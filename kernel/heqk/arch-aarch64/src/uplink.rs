@@ -321,7 +321,143 @@ fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mu
             }
         }
     }
+    pppoe_v6_probe(nic, &mut eng, out);
     unsafe { PPP = Some(eng) };
+}
+
+/// What the WAN v6 probe learned from the ISP (logged by the caller; nothing is configured from it
+/// yet — the LAN side follows once we know what the ISP delegates).
+#[derive(Clone, Copy, Debug)]
+pub struct Wan6 {
+    pub ran: bool,
+    pub ip6cp_up: bool,
+    pub ip6cp_off: bool,
+    pub my_iid: [u8; 8],
+    pub peer_iid: [u8; 8],
+    pub rs_tx: u32,
+    pub ra: Option<crate::ip6::Ra>,
+    pub dhcp_tx: u32,
+    pub dhcp_rx: u32,
+    pub advertise: bool,
+    pub reply: bool,
+    pub status: u16,
+    pub pd: Option<([u8; 16], u8, u32)>,
+    pub dns: Option<[u8; 16]>,
+    pub v6_frames_rx: u32,
+}
+pub static mut WAN6: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, v6_frames_rx: 0 };
+
+/// IPv6 over the open PPPoE session — PROBE ONLY (12-s cap, never fatal, IPv4 already works):
+/// wait for IPV6CP, Router Solicitation -> Router Advertisement (the WAN /64, M/O flags), then
+/// DHCPv6 Solicit with IA_PD (+ Rapid Commit) -> Advertise -> Request -> Reply (the delegated prefix
+/// for the LAN, DNS). Results in WAN6 for the [WAN6] log line.
+fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
+    use crate::ip6;
+    use crate::pppoe::Tx;
+    let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
+    w.ran = true;
+    let cap = cntpct() + ticks_ms(12_000);
+    let mut buf = [0u8; 2048];
+    let mut tx = Tx::new();
+    // Service the engine (LCP echo, IPV6CP) on anything that is not session IPv6; return v6 packets.
+    // 1. IPV6CP (it started with IPCP; give it up to 5 s more).
+    let dl = cntpct() + ticks_ms(5_000);
+    while !eng.ip6_up && !eng.ip6_off && cntpct() < dl.min(cap) {
+        match nic_rx(nic, &mut buf) {
+            Some(n) if n >= 14 => eng.rx(&buf[..n.min(buf.len())], ms_now(), &mut tx),
+            _ => eng.tick(ms_now(), &mut tx),
+        }
+        for i in 0..tx.n {
+            let _ = nic_tx(nic, tx.frame(i));
+        }
+        tx.clear();
+    }
+    w.ip6cp_up = eng.ip6_up;
+    w.ip6cp_off = eng.ip6_off;
+    w.my_iid = eng.my_iid;
+    w.peer_iid = eng.peer_iid;
+    if !eng.ip6_up {
+        return;
+    }
+    let mut pkt = [0u8; 400];
+    let mut enc = [0u8; 480];
+    let xid = (cntpct() as u32) & 0x00ff_ffff | 0x0100_0000;
+    let iaid = u32::from_be_bytes([out.mac[2], out.mac[3], out.mac[4], out.mac[5]]);
+    // 2. RS (every 1.5 s, up to 3) until an RA; 3. DHCPv6 (every 2 s, up to 3 rounds).
+    let mut next_rs = 0u64;
+    let mut next_dhcp = 0u64;
+    let mut sid = [0u8; 64];
+    let mut sid_len = 0usize;
+    let mut adv_pd: Option<([u8; 16], u8)> = None;
+    while cntpct() < cap && !w.reply {
+        let now = cntpct();
+        if w.ra.is_none() && w.rs_tx < 3 && now >= next_rs {
+            let n = ip6::build_rs(&eng.my_iid, &mut pkt);
+            if let Some(en) = eng.encap_ipv6(&pkt[..n], &mut enc) {
+                let _ = nic_tx(nic, &enc[..en]);
+                w.rs_tx += 1;
+            }
+            next_rs = now + ticks_ms(1_500);
+        }
+        if w.dhcp_tx < 6 && now >= next_dhcp && (w.ra.is_some() || w.rs_tx >= 3) {
+            // Solicit (+Rapid Commit) until an Advertise; then Request for the advertised prefix.
+            let (msg, pd) = if w.advertise { (ip6::DHCP6_REQUEST, adv_pd) } else { (ip6::DHCP6_SOLICIT, None) };
+            let n = ip6::build_dhcp6(msg, xid, &out.mac, &eng.my_iid, iaid, &sid[..sid_len], pd.as_ref().map(|(p, l)| (p, *l)), !w.advertise, &mut pkt);
+            if let Some(en) = eng.encap_ipv6(&pkt[..n], &mut enc) {
+                let _ = nic_tx(nic, &enc[..en]);
+                w.dhcp_tx += 1;
+            }
+            next_dhcp = now + ticks_ms(2_000);
+        }
+        let Some(n) = nic_rx(nic, &mut buf) else {
+            eng.tick(ms_now(), &mut tx);
+            for i in 0..tx.n {
+                let _ = nic_tx(nic, tx.frame(i));
+            }
+            tx.clear();
+            continue;
+        };
+        let n = n.min(buf.len());
+        let Some(ip) = eng.decap_ipv6(&buf[..n]) else {
+            eng.rx(&buf[..n], ms_now(), &mut tx);
+            for i in 0..tx.n {
+                let _ = nic_tx(nic, tx.frame(i));
+            }
+            tx.clear();
+            continue;
+        };
+        w.v6_frames_rx += 1;
+        if let Some(ra) = ip6::parse_ra(ip) {
+            if w.ra.is_none() {
+                w.ra = Some(ra);
+                next_dhcp = 0; // DHCPv6 right away
+            }
+            continue;
+        }
+        if let Some(d) = ip6::parse_dhcp6(ip, xid) {
+            w.dhcp_rx += 1;
+            if d.status != 0 {
+                w.status = d.status;
+            }
+            if d.has_dns {
+                w.dns = Some(d.dns);
+            }
+            if d.msg == ip6::DHCP6_ADVERTISE && !w.advertise {
+                w.advertise = true;
+                sid_len = d.sid_len;
+                sid[..sid_len].copy_from_slice(&d.server_id[..sid_len]);
+                if d.has_pd {
+                    adv_pd = Some((d.prefix, d.plen));
+                }
+                next_dhcp = 0; // Request now
+            } else if d.msg == ip6::DHCP6_REPLY {
+                w.reply = true;
+                if d.has_pd {
+                    w.pd = Some((d.prefix, d.plen, d.valid));
+                }
+            }
+        }
+    }
 }
 
 /// Send a WAN frame: as-is (DHCP/static), or wrapped in the PPPoE session (PPPoE).
