@@ -3086,6 +3086,7 @@ fn cm5_p10_probe() {
                         // unstick = [episodes, recovered w/o poke, recovered after A (DEV_INT), after B (ctl), reached 2 s]
                         let (mut unstick_stage, mut unstick_t) = (0u8, 0u64);
                         let mut unstick = [0u32; 5];
+                        const WAN_BUDGET: usize = 32; // WAN frames drained per loop (NAPI-style; wq is 128 deep)
                         let mut rx_busy = false;
                         let mut last_sta = [0u8; 6]; // most recent associated station (sta_info baseline) // the last pump read returned a frame (firmware RX pending)
                         // Which signed rules are DROPping forwarded frames (the beat names them).
@@ -3142,14 +3143,17 @@ fn cm5_p10_probe() {
                                     if credit0_since == 0 {
                                         credit0_since = t;
                                         unstick_stage = 0;
-                                    } else if unstick_stage == 0 && t.wrapping_sub(credit0_since) > freq / 4 {
+                                    } else if unstick_stage == 0 && t.wrapping_sub(credit0_since) > freq / 10 {
+                                        // Firmware TX-to-station stall KICK (metal 2026-11-05, img 6ed4833): a bare dongle
+                                        // interrupt never restarted it (0/2); one control frame always did, within ~5 ms
+                                        // (2/2). The firmware only resumes the station's TX queue when its wl layer runs an
+                                        // ioctl. A MITIGATION, not a root cause: the firmware-side trigger is still unknown.
                                         unstick[0] += 1;
-                                        cyw43::poke_dev_int(); // A: bare dongle interrupt
-                                        unstick_stage = 1;
-                                        unstick_t = t;
-                                    } else if unstick_stage == 1 && t.wrapping_sub(unstick_t) > freq / 4 {
-                                        let _ = cyw43::fw_pktcnts(); // B: one control frame (uses the reserved credit)
+                                        let _ = cyw43::fw_pktcnts(); // one control frame (uses the reserved credit)
                                         unstick_stage = 2;
+                                        unstick_t = t;
+                                    } else if unstick_stage == 2 && t.wrapping_sub(unstick_t) > freq / 2 {
+                                        let _ = cyw43::fw_pktcnts(); // still stuck 0.5 s later: kick again
                                         unstick_t = t;
                                     } else if !stall_diag_done && t.wrapping_sub(credit0_since) > 2 * freq {
                                         unstick[4] += 1;
@@ -3329,7 +3333,10 @@ fn cm5_p10_probe() {
                                 cyw43::ApEvent::Other => {
                                     wifi_frames += 1;
                                 }
-                                cyw43::ApEvent::Idle => {
+                                cyw43::ApEvent::Idle => {}
+                            }
+                            // Housekeeping + WAN drain run EVERY iteration (was Idle-arm only; see the WAN drain note).
+                            {
                                     // Plug-and-play WAN: the boot-time bringup is not the only chance. If the
                                     // uplink isn't usable and end0 now has a link, retry the lease every 10 s —
                                     // a cable plugged after boot (metal 2026-10-09) must not need a power-cycle.
@@ -3408,6 +3415,10 @@ fn cm5_p10_probe() {
                                             }
                                         }
                                     }
+                                    // Drain the WAN ring with a budget (Linux NAPI: up to 64/poll). It used to be ONE frame per
+                                    // loop and only when Wi-Fi was idle — under a speed test Wi-Fi is never idle, so the 128-slot
+                                    // GEM ring overflowed (metal 2026-11-05: res_err 325k, overrun 1450 = ISP packets dropped).
+                                    for _ in 0..WAN_BUDGET {
                                     match uplink::wan_poll(&mut up, &mut wbuf) {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
                                         uplink::WanEvent::GwRefreshed => wan_gw_refresh += 1,
@@ -3458,7 +3469,8 @@ fn cm5_p10_probe() {
                                                 }
                                             }
                                         }
-                                        uplink::WanEvent::Idle => {}
+                                        uplink::WanEvent::Idle => break,
+                                    }
                                     }
                                     let t = now();
                                     if t.wrapping_sub(last_ht) > freq / 10 {
@@ -3522,7 +3534,7 @@ fn cm5_p10_probe() {
                                                 }
                                             }
                                             kprint!("   [P11-AP3 chan] chosen {:#06x} | readbacks={} mismatches={} last={:#06x}\n", chosen_cs, ch_checks, ch_mismatch, ch_last);
-                                            kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(DEV_INT)={} after_B(ctl)={} reached_2s={}\n",
+                                            kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(unused)={} after_kick(ctl)={} reached_2s={}\n",
                                                 unstick[0], unstick[1], unstick[2], unstick[3], unstick[4]);
                                             // Healthy-state baseline of the firmware's view of the station (compare with the
                                             // stall snapshot): every 12th beat, only while associated.
@@ -3563,8 +3575,9 @@ fn cm5_p10_probe() {
                                             lan_frames, lan_served, lan_tx_fail, dh.nleases, cyw43::AP_LEASES);
                                         last_beat = t;
                                     }
-                                    unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
-                                }
+                                    if !rx_busy {
+                                        unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
+                                    }
                             }
                         }
                     }
