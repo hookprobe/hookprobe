@@ -3086,6 +3086,7 @@ fn cm5_p10_probe() {
                         // unstick = [episodes, recovered w/o poke, recovered after A (DEV_INT), after B (ctl), reached 2 s]
                         let (mut unstick_stage, mut unstick_t) = (0u8, 0u64);
                         let mut unstick = [0u32; 5];
+                        let mut loop_t0 = 0u64; // profiler: start of the current loop iteration
                         const WAN_BUDGET: usize = 32; // WAN frames drained per loop (NAPI-style; wq is 128 deep)
                         let mut rx_busy = false;
                         let mut last_sta = [0u8; 6]; // most recent associated station (sta_info baseline) // the last pump read returned a frame (firmware RX pending)
@@ -3243,7 +3244,9 @@ fn cm5_p10_probe() {
                             if force {
                                 last_force = now();
                             }
+                            let tpoll = cyw43::ticks();
                             let ev = cyw43::ap_poll(&mut rx, force);
+                            cyw43::prof_add(4, tpoll);
                             rx_busy = !matches!(ev, cyw43::ApEvent::Idle);
                             match ev {
                                 cyw43::ApEvent::Assoc(sta) => {
@@ -3421,6 +3424,7 @@ fn cm5_p10_probe() {
                                     // Backpressure: never pull more WAN frames than the Wi-Fi queue can hold — the rest wait in
                                     // the GEM ring (another 128 slots) instead of being head-dropped from wq (metal 2026-11-05:
                                     // 7,158 wq drops after the drain fix).
+                                    let twan = cyw43::ticks();
                                     for _ in 0..WAN_BUDGET.min(WQ_N - wq_n) {
                                     match uplink::wan_poll(&mut up, &mut wbuf) {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
@@ -3475,6 +3479,7 @@ fn cm5_p10_probe() {
                                         uplink::WanEvent::Idle => break,
                                     }
                                     }
+                                    cyw43::prof_add(5, twan);
                                     let t = now();
                                     if t.wrapping_sub(last_ht) > freq / 10 {
                                         cyw43::ap_keepalive();
@@ -3539,6 +3544,19 @@ fn cm5_p10_probe() {
                                             kprint!("   [P11-AP3 chan] chosen {:#06x} | readbacks={} mismatches={} last={:#06x}\n", chosen_cs, ch_checks, ch_mismatch, ch_last);
                                             kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(unused)={} after_kick(ctl)={} reached_2s={}\n",
                                                 unstick[0], unstick[1], unstick[2], unstick[3], unstick[4]);
+                                            {
+                                                // Profiler since the last beat: count / total ms / max us per slot, and % of wall time.
+                                                let p = unsafe { &mut *core::ptr::addr_of_mut!(cyw43::PROF) };
+                                                let wall = p[7][1].max(1);
+                                                let us = |t: u64| t * 1_000_000 / freq;
+                                                let names = ["tx", "rx_frame", "rx_dry", "glom", "ap_poll", "wan_drain", "wfe", "loop"];
+                                                kprint!("   [P11-AP3 prof] wall {} ms:", us(wall) / 1000);
+                                                for k in 0..8 {
+                                                    kprint!(" {}={}x/{}ms({}%)/max{}us", names[k], p[k][0], us(p[k][1]) / 1000, p[k][1] * 100 / wall, us(p[k][2]));
+                                                }
+                                                kprint!("\n");
+                                                *p = [[0; 3]; 8];
+                                            }
                                             // Healthy-state baseline of the firmware's view of the station (compare with the
                                             // stall snapshot): every 12th beat, only while associated.
                                             if beat_n % 12 == 0 && last_sta != [0u8; 6] {
@@ -3579,8 +3597,14 @@ fn cm5_p10_probe() {
                                         last_beat = t;
                                     }
                                     if !rx_busy {
+                                        let twfe = cyw43::ticks();
                                         unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
+                                        cyw43::prof_add(6, twfe);
                                     }
+                                    if loop_t0 != 0 {
+                                        cyw43::prof_add(7, loop_t0);
+                                    }
+                                    loop_t0 = cyw43::ticks();
                             }
                         }
                     }
