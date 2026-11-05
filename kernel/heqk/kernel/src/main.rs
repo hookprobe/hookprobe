@@ -12155,9 +12155,42 @@ fn pppoe_selftest() {
     c.rx(&b[..l], 1002, &mut tx);
     let padt_ok = c.phase == Phase::Down && c.why == DownWhy::Padt;
     // PAP run
-    let (open_pap, cp, acp) = run(false);
+    let (open_pap, mut cp, acp) = run(false);
     let pap_ok = open_pap && acp.pap_ok && cp.my_ip == [10, 67, 0, 10];
-    let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok;
-    kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP Protocol-Rejected (session stays up)={} IPv4 encap={} decap={} PADT->down={} | PAP run open={}\n",
-        if ok { "PASS" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok);
+    // Keepalive: the first tick arms the clock; one interval later an Echo-Request goes out; an
+    // Echo-Reply resets the miss count; ECHO_MISSES unanswered requests bring the session down.
+    let ka = {
+        use arch_aarch64::pppoe::{ECHO_MISSES, ECHO_MS};
+        let mut t = Tx::new();
+        let base = 50_000u64;
+        // An echo is due (the run's last tick armed the clock long ago): exactly one goes out ...
+        cp.tick(base, &mut t);
+        let req = t.n == 1 && t.frame(0)[22] == 9;
+        let rid = if req { t.frame(0)[23] } else { 0 };
+        t.clear();
+        // ... and not again within the same interval.
+        cp.tick(base + 1, &mut t);
+        let once = t.n == 0;
+        // An Echo-Reply resets the miss count.
+        let (b, l) = sess(0xc021, 10, rid, &0x1122_3344u32.to_be_bytes());
+        cp.rx(&b[..l], base + 5, &mut t);
+        let reset_ok = cp.stats.echo_rx == 1 && cp.phase == Phase::Open;
+        // ECHO_MISSES unanswered requests, then the next due tick declares the session dead.
+        let mut now = base;
+        let mut sent = 0;
+        for _ in 0..=ECHO_MISSES {
+            now += ECHO_MS;
+            t.clear();
+            cp.tick(now, &mut t);
+            sent += t.n;
+        }
+        let r = req && once && reset_ok && sent == ECHO_MISSES as usize && cp.phase == Phase::Down && cp.why == DownWhy::NoEcho;
+        if !r {
+            kprint!("   [P-pppoe ka] req={} once={} reset={} sent={} phase={:?} why={:?}\n", req, once, reset_ok, sent, cp.phase, cp.why);
+        }
+        r
+    };
+    let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok && ka;
+    kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP Protocol-Rejected (session stays up)={} IPv4 encap={} decap={} PADT->down={} | PAP run open={} | client keepalive: one echo per interval, reply resets, 3 misses -> down (NoEcho)={}\n",
+        if ok { "PASS" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok, ka);
 }
