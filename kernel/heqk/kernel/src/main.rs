@@ -3141,6 +3141,11 @@ fn cm5_p10_probe() {
                                         let (rseq, gaps, maxahead) = cyw43::rx_diag();
                                         kprint!(" [STALL-DIAG] tx credit 0 for >2 s: tx_seq={} tx_max={} fc_mask={:#04x} | max window ever ahead of tx_seq={} | last rx seq={} rx seq gaps={} | sdio intstatus={:#010x} | queued={} wifi_frames={}\n",
                                             seq, max, cyw43::fc_mask(), maxahead, rseq, gaps, cyw43::sdio_intstatus(), wq_n, wifi_frames);
+                                        // Bus clock evidence FIRST (before any probe that could perturb it). HT_AVAIL=0x80
+                                        // in CHIPCLKCSR, KSO=0x01 in SLEEPCSR, F2 ready=0x04 in IORDY.
+                                        let bc = cyw43::bus_clock_state();
+                                        kprint!("   [STALL-DIAG] bus clock: CHIPCLKCSR={:#04x} (HT_AVAIL={}) SLEEPCSR={:#04x} (KSO={}) IORDY={:#04x} (F2={})\n",
+                                            bc[0], bc[0] & 0x80 != 0, bc[1], bc[1] & 1 != 0, bc[2], bc[2] & 0x04 != 0);
                                         for k in 0..wq_n.min(3) {
                                             let j = (wq_head + k) % WQ_N;
                                             kprint!("   [STALL-DIAG] queued[{}] dst {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} len {} ethertype {:#06x}\n", k,
@@ -3187,6 +3192,12 @@ fn cm5_p10_probe() {
                                             }
                                             None => kprint!("   [STALL-DIAG] fw sdpcm_shared NOT readable\n"),
                                         }
+                                        // Experiment: the brcmfmac wake path (KSO + HT request). Both steps act only if
+                                        // the bit is CLEAR, so on a healthy clock this is a no-op. If the next beat logs
+                                        // "credit RECOVERED", the stall was the bus clock.
+                                        let after = cyw43::bus_wake();
+                                        let bc2 = cyw43::bus_clock_state();
+                                        kprint!("   [STALL-DIAG] bus wake -> CHIPCLKCSR={:#04x} SLEEPCSR={:#04x} (watch for 'credit RECOVERED')\n", after, bc2[1]);
                                     }
                                 } else {
                                     if stall_diag_done && credit0_since != 0 {
