@@ -2893,6 +2893,13 @@ fn cm5_p10_probe() {
                                 lan_started, lan_link, lan_mac[0], lan_mac[1], lan_mac[2], lan_mac[3], lan_mac[4], lan_mac[5]);
                             kprint!(" [M-NAT0] end0 (RP1 GEM) WAN uplink — DHCP, ARP gw, ping gw + 8.8.8.8 over the GEM TX ring\n");
                             uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut up);
+                            if let Some((ph, why, sid, ac, ip, peer, d1, d2, auth, st)) = uplink::pppoe_info() {
+                                kprint!(" [WAN] PPPoE: phase={:?} why={:?} sid={:#06x} AC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} | ip {}.{}.{}.{} peer {}.{}.{}.{} dns {}.{}.{}.{} / {}.{}.{}.{} auth={} | padi={} pado={} padr={} pads={} lcp tx/rx={}/{} nak/rej={} auth_tx={} ipcp_tx={} proto_rej={}\n",
+                                    ph, why, sid, ac[0], ac[1], ac[2], ac[3], ac[4], ac[5], ip[0], ip[1], ip[2], ip[3], peer[0], peer[1], peer[2], peer[3],
+                                    d1[0], d1[1], d1[2], d1[3], d2[0], d2[1], d2[2], d2[3],
+                                    match auth { 0xc023 => "PAP", 0xc223 => "CHAP-MD5", _ => "none" },
+                                    st.padi, st.pado, st.padr, st.pads, st.lcp_req_tx, st.lcp_req_rx, st.lcp_nak_rej_tx, st.auth_tx, st.ipcp_req_tx, st.proto_rejects);
+                            }
                             if !up.started {
                                 kprint!(" [M-NAT0] SKIP — GEM rings not armed\n");
                             } else {
@@ -3184,7 +3191,7 @@ fn cm5_p10_probe() {
                                             let gw_mac = up.gw_mac;
                                             let resolver = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
                                             if let Some(n) = nat::outbound_redirect(frame, nat::IF_WIFI, &inside_net, Some((&our_ip, &resolver)), &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
-                                                let gem_ok = arch_aarch64::gem::tx_frame(&nbuf[..n]).is_some();
+                                                let gem_ok = uplink::wan_tx(&up, &nbuf[..n]);
                                                 if nat_trace < NAT_TRACE_N {
                                                     nat_trace += 1;
                                                     nat_trace_line("OUT", &nbuf[..n], if gem_ok { "gem=ok" } else { "gem=FAIL" });
@@ -3271,7 +3278,7 @@ fn cm5_p10_probe() {
                                                         let gw_mac = up.gw_mac;
                                                         let resolver = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
                                                         if let Some(k) = nat::outbound_redirect(&ebuf[..n], nat::IF_ETH1, &inside_net, Some((&our_ip, &resolver)), &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, now(), &mut nst) {
-                                                            if arch_aarch64::gem::tx_frame(&nbuf[..k]).is_none() {
+                                                            if !uplink::wan_tx(&up, &nbuf[..k]) {
                                                                 nat_tx_fail += 1;
                                                             }
                                                         }
@@ -5237,6 +5244,8 @@ pub extern "C" fn kmain() -> ! {
         glom_selftest();
         dnsfwd_selftest();
         wancfg_selftest();
+        md5_selftest();
+        pppoe_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
@@ -11829,4 +11838,326 @@ fn wancfg_selftest() {
     let ok = dhcp && padded && st && st_dns_default && gw_out && bad_pfx && net_addr && bad_quad && pppoe && pppoe_nouser && no_magic && unknown && bad_mode;
     kprint!(" [P-wancfg] {} — WAN.TXT: dhcp={} padded/CRLF={} static={} dns-defaults-to-gw={} pppoe creds={} | refused: gw outside subnet={} /31={} network address={} bad quad={} pppoe w/o user={} no magic={} unknown key={} bad mode={}\n",
         if ok { "PASS" } else { "FAIL" }, dhcp, padded, st, st_dns_default, pppoe, gw_out, bad_pfx, net_addr, bad_quad, pppoe_nouser, no_magic, unknown, bad_mode);
+}
+
+/// `[P-md5]` — RFC 1321 appendix A.5 test vectors (MD5 exists only for PPP CHAP-MD5).
+#[allow(dead_code)]
+fn md5_selftest() {
+    fn hx(h: &[u8; 16], want: &str) -> bool {
+        let w = want.as_bytes();
+        (0..16).all(|i| {
+            let nib = |c: u8| if c <= b'9' { c - b'0' } else { c - b'a' + 10 };
+            h[i] == (nib(w[2 * i]) << 4) | nib(w[2 * i + 1])
+        })
+    }
+    let v = [
+        (&b""[..], "d41d8cd98f00b204e9800998ecf8427e"),
+        (&b"a"[..], "0cc175b9c0f1b6a831c399e269772661"),
+        (&b"abc"[..], "900150983cd24fb0d6963f7d28e17f72"),
+        (&b"message digest"[..], "f96b697d7cb7938d525a2f31aaf161d0"),
+        (&b"abcdefghijklmnopqrstuvwxyz"[..], "c3fcd3d76192e4007dfb496cca67e13b"),
+        (&b"12345678901234567890123456789012345678901234567890123456789012345678901234567890"[..], "57edf4a22be3c955ac49da2e2107b67a"),
+    ];
+    let ok = v.iter().all(|(d, h)| hx(&hal::md5(d), h));
+    kprint!(" [P-md5] {} — RFC 1321 A.5 vectors (6/6 incl. the 80-byte two-block case) — used only by PPP CHAP-MD5\n",
+        if ok { "PASS" } else { "FAIL" });
+}
+
+/// `[P-pppoe]` — the PPPoE client engine (arch_aarch64::pppoe) end to end against a scripted
+/// RFC 2516/1661 access concentrator: PADI/PADO(cookie)/PADR/PADS, LCP with an option the client
+/// must Reject, CHAP-MD5 verified cryptographically (and a PAP run), IPCP Nak-assigned address +
+/// DNS, then Echo-Reply, Protocol-Reject of IPV6CP, IPv4 encap/decap, and PADT -> down.
+#[allow(dead_code)]
+fn pppoe_selftest() {
+    use arch_aarch64::pppoe::{DownWhy, Phase, Pppoe, Tx, ETH_DISC, ETH_SESS};
+    const CLI: [u8; 6] = [2, 0, 0, 0, 0, 2];
+    const AC: [u8; 6] = [2, 0xac, 0, 0, 0, 1];
+    const SID: u16 = 0x1234;
+    const USER: &[u8] = b"client@isp";
+    const PASS: &[u8] = b"s3cret";
+    const CHAL: [u8; 16] = *b"0123456789abcdef";
+    fn be16(b: &[u8], o: usize) -> u16 {
+        u16::from_be_bytes([b[o], b[o + 1]])
+    }
+    struct Out {
+        f: [[u8; 256]; 4],
+        len: [usize; 4],
+        n: usize,
+    }
+    impl Out {
+        fn push(&mut self, b: &[u8]) {
+            if self.n < 4 {
+                self.f[self.n][..b.len()].copy_from_slice(b);
+                self.len[self.n] = b.len();
+                self.n += 1;
+            }
+        }
+    }
+    fn disc(code: u8, sid: u16, tags: &[(u16, &[u8])]) -> ([u8; 256], usize) {
+        let mut b = [0u8; 256];
+        b[0..6].copy_from_slice(&CLI);
+        b[6..12].copy_from_slice(&AC);
+        b[12..14].copy_from_slice(&ETH_DISC.to_be_bytes());
+        b[14] = 0x11;
+        b[15] = code;
+        b[16..18].copy_from_slice(&sid.to_be_bytes());
+        let mut o = 20;
+        for (t, v) in tags {
+            b[o..o + 2].copy_from_slice(&t.to_be_bytes());
+            b[o + 2..o + 4].copy_from_slice(&(v.len() as u16).to_be_bytes());
+            b[o + 4..o + 4 + v.len()].copy_from_slice(v);
+            o += 4 + v.len();
+        }
+        b[18..20].copy_from_slice(&((o - 20) as u16).to_be_bytes());
+        (b, o.max(60))
+    }
+    fn sess(proto: u16, code: u8, id: u8, data: &[u8]) -> ([u8; 256], usize) {
+        let mut b = [0u8; 256];
+        b[0..6].copy_from_slice(&CLI);
+        b[6..12].copy_from_slice(&AC);
+        b[12..14].copy_from_slice(&ETH_SESS.to_be_bytes());
+        b[14] = 0x11;
+        b[16..18].copy_from_slice(&SID.to_be_bytes());
+        b[20..22].copy_from_slice(&proto.to_be_bytes());
+        b[22] = code;
+        b[23] = id;
+        b[24..26].copy_from_slice(&((4 + data.len()) as u16).to_be_bytes());
+        b[26..26 + data.len()].copy_from_slice(data);
+        let end = 26 + data.len();
+        b[18..20].copy_from_slice(&((end - 20) as u16).to_be_bytes());
+        (b, end.max(60))
+    }
+    fn tag<'a>(f: &'a [u8], t: u16) -> Option<&'a [u8]> {
+        let end = 20 + be16(f, 18) as usize;
+        let mut o = 20;
+        while o + 4 <= end {
+            let (tt, l) = (be16(f, o), be16(f, o + 2) as usize);
+            if tt == t {
+                return Some(&f[o + 4..o + 4 + l]);
+            }
+            o += 4 + l;
+        }
+        None
+    }
+    struct Ac {
+        chap: bool,
+        lcp_reqs_sent: u32,
+        cli_acked_us: bool,
+        we_acked_cli: bool,
+        authed: bool,
+        auth_started: bool,
+        ipcp_started: bool,
+        chap_ok: bool,
+        pap_ok: bool,
+        cookie_echoed: bool,
+        rejected_acfc: bool,
+        ipcp_nak_sent: bool,
+        ipcp_acked: bool,
+    }
+    impl Ac {
+        fn lcp_req(&mut self, o: &mut Out) {
+            self.lcp_reqs_sent += 1;
+            let mut d = [0u8; 20];
+            let mut n = 0;
+            d[n..n + 4].copy_from_slice(&[1, 4, 0x05, 0xd4]); // MRU 1492
+            n += 4;
+            if self.lcp_reqs_sent == 1 {
+                d[n..n + 2].copy_from_slice(&[8, 2]); // ACFC — the client must Reject it
+                n += 2;
+            }
+            if self.chap {
+                d[n..n + 5].copy_from_slice(&[3, 5, 0xc2, 0x23, 5]);
+                n += 5;
+            } else {
+                d[n..n + 4].copy_from_slice(&[3, 4, 0xc0, 0x23]);
+                n += 4;
+            }
+            d[n..n + 6].copy_from_slice(&[5, 6, 0x11, 0x22, 0x33, 0x44]);
+            n += 6;
+            let (b, l) = sess(0xc021, 1, self.lcp_reqs_sent as u8, &d[..n]);
+            o.push(&b[..l]);
+        }
+        fn after_lcp(&mut self, o: &mut Out) {
+            if self.cli_acked_us && self.we_acked_cli && !self.auth_started {
+                self.auth_started = true;
+                if self.chap {
+                    let mut d = [0u8; 1 + 16 + 8];
+                    d[0] = 16;
+                    d[1..17].copy_from_slice(&CHAL);
+                    d[17..25].copy_from_slice(b"bench-ac");
+                    let (b, l) = sess(0xc223, 1, 7, &d);
+                    o.push(&b[..l]);
+                }
+            }
+        }
+        fn start_ipcp(&mut self, o: &mut Out) {
+            if !self.ipcp_started {
+                self.ipcp_started = true;
+                let (b, l) = sess(0x8021, 1, 1, &[3, 6, 10, 67, 0, 1]);
+                o.push(&b[..l]);
+            }
+        }
+        fn handle(&mut self, f: &[u8], o: &mut Out) {
+            let et = be16(f, 12);
+            if et == ETH_DISC {
+                match f[15] {
+                    0x09 => {
+                        let hu = tag(f, 0x0103).unwrap_or(&[]);
+                        let (b, l) = disc(0x07, 0, &[(0x0102, b"bench-ac"), (0x0101, b""), (0x0103, hu), (0x0104, b"COOKIE42")]);
+                        o.push(&b[..l]);
+                    }
+                    0x19 => {
+                        self.cookie_echoed = tag(f, 0x0104) == Some(&b"COOKIE42"[..]);
+                        let hu = tag(f, 0x0103).unwrap_or(&[]);
+                        if self.cookie_echoed {
+                            let (b, l) = disc(0x65, SID, &[(0x0101, b""), (0x0103, hu)]);
+                            o.push(&b[..l]);
+                        }
+                    }
+                    _ => {}
+                }
+                return;
+            }
+            if et != ETH_SESS || be16(f, 16) != SID {
+                return;
+            }
+            let proto = be16(f, 20);
+            let (code, id) = (f[22], f[23]);
+            let len = be16(f, 24) as usize;
+            let data = &f[26..22 + len];
+            match (proto, code) {
+                (0xc021, 1) => {
+                    // client ConfReq: Ack it; send ours the first time
+                    let (b, l) = sess(0xc021, 2, id, data);
+                    o.push(&b[..l]);
+                    self.we_acked_cli = true;
+                    if self.lcp_reqs_sent == 0 {
+                        self.lcp_req(o);
+                    }
+                    self.after_lcp(o);
+                }
+                (0xc021, 2) => {
+                    self.cli_acked_us = true;
+                    self.after_lcp(o);
+                }
+                (0xc021, 4) => {
+                    self.rejected_acfc = data == [8, 2];
+                    self.lcp_req(o);
+                }
+                (0xc223, 2) if self.chap => {
+                    // verify MD5(id || secret || challenge)
+                    let mut m = [0u8; 1 + 6 + 16];
+                    m[0] = id;
+                    m[1..7].copy_from_slice(PASS);
+                    m[7..23].copy_from_slice(&CHAL);
+                    let want = hal::md5(&m);
+                    self.chap_ok = data.len() >= 17 && data[0] == 16 && data[1..17] == want && &data[17..] == USER;
+                    let (b, l) = sess(0xc223, if self.chap_ok { 3 } else { 4 }, id, b"");
+                    o.push(&b[..l]);
+                    if self.chap_ok {
+                        self.authed = true;
+                        self.start_ipcp(o);
+                    }
+                }
+                (0xc023, 1) if !self.chap => {
+                    let ul = data[0] as usize;
+                    let pl = data[1 + ul] as usize;
+                    self.pap_ok = &data[1..1 + ul] == USER && &data[2 + ul..2 + ul + pl] == PASS;
+                    let (b, l) = sess(0xc023, if self.pap_ok { 2 } else { 3 }, id, b"\x00");
+                    o.push(&b[..l]);
+                    if self.pap_ok {
+                        self.authed = true;
+                        self.start_ipcp(o);
+                    }
+                }
+                (0x8021, 1) => {
+                    // client IPCP ConfReq: first Nak with the assignment, then Ack the corrected one
+                    if !self.ipcp_nak_sent {
+                        self.ipcp_nak_sent = true;
+                        let (b, l) = sess(0x8021, 3, id, &[3, 6, 10, 67, 0, 10, 129, 6, 1, 1, 1, 1, 131, 6, 9, 9, 9, 9]);
+                        o.push(&b[..l]);
+                    } else {
+                        self.ipcp_acked = data == [3, 6, 10, 67, 0, 10, 129, 6, 1, 1, 1, 1, 131, 6, 9, 9, 9, 9];
+                        let (b, l) = sess(0x8021, 2, id, data);
+                        o.push(&b[..l]);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    fn run(chap: bool) -> (bool, Pppoe, Ac) {
+        let mut c = Pppoe::new(CLI, USER, PASS, 0xdead_beef, 0xa1b2_c3d4);
+        let mut ac = Ac {
+            chap, lcp_reqs_sent: 0, cli_acked_us: false, we_acked_cli: false, authed: false, auth_started: false,
+            ipcp_started: false, chap_ok: false, pap_ok: false, cookie_echoed: false, rejected_acfc: false,
+            ipcp_nak_sent: false, ipcp_acked: false,
+        };
+        let mut tx = Tx::new();
+        c.start(0, &mut tx);
+        let mut now = 0u64;
+        for _round in 0..40 {
+            if c.phase == Phase::Open || c.phase == Phase::Down {
+                break;
+            }
+            let mut o = Out { f: [[0; 256]; 4], len: [0; 4], n: 0 };
+            for i in 0..tx.n {
+                let fr = tx.f[i];
+                let ln = tx.len[i];
+                ac.handle(&fr[..ln], &mut o);
+            }
+            tx.clear();
+            now += 10;
+            for i in 0..o.n {
+                c.rx(&o.f[i][..o.len[i]], now, &mut tx);
+            }
+            if tx.n == 0 {
+                c.tick(now + 2_100, &mut tx);
+            }
+        }
+        (c.phase == Phase::Open, c, ac)
+    }
+    // CHAP run, then the post-open checks
+    let (open_chap, mut c, ac) = run(true);
+    let neg_ok = open_chap && ac.cookie_echoed && ac.rejected_acfc && ac.chap_ok && ac.ipcp_acked
+        && c.sid == SID && c.my_ip == [10, 67, 0, 10] && c.peer_ip == [10, 67, 0, 1]
+        && c.dns1 == [1, 1, 1, 1] && c.dns2 == [9, 9, 9, 9] && c.ac_mac == AC;
+    let mut tx = Tx::new();
+    let (b, l) = sess(0xc021, 9, 0x55, &[0x11, 0x22, 0x33, 0x44, b'h', b'b']);
+    c.rx(&b[..l], 1000, &mut tx);
+    let echo_ok = tx.n == 1 && be16(tx.frame(0), 20) == 0xc021 && tx.frame(0)[22] == 10 && tx.frame(0)[23] == 0x55
+        && tx.frame(0)[26..30] == 0xa1b2_c3d4u32.to_be_bytes() && &tx.frame(0)[30..32] == b"hb";
+    tx.clear();
+    let (b, l) = sess(0x8057, 1, 1, &[1, 10, 0, 0, 0, 0, 0, 0, 0, 1]);
+    c.rx(&b[..l], 1001, &mut tx);
+    let prej_ok = tx.n == 1 && tx.frame(0)[22] == 8 && be16(tx.frame(0), 26) == 0x8057 && c.phase == Phase::Open;
+    // IPv4 encap/decap round trip
+    let mut eth = [0u8; 60];
+    eth[12] = 0x08;
+    eth[14] = 0x45;
+    eth[16..18].copy_from_slice(&40u16.to_be_bytes());
+    eth[23] = 6;
+    eth[26..30].copy_from_slice(&[10, 67, 0, 10]);
+    eth[30..34].copy_from_slice(&[8, 8, 8, 8]);
+    let mut enc = [0u8; 128];
+    let en = c.encap_ipv4(&eth[..54], &mut enc).unwrap_or(0);
+    let encap_ok = en >= 62 && be16(&enc, 12) == ETH_SESS && be16(&enc, 16) == SID && be16(&enc, 18) == 42
+        && be16(&enc, 20) == 0x0021 && enc[0..6] == AC && enc[22..62] == eth[14..54];
+    // the reply from the internet arrives in the session
+    let mut back = [0u8; 128];
+    back[..en].copy_from_slice(&enc[..en]);
+    back[0..6].copy_from_slice(&CLI);
+    back[6..12].copy_from_slice(&AC);
+    let mut dec = [0u8; 128];
+    let dn = c.decap_ipv4(&back[..en], &mut dec).unwrap_or(0);
+    let decap_ok = dn == 54 && be16(&dec, 12) == 0x0800 && dec[0..6] == CLI && dec[14..54] == eth[14..54];
+    let (b, l) = disc(0xa7, SID, &[]);
+    c.rx(&b[..l], 1002, &mut tx);
+    let padt_ok = c.phase == Phase::Down && c.why == DownWhy::Padt;
+    // PAP run
+    let (open_pap, cp, acp) = run(false);
+    let pap_ok = open_pap && acp.pap_ok && cp.my_ip == [10, 67, 0, 10];
+    let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok;
+    kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP Protocol-Rejected (session stays up)={} IPv4 encap={} decap={} PADT->down={} | PAP run open={}\n",
+        if ok { "PASS" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok);
 }

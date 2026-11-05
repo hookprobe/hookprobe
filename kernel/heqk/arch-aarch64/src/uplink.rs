@@ -215,11 +215,153 @@ pub fn bringup_with(nic: Nic, inet_ip: &[u8; 4], mode: &hal::WanMode, out: &mut 
             out.dhcp.ack_rx = true;
             post_lease(nic, inet_ip, out);
         }
-        hal::WanMode::Pppoe { .. } => {
+        hal::WanMode::Pppoe { user, user_len, pass, pass_len } => {
             out.mode = 2;
-            out.pppoe_unsupported = true;
+            pppoe_bringup(nic, inet_ip, &user[..user_len as usize], &pass[..pass_len as usize], out);
         }
     }
+}
+
+/// The live PPPoE session (engine state: session id, AC, negotiated addresses, LCP state).
+static mut PPP: Option<crate::pppoe::Pppoe> = None;
+/// Scratch for PPPoE encap/decap (one frame at a time; the WAN path is single-threaded).
+static mut PPP_SCRATCH: [u8; 2048] = [0; 2048];
+
+fn ms_now() -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    cntpct().saturating_mul(1000) / f.max(1)
+}
+
+/// Snapshot of the PPPoE session for the operator's log:
+/// (phase, why, sid, ac_mac, my_ip, peer_ip, dns1, dns2, auth protocol, stats).
+pub fn pppoe_info() -> Option<(crate::pppoe::Phase, crate::pppoe::DownWhy, u16, [u8; 6], [u8; 4], [u8; 4], [u8; 4], [u8; 4], u16, crate::pppoe::Stats)> {
+    unsafe {
+        (*core::ptr::addr_of!(PPP)).as_ref().map(|e| (e.phase, e.why, e.sid, e.ac_mac, e.my_ip, e.peer_ip, e.dns1, e.dns2, e.auth, e.stats))
+    }
+}
+
+/// PPPoE bring-up: discovery -> LCP -> PAP/CHAP -> IPCP over the NIC (30 s budget), then the
+/// negotiated address IS the lease (gateway = the PPP peer, next hop = the AC's MAC, MSS 1452),
+/// and the peer + internet probe are pinged THROUGH the session.
+fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mut UplinkResult) {
+    use crate::pppoe::{Phase, Pppoe, Tx, PPPOE_MSS};
+    if !prelude(nic, inet_ip, out) {
+        return;
+    }
+    let seed = cntpct();
+    let mut eng = Pppoe::new(out.mac, user, pass, seed as u32, (seed >> 11) as u32 ^ 0x5eed_c0de);
+    let mut tx = Tx::new();
+    eng.start(ms_now(), &mut tx);
+    let deadline = cntpct() + ticks_ms(30_000);
+    let mut buf = [0u8; 2048];
+    loop {
+        for i in 0..tx.n {
+            let _ = nic_tx(nic, tx.frame(i));
+        }
+        tx.clear();
+        if matches!(eng.phase, Phase::Open | Phase::Down) || cntpct() >= deadline {
+            break;
+        }
+        match nic_rx(nic, &mut buf) {
+            Some(n) if n >= 14 => {
+                out.rx_frames += 1;
+                eng.rx(&buf[..n.min(buf.len())], ms_now(), &mut tx);
+            }
+            _ => eng.tick(ms_now(), &mut tx),
+        }
+    }
+    if eng.phase != Phase::Open {
+        unsafe { PPP = Some(eng) };
+        return;
+    }
+    out.dhcp.yiaddr = eng.my_ip;
+    out.dhcp.router = eng.peer_ip;
+    out.dhcp.dns = if eng.dns1 != [0; 4] { eng.dns1 } else { eng.dns2 };
+    out.dhcp.mask = [255; 4];
+    out.dhcp.lease = 0;
+    out.dhcp.ack_rx = true;
+    out.gw_mac = eng.ac_mac;
+    out.arp_reply = true; // no ARP on a point-to-point link: the AC is the next hop
+    crate::nat::set_mss_limit(PPPOE_MSS);
+    // Ping the PPP peer, then the internet probe, through the session.
+    let none = [0u8; 4];
+    let mut small = [0u8; 128];
+    let mut enc = [0u8; 160];
+    for (k, dst) in [(1u16, eng.peer_ip), (2u16, *inet_ip)] {
+        let id = 0x4e31u16;
+        let n = build_icmp_echo(&mut small, &out.mac, &eng.ac_mac, &eng.my_ip, &dst, id, k);
+        let Some(en) = eng.encap_ipv4(&small[..n], &mut enc) else { continue };
+        let sent = nic_tx(nic, &enc[..en]);
+        if k == 1 { out.gw_ping_tx = sent } else { out.inet_ping_tx = sent }
+        let dl = cntpct() + ticks_ms(if k == 1 { WAIT_MS } else { WAIT_MS * 2 });
+        let mut dec = [0u8; 2048];
+        while cntpct() < dl {
+            let Some(n) = nic_rx(nic, &mut buf) else { continue };
+            let n = n.min(buf.len());
+            if let Some(dn) = eng.decap_ipv4(&buf[..n], &mut dec) {
+                let mut m = [0u8; 6];
+                let (mut ttl, mut src) = (0u8, [0u8; 4]);
+                if parse_ping_reply(&dec[..dn], &none, id, &mut m, &mut ttl, &mut src) == 2 && src == dst {
+                    if k == 1 { out.gw_ping_reply = true; out.gw_ttl = ttl } else { out.inet_ping_reply = true; out.inet_ttl = ttl }
+                    break;
+                }
+            } else {
+                eng.rx(&buf[..n], ms_now(), &mut tx); // LCP echo etc. while we wait
+                for i in 0..tx.n {
+                    let _ = nic_tx(nic, tx.frame(i));
+                }
+                tx.clear();
+            }
+        }
+    }
+    unsafe { PPP = Some(eng) };
+}
+
+/// Send a WAN frame: as-is (DHCP/static), or wrapped in the PPPoE session (PPPoE).
+pub fn wan_tx(up: &UplinkResult, f: &[u8]) -> bool {
+    if up.mode == 2 {
+        unsafe {
+            let Some(e) = (*core::ptr::addr_of!(PPP)).as_ref() else { return false };
+            let sc = &mut *core::ptr::addr_of_mut!(PPP_SCRATCH);
+            match e.encap_ipv4(f, sc) {
+                Some(n) => nic_tx(up.nic, &sc[..n]),
+                None => false,
+            }
+        }
+    } else {
+        nic_tx(up.nic, f)
+    }
+}
+
+/// PPPoE leg of wan_poll: session IPv4 is unwrapped into an Ethernet/IPv4 frame for the NAT;
+/// LCP/discovery frames go to the engine (Echo-Reply, PADT/Terminate). A dropped session makes
+/// the uplink unusable so the caller's retry path re-dials.
+fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
+    use crate::pppoe::{Phase, Tx};
+    let nic = up.nic;
+    let n = match nic_rx(nic, buf) {
+        Some(n) if n >= 14 => n.min(buf.len()),
+        _ => return WanEvent::Idle,
+    };
+    unsafe {
+        let Some(e) = (*core::ptr::addr_of_mut!(PPP)).as_mut() else { return WanEvent::Idle };
+        let sc = &mut *core::ptr::addr_of_mut!(PPP_SCRATCH);
+        if let Some(dn) = e.decap_ipv4(&buf[..n], sc) {
+            let k = dn.min(buf.len());
+            buf[..k].copy_from_slice(&sc[..k]);
+            return WanEvent::Frame(k);
+        }
+        let mut tx = Tx::new();
+        e.rx(&buf[..n], ms_now(), &mut tx);
+        for i in 0..tx.n {
+            let _ = nic_tx(nic, tx.frame(i));
+        }
+        if e.phase == Phase::Down {
+            up.dhcp.ack_rx = false; // usable() false -> the AP loop re-dials
+        }
+    }
+    WanEvent::Idle
 }
 
 /// Common start of every WAN mode: NIC up, link, our MAC, stale ring drained, TX re-armed.
@@ -381,6 +523,9 @@ pub enum WanEvent {
 pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
     if !up.dhcp.ack_rx {
         return WanEvent::Idle;
+    }
+    if up.mode == 2 {
+        return pppoe_poll(up, buf);
     }
     let nic = up.nic;
     let n = match nic_rx(nic, buf) {
