@@ -1105,6 +1105,25 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
                     if err == 0 { TSR_TGO } else { err }, // 0 => "timeout, TSR clean"
                 );
             }
+            // Ring-desync evidence (read-only): which slot we armed, where the controller's
+            // queue pointer actually is, and both descriptors' status words at timeout.
+            unsafe {
+                let ring = core::ptr::addr_of!(TXRING.desc) as usize;
+                let qp = r(GEM, TBQP) as usize;
+                let hw_slot = if qp >= ring + DMA_BUS_OFFSET as usize { (qp - ring - DMA_BUS_OFFSET as usize) / DESC_SZ } else { 0xff };
+                let w1 = |k: usize| read_volatile(nc_desc(ring + k * DESC_SZ).add(1));
+                let dg = &mut *core::ptr::addr_of_mut!(TX_FAIL_DIAG);
+                dg[0] += 1;
+                dg[1] = slot as u32;
+                dg[2] = hw_slot as u32;
+                dg[3] = w1(0);
+                dg[4] = w1(1);
+                dg[5] = n as u32;
+                dg[6] = err;
+                if hw_slot != slot {
+                    dg[7] += 1; // controller parked on a DIFFERENT slot than the one armed
+                }
+            }
             if err & TSR_W1C != 0 {
                 w(GEM, TSR, err & TSR_W1C);
             }
@@ -1964,6 +1983,10 @@ pub struct El0TxPlan {
 ///  * the buffer is written through the NON-CACHEABLE alias, like `tx_frame` (tx_init dropped
 ///    the cacheable copies; a cacheable write here would be a mismatched-attribute hazard).
 ///  * latched TSR status from earlier frames is cleared before the kick (sticky + halting).
+/// tx_frame timeout evidence: [0] timeouts, [1] slot armed, [2] slot the controller's TBQP points
+/// at, [3]/[4] desc0/desc1 word1, [5] frame length, [6] TSR, [7] timeouts with hw slot != armed slot.
+pub static mut TX_FAIL_DIAG: [u32; 8] = [0; 8];
+
 pub fn tx_prep_el0(len: usize) -> El0TxPlan {
     let n = len.min(TXBUF);
     let slot = unsafe {

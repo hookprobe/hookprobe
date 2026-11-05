@@ -3451,6 +3451,9 @@ fn cm5_p10_probe() {
                                                 let w = unsafe { uplink::WAN_TX_DIAG };
                                                 let (_, _, dg) = cyw43::ap_diag();
                                                 kprint!("   [P11-AP3 wan-tx] too_big_for_pppoe={} (last ip len {}) gem_fail={} (last TSR {:#06x}) | wifi xoff_held={}\n", w[0], w[2], w[1], w[3], dg[16]);
+                                                let g = unsafe { arch_aarch64::gem::TX_FAIL_DIAG };
+                                                kprint!("   [P11-AP3 gem-tx] timeouts={} hw-slot!=armed={} | last: armed slot {} hw TBQP slot {} desc0.w1={:#010x} desc1.w1={:#010x} len {} TSR {:#06x}\n",
+                                                    g[0], g[7], g[1], g[2], g[3], g[4], g[5], g[6]);
                                             }
                                             let gs = arch_aarch64::gem::rx_stats();
                                             kprint!("   [P11-AP3 gem] rx frames={} 256-511={} 512-1023={} 1024-1518={} 1519+={} | oversize={} fcs_err={} len_err={} res_err={} overrun={} rsr={:#x} | wan_poll big(>600)={} un-NATed big={}\n",
