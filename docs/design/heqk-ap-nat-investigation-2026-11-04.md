@@ -159,3 +159,21 @@ Log: `~/heqk-metal-logs/20261104-AP-NAT-glom-4a1a996-22mbps.log`.
 Progression on the same iPhone: no traffic → 7–8 Mbps → ~11 Mbps → 22 Mbps (then collapse) →
 **22 Mbps steady**. Method lesson: measure, then copy the reference (brcmfmac source / a Linux trace
 on the same board) — the guesses (channel, block-RX) cost images; the trace and counters did not.
+
+## 2026-11-05 — DNS, ACS, regdomain, SDIO High-Speed, real VHT80 → ~45 Mbps
+
+| Image | Change | Metal result |
+|---|---|---|
+| 2146169 | DNS on the AP address (forwarded upstream), queue 128, ACS un-pinned | `dns_redir` 13, `wifi_tx_fail` 0; ACS picked 2.4 GHz ch11 → **15 Mbps** |
+| eacc4cc | SDIO High-Speed (Linux `mmc_sdio_switch_hs`), ACS = max expected throughput, regdomain list, channel readback | **SDCLK 50 MHz verified** (was 12.5 MHz default speed = 50 Mbit/s raw ceiling); readback exposed **ch36/20 (`0xd024`) instead of the requested 80 MHz** |
+| 89138e5 | `chanspec` as a 4-byte int (brcmfmac `iovar_int_set`), SET_INFRA before SET_AP, `chanspecs` GET with an input chanspec | chanspec accepted, readback **`0xe02a` = ch36/80**, 66 regdomain chanspecs (RO), 3 periodic readbacks / 0 mismatches; **~45 Mbps** |
+
+Root causes (all confirmed against the brcmfmac source or a Linux register read, not inferred):
+the SDIO bus never left default-speed timing (12.5 MHz); the AP was **never** 80 MHz — the 2-byte
+chanspec was refused and a silent 20-MHz `WLC_SET_CHANNEL` fallback reported success; the
+`chanspecs` request lacked its input chanspec (count 0); `bcdc_dcmd` carried its own pre-fix frame
+reader (now uses the fixed one). Log: `~/heqk-metal-logs/20261105-AP-vht80-hs50-45mbps-89138e5.log`.
+
+Remaining gap to Linux (~150 Mbps): polled single loop + PIO SDIO, per-frame interrupt-status
+CMD52/CMD53 overhead, 1-ms dry-poll delays, no TX glomming; 802.11ax is impossible on the
+CYW43455 (Wi-Fi 5, 1x1) — Wi-Fi 6 needs a PCIe module + a new heqk driver (hardware tier).
