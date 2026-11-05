@@ -1608,6 +1608,24 @@ fn kso_enable() {
     }
     unsafe { KSO_DIAG = (before as u32, after as u32) };
 }
+/// TX-credit stall evidence: the bus clock/sleep state brcmfmac re-requests before EVERY bus access
+/// (brcmf_sdio_clkctl / brcmf_sdio_bus_sleep in the DPC) and heqk only set once at bring-up. If the
+/// chip dropped HT, F2 reads come back all-zero (heqk sees "dry") while F1 register reads still
+/// work — exactly a frozen credit with intstatus=0. Returns
+/// [CHIPCLKCSR, SLEEPCSR, CCCR IORDY(0x03)] — no F2 access (a half-read frame wedges the stream).
+pub fn bus_clock_state() -> [u32; 3] {
+    [
+        cmd52(false, 1, CHIPCLKCSR, 0).map(|v| v as u32).unwrap_or(0xEE),
+        cmd52(false, 1, SBSDIO_SLEEPCSR, 0).map(|v| v as u32).unwrap_or(0xEE),
+        cmd52(false, 0, 0x03, 0).map(|v| v as u32).unwrap_or(0xEE),
+    ]
+}
+/// Re-assert KSO + HT (the brcmfmac wake path). Returns CHIPCLKCSR afterwards.
+pub fn bus_wake() -> u32 {
+    kso_enable();
+    ensure_ht_avail() as u32
+}
+
 /// (SLEEPCSR before, after) — after should have KSO_EN(0x01) set.
 pub fn kso_diag() -> (u32, u32) {
     unsafe { KSO_DIAG }
