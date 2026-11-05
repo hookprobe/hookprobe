@@ -2163,10 +2163,52 @@ pub fn fw_pktcnts() -> Option<[u32; 5]> {
 }
 
 /// "sta_info" for one station, RAW (decoded later against brcmf_sta_info_le — not guessed here).
-pub fn fw_sta_info_raw(sta: &[u8; 6], out: &mut [u8; 128]) -> bool {
+pub fn fw_sta_info_raw(sta: &[u8; 6], out: &mut [u8; 192]) -> bool {
     let mut req = [0u8; 48];
     let n = iovar_buf(b"sta_info", sta, &mut req);
     bcdc_dcmd(WLC_GET_VAR, 0, &req[..n], out).0
+}
+
+/// Decoded "sta_info" (brcmf_sta_info_le, fwil_types.h — NOT packed, natural alignment):
+/// ver@0 len@2 flags@8 idle@12 ea@16 in@44 tx_pkts@52 tx_failures@56 rx_ucast@60 tx_rate@68
+/// rx_rate@72 tx_pkts_retry_exhausted@164. Flags: ASSOC 0x10, AUTHO 0x20, PS 0x100 (STA in power
+/// save from the AP's viewpoint), AMPDU_CAP 0x8000. ver/len are returned so the layout is checked
+/// on metal, not assumed.
+#[derive(Clone, Copy, Default, Debug)]
+pub struct StaInfo {
+    pub ver: u16,
+    pub len: u16,
+    pub flags: u32,
+    pub idle: u32,
+    pub in_secs: u32,
+    pub tx_pkts: u32,
+    pub tx_failures: u32,
+    pub rx_ucast: u32,
+    pub tx_rate: u32,
+    pub rx_rate: u32,
+    pub retry_exhausted: u32,
+}
+pub fn fw_sta_info(sta: &[u8; 6]) -> Option<StaInfo> {
+    let mut b = [0u8; 192];
+    if !fw_sta_info_raw(sta, &mut b) {
+        return None;
+    }
+    let u32at = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+    let ver = u16::from_le_bytes([b[0], b[1]]);
+    let len = u16::from_le_bytes([b[2], b[3]]);
+    Some(StaInfo {
+        ver,
+        len,
+        flags: u32at(8),
+        idle: u32at(12),
+        in_secs: u32at(44),
+        tx_pkts: if ver >= 3 { u32at(52) } else { 0 },
+        tx_failures: if ver >= 3 { u32at(56) } else { 0 },
+        rx_ucast: if ver >= 3 { u32at(60) } else { 0 },
+        tx_rate: if ver >= 3 { u32at(68) } else { 0 },
+        rx_rate: if ver >= 3 { u32at(72) } else { 0 },
+        retry_exhausted: if ver >= 4 && len as usize >= 168 { u32at(164) } else { 0 },
+    })
 }
 
 /// SDIO core interrupt status (for the stall snapshot).
@@ -3561,7 +3603,17 @@ pub fn ap_tx(eth: &[u8]) -> bool {
 /// phone never got its SYN-ACKs). The serve loop queues deliveries while this is false and
 /// flushes after the next read (brcmfmac does the same: packets wait for a credit update).
 pub fn tx_credit_ok() -> bool {
-    txctl_ok() && unsafe { FC_MASK } == 0
+    data_ok() && unsafe { FC_MASK } == 0
+}
+
+/// brcmfmac reserves TXCTL_CREDITS (2) for control frames (sdio.c data_ok). heqk reserves them
+/// ALWAYS (simpler than "only while a control frame is pending", and heqk's control path is
+/// synchronous): data never takes the last 2 credits, so a control request — the stall snapshot's
+/// pktcnts / sta_info — can still reach the firmware when data has exhausted the window.
+const TXCTL_CREDITS: u8 = 2;
+fn data_ok() -> bool {
+    let d = credit_avail();
+    (d & 0x80) == 0 && d > TXCTL_CREDITS
 }
 
 /// Set after a successful read: the firmware raises I_HMB_FRAME_IND for the FIRST queued
@@ -4647,7 +4699,7 @@ fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
 const DATA_TX_BUF: usize = 4 * 512;
 
 fn sdpcm_data_tx(eth: &[u8]) -> bool {
-    if !txctl_ok() {
+    if !data_ok() {
         unsafe { AP_DIAG[5] += 1 };
         return false;
     }

@@ -3082,7 +3082,8 @@ fn cm5_p10_probe() {
                         let mut sent_ring = [(0u32, 0u16); 4];
                         let mut sent_i = 0usize;
                         let (mut credit0_since, mut stall_diag_done) = (0u64, false);
-                        let mut rx_busy = false; // the last pump read returned a frame (firmware RX pending)
+                        let mut rx_busy = false;
+                        let mut last_sta = [0u8; 6]; // most recent associated station (sta_info baseline) // the last pump read returned a frame (firmware RX pending)
                         // Which signed rules are DROPping forwarded frames (the beat names them).
                         let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
                         let mut evs = [events::Event::EMPTY; 16];
@@ -3133,13 +3134,13 @@ fn cm5_p10_probe() {
                             {
                                 let (seq, max, _) = cyw43::ap_diag();
                                 let t = now();
-                                if max.wrapping_sub(seq) == 0 && wq_n > 0 {
+                                if max.wrapping_sub(seq) <= 2 && wq_n > 0 {
                                     if credit0_since == 0 {
                                         credit0_since = t;
                                     } else if !stall_diag_done && t.wrapping_sub(credit0_since) > 2 * freq {
                                         stall_diag_done = true;
                                         let (rseq, gaps, maxahead) = cyw43::rx_diag();
-                                        kprint!(" [STALL-DIAG] tx credit 0 for >2 s: tx_seq={} tx_max={} fc_mask={:#04x} | max window ever ahead of tx_seq={} | last rx seq={} rx seq gaps={} | sdio intstatus={:#010x} | queued={} wifi_frames={}\n",
+                                        kprint!(" [STALL-DIAG] tx credit <=2 (data-exhausted) for >2 s: tx_seq={} tx_max={} fc_mask={:#04x} | max window ever ahead of tx_seq={} | last rx seq={} rx seq gaps={} | sdio intstatus={:#010x} | queued={} wifi_frames={}\n",
                                             seq, max, cyw43::fc_mask(), maxahead, rseq, gaps, cyw43::sdio_intstatus(), wq_n, wifi_frames);
                                         // Bus clock evidence FIRST (before any probe that could perturb it). HT_AVAIL=0x80
                                         // in CHIPCLKCSR, KSO=0x01 in SLEEPCSR, F2 ready=0x04 in IORDY.
@@ -3167,17 +3168,20 @@ fn cm5_p10_probe() {
                                                 if b[2] != a[2] { "firmware IS transmitting (case 2: credit not returned)" } else { "firmware NOT transmitting (case 1)" });
                                         }
                                         {
+                                            // Firmware's view of the station, twice 1 s apart (control credit is reserved).
                                             let mut sta = [0u8; 6];
                                             sta.copy_from_slice(&wq[wq_head % WQ_N][0..6]);
-                                            let mut si = [0u8; 128];
-                                            if cyw43::fw_sta_info_raw(&sta, &mut si) {
-                                                for row in 0..8 {
-                                                    let r = &si[row * 16..row * 16 + 16];
-                                                    kprint!("   [STALL-DIAG] sta_info+{:03}: {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x} {:02x}\n", row * 16,
-                                                        r[0], r[1], r[2], r[3], r[4], r[5], r[6], r[7], r[8], r[9], r[10], r[11], r[12], r[13], r[14], r[15]);
+                                            let s1 = cyw43::fw_sta_info(&sta);
+                                            let t1 = now();
+                                            while now().wrapping_sub(t1) < freq {}
+                                            let s2 = cyw43::fw_sta_info(&sta);
+                                            for (tag, s) in [("t0", s1), ("t0+1s", s2)] {
+                                                match s {
+                                                    Some(i) => kprint!("   [STALL-DIAG] sta_info {}: ver={} len={} flags={:#x} (ASSOC={} AUTHO={} PS={} AMPDU={}) idle={}s in={}s tx_pkts={} tx_fail={} rx_ucast={} tx_rate={} rx_rate={} retry_exh={}\n",
+                                                        tag, i.ver, i.len, i.flags, i.flags & 0x10 != 0, i.flags & 0x20 != 0, i.flags & 0x100 != 0, i.flags & 0x8000 != 0,
+                                                        i.idle, i.in_secs, i.tx_pkts, i.tx_failures, i.rx_ucast, i.tx_rate, i.rx_rate, i.retry_exhausted),
+                                                    None => kprint!("   [STALL-DIAG] sta_info {}: GET failed\n", tag),
                                                 }
-                                            } else {
-                                                kprint!("   [STALL-DIAG] sta_info GET failed\n");
                                             }
                                         }
                                         match cyw43::fw_shared() {
@@ -3217,6 +3221,7 @@ fn cm5_p10_probe() {
                             match ev {
                                 cyw43::ApEvent::Assoc(sta) => {
                                     assocs += 1;
+                                    last_sta = sta;
                                     kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
                                         sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                                     // A station that re-associates MID-handshake gets a fresh ANonce
@@ -3494,6 +3499,14 @@ fn cm5_p10_probe() {
                                                 }
                                             }
                                             kprint!("   [P11-AP3 chan] chosen {:#06x} | readbacks={} mismatches={} last={:#06x}\n", chosen_cs, ch_checks, ch_mismatch, ch_last);
+                                            // Healthy-state baseline of the firmware's view of the station (compare with the
+                                            // stall snapshot): every 12th beat, only while associated.
+                                            if beat_n % 12 == 0 && last_sta != [0u8; 6] {
+                                                if let Some(i) = cyw43::fw_sta_info(&last_sta) {
+                                                    kprint!("   [P11-AP3 sta] ver={} len={} flags={:#x} (PS={}) idle={}s tx_pkts={} tx_fail={} rx_ucast={} tx_rate={} retry_exh={}\n",
+                                                        i.ver, i.len, i.flags, i.flags & 0x100 != 0, i.idle, i.tx_pkts, i.tx_failures, i.rx_ucast, i.tx_rate, i.retry_exhausted);
+                                                }
+                                            }
                                             {
                                                 let w = unsafe { uplink::WAN_TX_DIAG };
                                                 let (_, _, dg) = cyw43::ap_diag();
