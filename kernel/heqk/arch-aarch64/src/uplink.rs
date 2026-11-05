@@ -295,8 +295,14 @@ fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mu
         let sent = nic_tx(nic, &enc[..en]);
         if k == 1 { out.gw_ping_tx = sent } else { out.inet_ping_tx = sent }
         let dl = cntpct() + ticks_ms(if k == 1 { WAIT_MS } else { WAIT_MS * 2 });
+        let mut next_retx = cntpct() + ticks_ms(RETX_MS);
         let mut dec = [0u8; 2048];
         while cntpct() < dl {
+            // Retransmit every second: the AC may still be configuring its side of the link.
+            if cntpct() >= next_retx {
+                let _ = nic_tx(nic, &enc[..en]);
+                next_retx = cntpct() + ticks_ms(RETX_MS);
+            }
             let Some(n) = nic_rx(nic, &mut buf) else { continue };
             let n = n.min(buf.len());
             if let Some(dn) = eng.decap_ipv4(&buf[..n], &mut dec) {
@@ -342,7 +348,22 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
     let nic = up.nic;
     let n = match nic_rx(nic, buf) {
         Some(n) if n >= 14 => n.min(buf.len()),
-        _ => return WanEvent::Idle,
+        _ => {
+            // Idle: run the keepalive clock (Echo-Request every 10 s, 3 misses => down => re-dial).
+            unsafe {
+                if let Some(e) = (*core::ptr::addr_of_mut!(PPP)).as_mut() {
+                    let mut tx = Tx::new();
+                    e.tick(ms_now(), &mut tx);
+                    for i in 0..tx.n {
+                        let _ = nic_tx(nic, tx.frame(i));
+                    }
+                    if e.phase == Phase::Down {
+                        up.dhcp.ack_rx = false;
+                    }
+                }
+            }
+            return WanEvent::Idle;
+        }
     };
     unsafe {
         let Some(e) = (*core::ptr::addr_of_mut!(PPP)).as_mut() else { return WanEvent::Idle };

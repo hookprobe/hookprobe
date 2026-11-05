@@ -51,6 +51,10 @@ pub const PPPOE_MSS: u16 = PPPOE_MTU - 40;
 
 const RETRY_MS: u64 = 2_000;
 const MAX_TRIES: u32 = 8;
+/// Client-side LCP keepalive (as pppd's lcp-echo-interval / lcp-echo-failure): an Echo-Request
+/// every ECHO_MS while Open; ECHO_MISSES unanswered => the session is dead (cable moved, AC gone).
+pub const ECHO_MS: u64 = 10_000;
+pub const ECHO_MISSES: u32 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Phase {
@@ -79,6 +83,8 @@ pub enum DownWhy {
     NoAddress,
     PeerTerminated,
     Padt,
+    /// ECHO_MISSES keepalives unanswered.
+    NoEcho,
 }
 
 /// Up to three control frames produced by one input (a reply plus a new-phase request).
@@ -124,6 +130,8 @@ pub struct Stats {
     pub lcp_nak_rej_tx: u32,
     pub echo_replies: u32,
     pub proto_rejects: u32,
+    pub echo_tx: u32,
+    pub echo_rx: u32,
     pub auth_tx: u32,
     pub ipcp_req_tx: u32,
 }
@@ -171,6 +179,9 @@ pub struct Pppoe {
     // retransmit
     last_ms: u64,
     tries: u32,
+    // keepalive
+    echo_out: u32,
+    last_echo_ms: u64,
 }
 
 fn be16(b: &[u8], o: usize) -> u16 {
@@ -194,7 +205,7 @@ impl Pppoe {
             lcp_id: 0, magic: if magic == 0 { 0x4845_514b } else { magic }, mru: PPPOE_MTU, send_mru: true, send_magic: true,
             lcp_ack_rx: false, lcp_ack_tx: false,
             ipcp_id: 0, want_dns1: true, want_dns2: true, ipcp_ack_rx: false, ipcp_ack_tx: false,
-            pap_id: 0, last_ms: 0, tries: 0,
+            pap_id: 0, last_ms: 0, tries: 0, echo_out: 0, last_echo_ms: 0,
         }
     }
 
@@ -427,6 +438,26 @@ impl Pppoe {
 
     /// Retransmit / give up on timers. Call regularly with a monotonic millisecond clock.
     pub fn tick(&mut self, now_ms: u64, tx: &mut Tx) {
+        if self.phase == Phase::Open {
+            if self.last_echo_ms == 0 {
+                self.last_echo_ms = now_ms; // the session just opened: first echo one interval later
+                return;
+            }
+            if now_ms.wrapping_sub(self.last_echo_ms) >= ECHO_MS {
+                if self.echo_out >= ECHO_MISSES {
+                    self.down(DownWhy::NoEcho);
+                    return;
+                }
+                let m = self.magic.to_be_bytes();
+                self.lcp_id = self.lcp_id.wrapping_add(1);
+                let id = self.lcp_id;
+                self.send_ctl(tx, PPP_LCP, ECHO_REQ, id, &m);
+                self.echo_out += 1;
+                self.stats.echo_tx += 1;
+                self.last_echo_ms = now_ms;
+            }
+            return;
+        }
         if now_ms.wrapping_sub(self.last_ms) < RETRY_MS {
             return;
         }
@@ -632,6 +663,10 @@ impl Pppoe {
                     o += l;
                 }
                 self.send_lcp_req(now_ms, tx);
+            }
+            ECHO_REP => {
+                self.echo_out = 0;
+                self.stats.echo_rx += 1;
             }
             ECHO_REQ => {
                 let mut d = [0u8; 64];
