@@ -469,6 +469,8 @@ pub fn parse_wan_cfg(buf: &[u8]) -> Result<WanMode, WanCfgErr> {
             b"dns" => dns = Some(parse_quad(v).ok_or(WanCfgErr::BadAddr)?),
             b"pppoe_user" => user = Some(v),
             b"pppoe_pass" => pass = Some(v),
+            // link-level keys: parsed by parse_wan_link
+            b"vlan" | b"vlan_outer" | b"pcp" | b"mgmt_vlan" | b"mgmt" | b"mgmt_ip" | b"mgmt_gw" => {}
             _ => return Err(WanCfgErr::BadLine),
         }
     }
@@ -507,6 +509,110 @@ pub fn parse_wan_cfg(buf: &[u8]) -> Result<WanMode, WanCfgErr> {
         }
         _ => Err(WanCfgErr::BadMode),
     }
+}
+
+/// The management sub-interface on the WAN port (a separate VLAN; never the internet one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MgmtIf {
+    pub vlan: u16,
+    /// None = DHCP; Some = static (ip, prefix, gateway).
+    pub stat: Option<([u8; 4], u8, [u8; 4])>,
+}
+
+/// Link-level WAN settings from WAN.TXT: how the internet sub-interface is tagged, and the optional
+/// management sub-interface. Keys: `vlan=<1-4094>`, `vlan_outer=<1-4094>` (QinQ S-tag, needs `vlan`),
+/// `pcp=<0-7>`, `mgmt_vlan=<1-4094>` (must differ from `vlan`), `mgmt=dhcp|static`,
+/// `mgmt_ip=<a.b.c.d/len>`, `mgmt_gw=<a.b.c.d>`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WanLink {
+    pub vlan: u16,
+    pub outer: u16,
+    pub pcp: u8,
+    pub mgmt: Option<MgmtIf>,
+}
+
+pub fn parse_wan_link(buf: &[u8]) -> Result<WanLink, WanCfgErr> {
+    let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    let mut l = WanLink::default();
+    let (mut mvlan, mut mmode, mut mip, mut mgw) = (0u16, None::<&[u8]>, None::<([u8; 4], u8)>, None::<[u8; 4]>);
+    let vid = |v: &[u8]| -> Result<u16, WanCfgErr> {
+        if v.is_empty() || v.len() > 4 || !v.iter().all(|c| c.is_ascii_digit()) {
+            return Err(WanCfgErr::BadLine);
+        }
+        let n = v.iter().fold(0u32, |a, &c| a * 10 + (c - b'0') as u32);
+        if (1..=4094).contains(&n) { Ok(n as u16) } else { Err(WanCfgErr::BadLine) }
+    };
+    let mut magic = false;
+    for raw in buf[..end].split(|&b| b == b'\n') {
+        let line = trim(raw);
+        if line.is_empty() || line[0] == b'#' {
+            continue;
+        }
+        if !magic {
+            if line != WAN_CFG_MAGIC {
+                return Err(WanCfgErr::NoMagic);
+            }
+            magic = true;
+            continue;
+        }
+        let eq = line.iter().position(|&b| b == b'=').ok_or(WanCfgErr::BadLine)?;
+        let (k, v) = (trim(&line[..eq]), trim(&line[eq + 1..]));
+        match k {
+            b"vlan" => l.vlan = vid(v)?,
+            b"vlan_outer" => l.outer = vid(v)?,
+            b"pcp" => {
+                if v.len() != 1 || !(b'0'..=b'7').contains(&v[0]) {
+                    return Err(WanCfgErr::BadLine);
+                }
+                l.pcp = v[0] - b'0';
+            }
+            b"mgmt_vlan" => mvlan = vid(v)?,
+            b"mgmt" => mmode = Some(v),
+            b"mgmt_ip" => {
+                let slash = v.iter().position(|&b| b == b'/').ok_or(WanCfgErr::BadPrefix)?;
+                let ip = parse_quad(&v[..slash]).ok_or(WanCfgErr::BadAddr)?;
+                let p = &v[slash + 1..];
+                if p.is_empty() || p.len() > 2 || !p.iter().all(|c| c.is_ascii_digit()) {
+                    return Err(WanCfgErr::BadPrefix);
+                }
+                let pl = p.iter().fold(0u8, |a, &c| a * 10 + (c - b'0'));
+                if !(8..=30).contains(&pl) {
+                    return Err(WanCfgErr::BadPrefix);
+                }
+                mip = Some((ip, pl));
+            }
+            b"mgmt_gw" => mgw = Some(parse_quad(v).ok_or(WanCfgErr::BadAddr)?),
+            _ => {}
+        }
+    }
+    if !magic {
+        return Err(WanCfgErr::NoMagic);
+    }
+    if l.outer != 0 && l.vlan == 0 {
+        return Err(WanCfgErr::Missing); // QinQ needs the inner (customer) tag
+    }
+    if mvlan != 0 {
+        if mvlan == l.vlan {
+            return Err(WanCfgErr::BadLine); // management must be its own VLAN
+        }
+        let stat = match mmode {
+            None | Some(b"dhcp") => None,
+            Some(b"static") => {
+                let (ip, pl) = mip.ok_or(WanCfgErr::Missing)?;
+                let gw = mgw.ok_or(WanCfgErr::Missing)?;
+                let mask: u32 = u32::MAX << (32 - pl as u32);
+                if u32::from_be_bytes(ip) & mask != u32::from_be_bytes(gw) & mask || ip == gw {
+                    return Err(WanCfgErr::BadGateway);
+                }
+                Some((ip, pl, gw))
+            }
+            _ => return Err(WanCfgErr::BadMode),
+        };
+        l.mgmt = Some(MgmtIf { vlan: mvlan, stat });
+    } else if mmode.is_some() || mip.is_some() {
+        return Err(WanCfgErr::Missing); // management settings without a management VLAN
+    }
+    Ok(l)
 }
 
 // ── MD5 (RFC 1321) — needed ONLY for PPP CHAP-MD5 (RFC 1994), which ISPs still require. Not used
@@ -578,3 +684,6 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
     }
     out
 }
+
+/// WAN policy engine: prefix lists, ACLs, routes, sub-interface encapsulation (POLICY.TXT).
+pub mod policy;
