@@ -142,6 +142,18 @@ fn entry_for_ext(proto: u8, ext: u16, now: u64) -> Option<Entry> {
 }
 
 /// Clamp TCP option MSS (kind 2) on a SYN. `tcp` = the TCP header (+options) slice.
+/// Runtime MSS ceiling below MSS_CLAMP (0 = none): the WAN sets 1452 when it runs PPPoE (MTU 1492).
+static MSS_LIMIT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+pub fn set_mss_limit(v: u16) {
+    MSS_LIMIT.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+fn mss_ceiling() -> u16 {
+    match MSS_LIMIT.load(core::sync::atomic::Ordering::Relaxed) {
+        0 => MSS_CLAMP,
+        l => l.min(MSS_CLAMP),
+    }
+}
+
 fn clamp_mss(tcp: &mut [u8], st: &mut NatStats) {
     if tcp.len() < 20 || tcp[13] & 0x02 == 0 {
         return; // not a SYN
@@ -157,8 +169,8 @@ fn clamp_mss(tcp: &mut [u8], st: &mut NatStats) {
             1 => p += 1,
             2 if p + 4 <= doff => {
                 let mss = u16::from_be_bytes([tcp[p + 2], tcp[p + 3]]);
-                if mss > MSS_CLAMP {
-                    tcp[p + 2..p + 4].copy_from_slice(&MSS_CLAMP.to_be_bytes());
+                if mss > mss_ceiling() {
+                    tcp[p + 2..p + 4].copy_from_slice(&mss_ceiling().to_be_bytes());
                     st.mss_clamped += 1;
                 }
                 return;
