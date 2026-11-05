@@ -2223,6 +2223,30 @@ pub fn poke_dev_int() {
     let _ = bp_w32(sdio_core_base() + SD_REG_TOSBMAILBOX, SMB_DEV_INT);
 }
 
+/// AP data-path PROFILER (metal question 2026-11-05: Wi-Fi TX tops out ~40 Mbps where Linux did ~150
+/// on this chip — where does the loop's wall time go?). Per slot: [count, total ticks, max ticks].
+/// Slots: 0 data TX (sdpcm_data_tx), 1 RX frame read (got a frame), 2 RX dry pass (no frame),
+/// 3 glom superframe read, 4 ap_poll total, 5 WAN drain, 6 WFE idle, 7 whole loop iteration.
+pub static mut PROF: [[u64; 3]; 8] = [[0; 3]; 8];
+#[inline(always)]
+pub fn ticks() -> u64 {
+    let c: u64;
+    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack)) };
+    c
+}
+#[inline(always)]
+pub fn prof_add(slot: usize, t0: u64) {
+    let d = ticks().wrapping_sub(t0);
+    unsafe {
+        let p = &mut *core::ptr::addr_of_mut!(PROF);
+        p[slot][0] += 1;
+        p[slot][1] += d;
+        if d > p[slot][2] {
+            p[slot][2] = d;
+        }
+    }
+}
+
 /// SDIO core interrupt status (for the stall snapshot).
 pub fn sdio_intstatus() -> u32 {
     bp_r32(sdio_core_base() + SD_REG_INTSTATUS)
@@ -2267,6 +2291,11 @@ fn read_sdpcm_frame_dry(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
 
 /// Descriptor in `rx[..dlen]` -> read + validate the superframe into GLOM (queue its sub-frames).
 fn glom_read(rx: &[u8], dlen: usize) {
+    let t0 = ticks();
+    glom_read_inner(rx, dlen);
+    prof_add(3, t0);
+}
+fn glom_read_inner(rx: &[u8], dlen: usize) {
     #[cfg(feature = "wifi-bigrx")]
     {
         let mut subl = [0u16; hal::GLOM_MAX_SUBS];
@@ -2303,6 +2332,12 @@ fn glom_read(rx: &[u8], dlen: usize) {
 }
 
 fn read_sdpcm_frame_raw(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
+    let t0 = ticks();
+    let r = read_sdpcm_frame_raw_inner(rx, max_dry);
+    prof_add(if r.is_some() { 1 } else { 2 }, t0);
+    r
+}
+fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
     let sdb = sdio_core_base();
     let mut hw_len;
     let mut hw_ck;
@@ -2464,6 +2499,9 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let mut iob = [0u8; 64];
     let n = iovar_buf(b"event_msgs", &mask, &mut iob);
     let ev_ok = bcdc_iovar_set(&iob[..n]);
+    // P2b. txbf=1 — transmit beamforming ON, exactly as brcmf_c_preinit_dcmds does on this chip while
+    //      DOWN (Linux driver-load trace 2026-11-05: "name=txbf, len=4  01 00 00 00"). heqk never set it.
+    let _ = iovar_set_u32(b"txbf", 1);
     // P3. scan dwell tuning — longer than brcmf's 40ms default so we actually hear beacons
     //     (~100ms apart) from weaker APs; 40ms only caught the strongest few.
     let _ = wlc_set_int(WLC_SET_SCAN_CHANNEL_TIME, 120);
@@ -4711,6 +4749,12 @@ fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
 const DATA_TX_BUF: usize = 4 * 512;
 
 fn sdpcm_data_tx(eth: &[u8]) -> bool {
+    let t0 = ticks();
+    let r = sdpcm_data_tx_inner(eth);
+    prof_add(0, t0);
+    r
+}
+fn sdpcm_data_tx_inner(eth: &[u8]) -> bool {
     if !data_ok() {
         unsafe { AP_DIAG[5] += 1 };
         return false;
