@@ -2211,6 +2211,14 @@ pub fn fw_sta_info(sta: &[u8; 6]) -> Option<StaInfo> {
     })
 }
 
+/// Raise a pure host->dongle interrupt (tosbmailbox SMB_DEV_INT, sdio.c: "Miscellaneous
+/// Interrupt") — no frame, no credit. Stall experiment A: does a bare dongle wake-up restart the
+/// firmware's TX to the station, or does it take a real control frame (experiment B)?
+pub fn poke_dev_int() {
+    const SMB_DEV_INT: u32 = 1 << 3;
+    let _ = bp_w32(sdio_core_base() + SD_REG_TOSBMAILBOX, SMB_DEV_INT);
+}
+
 /// SDIO core interrupt status (for the stall snapshot).
 pub fn sdio_intstatus() -> u32 {
     bp_r32(sdio_core_base() + SD_REG_INTSTATUS)
