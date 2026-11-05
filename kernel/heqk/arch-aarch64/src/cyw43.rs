@@ -1999,10 +1999,149 @@ fn glom_next(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
 /// frame read. brcmfmac never dequeues a DATA frame of a precedence whose bit is set
 /// (brcmf_sdio_sendfromq: tx_prec_map = ~bus->flowcontrol).
 static mut FC_MASK: u8 = 0;
+/// (last RX SDPCM seq, RX seq gaps, max window-ahead-of-tx_seq ever advertised, seen-any)
+static mut RX_DIAG: (u32, u32, u32, u32) = (0, 0, 0, 0);
+pub fn rx_diag() -> (u32, u32, u32) {
+    unsafe { (RX_DIAG.0, RX_DIAG.1, RX_DIAG.2) }
+}
+pub fn fc_mask() -> u8 {
+    unsafe { FC_MASK }
+}
+
+// ── Firmware shared memory: console log + trap/assert (brcmfmac brcmf_sdio_readshared /
+//    brcmf_sdio_readconsole / brcmf_sdio_checkdied) — diagnostics for the TX-credit stall. ──
+
+/// Read chip RAM over the F1 backplane: CMD53 chunks <= 64 B that never cross a 32-KB window.
+fn ram_read(addr: u32, out: &mut [u8]) -> bool {
+    let mut off = 0usize;
+    while off < out.len() {
+        let a = addr + off as u32;
+        let left_in_win = 0x8000 - (a & 0x7FFF) as usize;
+        let n = (out.len() - off).min(64).min(left_in_win);
+        if !set_backplane_window(a) || !cmd53_read(1, (a & 0x7FFF) | 0x8000, &mut out[off..off + n]) {
+            return false;
+        }
+        off += n;
+    }
+    true
+}
+
+/// sdpcm_shared (flags, trap_addr, assert_exp_addr, assert_file_addr, assert_line, console_addr).
+#[derive(Clone, Copy, Default)]
+pub struct FwShared {
+    pub addr: u32,
+    pub flags: u32,
+    pub trap_addr: u32,
+    pub assert_file_addr: u32,
+    pub assert_line: u32,
+    pub console_addr: u32,
+}
+pub const SDPCM_SHARED_ASSERT: u32 = 0x0200;
+pub const SDPCM_SHARED_TRAP: u32 = 0x0400;
+
+/// Locate + read sdpcm_shared: its address is the LAST word of chip RAM (CR4: rambase != 0, so
+/// no save/restore adjustment), validated as brcmf_sdio_valid_shared_address does.
+pub fn fw_shared() -> Option<FwShared> {
+    let rs = unsafe { RAM_SIZE_DIAG };
+    let rs = if rs == 0 { RAM_SIZE } else { rs };
+    let mut w = [0u8; 4];
+    if !ram_read(RAM_BASE + rs - 4, &mut w) {
+        return None;
+    }
+    let addr = u32::from_le_bytes(w);
+    if addr == 0 || ((!addr >> 16) & 0xffff) == (addr & 0xffff) {
+        return None;
+    }
+    let mut b = [0u8; 24];
+    if !ram_read(addr, &mut b) {
+        return None;
+    }
+    let le = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+    Some(FwShared { addr, flags: le(0), trap_addr: le(4), assert_file_addr: le(12), assert_line: le(16), console_addr: le(20) })
+}
+
+static mut CON_LAST: u32 = 0;
+static mut CON_BUF: [u8; 4096] = [0; 4096];
+
+/// Print new firmware console lines ([FWCON] ...) since the last call, at most `max_lines`.
+/// Returns (lines printed, console buf size, console idx) or None.
+pub fn fw_console_dump(sh: &FwShared, max_lines: u32) -> Option<(u32, u32, u32)> {
+    if sh.console_addr == 0 {
+        return None;
+    }
+    let mut l = [0u8; 12]; // rte_console.log_le at +8: buf, buf_size, idx
+    if !ram_read(sh.console_addr + 8, &mut l) {
+        return None;
+    }
+    let le = |o: usize| u32::from_le_bytes([l[o], l[o + 1], l[o + 2], l[o + 3]]);
+    let (buf, size, idx) = (le(0), le(4), le(8));
+    if size == 0 || size as usize > 4096 || idx > size {
+        return Some((0, size, idx));
+    }
+    let cb = unsafe { &mut (&mut *core::ptr::addr_of_mut!(CON_BUF))[..size as usize] };
+    if !ram_read(buf, cb) {
+        return None;
+    }
+    let mut last = unsafe { CON_LAST } % size;
+    let mut lines = 0;
+    let mut line = [0u8; 160];
+    let mut n = 0usize;
+    while last != idx && lines < max_lines {
+        let ch = cb[last as usize];
+        last = (last + 1) % size;
+        if ch == b'\n' || n == line.len() {
+            let mut m = n;
+            if m > 0 && line[m - 1] == b'\r' {
+                m -= 1;
+            }
+            if m > 0 {
+                crate::_print(format_args!("   [FWCON] {}\n", core::str::from_utf8(&line[..m]).unwrap_or("<non-utf8>")));
+                lines += 1;
+            }
+            n = 0;
+        } else if (0x20..0x7f).contains(&ch) || ch == b'\r' {
+            line[n] = ch;
+            n += 1;
+        }
+    }
+    unsafe { CON_LAST = last };
+    Some((lines, size, idx))
+}
+
+/// If the firmware trapped or asserted, print the trap frame / assert location (checkdied).
+pub fn fw_trap_dump(sh: &FwShared) {
+    if sh.flags & SDPCM_SHARED_TRAP != 0 && sh.trap_addr != 0 {
+        let mut t = [0u8; 80];
+        if ram_read(sh.trap_addr, &mut t) {
+            let r = |i: usize| u32::from_le_bytes([t[4 * i], t[4 * i + 1], t[4 * i + 2], t[4 * i + 3]]);
+            crate::_print(format_args!("   [FWTRAP] type={:#x} epc={:#010x} cpsr={:#x} spsr={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} sp={:#010x} lr={:#010x} pc={:#010x}\n",
+                r(0), r(1), r(2), r(3), r(4), r(5), r(6), r(7), r(17), r(18), r(19)));
+        }
+    }
+    if sh.flags & SDPCM_SHARED_ASSERT != 0 {
+        let mut f = [0u8; 48];
+        let ok = sh.assert_file_addr != 0 && ram_read(sh.assert_file_addr, &mut f);
+        let end = f.iter().position(|&c| c == 0).unwrap_or(f.len());
+        crate::_print(format_args!("   [FWASSERT] line {} file {}\n", sh.assert_line,
+            if ok { core::str::from_utf8(&f[..end]).unwrap_or("?") } else { "?" }));
+    }
+}
+
+/// SDIO core interrupt status (for the stall snapshot).
+pub fn sdio_intstatus() -> u32 {
+    bp_r32(sdio_core_base() + SD_REG_INTSTATUS)
+}
 
 fn apply_window(w1r: u32) {
     unsafe { FC_MASK = (w1r & 0xff) as u8 };
     let mut new_max = ((w1r >> 8) & 0xff) as u8;
+    unsafe {
+        // case-3 discriminator: the highest window the firmware ever advertised, relative to tx_seq
+        let ahead = new_max.wrapping_sub(TX_SEQ);
+        if ahead < 0x80 && ahead as u32 > RX_DIAG.2 {
+            RX_DIAG.2 = ahead as u32;
+        }
+    }
     unsafe { AP_DIAG[3] = w1r };
     if new_max.wrapping_sub(unsafe { TX_SEQ }) > 0x40 {
         new_max = unsafe { TX_SEQ }.wrapping_add(2);
@@ -2096,6 +2235,14 @@ fn read_sdpcm_frame_raw(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
     let channel = ((w0r >> 8) & 0xf) as u8;
     let doffset = ((w0r >> 24) & 0xff) as usize;
+    unsafe {
+        let seq = (w0r & 0xff) as u8;
+        if RX_DIAG.3 != 0 && seq != (RX_DIAG.0 as u8).wrapping_add(1) {
+            RX_DIAG.1 += 1; // firmware RX sequence gap (a frame we never read)
+        }
+        RX_DIAG.0 = seq as u32;
+        RX_DIAG.3 = 1;
+    }
     apply_window(w1r);
     // AUDIT M-3 / L-15: cmd53_read silently caps a byte-mode transfer at 512 bytes
     // and still reports success, so for a frame claiming more than
