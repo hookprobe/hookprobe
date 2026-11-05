@@ -180,6 +180,56 @@ replication*. Decision stays exactly where it is: `verdict::decide()`.
   `annotate`/`investigate`; it becomes a signed `adjudication` node (ADR 0014 D4) and the only
   human label source.
 
+### 3.8 Pattern-break graph logic and the graduated-response ladder (for ADR 0048 D3)
+
+**The graph exists at two scales.** Off-device, the evidence graph *is* a graph (`devices /
+users / applications / net_sessions` nodes, typed `edges`, `REACH_CTE` bounded traversal) and a
+user's pattern is the recurrence-weighted subgraph from their node. On-device, the HBG
+intermediate layer *is* a bounded bipartite graph — entity → destination-class edges carrying
+`state, active_days, hour/context histograms, recurrence` — so "is this edge inside the
+entity's established neighbourhood?" is a lookup, never a traversal (bounded, no alloc,
+`[P-boi-replay]`-deterministic).
+
+**"Breaks the pattern", in graph terms** (every row is `FindingClass::Behavioral` → `Observe`;
+ids in the 1_2xx band per the review's L1 finding):
+
+| Break | Graph test | Detection |
+|---|---|---|
+| New edge | (entity, dst_class) absent | `novel_destination` |
+| Edge outside the neighbourhood | dst_class shares no node with the entity's Established set (first cross-segment / admin-port edge) | `context_shift` (higher severity) |
+| Wrong context on a known edge | Established edge, but `ctx` (VPN / segment / day-part) outside its **learned** histogram — distributions, never a fixed 09–17 rule | `context_shift` |
+| Sequence break | A→B transition never seen for this entity (per-entity Markov counts; order/smoothing in θ) | `sequence_surprise` (Phase 6) |
+| Dormant edge wakes | Established → Dormant → active | `dormant_reactivated` |
+| Scale break | entity normal, its **segment** node's edge-rate abnormal (hierarchy) | hierarchical deviation — the false-positive killer, and the first thing the UI should show |
+
+**The ladder — what "stop" may mean, each rung bound to an existing primitive:**
+
+| Rung | Action | Primitive | Who decides |
+|---|---|---|---|
+| 1 | **See it**: detection + explanation ("first contact with admin-port class, outside the entity's working-hours context; 0 prior active days") + one corroboration axis (`AXIS_BEHAVIOUR`, severity only) | `rules::behavioral_verdict`, `corroboration.rs` | heqk, automatically — observe-only |
+| 2 | **Step-up, never block**: if the entity has a credential anchor (per-device PSK / EAP), require re-authentication | `trust.rs` `StepUp` tier (40), provenance `Behavioral` capped here (review T4) | heqk proposes, the credential path enforces |
+| 3 | **Corroborated containment through the authority channel**: a break that is corroborated (IOC/reputation, scan shape, a second detector) becomes a proposed **operator-signed reach change** — `InternetOnly` or `Quarantine`, TTL 3600 s, self-reverting | `segment.rs::set_reach` (authority-only, C16), the C9/C16 signed-policy pattern, Mission Control plan-as-diff (why · confidence · evidence · model) | operator, or an operator-signed policy with pre-approved conditions |
+| 4 | **Automatic drop** — only when the break coincides with one of ADR 0023 D2's four classes (confirmed scan, malformed frame, real L1/L2 flood, resource-shed); the pattern break adds context to that alert, never a new drop class | existing `decide()` rows | heqk, exactly as today |
+
+**Why "pattern break ⇒ drop" is forbidden, not merely deferred:** the entity key is
+attacker-assertable on any LAN without 802.1X (review Q4). If a pattern break alone could stop
+traffic, an attacker who clones a victim's MAC/DHCP signature and misbehaves *stops the victim*
+— the attacker redefines what heqk trusts by influencing what it observes. ADR 0023 D4, ADR 0038
+D2 and the operator's principle all forbid it.
+
+**UI contract (so the ladder becomes a behaviour / root-cause view later, not a new surface):**
+the canon already reserves the slots — Detect → *Behavioral Detection* (`/detect/behavioral`),
+Investigate → "why AEGIS decided this (confidence, evidence, alternative hypotheses, model)" +
+*Root Cause* + *Similar Incidents*, Network → *Device Trust*. BOI feeds them through the
+existing explanation envelope, which gains three BOI-specific, deterministic fields:
+`pattern` (the entity's established neighbourhood as a small graph: nodes = destination
+classes/segments, edge weight = recurrence, state colour), `break` (the one edge/context/
+sequence that deviated, with its active-day history), and `ladder_rung` (1–4, plus the
+corroboration axes that would be needed to climb). A user-facing "what happened" is then a
+rendering of evidence that already exists — never a narrative generated after the fact, and
+with `model: null` until a signed model is in play. Accessibility and the plan-as-diff rules of
+`MissionControl.md` apply unchanged (no colour-only state; every node drills to its evidence).
+
 ## 4. What it buys HookProbe (benefits, specific to this product)
 
 1. **Memory for the Observe tier.** Today every behavioural table is a ≤10-minute window and
