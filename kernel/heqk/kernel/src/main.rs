@@ -2869,12 +2869,30 @@ fn cm5_p10_probe() {
                         // (link + station MAC only — heqk will be its DHCP SERVER, never a client).
                         use arch_aarch64::uplink::{self, Nic};
                         let mut up = uplink::UplinkResult::new(Nic::End0);
+                        // The operator's WAN mode (WAN.TXT on the eMMC boot partition); DHCP when absent.
+                        let wan_mode: hal::WanMode = match arch_aarch64::emmc::Emmc::probe() {
+                            Ok(dev) => match load_wan_cfg(&dev) {
+                                Some(Ok(mo)) => mo,
+                                Some(Err(e)) => {
+                                    kprint!(" [WAN] WAN.TXT invalid ({:?}) — falling back to DHCP\n", e);
+                                    hal::WanMode::Dhcp
+                                }
+                                None => hal::WanMode::Dhcp,
+                            },
+                            Err(_) => hal::WanMode::Dhcp,
+                        };
+                        match wan_mode {
+                            hal::WanMode::Dhcp => kprint!(" [WAN] mode = DHCP\n"),
+                            hal::WanMode::Static { ip, prefix, gw, dns } => kprint!(" [WAN] mode = STATIC {}.{}.{}.{}/{} gw {}.{}.{}.{} dns {}.{}.{}.{}\n",
+                                ip[0], ip[1], ip[2], ip[3], prefix, gw[0], gw[1], gw[2], gw[3], dns[0], dns[1], dns[2], dns[3]),
+                            hal::WanMode::Pppoe { user_len, .. } => kprint!(" [WAN] mode = PPPoE (user {} chars)\n", user_len),
+                        }
                         {
                             let (lan_started, lan_link, lan_mac) = uplink::eth1_lan_status();
                             kprint!(" [M-NAT0 lan] eth1 (RTL8111H) LAN port: started={} link={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                                 lan_started, lan_link, lan_mac[0], lan_mac[1], lan_mac[2], lan_mac[3], lan_mac[4], lan_mac[5]);
                             kprint!(" [M-NAT0] end0 (RP1 GEM) WAN uplink — DHCP, ARP gw, ping gw + 8.8.8.8 over the GEM TX ring\n");
-                            uplink::bringup(Nic::End0, &[8, 8, 8, 8], &mut up);
+                            uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut up);
                             if !up.started {
                                 kprint!(" [M-NAT0] SKIP — GEM rings not armed\n");
                             } else {
@@ -3193,7 +3211,7 @@ fn cm5_p10_probe() {
                                             last_wan_try = t;
                                             wan_retries += 1;
                                             let mut again = uplink::UplinkResult::new(Nic::End0);
-                                            uplink::bringup(Nic::End0, &[8, 8, 8, 8], &mut again);
+                                            uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
                                             if again.usable() {
                                                 kprint!(" [M-NAT0] WAN came up after boot (retry {}): leased {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{} inet_echo={}\n",
                                                     wan_retries, again.dhcp.yiaddr[0], again.dhcp.yiaddr[1], again.dhcp.yiaddr[2], again.dhcp.yiaddr[3],
@@ -3210,7 +3228,7 @@ fn cm5_p10_probe() {
                                             wan_leased_at = t;
                                         } else if up.dhcp.lease > 0 && t.wrapping_sub(wan_leased_at) > (up.dhcp.lease as u64 / 2) * freq {
                                             let mut again = uplink::UplinkResult::new(Nic::End0);
-                                            uplink::bringup(Nic::End0, &[8, 8, 8, 8], &mut again);
+                                            uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
                                             if again.usable() {
                                                 up = again;
                                                 wan_renewals += 1;
@@ -5218,6 +5236,7 @@ pub extern "C" fn kmain() -> ! {
         acs_selftest();
         glom_selftest();
         dnsfwd_selftest();
+        wancfg_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
@@ -11766,4 +11785,48 @@ fn dnsfwd_selftest() {
 #[allow(dead_code)]
 fn alloc_free_hex(v: u16) -> u16 {
     v
+}
+
+/// WAN.TXT on the boot partition (one 512-B sector, like OWNER.TXT): the operator's WAN mode.
+pub const WAN_8_3: &[u8; 11] = b"WAN     TXT";
+
+/// Read + parse WAN.TXT from a block device's first partition. None = no file (=> DHCP).
+#[allow(dead_code)]
+fn load_wan_cfg<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanMode, hal::WanCfgErr>> {
+    let mut sec = [0u8; 512];
+    dev.read_block(0, &mut sec).ok()?;
+    let p1 = store::parse_mbr(&sec)[0].start;
+    if p1 == 0 {
+        return None;
+    }
+    let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
+    dev.read_block(lba, &mut sec).ok()?;
+    Some(hal::parse_wan_cfg(&sec))
+}
+
+/// `[P-wancfg]` — WAN.TXT parsing (hal::parse_wan_cfg) against fixed vectors.
+#[allow(dead_code)]
+fn wancfg_selftest() {
+    use hal::{parse_wan_cfg as p, WanCfgErr as E, WanMode as M};
+    let dhcp = p(b"HQWAN1\nmode=dhcp\n") == Ok(M::Dhcp);
+    let padded = p(b"# heqk WAN\r\nHQWAN1\r\nmode=dhcp\r\n\n\n      \0\0\0") == Ok(M::Dhcp);
+    let st = p(b"HQWAN1\nmode=static\nip=10.200.0.12/28\ngw=10.200.0.1\ndns=10.200.0.1\n")
+        == Ok(M::Static { ip: [10, 200, 0, 12], prefix: 28, gw: [10, 200, 0, 1], dns: [10, 200, 0, 1] });
+    let st_dns_default = p(b"HQWAN1\nmode=static\nip=192.0.2.10/24\ngw=192.0.2.1\n")
+        == Ok(M::Static { ip: [192, 0, 2, 10], prefix: 24, gw: [192, 0, 2, 1], dns: [192, 0, 2, 1] });
+    let gw_out = p(b"HQWAN1\nmode=static\nip=10.200.0.12/28\ngw=10.200.1.1\n") == Err(E::BadGateway);
+    let bad_pfx = p(b"HQWAN1\nmode=static\nip=10.0.0.5/31\ngw=10.0.0.4\n") == Err(E::BadPrefix);
+    let net_addr = p(b"HQWAN1\nmode=static\nip=10.200.0.0/28\ngw=10.200.0.1\n") == Err(E::BadHost);
+    let bad_quad = p(b"HQWAN1\nmode=static\nip=10.200.0.256/28\ngw=10.200.0.1\n") == Err(E::BadAddr);
+    let pppoe = match p(b"HQWAN1\nmode=pppoe\npppoe_user=client@isp\npppoe_pass=s3cret!\n") {
+        Ok(M::Pppoe { user, user_len, pass, pass_len }) => &user[..user_len as usize] == b"client@isp" && &pass[..pass_len as usize] == b"s3cret!",
+        _ => false,
+    };
+    let pppoe_nouser = p(b"HQWAN1\nmode=pppoe\npppoe_pass=x\n") == Err(E::Missing);
+    let no_magic = p(b"mode=dhcp\n") == Err(E::NoMagic);
+    let unknown = p(b"HQWAN1\nmode=dhcp\nfoo=bar\n") == Err(E::BadLine);
+    let bad_mode = p(b"HQWAN1\nmode=ppp\n") == Err(E::BadMode);
+    let ok = dhcp && padded && st && st_dns_default && gw_out && bad_pfx && net_addr && bad_quad && pppoe && pppoe_nouser && no_magic && unknown && bad_mode;
+    kprint!(" [P-wancfg] {} — WAN.TXT: dhcp={} padded/CRLF={} static={} dns-defaults-to-gw={} pppoe creds={} | refused: gw outside subnet={} /31={} network address={} bad quad={} pppoe w/o user={} no magic={} unknown key={} bad mode={}\n",
+        if ok { "PASS" } else { "FAIL" }, dhcp, padded, st, st_dns_default, pppoe, gw_out, bad_pfx, net_addr, bad_quad, pppoe_nouser, no_magic, unknown, bad_mode);
 }

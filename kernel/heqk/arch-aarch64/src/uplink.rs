@@ -83,6 +83,10 @@ fn nic_rx(nic: Nic, out: &mut [u8]) -> Option<usize> {
 
 pub struct UplinkResult {
     pub nic: Nic,
+    /// WAN mode in use: 0 DHCP, 1 static, 2 PPPoE.
+    pub mode: u8,
+    /// PPPoE configured but this build has no PPPoE client yet (stage 2).
+    pub pppoe_unsupported: bool,
     pub started: bool,
     pub link: bool,
     pub mac: [u8; 6], // the station address in use (IDR read-back on eth1)
@@ -110,7 +114,7 @@ pub struct UplinkResult {
 impl UplinkResult {
     pub fn new(nic: Nic) -> Self {
         UplinkResult {
-            nic, started: false, link: false, mac: [0; 6], mac_ok: false,
+            nic, mode: 0, pppoe_unsupported: false, started: false, link: false, mac: [0; 6], mac_ok: false,
             stale_drained: 0, bna_recovered: false, rsr_before: 0, tx_err: 0, tx_retried: false,
             dhcp: DhcpResult::new(),
             rx_frames: 0, garp_tx: false, gw_mac: [0; 6], arp_tx: false, arp_reply: false,
@@ -191,19 +195,46 @@ fn drain_ring(nic: Nic, out: &mut UplinkResult) {
 /// M-NAT0: bring `nic` to a leased, gateway-resolved state and prove internet
 /// reach with an ICMP echo to `inet_ip`. Never blocks past the fixed deadlines;
 /// every stage's outcome is in `out`.
-pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
+/// Bring the WAN up in the operator-configured mode (WAN.TXT): DHCP (the default), a static
+/// address, or PPPoE (stage 2 — reported as unsupported until it lands).
+pub fn bringup_with(nic: Nic, inet_ip: &[u8; 4], mode: &hal::WanMode, out: &mut UplinkResult) {
+    match *mode {
+        hal::WanMode::Dhcp => bringup(nic, inet_ip, out),
+        hal::WanMode::Static { ip, prefix, gw, dns } => {
+            out.mode = 1;
+            if !prelude(nic, inet_ip, out) {
+                return;
+            }
+            // No DORA: the configured address IS the lease (lease = 0 => never renewed).
+            let mask: u32 = u32::MAX << (32 - prefix as u32);
+            out.dhcp.yiaddr = ip;
+            out.dhcp.router = gw;
+            out.dhcp.dns = dns;
+            out.dhcp.mask = mask.to_be_bytes();
+            out.dhcp.lease = 0;
+            out.dhcp.ack_rx = true;
+            post_lease(nic, inet_ip, out);
+        }
+        hal::WanMode::Pppoe { .. } => {
+            out.mode = 2;
+            out.pppoe_unsupported = true;
+        }
+    }
+}
+
+/// Common start of every WAN mode: NIC up, link, our MAC, stale ring drained, TX re-armed.
+fn prelude(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) -> bool {
     out.nic = nic;
     out.inet_ip = *inet_ip;
     out.started = nic_ready(nic);
     if !out.started {
-        return;
+        return false;
     }
     out.link = nic_link(nic);
     establish_mac(nic, out);
-    let mac = out.mac;
-    out.dhcp.mac = mac;
+    out.dhcp.mac = out.mac;
     if !out.link || !out.mac_ok {
-        return;
+        return false;
     }
     drain_ring(nic, out);
     if nic == Nic::End0 {
@@ -214,6 +245,14 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
         gem::tx_init();
         let _ = gem::tx_err_take(); // clear any stale latched error
     }
+    true
+}
+
+pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
+    if !prelude(nic, inet_ip, out) {
+        return;
+    }
+    let mac = out.mac;
 
     // Per-boot xid from the cycle counter (as wifi_dhcp).
     let xid = (cntpct() as u32).to_be_bytes();
@@ -254,6 +293,14 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     if !out.dhcp.ack_rx {
         return;
     }
+    post_lease(nic, inet_ip, out);
+}
+
+/// After an address is held (DHCP ACK, or a static configuration): announce it, resolve the
+/// gateway, ping the gateway and the internet probe host.
+fn post_lease(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
+    let mac = out.mac;
+    let none = [0u8; 4];
 
     // Announce the lease (gratuitous ARP request: sender IP == target IP == ours) so the
     // segment's neighbour caches learn END0_MAC before any return traffic.
