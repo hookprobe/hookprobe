@@ -35,6 +35,8 @@ pub mod rtl8111;
 pub mod uplink;
 // NAT engine: pure frame translation (no MMIO) — built on every target so QEMU tests it.
 pub mod nat;
+// PPPoE client engine (pure frame state machine) — built on every target so QEMU tests it.
+pub mod pppoe;
 // WPA2 PMK KDF (PBKDF2-HMAC-SHA1) for P10-E STA association. CM5-only.
 #[cfg(feature = "cm5")]
 pub mod wpa;
