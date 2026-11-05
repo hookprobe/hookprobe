@@ -325,19 +325,45 @@ fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mu
 }
 
 /// Send a WAN frame: as-is (DHCP/static), or wrapped in the PPPoE session (PPPoE).
+/// WAN transmit failures split by cause: [0] IPv4 packet larger than the PPPoE MTU (1492) — never
+/// reached the GEM; [1] the GEM itself did not complete the transmit; [2] IP length of the last
+/// too-big packet; [3] last GEM TSR on failure.
+pub static mut WAN_TX_DIAG: [u32; 4] = [0; 4];
+
 pub fn wan_tx(up: &UplinkResult, f: &[u8]) -> bool {
-    if up.mode == 2 {
+    let ok = if up.mode == 2 {
         unsafe {
             let Some(e) = (*core::ptr::addr_of!(PPP)).as_ref() else { return false };
             let sc = &mut *core::ptr::addr_of_mut!(PPP_SCRATCH);
             match e.encap_ipv4(f, sc) {
-                Some(n) => nic_tx(up.nic, &sc[..n]),
-                None => false,
+                Some(n) => {
+                    let r = nic_tx(up.nic, &sc[..n]);
+                    if !r {
+                        WAN_TX_DIAG[1] += 1;
+                        WAN_TX_DIAG[3] = gem::tx_err_take();
+                    }
+                    return r;
+                }
+                None => {
+                    WAN_TX_DIAG[0] += 1;
+                    if f.len() >= 18 {
+                        WAN_TX_DIAG[2] = u16::from_be_bytes([f[16], f[17]]) as u32;
+                    }
+                    false
+                }
             }
         }
     } else {
-        nic_tx(up.nic, f)
-    }
+        let r = nic_tx(up.nic, f);
+        if !r {
+            unsafe {
+                WAN_TX_DIAG[1] += 1;
+                WAN_TX_DIAG[3] = gem::tx_err_take();
+            }
+        }
+        r
+    };
+    ok
 }
 
 /// PPPoE leg of wan_poll: session IPv4 is unwrapped into an Ethernet/IPv4 frame for the NAT;
