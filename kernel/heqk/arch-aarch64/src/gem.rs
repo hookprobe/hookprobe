@@ -439,8 +439,9 @@ pub fn read_ncfgr() -> u32 {
 /// gate sits at the standard 1518-on-wire and silently drops a longer TX post-DMA (clean
 /// descriptor, no error) — the exact symptom the size sweep isolates. RE/TE live in NCR, not
 /// NCFGR, so this read-modify-write does not disturb RX/TX enable.
-#[cfg(feature = "txsweep")]
-#[allow(dead_code)] // RUN-2 proved jumbo was NOT the cause (retrigger race was); kept as a valid capability.
+/// Also REQUIRED for 802.1Q / QinQ on the WAN (task #26): a full 1500-B payload with one tag is 1522 B
+/// on the wire (1526 with an S-tag) — past the standard gate, dropped silently on TX and RX.
+#[allow(dead_code)] // RUN-2 proved jumbo was NOT the txsweep cause (retrigger race was); used for VLAN.
 pub fn enable_jumbo() {
     const JML: usize = 0x048;
     const JFRAME: u32 = 1 << 3;

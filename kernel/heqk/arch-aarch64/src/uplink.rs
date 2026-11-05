@@ -67,16 +67,306 @@ fn nic_link(nic: Nic) -> bool {
         Nic::Eth1 => rtl8111::link_up(),
     }
 }
+// ---------------------------------------------------------------- WAN link layer (task #26)
+// end0 carries up to two sub-interfaces: the INTERNET one (every WAN mode — DHCP, static, PPPoE — rides
+// it, tagged per WAN.TXT `vlan=` / `vlan_outer=`) and an optional MANAGEMENT one (`mgmt_vlan=`). All
+// end0 TX/RX goes through nic_tx / nic_rx, so tagging lives here: TX pushes the internet tag stack; RX
+// demultiplexes by VLAN — internet frames are untagged and returned, management frames are queued for the
+// management stack, anything else (another VLAN, or untagged when the internet is tagged) is DROPPED and
+// counted. A frame of the wrong VLAN never reaches a stack.
+
+/// The internet sub-interface's encapsulation (tags only; `pppoe` is informational here).
+pub static mut LINK: hal::policy::Encap = hal::policy::Encap { vlan: 0, outer: 0, pcp: 0, pppoe: false };
+/// Management sub-interface VLAN (0 = none). Single 802.1Q tag.
+pub static mut MGMT_VLAN: u16 = 0;
+/// Last time (ms) any frame arrived on the INTERNET sub-interface — WAN liveness for metric failover.
+pub static mut WAN_LAST_RX_MS: u64 = 0;
+/// [internet rx, mgmt rx, other-VLAN dropped, untagged dropped (internet is tagged), tagged tx, mgmt queue full]
+pub static mut LINK_DIAG: [u32; 6] = [0; 6];
+const MQ_N: usize = 16;
+static mut MGMT_Q: [[u8; 1600]; MQ_N] = [[0; 1600]; MQ_N];
+static mut MGMT_QL: [usize; MQ_N] = [0; MQ_N];
+static mut MGMT_QH: usize = 0;
+static mut MGMT_QN: usize = 0;
+static mut TAG_SCRATCH: [u8; 1600] = [0; 1600];
+
+/// Configure the WAN link from WAN.TXT (before any WAN mode comes up). Tags => jumbo gate opened
+/// (a tagged full-size frame is 1522/1526 B on the wire).
+pub fn link_configure(l: &hal::WanLink) {
+    unsafe {
+        LINK = hal::policy::Encap { vlan: l.vlan, outer: l.outer, pcp: l.pcp, pppoe: false };
+        MGMT_VLAN = l.mgmt.map(|m| m.vlan).unwrap_or(0);
+    }
+    if l.vlan != 0 || l.mgmt.is_some() {
+        gem::enable_jumbo();
+    }
+}
+
+/// Transmit `f` (an untagged Ethernet frame) on end0 with the tag stack `e`.
+fn tagged_tx(e: &hal::policy::Encap, f: &[u8]) -> bool {
+    if e.tag_len() == 0 {
+        return gem::tx_frame(f).is_some();
+    }
+    if f.len() < 14 || f.len() + e.tag_len() > 1600 {
+        return false;
+    }
+    let sc = unsafe { &mut *core::ptr::addr_of_mut!(TAG_SCRATCH) };
+    sc[..12].copy_from_slice(&f[..12]);
+    let o = e.push_tags(sc, u16::from_be_bytes([f[12], f[13]]));
+    let n = o + f.len() - 14;
+    sc[o..n].copy_from_slice(&f[14..]);
+    unsafe { LINK_DIAG[4] += 1 };
+    gem::tx_frame(&sc[..n]).is_some()
+}
+
+/// WAN liveness probe (DHCP / static): an ARP request for the gateway on the internet sub-interface, so a
+/// quiet but healthy link still shows traffic (its reply stamps WAN_LAST_RX_MS). PPPoE needs none — its
+/// LCP echo does the same.
+pub fn wan_probe(up: &UplinkResult) {
+    if up.mode == 2 || !up.usable() || up.dhcp.router == [0; 4] {
+        return;
+    }
+    let mut o = [0u8; 64];
+    let n = arp_frame(&mut o, 1, &up.mac, &up.dhcp.yiaddr, &[0; 6], &up.dhcp.router, &[0xff; 6]);
+    let _ = nic_tx(up.nic, &o[..n]);
+}
+
+/// Is the internet sub-interface alive: a usable lease AND a frame received within `window_ms`.
+pub fn wan_alive(up: &UplinkResult, window_ms: u64) -> bool {
+    up.usable() && ms_now().wrapping_sub(unsafe { WAN_LAST_RX_MS }) < window_ms
+}
+
+/// Transmit an untagged Ethernet frame on the MANAGEMENT sub-interface (802.1Q `mgmt_vlan`).
+pub fn mgmt_tx(f: &[u8]) -> bool {
+    let (v, pcp) = unsafe { (MGMT_VLAN, LINK.pcp) };
+    if v == 0 {
+        return false;
+    }
+    tagged_tx(&hal::policy::Encap { vlan: v, outer: 0, pcp, pppoe: false }, f)
+}
+
+/// Next queued management-sub-interface frame (untagged), if any.
+pub fn mgmt_rx(out: &mut [u8]) -> Option<usize> {
+    unsafe {
+        if MGMT_QN == 0 {
+            return None;
+        }
+        let i = MGMT_QH;
+        let n = MGMT_QL[i].min(out.len());
+        out[..n].copy_from_slice(&MGMT_Q[i][..n]);
+        MGMT_QH = (MGMT_QH + 1) % MQ_N;
+        MGMT_QN -= 1;
+        Some(n)
+    }
+}
+
+/// The management sub-interface's IPv4 stack (static address; DHCP on management is a follow-up).
+#[derive(Clone, Copy, Debug)]
+pub struct Mgmt {
+    pub ip: [u8; 4],
+    pub prefix: u8,
+    pub gw: [u8; 4],
+    pub gw_mac: Option<[u8; 6]>,
+    pub mac: [u8; 6],
+    last_arp: u64,
+    /// Next hops other than the default gateway (routes `via mgmt gw X`): a small ARP cache.
+    pub nh: [([u8; 4], [u8; 6]); 4],
+    nh_last_arp: u64,
+    /// [ARP answered, gateway ARP sent, ping answered, ping blocked, ping dropped, handed up (NAT), dropped]
+    pub stats: [u32; 7],
+}
+pub static mut MGMT: Option<Mgmt> = None;
+
+pub fn mgmt_configure(m: &hal::MgmtIf) -> bool {
+    match m.stat {
+        Some((ip, prefix, gw)) => {
+            unsafe { MGMT = Some(Mgmt { ip, prefix, gw, gw_mac: None, mac: END0_MAC, last_arp: 0, nh: [([0; 4], [0; 6]); 4], nh_last_arp: 0, stats: [0; 7] }) };
+            true
+        }
+        None => false, // DHCP on the management VLAN: not built yet (reported by the caller)
+    }
+}
+
+/// MAC of next hop `ip` on the management sub-interface: the default gateway or a cached one; on a
+/// miss an ARP request goes out (at most once a second) and None is returned — the caller drops this
+/// packet (TCP retries) rather than queueing.
+pub fn mgmt_nexthop(ip: [u8; 4]) -> Option<[u8; 6]> {
+    let m = unsafe { (*core::ptr::addr_of_mut!(MGMT)).as_mut()? };
+    if ip == m.gw {
+        if let Some(g) = m.gw_mac {
+            return Some(g);
+        }
+    }
+    if let Some(e) = m.nh.iter().find(|e| e.0 == ip && e.1 != [0; 6]) {
+        return Some(e.1);
+    }
+    let now = ms_now();
+    if now.wrapping_sub(m.nh_last_arp) >= 1000 {
+        m.nh_last_arp = now;
+        let mut o = [0u8; 64];
+        let n = arp_frame(&mut o, 1, &m.mac, &m.ip, &[0; 6], &ip, &[0xff; 6]);
+        let _ = mgmt_tx(&o[..n]);
+        m.stats[1] += 1;
+    }
+    None
+}
+
+pub enum MgmtEvent {
+    Idle,
+    /// An IPv4 frame for the management address the stack does not answer itself (NAT replies for
+    /// routes via mgmt): `buf[..n]`, untagged.
+    Frame(usize),
+}
+
+fn arp_frame(o: &mut [u8], op: u16, smac: &[u8; 6], sip: &[u8; 4], tmac: &[u8; 6], tip: &[u8; 4], dst: &[u8; 6]) -> usize {
+    o[0..6].copy_from_slice(dst);
+    o[6..12].copy_from_slice(smac);
+    o[12..14].copy_from_slice(&0x0806u16.to_be_bytes());
+    o[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, op as u8]);
+    o[22..28].copy_from_slice(smac);
+    o[28..32].copy_from_slice(sip);
+    o[32..38].copy_from_slice(tmac);
+    o[38..42].copy_from_slice(tip);
+    o[42..60].fill(0);
+    60
+}
+
+/// Service the management sub-interface: ARP, gateway resolution, ping (policy-checked by `decide`).
+/// `decide` returns the policy action for a packet arriving on mgmt (Allow / Block / Drop).
+pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::Act) -> MgmtEvent {
+    use hal::policy::Act;
+    let Some(m) = (unsafe { (*core::ptr::addr_of_mut!(MGMT)).as_mut() }) else { return MgmtEvent::Idle };
+    let mut o = [0u8; 1600];
+    let now = ms_now();
+    if m.gw_mac.is_none() && now.wrapping_sub(m.last_arp) >= 2000 {
+        m.last_arp = now;
+        let n = arp_frame(&mut o, 1, &m.mac, &m.ip, &[0; 6], &m.gw, &[0xff; 6]);
+        let _ = mgmt_tx(&o[..n]);
+        m.stats[1] += 1;
+    }
+    let Some(n) = mgmt_rx(buf) else { return MgmtEvent::Idle };
+    if n >= 42 && buf[12..14] == [0x08, 0x06] {
+        let op = u16::from_be_bytes([buf[20], buf[21]]);
+        let (smac, sip, tip) = (&buf[22..28], &buf[28..32], &buf[38..42]);
+        if op == 1 && tip == m.ip {
+            let (mut sm, mut si) = ([0u8; 6], [0u8; 4]);
+            sm.copy_from_slice(smac);
+            si.copy_from_slice(sip);
+            let k = arp_frame(&mut o, 2, &m.mac, &m.ip, &sm, &si, &sm);
+            let _ = mgmt_tx(&o[..k]);
+            m.stats[0] += 1;
+        }
+        let mut g = [0u8; 6];
+        g.copy_from_slice(smac);
+        if sip == m.gw {
+            m.gw_mac = Some(g);
+        } else if op == 2 {
+            // cache an answered next hop on our subnet (LRU-free: replace a matching or the first free slot)
+            let mask: u32 = u32::MAX << (32 - m.prefix as u32);
+            let si = [sip[0], sip[1], sip[2], sip[3]];
+            if u32::from_be_bytes(si) & mask == u32::from_be_bytes(m.ip) & mask {
+                let k = m.nh.iter().position(|e| e.0 == si).or_else(|| m.nh.iter().position(|e| e.1 == [0; 6])).unwrap_or(0);
+                m.nh[k] = (si, g);
+            }
+        }
+        return MgmtEvent::Idle;
+    }
+    if n < 34 || buf[12..14] != [0x08, 0x00] || buf[30..34] != m.ip || buf[0..6] != m.mac {
+        m.stats[6] += 1;
+        return MgmtEvent::Idle;
+    }
+    let ihl = ((buf[14] & 0x0f) as usize) * 4;
+    if buf[23] == 1 && n >= 14 + ihl + 8 && buf[14 + ihl] == 8 {
+        match decide(&buf[..n]) {
+            Act::Allow => {
+                // Echo reply: swap MACs/IPs, type 0, fresh checksums.
+                o[..n].copy_from_slice(&buf[..n]);
+                o[0..6].copy_from_slice(&buf[6..12]);
+                o[6..12].copy_from_slice(&m.mac);
+                o[26..30].copy_from_slice(&buf[30..34]);
+                o[30..34].copy_from_slice(&buf[26..30]);
+                o[22] = 64;
+                o[24] = 0;
+                o[25] = 0;
+                let c = hal::inet_csum(&o[14..14 + ihl], 0);
+                o[24..26].copy_from_slice(&c.to_be_bytes());
+                let tot = (u16::from_be_bytes([buf[16], buf[17]]) as usize).min(n - 14);
+                let ic = 14 + ihl;
+                o[ic] = 0;
+                o[ic + 2] = 0;
+                o[ic + 3] = 0;
+                let c = hal::inet_csum(&o[ic..14 + tot], 0);
+                o[ic + 2..ic + 4].copy_from_slice(&c.to_be_bytes());
+                let _ = mgmt_tx(&o[..14 + tot]);
+                m.stats[2] += 1;
+            }
+            Act::Block => {
+                if let Some(k) = crate::reject::reject4(&buf[..n], &m.ip, &m.mac, &mut o) {
+                    let _ = mgmt_tx(&o[..k]);
+                }
+                m.stats[3] += 1;
+            }
+            Act::Drop => m.stats[4] += 1,
+        }
+        return MgmtEvent::Idle;
+    }
+    m.stats[5] += 1;
+    MgmtEvent::Frame(n)
+}
+
+fn end0_rx(out: &mut [u8]) -> Option<usize> {
+    let (e, mv) = unsafe { (LINK, MGMT_VLAN) };
+    // Bounded: a burst of other-VLAN frames must not starve the caller.
+    for _ in 0..8 {
+        // A GEM descriptor with no length is "no valid frame" (L-13), not a frame.
+        let len = gem::poll_rx(out).and_then(|(len, _, _, _, _)| if len > 0 { Some(len) } else { None })?;
+        let len = len.min(out.len());
+        if e.tag_len() == 0 && mv == 0 {
+            unsafe { WAN_LAST_RX_MS = ms_now() };
+            return Some(len); // untagged link: the pre-#26 path (+ the liveness stamp)
+        }
+        let Some((outer, vid, off)) = hal::policy::rx_tags(&out[..len]) else { continue };
+        let strip = |out: &mut [u8]| -> usize {
+            out.copy_within(off..len, 12);
+            len - (off - 12)
+        };
+        if outer == e.outer && vid == e.vlan {
+            unsafe {
+                LINK_DIAG[0] += 1;
+                WAN_LAST_RX_MS = ms_now();
+            }
+            return Some(if off == 12 { len } else { strip(out) });
+        }
+        if mv != 0 && outer == 0 && vid == mv {
+            let n = strip(out);
+            unsafe {
+                LINK_DIAG[1] += 1;
+                if MGMT_QN == MQ_N {
+                    LINK_DIAG[5] += 1;
+                } else {
+                    let j = (MGMT_QH + MGMT_QN) % MQ_N;
+                    let k = n.min(1600);
+                    MGMT_Q[j][..k].copy_from_slice(&out[..k]);
+                    MGMT_QL[j] = k;
+                    MGMT_QN += 1;
+                }
+            }
+            continue;
+        }
+        unsafe { LINK_DIAG[if off == 12 { 3 } else { 2 }] += 1 };
+    }
+    None
+}
+
 fn nic_tx(nic: Nic, f: &[u8]) -> bool {
     match nic {
-        Nic::End0 => gem::tx_frame(f).is_some(),
+        Nic::End0 => tagged_tx(&unsafe { LINK }, f),
         Nic::Eth1 => rtl8111::tx_frame(f),
     }
 }
 fn nic_rx(nic: Nic, out: &mut [u8]) -> Option<usize> {
     match nic {
-        // A GEM descriptor with no length is "no valid frame" (L-13), not a frame.
-        Nic::End0 => gem::poll_rx(out).and_then(|(len, _, _, _, _)| if len > 0 { Some(len) } else { None }),
+        Nic::End0 => end0_rx(out),
         Nic::Eth1 => rtl8111::rx_next(out),
     }
 }
