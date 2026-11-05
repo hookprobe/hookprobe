@@ -3148,6 +3148,8 @@ fn cm5_p10_probe() {
                                                 kprint!("   [STALL-DIAG] fw sdpcm_shared @ {:#010x} flags={:#06x} (trap={} assert={}) console @ {:#010x}\n",
                                                     sh.addr, sh.flags, sh.flags & cyw43::SDPCM_SHARED_TRAP != 0, sh.flags & cyw43::SDPCM_SHARED_ASSERT != 0, sh.console_addr);
                                                 cyw43::fw_trap_dump(&sh);
+                                                let hm = unsafe { cyw43::HOSTMAIL_DIAG };
+                                                kprint!("   [STALL-DIAG] host mailbox (data path): msgs={} last data={:#010x} fc-via-mailbox={} nak-handled={} fw-halt={}\n", hm[0], hm[1], hm[2], hm[3], hm[4]);
                                                 let r = cyw43::fw_console_dump(&sh, 40);
                                                 kprint!("   [STALL-DIAG] fw console: {:?} (lines, buf size, idx)\n", r);
                                             }
@@ -3451,6 +3453,8 @@ fn cm5_p10_probe() {
                                                 let w = unsafe { uplink::WAN_TX_DIAG };
                                                 let (_, _, dg) = cyw43::ap_diag();
                                                 kprint!("   [P11-AP3 wan-tx] too_big_for_pppoe={} (last ip len {}) gem_fail={} (last TSR {:#06x}) | wifi xoff_held={}\n", w[0], w[2], w[1], w[3], dg[16]);
+                                                let hm = unsafe { cyw43::HOSTMAIL_DIAG };
+                                                kprint!("   [P11-AP3 mbox] host mailbox msgs={} last={:#010x} fc={} nak={} halt={}\n", hm[0], hm[1], hm[2], hm[3], hm[4]);
                                                 let g = unsafe { arch_aarch64::gem::TX_FAIL_DIAG };
                                                 kprint!("   [P11-AP3 gem-tx] timeouts={} hw-slot!=armed={} | last: armed slot {} hw TBQP slot {} desc0.w1={:#010x} desc1.w1={:#010x} len {} TSR {:#06x}\n",
                                                     g[0], g[7], g[1], g[2], g[3], g[4], g[5], g[6]);
