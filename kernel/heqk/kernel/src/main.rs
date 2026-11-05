@@ -3633,29 +3633,38 @@ fn cm5_p10_probe() {
                                             // station over the PTK path (≤ WIFI_MAX_FRAME; TCP is MSS-clamped).
                                             // IDS/IPS on the WAN leg too (a threat from the internet toward a client
                                             // DROPs before un-NAT), then return on the link the flow came in on.
-                                            // Operator policy, `wan in` — on arrival, before un-NAT (the addresses are still the
-                                            // real ones, so a `block` reject goes back to the actual sender).
-                                            let wan_in = hal::policy::facts(&wbuf[..n]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Wan, PDir::In, &p).0 }).unwrap_or(PAct::Allow);
-                                            if wan_in != PAct::Allow {
-                                                if wan_in == PAct::Block {
-                                                    pol_block[2] += 1;
-                                                    let mut rj = [0u8; 1400];
-                                                    if wbuf[12] == 0x86 {
-                                                        let src6 = unsafe { uplink::WAN6 }.na.unwrap_or(unsafe { V6.gua });
-                                                        if let Some(k) = arch_aarch64::reject::reject6(&wbuf[..n], &src6, &up.mac, &mut rj) {
-                                                            let _ = uplink::wan_tx6(&up, &rj[14..k]);
+                                            // Operator policy `wan in` is STATEFUL: it decides NEW inbound traffic. A reply to a
+                                            // flow the LAN opened (NAT session / IPv6 flow table) is admitted; `lan|eth1 out`
+                                            // still filters every delivery. Evaluated on arrival addresses, so a `block` reject
+                                            // goes back to the actual sender.
+                                            macro_rules! wan_in_new {
+                                                () => {{
+                                                    let a = hal::policy::facts(&wbuf[..n]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Wan, PDir::In, &p).0 }).unwrap_or(PAct::Allow);
+                                                    if a == PAct::Block {
+                                                        pol_block[2] += 1;
+                                                        let mut rj = [0u8; 1400];
+                                                        if wbuf[12] == 0x86 {
+                                                            let src6 = unsafe { uplink::WAN6 }.na.unwrap_or(unsafe { V6.gua });
+                                                            if let Some(k) = arch_aarch64::reject::reject6(&wbuf[..n], &src6, &up.mac, &mut rj) {
+                                                                let _ = uplink::wan_tx6(&up, &rj[14..k]);
+                                                            }
+                                                        } else if let Some(k) = arch_aarch64::reject::reject4(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, &mut rj) {
+                                                            let _ = uplink::wan_tx(&up, &rj[..k]);
                                                         }
-                                                    } else if let Some(k) = arch_aarch64::reject::reject4(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, &mut rj) {
-                                                        let _ = uplink::wan_tx(&up, &rj[..k]);
+                                                    } else if a == PAct::Drop {
+                                                        pol_drop[2] += 1;
                                                     }
-                                                } else {
-                                                    pol_drop[2] += 1;
-                                                }
-                                            } else if n >= 54 && wbuf[12] == 0x86 && wbuf[13] == 0xdd {
+                                                }};
+                                            }
+                                            if n >= 54 && wbuf[12] == 0x86 && wbuf[13] == 0xdd {
                                                 // IPv6 from the ISP: the stateful firewall + neighbor table decide; then the IDS.
                                                 let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                                 let nms = now() * 1000 / freq;
-                                                if let arch_aarch64::ip6lan::WanAction::Deliver(k) = v6.on_wan(&wbuf[14..n], nms, &mut v6buf) {
+                                                let v6a = v6.on_wan(&wbuf[14..n], nms, &mut v6buf);
+                                                if matches!(v6a, arch_aarch64::ip6lan::WanAction::Drop) {
+                                                    wan_in_new!(); // not a reply: the operator's `wan in` (block -> reject)
+                                                }
+                                                if let arch_aarch64::ip6lan::WanAction::Deliver(k) = v6a {
                                                     let lan_out = hal::policy::facts(&v6buf[..k]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Lan, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
                                                     if lan_out != PAct::Allow {
                                                         pol_drop[0] += 1;
@@ -3672,7 +3681,11 @@ fn cm5_p10_probe() {
                                                 ids_drop_in += 1;
                                             } else {
                                                 let lan_mac = uplink::ETH1_MAC;
-                                                if let Some((m, in_if)) = nat::inbound(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst).filter(|&(m, in_if)| {
+                                                let nat_r = nat::inbound(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst);
+                                                if nat_r.is_none() {
+                                                    wan_in_new!(); // no NAT session: new inbound traffic -> `wan in`
+                                                }
+                                                if let Some((m, in_if)) = nat_r.filter(|&(m, in_if)| {
                                                     // `lan out` / `eth1 out` after un-NAT. A `block` here acts as a drop: a reject would
                                                     // have to be re-NATed to reach the real sender (counted apart).
                                                     let oif = if in_if == nat::IF_ETH1 { PIf::Eth1 } else { PIf::Lan };
@@ -3754,13 +3767,18 @@ fn cm5_p10_probe() {
                                                 match uplink::mgmt_poll(&mut mbuf, &mut decide) {
                                                     uplink::MgmtEvent::Idle => break,
                                                     uplink::MgmtEvent::Frame(k) => {
+                                                        // Stateful like `wan in`: a reply to a flow routed out management (NAT session)
+                                                        // is admitted; anything else is new inbound traffic for `mgmt in`.
                                                         let mg = unsafe { uplink::MGMT }.unwrap();
-                                                        if decide(&mbuf[..k]) != PAct::Allow {
-                                                            pol_drop[3] += 1;
+                                                        let lan_mac = uplink::ETH1_MAC;
+                                                        let nat_r = nat::inbound(&mbuf[..k], &mg.ip, &mg.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst);
+                                                        if nat_r.is_none() {
+                                                            if decide(&mbuf[..k]) != PAct::Allow {
+                                                                pol_drop[3] += 1;
+                                                            }
                                                             continue;
                                                         }
-                                                        let lan_mac = uplink::ETH1_MAC;
-                                                        if let Some((mm, in_if)) = nat::inbound(&mbuf[..k], &mg.ip, &mg.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst) {
+                                                        if let Some((mm, in_if)) = nat_r {
                                                             let oif = if in_if == nat::IF_ETH1 { PIf::Eth1 } else { PIf::Lan };
                                                             let a = hal::policy::facts(&nbuf[..mm]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(oif, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
                                                             if a != PAct::Allow {
