@@ -128,7 +128,7 @@ impl ProdFull {
                 match SealedStore::open(&mut dev) {
                     Ok(ss) => {
                         let mut blob = [0u8; seal::SEAL_MAX_BLOB];
-                        if let Some(n) = ss.load(&mut blob) {
+                        if let Some(n) = ss.load_ab(&mut blob) {
                             let mut pt = [0u8; seal::SEAL_MAX_PT];
                             match seal::unseal(&pf.srk, &pf.policy, &blob[..n], &mut pt) {
                                 Ok(len) => match Snapshot::parse(&pt[..len]) {
@@ -253,8 +253,10 @@ impl ProdFull {
             None => return false,
         };
         match SealedStore::open(dev) {
-            Ok(mut ss) => match ss.store(blob.as_slice()) {
-                Ok(()) => true,
+            // A/B slots with a commit header (task #27 F2): a torn write never destroys the
+            // previous snapshot.
+            Ok(mut ss) => match ss.store_ab(blob.as_slice()) {
+                Ok(_gen) => true,
                 Err(e) => {
                     kprint!("   [PROD-FULL] M3 persist: store refused ({:?}) — continuing\n", e);
                     false

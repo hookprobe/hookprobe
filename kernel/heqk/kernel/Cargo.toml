@@ -120,6 +120,12 @@ p10bt = []
 # root). The default (non-p15-write) kernel links neither ed25519 nor SLH-DSA
 # beyond its existing ephemeral-attest use, keeping the base TCB untouched.
 p15-write = ["arch-aarch64/p15-write", "boot-abi/otaverify"]
+# task #27 (F1/F5): the CM5 eMMC WRITE SELF-TESTS (two-boot cookie @2040, sealed Event @2016, DataVolume
+# region self-test) are BENCH proofs. They used to run under p15-write — and so on every prod-mc boot,
+# where the sealed Event at 2016 clobbered the ProdFull snapshot (it never restored) and the DataVolume
+# test wrote a hard-coded LBA outside every partition. Production keeps p15-write (real persistence);
+# the self-tests need p15-bench (or the sepdiag bench profile).
+p15-bench = ["p15-write"]
 # otaflip — M3.4 ON-DEVICE forward tryboot-flip metal proof (opt-in; SELF-REBOOTS once).
 # Drives the OtaState state machine through a REAL firmware one-shot tryboot into the
 # existing valid slot B, confirm+commit, keystore-persisted + loop-guarded. Distinct from
