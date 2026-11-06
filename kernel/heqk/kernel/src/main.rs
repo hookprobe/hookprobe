@@ -3807,6 +3807,9 @@ fn cm5_p10_probe() {
                                         last_wan_probe = t;
                                         uplink::wan_probe(&up); // liveness for metric failover (DHCP / static)
                                     }
+                                    if up.usable() {
+                                        uplink::wan6_tick(&up); // DHCPv6 prefix-delegation renewal at T1
+                                    }
                                     {
                                         // (Re)number the LAN when the WAN has a delegated prefix (also after a WAN re-dial).
                                         let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
@@ -3922,7 +3925,8 @@ fn cm5_p10_probe() {
                                             {
                                                 let s = unsafe { V6.stats };
                                                 let l = unsafe { uplink::WAN6_LIVE };
-                                                kprint!("   [P11-AP3 v6] up={} ra_tx={} rs_rx={} na_tx={} ns_tx={} out={} in={} in_icmp_err={} | drop no_flow={} no_neigh={} hop={} src={} (savi={}) bad={} ids_out={} ids_in={} evict={} | WAN live: v6 rx={} RAs rx={} tx ok={} fail={}\n",
+                                                kprint!("   [P11-AP3 v6] pd renew tx={} ok={} t1={}s | up={} ra_tx={} rs_rx={} na_tx={} ns_tx={} out={} in={} in_icmp_err={} | drop no_flow={} no_neigh={} hop={} src={} (savi={}) bad={} ids_out={} ids_in={} evict={} | WAN live: v6 rx={} RAs rx={} tx ok={} fail={}\n",
+                                                    unsafe { uplink::WAN6 }.renew_tx, unsafe { uplink::WAN6 }.renew_ok, unsafe { uplink::WAN6 }.t1,
                                                     unsafe { V6.up }, s.ra_tx, s.rs_rx, s.na_tx, s.ns_tx, s.out_fwd, s.in_fwd, s.in_icmp_err, s.drop_no_flow, s.drop_no_neigh, s.drop_hop, s.drop_src, s.savi_refused, s.drop_bad,
                                                     v6_ids_drop[0], v6_ids_drop[1], s.flow_evict, l[0], l[1], l[2], l[3]);
                                                 if let Some(ra) = unsafe { uplink::WAN6_FIRST_RA } {
@@ -12902,6 +12906,8 @@ fn ip6_selftest() {
     // IA_PD { iaid 7, T1, T2, IAPREFIX { pref 3600, valid 7200, /56, 2001:db8:aa00:: } }
     p[k..k + 4].copy_from_slice(&[0, 25, 0, 41]);
     p[k + 4..k + 8].copy_from_slice(&7u32.to_be_bytes());
+    p[k + 8..k + 12].copy_from_slice(&1800u32.to_be_bytes()); // T1
+    p[k + 12..k + 16].copy_from_slice(&2880u32.to_be_bytes()); // T2
     let q = k + 16;
     p[q..q + 4].copy_from_slice(&[0, 26, 0, 25]);
     p[q + 4..q + 8].copy_from_slice(&3600u32.to_be_bytes());
@@ -12916,10 +12922,19 @@ fn ip6_selftest() {
     let an = build_udp6(&rtr, &me, 547, 546, 64, &p[..k], &mut adv);
     let adv_ok = match parse_dhcp6(&adv[..an], xid) {
         Some(d) => d.msg == DHCP6_ADVERTISE && d.sid_len == 4 && d.server_id[..4] == [0xaa, 0xbb, 0xcc, 0xdd] && d.has_pd && d.plen == 56
-            && d.preferred == 3600 && d.valid == 7200 && d.prefix[..5] == [0x20, 0x01, 0x0d, 0xb8, 0xaa] && d.has_dns && d.dns[15] == 0x88 && d.status == 0,
+            && d.preferred == 3600 && d.valid == 7200 && d.prefix[..5] == [0x20, 0x01, 0x0d, 0xb8, 0xaa] && d.has_dns && d.dns[15] == 0x88 && d.status == 0 && d.t1 == 1800 && d.t2 == 2880,
         None => false,
     };
     let xid_refuse = parse_dhcp6(&adv[..an], xid ^ 1).is_none();
+    let renew_ok = {
+        let mut r = [0u8; 400];
+        let pfx: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0xaa, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+        let rn = build_dhcp6(DHCP6_RENEW, xid, &mac, &iid, 7, &[0xaa, 0xbb, 0xcc, 0xdd], Some((&pfx, 56)), false, &mut r);
+        let pl = &r[48..rn];
+        // msg 5, server-id option (2) present, IA_PD (25) carrying an IAPREFIX for the /56, no rapid commit (14)
+        let has = |code: u16| { let mut o = 4; let mut f = false; while o + 4 <= pl.len() { let c = u16::from_be_bytes([pl[o], pl[o + 1]]); let l = u16::from_be_bytes([pl[o + 2], pl[o + 3]]) as usize; if c == code { f = true; } o += 4 + l; } f };
+        pl[0] == DHCP6_RENEW && has(2) && has(25) && !has(14) && pl.windows(5).any(|w| w == [0x20, 0x01, 0x0d, 0xb8, 0xaa]) && l4_csum(&me, &ALL_DHCP, 17, &r[40..rn]) == 0
+    };
     // ---- LAN router + stateful firewall (arch_aarch64::ip6lan) ----
     let lan_ok = {
         use arch_aarch64::ip6lan::{LanAction, V6Lan, WanAction};
@@ -13059,9 +13074,9 @@ fn ip6_selftest() {
         }
         r
     };
-    let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS={}\n",
-        if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, lan_ok);
+    let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok && renew_ok;
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS={}\n",
+        if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, renew_ok, lan_ok);
 }
 
 fn pppoe_selftest() {
