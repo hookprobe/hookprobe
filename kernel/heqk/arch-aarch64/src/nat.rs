@@ -69,6 +69,9 @@ pub struct NatStats {
     pub table_evict: u32,
     /// DNS queries to the AP address forwarded to the upstream resolver.
     pub dns_redirect: u32,
+    /// Inbound ICMP errors (unreachable / frag-needed / time-exceeded / param-problem) translated back
+    /// to the client whose flow they quote (RFC 5508) — PMTU discovery + traceroute through the NAT.
+    pub icmp_err_in: u32,
 }
 
 #[inline]
@@ -358,6 +361,60 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
         return None;
     }
     let l4 = 14 + ihl;
+    // RFC 5508 §7: an ICMP ERROR quoting one of OUR outbound packets (quoted source = the NAT address,
+    // quoted source port / echo id = a session) goes back to that client with the outer destination AND
+    // the quoted source address/port translated — otherwise "fragmentation needed" never reaches the
+    // client (PMTU black hole: metal 2026-11-06, a 1448-B segment retransmitted until the client's own
+    // heuristic shrank it), traceroute never sees time-exceeded, and UDP waits instead of failing fast.
+    if proto == 1 && l4 + 8 <= ip_end && matches!(f[l4], 3 | 11 | 12) {
+        let q = l4 + 8;
+        if q + 20 > ip_end || f[q] >> 4 != 4 {
+            st.in_drop += 1;
+            return None;
+        }
+        let qihl = ((f[q] & 0x0f) as usize) * 4;
+        let ql4 = q + qihl;
+        if qihl < 20 || ql4 + 8 > ip_end || &f[q + 12..q + 16] != &wan_ip[..] {
+            st.in_drop += 1;
+            return None;
+        }
+        let qproto = f[q + 9];
+        let qext = match qproto {
+            6 | 17 => u16::from_be_bytes([f[ql4], f[ql4 + 1]]),
+            1 if f[ql4] == 8 => u16::from_be_bytes([f[ql4 + 4], f[ql4 + 5]]),
+            _ => {
+                st.in_drop += 1;
+                return None;
+            }
+        };
+        let e = match entry_for_ext(qproto, qext, now) {
+            Some(e) => e,
+            None => {
+                st.in_drop += 1;
+                return None;
+            }
+        };
+        let inside_mac = inside_macs[(e.in_if as usize).min(1)];
+        out[..ip_end].copy_from_slice(&f[..ip_end]);
+        out[0..6].copy_from_slice(&e.in_mac);
+        out[6..12].copy_from_slice(inside_mac);
+        out[22] -= 1;
+        out[30..34].copy_from_slice(&e.in_ip); // outer destination -> the client
+        out[q + 12..q + 16].copy_from_slice(&e.in_ip); // quoted source -> the client
+        match qproto {
+            6 | 17 => out[ql4..ql4 + 2].copy_from_slice(&e.in_port.to_be_bytes()),
+            _ => out[ql4 + 4..ql4 + 6].copy_from_slice(&e.in_port.to_be_bytes()),
+        }
+        // quoted IP header checksum; the (truncated) quoted L4 checksum is left as received
+        out[q + 10] = 0;
+        out[q + 11] = 0;
+        let qc = inet_csum(&out[q..q + qihl], 0);
+        out[q + 10..q + 12].copy_from_slice(&qc.to_be_bytes());
+        fix_csums(out, ihl, ip_end); // outer IP + the whole ICMP message
+        st.in_fwd += 1;
+        st.icmp_err_in += 1;
+        return Some((ip_end, e.in_if));
+    }
     let ext = match proto {
         6 | 17 if l4 + 8 <= ip_end => u16::from_be_bytes([f[l4 + 2], f[l4 + 3]]),
         1 if l4 + 8 <= ip_end && f[l4] == 0 => u16::from_be_bytes([f[l4 + 4], f[l4 + 5]]), // echo reply id

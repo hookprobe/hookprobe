@@ -12422,12 +12422,46 @@ fn dnsfwd_selftest() {
     let rn2 = frame(&mut r, wan_mac, gw_mac, [1, 1, 1, 1], wan_ip, 53, ext2);
     let inb2 = nat::inbound(&r[..rn2], &wan_ip, &wan_mac, [&ap_mac, &ap_mac], &mut back, now, &mut st);
     let direct_back_ok = inb2.is_some() && back[26..30] == [1, 1, 1, 1] && udp_ok(&back);
+    // RFC 5508: an ICMP port-unreachable from an upstream router quoting the SNAT'd 1.1.1.1 query goes
+    // back to the client with outer dst + quoted src/port translated and valid IP/ICMP checksums.
+    let icmp_ok = {
+        // re-send the direct query to get its SNAT'd form (= what the router quotes)
+        let n2b = frame(&mut q, ap_mac, cli_mac, cli_ip, [1, 1, 1, 1], 51002, 53);
+        let _ = nat::outbound_redirect(&q[..n2b], nat::IF_WIFI, &inside, Some((&ap_ip, &resolver)), &wan_ip, &wan_mac, &gw_mac, &mut out, now, &mut st);
+        let quoted = out[14..42].to_vec(); // IP header + 8 bytes of UDP
+        let mut e = [0u8; 128];
+        e[0..6].copy_from_slice(&wan_mac);
+        e[6..12].copy_from_slice(&gw_mac);
+        e[12] = 0x08;
+        e[14] = 0x45;
+        let tot = (20 + 8 + quoted.len()) as u16;
+        e[16..18].copy_from_slice(&tot.to_be_bytes());
+        e[22] = 64;
+        e[23] = 1;
+        e[26..30].copy_from_slice(&[10, 200, 0, 1]);
+        e[30..34].copy_from_slice(&wan_ip);
+        e[34] = 3; // destination unreachable
+        e[35] = 3; // port unreachable
+        e[42..42 + quoted.len()].copy_from_slice(&quoted);
+        let c = csum16(&e[14..34], 0);
+        e[24..26].copy_from_slice(&c.to_be_bytes());
+        let c = csum16(&e[34..14 + tot as usize], 0);
+        e[36..38].copy_from_slice(&c.to_be_bytes());
+        let before = st.icmp_err_in;
+        match nat::inbound(&e[..14 + tot as usize], &wan_ip, &wan_mac, [&ap_mac, &ap_mac], &mut back, now, &mut st) {
+            Some((k, _)) => back[30..34] == cli_ip && back[42 + 12..42 + 16] == cli_ip
+                && u16::from_be_bytes([back[42 + 20], back[42 + 21]]) == 51002 && back[0..6] == cli_mac
+                && csum16(&back[14..34], 0) == 0 && csum16(&back[34..k], 0) == 0 && csum16(&back[42..62], 0) == 0
+                && st.icmp_err_in == before + 1,
+            None => false,
+        }
+    };
     // a non-DNS packet to the AP address stays local (never NATed)
     let n3 = frame(&mut q, ap_mac, cli_mac, cli_ip, ap_ip, 51004, 80);
     let local_ok = nat::outbound_redirect(&q[..n3], nat::IF_WIFI, &inside, Some((&ap_ip, &resolver)), &wan_ip, &wan_mac, &gw_mac, &mut out, now, &mut st).is_none();
-    let ok = out_ok && back_ok && direct_ok && direct_back_ok && local_ok;
-    kprint!(" [P11-dnsfwd] {} — AP DNS: query to the AP -> forwarded to the upstream resolver via SNAT={} reply returns FROM the AP to the client, checksums valid={} | direct query to 1.1.1.1 not redirected={} its reply keeps 1.1.1.1={} | non-DNS to the AP stays local={}\n",
-        if ok { "PASS" } else { "FAIL" }, out_ok, back_ok, direct_ok, direct_back_ok, local_ok);
+    let ok = out_ok && back_ok && direct_ok && direct_back_ok && local_ok && icmp_ok;
+    kprint!(" [P11-dnsfwd] {} — AP DNS: query to the AP -> forwarded to the upstream resolver via SNAT={} reply returns FROM the AP to the client, checksums valid={} | direct query to 1.1.1.1 not redirected={} its reply keeps 1.1.1.1={} | non-DNS to the AP stays local={} | ICMP error quoting a NATed flow translated back (RFC 5508: outer dst + quoted src/port, checksums)={}\n",
+        if ok { "PASS" } else { "FAIL" }, out_ok, back_ok, direct_ok, direct_back_ok, local_ok, icmp_ok);
 }
 
 /// 4-hex-digit formatting helper for a chanspec (no alloc): returns the value for `{:#06x}` printing.
