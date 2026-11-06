@@ -213,3 +213,13 @@ temporary address, router fe80::ba27:…. Forwarded out/in 707/2,565, 0 TX fail,
 0 IDS drops; test-ipv6.com **10/10**. Stateful default-deny inbound is QEMU-proven ([P-ip6]); a metal proof
 needs an outside IPv6 host. Also: PPPoE stale-session PADT sweep (img fcba6d5; not exercised yet — no
 stale session in these boots).
+
+## 2026-11-06 — task #26: route via the management VLAN, both directions (img 1cea191)
+
+Fortress port-4 bench (VLAN 100 internet / VLAN 200 mgmt). iPhone (airplane mode + Wi-Fi, private tab):
+`route 1.0.0.1/32 via mgmt gw 192.168.200.1` — fortress tcpdump on enp4s0.200 shows the iPhone's TCP to
+1.0.0.1:853 SNATed to 192.168.200.2, Cloudflare's SYN-ACK and data back on VLAN 200; heqk via mgmt=189,
+replies handed up (NAT) 583, `mgmt in` drops 0 (yesterday's stateless mgmt-in ACL dropped all 42). The
+admin-only `mgmt in` ACL still governs the device itself. Note: Safari sent 1.0.0.1:80/443 via iCloud
+Private Relay (never on the wire as 1.0.0.1) — test routes with non-relayed ports (444/853). Open: MSS
+clamp on the mgmt egress (fortress 5G path needed a 1188-B segment); WAN-down failover not yet run.
