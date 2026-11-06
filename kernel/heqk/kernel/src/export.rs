@@ -79,6 +79,36 @@ pub fn should_export(status: &EnrollStatus) -> bool {
     matches!(status, EnrollStatus::Enrolled(_))
 }
 
+// ---- MAC pseudonym for the IPv6 RA rules (review 2026-11-05) ----
+// For rules 121/122/123 `Event.src` is NOT an address: it is the low 32 bits of ratelimit::mac_hash, i.e.
+// the station's RAW first four MAC octets — exported off-device as "src_mac_hash". A plain hash would not
+// help (that space is small enough to brute-force). It is replaced AT THE EXPORT BOUNDARY by a device-
+// keyed pseudonym: HMAC-SHA256(K, src)[..4] with K = HKDF(SRK, "HQ-MAC-PSEUDONYM") — stable per device
+// (the receiver can still correlate one station's events), unlinkable without the device secret. The
+// on-device (sealed) record keeps the raw value. No key set -> 0 is exported, never the raw octets.
+const MAC_KEYED_RULES: [u16; 3] = [121, 122, 123];
+static mut MAC_PSEUDO_KEY: Option<[u8; 32]> = None;
+
+/// Derive the pseudonym key from the device sealing root (ProdFull::init).
+pub fn set_mac_pseudonym_key(srk: &[u8; 32]) {
+    let prk = boot_abi::kdf::hkdf_extract(b"HQ-MAC-PSEUDONYM", srk);
+    unsafe { MAC_PSEUDO_KEY = Some(boot_abi::kdf::hkdf_expand32(&prk, b"v1")) };
+}
+
+/// The `src` value that may LEAVE the device for this event.
+pub fn export_src(ev: &events::Event) -> u32 {
+    if !MAC_KEYED_RULES.contains(&ev.rule_id) {
+        return ev.src;
+    }
+    match unsafe { MAC_PSEUDO_KEY } {
+        Some(k) => {
+            let h = boot_abi::kdf::hmac_sha256(&k, &ev.src.to_le_bytes());
+            u32::from_le_bytes([h[0], h[1], h[2], h[3]])
+        }
+        None => 0,
+    }
+}
+
 /// Serialize one evidence `Event` into its 16-byte persist image.
 #[inline]
 pub fn ev_to_image(ev: &events::Event) -> [u8; EV_IMAGE_LEN] {
@@ -160,7 +190,7 @@ impl Exporter {
         }
         let rec = exportwire::Rec {
             ts: ev.ts,
-            src: ev.src,
+            src: export_src(ev), // raw MAC octets never leave the device (RA rules)
             rule_id: ev.rule_id,
             severity: ev.severity,
             verdict: ev.verdict,
@@ -679,7 +709,25 @@ mod selftest {
                 && !status.is_boot_blocking()
         })();
 
-        let pass = full_a && airgap_disk && a_ram && b && c && buffers_ok;
+        // MAC pseudonym at the export boundary (RA rules 121-123): never the raw octets, stable per key,
+        // 0 without a key; IPv4-keyed rules unchanged.
+        let pseudo_ok = {
+            let ra = events::Event { ts: 1, src: 0x4433_2211, rule_id: 121, severity: 3, verdict: 1, class: crate::verdict::CLASS_OBSERVE };
+            let v4 = events::Event { ts: 1, src: 0xC612_0001, rule_id: 1, severity: 3, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP };
+            let saved = unsafe { MAC_PSEUDO_KEY };
+            unsafe { MAC_PSEUDO_KEY = None };
+            let unkeyed = export_src(&ra) == 0;
+            set_mac_pseudonym_key(&[0x11; 32]);
+            let p1 = export_src(&ra);
+            let stable = export_src(&ra) == p1;
+            set_mac_pseudonym_key(&[0x22; 32]);
+            let other_key = export_src(&ra) != p1;
+            let ok = unkeyed && p1 != ra.src && p1 != 0 && stable && other_key && export_src(&v4) == v4.src;
+            unsafe { MAC_PSEUDO_KEY = saved };
+            ok
+        };
+        kprint!("   MAC pseudonym at export (RA rules: keyed, stable, never raw, 0 unkeyed; v4 unchanged)={}\n", yn(pseudo_ok));
+        let pass = full_a && airgap_disk && a_ram && b && c && buffers_ok && pseudo_ok;
         kprint!(
             "   full: M2-verdict->M3-disk-persist->M4-export->MC-verify(a)={} air-gap-on-disk(unenrolled persists, no export)(b)={}\n",
             yn(full_a), yn(airgap_disk)

@@ -55,6 +55,12 @@ const EXT_CSD_SEC_COUNT: usize = 212; // SEC_COUNT[215:212] LE, in 512-B sectors
 /// store's write ordering (commit header last) is only crash-consistent with the cache off (peer
 /// review COR-P2), and a flush would need CMD6.
 const EXT_CSD_CACHE_CTRL: usize = 33;
+/// Wear (JEDEC eMMC 5.0+): PRE_EOL_INFO (267: 1 normal, 2 warning >= 80% reserved blocks used, 3 urgent)
+/// and DEVICE_LIFE_TIME_EST_TYP_A/B (268/269: 0x01 = 0-10% of rated life used … 0x0A = 90-100%,
+/// 0x0B = exceeded; 0 = not reported). The device's own estimate — reported, never invented.
+const EXT_CSD_PRE_EOL_INFO: usize = 267;
+const EXT_CSD_LIFE_TIME_EST_A: usize = 268;
+const EXT_CSD_LIFE_TIME_EST_B: usize = 269;
 
 /// A brought-up eMMC block device. Read-only unless built with `p15-write`.
 pub struct Emmc {
@@ -65,6 +71,8 @@ pub struct Emmc {
     sector_addr: bool,
     /// EXT_CSD CACHE_CTRL bit 0 at probe (true = the volatile cache is enabled).
     cache_on: bool,
+    /// EXT_CSD wear at probe: (PRE_EOL_INFO, LIFE_TIME_EST_TYP_A, LIFE_TIME_EST_TYP_B).
+    wear: (u8, u8, u8),
     /// One-shot narrowing write window for the reserved KEYSTORE window (write build).
     #[cfg(feature = "p15-write")]
     win: Option<(u64, u64)>,
@@ -191,12 +199,14 @@ impl Emmc {
         }
 
         let cache_on = ext[EXT_CSD_CACHE_CTRL] & 1 != 0;
+        let wear = (ext[EXT_CSD_PRE_EOL_INFO], ext[EXT_CSD_LIFE_TIME_EST_A], ext[EXT_CSD_LIFE_TIME_EST_B]);
         Ok(Emmc {
             host,
             rca: RCA,
             sec_count,
             sector_addr,
             cache_on,
+            wear,
             #[cfg(feature = "p15-write")]
             win: None,
             #[cfg(feature = "p15-write")]
@@ -220,6 +230,10 @@ impl Emmc {
     /// durability not guaranteed without a flush, which this driver cannot issue).
     pub fn cache_on(&self) -> bool {
         self.cache_on
+    }
+    /// The device's own wear estimate: (PRE_EOL_INFO, LIFE_TIME_EST_TYP_A, _TYP_B) — see the consts.
+    pub fn wear(&self) -> (u8, u8, u8) {
+        self.wear
     }
     pub fn sector_addressed(&self) -> bool {
         self.sector_addr

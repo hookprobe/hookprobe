@@ -90,6 +90,7 @@ impl ProdFull {
     /// persistence (reported honestly on the console).
     pub fn init() -> ProdFull {
         let srk = crate::seal_srk().unwrap_or([0x5au8; 32]);
+        crate::export::set_mac_pseudonym_key(&srk); // exported RA-rule sources become device-keyed pseudonyms
         let handoff = crate::read_seal_handoff();
         let (device_id, svn_floor, pcr) = match handoff {
             Some(h) => (h.device_id, h.svn_floor, h.pcr),
@@ -128,6 +129,18 @@ impl ProdFull {
                     dev.sec_count(), wlo, whi, whi - wlo,
                     if dev.cache_on() { "ON — A/B snapshot write ORDER NOT GUARANTEED (no CMD6 flush in this driver)" } else { "off (A/B commit order holds)" }
                 );
+                {
+                    // eMMC wear, from the device itself (review 2026-11-05: no endurance figure in-tree).
+                    let (eol, a, b) = dev.wear();
+                    let life = |v: u8| -> (u32, u32) { if v == 0 || v > 0x0b { (0, 0) } else { (((v - 1) as u32) * 10, (v as u32) * 10) } };
+                    let (al, ah) = life(a);
+                    let (bl, bh) = life(b);
+                    kprint!(
+                        "   [PROD-FULL] eMMC wear: PRE_EOL_INFO={} ({}) | life used TYP_A {}-{}% TYP_B {}-{}% (raw {:#04x}/{:#04x}; 0 = not reported)\n",
+                        eol, match eol { 1 => "normal", 2 => "WARNING: >= 80% reserved blocks consumed", 3 => "URGENT", _ => "not reported" },
+                        al, ah, bl, bh, a, b
+                    );
+                }
                 // Restore the previous boot's snapshot, if any.
                 match SealedStore::open(&mut dev) {
                     Ok(ss) => {
