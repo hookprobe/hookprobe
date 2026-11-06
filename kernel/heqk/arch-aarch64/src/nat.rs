@@ -53,8 +53,14 @@ struct Entry {
     /// DNS redirect: the address the client actually queried (the AP's own IP) when the query
     /// was forwarded to the upstream resolver — replies get it back as their source. 0 = none.
     dnat_from: [u8; 4],
+    /// The remote addresses this mapping has SENT to (last 4, round-robin). Inbound is admitted only
+    /// from one of them — address-dependent filtering (RFC 4787 §5). Peer review SEC-M2: with the mapping
+    /// keyed on the external port alone, ANY internet host spraying the (sequential) ports 40000.. reached
+    /// a client with a live session and bypassed `wan in`.
+    remotes: [[u8; 4]; 4],
+    rnext: u8,
 }
-const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4] };
+const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0 };
 static mut TABLE: [Entry; N] = [EMPTY; N];
 
 #[derive(Default)]
@@ -122,9 +128,26 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
             oldest.0
         }
     };
-    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4] };
+    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0 };
     st.table_alloc += 1;
     i
+}
+
+/// Remember that mapping `i` sent to `remote` (no-op if already known).
+fn note_remote(i: usize, remote: &[u8; 4]) {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
+    let e = &mut t[i];
+    if e.remotes.iter().any(|r| r == remote) {
+        return;
+    }
+    e.remotes[(e.rnext as usize) % 4] = *remote;
+    e.rnext = e.rnext.wrapping_add(1);
+}
+
+impl Entry {
+    fn knows(&self, remote: &[u8]) -> bool {
+        self.remotes.iter().any(|r| r[..] == remote[..4] && *r != [0; 4])
+    }
 }
 
 fn entry_for_ext(proto: u8, ext: u16, now: u64) -> Option<Entry> {
@@ -335,6 +358,11 @@ pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<
         17 => out[l4..l4 + 2].copy_from_slice(&ext.to_be_bytes()),
         _ => out[l4 + 4..l4 + 6].copy_from_slice(&ext.to_be_bytes()),
     }
+    {
+        let mut d = [0u8; 4];
+        d.copy_from_slice(&out[30..34]);
+        note_remote(idx, &d);
+    }
     fix_csums(out, ihl, ip_end);
     st.out_fwd += 1;
     Some(ip_end)
@@ -388,8 +416,8 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
             }
         };
         let e = match entry_for_ext(qproto, qext, now) {
-            Some(e) => e,
-            None => {
+            Some(e) if e.knows(&f[q + 16..q + 20]) => e, // the quoted packet went to a remote we talked to
+            _ => {
                 st.in_drop += 1;
                 return None;
             }
@@ -424,8 +452,8 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
         }
     };
     let e = match entry_for_ext(proto, ext, now) {
-        Some(e) => e,
-        None => {
+        Some(e) if e.knows(&f[26..30]) => e,
+        _ => {
             st.in_drop += 1;
             return None;
         }

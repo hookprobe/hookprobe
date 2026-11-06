@@ -442,6 +442,17 @@ pub fn read_ncfgr() -> u32 {
 /// Also REQUIRED for 802.1Q / QinQ on the WAN (task #26): a full 1500-B payload with one tag is 1522 B
 /// on the wire (1526 with an S-tag) — past the standard gate, dropped silently on TX and RX.
 #[allow(dead_code)] // RUN-2 proved jumbo was NOT the txsweep cause (retrigger race was); used for VLAN.
+/// VLAN / QinQ frames (task #26): open the max-frame gate just enough — JFRAME with JML = 1536 (a QinQ
+/// frame is 1526 B + FCS = 1530). Peer review COR-P1: JML 10240 with 2048-B RX buffers would let a long
+/// frame span descriptors, each fragment then parsed as a standalone frame.
+pub fn enable_vlan_frames() {
+    const JML: usize = 0x048;
+    const JFRAME: u32 = 1 << 3;
+    w(GEM, NCFGR, r(GEM, NCFGR) | JFRAME);
+    w(GEM, JML, 1536);
+    unsafe { core::arch::asm!("dsb sy") };
+}
+
 pub fn enable_jumbo() {
     const JML: usize = 0x048;
     const JFRAME: u32 = 1 << 3;

@@ -496,10 +496,15 @@ impl Pppoe {
                 self.ip6_maybe_open();
             }
             CONF_NAK if id == self.ip6cp_id => {
-                if data.len() >= 10 && data[0] == 1 && data[1] == 10 {
+                // Peer review L5: never adopt a zero IID; the Nak loop is bounded like the retransmits.
+                if data.len() >= 10 && data[0] == 1 && data[1] == 10 && data[2..10] != [0u8; 8] {
                     self.my_iid.copy_from_slice(&data[2..10]);
                 }
-                self.send_ip6cp_req(now_ms, tx);
+                if self.ip6_tries >= 10 {
+                    self.ip6_off = true;
+                } else {
+                    self.send_ip6cp_req(now_ms, tx);
+                }
             }
             CONF_REJ if id == self.ip6cp_id => self.ip6_off = true,
             TERM_REQ => {
@@ -669,8 +674,11 @@ impl Pppoe {
         // session torn down); unicast to us only; once per SID per second.
         if et == ETH_SESS && f[0..6] == self.mac && self.phase != Phase::Requesting {
             let sid_in = be16(f, 16);
-            if sid_in != 0 && sid_in != self.sid {
-                if self.stale_last.0 != sid_in || now_ms.wrapping_sub(self.stale_last.1) >= 1000 {
+            // Peer review L1: ONE PADT per second in total (not per SID — rotating SIDs must not turn this
+            // into a 1:1 reflector), and once our session's AC is known only toward that AC.
+            let from_ok = self.ac_mac == [0; 6] || f[6..12] == self.ac_mac;
+            if sid_in != 0 && sid_in != self.sid && from_ok {
+                if self.stale_last.1 == 0 || now_ms.wrapping_sub(self.stale_last.1) >= 1000 {
                     self.stale_last = (sid_in, now_ms);
                     let mut ac = [0u8; 6];
                     ac.copy_from_slice(&f[6..12]);
@@ -1005,6 +1013,9 @@ impl Pppoe {
             return None;
         }
         let plen = (be16(f, 18) as usize).min(f.len() - 20);
+        if plen < 2 || f[0..6] != self.mac {
+            return None; // PPP length must cover the protocol field; only frames TO us (promiscuous GEM)
+        }
         let ip = &f[22..20 + plen];
         if 14 + ip.len() > out.len() {
             return None;
@@ -1038,6 +1049,9 @@ impl Pppoe {
             return None;
         }
         let plen = (be16(f, 18) as usize).min(f.len() - 20);
+        if plen < 2 || f[0..6] != self.mac {
+            return None; // peer review 2026-11-06 H1: plen 0/1 made this slice 22..20 = a remote panic
+        }
         Some(&f[22..20 + plen])
     }
 
