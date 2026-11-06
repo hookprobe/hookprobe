@@ -3674,10 +3674,74 @@ fn data_ok() -> bool {
 /// read, keep reading unconditionally until a dry pass.
 static mut AP_DRAIN: bool = false;
 
+// ---- Deferred station frames (peer review 2026-11-06 COR-M4) ----
+// A control request issued while the AP serves (the TX-stall kick, the channel readback) reads frames
+// until its reply arrives; the station DATA (ch 2) and EVENT (ch 1) frames it reads on the way — incl.
+// whole superframes' sub-frames — used to be DISCARDED (lost uplink TCP ACKs, even a missed assoc /
+// deauth event). While the serve loop runs they are parked here and ap_poll delivers them first, in
+// order. Off during bring-up, so a stale scan event can never surface later.
+const DEFER_N: usize = 16;
+static mut DEFER_BUF: [[u8; 2048]; DEFER_N] = [[0; 2048]; DEFER_N];
+static mut DEFER_META: [(u8, u16, usize); DEFER_N] = [(0, 0, 0); DEFER_N];
+static mut DEFER_HEAD: usize = 0;
+static mut DEFER_LEN: usize = 0;
+static mut DEFER_ON: bool = false;
+/// [parked, delivered, dropped because the ring was full]
+pub static mut DEFER_DIAG: [u32; 3] = [0; 3];
+
+/// Enable parking of station frames read by control requests (the AP serve loop turns it on).
+pub fn set_defer(on: bool) {
+    unsafe {
+        DEFER_ON = on;
+        DEFER_HEAD = 0;
+        DEFER_LEN = 0;
+    }
+}
+
+fn defer_push(rx: &[u8], ch: u8, len: u16, doff: usize) {
+    unsafe {
+        if !DEFER_ON || !(ch == 1 || ch == 2) {
+            return;
+        }
+        if DEFER_LEN == DEFER_N {
+            DEFER_DIAG[2] += 1;
+            return;
+        }
+        let i = (DEFER_HEAD + DEFER_LEN) % DEFER_N;
+        let n = (len as usize).min(rx.len()).min(2048);
+        let b = &mut *core::ptr::addr_of_mut!(DEFER_BUF);
+        b[i][..n].copy_from_slice(&rx[..n]);
+        DEFER_META[i] = (ch, n as u16, doff);
+        DEFER_LEN += 1;
+        DEFER_DIAG[0] += 1;
+    }
+}
+
+fn defer_pop(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
+    unsafe {
+        if DEFER_LEN == 0 {
+            return None;
+        }
+        let i = DEFER_HEAD;
+        let (ch, n, doff) = DEFER_META[i];
+        let n = (n as usize).min(rx.len());
+        let b = &*core::ptr::addr_of!(DEFER_BUF);
+        rx[..n].copy_from_slice(&b[i][..n]);
+        DEFER_HEAD = (DEFER_HEAD + 1) % DEFER_N;
+        DEFER_LEN -= 1;
+        DEFER_DIAG[1] += 1;
+        Some((ch, n as u16, doff))
+    }
+}
+
 /// `force` = read unconditionally (a cheap ~2 ms dry pass) — the liveness net the caller
 /// applies every ~250 ms so a lost or never-raised indication can stall the pump for at
 /// most that long.
 pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
+    // Frames a control request parked on the way to its reply come first, in order (COR-M4).
+    let (ch, hw_len, doff) = if let Some(t) = defer_pop(rx) {
+        t
+    } else {
     let draining = unsafe { AP_DRAIN };
     if !(force || draining || sdpcm_frame_pending()) {
         return ApEvent::Idle;
@@ -3686,7 +3750,7 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
     // 31e5466) showed the AP loop ~80% asleep in this call's 1-ms dry-poll delays (rx_dry ~2 ms each,
     // rx_frame ~0.8 ms avg) while TX took 40 us/frame with credit available — capping the AP at ~3,000
     // frames/s (~36 Mbps). brcmfmac's dpc never sleeps in the read path; the pump loop re-polls.
-    let (ch, hw_len, doff) = match read_sdpcm_frame_dry(rx, 0) {
+    match read_sdpcm_frame_dry(rx, 0) {
         Some(t) => {
             unsafe { AP_DRAIN = true };
             t
@@ -3695,6 +3759,7 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
             unsafe { AP_DRAIN = false };
             return ApEvent::Idle;
         }
+    }
     };
     if ch == 1 {
         if let Some((et, st, sta)) = parse_ap_event(rx, doff) {
@@ -5558,7 +5623,11 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
                 break 'frames;
             }
         }
-        // else: event/data frame or wrong reqid — skip it and read the next.
+        // else: event/data frame or wrong reqid — park station frames for the serve loop (COR-M4),
+        // then read the next.
+        if channel != SDPCM_CONTROL_CHANNEL {
+            defer_push(&rx[..valid], channel, valid as u16, doffset);
+        }
     }
     if want_diag {
         unsafe {

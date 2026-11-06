@@ -3100,6 +3100,7 @@ fn cm5_p10_probe() {
                         // proves liveness, and the core parks in `wfe`. The WiFi poll costs ~100 µs
                         // when idle (I_HMB_FRAME_IND peek), so the loop is responsive without the
                         // 1.5 s dry-read tax. Single-client pool (10.99.0.10) — a pool is M-NAT1.
+                        cyw43::set_defer(true); // control requests park station frames instead of dropping them
                         kprint!(" [P11-AP3] persistent WPA2 AP serve loop up — event-driven pump (assoc/deauth/ARP/DHCP), WAN keep-alive, 5s heartbeat\n");
                         let our_ip = [10u8, 99, 0, 1];
                         let offer_ip = [10u8, 99, 0, 10];
@@ -3696,6 +3697,9 @@ fn cm5_p10_probe() {
                                                 if matches!(v6a, arch_aarch64::ip6lan::WanAction::Drop) && v6.stats.drop_no_flow != no_flow0 {
                                                     wan_in_new!();
                                                 }
+                                                if let arch_aarch64::ip6lan::WanAction::Solicit(k) = v6a {
+                                                    let _ = wifi_send!(&v6buf[..k]); // re-learn an evicted client (SEC-M5)
+                                                }
                                                 if let arch_aarch64::ip6lan::WanAction::Deliver(k) = v6a {
                                                     let lan_out = hal::policy::facts(&v6buf[..k]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Lan, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
                                                     if lan_out != PAct::Allow {
@@ -3892,8 +3896,8 @@ fn cm5_p10_probe() {
                                             {
                                                 let s = unsafe { V6.stats };
                                                 let l = unsafe { uplink::WAN6_LIVE };
-                                                kprint!("   [P11-AP3 v6] up={} ra_tx={} rs_rx={} na_tx={} out={} in={} in_icmp_err={} | drop no_flow={} no_neigh={} hop={} src={} bad={} ids_out={} ids_in={} evict={} | WAN live: v6 rx={} RAs rx={} tx ok={} fail={}\n",
-                                                    unsafe { V6.up }, s.ra_tx, s.rs_rx, s.na_tx, s.out_fwd, s.in_fwd, s.in_icmp_err, s.drop_no_flow, s.drop_no_neigh, s.drop_hop, s.drop_src, s.drop_bad,
+                                                kprint!("   [P11-AP3 v6] up={} ra_tx={} rs_rx={} na_tx={} ns_tx={} out={} in={} in_icmp_err={} | drop no_flow={} no_neigh={} hop={} src={} (savi={}) bad={} ids_out={} ids_in={} evict={} | WAN live: v6 rx={} RAs rx={} tx ok={} fail={}\n",
+                                                    unsafe { V6.up }, s.ra_tx, s.rs_rx, s.na_tx, s.ns_tx, s.out_fwd, s.in_fwd, s.in_icmp_err, s.drop_no_flow, s.drop_no_neigh, s.drop_hop, s.drop_src, s.savi_refused, s.drop_bad,
                                                     v6_ids_drop[0], v6_ids_drop[1], s.flow_evict, l[0], l[1], l[2], l[3]);
                                                 if let Some(ra) = unsafe { uplink::WAN6_FIRST_RA } {
                                                     kprint!("   [P11-AP3 v6] ISP RA seen: router {:02x?} lifetime={}s M={} O={} prefix={} /{} mtu={}\n", &ra.router[..], ra.lifetime, ra.managed, ra.other, ra.has_prefix, ra.plen, ra.mtu);
@@ -3912,6 +3916,10 @@ fn cm5_p10_probe() {
                                                         mg.ip[0], mg.ip[1], mg.ip[2], mg.ip[3], mg.gw[0], mg.gw[1], mg.gw[2], mg.gw[3], mg.gw_mac.is_some(),
                                                         mg.stats[0], mg.stats[1], mg.stats[2], mg.stats[3], mg.stats[4], mg.stats[5], mg.stats[6]);
                                                 }
+                                            }
+                                            {
+                                                let d = unsafe { cyw43::DEFER_DIAG };
+                                                kprint!("   [P11-AP3 defer] station frames read by control requests: parked={} delivered={} ring-full={}\n", d[0], d[1], d[2]);
                                             }
                                             kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(unused)={} after_kick(ctl)={} reached_2s={}\n",
                                                 unstick[0], unstick[1], unstick[2], unstick[3], unstick[4]);
@@ -12908,14 +12916,43 @@ fn ip6_selftest() {
         let spoof_ok = matches!(v.on_lan(&f[..n], 70, &mut out), LanAction::Drop) && v.stats.drop_src == 1;
         let n = frame6(&mut f, &cmac, &apmac, &cli, &cll, 6, 64, &tcp);
         let ll_ok = matches!(v.on_lan(&f[..n], 80, &mut out), LanAction::Drop);
-        let r = ra_ok && na_ok && out_ok && in_ok && deny_ok && ptb_ok && spoof_ok && ll_ok;
+        // SAVI (SEC-M5): another station sourcing the client's address is refused; the owner keeps working.
+        let thief = [0x02u8, 0xee, 0, 0, 0, 9];
+        let n = frame6(&mut f, &thief, &apmac, &cli, &remote, 6, 64, &tcp);
+        let savi_ok = matches!(v.on_lan(&f[..n], 90, &mut out), LanAction::Drop) && v.stats.savi_refused == 1;
+        // Neighbor miss -> a Neighbor Solicitation for the destination (solicited-node multicast), not a silent drop.
+        let mut stranger = cli;
+        stranger[15] = 0x77;
+        let ns_ok = {
+            // `stranger` opens a flow (learned + committed), then 64 other stations fill the neighbor table
+            // and evict it (LRU); its reply must trigger an NS for it, not a silent drop.
+            let smac = [0x02u8, 0xdd, 0, 0, 0, 1];
+            let n2 = frame6(&mut f, &smac, &apmac, &stranger, &remote, 6, 64, &tcp);
+            let fwd = matches!(v.on_lan(&f[..n2], 100, &mut out), LanAction::Forward(_));
+            v.commit(100);
+            for k in 0..64u8 {
+                let mut a = cli;
+                a[14] = 0x40;
+                a[15] = k;
+                let n3 = frame6(&mut f, &[0x02, 0xcd, 0, 0, 1, k], &apmac, &a, &remote, 17, 64, &[0u8; 8]);
+                let _ = v.on_lan(&f[..n3], 110 + k as u64, &mut out);
+            }
+            let mut rt = rtcp;
+            rt[2..4].copy_from_slice(&50000u16.to_be_bytes());
+            let n4 = frame6(&mut f, &[0; 6], &[0; 6], &remote, &stranger, 6, 57, &rt);
+            fwd && match v.on_wan(&f[14..n4], 200, &mut out) {
+                WanAction::Solicit(k) => out[54] == 135 && out[62..78] == stranger && out[0..3] == [0x33, 0x33, 0xff] && k == 86 && v.stats.ns_tx == 1,
+                _ => false,
+            }
+        };
+        let r = ra_ok && na_ok && out_ok && in_ok && deny_ok && ptb_ok && spoof_ok && ll_ok && savi_ok && ns_ok;
         if !r {
             kprint!("   [P-ip6 lan] ra={} na={} out={} in={} deny={} ptb={} spoof={} ll={}\n", ra_ok, na_ok, out_ok, in_ok, deny_ok, ptb_ok, spoof_ok, ll_ok);
         }
         r
     };
     let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed={}\n",
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS={}\n",
         if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, lan_ok);
 }
 
