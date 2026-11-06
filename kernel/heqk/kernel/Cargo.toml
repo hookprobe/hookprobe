@@ -96,6 +96,9 @@ securechannel-selftest = ["securechannel"]
 #   stajoin — P10-E WPA2 STA join proof; needs HEQK_JOIN_SSID + HEQK_JOIN_PSK at build time.
 # Credentials are build-time env only — never source literals (ADR 0045).
 apmode = ["cm5"]
+# Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
+# Default builds read once and never block (peer review COR-L1).
+stalldiag = ["apmode"]
 stajoin = ["cm5"]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
 # addresses + linker load address, and boots a minimal serial "hello" first.

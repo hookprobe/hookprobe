@@ -50,6 +50,11 @@ const OCR_SECTOR_MODE: u32 = 1 << 30;
 const OCR_VOLT_WINDOW: u32 = 0x00FF_8000;
 const OCR_BUSY: u32 = 1 << 31; // R3 bit31: 1 = power-up complete
 const EXT_CSD_SEC_COUNT: usize = 212; // SEC_COUNT[215:212] LE, in 512-B sectors
+/// CACHE_CTRL (EXT_CSD[33]): bit 0 = the volatile cache is ON. Off after power-up until a host enables
+/// it with CMD6 — which this driver can never emit. Read and REPORTED, never changed: the A/B snapshot
+/// store's write ordering (commit header last) is only crash-consistent with the cache off (peer
+/// review COR-P2), and a flush would need CMD6.
+const EXT_CSD_CACHE_CTRL: usize = 33;
 
 /// A brought-up eMMC block device. Read-only unless built with `p15-write`.
 pub struct Emmc {
@@ -58,6 +63,8 @@ pub struct Emmc {
     rca: u32,
     sec_count: u64,
     sector_addr: bool,
+    /// EXT_CSD CACHE_CTRL bit 0 at probe (true = the volatile cache is enabled).
+    cache_on: bool,
     /// One-shot narrowing write window for the reserved KEYSTORE window (write build).
     #[cfg(feature = "p15-write")]
     win: Option<(u64, u64)>,
@@ -183,11 +190,13 @@ impl Emmc {
             return Err((10, BlkErr::CmdError));
         }
 
+        let cache_on = ext[EXT_CSD_CACHE_CTRL] & 1 != 0;
         Ok(Emmc {
             host,
             rca: RCA,
             sec_count,
             sector_addr,
+            cache_on,
             #[cfg(feature = "p15-write")]
             win: None,
             #[cfg(feature = "p15-write")]
@@ -206,6 +215,11 @@ impl Emmc {
 
     pub fn sec_count(&self) -> u64 {
         self.sec_count
+    }
+    /// EXT_CSD CACHE_CTRL at probe: true = the device's volatile write cache is enabled (write order /
+    /// durability not guaranteed without a flush, which this driver cannot issue).
+    pub fn cache_on(&self) -> bool {
+        self.cache_on
     }
     pub fn sector_addressed(&self) -> bool {
         self.sector_addr

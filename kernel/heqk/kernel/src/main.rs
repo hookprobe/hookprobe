@@ -3235,9 +3235,21 @@ fn cm5_p10_probe() {
                                         }
                                     }
                                     PAct::Allow => {
-                                        let gw_mac = up.gw_mac;
+                                        // `route … via wan gw X`: X's MAC (ARP-resolved); the default gateway otherwise.
+                                        let gw_mac = match nh_ip {
+                                            Some(g) => match uplink::wan_nexthop(&up, g) {
+                                                Some(mac) => mac,
+                                                None => {
+                                                    pol_mgmt_nh_miss += 1; // counted with the mgmt misses: "next hop unresolved"
+                                                    [0u8; 6]
+                                                }
+                                            },
+                                            None => up.gw_mac,
+                                        };
                                         let resolver = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
-                                        if let Some(k) = nat::outbound_redirect(frame, $nif, &inside_net, Some((&our_ip, &resolver)), &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, cyw43::ticks(), &mut nst) {
+                                        if gw_mac == [0u8; 6] {
+                                            false // next hop not resolved yet (ARP sent): drop, TCP retries
+                                        } else if let Some(k) = nat::outbound_redirect(frame, $nif, &inside_net, Some((&our_ip, &resolver)), &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, cyw43::ticks(), &mut nst) {
                                             let ok = uplink::wan_tx(&up, &nbuf[..k]);
                                             if !ok {
                                                 nat_tx_fail += 1;
@@ -3271,7 +3283,7 @@ fn cm5_p10_probe() {
                         let mut loop_t0 = 0u64; // profiler: start of the current loop iteration
                         const WAN_BUDGET: usize = 32; // WAN frames drained per loop (NAPI-style; wq is 128 deep)
                         let mut rx_busy = false;
-                        let mut last_sta = [0u8; 6]; // most recent associated station (sta_info baseline) // the last pump read returned a frame (firmware RX pending)
+                        let mut _last_sta = [0u8; 6]; // most recent associated station (stall snapshot uses the queued dst) // the last pump read returned a frame (firmware RX pending)
                         // Which signed rules are DROPping forwarded frames (the beat names them).
                         let mut rule_drops: [(u16, u32); 8] = [(0, 0); 8];
                         let mut evs = [events::Event::EMPTY; 16];
@@ -3361,7 +3373,8 @@ fn cm5_p10_probe() {
                                         // case 1 vs case 2: are the firmware's TX counters moving while credit is 0?
                                         let c1 = cyw43::fw_pktcnts();
                                         let t0 = now();
-                                        while now().wrapping_sub(t0) < freq {}
+                                        #[cfg(feature = "stalldiag")]
+                                        while now().wrapping_sub(t0) < freq {} // 1-s pair only on the bench: the serve loop never blocks (peer review COR-L1)
                                         let c2 = cyw43::fw_pktcnts();
                                         kprint!("   [STALL-DIAG] fw pktcnts (rx_good,rx_bad,tx_good,tx_bad,rx_ocast) t0={:?} t0+1s={:?}\n", c1, c2);
                                         if let (Some(a), Some(b)) = (c1, c2) {
@@ -3375,7 +3388,8 @@ fn cm5_p10_probe() {
                                             sta.copy_from_slice(&wq[wq_head % WQ_N][0..6]);
                                             let s1 = cyw43::fw_sta_info(&sta);
                                             let t1 = now();
-                                            while now().wrapping_sub(t1) < freq {}
+                                            #[cfg(feature = "stalldiag")]
+                                        while now().wrapping_sub(t1) < freq {} // 1-s pair only on the bench: the serve loop never blocks (peer review COR-L1)
                                             let s2 = cyw43::fw_sta_info(&sta);
                                             for (tag, s) in [("t0", s1), ("t0+1s", s2)] {
                                                 match s {
@@ -3433,7 +3447,7 @@ fn cm5_p10_probe() {
                             match ev {
                                 cyw43::ApEvent::Assoc(sta) => {
                                     assocs += 1;
-                                    last_sta = sta;
+                                    _last_sta = sta;
                                     kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
                                         sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                                     // A station that re-associates MID-handshake gets a fresh ANonce
@@ -3908,7 +3922,7 @@ fn cm5_p10_probe() {
                                             {
                                                 let ld = unsafe { uplink::LINK_DIAG };
                                                 let pol = unsafe { &*core::ptr::addr_of!(POLICY) };
-                                                kprint!("   [P11-AP3 policy] wan alive={} | drop lan/eth1/wan/mgmt={:?} block={:?} block-as-drop={} | via mgmt={} mgmt next-hop miss={} | link rx inet={} mgmt={} other-vlan drop={} untagged drop={} tagged tx={} mgmtq full={}\n",
+                                                kprint!("   [P11-AP3 policy] wan alive={} | drop lan/eth1/wan/mgmt={:?} block={:?} block-as-drop={} | via mgmt={} next-hop unresolved (mgmt+wan)={} | link rx inet={} mgmt={} other-vlan drop={} untagged drop={} tagged tx={} mgmtq full={}\n",
                                                     uplink::wan_alive(&up, 15_000), pol_drop, pol_block, pol_block_as_drop, pol_via_mgmt, pol_mgmt_nh_miss, ld[0], ld[1], ld[2], ld[3], ld[4], ld[5]);
                                                 for a in &pol.acl[..pol.nacl] {
                                                     kprint!("   [P11-AP3 policy] acl {} hits {:?} default {}\n", core::str::from_utf8(&a.name[..a.nlen]).unwrap_or("?"), &a.hits[..a.n], a.default_hits);

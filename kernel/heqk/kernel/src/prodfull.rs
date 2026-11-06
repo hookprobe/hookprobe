@@ -124,8 +124,9 @@ impl ProdFull {
                     arch_aarch64::emmc::RESERVED_LBA_HI,
                 );
                 kprint!(
-                    "   [PROD-FULL] eMMC up: {} sectors; write window armed LBA {}..{} ({} sectors — the ONLY writable region)\n",
-                    dev.sec_count(), wlo, whi, whi - wlo
+                    "   [PROD-FULL] eMMC up: {} sectors; write window armed LBA {}..{} ({} sectors — the ONLY writable region); volatile cache {}\n",
+                    dev.sec_count(), wlo, whi, whi - wlo,
+                    if dev.cache_on() { "ON — A/B snapshot write ORDER NOT GUARANTEED (no CMD6 flush in this driver)" } else { "off (A/B commit order holds)" }
                 );
                 // Restore the previous boot's snapshot, if any.
                 match SealedStore::open(&mut dev) {
