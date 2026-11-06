@@ -204,6 +204,12 @@ const SCAN_WINDOW_SECS: u64 = 10;
 /// is unambiguous.
 pub const SCAN_PORTS_RATELIMIT: u64 = 50;
 pub const SCAN_PORTS_CONFIRM: u64 = 100;
+/// Establishment holds scan escalation off only when it is SUBSTANTIAL relative to the sweep:
+/// `established × RATIO >= distinct SYN ports`. (Audit 2026-10-08 "connect-scan gap": the hold used to
+/// be `established == 0`, so a connect() scan that completed ONE handshake on an open port — or a scanner
+/// that opened one real connection first — disabled detection for the whole window.) A legit busy host
+/// (many established segments, few distinct SYN ports) stays held; zero establishment = unchanged.
+pub const SCAN_EST_RATIO: u64 = 8;
 
 /// Blanket per-source new-connection rate ceiling — parity with the Linux
 /// `scan_responder::DEFAULT_NEW_CONN_PPS`. A legit heavy burst (~100/s) sits far under
@@ -367,7 +373,8 @@ pub fn flow_established_count(src: u64) -> u64 {
 /// The bounded-RateLimit gate: a SYN-only distinct-port scan crossed the RATELIMIT bar
 /// WITH ZERO establishment. Keyed on scan SHAPE + no-establishment, never flow count.
 pub fn scan_over_ratelimit(src: u64) -> bool {
-    flow_established_count(src) == 0 && scan_distinct_ports(src) >= SCAN_PORTS_RATELIMIT
+    let d = scan_distinct_ports(src);
+    d >= SCAN_PORTS_RATELIMIT && flow_established_count(src).saturating_mul(SCAN_EST_RATIO) < d
 }
 
 /// The ADR-0018 CONFIRMATION signal for a durable Quarantine: a SYN-only sweep to
@@ -375,7 +382,8 @@ pub fn scan_over_ratelimit(src: u64) -> bool {
 /// (a single completed handshake) holds this at `false` forever within the window — this
 /// is precisely why a legit busy source (150 established flows) can NEVER be confirmed.
 pub fn scan_confirmed(src: u64) -> bool {
-    flow_established_count(src) == 0 && scan_distinct_ports(src) >= SCAN_PORTS_CONFIRM
+    let d = scan_distinct_ports(src);
+    d >= SCAN_PORTS_CONFIRM && flow_established_count(src).saturating_mul(SCAN_EST_RATIO) < d
 }
 
 /// Live flow-table fill as a percentage (0..=100) — the A7 conntrack-saturation SIGNAL.
