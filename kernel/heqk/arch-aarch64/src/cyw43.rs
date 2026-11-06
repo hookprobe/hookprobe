@@ -3696,7 +3696,7 @@ static mut AP_DRAIN: bool = false;
 // whole superframes' sub-frames — used to be DISCARDED (lost uplink TCP ACKs, even a missed assoc /
 // deauth event). While the serve loop runs they are parked here and ap_poll delivers them first, in
 // order. Off during bring-up, so a stale scan event can never surface later.
-const DEFER_N: usize = 16;
+const DEFER_N: usize = 64; // metal 2026-11-07: 16 overflowed 48x under a speed test (a control request reads many frames)
 static mut DEFER_BUF: [[u8; 2048]; DEFER_N] = [[0; 2048]; DEFER_N];
 static mut DEFER_META: [(u8, u16, usize); DEFER_N] = [(0, 0, 0); DEFER_N];
 static mut DEFER_HEAD: usize = 0;
