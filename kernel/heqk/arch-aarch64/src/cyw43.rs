@@ -1948,13 +1948,21 @@ pub fn sdpcm_frame_pending() -> bool {
 /// then wait until the device's remaining-frame byte count RFRAMEBCHI/LO (0x1001C/0x1001B) is
 /// zero (bounded, like brcmfmac's 0xffff retries).
 fn sdio_rxfail() {
+    sdio_rxfail_ex(true);
+}
+
+/// brcmf_sdio_rxfail(bus, abort, false): `abort` = also abort the in-flight F2 transfer (read errors);
+/// false = only terminate the frame (a corrupt header tag, nothing in flight).
+fn sdio_rxfail_ex(abort: bool) {
     const SDIO_CCCR_ABORT: u32 = 0x06;
     const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
     const SFC_RF_TERM: u8 = 1 << 0;
     const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1001B;
     const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1001C;
     unsafe { AP_DIAG[6] += 1 };
-    let _ = cmd52(true, 0, SDIO_CCCR_ABORT, 2);
+    if abort {
+        let _ = cmd52(true, 0, SDIO_CCCR_ABORT, 2);
+    }
     let _ = cmd52(true, 1, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
     for _ in 0..0xffffu32 {
         let hi = cmd52(false, 1, SBSDIO_FUNC1_RFRAMEBCHI, 0).unwrap_or(0xff);
@@ -2362,7 +2370,15 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
         }
         delay(1_000);
     }
-    if hw_len == 0 || ((!(hw_len ^ hw_ck)) & 0xffff) != 0 {
+    if hw_len == 0 {
+        return None;
+    }
+    if ((!(hw_len ^ hw_ck)) & 0xffff) != 0 {
+        // A corrupt frame tag: terminate it in the device, as brcmfmac's hdparse does
+        // (brcmf_sdio_rxfail(bus, false, false), sdio.c "HW hdr error") — leaving it in the F2 FIFO
+        // desyncs every later read (peer review COR-L6).
+        unsafe { AP_DIAG[15] += 1 };
+        sdio_rxfail_ex(false);
         return None;
     }
     let w0r = u32::from_le_bytes([rx[4], rx[5], rx[6], rx[7]]);

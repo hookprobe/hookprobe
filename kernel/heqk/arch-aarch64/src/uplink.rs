@@ -1227,7 +1227,44 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         up.gw_mac.copy_from_slice(&buf[22..28]); // gateway moved (VRRP/failover)
         return WanEvent::GwRefreshed;
     }
+    // A reply from another on-subnet next hop (routes `via wan gw X`, COR-L5): cache it.
+    if op == 2 && buf[0..6] == mac && spa != up.dhcp.router {
+        let mask = u32::from_be_bytes(up.dhcp.mask);
+        if mask != 0 && u32::from_be_bytes(spa) & mask == u32::from_be_bytes(ip) & mask {
+            let c = unsafe { &mut *core::ptr::addr_of_mut!(WAN_NH) };
+            let k = c.iter().position(|e| e.0 == spa).or_else(|| c.iter().position(|e| e.1 == [0; 6])).unwrap_or(0);
+            let mut g = [0u8; 6];
+            g.copy_from_slice(&buf[22..28]);
+            c[k] = (spa, g);
+        }
+    }
     WanEvent::Idle
+}
+
+/// Next hops on the internet sub-interface other than the default gateway (routes `via wan gw X`).
+static mut WAN_NH: [([u8; 4], [u8; 6]); 4] = [([0; 4], [0; 6]); 4];
+static mut WAN_NH_LAST_ARP: u64 = 0;
+
+/// MAC of next hop `gw` on the internet sub-interface (peer review COR-L5: `route … via wan gw X` used to
+/// silently ignore X). The default gateway is answered directly; another one from the ARP cache, else an
+/// ARP request goes out (at most 1/s) and None is returned (the packet is dropped; TCP retries). PPPoE:
+/// point-to-point, every packet goes to the AC — the gateway is meaningless, the AC is returned.
+pub fn wan_nexthop(up: &UplinkResult, gw: [u8; 4]) -> Option<[u8; 6]> {
+    if up.mode == 2 || gw == up.dhcp.router || gw == [0; 4] {
+        return Some(up.gw_mac);
+    }
+    let c = unsafe { &*core::ptr::addr_of!(WAN_NH) };
+    if let Some(e) = c.iter().find(|e| e.0 == gw && e.1 != [0; 6]) {
+        return Some(e.1);
+    }
+    let now = ms_now();
+    if now.wrapping_sub(unsafe { WAN_NH_LAST_ARP }) >= 1000 {
+        unsafe { WAN_NH_LAST_ARP = now };
+        let mut o = [0u8; 64];
+        let n = arp_frame(&mut o, 1, &up.mac, &up.dhcp.yiaddr, &[0; 6], &gw, &[0xff; 6]);
+        let _ = nic_tx(up.nic, &o[..n]);
+    }
+    None
 }
 
 /// LAN-port status for eth1: program its station address and report the link.
