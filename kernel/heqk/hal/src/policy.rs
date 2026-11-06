@@ -309,22 +309,27 @@ impl Policy {
 
     /// Run one ACL (first-match by seq; else its default, unset = Drop). Counts the deciding entry.
     pub fn acl_eval(&mut self, ai: usize, p: &Pkt) -> (Act, u16) {
-        let a = self.acl[ai];
-        for (k, r) in a.e[..a.n].iter().enumerate() {
-            if r.proto != 0 && r.proto != p.proto && !(r.proto == 1 && p.proto == 58) {
-                continue;
+        // By reference — no per-packet copy of the ~1.8-KB Acl (peer review COR-P3).
+        let hit = {
+            let a = &self.acl[ai];
+            a.e[..a.n].iter().position(|r| {
+                (r.proto == 0 || r.proto == p.proto || (r.proto == 1 && p.proto == 58))
+                    && (r.dport == (0, 0) || (p.dport >= r.dport.0 && p.dport <= r.dport.1))
+                    && self.addr_ok(&r.src, &p.src)
+                    && self.addr_ok(&r.dst, &p.dst)
+            })
+        };
+        let a = &mut self.acl[ai];
+        match hit {
+            Some(k) => {
+                a.hits[k] = a.hits[k].wrapping_add(1);
+                (a.e[k].act, a.e[k].seq)
             }
-            if r.dport != (0, 0) && (p.dport < r.dport.0 || p.dport > r.dport.1) {
-                continue;
+            None => {
+                a.default_hits = a.default_hits.wrapping_add(1);
+                (a.default.unwrap_or(Act::Drop), u16::MAX)
             }
-            if !self.addr_ok(&r.src, &p.src) || !self.addr_ok(&r.dst, &p.dst) {
-                continue;
-            }
-            self.acl[ai].hits[k] = self.acl[ai].hits[k].wrapping_add(1);
-            return (r.act, r.seq);
         }
-        self.acl[ai].default_hits = self.acl[ai].default_hits.wrapping_add(1);
-        (a.default.unwrap_or(Act::Drop), u16::MAX)
     }
 
     /// Every binding on (interface, direction), in config order: prefix lists filter the address
