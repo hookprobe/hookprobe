@@ -339,8 +339,15 @@ fn end0_rx(out: &mut [u8]) -> Option<usize> {
         }
         if mv != 0 && outer == 0 && vid == mv {
             let n = strip(out);
+            unsafe { LINK_DIAG[1] += 1 };
+            // Only what the management stack can act on: ARP, or unicast to our MAC. Multicast / IPv6 ND /
+            // other hosts' unicast on the management VLAN never occupy the queue (it filled at boot, metal
+            // 2026-11-05: mgmtq full=18).
+            let is_arp = n >= 14 && out[12] == 0x08 && out[13] == 0x06;
+            if !(is_arp || out[0..6] == END0_MAC) {
+                continue;
+            }
             unsafe {
-                LINK_DIAG[1] += 1;
                 if MGMT_QN == MQ_N {
                     LINK_DIAG[5] += 1;
                 } else {
