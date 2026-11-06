@@ -2899,6 +2899,9 @@ fn cm5_p10_probe() {
                                     if let Some((ip, pl)) = floor {
                                         let _ = crate::verdict::set_mgmt_floor(u32::from_be_bytes(ip), pl as u32);
                                     }
+                                    if l.floor_bad {
+                                        kprint!(" [LINK] WAN.TXT mgmt_floor= INVALID (need a.b.c.d/8..32) — ignored, the floor below applies\n");
+                                    }
                                     let (fnet, flen, fset) = crate::verdict::mgmt_floor();
                                     let fb = fnet.to_be_bytes();
                                     kprint!(" [LINK] management floor (never enforced against): {}.{}.{}.{}/{} — {}\n", fb[0], fb[1], fb[2], fb[3], flen,
@@ -3485,6 +3488,7 @@ fn cm5_p10_probe() {
                                     }
                                 }
                                 cyw43::ApEvent::Leave(sta) => {
+                                    unsafe { (*core::ptr::addr_of_mut!(V6)).forget_mac(&sta) }; // release its IPv6 bindings (SAVI)
                                     leaves += 1;
                                     kprint!("   [P11-AP3] station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left (deauth/disassoc)\n",
                                         sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
@@ -12789,14 +12793,14 @@ route 2001:db8:1::/48 via mgmt
         && parse_policy(b"acl A seq 1 drop any any any\n", &mut q) == Err(PolicyErr::NoMagic);
     // WAN.TXT link keys
     let w: &[u8] = b"HQWAN1\nmode=pppoe\npppoe_user=u@isp\npppoe_pass=x\nvlan=100\nvlan_outer=10\npcp=3\nmgmt_vlan=200\nmgmt=static\nmgmt_ip=192.168.200.2/24\nmgmt_gw=192.168.200.1\n";
-    let link_ok = hal::parse_wan_link(w) == Ok(hal::WanLink { vlan: 100, outer: 10, pcp: 3, mgmt: Some(hal::MgmtIf { vlan: 200, stat: Some(([192, 168, 200, 2], 24, [192, 168, 200, 1])) }), floor: None })
+    let link_ok = hal::parse_wan_link(w) == Ok(hal::WanLink { vlan: 100, outer: 10, pcp: 3, mgmt: Some(hal::MgmtIf { vlan: 200, stat: Some(([192, 168, 200, 2], 24, [192, 168, 200, 1])) }), floor: None, floor_bad: false })
         && matches!(hal::parse_wan_cfg(w), Ok(hal::WanMode::Pppoe { .. }))
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=100\nmgmt_vlan=100\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan_outer=10\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=4095\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\n") == Ok(hal::WanLink::default())
         && hal::parse_wan_link(b"HQWAN1\nmode=pppoe\npppoe_user=u\nvlan=35\nmgmt_vlan=200\nmgmt=dhcp\n")
-            == Ok(hal::WanLink { vlan: 35, outer: 0, pcp: 0, mgmt: Some(hal::MgmtIf { vlan: 200, stat: None }), floor: None })
+            == Ok(hal::WanLink { vlan: 35, outer: 0, pcp: 0, mgmt: Some(hal::MgmtIf { vlan: 200, stat: None }), floor: None, floor_bad: false })
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_vlan=200\nmgmt=bootp\n").is_err();
     // tag stack + MTU from the headers
     let e = Encap { vlan: 100, outer: 10, pcp: 3, pppoe: true };
@@ -12814,12 +12818,15 @@ route 2001:db8:1::/48 via mgmt
     let floor_ok = {
         let w = hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=192.168.77.0/24\n");
         let parsed = matches!(w, Ok(hal::WanLink { floor: Some(([192, 168, 77, 0], 24)), .. }))
-            && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=0.0.0.0/0\n").is_err()
-            && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=10.0.0.0/7\n").is_err();
+            // over-broad / malformed floors are IGNORED (flagged), never fatal — the rest of WAN.TXT stands
+            && matches!(hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=35\nmgmt_floor=0.0.0.0/0\n"), Ok(hal::WanLink { vlan: 35, floor: None, floor_bad: true, .. }))
+            && matches!(hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=10.0.0.0/7\n"), Ok(hal::WanLink { floor: None, floor_bad: true, .. }))
+            && matches!(hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=192.168.200.10/32\n"), Ok(hal::WanLink { floor: Some(([192, 168, 200, 10], 32)), .. }));
         let def = crate::verdict::is_allowlisted(0x0A_C8_00_05) && !crate::verdict::is_allowlisted(0xC0_A8_4D_05);
         let set = crate::verdict::set_mgmt_floor(0xC0_A8_4D_00, 24);
         let moved = crate::verdict::is_allowlisted(0xC0_A8_4D_05) && !crate::verdict::is_allowlisted(0x0A_C8_00_05) && crate::verdict::mgmt_floor().2;
-        let broad_refused = !crate::verdict::set_mgmt_floor(0, 0) && !crate::verdict::set_mgmt_floor(0x0A00_0000, 4);
+        let broad_refused = !crate::verdict::set_mgmt_floor(0, 0) && !crate::verdict::set_mgmt_floor(0x0A00_0000, 4)
+            && crate::verdict::set_mgmt_floor(0xC0A8_C80A, 32) && crate::verdict::is_allowlisted(0xC0A8_C80A) && !crate::verdict::is_allowlisted(0xC0A8_C80B);
         crate::verdict::reset_mgmt_floor();
         let restored = crate::verdict::is_allowlisted(0x0A_C8_00_05) && !crate::verdict::mgmt_floor().2;
         parsed && def && set && moved && broad_refused && restored
@@ -13053,29 +13060,60 @@ fn ip6_selftest() {
             let n2 = frame6(&mut f, &smac, &apmac, &stranger, &remote, 6, 64, &tcp);
             let fwd = matches!(v.on_lan(&f[..n2], 100, &mut out), LanAction::Forward(_));
             v.commit(100);
+            // The client goes IDLE past the 5-min active window (its flow is still live: 10-min timeout); only
+            // then may other stations' new bindings recycle its slot (H1: active bindings are never evicted).
+            let t = 100 + 300_001;
             for k in 0..64u8 {
                 let mut a = cli;
                 a[14] = 0x40;
                 a[15] = k;
                 let n3 = frame6(&mut f, &[0x02, 0xcd, 0, 0, 1, k], &apmac, &a, &remote, 17, 64, &[0u8; 8]);
-                let _ = v.on_lan(&f[..n3], 110 + k as u64, &mut out);
+                let _ = v.on_lan(&f[..n3], t + k as u64, &mut out);
             }
             let mut rt = rtcp;
             rt[2..4].copy_from_slice(&50000u16.to_be_bytes());
             let n4 = frame6(&mut f, &[0; 6], &[0; 6], &remote, &stranger, 6, 57, &rt);
-            fwd && match v.on_wan(&f[14..n4], 200, &mut out) {
+            fwd && match v.on_wan(&f[14..n4], t + 100, &mut out) {
                 WanAction::Solicit(k) => out[54] == 135 && out[62..78] == stranger && out[0..3] == [0x33, 0x33, 0xff] && k == 86 && v.stats.ns_tx == 1,
                 _ => false,
             }
         };
-        let r = ra_ok && na_ok && out_ok && in_ok && deny_ok && ptb_ok && spoof_ok && ll_ok && savi_ok && ns_ok;
+        // Re-review H1: ONE station flooding 64 sources cannot evict others' active bindings, so it can
+        // never claim them; M1: a station that leaves releases its bindings.
+        let flood_ok = {
+            let mut w = V6Lan::new();
+            w.configure(&pd, 56, u32::MAX, &apmac, None);
+            let vmac = [0x02u8, 0xaa, 0xaa, 0, 0, 1];
+            let atk = [0x02u8, 0xbb, 0xbb, 0, 0, 2];
+            let mut victim = cli;
+            victim[15] = 0x42;
+            let n0 = frame6(&mut f, &vmac, &apmac, &victim, &remote, 17, 64, &[0u8; 8]);
+            let v_ok = matches!(w.on_lan(&f[..n0], 1_000, &mut out), LanAction::Forward(_));
+            for k in 0..64u8 {
+                let mut a = cli;
+                a[14] = 0x77;
+                a[15] = k;
+                let n1 = frame6(&mut f, &atk, &apmac, &a, &remote, 17, 64, &[0u8; 8]);
+                let _ = w.on_lan(&f[..n1], 2_000 + k as u64, &mut out);
+            }
+            let n2 = frame6(&mut f, &atk, &apmac, &victim, &remote, 17, 64, &[0u8; 8]);
+            let claim_refused = matches!(w.on_lan(&f[..n2], 3_000, &mut out), LanAction::Drop);
+            let n3 = frame6(&mut f, &vmac, &apmac, &victim, &remote, 17, 64, &[0u8; 8]);
+            let victim_still = matches!(w.on_lan(&f[..n3], 3_100, &mut out), LanAction::Forward(_));
+            // M1: the victim leaves; a re-joined client (new private MAC) gets the address
+            w.forget_mac(&vmac);
+            let n4 = frame6(&mut f, &[0x02, 0xaa, 0xaa, 0, 0, 9], &apmac, &victim, &remote, 17, 64, &[0u8; 8]);
+            let rejoin = matches!(w.on_lan(&f[..n4], 3_200, &mut out), LanAction::Forward(_));
+            v_ok && claim_refused && victim_still && rejoin
+        };
+        let r = ra_ok && na_ok && out_ok && in_ok && deny_ok && ptb_ok && spoof_ok && ll_ok && savi_ok && ns_ok && flood_ok;
         if !r {
-            kprint!("   [P-ip6 lan] ra={} na={} out={} in={} deny={} ptb={} spoof={} ll={}\n", ra_ok, na_ok, out_ok, in_ok, deny_ok, ptb_ok, spoof_ok, ll_ok);
+            kprint!("   [P-ip6 lan] ra={} na={} out={} in={} deny={} ptb={} spoof={} ll={} savi={} ns={} flood={}\n", ra_ok, na_ok, out_ok, in_ok, deny_ok, ptb_ok, spoof_ok, ll_ok, savi_ok, ns_ok, flood_ok);
         }
         r
     };
     let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok && renew_ok;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS={}\n",
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings={}\n",
         if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, renew_ok, lan_ok);
 }
 

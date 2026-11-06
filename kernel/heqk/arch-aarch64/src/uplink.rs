@@ -222,47 +222,69 @@ pub struct MgmtDhcp {
 fn mgmt_dhcp_step(m: &mut Mgmt, rx: Option<&[u8]>, now: u64) -> bool {
     let Some(mut d) = m.dhcp else { return false };
     let mut consumed = false;
+    let mut restart = false;
     if let Some(f) = rx {
+        // Re-review M3: carry the pinned server into the parser (its own server-id guard), and check it
+        // again here for every message type.
         let mut r = DhcpResult::new();
+        r.server = d.server;
         let mt = parse_dhcp_reply(f, &d.xid, &m.mac, &mut r);
         if mt != 0 {
             consumed = true;
+            let from_pinned = d.server == [0; 4] || r.server == d.server;
             match mt {
                 2 if d.phase == 0 => {
                     d.offer = r.yiaddr;
-                    d.server = r.server;
+                    d.server = r.server; // pin
                     d.phase = 1;
                     d.last_tx = 0; // REQUEST now
                 }
-                5 if d.phase >= 1 => {
+                5 if d.phase >= 1 && from_pinned => {
                     let mask = u32::from_be_bytes(r.mask);
                     m.ip = r.yiaddr;
                     m.prefix = if mask == 0 { 24 } else { mask.count_ones() as u8 };
-                    if r.router != m.gw {
-                        m.gw_mac = None; // a new gateway: resolve it again
+                    if r.router != [0; 4] && r.router != m.gw {
+                        m.gw = r.router; // keep the old gateway when the ACK carries no router option
+                        m.gw_mac = None;
                     }
-                    m.gw = r.router;
-                    d.lease_s = if r.lease == 0 { 3600 } else { r.lease };
+                    d.lease_s = r.lease.max(60); // a 1-s lease must not become a renewal storm
                     d.bound_at = now;
                     d.phase = 2;
                     d.acks += 1;
+                    // L3: resolve the gateway right away (the first routed packets used to be dropped)
+                    if m.gw != [0; 4] && m.gw_mac.is_none() {
+                        let mut o = [0u8; 64];
+                        let k = arp_frame(&mut o, 1, &m.mac, &m.ip, &[0; 6], &m.gw, &[0xff; 6]);
+                        let _ = mgmt_tx(&o[..k]);
+                        m.last_arp = now;
+                    }
                 }
-                6 => {
+                // A NAK counts only while REQUESTING and only from the pinned server: a forged NAK must not
+                // take a bound management address down.
+                6 if d.phase == 1 && from_pinned => {
                     d.naks += 1;
-                    d.phase = 0;
-                    d.last_tx = 0;
-                    m.ip = [0; 4];
-                    m.gw_mac = None;
+                    restart = true;
                 }
                 _ => {}
             }
         }
     }
-    // Renewal at T1 (lease/2): REQUEST the bound address again (a NAK restarts DORA).
+    // Lease bookkeeping: renew at T1 (lease/2); if still unrenewed at expiry, give the address up (RFC 2131).
     if d.phase == 2 && now.wrapping_sub(d.bound_at) >= (d.lease_s as u64 / 2) * 1000 {
         d.phase = 1;
         d.offer = m.ip;
         d.last_tx = 0;
+    }
+    if d.phase == 1 && m.ip != [0; 4] && now.wrapping_sub(d.bound_at) >= d.lease_s as u64 * 1000 {
+        restart = true;
+    }
+    if restart {
+        d.phase = 0;
+        d.server = [0; 4];
+        d.last_tx = 0;
+        d.xid = ((cntpct() as u32) ^ u32::from_be_bytes(d.xid).rotate_left(7)).to_be_bytes(); // fresh xid per DORA
+        m.ip = [0; 4];
+        m.gw_mac = None;
     }
     if d.phase < 2 && (d.last_tx == 0 || now.wrapping_sub(d.last_tx) >= 2000) {
         let mut o = [0u8; 600];
@@ -1297,23 +1319,28 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         up.gw_mac.copy_from_slice(&buf[22..28]); // gateway moved (VRRP/failover)
         return WanEvent::GwRefreshed;
     }
-    // A reply from another on-subnet next hop (routes `via wan gw X`, COR-L5): cache it.
-    if op == 2 && buf[0..6] == mac && spa != up.dhcp.router {
-        let mask = u32::from_be_bytes(up.dhcp.mask);
-        if mask != 0 && u32::from_be_bytes(spa) & mask == u32::from_be_bytes(ip) & mask {
-            let c = unsafe { &mut *core::ptr::addr_of_mut!(WAN_NH) };
-            let k = c.iter().position(|e| e.0 == spa).or_else(|| c.iter().position(|e| e.1 == [0; 6])).unwrap_or(0);
-            let mut g = [0u8; 6];
-            g.copy_from_slice(&buf[22..28]);
-            c[k] = (spa, g);
-        }
+    // A reply to OUR outstanding request for a configured next hop (routes `via wan gw X`, COR-L5).
+    // Re-review L2: unsolicited replies are never cached (poisoning), entries age out after 5 min.
+    if op == 2 && buf[0..6] == mac && spa != up.dhcp.router && unsafe { WAN_NH_ASKED } == spa {
+        let c = unsafe { &mut *core::ptr::addr_of_mut!(WAN_NH) };
+        let now = ms_now();
+        let k = c.iter().position(|e| e.0 == spa)
+            .or_else(|| c.iter().position(|e| e.1 == [0; 6] || now.wrapping_sub(e.2) >= WAN_NH_TTL_MS))
+            .unwrap_or_else(|| c.iter().enumerate().min_by_key(|(_, e)| e.2).map(|(i, _)| i).unwrap_or(0));
+        let mut g = [0u8; 6];
+        g.copy_from_slice(&buf[22..28]);
+        c[k] = (spa, g, now.max(1));
+        unsafe { WAN_NH_ASKED = [0; 4] };
     }
     WanEvent::Idle
 }
 
 /// Next hops on the internet sub-interface other than the default gateway (routes `via wan gw X`).
-static mut WAN_NH: [([u8; 4], [u8; 6]); 4] = [([0; 4], [0; 6]); 4];
+static mut WAN_NH: [([u8; 4], [u8; 6], u64); 4] = [([0; 4], [0; 6], 0); 4];
 static mut WAN_NH_LAST_ARP: u64 = 0;
+/// The next hop we last ARPed for (only its reply is cached).
+static mut WAN_NH_ASKED: [u8; 4] = [0; 4];
+const WAN_NH_TTL_MS: u64 = 300_000;
 
 /// MAC of next hop `gw` on the internet sub-interface (peer review COR-L5: `route … via wan gw X` used to
 /// silently ignore X). The default gateway is answered directly; another one from the ARP cache, else an
@@ -1324,12 +1351,15 @@ pub fn wan_nexthop(up: &UplinkResult, gw: [u8; 4]) -> Option<[u8; 6]> {
         return Some(up.gw_mac);
     }
     let c = unsafe { &*core::ptr::addr_of!(WAN_NH) };
-    if let Some(e) = c.iter().find(|e| e.0 == gw && e.1 != [0; 6]) {
+    let now = ms_now();
+    if let Some(e) = c.iter().find(|e| e.0 == gw && e.1 != [0; 6] && now.wrapping_sub(e.2) < WAN_NH_TTL_MS) {
         return Some(e.1);
     }
-    let now = ms_now();
     if now.wrapping_sub(unsafe { WAN_NH_LAST_ARP }) >= 1000 {
-        unsafe { WAN_NH_LAST_ARP = now };
+        unsafe {
+            WAN_NH_LAST_ARP = now;
+            WAN_NH_ASKED = gw;
+        }
         let mut o = [0u8; 64];
         let n = arp_frame(&mut o, 1, &up.mac, &up.dhcp.yiaddr, &[0; 6], &gw, &[0xff; 6]);
         let _ = nic_tx(up.nic, &o[..n]);

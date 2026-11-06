@@ -529,8 +529,10 @@ pub struct WanLink {
     pub outer: u16,
     pub pcp: u8,
     pub mgmt: Option<MgmtIf>,
-    /// `mgmt_floor=a.b.c.d/len` — the management allowlist floor (never enforced against), 8..=30.
+    /// `mgmt_floor=a.b.c.d/len` — the management allowlist floor (never enforced against), /8../32.
     pub floor: Option<([u8; 4], u8)>,
+    /// A `mgmt_floor=` line was present but invalid (ignored; reported at boot).
+    pub floor_bad: bool,
 }
 
 pub fn parse_wan_link(buf: &[u8]) -> Result<WanLink, WanCfgErr> {
@@ -584,18 +586,22 @@ pub fn parse_wan_link(buf: &[u8]) -> Result<WanLink, WanCfgErr> {
                 mip = Some((ip, pl));
             }
             b"mgmt_gw" => mgw = Some(parse_quad(v).ok_or(WanCfgErr::BadAddr)?),
-            b"mgmt_floor" => {
-                let slash = v.iter().position(|&b| b == b'/').ok_or(WanCfgErr::BadPrefix)?;
-                let ip = parse_quad(&v[..slash]).ok_or(WanCfgErr::BadAddr)?;
+            b"mgmt_floor" => 'mf: {
+                let Some(slash) = v.iter().position(|&b| b == b'/') else { l.floor_bad = true; break 'mf };
+                let Some(ip) = parse_quad(&v[..slash]) else { l.floor_bad = true; break 'mf };
                 let p = &v[slash + 1..];
                 if p.is_empty() || p.len() > 2 || !p.iter().all(|c| c.is_ascii_digit()) {
-                    return Err(WanCfgErr::BadPrefix);
+                    l.floor_bad = true;
+                    break 'mf;
                 }
                 let pl = p.iter().fold(0u8, |a, &c| a * 10 + (c - b'0'));
-                if !(8..=30).contains(&pl) {
-                    return Err(WanCfgErr::BadPrefix);
+                // /8../32 (a /32 = one admin host is the NARROWEST, safest floor — re-review M4). A bad
+                // value is ignored (flagged by `floor_bad`), never fatal: it must not untag the internet.
+                if (8..=32).contains(&pl) {
+                    l.floor = Some((ip, pl));
+                } else {
+                    l.floor_bad = true;
                 }
-                l.floor = Some((ip, pl));
             }
             _ => {}
         }

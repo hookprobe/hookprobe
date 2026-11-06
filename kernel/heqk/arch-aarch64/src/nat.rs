@@ -59,8 +59,10 @@ struct Entry {
     /// a client with a live session and bypassed `wan in`.
     remotes: [[u8; 4]; 4],
     rnext: u8,
+    /// DNS redirect: the upstream resolver the query was forwarded to (re-review P3).
+    dnat_to: [u8; 4],
 }
-const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0 };
+const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4] };
 static mut TABLE: [Entry; N] = [EMPTY; N];
 
 #[derive(Default)]
@@ -128,7 +130,7 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
             oldest.0
         }
     };
-    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0 };
+    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4] };
     st.table_alloc += 1;
     i
 }
@@ -339,6 +341,7 @@ pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<
     unsafe {
         let t = &mut *core::ptr::addr_of_mut!(TABLE);
         t[idx].dnat_from = match redirect { Some((ap, _)) => ap, None => [0; 4] };
+        t[idx].dnat_to = match redirect { Some((_, r)) => r, None => [0; 4] };
     }
 
     out[..ip_end].copy_from_slice(&f[..ip_end]);
@@ -435,7 +438,7 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
         }
         // DNS-redirected session: the client sent to the AP, not to the resolver — quote what IT sent
         // (peer review SEC-P2), or its stack cannot match the error to the query.
-        if e.dnat_from != [0; 4] && qproto == 17 && u16::from_be_bytes([f[ql4 + 2], f[ql4 + 3]]) == 53 {
+        if e.dnat_from != [0; 4] && qproto == 17 && u16::from_be_bytes([f[ql4 + 2], f[ql4 + 3]]) == 53 && f[q + 16..q + 20] == e.dnat_to {
             out[q + 16..q + 20].copy_from_slice(&e.dnat_from);
         }
         // quoted IP header checksum; the (truncated) quoted L4 checksum is left as received
