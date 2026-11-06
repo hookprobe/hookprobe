@@ -109,3 +109,30 @@ tiers use an IPv4 u32; hashing v6 into it could land in the mgmt floor) — need
 deployment-mode badge needs an API field, the dst column a detections schema change — UI + API together,
 browser-verified); NAT random external ports (low value now that inbound requires the session's remote, SEC-M2);
 SEC-L6 deployment note: prefer a tagged internet VLAN whenever `mgmt_vlan` is set.
+
+## Second independent review (re-review of `a1816dc..ef44f5f`) — classification: PEER REVIEW
+
+Findings on the follow-up fixes themselves, all verified against the code:
+
+| ID | Sev | Finding | Disposition (`6785b5f`) |
+|---|---|---|---|
+| H1 | high | SAVI bypass: one station floods 64 sources, evicts every binding, claims a victim's address — FCFS then locks the victim out | **F+R** ≤ 8 bindings/MAC; never evict an active (< 5 min) binding of another station; full table refuses the new one; `[P-ip6]` flood |
+| M1 | med | bindings not released on deauth (new private MAC refused 30 min) | **F+R** `forget_mac` on Leave; `[P-ip6]` rejoin |
+| M2 | med | proportional scan hold gameable by padding stray ACKs (~1 per 8 SYNs) | **O** needs SYN-ACK evidence (bidirectional flow state); on the AP NAT path a naive version flags legit many-port clients (ADR 0023) — design item |
+| M3 | med | mgmt DHCP: server pinning never applied, forged NAK drops a bound address, missing router zeroes the gateway | **F** pin, NAK only while requesting from the pinned server, keep gateway, fresh xid |
+| M4 | med | `mgmt_floor=/32` rejected and failed ALL of WAN.TXT (internet untagged) | **F+R** /8../32; invalid ignored + reported, never fatal |
+| L1 | low | NS unthrottled (multicast airtime storm) | **F** 1/target/s, 20/s total |
+| L2 | low | WAN next-hop cache accepted unsolicited replies, never aged | **F** only the reply to our ARP; 5-min TTL |
+| L3 | low | mgmt DHCP: gateway not ARPed on bind, no lease expiry, 1-s lease storm | **F** |
+| P1 | plaus. | scan-hold regression band for P2P-like clients; distinct-port slot collisions | **O** tied to M2's redesign |
+| P2 | plaus. | the floor is keyed on IP, not ingress interface (a spoofed floor source on WAN/eth1) | **O** needs per-interface source validation (with the floor ADR item) |
+| P3 | plaus. | DNS un-DNAT too loose | **F** only when quoted dst == the redirect's resolver |
+| P4 | plaus. | RFC 1858 IPv4-only | **F** RFC 7112 IPv6 first-fragment check |
+| P5 | plaus. | defer-ring ordering vs direct FIFO readers (authenticator) | **O** not a regression (frames were discarded before) |
+
+## Final end-to-end gate run (HEAD `6785b5f`)
+
+`validate.sh` exit 0 — **84 phases PASS, 0 failing** · CI replay: `prod` + `prod-mc` build, `prod,apmode`
+refused, no credential literal · bench profiles `sepdiag,p15-write`, `hboot,stajoin`, `hboot,stalldiag`
+build · image factory `prod-mc` and AP + VLAN (mgmt DHCP) bench: **FACTORY PASS 8/8** each. Everything in
+the follow-up block and the re-review is METAL-PENDING.
