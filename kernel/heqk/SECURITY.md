@@ -390,7 +390,27 @@ HookProbe can help meet various compliance requirements:
 - ✅ Respond: Automated response, incident handling
 - ✅ Recover: Backup, recovery procedures
 
-### GDPR Compliance & Privacy Controls
+### heqk data handling — current truth (2026-11-07)
+
+> ⚠️ The "GDPR Compliance & Privacy Controls" section below describes **HookProbe v5.0 (V1, the Python
+> stack)** — its scripts (`/opt/hookprobe/...`), switches (`ANONYMIZE_MAC_ADDRESSES`, …) and `GDPR.md` do
+> **not exist in heqk** and its claims must not be read as heqk properties. What heqk actually does:
+
+- **Processed on device:** source/destination IPv4 + IPv6 addresses, MAC addresses, ports and protocol
+  headers of forwarded traffic (no payload is retained). Detections become 16-byte evidence events
+  (timestamp, source, rule, severity, verdict).
+- **Behavioural detection exists:** beacon / lateral-movement / DNS detectors keep per-source counters and
+  timestamps (observe-only, ADR 0023) — so "no behavioural profiling" is **not** a heqk claim.
+- **At rest:** evidence and the snapshot are sealed (Encrypt-then-MAC under the device's OTP-derived key)
+  in the eMMC keystore / DataVolume; bounded rings, oldest evicted.
+- **Leaving the device:** only when ENROLLED (standalone exports nothing), over the PQ-hybrid Noise
+  channel. Exported events carry the **IPv4 source address in clear inside the encrypted channel**
+  (personal data under GDPR — the receiving MSSP is a processor). For the IPv6 RA rules the MAC-derived
+  source is replaced by a device-keyed pseudonym (`export.rs`, 2026-11-07); it never leaves raw.
+- **Not implemented in heqk:** MAC masking of the IPv4 path, configurable retention windows, subject
+  export/erasure tooling, the breach-notification workflow — tracked as gaps, not claimed.
+
+### GDPR Compliance & Privacy Controls (V1 — HookProbe v5.0, NOT heqk)
 
 **HookProbe v5.0 is GDPR-compliant by design and by default.**
 
