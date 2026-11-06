@@ -345,7 +345,17 @@ fn parse_ipv4(frame: &[u8], l3_off: usize) -> Option<(u8, usize, usize)> {
     // report no L4 (proto 0) so payload bytes are never read as ports/flags. (Read as a
     // header, a legit fragment whose payload held e.g. 4444 at bytes 2-3 was FrameDropped
     // as a signature hit — an ADR 0023 legit-drop.) The FIRST fragment keeps its ports.
-    if be16(frame, l3_off + 6)? & 0x1fff != 0 {
+    let frag = be16(frame, l3_off + 6)?;
+    let (off, mf) = (frag & 0x1fff, frag & 0x2000 != 0);
+    // RFC 1858 §3 (audit 2026-10-08): TCP fragment-overlap / tiny-fragment evasion is a structurally
+    // evasive frame, not traffic — fail closed (None -> the malformed drop). Offset exactly 1 (8 bytes)
+    // exists only to overwrite the TCP flags of the first fragment; a FIRST fragment (MF set) that cannot
+    // hold a full 20-byte TCP header hides the flags from every flag rule. Real stacks never send either
+    // (first fragments are MTU-sized), so no legit traffic is affected (ADR 0023 malformed-frame class).
+    if ip_proto == IPPROTO_TCP && (off == 1 || (off == 0 && mf && total_len < ihl + 20)) {
+        return None;
+    }
+    if off != 0 {
         return Some((0, l3_off + ihl, l3_off + total_len));
     }
     Some((ip_proto, l3_off + ihl, l3_off + total_len))

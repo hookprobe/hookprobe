@@ -7407,6 +7407,23 @@ fn p8_flow() -> bool {
     kprint!("   LEGIT established handshake (est={}) -> scan_confirmed={} (an established flow is definitionally not a scan) [{}]\n",
         ratelimit::flow_established_count(ip(est) as u64), scan_confirmed(ip(est) as u64), if c_est { "ok" } else { "BUG" });
 
+    // === ATTACK (audit 2026-10-08 connect-scan gap): a connect() scan that COMPLETES the handshake
+    //     on 3 open ports among 120 probed (a few ACKs each) must still be confirmed — a handful of
+    //     established segments against a 120-port sweep is not "a busy legit host". ===
+    let cs: [u8; 4] = [198, 18, 0, 80];
+    for port in 1..=120u16 {
+        let _ = scan_step(cs, port, SYN);
+        if port % 40 == 0 {
+            // an open port: the scanner completes the handshake (+ a data ACK)
+            let _ = scan_step(cs, port, ACK);
+            let _ = scan_step(cs, port, ACK);
+        }
+    }
+    let c_cs = scan_confirmed(ip(cs) as u64) && ratelimit::scan_over_ratelimit(ip(cs) as u64);
+    ok &= c_cs;
+    kprint!("   ATTACK connect-scan: 120 ports, 3 completed (est={}, distinct-syn={}) -> confirmed={} (MUST be true — proportional establishment hold) [{}]\n",
+        ratelimit::flow_established_count(ip(cs) as u64), scan_distinct_ports(ip(cs) as u64), scan_confirmed(ip(cs) as u64), if c_cs { "ok" } else { "BUG" });
+
     // === A7 / L9: the flow-table SATURATION signal (pure verdict map; the self-reverting
     //     SHED action is M2.3). L9 40% full → no shed; A7 85% full → shed signal. Keyed on
     //     RESOURCE REALITY (table fill), never identity. ===
@@ -7443,8 +7460,24 @@ fn p8_flow() -> bool {
         v6[64] = (4444u16 >> 8) as u8;
         v6[65] = (4444u16 & 0xff) as u8;
         let v_v6tail = crate::packet::verdict(&v6).1;
+        // RFC 1858 tiny / overlapping TCP fragments are dropped (structural); a legit FIRST fragment
+        // (MF set, full TCP header) to a clean port still passes.
+        let mut tiny = tcp_frame(src, 443, ACK);
+        tiny[20] = 0x20; // MF, offset 0
+        tiny[16..18].copy_from_slice(&28u16.to_be_bytes()); // 20 IP + 8 bytes of TCP: no flags
+        let mut ovl = tcp_frame(src, 443, ACK);
+        ovl[20] = 0x00;
+        ovl[21] = 0x01; // offset 1 (8 B): rewrites the first fragment's flags
+        let mut legit_first = tcp_frame(src, 443, ACK);
+        legit_first[20] = 0x20; // MF, offset 0, full header
+        let v_tiny = crate::packet::verdict(&tiny).1;
+        let v_ovl = crate::packet::verdict(&ovl).1;
+        let v_lf = crate::packet::verdict(&legit_first).1;
+        let c_1858 = v_tiny == crate::packet::DROP && v_ovl == crate::packet::DROP && v_lf != crate::packet::DROP;
+        kprint!("   RFC 1858: tiny first TCP fragment -> {} , offset-1 overlap -> {} (both DROP), legit first fragment -> {} (PASS) [{}]\n",
+            v_tiny, v_ovl, v_lf, if c_1858 { "ok" } else { "BUG" });
         let c_frag = v_first == crate::packet::DROP && v_tail != crate::packet::DROP
-            && v_v6tail != crate::packet::DROP;
+            && v_v6tail != crate::packet::DROP && c_1858;
         ok &= c_frag;
         kprint!("   LEGIT fragment: first-frag :4444 -> {} (signature DROP), non-first v4 frag (same bytes) -> {}, non-first v6 frag -> {} (payload never read as ports) [{}]\n",
             v_first, v_tail, v_v6tail, if c_frag { "ok" } else { "BUG" });
