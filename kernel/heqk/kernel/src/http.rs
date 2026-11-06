@@ -212,8 +212,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             use core::fmt::Write;
             // An unarmed rule plane (0 active rules) passes everything — report it, never hide it.
             let rules = crate::rules::active_rules();
-            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{}}}",
-                if rules == 0 { "degraded: rule plane not armed" } else { "ok" }, rules, st.seen, st.forwarded, st.dropped, st.detections());
+            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"mode\":\"{}\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{}}}",
+                if rules == 0 { "degraded: rule plane not armed" } else { "ok" },
+                if st.cloud_linked { "cloud-linked" } else { "standalone" }, rules, st.seen, st.forwarded, st.dropped, st.detections());
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
         p if p.starts_with("/api/") => json(scratch, |w| w.raw("{\"error\":\"not implemented on heqk\"}")).with_status(404),
