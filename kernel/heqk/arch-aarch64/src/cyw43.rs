@@ -5050,6 +5050,8 @@ pub struct Wpa4Way {
     pub deauth_after: bool,
     pub deauth_reason: u32, // 802.11 reason code (15 = 4-way HS timeout/MIC failure)
     pub post_m2_eapol: u32, // EAPOL frames seen after M2 (M1 retries or M3)
+    /// M3 candidates REFUSED before any key install (bad MIC / ANonce changed / replay not newer).
+    pub m3_rejected: u32,
     pub last_eapol_ki: u16, // key info of the last post-M2 EAPOL (retry vs M3 discriminator)
     pub m2_dump: [u8; 140], // the exact M2 ethernet frame we built (for offline verification)
     pub m2_len: usize,
@@ -5070,7 +5072,7 @@ impl Wpa4Way {
         Wpa4Way {
             have_m1: false, kdv: 0, snonce_ok: false, m2_tx_ok: false, m3_seen: false,
             m3_key_info: 0, m3_len: 0, deauth_after: false, deauth_reason: 0,
-            post_m2_eapol: 0, last_eapol_ki: 0,
+            post_m2_eapol: 0, m3_rejected: 0, last_eapol_ki: 0,
             m2_dump: [0; 140], m2_len: 0, snonce: [0; 32],
             m4_tx_ok: false, deauth_after_m4: false,
             ptk_set_ok: false, gtk_unwrapped: false, gtk_keyid: 0, gtk_set_ok: false,
@@ -5187,7 +5189,37 @@ pub fn wpa_handshake(m1: &[u8], m1_len: usize, pmk: &[u8; 32], out: &mut Wpa4Way
                     out.last_eapol_ki = ki;
                     // M3 = Key-ACK (0x80) AND Key-MIC (0x100) set. An M1 RETRY has ACK but
                     // NOT MIC — don't mistake it for M3 (that was the earlier bug).
-                    if ki & 0x0080 != 0 && ki & 0x0100 != 0 && !out.m3_seen {
+                    // 802.11 §12.7.6.4 / audit 2026-10-08: VERIFY M3 before M4 or any key install — its
+                    // MIC under our KCK (constant-time compare), the SAME ANonce as M1, and a replay
+                    // counter NEWER than M1's. Anything else is ignored (the AP retransmits); nothing
+                    // from an unauthenticated M3 is ever installed.
+                    let m3_ok = ki & 0x0080 != 0 && ki & 0x0100 != 0 && !out.m3_seen && {
+                        let xlen = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
+                        let e0 = eth + 14;
+                        let e1 = e0 + 4 + xlen;
+                        if xlen < 95 || e1 > rx.len() || e1 - e0 > 512 {
+                            false
+                        } else {
+                            let mut ep = [0u8; 512];
+                            let n = e1 - e0;
+                            ep[..n].copy_from_slice(&rx[e0..e1]);
+                            let mo = body - 14 + 77; // MIC offset inside the EAPOL frame
+                            let mut got = [0u8; 16];
+                            got.copy_from_slice(&ep[mo..mo + 16]);
+                            ep[mo..mo + 16].fill(0);
+                            let want = crate::wpa::wpa_mic_sha1(&kck, &ep[..n]);
+                            let mut diff = 0u8;
+                            for k in 0..16 {
+                                diff |= got[k] ^ want[k];
+                            }
+                            let r3 = u64::from_be_bytes([rx[eth + body + 5], rx[eth + body + 6], rx[eth + body + 7], rx[eth + body + 8], rx[eth + body + 9], rx[eth + body + 10], rx[eth + body + 11], rx[eth + body + 12]]);
+                            diff == 0 && rx[eth + body + 13..eth + body + 45] == anonce[..] && r3 > u64::from_be_bytes(replay)
+                        }
+                    };
+                    if ki & 0x0080 != 0 && ki & 0x0100 != 0 && !out.m3_seen && !m3_ok {
+                        out.m3_rejected += 1;
+                    }
+                    if m3_ok {
                         out.m3_seen = true;
                         out.m3_key_info = ki;
                         out.m3_len = (rx.len() - eth).min(0xffff);
