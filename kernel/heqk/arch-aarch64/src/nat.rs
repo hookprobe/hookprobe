@@ -433,6 +433,11 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
             6 | 17 => out[ql4..ql4 + 2].copy_from_slice(&e.in_port.to_be_bytes()),
             _ => out[ql4 + 4..ql4 + 6].copy_from_slice(&e.in_port.to_be_bytes()),
         }
+        // DNS-redirected session: the client sent to the AP, not to the resolver — quote what IT sent
+        // (peer review SEC-P2), or its stack cannot match the error to the query.
+        if e.dnat_from != [0; 4] && qproto == 17 && u16::from_be_bytes([f[ql4 + 2], f[ql4 + 3]]) == 53 {
+            out[q + 16..q + 20].copy_from_slice(&e.dnat_from);
+        }
         // quoted IP header checksum; the (truncated) quoted L4 checksum is left as received
         out[q + 10] = 0;
         out[q + 11] = 0;
