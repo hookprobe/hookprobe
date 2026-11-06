@@ -1924,6 +1924,10 @@ fn cm5_prod_service() -> ! {
                 let link = arch_aarch64::gem::phy_link_up(0);
                 let now_ms = (now.wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
                 c.tick(now_ms, link, ir);
+                #[cfg(feature = "prod-mc")]
+                {
+                    mcserve::state().cloud_linked = c.established();
+                }
                 let mut dgrams = 0u32;
                 let mut last_ctrl = 0u32;
                 let mut last_len = 0usize;
