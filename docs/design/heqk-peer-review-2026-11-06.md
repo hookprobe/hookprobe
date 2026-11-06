@@ -81,3 +81,31 @@ Everything in this review is **METAL-PENDING** except what was already proven on
 Note (expected, COR-M1): the overload loss point moved from the GEM ring (res_err/overrun now 0) to the
 Wi-Fi queue (12,604 of 510,840 = 2.5% dropped, counted) — PPPoE/ARP/eth1/mgmt can no longer starve
 behind a full Wi-Fi queue. Still metal-pending: VLAN failover, IPv6 ACLs, mgmt-path fixes (H2, COR-M2).
+
+## Follow-up block (no metal, 2026-11-06 evening) — open items closed
+
+| Item | Commit | Proof |
+|---|---|---|
+| COR-M4 control requests discard station frames -> 16-frame deferred ring, delivered first by ap_poll | `9a0dc2a` | AP build; METAL-PENDING (no cyw43 QEMU harness); beat `[P11-AP3 defer]` |
+| SEC-M5 IPv6 source binding: SAVI first-come-first-served (RFC 6620), NS on neighbor miss, table 64 | `9a0dc2a` | `[P-ip6]`: thief refused; evicted client gets an NS |
+| task #26 DHCP on the management VLAN (`mgmt=dhcp`), + a latent boot panic (`mg.stat.unwrap()`) removed | `57883e3` | `[P-policy]` parse; AP build; bench script serves DHCP on VLAN 200 |
+| COR-L5 `route … via wan gw X` honours X (ARP next-hop cache; PPPoE = AC) | `efd787b` | AP build |
+| COR-L6 corrupt SDPCM tag terminated (rxfail without abort, as brcmfmac hdparse) | `efd787b` | AP build |
+| COR-L1 stall snapshot never blocks the serve loop (1-s pairs only with `stalldiag`) | `efd787b` | AP build |
+| COR-P2 eMMC CACHE_CTRL read + reported (driver cannot enable it; no CMD6) | `efd787b` | prod-mc build |
+| COR-P3 ACL eval by reference | `efd787b` | `[P-policy]` hit counts unchanged |
+| SEC-P2 ICMP error for a DNS-redirected query quotes the AP address | `65c39bd` | `[P11-dnsfwd]` |
+| task #21 N3 configurable management floor (`mgmt_floor=` / mgmt subnet / reported default) | `b027c36` | `[P-policy]` |
+| audit: STA supplicant verifies M3 (MIC ct-compare, ANonce, replay) before M4/key install | `c760d78` | AP + stajoin builds |
+| audit: connect-scan gap (proportional establishment hold, est x 8 >= distinct) | `7281bb9` | `[P8]` legit rows unchanged, connect-scan confirmed |
+| audit: RFC 1858 tiny / offset-1 TCP fragments -> malformed drop | `7281bb9` | `[P8]` both dropped, legit first fragment passes |
+| COR-M3 DHCPv6 PD renewal at T1 | `df77480` | `[P-ip6]` T1/T2 parse + Renew builder |
+| SEC-L6 management accepts only an 802.1Q (0x8100) tag | `4b6c977` | AP build |
+
+Still open (design, not patchable in place): **POLICY.TXT signing** — the authority should be the operator
+key (the segmentation reach-policy pattern: independent operator Ed25519 + TOFU pin, `[P19-seg-policy]`),
+emitted by the AEGIS reconciler — needs an ADR; **IPv6 source key** for scan/conn-rate/shed (the source-keyed
+tiers use an IPv4 u32; hashing v6 into it could land in the mgmt floor) — needs an ADR; **UI de-mock** (D3:
+deployment-mode badge needs an API field, the dst column a detections schema change — UI + API together,
+browser-verified); NAT random external ports (low value now that inbound requires the session's remote, SEC-M2);
+SEC-L6 deployment note: prefer a tagged internet VLAN whenever `mgmt_vlan` is set.
