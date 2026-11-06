@@ -136,3 +136,11 @@ Findings on the follow-up fixes themselves, all verified against the code:
 refused, no credential literal · bench profiles `sepdiag,p15-write`, `hboot,stajoin`, `hboot,stalldiag`
 build · image factory `prod-mc` and AP + VLAN (mgmt DHCP) bench: **FACTORY PASS 8/8** each. Everything in
 the follow-up block and the re-review is METAL-PENDING.
+
+## Metal regression of the whole no-metal block (2026-11-07, img `25e5d2c`, Digi PPPoE + iPhone)
+
+PPPoE first try, IPv6 /56 + LAN, internet; iPhone **80–110 Mbps, test-ipv6.com 10/10, no errors**.
+IPv6 forwarded 108,347 out / 189,414 in, **SAVI refusals 0** (no false positive under real traffic),
+neighbor misses 0, firewall no_flow 1; 12/12 firmware stalls kicked (none reached 2 s); 0 panics; PD renew
+correctly idle (infinite lifetimes). Deferred-frame ring: parked 51 = delivered 51, but **ring-full 48** —
+16 slots too few during a speed test -> raised to 64 (`DEFER_N`), AP build compiles; re-check next session.
