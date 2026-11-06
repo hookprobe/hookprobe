@@ -457,7 +457,9 @@ fn end0_rx(out: &mut [u8]) -> Option<usize> {
             }
             return Some(if off == 12 { len } else { strip(out) });
         }
-        if mv != 0 && outer == 0 && vid == mv {
+        // Management = a single 802.1Q tag (TPID 0x8100) only — a lone 802.1ad S-tag carrying the same VID is a
+        // different (provider) identity and is never management (peer review SEC-L6).
+        if mv != 0 && outer == 0 && vid == mv && off == 16 && out[12] == 0x81 && out[13] == 0x00 {
             let n = strip(out);
             unsafe { LINK_DIAG[1] += 1 };
             // Only what the management stack can act on: ARP, or unicast to our MAC. Multicast / IPv6 ND /
