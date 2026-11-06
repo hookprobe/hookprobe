@@ -3203,6 +3203,7 @@ fn cm5_p10_probe() {
                         let mut pol_block_as_drop = 0u32; // `out` blocks after un-NAT act as drops (see the note)
                         let mut last_wan_probe = 0u64;
                         let (mut rej_win, mut rej_n) = (0u64, 0u32); // `wan in` reject rate limit
+                        let mut wan_martian = 0u32; // WAN IPv4 sources that cannot come from the internet (dropped)
                         let mut mbuf = [0u8; 1600];
                         use hal::policy::{Act as PAct, Dir as PDir, If as PIf};
                         // One client IPv4 frame from `$pif` (lan = Wi-Fi, eth1): `<if> in` ACL/prefix-lists, then the
@@ -3674,6 +3675,17 @@ fn cm5_p10_probe() {
                                             // station over the PTK path (≤ WIFI_MAX_FRAME; TCP is MSS-clamped).
                                             // IDS/IPS on the WAN leg too (a threat from the internet toward a client
                                             // DROPs before un-NAT), then return on the link the flow came in on.
+                                            // Anti-spoof first (uRPF-lite, re-review P2): an IPv4 source that cannot come from the
+                                            // internet (ours, our LAN, the management floor, loopback, multicast…) is dropped before
+                                            // NAT, policy or the IDS see it.
+                                            let martian = n >= 34 && wbuf[12] == 0x08 && wbuf[13] == 0x00 && {
+                                                let (fnet, flen, _) = crate::verdict::mgmt_floor();
+                                                hal::policy::wan_martian4([wbuf[26], wbuf[27], wbuf[28], wbuf[29]], up.dhcp.yiaddr, inside_net, fnet, flen)
+                                            };
+                                            if martian {
+                                                wan_martian += 1;
+                                                continue;
+                                            }
                                             // Operator policy `wan in` is STATEFUL: it decides NEW inbound traffic. A reply to a
                                             // flow the LAN opened (NAT session / IPv6 flow table) is admitted; `lan|eth1 out`
                                             // still filters every delivery. Evaluated on arrival addresses, so a `block` reject
@@ -3940,8 +3952,8 @@ fn cm5_p10_probe() {
                                             {
                                                 let ld = unsafe { uplink::LINK_DIAG };
                                                 let pol = unsafe { &*core::ptr::addr_of!(POLICY) };
-                                                kprint!("   [P11-AP3 policy] wan alive={} | drop lan/eth1/wan/mgmt={:?} block={:?} block-as-drop={} | via mgmt={} next-hop unresolved (mgmt+wan)={} | link rx inet={} mgmt={} other-vlan drop={} untagged drop={} tagged tx={} mgmtq full={}\n",
-                                                    uplink::wan_alive(&up, 15_000), pol_drop, pol_block, pol_block_as_drop, pol_via_mgmt, pol_mgmt_nh_miss, ld[0], ld[1], ld[2], ld[3], ld[4], ld[5]);
+                                                kprint!("   [P11-AP3 policy] wan alive={} martian-src dropped={} | drop lan/eth1/wan/mgmt={:?} block={:?} block-as-drop={} | via mgmt={} next-hop unresolved (mgmt+wan)={} | link rx inet={} mgmt={} other-vlan drop={} untagged drop={} tagged tx={} mgmtq full={}\n",
+                                                    uplink::wan_alive(&up, 15_000), wan_martian, pol_drop, pol_block, pol_block_as_drop, pol_via_mgmt, pol_mgmt_nh_miss, ld[0], ld[1], ld[2], ld[3], ld[4], ld[5]);
                                                 for a in &pol.acl[..pol.nacl] {
                                                     kprint!("   [P11-AP3 policy] acl {} hits {:?} default {}\n", core::str::from_utf8(&a.name[..a.nlen]).unwrap_or("?"), &a.hits[..a.n], a.default_hits);
                                                 }
@@ -12831,9 +12843,20 @@ route 2001:db8:1::/48 via mgmt
         let restored = crate::verdict::is_allowlisted(0x0A_C8_00_05) && !crate::verdict::mgmt_floor().2;
         parsed && def && set && moved && broad_refused && restored
     };
-    let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok && floor_ok;
-    kprint!(" [P-policy] {} — WAN policy engine: IPv6 text={} POLICY.TXT parsed (5 lists, 2 named ACLs sorted by seq, 3 interface bindings, 6 routes)={} interface-attached ACL + prefix-list: allow/block/drop first-match by seq, ACL default + implicit deny, per-entry hits, v4+v6, ports, spoofed source dropped by the lan prefix-list, a v4-only list never applies to v6, unbound wan allowed={} prefix-list ge/le + seq order={} routes: longest prefix, source-based (from), gateway, metric failover when wan is down={} whole-file rejection with line numbers={} WAN.TXT vlan/QinQ/pcp/mgmt sub-interface={} QinQ tag stack + MTU from headers (PPPoE 1492/MSS 1452, frame 1522)={} single tag={} | management floor configurable (WAN.TXT mgmt_floor=, over-broad refused, default restorable)={}\n",
-        if ok { "PASS" } else { "FAIL" }, v6_ok, parsed, acl_ok, pl_ok, rt_ok, rej_ok, link_ok, tag_ok, tag1_ok, floor_ok);
+    // re-review P2: martian WAN sources (uRPF-lite)
+    let martian_ok = {
+        let (wan, inside) = ([100u8, 71, 11, 24], [10u8, 99, 0]);
+        let floor = (0x0A_C8_00_00u32, 24u32); // 10.200.0.0/24
+        let m = |s: [u8; 4], w: [u8; 4]| wan_martian4(s, w, inside, floor.0, floor.1);
+        m([10, 99, 0, 10], wan) && m([127, 0, 0, 1], wan) && m([0, 1, 2, 3], wan) && m([224, 0, 0, 1], wan)
+            && m([255, 255, 255, 255], wan) && m(wan, wan)
+            && m([10, 200, 0, 5], wan) // a spoofed management-floor source from the internet
+            && !m([10, 200, 0, 5], [10, 200, 0, 13]) // ...but legit when the WAN itself sits in the floor
+            && !m([8, 8, 8, 8], wan) && !m([100, 64, 0, 1], wan) && !m([192, 168, 1, 1], wan)
+    };
+    let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok && floor_ok && martian_ok;
+    kprint!(" [P-policy] {} — WAN policy engine: IPv6 text={} POLICY.TXT parsed (5 lists, 2 named ACLs sorted by seq, 3 interface bindings, 6 routes)={} interface-attached ACL + prefix-list: allow/block/drop first-match by seq, ACL default + implicit deny, per-entry hits, v4+v6, ports, spoofed source dropped by the lan prefix-list, a v4-only list never applies to v6, unbound wan allowed={} prefix-list ge/le + seq order={} routes: longest prefix, source-based (from), gateway, metric failover when wan is down={} whole-file rejection with line numbers={} WAN.TXT vlan/QinQ/pcp/mgmt sub-interface={} QinQ tag stack + MTU from headers (PPPoE 1492/MSS 1452, frame 1522)={} single tag={} | management floor configurable (WAN.TXT mgmt_floor=, over-broad refused, default restorable)={} martian WAN sources (uRPF-lite)={}\n",
+        if ok { "PASS" } else { "FAIL" }, v6_ok, parsed, acl_ok, pl_ok, rt_ok, rej_ok, link_ok, tag_ok, tag1_ok, floor_ok, martian_ok);
 }
 
 /// `[P-pppoe]` — the PPPoE client engine (arch_aarch64::pppoe) end to end against a scripted
