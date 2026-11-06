@@ -2090,8 +2090,8 @@ fn cm5_prod_service() -> ! {
                 let up = now.wrapping_sub(t0) / cntfrq;
                 let c = prodfull::Counters { seen, forwarded, dropped, tx_fail, faults, empty };
                 if pf.on_heartbeat(up, c, telemetry::score()) {
-                    kprint!("   [PROD-FULL] M3 persisted: boots={} seen={} drop={} events={} (sealed, LBA {}..)\n",
-                        pf.snap.boots, seen, dropped, pf.snap.nev, arch_aarch64::emmc::RESERVED_LBA_LO);
+                    kprint!("   [PROD-FULL] M3 persisted: boots={} seen={} drop={} events={} (sealed, A/B slot gen {})\n",
+                        pf.snap.boots, seen, dropped, pf.snap.nev, pf.last_gen);
                 }
             }
         }
