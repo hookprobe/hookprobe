@@ -70,3 +70,14 @@ VLAN demux (wrong VLAN / untagged-when-tagged dropped), A/B store crash consiste
 
 Everything in this review is **METAL-PENDING** except what was already proven on metal before it (AP
 120–160 Mbps, PPPoE + IPv6 10/10, VLAN + mgmt isolation, route via mgmt both directions).
+
+## Metal regression after the fixes (2026-11-06 afternoon)
+
+| Run | Image | Result |
+|---|---|---|
+| task #27 A3.3 (prod-mc) | `15f5303` | boot 1 fresh, no bench write in the keystore; persisted boots=1; power-cycle; `M3 RESTORED across reboot` then `persisted: boots=2 … events=2` — **PASS** |
+| AP over Digi PPPoE + IPv6 | `ea8716c` | PPPoE first try (hardened decap), IPv6 /56 + IA_NA, LAN numbered; iPhone test-ipv6.com **10/10**, no socket error; ~130 Mbps peak (55k frames/5 s); 7/7 firmware stalls kicked; no panic/exception — **PASS** |
+
+Note (expected, COR-M1): the overload loss point moved from the GEM ring (res_err/overrun now 0) to the
+Wi-Fi queue (12,604 of 510,840 = 2.5% dropped, counted) — PPPoE/ARP/eth1/mgmt can no longer starve
+behind a full Wi-Fi queue. Still metal-pending: VLAN failover, IPv6 ACLs, mgmt-path fixes (H2, COR-M2).
