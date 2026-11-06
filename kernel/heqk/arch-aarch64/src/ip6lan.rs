@@ -14,7 +14,7 @@
 
 use crate::ip6::{l4_csum, link_local};
 
-pub const NEIGH_N: usize = 32;
+pub const NEIGH_N: usize = 64; // a phone holds link-local + stable + temporary addresses (peer review SEC-M5)
 pub const FLOW_N: usize = 256;
 /// Idle timeouts (ms): established flows, and anything else.
 const FLOW_IDLE_MS: u64 = 600_000;
@@ -54,6 +54,10 @@ pub struct Stats {
     pub drop_src: u32,
     pub drop_bad: u32,
     pub flow_evict: u32,
+    /// Sources refused by SAVI first-come-first-served (another station's address).
+    pub savi_refused: u32,
+    /// Neighbor Solicitations sent on a cache miss.
+    pub ns_tx: u32,
 }
 
 pub enum LanAction {
@@ -70,6 +74,9 @@ pub enum WanAction {
     /// Deliver this Ethernet frame to a LAN client.
     Deliver(usize),
     Drop,
+    /// Neighbor-cache miss for an admitted packet: `out[..n]` holds a Neighbor Solicitation to send on
+    /// the LAN (the packet itself is dropped; its retransmission is delivered once the client answers).
+    Solicit(usize),
 }
 
 pub struct V6Lan {
@@ -140,7 +147,7 @@ impl V6Lan {
             flows: [Flow { local: [0; 16], remote: [0; 16], proto: 0, lport: 0, rport: 0, seen: 0, used: false }; FLOW_N],
             stats: Stats {
                 ra_tx: 0, rs_rx: 0, na_tx: 0, out_fwd: 0, in_fwd: 0, in_icmp_err: 0, drop_no_flow: 0,
-                drop_no_neigh: 0, drop_hop: 0, drop_src: 0, drop_bad: 0, flow_evict: 0,
+                drop_no_neigh: 0, drop_hop: 0, drop_src: 0, drop_bad: 0, flow_evict: 0, savi_refused: 0, ns_tx: 0,
             },
             last_ra_ms: 0,
             ra_burst: 0,
@@ -177,14 +184,22 @@ impl V6Lan {
         a[..8] == self.prefix[..8]
     }
 
-    fn learn(&mut self, ip: &[u8; 16], mac: &[u8], now: u64) {
+    /// Learn / refresh `ip -> mac`. SAVI first-come-first-served (RFC 6620): an address belongs to the
+    /// first MAC seen using it while that owner stays active; another MAC sourcing it is a SPOOF
+    /// (returns false) — IPv4 has `binding_ok`, IPv6 had nothing (peer review SEC-M5: a Wi-Fi client could
+    /// claim a victim's address and steal its return traffic). An idle owner's binding expires.
+    fn learn(&mut self, ip: &[u8; 16], mac: &[u8], now: u64) -> bool {
         if !(self.on_link(ip) || is_ll(ip)) {
-            return;
+            return true; // not ours to bind (the forward path refuses off-link sources anyway)
         }
         let mut slot = 0;
         let mut oldest = u64::MAX;
         for (i, n) in self.neigh.iter().enumerate() {
-            if n.ip == *ip {
+            if n.seen != 0 && n.ip == *ip {
+                if n.mac[..] != mac[..6] && now.wrapping_sub(n.seen) < NEIGH_IDLE_MS {
+                    self.stats.savi_refused += 1;
+                    return false;
+                }
                 slot = i;
                 oldest = 0;
                 break;
@@ -198,6 +213,25 @@ impl V6Lan {
         n.ip = *ip;
         n.mac.copy_from_slice(&mac[..6]);
         n.seen = now.max(1);
+        true
+    }
+
+    /// A Neighbor Solicitation for `target` from the router (to its solicited-node multicast) — sent on a
+    /// neighbor-cache miss so an evicted client is re-learned and the next retransmission is delivered.
+    pub fn build_ns(&self, target: &[u8; 16], out: &mut [u8]) -> usize {
+        let snm: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, target[13], target[14], target[15]];
+        let dmac = [0x33, 0x33, 0xff, target[13], target[14], target[15]];
+        let il = 32;
+        let o = self.icmp_frame(out, &dmac, &self.ll, &snm, il);
+        let r = &mut out[o..o + il];
+        r.fill(0);
+        r[0] = 135;
+        r[8..24].copy_from_slice(target);
+        r[24] = 1; // source link-layer address
+        r[25] = 1;
+        r[26..32].copy_from_slice(&self.mac);
+        let ll = self.ll;
+        Self::finish_icmp(out, &ll, &snm, il)
     }
 
     fn lookup(&self, ip: &[u8; 16], now: u64) -> Option<[u8; 6]> {
@@ -330,8 +364,9 @@ impl V6Lan {
         }
         let ip = &ip[..40 + plen];
         let (src, dst) = (addr(ip, 8), addr(ip, 24));
-        if src != [0; 16] && !is_mc(&src) {
-            self.learn(&src, &f[6..12], now);
+        if src != [0; 16] && !is_mc(&src) && !self.learn(&src, &f[6..12], now) {
+            self.stats.drop_src += 1;
+            return LanAction::Drop; // SAVI: another station's address
         }
         // ICMPv6 addressed to us / to the link: RS, NS (hop limit 255 = on-link, RFC 4861).
         if ip[6] == 58 && plen >= 8 && (is_mc(&dst) || dst == self.ll || dst == self.gua) {
@@ -467,7 +502,8 @@ impl V6Lan {
         }
         let Some(mac) = self.lookup(&dst, now) else {
             self.stats.drop_no_neigh += 1;
-            return WanAction::Drop;
+            self.stats.ns_tx += 1;
+            return WanAction::Solicit(self.build_ns(&dst, out));
         };
         out[0..6].copy_from_slice(&mac);
         out[6..12].copy_from_slice(&self.mac);
