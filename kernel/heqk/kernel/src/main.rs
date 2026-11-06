@@ -4201,7 +4201,7 @@ fn cm5_p15_block_seal() {
     // clear of the seal-store blob region at 2016. TWO-BOOT PROOF: read FIRST (a cookie from
     // a prior boot ⇒ persistence survived the power-cycle on real eMMC), then rewrite with a
     // bumped boot counter.
-    #[cfg(feature = "p15-write")]
+    #[cfg(all(feature = "p15-write", any(feature = "p15-bench", feature = "sepdiag")))] // bench self-test (task #27: never on prod)
     {
         const WLBA: u64 = 2040;
         const WMAGIC: &[u8; 8] = b"HQKEMWR1";
@@ -4238,7 +4238,7 @@ fn cm5_p15_block_seal() {
     // OTP-derived SRK when HBoot supplies one (device-binding — a blob is unsealable on
     // another device). Full stack — seal → SealedStore::store → (reboot) → load → unseal —
     // over the keystore reserved window (the P15-fs/P15-sealfs QEMU stack, now on silicon).
-    #[cfg(feature = "p15-write")]
+    #[cfg(all(feature = "p15-write", any(feature = "p15-bench", feature = "sepdiag")))] // bench self-test (task #27: never on prod)
     {
         use seal::{Policy, SealBlob};
         use store::SealedStore;
@@ -4328,11 +4328,23 @@ fn cm5_p15_block_seal() {
     // board (Linux re-flashable, operator-authorized 2026-09-08). 128 sectors @ LBA
     // 16_777_216 (SB + 127 record slots), far from the MBR/keystore/boot-slot; the widened
     // eMMC Gate-1 allowlist (keystore ∪ DataVolume) + the dv armed window admit it.
-    #[cfg(feature = "p15-write")]
+    #[cfg(all(feature = "p15-write", any(feature = "p15-bench", feature = "sepdiag")))] // bench self-test (task #27: never on prod)
     {
         use store::{RegionKind, SealedStore};
-        const DV_LO: u64 = 16_777_216;
-        const DV_HI: u64 = DV_LO + 128;
+        // task #27 F5: the region comes from the MBR's DataVolume partition (type 0xDA), never a
+        // hard-coded LBA (16,777,216 was past p2 on the 512-MiB factory layout = unpartitioned eMMC).
+        // Offset 1024 into p2: clear of segmetal's reach-floor ring at [p2.lo, p2.lo+16).
+        let mut mbr0 = [0u8; 512];
+        let dv = if emmc.read_block(0, &mut mbr0).is_ok() { store::datavolume_from_mbr(&mbr0) } else { None };
+        #[allow(non_snake_case)]
+        let (DV_LO, DV_HI) = match dv {
+            Some((lo, hi)) if lo + 1024 + 128 <= hi => (lo + 1024, lo + 1024 + 128),
+            _ => {
+                kprint!("   [SEPDIAG-DV] SKIP — no DataVolume partition (0xDA) with room on this eMMC\n");
+                (0, 0)
+            }
+        };
+        if DV_HI != 0 {
         emmc.set_data_volume(DV_LO, DV_HI); // Gate-1 allowlist entry
         emmc.arm_write_window(DV_LO, DV_HI); // Gate-2 armed window (routes to the dv region)
         let (dv_prev, dv_now, dv_cap, dv_order, dv_evid, dv_pass) = (|| -> (u64, u64, u64, bool, bool, bool) {
@@ -4378,6 +4390,7 @@ fn cm5_p15_block_seal() {
         })();
         kprint!("   [SEPDIAG-EMMC-DATAVOL] persisted-records-from-prior-boot={} | appended=3 total={} cap={} readback-in-order={} all-evidence={} => {}\n",
             dv_prev, dv_now, dv_cap, dv_order, dv_evid, if dv_pass { "PASS" } else { "FAIL" });
+        }
     }
 
     // M3.4 metal — the ON-DEVICE forward A/B tryboot flip (opt-in `otaflip`; SELF-REBOOTS
@@ -5894,6 +5907,9 @@ pub extern "C" fn kmain() -> ! {
 
     // --- P15: sealed storage — seal/unseal + guard over a RamDisk (arch-agnostic) ---
     p15_seal_selftest();
+    // --- task #27 F2: crash-consistent A/B snapshot store (needs the write path) ---
+    #[cfg(feature = "p15-write")]
+    abstore_selftest();
 
     // --- P15-guard2: M3.0 multi-region write-guard (brick-safety, every boot) ---
     p15_guard_selftest();
@@ -9252,6 +9268,99 @@ fn mbr_with(parts: &[(u8, u32, u32)]) -> [u8; 512] {
 /// LBA outside [2016,2048), so a store-layer escape becomes an immediate, loud
 /// abort (the write-window-escape assertion). `seed`/`install_mbr` bypass it for
 /// test setup (they are direct backing writes, not BlockDev writes).
+
+/// `[P-abstore]` — task #27 F2: ProdFull's snapshot store is crash-consistent. A/B slots with a commit
+/// header written LAST: a write torn at any point (blob half-written, header torn) leaves the previous
+/// snapshot loadable; a corrupted newest slot falls back to the older one; a device persisted by an older
+/// image (single blob at 2016) is still loaded (one-time migration). RamDisk writes that leave the
+/// reserved window PANIC, so the store is also proven never to escape it.
+#[cfg(all(feature = "p15-write", not(feature = "cm5")))]
+fn abstore_selftest() {
+    use hal::BlockDev;
+    use store::{SealedStore, AB_SLOTS, AB_SLOT_SECTORS};
+    let mut mbr = [0u8; 512];
+    mbr[450] = 0x0c;
+    mbr[454..458].copy_from_slice(&2048u32.to_le_bytes());
+    mbr[458..462].copy_from_slice(&129_024u32.to_le_bytes());
+    mbr[510] = 0x55;
+    mbr[511] = 0xaa;
+    let srk = [0x5au8; 32];
+    let policy = seal::Policy { mask: 0, device_id: 0xab57_0e00, svn_floor: 0, pcr: [[0u8; 32]; boot_abi::NUM_PCR] };
+    let mk = |tag: u8| {
+        let mut pt = [0u8; 1104];
+        pt[0] = tag;
+        pt[1103] = tag ^ 0xff;
+        let mut b = seal::SealBlob::new();
+        seal::seal(&srk, &policy, &pt, &mut b).expect("seal");
+        b
+    };
+    let (b1, b2, b3) = (mk(1), mk(2), mk(3));
+    let tag_of = |bytes: &[u8]| -> Option<u8> {
+        let mut pt = [0u8; 1104];
+        match seal::unseal(&srk, &policy, bytes, &mut pt) {
+            Ok(n) if n == 1104 && pt[1103] == pt[0] ^ 0xff => Some(pt[0]),
+            _ => None,
+        }
+    };
+    let mut disk = RamDisk::new(2_000_000);
+    disk.install_mbr(&mbr);
+    let mut out = [0u8; seal::SEAL_MAX_BLOB];
+    // 1. gen 1 then gen 2, alternating slots; load = newest.
+    let (g1, g2) = {
+        let mut ss = SealedStore::open(&mut disk).expect("guard");
+        (ss.store_ab(b1.as_slice()), ss.store_ab(b2.as_slice()))
+    };
+    let newest = |d: &mut RamDisk, out: &mut [u8]| -> Option<u8> {
+        let ss = SealedStore::open(d).ok()?;
+        let n = ss.load_ab(out)?;
+        tag_of(&out[..n])
+    };
+    let gens_ok = g1 == Ok(1) && g2 == Ok(2) && newest(&mut disk, &mut out) == Some(2);
+    // gen 2 went to slot B (AB_SLOTS[1]); the next write targets slot A.
+    // 2. torn: slot A's blob sectors overwritten with gen 3's bytes, header NOT written (power loss).
+    let torn_blob = {
+        let bs = b3.as_slice();
+        for i in 0..bs.len().div_ceil(512) {
+            let mut s = [0u8; 512];
+            let n = (bs.len() - i * 512).min(512);
+            s[..n].copy_from_slice(&bs[i * 512..i * 512 + n]);
+            disk.seed(AB_SLOTS[0] + 1 + i as u64, &s);
+        }
+        newest(&mut disk, &mut out) == Some(2)
+    };
+    // 3. torn header: garbage in slot A's header sector -> still gen 2.
+    let torn_hdr = {
+        let mut h = [0u8; 512];
+        h[..8].copy_from_slice(b"HQKSLOT1");
+        h[8] = 9; // gen 9 claimed, but the self-check is wrong
+        disk.seed(AB_SLOTS[0], &h);
+        newest(&mut disk, &mut out) == Some(2)
+    };
+    // 4. a completed gen 3 wins; then corrupt it -> fall back to gen 2 (slot B).
+    let g3 = {
+        let mut ss = SealedStore::open(&mut disk).expect("guard");
+        ss.store_ab(b3.as_slice())
+    };
+    let gen3_ok = g3 == Ok(3) && newest(&mut disk, &mut out) == Some(3);
+    let fallback = {
+        let mut s = [0u8; 512];
+        disk.read_block(AB_SLOTS[0] + 2, &mut s).ok();
+        s[7] ^= 0x40;
+        disk.seed(AB_SLOTS[0] + 2, &s);
+        newest(&mut disk, &mut out) == Some(2)
+    };
+    // 5. legacy migration: a fresh disk holding only the old single blob at 2016.
+    let mut old = RamDisk::new(2_000_000);
+    old.install_mbr(&mbr);
+    old.seed(store::RESERVED_LBA_LO, b1.as_slice());
+    let legacy = newest(&mut old, &mut out) == Some(1);
+    // 6. the slots never collide with the VEK (2024), the bench cookie (2040) or OTA (2044).
+    let layout = AB_SLOTS[0] > 2024 && AB_SLOTS[1] + AB_SLOT_SECTORS < 2040 && b1.as_slice().len() <= (AB_SLOT_SECTORS as usize) * 512;
+    let ok = gens_ok && torn_blob && torn_hdr && gen3_ok && fallback && legacy && layout;
+    kprint!(" [P-abstore] {} — crash-consistent A/B snapshot store (task #27 F2): gen1/gen2 alternate, newest loads={} | torn blob (no commit header) -> previous gen intact={} | torn header -> previous gen={} | completed gen3 wins={} | corrupted newest -> falls back={} | legacy single blob @2016 still loads (migration)={} | slots clear of VEK/cookie/OTA + blob fits={}\n",
+        if ok { "PASS" } else { "FAIL" }, gens_ok, torn_blob, torn_hdr, gen3_ok, fallback, legacy, layout);
+}
+
 #[cfg(not(feature = "cm5"))]
 struct RamDisk {
     mbr: [u8; 512],
