@@ -69,6 +69,8 @@ const PERSIST_INTERVAL_S: u64 = 300;
 
 /// The `prod-full` runtime state, owned by the sensor loop.
 pub struct ProdFull {
+    /// Generation of the last committed A/B snapshot slot (task #27; 0 = none this boot).
+    pub last_gen: u64,
     emmc: Option<Emmc>,
     srk: [u8; 32],
     policy: Policy,
@@ -100,6 +102,7 @@ impl ProdFull {
             pcr,
         };
         let mut pf = ProdFull {
+            last_gen: 0,
             emmc: None,
             srk,
             policy,
@@ -256,7 +259,10 @@ impl ProdFull {
             // A/B slots with a commit header (task #27 F2): a torn write never destroys the
             // previous snapshot.
             Ok(mut ss) => match ss.store_ab(blob.as_slice()) {
-                Ok(_gen) => true,
+                Ok(gen) => {
+                    self.last_gen = gen;
+                    true
+                }
                 Err(e) => {
                     kprint!("   [PROD-FULL] M3 persist: store refused ({:?}) — continuing\n", e);
                     false
