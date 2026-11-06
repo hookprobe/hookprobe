@@ -1,0 +1,6 @@
+HQWAN1
+# task #26 bench: internet VLAN 100 (DHCP), management VLAN 200 by DHCP
+mode=dhcp
+vlan=100
+mgmt_vlan=200
+mgmt=dhcp
