@@ -275,6 +275,16 @@ pub fn guard_from_mbr(sector: &[u8; 512], capacity: u64) -> Result<LbaGuard, Gua
 
 /// A sealed store over a block device: opens by reading + guarding the MBR, then
 /// exposes a read/scan path (always) and a store path (behind `p15-write`).
+/// A/B snapshot slots (task #27 F2) inside the keystore window, clear of every other user of it:
+/// 2016..=2018 legacy blob (read once for migration), 2024 VEK (fslog), 2040 bench cookie, 2044 OTA.
+/// Slot = 1 commit header + up to AB_SLOT_SECTORS blob sectors.
+pub const AB_SLOTS: [u64; 2] = [2025, 2030];
+pub const AB_SLOT_SECTORS: u64 = 4;
+const AB_MAGIC: &[u8; 8] = b"HQKSLOT1";
+/// Public digest domain (crash-consistency check, not authentication — the blob is itself sealed).
+const AB_DOMAIN: &[u8] = b"HQKSLOT1-digest";
+const _: () = assert!(AB_SLOTS[0] + 1 + AB_SLOT_SECTORS <= AB_SLOTS[1] && AB_SLOTS[1] + 1 + AB_SLOT_SECTORS <= 2040);
+
 pub struct SealedStore<'d, D: BlockDev> {
     dev: &'d mut D,
     guard: LbaGuard,
@@ -338,6 +348,113 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
     /// Read one 512-byte sector at `lba` (always available — reads are never
     /// guarded). Thin pass-through so callers persisting the data volume / an OTA
     /// slot go through the store, not the raw device.
+    /// Read one slot (header + blob) of the A/B snapshot store. Returns (gen, blob length) when the
+    /// header is intact AND the blob read back matches the digest the header committed to.
+    fn slot_read(&self, hdr_lba: u64, out: &mut [u8]) -> Option<(u64, usize)> {
+        let mut h = [0u8; 512];
+        self.dev.read_block(hdr_lba, &mut h).ok()?;
+        if &h[..8] != AB_MAGIC {
+            return None;
+        }
+        // header self-check: a torn header sector must never be trusted
+        let hc = boot_abi::kdf::hmac_sha256(AB_DOMAIN, &h[..52]);
+        if !boot_abi::kdf::ct_eq(&hc[..8], &h[52..60]) {
+            return None;
+        }
+        let gen = u64::from_le_bytes(h[8..16].try_into().ok()?);
+        let len = u32::from_le_bytes(h[16..20].try_into().ok()?) as usize;
+        if len == 0 || len > AB_SLOT_SECTORS as usize * 512 || len > out.len() {
+            return None;
+        }
+        for i in 0..len.div_ceil(512) {
+            let mut sec = [0u8; 512];
+            self.dev.read_block(hdr_lba + 1 + i as u64, &mut sec).ok()?;
+            let off = i * 512;
+            let n = (len - off).min(512);
+            out[off..off + n].copy_from_slice(&sec[..n]);
+        }
+        let d = boot_abi::kdf::hmac_sha256(AB_DOMAIN, &out[..len]);
+        if !boot_abi::kdf::ct_eq(&d, &h[20..52]) {
+            return None; // blob does not match its commit (torn / half-written) -> slot invalid
+        }
+        Some((gen, len))
+    }
+
+    /// Load the newest COMMITTED snapshot from the A/B slots (task #27 F2). Falls back to the legacy
+    /// single blob at the window base (`load`) when no slot was ever committed — the one-time migration
+    /// of a device persisted by an older image. Returns the blob length.
+    pub fn load_ab(&self, out: &mut [u8]) -> Option<usize> {
+        let mut best: Option<(u64, usize, usize)> = None; // (gen, len, slot)
+        let mut tmp = [0u8; AB_SLOT_SECTORS as usize * 512];
+        for (k, &h) in AB_SLOTS.iter().enumerate() {
+            if let Some((g, n)) = self.slot_read(h, &mut tmp) {
+                if best.map_or(true, |b| g > b.0) {
+                    best = Some((g, n, k));
+                }
+            }
+        }
+        match best {
+            Some((_, n, k)) => {
+                let _ = self.slot_read(AB_SLOTS[k], out)?;
+                Some(n)
+            }
+            None => self.load(out),
+        }
+    }
+
+    /// Crash-consistent store (task #27 F2): write the INACTIVE slot's blob sectors, then its header
+    /// LAST — the header is the commit point (generation, length, digest of the blob, self-check). A
+    /// power loss at any point leaves the other slot (the previous snapshot) intact and the half-written
+    /// slot invalid (digest or header check fails). Every sector is read back and verified; every LBA
+    /// is re-checked against the guard and the hard reserved clamp. Returns the generation written.
+    #[cfg(feature = "p15-write")]
+    pub fn store_ab(&mut self, blob: &[u8]) -> Result<u64, StoreErr> {
+        if blob.is_empty() || blob.len() > AB_SLOT_SECTORS as usize * 512 {
+            return Err(StoreErr::TooBig);
+        }
+        let mut tmp = [0u8; AB_SLOT_SECTORS as usize * 512];
+        let gens = [self.slot_read(AB_SLOTS[0], &mut tmp).map(|g| g.0), self.slot_read(AB_SLOTS[1], &mut tmp).map(|g| g.0)];
+        // target = the slot NOT holding the newest valid generation
+        let (target, gen) = match gens {
+            [Some(a), Some(b)] => if a >= b { (1, a + 1) } else { (0, b + 1) },
+            [Some(a), None] => (1, a + 1),
+            [None, Some(b)] => (0, b + 1),
+            [None, None] => (0, 1),
+        };
+        let hdr = AB_SLOTS[target];
+        let mut put = |dev: &mut D, guard: &LbaGuard, lba: u64, s: &[u8; 512]| -> Result<(), StoreErr> {
+            if !guard.allows(lba) || lba < RESERVED_LBA_LO || lba >= RESERVED_LBA_HI {
+                return Err(StoreErr::WindowEscape);
+            }
+            dev.write_block(lba, s).map_err(|e| match e {
+                BlockErr::WriteRefused => StoreErr::WindowEscape,
+                _ => StoreErr::Io,
+            })?;
+            let mut rb = [0u8; 512];
+            dev.read_block(lba, &mut rb).map_err(|_| StoreErr::Io)?;
+            if &rb != s {
+                return Err(StoreErr::VerifyFailed);
+            }
+            Ok(())
+        };
+        for i in 0..blob.len().div_ceil(512) {
+            let off = i * 512;
+            let n = (blob.len() - off).min(512);
+            let mut s = [0u8; 512];
+            s[..n].copy_from_slice(&blob[off..off + n]);
+            put(self.dev, &self.guard, hdr + 1 + i as u64, &s)?;
+        }
+        let mut h = [0u8; 512];
+        h[..8].copy_from_slice(AB_MAGIC);
+        h[8..16].copy_from_slice(&gen.to_le_bytes());
+        h[16..20].copy_from_slice(&(blob.len() as u32).to_le_bytes());
+        h[20..52].copy_from_slice(&boot_abi::kdf::hmac_sha256(AB_DOMAIN, blob));
+        let hc = boot_abi::kdf::hmac_sha256(AB_DOMAIN, &h[..52]);
+        h[52..60].copy_from_slice(&hc[..8]);
+        put(self.dev, &self.guard, hdr, &h)?; // COMMIT
+        Ok(gen)
+    }
+
     pub fn read_sector(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), StoreErr> {
         self.dev.read_block(lba, buf).map_err(|_| StoreErr::Io)
     }
