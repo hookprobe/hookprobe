@@ -1866,8 +1866,11 @@ fn cm5_prod_service() -> ! {
                 st.dropped = dropped as u64;
                 st.sample_qsecbit(now, telemetry::score());
             }
-            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={}\n",
-                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score());
+            // A7.7 (review 2026-11-05): GEM RX-ring loss is NOT in drop/faults (rsr=0x7 on 368 of ~1,310
+            // heartbeats with faults=0) — report it: resource errors (no free RX descriptor) + overruns.
+            let gs = arch_aarch64::gem::rx_stats();
+            kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={} rx_lost(res_err={} overrun={})\n",
+                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score(), gs[8], gs[9]);
             #[cfg(feature = "dnssink")]
             kprint!("   [DNSSINK hb] sinkholed={} (RPZ-blocked DNS queries answered with SINKHOLE_IP + not forwarded)\n", dns_sinks);
             // M4 DHCP: drive the client (DISCOVER/REQUEST/retransmit) + report the lease.
