@@ -328,12 +328,16 @@ fn run_live(dev_ip: &str, dev_pk: EdPub, gen: u64, evidence_out: &str) -> std::i
                 };
                 match responder_read_msg1(&resp, &dev_pk, reasm.message()) {
                     Ok(rpend) => {
-                        // msg1 payload1 = device_fp (= sha256(dev.pk)) — capture it BEFORE
-                        // responder_write_msg2 consumes rpend; it binds the policy + the exports.
-                        let mut device_fp = [0u8; 32];
-                        let pl = rpend.payload1.as_slice();
-                        if pl.len() == 32 {
-                            device_fp.copy_from_slice(pl);
+                        // device_fp binds the reach policy AND every exported evidence record. Review Q2-H1:
+                        // it used to be taken from the device's own msg1 claim. It is now DERIVED from the
+                        // key this handshake just authenticated (sha256(dev_pk)); a device claiming any other
+                        // fingerprint is refused — it could otherwise file evidence as another device.
+                        let device_fp = sha256::digest(dev_pk.as_ref());
+                        if rpend.payload1.as_slice() != &device_fp[..] {
+                            eprintln!(" [sim] REFUSED: msg1 claims device_fp {:02x?}.. but the authenticated key's is {:02x?}.. (Q2-H1)",
+                                &rpend.payload1.as_slice()[..rpend.payload1.as_slice().len().min(8)], &device_fp[..8]);
+                            reasm = HsReasm::new();
+                            continue;
                         }
                         match responder_write_msg2(rpend, &rrand, &SEG_TENANT.to_le_bytes()) {
                             Some((msg2, rsession)) => {
