@@ -89,6 +89,10 @@ pub struct V6Lan {
     pub stats: Stats,
     last_ra_ms: u64,
     ra_burst: u32,
+    /// The flow of the last `Forward` — recorded only when the caller `commit`s it (after policy, the
+    /// IDS and a successful send). Peer review SEC-M4: recording it inside on_lan let a BLOCKED
+    /// outbound SYN open a 10-minute inbound pinhole.
+    pending: Option<([u8; 16], [u8; 16], u8, u16, u16)>,
 }
 
 fn addr(b: &[u8], o: usize) -> [u8; 16] {
@@ -140,6 +144,7 @@ impl V6Lan {
             },
             last_ra_ms: 0,
             ra_burst: 0,
+            pending: None,
         }
     }
 
@@ -318,7 +323,8 @@ impl V6Lan {
         }
         let ip = &f[14..];
         let plen = u16::from_be_bytes([ip[4], ip[5]]) as usize;
-        if 40 + plen > ip.len() {
+        // Peer review P1: bound by the caller's output buffer too (an 802.11 MSDU may exceed it).
+        if 40 + plen > ip.len() || 14 + 40 + plen > out.len() {
             self.stats.drop_bad += 1;
             return LanAction::Drop;
         }
@@ -365,8 +371,9 @@ impl V6Lan {
                 return LanAction::Drop; // other ND / echo to the router: not routed
             }
         }
-        if is_mc(&dst) || is_ll(&dst) || dst == self.gua {
-            return LanAction::Drop; // link-scope: never leaves the LAN
+        let special = dst == [0; 16] || dst == { let mut l = [0u8; 16]; l[15] = 1; l } || (dst[..10] == [0u8; 10] && dst[10] == 0xff && dst[11] == 0xff);
+        if is_mc(&dst) || is_ll(&dst) || dst == self.gua || self.on_link(&dst) || special {
+            return LanAction::Drop; // link-scope / our own /64 / unspecified / loopback / v4-mapped: never to the ISP
         }
         // Forward: only sources from our /64 (anti-spoof), hop limit > 1.
         if !self.on_link(&src) {
@@ -377,8 +384,9 @@ impl V6Lan {
             self.stats.drop_hop += 1;
             return LanAction::Drop;
         }
+        self.pending = None;
         if let Some((proto, sp, dp)) = ports(ip) {
-            self.flow_note(&src, &dst, proto, sp, dp, now);
+            self.pending = Some((src, dst, proto, sp, dp));
         } else if !(ip[6] == 58) {
             // Extension headers / other protocols: no stateful entry possible -> outbound refused
             // (fail-closed; IPv6 TCP/UDP/ICMPv6 cover the client traffic we serve).
@@ -390,6 +398,14 @@ impl V6Lan {
         out[7] -= 1;
         self.stats.out_fwd += 1;
         LanAction::Forward(n)
+    }
+
+    /// Record the flow of the last `Forward` — call only once it was allowed by policy, passed the IDS
+    /// and was sent. A no-op otherwise.
+    pub fn commit(&mut self, now: u64) {
+        if let Some((l, r, p, sp, dp)) = self.pending.take() {
+            self.flow_note(&l, &r, p, sp, dp, now);
+        }
     }
 
     /// One bare IPv6 packet from the WAN. `out` receives the Ethernet frame for the LAN client.
@@ -416,9 +432,30 @@ impl V6Lan {
         let allowed = match ports(ip) {
             Some((proto, sp, dp)) => self.flow_match(&dst, &src, proto, dp, sp, now),
             None => {
-                if ip[6] == 58 && plen >= 8 && (1..=4).contains(&ip[40]) {
-                    self.stats.in_icmp_err += 1;
-                    true
+                // ICMPv6 error (RFC 4890 §4.3.1) — admitted only when the packet it quotes is one of OUR
+                // LAN host's live flows (peer review SEC-M3: any internet host could push type 1-4 to any
+                // learned LAN address). Quoted packet = an IPv6 header at ip[48..] whose SOURCE is the LAN
+                // host this error is addressed to.
+                let q = 48;
+                if ip[6] == 58 && plen >= 8 + 40 + 4 && (1..=4).contains(&ip[40]) && ip.len() >= q + 44 && ip[q] >> 4 == 6 {
+                    let (qs, qd) = (addr(ip, q + 8), addr(ip, q + 24));
+                    let qnh = ip[q + 6];
+                    let ql4 = q + 40;
+                    let ok = qs == dst && match qnh {
+                        6 | 17 => {
+                            let (sp, dp) = (u16::from_be_bytes([ip[ql4], ip[ql4 + 1]]), u16::from_be_bytes([ip[ql4 + 2], ip[ql4 + 3]]));
+                            self.flow_match(&qs, &qd, qnh, sp, dp, now)
+                        }
+                        58 if ip.len() >= ql4 + 8 && ip[ql4] == 128 => {
+                            let id = u16::from_be_bytes([ip[ql4 + 4], ip[ql4 + 5]]);
+                            self.flow_match(&qs, &qd, 58, id, id, now)
+                        }
+                        _ => false,
+                    };
+                    if ok {
+                        self.stats.in_icmp_err += 1;
+                    }
+                    ok
                 } else {
                     false
                 }

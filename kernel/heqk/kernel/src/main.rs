@@ -2918,8 +2918,13 @@ fn cm5_p10_probe() {
                                     }
                                 }
                                 Some(Err(e)) => {
-                                    unsafe { *core::ptr::addr_of_mut!(POLICY) = hal::policy::Policy::new() };
-                                    kprint!(" [POLICY] POLICY.TXT REJECTED ({:?}) — running WITHOUT operator policy (never half-applied); fix the file\n", e);
+                                    // Never half-applied, and never silently OPEN (peer review SEC-M1): a broken file
+                                    // locks the MANAGEMENT sub-interface (implicit deny) until it is fixed — a typo must
+                                    // not remove an admin-only lockdown. Forwarding stays as without a policy (legit
+                                    // customer traffic always passes, ADR 0023); NAT / the v6 firewall still deny inbound.
+                                    let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
+                                    let _ = hal::policy::parse_policy(b"HQPOL1\nacl LOCKDOWN default drop\ninterface mgmt acl in LOCKDOWN\n", pol);
+                                    kprint!(" [POLICY] POLICY.TXT REJECTED ({:?}) — never half-applied: management LOCKED (implicit deny), forwarding unchanged; fix the file\n", e);
                                 }
                                 None => kprint!(" [POLICY] no POLICY.TXT — no operator ACLs / routes\n"),
                             }
@@ -3181,6 +3186,7 @@ fn cm5_p10_probe() {
                         let mut pol_mgmt_nh_miss = 0u32; // routed to mgmt but the next hop is not resolved yet
                         let mut pol_block_as_drop = 0u32; // `out` blocks after un-NAT act as drops (see the note)
                         let mut last_wan_probe = 0u64;
+                        let (mut rej_win, mut rej_n) = (0u64, 0u32); // `wan in` reject rate limit
                         let mut mbuf = [0u8; 1600];
                         use hal::policy::{Act as PAct, Dir as PDir, If as PIf};
                         // One client IPv4 frame from `$pif` (lan = Wi-Fi, eth1): `<if> in` ACL/prefix-lists, then the
@@ -3495,8 +3501,8 @@ fn cm5_p10_probe() {
                                                     (PAct::Allow, _) => {
                                                         if packet::verdict(frame).1 == packet::DROP {
                                                             v6_ids_drop[0] += 1;
-                                                        } else if up.usable() {
-                                                            let _ = uplink::wan_tx6(&up, &v6buf[..k]);
+                                                        } else if up.usable() && uplink::wan_tx6(&up, &v6buf[..k]) {
+                                                            v6.commit(now() * 1000 / freq); // the inbound pinhole opens only now
                                                         }
                                                     }
                                                     (PAct::Block, i) => {
@@ -3621,7 +3627,11 @@ fn cm5_p10_probe() {
                                     // the GEM ring (another 128 slots) instead of being head-dropped from wq (metal 2026-11-05:
                                     // 7,158 wq drops after the drain fix).
                                     let twan = cyw43::ticks();
-                                    for _ in 0..WAN_BUDGET.min(WQ_N - wq_n) {
+                                    // ...but NEVER zero (peer review COR-M1): a full Wi-Fi queue (firmware TX stall) used to
+                                    // stop end0 entirely — PPPoE LCP echoes unanswered (session dropped), WAN ARP, eth1
+                                    // clients and the management VLAN all starved. At least 4 per loop; Wi-Fi-bound frames
+                                    // that do not fit are dropped at the congested queue, where TCP will see it.
+                                    for _ in 0..WAN_BUDGET.min(WQ_N - wq_n).max(4) {
                                     match uplink::wan_poll(&mut up, &mut wbuf) {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
                                         uplink::WanEvent::GwRefreshed => wan_gw_refresh += 1,
@@ -3639,8 +3649,26 @@ fn cm5_p10_probe() {
                                             // goes back to the actual sender.
                                             macro_rules! wan_in_new {
                                                 () => {{
-                                                    let a = hal::policy::facts(&wbuf[..n]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Wan, PDir::In, &p).0 }).unwrap_or(PAct::Allow);
+                                                    // Peer review H3: only traffic ADDRESSED TO US (our MAC + our WAN address) is ours
+                                                    // to police. The GEM is promiscuous: on a shared WAN segment, `wan in` + block used
+                                                    // to forge RSTs / ICMP for OTHER hosts' flows.
+                                                    let to_us = wbuf[0..6] == up.mac && match wbuf[12..14] {
+                                                        [0x08, 0x00] => n >= 34 && wbuf[30..34] == up.dhcp.yiaddr,
+                                                        [0x86, 0xdd] => n >= 54 && (Some({ let mut d = [0u8; 16]; d.copy_from_slice(&wbuf[38..54]); d }) == unsafe { uplink::WAN6 }.na
+                                                            || (unsafe { V6.up } && wbuf[38..46] == unsafe { V6.prefix }[..8])),
+                                                        _ => false,
+                                                    };
+                                                    let a = if !to_us { PAct::Allow } else { hal::policy::facts(&wbuf[..n]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Wan, PDir::In, &p).0 }).unwrap_or(PAct::Allow) };
+                                                    // RFC 4443 §2.4(f) / peer review SEC-L2: at most 20 rejects/s toward the internet
+                                                    // (a spoofed-source flood must not turn heqk into a reflector); beyond it, drop.
+                                                    let tnow = now();
+                                                    if tnow.wrapping_sub(rej_win) > freq {
+                                                        rej_win = tnow;
+                                                        rej_n = 0;
+                                                    }
+                                                    let a = if a == PAct::Block && rej_n >= 20 { PAct::Drop } else { a };
                                                     if a == PAct::Block {
+                                                        rej_n += 1;
                                                         pol_block[2] += 1;
                                                         let mut rj = [0u8; 1400];
                                                         if wbuf[12] == 0x86 {
@@ -3660,9 +3688,13 @@ fn cm5_p10_probe() {
                                                 // IPv6 from the ISP: the stateful firewall + neighbor table decide; then the IDS.
                                                 let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                                 let nms = now() * 1000 / freq;
+                                                let no_flow0 = v6.stats.drop_no_flow;
                                                 let v6a = v6.on_wan(&wbuf[14..n], nms, &mut v6buf);
-                                                if matches!(v6a, arch_aarch64::ip6lan::WanAction::Drop) {
-                                                    wan_in_new!(); // not a reply: the operator's `wan in` (block -> reject)
+                                                // `wan in` judges only genuinely NEW inbound traffic (no flow). A neighbor-table
+                                                // miss / hop-limit / malformed drop is not a policy event and must never turn into
+                                                // a reject of a legitimate reply (peer review SEC-M5, ADR 0023).
+                                                if matches!(v6a, arch_aarch64::ip6lan::WanAction::Drop) && v6.stats.drop_no_flow != no_flow0 {
+                                                    wan_in_new!();
                                                 }
                                                 if let arch_aarch64::ip6lan::WanAction::Deliver(k) = v6a {
                                                     let lan_out = hal::policy::facts(&v6buf[..k]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Lan, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
@@ -3763,7 +3795,7 @@ fn cm5_p10_probe() {
                                         // management (un-NAT -> `mgmt in` -> `<lan|eth1> out` -> the client).
                                         if unsafe { uplink::MGMT }.is_some() {
                                             for _ in 0..8 {
-                                                let mut decide = |f: &[u8]| hal::policy::facts(f).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Mgmt, PDir::In, &p).0 }).unwrap_or(PAct::Allow);
+                                                let mut decide = |f: &[u8]| hal::policy::facts(f).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Mgmt, PDir::In, &p).0 }).unwrap_or(PAct::Drop); // unparseable = drop (peer review H2)
                                                 match uplink::mgmt_poll(&mut mbuf, &mut decide) {
                                                     uplink::MgmtEvent::Idle => break,
                                                     uplink::MgmtEvent::Frame(k) => {
@@ -3896,14 +3928,8 @@ fn cm5_p10_probe() {
                                                 kprint!("\n");
                                                 *p = [[0; 3]; 8];
                                             }
-                                            // Healthy-state baseline of the firmware's view of the station (compare with the
-                                            // stall snapshot): every 12th beat, only while associated.
-                                            if beat_n % 12 == 0 && last_sta != [0u8; 6] {
-                                                if let Some(i) = cyw43::fw_sta_info(&last_sta) {
-                                                    kprint!("   [P11-AP3 sta] ver={} len={} flags={:#x} (PS={}) idle={}s tx_pkts={} tx_fail={} rx_ucast={} tx_rate={} retry_exh={}\n",
-                                                        i.ver, i.len, i.flags, i.flags & 0x100 != 0, i.idle, i.tx_pkts, i.tx_failures, i.rx_ucast, i.tx_rate, i.retry_exhausted);
-                                                }
-                                            }
+                                            // (the periodic sta_info baseline was removed: every control request discards the station
+                                            // frames queued behind it — peer review COR-M4; the stall snapshot still reads sta_info)
                                             {
                                                 let w = unsafe { uplink::WAN_TX_DIAG };
                                                 let (_, _, dg) = cyw43::ap_diag();
@@ -12422,6 +12448,10 @@ fn dnsfwd_selftest() {
     let rn2 = frame(&mut r, wan_mac, gw_mac, [1, 1, 1, 1], wan_ip, 53, ext2);
     let inb2 = nat::inbound(&r[..rn2], &wan_ip, &wan_mac, [&ap_mac, &ap_mac], &mut back, now, &mut st);
     let direct_back_ok = inb2.is_some() && back[26..30] == [1, 1, 1, 1] && udp_ok(&back);
+    // Peer review SEC-M2 regression: a DIFFERENT remote sending to the same live mapping is refused
+    // (address-dependent filtering) — only the host the client talked to gets in.
+    let rn3 = frame(&mut r, wan_mac, gw_mac, [9, 9, 9, 9], wan_ip, 53, ext2);
+    let adf_ok = nat::inbound(&r[..rn3], &wan_ip, &wan_mac, [&ap_mac, &ap_mac], &mut back, now, &mut st).is_none();
     // RFC 5508: an ICMP port-unreachable from an upstream router quoting the SNAT'd 1.1.1.1 query goes
     // back to the client with outer dst + quoted src/port translated and valid IP/ICMP checksums.
     let icmp_ok = {
@@ -12459,9 +12489,9 @@ fn dnsfwd_selftest() {
     // a non-DNS packet to the AP address stays local (never NATed)
     let n3 = frame(&mut q, ap_mac, cli_mac, cli_ip, ap_ip, 51004, 80);
     let local_ok = nat::outbound_redirect(&q[..n3], nat::IF_WIFI, &inside, Some((&ap_ip, &resolver)), &wan_ip, &wan_mac, &gw_mac, &mut out, now, &mut st).is_none();
-    let ok = out_ok && back_ok && direct_ok && direct_back_ok && local_ok && icmp_ok;
-    kprint!(" [P11-dnsfwd] {} — AP DNS: query to the AP -> forwarded to the upstream resolver via SNAT={} reply returns FROM the AP to the client, checksums valid={} | direct query to 1.1.1.1 not redirected={} its reply keeps 1.1.1.1={} | non-DNS to the AP stays local={} | ICMP error quoting a NATed flow translated back (RFC 5508: outer dst + quoted src/port, checksums)={}\n",
-        if ok { "PASS" } else { "FAIL" }, out_ok, back_ok, direct_ok, direct_back_ok, local_ok, icmp_ok);
+    let ok = out_ok && back_ok && direct_ok && direct_back_ok && local_ok && icmp_ok && adf_ok;
+    kprint!(" [P11-dnsfwd] {} — AP DNS: query to the AP -> forwarded to the upstream resolver via SNAT={} reply returns FROM the AP to the client, checksums valid={} | direct query to 1.1.1.1 not redirected={} its reply keeps 1.1.1.1={} | non-DNS to the AP stays local={} | ICMP error quoting a NATed flow translated back (RFC 5508: outer dst + quoted src/port, checksums)={} | another remote to the same live mapping refused (address-dependent filtering)={}\n",
+        if ok { "PASS" } else { "FAIL" }, out_ok, back_ok, direct_ok, direct_back_ok, local_ok, icmp_ok, adf_ok);
 }
 
 /// 4-hex-digit formatting helper for a chanspec (no alloc): returns the value for `{:#06x}` printing.
@@ -12831,7 +12861,20 @@ fn ip6_selftest() {
         tcp[2..4].copy_from_slice(&443u16.to_be_bytes());
         tcp[13] = 0x02;
         let n = frame6(&mut f, &cmac, &apmac, &cli, &remote, 6, 64, &tcp);
-        let out_ok = matches!(v.on_lan(&f[..n], 30, &mut out), LanAction::Forward(k) if k == 60 && out[7] == 63 && out[24..40] == remote);
+        // A forward that is never committed (policy blocked / IDS dropped / send failed) opens NO pinhole
+        // (peer review SEC-M4): its SYN-ACK is denied.
+        let _ = v.on_lan(&f[..n], 25, &mut out);
+        let mut rtcp0 = [0u8; 20];
+        rtcp0[0..2].copy_from_slice(&443u16.to_be_bytes());
+        rtcp0[2..4].copy_from_slice(&50000u16.to_be_bytes());
+        rtcp0[13] = 0x12;
+        let mut g = [0u8; 200];
+        let gn = frame6(&mut g, &[0; 6], &[0; 6], &remote, &cli, 6, 57, &rtcp0);
+        let no_pinhole = matches!(v.on_wan(&g[14..gn], 26, &mut out), WanAction::Drop);
+        let out_ok = no_pinhole && matches!(v.on_lan(&f[..n], 30, &mut out), LanAction::Forward(k) if k == 60 && out[7] == 63 && out[24..40] == remote);
+        let mut syn_sent = [0u8; 60];
+        syn_sent.copy_from_slice(&out[..60]); // the packet as forwarded (quoted by the PTB below)
+        v.commit(30); // sent: the flow is recorded now
         // The SYN-ACK back -> Deliver to the client's MAC, hop decremented
         let mut rtcp = [0u8; 20];
         rtcp[0..2].copy_from_slice(&443u16.to_be_bytes());
@@ -12845,13 +12888,19 @@ fn ip6_selftest() {
         scan[2..4].copy_from_slice(&22u16.to_be_bytes());
         scan[13] = 0x02;
         let n = frame6(&mut f, &[0; 6], &[0; 6], &remote, &cli, 6, 57, &scan);
-        let deny_ok = matches!(v.on_wan(&f[14..n], 50, &mut out), WanAction::Drop) && v.stats.drop_no_flow == 1;
-        // ICMPv6 Packet Too Big inbound -> passes (PMTU)
-        let mut ptb = [0u8; 56];
+        let deny_ok = matches!(v.on_wan(&f[14..n], 50, &mut out), WanAction::Drop) && v.stats.drop_no_flow == 2;
+        // ICMPv6 Packet Too Big quoting the client's live flow -> passes (PMTU); one quoting nothing of
+        // ours is denied (peer review SEC-M3).
+        let mut ptb = [0u8; 8 + 60];
         ptb[0] = 2;
         ptb[4..8].copy_from_slice(&1280u32.to_be_bytes());
+        ptb[8..68].copy_from_slice(&syn_sent);
         let n = frame6(&mut f, &[0; 6], &[0; 6], &remote, &cli, 58, 57, &ptb);
-        let ptb_ok = matches!(v.on_wan(&f[14..n], 60, &mut out), WanAction::Deliver(_)) && v.stats.in_icmp_err == 1;
+        let ptb_flow = matches!(v.on_wan(&f[14..n], 60, &mut out), WanAction::Deliver(_)) && v.stats.in_icmp_err == 1;
+        let mut bogus = ptb;
+        bogus[8 + 40..8 + 42].copy_from_slice(&50999u16.to_be_bytes()); // a port the client never used
+        let n = frame6(&mut f, &[0; 6], &[0; 6], &remote, &cli, 58, 57, &bogus);
+        let ptb_ok = ptb_flow && matches!(v.on_wan(&f[14..n], 61, &mut out), WanAction::Drop) && v.stats.in_icmp_err == 1;
         // Spoofed source (not our /64) and a link-local destination are never routed out
         let mut spoof = cli;
         spoof[3] ^= 0xff;
@@ -12866,7 +12915,7 @@ fn ip6_selftest() {
         r
     };
     let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, Packet-Too-Big passes, spoofed src / link-local dst never routed={}\n",
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed={}\n",
         if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, lan_ok);
 }
 
@@ -13282,7 +13331,26 @@ fn pppoe_selftest() {
         }
         r
     };
-    let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok && ka && stale_ok;
-    kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP run (AC IID acked, ours acked -> v6 up, IPv6 encap/decap) + CCP still Protocol-Rejected={} IPv4 encap={} decap={} PADT->down={} | PAP run open={} | client keepalive: one echo per interval, reply resets, 3 misses -> down (NoEcho)={} | stale-session sweep: PADT for an old SID, rate-limited, never broadcast={}\n",
-        if ok { "SECRET_TV" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok, ka, stale_ok);
+    // Peer review H1 regression: session frames with PPPoE length 0/1 (or not addressed to us) are refused by
+    // BOTH decap paths — they used to slice f[22..20] and panic the kernel (remote DoS from the WAN segment).
+    let short_ok = {
+        let mut ok = true;
+        for (proto, l, to_us) in [(0x0021u16, 0u16, true), (0x0021, 1, true), (0x0057, 0, true), (0x0057, 1, true), (0x0021, 44, false)] {
+            let mut b = [0u8; 80];
+            b[0..6].copy_from_slice(if to_us { &CLI } else { &AC });
+            b[6..12].copy_from_slice(&AC);
+            b[12..14].copy_from_slice(&ETH_SESS.to_be_bytes());
+            b[14] = 0x11;
+            b[16..18].copy_from_slice(&SID.to_be_bytes());
+            b[18..20].copy_from_slice(&l.to_be_bytes());
+            b[20..22].copy_from_slice(&proto.to_be_bytes());
+            b[22] = 0x45;
+            let mut o = [0u8; 128];
+            ok &= c.decap_ipv4(&b[..80], &mut o).is_none() && c.decap_ipv6(&b[..80]).is_none();
+        }
+        ok
+    };
+    let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok && ka && stale_ok && short_ok;
+    kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP run (AC IID acked, ours acked -> v6 up, IPv6 encap/decap) + CCP still Protocol-Rejected={} IPv4 encap={} decap={} PADT->down={} | PAP run open={} | client keepalive: one echo per interval, reply resets, 3 misses -> down (NoEcho)={} | stale-session sweep: PADT for an old SID, rate-limited, never broadcast={} | short (len 0/1) or not-to-us session frames refused by both decaps, no panic={}\n",
+        if ok { "PASS" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok, ka, stale_ok, short_ok);
 }

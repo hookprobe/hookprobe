@@ -395,10 +395,26 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
         }
         match best {
             Some((_, n, k)) => {
-                let _ = self.slot_read(AB_SLOTS[k], out)?;
-                Some(n)
+                if self.slot_read(AB_SLOTS[k], out).is_some() {
+                    return Some(n);
+                }
+                // the re-read failed: the OTHER slot, if valid (peer review COR-L4)
+                let o = AB_SLOTS[1 - k];
+                self.slot_read(o, out).map(|(_, n)| n)
             }
-            None => self.load(out),
+            None => {
+                // Legacy single blob ONLY when no slot was ever written: a slot that exists but fails to
+                // read (I/O glitch, torn) must never let an OLDER legacy snapshot win (peer review COR-L4).
+                let mut h = [0u8; 512];
+                let mut any_hdr = false;
+                for &s in AB_SLOTS.iter() {
+                    match self.dev.read_block(s, &mut h) {
+                        Ok(()) => any_hdr |= &h[..8] == AB_MAGIC,
+                        Err(_) => return None,
+                    }
+                }
+                if any_hdr { None } else { self.load(out) }
+            }
         }
     }
 
@@ -415,12 +431,14 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
         let mut tmp = [0u8; AB_SLOT_SECTORS as usize * 512];
         let gens = [self.slot_read(AB_SLOTS[0], &mut tmp).map(|g| g.0), self.slot_read(AB_SLOTS[1], &mut tmp).map(|g| g.0)];
         // target = the slot NOT holding the newest valid generation
-        let (target, gen) = match gens {
-            [Some(a), Some(b)] => if a >= b { (1, a + 1) } else { (0, b + 1) },
-            [Some(a), None] => (1, a + 1),
-            [None, Some(b)] => (0, b + 1),
-            [None, None] => (0, 1),
+        let (target, cur) = match gens {
+            [Some(a), Some(b)] => if a >= b { (1, a) } else { (0, b) },
+            [Some(a), None] => (1, a),
+            [None, Some(b)] => (0, b),
+            [None, None] => (0, 0),
         };
+        // a forged header claiming gen u64::MAX must not wrap (peer review COR-L4)
+        let gen = cur.checked_add(1).ok_or(StoreErr::TooBig)?;
         let hdr = AB_SLOTS[target];
         let mut put = |dev: &mut D, guard: &LbaGuard, lba: u64, s: &[u8; 512]| -> Result<(), StoreErr> {
             if !guard.allows(lba) || lba < RESERVED_LBA_LO || lba >= RESERVED_LBA_HI {

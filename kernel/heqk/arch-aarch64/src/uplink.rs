@@ -98,7 +98,7 @@ pub fn link_configure(l: &hal::WanLink) {
         MGMT_VLAN = l.mgmt.map(|m| m.vlan).unwrap_or(0);
     }
     if l.vlan != 0 || l.mgmt.is_some() {
-        gem::enable_jumbo();
+        gem::enable_vlan_frames();
     }
 }
 
@@ -258,9 +258,9 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
         }
         let mut g = [0u8; 6];
         g.copy_from_slice(smac);
-        if sip == m.gw {
-            m.gw_mac = Some(g);
-        } else if op == 2 {
+        if sip == m.gw && op == 2 {
+            m.gw_mac = Some(g); // replies only: unsolicited ARP must not repoint the gateway (peer review L4)
+        } else if op == 2 && sip != m.gw {
             // cache an answered next hop on our subnet (LRU-free: replace a matching or the first free slot)
             let mask: u32 = u32::MAX << (32 - m.prefix as u32);
             let si = [sip[0], sip[1], sip[2], sip[3]];
@@ -276,7 +276,14 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
         return MgmtEvent::Idle;
     }
     let ihl = ((buf[14] & 0x0f) as usize) * 4;
-    if buf[23] == 1 && n >= 14 + ihl + 8 && buf[14 + ihl] == 8 {
+    let tot = u16::from_be_bytes([buf[16], buf[17]]) as usize;
+    // Peer review 2026-11-06 H2: a total length < IHL+8 made the echo-reply checksum slice inverted (a
+    // remote panic from the management VLAN). Validate the whole header before touching it.
+    if buf[14] >> 4 != 4 || ihl < 20 || tot < ihl + 8 || 14 + tot > n {
+        m.stats[6] += 1;
+        return MgmtEvent::Idle;
+    }
+    if buf[23] == 1 && buf[14 + ihl] == 8 {
         match decide(&buf[..n]) {
             Act::Allow => {
                 // Echo reply: swap MACs/IPs, type 0, fresh checksums.
@@ -290,7 +297,6 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
                 o[25] = 0;
                 let c = hal::inet_csum(&o[14..14 + ihl], 0);
                 o[24..26].copy_from_slice(&c.to_be_bytes());
-                let tot = (u16::from_be_bytes([buf[16], buf[17]]) as usize).min(n - 14);
                 let ic = 14 + ihl;
                 o[ic] = 0;
                 o[ic + 2] = 0;
@@ -316,8 +322,9 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
 
 fn end0_rx(out: &mut [u8]) -> Option<usize> {
     let (e, mv) = unsafe { (LINK, MGMT_VLAN) };
-    // Bounded: a burst of other-VLAN frames must not starve the caller.
-    for _ in 0..8 {
+    // Bounded: a burst of other-VLAN frames must not starve the caller — but large enough that a few
+    // management / foreign-VLAN frames do not end the WAN drain early (peer review COR-L2).
+    for _ in 0..64 {
         // A GEM descriptor with no length is "no valid frame" (L-13), not a frame.
         let len = gem::poll_rx(out).and_then(|(len, _, _, _, _)| if len > 0 { Some(len) } else { None })?;
         let len = len.min(out.len());
@@ -659,7 +666,9 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
     use crate::ip6;
     use crate::pppoe::Tx;
     let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
-    w.ran = true;
+    // Fresh state per dial (peer review COR-M3): a re-dial used to find reply=true from the last session,
+    // skip RS/DHCPv6 entirely, and keep advertising the OLD delegated prefix on the LAN.
+    *w = Wan6 { ran: true, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0 };
     let cap = cntpct() + ticks_ms(12_000);
     let mut buf = [0u8; 2048];
     let mut tx = Tx::new();
@@ -1047,6 +1056,12 @@ pub enum WanEvent {
 /// for the NAT inbound path.
 pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
     if !up.dhcp.ack_rx {
+        // Peer review COR-M2: the internet sub-interface is down, but end0 must still be read — the
+        // management VLAN (its ARP / ping / replies of `route … via mgmt`, i.e. the failover path)
+        // only receives through end0_rx. Internet frames are discarded here (no lease to own them).
+        if up.nic == Nic::End0 && unsafe { MGMT_VLAN } != 0 {
+            let _ = nic_rx(up.nic, buf);
+        }
         return WanEvent::Idle;
     }
     if up.mode == 2 {
