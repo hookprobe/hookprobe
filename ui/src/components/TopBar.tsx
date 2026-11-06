@@ -8,14 +8,30 @@
  * changes — capability-gated per manifest. Standalone hides scope switcher.
  */
 
-import type { Component } from 'solid-js';
-import { qsecbit, protectionStatus, deployMode, currentUser } from '../store/mock';
+import { onMount, type Component } from 'solid-js';
+import { qsecbit, protectionStatus, deployMode, setDeployMode, currentUser } from '../store/mock';
+import { fetchJson } from '../store/api';
+import type { DeployMode } from './LeftRail';
+
+const MODES: readonly DeployMode[] = ['standalone', 'cloud-linked', 'self-hosted'];
+
+/** Read the device's real deployment mode; keep the default when the API has no `mode` field. */
+async function loadMode(): Promise<void> {
+  try {
+    const h = await fetchJson<{ mode?: string }>('/api/health');
+    if (h.mode && (MODES as readonly string[]).includes(h.mode)) setDeployMode(h.mode as DeployMode);
+  } catch {
+    /* offline / unauthenticated: the badge keeps its default rather than inventing a mode */
+  }
+}
 
 interface Props {
   onOpenCopilot: () => void;
 }
 
-const TopBar: Component<Props> = (props) => (
+const TopBar: Component<Props> = (props) => {
+  onMount(() => void loadMode());
+  return (
   <header class="topbar">
     {/* Brand */}
     <div class="topbar-brand" aria-label="HookProbe OS">
@@ -87,6 +103,7 @@ const TopBar: Component<Props> = (props) => (
       </button>
     </div>
   </header>
-);
+  );
+};
 
 export default TopBar;

@@ -128,6 +128,9 @@ pub struct McState {
     pub forwarded: u64,
     /// Bumps on every new detection or QSecBit sample — SSE clients compare against it.
     pub change: u64,
+    /// Deployment mode truth for the UI badge: true only while the MSSP control-plane session is
+    /// Established (set by the serve loop from `ControlPlane::established()`); otherwise standalone.
+    pub cloud_linked: bool,
 }
 
 impl McState {
@@ -150,6 +153,7 @@ impl McState {
             dropped: 0,
             forwarded: 0,
             change: 0,
+            cloud_linked: false,
         }
     }
 

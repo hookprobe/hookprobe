@@ -64,7 +64,9 @@ export interface TimelineStats {
 
 export const [qsecbit,         setQsecbit]         = createSignal<number>(92);
 export const [protectionStatus]                     = createSignal<ProtectionStatus>('protected');
-export const [deployMode]                           = createSignal<DeployMode>('standalone');
+// Default 'standalone' until the device says otherwise: TopBar reads the real mode from
+// `/api/health` (heqk: `mode` = cloud-linked only while the MSSP session is Established).
+export const [deployMode,      setDeployMode]       = createSignal<DeployMode>('standalone');
 export const [currentUser]                          = createSignal<string>('Admin');
 export const [lastChecked,     setLastChecked]      = createSignal<string>('just now');
 

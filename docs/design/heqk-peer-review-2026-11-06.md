@@ -144,3 +144,19 @@ IPv6 forwarded 108,347 out / 189,414 in, **SAVI refusals 0** (no false positive 
 neighbor misses 0, firewall no_flow 1; 12/12 firmware stalls kicked (none reached 2 s); 0 panics; PD renew
 correctly idle (infinite lifetimes). Deferred-frame ring: parked 51 = delivered 51, but **ring-full 48** —
 16 slots too few during a speed test -> raised to 64 (`DEFER_N`), AP build compiles; re-check next session.
+
+## Background block (no metal, 2026-11-07) — re-review items + design ADR
+
+| Commit | Item | What changed |
+|---|---|---|
+| `3c6c73c` | metal: ring-full 48 | deferred-frame ring 16 → 64 |
+| `c92ed58` | re-review **P2** (partial) | uRPF-lite martian source filter on the internet sub-interface: RFC 1812 martians, our own WAN address, our inside prefixes and the mgmt floor arriving from the WAN are dropped before NAT/policy (`hal::policy::wan_martian4`, `[P-policy]`). Per-interface floor binding beyond the WAN stays an ADR item |
+| `2fc7e2e` | **M2 / SEC-M1 / IPv6 tiers** | ADR 0049 **PROPOSED** (operator review): D1 POLICY.TXT signed by the operator key (not the boot key), D2 tagged v4/v6-/64 source identity, D3 scan establishment needs SYN-ACK evidence |
+| `acf5087` | review Q2-H1 | responder-sim: `device_fp` = sha256(authenticated device key); a mismatching msg1 claim is refused |
+| `1607ee3` | A7.7 + data handling | `[PROD hb] rx_lost` (GEM RX-ring loss), eMMC PRE_EOL/LIFE from EXT_CSD at boot, exported RA-rule (121–123) MAC-derived sources pseudonymised with an HKDF(SRK) HMAC key |
+| `d0f4e95` | docs | `kernel/heqk/SECURITY.md`: an accurate heqk data-handling statement; the V1 GDPR section marked as not describing heqk. **ADR 0007 (Apache-2.0) vs LICENSING.md (AGPL-3.0) contradiction flagged, not resolved — operator decision** |
+| `HEAD` | UI de-mock D3 (mode badge) | `/api/health` (authenticated) carries `mode`: `cloud-linked` only while the MSSP control-plane session is Established, else `standalone`; TopBar reads it (default kept when the field is absent). Unauthenticated health unchanged. The `dst` column still needs an evidence-schema change |
+
+Gate run at the end of the block: `validate.sh` exit 0 (all implemented phases GREEN); `prod`, `prod-mc`,
+`hboot,apmode`, `hboot,stalldiag` release builds OK. The UI change is not typechecked here (no Node on the
+build box). Everything in this block is METAL-PENDING.
