@@ -2893,6 +2893,16 @@ fn cm5_p10_probe() {
                             match load_wan_link(&dev) {
                                 Some(Ok(l)) => {
                                     uplink::link_configure(&l);
+                                    // Management floor (task #21 N3): explicit `mgmt_floor`, else the management
+                                    // sub-interface's subnet (the operator's path), else the compile-time default.
+                                    let floor = l.floor.or_else(|| l.mgmt.and_then(|mg| mg.stat.map(|(ip, pl, _)| (ip, pl))));
+                                    if let Some((ip, pl)) = floor {
+                                        let _ = crate::verdict::set_mgmt_floor(u32::from_be_bytes(ip), pl as u32);
+                                    }
+                                    let (fnet, flen, fset) = crate::verdict::mgmt_floor();
+                                    let fb = fnet.to_be_bytes();
+                                    kprint!(" [LINK] management floor (never enforced against): {}.{}.{}.{}/{} — {}\n", fb[0], fb[1], fb[2], fb[3], flen,
+                                        if fset { "configured" } else { "COMPILE-TIME DEFAULT (set mgmt_floor= in WAN.TXT)" });
                                     let e = hal::policy::Encap { vlan: l.vlan, outer: l.outer, pcp: l.pcp, pppoe: matches!(wan_mode, hal::WanMode::Pppoe { .. }) };
                                     kprint!(" [LINK] internet sub-interface: vlan={} outer={} pcp={} -> IP MTU {} (frame {} B{}) | mgmt: {}\n",
                                         l.vlan, l.outer, l.pcp, e.ip_mtu(), e.frame_max(), if e.tag_len() > 0 { ", jumbo gate opened" } else { "" },
@@ -12742,14 +12752,14 @@ route 2001:db8:1::/48 via mgmt
         && parse_policy(b"acl A seq 1 drop any any any\n", &mut q) == Err(PolicyErr::NoMagic);
     // WAN.TXT link keys
     let w: &[u8] = b"HQWAN1\nmode=pppoe\npppoe_user=u@isp\npppoe_pass=x\nvlan=100\nvlan_outer=10\npcp=3\nmgmt_vlan=200\nmgmt=static\nmgmt_ip=192.168.200.2/24\nmgmt_gw=192.168.200.1\n";
-    let link_ok = hal::parse_wan_link(w) == Ok(hal::WanLink { vlan: 100, outer: 10, pcp: 3, mgmt: Some(hal::MgmtIf { vlan: 200, stat: Some(([192, 168, 200, 2], 24, [192, 168, 200, 1])) }) })
+    let link_ok = hal::parse_wan_link(w) == Ok(hal::WanLink { vlan: 100, outer: 10, pcp: 3, mgmt: Some(hal::MgmtIf { vlan: 200, stat: Some(([192, 168, 200, 2], 24, [192, 168, 200, 1])) }), floor: None })
         && matches!(hal::parse_wan_cfg(w), Ok(hal::WanMode::Pppoe { .. }))
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=100\nmgmt_vlan=100\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan_outer=10\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=4095\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\n") == Ok(hal::WanLink::default())
         && hal::parse_wan_link(b"HQWAN1\nmode=pppoe\npppoe_user=u\nvlan=35\nmgmt_vlan=200\nmgmt=dhcp\n")
-            == Ok(hal::WanLink { vlan: 35, outer: 0, pcp: 0, mgmt: Some(hal::MgmtIf { vlan: 200, stat: None }) })
+            == Ok(hal::WanLink { vlan: 35, outer: 0, pcp: 0, mgmt: Some(hal::MgmtIf { vlan: 200, stat: None }), floor: None })
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_vlan=200\nmgmt=bootp\n").is_err();
     // tag stack + MTU from the headers
     let e = Encap { vlan: 100, outer: 10, pcp: 3, pppoe: true };
@@ -12763,9 +12773,23 @@ route 2001:db8:1::/48 via mgmt
     let og = one.push_tags(&mut g, 0x0800);
     let tag1_ok = og == 18 && rx_tags(&g) == Some((0, 35, 16)) && one.ip_mtu() == 1500 && one.frame_max() == 1518
         && rx_tags(&[0u8; 14]) == Some((0, 0, 12));
-    let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok;
-    kprint!(" [P-policy] {} — WAN policy engine: IPv6 text={} POLICY.TXT parsed (5 lists, 2 named ACLs sorted by seq, 3 interface bindings, 6 routes)={} interface-attached ACL + prefix-list: allow/block/drop first-match by seq, ACL default + implicit deny, per-entry hits, v4+v6, ports, spoofed source dropped by the lan prefix-list, a v4-only list never applies to v6, unbound wan allowed={} prefix-list ge/le + seq order={} routes: longest prefix, source-based (from), gateway, metric failover when wan is down={} whole-file rejection with line numbers={} WAN.TXT vlan/QinQ/pcp/mgmt sub-interface={} QinQ tag stack + MTU from headers (PPPoE 1492/MSS 1452, frame 1522)={} single tag={}\n",
-        if ok { "PASS" } else { "FAIL" }, v6_ok, parsed, acl_ok, pl_ok, rt_ok, rej_ok, link_ok, tag_ok, tag1_ok);
+    // task #21 N3: the management floor is configurable (WAN.TXT mgmt_floor=), never over-broad, restorable.
+    let floor_ok = {
+        let w = hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=192.168.77.0/24\n");
+        let parsed = matches!(w, Ok(hal::WanLink { floor: Some(([192, 168, 77, 0], 24)), .. }))
+            && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=0.0.0.0/0\n").is_err()
+            && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_floor=10.0.0.0/7\n").is_err();
+        let def = crate::verdict::is_allowlisted(0x0A_C8_00_05) && !crate::verdict::is_allowlisted(0xC0_A8_4D_05);
+        let set = crate::verdict::set_mgmt_floor(0xC0_A8_4D_00, 24);
+        let moved = crate::verdict::is_allowlisted(0xC0_A8_4D_05) && !crate::verdict::is_allowlisted(0x0A_C8_00_05) && crate::verdict::mgmt_floor().2;
+        let broad_refused = !crate::verdict::set_mgmt_floor(0, 0) && !crate::verdict::set_mgmt_floor(0x0A00_0000, 4);
+        crate::verdict::reset_mgmt_floor();
+        let restored = crate::verdict::is_allowlisted(0x0A_C8_00_05) && !crate::verdict::mgmt_floor().2;
+        parsed && def && set && moved && broad_refused && restored
+    };
+    let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok && floor_ok;
+    kprint!(" [P-policy] {} — WAN policy engine: IPv6 text={} POLICY.TXT parsed (5 lists, 2 named ACLs sorted by seq, 3 interface bindings, 6 routes)={} interface-attached ACL + prefix-list: allow/block/drop first-match by seq, ACL default + implicit deny, per-entry hits, v4+v6, ports, spoofed source dropped by the lan prefix-list, a v4-only list never applies to v6, unbound wan allowed={} prefix-list ge/le + seq order={} routes: longest prefix, source-based (from), gateway, metric failover when wan is down={} whole-file rejection with line numbers={} WAN.TXT vlan/QinQ/pcp/mgmt sub-interface={} QinQ tag stack + MTU from headers (PPPoE 1492/MSS 1452, frame 1522)={} single tag={} | management floor configurable (WAN.TXT mgmt_floor=, over-broad refused, default restorable)={}\n",
+        if ok { "PASS" } else { "FAIL" }, v6_ok, parsed, acl_ok, pl_ok, rt_ok, rej_ok, link_ok, tag_ok, tag1_ok, floor_ok);
 }
 
 /// `[P-pppoe]` — the PPPoE client engine (arch_aarch64::pppoe) end to end against a scripted

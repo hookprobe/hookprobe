@@ -278,6 +278,39 @@ impl DecideCtx {
 pub const MGMT_NET: u32 = 0x0A_C8_00_00; // 10.200.0.0
 pub const MGMT_LEN: u32 = 24;
 
+/// The RUNTIME management floor: `net << 8 | len` (host-order). Initialised to the compile-time default
+/// above; replaced by configuration (task #21 N3 — the audit found the hard-coded 10.200.0.0/24 made
+/// every host on the fortress customer LAN "management", never enforceable, and protected nothing on
+/// any other network). Sources: WAN.TXT `mgmt_floor=a.b.c.d/len`, else the management sub-interface's
+/// subnet; neither = the default, reported as such at boot.
+static MGMT_FLOOR: core::sync::atomic::AtomicU64 =
+    core::sync::atomic::AtomicU64::new(((MGMT_NET as u64) << 8) | MGMT_LEN as u64);
+static MGMT_FLOOR_SET: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Set the management floor to `net/len` (host-order IPv4). `len` 8..=30; anything else is refused
+/// (an over-broad floor would exempt the whole internet from enforcement). Returns whether it applied.
+pub fn set_mgmt_floor(net: u32, len: u32) -> bool {
+    if !(8..=30).contains(&len) {
+        return false;
+    }
+    let mask = u32::MAX << (32 - len);
+    MGMT_FLOOR.store((((net & mask) as u64) << 8) | len as u64, core::sync::atomic::Ordering::Relaxed);
+    MGMT_FLOOR_SET.store(true, core::sync::atomic::Ordering::Relaxed);
+    true
+}
+
+/// The floor in force: (net, len, configured — false = the compile-time default).
+pub fn mgmt_floor() -> (u32, u32, bool) {
+    let v = MGMT_FLOOR.load(core::sync::atomic::Ordering::Relaxed);
+    ((v >> 8) as u32, (v & 0xff) as u32, MGMT_FLOOR_SET.load(core::sync::atomic::Ordering::Relaxed))
+}
+
+/// Restore the compile-time default (tests).
+pub fn reset_mgmt_floor() {
+    MGMT_FLOOR.store(((MGMT_NET as u64) << 8) | MGMT_LEN as u64, core::sync::atomic::Ordering::Relaxed);
+    MGMT_FLOOR_SET.store(false, core::sync::atomic::Ordering::Relaxed);
+}
+
 /// Is `src` (host-order IPv4) on the management path? A `0` source (no IPv4
 /// attribution) is never allowlisted — the floor requires a positive identity.
 #[inline]
@@ -285,8 +318,9 @@ pub fn is_allowlisted(src: u32) -> bool {
     if src == 0 {
         return false;
     }
-    let mask = if MGMT_LEN == 0 { 0 } else { u32::MAX << (32 - MGMT_LEN) };
-    (src & mask) == (MGMT_NET & mask)
+    let (net, len, _) = mgmt_floor();
+    let mask = if len == 0 { 0 } else { u32::MAX << (32 - len) };
+    (src & mask) == (net & mask)
 }
 
 /// The core policy: `FindingClass` × `DecideCtx` → `Verdict`. Default is `Observe`.
