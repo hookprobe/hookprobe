@@ -392,8 +392,14 @@ fn parse_ipv6(frame: &[u8], l3_off: usize) -> Option<(u8, usize, usize)> {
             44 => {
                 next = *frame.get(off)?;
                 // Non-first fragment (offset field != 0): payload, not an L4 header.
-                if be16(frame, off + 2)? & 0xfff8 != 0 {
+                let fo = be16(frame, off + 2)?;
+                if fo & 0xfff8 != 0 {
                     return Some((0, off + 8, ip_end));
+                }
+                // RFC 7112 (the IPv6 RFC 1858): a FIRST fragment (M set) must carry the whole upper-layer
+                // header — a TCP first fragment shorter than 20 bytes hides the flags: fail closed.
+                if fo & 1 != 0 && next == 6 && off + 8 + 20 > ip_end {
+                    return None;
                 }
                 off += 8;
             }

@@ -14,7 +14,11 @@
 
 use crate::ip6::{l4_csum, link_local};
 
-pub const NEIGH_N: usize = 64; // a phone holds link-local + stable + temporary addresses (peer review SEC-M5)
+pub const NEIGH_N: usize = 64;
+/// At most this many live address bindings per station MAC (link-local + stable + temporaries fit).
+pub const NEIGH_PER_MAC: usize = 8;
+/// A binding seen within this window is ACTIVE and is never evicted for another station.
+const NEIGH_ACTIVE_MS: u64 = 300_000; // a phone holds link-local + stable + temporary addresses (peer review SEC-M5)
 pub const FLOW_N: usize = 256;
 /// Idle timeouts (ms): established flows, and anything else.
 const FLOW_IDLE_MS: u64 = 600_000;
@@ -100,6 +104,9 @@ pub struct V6Lan {
     /// IDS and a successful send). Peer review SEC-M4: recording it inside on_lan let a BLOCKED
     /// outbound SYN open a 10-minute inbound pinhole.
     pending: Option<([u8; 16], [u8; 16], u8, u16, u16)>,
+    /// NS throttle (re-review L1): last NS per target (8 slots) + a global per-second budget.
+    ns_last: [([u8; 16], u64); 8],
+    ns_win: (u64, u32),
 }
 
 fn addr(b: &[u8], o: usize) -> [u8; 16] {
@@ -152,6 +159,8 @@ impl V6Lan {
             last_ra_ms: 0,
             ra_burst: 0,
             pending: None,
+            ns_last: [([0; 16], 0); 8],
+            ns_win: (0, 0),
         }
     }
 
@@ -192,28 +201,51 @@ impl V6Lan {
         if !(self.on_link(ip) || is_ll(ip)) {
             return true; // not ours to bind (the forward path refuses off-link sources anyway)
         }
-        let mut slot = 0;
-        let mut oldest = u64::MAX;
-        for (i, n) in self.neigh.iter().enumerate() {
-            if n.seen != 0 && n.ip == *ip {
-                if n.mac[..] != mac[..6] && now.wrapping_sub(n.seen) < NEIGH_IDLE_MS {
-                    self.stats.savi_refused += 1;
-                    return false;
-                }
-                slot = i;
-                oldest = 0;
-                break;
+        let live = |n: &Neigh| n.seen != 0 && now.wrapping_sub(n.seen) < NEIGH_IDLE_MS;
+        // existing binding for this address
+        if let Some(i) = self.neigh.iter().position(|n| n.seen != 0 && n.ip == *ip) {
+            let n = self.neigh[i];
+            if n.mac[..] != mac[..6] && live(&n) {
+                self.stats.savi_refused += 1;
+                return false;
             }
-            if n.seen < oldest {
-                oldest = n.seen;
-                slot = i;
+            let e = &mut self.neigh[i];
+            e.mac.copy_from_slice(&mac[..6]);
+            e.seen = now.max(1);
+            return true;
+        }
+        // A NEW binding. Re-review 2026-11-06 H1: one station flooding sources must not evict other
+        // stations' live bindings (that let it then CLAIM a victim's address, and SAVI locked the victim out).
+        // (1) at most NEIGH_PER_MAC bindings per MAC — over the cap it recycles its OWN oldest;
+        // (2) else a free / expired slot; (3) else the oldest binding idle > NEIGH_ACTIVE_MS;
+        // (4) else REFUSE the new binding (the table is full of active stations) — never evict them.
+        let mine = self.neigh.iter().filter(|n| live(n) && n.mac[..] == mac[..6]).count();
+        let slot = if mine >= NEIGH_PER_MAC {
+            self.neigh.iter().enumerate().filter(|(_, n)| live(n) && n.mac[..] == mac[..6]).min_by_key(|(_, n)| n.seen).map(|(i, _)| i)
+        } else if let Some(i) = self.neigh.iter().position(|n| !live(n)) {
+            Some(i)
+        } else {
+            self.neigh.iter().enumerate().filter(|(_, n)| now.wrapping_sub(n.seen) >= NEIGH_ACTIVE_MS).min_by_key(|(_, n)| n.seen).map(|(i, _)| i)
+        };
+        let Some(i) = slot else {
+            self.stats.savi_refused += 1;
+            return false;
+        };
+        let e = &mut self.neigh[i];
+        e.ip = *ip;
+        e.mac.copy_from_slice(&mac[..6]);
+        e.seen = now.max(1);
+        true
+    }
+
+    /// A station left (deauth / disassoc): release its address bindings (re-review M1 — a client that
+    /// re-joins with a new private MAC must not be refused its own address for 30 min).
+    pub fn forget_mac(&mut self, mac: &[u8; 6]) {
+        for n in self.neigh.iter_mut() {
+            if n.mac == *mac {
+                n.seen = 0;
             }
         }
-        let n = &mut self.neigh[slot];
-        n.ip = *ip;
-        n.mac.copy_from_slice(&mac[..6]);
-        n.seen = now.max(1);
-        true
     }
 
     /// A Neighbor Solicitation for `target` from the router (to its solicited-node multicast) — sent on a
@@ -502,6 +534,18 @@ impl V6Lan {
         }
         let Some(mac) = self.lookup(&dst, now) else {
             self.stats.drop_no_neigh += 1;
+            // At most 1 NS per target per second and 20/s in total (multicast at basic rate costs the
+            // whole BSS airtime; a download to an evicted client must not become an NS storm).
+            if now.wrapping_sub(self.ns_win.0) >= 1000 {
+                self.ns_win = (now, 0);
+            }
+            let recent = self.ns_last.iter().any(|(t, at)| *t == dst && *at != 0 && now.wrapping_sub(*at) < 1000);
+            if recent || self.ns_win.1 >= 20 {
+                return WanAction::Drop;
+            }
+            let k = self.ns_last.iter().enumerate().min_by_key(|(_, e)| e.1).map(|(i, _)| i).unwrap_or(0);
+            self.ns_last[k] = (dst, now.max(1));
+            self.ns_win.1 += 1;
             self.stats.ns_tx += 1;
             return WanAction::Solicit(self.build_ns(&dst, out));
         };

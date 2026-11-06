@@ -287,13 +287,13 @@ static MGMT_FLOOR: core::sync::atomic::AtomicU64 =
     core::sync::atomic::AtomicU64::new(((MGMT_NET as u64) << 8) | MGMT_LEN as u64);
 static MGMT_FLOOR_SET: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Set the management floor to `net/len` (host-order IPv4). `len` 8..=30; anything else is refused
+/// Set the management floor to `net/len` (host-order IPv4). `len` 8..=32; anything else is refused
 /// (an over-broad floor would exempt the whole internet from enforcement). Returns whether it applied.
 pub fn set_mgmt_floor(net: u32, len: u32) -> bool {
-    if !(8..=30).contains(&len) {
+    if !(8..=32).contains(&len) {
         return false;
     }
-    let mask = u32::MAX << (32 - len);
+    let mask = if len == 32 { u32::MAX } else { u32::MAX << (32 - len) };
     MGMT_FLOOR.store((((net & mask) as u64) << 8) | len as u64, core::sync::atomic::Ordering::Relaxed);
     MGMT_FLOOR_SET.store(true, core::sync::atomic::Ordering::Relaxed);
     true
