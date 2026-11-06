@@ -470,7 +470,7 @@ pub fn parse_wan_cfg(buf: &[u8]) -> Result<WanMode, WanCfgErr> {
             b"pppoe_user" => user = Some(v),
             b"pppoe_pass" => pass = Some(v),
             // link-level keys: parsed by parse_wan_link
-            b"vlan" | b"vlan_outer" | b"pcp" | b"mgmt_vlan" | b"mgmt" | b"mgmt_ip" | b"mgmt_gw" => {}
+            b"vlan" | b"vlan_outer" | b"pcp" | b"mgmt_vlan" | b"mgmt" | b"mgmt_ip" | b"mgmt_gw" | b"mgmt_floor" => {}
             _ => return Err(WanCfgErr::BadLine),
         }
     }
@@ -529,6 +529,8 @@ pub struct WanLink {
     pub outer: u16,
     pub pcp: u8,
     pub mgmt: Option<MgmtIf>,
+    /// `mgmt_floor=a.b.c.d/len` — the management allowlist floor (never enforced against), 8..=30.
+    pub floor: Option<([u8; 4], u8)>,
 }
 
 pub fn parse_wan_link(buf: &[u8]) -> Result<WanLink, WanCfgErr> {
@@ -582,6 +584,19 @@ pub fn parse_wan_link(buf: &[u8]) -> Result<WanLink, WanCfgErr> {
                 mip = Some((ip, pl));
             }
             b"mgmt_gw" => mgw = Some(parse_quad(v).ok_or(WanCfgErr::BadAddr)?),
+            b"mgmt_floor" => {
+                let slash = v.iter().position(|&b| b == b'/').ok_or(WanCfgErr::BadPrefix)?;
+                let ip = parse_quad(&v[..slash]).ok_or(WanCfgErr::BadAddr)?;
+                let p = &v[slash + 1..];
+                if p.is_empty() || p.len() > 2 || !p.iter().all(|c| c.is_ascii_digit()) {
+                    return Err(WanCfgErr::BadPrefix);
+                }
+                let pl = p.iter().fold(0u8, |a, &c| a * 10 + (c - b'0'));
+                if !(8..=30).contains(&pl) {
+                    return Err(WanCfgErr::BadPrefix);
+                }
+                l.floor = Some((ip, pl));
+            }
             _ => {}
         }
     }
