@@ -15,6 +15,7 @@ pub const ALL_DHCP: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 
 pub const DHCP6_SOLICIT: u8 = 1;
 pub const DHCP6_ADVERTISE: u8 = 2;
 pub const DHCP6_REQUEST: u8 = 3;
+pub const DHCP6_RENEW: u8 = 5;
 pub const DHCP6_REPLY: u8 = 7;
 
 /// Modified EUI-64 interface identifier from a MAC (RFC 4291 App. A).
@@ -228,6 +229,9 @@ pub struct Dhcp6 {
     /// IA_NA / IAADDR: a WAN global address, if the server assigned one.
     pub has_na: bool,
     pub na: [u8; 16],
+    /// IA_PD T1 / T2 (seconds; 0 = server's choice, 0xffffffff = infinite).
+    pub t1: u32,
+    pub t2: u32,
 }
 
 /// Parse a DHCPv6 server message (bare IPv6, UDP to port 546) for transaction `xid`. Verifies the
@@ -248,7 +252,7 @@ pub fn parse_dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
     if p[1..4] != xid.to_be_bytes()[1..4] {
         return None;
     }
-    let mut d = Dhcp6 { msg: p[0], server_id: [0; 64], sid_len: 0, rapid: false, status: 0, has_pd: false, prefix: [0; 16], plen: 0, preferred: 0, valid: 0, has_dns: false, dns: [0; 16], has_na: false, na: [0; 16] };
+    let mut d = Dhcp6 { msg: p[0], server_id: [0; 64], sid_len: 0, rapid: false, status: 0, has_pd: false, prefix: [0; 16], plen: 0, preferred: 0, valid: 0, has_dns: false, dns: [0; 16], has_na: false, na: [0; 16], t1: 0, t2: 0 };
     let mut o = 4;
     while o + 4 <= p.len() {
         let (code, l) = (u16::from_be_bytes([p[o], p[o + 1]]), u16::from_be_bytes([p[o + 2], p[o + 3]]) as usize);
@@ -282,6 +286,8 @@ pub fn parse_dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
                 }
             }
             25 if l >= 12 => {
+                d.t1 = u32::from_be_bytes([v[4], v[5], v[6], v[7]]);
+                d.t2 = u32::from_be_bytes([v[8], v[9], v[10], v[11]]);
                 let mut q = 12;
                 while q + 4 <= l {
                     let (c2, l2) = (u16::from_be_bytes([v[q], v[q + 1]]), u16::from_be_bytes([v[q + 2], v[q + 3]]) as usize);

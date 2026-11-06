@@ -767,8 +767,18 @@ pub struct Wan6 {
     pub dns: Option<[u8; 16]>,
     pub na: Option<[u8; 16]>,
     pub v6_frames_rx: u32,
+    /// Renewal (RFC 8415 §18.2.4): IA_PD T1 (s), the server that delegated, the transaction, when the
+    /// last Reply arrived (ms), Renews sent / Replies to them.
+    pub t1: u32,
+    pub sid: [u8; 64],
+    pub sid_len: usize,
+    pub xid: u32,
+    pub got_ms: u64,
+    pub renew_tx: u32,
+    pub renew_ok: u32,
+    pub last_renew_ms: u64,
 }
-pub static mut WAN6: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0 };
+pub static mut WAN6: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0, t1: 0, sid: [0; 64], sid_len: 0, xid: 0, got_ms: 0, renew_tx: 0, renew_ok: 0, last_renew_ms: 0 };
 
 /// IPv6 seen on the LIVE session (whole uptime, not just the 12-s probe): every v6 datagram and every
 /// Router Advertisement from the ISP — answers "does Digi ever send an RA?" — plus WAN v6 TX outcomes.
@@ -786,7 +796,7 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
     let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
     // Fresh state per dial (peer review COR-M3): a re-dial used to find reply=true from the last session,
     // skip RS/DHCPv6 entirely, and keep advertising the OLD delegated prefix on the LAN.
-    *w = Wan6 { ran: true, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0 };
+    *w = Wan6 { ran: true, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0, t1: 0, sid: [0; 64], sid_len: 0, xid: 0, got_ms: 0, renew_tx: 0, renew_ok: 0, last_renew_ms: 0 };
     let cap = cntpct() + ticks_ms(12_000);
     let mut buf = [0u8; 2048];
     let mut tx = Tx::new();
@@ -883,6 +893,16 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
                 next_dhcp = 0; // Request now
             } else if d.msg == ip6::DHCP6_REPLY {
                 w.reply = true;
+                w.t1 = d.t1;
+                w.sid_len = sid_len.max(d.sid_len);
+                if d.sid_len > 0 {
+                    w.sid[..d.sid_len].copy_from_slice(&d.server_id[..d.sid_len]);
+                    w.sid_len = d.sid_len;
+                } else {
+                    w.sid[..sid_len].copy_from_slice(&sid[..sid_len]);
+                }
+                w.xid = xid;
+                w.got_ms = ms_now();
                 if d.has_pd {
                     w.pd = Some((d.prefix, d.plen, d.valid));
                 }
@@ -891,6 +911,41 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
                 }
             }
         }
+    }
+}
+
+/// DHCPv6 prefix-delegation RENEWAL (RFC 8415 §18.2.4; peer review COR-M3): at T1 after the last Reply,
+/// send a Renew for the delegated prefix to the server that granted it, repeated at most every 10 s until
+/// a Reply refreshes it (pppoe_poll). T1 = 0 (server's choice) -> renew at half the valid lifetime;
+/// T1 = infinite (Digi) -> never. Call from the serve loop; cheap when nothing is due.
+pub fn wan6_tick(up: &UplinkResult) {
+    if up.mode != 2 {
+        return;
+    }
+    let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
+    let Some((pfx, plen, valid)) = w.pd else { return };
+    let t1 = if w.t1 == 0 { valid / 2 } else { w.t1 };
+    if t1 == u32::MAX || valid == u32::MAX && w.t1 == 0 || w.sid_len == 0 {
+        return;
+    }
+    let now = ms_now();
+    if now.wrapping_sub(w.got_ms) < t1 as u64 * 1000 || (w.last_renew_ms != 0 && now.wrapping_sub(w.last_renew_ms) < 10_000) {
+        return;
+    }
+    unsafe {
+        let Some(e) = (*core::ptr::addr_of!(PPP)).as_ref() else { return };
+        if !e.ip6_up {
+            return;
+        }
+        let iaid = u32::from_be_bytes([up.mac[2], up.mac[3], up.mac[4], up.mac[5]]);
+        let mut pkt = [0u8; 400];
+        let n = crate::ip6::build_dhcp6(crate::ip6::DHCP6_RENEW, w.xid, &up.mac, &e.my_iid, iaid, &w.sid[..w.sid_len], Some((&pfx, plen)), false, &mut pkt);
+        let sc = &mut *core::ptr::addr_of_mut!(PPP_SCRATCH);
+        if let Some(en) = e.encap_ipv6(&pkt[..n], sc) {
+            let _ = nic_tx(up.nic, &sc[..en]);
+            w.renew_tx += 1;
+        }
+        w.last_renew_ms = now.max(1);
     }
 }
 
@@ -989,6 +1044,19 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         // Session IPv6 -> an Ethernet/IPv6 frame (dst = us, src = the AC) for the LAN v6 router.
         if let Some(ip6) = e.decap_ipv6(&buf[..n]) {
             WAN6_LIVE[0] += 1;
+            // A Reply to our Renew: refresh the delegation (and the T1 clock).
+            let w = &mut *core::ptr::addr_of_mut!(WAN6);
+            if w.pd.is_some() && w.renew_tx > 0 {
+                if let Some(d) = crate::ip6::parse_dhcp6(ip6, w.xid) {
+                    if d.msg == crate::ip6::DHCP6_REPLY && d.has_pd && d.status == 0 {
+                        w.pd = Some((d.prefix, d.plen, d.valid));
+                        w.t1 = d.t1;
+                        w.got_ms = ms_now();
+                        w.renew_ok += 1;
+                        return WanEvent::Idle;
+                    }
+                }
+            }
             if let Some(ra) = crate::ip6::parse_ra(ip6) {
                 WAN6_LIVE[1] += 1;
                 if WAN6_FIRST_RA.is_none() {
