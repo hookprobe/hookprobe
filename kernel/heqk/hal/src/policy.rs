@@ -833,6 +833,27 @@ pub fn facts(f: &[u8]) -> Option<Pkt> {
     Some(Pkt { proto, src, dst, dport })
 }
 
+/// uRPF-style MARTIAN check for an IPv4 source arriving on the internet sub-interface (RFC 1812 §5.3.7 +
+/// our own addresses). True = the source is impossible from the WAN, i.e. spoofed: `0.0.0.0/8`,
+/// `127/8`, multicast / class E / broadcast, OUR WAN address, OUR inside LAN /24, and the management
+/// floor `floor_net/floor_len` — unless that floor also covers the WAN address itself (DHCP behind a
+/// LAN where the operator genuinely arrives via the WAN). Peer re-review P2: the floor (never enforced
+/// against) is keyed on the source IP, so a spoofed floor source from the internet must never get it.
+pub fn wan_martian4(src: [u8; 4], wan_ip: [u8; 4], inside: [u8; 3], floor_net: u32, floor_len: u32) -> bool {
+    let s = u32::from_be_bytes(src);
+    if src[0] == 0 || src[0] == 127 || src[0] >= 224 || src == wan_ip || src[..3] == inside {
+        return true;
+    }
+    if (8..=32).contains(&floor_len) {
+        let mask = if floor_len == 32 { u32::MAX } else { u32::MAX << (32 - floor_len) };
+        let w = u32::from_be_bytes(wan_ip);
+        if s & mask == floor_net & mask && w & mask != floor_net & mask {
+            return true;
+        }
+    }
+    false
+}
+
 // ---------------------------------------------------------------- WAN link encapsulation
 
 /// How a WAN sub-interface is framed on the wire (WAN.TXT `vlan=` / `vlan_outer=` + the mode).
