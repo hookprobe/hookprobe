@@ -2896,12 +2896,14 @@ fn cm5_p10_probe() {
                                     let e = hal::policy::Encap { vlan: l.vlan, outer: l.outer, pcp: l.pcp, pppoe: matches!(wan_mode, hal::WanMode::Pppoe { .. }) };
                                     kprint!(" [LINK] internet sub-interface: vlan={} outer={} pcp={} -> IP MTU {} (frame {} B{}) | mgmt: {}\n",
                                         l.vlan, l.outer, l.pcp, e.ip_mtu(), e.frame_max(), if e.tag_len() > 0 { ", jumbo gate opened" } else { "" },
-                                        match l.mgmt { None => "none", Some(hal::MgmtIf { stat: None, .. }) => "vlan DHCP (NOT BUILT YET — management stays down)", Some(_) => "vlan static" });
+                                        match l.mgmt { None => "none", Some(hal::MgmtIf { stat: None, .. }) => "vlan DHCP", Some(_) => "vlan static" });
                                     if let Some(mg) = l.mgmt {
                                         if uplink::mgmt_configure(&mg) {
-                                            let (ip, pl, gw) = mg.stat.unwrap();
-                                            kprint!(" [LINK] management sub-interface: vlan {} {}.{}.{}.{}/{} gw {}.{}.{}.{} (ARP, ping under the `mgmt in` policy)\n",
-                                                mg.vlan, ip[0], ip[1], ip[2], ip[3], pl, gw[0], gw[1], gw[2], gw[3]);
+                                            match mg.stat {
+                                                Some((ip, pl, gw)) => kprint!(" [LINK] management sub-interface: vlan {} {}.{}.{}.{}/{} gw {}.{}.{}.{} (ARP, ping under the `mgmt in` policy)\n",
+                                                    mg.vlan, ip[0], ip[1], ip[2], ip[3], pl, gw[0], gw[1], gw[2], gw[3]),
+                                                None => kprint!(" [LINK] management sub-interface: vlan {} DHCP (DORA on the management VLAN; ARP, ping under the `mgmt in` policy once bound)\n", mg.vlan),
+                                            }
                                         }
                                     }
                                 }
@@ -3915,6 +3917,9 @@ fn cm5_p10_probe() {
                                                     kprint!("   [P11-AP3 mgmt] {}.{}.{}.{} gw {}.{}.{}.{} resolved={} | arp answered={} arp sent={} ping ok={} blocked={} dropped={} up(NAT)={} other={}\n",
                                                         mg.ip[0], mg.ip[1], mg.ip[2], mg.ip[3], mg.gw[0], mg.gw[1], mg.gw[2], mg.gw[3], mg.gw_mac.is_some(),
                                                         mg.stats[0], mg.stats[1], mg.stats[2], mg.stats[3], mg.stats[4], mg.stats[5], mg.stats[6]);
+                                                    if let Some(d) = mg.dhcp {
+                                                        kprint!("   [P11-AP3 mgmt] dhcp phase={} (0 discover / 1 request / 2 bound) /{} lease={}s acks={} naks={}\n", d.phase, mg.prefix, d.lease_s, d.acks, d.naks);
+                                                    }
                                                 }
                                             }
                                             {
@@ -12699,7 +12704,10 @@ route 2001:db8:1::/48 via mgmt
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=100\nmgmt_vlan=100\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan_outer=10\n").is_err()
         && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nvlan=4095\n").is_err()
-        && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\n") == Ok(hal::WanLink::default());
+        && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\n") == Ok(hal::WanLink::default())
+        && hal::parse_wan_link(b"HQWAN1\nmode=pppoe\npppoe_user=u\nvlan=35\nmgmt_vlan=200\nmgmt=dhcp\n")
+            == Ok(hal::WanLink { vlan: 35, outer: 0, pcp: 0, mgmt: Some(hal::MgmtIf { vlan: 200, stat: None }) })
+        && hal::parse_wan_link(b"HQWAN1\nmode=dhcp\nmgmt_vlan=200\nmgmt=bootp\n").is_err();
     // tag stack + MTU from the headers
     let e = Encap { vlan: 100, outer: 10, pcp: 3, pppoe: true };
     let mut f = [0u8; 32];

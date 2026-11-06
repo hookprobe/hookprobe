@@ -172,6 +172,8 @@ pub struct Mgmt {
     /// Next hops other than the default gateway (routes `via mgmt gw X`): a small ARP cache.
     pub nh: [([u8; 4], [u8; 6]); 4],
     nh_last_arp: u64,
+    /// `mgmt=dhcp`: the client state. None = static address.
+    pub dhcp: Option<MgmtDhcp>,
     /// [ARP answered, gateway ARP sent, ping answered, ping blocked, ping dropped, handed up (NAT), dropped]
     pub stats: [u32; 7],
 }
@@ -180,11 +182,97 @@ pub static mut MGMT: Option<Mgmt> = None;
 pub fn mgmt_configure(m: &hal::MgmtIf) -> bool {
     match m.stat {
         Some((ip, prefix, gw)) => {
-            unsafe { MGMT = Some(Mgmt { ip, prefix, gw, gw_mac: None, mac: END0_MAC, last_arp: 0, nh: [([0; 4], [0; 6]); 4], nh_last_arp: 0, stats: [0; 7] }) };
+            unsafe { MGMT = Some(Mgmt { ip, prefix, gw, gw_mac: None, mac: END0_MAC, last_arp: 0, nh: [([0; 4], [0; 6]); 4], nh_last_arp: 0, dhcp: None, stats: [0; 7] }) };
             true
         }
-        None => false, // DHCP on the management VLAN: not built yet (reported by the caller)
+        None => {
+            // `mgmt=dhcp`: no address until the DORA on the management VLAN completes (mgmt_poll).
+            let xid = (cntpct() as u32 ^ 0x6d67_6d74).to_be_bytes();
+            unsafe {
+                MGMT = Some(Mgmt {
+                    ip: [0; 4], prefix: 0, gw: [0; 4], gw_mac: None, mac: END0_MAC, last_arp: 0,
+                    nh: [([0; 4], [0; 6]); 4], nh_last_arp: 0,
+                    dhcp: Some(MgmtDhcp { phase: 0, xid, offer: [0; 4], server: [0; 4], last_tx: 0, bound_at: 0, lease_s: 0, acks: 0, naks: 0 }),
+                    stats: [0; 7],
+                })
+            };
+            true
+        }
     }
+}
+
+/// DHCP client state of the management sub-interface (`mgmt=dhcp`).
+#[derive(Clone, Copy, Debug)]
+pub struct MgmtDhcp {
+    /// 0 = discovering, 1 = requesting the offer, 2 = bound.
+    pub phase: u8,
+    xid: [u8; 4],
+    offer: [u8; 4],
+    server: [u8; 4],
+    last_tx: u64,
+    bound_at: u64,
+    pub lease_s: u32,
+    pub acks: u32,
+    pub naks: u32,
+}
+
+/// Non-blocking DHCP client step for the management sub-interface: (re)transmit DISCOVER/REQUEST every
+/// 2 s; renew (REQUEST the bound address) at T1 = lease/2. `rx` = a received management frame, if any.
+/// Returns true if `rx` was a DHCP reply consumed here.
+fn mgmt_dhcp_step(m: &mut Mgmt, rx: Option<&[u8]>, now: u64) -> bool {
+    let Some(mut d) = m.dhcp else { return false };
+    let mut consumed = false;
+    if let Some(f) = rx {
+        let mut r = DhcpResult::new();
+        let mt = parse_dhcp_reply(f, &d.xid, &m.mac, &mut r);
+        if mt != 0 {
+            consumed = true;
+            match mt {
+                2 if d.phase == 0 => {
+                    d.offer = r.yiaddr;
+                    d.server = r.server;
+                    d.phase = 1;
+                    d.last_tx = 0; // REQUEST now
+                }
+                5 if d.phase >= 1 => {
+                    let mask = u32::from_be_bytes(r.mask);
+                    m.ip = r.yiaddr;
+                    m.prefix = if mask == 0 { 24 } else { mask.count_ones() as u8 };
+                    if r.router != m.gw {
+                        m.gw_mac = None; // a new gateway: resolve it again
+                    }
+                    m.gw = r.router;
+                    d.lease_s = if r.lease == 0 { 3600 } else { r.lease };
+                    d.bound_at = now;
+                    d.phase = 2;
+                    d.acks += 1;
+                }
+                6 => {
+                    d.naks += 1;
+                    d.phase = 0;
+                    d.last_tx = 0;
+                    m.ip = [0; 4];
+                    m.gw_mac = None;
+                }
+                _ => {}
+            }
+        }
+    }
+    // Renewal at T1 (lease/2): REQUEST the bound address again (a NAK restarts DORA).
+    if d.phase == 2 && now.wrapping_sub(d.bound_at) >= (d.lease_s as u64 / 2) * 1000 {
+        d.phase = 1;
+        d.offer = m.ip;
+        d.last_tx = 0;
+    }
+    if d.phase < 2 && (d.last_tx == 0 || now.wrapping_sub(d.last_tx) >= 2000) {
+        let mut o = [0u8; 600];
+        let none = [0u8; 4];
+        let n = if d.phase == 0 { build_dhcp(&mut o, &m.mac, &d.xid, 1, &none, &none) } else { build_dhcp(&mut o, &m.mac, &d.xid, 3, &d.offer, &d.server) };
+        let _ = mgmt_tx(&o[..n]);
+        d.last_tx = now.max(1);
+    }
+    m.dhcp = Some(d);
+    consumed
 }
 
 /// MAC of next hop `ip` on the management sub-interface: the default gateway or a cached one; on a
@@ -238,13 +326,38 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
     let Some(m) = (unsafe { (*core::ptr::addr_of_mut!(MGMT)).as_mut() }) else { return MgmtEvent::Idle };
     let mut o = [0u8; 1600];
     let now = ms_now();
-    if m.gw_mac.is_none() && now.wrapping_sub(m.last_arp) >= 2000 {
+    // `mgmt=dhcp`: no address yet (or renewing) — run the client; replies are consumed there.
+    if m.dhcp.is_some() {
+        let got = mgmt_rx(buf);
+        let consumed = mgmt_dhcp_step(m, got.map(|n| &buf[..n]), now);
+        if m.ip == [0; 4] {
+            return MgmtEvent::Idle; // nothing else is served without an address
+        }
+        if consumed || got.is_none() {
+            return MgmtEvent::Idle;
+        }
+        // a non-DHCP frame while bound: fall through with it
+        return mgmt_frame(m, buf, got.unwrap(), now, decide, &mut o);
+    }
+    if m.gw_mac.is_none() && m.ip != [0; 4] && now.wrapping_sub(m.last_arp) >= 2000 {
         m.last_arp = now;
         let n = arp_frame(&mut o, 1, &m.mac, &m.ip, &[0; 6], &m.gw, &[0xff; 6]);
         let _ = mgmt_tx(&o[..n]);
         m.stats[1] += 1;
     }
     let Some(n) = mgmt_rx(buf) else { return MgmtEvent::Idle };
+    mgmt_frame(m, buf, n, now, decide, &mut o)
+}
+
+/// One received management frame (untagged, `buf[..n]`): ARP, ping under `decide`, else handed up.
+fn mgmt_frame(m: &mut Mgmt, buf: &mut [u8], n: usize, now: u64, decide: &mut dyn FnMut(&[u8]) -> hal::policy::Act, o: &mut [u8; 1600]) -> MgmtEvent {
+    use hal::policy::Act;
+    if m.gw_mac.is_none() && m.ip != [0; 4] && now.wrapping_sub(m.last_arp) >= 2000 {
+        m.last_arp = now;
+        let k = arp_frame(o, 1, &m.mac, &m.ip, &[0; 6], &m.gw, &[0xff; 6]);
+        let _ = mgmt_tx(&o[..k]);
+        m.stats[1] += 1;
+    }
     if n >= 42 && buf[12..14] == [0x08, 0x06] {
         let op = u16::from_be_bytes([buf[20], buf[21]]);
         let (smac, sip, tip) = (&buf[22..28], &buf[28..32], &buf[38..42]);
@@ -252,7 +365,7 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
             let (mut sm, mut si) = ([0u8; 6], [0u8; 4]);
             sm.copy_from_slice(smac);
             si.copy_from_slice(sip);
-            let k = arp_frame(&mut o, 2, &m.mac, &m.ip, &sm, &si, &sm);
+            let k = arp_frame(&mut o[..], 2, &m.mac, &m.ip, &sm, &si, &sm);
             let _ = mgmt_tx(&o[..k]);
             m.stats[0] += 1;
         }
@@ -307,7 +420,7 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
                 m.stats[2] += 1;
             }
             Act::Block => {
-                if let Some(k) = crate::reject::reject4(&buf[..n], &m.ip, &m.mac, &mut o) {
+                if let Some(k) = crate::reject::reject4(&buf[..n], &m.ip, &m.mac, &mut o[..]) {
                     let _ = mgmt_tx(&o[..k]);
                 }
                 m.stats[3] += 1;
@@ -351,7 +464,12 @@ fn end0_rx(out: &mut [u8]) -> Option<usize> {
             // other hosts' unicast on the management VLAN never occupy the queue (it filled at boot, metal
             // 2026-11-05: mgmtq full=18).
             let is_arp = n >= 14 && out[12] == 0x08 && out[13] == 0x06;
-            if !(is_arp || out[0..6] == END0_MAC) {
+            // DHCP replies may be broadcast (bootp broadcast flag): UDP to port 68.
+            let is_dhcp = n >= 42 && out[12] == 0x08 && out[13] == 0x00 && out[23] == 17 && {
+                let l4 = 14 + ((out[14] & 0x0f) as usize) * 4;
+                l4 + 4 <= n && out[l4 + 2] == 0 && out[l4 + 3] == 68
+            };
+            if !(is_arp || is_dhcp || out[0..6] == END0_MAC) {
                 continue;
             }
             unsafe {
