@@ -25,10 +25,13 @@ the EL0 target and interoperates (TLS 1.3, X25519, ECDSA) — using `rustls-rust
 | `chacha20poly1305` 0.10 (already vendored) | record AEAD | NCC Group review (published 2020), no significant findings |
 | `x25519-dalek` 2 / `curve25519-dalek` (already vendored) | key exchange | Quarkslab 2019 review of the dalek libraries, minor issues — predates the 4.x line in use |
 | `p256` / `ecdsa` (new) | certificate signing | **No full independent audit** (crate docs disclaim one); a scoped zkSecurity 2025 review of field/group arithmetic + verification at one older commit. Signing path not covered → open risk, tracked |
-| `sha2` / `hmac` / `hkdf` | key schedule | to verify before release |
+| `sha2` / `hmac` (HKDF is rustls' generic `HkdfUsingHmac`) | key schedule | **No published independent audit found** (checked 2026-11-07); very widely deployed. Open risk, tracked |
+| `ml-kem` 0.2 (already vendored) | hybrid KEX (X25519MLKEM768) | **No independent audit found**; conflicting third-party claims. The formally verified alternative is libcrux ML-KEM (hax/F* proofs, also not independently audited). The X25519 half keeps the hybrid at least classically secure if ML-KEM fails |
 
-- PQC: hybrid `X25519MLKEM768` is a follow-up (ML-KEM-768 is already vendored, `[P19-pqc-kat]`); until then the
-  CBOM reports classical X25519 for Mission Control TLS.
+- PQC: **hybrid `X25519MLKEM768` (0x11EC) is preferred** (built 2026-11-07): ML-KEM-768 encapsulation via the
+  vendored `ml-kem` (entropy from the kernel pool), the client's encapsulation key passes the FIPS 203 §7.2
+  modulus check first, shared secret = ML-KEM ‖ X25519. Clients without it (OpenSSL 3.0) fall back to X25519.
+  Chromium 141 negotiates the hybrid against this provider. **[realized: QEMU + host interop]**
 
 ### D2 — Browser trust = a local CA, name-constrained to the device **[vision]**
 
@@ -79,6 +82,19 @@ fails closed, is restarted; forwarding/IPS unaffected).
   renders live data incl. the SSE stream. 0 EL0 faults / panics in the serial log.
 - **Open**: flasher-side CA + one-time root install UX (task #20); `p256` signing review; hybrid
   X25519MLKEM768; `sha2`/`hmac`/`hkdf` audit check; HTTP keep-alive (each request is a new TLS session today).
+
+## P-256 signing — usage review (2026-11-07)
+
+What the device signs: only the TLS 1.3 `CertificateVerify` transcript hash, with an SRK-derived key that lives
+in the EL0 server's heap (never on disk, never in the kernel). Properties of the path as used:
+- **Nonce:** RFC 6979 deterministic (`p256::ecdsa::SigningKey::try_sign`) — no dependence on the entropy pool,
+  so a weak or failed RNG cannot cause nonce reuse (the classic ECDSA key-recovery failure).
+- **Encoding:** DER, as TLS requires; the scheme is fixed to `ecdsa_secp256r1_sha256` (nothing else offered).
+- **Timing:** the crate aims for constant-time scalar arithmetic but documents that this is not thoroughly
+  assessed; signing is reachable by any network client that can open a handshake. Mitigations available if
+  a review finds leakage: rate-limit handshakes per source (the kernel already counts them), or move signing
+  to a constant-time-verified implementation. **Open risk, tracked** — a focused review of the signing path
+  (scalar mult + inversion) is the remaining action.
 
 ## Consequences
 

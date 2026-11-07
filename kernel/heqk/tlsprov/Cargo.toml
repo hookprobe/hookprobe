@@ -16,7 +16,9 @@ chacha20poly1305 = { version = "0.10", default-features = false }
 x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
 sha2 = { version = "0.10", default-features = false }
 hmac = { version = "0.12", default-features = false }
+ml-kem = { version = "0.2", default-features = false, features = ["deterministic"] }
 p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
 
 [dev-dependencies]
+kem = "=0.3.0-pre.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }

@@ -33,6 +33,11 @@ pub struct Req<'a> {
     pub body: &'a [u8],
     /// The `Host` header (for the :80 -> https redirect); empty if absent or not a plain host[:port].
     pub host: &'a str,
+    /// The client wants the connection kept open (HTTP/1.1 without `Connection: close`).
+    pub keep_alive: bool,
+    /// Bytes of the input this request occupies (header block + body) — anything after it is the next
+    /// (pipelined) request and must be kept.
+    pub consumed: usize,
 }
 
 /// Largest accepted request body (the login form; nothing else posts).
@@ -68,6 +73,7 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
     };
     let mut session = None;
     let mut host = "";
+    let mut conn_close = false;
     let mut clen = 0usize;
     for h in head.split("\r\n").skip(1) {
         let Some((k, v)) = h.split_once(':') else { continue };
@@ -89,6 +95,8 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
             }
         } else if k.eq_ignore_ascii_case("content-length") {
             clen = v.parse().map_err(|_| ParseErr::Bad)?;
+        } else if k.eq_ignore_ascii_case("connection") {
+            conn_close = v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close"));
         }
     }
     if clen > MAX_BODY {
@@ -99,7 +107,8 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
         return Err(ParseErr::Incomplete);
     }
     let body = &buf[body_start..body_start + clen];
-    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host })
+    let keep_alive = version == "HTTP/1.1" && !conn_close;
+    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host, keep_alive, consumed: body_start + clen })
 }
 
 /// `key=<u32>` from a query string.
@@ -297,6 +306,16 @@ pub fn write_head(resp: &Response, out: &mut [u8]) -> usize {
 
 /// `write_head` for a response travelling over TLS: the session cookie gains `Secure` (ADR 0051 D4).
 pub fn write_head_tls(resp: &Response, out: &mut [u8], secure: bool) -> usize {
+    write_head_ka(resp, out, secure, false)
+}
+
+/// Idle seconds a kept-alive connection may wait for its next request, and requests per connection.
+pub const KEEPALIVE_SECS: u64 = 15;
+pub const KEEPALIVE_MAX: u16 = 100;
+
+/// `write_head_tls` that keeps the connection open after a sized body when `keep` (HTTP keep-alive):
+/// the next request reuses the TCP connection — and, over HTTPS, the TLS session.
+pub fn write_head_ka(resp: &Response, out: &mut [u8], secure: bool, keep: bool) -> usize {
     use core::fmt::Write;
     let mut w = JsonBuf::new(out);
     // No CORS header: the UI is same-origin (served by this device), and the session cookie must
@@ -312,7 +331,11 @@ pub fn write_head_tls(resp: &Response, out: &mut [u8], secure: bool) -> usize {
     }
     match resp.body_len() {
         Some(n) => {
-            let _ = write!(w, "Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", n);
+            if keep {
+                let _ = write!(w, "Content-Length: {}\r\nCache-Control: no-store\r\nConnection: keep-alive\r\nKeep-Alive: timeout={}, max={}\r\n\r\n", n, KEEPALIVE_SECS, KEEPALIVE_MAX);
+            } else {
+                let _ = write!(w, "Content-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n", n);
+            }
         }
         None => w.raw("Cache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n"),
     }
@@ -511,10 +534,22 @@ pub fn mc_selftest() -> bool {
         let sec = has(&hh[..a], "Max-Age=43200; Secure\r\n");
         let b = write_head_tls(&login, &mut hh, false);
         let plain = !has(&hh[..b], "Secure");
-        red && v6 && bad && sec && plain
+        // keep-alive (HTTP/1.1 default, Connection: close / HTTP/1.0 end it; `consumed` spans head + body so a
+        // pipelined next request survives; the header advertises the limits only when kept)
+        let two = b"POST /api/login HTTP/1.1\r\nContent-Length: 5\r\n\r\nabcdeGET / HTTP/1.1\r\n\r\n";
+        let ka = parse(two).map_or(false, |r| r.keep_alive && r.consumed == two.len() - 18 && r.body == b"abcde")
+            && parse(b"GET / HTTP/1.1\r\nConnection: Close\r\n\r\n").map_or(false, |r| !r.keep_alive)
+            && parse(b"GET / HTTP/1.0\r\n\r\n").map_or(false, |r| !r.keep_alive)
+            && parse(b"GET / HTTP/1.1\r\nConnection: keep-alive, Upgrade\r\n\r\n").map_or(false, |r| r.keep_alive);
+        let h1 = handle(&parse(b"GET /api/health HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 0, || Some([0; 16]), &mut scratch);
+        let k = write_head_ka(&h1, &mut hh, false, true);
+        let kept = has(&hh[..k], "Connection: keep-alive\r\nKeep-Alive: timeout=15, max=100\r\n");
+        let c = write_head_ka(&h1, &mut hh, false, false);
+        let closed = has(&hh[..c], "Connection: close\r\n") && !has(&hh[..c], "Keep-Alive");
+        red && v6 && bad && sec && plain && ka && kept && closed
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;
-    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS)={} (ui assets embedded: {})\n",
+    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS) + keep-alive(1.1 default, close/1.0 end it, pipelined bytes kept, limits advertised)={} (ui assets embedded: {})\n",
         if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, time_ok, tls_ok, UI_ASSETS.len());
     pass
 }

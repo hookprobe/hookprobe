@@ -154,6 +154,13 @@ DT=$(curl "${C[@]}" -b "$JAR2" "$BS/api/detections?limit=20")
 echo "$DT" | jget "any(x['rule_id']==1200001 for x in d['detections'])" | grep -q True && ok "attack during TLS service still dropped + detected, visible over https" || bad "detections over https: $DT"
 echo | timeout 20 openssl s_client -connect "$HOST:$HTTPS" -servername heqk.local -tls1_3 -ciphersuites TLS_AES_256_GCM_SHA384 2>&1 | grep -q "Cipher is (NONE)" \
   && ok "a client offering only AES-GCM is refused (one-suite policy)" || bad "AES-GCM-only client was not refused"
+# A handshake flood is rate-limited (ADR 0051): 80 new sessions as fast as possible — some refused, none crash it.
+FP=(); for _ in $(seq 1 80); do curl "${C[@]}" -o /dev/null -m 5 "$BS/api/health" 2>/dev/null & FP+=($!); done; wait "${FP[@]}" 2>/dev/null
+sleep 2
+HSF=$(curl "${C[@]}" "$BS/api/health")
+[ "$(echo "$HSF" | jget "d['substrate']")" = heqk ] && ok "after 80 simultaneous connections (most abandoned) HTTPS still serves — no slot left pinned" || bad "https after connection flood: $HSF"
+KA=$(curl "${C[@]}" -v -o /dev/null -o /dev/null "$BS/api/health" "$BS/api/health" 2>&1)
+echo "$KA" | grep -qi "Re-using existing connection" && ok "keep-alive: two https requests share one connection (one TLS handshake)" || bad "https keep-alive not reused"
 head -c 3000 /dev/urandom | timeout 10 nc -q 2 "$HOST" "$HTTPS" >/dev/null 2>&1
 HS2=$(curl "${C[@]}" "$BS/api/health")
 [ "$(echo "$HS2" | jget "d['substrate']")" = heqk ] && ok "garbage on :443 fails that connection only — HTTPS keeps serving" || bad "https after garbage: $HS2"
@@ -165,6 +172,12 @@ sleep 11
 TH=$(tr -d '\r' < "$LOG2" | grep -a "MC-TLS hb" | tail -1)
 echo "        $TH"
 echo "$TH" | grep -q "timeouts=0 faults=0" && echo "$TH" | grep -Eq "handshakes=[1-9]" && ok "TLS server: handshakes counted, no watchdog timeout, no EL0 fault" || bad "TLS server counters: $TH"
+TS=$(tr -d '\r' < "$LOG2" | grep -a "MC-TLS slots" | tail -1)
+echo "        $TS"
+echo "$TS" | grep -Eq "slots\] (L ){8}" && ok "every HTTPS slot back in Listen after the flood" || bad "HTTPS slots not recycled: $TS"
+if [ "$BROWSER" = ran ]; then
+  echo "$TH" | grep -Eq "pq_hybrid=[1-9]" && ok "the browser negotiated hybrid post-quantum X25519MLKEM768 with the device" || bad "no X25519MLKEM768 handshake from the browser: $TH"
+fi
 LOG="$LOG2"; rm -rf "$TLSD" "$JAR2"
 
 echo

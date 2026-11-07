@@ -146,10 +146,11 @@ enum Src {
 
 #[derive(Clone, Copy)]
 enum Conn {
-    /// Accumulating the request header block.
-    Reading { got: usize },
+    /// Accumulating the request header block. `since` = when this wait began (0 = not yet started — the
+    /// keep-alive idle clock); `served` = requests already answered on this connection.
+    Reading { got: usize, since: u64, served: u16 },
     /// Streaming head (in `head`) then body.
-    Sending { hlen: usize, hoff: usize, body: Src, boff: usize },
+    Sending { hlen: usize, hoff: usize, body: Src, boff: usize, keep: bool, carry: usize, served: u16 },
     /// Long-lived SSE stream.
     Sse { last_change: u64, last_ping_ms: u64 },
 }
@@ -332,7 +333,7 @@ impl McNode {
             sockets.add(u)
         };
         Some(McNode {
-            iface, sockets, handles, conns: [Conn::Reading { got: 0 }; ALL], tls_open: [false; TLS_N], tls_hs: [false; TLS_N], dhcp, mac, ip, leased: dhcp.is_none(), gw,
+            iface, sockets, handles, conns: [Conn::Reading { got: 0, since: 0, served: 0 }; ALL], tls_open: [false; TLS_N], tls_hs: [false; TLS_N], dhcp, mac, ip, leased: dhcp.is_none(), gw,
             ntp: Sntp { sock: ntp_sock, nonce: 0, rng: seed | 1, server: None, next_ms: 0, tries: 0, synced_once: false, result: None },
         })
     }
@@ -394,9 +395,14 @@ impl McNode {
         for i in 0..CONNS {
             let Some(h) = self.handles[i] else { continue };
             let s = self.sockets.get_mut::<tcp::Socket>(h);
+            // A slot in TIME-WAIT has already exchanged FINs; holding it for the 2*MSL timer only starves
+            // the listener pool under bursts — recycle it straight to Listen.
+            if s.state() == tcp::State::TimeWait {
+                s.abort();
+            }
             if !s.is_open() {
                 let _ = s.listen(HTTP_PORT);
-                self.conns[i] = Conn::Reading { got: 0 };
+                self.conns[i] = Conn::Reading { got: 0, since: 0, served: 0 };
                 continue;
             }
             serve_conn(i, &mut Plain(s), &mut self.conns[i], st, now_ms as u64);
@@ -583,10 +589,16 @@ pub fn run() -> ! {
             last_hb = now;
             let (lost, gated) = node.tx_stats();
             #[cfg(feature = "mctls")]
+            {
+                let mut ss = [0u8; TLS_N * 2];
+                node.tls_slot_states(&mut ss);
+                kprint!(" [MC-TLS slots] {}\n", core::str::from_utf8(&ss).unwrap_or("?"));
+            }
+            #[cfg(feature = "mctls")]
             if let Some(h) = crate::tlshost::host() {
                 let t = unsafe { TLS_STATS };
-                kprint!(" [MC-TLS hb] ready={} calls={} handshakes={} records_out={} failed_closed={} tls_errors={} timeouts={} faults={} restarts={}\n",
-                    h.ready, h.calls, t[0], t[1], t[2], h.tls_errors, h.timeouts, h.faults, h.restarts);
+                kprint!(" [MC-TLS hb] ready={} calls={} handshakes={} pq_hybrid={} records_out={} failed_closed={} rate_limited={} tls_errors={} timeouts={} faults={} restarts={}\n",
+                    h.ready, h.calls, t[0], t[3], t[1], t[2], t[4], h.tls_errors, h.timeouts, h.faults, h.restarts);
             }
             kprint!(" [MC hb] seen={} passed={} dropped={} detections={} qsecbit_raw={} rules_active={} tx_lost={} egress_gated={}\n",
                 st.seen, st.forwarded, st.dropped, st.detections(), telemetry::score(), crate::rules::active_rules(), lost, gated);
@@ -600,13 +612,28 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
     let head = unsafe { &mut HEAD[i] };
     let scratch = unsafe { &mut SCRATCH_BUF[i] };
     match *c {
-        Conn::Reading { got } => {
-            if !s.may_recv() {
+        Conn::Reading { got, since, served } => {
+            // Keep-alive idle clock: a connection waiting too long for its next request is closed (HTTPS
+            // has only TLS_N slots — idle browsers must not pin them).
+            let since = if since == 0 { now_ms.max(1) } else { since };
+            if now_ms.saturating_sub(since) > http::KEEPALIVE_SECS * 1000 {
+                s.close();
+                *c = Conn::Reading { got: 0, since: 0, served: 0 };
                 return;
             }
-            let n = s.recv(&mut req[got..]);
+            if !s.may_recv() && got == 0 {
+                if s.peer_closed() {
+                    s.close(); // the client ended a kept-alive connection
+                    *c = Conn::Reading { got: 0, since: 0, served: 0 };
+                } else {
+                    *c = Conn::Reading { got, since, served };
+                }
+                return;
+            }
+            // (A carried-over pipelined request is parsed even when no new bytes arrived.)
+            let n = if s.may_recv() { s.recv(&mut req[got..]) } else { 0 };
             let got = got + n;
-            *c = Conn::Reading { got };
+            *c = Conn::Reading { got, since, served };
             match http::parse(&req[..got]) {
                 Err(http::ParseErr::Incomplete) => {}
                 Err(http::ParseErr::Bad) => {
@@ -621,10 +648,16 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
                         return;
                     }
                     let resp = http::handle(&r, st, auth(), now_ms, rand16, &mut scratch[..]);
-                    let hlen = http::write_head_tls(&resp, &mut head[..], s.secure());
+                    let keep = r.keep_alive && served + 1 < http::KEEPALIVE_MAX && !matches!(resp.body, Body::Sse);
+                    let consumed = r.consumed.min(got);
+                    let hlen = http::write_head_ka(&resp, &mut head[..], s.secure(), keep);
+                    // Bytes after this request are the next (pipelined) one: keep them at the buffer start.
+                    req.copy_within(consumed..got, 0);
+                    let carry = got - consumed;
+                    let served = served + 1;
                     *c = match resp.body {
-                        Body::Static(b) => Conn::Sending { hlen, hoff: 0, body: Src::Static(b), boff: 0 },
-                        Body::Scratch(n) => Conn::Sending { hlen, hoff: 0, body: Src::Scratch(n), boff: 0 },
+                        Body::Static(b) => Conn::Sending { hlen, hoff: 0, body: Src::Static(b), boff: 0, keep, carry, served },
+                        Body::Scratch(n) => Conn::Sending { hlen, hoff: 0, body: Src::Scratch(n), boff: 0, keep, carry, served },
                         Body::Sse => {
                             let _ = s.send(&head[..hlen]);
                             Conn::Sse { last_change: u64::MAX, last_ping_ms: now_ms }
@@ -633,7 +666,7 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
                 }
             }
         }
-        Conn::Sending { hlen, mut hoff, body, mut boff } => {
+        Conn::Sending { hlen, mut hoff, body, mut boff, keep, carry, served } => {
             if hoff < hlen {
                 hoff += s.send(&head[hoff..hlen]);
             }
@@ -646,10 +679,15 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
                     boff += s.send(&src[boff..]);
                 }
                 if boff >= src.len() {
+                    if keep {
+                        // Response complete: wait for the next request on the same connection.
+                        *c = Conn::Reading { got: carry, since: now_ms.max(1), served };
+                        return;
+                    }
                     s.close(); // FIN after the queued bytes drain
                 }
             }
-            *c = Conn::Sending { hlen, hoff, body, boff };
+            *c = Conn::Sending { hlen, hoff, body, boff, keep, carry, served };
         }
         Conn::Sse { last_change, last_ping_ms } => {
             if !s.may_send() {
@@ -682,6 +720,10 @@ trait Pipe {
     fn close(&mut self);
     /// The pipe is TLS (cookies get `Secure`; no https redirect).
     fn secure(&self) -> bool {
+        false
+    }
+    /// The client closed its sending side (FIN) — a kept-alive connection can be released now.
+    fn peer_closed(&self) -> bool {
         false
     }
 }
@@ -718,6 +760,10 @@ impl Pipe for Plain<'_, '_> {
     fn close(&mut self) {
         self.0.close()
     }
+    fn peer_closed(&self) -> bool {
+        // FIN received (a LISTENING socket also has !may_recv — it must never be closed here).
+        self.0.state() == tcp::State::CloseWait
+    }
 }
 
 #[cfg(feature = "mctls")]
@@ -731,8 +777,35 @@ mod tls_side {
     pub(super) static mut RXN: [usize; TLS_N] = [0; TLS_N];
     /// Ciphertext staging between the EL0 server's IO region and the socket.
     pub(super) static mut CT: [u8; OUT_TLS_MAX] = [0; OUT_TLS_MAX];
-    /// TLS-side counters for the heartbeat: [handshakes, records out, sessions failed closed].
-    pub static mut STATS: [u32; 3] = [0; 3];
+    /// TLS-side counters for the heartbeat: [handshakes, records out, sessions failed closed, of the
+    /// handshakes: hybrid post-quantum X25519MLKEM768].
+    pub static mut STATS: [u32; 5] = [0; 5]; // [4] = new sessions refused by the handshake rate limit
+
+    /// Handshake rate limit (ADR 0051): every handshake costs an ECDSA signature + ML-KEM work and is a
+    /// timing sample of the signing key; a browser with keep-alive needs a handful. Token bucket over all
+    /// clients: BURST sessions, refilled at RATE per second; an empty bucket refuses the new session.
+    pub(super) const HS_BURST: u32 = 32;
+    pub(super) const HS_RATE: u32 = 16;
+    pub(super) static mut HS_TOKENS: u32 = HS_BURST;
+    pub(super) static mut HS_LAST_MS: i64 = 0;
+
+    #[allow(static_mut_refs)]
+    pub(super) fn hs_take(now_ms: i64) -> bool {
+        unsafe {
+            let dt = now_ms.saturating_sub(HS_LAST_MS).max(0) as u64;
+            let add = (dt * HS_RATE as u64 / 1000) as u32;
+            if add > 0 {
+                HS_TOKENS = (HS_TOKENS + add).min(HS_BURST);
+                HS_LAST_MS = now_ms;
+            }
+            if HS_TOKENS == 0 {
+                STATS[4] += 1;
+                return false;
+            }
+            HS_TOKENS -= 1;
+            true
+        }
+    }
 
     /// Copy the server's OUT_TLS bytes onto the socket. False if the socket could not take all of them
     /// (a partial TLS record on the wire would corrupt the stream — the caller aborts instead).
@@ -814,6 +887,31 @@ pub use tls_side::STATS as TLS_STATS;
 
 #[cfg(feature = "mctls")]
 impl McNode {
+    /// Diagnostics: one letter per HTTPS slot — L listen, S syn-recv, E established, W close-wait,
+    /// F fin-wait, C closing/last-ack, T time-wait, X closed, - none; uppercase+'*' = TLS session open.
+    pub fn tls_slot_states(&mut self, out: &mut [u8; TLS_N * 2]) {
+        for k in 0..TLS_N {
+            let (c, open) = match self.handles[CONNS + k] {
+                None => (b'-', false),
+                Some(h) => {
+                    let st = self.sockets.get_mut::<tcp::Socket>(h).state();
+                    (match st {
+                        tcp::State::Listen => b'L',
+                        tcp::State::SynReceived | tcp::State::SynSent => b'S',
+                        tcp::State::Established => b'E',
+                        tcp::State::CloseWait => b'W',
+                        tcp::State::FinWait1 | tcp::State::FinWait2 => b'F',
+                        tcp::State::Closing | tcp::State::LastAck => b'C',
+                        tcp::State::TimeWait => b'T',
+                        tcp::State::Closed => b'X',
+                    }, self.tls_open[k])
+                }
+            };
+            out[k * 2] = c;
+            out[k * 2 + 1] = if open { b'*' } else { b' ' };
+        }
+    }
+
     /// One HTTPS slot per iteration: accept → OPEN; ciphertext → RECV (handshake / app data out, plaintext
     /// staged); then the same `serve_conn` as plain HTTP over the TLS pipe. Any TLS failure aborts that
     /// connection only (ADR 0050 D5).
@@ -827,6 +925,27 @@ impl McNode {
         let secs = st.epoch_at_ms(now_ms as u64) / 1000;
         let s = self.sockets.get_mut::<tcp::Socket>(h);
         let Some(th) = host() else { return };
+        if s.state() == tcp::State::TimeWait {
+            s.abort(); // recycle (see the plain-HTTP loop)
+        }
+        // The client went away (FIN) before / between requests: release the TLS session and the slot now
+        // instead of waiting for the idle clock — a burst of abandoned connections must not pin all slots.
+        // A connection that never got a TLS session and is already past Established (the client gave up —
+        // its FIN arrived with or before the ClientHello) can never be served: drop it now, unread data and
+        // all (metal/QEMU flood 2026-11-07: all 8 slots pinned in CloseWait this way).
+        if !self.tls_open[k]
+            && !matches!(s.state(), tcp::State::Listen | tcp::State::SynReceived | tcp::State::Established | tcp::State::Closed)
+        {
+            s.abort();
+        }
+        // With a session open: answer whatever the client sent before its FIN, then release.
+        if self.tls_open[k] && s.state() == tcp::State::CloseWait && !s.can_recv() && unsafe { RXN[k] } == 0
+            && matches!(self.conns[i], Conn::Reading { got: 0, .. })
+        {
+            let _ = th.call(CMD_CLOSE, k, &[], secs);
+            self.tls_open[k] = false;
+            s.close();
+        }
         if !s.is_open() {
             if self.tls_open[k] {
                 let _ = th.call(CMD_CLOSE, k, &[], secs);
@@ -834,14 +953,14 @@ impl McNode {
             }
             unsafe { RXN[k] = 0 };
             let _ = s.listen(HTTPS_PORT);
-            self.conns[i] = Conn::Reading { got: 0 };
+            self.conns[i] = Conn::Reading { got: 0, since: 0, served: 0 };
             return;
         }
         if !self.tls_open[k] {
             if s.state() != tcp::State::Established {
                 return;
             }
-            if th.call(CMD_OPEN, k, &[], secs).status != ST_OK {
+            if !hs_take(now_ms) || th.call(CMD_OPEN, k, &[], secs).status != ST_OK {
                 s.abort();
                 return;
             }
@@ -866,6 +985,9 @@ impl McNode {
             if r.flags & F_HANDSHAKE_DONE != 0 && !self.tls_hs[k] {
                 self.tls_hs[k] = true; // counted once per session
                 unsafe { STATS[0] += 1 };
+                if r.flags & F_PQ != 0 {
+                    unsafe { STATS[3] += 1 };
+                }
             }
             if r.plain_len > 0 {
                 let (rx, rn) = unsafe { (&mut RX[k], &mut RXN[k]) };
