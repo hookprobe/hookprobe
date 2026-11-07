@@ -105,6 +105,37 @@ pub struct Det {
     pub sev_points: u8,
     pub verdict: u8,
     pub class: u8,
+    /// Wall-clock-anchored row (restored from a prior boot): a clock step never moves it.
+    pub abs: bool,
+}
+
+/// No real reply can predate this build era (2026-01-01T00:00:00Z): an older time is a forged or
+/// unsynchronised server and is refused.
+pub const NTP_FLOOR_UNIX: u64 = 1_767_225_600;
+
+/// Validate one SNTP reply against our request: server mode (4), not "alarm" (LI 3), stratum
+/// 1..=15, the Originate Timestamp equal to the nonce we sent (RFC 4330 §5 — an off-path
+/// forger cannot guess it), a non-zero Transmit Timestamp, and a time at or after the build
+/// floor. Returns the Transmit Timestamp in Unix milliseconds.
+pub fn sntp_parse_strict(r: &[u8], nonce: u64) -> Option<u64> {
+    if r.len() < 48 || nonce == 0 {
+        return None;
+    }
+    let (li, mode, stratum) = (r[0] >> 6, r[0] & 7, r[1]);
+    if mode != 4 || li == 3 || stratum == 0 || stratum > 15 {
+        return None;
+    }
+    let orig = u64::from_be_bytes([r[24], r[25], r[26], r[27], r[28], r[29], r[30], r[31]]);
+    if orig != nonce {
+        return None;
+    }
+    let secs = u32::from_be_bytes([r[40], r[41], r[42], r[43]]) as u64;
+    let frac = u32::from_be_bytes([r[44], r[45], r[46], r[47]]) as u64;
+    let unix = secs.checked_sub(2_208_988_800)?;
+    if unix < NTP_FLOOR_UNIX {
+        return None;
+    }
+    Some(unix * 1000 + (frac * 1000 >> 32))
 }
 
 /// The device's Mission Control state. One instance, owned by the serve loop.
@@ -131,12 +162,18 @@ pub struct McState {
     /// Deployment mode truth for the UI badge: true only while the MSSP control-plane session is
     /// Established (set by the serve loop from `ControlPlane::established()`); otherwise standalone.
     pub cloud_linked: bool,
+    /// True once a validated SNTP reply has set the wall clock (the UI shows "unsynced" otherwise).
+    pub clock_synced: bool,
 }
+
+/// A wall-clock re-sync larger than this is refused once the clock is synced (a forged reply can
+/// not drag the timeline by days; the first sync has nothing better to compare against).
+pub const MAX_RESYNC_STEP_MS: i64 = 3_600_000;
 
 impl McState {
     pub const fn new() -> Self {
         McState {
-            dets: [Det { seq: 0, ts_ms: 0, src: 0, rule_id: 0, sev_points: 0, verdict: 0, class: 0 }; DET_CAP],
+            dets: [Det { seq: 0, ts_ms: 0, src: 0, rule_id: 0, sev_points: 0, verdict: 0, class: 0, abs: false }; DET_CAP],
             dhead: 0,
             dlen: 0,
             next_seq: 0,
@@ -154,6 +191,7 @@ impl McState {
             forwarded: 0,
             change: 0,
             cloud_linked: false,
+            clock_synced: false,
         }
     }
 
@@ -164,6 +202,31 @@ impl McState {
         self.cntfrq = cntfrq.max(1);
     }
 
+    /// Set the wall clock from a validated time source: `epoch_ms` is true at `now_ticks`. Every
+    /// timestamp already recorded (detections, QSecBit history) moves by the same step, so
+    /// pre-sync rows land at their real time instead of 1970. Returns the step, or `None` when a
+    /// re-sync would step more than `MAX_RESYNC_STEP_MS` (refused, clock unchanged).
+    pub fn sync_clock(&mut self, epoch_ms: u64, now_ticks: u64) -> Option<i64> {
+        let step = epoch_ms as i64 - self.epoch_ms(now_ticks) as i64;
+        if self.clock_synced && step.abs() > MAX_RESYNC_STEP_MS {
+            return None;
+        }
+        let mv = |t: u64| (t as i64).saturating_add(step).max(0) as u64;
+        self.boot_epoch_ms = mv(self.boot_epoch_ms);
+        for d in self.dets.iter_mut().filter(|d| !d.abs) {
+            d.ts_ms = mv(d.ts_ms);
+        }
+        for q in self.qs.iter_mut() {
+            q.0 = mv(q.0);
+        }
+        for r in self.raw.iter_mut() {
+            r.0 = mv(r.0);
+        }
+        self.clock_synced = true;
+        self.change += 1;
+        Some(step)
+    }
+
     pub fn epoch_ms(&self, ticks: u64) -> u64 {
         let dt = ticks.saturating_sub(self.boot_ticks);
         self.boot_epoch_ms + dt / self.cntfrq * 1000 + (dt % self.cntfrq) * 1000 / self.cntfrq
@@ -171,14 +234,26 @@ impl McState {
 
     /// Record one drained SOAR event (the oldest is overwritten at capacity).
     pub fn push_event(&mut self, ev: &events::Event) {
+        let ms = self.epoch_ms(ev.ts);
+        self.push_at(ev, ms, false);
+    }
+
+    /// Restore one prior-boot detection at its persisted wall-clock time (D1: the UI's detection
+    /// list survives a reboot). Call before live events so restored rows are the oldest.
+    pub fn push_restored(&mut self, ev: &events::Event, epoch_ms: u64) {
+        self.push_at(ev, epoch_ms, true);
+    }
+
+    fn push_at(&mut self, ev: &events::Event, ts_ms: u64, abs: bool) {
         let d = Det {
             seq: self.next_seq,
-            ts_ms: self.epoch_ms(ev.ts),
+            ts_ms,
             src: ev.src,
             rule_id: ev.rule_id,
             sev_points: ev.severity,
             verdict: ev.verdict,
             class: ev.class,
+            abs,
         };
         self.next_seq += 1;
         self.dets[(self.dhead + self.dlen) % DET_CAP] = d;
@@ -188,6 +263,11 @@ impl McState {
             self.dhead = (self.dhead + 1) % DET_CAP;
         }
         self.change += 1;
+    }
+
+    /// The `i`-th newest detection's timestamp (epoch ms) — for the self-tests.
+    pub fn health_ts(&self, i: usize) -> Option<u64> {
+        self.newest(i).map(|d| d.ts_ms)
     }
 
     pub fn detections(&self) -> usize {
