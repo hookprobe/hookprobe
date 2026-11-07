@@ -1,0 +1,142 @@
+# =============================================================================
+# autoheal.yml — the L2 heal loop on GitHub (ADR 0048).
+#
+#   red run ──► triage (deterministic classify, dedup issue per signature)
+#                 ├─ rerun    → re-run the failed jobs once (transient infra / TCG budget)
+#                 ├─ autofix  → agent fixes in an isolated autofix/* branch; guard + gate
+#                 │             re-run must pass; result = DRAFT PR (a human merges)
+#                 └─ human    → the issue IS the escalation (secret, licence, wiring, unknown)
+#
+# Guardrails: default-branch failures only for autofix (PR authors own their PRs; they get the
+# classification as an issue); max 2 attempts per signature; a spend cap per attempt; the
+# autofix guard (tools/ci/heal/autofix_guard.py) also runs on the autofix PR in ci.yml.
+# Autofix needs secrets.ANTHROPIC_API_KEY; without it the loop degrades to triage + rerun.
+# Optional secrets.AUTOFIX_TOKEN (a GitHub App / fine-grained token): PRs opened with the
+# default GITHUB_TOKEN do NOT trigger ci.yml, so the draft PR's own gates need that token.
+#
+# SECURITY: workflow_run runs with secrets → only trusted DEFAULT-branch code executes here;
+# the failing run's logs are data. Fork runs are ignored entirely.
+# =============================================================================
+name: autoheal
+
+on:
+  workflow_run:
+    workflows: [ci, nightly, build-heqk, secrets-scan]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autoheal-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      issues: write
+    outputs:
+      action: ${{ steps.t.outputs.action }}
+      gate: ${{ steps.t.outputs.gate }}
+      signature: ${{ steps.t.outputs.signature }}
+      attempts: ${{ steps.t.outputs.attempts }}
+      issue: ${{ steps.t.outputs.issue }}
+      is_default_branch: ${{ steps.t.outputs.is_default_branch }}
+      run_attempt: ${{ steps.t.outputs.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4      # default branch: trusted code only
+      - id: t
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 tools/ci/heal/triage_run.py --repo "${{ github.repository }}" --run-id "${{ github.event.workflow_run.id }}"
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: autoheal-triage, path: out/ci/triage, if-no-files-found: ignore }
+
+  rerun:
+    needs: triage
+    if: needs.triage.outputs.action == 'rerun' && needs.triage.outputs.run_attempt == '1'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run rerun "${{ github.event.workflow_run.id }}" --failed --repo "${{ github.repository }}"
+
+  autofix:
+    needs: triage
+    if: >-
+      needs.triage.outputs.action == 'autofix' &&
+      needs.triage.outputs.is_default_branch == 'true' &&
+      fromJSON(needs.triage.outputs.attempts) < 2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    env:
+      CI_STRICT: "1"
+      HEQK_QEMU_TIMEOUT: "900"
+      HEAL_MAX_BUDGET_USD: "5"
+    steps:
+      - name: Require an agent key (otherwise triage-only)
+        id: key
+        env: { K: "${{ secrets.ANTHROPIC_API_KEY }}" }
+        run: |
+          if [ -z "$K" ]; then echo "no ANTHROPIC_API_KEY secret — heal loop stays triage + rerun"; echo "ok=false" >> "$GITHUB_OUTPUT"
+          else echo "ok=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.key.outputs.ok == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          token: ${{ secrets.AUTOFIX_TOKEN || github.token }}
+      - if: steps.key.outputs.ok == 'true'
+        uses: dtolnay/rust-toolchain@stable
+      - if: steps.key.outputs.ok == 'true'
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools, clippy
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - if: steps.key.outputs.ok == 'true'
+        uses: taiki-e/install-action@v2
+        with: { tool: cargo-deny }
+      - if: steps.key.outputs.ok == 'true'
+        uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - if: steps.key.outputs.ok == 'true'
+        name: Tooling (QEMU, Claude Code CLI)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools
+          npm install -g @anthropic-ai/claude-code
+      - if: steps.key.outputs.ok == 'true'
+        name: Heal (reproduce → agent in isolated worktree → guard → gate re-run → draft PR)
+        id: heal
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GH_TOKEN: ${{ secrets.AUTOFIX_TOKEN || github.token }}
+        run: |
+          git config user.name "hookprobe-autofix"; git config user.email "autofix@users.noreply.github.com"
+          set +e
+          python3 tools/ci/heal/heal.py --gates "${{ needs.triage.outputs.gate }}" --agent claude \
+            --max-attempts 1 --push --pr-base "${{ github.event.repository.default_branch }}"
+          echo "rc=$?" >> "$GITHUB_OUTPUT"
+      - if: always() && steps.key.outputs.ok == 'true' && needs.triage.outputs.issue != ''
+        name: Record the attempt on the signature's issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { echo "<!-- autofix-attempt -->"; echo "**Autofix attempt** (run ${{ github.run_id }}):"; echo
+            cat out/ci/heal/report.md 2>/dev/null || echo "(no heal report — see the run logs)"; } > /tmp/attempt.md
+          gh issue comment "${{ needs.triage.outputs.issue }}" --repo "${{ github.repository }}" --body-file /tmp/attempt.md
+      - if: always() && steps.key.outputs.ok == 'true'
+        uses: actions/upload-artifact@v4
+        with: { name: autoheal-heal, path: out/ci/heal, if-no-files-found: ignore }

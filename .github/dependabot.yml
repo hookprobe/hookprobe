@@ -1,0 +1,38 @@
+# Root Dependabot config (ADR 0048 L3 — Watch). GitHub ONLY reads this file at the repo root:
+# the old os/kernel/.github/dependabot.yml was inert after the 2026-11-07 merge. G0
+# (tools/ci/g0_wiring.py W5) fails if any lockfile in tools/ci/lockfiles.txt is not covered here.
+# Every Dependabot PR runs the full ci.yml gate spine; a red one is picked up by autoheal.yml.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule: { interval: "weekly", day: "monday" }
+    labels: ["dependencies", "github-actions"]
+    commit-message: { prefix: "chore(deps)", include: "scope" }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "cargo"
+    directories:
+      - "/os/kernel"
+      - "/os/kernel/tlsprov"
+      - "/os/kernel/el0-tlshost"
+      - "/os/kernel/el0-wasmhost"
+      - "/os/kernel/wasip1-fixture"
+      - "/os/build/heqk-sign"
+      - "/onboarding/enrollment/responder-sim"
+    schedule: { interval: "weekly", day: "monday" }
+    labels: ["dependencies", "rust"]
+    commit-message: { prefix: "chore(deps)", include: "scope" }
+    open-pull-requests-limit: 10
+    groups:
+      rustcrypto:
+        patterns: ["p256", "ecdsa", "elliptic-curve", "crypto-bigint", "sha2", "hmac", "digest", "chacha20poly1305", "ml-kem", "x25519-dalek"]
+
+  - package-ecosystem: "npm"
+    directories:
+      - "/os/mission-control"
+      - "/os/kernel/tools/mc-e2e"
+    schedule: { interval: "weekly", day: "monday" }
+    labels: ["dependencies", "javascript"]
+    commit-message: { prefix: "chore(deps)", include: "scope" }
+    open-pull-requests-limit: 5

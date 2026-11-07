@@ -1,0 +1,91 @@
+# =============================================================================
+# release.yml — L4 Release (ADR 0048, ADR 0012, ADR 0046 key custody).
+#
+# A `v*` tag builds the release CANDIDATE and STOPS before signing:
+#   gates  g0 g1 g4 + reproducibility (g4r) must be green on the tagged commit
+#   build  the shipped CM5 profile (`prod-mc`: heqk + embedded Mission Control)
+#   prove  SBOM (CycloneDX) + SLSA build provenance attestation + sha256 manifest
+#   draft  a DRAFT GitHub release with the UNSIGNED candidate + SIGNING-CHECKLIST.md
+#
+# Signing is Red tier: heqk boot signing (Ed25519 + SLH-DSA, os/build/heqk-sign) needs
+# the offline operator KEYDIR, which never exists in CI (ADR 0046 D4). The operator
+# downloads the candidate, verifies provenance, signs offline, and attaches heqk8.img.
+# Rollout then follows the rings (canary → ring → fleet, ADR 0012).
+# =============================================================================
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CI_STRICT: "1"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  gates:
+    name: "release gates (g0 g1 g4 g4r)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools, clippy
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-deny }
+      - uses: anchore/sbom-action/download-syft@v0
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - run: tools/ci/gates.sh g0 g1 g4 g4r
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: release-gates, path: out/ci, if-no-files-found: ignore }
+
+  candidate:
+    name: "build unsigned candidate + provenance"
+    needs: gates
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write        # draft release
+      id-token: write        # keyless provenance attestation (Sigstore)
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - uses: anchore/sbom-action/download-syft@v0
+      - name: Build the shipped CM5 profile (prod-mc)
+        run: |
+          (cd os/mission-control && npm ci --no-audit --no-fund && PUBLIC_API_BASE='' npm run build)
+          (cd os/kernel && cargo build -p kernel --features prod-mc --release)
+          mkdir -p dist-release
+          cp os/kernel/target/aarch64-unknown-none-softfloat/release/kernel "dist-release/heqk-${GITHUB_REF_NAME}-prod-mc.elf"
+          syft scan dir:. -q -o "cyclonedx-json=dist-release/sbom-${GITHUB_REF_NAME}.cdx.json"
+          (cd dist-release && sha256sum * > SHA256SUMS)
+          cat > dist-release/SIGNING-CHECKLIST.md <<EOF
+          # Release ${GITHUB_REF_NAME} — operator signing checklist (Red tier, offline)
+          1. \`gh attestation verify dist-release/heqk-${GITHUB_REF_NAME}-prod-mc.elf --repo ${GITHUB_REPOSITORY}\`
+          2. \`sha256sum -c SHA256SUMS\`; rebuild locally and compare (tools/ci/repro.sh).
+          3. Sign offline: \`os/build/make-cm5-heqk-image.sh\` with the operator HEQK_KEYDIR (never in CI).
+          4. Attach heqk8.img + signature; publish to the canary ring first (ADR 0012).
+          EOF
+      - uses: actions/attest-build-provenance@v2
+        with: { subject-path: "dist-release/heqk-*.elf" }
+      - name: Draft release (unsigned candidate — never auto-published)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist-release/* --draft --verify-tag \
+            --title "HookProbe OS $GITHUB_REF_NAME (candidate — awaiting offline signing)" \
+            --notes-file dist-release/SIGNING-CHECKLIST.md
