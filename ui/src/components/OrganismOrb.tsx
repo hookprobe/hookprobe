@@ -77,8 +77,9 @@ const OrganismOrb: Component = () => {
           <defs>
             {/* Green → purple gradient matches the color language */}
             <linearGradient id="orbGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%"   stop-color="#00B4FF" />
-              <stop offset="100%" stop-color="#00FF9D" />
+              {/* Status colors (pill bands): green protected, amber attention, red under attack */}
+              <stop offset="0%"   stop-color={protectionStatus() === 'protected' ? '#00B4FF' : protectionStatus() === 'needs-attention' ? '#ff7a00' : '#c0392b'} />
+              <stop offset="100%" stop-color={protectionStatus() === 'protected' ? '#00FF9D' : protectionStatus() === 'needs-attention' ? '#ffaa00' : '#FF6B6B'} />
             </linearGradient>
           </defs>
 
@@ -161,7 +162,7 @@ const OrganismOrb: Component = () => {
               <polyline
                 points={sparkPoints()}
                 fill="none"
-                stroke="#00FF9D"
+                stroke={protectionStatus() === 'protected' ? '#00FF9D' : protectionStatus() === 'needs-attention' ? '#ffaa00' : '#FF6B6B'}
                 stroke-width="1.6"
                 stroke-linecap="round"
                 stroke-linejoin="round"
