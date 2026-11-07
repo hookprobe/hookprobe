@@ -1,4 +1,4 @@
-# Root Dependabot config (ADR 0048 L3 — Watch). GitHub ONLY reads this file at the repo root:
+# Root Dependabot config (ADR 0052 L3 — Watch). GitHub ONLY reads this file at the repo root:
 # the old os/kernel/.github/dependabot.yml was inert after the 2026-11-07 merge. G0
 # (tools/ci/g0_wiring.py W5) fails if any lockfile in tools/ci/lockfiles.txt is not covered here.
 # Every Dependabot PR runs the full ci.yml gate spine; a red one is picked up by autoheal.yml.

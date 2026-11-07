@@ -12231,7 +12231,7 @@ fn p3_user_demo() {
 /// SAFETY contract: called ONLY from the `lower_sync_entry` asm vector stub, with `frame` pointing at
 /// the 34-word register frame that stub just pushed on the current kernel stack (always valid, aligned,
 /// exclusively owned for the duration of the call). No Rust code calls it, so the raw-pointer argument
-/// is an ABI fact, not an API — hence the scoped clippy allow rather than an `unsafe fn` (ADR 0048 G1).
+/// is an ABI fact, not an API — hence the scoped clippy allow rather than an `unsafe fn` (ADR 0052 G1).
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {

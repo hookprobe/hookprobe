@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L5 Learn — fold CI gate results into the Product Cortex lifecycle log (ADR 0048, ADR 0013).
+"""L5 Learn — fold CI gate results into the Product Cortex lifecycle log (ADR 0052, ADR 0013).
 
 The dev-time hooks (.claude/hooks/cortex_emit.py) already record intent → change → gate for
 interactive sessions. This closes the other half: every CI / nightly / heal run becomes

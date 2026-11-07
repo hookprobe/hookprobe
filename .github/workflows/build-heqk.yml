@@ -99,7 +99,7 @@ jobs:
         run: |
           set -euo pipefail
           # prod/prod-mc embed the licensed CYW43455 firmware (gitignored): stage the sha256-pinned
-          # blob first, or a fresh runner cannot compile the shipped flavour at all (ADR 0048).
+          # blob first, or a fresh runner cannot compile the shipped flavour at all (ADR 0052).
           ../../tools/ci/stage-firmware.sh
           cargo build -p kernel --features prod --release
           # prod-mc = THE production CM5 profile (ADR 0047: Mission Control served by heqk on the
