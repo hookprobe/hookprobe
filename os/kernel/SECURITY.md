@@ -287,7 +287,7 @@ cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).tx
 
 #### Complete GDPR Documentation
 
-📖 **[GDPR.md](GDPR.md)** - Comprehensive compliance guide including:
+📖 **[GDPR.md](../../legacy/v1/docs/GDPR.md)** - Comprehensive compliance guide including:
 - Detailed data inventory
 - Legal basis justification
 - Privacy by design implementation
@@ -316,7 +316,7 @@ cat /var/log/hookprobe/compliance-reports/compliance-report-$(date +%Y-%m-%d).tx
 
 #### Contact
 
-- **GDPR Documentation**: [GDPR.md](GDPR.md)
+- **GDPR Documentation**: [GDPR.md](../../legacy/v1/docs/GDPR.md)
 - **Data Protection Officer**: qsecbit@hookprobe.com
 - **Security Contact**: qsecbit@hookprobe.com
 
