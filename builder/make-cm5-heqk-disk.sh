@@ -40,6 +40,8 @@ OWNER_TOKEN=""
 WAN_FILE=""
 POLICY_FILE=""
 MCTLS_FILE=""
+POLICY_KEY=""
+POLICY_GEN="1"
 while [ $# -gt 0 ]; do
   case "$1" in
     --zero-linux) ZERO_LINUX=1 ;;
@@ -48,7 +50,9 @@ while [ $# -gt 0 ]; do
     --wan-file) WAN_FILE="$2"; shift ;;
     --policy-file) POLICY_FILE="$2"; shift ;;
     --mctls-file) MCTLS_FILE="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT]" >&2; exit 2 ;;
+    --policy-key) POLICY_KEY="$2"; shift ;;
+    --policy-gen) POLICY_GEN="$2"; shift ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -72,6 +76,15 @@ case ",$FEATURES," in
     fi ;;
 esac
 
+# ADR 0049 D1 — an operator policy key: its PUBLIC half is compiled into the boot-signed kernel (the device
+# then refuses any POLICY.TXT not signed by it), and this image's generation becomes the anti-rollback floor.
+if [ -n "$POLICY_KEY" ]; then
+  HEQK_POLICY_PUBKEY="$(python3 -I "$HEQK/tools/policy-sign.py" pubkey "$POLICY_KEY")" || { echo "FATAL: --policy-key unreadable"; exit 1; }
+  export HEQK_POLICY_PUBKEY HEQK_POLICY_GEN_FLOOR="$POLICY_GEN"
+  echo "   operator policy key ${HEQK_POLICY_PUBKEY:0:16}… compiled in, generation floor $POLICY_GEN"
+else
+  unset HEQK_POLICY_PUBKEY HEQK_POLICY_GEN_FLOOR
+fi
 echo "== [factory] 2/5 build + hybrid-sign the boot set (make-cm5-heqk-image.sh, FEATURES=$FEATURES)"
 # Job-PRIVATE image dir + cargo target dir: never write the shared cm5-boot/ or target/ that
 # other builders/sessions flash from (a shared path once swapped another session's slot A).
@@ -183,6 +196,9 @@ if len(body) > 4096:
 open(dst, "wb").write(body + b"\n" * (4096 - len(body)))
 PY
 [ "$(stat -c %s "$STAGE/POLICY.TXT")" = 4096 ] || { echo "FATAL: POLICY.TXT must be exactly 4096 bytes"; exit 1; }
+if [ -n "$POLICY_KEY" ]; then
+  python3 -I "$HEQK/tools/policy-sign.py" sign "$POLICY_KEY" "$STAGE/POLICY.TXT" "$POLICY_GEN" "$STAGE/POLICY.SIG" >/dev/null || { echo "FATAL: signing POLICY.TXT failed"; exit 1; }
+fi
 # MCTLS.CRT — the Mission Control HTTPS certificate (ADR 0051): fixed 4096 B so the flasher patches it in
 # place. Default = all zeros (unprovisioned: the device publishes its SRK-derived key and serves HTTP only);
 # --mctls-file = a chain made by kernel/heqk/tools/mctls-provision.py for THIS device's key. Public data only.
@@ -195,7 +211,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none

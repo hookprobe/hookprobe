@@ -260,6 +260,8 @@ pub struct Policy {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PolicyErr {
+    /// ADR 0049 D1: an operator key is set and the signature is missing / invalid / rolled back.
+    Unsigned,
     NoMagic,
     /// (1-based line number) — anything malformed rejects the WHOLE file: a policy is never
     /// half-applied (a half-parsed ACL set could open what the operator meant to close). The caller
