@@ -1,7 +1,7 @@
 //! heqk's thin rustls `CryptoProvider` (ADR 0051 D1).
 //!
-//! Server-only, TLS 1.3 only, exactly one cipher suite (`TLS13_CHACHA20_POLY1305_SHA256`), X25519 key
-//! exchange and an ECDSA P-256/SHA-256 signing key. Everything here is glue between rustls' provider traits
+//! Server-only, TLS 1.3 only, exactly one cipher suite (`TLS13_CHACHA20_POLY1305_SHA256`), hybrid
+//! post-quantum `X25519MLKEM768` (preferred) or X25519 key exchange and an ECDSA P-256/SHA-256 signing key. Everything here is glue between rustls' provider traits
 //! and RustCrypto / dalek primitives — no cryptographic algorithm is implemented in this crate.
 //!
 //! Entropy is injected by the host (`set_rng`): on heqk the EL0 TLS server passes a function backed by the
@@ -277,6 +277,76 @@ impl ActiveKeyExchange for X25519Active {
 
 static X25519_GROUP: X25519 = X25519;
 
+// ------------------------------------------------------------------ X25519MLKEM768 (hybrid, server side)
+
+/// The IETF hybrid `X25519MLKEM768` (0x11EC; draft-ietf-tls-ecdhe-mlkem): client share = ML-KEM-768
+/// encapsulation key (1184 B) ‖ X25519 (32 B); server share = ML-KEM ciphertext (1088 B) ‖ X25519 (32 B);
+/// shared secret = ML-KEM secret ‖ X25519 secret. Server role only (a KEM is completed in one step).
+#[derive(Debug)]
+struct X25519MlKem768;
+
+const MLKEM_EK: usize = 1184;
+const MLKEM_CT: usize = 1088;
+
+/// FIPS 203 §7.2 encapsulation-key check: every 12-bit coefficient of the encoded t-hat (the first
+/// 1152 bytes) must be < q = 3329 (ByteEncode12(ByteDecode12(ek)) == ek).
+fn mlkem_ek_ok(ek: &[u8]) -> bool {
+    if ek.len() != MLKEM_EK {
+        return false;
+    }
+    ek[..1152].chunks_exact(3).all(|b| {
+        let a = b[0] as u16 | ((b[1] as u16 & 0x0f) << 8);
+        let c = (b[1] as u16 >> 4) | ((b[2] as u16) << 4);
+        a < 3329 && c < 3329
+    })
+}
+
+impl SupportedKxGroup for X25519MlKem768 {
+    fn start(&self) -> Result<Box<dyn ActiveKeyExchange>, Error> {
+        // Never the initiator: this provider is server-only.
+        Err(Error::General("X25519MLKEM768: server role only".into()))
+    }
+    fn start_and_complete(&self, client_share: &[u8]) -> Result<rustls::crypto::CompletedKeyExchange, Error> {
+        use ml_kem::{EncapsulateDeterministic, EncodedSizeUser, KemCore, MlKem768};
+        if client_share.len() != MLKEM_EK + 32 || !mlkem_ek_ok(&client_share[..MLKEM_EK]) {
+            return Err(PeerMisbehaved::InvalidKeyShare.into());
+        }
+        let (ek_bytes, x_peer) = client_share.split_at(MLKEM_EK);
+        let ek_arr = ml_kem::Encoded::<<MlKem768 as KemCore>::EncapsulationKey>::try_from(ek_bytes)
+            .map_err(|_| PeerMisbehaved::InvalidKeyShare)?;
+        let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&ek_arr);
+        let mut m = [0u8; 32];
+        Rng.fill(&mut m).map_err(|_| Error::FailedToGetRandomBytes)?;
+        let (ct, kem_ss) = ek
+            .encapsulate_deterministic(&m.into())
+            .map_err(|_| Error::General("ML-KEM encapsulate".into()))?;
+        m.fill(0);
+        // X25519 half (same contributory check as the plain group).
+        let mut seed = [0u8; 32];
+        Rng.fill(&mut seed).map_err(|_| Error::FailedToGetRandomBytes)?;
+        let secret = x25519_dalek::StaticSecret::from(seed);
+        seed.fill(0);
+        let our_x = x25519_dalek::PublicKey::from(&secret).to_bytes();
+        let peer: [u8; 32] = x_peer.try_into().map_err(|_| PeerMisbehaved::InvalidKeyShare)?;
+        let xss = secret.diffie_hellman(&x25519_dalek::PublicKey::from(peer));
+        if !xss.was_contributory() {
+            return Err(PeerMisbehaved::InvalidKeyShare.into());
+        }
+        let mut pub_key = Vec::with_capacity(MLKEM_CT + 32);
+        pub_key.extend_from_slice(ct.as_slice());
+        pub_key.extend_from_slice(&our_x);
+        let mut ss = Vec::with_capacity(64);
+        ss.extend_from_slice(kem_ss.as_slice());
+        ss.extend_from_slice(xss.as_bytes());
+        Ok(rustls::crypto::CompletedKeyExchange { group: NamedGroup::X25519MLKEM768, pub_key, secret: SharedSecret::from(&ss[..]) })
+    }
+    fn name(&self) -> NamedGroup {
+        NamedGroup::X25519MLKEM768
+    }
+}
+
+static X25519_MLKEM768: X25519MlKem768 = X25519MlKem768;
+
 // ------------------------------------------------------------------ ECDSA P-256 signing key
 
 #[derive(Debug)]
@@ -346,7 +416,9 @@ static KEYS: Keys = Keys;
 pub fn provider() -> CryptoProvider {
     CryptoProvider {
         cipher_suites: alloc::vec![SupportedCipherSuite::Tls13(&TLS13_CHACHA20_POLY1305_SHA256)],
-        kx_groups: alloc::vec![&X25519_GROUP as &dyn SupportedKxGroup],
+        // Hybrid post-quantum first (ADR 0002 / 0051): browsers that offer X25519MLKEM768 get it; others
+        // fall back to classical X25519.
+        kx_groups: alloc::vec![&X25519_MLKEM768 as &dyn SupportedKxGroup, &X25519_GROUP as &dyn SupportedKxGroup],
         signature_verification_algorithms: WebPkiSupportedAlgorithms { all: &[], mapping: &[] },
         secure_random: &RNG_IMPL,
         key_provider: &KEYS,
@@ -383,6 +455,43 @@ mod tests {
         assert!(a.complete(&[0u8; 32]).is_err());
         let b = X25519_GROUP.start().unwrap();
         assert!(b.complete(&[1u8; 31]).is_err()); // wrong length
+    }
+
+    #[test]
+    fn hybrid_x25519_mlkem768_agrees_with_a_client() {
+        use kem::Decapsulate;
+        use ml_kem::{EncodedSizeUser, KemCore, MlKem768};
+        set_rng(|b| {
+            for (i, x) in b.iter_mut().enumerate() {
+                *x = (i as u8).wrapping_mul(37) ^ 0xa5;
+            }
+            true
+        });
+        // The client: an ML-KEM-768 key pair + an X25519 key.
+        let (dk, ek) = MlKem768::generate_deterministic(&[1u8; 32].into(), &[2u8; 32].into());
+        let csec = x25519_dalek::StaticSecret::from([9u8; 32]);
+        let cpub = x25519_dalek::PublicKey::from(&csec).to_bytes();
+        let mut share = ek.as_bytes().to_vec();
+        share.extend_from_slice(&cpub);
+        assert_eq!(share.len(), 1216);
+        let done = X25519_MLKEM768.start_and_complete(&share).unwrap();
+        assert_eq!(done.group, NamedGroup::X25519MLKEM768);
+        assert_eq!(done.pub_key.len(), 1088 + 32);
+        // The client completes: decapsulate the ciphertext, X25519 with the server's half.
+        let ct = ml_kem::Ciphertext::<MlKem768>::try_from(&done.pub_key[..1088]).unwrap();
+        let kss = dk.decapsulate(&ct).unwrap();
+        let spub: [u8; 32] = done.pub_key[1088..].try_into().unwrap();
+        let xss = csec.diffie_hellman(&x25519_dalek::PublicKey::from(spub));
+        let mut want = kss.as_slice().to_vec();
+        want.extend_from_slice(xss.as_bytes());
+        assert_eq!(done.secret.secret_bytes(), &want[..]); // ML-KEM ‖ X25519, both sides agree
+        // A tampered encapsulation key (coefficient ≥ q) and a wrong length are refused.
+        let mut bad = share.clone();
+        bad[0] = 0xff;
+        bad[1] |= 0x0f; // first 12-bit coefficient = 0xfff ≥ 3329
+        assert!(X25519_MLKEM768.start_and_complete(&bad).is_err());
+        assert!(X25519_MLKEM768.start_and_complete(&share[..1215]).is_err());
+        assert!(X25519_MLKEM768.start().is_err()); // server role only
     }
 
     #[test]

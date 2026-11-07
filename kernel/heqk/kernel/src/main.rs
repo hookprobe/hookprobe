@@ -1949,8 +1949,8 @@ fn cm5_prod_service() -> ! {
             #[cfg(feature = "mctls")]
             if let Some(h) = crate::tlshost::host() {
                 let t = unsafe { mcserve::TLS_STATS };
-                kprint!("   [MC-TLS hb] ready={} calls={} handshakes={} records_out={} failed_closed={} tls_errors={} timeouts={} faults={} restarts={}\n",
-                    h.ready, h.calls, t[0], t[1], t[2], h.tls_errors, h.timeouts, h.faults, h.restarts);
+                kprint!("   [MC-TLS hb] ready={} calls={} handshakes={} pq_hybrid={} records_out={} failed_closed={} rate_limited={} tls_errors={} timeouts={} faults={} restarts={}\n",
+                    h.ready, h.calls, t[0], t[3], t[1], t[2], t[4], h.tls_errors, h.timeouts, h.faults, h.restarts);
             }
             // M4 DHCP: drive the client (DISCOVER/REQUEST/retransmit) + report the lease.
             #[cfg(feature = "dhcp")]
