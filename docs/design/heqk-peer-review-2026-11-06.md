@@ -222,3 +222,23 @@ its switch port), `sealed_cap:64`, `oldest_detection` set; detections carry dst
 (`10.200.0.1 → 10.200.0.6:4444` / `:23`); legit operator traffic served during the attack; home renders
 UNDER ATTACK 26 (pill + hero agree), STANDALONE, "4 devices", "14 detections kept · newest 64 sealed".
 Cosmetic left: the orb arc stays green under attack.
+
+### AP bench (2026-11-07 08:40–09:30) — task #26 metal backlog
+
+**Phase A** (img `b0dc87f`, fortress port 4: VLAN 100 internet DHCP, VLAN 200 mgmt DHCP, `policy-bench.txt`):
+mgmt DHCP lease 192.168.200.146 (server-pinned, bound, acks 2); internet lease 10.100.0.135 tagged; admin ping
+4/4 with well-formed replies (the malformed-ping fix) and a non-admin source 0/3 (implicit deny); route
+`1.0.0.1/32 via mgmt` — SYNs to 1.0.0.1:400 leave VLAN 200 SNATed to .146; **failover**: VLAN 100 down 45 s →
+`wan alive=false`, traffic moved to mgmt (via-mgmt 312 → 45,368, ~5–6k pps), VLAN 100 up → back within 1 s;
+operator: iPhone stayed online, speed test never stalled. Deferred ring parked = delivered (122), ring-full 0;
+16/16 stalls kicked, none ≥ 2 s; mgmt queue full 0.
+**Found + fixed (`7e7bc69`):** the uRPF-lite filter dropped 69 legit SYN-ACKs from the upstream LAN
+(10.200.0.3/.12 :7000, AirPlay) — the compile-time default mgmt floor 10.200.0.0/24 = the upstream LAN. The
+floor rule now applies only when `mgmt_floor=` is configured AND a mgmt sub-interface exists; `[P-policy]`
+regression row. Verified on Phase B (martian 0).
+**Phase B** (img `7e7bc69`, Digi PPPoE, `policy-v6.txt`): PPPoE AuthRejected ×8 then Open at retry 9 — the ISP
+held the previous (un-PADTed) session from the morning boot; bounded retries recovered unaided.
+**test-ipv6.com 10/10**; IPv6 ~107k out / ~379k in, SAVI 0, martian 0; **IPv6 ACL**: `block tcp → [2606:4700:4700::1111]:400`
+hit 1 → TCP RST to the client (one SYN, no retries = the reset was accepted). Host check with the device's own
+parser/matcher: that packet → `Block, Acl(0, 10)`. Drop rule (Quad9 v6 :53) not exercised (no client used it).
+Port 4 restored to FTS (teardown) before Phase B.
