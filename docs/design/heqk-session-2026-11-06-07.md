@@ -59,8 +59,8 @@ key, MCTLS certs for CM5 6609fd646386), `~/heqk-sign/keys` (boot signing), `~/he
 
 ## 5. Open — next steps
 
-1. **Shield on metal**: read the `[SHIELD] queries_seen/blocked/last` heartbeat from image `22425ea5`; rule out the
-   iPhone's DNS cache (airplane-mode toggle) vs a device-side miss.
+1. **Shield on metal**: `22425ea5` shows 131 client queries reach the hook but none for example.org — the iPhone
+   resolved Safari via iCloud Private Relay. Confirm with Chrome/Firefox (no Relay) → `blocked` must rise.
 2. Metal check of `/api/flows`, incident detail + timeline (re-run the 10.100.0.77 scan to create an incident).
 3. eth1 traffic with a wired client (gap #2 of the hardware list).
 4. The rest of `heqk-remaining-gaps.md`: EL0 migration of the control protocols (ADR 0050 D4), IPv6 identity
