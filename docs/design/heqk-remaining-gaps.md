@@ -1,4 +1,4 @@
-# heqk — remaining gaps (living list, 2026-11-07 evening)
+# heqk — remaining gaps (living list, 2026-11-07 night)
 
 Legend — **Board**: needs the CM5 (flash / power-cycle / bench). **Decision**: needs the operator.
 Status `built` = committed + QEMU/host-proven, not yet on silicon.
@@ -7,9 +7,9 @@ Status `built` = committed + QEMU/host-proven, not yet on silicon.
 
 | # | Gap | Status | Board? | Notes |
 |---|---|---|---|---|
-| 1 | ADR 0049 D1 signed POLICY.TXT — metal check | built `aa24555` | **Board** | AP boot must print `[POLICY] signature OK — generation 2`; a tampered POLICY.TXT must lock management |
+| 1 | ADR 0049 D1 signed POLICY.TXT — metal check | **metal: signature OK** (AP image `74cb1a9`, `[POLICY] signature OK — operator key, generation 2 (floor 2)`) | Board (optional) | remaining: a tampered POLICY.TXT must lock management |
 | 2 | POLICY.TXT anti-rollback floor **persisted** | partial (floor compiled into the image) | **Decision** | a floor an attacker with the card cannot roll back needs the eMMC **RPMB** partition — programming its key is irreversible |
-| 3 | ADR 0049 D3 response-observed scans — metal check | built `9cc2520` | **Board** | real `nmap -sS` / `-sT` across the passive sensor + through the AP; confirm one-sided traffic stays uncounted |
+| 3 | ADR 0049 D3 response-observed scans — metal check | **metal: nmap sweep fired rule 113 (93 drops)** | Board (optional) | real `nmap -sS` / `-sT` across the passive sensor + through the AP; confirm one-sided traffic stays uncounted |
 | 4 | ADR 0049 D2 IPv6 source identity (device-keyed LAN, /64 WAN) | **designed** (ADR 0049 D2 detailed design) | no | build later per operator (gap 13) |
 | 5 | P-256 signing timing review | **source review done** — no secret-dependent branch/index | Board (empirical) | residual: compiler/µarch; a dudect-style timing run on the CM5 |
 | 6 | Independent audit status: `sha2`/`hmac`, `ml-kem` | open | no | none found publicly; libcrux ML-KEM (formally verified) is the alternative |
@@ -19,9 +19,10 @@ Status `built` = committed + QEMU/host-proven, not yet on silicon.
 
 | # | Gap | Status | Board? | Notes |
 |---|---|---|---|---|
-| 8 | Shield + Get Online tiles | built `3b93b3b` (`apmc`) | **Board** | Get Online = WAN facts; Shield = DNS queries inspected (no blocklist on heqk yet) |
-| 9 | HTTPS on the AP image | built `3b93b3b` | **Board** | cert SANs heqk.local / 10.99.0.1 / 10.200.0.6; owner CA re-issued with private-range constraints |
+| 8 | Shield + Get Online tiles | **metal: AP Mission Control served** (`74cb1a9`) | — | Get Online = WAN facts; Shield = DNS queries inspected (no blocklist on heqk yet) |
+| 9 | HTTPS on the AP image | **metal PASS** — iPhone on the heqk AP: http://10.99.0.1 → https, owner sign-in, pages + sub-pages load (`74cb1a9`; needed the ARP-to-node fix) | — | cert SANs heqk.local / 10.99.0.1 / 10.200.0.6; owner CA re-issued with private-range constraints |
 | 10 | IPv6 on the management VLAN | blocked on #4 | — | |
+| 19 | Workspaces without a heqk API showed sample data unlabeled | **built** — `/api/devices` from the host inventory (first/last seen, MAC never invented) + a "Sample data" notice on every view heqk does not back | Board (re-flash) | still sample on heqk: flows, incident story/timeline/process tree, Protect, Automate, Intelligence, Knowledge, Business, Customers, Admin, network map/DNS |
 
 ## Architecture (ADR 0050 D4 migration — control protocols to EL0)
 

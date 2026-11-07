@@ -224,6 +224,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         "/api/detections" => json(scratch, |w| st.render_detections(limit(200, 500), w)),
         "/api/incidents" => json(scratch, |w| st.render_incidents(limit(50, 500), w)),
         "/api/qsecbit" => json(scratch, |w| st.render_qsecbit(limit(20, 1000), w)),
+        "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
         // No engine registry on heqk yet: an EMPTY list keeps every engine row honestly badged
         // "mock" in the Detect UI rather than inventing live engines.
         "/api/engines" => json(scratch, |w| w.raw("{\"engines\":[]}")),
@@ -519,6 +520,13 @@ pub fn mc_selftest() -> bool {
         let two = h.hosts_active(1_000_000) == 2; // a repeat sighting is one host
         h.note_host(0x0A00_0003, 1_000_000 + 700_000);
         let hosts_ok = two && h.hosts_active(1_000_000 + 700_000) == 1; // the two silent > 10 min aged out
+        // /api/devices: newest first, first_seen kept across sightings, mac never invented.
+        let mut dbuf = [0u8; 512];
+        let mut dw = JsonBuf::new(&mut dbuf);
+        h.render_devices(10, &mut dw);
+        let dj = core::str::from_utf8(dw.bytes()).unwrap_or("");
+        let devices_ok = dj.starts_with("{\"devices\":[{\"id\":\"host-10.0.0.3\"") && dj.contains("\"ip\":\"10.0.0.1\",\"mac\":null,\"first_seen\":1000,\"last_seen\":1000}") && dj.ends_with("],\"count\":3}");
+        let hosts_ok = hosts_ok && devices_ok;
         good && wrong_nonce && refused && synced && small && big && pinned && hosts_ok
     };
     // ADR 0051 D4: :80 -> https redirect keeps path+query, drops the port; a hostile Host never reaches
