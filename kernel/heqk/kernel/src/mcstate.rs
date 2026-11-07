@@ -191,7 +191,8 @@ pub struct McState {
     /// How many of the newest detections the device seals across a reboot (0 = none persisted).
     pub sealed_cap: u16,
     /// Passive inventory: (IPv4 host order, last seen epoch ms). 0 = empty slot.
-    hosts: [(u32, u64); HOST_CAP],
+    /// (ip, first seen, last seen) — epoch ms, or ms since the anchor before the clock syncs.
+    hosts: [(u32, u64, u64); HOST_CAP],
 }
 
 /// A wall-clock re-sync larger than this is refused once the clock is synced (a forged reply can
@@ -222,7 +223,7 @@ impl McState {
             clock_synced: false,
             wan: None,
             sealed_cap: 0,
-            hosts: [(0, 0); HOST_CAP],
+            hosts: [(0, 0, 0); HOST_CAP],
         }
     }
 
@@ -255,6 +256,7 @@ impl McState {
         }
         for h in self.hosts.iter_mut().filter(|h| h.0 != 0) {
             h.1 = mv(h.1);
+            h.2 = mv(h.2);
         }
         self.clock_synced = true;
         self.change += 1;
@@ -314,20 +316,63 @@ impl McState {
         let mut victim = h;
         for k in 0..8 {
             let i = (h + k) % HOST_CAP;
-            if self.hosts[i].0 == ip || self.hosts[i].0 == 0 {
-                self.hosts[i] = (ip, now_ms);
+            if self.hosts[i].0 == ip {
+                self.hosts[i].2 = now_ms;
                 return;
             }
-            if self.hosts[i].1 < self.hosts[victim].1 {
+            if self.hosts[i].0 == 0 {
+                self.hosts[i] = (ip, now_ms, now_ms);
+                return;
+            }
+            if self.hosts[i].2 < self.hosts[victim].2 {
                 victim = i;
             }
         }
-        self.hosts[victim] = (ip, now_ms);
+        self.hosts[victim] = (ip, now_ms, now_ms);
     }
 
     /// LAN hosts seen within `HOST_ACTIVE_MS` of `now_ms`.
     pub fn hosts_active(&self, now_ms: u64) -> usize {
-        self.hosts.iter().filter(|&&(ip, t)| ip != 0 && now_ms.saturating_sub(t) <= HOST_ACTIVE_MS).count()
+        self.hosts.iter().filter(|&&(ip, _, t)| ip != 0 && now_ms.saturating_sub(t) <= HOST_ACTIVE_MS).count()
+    }
+
+    /// `GET /api/devices` → `{devices (most recently seen first), count}` — the LAN hosts this
+    /// device has actually observed (IP only: heqk keeps no MAC per host, so `mac` is null rather
+    /// than invented). Timestamps in epoch seconds, like `/api/detections`.
+    pub fn render_devices(&self, limit: usize, out: &mut JsonBuf) {
+        let mut idx = [0u16; HOST_CAP];
+        let mut n = 0usize;
+        for (i, h) in self.hosts.iter().enumerate() {
+            if h.0 != 0 {
+                idx[n] = i as u16;
+                n += 1;
+            }
+        }
+        // newest first (insertion sort: <= 256 rows, no allocator)
+        for a in 1..n {
+            let mut b = a;
+            while b > 0 && self.hosts[idx[b - 1] as usize].2 < self.hosts[idx[b] as usize].2 {
+                idx.swap(b - 1, b);
+                b -= 1;
+            }
+        }
+        out.raw("{\"devices\":[");
+        let mut k = 0usize;
+        for &i in idx[..n].iter().take(limit) {
+            let (ip, first, last) = self.hosts[i as usize];
+            let m = out.mark();
+            if k > 0 {
+                out.raw(",");
+            }
+            let [a, b, c, d] = ip.to_be_bytes();
+            let _ = write!(out, "{{\"id\":\"host-{a}.{b}.{c}.{d}\",\"ip\":\"{a}.{b}.{c}.{d}\",\"mac\":null,\"first_seen\":{},\"last_seen\":{}}}", first / 1000, last / 1000);
+            if out.overflow || out.len + 32 > out.buf.len() {
+                out.rewind(m);
+                break;
+            }
+            k += 1;
+        }
+        let _ = write!(out, "],\"count\":{}}}", k);
     }
 
     /// (detections kept, capacity, oldest kept timestamp in epoch ms).
