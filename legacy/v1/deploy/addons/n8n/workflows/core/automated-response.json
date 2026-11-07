@@ -1,0 +1,187 @@
+{
+  "name": "HookProbe: Automated Response",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "webhook-trigger",
+      "name": "Webhook - Threat Alert",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "hookprobe-response"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.qsecbit_score}}",
+              "operation": "larger",
+              "value2": 0.9
+            }
+          ]
+        }
+      },
+      "id": "risk-level-router",
+      "name": "Determine Risk Level",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "// CRITICAL: Immediate device isolation\nconst event = items[0].json;\n\nconst response = {\n  action: 'ISOLATE_DEVICE',\n  target_ip: event.source_ip,\n  severity: 'CRITICAL',\n  timestamp: new Date().toISOString(),\n  commands: [\n    `nft add rule inet filter input ip saddr ${event.source_ip} drop`,\n    `nft add rule inet filter forward ip saddr ${event.source_ip} drop`,\n    `ip route add blackhole ${event.source_ip}`\n  ]\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "critical-response",
+      "name": "CRITICAL: Isolate Device",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [650, 100]
+    },
+    {
+      "parameters": {
+        "functionCode": "// HIGH: Block IP + Alert SOC\nconst event = items[0].json;\n\nconst response = {\n  action: 'BLOCK_IP',\n  target_ip: event.source_ip,\n  severity: 'HIGH',\n  timestamp: new Date().toISOString(),\n  commands: [\n    `nft add element inet filter blacklist { ${event.source_ip} }`,\n    `logger -t hookprobe \"HIGH RISK: Blocked ${event.source_ip}\"`\n  ],\n  alert_soc: true\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "high-response",
+      "name": "HIGH: Block IP",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [650, 250]
+    },
+    {
+      "parameters": {
+        "functionCode": "// MEDIUM: Rate limit + Monitor\nconst event = items[0].json;\n\nconst response = {\n  action: 'RATE_LIMIT',\n  target_ip: event.source_ip,\n  severity: 'MEDIUM',\n  timestamp: new Date().toISOString(),\n  commands: [\n    `nft add rule inet filter input ip saddr ${event.source_ip} limit rate 10/minute accept`,\n    `logger -t hookprobe \"MEDIUM RISK: Rate limited ${event.source_ip}\"`\n  ],\n  monitor: true\n};\n\nreturn [{ json: response }];"
+      },
+      "id": "medium-response",
+      "name": "MEDIUM: Rate Limit",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [650, 400]
+    },
+    {
+      "parameters": {
+        "command": "={{$json.commands.join(' && ')}}"
+      },
+      "id": "execute-firewall-rules",
+      "name": "Execute Firewall Rules",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [850, 250]
+    },
+    {
+      "parameters": {
+        "url": "http://clickhouse:8123",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "INSERT INTO automated_responses FORMAT JSONEachRow"
+            },
+            {
+              "name": "data",
+              "value": "={{$json}}"
+            }
+          ]
+        }
+      },
+      "id": "log-response",
+      "name": "Log Response to ClickHouse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1050, 250]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{$json.alert_soc}}",
+              "value2": true
+            }
+          ]
+        }
+      },
+      "id": "should-alert",
+      "name": "Should Alert SOC?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1250, 250]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:3000/api/alert",
+        "method": "POST",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "title",
+              "value": "High Risk Threat Detected"
+            },
+            {
+              "name": "message",
+              "value": "Automated response triggered for ={{$json.target_ip}}"
+            },
+            {
+              "name": "severity",
+              "value": "={{$json.severity}}"
+            }
+          ]
+        }
+      },
+      "id": "send-grafana-alert",
+      "name": "Send Grafana Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [1450, 150]
+    }
+  ],
+  "connections": {
+    "Webhook - Threat Alert": {
+      "main": [[{ "node": "Determine Risk Level", "type": "main", "index": 0 }]]
+    },
+    "Determine Risk Level": {
+      "main": [
+        [{ "node": "CRITICAL: Isolate Device", "type": "main", "index": 0 }],
+        [{ "node": "HIGH: Block IP", "type": "main", "index": 0 }],
+        [{ "node": "MEDIUM: Rate Limit", "type": "main", "index": 0 }]
+      ]
+    },
+    "CRITICAL: Isolate Device": {
+      "main": [[{ "node": "Execute Firewall Rules", "type": "main", "index": 0 }]]
+    },
+    "HIGH: Block IP": {
+      "main": [[{ "node": "Execute Firewall Rules", "type": "main", "index": 0 }]]
+    },
+    "MEDIUM: Rate Limit": {
+      "main": [[{ "node": "Execute Firewall Rules", "type": "main", "index": 0 }]]
+    },
+    "Execute Firewall Rules": {
+      "main": [[{ "node": "Log Response to ClickHouse", "type": "main", "index": 0 }]]
+    },
+    "Log Response to ClickHouse": {
+      "main": [[{ "node": "Should Alert SOC?", "type": "main", "index": 0 }]]
+    },
+    "Should Alert SOC?": {
+      "main": [[{ "node": "Send Grafana Alert", "type": "main", "index": 0 }], []]
+    }
+  },
+  "settings": {},
+  "staticData": null,
+  "tags": [
+    {
+      "name": "HookProbe",
+      "id": "hookprobe"
+    },
+    {
+      "name": "Core",
+      "id": "core"
+    },
+    {
+      "name": "Response",
+      "id": "response"
+    }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}

@@ -1,0 +1,103 @@
+# ==============================================================================
+# Fortress Qsecbit Agent Container
+# ==============================================================================
+# ML-powered threat detection agent with numpy/scipy/sklearn
+#
+# Build:
+#   podman build -f Containerfile.agent -t fts-agent:latest ../..
+#
+# Run:
+#   podman run --network=host --cap-add=NET_ADMIN,NET_RAW fts-agent:latest
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies for numpy/scipy compilation
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    libopenblas-dev \
+    liblapack-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install ML dependencies
+COPY products/fortress/containers/requirements-ml.txt /tmp/
+RUN pip install --no-cache-dir -r /tmp/requirements-ml.txt
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+# Runtime dependencies only
+# hostapd package includes hostapd_cli for WiFi status
+# curl for HTTP-based connectivity tests (more reliable for LTE)
+# avahi-utils for mDNS hostname discovery (Apple devices, printers)
+# nbtscan for NetBIOS hostname discovery (Windows devices)
+# hwdata provides /usr/share/hwdata/oui.txt for manufacturer lookup (~40K entries)
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libopenblas0 \
+    libgomp1 \
+    iproute2 \
+    nftables \
+    hostapd \
+    openvswitch-switch \
+    curl \
+    avahi-utils \
+    nbtscan \
+    hwdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin fortress
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/core/qsecbit \
+             /opt/hookprobe/fortress/qsecbit \
+             /opt/hookprobe/fortress/data \
+             /var/log/hookprobe \
+    && chown -R fortress:nogroup /opt/hookprobe /var/log/hookprobe
+
+# Copy Qsecbit core modules
+COPY --chown=fortress:nogroup core/qsecbit/ /opt/hookprobe/core/qsecbit/
+COPY --chown=fortress:nogroup core/__init__.py /opt/hookprobe/core/
+
+# Copy Fortress-specific agent
+COPY --chown=fortress:nogroup products/fortress/__init__.py /opt/hookprobe/fortress/
+COPY --chown=fortress:nogroup products/fortress/qsecbit/ /opt/hookprobe/fortress/qsecbit/
+COPY --chown=fortress:nogroup products/fortress/lib/ /opt/hookprobe/fortress/lib/
+
+# Copy shared MSSP module for heartbeat and telemetry
+RUN mkdir -p /opt/hookprobe/shared/mssp
+COPY --chown=fortress:nogroup shared/mssp/ /opt/hookprobe/shared/mssp/
+RUN touch /opt/hookprobe/shared/__init__.py && chown fortress:nogroup /opt/hookprobe/shared/__init__.py
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV QSECBIT_MODE=fortress
+ENV QSECBIT_DATA_DIR=/opt/hookprobe/fortress/data
+ENV QSECBIT_LOG_DIR=/var/log/hookprobe
+ENV OVS_BRIDGE=FTS
+
+# Health check - verify API server is responding
+HEALTHCHECK --interval=30s --timeout=10s --start-period=20s --retries=3 \
+    CMD python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:9090/health", timeout=5)'
+
+# Note: This container typically runs with --network=host for traffic analysis
+EXPOSE 9090
+
+# SECURITY: Run as non-root user (CWE-250)
+# Use --userns=keep-id in podman run for bind mount compatibility
+USER fortress
+
+WORKDIR /opt/hookprobe
+
+ENTRYPOINT ["python", "-m", "fortress.qsecbit.fortress_agent"]
+CMD ["--config", "/etc/hookprobe/qsecbit.conf"]

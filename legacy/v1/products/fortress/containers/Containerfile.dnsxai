@@ -1,0 +1,93 @@
+# ==============================================================================
+# Fortress dnsXai DNS Protection Container
+# ==============================================================================
+# AI-powered DNS filtering with ML classification
+#
+# Build:
+#   podman build -f Containerfile.dnsxai -t fts-dnsxai:latest ../..
+#
+# Run:
+#   podman run -p 5353:5353/udp fts-dnsxai:latest
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install dependencies
+RUN pip install --no-cache-dir \
+    "numpy>=1.24.0,<2.0.0" \
+    "dnslib>=0.9.0,<1.0.0" \
+    "requests>=2.31.0"
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    libcap2-bin \
+    openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin dnsxai
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/shared/dnsXai/data \
+             /opt/hookprobe/shared/dnsXai/defaults \
+             /opt/hookprobe/shared/dnsXai/blocklists \
+             /etc/hookprobe/certs \
+             /var/log/hookprobe \
+    && chown -R dnsxai:nogroup /opt/hookprobe /var/log/hookprobe /etc/hookprobe
+
+# Copy dnsXai module
+COPY --chown=dnsxai:nogroup shared/dnsXai/ /opt/hookprobe/shared/dnsXai/
+COPY --chown=dnsxai:nogroup shared/__init__.py /opt/hookprobe/shared/
+
+# Preserve default whitelist in a location that won't be overwritten by volume mounts
+# This allows the entrypoint to copy it to the data volume on first run
+RUN if [ -f /opt/hookprobe/shared/dnsXai/data/whitelist.txt ]; then \
+        cp /opt/hookprobe/shared/dnsXai/data/whitelist.txt /opt/hookprobe/shared/dnsXai/defaults/whitelist.txt; \
+    fi
+
+# Copy entrypoint script
+COPY --chown=dnsxai:nogroup products/fortress/containers/entrypoint-dnsxai.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe"
+ENV PYTHONUNBUFFERED=1
+ENV DNSXAI_DATA_DIR=/opt/hookprobe/shared/dnsXai/data
+ENV DNSXAI_BLOCKLIST_DIR=/opt/hookprobe/shared/dnsXai/blocklists
+
+# Verify setup
+RUN python -c "print('dnsXai container ready')"
+
+# Health check - verify HTTP API is responding
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD python3 -c 'import urllib.request; urllib.request.urlopen("http://localhost:8080/health", timeout=5)'
+
+# Expose ports: DNS (5353/udp), DoT (853/tcp), HTTP API (8080/tcp)
+EXPOSE 5353/udp
+EXPOSE 853/tcp
+EXPOSE 8080/tcp
+
+# SECURITY: Run as non-root user (CWE-250)
+# Use --userns=keep-id in podman run for bind mount compatibility
+USER dnsxai
+
+WORKDIR /opt/hookprobe/shared/dnsXai
+
+# Use entrypoint script which handles all DNS/DoT flags
+ENTRYPOINT ["/entrypoint.sh"]
+# Default CMD is empty - entrypoint handles all flags including DoT

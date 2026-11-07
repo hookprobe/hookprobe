@@ -1,0 +1,55 @@
+[Unit]
+Description=Guardian Access Point Service (Umbrella)
+Documentation=https://github.com/hookprobe/hookprobe
+
+# This is the main service that ensures the Guardian AP starts on boot
+# It pulls in all required services for the WiFi access point
+# and does NOT depend on WAN connectivity
+
+# Dependencies - order matters
+After=guardian-wlan.service guardian-offline.service
+Requires=guardian-wlan.service
+Wants=guardian-offline.service
+
+# Pull in hostapd and dnsmasq
+Wants=hostapd.service dnsmasq.service
+After=hostapd.service
+
+# CRITICAL: Do NOT wait for network-online.target
+# We provide network to LAN clients, we don't need WAN to start
+# This allows Guardian to work in offline/disconnected mode
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Start hostapd if not already running
+ExecStart=/bin/bash -c 'systemctl is-active --quiet hostapd || systemctl start hostapd'
+# Start dnsmasq if not already running
+ExecStart=/bin/bash -c 'systemctl is-active --quiet dnsmasq || systemctl start dnsmasq'
+
+# Health check - verify services are running
+ExecStartPost=/bin/bash -c '\
+    sleep 3; \
+    if systemctl is-active --quiet hostapd && systemctl is-active --quiet dnsmasq; then \
+        echo "Guardian AP services started successfully"; \
+        exit 0; \
+    else \
+        echo "Warning: Some AP services may not be running"; \
+        systemctl status hostapd --no-pager || true; \
+        systemctl status dnsmasq --no-pager || true; \
+        exit 0; \
+    fi'
+
+# Restart services if they fail
+ExecReload=/bin/bash -c '\
+    systemctl restart hostapd; \
+    systemctl restart dnsmasq'
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-ap
+
+[Install]
+WantedBy=multi-user.target

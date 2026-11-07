@@ -1,0 +1,822 @@
+<!-- System Tab Content -->
+<div class="dashboard-header">
+    <h2>System Settings</h2>
+    <p class="text-muted">System configuration, updates, logs, and service management</p>
+</div>
+
+<!-- System Info -->
+<div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+    <div class="stat-card">
+        <div class="stat-value" style="font-size: 1.25rem;" id="system-hostname">guardian</div>
+        <div class="stat-label">Hostname</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" id="system-uptime">0:00</div>
+        <div class="stat-label">Uptime</div>
+    </div>
+    <div class="stat-card success">
+        <div class="stat-value" style="font-size: 1rem;" id="system-cpu">0%</div>
+        <div class="stat-label">CPU<br><span id="system-cpu-cores" style="font-size: 0.75rem; opacity: 0.8;">0 cores</span></div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" style="font-size: 1rem;" id="system-memory">0%</div>
+        <div class="stat-label">Memory<br><span id="system-memory-detail" style="font-size: 0.75rem; opacity: 0.8;">0 / 0 MB</span></div>
+    </div>
+</div>
+
+<!-- Quick Actions -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M13 3c-4.97 0-9 4.03-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42C8.27 19.99 10.51 21 13 21c4.97 0 9-4.03 9-9s-4.03-9-9-9zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z"/>
+            </svg>
+            Quick Actions
+        </h3>
+    </div>
+    <div class="card-body">
+        <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-md);">
+            <button class="btn btn-primary" onclick="restartServices()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M17.65 6.35C16.2 4.9 14.21 4 12 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08c-.82 2.33-3.04 4-5.65 4-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/>
+                </svg>
+                Restart Services
+            </button>
+            <button class="btn btn-secondary" onclick="checkUpdates()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.53-9.11-.02-12.58s9.14-3.47 12.65 0L21 3v7.12zM12.5 8v4.25l3.5 2.08-.72 1.21L11 13V8h1.5z"/>
+                </svg>
+                Check Updates
+            </button>
+            <button class="btn btn-secondary" onclick="viewLogs()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/>
+                </svg>
+                View Logs
+            </button>
+            <button class="btn btn-danger" onclick="confirmReboot()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42C17.99 7.86 19 9.81 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.19 1.01-4.14 2.58-5.42L6.17 5.17C4.23 6.82 3 9.26 3 12c0 4.97 4.03 9 9 9s9-4.03 9-9c0-2.74-1.23-5.18-3.17-6.83z"/>
+                </svg>
+                Reboot System
+            </button>
+        </div>
+    </div>
+</div>
+
+<!-- SSH Maintenance Access -->
+<div class="card" id="ssh-access-card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M21 2H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7l-2 3v1h8v-1l-2-3h7c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H3V4h18v12z"/>
+            </svg>
+            SSH Maintenance Access
+        </h3>
+        <span class="badge" id="ssh-status-badge" style="font-size: 0.75rem;">Checking...</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-md);">
+            Open SSH port 22 through the XDP firewall for remote debugging (LAN only).
+            Auto-disables after <strong>30 minutes</strong> for security.
+        </p>
+        <div style="display: flex; align-items: center; gap: var(--spacing-lg); flex-wrap: wrap;">
+            <label class="toggle">
+                <input type="checkbox" id="ssh-toggle" onchange="toggleSSHAccess(this.checked)">
+                <span class="switch"></span>
+                <span id="ssh-toggle-label" style="font-weight: 600;">Disabled</span>
+            </label>
+            <div id="ssh-timer-display" style="display: none; font-family: var(--font-mono); font-size: 0.875rem; color: var(--tangerine);">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle; margin-right: 4px;">
+                    <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+                </svg>
+                <span id="ssh-countdown">30:00</span> remaining
+            </div>
+        </div>
+        <div id="ssh-warning" style="display: none; margin-top: var(--spacing-md); padding: var(--spacing-sm) var(--spacing-md); background: rgba(230, 149, 0, 0.1); border: 1px solid var(--tangerine); border-radius: var(--radius-md); font-size: 0.8125rem; color: var(--tangerine);">
+            SSH is open on the LAN bridge (br0). Connect your phone to the Guardian WiFi and use Terminus to access port 22.
+        </div>
+    </div>
+</div>
+
+<!-- Services -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">System Services</h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadSystemData()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="services-body">
+                    <tr>
+                        <td><strong>dnsmasq</strong> - DNS/DHCP Server</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('dnsmasq')">Restart</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>hostapd</strong> - WiFi Access Point</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('hostapd')">Restart</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>napse</strong> - Neural Adaptive Packet Synthesis Engine</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('napse')">Restart</button>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td><strong>guardian-agent</strong> - Security Agent</td>
+                        <td><span class="badge badge-success">Running</span></td>
+                        <td>
+                            <button class="btn btn-sm btn-secondary" onclick="restartService('guardian-agent')">Restart</button>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Storage -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Storage</h3>
+    </div>
+    <div class="card-body">
+        <div style="margin-bottom: var(--spacing-md);">
+            <div style="display: flex; justify-content: space-between; margin-bottom: var(--spacing-xs);">
+                <span>Root Filesystem</span>
+                <span id="disk-usage">0 / 0 GB (0%)</span>
+            </div>
+            <div class="progress">
+                <div class="progress-bar" id="disk-progress" style="width: 0%;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Logs Preview -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Recent Logs</h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshLogs()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <pre id="logs-preview" style="background: var(--bg-darkest); color: var(--hp-green); padding: var(--spacing-md); border-radius: var(--radius-md); font-family: var(--font-mono); font-size: 0.8125rem; max-height: 300px; overflow-y: auto; white-space: pre-wrap; word-break: break-all;">Loading logs...</pre>
+    </div>
+</div>
+
+<!-- ==================== SOFTWARE UPDATES SECTION ==================== -->
+<div style="margin-top: var(--spacing-xl); padding-top: var(--spacing-xl); border-top: 2px solid var(--border-color);">
+    <div class="dashboard-header" style="margin-bottom: var(--spacing-lg);">
+        <h2>Software Updates</h2>
+        <p class="text-muted">Pull updates from GitHub - Limited to networking components</p>
+    </div>
+
+    <!-- Version Info -->
+    <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+        <div class="stat-card">
+            <div class="stat-value" style="font-size: 0.9rem; font-family: var(--font-mono);" id="github-current-commit">---</div>
+            <div class="stat-label">Version</div>
+        </div>
+        <div class="stat-card info">
+            <div class="stat-value" style="font-size: 0.9rem;" id="github-branch">---</div>
+            <div class="stat-label">Branch</div>
+        </div>
+        <div class="stat-card" id="github-status-card">
+            <div class="stat-value" style="font-size: 0.9rem;" id="github-update-status">Checking...</div>
+            <div class="stat-label">Status</div>
+        </div>
+        <div class="stat-card warning">
+            <div class="stat-value" id="github-commits-behind">0</div>
+            <div class="stat-label">Behind</div>
+        </div>
+    </div>
+
+    <!-- Update Actions -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                </svg>
+                Update Actions
+            </h3>
+        </div>
+        <div class="card-body">
+            <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-md);">
+                <button class="btn btn-primary" onclick="checkGitHubUpdates()">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.53-9.11-.02-12.58s9.14-3.47 12.65 0L21 3v7.12z"/>
+                    </svg>
+                    Check for Updates
+                </button>
+                <button class="btn btn-secondary" onclick="previewGitHubChanges()" id="btn-preview" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5zM12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5zm0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z"/>
+                    </svg>
+                    Preview
+                </button>
+                <button class="btn btn-success" onclick="openPullModal()" id="btn-pull" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                        <path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/>
+                    </svg>
+                    Pull Updates
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Recent Commits -->
+    <div class="card">
+        <div class="card-header">
+            <h3 class="card-title">Recent Commits</h3>
+            <button class="btn btn-sm btn-secondary" onclick="loadGitHubLog()">Refresh</button>
+        </div>
+        <div class="card-body">
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th style="width: 80px;">Hash</th>
+                            <th>Message</th>
+                            <th style="width: 140px;">Date</th>
+                        </tr>
+                    </thead>
+                    <tbody id="github-commits-body">
+                        <tr>
+                            <td colspan="3" class="text-muted">Loading commits...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+<!-- ==================== END SOFTWARE UPDATES ==================== -->
+
+<!-- Reboot Modal -->
+<div class="modal-overlay" id="reboot-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Confirm Reboot</h3>
+            <button class="modal-close" onclick="closeModal('reboot-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Are you sure you want to reboot the system? All connected clients will be temporarily disconnected.</p>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('reboot-modal')">Cancel</button>
+            <button class="btn btn-danger" onclick="rebootSystem()">Reboot Now</button>
+        </div>
+    </div>
+</div>
+
+<!-- GitHub Preview Modal -->
+<div class="modal-overlay" id="preview-modal">
+    <div class="modal" style="max-width: 700px;">
+        <div class="modal-header">
+            <h3 class="modal-title">Preview Changes</h3>
+            <button class="modal-close" onclick="closeModal('preview-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div id="preview-content">
+                <p class="text-muted">Loading preview...</p>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('preview-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
+<!-- GitHub Pull Confirmation Modal -->
+<div class="modal-overlay" id="pull-modal">
+    <div class="modal" style="max-width: 600px;">
+        <div class="modal-header">
+            <h3 class="modal-title">Confirm Update</h3>
+            <button class="modal-close" onclick="closeModal('pull-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p>Are you sure you want to pull updates from GitHub?</p>
+            <div id="pull-preview-summary" style="margin: var(--spacing-md) 0;"></div>
+            <div class="alert alert-warning" style="margin-top: var(--spacing-md); background: rgba(240, 91, 45, 0.1); border: 1px solid var(--hp-orange); color: var(--hp-orange); padding: var(--spacing-md); border-radius: var(--radius-md);">
+                <strong>Warning:</strong> Services may be restarted after update.
+                <ul id="services-to-restart" style="margin: var(--spacing-sm) 0 0 var(--spacing-lg);"></ul>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('pull-modal')">Cancel</button>
+            <button class="btn btn-success" onclick="executePull()">Pull &amp; Apply</button>
+        </div>
+    </div>
+</div>
+
+<!-- GitHub Progress Modal -->
+<div class="modal-overlay" id="progress-modal">
+    <div class="modal" style="max-width: 500px;">
+        <div class="modal-header">
+            <h3 class="modal-title">Updating...</h3>
+        </div>
+        <div class="modal-body" style="text-align: center; padding: var(--spacing-xl);">
+            <div class="spinner" style="width: 48px; height: 48px; border: 4px solid var(--bg-lighter); border-top-color: var(--hp-green); border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto var(--spacing-lg);"></div>
+            <p id="progress-message">Pulling updates from GitHub...</p>
+            <div class="progress" style="margin-top: var(--spacing-md);">
+                <div class="progress-bar" id="progress-bar" style="width: 0%;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+.file-list { max-height: 300px; overflow-y: auto; background: var(--bg-darker); border-radius: var(--radius-md); padding: var(--spacing-md); }
+.file-list-item { font-family: var(--font-mono); font-size: 0.8125rem; padding: var(--spacing-xs) 0; border-bottom: 1px solid var(--bg-lighter); }
+.file-list-item:last-child { border-bottom: none; }
+.file-list-item.allowed { color: var(--hp-green); }
+</style>
+
+<script>
+async function restartServices() {
+    try {
+        showToast('Restarting services...', 'info');
+        const result = await apiPost('/system/restart-services');
+        if (result.success) {
+            showToast('Services restarted successfully', 'success');
+        }
+    } catch (error) {
+        showToast('Failed to restart services', 'error');
+    }
+}
+
+async function checkUpdates() {
+    try {
+        showToast('Checking for updates...', 'info');
+        const result = await apiGet('/system/updates');
+        if (result.available) {
+            showToast(`Updates available: ${result.count} packages`, 'warning');
+        } else {
+            showToast('System is up to date', 'success');
+        }
+    } catch (error) {
+        showToast('Failed to check updates', 'error');
+    }
+}
+
+function viewLogs() {
+    // Navigate to logs section or open modal
+    document.getElementById('logs-preview').scrollIntoView({ behavior: 'smooth' });
+    refreshLogs();
+}
+
+async function refreshLogs() {
+    try {
+        const result = await apiGet('/system/logs');
+        document.getElementById('logs-preview').textContent = result.logs || 'No logs available';
+    } catch (error) {
+        document.getElementById('logs-preview').textContent = 'Failed to load logs';
+    }
+}
+
+function confirmReboot() {
+    openModal('reboot-modal');
+}
+
+async function rebootSystem() {
+    closeModal('reboot-modal');
+    try {
+        showToast('System is rebooting...', 'warning');
+        await apiPost('/system/reboot');
+    } catch (error) {
+        // Expected - connection will be lost
+    }
+}
+
+async function restartService(service) {
+    try {
+        const result = await apiPost(`/system/service/${service}/restart`);
+        if (result.success) {
+            showToast(`${service} restarted`, 'success');
+        }
+    } catch (error) {
+        showToast(`Failed to restart ${service}`, 'error');
+    }
+}
+
+// Load logs on tab view
+if (typeof Guardian !== 'undefined' && Guardian.currentTab === 'system') {
+    refreshLogs();
+}
+
+// ==================== SSH Maintenance Access ====================
+let sshCountdownInterval = null;
+let sshExpiresAt = null;
+
+async function loadSSHStatus() {
+    try {
+        const result = await apiGet('/system/ssh-access');
+        updateSSHUI(result.enabled, result.expires_at);
+    } catch (error) {
+        console.error('Failed to load SSH status:', error);
+        updateSSHUI(false, null);
+    }
+}
+
+function updateSSHUI(enabled, expiresAt) {
+    const toggle = document.getElementById('ssh-toggle');
+    const label = document.getElementById('ssh-toggle-label');
+    const badge = document.getElementById('ssh-status-badge');
+    const timerDisplay = document.getElementById('ssh-timer-display');
+    const warning = document.getElementById('ssh-warning');
+
+    if (!toggle) return;
+    toggle.checked = enabled;
+
+    if (enabled) {
+        label.textContent = 'Enabled';
+        label.style.color = 'var(--tangerine)';
+        badge.textContent = 'OPEN';
+        badge.style.background = 'rgba(230, 149, 0, 0.2)';
+        badge.style.color = 'var(--tangerine)';
+        timerDisplay.style.display = 'block';
+        warning.style.display = 'block';
+        sshExpiresAt = expiresAt;
+        startSSHCountdown();
+    } else {
+        label.textContent = 'Disabled';
+        label.style.color = '';
+        badge.textContent = 'CLOSED';
+        badge.style.background = 'rgba(105, 212, 172, 0.2)';
+        badge.style.color = 'var(--pacific)';
+        timerDisplay.style.display = 'none';
+        warning.style.display = 'none';
+        stopSSHCountdown();
+    }
+}
+
+async function toggleSSHAccess(enabled) {
+    const toggle = document.getElementById('ssh-toggle');
+    try {
+        toggle.disabled = true;
+        const result = await apiPost('/system/ssh-access', { enabled });
+        if (result.success) {
+            updateSSHUI(result.enabled, result.expires_at);
+            showToast(result.message, enabled ? 'warning' : 'success');
+        } else {
+            toggle.checked = !enabled;
+            showToast(result.error || 'Failed to toggle SSH access', 'error');
+        }
+    } catch (error) {
+        toggle.checked = !enabled;
+        showToast('Failed to toggle SSH access', 'error');
+    } finally {
+        toggle.disabled = false;
+    }
+}
+
+function startSSHCountdown() {
+    stopSSHCountdown();
+    sshCountdownInterval = setInterval(() => {
+        if (!sshExpiresAt) return;
+        const now = Date.now() / 1000;
+        const remaining = Math.max(0, sshExpiresAt - now);
+        if (remaining <= 0) {
+            stopSSHCountdown();
+            updateSSHUI(false, null);
+            showToast('SSH access auto-disabled (timeout)', 'info');
+            return;
+        }
+        const minutes = Math.floor(remaining / 60);
+        const seconds = Math.floor(remaining % 60);
+        const el = document.getElementById('ssh-countdown');
+        if (el) el.textContent = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }, 1000);
+}
+
+function stopSSHCountdown() {
+    if (sshCountdownInterval) {
+        clearInterval(sshCountdownInterval);
+        sshCountdownInterval = null;
+    }
+}
+
+// Load SSH status on system tab
+loadSSHStatus();
+
+// ==================== GitHub Update Functions ====================
+const GitHubUpdate = {
+    updatesAvailable: false,
+    commitsBehind: 0,
+    servicesToRestart: [],
+    previewData: null
+};
+
+// Load GitHub status
+async function loadGitHubStatus() {
+    try {
+        const status = await apiGet('/github/status');
+        if (status.success && status.is_valid) {
+            document.getElementById('github-current-commit').textContent = status.current_commit || '---';
+            document.getElementById('github-branch').textContent = status.current_branch || '---';
+            document.getElementById('github-update-status').textContent = 'Ready';
+        } else if (status.success) {
+            // Git repo not found or commands failed
+            document.getElementById('github-current-commit').textContent = status.current_commit || 'N/A';
+            document.getElementById('github-branch').textContent = status.current_branch || 'N/A';
+            document.getElementById('github-update-status').textContent = 'Not Available';
+            const statusCard = document.getElementById('github-status-card');
+            statusCard.classList.add('danger');
+            console.warn('Git status:', status.error || 'Repository not configured', 'Path:', status.repo_path);
+        }
+    } catch (error) {
+        console.error('Failed to load GitHub status:', error);
+        document.getElementById('github-current-commit').textContent = 'Error';
+        document.getElementById('github-branch').textContent = 'Error';
+        document.getElementById('github-update-status').textContent = 'API Error';
+    }
+}
+
+// Check for GitHub updates
+async function checkGitHubUpdates() {
+    try {
+        showToast('Checking for updates...', 'info');
+        const result = await apiGet('/github/check');
+
+        if (result.success && !result.error) {
+            GitHubUpdate.updatesAvailable = result.updates_available;
+            GitHubUpdate.commitsBehind = result.commits_behind || 0;
+
+            document.getElementById('github-commits-behind').textContent = GitHubUpdate.commitsBehind;
+
+            const statusCard = document.getElementById('github-status-card');
+            const statusText = document.getElementById('github-update-status');
+
+            // Reset status card classes
+            statusCard.classList.remove('warning', 'success', 'danger');
+
+            if (result.updates_available) {
+                statusText.textContent = 'Updates Available';
+                statusCard.classList.add('warning');
+                document.getElementById('btn-preview').disabled = false;
+                document.getElementById('btn-pull').disabled = false;
+                showToast(`${result.commits_behind} update(s) available`, 'warning');
+            } else {
+                statusText.textContent = 'Up to Date';
+                statusCard.classList.add('success');
+                document.getElementById('btn-preview').disabled = true;
+                document.getElementById('btn-pull').disabled = true;
+                showToast('Already up to date', 'success');
+            }
+        } else {
+            const errorMsg = result.error || 'Failed to check updates';
+            showToast(errorMsg, 'error');
+            document.getElementById('github-update-status').textContent = 'Check Failed';
+            const statusCard = document.getElementById('github-status-card');
+            statusCard.classList.remove('warning', 'success');
+            statusCard.classList.add('danger');
+        }
+    } catch (error) {
+        showToast('Failed to check for updates: ' + error.message, 'error');
+        document.getElementById('github-update-status').textContent = 'Error';
+    }
+}
+
+// Preview GitHub changes
+async function previewGitHubChanges() {
+    try {
+        showToast('Loading preview...', 'info');
+        const result = await apiGet('/github/preview');
+
+        if (result.success) {
+            GitHubUpdate.previewData = result;
+            GitHubUpdate.servicesToRestart = result.services_to_restart || [];
+
+            let html = '';
+
+            // Show frontend-only badge if applicable
+            if (result.is_frontend_only) {
+                html += `<div class="alert" style="background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: var(--spacing-md); border-radius: var(--radius-md); margin-bottom: var(--spacing-md);">
+                    <strong>🚀 Frontend-Only Update</strong><br>
+                    <small>Only Web UI files changed. Quick update - no reboot required!</small>
+                </div>`;
+            }
+
+            html += `<div class="alert" style="background: rgba(105, 212, 172, 0.1); border: 1px solid var(--hp-green); color: var(--hp-green); padding: var(--spacing-md); border-radius: var(--radius-md); margin-bottom: var(--spacing-md);">`;
+            html += `<strong>${result.allowed_changes || 0}</strong> files will be updated`;
+            if (result.blocked_files && result.blocked_files.length > 0) {
+                html += ` (${result.blocked_files.length} excluded)`;
+            }
+            html += '</div>';
+
+            // Show categorized changes
+            if (result.categories) {
+                const categoryNames = {
+                    'web_ui': '🎨 Web UI',
+                    'cortex': '🌍 Cortex Globe',
+                    'backend': '⚙️ Backend',
+                    'dnsxai': '🛡️ DNS Protection',
+                    'network': '🌐 Network Config',
+                    'response': '🔥 Threat Response',
+                    'other': '📁 Other'
+                };
+
+                for (const [cat, files] of Object.entries(result.categories)) {
+                    if (files && files.length > 0) {
+                        html += `<h4 style="margin: var(--spacing-md) 0 var(--spacing-sm);">${categoryNames[cat] || cat} (${files.length})</h4>`;
+                        html += '<div class="file-list">';
+                        files.forEach(file => {
+                            html += `<div class="file-list-item allowed">${file}</div>`;
+                        });
+                        html += '</div>';
+                    }
+                }
+            } else if (result.files && result.files.length > 0) {
+                html += '<h4 style="margin-bottom: var(--spacing-sm);">Files to Update:</h4>';
+                html += '<div class="file-list">';
+                result.files.forEach(file => {
+                    html += `<div class="file-list-item allowed">${file}</div>`;
+                });
+                html += '</div>';
+            }
+
+            document.getElementById('preview-content').innerHTML = html;
+            openModal('preview-modal');
+        } else {
+            showToast(result.error || 'Failed to load preview', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to preview changes', 'error');
+    }
+}
+
+// Open pull confirmation modal
+async function openPullModal() {
+    if (!GitHubUpdate.previewData) {
+        const result = await apiGet('/github/preview');
+        if (result.success) {
+            GitHubUpdate.previewData = result;
+            GitHubUpdate.servicesToRestart = result.services_to_restart || [];
+        }
+    }
+
+    const preview = GitHubUpdate.previewData;
+    if (preview) {
+        let summaryHtml = '';
+
+        // Show frontend-only badge
+        if (preview.is_frontend_only) {
+            summaryHtml += `<div style="background: rgba(59, 130, 246, 0.1); border: 1px solid #3b82f6; color: #3b82f6; padding: var(--spacing-sm); border-radius: var(--radius-md); margin-bottom: var(--spacing-md); font-size: 0.875rem;">
+                <strong>🚀 Quick Update</strong> - Only Web UI changes, no reboot needed
+            </div>`;
+        }
+
+        summaryHtml += `<p><strong>${preview.allowed_changes || 0}</strong> files will be updated.</p>`;
+
+        document.getElementById('pull-preview-summary').innerHTML = summaryHtml;
+        const servicesList = document.getElementById('services-to-restart');
+        if (preview.services_to_restart && preview.services_to_restart.length > 0) {
+            servicesList.innerHTML = preview.services_to_restart.map(s => `<li><code>${s}</code></li>`).join('');
+        } else {
+            servicesList.innerHTML = '<li><em>No services need restart</em></li>';
+        }
+    }
+    openModal('pull-modal');
+}
+
+// Execute GitHub pull
+async function executePull() {
+    closeModal('pull-modal');
+    openModal('progress-modal');
+
+    const progressBar = document.getElementById('progress-bar');
+    const progressMessage = document.getElementById('progress-message');
+
+    try {
+        progressMessage.textContent = 'Pulling updates from GitHub...';
+        progressBar.style.width = '20%';
+
+        const pullResult = await apiPost('/github/pull', { dry_run: false });
+
+        if (!pullResult.success) {
+            closeModal('progress-modal');
+            showToast(pullResult.error || 'Pull failed', 'error');
+            return;
+        }
+
+        progressBar.style.width = '70%';
+        progressMessage.textContent = 'Updates pulled. Restarting services...';
+
+        const servicesToRestart = pullResult.services_to_restart || GitHubUpdate.servicesToRestart;
+        if (servicesToRestart.length > 0) {
+            await apiPost('/github/apply', { services: servicesToRestart });
+        }
+
+        progressBar.style.width = '100%';
+        progressMessage.textContent = 'Update complete!';
+
+        setTimeout(() => {
+            closeModal('progress-modal');
+            showToast('Update applied successfully!', 'success');
+            loadGitHubStatus();
+            checkGitHubUpdates();
+            loadGitHubLog();
+        }, 1000);
+
+    } catch (error) {
+        closeModal('progress-modal');
+        showToast('Update failed: ' + error.message, 'error');
+    }
+}
+
+// Load GitHub commit log
+async function loadGitHubLog() {
+    try {
+        const result = await apiGet('/github/log');
+        const tbody = document.getElementById('github-commits-body');
+
+        if (result.success && result.commits && result.commits.length > 0) {
+            tbody.innerHTML = result.commits.map(commit => `
+                <tr>
+                    <td><code>${commit.hash}</code></td>
+                    <td>${escapeHtml(commit.message)}</td>
+                    <td class="text-muted" style="font-size: 0.8125rem;">${formatGitDate(commit.date)}</td>
+                </tr>
+            `).join('');
+        } else {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-muted">No commits found</td></tr>';
+        }
+    } catch (error) {
+        console.error('Failed to load git log:', error);
+    }
+}
+
+function escapeHtml(text) {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+function formatGitDate(dateStr) {
+    if (!dateStr || dateStr === 'unknown') return '---';
+    try {
+        // Git date format: "2024-01-15 10:30:45 +0000" or "2024-01-15 10:30:45"
+        // Manually parse to avoid Safari Date parsing issues
+        const match = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})[\sT]+(\d{2}):(\d{2}):(\d{2})(?:\s*([+-])(\d{2}):?(\d{2}))?/);
+
+        if (!match) {
+            return dateStr; // Can't parse, return original
+        }
+
+        const [, year, month, day, hour, minute, second, tzSign, tzHour, tzMin] = match;
+
+        // Create date using explicit numeric values (works on all browsers)
+        let date;
+        if (tzSign && tzHour && tzMin) {
+            // Has timezone offset - create as UTC then adjust
+            const tzOffsetMinutes = (parseInt(tzHour, 10) * 60 + parseInt(tzMin, 10)) * (tzSign === '-' ? 1 : -1);
+            date = new Date(Date.UTC(
+                parseInt(year, 10),
+                parseInt(month, 10) - 1,
+                parseInt(day, 10),
+                parseInt(hour, 10),
+                parseInt(minute, 10),
+                parseInt(second, 10)
+            ));
+            date = new Date(date.getTime() + tzOffsetMinutes * 60 * 1000);
+        } else {
+            // No timezone, assume local
+            date = new Date(
+                parseInt(year, 10),
+                parseInt(month, 10) - 1,
+                parseInt(day, 10),
+                parseInt(hour, 10),
+                parseInt(minute, 10),
+                parseInt(second, 10)
+            );
+        }
+
+        if (isNaN(date.getTime())) {
+            return dateStr;
+        }
+
+        return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+    } catch { return dateStr; }
+}
+
+// Initialize GitHub status on system tab load
+loadGitHubStatus();
+loadGitHubLog();
+</script>

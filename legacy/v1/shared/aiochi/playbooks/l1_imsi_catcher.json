@@ -1,0 +1,127 @@
+{
+  "id": "l1_imsi_catcher",
+  "name": "L1 IMSI Catcher Defense",
+  "version": "1.0",
+  "description": "Defends against IMSI catchers (Stingrays) detected via L1 telemetry",
+  "mitre_attack": ["T1040", "T1556"],
+  "category": "l1_soc",
+  "severity_threshold": 1,
+
+  "triggers": [
+    {
+      "type": "l1_anomaly",
+      "anomaly_types": ["imsi_catcher", "rogue_tower", "unknown_tower"],
+      "conditions": {
+        "l1_trust_score": "<30",
+        "indicators_count": ">=2"
+      }
+    },
+    {
+      "type": "l1_anomaly",
+      "description": "Handover ping-pong (IMSI catcher signature)",
+      "anomaly_types": ["handover_storm"],
+      "conditions": {
+        "handover_count_5min": ">10",
+        "cells_involved": "<=3"
+      }
+    },
+    {
+      "type": "l1_anomaly",
+      "description": "GPS vs tower location mismatch while stationary",
+      "anomaly_types": ["gps_tower_mismatch"],
+      "conditions": {
+        "location_mismatch_km": ">5",
+        "gps_stationary": true
+      }
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "survival_mode_enter",
+      "description": "Activate L1 Survival Mode",
+      "command": "l1_survival_mode",
+      "parameters": {
+        "trigger": "imsi_catcher_detected",
+        "actions": ["protocol_lockdown", "vpn_enable", "alert_soc"]
+      },
+      "rollback": "l1_survival_mode_exit"
+    },
+    {
+      "order": 2,
+      "type": "protocol_lockdown",
+      "description": "Disable 2G/3G to prevent crypto downgrade",
+      "command": "mmcli -m 0 --set-allowed-modes='4g|5g'",
+      "rollback": "mmcli -m 0 --set-allowed-modes='any'"
+    },
+    {
+      "order": 3,
+      "type": "cell_blacklist",
+      "description": "Blacklist the suspicious cell tower",
+      "command": "l1_blacklist_cell",
+      "parameters": {
+        "cell_id": "{{trigger.cell_id}}",
+        "pci": "{{trigger.pci}}",
+        "mcc": "{{trigger.mcc}}",
+        "mnc": "{{trigger.mnc}}",
+        "reason": "IMSI catcher indicators",
+        "duration_hours": 168
+      }
+    },
+    {
+      "order": 4,
+      "type": "vpn_enable",
+      "description": "Enable zero-trust VPN",
+      "command": "systemctl start hookprobe-vpn",
+      "parameters": {
+        "tunnel_type": "wireguard",
+        "split_tunnel": false,
+        "dns_override": ["1.1.1.1", "8.8.8.8"]
+      }
+    },
+    {
+      "order": 5,
+      "type": "notification",
+      "description": "Alert user and SOC",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "critical",
+        "persona": "parent",
+        "push_notification": true,
+        "sms_alert": true
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Cellular eavesdropping attempt blocked",
+    "owner_friendly": "I detected what appears to be a fake cell tower (sometimes called a 'Stingray') trying to intercept your phone's communications. I've activated protection mode: your data is now encrypted through a secure tunnel and I'm blocking the suspicious tower. Your calls and texts should still work normally.",
+    "technical": "L1 SOC detected IMSI catcher indicators: Cell ID {{trigger.cell_id}} (PCI {{trigger.pci}}) shows rogue tower signatures. L1 Trust Score: {{trigger.l1_trust_score}}%. Evidence: {{trigger.evidence}}. Actions: Protocol lockdown (2G/3G disabled), VPN tunnel active, cell blacklisted.",
+    "action_prompt": "Your protection is active. If you're in a sensitive location (protest, border crossing, etc.), consider leaving the area.",
+    "resolution_options": [
+      {"label": "Keep protection active", "action": "continue_survival"},
+      {"label": "Move to safer location", "action": "log_and_continue"},
+      {"label": "View technical details", "action": "show_l1_dashboard"}
+    ],
+    "emergency_contact": "If this is a government surveillance concern, contact a civil liberties organization."
+  },
+
+  "auto_resolve": {
+    "enabled": true,
+    "conditions": {
+      "l1_trust_score": ">70",
+      "stable_duration_minutes": 15,
+      "different_cell": true
+    },
+    "reason": "L1 Trust Score recovered after moving to trusted cell"
+  },
+
+  "evidence_collection": {
+    "l1_metrics_log": true,
+    "l1_log_duration_seconds": 600,
+    "cell_fingerprint": true,
+    "gps_track": true,
+    "timing_advance_log": true
+  }
+}

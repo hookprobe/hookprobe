@@ -1,0 +1,1164 @@
+#!/bin/bash
+#
+# HookProbe Guardian Uninstall Script
+# Version: 5.4.0
+# License: AGPL-3.0 - see LICENSE file
+#
+# Removes all Guardian components:
+# - Podman containers (WAF, Neuro)
+# - DNS Shield blocklists
+# - dnsXai ML models, training data, and Python packages (scikit-learn, joblib)
+# - Systemd services (including AP services: guardian-wlan, guardian-ap)
+# - Systemd service overrides (hostapd.service.d, dnsmasq.service.d)
+# - Network bridges
+# - hostapd, wpa_supplicant, and dnsmasq configurations
+# - nftables rules
+# - Guardian directories
+# - Guardian scripts (/usr/local/bin/guardian-wlan-setup.sh)
+# - resolv.conf immutable flag and DNS restoration
+# - NetworkManager guardian.conf configuration
+# - sbin tool symlinks (/usr/local/bin/iw, rfkill, etc.)
+# - /etc/hookprobe configuration files
+#
+
+set -e
+
+# ============================================================
+# COLORS
+# ============================================================
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+WHITE='\033[1;37m'
+BOLD='\033[1m'
+DIM='\033[2m'
+NC='\033[0m'
+
+# ============================================================
+# LOGGING
+# ============================================================
+log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
+log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
+log_error() { echo -e "${RED}[ERROR]${NC} $1"; }
+log_step() { echo -e "${CYAN}[STEP]${NC} $1"; }
+
+# ============================================================
+# PARSE ARGUMENTS
+# ============================================================
+FORCE_MODE=false
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --force|-f)
+            FORCE_MODE=true
+            shift
+            ;;
+        *)
+            shift
+            ;;
+    esac
+done
+
+# ============================================================
+# PREREQUISITES
+# ============================================================
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        log_error "This script must be run as root"
+        exit 1
+    fi
+}
+
+# ============================================================
+# STOP SERVICES
+# ============================================================
+stop_services() {
+    log_step "Stopping Guardian services..."
+
+    local services=(
+        # Core services
+        "guardian-webui"
+        "dns-shield-update"
+        "guardian-qsecbit"
+        # Unified services
+        "guardian-htp"
+        "guardian-htp-file"
+        "guardian-layer-detector"
+        "guardian-mobile-protection"
+        "guardian-aggregator"
+        "guardian-xdp"
+        "guardian-waf"
+        "guardian-neuro"
+        # AP services (WAN-independent startup)
+        "guardian-ap"
+        "guardian-wlan"
+        # Health check timers
+        "guardian-ssid-health"
+        "guardian-wifi-health"
+        # Channel optimization
+        "guardian-channel-optimize"
+        # Offline mode service
+        "guardian-offline"
+        # Routing/NAT service
+        "guardian-routing"
+        # System services
+        "hostapd"
+        "dnsmasq"
+    )
+
+    # Stop timers first
+    local timers=(
+        "guardian-ssid-health"
+        "guardian-wifi-health"
+        "guardian-channel-optimize"
+    )
+    for timer in "${timers[@]}"; do
+        if systemctl is-active "${timer}.timer" &>/dev/null; then
+            log_info "Stopping ${timer}.timer..."
+            systemctl stop "${timer}.timer" 2>/dev/null || true
+        fi
+    done
+
+    for service in "${services[@]}"; do
+        if systemctl is-active "$service" &>/dev/null; then
+            log_info "Stopping $service..."
+            systemctl stop "$service" 2>/dev/null || true
+        fi
+    done
+
+    log_info "Services stopped"
+}
+
+# ============================================================
+# DISABLE AND REMOVE SYSTEMD SERVICES
+# ============================================================
+remove_systemd_services() {
+    log_step "Removing systemd services..."
+
+    local services=(
+        # Core services
+        "guardian-webui"
+        "guardian-waf"
+        "guardian-neuro"
+        "dns-shield-update"
+        "guardian-qsecbit"
+        # Unified services
+        "guardian-htp"
+        "guardian-htp-file"
+        "guardian-layer-detector"
+        "guardian-mobile-protection"
+        "guardian-aggregator"
+        "guardian-xdp"
+        # AP services (WAN-independent startup)
+        "guardian-ap"
+        "guardian-wlan"
+        # Health check services
+        "guardian-ssid-health"
+        "guardian-wifi-health"
+        # Channel optimization
+        "guardian-channel-optimize"
+        # Offline mode service
+        "guardian-offline"
+        # Routing/NAT service
+        "guardian-routing"
+        # wlan0 WAN interface UP service
+        "guardian-wlan0-up"
+    )
+
+    # Disable and remove timers first
+    local timers=(
+        "guardian-ssid-health"
+        "guardian-wifi-health"
+        "guardian-channel-optimize"
+    )
+    for timer in "${timers[@]}"; do
+        if systemctl is-enabled "${timer}.timer" &>/dev/null; then
+            log_info "Disabling ${timer}.timer..."
+            systemctl disable "${timer}.timer" 2>/dev/null || true
+        fi
+        if [ -f "/etc/systemd/system/${timer}.timer" ]; then
+            log_info "Removing ${timer}.timer..."
+            rm -f "/etc/systemd/system/${timer}.timer"
+        fi
+    done
+
+    for service in "${services[@]}"; do
+        if systemctl is-enabled "$service" &>/dev/null; then
+            log_info "Disabling $service..."
+            systemctl disable "$service" 2>/dev/null || true
+        fi
+
+        if [ -f "/etc/systemd/system/${service}.service" ]; then
+            log_info "Removing ${service}.service..."
+            rm -f "/etc/systemd/system/${service}.service"
+        fi
+    done
+
+    # Remove systemd service drop-in directories (overrides for hostapd/dnsmasq)
+    log_info "Removing service override directories..."
+    if [ -d "/etc/systemd/system/hostapd.service.d" ]; then
+        rm -rf /etc/systemd/system/hostapd.service.d
+        log_info "Removed hostapd.service.d overrides"
+    fi
+    if [ -d "/etc/systemd/system/dnsmasq.service.d" ]; then
+        rm -rf /etc/systemd/system/dnsmasq.service.d
+        log_info "Removed dnsmasq.service.d overrides"
+    fi
+
+    # Remove guardian-wlan-setup script
+    if [ -f "/usr/local/bin/guardian-wlan-setup.sh" ]; then
+        rm -f /usr/local/bin/guardian-wlan-setup.sh
+        log_info "Removed guardian-wlan-setup.sh"
+    fi
+
+    # Remove guardian-setup-routing script
+    if [ -f "/usr/local/bin/guardian-setup-routing.sh" ]; then
+        rm -f /usr/local/bin/guardian-setup-routing.sh
+        log_info "Removed guardian-setup-routing.sh"
+    fi
+
+    # Remove health check scripts
+    if [ -f "/usr/local/bin/guardian-ssid-health.sh" ]; then
+        rm -f /usr/local/bin/guardian-ssid-health.sh
+        log_info "Removed guardian-ssid-health.sh"
+    fi
+    if [ -f "/usr/local/bin/guardian-wifi-health.sh" ]; then
+        rm -f /usr/local/bin/guardian-wifi-health.sh
+        log_info "Removed guardian-wifi-health.sh"
+    fi
+    if [ -f "/usr/local/bin/guardian-channel-optimize.sh" ]; then
+        rm -f /usr/local/bin/guardian-channel-optimize.sh
+        log_info "Removed guardian-channel-optimize.sh"
+    fi
+
+    # Remove additional helper scripts (installed by setup.sh)
+    if [ -f "/usr/local/bin/guardian-nm-setup.sh" ]; then
+        rm -f /usr/local/bin/guardian-nm-setup.sh
+        log_info "Removed guardian-nm-setup.sh"
+    fi
+    if [ -f "/usr/local/bin/fix-dns-nat.sh" ]; then
+        rm -f /usr/local/bin/fix-dns-nat.sh
+        log_info "Removed fix-dns-nat.sh"
+    fi
+    if [ -f "/usr/local/bin/update-blocklists.sh" ]; then
+        rm -f /usr/local/bin/update-blocklists.sh
+        log_info "Removed update-blocklists.sh"
+    fi
+    if [ -f "/usr/local/bin/update-cortex-modules.sh" ]; then
+        rm -f /usr/local/bin/update-cortex-modules.sh
+        log_info "Removed update-cortex-modules.sh"
+    fi
+    if [ -f "/usr/local/bin/guardian-macsec" ]; then
+        rm -f /usr/local/bin/guardian-macsec
+        log_info "Removed guardian-macsec"
+    fi
+    if [ -f "/usr/local/bin/guardian-routing.sh" ]; then
+        rm -f /usr/local/bin/guardian-routing.sh
+        log_info "Removed guardian-routing.sh"
+    fi
+
+    # Remove runtime state directory
+    rm -rf /run/guardian 2>/dev/null || true
+
+    # Reload systemd
+    systemctl daemon-reload
+
+    log_info "Systemd services removed"
+}
+
+# ============================================================
+# REMOVE PODMAN CONTAINERS
+# ============================================================
+remove_containers() {
+    log_step "Removing Podman containers..."
+
+    if ! command -v podman &>/dev/null; then
+        log_info "Podman not installed, skipping container removal"
+        return 0
+    fi
+
+    local containers=(
+        "guardian-waf"
+        "guardian-neuro"
+    )
+
+    for container in "${containers[@]}"; do
+        if podman ps -a --format "{{.Names}}" | grep -q "^${container}$"; then
+            log_info "Removing container: $container"
+            podman stop "$container" 2>/dev/null || true
+            podman rm -f "$container" 2>/dev/null || true
+        fi
+    done
+
+    # Remove volumes
+    log_info "Removing Podman volumes..."
+    local volumes=(
+        "guardian-waf-logs"
+    )
+
+    for volume in "${volumes[@]}"; do
+        if podman volume exists "$volume" 2>/dev/null; then
+            log_info "Removing volume: $volume"
+            podman volume rm "$volume" 2>/dev/null || true
+        fi
+    done
+
+    # Remove legacy guardian-net network (backward compatibility)
+    # Note: Current containers use --network host, but older installs may have this
+    if podman network exists guardian-net 2>/dev/null; then
+        log_info "Removing legacy network: guardian-net"
+        podman network rm guardian-net 2>/dev/null || true
+    fi
+
+    log_info "Containers removed"
+}
+
+# ============================================================
+# REMOVE NETWORK INTERFACES
+# ============================================================
+remove_network_interfaces() {
+    log_step "Removing network interfaces..."
+
+    # Remove VLAN bridges (SDN mode)
+    local vlans=(10 20 30 40 50 60 70 80 999)
+    for vlan in "${vlans[@]}"; do
+        if ip link show "br${vlan}" &>/dev/null; then
+            log_info "Removing bridge: br${vlan}"
+            ip link set "br${vlan}" down 2>/dev/null || true
+            ip link delete "br${vlan}" 2>/dev/null || true
+        fi
+    done
+
+    # Remove VLAN interfaces
+    for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -E '\.[0-9]+$'); do
+        log_info "Removing VLAN interface: $iface"
+        ip link set "$iface" down 2>/dev/null || true
+        ip link delete "$iface" 2>/dev/null || true
+    done
+
+    # Remove main bridge
+    if ip link show br0 &>/dev/null; then
+        log_info "Removing bridge: br0"
+        ip link set br0 down 2>/dev/null || true
+        ip link delete br0 2>/dev/null || true
+    fi
+
+    # Remove any VXLAN interfaces
+    for vxlan in $(ip -o link show | awk -F': ' '{print $2}' | grep -E '^vxlan'); do
+        log_info "Removing VXLAN interface: $vxlan"
+        ip link set "$vxlan" down 2>/dev/null || true
+        ip link delete "$vxlan" 2>/dev/null || true
+    done
+
+    # Remove OVS bridges if present
+    if command -v ovs-vsctl &>/dev/null; then
+        for bridge in $(ovs-vsctl list-br 2>/dev/null); do
+            if [[ "$bridge" == *guardian* ]] || [[ "$bridge" == "br-sdn" ]]; then
+                log_info "Removing OVS bridge: $bridge"
+                ovs-vsctl del-br "$bridge" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    log_info "Network interfaces removed"
+}
+
+# ============================================================
+# REMOVE NFTABLES RULES
+# ============================================================
+remove_nftables_rules() {
+    log_step "Removing nftables rules..."
+
+    # Delete Guardian table if it exists
+    if nft list tables 2>/dev/null | grep -q "guardian"; then
+        log_info "Removing nftables table: guardian"
+        nft delete table inet guardian 2>/dev/null || true
+        nft delete table ip guardian_nat 2>/dev/null || true
+    fi
+
+    # Remove nftables configuration files
+    rm -f /etc/nftables.d/guardian.nft
+    rm -f /etc/nftables.d/guardian-vlans.nft
+
+    # Restore nftables.conf to default (remove guardian include and inline rules)
+    if [ -f /etc/nftables.conf ]; then
+        # Check if nftables.conf was replaced by Guardian (contains guardian include)
+        if grep -q "guardian.nft\|guardian_nat\|inet guardian" /etc/nftables.conf 2>/dev/null; then
+            # Restore to Debian default nftables.conf
+            cat > /etc/nftables.conf << 'NFTEOF'
+#!/usr/sbin/nft -f
+
+flush ruleset
+NFTEOF
+            log_info "Restored nftables.conf to default"
+        else
+            sed -i '/guardian.nft/d' /etc/nftables.conf
+            log_info "Removed Guardian include from nftables.conf"
+        fi
+    fi
+
+    # Remove iptables persistence hook script
+    rm -f /etc/network/if-up.d/guardian-nat
+    log_info "Removed iptables persistence hook"
+
+    # Clean up iptables NAT rules (all common WAN interfaces)
+    log_info "Cleaning up iptables NAT rules..."
+    for WAN in eth0 wlan0 enp0s25 enp1s0 wlp2s0; do
+        iptables -t nat -D POSTROUTING -o $WAN -j MASQUERADE 2>/dev/null || true
+    done
+
+    # Clean up iptables FORWARD rules for Guardian LAN interfaces
+    for LAN in wlan1 br0; do
+        iptables -D FORWARD -i $LAN -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -o $LAN -j ACCEPT 2>/dev/null || true
+        iptables -D FORWARD -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        for WAN in eth0 wlan0 enp0s25 enp1s0 wlp2s0; do
+            iptables -D FORWARD -i $LAN -o $WAN -j ACCEPT 2>/dev/null || true
+            iptables -D FORWARD -i $WAN -o $LAN -j ACCEPT 2>/dev/null || true
+            iptables -D FORWARD -i $WAN -o $LAN -m state --state RELATED,ESTABLISHED -j ACCEPT 2>/dev/null || true
+        done
+    done
+
+    log_info "nftables rules removed"
+}
+
+# ============================================================
+# REMOVE HOSTAPD CONFIGURATION
+# ============================================================
+remove_hostapd_config() {
+    log_step "Removing hostapd configuration..."
+
+    rm -f /etc/hostapd/hostapd.conf
+    rm -f /etc/hostapd/hostapd.vlan
+    rm -f /etc/hostapd/hostapd.accept
+    rm -f /etc/hostapd/hostapd.deny
+    rm -f /etc/default/hostapd
+
+    # Restore default hostapd if needed
+    if [ -f /etc/hostapd/hostapd.conf.bak ]; then
+        mv /etc/hostapd/hostapd.conf.bak /etc/hostapd/hostapd.conf
+        log_info "Restored original hostapd.conf"
+    fi
+
+    log_info "hostapd configuration removed"
+}
+
+# ============================================================
+# REMOVE WPA_SUPPLICANT CONFIGURATION (wlan0 WAN)
+# ============================================================
+remove_wpa_supplicant_config() {
+    log_step "Removing wpa_supplicant configuration..."
+
+    # Remove Guardian-created wpa_supplicant config for wlan0
+    rm -f /etc/wpa_supplicant/wpa_supplicant-wlan0.conf
+    rm -f /tmp/wpa_supplicant-wlan0.conf
+
+    # Stop wpa_supplicant on wlan0 if running
+    pkill -f "wpa_supplicant.*wlan0" 2>/dev/null || true
+
+    log_info "wpa_supplicant configuration removed"
+}
+
+# ============================================================
+# REMOVE NETWORKMANAGER CONFIGURATION
+# ============================================================
+remove_networkmanager_config() {
+    log_step "Removing NetworkManager Guardian configuration..."
+
+    # Remove Guardian NM configuration files
+    rm -f /etc/NetworkManager/conf.d/guardian-unmanaged.conf 2>/dev/null || true
+    rm -f /etc/NetworkManager/conf.d/guardian.conf 2>/dev/null || true
+
+    # Remove Guardian WiFi connections
+    if command -v nmcli &>/dev/null && systemctl is-active NetworkManager &>/dev/null; then
+        # List and delete guardian-* connections
+        local connections
+        connections=$(nmcli -t -f NAME connection show 2>/dev/null | grep "^guardian-" || true)
+        for conn in $connections; do
+            log_info "Removing NetworkManager connection: $conn"
+            nmcli connection delete "$conn" 2>/dev/null || true
+        done
+
+        # Reload NM configuration
+        nmcli general reload 2>/dev/null || true
+
+        # Re-enable management of all interfaces
+        for iface in wlan0 wlan1 eth0; do
+            if [ -d "/sys/class/net/$iface" ]; then
+                nmcli device set "$iface" managed yes 2>/dev/null || true
+            fi
+        done
+    fi
+
+    log_info "NetworkManager configuration removed"
+}
+
+# ============================================================
+# REMOVE DNSMASQ CONFIGURATION
+# ============================================================
+remove_dnsmasq_config() {
+    log_step "Removing dnsmasq configuration..."
+
+    # Remove Guardian dnsmasq configs
+    rm -f /etc/dnsmasq.d/guardian.conf
+    rm -f /etc/dnsmasq.d/dns-shield.conf
+
+    # Restore original dnsmasq config if backed up
+    # Check for both possible backup names
+    if [ -f /etc/dnsmasq.conf.guardian-backup ]; then
+        mv /etc/dnsmasq.conf.guardian-backup /etc/dnsmasq.conf
+        log_info "Restored original dnsmasq.conf from guardian-backup"
+    elif [ -f /etc/dnsmasq.conf.bak ]; then
+        mv /etc/dnsmasq.conf.bak /etc/dnsmasq.conf
+        log_info "Restored original dnsmasq.conf from bak"
+    fi
+
+    log_info "dnsmasq configuration removed"
+}
+
+# ============================================================
+# REMOVE OFFLINE MODE CONFIGURATION
+# ============================================================
+remove_offline_mode_config() {
+    log_step "Removing offline mode configuration..."
+
+    # Remove offline state files
+    rm -f /var/lib/guardian/offline_state.json 2>/dev/null || true
+    rm -f /opt/hookprobe/guardian/data/offline_state.json 2>/dev/null || true
+    rmdir /var/lib/guardian 2>/dev/null || true
+
+    # Remove generated hostapd configs from offline mode
+    rm -f /etc/hostapd/hostapd.conf.offline 2>/dev/null || true
+
+    # Restore original dhcpcd.conf if backed up
+    if [ -f /etc/dhcpcd.conf.guardian.bak ]; then
+        mv /etc/dhcpcd.conf.guardian.bak /etc/dhcpcd.conf
+        log_info "Restored original dhcpcd.conf"
+    fi
+
+    # Remove route metric configurations added by offline mode
+    # These are typically in dhcpcd.conf, so restoring backup handles this
+
+    log_info "Offline mode configuration removed"
+}
+
+# ============================================================
+# REMOVE SYSCTL SETTINGS
+# ============================================================
+remove_sysctl_settings() {
+    log_step "Removing sysctl settings..."
+
+    rm -f /etc/sysctl.d/99-guardian.conf
+
+    # Reload sysctl
+    sysctl --system &>/dev/null || true
+
+    log_info "sysctl settings removed"
+}
+
+# ============================================================
+# REMOVE GUARDIAN CONFIGURATION
+# ============================================================
+remove_guardian_config() {
+    log_step "Removing Guardian configuration..."
+
+    # Remove main configuration file
+    if [ -f "/etc/guardian/guardian.yaml" ]; then
+        log_info "Removing /etc/guardian/guardian.yaml..."
+        rm -f "/etc/guardian/guardian.yaml"
+    fi
+
+    # Remove guardian config directory if empty
+    if [ -d "/etc/guardian" ] && [ -z "$(ls -A /etc/guardian 2>/dev/null)" ]; then
+        rm -rf "/etc/guardian"
+        log_info "Removed /etc/guardian (was empty)"
+    fi
+
+    log_info "Guardian configuration removed"
+}
+
+# ============================================================
+# REMOVE HTP FILE TRANSFER STATE AND DATA
+# ============================================================
+remove_htp_data() {
+    log_step "Removing HTP file transfer state and data..."
+
+    # Remove HTP file transfer state
+    rm -f /opt/hookprobe/guardian/data/htp_file_state.json 2>/dev/null || true
+    rm -f /opt/hookprobe/guardian/data/htp_state.json 2>/dev/null || true
+
+    # Remove HTP session keys
+    rm -f /opt/hookprobe/guardian/data/htp_session_keys.json 2>/dev/null || true
+
+    # Remove legacy WebSocket VPN state files (deprecated - replaced by HTP Mesh)
+    rm -f /opt/hookprobe/guardian/data/vpn_state.json 2>/dev/null || true
+    rm -f /opt/hookprobe/guardian/data/vpn_keypair.json 2>/dev/null || true
+    rm -rf /opt/hookprobe/guardian/data/noise_keys 2>/dev/null || true
+
+    # Remove HTP transfer cache
+    rm -rf /opt/hookprobe/guardian/data/htp_transfers 2>/dev/null || true
+
+    # Remove file transfer base directory if empty
+    rmdir /srv/guardian 2>/dev/null || true
+
+    log_info "HTP file transfer data removed"
+}
+
+# ============================================================
+# REMOVE DNS SHIELD AND ML COMPONENTS
+# ============================================================
+remove_dns_shield() {
+    log_step "Removing DNS Shield, dnsXai ML, and configuration..."
+
+    # Stop and disable timer
+    systemctl stop dns-shield-update.timer 2>/dev/null || true
+    systemctl disable dns-shield-update.timer 2>/dev/null || true
+
+    # Remove systemd files
+    rm -f /etc/systemd/system/dns-shield-update.service 2>/dev/null || true
+    rm -f /etc/systemd/system/dns-shield-update.timer 2>/dev/null || true
+
+    # Remove dnsmasq DNS Shield config
+    rm -f /etc/dnsmasq.d/dns-shield.conf 2>/dev/null || true
+
+    # Remove ML data directory (dnsXai models, training data)
+    if [ -d "/opt/hookprobe/guardian/dns-shield/ml" ]; then
+        log_info "Removing dnsXai ML models and training data..."
+        rm -rf /opt/hookprobe/guardian/dns-shield/ml 2>/dev/null || true
+    fi
+
+    # Remove DNS Shield directory and all blocklists
+    rm -rf /opt/hookprobe/guardian/dns-shield 2>/dev/null || true
+
+    # Remove DNS Shield logs
+    rm -f /var/log/hookprobe/dns-shield.log 2>/dev/null || true
+    rm -f /var/log/hookprobe/dnsmasq-queries.log 2>/dev/null || true
+
+    systemctl daemon-reload 2>/dev/null || true
+
+    log_info "DNS Shield and dnsXai ML removed"
+}
+
+# ============================================================
+# REMOVE GUARDIAN DIRECTORIES
+# ============================================================
+remove_guardian_directories() {
+    log_step "Removing Guardian directories..."
+
+    # Remove Guardian Python library
+    rm -rf /opt/hookprobe/guardian/lib
+    log_info "Removed Guardian library modules"
+
+    # Remove Guardian data directory
+    rm -rf /opt/hookprobe/guardian/data
+    log_info "Removed Guardian data directory"
+
+    # Remove shared Cortex visualization modules
+    if [ -d /opt/hookprobe/shared/cortex ]; then
+        rm -rf /opt/hookprobe/shared/cortex
+        log_info "Removed shared Cortex modules"
+    fi
+    # Remove shared directory if empty
+    if [ -d /opt/hookprobe/shared ] && [ -z "$(ls -A /opt/hookprobe/shared 2>/dev/null)" ]; then
+        rm -rf /opt/hookprobe/shared
+        log_info "Removed /opt/hookprobe/shared (was empty)"
+    fi
+
+    # Remove full Guardian directory
+    rm -rf /opt/hookprobe/guardian
+
+    # Remove VXLAN secrets
+    rm -rf /etc/hookprobe/secrets/vxlan
+    rm -f /etc/hookprobe/ovs-config.sh
+
+    # Remove MACsec configuration and secrets
+    rm -rf /etc/hookprobe/secrets/macsec 2>/dev/null || true
+    rm -f /etc/hookprobe/macsec.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/macsec-*.conf 2>/dev/null || true
+    log_info "Removed MACsec configuration"
+
+    # Remove /etc/hookprobe/secrets if empty
+    if [ -d /etc/hookprobe/secrets ] && [ -z "$(ls -A /etc/hookprobe/secrets 2>/dev/null)" ]; then
+        rm -rf /etc/hookprobe/secrets
+        log_info "Removed /etc/hookprobe/secrets (was empty)"
+    fi
+
+    # Remove Guardian-specific configuration files from /etc/hookprobe
+    rm -f /etc/hookprobe/guardian.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/guardian_auth.json 2>/dev/null || true
+    rm -f /etc/hookprobe/guardian_setup_token 2>/dev/null || true
+    rm -f /etc/hookprobe/install.conf 2>/dev/null || true
+    rm -f /etc/hookprobe/environment 2>/dev/null || true
+    rm -f /etc/hookprobe/mesh_seed 2>/dev/null || true
+    rm -f /etc/hookprobe/wifi-interfaces.conf 2>/dev/null || true
+
+    # Don't remove /etc/hookprobe if other components exist (e.g. Fortress)
+    if [ -d /etc/hookprobe ] && [ -z "$(ls -A /etc/hookprobe 2>/dev/null)" ]; then
+        rm -rf /etc/hookprobe
+        log_info "Removed /etc/hookprobe (was empty)"
+    elif [ -d /etc/hookprobe ]; then
+        log_info "Kept /etc/hookprobe (other components present)"
+    fi
+
+    # Remove Guardian log directory
+    if [ -d /var/log/hookprobe ]; then
+        rm -rf /var/log/hookprobe
+        log_info "Removed /var/log/hookprobe log directory"
+    fi
+
+    # Remove runtime interface detection files
+    rm -f /run/guardian-xdp-iface 2>/dev/null || true
+    rm -f /run/guardian-*.pid 2>/dev/null || true
+    log_info "Removed runtime state files"
+
+    # Don't remove /opt/hookprobe if other components exist
+    if [ -d /opt/hookprobe ] && [ -z "$(ls -A /opt/hookprobe 2>/dev/null)" ]; then
+        rm -rf /opt/hookprobe
+        log_info "Removed /opt/hookprobe (was empty)"
+    fi
+
+    # Remove Python path entry
+    local PYTHON_SITE=$(python3 -c "import site; print(site.getsitepackages()[0])" 2>/dev/null || echo "/usr/lib/python3/dist-packages")
+    rm -f "$PYTHON_SITE/guardian.pth" 2>/dev/null || true
+
+    log_info "Guardian directories removed"
+}
+
+# ============================================================
+# OPTIONAL: REMOVE PACKAGES
+# ============================================================
+remove_packages() {
+    log_step "Removing installed packages (optional)..."
+
+    if [ "$FORCE_MODE" = true ]; then
+        # In force mode, skip optional package removal
+        log_info "Force mode - skipping optional package removal"
+        return 0
+    fi
+
+    read -p "Remove hostapd and dnsmasq packages? (yes/no) [no]: " remove_pkgs
+    if [ "$remove_pkgs" != "yes" ]; then
+        log_info "Skipping package removal"
+        return 0
+    fi
+
+    # Check for apt lock
+    if command -v apt-get &>/dev/null; then
+        # Check if apt is locked
+        if fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; then
+            log_warn "apt is locked by another process"
+            log_info "Waiting up to 30 seconds for lock to release..."
+            local wait_count=0
+            while fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1 && [ $wait_count -lt 6 ]; do
+                sleep 5
+                wait_count=$((wait_count + 1))
+            done
+            if fuser /var/lib/dpkg/lock-frontend &>/dev/null 2>&1; then
+                log_warn "apt still locked - skipping package removal"
+                log_info "You can manually remove packages later with:"
+                log_info "  sudo apt-get remove --purge hostapd dnsmasq"
+                return 0
+            fi
+        fi
+
+        # Remove hostapd if installed
+        if dpkg -l hostapd 2>/dev/null | grep -q "^ii"; then
+            log_info "Removing hostapd..."
+
+            # Kill any running hostapd processes first
+            pkill -9 hostapd 2>/dev/null || true
+
+            # Try to stop/disable service (ignore errors - service may not exist)
+            systemctl stop hostapd 2>/dev/null || true
+            systemctl disable hostapd 2>/dev/null || true
+            systemctl unmask hostapd 2>/dev/null || true
+
+            # Remove with purge and auto-yes for config prompts
+            if DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y hostapd 2>/dev/null; then
+                log_info "hostapd removed successfully"
+            else
+                # Fallback: try dpkg directly
+                log_warn "apt-get failed, trying dpkg..."
+                dpkg --remove --force-remove-reinstreq hostapd 2>/dev/null || {
+                    log_warn "Failed to remove hostapd package"
+                    log_info "Manual removal: sudo dpkg --purge --force-all hostapd"
+                }
+            fi
+        else
+            log_info "hostapd is not installed - skipping"
+        fi
+
+        # Remove dnsmasq if installed
+        if dpkg -l dnsmasq 2>/dev/null | grep -q "^ii"; then
+            log_info "Removing dnsmasq..."
+
+            # Kill any running dnsmasq processes first
+            pkill -9 dnsmasq 2>/dev/null || true
+
+            # Try to stop/disable service (ignore errors - service may not exist)
+            systemctl stop dnsmasq 2>/dev/null || true
+            systemctl disable dnsmasq 2>/dev/null || true
+            systemctl unmask dnsmasq 2>/dev/null || true
+
+            # Remove with purge and auto-yes for config prompts
+            if DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y dnsmasq 2>/dev/null; then
+                log_info "dnsmasq removed successfully"
+            else
+                # Fallback: try dpkg directly
+                log_warn "apt-get failed, trying dpkg..."
+                dpkg --remove --force-remove-reinstreq dnsmasq 2>/dev/null || {
+                    log_warn "Failed to remove dnsmasq package"
+                    log_info "Manual removal: sudo dpkg --purge --force-all dnsmasq"
+                }
+            fi
+        else
+            log_info "dnsmasq is not installed - skipping"
+        fi
+
+        # Also try to remove dnsmasq-base if present
+        if dpkg -l dnsmasq-base 2>/dev/null | grep -q "^ii"; then
+            log_info "Removing dnsmasq-base..."
+            DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y dnsmasq-base 2>/dev/null || true
+        fi
+
+        log_info "Running autoremove..."
+        DEBIAN_FRONTEND=noninteractive apt-get autoremove -y 2>/dev/null || {
+            log_warn "Autoremove failed - skipping"
+        }
+
+    elif command -v dnf &>/dev/null; then
+        # Check if packages are installed on RHEL/Fedora
+        if rpm -q hostapd &>/dev/null; then
+            log_info "Removing hostapd..."
+            pkill -9 hostapd 2>/dev/null || true
+            systemctl stop hostapd 2>/dev/null || true
+            systemctl disable hostapd 2>/dev/null || true
+            dnf remove -y hostapd 2>/dev/null || log_warn "Failed to remove hostapd"
+        else
+            log_info "hostapd is not installed - skipping"
+        fi
+
+        if rpm -q dnsmasq &>/dev/null; then
+            log_info "Removing dnsmasq..."
+            pkill -9 dnsmasq 2>/dev/null || true
+            systemctl stop dnsmasq 2>/dev/null || true
+            systemctl disable dnsmasq 2>/dev/null || true
+            dnf remove -y dnsmasq 2>/dev/null || log_warn "Failed to remove dnsmasq"
+        else
+            log_info "dnsmasq is not installed - skipping"
+        fi
+    else
+        log_warn "No supported package manager found (apt/dnf)"
+    fi
+
+    log_info "Package removal complete"
+}
+
+# ============================================================
+# REMOVE VM SUPPORT (QEMU/KVM/libvirt)
+# ============================================================
+remove_vm_support() {
+    log_step "Checking for VM support installation..."
+
+    # Check if libvirt is installed
+    if ! command -v virsh &>/dev/null; then
+        log_info "VM support (libvirt) not installed, skipping"
+        return 0
+    fi
+
+    log_info "VM support detected, cleaning up..."
+
+    # Stop and remove all Guardian-managed VMs
+    log_info "Stopping Guardian-managed VMs..."
+    local vms
+    vms=$(virsh list --all --name 2>/dev/null | grep -v "^$" || true)
+
+    if [ -n "$vms" ]; then
+        local remove_vms="no"
+        if [ "$FORCE_MODE" = false ]; then
+            echo ""
+            echo -e "${YELLOW}Found the following VMs:${NC}"
+            virsh list --all 2>/dev/null || true
+            echo ""
+            read -p "Remove all VMs? This will destroy VM data! (yes/no) [no]: " remove_vms
+        else
+            log_info "Force mode - preserving VMs"
+        fi
+
+        if [ "$remove_vms" == "yes" ]; then
+            for vm in $vms; do
+                log_info "Stopping VM: $vm"
+                virsh destroy "$vm" 2>/dev/null || true
+                log_info "Removing VM: $vm"
+                virsh undefine "$vm" --remove-all-storage 2>/dev/null || \
+                virsh undefine "$vm" 2>/dev/null || true
+            done
+            log_info "All VMs removed"
+        else
+            log_info "VMs preserved - you can manage them with 'virsh'"
+        fi
+    fi
+
+    # Remove Guardian libvirt network
+    if virsh net-info guardian &>/dev/null 2>&1; then
+        log_info "Removing libvirt network: guardian"
+        virsh net-destroy guardian 2>/dev/null || true
+        virsh net-undefine guardian 2>/dev/null || true
+    fi
+
+    # Remove VM management systemd service
+    if systemctl is-enabled guardian-vms &>/dev/null 2>&1; then
+        log_info "Disabling guardian-vms service..."
+        systemctl stop guardian-vms 2>/dev/null || true
+        systemctl disable guardian-vms 2>/dev/null || true
+    fi
+    rm -f /etc/systemd/system/guardian-vms.service 2>/dev/null || true
+
+    # Remove VM autostart script
+    rm -f /opt/hookprobe/guardian/scripts/vm-autostart.sh 2>/dev/null || true
+
+    # Remove VM storage directory
+    if [ -d /var/lib/hookprobe/vms ]; then
+        local remove_vm_storage="no"
+        if [ "$FORCE_MODE" = false ]; then
+            read -p "Remove VM storage directory (/var/lib/hookprobe/vms)? (yes/no) [no]: " remove_vm_storage
+        else
+            log_info "Force mode - preserving VM storage"
+        fi
+        if [ "$remove_vm_storage" == "yes" ]; then
+            log_info "Removing VM storage directory..."
+            rm -rf /var/lib/hookprobe/vms
+            log_info "VM storage removed"
+        else
+            log_info "VM storage preserved at /var/lib/hookprobe/vms"
+        fi
+    fi
+
+    # Remove dnsmasq VM static reservations
+    if [ -f /etc/dnsmasq.d/guardian-vms.conf ]; then
+        log_info "Removing VM DNS/DHCP reservations..."
+        rm -f /etc/dnsmasq.d/guardian-vms.conf
+    fi
+
+    # Optional: Remove libvirt packages
+    local remove_vm_pkgs="no"
+    if [ "$FORCE_MODE" = false ]; then
+        echo ""
+        read -p "Remove VM packages (qemu, libvirt)? (yes/no) [no]: " remove_vm_pkgs
+    else
+        log_info "Force mode - preserving VM packages"
+    fi
+    if [ "$remove_vm_pkgs" == "yes" ]; then
+        log_info "Removing VM packages..."
+
+        # Stop libvirt services
+        systemctl stop libvirtd 2>/dev/null || true
+        systemctl disable libvirtd 2>/dev/null || true
+
+        if command -v apt-get &>/dev/null; then
+            DEBIAN_FRONTEND=noninteractive apt-get remove --purge -y \
+                qemu-system-arm qemu-utils libvirt-daemon-system \
+                libvirt-clients virtinst 2>/dev/null || true
+            apt-get autoremove -y 2>/dev/null || true
+        elif command -v dnf &>/dev/null; then
+            dnf remove -y qemu-kvm libvirt virt-install 2>/dev/null || true
+        fi
+        log_info "VM packages removed"
+    else
+        log_info "VM packages preserved"
+    fi
+
+    systemctl daemon-reload 2>/dev/null || true
+    log_info "VM support cleanup complete"
+}
+
+# ============================================================
+# REMOVE ML PYTHON PACKAGES
+# ============================================================
+remove_ml_packages() {
+    log_step "Removing ML Python packages (dnsXai)..."
+
+    # Check if pip3 is available
+    if ! command -v pip3 &>/dev/null; then
+        log_info "pip3 not installed, skipping ML package removal"
+        return 0
+    fi
+
+    # ML packages installed by Guardian setup
+    local ml_packages=(
+        "scikit-learn"
+        "joblib"
+    )
+
+    for pkg in "${ml_packages[@]}"; do
+        if pip3 show "$pkg" &>/dev/null; then
+            log_info "Removing ML package: $pkg"
+            pip3 uninstall -y "$pkg" 2>/dev/null || \
+            pip3 uninstall --break-system-packages -y "$pkg" 2>/dev/null || \
+            log_warn "Could not remove $pkg - may need manual removal"
+        fi
+    done
+
+    log_info "ML Python packages removed"
+}
+
+# ============================================================
+# RESTORE NETWORK
+# ============================================================
+restore_network() {
+    log_step "Restoring network configuration..."
+
+    # Restore resolv.conf (Guardian sets it to 127.0.0.1 with immutable flag)
+    if [ -f /etc/resolv.conf ]; then
+        chattr -i /etc/resolv.conf 2>/dev/null || true
+        # Let NetworkManager regenerate resolv.conf on restart
+        log_info "Removed resolv.conf immutable flag"
+    fi
+
+    # Remove sbin tool symlinks created by Guardian setup
+    for tool in iw rfkill iwlist iwconfig iwgetid; do
+        if [ -L "/usr/local/bin/$tool" ]; then
+            rm -f "/usr/local/bin/$tool"
+            log_info "Removed symlink /usr/local/bin/$tool"
+        fi
+    done
+
+    # Restart networking service to restore original config
+    if systemctl is-active NetworkManager &>/dev/null; then
+        log_info "Restarting NetworkManager..."
+        systemctl restart NetworkManager
+    elif systemctl is-active networking &>/dev/null; then
+        log_info "Restarting networking..."
+        systemctl restart networking
+    fi
+
+    # Bring up original interfaces
+    for iface in $(ip -o link show | awk -F': ' '{print $2}' | grep -E '^(eth|enp|eno|wlan|wlp)'); do
+        if ! ip link show "$iface" | grep -q "UP"; then
+            log_info "Bringing up interface: $iface"
+            ip link set "$iface" up 2>/dev/null || true
+        fi
+    done
+
+    log_info "Network restored"
+}
+
+# ============================================================
+# MAIN
+# ============================================================
+main() {
+    echo ""
+    echo -e "${BOLD}${RED}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BOLD}${RED}║              HookProbe Guardian Uninstaller                ║${NC}"
+    echo -e "${BOLD}${RED}║                       Version 5.4.0                        ║${NC}"
+    echo -e "${BOLD}${RED}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+
+    check_root
+
+    echo -e "${YELLOW}WARNING: This will remove all Guardian components including:${NC}"
+    echo -e "  - Guardian systemd services (webui, htp, xdp, wlan, ap, etc.)"
+    echo -e "  - Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
+    echo -e "  - Podman containers (WAF, Neuro)"
+    echo -e "  - DNS Shield blocklists and configuration"
+    echo -e "  - dnsXai ML models and training data"
+    echo -e "  - ML Python packages (scikit-learn, joblib)"
+    echo -e "  - Network bridges (br0, VLAN bridges)"
+    echo -e "  - WiFi hotspot (hostapd) configuration"
+    echo -e "  - NetworkManager Guardian connections and configuration"
+    echo -e "  - DHCP/DNS (dnsmasq) configuration"
+    echo -e "  - Guardian configuration (/etc/guardian/guardian.yaml)"
+    echo -e "  - HTP file transfer state and session keys"
+    echo -e "  - VXLAN and MACsec secrets (/etc/hookprobe/secrets/)"
+    echo -e "  - nftables/iptables firewall rules"
+    echo -e "  - Guardian Python library modules"
+    echo -e "  - Guardian helper scripts (/usr/local/bin/guardian-*, fix-dns-nat.sh, etc.)"
+    echo -e "  - Guardian log files (/var/log/hookprobe/)"
+    echo -e "  - Shared Cortex visualization modules"
+    echo -e "  - Guardian data directories (/opt/hookprobe/guardian/)"
+    echo -e "  - VM support (QEMU/KVM, libvirt, VMs if installed)"
+    echo ""
+
+    if [ "$FORCE_MODE" = false ]; then
+        read -p "Are you sure you want to continue? (yes/no) [no]: " confirm
+        if [ "$confirm" != "yes" ]; then
+            log_info "Uninstall cancelled"
+            exit 0
+        fi
+    else
+        log_info "Force mode enabled - skipping confirmation"
+    fi
+
+    echo ""
+
+    # Stop all services first
+    stop_services
+
+    # Remove components in order
+    remove_containers
+    remove_network_interfaces
+    remove_nftables_rules
+    remove_hostapd_config
+    remove_wpa_supplicant_config
+    remove_networkmanager_config
+    remove_dnsmasq_config
+    remove_offline_mode_config
+    remove_sysctl_settings
+    remove_guardian_config
+    remove_htp_data
+    remove_dns_shield
+    remove_systemd_services
+    remove_guardian_directories
+
+    # Remove ML Python packages (dnsXai)
+    remove_ml_packages
+
+    # Remove VM support (QEMU/KVM/libvirt)
+    remove_vm_support
+
+    # Restore network
+    restore_network
+
+    # Optional package removal
+    remove_packages
+
+    echo ""
+    echo -e "${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${GREEN}║           Guardian Uninstall Complete!                     ║${NC}"
+    echo -e "${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "  ${BOLD}Removed:${NC}"
+    echo -e "  • Guardian systemd services (webui, htp, xdp, wlan, ap, offline, routing, etc.)"
+    echo -e "  • Systemd service overrides (hostapd.service.d, dnsmasq.service.d)"
+    echo -e "  • Podman containers and volumes (WAF, Neuro)"
+    echo -e "  • DNS Shield blocklists and configuration"
+    echo -e "  • dnsXai ML models, training data, and Python packages"
+    echo -e "  • Network bridges (br0, VLAN bridges)"
+    echo -e "  • NAT/routing rules (nftables, iptables, MASQUERADE)"
+    echo -e "  • hostapd, wpa_supplicant, and dnsmasq configuration"
+    echo -e "  • Offline mode configuration and dhcpcd settings"
+    echo -e "  • Guardian configuration (/etc/guardian/)"
+    echo -e "  • HTP file transfer state and session keys"
+    echo -e "  • VXLAN and MACsec secrets (/etc/hookprobe/secrets/)"
+    echo -e "  • nftables rules and iptables persistence hooks"
+    echo -e "  • Shared Cortex visualization modules"
+    echo -e "  • Python library modules"
+    echo -e "  • Guardian helper scripts (/usr/local/bin/guardian-*, fix-dns-nat.sh, update-*, etc.)"
+    echo -e "  • Guardian log files (/var/log/hookprobe/)"
+    echo -e "  • Guardian directories (/opt/hookprobe/guardian/)"
+    echo -e "  • resolv.conf restored (immutable flag removed)"
+    echo -e "  • sbin tool symlinks (iw, rfkill, iwlist, iwconfig, iwgetid)"
+    echo -e "  • /etc/hookprobe Guardian configuration files"
+    echo -e "  • VM support (libvirt network, VMs, QEMU/KVM packages if selected)"
+    echo ""
+    echo -e "  ${YELLOW}Note:${NC} You may need to reboot for all changes to take effect."
+    echo -e "  ${DIM}Reboot: sudo reboot${NC}"
+    echo ""
+}
+
+# Run main if not sourced
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    main "$@"
+fi

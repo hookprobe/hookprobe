@@ -1,0 +1,10 @@
+# Secrets - NEVER commit these
+.env
+
+# Generated certificates
+*.pem
+*.crt
+*.key
+
+# Build artifacts
+*.log
