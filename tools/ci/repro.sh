@@ -27,6 +27,9 @@ build() {  # build <n>
   sha256sum "$td/aarch64-unknown-none-softfloat/release/kernel" | cut -d' ' -f1
 }
 
+# The shipped flavours embed the licensed CYW43455 firmware (gitignored) — stage the pinned blob.
+"$ROOT/tools/ci/stage-firmware.sh"
+
 echo "[repro] build 1/2 (features=$FEATURES)"; H1=$(build 1)
 echo "[repro] build 2/2 (features=$FEATURES)"; H2=$(build 2)
 echo "[repro] sha256 #1 $H1"
