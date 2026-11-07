@@ -333,9 +333,10 @@ pub fn run_flow(frame: &[u8], src: u32) -> u16 {
 fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
     let wire = v.to_wire();
     crate::events::push_hit(rule_id, severity as u8, wire as u8, v.class_code(), src);
-    if wire == crate::packet::DROP {
-        telemetry::emit_rule_hit(severity);
-    }
+    // Parity G5: every detection scores by SEVERITY, whatever its wire verdict — an observed beacon,
+    // lateral sweep or ARP spoof is a threat even though ADR 0023 forbids dropping it. (Behavioral
+    // repeats are already throttled by the refire cooldown, so one noisy source cannot pin the score.)
+    telemetry::emit_rule_hit(severity);
 }
 
 // ---- M2.1: the structural + stateful L2 tier (F6/F7/F8 + mac-flood + broadcast-storm)
@@ -643,20 +644,56 @@ pub fn resource_shed_verdict(src: u32) -> Option<Verdict> {
     }
 }
 
+/// Behavioral alert refire cooldown (parity G4): once a (rule, source) has alerted, further trips within
+/// this window are counted (corroboration still sees them) but raise no new event — a regular beacon or
+/// a sustained transfer would otherwise alert on every packet and evict the 256-row detection ring.
+pub const BEHAVIORAL_COOLDOWN_SECS: u64 = 300;
+const COOL_N: usize = 128;
+static COOL_KEY: [core::sync::atomic::AtomicU64; COOL_N] = [const { core::sync::atomic::AtomicU64::new(0) }; COOL_N];
+static COOL_AT: [core::sync::atomic::AtomicU64; COOL_N] = [const { core::sync::atomic::AtomicU64::new(0) }; COOL_N];
+pub static COOL_SUPPRESSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// True if (rule, src) may raise an event now (and arms the cooldown). `now` in seconds.
+pub fn refire_ok(rule_id: u16, src: u32, now: u64) -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    let key = ((rule_id as u64) << 32) | src as u64 | (1u64 << 63);
+    let i = (key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 57) as usize % COOL_N;
+    if COOL_KEY[i].load(Relaxed) == key && now.saturating_sub(COOL_AT[i].load(Relaxed)) < BEHAVIORAL_COOLDOWN_SECS {
+        COOL_SUPPRESSED.fetch_add(1, Relaxed);
+        return false;
+    }
+    COOL_KEY[i].store(key, Relaxed);
+    COOL_AT[i].store(now, Relaxed);
+    true
+}
+
+/// Test hook: clear the cooldown table.
+pub fn refire_reset() {
+    use core::sync::atomic::Ordering::Relaxed;
+    for i in 0..COOL_N {
+        COOL_KEY[i].store(0, Relaxed);
+        COOL_AT[i].store(0, Relaxed);
+    }
+}
+
 /// M2.4 shared verdict step: a behavioral detector FIRED → route through `decide()` as
-/// `FindingClass::Behavioral`, which is OBSERVE-ONLY by construction (always `Observe`,
-/// PASS on the wire — zero legit-drop risk). `fire()` still exports the SOAR alert so the
-/// SOC SEES the behavior; the wire is never touched. This is the whole M2.4 contract:
-/// detection parity WITHOUT enforcement.
+/// `FindingClass::Behavioral`, OBSERVE-ONLY by construction; `fire()` exports the alert (subject to
+/// the refire cooldown); the wire is never touched — detection parity WITHOUT enforcement.
 #[inline]
 fn behavioral_verdict(rule_id: u16, src: u32, axis: u32) -> Verdict {
+    behavioral_verdict_at(rule_id, src, axis, crate::behavioral::now_secs())
+}
+
+fn behavioral_verdict_at(rule_id: u16, src: u32, axis: u32, now: u64) -> Verdict {
     let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(src));
     // A11 corroboration (SEVERITY only): record this behavioral axis; a source corroborated
     // across >= K axes is stamped CRITICAL for the SOC. `v` stays `Observe` — behavioral is
     // observe-only by construction, and corroboration NEVER changes the wire verdict.
     crate::corroboration::corr_observe(src as u64, axis);
     let sev = if crate::corroboration::is_corroborated(src as u64) { SEV_CRIT } else { SEV_MED };
-    fire(rule_id, sev, v, src);
+    if refire_ok(rule_id, src, now) {
+        fire(rule_id, sev, v, src);
+    }
     v
 }
 
@@ -669,7 +706,7 @@ pub fn beacon_verdict_at(src: u32, dst: u32, dst_port: u16, now: u64) -> Option<
     if !crate::behavioral::beacon_observe_at(src, dst, dst_port, now) {
         return None;
     }
-    Some(behavioral_verdict(RULE_BEACON, src, crate::corroboration::AXIS_BEACON))
+    Some(behavioral_verdict_at(RULE_BEACON, src, crate::corroboration::AXIS_BEACON, now))
 }
 
 /// Live-clock wrapper for the datapath (M2.4 A10/L8 wiring): same as `beacon_verdict_at`
@@ -707,6 +744,12 @@ pub fn dns_verdict(frame: &[u8]) -> Option<Verdict> {
     } else {
         None // parsed as DNS but the name is normal
     }
+}
+
+/// Parity G8: a Shield query whose name scored as DGA / lookalike / tunnel (`dga::score`). Observe-only
+/// (`dns_dga`), refire-cooled per source; the name itself is still answered normally.
+pub fn shield_dga_verdict(src: u32) -> Verdict {
+    behavioral_verdict(RULE_DNS, src, crate::corroboration::AXIS_DNS)
 }
 
 /// mDNS / SSDP / LLMNR and IPv6-multicast destination groups — well-known service

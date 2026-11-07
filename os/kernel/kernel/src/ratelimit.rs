@@ -438,6 +438,44 @@ pub fn flow_established_count(src: u64) -> u64 {
     SCAN_EST[s].load(Ordering::Relaxed)
 }
 
+/// One source the scan tier is currently tracking (parity G23: `/api/enforcement`).
+#[derive(Clone, Copy, Debug)]
+pub struct ScanState {
+    pub src: u32,
+    pub distinct: u64,
+    pub established: u64,
+    /// Seconds left in the window (enforcement self-reverts when it ends).
+    pub expires_in: u64,
+    /// 0 watching, 1 rate-limited, 2 quarantined (confirmed scan, ADR 0018).
+    pub level: u8,
+}
+
+/// Every source with a live scan window and at least one answered probe.
+pub fn for_each_scan_source(f: &mut dyn FnMut(&ScanState)) {
+    let now = cntpct();
+    let fr = cntfrq().max(1);
+    for s in 0..FLOW_SRCS {
+        let src = SCAN_SRC[s].load(Ordering::Relaxed);
+        let d = SCAN_DISTINCT[s].load(Ordering::Relaxed);
+        if src == 0 || src > u32::MAX as u64 || d == 0 {
+            continue;
+        }
+        let age = now.wrapping_sub(SCAN_WIN[s].load(Ordering::Relaxed)) / fr;
+        if age >= SCAN_WINDOW_SECS {
+            continue;
+        }
+        let e = SCAN_EST[s].load(Ordering::Relaxed);
+        let level = if d >= SCAN_PORTS_CONFIRM && e.saturating_mul(SCAN_EST_RATIO) < d {
+            2
+        } else if d >= SCAN_PORTS_RATELIMIT && e.saturating_mul(SCAN_EST_RATIO) < d {
+            1
+        } else {
+            0
+        };
+        f(&ScanState { src: src as u32, distinct: d, established: e, expires_in: SCAN_WINDOW_SECS - age, level });
+    }
+}
+
 /// The bounded-RateLimit gate: a SYN-only distinct-port scan crossed the RATELIMIT bar
 /// WITH ZERO establishment. Keyed on scan SHAPE + no-establishment, never flow count.
 pub fn scan_over_ratelimit(src: u64) -> bool {
