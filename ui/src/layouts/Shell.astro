@@ -3,11 +3,12 @@
  * Shell — HTML document wrapper.
  *
  * Provides: <html>, <head> (charset, viewport, meta, CSS import), <body>.
- * JS is supplied only by the Solid client:load island in index.astro;
- * this layout emits zero script tags of its own.
+ * JS is supplied by the page's Solid client:load island plus the SampleDataNotice island
+ * (heqk honesty label: which views are sample data).
  */
 
 import '../styles/global.css';
+import SampleDataNotice from '../components/SampleDataNotice';
 
 interface Props {
   title?: string;
@@ -34,5 +35,6 @@ const {
   </head>
   <body>
     <slot />
+    <SampleDataNotice client:load />
   </body>
 </html>
