@@ -83,6 +83,11 @@ fails closed, is restarted; forwarding/IPS unaffected).
 - **Open**: flasher-side CA + one-time root install UX (task #20); `p256` signing review; hybrid
   X25519MLKEM768; `sha2`/`hmac`/`hkdf` audit check; HTTP keep-alive (each request is a new TLS session today).
 
+- **[metal] 2026-11-07 19:00 (`22c2120-TLS`):** keep-alive reuse confirmed; real browser over HTTPS negotiated
+  **X25519MLKEM768** (`pq_hybrid=7`) and rendered live data; an 80-connection flood: 24 served, the rest
+  refused at TCP (8 slots), HTTPS answered **8 ms** right after; counters `failed_closed=0 tls_errors=0
+  timeouts=0 faults=0 restarts=0`, sensor `faults=0 rx_lost 0/0`.
+
 ## P-256 signing — usage review (2026-11-07)
 
 What the device signs: only the TLS 1.3 `CertificateVerify` transcript hash, with an SRK-derived key that lives
