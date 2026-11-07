@@ -57,7 +57,9 @@ fi
 HEQK_SIGNER="${HEQK_SIGNER:-$ROOT/os/build/heqk-sign/target/release/heqk-sign}"
 if [ ! -x "$HEQK_SIGNER" ] && [ -f "$ROOT/os/build/heqk-sign/Cargo.toml" ]; then
   echo "== building in-tree heqk-sign (os/build/heqk-sign)"
-  ( cd "$ROOT/os/build/heqk-sign" && cargo build --release )
+  # Pin the target dir: the factory exports CARGO_TARGET_DIR for heqk, which would otherwise put
+  # the signer binary somewhere this check never looks (fresh checkout → "not executable").
+  ( cd "$ROOT/os/build/heqk-sign" && CARGO_TARGET_DIR="$ROOT/os/build/heqk-sign/target" cargo build --release )
 fi
 [ -x "$HEQK_SIGNER" ] || { echo "FATAL: heqk-sign not executable at $HEQK_SIGNER — build os/build/heqk-sign or set HEQK_SIGNER" >&2; exit 1; }
 
@@ -73,7 +75,7 @@ cd "$HEQK"
 # pass before we sign an image (mirrors heqk BUILD_FLASH_PLAN.md §1).
 #
 # The harness binary is written next to $OUT, so $OUT's parent MUST exist first. It used to
-# be created 16 lines BELOW this gate, so on any tree where builder/generated/ did not
+# be created 16 lines BELOW this gate, so on any tree where os/build/generated/ did not
 # already exist (a fresh clone, CI, or a git worktree) rustc could not create the output
 # file and the gate aborted — and because stderr went to /dev/null, a MISSING DIRECTORY
 # reported itself as "verifier harness failed", i.e. as BPF verifier UNSOUNDNESS. That is

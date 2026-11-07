@@ -147,7 +147,7 @@ The spine maps onto the Readme's target layout:
 | Platform Manifest | `manifest/` → runtime `/var/lib/hookprobe/manifest.json` |
 | Supervisor + reconciler | `supervisor/` |
 | Modules (Wasm/container/sysext) | `modules/{napse,hydra,ovs,…}` |
-| Local backend + Mission Control | `ui/` (+ backend crate) |
+| Local backend + Mission Control | `os/mission-control/` (served by heqk; `legacy/linux-tier/crates/hookprobe-api` is the API contract) |
 | Fleet (additive) | `fleet/` |
 | Supply chain / PQC | `security/` |
 
