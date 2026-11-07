@@ -6,9 +6,16 @@ H3, done + reboot-proof). Supersedes the earlier draft; folds in the operator's 
 **Relates to:** [ADR 0006](0006-os-hardening.md) (verity/integrity), [ADR 0002](0002-crypto-agility-pqc.md)
 (PQC/crypto-agility), `security/crypt/README.md`.
 
+> **Amendment (operator, 2026-11-07) — licence.** The licence is **GNU AGPL-3.0 with commercial dual licensing**,
+> matching `LICENSING.md` (this ADR previously said Apache-2.0). Reasons: nothing is published yet, so starting
+> strict keeps the option to loosen later (the reverse is impossible once code is out); AGPL's network clause
+> blocks free-riding SaaS clones, and the commercial licence serves organisations that cannot accept AGPL.
+> HookProbe keeps **sole copyright** — **no outside contributions until a CLA exists**. The dual-licensing terms
+> get **one legal review before the first public release**.
+
 ## The decision that resolves open-vs-closed
 
-**The OS stays OPEN (GitHub, Apache-2.0); the proprietary crown jewels are ENCRYPTED.** Open source is a
+**The OS stays OPEN (GitHub, AGPL-3.0 + Commercial dual licence — see the 2026-11-07 amendment); the proprietary crown jewels are ENCRYPTED.** Open source is a
 *trust* feature for a security product (auditability) — and dm-verity proves the public code is genuine
 ("code-signing"). Confidentiality is reserved for what's actually secret: **AI models, threat intel,
 TLS certs, API tokens, credentials, and customer operational/capture data.** This gives commercial-grade

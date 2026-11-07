@@ -1,8 +1,7 @@
 # ADR 0049 — WAN policy authority, IPv6 source identity, and scan-establishment evidence
 
-**Status:** 🟡 **Proposed — for operator review** (drafted 2026-11-07 from the open design items of the
-2026-11-06 peer reviews, `docs/design/heqk-peer-review-2026-11-06.md`). Nothing here is implemented until
-ratified. Clauses are tagged **[realized]**, **[partial]** or **[vision]** (the ADR 0043/0044 discipline).
+**Status:** ✅ **Accepted by the operator 2026-11-07, with the amendments below** (drafted 2026-11-07 from the
+open design items of the 2026-11-06 peer reviews, `docs/design/heqk-peer-review-2026-11-06.md`). Clauses are tagged **[realized]**, **[partial]** or **[vision]** (the ADR 0043/0044 discipline).
 (0048 is reserved for the BOI / Behavioural Genome ADR.)
 
 ## Context
@@ -59,6 +58,18 @@ finding that could be patched in place. Three cannot be patched without a design
   passive `prod-mc` sensor. A per-source 256-bit "answered" bitmap (port % 256) next to the SYN-port set.
 - Until D3 lands, the current proportional hold stays (it raised evasion cost from 1 packet to ~1 per 8
   probes) **[realized]**, and the gap is listed in the peer-review doc.
+
+## Operator amendments (2026-11-07) — these override the clauses above where they differ
+
+- **D1:** the signature is verified **before** POLICY.TXT is parsed (the parser never sees unauthenticated
+  bytes), and the generation counter is a persisted **anti-rollback** floor: an older signed policy is refused.
+- **D2:** IPv6 source identity is keyed on the **device** (link-layer MAC, or the DHCPv6 DUID), not on the
+  address, because privacy addresses rotate. *Engineering note (not in the operator's table):* a device key
+  only exists for sources on our own links (Wi-Fi / eth1 clients). An attacker on the **internet** side of the
+  WAN has no MAC or DUID we can see, so WAN-side IPv6 sources keep the `/64` key from D2 — the two key kinds are
+  separate variants of the tagged source enum. **Design now, build later** (with the IPv6 work, gap 13).
+- **D3:** a scan is counted **only** when the server's response was observed (SYN-ACK / RST from the target);
+  one-sided or spoofed traffic never counts.
 
 ## Consequences
 

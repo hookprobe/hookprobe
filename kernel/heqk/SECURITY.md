@@ -50,7 +50,7 @@ Subject: [SECURITY] Brief Description
 
 Vulnerability Type: [e.g., SQL Injection, XSS, Authentication Bypass]
 Severity: [Critical/High/Medium/Low]
-Affected Component: [e.g., Django Admin, WAF, Qsecbit API]
+Affected Component: [e.g., rule plane / verifier, PPPoE client, IPv6 firewall, Mission Control HTTP, hboot]
 Affected Versions: [e.g., 4.0, 3.x]
 
 Description:
@@ -94,281 +94,42 @@ Additional Information:
 
 ---
 
-## 🛡️ Security Features
+## 🛡️ What heqk actually does (current truth, 2026-11-07)
 
-HookProbe includes multiple layers of security:
+> This section replaced a feature list copied from the **V1 Linux stack** (VXLAN pods, Django/NAXSI, Logto,
+> Grafana, a Kali countermeasure container, rsyslog/Loki, containers, default `admin/admin` credentials,
+> unauthenticated internal APIs). **None of those exist in heqk**; their hardening advice does not apply.
+> Every item below is tagged: **[metal]** proven on CM5 silicon, **[qemu]** proven in the `validate.sh` gate,
+> **[not built]** decided but not implemented.
 
-### 🔒 Network Security
-- ✅ **PSK-Encrypted VXLAN**: All inter-POD traffic encrypted
-- ✅ **Network Segmentation**: 7 isolated POD networks
-- ✅ **Firewall Rules**: Strict iptables configuration
-- ✅ **Zero Trust Architecture**: Optional Cloudflare Tunnel integration
+**Kernel & boot**
+- Rust `no_std` capability microkernel on aarch64; EL2 carve-out makes the OTP/mailbox unreachable from EL1. **[metal]**
+- Signed boot (`hboot`), A/B tryboot with commit-on-health and anti-rollback. **[metal]**
+- Sealed persistence bound to the device root key (SRK) and the measured-boot policy; crash-consistent A/B
+  snapshot slots. **[metal]**
 
-### 🌐 Web Application Security
-- ✅ **NAXSI WAF**: Web Application Firewall protecting Django
-- ✅ **ModSecurity**: Additional WAF layer
-- ✅ **Input Validation**: All user inputs sanitized
-- ✅ **CSRF Protection**: Django CSRF middleware enabled
-- ✅ **XSS Prevention**: Content Security Policy headers
-- ✅ **SQL Injection Protection**: Parameterized queries only
+**Detection & enforcement**
+- Rule plane: verifier-checked BPF bytecode (RFC 9669 ISA), signature-checked against a pinned rule root,
+  JIT on metal. **[metal]**
+- Enforcement separation (ADR 0023): observe by default; drops only for confirmed attacks / resource
+  exhaustion; legitimate traffic always passes — the 33-row separation matrix. **[metal]**
+- Signed Wasm detection modules run by a real wasmi interpreter in an isolated EL0 excursion. **[metal]**
 
-### 🔐 Authentication & Authorization
-- ✅ **Logto IAM**: Enterprise-grade identity management
-- ✅ **Multi-Factor Authentication**: Supported via Logto
-- ✅ **Role-Based Access Control**: Granular permissions
-- ✅ **Session Management**: Secure session handling
-- ✅ **Password Hashing**: Industry-standard bcrypt
+**Network (Wi-Fi AP / WAN)**
+- Stateful IPv4 NAT with address-dependent filtering, stateful IPv6 firewall, IPv6 SAVI, uRPF-lite WAN
+  source filter, operator ACLs / prefix lists / metric routes (`POLICY.TXT`), management VLAN isolation. **[metal]**
+- Every remote-reachable parser in the QEMU build is fuzzed on every gate run (`[P-fuzz]`). **[qemu]**
 
-### 🤖 AI-Driven Security (Qsecbit v5.0)
-- ✅ **Cyber Resilience Metric**: Real-time threat scoring (RAG status) measuring attack-defense equilibrium
-- ✅ **XDP/eBPF DDoS Mitigation**: Kernel-level packet filtering with automatic NIC detection
-- ✅ **Energy Monitoring**: RAPL + per-PID power tracking for anomaly detection
-- ✅ **Network Direction-Aware Analysis**: Role-based traffic pattern detection (PUBLIC_SERVER vs USER_ENDPOINT)
-- ✅ **Automated Response**: Kali Linux countermeasures triggered on AMBER/RED status
-- ✅ **Behavioral Analysis**: NAPSE AI-native IDS/NSM/IPS
-- ✅ **Honeypot System**: Attacker intelligence gathering
-- ✅ **Attack Mitigation**: Automated blocking and redirection
-- ✅ **Dual-Database Support**: ClickHouse (edge) and Apache Doris (cloud) for security analytics
+**Mission Control**
+- Owner authentication: a salted verifier from the flasher, **no default password**; an unclaimed device
+  refuses every protected route; HttpOnly SameSite session cookies; no CORS. **[metal]**
+- Served over **plain HTTP today** — HTTPS is ADR 0051 (EL0 TLS server, local name-constrained CA). **[not built]**
 
-### 📊 Monitoring & Logging
-- ✅ **Centralized Logging**: Rsyslog + Loki aggregation
-- ✅ **Audit Trail**: Complete activity logging
-- ✅ **SIEM Integration**: VictoriaMetrics + VictoriaLogs
-- ✅ **Alert System**: Email notifications for incidents
-- ✅ **Log Integrity**: Append-only logging
-
-### 🔒 Container Security
-- ✅ **Rootless Containers**: Non-root execution where possible
-- ✅ **Image Scanning**: Vulnerability scanning recommended
-- ✅ **Minimal Base Images**: Alpine-based containers
-- ✅ **Resource Limits**: CPU/Memory quotas enforced
-- ✅ **Network Policies**: Pod-to-pod access control
-
----
-
-## ⚠️ Security Considerations
-
-### Known Security Design Decisions
-
-#### 1. Honeypot Exposure
-**Design**: Honeypots are intentionally vulnerable to attract attackers.
-
-**Mitigation**:
-- Honeypots are network-isolated from production
-- All honeypot traffic is logged and monitored
-- Automatic cleanup of honeypot data after 90 days
-- No sensitive data stored in honeypots
-
-#### 2. Automated Response Capabilities
-**Design**: Kali Linux container can execute automated countermeasures.
-
-**Mitigation**:
-- Kali container is only activated on AMBER/RED Qsecbit status
-- All actions are logged and reported
-- Human approval required for critical actions (configurable)
-- Automatic cooldown and shutdown after mitigation
-
-#### 3. Email Notifications
-**Design**: Security alerts sent via email to qsecbit@hookprobe.com.
-
-**Security Notes**:
-- Emails may contain sensitive attack data
-- Ensure email channel is secured (TLS required)
-- Consider PGP encryption for sensitive alerts
-- Monitor email account 24/7
-
-#### 4. Default Credentials
-**WARNING**: Default credentials are provided for initial setup ONLY.
-
-**Action Required**:
-- ⚠️ Change Django admin password (admin/admin)
-- ⚠️ Change Grafana password (admin/admin)
-- ⚠️ Generate strong Django SECRET_KEY
-- ⚠️ Rotate all database passwords
-- ⚠️ Update PSK keys for VXLAN tunnels
-
-#### 5. API Endpoints
-**Design**: Several internal APIs exposed for system communication.
-
-**Mitigation**:
-- APIs only accessible within 10.200.0.0/16 network
-- No authentication required for internal APIs (trust model)
-- Use firewall rules to restrict external access
-- Consider adding API authentication for production
-
----
-
-## 🔧 Security Best Practices
-
-### Deployment Security
-
-#### Before Deployment
-- [ ] Change all default passwords
-- [ ] Generate unique PSK keys for VXLAN (minimum 32 characters)
-- [ ] Generate strong Django SECRET_KEY (minimum 50 characters)
-- [ ] Configure SSL/TLS certificates (Let's Encrypt or commercial)
-- [ ] Review and update IP whitelist
-- [ ] Configure firewall to block unnecessary ports
-- [ ] Set up email notifications with secure SMTP
-- [ ] Review Qsecbit thresholds for your environment
-
-#### After Deployment
-- [ ] Enable automated backups
-- [ ] Set up monitoring alerts
-- [ ] Configure log retention policies
-- [ ] Schedule regular security audits
-- [ ] Enable automatic security updates
-- [ ] Document your security configuration
-- [ ] Train team on incident response procedures
-
-### Operational Security
-
-#### Daily
-- [ ] Monitor Grafana dashboards for anomalies
-- [ ] Review Qsecbit RAG status
-- [ ] Check email alerts for security incidents
-- [ ] Verify all services are running
-
-#### Weekly
-- [ ] Review honeypot logs for attack patterns
-- [ ] Analyze blocked IPs and attack trends
-- [ ] Update WAF rules based on new attack signatures
-- [ ] Check disk space and log rotation
-
-#### Monthly
-- [ ] Review and update IP whitelist
-- [ ] Audit user accounts and permissions
-- [ ] Test backup restoration procedures
-- [ ] Update container images
-- [ ] Review firewall rules for optimization
-
-#### Quarterly
-- [ ] Conduct security audit
-- [ ] Penetration testing (optional but recommended)
-- [ ] Review and update security policies
-- [ ] Team security training
-- [ ] Disaster recovery drill
-
----
-
-## 🔐 Hardening Guide
-
-### Network Hardening
-
-```bash
-# Disable unnecessary services
-sudo systemctl disable --now avahi-daemon
-sudo systemctl disable --now cups
-
-# Enable firewall
-sudo systemctl enable --now firewalld
-
-# Restrict SSH (production)
-sudo sed -i 's/#PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
-sudo sed -i 's/#PasswordAuthentication yes/PasswordAuthentication no/' /etc/ssh/sshd_config
-sudo systemctl restart sshd
-
-# Enable automatic security updates
-sudo apt install -y unattended-upgrades
-sudo dpkg-reconfigure -plow unattended-upgrades
-```
-
-### Container Hardening
-
-```bash
-# Scan images for vulnerabilities
-podman run --rm aquasec/trivy image hookprobe-django:latest
-
-# Run containers as non-root (where possible)
-podman run --user 1000:1000 ...
-
-# Set resource limits
-podman run --memory="1g" --cpus="2" ...
-
-# Use read-only root filesystem
-podman run --read-only ...
-```
-
-### Application Hardening
-
-```python
-# Django settings.py - Production hardening
-
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
-
-# HTTPS enforcement
-SECURE_SSL_REDIRECT = True
-SESSION_COOKIE_SECURE = True
-CSRF_COOKIE_SECURE = True
-
-# HSTS (HTTP Strict Transport Security)
-SECURE_HSTS_SECONDS = 31536000  # 1 year
-SECURE_HSTS_INCLUDE_SUBDOMAINS = True
-SECURE_HSTS_PRELOAD = True
-
-# XSS Protection
-SECURE_BROWSER_XSS_FILTER = True
-SECURE_CONTENT_TYPE_NOSNIFF = True
-X_FRAME_OPTIONS = 'DENY'
-
-# Content Security Policy
-CSP_DEFAULT_SRC = ("'self'",)
-CSP_SCRIPT_SRC = ("'self'",)
-CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
-
-# Limit allowed hosts
-ALLOWED_HOSTS = ['your-domain.com', 'www.your-domain.com']
-```
-
----
-
-## 🚨 Incident Response
-
-### If You're Compromised
-
-1. **Immediate Actions**
-   ```bash
-   # Isolate affected systems
-   sudo iptables -I INPUT -j DROP
-   sudo iptables -I OUTPUT -j DROP
-   
-   # Keep localhost communication
-   sudo iptables -I INPUT -i lo -j ACCEPT
-   sudo iptables -I OUTPUT -o lo -j ACCEPT
-   
-   # Preserve evidence
-   sudo tar -czf /tmp/evidence-$(date +%Y%m%d-%H%M%S).tar.gz \
-       /var/log/hookprobe/ \
-       /var/lib/hookprobe/ \
-       /opt/hookprobe/honeypots/
-   
-   # Create memory dump (if forensics needed)
-   sudo dd if=/dev/mem of=/tmp/memory-dump-$(date +%Y%m%d-%H%M%S).img
-   ```
-
-2. **Investigation**
-   - Review Qsecbit analysis for attack timeline
-   - Check honeypot logs for attacker behavior
-   - Analyze Loki/Grafana for unusual patterns
-   - Examine WAF logs for attack vectors
-
-3. **Containment**
-   - Block attacker IPs
-   - Rotate all credentials
-   - Patch vulnerabilities
-   - Restore from clean backup if needed
-
-4. **Recovery**
-   - Deploy updated system
-   - Verify integrity
-   - Monitor closely for 72 hours
-   - Document lessons learned
-
-5. **Reporting**
-   - Email incident details to qsecbit@hookprobe.com
-   - Document timeline and impact
-   - Share findings with community (after remediation)
+**Not yet built (known gaps — do not assume these protections)**
+- `POLICY.TXT` is not yet signature-checked (ADR 0049 D1). **[not built]**
+- Control protocols (HTTP, DHCP, DNS, PPPoE, Noise) still parse in EL1; moving them to isolated EL0 servers is
+  ADR 0050. **[not built]**
+- IPv6 sources have no identity in the rate/scan tiers (ADR 0049 D2). **[not built]**
 
 ---
 
@@ -718,38 +479,15 @@ HookProbe security is built on:
 
 ---
 
-## ✅ Security Checklist
+## ✅ Deployment checklist (heqk)
 
-Before going to production:
-
-### Critical (Must Do)
-- [ ] Change all default passwords
-- [ ] Generate unique encryption keys
-- [ ] Enable SSL/TLS
-- [ ] Configure firewall
-- [ ] Set up backups
-- [ ] Enable security monitoring
-- [ ] Review security logs
-
-### Recommended (Should Do)
-- [ ] Implement MFA
-- [ ] Configure rate limiting
-- [ ] Set up intrusion detection
-- [ ] Enable audit logging
-- [ ] Perform security scan
-- [ ] Document security procedures
-- [ ] Train team on security
-
-### Optional (Nice to Have)
-- [ ] Penetration testing
-- [ ] Bug bounty program
-- [ ] Security certifications
-- [ ] Third-party security audit
-- [ ] Security awareness training
+- [ ] Flash with an owner key (the factory default is UNCLAIMED — every protected route refuses until claimed).
+- [ ] Use a release-signed image (never a `HOOKPROBE_DEBUG_ACCESS` bench image in production).
+- [ ] Keep Mission Control on a trusted network until HTTPS lands (ADR 0051): it is plain HTTP today.
+- [ ] Treat physical access to the card as access to `POLICY.TXT` / `WAN.TXT` until policy signing lands (ADR 0049 D1).
+- [ ] Watch the heartbeat counters (`faults`, `rx_lost`, stalls, policy drops) and `/api/health`.
 
 ---
-
-**Remember**: Security is a continuous process, not a one-time setup. Stay vigilant! 🛡️
 
 ## Accepted residual: EL0 high-resolution timer (P17)
 
