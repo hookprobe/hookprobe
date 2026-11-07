@@ -1,0 +1,4 @@
+# Bench IOC pack (detect-only). Visible test: a client resolving c2.ioc-test.example raises ioc_match,
+# and traffic to 203.0.113.0/24 (TEST-NET-3) is tagged rule 302 — neither is ever dropped.
+domain c2.ioc-test.example
+cidr 203.0.113.0/24

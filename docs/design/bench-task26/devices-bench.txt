@@ -1,0 +1,4 @@
+# Bench per-device policy (DEVICES.TXT). Replace the MAC with the test phone's Wi-Fi address
+# (iPhone: Settings > Wi-Fi > (i) > Wi-Fi Address; turn "Private Wi-Fi Address" off or use the shown one).
+# internet_only: the phone browses, but http://10.99.0.1 (Mission Control) does not load.
+02:00:00:00:00:99 internet_only bench-phone

@@ -698,6 +698,11 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
             };
             let v = decide(&q.name[..q.nl]);
             record(now, client, q.qtype, &q.name[..q.nl], v);
+            // Parity G7: threat-intel domain (IOC pack) — detection only, the name is still answered.
+            if crate::ioc::domain_listed(&q.name[..q.nl]) {
+                st().ioc += 1;
+                let _ = crate::rules::ioc_domain_verdict(client);
+            }
             // Parity G8: DGA / lookalike / tunnel scoring on names Shield let through — detection only.
             if v == Verdict::Allowed && crate::dga::score(&q.name[..q.nl]) >= crate::dga::DGA_THRESHOLD {
                 st().dga += 1;
@@ -869,8 +874,9 @@ struct Stats {
     ncli: usize,
     last_blocked: Ent,
     dga: u64,
+    ioc: u64,
 }
-static mut ST: Stats = Stats { c: [0; NC], ring: [ENT0; RING], rhead: 0, rlen: 0, top: [TOP0; TOPK], ntop: 0, cli: [CLI0; CLIENTS], ncli: 0, last_blocked: ENT0, dga: 0 };
+static mut ST: Stats = Stats { c: [0; NC], ring: [ENT0; RING], rhead: 0, rlen: 0, top: [TOP0; TOPK], ntop: 0, cli: [CLI0; CLIENTS], ncli: 0, last_blocked: ENT0, dga: 0, ioc: 0 };
 
 fn st() -> &'static mut Stats {
     unsafe { &mut *core::ptr::addr_of_mut!(ST) }
@@ -889,6 +895,7 @@ pub fn reset_stats() {
     s.ncli = 0;
     s.last_blocked = ENT0;
     s.dga = 0;
+    s.ioc = 0;
 }
 
 fn record(t: u64, client: u32, qtype: u16, name: &[u8], v: Verdict) {
@@ -1038,7 +1045,7 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
         }
         k += 1;
     }
-    let _ = write!(out, "],\"recent_count\":{},\"dga_suspects\":{}}}", k, s.dga);
+    let _ = write!(out, "],\"recent_count\":{},\"dga_suspects\":{},\"ioc_domain_hits\":{}}}", k, s.dga, s.ioc);
 }
 
 // ---------------------------------------------------------------------------------------------------

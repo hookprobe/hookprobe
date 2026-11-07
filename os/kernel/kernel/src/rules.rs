@@ -746,6 +746,12 @@ pub fn dns_verdict(frame: &[u8]) -> Option<Verdict> {
     }
 }
 
+/// Parity G7: a Shield query for an IOC-pack domain — `ioc_match` (rule 302's catalogue entry),
+/// observe-only + refire-cooled per source (identity-based intel never drops, ADR 0023).
+pub fn ioc_domain_verdict(src: u32) -> Verdict {
+    behavioral_verdict(302, src, crate::corroboration::AXIS_DNS)
+}
+
 /// Parity G8: a Shield query whose name scored as DGA / lookalike / tunnel (`dga::score`). Observe-only
 /// (`dns_dga`), refire-cooled per source; the name itself is still answered normally.
 pub fn shield_dga_verdict(src: u32) -> Verdict {
