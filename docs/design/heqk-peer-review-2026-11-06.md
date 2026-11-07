@@ -253,3 +253,8 @@ Port 4 restored to FTS (teardown) before Phase B.
 - `a79b261` `[P-fuzz]`: structure-aware fuzzing of every QEMU-built remote parser, 0 panics (3k + one-off 30k).
   Hand review of the CM5-only parsers (AP DHCP server, firmware events, EAPOL match, WAN DHCP client, mgmt
   frame handler incl. the prefix shift): no new defect.
+
+### Mission Control HTTPS build (2026-11-07 afternoon, no metal) — ADR 0049/0050/0051 accepted
+`4d66032` decisions · `319b654` thin provider · `c14912f` bounded EL0 excursion + EL0 TLS server · `e82d386`
+kernel pump/provisioning/e2e · `9e8fe0b` factory MCTLS.CRT. Gates: validate 87 PASS (+`[P-exc-bound]`),
+mc-e2e PASS incl. HTTPS + browser over HTTPS, all six profiles build, factory 9/9. METAL-PENDING (ADR 0051).

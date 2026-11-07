@@ -58,6 +58,22 @@ the EL0 target and interoperates (TLS 1.3, X25519, ECDSA) — using `rustls-rust
 `Secure`. TLS failures are counted on the heartbeat; an EL0 TLS server fault follows ADR 0050 D5 (the service
 fails closed, is restarted; forwarding/IPS unaffected).
 
+## Status of the build (2026-11-07)
+
+- **[qemu] realized end-to-end** (`e82d386`, `9e8fe0b`): `tlsprov` (thin provider; curl/openssl interop,
+  AES-GCM-only and P-384-only clients refused), `el0-tlshost` (181 KiB text, W^X, 8 sessions) driven one
+  command per **bounded excursion** (`[P-exc-bound]`: a spinning EL0 server is preempted after its budget,
+  a fault is contained, the server is reset and re-initialised — HTTPS fails closed, forwarding/IPS
+  unaffected), SRK-derived key + public key published at boot, `MCTLS.CRT` from the boot partition,
+  `tools/mctls-provision.py` (name-constrained owner CA), :80 → 308 https + `Secure` cookie once provisioned.
+  `mc-e2e` HTTPS leg PASS incl. the browser (SPKI-pinned to the device key): 46 handshakes, 0 timeouts,
+  0 faults, garbage / wrong-suite connections fail alone. Image factory ships the 4 KiB `MCTLS.CRT`
+  (placeholder or `--mctls-file`), offset in the manifest for the flasher.
+- **[metal] pending**: CM5 boot (EL0 window +0x8_0000 beside the GEM stub, RNG200 entropy, SRK key), then
+  provision + reflash with `--mctls-file`, `https://<device>` from a browser.
+- **Open**: flasher-side CA + one-time root install UX (task #20); `p256` signing review; hybrid
+  X25519MLKEM768; `sha2`/`hmac`/`hkdf` audit check; HTTP keep-alive (each request is a new TLS session today).
+
 ## Consequences
 
 - No unaudited all-in-one provider in the product; a small reviewable surface (one suite, server only).
