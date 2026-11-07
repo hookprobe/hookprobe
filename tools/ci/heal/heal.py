@@ -122,8 +122,14 @@ def invoke_agent(agent, wt, prompt_file, decision_file, timeout):
     env = safe_env(HEAL_PROMPT_FILE=prompt_file, HEAL_DECISION_FILE=decision_file, HEAL_WORKTREE=wt)
     if agent == "claude":
         # The model key is the ONLY secret the agent process gets (use a dedicated, spend-limited key).
-        if os.environ.get("ANTHROPIC_API_KEY"):
+        # In CI it is the auth. Locally it is forwarded only on request: a stray key in a dev shell
+        # silently outranks the operator's logged-in Claude Code session (drill 2026-11-08 failed
+        # with "Credit balance is too low" on an unfunded key while the login was fine).
+        if os.environ.get("ANTHROPIC_API_KEY") and (os.environ.get("CI") or os.environ.get("HEAL_USE_API_KEY") == "1"):
             env["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
+        for k in ("CLAUDE_CONFIG_DIR",):   # where the local login lives, if relocated
+            if os.environ.get(k):
+                env[k] = os.environ[k]
         with open(prompt_file) as f:
             prompt = f.read()
         # Hard spend cap per attempt (the attempt budget caps the count; this caps the cost).
@@ -177,6 +183,10 @@ def autofix(decision, log_text, args, state, outdir):
         f.write(agent_out)
 
     res = {"branch": branch, "worktree": wt, "base": base, "agent_rc": rc}
+    if rc != 0:
+        # An agent that errored (auth, credit, crash, budget cap) must never read as "no_change".
+        res.update(status="agent_failed", detail=agent_out.strip()[-1500:] or f"agent exited {rc}")
+        return res
     if trusted_snapshot() != before:
         res.update(status="tamper_detected",
                    detail="the agent modified the trusted gate machinery / git hooks / git config — aborted, nothing proposed")
