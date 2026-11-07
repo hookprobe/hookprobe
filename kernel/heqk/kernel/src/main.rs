@@ -5979,6 +5979,7 @@ pub extern "C" fn kmain() -> ! {
         md5_selftest();
         pppoe_selftest();
         ip6_selftest();
+        fuzz_selftest();
         let ok = netsvc::netsvc_selftest(0x4845_514b_5636_0000);
         kprint!(" [PH6-net] {} — smoltcp stack answers ARP for its own IP, ingress+egress verdict-gated (EL0-isolated netq service = metal follow-up)\n",
             if ok { "PASS" } else { "FAIL" });
@@ -13249,6 +13250,170 @@ fn ip6_selftest() {
     let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok && renew_ok;
     kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings={}\n",
         if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, renew_ok, lan_ok);
+}
+
+/// `[P-fuzz]` (ADR 0050 D3) — deterministic structure-aware fuzzing of every remote-reachable parser the
+/// QEMU build carries: frame facts + header parse, PPPoE client (discovery/LCP/auth/IPCP/IPV6CP) + decap,
+/// IPv6 RA / DHCPv6 parsers, the IPv6 LAN router/firewall (both directions), NAT inbound/outbound, the
+/// reject builders, HTTP request parse, and the POLICY.TXT / WAN.TXT parsers. Fixed seed + budget; any
+/// panic aborts the boot, so the PASS marker never prints (validate fails).
+#[cfg(not(feature = "cm5"))]
+fn fuzz_selftest() {
+    let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = move || {
+        rng ^= rng << 13;
+        rng ^= rng >> 7;
+        rng ^= rng << 17;
+        rng
+    };
+    // A structure-aware random frame: a real ethertype, a mostly-valid L3 header, random rest + length.
+    fn frame(r: &mut dyn FnMut() -> u64, buf: &mut [u8; 1600]) -> usize {
+        let len = (r() % 1600) as usize;
+        for b in buf[..len].iter_mut() {
+            *b = r() as u8;
+        }
+        if len < 14 {
+            return len;
+        }
+        const ET: [u16; 7] = [0x0800, 0x86dd, 0x8863, 0x8864, 0x0806, 0x8100, 0x88a8];
+        let et = ET[(r() % 7) as usize];
+        buf[12..14].copy_from_slice(&et.to_be_bytes());
+        let k = r();
+        match et {
+            0x0800 if len >= 34 => {
+                buf[14] = if k & 3 == 0 { buf[14] } else { 0x45 };
+                buf[23] = [6u8, 17, 1, 47][(k >> 2) as usize % 4];
+                let tl = if k & 0x30 == 0 { (k >> 8) as u16 } else { (len - 14) as u16 };
+                buf[16..18].copy_from_slice(&tl.to_be_bytes());
+            }
+            0x86dd if len >= 54 => {
+                buf[14] = 0x60;
+                buf[20] = [6u8, 17, 58, 0, 43, 44, 60][(k >> 2) as usize % 7];
+                let pl = if k & 0x30 == 0 { (k >> 8) as u16 } else { (len - 54) as u16 };
+                buf[18..20].copy_from_slice(&pl.to_be_bytes());
+                if buf[20] == 58 && len > 54 {
+                    buf[54] = [1u8, 2, 3, 4, 128, 129, 133, 134, 135, 136, 137][(k >> 12) as usize % 11];
+                }
+            }
+            0x8863 | 0x8864 if len >= 20 => {
+                buf[14] = if k & 3 == 0 { buf[14] } else { 0x11 };
+                buf[15] = [0x07u8, 0x65, 0xa7, 0x00, 0x09, 0x19][(k >> 2) as usize % 6];
+                let pl = if k & 0x30 == 0 { (k >> 8) as u16 } else { (len - 20) as u16 };
+                buf[18..20].copy_from_slice(&pl.to_be_bytes());
+                if et == 0x8864 && len >= 22 {
+                    let proto: [u16; 6] = [0xc021, 0xc023, 0x8021, 0x8057, 0x0021, 0x0057];
+                    buf[20..22].copy_from_slice(&proto[(k >> 12) as usize % 6].to_be_bytes());
+                }
+            }
+            _ => {}
+        }
+        len
+    }
+    const N: u32 = 3000;
+    let mut buf = [0u8; 1600];
+    let mut out = [0u8; 2048];
+    let mut n_frames = 0u32;
+
+    // 1. Frame facts + header parse (every frame the datapath sees).
+    for _ in 0..N {
+        let n = frame(&mut next, &mut buf);
+        let _ = hal::policy::facts(&buf[..n]);
+        let _ = crate::net::parse(&buf[..n]);
+        let _ = crate::net::eth_ipv4_dst(&buf[..n]);
+        let _ = crate::net::eth_ipv6_dst(&buf[..n]);
+        n_frames += 1;
+    }
+    // 2. PPPoE client: every phase sees hostile frames; decap both families.
+    {
+        use arch_aarch64::pppoe::{Pppoe, Tx};
+        let mut c = Pppoe::new([2, 0, 0, 0, 0, 2], b"user", b"pass", 0x1234_5678, 0x9abc_def0);
+        let mut tx = Tx::new();
+        for i in 0..N {
+            let n = frame(&mut next, &mut buf);
+            if n >= 6 {
+                buf[0..6].copy_from_slice(&[2, 0, 0, 0, 0, 2]); // addressed to us: reach the parser
+            }
+            tx.clear();
+            c.rx(&buf[..n], i as u64 * 10, &mut tx);
+            let _ = c.decap_ipv4(&buf[..n], &mut out);
+            let _ = c.decap_ipv6(&buf[..n]);
+            n_frames += 1;
+        }
+    }
+    // 3. IPv6 WAN parsers + the LAN router/firewall both ways.
+    {
+        let mut v = arch_aarch64::ip6lan::V6Lan::new();
+        for i in 0..N {
+            let n = frame(&mut next, &mut buf);
+            if n > 14 {
+                let _ = arch_aarch64::ip6::parse_ra(&buf[14..n]);
+                let _ = arch_aarch64::ip6::parse_dhcp6(&buf[14..n], 0x00ab_cdef);
+                let _ = v.on_wan(&buf[14..n], i as u64 * 7, &mut out);
+            }
+            let _ = v.on_lan(&buf[..n], i as u64 * 7, &mut out);
+            n_frames += 1;
+        }
+    }
+    // 4. NAT both directions + the reject builders.
+    {
+        let mut st = arch_aarch64::nat::NatStats::default();
+        let (wan_ip, wan_mac, gw) = ([100u8, 71, 11, 24], [2u8, 0, 0, 0, 0, 2], [2u8, 0xac, 0, 0, 0, 1]);
+        let (m1, m2) = ([0xb8u8, 0x27, 0xeb, 1, 2, 3], [0xb8u8, 0x27, 0xeb, 1, 2, 4]);
+        for i in 0..N {
+            let n = frame(&mut next, &mut buf);
+            if n >= 6 && i & 1 == 0 {
+                buf[0..6].copy_from_slice(&wan_mac);
+            }
+            let _ = arch_aarch64::nat::inbound(&buf[..n], &wan_ip, &wan_mac, [&m1, &m2], &mut out, i as u64, &mut st);
+            let _ = arch_aarch64::nat::outbound_redirect(&buf[..n], 0, &[10, 66, 0], Some((&[10, 66, 0, 1], &[1, 1, 1, 1])), &wan_ip, &wan_mac, &gw, &mut out, i as u64, &mut st);
+            let _ = arch_aarch64::reject::reject4(&buf[..n], &[10, 66, 0, 1], &gw, &mut out);
+            n_frames += 1;
+        }
+    }
+    // 5. HTTP request parse (Mission Control, reachable on :80).
+    let mut n_http = 0u32;
+    #[cfg(feature = "netsvc")]
+    {
+        const SEED: &[u8] = b"POST /api/login?x=1 HTTP/1.1\r\nHost: d\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\nContent-Length: 11\r\n\r\ntoken=hello";
+        let mut b = [0u8; 512];
+        for _ in 0..N {
+            let n = SEED.len().min(b.len());
+            b[..n].copy_from_slice(&SEED[..n]);
+            let cut = (next() as usize) % (n + 1);
+            for _ in 0..(next() % 8) {
+                let at = (next() as usize) % n.max(1);
+                b[at] = next() as u8;
+            }
+            let _ = crate::http::parse(&b[..cut]);
+            n_http += 1;
+        }
+    }
+    // 6. POLICY.TXT / WAN.TXT (boot config) — byte mutation of valid files.
+    let mut n_cfg = 0u32;
+    {
+        const POL: &[u8] = b"HQPOL1\nprefix-list ADMINS seq 10 permit 192.168.200.1/32\nprefix-list P6 seq 5 permit 2001:db8::/32 le 64\nacl MGMT-IN seq 10 allow any pl:ADMINS any\ninterface mgmt acl in MGMT-IN\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN seq 20 drop udp any 2620:fe::fe/128 53\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 1.0.0.1/32 via mgmt gw 192.168.200.1\nroute 0.0.0.0/0 via wan metric 10\n";
+        const WAN: &[u8] = b"HQWAN1\nmode=pppoe\nuser=abc\npass=def\nvlan=100\nvlan_outer=0\npcp=3\nmgmt_vlan=200\nmgmt=static\nmgmt_ip=192.168.200.10/24\nmgmt_gw=192.168.200.1\nmgmt_floor=192.168.200.0/24\n";
+        let mut b = [0u8; 1024];
+        for i in 0..N {
+            let src = if i & 1 == 0 { POL } else { WAN };
+            let n = src.len();
+            b[..n].copy_from_slice(src);
+            for _ in 0..(1 + next() % 6) {
+                let at = (next() as usize) % n;
+                b[at] = match next() % 4 { 0 => b'\n', 1 => b' ', 2 => b'/', _ => next() as u8 };
+            }
+            let cut = n - (next() as usize % 16).min(n);
+            if i & 1 == 0 {
+                let mut pol = hal::policy::Policy::new();
+                let _ = hal::policy::parse_policy(&b[..cut], &mut pol);
+            } else {
+                let _ = hal::parse_wan_link(&b[..cut]);
+            }
+            n_cfg += 1;
+        }
+    }
+    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
+        n_frames, n_http, n_cfg);
 }
 
 fn pppoe_selftest() {
