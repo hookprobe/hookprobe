@@ -1,0 +1,12 @@
+# Host stub for the kernel's `arch_aarch64` crate. securechannel.rs references
+# `arch_aarch64::_print` in its in-kernel KAT printer (securechannel_selftest) — an
+# extern-crate path, so it needs a real crate of that name on the host. This provides
+# just `_print`, routed to stdout. Named `arch_aarch64` via [lib] so the extern path resolves.
+[package]
+name = "arch-stub"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "arch_aarch64"
+path = "src/lib.rs"

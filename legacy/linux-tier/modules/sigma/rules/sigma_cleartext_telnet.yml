@@ -1,0 +1,19 @@
+title: Cleartext Telnet Connection Attempt
+id: 0c1d2e3f-4a5b-4c6d-8e9f-0a1b2c3d4e5f
+status: stable
+description: >
+  A TCP connection attempt to the Telnet port (23) — a cleartext, deprecated protocol
+  still targeted by IoT/embedded-device credential-stuffing botnets. Demonstrates plain
+  field equality (no modifier) across two AND'd fields in one selection.
+logsource:
+  category: network_connection
+  product: linux
+detection:
+  selection:
+    dst_port: 23
+    proto: tcp
+  condition: selection
+level: medium
+tags:
+  - attack.initial-access
+  - attack.t1021

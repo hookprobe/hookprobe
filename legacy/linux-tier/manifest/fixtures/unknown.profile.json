@@ -1,0 +1,21 @@
+{
+  "_comment": "probert-style RAW scanner output for an UNRECOGNIZED x86 box. DMI fields are blank/'Default string' so no profile matches -> classifier falls back to 'generic'. Proves local-first: baseline SOC still runs.",
+  "scan": {
+    "device_tree_compatible": [],
+    "dmi": { "sys_vendor": "Default string", "product_name": "Default string", "board_name": "Default string" },
+    "arch": "amd64",
+    "cpu": { "model": "Intel(R) Celeron(R) N5105", "cores": 4 },
+    "memory_mb": 8192,
+    "storage": [ { "dev": "sda", "size_gb": 64, "type": "ssd" } ],
+    "tpm": { "present": false, "version": null, "kind": "none" },
+    "secure_boot": { "supported": true, "enabled": false },
+    "npu": { "present": false, "driver_ready": false, "vendor": null, "model": null },
+    "virt": "none",
+    "interfaces": [
+      { "name": "eth0", "mac": "52:54:00:ab:cd:ef", "type": "ethernet", "driver": "r8169",
+        "supported_modes": ["1000baseT/Full"], "role": "out-of-band", "state": "up" }
+    ],
+    "wifi": { "present": false },
+    "lte": { "present": false }
+  }
+}

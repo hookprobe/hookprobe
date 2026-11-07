@@ -1,0 +1,52 @@
+[Unit]
+Description=QSECBIT - resilience score (Organism orb) from telemetry (sandboxed Wasm)
+After=hookprobe-telemetry.service hookprobe-precompile.service
+Wants=hookprobe-telemetry.service
+# Best-effort ordering only (After=, not Requires=): a missing/stale .cwasm falls back to JIT
+# (ADR 0009 gap 2), so qsecbit must still start even if precompiling hasn't run yet or failed.
+[Service]
+# 2026-07-07 backend-audit gap 2 (sd_notify watchdog, Architecture.md §4.4): the sender of
+# READY=1/WATCHDOG=1 is `hookprobe-supervisor --run-wasm qsecbit` (see
+# `wasm_loader::run_wasi_module_streaming`'s doc comment) — a GRANDCHILD of this unit's tracked
+# main PID (the ExecStart pipeline forks a process per stage). NotifyAccess=all is the correct,
+# documented systemd knob for exactly this shape, not a workaround. WATCHDOG=1 is pinged from
+# inside the wasm epoch-check callback, which only runs while the sandboxed module is ACTUALLY
+# executing (see that function's doc for why that's a genuine liveness proof, not a dumb timer).
+# qsecbit's input (`telemetry`) is `hookprobe-telemetry.service`'s own 5s host-metric sampler --
+# unlike an attack-detection-driven stream, this is continuous BY CONSTRUCTION regardless of
+# network activity, so WatchdogSec=120s (well above the ~20s ping interval) can stay tight without
+# false-positive risk.
+Type=notify
+NotifyAccess=all
+WatchdogSec=120s
+ExecStart=/bin/bash -c 'set -o pipefail; exec tail -n0 -F /var/lib/hookprobe/telemetry | /usr/lib/hookprobe/hookprobe-supervisor --run-wasm qsecbit --modules /usr/lib/hookprobe/modules --trust /usr/share/hookprobe/trust >> /var/lib/hookprobe/qsecbit-scores'
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# GAP-3 (2026-07-16 hardening): processes the telemetry stream but ran root with the full cap
+# bounding set. Mirror the supervisor's proven sandbox; CapabilityBoundingSet= empty (wasm needs no
+# capability); MDWE stays OFF (Wasmtime JITs). Reads/appends /var/lib/hookprobe only.
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io
+ReadWritePaths=/var/lib/hookprobe
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=64M
+# 2026-07-07 backend-audit fix: same gap as aegis-guard.service/dnsxai.service -- no Slice=
+# meant this long-running wasm scoring engine ran unaccounted in system.slice.
+Slice=hookprobe-live.slice
+[Install]
+WantedBy=multi-user.target

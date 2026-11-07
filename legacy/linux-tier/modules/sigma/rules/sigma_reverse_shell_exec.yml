@@ -1,0 +1,23 @@
+title: Reverse Shell Exec Pattern
+id: 8f6e6d1a-2b3c-4a5e-9f0a-1c2d3e4f5a6b
+status: stable
+description: >
+  A process exec pattern consistent with a reverse or interactive-shell-via-socket
+  (bash /dev/tcp redirection, netcat -e, ncat --exec). Bundled HookProbe Sigma
+  starter rule — logic mirrors hookprobe_evidence::host_edr's REVERSE_SHELL detector,
+  expressed here as a Sigma rule to prove the Sigma ingestion path end-to-end.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - "/dev/tcp/"
+      - "/dev/udp/"
+      - "nc -e"
+      - "ncat --exec"
+  condition: selection
+level: critical
+tags:
+  - attack.execution
+  - attack.t1059.004

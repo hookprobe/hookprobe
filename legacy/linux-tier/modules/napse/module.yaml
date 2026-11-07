@@ -1,0 +1,75 @@
+# modules/napse/module.yaml — NAPSE network IDS/IPS sensor.
+# The supervisor resolves requires/grants/provides against the signed manifest
+# (Architecture.md C10). grant must be state=granted for each required capability.
+id: napse
+version: 2.4.1
+title: "NAPSE — Network IDS/IPS"
+runtime: wasm
+artifact: registry.hookprobe.com/modules/napse:2.4.1
+
+requires:
+  capabilities: [soc, ids]
+  min_memory_mb: 256
+
+grants:                       # the ONLY host access this module receives (WASI caps)
+  - read: /var/lib/hookprobe/flows
+  - wasi-nn: cpu
+
+provides:
+  capabilities: [napse]
+
+resources:                    # requested budget; supervisor allocates from manifest.resources.allocatable
+  cpu_pct: 50
+  memory_mb: 256
+  epoch_ms: 50
+
+# Payload digest (ADR 0016) — the signature below now transitively covers this file, not just
+# this module.yaml's metadata. `value` is computed + refreshed by
+# `hookprobe-supervisor --write-artifact-digests napse` (builder/sign-release.sh runs it
+# BEFORE --sign-modules, so the .sig covers the FINAL bytes); never hand-edit `value`.
+artifacts:
+  - path: napse.wasm            # resolved relative to this module's install dir
+    role: executable
+    digest:
+      alg: sha256
+      value: "c732ab2dbcfeb81b20d85c3976361ff284d86306120882f4d3aa725a829d3ed1"
+
+  # ADR 0017 — build-time-precompiled, Wasmtime-native AOT blob, arch-qualified: one entry per
+  # target arch the builder actually precompiled (native precompile in the `build` stage, which
+  # runs AS that arch — no cross-arch codegen). The supervisor consults ONLY the entry whose
+  # `arch` equals its own running arch (`module_sig::running_arch()`); every other arch's entry
+  # is inert signed metadata. Populated by `hookprobe-supervisor --write-artifact-digests napse`
+  # (same tool, same rule: never hand-edit `value`); a device with no matching entry, or a
+  # mismatched one, safely falls back to the verified `.wasm` JIT floor (ADR 0016 Fix A) — never
+  # a load failure. arm64/riscv64 entries are added by their own arch's CI/build run.
+  - path: napse.cwasm
+    role: aot
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "571b7aaf45b80fea162364b333d56b9b0286ce2c0d1ba8166af37e86d9e427ca"
+
+  # arm64 leg (ADR 0017 D3/D1 — closes the "amd64-only role:aot" gap: without this entry every
+  # Pi/RK3588 device had NO arm64 `role: aot` to match, silently falling back to verified-JIT
+  # forever, never the AOT fast path). Populated by
+  # `hookprobe-supervisor --write-artifact-digests napse` run AS arm64 (native arm64 CI runner, or
+  # this dev box's qemu-aarch64-static stand-in via `builder/refresh-aot.sh --arch arm64`); never
+  # hand-edit `value`.
+  - path: napse.cwasm
+    role: aot
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "965f4f359335faca688068869087848c65db852cb5a6f7eccdee1303b3dad790"
+
+  - path: napse.a76.cwasm
+    role: aot
+    arch: arm64
+    cpu: cortex-a76  # A76-tier (LSE) variant of the same path's A72-safe baseline;
+                     # defaults to A72-safe when `cpu:` is absent (every other entry).
+                     # informational until the Rust-side selection lands (see
+                     # builder/refresh-aot.sh --with-a76's doc header).
+    digest:
+      alg: sha256
+      value: "0fae99f8bfe1ae3d3d9ff33494ea601fea391cd5176627e098bac051396555c1"
+signature: required             # the .sig now protects code, not just metadata

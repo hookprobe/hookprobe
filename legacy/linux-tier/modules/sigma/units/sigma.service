@@ -1,0 +1,30 @@
+[Unit]
+Description=HookProbe Sigma engine — merges flows+host-events, fires Sigma rule matches
+Documentation=file:///usr/share/hookprobe/docs/adr/0026-sigma-yara-detection.md
+# Consumes /var/lib/hookprobe/flows AND /var/lib/hookprobe/host-events (merged — `tail -q`
+# suppresses the per-file "==>" headers so both streams interleave as plain JSON lines) and
+# appends alerts to /var/lib/hookprobe/events, exactly like napse.service's own pipeline.
+After=hookprobe-network-reconcile.service senzorium-flow.service host-telemetry.service
+Wants=senzorium-flow.service
+# Best-effort ordering only (After=, not Requires=/Wants=): host-telemetry may be absent on a
+# platform without host_telemetry granted (see modules/host-telemetry/module.yaml) — this
+# engine must still start and evaluate network-only Sigma rules in that case.
+
+[Service]
+Type=simple
+# `-q` suppresses tail's per-file "==> filename <==" headers so the two streams merge as plain
+# JSON lines on one pipe — this native binary (NOT a Wasm module: see module.yaml's doc header
+# for why) reads stdin exactly like napse/qsecbit's own tail|module>>events pipelines.
+ExecStart=/bin/sh -c 'exec tail -n0 -q -F /var/lib/hookprobe/flows /var/lib/hookprobe/host-events | /usr/lib/hookprobe/hookprobe-sigma >> /var/lib/hookprobe/events'
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+CapabilityBoundingSet=
+MemoryMax=128M
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

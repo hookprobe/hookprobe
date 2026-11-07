@@ -1,0 +1,38 @@
+/* rail.css — the shared canonical left nav rail (AppRail). Matches ~/workspace.png. */
+
+.rail2 { width: 212px; flex-shrink: 0; background: linear-gradient(180deg, #0b0f18, #080a10);
+  border-right: 1px solid var(--hp-border); display: flex; flex-direction: column; padding: 18px 14px; gap: 3px; }
+.rail2-brand { display: flex; align-items: center; gap: 10px; text-decoration: none; padding: 4px 8px 16px; }
+.rail2-brand-mark { color: var(--hp-cyan); font-size: 20px; letter-spacing: -3px; }
+.rail2-brand-txt { display: flex; flex-direction: column; font-size: 15px; font-weight: 800; color: #fff; letter-spacing: .3px; }
+.rail2-brand-txt em { font-size: 9px; font-weight: 500; color: var(--hp-text-muted); letter-spacing: .5px; font-style: normal; margin-top: 1px; }
+
+.rail2-nav { display: flex; flex-direction: column; gap: 1px; flex: 1; }
+.rail2-item { display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: var(--hp-radius);
+  color: var(--hp-text-secondary); text-decoration: none; font-size: 13.5px; font-weight: 500; }
+.rail2-item:hover { background: rgba(255,255,255,.03); color: var(--hp-text-primary); }
+.rail2-icon { width: 18px; text-align: center; opacity: .8; }
+.rail2-item--active { background: linear-gradient(90deg, rgba(0,180,255,.16), rgba(0,180,255,.03)); color: #fff; box-shadow: inset 2px 0 0 var(--hp-cyan); }
+.rail2-item--active .rail2-icon { color: var(--hp-cyan); opacity: 1; }
+
+.rail2-qcard { margin-top: 8px; padding: 13px; border-radius: var(--hp-radius-lg);
+  background: linear-gradient(180deg, rgba(0,255,157,.07), rgba(0,0,0,.2)); border: 1px solid rgba(0,255,157,.18);
+  display: flex; flex-direction: column; gap: 1px; text-align: center; }
+.rail2-qcard-label { font-size: 11px; color: var(--hp-text-secondary); }
+.rail2-qcard-score { font-size: 34px; font-weight: 800; color: var(--hp-green); line-height: 1.1; }
+.rail2-qcard-score em { font-size: 13px; font-weight: 500; color: var(--hp-text-muted); font-style: normal; }
+.rail2-qcard-spark { width: 100%; height: 30px; margin: 2px 0; }
+.rail2-qcard-posture { font-size: 10.5px; color: var(--hp-green); }
+
+.rail2-tenant { margin-top: 10px; display: flex; align-items: center; justify-content: space-between; padding: 10px 12px;
+  background: var(--hp-surface); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); cursor: pointer; color: var(--hp-text-secondary); }
+.rail2-tenant span { display: flex; flex-direction: column; text-align: left; }
+.rail2-tenant em { font-size: 10px; color: var(--hp-text-muted); font-style: normal; }
+.rail2-tenant b { font-size: 13px; color: var(--hp-text-primary); }
+.rail2-os { display: flex; align-items: center; gap: 9px; padding: 10px 6px 2px; }
+.rail2-os-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hp-green); box-shadow: var(--hp-glow-green); flex-shrink: 0; }
+.rail2-os span { display: flex; flex-direction: column; }
+.rail2-os b { font-size: 11px; color: var(--hp-text-secondary); letter-spacing: .3px; }
+.rail2-os em { font-size: 10px; color: var(--hp-text-muted); font-style: normal; }
+
+@media (max-width: 720px) { .rail2 { display: none; } }

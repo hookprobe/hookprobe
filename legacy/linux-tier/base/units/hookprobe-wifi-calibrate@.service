@@ -1,0 +1,38 @@
+[Unit]
+Description=HookProbe adaptive Wi-Fi calibration (regdomain + channel/width step-down) on %i
+Documentation=file:///usr/share/hookprobe/docs/adr/0034-adaptive-wifi-regdomain-and-calibration.md
+# Runs the RUNTIME half of ADR 0034 (D14, W4): try the widest AP channel/width the regdomain +
+# radio allow and step DOWN (after a bounded number of same-rung CLEAN retries) until it holds —
+# writing a status artifact. The DETERMINISTIC decisions are pure functions in
+# hookprobe-manifest::wifi_calibrate (`verify_rung`/`next_rung_action`). D14 correction: this loop
+# does NOT detect the country or call `iw reg set` — the regdomain is EXCLUSIVELY owned by
+# hookprobe-regdomain.service (boot) / hookprobe-regdomain-reresolve.service (WAN-online
+# re-resolve, D11); re-setting it at runtime while hostapd is/was serving is the brcmfmac
+# DFS-bounce trigger this loop exists to avoid. It reads the already-applied country read-only.
+#
+# Ordering: after the network reconcile has staged/installed the base hostapd conf (this loop
+# rewrites hostapd-%i.conf per rung and restarts hookprobe-hostapd@%i), and after the AP radio
+# device exists. Started explicitly right after hostapd by network-apply.sh (see network-apply.sh
+# item 9, ADR 0034) — NOT on a spin timer (hysteresis: only re-calibrate on regdomain change,
+# radio change, boot, or operator request).
+After=hookprobe-network-reconcile.service sys-subsystem-net-devices-%i.device network-online.target
+Wants=network-online.target
+ConditionPathExists=/etc/hostapd/hostapd-%i.conf
+ConditionPathExists=/usr/sbin/hostapd
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# %i is the AP interface (e.g. wlan0).
+ExecStart=/usr/lib/hookprobe/wifi-calibrate.sh %i
+# Needs net_admin to restart the AP + issue a scan-abort during the clean restart; masks the
+# supplicant on the AP radio (systemctl) — hence a modest privilege set, no more.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/etc/hostapd -/var/lib/hookprobe -/run
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

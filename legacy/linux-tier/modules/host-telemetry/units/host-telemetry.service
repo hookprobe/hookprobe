@@ -1,0 +1,41 @@
+[Unit]
+Description=HookProbe host telemetry — eBPF execsnoop (every process exec → host-events stream)
+Documentation=https://github.com/hookprobe/hookprobe-os/tree/main/modules/host-telemetry
+# Needs the persistent data partition mounted before it appends to /var/lib/hookprobe/host-events.
+# 2026-07-07 FIX: this ordered After=/Wants= `hookprobe-provision-data.service` — a unit that DOES
+# NOT EXIST (the provisioner is hookprobe-firstboot-data.service; the actual data volume is the
+# var-lib-hookprobe.mount). systemd resolves a Wants= to a non-existent unit INSTANTLY (no wait,
+# no error), so host-telemetry had ZERO ordering against the data partition and could start while
+# /var/lib/hookprobe was still the read-only rootfs mountpoint (EROFS on write → Restart churn).
+# Depend on the mount itself, matching this module's own hookprobe-retention.service.
+After=var-lib-hookprobe.mount
+Wants=var-lib-hookprobe.mount
+
+[Service]
+Type=simple
+# eBPF loader: attach sched_process_exec, stream ingest_host_event JSON. The evidence graph tails
+# /var/lib/hookprobe/host-events (decoupled — survives if the graph is offline).
+# wrapper picks eBPF execsnoop (if the CI-built loader is present) else the /proc fallback → host-events
+ExecStart=/usr/lib/hookprobe/host-telemetry-start.sh
+# BPF load + tracepoint attach: CAP_BPF + CAP_PERFMON suffice on the product baseline (≥5.19; the
+# edge kernels are 6.12). CAP_SYS_ADMIN (near-root) was dropped 2026-07-16 (audit GAP-5): it is not
+# needed to attach sched_process_exec on a modern kernel, and if a BPF attach ever DID fail the
+# wrapper degrades to the /proc fallback (see host-telemetry-start.sh) rather than crashing — so
+# removing it hardens without risking the sensor.
+AmbientCapabilities=CAP_BPF CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_PERFMON
+# hardening — a read-only sensor that only writes its append stream
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=64M
+Restart=on-failure
+RestartSec=5
+# 2026-07-07 backend-audit fix: the host EDR sensor (execsnoop) is a live-path detection
+# engine same as napse/aegis-guard/qsecbit -- it had no Slice= and ran unaccounted.
+Slice=hookprobe-live.slice
+
+[Install]
+WantedBy=multi-user.target

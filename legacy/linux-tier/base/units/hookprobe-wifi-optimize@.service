@@ -1,0 +1,38 @@
+[Unit]
+Description=HookProbe autonomous 5GHz channel optimizer (ADR 0034 D24-D33) on %i
+Documentation=file:///usr/share/hookprobe/docs/adr/0034-adaptive-wifi-regdomain-and-calibration.md
+# The D24-D33 extension: a STRICTLY ADDITIVE layer above the boot calibrate ladder
+# (hookprobe-wifi-calibrate@) — it never runs at boot/bring-up (that stays fast + DFS-free), only
+# on its own schedule (the sibling .timer, 03:00 daily + jitter), on-demand
+# (`systemctl start hookprobe-wifi-optimize@wlan0`), on a regdomain change, or as the fast
+# post-boot DFS-LKG restore (`reapply` mode, started by network-apply.sh right after hostapd).
+# Off the enforcement path (D24) — it only ever touches the AP radio, and can only ever hand the
+# AP a channel it has itself validated; any failure degrades to the boot ladder's own ch40 anchor,
+# never a dead AP. The deterministic decisions (candidate enumeration, scoring, hysteresis select,
+# DFS test-and-learn) are pure functions in hookprobe-manifest::wifi_calibrate
+# (`optimize_candidates`/`score_block`/`select_optimized_channel`), mirrored here in
+# wifi-optimize.sh (same pattern as hookprobe-wifi-calibrate@ mirrors `verify_rung`/
+# `next_rung_action`).
+After=hookprobe-network-reconcile.service sys-subsystem-net-devices-%i.device network-online.target hookprobe-hostapd@%i.service
+Wants=network-online.target
+ConditionPathExists=/etc/hostapd/hostapd-%i.conf
+ConditionPathExists=/usr/sbin/hostapd
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+# %i is the AP interface (e.g. wlan0). Default mode is `optimize` (the full nightly/on-demand
+# survey->score->select->validate->commit/revert run) — network-apply.sh separately invokes
+# `reapply` mode right after hostapd on every boot (D31's fast post-boot DFS-LKG restore).
+ExecStart=/usr/lib/hookprobe/wifi-optimize.sh %i optimize
+# Needs net_admin to restart the AP + issue an off-channel survey retune during measurement; masks
+# the supplicant on the AP radio (systemctl) — same privilege posture as hookprobe-wifi-calibrate@.
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/etc/hostapd -/var/lib/hookprobe -/run
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

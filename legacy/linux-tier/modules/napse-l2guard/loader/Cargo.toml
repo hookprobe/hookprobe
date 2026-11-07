@@ -1,0 +1,42 @@
+[package]
+name = "napse-l2guard"
+version = "0.1.0"
+edition = "2021"
+
+# Ring-0 line-rate malformed-frame / malformed-ARP drop — the real enforcement point
+# `crates/hookprobe-manifest/src/l2_responder.rs`'s `render_frame_drop_todo` stub named as still
+# missing. Mirrors modules/napse-quarantine/loader's split: everything that builds+tests without
+# libbpf lives outside the `bpf` feature; the libbpf glue (bpf.rs) needs libbpf + the compiled
+# l2guard.bpf.o (CI, or this dev box, which happens to carry clang/bpftool/libbpf-dev).
+[[bin]]
+name = "napse-l2guard"
+path = "src/main.rs"
+
+[dependencies]
+hookprobe-manifest = { path = "../../../crates/hookprobe-manifest" }
+serde_json = "1"
+# ADR 0016 Fix C: this loader reads its OWN module.yaml to self-verify its artifact digests before
+# attaching the BPF program — same crate version every other module.yaml consumer already uses.
+serde_yaml = "0.9"
+anyhow = "1"
+# `vendored` (not just the crate default `vendored-libbpf`) also vendors libelf+zlib from source —
+# needed for aarch64 cross-compilation on this dev box (no aarch64 system libelf/libz), same
+# rationale as modules/napse-quarantine/loader/Cargo.toml.
+libbpf-rs = { version = "0.24", optional = true, features = ["vendored"] }
+
+[dev-dependencies]
+# ADR 0016 Fix C regression tests build fixture digests the same way `--write-artifact-digests`
+# would — same crate versions `hookprobe-manifest::module_sig` already pulls in.
+sha2 = "0.10"
+hex = "0.4"
+# The anti-drift proof (loader/src/predicates.rs): reuses napse-loader's ACTUAL production
+# detector code (`dpi::frame_anomaly_reason`, `dpi::parse_arp_obs`, `dpi::ArpObs`) directly rather
+# than re-declaring a second copy of those predicates — a test-only dependency (this crate's
+# release binary never links napse-loader; the BPF-side enforcement is standalone C).
+napse-loader = { path = "../../napse-capture/loader" }
+
+[features]
+default = []
+# `hookprobe-manifest/bpf` pulls in the shared `xdp::apply_btf_custom_path` wiring (libbpf
+# `btf_custom_path` for RPi BSP kernels that lack /sys/kernel/btf/vmlinux — ADR 0029/0030).
+bpf = ["dep:libbpf-rs", "hookprobe-manifest/bpf"]      # enabled once l2guard.bpf.o is built + libbpf is present.

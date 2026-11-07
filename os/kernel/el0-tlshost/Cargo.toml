@@ -1,0 +1,31 @@
+# ADR 0050 D2 / ADR 0051 — the EL0 TLS server for Mission Control HTTPS. A detached crate (own
+# [workspace]) built by the kernel's build.rs exactly like el0-wasmhost and loaded by the M5.1 ELF
+# loader into EL0: rustls + heqk-tlsprov + the talc heap live HERE, never in the kernel TCB.
+[package]
+name = "el0-tlshost"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[[bin]]
+name = "el0-tlshost"
+path = "src/main.rs"
+
+[features]
+# Link at the CM5 GB5 user window (USER_VA_BASE + 0x8_0000) instead of the QEMU 0xA000_0000 map.
+cm5 = []
+
+[dependencies]
+heqk-tlsprov = { path = "../tlsprov" }
+rustls = { version = "0.23", default-features = false }
+hal = { path = "../hal" }
+talc = { version = "4", default-features = false, features = ["lock_api"] }
+spin = { version = "0.9", default-features = false, features = ["lock_api", "spin_mutex"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1

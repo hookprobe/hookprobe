@@ -1,0 +1,17 @@
+[package]
+name = "hookprobe-yara-scan"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "hookprobe_yara_scan"
+path = "src/lib.rs"
+
+[dependencies]
+yara-x = { version = "1.19.0", default-features = false }
+serde_json = "1"
+
+[[bin]]
+name = "hookprobe-yara-scan"
+path = "src/main.rs"
+

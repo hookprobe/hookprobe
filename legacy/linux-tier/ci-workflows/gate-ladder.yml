@@ -1,0 +1,275 @@
+# =============================================================================
+# gate-ladder.yml — CI wiring for the local gate ladder (`builder/gate-ladder.sh`,
+# verification-engineer canon; docs/roadmap/BuildPlan.md's gate-ladder definition; ADR 0011
+# D4 "the gate ladder IS the sandbox"). This workflow does NOT reimplement any
+# check — every job just invokes the same script a developer runs on their box, so
+# CI and local runs can never silently diverge.
+#
+# Jobs (cheapest first):
+#   gate0            — every push + PR. `builder/gate-ladder.sh --gate0`
+#                       (fmt/clippy/test-debug/manifest/ui). Fast (~1-2 min).
+#   wasmtime-drift    — every push + PR. Explicit, standalone assertion (independent
+#                       of the Containerfile build even running) that Cargo.lock's
+#                       embedded `wasmtime` crate version equals `base/Containerfile`'s
+#                       `WASMTIME_VERSION` ARG default — the exact class of drift ADR
+#                       0017 closed. Cheap (no cargo build needed), so it runs FIRST
+#                       and fails fast, before burning a build on a doomed image.
+#   gate1            — pull_request only (release-shaped; needs the gate0 toolchain +
+#                       cache, so `needs: gate0`). `builder/gate-ladder.sh --gate1`.
+#   gate2-image       — nightly (schedule) + manual dispatch + a `run-gate2` label on
+#                       the PR (image build + boot self-provisioning is slow and needs
+#                       privileged podman — never implied by every push/PR). Runs on a
+#                       matrix of {amd64, arm64} via QEMU-emulated buildx where native
+#                       runners aren't available; matrix is honest about arm64 being
+#                       emulation-dilated (never compared against silicon wall-clock,
+#                       verification-engineer canon).
+#
+# Secrets this workflow would need once it moves beyond the free CI tier (documented,
+# never invented): a cosign identity (keyless OIDC via `id-token: write`, already
+# requested below, needs no secret) OR a KMS-backed key (`COSIGN_KMS_KEY` secret, ADR
+# 0002 §3 regulated line) for the eventual real `sign-release.sh` run against
+# production keys (this workflow signs with the repo's own dev key, same as the dev
+# box — see builder/release.key comment) and a registry credential
+# (`REGISTRY_USERNAME`/`REGISTRY_PASSWORD` or OIDC) to push the built image, wired the
+# same way `build-os.yml` already does for its own `promote` job.
+# =============================================================================
+name: gate-ladder
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 3 * * *"   # nightly Gate 2 (image) run
+  workflow_dispatch:
+    inputs:
+      run_gate2:
+        description: "Also run Gate 2 (image build + smoketest) on this manual run"
+        type: boolean
+        default: false
+      run_gate_r:
+        description: "Also run Gate R (ADR 0020 adversarial-resilience netns DUT) on this manual run"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+env:
+  RUST_TOOLCHAIN: "1.96.0"          # pin — matches the version this ladder was validated against
+  WASM_TARGET: wasm32-wasip1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 0) Wasmtime version-drift assertion — standalone, no cargo build required.
+  #    Fails the job the instant Cargo.lock's embedded wasmtime version and
+  #    base/Containerfile's WASMTIME_VERSION ARG disagree (ADR 0017 Blocker: a
+  #    drift silently degrades every AOT `.cwasm` load to the JIT floor). This
+  #    mirrors the Containerfile's own build-time RUN assertion exactly, so a
+  #    drift is caught here BEFORE a slow image build ever starts, and is caught
+  #    even on a change that never touches base/Containerfile itself.
+  # ---------------------------------------------------------------------------
+  wasmtime-drift:
+    name: "wasmtime version-drift assertion"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cargo.lock wasmtime version == Containerfile WASMTIME_VERSION
+        run: |
+          set -euo pipefail
+          locked="$(awk '/^name = "wasmtime"$/{f=1;next} f && /^version = /{gsub(/"/,"",$3); print $3; exit}' Cargo.lock)"
+          if [ -z "$locked" ]; then
+            echo "::error::could not find a Cargo.lock entry for the 'wasmtime' crate"
+            exit 1
+          fi
+          declared="$(grep -oP '^ARG WASMTIME_VERSION=\K[0-9.]+' base/Containerfile | head -1)"
+          if [ -z "$declared" ]; then
+            echo "::error::could not find 'ARG WASMTIME_VERSION=<x.y.z>' in base/Containerfile"
+            exit 1
+          fi
+          echo "Cargo.lock embedded wasmtime  = $locked"
+          echo "Containerfile WASMTIME_VERSION = $declared"
+          if [ "$locked" != "$declared" ]; then
+            echo "::error::Wasmtime version drift (ADR 0017 Blocker): embedded crate (Cargo.lock)=$locked vs base/Containerfile ARG WASMTIME_VERSION=$declared. These MUST match -- a drift silently degrades every AOT .cwasm load to the JIT floor. Fix: bump base/Containerfile's WASMTIME_VERSION default to $locked (or re-lock supervisor/Cargo.toml's wasmtime dep to $declared)."
+            exit 1
+          fi
+          echo "OK: no drift ($locked == $declared)"
+
+  # ---------------------------------------------------------------------------
+  # 1) Gate 0 — fast tier, every push + PR.
+  # ---------------------------------------------------------------------------
+  gate0:
+    name: "Gate 0 (fmt/clippy/test/manifest/ui)"
+    needs: wasmtime-drift
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: ${{ env.WASM_TARGET }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install python deps (manifest validate gate)
+        run: pip install -r manifest/requirements.txt
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: os/mission-control/package-lock.json
+
+      - name: Install jq (verify-staging.sh dependency, used by Gate 1 too but cheap here)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq
+
+      - name: Regenerate the staging plan (amd64) so Gate 0's tree matches CI's arch
+        run: builder/gen-staging.sh --arch amd64
+
+      - name: builder/gate-ladder.sh --gate0
+        run: builder/gate-ladder.sh --gate0
+
+  # ---------------------------------------------------------------------------
+  # 2) Gate 1 — release-shaped tier, PR only (needs: gate0 -- no point spending
+  #    release-mode compile time on a tree that already failed the fast tier).
+  # ---------------------------------------------------------------------------
+  gate1:
+    name: "Gate 1 (release tests + staging + digest-gate + release-pass rehearsal)"
+    needs: gate0
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: ${{ env.WASM_TARGET }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install jq (verify-staging.sh / release-pass.sh dependency)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq
+
+      - name: Sign modules with the dev key (so digest/signature gates have something
+              real to check against -- the canonical release path uses an HSM/KMS key
+              instead, see ADR 0002 §3; this repeats what builder/sign-release.sh does
+              on a dev box, using the repo's checked-in dev key)
+        run: builder/sign-release.sh
+
+      - name: builder/gate-ladder.sh --gate1
+        run: builder/gate-ladder.sh --gate1
+
+  # ---------------------------------------------------------------------------
+  # 3) Gate 2 — image tier. Nightly + manual opt-in only (needs privileged podman,
+  #    is slow, and needs open apt/registry egress a locked-down runner may not
+  #    have -- never implied by a plain push/PR). arm64 runs under QEMU emulation
+  #    (docker/setup-qemu-action); its wall-clock is NEVER a valid comparison
+  #    against Pi5/RK3588/N100 silicon numbers (verification-engineer canon) --
+  #    this matrix exists to catch BUILD-time breakage (e.g. a GPT/partitioning
+  #    or cross-arch toolchain regression) per-arch, not to benchmark.
+  # ---------------------------------------------------------------------------
+  gate2-image:
+    name: "Gate 2 (image build + boot self-provisioning smoketest) · ${{ matrix.arch }}"
+    needs: gate0
+    if: >-
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_gate2) ||
+      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-gate2'))
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: ${{ env.WASM_TARGET }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends jq
+
+      - name: Set up QEMU (needed for the arm64 leg on an amd64 runner -- emulation-dilated, never a benchmark)
+        if: matrix.arch == 'arm64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Regenerate the staging plan for this arch
+        run: builder/gen-staging.sh --arch ${{ matrix.arch }}
+
+      - name: Sign modules (dev key -- see Gate 1's note; production uses an HSM/KMS key, ADR 0002 §3)
+        run: builder/sign-release.sh
+
+      - name: builder/gate-ladder.sh --gate2
+        env:
+          IMAGE_TAG: hookprobe-os:gate-ladder-${{ matrix.arch }}
+          # This CI runner's apt/registry egress is expected to be open (unlike a
+          # network-sandboxed dev box) -- no SKIP_GITHUB_DL override here; a real
+          # cosign identity would additionally be wired here once one exists
+          # (id-token: write is requested at the workflow level for that day).
+          GATE2_BUILD_TIMEOUT: "2400"
+        run: builder/gate-ladder.sh --gate2
+
+  # ---------------------------------------------------------------------------
+  # 3b) Gate R -- adversarial resilience (ADR 0020 D5). Manual dispatch ONLY (never
+  #     every push/PR/nightly): the `ubuntu-24.04` GH-hosted runner is a full VM
+  #     (unlike gate2-image's container-style build steps) and genuinely HAS
+  #     CAP_NET_ADMIN/CAP_NET_RAW via `sudo`, so this job is REAL, not a stub --
+  #     but it is opt-in because it needs a built napse-dpi + redteam-engine and
+  #     roughly a minute of privileged netns setup, which the free tier should not
+  #     pay on every push. `builder/gate-ladder.sh --gate-r` itself SKIPs honestly
+  #     (never a synthetic pass) if a future runner class lacks the privilege.
+  # ---------------------------------------------------------------------------
+  gate-r-resilience:
+    name: "Gate R (ADR 0020 adversarial resilience -- netns DUT)"
+    needs: gate0
+    if: github.event_name == 'workflow_dispatch' && inputs.run_gate_r
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@1.96.0
+        with:
+          targets: ${{ env.WASM_TARGET }}
+      - uses: Swatinem/rust-cache@v2
+
+      - name: builder/gate-ladder.sh --gate-r
+        env:
+          REDTEAM_SUDO: "1"   # ubuntu-24.04 runners have passwordless sudo by default
+        run: builder/gate-ladder.sh --gate-r
+
+  # ---------------------------------------------------------------------------
+  # 4) Required-checks fan-in: a single job PR branch protection can point at,
+  #    regardless of which of the above actually ran for a given event.
+  # ---------------------------------------------------------------------------
+  gate-ladder-summary:
+    name: "gate ladder: summary"
+    if: always()
+    needs: [wasmtime-drift, gate0, gate1]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check required gate results
+        run: |
+          echo "wasmtime-drift: ${{ needs.wasmtime-drift.result }}"
+          echo "gate0:          ${{ needs.gate0.result }}"
+          echo "gate1:          ${{ needs.gate1.result }}"
+          if [ "${{ needs.wasmtime-drift.result }}" != "success" ] || [ "${{ needs.gate0.result }}" != "success" ]; then
+            echo "::error::a required gate did not pass"
+            exit 1
+          fi
+          # gate1 only runs on pull_request (see its own `if:`) -- 'skipped' on a
+          # plain push to main is expected, not a failure; only a genuine 'failure'
+          # result should trip this fan-in.
+          if [ "${{ needs.gate1.result }}" = "failure" ]; then
+            echo "::error::Gate 1 failed"
+            exit 1
+          fi
+          echo "OK"

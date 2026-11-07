@@ -1,0 +1,8 @@
+[Unit]
+Description=Cap HookProbe SOC streams every 10 minutes (disk-fill backstop)
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=10min
+Persistent=true
+[Install]
+WantedBy=timers.target

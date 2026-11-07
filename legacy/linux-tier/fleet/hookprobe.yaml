@@ -1,0 +1,29 @@
+# fleet/hookprobe.yaml — desired state for a node or group (pull-based GitOps).
+#
+# A device PULLS this (from Git, or a signed OCI artifact at scale), diffs it
+# against its live manifest, and the supervisor converges toward it (drift
+# self-heal). Updates promote through health-gated rollout rings (canary→ring→fleet).
+# At scale, store per-node files at fleet/nodes/<node>/hookprobe.yaml.
+#
+# `rollout.ring` below (which wave THIS node is in) is checked against
+# `fleet/rollout.yaml` (which rings the promoted digest has REACHED, repo-root, not
+# per-node — ADR 0012 D2/D3) by `crate::fleet::diff_ring_gated`: a channel mismatch
+# only becomes an actionable `bootc upgrade` once this node's ring is inside
+# `rollout.yaml`'s `promoted_rings`. No `rollout.yaml` present = legacy behavior
+# (every channel mismatch is actionable immediately).
+
+channel: stable            # bootc image channel this node should track
+mode: standalone           # standalone | cloud-linked | self-hosted
+
+modules:
+  enable:                  # must be running (capability + budget permitting)
+    - napse
+    - hydra
+    - qsecbit
+    - dnsxai
+    - aegis-guard
+  disable:                 # must NOT run, even if the hardware would grant it
+    - edge-ai-detector
+
+rollout:
+  ring: canary             # canary | ring | fleet — which wave this node is in

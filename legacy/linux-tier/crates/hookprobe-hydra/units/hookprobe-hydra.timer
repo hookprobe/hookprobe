@@ -1,0 +1,14 @@
+[Unit]
+Description=Re-run HYDRA's IOC matcher on the bundled-feed cadence
+
+[Timer]
+# First pass shortly after the evidence graph exists, then every 5 minutes — frequent enough that
+# a beaconing/C2 flow gets matched promptly (the watermark in ioc_flow_candidates makes each rerun
+# cheap: only NEW flows since the last pass are scanned). Persistent so a powered-off edge box
+# still matches on next boot.
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

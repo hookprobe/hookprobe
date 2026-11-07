@@ -1,0 +1,75 @@
+# modules/senzorium-flow/module.yaml — Senzorium SOFTWARE flow capture.
+# The host-integral fallback capture path: normalizes kernel conntrack flows to the
+# common event schema at /var/lib/hookprobe/flows (the NAPSE input stream). Ships as a
+# host script + unit (runtime: sysext-style, host-integral) — NOT Wasm (it reads
+# /proc/net/nf_conntrack, which WASI cannot). Production fast path is napse-capture (XDP).
+id: senzorium-flow
+version: 0.1.0
+title: "Senzorium — software flow capture (conntrack)"
+runtime: host                 # host-integral script + unit (layered into the image)
+artifact: base
+
+requires:
+  capabilities: [soc]         # the SOC must be enabled; observes all flows
+  min_memory_mb: 16
+
+grants:                       # the only host access it needs
+  - read: /proc/net/nf_conntrack
+  - write: /var/lib/hookprobe/flows
+
+provides:
+  capabilities: [flow-capture]
+
+resources:
+  cpu_pct: 5
+  memory_mb: 16
+
+# staging: — ADR 0015 D1 explicit override. This module's fix for the "hollow bootc SOC"
+# bug (ADR 0015 context): base/Containerfile never staged this today even though the base
+# preset unconditionally `enable`s senzorium-flow.service — a cloud/N100/edge-pro/VM image
+# booted with NO software flow capture. Registry-driving this closes that gap for all three
+# build paths at once.
+staging:
+  artifacts:
+    - { src: "modules/senzorium-flow/senzorium-flow-export.sh",
+        dest: "/usr/lib/hookprobe/senzorium-flow-export.sh", mode: "0755" }
+    - { src: "modules/senzorium-flow/60-hookprobe-conntrack-acct.conf",
+        dest: "/etc/sysctl.d/60-hookprobe-conntrack-acct.conf", mode: "0644" }
+    # 2026-07-05 FIX (backend-audit P2 #7 — silent-skip gate #1): load `nf_conntrack`
+    # explicitly at boot (systemd-modules-load.service) so senzorium-flow.service's
+    # `ConditionPathExists=/proc/net/nf_conntrack` is reliably true on any kernel that
+    # ships the module, instead of silently depending on something ELSE having already
+    # triggered an auto-load. See modules/senzorium-flow/60-hookprobe-nf-conntrack.conf.
+    - { src: "modules/senzorium-flow/60-hookprobe-nf-conntrack.conf",
+        dest: "/etc/modules-load.d/60-hookprobe-nf-conntrack.conf", mode: "0644" }
+  units:
+    - "modules/senzorium-flow/senzorium-flow.service"
+  preset:
+    senzorium-flow.service: enable
+
+# Payload digests (ADR 0016) — paths are the ON-DEVICE staged dest (this is a `runtime: host`
+# module: unlike the co-located wasm convention, its module.yaml does NOT ship next to these
+# files — see `staging.artifacts[].dest` above). Plain-text staging actions (script/config, no
+# compilation) are byte-identical copies of the checked-in source, so these values were computed
+# directly from `modules/senzorium-flow/{senzorium-flow-export.sh,60-hookprobe-conntrack-acct.conf}`
+# (`sha256sum`) rather than via `--write-artifact-digests` (which resolves relative paths against
+# THIS module's own directory, not an arbitrary absolute on-device dest — a gap flagged for
+# os-architect: extend the tool to resolve `staging.artifacts[].src` for non-co-located runtimes).
+artifacts:
+  - path: /usr/lib/hookprobe/senzorium-flow-export.sh
+    role: executable
+    digest:
+      alg: sha256
+      value: "9a7741ecd82319f9f688c011c8a389b672780802945d06302d753efd4b154c24"
+  - path: /etc/sysctl.d/60-hookprobe-conntrack-acct.conf
+    role: data
+    digest:
+      alg: sha256
+      value: "4a372cd81abbe5b464a3c8fbf24323f7805e04d2c144d077de961906b1fddf32"
+  - path: /etc/modules-load.d/60-hookprobe-nf-conntrack.conf
+    role: data
+    digest:
+      alg: sha256
+      value: "92ae224b7fc905caa95f306ea90935bda8b5a52c0cdaf980f697036cf83f629b"
+
+signature: required

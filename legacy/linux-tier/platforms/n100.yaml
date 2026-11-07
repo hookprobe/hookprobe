@@ -1,0 +1,73 @@
+# platforms/n100.yaml — build-team INPUT for Intel N100 (x86) appliances.
+# See platforms/rk3588.yaml for the field-by-field explanation.
+
+profile: n100
+class: edge-pro
+sku: HP-FT-001
+
+# Retirement audit #8 (2026-07-08): honesty marker — only platforms/rpi4.yaml carries a
+# real on-silicon boot+selftest gate record (docs/roadmap/BuildPlan.md). n100 has been
+# classification-validated (live DMI/CPU-model probe) but has no boot-gate record.
+hardware_validated: false
+validation_note: "classification-tested; no on-silicon boot-gate record yet"
+
+# x86 path. DMI is firmware-asserted but N100 mini-PCs very often ship blank DMI
+# ("Default string"), which defeats DMI-tuple matching — so we classify by the
+# CPU model, which is reliable on both whitebox and branded N100 boards
+# (validated live: a blank-DMI N100 reports cpu.model "Intel(R) N100").
+match:
+  method: cpu-model
+  cpu_models:
+    - "Intel(R) N100*"
+
+spec:
+  min:         { cores: 4, memory_mb: 8192,  storage_gb: 32 }
+  recommended: { cores: 4, memory_mb: 16384, storage_gb: 128 }
+
+resources:
+  reserved:  { cpu_pct: 150, memory_mb: 2048 }
+  defaults:
+    wasm:      { cpu_pct: 25,  memory_mb: 128, epoch_ms: 50 }
+    container: { cpu_pct: 100, memory_mb: 512 }
+
+capabilities:
+  soc:
+    requires: [cpu, memory_mb]
+    policy: enabled
+  ids:
+    requires: [soc]
+    policy: enabled
+  openvswitch:
+    requires: [arch, "network.interfaces>=2"]
+    policy: enabled
+  wifi_ap:
+    requires: ["wifi.present"]
+    policy: enabled
+  edge_ai:
+    requires: ["npu.driver_ready", "memory_mb>=8192"]
+    policy: enabled
+  inline_ips:
+    requires: ["network.role:inline"]
+    policy: enabled
+    # Intel i225/i226 (igc) and ixgbe offload are validated → inline interfaces
+    # using these drivers resolve to `granted`. Others → present_unsafe.
+    known_good_nic_drivers: [igc, ixgbe]
+
+  # --- engine-derived capability tokens (see docs/architecture/runtime-engine-map.md) ---
+  capture:          { requires: [soc], policy: enabled }
+  host_telemetry:   { requires: [soc], policy: enabled }
+  ddos_mitigation:  { requires: [capture], policy: enabled }
+  sdn:              { requires: [openvswitch], policy: enabled }
+  wifi_dfs:         { requires: [wifi_ap], policy: enabled }        # absent on n100 (no Wi-Fi radio)
+  dns_filtering:    { requires: [soc], policy: enabled }
+  threat_intel:     { requires: [soc], policy: enabled }
+  deception:        { requires: [soc], policy: enabled }
+  multi_wan:        { requires: ["network.interfaces>=2"], policy: enabled }
+  ai_planner:       { requires: [soc], policy: enabled }
+  secure_tunnel:    { requires: [soc], policy: enabled }            # edge-to-edge PQC VPN data plane (HTP successor)
+  fleet_mesh:       { requires: [soc], policy: disabled }           # ADDITIVE; enabled on enrollment
+
+crypto_suite: hookprobe-pqc-hybrid-2026
+
+retention:
+  tier_fractions: { pcap: 0.20, events: 0.35, evidence: 0.25 }

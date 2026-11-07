@@ -1,0 +1,15 @@
+# Pin ADD-ON (USB / M.2) AP-capable radios to a stable AP name, so hostapd always
+# binds the right interface even if it enumerates as wlan0 on one boot and wlan1 on
+# the next. Result: `wlan-ap`.
+#
+# EXTEND the Driver list with your adapter's driver — find it with:
+#   basename "$(readlink /sys/class/net/wlanX/device/driver)"
+# (Validated on a real Pi 4: the USB AP dongle was `rtl88XXau`.)
+#
+# Baked into the image at /etc/systemd/network/20-hookprobe-wlan-ap.link.
+
+[Match]
+Driver=rtl88XXau 88x2bu rtl8821au rtl8814au mt76x2u mt7612u 8821cu rtw_8822bu
+
+[Link]
+Name=wlan-ap

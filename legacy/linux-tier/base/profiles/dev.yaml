@@ -1,0 +1,48 @@
+# profiles/dev.yaml — maintainer/developer variant. Maps to platform.class = dev
+# (ADR 0003). Adds debug + build introspection tooling for fast iteration. STILL a
+# signed bootc image (we never ship an unsigned path), but with relaxed ergonomics
+# (serial console, debug symbols, an SSH path). NEVER a production target.
+
+profile: dev
+class: dev
+target_arch: amd64
+
+build_args:
+  PROFILE: dev
+  TARGETARCH: amd64
+
+packages:
+  include:
+    # Debug + introspection only on dev.
+    - strace
+    - gdb
+    - tcpdump
+    - vim-tiny
+    - openssh-server      # dev convenience; disabled-by-default in prod profiles
+    - qemu-guest-agent
+    - cloud-init
+  exclude: []
+
+# Dev allows on-device experimentation but the budget + capability model still apply
+# (the whole point is to dogfood them). No slice changes.
+
+kargs_extra:
+  - "console=ttyS0,115200"
+  - "console=tty1"
+  # Verbose boot for debugging (override the quiet appliance default).
+  - "systemd.log_level=debug"
+
+bib:
+  variants:
+    - arch: x86_64
+      types: ["qcow2"]
+  filesystem:
+    - mountpoint: /
+      minsize: "12 GiB"   # room for debug tooling
+    - mountpoint: /var/lib/hookprobe
+      label: hookprobe-data
+      minsize: "16 GiB"
+      type: ext4
+  seed_engine: cloud-init
+# TODO: gate the `dev` profile behind a CI flag so it is never published to the
+#       production registry path; its SBOM/CBOM will differ (extra tooling).

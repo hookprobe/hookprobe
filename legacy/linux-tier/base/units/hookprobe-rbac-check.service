@@ -1,0 +1,14 @@
+[Unit]
+Description=HookProbe RBAC OS-separation audit (admin-only OS; operators dashboard-only) — ADR 0008
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/adr/0008-rbac-admin-operator.md
+# After the encrypted data volume is up (writes its posture report there for QSECBIT/the dashboard).
+After=hookprobe-data-guard.service var-lib-hookprobe.mount
+Wants=var-lib-hookprobe.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/rbac-os-check.sh
+
+[Install]
+WantedBy=multi-user.target

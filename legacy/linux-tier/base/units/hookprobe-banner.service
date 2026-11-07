@@ -1,0 +1,17 @@
+[Unit]
+Description=HookProbe OS boot banner (console identity)
+# Print the branded banner to the console early in userspace boot, so a headless unit on a serial
+# console (Pi/RK3588/edge) shows "HookProbe OS" as it comes up — the display splash is Plymouth's job.
+DefaultDependencies=no
+After=systemd-remount-fs.service
+Before=basic.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The escape codes in /etc/issue are getty-specific; print a clean static banner instead.
+ExecStart=/bin/sh -c 'printf "\n  \033[1;36m◢█◣  HOOKPROBE OS\033[0m  \033[0;90m— one node'\''s detection, everyone'\''s protection\033[0m\n\n" > /dev/console 2>/dev/null || true'
+StandardOutput=journal
+
+[Install]
+WantedBy=sysinit.target

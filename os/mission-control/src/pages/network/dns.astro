@@ -1,0 +1,20 @@
+---
+/**
+ * /network/dns — Shield (Pillar 1) DNS ad/tracker/malware blocking.
+ *
+ * Astro shell: static pre-render, one Solid client:load island.
+ * Linked from PillarGrid's "Shield" card (href="/network/dns").
+ *
+ * Spec: docs/research/v2-customer-experience.md §0 (Pillar 1) · V1 dnsXai engine.
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import ShieldApp from '../../components/ShieldApp';
+---
+
+<Shell
+  title="Shield — HookProbe OS"
+  description="DNS ad, tracker and malware blocking — see what's blocked, set protection level, and control allow/block lists."
+>
+  <ShieldApp client:load />
+</Shell>

@@ -1,0 +1,8 @@
+# security/local-release/.gitignore — the private half of the local/offline signing key
+# never gets tracked, even if `git init` happens in this tree later (repo has no git remote
+# today; this key must not leave this machine regardless). Mirrors security/secureboot/.gitignore's
+# pattern. The PUBLIC half (cosign.pub) is intentionally in here too by default -- see
+# README.md "custody" note: until the operator consciously decides to formalize/publish it,
+# nothing under keys/ is assumed safe to share.
+keys/
+*.key

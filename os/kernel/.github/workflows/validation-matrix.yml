@@ -1,0 +1,36 @@
+name: Update validation matrix
+
+# Keeps the README's validation-matrix tables in sync with heqk-validation.html
+# (which tools/gen-validation.py rebuilds from a live ./validate.sh run).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - heqk-validation.html
+      - tools/gen-readme-matrix.py
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Regenerate README matrix section
+        run: python3 tools/gen-readme-matrix.py
+
+      - name: Commit and push if changed
+        run: |
+          if git diff --quiet README.md; then
+            echo "README already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md
+          git commit -m "README: auto-update validation matrix"
+          git push

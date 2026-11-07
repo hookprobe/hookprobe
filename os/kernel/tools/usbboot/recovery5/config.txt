@@ -1,0 +1,8 @@
+# Uncomment to enable more UART debug logs
+uart_2ndstage=1
+
+# Uncomment to instruct recovery.bin to reboot the Pi after flashing the bootloader image
+#recovery_reboot=1
+
+# Uncomment to instruct recovery.bin to stop sending metadata
+#recovery_metadata=0

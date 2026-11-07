@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=HookProbe OS
+Description=HookProbe OS boot splash — one node's detection, everyone's protection
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/hookprobe
+ScriptFile=/usr/share/plymouth/themes/hookprobe/hookprobe.script

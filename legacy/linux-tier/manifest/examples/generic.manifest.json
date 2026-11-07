@@ -1,0 +1,295 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "device_id": "hp-9fe2a9b1e40decf1bbeefd05a56986d4",
+    "serial": null,
+    "idevid": {
+      "type": "software",
+      "pubkey_fpr": "SHA256:b0cdd9515ffe25eafe0379072e9d5b2fae5b87478b28f9cf1dddba6bd028e8aa",
+      "sealed": false
+    },
+    "claim_state": "unclaimed",
+    "tenant": null
+  },
+  "platform": {
+    "class": "generic",
+    "profile": "generic",
+    "sku": null,
+    "match": {
+      "method": "fallback",
+      "key": "unknown"
+    }
+  },
+  "hardware": {
+    "arch": "amd64",
+    "cpu": {
+      "model": "Intel(R) Celeron(R) N5105",
+      "cores": 4
+    },
+    "memory_mb": 8192,
+    "storage": [
+      {
+        "dev": "sda",
+        "size_gb": 64,
+        "type": "ssd"
+      }
+    ],
+    "tpm": {
+      "present": false,
+      "version": null,
+      "kind": "none"
+    },
+    "secure_boot": {
+      "supported": true,
+      "enabled": false
+    },
+    "npu": {
+      "present": false,
+      "driver_ready": false,
+      "vendor": null,
+      "model": null
+    },
+    "virt": "none",
+    "fingerprint": "SHA256:9fe2a9b1e40decf1bbeefd05a56986d4676869edc2234095716e8daa2e0694de"
+  },
+  "network": {
+    "interfaces": [
+      {
+        "name": "eth0",
+        "mac": "52:54:00:ab:cd:ef",
+        "type": "ethernet",
+        "supported_modes": [
+          "1000baseT/Full"
+        ],
+        "role": "out-of-band",
+        "fail_mode": null,
+        "state": "up"
+      }
+    ],
+    "wifi": {
+      "present": false
+    },
+    "lte": {
+      "present": false
+    }
+  },
+  "capabilities": {
+    "soc": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "cpu",
+        "memory_mb"
+      ]
+    },
+    "ids": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "openvswitch": {
+      "state": "absent",
+      "reason": "requires >=2 network interfaces; 1 present",
+      "evidence": [
+        "network.interfaces==1"
+      ]
+    },
+    "wifi_ap": {
+      "state": "absent",
+      "reason": "no Wi-Fi radio present",
+      "evidence": [
+        "wifi.present=false"
+      ]
+    },
+    "edge_ai": {
+      "state": "absent",
+      "reason": "no NPU/accelerator present",
+      "evidence": [
+        "npu.present=false"
+      ]
+    },
+    "inline_ips": {
+      "state": "absent",
+      "reason": "no interface assigned an inline role",
+      "evidence": [
+        "network.interfaces:no-inline"
+      ]
+    },
+    "capture": {
+      "state": "policy_denied",
+      "reason": "withheld on 'generic' platform class by policy",
+      "evidence": [
+        "soc"
+      ]
+    },
+    "host_telemetry": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "ddos_mitigation": {
+      "state": "absent",
+      "reason": "requires not met: capture",
+      "evidence": [
+        "capture"
+      ]
+    },
+    "sdn": {
+      "state": "absent",
+      "reason": "requires not met: openvswitch",
+      "evidence": [
+        "openvswitch"
+      ]
+    },
+    "wifi_dfs": {
+      "state": "absent",
+      "reason": "requires not met: wifi_ap",
+      "evidence": [
+        "wifi_ap"
+      ]
+    },
+    "dns_filtering": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "threat_intel": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "deception": {
+      "state": "policy_denied",
+      "reason": "withheld on 'generic' platform class by policy",
+      "evidence": [
+        "soc"
+      ]
+    },
+    "multi_wan": {
+      "state": "absent",
+      "reason": "requires >=2 network interfaces; 1 present",
+      "evidence": [
+        "network.interfaces==1"
+      ]
+    },
+    "ai_planner": {
+      "state": "policy_denied",
+      "reason": "withheld on 'generic' platform class by policy",
+      "evidence": [
+        "soc"
+      ]
+    },
+    "secure_tunnel": {
+      "state": "policy_denied",
+      "reason": "withheld on 'generic' platform class by policy",
+      "evidence": [
+        "soc"
+      ]
+    },
+    "fleet_mesh": {
+      "state": "policy_denied",
+      "reason": "withheld on 'generic' platform class by policy",
+      "evidence": [
+        "soc"
+      ]
+    }
+  },
+  "resources": {
+    "total": {
+      "cpu_pct": 400,
+      "memory_mb": 8192
+    },
+    "reserved": {
+      "cpu_pct": 150,
+      "memory_mb": 1536
+    },
+    "allocatable": {
+      "cpu_pct": 250,
+      "memory_mb": 6656
+    },
+    "defaults": {
+      "wasm": {
+        "cpu_pct": 25,
+        "memory_mb": 128,
+        "epoch_ms": 50
+      },
+      "container": {
+        "cpu_pct": 100,
+        "memory_mb": 512
+      }
+    }
+  },
+  "crypto": {
+    "agility": true,
+    "suite_id": "hookprobe-pqc-hybrid-2026",
+    "image_signing": [
+      "ecdsa-p256"
+    ],
+    "module_signing": [
+      "ml-dsa-65",
+      "ed25519"
+    ],
+    "boot_signing": "lms",
+    "tls_kex": [
+      "ml-kem-768+x25519"
+    ],
+    "tls_auth": [
+      "ml-dsa-65",
+      "ecdsa-p256"
+    ],
+    "data_at_rest": "aes-256-gcm",
+    "hash": [
+      "sha-256",
+      "sha-384",
+      "sha3-256"
+    ],
+    "device_identity": [
+      "ml-dsa-65",
+      "ed25519"
+    ],
+    "cbom": "/usr/share/hookprobe/cbom.json"
+  },
+  "retention": {
+    "tiers": [
+      {
+        "name": "pcap",
+        "cap_gb": 5,
+        "window": "hours"
+      },
+      {
+        "name": "events",
+        "cap_gb": 18,
+        "window": "~1-2 weeks"
+      },
+      {
+        "name": "evidence",
+        "cap_gb": 15,
+        "window": "months"
+      }
+    ],
+    "computed_at": "2026-06-27T12:00:00+00:00"
+  },
+  "modules": [],
+  "provenance": {
+    "image_ref": "ghcr.io/hookprobe/os:dev",
+    "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "generated_at": "2026-06-27T12:00:00+00:00",
+    "generator": "bootstrap-ref/0.1.0",
+    "schema_version": 2
+  },
+  "signature": {
+    "method": "cosign",
+    "sig": "UNSIGNED-REFERENCE-BUILD",
+    "cert": "UNSIGNED-REFERENCE-BUILD",
+    "tpm_sealed": false,
+    "pcr_policy": null
+  }
+}

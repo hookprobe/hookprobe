@@ -1,0 +1,79 @@
+{
+  "_comment": "LIVE read-only capture from the real Pi4 'guardian' (10.200.0.4), 2026-06-29. Physical interfaces only \u2014 br0/guardian/ovs-system/podman0/veth0/vxlan_sys_4789 were correctly filtered by the prober's device-symlink rule.",
+  "scan": {
+    "device_tree_compatible": [
+      "raspberrypi,4-model-b",
+      "brcm,bcm2711"
+    ],
+    "dmi": null,
+    "arch": "arm64",
+    "cpu": {
+      "model": "Raspberry Pi 4 Model B Rev 1.2",
+      "cores": 4
+    },
+    "memory_mb": 3796,
+    "storage": [
+      {
+        "dev": "mmcblk0",
+        "size_gb": 31,
+        "type": "emmc-sd"
+      }
+    ],
+    "tpm": {
+      "present": false,
+      "version": null,
+      "kind": "none"
+    },
+    "secure_boot": {
+      "supported": false,
+      "enabled": false
+    },
+    "npu": {
+      "present": false,
+      "driver_ready": false,
+      "vendor": null,
+      "model": null
+    },
+    "virt": "none",
+    "interfaces": [
+      {
+        "name": "eth0",
+        "mac": null,
+        "type": "ethernet",
+        "driver": "bcmgenet",
+        "supported_modes": [],
+        "role": "unassigned",
+        "state": "up"
+      },
+      {
+        "name": "wlan0",
+        "mac": null,
+        "type": "wifi",
+        "driver": "rtl88XXau",
+        "supported_modes": [],
+        "role": "unassigned",
+        "state": "up",
+        "onboard": false,
+        "bus": "usb"
+      },
+      {
+        "name": "wlan1",
+        "mac": null,
+        "type": "wifi",
+        "driver": "brcmfmac",
+        "supported_modes": [],
+        "role": "unassigned",
+        "state": "up",
+        "onboard": true,
+        "bus": "sdio"
+      }
+    ],
+    "wifi": {
+      "present": true
+    },
+    "lte": {
+      "present": false
+    },
+    "kernel_release": "6.1.0-49-arm64"
+  }
+}

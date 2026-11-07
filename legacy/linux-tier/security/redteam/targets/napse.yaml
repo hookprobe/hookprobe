@@ -1,0 +1,27 @@
+# security/redteam/targets/napse.yaml — per-DUT-component descriptor (ADR 0020 D2). NAMES the
+# component and which telemetry proves a defense fired; it NEVER names an out-of-scope host (that
+# is rules-of-engagement.yaml's `allowed_targets`/`target_guard`'s job to reject, not this file's).
+component: napse
+description: >
+  NAPSE capture + detection stack: napse-dpi (AF_PACKET mirror sensor), the L1/L2 defensive
+  detectors (mac-flood/ARP-guard/broadcast-storm/malformed-frame — ADR 0020 Phase-1a), the L4
+  port-scan fan-out tracker + handshake confirmation gate (ADR 0018), and napse-quarantine's
+  bounded enforced set.
+dut_binary: target/{release,debug}/napse-dpi
+dut_iface: veth-dut-peer            # inside the hookprobe-dut netns (security/redteam/dut/netns-dut.sh)
+telemetry:
+  events: /tmp/redteam-dut-events.jsonl   # napse-dpi's own alert stream (EVENTS env var)
+  flows: /tmp/redteam-dut-flows.jsonl     # napse-dpi's DNS/TLS/HTTP flow records (FLOWS env var)
+verify_fired_markers:
+  l2_mac_flood: "l2_mac_flood"      # substring napse_loader::l2guard::MacFloodTracker's alert JSON carries
+  l2_arp_guard: "l2_arp"            # ArpGuard flip-flop/gratuitous alerts
+  l2_broadcast_storm: "l2_broadcast"
+  l2_malformed_frame: "l2_malformed"
+  l4_portscan: "port_scan"          # the alert JSON's "category" field (napse_loader::portscan);
+                                     # napse-dpi ALSO eprintln's "port scan detected" (lowercase) to
+                                     # its own stdout log, but that is NOT the events JSONL stream --
+                                     # verify-fired must read the DUT's telemetry FILE, never its log
+red_thresholds:                     # ADR 0020 D5 Gate R RED rows this component's probes exercise
+  - "a spoofed single-packet/SYN burst causes a victim host to be quarantined (reflected-DoS)"
+  - "an unconfirmed source (no completed handshake) reaches the enforced quarantine map"
+  - "the confirmation tracker or quarantine set grows unbounded (OOM/budget breach) under flood"
