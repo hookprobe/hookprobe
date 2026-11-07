@@ -225,6 +225,26 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         "/api/incidents" => json(scratch, |w| st.render_incidents(limit(50, 500), w)),
         "/api/qsecbit" => json(scratch, |w| st.render_qsecbit(limit(20, 1000), w)),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
+        "/api/flows" => json(scratch, |w| st.render_flows(st.ticks_at_ms(now_ms), limit(100, 256), w)),
+        p if p.starts_with("/api/incidents/") => {
+            let rest = &p["/api/incidents/".len()..];
+            let (id, sub) = match rest.find('/') { Some(i) => (&rest[..i], &rest[i..]), None => (rest, "") };
+            match (McState::parse_incident_id(id), sub) {
+                (Some(src), "") => {
+                    let mut found = true;
+                    let r = json(scratch, |w| found = st.render_incident(src, w));
+                    if found { r } else { json(scratch, |w| w.raw("{\"error\":\"no such incident\"}")).with_status(404) }
+                }
+                (Some(src), "/timeline") => json(scratch, |w| st.render_timeline(src, st.ticks_at_ms(now_ms), w)),
+                // heqk has no host process telemetry (no EDR agent on the clients): an honest empty tree.
+                (Some(src), "/processes") => json(scratch, |w| {
+                    use core::fmt::Write;
+                    let _ = write!(w, "{{\"incident\":\"inc:heqk:{}.{}.{}.{}\",\"found\":true,\"process_count\":0,\"roots\":[]}}",
+                        src >> 24, (src >> 16) & 0xff, (src >> 8) & 0xff, src & 0xff);
+                }),
+                _ => json(scratch, |w| w.raw("{\"error\":\"no such incident\"}")).with_status(404),
+            }
+        }
         // No engine registry on heqk yet: an EMPTY list keeps every engine row honestly badged
         // "mock" in the Detect UI rather than inventing live engines.
         "/api/engines" => json(scratch, |w| w.raw("{\"engines\":[]}")),
@@ -239,8 +259,8 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 if st.clock_synced { "ntp" } else { "unsynced" }, rules, st.seen, st.forwarded, st.dropped, st.detections(),
                 st.hosts_active(now_epoch), st.retention().1, st.retention().2 / 1000, st.sealed_cap);
             if let Some(f) = st.wan {
-                let _ = write!(w, ",\"wan\":{{\"up\":{},\"ip\":\"{}.{}.{}.{}\",\"mode\":\"{}\",\"ipv6\":{},\"clients\":{},\"pkts_out\":{},\"pkts_in\":{},\"dns_inspected\":{}}}",
-                    f.up, f.ip[0], f.ip[1], f.ip[2], f.ip[3], ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ipv6, f.clients, f.pkts_out, f.pkts_in, f.dns_inspected);
+                let _ = write!(w, ",\"wan\":{{\"up\":{},\"ip\":\"{}.{}.{}.{}\",\"mode\":\"{}\",\"ipv6\":{},\"clients\":{},\"pkts_out\":{},\"pkts_in\":{},\"dns_inspected\":{},\"dns_blocked\":{},\"blocklist\":{}}}",
+                    f.up, f.ip[0], f.ip[1], f.ip[2], f.ip[3], ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ipv6, f.clients, f.pkts_out, f.pkts_in, f.dns_inspected, f.dns_blocked, f.blocklist);
             }
             w.raw("}");
         }),
@@ -527,6 +547,34 @@ pub fn mc_selftest() -> bool {
         let dj = core::str::from_utf8(dw.bytes()).unwrap_or("");
         let devices_ok = dj.starts_with("{\"devices\":[{\"id\":\"host-10.0.0.3\"") && dj.contains("\"ip\":\"10.0.0.1\",\"mac\":null,\"first_seen\":1000,\"last_seen\":1000}") && dj.ends_with("],\"count\":3}");
         let hosts_ok = hosts_ok && devices_ok;
+        // Incident drill-down: id parse (URL-encoded too), detail + explanation + attack path, timeline,
+        // honest empty process tree, unknown -> None.
+        let ids_ok = McState::parse_incident_id("inc:heqk:10.100.0.77") == Some(0x0A64_004D)
+            && McState::parse_incident_id("inc%3Aheqk%3A10.100.0.77") == Some(0x0A64_004D)
+            && McState::parse_incident_id("inc:heqk:10.100.0.256").is_none()
+            && McState::parse_incident_id("inc:heqk:10.100.0").is_none()
+            && McState::parse_incident_id("inc:other:10.100.0.77").is_none()
+            && McState::parse_incident_id("inc:heqk:1..2.3").is_none();
+        let mut di = McState::new();
+        di.push_restored(&crate::events::Event { ts: 0, src: 0x0A64_004D, rule_id: 113, severity: 5, verdict: 2, class: 0, dst: 0x0A64_0087, dport: 22 }, 1_800_000_000_000);
+        di.push_restored(&crate::events::Event { ts: 0, src: 0x0A64_004D, rule_id: 113, severity: 5, verdict: 2, class: 0, dst: 0x0A64_0087, dport: 80 }, 1_800_000_001_000);
+        let mut ib = [0u8; 4096];
+        let mut iw = JsonBuf::new(&mut ib);
+        let found = di.render_incident(0x0A64_004D, &mut iw);
+        let ij = core::str::from_utf8(iw.bytes()).unwrap_or("");
+        let detail_ok = found && ij.starts_with("{\"id\":\"inc:heqk:10.100.0.77\"") && ij.contains("\"model\":null")
+            && ij.contains("\"evidence\":2") && ij.contains("\"label\":\"10.100.0.135:22\"") && ij.contains("\"node_count\":4,\"edge_count\":3")
+            && ij.ends_with("]}}");
+        let mut nb = [0u8; 256];
+        let mut nw = JsonBuf::new(&mut nb);
+        let unknown_ok = !di.render_incident(0x0A00_0001, &mut nw);
+        let mut tb2 = [0u8; 4096];
+        let mut tw2 = JsonBuf::new(&mut tb2);
+        di.render_timeline(0x0A64_004D, 0, &mut tw2);
+        let tj = core::str::from_utf8(tw2.bytes()).unwrap_or("");
+        let timeline_ok = tj.contains("\"found\":true") && tj.contains("\"kind\":\"detection\"") && tj.ends_with("],\"count\":2}")
+            && tj.find("10.100.0.135:22").map_or(false, |a| tj.find("10.100.0.135:80").map_or(false, |b| a < b));
+        let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok;
         good && wrong_nonce && refused && synced && small && big && pinned && hosts_ok
     };
     // ADR 0051 D4: :80 -> https redirect keeps path+query, drops the port; a hostile Host never reaches
@@ -561,9 +609,9 @@ pub fn mc_selftest() -> bool {
         let closed = has(&hh[..c], "Connection: close\r\n") && !has(&hh[..c], "Keep-Alive");
         // AP image: the WAN facts reach /api/health for the Get Online / Shield tiles.
         let mut sw = McState::new();
-        sw.wan = Some(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7 });
+        sw.wan = Some(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7, dns_blocked: 2, blocklist: 3 });
         let hw = handle(&parse(b"GET /api/health HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &sw, &mut auth, 1, || Some([0; 16]), &mut scratch);
-        let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7}}"));
+        let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3}}"));
         red && v6 && bad && sec && plain && ka && kept && closed && wan_ok
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;

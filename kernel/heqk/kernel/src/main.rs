@@ -38,6 +38,7 @@ mod caps;
 mod corroboration;
 mod devq;
 mod dnssink;
+mod dnsblock;
 // M5.1 (Track C) — minimal bounds-safe ELF64/aarch64 static loader (the userspace-server
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
 // backends but the loader/mapping path is QEMU-only (see load_into's cfg).
@@ -3026,6 +3027,14 @@ fn cm5_p10_probe() {
                                 }
                                 None => kprint!(" [POLICY] no POLICY.TXT — no operator ACLs / routes\n"),
                             }
+                            // Shield: the DNS blocklist (BLOCK.TXT, operator-signed like POLICY.TXT).
+                            match dnsblock::load(&dev) {
+                                Some(Ok(l)) => kprint!(" [SHIELD] DNS blocklist: {} domains{}{} — blocked names answered 0.0.0.0 / NODATA by the AP\n", l.domains,
+                                    if l.signed { " (signature OK, operator key)" } else { " (unsigned — standalone image)" },
+                                    if l.truncated > 0 { " — list longer than the table, rest ignored" } else { "" }),
+                                Some(Err(e)) => kprint!(" [SHIELD] BLOCK.TXT REFUSED ({:?}) — Shield OFF, nothing blocked (a tampered list must not black-hole names)\n", e),
+                                None => kprint!(" [SHIELD] no BLOCK.TXT — Shield counts DNS queries but blocks nothing\n"),
+                            }
                         }
                         {
                             let (lan_started, lan_link, lan_mac) = uplink::eth1_lan_status();
@@ -3283,6 +3292,7 @@ fn cm5_p10_probe() {
                         let mut pol_drop = [0u32; 4];
                         let mut pol_block = [0u32; 4];
                         let mut pol_via_mgmt = 0u32; // flows routed out the management sub-interface
+                        let mut dns_blocked = 0u32; // Shield: client DNS queries answered as blocked
                         let mut pol_mgmt_nh_miss = 0u32; // routed to mgmt but the next hop is not resolved yet
                         let mut pol_block_as_drop = 0u32; // `out` blocks after un-NAT act as drops (see the note)
                         let mut last_wan_probe = 0u64;
@@ -3314,6 +3324,19 @@ fn cm5_p10_probe() {
                                     }
                                 }
                                 let pi = ($pif) as usize;
+                                // Shield: an allowed client DNS query for a blocklisted name is answered here
+                                // (0.0.0.0 / NODATA, from the resolver it asked) and never leaves the device.
+                                let mut shield = false;
+                                if act == PAct::Allow && dnsblock::len() > 0 {
+                                    let me = if $pif == PIf::Eth1 { uplink::ETH1_MAC } else { ap.bssid };
+                                    let mut dr = [0u8; 600];
+                                    if let Some(k) = dnssink::block_reply_frame(frame, &me, &mut dr, &dnsblock::blocked) {
+                                        dns_blocked += 1;
+                                        let _ = $reply!(&dr[..k]);
+                                        act = PAct::Drop;
+                                        shield = true;
+                                    }
+                                }
                                 match act {
                                     PAct::Allow if egress == PIf::Mgmt => {
                                         let mg = unsafe { uplink::MGMT }.unwrap();
@@ -3367,7 +3390,9 @@ fn cm5_p10_probe() {
                                         false
                                     }
                                     PAct::Drop => {
-                                        pol_drop[pi] += 1;
+                                        if !shield {
+                                            pol_drop[pi] += 1;
+                                        }
                                         false
                                     }
                                 }
@@ -4167,6 +4192,8 @@ fn cm5_p10_probe() {
                                                 pkts_out: nst.out_fwd as u64,
                                                 pkts_in: nst.in_fwd as u64,
                                                 dns_inspected: nst.dns_redirect as u64,
+                                                dns_blocked: dns_blocked as u64,
+                                                blocklist: dnsblock::len() as u32,
                                             });
                                         }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
@@ -6063,6 +6090,7 @@ pub extern "C" fn kmain() -> ! {
         wancfg_selftest();
         policy_selftest();
         let _ = policysig::selftest();
+        let _ = dnsblock::selftest();
         md5_selftest();
         pppoe_selftest();
         ip6_selftest();
@@ -13755,6 +13783,38 @@ fn fuzz_selftest() {
             n_frames += 1;
         }
     }
+    // 4b. Shield: the DNS block-answer builder (client UDP/53 queries, everything "blocked").
+    {
+        let mut o = [0u8; 600];
+        let mut q = [0u8; 200];
+        let base = dnssink::test_query_frame(b"ads.tracker.example", 1, &mut q);
+        for i in 0..N {
+            let n = if i % 2 == 0 {
+                // a real query, mutated: lengths, labels, counts, flags
+                buf[..base].copy_from_slice(&q[..base]);
+                for _ in 0..(1 + next() % 4) {
+                    let at = (next() as usize) % base;
+                    buf[at] = next() as u8;
+                }
+                (base as u64 - next() % 4) as usize
+            } else {
+                let n = frame(&mut next, &mut buf);
+                if n > 40 {
+                    buf[23] = 17;
+                    let ihl = ((buf[14] & 0x0f) as usize) * 4;
+                    if 14 + ihl + 4 <= n {
+                        buf[14 + ihl + 2] = 0;
+                        buf[14 + ihl + 3] = 53;
+                    }
+                }
+                n
+            };
+            if let Some(k) = dnssink::block_reply_frame(&buf[..n], &[2, 0, 0, 0, 0, 1], &mut o, &|_| true) {
+                assert!(k <= o.len() && k >= 54);
+            }
+            n_frames += 1;
+        }
+    }
     // 5. HTTP request parse (Mission Control, reachable on :80).
     let mut n_http = 0u32;
     #[cfg(feature = "netsvc")]
@@ -13797,7 +13857,7 @@ fn fuzz_selftest() {
             n_cfg += 1;
         }
     }
-    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
+    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler, Shield DNS block answers; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
         n_frames, n_http, n_cfg);
 }
 

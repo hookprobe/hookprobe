@@ -61,8 +61,14 @@ struct Entry {
     rnext: u8,
     /// DNS redirect: the upstream resolver the query was forwarded to (re-review P3).
     dnat_to: [u8; 4],
+    /// Flow view (Observe): when the mapping was made, the first destination port it sent to, and
+    /// the IP bytes carried each way.
+    first: u64,
+    dport: u16,
+    bytes_out: u64,
+    bytes_in: u64,
 }
-const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4] };
+const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: 0, dport: 0, bytes_out: 0, bytes_in: 0 };
 static mut TABLE: [Entry; N] = [EMPTY; N];
 
 #[derive(Default)]
@@ -130,7 +136,7 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
             oldest.0
         }
     };
-    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4] };
+    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: now, dport: 0, bytes_out: 0, bytes_in: 0 };
     st.table_alloc += 1;
     i
 }
@@ -365,6 +371,12 @@ pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<
         let mut d = [0u8; 4];
         d.copy_from_slice(&out[30..34]);
         note_remote(idx, &d);
+        let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
+        let e = &mut t[idx];
+        if e.dport == 0 && proto != 1 {
+            e.dport = u16::from_be_bytes([f[l4 + 2], f[l4 + 3]]);
+        }
+        e.bytes_out += (ip_end - 14) as u64;
     }
     fix_csums(out, ihl, ip_end);
     st.out_fwd += 1;
@@ -486,6 +498,38 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
         out[26..30].copy_from_slice(&e.dnat_from);
     }
     fix_csums(out, ihl, ip_end);
+    if let Some(i) = (ext as usize).checked_sub(EXT_BASE as usize).filter(|&i| i < N) {
+        unsafe { (*core::ptr::addr_of_mut!(TABLE))[i].bytes_in += (ip_end - 14) as u64 };
+    }
     st.in_fwd += 1;
     Some((ip_end, e.in_if))
+}
+
+/// One translated flow, read-only (Observe → flows). `dst` is the first destination the mapping
+/// sent to (a mapping is endpoint-independent: it may have reached more); times are cntpct.
+#[derive(Clone, Copy, Debug)]
+pub struct FlowView {
+    pub slot: u16,
+    pub proto: u8,
+    pub src: [u8; 4],
+    pub sport: u16,
+    pub dst: [u8; 4],
+    pub dport: u16,
+    pub first: u64,
+    pub last: u64,
+    pub bytes_out: u64,
+    pub bytes_in: u64,
+}
+
+/// Every live (not expired at `now`) mapping, in table order.
+pub fn for_each_flow(now: u64, f: &mut dyn FnMut(&FlowView)) {
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
+    for (i, e) in t.iter().enumerate() {
+        if !e.used || now.wrapping_sub(e.last) > timeout(e.proto) {
+            continue;
+        }
+        let dst = if e.dnat_to != [0; 4] { e.dnat_to } else { e.remotes[0] };
+        f(&FlowView { slot: i as u16, proto: e.proto, src: e.in_ip, sport: e.in_port, dst, dport: e.dport,
+            first: e.first, last: e.last, bytes_out: e.bytes_out, bytes_in: e.bytes_in });
+    }
 }

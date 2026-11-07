@@ -14,8 +14,8 @@ import { loadHealth } from '../store/health';
 const LIVE: Record<string, 'live' | string> = {
   '/': 'live',
   '/detect/feed': 'live',
-  '/investigate/queue': 'Incident list is live; story, timeline and process tree are sample data.',
-  '/observe/events': 'Devices are live; flows are sample data.',
+  '/investigate/queue': 'live',
+  '/observe/events': 'live',
 };
 
 function norm(p: string): string {
@@ -43,7 +43,7 @@ const SampleDataNotice: Component = () => {
           'backdrop-filter': 'blur(6px)',
         }}
       >
-        <strong>Sample data</strong> — {status()} Live on this device: Home, Detect, Investigate queue, Observe devices.
+        <strong>Sample data</strong> — {status()} Live on this device: Home, Detect, Investigate, Observe.
       </div>
     </Show>
   );
