@@ -30,7 +30,10 @@ MIN_FW="7.45.265"                  # older silently ignores the country (metal-p
 
 # Firmware .bin — Cypress cyfmac43455 (7.45.265 standard build preferred).
 BIN_SRC=""
-for c in /lib/firmware/cypress/cyfmac43455-sdio-standard.bin \
+# FW_BIN_SRC (optional) wins: tools/ci/stage-firmware.sh passes the sha256-pinned blob it extracted
+# from the RPi firmware-nonfree .deb, so CI / fresh checkouts stage the SAME bytes as a dev box.
+for c in ${FW_BIN_SRC:+"$FW_BIN_SRC"} \
+         /lib/firmware/cypress/cyfmac43455-sdio-standard.bin \
          /lib/firmware/cypress/cyfmac43455-sdio.bin \
          /lib/firmware/cypress/cyfmac43455-sdio.bin.zst \
          /lib/firmware/brcm/brcmfmac43455-sdio.bin \

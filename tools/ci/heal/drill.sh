@@ -20,7 +20,7 @@
 # Everything happens under $CI_OUT/drill; the operator's checkout and branches are untouched.
 # =============================================================================
 set -uo pipefail
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"   # tools/ci/heal → repo root
 CI_OUT="${CI_OUT:-$ROOT/out/ci}"
 D="$CI_OUT/drill"
 SCEN="${1:-default}"
