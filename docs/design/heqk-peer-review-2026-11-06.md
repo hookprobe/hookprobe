@@ -258,3 +258,11 @@ Port 4 restored to FTS (teardown) before Phase B.
 `4d66032` decisions · `319b654` thin provider · `c14912f` bounded EL0 excursion + EL0 TLS server · `e82d386`
 kernel pump/provisioning/e2e · `9e8fe0b` factory MCTLS.CRT. Gates: validate 87 PASS (+`[P-exc-bound]`),
 mc-e2e PASS incl. HTTPS + browser over HTTPS, all six profiles build, factory 9/9. METAL-PENDING (ADR 0051).
+
+### HTTPS follow-ups (2026-11-07 afternoon, no metal) — `22c2120`
+Keep-alive (handshakes per e2e run 46 → 14), hybrid post-quantum `X25519MLKEM768` preferred (Chromium 141
+negotiates it against the device; OpenSSL 3.0 falls back to X25519), handshake rate limit, and a real
+defect found by an 80-connection flood: abandoned connections pinned all 8 HTTPS slots in CloseWait (the
+ClientHello + FIN arrived before OPEN) — fixed (never-opened slots past Established are aborted, TIME-WAIT
+recycled); `[MC-TLS slots]` diagnostic added. Gates: validate 87, mc-e2e PASS (flood recovery, keep-alive,
+PQ hybrid asserted), six profiles, factory 9/9. Provisioned image `22c2120-TLS` built (same SRK key / cert).
