@@ -387,6 +387,8 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
   text-transform: uppercase;
   text-shadow: 0 0 24px rgba(0, 255, 157, 0.38);
 }
+.verdict-status[data-status='needs-attention'] { color: var(--hp-amber); text-shadow: 0 0 24px rgba(255, 170, 0, 0.35); }
+.verdict-status[data-status='critical'] { color: var(--hp-red); text-shadow: 0 0 24px rgba(255, 107, 107, 0.4); }
 
 .verdict-message {
   font-size: 15px;

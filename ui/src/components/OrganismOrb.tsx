@@ -23,7 +23,7 @@
  */
 
 import { type Component, createMemo } from 'solid-js';
-import { qsecbit, heartbeat, lastChecked } from '../store/mock';
+import { qsecbit, heartbeat, lastChecked, protectionStatus, security } from '../store/mock';
 
 const R  = 88;    // arc radius (px)
 const CX = 110;   // SVG center x
@@ -134,11 +134,17 @@ const OrganismOrb: Component = () => {
           class="verdict-status"
           role="status"
           aria-live="polite"
+          data-status={protectionStatus()}
         >
-          YOU'RE PROTECTED
+          {protectionStatus() === 'protected' ? "YOU'RE PROTECTED" : protectionStatus() === 'needs-attention' ? 'NEEDS ATTENTION' : 'UNDER ATTACK'}
         </div>
 
-        <p class="verdict-message">Nothing needs you right now.</p>
+        {/* The verdict follows the live score + open incidents — never "nothing needs you" while one is open. */}
+        <p class="verdict-message">
+          {security().openIncidents > 0
+            ? `${security().openIncidents} incident${security().openIncidents === 1 ? ' needs' : 's need'} your review.`
+            : protectionStatus() === 'protected' ? 'Nothing needs you right now.' : 'Risk is elevated — HookProbe is handling it.'}
+        </p>
 
         <div class="verdict-meta">
           <span>Last checked {lastChecked()}</span>
