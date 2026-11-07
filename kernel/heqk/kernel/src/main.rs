@@ -3748,7 +3748,14 @@ fn cm5_p10_probe() {
                                             // internet (ours, our LAN, the management floor, loopback, multicast…) is dropped before
                                             // NAT, policy or the IDS see it.
                                             let martian = n >= 34 && wbuf[12] == 0x08 && wbuf[13] == 0x00 && {
-                                                let (fnet, flen, _) = crate::verdict::mgmt_floor();
+                                                // The floor rule only where it means "spoofed": an operator-configured floor that
+                                                // lives behind a management sub-interface. The compile-time default must NOT be
+                                                // enforced here — metal 2026-11-07: behind a home router the upstream LAN
+                                                // (10.200.0.0/24 = the default) answered the iPhone (AirPlay :7000 SYN-ACKs) and
+                                                // was dropped as "martian" (ADR 0023: legit traffic always passes).
+                                                let (fnet, flen, fset) = crate::verdict::mgmt_floor();
+                                                let has_mgmt = unsafe { (*core::ptr::addr_of!(uplink::MGMT)).is_some() };
+                                                let flen = if fset && has_mgmt { flen } else { 0 };
                                                 hal::policy::wan_martian4([wbuf[26], wbuf[27], wbuf[28], wbuf[29]], up.dhcp.yiaddr, inside_net, fnet, flen)
                                             };
                                             if martian {
@@ -12954,6 +12961,9 @@ route 2001:db8:1::/48 via mgmt
             && m([10, 200, 0, 5], wan) // a spoofed management-floor source from the internet
             && !m([10, 200, 0, 5], [10, 200, 0, 13]) // ...but legit when the WAN itself sits in the floor
             && !m([8, 8, 8, 8], wan) && !m([100, 64, 0, 1], wan) && !m([192, 168, 1, 1], wan)
+            // metal 2026-11-07: with no ENFORCED floor (compile-time default / no mgmt sub-interface) an
+            // upstream-LAN host in 10.200.0.0/24 answering a client is legit and must pass
+            && !wan_martian4([10, 200, 0, 12], wan, inside, floor.0, 0)
     };
     let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok && floor_ok && martian_ok;
     kprint!(" [P-policy] {} — WAN policy engine: IPv6 text={} POLICY.TXT parsed (5 lists, 2 named ACLs sorted by seq, 3 interface bindings, 6 routes)={} interface-attached ACL + prefix-list: allow/block/drop first-match by seq, ACL default + implicit deny, per-entry hits, v4+v6, ports, spoofed source dropped by the lan prefix-list, a v4-only list never applies to v6, unbound wan allowed={} prefix-list ge/le + seq order={} routes: longest prefix, source-based (from), gateway, metric failover when wan is down={} whole-file rejection with line numbers={} WAN.TXT vlan/QinQ/pcp/mgmt sub-interface={} QinQ tag stack + MTU from headers (PPPoE 1492/MSS 1452, frame 1522)={} single tag={} | management floor configurable (WAN.TXT mgmt_floor=, over-broad refused, default restorable)={} martian WAN sources (uRPF-lite)={}\n",

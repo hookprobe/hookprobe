@@ -1,0 +1,7 @@
+HQPOL1
+# task #26 bench (PPPoE + IPv6): IPv6 ACLs on the Wi-Fi LAN, IPv4 left open
+# http to Cloudflare's v6 resolver is REJECTED (fast fail); DNS to Quad9 v6 is DROPPED (silent)
+acl LAN6-IN seq 10 block tcp any 2606:4700:4700::1111/128 400
+acl LAN6-IN seq 20 drop udp any 2620:fe::fe/128 53
+acl LAN6-IN default allow
+interface lan acl in LAN6-IN
