@@ -69,8 +69,14 @@ fails closed, is restarted; forwarding/IPS unaffected).
   `mc-e2e` HTTPS leg PASS incl. the browser (SPKI-pinned to the device key): 46 handshakes, 0 timeouts,
   0 faults, garbage / wrong-suite connections fail alone. Image factory ships the 4 KiB `MCTLS.CRT`
   (placeholder or `--mctls-file`), offset in the manifest for the flasher.
-- **[metal] pending**: CM5 boot (EL0 window +0x8_0000 beside the GEM stub, RNG200 entropy, SRK key), then
-  provision + reflash with `--mctls-file`, `https://<device>` from a browser.
+- **[metal] PROVEN 2026-11-07 11:40 (CM5, `a5ff2b6-TLS`, fortress port 4):** the EL0 TLS server loads in the
+  GB5 window beside the GEM stub; the SRK-derived key is stable across reflashes (`04 55 18 a3 …` on both
+  images); owner CA (`~/heqk-owner-ca`, name-constrained to heqk.local / 10.200.0.0/24 / link-local) +
+  `--mctls-file` → `HTTPS ready on :443`. From fortress: `curl --cacert` OK by IP and by name (handshake +
+  request **14 ms**), TLS1.3 / CHACHA20_POLY1305 / X25519 / ECDSA verify 0, :80 → 308 https, AES-only client
+  refused, garbage on :443 fails alone, owner sign-in sets `HttpOnly; SameSite=Strict; Secure`, an attack
+  during TLS service is still dropped + detected (dst shown), and the **real browser over HTTPS** (SPKI-pinned)
+  renders live data incl. the SSE stream. 0 EL0 faults / panics in the serial log.
 - **Open**: flasher-side CA + one-time root install UX (task #20); `p256` signing review; hybrid
   X25519MLKEM768; `sha2`/`hmac`/`hkdf` audit check; HTTP keep-alive (each request is a new TLS session today).
 
