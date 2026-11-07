@@ -4,7 +4,7 @@ Prepared from two deep investigations (2026-07-22) so the metal flashes are
 maximally productive (connector-wear-minimizing): each stage has ONE console
 proof-point, and everything codeable **off-metal** is separated from what needs
 the board. Primary oracles: the local RPi kernel tree
-(`~/hookprobe-os/builder/kernel-build/linux-a923c1dcd822385aaa82a4388c6a6ad92cbf9280/`),
+(`~/hookprobe-os/legacy/linux-tier/builder/kernel-build/linux-a923c1dcd822385aaa82a4388c6a6ad92cbf9280/`),
 `~/heqk/arch-aarch64/src/gem.rs` (the proven RC2 + NC-alias + polled-OWN patterns),
 and the Pico-W `cyw43-driver` (bare-metal same-family WiFi).
 
