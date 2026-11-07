@@ -18,7 +18,11 @@
  */
 
 import type { Component } from 'solid-js';
-import { shield, network, connectivity, security, timeline } from '../store/mock';
+import { shield, network, connectivity, security, timeline, substrate } from '../store/mock';
+
+/** The device (heqk) has no source for these tiles yet — never show demo numbers as its own. */
+const unreported = () => substrate() === 'heqk';
+const NA = { kpi: '—', sub: 'Not reported by this device yet', badge: 'No data', badgeClass: 'badge--grey' };
 
 // ── PillarCard — reusable bento cell ────────────────────────────────────────
 
@@ -96,11 +100,11 @@ const PillarGrid: Component = () => {
           ctx="shield"
           title="Shield"
           icon="🛡"
-          kpi={shield().adsBlocked.toLocaleString()}
-          sub={`ads, trackers & ${shield().malwareStopped} malware sites blocked today`}
-          detail="dnsXai resolver · protecting all devices · on since setup"
-          badge="Active"
-          badgeClass="badge--green"
+          kpi={unreported() ? NA.kpi : shield().adsBlocked.toLocaleString()}
+          sub={unreported() ? NA.sub : `ads, trackers & ${shield().malwareStopped} malware sites blocked today`}
+          detail={unreported() ? undefined : 'dnsXai resolver · protecting all devices · on since setup'}
+          badge={unreported() ? NA.badge : 'Active'}
+          badgeClass={unreported() ? NA.badgeClass : 'badge--green'}
           href="/network/dns"
           action="Manage"
         />
@@ -110,11 +114,11 @@ const PillarGrid: Component = () => {
           ctx="network"
           title="My Network"
           icon="🌐"
-          kpi={`${network().devices} devices`}
-          sub={`${network().online} online · ${network().zones} zones`}
-          detail="Family · Smart Home · Guests · 1 in Quarantine"
-          badge="All mapped"
-          badgeClass="badge--blue"
+          kpi={unreported() ? NA.kpi : `${network().devices} devices`}
+          sub={unreported() ? NA.sub : `${network().online} online · ${network().zones} zones`}
+          detail={unreported() ? undefined : 'Family · Smart Home · Guests · 1 in Quarantine'}
+          badge={unreported() ? NA.badge : 'All mapped'}
+          badgeClass={unreported() ? NA.badgeClass : 'badge--blue'}
           href="/network/map"
           action="Open map"
         />
@@ -129,12 +133,12 @@ const PillarGrid: Component = () => {
           ctx="wan"
           title="Get Online"
           icon="⚡"
-          kpi={connectivity().online ? 'Online' : 'Offline'}
-          kpiClass={connectivity().online ? 'kpi--green' : 'kpi--amber'}
-          sub={`${connectivity().wanStatus} · ${connectivity().aps} APs`}
-          detail={`↓ ${connectivity().downMbps} Mbps · ↑ ${connectivity().upMbps} Mbps`}
-          badge={connectivity().online ? 'Connected' : 'Check WAN'}
-          badgeClass={connectivity().online ? 'badge--green' : 'badge--amber'}
+          kpi={unreported() ? NA.kpi : connectivity().online ? 'Online' : 'Offline'}
+          kpiClass={unreported() ? undefined : connectivity().online ? 'kpi--green' : 'kpi--amber'}
+          sub={unreported() ? NA.sub : `${connectivity().wanStatus} · ${connectivity().aps} APs`}
+          detail={unreported() ? undefined : `↓ ${connectivity().downMbps} Mbps · ↑ ${connectivity().upMbps} Mbps`}
+          badge={unreported() ? NA.badge : connectivity().online ? 'Connected' : 'Check WAN'}
+          badgeClass={unreported() ? NA.badgeClass : connectivity().online ? 'badge--green' : 'badge--amber'}
           href="/network/wan"
           action="Settings"
         />
@@ -151,7 +155,7 @@ const PillarGrid: Component = () => {
               ? 'All incidents contained'
               : `${security().openIncidents} incident${security().openIncidents !== 1 ? 's' : ''} need attention`
           }
-          detail={`${security().autonomousActions} actions taken autonomously today`}
+          detail={unreported() ? 'detections, verdicts & incidents from this device' : `${security().autonomousActions} actions taken autonomously today`}
           badge={security().allContained ? 'Contained' : 'Needs you'}
           badgeClass={security().allContained ? 'badge--green' : 'badge--amber'}
           href="/investigate/queue"
@@ -163,10 +167,10 @@ const PillarGrid: Component = () => {
           ctx="timeline"
           title="Timeline & Export"
           icon="📋"
-          kpi={`${timeline().retentionDays}d`}
-          sub="fully traceable · export ready"
-          detail={`${timeline().storedGb} GB stored · number → event → packet → raw`}
-          badge="Ready"
+          kpi={unreported() ? NA.kpi : `${timeline().retentionDays}d`}
+          sub={unreported() ? NA.sub : 'fully traceable · export ready'}
+          detail={unreported() ? undefined : `${timeline().storedGb} GB stored · number → event → packet → raw`}
+          badge={unreported() ? NA.badge : 'Ready'}
           badgeClass="badge--grey"
           href="/observe/events"
           action="Open"

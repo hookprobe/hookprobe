@@ -72,6 +72,9 @@ export const protectionStatus = (): ProtectionStatus => {
 // Default 'standalone' until the device says otherwise: TopBar reads the real mode from
 // `/api/health` (heqk: `mode` = cloud-linked only while the MSSP session is Established).
 export const [deployMode,      setDeployMode]       = createSignal<DeployMode>('standalone');
+// Which engine answered /api/health ('' until known). On the heqk device only the SOC pipeline is
+// live (detections/incidents/QSecBit); tiles without a device source say so instead of demo data.
+export const [substrate,       setSubstrate]        = createSignal<string>('');
 export const [currentUser]                          = createSignal<string>('Admin');
 export const [lastChecked,     setLastChecked]      = createSignal<string>('just now');
 
