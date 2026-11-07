@@ -3308,12 +3308,22 @@ enum KeyWait {
 /// version byte) into `buf`; a frame longer than `buf` is skipped, never truncated (a
 /// truncated MIC span reads as "wrong PSK").
 fn wait_eapol(sta: &[u8; 6], secure: bool, replay: u64, dry_limit: u32, buf: &mut [u8]) -> KeyWait {
-    let body = 18usize;
     let mut rx = [0u8; 2048];
+    // P5 (peer review 2026-11-06): a control request issued while the AP serves may have PARKED this
+    // station's EAPOL reply (or its deauth) in the defer ring — look there first, taking only the
+    // matching entry so the other parked frames keep their order for the serve loop.
+    let parked = unsafe { (*core::ptr::addr_of_mut!(DEFER)).take(&mut rx, |f, ch, doff| eapol_match(f, ch, doff, sta, secure, replay, None)) };
+    if let Some((r, doff)) = parked {
+        return match r {
+            // re-run on the taken copy to fill `buf`
+            KeyWait::Got(_) => eapol_match(&rx, 2, doff, sta, secure, replay, Some(buf)).unwrap_or(KeyWait::Dry),
+            other => other,
+        };
+    }
     let mut dry = 0u32;
     let mut frames = 0u32;
     while dry < dry_limit && frames < 64 {
-        let (ch, _h, doff) = match read_sdpcm_frame(&mut rx) {
+        let (ch, h, doff) = match read_sdpcm_frame(&mut rx) {
             Some(t) => t,
             None => {
                 dry += 1;
@@ -3321,48 +3331,68 @@ fn wait_eapol(sta: &[u8; 6], secure: bool, replay: u64, dry_limit: u32, buf: &mu
             }
         };
         frames += 1;
-        if ch == 1 {
-            if let Some((et, _st, who)) = parse_ap_event(&rx, doff) {
-                if who == *sta {
-                    if et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC_IND {
-                        return KeyWait::Deauth;
-                    }
-                    if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
-                        return KeyWait::Reassoc;
-                    }
-                }
-            }
-            continue;
+        if let Some(r) = eapol_match(&rx, ch, doff, sta, secure, replay, Some(buf)) {
+            return r;
         }
-        if ch != 2 {
-            continue;
-        }
-        let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
-        if eth + body + 95 > rx.len() {
-            continue;
-        }
-        if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E || &rx[eth + 6..eth + 12] != &sta[..] {
-            continue;
-        }
-        let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
-        let pairwise_mic_noack = ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0080 == 0;
-        if !pairwise_mic_noack || (ki & 0x0200 != 0) != secure {
-            continue;
-        }
-        let mut rc = [0u8; 8];
-        rc.copy_from_slice(&rx[eth + body + 5..eth + body + 13]);
-        if u64::from_be_bytes(rc) != replay {
-            continue; // stale (previous session / previous retransmit)
-        }
-        let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
-        let n = 4 + x1;
-        if n > buf.len() || eth + 14 + n > rx.len() {
-            continue;
-        }
-        buf[..n].copy_from_slice(&rx[eth + 14..eth + 14 + n]);
-        return KeyWait::Got(n);
+        // Not ours: another station's data / event — keep it for the serve loop instead of
+        // discarding it (no-op outside the serve loop, e.g. the first handshake at bring-up).
+        defer_push(&rx, ch, (h as usize).min(rx.len()) as u16, doff);
     }
     KeyWait::Dry
+}
+
+/// One SDPCM frame vs the authenticator's wait: `Some` = terminal for this wait (our EAPOL reply —
+/// copied into `out` when given — or this station's deauth / reassoc event), `None` = not ours.
+fn eapol_match(rx: &[u8], ch: u8, doff: usize, sta: &[u8; 6], secure: bool, replay: u64, out: Option<&mut [u8]>) -> Option<KeyWait> {
+    let body = 18usize;
+    if ch == 1 {
+        if let Some((et, _st, who)) = parse_ap_event(rx, doff) {
+            if who == *sta {
+                if et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC_IND {
+                    return Some(KeyWait::Deauth);
+                }
+                if et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND {
+                    return Some(KeyWait::Reassoc);
+                }
+            }
+        }
+        return None;
+    }
+    if ch != 2 || doff + 4 > rx.len() {
+        return None;
+    }
+    let eth = doff + 4 + (rx[doff + 3] as usize) * 4;
+    if eth + body + 95 > rx.len() {
+        return None;
+    }
+    if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E || &rx[eth + 6..eth + 12] != &sta[..] {
+        return None;
+    }
+    let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
+    let pairwise_mic_noack = ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0080 == 0;
+    if !pairwise_mic_noack || (ki & 0x0200 != 0) != secure {
+        return None;
+    }
+    let mut rc = [0u8; 8];
+    rc.copy_from_slice(&rx[eth + body + 5..eth + body + 13]);
+    if u64::from_be_bytes(rc) != replay {
+        return None; // stale (previous session / previous retransmit)
+    }
+    let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
+    let n = 4 + x1;
+    if eth + 14 + n > rx.len() {
+        return None;
+    }
+    match out {
+        Some(buf) => {
+            if n > buf.len() {
+                return None; // skipped, never truncated (a truncated MIC span reads as "wrong PSK")
+            }
+            buf[..n].copy_from_slice(&rx[eth + 14..eth + 14 + n]);
+            Some(KeyWait::Got(n))
+        }
+        None => Some(KeyWait::Got(n)),
+    }
 }
 
 /// Build M1 (AP->STA): ver2 | pairwise | ACK = 0x008a; ANonce; the given replay; no MIC/key-data.
@@ -3697,57 +3727,23 @@ static mut AP_DRAIN: bool = false;
 // deauth event). While the serve loop runs they are parked here and ap_poll delivers them first, in
 // order. Off during bring-up, so a stale scan event can never surface later.
 const DEFER_N: usize = 64; // metal 2026-11-07: 16 overflowed 48x under a speed test (a control request reads many frames)
-static mut DEFER_BUF: [[u8; 2048]; DEFER_N] = [[0; 2048]; DEFER_N];
-static mut DEFER_META: [(u8, u16, usize); DEFER_N] = [(0, 0, 0); DEFER_N];
-static mut DEFER_HEAD: usize = 0;
-static mut DEFER_LEN: usize = 0;
-static mut DEFER_ON: bool = false;
+static mut DEFER: hal::defer::DeferRing<DEFER_N, 2048> = hal::defer::DeferRing::new();
 /// [parked, delivered, dropped because the ring was full]
-pub static mut DEFER_DIAG: [u32; 3] = [0; 3];
+pub fn defer_diag() -> [u32; 3] {
+    unsafe { (*core::ptr::addr_of!(DEFER)).diag }
+}
 
 /// Enable parking of station frames read by control requests (the AP serve loop turns it on).
 pub fn set_defer(on: bool) {
-    unsafe {
-        DEFER_ON = on;
-        DEFER_HEAD = 0;
-        DEFER_LEN = 0;
-    }
+    unsafe { (*core::ptr::addr_of_mut!(DEFER)).set(on) }
 }
 
 fn defer_push(rx: &[u8], ch: u8, len: u16, doff: usize) {
-    unsafe {
-        if !DEFER_ON || !(ch == 1 || ch == 2) {
-            return;
-        }
-        if DEFER_LEN == DEFER_N {
-            DEFER_DIAG[2] += 1;
-            return;
-        }
-        let i = (DEFER_HEAD + DEFER_LEN) % DEFER_N;
-        let n = (len as usize).min(rx.len()).min(2048);
-        let b = &mut *core::ptr::addr_of_mut!(DEFER_BUF);
-        b[i][..n].copy_from_slice(&rx[..n]);
-        DEFER_META[i] = (ch, n as u16, doff);
-        DEFER_LEN += 1;
-        DEFER_DIAG[0] += 1;
-    }
+    unsafe { (*core::ptr::addr_of_mut!(DEFER)).push(rx, ch, len, doff) }
 }
 
 fn defer_pop(rx: &mut [u8]) -> Option<(u8, u16, usize)> {
-    unsafe {
-        if DEFER_LEN == 0 {
-            return None;
-        }
-        let i = DEFER_HEAD;
-        let (ch, n, doff) = DEFER_META[i];
-        let n = (n as usize).min(rx.len());
-        let b = &*core::ptr::addr_of!(DEFER_BUF);
-        rx[..n].copy_from_slice(&b[i][..n]);
-        DEFER_HEAD = (DEFER_HEAD + 1) % DEFER_N;
-        DEFER_LEN -= 1;
-        DEFER_DIAG[1] += 1;
-        Some((ch, n as u16, doff))
-    }
+    unsafe { (*core::ptr::addr_of_mut!(DEFER)).pop(rx) }
 }
 
 /// `force` = read unconditionally (a cheap ~2 ms dry pass) — the liveness net the caller

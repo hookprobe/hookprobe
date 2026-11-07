@@ -255,7 +255,7 @@ impl Snapshot {
 #[cfg(feature = "securechannel-selftest")]
 pub fn snapshot_selftest() -> bool {
     macro_rules! kprint { ($($t:tt)*) => { arch_aarch64::_print(format_args!($($t)*)) }; }
-    let ev = |k: u64| events::Event { ts: k, src: k as u32, rule_id: k as u16, severity: 1, verdict: 2, class: 5 };
+    let ev = |k: u64| events::Event { ts: k, src: k as u32, rule_id: k as u16, severity: 1, verdict: 2, class: 5, dst: 0, dport: 0 };
     let ts_of = |img: &[u8; export::EV_IMAGE_LEN]| u64::from_le_bytes(img[0..8].try_into().unwrap());
 
     // Wrap the ring (SNAP_EVENTS + 10 events), persist, restore, then push ONE more.

@@ -143,7 +143,7 @@ const DetectApp: Component = () => {
                           <span class="det-engine" title="detection category">{d.category}</span>
                           <div class="det-body">
                             <div class="det-title">{d.rule_msg}</div>
-                            <div class="det-flow">{d.src_ip} <span class="det-arrow">→</span> {d.dst_ip}:{d.dst_port}</div>
+                            <div class="det-flow">{d.src_ip || '—'} <span class="det-arrow">→</span> {d.dst_ip ? `${d.dst_ip}${d.dst_port ? `:${d.dst_port}` : ''}` : '—'}</div>
                           </div>
                           <span class="det-tech" title={d.mitre}>{d.mitre}</span>
                           <span class={`det-verdict v--conf-${confTier(d.confidence)}`} title="model confidence — no enforcement-outcome field yet">

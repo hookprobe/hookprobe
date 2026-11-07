@@ -325,9 +325,9 @@ pub fn mc_selftest() -> bool {
     let has = |hay: &[u8], needle: &str| hay.windows(needle.len()).any(|w| w == needle.as_bytes());
     let mut st = McState::new();
     st.set_clock(1_700_000_000_000, 0, 1000); // 1 kHz: tick == ms
-    st.push_event(&crate::events::Event { ts: 5_000, src: 0x0A00_0202, rule_id: 1, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP });
-    st.push_event(&crate::events::Event { ts: 6_000, src: 0x0A00_0202, rule_id: 113, severity: 3, verdict: 2, class: crate::verdict::CLASS_QUARANTINE });
-    st.push_event(&crate::events::Event { ts: 7_000, src: 0x1122_3344, rule_id: 122, severity: 3, verdict: 2, class: crate::verdict::CLASS_RATELIMIT_OVER });
+    st.push_event(&crate::events::Event { ts: 5_000, src: 0x0A00_0202, rule_id: 1, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP, dst: 0x0A00_020F, dport: 4444 });
+    st.push_event(&crate::events::Event { ts: 6_000, src: 0x0A00_0202, rule_id: 113, severity: 3, verdict: 2, class: crate::verdict::CLASS_QUARANTINE, dst: 0, dport: 0 });
+    st.push_event(&crate::events::Event { ts: 7_000, src: 0x1122_3344, rule_id: 122, severity: 3, verdict: 2, class: crate::verdict::CLASS_RATELIMIT_OVER, dst: 0, dport: 0 });
     st.sample_qsecbit(1_000, 0);
     st.sample_qsecbit(8_000, 40); // 40 points inside the window → risk 40/60
     let mut scratch = [0u8; 8192];
@@ -378,7 +378,7 @@ pub fn mc_selftest() -> bool {
     let d = &scratch[..n1];
     let det_ok = s1 == 200 && has(d, "\"count\":3") && has(d, "\"rule_id\":1200001") && has(d, "Known C2 port 4444 (DROP, framedrop)")
         && has(d, "\"src_ip\":\"10.0.2.2\"") && has(d, "\"severity\":2") && has(d, "\"mitre\":\"T1571\"")
-        && has(d, "\"ts\":1700000005.000") && !has(d, "17.34.51.68") /* MAC-hash src never rendered as an IP */;
+        && has(d, "\"ts\":1700000005.000") && has(d, "\"dst_ip\":\"10.0.2.15\",\"dst_port\":4444") && !has(d, "17.34.51.68") /* MAC-hash src never rendered as an IP */;
     let (s2, n2) = get(b"GET /api/incidents HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let i = &scratch[..n2];
     let inc_ok = s2 == 200 && has(i, "\"count\":1") && has(i, "\"device_ip\":\"10.0.2.2\"") && has(i, "\"priority\":\"High\"")
@@ -434,7 +434,7 @@ pub fn mc_selftest() -> bool {
         // 1.8e12 at tick 10_000 moves it to 1.8e12 - 5_000. A later 2-h step is refused.
         let mut t = McState::new();
         t.set_clock(0, 0, 1000);
-        t.push_event(&crate::events::Event { ts: 5_000, src: 1, rule_id: 1, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP });
+        t.push_event(&crate::events::Event { ts: 5_000, src: 1, rule_id: 1, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP, dst: 0, dport: 0 });
         let before = t.health_ts(0);
         let step = t.sync_clock(1_800_000_000_000, 10_000);
         let after = t.health_ts(0);
@@ -443,7 +443,7 @@ pub fn mc_selftest() -> bool {
         let big = t.sync_clock(1_800_000_000_000 + 7_200_000 + 40_000, 40_000).is_none();
         // A restored (prior-boot, wall-clock) row is never moved by this boot's clock step.
         let mut r2 = McState::new();
-        r2.push_restored(&crate::events::Event { ts: 0, src: 1, rule_id: 1, severity: 5, verdict: 2, class: 0 }, 1_799_000_000_000);
+        r2.push_restored(&crate::events::Event { ts: 0, src: 1, rule_id: 1, severity: 5, verdict: 2, class: 0, dst: 0, dport: 0 }, 1_799_000_000_000);
         let _ = r2.sync_clock(1_800_000_000_000, 10_000);
         let pinned = r2.health_ts(0) == Some(1_799_000_000_000);
         good && wrong_nonce && refused && synced && small && big && pinned

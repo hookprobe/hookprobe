@@ -134,6 +134,8 @@ pub fn image_to_ev(b: &[u8]) -> Option<events::Event> {
         severity: b[14],
         verdict: b[15],
         class: crate::verdict::CLASS_UNKNOWN, // the 16-byte persisted image carries no class
+        dst: 0,
+        dport: 0,
     })
 }
 
@@ -372,7 +374,7 @@ mod selftest {
         // (t) TRANSPORT: frame B is lost in transit, C still opens (no desync) and the gap is
         // counted; B then arrives late and is accepted as late; an exact replay and a tampered
         // record are refused.
-        let synth = |rule: u16| events::Event { ts: 2_000, src: 0xC612_0001, rule_id: rule, severity: 3, verdict: 1, class: crate::verdict::CLASS_OBSERVE };
+        let synth = |rule: u16| events::Event { ts: 2_000, src: 0xC612_0001, rule_id: rule, severity: 3, verdict: 1, class: crate::verdict::CLASS_OBSERVE, dst: 0, dport: 0 };
         for r in 0..3u16 {
             ex.push(&synth(200 + r));
         }
@@ -520,7 +522,7 @@ mod selftest {
                 Ok(x) => x,
                 Err(_) => return false,
             };
-        let ev = events::Event { ts: 1, src: 2, rule_id: 3, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP };
+        let ev = events::Event { ts: 1, src: 2, rule_id: 3, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP, dst: 0, dport: 0 };
         let mut ex = Exporter::new(enr.tenant_id, device_fp, 1, 1);
         let mut rx = mc.recv.into_anti_replay();
         let mut tr = crate::exportwire::Tracker::new(enr.tenant_id, device_fp);
@@ -712,8 +714,8 @@ mod selftest {
         // MAC pseudonym at the export boundary (RA rules 121-123): never the raw octets, stable per key,
         // 0 without a key; IPv4-keyed rules unchanged.
         let pseudo_ok = {
-            let ra = events::Event { ts: 1, src: 0x4433_2211, rule_id: 121, severity: 3, verdict: 1, class: crate::verdict::CLASS_OBSERVE };
-            let v4 = events::Event { ts: 1, src: 0xC612_0001, rule_id: 1, severity: 3, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP };
+            let ra = events::Event { ts: 1, src: 0x4433_2211, rule_id: 121, severity: 3, verdict: 1, class: crate::verdict::CLASS_OBSERVE, dst: 0, dport: 0 };
+            let v4 = events::Event { ts: 1, src: 0xC612_0001, rule_id: 1, severity: 3, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP, dst: 0, dport: 0 };
             let saved = unsafe { MAC_PSEUDO_KEY };
             unsafe { MAC_PSEUDO_KEY = None };
             let unkeyed = export_src(&ra) == 0;

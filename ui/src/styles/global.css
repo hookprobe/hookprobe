@@ -1258,6 +1258,10 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 .rail-organism-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--hp-green); box-shadow: 0 0 8px var(--hp-green); }
 .rail-organism-label { font-size: 10px; font-weight: 700; letter-spacing: 0.08em; color: var(--hp-green); }
 .rail-organism-score { margin-left: auto; font-family: var(--hp-font-mono); font-weight: 800; color: var(--hp-green); }
+.rail-organism--needs-attention .rail-organism-dot { background: var(--hp-amber); box-shadow: 0 0 8px var(--hp-amber); }
+.rail-organism--needs-attention .rail-organism-label, .rail-organism--needs-attention .rail-organism-score { color: var(--hp-amber); }
+.rail-organism--critical .rail-organism-dot { background: var(--hp-red); box-shadow: 0 0 8px var(--hp-red); }
+.rail-organism--critical .rail-organism-label, .rail-organism--critical .rail-organism-score { color: var(--hp-red); }
 .rail-nav { display: flex; flex-direction: column; gap: 1px; flex: 1; }
 .rail-item {
   display: flex; align-items: center; gap: 10px;
