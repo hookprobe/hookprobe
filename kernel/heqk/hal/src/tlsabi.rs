@@ -9,11 +9,14 @@ pub const BASE_QEMU: usize = 0xA000_0000;
 pub const BASE_CM5: usize = 0x1_4008_0000;
 pub const IMAGE_MAX: usize = 0x8_0000; // 512 KiB for text+rodata+data+bss
 pub const HEAP_OFF: usize = 0x8_0000;
-pub const HEAP_SIZE: usize = 0xA_0000; // 640 KiB (talc)
-pub const STACK_OFF: usize = 0x12_0000;
+pub const HEAP_SIZE: usize = 0xE_0000; // 896 KiB (talc) — 8 sessions
+pub const STACK_OFF: usize = 0x16_0000;
 pub const STACK_SIZE: usize = 0x1_0000;
-pub const IO_OFF: usize = 0x13_0000;
+pub const IO_OFF: usize = 0x17_0000;
 pub const IO_SIZE: usize = 0x1_0000;
+// CM5: BASE_CM5 + IO_OFF + IO_SIZE = USER_VA_BASE + 0x20_0000 — exactly the end of the 2 MiB window.
+const _: () = assert!(0x8_0000 + IO_OFF + IO_SIZE <= 0x20_0000);
+const _: () = assert!(HEAP_OFF + HEAP_SIZE <= STACK_OFF && STACK_OFF + STACK_SIZE <= IO_OFF);
 
 // Header (little-endian), at the IO base.
 pub const H_MAGIC: usize = 0; // u32 "HQTL"
@@ -39,8 +42,8 @@ pub const OUT_PLAIN_MAX: usize = 0x3000;
 
 /// Plaintext per SEND (one TLS record's worth; the kernel chunks larger responses).
 pub const SEND_CHUNK: usize = 16 * 1024;
-/// Concurrent TLS connections the server holds.
-pub const SLOTS: usize = 4;
+/// Concurrent TLS connections the server holds (a browser opens up to 6 per host + the SSE stream).
+pub const SLOTS: usize = 8;
 
 // Commands.
 /// IN = [32-byte P-256 scalar][u16 n_certs]{[u16 len][DER]}* — builds the server config once.
