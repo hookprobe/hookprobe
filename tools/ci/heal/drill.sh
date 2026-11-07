@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tools/ci/heal/drill.sh — end-to-end fire drill of the L2 heal loop (ADR 0048).
+# tools/ci/heal/drill.sh — end-to-end fire drill of the L2 heal loop (ADR 0052).
 #
 # Proves the WHOLE loop on a real, seeded defect — not mocks:
 #   seed a bug in a throwaway clone → the gate goes red → classify → isolated autofix
@@ -75,7 +75,7 @@ run_heal() {  # run_heal <scenario> <agent>
   # The red gate run that the heal loop reacts to (only tlsprov's tests need to go red: g1).
   CI_OUT="$out/gates" tools/ci/gates.sh g1 >"$out/red-run.log" 2>&1
   python3 -I tools/ci/heal/heal.py --results "$out/gates/gate-results.json" --agent "$2" \
-    --base HEAD --out "$out/heal" >"$out/heal.log" 2>&1
+    --base HEAD --out "$out/heal" --wt-root "$D/wt" >"$out/heal.log" 2>&1
   cat "$out/heal.log" | sed 's/^/    /'
 }
 

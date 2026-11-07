@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""G0 — the CI wiring meta-gate (ADR 0048): "a gate that is not wired is not a gate".
+"""G0 — the CI wiring meta-gate (ADR 0052): "a gate that is not wired is not a gate".
 
 The 2026-11-07 repo merge silently un-wired CI: gate-ladder.yml was parked under
 legacy/, and os/kernel/.github/{dependabot.yml,workflows/} kept existing in a place

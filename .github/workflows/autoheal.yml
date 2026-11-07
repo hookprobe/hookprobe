@@ -1,5 +1,5 @@
 # =============================================================================
-# autoheal.yml — the L2 heal loop on GitHub (ADR 0048).
+# autoheal.yml — the L2 heal loop on GitHub (ADR 0052).
 #
 #   red run ──► triage (deterministic classify, one issue per failure signature)
 #                 ├─ rerun    → re-run the failed jobs once (transient infra / TCG budget)
@@ -211,7 +211,7 @@ jobs:
           git -c core.hooksPath=/dev/null push --no-verify -q origin "$BR"
           python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m["notes"])' "$RUNNER_TEMP/patch/meta.json" \
             | sed 's/@/(at)/g' > "$RUNNER_TEMP/notes.md"
-          { echo "**Autofix proposal (ADR 0048 L2) — DRAFT, needs human review.**"; echo
+          { echo "**Autofix proposal (ADR 0052 L2) — DRAFT, needs human review.**"; echo
             cat "$RUNNER_TEMP/notes.md"; echo
             echo "- signature: \`$SIG\` · gate \`$GATE\` re-ran green with no secrets present · trusted guard: PASS (twice)"
             [ -n "$ISSUE" ] && echo "- tracking issue: #$ISSUE"; } > "$RUNNER_TEMP/body.md"

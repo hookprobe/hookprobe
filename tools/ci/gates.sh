@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tools/ci/gates.sh — THE single entrypoint of the HookProbe gate spine (ADR 0048).
+# tools/ci/gates.sh — THE single entrypoint of the HookProbe gate spine (ADR 0052).
 #
 # CI workflows call this script verbatim and a developer runs the identical
 # command locally, so "green on my box" and "green in CI" can never diverge

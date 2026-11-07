@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # tools/ci/stage-firmware.sh — reproducibly stage the CYW43455 Wi-Fi firmware that the
-# SHIPPED heqk flavours (`prod`, `prod-mc`) embed via include_bytes! (ADR 0048).
+# SHIPPED heqk flavours (`prod`, `prod-mc`) embed via include_bytes! (ADR 0052).
 #
 # Why: the blobs are licensed (redistributable via linux-firmware) and gitignored, so a
 # fresh checkout — and therefore every CI runner — could not build the shipped kernel at
