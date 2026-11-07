@@ -242,3 +242,14 @@ held the previous (un-PADTed) session from the morning boot; bounded retries rec
 hit 1 → TCP RST to the client (one SYN, no retries = the reset was accepted). Host check with the device's own
 parser/matcher: that packet → `Block, Acl(0, 10)`. Drop rule (Quad9 v6 :53) not exercised (no client used it).
 Port 4 restored to FTS (teardown) before Phase B.
+
+### Background block 3 (no metal, 2026-11-07 late morning)
+
+- `a687de6` ADR 0050 PROPOSED (parser placement: line-rate headers EL1; control/app protocols → EL0 servers;
+  TLS in EL0 with its own heap, no freeing allocator in the TCB) + the orb arc follows the live status.
+- `5b636cc` EL0 TLS spike (`docs/design/tls-el0-spike/`): rustls no_std + rustcrypto + talc builds for
+  aarch64-none (316 KiB .text); host interop TLS1.3 / X25519 / ECDSA with curl + openssl. Open: provider is
+  alpha/unaudited; no hybrid ML-KEM group yet.
+- `a79b261` `[P-fuzz]`: structure-aware fuzzing of every QEMU-built remote parser, 0 panics (3k + one-off 30k).
+  Hand review of the CM5-only parsers (AP DHCP server, firmware events, EAPOL match, WAN DHCP client, mgmt
+  frame handler incl. the prefix shift): no new defect.
