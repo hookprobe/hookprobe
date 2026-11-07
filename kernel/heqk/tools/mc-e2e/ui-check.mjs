@@ -8,7 +8,7 @@ const base = process.argv[2] ?? 'http://127.0.0.1:18080';
 // certificate checking stays on for everything else.
 const spki = process.env.MC_E2E_SPKI;
 const browser = await chromium.launch(spki ? {
-  args: [`--ignore-certificate-errors-spki-list=${spki}`, `--host-resolver-rules=MAP heqk.local 127.0.0.1`],
+  args: [`--ignore-certificate-errors-spki-list=${spki}`, `--host-resolver-rules=MAP heqk.local ${process.env.MC_E2E_MAP_IP ?? '127.0.0.1'}`],
 } : {});
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const apiCalls = [];
