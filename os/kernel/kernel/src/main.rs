@@ -41,6 +41,10 @@ mod dnssink;
 mod shield;
 // Parity G8: DGA / lookalike / tunnel scoring of Shield queries (detection only).
 mod dga;
+// Parity G7: operator-signed threat-intel IOC pack (observe-only).
+mod ioc;
+// Parity G9: operator-signed local per-device policy (DEVICES.TXT).
+mod devpolicy;
 // M5.1 (Track C) — minimal bounds-safe ELF64/aarch64 static loader (the userspace-server
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
 // backends but the loader/mapping path is QEMU-only (see load_into's cfg).
@@ -3034,6 +3038,13 @@ fn cm5_p10_probe() {
                             }
                             // Shield v2 (ADR 0052): BLOCK.TXT (+ directives) and ALLOW.TXT, operator-signed.
                             {
+                                let ii = ioc::load(&dev);
+                                kprint!(" [INTEL] IOC pack: {} IPv4 prefixes + {} domains {} — matches are DETECTIONS (ioc_match), never drops\n",
+                                    ioc::v4_len(), ioc::dom_len(),
+                                    match ii.file { 0 => "(no IOC.TXT)", 1 => if ii.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(IOC.TXT REFUSED — not loaded)" });
+                                let di = devpolicy::load(&dev);
+                                kprint!(" [DEVICES] per-device policy: {} devices {}\n", devpolicy::len(),
+                                    match di.file { 0 => "(no DEVICES.TXT — every device full access)", 1 => if di.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(DEVICES.TXT REFUSED — every device full access)" });
                                 let li = shield::load(&dev);
                                 let p = shield::policy();
                                 kprint!(" [SHIELD] v2: {} blocked + {} allowed domains | BLOCK.TXT {} ALLOW.TXT {}{}{} | encrypted DNS {} | Private Relay {} | DDR + Firefox canary answered, system floor on\n",
@@ -3337,13 +3348,28 @@ fn cm5_p10_probe() {
                                 let pi = ($pif) as usize;
                                 // Shield: an allowed client DNS query for a blocklisted name is answered here
                                 // (0.0.0.0 / NODATA, from the resolver it asked) and never leaves the device.
+                                let mut shield = false; // answered/refused by Shield or a device policy (not an ACL drop)
+                                // Parity G9: the device's declared policy (DEVICES.TXT, by MAC). DNS is infrastructure
+                                // (Shield answers it); everything this macro forwards goes to the internet.
+                                if act == PAct::Allow && frame.len() >= 34 && devpolicy::len() > 0 {
+                                    let mut smac = [0u8; 6];
+                                    smac.copy_from_slice(&frame[6..12]);
+                                    let dns = frame[23] == 17 && {
+                                        let u = 14 + ((frame[14] & 0x0f) as usize) * 4;
+                                        frame.get(u + 2..u + 4) == Some(&[0, 53][..])
+                                    };
+                                    let d = if dns { devpolicy::Dest::Infra } else { devpolicy::Dest::Internet };
+                                    if !devpolicy::check(&smac, d) {
+                                        act = PAct::Drop;
+                                        shield = true; // not counted as an ACL drop: a declared device policy
+                                    }
+                                }
                                 // Exfil (parity G3): outbound bytes per inside source, observe-only + cooldown.
                                 if act == PAct::Allow && frame.len() >= 34 {
                                     let src = u32::from_be_bytes([frame[26], frame[27], frame[28], frame[29]]);
                                     let dst = u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]);
                                     let _ = rules::exfil_verdict(src, dst, u16::from_be_bytes([frame[16], frame[17]]) as u64);
                                 }
-                                let mut shield = false;
                                 // Shield v2 (ADR 0052): every client DNS query (any resolver, UDP and TCP), DoT, DoH names.
                                 if act == PAct::Allow {
                                     let me = if $pif == PIf::Eth1 { uplink::ETH1_MAC } else { ap.bssid };
@@ -3736,6 +3762,8 @@ fn cm5_p10_probe() {
                                             trunc_drop += 1; // truncated/oversize: fail-closed, but NOT a rule drop
                                         } else if packet::verdict(frame).1 == packet::DROP {
                                             ids_drop_out += 1;
+                                        } else if mc_bound(frame, &our_ip) && !devpolicy::check(&smac, devpolicy::Dest::DeviceMgmt) {
+                                            // Parity G9: internet_only / quarantine devices may not reach Mission Control.
                                         } else if mc_bound(frame, &our_ip) {
                                             // Mission Control on the AP address (after the lease binding + IDS gates).
                                             #[cfg(feature = "mcserve")]
@@ -3926,6 +3954,7 @@ fn cm5_p10_probe() {
                                                 // Parity G11: our SNTP answer (validated: server asked, port 123, our nonce).
                                                 #[cfg(feature = "mcserve")]
                                                 if let Some(ms) = wntp.on_frame(&wbuf[..n], up.dhcp.yiaddr, cyw43::now_secs()) {
+                                                    ioc::set_now_unix((ms / 1000) as u32); // IOC expiry needs a real clock
                                                     match mcserve::state().sync_clock(ms, now()) {
                                                         Some(step) => kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
                                                             wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step),
@@ -6157,6 +6186,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = policysig::selftest();
         let _ = shield::selftest();
         let _ = dga::selftest();
+        let _ = ioc::selftest();
+        let _ = devpolicy::selftest();
         let _ = arch_aarch64::dhcpd::selftest();
         #[cfg(feature = "netsvc")]
         let _ = wanntp::selftest();

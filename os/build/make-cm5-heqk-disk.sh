@@ -41,6 +41,8 @@ WAN_FILE=""
 POLICY_FILE=""
 BLOCK_FILE=""
 ALLOW_FILE=""
+IOC_FILE=""
+DEVICES_FILE=""
 MCTLS_FILE=""
 POLICY_KEY=""
 POLICY_GEN="1"
@@ -56,7 +58,9 @@ while [ $# -gt 0 ]; do
     --policy-gen) POLICY_GEN="$2"; shift ;;
     --blocklist-file) BLOCK_FILE="$2"; shift ;;
     --allowlist-file) ALLOW_FILE="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT]" >&2; exit 2 ;;
+    --ioc-file) IOC_FILE="$2"; shift ;;
+    --devices-file) DEVICES_FILE="$2"; shift ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT] [--ioc-file IOC.TXT] [--devices-file DEVICES.TXT]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -212,6 +216,17 @@ if [ -n "$BLOCK_FILE" ]; then
     python3 -I "$HEQK/tools/policy-sign.py" sign-blocklist "$POLICY_KEY" "$STAGE/BLOCK.TXT" "$POLICY_GEN" "$STAGE/BLOCK.SIG" >/dev/null || { echo "FATAL: signing BLOCK.TXT failed"; exit 1; }
   fi
 fi
+# IOC.TXT (threat intel, detect-only) and DEVICES.TXT (per-device policy) — operator-signed the same way.
+stage_signed() { # src dst-name sign-subcommand max-bytes
+  [ -n "$1" ] || return 0
+  [ "$(stat -c %s "$1")" -le "$4" ] || { echo "FATAL: $1 larger than $4 bytes"; exit 1; }
+  cp "$1" "$STAGE/$2.TXT"
+  if [ -n "$POLICY_KEY" ]; then
+    python3 -I "$HEQK/tools/policy-sign.py" "$3" "$POLICY_KEY" "$STAGE/$2.TXT" "$POLICY_GEN" "$STAGE/$2.SIG" >/dev/null || { echo "FATAL: signing $2.TXT failed"; exit 1; }
+  fi
+}
+stage_signed "$IOC_FILE" IOC sign-ioc $((16 << 20))
+stage_signed "$DEVICES_FILE" DEVICES sign-devices $((16 << 10))
 if [ -n "$ALLOW_FILE" ]; then
   [ "$(stat -c %s "$ALLOW_FILE")" -le $((16 << 20)) ] || { echo "FATAL: --allowlist-file larger than 16 MiB"; exit 1; }
   cp "$ALLOW_FILE" "$STAGE/ALLOW.TXT"
@@ -231,7 +246,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
