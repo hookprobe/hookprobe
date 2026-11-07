@@ -1798,6 +1798,9 @@ fn cm5_prod_service() -> ! {
             // every protected route refuses — never an open claim window.
             let owner = pf.read_owner();
             mcserve::set_owner(owner);
+            if pf.persist_ready {
+                mcserve::state().sealed_cap = crate::snapshot::SNAP_EVENTS as u16;
+            }
             // D1: the prior boot's wall-clock-stamped detections come back into the UI.
             let mut restored = 0usize;
             for i in 0..crate::snapshot::SNAP_EVENTS {
@@ -2236,6 +2239,16 @@ fn cm5_prod_service() -> ! {
                     let (_port, v) = packet::verdict(&buf[..n]);
                     #[cfg(feature = "rxprof")]
                     { let t = prod_cntpct(); prof.verdict += t.wrapping_sub(mark); mark = t; }
+                    // Passive LAN inventory for the UI's "My Network" (local only, bounded).
+                    #[cfg(feature = "prod-mc")]
+                    {
+                        let src = crate::net::eth_ipv4_src(&buf[..n]);
+                        if src != 0 && crate::behavioral::is_internal(src) {
+                            let st = mcserve::state();
+                            let ms = st.epoch_ms(prod_cntpct());
+                            st.note_host(src, ms);
+                        }
+                    }
                     if v == packet::PASS {
                         // M4 FIRST-LIGHT (netmetal): AFTER the frame PASSes the verified rule
                         // plane, demux for-heqk frames (ARP-for-us + unicast-to-our-MAC, i.e.
