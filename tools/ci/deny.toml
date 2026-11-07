@@ -1,6 +1,6 @@
 # =============================================================================
 # tools/ci/deny.toml — the ONE cargo-deny policy for every Rust lockfile in the
-# live tree (G4 supply-chain gate, ADR 0048). Run via tools/ci/gates.sh g4, which
+# live tree (G4 supply-chain gate, ADR 0052). Run via tools/ci/gates.sh g4, which
 # iterates tools/ci/lockfiles.txt so a new detached workspace can't be forgotten
 # (G0 fails if a Cargo.lock outside legacy/ is missing from that list).
 #

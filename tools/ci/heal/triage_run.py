@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L2 heal loop — GitHub side (ADR 0048): triage a FAILED workflow run.
+"""L2 heal loop — GitHub side (ADR 0052): triage a FAILED workflow run.
 
 Called by .github/workflows/autoheal.yml on `workflow_run: completed` (failure). It:
 
@@ -128,7 +128,7 @@ def main() -> int:
     issue, attempts = "", 0
     if not a.dry_run:
         gh("label", "create", "ci-autoheal", "--repo", a.repo, "--color", "B60205", "--force",
-           "--description", "Opened by the ADR 0048 heal loop")
+           "--description", "Opened by the ADR 0052 heal loop")
         for d in decisions:
             title = issue_title(d)
             # ALL states: closing the issue must not reset the attempt budget (security-auditor L2).
@@ -142,7 +142,7 @@ def main() -> int:
                 gh("issue", "comment", str(num), "--repo", a.repo, "--body", "Recurred.\n\n" + body)
             else:
                 url = gh("issue", "create", "--repo", a.repo, "--title", title, "--label", "ci-autoheal",
-                         "--body", body + "\n_Deterministic triage by tools/ci/heal/triage_run.py (ADR 0048)._").strip()
+                         "--body", body + "\n_Deterministic triage by tools/ci/heal/triage_run.py (ADR 0052)._").strip()
                 num = url.rsplit("/", 1)[-1]
             if d is top:
                 issue, attempts = str(num), n_att

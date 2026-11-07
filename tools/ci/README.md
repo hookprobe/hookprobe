@@ -1,4 +1,4 @@
-# tools/ci — the HookProbe gate spine and heal loop (ADR 0048)
+# tools/ci — the HookProbe gate spine and heal loop (ADR 0052)
 
 One deterministic gate ladder, run **identically** on a developer box and in GitHub Actions,
 plus an autonomous loop that turns red runs into reruns, draft fix-PRs, or human escalations.
@@ -68,9 +68,36 @@ python3 tools/ci/heal/classify.py out/ci/gate-results.json # just classify
 
 On GitHub, `autoheal.yml` runs `triage_run.py` on every failed `ci`/`nightly`/`build-heqk`/
 `secrets-scan` run: one deduplicated issue per failure signature, a single rerun for transient
-failures, and (default branch only, with `secrets.ANTHROPIC_API_KEY`) the same `heal.py` flow
-ending in a draft PR. Set `secrets.AUTOFIX_TOKEN` (GitHub App / fine-grained PAT) so the draft
-PR's own `ci.yml` runs (PRs opened with `GITHUB_TOKEN` do not trigger workflows).
+failures, and (only for code verified to be on the default branch, with
+`secrets.ANTHROPIC_API_KEY`) an autofix **split by privilege** — the adversarial boundary, since
+an agent that can run `cargo`/`python3` can do anything its job can:
+
+| job | executes agent code? | holds |
+|---|---|---|
+| `agent` | yes (model + its tools) | the model key only — no write token, no persisted git credentials |
+| `regate` | yes (build.rs, tests) | **nothing** — applies the patch, trusted guard, red gate must pass |
+| `propose` | **no** | write token — re-guards from a clean checkout, pushes `autofix/*`, DRAFT PR |
+
+Set `secrets.AUTOFIX_TOKEN` (GitHub App / fine-grained PAT) so the draft PR's own `ci.yml` runs
+(PRs opened with `GITHUB_TOKEN` do not trigger workflows). Use a dedicated, spend-limited model key.
+
+### Fire drill — prove the heal loop end to end
+```bash
+tools/ci/heal/drill.sh            # triage + honest + cheat-ignore + cheat-protected
+tools/ci/heal/drill.sh claude     # + the real Claude Code agent fixing a seeded defect (costs $)
+```
+Seeds a real defect (tlsprov publishes a compressed point) in a private clone under `$TMPDIR`
+and checks every verdict: transient → `transient_cleared`, leaked secret → `escalated_to_human`,
+spent budget → `budget_exhausted`, honest fix → `proposed`, `#[ignore]` / ratchet-lowering
+"fixes" → `rejected_by_guard`. It can never write to the operator's repository (incident
+2026-11-08: clone outside the repo, uniquely named remote, own-clone check before every write).
+
+## Shipped-flavour firmware
+`prod` / `prod-mc` embed the licensed CYW43455 Wi-Fi firmware, which is gitignored.
+`tools/ci/stage-firmware.sh` fetches the RPi firmware-nonfree 20260519 package, verifies the
+`.deb` **and** the extracted `.bin` against pinned sha256s (7.45.265, the metal-proven blob), and
+runs `os/kernel/cm5-boot/stage-wifi-firmware.sh`. `repro.sh`, `release.yml` and `build-heqk.yml`
+call it; it is a no-op when the pinned blob is already staged.
 
 ## Adding things
 - **New lockfile / detached workspace** → add it to `lockfiles.txt` **and** `.github/dependabot.yml`
@@ -82,5 +109,8 @@ PR's own `ci.yml` runs (PRs opened with `GITHUB_TOKEN` do not trigger workflows)
 
 ## One-time GitHub setup (operator)
 1. Branch protection on `main`: require **`ci-ok`**, `heqk QEMU gate`, and the secrets-scan jobs.
-2. Secrets: `ANTHROPIC_API_KEY` (enables autofix), optionally `AUTOFIX_TOKEN`.
-3. Register the bench host as a self-hosted runner labelled `cm5-bench` with `HEQK_METAL=1`.
+2. Secrets: `ANTHROPIC_API_KEY` (dedicated, spend-limited; enables autofix), optionally `AUTOFIX_TOKEN`.
+3. Register the bench host as a self-hosted runner labelled `cm5-bench` with `HEQK_METAL=1`, in a
+   runner group restricted to `.github/workflows/metal.yml@refs/heads/main`; create the
+   `metal-bench` environment with a required reviewer.
+4. A tag ruleset protecting `v*` (only maintainers may create release tags).

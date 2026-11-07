@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""G1 clippy ratchet for the heqk kernel workspace (ADR 0048).
+"""G1 clippy ratchet for the heqk kernel workspace (ADR 0052).
 
-heqk has never been clippy-clean (~230 findings at ADR 0048 time), so `-D warnings` would be
+heqk has never been clippy-clean (~230 findings at ADR 0052 time), so `-D warnings` would be
 permanently red and therefore ignored. A ratchet is the honest gate instead:
 
   * count clippy/rustc findings per (crate, lint) for our own crates;
@@ -19,12 +19,13 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 
 OUR_CRATES = {"kernel", "hal", "arch_aarch64", "abi", "hboot", "boot_abi"}
 
 
-def collect(lines) -> tuple:
-    """Parse cargo --message-format=json lines → (Counter[(crate,lint)], errors list). Pure."""
+def collect(lines, featureset="") -> tuple:
+    """Parse cargo --message-format=json lines → (Counter[(crate[@featureset],lint)], errors). Pure."""
     counts = collections.Counter()
     errors = []
     for line in lines:
@@ -49,9 +50,10 @@ def collect(lines) -> tuple:
         prim = next((s for s in spans if s.get("is_primary")), spans[0] if spans else {})
         if "/out/" in (prim.get("file_name") or ""):
             continue  # build-script generated code
-        counts[(crate, code)] += 1
+        key = f"{crate}@{featureset}" if featureset else crate
+        counts[(key, code)] += 1
         if level == "error":
-            errors.append(f"{crate}: {code} at {prim.get('file_name')}:{prim.get('line_start')}")
+            errors.append(f"{crate}@{featureset}: {code} at {prim.get('file_name')}:{prim.get('line_start')}")
     return counts, errors
 
 
@@ -81,7 +83,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=".")
     ap.add_argument("--baseline", default="tools/ci/baselines/clippy.json")
-    ap.add_argument("--features", default="netsvc")
+    ap.add_argument("--features", default="netsvc;mcserve",
+                    help="';'-separated feature sets, each linted separately (mcserve = MC server + HTTPS)")
     ap.add_argument("--from-json", help="parse a saved cargo json log instead of running clippy (tests)")
     ap.add_argument("--update", action="store_true")
     a = ap.parse_args()
@@ -90,18 +93,31 @@ def main() -> int:
         with open(a.from_json) as f:
             lines = f.readlines()
     else:
+        lines = []
+        # One pass per feature set: `netsvc` alone never compiles the Mission Control server (mcserve /
+        # mctls — the device's HTTPS stack), which therefore escaped linting entirely. Counts are keyed
+        # `<crate>@<featureset>` so each code surface has its own floor.
         tr = os.environ.get("CI_TARGET_ROOT")
-        tgt = os.path.join(tr, "clippy") if tr else os.path.join(a.root, "os/kernel/target/ci-clippy")
-        env = dict(os.environ, CARGO_TARGET_DIR=tgt)
-        p = subprocess.run(
-            ["cargo", "clippy", "-p", "kernel", "--features", a.features, "--message-format=json"],
-            cwd=os.path.join(a.root, "os/kernel"), env=env, capture_output=True, text=True)
-        lines = p.stdout.splitlines()
-        if p.returncode != 0 and not any('"level":"error"' in l for l in lines):
-            print(p.stderr[-3000:])
-            print("FAIL: clippy did not run (toolchain/build failure, not a lint) — fail-closed")
-            return 1
-    counts, errors = collect(lines)
+        stub_ui = tempfile.mkdtemp(prefix="heqk-lint-ui-")   # lint needs *a* UI dist, not the real one
+        with open(os.path.join(stub_ui, "index.html"), "w") as f:
+            f.write("<!doctype html><title>lint</title>\n")
+        for fs in a.features.split(";"):
+            tgt = os.path.join(tr, "clippy-" + fs) if tr else os.path.join(a.root, "os/kernel/target/ci-clippy-" + fs)
+            env = dict(os.environ, CARGO_TARGET_DIR=tgt, HEQK_UI_DIST=stub_ui)
+            p = subprocess.run(
+                ["cargo", "clippy", "-p", "kernel", "--features", fs, "--message-format=json"],
+                cwd=os.path.join(a.root, "os/kernel"), env=env, capture_output=True, text=True)
+            got = p.stdout.splitlines()
+            if p.returncode != 0 and not any('"level":"error"' in l for l in got):
+                print(p.stderr[-3000:])
+                print(f"FAIL: clippy [{fs}] did not run (toolchain/build failure, not a lint) — fail-closed")
+                return 1
+            lines.append((fs, got))
+    counts, errors = collections.Counter(), []
+    for fs, got in (lines if not a.from_json else [("", lines)]):
+        c, e = collect(got, fs)
+        counts.update(c)
+        errors += e
     total = sum(counts.values())
     if a.update:
         if errors:
