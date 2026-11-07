@@ -71,3 +71,5 @@ pub const ST_NOT_READY: u32 = 8;
 pub const F_HANDSHAKE_DONE: u32 = 1;
 pub const F_PEER_CLOSED: u32 = 2;
 pub const F_CLOSED: u32 = 4;
+/// The session's key exchange is the hybrid post-quantum X25519MLKEM768.
+pub const F_PQ: u32 = 8;

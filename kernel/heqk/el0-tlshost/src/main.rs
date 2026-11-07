@@ -162,6 +162,7 @@ fn pump(s: &mut Slot, mut send: Option<&[u8]>, mut close: bool) -> Result<(usize
     let out_tls = io(OUT_TLS_OFF, OUT_TLS_MAX);
     let out_plain = io(OUT_PLAIN_OFF, OUT_PLAIN_MAX);
     let (mut nt, mut np, mut flags) = (0usize, 0usize, 0u32);
+    let pq = s.conn.negotiated_key_exchange_group().map_or(false, |g| g.name() == rustls::NamedGroup::X25519MLKEM768);
     for _ in 0..64 {
         let st = s.conn.process_tls_records(&mut s.inbuf);
         let mut discard = st.discard;
@@ -185,6 +186,9 @@ fn pump(s: &mut Slot, mut send: Option<&[u8]>, mut close: bool) -> Result<(usize
             ConnectionState::BlockedHandshake => stop = true, // need more ciphertext
             ConnectionState::WriteTraffic(mut w) => {
                 flags |= F_HANDSHAKE_DONE;
+                if pq {
+                    flags |= F_PQ;
+                }
                 s.done = true;
                 if let Some(d) = send.take() {
                     nt += w.encrypt(d, &mut out_tls[nt..]).map_err(|_| ST_TOO_BIG)?;
