@@ -1,0 +1,75 @@
+name: Application Tests
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [ main, master, develop, 'claude/**' ]
+    paths:
+      - 'core/**/*.py'
+      - 'shared/**/*.py'
+      - 'products/**/*.py'
+      - 'tests/**'
+      - 'pytest.ini'
+      - '.github/workflows/app-tests.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'core/**/*.py'
+      - 'shared/**/*.py'
+      - 'products/**/*.py'
+      - 'tests/**'
+      - 'pytest.ini'
+  workflow_dispatch:
+
+jobs:
+  # GATING: the engine unit lane must be green. These tests need no live
+  # services (ClickHouse / running containers / fortress runtime) — that's
+  # enforced by the `not integration and not product` marker selection wired in
+  # tests/conftest.py. A real regression in the engines now FAILS this job.
+  # (Replaces the previous continue-on-error "theatre" that grepped install
+  # scripts for strings and validated a Django framework that was removed.)
+  engine-unit-tests:
+    name: Engine Unit Tests (gating)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Python with cache
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install test dependencies
+        run: pip install pytest numpy scipy cryptography psutil
+
+      - name: Run engine unit gate (no live services)
+        run: python -m pytest tests/ -m "not integration and not product" -q
+
+  # INFORMATIONAL until a service harness (ClickHouse + containers + fortress
+  # data/Flask) exists in CI. These tests require live infrastructure, so they
+  # cannot gate yet — but we still run them for visibility. As harnesses land,
+  # move files out of the integration/product sets in tests/conftest.py and
+  # they graduate into the gating lane above.
+  integration-tests:
+    name: Integration Tests (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Setup Python with cache
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install test dependencies
+        run: pip install pytest numpy scipy cryptography psutil
+
+      - name: Run integration + product lanes (non-gating)
+        run: python -m pytest tests/ -m "integration or product" -q || true

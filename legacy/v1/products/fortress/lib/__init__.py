@@ -1,0 +1,280 @@
+"""
+HookProbe Fortress Library
+
+Core modules for the Fortress small business security gateway.
+Extends Guardian capabilities with:
+- PostgreSQL database integration
+- VLAN management
+- Device tracking with network segmentation
+- SDN Autopilot for automatic device classification
+- AI-powered device fingerprinting (99% accuracy)
+- Ecosystem Bubble - Atmospheric Presence networking
+- Business reporting
+"""
+
+from .config import FortressConfig, VLANConfig, load_config, get_config
+from .database import Database, get_db
+
+# Lazy imports to avoid circular dependencies
+def get_device_manager():
+    """Get the device manager singleton."""
+    from .device_manager import get_device_manager as _get_dm
+    return _get_dm()
+
+def get_vlan_manager():
+    """Get the VLAN manager singleton."""
+    from .vlan_manager import get_vlan_manager as _get_vm
+    return _get_vm()
+
+def get_sdn_autopilot(ovs_bridge: str = 'FTS'):
+    """Get the SDN autopilot singleton."""
+    from .sdn_autopilot import get_sdn_autopilot as _get_sdn
+    return _get_sdn(ovs_bridge)
+
+def get_network_policy_manager():
+    """Get the network policy manager singleton."""
+    from .network_policy_manager import NetworkPolicyManager
+    return NetworkPolicyManager()
+
+def get_device_data_manager():
+    """Get the device data manager singleton (file-based CRUD)."""
+    from .device_data_manager import get_device_data_manager as _get_ddm
+    return _get_ddm()
+
+
+# ============================================================
+# AI-POWERED DEVICE FINGERPRINTING (Proprietary)
+# ============================================================
+
+def get_ml_fingerprint_classifier():
+    """Get the ML fingerprint classifier singleton.
+
+    XGBoost-based device classifier with active learning
+    for 99%+ device identification accuracy.
+    """
+    from .ml_fingerprint_classifier import get_classifier
+    return get_classifier()
+
+def get_ja3_fingerprinter():
+    """Get the JA3 TLS fingerprinter.
+
+    Passive TLS fingerprinting for OS/application detection.
+    """
+    from .ja3_fingerprint import JA3Fingerprinter
+    return JA3Fingerprinter()
+
+def get_unified_fingerprint_engine():
+    """Get the unified fingerprint engine singleton.
+
+    Combines all fingerprinting signals with weighted ensemble voting:
+    - DHCP Option 55 fingerprinting
+    - MAC OUI lookup
+    - Hostname analysis
+    - mDNS service discovery
+    - JA3/TLS fingerprinting
+    - TCP stack analysis
+    - Fingerbank API enrichment
+    """
+    from .unified_fingerprint_engine import get_fingerprint_engine
+    return get_fingerprint_engine()
+
+
+# ============================================================
+# ECOSYSTEM BUBBLE - ATMOSPHERIC PRESENCE (Proprietary)
+# Unified module located at shared/aiochi/bubble/
+# ============================================================
+
+def get_presence_sensor():
+    """Get the multi-modal presence sensor.
+
+    Detects device presence through:
+    - mDNS/Bonjour service discovery
+    - BLE proximity signatures
+    - Spatial/temporal correlation
+    """
+    from .presence_sensor import get_presence_sensor as _get_ps
+    return _get_ps()
+
+def get_behavior_clustering_engine():
+    """Get the behavioral clustering engine.
+
+    DBSCAN-based unsupervised clustering for detecting
+    "user bubbles" - devices belonging to the same person.
+    """
+    from .behavior_clustering import get_clustering_engine
+    return get_clustering_engine()
+
+def get_ecosystem_bubble_manager():
+    """Get the ecosystem bubble manager singleton.
+
+    Orchestrates presence sensing, behavioral clustering, and
+    SDN policy enforcement for same-user device groups.
+
+    NOTE: Uses unified module from shared/aiochi/bubble/
+    """
+    try:
+        # Prefer unified module from shared/aiochi
+        from shared.aiochi.bubble import get_bubble_manager
+        return get_bubble_manager()
+    except ImportError:
+        import logging
+        logging.getLogger(__name__).warning(
+            "Ecosystem bubble manager not available (shared.aiochi.bubble not installed)"
+        )
+        return None
+
+
+def get_policy_resolver():
+    """Get the policy resolver for bubble->OpenFlow mapping.
+
+    Maps bubbles and devices to OpenFlow network policies.
+    Supports:
+    - Device-specific policy overrides (priority 900)
+    - Bubble default policies (priority 600)
+    - Quarantine for unknown devices
+
+    NOTE: Uses unified module from shared/aiochi/bubble/
+    """
+    try:
+        from shared.aiochi.bubble import get_policy_resolver
+        return get_policy_resolver()
+    except ImportError:
+        # Policy resolver only available in unified module
+        raise ImportError("PolicyResolver requires shared/aiochi/bubble module")
+
+
+def get_d2d_connection_graph():
+    """Get the D2D connection graph analyzer.
+
+    Analyzes NAPSE connection events to detect device-to-device communication
+    patterns and calculate affinity scores for bubble detection.
+
+    Affinity Score Formula:
+    S_aff = (Discovery Hits × 10) + (D2D Flows × 5) + (Temporal Sync × 2)
+    """
+    from .connection_graph import get_connection_analyzer
+    return get_connection_analyzer()
+
+
+# NOTE: the clickhouse_graph / n8n_webhook / reinforcement_feedback factory
+# stubs were removed — those modules migrated to the aiochi-bubble container
+# (shared/aiochi/bubble), reached via the REST shim aiochi_bubble_client. The
+# old local stubs imported deleted files and had zero callers.
+
+
+# ============================================================
+# AI AUTOPILOT - EVENT-DRIVEN EFFICIENCY (Proprietary)
+# ============================================================
+
+def get_efficiency_engine():
+    """Get the AI Autopilot efficiency engine singleton.
+
+    Central coordinator for event-driven device identification.
+    Orchestrates DHCP sentinel, MAC watcher, and on-demand probes.
+    """
+    from .autopilot.efficiency_engine import get_efficiency_engine as _get_ee
+    return _get_ee()
+
+
+def get_dhcp_sentinel():
+    """Get the DHCP sentinel singleton.
+
+    Low-power hook into dnsmasq DHCP events for new device detection.
+    """
+    from .autopilot.dhcp_sentinel import get_dhcp_sentinel as _get_ds
+    return _get_ds()
+
+
+def get_mac_watcher():
+    """Get the OVS MAC watcher singleton.
+
+    Monitors OVS MAC table for unknown devices.
+    """
+    from .autopilot.mac_watcher import get_mac_watcher as _get_mw
+    return _get_mw()
+
+
+def get_probe_service():
+    """Get the on-demand probe service singleton.
+
+    Performs burst packet capture for device fingerprinting.
+    """
+    from .autopilot.probe_service import get_probe_service as _get_ps
+    return _get_ps()
+
+
+def get_ipfix_collector():
+    """Get the IPFIX collector singleton.
+
+    Collects sampled flow data for D2D relationship detection.
+    """
+    from .autopilot.ipfix_collector import get_ipfix_collector as _get_ic
+    return _get_ic()
+
+
+# ============================================================
+# G.N.C. ARCHITECTURE - HOST AGENT CLIENT
+# ============================================================
+
+def get_host_agent_client():
+    """Get the FTS Host Agent client singleton.
+
+    Unix Domain Socket client for container-to-host communication.
+    Enables the containerized web UI to control hostapd on the host
+    for WiFi device disconnect and management.
+
+    G.N.C. Architecture:
+    - Container sends JSON command via UDS
+    - Host agent validates and executes hostapd_cli
+    - Response returned to container
+    """
+    from .host_agent_client import get_host_agent_client as _get_hac
+    return _get_hac()
+
+
+def is_host_agent_available():
+    """Check if the host agent is available and responding.
+
+    Returns True if the UDS socket exists and agent responds to ping.
+    """
+    from .host_agent_client import is_host_agent_available as _is_available
+    return _is_available()
+
+
+__all__ = [
+    # Config
+    'FortressConfig',
+    'VLANConfig',
+    'load_config',
+    'get_config',
+    # Database
+    'Database',
+    'get_db',
+    # Device management
+    'get_device_manager',
+    'get_vlan_manager',
+    'get_sdn_autopilot',
+    'get_network_policy_manager',
+    'get_device_data_manager',
+    # AI-Powered Device Fingerprinting (Proprietary)
+    'get_ml_fingerprint_classifier',
+    'get_ja3_fingerprinter',
+    'get_unified_fingerprint_engine',
+    # Ecosystem Bubble - Atmospheric Presence (Proprietary)
+    'get_presence_sensor',
+    'get_behavior_clustering_engine',
+    'get_ecosystem_bubble_manager',
+    'get_policy_resolver',
+    'get_d2d_connection_graph',
+    # AI Autopilot - Event-Driven Efficiency (Proprietary)
+    'get_efficiency_engine',
+    'get_dhcp_sentinel',
+    'get_mac_watcher',
+    'get_probe_service',
+    'get_ipfix_collector',
+    # G.N.C. Architecture - Host Agent
+    'get_host_agent_client',
+    'is_host_agent_available',
+]
+
+__version__ = '5.6.0'

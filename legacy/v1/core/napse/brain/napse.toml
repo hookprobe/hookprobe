@@ -1,0 +1,112 @@
+# =============================================================================
+# Napse Configuration
+# Neural Adaptive Packet Synthesis Engine - Mojo AI Intent Attribution
+# =============================================================================
+
+[input]
+# Shared ring buffer path (Aegis writes, Napse reads)
+ring_buffer_path = "/dev/shm/aegis-napse-ring"
+
+# Ring buffer size (must match Aegis config)
+ring_buffer_size = 16777216
+
+# Feature vector dimensionality (must match Aegis)
+feature_dims = 32
+
+# Batch size for SIMD processing (8 or 16 depending on CPU)
+simd_batch_size = 8
+
+# Consumer poll interval (microseconds) when ring is empty
+idle_poll_us = 100
+
+[classification]
+# Intent threat classes (ordered by severity)
+threat_classes = [
+    "benign",
+    "scan",
+    "bruteforce",
+    "c2_beacon",
+    "exfiltration",
+    "ddos",
+    "malware",
+    "lateral_movement",
+]
+
+# Severity mapping (1=critical, 2=high, 3=medium, 4=low)
+# Each class has a base severity; confidence modifies it
+[classification.severity]
+c2_beacon = 1
+exfiltration = 1
+malware = 1
+ddos = 2
+bruteforce = 2
+lateral_movement = 2
+scan = 3
+benign = 4
+
+# Minimum confidence threshold to emit an intent event
+min_confidence = 0.7
+
+# Prior probability update interval (seconds)
+prior_update_interval_s = 300
+
+# Baseline drift detection threshold (Manhattan distance)
+drift_threshold = 0.9
+
+[hmm]
+# Hidden Markov Model configuration for intent state tracking
+enabled = true
+
+# Number of hidden states per flow
+num_states = 8
+
+# State names (for human-readable output)
+state_names = [
+    "idle",
+    "reconnaissance",
+    "weaponization",
+    "delivery",
+    "exploitation",
+    "installation",
+    "command_control",
+    "action_on_objectives",
+]
+
+# Transition probability learning rate
+learning_rate = 0.01
+
+# Maximum flows to track simultaneously
+max_tracked_flows = 100000
+
+# Flow expiry (seconds without activity)
+flow_expiry_s = 300
+
+[output]
+# Output format: "json" or "binary"
+format = "json"
+
+# Output directory for intent classification events
+output_path = "/var/log/napse/"
+
+# ClickHouse direct insert
+clickhouse_enabled = true
+clickhouse_url = "http://172.32.0.10:8123"
+clickhouse_database = "hookprobe_ids"
+
+# MSSP API forwarding
+mssp_enabled = false
+mssp_url = "https://mssp.hookprobe.com/api/v1/security/alerts/ingest/"
+
+[autotuning]
+# Mojo autotuning: optimize SIMD operations for target hardware
+enabled = true
+
+# Hardware detection (auto, cpu, gpu, npu)
+target = "auto"
+
+# Warm-up packets before autotuning kicks in
+warmup_packets = 10000
+
+[logging]
+level = "info"
+output = "/var/log/napse/napse.log"

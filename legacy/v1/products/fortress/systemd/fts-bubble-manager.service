@@ -1,0 +1,26 @@
+[Unit]
+Description=HookProbe Fortress Ecosystem Bubble Manager (Container Monitor)
+Documentation=https://github.com/hookprobe/hookprobe
+# Wait for fortress.service which starts all containers via podman-compose
+After=network.target openvswitch-switch.service fortress.service
+Requires=fortress.service
+# Start rate limiting
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# The bubble manager now runs in the fts-bubble-manager container.
+# This service just verifies the container is running.
+ExecStart=/bin/bash -c 'for i in 1 2 3 4 5; do podman inspect fts-bubble-manager --format "{{.State.Status}}" 2>/dev/null | grep -q running && exit 0; sleep 2; done; echo "Container fts-bubble-manager not running"; exit 1'
+ExecStop=/bin/true
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-bubble-manager
+
+[Install]
+WantedBy=multi-user.target

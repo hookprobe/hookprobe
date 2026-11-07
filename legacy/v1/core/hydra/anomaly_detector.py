@@ -1,0 +1,1156 @@
+#!/usr/bin/env python3
+"""
+HookProbe HYDRA Anomaly Detector
+==================================
+
+Isolation Forest anomaly detection on 24-feature IP behavior vectors.
+
+Modes:
+  - BASELINE: Collects normal traffic features for initial model training
+  - DETECT:   Scores new observations against trained model
+  - RETRAIN:  Periodically retrains on labeled data (operator feedback)
+
+Scoring:
+  - anomaly_score < 0.5   → benign
+  - anomaly_score 0.5-0.7 → suspicious (alert only)
+  - anomaly_score > 0.7   → malicious  (auto-block if 3+ consecutive windows)
+
+Output:
+  - ClickHouse: hydra_verdicts table
+  - Discord alerts for malicious verdicts
+
+Usage:
+    python3 anomaly_detector.py [--mode baseline|detect]
+"""
+
+import ipaddress
+import os
+import sys
+import time
+import json
+import math
+import signal
+import hmac
+import pickle
+import logging
+import hashlib
+from pathlib import Path
+from datetime import datetime, timezone
+from typing import Dict, List, Optional, Tuple
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
+from urllib.parse import urlencode
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [ANOMALY] %(levelname)s: %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# ============================================================================
+# CONFIGURATION
+# ============================================================================
+
+CH_HOST = os.environ.get('CLICKHOUSE_HOST', '127.0.0.1')
+CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
+CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
+CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
+CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_select as ch_query, ch_insert
+
+DISCORD_WEBHOOK = os.environ.get('DISCORD_WEBHOOK_URL', '')
+
+# Detection interval (seconds) — how often to score new features
+DETECT_INTERVAL = int(os.environ.get('DETECT_INTERVAL', '300'))  # 5 minutes
+
+# Multi-model consensus: the Isolation Forest is one voter. SENTINEL evidence
+# (Bayes + profile-deviation + CVE ensemble, written by sentinel_engine.py to
+# the sentinel_evidence table) is a second, independent voter. Blocking now
+# requires corroboration — an IF 'malicious' is downgraded to 'suspicious'
+# when SENTINEL confidently calls the IP benign, which closes the long-standing
+# gap where IF false positives could escalate to a block on their own.
+SENTINEL_CONSENSUS = os.environ.get('SENTINEL_CONSENSUS', '1') == '1'
+# How far back to consider a SENTINEL verdict authoritative for an IP. SENTINEL
+# runs on its own ~300s cadence; widen the window so evidence overlaps the
+# detection window even when the two cycles are out of phase.
+SENTINEL_WINDOW = int(os.environ.get('SENTINEL_WINDOW', str(max(DETECT_INTERVAL * 3, 900))))
+# Minimum SENTINEL confidence for a benign verdict to veto an IF malicious
+# verdict (drop to suspicious) or for a malicious verdict to corroborate.
+SENTINEL_VETO_CONF = float(os.environ.get('SENTINEL_VETO_CONF', '0.6'))
+
+# Predictive alerts (predictor_engine.py → predictive_alerts) are forward-
+# looking attack forecasts. They were previously written and never read by
+# any detector. We now consume open high-severity predictions to PRE-EMPT
+# the predicted attack: an IP named in a prediction has its suspicion raised
+# one level. Predictions never auto-block on their own (they are lower
+# confidence than observed evidence) — benign→suspicious surfaces the IP,
+# and suspicious→malicious only for high-confidence 'critical' forecasts.
+PREDICTIVE_CONSENSUS = os.environ.get('PREDICTIVE_CONSENSUS', '1') == '1'
+PREDICTIVE_WINDOW = int(os.environ.get('PREDICTIVE_WINDOW', '3600'))  # 1h
+PREDICTIVE_MALICIOUS_CONF = float(os.environ.get('PREDICTIVE_MALICIOUS_CONF', '0.8'))
+
+# Trusted-network veto. The Isolation Forest was trained mostly on internal
+# traffic, so it readily flags RFC1918 / known-trusted hosts (e.g. the mesh
+# client pool on 10.0.x) as anomalous — producing block requests for internal
+# IPs. We never classify a trusted IP as malicious/suspicious and never block
+# it. Reuse the canonical allowlist (core/hydra/trusted_networks.py); fall back
+# to RFC1918 detection if the module is unavailable.
+try:
+    from trusted_networks import is_trusted as _is_trusted_net
+except ImportError:
+    try:
+        from core.hydra.trusted_networks import is_trusted as _is_trusted_net
+    except ImportError:
+        _is_trusted_net = None
+
+
+def _is_trusted_ip(ip: str) -> bool:
+    """True if ip is internal/RFC1918 or in the trusted allowlist."""
+    if _is_trusted_net is not None:
+        try:
+            return bool(_is_trusted_net(ip))
+        except Exception:
+            pass
+    try:
+        return ipaddress.ip_address(ip).is_private
+    except ValueError:
+        return False
+
+# Minimum training samples before model is usable
+MIN_TRAINING_SAMPLES = int(os.environ.get('MIN_TRAINING_SAMPLES', '100'))
+
+# Baseline collection period (hours) — how long to collect before first train
+BASELINE_HOURS = int(os.environ.get('BASELINE_HOURS', '24'))
+
+# Retrain interval (hours)
+RETRAIN_HOURS = int(os.environ.get('RETRAIN_HOURS', '168'))  # Weekly
+
+# Model persistence path
+MODEL_DIR = Path(os.environ.get('MODEL_DIR', '/app/models'))
+MODEL_PATH = MODEL_DIR / 'isolation_forest.pkl'
+SCALER_PATH = MODEL_DIR / 'feature_scaler.pkl'
+META_PATH = MODEL_DIR / 'model_meta.json'
+
+# HMAC key for model integrity verification (CWE-502 mitigation)
+# Requires env var or keyfile — no hardcoded fallback.
+def _load_hmac_key() -> Optional[bytes]:
+    env_key = os.environ.get('HOOKPROBE_MODEL_KEY')
+    if env_key:
+        return env_key.encode()
+    keyfile = Path('/etc/hookprobe/model-integrity.key')
+    if keyfile.exists():
+        return keyfile.read_bytes().strip()
+    return None
+
+_MODEL_HMAC_KEY = _load_hmac_key()
+
+# Default thresholds (overridden by adaptive calibration after training)
+SCORE_SUSPICIOUS = 0.5
+SCORE_MALICIOUS = 0.7
+
+# Adaptive thresholds computed from training data score distribution
+# These are updated after each model training to match percentiles
+_adaptive_suspicious = None  # Set to 95th percentile of training scores
+_adaptive_malicious = None   # Set to 99th percentile of training scores
+
+# Number of features (must match feature_extractor.py)
+N_FEATURES = 24
+
+running = True
+
+
+def signal_handler(sig, frame):
+    global running
+    logger.info(f"Received signal {sig}, shutting down...")
+    running = False
+
+
+signal.signal(signal.SIGTERM, signal_handler)
+signal.signal(signal.SIGINT, signal_handler)
+
+
+# ============================================================================
+# CLICKHOUSE CLIENT
+# ============================================================================
+
+# ============================================================================
+# FEATURE LOADING
+# ============================================================================
+
+def load_recent_features(window_seconds: int) -> Tuple[List[str], List[List[float]]]:
+    """
+    Load feature vectors from hydra_ip_features for the given time window.
+    Returns (ips, feature_vectors).
+    """
+    query = f"""
+        SELECT
+            IPv4NumToString(src_ip) AS ip,
+            feature_vector
+        FROM {CH_DB}.hydra_ip_features
+        WHERE timestamp >= now() - INTERVAL {window_seconds} SECOND
+          AND length(feature_vector) = {N_FEATURES}
+        ORDER BY timestamp DESC
+    """
+
+    result = ch_query(query)
+    if not result:
+        return [], []
+
+    ips = []
+    vectors = []
+    for line in result.strip().split('\n'):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            ip = row['ip']
+            vec = row['feature_vector']
+            if len(vec) == N_FEATURES:
+                ips.append(ip)
+                vectors.append([float(v) for v in vec])
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+
+    return ips, vectors
+
+
+def load_training_data(hours: int) -> List[List[float]]:
+    """
+    Load training data from the last N hours.
+    Excludes IPs that have been marked as malicious by operators.
+    """
+    query = f"""
+        SELECT feature_vector
+        FROM {CH_DB}.hydra_ip_features
+        WHERE timestamp >= now() - INTERVAL {hours} HOUR
+          AND length(feature_vector) = {N_FEATURES}
+          AND src_ip NOT IN (
+              SELECT src_ip
+              FROM {CH_DB}.hydra_verdicts
+              WHERE operator_decision = 'confirm'
+                AND verdict = 'malicious'
+                AND timestamp >= now() - INTERVAL {hours} HOUR
+          )
+        ORDER BY timestamp
+    """
+
+    result = ch_query(query)
+    if not result:
+        return []
+
+    vectors = []
+    for line in result.strip().split('\n'):
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            vec = row['feature_vector']
+            if len(vec) == N_FEATURES:
+                vectors.append([float(v) for v in vec])
+        except (json.JSONDecodeError, KeyError, TypeError):
+            continue
+
+    return vectors
+
+
+# ============================================================================
+# ISOLATION FOREST (Pure Python — no scikit-learn dependency)
+# ============================================================================
+# scikit-learn is 200MB+ installed — too heavy for a container that only needs
+# Isolation Forest. This pure-Python implementation follows the original
+# Liu et al. 2008 paper exactly.
+
+import random
+
+
+def _c(n: int) -> float:
+    """Average path length of unsuccessful search in BST (Eq. 1 from paper)."""
+    if n <= 1:
+        return 0.0
+    if n == 2:
+        return 1.0
+    # H(n-1) ≈ ln(n-1) + euler_gamma
+    return 2.0 * (math.log(n - 1) + 0.5772156649) - 2.0 * (n - 1) / n
+
+
+class IsolationTree:
+    """A single isolation tree."""
+
+    __slots__ = ('left', 'right', 'split_feature', 'split_value', 'size', 'height')
+
+    def __init__(self):
+        self.left: Optional['IsolationTree'] = None
+        self.right: Optional['IsolationTree'] = None
+        self.split_feature: int = -1
+        self.split_value: float = 0.0
+        self.size: int = 0
+        self.height: int = 0
+
+    @staticmethod
+    def build(data: List[List[float]], height_limit: int, current_height: int = 0) -> 'IsolationTree':
+        node = IsolationTree()
+        node.size = len(data)
+        node.height = current_height
+
+        if len(data) <= 1 or current_height >= height_limit:
+            return node
+
+        n_features = len(data[0])
+
+        # Shuffle all feature indices and try each once (no replacement)
+        feature_order = list(range(n_features))
+        random.shuffle(feature_order)
+        q, min_val, max_val = -1, 0.0, 0.0
+        for f in feature_order:
+            col = [row[f] for row in data]
+            lo = min(col)
+            hi = max(col)
+            if hi > lo:
+                q, min_val, max_val = f, lo, hi
+                break
+        else:
+            return node
+
+        node.split_feature = q
+        node.split_value = min_val + random.random() * (max_val - min_val)
+
+        left_data = [row for row in data if row[q] < node.split_value]
+        right_data = [row for row in data if row[q] >= node.split_value]
+
+        # Avoid degenerate splits
+        if len(left_data) == 0 or len(right_data) == 0:
+            return node
+
+        node.left = IsolationTree.build(left_data, height_limit, current_height + 1)
+        node.right = IsolationTree.build(right_data, height_limit, current_height + 1)
+
+        return node
+
+    def path_length(self, x: List[float]) -> float:
+        """Compute path length for a single observation."""
+        if self.left is None or self.right is None or self.split_feature < 0:
+            return float(self.height) + _c(self.size)
+
+        if x[self.split_feature] < self.split_value:
+            return self.left.path_length(x)
+        else:
+            return self.right.path_length(x)
+
+
+class IsolationForest:
+    """
+    Isolation Forest — Liu et al. 2008.
+
+    Pure Python implementation suitable for modest-scale network anomaly detection.
+    """
+
+    def __init__(self, n_trees: int = 100, sample_size: int = 256):
+        self.n_trees = n_trees
+        self.sample_size = sample_size
+        self.trees: List[IsolationTree] = []
+        self._n_train: int = 0
+
+    def fit(self, data: List[List[float]]) -> 'IsolationForest':
+        """Train the forest on the provided data."""
+        if not data:
+            raise ValueError("Cannot fit on empty data")
+
+        self._n_train = len(data)
+        psi = min(self.sample_size, len(data))
+        height_limit = int(math.ceil(math.log2(max(psi, 2))))
+
+        self.trees = []
+        for _ in range(self.n_trees):
+            sample = random.sample(data, psi) if len(data) > psi else list(data)
+            tree = IsolationTree.build(sample, height_limit)
+            self.trees.append(tree)
+
+        logger.info(f"Trained forest: {self.n_trees} trees, "
+                     f"sample_size={psi}, height_limit={height_limit}, "
+                     f"n_train={self._n_train}")
+        return self
+
+    def score_samples(self, data: List[List[float]]) -> List[float]:
+        """
+        Compute anomaly scores for each observation.
+
+        Returns scores in [0, 1]:
+          - Close to 1.0 = anomaly
+          - Close to 0.5 = normal
+          - Close to 0.0 = very normal (dense region)
+        """
+        if not self.trees:
+            return [0.5] * len(data)
+
+        psi = min(self.sample_size, self._n_train)
+        c_psi = _c(psi)
+        if c_psi == 0:
+            return [0.5] * len(data)
+
+        scores = []
+        for x in data:
+            avg_path = sum(tree.path_length(x) for tree in self.trees) / len(self.trees)
+            # Anomaly score: s(x, psi) = 2^(-E(h(x)) / c(psi))
+            score = 2.0 ** (-avg_path / c_psi)
+            scores.append(score)
+
+        return scores
+
+
+# ============================================================================
+# FEATURE NORMALIZATION (Z-Score)
+# ============================================================================
+
+class FeatureScaler:
+    """Online Z-score scaler with running mean/variance."""
+
+    def __init__(self, n_features: int):
+        self.n = n_features
+        self.count = 0
+        self.mean = [0.0] * n_features
+        self.m2 = [0.0] * n_features  # Running sum of squared differences
+
+    def partial_fit(self, data: List[List[float]]) -> None:
+        """Update running statistics with new data (Welford's)."""
+        for x in data:
+            self.count += 1
+            for i in range(self.n):
+                delta = x[i] - self.mean[i]
+                self.mean[i] += delta / self.count
+                delta2 = x[i] - self.mean[i]
+                self.m2[i] += delta * delta2
+
+    def transform(self, data: List[List[float]]) -> List[List[float]]:
+        """Z-score normalize using current statistics."""
+        if self.count < 2:
+            return data
+
+        std = [math.sqrt(self.m2[i] / self.count) if self.m2[i] > 0 else 0.0
+               for i in range(self.n)]
+
+        result = []
+        for x in data:
+            scaled = [(x[i] - self.mean[i]) / std[i] if std[i] > 0 else 0.0
+                      for i in range(self.n)]
+            result.append(scaled)
+        return result
+
+    def fit_transform(self, data: List[List[float]]) -> List[List[float]]:
+        """Fit and transform in one step."""
+        self.count = 0
+        self.mean = [0.0] * self.n
+        self.m2 = [0.0] * self.n
+        self.partial_fit(data)
+        return self.transform(data)
+
+
+# ============================================================================
+# MODEL PERSISTENCE
+# ============================================================================
+
+def _save_signed_pickle(obj, path: Path):
+    """Save pickle with HMAC-SHA256 signature (CWE-502 mitigation)."""
+    if _MODEL_HMAC_KEY is None:
+        logger.error("HOOKPROBE_MODEL_KEY env var not set — refusing to save model")
+        return
+    model_bytes = pickle.dumps(obj, protocol=pickle.HIGHEST_PROTOCOL)
+    path.write_bytes(model_bytes)
+    sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+    sig_path = path.with_suffix(path.suffix + '.sig')
+    sig_path.write_text(sig)
+
+
+def _load_verified_pickle(path: Path):
+    """Load pickle with HMAC-SHA256 integrity verification (CWE-502 fix)."""
+    if _MODEL_HMAC_KEY is None:
+        logger.error("HOOKPROBE_MODEL_KEY env var not set — refusing to load model")
+        return None
+    sig_path = path.with_suffix(path.suffix + '.sig')
+    try:
+        model_bytes = path.read_bytes()
+        if sig_path.exists():
+            expected_sig = sig_path.read_text().strip()
+            actual_sig = hmac.new(_MODEL_HMAC_KEY, model_bytes, hashlib.sha256).hexdigest()
+            if not hmac.compare_digest(expected_sig, actual_sig):
+                logger.error(f"SECURITY: HMAC verification failed for {path}")
+                return None
+        else:
+            logger.warning(f"No .sig file for {path}, skipping load")
+            return None
+        return pickle.loads(model_bytes)
+    except Exception as e:
+        logger.warning(f"Could not load verified pickle {path}: {e}")
+        return None
+
+
+def save_model(forest: IsolationForest, scaler: FeatureScaler,
+               meta: dict) -> bool:
+    """Save model, scaler, and metadata to disk with HMAC signatures."""
+    try:
+        MODEL_DIR.mkdir(parents=True, exist_ok=True)
+
+        _save_signed_pickle(forest, MODEL_PATH)
+        _save_signed_pickle(scaler, SCALER_PATH)
+
+        with open(META_PATH, 'w') as f:
+            json.dump(meta, f, indent=2)
+
+        logger.info(f"Model saved to {MODEL_DIR} with HMAC signatures")
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to save model: {e}")
+        return False
+
+
+def load_model() -> Tuple[Optional[IsolationForest], Optional[FeatureScaler], dict]:
+    """Load model from disk with HMAC verification."""
+    try:
+        if not MODEL_PATH.exists():
+            return None, None, {}
+
+        if not SCALER_PATH.exists():
+            logger.warning("Model file exists but scaler is missing — removing orphaned model")
+            MODEL_PATH.unlink(missing_ok=True)
+            return None, None, {}
+
+        forest = _load_verified_pickle(MODEL_PATH)
+        scaler = _load_verified_pickle(SCALER_PATH)
+
+        if forest is None or scaler is None:
+            logger.warning("Model HMAC verification failed, using untrained state")
+            return None, None, {}
+
+        meta = {}
+        if META_PATH.exists():
+            with open(META_PATH) as f:
+                meta = json.load(f)
+
+        logger.info(f"Loaded model from {MODEL_DIR} "
+                     f"(trained: {meta.get('trained_at', 'unknown')})")
+        return forest, scaler, meta
+
+    except Exception as e:
+        logger.error(f"Failed to load model: {e}")
+        return None, None, {}
+
+
+# ============================================================================
+# VERDICT WRITING
+# ============================================================================
+
+def _ch_escape(s: str) -> str:
+    """Escape a string for safe interpolation into a ClickHouse query."""
+    return s.replace('\\', '\\\\').replace("'", "\\'")
+
+
+def _validate_ip(ip: str) -> str:
+    """Validate that ip is a well-formed IPv4 address; raise ValueError otherwise."""
+    ipaddress.IPv4Address(ip)
+    return ip
+
+
+def write_verdicts(verdicts: List[dict]) -> int:
+    """Write anomaly verdicts to ClickHouse."""
+    if not verdicts:
+        return 0
+
+    rows = []
+    for v in verdicts:
+        ts = v['timestamp']
+        try:
+            ip = _validate_ip(v['ip'])
+        except (ValueError, KeyError):
+            logger.warning(f"write_verdicts: skipping verdict with invalid IP: {v.get('ip')!r}")
+            continue
+        score = v['anomaly_score']
+        model_scores = "[" + ",".join(f"{s:.6f}" for s in v.get('model_scores', [score])) + "]"
+        verdict = _ch_escape(str(v['verdict']))
+        action = _ch_escape(str(v.get('action', 'none')))
+
+        rows.append(
+            f"('{ts}', IPv4StringToNum('{ip}'), {score:.6f}, "
+            f"{model_scores}, '{verdict}', '{action}', '', NULL)"
+        )
+
+    if not rows:
+        return 0
+
+    query = (
+        f"INSERT INTO {CH_DB}.hydra_verdicts "
+        "(timestamp, src_ip, anomaly_score, model_scores, verdict, "
+        "action_taken, operator_decision, operator_decided_at) VALUES "
+        + ", ".join(rows)
+    )
+
+    if ch_insert(query):
+        return len(rows)
+    return 0
+
+
+# ============================================================================
+# DISCORD ALERTS
+# ============================================================================
+
+def send_discord_alert(ip: str, score: float, verdict: str, action: str) -> None:
+    """Send a Discord alert for malicious verdicts."""
+    if not DISCORD_WEBHOOK:
+        return
+
+    try:
+        embed = {
+            "embeds": [{
+                "title": "HYDRA ML Alert",
+                "color": 0xFF6B6B if verdict == 'malicious' else 0xFFAA00,
+                "fields": [
+                    {"name": "Source IP", "value": f"`{ip}`", "inline": True},
+                    {"name": "Anomaly Score", "value": f"{score:.3f}", "inline": True},
+                    {"name": "Verdict", "value": verdict.upper(), "inline": True},
+                    {"name": "Action", "value": action, "inline": True},
+                ],
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "footer": {"text": "HookProbe HYDRA Anomaly Detector"}
+            }]
+        }
+
+        data = json.dumps(embed).encode('utf-8')
+        req = Request(DISCORD_WEBHOOK, data=data)
+        req.add_header('Content-Type', 'application/json')
+
+        with urlopen(req, timeout=10) as resp:
+            resp.read()
+
+    except Exception as e:
+        logger.debug(f"Discord alert failed: {e}")
+
+
+# ============================================================================
+# TRACKING: Consecutive malicious detections per IP
+# ============================================================================
+
+# Track consecutive malicious windows per IP for graduated response
+# Bounded to prevent memory leak: evict oldest entries beyond 10,000
+consecutive_malicious: Dict[str, int] = {}
+_MAX_TRACKED_IPS = 10000
+
+
+def determine_action(ip: str, verdict: str) -> str:
+    """
+    Determine action based on verdict and history.
+
+    - First malicious window: alert
+    - Second consecutive: throttle (log for manual review)
+    - Third+ consecutive: block (add to nftables via hydra_blocks)
+    """
+    if verdict == 'malicious':
+        consecutive_malicious[ip] = consecutive_malicious.get(ip, 0) + 1
+        count = consecutive_malicious[ip]
+
+        # Evict oldest entries if dict grows too large (memory leak prevention)
+        if len(consecutive_malicious) > _MAX_TRACKED_IPS:
+            # Remove IPs with lowest counts (least suspicious)
+            sorted_ips = sorted(consecutive_malicious, key=consecutive_malicious.get)
+            for old_ip in sorted_ips[:len(consecutive_malicious) - _MAX_TRACKED_IPS]:
+                del consecutive_malicious[old_ip]
+
+        if count >= 3:
+            return 'block'
+        elif count >= 2:
+            return 'throttle'
+        else:
+            return 'alert'
+
+    elif verdict == 'suspicious':
+        # Don't reset counter on suspicious, but don't increment either
+        return 'alert'
+
+    else:
+        # Benign — reset counter
+        consecutive_malicious.pop(ip, None)
+        return 'none'
+
+
+def load_sentinel_verdicts(window_seconds: int) -> Dict[str, Tuple[str, float, float]]:
+    """Load the latest SENTINEL evidence verdict per IP within the window.
+
+    Returns {ip: (verdict, confidence, sentinel_score)}. SENTINEL is the
+    Bayes + profile + CVE ensemble (sentinel_engine.py); it is an independent
+    voter to the Isolation Forest. Returns an empty dict on any error so the
+    detector degrades gracefully to IF-only scoring.
+    """
+    if not SENTINEL_CONSENSUS:
+        return {}
+    query = (
+        "SELECT IPv4NumToString(src_ip) AS ip, "
+        "argMax(verdict, timestamp) AS v, "
+        "argMax(confidence, timestamp) AS conf, "
+        "argMax(sentinel_score, timestamp) AS sscore "
+        f"FROM {CH_DB}.sentinel_evidence "
+        f"WHERE timestamp > now() - INTERVAL {int(window_seconds)} SECOND "
+        "GROUP BY src_ip"
+    )
+    raw = ch_query(query)
+    if not raw:
+        return {}
+    out: Dict[str, Tuple[str, float, float]] = {}
+    for line in raw.strip().splitlines():
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            out[row['ip']] = (
+                str(row.get('v', 'unknown')),
+                float(row.get('conf', 0.0) or 0.0),
+                float(row.get('sscore', 0.0) or 0.0),
+            )
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
+def consensus_verdict(
+    iso_verdict: str,
+    sentinel: Optional[Tuple[str, float, float]],
+) -> Tuple[str, str]:
+    """Combine the Isolation Forest verdict with SENTINEL evidence.
+
+    Returns (final_verdict, agreement) where agreement is one of
+    'if_only' (no SENTINEL evidence), 'confirmed' (both agree malicious),
+    'vetoed' (SENTINEL benign overrode IF), 'raised' (SENTINEL escalated a
+    benign IF), or 'concur'. The guiding rule: a block must be corroborated —
+    IF malicious alone is NOT enough when SENTINEL confidently says benign.
+    """
+    if not sentinel:
+        return iso_verdict, 'if_only'
+
+    s_verdict, s_conf, _ = sentinel
+
+    # SENTINEL confidently benign → veto an IF escalation (prevents FP blocks).
+    if s_verdict == 'benign' and s_conf >= SENTINEL_VETO_CONF:
+        if iso_verdict == 'malicious':
+            return 'suspicious', 'vetoed'
+        if iso_verdict == 'suspicious':
+            return 'benign', 'vetoed'
+        return iso_verdict, 'concur'
+
+    # SENTINEL confidently malicious.
+    if s_verdict == 'malicious' and s_conf >= SENTINEL_VETO_CONF:
+        if iso_verdict == 'malicious':
+            return 'malicious', 'confirmed'
+        if iso_verdict == 'benign':
+            # Raise to suspicious (alert), but don't auto-block on SENTINEL alone.
+            return 'suspicious', 'raised'
+        return 'malicious', 'raised'
+
+    # SENTINEL suspicious or low-confidence → nudge but defer to IF.
+    if s_verdict == 'suspicious' and iso_verdict == 'benign':
+        return 'suspicious', 'raised'
+
+    return iso_verdict, 'concur'
+
+
+def load_predictive_ips(window_seconds: int) -> Dict[str, Tuple[str, float]]:
+    """Load IPs named in open predictive_alerts within the window.
+
+    Returns {ip: (severity, confidence)} keeping the highest-confidence
+    alert per IP. Returns {} on any error so detection degrades gracefully.
+    """
+    if not PREDICTIVE_CONSENSUS:
+        return {}
+    # Unnest involved_ips and keep the strongest open alert per IP.
+    query = (
+        "SELECT IPv4NumToString(ip) AS ip, "
+        "argMax(severity, confidence) AS sev, "
+        "max(confidence) AS conf "
+        "FROM (SELECT arrayJoin(involved_ips) AS ip, severity, confidence "
+        f"      FROM {CH_DB}.predictive_alerts "
+        f"      WHERE status = 'open' "
+        f"        AND created_at > now() - INTERVAL {int(window_seconds)} SECOND "
+        "        AND severity IN ('high', 'critical')) "
+        "GROUP BY ip"
+    )
+    raw = ch_query(query)
+    if not raw:
+        return {}
+    out: Dict[str, Tuple[str, float]] = {}
+    for line in raw.strip().splitlines():
+        if not line:
+            continue
+        try:
+            row = json.loads(line)
+            out[row['ip']] = (
+                str(row.get('sev', 'high')),
+                float(row.get('conf', 0.0) or 0.0),
+            )
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
+def load_cno_benign_vetoes(window_seconds: int) -> set:
+    """The 'one self' seam (SSOL C4): CNO's LEARNED outcome knowledge steers
+    HYDRA's verdict.
+
+    Returns the set of IPs the organism's outcome ledger recently labelled
+    BENIGN (via A.5 allow-reconciliation — correctly-allowed sources, RDAP-
+    corroborated CDNs/ISPs, operator FPs). This is the brain influencing the
+    body — but VETO-ONLY (it can only DOWNGRADE a verdict, never amplify), so
+    there is no oscillation: the benign label is an independent outcome signal,
+    not a re-read of the current score. A vetoed IP that is actually attacking
+    still re-escalates (the malicious evidence overrides on the next ledger
+    pass). Gated by CNO_OUTCOME_VETO env (default on); '' on error → IF-only.
+    """
+    if os.environ.get('CNO_OUTCOME_VETO', '1') != '1':
+        return set()
+    query = (
+        "SELECT DISTINCT src_ip "
+        f"FROM {CH_DB}.cno_outcome_ledger "
+        f"WHERE weak_label = 'benign' AND label_conf >= 0.5 "
+        f"AND ts > now() - INTERVAL {int(window_seconds)} SECOND "
+        # exclude any IP the ledger ALSO flagged malicious in the window
+        f"AND src_ip NOT IN ("
+        f"  SELECT src_ip FROM {CH_DB}.cno_outcome_ledger "
+        f"  WHERE weak_label = 'malicious' "
+        f"  AND ts > now() - INTERVAL {int(window_seconds)} SECOND)"
+    )
+    raw = ch_query(query)
+    if not raw:
+        return set()
+    out = set()
+    for line in raw.strip().splitlines():
+        if not line:
+            continue
+        try:
+            out.add(json.loads(line)['src_ip'])
+        except (ValueError, KeyError):
+            continue
+    return out
+
+
+def apply_predictive(verdict: str, prediction: Optional[Tuple[str, float]]) -> Tuple[str, bool]:
+    """Raise suspicion one level for IPs named in an open prediction.
+
+    Returns (verdict, raised). Never auto-blocks on a prediction alone:
+    benign→suspicious always; suspicious→malicious only for a high-confidence
+    'critical' forecast.
+    """
+    if not prediction:
+        return verdict, False
+    severity, confidence = prediction
+    if verdict == 'benign':
+        return 'suspicious', True
+    if (verdict == 'suspicious' and severity == 'critical'
+            and confidence >= PREDICTIVE_MALICIOUS_CONF):
+        return 'malicious', True
+    return verdict, False
+
+
+def write_block_request(ip: str, reason: str) -> None:
+    """Write a block request to hydra_blocks for nftables-sync to pick up."""
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    query = (
+        f"INSERT INTO {CH_DB}.hydra_blocks "
+        "(timestamp, src_ip, duration_seconds, reason, source, auto_expired, event_count) VALUES "
+        f"('{now}', IPv4StringToNum('{ip}'), 3600, '{reason}', 'ml', 0, 0)"
+    )
+    ch_insert(query)
+
+
+# ============================================================================
+# MAIN DETECTION LOOP
+# ============================================================================
+
+def _percentile(sorted_vals: List[float], p: float) -> float:
+    """Compute p-th percentile (0-100) from a sorted list."""
+    if not sorted_vals:
+        return 0.0
+    k = (len(sorted_vals) - 1) * (p / 100.0)
+    f = int(k)
+    c = f + 1 if f + 1 < len(sorted_vals) else f
+    d = k - f
+    return sorted_vals[f] + d * (sorted_vals[c] - sorted_vals[f])
+
+
+def train_model(hours: int = None) -> Tuple[Optional[IsolationForest], Optional[FeatureScaler]]:
+    """Train or retrain the Isolation Forest model."""
+    global _adaptive_suspicious, _adaptive_malicious
+
+    if hours is None:
+        hours = BASELINE_HOURS
+
+    logger.info(f"Loading training data (last {hours} hours)...")
+    data = load_training_data(hours)
+
+    if len(data) < MIN_TRAINING_SAMPLES:
+        logger.warning(f"Insufficient training data: {len(data)}/{MIN_TRAINING_SAMPLES}")
+        return None, None
+
+    logger.info(f"Training on {len(data)} samples...")
+
+    # Normalize features
+    scaler = FeatureScaler(N_FEATURES)
+    scaled_data = scaler.fit_transform(data)
+
+    # Train Isolation Forest
+    # sample_size=256 is the standard from the original paper
+    # n_trees=100 gives good precision/speed tradeoff
+    forest = IsolationForest(n_trees=100, sample_size=256)
+    forest.fit(scaled_data)
+
+    # Calibrate thresholds from training data score distribution
+    # Training data is assumed mostly benign (malicious excluded in query)
+    # So anomaly scores on training data represent the "normal" distribution
+    train_scores = sorted(forest.score_samples(scaled_data))
+    _adaptive_suspicious = _percentile(train_scores, 95)  # Top 5% = suspicious
+    _adaptive_malicious = _percentile(train_scores, 99)   # Top 1% = malicious
+
+    # Ensure minimum separation between thresholds
+    if _adaptive_malicious - _adaptive_suspicious < 0.05:
+        _adaptive_malicious = _adaptive_suspicious + 0.05
+
+    logger.info(f"Adaptive thresholds: suspicious={_adaptive_suspicious:.4f}, "
+                f"malicious={_adaptive_malicious:.4f} "
+                f"(score range: {train_scores[0]:.4f}-{train_scores[-1]:.4f}, "
+                f"median={_percentile(train_scores, 50):.4f})")
+
+    # Save model
+    meta = {
+        'trained_at': datetime.now(timezone.utc).isoformat(),
+        'n_samples': len(data),
+        'n_features': N_FEATURES,
+        'n_trees': 100,
+        'sample_size': 256,
+        'baseline_hours': hours,
+        'version': '2.0.0',
+        'threshold_suspicious': _adaptive_suspicious,
+        'threshold_malicious': _adaptive_malicious,
+    }
+    save_model(forest, scaler, meta)
+
+    logger.info(f"Model trained and saved ({len(data)} samples, 100 trees)")
+    return forest, scaler
+
+
+def detect_cycle(forest: IsolationForest, scaler: FeatureScaler) -> int:
+    """
+    Run one detection cycle:
+    1. Load feature vectors from the last detection interval
+    2. Score with Isolation Forest
+    3. Write verdicts to ClickHouse
+    4. Send alerts for malicious detections
+    """
+    # Load features from the last interval window
+    ips, vectors = load_recent_features(DETECT_INTERVAL)
+    if not vectors:
+        logger.debug("No feature vectors available for scoring")
+        return 0
+
+    # Normalize
+    scaled = scaler.transform(vectors)
+
+    # Score
+    scores = forest.score_samples(scaled)
+
+    # Second voter: latest SENTINEL evidence per IP (graceful empty on error).
+    sentinel_verdicts = load_sentinel_verdicts(SENTINEL_WINDOW)
+    # Forward-looking input: open high-severity predictive alerts per IP.
+    predictive_ips = load_predictive_ips(PREDICTIVE_WINDOW)
+    # 'One self': IPs the CNO outcome-ledger recently confirmed benign (6h).
+    cno_benign = load_cno_benign_vetoes(21600)
+
+    now = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
+    verdicts = []
+    n_suspicious = 0
+    n_malicious = 0
+    n_vetoed = 0
+    n_predicted = 0
+    n_cno_veto = 0
+
+    # Use adaptive thresholds if available, otherwise fixed defaults
+    thresh_suspicious = _adaptive_suspicious if _adaptive_suspicious is not None else SCORE_SUSPICIOUS
+    thresh_malicious = _adaptive_malicious if _adaptive_malicious is not None else SCORE_MALICIOUS
+
+    n_trusted = 0
+    for ip, score in zip(ips, scores):
+        # Trusted-network veto: internal/RFC1918 and allowlisted IPs are never
+        # flagged or blocked, regardless of anomaly score. Record a benign
+        # verdict for visibility, then move on (no consensus/predictive/block).
+        if _is_trusted_ip(ip):
+            n_trusted += 1
+            verdicts.append({
+                'timestamp': now, 'ip': ip, 'anomaly_score': score,
+                'model_scores': [score], 'verdict': 'benign', 'action': 'none',
+            })
+            consecutive_malicious.pop(ip, None)
+            continue
+
+        # Isolation Forest verdict using calibrated thresholds
+        if score > thresh_malicious:
+            iso_verdict = 'malicious'
+        elif score > thresh_suspicious:
+            iso_verdict = 'suspicious'
+        else:
+            iso_verdict = 'benign'
+
+        # Multi-model consensus with SENTINEL evidence. A block must be
+        # corroborated; a confident SENTINEL benign verdict vetoes an IF FP.
+        sentinel = sentinel_verdicts.get(ip)
+        verdict, agreement = consensus_verdict(iso_verdict, sentinel)
+
+        # Pre-empt forecast attacks: raise suspicion for predicted IPs.
+        # Skip when SENTINEL vetoed (confident benign beats a forecast).
+        if agreement != 'vetoed':
+            verdict, raised = apply_predictive(verdict, predictive_ips.get(ip))
+            if raised:
+                n_predicted += 1
+
+        # 'One self' (SSOL C4): the organism's LEARNED outcome knowledge steers
+        # the verdict. An IP the CNO outcome-ledger confirmed benign downgrades
+        # one level — benign-only, so it can only cut false positives, never
+        # amplify (no oscillation). The escalation counter still re-escalates a
+        # genuinely-attacking IP on later cycles.
+        if ip in cno_benign and verdict in ('malicious', 'suspicious'):
+            verdict = 'suspicious' if verdict == 'malicious' else 'benign'
+            agreement = 'cno_outcome_veto'
+            n_cno_veto += 1
+
+        if agreement in ('vetoed', 'cno_outcome_veto'):
+            n_vetoed += 1
+        if verdict == 'malicious':
+            n_malicious += 1
+        elif verdict == 'suspicious':
+            n_suspicious += 1
+
+        action = determine_action(ip, verdict)
+
+        # Record both model scores so the verdict row reflects the ensemble.
+        model_scores = [score]
+        if sentinel is not None:
+            model_scores.append(sentinel[2])  # SENTINEL ensemble score
+
+        verdicts.append({
+            'timestamp': now,
+            'ip': ip,
+            'anomaly_score': score,
+            'model_scores': model_scores,
+            'verdict': verdict,
+            'action': action,
+        })
+
+        # Auto-block on escalation
+        if action == 'block':
+            reason = ('ml_consensus_escalation' if agreement == 'confirmed'
+                      else 'ml_anomaly_escalation')
+            write_block_request(ip, reason)
+            send_discord_alert(ip, score, verdict, action)
+        elif action == 'throttle':
+            send_discord_alert(ip, score, verdict, action)
+
+    # Write verdicts
+    written = write_verdicts(verdicts)
+
+    n_benign = len(ips) - n_malicious - n_suspicious
+    logger.info(f"Scored {len(ips)} IPs: "
+                f"{n_malicious} malicious, {n_suspicious} suspicious, "
+                f"{n_benign} benign "
+                f"(trusted-vetoed: {n_trusted}; "
+                f"SENTINEL: {len(sentinel_verdicts)} evidence, {n_vetoed} vetoed; "
+                f"predictive: {len(predictive_ips)} open, {n_predicted} raised; "
+                f"CNO-outcome: {len(cno_benign)} benign, {n_cno_veto} vetoed)")
+
+    return written
+
+
+def main():
+    logger.info("HYDRA Anomaly Detector starting...")
+    logger.info(f"ClickHouse: {CH_HOST}:{CH_PORT}/{CH_DB}")
+    logger.info(f"Detection interval: {DETECT_INTERVAL}s")
+    logger.info(f"Thresholds: suspicious={SCORE_SUSPICIOUS}, malicious={SCORE_MALICIOUS}")
+
+    if not CH_PASSWORD:
+        logger.error("CLICKHOUSE_PASSWORD not set")
+        sys.exit(1)
+
+    # Ch 22 §6.2 — per-service readiness endpoint
+    _health = None
+    try:
+        from core.common.health import HealthReporter, start_health_server
+        _health = HealthReporter(service="hydra-anomaly")
+        start_health_server(_health,
+                             port=int(os.environ.get("HEALTH_PORT", "9301")))
+    except Exception as e:
+        logger.warning("health module unavailable: %s", e)
+
+    # Try to load existing model
+    forest, scaler, meta = load_model()
+    if _health and forest is not None:
+        _health.set_model_loaded(True)
+
+    if forest is None:
+        logger.info(f"No trained model found. Collecting baseline ({BASELINE_HOURS}h)...")
+        logger.info("Will attempt training once enough data accumulates.")
+    else:
+        # Restore adaptive thresholds from saved metadata
+        # BUG FIX (L97): missing 'global' declaration made these local vars,
+        # so every run fell back to hardcoded 0.5/0.7 defaults. Every
+        # anomaly score since Mar-5 calibration was miscalibrated.
+        if meta.get('threshold_suspicious') is not None:
+            global _adaptive_suspicious, _adaptive_malicious
+            _adaptive_suspicious = float(meta['threshold_suspicious'])
+            _adaptive_malicious = float(meta['threshold_malicious'])
+            logger.info(f"Restored adaptive thresholds: suspicious={_adaptive_suspicious:.4f}, "
+                        f"malicious={_adaptive_malicious:.4f}")
+        else:
+            # Model was trained with old version — retrain to calibrate
+            logger.info("Model lacks adaptive thresholds, will retrain to calibrate")
+
+    last_train_time = time.time()
+    retrain_interval = RETRAIN_HOURS * 3600
+
+    while running:
+        try:
+            # Check if we need to train/retrain
+            if forest is None:
+                # Try initial training
+                forest, scaler = train_model(BASELINE_HOURS)
+                if forest:
+                    last_train_time = time.time()
+                    logger.info("Initial model training complete — entering detection mode")
+
+            elif time.time() - last_train_time > retrain_interval:
+                # Periodic retrain — always update timestamp to avoid retry spam
+                logger.info("Scheduled retrain...")
+                new_forest, new_scaler = train_model(RETRAIN_HOURS)
+                last_train_time = time.time()
+                if new_forest:
+                    forest = new_forest
+                    scaler = new_scaler
+                    if _health:
+                        _health.set_model_loaded(True)
+                    logger.info("Retrain complete")
+                else:
+                    logger.warning("Retrain failed — keeping existing model, "
+                                   "will retry in %dh", RETRAIN_HOURS)
+
+            # Run detection if model is available
+            if forest and scaler:
+                detect_cycle(forest, scaler)
+                if _health:
+                    _health.bump_ingest()
+                    if forest is not None:
+                        _health.set_model_loaded(True)
+
+        except Exception as e:
+            logger.error(f"Detection cycle failed: {e}")
+
+        # Wait for next cycle
+        for _ in range(DETECT_INTERVAL):
+            if not running:
+                break
+            time.sleep(1)
+
+    logger.info("Anomaly Detector shutting down")
+
+
+if __name__ == '__main__':
+    main()

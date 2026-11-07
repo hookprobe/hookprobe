@@ -1,0 +1,12 @@
+[Unit]
+Description=Fortress NAC Policy Sync Timer
+Requires=fts-nac-sync.service
+
+[Timer]
+# Run every 5 seconds for near real-time policy application
+OnBootSec=15s
+OnUnitActiveSec=5s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

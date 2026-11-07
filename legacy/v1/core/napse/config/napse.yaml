@@ -1,0 +1,86 @@
+# NAPSE - Neural Adaptive Packet Synthesis Engine
+# Default Configuration (Fortress tier)
+#
+# Override per-tier settings by loading the tier-specific YAML file.
+
+napse:
+  version: "2.0.0"
+  tier: "fortress"
+
+  # Network interface to monitor
+  interface: "${WAN_INTERFACE:-eth0}"
+  bridge: "FTS"
+
+  # Capture engine selection
+  # auto: tries mojo -> python-inspector -> synthesis-only
+  # mojo: require Mojo napse-brain binary
+  # python: require Python PacketInspector
+  # synthesis-only: no capture, external IDS feeds events
+  capture:
+    engine: "auto"
+
+  # Zig Aegis capture engine (Layer 0: XDP kernel fast path)
+  aegis:
+    binary: "/opt/napse/aegis/aegis-loader"
+    config: "/etc/aegis/aegis.toml"
+    ring_buffer: "/dev/shm/aegis-napse-ring"
+    ring_size_mb: 16
+
+  # Mojo Napse-brain classification engine (Layer 1: SIMD intent attribution)
+  brain:
+    binary: "/opt/napse/brain/napse-brain"
+    config: "/etc/napse/napse-brain.toml"
+
+  # Layer 0: eBPF/XDP Kernel (C kernel programs, independent of Zig Aegis)
+  kernel:
+    xdp_mode: "auto"               # auto/native/driver/skb
+    rate_limit_pps: 1000
+    blocked_ips_max: 65536
+    flow_table_size: 65536
+    ringbuf_size_mb: 4
+    af_xdp:
+      enabled: true
+      umem_frames: 16384
+      frame_size: 2048
+      busy_poll: false
+      busy_poll_timeout_us: 20
+
+  # Layer 2: Python Event Synthesis
+  synthesis:
+    event_bus_queue_size: 10000
+
+    # QSecBit direct feed
+    qsecbit_feed:
+      enabled: true
+      direct_mode: true
+
+    # AEGIS bridge
+    aegis_bridge:
+      enabled: true
+
+    # D2D Bubble feed
+    bubble_feed:
+      enabled: true
+
+    # ClickHouse shipper
+    clickhouse:
+      enabled: true
+      host: "localhost"
+      port: 8123
+      database: "aiochi"
+      batch_size: 100
+      flush_interval_s: 5.0
+
+    # Prometheus metrics
+    metrics:
+      enabled: true
+      port: 9092
+      path: "/metrics"
+
+    # Notice emitter
+    notices:
+      enabled: true
+      port_scan_threshold: 50
+      port_scan_window_s: 300
+      ssh_bruteforce_threshold: 5
+      dns_tunnel_query_length: 60

@@ -1,0 +1,851 @@
+"""
+Git Operations - Safe git command wrappers for GitHub updates
+
+All operations are read-only or use --ff-only for safety.
+Designed to work without CLI access (via web UI).
+
+SECURITY:
+- All external binaries use absolute paths to prevent PATH manipulation
+- Service names validated against strict allowlist before systemctl calls
+- No shell=True anywhere to prevent command injection
+"""
+import logging
+import os
+import re
+import subprocess
+import shlex
+from typing import Dict, List, Tuple
+
+logger = logging.getLogger(__name__)
+
+# Absolute paths for external binaries (prevents PATH manipulation attacks)
+GIT_BIN = '/usr/bin/git'
+SYSTEMCTL_BIN = '/bin/systemctl'
+SUDO_BIN = '/usr/bin/sudo'
+
+# Strict service name pattern (alphanumeric, hyphens only)
+_SERVICE_NAME_RE = re.compile(r'^[a-z][a-z0-9\-]{0,63}$')
+
+
+def run_command(cmd, timeout=30):
+    """Execute a command safely without shell=True to prevent command injection."""
+    try:
+        # Convert string to list for safe execution
+        if isinstance(cmd, str):
+            cmd_list = shlex.split(cmd)
+        else:
+            cmd_list = list(cmd)
+
+        result = subprocess.run(
+            cmd_list,
+            capture_output=True,
+            text=True,
+            timeout=timeout
+        )
+        # Combine stdout and stderr for better error reporting
+        output = result.stdout.strip()
+        if result.returncode != 0 and result.stderr:
+            # Include stderr in output for failed commands
+            output = result.stderr.strip() if not output else f"{output}\n{result.stderr.strip()}"
+        return output, result.returncode == 0
+    except subprocess.TimeoutExpired:
+        return "Command timed out", False
+    except Exception as e:
+        return str(e), False
+
+
+# Configuration
+REPO_PATH = os.environ.get('GUARDIAN_REPO_PATH', '/opt/hookprobe')
+REMOTE_NAME = 'origin'
+DEFAULT_BRANCH = os.environ.get('GUARDIAN_BRANCH', 'main')
+DEFAULT_REMOTE_URL = os.environ.get(
+    'HOOKPROBE_REMOTE_URL',
+    'https://github.com/hookprobe/hookprobe.git'
+)
+
+# Installation config file location
+INSTALL_CONFIG_FILE = '/etc/hookprobe/install.conf'
+
+# Cache for detected repo path
+_cached_repo_path = None
+
+
+def read_install_config() -> dict:
+    """Read the HookProbe installation configuration file."""
+    config = {}
+    if os.path.isfile(INSTALL_CONFIG_FILE):
+        try:
+            with open(INSTALL_CONFIG_FILE, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    # Skip comments and empty lines
+                    if not line or line.startswith('#'):
+                        continue
+                    # Parse KEY="value" or KEY=value
+                    if '=' in line:
+                        key, value = line.split('=', 1)
+                        key = key.strip()
+                        value = value.strip().strip('"').strip("'")
+                        config[key] = value
+        except (IOError, PermissionError):
+            pass
+    return config
+
+# Allowed paths for updates (networking-related only)
+ALLOWED_UPDATE_PATHS = [
+    'products/guardian/',
+    'shared/dnsXai/',
+    'shared/mesh/',
+    'shared/response/',
+    'shared/cortex/',        # Cortex globe visualization (embedded in Guardian)
+]
+
+# Services that can be restarted after update
+ALLOWED_SERVICES = [
+    'dnsmasq',
+    'hostapd',
+    'dnsxai',
+    'guardian-agent',
+    'guardian-webui',
+    'guardian-qsecbit',
+    'guardian-wlan',
+    'nginx',
+]
+
+
+def _try_add_safe_directory(repo_path: str) -> bool:
+    """
+    Try to add repo_path to git's safe.directory config.
+
+    This resolves the 'dubious ownership' error when running git commands
+    in a directory owned by a different user.
+
+    Args:
+        repo_path: Path to the git repository
+
+    Returns:
+        True if safe.directory was added successfully, False otherwise
+    """
+    # Try adding to global config (requires write access to user's gitconfig)
+    output, success = run_command(
+        [GIT_BIN, 'config', '--global', '--add', 'safe.directory', repo_path],
+        timeout=10
+    )
+    if success:
+        return True
+
+    # If global config fails, try system config with sudo
+    # This is a fallback that may work if sudoers is configured
+    output, success = run_command(
+        [SUDO_BIN, '-n', GIT_BIN, 'config', '--system', '--add', 'safe.directory', repo_path],
+        timeout=10
+    )
+    return success
+
+
+def get_repo_path() -> str:
+    """Get the repository path, validating it exists. Result is cached."""
+    global _cached_repo_path
+
+    # Return cached path if already detected
+    if _cached_repo_path is not None:
+        return _cached_repo_path
+
+    # Priority 1: Read from installation config file (/etc/hookprobe/install.conf)
+    install_config = read_install_config()
+    config_path = install_config.get('HOOKPROBE_INSTALL_DIR')
+    if config_path and os.path.isdir(os.path.join(config_path, '.git')):
+        _cached_repo_path = config_path
+        return _cached_repo_path
+
+    # Priority 2: Check environment variable
+    if os.path.isdir(os.path.join(REPO_PATH, '.git')):
+        _cached_repo_path = REPO_PATH
+        return _cached_repo_path
+
+    # Priority 3: Try common installation paths
+    common_paths = [
+        '/opt/hookprobe',
+        '/home/user/hookprobe',
+        '/home/pi/hookprobe',
+        '/home/guardian/hookprobe',
+        os.path.expanduser('~/hookprobe'),
+    ]
+
+    for path in common_paths:
+        if os.path.isdir(os.path.join(path, '.git')):
+            _cached_repo_path = path
+            return _cached_repo_path
+
+    # Priority 4: Find repo by traversing up from current file location
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(10):  # Max 10 levels up
+        if os.path.isdir(os.path.join(current_dir, '.git')):
+            _cached_repo_path = current_dir
+            return _cached_repo_path
+        parent = os.path.dirname(current_dir)
+        if parent == current_dir:  # Reached root
+            break
+        current_dir = parent
+
+    # Priority 5: Current working directory
+    cwd = os.getcwd()
+    if os.path.isdir(os.path.join(cwd, '.git')):
+        _cached_repo_path = cwd
+        return _cached_repo_path
+
+    # Priority 6: Use git to find repo root from this file's location
+    this_file_dir = os.path.dirname(os.path.abspath(__file__))
+    output, success = run_command(
+        [GIT_BIN, '-C', this_file_dir, 'rev-parse', '--show-toplevel']
+    )
+    if success and output and os.path.isdir(output):
+        _cached_repo_path = output
+        return _cached_repo_path
+
+    _cached_repo_path = REPO_PATH
+    return _cached_repo_path
+
+
+def get_current_status() -> Dict:
+    """
+    Get current git repository status.
+
+    Returns:
+        Dict with current_commit, current_branch, repo_path, is_valid
+    """
+    # Read install config for fallback values
+    install_config = read_install_config()
+    fallback_commit = install_config.get('HOOKPROBE_INSTALL_COMMIT', '')
+    fallback_branch = install_config.get('HOOKPROBE_INSTALL_BRANCH', '')
+    fallback_date = install_config.get('HOOKPROBE_INSTALL_DATE', '')
+
+    repo_path = get_repo_path()
+
+    # Check if path exists and has .git
+    git_dir = os.path.join(repo_path, '.git')
+    if not os.path.isdir(git_dir):
+        # Use install config values if available
+        if fallback_commit and fallback_branch:
+            return {
+                'current_commit': fallback_commit,
+                'full_commit': fallback_commit,
+                'current_branch': fallback_branch,
+                'commit_date': fallback_date or 'unknown',
+                'repo_path': repo_path,
+                'is_valid': True,
+                'source': 'install_config',
+                'note': 'Using values from installation config (git directory not accessible)'
+            }
+        return {
+            'current_commit': 'not found',
+            'full_commit': 'not found',
+            'current_branch': 'not found',
+            'commit_date': 'unknown',
+            'repo_path': repo_path,
+            'is_valid': False,
+            'error': f'Git directory not found at {repo_path}'
+        }
+
+    # Get current commit hash
+    commit_output, commit_success = run_command(
+        [GIT_BIN, '-C', repo_path, 'rev-parse', '--short', 'HEAD']
+    )
+
+    # Get current branch
+    branch_output, branch_success = run_command(
+        [GIT_BIN, '-C', repo_path, 'rev-parse', '--abbrev-ref', 'HEAD']
+    )
+
+    # Get full commit hash for comparison
+    full_commit, _ = run_command(
+        [GIT_BIN, '-C', repo_path, 'rev-parse', 'HEAD']
+    )
+
+    # Get commit date
+    date_output, _ = run_command(
+        [GIT_BIN, '-C', repo_path, 'log', '-1', '--format=%ci']
+    )
+
+    # If git commands failed but we have install config, use those values
+    if not commit_success or not branch_success:
+        if fallback_commit and fallback_branch:
+            return {
+                'current_commit': fallback_commit,
+                'full_commit': fallback_commit,
+                'current_branch': fallback_branch,
+                'commit_date': fallback_date or 'unknown',
+                'repo_path': repo_path,
+                'is_valid': True,
+                'source': 'install_config',
+                'note': 'Using values from installation config (git commands failed - check permissions)'
+            }
+
+    result = {
+        'current_commit': commit_output if commit_success else 'error',
+        'full_commit': full_commit.strip() if full_commit else 'error',
+        'current_branch': branch_output if branch_success else 'error',
+        'commit_date': date_output.strip() if date_output else 'unknown',
+        'repo_path': repo_path,
+        'is_valid': commit_success and branch_success,
+        'source': 'git'
+    }
+
+    # Add error info if git commands failed
+    if not commit_success:
+        result['error'] = f'Git command failed: {commit_output}'
+
+    return result
+
+
+def fetch_updates() -> Tuple[bool, str]:
+    """
+    Fetch updates from remote without applying them.
+
+    Returns:
+        Tuple of (success, message)
+    """
+    repo_path = get_repo_path()
+
+    # First verify git is available
+    git_version, git_available = run_command([GIT_BIN, '--version'], timeout=5)
+    if not git_available:
+        return False, f'Git is not installed at {GIT_BIN}'
+
+    # Verify the repo path has a .git directory
+    git_dir = os.path.join(repo_path, '.git')
+    if not os.path.isdir(git_dir):
+        return False, f'Not a git repository: {repo_path}'
+
+    # Check if we can read the git config (permission check)
+    git_config = os.path.join(git_dir, 'config')
+    if os.path.isfile(git_config) and not os.access(git_config, os.R_OK):
+        # Git directory exists but we can't read it - permission issue
+        install_config = read_install_config()
+        install_user = install_config.get('HOOKPROBE_USER', 'unknown')
+        current_user = os.environ.get('USER', 'unknown')
+        return False, (
+            f'Permission denied: Cannot read git config. '
+            f'Web app running as "{current_user}" but repo owned by "{install_user}". '
+            f'Fix with: sudo chown -R {current_user}:{current_user} {repo_path}/.git '
+            f'or run web app as {install_user}.'
+        )
+
+    # Check if remote is configured
+    remote_output, remote_ok = run_command(
+        [GIT_BIN, '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
+        timeout=10
+    )
+    if not remote_ok:
+        # Check if this might be a permission issue rather than missing remote
+        error_lower = remote_output.lower() if remote_output else ''
+        if 'permission' in error_lower or 'denied' in error_lower:
+            install_config = read_install_config()
+            install_user = install_config.get('HOOKPROBE_USER', 'unknown')
+            current_user = os.environ.get('USER', 'unknown')
+            return False, (
+                f'Permission issue: Cannot access git repository at {repo_path}. '
+                f'The web app is running as "{current_user}" but needs access to files owned by "{install_user}". '
+                f'Solution: Add {current_user} to the {install_user} group, or adjust directory permissions.'
+            )
+
+        # Check for dubious ownership error (git safe.directory issue)
+        if 'dubious ownership' in error_lower:
+            # Try to add safe.directory config
+            safe_dir_ok = _try_add_safe_directory(repo_path)
+            if safe_dir_ok:
+                # Retry getting remote URL
+                remote_output, remote_ok = run_command(
+                    [GIT_BIN, '-C', repo_path, 'remote', 'get-url', REMOTE_NAME],
+                    timeout=10
+                )
+                if remote_ok:
+                    # Remote is now accessible, continue to fetch
+                    pass
+                else:
+                    # Still need to add remote, fall through to add logic below
+                    pass
+            else:
+                return False, (
+                    f'Git safe directory issue: The repository at {repo_path} is owned by a different user. '
+                    f'Run: sudo git config --global --add safe.directory {repo_path}'
+                )
+
+        # Remote not configured - try to auto-configure with default URL
+        # First check install config for custom remote URL
+        if not remote_ok:
+            install_config = read_install_config()
+            remote_url = install_config.get('HOOKPROBE_REMOTE_URL', DEFAULT_REMOTE_URL)
+
+            add_output, add_ok = run_command(
+                [GIT_BIN, '-C', repo_path, 'remote', 'add', REMOTE_NAME, remote_url],
+                timeout=10
+            )
+            if not add_ok:
+                # Check for dubious ownership again
+                if 'dubious ownership' in add_output.lower():
+                    return False, (
+                        f'Git safe directory issue: The repository at {repo_path} is owned by a different user. '
+                        f'Run: sudo git config --global --add safe.directory {repo_path}'
+                    )
+                # Remote might already exist with different name, or permission issue
+                if 'already exists' in add_output.lower():
+                    # Try to set the URL instead
+                    set_output, set_ok = run_command(
+                        [GIT_BIN, '-C', repo_path, 'remote', 'set-url', REMOTE_NAME, remote_url],
+                        timeout=10
+                    )
+                    if not set_ok:
+                        return False, f'Failed to configure remote: {set_output}'
+                else:
+                    return False, f'Failed to add remote "{REMOTE_NAME}": {add_output}'
+
+    # Try to fetch
+    output, success = run_command(
+        [GIT_BIN, '-C', repo_path, 'fetch', REMOTE_NAME],
+        timeout=60
+    )
+
+    if success:
+        return True, 'Successfully fetched updates from remote'
+
+    # Provide more helpful error messages
+    error_msg = output.strip() if output else 'Unknown error'
+    error_lower = error_msg.lower()
+
+    # Handle dubious ownership during fetch
+    if 'dubious ownership' in error_lower:
+        safe_dir_ok = _try_add_safe_directory(repo_path)
+        if safe_dir_ok:
+            # Retry fetch after adding safe.directory
+            output, success = run_command(
+                [GIT_BIN, '-C', repo_path, 'fetch', REMOTE_NAME],
+                timeout=60
+            )
+            if success:
+                return True, 'Successfully fetched updates from remote'
+            error_msg = output.strip() if output else 'Unknown error'
+        else:
+            return False, (
+                f'Git safe directory issue: The repository at {repo_path} is owned by a different user. '
+                f'Run: sudo git config --global --add safe.directory {repo_path}'
+            )
+
+    if 'Could not resolve host' in error_msg or 'unable to access' in error_lower:
+        return False, 'Network error: Unable to reach GitHub. Check internet connection.'
+    if 'Permission denied' in error_msg or 'Authentication failed' in error_msg:
+        return False, 'Authentication error: Git credentials may be required or invalid.'
+    if 'not found' in error_lower:
+        return False, 'Repository not found on remote. Check if the repository exists.'
+
+    return False, f'Failed to fetch: {error_msg}' if error_msg else 'Failed to fetch: Unknown error (no output from git)'
+
+
+def check_for_updates() -> Dict:
+    """
+    Check if updates are available from remote.
+
+    Returns:
+        Dict with updates_available, commits_behind, commits list
+    """
+    repo_path = get_repo_path()
+    branch = DEFAULT_BRANCH
+
+    # First fetch to ensure we have latest remote info
+    fetch_success, fetch_msg = fetch_updates()
+    if not fetch_success:
+        return {
+            'updates_available': False,
+            'error': fetch_msg,
+            'commits_behind': 0,
+            'commits': []
+        }
+
+    # Get current HEAD
+    local_head, _ = run_command(
+        [GIT_BIN, '-C', repo_path, 'rev-parse', 'HEAD']
+    )
+
+    # Get remote HEAD
+    remote_head, _ = run_command(
+        [GIT_BIN, '-C', repo_path, 'rev-parse', f'{REMOTE_NAME}/{branch}']
+    )
+
+    if local_head.strip() == remote_head.strip():
+        return {
+            'updates_available': False,
+            'commits_behind': 0,
+            'commits': [],
+            'message': 'Already up to date'
+        }
+
+    # Count commits behind
+    count_output, _ = run_command(
+        [GIT_BIN, '-C', repo_path, 'rev-list', '--count',
+         f'HEAD..{REMOTE_NAME}/{branch}']
+    )
+    commits_behind = int(count_output.strip()) if count_output.isdigit() else 0
+
+    # Get commit list (limit to 20 for UI)
+    log_output, _ = run_command(
+        [GIT_BIN, '-C', repo_path, 'log', '--oneline',
+         f'HEAD..{REMOTE_NAME}/{branch}', '-n', '20']
+    )
+
+    commits = []
+    if log_output:
+        for line in log_output.strip().split('\n'):
+            if line:
+                parts = line.split(' ', 1)
+                if len(parts) >= 2:
+                    commits.append({
+                        'hash': parts[0],
+                        'message': parts[1]
+                    })
+
+    return {
+        'updates_available': commits_behind > 0,
+        'commits_behind': commits_behind,
+        'commits': commits,
+        'latest_commit': remote_head.strip()[:7] if remote_head else 'unknown'
+    }
+
+
+def preview_changes() -> Dict:
+    """
+    Preview what files would be changed by an update.
+
+    Returns:
+        Dict with files list, filtered to allowed paths
+    """
+    repo_path = get_repo_path()
+    branch = DEFAULT_BRANCH
+
+    # Get diff stat
+    diff_output, success = run_command(
+        [GIT_BIN, '-C', repo_path, 'diff', '--stat', '--name-only',
+         f'HEAD..{REMOTE_NAME}/{branch}']
+    )
+
+    if not success:
+        return {'files': [], 'error': 'Failed to get diff'}
+
+    all_files = diff_output.strip().split('\n') if diff_output else []
+
+    # Filter to allowed paths and categorize
+    allowed_files = []
+    blocked_files = []
+
+    for file_path in all_files:
+        if not file_path:
+            continue
+        is_allowed = any(file_path.startswith(path) for path in ALLOWED_UPDATE_PATHS)
+        if is_allowed:
+            allowed_files.append(file_path)
+        else:
+            blocked_files.append(file_path)
+
+    # Determine which services need restart based on changed files
+    services_to_restart = determine_services_to_restart(allowed_files)
+
+    return {
+        'files': allowed_files,
+        'blocked_files': blocked_files,
+        'total_changes': len(all_files),
+        'allowed_changes': len(allowed_files),
+        'services_to_restart': services_to_restart
+    }
+
+
+def determine_services_to_restart(changed_files: List[str]) -> List[str]:
+    """
+    Determine which services need restart based on changed files.
+
+    Args:
+        changed_files: List of file paths that changed
+
+    Returns:
+        List of service names to restart
+    """
+    services = set()
+
+    for file_path in changed_files:
+        # Guardian web UI changes
+        if file_path.startswith('products/guardian/web/'):
+            services.add('guardian-webui')
+
+        # Guardian lib changes
+        if file_path.startswith('products/guardian/lib/'):
+            services.add('guardian-agent')
+
+        # Guardian config changes
+        if file_path.startswith('products/guardian/config/'):
+            if 'dnsmasq' in file_path:
+                services.add('dnsmasq')
+            if 'hostapd' in file_path:
+                services.add('hostapd')
+            if 'wpa_supplicant' in file_path:
+                services.add('guardian-wlan')
+
+        # dnsXai changes
+        if file_path.startswith('shared/dnsXai/'):
+            services.add('dnsxai')
+            services.add('dnsmasq')
+
+        # Mesh changes
+        if file_path.startswith('shared/mesh/'):
+            services.add('guardian-agent')
+
+        # Response changes
+        if file_path.startswith('shared/response/'):
+            services.add('guardian-agent')
+
+        # Cortex visualization changes (embedded in Guardian web UI)
+        if file_path.startswith('shared/cortex/'):
+            services.add('guardian-webui')
+
+    # Filter to only allowed services
+    return [s for s in services if s in ALLOWED_SERVICES]
+
+
+def is_frontend_only_update(changed_files: List[str]) -> bool:
+    """
+    Check if the update only affects frontend (web UI) files.
+    Frontend-only updates don't require system reboot.
+
+    Args:
+        changed_files: List of file paths that changed
+
+    Returns:
+        True if only frontend files changed
+    """
+    frontend_paths = [
+        'products/guardian/web/',
+        'shared/cortex/frontend/',
+    ]
+
+    backend_paths = [
+        'products/guardian/lib/',
+        'products/guardian/config/',
+        'shared/dnsXai/',
+        'shared/mesh/',
+        'shared/response/',
+        'shared/cortex/backend/',
+    ]
+
+    has_frontend = False
+    has_backend = False
+
+    for file_path in changed_files:
+        if any(file_path.startswith(p) for p in frontend_paths):
+            has_frontend = True
+        if any(file_path.startswith(p) for p in backend_paths):
+            has_backend = True
+
+    return has_frontend and not has_backend
+
+
+def categorize_changes(changed_files: List[str]) -> Dict:
+    """
+    Categorize changed files by component for better UI display.
+
+    Args:
+        changed_files: List of file paths that changed
+
+    Returns:
+        Dict with categorized files and metadata
+    """
+    categories = {
+        'web_ui': [],      # Guardian web UI templates, JS, CSS
+        'cortex': [],      # Cortex visualization
+        'backend': [],     # Guardian agent/lib
+        'dnsxai': [],      # DNS protection
+        'network': [],     # Mesh, config
+        'response': [],    # Threat response scripts
+        'other': []
+    }
+
+    for file_path in changed_files:
+        if file_path.startswith('products/guardian/web/'):
+            categories['web_ui'].append(file_path)
+        elif file_path.startswith('shared/cortex/'):
+            categories['cortex'].append(file_path)
+        elif file_path.startswith('products/guardian/lib/'):
+            categories['backend'].append(file_path)
+        elif file_path.startswith('shared/dnsXai/'):
+            categories['dnsxai'].append(file_path)
+        elif file_path.startswith('shared/mesh/') or file_path.startswith('products/guardian/config/'):
+            categories['network'].append(file_path)
+        elif file_path.startswith('shared/response/'):
+            categories['response'].append(file_path)
+        else:
+            categories['other'].append(file_path)
+
+    # Remove empty categories
+    categories = {k: v for k, v in categories.items() if v}
+
+    return {
+        'categories': categories,
+        'is_frontend_only': is_frontend_only_update(changed_files),
+        'requires_reboot': False,  # Updates via this mechanism never require reboot
+        'total_files': len(changed_files)
+    }
+
+
+def pull_updates(dry_run: bool = False) -> Dict:
+    """
+    Pull updates from remote using fast-forward only (safe).
+
+    Args:
+        dry_run: If True, only simulate the pull
+
+    Returns:
+        Dict with success status and details
+    """
+    repo_path = get_repo_path()
+    branch = DEFAULT_BRANCH
+
+    if dry_run:
+        # Just return what would happen
+        preview = preview_changes()
+        return {
+            'success': True,
+            'dry_run': True,
+            'would_update': preview['allowed_changes'],
+            'files': preview['files'],
+            'services_to_restart': preview['services_to_restart']
+        }
+
+    # Check for local changes that would prevent pull
+    status_output, _ = run_command(
+        [GIT_BIN, '-C', repo_path, 'status', '--porcelain']
+    )
+
+    if status_output and status_output.strip():
+        return {
+            'success': False,
+            'error': 'Local changes detected. Please commit or stash changes first.',
+            'local_changes': status_output.strip().split('\n')
+        }
+
+    # Get preview before pull
+    preview = preview_changes()
+
+    # Perform fast-forward only pull (safe - fails on conflicts)
+    pull_output, success = run_command(
+        [GIT_BIN, '-C', repo_path, 'pull', '--ff-only', REMOTE_NAME, branch],
+        timeout=120
+    )
+
+    if success:
+        return {
+            'success': True,
+            'message': 'Successfully pulled updates',
+            'output': pull_output,
+            'updated_files': preview['files'],
+            'services_to_restart': preview['services_to_restart']
+        }
+
+    return {
+        'success': False,
+        'error': f'Pull failed: {pull_output}',
+        'hint': 'Fast-forward only pull failed. This usually means there are '
+                'conflicting changes. Manual intervention may be required.'
+    }
+
+
+def restart_services(services: List[str]) -> Dict:
+    """
+    Restart specified services after update.
+
+    Args:
+        services: List of service names to restart
+
+    Returns:
+        Dict with results for each service
+    """
+    results = {}
+    webui_deferred = False
+    deferred_services = []
+
+    # Services that will kill the connection if restarted immediately
+    # These need to be restarted after the HTTP response is sent
+    DEFERRED_SERVICES = {'guardian-webui', 'nginx'}
+
+    for service in services:
+        if service not in ALLOWED_SERVICES:
+            results[service] = {
+                'success': False,
+                'error': 'Service not in allowed list'
+            }
+            continue
+
+        # Skip services that would kill the connection
+        # Web UI changes take effect on page reload, nginx will be restarted by systemd timer or manual
+        if service in DEFERRED_SERVICES:
+            webui_deferred = True
+            deferred_services.append(service)
+            results[service] = {
+                'success': True,
+                'output': 'Deferred - reload page to apply changes'
+            }
+            continue
+
+        # Validate service name against strict pattern
+        if not _SERVICE_NAME_RE.match(service):
+            logger.warning("Rejected invalid service name: %s", service)
+            results[service] = {
+                'success': False,
+                'error': 'Invalid service name'
+            }
+            continue
+
+        output, success = run_command(
+            [SUDO_BIN, SYSTEMCTL_BIN, 'restart', service],
+            timeout=30
+        )
+
+        results[service] = {
+            'success': success,
+            'output': output if not success else 'Restarted successfully'
+        }
+
+    return {
+        'success': all(r['success'] for r in results.values()),
+        'results': results,
+        'webui_deferred': webui_deferred,
+        'deferred_services': deferred_services,
+        'message': f'Reload the page to apply changes. Deferred: {", ".join(deferred_services)}' if deferred_services else None
+    }
+
+
+def get_update_log() -> List[Dict]:
+    """
+    Get recent git log for the repository.
+
+    Returns:
+        List of recent commits
+    """
+    repo_path = get_repo_path()
+
+    log_output, success = run_command(
+        [GIT_BIN, '-C', repo_path, 'log', '--oneline', '-n', '10',
+         '--format=%h|%s|%ci|%an']
+    )
+
+    if not success or not log_output:
+        return []
+
+    commits = []
+    for line in log_output.strip().split('\n'):
+        if line:
+            parts = line.split('|', 3)
+            if len(parts) >= 4:
+                commits.append({
+                    'hash': parts[0],
+                    'message': parts[1],
+                    'date': parts[2],
+                    'author': parts[3]
+                })
+
+    return commits

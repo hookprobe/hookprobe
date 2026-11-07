@@ -1,0 +1,52 @@
+# HookProbe Web Server Container
+# Base image: Python 3.11 slim
+FROM python:3.11-slim
+
+LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
+LABEL description="HookProbe Django Web Application"
+LABEL version="5.0"
+
+# Set environment variables
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    DJANGO_SETTINGS_MODULE=hookprobe.settings
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    postgresql-client \
+    libpq-dev \
+    gcc \
+    curl \
+    netcat-traditional \
+    wget \
+    unzip \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create application directory
+WORKDIR /app
+
+# Copy requirements first (for better layer caching)
+COPY src/web/requirements.txt /app/requirements.txt
+
+# Install Python dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy application code
+COPY src/web /app/
+
+# Copy entrypoint script
+COPY install/addons/webserver/entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+# Create directories (including static for STATICFILES_DIRS)
+RUN mkdir -p /app/staticfiles /app/media /app/logs /app/static
+
+# Collect static files (will be overridden by volume mounts)
+RUN python manage.py collectstatic --noinput || true
+
+# Expose port
+EXPOSE 8000
+
+ENTRYPOINT ["/entrypoint.sh"]

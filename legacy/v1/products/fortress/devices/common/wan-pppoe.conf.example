@@ -1,0 +1,33 @@
+# Fortress fiber WAN (PPPoE + IPv6-PD) configuration.
+#
+#   sudo cp wan-pppoe.conf.example /etc/hookprobe/wan-pppoe.conf
+#   sudo chmod 600 /etc/hookprobe/wan-pppoe.conf   # contains the PPPoE password
+#   sudo edit /etc/hookprobe/wan-pppoe.conf
+#   sudo ./wan-pppoe-setup.sh /etc/hookprobe/wan-pppoe.conf
+#
+# This file holds secrets — it lives in /etc only and is NEVER committed.
+
+# NIC the ONT / fiber Ethernet is plugged into (ISP CPE bypassed).
+WAN_NIC="enp1s0"
+
+# OVS LAN bridge that receives the delegated /64.
+LAN_BRIDGE="FTS"
+
+# ISP PPPoE credentials (REQUIRED).
+PPPOE_USER="your-pppoe-user"
+PPPOE_PASS="your-pppoe-password"
+
+# PPPoE MTU (1492 is typical for PPPoE-over-Ethernet).
+PPPOE_MTU="1492"
+
+# Prefix-delegation subnet bits. /56 delegation => sla-len 8 (=> /64 on bridge).
+#   /60 delegation => 4    /62 => 2
+PD_SLA_LEN="8"
+
+# Optional: force a specific DHCPv6 DUID (hex, no separators) so the ISP
+# re-issues the SAME delegated prefix as a prior CPE. Empty = auto DUID-LLT.
+# Example (DUID-LL from MAC 44:f0:34:49:c0:00): 0003000144f03449c000
+PD_DUID=""
+
+# LTE / backup WAN interface (included in the WAN firewall match set).
+BACKUP_IFACE="wwan0"
