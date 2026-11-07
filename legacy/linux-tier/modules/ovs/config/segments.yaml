@@ -1,0 +1,13 @@
+# segments.yaml — default OVS segment plan (RO; baked to /usr/lib/hookprobe/ovs/).
+# A starting plan; the real per-segment policy is operator intent reconciled by AEGIS.
+# fail_open == OVS fail_mode=standalone (default); fail_closed == OVS fail_mode=secure.
+#
+# TODO: lock the segment schema (VLAN tags, inter-segment policy) in an ADR; until then
+#       ovs-bringup uses only the manifest network.interfaces[] role/fail_mode.
+bridges:
+  - name: hp-br0
+    fail_mode: standalone        # FAIL-OPEN default (edge safety: never drop the net)
+    segments:
+      - { name: trusted,  vlan: 10, fail: fail_open }
+      - { name: iot,      vlan: 20, fail: fail_open }
+      - { name: quarantine, vlan: 666, fail: fail_closed }   # isolate-this-host intents

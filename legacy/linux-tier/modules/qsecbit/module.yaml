@@ -1,0 +1,86 @@
+# modules/qsecbit/module.yaml — Composite cyber-resilience scorer.
+#
+# V2 port of V1 core/qsecbit/ (Python, scipy/numpy).
+# This first cut is a pure-Rust heuristic scorer (deterministic math only).
+# Upgrade path: load V1's Random Forest / VAE attack-probability model via
+# WASI-NN (see TODO(wasi-nn) in src/lib.rs) once exported to ONNX.
+#
+# The supervisor resolves requires/grants/provides against the signed manifest
+# (ADR 0003). The capability token `qsecbit` is produced by this module and
+# is declared here in `provides`; no new platform capability needs to be
+# granted by the manifest — this follows the same pattern as napse provides
+# `napse` and dnsxai provides `dns_filtering`.
+id: qsecbit
+version: 0.1.0
+title: "QSECBIT — Composite Cyber-Resilience Scorer"
+runtime: wasm
+artifact: registry.hookprobe.com/modules/qsecbit:0.1.0
+
+# `soc` is the minimum viable platform (CPU + memory available for event
+# processing). The supervisor will refuse to load this module if the token
+# is not granted — preventing load on a platform that hasn't been probed.
+requires:
+  capabilities: [soc]
+  min_memory_mb: 256
+
+grants:                         # the ONLY host access this module receives (WASI caps)
+  - read: /var/lib/hookprobe/events   # reads normalized telemetry events from Senzorium
+  - wasi-nn: cpu                      # reserved for the WASI-NN ML upgrade path (heuristic-only today)
+
+provides:
+  capabilities: [qsecbit]       # downstream modules / UI can gate on this token
+
+# wasm-M budget (ADR 0003 defaults: 50%/256MB/50ms).
+# Mahalanobis + entropy computation is O(n^2) in feature dimensions (n=4),
+# constant per tick — well within epoch_ms=50 even on a Pi 5.
+resources:
+  cpu_pct: 50
+  memory_mb: 256
+  epoch_ms: 50
+
+# Payload digest (ADR 0016) — refreshed by
+# `hookprobe-supervisor --write-artifact-digests qsecbit` (builder/sign-release.sh runs it
+# BEFORE --sign-modules); never hand-edit `value`.
+artifacts:
+  - path: qsecbit.wasm
+    role: executable
+    digest:
+      alg: sha256
+      value: "c9a79b62b2022cf706845de108291e9a9bc30224be42b8ac99bd227105cb156e"
+
+  # ADR 0017 — build-time-precompiled AOT blob, arch-qualified (one entry per built arch; the
+  # supervisor consults only the entry matching its own running arch, falls back to the verified
+  # `.wasm` JIT floor on any doubt). Populated by `--write-artifact-digests qsecbit`; never
+  # hand-edit `value`. arm64/riscv64 entries land via their own arch's CI/build run.
+  - path: qsecbit.cwasm
+    role: aot
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "3b8daae68baae74ea9493a377f1a634eb3ed7da88a0a8e1556a8087f3f0d5da4"
+
+  # arm64 leg (ADR 0017 D3/D1 — closes the "amd64-only role:aot" gap: without this entry every
+  # Pi/RK3588 device had NO arm64 `role: aot` to match, silently falling back to verified-JIT
+  # forever, never the AOT fast path). Populated by
+  # `hookprobe-supervisor --write-artifact-digests qsecbit` run AS arm64 (native arm64 CI runner,
+  # or this dev box's qemu-aarch64-static stand-in via `builder/refresh-aot.sh --arch arm64`);
+  # never hand-edit `value`.
+  - path: qsecbit.cwasm
+    role: aot
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "0919ac5efd2e09984b64a83c78be334e5e8da62dc992d44a77c0293575a3c07b"
+
+# All modules must be cosign-signed before the supervisor will load them.
+  - path: qsecbit.a76.cwasm
+    role: aot
+    arch: arm64
+    cpu: cortex-a76  # A76-tier (LSE) variant of the same path's A72-safe baseline;
+                     # defaults to A72-safe when `cpu:` is absent (every other entry).
+                     # informational until the Rust-side selection lands (see
+                     # builder/refresh-aot.sh --with-a76's doc header).
+    digest:
+      alg: sha256
+      value: "7b4b0ae813d3cf1177a251dc32427fbcee11bab18f180cd6d9b5e02a0f782f43"
+signature: required

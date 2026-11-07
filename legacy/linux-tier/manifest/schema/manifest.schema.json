@@ -1,0 +1,419 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.hookprobe.os/manifest/2.json",
+  "title": "HookProbe OS Platform Manifest",
+  "description": "Canonical schema (schema_version 2) for /var/lib/hookprobe/manifest.json. Generated from ADR 0003. The signed source of truth for 'detect once, query forever'. NOTE: three invariants cannot be expressed in JSON Schema and are enforced by external CI / write-time checks: (4) resources.allocatable == total - reserved per dimension; (7) signature verifies over the canonical bytes (all fields except `signature`); (8) probert-replay round-trip reproduces an identical manifest. Runtime readers additionally tolerate unknown keys for forward-compat; this validator is strict to catch writer bugs at build/write time.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "identity",
+    "platform",
+    "hardware",
+    "network",
+    "capabilities",
+    "resources",
+    "crypto",
+    "retention",
+    "modules",
+    "provenance",
+    "signature"
+  ],
+  "properties": {
+    "schema_version": {
+      "description": "Integer schema version. Breaking changes bump this; additive optional keys do not.",
+      "const": 2
+    },
+
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["device_id", "serial", "idevid", "claim_state", "tenant"],
+      "properties": {
+        "device_id": { "type": "string", "minLength": 1, "description": "Stable UUID derived at first boot." },
+        "serial": { "type": ["string", "null"], "description": "DMI/board serial or assigned; null if unknown." },
+        "idevid": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "pubkey_fpr", "sealed"],
+          "properties": {
+            "type": { "enum": ["tpm", "dice", "software"], "description": "Pi 5/CM5 have no discrete TPM -> usually 'software'." },
+            "pubkey_fpr": { "type": "string", "minLength": 1, "description": "Device identity public-key fingerprint." },
+            "sealed": { "type": "boolean", "description": "Sealed to TPM/OTP where present." }
+          }
+        },
+        "claim_state": { "enum": ["unclaimed", "claimed", "enrolled"] },
+        "tenant": { "type": ["string", "null"], "description": "null in standalone; set when enrolled (LDevID)." }
+      }
+    },
+
+    "platform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["class", "profile", "match"],
+      "properties": {
+        "class": { "enum": ["edge-lite", "edge-pro", "cloud", "virtual", "dev", "generic"] },
+        "profile": { "type": "string", "minLength": 1, "description": "Matches platforms/<profile>.yaml." },
+        "sku": { "type": ["string", "null"], "description": "Marketing SKU (Guardian/Fortress); cosmetic." },
+        "match": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["method", "key"],
+          "properties": {
+            "method": { "enum": ["device-tree", "dmi-tuple", "cpu-model", "virt", "fallback"] },
+            "key": { "type": "string", "description": "The durable identifier that matched (DT token / DMI tuple)." }
+          }
+        }
+      }
+    },
+
+    "hardware": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["arch", "cpu", "memory_mb", "storage", "tpm", "secure_boot", "npu", "virt", "fingerprint"],
+      "properties": {
+        "arch": { "enum": ["arm64", "amd64", "riscv64"] },
+        "cpu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["model", "cores"],
+          "properties": {
+            "model": { "type": "string" },
+            "cores": { "type": "integer", "minimum": 1 },
+            "tier": { "type": "string", "description": "CPU microarch tier for AOT blob selection (ADR 0017/0021), e.g. cortex-a76 for rpi5/rk3588; absent = the arch's safe baseline (Cortex-A72/ARMv8.0 on arm64)." }
+          }
+        },
+        "memory_mb": { "type": "integer", "minimum": 0 },
+        "storage": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/storage" }
+        },
+        "tpm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["present", "version", "kind"],
+          "properties": {
+            "present": { "type": "boolean" },
+            "version": { "type": ["string", "null"] },
+            "kind": { "enum": ["discrete", "firmware", "none"] }
+          }
+        },
+        "secure_boot": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["supported", "enabled"],
+          "properties": {
+            "supported": { "type": "boolean" },
+            "enabled": { "type": "boolean" }
+          }
+        },
+        "npu": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["present", "driver_ready", "vendor", "model"],
+          "properties": {
+            "present": { "type": "boolean" },
+            "driver_ready": { "type": "boolean", "description": "Distinct from present: an accelerator with no driver is invisible to modules." },
+            "vendor": { "type": ["string", "null"] },
+            "model": { "type": ["string", "null"] }
+          }
+        },
+        "virt": { "type": "string", "description": "none | kvm | qemu | vmware | aws | ... (systemd-detect-virt)." },
+        "fingerprint": { "type": "string", "minLength": 1, "description": "Hash of STABLE hw facts; re-probe trigger if it changes." }
+      }
+    },
+
+    "network": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["interfaces", "wifi", "lte"],
+      "properties": {
+        "interfaces": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/interface" }
+        },
+        "bpf_stateful": {
+          "type": "boolean",
+          "description": "Host kernel supports the stateful eBPF fast-path (SCHED_CLS + bpf_ct_lookup, kernel >= 5.19). Drives the inspect ladder (ADR 0005)."
+        },
+        "wifi": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["present"],
+          "properties": {
+            "present": { "type": "boolean" },
+            "max_standard": { "type": "string", "description": "From iw phy bitmaps (HE->wifi6, EHT->wifi7)." }
+          }
+        },
+        "lte": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["present"],
+          "properties": {
+            "present": { "type": "boolean" },
+            "model": { "type": "string" }
+          }
+        },
+        "uplinks": {
+          "type": "array",
+          "description": "The 'Get Online' view: every WAN candidate in failover order.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "kind", "priority"],
+            "properties": {
+              "name": { "type": "string" },
+              "kind": { "enum": ["wired", "wifi-station", "cellular"] },
+              "priority": { "type": "integer" }
+            }
+          }
+        },
+        "wifi_radios": {
+          "type": "array",
+          "description": "Each Wi-Fi radio + its stable-identity role (station vs AP).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "role"],
+            "properties": {
+              "name": { "type": "string" },
+              "role": { "enum": ["station", "ap"] },
+              "band": { "type": "string", "description": "2.4 | 5 | 6 | combo e.g. 2.4+5" }
+            }
+          }
+        }
+      }
+    },
+
+    "capabilities": {
+      "type": "object",
+      "description": "Flat namespace of capability tokens -> grant object. grant = presence AND known-good AND policy.",
+      "additionalProperties": { "$ref": "#/$defs/capability" }
+    },
+
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["total", "reserved", "allocatable", "defaults"],
+      "properties": {
+        "total": { "$ref": "#/$defs/cpuMem" },
+        "reserved": { "$ref": "#/$defs/cpuMem" },
+        "allocatable": { "$ref": "#/$defs/cpuMem" },
+        "defaults": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wasm", "container"],
+          "properties": {
+            "wasm": { "$ref": "#/$defs/budget" },
+            "container": { "$ref": "#/$defs/budget" }
+          }
+        }
+      }
+    },
+
+    "crypto": {
+      "type": "object",
+      "description": "Canonical crypto block per ADR 0002. Allowed algorithm sets per suite_id are checked in CI.",
+      "additionalProperties": false,
+      "required": [
+        "agility", "suite_id", "image_signing", "module_signing", "boot_signing",
+        "tls_kex", "tls_auth", "data_at_rest", "hash", "device_identity", "cbom"
+      ],
+      "properties": {
+        "agility": { "type": "boolean" },
+        "suite_id": { "type": "string", "minLength": 1 },
+        "image_signing": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "module_signing": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "boot_signing": { "type": "string" },
+        "tls_kex": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "tls_auth": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "data_at_rest": { "type": "string" },
+        "hash": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "device_identity": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "cbom": { "type": "string" }
+      }
+    },
+
+    "retention": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["tiers", "computed_at"],
+      "properties": {
+        "tiers": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/retentionTier" }
+        },
+        "computed_at": { "type": "string", "format": "date-time" }
+      }
+    },
+
+    "modules": {
+      "type": "array",
+      "description": "May be empty at first boot. Only the supervisor mutates this section (and re-signs).",
+      "items": { "$ref": "#/$defs/module" }
+    },
+
+    "provenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image_ref", "image_digest", "generated_at", "generator", "schema_version"],
+      "properties": {
+        "image_ref": { "type": "string" },
+        "image_digest": { "type": "string", "description": "e.g. sha256:..." },
+        "generated_at": { "type": "string", "format": "date-time" },
+        "generator": { "type": "string", "description": "e.g. bootstrap/1.0.0" },
+        "schema_version": { "const": 2 }
+      }
+    },
+
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["method", "sig", "cert", "tpm_sealed", "pcr_policy"],
+      "properties": {
+        "method": { "enum": ["cosign", "ed25519-puf"] },
+        "sig": { "type": "string", "minLength": 1 },
+        "cert": { "type": "string", "minLength": 1 },
+        "tpm_sealed": { "type": "boolean" },
+        "pcr_policy": { "type": ["string", "null"], "description": "PCRs bound when sealed (e.g. sha256:0,2,7); null otherwise." }
+      }
+    }
+  },
+
+  "$defs": {
+    "cpuMem": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_pct", "memory_mb"],
+      "properties": {
+        "cpu_pct": { "type": "integer", "minimum": 0, "description": "100 = one core." },
+        "memory_mb": { "type": "integer", "minimum": 0 }
+      }
+    },
+
+    "budget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["cpu_pct", "memory_mb"],
+      "properties": {
+        "cpu_pct": { "type": "integer", "minimum": 0, "description": "100 = one core; maps to cgroup CPUQuota." },
+        "memory_mb": { "type": "integer", "minimum": 0, "description": "HARD wall; maps to cgroup MemoryMax (and the Wasmtime StoreLimits memory cap for wasm)." },
+        "epoch_ms": { "type": "integer", "minimum": 1, "description": "Wasmtime epoch deadline (wall-clock wall); wasm runtime only." },
+        "mem_high_mb": { "type": "integer", "minimum": 0, "description": "SOFT wall; maps to cgroup MemoryHigh (throttle, never kills). Defaults to a fraction of memory_mb when absent." },
+        "cpu_weight": { "type": "integer", "minimum": 1, "maximum": 10000, "description": "Relative cgroup CPUWeight under contention (systemd default 100). Defaults per-runtime when absent." },
+        "fuel": { "type": "integer", "minimum": 1, "description": "Wasm-only CPU-metering wall: Wasmtime fuel budget (~1 unit/instruction). Ignored for non-wasm runtimes. Defaults per-runtime when absent." }
+      }
+    },
+
+    "storage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dev", "size_gb", "type"],
+      "properties": {
+        "dev": { "type": "string" },
+        "size_gb": { "type": "number", "minimum": 0 },
+        "type": { "type": "string", "description": "emmc | nvme | ssd | sd | usb | virtio | ..." },
+        "serial": { "type": "string", "description": "stable disk serial/wwid; the device fingerprint uses this over the /dev name." },
+        "removable": { "type": "boolean" }
+      }
+    },
+
+    "interface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "mac", "type", "supported_modes", "role", "fail_mode", "state"],
+      "properties": {
+        "name": { "type": "string" },
+        "mac": { "type": ["string", "null"] },
+        "type": { "enum": ["ethernet", "wifi", "lte"] },
+        "supported_modes": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Supported link modes (stable), NOT current speed (transient)."
+        },
+        "role": { "enum": ["out-of-band", "inline", "mgmt", "unassigned"] },
+        "fail_mode": {
+          "description": "Required (fail-open|fail-closed) when role=inline; null otherwise.",
+          "type": ["string", "null"]
+        },
+        "state": { "type": "string", "description": "up | down | unknown" },
+        "xdp_native": {
+          "type": "boolean",
+          "description": "Driver supports native (driver-hook) XDP. False => the inspect ladder uses TC-bpf (ADR 0005)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "role": { "const": "inline" } },
+            "required": ["role"]
+          },
+          "then": {
+            "properties": { "fail_mode": { "enum": ["fail-open", "fail-closed"] } },
+            "required": ["fail_mode"]
+          },
+          "else": {
+            "properties": { "fail_mode": { "type": "null" } }
+          }
+        }
+      ]
+    },
+
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["state", "reason", "evidence"],
+      "properties": {
+        "state": {
+          "enum": ["granted", "present_unsafe", "policy_denied", "absent"],
+          "description": "granted->render; present_unsafe/policy_denied->disable-with-reason; absent->hide."
+        },
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Required (non-null, non-empty) when state != granted."
+        },
+        "evidence": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Facts/tokens that produced the decision (drill-down + audit)."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "not": { "properties": { "state": { "const": "granted" } } }
+          },
+          "then": {
+            "properties": { "reason": { "type": "string", "minLength": 1 } },
+            "required": ["reason"]
+          }
+        }
+      ]
+    },
+
+    "retentionTier": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "cap_gb", "window"],
+      "properties": {
+        "name": { "type": "string", "description": "pcap | events | evidence | ..." },
+        "cap_gb": { "type": "number", "minimum": 0 },
+        "window": { "type": "string", "description": "Human default window; not a guarantee." }
+      }
+    },
+
+    "module": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "runtime", "state", "budget", "signature"],
+      "properties": {
+        "id": { "type": "string" },
+        "version": { "type": "string" },
+        "runtime": { "enum": ["wasm", "container", "sysext", "image-layer"] },
+        "state": { "enum": ["pending", "running", "throttled", "paused", "stopped", "failed", "evicted"] },
+        "budget": { "$ref": "#/$defs/budget" },
+        "signature": { "enum": ["verified", "required", "unsigned"] }
+      }
+    }
+  }
+}

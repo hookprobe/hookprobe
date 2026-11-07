@@ -1,0 +1,15 @@
+HQPOL1
+# task #26 bench policy
+prefix-list ADMINS seq 10 permit 192.168.200.1/32
+acl MGMT-IN seq 10 allow any pl:ADMINS any
+# management answers only fortress's 192.168.200.1; everyone else: implicit deny
+interface mgmt acl in MGMT-IN
+# Wi-Fi clients: http to 1.1.1.1 is REJECTED (fast fail), DNS to 9.9.9.9 is DROPPED (silent)
+acl LAN-IN seq 10 block tcp any 1.1.1.1/32 80
+acl LAN-IN seq 20 drop udp any 9.9.9.9/32 53
+acl LAN-IN default allow
+interface lan acl in LAN-IN
+# 1.0.0.1 goes out the management VLAN; everything else the internet VLAN; mgmt is the metric-100 backup
+route 1.0.0.1/32 via mgmt gw 192.168.200.1
+route 0.0.0.0/0 via wan metric 10
+route 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100

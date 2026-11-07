@@ -1,0 +1,18 @@
+[Unit]
+Description=HookProbe telemetry sampler (host metrics -> qsecbit)
+After=hookprobe-data-guard.service
+[Service]
+ExecStart=/usr/lib/hookprobe/telemetry-export.sh /var/lib/hookprobe/telemetry 5
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=32M
+# 2026-07-07 backend-audit fix: feeds qsecbit's live scoring loop directly -- belongs in the
+# same accounted slice as qsecbit.service, not the default system.slice.
+Slice=hookprobe-live.slice
+[Install]
+WantedBy=multi-user.target

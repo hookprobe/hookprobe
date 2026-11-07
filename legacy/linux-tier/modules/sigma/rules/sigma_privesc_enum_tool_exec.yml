@@ -1,0 +1,33 @@
+title: Known Privilege-Escalation / System-Enumeration Script Executed
+id: d014e710-349d-49c4-baaa-d622c00203e4
+status: stable
+description: >
+  Exec of a well-known post-exploitation enumeration script/tool by its own filename —
+  linpeas(.sh), linenum.sh, linux-exploit-suggester, lse.sh, pspy32/pspy64, or
+  unix-privesc-check. These scripts perform bulk system/account/process/service
+  discovery (closest single ATT&CK mapping: T1082 System Information Discovery; the
+  same exec also functionally covers T1057 Process Discovery and T1087 Account
+  Discovery — Sigma's `tags:` extraction here keeps only the first `attack.tNNNN` tag
+  per the engine's documented one-technique-per-rule contract, see this rule's second
+  tag for the runner-up). host_edr has NO discovery-family detector at all (its scope is
+  exec/persistence heuristics — see its own module doc's honest gap list) — real NEW
+  coverage, and a very low-noise signal: these exact filenames essentially never appear
+  in benign operational traffic.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - "linpeas"
+      - "linenum.sh"
+      - "linux-exploit-suggester"
+      - "lse.sh"
+      - "pspy32"
+      - "pspy64"
+      - "unix-privesc-check"
+  condition: selection
+level: high
+tags:
+  - attack.discovery
+  - attack.t1082

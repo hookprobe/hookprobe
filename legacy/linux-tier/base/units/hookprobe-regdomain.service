@@ -1,0 +1,52 @@
+[Unit]
+Description=HookProbe regulatory-domain detection + apply (BEFORE hostapd) — ADR 0034
+Documentation=file:///usr/share/hookprobe/docs/adr/0034-adaptive-wifi-regdomain-and-calibration.md
+# CRITICAL ORDERING (brcmfmac constraint, proven live CM5 2026-07-10): `iw reg set <CC>` at
+# RUNTIME (while hostapd serves) triggers the FullMAC DFS bounce → AP collapses ch40/80MHz →
+# ch140/20MHz. So the regdomain MUST be set at BOOT, before the radio comes up. This oneshot
+# resolves the country (offline-first) + `iw reg set` + writes /run/hookprobe/wifi-country, and
+# is ordered BEFORE the network reconcile (which renders hostapd's country_code from that file and
+# starts hookprobe-hostapd@). Ordering before the reconcile transitively guarantees "regdomain
+# before hostapd", and hookprobe-hostapd@.service also carries an explicit After= on this unit
+# (belt-and-suspenders for a hostapd started by any other path).
+# Order AFTER the manifest exists (offline intent/timezone are always available) and — best-effort,
+# not a hard Want — after ModemManager so the cellular-MCC source is up if a modem is present; and
+# BEFORE the network reconcile (which renders hostapd's country_code + starts hostapd). Only
+# meaningful where a Wi-Fi radio exists; runs world-00 harmlessly otherwise.
+After=hookprobe-bootstrap.service ModemManager.service
+Before=hookprobe-network-reconcile.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# HOOKPROBE_WIFI_GEOIP gates ONLY the behind-NAT external IP-echo (ADR 0034 D10). The OFFLINE
+# GeoIP rung (public WAN IP → embedded ODC-PDDL DB at /usr/share/hookprobe/geoip/) is a purely
+# local lookup and runs regardless — no packet leaves. 0 = offline-only (default, no leak). The
+# whole offline path (operator-intent → LKG → cellular MCC → offline-GeoIP → timezone → world 00)
+# needs no network, so this runs early.
+Environment=HOOKPROBE_WIFI_GEOIP=0
+ExecStart=/usr/lib/hookprobe/regdomain-apply.sh
+# Never fail the boot on a regdomain miss (GAP-R1): the script always exits 0 (world-00 fail-safe);
+# SuccessExitStatus is belt-and-suspenders.
+SuccessExitStatus=0
+# Needs net_admin to set the kernel regdomain (iw reg set); writes /run (run-file) + the
+# last-known-good cache under /var/lib/hookprobe. Reads the embedded GeoIP DB under RO /usr/share.
+# BUG-N2 (2026-07-17, found on live Pi4+CM5 metal): `/run/hookprobe` is created `hookprobe:hookprobe`
+# 0755 by tmpfiles.d (for the sandboxed `hookprobe`-user Wasm modules). This oneshot runs as root but
+# with caps minimized to net_admin — so WITHOUT CAP_DAC_OVERRIDE root cannot write a file into a
+# `hookprobe`-owned directory, and the write failed EACCES → `could not write … (reconciler falls to
+# 00)`. The early detection's verdict was silently discarded EVERY boot; only the later WAN-online
+# `reresolve` (which happened to run after another root service had re-chowned the dir to root:root)
+# persisted a country. Add CAP_DAC_OVERRIDE — the minimal, targeted fix: it lets this root oneshot
+# write its own system run-file regardless of the shared dir's owner, and (unlike changing the dir to
+# root:root) leaves the `hookprobe`-user module consumers untouched.
+AmbientCapabilities=CAP_NET_ADMIN CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/run -/var/lib/hookprobe
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,29 @@
+[package]
+name = "hookprobe-rbac"
+version = "0.1.0"
+edition = "2021"
+description = "HookProbe OS RBAC enforcement seam (ADR 0008 + ADR 0028): the role/verb model (parsed straight from security/rbac/roles.yaml, embedded — data, not code) plus an identity-token authorization decision, consumed as an axum middleware by hookprobe-api and hookprobe-planner. Standalone-loopback stays permissive by construction (no account required to run the device); enforcement activates the moment a bearer identity is presented or the peer is not local."
+
+[lib]
+name = "hookprobe_rbac"
+path = "src/lib.rs"
+
+[dependencies]
+# Parses the REAL security/rbac/roles.yaml (embedded via include_str! at compile time, so the
+# Rust role table can never drift from the policy file a human edits) plus the on-disk token
+# store (`/var/lib/hookprobe/rbac/tokens.json`, ADR 0008's own store path).
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+hex = "0.4"
+anyhow = "1"
+# The one axum-facing piece: an `axum::middleware::from_fn_with_state`-compatible enforcement
+# function, so both consumer binaries (hookprobe-api, hookprobe-planner — already axum 0.8
+# services) share the exact same authorization decision code, never two copies that can drift.
+axum = "0.8"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }

@@ -1,0 +1,35 @@
+{
+  "//": "Container/image signature policy (Readme 'Trust nothing unsigned'; ADR 0002).",
+  "//1": "Default REJECT: nothing runs/upgrades unless it matches a signed-by rule below.",
+  "//2": "HookProbe images + modules must be cosign/sigstore-signed by the HookProbe",
+  "//3": "release identity. The PUBLIC trust material is injected by CI into",
+  "//4": "/etc/pki/hookprobe/ (public only — signing keys NEVER ship, ADR 0002 §5).",
+  "//5": "TODO: switch keyPath to sigstoreSigned (Fulcio identity + Rekor) once the",
+  "//6": "release uses keyless signing; track sigstore PQC/composite ML-DSA roadmap.",
+
+  "default": [
+    { "type": "reject" }
+  ],
+
+  "transports": {
+    "docker": {
+      "ghcr.io/hookprobe": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/etc/pki/hookprobe/cosign.pub",
+          "signedIdentity": { "type": "matchRepoDigestOrExact" }
+        }
+      ],
+      "registry.hookprobe.com": [
+        {
+          "type": "sigstoreSigned",
+          "keyPath": "/etc/pki/hookprobe/cosign.pub",
+          "signedIdentity": { "type": "matchRepoDigestOrExact" }
+        }
+      ]
+    },
+    "docker-daemon": {
+      "": [ { "type": "reject" } ]
+    }
+  }
+}

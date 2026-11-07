@@ -1,0 +1,20 @@
+#!/bin/sh
+# HookProbe OS dynamic MOTD — the live "Organism Status" shown at every console/SSH login.
+# Debian runs executables in /etc/update-motd.d/ via pam_motd. Read-only; degrades gracefully.
+M=/var/lib/hookprobe/manifest.json
+C='\033[1;36m'; D='\033[0;90m'; G='\033[0;32m'; Y='\033[0;33m'; N='\033[0m'
+
+get() { jq -r "$1 // \"—\"" "$M" 2>/dev/null; }
+soc() { s=$(systemctl is-active "$1" 2>/dev/null); [ "$s" = active ] && printf "${G}%s${N}" "$s" || printf "${D}%s${N}" "${s:-inactive}"; }
+
+class=$(get '.platform.class')
+caps=$(jq -r '[.capabilities|to_entries[]|select(.value.state=="granted")|.key]|join(" ")' "$M" 2>/dev/null)
+# cat|wc so a missing file is a clean 0 (a `< file` redirect on a missing file warns before wc runs).
+flows=$(cat /var/lib/hookprobe/flows 2>/dev/null | wc -l)
+events=$(cat /var/lib/hookprobe/events 2>/dev/null | wc -l)
+
+printf "\n  ${C}HookProbe OS${N}  ${D}—  one node's detection, everyone's protection${N}\n\n"
+printf "  ${D}class     ${N}%s\n" "$class"
+printf "  ${D}detection ${N}senzorium=%b  dpi=%b  ids=%b  ebpf=%b\n" "$(soc senzorium-flow)" "$(soc napse-dpi)" "$(soc napse)" "$(soc napse-capture)"
+printf "  ${D}soc       ${N}flows seen ${Y}%s${N}   ·   alerts ${Y}%s${N}\n" "$flows" "$events"
+printf "  ${D}granted   ${N}%s\n\n" "${caps:-—}"

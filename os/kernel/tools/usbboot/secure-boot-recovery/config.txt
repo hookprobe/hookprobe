@@ -1,0 +1,40 @@
+uart_2ndstage=1
+
+# Uncomment to mark the EEPROM as write protected when the EEPROM write-protect pin is pulled low.
+# See https://www.raspberrypi.com/documentation/computers/raspberry-pi.html#eeprom-write-protect
+#eeprom_write_protect=1
+
+# Uncomment to write to enable secure-boot by writing. This
+# locks the device to the public key in the EEPROM by storing the
+# sha256 hash of the public key in OTP.
+#
+# This option also prevents the ROM from loading recovery.bin from SD/EMMC
+# which means that the bootloader can only be updated via RPIBOOT or self-update.
+#
+# recovery.bin version to 2025-05-16 and newer automatically sets
+# revoke_devkey=1 if program_pubkey is non-zero.
+#
+# Uncomment program_pubkey=1 to enable this
+# WARNING: THIS OPTION MODIFIES THE BCM2711 CHIP AND IS IRREVERSIBLE.
+#program_pubkey=1
+
+# Pi 4B and Pi400 do not have a dedicated RPIBOOT jumper so a different GPIO
+# must be used to enable RPIBOOT if pulled low. The options are 2,4,5,6,7,8.
+#
+# This option has no effect on CM4.
+
+# WARNING: THIS OPTION MODIFIES THE BCM2711 CHIP AND IS IRREVERSIBLE.
+#program_rpiboot_gpio=6
+
+# Permanently disable VideoCore JTAG access.
+# Warning: This option limits the ability to do failure analysis on
+# boards returned to resellers or Raspberry Pi Trading Ltd.
+#program_jtag_lock=1
+
+# rpiboot - only
+# If recovery_reboot is set then the Pi will disconnect USB and
+# reboot after the flashing the firmware.
+#recovery_reboot=1
+
+# Uncomment to instruct recovery.bin to stop sending metadata
+#recovery_metadata=0

@@ -1,0 +1,29 @@
+# A2 (M5.5) — a REAL wasm32-wasip1 detection module fixture for the EL0 wasip1 host.
+# no_std / no_main with a hand-written `_start`: it imports ONLY the three core WASI
+# preview1 functions a stdin/stdout detection module needs (fd_read, fd_write, proc_exit)
+# from the "wasi_snapshot_preview1" module — a genuine wasip1 command binary with a
+# minimal, deterministic import surface (a strict subset of what a std wasip1 module like
+# napse-dpi imports). Compiled to wasm32-wasip1 by the kernel's build.rs (nested cargo).
+# Detached workspace so it never enters the kernel's build graph / Cargo.lock.
+[package]
+name = "wasip1-fixture"
+version = "0.1.0"
+edition = "2021"
+
+[workspace]
+
+[[bin]]
+name = "wasip1-fixture"
+path = "src/main.rs"
+
+# A2+ — the SECOND catalogue module (DNS-RPZ sinkhole detector), same wasip1 stdin/stdout ABI.
+[[bin]]
+name = "wasip1-dnsrpz"
+path = "src/dnsrpz.rs"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true

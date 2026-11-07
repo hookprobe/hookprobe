@@ -1,0 +1,123 @@
+# modules/napse-capture/module.yaml — NAPSE kernel-level XDP/eBPF packet intake.
+#
+# This is the ONE deliberate exception to "logic = Wasm". An XDP program runs
+# INSIDE the kernel at the NIC RX path (before sk_buff / the TCP-IP stack); a
+# Wasm/WASI sandbox cannot do that. So this ships as a systemd-sysext that extends
+# /usr (Pillar 1: "host-integral pieces layer into the image"), and the supervisor
+# GATES it by capability + ENABLES it — it does NOT sandbox-load it the way it
+# loads a Wasm module. Budget is a host cgroup slice, never a Wasmtime fuel/epoch.
+#
+# Canon: docs/architecture/runtime-engine-map.md §0 + §4 (napse-capture sketch), docs/architecture/Readme.md
+# Pillar 1 (sysext) + "Data plane" (out-of-band default / inline opt-in /
+# fail-open|closed), docs/architecture/Architecture.md C12 (NIC→fast path) + §4.4 (OS-Agent
+# privileged bridge), docs/adr/0003 (module model; `runtime` ∈ wasm/container/sysext).
+# V1 source: ~/hookprobe/core/napse/aegis/ (Zig XDP) + core/napse/kernel/*.c (C eBPF).
+
+id: napse-capture
+version: 0.1.0
+title: "NAPSE capture — kernel XDP/eBPF packet intake"
+runtime: sysext               # kernel/eBPF; NOT Wasm. /usr overlay merged at boot.
+artifact: registry.hookprobe.com/sysext/napse-capture:0.1.0   # per-arch OCI sysext image
+
+requires:
+  capabilities: [capture]     # NIC XDP-capable (native or SKB) ∧ CAP_BPF, known-good gated
+                              # (runtime-engine-map §2: `capture` = XDP-NIC ∧ CAP_BPF).
+  # NOTE: the XDP *drop* fast path (active mitigation, not passive copy) additionally
+  # requires `ddos_mitigation` (inline/XDP-drop-capable NIC on the known-good list).
+  # Passive out-of-band capture needs only `capture`; the drop path is gated harder.
+  min_kernel: "5.8"           # CAP_BPF split landed in 5.8; BTF/CO-RE needs a BTF kernel.
+                              # TODO: the supervisor has no `min_kernel` field yet — either
+                              #       add it to ADR 0003 or fold kernel/BTF into the
+                              #       `capture` known-good rule in platforms/*.yaml.
+
+grants:                       # HOST capabilities — the HONEST boundary of the WASI model.
+  # A Wasm module can NEVER be granted these: it has no kernel address space, cannot
+  # call bpf(2)/setsockopt(SO_ATTACH_*), and cannot own an AF_XDP UMEM ring. These caps
+  # are exactly WHY this engine is a sysext and not Wasm. They are scoped to the loader
+  # process only (AmbientCapabilities in the unit), not granted process-wide on the host.
+  - cap: [bpf, net_admin, net_raw]
+      # bpf      → bpf(2): load XDP prog, create/update BPF maps + ring buffer (5.8+).
+      # net_admin→ attach/detach XDP on a netdev; configure AF_XDP queues / TC clsact.
+      # net_raw  → AF_XDP socket (raw frame rings) for the kernel→userspace feature feed.
+  - af_xdp: rx                # zero-copy RX ring. Out-of-band = the kernel keeps the
+                              # packet (XDP_PASS) and we read a COPY; we are never in the path.
+
+provides:
+  capabilities: [flows, packets]   # the SERVICE this module materializes (the live feed at the
+                                   # path below). NOT [capture]: `capture` is the PLATFORM token
+                                   # ("device CAN capture", granted from HW+policy) which this
+                                   # module REQUIRES; a module must never require∧provide the same
+                                   # token (circular). Resolved per ADR 0003 §"Token kinds":
+                                   # platform-capability tokens vs module-provided SERVICE tokens.
+                                   # Downstream: wasm `napse` (synthesis) consumes `flows`.
+  feeds:                      # the concrete artifact other modules read (the wasm `napse`
+    - /var/lib/hookprobe/flows   # module requires [soc,ids] and reads exactly this path.
+
+resources:
+  # sysext is NOT budgeted like Wasm (no fuel/epoch/StoreLimits). The in-kernel XDP
+  # program is not cgroup-accountable at all. We bound only the USERSPACE loader/ring
+  # consumer via a dedicated host slice (Architecture C11 outer wall, cgroups v2).
+  slice: hookprobe-dataplane.slice    # see base/sysext/hookprobe-dataplane.slice
+  # TODO: ADR 0003 `resources.defaults` has wasm/container tiers but no `sysext` tier.
+  #       Add a `sysext` tier (host slice id + a soft CPU/mem ceiling for the loader).
+
+signature: required           # the sysext OCI image is cosign-signed (ADR 0002
+                              # module_signing); the device VERIFIES, never signs.
+
+# staging: — ADR 0015 D1 explicit override (irregular runtime). Stages the WORKING
+# artifact this module materializes today: the AF_PACKET mirror-sink DPI sensor
+# (napse-dpi, built from the shared napse-loader crate) that produces the `flows`
+# feed this module.yaml `provides`. This is the honest, currently-buildable half of
+# napse-capture; the true in-kernel XDP loader (napse-xdp-attach + napse_detect.bpf.o,
+# under sysext/usr/lib/hookprobe/xdp/) is tracked but NOT wired into the plan here —
+# it has no CI cross-build recipe validated yet (unlike napse-quarantine's, which
+# napse-quarantine/README.md documents end-to-end). Flagged for os-architect: promote
+# the XDP path into this staging: block once its cross-build trail is proven, the same
+# way napse-quarantine's was.
+staging:
+  build:
+    - crate: napse-loader        # workspace member: modules/napse-capture/loader
+      bin: napse-dpi              # this crate also produces napse-loader + hydra-feedsync
+      toolchain: musl              # bins; only napse-dpi is staged (see note above)
+  artifacts:
+    - { src: "{bin}/napse-dpi", dest: "/usr/lib/hookprobe/napse-dpi", mode: "0755" }
+  units:
+    - "modules/napse-capture/loader/napse-dpi.service"
+  preset:
+    napse-dpi.service: enable
+
+# Payload digest (ADR 0016, arch-qualified per ADR 0021) — on-device dest path (sysext: never
+# co-located with this module.yaml at runtime). Only `napse-dpi` is pinned (the true in-kernel XDP
+# loader is not staged today — see the staging: note above; nothing would be gained by pinning a
+# payload that never ships; it also loads no `.bpf.o` at all — AF_PACKET only — so there is no
+# bpf-object entry to arch-qualify or check).
+#
+# RESOLVED 2026-07-05 (code-developer, multi-arch native-binary digest gap closure — the SAME gap
+# flagged and closed for napse-quarantine/evidence/api/host-telemetry): `napse-dpi` is a native
+# binary, genuinely different bytes per arch — a single arch-less digest here meant an arm64 (Pi)
+# image would ship the real arm64 `napse-dpi` bytes while this file pinned the amd64 build's hash,
+# so `verify_artifact_digests` would refuse it on first boot (napse-capture provides the `flows`
+# feed the wasm `napse` module consumes — a refusal here is a dead detection pipeline on the Pi).
+# Closed the same way (`docs/adr/0021-multiarch-native-artifact-digests.md`): one arch-qualified
+# entry per built arch. Both `value`s are REAL sha256 of `napse-dpi` rebuilt fresh in this pass for
+# x86_64-unknown-linux-musl (native) and aarch64-unknown-linux-musl (`CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=aarch64-linux-gnu-gcc`
+# — a pure-static-musl Rust binary with no C/libbpf dependency, so the plain glibc-hosted cross
+# linker suffices, unlike the `gnu`-toolchain modules), each written by its own arch's
+# `hookprobe-supervisor --write-artifact-digests napse-capture` run (arm64 via
+# qemu-aarch64-static/binfmt so `module_sig::running_arch()` reports `arm64` correctly) — proven
+# `verified` under a qemu-aarch64-static arm64 reconcile. A compiled binary's bytes remain
+# toolchain/version-sensitive; a real release pipeline re-runs `--write-artifact-digests` +
+# `--sign-modules` against its OWN build of each arch before shipping.
+artifacts:
+  - path: /usr/lib/hookprobe/napse-dpi
+    role: executable
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "e42c51f33176de67073e4e578297df62bb60ee86ba6ca1bae24e22d86c8a41e0"
+  - path: /usr/lib/hookprobe/napse-dpi
+    role: executable
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "c426bdbabb413f3341a3594b7d5a77e76ed2a0aa714195b11c2b995e4b6cf65c"

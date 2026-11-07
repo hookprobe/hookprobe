@@ -1,0 +1,37 @@
+[Unit]
+Description=HookProbe evidence graph — ingest SOC streams → track/trace/threat-graph (SQLite)
+After=napse.service
+[Service]
+Type=oneshot
+# idempotent re-ingest (node ON CONFLICT + edge PK dedup) → safe to run on a timer. Streams are
+# retention-capped so a full re-read is bounded; incremental-offset ingest is a later optimization.
+ExecStart=/usr/lib/hookprobe/hookprobe-evidence --db /var/lib/hookprobe/evidence.db --flows /var/lib/hookprobe/flows --events /var/lib/hookprobe/events --host /var/lib/hookprobe/host-events --responses /var/lib/hookprobe/responses --dns-verdicts /var/lib/hookprobe/dns-verdicts --aegis-verdicts /var/lib/hookprobe/aegis-verdicts --qsecbit-scores /var/lib/hookprobe/qsecbit-scores --correlate-all
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# GAP-3 (2026-07-16 hardening): native oneshot that ingests UNTRUSTED flow/event/host streams into
+# SQLite but ran root with the full capability bounding set. Full sandbox, no capabilities needed
+# (reads/writes /var/lib/hookprobe only; no network → AF_UNIX-only).
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io
+ReadWritePaths=/var/lib/hookprobe
+MemoryMax=128M
+# 2026-07-07 backend-audit fix: no Slice= meant this ran unaccounted in system.slice.
+# hookprobe-background.slice is its documented home (Architecture.md §4.3: "run compaction
+# in the low-priority background.slice") -- graph rebuild is deferrable, low-priority work
+# that must yield to the live detection path under contention, never starve it.
+Slice=hookprobe-background.slice

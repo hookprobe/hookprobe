@@ -1,0 +1,50 @@
+[Unit]
+Description=HookProbe regulatory-domain WAN-online re-resolve (offline GeoIP of the WAN exit IP) — ADR 0034
+Documentation=file:///usr/share/hookprobe/docs/adr/0034-adaptive-wifi-regdomain-and-calibration.md
+# ADR 0034 D11 (W1) — phase (b) of the two-phase regdomain flow. hookprobe-regdomain.service (phase
+# a) runs BEFORE the WAN is up and so can never reach the offline-GeoIP-of-the-WAN-exit-IP rung; it
+# only ever resolves via operator-intent / cached-LKG / cellular-MCC / timezone / world "00". This
+# unit runs ONCE THE WAN IS ACTUALLY UP (After=network-online.target — the AP/LAN-gateway radio's
+# generated .network sets RequiredForOnline=no precisely so this target is reached without waiting
+# on the AP, see lan.rs) and re-resolves in `HP_REGDOMAIN_MODE=reresolve`: the offline GeoIP rung now
+# has a real public WAN exit IP to look up. Idempotency guards live in regdomain-apply.sh itself: no
+# restart unless the CC actually CHANGED, and a resolve that yields "00"/unresolved NEVER downgrades
+# an already-real CC (a transient WAN blip must not undo a working domain). A genuine change performs
+# a CLEAN switch: stop every AP's hostapd (radio idle) → iw reg set (safe with no AP transmitting) →
+# restart hookprobe-network-reconcile.service (re-renders hostapd's country_code and cleanly
+# restarts hostapd + the verify-retry loop). HONEST SCOPE NOTE: re-firing this same script on a
+# LATER WAN change (box physically moved post-boot) via a networkd-dispatcher routable.d hook is
+# the ADR's stated design (D11) but is NOT built by this change — this unit only covers the
+# WAN-online-at-boot re-resolve. The dispatcher hook is roadmap.
+After=network-online.target hookprobe-network-reconcile.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# reresolve mode (see the script's MODE dispatch); GeoIP stays offline-only (no outbound identity
+# leak — ADR 0034 D10) unless the operator opts into the behind-NAT echo separately; SKIP_LKG=1
+# forces LIVE re-detection here (this run IS the live-detection phase, not the boot fail-safe).
+Environment=HP_REGDOMAIN_MODE=reresolve
+Environment=HOOKPROBE_WIFI_GEOIP=0
+Environment=HP_REGDOMAIN_SKIP_LKG=1
+ExecStart=/usr/lib/hookprobe/regdomain-apply.sh
+# Never fail on a miss (same GAP-R1 fail-safe contract as the boot phase): the script always exits
+# 0 (no-op on no-change / no-downgrade); SuccessExitStatus is belt-and-suspenders.
+SuccessExitStatus=0
+# Needs net_admin to set the kernel regdomain (iw reg set) and to talk to systemd (stop hostapd@,
+# restart the reconcile) via the system bus; writes the run-file + last-known-good cache.
+# BUG-N2 (2026-07-17): +CAP_DAC_OVERRIDE so this root oneshot can always write /run/hookprobe/wifi-country
+# (created `hookprobe:hookprobe` by tmpfiles for the sandboxed Wasm modules) regardless of the shared
+# dir's current owner — same fix as the early `hookprobe-regdomain.service` (see its comment). Without
+# it, this write only happened to succeed because another root service had already re-chowned the dir.
+AmbientCapabilities=CAP_NET_ADMIN CAP_DAC_OVERRIDE
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_OVERRIDE
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/run -/var/lib/hookprobe
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,27 @@
+title: Anti-Forensic Secure-Delete Tool Executed
+id: 50b0ba68-f027-4efa-822e-81a498893520
+status: experimental
+description: >
+  Exec of a dedicated secure-delete/anti-forensics tool (shred/wipe/srm/bleachbit) —
+  distinct from host_edr's LOG_TAMPERING_RULE_ID, which only watches `rm`/`truncate`
+  targeting `/var/log/*` plus shell-history clearing. These tools securely overwrite
+  ARBITRARY evidence (dropped payloads, staging files, exfil archives) anywhere on
+  disk, not just log files — a materially different target scope, real NEW coverage.
+  HONEST FALSE-POSITIVE NOTE: a sysadmin performing a genuine compliance-driven secure
+  wipe (disposing of a decommissioned disk/file per policy) will also fire — rare in
+  practice, but real; kept `experimental`/`medium`.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - "shred "
+      - "wipe "
+      - "srm "
+      - "bleachbit"
+  condition: selection
+level: medium
+tags:
+  - attack.defense-evasion
+  - attack.t1070.004

@@ -1,0 +1,31 @@
+# modules/edge-ai-detector/module.yaml — WASI-NN anomaly detector.
+# Requires the `edge_ai` capability -> loads on rk3588 (NPU present+driver-ready),
+# REFUSED on n100/generic (no NPU). Demonstrates capability-gated loading.
+#
+# status: stub (ADR 0015 D3 escape hatch): only module.yaml + module.sig exist under
+# modules/edge-ai-detector/ (no Cargo.toml/src) — no wasm artifact can be built yet.
+# gen-staging.sh stages nothing for this id; verify-staging.sh exempts it from the
+# orphan check (BuildPlan Track-B: not yet built).
+id: edge-ai-detector
+version: 0.3.0
+title: "Edge AI anomaly detector (WASI-NN)"
+runtime: wasm
+artifact: registry.hookprobe.com/modules/edge-ai-detector:0.3.0
+status: stub
+
+requires:
+  capabilities: [soc, edge_ai]
+  min_memory_mb: 512
+
+grants:
+  - wasi-nn: npu
+
+provides:
+  capabilities: [ai_detection]
+
+resources:
+  cpu_pct: 50
+  memory_mb: 512
+  epoch_ms: 100
+
+signature: required

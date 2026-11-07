@@ -1,0 +1,23 @@
+[package]
+name = "dnsxai"
+version = "0.1.0"
+edition = "2021"
+description = "DNS/DGA anomaly classifier — HookProbe OS V2 detection module"
+license = "Apache-2.0"
+
+# Library: the classifier logic, shared by the WASI binary and tests.
+# Tests run on the native target; the binary is built for wasm32-wasip1.
+[lib]
+name = "dnsxai"
+crate-type = ["rlib"]
+
+# WASI binary: reads domain events from stdin, writes JSON results to stdout.
+[[bin]]
+name = "dnsxai"
+path = "src/main.rs"
+
+# Zero external dependencies — keeps the .wasm binary small and the security
+# surface minimal (no supply-chain exposure beyond std).
+# Release profile (opt-level="s", lto, panic="abort", strip) is declared at
+# the workspace root Cargo.toml and applies to all members.
+[dependencies]

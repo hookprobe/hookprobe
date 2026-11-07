@@ -1,0 +1,126 @@
+<title>HEQK Validation Matrix</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root{
+    --bg:#F1F4F5; --panel:#FFFFFF; --panel-2:#F7F9FA;
+    --ink:#0F1618; --ink-dim:#586A70; --ink-faint:#85959B;
+    --line:#DBE3E5; --line-strong:#C4CFD2;
+    --accent:#0C6E6C;
+    --metal:#1C8348; --metal-bg:#E4F3EA;
+    --qemu:#1F6BB8; --qemu-bg:#E4EEF8;
+    --block:#A86410; --block-bg:#F6ECDD;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#0C1215; --panel:#131B20; --panel-2:#0F171B;
+      --ink:#E1EAED; --ink-dim:#93A3AA; --ink-faint:#66757C;
+      --line:#243036; --line-strong:#31414A; --accent:#2CC0BC;
+      --metal:#3BCE84; --metal-bg:#12281C; --qemu:#5BA6EE; --qemu-bg:#122435;
+      --block:#E0A64A; --block-bg:#2C2213;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#F1F4F5; --panel:#FFFFFF; --panel-2:#F7F9FA;
+    --ink:#0F1618; --ink-dim:#586A70; --ink-faint:#85959B;
+    --line:#DBE3E5; --line-strong:#C4CFD2; --accent:#0C6E6C;
+    --metal:#1C8348; --metal-bg:#E4F3EA; --qemu:#1F6BB8; --qemu-bg:#E4EEF8;
+    --block:#A86410; --block-bg:#F6ECDD;
+  }
+  :root[data-theme="dark"]{
+    --bg:#0C1215; --panel:#131B20; --panel-2:#0F171B;
+    --ink:#E1EAED; --ink-dim:#93A3AA; --ink-faint:#66757C;
+    --line:#243036; --line-strong:#31414A; --accent:#2CC0BC;
+    --metal:#3BCE84; --metal-bg:#12281C; --qemu:#5BA6EE; --qemu-bg:#122435;
+    --block:#E0A64A; --block-bg:#2C2213;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.5;-webkit-font-smoothing:antialiased;
+    background-image:radial-gradient(circle at 1px 1px,color-mix(in srgb,var(--line) 60%,transparent) 1px,transparent 0);
+    background-size:22px 22px;}
+  .wrap{max-width:1120px;margin:0 auto;padding:clamp(20px,4vw,52px) clamp(16px,4vw,40px) 72px;}
+  header{border-bottom:1px solid var(--line-strong);padding-bottom:26px;margin-bottom:30px}
+  .kicker{font-family:var(--mono);font-size:12px;letter-spacing:.16em;text-transform:uppercase;
+    color:var(--accent);font-weight:600;display:flex;align-items:center;gap:9px}
+  .kicker::before{content:"";width:26px;height:2px;background:var(--accent);display:inline-block}
+  h1{font-family:var(--mono);font-weight:650;font-size:clamp(28px,5vw,42px);line-height:1.05;
+    letter-spacing:-.01em;margin:14px 0 8px;text-wrap:balance}
+  h1 span{color:var(--ink-dim);font-weight:500}
+  .sub{color:var(--ink-dim);font-size:15.5px;max-width:66ch;margin:0}
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:1px;
+    margin-top:28px;background:var(--line);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .stat{background:var(--panel);padding:16px 18px}
+  .stat .n{font-family:var(--mono);font-size:30px;font-weight:650;letter-spacing:-.02em;
+    font-variant-numeric:tabular-nums;line-height:1}
+  .stat .l{font-size:12.5px;color:var(--ink-dim);margin-top:6px;letter-spacing:.01em}
+  .stat.m .n{color:var(--metal)} .stat.q .n{color:var(--qemu)} .stat.b .n{color:var(--block)}
+  .legend{display:flex;flex-wrap:wrap;gap:10px 18px;margin:26px 0 8px;align-items:center;
+    font-size:13px;color:var(--ink-dim)}
+  .pill{font-family:var(--mono);font-size:11px;font-weight:600;letter-spacing:.04em;
+    text-transform:uppercase;padding:3px 8px;border-radius:5px;white-space:nowrap;
+    display:inline-flex;align-items:center;gap:5px;border:1px solid transparent}
+  .pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;opacity:.9}
+  .pill.metal{color:var(--metal);background:var(--metal-bg);border-color:color-mix(in srgb,var(--metal) 30%,transparent)}
+  .pill.qemu{color:var(--qemu);background:var(--qemu-bg);border-color:color-mix(in srgb,var(--qemu) 30%,transparent)}
+  .pill.block{color:var(--block);background:var(--block-bg);border-color:color-mix(in srgb,var(--block) 32%,transparent)}
+  section{margin-top:38px}
+  .sec-head{display:flex;align-items:baseline;gap:12px;margin-bottom:14px;flex-wrap:wrap}
+  .sec-no{font-family:var(--mono);font-size:12px;font-weight:600;color:var(--accent);
+    letter-spacing:.1em;padding-top:3px}
+  .sec-head h2{font-size:18px;font-weight:650;margin:0;letter-spacing:-.01em}
+  .sec-head .desc{color:var(--ink-faint);font-size:13.5px}
+  .tbl-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:12px;background:var(--panel)}
+  table{border-collapse:collapse;width:100%;min-width:720px}
+  thead th{font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--ink-faint);font-weight:600;text-align:left;padding:11px 16px;
+    border-bottom:1px solid var(--line-strong);background:var(--panel-2);white-space:nowrap}
+  tbody td{padding:13px 16px;border-bottom:1px solid var(--line);vertical-align:top;font-size:14px}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:hover{background:var(--panel-2)}
+  .feat{font-weight:600;color:var(--ink);border-left:3px solid transparent}
+  tr.metal .feat{border-left-color:var(--metal)}
+  tr.qemu .feat{border-left-color:var(--qemu)}
+  tr.block .feat{border-left-color:var(--block)}
+  .feat small{display:block;font-weight:450;color:var(--ink-dim);font-size:12.5px;margin-top:3px;
+    font-family:var(--sans);letter-spacing:0}
+  .ph{font-family:var(--mono);font-size:12.5px;color:var(--ink-dim);font-weight:600;white-space:nowrap}
+  .proves{color:var(--ink-dim);font-size:13.5px;max-width:34ch}
+  .env{white-space:nowrap}
+  .env .pill+.pill{margin-left:5px}
+  .marker{font-family:var(--mono);font-size:12px;color:var(--ink-dim);white-space:nowrap}
+  .marker b{color:var(--metal);font-weight:600}
+  .new{font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.06em;color:var(--accent);
+    border:1px solid color-mix(in srgb,var(--accent) 40%,transparent);border-radius:4px;
+    padding:1px 4px;margin-left:6px;vertical-align:middle;text-transform:uppercase}
+  footer{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);
+    display:flex;flex-wrap:wrap;gap:8px 20px;justify-content:space-between;
+    font-family:var(--mono);font-size:12px;color:var(--ink-faint)}
+  footer .k{color:var(--ink-dim)}
+  @media (max-width:560px){ .proves{display:none} }
+</style>
+<div class="wrap">
+  <header>
+    <div class="kicker">Hardened Edge Quantum-safe Kernel</div>
+    <h1>HEQK Validation Matrix <span>· P0 → P9</span></h1>
+    <p class="sub">Every feature built into the HEQK microkernel (Rust <code>no_std</code>, aarch64) and where it has been proven — under QEMU emulation, on Raspberry Pi CM5 (BCM2712) silicon, or both. QEMU gates are re-derived live from <code>./validate.sh</code>; metal rows carry their last-recorded boot state.</p>
+    <div class="stats">
+      <div class="stat"><div class="n">36</div><div class="l">features built</div></div>
+      <div class="stat m"><div class="n">27</div><div class="l">proven on CM5 metal</div></div>
+      <div class="stat q"><div class="n">23</div><div class="l">proven under QEMU</div></div>
+      <div class="stat b"><div class="n">0</div><div class="l">hardware blockers</div></div>
+    </div>
+    <div class="legend">
+      <span class="pill metal">Metal</span> validated on CM5 (BCM2712) hardware
+      <span class="pill qemu">QEMU</span> validated under emulation
+      <span class="pill block">HW-gated</span> code complete, blocked on hardware
+    </div>
+  </header>
+  <section><div class="sec-head"><span class="sec-no">L0</span><h2>Microkernel core</h2><span class="desc">seL4-style capability kernel — the trusted computing base</span></div><div class="tbl-wrap"><table><thead><tr><th>Feature</th><th>Phase</th><th>Proves</th><th>Validated</th><th>Marker</th></tr></thead><tbody><tr class="metal"><td class="feat">Boot chain EL2→EL1 + PL011 UART + exception vectors<small>fault trapped, not fatal</small></td><td class="ph">P0</td><td class="proves">Boots and prints; a fault is caught, not fatal.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker"><b>[CM5-BOOT]</b> · [P0]</td></tr><tr class="metal"><td class="feat">Preemptive priority scheduler + context switch</td><td class="ph">P1</td><td class="proves">H&gt;M&gt;L preemption; an uncooperative task is timer-preempted.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P7b] · [P1]</td></tr><tr class="metal"><td class="feat">MMU stage-1 + physical frame allocator</td><td class="ph">P1b</td><td class="proves">Live translation; VA≠PA read-back proves the walk.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P1b]</td></tr><tr class="qemu"><td class="feat">Capabilities — untyped / retype / CDT / revoke + rights<small>iterative revoke; rights-diminished mint; enforcement on invoke<span class="new">new</span></small></td><td class="ph">P2</td><td class="proves">Capability derivation tree; iterative (non-recursive) revoke; monotonic rights diminution — a read-only frame's write is denied, amplification refused.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P2]</td></tr><tr class="metal"><td class="feat">EL0 userspace + SVC syscall boundary + fault containment</td><td class="ph">P3</td><td class="proves">User/kernel split; an EL0 fault is contained.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P3]</td></tr><tr class="qemu"><td class="feat">Synchronous IPC — Endpoint rendezvous + register fastpath</td><td class="ph">P4</td><td class="proves">Block/unblock over an Endpoint; reply-cap fastpath.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P4]</td></tr><tr class="qemu"><td class="feat">Packet Engine — zero-copy SPSC ring + in-place verdict</td><td class="ph">P5</td><td class="proves">Payload inspected in place, never copied through the ring.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P5]</td></tr><tr class="qemu"><td class="feat">Real wire — virtio-net ARP round-trip → ring → verdict</td><td class="ph">P5b</td><td class="proves">A real received frame reaches the verdict engine.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P5b]</td></tr><tr class="metal"><td class="feat">RFC 9669 BPF VM (interpreter) + bounds sandbox</td><td class="ph">P6</td><td class="proves">Signed bytecode is the verdict; OOB load rejected.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P6]</td></tr><tr class="qemu"><td class="feat">BPF static verifier + JIT (W^X) + self-heal + telemetry</td><td class="ph">P6b</td><td class="proves">Verify-before-run; native codegen; HAM restart; QSecBit-lite.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P6b]</td></tr></tbody></table></div></section><section><div class="sec-head"><span class="sec-no">L1</span><h2>Metal bring-up &amp; driver isolation</h2><span class="desc">the microkernel on real silicon, drivers pushed out of the TCB</span></div><div class="tbl-wrap"><table><thead><tr><th>Feature</th><th>Phase</th><th>Proves</th><th>Validated</th><th>Marker</th></tr></thead><tbody><tr class="metal"><td class="feat">CM5 / BCM2712 bring-up — RP1 UART console, high-PA MMU</td><td class="ph">P7</td><td class="proves">Boots and prints on real silicon over the FTDI console.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>[CM5-BOOT]</b></td></tr><tr class="metal"><td class="feat">Inline IPS — wire → ring → BPF → enforce</td><td class="ph">P7a</td><td class="proves">Benign :53 forwarded, threat :4444 dropped on the wire.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>[P8] IPS</b></td></tr><tr class="metal"><td class="feat">W^X — kernel .text RO+X, data RW+PXN, SCTLR.WXN</td><td class="ph">P7b</td><td class="proves">No writable-executable memory anywhere (K1 block-split).</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker"><b>[P7b] W^X</b></td></tr><tr class="metal"><td class="feat">Isolated EL0 GEM driver — register probe</td><td class="ph">P7c·1</td><td class="proves">EL0 driver reads real GEM MMIO; matches kernel, nothing else granted.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>[P7c]</b></td></tr><tr class="metal"><td class="feat">Isolated EL0 GEM driver — TX from EL0</td><td class="ph">P7c·3</td><td class="proves">Transmit armed + kicked + completed from user space.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>[P7c]</b></td></tr><tr class="metal"><td class="feat">Continuous restartable EL0 driver server</td><td class="ph">P7c·4d</td><td class="proves">5 real frames judged; a driver crash contained + restarted.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>[P7c]</b></td></tr><tr class="metal"><td class="feat">EL0 driver as preemptible scheduled TCB in its own ASID<small>counter 1.29 B, preempted, zero EL0 faults<span class="new">new</span></small></td><td class="ph">P7c·4c</td><td class="proves">Full driver-isolation runtime — own address space, ASID-tagged TTBR0 switch — on metal.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker"><b>[P7c-4c]</b></td></tr><tr class="metal"><td class="feat">EL1↔EL2 stage-2 isolation — HBoot region hidden</td><td class="ph">P7e</td><td class="proves">An EL1 access into HBoot's footprint traps to EL2 (B-3 closed).</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker">stage2 armed</td></tr></tbody></table></div></section><section><div class="sec-head"><span class="sec-no">L2</span><h2>Secure boot &amp; hardware attestation</h2><span class="desc">quantum-safe, OTP-rooted — HBoot at EL2</span></div><div class="tbl-wrap"><table><thead><tr><th>Feature</th><th>Phase</th><th>Proves</th><th>Validated</th><th>Marker</th></tr></thead><tbody><tr class="metal"><td class="feat">Hybrid quantum-safe secure boot — ed25519 AND SLH-DSA (FIPS-205)</td><td class="ph">—</td><td class="proves">Breaking boot needs breaking classical ECC AND post-quantum.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>verify PASS</b></td></tr><tr class="metal"><td class="feat">Measured boot + CRTM anchor<small>PCR0 rooted in OTP device id 0x0102…5a31<span class="new">new</span></small></td><td class="ph">B-7</td><td class="proves">PCR chain rooted in the immutable OTP-fused identity, not a free-floating self-measurement.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>CRTM-anchored</b></td></tr><tr class="metal"><td class="feat">Hardware-bound per-device AK — OTP-derived, non-extractable</td><td class="ph">B-1</td><td class="proves">Attestation key lives only in fuses, per device — not in the image.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>[P7d-B1]</b></td></tr><tr class="metal"><td class="feat">Runtime attestation — ephemeral key answers verifier nonces</td><td class="ph">B-2</td><td class="proves">Fresh challenge → fresh signature; replay rejected; AK scrubbed post-boot.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>[P7d-B2]</b></td></tr><tr class="metal"><td class="feat">Anti-rollback SVN floor — OTP thermometer, fail-closed<small>watermark held on read failure — no rollback<span class="new">new</span></small></td><td class="ph">B-8 · P7d-c</td><td class="proves">Monotonic hardware floor; a forced OTP read-failure can't roll it back.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker"><b>floor read OK</b></td></tr><tr class="metal"><td class="feat">Hardware TRNG per-boot nonce — BCM2712 rng200</td><td class="ph">P7d-a</td><td class="proves">A fresh 32-byte nonce each boot; kills the static-nonce weakness.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker">hw-trng</td></tr></tbody></table></div></section><section><div class="sec-head"><span class="sec-no">L3</span><h2>Detection plane at scale</h2><span class="desc">the IDS/IPS product surface — &ldquo;the OS is the sensor&rdquo;</span></div><div class="tbl-wrap"><table><thead><tr><th>Feature</th><th>Phase</th><th>Proves</th><th>Validated</th><th>Marker</th></tr></thead><tbody><tr class="metal"><td class="feat">PREVAIL-style static verifier — abstract interpretation</td><td class="ph">P8</td><td class="proves">Proves rule memory-safety before it runs; rejects wild-load / loop / uninit-verdict.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker"><b>[P8]</b></td></tr><tr class="metal"><td class="feat">General BPF JIT — two-pass, W^X, forward branches<small>EL1 RO+X code window on metal (GB6)<span class="new">new</span></small></td><td class="ph">P8</td><td class="proves">Native aarch64 codegen; verdicts match the interpreter — on QEMU and CM5 silicon.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker"><b>[P8-JIT]</b></td></tr><tr class="metal"><td class="feat">HookProbe rule registry — parity corpus<small>3/3 rules JIT-compiled to native ARM64 on metal</small></td><td class="ph">P8</td><td class="proves">The same signed bytecode runs on the Linux/FreeBSD/QNX tracks and here, unchanged.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">rule plane</td></tr><tr class="qemu"><td class="feat">Live QSecBit scoring — severity-weighted, in the TCB</td><td class="ph">P8</td><td class="proves">Rule hits on real traffic scored inside the kernel — the OS is the sensor.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P8-plane]</td></tr><tr class="qemu"><td class="feat">Adaptive NAPI data plane — grows under load, idles when quiet</td><td class="ph">P8</td><td class="proves">Poll-budget peaks under a burst, re-arms the IRQ when quiet; spin-poll retired.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P8-napi]</td></tr><tr class="metal"><td class="feat">L2 guard — malformed-ARP + ARP-spoof drop<small>napse-l2guard parity; JIT'd + running on metal (drop-logic proven on QEMU)<span class="new">new</span></small></td><td class="ph">P8</td><td class="proves">Deterministic frame-level enforcement: bad ARP shape (is_malformed) + spoofed sender-MAC (eth_mismatch) dropped before L4.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P8-l2]</td></tr><tr class="qemu"><td class="feat">TCP scan detection — NULL / FIN / Xmas / SYN-FIN<small>stateless anomalous-flag signatures (Nmap/Suricata-style)<span class="new">new</span></small></td><td class="ph">P8</td><td class="proves">Anomalous TCP flag combinations dropped as scans; normal SYN/ACK pass (no false positives).</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P8-tcp]</td></tr><tr class="metal"><td class="feat">Stateful substrate — BPF CALL helper + rate limiter<small>running on metal (10-rule plane, CALL interp path, 0 faults); logic proven on QEMU<span class="new">new</span></small></td><td class="ph">P8</td><td class="proves">A signed rule decides on a RATE, not one packet — verifier admits CALL, JIT declines it, interpreter runs it. Substrate for the stateful WAN tier.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P8-syn]</td></tr><tr class="metal"><td class="feat">Per-source SYN-flood — live datapath rule<small>keyed by IP source; running in live classify on metal (isolation proven on QEMU)<span class="new">new</span></small></td><td class="ph">P8</td><td class="proves">Wired into live classify: a per-source SYN flood is rate-limited inline while other sources' connection setups pass.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P8-synsrc]</td></tr><tr class="metal"><td class="feat">Threat-feed blocklist — keyed CIDR lookup (helper #2)<small>signed block set; running in live classify on metal (drop-logic proven on QEMU)<span class="new">new</span></small></td><td class="ph">P8</td><td class="proves">The stateful substrate generalizes beyond a counter to a keyed lookup: frames from a blocked source prefix are dropped inline; clean sources pass.</td><td class="env"><span class="pill metal">Metal</span><span class="pill qemu">QEMU</span></td><td class="marker">[P8-block]</td></tr><tr class="qemu"><td class="feat">Verifier self-hardening — abstract-operator soundness harness<small>Agni-style; modular operators (absdom.rs); injected unsoundness caught<span class="new">new</span></small></td><td class="ph">P16</td><td class="proves">The verifier that gates every rule is itself checked: each abstract operator over-approximates the concrete semantics; a deliberately-unsound operator is caught by the CI harness, not by prod.</td><td class="env"><span class="pill qemu">QEMU</span></td><td class="marker">[P16-verifier]</td></tr></tbody></table></div></section><section><div class="sec-head"><span class="sec-no">L4</span><h2>Second interface</h2><span class="desc">external PCIe (RTL8111H) — trained + enumerated on metal</span></div><div class="tbl-wrap"><table><thead><tr><th>Feature</th><th>Phase</th><th>Proves</th><th>Validated</th><th>Marker</th></tr></thead><tbody><tr class="metal"><td class="feat">RTL8111H external PCIe RC1 bring-up<small>pcie-brcmstb train: RESCAL, SERDES, refclk-MDIO, DIS_PLL_PD, Gen1, tperst; then enumerate</small></td><td class="ph">P9</td><td class="proves">HEQK trains the external PCIe (RC1 LINK UP, status 0x0003e0bf) and enumerates the RTL8111H at 01:00.0 (vendor/device 0x816810ec) on metal. The long 'won't train' was PHYSICAL — the CM5 was not fully seated in the carrier (Linux failed identically); once reseated it trains. RX datapath (BAR2 MMIO window + ring → IDS, mirrors the GEM) is the remaining step.</td><td class="env"><span class="pill metal">Metal</span></td><td class="marker">[P9] PASS · RTL8111H found</td></tr></tbody></table></div></section>
+  <footer>
+    <span><span class="k">Repo</span> ~/heqk · local only, no remote</span>
+    <span><span class="k">QEMU gates re-validated</span> 2026-07-22 20:30 UTC</span>
+    <span><span class="k">commit</span> b5d83e3</span>
+  </footer>
+</div>

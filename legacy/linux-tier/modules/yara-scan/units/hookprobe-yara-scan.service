@@ -1,0 +1,22 @@
+[Unit]
+Description=HookProbe YARA engine — one bounded scan sweep of the configured file set
+Documentation=file:///usr/share/hookprobe/docs/adr/0026-sigma-yara-detection.md
+After=var-lib-hookprobe.mount
+Wants=var-lib-hookprobe.mount
+
+[Service]
+Type=oneshot
+# One bounded sweep, then exit — triggered by hookprobe-yara-scan.timer (same "oneshot binary +
+# timer" shape as hookprobe-evidence-prune.service: file scanning is I/O/CPU-heavy, so this is
+# deliberately NOT a continuous service like napse/hookprobe-sigma).
+ExecStart=/bin/sh -c 'exec /usr/lib/hookprobe/hookprobe-yara-scan >> /var/lib/hookprobe/events'
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# Read access to the scan set (default /tmp,/var/tmp,/dev/shm — see main.rs's doc comment) is
+# already available under ProtectSystem=strict (world-writable/tmp paths are never restricted by
+# it); ReadWritePaths only needs the event/status outputs.
+ReadWritePaths=/var/lib/hookprobe
+CapabilityBoundingSet=
+MemoryMax=256M
+Slice=hookprobe-background.slice

@@ -1,0 +1,18 @@
+# hookprobe-background.slice — LOW-priority slice for deferrable work (Architecture
+# §4.3). Hosts retention compaction, registry/model pulls, SBOM/CBOM scans, and
+# low-priority detections that shed FIRST under saturation. Weighted well below the
+# live slice so it yields CPU/IO whenever the live path needs it.
+
+[Unit]
+Description=HookProbe background work (low priority)
+Before=slices.target
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+
+CPUWeight=50
+IOWeight=50
+# Keep background memory pressure from pushing the live path into reclaim.
+MemoryHigh=40%

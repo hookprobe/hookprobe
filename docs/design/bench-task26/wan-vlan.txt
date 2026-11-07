@@ -1,0 +1,8 @@
+HQWAN1
+# task #26 bench: internet on VLAN 100 (fortress enp4s0.100, DHCP), management on VLAN 200 (static)
+mode=dhcp
+vlan=100
+mgmt_vlan=200
+mgmt=static
+mgmt_ip=192.168.200.2/24
+mgmt_gw=192.168.200.1

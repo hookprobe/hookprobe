@@ -1,0 +1,56 @@
+[Unit]
+Description=HYDRA IOC/threat-intel matcher — bundled feed x evidence graph (ADR 0027)
+# Needs flows/applications already ingested (the candidates HYDRA matches against) and the
+# evidence DB's schema in place.
+After=hookprobe-bootstrap.service hookprobe-evidence.service
+Wants=hookprobe-evidence.service
+# Air-gapped by default: no network dependency. The bundled IOC feed under
+# /usr/share/hookprobe/threat-intel/ is all this needs; a live STIX/TAXII/MISP fetch is additive
+# and not built in this first version (see security/threat-intel/README.md).
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/hookprobe/hookprobe-hydra \
+  --feed /usr/share/hookprobe/threat-intel/ioc-feed.json \
+  --db /var/lib/hookprobe/evidence.db \
+  --verdicts-out /var/lib/hookprobe/hydra-verdicts
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+# GAP-3 (2026-07-16 hardening): native oneshot matching the IOC feed against the UNTRUSTED evidence
+# graph but ran root with the full capability bounding set. Full sandbox, no capabilities needed
+# (air-gapped: reads the bundled feed + evidence DB, appends the verdicts sidecar; no network).
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io
+ReadWritePaths=/var/lib/hookprobe
+MemoryMax=128M
+# 2026-07-16 security-auditor AMBER-2: hookprobe-supervisor trusts `--hydra-verdicts`'
+# `enforce`/`corroborated` bit as untrusted-provenance IntelOnly trust input (the mgmt floor in
+# `trust::build_posture` is the primary backstop) — restrict WHO can write the sidecar as
+# defense-in-depth too. UMask makes every file this (root-run, no User=) unit creates, including
+# `/var/lib/hookprobe/hydra-verdicts` on its first write, mode 0600 (owner-only); see also the
+# `z` tmpfiles.d line in base/config/tmpfiles.d/hookprobe.conf, which re-asserts root:root 0600
+# on every boot/upgrade in case an older image left it looser.
+UMask=0177
+# Deferrable, low-priority enrichment — must yield to the live detection path under contention,
+# same slice as the evidence-graph rebuild + the exploitability pipeline (Architecture.md §4.3).
+# Alert/enrich ONLY (ADR 0027, gate 0.7): this unit never touches enforcement — it has no
+# CAP_NET_ADMIN/CAP_BPF, no nft/tc access, and ReadWritePaths is scoped to the evidence store alone.
+Slice=hookprobe-background.slice
+
+[Install]
+WantedBy=multi-user.target

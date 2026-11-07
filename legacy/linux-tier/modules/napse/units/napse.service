@@ -1,0 +1,32 @@
+[Unit]
+Description=NAPSE IDS — synthesize alerts from the flow stream (sandboxed Wasm run)
+Documentation=file:///usr/share/hookprobe/docs/adr/0005-unified-ebpf-detection.md
+# Consumes /var/lib/hookprobe/flows (written by senzorium-flow + napse-dpi + the eBPF loader) and
+# appends alerts to /var/lib/hookprobe/events. Runs the capability-sandboxed Wasm module under
+# Wasmtime (ADR 0009 build step 1: real loader, verify-before-run, AOT `.cwasm` when the
+# precompile cache has one, epoch-interrupted) — not the native binary.
+After=hookprobe-network-reconcile.service senzorium-flow.service hookprobe-precompile.service
+Wants=senzorium-flow.service
+# Best-effort ordering only: a missing/stale `.cwasm` is not fatal (falls back to JIT), so this is
+# After=, not Requires=/Wants= — napse must still start if precompiling hasn't run yet or failed.
+
+[Service]
+Type=simple
+# Follow the flow stream from its tail (new records only) → NAPSE → append alerts to the event store.
+# The NAPSE detection logic runs as the capability-sandboxed Wasm module under Wasmtime (ADR 0009
+# step 1), not the native binary — same engine, sandboxed + memory-budgeted (~6 MB idle on a Pi 4).
+ExecStart=/bin/sh -c 'exec tail -n0 -F /var/lib/hookprobe/flows | /usr/lib/hookprobe/hookprobe-supervisor --run-wasm napse --modules /usr/lib/hookprobe/modules --trust /usr/share/hookprobe/trust >> /var/lib/hookprobe/events'
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+CapabilityBoundingSet=
+# GAP-9: napse only reads /var/lib/hookprobe/flows and appends events + the AF_UNIX control socket —
+# it never opens an IP socket, so restrict the family set (defence-in-depth, matches its siblings).
+RestrictAddressFamilies=AF_UNIX
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

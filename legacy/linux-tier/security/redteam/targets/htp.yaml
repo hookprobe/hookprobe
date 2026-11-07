@@ -1,0 +1,11 @@
+# security/redteam/targets/htp.yaml — roadmap placeholder (ADR 0020 D2/D8). HTP/NEURO/DSM (ADR
+# 0004) is DESIGN-ONLY in this repo today. Declares the probe classes that WOULD exist once HTP's
+# evolved X25519+ML-KEM/PUF handshake is actually built; inactive, no send path, no findings ever
+# emitted against this file. Do NOT fabricate an HTP probe result -- ADR 0020 D1/D8 is explicit
+# that "there is nothing here to attack yet."
+component: htp
+status: roadmap
+reason: "ADR 0004's evolved handshake is design-only in this repo; no target exists to probe."
+declared_future_probes:
+  - htp-session-forgery      # L5 -- session forgery / lack of forward secrecy
+  - htp-handshake-downgrade  # L5 -- downgrade the negotiated PQC/hybrid suite

@@ -1,0 +1,29 @@
+# hookprobe-manifest.socket — the READ-ONLY Platform Manifest socket (Architecture C8,
+# ADR 0003 §exposure). World-connectable UNIX socket: any local reader (Mission
+# Control backend, modules, AEGIS, updater) queries the verified manifest + grants
+# read-only. The data served is RO; mutation goes through the SEPARATE admin-only
+# control socket. Readers NEVER touch the manifest file directly and NEVER re-probe.
+
+[Unit]
+Description=HookProbe read-only Platform Manifest socket
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/adr/0003-platform-manifest-schema.md
+
+[Socket]
+ListenStream=/run/hookprobe/manifest.sock
+
+# World-connectable. NOTE: connecting to a UNIX stream socket requires *write*
+# permission on the socket inode, so a literal 0444 would block all readers; 0666
+# is the "world-readable RO API" intent (ADR 0003 says "0444-style"/"world-readable").
+# Read-only-ness is enforced server-side, not by file mode. SO_PEERCRED is available
+# to the service if it ever needs to distinguish callers.
+SocketMode=0666
+SocketUser=hookprobe
+SocketGroup=hookprobe
+
+# Hand the listening fd to the supervisor, which serves the manifest read API.
+# (A dedicated manifest service can take this over later; Sockets= in the service
+# pairs them. The local backend may assume this role in Phase 3 — Architecture §4.4.)
+Service=hookprobe-supervisor.service
+
+[Install]
+WantedBy=sockets.target

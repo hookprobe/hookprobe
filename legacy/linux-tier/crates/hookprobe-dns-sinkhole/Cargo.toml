@@ -1,0 +1,23 @@
+[package]
+name = "hookprobe-dns-sinkhole"
+version = "0.1.0"
+edition = "2021"
+description = "HookProbe OS DNS sinkhole / RPZ enforcement (roadmap A1). The safest possible attack-block: refuses a NAME (per-query, reversible, NXDOMAIN/sinkhole), never a customer's PACKET — fits the 'legit customer always passes' invariant far better than a drop. Merges dnsxai's BLOCK_INSTANT verdicts + HYDRA's bundled domain IOCs into a signed-source, allowlist-guarded RPZ zone / dnsmasq blocklist, and records each sinkhole action as a reversible, TTL-able evidence-graph response."
+
+[[bin]]
+name = "hookprobe-dns-sinkhole"
+path = "src/main.rs"
+
+[lib]
+name = "hookprobe_dns_sinkhole"
+path = "src/lib.rs"
+
+[dependencies]
+# The second signal source (ADR 0027's IocFeed/Indicator/IocType) — reused directly, never
+# reimplemented, so this crate can never drift from HYDRA's own feed-loading rules.
+hookprobe-hydra = { path = "../hookprobe-hydra" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }

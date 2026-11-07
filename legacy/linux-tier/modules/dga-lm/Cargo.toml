@@ -1,0 +1,37 @@
+[package]
+name = "dga-lm"
+version = "0.1.0"
+edition = "2021"
+description = "dga-lm — int8 char-level DGA (domain-generation-algorithm) classifier, base-tier-build-ticket.md Phase 4"
+license = "Apache-2.0"
+
+# Library: the tokenizer + int8 model forward-pass + dot-product kernels, shared by the
+# WASI binary and by native `cargo test` (the dot kernels are cross-checked against a
+# scalar oracle on the HOST target too — wasm32-only SIMD paths are exercised on wasm32).
+[lib]
+name = "dga_lm"
+crate-type = ["rlib"]
+
+# WASI binary: reads one domain string per line from stdin, writes one JSON score line
+# per domain to stdout. Same protocol shape as modules/qsecbit's stdin/stdout convention.
+[[bin]]
+name = "dga-lm"
+path = "src/main.rs"
+
+# Zero external dependencies — small binary, minimal supply-chain surface (matches
+# modules/qsecbit's convention). Release profile (opt-level="s", lto, panic="abort",
+# strip) is declared at the workspace root Cargo.toml and applies to all members.
+[dependencies]
+
+# `relaxed-dot` — compiles `src/dot.rs`'s A76 tier, which calls the EXPLICIT
+# `core::arch::wasm32::i32x4_relaxed_dot_i8x16_i7x16_add` intrinsic (base-tier-build-
+# ticket.md must-fix #2: plain `core::simd` emits NO relaxed-dot opcode; this feature
+# flag exists so the intrinsic is only ever reachable from an explicit, audited path).
+# Building this feature ALSO requires `-C target-feature=+relaxed-simd` in RUSTFLAGS
+# (the Cargo feature alone does not change what the wasm32 backend is allowed to emit;
+# see `sdot-gate.sh`, which is the ONLY caller of this feature — the module's co-located,
+# generically-precompiled `dga-lm.wasm` is ALWAYS built WITHOUT this feature, so the
+# shared `builder/refresh-aot.sh` `--precompile all` pipeline (used by every other
+# module too) never has to reason about relaxed-simd at all).
+[features]
+relaxed-dot = []

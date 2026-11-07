@@ -1,0 +1,62 @@
+[Unit]
+Description=HookProbe AEGIS BYO-LLM planner (ADR 0025) — assistive intent-to-diff HTTP surface, never in the enforcement path
+Documentation=file:///usr/share/hookprobe/docs/adr/0025-aegis-byo-llm-planner.md
+# Same data-partition dependency as hookprobe-api (needs evidence.db to exist for the /explain
+# route's write path); After=, not Requires= — a late/missing writer just means an empty graph to
+# ground answers in, not a failed unit. This service is purely ADDITIVE: with no
+# HOOKPROBE_AI_ENDPOINT/HOOKPROBE_AI_MODEL configured (see planner.env below), every handler still
+# starts and answers honestly ("not configured") — the air-gap default.
+After=var-lib-hookprobe.mount hookprobe-evidence.service
+Wants=hookprobe-evidence.service
+ConditionPathExists=/var/lib/hookprobe/evidence.db
+
+[Service]
+Type=simple
+# Operator-set BYO-LLM config (HOOKPROBE_AI_ENDPOINT / HOOKPROBE_AI_MODEL / HOOKPROBE_AI_API_KEY /
+# HOOKPROBE_AI_TIMEOUT_MS) lives in this file, never hardcoded and never baked into the image —
+# `-` prefix means a missing file is fine (the honest "no model configured" default). Written by
+# Mission Control's Administration → AI Models panel (or by hand for a local Ollama endpoint).
+EnvironmentFile=-/etc/hookprobe/planner.env
+ExecStart=/usr/lib/hookprobe/hookprobe-planner \
+    --db /var/lib/hookprobe/evidence.db \
+    --manifest /var/lib/hookprobe/manifest.json \
+    --network-intent /etc/hookprobe/network.yaml \
+    --staging-dir /var/lib/hookprobe/planner/staged \
+    --listen 127.0.0.1:8421
+Restart=on-failure
+RestartSec=5
+
+# Hardening: unlike hookprobe-api (ReadOnlyPaths), this service has ONE narrow write need — the
+# evidence.db (record_ai_explanation) and its own staging directory. Everything else about the
+# data partition stays read-only. Needs network egress (the BYO-LLM endpoint may be remote) —
+# AF_INET/AF_INET6 alongside AF_UNIX, same address-family allowance hookprobe-api already carries.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/hookprobe /etc/hookprobe
+# Create /var/lib/hookprobe/planner{,/staged} BEFORE the mount namespace is set up (fixed
+# 2026-07-08: on-metal the service crash-looped 226/NAMESPACE because ReadWritePaths pointed at
+# /var/lib/hookprobe/planner, which does not exist on a fresh image — StateDirectory makes it first).
+StateDirectory=hookprobe/planner hookprobe/planner/staged
+ReadWritePaths=/var/lib/hookprobe/evidence.db /var/lib/hookprobe/planner
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io
+MemoryMax=128M
+Slice=hookprobe-live.slice
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,5 @@
+pieeprom.bin
+pieeprom.sig
+bootcode5.bin
+*signed_boot*
+metadata/

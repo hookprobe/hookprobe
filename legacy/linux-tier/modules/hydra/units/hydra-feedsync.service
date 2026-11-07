@@ -1,0 +1,20 @@
+[Unit]
+Description=HYDRA threat-feed → BPF blocklist sync (fetch + map update)
+Documentation=file:///usr/share/hookprobe/docs/adr/0005-unified-ebpf-detection.md
+# Only meaningful once napse-capture.service pinned the blocklist map; harmless otherwise (the sync
+# logs "is napse-capture.service running?" and exits 0-ish). Fetch needs network; the map update
+# needs CAP_BPF. Ordered after the reconcile (WAN up for the fetch).
+After=hookprobe-network-reconcile.service napse-dpi.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+Environment=FEEDS_DIR=/var/lib/hookprobe/feeds
+# 1) refresh the feeds (network), 2) sync them into the pinned blocklist map (CAP_BPF).
+ExecStartPre=/usr/lib/hookprobe/hydra-feed-fetch.sh
+ExecStart=/usr/lib/hookprobe/bin/hydra-feedsync
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hookprobe

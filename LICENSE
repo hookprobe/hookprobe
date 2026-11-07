@@ -1,14 +1,18 @@
-HookProbe - Federated Cybersecurity Mesh
-Copyright (C) 2024-2025 HookProbe Contributors
+HookProbe OS
+Copyright (C) 2024-2026 HookProbe Contributors
 
-This file is part of HookProbe.
-
-HookProbe is dual-licensed:
+HookProbe OS follows the HookProbe dual-licensing model:
 - Open source components: GNU Affero General Public License v3.0 (AGPL-3.0)
-- Proprietary components: Commercial License (see LICENSING.md)
+- Proprietary / offering-as-a-service: Commercial License (see LICENSING.md)
 
-This LICENSE file applies to the AGPL-licensed portions of HookProbe.
-For full licensing details, see LICENSING.md.
+This LICENSE file supplies the full text of the AGPL-3.0 and applies to the
+AGPL-licensed portions of HookProbe OS (the base OS + standalone SOC). Some
+core innovations are proprietary and require a commercial license, and running
+HookProbe OS as a service to third parties requires a commercial license under
+the AGPL network-copyleft clause. For the dual-license terms, the list of
+proprietary components, and commercial-license contact, see LICENSING.md.
+The HEQK microkernel under os/kernel/ carries its own component-scoped
+LICENSE/LICENSING.md that follows this same model.
 
 ================================================================================
 

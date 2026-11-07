@@ -1,0 +1,24 @@
+# /etc/hookprobe/dns-sinkhole-allowlist.yaml — operator-owned DNS sinkhole allowlist.
+#
+# GENERATED-ONCE by the image (this is the shipped DEFAULT), then OWNED BY THE OPERATOR — unlike
+# every `*-intent.yaml` under /etc/hookprobe (network/lan/wifi/nac/...), which the reconciler
+# treats as read-only input, this file is likewise never regenerated/overwritten by
+# `hookprobe-dns-sinkhole` (it only ever READS this file — see crates/hookprobe-dns-sinkhole's
+# module doc). Edit it directly on a live device; your changes persist across reboots and image
+# upgrades (this lives on the persistent /etc overlay, not the immutable rootfs).
+#
+# Domains listed here are NEVER sinkholed, no matter what dnsxai or the HYDRA threat-intel feed
+# says — this is the false-positive safety valve (docs/adr/0033-dns-sinkhole-rpz.md). A small
+# built-in floor (HookProbe's own control-plane domains, base-OS package mirrors, NTP, a handful
+# of maximally-implausible-to-be-malicious root infra) is ALWAYS active underneath this file, even
+# if it's empty or missing — this file only ever ADDS to that floor, never replaces it.
+#
+# An entry protects the domain AND every subdomain of it: listing "example.com" also protects
+# "vpn.example.com", "mail.example.com", etc.
+#
+# Example (uncomment / add your own):
+#   domains:
+#     - my-corp-vpn.example
+#     - internal-tooling.example
+
+domains: []

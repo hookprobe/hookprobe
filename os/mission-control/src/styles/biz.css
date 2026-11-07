@@ -1,0 +1,432 @@
+/*
+ * HookProbe OS V2 — Business workspace (§10) styles.
+ *
+ * All classes are prefixed `.biz-` to avoid collision with global.css.
+ * Do NOT edit global.css; this file is imported per-page from
+ * /business/dashboard.astro. Reuses global tokens (--hp-*) and shared
+ * structural classes (mc-grid, mc-panel, hp-terminal, dash-layout, …).
+ *
+ * Theme: cyber-industrial — void-black canvas, cyan #00B4FF + green #00FF9D
+ * accents, JetBrains Mono, terminal-window panels with hookprobe@edge ~ <ctx>.
+ */
+
+/* ===========================================================================
+ * KPI row — 5 columns wide (override the default 3-col mc-cell--kpis grid)
+ * ======================================================================== */
+.biz-kpis {
+  grid-column: span 12 !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+}
+
+/* ===========================================================================
+ * Revenue & Costs panel
+ * ======================================================================== */
+
+/* Header row: legend left, margin sparkline right */
+.biz-rev-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+/* Legend */
+.biz-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.biz-leg-swatch {
+  display: inline-block;
+  width: 28px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.biz-leg-swatch--profit {
+  background: linear-gradient(to right, rgba(0,180,255,0.72), rgba(0,255,157,0.9));
+}
+.biz-leg-swatch--cost {
+  background: rgba(255,170,0,0.50);
+}
+
+.biz-leg-label {
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+  font-family: var(--hp-font-mono);
+  white-space: nowrap;
+}
+
+/* Margin sparkline group */
+.biz-margin-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.biz-margin-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  font-weight: 700;
+  color: var(--hp-text-muted);
+  font-family: var(--hp-font-mono);
+}
+
+.biz-margin-spark {
+  display: block;
+  overflow: visible;
+  width: 90px;   /* display size; viewBox handles intrinsic ratio */
+  height: auto;
+}
+
+.biz-margin-val {
+  font-family: var(--hp-font-mono);
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--hp-green);
+  white-space: nowrap;
+}
+
+/* SVG stacked bar chart */
+.biz-chart-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+/* ===========================================================================
+ * Licenses panel
+ * ======================================================================== */
+
+.biz-lic-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+}
+
+.biz-lic-row {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.biz-lic-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.biz-lic-name {
+  font-size: 12.5px;
+  color: var(--hp-text-primary);
+  font-weight: 600;
+  font-family: var(--hp-font-mono);
+}
+
+.biz-lic-tier {
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-family: var(--hp-font-mono);
+  flex-shrink: 0;
+}
+
+.biz-lic-bar-track {
+  height: 5px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.biz-lic-bar-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.3s ease;
+}
+
+.biz-lic-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.biz-lic-seats {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-secondary);
+}
+
+.biz-lic-renew {
+  font-size: 10px;
+  color: var(--hp-text-muted);
+  font-family: var(--hp-font-mono);
+}
+
+/* ===========================================================================
+ * Marketplace panel — signed module catalog
+ * ======================================================================== */
+
+.biz-mod-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.biz-mod-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 9px 6px;
+  border-radius: var(--hp-radius-sm);
+  transition: background 0.12s;
+}
+.biz-mod-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+/* Module body (name, desc, meta) */
+.biz-mod-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.biz-mod-name {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--hp-text-primary);
+  font-family: var(--hp-font-mono);
+  font-weight: 600;
+}
+
+.biz-mod-ver {
+  font-size: 10px;
+  color: var(--hp-text-muted);
+  font-weight: 400;
+}
+
+.biz-mod-signed {
+  font-size: 9.5px;
+  color: var(--hp-green);
+  background: rgba(0, 255, 157, 0.08);
+  border: 1px solid rgba(0, 255, 157, 0.20);
+  border-radius: 3px;
+  padding: 0 5px;
+  letter-spacing: 0.03em;
+}
+
+.biz-mod-desc {
+  font-size: 11px;
+  color: var(--hp-text-muted);
+  line-height: 1.45;
+  font-family: var(--hp-font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.biz-mod-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+/* Runtime badge */
+.biz-rt {
+  font-family: var(--hp-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 7px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+.biz-rt--wasm {
+  color: var(--hp-purple);
+  background: rgba(168, 85, 247, 0.10);
+  border: 1px solid rgba(168, 85, 247, 0.20);
+}
+.biz-rt--container {
+  color: var(--hp-cyan);
+  background: rgba(0, 180, 255, 0.08);
+  border: 1px solid rgba(0, 180, 255, 0.18);
+}
+
+.biz-mod-cat {
+  font-size: 10px;
+  color: var(--hp-text-muted);
+  font-family: var(--hp-font-mono);
+}
+
+/* Module right column (installs + price) */
+.biz-mod-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.biz-mod-installs {
+  font-family: var(--hp-font-mono);
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--hp-text-primary);
+  white-space: nowrap;
+}
+
+.biz-mod-ik {
+  font-size: 10px;
+  color: var(--hp-text-muted);
+  font-weight: 400;
+}
+
+.biz-mod-price {
+  font-family: var(--hp-font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--hp-amber);
+  white-space: nowrap;
+}
+.biz-mod-price--free {
+  color: var(--hp-green);
+}
+
+/* ===========================================================================
+ * AI Cost panel — per tenant / workspace model spend
+ * ======================================================================== */
+
+.biz-ai-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.biz-ai-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.biz-ai-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.biz-ai-tenant {
+  font-size: 12.5px;
+  color: var(--hp-text-primary);
+  font-weight: 600;
+  font-family: var(--hp-font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.biz-ai-meta {
+  font-family: var(--hp-font-mono);
+  font-size: 9.5px;
+  color: var(--hp-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.biz-ai-right {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 3px;
+  flex-shrink: 0;
+  min-width: 100px;
+}
+
+.biz-ai-bar-track {
+  width: 100%;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.biz-ai-bar-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(to right, var(--hp-cyan), var(--hp-green));
+  border-radius: 999px;
+}
+
+.biz-ai-cost {
+  font-family: var(--hp-font-mono);
+  font-size: 14px;
+  font-weight: 800;
+  color: var(--hp-cyan);
+}
+
+/* Total row */
+.biz-ai-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--hp-border);
+  margin-top: 12px;
+  padding-top: 10px;
+}
+
+.biz-ai-total-label {
+  font-family: var(--hp-font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--hp-text-muted);
+  font-weight: 700;
+}
+
+.biz-ai-total-val {
+  font-family: var(--hp-font-mono);
+  font-size: 17px;
+  font-weight: 800;
+  color: var(--hp-text-primary);
+}
+
+/* ===========================================================================
+ * Responsive overrides
+ * ======================================================================== */
+
+@media (max-width: 1180px) {
+  .biz-kpis {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+}
+
+@media (max-width: 720px) {
+  .biz-kpis {
+    grid-template-columns: 1fr 1fr !important;
+  }
+  .biz-mod-desc {
+    white-space: normal;
+  }
+}

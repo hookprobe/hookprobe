@@ -1,0 +1,40 @@
+# hookprobe-dataplane.slice — host cgroup slice for sysext/image-layer DATAPLANE
+# workloads (Architecture §4.3, C11 outer wall). This is how the supervisor "budgets" a
+# sysext module: NOT with Wasmtime fuel/epoch/StoreLimits (those don't exist for kernel
+# code), but with cgroups v2 on the USERSPACE side of the dataplane.
+#
+# What lives here: the NAPSE XDP userspace loader/ring consumer (napse-capture@.service)
+# and the OVS control daemons' HookProbe bring-up (hookprobe-ovs.service). The IN-KERNEL
+# XDP program and the OVS kernel datapath are NOT cgroup-accountable at all — only their
+# userspace companions are, which is exactly what this slice bounds.
+#
+# Placement vs the Wasm path: this is a sibling of hookprobe-live.slice /
+# hookprobe-background.slice under the hookprobe.slice parent. Dataplane sits HIGH (the
+# capture/forward path must not starve), but per-process hard ceilings are set by the
+# supervisor on each scope, not here.
+#
+# CI installs this to /usr/lib/systemd/system/ alongside base/units/ (it is part of the
+# base image, not a separate sysext payload — the slice must exist before any sysext
+# unit references Slice=hookprobe-dataplane.slice).
+
+[Unit]
+Description=HookProbe dataplane (XDP loader + OVS bring-up) — host slice
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/base/sysext/README.md
+Before=slices.target
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+
+# High weight: the dataplane must win contention against background work (retention
+# compaction, model pulls). Comparable to the live slice (CPUWeight=800). Relative,
+# only matters under contention.
+CPUWeight=800
+IOWeight=800
+# Soft memory ceiling for the userspace loaders/daemons. NOT MemoryMax (a hard cap could
+# OOM-kill the loader and silently drop capture); MemoryHigh back-pressures first.
+# TODO: derive the exact value from manifest resources per profile (Pi5 vs cloud), not a
+#       static cap — same pattern as the parent hookprobe.slice TODO.
+MemoryHigh=25%

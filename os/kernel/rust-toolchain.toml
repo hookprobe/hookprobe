@@ -1,0 +1,6 @@
+# Pinned nightly (build-std + custom_test_frameworks are unstable).
+# Bump deliberately; keep rust-src (for build-std) and llvm-tools (rust-lld).
+[toolchain]
+channel    = "nightly"
+components = ["rust-src", "llvm-tools"]
+targets    = ["aarch64-unknown-none-softfloat"]

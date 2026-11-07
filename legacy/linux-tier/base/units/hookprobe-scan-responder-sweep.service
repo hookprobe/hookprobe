@@ -1,0 +1,39 @@
+[Unit]
+Description=AEGIS reflex: TTL-sweep the scan-responder's nft quarantine (auto-revert)
+Documentation=file:///usr/share/hookprobe/docs/adr/0023-enforcement-separation.md
+# Explicit bootstrap ordering (2026-07-05 live-hunt fix, same reasoning as
+# hookprobe-scan-responder.service): the sweep is timer-driven so a first-boot race is unlikely
+# in practice, but declaring it keeps both units' ConditionPathExists semantics consistent.
+After=var-lib-hookprobe.mount hookprobe-bootstrap.service
+Wants=hookprobe-bootstrap.service
+ConditionPathExists=/var/lib/hookprobe/manifest.json
+
+[Service]
+Type=oneshot
+# Independent of new alerts (the tail-loop responder only re-evaluates TTL when a new port-scan
+# line arrives) — this is what makes quarantine auto-revert even when the scanner goes quiet.
+# Env knobs (must match hookprobe-scan-responder.service's — same state file, same ifaces):
+#Environment=QUARANTINE_TTL_SECS=300
+#Environment=LAN_IFACE=wlan0
+#Environment=WAN_IFACE=end0
+# 2026-07-07 cross-platform fix: MUST match hookprobe-scan-responder.service's ifaces.env source
+# (same nft quarantine table/sets — a mismatched iface here would sweep-revert against the wrong
+# interface). See that unit's identical comment for the live amd64-VM finding this fixes.
+EnvironmentFile=-/var/lib/hookprobe/ifaces.env
+# APPLY=1 by default — MUST match hookprobe-scan-responder.service's setting (same nft quarantine
+# state; a sweep running plan-only while the responder runs apply-only would never actually
+# revert a live drop, quietly wedging a quarantine open past its TTL). See that unit's comment.
+Environment=SCAN_RESPOND_APPLY=1
+ExecStart=/usr/lib/hookprobe/scan-responder-sweep.sh
+Nice=10
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+PrivateTmp=yes
+# 2026-07-07 backend-audit fix: no Slice= meant this ran unaccounted in system.slice; its
+# sibling hookprobe-scan-responder.service (same nft quarantine state, same enforcement
+# pipeline) is already Slice=hookprobe-live.slice -- match it.
+Slice=hookprobe-live.slice
