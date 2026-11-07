@@ -13370,6 +13370,46 @@ fn fuzz_selftest() {
             n_frames += 1;
         }
     }
+    // 4b. AP DHCP server + WAN DHCP client (BOOTP-shaped: real ports/op/cookie, random options and
+    //     lengths), firmware event decode and the WPA2 authenticator's EAPOL matcher.
+    {
+        use arch_aarch64::apparse::{eapol_match, parse_ap_event, parse_client_dhcp, parse_dhcp_reply, DhcpResult};
+        let mac = [2u8, 0, 0, 0, 0, 2];
+        let xid = [0x12u8, 0x34, 0x56, 0x78];
+        let mut r = DhcpResult::new();
+        for i in 0..N {
+            let n = frame(&mut next, &mut buf);
+            if n >= 42 + 240 && i % 3 != 0 {
+                let k = next();
+                buf[0..6].copy_from_slice(if k & 1 == 0 { &mac } else { &[0xff; 6] });
+                buf[12] = 0x08;
+                buf[13] = 0x00;
+                buf[14] = if k & 6 == 0 { buf[14] } else { 0x45 };
+                buf[23] = 17;
+                let l4 = 14 + ((buf[14] & 0x0f) as usize) * 4;
+                if l4 + 8 + 240 <= n {
+                    let server = k & 8 == 0;
+                    buf[l4..l4 + 2].copy_from_slice(&(if server { 67u16 } else { 68 }).to_be_bytes());
+                    buf[l4 + 2..l4 + 4].copy_from_slice(&(if server { 68u16 } else { 67 }).to_be_bytes());
+                    let b = l4 + 8;
+                    buf[b] = if server { 2 } else { 1 };
+                    if k & 16 != 0 {
+                        buf[b + 4..b + 8].copy_from_slice(&xid);
+                        buf[b + 28..b + 34].copy_from_slice(&mac);
+                    }
+                    buf[b + 236..b + 240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]);
+                }
+            }
+            let _ = parse_dhcp_reply(&buf[..n], &xid, &mac, &mut r);
+            let (mut cm, mut cx, mut ci) = ([0u8; 6], [0u8; 4], [0u8; 4]);
+            let _ = parse_client_dhcp(&buf[..n], &mut cm, &mut cx, &mut ci);
+            let doff = (next() as usize) % 64;
+            let _ = parse_ap_event(&buf[..n], doff);
+            let mut eb = [0u8; 256];
+            let _ = eapol_match(&buf[..n], (next() % 3) as u8, doff, &mac, next() & 1 == 0, next() % 4, Some(&mut eb[..]));
+            n_frames += 1;
+        }
+    }
     // 5. HTTP request parse (Mission Control, reachable on :80).
     let mut n_http = 0u32;
     #[cfg(feature = "netsvc")]
@@ -13412,7 +13452,7 @@ fn fuzz_selftest() {
             n_cfg += 1;
         }
     }
-    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
+    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
         n_frames, n_http, n_cfg);
 }
 
