@@ -56,9 +56,10 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
 - Every remote-reachable parser gets a QEMU fuzz phase in `validate.sh` (deterministic corpus + mutation, a
   fixed budget, panic = FAIL) before it ships. **[partial]** — `[P-fuzz]` (`a79b261`) covers every parser the
   QEMU build carries (frames, PPPoE, IPv6 RA/DHCPv6/LAN firewall, NAT, reject, HTTP, POLICY/WAN.TXT); 0 panics
-  at 3k/target and a one-off 30k/target. The CM5-only parsers (`cyw43.rs` AP DHCP server / events / EAPOL,
-  `uplink.rs` mgmt + WAN DHCP) were hand-reviewed on 2026-11-07 (every index bounded first) but are not fuzzed —
-  moving them to a target-independent module (the `hal::defer` pattern) is the follow-up.
+  at 3k/target and a one-off 30k/target. The AP DHCP server, WAN DHCP client, firmware-event
+  decoder and EAPOL matcher moved to the target-independent `arch-aarch64::apparse` and are fuzzed too
+  (0 panics, 3k + one-off 30k). Still hand-review-only: `uplink.rs` `mgmt_frame` / `mgmt_dhcp_step` (bound to
+  MMIO-backed statics; reviewed 2026-11-07, no defect).
 
 ### D4 — Migration order **[vision]**
 
