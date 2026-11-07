@@ -55,6 +55,7 @@ fn main() {
         build_el0_wasmhost(&dir, &std::env::var("OUT_DIR").unwrap());
         build_wasip1_fixture(&dir, &std::env::var("OUT_DIR").unwrap());
     }
+    gen_policy_key(&std::env::var("OUT_DIR").unwrap());
     if std::env::var("CARGO_FEATURE_MCTLS").is_ok() {
         build_el0_tlshost(&dir, &std::env::var("OUT_DIR").unwrap());
     }
@@ -535,4 +536,25 @@ fn gen_ui_assets(manifest_dir: &str, out_dir: &str) {
     }
     src.push_str("];\n");
     std::fs::write(out, src).unwrap();
+}
+
+// ADR 0049 D1 — the OPERATOR's POLICY.TXT signing key, baked into the (boot-signed) image by the factory:
+// HEQK_POLICY_PUBKEY = 64 hex chars (Ed25519 public key); HEQK_POLICY_GEN_FLOOR = minimum generation.
+// Unset = a standalone image (unsigned POLICY.TXT accepted). A malformed key FAILS the build (never a
+// silently unsigned image when the operator asked for signing).
+fn gen_policy_key(out_dir: &str) {
+    println!("cargo:rerun-if-env-changed=HEQK_POLICY_PUBKEY");
+    println!("cargo:rerun-if-env-changed=HEQK_POLICY_GEN_FLOOR");
+    let key = match std::env::var("HEQK_POLICY_PUBKEY") {
+        Ok(h) if !h.trim().is_empty() => {
+            let h = h.trim();
+            assert!(h.len() == 64 && h.bytes().all(|c| c.is_ascii_hexdigit()), "HEQK_POLICY_PUBKEY must be 64 hex chars");
+            let b: Vec<String> = (0..32).map(|i| format!("0x{}", &h[i * 2..i * 2 + 2])).collect();
+            format!("Some([{}])", b.join(", "))
+        }
+        _ => "None".to_string(),
+    };
+    let floor: u64 = std::env::var("HEQK_POLICY_GEN_FLOOR").ok().map(|v| v.trim().parse().expect("HEQK_POLICY_GEN_FLOOR: u64")).unwrap_or(0);
+    let src = format!("pub const POLICY_PUBKEY: Option<[u8; 32]> = {key};\npub const POLICY_GEN_FLOOR: u64 = {floor};\n");
+    std::fs::write(std::path::Path::new(out_dir).join("policy_key.rs"), src).expect("write policy_key.rs");
 }
