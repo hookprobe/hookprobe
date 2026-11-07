@@ -402,7 +402,7 @@ pub fn signing_key_from_scalar(scalar: &[u8; 32]) -> Option<Arc<dyn SigningKey>>
 /// owner's CA can certify it (ADR 0051 D3).
 pub fn public_point_from_scalar(scalar: &[u8; 32]) -> Option<[u8; 65]> {
     let k = p256::ecdsa::SigningKey::from_bytes(scalar.into()).ok()?;
-    let ep = k.verifying_key().to_encoded_point(false);
+    let ep = k.verifying_key().to_sec1_point(false);
     ep.as_bytes().try_into().ok()
 }
 
@@ -429,8 +429,17 @@ pub fn provider() -> CryptoProvider {
 mod tests {
     use super::*;
 
+    // The entropy source is ONE process-global (`RNG`), and libtest runs tests in parallel: a test
+    // that installs a failing source used to race the key-exchange tests and fail them at random
+    // (seen on nightly + build-std). Every test that touches `RNG` holds this lock for its whole body.
+    static RNG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    fn rng_lock() -> std::sync::MutexGuard<'static, ()> {
+        RNG_LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn no_entropy_source_fails_closed() {
+        let _g = rng_lock();
         // RNG unset in this test binary until set_rng: key exchange must refuse to start.
         RNG.store(0, Ordering::Release);
         assert!(X25519_GROUP.start().is_err());
@@ -443,6 +452,7 @@ mod tests {
 
     #[test]
     fn small_order_peer_key_refused() {
+        let _g = rng_lock();
         set_rng(|b| {
             for (i, x) in b.iter_mut().enumerate() {
                 *x = i as u8 ^ 0x3c;
@@ -459,6 +469,7 @@ mod tests {
 
     #[test]
     fn hybrid_x25519_mlkem768_agrees_with_a_client() {
+        let _g = rng_lock();
         use kem::Decapsulate;
         use ml_kem::{EncodedSizeUser, KemCore, MlKem768};
         set_rng(|b| {
@@ -492,6 +503,26 @@ mod tests {
         assert!(X25519_MLKEM768.start_and_complete(&bad).is_err());
         assert!(X25519_MLKEM768.start_and_complete(&share[..1215]).is_err());
         assert!(X25519_MLKEM768.start().is_err()); // server role only
+    }
+
+    /// RFC 6979 §A.2.5 known-answer test (P-256, SHA-256, message "sample"): pins the EXACT public point
+    /// and the deterministic signature, so a dependency bump (e.g. p256 0.13 → 0.14 for RUSTSEC-2026-0387)
+    /// can never silently change what the device signs — a round-trip alone would not catch that.
+    #[test]
+    fn rfc6979_p256_sha256_known_answer() {
+        fn hx(s: &str) -> alloc::vec::Vec<u8> {
+            (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        }
+        let x: [u8; 32] = hx("C9AFA9D845BA75166B5C215767B1D6934E50C3DB36E89B127B8A622B120F6721").try_into().unwrap();
+        let pt = public_point_from_scalar(&x).unwrap();
+        assert_eq!(&pt[1..33], &hx("60FED4BA255A9D31C961EB74C6356D68C049B8923B61FA6CE669622E60F29FB6")[..]);
+        assert_eq!(&pt[33..], &hx("7903FE1008B8BC99A41AE9E95628BC64F2F1B20C2D7E9F5177A3C294D4462299")[..]);
+        let k = signing_key_from_scalar(&x).unwrap();
+        let der = k.choose_scheme(&[SignatureScheme::ECDSA_NISTP256_SHA256]).unwrap().sign(b"sample").unwrap();
+        let sig = p256::ecdsa::Signature::from_der(&der).unwrap();
+        let rs = sig.to_bytes();
+        assert_eq!(&rs[..32], &hx("EFD48B2AACB6A8FD1140DD9CD45E81D69D2C877B56AAF991C34D0EA84EAF3716")[..]);
+        assert_eq!(&rs[32..], &hx("F7CB1C942D657C41D436C7A1B6E29F65F3E900DBB9AFF4064DC4AB2F843ACDA8")[..]);
     }
 
     #[test]
