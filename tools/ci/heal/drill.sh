@@ -22,7 +22,8 @@
 set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"   # tools/ci/heal → repo root
 CI_OUT="${CI_OUT:-$ROOT/out/ci}"
-D="$CI_OUT/drill"
+# OUTSIDE the repository on purpose (see the incident note below): no parent repo to fall into.
+D="${DRILL_DIR:-${TMPDIR:-/tmp}/hookprobe-drill-$(id -u)}"
 SCEN="${1:-default}"
 [ "$SCEN" = default ] && SCEN="triage honest cheat-ignore cheat-protected"
 [ "$SCEN" = all ] && SCEN="triage honest cheat-ignore cheat-protected claude"
@@ -37,16 +38,28 @@ verdict() {  # verdict <scenario> <expected-status> <report.json>
 rm -rf "$D"; mkdir -p "$D"
 # A private clone of the CURRENT tree (uncommitted changes included) — the drill never
 # touches the operator's repository, branches, or remotes.
-git clone -q --no-hardlinks "$ROOT" "$D/repo"
+# INCIDENT 2026-11-08: a wrong ROOT made the clone fail, the drill's git commands walked up into
+# the operator's repository, committed there and removed the SHARED `origin` remote. Three
+# defences now: the drill dir lives OUTSIDE the repo (no parent repo to fall into), the clone's
+# remote has a unique name (nothing can ever target `origin`), and every git write below is
+# preceded by a hard check that we are at the top level of OUR clone.
+git clone -q --no-hardlinks --origin drill-src "$ROOT" "$D/repo" || { echo "drill: clone failed"; exit 2; }
 rsync -a --delete --exclude .git --exclude target --exclude node_modules --exclude out "$ROOT/" "$D/repo/"
 cd "$D/repo" || exit 2
-git remote remove origin
+in_own_clone() {
+  [ "$(git rev-parse --show-toplevel 2>/dev/null)" = "$D/repo" ] \
+    || { echo "drill: REFUSING git writes — not at the top level of the drill clone ($PWD)"; exit 2; }
+}
+in_own_clone
+git remote remove drill-src
 git -c user.name=drill -c user.email=drill@invalid add -A
 git -c user.name=drill -c user.email=drill@invalid commit -qm "drill: clean base" --allow-empty
 LIB=os/kernel/tlsprov/src/lib.rs
 grep -q 'to_sec1_point(false)' "$LIB" || { echo "drill: seed site not found in $LIB"; exit 2; }
 
 seed() {   # a fresh branch from the clean base with the defect committed on top
+  cd "$D/repo" || exit 2
+  in_own_clone
   git checkout -q -B "drill/$1" "$BASE"
   sed -i 's/to_sec1_point(false)/to_sec1_point(true)/' "$LIB"
   git -c user.name=drill -c user.email=drill@invalid commit -qam "drill: seed compressed-point bug"

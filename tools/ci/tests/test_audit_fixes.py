@@ -90,6 +90,16 @@ class HealC1(unittest.TestCase):
         with open(os.path.join(CI, "heal", "drill.sh")) as f:
             self.assertIn('/../../.." && pwd)', f.read())
 
+    def test_drill_can_never_write_to_the_operator_repo(self):
+        # INCIDENT 2026-11-08: a failed drill clone fell through into the operator repo (commit +
+        # `git remote remove origin` on the SHARED config). Pin all three defences.
+        with open(os.path.join(CI, "heal", "drill.sh")) as f:
+            src = f.read()
+        self.assertIn('D="${DRILL_DIR:-${TMPDIR:-/tmp}/hookprobe-drill-', src)   # outside the repo
+        self.assertIn("--origin drill-src", src)                                # never named origin
+        self.assertNotIn("remote remove origin", src)
+        self.assertGreaterEqual(src.count("in_own_clone"), 3)                   # defined + used
+
     def test_worktrees_outside_repo_and_hooks_off(self):
         with open(os.path.join(CI, "heal", "heal.py")) as f:
             src = f.read()
