@@ -1946,6 +1946,12 @@ fn cm5_prod_service() -> ! {
                 gs[8].wrapping_sub(gs_boot[8]), gs[9].wrapping_sub(gs_boot[9]));
             #[cfg(feature = "dnssink")]
             kprint!("   [DNSSINK hb] sinkholed={} (RPZ-blocked DNS queries answered with SINKHOLE_IP + not forwarded)\n", dns_sinks);
+            #[cfg(feature = "mctls")]
+            if let Some(h) = crate::tlshost::host() {
+                let t = unsafe { mcserve::TLS_STATS };
+                kprint!("   [MC-TLS hb] ready={} calls={} handshakes={} records_out={} failed_closed={} tls_errors={} timeouts={} faults={} restarts={}\n",
+                    h.ready, h.calls, t[0], t[1], t[2], h.tls_errors, h.timeouts, h.faults, h.restarts);
+            }
             // M4 DHCP: drive the client (DISCOVER/REQUEST/retransmit) + report the lease.
             #[cfg(feature = "dhcp")]
             if let Some(dc) = dhcp_client.as_mut() {
