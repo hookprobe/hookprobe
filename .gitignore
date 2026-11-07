@@ -44,7 +44,6 @@ os/build/generated/
 cosign.key
 *.sk
 *.pem
-!os/kernel/tools/usbboot/secure-boot-example/*.pem   # upstream usbboot PUBLIC example (gitleaks-allowlist); drop if unused
 .env
 !os/mission-control/.env.example
 .netrc
