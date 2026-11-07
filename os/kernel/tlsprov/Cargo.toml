@@ -6,6 +6,7 @@
 name = "heqk-tlsprov"
 version = "0.1.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0048 G4)
 license = "AGPL-3.0-only"
 
 [workspace]
@@ -17,7 +18,7 @@ x25519-dalek = { version = "2", default-features = false, features = ["static_se
 sha2 = { version = "0.10", default-features = false }
 hmac = { version = "0.12", default-features = false }
 ml-kem = { version = "0.2", default-features = false, features = ["deterministic"] }
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
 
 [dev-dependencies]
 kem = "=0.3.0-pre.0"
