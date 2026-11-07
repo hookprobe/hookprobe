@@ -19,6 +19,7 @@ that class of regression loud. It checks:
 Stdlib + PyYAML (present on GitHub runners and Debian/Ubuntu system python).
 """
 import argparse
+import json
 import os
 import re
 import sys
@@ -103,6 +104,26 @@ def workflow_triggers(doc):
     return set()
 
 
+SHA_PIN = re.compile(r"@[0-9a-f]{40}$")
+
+
+def _writes(perms):
+    if isinstance(perms, str):
+        return perms == "write-all"
+    if isinstance(perms, dict):
+        return any(v == "write" for v in perms.values())
+    return False
+
+
+def job_is_privileged(doc, job):
+    """A job is privileged if it can write (job or inherited workflow permissions) or references a
+    secret other than the default GITHUB_TOKEN (W2b, security-auditor M4)."""
+    perms = job.get("permissions", doc.get("permissions"))
+    blob = json.dumps(job)
+    other_secrets = [s for s in re.findall(r"secrets\.(\w+)", blob) if s != "GITHUB_TOKEN"]
+    return _writes(perms) or bool(other_secrets)
+
+
 def check_workflow(name, text):
     """Return list of errors for one workflow. Pure — unit-tested."""
     errs = []
@@ -136,10 +157,14 @@ def check_workflow(name, text):
         for st in job.get("steps") or []:
             if isinstance(st, dict) and isinstance(st.get("uses"), str):
                 refs.append(st["uses"])
+        privileged = job_is_privileged(doc, job)
         for u in refs:
             if u.startswith("./") or u.startswith("docker://"):
                 continue
-            if not PIN_OK.search(u) and not TOOLCHAIN_REF_OK.match(u):
+            if privileged and not SHA_PIN.search(u):
+                errs.append(f"{name}:{jid}: holds a secret/write token, so every action must be pinned to a "
+                            f"full commit SHA (W2b; a moved tag would run with those privileges): {u}")
+            elif not PIN_OK.search(u) and not TOOLCHAIN_REF_OK.match(u):
                 errs.append(f"{name}:{jid}: action not pinned to a version/sha: {u}")
     return errs
 

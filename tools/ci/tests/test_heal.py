@@ -124,10 +124,12 @@ class Guard(unittest.TestCase):
     def test_guard_is_always_the_trusted_copy(self):
         # heal.py must run the guard from its own (operator) tree, and ci.yml from the base branch —
         # never the copy inside the change under review (an agent could rewrite it to pass).
-        heal_src = open(os.path.join(CI, "heal", "heal.py")).read()
+        with open(os.path.join(CI, "heal", "heal.py")) as f:
+            heal_src = f.read()
         self.assertIn('os.path.join(HERE, "autofix_guard.py")', heal_src)
         self.assertNotIn('os.path.join(wt, "tools/ci/heal/autofix_guard.py")', heal_src)
-        ci_yml = open(os.path.join(CI, "..", "..", ".github", "workflows", "ci.yml")).read()
+        with open(os.path.join(CI, "..", "..", ".github", "workflows", "ci.yml")) as f:
+            ci_yml = f.read()
         self.assertIn('git show "origin/$BASE_REF:tools/ci/heal/autofix_guard.py"', ci_yml)
 
     def test_wrong_branch_blocked(self):

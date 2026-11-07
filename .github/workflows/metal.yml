@@ -34,18 +34,24 @@ concurrency:
 jobs:
   g6:
     name: "g6 · CM5 metal (mc-e2e-metal)"
-    if: github.repository == 'hookprobe/hookprobe'
+    # main ONLY (security-auditor M1): workflow_dispatch can otherwise target any branch, and the
+    # bench runner is wired to hardware + the LAN. Also configure, operator-side:
+    #   - environment `metal-bench` with a required reviewer,
+    #   - a runner group restricted to `.github/workflows/metal.yml@refs/heads/main`.
+    if: github.repository == 'hookprobe/hookprobe' && github.ref == 'refs/heads/main'
+    environment: metal-bench
     runs-on: [self-hosted, linux, cm5-bench]
     timeout-minutes: 90
     env:
       CI_STRICT: "1"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with: { persist-credentials: false }
       - run: tools/ci/gates.sh g6
       - name: Gate-R separation matrix (attended)
         if: inputs.gate_r
         working-directory: os/kernel
         run: ./tools/gate-r-matrix.sh | tee ../../out/ci/gate-r.log
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
         with: { name: metal-g6, path: out/ci, if-no-files-found: ignore }
