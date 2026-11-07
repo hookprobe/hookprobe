@@ -33,7 +33,8 @@ MODE="$(cat /etc/hookprobe/build-mode 2>/dev/null || echo release)"
 # mkosi.postinst / make-pi4-image.sh ever bake (root and the elevated hookprobe login share it),
 # and only when HOOKPROBE_DEBUG_ACCESS=1. Finding it on a release image means the artifact shipped
 # a hardcoded backdoor.
-DEBUG_HASHES='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'
+DEBUG_HASHES="$(openssl passwd -6 -salt qEkJ33cMtCvXHNnx hookprobe 2>/dev/null)"  # ADR 0045 public dev login hookprobe/hookprobe, DERIVED (no literal hash in the tree)
+case "$DEBUG_HASHES" in '$6$'*) ;; *) echo "rbac-os-check: FATAL: cannot derive the known dev hash (openssl missing); failing closed" >&2; exit 1 ;; esac
 
 # The single OS admin: provisioning/wizard writes /etc/hookprobe/admin-user; fall back to the lowest
 # real UID (1000) so a dev image without a wizard run still audits cleanly. NOTE: this fallback does

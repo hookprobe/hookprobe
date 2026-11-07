@@ -43,7 +43,8 @@ systemctl enable hookprobe-selftest.service 2>/dev/null || true
 #   release (default): root LOCKED, no autologin unit staged (build-vm.sh) — this image ships
 #                 no openssh-server/sudo package today, so there is no sshd posture to harden
 #                 here (arm64's gate additionally hardens sshd; that doesn't apply to this leg).
-R_HASH='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'   # hookprobe
+R_HASH="$(openssl passwd -6 -salt qEkJ33cMtCvXHNnx hookprobe)"  # ADR 0045 public dev login hookprobe/hookprobe, DERIVED (no literal hash in the tree)
+case "$R_HASH" in '$6$'*) ;; *) echo "FATAL: openssl passwd failed; refusing to bake an empty debug password" >&2; exit 1 ;; esac
 # 2026-07-07 regression fix (see arm64 mkosi.postinst): mkosi runs this postinst in a sandbox
 # where bare /etc is NOT the image account DB (host /usr overlaid, /etc/shadow absent) — a bare
 # sed here exits 2 under `set -e` and fails `mkosi build`. mkosi.conf no longer bakes a root
