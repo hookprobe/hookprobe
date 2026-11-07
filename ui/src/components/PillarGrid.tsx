@@ -22,6 +22,8 @@ import { shield, network, connectivity, security, timeline, substrate, deviceSta
 
 /** The device (heqk) has no source for these tiles yet — never show demo numbers as its own. */
 const unreported = () => substrate() === 'heqk';
+/** The AP's own WAN facts (heqk AP image only; null on the passive sensor). */
+const devWan = () => deviceStats()?.wan ?? null;
 const hhmm = (sec: number) => new Date(sec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const NA = { kpi: '—', sub: 'Not reported by this device yet', badge: 'No data', badgeClass: 'badge--grey' };
 
@@ -101,11 +103,11 @@ const PillarGrid: Component = () => {
           ctx="shield"
           title="Shield"
           icon="🛡"
-          kpi={unreported() ? NA.kpi : shield().adsBlocked.toLocaleString()}
-          sub={unreported() ? NA.sub : `ads, trackers & ${shield().malwareStopped} malware sites blocked today`}
-          detail={unreported() ? undefined : 'dnsXai resolver · protecting all devices · on since setup'}
-          badge={unreported() ? NA.badge : 'Active'}
-          badgeClass={unreported() ? NA.badgeClass : 'badge--green'}
+          kpi={unreported() ? (devWan() ? devWan()!.dnsInspected.toLocaleString() : NA.kpi) : shield().adsBlocked.toLocaleString()}
+          sub={unreported() ? (devWan() ? 'DNS queries inspected by the IDS' : NA.sub) : `ads, trackers & ${shield().malwareStopped} malware sites blocked today`}
+          detail={unreported() ? (devWan() ? 'every client resolves through this device · no blocklist yet' : undefined) : 'dnsXai resolver · protecting all devices · on since setup'}
+          badge={unreported() ? (devWan() ? 'Inspecting' : NA.badge) : 'Active'}
+          badgeClass={unreported() ? (devWan() ? 'badge--blue' : NA.badgeClass) : 'badge--green'}
           href="/network/dns"
           action="Manage"
         />
@@ -134,12 +136,12 @@ const PillarGrid: Component = () => {
           ctx="wan"
           title="Get Online"
           icon="⚡"
-          kpi={unreported() ? NA.kpi : connectivity().online ? 'Online' : 'Offline'}
-          kpiClass={unreported() ? undefined : connectivity().online ? 'kpi--green' : 'kpi--amber'}
-          sub={unreported() ? NA.sub : `${connectivity().wanStatus} · ${connectivity().aps} APs`}
-          detail={unreported() ? undefined : `↓ ${connectivity().downMbps} Mbps · ↑ ${connectivity().upMbps} Mbps`}
-          badge={unreported() ? NA.badge : connectivity().online ? 'Connected' : 'Check WAN'}
-          badgeClass={unreported() ? NA.badgeClass : connectivity().online ? 'badge--green' : 'badge--amber'}
+          kpi={unreported() ? (devWan() ? (devWan()!.up ? 'Online' : 'Offline') : NA.kpi) : connectivity().online ? 'Online' : 'Offline'}
+          kpiClass={unreported() ? (devWan() ? (devWan()!.up ? 'kpi--green' : 'kpi--amber') : undefined) : connectivity().online ? 'kpi--green' : 'kpi--amber'}
+          sub={unreported() ? (devWan() ? `${devWan()!.mode.toUpperCase()} · ${devWan()!.clients} Wi-Fi client${devWan()!.clients === 1 ? '' : 's'}` : NA.sub) : `${connectivity().wanStatus} · ${connectivity().aps} APs`}
+          detail={unreported() ? (devWan() ? `WAN ${devWan()!.ip}${devWan()!.ipv6 ? ' · IPv6' : ''} · ${devWan()!.pktsOut.toLocaleString()} out / ${devWan()!.pktsIn.toLocaleString()} in` : undefined) : `↓ ${connectivity().downMbps} Mbps · ↑ ${connectivity().upMbps} Mbps`}
+          badge={unreported() ? (devWan() ? (devWan()!.up ? 'Connected' : 'Check WAN') : NA.badge) : connectivity().online ? 'Connected' : 'Check WAN'}
+          badgeClass={unreported() ? (devWan() ? (devWan()!.up ? 'badge--green' : 'badge--amber') : NA.badgeClass) : connectivity().online ? 'badge--green' : 'badge--amber'}
           href="/network/wan"
           action="Settings"
         />
