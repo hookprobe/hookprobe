@@ -43,6 +43,7 @@ BLOCK_FILE=""
 ALLOW_FILE=""
 IOC_FILE=""
 DEVICES_FILE=""
+WIFI_FILE=""
 MCTLS_FILE=""
 POLICY_KEY=""
 POLICY_GEN="1"
@@ -60,7 +61,8 @@ while [ $# -gt 0 ]; do
     --allowlist-file) ALLOW_FILE="$2"; shift ;;
     --ioc-file) IOC_FILE="$2"; shift ;;
     --devices-file) DEVICES_FILE="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT] [--ioc-file IOC.TXT] [--devices-file DEVICES.TXT]" >&2; exit 2 ;;
+    --wifi-file) WIFI_FILE="$2"; shift ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT] [--ioc-file IOC.TXT] [--devices-file DEVICES.TXT] [--wifi-file WIFI.TXT]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -227,6 +229,7 @@ stage_signed() { # src dst-name sign-subcommand max-bytes
 }
 stage_signed "$IOC_FILE" IOC sign-ioc $((16 << 20))
 stage_signed "$DEVICES_FILE" DEVICES sign-devices $((16 << 10))
+stage_signed "$WIFI_FILE" WIFI sign-wifi 1024   # SSID / PSK / channel (contains the PSK: never commit one)
 if [ -n "$ALLOW_FILE" ]; then
   [ "$(stat -c %s "$ALLOW_FILE")" -le $((16 << 20)) ] || { echo "FATAL: --allowlist-file larger than 16 MiB"; exit 1; }
   cp "$ALLOW_FILE" "$STAGE/ALLOW.TXT"
@@ -246,7 +249,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
