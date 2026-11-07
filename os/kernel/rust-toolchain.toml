@@ -3,4 +3,4 @@
 [toolchain]
 channel    = "nightly"
 components = ["rust-src", "llvm-tools"]
-targets    = ["aarch64-unknown-none-softfloat"]
+targets    = ["aarch64-unknown-none-softfloat", "wasm32-wasip1"]  # wasm32-wasip1: kernel/build.rs builds the signed wasip1 fixture
