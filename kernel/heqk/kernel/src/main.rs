@@ -5249,6 +5249,31 @@ fn cm5_gem_rx_demo() {
         }
     }
     kprint!(" [P8] PASS — inline IPS: wire -> ring -> parser -> BPF verdict -> ENFORCE (forward :53 / drop :4444)\n");
+    // The synthetic :4444 threat above is a SELF-TEST, not an attack: its hit (src 0.0.0.0) must
+    // not reach the SOAR ring's consumers (UI detections, sealed snapshot, export). Metal
+    // 2026-11-07: it showed as a Known-C2 detection with no source on every prod-mc boot. Real
+    // wire events from the probe window are kept (re-recorded with their own fields).
+    {
+        let mut evs = [crate::events::Event::EMPTY; 32];
+        let mut keep = [crate::events::Event::EMPTY; 32];
+        let (mut nk, mut dropped) = (0usize, 0u32);
+        loop {
+            let n = crate::events::drain(&mut evs);
+            for e in &evs[..n] {
+                if e.src == 0 {
+                    dropped += 1;
+                } else if nk < keep.len() {
+                    keep[nk] = *e;
+                    nk += 1;
+                }
+            }
+            if n < evs.len() { break; }
+        }
+        for e in &keep[..nk] {
+            crate::events::push_hit(e.rule_id, e.severity, e.verdict, e.class, e.src);
+        }
+        kprint!(" [P8] self-test events discarded: {} (real events kept: {})\n", dropped, nk);
+    }
 
     // [P8-txburst] DETERMINISTIC TX measurement. Every tx_fail rate quoted from live
     // traffic this session swung wildly (20% -> 9% -> 2% -> 9% across windows of the SAME
