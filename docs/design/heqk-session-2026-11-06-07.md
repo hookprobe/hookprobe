@@ -35,20 +35,20 @@ committed. Living gap list: `docs/design/heqk-remaining-gaps.md`. Peer-review de
 
 ```
 HEQK_AP_PSK="$(cat ~/heqk-ap-psk.txt)" HOOKPROBE_DEBUG_ACCESS=1 HEQK_KEYDIR=$HOME/heqk-sign/keys \
-FEATURES=hboot,apmc,wifi-bigtx builder/make-cm5-heqk-disk.sh --zero-linux \
-  --owner-token "$(cat builder/generated/cm5-heqk/hookprobe-heqk-cm5-74cb1a9-zerolinux-APMC-VLAN.img.owner-key)" \
+FEATURES=hboot,apmc,wifi-bigtx os/build/make-cm5-heqk-disk.sh --zero-linux \
+  --owner-token "$(cat os/build/generated/cm5-heqk/hookprobe-heqk-cm5-74cb1a9-zerolinux-APMC-VLAN.img.owner-key)" \
   --wan-file docs/design/bench-task26/wan-vlan-mgmtdhcp.txt \
   --policy-file docs/design/bench-task26/policy-bench.txt \
   --policy-key ~/heqk-owner-ca/policy.key --policy-gen 2 \
   --mctls-file ~/heqk-owner-ca/MCTLS-cm5-6609fd646386-ap.crt \
   --blocklist-file docs/design/bench-task26/block-bench.txt
 # flash (board in rpiboot):
-sudo kernel/heqk/cm5-boot/flash-image.sh <image> --confirm-erase
+sudo os/kernel/cm5-boot/flash-image.sh <image> --confirm-erase
 ```
 
 - Owner key for the bench images: the `.owner-key` file next to each image (same token reused since `74cb1a9`).
-- UI must be built first: `cd ui && PUBLIC_API_BASE='' npm run build` (node at `~/.local/node/bin`).
-- Validate: `cd kernel/heqk && ./validate.sh` (all phases green at `d2cee9b4`).
+- UI must be built first: `cd os/mission-control && PUBLIC_API_BASE='' npm run build` (node at `~/.local/node/bin`).
+- Validate: `cd os/kernel && ./validate.sh` (all phases green at `d2cee9b4`).
 - Fortress port-4 VLAN bench: `docs/design/bench-task26/fortress-vlan-bench.sh setup|teardown` (needs sudo). **Still up — tear down when the bench ends.**
 - Serial log: `~/heqk-metal-logs/20261107-ap-serial.log` (`/dev/ttyUSB2`, 115200).
 
