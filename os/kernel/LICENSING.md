@@ -244,7 +244,7 @@ For proprietary components: Modifications require commercial license.
 
 ## Third-Party Licenses
 
-See [3rd-party-licenses.md](3rd-party-licenses.md) for comprehensive third-party license documentation.
+See [3rd-party-licenses.md](../../legacy/v1/3rd-party-licenses.md) for comprehensive third-party license documentation.
 
 All third-party components are GPL-free and commercially compatible.
 
