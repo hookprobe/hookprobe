@@ -130,8 +130,11 @@ def autofix(decision, log_text, args, state, outdir):
     msg = f"autofix({decision['category']}): heal {decision['gate']} [{sig}]\n\n{notes}\n\nGenerated-by: tools/ci/heal (ADR 0048)"
     sh(["git", "-c", "user.name=hookprobe-autofix", "-c", "user.email=autofix@hookprobe.invalid",
         "commit", "-q", "-m", msg], cwd=wt, check=True)
-    g = sh([sys.executable, "-I", os.path.join(wt, "tools/ci/heal/autofix_guard.py"), "--base", base,
-            "--head", "HEAD", "--branch", branch, "--require-branch"], cwd=wt)
+    # The guard and its policy come from the TRUSTED tree running this loop (HERE), never from the
+    # worktree the agent just edited — otherwise an agent could rewrite the guard to pass itself.
+    g = sh([sys.executable, "-I", os.path.join(HERE, "autofix_guard.py"), "--base", base,
+            "--head", "HEAD", "--branch", branch, "--require-branch",
+            "--protected", os.path.join(HERE, "protected-paths.txt")], cwd=wt)
     res["guard"] = g.stdout.strip()
     if g.returncode != 0:
         res.update(status="rejected_by_guard", detail=g.stdout.strip()[-1500:])

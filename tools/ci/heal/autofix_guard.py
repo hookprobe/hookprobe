@@ -49,21 +49,36 @@ def is_protected(path, protected):
     return False
 
 
+UNPARSED = "<unparseable diff header>"
+
+
 def parse_diff(diff_text):
-    """Unified diff → {path: {"add": [lines], "del": [lines]}}. Pure."""
+    """Unified diff → {path: {"add": [lines], "del": [lines]}}. Pure.
+
+    BOTH sides of every file header are recorded: a rename/copy of a protected file to an
+    unprotected name (`a/tools/ci/deny.toml b/x.toml`) must still trip A1 — checking only the
+    new path would let an agent delete a gate's policy by renaming it away. A header we cannot
+    parse becomes the UNPARSED pseudo-path, which evaluate() rejects (fail-closed).
+    """
     files, cur = {}, None
+
+    def touch(p):
+        files.setdefault(p, {"add": [], "del": []})
+
     for line in diff_text.splitlines():
         if line.startswith("diff --git "):
             m = re.match(r"diff --git a/(.+?) b/(.+)$", line)
-            cur = m.group(2) if m else None
-            if cur:
-                files.setdefault(cur, {"add": [], "del": []})
-        elif cur is None or line.startswith(("+++", "---", "@@", "index ", "new file", "deleted file",
-                                              "similarity", "rename ", "old mode", "new mode")):
-            m = re.match(r"\+\+\+ b/(.+)$", line)
             if m:
-                cur = m.group(1)
-                files.setdefault(cur, {"add": [], "del": []})
+                touch(m.group(1))
+                cur = m.group(2)
+            else:
+                cur = UNPARSED
+            touch(cur)
+        elif line.startswith(("rename from ", "rename to ", "copy from ", "copy to ")):
+            touch(line.split(" ", 2)[2])
+        elif cur is None or line.startswith(("+++", "---", "@@", "index ", "new file", "deleted file",
+                                              "similarity", "dissimilarity", "old mode", "new mode",
+                                              "Binary files")):
             continue
         elif line.startswith("+"):
             files[cur]["add"].append(line[1:])
@@ -80,6 +95,9 @@ def evaluate(files, protected, branch=None, require_branch=False):
     total = 0
     for path, ch in sorted(files.items()):
         total += len(ch["add"]) + len(ch["del"])
+        if path == UNPARSED:
+            v.append("A1 a diff header could not be parsed (quoted/odd path) — fail-closed")
+            continue
         if is_protected(path, protected):
             v.append(f"A1 touches protected path {path}")
         rm = sum(1 for l in ch["del"] if TESTLIKE.search(l))
@@ -103,6 +121,9 @@ def main() -> int:
     ap.add_argument("--diff", help="read a saved unified diff instead of running git")
     ap.add_argument("--branch", help="branch name (default: current)")
     ap.add_argument("--require-branch", action="store_true")
+    ap.add_argument("--protected", default=os.path.join(HERE, "protected-paths.txt"),
+                    help="TRUSTED protected-path list. Callers must pass the copy from the base "
+                         "branch / operator checkout, never the one inside the change under review.")
     a = ap.parse_args()
     if a.diff:
         text = open(a.diff).read()
@@ -112,7 +133,9 @@ def main() -> int:
         if mb.returncode != 0:
             print(f"FAIL: cannot find merge-base of {a.base} and {a.head} (fail-closed): {mb.stderr.strip()}")
             return 1
-        text = subprocess.run(["git", "diff", "--no-color", "-M", mb.stdout.strip(), a.head],
+        # --no-renames: a rename is shown as delete + add, so BOTH paths are policy-checked.
+        text = subprocess.run(["git", "-c", "core.quotePath=false", "diff", "--no-color", "--no-renames",
+                               "--no-ext-diff", "--no-textconv", mb.stdout.strip(), a.head],
                               capture_output=True, text=True, check=True).stdout
         branch = a.branch or os.environ.get("GITHUB_HEAD_REF") or subprocess.run(
             ["git", "rev-parse", "--abbrev-ref", "HEAD"], capture_output=True, text=True).stdout.strip()
@@ -120,7 +143,7 @@ def main() -> int:
     if not files:
         print("FAIL: empty diff — an autofix must change something (fail-closed)")
         return 1
-    v = evaluate(files, load_protected(), branch, a.require_branch)
+    v = evaluate(files, load_protected(a.protected), branch, a.require_branch)
     n = sum(len(c["add"]) + len(c["del"]) for c in files.values())
     print(f"autofix guard: {len(files)} file(s), {n} changed line(s), branch={branch}")
     for x in v:
