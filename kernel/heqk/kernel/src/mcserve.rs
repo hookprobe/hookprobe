@@ -38,6 +38,14 @@ const TCP_RX: usize = 2048;
 const TCP_TX: usize = 16 * 1024;
 const SCRATCH: usize = 64 * 1024;
 const HTTP_PORT: u16 = 80;
+const HTTPS_PORT: u16 = 443;
+/// TLS connections (ADR 0051): one EL0 TLS-server slot each, on top of the plain-HTTP pool.
+#[cfg(feature = "mctls")]
+const TLS_N: usize = hal::tlsabi::SLOTS;
+#[cfg(not(feature = "mctls"))]
+const TLS_N: usize = 0;
+/// Every TCP connection slot: plain HTTP `0..CONNS`, HTTPS `CONNS..ALL`.
+const ALL: usize = CONNS + TLS_N;
 
 #[cfg(not(feature = "cm5"))]
 #[inline]
@@ -146,17 +154,17 @@ enum Conn {
     Sse { last_change: u64, last_ping_ms: u64 },
 }
 
-static mut STORAGE: [SocketStorage<'static>; CONNS + 1] = [SocketStorage::EMPTY; CONNS + 1];
+static mut STORAGE: [SocketStorage<'static>; ALL + 1] = [SocketStorage::EMPTY; ALL + 1];
 // The SNTP client's one UDP socket (the +1 storage slot): two packets of 48 B each way.
 static mut NTP_RX_META: [udp::PacketMetadata; 2] = [udp::PacketMetadata::EMPTY; 2];
 static mut NTP_RX_BUF: [u8; 128] = [0; 128];
 static mut NTP_TX_META: [udp::PacketMetadata; 2] = [udp::PacketMetadata::EMPTY; 2];
 static mut NTP_TX_BUF: [u8; 128] = [0; 128];
-static mut TCP_RX_BUF: [[u8; TCP_RX]; CONNS] = [[0; TCP_RX]; CONNS];
-static mut TCP_TX_BUF: [[u8; TCP_TX]; CONNS] = [[0; TCP_TX]; CONNS];
-static mut REQ: [[u8; 4096]; CONNS] = [[0; 4096]; CONNS];
-static mut HEAD: [[u8; 512]; CONNS] = [[0; 512]; CONNS];
-static mut SCRATCH_BUF: [[u8; SCRATCH]; CONNS] = [[0; SCRATCH]; CONNS];
+static mut TCP_RX_BUF: [[u8; TCP_RX]; ALL] = [[0; TCP_RX]; ALL];
+static mut TCP_TX_BUF: [[u8; TCP_TX]; ALL] = [[0; TCP_TX]; ALL];
+static mut REQ: [[u8; 4096]; ALL] = [[0; 4096]; ALL];
+static mut HEAD: [[u8; 512]; ALL] = [[0; 512]; ALL];
+static mut SCRATCH_BUF: [[u8; SCRATCH]; ALL] = [[0; SCRATCH]; ALL];
 static mut DEV: McDev = McDev::new();
 static mut STATE: McState = McState::new();
 static mut AUTH: Auth = Auth::new(None);
@@ -253,8 +261,12 @@ fn link_local(mac: [u8; 6]) -> [u8; 4] {
 pub struct McNode {
     iface: Interface,
     sockets: SocketSet<'static>,
-    handles: [Option<SocketHandle>; CONNS],
-    conns: [Conn; CONNS],
+    handles: [Option<SocketHandle>; ALL],
+    conns: [Conn; ALL],
+    /// HTTPS slot `k` (socket `CONNS + k`) has an open session in the EL0 TLS server.
+    tls_open: [bool; TLS_N],
+    /// HTTPS slot `k` completed its handshake (counted once).
+    tls_hs: [bool; TLS_N],
     dhcp: Option<SocketHandle>,
     mac: [u8; 6],
     pub ip: [u8; 4],
@@ -287,7 +299,7 @@ impl McNode {
             let _ = iface.routes_mut().add_default_ipv4_route(Ipv4Address::new(g[0], g[1], g[2], g[3]));
         }
         let mut sockets = SocketSet::new(unsafe { &mut STORAGE[..] });
-        let mut handles: [Option<SocketHandle>; CONNS] = [None; CONNS];
+        let mut handles: [Option<SocketHandle>; ALL] = [None; ALL];
         // Reserve one slot of the pool for the DHCP socket in DHCP mode.
         let tcp_slots = if matches!(mode, NetMode::Dhcp) { CONNS - 1 } else { CONNS };
         for (i, h) in handles.iter_mut().enumerate().take(tcp_slots) {
@@ -296,6 +308,17 @@ impl McNode {
             let mut s = tcp::Socket::new(rx, tx);
             let _ = s.listen(HTTP_PORT);
             *h = Some(sockets.add(s));
+        }
+        // HTTPS listeners only when the EL0 TLS server is up with a certificate (ADR 0051).
+        #[cfg(feature = "mctls")]
+        if crate::tlshost::host().map_or(false, |h| h.ready) {
+            for i in CONNS..ALL {
+                let rx = tcp::SocketBuffer::new(unsafe { &mut TCP_RX_BUF[i][..] });
+                let tx = tcp::SocketBuffer::new(unsafe { &mut TCP_TX_BUF[i][..] });
+                let mut s = tcp::Socket::new(rx, tx);
+                let _ = s.listen(HTTPS_PORT);
+                handles[i] = Some(sockets.add(s));
+            }
         }
         let dhcp = match mode {
             NetMode::Dhcp => Some(sockets.add(smoltcp::socket::dhcpv4::Socket::new())),
@@ -309,7 +332,7 @@ impl McNode {
             sockets.add(u)
         };
         Some(McNode {
-            iface, sockets, handles, conns: [Conn::Reading { got: 0 }; CONNS], dhcp, mac, ip, leased: dhcp.is_none(), gw,
+            iface, sockets, handles, conns: [Conn::Reading { got: 0 }; ALL], tls_open: [false; TLS_N], tls_hs: [false; TLS_N], dhcp, mac, ip, leased: dhcp.is_none(), gw,
             ntp: Sntp { sock: ntp_sock, nonce: 0, rng: seed | 1, server: None, next_ms: 0, tries: 0, synced_once: false, result: None },
         })
     }
@@ -376,7 +399,11 @@ impl McNode {
                 self.conns[i] = Conn::Reading { got: 0 };
                 continue;
             }
-            serve_conn(i, s, &mut self.conns[i], st, now_ms as u64);
+            serve_conn(i, &mut Plain(s), &mut self.conns[i], st, now_ms as u64);
+        }
+        #[cfg(feature = "mctls")]
+        for i in CONNS..ALL {
+            self.tls_service(i, st, now_ms);
         }
         if self.leased {
             self.sntp_step(now_ms);
@@ -503,6 +530,9 @@ pub fn run() -> ! {
     let owner = arch_aarch64::virtio_blk::VirtioBlk::open().and_then(|d| crate::mcauth::load_owner(&d));
     set_owner(owner);
     kprint!(" [MC] owner: {}\n", if owner.is_some() { "CLAIMED (OWNER.TXT verifier loaded) — sign-in required" } else { "UNCLAIMED — every protected route refuses (flash with the owner key)" });
+    // ADR 0051: the EL0 TLS server + MCTLS.CRT from the same boot disk (before the node: it decides :443).
+    #[cfg(feature = "mctls")]
+    crate::tlshost::bring_up(arch_aarch64::virtio_blk::VirtioBlk::open().as_ref());
     let now_ms = || (cntpct().wrapping_sub(t0) / (frq / 1000).max(1)) as i64;
     // DHCP (QEMU's user-mode network serves 10.0.2.15), the production address path.
     let mut node = McNode::new(mac, NetMode::Dhcp, t0 ^ 0x4D43_5345_5256_4500).expect("one node per boot");
@@ -552,6 +582,12 @@ pub fn run() -> ! {
         if now - last_hb >= 10_000 {
             last_hb = now;
             let (lost, gated) = node.tx_stats();
+            #[cfg(feature = "mctls")]
+            if let Some(h) = crate::tlshost::host() {
+                let t = unsafe { TLS_STATS };
+                kprint!(" [MC-TLS hb] ready={} calls={} handshakes={} records_out={} failed_closed={} tls_errors={} timeouts={} faults={} restarts={}\n",
+                    h.ready, h.calls, t[0], t[1], t[2], h.tls_errors, h.timeouts, h.faults, h.restarts);
+            }
             kprint!(" [MC hb] seen={} passed={} dropped={} detections={} qsecbit_raw={} rules_active={} tx_lost={} egress_gated={}\n",
                 st.seen, st.forwarded, st.dropped, st.detections(), telemetry::score(), crate::rules::active_rules(), lost, gated);
         }
@@ -559,7 +595,7 @@ pub fn run() -> ! {
 }
 
 #[allow(static_mut_refs)]
-fn serve_conn(i: usize, s: &mut tcp::Socket, c: &mut Conn, st: &McState, now_ms: u64) {
+fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: u64) {
     let req = unsafe { &mut REQ[i] };
     let head = unsafe { &mut HEAD[i] };
     let scratch = unsafe { &mut SCRATCH_BUF[i] };
@@ -568,23 +604,29 @@ fn serve_conn(i: usize, s: &mut tcp::Socket, c: &mut Conn, st: &McState, now_ms:
             if !s.may_recv() {
                 return;
             }
-            let n = s.recv_slice(&mut req[got..]).unwrap_or(0);
+            let n = s.recv(&mut req[got..]);
             let got = got + n;
             *c = Conn::Reading { got };
             match http::parse(&req[..got]) {
                 Err(http::ParseErr::Incomplete) => {}
                 Err(http::ParseErr::Bad) => {
-                    let _ = s.send_slice(http::BAD_REQUEST);
+                    let _ = s.send(http::BAD_REQUEST);
                     s.close();
                 }
                 Ok(r) => {
+                    if !s.secure() && https_ready() {
+                        let n = http::https_redirect(&r, &mut head[..]);
+                        let _ = s.send(&head[..n]);
+                        s.close();
+                        return;
+                    }
                     let resp = http::handle(&r, st, auth(), now_ms, rand16, &mut scratch[..]);
-                    let hlen = http::write_head(&resp, &mut head[..]);
+                    let hlen = http::write_head_tls(&resp, &mut head[..], s.secure());
                     *c = match resp.body {
                         Body::Static(b) => Conn::Sending { hlen, hoff: 0, body: Src::Static(b), boff: 0 },
                         Body::Scratch(n) => Conn::Sending { hlen, hoff: 0, body: Src::Scratch(n), boff: 0 },
                         Body::Sse => {
-                            let _ = s.send_slice(&head[..hlen]);
+                            let _ = s.send(&head[..hlen]);
                             Conn::Sse { last_change: u64::MAX, last_ping_ms: now_ms }
                         }
                     };
@@ -593,7 +635,7 @@ fn serve_conn(i: usize, s: &mut tcp::Socket, c: &mut Conn, st: &McState, now_ms:
         }
         Conn::Sending { hlen, mut hoff, body, mut boff } => {
             if hoff < hlen {
-                hoff += s.send_slice(&head[hoff..hlen]).unwrap_or(0);
+                hoff += s.send(&head[hoff..hlen]);
             }
             if hoff >= hlen {
                 let src: &[u8] = match body {
@@ -601,7 +643,7 @@ fn serve_conn(i: usize, s: &mut tcp::Socket, c: &mut Conn, st: &McState, now_ms:
                     Src::Scratch(n) => &scratch[..n],
                 };
                 if boff < src.len() {
-                    boff += s.send_slice(&src[boff..]).unwrap_or(0);
+                    boff += s.send(&src[boff..]);
                 }
                 if boff >= src.len() {
                     s.close(); // FIN after the queued bytes drain
@@ -614,15 +656,236 @@ fn serve_conn(i: usize, s: &mut tcp::Socket, c: &mut Conn, st: &McState, now_ms:
                 s.close();
                 return;
             }
-            if st.change != last_change && s.send_capacity() - s.send_queue() > 4096 {
+            if st.change != last_change && s.room() > 4096 {
                 let n = http::sse_update(st, &mut scratch[..8192]);
-                if n > 0 && s.send_slice(&scratch[..n]).is_ok() {
+                if n > 0 && s.send(&scratch[..n]) > 0 {
                     *c = Conn::Sse { last_change: st.change, last_ping_ms: now_ms };
                 }
             } else if now_ms.saturating_sub(last_ping_ms) >= 15_000 {
-                let _ = s.send_slice(http::SSE_PING);
+                let _ = s.send(http::SSE_PING);
                 *c = Conn::Sse { last_change, last_ping_ms: now_ms };
             }
         }
+    }
+}
+
+/// A byte pipe `serve_conn` talks HTTP over: the TCP socket itself (plain HTTP), or the TLS session that
+/// encrypts through the EL0 TLS server (ADR 0051) — one HTTP code path for both ports.
+trait Pipe {
+    fn may_recv(&self) -> bool;
+    fn recv(&mut self, buf: &mut [u8]) -> usize;
+    /// Accepts a prefix of `d`; returns how many bytes were taken.
+    fn send(&mut self, d: &[u8]) -> usize;
+    fn may_send(&self) -> bool;
+    /// Free send space (plaintext bytes that would currently be accepted).
+    fn room(&self) -> usize;
+    fn close(&mut self);
+    /// The pipe is TLS (cookies get `Secure`; no https redirect).
+    fn secure(&self) -> bool {
+        false
+    }
+}
+
+/// HTTPS is up (a certificate is installed): plain :80 then only redirects (ADR 0051 D4).
+fn https_ready() -> bool {
+    #[cfg(feature = "mctls")]
+    {
+        crate::tlshost::host().map_or(false, |h| h.ready)
+    }
+    #[cfg(not(feature = "mctls"))]
+    {
+        false
+    }
+}
+
+struct Plain<'a, 'b>(&'a mut tcp::Socket<'b>);
+impl Pipe for Plain<'_, '_> {
+    fn may_recv(&self) -> bool {
+        self.0.may_recv()
+    }
+    fn recv(&mut self, buf: &mut [u8]) -> usize {
+        self.0.recv_slice(buf).unwrap_or(0)
+    }
+    fn send(&mut self, d: &[u8]) -> usize {
+        self.0.send_slice(d).unwrap_or(0)
+    }
+    fn may_send(&self) -> bool {
+        self.0.may_send()
+    }
+    fn room(&self) -> usize {
+        self.0.send_capacity() - self.0.send_queue()
+    }
+    fn close(&mut self) {
+        self.0.close()
+    }
+}
+
+#[cfg(feature = "mctls")]
+mod tls_side {
+    use super::*;
+    use crate::tlshost::{host, TlsHost};
+    use hal::tlsabi::*;
+
+    /// Decrypted request bytes waiting for `serve_conn`, per HTTPS slot.
+    pub(super) static mut RX: [[u8; 4096]; TLS_N] = [[0; 4096]; TLS_N];
+    pub(super) static mut RXN: [usize; TLS_N] = [0; TLS_N];
+    /// Ciphertext staging between the EL0 server's IO region and the socket.
+    pub(super) static mut CT: [u8; OUT_TLS_MAX] = [0; OUT_TLS_MAX];
+    /// TLS-side counters for the heartbeat: [handshakes, records out, sessions failed closed].
+    pub static mut STATS: [u32; 3] = [0; 3];
+
+    /// Copy the server's OUT_TLS bytes onto the socket. False if the socket could not take all of them
+    /// (a partial TLS record on the wire would corrupt the stream — the caller aborts instead).
+    #[allow(static_mut_refs)]
+    pub(super) fn flush_tls(h: &TlsHost, s: &mut tcp::Socket, n: usize) -> bool {
+        if n == 0 {
+            return true;
+        }
+        let ct = unsafe { &mut CT };
+        h.read(OUT_TLS_OFF, &mut ct[..n]);
+        s.send_slice(&ct[..n]).map_or(false, |k| k == n)
+    }
+
+    pub(super) struct TlsPipe<'a, 'b> {
+        pub s: &'a mut tcp::Socket<'b>,
+        pub slot: usize,
+        pub secs: u64,
+        pub open: &'a mut bool,
+    }
+
+    #[allow(static_mut_refs)]
+    impl Pipe for TlsPipe<'_, '_> {
+        fn may_recv(&self) -> bool {
+            unsafe { RXN[self.slot] > 0 }
+        }
+        fn recv(&mut self, buf: &mut [u8]) -> usize {
+            let (rx, n) = unsafe { (&mut RX[self.slot], &mut RXN[self.slot]) };
+            let k = buf.len().min(*n);
+            buf[..k].copy_from_slice(&rx[..k]);
+            rx.copy_within(k..*n, 0);
+            *n -= k;
+            k
+        }
+        fn send(&mut self, d: &[u8]) -> usize {
+            let Some(h) = host() else { return 0 };
+            if !*self.open || !self.s.may_send() {
+                return 0;
+            }
+            // Leave room for the record header + tag (+ inner type); one record per call.
+            let room = (self.s.send_capacity() - self.s.send_queue()).saturating_sub(64);
+            let chunk = d.len().min(SEND_CHUNK).min(room);
+            if chunk == 0 {
+                return 0;
+            }
+            let r = h.call(CMD_SEND, self.slot, &d[..chunk], self.secs);
+            if r.status != ST_OK || !flush_tls(h, self.s, r.tls_len) {
+                unsafe { STATS[2] += 1 };
+                *self.open = false;
+                self.s.abort();
+                return 0;
+            }
+            unsafe { STATS[1] += 1 };
+            chunk
+        }
+        fn may_send(&self) -> bool {
+            *self.open && self.s.may_send()
+        }
+        fn secure(&self) -> bool {
+            true
+        }
+        fn room(&self) -> usize {
+            (self.s.send_capacity() - self.s.send_queue()).saturating_sub(64)
+        }
+        fn close(&mut self) {
+            if *self.open {
+                if let Some(h) = host() {
+                    let r = h.call(CMD_CLOSE, self.slot, &[], self.secs);
+                    let _ = flush_tls(h, self.s, r.tls_len); // close_notify, best effort
+                }
+                *self.open = false;
+            }
+            self.s.close();
+        }
+    }
+}
+
+#[cfg(feature = "mctls")]
+pub use tls_side::STATS as TLS_STATS;
+
+#[cfg(feature = "mctls")]
+impl McNode {
+    /// One HTTPS slot per iteration: accept → OPEN; ciphertext → RECV (handshake / app data out, plaintext
+    /// staged); then the same `serve_conn` as plain HTTP over the TLS pipe. Any TLS failure aborts that
+    /// connection only (ADR 0050 D5).
+    #[allow(static_mut_refs)]
+    fn tls_service(&mut self, i: usize, st: &McState, now_ms: i64) {
+        use crate::tlshost::host;
+        use hal::tlsabi::*;
+        use tls_side::*;
+        let Some(h) = self.handles[i] else { return };
+        let k = i - CONNS;
+        let secs = st.epoch_at_ms(now_ms as u64) / 1000;
+        let s = self.sockets.get_mut::<tcp::Socket>(h);
+        let Some(th) = host() else { return };
+        if !s.is_open() {
+            if self.tls_open[k] {
+                let _ = th.call(CMD_CLOSE, k, &[], secs);
+                self.tls_open[k] = false;
+            }
+            unsafe { RXN[k] = 0 };
+            let _ = s.listen(HTTPS_PORT);
+            self.conns[i] = Conn::Reading { got: 0 };
+            return;
+        }
+        if !self.tls_open[k] {
+            if s.state() != tcp::State::Established {
+                return;
+            }
+            if th.call(CMD_OPEN, k, &[], secs).status != ST_OK {
+                s.abort();
+                return;
+            }
+            self.tls_open[k] = true;
+            self.tls_hs[k] = false;
+            unsafe { RXN[k] = 0 };
+        }
+        // Ciphertext in.
+        let mut ct = [0u8; 2048];
+        while s.can_recv() && self.tls_open[k] {
+            let n = s.recv_slice(&mut ct).unwrap_or(0);
+            if n == 0 {
+                break;
+            }
+            let r = th.call(CMD_RECV, k, &ct[..n], secs);
+            if r.status != ST_OK || !flush_tls(th, s, r.tls_len) {
+                unsafe { STATS[2] += 1 };
+                self.tls_open[k] = false;
+                s.abort();
+                return;
+            }
+            if r.flags & F_HANDSHAKE_DONE != 0 && !self.tls_hs[k] {
+                self.tls_hs[k] = true; // counted once per session
+                unsafe { STATS[0] += 1 };
+            }
+            if r.plain_len > 0 {
+                let (rx, rn) = unsafe { (&mut RX[k], &mut RXN[k]) };
+                if *rn + r.plain_len > rx.len() {
+                    self.tls_open[k] = false;
+                    s.abort();
+                    return;
+                }
+                th.read(OUT_PLAIN_OFF, &mut rx[*rn..*rn + r.plain_len]);
+                *rn += r.plain_len;
+            }
+            if r.flags & (F_CLOSED | F_PEER_CLOSED) != 0 {
+                self.tls_open[k] = false;
+                s.close();
+                return;
+            }
+        }
+        let mut open = self.tls_open[k];
+        let mut p = TlsPipe { s, slot: k, secs, open: &mut open };
+        serve_conn(i, &mut p, &mut self.conns[i], st, now_ms as u64);
+        self.tls_open[k] = open;
     }
 }

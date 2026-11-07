@@ -231,6 +231,12 @@ impl ProdFull {
 
     /// The owner verifier from the eMMC boot partition's OWNER.TXT (ADR 0037 D3), for the
     /// on-device Mission Control. `None` = unclaimed (or eMMC silent): every protected route refuses.
+    /// ADR 0051: bring up the EL0 TLS server with `MCTLS.CRT` from the eMMC boot partition.
+    #[cfg(feature = "mctls")]
+    pub fn tls_bring_up(&self) {
+        crate::tlshost::bring_up(self.emmc.as_ref());
+    }
+
     #[cfg(feature = "mcserve")]
     pub fn read_owner(&self) -> Option<crate::mcauth::Owner> {
         self.emmc.as_ref().and_then(|d| crate::mcauth::load_owner(d))

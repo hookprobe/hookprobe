@@ -72,7 +72,9 @@ netsvc = ["dep:smoltcp"]
 # IPS-gated datapath + SOAR → evidence state + an HTTP server for the embedded UI (ui/dist, built
 # with PUBLIC_API_BASE='') and the UI's API. Run: tools/mc-e2e.sh. Not a validate.sh flavour (the
 # serve loop never exits); its pure logic is the [P-mc] gate.
-mcserve = ["netsvc"]
+# ADR 0051 — Mission Control HTTPS: embed the EL0 TLS server (el0-tlshost) and the :443 pump.
+mctls = []
+mcserve = ["netsvc", "mctls"]
 # M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
 # prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
 # (smoltcp) into the cm5 build; prod stays byte-identical without it. os-architect design
