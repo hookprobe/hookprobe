@@ -38,12 +38,14 @@ on:
       - "os/build/**"
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
+      - "tools/ci/stage-firmware.sh"
   pull_request:
     paths:
       - "os/kernel/**"
       - "os/build/**"
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
+      - "tools/ci/stage-firmware.sh"
   workflow_dispatch: {}
 
 permissions:
@@ -96,6 +98,9 @@ jobs:
         working-directory: os/kernel
         run: |
           set -euo pipefail
+          # prod/prod-mc embed the licensed CYW43455 firmware (gitignored): stage the sha256-pinned
+          # blob first, or a fresh runner cannot compile the shipped flavour at all (ADR 0048).
+          ../../tools/ci/stage-firmware.sh
           cargo build -p kernel --features prod --release
           # prod-mc = THE production CM5 profile (ADR 0047: Mission Control served by heqk on the
           # GEM, passive-first). It embeds the UI, so build os/mission-control/dist first (same-origin API).
