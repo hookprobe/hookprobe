@@ -53,7 +53,7 @@ uses — a crate living outside `modules/` gets a `staging:` override block, not
 ## Context
 
 `modules/hydra/module.yaml` was `status: stub` — the Intelligence workspace's IOC/threat-intel
-surface was 100% mock (`ui/src/store/itlMock.ts`'s hard-coded CVE list; no IOC concept existed at
+surface was 100% mock (`os/mission-control/src/store/itlMock.ts`'s hard-coded CVE list; no IOC concept existed at
 all). ADR 0024 already built HYDRA's CVE lens (`hookprobe-exploit`: SBOM→CVE→EPSS→VEX→SSVC) and
 explicitly flagged the OTHER half as future work: matching IOC indicators (IPs/domains/hashes/JA3)
 against the SOC's own real traffic. This ADR builds that first version — not full MISP/TAXII/STIX
@@ -124,7 +124,7 @@ repeat sighting of the same indicator always gets the same `rule_id`, so `hookpr
 
 A confirmed match does three things through
 `hookprobe_evidence::EvidenceGraph::ingest_ioc_match` (a new method, reusing
-[`ingest_detection`](../../crates/hookprobe-evidence/src/lib.rs) verbatim for the detection row
+[`ingest_detection`](../../legacy/linux-tier/crates/hookprobe-evidence/src/lib.rs) verbatim for the detection row
 itself — zero duplicated device-upsert/flow-linkage/user-attribution logic):
 
 1. Upserts the pre-existing `iocs` table row (`id`/`ts`/`indicator`/`ioc_type`/`family`/`hits` —

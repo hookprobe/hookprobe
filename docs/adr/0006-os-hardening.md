@@ -5,7 +5,7 @@ H2 core (secure-boot UKI signing + measured-boot PCR attestation) landed. H2 fol
 enrollment, PCR-sealed secrets, remote attestation) + H3–H5 open.
 **Date:** 2026-07-01
 **Deciders:** os-architect (author), security, code-developer
-**Relates to:** [`Readme.md`](../Readme.md) (supply chain / PQC invariants), [ADR 0002](0002-crypto-agility-pqc.md)
+**Relates to:** [`Readme.md`](../architecture/Readme.md) (supply chain / PQC invariants), [ADR 0002](0002-crypto-agility-pqc.md)
 (crypto posture), [ADR 0003](0003-platform-manifest-schema.md) (capability model), [ADR 0005](0005-unified-ebpf-detection.md)
 (eBPF dataplane — the hardening must not break it). Grounded in a 2026-07-01 deep-research pass
 (competition teardown + Linux-hardening survey; sources at the end). Verification was rate-limited

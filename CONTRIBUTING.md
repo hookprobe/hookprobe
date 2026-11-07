@@ -2,7 +2,7 @@
 
 HookProbe OS is **one operating system** — a single signed OCI image, one data model, one evidence
 graph, one AI. Every named component is a *module/lens* on the same substrate, never a separate
-product. Before contributing, read `docs/Readme.md` (the OS architecture) and `docs/MissionControl.md`
+product. Before contributing, read `docs/architecture/Readme.md` (the OS architecture) and `docs/architecture/MissionControl.md`
 (the target dashboard), and skim `CLAUDE.md` for the load-bearing decisions that are not up for
 relitigation.
 

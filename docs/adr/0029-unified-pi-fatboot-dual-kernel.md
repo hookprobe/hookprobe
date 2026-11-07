@@ -4,7 +4,7 @@
 
 **Status:** 🟡 Proposed (2026-07-08) — design accepted pending operator sign-off; **no build scripts rewritten yet** (this ADR is the design that gates the follow-on implementation). Classification for all four boards is already in-tree and test-locked; the boot-substrate work is what this ADR authorizes.
 **Deciders:** os-architect (author), release-engineer, verification-engineer, security-auditor.
-**Relates to:** [ADR 0019](0019-bootc-debian-substrate.md) (boot-model split: rpi-native A/B image-sync vs UEFI bootc — this ADR refines the rpi-native factory it names), [ADR 0017](0017-authenticated-aot-cache.md)/[ADR 0021](0021-multiarch-native-artifact-digests.md) (per-CPU-tier AOT selection — the A76 seam that must keep working per-board from a shared rootfs), [ADR 0003](0003-platform-manifest-schema.md) (manifest classification — the "detect once" contract), [ADR 0016](0016-artifact-hash-signing.md) (supply-chain signing the RPi-repo inputs must not break), `docs/driver-strategy.md` (driver vendoring discipline), `platforms/rpi4.yaml` + `platforms/rpi5.yaml`.
+**Relates to:** [ADR 0019](0019-bootc-debian-substrate.md) (boot-model split: rpi-native A/B image-sync vs UEFI bootc — this ADR refines the rpi-native factory it names), [ADR 0017](0017-authenticated-aot-cache.md)/[ADR 0021](0021-multiarch-native-artifact-digests.md) (per-CPU-tier AOT selection — the A76 seam that must keep working per-board from a shared rootfs), [ADR 0003](0003-platform-manifest-schema.md) (manifest classification — the "detect once" contract), [ADR 0016](0016-artifact-hash-signing.md) (supply-chain signing the RPi-repo inputs must not break), `docs/architecture/driver-strategy.md` (driver vendoring discipline), `platforms/rpi4.yaml` + `platforms/rpi5.yaml`.
 
 ---
 
@@ -138,7 +138,7 @@ This upholds ADR 0019 exactly: the OCI image / rootfs is the universal source of
 4. **Boot-partition static gate** — verify presence of `kernel8.img`, `kernel_2712.img`, all four DTBs, both initrds, and (via `unmkinitramfs`) the storage-driver union in each initrd; assert `config.txt` filter block matches the matrix. *(build-time verifiable — this is the honest ceiling of what CI can prove)*
 5. **`classify.rs` tests** — add explicit CM4 (`raspberrypi,4-compute-module`→`rpi4`) and Pi5-model (`raspberrypi,5-model-b`→`rpi5`) regression cases alongside the existing CM5 test, so all four boards are asserted, not just three. *(build-time verifiable — pure classification)*
 6. **A76-per-board assertion** — a test that `rpi5`/`rpi5.yaml cpu_tier: cortex-a76` yields A76-blob selection and `rpi4` yields baseline, both resolving from one staged rootfs. *(build-time verifiable)*
-7. **Docs** — refine `mkosi.conf` header (one rootfs, **three** boot substrates), `docs/driver-strategy.md` (RPi-kernel-for-Pi rationale + RP1), CLAUDE.md/`docs/Readme.md` image map. *(docs)*
+7. **Docs** — refine `mkosi.conf` header (one rootfs, **three** boot substrates), `docs/architecture/driver-strategy.md` (RPi-kernel-for-Pi rationale + RP1), CLAUDE.md/`docs/architecture/Readme.md` image map. *(docs)*
 
 **Genuinely needs physical silicon (cannot be build-time-proven):**
 - **CM5/Pi5 on-metal boot with the RPi `linux-image-rpi-2712` kernel** — that RP1 Ethernet + USB actually come up (the whole point). This is the single validation that closes the CM5 gap; everything above only proves the image is *assembled* correctly. `rpi5.yaml`'s `hardware_validated: false` stays until this passes.

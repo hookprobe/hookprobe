@@ -1,10 +1,10 @@
 # ADR 0009 — The SOC brain: two-tier detect→track→trace→display (edge muscle / cloud brain)
 
 **Status:** ✅ Accepted (2026-07-02). Grounded in a live investigation of the V1 production system
-(`mesh.hookprobe.com`), the V2 module tree, and `docs/MissionControl.md`. Governs Track-B Phase 2
+(`mesh.hookprobe.com`), the V2 module tree, and `docs/architecture/MissionControl.md`. Governs Track-B Phase 2
 ("Modules, Data & Supervisor") + the SOC surfaces of Track-A.
 **Relates to:** [ADR 0002](0002-crypto-agility-pqc.md) (crypto-agility), [ADR 0003](0003-platform-manifest-schema.md)
-(manifest), [ADR 0005](0005-unified-ebpf-detection.md) (eBPF), `docs/v2-reconciliation.md`, `docs/MissionControl.md`.
+(manifest), [ADR 0005](0005-unified-ebpf-detection.md) (eBPF), `docs/research/v2-reconciliation.md`, `docs/architecture/MissionControl.md`.
 
 ## Context (what the investigation found)
 
@@ -16,7 +16,7 @@
 - **The science is already ported to Wasm** — `napse`, `qsecbit`, `dnsxai`, `aegis-guard` (pure-Rust),
   + the `napse-capture` XDP sysext (CO-RE, `BPF_MAP_TYPE_LPM_TRIE` blocklist/allowlist). **The blocker:
   the supervisor's loader is `MockLoader` — the modules don't execute yet.**
-- **The display side is a fully specified contract** (`ui/src/store/*Mock.ts`) but the **evidence graph
+- **The display side is a fully specified contract** (`os/mission-control/src/store/*Mock.ts`) but the **evidence graph
   (track&trace spine) doesn't exist**, and there's no live push (Axum/SSE).
 - `mesh` runs **15 podman daemons + ClickHouse** — far too heavy for a 1–2 GB edge.
 
@@ -190,7 +190,7 @@ chokepoint/SMB; out-of-band tap = high-throughput cores** (telemetry advantage h
   (GNN/RF/VAE/ensemble), the Mojo classifier rebuild, and `fleet_mesh` (PQC-first) — none block the
   standalone SOC brain.
 
-## Canonical alignment (tracks `docs/MissionControl.md` + `docs/Readme.md` + `docs/BuildPlan.md`)
+## Canonical alignment (tracks `docs/architecture/MissionControl.md` + `docs/architecture/Readme.md` + `docs/roadmap/BuildPlan.md`)
 
 Per the repo rule — *treat Readme.md + MissionControl.md as canonical; keep them in sync; flag (don't
 silently resolve) contradictions.* This ADR **refines**, never overrides, those specs:
@@ -217,7 +217,7 @@ silently resolve) contradictions.* This ADR **refines**, never overrides, those 
 3. **JSON-lines vs the CLAUDE.md "WIT" framing** — module I/O is line-delimited JSON today; WIT is a
    tracked follow-up, not yet reality.
 
-**On build: update `docs/BuildPlan.md` change-log per step, and keep this table current** so the ADR
+**On build: update `docs/roadmap/BuildPlan.md` change-log per step, and keep this table current** so the ADR
 never drifts from canon.
 
 ---

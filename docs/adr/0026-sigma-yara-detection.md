@@ -30,9 +30,9 @@ pattern-matching, no ML in the enforcement path; see honest limits below).
 
 ## Context
 
-The Detect workspace (`docs/MissionControl.md` §4) advertises five engines: "Suricata/Sigma/YARA/
+The Detect workspace (`docs/architecture/MissionControl.md` §4) advertises five engines: "Suricata/Sigma/YARA/
 AI/Behavioral". Before this ADR, Sigma and YARA were **entirely mock** —
-`ui/src/store/detectMock.ts`'s hard-coded `ENGINES` array (`{name:'Sigma', rules:'3,910', hits:512,
+`os/mission-control/src/store/detectMock.ts`'s hard-coded `ENGINES` array (`{name:'Sigma', rules:'3,910', hits:512,
 status:'active'}`, literally invented numbers) and matching hard-coded rows in the demo feed. No
 rule ever parsed, no file ever scanned, nothing ever really fired. This ADR builds the FIRST real
 version of both — not full Sigma/YARA-ecosystem compatibility, a working, tested, honestly-scoped
@@ -151,7 +151,7 @@ accepted, v1 limit.
 `hookprobe-sigma`/`hookprobe-yara-scan` each write a small JSON status file
 (`sigma-status.json`/`yara-status.json`: loaded/skipped rule counts, events/files processed, hits,
 last-run timestamp) that `crates/hookprobe-api/src/engine_status.rs`'s new `GET /api/engines`
-reads and normalizes. `ui/src/store/detectLive.ts`/`DetectApp.tsx` merge this with the existing
+reads and normalizes. `os/mission-control/src/store/detectLive.ts`/`DetectApp.tsx` merge this with the existing
 static `ENGINES` mock: a Sigma/YARA row with real data REPLACES the mock numbers; Suricata/AI
 Detection/Behavioral (no backing engine exists) stay mock — every row is now individually badged
 "live"/"mock" rather than one blanket "· mock" on the whole panel, so the UI never overclaims

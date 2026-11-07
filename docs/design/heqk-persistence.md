@@ -1,6 +1,6 @@
 # heqk persistence & OTA — Track C / Milestone M3 scoping
 
-> **Track-C honesty header.** heqk has **no post-boot storage today** (`docs/BuildPlan.md`
+> **Track-C honesty header.** heqk has **no post-boot storage today** (`docs/roadmap/BuildPlan.md`
 > M3: "no post-boot storage today"). What *does* exist is a **P15 keystore beachhead**:
 > a `hal::BlockDev` trait, a metal-gated **read-only** eMMC driver, full DICE-style
 > sealing crypto, and an MBR write-guard — all QEMU-green over a RAM disk, plus a
@@ -8,8 +8,8 @@
 > **real eMMC *write* driver is metal-gated (Gate R) — unproven on silicon.** M3 is the
 > build that turns the keystore beachhead into a durable data volume + on-device OTA.
 > This doc scopes it; it changes no code. Companion to `docs/design/heqk-detection-parity.md`
-> (M2) and `docs/design/heqk-signing-identity.md` (M1). Canon: `docs/BuildPlan.md` Track C
-> M3, ADR 0007, ADR 0043/0044 D4, `kernel/heqk/SEALED_STORAGE.md`.
+> (M2) and `docs/design/heqk-signing-identity.md` (M1). Canon: `docs/roadmap/BuildPlan.md` Track C
+> M3, ADR 0007, ADR 0043/0044 D4, `os/kernel/SEALED_STORAGE.md`.
 
 ---
 
@@ -20,17 +20,17 @@ landed a keystore-grade write path. Ground truth from the tree:
 
 | Surface | File | State | QEMU / metal |
 |---|---|---|---|
-| **Block-device trait** | `kernel/heqk/hal/src/lib.rs` (`BlockDev`) | ✅ done — 512-B sectors; read always; `write_block` **defaults to `WriteRefused`** (write is opt-in per arch behind `p15-write`) | arch-agnostic |
-| **eMMC driver (read)** | `kernel/heqk/arch-aarch64/src/emmc.rs` | ✅ read-only bring-up (CMD0/1/2/3/7/8/9/16/17); `cfg(feature="cm5")` | **metal-only** |
+| **Block-device trait** | `os/kernel/hal/src/lib.rs` (`BlockDev`) | ✅ done — 512-B sectors; read always; `write_block` **defaults to `WriteRefused`** (write is opt-in per arch behind `p15-write`) | arch-agnostic |
+| **eMMC driver (read)** | `os/kernel/arch-aarch64/src/emmc.rs` | ✅ read-only bring-up (CMD0/1/2/3/7/8/9/16/17); `cfg(feature="cm5")` | **metal-only** |
 | **eMMC driver (write)** | same, `write_block_impl` (CMD24) behind `p15-write` | 🟡 **coded, NOT metal-validated** | **metal-only** |
-| **SDHCI primitives** | `kernel/heqk/arch-aarch64/src/sdhci.rs` | ✅ transcribed from the metal-proven `cyw43.rs` SDHCI | metal-only |
-| **Sealed store (guard + read/scan + write)** | `kernel/heqk/kernel/src/store.rs` (`SealedStore<D: BlockDev>`) | ✅ runtime MBR-derived `LbaGuard`; read/scan always; store behind `p15-write`, read-back verified; **two independent gates** | QEMU-green (RamDisk) |
-| **Sealing crypto** | `kernel/heqk/kernel/src/seal.rs` (`HQKSEAL1`) | ✅ DICE-style KDF over `boot-abi` SHA-256; Encrypt-then-MAC; per-seal nonce; policy = device_id ∥ svn_floor ∥ PCR-mask; zeroize-on-drop | **QEMU-green (arch-agnostic)** |
-| **QEMU block backend** | `RamDisk` in `kernel/heqk/kernel/src/main.rs` | ✅ implements `BlockDev`; write-hook **PANICs** on any out-of-window LBA | QEMU/host |
+| **SDHCI primitives** | `os/kernel/arch-aarch64/src/sdhci.rs` | ✅ transcribed from the metal-proven `cyw43.rs` SDHCI | metal-only |
+| **Sealed store (guard + read/scan + write)** | `os/kernel/kernel/src/store.rs` (`SealedStore<D: BlockDev>`) | ✅ runtime MBR-derived `LbaGuard`; read/scan always; store behind `p15-write`, read-back verified; **two independent gates** | QEMU-green (RamDisk) |
+| **Sealing crypto** | `os/kernel/kernel/src/seal.rs` (`HQKSEAL1`) | ✅ DICE-style KDF over `boot-abi` SHA-256; Encrypt-then-MAC; per-seal nonce; policy = device_id ∥ svn_floor ∥ PCR-mask; zeroize-on-drop | **QEMU-green (arch-agnostic)** |
+| **QEMU block backend** | `RamDisk` in `os/kernel/kernel/src/main.rs` | ✅ implements `BlockDev`; write-hook **PANICs** on any out-of-window LBA | QEMU/host |
 | **P15 selftest** | `p15_seal_selftest()` in `main.rs` | ✅ seal↔unseal round-trip, wrong-policy/tamper/device-mismatch refusals, guard accept/reject, write-window-escape | QEMU-gated |
-| **A/B updater** | `kernel/heqk/cm5-boot/ab-update.sh` + `tryboot.txt`/`config.txt` | ✅ **host-PC** stage/commit/status over rpiboot | host-PC, not on-device |
-| **Anti-rollback (SVN floor)** | `kernel/heqk/hboot/src/rollback.rs` | ✅ `effective_floor = max(compile, OTP-thermometer, fail-closed watermark)`; `svn` bound into the signed image; `SecureCounter` backend abstraction | metal (OTP) / logic QEMU |
-| **Trial-boot watchdog** | `kernel/heqk/hboot/src/watchdog.rs` | ✅ BCM2712 PM watchdog; armed pre-launch, disarmed by the `hvc #1` EL2 gate; fires → full reset → firmware one-shot consumed → known-good slot | metal (real reset) |
+| **A/B updater** | `os/kernel/cm5-boot/ab-update.sh` + `tryboot.txt`/`config.txt` | ✅ **host-PC** stage/commit/status over rpiboot | host-PC, not on-device |
+| **Anti-rollback (SVN floor)** | `os/kernel/hboot/src/rollback.rs` | ✅ `effective_floor = max(compile, OTP-thermometer, fail-closed watermark)`; `svn` bound into the signed image; `SecureCounter` backend abstraction | metal (OTP) / logic QEMU |
+| **Trial-boot watchdog** | `os/kernel/hboot/src/watchdog.rs` | ✅ BCM2712 PM watchdog; armed pre-launch, disarmed by the `hvc #1` EL2 gate; fires → full reset → firmware one-shot consumed → known-good slot | metal (real reset) |
 
 ### What this means honestly
 
@@ -47,7 +47,7 @@ to serial/SIEM (never disk); `telemetry.rs` keeps the QSecBit-lite score **in RA
 `ab-update.sh` is still the **host-PC** factory/recovery script (mounts the FAT boot partition
 over rpiboot, copies `heqk8-b.img`). The *device* already owned the **fallback half** of A/B —
 the firmware one-shot `tryboot` flag + hboot's EL2 trial watchdog + the SVN anti-rollback
-floor. M3.4 (`kernel/heqk/kernel/src/ota.rs`) adds the missing **front half** on-device —
+floor. M3.4 (`os/kernel/kernel/src/ota.rs`) adds the missing **front half** on-device —
 *pull → inactive-slot write → verify → slot-flip* — riding on that existing machinery (reuse,
 don't reinvent). The candidate is staged **only** into the `InactiveSlot` region (the active
 slot / LBA 0 stay guard-refused, brick-safe), verified by the **shared** hboot verifier
@@ -202,7 +202,7 @@ reboot** (the C-acceptance ledger gate: "Persist evidence graph + QSecBit histor
   evidence graph + QSecBit history replay intact; retention cap enforced (oldest reclaimed).
 - **Gate R (metal, CM5)** — the M3 **release sign-off**: real eMMC write to the data
   partition; power-cycle → evidence graph + score persist; OTA installs to the inactive slot
-  from a registry and a **forced-bad boot rolls back** on silicon (the `docs/BuildPlan.md`
+  from a registry and a **forced-bad boot rolls back** on silicon (the `docs/roadmap/BuildPlan.md`
   M3 acceptance line + the C-acceptance ledger "Persist evidence graph" row).
 
 ---

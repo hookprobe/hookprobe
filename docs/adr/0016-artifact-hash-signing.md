@@ -231,7 +231,7 @@ The dangerous silent state is "signed manifest, unprotected payload." Policy by 
 
 **Docs**
 - `docs/adr/0006-os-hardening.md` — follow-up note: extend verity from `verified` to `enforced` on non-Pi image paths (D4).
-- `docs/Readme.md` (supply-chain section) — state that the module signature covers the payload digest, not just the manifest.
+- `docs/architecture/Readme.md` (supply-chain section) — state that the module signature covers the payload digest, not just the manifest.
 
 ---
 

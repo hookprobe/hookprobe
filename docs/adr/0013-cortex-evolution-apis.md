@@ -2,37 +2,37 @@
 
 **Status:** ✅ Accepted (2026-07-03).
 **Deciders:** operator, product-steward, os-architect.
-**Relates to:** [ADR 0011](0011-product-cortex.md) (the Product Cortex — lifecycle graph, two rings, Green/Amber/Red, the roster), [ADR 0012](0012-release-definition-cortex-pass.md) (release definition + the Cortex release pass, D5 beacon), [ADR 0009](0009-soc-brain-edge-cloud.md) (evidence graph, SQLite-edge/ClickHouse-cloud, C9 AI-never-enforces), `docs/product-cortex-competitive.md` (the verified 2026 competitive pass this ADR operationalizes), `.claude/agents/` (the Ring-1 roster), `crates/hookprobe-evidence`, [ADR 0014](0014-continuous-improvement-detection-lifecycle.md) (the continuous-improvement detection loop — a concrete instance of this ADR's event-driven requirement→retirement lifecycle applied to detection, using the D3 roster incl. `retirement-agent`).
+**Relates to:** [ADR 0011](0011-product-cortex.md) (the Product Cortex — lifecycle graph, two rings, Green/Amber/Red, the roster), [ADR 0012](0012-release-definition-cortex-pass.md) (release definition + the Cortex release pass, D5 beacon), [ADR 0009](0009-soc-brain-edge-cloud.md) (evidence graph, SQLite-edge/ClickHouse-cloud, C9 AI-never-enforces), `docs/research/product-cortex-competitive.md` (the verified 2026 competitive pass this ADR operationalizes), `.claude/agents/` (the Ring-1 roster), `crates/hookprobe-evidence`, [ADR 0014](0014-continuous-improvement-detection-lifecycle.md) (the continuous-improvement detection loop — a concrete instance of this ADR's event-driven requirement→retirement lifecycle applied to detection, using the D3 roster incl. `retirement-agent`).
 
 ## Context
 
 ADR 0011 built the Product Cortex as a lens on the evidence graph, with a Ring-1 roster capped at 8.
-A verified competitive-research pass (`docs/product-cortex-competitive.md`, 2026-07-03: 23 sources,
+A verified competitive-research pass (`docs/research/product-cortex-competitive.md`, 2026-07-03: 23 sources,
 25 claims 3-vote-verified, 0 refuted) then mapped the 2026 agentic-SDLC field against that bet. The
 finding: **the field is converging on exactly the Cortex shape** (a lifecycle knowledge graph
 grounding a ring of named pre-built agents behind human-deployment-grade gates), which validates ADR
 0011 — but **every verified incumbent stops at the CI/CD or portal boundary**, and none owns the
-substrate we do (`docs/product-cortex-competitive.md:5-7`).
+substrate we do (`docs/research/product-cortex-competitive.md:5-7`).
 
 Three structural facts fall out of that pass and need to be recorded as decisions before the window
 closes (Harness shipped its agent ring 2026-06-30, three days before the research —
-`docs/product-cortex-competitive.md:21,80`):
+`docs/research/product-cortex-competitive.md:21,80`):
 
 1. The "APIS" vision doc's advice to *avoid relational databases and build on a graph DB* is
    **contradicted by the leaders** — GitLab Orbit runs on ClickHouse, Harness uses schema-driven
-   joins (`docs/product-cortex-competitive.md:26`). Our existing SQLite-edge/ClickHouse-cloud choice
+   joins (`docs/research/product-cortex-competitive.md:26`). Our existing SQLite-edge/ClickHouse-cloud choice
    (ADR 0009) is the mainstream-correct one, and the only one that runs on a Pi. This must be locked
    so it is not relitigated.
 2. An **event-driven lifecycle bus is genuine whitespace** — no verified competitor ships one
-   (`docs/product-cortex-competitive.md:27,51,59`).
+   (`docs/research/product-cortex-competitive.md:27,51,59`).
 3. **No competitor ships ideation, market-intelligence, or retirement/EOL agents** — the field stops
    at code/build/deploy/security; the full requirement→retirement lifecycle (the hardware-PLM
-   framing) is unclaimed in software (`docs/product-cortex-competitive.md:38-40,61`). Capturing it
+   framing) is unclaimed in software (`docs/research/product-cortex-competitive.md:38-40,61`). Capturing it
    requires lifting the ADR 0011 roster cap — which needs an ADR. **This is that ADR.**
 
 Plus two table-stakes closes the same pass names as *now expected, not novel*: an MCP tool surface
 and Harness-grade governance rigor (scoped ephemeral creds, per-agent budget caps, per-identity
-audit) — `docs/product-cortex-competitive.md:48-49,57-58`.
+audit) — `docs/research/product-cortex-competitive.md:48-49,57-58`.
 
 **"One system" still holds.** Nothing here is a new product or a parallel graph. The bus is the
 existing `/var/lib/hookprobe` event-stream pattern; the new agents are Ring-1 personas over the same
@@ -46,8 +46,8 @@ The lifecycle knowledge graph is, and remains, a **graph *model* over a relation
 *store*** — the SQLite `edges` table at the edge (ADR 0009 revision 2026-07-02; ADR 0011 D1) and
 ClickHouse in the cloud. This is the verified state of the art: GitLab's Orbit "lifecycle context
 graph" is built on **ClickHouse**, and Harness's "Software Delivery Knowledge Graph" is schema-driven
-joins, *not* a native graph DB (`docs/product-cortex-competitive.md:14,26`). It is also the **only**
-option that runs on a Pi — a standalone graph DB cannot (`docs/product-cortex-competitive.md:26,68`).
+joins, *not* a native graph DB (`docs/research/product-cortex-competitive.md:14,26`). It is also the **only**
+option that runs on a Pi — a standalone graph DB cannot (`docs/research/product-cortex-competitive.md:26,68`).
 
 **Explicitly rejected:** a standalone/native graph database at the edge (Neo4j/dgraph/etc.). The
 "APIS" vision doc's advice to *avoid relational databases* is **superseded** by this decision; it was
@@ -63,7 +63,7 @@ Add an **append-only lifecycle event log** the Cortex reasons over. Immutable ev
 `retirement` — are appended; Ring-1 agents **subscribe** to the event types relevant to their role,
 do **bounded** reasoning, **emit** new events, and **hand off** to the next subscriber. Because the
 log is append-only and immutable, it is **replayable = a full audit trail**. No competitor ships this
-(`docs/product-cortex-competitive.md:27,51,59`).
+(`docs/research/product-cortex-competitive.md:27,51,59`).
 
 **Edge-honesty (non-negotiable, same discipline as ADR 0009/0011):**
 
@@ -82,13 +82,13 @@ layer over the graph that already exists, not a new datastore.
 
 Every verified agent ring stops at code/build/deploy/security. To own the **full
 requirement→retirement lifecycle** that is unclaimed in software
-(`docs/product-cortex-competitive.md:38-40,61`), add three Ring-1 personas — one upstream of code,
+(`docs/research/product-cortex-competitive.md:38-40,61`), add three Ring-1 personas — one upstream of code,
 two downstream — and lift the ADR 0011 cap to match:
 
 | New agent | Cortex role | Owns | Model |
 |---|---|---|---|
 | `ideation-scout` ★new | Upstream signal → candidate requirements | scans market / CVE / MITRE ATT&CK / competitor moves / GitHub-issue signal → proposes candidate `requirement` nodes (as `idea` events) | opus |
-| `market-intelligence` ★new | Positioning & competitive tracking | the hookprobe.com narrative; ongoing competitive tracking; **owns `docs/product-cortex-competitive.md`** | opus |
+| `market-intelligence` ★new | Positioning & competitive tracking | the hookprobe.com narrative; ongoing competitive tracking; **owns `docs/research/product-cortex-competitive.md`** | opus |
 | `retirement-agent` ★new | Downstream EOL | finds dead APIs / unused features / stale detection rules / unsupported hardware → proposes EOL `retirement` events | sonnet |
 
 These three **complete the requirement→retirement lifecycle** (the hardware-PLM framing — Teamcenter
@@ -98,25 +98,25 @@ Harness/GitLab stop, turning "more agents" into genuine differentiation.
 **Governance of the cap:** new roles require an ADR (ADR 0011 D5). **This ADR is that gate for these
 three.** ADR 0011's "capped at 8" note is amended to **"capped at 11 (ADR 0013)"** in its D5 and its
 sprawl consequence. **The discipline holds: any 12th agent still needs a new ADR.** The cap is a
-deliberate anti-sprawl control (`docs/product-cortex-competitive.md:66`), not a suggestion.
+deliberate anti-sprawl control (`docs/research/product-cortex-competitive.md:66`), not a suggestion.
 
 ### D4 · Sequence the table-stakes closes (now expected, not novel)
 
 The research names two capabilities that are table-stakes across all four majors and that we are
-currently behind on (`docs/product-cortex-competitive.md:48-49,57-58`). Both are ⬜ direction here,
+currently behind on (`docs/research/product-cortex-competitive.md:48-49,57-58`). Both are ⬜ direction here,
 not implemented by this ADR.
 
 **(a) MCP tool surface.** Adopt MCP as the Phase-4 backend tool protocol (already the ADR 0011 plan —
 ADR 0011 reality-check row + D2 Ring 2). Each workspace exposes read tools + plan-proposal tools; the
 **Copilot, the AEGIS planner, and the dev-time agents share one protocol**. Without it we look behind
-(`docs/product-cortex-competitive.md:48,57`). Gated behind the A-Phase 4 backend, as ADR 0011 already
+(`docs/research/product-cortex-competitive.md:48,57`). Gated behind the A-Phase 4 backend, as ADR 0011 already
 sequences.
 
 **(b) Governance parity with Harness's benchmark.** Layer three rigor points *on top of* our existing
 Green/Amber/Red + aegis-guard Deny-final (ADR 0011 D3 — which already matches Harness's verdict model,
 not exceeds it):
 
-| Parity item | Harness (`docs/product-cortex-competitive.md:13`) | HookProbe today | Gap |
+| Parity item | Harness (`docs/research/product-cortex-competitive.md:13`) | HookProbe today | Gap |
 |---|---|---|---|
 | Verdict/policy engine | OPA at 3 points | Green/Amber/Red + aegis-guard Deny-final (ADR 0011 D3) | **have it — parity, honest** |
 | Scoped ephemeral creds | agent∩user RBAC, per-run | — | **lack it** |
@@ -124,37 +124,37 @@ not exceeds it):
 | Per-identity audit trail | per-identity audit | evidence-graph nodes exist; per-agent-run identity does not | **partial** |
 
 **Honest statement:** we have the *verdict* model and match it; we **lack the credential/budget/audit
-rigor** today. This is the cheapest credibility win (`docs/product-cortex-competitive.md:58`) and it
+rigor** today. This is the cheapest credibility win (`docs/research/product-cortex-competitive.md:58`) and it
 is real work, owned by os-architect + code-developer (build steps below).
 
 ### D5 · Naming & positioning
 
 - **Product name = "Product Cortex."** Never "PLM" — the term carries manufacturing baggage
-  (`docs/product-cortex-competitive.md:76`).
+  (`docs/research/product-cortex-competitive.md:76`).
 - **Category descriptor = "APIS / Autonomous Product Intelligence System."** This is the
   external/marketing framing for hookprobe.com; Product Cortex is the product, APIS is the category it
   defines. Position it as *"the security OS that defends your network autonomously — and evolves
-  itself the same way, in public, over one verifiable graph"* (`docs/product-cortex-competitive.md:75`).
+  itself the same way, in public, over one verifiable graph"* (`docs/research/product-cortex-competitive.md:75`).
 - **Anti-pattern immunity is a positioning asset.** The research names the "partial-determinism
   illusion" — deterministic-looking workflows hiding non-deterministic LLM decisions in the critical
-  path (`docs/product-cortex-competitive.md:67`). Our **C9 (AI never in the enforcement path;
+  path (`docs/research/product-cortex-competitive.md:67`). Our **C9 (AI never in the enforcement path;
   aegis-guard Deny is final)** makes us *structurally immune* to it. State this as a differentiator,
   not a footnote.
 
 ## Consequences
 
 - **+** Owns the **full lifecycle on an owned, signed, hardware-validated substrate** — the verified
-  moat (`docs/product-cortex-competitive.md:36,50`): one evidence graph serving both the shipped
+  moat (`docs/research/product-cortex-competitive.md:36,50`): one evidence graph serving both the shipped
   security product and its own development, which no competitor can replicate without owning an OS +
   kernel telemetry + a running product.
 - **+** The event bus gives **replay/audit** and **decouples agents** (subscribe/emit/hand-off) —
   directly mitigating the agent-sprawl coupling risk it might otherwise add.
 - **−** **11 agents is more surface** than 8 (attack surface + cost + confusion —
-  `docs/product-cortex-competitive.md:66`). Mitigated by: the hard cap + the ADR-gate on any 12th +
+  `docs/research/product-cortex-competitive.md:66`). Mitigated by: the hard cap + the ADR-gate on any 12th +
   the bus's **bounded-subscription** model (each agent sees only its event types, reasons in bounded
   steps).
 - **−** The moat is **time-sensitive** — Harness shipped its ring 2026-06-30
-  (`docs/product-cortex-competitive.md:21,80`); the window to own the full-lifecycle-on-owned-substrate
+  (`docs/research/product-cortex-competitive.md:21,80`); the window to own the full-lifecycle-on-owned-substrate
   position is now, not next quarter.
 - **−** D4's table-stakes (MCP, governance-parity) are **real work we are currently behind on**, not a
   claim we already lead.
@@ -167,7 +167,7 @@ is real work, owned by os-architect + code-developer (build steps below).
 
 1. ✅ This ADR + the three agent definitions in `.claude/agents/` (`ideation-scout`,
    `market-intelligence`, `retirement-agent`) + canon updates (ADR 0011 cap, root CLAUDE.md roster,
-   `docs/BuildPlan.md`) — product-steward, this session (2026-07-03).
+   `docs/roadmap/BuildPlan.md`) — product-steward, this session (2026-07-03).
 2. ⬜ **Event-bus schema** in `crates/hookprobe-evidence`: the 8 lifecycle event types on the
    append-only `/var/lib/hookprobe` log + timer-ingest, replayable, C9-bound (carries, never enforces)
    — code-developer.
@@ -180,7 +180,7 @@ is real work, owned by os-architect + code-developer (build steps below).
 4. ⬜ **Governance parity**: scoped ephemeral per-agent-run credentials, per-agent budget/token caps,
    per-identity audit trail — layered on Green/Amber/Red + aegis-guard — os-architect + code-developer.
 5. ⬜ `market-intelligence` runs the **ongoing competitive-tracking pass** and keeps
-   `docs/product-cortex-competitive.md` current as the field moves — market-intelligence agent.
+   `docs/research/product-cortex-competitive.md` current as the field moves — market-intelligence agent.
 
 ## Execution detail (operator-directed, 2026-07-03) — the "how" for build steps 2–4
 

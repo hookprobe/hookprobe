@@ -4,7 +4,7 @@
 
 **Status:** 🟡 Proposed (2026-07-08) — refines and *keeps* ADR 0029; adds three build-time gates, a faster-CM5 bring-up path, a CM5 performance tuning set, and makes the Pi fat-boot an explicit, low-risk **bridge** to a single mainline arm64 kernel. Does not reopen ADR 0029's ship decision.
 **Deciders:** os-architect (author), release-engineer, verification-engineer, security-auditor.
-**Relates to:** [ADR 0029](0029-unified-pi-fatboot-dual-kernel.md) (the fat-boot this refines), [ADR 0019](0019-bootc-debian-substrate.md) (boot-model split), [ADR 0017](0017-authenticated-aot-cache.md)/[ADR 0021](0021-multiarch-native-artifact-digests.md) (A76 AOT seam), `platforms/rpi5.yaml`, `docs/driver-strategy.md`.
+**Relates to:** [ADR 0029](0029-unified-pi-fatboot-dual-kernel.md) (the fat-boot this refines), [ADR 0019](0019-bootc-debian-substrate.md) (boot-model split), [ADR 0017](0017-authenticated-aot-cache.md)/[ADR 0021](0021-multiarch-native-artifact-digests.md) (A76 AOT seam), `platforms/rpi5.yaml`, `docs/architecture/driver-strategy.md`.
 
 ---
 
