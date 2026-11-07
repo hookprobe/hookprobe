@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 # tools/ci/repro.sh — G4r: reproducible-build check for the SHIPPED heqk flavour
-# (ADR 0036 Rung 1, ADR 0048). Builds `--features prod --release` twice into two
+# (ADR 0036 Rung 1, ADR 0052). Builds `--features prod --release` twice into two
 # FRESH target dirs at two different absolute paths and requires byte-identical
 # kernel ELFs. A mismatch means something non-deterministic (timestamps, absolute
 # paths, HashMap order, build-script randomness) leaked into the image — which

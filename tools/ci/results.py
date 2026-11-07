@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fold gates.sh's per-gate JSONL into one gate-results.json (ADR 0048).
+"""Fold gates.sh's per-gate JSONL into one gate-results.json (ADR 0052).
 
 The single machine-readable record of a gate run: consumed by the heal loop
 (tools/ci/heal/classify.py), the Cortex feed (tools/ci/cortex/ci_to_cortex.py)

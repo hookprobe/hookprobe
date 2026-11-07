@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""G1 phase ratchet — an implemented validate.sh phase can never silently disappear (ADR 0048).
+"""G1 phase ratchet — an implemented validate.sh phase can never silently disappear (ADR 0052).
 
 os/kernel/validate.sh carries a table of phases `"ID|marker|status(impl|plan)|stage|what"`.
 validate.sh itself only fails when an *implemented* phase's PASS marker is missing — so the

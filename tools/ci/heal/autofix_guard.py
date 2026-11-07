@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L2 heal loop — the autofix guard (ADR 0048). Deterministic; runs on EVERY autofix diff.
+"""L2 heal loop — the autofix guard (ADR 0052). Deterministic; runs on EVERY autofix diff.
 
 An autonomous fixer is only safe if "make the gate green" can never be achieved by
 weakening the gate. This guard rejects an autofix change that:
