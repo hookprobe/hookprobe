@@ -39,13 +39,13 @@ The repo already knows how to *build* a release but not how to *define* one. Con
   JSONEachRow (`src/main.rs:112-114`) but only writes to a local path — no transport moves it
   anywhere, cloud or otherwise.
 - No product-feedback / opt-in-telemetry / crash-report channel exists anywhere in the specs. The
-  standalone invariant (`docs/Readme.md`: no account, no cloud, air-gapped by default) means nothing
+  standalone invariant (`docs/architecture/Readme.md`: no account, no cloud, air-gapped by default) means nothing
   leaves a standalone device today. ADR 0009 designs the JSONEachRow → ClickHouse offload for
   cloud-linked tenants, but per the point above, the transport is unbuilt.
 
 This ADR fixes the *definition* (version/channel/ring/pass/notes). It does not implement CI,
 fleet, or BuildPlan changes — those are separate, sequenced build steps owned by release-engineer
-and reconciled into `docs/BuildPlan.md` by product-steward.
+and reconciled into `docs/roadmap/BuildPlan.md` by product-steward.
 
 ## Decision
 
@@ -85,7 +85,7 @@ scheme. Update the TODO comment to point at this ADR when D1 is implemented (bui
   that `fleet/agent.sh` step 3 (currently the `# TODO: parse the drift output` echo,
   `agent.sh:32-35`) must gate the `bootc upgrade` call on the node's `rollout.ring` being inside the
   promoted window for the target digest — closing that TODO is build step 3 below.
-- **Honest limitation**: standalone/air-gapped devices (`docs/Readme.md` standalone invariant: no
+- **Honest limitation**: standalone/air-gapped devices (`docs/architecture/Readme.md` standalone invariant: no
   account, no cloud) do not phone home and cannot contribute health signal to a promotion decision,
   and do not auto-pull `bootc upgrade` at all — they update manually, operator-triggered. Promotion
   criteria above can therefore only be computed from **cloud-linked fleet devices + lab/QEMU/hardware
@@ -105,7 +105,7 @@ autonomous), matching this file's own Boundaries.
 | `verification-engineer` | The gate ladder is green for this digest: workspace tests → clippy → `podman build` + `builder/smoketest.sh` → mkosi/QEMU boot (amd64 KVM, arm64 emulated) → greenboot health-gate semantics → hardware gates (Pi4/N100) when boot/partition/units changed (ADR 0011 D4). |
 | `security-auditor` | Supply-chain: cosign signature, SBOM, CBOM, SLSA provenance present and *honestly* described (no claimed-but-absent PQC, no stale CBOM suite); reviews the diff since the last released digest for anything that should have triggered a hardware gate and didn't. |
 | `release-engineer` | Produces the release notes (D4) and the version/channel/ring assignment (D1/D2). |
-| `product-steward` | Verifies `docs/BuildPlan.md` truth (features claimed as shipped in the notes actually moved to ✅ in BuildPlan) and records the release in the Change Log. |
+| `product-steward` | Verifies `docs/roadmap/BuildPlan.md` truth (features claimed as shipped in the notes actually moved to ✅ in BuildPlan) and records the release in the Change Log. |
 
 **Mechanical output — this closes the ADR 0011 "who emits `release_image`" hole:** the pass writes a
 `release.json` evidence bundle (version, digest per profile/arch, channel, platforms, gate results,
@@ -131,7 +131,7 @@ honestly (e.g., the Pi 4 software-key anchor documented in ADR 0007, or a promot
 canary population that under-represents standalone installs per D2).
 
 Two artifacts, both required:
-1. A `docs/BuildPlan.md` Change Log row (reconciled by product-steward, not this ADR).
+1. A `docs/roadmap/BuildPlan.md` Change Log row (reconciled by product-steward, not this ADR).
 2. A `docs/releases/<version>.md` note (new directory; does not exist yet — created as part of build
    step 4 tooling, populated per release thereafter).
 
@@ -139,7 +139,7 @@ Two artifacts, both required:
 
 No mechanism today lets a device tell anyone (HookProbe or the operator's own fleet ops) how a
 release is actually behaving, except the cloud-linked ClickHouse offload designed in ADR 0009
-(unbuilt transport) and lab/canary evidence. The invariant at stake, verbatim from `docs/Readme.md`
+(unbuilt transport) and lab/canary evidence. The invariant at stake, verbatim from `docs/architecture/Readme.md`
 and this file's own canon: **"never gate the device on an account"** and standalone devices are
 **"no account, no cloud, air-gapped"** by default — nothing leaves without explicit opt-in.
 

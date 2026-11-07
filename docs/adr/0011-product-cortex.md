@@ -2,7 +2,7 @@
 
 **Status:** ✅ Accepted (2026-07-03).
 **Deciders:** operator, product-steward (new), os-architect.
-**Relates to:** [ADR 0009](0009-soc-brain-edge-cloud.md) (evidence graph, SQLite-edge/ClickHouse-cloud), [ADR 0005](0005-unified-ebpf-detection.md) (eBPF posture + CI-side verification), `docs/BuildPlan.md` (the living tracker this ADR upgrades), `.claude/agents/` (the Ring-1 roster), `crates/hookprobe-evidence`, [ADR 0012](0012-release-definition-cortex-pass.md) (release definition + the Cortex release pass that fills D1's `release_image` emitter), [ADR 0013](0013-cortex-evolution-apis.md) (Cortex evolution: event bus, roster raised to 11, table-stakes closes), [ADR 0014](0014-continuous-improvement-detection-lifecycle.md) (the continuous-improvement detection loop — the `informed_by` field-feedback edge applied to detection, requirement→retirement, C9-bound, no on-device self-training).
+**Relates to:** [ADR 0009](0009-soc-brain-edge-cloud.md) (evidence graph, SQLite-edge/ClickHouse-cloud), [ADR 0005](0005-unified-ebpf-detection.md) (eBPF posture + CI-side verification), `docs/roadmap/BuildPlan.md` (the living tracker this ADR upgrades), `.claude/agents/` (the Ring-1 roster), `crates/hookprobe-evidence`, [ADR 0012](0012-release-definition-cortex-pass.md) (release definition + the Cortex release pass that fills D1's `release_image` emitter), [ADR 0013](0013-cortex-evolution-apis.md) (Cortex evolution: event bus, roster raised to 11, table-stakes closes), [ADR 0014](0014-continuous-improvement-detection-lifecycle.md) (the continuous-improvement detection loop — the `informed_by` field-feedback edge applied to detection, requirement→retirement, C9-bound, no on-device self-training).
 
 ## Context
 
@@ -48,7 +48,7 @@ detection become nodes in *the same graph* an operator's incident already lives 
 
 - **Ring 1 — dev-time Cortex (now):** the `.claude/agents/` roster below operates the lifecycle
   during development: roadmap truth, security audit, gate verification, releases, field-evidence
-  analysis. It works over the repo + `docs/BuildPlan.md` today and over the lifecycle graph as D1
+  analysis. It works over the repo + `docs/roadmap/BuildPlan.md` today and over the lifecycle graph as D1
   lands.
 - **Ring 2 — in-product Cortex (ships with A-Phase 4 backend + Track-B Phase 2 AEGIS LLM
   adapter):** the same roles become AEGIS-planner personas over MCP, surfaced in Mission Control
@@ -92,7 +92,7 @@ result is recorded (a `gate_result` node once D1 lands; the BuildPlan Change Log
 
 **Roster extension (ADR 0013 D3 — cap raised 8 → 11):** the requirement→retirement lifecycle adds
 three Ring-1 personas — `ideation-scout` (upstream signal → candidate requirements),
-`market-intelligence` (positioning / competitive tracking; owns `docs/product-cortex-competitive.md`),
+`market-intelligence` (positioning / competitive tracking; owns `docs/research/product-cortex-competitive.md`),
 `retirement-agent` (dead-API/feature/rule/hardware EOL proposals). See ADR 0013 for rationale and the
 event-bus they subscribe to. The cap is now 11; a 12th still needs an ADR.
 

@@ -1,0 +1,23 @@
+# hookprobe.slice — parent cgroup for ALL HookProbe workloads (Architecture §4.3,
+# C11 outer wall). Accounting is enabled here so the supervisor can read PSI / *.stat
+# and drive throttle→pause→evict. Child slices (live / background) inherit this.
+# The host's own services live OUTSIDE this slice and are protected from any module.
+
+[Unit]
+Description=HookProbe workloads (parent slice)
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/architecture/Architecture.md
+Before=slices.target
+
+[Slice]
+CPUAccounting=yes
+MemoryAccounting=yes
+IOAccounting=yes
+TasksAccounting=yes
+
+# Whole-OS guard rail: HookProbe workloads in aggregate never starve the host.
+# A module going over-budget is throttled/evicted individually (inner+outer walls);
+# this is the coarse aggregate ceiling. TODO: derive the exact % from the manifest
+# resources.reserved/allocatable per profile rather than a static cap.
+CPUWeight=100
+MemoryHigh=80%
+TasksMax=8192

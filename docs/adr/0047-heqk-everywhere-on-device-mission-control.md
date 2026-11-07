@@ -17,7 +17,7 @@ HookProbe OS = the heqk capability microkernel plus software purpose-built aroun
 The device answers the operator directly: heqk serves the evidence/status API and the static Mission Control UI over its own TCP stack, on the IPS-gated datapath (`packet::verdict` both ways). Browser → device, no Linux in the path. This restores *standalone by default* on every heqk device. Fleet/MSSP aggregation is **additive**: the M6 export stream (ADR 0044 D3 B2 work, `exportwire.rs`) stays as the fleet feed, and the fleet aggregator is itself a heqk target (not a Linux service) once it exists.
 
 ### D3 · Linux's remaining role: build host and transitional image only **[realized: this clause]**
-- Linux remains acceptable as a **developer/build host** (cargo, signing, QEMU, the host-side test sims such as `kernel/responder-sim`), because it is not shipped.
+- Linux remains acceptable as a **developer/build host** (cargo, signing, QEMU, the host-side test sims such as `onboarding/enrollment/responder-sim`), because it is not shipped.
 - The bootc/Debian images keep shipping **only until** each platform's heqk port passes its metal gate. Linux-tier code gets **bug and security fixes only, no new features**. New product capability lands in heqk.
 - Linux-tier components are classified KEEP (portable logic / host tooling), PORT (re-host on heqk), REPLACED (heqk already supersedes) or RETIRE in the report. `retirement-agent` owns the retire list.
 

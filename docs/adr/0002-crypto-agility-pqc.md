@@ -8,7 +8,7 @@ Ed25519 leg — the one domain that WAS built — is now genuinely fail-closed-e
 declared.
 **Date:** 2026-06-27
 **Deciders:** os-architect (author), code-developer, security
-**Relates to:** [ADR 0001 — Mission Control stack](0001-mission-control-stack.md) (transport TLS); `docs/Readme.md` § Post-quantum readiness; the Platform Manifest `crypto` block.
+**Relates to:** [ADR 0001 — Mission Control stack](0001-mission-control-stack.md) (transport TLS); `docs/architecture/Readme.md` § Post-quantum readiness; the Platform Manifest `crypto` block.
 
 ## Context
 

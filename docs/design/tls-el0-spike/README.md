@@ -34,5 +34,5 @@ loader); kernel ↔ server IPC carries TCP payload (smoltcp moves into the serve
 `SYS_TRNG`; port 443 alongside 80 (80 → redirect); `mc-e2e` HTTPS leg.
 
 Reproduce: `el0/` → `cargo build --release` (needs `.cargo/config.toml` + `rust-toolchain.toml` from
-`kernel/heqk/el0-wasmhost`, and `cert.der`/`key.der` from `openssl req -x509 -newkey ec -pkeyopt
+`os/kernel/el0-wasmhost`, and `cert.der`/`key.der` from `openssl req -x509 -newkey ec -pkeyopt
 ec_paramgen_curve:P-256 …` — never committed). `host/` → `cargo run --release`, then `curl -k https://127.0.0.1:18443/`.

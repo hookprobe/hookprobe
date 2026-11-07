@@ -58,11 +58,11 @@ under each category, the usage scenarios (home / self-hosted business / SaaS /
 OEM / academic), the commercial license tiers, and the FAQ, see the canonical
 source, which the whole project follows:
 
-- **[`kernel/heqk/LICENSING.md`](kernel/heqk/LICENSING.md)** — the detailed
+- **[`os/kernel/LICENSING.md`](os/kernel/LICENSING.md)** — the detailed
   HookProbe licensing policy (v5.0 "Cortex"). It is component-scoped in its file
   paths but is the project-wide policy of record; this root document promotes it
   to the repo front door. Where the two ever diverge, this root document governs
-  repo scope and `kernel/heqk/LICENSING.md` governs the HEQK component.
+  repo scope and `os/kernel/LICENSING.md` governs the HEQK component.
 
 ---
 
@@ -88,4 +88,4 @@ Licensing, compliance, contributor agreements (CLA), and commercial terms:
 **qsecbit@hookprobe.com**
 
 For third-party component licenses, see the project's third-party license
-documentation referenced from `kernel/heqk/LICENSING.md`.
+documentation referenced from `os/kernel/LICENSING.md`.

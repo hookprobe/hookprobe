@@ -4,7 +4,7 @@
 `inspect.rs` ladder that used generic XDP.
 **Date:** 2026-07-01
 **Deciders:** os-architect (author), code-developer, security
-**Relates to:** [`Readme.md`](../Readme.md) (data plane), [ADR 0003](0003-platform-manifest-schema.md)
+**Relates to:** [`Readme.md`](../architecture/Readme.md) (data plane), [ADR 0003](0003-platform-manifest-schema.md)
 (capability model + `runtime: sysext`), `modules/napse-capture/` (the sysext), `crates/hookprobe-manifest/src/inspect.rs`
 (the reconciler). Grounded in a 2026-07-01 deep-research pass (24 authoritative sources, 25
 adversarially-verified claims; sources listed at the end).

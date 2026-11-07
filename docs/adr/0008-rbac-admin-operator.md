@@ -1,7 +1,7 @@
 # ADR 0008 — Admin/operator RBAC (the OS is the admin's; operators live in the dashboard)
 
 **Status:** ✅ Accepted (2026-07-02) — E4a. **🟡 Policy accepted; ENFORCEMENT SEAM BUILT (2026-07-08, [ADR 0028](0028-rbac-enforcement.md)).** `security/rbac/roles.yaml` is now parsed at runtime (embedded, `hookprobe-rbac::RolePolicy`) and enforced by a shared axum middleware in BOTH `hookprobe-api` (read-API) and `hookprobe-planner` (the AEGIS write surface, including the `/approve` Red-action gate) — standalone-loopback stays permissive (no account required to run the device), enforcement activates the moment a bearer identity or a non-loopback peer is observed. `rbac-os-check.sh`'s non-admin-OS-account check is now a release-image hard gate (was audit-only), and a new greenboot check makes that a real bootc-rollback trigger. **Still ⬜ (ADR 0028's honest scope, not re-derived here):** no dashboard user store, no login/session/MFA/token-issuance UI, no tenant-subtree clamp, no capability-manifest-intersection code. Builds on [ADR 0007](0007-data-at-rest-encryption.md) (encryption)
-and the Mission Control workspace model (`docs/MissionControl.md`).
+and the Mission Control workspace model (`docs/architecture/MissionControl.md`).
 **Deciders:** operator (the encryption requirement), os-architect.
 
 ## The load-bearing separation

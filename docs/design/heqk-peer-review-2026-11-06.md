@@ -59,7 +59,7 @@ VLAN demux (wrong VLAN / untagged-when-tagged dropped), A/B store crash consiste
 
 | Gate | Result |
 |---|---|
-| `kernel/heqk/validate.sh` (QEMU: every implemented phase incl. the p15-write two-boot stage) | **exit 0, 0 failing** — incl. `[P-abstore]`, `[P-ip6]`, `[P-pppoe]`, `[P-policy]`, `[P11-dnsfwd]` with the new regressions |
+| `os/kernel/validate.sh` (QEMU: every implemented phase incl. the p15-write two-boot stage) | **exit 0, 0 failing** — incl. `[P-abstore]`, `[P-ip6]`, `[P-pppoe]`, `[P-policy]`, `[P11-dnsfwd]` with the new regressions |
 | CI replay `build-heqk.yml` G2 `prod` / G3 `prod-mc` | build |
 | G4 `prod,apmode` must be refused | refused ("cannot be combined with `prod`") |
 | G5 no Wi-Fi credential literal in kernel source | clean |
@@ -154,7 +154,7 @@ correctly idle (infinite lifetimes). Deferred-frame ring: parked 51 = delivered 
 | `2fc7e2e` | **M2 / SEC-M1 / IPv6 tiers** | ADR 0049 **PROPOSED** (operator review): D1 POLICY.TXT signed by the operator key (not the boot key), D2 tagged v4/v6-/64 source identity, D3 scan establishment needs SYN-ACK evidence |
 | `acf5087` | review Q2-H1 | responder-sim: `device_fp` = sha256(authenticated device key); a mismatching msg1 claim is refused |
 | `1607ee3` | A7.7 + data handling | `[PROD hb] rx_lost` (GEM RX-ring loss), eMMC PRE_EOL/LIFE from EXT_CSD at boot, exported RA-rule (121–123) MAC-derived sources pseudonymised with an HKDF(SRK) HMAC key |
-| `d0f4e95` | docs | `kernel/heqk/SECURITY.md`: an accurate heqk data-handling statement; the V1 GDPR section marked as not describing heqk. **ADR 0007 (Apache-2.0) vs LICENSING.md (AGPL-3.0) contradiction flagged, not resolved — operator decision** |
+| `d0f4e95` | docs | `os/kernel/SECURITY.md`: an accurate heqk data-handling statement; the V1 GDPR section marked as not describing heqk. **ADR 0007 (Apache-2.0) vs LICENSING.md (AGPL-3.0) contradiction flagged, not resolved — operator decision** |
 | `HEAD` | UI de-mock D3 (mode badge) | `/api/health` (authenticated) carries `mode`: `cloud-linked` only while the MSSP control-plane session is Established, else `standalone`; TopBar reads it (default kept when the field is absent). Unauthenticated health unchanged. The `dst` column still needs an evidence-schema change |
 
 Gate run at the end of the block: `validate.sh` exit 0 (all implemented phases GREEN); `prod`, `prod-mc`,
@@ -176,7 +176,7 @@ build box). Everything in this block is METAL-PENDING.
 - **D2 on-demand SOAR drain.** One drain body (macro) for the heartbeat and on demand (ring ≥ 1/4 full or
   250 ms): detections reach the UI within ~250 ms instead of up to 5 s, and a burst between heartbeats no
   longer overruns the 64-slot ring.
-- **Bench automation.** `tools/cm5-relay.py`: 2-channel USB relay (CH340 "LCUS" serial or HID USBRelay2)
+- **Bench automation.** `tools/diagnostics/cm5-relay.py`: 2-channel USB relay (CH340 "LCUS" serial or HID USBRelay2)
   for power-cycle and rpiboot (asserts nRPIBOOT, cycles, waits for the 0a5c:2712 ROM, releases). Refuses
   the console tty.
 

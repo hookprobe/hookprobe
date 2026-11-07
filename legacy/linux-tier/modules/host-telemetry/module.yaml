@@ -1,0 +1,130 @@
+# modules/host-telemetry/module.yaml — host eBPF process/file telemetry (registry entry).
+#
+# NEW as of ADR 0015 (registry-driven module inclusion), resolving C2: this module was
+# staged by hand in builder/mkosi-arm64/build-arm64.sh and preset-enabled in
+# base/config/presets/80-hookprobe.preset with NO module.yaml — invisible to the
+# registry, so `builder/verify-staging.sh` (D3 #3, "staged artifact outside the
+# registry") would have flagged it forever. This entry makes it a normal
+# registry-driven module: `builder/gen-staging.sh` now derives its staging actions
+# from THIS file's `staging:` block instead of build-arm64.sh's hand-list.
+#
+# Same class of exception as napse-capture/napse-quarantine: eBPF (sched_process_exec
+# tracepoint → ring buffer) cannot run inside a Wasm/WASI sandbox, so this ships as a
+# systemd-sysext-style host layer (loader binary + pre-compiled CO-RE .bpf.o), NOT Wasm.
+#
+# Canon: docs/adr/0009-soc-brain-edge-cloud.md (evidence-graph host layer),
+# docs/adr/0015-registry-driven-module-inclusion.md (C2, this module's origin story).
+
+id: host-telemetry
+version: 0.1.0
+title: "Host telemetry — eBPF execsnoop (process-exec host layer)"
+runtime: sysext               # kernel/eBPF; NOT Wasm. Flat-COPY staging (see staging: below),
+                              # same packaging convention as napse-quarantine/napse-capture.
+artifact: base                # host-integral; delivered IN the bootc image (no separate OCI)
+
+requires:
+  capabilities: [host_telemetry]   # platform token: policy: enabled on every real class
+                                   # (rpi4/rpi5/rk3588/n100/cloud), policy: disabled on
+                                   # `generic` (local-first floor withholds it — see
+                                   # platforms/generic.yaml). This is one of D4's
+                                   # "always-on baseline" tokens, so the generator
+                                   # preset-enables it by default (managed, not gated).
+  min_kernel: "5.8"            # sched_process_exec tracepoint + CO-RE/BTF baseline,
+                                # same floor napse-capture documents for CAP_BPF.
+
+grants:                        # HOST capabilities — same honest boundary as napse-capture:
+  - cap: [bpf, dac_read_search]
+      # bpf              → bpf(2): load the tracepoint prog, drain the ring buffer.
+      # dac_read_search  → read /proc/<pid>/exe, /proc/<pid>/cmdline for the enriched event.
+
+provides:
+  capabilities: [host_process_events]   # the SERVICE this module materializes.
+  feeds:
+    - /var/lib/hookprobe/host-events    # consumed by hookprobe-evidence (evidence graph
+                                        # host layer) and hookprobe-retention.timer's cap.
+
+resources:
+  slice: hookprobe-background.slice     # not cgroup-accountable in-kernel; the userspace
+                                        # loader is bounded via the host slice (like
+                                        # napse-capture/napse-quarantine's dataplane slice).
+
+# staging: — the irregular-runtime override block (ADR 0015 D1). Builds the loader crate for
+# THIS arch's GNU (glibc) toolchain — CHANGED 2026-07-05 from `musl` (release-engineer,
+# item 4 of the AOT/cross-build closure pass): a musl-target build with libbpf-sys's vendored C
+# source fails the same way modules/napse-quarantine/README.md documents for napse-quarantine
+# (glibc-only `_FORTIFY_SOURCE` symbols like `__snprintf_chk`/`open64` don't exist in musl once
+# compiled with a GLIBC cross compiler), AND this dev box has no musl-targeting C cross-compiler
+# to fix it the other way. `toolchain: gnu` + `{gnu_bin}` below now mirrors napse-quarantine's own
+# aarch64-unknown-linux-gnu precedent exactly (same libbpf-rs `vendored` feature added to
+# loader/Cargo.toml, same aarch64-linux-gnu-gcc cross build). Stages the pre-compiled CO-RE object
+# checked in under sysext/, and carries BOTH units that were previously hand-staged alongside it
+# (host-telemetry.service + the retention timer pair — the retention cap is this module's
+# disk-fill backstop, not a separate module).
+staging:
+  build:
+    - crate: hookprobe-execsnoop     # workspace member: modules/host-telemetry/loader
+      features: [bpf]
+      toolchain: gnu                 # aarch64-unknown-linux-gnu / x86_64-unknown-linux-gnu
+  artifacts:
+    - { src: "{gnu_bin}/hookprobe-execsnoop", dest: "/usr/lib/hookprobe/hookprobe-execsnoop", mode: "0755" }
+    - { src: "modules/host-telemetry/sysext/usr/lib/hookprobe/bpf/execsnoop.bpf.o",
+        dest: "/usr/lib/hookprobe/bpf/execsnoop.bpf.o", mode: "0644" }
+    - { src: "base/config/journald.conf.d/hookprobe.conf",
+        dest: "/usr/lib/systemd/journald.conf.d/hookprobe.conf", mode: "0644" }
+  units:
+    - "modules/host-telemetry/units/host-telemetry.service"
+    - "modules/host-telemetry/units/hookprobe-retention.service"
+    - "modules/host-telemetry/units/hookprobe-retention.timer"
+  preset:
+    host-telemetry.service: enable
+    hookprobe-retention.timer: enable
+
+# Payload digests (ADR 0016 D1, arch-qualified per ADR 0021) — on-device dest paths (matches
+# staging.artifacts[].dest above: a sysext module is never co-located with its own module.yaml at
+# runtime; same convention as napse-quarantine's worked example). Populated via
+# `hookprobe-supervisor --write-artifact-digests host-telemetry`, which (ADR 0016/0017 sysext-
+# artifact-digest gap fix) resolves each entry's BUILD-TREE bytes through THIS module's own
+# `staging.artifacts[].src -> dest` mapping above (the same {repo}/{wasm}/{bin}/{gnu_bin}
+# convention gen-staging.sh/stage-apply.sh already interpret) — not a hand-run `sha256sum`
+# workaround.
+#
+# RESOLVED 2026-07-05 (code-developer, multi-arch native-binary digest gap closure): the
+# single-arch-digest-slot gap this file used to flag ("role: loader has no arch: field the way
+# role: aot does") is CLOSED — `loader` now carries one arch-qualified entry per built arch (same
+# `role: aot` convention generalized; see `docs/adr/0021-multiarch-native-artifact-digests.md`).
+# Both `value`s are REAL sha256 of `hookprobe-execsnoop` built fresh in this pass for
+# aarch64-unknown-linux-gnu (via the same exact-glibc-2.36 sysroot wrapper) AND
+# x86_64-unknown-linux-gnu (native), each written by its own arch's
+# `hookprobe-supervisor --write-artifact-digests host-telemetry` run (arm64 via
+# qemu-aarch64-static/binfmt so `module_sig::running_arch()` reports `arm64` correctly) — proven
+# `verified` under a qemu-aarch64-static arm64 reconcile (docs/roadmap/BuildPlan.md's changelog).
+artifacts:
+  - path: /usr/lib/hookprobe/hookprobe-execsnoop
+    role: loader
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "007f4f1de5dfd825e3761da7c874ac75813a4477d31b029776f5eaf2f8ad0887"
+  - path: /usr/lib/hookprobe/hookprobe-execsnoop
+    role: loader
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "6c070c662d5b48acc276c232c4710c27271968db5dbdc3b33c2848ff8d0d6889"
+  - path: /usr/lib/hookprobe/bpf/execsnoop.bpf.o
+    role: bpf-object
+    digest:
+      alg: sha256
+      # REAL sha256, written by actually RUNNING `hookprobe-supervisor --write-artifact-digests
+      # host-telemetry` against the CHECKED-IN, pre-compiled CO-RE eBPF object
+      # (modules/host-telemetry/sysext/usr/lib/hookprobe/bpf/execsnoop.bpf.o). Kept a SINGLE
+      # arch-less entry (unchanged convention) — VERIFIED this pass by rebuilding
+      # `execsnoop.bpf.c` with both `-D__TARGET_ARCH_arm64` and `-D__TARGET_ARCH_x86` and diffing
+      # byte-for-byte identical output: this program (a `sched_process_exec` tracepoint, no
+      # `PT_REGS` register-layout macro) is genuinely arch-independent CO-RE bytecode, so ONE
+      # digest honestly covers every arch (matches `sha256sum` of that file; not a hand-pasted
+      # digest).
+      value: "b2693e84aedc6362c51cbd5d4c0ed42e9618fa5dc2f67737767f7d60d5dfddb8"
+
+signature: required            # the loader binary + .bpf.o are cosign-signed (ADR 0002
+                                # module_signing); the device VERIFIES, never signs.

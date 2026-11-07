@@ -209,7 +209,7 @@ The arm64 `--check-artifact-digests` run above surfaced exactly ONE failure outs
 modules this ADR originally targeted: `napse-capture`'s `napse-dpi` — the SAME gap (a native
 binary, single arch-less digest pinned to the amd64 build), and a real blocker for the arm64 Pi
 image: `napse-capture` provides the `flows`/`packets` feed the wasm `napse` detection module reads
-(`docs/Readme.md`'s Senzorium/Observe pipeline) — a refusal here is a dead detection pipeline on
+(`docs/architecture/Readme.md`'s Senzorium/Observe pipeline) — a refusal here is a dead detection pipeline on
 the Pi, not a cosmetic gap.
 
 **Closed with the identical D1/D2/D3 mechanism, zero new code**: `modules/napse-capture/module.yaml`

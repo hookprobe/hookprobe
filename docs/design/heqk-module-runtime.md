@@ -11,9 +11,9 @@
 > Canon: `docs/adr/0044-zero-linux-rpi-native-cm5.md` **D4** (the ranked component contract; #1
 > userspace-server substrate = the keystone every isolation claim depends on; #2 Wasm host) + **D5**
 > (the honesty floor), `docs/adr/0043` (the substrate keystone), `docs/adr/0016` (artifact-hash
-> module signing) + `0017` (authenticated AOT `.cwasm` cache), `kernel/heqk/HEQK_REMEDIATION_PLAN.md`
-> (**R1** = "the security mechanism, before any claim holds"), `kernel/heqk/PER_TCB_CSPACE.md` +
-> `CAPABILITY_MODEL.md` (the cap model claims), `kernel/heqk/PRODUCTION_READINESS.md` (heqk's
+> module signing) + `0017` (authenticated AOT `.cwasm` cache), `os/kernel/HEQK_REMEDIATION_PLAN.md`
+> (**R1** = "the security mechanism, before any claim holds"), `os/kernel/PER_TCB_CSPACE.md` +
+> `CAPABILITY_MODEL.md` (the cap model claims), `os/kernel/PRODUCTION_READINESS.md` (heqk's
 > QEMU-proven surface). Sibling scopings: `heqk-detection-parity.md` (M2), `heqk-persistence.md`
 > (M3), `heqk-control-plane.md` (M4).
 

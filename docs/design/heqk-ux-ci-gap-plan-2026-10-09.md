@@ -7,7 +7,7 @@
 > metal check that proves it WITH one. Flashes are batched: build everything QEMU/host can prove,
 > flash once, read the serial evidence, repeat. Canon: ADR 0047 (heqk everywhere, Mission Control
 > served on-device), `docs/design/e2e-gap-audit-2026-10-08.md` (Stages 1–4),
-> `kernel/heqk/docs/design/heqk-gap-plan.md` (kernel ledger).
+> `os/kernel/docs/design/heqk-gap-plan.md` (kernel ledger).
 
 ## 1. Where the product stands on metal (2026-10-09, apmode image on HEAD)
 

@@ -23,7 +23,7 @@ into the guard itself this pass — see Honest limits).
 
 ## Context
 
-Per `docs/BuildPlan.md`/CLAUDE.md, AEGIS today is **deterministic-reconciler-only**: `aegis.rs`'s
+Per `docs/roadmap/BuildPlan.md`/CLAUDE.md, AEGIS today is **deterministic-reconciler-only**: `aegis.rs`'s
 `reconcile_network` turns a declared `network:` intent into a plan-as-diff + generated artifacts,
 and `aegis-guard`'s `check_action`/`evaluate_reflex` gate proposed actions into
 `AutoApply`/`RequireApproval`/`Deny`. The AI planner leg — "operate by intent, not query

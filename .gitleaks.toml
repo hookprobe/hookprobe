@@ -10,7 +10,7 @@
 #
 # Consumed by:
 #   .github/workflows/secrets-scan.yml  (gitleaks/gitleaks-action@v2, CI gate)
-#   scripts/hooks/pre-push               (local grep tripwire mirrors the same
+#   tools/build/git-hooks/pre-push               (local grep tripwire mirrors the same
 #                                          patterns/intent, pure-grep -- see that
 #                                          script's header for why it can't run
 #                                          the real gitleaks binary on this box)
@@ -45,12 +45,12 @@ regexes = [
 # real production key material (see the directory's own README.md: "This
 # example demonstrates how the low level code signing and provisioning
 # tools can be used..."). It is inherited verbatim from upstream
-# raspberrypi/usbboot (now under kernel/heqk/tools/usbboot/ per ADR 0043 M1)
+# raspberrypi/usbboot (now under os/kernel/tools/usbboot/ per ADR 0043 M1)
 # and is publicly documented/distributed by Raspberry Pi themselves -- not a
 # credential of ours, not unique, not rotatable-because-leaked (it was never
 # secret). Scoped to exactly this one upstream directory, nothing wider.
 paths = [
-  '''kernel/heqk/tools/usbboot/secure-boot-example/.*\.pem$''',
+  '''os/kernel/tools/usbboot/secure-boot-example/.*\.pem$''',
 ]
 
 [[allowlist.paths]]
@@ -84,6 +84,6 @@ paths = [
 # for a key that was never secret. Real production signing NEVER uses this
 # key (HSM-held keys + cosign keyless-OIDC only, ADR 0002 §3 / ADR 0046 D4).
 paths = [
-  '''^builder/release\.key$''',
-  '''^builder/release\.key\.mldsa$''',
+  '''^legacy/linux-tier/builder/release\.key$''',
+  '''^legacy/linux-tier/builder/release\.key\.mldsa$''',
 ]

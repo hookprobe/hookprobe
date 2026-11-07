@@ -8,8 +8,8 @@
 > where the proposal and canon collide, the collision is named and resolved, not smoothed.
 > Canon: ADR 0047 (heqk everywhere, Mission Control on-device), ADR 0023 (enforcement
 > separation), ADR 0014 (continuous improvement: no on-device training), ADR 0038 (AI tiers,
-> C9 by construction), ADR 0003 (manifest tokens), `docs/Readme.md` (bounded & honest; the
-> "not predictive" guardrail), `docs/MissionControl.md` (Detect → Behavioral, explanation
+> C9 by construction), ADR 0003 (manifest tokens), `docs/architecture/Readme.md` (bounded & honest; the
+> "not predictive" guardrail), `docs/architecture/MissionControl.md` (Detect → Behavioral, explanation
 > envelope), `heqk-everywhere-report-2026-10-09.md` (gap ranking, port order).
 
 ## 0. The one-paragraph answer
@@ -166,7 +166,7 @@ replication*. Decision stays exactly where it is: `verdict::decide()`.
   4-frames-per-heartbeat budget.
 
 ### 3.7 UI / API
-- `docs/MissionControl.md` already reserves the slots: Detect → **Behavioral Detection**
+- `docs/architecture/MissionControl.md` already reserves the slots: Detect → **Behavioral Detection**
   (`/detect/behavioral`), Investigate → the explanation envelope, Intelligence (HYDRA
   predictor/temporal) for fleet-level prediction, Network → Device Trust for per-device genome
   status, Administration → AI Models for provenance/retention.
@@ -279,8 +279,8 @@ with `model: null` until a signed model is in play. Accessibility and the plan-a
 | Phase | Deliverable | Where | Gate (no flash) | Metal check |
 |---|---|---|---|---|
 | 0 | **ADR 0048** (next free number): C1–C9 resolutions, privacy/profiling stance, licensing boundary, token `boi`, band 1_300_000, four-concern vocabulary (Observation/Memory/Prediction/Deviation + Decision untouched) | `docs/adr/0048-*.md` (product-steward) | docs gate | — |
-| 1 | **HBG event contract**: `Obs` record + sessionised observation ring in heqk; dst/port added to NAT entries; the same record ingested by `hookprobe-evidence` | `kernel/heqk/kernel/src/hbg/obs.rs` (new), `packet.rs`, `nat.rs`; evidence crate | new `[P-hbg-obs]`: 5-tuple + bytes + ctx captured for a synthetic flow set; overruns counted | heartbeat shows `obs=`, `:0` ports gone in MC |
-| 2 | **BSIG codec + delta** as a pure `no_std` crate linked via `#[path]` by kernel, responder-sim and evidence; host KAT with golden vectors | `kernel/heqk/kernel/src/hbgwire.rs` | host harness `tools/hbg-kat.rs` (Stage-1 hard gate like the crypto KAT) | — |
+| 1 | **HBG event contract**: `Obs` record + sessionised observation ring in heqk; dst/port added to NAT entries; the same record ingested by `hookprobe-evidence` | `os/kernel/kernel/src/hbg/obs.rs` (new), `packet.rs`, `nat.rs`; evidence crate | new `[P-hbg-obs]`: 5-tuple + bytes + ctx captured for a synthetic flow set; overruns counted | heartbeat shows `obs=`, `:0` ports gone in MC |
+| 2 | **BSIG codec + delta** as a pure `no_std` crate linked via `#[path]` by kernel, responder-sim and evidence; host KAT with golden vectors | `os/kernel/kernel/src/hbgwire.rs` | host harness `tools/hbg-kat.rs` (Stage-1 hard gate like the crypto KAT) | — |
 | 3 | **Three temporal layers** as bounded state + integer Bayesian recurrence + decay + the four states; deterministic replay of the proposal's test list (09–17 routine, VPN/non-VPN, one new site, repeated visits on independent days, unusual sequence, dormant) under a synthetic clock | `hbg/genome.rs` | new `[P-hbg-layers]` asserting the exact transitions + that 3 visits in 3 minutes ≠ 3 weeks | — |
 | 4 | **Persistence + export + UI**: `fslog` `RT_HBG` records under a BOI VEK; HQXR `REC_BSIG_DELTA`; evidence tables + edges; `/api/behaviour/*`; Detect → Behavioral page; engines row real | `fslog.rs`, `export.rs`, `exportwire.rs`, `http.rs`/`mcstate.rs`, evidence, ui | `[P-hbg-persist]` (p15-write two-boot), `[P-m6-export]` extended, `mc-e2e` | genome survives a power-cycle; delta seen in sim JSONL; **needs the DataVolume partition** |
 | 5 | **Novelty detection** → Behavioral detections 1_300_001–004 + corroboration axis; adjudication service (separate port, RBAC) | `rules.rs`, `corroboration.rs`, new service | `[P-hbg-novelty]`: novel fires once, established suppresses, dormant-reactivated fires; wire verdict always PASS (separation matrix row added) | `[SEPDIAG-HBG]` self-test; zero legit drops |

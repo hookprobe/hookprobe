@@ -85,7 +85,7 @@ ML-DSA-65 + Ed25519 module signing; hybrid ML-KEM control channel on metal vs a 
 ML-KEM data plane); Wi-Fi throughput leadership; multi-site fleet maturity.
 
 ## Follow-ups
-- Add a "WAN/SASE field" section to `docs/product-cortex-competitive.md` (market-intelligence).
+- Add a "WAN/SASE field" section to `docs/research/product-cortex-competitive.md` (market-intelligence).
 - Candidate requirements (ideation-scout): multi-WAN intent failover; Gate R on the AP path;
   self-hostable super-PoP.
 
