@@ -2,6 +2,7 @@
 name = "boot-abi"
 version = "0.1.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0048 G4)
 
 [dependencies]
 # HYBRID secure-boot VERIFY (ed25519 + SLH-DSA-SHA2-128s / FIPS 205), behind the
