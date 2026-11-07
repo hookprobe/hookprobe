@@ -97,6 +97,17 @@ echo "$DETS" | jget "all(x['src_ip']=='10.0.2.2' for x in d['detections'])" | gr
 INC=$(curl -s -m 10 $C "$B/api/incidents")
 echo "$INC" | jget "d['count']>=1 and d['incidents'][0]['device_ip']=='10.0.2.2' and d['incidents'][0]['priority']=='High'" | grep -q True \
   && ok "correlated into a High incident for 10.0.2.2" || bad "incident correlation: $INC"
+IID=$(echo "$INC" | jget "d['incidents'][0]['id']")
+ID=$(curl -s -m 10 $C "$B/api/incidents/$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$IID")")
+echo "$ID" | jget "d['explanation']['model'] is None and d['explanation']['evidence']>=5 and d['attack_path']['node_count']>=2" | grep -q True \
+  && ok "incident drill-down: deterministic explanation (no AI model claimed) + attack path" || bad "incident detail: $ID"
+TL=$(curl -s -m 10 $C "$B/api/incidents/$IID/timeline")
+echo "$TL" | jget "d['found'] and d['count']>=5 and all(e['kind'] in ('detection','flow') for e in d['events'])" | grep -q True \
+  && ok "incident timeline served by heqk" || bad "timeline: $TL"
+DNS=$(curl -s -m 10 $C "$B/api/dns")
+echo "$DNS" | jget "'lists' in d and 'counters' in d and isinstance(d['recent'],list) and d['policy']['encrypted_dns'] in ('block','allow')" | grep -q True \
+  && ok "Shield v2 /api/dns answers (lists, counters, policy, query log)" || bad "/api/dns: $DNS"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/dns")" = 401 ] && ok "/api/dns requires the owner session" || bad "/api/dns reachable without a session"
 sleep 2
 Q=$(curl -s -m 10 $C "$B/api/qsecbit")
 echo "$Q" | jget "d['latest'] is not None and d['latest']['score']>0" | grep -q True && ok "QSecBit-lite risk rose under attack ($(echo "$Q" | jget "d['latest']"))" || bad "qsecbit: $Q"
