@@ -31,6 +31,8 @@ pub struct Req<'a> {
     pub session: Option<&'a str>,
     /// Request body (POST only; bounded by `MAX_BODY`).
     pub body: &'a [u8],
+    /// The `Host` header (for the :80 -> https redirect); empty if absent or not a plain host[:port].
+    pub host: &'a str,
 }
 
 /// Largest accepted request body (the login form; nothing else posts).
@@ -65,6 +67,7 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
         None => (target, ""),
     };
     let mut session = None;
+    let mut host = "";
     let mut clen = 0usize;
     for h in head.split("\r\n").skip(1) {
         let Some((k, v)) = h.split_once(':') else { continue };
@@ -76,6 +79,13 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
                         session = Some(cv);
                     }
                 }
+            }
+        } else if k.eq_ignore_ascii_case("host") {
+            let h = v.trim();
+            // Only a plain host / IPv4 / [IPv6] with an optional port — never anything that could split
+            // the Location header we echo it into.
+            if !h.is_empty() && h.len() <= 255 && h.bytes().all(|c| c.is_ascii_alphanumeric() || b".-:[]".contains(&c)) {
+                host = h;
             }
         } else if k.eq_ignore_ascii_case("content-length") {
             clen = v.parse().map_err(|_| ParseErr::Bad)?;
@@ -89,7 +99,7 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
         return Err(ParseErr::Incomplete);
     }
     let body = &buf[body_start..body_start + clen];
-    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body })
+    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host })
 }
 
 /// `key=<u32>` from a query string.
@@ -282,6 +292,11 @@ fn reason(status: u16) -> &'static str {
 
 /// Write the status line + headers for `resp` into `out`; returns the length.
 pub fn write_head(resp: &Response, out: &mut [u8]) -> usize {
+    write_head_tls(resp, out, false)
+}
+
+/// `write_head` for a response travelling over TLS: the session cookie gains `Secure` (ADR 0051 D4).
+pub fn write_head_tls(resp: &Response, out: &mut [u8], secure: bool) -> usize {
     use core::fmt::Write;
     let mut w = JsonBuf::new(out);
     // No CORS header: the UI is same-origin (served by this device), and the session cookie must
@@ -292,8 +307,8 @@ pub fn write_head(resp: &Response, out: &mut [u8]) -> usize {
         let _ = write!(w, "Location: {}\r\n", l);
     }
     if let Some(c) = resp.set_cookie {
-        let _ = write!(w, "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200\r\n",
-            mcauth::COOKIE, core::str::from_utf8(&c).unwrap_or(""));
+        let _ = write!(w, "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{}\r\n",
+            mcauth::COOKIE, core::str::from_utf8(&c).unwrap_or(""), if secure { "; Secure" } else { "" });
     }
     match resp.body_len() {
         Some(n) => {
@@ -317,6 +332,26 @@ pub fn sse_update(st: &McState, out: &mut [u8]) -> usize {
 }
 
 pub const SSE_PING: &[u8] = b": ping\n\n";
+
+/// `308` to the same path over https (ADR 0051 D4: once a certificate is installed, :80 never serves the
+/// UI in cleartext). The port is dropped (443 is implied); `host` was charset-checked by `parse`.
+pub fn https_redirect(r: &Req, out: &mut [u8]) -> usize {
+    use core::fmt::Write;
+    let mut w = JsonBuf::new(out);
+    // Drop the port: "[v6]:8080" -> "[v6]", "name:8080" -> "name"; a bare IPv6 (several ':') stays as is.
+    let h = r.host;
+    let host = if h.starts_with('[') {
+        h.find(']').map_or(h, |e| &h[..=e])
+    } else if h.bytes().filter(|&c| c == b':').count() == 1 {
+        h.split(':').next().unwrap_or(h)
+    } else {
+        h
+    };
+    let host = if host.is_empty() { "heqk.local" } else { host };
+    let _ = write!(w, "HTTP/1.1 308 Permanent Redirect\r\nLocation: https://{}{}{}{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+        host, r.path, if r.query.is_empty() { "" } else { "?" }, r.query);
+    if w.overflow { 0 } else { w.len }
+}
 
 /// `[P-mc]` — the on-device Mission Control server logic, proven without a network: parse, route,
 /// JSON shapes the UI parses (detections/incidents/qsecbit/engines/health), SSE framing, static
@@ -458,8 +493,28 @@ pub fn mc_selftest() -> bool {
         let hosts_ok = two && h.hosts_active(1_000_000 + 700_000) == 1; // the two silent > 10 min aged out
         good && wrong_nonce && refused && synced && small && big && pinned && hosts_ok
     };
-    let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok;
-    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} (ui assets embedded: {})\n",
-        if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, time_ok, UI_ASSETS.len());
+    // ADR 0051 D4: :80 -> https redirect keeps path+query, drops the port; a hostile Host never reaches
+    // the Location header; the session cookie gains Secure only over TLS.
+    let tls_ok = {
+        let mut o = [0u8; 512];
+        let r1 = parse(b"GET /detect/feed?x=1 HTTP/1.1\r\nHost: heqk.local:8080\r\n\r\n").unwrap();
+        let n1 = https_redirect(&r1, &mut o);
+        let red = has(&o[..n1], "HTTP/1.1 308") && has(&o[..n1], "Location: https://heqk.local/detect/feed?x=1\r\n");
+        let r6 = parse(b"GET / HTTP/1.1\r\nHost: [fd00::1]:80\r\n\r\n").unwrap();
+        let n6 = https_redirect(&r6, &mut o);
+        let v6 = has(&o[..n6], "Location: https://[fd00::1]/\r\n");
+        let bad = parse(b"GET / HTTP/1.1\r\nHost: evil.com\rSet-Cookie: x=1\r\n\r\n").map_or(true, |r| r.host.is_empty())
+            && parse(b"GET / HTTP/1.1\r\nHost: a b/c\r\n\r\n").map_or(true, |r| r.host.is_empty());
+        let login = handle(&parse(b"POST /api/login HTTP/1.1\r\nContent-Length: 29\r\n\r\ntoken=hq-owner-selftest-token").unwrap(), &st, &mut auth, 0, || Some([0x5A; 16]), &mut scratch);
+        let mut hh = [0u8; 512];
+        let a = write_head_tls(&login, &mut hh, true);
+        let sec = has(&hh[..a], "Max-Age=43200; Secure\r\n");
+        let b = write_head_tls(&login, &mut hh, false);
+        let plain = !has(&hh[..b], "Secure");
+        red && v6 && bad && sec && plain
+    };
+    let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;
+    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS)={} (ui assets embedded: {})\n",
+        if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, time_ok, tls_ok, UI_ASSETS.len());
     pass
 }

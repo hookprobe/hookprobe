@@ -110,6 +110,63 @@ else
   echo "  SKIP  browser leg — Playwright not installed (cd tools/mc-e2e && npm i && npx playwright install chromium)"
 fi
 
+echo "[7] HTTPS (ADR 0051): the EL0 TLS server, a key the device derives, a certificate from a name-constrained owner CA"
+PUB=$(tr -d '\r' < "$LOG" | grep -ao 'pub=04[0-9a-f]\{128\}' | head -1 | cut -d= -f2)
+grep -qa "HTTPS OFF — no certificate provisioned" "$LOG" && [ ${#PUB} = 130 ] && ok "unprovisioned: HTTPS stays off and the device publishes its TLS public key" || bad "no TLS public key / unexpected HTTPS state"
+TLSD=$(mktemp -d)
+if python3 tools/mctls-provision.py --ca-dir "$TLSD/ca" --pub "$PUB" --name heqk.local --ip 127.0.0.1 \
+     --permit-dns heqk.local --permit-ip 127.0.0.0/255.0.0.0 --permit-ip 10.0.0.0/255.0.0.0 --out "$TLSD/MCTLS.CRT" >/dev/null; then
+  ok "owner CA certified the device key (CA is name-constrained; its private key never touches the device)"
+else bad "provisioning failed"; fi
+# The CA cannot certify other names: a leaf for evil.example signed by it must fail verification.
+openssl ecparam -name prime256v1 -genkey -noout -out "$TLSD/evil.key" 2>/dev/null
+openssl req -new -key "$TLSD/evil.key" -subj /CN=evil.example -out "$TLSD/evil.csr" 2>/dev/null
+printf 'subjectAltName=DNS:evil.example\n' > "$TLSD/evil.ext"
+openssl x509 -req -in "$TLSD/evil.csr" -CA "$TLSD/ca/ca.pem" -CAkey "$TLSD/ca/ca.key" -CAcreateserial -days 2 -extfile "$TLSD/evil.ext" -out "$TLSD/evil.pem" 2>/dev/null
+openssl verify -CAfile "$TLSD/ca/ca.pem" "$TLSD/evil.pem" 2>&1 | grep -q "permitted subtree violation" && ok "name constraints: the owner CA cannot mint a certificate for another site" || bad "name constraints not enforced"
+kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null
+# second boot: same image, the boot disk now carries MCTLS.CRT
+PART=$(mktemp); dd if="$DISK" of="$PART" bs=512 skip=2048 count=129024 status=none
+mcopy -i "$PART" "$TLSD/MCTLS.CRT" ::MCTLS.CRT && dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none; rm -f "$PART"
+LOG2=$(mktemp /tmp/mc-e2e-qemu-tls.XXXX.log); HTTPS=18443; BS="https://heqk.local:$HTTPS"
+qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
+  -global virtio-mmio.force-legacy=false \
+  -netdev user,id=n0,hostfwd=tcp:$HOST:$HTTP-:80,hostfwd=tcp:$HOST:$HTTPS-:443,hostfwd=tcp:$HOST:$P4444-:4444 \
+  -device virtio-net-device,netdev=n0 \
+  -drive file="$DISK",format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel "$KERNEL" >"$LOG2" 2>&1 &
+QPID=$!
+for _ in $(seq 1 90); do grep -qa "\[MC\] heqk Mission Control serving on http://10.0.2.15" "$LOG2" && break; sleep 1; done
+C=(--cacert "$TLSD/ca/ca.pem" --resolve "heqk.local:$HTTPS:$HOST" -sS -m 30)
+grep -qa "HTTPS ready on :443" "$LOG2" && ok "device loaded MCTLS.CRT: HTTPS ready on :443 (EL0 TLS server)" || bad "HTTPS not ready after provisioning"
+HS=$(curl "${C[@]}" "$BS/api/health")
+[ "$(echo "$HS" | jget "d['substrate']")" = heqk ] && ok "https://heqk.local/api/health answered with the certificate verified against the owner CA" || bad "https health: $HS"
+SC=$(echo | timeout 30 openssl s_client -connect "$HOST:$HTTPS" -servername heqk.local -CAfile "$TLSD/ca/ca.pem" 2>/dev/null)
+echo "$SC" | grep -q "TLSv1.3, Cipher is TLS_CHACHA20_POLY1305_SHA256" && echo "$SC" | grep -q "Server Temp Key: X25519" \
+  && echo "$SC" | grep -q "Verify return code: 0" && ok "negotiated TLS 1.3 / CHACHA20_POLY1305 / X25519 / ECDSA, chain verified" || bad "unexpected TLS parameters"
+RD=$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' -m 10 -H "Host: heqk.local:$HTTP" "$B/detect/feed?x=1")
+[ "$RD" = "308 https://heqk.local/detect/feed?x=1" ] && ok "plain :80 now only redirects to https (308, path + query kept)" || bad "redirect: $RD"
+JAR2=$(mktemp)
+curl "${C[@]}" -o /dev/null -D "$TLSD/h" --data-urlencode "token=$TOKEN" "$BS/api/login" -c "$JAR2"
+grep -qi '^set-cookie: hq_session=.*HttpOnly.*Secure' "$TLSD/h" && ok "owner sign-in over https; the session cookie is HttpOnly + Secure" || bad "https login / Secure cookie"
+for _ in 1 2 3; do curl -s -m 3 -o /dev/null "http://$HOST:$P4444/" 2>/dev/null; done
+sleep 3
+DT=$(curl "${C[@]}" -b "$JAR2" "$BS/api/detections?limit=20")
+echo "$DT" | jget "any(x['rule_id']==1200001 for x in d['detections'])" | grep -q True && ok "attack during TLS service still dropped + detected, visible over https" || bad "detections over https: $DT"
+echo | timeout 20 openssl s_client -connect "$HOST:$HTTPS" -servername heqk.local -tls1_3 -ciphersuites TLS_AES_256_GCM_SHA384 2>&1 | grep -q "Cipher is (NONE)" \
+  && ok "a client offering only AES-GCM is refused (one-suite policy)" || bad "AES-GCM-only client was not refused"
+head -c 3000 /dev/urandom | timeout 10 nc -q 2 "$HOST" "$HTTPS" >/dev/null 2>&1
+HS2=$(curl "${C[@]}" "$BS/api/health")
+[ "$(echo "$HS2" | jget "d['substrate']")" = heqk ] && ok "garbage on :443 fails that connection only — HTTPS keeps serving" || bad "https after garbage: $HS2"
+if [ "$BROWSER" = ran ]; then
+  SPKI=$(openssl x509 -in <(dd if="$TLSD/MCTLS.CRT" bs=1 skip=12 count=$(python3 -I -c "import struct,sys;print(struct.unpack('<H',open(sys.argv[1],'rb').read()[10:12])[0])" "$TLSD/MCTLS.CRT") status=none) -inform DER -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | base64)
+  (cd tools/mc-e2e && MC_E2E_SPKI="$SPKI" node ui-check.mjs "https://heqk.local:$HTTPS" "$TOKEN") && ok "browser: the UI over https (pinned to the device key) rendered live heqk data" || bad "browser over https failed"
+fi
+sleep 11
+TH=$(tr -d '\r' < "$LOG2" | grep -a "MC-TLS hb" | tail -1)
+echo "        $TH"
+echo "$TH" | grep -q "timeouts=0 faults=0" && echo "$TH" | grep -Eq "handshakes=[1-9]" && ok "TLS server: handshakes counted, no watchdog timeout, no EL0 fault" || bad "TLS server counters: $TH"
+LOG="$LOG2"; rm -rf "$TLSD" "$JAR2"
+
 echo
 if [ "$FAILS" != 0 ]; then echo "MC-E2E: FAIL ($FAILS)"
 elif [ "$BROWSER" = ran ]; then echo "MC-E2E: PASS — attack → heqk IPS → evidence → heqk API → Mission Control UI in a real browser, no Linux in the device path"

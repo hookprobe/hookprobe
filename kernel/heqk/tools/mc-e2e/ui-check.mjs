@@ -4,7 +4,12 @@
 import { chromium } from 'playwright';
 
 const base = process.argv[2] ?? 'http://127.0.0.1:18080';
-const browser = await chromium.launch();
+// HTTPS leg (ADR 0051): trust ONLY the device's own key (SPKI pin) and map its name to the QEMU forward —
+// certificate checking stays on for everything else.
+const spki = process.env.MC_E2E_SPKI;
+const browser = await chromium.launch(spki ? {
+  args: [`--ignore-certificate-errors-spki-list=${spki}`, `--host-resolver-rules=MAP heqk.local 127.0.0.1`],
+} : {});
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const apiCalls = [];
 page.on('response', (r) => { if (r.url().includes('/api/')) apiCalls.push(`${r.status()} ${new URL(r.url()).pathname}`); });

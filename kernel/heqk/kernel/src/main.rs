@@ -85,6 +85,9 @@ mod mcauth;
 mod http;
 #[cfg(feature = "mcserve")]
 mod mcserve;
+// ADR 0051 — the EL0 TLS server loader + bounded-excursion driver.
+#[cfg(feature = "mctls")]
+mod tlshost;
 #[cfg(feature = "netsvc")]
 mod netcfg;
 // M4.2a — PQC secure-channel crypto PRIMITIVES + KATs (framing-agnostic). Behind
@@ -1798,6 +1801,8 @@ fn cm5_prod_service() -> ! {
             // every protected route refuses — never an open claim window.
             let owner = pf.read_owner();
             mcserve::set_owner(owner);
+            #[cfg(feature = "mctls")]
+            pf.tls_bring_up();
             if pf.persist_ready {
                 mcserve::state().sealed_cap = crate::snapshot::SNAP_EVENTS as u16;
             }

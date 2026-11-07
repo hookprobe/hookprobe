@@ -112,14 +112,19 @@ fn slot(i: usize) -> Option<&'static mut Option<Slot>> {
     unsafe { SLOTS_.get_mut(i) }
 }
 
-fn init(input: &[u8]) -> Result<(), u32> {
+/// INIT: build the key from the scalar, ALWAYS publish its SEC1 public point (65 B at OUT_TLS — the
+/// provisioning step, ADR 0051 D3), and build the server config only when a certificate chain is given.
+/// Returns whether TLS is now ready to serve.
+fn init(input: &[u8]) -> Result<bool, u32> {
     if input.len() < 34 {
         return Err(ST_BAD_INIT);
     }
     let mut scalar = [0u8; 32];
     scalar.copy_from_slice(&input[..32]);
     let key = heqk_tlsprov::signing_key_from_scalar(&scalar).ok_or(ST_BAD_INIT)?;
+    let pubpt = heqk_tlsprov::public_point_from_scalar(&scalar).ok_or(ST_BAD_INIT)?;
     scalar.fill(0);
+    io(OUT_TLS_OFF, 65).copy_from_slice(&pubpt);
     let n = u16::from_le_bytes([input[32], input[33]]) as usize;
     let mut p = 34;
     let mut chain = Vec::new();
@@ -136,7 +141,7 @@ fn init(input: &[u8]) -> Result<(), u32> {
         p += l;
     }
     if chain.is_empty() {
-        return Err(ST_BAD_INIT);
+        return Ok(false); // key published, no certificate yet: TLS stays off
     }
     heqk_tlsprov::set_rng(pool_rng);
     let cfg = rustls::ServerConfig::builder_with_details(Arc::new(heqk_tlsprov::provider()), Arc::new(KernelTime))
@@ -148,7 +153,7 @@ fn init(input: &[u8]) -> Result<(), u32> {
     cfg.alpn_protocols = alloc::vec![b"http/1.1".to_vec()];
     cfg.send_tls13_tickets = 0; // no resumption state to keep
     unsafe { CONFIG = Some(Arc::new(cfg)) };
-    Ok(())
+    Ok(true)
 }
 
 /// Drive one connection: process buffered ciphertext, emit handshake/app records, collect plaintext,
@@ -224,7 +229,7 @@ pub extern "C" fn _start() -> ! {
         let r = init(input);
         input.fill(0); // the key scalar leaves the shared region
         match r {
-            Ok(()) => exit(ST_OK, 0, 0, 0),
+            Ok(ready) => exit(ST_OK, 65, 0, if ready { F_HANDSHAKE_DONE } else { 0 }),
             Err(e) => exit(e, 0, 0, 0),
         }
     }

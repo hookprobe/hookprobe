@@ -55,6 +55,9 @@ fn main() {
         build_el0_wasmhost(&dir, &std::env::var("OUT_DIR").unwrap());
         build_wasip1_fixture(&dir, &std::env::var("OUT_DIR").unwrap());
     }
+    if std::env::var("CARGO_FEATURE_MCTLS").is_ok() {
+        build_el0_tlshost(&dir, &std::env::var("OUT_DIR").unwrap());
+    }
     println!("cargo:rerun-if-changed=build.rs");
 }
 
@@ -242,13 +245,29 @@ fn gen_fixture_trap_wasm(out_dir: &str) {
 // Fail-CLOSED: any failure PANICS the kernel build — a `wasmhost` kernel that can't produce
 // its EL0 host must not link a stale/absent image.
 fn build_el0_wasmhost(kernel_manifest_dir: &str, out_dir: &str) {
+    // M5.5 — a CM5 kernel gets the SYNCHRONOUS-EXCURSION host (syncabi: link-cm5.ld GB5 window).
+    let feat = std::env::var("CARGO_FEATURE_CM5").is_ok().then_some("syncabi");
+    build_el0_crate(kernel_manifest_dir, out_dir, "el0-wasmhost", "el0host-target", feat, "el0_wasmhost.elf");
+}
+
+// ADR 0050 D2 / ADR 0051 — the EL0 TLS server (el0-tlshost) for Mission Control HTTPS, built the same way.
+fn build_el0_tlshost(kernel_manifest_dir: &str, out_dir: &str) {
+    let feat = std::env::var("CARGO_FEATURE_CM5").is_ok().then_some("cm5");
+    build_el0_crate(kernel_manifest_dir, out_dir, "el0-tlshost", "el0tls-target", feat, "el0_tlshost.elf");
+    // its provider + shared ABI are sources of the image too
+    let dir = std::path::Path::new(kernel_manifest_dir);
+    println!("cargo:rerun-if-changed={}", dir.join("../tlsprov/src/lib.rs").display());
+    println!("cargo:rerun-if-changed={}", dir.join("../hal/src/tlsabi.rs").display());
+}
+
+fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &str, feature: Option<&str>, dest_name: &str) {
     use std::path::Path;
     use std::process::Command;
 
-    let crate_dir = Path::new(kernel_manifest_dir).join("../el0-wasmhost");
-    let crate_dir = crate_dir.canonicalize().expect("el0-wasmhost dir missing");
+    let crate_dir = Path::new(kernel_manifest_dir).join("..").join(name);
+    let crate_dir = crate_dir.canonicalize().unwrap_or_else(|_| panic!("{name} dir missing"));
     let manifest = crate_dir.join("Cargo.toml");
-    let nested_target = Path::new(out_dir).join("el0host-target");
+    let nested_target = Path::new(out_dir).join(tdir);
 
     // Rebuild if any of the EL0 host's sources change.
     println!("cargo:rerun-if-changed={}", manifest.display());
@@ -265,11 +284,8 @@ fn build_el0_wasmhost(kernel_manifest_dir: &str, out_dir: &str) {
         .arg("--target-dir")
         .arg(&nested_target)
         .current_dir(&crate_dir);
-    // M5.5 — a CM5 kernel gets the SYNCHRONOUS-EXCURSION host (syncabi: link-cm5.ld GB5
-    // window + SYS_DRIVER_REPORT return), matching CM5 prod's IRQs-off enter_user model.
-    // Read the parent feature BEFORE the clean-env scrub below strips CARGO_FEATURE_*.
-    if std::env::var("CARGO_FEATURE_CM5").is_ok() {
-        cmd.arg("--features").arg("syncabi");
+    if let Some(f) = feature {
+        cmd.arg("--features").arg(f);
     }
 
     // CLEAN env: drop every parent-build-script var that would confuse the child cargo/rustc,
@@ -299,16 +315,15 @@ fn build_el0_wasmhost(kernel_manifest_dir: &str, out_dir: &str) {
         }
     }
 
-    let status = cmd.status().expect("failed to invoke nested cargo for el0-wasmhost");
+    let status = cmd.status().unwrap_or_else(|_| panic!("failed to invoke nested cargo for {name}"));
     if !status.success() {
-        panic!("el0-wasmhost nested build FAILED (status {status}) — wasmhost kernel cannot ship without its EL0 Wasm host");
+        panic!("{name} nested build FAILED (status {status}) — the kernel cannot ship without its EL0 image");
     }
 
-    let produced = nested_target
-        .join("aarch64-unknown-none-softfloat/release/el0-wasmhost");
-    let dest = Path::new(out_dir).join("el0_wasmhost.elf");
+    let produced = nested_target.join("aarch64-unknown-none-softfloat/release").join(name);
+    let dest = Path::new(out_dir).join(dest_name);
     std::fs::copy(&produced, &dest).unwrap_or_else(|e| {
-        panic!("el0-wasmhost ELF not found at {}: {e}", produced.display())
+        panic!("{name} ELF not found at {}: {e}", produced.display())
     });
 }
 
