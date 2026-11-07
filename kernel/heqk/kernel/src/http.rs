@@ -212,10 +212,12 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             use core::fmt::Write;
             // An unarmed rule plane (0 active rules) passes everything — report it, never hide it.
             let rules = crate::rules::active_rules();
-            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"mode\":\"{}\",\"clock\":\"{}\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{}}}",
+            let now_epoch = st.epoch_at_ms(now_ms);
+            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"mode\":\"{}\",\"clock\":\"{}\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{},\"hosts_active\":{},\"detections_cap\":{},\"oldest_detection\":{},\"sealed_cap\":{}}}",
                 if rules == 0 { "degraded: rule plane not armed" } else { "ok" },
                 if st.cloud_linked { "cloud-linked" } else { "standalone" },
-                if st.clock_synced { "ntp" } else { "unsynced" }, rules, st.seen, st.forwarded, st.dropped, st.detections());
+                if st.clock_synced { "ntp" } else { "unsynced" }, rules, st.seen, st.forwarded, st.dropped, st.detections(),
+                st.hosts_active(now_epoch), st.retention().1, st.retention().2 / 1000, st.sealed_cap);
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
         p if p.starts_with("/api/") => json(scratch, |w| w.raw("{\"error\":\"not implemented on heqk\"}")).with_status(404),
@@ -446,7 +448,15 @@ pub fn mc_selftest() -> bool {
         r2.push_restored(&crate::events::Event { ts: 0, src: 1, rule_id: 1, severity: 5, verdict: 2, class: 0, dst: 0, dport: 0 }, 1_799_000_000_000);
         let _ = r2.sync_clock(1_800_000_000_000, 10_000);
         let pinned = r2.health_ts(0) == Some(1_799_000_000_000);
-        good && wrong_nonce && refused && synced && small && big && pinned
+        // My Network: distinct LAN hosts active in the window; a host silent > 10 min ages out.
+        let mut h = McState::new();
+        for ip in [0x0A00_0001u32, 0x0A00_0002, 0x0A00_0001] {
+            h.note_host(ip, 1_000_000);
+        }
+        let two = h.hosts_active(1_000_000) == 2; // a repeat sighting is one host
+        h.note_host(0x0A00_0003, 1_000_000 + 700_000);
+        let hosts_ok = two && h.hosts_active(1_000_000 + 700_000) == 1; // the two silent > 10 min aged out
+        good && wrong_nonce && refused && synced && small && big && pinned && hosts_ok
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok;
     kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} (ui assets embedded: {})\n",

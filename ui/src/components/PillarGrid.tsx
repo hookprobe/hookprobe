@@ -18,10 +18,11 @@
  */
 
 import type { Component } from 'solid-js';
-import { shield, network, connectivity, security, timeline, substrate } from '../store/mock';
+import { shield, network, connectivity, security, timeline, substrate, deviceStats } from '../store/mock';
 
 /** The device (heqk) has no source for these tiles yet — never show demo numbers as its own. */
 const unreported = () => substrate() === 'heqk';
+const hhmm = (sec: number) => new Date(sec * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 const NA = { kpi: '—', sub: 'Not reported by this device yet', badge: 'No data', badgeClass: 'badge--grey' };
 
 // ── PillarCard — reusable bento cell ────────────────────────────────────────
@@ -114,11 +115,11 @@ const PillarGrid: Component = () => {
           ctx="network"
           title="My Network"
           icon="🌐"
-          kpi={unreported() ? NA.kpi : `${network().devices} devices`}
-          sub={unreported() ? NA.sub : `${network().online} online · ${network().zones} zones`}
-          detail={unreported() ? undefined : 'Family · Smart Home · Guests · 1 in Quarantine'}
-          badge={unreported() ? NA.badge : 'All mapped'}
-          badgeClass={unreported() ? NA.badgeClass : 'badge--blue'}
+          kpi={unreported() ? (deviceStats() ? `${deviceStats()!.hostsActive} devices` : NA.kpi) : `${network().devices} devices`}
+          sub={unreported() ? (deviceStats() ? 'active on this network · last 10 min' : NA.sub) : `${network().online} online · ${network().zones} zones`}
+          detail={unreported() ? (deviceStats() ? 'passive: seen by the sensor, nothing is scanned' : undefined) : 'Family · Smart Home · Guests · 1 in Quarantine'}
+          badge={unreported() ? (deviceStats() ? 'Live' : NA.badge) : 'All mapped'}
+          badgeClass={unreported() ? (deviceStats() ? 'badge--green' : NA.badgeClass) : 'badge--blue'}
           href="/network/map"
           action="Open map"
         />
@@ -167,10 +168,13 @@ const PillarGrid: Component = () => {
           ctx="timeline"
           title="Timeline & Export"
           icon="📋"
-          kpi={unreported() ? NA.kpi : `${timeline().retentionDays}d`}
-          sub={unreported() ? NA.sub : 'fully traceable · export ready'}
-          detail={unreported() ? undefined : `${timeline().storedGb} GB stored · number → event → packet → raw`}
-          badge={unreported() ? NA.badge : 'Ready'}
+          kpi={unreported() ? (deviceStats() ? `${deviceStats()!.detections}` : NA.kpi) : `${timeline().retentionDays}d`}
+          sub={unreported() ? (deviceStats() ? `detections kept (newest ${deviceStats()!.detectionsCap})` : NA.sub) : 'fully traceable · export ready'}
+          detail={unreported() ? (deviceStats() ? [
+            deviceStats()!.oldestDetection > 0 ? `since ${hhmm(deviceStats()!.oldestDetection)}` : '',
+            deviceStats()!.sealedCap > 0 ? `newest ${deviceStats()!.sealedCap} sealed across reboot` : 'not kept across reboot',
+          ].filter(Boolean).join(' · ') : undefined) : `${timeline().storedGb} GB stored · number → event → packet → raw`}
+          badge={unreported() ? (deviceStats() ? 'Bounded' : NA.badge) : 'Ready'}
           badgeClass="badge--grey"
           href="/observe/events"
           action="Open"

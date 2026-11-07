@@ -519,6 +519,11 @@ pub fn run() -> ! {
             budget -= 1;
             let Some(n) = nic.rx(&mut frame) else { break };
             st.seen += 1;
+            let src = crate::net::eth_ipv4_src(&frame[..n]);
+            if src != 0 && crate::behavioral::is_internal(src) {
+                let ms = st.epoch_ms(cntpct());
+                st.note_host(src, ms);
+            }
             if packet::verdict(&frame[..n]).1 != packet::PASS {
                 st.dropped += 1;
                 continue;
