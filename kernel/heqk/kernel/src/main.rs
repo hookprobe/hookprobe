@@ -1852,6 +1852,13 @@ fn cm5_prod_service() -> ! {
     }
     #[cfg(any(feature = "sepdiag", feature = "prod-full"))]
     let mut last_drain: u64 = 0;
+    // A7.7 follow-up (metal 2026-11-07): the GEM loss counters are clear-on-read and SATURATE at
+    // 18 bits; the RX ring is not serviced while the boot self-tests run, so on a busy segment the
+    // first read is 262143 = "lost during boot", not runtime loss. Baseline here, report boot loss
+    // once, and the heartbeat reports only what the running sensor lost.
+    let gs_boot = arch_aarch64::gem::rx_stats();
+    kprint!(" [PROD] GEM RX loss before the sensor loop (boot self-tests, ring not serviced): res_err={}{} overrun={}\n",
+        gs_boot[8], if gs_boot[8] >= 0x3_FFFF { "+ (saturated)" } else { "" }, gs_boot[9]);
     kprint!(" [BOOT-TIMING] prod loop entered at t=+{} ms\n", boot_ms());
     #[cfg(all(feature = "late-confirm", not(feature = "apmode")))]
     let mut confirmed = false;
@@ -1927,7 +1934,8 @@ fn cm5_prod_service() -> ! {
             // heartbeats with faults=0) — report it: resource errors (no free RX descriptor) + overruns.
             let gs = arch_aarch64::gem::rx_stats();
             kprint!("   [PROD hb] up={}s seen={} fwd={} drop={} tx_fail={} txerr={:#04x} rsr={:#04x} faults={} empty={} qsecbit={} rx_lost(res_err={} overrun={})\n",
-                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score(), gs[8], gs[9]);
+                now.wrapping_sub(t0) / cntfrq, seen, forwarded, dropped, tx_fail, txerr, rsr, faults, empty, telemetry::score(),
+                gs[8].wrapping_sub(gs_boot[8]), gs[9].wrapping_sub(gs_boot[9]));
             #[cfg(feature = "dnssink")]
             kprint!("   [DNSSINK hb] sinkholed={} (RPZ-blocked DNS queries answered with SINKHOLE_IP + not forwarded)\n", dns_sinks);
             // M4 DHCP: drive the client (DISCOVER/REQUEST/retransmit) + report the lease.
@@ -4015,7 +4023,7 @@ fn cm5_p10_probe() {
                                                 }
                                             }
                                             {
-                                                let d = unsafe { cyw43::DEFER_DIAG };
+                                                let d = cyw43::defer_diag();
                                                 kprint!("   [P11-AP3 defer] station frames read by control requests: parked={} delivered={} ring-full={}\n", d[0], d[1], d[2]);
                                             }
                                             kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(unused)={} after_kick(ctl)={} reached_2s={}\n",
@@ -5941,6 +5949,11 @@ pub extern "C" fn kmain() -> ! {
         acs_selftest();
         glom_selftest();
         dnsfwd_selftest();
+        {
+            let ok = hal::defer::defer_selftest();
+            kprint!(" [P11-defer] {} — parked station frames: inert when off, FIFO across wrap-around, a full ring counts the drop, the authenticator's take removes ONLY its frame and the rest keep their order (P5)\n",
+                if ok { "PASS" } else { "FAIL" });
+        }
         wancfg_selftest();
         policy_selftest();
         md5_selftest();
@@ -8831,6 +8844,8 @@ fn p15_fs_selftest() {
                     severity: EV_SEV,
                     verdict: EV_VERDICT,
                     class: verdict::CLASS_UNKNOWN,
+                    dst: 0,
+                    dport: 0,
                 };
                 let mut evb = [0u8; 16];
                 evb[0..8].copy_from_slice(&ev.ts.to_le_bytes());
