@@ -2,6 +2,7 @@
 name = "heqk-sign"
 version = "1.0.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0048 G4)
 description = "HEQK secure-boot signer: hybrid ed25519 + SLH-DSA (FIPS 205)"
 
 [dependencies]
