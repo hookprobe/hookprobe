@@ -3293,6 +3293,10 @@ fn cm5_p10_probe() {
                         let mut pol_block = [0u32; 4];
                         let mut pol_via_mgmt = 0u32; // flows routed out the management sub-interface
                         let mut dns_blocked = 0u32; // Shield: client DNS queries answered as blocked
+                        let mut dns_seen = 0u32;
+                        let mut dns_last = [0u8; 48];
+                        let mut dns_last_len = 0usize;
+                        let mut dns_last_act = 0u8;
                         let mut pol_mgmt_nh_miss = 0u32; // routed to mgmt but the next hop is not resolved yet
                         let mut pol_block_as_drop = 0u32; // `out` blocks after un-NAT act as drops (see the note)
                         let mut last_wan_probe = 0u64;
@@ -3327,6 +3331,20 @@ fn cm5_p10_probe() {
                                 // Shield: an allowed client DNS query for a blocklisted name is answered here
                                 // (0.0.0.0 / NODATA, from the resolver it asked) and never leaves the device.
                                 let mut shield = false;
+                                // Shield diagnostics: every client UDP/53 query reaching this hook, and its name.
+                                if frame.len() >= 42 && frame[23] == 17 {
+                                    let u = 14 + ((frame[14] & 0x0f) as usize) * 4;
+                                    if u + 8 + 13 <= frame.len() && frame[u + 2] == 0 && frame[u + 3] == 53 {
+                                        dns_seen += 1;
+                                        let mut nm = [0u8; 256];
+                                        if let Some(l) = dnssink::parse_qname(&frame[u + 8..], &mut nm) {
+                                            let l = l.min(dns_last.len());
+                                            dns_last[..l].copy_from_slice(&nm[..l]);
+                                            dns_last_len = l;
+                                            dns_last_act = act as u8;
+                                        }
+                                    }
+                                }
                                 if act == PAct::Allow && dnsblock::len() > 0 {
                                     let me = if $pif == PIf::Eth1 { uplink::ETH1_MAC } else { ap.bssid };
                                     let mut dr = [0u8; 600];
@@ -4197,6 +4215,8 @@ fn cm5_p10_probe() {
                                             });
                                         }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
+                                        kprint!("   [SHIELD] list={} queries_seen={} blocked={} last={} (act {})\n", dnsblock::len(), dns_seen, dns_blocked,
+                                            core::str::from_utf8(&dns_last[..dns_last_len]).unwrap_or("?"), dns_last_act);
                                         kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} dns_redir={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
