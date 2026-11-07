@@ -1,7 +1,8 @@
 # ADR 0050 — heqk parser placement: which untrusted-input parsers run in EL1, which move to EL0
 
-**Status:** 🟡 **Proposed — for operator review** (2026-11-07; task #21 item S3). Clauses are tagged
-**[realized]**, **[partial]** or **[vision]** (the ADR 0043/0044 discipline). Nothing here moves code until ratified.
+**Status:** ✅ **Accepted by the operator 2026-11-07** (task #21 item S3): the L3/L4 fast path and rule matching
+stay in the kernel; deep parsers (TLS, DNS, HTTP, …) run in isolated EL0 servers so a parser bug or panic cannot
+take down forwarding or the IPS. Clauses are tagged **[realized]**, **[partial]** or **[vision]**.
 
 ## Context
 
@@ -71,6 +72,19 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
 
 Each step must keep the AP throughput (≥ the 2026-11-07 metal baseline: 80–160 Mbps) and pass the separation
 matrix + `mc-e2e` before the EL1 copy is deleted.
+
+### D5 — Failure policy (operator: "write it down") **[vision]**
+
+| What fails | Effect | Why |
+|---|---|---|
+| An EL0 service server (HTTPS, DNS forwarder, DHCP server, PPPoE control, …) faults or panics | **That service fails closed**: its connections are dropped, the kernel restarts the server (bounded backoff, counted, reported on the heartbeat and `/api/health`). Forwarding and the IPS continue unaffected. | A broken parser must never serve wrong answers; its blast radius is one service. |
+| An EL0 **deep-inspection** module (Wasm detection, L7 classifier) faults on a frame | **Verdict for that frame = observe + alert** (no drop); the module is restarted; repeated faults are an alert of their own. The in-kernel L3/L4 rules still enforce. | ADR 0023: legitimate traffic always passes — a module crash must not become a self-inflicted outage. Operators who want fail-closed choose it per interface (CLAUDE.md: "per-interface fail-open (default) / fail-closed (policy choice)"). |
+| The in-kernel verdict engine itself | Unchanged: a verified-rule DROP is enforced; the kernel never "fails open" on a confirmed threat verdict. | Rule bytecode is verifier-proven; this path does not contain deep parsers. |
+
+*Engineering note (vs the operator's "fail-closed for IPS verdicts"):* fail-closed is kept for **confirmed**
+in-kernel threat verdicts; a **fault** in a deep-inspection module is observe-and-alert by default because
+ADR 0023 forbids dropping legitimate traffic on anything other than a confirmed attack. Fail-closed on module
+fault is available as an explicit per-interface policy.
 
 ## Consequences
 
