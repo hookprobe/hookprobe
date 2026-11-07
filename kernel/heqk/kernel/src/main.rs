@@ -1912,6 +1912,7 @@ fn cm5_prod_service() -> ! {
                 }
             }
             if node.service(mcserve::state(), now_ms) {
+                ratelimit::set_local_ip(0, u32::from_be_bytes(node.ip)); // ADR 0049 D3: our own address
                 kprint!(" [MC] heqk Mission Control serving on http://{}.{}.{}.{}:80 ({})\n",
                     node.ip[0], node.ip[1], node.ip[2], node.ip[3], if node.leased { "DHCP lease" } else { "link-local fallback" });
             }
@@ -3201,6 +3202,7 @@ fn cm5_p10_probe() {
                         kprint!(" [P11-AP3] persistent WPA2 AP serve loop up — event-driven pump (assoc/deauth/ARP/DHCP), WAN keep-alive, 5s heartbeat\n");
                         let our_ip = [10u8, 99, 0, 1];
                         let offer_ip = [10u8, 99, 0, 10];
+                        ratelimit::set_local_ip(0, u32::from_be_bytes(our_ip)); // ADR 0049 D3: our own addresses
                         let mut rx = [0u8; 2048];
                         let mut wbuf = [0u8; 2048];
                         let mut nbuf = [0u8; 2048];
@@ -3868,6 +3870,7 @@ fn cm5_p10_probe() {
                                                     if m > 600 {
                                                         wan_big_unnat += 1;
                                                     }
+                                                    rules::scan_response_hook(&nbuf[..m]); // ADR 0049 D3: credit the real prober
                                                     if in_if == nat::IF_ETH1 {
                                                         if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
                                                             lan_tx_fail += 1;
@@ -4099,6 +4102,8 @@ fn cm5_p10_probe() {
                                             wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
                                             rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
+                                        ratelimit::set_local_ip(1, u32::from_be_bytes(up.dhcp.yiaddr));
+                                        ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
                                         kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} dns_redir={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
@@ -7443,7 +7448,9 @@ fn p8_flow() -> bool {
 
     // A normalized eth/IPv4/TCP frame (54B) with a settable src, dst port, and flags.
     // Mirrors the live datapath: `flow_scan_verdict` self-parses to the IP source.
-    fn tcp_frame(src: [u8; 4], dst_port: u16, flags: u8) -> [u8; 54] {
+    /// The scan target the matrix probes (TEST-NET-3).
+    const TGT: [u8; 4] = [203, 0, 113, 9];
+    fn tcp_frame(src: [u8; 4], dst: [u8; 4], sport: u16, dst_port: u16, flags: u8) -> [u8; 54] {
         let mut f = [0u8; 54];
         f[12] = 0x08;
         f[13] = 0x00; // EtherType IPv4
@@ -7451,6 +7458,8 @@ fn p8_flow() -> bool {
         f[17] = 40; // IP total length = 20 (IP) + 20 (TCP)
         f[23] = 6; // proto TCP
         f[26..30].copy_from_slice(&src); // IP source
+        f[30..34].copy_from_slice(&dst); // IP destination
+        f[34..36].copy_from_slice(&sport.to_be_bytes()); // TCP src port
         f[36] = (dst_port >> 8) as u8;
         f[37] = (dst_port & 0xff) as u8; // TCP dst port
         f[46] = 0x50; // TCP data offset = 5 words
@@ -7459,14 +7468,39 @@ fn p8_flow() -> bool {
     }
     const SYN: u8 = 0x02;
     const ACK: u8 = 0x10;
+    const RST_ACK: u8 = 0x14;
+    const SYN_ACK: u8 = 0x12;
     #[inline]
     fn ip(src: [u8; 4]) -> u32 {
-        crate::net::eth_ipv4_src(&tcp_frame(src, 0, SYN))
+        crate::net::eth_ipv4_src(&tcp_frame(src, TGT, 40000, 0, SYN))
     }
+    /// The prober's segment to the target (SYN-only probe, or an ACK on the flow).
     #[inline]
     fn scan_step(src: [u8; 4], dst_port: u16, flags: u8) -> Option<verdict::Verdict> {
-        let f = tcp_frame(src, dst_port, flags);
+        let f = tcp_frame(src, TGT, 40000, dst_port, flags);
         rules::flow_scan_verdict(&f, crate::net::eth_ipv4_src(&f))
+    }
+    /// The TARGET's answer to `prober`'s probe of `port` (RST|ACK = closed, SYN|ACK = open) — ADR 0049 D3.
+    #[inline]
+    fn reply(prober: [u8; 4], port: u16, flags: u8) {
+        let f = tcp_frame(TGT, prober, port, 40000, flags);
+        let _ = rules::flow_scan_verdict(&f, crate::net::eth_ipv4_src(&f));
+    }
+    /// A probe the target answers: closed (RST) — the scan shape with evidence.
+    #[inline]
+    fn probe_closed(src: [u8; 4], port: u16) -> Option<verdict::Verdict> {
+        let a = scan_step(src, port, SYN);
+        reply(src, port, RST_ACK);
+        let b = scan_step(src, port, SYN); // re-evaluate now that the answer is in (a repeat SYN adds nothing)
+        b.or(a)
+    }
+    /// A real handshake: SYN, the target's SYN-ACK, the source's ACK.
+    #[inline]
+    fn handshake(src: [u8; 4], port: u16) -> bool {
+        let a = scan_step(src, port, SYN).is_some();
+        reply(src, port, SYN_ACK);
+        let b = scan_step(src, port, ACK).is_some();
+        a || b
     }
 
     // === ATTACKER A4: a 60-distinct-port SYN scan, UNCONFIRMED → RateLimit (wire DROP),
@@ -7475,7 +7509,7 @@ fn p8_flow() -> bool {
     let mut saw_ratelimit_drop = false;
     let mut saw_quarantine_early = false;
     for port in 1..=60u16 {
-        if let Some(v) = scan_step(atk, port, SYN) {
+        if let Some(v) = probe_closed(atk, port) {
             if matches!(v, verdict::Verdict::RateLimit { over_limit: true }) && v.is_drop() {
                 saw_ratelimit_drop = true;
             }
@@ -7493,7 +7527,7 @@ fn p8_flow() -> bool {
     //     establishment) → CONFIRMED → durable Quarantine (wire DROP). ===
     let mut saw_quarantine = false;
     for port in 61..=130u16 {
-        if let Some(verdict::Verdict::Quarantine) = scan_step(atk, port, SYN) {
+        if let Some(verdict::Verdict::Quarantine) = probe_closed(atk, port) {
             saw_quarantine = true;
         }
     }
@@ -7508,10 +7542,7 @@ fn p8_flow() -> bool {
     let nas: [u8; 4] = [198, 18, 0, 50];
     let mut nas_fired = false; // ANY Some(verdict) here is a false-positive on a legit source
     for port in 1..=150u16 {
-        if scan_step(nas, port, SYN).is_some() {
-            nas_fired = true;
-        }
-        if scan_step(nas, port, ACK).is_some() {
+        if handshake(nas, port) {
             nas_fired = true;
         }
     }
@@ -7528,10 +7559,7 @@ fn p8_flow() -> bool {
     let mut burst_fired = false;
     for _ in 0..100u16 {
         // 100 connections, all to :443 (a web page load): 1 distinct dst port.
-        if scan_step(burst, 443, SYN).is_some() {
-            burst_fired = true;
-        }
-        if scan_step(burst, 443, ACK).is_some() {
+        if handshake(burst, 443) {
             burst_fired = true;
         }
     }
@@ -7543,8 +7571,7 @@ fn p8_flow() -> bool {
 
     // === LEGIT: an ESTABLISHED handshake flow (SYN then ACK) is NEVER scan-confirmed. ===
     let est: [u8; 4] = [198, 18, 0, 70];
-    let _ = scan_step(est, 22, SYN);
-    let _ = scan_step(est, 22, ACK);
+    let _ = handshake(est, 22);
     let c_est = !scan_confirmed(ip(est) as u64) && !ratelimit::scan_over_ratelimit(ip(est) as u64);
     ok &= c_est;
     kprint!("   LEGIT established handshake (est={}) -> scan_confirmed={} (an established flow is definitionally not a scan) [{}]\n",
@@ -7555,17 +7582,63 @@ fn p8_flow() -> bool {
     //     established segments against a 120-port sweep is not "a busy legit host". ===
     let cs: [u8; 4] = [198, 18, 0, 80];
     for port in 1..=120u16 {
-        let _ = scan_step(cs, port, SYN);
         if port % 40 == 0 {
             // an open port: the scanner completes the handshake (+ a data ACK)
+            let _ = handshake(cs, port);
             let _ = scan_step(cs, port, ACK);
-            let _ = scan_step(cs, port, ACK);
+        } else {
+            let _ = probe_closed(cs, port);
         }
     }
     let c_cs = scan_confirmed(ip(cs) as u64) && ratelimit::scan_over_ratelimit(ip(cs) as u64);
     ok &= c_cs;
     kprint!("   ATTACK connect-scan: 120 ports, 3 completed (est={}, distinct-syn={}) -> confirmed={} (MUST be true — proportional establishment hold) [{}]\n",
         ratelimit::flow_established_count(ip(cs) as u64), scan_distinct_ports(ip(cs) as u64), scan_confirmed(ip(cs) as u64), if c_cs { "ok" } else { "BUG" });
+
+    // === ATTACK (ADR 0049 D3, re-review M2): the ACK-PADDING evasion — a 120-port sweep plus a stray ACK
+    //     for every 8 probes used to buy a full hold (15 ACKs × 8 ≥ 120). Without the target's SYN-ACK an
+    //     ACK earns nothing now: confirmed. ===
+    let pad: [u8; 4] = [198, 18, 0, 81];
+    for port in 1..=120u16 {
+        let _ = probe_closed(pad, port);
+        if port % 8 == 0 {
+            let _ = scan_step(pad, 1000 + port, ACK); // stray ACKs, no handshake behind them
+        }
+    }
+    let c_pad = scan_confirmed(ip(pad) as u64) && ratelimit::flow_established_count(ip(pad) as u64) == 0;
+    ok &= c_pad;
+    kprint!("   ATTACK ACK-padding: 120 ports + 15 stray ACKs (est={}) -> confirmed={} (MUST be true — an ACK without the target's SYN-ACK is no establishment) [{}]\n",
+        ratelimit::flow_established_count(ip(pad) as u64), scan_confirmed(ip(pad) as u64), if c_pad { "ok" } else { "BUG" });
+
+    // === LEGIT-SAFETY (operator, ADR 0049 D3): ONE-SIDED / SPOOFED SYN traffic — 150 SYNs to 150 ports,
+    //     the target never seen answering (asymmetric path, or a forged source) — must NEVER count. ===
+    let oneside: [u8; 4] = [198, 18, 0, 82];
+    let mut os_fired = false;
+    for port in 1..=150u16 {
+        if scan_step(oneside, port, SYN).is_some() {
+            os_fired = true;
+        }
+    }
+    let c_os = !os_fired && scan_distinct_ports(ip(oneside) as u64) == 0 && !scan_confirmed(ip(oneside) as u64);
+    ok &= c_os;
+    kprint!("   LEGIT-SAFETY one-sided/spoofed: 150 SYNs, no answer ever seen -> counted={} fired={} (MUST be 0/false — no evidence the probes reached a host) [{}]\n",
+        scan_distinct_ports(ip(oneside) as u64), os_fired, if c_os { "ok" } else { "BUG" });
+
+    // === ATTACK on THIS device: probes to one of our own addresses count without a reply (the device knows
+    //     its own port state) — an inbound sweep of the WAN address is still caught. ===
+    ratelimit::set_local_ip(3, u32::from_be_bytes(TGT));
+    let me_atk: [u8; 4] = [198, 18, 0, 83];
+    let mut me_q = false;
+    for port in 1..=110u16 {
+        if let Some(verdict::Verdict::Quarantine) = scan_step(me_atk, port, SYN) {
+            me_q = true;
+        }
+    }
+    ratelimit::set_local_ip(3, 0);
+    let c_me = me_q && scan_confirmed(ip(me_atk) as u64);
+    ok &= c_me;
+    kprint!("   ATTACK sweep of this device's own address (110 ports, no replies needed) -> Quarantine={} [{}]\n",
+        me_q, if c_me { "ok" } else { "BUG" });
 
     // === A7 / L9: the flow-table SATURATION signal (pure verdict map; the self-reverting
     //     SHED action is M2.3). L9 40% full → no shed; A7 85% full → shed signal. Keyed on
@@ -7583,7 +7656,7 @@ fn p8_flow() -> bool {
     //     2-3 were read as the dst port). Also IPv6: a non-first Fragment(44) header. ===
     {
         let src = [198, 18, 0, 72];
-        let first = tcp_frame(src, 4444, ACK);
+        let first = tcp_frame(src, TGT, 40000, 4444, ACK);
         let mut tail = first;
         tail[20] = 0x00;
         tail[21] = 0xb9; // fragment offset 185 (x8 B), MF=0: the datagram's last fragment
@@ -7605,13 +7678,13 @@ fn p8_flow() -> bool {
         let v_v6tail = crate::packet::verdict(&v6).1;
         // RFC 1858 tiny / overlapping TCP fragments are dropped (structural); a legit FIRST fragment
         // (MF set, full TCP header) to a clean port still passes.
-        let mut tiny = tcp_frame(src, 443, ACK);
+        let mut tiny = tcp_frame(src, TGT, 40000, 443, ACK);
         tiny[20] = 0x20; // MF, offset 0
         tiny[16..18].copy_from_slice(&28u16.to_be_bytes()); // 20 IP + 8 bytes of TCP: no flags
-        let mut ovl = tcp_frame(src, 443, ACK);
+        let mut ovl = tcp_frame(src, TGT, 40000, 443, ACK);
         ovl[20] = 0x00;
         ovl[21] = 0x01; // offset 1 (8 B): rewrites the first fragment's flags
-        let mut legit_first = tcp_frame(src, 443, ACK);
+        let mut legit_first = tcp_frame(src, TGT, 40000, 443, ACK);
         legit_first[20] = 0x20; // MF, offset 0, full header
         let v_tiny = crate::packet::verdict(&tiny).1;
         let v_ovl = crate::packet::verdict(&ovl).1;
@@ -7639,7 +7712,7 @@ fn p8_flow() -> bool {
         }
         let g_full = flow_count_at(t0 + 2, w);
         for _ in 0..100_000 {
-            ratelimit::flow_established(ip([198, 18, 0, 71]) as u64);
+            ratelimit::flow_ack_observe(ip([198, 18, 0, 71]) as u64, 443);
         }
         let g_acks = flow_count_at(t0 + 3, w);
         let g_half = flow_count_at(t0 + w + w / 2, w); // prev bucket half-overlapping

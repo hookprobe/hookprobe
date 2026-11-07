@@ -205,7 +205,8 @@ const SCAN_WINDOW_SECS: u64 = 10;
 pub const SCAN_PORTS_RATELIMIT: u64 = 50;
 pub const SCAN_PORTS_CONFIRM: u64 = 100;
 /// Establishment holds scan escalation off only when it is SUBSTANTIAL relative to the sweep:
-/// `established × RATIO >= distinct SYN ports`. (Audit 2026-10-08 "connect-scan gap": the hold used to
+/// `established × RATIO >= distinct answered ports`, where "established" = distinct ports with a real
+/// handshake (target SYN-ACK seen, then the source's ACK — ADR 0049 D3). (Audit 2026-10-08 "connect-scan gap": the hold used to
 /// be `established == 0`, so a connect() scan that completed ONE handshake on an open port — or a scanner
 /// that opened one real connection first — disabled detection for the whole window.) A legit busy host
 /// (many established segments, few distinct SYN ports) stays held; zero establishment = unchanged.
@@ -231,6 +232,28 @@ static SCAN_PORT_GEN: [[AtomicU64; SCAN_PORT_SET]; FLOW_SRCS] =
     [const { [const { AtomicU64::new(0) }; SCAN_PORT_SET] }; FLOW_SRCS];
 static SCAN_PORT_KEY: [[AtomicU64; SCAN_PORT_SET]; FLOW_SRCS] =
     [const { [const { AtomicU64::new(0) }; SCAN_PORT_SET] }; FLOW_SRCS];
+/// ADR 0049 D3 — per (source, port) evidence bits, valid when the entry's gen + key match.
+static SCAN_PORT_FLAGS: [[AtomicU64; SCAN_PORT_SET]; FLOW_SRCS] =
+    [const { [const { AtomicU64::new(0) }; SCAN_PORT_SET] }; FLOW_SRCS];
+const P_SYN: u64 = 1; // the source sent a SYN-only probe to this port
+const P_ANS: u64 = 2; // the target answered it (RST or SYN-ACK) — or the target is this device
+const P_SYNACK: u64 = 4; // the target accepted (SYN-ACK seen)
+const P_EST: u64 = 8; // the source ACKed after the SYN-ACK: a real handshake (credit, once per port)
+
+/// This device's own addresses (WAN lease, AP / LAN address, management address): a probe to one of them
+/// needs no observed response — the device knows its own port state (ADR 0049 D3).
+static LOCAL_IPS: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+
+/// Register (or clear with 0) local address slot `i` (host-order IPv4).
+pub fn set_local_ip(i: usize, ip: u32) {
+    if let Some(a) = LOCAL_IPS.get(i) {
+        a.store(ip as u64, Ordering::Relaxed);
+    }
+}
+
+pub fn is_local_ip(ip: u32) -> bool {
+    ip != 0 && LOCAL_IPS.iter().any(|a| a.load(Ordering::Relaxed) == ip as u64)
+}
 
 /// The GLOBAL flow-table occupancy GAUGE (the conntrack-equivalent fill) behind the A7
 /// saturation signal. heqk tracks no teardown, so occupancy is measured as NEW flows
@@ -311,41 +334,86 @@ fn touch_scan_slot(src: u64) -> usize {
     s
 }
 
-/// Record a SYN-only (connection-attempt) packet to `dst_port` from `src` (host-order
-/// IPv4). Adds the port to the source's distinct set; returns the running distinct count.
-/// `src == 0` (no attribution) is ignored — the port-scan verdict requires an identity.
-pub fn syn_scan_observe(src: u64, dst_port: u16) -> u64 {
+/// The port entry for `dst_port` in slot `s` (current generation), created when `create`.
+fn port_entry(s: usize, dst_port: u16, create: bool) -> Option<usize> {
+    let gen = SCAN_GEN[s].load(Ordering::Relaxed);
+    let pk = (dst_port as u64) | (1u64 << 48); // non-zero key (port 0 is a real port)
+    let i = (dst_port as usize) % SCAN_PORT_SET;
+    let live = SCAN_PORT_GEN[s][i].load(Ordering::Relaxed) == gen && SCAN_PORT_KEY[s][i].load(Ordering::Relaxed) == pk;
+    if live {
+        return Some(i);
+    }
+    if !create {
+        return None;
+    }
+    SCAN_PORT_GEN[s][i].store(gen, Ordering::Relaxed);
+    SCAN_PORT_KEY[s][i].store(pk, Ordering::Relaxed);
+    SCAN_PORT_FLAGS[s][i].store(0, Ordering::Relaxed);
+    Some(i)
+}
+
+/// Set `bit` on the entry; returns true if it was newly set.
+fn set_flag(s: usize, i: usize, bit: u64) -> bool {
+    SCAN_PORT_FLAGS[s][i].fetch_or(bit, Ordering::Relaxed) & bit == 0
+}
+
+/// Record a SYN-only probe from `src` to `dst_port` (host-order IPv4). ADR 0049 D3: the port COUNTS toward
+/// the scan only once the target is seen answering (`scan_response_observe`) — or at once when the target is
+/// this device (`local_target`). One-sided / spoofed SYN traffic never counts. Returns the distinct
+/// answered-probe count.
+pub fn syn_scan_observe(src: u64, dst_port: u16, local_target: bool) -> u64 {
     if src == 0 {
         return 0;
     }
     let s = touch_scan_slot(src);
-    let gen = SCAN_GEN[s].load(Ordering::Relaxed);
-    let pk = (dst_port as u64) | (1u64 << 48); // non-zero key (port 0 is a real port)
-    let i = (dst_port as usize) % SCAN_PORT_SET;
-    let seen = SCAN_PORT_GEN[s][i].load(Ordering::Relaxed) == gen
-        && SCAN_PORT_KEY[s][i].load(Ordering::Relaxed) == pk;
-    if !seen {
-        SCAN_PORT_GEN[s][i].store(gen, Ordering::Relaxed);
-        SCAN_PORT_KEY[s][i].store(pk, Ordering::Relaxed);
-        SCAN_DISTINCT[s].fetch_add(1, Ordering::Relaxed);
+    if let Some(i) = port_entry(s, dst_port, true) {
+        set_flag(s, i, P_SYN);
+        if local_target && set_flag(s, i, P_ANS) {
+            SCAN_DISTINCT[s].fetch_add(1, Ordering::Relaxed);
+        }
     }
     SCAN_DISTINCT[s].load(Ordering::Relaxed)
 }
 
-/// Record that a flow from `src` reached ESTABLISHED (handshake completed — heqk's
-/// cheapest proxy is an ACK-bearing segment on an existing flow). Bumps the source's
-/// established count (NOT the global occupancy gauge — that counts new flows, see
-/// `flow_new`). An established source is definitionally NOT a scanner: `est > 0` holds
-/// every scan escalation OFF (below).
-pub fn flow_established(src: u64) {
+/// The TARGET answered `scanner`'s probe to `port`: an RST (closed) or a SYN-ACK (`synack`, open). Only an
+/// outstanding probe in the scanner's current window is credited — an unsolicited response creates nothing.
+pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
+    if scanner == 0 {
+        return;
+    }
+    let s = (scanner as usize) % FLOW_SRCS;
+    if SCAN_SRC[s].load(Ordering::Relaxed) != scanner {
+        return;
+    }
+    let Some(i) = port_entry(s, port, false) else { return };
+    if SCAN_PORT_FLAGS[s][i].load(Ordering::Relaxed) & P_SYN == 0 {
+        return;
+    }
+    if set_flag(s, i, P_ANS) {
+        SCAN_DISTINCT[s].fetch_add(1, Ordering::Relaxed);
+    }
+    if synack {
+        set_flag(s, i, P_SYNACK);
+    }
+}
+
+/// An ACK from `src` to `dst_port`. ADR 0049 D3: it earns establishment credit ONLY after the target's
+/// SYN-ACK was seen for that port, and only once per port — stray ACKs (the padding evasion) earn nothing.
+pub fn flow_ack_observe(src: u64, dst_port: u16) {
     if src == 0 {
         return;
     }
-    let s = touch_scan_slot(src);
-    SCAN_EST[s].fetch_add(1, Ordering::Relaxed);
+    let s = (src as usize) % FLOW_SRCS;
+    if SCAN_SRC[s].load(Ordering::Relaxed) != src {
+        return;
+    }
+    let Some(i) = port_entry(s, dst_port, false) else { return };
+    if SCAN_PORT_FLAGS[s][i].load(Ordering::Relaxed) & P_SYNACK != 0 && set_flag(s, i, P_EST) {
+        SCAN_EST[s].fetch_add(1, Ordering::Relaxed);
+    }
 }
 
-/// Distinct SYN-only dst-port count for `src` in the current window (0 if the slot was
+/// Distinct ANSWERED-probe dst-port count for `src` in the current window (0 if the slot was
 /// evicted by another source, or no attribution).
 pub fn scan_distinct_ports(src: u64) -> u64 {
     if src == 0 {

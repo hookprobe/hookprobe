@@ -506,15 +506,20 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     const TCP_SYN: u8 = 0x02;
     const TCP_ACK: u8 = 0x10;
     let src64 = src as u64;
-    if flags & TCP_ACK != 0 {
-        // An ACK-bearing segment ⇒ an existing/established flow. Records establishment,
-        // which holds the scan escalation off for this source (legit-safety).
-        crate::ratelimit::flow_established(src64);
+    const TCP_RST: u8 = 0x04;
+    // ADR 0049 D3 — scans count only with evidence the probe reached a real host, and establishment credit
+    // needs the target's SYN-ACK. The responder's frame (SYN-ACK / RST) is keyed on its DESTINATION (the
+    // prober) and its SOURCE port (the probed port).
+    let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
+    if flags & TCP_RST != 0 || (flags & TCP_SYN != 0 && flags & TCP_ACK != 0) {
+        crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & TCP_SYN != 0);
+    } else if flags & TCP_ACK != 0 {
+        // An ACK on a flow: establishment credit for this (source, port) — only after a SYN-ACK.
+        crate::ratelimit::flow_ack_observe(src64, meta.dst_port);
     } else if flags & TCP_SYN != 0 {
-        // A SYN-only connection attempt ⇒ a NEW flow (occupancy gauge) and a scan-shape
-        // probe (counts the distinct dst port).
+        // A SYN-only connection attempt ⇒ a NEW flow (occupancy gauge) and a probe of this port.
         crate::ratelimit::flow_new();
-        crate::ratelimit::syn_scan_observe(src64, meta.dst_port);
+        crate::ratelimit::syn_scan_observe(src64, meta.dst_port, crate::ratelimit::is_local_ip(dst));
     }
 
     if !crate::ratelimit::scan_over_ratelimit(src64) {
@@ -534,6 +539,21 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     let sev = if crate::corroboration::is_corroborated(src64) { SEV_CRIT } else { SEV_HIGH };
     fire(RULE_PORT_SCAN, sev, v, src);
     Some(v)
+}
+
+/// ADR 0049 D3 on the AP's NAT path: the IDS sees inbound answers BEFORE un-NAT (addressed to the WAN IP),
+/// so a LAN client's probes could never be matched. The un-NATed frame (addressed to the client) is fed here
+/// so the target's RST / SYN-ACK credits the right prober. Observation only — no verdict.
+pub fn scan_response_hook(frame: &[u8]) {
+    let Some(meta) = crate::net::parse(frame) else { return };
+    if meta.ip_proto != crate::net::IPPROTO_TCP || !meta.has_l4_ports() {
+        return;
+    }
+    let Some(&flags) = frame.get(meta.l4_off + 13) else { return };
+    if flags & 0x04 != 0 || (flags & 0x02 != 0 && flags & 0x10 != 0) {
+        let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
+        crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & 0x02 != 0);
+    }
 }
 
 // ---- M2.3: resource-shed verdict routing (ADR 0023's fourth suspicion-free drop) ----

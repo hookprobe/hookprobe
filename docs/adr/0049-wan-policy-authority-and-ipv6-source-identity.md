@@ -71,6 +71,32 @@ finding that could be patched in place. Three cannot be patched without a design
 - **D3:** a scan is counted **only** when the server's response was observed (SYN-ACK / RST from the target);
   one-sided or spoofed traffic never counts.
 
+## D2 — detailed design (2026-11-07; build later, gap 13)
+
+**Key type.** `ratelimit` and `verdict::DecideCtx` key on a tagged `SrcKey` instead of `u32`:
+
+```rust
+enum SrcKey { V4(u32), Dev(u64) /* LAN device: hash(MAC) or hash(DHCPv6 DUID) */, V6Net(u64) /* WAN: the /64 */ }
+```
+The slot index hashes the whole enum (tag included), so a v6 key can never alias a v4 address — and the
+management floor (`verdict::is_allowlisted`) matches **only** `V4` (its own `mgmt_floor6=` list matches only
+`V6Net`/`Dev` once IPv6 management exists, #10).
+
+**Which key a frame gets** (decided where the frame enters, never from the packet alone):
+
+| Ingress | IPv4 | IPv6 |
+|---|---|---|
+| Wi-Fi / eth1 (our LAN) | `V4(src)` | `Dev(hash(src MAC))` — the AP holds the station's MAC (and the SAVI binding table already ties each IPv6 to it); a station with a DHCPv6 DUID uses `hash(DUID)` |
+| WAN | `V4(src)` | `V6Net(src >> 64)` — no MAC/DUID from the internet; the /64 is what one site controls |
+| Passive sensor (prod-mc) | `V4(src)` | `Dev(hash(src MAC))` on the local segment; `V6Net` for routed sources (src MAC = the router) |
+
+**Why not the /128.** Privacy addresses rotate per connection (RFC 8981); a /128 key would let one host
+present a fresh identity per probe. `Dev` survives rotation on the LAN; `V6Net` bounds a WAN host to its /64.
+
+**Enforcement.** Only after the ADR 0023 separation matrix gains IPv6 rows (legit busy host with rotating
+temporaries never fires; v6 sweep with answers confirmed; one-sided v6 SYNs never counted — the D3 rule is
+family-independent). Until then IPv6 sources are observe-only (today's behaviour).
+
 ## Consequences
 
 - D1 closes "trust nothing unsigned" for the one operator-written artifact on the boot partition without

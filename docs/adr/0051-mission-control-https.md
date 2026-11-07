@@ -98,8 +98,16 @@ in the EL0 server's heap (never on disk, never in the kernel). Properties of the
 - **Timing:** the crate aims for constant-time scalar arithmetic but documents that this is not thoroughly
   assessed; signing is reachable by any network client that can open a handshake. Mitigations available if
   a review finds leakage: rate-limit handshakes per source (the kernel already counts them), or move signing
-  to a constant-time-verified implementation. **Open risk, tracked** — a focused review of the signing path
-  (scalar mult + inversion) is the remaining action.
+  to a constant-time-verified implementation.
+- **Source review of the signing path (2026-11-07, `ecdsa` 0.16.9 / `p256` 0.13.2 / `primeorder` 0.13.6):**
+  `hazmat::sign_prehashed` computes `k⁻¹` with `Scalar::invert` (Fermat exponentiation by the fixed
+  `n−2` — no data-dependent branch) and `R = k·G` with `primeorder::ProjectivePoint::mul`: a fixed 4-bit
+  window, the same double/add sequence for every scalar, each table lookup scanning all 15 entries with
+  `conditional_assign` (no secret-indexed load), complete addition formulas (identity handled uniformly).
+  `s = k⁻¹(z + r·d)` is plain field arithmetic. **No secret-dependent branch or memory index on the path.**
+  Residual (not decidable from source): compiler output and A76 micro-architecture (e.g. variable-latency
+  multiply) — mitigated by the handshake rate limit; a dudect-style timing measurement on the CM5 is the
+  remaining empirical check (Board).
 
 ## Consequences
 
