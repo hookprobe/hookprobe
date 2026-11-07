@@ -102,7 +102,7 @@ fn csum(b: &[u8], init: u32) -> u16 {
     !(s as u16)
 }
 
-fn udp4(out: &mut [u8], smac: &[u8; 6], dmac: &[u8; 6], sip: [u8; 4], dip: [u8; 4], sp: u16, dp: u16, payload: &[u8]) -> usize {
+pub fn udp4(out: &mut [u8], smac: &[u8; 6], dmac: &[u8; 6], sip: [u8; 4], dip: [u8; 4], sp: u16, dp: u16, payload: &[u8]) -> usize {
     let ul = 8 + payload.len();
     let total = 14 + 20 + ul;
     out[0..6].copy_from_slice(dmac);

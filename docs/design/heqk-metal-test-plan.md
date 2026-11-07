@@ -56,6 +56,18 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | D4 | Evidence explorer: click a rule node, a device node | subgraph drills (rule → sources; device → MAC/IP/rules/targets) | screenshot |
 | D5 | `/api/evidence/stats` | live counts, `storage: ram`, `last_prune: null` | JSON |
 
+## F. Signed configuration & operations (batch 3–4)
+
+| ID | Test | Expected | Evidence |
+|---|---|---|---|
+| F1 | IOC pack (G7): from a client `nslookup c2.ioc-test.example`; `curl http://203.0.113.10` | `ioc_match` detections (observe-only, nothing dropped); `/api/intel` counts | Detect feed + JSON |
+| F2 | Device policy (G9): put the phone's MAC in DEVICES.TXT as `internet_only` | the phone browses; `http://10.99.0.1` does not load; `/api/devices` shows `policy: internet_only`; `/api/intel` denied counter rises | screenshots |
+| F3 | Same MAC as `quarantine` | only DHCP/DNS work; browsing fails | phone |
+| F4 | WIFI.TXT (G20): image built WITHOUT `HEQK_AP_PSK`, SSID/PSK from WIFI.TXT | `[WIFI] WIFI.TXT: SSID …`; the phone joins with the file's PSK | serial + join |
+| F5 | WIFI.TXT tampered / absent and no build PSK | `REFUSED` → build defaults; with no PSK at all the AP does **not** start (never open) | serial |
+| F6 | SIEM export (G15): `nc -ulk 514` on fortress (VLAN 200), run the C2 scan | RFC 5424 lines with rule/MITRE/src/dst arrive; `[SIEM] … sent=N lost=0` | nc capture |
+| F7 | WAN health (G16): unplug the fortress uplink behind a live VLAN 100 gateway (or drop ICMP to 1.1.1.1/9.9.9.9 on fortress) | `[WAN-HEALTH] down` after 3 probes, traffic fails over to the mgmt route; `up` again after 2 good probes | serial + speed test |
+
 ## E. Platform (from earlier sessions, still open)
 
 | ID | Test | Expected |

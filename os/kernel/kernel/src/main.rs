@@ -19,8 +19,10 @@ const fn wpa_psk_ok(p: Option<&str>) -> bool {
         None => false,
     }
 }
+// apmode: the AP PSK comes from the signed WIFI.TXT (parity G20) or, for bench images, the build env
+// HEQK_AP_PSK; with neither, the AP refuses to start (it never comes up open). A set env must be valid.
 #[cfg(feature = "apmode")]
-const _: () = assert!(wpa_psk_ok(option_env!("HEQK_AP_PSK")), "apmode needs HEQK_AP_PSK (8..63 chars) set at build time");
+const _: () = assert!(option_env!("HEQK_AP_PSK").is_none() || wpa_psk_ok(option_env!("HEQK_AP_PSK")), "HEQK_AP_PSK must be 8..63 chars");
 #[cfg(feature = "stajoin")]
 const _: () = assert!(
     option_env!("HEQK_JOIN_SSID").is_some() && wpa_psk_ok(option_env!("HEQK_JOIN_PSK")),
@@ -43,6 +45,13 @@ mod shield;
 mod dga;
 // Parity G7: operator-signed threat-intel IOC pack (observe-only).
 mod ioc;
+// Parity G20: operator-signed WIFI.TXT (SSID / PSK / channel).
+mod wificfg;
+// Parity G16: WAN health with hysteresis.
+mod wanhealth;
+// Parity G15: local SIEM export formats (RFC 5424 / OCSF JSON).
+#[cfg(feature = "netsvc")]
+mod siem;
 // Parity G9: operator-signed local per-device policy (DEVICES.TXT).
 mod devpolicy;
 // M5.1 (Track C) — minimal bounds-safe ELF64/aarch64 static loader (the userspace-server
@@ -2951,8 +2960,31 @@ fn cm5_p10_probe() {
                     // BSS beacons (validated by an attending operator seeing the SSID on a phone).
                     const AP_MODE: bool = cfg!(feature = "apmode");
                     if AP_MODE {
-                        const AP_SSID: &[u8] = b"heqk-ap";
-                        const AP_PSK: &[u8] = match option_env!("HEQK_AP_PSK") { Some(s) => s.as_bytes(), None => b"" }; // WPA2 passphrase for heqk-ap (build-time env, never in source)
+                        // Parity G20: SSID / PSK / channel from the operator-signed WIFI.TXT; the build-time
+                        // env (bench images) is the fallback; neither = the AP does not start (never open).
+                        let wcfg = match arch_aarch64::emmc::Emmc::probe() { Ok(dev) => wificfg::load(&dev), Err(_) => None };
+                        let wifi = match wcfg {
+                            Some(Ok(c)) => {
+                                kprint!(" [WIFI] WIFI.TXT: SSID \"{}\", channel {}{}\n", core::str::from_utf8(&c.ssid[..c.ssid_len as usize]).unwrap_or("?"),
+                                    c.channel, if c.channel == 0 { " (auto)" } else { "" });
+                                Some(c)
+                            }
+                            Some(Err(e)) => {
+                                kprint!(" [WIFI] WIFI.TXT REFUSED ({:?}) — using the build defaults\n", e);
+                                None
+                            }
+                            None => None,
+                        };
+                        let build_psk: &[u8] = match option_env!("HEQK_AP_PSK") { Some(s) => s.as_bytes(), None => b"" };
+                        let ap_ssid: &[u8] = match &wifi { Some(c) => &c.ssid[..c.ssid_len as usize], None => b"heqk-ap" };
+                        let ap_psk: &[u8] = match &wifi { Some(c) => &c.psk[..c.psk_len as usize], None => build_psk };
+                        let wifi_chan: u32 = wifi.map_or(0, |c| c.channel as u32);
+                        if ap_psk.len() < 8 {
+                            kprint!(" [WIFI] no WIFI.TXT and no build-time PSK — the AP will NOT start (it never runs open)\n");
+                            loop {
+                                unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
+                            }
+                        }
                         // M-NAT0: the wired UPLINK. Operator topology: end0 (RP1 GEM) is ALWAYS
                         // the WAN, eth1 (RTL8111H) is the LAN. Lease an IP on end0, resolve the
                         // gateway, ping the internet — over the metal-proven GEM rings (armed by
@@ -3135,10 +3167,20 @@ fn cm5_p10_probe() {
                                 }
                             }
                         }
-                        kprint!(" [P11-AP2] WPA2-secured AP: SSID \"heqk-ap\" ch6 (PSK) — heqk is the authenticator...\n");
+                        kprint!(" [P11-AP2] WPA2-secured AP: SSID \"{}\" (PSK) — heqk is the authenticator...\n", core::str::from_utf8(ap_ssid).unwrap_or("?"));
                         // PMK + GTK FIRST (fail-closed): never leave a WPA2 BSS beaconing with no
                         // authenticator behind it because the TRNG refused after the BSS was up.
-                        let pmk = arch_aarch64::wpa::wpa_pmk(AP_PSK, AP_SSID);
+                        // a 64-hex PSK is the PMK itself (WPA2); otherwise PBKDF2(passphrase, SSID)
+                        let pmk = if ap_psk.len() == 64 {
+                            let mut k = [0u8; 32];
+                            for (i, b) in k.iter_mut().enumerate() {
+                                let h = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+                                *b = h(ap_psk[2 * i]) << 4 | h(ap_psk[2 * i + 1]);
+                            }
+                            k
+                        } else {
+                            arch_aarch64::wpa::wpa_pmk(ap_psk, ap_ssid)
+                        };
                         let mut gtk = [0u8; 16];
                         let mut gtk_ok = true;
                         for k in 0..2 {
@@ -3163,7 +3205,7 @@ fn cm5_p10_probe() {
                             // Bench pin: HEQK_AP_CHANNEL=<n> (build env) bypasses the scan choice — used to hold
                             // the channel constant while isolating another variable.
                             const AP_PIN: Option<&str> = option_env!("HEQK_AP_CHANNEL");
-                            let pin: u32 = match AP_PIN { Some(s) => s.bytes().fold(0u32, |a, b| if b.is_ascii_digit() { a * 10 + (b - b'0') as u32 } else { a }), None => 0 };
+                            let pin: u32 = if wifi_chan != 0 { wifi_chan } else { match AP_PIN { Some(s) => s.bytes().fold(0u32, |a, b| if b.is_ascii_digit() { a * 10 + (b - b'0') as u32 } else { a }), None => 0 } };
                             let (ap_chan, ap_cs): (u32, u16) = if ap_tries == 1 && pin != 0 {
                                 kprint!("   [P11-ACS] channel PINNED by build env HEQK_AP_CHANNEL={} (scan choice bypassed)\n", pin);
                                 (pin, cyw43::ap_chanspec(pin))
@@ -3190,7 +3232,7 @@ fn cm5_p10_probe() {
                                 (6, cyw43::ap_chanspec(6))
                             };
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
-                            cyw43::ap_start(AP_SSID, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
+                            cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
                             // group PN on every join.
@@ -3208,7 +3250,7 @@ fn cm5_p10_probe() {
                                 let rb = cyw43::current_chanspec();
                                 kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
                                     rb.unwrap_or(0), ap_cs, if rb == Some(ap_cs) { "ON THE CHOSEN CHANNEL" } else { "MISMATCH" });
-                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"heqk-ap\" (PSK = build-time HEQK_AP_PSK)\n", ap_tries);
+                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"{}\" (PSK from {})\n", ap_tries, core::str::from_utf8(ap_ssid).unwrap_or("?"), if wifi.is_some() { "WIFI.TXT" } else { "the build env" });
                                 break;
                             }
                             kprint!(" [P11-AP2] AP config INCOMPLETE (try {}: get_ap={} ssid_ok={} bssid_nonzero={} ev_ok={} gtk_set={})\n",
@@ -3312,6 +3354,9 @@ fn cm5_p10_probe() {
                             }};
                         }
                         // ---- WAN policy (task #26): per-interface counters [lan, eth1, wan, mgmt] ----
+                        // Parity G16: WAN health probes (hysteresis) drive the failover, not ARP liveness alone.
+                        let mut whealth = wanhealth::WanHealth::new();
+                        let (mut wh_slot, mut wh_out, mut wh_sent_at): (u32, Option<(u16, bool)>, u64) = (0, None, 0);
                         let mut pol_drop = [0u32; 4];
                         let mut pol_block = [0u32; 4];
                         let mut pol_via_mgmt = 0u32; // flows routed out the management sub-interface
@@ -3337,7 +3382,7 @@ fn cm5_p10_probe() {
                                     act = pol.check($pif, PDir::In, &p).0;
                                     if act == PAct::Allow {
                                         let mgmt_up = unsafe { uplink::MGMT }.map_or(false, |m| m.gw_mac.is_some());
-                                        let wan_up = uplink::wan_alive(&up, 15_000);
+                                        let wan_up = uplink::wan_alive(&up, 15_000) && whealth.usable(); // G16: probes, not only ARP
                                         if let Some(r) = pol.route(&p.src, &p.dst, &|i| match i { PIf::Wan => wan_up, PIf::Mgmt => mgmt_up, _ => false }) {
                                             egress = r.via;
                                             nh_ip = r.gw.filter(|g| !g.v6).map(|g| [g.a[0], g.a[1], g.a[2], g.a[3]]);
@@ -3493,6 +3538,8 @@ fn cm5_p10_probe() {
                         };
                         #[cfg(feature = "mcserve")]
                         let mut wntp = wanntp::WanNtp::new();
+                        #[cfg(feature = "mcserve")]
+                        let (mut siem_cursor, mut siem_sent, mut siem_lost, mut siem_unrouted): (Option<u64>, u32, u32, u32) = (None, 0, 0, 0);
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
                         // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
                         let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
@@ -3950,7 +3997,17 @@ fn cm5_p10_probe() {
                                             let ntp_ours = wanntp::is_ours(&wbuf[..n], up.dhcp.yiaddr);
                                             #[cfg(not(feature = "mcserve"))]
                                             let ntp_ours = false;
-                                            if ntp_ours {
+                                            let probe_seq = wanhealth::probe_reply(&wbuf[..n], up.dhcp.yiaddr);
+                                            if let Some(seq) = probe_seq {
+                                                if let Some((want, internet)) = wh_out.filter(|w| w.0 == seq) {
+                                                    let _ = want;
+                                                    let rtt = (now().wrapping_sub(wh_sent_at) / (freq / 1000).max(1)).min(u16::MAX as u64) as u16;
+                                                    if let Some(st) = whealth.report(internet, true, rtt) {
+                                                        kprint!(" [WAN-HEALTH] {} (internet probe answered, rtt {} ms)\n", st.name(), rtt);
+                                                    }
+                                                    wh_out = None;
+                                                }
+                                            } else if ntp_ours {
                                                 // Parity G11: our SNTP answer (validated: server asked, port 123, our nonce).
                                                 #[cfg(feature = "mcserve")]
                                                 if let Some(ms) = wntp.on_frame(&wbuf[..n], up.dhcp.yiaddr, cyw43::now_secs()) {
@@ -4257,6 +4314,46 @@ fn cm5_p10_probe() {
                                             st.dropped = (ids_drop_out + ids_drop_in) as u64;
                                             st.sample_qsecbit(now(), telemetry::score());
                                             st.set_leases(&dh);
+                                            // Parity G15: new detections -> the signed POLICY.TXT `export syslog` collector.
+                                            if let Some(ex) = unsafe { (*core::ptr::addr_of!(POLICY)).export } {
+                                                let (via_wan, src_ip, src_mac, nh) = match ex.via {
+                                                    PIf::Mgmt => match unsafe { uplink::MGMT } {
+                                                        Some(m) => (false, m.ip, m.mac, uplink::mgmt_nexthop(ex.ip)),
+                                                        None => (false, [0; 4], [0; 6], None),
+                                                    },
+                                                    _ => (true, up.dhcp.yiaddr, up.mac, (up.gw_mac != [0u8; 6]).then_some(up.gw_mac)),
+                                                };
+                                                if let Some(dmac) = nh.filter(|_| src_ip != [0; 4]) {
+                                                    let mut sent = 0u32;
+                                                    let mut last = siem_cursor;
+                                                    st.for_each_det_after(siem_cursor, &mut |d, ms| {
+                                                        if sent >= 32 {
+                                                            return; // bounded per beat; the rest go next beat
+                                                        }
+                                                        let info = rulecat::lookup_or_generic(d.rule_id);
+                                                        let det = siem::Det {
+                                                            seq: d.seq, ts_ms: ms, rule_id: rulecat::HEQK_RULE_BAND + d.rule_id as u32, msg: info.msg,
+                                                            category: info.category, mitre: info.mitre, severity: info.severity, src: d.src, dst: d.dst,
+                                                            dport: d.dport, action: if d.verdict == 2 { "dropped" } else { "observed" },
+                                                        };
+                                                        let mut msg = [0u8; 700];
+                                                        let n = if ex.json { siem::ocsf_json(&det, "heqk-ap", &mut msg) } else { siem::rfc5424(&det, "heqk-ap", &mut msg) };
+                                                        let mut fr = [0u8; 760];
+                                                        if n > 0 {
+                                                            let k = wanntp::udp4(&mut fr, &src_mac, &dmac, src_ip, ex.ip, 40514, ex.port, &msg[..n]);
+                                                            let ok = if via_wan { uplink::wan_tx(&up, &fr[..k]) } else { uplink::mgmt_tx(&fr[..k]) };
+                                                            if ok { siem_sent += 1 } else { siem_lost += 1 }
+                                                        }
+                                                        last = Some(d.seq);
+                                                        sent += 1;
+                                                    });
+                                                    siem_cursor = last;
+                                                } else {
+                                                    siem_unrouted += 1;
+                                                }
+                                                kprint!("   [SIEM] export {}.{}.{}.{}:{} via {} ({}): sent={} lost={} unrouted beats={}\n", ex.ip[0], ex.ip[1], ex.ip[2], ex.ip[3], ex.port,
+                                                    if via_wan { "wan" } else { "mgmt" }, if ex.json { "OCSF JSON" } else { "RFC 5424" }, siem_sent, siem_lost, siem_unrouted);
+                                            }
                                             // Parity G11: ask for the time over the WAN (retry 15 s until set, then hourly).
                                             if up.usable() && up.gw_mac != [0u8; 6] {
                                                 if let Some(nonce) = arch_aarch64::rng200::next_word_strict() {
@@ -4280,6 +4377,22 @@ fn cm5_p10_probe() {
                                             });
                                         }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
+                                        // Parity G16: the previous probe unanswered = a failure; then send the next one.
+                                        if let Some((_, internet)) = wh_out.take() {
+                                            if let Some(st) = whealth.report(internet, false, 0) {
+                                                kprint!(" [WAN-HEALTH] {} ({} probe unanswered)\n", st.name(), if internet { "internet" } else { "gateway" });
+                                            }
+                                        }
+                                        if up.usable() && up.gw_mac != [0u8; 6] {
+                                            let (dst, internet) = wanhealth::WanHealth::target(wh_slot, up.dhcp.router);
+                                            let mut pf = [0u8; 64];
+                                            let k = wanhealth::echo_request(&mut pf, &up.mac, &up.gw_mac, up.dhcp.yiaddr, dst, wh_slot as u16);
+                                            if uplink::wan_tx(&up, &pf[..k]) {
+                                                wh_out = Some((wh_slot as u16, internet));
+                                                wh_sent_at = now();
+                                            }
+                                            wh_slot = wh_slot.wrapping_add(1);
+                                        }
                                         {
                                             let (q, b, by) = shield::totals();
                                             let mut lb = [0u8; 64];
@@ -6188,6 +6301,10 @@ pub extern "C" fn kmain() -> ! {
         let _ = dga::selftest();
         let _ = ioc::selftest();
         let _ = devpolicy::selftest();
+        let _ = wificfg::selftest();
+        let _ = wanhealth::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = siem::selftest();
         let _ = arch_aarch64::dhcpd::selftest();
         #[cfg(feature = "netsvc")]
         let _ = wanntp::selftest();
@@ -13408,7 +13525,26 @@ route 2001:db8:1::/48 via mgmt
             // upstream-LAN host in 10.200.0.0/24 answering a client is legit and must pass
             && !wan_martian4([10, 200, 0, 12], wan, inside, floor.0, 0)
     };
-    let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok && floor_ok && martian_ok;
+    // Parity G15: `export syslog <ip> <port> via wan|mgmt [json]` — one collector, strict.
+    let export_ok = {
+        let mut p = Policy::new();
+        let good = parse_policy(b"HQPOL1\nexport syslog 192.168.200.10 514 via mgmt json\n", &mut p).is_ok()
+            && p.export == Some(Export { ip: [192, 168, 200, 10], port: 514, via: If::Mgmt, json: true });
+        let plain = parse_policy(b"HQPOL1\nexport syslog 10.0.0.5 6514 via wan\n", &mut p).is_ok() && p.export.map_or(false, |e| !e.json && e.via == If::Wan);
+        let bad = [
+            &b"HQPOL1\nexport syslog 10.0.0.5 0 via wan\n"[..],
+            b"HQPOL1\nexport syslog 10.0.0.5 514 via lan\n",
+            b"HQPOL1\nexport syslog 239.1.1.1 514 via wan\n",
+            b"HQPOL1\nexport syslog 10.0.0.5 514 via wan\nexport syslog 10.0.0.6 514 via wan\n",
+            b"HQPOL1\nexport syslog 10.0.0.5 514 via wan xml\n",
+            b"HQPOL1\nexport netflow 10.0.0.5 514 via wan\n",
+        ]
+        .iter()
+        .all(|t| parse_policy(t, &mut p).is_err());
+        good && plain && bad
+    };
+    let ok = v6_ok && parsed && acl_ok && pl_ok && rt_ok && rej_ok && link_ok && tag_ok && tag1_ok && floor_ok && martian_ok && export_ok;
+    kprint!("   [P-policy] SIEM export directive (one collector; port 0 / lan / multicast / duplicate / unknown format refused)={}\n", export_ok);
     kprint!(" [P-policy] {} — WAN policy engine: IPv6 text={} POLICY.TXT parsed (5 lists, 2 named ACLs sorted by seq, 3 interface bindings, 6 routes)={} interface-attached ACL + prefix-list: allow/block/drop first-match by seq, ACL default + implicit deny, per-entry hits, v4+v6, ports, spoofed source dropped by the lan prefix-list, a v4-only list never applies to v6, unbound wan allowed={} prefix-list ge/le + seq order={} routes: longest prefix, source-based (from), gateway, metric failover when wan is down={} whole-file rejection with line numbers={} WAN.TXT vlan/QinQ/pcp/mgmt sub-interface={} QinQ tag stack + MTU from headers (PPPoE 1492/MSS 1452, frame 1522)={} single tag={} | management floor configurable (WAN.TXT mgmt_floor=, over-broad refused, default restorable)={} martian WAN sources (uRPF-lite)={}\n",
         if ok { "PASS" } else { "FAIL" }, v6_ok, parsed, acl_ok, pl_ok, rt_ok, rej_ok, link_ok, tag_ok, tag1_ok, floor_ok, martian_ok);
 }
