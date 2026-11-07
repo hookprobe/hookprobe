@@ -119,6 +119,27 @@ pub fn query_u32(query: &str, key: &str) -> Option<u32> {
     })
 }
 
+/// A query value, percent-decoded into `buf` (bounded; a malformed escape → None).
+pub fn query_str<'b>(query: &str, key: &str, buf: &'b mut [u8; 96]) -> Option<&'b str> {
+    let v = query.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))?;
+    let b = v.as_bytes();
+    let (mut i, mut n) = (0usize, 0usize);
+    while i < b.len() {
+        let c = if b[i] == b'%' {
+            let h = |x: u8| (x as char).to_digit(16);
+            let (hi, lo) = (h(*b.get(i + 1)?)?, h(*b.get(i + 2)?)?);
+            i += 3;
+            (hi * 16 + lo) as u8
+        } else {
+            i += 1;
+            b[i - 1]
+        };
+        *buf.get_mut(n)? = c;
+        n += 1;
+    }
+    core::str::from_utf8(&buf[..n]).ok()
+}
+
 /// Map a URL path to an embedded asset: `/` → `index.html`; `/a/b` or `/a/b/` → `a/b/index.html`
 /// (Astro's directory format); otherwise the exact file. Paths containing `..` never resolve.
 pub fn asset_for(path: &str) -> Option<&'static Asset> {
@@ -248,7 +269,56 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }
         // No engine registry on heqk yet: an EMPTY list keeps every engine row honestly badged
         // "mock" in the Detect UI rather than inventing live engines.
-        "/api/engines" => json(scratch, |w| w.raw("{\"engines\":[]}")),
+        "/api/engines" => json(scratch, |w| st.render_engines((crate::shield::block_len(), crate::shield::totals().1), w)),
+        "/api/evidence/stats" => json(scratch, |w| {
+            let mut nf = 0usize;
+            arch_aarch64::nat::for_each_flow(st.ticks_at_ms(now_ms), &mut |_| nf += 1);
+            st.render_evidence_stats(nf, crate::shield::totals().0, w)
+        }),
+        "/api/evidence/graph" => {
+            let mut nb = [0u8; 96];
+            match query_str(req.query, "node", &mut nb) {
+                Some(node) => {
+                    let mut found = true;
+                    let r = json(scratch, |w| found = st.render_graph(node, w));
+                    if found { r } else { json(scratch, |w| w.raw("{\"error\":\"no such node\"}")).with_status(404) }
+                }
+                None => json(scratch, |w| w.raw("{\"error\":\"node= required\"}")).with_status(400),
+            }
+        }
+        "/api/reports" => json(scratch, |w| st.render_reports(limit(200, 32), w)),
+        // Parity G23: who the device is enforcing against RIGHT NOW (read-only; everything self-reverts).
+        "/api/enforcement" => json(scratch, |w| {
+            use core::fmt::Write;
+            w.raw("{\"policy\":\"observe by default; only a confirmed scan, a malformed frame, an L1/L2 flood or resource exhaustion is acted on, and every action self-reverts (ADR 0023)\",\"sources\":[");
+            let mut k = 0;
+            crate::ratelimit::for_each_scan_source(&mut |x| {
+                let s = x.src;
+                let _ = write!(w, "{}{{\"ip\":\"{}.{}.{}.{}\",\"state\":\"{}\",\"reason\":\"port scan\",\"distinct_ports\":{},\"established\":{},\"expires_in_s\":{}}}",
+                    if k > 0 { "," } else { "" }, s >> 24, (s >> 16) & 0xff, (s >> 8) & 0xff, s & 0xff,
+                    ["watching", "rate_limited", "quarantined"][x.level as usize % 3], x.distinct, x.established, x.expires_in);
+                k += 1;
+            });
+            let _ = write!(w, "],\"count\":{}}}", k);
+        }),
+        p if p.starts_with("/api/reports/") => {
+            // `rep:heqk:IP` (any `%3A` escaping) names the incident `inc:heqk:IP`
+            let id = &p["/api/reports/".len()..];
+            let mut ib = [0u8; 96];
+            let n = id.len().min(ib.len());
+            ib[..n].copy_from_slice(&id.as_bytes()[..n]);
+            if ib[..n].starts_with(b"rep") {
+                ib[..3].copy_from_slice(b"inc");
+            }
+            match core::str::from_utf8(&ib[..n]).ok().and_then(McState::parse_incident_id) {
+                Some(src) => {
+                    let mut found = true;
+                    let r = json(scratch, |w| found = st.render_report(src, st.ticks_at_ms(now_ms), w));
+                    if found { r } else { json(scratch, |w| w.raw("{\"error\":\"no such report\"}")).with_status(404) }
+                }
+                None => json(scratch, |w| w.raw("{\"error\":\"no such report\"}")).with_status(404),
+            }
+        }
         "/api/health" => json(scratch, |w| {
             use core::fmt::Write;
             // An unarmed rule plane (0 active rules) passes everything — report it, never hide it.
@@ -474,7 +544,8 @@ pub fn mc_selftest() -> bool {
     let q = &scratch[..n3];
     let qs_ok = s3 == 200 && has(q, "\"latest\":{\"ts\":1700000008.000,\"score\":0.666,\"band\":\"AMBER\"}") && has(q, "\"count\":2");
     let (s4, n4) = get(b"GET /api/engines HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
-    let eng_ok = s4 == 200 && &scratch[..n4] == b"{\"engines\":[]}";
+    // engines: the device's REAL detection tiers (parity G13), never a mock row
+    let eng_ok = s4 == 200 && { let e = core::str::from_utf8(&scratch[..n4]).unwrap_or(""); e.starts_with("{\"engines\":[{\"name\":") && !e.contains("\"mock\"") };
     let (s5, _) = get(b"GET /api/nope HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let (s6, _) = get(b"POST /api/detections HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let errs_ok = s5 == 404 && s6 == 405
@@ -575,7 +646,73 @@ pub fn mc_selftest() -> bool {
         let tj = core::str::from_utf8(tw2.bytes()).unwrap_or("");
         let timeline_ok = tj.contains("\"found\":true") && tj.contains("\"kind\":\"detection\"") && tj.ends_with("],\"count\":2}")
             && tj.find("10.100.0.135:22").map_or(false, |a| tj.find("10.100.0.135:80").map_or(false, |b| a < b));
-        let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok;
+        // AP/LAN images: /api/devices from DHCP leases (MAC, hostname, OS guess, private MAC, active).
+        let mut dl = McState::new();
+        let mut dd = arch_aarch64::dhcpd::ApDhcp::new();
+        dd.now = 100;
+        let _ = dd.alloc_for(&[0x02, 0, 0, 0, 0, 7], &[10, 99, 0, 10]);
+        dd.commit(&[0x02, 0, 0, 0, 0, 7]);
+        let mut id = arch_aarch64::dhcpd::client_identity(&[]);
+        id.host[..6].copy_from_slice(b"Johns-");
+        id.hlen = 6;
+        id.vendor[..15].copy_from_slice(b"android-dhcp-14");
+        id.vlen = 15;
+        dd.note_identity(&[0x02, 0, 0, 0, 0, 7], &id);
+        dl.set_leases(&dd);
+        let mut lb = [0u8; 1024];
+        let mut lw = JsonBuf::new(&mut lb);
+        dl.render_devices(10, &mut lw);
+        let lj = core::str::from_utf8(lw.bytes()).unwrap_or("");
+        let leases_ok = lj.contains("\"mac\":\"02:00:00:00:00:07\"") && lj.contains("\"ip\":\"10.99.0.10\"") && lj.contains("\"hostname\":\"Johns-\"")
+            && lj.contains("\"os\":\"Android\"") && lj.contains("\"private_mac\":true,\"active\":true") && lj.ends_with("],\"count\":1}");
+        // G13: engines, evidence stats/graph, reports — all from the device's own evidence.
+        let mut gb = [0u8; 8192];
+        let g = |f: &dyn Fn(&mut JsonBuf) -> bool, b: &mut [u8; 8192]| -> (bool, usize) {
+            let mut w = JsonBuf::new(&mut b[..]);
+            let ok = f(&mut w);
+            (ok && !w.overflow, w.len)
+        };
+        let (_, n1) = g(&|w| { di.render_engines((7, 3), w); true }, &mut gb);
+        let ej = core::str::from_utf8(&gb[..n1]).unwrap_or("");
+        let engines_ok = ej.contains("\"name\":\"Scan & flood detection\"") && ej.contains("\"Shield DNS (ADR 0052)\",\"kind\":\"dns\",\"source\":\"real\",\"status\":\"active\",\"loaded_rules\":7")
+            && !ej.contains("\"mock\"");
+        let (_, n2) = g(&|w| { di.render_evidence_stats(4, 9, w); true }, &mut gb);
+        let sj = core::str::from_utf8(&gb[..n2]).unwrap_or("");
+        let stats_ok = sj.contains("\"detections\":2,\"incidents\":1,\"flows\":4,\"dns_queries\":9") && sj.contains("\"last_prune\":null");
+        let (f1, _) = g(&|w| di.render_graph("inc:heqk:10.100.0.77", w), &mut gb);
+        let (f2, n3) = g(&|w| di.render_graph("rule:1200113", w), &mut gb);
+        let rule_edge = core::str::from_utf8(&gb[..n3]).unwrap_or("").contains("\"dst\":\"ip:10.100.0.77\"");
+        let (f3, _) = g(&|w| di.render_graph("det:heqk:0", w), &mut gb);
+        let (f4, _) = g(&|w| di.render_graph("ip:10.0.0.99", w), &mut gb);
+        let (f5, _) = g(&|w| di.render_graph("rule:junk", w), &mut gb);
+        let graph_ok = f1 && f2 && rule_edge && f3 && !f4 && !f5;
+        let (_, n4) = g(&|w| { di.render_reports(10, w); true }, &mut gb);
+        let lj_ok = { let lj = core::str::from_utf8(&gb[..n4]).unwrap_or(""); lj.contains("\"id\":\"rep:heqk:10.100.0.77\"") && lj.ends_with("],\"count\":1}") };
+        let (f6, n5) = g(&|w| di.render_report(0x0A64_004D, 0, w), &mut gb);
+        let pj = core::str::from_utf8(&gb[..n5]).unwrap_or("");
+        let reports_ok = lj_ok && f6
+            && pj.contains("\"mitre_techniques\":[") && pj.contains("\"evidence_node_ids\":[\"det:heqk:") && pj.contains("\"process_tree\":[]")
+            && pj.contains("\"timeline\":[{");
+        let mut qb = [0u8; 96];
+        let q_ok = query_str("node=inc%3Aheqk%3A10.0.0.1&x=1", "node", &mut qb) == Some("inc:heqk:10.0.0.1")
+            && query_str("node=%zz", "node", &mut qb).is_none() && query_str("a=1", "node", &mut qb).is_none();
+        // G5: risk decays with a 5-min half-life instead of dropping to GREEN a minute after an attack.
+        let mut qd = McState::new();
+        qd.set_clock(0, 0, 1000); // ticks = ms
+        qd.sample_qsecbit(1_000, 0);
+        qd.sample_qsecbit(2_000, 40);
+        let r1 = qd.latest_risk();
+        qd.sample_qsecbit(2_000 + 300_000, 40);
+        let r2 = qd.latest_risk();
+        qd.sample_qsecbit(2_000 + 3_600_000, 40);
+        let r3 = qd.latest_risk();
+        let mut qn = McState::new();
+        qn.set_clock(0, 0, 1000);
+        qn.sample_qsecbit(1_000, 500); // a lifetime score from before the first sample is not current risk
+        let decay_ok = r1 >= 600 && (450..=550).contains(&r2) && r3 < 50 && qn.latest_risk() == 0;
+        kprint!(" [P-mc-x] hosts={} incident-ids={} detail={} unknown={} timeline={} lease-devices={} engines={} evidence-stats={} graph={} reports={} query-decode={} qsecbit-decay={}\n",
+            hosts_ok, ids_ok, detail_ok, unknown_ok, timeline_ok, leases_ok, engines_ok, stats_ok, graph_ok, reports_ok, q_ok, decay_ok);
+        let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok && leases_ok && engines_ok && stats_ok && graph_ok && reports_ok && q_ok && decay_ok;
         good && wrong_nonce && refused && synced && small && big && pinned && hosts_ok
     };
     // ADR 0051 D4: :80 -> https redirect keeps path+query, drops the port; a hostile Host never reaches
@@ -616,7 +753,7 @@ pub fn mc_selftest() -> bool {
         red && v6 && bad && sec && plain && ka && kept && closed && wan_ok
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;
-    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS) + keep-alive(1.1 default, close/1.0 end it, pipelined bytes kept, limits advertised)={} (ui assets embedded: {})\n",
+    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(real tiers, no mock)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS) + keep-alive(1.1 default, close/1.0 end it, pipelined bytes kept, limits advertised)={} (ui assets embedded: {})\n",
         if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, time_ok, tls_ok, UI_ASSETS.len());
     pass
 }

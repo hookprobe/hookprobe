@@ -698,6 +698,11 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
             };
             let v = decide(&q.name[..q.nl]);
             record(now, client, q.qtype, &q.name[..q.nl], v);
+            // Parity G8: DGA / lookalike / tunnel scoring on names Shield let through — detection only.
+            if v == Verdict::Allowed && crate::dga::score(&q.name[..q.nl]) >= crate::dga::DGA_THRESHOLD {
+                st().dga += 1;
+                let _ = crate::rules::shield_dga_verdict(client);
+            }
             if v.answered() {
                 if let Some(n) = answer_frame(f, u, dns, &q, v == Verdict::Ddr, me, out) {
                     return Act::Answer(n);
@@ -863,8 +868,9 @@ struct Stats {
     cli: [Cli; CLIENTS],
     ncli: usize,
     last_blocked: Ent,
+    dga: u64,
 }
-static mut ST: Stats = Stats { c: [0; NC], ring: [ENT0; RING], rhead: 0, rlen: 0, top: [TOP0; TOPK], ntop: 0, cli: [CLI0; CLIENTS], ncli: 0, last_blocked: ENT0 };
+static mut ST: Stats = Stats { c: [0; NC], ring: [ENT0; RING], rhead: 0, rlen: 0, top: [TOP0; TOPK], ntop: 0, cli: [CLI0; CLIENTS], ncli: 0, last_blocked: ENT0, dga: 0 };
 
 fn st() -> &'static mut Stats {
     unsafe { &mut *core::ptr::addr_of_mut!(ST) }
@@ -882,6 +888,7 @@ pub fn reset_stats() {
     s.ntop = 0;
     s.ncli = 0;
     s.last_blocked = ENT0;
+    s.dga = 0;
 }
 
 fn record(t: u64, client: u32, qtype: u16, name: &[u8], v: Verdict) {
@@ -952,6 +959,11 @@ pub fn last_blocked(out: &mut [u8; NAME_MAX]) -> (usize, u32) {
     let e = st().last_blocked;
     out[..e.nl as usize].copy_from_slice(&e.name[..e.nl as usize]);
     (e.nl as usize, e.client)
+}
+
+/// Queries Shield let through that scored as DGA / lookalike / tunnel (detections raised).
+pub fn dga_hits() -> u64 {
+    st().dga
 }
 
 pub fn counter(v: Verdict) -> u64 {
@@ -1026,7 +1038,7 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
         }
         k += 1;
     }
-    let _ = write!(out, "],\"recent_count\":{}}}", k);
+    let _ = write!(out, "],\"recent_count\":{},\"dga_suspects\":{}}}", k, s.dga);
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -1222,7 +1234,7 @@ pub fn selftest() -> bool {
         let mut w = JsonBuf::new(&mut jb);
         render(&mut w, &|t| t * 1000, 5);
         let j = core::str::from_utf8(w.bytes()).unwrap_or("");
-        !w.overflow && j.starts_with("{\"lists\":{\"blocked_domains\":6") && j.contains("\"recent_count\":5}") && j.contains("\"private_relay\":\"block\"")
+        !w.overflow && j.starts_with("{\"lists\":{\"blocked_domains\":6") && j.contains("\"recent_count\":5,\"dga_suspects\":") && j.contains("\"private_relay\":\"block\"")
     };
     #[cfg(not(feature = "netsvc"))]
     let json = true;
