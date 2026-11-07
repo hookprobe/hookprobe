@@ -58,7 +58,8 @@ systemctl enable hookprobe-depmod.service 2>/dev/null || true
 # `useradd`/`chpasswd` are unreliable in this emulated arm64 chroot (useradd -m silently
 # no-ops; chpasswd needs PAM → pam_start failure 26), so both branches write /etc/{passwd,
 # shadow,group} directly — bulletproof in any chroot.
-R_HASH='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'   # hookprobe
+R_HASH="$(openssl passwd -6 -salt qEkJ33cMtCvXHNnx hookprobe)"  # ADR 0045 public dev login hookprobe/hookprobe, DERIVED (no literal hash in the tree)
+case "$R_HASH" in '$6$'*) ;; *) echo "FATAL: openssl passwd failed; refusing to bake an empty debug password" >&2; exit 1 ;; esac
 mkdir -p /etc/ssh/sshd_config.d /etc/hookprobe
 # 2026-07-07 regression fix: mkosi runs this postinst ("final") in a SANDBOX where bare /etc is
 # NOT the image's account DB (mkosi overlays the host's /usr, and /etc/{passwd,shadow,group} are

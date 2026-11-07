@@ -208,7 +208,8 @@ RT="$WORK/p2"
 mkdir -p "$RT/etc/ssh/sshd_config.d" "$RT/etc/systemd/system/multi-user.target.wants"
 if [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ]; then
   # DEBUG-ONLY: cracked-by-design credentials. NEVER set this flag for a release build.
-  R_HASH='$6$qEkJ33cMtCvXHNnx$n8xTd2YDLffJ9efYmRlXqD72fuTvPwH5VXvFWMfOXKrI/ebwPtK7m8C1TW25nJCwegHnIashhrvPhXMsl7Nw60'
+  R_HASH="$(openssl passwd -6 -salt qEkJ33cMtCvXHNnx hookprobe)"  # ADR 0045 public dev login hookprobe/hookprobe, DERIVED (no literal hash in the tree)
+  case "$R_HASH" in '$6$'*) ;; *) echo "FATAL: openssl passwd failed; refusing to bake an empty debug password" >&2; exit 1 ;; esac
   if grep -q '^hookprobe:' "$RT/etc/passwd"; then
     awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/bin/bash"} 1' "$RT/etc/passwd" > "$RT/etc/passwd.new" && mv "$RT/etc/passwd.new" "$RT/etc/passwd"
   fi
