@@ -197,3 +197,18 @@ across a power cycle, drain latency.
   detection every boot. Fixed `0cf4f3b`; **metal-proven**: `self-test events discarded: 1`, detections 0.
 - `0cf4f3b` under NAC `internet_only`: **SNTP synced unaided** from the public server
   (`clock synced by SNTP`), `/api/health` `clock:"ntp"`, API sample within 2.5 s of fortress time.
+
+### Background block 2 (no metal, 2026-11-07, operator: "agile until we need rpiboot")
+
+| Commit | Item | What changed |
+|---|---|---|
+| `eadd9db` | #10 rx_lost | GEM loss counters baselined at loop entry: boot-time loss (ring unserviced during self-tests; 18-bit counters saturate at 262143) printed once, heartbeat shows runtime loss only |
+| `eadd9db` | #12 mgmt queue | only ARP replies + requests for OUR management address are queued (other hosts' who-has broadcasts no longer take slots) |
+| `eadd9db` | #13 dst column | `Event` carries dst IPv4 + dport (in former padding: 24 B, existing offsets unchanged; persist/export images unchanged); set per frame in `packet::classify`; `/api/detections` + Detect feed show `src → dst:port` |
+| `eadd9db` | #14 P5 | the WPA2 authenticator first takes ITS EAPOL / deauth from the parked ring (others keep order) and parks other stations' frames instead of discarding them; ring moved to `hal::defer` (generic, QEMU `[P11-defer]`) |
+| `eadd9db` | UI | left rail: live status pill + device-reported mode on every workspace |
+| this | #17 (part) | passive LAN host inventory (256, local only) + retention facts in `/api/health`; home "My Network" / "Timeline" tiles render them on heqk ("Shield" / "Get Online" stay "No data" — no device source yet) |
+| — | #11 | WAN routes with a gateway and mgmt routes already existed; the MSS ceiling (1452 PPPoE / 1460) covers mgmt egress — nothing to build. IPv6 on mgmt waits on ADR 0049 D2 |
+
+Gates: `validate.sh` 85 PASS (new `Pdefer`; `Pmc` asserts dst + host inventory), `mc-e2e` PASS incl. browser,
+all six kernel profiles build. METAL-PENDING: everything in this block.
