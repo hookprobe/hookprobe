@@ -42,6 +42,8 @@ mod dnssink;
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
 // backends but the loader/mapping path is QEMU-only (see load_into's cfg).
 mod elf;
+// ADR 0049 D1 — operator signature over POLICY.TXT (verified before parsing).
+mod policysig;
 // M5.2 (Track C) — the Wasm-host BEACHHEAD: verify-then-run ONE signed .wasm module,
 // in-kernel, via the wasmi no_std interpreter. Behind `wasmhost` (OFF by default so the
 // base kernel TCB pulls in no interpreter); the [P-wasm] QEMU gate enables it.
@@ -5989,6 +5991,7 @@ pub extern "C" fn kmain() -> ! {
         }
         wancfg_selftest();
         policy_selftest();
+        let _ = policysig::selftest();
         md5_selftest();
         pppoe_selftest();
         ip6_selftest();
@@ -12890,6 +12893,24 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
     for k in 0..(n as usize).min(hal::policy::POLICY_FILE_LEN / 512) {
         dev.read_block(lba + k as u64, &mut sec).ok()?;
         buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
+    }
+    // ADR 0049 D1: with an operator key in this image, the signature is checked BEFORE the parser sees a
+    // byte; any failure is reported as a rejected policy (=> the management lockdown below), never applied.
+    if let Some(key) = policysig::POLICY_PUBKEY {
+        let mut sig = [0u8; policysig::SIG_FILE_LEN];
+        let have = fat::locate_contiguous(dev, p1, policysig::SIG_8_3)
+            .and_then(|(l, _)| dev.read_block(l, &mut sig).ok())
+            .is_some();
+        let r = if have { policysig::verify(&buf, &sig, &key, policysig::POLICY_GEN_FLOOR) } else { Err(policysig::SigErr::Missing) };
+        match r {
+            Ok(gen) => kprint!(" [POLICY] signature OK — operator key, generation {} (floor {})\n", gen, policysig::POLICY_GEN_FLOOR),
+            Err(e) => {
+                kprint!(" [POLICY] signature REFUSED ({:?}) — the policy is not parsed\n", e);
+                return Some(Err(hal::policy::PolicyErr::Unsigned));
+            }
+        }
+    } else {
+        kprint!(" [POLICY] no operator key in this image (standalone) — POLICY.TXT accepted unsigned\n");
     }
     Some(hal::policy::parse_policy(&buf, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }))
 }
