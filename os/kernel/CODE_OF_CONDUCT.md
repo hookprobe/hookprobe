@@ -150,7 +150,7 @@ Given HookProbe's focus on security, we recognize that:
 - **Exploit code** should never be shared publicly without coordination
 - **Ethical hacking** is encouraged within proper bounds
 
-See [SECURITY.md](docs/SECURITY.md) for vulnerability reporting procedures.
+See [SECURITY.md](../../SECURITY.md) for vulnerability reporting procedures.
 
 ---
 
