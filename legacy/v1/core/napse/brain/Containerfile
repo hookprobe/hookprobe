@@ -1,0 +1,45 @@
+# =============================================================================
+# Napse Brain Container - Mojo AI Intent Attribution Engine
+# =============================================================================
+# Multi-stage build:
+#   Stage 1: Compile Mojo source to native binary
+#   Stage 2: Minimal runtime
+
+# --- Build Stage ---
+FROM docker.io/library/ubuntu:24.04 AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    python3 \
+    python3-pip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Modular/Mojo toolchain
+RUN curl -ssL https://magic.modular.com | bash
+ENV PATH="/root/.modular/bin:${PATH}"
+
+WORKDIR /build
+COPY . .
+
+# Build Napse brain binary
+RUN mojo build src/main.mojo -o napse-brain
+
+# --- Runtime Stage ---
+FROM docker.io/library/ubuntu:24.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Mojo runtime libraries
+COPY --from=builder /root/.modular/ /opt/modular/
+COPY --from=builder /build/napse-brain /opt/hookprobe/napse/napse-brain
+COPY napse.toml /etc/napse/napse.toml
+
+RUN mkdir -p /var/log/napse
+
+WORKDIR /opt/hookprobe/napse
+
+ENTRYPOINT ["/opt/hookprobe/napse/napse-brain"]
+CMD ["--config", "/etc/napse/napse.toml"]

@@ -1,0 +1,34 @@
+[Unit]
+Description=HookProbe Fortress IDS (HYDRA threat-intel + NAPSE QSecBit)
+# Start after the core stack (postgres/redis/web) and AIOCHI ClickHouse are up.
+After=fortress.service aiochi.service network-online.target
+Wants=fortress.service
+Requires=podman.socket
+StartLimitIntervalSec=300
+StartLimitBurst=3
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/hookprobe/fortress/containers
+EnvironmentFile=-/etc/hookprobe/fortress.conf
+
+# Wait for podman to be ready.
+ExecStartPre=/bin/bash -c 'for i in $(seq 1 60); do podman info >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+
+# Boot resilience: an unclean reboot leaves these containers in 'Created' state
+# with broken overlay mounts, so 'podman-compose up' fails. Force-remove any IDS
+# container that exists but is NOT running so the up below recreates it fresh.
+ExecStartPre=/bin/bash -c 'for c in fts-hydra-feed fts-hydra-consumer fts-hydra-enricher fts-hydra-features fts-hydra-anomaly fts-hydra-lifecycle fts-hydra-temporal fts-hydra-sentinel fts-hydra-cve fts-hydra-sentinel-engine fts-qsecbit-ids; do if podman container exists "$c"; then st=$(podman inspect -f "{{.State.Status}}" "$c" 2>/dev/null); if [ "$st" != "running" ]; then echo "[FTS-IDS] removing stale $c ($st)"; podman rm -f "$c" 2>/dev/null || true; fi; fi; done; true'
+
+# Bring up the IDS profile services (podman-compose 1.x has no --profile, so
+# the services are named explicitly; they all use the localhost/fts-hydra image).
+ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && /usr/bin/podman-compose -f podman-compose.yml up -d --no-build hydra-feed hydra-consumer hydra-enricher hydra-features hydra-anomaly hydra-lifecycle hydra-temporal hydra-sentinel qsecbit-ids'
+
+ExecStop=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && /usr/bin/podman-compose -f podman-compose.yml stop hydra-feed hydra-consumer hydra-enricher hydra-features hydra-anomaly hydra-lifecycle hydra-temporal hydra-sentinel qsecbit-ids'
+
+TimeoutStartSec=300
+TimeoutStopSec=120
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,190 @@
+# Cloudflare Tunnel Configuration
+# HookProbe POD-009 Email System
+#
+# Purpose: Zero-trust access and DDoS protection for mail services
+#
+# NOTE: This config requires a Cloudflare account and tunnel credentials
+#       Run: cloudflared tunnel create hookprobe-mail
+#       Then: cloudflared tunnel route dns hookprobe-mail mail.hookprobe.com
+
+# Tunnel ID (replace with your tunnel ID from Cloudflare dashboard)
+tunnel: YOUR_TUNNEL_ID_HERE
+credentials-file: /etc/cloudflared/credentials.json
+
+# ============================================
+# INGRESS RULES
+# ============================================
+ingress:
+  # SMTP (Port 25)
+  # Route mail.hookprobe.com:25 → DMZ Gateway
+  - hostname: mail.hookprobe.com
+    service: tcp://10.200.9.10:25
+    originRequest:
+      noTLSVerify: false
+      connectTimeout: 30s
+      tcpKeepAlive: 30s
+
+  # SMTP Submission (Port 587 with STARTTLS)
+  # Route mail.hookprobe.com:587 → DMZ Gateway
+  - hostname: mail.hookprobe.com
+    service: tcp://10.200.9.10:587
+    originRequest:
+      noTLSVerify: false
+      connectTimeout: 30s
+
+  # Webmail (Future: HTTPS for webmail interface)
+  - hostname: webmail.hookprobe.com
+    service: https://10.200.1.25:443
+    originRequest:
+      noTLSVerify: true  # Self-signed cert for internal server
+
+  # Catch-all rule (required)
+  - service: http_status:404
+
+# ============================================
+# TUNNEL SETTINGS
+# ============================================
+
+# Logging
+loglevel: info  # debug, info, warn, error
+
+# Metrics
+metrics: localhost:9090
+metrics-update-freq: 30s
+
+# Protocol
+protocol: quic  # quic, http2, h2mux (quic recommended for performance)
+
+# Retry settings
+retries: 5
+
+# Grace period for connection shutdown
+grace-period: 30s
+
+# ============================================
+# ORIGIN CONFIGURATION
+# ============================================
+originRequest:
+  # Connection settings
+  connectTimeout: 30s
+  tlsTimeout: 10s
+  tcpKeepAlive: 30s
+  keepAliveTimeout: 90s
+  keepAliveConnections: 100
+
+  # HTTP settings (for webmail)
+  httpHostHeader: mail.hookprobe.com
+  originServerName: mail.hookprobe.com
+
+  # Disable chunked encoding
+  disableChunkedEncoding: false
+
+  # Proxy settings
+  proxyType: ""  # socks, http, or empty for direct
+
+# ============================================
+# WAF RULES (Cloudflare Dashboard)
+# ============================================
+# Configure these in Cloudflare Dashboard:
+#
+# 1. Rate Limiting:
+#    - Limit SMTP connections to 100/minute per IP
+#    - Limit submission to 50/minute per IP
+#
+# 2. DDoS Protection:
+#    - Enable "Under Attack Mode" if needed
+#    - Automatic DDoS mitigation
+#
+# 3. Geo-blocking (Optional):
+#    - Block countries with high spam rates
+#    - Allow-list trusted countries
+#
+# 4. IP Access Rules:
+#    - Allow-list known good IPs
+#    - Block known bad actors
+#
+# 5. Bot Protection:
+#    - Challenge suspicious SMTP clients
+#    - Block known spam bots
+
+# ============================================
+# DNS CONFIGURATION
+# ============================================
+# Add these DNS records in Cloudflare:
+#
+# Type  Name                Value                   Proxy
+# --------------------------------------------------------------
+# A     mail.hookprobe.com  YOUR_TUNNEL_ID.cfargotunnel.com  Yes
+# MX    hookprobe.com       mail.hookprobe.com      N/A
+# CNAME webmail            YOUR_TUNNEL_ID.cfargotunnel.com  Yes
+# TXT   hookprobe.com       v=spf1 ...              N/A
+# TXT   _dmarc             v=DMARC1 ...            N/A
+# TXT   default._domainkey  v=DKIM1 ...             N/A
+
+# ============================================
+# HEALTH CHECKS
+# ============================================
+# Cloudflare will monitor these endpoints:
+# - mail.hookprobe.com:25 (SMTP)
+# - mail.hookprobe.com:587 (Submission)
+#
+# If health check fails, traffic is not routed
+
+# ============================================
+# SECURITY BEST PRACTICES
+# ============================================
+# 1. Enable Cloudflare Access for webmail
+# 2. Configure rate limiting in dashboard
+# 3. Enable email obfuscation
+# 4. Use Page Rules for additional protection
+# 5. Monitor analytics for unusual patterns
+# 6. Rotate tunnel credentials quarterly
+# 7. Enable 2FA on Cloudflare account
+
+# ============================================
+# MONITORING & ALERTS
+# ============================================
+# Set up Cloudflare alerts for:
+# - High error rates
+# - DDoS attacks
+# - Certificate expiration
+# - Origin unreachable
+# - Rate limit violations
+
+# ============================================
+# FAILOVER CONFIGURATION
+# ============================================
+# Configure secondary MX record:
+# MX 20 mail-backup.hookprobe.com
+#
+# Set up secondary tunnel on different infrastructure
+
+# ============================================
+# NOTES
+# ============================================
+# 1. Cloudflare Tunnel replaces traditional port forwarding
+# 2. No inbound firewall rules needed (outbound only)
+# 3. Origin IP is hidden from internet
+# 4. Automatic DDoS protection included
+# 5. Free tier supports up to 50 tunnels
+# 6. Metrics available at localhost:9090/metrics
+
+# ============================================
+# SETUP COMMANDS
+# ============================================
+# 1. Login to Cloudflare:
+#    cloudflared tunnel login
+#
+# 2. Create tunnel:
+#    cloudflared tunnel create hookprobe-mail
+#
+# 3. Route DNS:
+#    cloudflared tunnel route dns hookprobe-mail mail.hookprobe.com
+#
+# 4. Run tunnel:
+#    cloudflared tunnel --config /etc/cloudflared/config.yml run
+#
+# 5. Install as service:
+#    cloudflared service install
+#    systemctl enable cloudflared
+#    systemctl start cloudflared

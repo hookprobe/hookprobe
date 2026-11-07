@@ -1,0 +1,731 @@
+<!-- dnsXai Tab Content -->
+
+<!-- Quick Actions / Kill Switch with Protection Emblem -->
+<div class="quick-actions dnsxai-protection-panel">
+    <!-- Large Protection Emblem (Shield Icon) -->
+    <div class="protection-emblem active" id="protection-emblem">
+        <svg width="72" height="72" viewBox="0 0 24 24" fill="currentColor" class="emblem-icon">
+            <path d="M12 1L3 5v6c0 5.55 3.84 10.74 9 12 5.16-1.26 9-6.45 9-12V5l-9-4zm0 10.99h7c-.53 4.12-3.28 7.79-7 8.94V12H5V6.3l7-3.11v8.8z"/>
+        </svg>
+        <div class="emblem-pulse"></div>
+    </div>
+    <!-- Status Info -->
+    <div class="quick-actions-status">
+        <div class="quick-actions-info">
+            <h4>Quick Controls</h4>
+            <span class="status-label active" id="quick-actions-label">Protection Active</span>
+        </div>
+    </div>
+    <div class="quick-actions-buttons">
+        <button class="btn btn-sm pause-btn" onclick="pauseDnsxai(5)" title="Pause for 5 minutes">5m</button>
+        <button class="btn btn-sm pause-btn" onclick="pauseDnsxai(15)" title="Pause for 15 minutes">15m</button>
+        <button class="btn btn-sm pause-btn" onclick="pauseDnsxai(30)" title="Pause for 30 minutes">30m</button>
+        <button class="btn btn-danger" id="killswitch-btn" onclick="toggleDnsxaiKillSwitch()">DISABLE</button>
+    </div>
+</div>
+
+<!-- Pause Timer -->
+<div class="alert alert-warning" id="pause-timer" style="display: none;">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <path d="M11.99 2C6.47 2 2 6.48 2 12s4.47 10 9.99 10C17.52 22 22 17.52 22 12S17.52 2 11.99 2zM12 20c-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8-3.58 8-8 8zm.5-13H11v6l5.25 3.15.75-1.23-4.5-2.67z"/>
+    </svg>
+    <span>Protection Paused - <span id="pause-countdown">--:--</span></span>
+    <button class="btn btn-sm btn-success" onclick="resumeDnsxai()" style="margin-left: auto;">Resume Now</button>
+</div>
+
+<!-- Quick Whitelist -->
+<div class="card" style="margin-bottom: var(--spacing-lg);">
+    <div class="input-group">
+        <input type="text" class="form-input" id="quick-whitelist-input" placeholder="Quick whitelist: enter domain and press Enter" onkeypress="if(event.key==='Enter') quickWhitelist()">
+        <button class="btn btn-success" onclick="quickWhitelist()">Whitelist</button>
+    </div>
+</div>
+
+<!-- Header -->
+<div class="dashboard-header">
+    <div style="display: flex; align-items: center; gap: 0.75rem; flex-wrap: wrap;">
+        <h2>dnsXai</h2>
+        <span class="badge badge-primary" style="background: linear-gradient(135deg, var(--hp-primary), #ff8c42); color: white;">AI-POWERED</span>
+        <span id="ml-status-badge"></span>
+    </div>
+    <p class="text-muted">Next-generation DNS protection with machine learning, CNAME uncloaking, and federated threat intelligence</p>
+</div>
+
+<!-- Stats Grid -->
+<div class="stats-grid">
+    <div class="stat-card">
+        <div class="stat-value" id="dnsxai-queries">0</div>
+        <div class="stat-label">Total Queries</div>
+    </div>
+    <div class="stat-card success" style="cursor: pointer;" onclick="openBlockedModal()" title="Click to view blocked domains">
+        <div class="stat-value" id="dnsxai-blocked">0</div>
+        <div class="stat-label">Blocked<br><span style="font-size: 0.625rem; opacity: 0.7;">click to view</span></div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" id="dnsxai-block-rate">0%</div>
+        <div class="stat-label">Block Rate</div>
+    </div>
+    <div class="stat-card info">
+        <div class="stat-value" id="dnsxai-blocklist-size">0</div>
+        <div class="stat-label">Blocklist Size</div>
+    </div>
+</div>
+
+<!-- Detection Breakdown -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Detection Methods</h3>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: var(--spacing-md);">
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-green);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="dnsxai-blocklist-hits">0</div>
+                <div class="text-muted" style="font-size: 0.8125rem;">Blocklist</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-primary);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="dnsxai-ml-hits">0</div>
+                <div class="text-muted" style="font-size: 0.8125rem;">ML Detected</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-amber);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="dnsxai-cname-hits">0</div>
+                <div class="text-muted" style="font-size: 0.8125rem;">CNAME Uncloaked</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ML Engine Status -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M21 10.12h-6.78l2.74-2.82c-2.73-2.7-7.15-2.8-9.88-.1-2.73 2.71-2.73 7.08 0 9.79s7.15 2.71 9.88 0C18.32 15.65 19 14.08 19 12.1h2c0 1.98-.88 4.55-2.64 6.29-3.51 3.48-9.21 3.48-12.72 0-3.5-3.47-3.5-9.11 0-12.58 3.51-3.47 9.14-3.47 12.65 0L21 3v7.12zM12.5 8v4.25l3.5 2.08-.72 1.21L11 13V8h1.5z"/>
+            </svg>
+            AI/ML Engine
+        </h3>
+        <button class="btn btn-sm btn-primary" id="ml-train-btn" onclick="trainDnsxaiML()">Train Model</button>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--spacing-md);">
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
+                <div class="text-muted" style="font-size: 0.75rem; margin-bottom: var(--spacing-xs);">Training Samples</div>
+                <div style="font-size: 1.5rem; font-weight: 700;" id="ml-training-samples">0</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
+                <div class="text-muted" style="font-size: 0.75rem; margin-bottom: var(--spacing-xs);">Model Confidence</div>
+                <div style="font-size: 1.5rem; font-weight: 700; color: var(--hp-green);" id="ml-confidence">0%</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md);">
+                <div class="text-muted" style="font-size: 0.75rem; margin-bottom: var(--spacing-xs);">Federated Learning</div>
+                <div style="font-size: 1rem; font-weight: 600;" id="federated-status">Local Only</div>
+            </div>
+        </div>
+        <div style="margin-top: var(--spacing-lg); padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 3px solid var(--hp-primary);">
+            <p style="font-size: 0.875rem; margin: 0;">
+                <strong>How ML Training Works:</strong> The model learns from your browsing history to distinguish normal domains from suspicious ones.
+                Click "Train Model" to train on the last 24 hours of DNS queries. The more you browse, the smarter it gets.
+            </p>
+        </div>
+    </div>
+</div>
+
+<!-- Domain Classifier -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>
+            </svg>
+            Domain Classifier
+        </h3>
+    </div>
+    <div class="card-body">
+        <div class="input-group" style="margin-bottom: var(--spacing-md);">
+            <input type="text" class="form-input" id="ml-classify-input" placeholder="Enter domain to analyze (e.g., suspicious-domain.xyz)" onkeypress="if(event.key==='Enter') classifyDomain()">
+            <button class="btn btn-primary" onclick="classifyDomain()">Analyze</button>
+        </div>
+        <div id="ml-classify-result">
+            <div class="empty-state" style="padding: var(--spacing-lg);">
+                <p class="text-muted">Enter a domain above to see AI-powered threat analysis</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent ML Threats -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm-1.06 13.54L7.4 12l1.41-1.41 2.12 2.12 4.24-4.24 1.41 1.41-5.64 5.66z"/>
+            </svg>
+            Recent ML Detections
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadMLThreats()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div id="ml-threats-list">
+            <div class="empty-state">
+                <p class="text-muted">No ML-detected threats yet. Train the model and browse to generate detections.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Deep Packet Inspection -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M20 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm-5 14H4v-4h11v4zm0-5H4V9h11v4zm5 5h-4V9h4v9z"/>
+            </svg>
+            Deep Packet Inspection
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadPacketStats()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: var(--spacing-md); margin-bottom: var(--spacing-lg);">
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-primary);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-analyzed">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">Connections</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-green);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-ads-detected">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">Ads Detected</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-amber);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-sni-blocks">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">SNI Blocks</div>
+            </div>
+            <div style="text-align: center; padding: var(--spacing-md); background: var(--bg-light); border-radius: var(--radius-md); border-left: 4px solid var(--hp-red);">
+                <div style="font-size: 1.5rem; font-weight: 700;" id="packet-ip-blocks">0</div>
+                <div class="text-muted" style="font-size: 0.75rem;">IP Blocks</div>
+            </div>
+        </div>
+        <div style="margin-bottom: var(--spacing-md);">
+            <div class="text-muted" style="font-size: 0.75rem; margin-bottom: var(--spacing-xs);">Detection Methods</div>
+            <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-xs);">
+                <span class="badge badge-success">TLS SNI Inspection</span>
+                <span class="badge badge-info">IP Reputation</span>
+                <span class="badge badge-warning">Traffic Patterns</span>
+                <span class="badge badge-primary">JA3 Fingerprinting</span>
+            </div>
+        </div>
+        <!-- IP/Domain Check -->
+        <div style="margin-top: var(--spacing-lg); padding-top: var(--spacing-lg); border-top: 1px solid var(--border-color);">
+            <div class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-sm);">Check IP or Domain</div>
+            <div class="input-group">
+                <input type="text" class="form-input" id="packet-check-input" placeholder="Enter IP (e.g., 142.250.1.1) or domain (e.g., ads.example.com)">
+                <button class="btn btn-primary" onclick="checkPacketTarget()">Check</button>
+            </div>
+            <div id="packet-check-result" style="margin-top: var(--spacing-md);"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Recent Packet Detections -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M1 21h22L12 2 1 21zm12-3h-2v-2h2v2zm0-4h-2v-4h2v4z"/>
+            </svg>
+            Recent Packet Detections
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadPacketDetections()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div id="packet-detections-list">
+            <div class="empty-state">
+                <p class="text-muted">No packet-level ad detections yet. Browse the web to generate traffic analysis.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Protection Level -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Protection Level</h3>
+    </div>
+    <div class="card-body">
+        <div class="slider-container">
+            <input type="range" class="slider" id="dnsxai-level-slider" min="0" max="5" value="3" oninput="updateDnsxaiLevelDisplay(this.value)" onchange="setDnsxaiLevel(this.value)">
+            <div class="slider-labels">
+                <span>OFF</span>
+                <span>BASE</span>
+                <span>ENHANCED</span>
+                <span>STRONG</span>
+                <span>MAX</span>
+                <span>FULL</span>
+            </div>
+        </div>
+        <div style="text-align: center; margin-top: var(--spacing-lg); padding: var(--spacing-lg); background: var(--bg-light); border-radius: var(--radius-lg);">
+            <div class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-xs);">Current Protection</div>
+            <div id="dnsxai-level-name" style="font-size: 1.75rem; font-weight: 700; color: var(--hp-green);">Strong</div>
+        </div>
+    </div>
+</div>
+
+<!-- Whitelist Management -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Whitelisted Domains</h3>
+        <div class="card-actions">
+            <span class="badge badge-info" id="dnsxai-whitelist-count">0 domains</span>
+        </div>
+    </div>
+    <div class="card-body">
+        <div class="input-group" style="margin-bottom: var(--spacing-md);">
+            <input type="text" class="form-input" id="dnsxai-whitelist-input" placeholder="Enter domain to whitelist">
+            <button class="btn btn-primary" onclick="addDnsxaiWhitelist()">Add</button>
+        </div>
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th style="width: 100px;">Action</th>
+                    </tr>
+                </thead>
+                <tbody id="dnsxai-whitelist-body">
+                    <tr><td colspan="2" class="empty-state">No whitelisted domains</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- Blocklist Sources -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Blocklist Sources</h3>
+        <button class="btn btn-sm btn-primary" onclick="openModal('add-source-modal')">Add Source</button>
+    </div>
+    <div class="card-body">
+        <div id="dnsxai-sources-list">
+            <!-- Populated by JavaScript -->
+        </div>
+    </div>
+    <div class="card-footer">
+        <button class="btn btn-secondary" onclick="apiPost('/dnsxai/update').then(() => showToast('Blocklists updated', 'success'))">Update Blocklists</button>
+    </div>
+</div>
+
+<!-- Add Source Modal -->
+<div class="modal-overlay" id="add-source-modal">
+    <div class="modal">
+        <div class="modal-header">
+            <h3 class="modal-title">Add Blocklist Source</h3>
+            <button class="modal-close" onclick="closeModal('add-source-modal')">&times;</button>
+        </div>
+        <div class="modal-body">
+            <div class="form-group">
+                <label class="form-label">Source Name</label>
+                <input type="text" class="form-input" id="source-name" placeholder="e.g., StevenBlack Hosts">
+            </div>
+            <div class="form-group">
+                <label class="form-label">Source URL</label>
+                <input type="text" class="form-input" id="source-url" placeholder="https://raw.githubusercontent.com/...">
+                <span class="form-help">URL to a hosts file or domain list</span>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('add-source-modal')">Cancel</button>
+            <button class="btn btn-primary" onclick="addDnsxaiSource()">Add Source</button>
+        </div>
+    </div>
+</div>
+
+<!-- Blocked Domains Modal -->
+<div class="modal-overlay" id="blocked-domains-modal">
+    <div class="modal blocked-domains-modal">
+        <div class="modal-header">
+            <h3 class="modal-title">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" style="margin-right: 8px;">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zM4 12c0-4.42 3.58-8 8-8 1.85 0 3.55.63 4.9 1.69L5.69 16.9C4.63 15.55 4 13.85 4 12zm8 8c-1.85 0-3.55-.63-4.9-1.69L18.31 7.1C19.37 8.45 20 10.15 20 12c0 4.42-3.58 8-8 8z"/>
+                </svg>
+                Recently Blocked Domains
+            </h3>
+            <button class="modal-close" onclick="closeModal('blocked-domains-modal')">&times;</button>
+        </div>
+        <div class="modal-body" style="max-height: 400px; overflow-y: auto;">
+            <!-- Filter dropdown -->
+            <div style="margin-bottom: var(--spacing-md); display: flex; gap: var(--spacing-sm); align-items: center;">
+                <label style="font-size: 0.875rem; color: var(--text-secondary);">Filter by:</label>
+                <select id="blocked-filter" class="form-select" style="width: auto;" onchange="filterBlockedDomains()">
+                    <option value="all">All Blocked</option>
+                    <option value="blocklist">Blocklist</option>
+                    <option value="ml">ML Detected</option>
+                    <option value="cname">CNAME Uncloaked</option>
+                </select>
+                <button class="btn btn-sm btn-secondary" onclick="loadBlockedDomains()" style="margin-left: auto;">
+                    Refresh
+                </button>
+            </div>
+            <div id="blocked-domains-list" class="table-container">
+                <div class="empty-state">
+                    <p class="text-muted">Loading blocked domains...</p>
+                </div>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" onclick="closeModal('blocked-domains-modal')">Close</button>
+        </div>
+    </div>
+</div>
+
+<script>
+async function addDnsxaiSource() {
+    const name = document.getElementById('source-name').value.trim();
+    const url = document.getElementById('source-url').value.trim();
+
+    if (!url) {
+        showToast('Please enter a URL', 'error');
+        return;
+    }
+
+    try {
+        const result = await apiPost('/dnsxai/sources', { name, url });
+        if (result.success) {
+            closeModal('add-source-modal');
+            document.getElementById('source-name').value = '';
+            document.getElementById('source-url').value = '';
+            loadDnsxaiData();
+            showToast('Source added successfully', 'success');
+        }
+    } catch (error) {
+        showToast('Failed to add source', 'error');
+    }
+}
+
+// Blocked domains data cache
+let blockedDomainsCache = [];
+
+async function openBlockedModal() {
+    openModal('blocked-domains-modal');
+    await loadBlockedDomains();
+}
+
+async function loadBlockedDomains() {
+    const container = document.getElementById('blocked-domains-list');
+    container.innerHTML = '<div class="empty-state"><p class="text-muted">Loading...</p></div>';
+
+    try {
+        // Get blocked domains from dnsmasq log and ML threats in parallel
+        const [blockedResult, mlThreats] = await Promise.all([
+            apiGet('/dnsxai/blocked?limit=50').catch(() => ({ domains: [], total_blocks: 0 })),
+            apiGet('/dnsxai/ml/threats').catch(() => ({ threats: [] }))
+        ]);
+
+        // Build blocked domains list
+        blockedDomainsCache = [];
+
+        // Add blocklist blocked domains first (with block counts)
+        if (blockedResult.domains) {
+            blockedResult.domains.forEach(d => {
+                blockedDomainsCache.push({
+                    domain: d.domain,
+                    type: 'blocklist',
+                    typeBadge: 'BLOCKED',
+                    timestamp: d.timestamp,
+                    time: d.time,
+                    block_count: d.block_count || 1
+                });
+            });
+        }
+
+        // Add ML detected threats
+        if (mlThreats.threats) {
+            mlThreats.threats.forEach(t => {
+                // Avoid duplicates
+                if (!blockedDomainsCache.find(d => d.domain === t.domain)) {
+                    blockedDomainsCache.push({
+                        domain: t.domain,
+                        type: t.type === 'cname_uncloaked' ? 'cname' : 'ml',
+                        typeBadge: t.type === 'cname_uncloaked' ? 'CNAME' : 'ML',
+                        confidence: t.confidence,
+                        time: t.timestamp,
+                        block_count: 1
+                    });
+                }
+            });
+        }
+
+        // Update modal header with total blocks
+        const totalBlocks = blockedResult.total_blocks || blockedDomainsCache.reduce((sum, d) => sum + (d.block_count || 1), 0);
+        const modalHeader = document.querySelector('#blocked-domains-modal .modal-title');
+        if (modalHeader) {
+            modalHeader.textContent = `Blocked Domains (${totalBlocks} blocks)`;
+        }
+
+        renderBlockedDomains();
+    } catch (error) {
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Failed to load blocked domains</p></div>';
+    }
+}
+
+function filterBlockedDomains() {
+    renderBlockedDomains();
+}
+
+function renderBlockedDomains() {
+    const container = document.getElementById('blocked-domains-list');
+    const filter = document.getElementById('blocked-filter')?.value || 'all';
+
+    let filtered = blockedDomainsCache;
+    if (filter !== 'all') {
+        filtered = blockedDomainsCache.filter(d => d.type === filter);
+    }
+
+    if (filtered.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="currentColor" style="color: var(--text-light);">
+                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-2 15l-5-5 1.41-1.41L10 14.17l7.59-7.59L19 8l-9 9z"/>
+                </svg>
+                <p class="text-muted">No blocked domains to display</p>
+                <p class="text-muted" style="font-size: 0.8125rem;">Blocked domains will appear here as dnsXai protects your network</p>
+            </div>
+        `;
+        return;
+    }
+
+    const html = `
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Domain</th>
+                    <th style="width: 60px;">Blocks</th>
+                    <th>Type</th>
+                    <th style="width: 100px;">Action</th>
+                </tr>
+            </thead>
+            <tbody>
+                ${filtered.map(d => `
+                    <tr>
+                        <td class="font-mono" style="word-break: break-all;">${d.domain}</td>
+                        <td style="text-align: center;">
+                            <span class="badge badge-danger">${d.block_count || 1}×</span>
+                        </td>
+                        <td>
+                            <span class="badge ${d.type === 'ml' ? 'badge-warning' : d.type === 'cname' ? 'badge-info' : 'badge-secondary'}">
+                                ${d.typeBadge || d.type.toUpperCase()}
+                            </span>
+                            ${d.confidence ? `<span class="text-muted" style="font-size: 0.75rem;">${Math.round(d.confidence * 100)}%</span>` : ''}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-success" onclick="whitelistFromBlocked('${d.domain}')" title="Whitelist this domain">
+                                Whitelist
+                            </button>
+                        </td>
+                    </tr>
+                `).join('')}
+            </tbody>
+        </table>
+    `;
+
+    container.innerHTML = html;
+}
+
+async function whitelistFromBlocked(domain) {
+    try {
+        const result = await apiPost('/dnsxai/whitelist', { domain });
+        if (result.success) {
+            showToast(`${domain} whitelisted`, 'success');
+            // Remove from cache and re-render
+            blockedDomainsCache = blockedDomainsCache.filter(d => d.domain !== domain);
+            renderBlockedDomains();
+            loadDnsxaiData(); // Refresh main stats
+        }
+    } catch (error) {
+        showToast('Failed to whitelist domain', 'error');
+    }
+}
+
+// =========================================================================
+// PACKET-LEVEL DETECTION FUNCTIONS
+// =========================================================================
+
+async function loadPacketStats() {
+    try {
+        const result = await apiGet('/dnsxai/packet/status');
+
+        if (result.success && result.available) {
+            updateElement('packet-analyzed', result.packets_analyzed || 0);
+            updateElement('packet-ads-detected', result.ads_detected || 0);
+            updateElement('packet-sni-blocks', result.sni_blocks || 0);
+            updateElement('packet-ip-blocks', result.ip_blocks || 0);
+        }
+    } catch (error) {
+        console.error('Failed to load packet stats:', error);
+    }
+}
+
+async function loadPacketDetections() {
+    const container = document.getElementById('packet-detections-list');
+    container.innerHTML = '<div class="empty-state"><p class="text-muted">Loading...</p></div>';
+
+    try {
+        const result = await apiGet('/dnsxai/packet/detections?limit=10');
+
+        if (!result.success || !result.detections || result.detections.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <p class="text-muted">No packet-level ad detections yet.</p>
+                    <p class="text-muted" style="font-size: 0.8125rem;">Browse the web to generate traffic analysis.</p>
+                </div>
+            `;
+            return;
+        }
+
+        const html = `
+            <div class="table-container">
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>IP/Domain</th>
+                            <th>Method</th>
+                            <th>Confidence</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${result.detections.map(d => `
+                            <tr>
+                                <td class="font-mono" style="word-break: break-all;">
+                                    ${d.sni || d.ip}
+                                </td>
+                                <td>
+                                    ${(d.methods || []).map(m => `<span class="badge badge-secondary">${m}</span>`).join(' ')}
+                                </td>
+                                <td>
+                                    <span class="${d.confidence > 0.7 ? 'text-danger' : d.confidence > 0.4 ? 'text-warning' : ''}">
+                                        ${Math.round((d.confidence || 0) * 100)}%
+                                    </span>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+
+        container.innerHTML = html;
+    } catch (error) {
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Failed to load detections</p></div>';
+    }
+}
+
+async function checkPacketTarget() {
+    const input = document.getElementById('packet-check-input').value.trim();
+    const resultContainer = document.getElementById('packet-check-result');
+
+    if (!input) {
+        showToast('Enter an IP address or domain', 'warning');
+        return;
+    }
+
+    resultContainer.innerHTML = '<p class="text-muted">Checking...</p>';
+
+    try {
+        // Determine if input is IP or domain
+        const isIP = /^(\d{1,3}\.){3}\d{1,3}$/.test(input);
+
+        // Use combined check endpoint
+        const result = await apiPost('/dnsxai/packet/combined/check', {
+            domain: isIP ? '' : input,
+            ip: isIP ? input : ''
+        });
+
+        if (!result.success) {
+            resultContainer.innerHTML = `<p class="text-danger">Error: ${result.error}</p>`;
+            return;
+        }
+
+        // Build result display
+        const isAd = result.is_ad;
+        const confidence = Math.round((result.confidence || 0) * 100);
+        const methods = result.methods_used || [];
+
+        let html = `
+            <div style="padding: var(--spacing-md); background: var(--bg-${isAd ? 'light' : 'tertiary'}); border-radius: var(--radius-md); border-left: 4px solid var(--hp-${isAd ? 'red' : 'green'});">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
+                    <strong>${input}</strong>
+                    <span class="badge ${isAd ? 'badge-danger' : 'badge-success'}">
+                        ${isAd ? 'AD/TRACKER' : 'CLEAN'}
+                    </span>
+                </div>
+                <div class="text-muted" style="font-size: 0.875rem; margin-bottom: var(--spacing-sm);">
+                    Confidence: <strong>${confidence}%</strong>
+                </div>
+                <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-xs);">
+                    ${methods.map(m => `<span class="badge badge-secondary">${m.replace('_', ' ')}</span>`).join('')}
+                </div>
+        `;
+
+        // Add details
+        if (result.details) {
+            if (result.details.sni_check?.is_ad) {
+                html += `
+                    <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
+                        SNI Pattern: <code>${result.details.sni_check.matched_pattern}</code>
+                    </div>
+                `;
+            }
+            if (result.details.ip_check?.is_ad) {
+                html += `
+                    <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
+                        IP Network: ${result.details.ip_check.info}
+                    </div>
+                `;
+            }
+            if (result.details.ml_classification?.is_suspicious) {
+                html += `
+                    <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
+                        ML Classification: ${result.details.ml_classification.classification}
+                        (${result.details.ml_classification.reasons?.join(', ') || 'suspicious pattern'})
+                    </div>
+                `;
+            }
+        }
+
+        html += '</div>';
+
+        // Add block button if it's an ad
+        if (isAd && isIP) {
+            html += `
+                <div style="margin-top: var(--spacing-sm);">
+                    <button class="btn btn-sm btn-danger" onclick="blockAdIP('${input}')">Block This IP</button>
+                </div>
+            `;
+        }
+
+        resultContainer.innerHTML = html;
+
+    } catch (error) {
+        resultContainer.innerHTML = `<p class="text-danger">Check failed: ${error.message}</p>`;
+    }
+}
+
+async function blockAdIP(ip) {
+    try {
+        const result = await apiPost('/dnsxai/packet/ip/block', { ip, reason: 'User blocked via UI' });
+        if (result.success) {
+            showToast(`IP ${ip} blocked`, 'success');
+            loadPacketStats();
+        } else {
+            showToast(result.error || 'Failed to block IP', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to block IP', 'error');
+    }
+}
+
+// Load packet stats on page load
+document.addEventListener('DOMContentLoaded', function() {
+    setTimeout(() => {
+        loadPacketStats();
+        loadPacketDetections();
+    }, 1000);
+});
+</script>

@@ -1,0 +1,9 @@
+[project]
+name = "napse-brain"
+version = "2.0.0"
+description = "HookProbe Neural Adaptive Packet Synthesis Engine - Mojo AI Intent Attribution"
+authors = ["HookProbe <qsecbit@hookprobe.com>"]
+channels = ["conda-forge", "https://conda.modular.com/max"]
+
+[dependencies]
+max = ">=25.1.0"

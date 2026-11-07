@@ -1,0 +1,11 @@
+[Unit]
+Description=HookProbe Fortress Device Status Timer
+Documentation=https://github.com/hookprobe/hookprobe
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target

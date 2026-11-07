@@ -1,0 +1,1352 @@
+{% extends "base.html" %}
+
+{% block title %}SLA AI - Business Continuity{% endblock %}
+
+{% block page_header %}{% endblock %}
+
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+<li class="breadcrumb-item active">SLA AI</li>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+/* SLA AI Dashboard - Premium Financial Style */
+.slaai-container {
+    padding: 0;
+}
+
+/* Header Status Bar */
+.slaai-status-bar {
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.1);
+}
+
+.slaai-status-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 1.5rem;
+}
+
+/* RTO/RPO Gauges */
+.gauge-card {
+    background: rgba(255,255,255,0.05);
+    border-radius: 10px;
+    padding: 1.25rem;
+    text-align: center;
+}
+
+.gauge-card .gauge-title {
+    font-size: 0.7rem;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #888;
+    margin-bottom: 0.75rem;
+}
+
+.gauge-ring {
+    width: 100px;
+    height: 100px;
+    margin: 0 auto 0.75rem;
+    position: relative;
+}
+
+.gauge-ring svg {
+    transform: rotate(-90deg);
+    width: 100%;
+    height: 100%;
+}
+
+.gauge-ring .gauge-bg {
+    fill: none;
+    stroke: rgba(255,255,255,0.1);
+    stroke-width: 8;
+}
+
+.gauge-ring .gauge-fill {
+    fill: none;
+    stroke-width: 8;
+    stroke-linecap: round;
+    transition: stroke-dashoffset 0.5s ease;
+}
+
+.gauge-ring .gauge-value {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+}
+
+.gauge-ring .gauge-number {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #fff;
+    display: block;
+}
+
+.gauge-ring .gauge-unit {
+    font-size: 0.7rem;
+    color: #888;
+}
+
+.gauge-card .gauge-status {
+    font-size: 0.75rem;
+    padding: 0.25rem 0.75rem;
+    border-radius: 20px;
+    display: inline-block;
+}
+
+.gauge-status.ok { background: rgba(76, 175, 80, 0.2); color: #81c784; }
+.gauge-status.warning { background: rgba(255, 152, 0, 0.2); color: #ffb74d; }
+.gauge-status.critical { background: rgba(244, 67, 54, 0.2); color: #e57373; }
+
+/* WAN Interface Cards */
+.wan-cards {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.wan-card {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    border: 2px solid rgba(255,255,255,0.1);
+    transition: all 0.3s ease;
+}
+
+.wan-card.active {
+    border-color: rgba(76, 175, 80, 0.6);
+    box-shadow: 0 0 25px rgba(76, 175, 80, 0.15);
+}
+
+.wan-card.failed {
+    border-color: rgba(244, 67, 54, 0.6);
+    box-shadow: 0 0 25px rgba(244, 67, 54, 0.15);
+}
+
+.wan-card.standby {
+    border-color: rgba(255, 152, 0, 0.3);
+}
+
+.wan-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.wan-card-title {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+.wan-card-title .icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+}
+
+.wan-card-title .icon.primary { background: rgba(79, 195, 247, 0.2); color: #4fc3f7; }
+.wan-card-title .icon.backup { background: rgba(255, 152, 0, 0.2); color: #ffb74d; }
+
+.wan-card-title h4 {
+    margin: 0;
+    font-size: 1.1rem;
+    font-weight: 600;
+}
+
+.wan-card-title .interface {
+    font-size: 0.8rem;
+    color: #888;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.wan-status-badge {
+    padding: 0.4rem 0.85rem;
+    border-radius: 20px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.wan-status-badge.active { background: rgba(76, 175, 80, 0.25); color: #81c784; border: 1px solid rgba(76, 175, 80, 0.4); }
+.wan-status-badge.standby { background: rgba(255, 152, 0, 0.15); color: #ffb74d; border: 1px solid rgba(255, 152, 0, 0.3); }
+.wan-status-badge.failed { background: rgba(244, 67, 54, 0.25); color: #e57373; border: 1px solid rgba(244, 67, 54, 0.4); }
+
+/* Health Bar */
+.health-bar-container {
+    margin-bottom: 1rem;
+}
+
+.health-bar-label {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.75rem;
+    margin-bottom: 0.35rem;
+}
+
+.health-bar-label span:first-child { color: #888; }
+.health-bar-label span:last-child { color: #fff; font-weight: 600; }
+
+.health-bar {
+    height: 10px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 5px;
+    overflow: hidden;
+}
+
+.health-bar-fill {
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.5s ease, background 0.3s ease;
+}
+
+.health-bar-fill.good { background: linear-gradient(90deg, #4caf50, #81c784); }
+.health-bar-fill.warning { background: linear-gradient(90deg, #ff9800, #ffb74d); }
+.health-bar-fill.critical { background: linear-gradient(90deg, #f44336, #e57373); }
+
+/* Metrics Grid */
+.wan-metrics {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.75rem;
+}
+
+.wan-metric {
+    text-align: center;
+    padding: 0.65rem;
+    background: rgba(255,255,255,0.04);
+    border-radius: 8px;
+}
+
+.wan-metric-value {
+    font-size: 1.15rem;
+    font-weight: 600;
+    color: #fff;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.wan-metric-label {
+    font-size: 0.65rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Financial Traffic Charts */
+.traffic-chart-container {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+.traffic-chart-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+}
+
+.traffic-chart-header h4 {
+    margin: 0;
+    font-size: 1rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.traffic-chart-legend {
+    display: flex;
+    gap: 1.5rem;
+    font-size: 0.75rem;
+    color: #888;
+}
+
+.traffic-chart-legend .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.traffic-chart-legend .legend-bar {
+    width: 12px;
+    height: 12px;
+    border-radius: 2px;
+}
+
+.traffic-chart-legend .legend-bar.download { background: #4fc3f7; }
+.traffic-chart-legend .legend-bar.upload { background: #ff6b6b; }
+
+/* Interface Traffic Row */
+.interface-traffic-row {
+    display: flex;
+    align-items: center;
+    padding: 0.85rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.interface-traffic-row:last-child { border-bottom: none; }
+
+.interface-info {
+    width: 140px;
+    flex-shrink: 0;
+}
+
+.interface-name {
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #fff;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.interface-name i {
+    width: 18px;
+    text-align: center;
+    opacity: 0.7;
+}
+
+.interface-type {
+    font-size: 0.7rem;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Candlestick-style Traffic Chart */
+.candlestick-chart {
+    flex: 1;
+    height: 40px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    padding: 0 10px;
+    position: relative;
+}
+
+.candlestick {
+    flex: 1;
+    max-width: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    position: relative;
+}
+
+.candlestick-body {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    border-radius: 1px;
+}
+
+.candlestick-download {
+    background: linear-gradient(180deg, #4fc3f7, #29b6f6);
+    border-radius: 1px 1px 0 0;
+}
+
+.candlestick-upload {
+    background: linear-gradient(180deg, #ff6b6b, #ee5a5a);
+    border-radius: 0 0 1px 1px;
+}
+
+/* Traffic Values */
+.traffic-values {
+    width: 180px;
+    display: flex;
+    gap: 1rem;
+    justify-content: flex-end;
+    flex-shrink: 0;
+}
+
+.traffic-value {
+    text-align: right;
+}
+
+.traffic-value-number {
+    font-size: 0.95rem;
+    font-weight: 600;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.traffic-value-number.download { color: #4fc3f7; }
+.traffic-value-number.upload { color: #ff6b6b; }
+
+.traffic-value-label {
+    font-size: 0.65rem;
+    color: #666;
+    text-transform: uppercase;
+}
+
+/* Section Headers */
+.traffic-section-header {
+    display: flex;
+    align-items: center;
+    padding: 0.6rem 0;
+    margin-top: 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.traffic-section-header:first-of-type {
+    border-top: none;
+    margin-top: 0;
+}
+
+.traffic-section-header i {
+    margin-right: 0.5rem;
+    opacity: 0.7;
+}
+
+/* Empty State */
+.empty-state {
+    text-align: center;
+    padding: 2rem;
+    color: #666;
+}
+
+.empty-state i {
+    font-size: 2rem;
+    margin-bottom: 0.5rem;
+    opacity: 0.5;
+}
+
+/* Cost Tracking */
+.cost-panel {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+.cost-panel h4 {
+    margin: 0 0 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.cost-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 1rem;
+}
+
+.cost-item {
+    background: rgba(255,255,255,0.03);
+    border-radius: 8px;
+    padding: 1rem;
+}
+
+.cost-item-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.5rem;
+}
+
+.cost-item-label {
+    font-size: 0.75rem;
+    color: #888;
+    text-transform: uppercase;
+}
+
+.cost-item-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+    font-family: 'JetBrains Mono', monospace;
+}
+
+.cost-bar {
+    height: 6px;
+    background: rgba(255,255,255,0.1);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 0.5rem;
+}
+
+.cost-bar-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.5s ease;
+}
+
+/* Failover Timeline */
+.failover-timeline {
+    background: #1a1a2e;
+    border-radius: 12px;
+    padding: 1.5rem;
+    border: 1px solid rgba(255,255,255,0.08);
+}
+
+.failover-timeline h4 {
+    margin: 0 0 1rem;
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.timeline-track {
+    position: relative;
+    height: 60px;
+    background: rgba(255,255,255,0.03);
+    border-radius: 8px;
+    margin-bottom: 1rem;
+    overflow: hidden;
+}
+
+.timeline-line {
+    position: absolute;
+    top: 50%;
+    left: 20px;
+    right: 20px;
+    height: 2px;
+    background: rgba(255,255,255,0.2);
+    transform: translateY(-50%);
+}
+
+.timeline-event {
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 16px;
+    height: 16px;
+    border-radius: 50%;
+    cursor: pointer;
+    transition: transform 0.2s;
+}
+
+.timeline-event:hover {
+    transform: translate(-50%, -50%) scale(1.3);
+}
+
+.timeline-event.failover { background: #e57373; box-shadow: 0 0 10px rgba(229, 115, 115, 0.5); }
+.timeline-event.failback { background: #81c784; box-shadow: 0 0 10px rgba(129, 199, 132, 0.5); }
+.timeline-event.now { background: #4fc3f7; box-shadow: 0 0 10px rgba(79, 195, 247, 0.5); }
+
+.timeline-labels {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.7rem;
+    color: #666;
+}
+
+.timeline-events-list {
+    max-height: 150px;
+    overflow-y: auto;
+}
+
+.timeline-event-item {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem;
+    border-radius: 6px;
+    margin-bottom: 0.5rem;
+    background: rgba(255,255,255,0.03);
+}
+
+.timeline-event-item .event-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+}
+
+.timeline-event-item .event-icon.failover { background: rgba(244, 67, 54, 0.2); color: #e57373; }
+.timeline-event-item .event-icon.failback { background: rgba(76, 175, 80, 0.2); color: #81c784; }
+
+.timeline-event-item .event-details {
+    flex: 1;
+}
+
+.timeline-event-item .event-type {
+    font-size: 0.85rem;
+    font-weight: 500;
+}
+
+.timeline-event-item .event-reason {
+    font-size: 0.75rem;
+    color: #888;
+}
+
+.timeline-event-item .event-time {
+    font-size: 0.75rem;
+    color: #666;
+    text-align: right;
+}
+
+.timeline-event-item .event-duration {
+    font-size: 0.7rem;
+    color: #4fc3f7;
+}
+
+/* Loading Spinner */
+.loading-overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2rem;
+    color: #888;
+}
+
+.loading-overlay .spinner {
+    width: 24px;
+    height: 24px;
+    border: 2px solid rgba(255,255,255,0.1);
+    border-top-color: #4fc3f7;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+    margin-right: 0.75rem;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Responsive */
+@media (max-width: 1200px) {
+    .slaai-status-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 768px) {
+    .slaai-status-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .wan-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .wan-metrics {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .cost-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .interface-traffic-row {
+        flex-wrap: wrap;
+    }
+
+    .candlestick-chart {
+        width: 100%;
+        margin: 0.5rem 0;
+    }
+
+    .traffic-values {
+        width: 100%;
+        justify-content: flex-start;
+    }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="content-header">
+    <div class="container-fluid">
+        <div class="row mb-2">
+            <div class="col-sm-6">
+                <h1 class="m-0"><i class="fas fa-heartbeat mr-2"></i>SLA AI - Business Continuity</h1>
+            </div>
+            <div class="col-sm-6">
+                <ol class="breadcrumb float-sm-right">
+                    <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+                    <li class="breadcrumb-item active">SLA AI</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<section class="content">
+    <div class="container-fluid slaai-container">
+
+        {% if not slaai_available %}
+        <div class="alert alert-warning alert-dismissible">
+            <button type="button" class="close" data-dismiss="alert">&times;</button>
+            <i class="fas fa-info-circle mr-2"></i>
+            <strong>Demo Mode:</strong> System data module not available. Showing sample data.
+        </div>
+        {% endif %}
+
+        <!-- RTO/RPO Status Bar -->
+        <div class="slaai-status-bar">
+            <div class="slaai-status-grid">
+                <!-- RTO Gauge -->
+                <div class="gauge-card">
+                    <div class="gauge-title">Recovery Time Objective</div>
+                    <div class="gauge-ring">
+                        <svg viewBox="0 0 100 100">
+                            <circle class="gauge-bg" cx="50" cy="50" r="40"/>
+                            <circle class="gauge-fill" cx="50" cy="50" r="40"
+                                    stroke-dasharray="251.2"
+                                    stroke-dashoffset="25.12"
+                                    id="rto-gauge"
+                                    style="stroke: #81c784;"/>
+                        </svg>
+                        <div class="gauge-value">
+                            <span class="gauge-number" id="rto-value">--</span>
+                            <span class="gauge-unit">seconds</span>
+                        </div>
+                    </div>
+                    <div class="gauge-status ok" id="rto-status">
+                        <i class="fas fa-check mr-1"></i>Target: 5s
+                    </div>
+                </div>
+
+                <!-- RPO Gauge -->
+                <div class="gauge-card">
+                    <div class="gauge-title">Recovery Point Objective</div>
+                    <div class="gauge-ring">
+                        <svg viewBox="0 0 100 100">
+                            <circle class="gauge-bg" cx="50" cy="50" r="40"/>
+                            <circle class="gauge-fill" cx="50" cy="50" r="40"
+                                    stroke-dasharray="251.2"
+                                    stroke-dashoffset="0"
+                                    id="rpo-gauge"
+                                    style="stroke: #81c784;"/>
+                        </svg>
+                        <div class="gauge-value">
+                            <span class="gauge-number" id="rpo-value">0</span>
+                            <span class="gauge-unit">bytes lost</span>
+                        </div>
+                    </div>
+                    <div class="gauge-status ok" id="rpo-status">
+                        <i class="fas fa-check mr-1"></i>Zero Data Loss
+                    </div>
+                </div>
+
+                <!-- Uptime Gauge -->
+                <div class="gauge-card">
+                    <div class="gauge-title">24h Uptime</div>
+                    <div class="gauge-ring">
+                        <svg viewBox="0 0 100 100">
+                            <circle class="gauge-bg" cx="50" cy="50" r="40"/>
+                            <circle class="gauge-fill" cx="50" cy="50" r="40"
+                                    stroke-dasharray="251.2"
+                                    stroke-dashoffset="0.31"
+                                    id="uptime-gauge"
+                                    style="stroke: #81c784;"/>
+                        </svg>
+                        <div class="gauge-value">
+                            <span class="gauge-number" id="uptime-value">--</span>
+                            <span class="gauge-unit">%</span>
+                        </div>
+                    </div>
+                    <div class="gauge-status ok" id="uptime-status">
+                        <i class="fas fa-check mr-1"></i>Target: 99.9%
+                    </div>
+                </div>
+
+                <!-- Failovers Gauge -->
+                <div class="gauge-card">
+                    <div class="gauge-title">Failovers (24h)</div>
+                    <div class="gauge-ring">
+                        <svg viewBox="0 0 100 100">
+                            <circle class="gauge-bg" cx="50" cy="50" r="40"/>
+                            <circle class="gauge-fill" cx="50" cy="50" r="40"
+                                    stroke-dasharray="251.2"
+                                    stroke-dashoffset="251.2"
+                                    id="failover-gauge"
+                                    style="stroke: #81c784;"/>
+                        </svg>
+                        <div class="gauge-value">
+                            <span class="gauge-number" id="failover-count">0</span>
+                            <span class="gauge-unit">switches</span>
+                        </div>
+                    </div>
+                    <div class="gauge-status ok" id="failover-status">
+                        <i class="fas fa-check mr-1"></i>Max: 4/day
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- WAN Interface Cards -->
+        <div class="wan-cards">
+            <!-- Primary WAN -->
+            <div class="wan-card" id="primary-wan-card">
+                <div class="wan-card-header">
+                    <div class="wan-card-title">
+                        <div class="icon primary"><i class="fas fa-ethernet"></i></div>
+                        <div>
+                            <h4>Primary WAN</h4>
+                            <span class="interface" id="primary-interface">--</span>
+                        </div>
+                    </div>
+                    <span class="wan-status-badge" id="primary-status-badge">--</span>
+                </div>
+
+                <div class="health-bar-container">
+                    <div class="health-bar-label">
+                        <span>Health Score</span>
+                        <span id="primary-health-value">--%</span>
+                    </div>
+                    <div class="health-bar">
+                        <div class="health-bar-fill good" id="primary-health-bar" style="width: 0%;"></div>
+                    </div>
+                </div>
+
+                <div class="wan-metrics">
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="primary-rtt">--</div>
+                        <div class="wan-metric-label">RTT</div>
+                    </div>
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="primary-jitter">--</div>
+                        <div class="wan-metric-label">Jitter</div>
+                    </div>
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="primary-loss">--</div>
+                        <div class="wan-metric-label">Loss</div>
+                    </div>
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="primary-ip">--</div>
+                        <div class="wan-metric-label">IP</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Backup WAN -->
+            <div class="wan-card" id="backup-wan-card">
+                <div class="wan-card-header">
+                    <div class="wan-card-title">
+                        <div class="icon backup" id="backup-icon"><i class="fas fa-signal"></i></div>
+                        <div>
+                            <h4 id="backup-title">Backup WAN</h4>
+                            <span class="interface" id="backup-interface">--</span>
+                        </div>
+                    </div>
+                    <span class="wan-status-badge standby" id="backup-status-badge">--</span>
+                </div>
+
+                <div class="health-bar-container">
+                    <div class="health-bar-label">
+                        <span>Health Score</span>
+                        <span id="backup-health-value">--%</span>
+                    </div>
+                    <div class="health-bar">
+                        <div class="health-bar-fill warning" id="backup-health-bar" style="width: 0%;"></div>
+                    </div>
+                </div>
+
+                <div class="wan-metrics">
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="backup-rtt">--</div>
+                        <div class="wan-metric-label">RTT</div>
+                    </div>
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="backup-signal">--</div>
+                        <div class="wan-metric-label">Signal</div>
+                    </div>
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="backup-loss">--</div>
+                        <div class="wan-metric-label">Loss</div>
+                    </div>
+                    <div class="wan-metric">
+                        <div class="wan-metric-value" id="backup-ip">--</div>
+                        <div class="wan-metric-label">IP</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Interface Traffic (Financial Style) -->
+        <div class="traffic-chart-container">
+            <div class="traffic-chart-header">
+                <h4><i class="fas fa-chart-bar"></i>Interface Traffic (Real-time)</h4>
+                <div class="traffic-chart-legend">
+                    <div class="legend-item">
+                        <span class="legend-bar download"></span>
+                        <span>Download</span>
+                    </div>
+                    <div class="legend-item">
+                        <span class="legend-bar upload"></span>
+                        <span>Upload</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="traffic-interfaces">
+                <div class="loading-overlay">
+                    <div class="spinner"></div>
+                    <span>Loading interfaces...</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="row">
+            <!-- Cost Tracking -->
+            <div class="col-md-6">
+                <div class="cost-panel">
+                    <h4><i class="fas fa-dollar-sign mr-2"></i>LTE Data Budget (<span id="lte-interface-name">wwan0</span>)</h4>
+                    <div class="cost-grid">
+                        <div class="cost-item">
+                            <div class="cost-item-header">
+                                <span class="cost-item-label">Daily Usage</span>
+                                <span class="cost-item-value" id="daily-usage">-- MB</span>
+                            </div>
+                            <div class="cost-bar">
+                                <div class="cost-bar-fill" id="daily-bar" style="width: 0%; background: linear-gradient(90deg, #4caf50, #81c784);"></div>
+                            </div>
+                            <div style="font-size: 0.7rem; color: #888; margin-top: 0.25rem;">
+                                <span id="daily-budget">500 MB budget</span> · <span id="daily-pct">0%</span>
+                            </div>
+                        </div>
+                        <div class="cost-item">
+                            <div class="cost-item-header">
+                                <span class="cost-item-label">Monthly Usage</span>
+                                <span class="cost-item-value" id="monthly-usage">-- GB</span>
+                            </div>
+                            <div class="cost-bar">
+                                <div class="cost-bar-fill" id="monthly-bar" style="width: 0%; background: linear-gradient(90deg, #4caf50, #81c784);"></div>
+                            </div>
+                            <div style="font-size: 0.7rem; color: #888; margin-top: 0.25rem;">
+                                <span id="monthly-budget">10 GB budget</span> · <span id="monthly-pct">0%</span>
+                            </div>
+                        </div>
+                        <div class="cost-item">
+                            <div class="cost-item-header">
+                                <span class="cost-item-label">Current Cost</span>
+                                <span class="cost-item-value" id="current-cost">$0.00</span>
+                            </div>
+                            <div style="font-size: 0.75rem; color: #81c784; margin-top: 0.5rem;">
+                                <i class="fas fa-check-circle mr-1"></i>Under budget
+                            </div>
+                        </div>
+                        <div class="cost-item">
+                            <div class="cost-item-header">
+                                <span class="cost-item-label">Budget Remaining</span>
+                                <span class="cost-item-value" id="budget-remaining">$20.00</span>
+                            </div>
+                            <div style="font-size: 0.75rem; color: #888; margin-top: 0.5rem;">
+                                <i class="fas fa-info-circle mr-1"></i>$20/month total
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Failover Timeline -->
+            <div class="col-md-6">
+                <div class="failover-timeline">
+                    <h4><i class="fas fa-history mr-2"></i>Failover Timeline (24h)</h4>
+                    <div class="timeline-track">
+                        <div class="timeline-line"></div>
+                        <div class="timeline-event now" style="left: 95%;" title="Now"></div>
+                    </div>
+                    <div class="timeline-labels">
+                        <span>24h ago</span>
+                        <span>12h ago</span>
+                        <span>Now</span>
+                    </div>
+
+                    <div class="timeline-events-list" id="timeline-events">
+                        <div class="empty-state">
+                            <i class="fas fa-check-circle"></i>
+                            <p>No failover events in the last 24 hours</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</section>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// Traffic history for candlestick charts (keep last 30 samples)
+const trafficHistory = {};
+const MAX_HISTORY = 30;
+
+// Interface type icons
+const interfaceIcons = {
+    'wan': 'fa-ethernet',
+    'lte': 'fa-signal',
+    'bridge': 'fa-project-diagram',
+    'wifi': 'fa-wifi',
+    'vlan': 'fa-layer-group',
+};
+
+// Interface type colors
+const interfaceColors = {
+    'wan': '#4fc3f7',
+    'lte': '#ffb74d',
+    'bridge': '#ce93d8',
+    'wifi': '#81c784',
+    'vlan': '#64b5f6',
+};
+
+// Load SLA status
+async function loadSLAStatus() {
+    try {
+        const res = await fetch('/slaai/api/status');
+        const data = await res.json();
+
+        if (data.success) {
+            updateDashboard(data.status);
+        }
+    } catch (error) {
+        console.error('Error loading SLA status:', error);
+    }
+}
+
+// Load traffic data
+async function loadTrafficData() {
+    try {
+        const res = await fetch('/slaai/api/traffic');
+        const data = await res.json();
+
+        if (data.success) {
+            updateTrafficCharts(data.traffic, data.vlans);
+        }
+    } catch (error) {
+        console.error('Error loading traffic:', error);
+    }
+}
+
+function updateDashboard(status) {
+    // RTO
+    const rtoValue = status.rto_actual_s ?? '--';
+    document.getElementById('rto-value').textContent = typeof rtoValue === 'number' ? rtoValue.toFixed(1) : rtoValue;
+
+    // RPO
+    document.getElementById('rpo-value').textContent = status.rpo_actual_bytes ?? 0;
+
+    // Uptime
+    const uptime = status.uptime_pct ?? 99.9;
+    document.getElementById('uptime-value').textContent = uptime.toFixed(2);
+    updateGauge('uptime-gauge', uptime, uptime >= 99.9 ? '#81c784' : '#ffb74d');
+
+    // Failover count
+    document.getElementById('failover-count').textContent = status.failover_count_24h ?? 0;
+
+    // Primary WAN
+    updateWanCard('primary', status);
+
+    // Backup WAN
+    updateWanCard('backup', status);
+
+    // WAN card classes based on active state
+    const primaryCard = document.getElementById('primary-wan-card');
+    const backupCard = document.getElementById('backup-wan-card');
+
+    primaryCard.classList.remove('active', 'failed', 'standby');
+    backupCard.classList.remove('active', 'failed', 'standby');
+
+    if (status.primary_status === 'ACTIVE') {
+        primaryCard.classList.add('active');
+        backupCard.classList.add('standby');
+    } else if (status.primary_status === 'FAILED') {
+        primaryCard.classList.add('failed');
+        if (status.backup_status === 'ACTIVE') {
+            backupCard.classList.add('active');
+        }
+    }
+
+    // Cost tracking
+    if (status.cost_status) {
+        const cost = status.cost_status;
+        document.getElementById('lte-interface-name').textContent = cost.interface || 'wwan0';
+        document.getElementById('daily-usage').textContent = `${cost.daily_usage_mb || 0} MB`;
+        document.getElementById('monthly-usage').textContent = `${((cost.monthly_usage_mb || 0) / 1024).toFixed(1)} GB`;
+        document.getElementById('current-cost').textContent = `$${(cost.current_cost || 0).toFixed(2)}`;
+        document.getElementById('budget-remaining').textContent = `$${(cost.budget_remaining || 20).toFixed(2)}`;
+
+        const dailyPct = ((cost.daily_usage_mb || 0) / (cost.daily_budget_mb || 500)) * 100;
+        const monthlyPct = ((cost.monthly_usage_mb || 0) / (cost.monthly_budget_mb || 10240)) * 100;
+        document.getElementById('daily-bar').style.width = `${dailyPct}%`;
+        document.getElementById('monthly-bar').style.width = `${monthlyPct}%`;
+        document.getElementById('daily-pct').textContent = `${Math.round(dailyPct)}%`;
+        document.getElementById('monthly-pct').textContent = `${Math.round(monthlyPct)}%`;
+    }
+
+    // Timeline events
+    if (status.failover_history && status.failover_history.length > 0) {
+        updateTimeline(status.failover_history);
+    }
+}
+
+function updateWanCard(type, status) {
+    const prefix = type;
+    const iface = status[`${type}_interface`] || '--';
+    const health = status[`${type}_health`] || 0;
+    const statusText = status[`${type}_status`] || 'DOWN';
+    const rtt = status[`${type}_rtt`];
+    const jitter = status[`${type}_jitter`];
+    const signal = status[`${type}_signal`];
+    const loss = status[`${type}_loss`];
+    const ip = status[`${type}_ip`];
+    const isLte = status[`${type}_is_lte`] || false;
+
+    // Interface name
+    document.getElementById(`${prefix}-interface`).textContent = iface;
+
+    // Update backup title and icon based on interface type
+    if (type === 'backup') {
+        const titleEl = document.getElementById('backup-title');
+        const iconEl = document.getElementById('backup-icon');
+        if (isLte) {
+            titleEl.textContent = 'Backup WAN (LTE)';
+            iconEl.innerHTML = '<i class="fas fa-signal"></i>';
+        } else if (iface && iface !== '--') {
+            titleEl.textContent = 'Backup WAN';
+            iconEl.innerHTML = '<i class="fas fa-ethernet"></i>';
+        }
+    }
+
+    // Status badge
+    const badge = document.getElementById(`${prefix}-status-badge`);
+    badge.textContent = statusText === 'ACTIVE' ? '● ACTIVE' : (statusText === 'FAILED' ? '✕ FAILED' : '○ STANDBY');
+    badge.className = 'wan-status-badge ' + statusText.toLowerCase();
+
+    // Health
+    const healthPct = Math.round(health * 100);
+    document.getElementById(`${prefix}-health-value`).textContent = `${healthPct}%`;
+    const healthBar = document.getElementById(`${prefix}-health-bar`);
+    healthBar.style.width = `${healthPct}%`;
+    healthBar.className = 'health-bar-fill ' + (healthPct >= 80 ? 'good' : (healthPct >= 50 ? 'warning' : 'critical'));
+
+    // Metrics
+    document.getElementById(`${prefix}-rtt`).textContent = rtt ? `${rtt.toFixed(0)}ms` : '--';
+    if (type === 'primary') {
+        document.getElementById(`${prefix}-jitter`).textContent = jitter ? `${jitter.toFixed(1)}ms` : '--';
+    } else {
+        // For backup, show jitter if available (for ethernet backup), signal for LTE
+        const signalEl = document.getElementById(`${prefix}-signal`);
+        if (isLte && signal) {
+            signalEl.textContent = `${signal.toFixed(0)}dBm`;
+        } else if (jitter) {
+            signalEl.textContent = `${jitter.toFixed(1)}ms`;
+        } else {
+            signalEl.textContent = '--';
+        }
+    }
+    document.getElementById(`${prefix}-loss`).textContent = typeof loss === 'number' ? `${loss}%` : '--';
+    document.getElementById(`${prefix}-ip`).textContent = ip ? ip.split('/')[0] : '--';
+}
+
+function updateTrafficCharts(traffic, vlans) {
+    const container = document.getElementById('traffic-interfaces');
+
+    if (!traffic || traffic.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-network-wired"></i>
+                <p>No active interfaces detected</p>
+            </div>
+        `;
+        return;
+    }
+
+    // Group by type
+    const grouped = {
+        wan: traffic.filter(t => t.type === 'wan'),
+        lte: traffic.filter(t => t.type === 'lte'),
+        bridge: traffic.filter(t => t.type === 'bridge'),
+        wifi: traffic.filter(t => t.type === 'wifi'),
+        vlan: traffic.filter(t => t.type === 'vlan'),
+    };
+
+    let html = '';
+
+    // WAN Section
+    if (grouped.wan.length > 0 || grouped.lte.length > 0) {
+        html += `<div class="traffic-section-header"><i class="fas fa-globe"></i>WAN Interfaces</div>`;
+        [...grouped.wan, ...grouped.lte].forEach(iface => {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // Bridge & WiFi Section
+    if (grouped.bridge.length > 0 || grouped.wifi.length > 0) {
+        html += `<div class="traffic-section-header"><i class="fas fa-project-diagram"></i>Bridge & WiFi</div>`;
+        [...grouped.bridge, ...grouped.wifi].forEach(iface => {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // VLAN Section
+    if (grouped.vlan.length > 0) {
+        html += `<div class="traffic-section-header"><i class="fas fa-layer-group"></i>VLANs</div>`;
+        grouped.vlan.forEach(iface => {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    container.innerHTML = html;
+
+    // Update candlestick charts with history
+    traffic.forEach(iface => {
+        updateCandlestickHistory(iface);
+        renderCandlesticks(iface.interface);
+    });
+}
+
+function renderInterfaceRow(iface) {
+    const icon = interfaceIcons[iface.type] || 'fa-network-wired';
+    const color = interfaceColors[iface.type] || '#888';
+
+    return `
+        <div class="interface-traffic-row" data-interface="${iface.interface}">
+            <div class="interface-info">
+                <div class="interface-name">
+                    <i class="fas ${icon}" style="color: ${color};"></i>
+                    ${iface.interface}
+                </div>
+                <div class="interface-type">${iface.type.toUpperCase()}</div>
+            </div>
+            <div class="candlestick-chart" id="chart-${iface.interface}"></div>
+            <div class="traffic-values">
+                <div class="traffic-value">
+                    <div class="traffic-value-number download" id="dl-${iface.interface}">${iface.rx_mbps || 0} Mbps</div>
+                    <div class="traffic-value-label">↓ Download</div>
+                </div>
+                <div class="traffic-value">
+                    <div class="traffic-value-number upload" id="ul-${iface.interface}">${iface.tx_mbps || 0} Mbps</div>
+                    <div class="traffic-value-label">↑ Upload</div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function updateCandlestickHistory(iface) {
+    if (!trafficHistory[iface.interface]) {
+        trafficHistory[iface.interface] = [];
+    }
+
+    trafficHistory[iface.interface].push({
+        rx: iface.rx_mbps || 0,
+        tx: iface.tx_mbps || 0,
+        time: Date.now()
+    });
+
+    // Keep only last N samples
+    if (trafficHistory[iface.interface].length > MAX_HISTORY) {
+        trafficHistory[iface.interface].shift();
+    }
+}
+
+function renderCandlesticks(ifaceName) {
+    const container = document.getElementById(`chart-${ifaceName}`);
+    if (!container) return;
+
+    const history = trafficHistory[ifaceName] || [];
+    if (history.length === 0) {
+        container.innerHTML = '<div class="empty-state" style="padding: 0.5rem; font-size: 0.75rem;">Waiting for data...</div>';
+        return;
+    }
+
+    // Find max for scaling
+    const maxVal = Math.max(
+        ...history.map(h => Math.max(h.rx, h.tx)),
+        1  // Minimum to avoid division by zero
+    );
+
+    // Render candlesticks
+    let html = '';
+    history.forEach((sample, i) => {
+        const dlHeight = Math.min(40, (sample.rx / maxVal) * 35);
+        const ulHeight = Math.min(40, (sample.tx / maxVal) * 35);
+
+        html += `
+            <div class="candlestick" title="${sample.rx.toFixed(1)} Mbps ↓ / ${sample.tx.toFixed(1)} Mbps ↑">
+                <div class="candlestick-body">
+                    <div class="candlestick-download" style="height: ${dlHeight}px;"></div>
+                    <div class="candlestick-upload" style="height: ${ulHeight}px;"></div>
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+
+    // Update current values
+    const latest = history[history.length - 1];
+    const dlEl = document.getElementById(`dl-${ifaceName}`);
+    const ulEl = document.getElementById(`ul-${ifaceName}`);
+    if (dlEl) dlEl.textContent = `${latest.rx.toFixed(1)} Mbps`;
+    if (ulEl) ulEl.textContent = `${latest.tx.toFixed(1)} Mbps`;
+}
+
+function updateGauge(id, percent, color) {
+    const gauge = document.getElementById(id);
+    if (gauge) {
+        const circumference = 2 * Math.PI * 40;
+        const offset = circumference * (1 - percent / 100);
+        gauge.style.strokeDashoffset = offset;
+        gauge.style.stroke = color;
+    }
+}
+
+function updateTimeline(events) {
+    const container = document.getElementById('timeline-events');
+    if (!container || !events.length) return;
+
+    container.innerHTML = events.map(event => {
+        const time = new Date(event.timestamp);
+        const timeStr = time.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
+        const typeClass = event.type === 'failover' ? 'failover' : 'failback';
+        const icon = event.type === 'failover' ? 'fa-arrow-right' : 'fa-arrow-left';
+
+        return `
+            <div class="timeline-event-item">
+                <div class="event-icon ${typeClass}">
+                    <i class="fas ${icon}"></i>
+                </div>
+                <div class="event-details">
+                    <div class="event-type">${event.type.charAt(0).toUpperCase() + event.type.slice(1)}</div>
+                    <div class="event-reason">${event.reason || 'Manual switch'}</div>
+                </div>
+                <div class="event-time">
+                    ${timeStr}
+                    <div class="event-duration">${event.duration_s || 0}s</div>
+                </div>
+            </div>
+        `;
+    }).join('');
+}
+
+// Initialize
+document.addEventListener('DOMContentLoaded', function() {
+    loadSLAStatus();
+    loadTrafficData();
+
+    // Refresh status every 5 seconds
+    setInterval(loadSLAStatus, 5000);
+
+    // Refresh traffic every 2 seconds for smoother charts
+    setInterval(loadTrafficData, 2000);
+});
+</script>
+{% endblock %}

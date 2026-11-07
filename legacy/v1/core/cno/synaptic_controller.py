@@ -1,0 +1,1038 @@
+"""
+Synaptic Controller — The Thalamus
+
+The ONLY component that spans all three biological layers.
+Routes events from Cerebellum to the correct Cerebrum processing region,
+and feedback from Cerebrum back to Brainstem BPF maps.
+
+Upward routing (Cerebellum → Cerebrum):
+    - High risk velocity → Cognitive Defense (frontal lobe)
+    - Novel/unknown patterns → Multi-RAG Consensus
+    - App deviations → Session Analyzer (Wernicke's area)
+    - Temporal drift → Temporal Memory
+    - Kill chain advancement → Entity Graph (SIA engine)
+
+Downward routing (Cerebrum → Brainstem):
+    - BLOCK action → XDP blocklist map
+    - ALLOW action → XDP allowlist map
+    - CAMOUFLAGE → camo_config BPF map
+    - STRESS_UPDATE → stress_level BPF map
+    - RETRAIN → model weight updates
+
+Integration:
+    - Reads from: NAPSE EventBus, HYDRA verdicts, AEGIS signals
+    - Writes to: BPF maps (via bpf_map_ops), ClickHouse (audit log)
+    - Coordinates: StressGauge, PacketSIEM, CognitiveDefense
+
+Author: HookProbe Team
+License: Proprietary
+Version: 1.0.0
+"""
+
+import ipaddress
+import logging
+import os
+import re
+import socket
+import struct
+import threading
+import time
+from collections import deque
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+from urllib.request import Request, urlopen
+
+from .types import (
+    BPFMapWrite,
+    BrainLayer,
+    EmotionState,
+    PacketSnapshot,
+    StressSignal,
+    StressState,
+    SynapticEvent,
+    SynapticRoute,
+)
+
+logger = logging.getLogger(__name__)
+
+# =============================================================================
+# Thalamus Priority Tiers (Phase 2-U C2)
+# =============================================================================
+# The SynapticController is the thalamus. To formalize the v1.3 "priority =
+# biology" principle, every event is classified into one of three tiers:
+#
+#   TIER_AUTONOMIC (P0) — reflex/wire-speed. XDP writes, stress commits.
+#                         Cannot be blocked by ANY other tier.
+#   TIER_SOMATIC  (P1) — coordination/working memory. Cerebellum signals.
+#                         Cannot be blocked by cognitive tier.
+#   TIER_COGNITIVE (P2) — reasoning/content. Multi-RAG consensus, SEO work.
+#                         Bounded queue share; P2 flood cannot displace P0/P1.
+#
+# Priority classification:
+#   int priority 0-3  → TIER_AUTONOMIC
+#   int priority 4-6  → TIER_SOMATIC
+#   int priority 7+   → TIER_COGNITIVE
+#
+# Backpressure caps (tier-weighted queue admission):
+#   P0 always admitted up to MAX_QUEUE_SIZE
+#   P1 admitted up to 70% of MAX_QUEUE_SIZE
+#   P2 admitted up to 40% of MAX_QUEUE_SIZE
+#
+# This guarantees that a P2 flood (e.g. SEO embedding burst) can never fill
+# the queue to the point of dropping incoming P0 (XDP commit) events.
+# =============================================================================
+
+TIER_AUTONOMIC = 'autonomic'
+TIER_SOMATIC = 'somatic'
+TIER_COGNITIVE = 'cognitive'
+
+TIER_ADMIT_FRACTION: Dict[str, float] = {
+    TIER_AUTONOMIC: 1.00,
+    TIER_SOMATIC: 0.70,
+    TIER_COGNITIVE: 0.40,
+}
+
+
+def classify_tier(priority: int) -> str:
+    """Map integer priority to a thalamus tier."""
+    if priority <= 3:
+        return TIER_AUTONOMIC
+    if priority <= 6:
+        return TIER_SOMATIC
+    return TIER_COGNITIVE
+
+# BPF map operations — import from HYDRA's bpf_map_ops.py
+_BPF_AVAILABLE = False
+_bpf_ops = None
+try:
+    import sys as _sys
+    _hydra_path = os.environ.get('HYDRA_PATH', '/home/ubuntu/hookprobe/core/hydra')
+    if _hydra_path not in _sys.path:
+        _sys.path.insert(0, _hydra_path)
+    from bpf_map_ops import BpfMapOps as _BPFMapOps  # Phase 6: fixed case (was BPFMapOps)
+    _bpf_ops = _BPFMapOps()
+    _BPF_AVAILABLE = True
+    logger.info("BPF map ops loaded from %s", _hydra_path)
+except ImportError:
+    logger.info("BPF map ops unavailable — BPF writes will be logged only")
+except Exception as _e:
+    logger.warning("BPF map ops init failed: %s — writes will be logged only", _e)
+
+# IPv4 validation
+_IPV4_RE = re.compile(
+    r'^(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}'
+    r'(?:25[0-5]|2[0-4]\d|[01]?\d\d?)$'
+)
+
+# ClickHouse config
+CH_HOST = os.environ.get('CLICKHOUSE_HOST', '127.0.0.1')
+CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
+CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
+CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
+CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_post as _ch_post
+
+# Validate CH_DB is a safe identifier
+if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
+    raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
+
+# Private/reserved IP ranges — never block these
+_RESERVED_NETS = [
+    ipaddress.ip_network('10.0.0.0/8'),
+    ipaddress.ip_network('172.16.0.0/12'),
+    ipaddress.ip_network('192.168.0.0/16'),
+    ipaddress.ip_network('127.0.0.0/8'),
+    ipaddress.ip_network('169.254.0.0/16'),
+]
+
+
+def _is_reserved(ip_str: str) -> bool:
+    """Check if IP is private/reserved (never block)."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return any(addr in net for net in _RESERVED_NETS)
+    except ValueError:
+        return True  # Invalid IP = treat as reserved (don't block)
+
+
+class SynapticController:
+    """The thalamus — central relay between all three brain layers.
+
+    Thread-safe event queue with priority-based dispatching.
+    Routes upward (sensory → cognition) and downward (decision → reflex).
+    """
+
+    MAX_QUEUE_SIZE = 10_000
+    DISPATCH_INTERVAL_S = 0.1          # 100ms dispatch cycle
+    BPF_BATCH_INTERVAL_S = 1.0         # Batch BPF writes every 1s
+    AUDIT_FLUSH_INTERVAL_S = 30.0      # Flush audit log every 30s
+    MAX_BPF_WRITES_PER_BATCH = 50      # Rate limit BPF operations
+    # Phase 17: blocklist capacity management
+    MAX_BLOCKLIST_SIZE = 65_536         # Match BPF LPM_TRIE max_entries
+    BLOCKLIST_EVICT_INTERVAL_S = 300   # Check every 5 min
+
+    def __init__(self):
+        # Event queue (priority-sorted: lower number = higher priority)
+        self._queue: deque = deque(maxlen=self.MAX_QUEUE_SIZE)
+        self._lock = threading.Lock()
+
+        # Upward route handlers: SynapticRoute → callback(SynapticEvent)
+        self._upward_handlers: Dict[SynapticRoute, Callable] = {}
+        # Downward BPF write queue
+        self._bpf_queue: deque = deque(maxlen=1000)
+        self._bpf_lock = threading.Lock()
+
+        # Audit buffer for ClickHouse
+        self._audit_buffer: List[Dict[str, Any]] = []
+        self._audit_lock = threading.Lock()
+
+        # Stats
+        self._stats = {
+            'events_received': 0,
+            'events_dispatched': 0,
+            'events_dropped': 0,
+            'bpf_writes': 0,
+            'bpf_errors': 0,
+            'upward_routes': 0,
+            'downward_routes': 0,
+        }
+
+        # Phase 2-U C2: per-tier metrics (autonomic/somatic/cognitive)
+        self._tier_stats: Dict[str, Dict[str, int]] = {
+            TIER_AUTONOMIC: {'received': 0, 'dispatched': 0, 'dropped': 0},
+            TIER_SOMATIC:   {'received': 0, 'dispatched': 0, 'dropped': 0},
+            TIER_COGNITIVE: {'received': 0, 'dispatched': 0, 'dropped': 0},
+        }
+        # Rolling queue depth by tier (updated on submit/dispatch for
+        # backpressure calculation — separate from the single _queue deque)
+        self._tier_queue_depth: Dict[str, int] = {
+            TIER_AUTONOMIC: 0,
+            TIER_SOMATIC: 0,
+            TIER_COGNITIVE: 0,
+        }
+
+        self._running = False
+        self._threads: List[threading.Thread] = []
+
+        # Phase 17: blocklist TTL tracking for dedup + auto-eviction
+        self._blocklist_ttl: Dict[str, float] = {}  # ip → expire_timestamp
+        self._blocklist_lock = threading.Lock()
+        self._last_evict_time = 0.0
+        self._blocklist_stats = {
+            'dedup_hits': 0,
+            'evictions': 0,
+            'pressure_evictions': 0,
+        }
+
+        logger.info("SynapticController initialized with tier backpressure")
+
+    # ------------------------------------------------------------------
+    # Registration
+    # ------------------------------------------------------------------
+
+    def register_handler(self, route: SynapticRoute,
+                         handler: Callable[[SynapticEvent], None]) -> None:
+        """Register a handler for a specific route.
+
+        The handler will be called when events are dispatched to this route.
+        """
+        self._upward_handlers[route] = handler
+        logger.info("Handler registered for route: %s", route.value)
+
+    # ------------------------------------------------------------------
+    # Event Submission
+    # ------------------------------------------------------------------
+
+    def submit(self, event: SynapticEvent) -> bool:
+        """Submit an event to the synaptic queue.
+
+        Thread-safe. Returns False if the tier-weighted admission cap rejects
+        the event. P0 events are always admitted (up to MAX_QUEUE_SIZE). P1
+        is capped at 70% of MAX_QUEUE_SIZE. P2 is capped at 40%.
+
+        This guarantees that a P2 flood can never starve P0 events.
+        """
+        tier = classify_tier(event.priority)
+        admit_cap = int(self.MAX_QUEUE_SIZE * TIER_ADMIT_FRACTION[tier])
+
+        with self._lock:
+            total_depth = len(self._queue)
+            tier_depth = self._tier_queue_depth[tier]
+
+            # Hard cap: if total queue is full, drop (even P0 can't escape this)
+            if total_depth >= self.MAX_QUEUE_SIZE:
+                self._stats['events_dropped'] += 1
+                self._tier_stats[tier]['dropped'] += 1
+                return False
+
+            # Tier-weighted backpressure: P1/P2 rejected when their share
+            # of the queue would exceed their admission cap. P0 skips this
+            # check (always accepted up to the hard cap above).
+            if tier != TIER_AUTONOMIC and tier_depth >= admit_cap:
+                self._stats['events_dropped'] += 1
+                self._tier_stats[tier]['dropped'] += 1
+                return False
+
+            self._queue.append(event)
+            self._stats['events_received'] += 1
+            self._tier_stats[tier]['received'] += 1
+            self._tier_queue_depth[tier] += 1
+        return True
+
+    def submit_upward(self, source_layer: BrainLayer, route: SynapticRoute,
+                      event_type: str, priority: int = 5,
+                      source_ip: str = "", dest_ip: str = "",
+                      payload: Optional[Dict[str, Any]] = None) -> bool:
+        """Convenience: create and submit an upward-bound event."""
+        event = SynapticEvent(
+            source_layer=source_layer,
+            route=route,
+            priority=priority,
+            event_type=event_type,
+            source_ip=source_ip,
+            dest_ip=dest_ip,
+            payload=payload or {},
+        )
+        return self.submit(event)
+
+    def submit_downward(self, route: SynapticRoute, source_ip: str,
+                        action: str, ttl_seconds: int = 3600,
+                        reason: str = "", priority: int = 3,
+                        payload: Optional[Dict[str, Any]] = None) -> bool:
+        """Convenience: submit a downward (Cerebrum → Brainstem) event."""
+        event = SynapticEvent(
+            source_layer=BrainLayer.CEREBRUM,
+            route=route,
+            priority=priority,
+            event_type=f"feedback.{action}",
+            source_ip=source_ip,
+            payload={
+                'action': action,
+                'ttl_seconds': ttl_seconds,
+                'reason': reason,
+                **(payload or {}),
+            },
+        )
+        return self.submit(event)
+
+    # ------------------------------------------------------------------
+    # BPF Map Operations (Brainstem feedback)
+    # ------------------------------------------------------------------
+
+    def queue_bpf_write(self, write: BPFMapWrite) -> None:
+        """Queue a BPF map write for batched execution."""
+        with self._bpf_lock:
+            self._bpf_queue.append(write)
+
+    # Phase 26c: eviction class hierarchy. Higher numbers = more protected.
+    EVICTION_CLASS_PROVISIONAL = 0   # Phase 21 quarantine, evict first
+    EVICTION_CLASS_NORMAL = 1        # Default single-source verdict
+    EVICTION_CLASS_PROTECTED = 2     # Mesh-voted (2+ peers) or high-rate confirmed
+
+    # Phase H.C1 — Alexandria Agency adoption. No-op when Alexandria is
+    # absent (Sentinel tier, dev rig); routes through Warden + Gatekeeper
+    # when ids-alexandria-agency is on PYTHONPATH.
+    from core.agency_shim import ActionKind as _AK, agency_gated as _gated
+
+    @_gated(kind=_AK.BLOCK_IP, proposer="cno.synaptic_controller")
+    def push_to_blocklist(self, ip: str, ttl_seconds: int = 3600,
+                          reason: str = "",
+                          eviction_class: int = EVICTION_CLASS_NORMAL) -> bool:
+        """Queue an IP for XDP blocklist insertion.
+
+        Phase 17: dedup + TTL tracking + memory pressure eviction.
+        Phase 26c: eviction class — PROTECTED entries (mesh-voted or
+        high-rate confirmed) survive pressure eviction; PROVISIONAL
+        (quarantine) and NORMAL evict first under attack.
+
+        This mitigates the /16 flood attack: attacker floods 70K fake IPs
+        as singletons → all NORMAL/PROVISIONAL → evicted first → real
+        PROTECTED C2 block survives.
+
+        Args:
+            ip: IPv4 address to block
+            ttl_seconds: time-to-live in seconds
+            reason: human-readable reason (also used to infer class
+                    if the prefix is "PROVISIONAL:" — Phase 21 quarantine)
+            eviction_class: PROVISIONAL (0) | NORMAL (1) | PROTECTED (2)
+        """
+        if not _IPV4_RE.match(ip):
+            logger.warning("Invalid IP for blocklist: %r", ip)
+            return False
+
+        if _is_reserved(ip):
+            logger.warning("Refusing to block reserved IP: %s", ip)
+            return False
+
+        # Auto-classify from reason prefix (Phase 21 integration)
+        if reason.startswith("PROVISIONAL:"):
+            eviction_class = self.EVICTION_CLASS_PROVISIONAL
+        elif "mesh consensus" in reason.lower() or "bft" in reason.lower():
+            eviction_class = self.EVICTION_CLASS_PROTECTED
+
+        # SSOL B4 — precision-gated governor. OBSERVE by default (logs only);
+        # only suppresses when B4_GOVERNOR_ENFORCE=1 and rolling FPR is high.
+        # FIGHT-reflex and PROTECTED blocks always bypass.
+        _b4_governor.check_and_update()
+        if not _b4_governor.allow_block(ip, reason, eviction_class):
+            return False
+
+        now = time.time()
+
+        with self._blocklist_lock:
+            # Dedup: skip if already blocked and not expired
+            if ip in self._blocklist_ttl:
+                existing = self._blocklist_ttl[ip]
+                if existing['expiry'] > now:
+                    # Upgrade class if new reason is more protected
+                    if eviction_class > existing.get('class', 1):
+                        existing['class'] = eviction_class
+                    self._blocklist_stats['dedup_hits'] += 1
+                    return True
+
+            # Memory pressure: evict CLASS-AWARE if at capacity
+            if len(self._blocklist_ttl) >= self.MAX_BLOCKLIST_SIZE:
+                self._pressure_evict_oldest(self.MAX_BLOCKLIST_SIZE // 10)
+
+        # Pack for LPM_TRIE: prefixlen (u32 LE) + addr (network byte order)
+        try:
+            key = struct.pack('<I', 32) + socket.inet_aton(ip)
+            value = struct.pack('<I', 1)
+        except (ValueError, struct.error) as e:
+            logger.error("Failed to pack IP %s: %s", ip, e)
+            return False
+
+        with self._blocklist_lock:
+            self._blocklist_ttl[ip] = {
+                'expiry': now + ttl_seconds,
+                'class': eviction_class,
+                'inserted': now,
+            }
+
+        self.queue_bpf_write(BPFMapWrite(
+            map_name='blocklist',
+            key=key,
+            value=value,
+            ttl_seconds=ttl_seconds,
+            reason=reason,
+        ))
+        return True
+
+    def _evict_expired_blocklist(self) -> int:
+        """Remove expired IPs from the XDP blocklist.
+
+        Phase 17: called periodically from the dispatch loop.
+        Deletes expired entries from both the tracking dict and the
+        BPF LPM_TRIE map (kernel 6.17 supports LPM_TRIE delete).
+        """
+        now = time.time()
+        with self._blocklist_lock:
+            # Phase 26c: entries are now dicts {expiry, class, inserted}
+            expired = [
+                ip for ip, meta in self._blocklist_ttl.items()
+                if (meta['expiry'] if isinstance(meta, dict) else meta) <= now
+            ]
+        evicted = 0
+
+        for ip in expired:
+            self._delete_from_blocklist(ip)
+            evicted += 1
+
+        if evicted > 0:
+            self._blocklist_stats['evictions'] += evicted
+            with self._blocklist_lock:
+                active = len(self._blocklist_ttl)
+            logger.info("BLOCKLIST: evicted %d expired IPs (%d active)",
+                        evicted, active)
+        return evicted
+
+    def _pressure_evict_oldest(self, count: int) -> int:
+        """Evict entries under memory pressure — CLASS-AWARE (Phase 26c).
+
+        Sort key: (eviction_class ASC, expiry ASC). PROVISIONAL evicts first,
+        then NORMAL, then PROTECTED. Within each class, soonest-to-expire
+        evicts first. This mitigates the /16 flood attack where attacker
+        floods 70K singleton fake-malicious IPs to evict real C2 blocks.
+
+        Must be called with _blocklist_lock held.
+        """
+        if not self._blocklist_ttl:
+            return 0
+
+        def _sort_key(item):
+            ip, meta = item
+            if isinstance(meta, dict):
+                return (meta.get('class', 1), meta['expiry'])
+            # Backward-compat with old tuple format
+            return (1, meta)
+
+        oldest = sorted(self._blocklist_ttl.items(), key=_sort_key)
+        to_evict = [ip for ip, _ in oldest[:count]]
+        evicted = 0
+
+        # Track per-class eviction counts for visibility
+        class_evicts = {0: 0, 1: 0, 2: 0}
+        for ip in to_evict:
+            meta = self._blocklist_ttl.get(ip)
+            cls = meta.get('class', 1) if isinstance(meta, dict) else 1
+            class_evicts[cls] = class_evicts.get(cls, 0) + 1
+            del self._blocklist_ttl[ip]
+            evicted += 1
+
+        self._blocklist_stats['pressure_evictions'] += evicted
+        logger.warning(
+            "BLOCKLIST: pressure-evicted %d entries "
+            "(provisional=%d normal=%d protected=%d, %d active, max %d)",
+            evicted, class_evicts[0], class_evicts[1], class_evicts[2],
+            len(self._blocklist_ttl), self.MAX_BLOCKLIST_SIZE)
+        return evicted
+
+    def _delete_from_blocklist(self, ip: str) -> bool:
+        """Delete a single IP from the BPF blocklist map and tracking dict.
+
+        Phase 17: uses bpf_map_ops.map_delete() for real kernel eviction.
+        Kernel 6.17 supports BPF_MAP_DELETE_ELEM on LPM_TRIE maps.
+        """
+        try:
+            key = struct.pack('<I', 32) + socket.inet_aton(ip)
+            if _BPF_AVAILABLE and _bpf_ops:
+                map_id = _bpf_ops.find_map_by_name('blocklist')
+                if map_id is not None:
+                    _bpf_ops.map_delete(map_id, key)
+            with self._blocklist_lock:
+                self._blocklist_ttl.pop(ip, None)
+            return True
+        except Exception as e:
+            logger.debug("Blocklist delete error for %s: %s", ip, e)
+            with self._blocklist_lock:
+                self._blocklist_ttl.pop(ip, None)
+            return False
+
+    def update_stress_level(self, state: StressState) -> None:
+        """Push stress state to the BPF stress_level map.
+
+        Map layout: ARRAY[0] = stress_level (u8)
+        0=CALM, 1=ALERT, 2=FIGHT, 3=RECOVERY
+        """
+        state_map = {
+            StressState.CALM: 0,
+            StressState.ALERT: 1,
+            StressState.FIGHT: 2,
+            StressState.RECOVERY: 3,
+        }
+        key = struct.pack('<I', 0)
+        value = struct.pack('<B', state_map.get(state, 0))
+
+        self.queue_bpf_write(BPFMapWrite(
+            map_name='stress_level',
+            key=key,
+            value=value,
+            reason=f'stress_state={state.value}',
+        ))
+
+    def _flush_bpf_writes(self) -> int:
+        """Execute pending BPF map writes.
+
+        Uses bpf_map_ops.py for raw syscall access (no bpftool dependency).
+        Returns number of successful writes.
+        """
+        with self._bpf_lock:
+            if not self._bpf_queue:
+                return 0
+            batch = []
+            for _ in range(min(len(self._bpf_queue), self.MAX_BPF_WRITES_PER_BATCH)):
+                batch.append(self._bpf_queue.popleft())
+
+        success = 0
+        for write in batch:
+            try:
+                ok = self._execute_bpf_write(write)
+                if ok:
+                    self._stats['bpf_writes'] += 1
+                    success += 1
+                else:
+                    self._stats['bpf_errors'] += 1
+
+                self._audit(
+                    event_type='bpf_write',
+                    details={
+                        # source_layer and route are top-level columns in
+                        # cno_synaptic_log — without them this audit row
+                        # would render as an anonymous "(empty label)" in
+                        # the dashboard's High-Priority Memory Sectors list.
+                        'source_layer': 'brainstem',
+                        'route': SynapticRoute.for_bpf_map(write.map_name),
+                        'map_name': write.map_name,
+                        'operation': write.operation,
+                        'reason': write.reason,
+                        'ttl_seconds': write.ttl_seconds,
+                        'success': ok,
+                    },
+                )
+
+            except Exception as e:
+                logger.error("BPF write failed for map %s: %s", write.map_name, e)
+                self._stats['bpf_errors'] += 1
+
+        return success
+
+    def _execute_bpf_write(self, write: BPFMapWrite) -> bool:
+        """Execute a single BPF map write via bpf_map_ops or log-only fallback."""
+        if _BPF_AVAILABLE and _bpf_ops:
+            try:
+                if write.map_name in ('blocklist', 'allowlist'):
+                    # LPM_TRIE update via bpf_map_ops
+                    ok = _bpf_ops.map_update_by_name(
+                        write.map_name, write.key, write.value
+                    )
+                    return ok
+                elif write.map_name in ('stress_level', 'camo_config'):
+                    # ARRAY map update — these maps only exist when the
+                    # xdp_flow_ctrl program is loaded. On systems with
+                    # only xdp_hydra + xdp_synwall, the maps don't exist.
+                    # Check first to avoid 13+ WARNING logs per session.
+                    if _bpf_ops.find_map_by_name(write.map_name) is None:
+                        return True  # Silently skip — program not loaded
+                    ok = _bpf_ops.map_update_by_name(
+                        write.map_name, write.key, write.value
+                    )
+                    return ok
+                else:
+                    logger.debug("Unknown BPF map: %s", write.map_name)
+                    return False
+            except Exception as e:
+                logger.error("BPF ops error for %s: %s", write.map_name, e)
+                return False
+        else:
+            # Fallback: log-only mode (BPF ops unavailable)
+            logger.debug(
+                "BPF write (log-only): map=%s op=%s reason=%s",
+                write.map_name, write.operation, write.reason,
+            )
+            return True  # Count as success for stats in dev mode
+
+    # ------------------------------------------------------------------
+    # Upward Routing (Sensory → Cognition)
+    # ------------------------------------------------------------------
+
+    def route_upward(self, event: SynapticEvent) -> bool:
+        """Route an event to its registered Cerebrum handler."""
+        handler = self._upward_handlers.get(event.route)
+        if not handler:
+            logger.debug("No handler for route %s, event dropped", event.route.value)
+            return False
+
+        start = time.monotonic()
+        try:
+            handler(event)
+            elapsed_us = int((time.monotonic() - start) * 1_000_000)
+            event.processed = True
+            event.processing_time_us = elapsed_us
+            self._stats['upward_routes'] += 1
+
+            self._audit(
+                event_type='upward_route',
+                details={
+                    'route': event.route.value,
+                    'source_layer': event.source_layer.value,
+                    'event_type': event.event_type,
+                    'source_ip': event.source_ip,
+                    'processing_us': elapsed_us,
+                },
+            )
+            return True
+
+        except Exception as e:
+            logger.error("Handler %s failed: %s", event.route.value, e)
+            return False
+
+    # ------------------------------------------------------------------
+    # Downward Routing (Cognition → Reflex)
+    # ------------------------------------------------------------------
+
+    def route_downward(self, event: SynapticEvent) -> bool:
+        """Route a Cerebrum decision to the Brainstem for execution."""
+        action = event.payload.get('action', '')
+        ip = event.source_ip
+        ttl = event.payload.get('ttl_seconds', 3600)
+        reason = event.payload.get('reason', event.event_type)
+
+        routed = False
+
+        if event.route == SynapticRoute.XDP_BLOCKLIST:
+            routed = self.push_to_blocklist(ip, ttl, reason)
+            if routed:
+                logger.info("BLOCK %s for %ds: %s", ip, ttl, reason)
+
+        elif event.route == SynapticRoute.XDP_ALLOWLIST:
+            if _IPV4_RE.match(ip):
+                key = struct.pack('<I', 32) + socket.inet_aton(ip)
+                value = struct.pack('<I', 1)
+                self.queue_bpf_write(BPFMapWrite(
+                    map_name='allowlist', key=key, value=value,
+                    reason=reason,
+                ))
+                routed = True
+
+        elif event.route == SynapticRoute.XDP_FLOW_CTRL:
+            stress = event.payload.get('stress_state')
+            if stress and isinstance(stress, StressState):
+                self.update_stress_level(stress)
+                routed = True
+
+        elif event.route == SynapticRoute.XDP_CAMOUFLAGE:
+            # Future Phase 2: push to camo_config BPF map
+            logger.debug("Camouflage request queued (Phase 2): %s", event.payload)
+            routed = True
+
+        elif event.route == SynapticRoute.BASELINE_UPDATE:
+            # Cerebellum feedback — update Welford profile
+            logger.debug("Baseline update for %s (delegated)", ip)
+            routed = True
+
+        elif event.route == SynapticRoute.SCRIBE:
+            # Content generation pipeline
+            logger.debug("SCRIBE content request: %s", event.event_type)
+            routed = True
+
+        if routed:
+            self._stats['downward_routes'] += 1
+            self._audit(
+                event_type='downward_route',
+                details={
+                    # Downward routes originate in the cerebrum and flow
+                    # to the brainstem. Previously this audit row had an
+                    # empty source_layer because it wasn't passed through.
+                    'source_layer': 'cerebrum',
+                    'route': event.route.value,
+                    'action': action,
+                    'source_ip': ip,
+                    'ttl_seconds': ttl,
+                    'reason': reason,
+                },
+            )
+
+        return routed
+
+    # ------------------------------------------------------------------
+    # Main Dispatch Loop
+    # ------------------------------------------------------------------
+
+    def _dispatch_loop(self) -> None:
+        """Main event dispatch loop (runs in dedicated thread).
+
+        Gap 1 fix: upward routing (cognitive handlers like Multi-RAG) is
+        now dispatched to a ThreadPoolExecutor instead of being called
+        inline. Multi-RAG evaluate() takes ~189ms per call — calling it
+        synchronously blocked the entire dispatch loop, causing 86% event
+        drop rate and 100% queue fill.
+
+        Downward routing (BPF writes, blocklist) stays synchronous because
+        it's fast (<1ms) and order-sensitive.
+
+        The handler pool has max_workers=4 so up to 4 cognitive evaluations
+        run in parallel. Each handler completion decrements the tier depth
+        counter asynchronously via the done callback.
+        """
+        from concurrent.futures import ThreadPoolExecutor
+        logger.info("Synaptic dispatch loop started (async handlers, 4 workers)")
+        last_bpf_flush = time.monotonic()
+        last_audit_flush = time.monotonic()
+
+        # Handler pool for slow cognitive work (Multi-RAG, CognitiveDefense)
+        handler_pool = ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="cno-handler",
+        )
+
+        _DOWNWARD_ROUTES = frozenset((
+            SynapticRoute.XDP_BLOCKLIST,
+            SynapticRoute.XDP_ALLOWLIST,
+            SynapticRoute.XDP_CAMOUFLAGE,
+            SynapticRoute.XDP_FLOW_CTRL,
+            SynapticRoute.BASELINE_UPDATE,
+            SynapticRoute.SCRIBE,
+        ))
+
+        def _handle_upward(event: SynapticEvent, tier: str) -> None:
+            """Called in handler_pool thread — runs the registered handler."""
+            try:
+                self.route_upward(event)
+                self._stats['events_dispatched'] += 1
+                self._tier_stats[tier]['dispatched'] += 1
+            except Exception as e:
+                logger.error("Async dispatch error for %s: %s",
+                             event.event_type, e)
+            finally:
+                with self._lock:
+                    if self._tier_queue_depth[tier] > 0:
+                        self._tier_queue_depth[tier] -= 1
+
+        while self._running:
+            # Drain queue — increased from 100 to 500 per cycle to keep
+            # up with the 6+ events/sec submission rate. The old 100/cycle
+            # at 100ms sleep = 1000/sec theoretical, but each inline
+            # handler call blocked for 189ms, reducing real throughput
+            # to ~5/sec. With async dispatch, 500/cycle is fine.
+            events: List[SynapticEvent] = []
+            with self._lock:
+                batch = min(len(self._queue), 500)
+                for _ in range(batch):
+                    events.append(self._queue.popleft())
+
+            # Sort by priority (lower = higher priority).
+            # NOTE: Phase 27d shipped a Zig radix sort .so (35x faster
+            # at the C boundary: 2µs vs 70µs for N=500), but ctypes
+            # marshaling overhead (Python attribute access + buffer
+            # alloc per call) costs ~245µs — net 3x SLOWER than this
+            # Python sort. Native path is kept available in core/cno/native/
+            # for future use when SynapticEvent is restructured to be
+            # ctypes-compatible (no per-call attribute marshaling).
+            events.sort(key=lambda e: e.priority)
+
+            for event in events:
+                tier = classify_tier(event.priority)
+                if event.route in _DOWNWARD_ROUTES:
+                    # Downward = synchronous (BPF writes are fast, order matters)
+                    try:
+                        self.route_downward(event)
+                        self._stats['events_dispatched'] += 1
+                        self._tier_stats[tier]['dispatched'] += 1
+                    except Exception as e:
+                        logger.error("Dispatch error (down): %s", e)
+                    finally:
+                        with self._lock:
+                            if self._tier_queue_depth[tier] > 0:
+                                self._tier_queue_depth[tier] -= 1
+                else:
+                    # Upward = async via handler pool (cognitive handlers are slow)
+                    handler_pool.submit(_handle_upward, event, tier)
+
+            # Periodic BPF flush
+            now = time.monotonic()
+            if now - last_bpf_flush >= self.BPF_BATCH_INTERVAL_S:
+                self._flush_bpf_writes()
+                last_bpf_flush = now
+
+            # Periodic audit flush
+            if now - last_audit_flush >= self.AUDIT_FLUSH_INTERVAL_S:
+                self._flush_audit()
+                last_audit_flush = now
+
+            # Phase 17: periodic blocklist eviction (every 5 min)
+            if now - self._last_evict_time >= self.BLOCKLIST_EVICT_INTERVAL_S:
+                self._evict_expired_blocklist()
+                self._last_evict_time = now
+
+            # Sleep if no events (avoid busy-wait)
+            if not events:
+                time.sleep(self.DISPATCH_INTERVAL_S)
+
+    # ------------------------------------------------------------------
+    # Audit Trail (ClickHouse)
+    # ------------------------------------------------------------------
+
+    def _audit(self, event_type: str, details: Dict[str, Any]) -> None:
+        """Buffer an audit entry for batch insert to ClickHouse."""
+        entry = {
+            'timestamp': time.time(),
+            'event_type': event_type,
+            **details,
+        }
+        with self._audit_lock:
+            self._audit_buffer.append(entry)
+
+    def _flush_audit(self) -> None:
+        """Batch insert audit entries to cno_synaptic_log."""
+        with self._audit_lock:
+            if not self._audit_buffer:
+                return
+            batch = self._audit_buffer[:]
+            self._audit_buffer.clear()
+
+        if not batch:
+            return
+
+        try:
+            import json as _json
+            rows = []
+            for entry in batch:
+                ts = entry.get('timestamp', time.time())
+                evt = entry.get('event_type', 'unknown')
+                ts_ms = int(ts * 1000)
+                rows.append(
+                    f"(fromUnixTimestamp64Milli({ts_ms}), '{_ch_escape(evt)}', "
+                    f"'{_ch_escape(entry.get('source_layer', ''))}', "
+                    f"'{_ch_escape(entry.get('route', ''))}', "
+                    f"'{_ch_escape(entry.get('source_ip', ''))}', "
+                    f"'{_ch_escape(_json.dumps(entry))}')"
+                )
+
+            values = ','.join(rows)
+            query = (
+                f"INSERT INTO {CH_DB}.cno_synaptic_log "
+                f"(timestamp, event_type, source_layer, route, source_ip, details) "
+                f"VALUES {values}"
+            )
+            _ch_post(query)
+            logger.debug("Flushed %d audit entries to ClickHouse", len(batch))
+
+        except Exception as e:
+            logger.error("Audit flush failed: %s", e)
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def start(self) -> None:
+        """Start the synaptic dispatch loop."""
+        if self._running:
+            return
+        self._running = True
+        t = threading.Thread(target=self._dispatch_loop, daemon=True,
+                             name="cno-synaptic")
+        t.start()
+        self._threads.append(t)
+        logger.info("SynapticController started")
+
+    def stop(self) -> None:
+        """Stop the dispatch loop and flush pending writes."""
+        self._running = False
+        for t in self._threads:
+            t.join(timeout=5)
+        self._flush_bpf_writes()
+        self._flush_audit()
+        logger.info("SynapticController stopped")
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Return controller statistics including per-tier metrics."""
+        return {
+            **self._stats,
+            'queue_depth': len(self._queue),
+            'bpf_queue_depth': len(self._bpf_queue),
+            'audit_buffer_depth': len(self._audit_buffer),
+            'running': self._running,
+            # Phase 2-U C2: tier-level thalamus metrics
+            'thalamus': {
+                'tiers': {
+                    tier: {
+                        **stats,
+                        'queue_depth': self._tier_queue_depth[tier],
+                        'admit_cap': int(self.MAX_QUEUE_SIZE * TIER_ADMIT_FRACTION[tier]),
+                    }
+                    for tier, stats in self._tier_stats.items()
+                },
+                'admit_fraction': TIER_ADMIT_FRACTION,
+                'max_queue': self.MAX_QUEUE_SIZE,
+            },
+            # Phase 17: blocklist capacity management stats
+            'blocklist': {
+                'active': len(self._blocklist_ttl),
+                'max': self.MAX_BLOCKLIST_SIZE,
+                'utilization_pct': round(
+                    len(self._blocklist_ttl) * 100 / self.MAX_BLOCKLIST_SIZE, 1
+                ),
+                **self._blocklist_stats,
+            },
+        }
+
+
+# ------------------------------------------------------------------
+# ClickHouse Helpers
+# ------------------------------------------------------------------
+
+def _ch_escape(s: str) -> str:
+    """Escape string for ClickHouse SQL (handles injection vectors)."""
+    if not s:
+        return ''
+    return (s.replace('\\', '\\\\').replace("'", "\\'")
+             .replace('\n', '\\n').replace('\r', '\\r')
+             .replace('\t', '\\t').replace('\0', ''))
+
+
+def _ch_read_one(query: str) -> list:
+    """Run a single-row query, return tab-split columns ([] on error)."""
+    try:
+        req = Request(f"http://{CH_HOST}:{CH_PORT}/", data=query.encode('utf-8'))
+        req.add_header('X-ClickHouse-User', CH_USER)
+        req.add_header('X-ClickHouse-Key', CH_PASSWORD)
+        req.add_header('X-ClickHouse-Database', CH_DB)
+        with urlopen(req, timeout=5) as resp:
+            raw = resp.read().decode('utf-8')
+    except Exception:
+        return []
+    first = raw.strip().split('\n')[0] if raw and raw.strip() else ''
+    return first.split('\t') if first else []
+
+
+class B4Governor:
+    """SSOL B4 — precision-gated autonomy governor (OBSERVE-first).
+
+    Today's only autonomy ceiling is a static reserved-IP denylist. B4 makes
+    block authority scale with MEASURED precision: it reads the rolling
+    false-positive rate from the SSOL outcome ledger (blocks the network later
+    confirmed benign) and, when FPR climbs, narrows what it will auto-block.
+
+    SAFETY: default is OBSERVE — it computes FPR and LOGS what it WOULD
+    suppress, but suppresses nothing. Only B4_GOVERNOR_ENFORCE=1 lets it act,
+    and even then FIGHT-mode reflex and PROTECTED (mesh/BFT) blocks always
+    bypass. This is the mechanism that makes *more* autonomy safe, introduced
+    without changing live behavior until explicitly armed.
+    """
+    FPR_SUSPEND = float(os.environ.get('B4_FPR_SUSPEND', '0.15'))
+    FPR_WARN = float(os.environ.get('B4_FPR_WARN', '0.05'))
+    MIN_BLOCK_LABELS = int(os.environ.get('B4_MIN_BLOCK_LABELS', '30'))
+    CHECK_INTERVAL_S = 300.0
+    ENFORCE = os.environ.get('B4_GOVERNOR_ENFORCE', '0') == '1'
+
+    def __init__(self):
+        self._fpr = 0.0
+        self._n = 0
+        self._last_check = 0.0
+        self._lock = threading.Lock()
+
+    def check_and_update(self) -> None:
+        now = time.time()
+        if now - self._last_check < self.CHECK_INTERVAL_S:
+            return
+        self._last_check = now
+        # FPR = fraction of recent BLOCK decisions the ledger later called benign.
+        row = _ch_read_one(
+            f"SELECT countIf(weak_label='benign' AND action='block') AS fp, "
+            f"count() AS n FROM {CH_DB}.cno_outcome_ledger "
+            f"WHERE ts >= now() - INTERVAL 4 HOUR AND action='block' AND label_conf >= 0.5"
+        )
+        try:
+            fp = int(row[0]); n = int(row[1]) if len(row) > 1 else 0
+        except (ValueError, IndexError):
+            return
+        with self._lock:
+            self._n = n
+            self._fpr = (fp / n) if n > 0 else 0.0
+        mode = 'ENFORCE' if self.ENFORCE else 'OBSERVE'
+        if n >= self.MIN_BLOCK_LABELS and self._fpr > self.FPR_WARN:
+            logger.warning("[B4 GOVERNOR %s] rolling FPR=%.3f (n=%d) — would %s",
+                           mode, self._fpr, n,
+                           'SUSPEND auto-block' if self._fpr > self.FPR_SUSPEND
+                           else 'tighten low-confidence blocks')
+        else:
+            logger.info("[B4 GOVERNOR %s] FPR=%.3f n=%d (healthy)", mode, self._fpr, n)
+
+    def allow_block(self, ip: str, reason: str, eviction_class: int) -> bool:
+        """Gate a block. Always True in OBSERVE; in ENFORCE, suppress per FPR."""
+        if 'FIGHT mode' in reason or eviction_class >= SynapticController.EVICTION_CLASS_PROTECTED:
+            return True
+        with self._lock:
+            fpr, n = self._fpr, self._n
+        if n < self.MIN_BLOCK_LABELS:
+            return True  # not enough outcome data to judge
+        if not self.ENFORCE:
+            if fpr > self.FPR_SUSPEND:
+                logger.info("[B4 OBSERVE] would SUSPEND block %s (FPR=%.3f)", ip, fpr)
+            return True
+        if fpr > self.FPR_SUSPEND:
+            logger.warning("[B4 ENFORCE] SUSPENDED block %s (FPR=%.3f)", ip, fpr)
+            return False
+        return True
+
+
+_b4_governor = B4Governor()

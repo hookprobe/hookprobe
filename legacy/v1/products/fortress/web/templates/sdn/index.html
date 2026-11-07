@@ -1,0 +1,2443 @@
+{% extends "base.html" %}
+
+{% block title %}SDN AI - Intelligent Network Control{% endblock %}
+
+{% block content_header %}
+<!-- Content header hidden for SDN page - cards serve as header -->
+{% endblock %}
+
+{% block extra_css %}
+<style>
+/* Premium Stats Cards */
+.stats-card {
+    cursor: pointer;
+}
+.stats-card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 8px 25px rgba(0,0,0,0.35) !important;
+}
+
+/* Premium Table Styling */
+#devices-table {
+    border-collapse: separate;
+    border-spacing: 0;
+}
+#devices-table thead th {
+    background: linear-gradient(180deg, #2d2d3a 0%, #1f1f2e 100%);
+    border-bottom: 2px solid #00d9ff;
+    font-weight: 600;
+    text-transform: uppercase;
+    font-size: 0.75rem;
+    letter-spacing: 0.5px;
+    color: #8b8b9a;
+    padding: 1rem 0.75rem;
+}
+#devices-table tbody tr {
+    transition: background-color 0.15s ease;
+}
+#devices-table tbody tr:hover {
+    background-color: rgba(0, 217, 255, 0.08) !important;
+}
+#devices-table td {
+    vertical-align: middle;
+    border-top: 1px solid rgba(255,255,255,0.05);
+    padding: 0.75rem;
+}
+
+/* Action Buttons */
+#devices-table .btn-group .btn {
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+/* Empty State */
+.dataTables_empty {
+    padding: 3rem 1rem !important;
+    text-align: center;
+}
+
+/* Premium Empty State */
+.empty-state {
+    text-align: center;
+    padding: 4rem 2rem;
+    color: #6c7a89;
+}
+.empty-state i {
+    font-size: 4rem;
+    margin-bottom: 1.5rem;
+    opacity: 0.5;
+}
+.empty-state h4 {
+    color: #8b8b9a;
+    margin-bottom: 0.75rem;
+}
+.empty-state p {
+    max-width: 400px;
+    margin: 0 auto 1.5rem;
+}
+
+/* Policy Reference Accordion */
+.policy-card {
+    transition: all 0.2s ease;
+    border: 1px solid rgba(255,255,255,0.05);
+}
+.policy-card:hover {
+    border-color: rgba(0,217,255,0.3);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+
+/* Filters Card */
+.card-outline.card-primary {
+    border-top: 3px solid #00d9ff;
+}
+
+/* WAN Health Bar Improvements */
+#wan-health-bar .progress {
+    border-radius: 3px;
+    overflow: hidden;
+}
+#wan-health-bar .progress-bar {
+    transition: width 0.5s ease, background-color 0.3s ease;
+}
+
+/* Badge improvements */
+.badge-sm {
+    font-size: 0.65rem;
+    padding: 0.25rem 0.5rem;
+}
+
+/* Premium DataTable Pagination */
+.dataTables_wrapper .dataTables_paginate .paginate_button {
+    border: none;
+    background: rgba(255,255,255,0.05);
+    color: #8b8b9a !important;
+    margin: 0 2px;
+    border-radius: 4px;
+    padding: 0.375rem 0.75rem;
+    transition: all 0.2s ease;
+}
+.dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+    background: rgba(0,217,255,0.15) !important;
+    color: #00d9ff !important;
+}
+.dataTables_wrapper .dataTables_paginate .paginate_button.current {
+    background: linear-gradient(135deg, #00d9ff 0%, #0099cc 100%) !important;
+    color: #fff !important;
+    box-shadow: 0 2px 8px rgba(0,217,255,0.3);
+}
+.dataTables_wrapper .dataTables_paginate .paginate_button.disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* DataTable Info & Length Styling */
+.dataTables_wrapper .dataTables_info {
+    color: #6c7a89;
+    font-size: 0.85rem;
+}
+.dataTables_wrapper .dataTables_length select,
+.dataTables_wrapper .dataTables_filter input {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #fff;
+    border-radius: 4px;
+    padding: 0.375rem 0.75rem;
+}
+.dataTables_wrapper .dataTables_filter input:focus {
+    border-color: #00d9ff;
+    box-shadow: 0 0 0 2px rgba(0,217,255,0.2);
+    outline: none;
+}
+
+/* Device Name Hover Effect - Column 1 (Device) */
+#devices-table tbody tr td:nth-child(1) .device-name {
+    color: #00d9ff;
+    cursor: pointer;
+}
+#devices-table tbody tr td:nth-child(1):hover .device-name {
+    text-decoration: underline;
+}
+
+/* Status Badge Animation */
+.badge-success, .badge-warning, .badge-danger {
+    animation: pulseGlow 2s infinite;
+}
+@keyframes pulseGlow {
+    0%, 100% { box-shadow: none; }
+    50% { box-shadow: 0 0 8px currentColor; }
+}
+
+/* Filter Card Enhancement */
+.card-outline.card-primary .card-header {
+    background: rgba(0,217,255,0.05);
+}
+.card-outline.card-primary .form-control {
+    background: rgba(255,255,255,0.05);
+    border-color: rgba(255,255,255,0.1);
+    color: #fff;
+}
+.card-outline.card-primary .form-control:focus {
+    border-color: #00d9ff;
+    box-shadow: 0 0 0 2px rgba(0,217,255,0.2);
+}
+
+/* Quick Action Buttons */
+.btn-outline-success, .btn-outline-danger, .btn-outline-info {
+    border-width: 1px;
+}
+.btn-outline-success:hover, .btn-outline-danger:hover, .btn-outline-info:hover {
+    transform: scale(1.05);
+}
+
+/* Tooltip Styling */
+.tooltip-inner {
+    background: #1a1a2e;
+    border: 1px solid rgba(0,217,255,0.3);
+    border-radius: 6px;
+    padding: 0.5rem 0.75rem;
+}
+.tooltip.bs-tooltip-top .arrow::before {
+    border-top-color: rgba(0,217,255,0.3);
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="content-header">
+    <div class="container-fluid">
+        <div class="row mb-2">
+            <div class="col-sm-6">
+                <h1 class="m-0"><i class="fas fa-network-wired mr-2"></i>SDN AI</h1>
+            </div>
+            <div class="col-sm-6">
+                <ol class="breadcrumb float-sm-right">
+                    <li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+                    <li class="breadcrumb-item active">SDN AI</li>
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+
+<section class="content">
+    <div class="container-fluid">
+
+        <!-- Demo Mode Alert -->
+        {% if not db_available %}
+        <div class="alert alert-warning alert-dismissible">
+            <button type="button" class="close" data-dismiss="alert">&times;</button>
+            <i class="fas fa-info-circle mr-2"></i>
+            <strong>Demo Mode:</strong> Database not connected. Showing sample data.
+        </div>
+        {% endif %}
+
+        <!-- WiFi Intelligence Hero Section -->
+        <div class="row" id="wifi-intelligence-hero">
+            <div class="col-12">
+                <div class="card card-widget widget-user-2" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%); border: none; border-radius: 15px; overflow: hidden;">
+                    <div class="card-header border-0" style="background: transparent;">
+                        <div class="row align-items-center">
+                            <!-- Left: WiFi Status -->
+                            <div class="col-lg-3 col-md-6 text-center text-lg-left mb-3 mb-lg-0">
+                                <div class="d-flex align-items-center justify-content-center justify-content-lg-start">
+                                    <div class="wifi-icon-container mr-3" style="width: 80px; height: 80px; background: rgba(255,255,255,0.1); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+                                        <i class="fas fa-broadcast-tower fa-3x" id="wifi-icon" style="color: #00d9ff; text-shadow: 0 0 20px rgba(0,217,255,0.5);"></i>
+                                    </div>
+                                    <div>
+                                        <h2 class="mb-0" style="color: #fff; font-weight: 700;">
+                                            <span id="wifi-ssid">Loading...</span>
+                                        </h2>
+                                        <p class="mb-0" style="color: #888; font-size: 0.85em;">
+                                            <i class="fas fa-wifi mr-1"></i>
+                                            <span id="wifi-band">--</span>
+                                            <span id="wifi-channel-wrapper" class="ml-2" style="display: none;">
+                                                <span class="text-muted">|</span>
+                                                <span class="ml-1">CH <span id="wifi-channel">--</span></span>
+                                            </span>
+                                        </p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Center: ML Score Gauge -->
+                            <div class="col-lg-3 col-md-6 text-center mb-3 mb-lg-0">
+                                <div class="ml-score-container">
+                                    <div class="score-ring" style="width: 90px; height: 90px; margin: 0 auto; position: relative;">
+                                        <svg viewBox="0 0 36 36" class="circular-chart" style="width: 100%; height: 100%;">
+                                            <path class="circle-bg" d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                                  fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+                                            <path class="circle" id="ml-score-ring"
+                                                  stroke-dasharray="0, 100"
+                                                  d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                                  fill="none" stroke="#00ff88" stroke-width="3" stroke-linecap="round"
+                                                  style="transition: stroke-dasharray 1s ease-in-out;"/>
+                                        </svg>
+                                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); text-align: center;">
+                                            <span id="ml-score-value" style="color: #00ff88; font-size: 1.4em; font-weight: 700;">--</span>
+                                        </div>
+                                    </div>
+                                    <p class="mb-0 mt-1" style="color: #888; font-size: 0.75em;">
+                                        <i class="fas fa-brain mr-1" style="color: #00ff88;"></i>ML CHANNEL SCORE
+                                    </p>
+                                </div>
+                            </div>
+
+                            <!-- Center-Right: Statistics -->
+                            <div class="col-lg-3 col-md-6 text-center mb-3 mb-lg-0">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <div class="stat-box p-2" style="background: rgba(255,255,255,0.05); border-radius: 10px;">
+                                            <i class="fas fa-satellite-dish mb-1" style="color: #ff6b6b; font-size: 1.5em;"></i>
+                                            <h4 class="mb-0" style="color: #fff; font-weight: 600;">
+                                                <span id="radar-count">0</span>
+                                            </h4>
+                                            <small style="color: #888; font-size: 0.7em;">RADAR EVENTS</small>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <div class="stat-box p-2" style="background: rgba(255,255,255,0.05); border-radius: 10px;">
+                                            <i class="fas fa-exchange-alt mb-1" style="color: #ffd93d; font-size: 1.5em;"></i>
+                                            <h4 class="mb-0" style="color: #fff; font-weight: 600;">
+                                                <span id="channel-switches">0</span>
+                                            </h4>
+                                            <small style="color: #888; font-size: 0.7em;">CH SWITCHES</small>
+                                        </div>
+                                    </div>
+                                </div>
+                                <p class="mb-0 mt-2" style="color: #666; font-size: 0.7em;">
+                                    <i class="far fa-calendar-alt mr-1"></i>Last 30 days
+                                </p>
+                            </div>
+
+                            <!-- Right: Next Optimization Countdown -->
+                            <div class="col-lg-3 col-md-6 text-center text-lg-right">
+                                <div class="next-opt-container">
+                                    <p class="mb-1" style="color: #888; font-size: 0.75em; text-transform: uppercase; letter-spacing: 1px;">
+                                        <i class="fas fa-clock mr-1"></i>Next Auto-Optimization
+                                    </p>
+                                    <h3 class="mb-0" id="countdown-timer" style="color: #fff; font-family: 'Courier New', monospace; font-weight: 600; letter-spacing: 2px;">
+                                        --:--:--
+                                    </h3>
+                                    <p class="mb-0 mt-1" style="color: #666; font-size: 0.7em;">
+                                        <span id="last-opt-info">
+                                            <i class="fas fa-history mr-1"></i>Last: <span id="last-opt-time">Never</span>
+                                            <span id="prev-channel-info" style="display: none;"> (was CH <span id="prev-channel">--</span>)</span>
+                                        </span>
+                                    </p>
+                                    <div class="mt-2">
+                                        <span id="dfs-badge" class="badge" style="background: rgba(0,217,255,0.2); color: #00d9ff; font-size: 0.7em; display: none;">
+                                            <i class="fas fa-bolt mr-1"></i>DFS INTELLIGENCE ACTIVE
+                                        </span>
+                                        <span id="basic-badge" class="badge" style="background: rgba(255,255,255,0.1); color: #888; font-size: 0.7em;">
+                                            <i class="fas fa-search mr-1"></i>BASIC SCAN MODE
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress bar for countdown -->
+                    <div class="progress" style="height: 4px; background: rgba(255,255,255,0.05); border-radius: 0;">
+                        <div class="progress-bar" id="countdown-progress" role="progressbar" style="width: 0%; background: linear-gradient(90deg, #00d9ff, #00ff88); transition: width 1s linear;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- WAN Health Bar -->
+        <div class="row mb-3" id="wan-health-bar">
+            <div class="col-12">
+                <div class="card mb-0" style="background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%); border: none; border-radius: 12px;">
+                    <div class="card-body py-3">
+                        <div class="row align-items-center">
+                            <!-- Primary WAN -->
+                            <div class="col-lg-3 col-md-6 mb-2 mb-lg-0">
+                                <div class="d-flex align-items-center">
+                                    <div class="wan-icon mr-3" style="width: 45px; height: 45px; background: rgba(79,195,247,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                                        <i class="fas fa-ethernet fa-lg" style="color: #4fc3f7;"></i>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <small class="text-muted">Primary WAN</small>
+                                            <span id="wan-primary-status" class="badge badge-success badge-sm">ACTIVE</span>
+                                        </div>
+                                        <div class="progress" style="height: 6px; background: rgba(255,255,255,0.1);">
+                                            <div class="progress-bar bg-success" id="wan-primary-health" style="width: 95%;"></div>
+                                        </div>
+                                        <small class="text-white-50" id="wan-primary-interface">eth0</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Backup WAN -->
+                            <div class="col-lg-3 col-md-6 mb-2 mb-lg-0">
+                                <div class="d-flex align-items-center">
+                                    <div class="wan-icon mr-3" style="width: 45px; height: 45px; background: rgba(255,152,0,0.2); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                                        <i class="fas fa-signal fa-lg" style="color: #ffb74d;"></i>
+                                    </div>
+                                    <div class="flex-grow-1">
+                                        <div class="d-flex justify-content-between align-items-center mb-1">
+                                            <small class="text-muted">Backup WAN</small>
+                                            <span id="wan-backup-status" class="badge badge-secondary badge-sm">STANDBY</span>
+                                        </div>
+                                        <div class="progress" style="height: 6px; background: rgba(255,255,255,0.1);">
+                                            <div class="progress-bar bg-warning" id="wan-backup-health" style="width: 72%;"></div>
+                                        </div>
+                                        <small class="text-white-50" id="wan-backup-interface">wwan0</small>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- LSTM Prediction -->
+                            <div class="col-lg-3 col-md-6 mb-2 mb-lg-0 text-center">
+                                <div class="d-flex align-items-center justify-content-center">
+                                    <div class="mr-3" style="width: 50px; height: 50px; position: relative;">
+                                        <svg viewBox="0 0 36 36" style="width: 100%; height: 100%; transform: rotate(-90deg);">
+                                            <circle cx="18" cy="18" r="15" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="3"/>
+                                            <circle id="lstm-confidence-ring" cx="18" cy="18" r="15" fill="none" stroke="#00ff88" stroke-width="3"
+                                                    stroke-dasharray="87, 100" stroke-linecap="round"/>
+                                        </svg>
+                                        <span style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #00ff88; font-weight: 700; font-size: 0.8rem;" id="lstm-confidence">87%</span>
+                                    </div>
+                                    <div class="text-left">
+                                        <small class="text-muted d-block">LSTM Prediction</small>
+                                        <span class="text-success" id="lstm-status"><i class="fas fa-check-circle mr-1"></i>Stable</span>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Actions -->
+                            <div class="col-lg-3 col-md-6 text-center text-lg-right">
+                                <div class="d-flex justify-content-center justify-content-lg-end align-items-center">
+                                    <div class="mr-3 text-right d-none d-md-block">
+                                        <small class="text-muted d-block">Uptime</small>
+                                        <span class="text-white font-weight-bold" id="wan-uptime">99.9%</span>
+                                    </div>
+                                    <button class="btn btn-sm btn-outline-info" onclick="showWanHealthModal()" title="Full WAN Health Dashboard">
+                                        <i class="fas fa-expand-alt mr-1"></i>Details
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Statistics Cards - Premium Design -->
+        <div class="row" id="stats-cards">
+            <!-- Total Devices -->
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(30,60,114,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-laptop" style="font-size: 4rem; color: #fff;"></i>
+                    </div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-total" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.total or 0 }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Total Devices</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Online Devices -->
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #11998e 0%, #38ef7d 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(17,153,142,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-wifi" style="font-size: 4rem; color: #fff;"></i>
+                    </div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-online" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.online or 0 }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Online</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Offline Devices -->
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(245,87,108,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-power-off" style="font-size: 4rem; color: #fff;"></i>
+                    </div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-offline" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.offline or 0 }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Offline</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Quarantined Devices -->
+            <div class="col-lg-3 col-6 mb-3">
+                <div class="stats-card" style="background: linear-gradient(135deg, #c33764 0%, #1d2671 100%); border-radius: 12px; padding: 1.25rem; position: relative; overflow: hidden; box-shadow: 0 4px 15px rgba(195,55,100,0.3); transition: transform 0.2s, box-shadow 0.2s;">
+                    <div class="stats-icon" style="position: absolute; right: 15px; top: 50%; transform: translateY(-50%); opacity: 0.15;">
+                        <i class="fas fa-ban" style="font-size: 4rem; color: #fff;"></i>
+                    </div>
+                    <div class="stats-content" style="position: relative; z-index: 1;">
+                        <h3 class="stats-number mb-1" id="stat-quarantined" style="font-size: 2.5rem; font-weight: 700; color: #fff; margin: 0;">{{ stats.quarantined or 0 }}</h3>
+                        <p class="stats-label mb-0" style="color: rgba(255,255,255,0.8); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.5px;">Quarantined</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Network Devices - Unified Card with Filters -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: none; border-radius: 12px;">
+                    <div class="card-header border-0" style="background: transparent;">
+                        <!-- Title Row -->
+                        <div class="d-flex justify-content-between align-items-center mb-3">
+                            <h3 class="card-title text-white mb-0">
+                                <i class="fas fa-network-wired mr-2 text-info"></i>Network Devices
+                            </h3>
+                            <div class="d-flex align-items-center">
+                                <span class="badge badge-light mr-2" id="device-count-badge">{{ devices|length }} devices</span>
+                                <button type="button" id="btn-discover" class="btn btn-sm btn-primary mr-1" title="Discover">
+                                    <i class="fas fa-search"></i>
+                                </button>
+                                <button type="button" id="btn-refresh" class="btn btn-sm btn-outline-info" title="Refresh">
+                                    <i class="fas fa-sync-alt"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Inline Filters Row -->
+                        <div class="d-flex flex-wrap align-items-center" style="gap: 0.75rem;">
+                            <select id="filter-policy" class="form-control form-control-sm" style="width: auto; min-width: 130px; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: #fff;">
+                                <option value="">All Policies</option>
+                                {% for policy in policies %}
+                                <option value="{{ policy.name }}">{{ policy.display_name }}</option>
+                                {% endfor %}
+                            </select>
+                            <select id="filter-category" class="form-control form-control-sm" style="width: auto; min-width: 130px; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: #fff;">
+                                <option value="">All Types</option>
+                                <option value="iot">IoT</option>
+                                <option value="camera">Camera</option>
+                                <option value="pos">POS</option>
+                                <option value="printer">Printer</option>
+                                <option value="workstation">Workstation</option>
+                                <option value="laptop">Laptop</option>
+                                <option value="mobile">Mobile</option>
+                                <option value="unknown">Unknown</option>
+                            </select>
+                            <select id="filter-status" class="form-control form-control-sm" style="width: auto; min-width: 100px; background: rgba(255,255,255,0.1); border-color: rgba(255,255,255,0.2); color: #fff;">
+                                <option value="">All Status</option>
+                                <option value="online">Online</option>
+                                <option value="offline">Offline</option>
+                                <option value="blocked">Blocked</option>
+                            </select>
+                            <div class="ml-auto">
+                                <div class="btn-group btn-group-sm">
+                                    <button type="button" class="btn btn-outline-secondary dropdown-toggle" data-toggle="dropdown" style="border-color: rgba(255,255,255,0.2); color: #aaa;">
+                                        <i class="fas fa-download mr-1"></i> Export
+                                    </button>
+                                    <div class="dropdown-menu dropdown-menu-right">
+                                        <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='csv') }}">
+                                            <i class="fas fa-file-csv mr-2"></i> CSV
+                                        </a>
+                                        <a class="dropdown-item" href="{{ url_for('sdn.export_devices', format='json') }}">
+                                            <i class="fas fa-file-code mr-2"></i> JSON
+                                        </a>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body p-3 pt-2">
+                        <table id="devices-table" class="table table-borderless mb-0" style="color: #e0e0e0;">
+                            <thead>
+                                <tr style="border-bottom: 1px solid rgba(255,255,255,0.1);">
+                                    <th style="width: 50%; padding-left: 1rem;">Device</th>
+                                    <th style="width: 15%; text-align: center;">Status</th>
+                                    <th style="width: 20%; text-align: center;">Policy</th>
+                                    <th style="width: 15%; text-align: center;">Signal</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for device in devices %}
+                                {% set category_icons = {
+                                    'iot': 'fa-microchip',
+                                    'camera': 'fa-video',
+                                    'pos': 'fa-cash-register',
+                                    'printer': 'fa-print',
+                                    'workstation': 'fa-desktop',
+                                    'voice_assistant': 'fa-volume-up',
+                                    'mobile': 'fa-mobile-alt',
+                                    'network': 'fa-network-wired',
+                                    'homepod': 'fa-home',
+                                    'echo': 'fa-volume-up',
+                                    'google_home': 'fa-home',
+                                    'smart_hub': 'fa-home',
+                                    'bridge': 'fa-project-diagram',
+                                    'iphone': 'fa-mobile-alt',
+                                    'android': 'fa-mobile-alt',
+                                    'phone': 'fa-mobile-alt',
+                                    'tablet': 'fa-tablet-alt',
+                                    'laptop': 'fa-laptop',
+                                    'macbook': 'fa-laptop',
+                                    'raspberry_pi': 'fa-server',
+                                    'smart_plug': 'fa-plug',
+                                    'sensor': 'fa-thermometer-half',
+                                    'tv': 'fa-tv',
+                                    'smart_tv': 'fa-tv',
+                                    'health': 'fa-heartbeat',
+                                    'watch': 'fa-clock',
+                                    'sbc': 'fa-microchip',
+                                    'unknown': 'fa-question-circle'
+                                } %}
+                                <tr data-mac="{{ device.mac_address }}"
+                                    data-policy="{{ device.policy }}"
+                                    data-category="{{ device.device_type }}"
+                                    data-status="{% if device.is_blocked %}blocked{% elif device.is_online %}online{% elif device.is_idle %}idle{% else %}offline{% endif %}"
+                                    class="device-row"
+                                    style="cursor: pointer; border-bottom: 1px solid rgba(255,255,255,0.05); transition: background 0.2s;"
+                                    onmouseover="this.style.background='rgba(255,255,255,0.05)'"
+                                    onmouseout="this.style.background='transparent'"
+                                    onclick="openDeviceDetail('{{ device.mac_address }}')">
+                                    <!-- Device Column: Icon + Name + MAC -->
+                                    <td style="padding: 0.75rem 1rem;">
+                                        <div class="d-flex align-items-center">
+                                            <div class="device-icon-wrapper mr-3" style="width: 40px; height: 40px; background: rgba(255,255,255,0.1); border-radius: 10px; display: flex; align-items: center; justify-content: center;">
+                                                <i class="fas {{ category_icons.get(device.device_type, 'fa-question-circle') }} text-info"></i>
+                                            </div>
+                                            <div>
+                                                <div class="device-name" style="font-weight: 600; color: #fff;">
+                                                    {{ device.friendly_name or device.hostname or device.device_type | replace('_', ' ') | title or 'Unknown Device' }}
+                                                </div>
+                                                <div class="device-meta" style="font-size: 0.75rem; color: #888;">
+                                                    {{ device.manufacturer or 'Unknown' }} · {{ device.mac_address }}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <!-- Status Column: Simple Dot -->
+                                    <td style="text-align: center; vertical-align: middle;">
+                                        {% if device.is_blocked %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(220,53,69,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #dc3545; border-radius: 50%; margin-right: 0.5rem;"></span>
+                                            <span style="color: #dc3545;">Blocked</span>
+                                        </span>
+                                        {% elif device.is_online %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(40,167,69,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #28a745; border-radius: 50%; margin-right: 0.5rem; animation: pulse 2s infinite;"></span>
+                                            <span style="color: #28a745;">Online</span>
+                                        </span>
+                                        {% elif device.is_idle %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(255,193,7,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #ffc107; border-radius: 50%; margin-right: 0.5rem;"></span>
+                                            <span style="color: #ffc107;">Idle</span>
+                                        </span>
+                                        {% else %}
+                                        <span class="status-indicator" style="display: inline-flex; align-items: center; padding: 0.25rem 0.75rem; background: rgba(108,117,125,0.2); border-radius: 20px; font-size: 0.8rem;">
+                                            <span style="width: 8px; height: 8px; background: #6c757d; border-radius: 50%; margin-right: 0.5rem;"></span>
+                                            <span style="color: #6c757d;">Offline</span>
+                                        </span>
+                                        {% endif %}
+                                    </td>
+                                    <!-- Policy Column: Colored Badge -->
+                                    <td style="text-align: center; vertical-align: middle;">
+                                        {% set policy_styles = {
+                                            'quarantine': ('rgba(220,53,69,0.3)', '#ff6b6b', 'fa-ban'),
+                                            'internet_only': ('rgba(255,193,7,0.3)', '#ffc107', 'fa-globe'),
+                                            'lan_only': ('rgba(23,162,184,0.3)', '#17a2b8', 'fa-home'),
+                                            'smart_home': ('rgba(0,123,255,0.3)', '#007bff', 'fa-check'),
+                                            'full_access': ('rgba(40,167,69,0.3)', '#28a745', 'fa-shield-alt')
+                                        } %}
+                                        {% set ps = policy_styles.get(device.policy, ('rgba(108,117,125,0.3)', '#6c757d', 'fa-question')) %}
+                                        <span class="policy-badge" style="display: inline-flex; align-items: center; padding: 0.35rem 0.75rem; background: {{ ps[0] }}; border: 1px solid {{ ps[1] }}; border-radius: 6px; font-size: 0.75rem; font-weight: 600; text-transform: uppercase; color: {{ ps[1] }};">
+                                            <i class="fas {{ ps[2] }} mr-1" style="font-size: 0.7rem;"></i>
+                                            {{ device.policy | replace('_', ' ') }}
+                                        </span>
+                                    </td>
+                                    <!-- Signal Column: WiFi Bars -->
+                                    <td style="text-align: center; vertical-align: middle;">
+                                        {% if device.wifi_quality is defined and device.wifi_quality %}
+                                        {% set q = device.wifi_quality %}
+                                        <div class="signal-bars" style="display: inline-flex; align-items: flex-end; gap: 2px; height: 20px;" title="{{ device.wifi_rssi or '?' }} dBm">
+                                            <div style="width: 4px; height: 5px; background: {% if q > 0 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                            <div style="width: 4px; height: 9px; background: {% if q > 25 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                            <div style="width: 4px; height: 13px; background: {% if q > 50 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                            <div style="width: 4px; height: 17px; background: {% if q > 75 %}#28a745{% else %}#444{% endif %}; border-radius: 1px;"></div>
+                                        </div>
+                                        {% else %}
+                                        <i class="fas fa-ethernet text-muted" title="Wired or no signal data"></i>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% else %}
+                                <tr>
+                                    <td colspan="4" class="text-center py-5" style="color: #666;">
+                                        <i class="fas fa-inbox fa-3x mb-3" style="color: #444;"></i>
+                                        <p class="mb-0">No devices found</p>
+                                        <small>Devices will appear here when they connect to the network</small>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <style>
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        #devices-table th {
+            font-weight: 500;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #888;
+            padding: 0.75rem 1rem;
+        }
+        .device-row:active {
+            background: rgba(255,255,255,0.1) !important;
+        }
+        /* AI Eyes Link Banner */
+        .aiochi-link-banner {
+            background: linear-gradient(135deg, rgba(79, 195, 247, 0.1) 0%, rgba(0,0,0,0.2) 100%);
+            border: 1px solid rgba(79, 195, 247, 0.3);
+            border-radius: 12px;
+            padding: 1.25rem 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: all 0.3s ease;
+        }
+        .aiochi-link-banner:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(79, 195, 247, 0.2);
+            border-color: rgba(79, 195, 247, 0.5);
+        }
+        .aiochi-link-banner .banner-content {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        .aiochi-link-banner .banner-icon {
+            width: 48px;
+            height: 48px;
+            background: rgba(79, 195, 247, 0.15);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.25rem;
+            color: #4fc3f7;
+        }
+        .aiochi-link-banner h4 {
+            margin: 0 0 0.25rem 0;
+            font-size: 1rem;
+            font-weight: 600;
+            color: #fff;
+        }
+        .aiochi-link-banner p {
+            margin: 0;
+            font-size: 0.85rem;
+            color: #8b8b9a;
+        }
+        .aiochi-link-banner .btn-aiochi {
+            background: linear-gradient(135deg, #4fc3f7 0%, #29b6f6 100%);
+            color: #000;
+            border: none;
+            padding: 0.5rem 1.25rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 0.85rem;
+            transition: all 0.2s ease;
+        }
+        .aiochi-link-banner .btn-aiochi:hover {
+            transform: scale(1.05);
+            box-shadow: 0 4px 12px rgba(79, 195, 247, 0.4);
+        }
+        </style>
+
+        <!-- Device Bubbles - Now in AI Eyes -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <a href="{{ url_for('aiochi.index') }}" class="aiochi-link-banner text-decoration-none">
+                    <div class="banner-content">
+                        <div class="banner-icon">
+                            <i class="fas fa-eye"></i>
+                        </div>
+                        <div>
+                            <h4><i class="fas fa-users mr-2"></i>Device Bubbles</h4>
+                            <p>Manage device groups, drag-and-drop assignment, and AI-powered suggestions in AI Eyes</p>
+                        </div>
+                    </div>
+                    <button class="btn btn-aiochi">
+                        <i class="fas fa-external-link-alt mr-1"></i>Open AI Eyes
+                    </button>
+                </a>
+            </div>
+        </div>
+
+        <!-- Interface Traffic (Real-time) -->
+        <div class="row">
+            <div class="col-12">
+                <div class="card" style="background: #1a1a2e; border: 1px solid rgba(255,255,255,0.08); border-radius: 12px;">
+                    <div class="card-header border-0" style="background: transparent;">
+                        <div class="d-flex justify-content-between align-items-center">
+                            <h3 class="card-title"><i class="fas fa-chart-bar mr-2"></i>Interface Traffic (Real-time)</h3>
+                            <div class="d-flex align-items-center" style="font-size: 0.75rem; color: #888;">
+                                <span class="mr-3"><span style="display: inline-block; width: 12px; height: 12px; background: #4fc3f7; border-radius: 2px; margin-right: 4px;"></span>Download</span>
+                                <span><span style="display: inline-block; width: 12px; height: 12px; background: #ff6b6b; border-radius: 2px; margin-right: 4px;"></span>Upload</span>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="card-body pt-0" id="traffic-interfaces">
+                        <div class="text-center py-4 text-muted">
+                            <i class="fas fa-spinner fa-spin mr-2"></i>Loading interfaces...
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</section>
+
+<!-- Block Device Modal -->
+<div class="modal fade" id="modal-block" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-danger">
+                <h5 class="modal-title"><i class="fas fa-ban mr-2"></i>Block Device</h5>
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+            </div>
+            <form id="form-block" method="POST">
+                <div class="modal-body">
+                    <p>Block device <strong id="block-mac"></strong>?</p>
+                    <p class="text-muted">This device will be completely isolated from the network.</p>
+                    <div class="form-group">
+                        <label>Reason (optional)</label>
+                        <input type="text" name="reason" class="form-control" placeholder="Security concern, unauthorized, etc.">
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">Block Device</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<!-- Device Detail Modal -->
+{% include 'sdn/partials/device_detail_modal.html' %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+// =============================================================================
+// Device Detail Modal Controller
+// =============================================================================
+var DeviceDetailModal = {
+    currentMac: null,
+
+    open: function(mac) {
+        this.currentMac = mac;
+        $('#deviceDetailModal').modal('show');
+        this.loadDevice(mac);
+    },
+
+    loadDevice: function(mac) {
+        var self = this;
+
+        // Show loading state
+        $('#modal-device-name').text('Loading...');
+
+        $.get('/sdn/api/device/' + encodeURIComponent(mac) + '/detail')
+            .done(function(data) {
+                if (data.success && data.device) {
+                    self.renderDevice(data.device);
+                } else {
+                    toastr.error(data.error || 'Failed to load device');
+                }
+            })
+            .fail(function() {
+                toastr.error('Failed to load device details');
+            });
+    },
+
+    renderDevice: function(device) {
+        // Header
+        $('#modal-device-name').text(device.friendly_name || device.hostname || device.device_type || 'Unknown Device');
+        $('#modal-device-mac').text(device.mac);
+
+        // Status badge
+        var statusBadge = $('#modal-status-badge');
+        var status = device.status || 'offline';
+        statusBadge.removeClass('badge-success badge-warning badge-secondary')
+            .addClass(status === 'online' ? 'badge-success' : status === 'idle' ? 'badge-warning' : 'badge-secondary');
+        $('#modal-status-text').text(status.charAt(0).toUpperCase() + status.slice(1));
+
+        // Identity
+        $('#modal-ip').text(device.ip || '--');
+        $('#modal-hostname').text(device.hostname || '--');
+        $('#modal-vendor').text(device.vendor || '--');
+        $('#modal-category').text(device.category || device.device_type || '--');
+        $('#modal-first-seen').text(this.formatDate(device.first_seen));
+        $('#modal-last-seen').text(this.formatDate(device.last_seen));
+
+        // WiFi Signal - check if device has WiFi data
+        var hasWifiData = device.wifi_rssi !== null && device.wifi_rssi !== undefined;
+        var quality = device.wifi_quality || 0;
+        var rssi = device.wifi_rssi;
+
+        if (hasWifiData) {
+            $('#modal-signal-quality').text(quality + '%');
+            $('#modal-rssi').text(rssi || '--');
+
+            // Update signal arc (126 is full arc length)
+            var arcLength = (quality / 100) * 126;
+            $('#signal-arc').attr('stroke-dasharray', arcLength + ', 126');
+            $('#signal-arc').attr('stroke', quality > 70 ? '#28a745' : quality > 40 ? '#ffc107' : '#dc3545');
+
+            // Proximity badge
+            var proximity = device.wifi_proximity || 'unknown';
+            $('#modal-proximity-badge')
+                .removeClass('proximity-immediate proximity-near proximity-far proximity-distant badge-secondary')
+                .addClass(proximity !== 'unknown' ? 'proximity-' + proximity : 'badge-secondary')
+                .text(proximity.charAt(0).toUpperCase() + proximity.slice(1));
+
+            // Proximity warning
+            if (proximity === 'distant' && (device.policy === 'full_access' || device.policy === 'lan_only')) {
+                $('#modal-proximity-warning').removeClass('d-none');
+                $('#modal-proximity-warning-text').text('Device has high access but weak signal - potential security risk');
+            } else {
+                $('#modal-proximity-warning').addClass('d-none');
+            }
+
+            $('#modal-wifi-band').text((device.wifi_band || '--') + ' / ' + (device.wifi_interface || '--'));
+        } else {
+            // Device likely connected via Ethernet or not currently on WiFi
+            $('#modal-signal-quality').text('--');
+            $('#modal-rssi').text('N/A');
+            $('#signal-arc').attr('stroke-dasharray', '0, 126');
+            $('#signal-arc').attr('stroke', '#6c757d');
+            $('#modal-proximity-badge')
+                .removeClass('proximity-immediate proximity-near proximity-far proximity-distant')
+                .addClass('badge-secondary')
+                .text('Wired/Offline');
+            $('#modal-proximity-warning').addClass('d-none');
+            $('#modal-wifi-band').text('Ethernet / Not on WiFi');
+        }
+
+        // Traffic
+        var traffic = device.traffic || {};
+        $('#modal-rx').text(traffic.rx_formatted || '0 B');
+        $('#modal-tx').text(traffic.tx_formatted || '0 B');
+        $('#modal-connected-time').text(this.formatDuration(device.connected_time || 0));
+
+        // Policy
+        this.renderPolicy(device.policy || 'quarantine');
+        $('#modal-confidence').text(Math.round((device.confidence || 0) * 100));
+
+        // Access indicators
+        this.renderAccessIndicators(device.policy);
+
+        // Tags
+        this.renderTags(device.tags || []);
+
+        // History
+        this.renderHistory(device.history || []);
+    },
+
+    renderPolicy: function(policy) {
+        var policyColors = {
+            'quarantine': 'danger',
+            'internet_only': 'warning',
+            'lan_only': 'info',
+            'normal': 'primary',
+            'smart_home': 'primary',
+            'full_access': 'success'
+        };
+        var policyNames = {
+            'quarantine': 'QUARANTINE',
+            'internet_only': 'INTERNET ONLY',
+            'lan_only': 'LAN ONLY',
+            'normal': 'SMART HOME',
+            'smart_home': 'SMART HOME',
+            'full_access': 'FULL ACCESS'
+        };
+
+        $('#modal-policy-badge')
+            .removeClass('badge-success badge-warning badge-danger badge-info badge-primary')
+            .addClass('badge-' + (policyColors[policy] || 'secondary'))
+            .text(policyNames[policy] || policy);
+
+        // Highlight active policy button
+        $('.policy-btn').removeClass('active btn-danger btn-warning btn-info btn-success')
+            .addClass('btn-outline-' + (function(p) {
+                return p === 'quarantine' ? 'danger' : p === 'internet_only' ? 'warning' : p === 'lan_only' ? 'info' : 'success';
+            })(policy));
+        $('.policy-btn[data-policy="' + policy + '"]')
+            .removeClass('btn-outline-danger btn-outline-warning btn-outline-info btn-outline-success')
+            .addClass('active btn-' + (policyColors[policy] || 'secondary'));
+    },
+
+    renderAccessIndicators: function(policy) {
+        var access = {
+            'quarantine': { internet: false, lan: false, mgmt: false, print: false },
+            'internet_only': { internet: true, lan: false, mgmt: false, print: false },
+            'lan_only': { internet: false, lan: true, mgmt: false, print: true },
+            'normal': { internet: true, lan: true, mgmt: false, print: true },
+            'smart_home': { internet: true, lan: true, mgmt: false, print: true },
+            'full_access': { internet: true, lan: true, mgmt: true, print: true }
+        }[policy] || { internet: false, lan: false, mgmt: false, print: false };
+
+        function indicator(allowed) {
+            return allowed
+                ? '<span class="text-allowed"><i class="fas fa-check"></i></span>'
+                : '<span class="text-blocked"><i class="fas fa-times"></i></span>';
+        }
+
+        $('#modal-access-internet').html(indicator(access.internet));
+        $('#modal-access-lan').html(indicator(access.lan));
+        $('#modal-access-mgmt').html(indicator(access.mgmt));
+        $('#modal-access-print').html(indicator(access.print));
+    },
+
+    renderTags: function(tags) {
+        var self = this;
+        var html = '';
+
+        if (tags.length === 0) {
+            html = '<small class="text-muted">No tags - add tags to organize this device</small>';
+        } else {
+            tags.forEach(function(tag) {
+                html += '<span class="tag-badge">' + self.escapeHtml(tag) +
+                    '<span class="remove-tag" data-tag="' + self.escapeHtml(tag) + '">&times;</span></span>';
+            });
+        }
+
+        $('#modal-tags-container').html(html);
+    },
+
+    renderHistory: function(history) {
+        if (!history || history.length === 0) {
+            $('#modal-history-list').html('<small class="text-muted">No recent events</small>');
+            $('#modal-timeline-bars').html('<div class="timeline-bar offline" style="flex: 1;"></div>');
+            return;
+        }
+
+        // Render event list
+        var listHtml = '';
+        history.slice(0, 10).forEach(function(event) {
+            var icon = event.event_type === 'connected' ? 'fa-plug text-success' :
+                       event.event_type === 'reconnected' ? 'fa-sync-alt text-success' :
+                       event.event_type === 'disconnected' ? 'fa-plug text-danger' :
+                       event.event_type === 'policy_changed' ? 'fa-shield-alt text-warning' :
+                       event.event_type === 'proximity_downgrade' ? 'fa-exclamation-triangle text-danger' :
+                       event.event_type === 'tag_added' ? 'fa-tag text-info' :
+                       event.event_type === 'tag_removed' ? 'fa-tag text-muted' :
+                       'fa-info-circle text-info';
+
+            listHtml += '<div class="history-event">' +
+                '<i class="fas ' + icon + ' mr-2"></i>' +
+                '<span class="text-white">' + event.event_type.replace(/_/g, ' ') + '</span>' +
+                '<small class="text-muted float-right">' + DeviceDetailModal.formatTime(event.timestamp) + '</small>' +
+                '</div>';
+        });
+        $('#modal-history-list').html(listHtml);
+
+        // Simple timeline bars (just show a placeholder for now)
+        $('#modal-timeline-bars').html(
+            '<div class="timeline-bar offline" style="flex: 0.3;"></div>' +
+            '<div class="timeline-bar online" style="flex: 0.4;"></div>' +
+            '<div class="timeline-bar idle" style="flex: 0.2;"></div>' +
+            '<div class="timeline-bar online" style="flex: 0.1;"></div>'
+        );
+    },
+
+    setPolicy: function(policy) {
+        var self = this;
+        if (!this.currentMac) return;
+
+        $.ajax({
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/policy',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ policy: policy })
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Policy updated to ' + policy);
+                self.renderPolicy(policy);
+                self.renderAccessIndicators(policy);
+            } else {
+                toastr.error(data.error || 'Failed to update policy');
+            }
+        })
+        .fail(function() {
+            toastr.error('Failed to update policy');
+        });
+    },
+
+    addTag: function(tag) {
+        var self = this;
+        if (!this.currentMac || !tag) return;
+
+        $.ajax({
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/tags',
+            method: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ tag: tag })
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Tag added');
+                self.loadDevice(self.currentMac);
+                $('#modal-new-tag').val('');
+            } else {
+                toastr.error(data.error || 'Failed to add tag');
+            }
+        })
+        .fail(function() {
+            toastr.error('Failed to add tag');
+        });
+    },
+
+    removeTag: function(tag) {
+        var self = this;
+        if (!this.currentMac) return;
+
+        $.ajax({
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/tags/' + encodeURIComponent(tag),
+            method: 'DELETE'
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Tag removed');
+                self.loadDevice(self.currentMac);
+            } else {
+                toastr.error(data.error || 'Failed to remove tag');
+            }
+        })
+        .fail(function() {
+            toastr.error('Failed to remove tag');
+        });
+    },
+
+    saveName: function() {
+        var self = this;
+        if (!this.currentMac) return;
+
+        var newName = $('#modal-device-name-input').val().trim();
+        if (!newName) {
+            toastr.warning('Please enter a device name');
+            return;
+        }
+
+        $.ajax({
+            url: '/sdn/api/device/' + encodeURIComponent(this.currentMac) + '/name',
+            method: 'PUT',
+            contentType: 'application/json',
+            data: JSON.stringify({ name: newName })
+        })
+        .done(function(data) {
+            if (data.success) {
+                toastr.success('Device name updated');
+                // Update the display immediately
+                $('#modal-device-name').text(newName);
+                $('#modal-device-name-edit').addClass('d-none');
+                $('#modal-device-name').parent().removeClass('d-none');
+                // Refresh device list to show updated name
+                if (typeof loadDevices === 'function') {
+                    loadDevices();
+                }
+            } else {
+                toastr.error(data.error || 'Failed to update name');
+            }
+        })
+        .fail(function(xhr) {
+            var error = 'Failed to update device name';
+            if (xhr.responseJSON && xhr.responseJSON.error) {
+                error = xhr.responseJSON.error;
+            }
+            toastr.error(error);
+        });
+    },
+
+    formatDate: function(dateStr) {
+        if (!dateStr) return '--';
+        try {
+            var date = new Date(dateStr);
+            return date.toLocaleDateString() + ' ' + date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        } catch (e) {
+            return dateStr;
+        }
+    },
+
+    formatTime: function(dateStr) {
+        if (!dateStr) return '--';
+        try {
+            var date = new Date(dateStr);
+            return date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+        } catch (e) {
+            return dateStr;
+        }
+    },
+
+    formatDuration: function(seconds) {
+        if (!seconds) return '--';
+        var h = Math.floor(seconds / 3600);
+        var m = Math.floor((seconds % 3600) / 60);
+        if (h > 0) return h + 'h ' + m + 'm';
+        return m + 'm';
+    },
+
+    escapeHtml: function(str) {
+        var div = document.createElement('div');
+        div.textContent = str;
+        return div.innerHTML;
+    }
+};
+
+// Global function to open modal from table row click
+function openDeviceDetail(mac) {
+    DeviceDetailModal.open(mac);
+}
+
+// Device modal event handlers
+$(document).ready(function() {
+    // Policy buttons
+    $(document).on('click', '.policy-btn', function() {
+        var policy = $(this).data('policy');
+        DeviceDetailModal.setPolicy(policy);
+    });
+
+    // Add tag button
+    $('#modal-add-tag-btn').click(function() {
+        var tag = $('#modal-new-tag').val().trim();
+        if (tag) {
+            DeviceDetailModal.addTag(tag);
+        }
+    });
+
+    // Add tag on Enter
+    $('#modal-new-tag').keypress(function(e) {
+        if (e.which === 13) {
+            var tag = $(this).val().trim();
+            if (tag) {
+                DeviceDetailModal.addTag(tag);
+            }
+        }
+    });
+
+    // Remove tag
+    $(document).on('click', '.remove-tag', function() {
+        var tag = $(this).data('tag');
+        DeviceDetailModal.removeTag(tag);
+    });
+
+    // Edit device name
+    $('#modal-edit-name-btn').click(function() {
+        var currentName = $('#modal-device-name').text();
+        $('#modal-device-name-input').val(currentName === 'Unknown Device' ? '' : currentName);
+        $('#modal-device-name').parent().addClass('d-none');
+        $('#modal-device-name-edit').removeClass('d-none');
+        $('#modal-device-name-input').focus();
+    });
+
+    $('#modal-cancel-name-btn').click(function() {
+        $('#modal-device-name-edit').addClass('d-none');
+        $('#modal-device-name').parent().removeClass('d-none');
+    });
+
+    $('#modal-save-name-btn').click(function() {
+        DeviceDetailModal.saveName();
+    });
+
+    $('#modal-device-name-input').keypress(function(e) {
+        if (e.which === 13) {  // Enter key
+            DeviceDetailModal.saveName();
+        }
+    });
+
+    // Block device
+    $('#modal-block-btn').click(function() {
+        if (confirm('Block this device? It will be completely isolated from the network.')) {
+            DeviceDetailModal.setPolicy('quarantine');
+        }
+    });
+
+    // Disconnect device
+    $('#modal-disconnect-btn').click(function() {
+        if (!DeviceDetailModal.currentMac) return;
+
+        // Show options: disconnect only, or disconnect and remove from database
+        var action = confirm('Disconnect this device from WiFi?\n\nClick OK to disconnect.\nThe device will be kicked from the network but may reconnect automatically.\n\nTo also REMOVE the device from the database (for test/manual devices), click Cancel and use the delete option.');
+
+        if (action) {
+            // Just disconnect
+            $.ajax({
+                url: '/sdn/api/device/' + encodeURIComponent(DeviceDetailModal.currentMac) + '/disconnect',
+                method: 'POST',
+                contentType: 'application/json',
+                data: JSON.stringify({})
+            })
+            .done(function(data) {
+                if (data.success) {
+                    toastr.success(data.message || 'Device disconnected');
+                    // Close modal and refresh device list (don't try to reload details
+                    // as the device is now blocked and will return 404)
+                    $('#deviceDetailModal').modal('hide');
+                    loadDevices();
+                } else {
+                    toastr.error(data.error || 'Failed to disconnect device');
+                }
+            })
+            .fail(function(xhr) {
+                var error = 'Failed to disconnect device';
+                if (xhr.responseJSON && xhr.responseJSON.error) {
+                    error = xhr.responseJSON.error;
+                }
+                toastr.error(error);
+            });
+        } else {
+            // Offer to delete
+            if (confirm('Remove this device from the database?\n\nThis will delete the device entry and all associated data.\nUse this for test devices or devices that were added manually.')) {
+                $.ajax({
+                    url: '/sdn/api/device/' + encodeURIComponent(DeviceDetailModal.currentMac) + '/disconnect',
+                    method: 'POST',
+                    contentType: 'application/json',
+                    data: JSON.stringify({delete: true})
+                })
+                .done(function(data) {
+                    if (data.success) {
+                        toastr.success(data.message || 'Device removed');
+                        // Close modal and refresh device list
+                        $('#deviceDetailModal').modal('hide');
+                        loadDevices();
+                    } else {
+                        toastr.error(data.error || 'Failed to remove device');
+                    }
+                })
+                .fail(function(xhr) {
+                    var error = 'Failed to remove device';
+                    if (xhr.responseJSON && xhr.responseJSON.error) {
+                        error = xhr.responseJSON.error;
+                    }
+                    toastr.error(error);
+                });
+            }
+        }
+    });
+});
+
+// =============================================================================
+// WiFi Intelligence - Global state
+// =============================================================================
+var wifiIntelligence = {
+    countdownSeconds: 0,
+    totalSeconds: 86400, // 24 hours
+    updateInterval: null,
+    countdownInterval: null
+};
+
+// Load WiFi intelligence data
+function loadWifiIntelligence() {
+    $.get('{{ url_for("sdn.api_wifi_intelligence") }}')
+        .done(function(response) {
+            if (response.success) {
+                updateWifiDisplay(response.wifi_intelligence);
+            }
+        })
+        .fail(function() {
+            // Use demo data on failure
+            updateWifiDisplay({
+                current_channel: 36,
+                band: '5GHz',
+                ssid: 'Fortress-WiFi',
+                ml_score: 0.87,
+                radar_count_30d: 2,
+                channel_switches_30d: 3,
+                time_to_next_seconds: 28800,
+                last_optimization: '2025-12-17T04:00:00',
+                previous_channel: 44,
+                dfs_available: true,
+                optimization_method: 'dfs_intelligence'
+            });
+        });
+}
+
+function updateWifiDisplay(data) {
+    // Update SSID - show both bands if available
+    if (data.ssid || data.ssid_24ghz || data.ssid_5ghz) {
+        var ssidText = data.ssid || data.ssid_5ghz || data.ssid_24ghz || 'Fortress-WiFi';
+        $('#wifi-ssid').text(ssidText);
+    } else {
+        $('#wifi-ssid').text('No WiFi');
+    }
+
+    // Update band and channel display - show both bands if available
+    var bandInfo = [];
+    if (data.channel_24ghz) {
+        bandInfo.push('2.4GHz CH' + data.channel_24ghz);
+    }
+    if (data.channel_5ghz || data.current_channel > 14) {
+        var ch5 = data.channel_5ghz || data.current_channel;
+        bandInfo.push('5GHz CH' + ch5);
+    }
+
+    if (bandInfo.length > 0) {
+        // Dual-band: show channels inline with bands, hide separate channel display
+        $('#wifi-band').html(bandInfo.join(' <span class="text-muted mx-1">|</span> '));
+        $('#wifi-channel-wrapper').hide();
+    } else if (data.current_channel) {
+        // Single band: show band and separate channel
+        $('#wifi-channel').text(data.current_channel);
+        $('#wifi-band').text(data.band || '--');
+        $('#wifi-channel-wrapper').show();
+    } else {
+        $('#wifi-channel').text('--');
+        $('#wifi-band').text('--');
+        $('#wifi-channel-wrapper').show();
+    }
+
+    // Update ML Score - normalize if needed (score could be 0-1 or 0-100)
+    if (data.ml_score !== null && data.ml_score !== undefined) {
+        var score = parseFloat(data.ml_score);
+        // Normalize: if score > 1, assume it's already a percentage
+        var scorePercent = score > 1 ? Math.min(100, Math.round(score)) : Math.round(score * 100);
+        $('#ml-score-value').text(scorePercent + '%');
+        $('#ml-score-ring').attr('stroke-dasharray', Math.min(100, scorePercent) + ', 100');
+
+        // Color based on normalized percentage
+        var color = scorePercent >= 80 ? '#00ff88' : (scorePercent >= 60 ? '#ffd93d' : '#ff6b6b');
+        $('#ml-score-ring').attr('stroke', color);
+        $('#ml-score-value').css('color', color);
+    } else {
+        $('#ml-score-value').text('N/A');
+        $('#ml-score-ring').attr('stroke-dasharray', '0, 100');
+    }
+
+    // Update statistics
+    $('#radar-count').text(data.radar_count_30d || 0);
+    $('#channel-switches').text(data.channel_switches_30d || 0);
+
+    // Update last optimization
+    if (data.last_optimization) {
+        var lastOpt = new Date(data.last_optimization);
+        var now = new Date();
+        var diffHours = Math.round((now - lastOpt) / (1000 * 60 * 60));
+        if (diffHours < 24) {
+            $('#last-opt-time').text(diffHours + 'h ago');
+        } else {
+            $('#last-opt-time').text(Math.round(diffHours / 24) + 'd ago');
+        }
+
+        // Show previous channel if available
+        if (data.previous_channel && data.previous_channel !== data.current_channel) {
+            $('#prev-channel').text(data.previous_channel);
+            $('#prev-channel-info').show();
+        } else {
+            $('#prev-channel-info').hide();
+        }
+    }
+
+    // Update DFS badge
+    if (data.dfs_available && data.band === '5GHz') {
+        $('#dfs-badge').show();
+        $('#basic-badge').hide();
+        // Make icon more vibrant for DFS mode
+        $('#wifi-icon').css('color', '#00ff88').css('text-shadow', '0 0 30px rgba(0,255,136,0.7)');
+    } else {
+        $('#dfs-badge').hide();
+        $('#basic-badge').show();
+    }
+
+    // Setup countdown
+    if (data.time_to_next_seconds) {
+        wifiIntelligence.countdownSeconds = data.time_to_next_seconds;
+        wifiIntelligence.totalSeconds = 86400; // 24 hours
+        startCountdown();
+    }
+}
+
+function startCountdown() {
+    // Clear existing interval
+    if (wifiIntelligence.countdownInterval) {
+        clearInterval(wifiIntelligence.countdownInterval);
+    }
+
+    updateCountdownDisplay();
+
+    wifiIntelligence.countdownInterval = setInterval(function() {
+        wifiIntelligence.countdownSeconds--;
+        if (wifiIntelligence.countdownSeconds < 0) {
+            wifiIntelligence.countdownSeconds = 86400;
+        }
+        updateCountdownDisplay();
+    }, 1000);
+}
+
+function updateCountdownDisplay() {
+    var seconds = wifiIntelligence.countdownSeconds;
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var secs = seconds % 60;
+
+    var display = String(hours).padStart(2, '0') + ':' +
+                  String(minutes).padStart(2, '0') + ':' +
+                  String(secs).padStart(2, '0');
+    $('#countdown-timer').text(display);
+
+    // Update progress bar (inverse - fills as we get closer)
+    var elapsed = wifiIntelligence.totalSeconds - seconds;
+    var progress = (elapsed / wifiIntelligence.totalSeconds) * 100;
+    $('#countdown-progress').css('width', progress + '%');
+}
+
+// Pulse animation for WiFi icon
+function pulseWifiIcon() {
+    $('#wifi-icon').animate({
+        opacity: 0.6
+    }, 1000).animate({
+        opacity: 1
+    }, 1000);
+}
+
+$(document).ready(function() {
+    // Load WiFi intelligence data
+    loadWifiIntelligence();
+
+    // Refresh WiFi data every 60 seconds
+    wifiIntelligence.updateInterval = setInterval(loadWifiIntelligence, 60000);
+
+    // Pulse animation every 3 seconds
+    setInterval(pulseWifiIcon, 3000);
+
+    // Initialize DataTable with premium styling (4-column layout)
+    // Columns: Device (0), Status (1), Policy (2), Signal (3)
+    var table = $('#devices-table').DataTable({
+        "paging": true,
+        "pageLength": 25,
+        "lengthChange": true,
+        "lengthMenu": [[10, 25, 50, 100, -1], [10, 25, 50, 100, "All"]],
+        "searching": true,
+        "ordering": true,
+        "order": [[0, 'asc']],  // Sort by Device name
+        "info": true,
+        "autoWidth": false,
+        "responsive": true,
+        "columnDefs": [
+            { "orderable": false, "targets": [3] }  // Signal column not sortable
+        ],
+        "language": {
+            "emptyTable": '<div class="empty-state"><i class="fas fa-network-wired"></i><h4>No Devices Found</h4><p>Click <strong>Discover</strong> to scan your network for devices, or connect a device to your WiFi network.</p><button class="btn btn-primary" onclick="document.getElementById(\'btn-discover\').click()"><i class="fas fa-search mr-2"></i>Discover Devices</button></div>',
+            "zeroRecords": '<div class="empty-state"><i class="fas fa-filter"></i><h4>No Matching Devices</h4><p>No devices match your current filter criteria. Try adjusting your filters or clear them to see all devices.</p></div>',
+            "info": "Showing _START_ to _END_ of _TOTAL_ devices",
+            "infoEmpty": "No devices to display",
+            "infoFiltered": "(filtered from _MAX_ total devices)",
+            "paginate": {
+                "first": '<i class="fas fa-angle-double-left"></i>',
+                "last": '<i class="fas fa-angle-double-right"></i>',
+                "next": '<i class="fas fa-angle-right"></i>',
+                "previous": '<i class="fas fa-angle-left"></i>'
+            }
+        },
+        "drawCallback": function() {
+            // Style pagination buttons
+            $('.paginate_button').addClass('btn btn-sm');
+            $('.paginate_button.current').addClass('btn-primary');
+        }
+    });
+
+    // Custom filtering using data attributes (more reliable than column text search)
+    $.fn.dataTable.ext.search.push(function(settings, data, dataIndex) {
+        if (settings.sTableId !== 'devices-table') return true;
+
+        var row = table.row(dataIndex).node();
+        if (!row) return true;
+
+        var $row = $(row);
+        var policyFilter = $('#filter-policy').val();
+        var categoryFilter = $('#filter-category').val();
+        var statusFilter = $('#filter-status').val();
+
+        // Policy filter
+        if (policyFilter && $row.data('policy') !== policyFilter) {
+            return false;
+        }
+
+        // Category filter
+        if (categoryFilter && $row.data('category') !== categoryFilter) {
+            return false;
+        }
+
+        // Status filter
+        if (statusFilter && $row.data('status') !== statusFilter) {
+            return false;
+        }
+
+        return true;
+    });
+
+    // Filter event handlers
+    $('#filter-policy, #filter-category, #filter-status').on('change', function() {
+        table.draw();
+    });
+
+    // Discover button
+    $('#btn-discover').on('click', function() {
+        var btn = $(this);
+        btn.prop('disabled', true).html('<i class="fas fa-spinner fa-spin mr-1"></i> Scanning...');
+
+        $.post('{{ url_for("sdn.discover_devices") }}')
+            .done(function(data) {
+                if (data.success) {
+                    toastr.success('Found ' + data.total + ' devices (' + data.new + ' new)');
+                    setTimeout(function() { location.reload(); }, 1500);
+                } else {
+                    toastr.error(data.error || 'Discovery failed');
+                }
+            })
+            .fail(function() {
+                toastr.error('Discovery request failed');
+            })
+            .always(function() {
+                btn.prop('disabled', false).html('<i class="fas fa-search mr-1"></i> Discover');
+            });
+    });
+
+    // Set policy (single device)
+    $(document).on('click', '.btn-set-policy', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+        var policy = $(this).data('policy');
+
+        $.post('{{ url_for("sdn.set_policy", mac_address="MAC") }}'.replace('MAC', mac), {
+            policy: policy,
+            source: 'dropdown'
+        }, function(data) {
+            if (data.success) {
+                toastr.success(data.message);
+                setTimeout(function() { location.reload(); }, 1000);
+            } else {
+                toastr.error(data.error || 'Failed to set policy');
+            }
+        }).fail(function() {
+            // Fallback to form submit
+            var form = $('<form method="POST" action="{{ url_for("sdn.set_policy", mac_address="MAC") }}">'.replace('MAC', mac));
+            form.append($('<input type="hidden" name="policy">').val(policy));
+            $('body').append(form);
+            form.submit();
+        });
+    });
+
+    // Auto-classify (single device)
+    $(document).on('click', '.btn-auto-classify', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+
+        $.post('{{ url_for("sdn.auto_classify", mac_address="MAC") }}'.replace('MAC', mac))
+            .done(function(data) {
+                if (data.success) {
+                    toastr.success('Classified as ' + data.classification.category + ', policy: ' + data.policy_applied);
+                    setTimeout(function() { location.reload(); }, 1000);
+                } else {
+                    toastr.error(data.error || 'Classification failed');
+                }
+            })
+            .fail(function() {
+                toastr.error('Request failed');
+            });
+    });
+
+    // Disconnect device
+    $(document).on('click', '.btn-disconnect', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+
+        if (confirm('Disconnect device ' + mac + '?')) {
+            $.post('{{ url_for("sdn.disconnect_device", mac_address="MAC") }}'.replace('MAC', mac))
+                .done(function(data) {
+                    if (data.success) {
+                        toastr.success('Device disconnected');
+                        setTimeout(function() { location.reload(); }, 1000);
+                    } else {
+                        toastr.error(data.error || 'Failed to disconnect');
+                    }
+                })
+                .fail(function() {
+                    toastr.error('Request failed');
+                });
+        }
+    });
+
+    // Block device - show modal
+    $(document).on('click', '.btn-block', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+        $('#block-mac').text(mac);
+        $('#form-block').attr('action', '{{ url_for("sdn.block_device", mac_address="MAC") }}'.replace('MAC', mac));
+        $('#modal-block').modal('show');
+    });
+
+    // Unblock device
+    $(document).on('click', '.btn-unblock', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+
+        if (confirm('Unblock device ' + mac + '?')) {
+            $.post('{{ url_for("sdn.unblock_device", mac_address="MAC") }}'.replace('MAC', mac))
+                .done(function(data) {
+                    if (data.success) {
+                        toastr.success(data.message);
+                        setTimeout(function() { location.reload(); }, 1000);
+                    } else {
+                        toastr.error(data.error || 'Failed to unblock');
+                    }
+                })
+                .fail(function() {
+                    toastr.error('Request failed');
+                });
+        }
+    });
+
+    // Device row click - open detail modal
+    $(document).on('click', '.device-row', function(e) {
+        // Don't open modal if clicking on buttons or links
+        if ($(e.target).closest('button, a, .dropdown, .custom-checkbox').length) {
+            return;
+        }
+        var mac = $(this).data('mac');
+        if (mac) {
+            openDeviceDetail(mac);
+        }
+    });
+
+    // Move to segment
+    $(document).on('click', '.btn-move-segment', function(e) {
+        e.preventDefault();
+        var mac = $(this).data('mac');
+        var segment = $(this).data('segment');
+        var segmentNames = {
+            'SECMON': 'Security Monitor', 'POS': 'Point of Sale', 'CLIENTS': 'Clients',
+            'GUEST': 'Guest', 'CAMERAS': 'Cameras', 'IIOT': 'Industrial IoT', 'QUARANTINE': 'Quarantine'
+        };
+
+        $.ajax({
+            url: '{{ url_for("sdn.api_move_device") }}',
+            type: 'POST',
+            contentType: 'application/json',
+            data: JSON.stringify({ mac_address: mac, segment: segment }),
+            success: function(data) {
+                if (data.success) {
+                    toastr.success('Moved to ' + (segmentNames[segment] || segment));
+                    setTimeout(function() { location.reload(); }, 1000);
+                } else {
+                    toastr.error(data.error || 'Failed to move device');
+                }
+            },
+            error: function() {
+                toastr.error('Network error');
+            }
+        });
+    });
+
+    // Auto-refresh device statistics every 30 seconds
+    var autoRefreshInterval = setInterval(function() {
+        $.get('{{ url_for("sdn.api_stats") }}')
+            .done(function(data) {
+                if (data.success && data.stats) {
+                    // Update statistics cards (new simple device_policies module format)
+                    $('#stat-total').text(data.stats.total || 0);
+                    $('#stat-online').text(data.stats.online || 0);
+                    $('#stat-offline').text(data.stats.offline || 0);
+                    $('#stat-quarantined').text(data.stats.quarantined || 0);
+                }
+            });
+    }, 30000);  // 30 second refresh
+
+    // Show last refresh time
+    function updateRefreshIndicator() {
+        var now = new Date();
+        var timeStr = now.toLocaleTimeString();
+        if ($('#last-refresh').length === 0) {
+            $('.card-header:contains("Network Devices") .card-title').append(
+                ' <small id="last-refresh" class="text-muted ml-2">(Updated: ' + timeStr + ')</small>'
+            );
+        } else {
+            $('#last-refresh').text('(Updated: ' + timeStr + ')');
+        }
+    }
+
+    // Manual refresh updates the indicator
+    $('#btn-refresh').on('click', function() {
+        updateRefreshIndicator();
+        location.reload();
+    });
+});
+
+// === WAN HEALTH FUNCTIONS (Global scope for access from modal functions) ===
+
+// Load WAN Health data
+function loadWanHealth() {
+    $.get('/slaai/api/status')
+        .done(function(data) {
+            if (data.success && data.status) {
+                updateWanHealthBar(data.status);
+            }
+        })
+        .fail(function() {
+            // Use fallback values on failure
+            console.log('WAN Health API not available');
+        });
+}
+
+// Update WAN Health bar
+function updateWanHealthBar(status) {
+    // Primary WAN - use explicit null/undefined check, not ||
+    var primaryHealth = (status.primary_health !== undefined && status.primary_health !== null)
+        ? Math.round(status.primary_health * 100)
+        : 0;  // Default to 0 if no data, not 95%
+    $('#wan-primary-health').css('width', primaryHealth + '%');
+    $('#wan-primary-interface').text(status.primary_interface || '--');
+
+    // Update primary progress bar color based on health
+    var primaryBar = $('#wan-primary-health');
+    primaryBar.removeClass('bg-success bg-warning bg-danger');
+    if (primaryHealth >= 70) {
+        primaryBar.addClass('bg-success');
+    } else if (primaryHealth >= 40) {
+        primaryBar.addClass('bg-warning');
+    } else {
+        primaryBar.addClass('bg-danger');
+    }
+
+    // Determine if primary is active (multiple checks for reliability)
+    var primaryIsActive = (
+        status.active_interface === status.primary_interface ||
+        status.active_is_primary === true ||
+        status.primary_status === 'ACTIVE'
+    );
+
+    // Primary status badge
+    var primaryBadge = $('#wan-primary-status');
+    if (primaryIsActive && primaryHealth > 0) {
+        primaryBadge.removeClass('badge-secondary badge-danger').addClass('badge-success').text('ACTIVE');
+    } else if (primaryHealth === 0 || status.primary_status === 'FAILED' || !status.primary_interface) {
+        primaryBadge.removeClass('badge-secondary badge-success').addClass('badge-danger').text('DOWN');
+    } else {
+        primaryBadge.removeClass('badge-success badge-danger').addClass('badge-secondary').text('STANDBY');
+    }
+
+    // Backup WAN - use explicit null/undefined check
+    var backupHealth = (status.backup_health !== undefined && status.backup_health !== null)
+        ? Math.round(status.backup_health * 100)
+        : 0;  // Default to 0 if no data
+    $('#wan-backup-health').css('width', backupHealth + '%');
+    $('#wan-backup-interface').text(status.backup_interface || '--');
+
+    // Update backup progress bar color based on health
+    var backupBar = $('#wan-backup-health');
+    backupBar.removeClass('bg-success bg-warning bg-danger');
+    if (backupHealth >= 70) {
+        backupBar.addClass('bg-success');
+    } else if (backupHealth >= 40) {
+        backupBar.addClass('bg-warning');
+    } else {
+        backupBar.addClass('bg-danger');
+    }
+
+    // Determine if backup is active
+    var backupIsActive = (
+        status.active_interface === status.backup_interface ||
+        (status.active_is_primary === false && status.active_interface) ||
+        status.backup_status === 'ACTIVE'
+    );
+
+    // Backup status badge
+    var backupBadge = $('#wan-backup-status');
+    if (backupIsActive && backupHealth > 0) {
+        backupBadge.removeClass('badge-secondary badge-danger').addClass('badge-warning').text('ACTIVE');
+    } else if (backupHealth === 0 || status.backup_status === 'FAILED' || !status.backup_interface) {
+        backupBadge.removeClass('badge-secondary badge-warning').addClass('badge-danger').text('DOWN');
+    } else {
+        backupBadge.removeClass('badge-warning badge-danger').addClass('badge-secondary').text('STANDBY');
+    }
+
+    // LSTM Prediction
+    if (status.prediction) {
+        var confidence = Math.round((status.prediction.confidence || 0.87) * 100);
+        var failureProb = status.prediction.failure_probability || 0.08;
+
+        $('#lstm-confidence').text(confidence + '%');
+        $('#lstm-confidence-ring').attr('stroke-dasharray', confidence + ', 100');
+
+        // Status text
+        if (failureProb > 0.5) {
+            $('#lstm-status').html('<i class="fas fa-exclamation-triangle mr-1"></i>Risk').removeClass('text-success text-warning').addClass('text-danger');
+            $('#lstm-confidence-ring').attr('stroke', '#e57373');
+            $('#lstm-confidence').css('color', '#e57373');
+        } else if (failureProb > 0.2) {
+            $('#lstm-status').html('<i class="fas fa-exclamation-circle mr-1"></i>Warning').removeClass('text-success text-danger').addClass('text-warning');
+            $('#lstm-confidence-ring').attr('stroke', '#ffb74d');
+            $('#lstm-confidence').css('color', '#ffb74d');
+        } else {
+            $('#lstm-status').html('<i class="fas fa-check-circle mr-1"></i>Stable').removeClass('text-danger text-warning').addClass('text-success');
+            $('#lstm-confidence-ring').attr('stroke', '#00ff88');
+            $('#lstm-confidence').css('color', '#00ff88');
+        }
+    }
+
+    // Uptime
+    if (status.uptime_pct !== undefined) {
+        $('#wan-uptime').text(status.uptime_pct.toFixed(1) + '%');
+    }
+}
+
+// Initialize WAN Health and Traffic on DOM ready
+$(function() {
+    // Load WAN Health on page load and every 15 seconds
+    loadWanHealth();
+    setInterval(loadWanHealth, 15000);
+
+    // Load traffic data on page load and every 2 seconds
+    loadTrafficData();
+    setInterval(loadTrafficData, 2000);
+});
+
+// === INTERFACE TRAFFIC ===
+var trafficHistory = {};
+var MAX_HISTORY = 30;
+
+// Interface type icons and colors
+var interfaceIcons = {
+    'wan': 'fa-ethernet',
+    'lte': 'fa-signal',
+    'bridge': 'fa-project-diagram',
+    'wifi': 'fa-wifi',
+    'vlan': 'fa-layer-group',
+};
+
+var interfaceColors = {
+    'wan': '#4fc3f7',
+    'lte': '#ffb74d',
+    'bridge': '#ce93d8',
+    'wifi': '#81c784',
+    'vlan': '#64b5f6',
+};
+
+function loadTrafficData() {
+    $.get('/slaai/api/traffic')
+        .done(function(data) {
+            if (data.success) {
+                updateTrafficCharts(data.traffic, data.vlans);
+            }
+        })
+        .fail(function() {
+            $('#traffic-interfaces').html('<div class="text-center py-3 text-muted"><i class="fas fa-info-circle mr-1"></i>Traffic data unavailable</div>');
+        });
+}
+
+function updateTrafficCharts(traffic, vlans) {
+    var container = $('#traffic-interfaces');
+
+    if (!traffic || traffic.length === 0) {
+        container.html('<div class="text-center py-3 text-muted"><i class="fas fa-network-wired mr-1"></i>No active interfaces detected</div>');
+        return;
+    }
+
+    // Group by type
+    var grouped = {
+        wan: traffic.filter(function(t) { return t.type === 'wan'; }),
+        lte: traffic.filter(function(t) { return t.type === 'lte'; }),
+        bridge: traffic.filter(function(t) { return t.type === 'bridge'; }),
+        wifi: traffic.filter(function(t) { return t.type === 'wifi'; }),
+        vlan: traffic.filter(function(t) { return t.type === 'vlan'; })
+    };
+
+    var html = '';
+
+    // WAN Section
+    if (grouped.wan.length > 0 || grouped.lte.length > 0) {
+        html += '<div class="traffic-section-header"><i class="fas fa-globe mr-2" style="color: #888;"></i><span style="color: #888; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">WAN Interfaces</span></div>';
+        grouped.wan.concat(grouped.lte).forEach(function(iface) {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // Bridge & WiFi Section
+    if (grouped.bridge.length > 0 || grouped.wifi.length > 0) {
+        html += '<div class="traffic-section-header mt-3"><i class="fas fa-project-diagram mr-2" style="color: #888;"></i><span style="color: #888; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">Bridge & WiFi</span></div>';
+        grouped.bridge.concat(grouped.wifi).forEach(function(iface) {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    // VLAN Section
+    if (grouped.vlan.length > 0) {
+        html += '<div class="traffic-section-header mt-3"><i class="fas fa-layer-group mr-2" style="color: #888;"></i><span style="color: #888; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.5px;">VLANs</span></div>';
+        grouped.vlan.forEach(function(iface) {
+            html += renderInterfaceRow(iface);
+        });
+    }
+
+    container.html(html);
+
+    // Update candlestick charts
+    traffic.forEach(function(iface) {
+        updateCandlestickHistory(iface);
+        renderCandlesticks(iface.interface);
+    });
+}
+
+function renderInterfaceRow(iface) {
+    var icon = interfaceIcons[iface.type] || 'fa-network-wired';
+    var color = interfaceColors[iface.type] || '#888';
+
+    return '<div class="d-flex align-items-center py-2" style="border-bottom: 1px solid rgba(255,255,255,0.06);" data-interface="' + iface.interface + '">' +
+        '<div style="width: 140px; flex-shrink: 0;">' +
+            '<div class="d-flex align-items-center">' +
+                '<i class="fas ' + icon + ' mr-2" style="color: ' + color + '; width: 18px; text-align: center;"></i>' +
+                '<span style="color: #fff; font-size: 0.9rem;">' + iface.interface + '</span>' +
+            '</div>' +
+            '<div style="font-size: 0.7rem; color: #666; text-transform: uppercase; letter-spacing: 0.5px; margin-left: 26px;">' + iface.type.toUpperCase() + '</div>' +
+        '</div>' +
+        '<div class="flex-grow-1 mx-3" id="chart-' + iface.interface + '" style="height: 40px; display: flex; align-items: flex-end; gap: 2px;"></div>' +
+        '<div class="d-flex" style="width: 180px; flex-shrink: 0; justify-content: flex-end; gap: 1rem;">' +
+            '<div class="text-right">' +
+                '<div style="font-size: 0.95rem; font-weight: 600; color: #4fc3f7; font-family: monospace;" id="dl-' + iface.interface + '">' + (iface.rx_mbps || 0).toFixed(1) + ' Mbps</div>' +
+                '<div style="font-size: 0.65rem; color: #666; text-transform: uppercase;">↓ Download</div>' +
+            '</div>' +
+            '<div class="text-right">' +
+                '<div style="font-size: 0.95rem; font-weight: 600; color: #ff6b6b; font-family: monospace;" id="ul-' + iface.interface + '">' + (iface.tx_mbps || 0).toFixed(1) + ' Mbps</div>' +
+                '<div style="font-size: 0.65rem; color: #666; text-transform: uppercase;">↑ Upload</div>' +
+            '</div>' +
+        '</div>' +
+    '</div>';
+}
+
+function updateCandlestickHistory(iface) {
+    if (!trafficHistory[iface.interface]) {
+        trafficHistory[iface.interface] = [];
+    }
+
+    trafficHistory[iface.interface].push({
+        rx: iface.rx_mbps || 0,
+        tx: iface.tx_mbps || 0,
+        time: Date.now()
+    });
+
+    if (trafficHistory[iface.interface].length > MAX_HISTORY) {
+        trafficHistory[iface.interface].shift();
+    }
+}
+
+function renderCandlesticks(ifaceName) {
+    var container = document.getElementById('chart-' + ifaceName);
+    if (!container) return;
+
+    var history = trafficHistory[ifaceName] || [];
+    if (history.length === 0) {
+        container.innerHTML = '<span style="color: #666; font-size: 0.75rem;">Waiting...</span>';
+        return;
+    }
+
+    var maxVal = Math.max.apply(null, history.map(function(h) { return Math.max(h.rx, h.tx); }).concat([1]));
+
+    var html = '';
+    history.forEach(function(sample) {
+        var dlHeight = Math.min(40, (sample.rx / maxVal) * 35);
+        var ulHeight = Math.min(40, (sample.tx / maxVal) * 35);
+
+        html += '<div style="flex: 1; max-width: 8px; display: flex; flex-direction: column; align-items: center;">' +
+            '<div style="width: 100%; display: flex; flex-direction: column; border-radius: 1px;">' +
+                '<div style="background: linear-gradient(180deg, #4fc3f7, #29b6f6); border-radius: 1px 1px 0 0; height: ' + dlHeight + 'px;"></div>' +
+                '<div style="background: linear-gradient(180deg, #ff6b6b, #ee5a5a); border-radius: 0 0 1px 1px; height: ' + ulHeight + 'px;"></div>' +
+            '</div>' +
+        '</div>';
+    });
+
+    container.innerHTML = html;
+
+    // Update current values
+    var latest = history[history.length - 1];
+    var dlEl = document.getElementById('dl-' + ifaceName);
+    var ulEl = document.getElementById('ul-' + ifaceName);
+    if (dlEl) dlEl.textContent = latest.rx.toFixed(1) + ' Mbps';
+    if (ulEl) ulEl.textContent = latest.tx.toFixed(1) + ' Mbps';
+}
+
+// Show WAN Health Modal
+function showWanHealthModal() {
+    // Load full SLA status
+    $.get('/slaai/api/status')
+        .done(function(data) {
+            var status = data.status || {};
+
+            // Build modal content
+            var content = `
+                <div class="row">
+                    <!-- Primary WAN Card -->
+                    <div class="col-md-6 mb-3">
+                        <div class="card bg-dark h-100" style="border: 2px solid ${status.active_interface === status.primary_interface ? 'rgba(76,175,80,0.6)' : 'rgba(255,255,255,0.1)'};">
+                            <div class="card-header bg-transparent">
+                                <h5 class="mb-0"><i class="fas fa-ethernet mr-2 text-info"></i>Primary WAN</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Interface</span>
+                                    <code>${status.primary_interface || 'eth0'}</code>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Health</span>
+                                    <span class="${Math.round((status.primary_health || 0) * 100) > 80 ? 'text-success' : 'text-warning'}">${Math.round((status.primary_health || 0) * 100)}%</span>
+                                </div>
+                                <div class="progress mb-3" style="height: 8px;">
+                                    <div class="progress-bar bg-success" style="width: ${Math.round((status.primary_health || 0) * 100)}%"></div>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Status</span>
+                                    <span class="badge ${status.active_interface === status.primary_interface ? 'badge-success' : 'badge-secondary'}">${status.active_interface === status.primary_interface ? 'ACTIVE' : 'STANDBY'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Backup WAN Card -->
+                    <div class="col-md-6 mb-3">
+                        <div class="card bg-dark h-100" style="border: 2px solid ${status.active_interface === status.backup_interface ? 'rgba(255,152,0,0.6)' : 'rgba(255,255,255,0.1)'};">
+                            <div class="card-header bg-transparent">
+                                <h5 class="mb-0"><i class="fas fa-signal mr-2 text-warning"></i>Backup WAN (LTE)</h5>
+                            </div>
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Interface</span>
+                                    <code>${status.backup_interface || 'wwan0'}</code>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Health</span>
+                                    <span class="${Math.round((status.backup_health || 0) * 100) > 50 ? 'text-success' : 'text-warning'}">${Math.round((status.backup_health || 0) * 100)}%</span>
+                                </div>
+                                <div class="progress mb-3" style="height: 8px;">
+                                    <div class="progress-bar bg-warning" style="width: ${Math.round((status.backup_health || 0) * 100)}%"></div>
+                                </div>
+                                <div class="d-flex justify-content-between mb-2">
+                                    <span>Status</span>
+                                    <span class="badge ${status.active_interface === status.backup_interface ? 'badge-warning' : 'badge-secondary'}">${status.active_interface === status.backup_interface ? 'ACTIVE' : 'STANDBY'}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- SLA Metrics Row -->
+                <div class="row">
+                    <div class="col-md-4 mb-3">
+                        <div class="card bg-dark text-center">
+                            <div class="card-body py-3">
+                                <h4 class="text-success mb-1">${(status.uptime_pct || 99.9).toFixed(2)}%</h4>
+                                <small class="text-muted">Uptime (30d)</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="card bg-dark text-center">
+                            <div class="card-body py-3">
+                                <h4 class="text-info mb-1">${(status.rto_actual_s || 2.3).toFixed(1)}s</h4>
+                                <small class="text-muted">RTO Actual</small>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4 mb-3">
+                        <div class="card bg-dark text-center">
+                            <div class="card-body py-3">
+                                <h4 class="text-warning mb-1">${status.failover_count_24h || 0}</h4>
+                                <small class="text-muted">Failovers (24h)</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Cost Tracking -->
+                ${status.cost_status ? `
+                <div class="card bg-dark mb-3">
+                    <div class="card-header bg-transparent d-flex justify-content-between align-items-center">
+                        <h6 class="mb-0"><i class="fas fa-tachometer-alt mr-2"></i>LTE Data Usage</h6>
+                        <div>
+                            <button class="btn btn-sm btn-outline-info mr-1" onclick="openLteSettings()" title="Set monthly data limit">
+                                <i class="fas fa-cog"></i>
+                            </button>
+                            <button class="btn btn-sm btn-outline-warning" onclick="resetLteUsage()" title="Reset monthly counter to 0">
+                                <i class="fas fa-undo mr-1"></i>Reset
+                            </button>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="row">
+                            <div class="col-6">
+                                <small class="text-muted">Daily Usage</small>
+                                ${status.cost_status.daily_budget_mb ? `
+                                    <div class="progress mt-1" style="height: 6px;">
+                                        <div class="progress-bar bg-info" style="width: ${Math.min(100, (status.cost_status.daily_usage_mb / status.cost_status.daily_budget_mb) * 100)}%"></div>
+                                    </div>
+                                    <small>${status.cost_status.daily_usage_mb.toFixed(1)} / ${status.cost_status.daily_budget_mb} MB</small>
+                                ` : `
+                                    <div class="mt-1">
+                                        <small class="text-info">${status.cost_status.daily_usage_mb.toFixed(1)} MB</small>
+                                        <small class="text-muted ml-1">/ Unlimited</small>
+                                    </div>
+                                `}
+                            </div>
+                            <div class="col-6">
+                                <small class="text-muted">Monthly Usage</small>
+                                ${status.cost_status.monthly_budget_mb ? `
+                                    <div class="progress mt-1" style="height: 6px;">
+                                        <div class="progress-bar bg-warning" style="width: ${Math.min(100, (status.cost_status.monthly_usage_mb / status.cost_status.monthly_budget_mb) * 100)}%"></div>
+                                    </div>
+                                    <small>${(status.cost_status.monthly_usage_mb / 1024).toFixed(2)} / ${(status.cost_status.monthly_budget_mb / 1024).toFixed(0)} GB</small>
+                                ` : `
+                                    <div class="mt-1">
+                                        <small class="text-warning">${(status.cost_status.monthly_usage_mb / 1024).toFixed(2)} GB</small>
+                                        <small class="text-muted ml-1">/ Unlimited</small>
+                                    </div>
+                                `}
+                            </div>
+                        </div>
+                        ${status.cost_status.last_update ? `
+                        <div class="mt-2 text-muted" style="font-size: 0.7rem;">
+                            <i class="fas fa-clock mr-1"></i>Updated: ${new Date(status.cost_status.last_update).toLocaleString()}
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+                ` : ''}
+
+                <!-- Failover History -->
+                ${status.failover_history && status.failover_history.length > 0 ? `
+                <div class="card bg-dark">
+                    <div class="card-header bg-transparent">
+                        <h6 class="mb-0"><i class="fas fa-history mr-2"></i>Recent Events</h6>
+                    </div>
+                    <div class="card-body p-0">
+                        <table class="table table-dark table-striped mb-0">
+                            <thead><tr><th>Time</th><th>Type</th><th>From</th><th>To</th><th>Duration</th></tr></thead>
+                            <tbody>
+                                ${status.failover_history.slice(0, 5).map(e => `
+                                    <tr>
+                                        <td><small>${new Date(e.timestamp).toLocaleString()}</small></td>
+                                        <td><span class="badge badge-${e.type === 'failover' ? 'danger' : 'success'}">${e.type}</span></td>
+                                        <td><code>${e.from_interface}</code></td>
+                                        <td><code>${e.to_interface}</code></td>
+                                        <td>${e.duration_s}s</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                ` : ''}
+            `;
+
+            $('#wan-modal-body').html(content);
+            $('#wan-health-modal').modal('show');
+        })
+        .fail(function() {
+            $('#wan-modal-body').html('<div class="alert alert-warning"><i class="fas fa-exclamation-triangle mr-2"></i>Could not load WAN Health data</div>');
+            $('#wan-health-modal').modal('show');
+        });
+}
+
+// Reset LTE Usage Counter
+function resetLteUsage() {
+    // Confirm with user
+    if (!confirm('Are you sure you want to reset the LTE data usage counter to 0?\n\nThis will reset the monthly usage tracking.')) {
+        return;
+    }
+
+    $.ajax({
+        url: '/slaai/api/lte-usage/reset',
+        type: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify({ type: 'monthly' }),
+        success: function(data) {
+            if (data.success) {
+                toastr.success('LTE usage counter reset successfully');
+                // Reload the WAN health data to reflect the change
+                loadWanHealth();
+            } else {
+                toastr.error(data.error || 'Failed to reset LTE usage');
+            }
+        },
+        error: function(xhr, status, error) {
+            toastr.error('Failed to reset LTE usage: ' + error);
+        }
+    });
+}
+</script>
+
+<!-- WAN Health Modal -->
+<div class="modal fade" id="wan-health-modal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-content bg-dark">
+            <div class="modal-header" style="background: linear-gradient(135deg, #0f2027 0%, #203a43 100%); border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <h5 class="modal-title"><i class="fas fa-heartbeat mr-2 text-info"></i>WAN Health Dashboard</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body" id="wan-modal-body" style="background: #1a1a2e;">
+                <div class="text-center py-4">
+                    <i class="fas fa-spinner fa-spin fa-2x text-muted"></i>
+                    <p class="mt-2 text-muted">Loading...</p>
+                </div>
+            </div>
+            <div class="modal-footer" style="background: #1a1a2e; border-top: 1px solid rgba(255,255,255,0.1);">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- LTE Settings Modal -->
+<div class="modal fade" id="lte-settings-modal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content bg-dark">
+            <div class="modal-header" style="background: linear-gradient(135deg, #1a1a2e 0%, #2d2d44 100%); border-bottom: 1px solid rgba(255,255,255,0.1);">
+                <h5 class="modal-title"><i class="fas fa-sim-card mr-2 text-info"></i>LTE Data Limit Settings</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body" style="background: #1a1a2e;">
+                <form id="lte-settings-form">
+                    <!-- Monthly Limit -->
+                    <div class="form-group">
+                        <label class="text-white">Monthly Data Limit</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                   id="lte-monthly-limit" placeholder="Leave empty for unlimited"
+                                   min="0" max="1000" step="0.5">
+                            <div class="input-group-append">
+                                <span class="input-group-text bg-secondary text-white">GB</span>
+                            </div>
+                        </div>
+                        <small class="text-muted">Set your carrier's monthly data cap (e.g., 10 GB)</small>
+                    </div>
+
+                    <!-- Warning Threshold -->
+                    <div class="form-group">
+                        <label class="text-white">Warning at</label>
+                        <div class="input-group">
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                   id="lte-warning-threshold" value="80"
+                                   min="50" max="99" step="5">
+                            <div class="input-group-append">
+                                <span class="input-group-text bg-secondary text-white">%</span>
+                            </div>
+                        </div>
+                        <small class="text-muted">Show warning when usage reaches this percentage</small>
+                    </div>
+
+                    <!-- Quick Presets -->
+                    <div class="form-group">
+                        <label class="text-white d-block">Quick Presets</label>
+                        <div class="btn-group btn-group-sm" role="group">
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(5)">5 GB</button>
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(10)">10 GB</button>
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(20)">20 GB</button>
+                            <button type="button" class="btn btn-outline-info" onclick="setLtePreset(50)">50 GB</button>
+                            <button type="button" class="btn btn-outline-secondary" onclick="setLtePreset(null)">Unlimited</button>
+                        </div>
+                    </div>
+
+                    <!-- Optional: Cost per GB -->
+                    <div class="form-group">
+                        <label class="text-white">
+                            <i class="fas fa-dollar-sign mr-1 text-success"></i>Cost per GB (optional)
+                        </label>
+                        <div class="input-group">
+                            <div class="input-group-prepend">
+                                <span class="input-group-text bg-secondary text-white">$</span>
+                            </div>
+                            <input type="number" class="form-control bg-dark text-white border-secondary"
+                                   id="lte-cost-per-gb" placeholder="Leave empty to disable"
+                                   min="0" max="100" step="0.50">
+                        </div>
+                        <small class="text-muted">Track estimated cost (e.g., $5/GB overage fee)</small>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer" style="background: #1a1a2e; border-top: 1px solid rgba(255,255,255,0.1);">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="saveLteSettings()">
+                    <i class="fas fa-save mr-1"></i>Save Settings
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+// LTE Settings Functions
+function openLteSettings() {
+    console.log('Opening LTE settings modal...');
+    // Load current settings
+    $.get('/slaai/api/lte-limits')
+        .done(function(data) {
+            console.log('LTE limits loaded:', data);
+            if (data.success && data.limits) {
+                var limits = data.limits;
+                $('#lte-monthly-limit').val(limits.monthly_limit_gb || '');
+                $('#lte-warning-threshold').val(limits.warning_threshold_percent || 80);
+                $('#lte-cost-per-gb').val(limits.cost_per_gb || '');
+            }
+            $('#lte-settings-modal').modal('show');
+        })
+        .fail(function(xhr, status, error) {
+            console.error('Failed to load LTE limits:', status, error);
+            // Show modal with defaults on error
+            $('#lte-settings-modal').modal('show');
+        });
+}
+
+function setLtePreset(gb) {
+    if (gb === null) {
+        $('#lte-monthly-limit').val('');
+    } else {
+        $('#lte-monthly-limit').val(gb);
+    }
+}
+
+function saveLteSettings() {
+    var monthlyLimit = $('#lte-monthly-limit').val();
+    var warningThreshold = $('#lte-warning-threshold').val();
+    var costPerGb = $('#lte-cost-per-gb').val();
+
+    var settings = {
+        monthly_limit_gb: monthlyLimit ? parseFloat(monthlyLimit) : null,
+        warning_threshold_percent: parseInt(warningThreshold) || 80,
+        cost_per_gb: costPerGb ? parseFloat(costPerGb) : null
+    };
+
+    console.log('Saving LTE settings:', settings);
+
+    $.ajax({
+        url: '/slaai/api/lte-limits',
+        method: 'POST',
+        contentType: 'application/json',
+        data: JSON.stringify(settings)
+    })
+    .done(function(data) {
+        console.log('LTE settings response:', data);
+        if (data.success) {
+            toastr.success('LTE settings saved successfully');
+            $('#lte-settings-modal').modal('hide');
+            // Refresh WAN health display
+            loadWanHealth();
+        } else {
+            toastr.error(data.error || 'Failed to save settings');
+        }
+    })
+    .fail(function(xhr, status, error) {
+        console.error('LTE settings error:', status, error, xhr.responseText);
+        toastr.error('Failed to save LTE settings: ' + (xhr.responseJSON ? xhr.responseJSON.error : error));
+    });
+}
+</script>
+{% endblock %}

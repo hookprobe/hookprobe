@@ -1,0 +1,327 @@
+{
+  "name": "Purple Team Validation Loop",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "purple-team-validation",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-receiver",
+      "name": "Webhook - Purple Team Events",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event_type }}",
+              "operation": "equals",
+              "value2": "purple_team_validation"
+            }
+          ]
+        }
+      },
+      "id": "route-validation",
+      "name": "Route - Validation Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.event_type }}",
+              "operation": "equals",
+              "value2": "purple_team_optimization"
+            }
+          ]
+        }
+      },
+      "id": "route-optimization",
+      "name": "Route - Optimization Event",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [450, 500]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract validation data\nconst data = $input.first().json.data;\n\n// Calculate defense metrics\nconst defenseScore = data.defense_score || 0;\nconst overallRisk = data.overall_risk || 'UNKNOWN';\nconst attacksTotal = data.summary?.attacks_total || 0;\nconst attacksSuccessful = data.summary?.attacks_successful || 0;\nconst bubblesPenetrated = data.bubble_metrics?.penetrated || 0;\n\n// Determine action based on risk\nlet action = 'log_only';\nlet priority = 'low';\n\nif (overallRisk === 'CRITICAL' || defenseScore < 40) {\n  action = 'immediate_alert';\n  priority = 'critical';\n} else if (overallRisk === 'HIGH' || defenseScore < 60) {\n  action = 'alert_and_optimize';\n  priority = 'high';\n} else if (bubblesPenetrated > 0) {\n  action = 'review_required';\n  priority = 'medium';\n}\n\nreturn {\n  simulation_id: data.simulation_id,\n  defense_score: defenseScore,\n  overall_risk: overallRisk,\n  attacks_total: attacksTotal,\n  attacks_successful: attacksSuccessful,\n  bubbles_penetrated: bubblesPenetrated,\n  action: action,\n  priority: priority,\n  recommendations: data.recommendations || [],\n  auto_mitigations: data.auto_mitigations || [],\n  timestamp: new Date().toISOString()\n};"
+      },
+      "id": "process-validation",
+      "name": "Process Validation Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "string": [
+            {
+              "value1": "={{ $json.action }}",
+              "operation": "equals",
+              "value2": "immediate_alert"
+            }
+          ]
+        }
+      },
+      "id": "check-critical",
+      "name": "Check Critical Alert",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://fortress-api:8443/api/v1/alerts",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"alert_type\": \"purple_team_critical\",\n  \"priority\": \"{{ $json.priority }}\",\n  \"message\": \"Purple Team Simulation detected CRITICAL risk\",\n  \"defense_score\": {{ $json.defense_score }},\n  \"bubbles_penetrated\": {{ $json.bubbles_penetrated }},\n  \"simulation_id\": \"{{ $json.simulation_id }}\",\n  \"recommendations\": {{ JSON.stringify($json.recommendations) }}\n}",
+        "options": {}
+      },
+      "id": "send-critical-alert",
+      "name": "Send Critical Alert to Fortress",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1050, 100]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Apply auto-mitigations\nconst mitigations = $input.first().json.auto_mitigations || [];\n\nconst appliedMitigations = mitigations.map(m => {\n  return {\n    type: m.type,\n    rule: m.rule,\n    priority: m.priority,\n    action: m.action,\n    status: 'pending',\n    queued_at: new Date().toISOString()\n  };\n});\n\nreturn {\n  simulation_id: $input.first().json.simulation_id,\n  mitigations_queued: appliedMitigations.length,\n  mitigations: appliedMitigations\n};"
+      },
+      "id": "queue-mitigations",
+      "name": "Queue Auto-Mitigations",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Process optimization recommendations\nconst data = $input.first().json.data;\nconst optimizations = data.optimizations || [];\n\nconst formattedOptimizations = optimizations.map(opt => {\n  return {\n    parameter: opt.parameter,\n    action: opt.action,\n    value: opt.value,\n    reason: opt.reason,\n    apply_at: new Date().toISOString()\n  };\n});\n\nreturn {\n  simulation_id: data.simulation_id,\n  optimization_count: formattedOptimizations.length,\n  optimizations: formattedOptimizations\n};"
+      },
+      "id": "process-optimization",
+      "name": "Process Optimization",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [650, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://fortress-api:8443/api/v1/autopilot/optimize",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"source\": \"purple_team\",\n  \"simulation_id\": \"{{ $json.simulation_id }}\",\n  \"optimizations\": {{ JSON.stringify($json.optimizations) }}\n}",
+        "options": {}
+      },
+      "id": "apply-optimization",
+      "name": "Apply to SDN Autopilot",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [850, 500]
+    },
+    {
+      "parameters": {
+        "url": "http://clickhouse:8123",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "query",
+              "value": "=INSERT INTO purple_team.simulations (simulation_id, timestamp, defense_score, overall_risk, attacks_total, attacks_successful, bubbles_penetrated, action, priority) VALUES ('{{ $json.simulation_id }}', now(), {{ $json.defense_score }}, '{{ $json.overall_risk }}', {{ $json.attacks_total }}, {{ $json.attacks_successful }}, {{ $json.bubbles_penetrated }}, '{{ $json.action }}', '{{ $json.priority }}')"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "log-to-clickhouse",
+      "name": "Log to ClickHouse",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"status\": \"processed\",\n  \"simulation_id\": \"{{ $json.simulation_id }}\",\n  \"action_taken\": \"{{ $json.action }}\",\n  \"timestamp\": \"{{ $now }}\"\n}",
+        "options": {}
+      },
+      "id": "respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "channel": "#security-alerts",
+        "text": "=🔴 *Purple Team Alert*\n\n*Simulation:* {{ $json.simulation_id }}\n*Risk Level:* {{ $json.overall_risk }}\n*Defense Score:* {{ $json.defense_score }}/100\n*Bubbles Penetrated:* {{ $json.bubbles_penetrated }}\n\n*Recommendations:*\n{{ $json.recommendations.map(r => '• ' + r).join('\\n') }}",
+        "otherOptions": {}
+      },
+      "id": "slack-alert",
+      "name": "Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2,
+      "position": [1250, 100],
+      "disabled": true
+    }
+  ],
+  "connections": {
+    "Webhook - Purple Team Events": {
+      "main": [
+        [
+          {
+            "node": "Route - Validation Event",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Route - Optimization Event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route - Validation Event": {
+      "main": [
+        [
+          {
+            "node": "Process Validation Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route - Optimization Event": {
+      "main": [
+        [
+          {
+            "node": "Process Optimization",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Validation Results": {
+      "main": [
+        [
+          {
+            "node": "Check Critical Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Critical Alert": {
+      "main": [
+        [
+          {
+            "node": "Send Critical Alert to Fortress",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Queue Auto-Mitigations",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Critical Alert to Fortress": {
+      "main": [
+        [
+          {
+            "node": "Slack Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Queue Auto-Mitigations": {
+      "main": [
+        [
+          {
+            "node": "Log to ClickHouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to ClickHouse": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Process Optimization": {
+      "main": [
+        [
+          {
+            "node": "Apply to SDN Autopilot",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply to SDN Autopilot": {
+      "main": [
+        [
+          {
+            "node": "Log to ClickHouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Log to ClickHouse",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "meta": {
+    "instanceId": "hookprobe-nexus"
+  },
+  "tags": [
+    {
+      "name": "purple-team",
+      "id": "1"
+    },
+    {
+      "name": "security",
+      "id": "2"
+    }
+  ]
+}

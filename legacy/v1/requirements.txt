@@ -1,0 +1,52 @@
+# HookProbe Python Dependencies
+# Used by: core/qsecbit/, shared/, products/
+
+# Core numerical and scientific computing
+numpy>=1.24.0,<2.0.0
+scipy>=1.10.0,<2.0.0
+
+# Database integrations
+clickhouse-driver>=0.2.6,<1.0.0    # ClickHouse for edge deployments
+pymysql>=1.1.0,<2.0.0               # Doris (MySQL protocol) for cloud backend
+
+# DNS and networking
+dnslib>=0.9.0,<1.0.0                # DNS protocol library for dnsXai
+requests>=2.31.0,<3.0.0             # HTTP client for blocklist updates
+
+# Distributed caching and sessions (G.N.C. Phase 2)
+redis>=5.0.0,<6.0.0                 # Redis client for dnsXai AI/ML cache
+
+# Machine Learning - MANDATORY for dnsXai AI/ML
+scikit-learn>=1.5.0,<2.0.0          # Base ML utilities (CVE-2024-5206 fix)
+lightgbm>=4.0.0,<5.0.0              # LightGBM gradient boosting (lightweight, fast)
+
+# XDP/eBPF support (for edge deployments with kernel-level DDoS mitigation)
+# NOTE: BCC must be installed via system packages first:
+#   RHEL/Fedora: dnf install bcc python3-bcc
+#   Ubuntu/Debian: apt-get install bpfcc-tools python3-bpfcc
+# The Python bindings are typically installed with the system package, not via pip.
+
+# Optional: For enhanced functionality
+# Uncomment if you need these features
+
+# Additional Machine Learning (optional)
+# pandas>=2.0.0,<3.0.0
+
+# Visualization (for debugging/analysis)
+# matplotlib>=3.7.0,<4.0.0
+
+# Web framework (for qsecbit API)
+# flask>=3.0.0,<4.0.0
+# fastapi>=0.100.0,<1.0.0
+# uvicorn>=0.23.0,<1.0.0
+
+# Data validation
+# pydantic>=2.0.0,<3.0.0
+
+# Logging and monitoring
+# loguru>=0.7.0,<1.0.0
+
+# Testing dependencies (install with: pip install -r requirements-dev.txt)
+# pytest>=7.4.0,<8.0.0
+# pytest-cov>=4.1.0,<5.0.0
+# pytest-mock>=3.11.0,<4.0.0

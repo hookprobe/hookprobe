@@ -1,0 +1,68 @@
+# AIOCHI Identity Engine Container
+# Transforms MAC addresses into human-readable device labels
+#
+# Features:
+#   - Device fingerprinting (DHCP Option 55, MAC OUI, hostname, mDNS)
+#   - Ecosystem bubble detection (Apple, Google, Samsung clusters)
+#   - Human labeling ("Dad's iPhone", "Kitchen Thermostat")
+#   - REST API for device identity lookups
+#
+# Usage: podman build -t localhost/aiochi-identity:latest -f Containerfile.identity ..
+#
+# NOTE: Heredocs with Python 'from' statements confuse buildah's parser.
+#       All scripts are now external files that get COPYed in.
+
+FROM docker.io/library/python:3.11-slim-bookworm
+
+LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
+LABEL version="1.0.0"
+LABEL description="AIOCHI Identity Engine - Device fingerprinting and labeling"
+
+# Create app user
+RUN groupadd -r aiochi && useradd -r -g aiochi aiochi
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Copy ALL backend modules (required for __init__.py imports)
+COPY backend/__init__.py backend/
+COPY backend/identity_engine.py backend/
+COPY backend/presence_tracker.py backend/
+COPY backend/time_patterns.py backend/
+COPY backend/trust_heatmap.py backend/
+COPY backend/ambient_state.py backend/
+COPY backend/family_profiles.py backend/
+COPY backend/narrative_engine.py backend/
+COPY backend/performance_scorer.py backend/
+COPY backend/quick_actions.py backend/
+COPY backend/whisper_mode.py backend/
+
+# Copy scripts (external files to avoid heredoc parsing issues)
+COPY containers/scripts/identity_entrypoint.sh /app/entrypoint.sh
+COPY containers/scripts/identity_engine_app.py /app/backend/identity_engine_app.py
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    flask>=3.0.0 \
+    gunicorn>=21.0.0 \
+    clickhouse-connect>=0.7.0 \
+    requests>=2.31.0
+
+# Create data directory and set permissions
+RUN mkdir -p /app/data && chown -R aiochi:aiochi /app/data
+RUN chmod +x /app/entrypoint.sh
+
+# Switch to non-root user
+USER aiochi
+
+EXPOSE 8060
+
+HEALTHCHECK --interval=10s --timeout=5s --retries=5 \
+    CMD curl -f http://localhost:8060/health || exit 1
+
+ENTRYPOINT ["/app/entrypoint.sh"]
