@@ -1,0 +1,61 @@
+# =============================================================================
+# tools/ci/deny.toml — the ONE cargo-deny policy for every Rust lockfile in the
+# live tree (G4 supply-chain gate, ADR 0048). Run via tools/ci/gates.sh g4, which
+# iterates tools/ci/lockfiles.txt so a new detached workspace can't be forgotten
+# (G0 fails if a Cargo.lock outside legacy/ is missing from that list).
+#
+# Policy in one line: no known-vulnerable or yanked crate, only permissive
+# AGPL-compatible third-party licences, crates.io only, and every exception
+# below carries a reason + a re-review trigger. Exceptions are PROTECTED paths
+# for the autofix loop (tools/ci/heal/protected-paths.txt): an agent may never
+# add an ignore to make a red gate green.
+# =============================================================================
+
+[graph]
+all-features = true
+
+[advisories]
+# Vulnerabilities are always fatal (cargo-deny default). Unmaintained crates are
+# fatal unless listed here with a reason.
+yanked = "deny"
+ignore = [
+    # paste: unmaintained (no vulnerability). Pulled by wasmi as a compile-time
+    # proc-macro only — no code from it reaches the EL0 Wasm host at runtime.
+    # Re-review: when wasmi drops it, or if any RUSTSEC *vulnerability* lands on it.
+    { id = "RUSTSEC-2024-0436", reason = "unmaintained compile-time proc-macro via wasmi; no runtime exposure" },
+]
+
+[licenses]
+confidence-threshold = 0.9
+# All permissive and AGPL-3.0-compatible. Adding a licence here is a licensing
+# decision (operator / LICENSING.md), never an autofix.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Unicode-3.0",
+    "Zlib",
+    "CC0-1.0",
+    # our own crates that declare SPDX metadata
+    "AGPL-3.0-only",
+    "AGPL-3.0-or-later",
+]
+
+[licenses.private]
+# First-party crates are `publish = false`; their licence is the repo's
+# dual-licence (LICENSING.md), not per-crate metadata.
+ignore = true
+
+[bans]
+multiple-versions = "allow"   # RustCrypto 0.13/0.14 graphs legitimately coexist
+wildcards = "deny"
+allow-wildcard-paths = true   # path deps between our own private crates
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

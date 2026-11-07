@@ -1,0 +1,136 @@
+# =============================================================================
+# ci.yml — the PR / main gate spine (ADR 0048 L1). Every job is a thin wrapper
+# around tools/ci/gates.sh so CI and a developer box run the IDENTICAL command.
+#
+#   g0  hygiene + CI wiring meta-gate + CI-tooling self-tests
+#   g1  clippy ratchet + host unit tests + validate.sh phase ratchet
+#   g3  Mission Control e2e in QEMU incl. the real-browser HTTPS/PQ leg
+#   g4  supply chain: cargo-deny (RustSec) on every lockfile, npm audit, SBOM
+#   autofix-guard   only on autofix/* branches: the deterministic anti-gaming guard
+#   ci-ok           the ONE required status check for branch protection
+#
+# g2 (validate.sh QEMU boot) stays in build-heqk.yml, which is path-filtered and
+# owns the heqk QEMU budget (HEQK_QEMU_TIMEOUT). A red run here is picked up by
+# autoheal.yml (workflow_run) — classified, then rerun / autofix-proposed / escalated.
+# =============================================================================
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CI_STRICT: "1"            # a missing tool is a FAIL here, never a silent skip
+  CARGO_TERM_COLOR: never
+  HEQK_QEMU_TIMEOUT: "900"  # GitHub runners emulate aarch64 with TCG (no KVM)
+
+jobs:
+  g0:
+    name: "g0 · hygiene + CI wiring"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: tools/ci/gates.sh g0
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: gates-g0, path: out/ci, if-no-files-found: ignore }
+
+  g1:
+    name: "g1 · clippy ratchet + unit tests + phase ratchet"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools, clippy
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            os/kernel -> target/ci-clippy
+            os/kernel/tlsprov -> target/ci
+            onboarding/enrollment/responder-sim -> target/ci
+            os/build/heqk-sign -> target/ci
+      - run: tools/ci/gates.sh g1
+      - if: always()
+        run: python3 tools/ci/cortex/ci_to_cortex.py out/ci/gate-results.json --out out/ci/cortex-events.jsonl
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: gates-g1, path: out/ci, if-no-files-found: ignore }
+
+  g3:
+    name: "g3 · Mission Control e2e (QEMU + real browser)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: Swatinem/rust-cache@v2
+        with: { workspaces: "os/kernel -> target/mc" }
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - name: QEMU + disk tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools
+      - name: Playwright Chromium (browser leg)
+        run: cd os/kernel/tools/mc-e2e && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+      - run: tools/ci/gates.sh g3
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: gates-g3, path: out/ci, if-no-files-found: ignore }
+
+  g4:
+    name: "g4 · supply chain (RustSec, npm audit, SBOM)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with: { tool: cargo-deny }
+      - uses: anchore/sbom-action/download-syft@v0
+      - uses: actions/setup-node@v4
+        with: { node-version: "24" }
+      - run: tools/ci/gates.sh g4
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with: { name: gates-g4-sbom, path: out/ci, if-no-files-found: ignore }
+
+  autofix-guard:
+    name: "autofix guard (autofix/* only)"
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'autofix/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - run: python3 tools/ci/heal/autofix_guard.py --base "origin/${{ github.base_ref }}" --head HEAD --require-branch
+
+  ci-ok:
+    name: ci-ok
+    if: always()
+    needs: [g0, g1, g3, g4, autofix-guard]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: All required gates green (autofix-guard may be skipped)
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | python3 -c '
+          import json, sys
+          bad = {k: v["result"] for k, v in json.load(sys.stdin).items()
+                 if v["result"] not in ("success", "skipped") or (k != "autofix-guard" and v["result"] == "skipped")}
+          print("gate results:", bad or "all green")
+          sys.exit(1 if bad else 0)'
