@@ -1,0 +1,2268 @@
+{% extends "base.html" %}
+{% block title %}AI Security - HookProbe Fortress{% endblock %}
+{% block page_title %}AI Security{% endblock %}
+{% block breadcrumb %}
+<li class="breadcrumb-item"><a href="{{ url_for('dashboard.index') }}">Home</a></li>
+<li class="breadcrumb-item active">AI Security</li>
+{% endblock %}
+
+{% block extra_css %}
+<style>
+    /* ==========================================================================
+       AI PACKET INSPECTOR - Particle Flow Visualization
+       ========================================================================== */
+    .packet-inspector {
+        position: relative;
+        background: linear-gradient(135deg, #0a0f1a 0%, #1a1f2e 50%, #0d1117 100%);
+        border-radius: 12px;
+        overflow: hidden;
+        margin-bottom: 1.5rem;
+        border: 1px solid rgba(74, 222, 128, 0.2);
+    }
+    .packet-inspector-canvas {
+        width: 100%;
+        height: 140px;
+        display: block;
+    }
+    .packet-inspector-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        pointer-events: none;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0 2rem;
+    }
+    .inspector-stats {
+        display: flex;
+        gap: 2rem;
+        z-index: 10;
+    }
+    .inspector-stat {
+        text-align: center;
+    }
+    .inspector-stat-value {
+        font-size: 1.5rem;
+        font-weight: 700;
+        color: #fff;
+        text-shadow: 0 0 10px rgba(74, 222, 128, 0.5);
+    }
+    .inspector-stat-value.blocked { color: #f87171; text-shadow: 0 0 10px rgba(248, 113, 113, 0.5); }
+    .inspector-stat-value.inspected { color: #60a5fa; text-shadow: 0 0 10px rgba(96, 165, 250, 0.5); }
+    .inspector-stat-label {
+        font-size: 0.65rem;
+        color: #9ca3af;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+    }
+    .inspector-layers {
+        display: flex;
+        gap: 0.5rem;
+        z-index: 10;
+    }
+    .layer-indicator {
+        width: 40px;
+        height: 40px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.75rem;
+        background: rgba(30, 41, 59, 0.8);
+        border: 2px solid rgba(255, 255, 255, 0.1);
+        color: #9ca3af;
+        transition: all 0.3s ease;
+    }
+    .layer-indicator.active {
+        border-color: #4ade80;
+        color: #4ade80;
+        box-shadow: 0 0 15px rgba(74, 222, 128, 0.3);
+        animation: layer-pulse 2s infinite;
+    }
+    .layer-indicator.alert {
+        border-color: #f87171;
+        color: #f87171;
+        box-shadow: 0 0 15px rgba(248, 113, 113, 0.5);
+        animation: layer-alert 0.5s infinite;
+    }
+    @keyframes layer-pulse {
+        0%, 100% { box-shadow: 0 0 15px rgba(74, 222, 128, 0.3); }
+        50% { box-shadow: 0 0 25px rgba(74, 222, 128, 0.5); }
+    }
+    @keyframes layer-alert {
+        0%, 100% { transform: scale(1); }
+        50% { transform: scale(1.1); }
+    }
+    .inspector-title {
+        position: absolute;
+        top: 10px;
+        left: 15px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #4ade80;
+        text-transform: uppercase;
+        letter-spacing: 0.15em;
+        z-index: 10;
+    }
+    .inspector-status {
+        position: absolute;
+        top: 10px;
+        right: 15px;
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        font-size: 0.7rem;
+        color: #9ca3af;
+        z-index: 10;
+    }
+    .status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #4ade80;
+        animation: status-blink 1.5s infinite;
+    }
+    @keyframes status-blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.4; }
+    }
+
+    /* ==========================================================================
+       EQUAL HEIGHT CARDS
+       ========================================================================== */
+    .ai-security-row {
+        display: flex;
+        flex-wrap: wrap;
+    }
+    .ai-security-row > [class*='col-'] {
+        display: flex;
+        flex-direction: column;
+    }
+    .ai-security-card {
+        flex: 1;
+        display: flex;
+        flex-direction: column;
+    }
+    .ai-security-card .card-body {
+        flex: 1;
+    }
+
+    /* ==========================================================================
+       QSECBIT GAUGE
+       ========================================================================== */
+    .qsecbit-gauge {
+        width: 160px;
+        height: 160px;
+        margin: 0 auto;
+        position: relative;
+    }
+    .qsecbit-score {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 36px;
+        font-weight: bold;
+    }
+    .rag-GREEN { color: #28a745; }
+    .rag-AMBER { color: #ffc107; }
+    .rag-RED { color: #dc3545; }
+
+    /* ==========================================================================
+       DNS PROTECTION STATUS
+       ========================================================================== */
+    .dns-status-icon {
+        font-size: 4rem;
+    }
+    .dns-status-icon.active { color: #28a745; }
+    .dns-status-icon.paused { color: #ffc107; }
+    .dns-status-icon.disabled { color: #dc3545; }
+
+    /* ==========================================================================
+       THREAT SEVERITY & COMPONENTS
+       ========================================================================== */
+    .threat-severity-HIGH { border-left: 3px solid #dc3545; }
+    .threat-severity-MEDIUM { border-left: 3px solid #ffc107; }
+    .threat-severity-LOW { border-left: 3px solid #17a2b8; }
+
+    .component-item {
+        padding: 0.5rem 0;
+        border-bottom: 1px solid rgba(255,255,255,0.1);
+    }
+    .component-item:last-child {
+        border-bottom: none;
+    }
+
+    /* ==========================================================================
+       STATS DISPLAY
+       ========================================================================== */
+    .stat-value {
+        font-size: 1.5rem;
+        font-weight: 600;
+    }
+    .stat-label {
+        font-size: 0.75rem;
+        color: #adb5bd;
+        text-transform: uppercase;
+    }
+
+    /* ==========================================================================
+       PROTECTION LEVEL SLIDER
+       ========================================================================== */
+    .protection-slider-container {
+        position: relative;
+        padding: 8px 0;
+    }
+    .protection-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 12px;
+        border-radius: 6px;
+        background: linear-gradient(to right,
+            #6c757d 0%,
+            #17a2b8 20%,
+            #28a745 40%,
+            #ffc107 60%,
+            #fd7e14 80%,
+            #dc3545 100%
+        );
+        outline: none;
+        cursor: pointer;
+        box-shadow: inset 0 1px 3px rgba(0,0,0,0.3), 0 2px 4px rgba(0,0,0,0.2);
+    }
+    .protection-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #fff;
+        border: 3px solid #212529;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4), 0 0 0 2px rgba(255,255,255,0.2);
+        cursor: grab;
+        transition: transform 0.15s ease, box-shadow 0.15s ease;
+    }
+    .protection-slider::-webkit-slider-thumb:hover {
+        transform: scale(1.1);
+    }
+    .protection-slider::-webkit-slider-thumb:active {
+        cursor: grabbing;
+        transform: scale(1.15);
+    }
+    .protection-slider::-moz-range-thumb {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        background: #fff;
+        border: 3px solid #212529;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+        cursor: grab;
+    }
+    .protection-slider::-moz-range-track {
+        height: 12px;
+        border-radius: 6px;
+        background: transparent;
+    }
+    .protection-labels {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 8px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: #6c757d;
+    }
+    .protection-labels span {
+        flex: 1;
+        text-align: center;
+        transition: color 0.2s ease, transform 0.2s ease;
+    }
+    .protection-labels span.active {
+        color: #fff;
+        transform: scale(1.1);
+    }
+
+    /* ==========================================================================
+       MODAL STYLES
+       ========================================================================== */
+    .modal-dark .modal-content {
+        background-color: #343a40;
+        color: #fff;
+    }
+    .modal-dark .modal-header {
+        border-bottom-color: #495057;
+    }
+    .modal-dark .modal-footer {
+        border-top-color: #495057;
+    }
+    .modal-dark .close {
+        color: #fff;
+    }
+    .modal-dark .nav-tabs .nav-link {
+        color: #adb5bd;
+    }
+    .modal-dark .nav-tabs .nav-link.active {
+        background-color: #495057;
+        color: #fff;
+        border-color: #495057;
+    }
+    .modal-dark .table {
+        color: #fff;
+    }
+    .modal-dark .form-control {
+        background-color: #495057;
+        border-color: #6c757d;
+        color: #fff;
+    }
+
+    /* ==========================================================================
+       PAUSE BUTTONS
+       ========================================================================== */
+    .pause-btn {
+        border-color: #6c757d;
+        color: #6c757d;
+    }
+    .pause-btn:hover {
+        background-color: #ffc107;
+        border-color: #ffc107;
+        color: #212529;
+    }
+
+    /* ==========================================================================
+       SCROLLABLE LISTS
+       ========================================================================== */
+    .threats-scroll {
+        max-height: 200px;
+        overflow-y: auto;
+    }
+    .blocked-scroll {
+        max-height: 220px;
+        overflow-y: auto;
+    }
+    .activity-scroll {
+        max-height: 220px;
+        overflow-y: auto;
+    }
+
+    /* ==========================================================================
+       BLOCKED DOMAINS SECTION
+       ========================================================================== */
+    .blocked-domain-item {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 0.4rem 0.6rem;
+        border-bottom: 1px solid rgba(255,255,255,0.08);
+        transition: background-color 0.2s ease;
+    }
+    .blocked-domain-item:last-child {
+        border-bottom: none;
+    }
+    .blocked-domain-item:hover {
+        background-color: rgba(255,255,255,0.05);
+    }
+    .blocked-domain-name {
+        font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+        font-size: 0.75rem;
+        word-break: break-all;
+        flex: 1;
+        margin-right: 0.5rem;
+        color: #e5e7eb;
+    }
+    .blocked-domain-meta {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+    }
+    .whitelist-quick-btn {
+        padding: 0.15rem 0.4rem;
+        font-size: 0.65rem;
+        border-radius: 4px;
+        opacity: 0.8;
+        transition: opacity 0.2s ease;
+    }
+    .whitelist-quick-btn:hover {
+        opacity: 1;
+    }
+    .blocked-time {
+        font-size: 0.6rem;
+        color: #6c757d;
+        white-space: nowrap;
+    }
+
+    /* ==========================================================================
+       LAYER ACTIVITY SECTION
+       ========================================================================== */
+    .layer-activity-item {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+        padding: 0.5rem;
+        margin-bottom: 0.5rem;
+        background: rgba(30, 41, 59, 0.5);
+        border-radius: 8px;
+        border-left: 3px solid transparent;
+        transition: all 0.3s ease;
+    }
+    .layer-activity-item:hover {
+        background: rgba(30, 41, 59, 0.8);
+    }
+    .layer-activity-item.allowed {
+        border-left-color: #4ade80;
+    }
+    .layer-activity-item.blocked {
+        border-left-color: #f87171;
+        animation: activity-flash 0.5s ease;
+    }
+    .layer-activity-item.warning {
+        border-left-color: #fbbf24;
+    }
+    @keyframes activity-flash {
+        0% { background: rgba(248, 113, 113, 0.3); }
+        100% { background: rgba(30, 41, 59, 0.5); }
+    }
+    .layer-badge {
+        width: 32px;
+        height: 32px;
+        border-radius: 6px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-weight: 700;
+        font-size: 0.65rem;
+        flex-shrink: 0;
+    }
+    .layer-badge.L2 { background: #3b82f6; color: #fff; }
+    .layer-badge.L3 { background: #8b5cf6; color: #fff; }
+    .layer-badge.L4 { background: #ec4899; color: #fff; }
+    .layer-badge.L5 { background: #f59e0b; color: #000; }
+    .layer-badge.L7 { background: #10b981; color: #fff; }
+    .layer-badge.DNS { background: #06b6d4; color: #fff; }
+    .layer-badge.ML { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #fff; }
+    .layer-activity-content {
+        flex: 1;
+        min-width: 0;
+    }
+    .layer-activity-title {
+        font-size: 0.75rem;
+        font-weight: 600;
+        color: #e5e7eb;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
+    .layer-activity-detail {
+        font-size: 0.65rem;
+        color: #9ca3af;
+        font-family: 'SFMono-Regular', Consolas, monospace;
+    }
+    .layer-activity-time {
+        font-size: 0.6rem;
+        color: #6b7280;
+        white-space: nowrap;
+    }
+    .layer-activity-action {
+        font-size: 0.6rem;
+        font-weight: 600;
+        padding: 0.15rem 0.4rem;
+        border-radius: 4px;
+    }
+    .layer-activity-action.blocked {
+        background: rgba(248, 113, 113, 0.2);
+        color: #f87171;
+    }
+    .layer-activity-action.allowed {
+        background: rgba(74, 222, 128, 0.2);
+        color: #4ade80;
+    }
+    .layer-activity-action.inspected {
+        background: rgba(96, 165, 250, 0.2);
+        color: #60a5fa;
+    }
+
+    /* ==========================================================================
+       EMPTY STATE
+       ========================================================================== */
+    .empty-state {
+        text-align: center;
+        padding: 2rem 1rem;
+        color: #9ca3af;
+    }
+    .empty-state i {
+        font-size: 2.5rem;
+        margin-bottom: 0.75rem;
+        opacity: 0.5;
+    }
+    .empty-state p {
+        margin: 0;
+        font-size: 0.85rem;
+    }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- AI Packet Inspector - Real-time Flow Visualization -->
+<div class="packet-inspector">
+    <canvas id="packetInspectorCanvas" class="packet-inspector-canvas"></canvas>
+    <div class="inspector-title">
+        <i class="fas fa-microchip mr-1"></i> AI Packet Inspector
+    </div>
+    <div class="inspector-status">
+        <span class="status-dot"></span>
+        <span>Live</span>
+    </div>
+    <div class="packet-inspector-overlay">
+        <div class="inspector-stats">
+            <div class="inspector-stat">
+                <div class="inspector-stat-value inspected" id="packets-inspected">0</div>
+                <div class="inspector-stat-label">Inspected</div>
+            </div>
+            <div class="inspector-stat">
+                <div class="inspector-stat-value blocked" id="packets-blocked">0</div>
+                <div class="inspector-stat-label">Blocked</div>
+            </div>
+            <div class="inspector-stat">
+                <div class="inspector-stat-value" id="packets-rate">0</div>
+                <div class="inspector-stat-label">Pkts/sec</div>
+            </div>
+        </div>
+        <div class="inspector-layers">
+            <div class="layer-indicator active" id="layer-l2" title="Layer 2 - Data Link">L2</div>
+            <div class="layer-indicator active" id="layer-l3" title="Layer 3 - Network">L3</div>
+            <div class="layer-indicator active" id="layer-l4" title="Layer 4 - Transport">L4</div>
+            <div class="layer-indicator active" id="layer-l5" title="Layer 5 - Session/TLS">L5</div>
+            <div class="layer-indicator active" id="layer-l7" title="Layer 7 - Application">L7</div>
+        </div>
+    </div>
+</div>
+
+<!-- Main Two-Card Layout -->
+<div class="row ai-security-row">
+    <!-- LEFT CARD: DNS Protection -->
+    <div class="col-lg-6 mb-4">
+        <div class="card ai-security-card card-outline card-success">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-shield-alt mr-2"></i>DNS Protection</h3>
+                <div class="card-tools">
+                    <button class="btn btn-sm btn-outline-light" onclick="showDnsSettings()" title="Settings">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Protection Status -->
+                <div class="text-center mb-4">
+                    <div id="dns-status-icon" class="dns-status-icon active mb-2">
+                        <i class="fas fa-shield-alt"></i>
+                    </div>
+                    <h4 id="dns-status-text" class="text-success mb-0">Active</h4>
+                    <p class="text-muted mb-2" id="pause-timer" style="display: none;">
+                        Resuming in: <span id="pause-countdown">--:--</span>
+                    </p>
+                    <div class="btn-group mt-2" role="group">
+                        <button class="btn btn-sm btn-outline-secondary pause-btn" onclick="pauseProtection(5)">5m</button>
+                        <button class="btn btn-sm btn-outline-secondary pause-btn" onclick="pauseProtection(15)">15m</button>
+                        <button class="btn btn-sm btn-outline-secondary pause-btn" onclick="pauseProtection(30)">30m</button>
+                        <button class="btn btn-sm btn-danger" id="killswitch-btn" onclick="toggleProtection()">OFF</button>
+                    </div>
+                </div>
+
+                <!-- Statistics Row -->
+                <div class="row text-center mb-4">
+                    <div class="col-4">
+                        <div class="stat-value text-success" id="stat-allowed">0</div>
+                        <div class="stat-label">Allowed</div>
+                    </div>
+                    <div class="col-4">
+                        <div class="stat-value text-danger" id="stat-blocked">0</div>
+                        <div class="stat-label">Blocked</div>
+                    </div>
+                    <div class="col-4">
+                        <div class="stat-value text-info" id="stat-rate">0%</div>
+                        <div class="stat-label">Block Rate</div>
+                    </div>
+                </div>
+
+                <!-- Protection Level - Unified Slider -->
+                <div class="mb-4">
+                    <div class="d-flex justify-content-between align-items-center mb-3">
+                        <span class="text-muted small text-uppercase font-weight-bold">Protection Level</span>
+                        <span id="level-name" class="badge badge-success px-3 py-2" style="font-size: 0.85rem;">Strong</span>
+                    </div>
+                    <div class="protection-slider-container">
+                        <input type="range" class="protection-slider" min="0" max="5" value="3" id="protection-level"
+                               oninput="updateLevelDisplay(this.value)" onchange="setProtectionLevel(this.value)">
+                    </div>
+                    <div class="protection-labels" id="protection-labels">
+                        <span data-level="0">OFF</span>
+                        <span data-level="1">BASE</span>
+                        <span data-level="2">ENHANCED</span>
+                        <span data-level="3" class="active">STRONG</span>
+                        <span data-level="4">MAX</span>
+                        <span data-level="5">FULL</span>
+                    </div>
+                </div>
+
+                <!-- ML Status with Training Button -->
+                <div class="d-flex justify-content-between align-items-center p-2 bg-dark rounded">
+                    <div>
+                        <i class="fas fa-brain text-primary mr-2"></i>
+                        <span>ML/LSTM Threat Detection</span>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <span id="ml-status" class="badge badge-secondary mr-2">Checking...</span>
+                        <button id="train-btn" class="btn btn-sm btn-outline-info" onclick="trainML()" title="Train ML Model" style="display: none;">
+                            <i class="fas fa-graduation-cap"></i>
+                        </button>
+                    </div>
+                </div>
+                <div id="ml-training-progress" class="mt-2 p-2 bg-info text-white rounded" style="display: none;">
+                    <i class="fas fa-spinner fa-spin mr-2"></i>
+                    <span id="ml-training-text">Training in progress...</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT CARD: QSecBit Security -->
+    <div class="col-lg-6 mb-4">
+        <div class="card ai-security-card card-outline card-warning">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-chart-line mr-2"></i>QSecBit Score</h3>
+                <div class="card-tools">
+                    <span class="badge badge-lg badge-{% if qsecbit.rag_status == 'GREEN' %}success{% elif qsecbit.rag_status == 'AMBER' %}warning{% else %}danger{% endif %}">
+                        {{ qsecbit.rag_status }}
+                    </span>
+                </div>
+            </div>
+            <div class="card-body">
+                <!-- Score Gauge -->
+                <div class="row mb-4">
+                    <div class="col-5 text-center">
+                        <div class="qsecbit-gauge">
+                            <canvas id="qsecbitGauge" width="160" height="160"></canvas>
+                            <div class="qsecbit-score rag-{{ qsecbit.rag_status }}" id="qsecbit-score">
+                                {{ (qsecbit.score * 100)|int }}%
+                            </div>
+                        </div>
+                        <small class="text-muted">Security Score</small>
+                    </div>
+                    <div class="col-7">
+                        <!-- Threat Summary -->
+                        <h6 class="mb-3"><i class="fas fa-exclamation-triangle mr-1"></i> Threats (24h)</h6>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>Total</span>
+                            <span class="font-weight-bold">{{ threat_summary.total }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span><span class="badge badge-danger">HIGH</span></span>
+                            <span>{{ threat_summary.high }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span><span class="badge badge-warning">MEDIUM</span></span>
+                            <span>{{ threat_summary.medium }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span><span class="badge badge-info">LOW</span></span>
+                            <span>{{ threat_summary.low }}</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span class="text-success"><i class="fas fa-ban mr-1"></i>Blocked</span>
+                            <span class="text-success font-weight-bold">{{ threat_summary.blocked }}</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Security Components -->
+                <div class="mb-3">
+                    <h6 class="mb-2"><i class="fas fa-cogs mr-1"></i> Security Components</h6>
+                    <div class="row">
+                        <div class="col-6">
+                            <div class="component-item d-flex justify-content-between">
+                                <span><i class="fas fa-shield-alt text-success mr-1"></i> QSecBit</span>
+                                <span class="badge badge-success">Active</span>
+                            </div>
+                            <div class="component-item d-flex justify-content-between">
+                                <span><i class="fas fa-brain text-info mr-1"></i> dnsXai</span>
+                                <span class="badge badge-success">Active</span>
+                            </div>
+                            <div class="component-item d-flex justify-content-between">
+                                <span><i class="fas fa-microchip text-warning mr-1"></i> XDP</span>
+                                <span class="badge badge-success">Enabled</span>
+                            </div>
+                        </div>
+                        <div class="col-6">
+                            <div class="component-item d-flex justify-content-between">
+                                <span><i class="fas fa-sitemap text-primary mr-1"></i> VLAN</span>
+                                <span class="badge badge-success">Active</span>
+                            </div>
+                            <div class="component-item d-flex justify-content-between">
+                                <span><i class="fas fa-lock text-danger mr-1"></i> MACsec</span>
+                                <span class="badge badge-success">Active</span>
+                            </div>
+                            <div class="component-item d-flex justify-content-between">
+                                <span><i class="fas fa-wifi text-info mr-1"></i> DFS</span>
+                                <span class="badge badge-success">Active</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Recent Threats -->
+                <div>
+                    <h6 class="mb-2"><i class="fas fa-shield-virus mr-1"></i> Recent Threats</h6>
+                    <div class="threats-scroll">
+                        {% for threat in threats %}
+                        <div class="d-flex justify-content-between align-items-center p-2 mb-1 bg-dark rounded threat-severity-{{ threat.severity }}">
+                            <div>
+                                <small class="font-weight-bold">{{ threat.threat_type|replace('_', ' ')|title }}</small>
+                                <br><small class="text-muted"><code>{{ threat.source_ip }}</code></small>
+                            </div>
+                            <div class="text-right">
+                                <span class="badge badge-{% if threat.severity == 'HIGH' %}danger{% elif threat.severity == 'MEDIUM' %}warning{% else %}info{% endif %}">
+                                    {{ threat.severity }}
+                                </span>
+                                {% if threat.blocked %}
+                                <span class="badge badge-success ml-1"><i class="fas fa-ban"></i></span>
+                                {% endif %}
+                            </div>
+                        </div>
+                        {% else %}
+                        <div class="text-center text-muted py-3">
+                            <i class="fas fa-check-circle fa-2x mb-2"></i>
+                            <p class="mb-0">No threats in last 24h</p>
+                        </div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Bottom Row: Recently Blocked + Layer Activity -->
+<div class="row">
+    <!-- LEFT: Recently Blocked DNS Domains -->
+    <div class="col-lg-6 mb-4">
+        <div class="card card-outline card-danger h-100">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-ban mr-2"></i>Recently Blocked</h3>
+                <div class="card-tools">
+                    <span class="badge badge-danger mr-2" id="recent-blocked-count">0</span>
+                    <button class="btn btn-sm btn-tool" onclick="loadRecentBlocked()" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="blocked-scroll" id="recent-blocked-list">
+                    <div class="empty-state">
+                        <i class="fas fa-spinner fa-spin"></i>
+                        <p>Loading...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer text-muted small d-flex justify-content-between align-items-center py-2">
+                <span><i class="fas fa-clock mr-1"></i>Last 24h</span>
+                <button class="btn btn-xs btn-outline-light" onclick="showDnsSettings(); $('.nav-tabs a[href=&quot;#tab-blocked&quot;]').tab('show');">
+                    View All
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- RIGHT: AI Layer Inspection Activity -->
+    <div class="col-lg-6 mb-4">
+        <div class="card card-outline card-info h-100">
+            <div class="card-header">
+                <h3 class="card-title"><i class="fas fa-layer-group mr-2"></i>Layer Inspection</h3>
+                <div class="card-tools">
+                    <span class="badge badge-info mr-2" id="activity-count">0</span>
+                    <button class="btn btn-sm btn-tool" onclick="loadLayerActivity()" title="Refresh">
+                        <i class="fas fa-sync-alt"></i>
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-2">
+                <div class="activity-scroll" id="layer-activity-list">
+                    <div class="empty-state">
+                        <i class="fas fa-shield-alt"></i>
+                        <p>Monitoring L2-L7 traffic...</p>
+                    </div>
+                </div>
+            </div>
+            <div class="card-footer py-2">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="d-flex gap-2" style="gap: 0.5rem;">
+                        <span class="badge badge-primary" title="Data Link"><i class="fas fa-ethernet"></i> L2</span>
+                        <span class="badge badge-purple" title="Network" style="background:#8b5cf6;"><i class="fas fa-network-wired"></i> L3</span>
+                        <span class="badge badge-pink" title="Transport" style="background:#ec4899;"><i class="fas fa-stream"></i> L4</span>
+                        <span class="badge badge-warning" title="Session/TLS"><i class="fas fa-lock"></i> L5</span>
+                        <span class="badge badge-success" title="Application"><i class="fas fa-globe"></i> L7</span>
+                    </div>
+                    <span class="text-muted small">Real-time</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if not data_available %}
+<div class="alert alert-info">
+    <i class="fas fa-info-circle mr-2"></i>
+    <strong>No Data:</strong> QSecBit agent is starting up. Security metrics will appear once data is collected.
+</div>
+{% endif %}
+
+<!-- DNS Settings Modal -->
+<div class="modal fade modal-dark" id="dnsSettingsModal" tabindex="-1" role="dialog"
+     aria-labelledby="dnsSettingsModalLabel" aria-modal="true">
+    <div class="modal-dialog modal-lg modal-dialog-scrollable" role="document">
+        <div class="modal-content">
+            <div class="modal-header bg-success">
+                <h5 class="modal-title" id="dnsSettingsModalLabel"><i class="fas fa-cog mr-2"></i>DNS Protection Settings</h5>
+                <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body p-0">
+                <!-- Tabs -->
+                <ul class="nav nav-tabs nav-fill" id="settingsTabs" role="tablist">
+                    <li class="nav-item">
+                        <a class="nav-link active" data-toggle="tab" href="#tab-privacy">
+                            <i class="fas fa-user-shield"></i> Privacy
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" data-toggle="tab" href="#tab-whitelist">
+                            <i class="fas fa-check-circle"></i> Whitelist
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" data-toggle="tab" href="#tab-sources">
+                            <i class="fas fa-list"></i> Sources
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" data-toggle="tab" href="#tab-blocked">
+                            <i class="fas fa-ban"></i> Blocked
+                        </a>
+                    </li>
+                </ul>
+
+                <div class="tab-content p-3">
+                    <!-- Privacy Tab -->
+                    <div class="tab-pane fade show active" id="tab-privacy">
+                        <div class="mb-3">
+                            <div class="btn-group btn-group-sm w-100">
+                                <button class="btn btn-success" onclick="applyPrivacyPreset('maximum')">Maximum Privacy</button>
+                                <button class="btn btn-warning" onclick="applyPrivacyPreset('balanced')">Balanced</button>
+                                <button class="btn btn-danger" onclick="applyPrivacyPreset('full')">Full Analytics</button>
+                            </div>
+                        </div>
+                        <div class="row">
+                            <div class="col-md-6">
+                                <div class="custom-control custom-switch mb-3">
+                                    <input type="checkbox" class="custom-control-input" id="privacy-query-logging"
+                                           onchange="setPrivacy('enable_query_logging', this.checked)">
+                                    <label class="custom-control-label" for="privacy-query-logging">DNS Query Logging</label>
+                                    <small class="form-text text-warning">HIGH privacy impact</small>
+                                </div>
+                                <div class="custom-control custom-switch mb-3">
+                                    <input type="checkbox" class="custom-control-input" id="privacy-domain-tracking"
+                                           onchange="setPrivacy('enable_domain_tracking', this.checked)">
+                                    <label class="custom-control-label" for="privacy-domain-tracking">Domain Tracking</label>
+                                    <small class="form-text text-warning">HIGH privacy impact</small>
+                                </div>
+                                <div class="custom-control custom-switch mb-3">
+                                    <input type="checkbox" class="custom-control-input" id="privacy-ad-stats" checked
+                                           onchange="setPrivacy('enable_ad_blocking_stats', this.checked)">
+                                    <label class="custom-control-label" for="privacy-ad-stats">Ad Blocking Statistics</label>
+                                    <small class="form-text text-muted">LOW privacy impact</small>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <div class="custom-control custom-switch mb-3">
+                                    <input type="checkbox" class="custom-control-input" id="privacy-threat-detection" checked
+                                           onchange="setPrivacy('enable_threat_detection', this.checked)">
+                                    <label class="custom-control-label" for="privacy-threat-detection">Threat Detection</label>
+                                    <small class="form-text text-success">RECOMMENDED</small>
+                                </div>
+                                <div class="custom-control custom-switch mb-3">
+                                    <input type="checkbox" class="custom-control-input" id="privacy-ml-training"
+                                           onchange="setPrivacy('enable_ml_training_data', this.checked)">
+                                    <label class="custom-control-label" for="privacy-ml-training">ML Training Data</label>
+                                    <small class="form-text text-info">MEDIUM privacy impact</small>
+                                </div>
+                                <div class="custom-control custom-switch mb-3">
+                                    <input type="checkbox" class="custom-control-input" id="privacy-anonymize-ips" checked
+                                           onchange="setPrivacy('anonymize_client_ips', this.checked)">
+                                    <label class="custom-control-label" for="privacy-anonymize-ips">Anonymize IPs</label>
+                                    <small class="form-text text-success">ALWAYS recommended</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Data Retention (days)</label>
+                            <input type="number" class="form-control" id="privacy-retention" value="7" min="1" max="90"
+                                   style="width: 100px;" onchange="setPrivacy('retention_days', parseInt(this.value))">
+                        </div>
+                    </div>
+
+                    <!-- Whitelist Tab -->
+                    <div class="tab-pane fade" id="tab-whitelist">
+                        <div class="input-group mb-3">
+                            <input type="text" class="form-control" id="whitelist-input" placeholder="domain.com"
+                                   onkeypress="if(event.key==='Enter') addWhitelist()">
+                            <div class="input-group-append">
+                                <button class="btn btn-success" onclick="addWhitelist()">Add</button>
+                            </div>
+                        </div>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                            <table class="table table-sm table-dark">
+                                <thead><tr><th>Domain</th><th class="text-right">Action</th></tr></thead>
+                                <tbody id="whitelist-body">
+                                    <tr><td colspan="2" class="text-muted text-center">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <!-- Sources Tab -->
+                    <div class="tab-pane fade" id="tab-sources">
+                        <button class="btn btn-sm btn-primary mb-3" data-toggle="modal" data-target="#add-source-modal">
+                            <i class="fas fa-plus"></i> Add Source
+                        </button>
+                        <div id="sources-list">
+                            <p class="text-muted">Loading sources...</p>
+                        </div>
+                    </div>
+
+                    <!-- Blocked Tab -->
+                    <div class="tab-pane fade" id="tab-blocked">
+                        <div class="input-group mb-3">
+                            <input type="text" class="form-control" id="blocked-search" placeholder="Search domains..."
+                                   onkeyup="filterBlockedList()">
+                            <div class="input-group-append">
+                                <button class="btn btn-outline-secondary" onclick="loadBlockedModal()">
+                                    <i class="fas fa-sync"></i>
+                                </button>
+                            </div>
+                        </div>
+                        <div style="max-height: 300px; overflow-y: auto;">
+                            <table class="table table-sm table-dark table-striped">
+                                <thead><tr><th>Domain</th><th>Reason</th><th class="text-center">Actions</th></tr></thead>
+                                <tbody id="blocked-modal-body">
+                                    <tr><td colspan="3" class="text-center text-muted">Loading...</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <small class="text-muted"><span id="blocked-modal-count">0</span> blocked domains (deduplicated)</small>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Source Modal -->
+<div class="modal fade modal-dark" id="add-source-modal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add Blocklist Source</h5>
+                <button type="button" class="close text-white" data-dismiss="modal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>Source Name</label>
+                    <input type="text" class="form-control" id="source-name" placeholder="e.g., StevenBlack Hosts">
+                </div>
+                <div class="form-group">
+                    <label>Source URL</label>
+                    <input type="text" class="form-control" id="source-url" placeholder="https://raw.githubusercontent.com/...">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="addSource()">Add Source</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+const LEVEL_NAMES = ['OFF', 'Base', 'Enhanced', 'Strong', 'Maximum', 'Full'];
+const LEVEL_COLORS = ['secondary', 'info', 'primary', 'success', 'warning', 'danger'];
+
+// =============================================================================
+// PACKET INSPECTOR - Particle Flow Animation
+// =============================================================================
+class PacketInspector {
+    constructor(canvasId) {
+        this.canvas = document.getElementById(canvasId);
+        if (!this.canvas) return;
+        this.ctx = this.canvas.getContext('2d');
+        this.particles = [];
+        this.darts = [];
+        this.deadPackets = [];  // Packets killed by darts, falling to the bin
+        this.packetsInspected = 0;
+        this.packetsBlocked = 0;
+        this.packetsPerSec = 0;
+        this.lastSecondCount = 0;
+        this.animationId = null;
+        this.gravity = 0.3;
+        this.floorY = 0;  // Will be set in resize
+        this.binX = 0;    // Will be set in resize
+        this.resize();
+        window.addEventListener('resize', () => this.resize());
+        this.startAnimation();
+        this.startPacketSimulation();
+        setInterval(() => this.updateStats(), 1000);
+    }
+
+    resize() {
+        const rect = this.canvas.parentElement.getBoundingClientRect();
+        this.canvas.width = rect.width;
+        this.canvas.height = 140;
+        this.width = this.canvas.width;
+        this.height = this.canvas.height;
+        this.floorY = this.height - 15;  // Floor line
+        this.binX = this.width - 40;     // Bin position
+    }
+
+    createPacket(isBlocked = false) {
+        const layer = ['L2', 'L3', 'L4', 'L5', 'L7'][Math.floor(Math.random() * 5)];
+        const colors = {
+            L2: '#3b82f6', L3: '#8b5cf6', L4: '#ec4899', L5: '#f59e0b', L7: '#10b981'
+        };
+        return {
+            x: 0,
+            y: 20 + Math.random() * (this.height - 40),
+            vx: 2 + Math.random() * 3,
+            vy: (Math.random() - 0.5) * 0.5,
+            size: 10 + Math.random() * 4,  // Font size for binary
+            color: isBlocked ? '#f87171' : colors[layer],
+            layer: layer,
+            alpha: 1,
+            isBlocked: isBlocked,
+            trail: [],
+            binary: Math.random() < 0.5 ? '0' : '1'  // Random binary value
+        };
+    }
+
+    createDart(x, y, layer) {
+        return {
+            x: x,
+            y: y,
+            targetX: x + 80,
+            targetY: y,
+            progress: 0,
+            layer: layer,
+            color: '#f87171',
+            size: 8,
+            alpha: 1
+        };
+    }
+
+    createExplosion(x, y) {
+        const particles = [];
+        for (let i = 0; i < 8; i++) {
+            const angle = (i / 8) * Math.PI * 2;
+            particles.push({
+                x: x,
+                y: y,
+                vx: Math.cos(angle) * 3,
+                vy: Math.sin(angle) * 3,
+                size: 2,
+                color: '#f87171',
+                alpha: 1,
+                life: 30
+            });
+        }
+        return particles;
+    }
+
+    startPacketSimulation() {
+        // Add packets at random intervals
+        setInterval(() => {
+            if (this.particles.length < 50) {
+                const isBlocked = Math.random() < 0.05; // 5% blocked
+                this.particles.push(this.createPacket(isBlocked));
+                this.packetsInspected++;
+                this.lastSecondCount++;
+                if (isBlocked) {
+                    this.packetsBlocked++;
+                    this.triggerBlockEvent(this.particles[this.particles.length - 1]);
+                }
+            }
+        }, 100);
+    }
+
+    triggerBlockEvent(packet) {
+        // Create dart animation
+        this.darts.push(this.createDart(packet.x + 50, packet.y, packet.layer));
+
+        // Mark packet for death - dart will "kill" it
+        packet.markedForDeath = true;
+        packet.deathTimer = 15; // Frames until dart hits
+
+        // Flash layer indicator
+        const layerEl = document.getElementById('layer-' + packet.layer.toLowerCase());
+        if (layerEl) {
+            layerEl.classList.add('alert');
+            setTimeout(() => layerEl.classList.remove('alert'), 1000);
+        }
+        // Add to layer activity
+        this.addLayerActivity(packet.layer, true);
+    }
+
+    killPacket(packet) {
+        // Create a dead packet - larger binary with "BLOCKED" label that falls to the bin
+        this.deadPackets.push({
+            x: packet.x,
+            y: packet.y,
+            vx: 0.5 + Math.random() * 1,  // Slight rightward momentum
+            vy: 0,                         // Will be affected by gravity
+            size: packet.size * 2.5,       // Grow bigger when blocked
+            color: '#f87171',
+            alpha: 1,
+            rotation: 0,
+            rotationSpeed: (Math.random() - 0.5) * 0.15,
+            onFloor: false,
+            sweepSpeed: 2 + Math.random() * 2,
+            binary: packet.binary,          // Keep the binary value
+            showBlockedLabel: true          // Show "BLOCKED" text
+        });
+
+        // Create binary debris (smaller 0s and 1s)
+        for (let i = 0; i < 6; i++) {
+            const angle = (i / 6) * Math.PI * 2;
+            this.deadPackets.push({
+                x: packet.x,
+                y: packet.y,
+                vx: Math.cos(angle) * 2.5,
+                vy: Math.sin(angle) * 2.5,
+                size: 8,
+                color: '#fca5a5',
+                alpha: 1,
+                rotation: 0,
+                rotationSpeed: 0,
+                isDebris: true,
+                life: 25,
+                binary: Math.random() < 0.5 ? '0' : '1'  // Random binary debris
+            });
+        }
+    }
+
+    addLayerActivity(layer, blocked) {
+        const container = document.getElementById('layer-activity-list');
+        if (!container) return;
+
+        const activities = [
+            { layer: 'L2', title: 'MAC Address Check', detail: 'ARP inspection' },
+            { layer: 'L3', title: 'IP Header Analysis', detail: 'Packet filtering' },
+            { layer: 'L4', title: 'Port Scan Detection', detail: 'TCP/UDP analysis' },
+            { layer: 'L5', title: 'TLS Inspection', detail: 'Certificate validation' },
+            { layer: 'L7', title: 'Payload Analysis', detail: 'Deep packet inspection' },
+            { layer: 'DNS', title: 'DNS Query Filter', detail: 'Domain classification' },
+            { layer: 'ML', title: 'ML Classification', detail: 'Neural network inference' }
+        ];
+
+        const activity = activities.find(a => a.layer === layer) ||
+            { layer: layer, title: layer + ' Inspection', detail: 'Traffic analysis' };
+
+        const item = document.createElement('div');
+        item.className = 'layer-activity-item ' + (blocked ? 'blocked' : 'allowed');
+        item.innerHTML = `
+            <div class="layer-badge ${layer}">${layer}</div>
+            <div class="layer-activity-content">
+                <div class="layer-activity-title">${activity.title}</div>
+                <div class="layer-activity-detail">${activity.detail}</div>
+            </div>
+            <span class="layer-activity-action ${blocked ? 'blocked' : 'inspected'}">
+                ${blocked ? 'BLOCKED' : 'OK'}
+            </span>
+            <span class="layer-activity-time">now</span>
+        `;
+
+        // Remove empty state if present
+        const emptyState = container.querySelector('.empty-state');
+        if (emptyState) emptyState.remove();
+
+        // Add to top and limit to 15 items
+        container.insertBefore(item, container.firstChild);
+        const items = container.querySelectorAll('.layer-activity-item');
+        if (items.length > 15) {
+            items[items.length - 1].remove();
+        }
+
+        // Update count
+        document.getElementById('activity-count').textContent =
+            Math.min(items.length, 15);
+    }
+
+    updateStats() {
+        this.packetsPerSec = this.lastSecondCount;
+        this.lastSecondCount = 0;
+
+        document.getElementById('packets-inspected').textContent =
+            this.formatNumber(this.packetsInspected);
+        document.getElementById('packets-blocked').textContent =
+            this.packetsBlocked;
+        document.getElementById('packets-rate').textContent =
+            this.packetsPerSec;
+    }
+
+    formatNumber(num) {
+        if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M';
+        if (num >= 1000) return (num / 1000).toFixed(1) + 'K';
+        return num.toString();
+    }
+
+    drawPacket(p) {
+        // Draw trail of smaller binary values
+        this.ctx.globalAlpha = 0.15;
+        this.ctx.font = `${p.size * 0.6}px 'Courier New', monospace`;
+        this.ctx.fillStyle = p.color;
+        for (let i = 0; i < p.trail.length; i++) {
+            const t = p.trail[i];
+            const trailAlpha = (i / p.trail.length) * 0.15;
+            this.ctx.globalAlpha = trailAlpha;
+            this.ctx.fillText(p.binary, t.x, t.y + p.size / 3);
+        }
+
+        // Draw binary digit (0 or 1)
+        this.ctx.globalAlpha = p.alpha;
+        this.ctx.font = `bold ${p.size}px 'Courier New', monospace`;
+        this.ctx.fillStyle = p.color;
+        this.ctx.shadowColor = p.color;
+        this.ctx.shadowBlur = 8;
+        this.ctx.fillText(p.binary, p.x, p.y + p.size / 3);
+        this.ctx.shadowBlur = 0;
+    }
+
+    drawDart(d) {
+        // Darts are no longer used - blocked packets grow and fall directly
+        // This function is kept for compatibility but draws nothing visible
+    }
+
+    update() {
+        // Update particles
+        for (let i = this.particles.length - 1; i >= 0; i--) {
+            const p = this.particles[i];
+            p.trail.push({ x: p.x, y: p.y });
+            if (p.trail.length > 10) p.trail.shift();
+
+            // Handle death timer - when dart hits, kill the packet
+            if (p.markedForDeath) {
+                p.deathTimer--;
+                if (p.deathTimer <= 0) {
+                    this.killPacket(p);
+                    this.particles.splice(i, 1);
+                    continue;
+                }
+                // Slow down while waiting for dart
+                p.vx *= 0.9;
+            }
+
+            p.x += p.vx;
+            p.y += p.vy;
+
+            // Bounce off edges
+            if (p.y < 10 || p.y > this.height - 10) p.vy *= -1;
+
+            // Remove if off screen
+            if (p.x > this.width + 10) {
+                this.particles.splice(i, 1);
+            }
+        }
+
+        // Update darts
+        for (let i = this.darts.length - 1; i >= 0; i--) {
+            const d = this.darts[i];
+            d.progress += 0.1;
+            if (d.progress >= 1) {
+                d.alpha *= 0.8;
+                if (d.alpha < 0.1) {
+                    this.darts.splice(i, 1);
+                }
+            }
+        }
+
+        // Update dead packets (falling and sweeping to bin)
+        for (let i = this.deadPackets.length - 1; i >= 0; i--) {
+            const dp = this.deadPackets[i];
+
+            // Handle explosion debris
+            if (dp.isDebris) {
+                dp.life--;
+                dp.alpha = dp.life / 20;
+                dp.x += dp.vx;
+                dp.y += dp.vy;
+                dp.vy += 0.1; // Light gravity
+                if (dp.life <= 0) {
+                    this.deadPackets.splice(i, 1);
+                }
+                continue;
+            }
+
+            // Apply gravity until hitting floor
+            if (!dp.onFloor) {
+                dp.vy += this.gravity;
+                dp.y += dp.vy;
+                dp.x += dp.vx;
+                dp.rotation += dp.rotationSpeed;
+
+                // Hit the floor
+                if (dp.y >= this.floorY) {
+                    dp.y = this.floorY;
+                    dp.vy = -dp.vy * 0.3; // Small bounce
+                    dp.onFloor = dp.vy > -1; // Settle if bounce is small
+                    if (dp.onFloor) {
+                        dp.vy = 0;
+                        dp.rotation = 0;
+                    }
+                }
+            } else {
+                // On floor - sweep to the right toward bin
+                dp.x += dp.sweepSpeed;
+
+                // Slow down near bin
+                if (dp.x > this.binX - 30) {
+                    dp.sweepSpeed *= 0.95;
+                    dp.alpha *= 0.92;
+                }
+
+                // Remove when in bin
+                if (dp.x >= this.binX || dp.alpha < 0.05) {
+                    this.deadPackets.splice(i, 1);
+                }
+            }
+        }
+    }
+
+    draw() {
+        this.ctx.clearRect(0, 0, this.width, this.height);
+
+        // Draw grid lines
+        this.ctx.strokeStyle = 'rgba(74, 222, 128, 0.05)';
+        this.ctx.lineWidth = 1;
+        for (let x = 0; x < this.width; x += 50) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(x, 0);
+            this.ctx.lineTo(x, this.height);
+            this.ctx.stroke();
+        }
+        for (let y = 0; y < this.height; y += 30) {
+            this.ctx.beginPath();
+            this.ctx.moveTo(0, y);
+            this.ctx.lineTo(this.width, y);
+            this.ctx.stroke();
+        }
+
+        // Draw inspection zones
+        const zones = [
+            { x: this.width * 0.15, label: 'L2' },
+            { x: this.width * 0.30, label: 'L3' },
+            { x: this.width * 0.45, label: 'L4' },
+            { x: this.width * 0.60, label: 'L5' },
+            { x: this.width * 0.75, label: 'L7' }
+        ];
+
+        zones.forEach(zone => {
+            this.ctx.strokeStyle = 'rgba(74, 222, 128, 0.15)';
+            this.ctx.setLineDash([5, 5]);
+            this.ctx.beginPath();
+            this.ctx.moveTo(zone.x, 0);
+            this.ctx.lineTo(zone.x, this.height);
+            this.ctx.stroke();
+            this.ctx.setLineDash([]);
+
+            this.ctx.fillStyle = 'rgba(74, 222, 128, 0.3)';
+            this.ctx.font = '10px sans-serif';
+            this.ctx.fillText(zone.label, zone.x - 8, this.height - 5);
+        });
+
+        // Draw floor line (subtle)
+        this.ctx.strokeStyle = 'rgba(248, 113, 113, 0.15)';
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(0, this.floorY + 5);
+        this.ctx.lineTo(this.width, this.floorY + 5);
+        this.ctx.stroke();
+
+        // Draw bin icon
+        this.drawBin();
+
+        // Draw dead packets (falling/sweeping)
+        this.deadPackets.forEach(dp => this.drawDeadPacket(dp));
+
+        // Draw particles and darts
+        this.particles.forEach(p => this.drawPacket(p));
+        this.darts.forEach(d => this.drawDart(d));
+
+        this.ctx.globalAlpha = 1;
+    }
+
+    drawDeadPacket(dp) {
+        this.ctx.save();
+        this.ctx.globalAlpha = dp.alpha;
+
+        if (dp.isDebris) {
+            // Draw debris as small fading binary digits
+            this.ctx.font = `${dp.size}px 'Courier New', monospace`;
+            this.ctx.fillStyle = dp.color;
+            this.ctx.fillText(dp.binary || '0', dp.x, dp.y);
+        } else {
+            // Draw dead packet with rotation - large binary digit
+            this.ctx.translate(dp.x, dp.y);
+            this.ctx.rotate(dp.rotation);
+
+            // Draw large binary digit with glow
+            this.ctx.font = `bold ${dp.size}px 'Courier New', monospace`;
+            this.ctx.fillStyle = dp.color;
+            this.ctx.shadowColor = dp.color;
+            this.ctx.shadowBlur = 15;
+            this.ctx.textAlign = 'center';
+            this.ctx.fillText(dp.binary || '1', 0, dp.size / 3);
+
+            // Draw "BLOCKED" label below the binary
+            if (dp.showBlockedLabel && !dp.onFloor) {
+                this.ctx.font = `bold 8px 'Courier New', monospace`;
+                this.ctx.fillStyle = '#fee2e2';
+                this.ctx.shadowBlur = 5;
+                this.ctx.fillText('BLOCKED', 0, dp.size / 3 + 12);
+            }
+
+            // Draw strike-through line
+            this.ctx.strokeStyle = '#7f1d1d';
+            this.ctx.lineWidth = 2;
+            this.ctx.beginPath();
+            const textWidth = dp.size * 0.6;
+            this.ctx.moveTo(-textWidth, 0);
+            this.ctx.lineTo(textWidth, 0);
+            this.ctx.stroke();
+
+            this.ctx.shadowBlur = 0;
+            this.ctx.textAlign = 'left';
+        }
+
+        this.ctx.restore();
+    }
+
+    drawBin() {
+        const x = this.binX;
+        const y = this.floorY - 5;
+        const w = 25;
+        const h = 20;
+
+        this.ctx.save();
+
+        // Bin glow when dead packets are nearby
+        const nearbyPackets = this.deadPackets.filter(dp =>
+            !dp.isDebris && dp.onFloor && dp.x > this.binX - 60
+        ).length;
+
+        if (nearbyPackets > 0) {
+            this.ctx.shadowColor = '#f87171';
+            this.ctx.shadowBlur = 15 + nearbyPackets * 3;
+        }
+
+        // Bin body
+        this.ctx.fillStyle = 'rgba(127, 29, 29, 0.6)';
+        this.ctx.strokeStyle = '#f87171';
+        this.ctx.lineWidth = 1.5;
+
+        // Trapezoid bin shape
+        this.ctx.beginPath();
+        this.ctx.moveTo(x - w/2 + 3, y - h);
+        this.ctx.lineTo(x + w/2 - 3, y - h);
+        this.ctx.lineTo(x + w/2, y);
+        this.ctx.lineTo(x - w/2, y);
+        this.ctx.closePath();
+        this.ctx.fill();
+        this.ctx.stroke();
+
+        // Bin lid
+        this.ctx.beginPath();
+        this.ctx.moveTo(x - w/2 - 2, y - h);
+        this.ctx.lineTo(x + w/2 + 2, y - h);
+        this.ctx.stroke();
+
+        // Bin icon (trash lines)
+        this.ctx.strokeStyle = 'rgba(248, 113, 113, 0.5)';
+        this.ctx.lineWidth = 1;
+        this.ctx.beginPath();
+        this.ctx.moveTo(x - 5, y - h + 5);
+        this.ctx.lineTo(x - 5, y - 3);
+        this.ctx.moveTo(x, y - h + 5);
+        this.ctx.lineTo(x, y - 3);
+        this.ctx.moveTo(x + 5, y - h + 5);
+        this.ctx.lineTo(x + 5, y - 3);
+        this.ctx.stroke();
+
+        this.ctx.shadowBlur = 0;
+        this.ctx.restore();
+    }
+
+    startAnimation() {
+        const animate = () => {
+            this.update();
+            this.draw();
+            this.animationId = requestAnimationFrame(animate);
+        };
+        animate();
+    }
+
+    // Public method to trigger a block event from external sources
+    triggerExternalBlock(layer = 'DNS') {
+        const packet = this.createPacket(true);
+        packet.layer = layer;
+        packet.x = this.width * 0.5;
+        this.particles.push(packet);
+        this.packetsBlocked++;
+        this.triggerBlockEvent(packet);
+    }
+}
+
+// Global inspector instance
+let packetInspector = null;
+
+// =============================================================================
+// LAYER ACTIVITY
+// =============================================================================
+let layerActivityCache = [];
+
+function loadLayerActivity() {
+    // This would normally fetch from an API
+    // For now, we'll let the packet inspector simulate activity
+    const container = document.getElementById('layer-activity-list');
+    if (!container) return;
+
+    if (layerActivityCache.length === 0) {
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-shield-alt"></i>
+                <p>Monitoring L2-L7 traffic...</p>
+            </div>
+        `;
+    }
+}
+
+// =============================================================================
+// INITIALIZATION
+// =============================================================================
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize packet inspector
+    packetInspector = new PacketInspector('packetInspectorCanvas');
+
+    loadDnsStats();
+    loadMLStatus();
+    loadRecentBlocked();
+    loadLayerActivity();
+    drawQsecbitGauge();
+
+    setInterval(checkPauseStatus, 10000);
+    setInterval(loadDnsStats, 30000);
+    setInterval(refreshQsecbit, 30000);
+    setInterval(loadRecentBlocked, 60000);
+});
+
+// === DNS STATS ===
+async function loadDnsStats() {
+    try {
+        const resp = await fetch('/dnsxai/api/stats');
+        const data = await resp.json();
+
+        document.getElementById('stat-blocked').textContent = data.blocked.toLocaleString();
+        document.getElementById('stat-allowed').textContent = data.allowed.toLocaleString();
+        document.getElementById('stat-rate').textContent = data.block_rate.toFixed(1) + '%';
+
+        document.getElementById('protection-level').value = data.level;
+        updateLevelDisplay(data.level);
+        updateDnsStatus(data.status);
+    } catch(e) {
+        console.error('Failed to load DNS stats:', e);
+    }
+}
+
+function updateDnsStatus(status) {
+    const icon = document.getElementById('dns-status-icon');
+    const text = document.getElementById('dns-status-text');
+    const btn = document.getElementById('killswitch-btn');
+    const timer = document.getElementById('pause-timer');
+
+    icon.className = 'dns-status-icon ' + status;
+
+    if (status === 'active') {
+        icon.innerHTML = '<i class="fas fa-shield-alt"></i>';
+        text.textContent = 'Active';
+        text.className = 'h4 text-success mb-0';
+        btn.textContent = 'OFF';
+        btn.className = 'btn btn-sm btn-danger';
+        timer.style.display = 'none';
+    } else if (status === 'paused') {
+        icon.innerHTML = '<i class="fas fa-pause-circle"></i>';
+        text.textContent = 'Paused';
+        text.className = 'h4 text-warning mb-0';
+        btn.textContent = 'ON';
+        btn.className = 'btn btn-sm btn-success';
+        timer.style.display = 'block';
+    } else {
+        icon.innerHTML = '<i class="fas fa-times-circle"></i>';
+        text.textContent = 'Disabled';
+        text.className = 'h4 text-danger mb-0';
+        btn.textContent = 'ON';
+        btn.className = 'btn btn-sm btn-success';
+        timer.style.display = 'none';
+    }
+}
+
+async function toggleProtection() {
+    const btn = document.getElementById('killswitch-btn');
+    const action = btn.textContent === 'OFF' ? 'disable' : 'enable';
+
+    try {
+        const resp = await fetch('/dnsxai/api/pause', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            updateDnsStatus(data.status);
+            toastr.success('Protection ' + data.status);
+        }
+    } catch(e) {
+        toastr.error('Failed to toggle protection');
+    }
+}
+
+async function pauseProtection(minutes) {
+    try {
+        const resp = await fetch('/dnsxai/api/pause', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({action: 'pause', minutes})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            updateDnsStatus('paused');
+            toastr.success('Paused for ' + minutes + ' minutes');
+        }
+    } catch(e) {
+        toastr.error('Failed to pause protection');
+    }
+}
+
+async function checkPauseStatus() {
+    try {
+        const resp = await fetch('/dnsxai/api/pause');
+        const data = await resp.json();
+        updateDnsStatus(data.status);
+
+        if (data.status === 'paused' && data.remaining_seconds > 0) {
+            const mins = Math.floor(data.remaining_seconds / 60);
+            const secs = data.remaining_seconds % 60;
+            document.getElementById('pause-countdown').textContent =
+                mins.toString().padStart(2, '0') + ':' + secs.toString().padStart(2, '0');
+        }
+    } catch(e) {}
+}
+
+// === PROTECTION LEVEL ===
+function updateLevelDisplay(level) {
+    const name = document.getElementById('level-name');
+    const labels = document.querySelectorAll('#protection-labels span');
+
+    // Update badge
+    name.textContent = LEVEL_NAMES[level];
+    name.className = 'badge badge-' + LEVEL_COLORS[level] + ' px-3 py-2';
+    name.style.fontSize = '0.85rem';
+
+    // Highlight active label
+    labels.forEach((label, idx) => {
+        if (idx == level) {
+            label.classList.add('active');
+        } else {
+            label.classList.remove('active');
+        }
+    });
+}
+
+async function setProtectionLevel(level) {
+    try {
+        const resp = await fetch('/dnsxai/api/level', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({level: parseInt(level)})
+        });
+        const data = await resp.json();
+        if (data.success) {
+            toastr.success('Level set to ' + LEVEL_NAMES[level]);
+        }
+    } catch(e) {
+        toastr.error('Failed to set level');
+    }
+}
+
+// === ML STATUS ===
+async function loadMLStatus() {
+    try {
+        const resp = await fetch('/dnsxai/api/ml/status');
+        const data = await resp.json();
+
+        const status = document.getElementById('ml-status');
+        const trainBtn = document.getElementById('train-btn');
+        const progress = document.getElementById('ml-training-progress');
+
+        if (data.training_in_progress) {
+            status.textContent = 'Training...';
+            status.className = 'badge badge-info mr-2';
+            trainBtn.style.display = 'none';
+            progress.style.display = 'block';
+        } else if (data.model_trained) {
+            status.textContent = 'Active';
+            status.className = 'badge badge-success mr-2';
+            trainBtn.style.display = 'inline-block';
+            trainBtn.title = 'Retrain ML Model';
+            progress.style.display = 'none';
+        } else if (data.ready_for_training) {
+            status.textContent = 'Ready';
+            status.className = 'badge badge-primary mr-2';
+            trainBtn.style.display = 'inline-block';
+            trainBtn.title = `Train ML Model (${data.training_samples || 0} samples)`;
+            progress.style.display = 'none';
+        } else {
+            status.textContent = 'Learning';
+            status.className = 'badge badge-secondary mr-2';
+            // Show train button if we have some samples
+            if (data.training_samples && data.training_samples > 50) {
+                trainBtn.style.display = 'inline-block';
+                trainBtn.title = `Train ML Model (${data.training_samples} samples)`;
+            } else {
+                trainBtn.style.display = 'none';
+            }
+            progress.style.display = 'none';
+        }
+    } catch(e) {
+        document.getElementById('ml-status').textContent = 'Offline';
+        document.getElementById('ml-status').className = 'badge badge-danger mr-2';
+        document.getElementById('train-btn').style.display = 'none';
+        document.getElementById('ml-training-progress').style.display = 'none';
+    }
+}
+
+async function trainML() {
+    const trainBtn = document.getElementById('train-btn');
+    const progress = document.getElementById('ml-training-progress');
+    const progressText = document.getElementById('ml-training-text');
+
+    // Confirm training
+    if (!confirm('Start ML training? This may take a few minutes.')) {
+        return;
+    }
+
+    // Show progress
+    trainBtn.disabled = true;
+    progress.style.display = 'block';
+    progressText.textContent = 'Starting training...';
+
+    try {
+        const resp = await fetch('/dnsxai/api/ml/train', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'}
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            progressText.textContent = 'Training complete!';
+            progress.className = 'mt-2 p-2 bg-success text-white rounded';
+            toastr.success('ML model trained successfully');
+
+            setTimeout(() => {
+                progress.style.display = 'none';
+                progress.className = 'mt-2 p-2 bg-info text-white rounded';
+                loadMLStatus();
+            }, 2000);
+        } else {
+            progressText.textContent = data.error || 'Training failed';
+            progress.className = 'mt-2 p-2 bg-danger text-white rounded';
+            toastr.error(data.error || 'Training failed');
+
+            setTimeout(() => {
+                progress.style.display = 'none';
+                progress.className = 'mt-2 p-2 bg-info text-white rounded';
+            }, 3000);
+        }
+    } catch(e) {
+        progressText.textContent = 'Connection error';
+        progress.className = 'mt-2 p-2 bg-danger text-white rounded';
+        toastr.error('Failed to connect to ML service');
+
+        setTimeout(() => {
+            progress.style.display = 'none';
+            progress.className = 'mt-2 p-2 bg-info text-white rounded';
+        }, 3000);
+    }
+
+    trainBtn.disabled = false;
+}
+
+// === QSECBIT GAUGE ===
+// Security gauge: full = secure (high score), empty = under attack (low score)
+function drawQsecbitGauge() {
+    const canvas = document.getElementById('qsecbitGauge');
+    if (!canvas) return;
+
+    const ctx = canvas.getContext('2d');
+    const score = {{ qsecbit.score }};
+    const status = '{{ qsecbit.rag_status }}';
+
+    const color = status === 'GREEN' ? '#28a745' : status === 'AMBER' ? '#ffc107' : '#dc3545';
+
+    // Background arc
+    ctx.beginPath();
+    ctx.arc(80, 80, 60, 0.75 * Math.PI, 2.25 * Math.PI);
+    ctx.strokeStyle = '#2c2c2c';
+    ctx.lineWidth = 15;
+    ctx.stroke();
+
+    // Security arc - full when score is high, empty when under attack
+    const endAngle = 0.75 * Math.PI + (score * 1.5 * Math.PI);
+    ctx.beginPath();
+    ctx.arc(80, 80, 60, 0.75 * Math.PI, endAngle);
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 15;
+    ctx.lineCap = 'round';
+    ctx.stroke();
+}
+
+async function refreshQsecbit() {
+    try {
+        const resp = await fetch('/security/api/qsecbit');
+        const data = await resp.json();
+        if (data.score !== undefined) {
+            // Show security score percentage
+            const securityScore = Math.round(data.score * 100);
+            document.getElementById('qsecbit-score').textContent = securityScore + '%';
+        }
+    } catch(e) {}
+}
+
+// === DNS SETTINGS MODAL ===
+let dnsSettingsTrigger = null;  // Track the element that opened the modal
+
+function showDnsSettings() {
+    // Store the trigger element for focus restoration
+    dnsSettingsTrigger = document.activeElement;
+    $('#dnsSettingsModal').modal('show');
+    loadPrivacy();
+    loadWhitelist();
+    loadSources();
+    loadBlockedModal();
+}
+
+// Handle modal close - restore focus to trigger element
+$('#dnsSettingsModal').on('hidden.bs.modal', function() {
+    // Move focus back to the trigger element to avoid aria-hidden issues
+    if (dnsSettingsTrigger && dnsSettingsTrigger.focus) {
+        // Small delay to ensure modal animation completes
+        setTimeout(() => {
+            dnsSettingsTrigger.focus();
+            dnsSettingsTrigger = null;
+        }, 10);
+    }
+});
+
+// Ensure focus is moved before aria-hidden is applied
+$('#dnsSettingsModal').on('hide.bs.modal', function() {
+    // If an element inside the modal has focus, blur it first
+    const activeElement = document.activeElement;
+    if (this.contains(activeElement)) {
+        activeElement.blur();
+    }
+});
+
+// === PRIVACY ===
+async function loadPrivacy() {
+    try {
+        const resp = await fetch('/dnsxai/api/privacy');
+        const data = await resp.json();
+        const s = data.settings || {};
+
+        document.getElementById('privacy-query-logging').checked = s.enable_query_logging;
+        document.getElementById('privacy-domain-tracking').checked = s.enable_domain_tracking;
+        document.getElementById('privacy-ad-stats').checked = s.enable_ad_blocking_stats;
+        document.getElementById('privacy-threat-detection').checked = s.enable_threat_detection;
+        document.getElementById('privacy-ml-training').checked = s.enable_ml_training_data;
+        document.getElementById('privacy-anonymize-ips').checked = s.anonymize_client_ips;
+        document.getElementById('privacy-retention').value = s.retention_days || 7;
+    } catch(e) {}
+}
+
+async function setPrivacy(setting, value) {
+    try {
+        const resp = await fetch('/dnsxai/api/privacy', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({setting, value})
+        });
+        if ((await resp.json()).success) toastr.success('Setting updated');
+    } catch(e) {
+        toastr.error('Failed to update');
+    }
+}
+
+async function applyPrivacyPreset(preset) {
+    if (preset === 'full' && !confirm('Enable full analytics?')) return;
+    try {
+        const resp = await fetch('/dnsxai/api/privacy/preset', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({preset})
+        });
+        if ((await resp.json()).success) {
+            loadPrivacy();
+            toastr.success('Preset applied: ' + preset);
+        }
+    } catch(e) {
+        toastr.error('Failed');
+    }
+}
+
+// === WHITELIST ===
+async function loadWhitelist() {
+    const tbody = document.getElementById('whitelist-body');
+    if (!tbody) return;
+
+    try {
+        const resp = await fetch('/dnsxai/api/whitelist');
+
+        // Handle non-OK responses gracefully
+        if (!resp.ok) {
+            console.warn('Whitelist API returned status:', resp.status);
+            tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Whitelist service unavailable</td></tr>';
+            return;
+        }
+
+        const data = await resp.json();
+        const list = data.whitelist || [];
+
+        // Check for API-level errors
+        if (data.error) {
+            console.warn('Whitelist API error:', data.error);
+            tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Could not load whitelist</td></tr>';
+            return;
+        }
+
+        if (list.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">No whitelisted domains</td></tr>';
+        } else {
+            tbody.innerHTML = list.map(d => `
+                <tr>
+                    <td class="text-monospace">${d}</td>
+                    <td class="text-right">
+                        <button class="btn btn-xs btn-danger" onclick="removeWhitelist('${d.replace(/'/g, "\\'")}')">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+    } catch(e) {
+        console.warn('Failed to load whitelist:', e);
+        tbody.innerHTML = '<tr><td colspan="2" class="text-muted text-center">Error loading whitelist</td></tr>';
+    }
+}
+
+async function addWhitelist() {
+    const input = document.getElementById('whitelist-input');
+    const domain = input.value.trim().toLowerCase();
+    if (!domain) return;
+
+    try {
+        const resp = await fetch('/dnsxai/api/whitelist', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({domain})
+        });
+        if ((await resp.json()).success) {
+            input.value = '';
+            loadWhitelist();
+            toastr.success(domain + ' whitelisted');
+        }
+    } catch(e) {
+        toastr.error('Failed');
+    }
+}
+
+async function removeWhitelist(domain) {
+    try {
+        const resp = await fetch('/dnsxai/api/whitelist', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({domain})
+        });
+        if ((await resp.json()).success) {
+            loadWhitelist();
+            toastr.success('Removed');
+        }
+    } catch(e) {}
+}
+
+// === SOURCES ===
+async function loadSources() {
+    try {
+        const resp = await fetch('/dnsxai/api/sources');
+        const data = await resp.json();
+        const sources = data.sources || [];
+
+        const container = document.getElementById('sources-list');
+        if (sources.length === 0) {
+            container.innerHTML = '<p class="text-muted">No sources configured</p>';
+        } else {
+            container.innerHTML = sources.map(s => `
+                <div class="d-flex justify-content-between align-items-center mb-2 p-2 bg-dark rounded">
+                    <div>
+                        <strong>${s.name}</strong>
+                        ${s.builtin ? '<span class="badge badge-secondary ml-1">Built-in</span>' : ''}
+                        <br><small class="text-muted">${s.url}</small>
+                    </div>
+                    ${!s.builtin ? `<button class="btn btn-sm btn-danger" onclick="removeSource('${s.id}')"><i class="fas fa-trash"></i></button>` : ''}
+                </div>
+            `).join('');
+        }
+    } catch(e) {}
+}
+
+async function addSource() {
+    const name = document.getElementById('source-name').value.trim();
+    const url = document.getElementById('source-url').value.trim();
+    if (!url) { toastr.error('URL required'); return; }
+
+    try {
+        const resp = await fetch('/dnsxai/api/sources', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name: name || 'Custom', url})
+        });
+        if ((await resp.json()).success) {
+            $('#add-source-modal').modal('hide');
+            document.getElementById('source-name').value = '';
+            document.getElementById('source-url').value = '';
+            loadSources();
+            toastr.success('Source added');
+        }
+    } catch(e) {
+        toastr.error('Failed');
+    }
+}
+
+async function removeSource(id) {
+    if (!confirm('Remove source?')) return;
+    try {
+        const resp = await fetch('/dnsxai/api/sources', {
+            method: 'DELETE',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id})
+        });
+        if ((await resp.json()).success) {
+            loadSources();
+            toastr.success('Removed');
+        }
+    } catch(e) {}
+}
+
+// === BLOCKED ===
+let blockedCache = [];
+
+async function loadBlockedModal() {
+    try {
+        const resp = await fetch('/dnsxai/api/blocked?limit=200');
+        const data = await resp.json();
+        blockedCache = data.blocked || [];
+        renderBlocked(blockedCache);
+    } catch(e) {}
+}
+
+function renderBlocked(domains) {
+    const tbody = document.getElementById('blocked-modal-body');
+    document.getElementById('blocked-modal-count').textContent = domains.length;
+
+    if (domains.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="3" class="text-center text-muted">No blocked domains</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = domains.map(d => {
+        const esc = d.domain.replace(/'/g, "\\'");
+        const badge = d.ml_classified ? '<span class="badge badge-primary">ML</span>' : '<span class="badge badge-secondary">List</span>';
+        return `
+            <tr>
+                <td class="text-monospace" style="font-size:0.8em;word-break:break-all;">${d.domain}</td>
+                <td>${badge}</td>
+                <td class="text-center text-nowrap">
+                    <button class="btn btn-xs btn-success" onclick="whitelistBlocked('${esc}')" title="Whitelist"><i class="fas fa-check"></i></button>
+                </td>
+            </tr>
+        `;
+    }).join('');
+}
+
+function filterBlockedList() {
+    const search = document.getElementById('blocked-search').value.toLowerCase();
+    if (!search) {
+        renderBlocked(blockedCache);
+    } else {
+        renderBlocked(blockedCache.filter(d => d.domain.includes(search)));
+    }
+}
+
+async function whitelistBlocked(domain) {
+    try {
+        const resp = await fetch('/dnsxai/api/whitelist', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({domain})
+        });
+        if ((await resp.json()).success) {
+            blockedCache = blockedCache.filter(d => d.domain !== domain);
+            renderBlocked(blockedCache);
+            loadWhitelist();
+            toastr.success('Whitelisted');
+        }
+    } catch(e) {}
+}
+
+// === RECENTLY BLOCKED (Main Page) ===
+let recentBlockedCache = [];
+
+async function loadRecentBlocked() {
+    const container = document.getElementById('recent-blocked-list');
+    const countBadge = document.getElementById('recent-blocked-count');
+
+    try {
+        const resp = await fetch('/dnsxai/api/blocked?limit=20');
+        const data = await resp.json();
+        recentBlockedCache = data.blocked || [];
+
+        countBadge.textContent = recentBlockedCache.length;
+
+        if (recentBlockedCache.length === 0) {
+            container.innerHTML = `
+                <div class="empty-state">
+                    <i class="fas fa-check-circle text-success"></i>
+                    <p>No domains blocked recently</p>
+                </div>
+            `;
+            return;
+        }
+
+        container.innerHTML = recentBlockedCache.map(d => {
+            const esc = d.domain.replace(/'/g, "\\'");
+            const badge = d.ml_classified
+                ? '<span class="badge badge-primary" title="ML Classified">ML</span>'
+                : '<span class="badge badge-secondary" title="Blocklist Match">List</span>';
+            const time = d.timestamp ? formatTimeAgo(d.timestamp) : '';
+
+            return `
+                <div class="blocked-domain-item" id="blocked-${esc.replace(/[^a-z0-9]/gi, '_')}">
+                    <div class="blocked-domain-name">${d.domain}</div>
+                    <div class="blocked-domain-meta">
+                        ${time ? `<span class="blocked-time">${time}</span>` : ''}
+                        ${badge}
+                        <button class="btn btn-success whitelist-quick-btn" onclick="quickWhitelist('${esc}')" title="Add to Whitelist">
+                            <i class="fas fa-check"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+        }).join('');
+    } catch(e) {
+        console.error('Failed to load recent blocked:', e);
+        container.innerHTML = `
+            <div class="empty-state">
+                <i class="fas fa-exclamation-triangle text-warning"></i>
+                <p>Failed to load blocked domains</p>
+            </div>
+        `;
+    }
+}
+
+async function quickWhitelist(domain) {
+    const itemId = 'blocked-' + domain.replace(/[^a-z0-9]/gi, '_');
+    const item = document.getElementById(itemId);
+
+    // Show loading state
+    if (item) {
+        item.style.opacity = '0.5';
+        item.querySelector('button').disabled = true;
+        item.querySelector('button').innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+    }
+
+    try {
+        const resp = await fetch('/dnsxai/api/whitelist', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({domain})
+        });
+        const data = await resp.json();
+
+        if (data.success) {
+            // Animate removal
+            if (item) {
+                item.style.transition = 'all 0.3s ease';
+                item.style.transform = 'translateX(100%)';
+                item.style.opacity = '0';
+                setTimeout(() => {
+                    item.remove();
+                    // Update count
+                    recentBlockedCache = recentBlockedCache.filter(d => d.domain !== domain);
+                    document.getElementById('recent-blocked-count').textContent = recentBlockedCache.length;
+
+                    if (recentBlockedCache.length === 0) {
+                        loadRecentBlocked();
+                    }
+                }, 300);
+            }
+            toastr.success(`${domain} whitelisted`);
+
+            // Refresh modal whitelist if open
+            if ($('#dnsSettingsModal').hasClass('show')) {
+                loadWhitelist();
+            }
+        } else {
+            throw new Error(data.error || 'Failed');
+        }
+    } catch(e) {
+        // Restore state on error
+        if (item) {
+            item.style.opacity = '1';
+            item.querySelector('button').disabled = false;
+            item.querySelector('button').innerHTML = '<i class="fas fa-check"></i>';
+        }
+        toastr.error('Failed to whitelist domain');
+    }
+}
+
+function formatTimeAgo(timestamp) {
+    const now = Date.now();
+    const time = new Date(timestamp).getTime();
+    const diff = Math.floor((now - time) / 1000);
+
+    if (diff < 60) return 'just now';
+    if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+    if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+    return Math.floor(diff / 86400) + 'd ago';
+}
+</script>
+{% endblock %}

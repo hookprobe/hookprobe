@@ -1,0 +1,16 @@
+[Unit]
+Description=HookProbe Auto-Update Timer - Weekly Updates
+Documentation=https://github.com/hookprobe/hookprobe
+
+[Timer]
+# Run weekly on Sundays at 3:00 AM
+OnCalendar=Sun *-*-* 03:00:00
+
+# Run on first boot if missed
+Persistent=true
+
+# Randomize start time by up to 1 hour to avoid thundering herd
+RandomizedDelaySec=3600
+
+[Install]
+WantedBy=timers.target

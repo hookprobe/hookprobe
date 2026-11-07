@@ -1,0 +1,342 @@
+<!-- Device Detail Modal - Premium SDN Dashboard -->
+<div class="modal fade" id="deviceDetailModal" tabindex="-1" role="dialog" aria-labelledby="deviceDetailModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-xl" role="document">
+        <div class="modal-content" style="background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px;">
+            <!-- Modal Header -->
+            <div class="modal-header border-bottom border-secondary" style="background: rgba(0,0,0,0.2); border-radius: 16px 16px 0 0;">
+                <div class="d-flex align-items-center w-100">
+                    <div class="device-icon mr-3" id="modal-device-icon">
+                        <i class="fas fa-laptop fa-2x text-primary"></i>
+                    </div>
+                    <div class="flex-grow-1">
+                        <div class="d-flex align-items-center">
+                            <h4 class="modal-title mb-0 text-white" id="modal-device-name">Loading...</h4>
+                            <button type="button" class="btn btn-sm btn-link text-muted ml-2 p-0" id="modal-edit-name-btn" title="Edit device name">
+                                <i class="fas fa-pencil-alt"></i>
+                            </button>
+                        </div>
+                        <div class="d-none" id="modal-device-name-edit">
+                            <div class="input-group input-group-sm" style="max-width: 300px;">
+                                <input type="text" class="form-control bg-dark text-white border-secondary" id="modal-device-name-input" placeholder="Enter device name">
+                                <div class="input-group-append">
+                                    <button class="btn btn-success" type="button" id="modal-save-name-btn" title="Save"><i class="fas fa-check"></i></button>
+                                    <button class="btn btn-secondary" type="button" id="modal-cancel-name-btn" title="Cancel"><i class="fas fa-times"></i></button>
+                                </div>
+                            </div>
+                        </div>
+                        <small class="text-muted" id="modal-device-mac">--:--:--:--:--:--</small>
+                    </div>
+                    <div class="d-flex align-items-center">
+                        <span class="badge mr-3" id="modal-status-badge" style="font-size: 0.9rem;">
+                            <i class="fas fa-circle mr-1"></i> <span id="modal-status-text">--</span>
+                        </span>
+                        <button type="button" class="close text-white" data-dismiss="modal" aria-label="Close">
+                            <span aria-hidden="true">&times;</span>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Body -->
+            <div class="modal-body p-4">
+                <div class="row">
+                    <!-- Left Column: Identity & WiFi Signal -->
+                    <div class="col-lg-6">
+                        <!-- Identity Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-id-card mr-2 text-info"></i>Identity</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small class="text-muted">IP Address</small>
+                                        <div class="text-white" id="modal-ip">--</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Hostname</small>
+                                        <div class="text-white text-truncate" id="modal-hostname">--</div>
+                                    </div>
+                                </div>
+                                <hr class="border-secondary my-2">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small class="text-muted">Vendor</small>
+                                        <div class="text-white" id="modal-vendor">--</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Category</small>
+                                        <div class="text-white" id="modal-category">--</div>
+                                    </div>
+                                </div>
+                                <hr class="border-secondary my-2">
+                                <div class="row">
+                                    <div class="col-6">
+                                        <small class="text-muted">First Seen</small>
+                                        <div class="text-white" id="modal-first-seen">--</div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Last Seen</small>
+                                        <div class="text-white" id="modal-last-seen">--</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- WiFi Signal Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-wifi mr-2 text-success"></i>WiFi Signal</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row align-items-center">
+                                    <div class="col-4 text-center">
+                                        <div class="signal-gauge mb-2" id="modal-signal-gauge">
+                                            <svg viewBox="0 0 100 60" width="100" height="60">
+                                                <path d="M10,50 A40,40 0 0,1 90,50" fill="none" stroke="rgba(255,255,255,0.1)" stroke-width="8" stroke-linecap="round"/>
+                                                <path d="M10,50 A40,40 0 0,1 90,50" fill="none" stroke="#28a745" stroke-width="8" stroke-linecap="round" id="signal-arc" stroke-dasharray="0, 126"/>
+                                            </svg>
+                                        </div>
+                                        <div class="h3 mb-0 text-white" id="modal-signal-quality">--%</div>
+                                        <small class="text-muted">Quality</small>
+                                    </div>
+                                    <div class="col-8">
+                                        <div class="mb-2">
+                                            <small class="text-muted">RSSI</small>
+                                            <div class="text-white"><span id="modal-rssi">--</span> dBm</div>
+                                        </div>
+                                        <div class="mb-2">
+                                            <small class="text-muted">Proximity</small>
+                                            <div>
+                                                <span class="badge" id="modal-proximity-badge">--</span>
+                                            </div>
+                                        </div>
+                                        <div>
+                                            <small class="text-muted">Band / Interface</small>
+                                            <div class="text-white"><span id="modal-wifi-band">--</span></div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="alert alert-warning mt-2 mb-0 py-1 px-2 d-none" id="modal-proximity-warning" style="font-size: 0.8rem;">
+                                    <i class="fas fa-exclamation-triangle mr-1"></i>
+                                    <span id="modal-proximity-warning-text"></span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Traffic Card -->
+                        <div class="card" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-chart-line mr-2 text-warning"></i>Traffic (Session)</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row text-center">
+                                    <div class="col-4">
+                                        <div class="h5 mb-0 text-info"><i class="fas fa-arrow-down mr-1"></i><span id="modal-rx">--</span></div>
+                                        <small class="text-muted">Download</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <div class="h5 mb-0 text-success"><i class="fas fa-arrow-up mr-1"></i><span id="modal-tx">--</span></div>
+                                        <small class="text-muted">Upload</small>
+                                    </div>
+                                    <div class="col-4">
+                                        <div class="h5 mb-0 text-white"><i class="fas fa-clock mr-1"></i><span id="modal-connected-time">--</span></div>
+                                        <small class="text-muted">Duration</small>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Right Column: Policy & Tags -->
+                    <div class="col-lg-6">
+                        <!-- Network Access Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-network-wired mr-2 text-primary"></i>Network Access</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div class="row mb-3">
+                                    <div class="col-6">
+                                        <small class="text-muted">Current Policy</small>
+                                        <div class="h5 mb-0">
+                                            <span class="badge badge-lg" id="modal-policy-badge">--</span>
+                                        </div>
+                                    </div>
+                                    <div class="col-6">
+                                        <small class="text-muted">Confidence</small>
+                                        <div class="text-white"><span id="modal-confidence">--</span>%</div>
+                                    </div>
+                                </div>
+                                <div class="mb-3">
+                                    <small class="text-muted d-block mb-2">Change Policy</small>
+                                    <div class="btn-group btn-group-sm w-100 flex-wrap" role="group">
+                                        <button type="button" class="btn btn-outline-danger policy-btn" data-policy="quarantine" title="No network access">
+                                            <i class="fas fa-ban"></i> Quarantine
+                                        </button>
+                                        <button type="button" class="btn btn-outline-warning policy-btn" data-policy="internet_only" title="Internet only, no LAN">
+                                            <i class="fas fa-globe"></i> Internet
+                                        </button>
+                                        <button type="button" class="btn btn-outline-info policy-btn" data-policy="lan_only" title="LAN only, no internet">
+                                            <i class="fas fa-home"></i> LAN
+                                        </button>
+                                        <button type="button" class="btn btn-outline-primary policy-btn" data-policy="smart_home" title="Smart home/IoT - LAN + Internet, no containers">
+                                            <i class="fas fa-lightbulb"></i> Smart Home
+                                        </button>
+                                        <button type="button" class="btn btn-outline-success policy-btn" data-policy="full_access" title="Full access including containers">
+                                            <i class="fas fa-check"></i> Full
+                                        </button>
+                                    </div>
+                                </div>
+                                <div class="row text-center small">
+                                    <div class="col-3">
+                                        <i class="fas fa-globe text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-internet">--</span>
+                                    </div>
+                                    <div class="col-3">
+                                        <i class="fas fa-home text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-lan">--</span>
+                                    </div>
+                                    <div class="col-3">
+                                        <i class="fas fa-server text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-mgmt">--</span>
+                                    </div>
+                                    <div class="col-3">
+                                        <i class="fas fa-print text-muted mb-1 d-block"></i>
+                                        <span id="modal-access-print">--</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Tags Card -->
+                        <div class="card mb-3" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-tags mr-2 text-purple"></i>Tags</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <div id="modal-tags-container" class="mb-2">
+                                    <!-- Tags rendered here -->
+                                </div>
+                                <div class="input-group input-group-sm">
+                                    <input type="text" class="form-control bg-dark text-white border-secondary" id="modal-new-tag" placeholder="Add tag..." maxlength="32">
+                                    <div class="input-group-append">
+                                        <button class="btn btn-outline-info" type="button" id="modal-add-tag-btn">
+                                            <i class="fas fa-plus"></i>
+                                        </button>
+                                    </div>
+                                </div>
+                                <small class="text-muted">Tags help organize devices (e.g., "Staff", "Kitchen", "John's Phone")</small>
+                            </div>
+                        </div>
+
+                        <!-- Connection History Card -->
+                        <div class="card" style="background: rgba(0,0,0,0.3); border: 1px solid rgba(255,255,255,0.1); border-radius: 12px;">
+                            <div class="card-header py-2" style="background: rgba(0,0,0,0.2); border-radius: 12px 12px 0 0;">
+                                <h6 class="mb-0 text-white"><i class="fas fa-history mr-2 text-secondary"></i>Connection History (24h)</h6>
+                            </div>
+                            <div class="card-body py-3">
+                                <!-- Timeline visualization -->
+                                <div class="timeline-container mb-2" style="height: 30px; background: rgba(0,0,0,0.3); border-radius: 4px; position: relative; overflow: hidden;">
+                                    <div id="modal-timeline-bars" style="display: flex; height: 100%; position: relative;">
+                                        <!-- Timeline bars rendered here -->
+                                    </div>
+                                    <div class="timeline-labels d-flex justify-content-between px-1" style="position: absolute; bottom: -18px; width: 100%;">
+                                        <small class="text-muted">24h ago</small>
+                                        <small class="text-muted">12h</small>
+                                        <small class="text-muted">Now</small>
+                                    </div>
+                                </div>
+                                <div class="mt-4">
+                                    <div id="modal-history-list" style="max-height: 100px; overflow-y: auto;">
+                                        <!-- History events rendered here -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Modal Footer -->
+            <div class="modal-footer border-top border-secondary" style="background: rgba(0,0,0,0.2); border-radius: 0 0 16px 16px;">
+                <button type="button" class="btn btn-outline-danger" id="modal-block-btn">
+                    <i class="fas fa-ban mr-1"></i> Block Device
+                </button>
+                <button type="button" class="btn btn-outline-warning" id="modal-disconnect-btn">
+                    <i class="fas fa-plug mr-1"></i> Disconnect
+                </button>
+                <button type="button" class="btn btn-secondary" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+/* Device Detail Modal Styles */
+#deviceDetailModal .badge-lg {
+    font-size: 1rem;
+    padding: 0.5rem 1rem;
+}
+
+#deviceDetailModal .badge-success { background: rgba(40,167,69,0.8); }
+#deviceDetailModal .badge-warning { background: rgba(255,193,7,0.8); color: #000; }
+#deviceDetailModal .badge-danger { background: rgba(220,53,69,0.8); }
+#deviceDetailModal .badge-info { background: rgba(23,162,184,0.8); }
+#deviceDetailModal .badge-primary { background: rgba(0,123,255,0.8); }
+
+#deviceDetailModal .policy-btn.active {
+    font-weight: bold;
+}
+
+#deviceDetailModal .tag-badge {
+    display: inline-flex;
+    align-items: center;
+    background: rgba(138, 43, 226, 0.3);
+    border: 1px solid rgba(138, 43, 226, 0.5);
+    color: #d8b4fe;
+    padding: 0.25rem 0.5rem;
+    border-radius: 12px;
+    margin: 0.125rem;
+    font-size: 0.8rem;
+}
+
+#deviceDetailModal .tag-badge .remove-tag {
+    margin-left: 0.5rem;
+    cursor: pointer;
+    opacity: 0.7;
+}
+
+#deviceDetailModal .tag-badge .remove-tag:hover {
+    opacity: 1;
+    color: #dc3545;
+}
+
+#deviceDetailModal .proximity-immediate { background: #28a745; color: white; }
+#deviceDetailModal .proximity-near { background: #17a2b8; color: white; }
+#deviceDetailModal .proximity-far { background: #ffc107; color: black; }
+#deviceDetailModal .proximity-distant { background: #dc3545; color: white; }
+
+#deviceDetailModal .timeline-bar {
+    height: 100%;
+    min-width: 2px;
+}
+#deviceDetailModal .timeline-bar.online { background: #28a745; }
+#deviceDetailModal .timeline-bar.idle { background: #ffc107; }
+#deviceDetailModal .timeline-bar.offline { background: rgba(255,255,255,0.1); }
+
+#deviceDetailModal .history-event {
+    padding: 0.25rem 0;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    font-size: 0.8rem;
+}
+#deviceDetailModal .history-event:last-child {
+    border-bottom: none;
+}
+
+/* Text colors for access icons */
+#deviceDetailModal .text-allowed { color: #28a745; }
+#deviceDetailModal .text-blocked { color: #dc3545; }
+</style>
+
+<!-- JavaScript moved to the extra_js block in index.html to ensure jQuery is loaded first -->

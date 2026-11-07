@@ -1,0 +1,316 @@
+# AIOCHI - AI Eyes Container Stack
+# Cognitive Network Layer for HookProbe Fortress
+#
+# Usage:
+#   # Minimal (recommended - ~2GB RAM)
+#   podman-compose -f podman-compose.aiochi.yml up -d
+#
+#   # With n8n workflows (~3GB RAM)
+#   podman-compose -f podman-compose.aiochi.yml --profile workflows up -d
+#
+# Note: This stack is OPTIONAL. Core security (QSecBit, dnsXai) runs without it.
+#       AIOCHI adds the "Eyes" - visual dashboards and human narratives.
+#
+# Minimal Stack (~1.5GB RAM):
+#   - clickhouse: Event analytics database
+#   - napse: NAPSE IDS engine
+#   - log-shipper: Supplementary data pipeline
+#   - identity-engine: Device fingerprinting (AIOCHI core)
+#   - bubble-manager: Ecosystem detection (AIOCHI core)
+#
+# Note: Visualization is handled by Fortress AdminLTE web UI (no Grafana needed)
+#
+# AI Narratives:
+#   - Uses OpenRouter API for LLM access (configure via: fortress-ctl openrouter add-api-key)
+#   - No local LLM required - uses cloud models via OpenRouter
+#
+# Optional (profile: workflows):
+#   - narrative-engine (n8n): Complex workflow automation (~500MB additional RAM)
+
+name: aiochi
+
+networks:
+  aiochi-internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.210.0/24
+          gateway: 172.20.210.1
+
+volumes:
+  clickhouse_data:
+  clickhouse_logs:
+  n8n_data:
+  identity_data:
+  bubble_data:
+
+services:
+  # ============================================================================
+  # DATA TIER - Event Storage (CORE)
+  # ============================================================================
+
+  clickhouse:
+    image: docker.io/clickhouse/clickhouse-server:24.8
+    container_name: aiochi-clickhouse
+    hostname: aiochi-clickhouse
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.10
+    ports:
+      - "127.0.0.1:8123:8123"   # HTTP API (internal only)
+      - "127.0.0.1:9000:9000"   # Native protocol (internal only)
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - clickhouse_logs:/var/log/clickhouse-server
+      # Main AIOCHI schema (executed first - creates database and tables)
+      - ../schemas/clickhouse-init.sql:/docker-entrypoint-initdb.d/00-schema.sql:ro
+      # Additional initialization (executed after schema)
+      - ./configs/clickhouse/init.sql:/docker-entrypoint-initdb.d/99-init.sql:ro
+      - ./configs/clickhouse/users.xml:/etc/clickhouse-server/users.d/users.xml:ro
+    environment:
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+    healthcheck:
+      # Use HTTP ping endpoint - more reliable than clickhouse-client which requires auth
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:8123/ping || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+
+  # ============================================================================
+  # CAPTURE TIER - Network Traffic Analysis (CORE)
+  # ============================================================================
+  #
+  # IMPORTANT: These containers capture from the OVS mirror port (FTS-mirror),
+  # NOT the main FTS bridge. Direct AF_PACKET capture on an OVS bridge causes:
+  #   1. Packet loss (competes with OVS datapath)
+  #   2. Promiscuous mode conflicts
+  #   3. CPU starvation
+  #
+  # The FTS-mirror port receives a copy of all traffic via OVS port mirroring,
+  # which is the proper way to capture traffic for IDS/NSM analysis.
+  # See: products/fortress/devices/common/ovs-post-setup.sh (setup_traffic_mirror)
+  #
+  # Default: CAPTURE_INTERFACE=FTS-mirror (OVS mirror port)
+  # ============================================================================
+
+  # ============================================================================
+  # NAPSE - Neural Adaptive Packet Synthesis Engine (IDS)
+  # ============================================================================
+  # Single high-performance engine for packet analysis, alerting, and event bus.
+  # All consumers (QSecBit, bubble-manager) use the NAPSE event bus directly.
+  # ============================================================================
+
+  napse:
+    build:
+      context: ../../..
+      dockerfile: core/napse/Containerfile.napse
+    image: localhost/aiochi-napse:latest
+    container_name: aiochi-napse
+    hostname: aiochi-napse
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+      - SYS_NICE
+    volumes:
+      - /run/fortress:/run/fortress:ro
+      - /etc/hookprobe:/etc/hookprobe:ro
+    environment:
+      NAPSE_CONFIG: "${NAPSE_CONFIG:-/etc/hookprobe/napse.yaml}"
+      CAPTURE_INTERFACE: "${CAPTURE_INTERFACE:-FTS-mirror}"
+      CLICKHOUSE_HOST: "172.20.210.10"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: "aiochi"
+      CLICKHOUSE_USER: "aiochi"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /run/napse/napse.pid && kill -0 $(cat /run/napse/napse.pid) || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+  # ============================================================================
+  # LOG SHIPPER - Supplementary Data Pipeline
+  # ============================================================================
+
+  log-shipper:
+    build:
+      context: ..
+      dockerfile: containers/Containerfile.logshipper
+    container_name: aiochi-logshipper
+    hostname: aiochi-logshipper
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.40
+    environment:
+      CLICKHOUSE_HOST: aiochi-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      napse:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'log_shipper' > /dev/null || pgrep -x python"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+  # ============================================================================
+  # INTELLIGENCE TIER - Device Identity & Bubble Detection (CORE)
+  # ============================================================================
+  # These are the AIOCHI-specific components that provide the "cognitive" layer.
+  # They consume events from the NAPSE event bus for real-time analysis.
+  # ============================================================================
+
+  identity-engine:
+    build:
+      context: ..
+      dockerfile: containers/Containerfile.identity
+    container_name: aiochi-identity
+    hostname: aiochi-identity
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.20
+    ports:
+      - "127.0.0.1:8060:8060"
+    volumes:
+      - identity_data:/app/data
+      - /var/lib/misc:/var/lib/misc:ro          # dnsmasq leases
+      - /run/avahi-daemon:/run/avahi-daemon:ro  # mDNS socket
+    environment:
+      # Use container DNS name instead of hardcoded IP
+      CLICKHOUSE_HOST: aiochi-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8060/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  bubble-manager:
+    build:
+      context: ..
+      dockerfile: containers/Containerfile.bubble
+    container_name: aiochi-bubble
+    hostname: aiochi-bubble
+    restart: unless-stopped
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.25
+    ports:
+      - "8070:8070"
+    volumes:
+      - bubble_data:/var/lib/aiochi
+      - /run/openvswitch:/run/openvswitch
+      - /etc/hookprobe:/etc/hookprobe:ro
+      - ../containers/scripts/bubble_entrypoint.py:/opt/hookprobe/bubble_entrypoint.py:ro
+      - ../containers/scripts/d2d_tracker.py:/opt/hookprobe/d2d_tracker.py:ro
+      - ../bubble:/opt/hookprobe/shared/aiochi/bubble:ro
+      - /var/lib/misc:/var/lib/misc:ro
+      # NAPSE core library (event bus, bubble_feed)
+      - ../../../core/napse:/opt/hookprobe/core/napse:ro
+    environment:
+      CLICKHOUSE_HOST: aiochi-clickhouse
+      CLICKHOUSE_PORT: 8123
+      CLICKHOUSE_DB: aiochi
+      CLICKHOUSE_USER: aiochi
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      NARRATIVE_ENGINE_URL: "http://aiochi-narrative:5678"
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_MODEL: "${OPENROUTER_MODEL:-google/gemma-3-27b-it:free}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+    cap_add:
+      - NET_ADMIN
+    depends_on:
+      napse:
+        condition: service_started
+      clickhouse:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8070/health || pgrep -f 'bubble'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+  # ============================================================================
+  # OPTIONAL: WORKFLOW ENGINE (profile: workflows)
+  # ============================================================================
+  # n8n for complex event workflows. Most use cases work fine with the
+  # built-in narrative templates. Enable with: --profile workflows
+  # ============================================================================
+
+  narrative-engine:
+    image: docker.io/n8nio/n8n:1.70.3
+    container_name: aiochi-narrative
+    hostname: aiochi-narrative
+    restart: unless-stopped
+    profiles:
+      - workflows
+    networks:
+      aiochi-internal:
+        ipv4_address: 172.20.210.21
+    ports:
+      - "127.0.0.1:5678:5678"
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ../n8n-workflows:/home/node/workflows:ro
+    environment:
+      N8N_BASIC_AUTH_ACTIVE: "true"
+      N8N_BASIC_AUTH_USER: "${N8N_USER:-admin}"
+      N8N_BASIC_AUTH_PASSWORD: "${N8N_PASSWORD:-aiochi_admin}"
+      N8N_HOST: "0.0.0.0"
+      N8N_PORT: "5678"
+      N8N_PROTOCOL: "http"
+      WEBHOOK_URL: "http://aiochi-narrative:5678"
+      GENERIC_TIMEZONE: "${TZ:-UTC}"
+      # ClickHouse connection (use container DNS names)
+      CLICKHOUSE_HOST: "aiochi-clickhouse"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: "aiochi"
+      CLICKHOUSE_USER: "aiochi"
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-aiochi_secure_password}"
+      # OpenRouter API for LLM access
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      OPENROUTER_MODEL: "${OPENROUTER_MODEL:-google/gemma-3-27b-it:free}"
+      # n8n AI features
+      N8N_AI_ENABLED: "true"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      identity-engine:
+        condition: service_healthy
+    healthcheck:
+      # n8n health endpoint - use wget for better container compatibility
+      test: ["CMD-SHELL", "wget --quiet --spider http://localhost:5678/healthz || wget --quiet --spider http://localhost:5678/ || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s

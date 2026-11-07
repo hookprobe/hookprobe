@@ -1,0 +1,82 @@
+# HookProbe FreeRADIUS - MAC Authentication Bypass Site
+# Handles MAC-based VLAN assignment for IoT devices
+# Version: 5.0.0
+
+server hookprobe-mab {
+
+    listen {
+        type = auth
+        ipaddr = *
+        port = 1812
+    }
+
+    listen {
+        type = acct
+        ipaddr = *
+        port = 1813
+    }
+
+    # Authorization - Determine VLAN for MAC address
+    authorize {
+        # Log the request
+        linelog
+
+        # Rewrite MAC address to consistent format (lowercase, colons)
+        rewrite_calling_station_id
+
+        # Set Auth-Type to Accept for MAC auth
+        # The REST module will determine the VLAN
+        update control {
+            &Auth-Type := Accept
+        }
+
+        # Call REST API to get VLAN assignment
+        rest
+
+        # If REST returns VLAN attributes, use them
+        if (&REST-HTTP-Status-Code == 200) {
+            # Parse JSON response and set VLAN attributes
+            update reply {
+                &Tunnel-Type := VLAN
+                &Tunnel-Medium-Type := IEEE-802
+                # Tunnel-Private-Group-Id is set from REST response
+            }
+        }
+        else {
+            # REST failed - assign to quarantine VLAN
+            update reply {
+                &Tunnel-Type := VLAN
+                &Tunnel-Medium-Type := IEEE-802
+                &Tunnel-Private-Group-Id := "999"
+            }
+        }
+    }
+
+    # Authentication - Accept all (MAC auth bypass)
+    authenticate {
+        # MAC authentication - accept based on authorize result
+        Auth-Type Accept {
+            ok
+        }
+    }
+
+    # Post-authentication
+    post-auth {
+        # Log successful auth
+        linelog
+
+        # Send accounting start
+        Post-Auth-Type REJECT {
+            linelog
+        }
+    }
+
+    # Accounting
+    accounting {
+        # Log accounting events
+        linelog
+
+        # Send to REST API
+        rest
+    }
+}

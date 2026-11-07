@@ -1,0 +1,389 @@
+# HookProbe dnsXai Enterprise Whitelist
+# Version: 1.0.0
+# Last Updated: 2024-12-29
+#
+# This file contains domains that should NEVER be blocked by dnsXai.
+# These are legitimate enterprise, infrastructure, and system domains.
+#
+# Format: One domain per line, comments start with #
+# Subdomains are automatically whitelisted (e.g., apple.com covers *.apple.com)
+
+# =============================================================================
+# OPERATING SYSTEM CONNECTIVITY (CRITICAL - NEVER BLOCK)
+# =============================================================================
+
+# Microsoft Network Connectivity Status Indicator (NCSI)
+msftconnecttest.com
+msftncsi.com
+dns.msftncsi.com
+
+# Apple Captive Network Assistant
+captive.apple.com
+captive.g.aaplimg.com
+
+# Google/Android connectivity check
+connectivitycheck.gstatic.com
+connectivitycheck.android.com
+clients3.google.com
+play.googleapis.com
+
+# Firefox/Mozilla captive portal
+detectportal.firefox.com
+
+# Linux/Ubuntu connectivity
+connectivity-check.ubuntu.com
+nmcheck.gnome.org
+
+# =============================================================================
+# MICROSOFT ECOSYSTEM
+# =============================================================================
+
+# Core Microsoft
+microsoft.com
+microsoftonline.com
+windows.com
+windowsupdate.com
+update.microsoft.com
+download.microsoft.com
+
+# Office 365 / Microsoft 365
+office.com
+office.net
+office365.com
+sharepoint.com
+onedrive.com
+onedrive.live.com
+outlook.com
+outlook.live.com
+outlook.office.com
+outlook.office365.com
+
+# Microsoft Live Services
+live.com
+live.net
+hotmail.com
+login.microsoftonline.com
+login.live.com
+login.windows.net
+
+# Microsoft Communication
+skype.com
+skypeforbusiness.com
+lync.com
+teams.microsoft.com
+teams.live.com
+
+# Azure
+azure.com
+azure.net
+azureedge.net
+azurewebsites.net
+blob.core.windows.net
+cloudapp.net
+cloudapp.azure.com
+trafficmanager.net
+azure-api.net
+azure-dns.com
+azure-dns.net
+
+# Other Microsoft
+msn.com
+bing.com
+bingapis.com
+visualstudio.com
+vsassets.io
+msedge.net
+msftauth.net
+msauthimages.net
+msftauthimages.net
+wns.windows.com
+notify.windows.com
+s-microsoft.com
+sfx.ms
+
+# =============================================================================
+# APPLE ECOSYSTEM
+# =============================================================================
+
+apple.com
+apple-dns.net
+aaplimg.com
+cdn-apple.com
+icloud.com
+icloud-content.com
+mzstatic.com
+apple-cloudkit.com
+apple-mapkit.com
+apple-livephotoskit.com
+itunes.apple.com
+itunes.com
+apps.apple.com
+appstore.com
+apple.news
+gs.apple.com
+lcdn-locator.apple.com
+lcdn-registration.apple.com
+setup.icloud.com
+fmf.icloud.com
+fmip.icloud.com
+keyvalueservice.icloud.com
+configuration.apple.com
+
+# =============================================================================
+# GOOGLE ECOSYSTEM
+# =============================================================================
+
+google.com
+googleapis.com
+gstatic.com
+googlevideo.com
+googleusercontent.com
+ggpht.com
+1e100.net
+youtube.com
+youtu.be
+ytimg.com
+youtube-nocookie.com
+gmail.com
+googlemail.com
+drive.google.com
+docs.google.com
+sheets.google.com
+meet.google.com
+hangouts.google.com
+chromium.org
+gvt1.com
+gvt2.com
+gvt3.com
+android.com
+firebase.google.com
+firebaseio.com
+firebasestorage.googleapis.com
+recaptcha.net
+fonts.gstatic.com
+
+# =============================================================================
+# AMAZON / AWS
+# =============================================================================
+
+amazon.com
+amazonaws.com
+cloudfront.net
+aws.amazon.com
+awsstatic.com
+s3.amazonaws.com
+elasticbeanstalk.com
+awsglobalaccelerator.com
+amazonwebservices.com
+alexa.amazon.com
+
+# =============================================================================
+# CDN PROVIDERS
+# =============================================================================
+
+# Akamai
+akamai.com
+akamai.net
+akamaihd.net
+akamaiedge.net
+akadns.net
+edgekey.net
+edgesuite.net
+akamaitechnologies.com
+akamaized.net
+
+# Fastly
+fastly.com
+fastly.net
+fastlylb.net
+
+# Cloudflare
+cloudflare.com
+cloudflare.net
+cloudflare-dns.com
+cloudflaressl.com
+
+# Other CDNs
+jsdelivr.net
+unpkg.com
+cdnjs.com
+cdnjs.cloudflare.com
+bootstrapcdn.com
+maxcdn.bootstrapcdn.com
+imgix.net
+
+# =============================================================================
+# ENTERPRISE SOFTWARE VENDORS
+# =============================================================================
+
+# Dell / VMware
+dell.com
+dell.net
+delltechnologies.com
+dellcdn.com
+vmware.com
+emc.com
+alienware.com
+
+# HP / HPE
+hp.com
+hpe.com
+hp.net
+
+# Intel
+intel.com
+intel.net
+
+# Lenovo
+lenovo.com
+lenovo.net
+
+# Cisco
+cisco.com
+webex.com
+ciscospark.com
+meraki.com
+
+# IBM
+ibm.com
+ibmcloud.com
+bluemix.net
+
+# Oracle
+oracle.com
+oraclecloud.com
+
+# SAP
+sap.com
+sapcloud.com
+
+# Salesforce
+salesforce.com
+force.com
+sfdc.net
+salesforceliveagent.com
+
+# Adobe
+adobe.com
+adobelogin.com
+adobecc.com
+typekit.net
+adobedtm.com
+adobe.io
+behance.net
+
+# Atlassian
+atlassian.com
+atlassian.net
+bitbucket.org
+trello.com
+
+# Collaboration Tools
+slack.com
+slack-edge.com
+slack-imgs.com
+slack-files.com
+zoom.us
+zoom.com
+zoomgov.com
+dropbox.com
+dropboxapi.com
+dropboxstatic.com
+
+# Developer Tools
+github.com
+github.io
+githubusercontent.com
+githubassets.com
+gitlab.com
+gitlab.io
+
+# =============================================================================
+# CERTIFICATE AUTHORITIES (CRITICAL FOR HTTPS)
+# =============================================================================
+
+lencr.org
+letsencrypt.org
+letsencrypt.com
+digicert.com
+geotrust.com
+verisign.com
+symantec.com
+globalsign.com
+comodo.com
+sectigo.com
+comodoca.com
+entrust.net
+entrust.com
+godaddy.com
+pki.goog
+crl.microsoft.com
+ocsp.digicert.com
+
+# =============================================================================
+# PAYMENT PROCESSORS
+# =============================================================================
+
+paypal.com
+paypalobjects.com
+stripe.com
+stripe.network
+braintreegateway.com
+braintree-api.com
+square.com
+squareup.com
+
+# =============================================================================
+# DNS PROVIDERS
+# =============================================================================
+
+quad9.net
+opendns.com
+cleanbrowsing.org
+nextdns.io
+adguard-dns.io
+controld.com
+dns.google
+one.one.one.one
+
+# =============================================================================
+# WEB SECURITY SERVICES
+# =============================================================================
+
+zscaler.com
+zscaler.net
+zscloud.net
+forcepoint.net
+bluecoat.com
+webdefence.global.blackspider.com
+
+# =============================================================================
+# SOCIAL / COMMUNICATION (Core Infrastructure)
+# =============================================================================
+
+# Note: These are kept for infrastructure purposes. Individual tracking
+# subdomains may still be blocked by blocklists.
+
+facebook.com
+fb.com
+facebook.net
+fbcdn.net
+instagram.com
+cdninstagram.com
+whatsapp.com
+whatsapp.net
+twitter.com
+twimg.com
+x.com
+linkedin.com
+licdn.com
+pinterest.com
+pinimg.com
+reddit.com
+redd.it
+redditmedia.com
+telegram.org
+t.me
+discord.com
+discordapp.com
+discord.gg

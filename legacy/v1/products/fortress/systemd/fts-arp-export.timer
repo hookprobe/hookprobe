@@ -1,0 +1,11 @@
+[Unit]
+Description=Fortress ARP Status Export Timer (5 second interval)
+After=network.target
+
+[Timer]
+OnBootSec=5s
+OnUnitActiveSec=5s
+AccuracySec=1s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,68 @@
+# NAPSE Nexus Tier Configuration (16GB+ RAM)
+# Full engine + advanced ML + Hyperscan + large tables
+
+napse:
+  tier: "nexus"
+
+  kernel:
+    xdp_mode: "auto"
+    rate_limit_pps: 10000
+    blocked_ips_max: 262144
+    flow_table_size: 262144
+    ringbuf_size_mb: 16
+    af_xdp:
+      enabled: true
+      umem_frames: 65536
+      busy_poll: true
+      busy_poll_timeout_us: 10
+
+  engine:
+    connection_table_size: 262144
+    connection_timeout_s: 300
+    max_concurrent_flows: 1000000
+
+    parsers:
+      tcp: true
+      dns: true
+      http: true
+      tls: true
+      dhcp: true
+      ssh: true
+      mdns: true
+      ssdp: true
+      smtp: true
+      smb: true
+      mqtt: true
+      modbus: true
+      dnp3: true
+      quic: true
+      rdp: true
+      ftp: true
+
+    matcher:
+      enabled: true
+      bloom_filter_size: 4194304
+      hyperscan: true              # Intel Hyperscan for complex PCRE
+
+    ml:
+      enabled: true
+      inference_budget_us: 1000
+      advanced_anomaly: true       # Large anomaly detection model
+      federated_training: true     # Train models across mesh
+
+  synthesis:
+    event_bus_queue_size: 100000
+    qsecbit_feed:
+      enabled: true
+      direct_mode: true
+    aegis_bridge:
+      enabled: true
+    bubble_feed:
+      enabled: true
+    clickhouse:
+      enabled: true
+      batch_size: 500
+    metrics:
+      enabled: true
+    notices:
+      enabled: true

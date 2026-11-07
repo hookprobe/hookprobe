@@ -1,0 +1,819 @@
+# HookProbe Fortress - Container Orchestration with OVS
+#
+# Self-contained, modular deployment with OVS-based network security.
+# All services run in isolation with OpenFlow-controlled traffic.
+#
+# Architecture:
+#   - OVS bridge (FTS) provides OpenFlow-based tier isolation
+#   - Podman bridge networks for container-to-container communication
+#   - veth pairs connect containers to OVS for flow monitoring
+#   - sFlow/IPFIX export to QSecBit for ML analysis
+#   - Traffic mirroring captures all packets for threat detection
+#
+# Usage:
+#   podman-compose up -d                       # Start core services
+#   podman-compose --profile training run lstm # Run LSTM training job
+#   podman-compose down                        # Stop all services
+#   podman-compose logs -f web                 # Follow web container logs
+#
+# After startup, connect containers to OVS:
+#   /opt/hookprobe/fortress/devices/common/ovs-container-network.sh connect-containers
+#
+# Container Groups:
+#   - Core: postgres, redis, web (always running)
+#   - Security: qsecbit-agent, dnsxai, dfs-intelligence (always running)
+#   - Jobs: lstm-trainer (--profile training, one-shot)
+#   - Mesh: mesh-orchestrator (--profile mesh) - HTP/Neuro/DSM communication
+#   - Analytics: Visualization via Fortress AdminLTE web UI (no Grafana needed)
+#
+# Network (simplified for podman-compose 1.0.6 compatibility):
+#   - fts-internal: 172.20.200.0/24 (all app containers share this network)
+#   - IDS containers (napse, xdp, qsecbit) use host network
+#   - fts-lan: 10.200.0.0/23-29 (WiFi/LAN clients) - NAT to internet
+#
+# Network isolation is achieved via nftables rules on the host.
+# Container IP assignments:
+#   .10 postgres, .11 redis, .20 web, .21 dnsxai, .22 dfs
+#   .40 lstm-trainer, .50 n8n, .51 clickhouse
+#   .60 cloudflared, .70 mesh-orchestrator
+#
+# OVS Security Features:
+#   - OpenFlow 1.3+ tier isolation rules
+#   - Traffic mirroring to fts-mirror port
+#   - sFlow export to 127.0.0.1:6343
+#   - IPFIX export to 127.0.0.1:4739
+#   - QoS meters for rate limiting
+#   - VXLAN tunnels for mesh connectivity
+#
+# Version: 5.5.0
+# License: AGPL-3.0
+
+version: '3.8'
+
+services:
+  # ============================================================
+  # DATA TIER - Isolated Database Layer (fts-data)
+  # ============================================================
+
+  # PostgreSQL Database - Most sensitive, fully isolated in data tier
+  postgres:
+    image: docker.io/library/postgres:15-alpine
+    container_name: fts-postgres
+    restart: unless-stopped
+    hostname: fts-postgres
+    environment:
+      POSTGRES_DB: fortress
+      POSTGRES_USER: fortress
+      # Use environment variable directly (podman secrets have permission issues with non-root users)
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+      # Enable SSL (certificates mounted from volume)
+      PGSSLMODE: prefer
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+      - ./migrations/002_device_identity_integration.sql:/docker-entrypoint-initdb.d/02-device-identity.sql:ro
+      - postgres_certs:/certs:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fortress -d fortress"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.10
+
+  # Redis Cache (Sessions + Rate Limiting)
+  redis:
+    image: docker.io/library/redis:7-alpine
+    container_name: fts-redis
+    restart: unless-stopped
+    hostname: fts-redis
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 128mb
+      --maxmemory-policy allkeys-lru
+      --bind 0.0.0.0
+      --requirepass "${REDIS_PASSWORD:-fortress_redis_secret}"
+    environment:
+      # Expose password to container for healthcheck
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      # Simple PING check - redis-cli reads REDISCLI_AUTH env var
+      test: ["CMD-SHELL", "REDISCLI_AUTH=\"$REDIS_PASSWORD\" redis-cli ping | grep -q PONG"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.11
+
+  # ============================================================
+  # SERVICES TIER - Web and DNS (fts-services)
+  # ============================================================
+
+  # Fortress Web Application (Flask + Gunicorn)
+  # Services tier with access to data tier for database connectivity
+  web:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.web
+    image: localhost/fts-web:latest
+    container_name: fts-web
+    restart: unless-stopped
+    hostname: fts-web
+    # Publish web port to host - required for rootless podman
+    # VLAN clients access via host IP, not container IP
+    ports:
+      - "${WEB_PORT:-8443}:${WEB_PORT:-8443}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Database connection via container network
+      DATABASE_HOST: fts-postgres
+      DATABASE_PORT: 5432
+      DATABASE_NAME: fortress
+      DATABASE_USER: fortress
+      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+      # Redis connection via container network
+      REDIS_HOST: fts-redis
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
+      # Flask settings
+      FLASK_ENV: production
+      FLASK_SECRET_KEY: "${FLASK_SECRET_KEY:-fortress_flask_secret_key_change_me}"
+      # Gunicorn settings
+      GUNICORN_WORKERS: 2
+      GUNICORN_THREADS: 4
+      GUNICORN_BIND: "0.0.0.0:${WEB_PORT:-8443}"
+      # ML service endpoints via container network
+      QSECBIT_API_URL: http://localhost:9090
+      DNSXAI_API_URL: http://fts-dnsxai:8080
+      DFS_API_URL: http://fts-dfs:8050
+      AIOCHI_BUBBLE_URL: http://172.20.200.1:8070
+      # AEGIS - AI Security Assistant (OpenRouter API)
+      OPENROUTER_API_KEY: "${OPENROUTER_API_KEY:-}"
+      AEGIS_MODEL: "${AEGIS_MODEL:-auto}"
+      AEGIS_ENABLED: "${AEGIS_ENABLED:-true}"
+      AEGIS_BACKEND: "${AEGIS_BACKEND:-cloud}"
+      AEGIS_OLLAMA_URL: "${AEGIS_OLLAMA_URL:-}"
+      AEGIS_LAN_INTERFACE: "${LAN_INTERFACE:-FTS}"
+    volumes:
+      - web_data:/app/data
+      - web_logs:/app/logs
+      # Share data from qsecbit agent (WAN health, QSecBit stats, SLAAI data)
+      # Uses bind mount to match agent's bind mount (data visible on host)
+      # NOTE: rw,U required - U suffix auto-adjusts ownership to container user
+      # This fixes GID mismatch when host fortress group != container GID 1000
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:rw,U
+      # Bind mount host config directory (install script creates users.json here)
+      # rw,U required - web app writes to users.json (last_login, password changes)
+      - /etc/hookprobe:/etc/hookprobe:rw,U
+      # SDN Auto Pilot database (device classification data)
+      # NOTE: rw,U required for web UI to set policies (quarantine, move segment, etc.)
+      - /var/lib/hookprobe:/var/lib/hookprobe:rw,U
+      # G.N.C. Architecture: FTS Host Agent socket for WiFi device control
+      # Enables container to send hostapd commands via Unix Domain Socket
+      # Socket is created by fts-host-agent.service on the host
+      - /var/run/fts-host-agent:/var/run/fts-host-agent:rw
+      # Host machine-id for MSSP device fingerprinting
+      - /etc/machine-id:/etc/machine-id:ro
+    # Container network - accessible via host port publishing
+    # Access: Host IP:8443 → Container (172.20.200.20:8443)
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.20
+    # Health check - wait up to 90s for entrypoint (DB wait up to 60s + app startup)
+    # Note: Uses WEB_PORT environment variable for dynamic port support
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f -k https://localhost:${WEB_PORT:-8443}/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 90s
+
+  # dnsXai Engine - DNS ML Protection with AI/ML Ensemble
+  # Provides DNS filtering (5353/udp), HTTP API (8080/tcp), and DoT (853/tcp)
+  # G.N.C. Phase 2: LightGBM + Neural Network ensemble with Redis caching
+  dnsxai:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.dnsxai
+    image: localhost/fts-dnsxai:latest
+    container_name: fts-dnsxai
+    restart: unless-stopped
+    hostname: fts-dnsxai
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      DNSXAI_UPSTREAM: "1.1.1.1"
+      DNSXAI_PROTECTION_LEVEL: 3
+      # Path must match Containerfile: /opt/hookprobe/shared/dnsXai/data
+      DNSXAI_DATA_DIR: /opt/hookprobe/shared/dnsXai/data
+      # User data directory for persistent whitelist (survives reinstall AND purge)
+      # CRITICAL: /etc/hookprobe/persistent/ is NEVER removed by any uninstall
+      DNSXAI_USERDATA_DIR: /etc/hookprobe/persistent/dnsxai
+      LOG_DIR: /var/log/hookprobe
+      # G.N.C. Phase 2: Redis integration for AI/ML classification caching
+      DNSXAI_REDIS_ENABLED: "true"
+      DNSXAI_REDIS_HOST: fts-redis
+      DNSXAI_REDIS_PORT: "6379"
+      DNSXAI_REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
+      DNSXAI_REDIS_DB: "1"  # Use DB 1 for dnsXai (DB 0 is for web sessions)
+      # G.N.C. Phase 2: ML model paths (use container default paths)
+      DNSXAI_MODEL_PATH: /opt/hookprobe/guardian/models/ad_classifier.pkl
+      DNSXAI_LIGHTGBM_PATH: /opt/hookprobe/guardian/models/lightgbm_classifier.txt
+    volumes:
+      # Mount over shared path to persist data while keeping bundled whitelist
+      - dnsxai_data:/opt/hookprobe/shared/dnsXai/data
+      - dnsxai_blocklists:/opt/hookprobe/shared/dnsXai/blocklists
+      # PERSISTENT USER DATA - NEVER removed, even with --purge
+      # This location survives ALL uninstall operations
+      - /etc/hookprobe/persistent/dnsxai:/etc/hookprobe/persistent/dnsxai:U
+      # Legacy mount for backwards compatibility (may contain symlinks)
+      - /var/lib/hookprobe/userdata/dnsxai:/opt/hookprobe/shared/dnsXai/userdata:U
+      # Bind mount logs to host for ML training data visibility
+      - /var/log/hookprobe:/var/log/hookprobe:U
+      - /etc/hookprobe:/etc/hookprobe:ro
+      # DoT (DNS over TLS) certificates - writable for auto-generation
+      - dnsxai_certs:/etc/hookprobe/certs
+    ports:
+      - "127.0.0.1:53:5353/udp"  # DNS on localhost (dnsmasq forwards here) - frees 5353 for mDNS
+      - "10.200.0.1:853:853/tcp"    # DoT (DNS over TLS) — LAN bridge only, never WAN
+      - "127.0.0.1:8053:8080"    # HTTP API (localhost only for security)
+    healthcheck:
+      # Check HTTP API health endpoint using Python urllib (always available)
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:8080/health\", timeout=5)'"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.21
+    # Core service - always started (provides mesh DNS protection)
+
+  # DFS Intelligence - WiFi Channel ML
+  dfs-intelligence:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.dfs
+    image: localhost/fts-dfs:latest
+    container_name: fts-dfs
+    restart: unless-stopped
+    hostname: fts-dfs
+    environment:
+      DFS_DATA_DIR: /opt/hookprobe/wireless/data
+      DFS_DB_PATH: /opt/hookprobe/wireless/data/dfs_radar.db
+    volumes:
+      - dfs_data:/opt/hookprobe/wireless/data
+      - /etc/hookprobe:/etc/hookprobe:ro
+    ports:
+      - "10.200.0.1:8050:8050"  # DFS API — LAN bridge only, never WAN
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8050/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      fts-internal:
+        ipv4_address: 172.20.200.22
+    # Core service - always started (provides WiFi DFS intelligence)
+
+  # ============================================================
+  # SECURITY TIER - Threat Detection (fts-ml)
+  # ============================================================
+
+  # QSecBit Agent - Threat Detection (numpy, scipy, sklearn)
+  # Uses host network for traffic capture on all interfaces
+  qsecbit-agent:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.agent
+    image: localhost/fts-agent:latest
+    container_name: fts-qsecbit
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      QSECBIT_MODE: fortress
+      # Database via container network gateway (host can reach container IPs)
+      DATABASE_HOST: 172.20.200.10
+      DATABASE_PORT: 5432
+      DATABASE_NAME: fortress
+      DATABASE_USER: fortress
+      DATABASE_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+      REDIS_HOST: 172.20.200.11
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-fortress_redis_secret}"
+      QSECBIT_DATA_DIR: /opt/hookprobe/fortress/data
+    volumes:
+      # Bind mount for shared data (visible on host and other containers)
+      # U suffix auto-adjusts ownership to container user (fixes GID mismatch)
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:U
+      - /etc/hookprobe:/etc/hookprobe:ro
+      - /etc/hostapd:/etc/hostapd:ro  # Read hostapd config for WiFi SSID/channel
+      - /sys/class/powercap:/sys/class/powercap:ro  # RAPL energy monitoring
+      - /run/hostapd:/run/hostapd:ro  # Access hostapd control socket
+      - /run/fortress:/run/fortress:ro  # PBR failover state file
+      - /var/lib/fortress:/var/lib/fortress:ro  # PBR JSON state file
+      - /var/lib/misc:/var/lib/misc:ro  # dnsmasq leases for DHCP hostname lookup
+      - /run/avahi-daemon:/run/avahi-daemon:ro  # Avahi socket for mDNS discovery
+    # Host network REQUIRED for traffic analysis on all interfaces
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    # Health check - verify HTTP API is responding on port 9090
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:9090/health\", timeout=5)'"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    # Core service - always started (provides mesh threat detection)
+
+  # ============================================================
+  # MESH TIER - HTP/Neuro/DSM Communication Hub (--profile mesh)
+  # ============================================================
+
+  # Mesh Orchestrator - Peer server (TCP 8144) + HTTP API (8766)
+  # Accepts incoming mesh peer connections from Guardian/Sentinel nodes
+  # on the LAN (10.200.0.1:8144) and connects outbound to MSSP relay
+  # for internet-based mesh (NAT/CGNAT traversal via MSSP).
+  mesh-orchestrator:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.mesh
+    image: localhost/fts-mesh:latest
+    container_name: fts-mesh
+    restart: unless-stopped
+    hostname: fts-mesh
+    environment:
+      MESH_NODE_ID: "${MESH_NODE_ID:-fortress001}"
+      MESH_NODE_TYPE: fortress
+      HTP_PRIMARY_PORT: "8144"
+      CORTEX_WS_PORT: "8766"
+      WAN_INTERFACE: "${WAN_INTERFACE:-eth0}"
+      MESH_BOOTSTRAP_PEERS: "${MESH_BOOTSTRAP_PEERS:-mesh.hookprobe.com:8144}"
+    volumes:
+      - /opt/hookprobe/fortress/data:/opt/hookprobe/fortress/data:ro
+      - /etc/hookprobe:/etc/hookprobe:ro
+      - mesh_data:/opt/hookprobe/mesh/data
+      - mesh_neuro:/opt/hookprobe/mesh/neuro
+    # Host network: must listen on 10.200.0.1:8144 for LAN peers (Guardian)
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    profiles: ["mesh"]
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8766/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  # ============================================================
+  # BUBBLE MANAGER - MOVED TO AIOCHI STACK
+  # ============================================================
+  # Ecosystem Bubble Manager has been moved to AIOCHI stack (aiochi-bubble)
+  # to eliminate host network dependency that was blocking port forwarding.
+  #
+  # Benefits of AIOCHI-based detection:
+  # - NAPSE is the IDS engine (~200MB RAM)
+  # - Uses event bus for real-time D2D analysis
+  # - No port 5353 conflict with avahi-daemon
+  # - Proper container isolation (bridge network)
+  # - Captures from FTS-mirror via NAPSE (non-interfering)
+  #
+  # To enable bubble detection, install with: --enable-aiochi
+  # See: shared/aiochi/containers/podman-compose.aiochi.yml
+  # ============================================================
+
+  # ============================================================
+  # IDS TIER - HYDRA/NAPSE Deep Packet Analysis (--profile ids)
+  # ============================================================
+  # HYDRA containers provide ML-powered threat intelligence:
+  # - Feed sync: Threat intel feeds → XDP blocking maps
+  # - Event consumer: XDP RINGBUF events → ClickHouse
+  # - RDAP enricher: IP ownership classification
+  # - Feature extractor: 24-feature ML vectors
+  # - Anomaly detector: Isolation Forest ML
+  # - SENTINEL stages: 6-stage false positive discrimination
+  #
+  # Requires: ClickHouse (analytics profile) for event storage
+  # Total RAM: ~1.5GB additional
+  #
+  # Enable with: --enable-ids during install
+
+  # HYDRA Feed Sync - Downloads threat feeds → XDP blocklist/allowlist
+  hydra-feed:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-feed
+    restart: unless-stopped
+    hostname: fts-hydra-feed
+    entrypoint: ["python3", "feed_sync.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA Event Consumer - XDP RINGBUF events → ClickHouse
+  hydra-consumer:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-consumer
+    restart: unless-stopped
+    hostname: fts-hydra-consumer
+    entrypoint: ["python3", "event_consumer.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA RDAP Enricher - IP ownership classification + XDP ip_scores
+  hydra-enricher:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-enricher
+    restart: unless-stopped
+    hostname: fts-hydra-enricher
+    entrypoint: ["python3", "rdap_enricher.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      POSTGRES_HOST: 172.20.200.10
+      POSTGRES_PORT: "5432"
+      POSTGRES_DB: fortress
+      POSTGRES_USER: fortress
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-fortress_db_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA Feature Extractor - 24-feature ML vectors per IP
+  hydra-features:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-features
+    restart: unless-stopped
+    hostname: fts-hydra-features
+    entrypoint: ["python3", "feature_extractor.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      XDP_INTERFACE: dummy-mirror
+    volumes:
+      - /sys/fs/bpf:/sys/fs/bpf:rw
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    profiles: ["ids"]
+
+  # HYDRA Anomaly Detector - Isolation Forest ML scoring
+  hydra-anomaly:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-anomaly
+    restart: unless-stopped
+    hostname: fts-hydra-anomaly
+    entrypoint: ["python3", "anomaly_detector.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      HOOKPROBE_MODEL_KEY: "${HOOKPROBE_MODEL_KEY:-}"
+      MODEL_DIR: /app/models
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    # host network: ClickHouse (aiochi-clickhouse) is published on host
+    # 127.0.0.1:8123; bridge containers can't reach a loopback-bound port.
+    network_mode: host
+    profiles: ["ids"]
+
+  # HYDRA SENTINEL Lifecycle - Model retraining + drift detection
+  hydra-lifecycle:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-lifecycle
+    restart: unless-stopped
+    hostname: fts-hydra-lifecycle
+    entrypoint: ["python3", "sentinel_lifecycle.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    profiles: ["ids"]
+
+  # HYDRA Temporal Memory - Behavioral drift + campaign detection
+  hydra-temporal:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-temporal
+    restart: unless-stopped
+    hostname: fts-hydra-temporal
+    entrypoint: ["python3", "temporal_memory.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+    volumes:
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    profiles: ["ids"]
+
+  # HYDRA SENTINEL Baseline Profiler - Per-IP Welford statistics + Z-scores
+  hydra-sentinel:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-sentinel
+    restart: unless-stopped
+    hostname: fts-hydra-sentinel
+    entrypoint: ["python3", "baseline_profiler.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      PROFILE_INTERVAL: "300"
+      WINDOW_SIZE: "300"
+      MIN_EVENTS: "3"
+      MAX_TRACKED_IPS: "5000"
+      PERSIST_EVERY: "6"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    profiles: ["ids"]
+
+  # HYDRA CVE Enricher - NVD + CISA KEV integration for false positive discrimination
+  hydra-cve:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-cve
+    restart: unless-stopped
+    hostname: fts-hydra-cve
+    entrypoint: ["python3", "cve_enricher.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      CVE_DB_PATH: "/app/models/cve.db"
+      NVD_API_KEY: "${NVD_API_KEY:-}"
+      CVE_FULL_SYNC_HOURS: "168"
+      CVE_INCR_SYNC_HOURS: "24"
+      CVE_SCORING_INTERVAL: "300"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    profiles: ["ids"]
+
+  # HYDRA SENTINEL Engine - Bayesian ensemble scoring (Naive Bayes + Z-scores + CVE + RDAP)
+  hydra-sentinel-engine:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-hydra-sentinel-engine
+    restart: unless-stopped
+    hostname: fts-hydra-sentinel-engine
+    entrypoint: ["python3", "sentinel_engine.py"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+      SENTINEL_INTERVAL: "300"
+      SENTINEL_ENABLED: "true"
+      SENTINEL_MIN_TRAINING: "10"
+    volumes:
+      - hydra_models:/app/models
+      - /etc/hookprobe:/etc/hookprobe:ro
+    network_mode: host
+    profiles: ["ids"]
+
+  # QSECBIT IDS Engine - SENTINEL-aware security scoring
+  qsecbit-ids:
+    build:
+      context: ../..
+      dockerfile: products/fortress/containers/Containerfile.hydra
+    image: localhost/fts-hydra:latest
+    container_name: fts-qsecbit-ids
+    restart: unless-stopped
+    hostname: fts-qsecbit-ids
+    entrypoint: ["python3", "/app/qsecbit/qsecbit_engine.py", "--auto-incidents"]
+    environment:
+      CLICKHOUSE_HOST: "${IDS_CLICKHOUSE_HOST:-127.0.0.1}"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:-fortress_ch_secret}"
+    volumes:
+      - /etc/hookprobe:/etc/hookprobe:ro
+    # host network: reaches host-published ClickHouse at 127.0.0.1:8123.
+    network_mode: host
+    profiles: ["ids"]
+
+# ============================================================
+# SECRETS
+# ============================================================
+# NOTE: File-based secrets disabled due to podman permission issues with non-root users.
+# Secrets are now passed via environment variables. For production, consider:
+# - Using podman secret with proper UID mapping
+# - Or using a secrets management solution like HashiCorp Vault
+#
+# secrets:
+#   postgres_password:
+#     file: ./secrets/postgres_password
+
+# ============================================================
+# VOLUMES (persistent storage)
+# ============================================================
+# NOTE: Only CORE service volumes are defined here.
+# Optional service volumes (monitoring, IDS, automation) are auto-created
+# when those services are started via profiles.
+volumes:
+  # Data Tier (CORE)
+  postgres_data:
+    driver: local
+    name: fts-postgres-data
+  postgres_certs:
+    driver: local
+    name: fts-postgres-certs
+  redis_data:
+    driver: local
+    name: fts-redis-data
+
+  # Services Tier (CORE)
+  web_data:
+    driver: local
+    name: fts-web-data
+  web_logs:
+    driver: local
+    name: fts-web-logs
+  dnsxai_data:
+    driver: local
+    name: fts-dnsxai-data
+  dnsxai_blocklists:
+    driver: local
+    name: fts-dnsxai-blocklists
+  dnsxai_certs:
+    driver: local
+    name: fts-dnsxai-certs
+  dfs_data:
+    driver: local
+    name: fts-dfs-data
+
+  # Mesh Tier (--profile mesh)
+  mesh_data:
+    driver: local
+    name: fts-mesh-data
+  mesh_neuro:
+    driver: local
+    name: fts-mesh-neuro
+
+  # IDS Tier (--profile ids)
+  hydra_models:
+    driver: local
+    name: fts-hydra-models
+
+
+# ============================================================
+# NETWORKS - OVS-Integrated 4-Tier Security Architecture
+# ============================================================
+#
+# These Podman bridge networks provide basic container connectivity.
+# The OVS bridge (FTS) provides the security layer:
+#
+#   ┌─────────────────────────────────────────────────────────┐
+#   │                  OVS Bridge: FTS                        │
+#   │  ┌─────────────┬─────────────┬──────────┐               │
+#   │  │  FTS-data   │  FTS-svc    │  FTS-ml  │               │
+#   │  │  (internal) │ (internet)  │(internal)│               │
+#   │  └──────┬──────┴──────┬──────┴─────┬────┘               │
+#   │         │             │            │                    │
+#   │    ┌────┴────┐   ┌────┴────┐  ┌────┴────┐               │
+#   │    │postgres │   │  web    │  │  lstm   │               │
+#   │    │redis    │   │dnsxai   │  │         │               │
+#   │    └─────────┘   │dfs      │  └─────────┘               │
+#   │                  └─────────┘                            │
+#   │  ┌───────────────────────────────────────────────────┐  │
+#   │  │ fts-lan (10.200.0.0/23-29) - WiFi/LAN clients     │  │
+#   │  └───────────────────────────────────────────────────┘  │
+#   │                                                         │
+#   │  OpenFlow Rules:                                        │
+#   │  - Table 0:  Ingress classification (ARP, DHCP, DNS)    │
+#   │  - Table 10: Tier isolation (drop cross-tier traffic)   │
+#   │  - Table 20: Internet control (allow/deny per tier)     │
+#   │  - Table 30: Mirror (copy to QSecBit)                   │
+#   │  - Table 40: Output (L2 forwarding)                     │
+#   └─────────────────────────────────────────────────────────┘
+#
+networks:
+  # SIMPLIFIED NETWORK - Single internal network for podman-compose 1.0.6 compatibility
+  # podman-compose 1.0.6 cannot handle --ip with multiple networks, so we use ONE network.
+  #
+  # Network isolation is achieved via:
+  # - nftables rules on the host (setup by install script)
+  # - OVS OpenFlow rules (if using OVS mode)
+  #
+  # All application containers share this network and can reach each other via DNS names.
+  # IDS containers (napse, xdp, qsecbit) use host network for traffic capture.
+  fts-internal:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.200.0/24
+          gateway: 172.20.200.1
+    driver_opts:
+      mtu: "1500"
+
+  # Legacy network names kept for potential manual multi-network setup
+  # These are NOT used by default due to podman-compose 1.0.6 limitations
+  # fts-data, fts-services, fts-ml, fts-mgmt - see comments above

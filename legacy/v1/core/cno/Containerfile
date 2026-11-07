@@ -1,0 +1,42 @@
+FROM docker.io/library/python:3.12-slim
+
+LABEL description="HookProbe Cognitive Network Organism (CNO) — Living Defense System"
+LABEL version="5.0.0"
+
+# Optional: install iproute2 + curl (skip if DNS unavailable during build)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iproute2 curl && rm -rf /var/lib/apt/lists/* \
+    || echo "WARN: apt packages skipped (DNS unavailable)"
+
+# Phase 12: AEGIS Orchestrator depends on pydantic for signal validation.
+# Install BEFORE apt packages so DNS failure in apt doesn't block pip
+# (pip uses its own resolver). Use --break-system-packages for slim images.
+#
+# numpy: required by core/brain/inference_bridge.py — without it the NPU
+# bridge silently falls back to CPU heuristics ("Failed to initialize
+# inference engine: No module named 'numpy'"), disabling Phase 21–25 NPU
+# inference. Pinned to <2.0 because aarch64 wheels for 2.x weren't on
+# PyPI when this image's Python 3.12-slim base was cut.
+RUN pip install --no-cache-dir --break-system-packages 'pydantic' 'numpy<2.0' || \
+    pip install --no-cache-dir 'pydantic' 'numpy<2.0' || \
+    echo "WARN: pip install failed"
+
+WORKDIR /app
+
+# Environment defaults for paths that differ inside container
+ENV HOOKPROBE_BASE=/home/ubuntu/hookprobe
+ENV HYDRA_PATH=/home/ubuntu/hookprobe/core/hydra
+
+# CNO core modules — must be in a package directory for relative imports
+COPY __init__.py __main__.py types.py synaptic_controller.py stress_gauge.py packet_siem.py cno_organism.py ./cno/
+COPY multi_rag_consensus.py emotion_engine.py adaptive_camouflage.py ./cno/
+COPY session_analyzer.py app_tracker.py ./cno/
+COPY bloom_sharing.py federated_sync.py npu_bridge.py fec_codec.py ./cno/
+COPY activation.py transport_mapper.py cno_aegis_bridge.py python_tarpit.py ./cno/
+# Phase 22-25 cognitive subsystems — were omitted from the image, so
+# cno_organism.py hit ImportError and left episodic memory / global workspace /
+# predictive coder / outcome observer / sleep cycle permanently dormant.
+COPY episodic_memory.py global_workspace.py predictive_coder.py outcome_observer.py sleep_cycle.py ./cno/
+
+# Entry point: runs cno/__main__.py which fires cno_organism.main()
+CMD ["python3", "-u", "-m", "cno"]

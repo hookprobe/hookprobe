@@ -1,0 +1,269 @@
+name: Installation & Configuration Tests
+
+on:
+  push:
+    branches: [ main, master, develop, 'claude/**' ]
+    paths:
+      - 'install.sh'
+      - 'install/**/*.sh'
+      - '.github/workflows/installation-test.yml'
+  pull_request:
+    branches: [ main, master, develop ]
+    paths:
+      - 'install.sh'
+      - 'install/**/*.sh'
+      - '.github/workflows/installation-test.yml'
+
+jobs:
+  syntax-check:
+    name: Shell Script Syntax Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Validate install.sh syntax
+        run: bash -n install.sh
+
+      - name: Validate all shell scripts
+        run: |
+          find install/ -name "*.sh" -type f | while read script; do
+            echo "Checking syntax: $script"
+            bash -n "$script"
+          done
+
+      - name: Check for common issues
+        run: |
+          echo "Checking for common shell script issues..."
+
+          # Check for missing shebangs
+          find install/ -name "*.sh" -type f | while read script; do
+            if ! head -n1 "$script" | grep -q "^#!/"; then
+              echo "ERROR: Missing shebang in $script"
+              exit 1
+            fi
+          done
+
+          # Check for set -e in critical scripts
+          for script in install.sh scripts/install-edge.sh install/cloud/setup.sh; do
+            if [ -f "$script" ] && ! grep -q "set -e" "$script"; then
+              echo "WARNING: Missing 'set -e' in $script"
+            fi
+          done
+
+  test-unified-installer:
+    name: Unified Installer Tests
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Test password generation
+        run: |
+          # Test that openssl is available for password generation
+          openssl rand -base64 32 | grep -E '^[A-Za-z0-9+/]{43}=$'
+
+      - name: Validate unified installer structure
+        run: |
+          # Check that unified installer exists
+          if [ ! -f scripts/install-edge.sh ]; then
+            echo "ERROR: scripts/install-edge.sh not found"
+            exit 1
+          fi
+
+          # Check syntax
+          bash -n scripts/install-edge.sh
+
+          # Check for library files
+          for lib in scripts/lib/platform.sh scripts/lib/requirements.sh scripts/lib/instructions.sh; do
+            if [ ! -f "$lib" ]; then
+              echo "ERROR: $lib not found"
+              exit 1
+            fi
+            bash -n "$lib"
+          done
+
+          # Check for required functions in libraries
+          if ! grep -q "detect_platform" scripts/lib/platform.sh; then
+            echo "ERROR: Missing detect_platform function"
+            exit 1
+          fi
+
+          if ! grep -q "run_system_check" scripts/lib/requirements.sh; then
+            echo "ERROR: Missing run_system_check function"
+            exit 1
+          fi
+
+          echo "✓ Unified installer validation passed"
+
+  test-edge-deployment:
+    name: Edge Deployment Dry Run
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Check deployment scripts exist
+        run: |
+          # Check for unified edge installer
+          if [ -f scripts/install-edge.sh ]; then
+            echo "✓ Unified edge installer exists"
+            bash -n scripts/install-edge.sh
+          else
+            echo "ERROR: scripts/install-edge.sh not found"
+            exit 1
+          fi
+
+          # Check for cloud setup (separate from edge)
+          if [ -f install/cloud/setup.sh ]; then
+            echo "✓ Cloud setup script exists"
+            bash -n install/cloud/setup.sh
+          else
+            echo "WARNING: install/cloud/setup.sh not found"
+          fi
+
+      - name: Validate auto-detection libraries
+        run: |
+          # Check that auto-detection libraries exist
+          echo "Checking auto-detection libraries..."
+
+          if [ -f scripts/lib/platform.sh ]; then
+            echo "✓ Platform detection library exists"
+          else
+            echo "ERROR: scripts/lib/platform.sh not found"
+            exit 1
+          fi
+
+          if [ -f scripts/lib/requirements.sh ]; then
+            echo "✓ Requirements validation library exists"
+          else
+            echo "ERROR: scripts/lib/requirements.sh not found"
+            exit 1
+          fi
+
+          if [ -f scripts/lib/instructions.sh ]; then
+            echo "✓ Instructions library exists"
+          else
+            echo "ERROR: scripts/lib/instructions.sh not found"
+            exit 1
+          fi
+
+          echo "✓ Deployment structure validation passed"
+
+  test-documentation:
+    name: Documentation Validation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Check core documentation exists
+        run: |
+          echo "Checking core documentation files..."
+
+          # Check for README
+          if [ -f README.md ]; then
+            echo "✓ README.md exists"
+            # Check that README mentions the installer
+            if grep -q "install.sh" README.md; then
+              echo "✓ README mentions install.sh"
+            else
+              echo "WARNING: README.md doesn't mention install.sh"
+            fi
+          else
+            echo "ERROR: README.md not found"
+            exit 1
+          fi
+
+          # Check for QUICK-START
+          if [ -f QUICK-START.md ]; then
+            echo "✓ QUICK-START.md exists"
+            if grep -q "install.sh" QUICK-START.md; then
+              echo "✓ QUICK-START mentions install.sh"
+            fi
+          else
+            echo "INFO: QUICK-START.md not found"
+          fi
+
+          echo "✓ Documentation validation passed"
+
+  security-scan:
+    name: Security & Best Practices
+    runs-on: ubuntu-latest
+    needs: syntax-check
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v7
+
+      - name: Check for password generation
+        run: |
+          echo "Checking for secure password generation..."
+
+          # Check that openssl is used for password generation in unified installer
+          if [ -f scripts/install-edge.sh ]; then
+            if grep -q "openssl rand" scripts/install-edge.sh; then
+              echo "✓ Password generation found in unified installer"
+            else
+              echo "INFO: Password generation may be handled externally"
+            fi
+          fi
+
+      - name: Check for unsafe patterns
+        run: |
+          echo "Checking for unsafe patterns..."
+
+          # Look for obvious hardcoded passwords (very strict pattern)
+          if grep -r "password=\"[^$]" install/ --include="*.sh" 2>/dev/null | grep -v "test\|example\|POSTGRES_PASSWORD\|GRAFANA_PASSWORD"; then
+            echo "WARNING: Potential hardcoded password found"
+          else
+            echo "✓ No obvious hardcoded passwords"
+          fi
+
+      - name: Verify security defaults
+        run: |
+          echo "Verifying security defaults..."
+
+          # Check unified installer for security features
+          if [ -f scripts/install-edge.sh ]; then
+            echo "✓ Unified installer exists"
+
+            # Check for memory limits (security feature)
+            if grep -q "POD_MEMORY" scripts/lib/platform.sh 2>/dev/null; then
+              echo "✓ Memory limits configured"
+            fi
+
+            # Check for cgroup validation (Raspberry Pi security)
+            if grep -q "check_cgroup" scripts/lib/requirements.sh 2>/dev/null; then
+              echo "✓ Cgroup validation present"
+            fi
+          fi
+
+          echo "✓ Security scan passed"
+
+  integration-summary:
+    name: Integration Test Summary
+    runs-on: ubuntu-latest
+    needs: [syntax-check, test-unified-installer, test-edge-deployment, test-documentation, security-scan]
+    if: always()
+
+    steps:
+      - name: Summary
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "   HookProbe Installation Tests"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "Syntax Check: ${{ needs.syntax-check.result }}"
+          echo "Unified Installer: ${{ needs.test-unified-installer.result }}"
+          echo "Edge Deployment: ${{ needs.test-edge-deployment.result }}"
+          echo "Documentation: ${{ needs.test-documentation.result }}"
+          echo "Security Scan: ${{ needs.security-scan.result }}"
+          echo ""
+          echo "Summary completed"

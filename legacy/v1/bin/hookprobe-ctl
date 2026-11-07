@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""
+hookprobe-ctl — HookProbe Platform Control CLI
+
+Commands:
+  hw-info     Show detected hardware, NPU, and tier recommendation
+  brain-info  Show inference bridge status and loaded models
+  version     Show HookProbe version
+  status      Show running services status
+
+Usage:
+  hookprobe-ctl hw-info
+  hookprobe-ctl hw-info --json
+  hookprobe-ctl brain-info
+  hookprobe-ctl version
+"""
+
+import json
+import os
+import sys
+
+# Add parent to path for core imports
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
+
+VERSION = "5.5.0"
+
+
+def cmd_hw_info(as_json=False):
+    """Display detected hardware capabilities."""
+    try:
+        from core.brain.hw_detect import detect_hardware
+    except ImportError:
+        print("Error: core.brain module not found. Ensure PYTHONPATH includes hookprobe root.", file=sys.stderr)
+        sys.exit(1)
+
+    hw = detect_hardware()
+    if as_json:
+        print(json.dumps(hw.to_dict(), indent=2))
+        return
+
+    accel = hw.accelerator.value
+    print(f"{'=' * 50}")
+    print(f"  HookProbe Hardware Profile")
+    print(f"{'=' * 50}")
+    print(f"  Accelerator:    {accel}" + (f" ({hw.tops} TOPS)" if hw.tops > 0 else ""))
+    print(f"  CPU:            {hw.cpu_arch}, {hw.cpu_cores} cores")
+    print(f"  SIMD:           {'NEON' if hw.simd_width == 128 else 'AVX2' if hw.simd_width == 256 else 'AVX-512' if hw.simd_width == 512 else 'none'} ({hw.simd_width}-bit)")
+    print(f"  RAM:            {hw.ram_mb} MB")
+    print(f"  Max Model:      {hw.max_model_mb} MB")
+    print(f"  Engine:         {hw.inference_engine}")
+    print(f"  Quantization:   {hw.quantization}")
+    print(f"{'─' * 50}")
+    print(f"  Tier:           {hw.tier_recommendation}")
+    print(f"  Can Run LLM:    {'Yes' if hw.can_run_llm else 'No'}")
+    if hw.can_run_llm:
+        print(f"  LLM Model:      {hw.llm_recommendation}")
+    if hw.is_mock:
+        print(f"  ⚠ Mock Mode:    HOOKPROBE_MOCK_NPU={os.environ.get('HOOKPROBE_MOCK_NPU', '')}")
+    print(f"{'=' * 50}")
+
+
+def cmd_brain_info(as_json=False):
+    """Display inference bridge status."""
+    try:
+        from core.brain.hw_detect import detect_hardware
+        from core.brain.inference_bridge import InferenceBridge
+    except ImportError:
+        print("Error: core.brain module not found.", file=sys.stderr)
+        sys.exit(1)
+
+    hw = detect_hardware()
+    bridge = InferenceBridge(tier='auto', hw_profile=hw)
+    info = bridge.device_info()
+
+    if as_json:
+        print(json.dumps(info, indent=2))
+        return
+
+    print(f"{'=' * 50}")
+    print(f"  HookProbe Inference Bridge")
+    print(f"{'=' * 50}")
+    print(f"  Tier:           {info['tier']}")
+    print(f"  Classify:       {info['classify_engine']}")
+    print(f"  LLM:            {info['llm_engine']}")
+    print(f"  LLM Available:  {'Yes' if info['llm_available'] else 'No'}")
+    print(f"{'=' * 50}")
+
+
+def cmd_version():
+    """Show version."""
+    print(f"HookProbe v{VERSION}")
+
+
+def cmd_status():
+    """Show service status."""
+    import subprocess
+    print(f"{'=' * 50}")
+    print(f"  HookProbe Service Status")
+    print(f"{'=' * 50}")
+    # Check for podman containers
+    try:
+        result = subprocess.run(
+            ['podman', 'ps', '--format', '{{.Names}} {{.Status}}'],
+            capture_output=True, text=True, timeout=5
+        )
+        lines = [l for l in result.stdout.strip().split('\n') if 'hookprobe' in l.lower() or 'fts-' in l.lower()]
+        if lines:
+            for line in sorted(lines):
+                parts = line.split(None, 1)
+                name = parts[0] if parts else '?'
+                status = parts[1] if len(parts) > 1 else '?'
+                icon = 'OK' if 'healthy' in status.lower() or 'up' in status.lower() else 'XX'
+                print(f"  [{icon}] {name:<30} {status}")
+        else:
+            print("  No HookProbe containers found")
+    except Exception:
+        print("  podman not available")
+    print(f"{'=' * 50}")
+
+
+def main():
+    args = sys.argv[1:]
+    if not args or args[0] in ('-h', '--help', 'help'):
+        print(__doc__)
+        sys.exit(0)
+
+    cmd = args[0]
+    flags = args[1:]
+    as_json = '--json' in flags
+
+    commands = {
+        'hw-info': lambda: cmd_hw_info(as_json),
+        'brain-info': lambda: cmd_brain_info(as_json),
+        'version': cmd_version,
+        'status': cmd_status,
+    }
+
+    if cmd in commands:
+        commands[cmd]()
+    else:
+        print(f"Unknown command: {cmd}", file=sys.stderr)
+        print(f"Available: {', '.join(commands.keys())}", file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == '__main__':
+    main()
