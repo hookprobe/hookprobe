@@ -1,0 +1,68 @@
+FROM docker.io/library/python:3.12-slim
+
+LABEL description="HookProbe HYDRA Feed Sync + Event Consumer + ML + Neural-Kernel"
+LABEL version="3.3.0"
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    iproute2 \
+    bpfcc-tools \
+    curl \
+    && pip install --no-cache-dir psycopg2-binary \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Create model persistence directory + the shared-module namespace tree
+# so `from core.common.health import ...` resolves inside the container.
+# Ch 24 §P0 fix: previously the import fell into try/except and
+# _health stayed None → no /healthz server bound on HEALTH_PORT →
+# Docker healthcheck probes failed → 4 containers reported unhealthy
+# while running fine. See: compose.hydra-{anomaly,consumer,...}.healthcheck
+# and core/hydra/anomaly_detector.py:862.
+RUN mkdir -p /app/models /app/core/common && \
+    touch /app/core/__init__.py /app/core/common/__init__.py
+
+# Build context is core/ (parent of hydra/) so we can reach common/.
+# Core HYDRA pipeline
+COPY hydra/bpf_map_ops.py hydra/feed_sync.py hydra/event_consumer.py \
+     hydra/feature_extractor.py hydra/anomaly_detector.py \
+     hydra/rdap_enricher.py hydra/baseline_profiler.py hydra/cve_enricher.py \
+     hydra/temporal_memory.py hydra/sentinel_engine.py \
+     hydra/sentinel_lifecycle.py hydra/predictor_engine.py ./
+
+# Phase 2 canonical source — `from hydra.trusted_networks import ...`.
+# Keep both flat and namespaced paths so old + new imports work.
+RUN mkdir -p /app/hydra && touch /app/hydra/__init__.py
+COPY hydra/trusted_networks.py /app/hydra/trusted_networks.py
+COPY hydra/trusted_networks.py /app/trusted_networks.py
+
+# Neural-Kernel: Risk Velocity + Cognitive Defense Loop
+COPY hydra/risk_velocity.py hydra/cognitive_defense.py ./
+
+# Shared readiness helper + canonical ClickHouse client (canonical
+# location preserved so imports match the source tree). clickhouse.py
+# added 2026-06-22 — the 2026-04 refactor moved per-module CH helpers
+# into core.common.clickhouse, but only health.py was being baked in, so
+# feed_sync/event_consumer/rdap_enricher/baseline_profiler/feature_extractor
+# all crashed with `ModuleNotFoundError: No module named
+# 'core.common.clickhouse'` on the first rebuild after the refactor.
+COPY common/health.py /app/core/common/health.py
+COPY common/clickhouse.py /app/core/common/clickhouse.py
+
+# Agency shim — required by feed_sync.py and rdap_enricher.py for the
+# gated-action contract (see core/agency_shim.py docstring). Added
+# 2026-06-09 after a rebuild surfaced `ModuleNotFoundError: No module
+# named 'core.agency_shim'` in hydra-feed and hydra-enricher. The
+# import sites are at feed_sync.py:44 and rdap_enricher.py:47.
+COPY agency_shim.py /app/core/agency_shim.py
+
+# Peer transport — feed_sync.py's iocs→XDP watcher does
+# `from cno.peer_transport import get_peer_transport`. Baked in 2026-06-10 so
+# the inject-neural-kernel.sh boot step (which side-loaded this and timed out
+# >120s) can be retired. This was the last un-baked module; without it the
+# feed logged "peer_transport startup failed: No module named 'cno'".
+RUN mkdir -p /app/cno && touch /app/cno/__init__.py
+COPY cno/peer_transport.py /app/cno/peer_transport.py
+
+# Default: run feed_sync (override in compose for other daemons)
+CMD ["python3", "-u", "feed_sync.py"]

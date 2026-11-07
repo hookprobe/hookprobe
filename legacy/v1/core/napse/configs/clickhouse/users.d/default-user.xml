@@ -1,0 +1,18 @@
+<clickhouse>
+  <!-- Docs: <https://clickhouse.com/docs/en/operations/settings/settings_users/> -->
+  <users>
+    <!-- Remove default user -->
+    <default remove="remove">
+    </default>
+
+    <ids>
+      <profile>default</profile>
+      <networks>
+        <ip>::/0</ip>
+      </networks>
+      <password><![CDATA[hookprobe_ids_2026]]></password>
+      <quota>default</quota>
+      <access_management>0</access_management>
+    </ids>
+  </users>
+</clickhouse>

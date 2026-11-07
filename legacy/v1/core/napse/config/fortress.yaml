@@ -1,0 +1,7 @@
+# NAPSE Fortress Tier Configuration (4GB RAM)
+# Full engine with all parsers + ML + D2D + ClickHouse
+# See napse.yaml for defaults (fortress is the default tier)
+
+napse:
+  tier: "fortress"
+  # All defaults from napse.yaml apply

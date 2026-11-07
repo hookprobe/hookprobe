@@ -1,0 +1,477 @@
+"""
+Emotion Engine — The Amygdala
+
+Maps network stress and threat intelligence into an emotional state
+using Russell's circumplex model (valence + arousal dimensions).
+
+Emotional States:
+    SERENE:     Low arousal, positive valence — normal operations, no camo
+    VIGILANT:   Medium arousal, neutral valence — enhanced monitoring
+    ANXIOUS:    High arousal, negative valence — TTL jitter, window randomization
+    FEARFUL:    Very high arousal, very negative valence — full camo + honeypots
+    ANGRY:      High arousal, negative valence — active counter-intelligence
+
+This is NOT anthropomorphization — it is a control theory mechanism for
+adaptive defensive posture. Each emotion maps to specific camouflage
+and deception behaviors in the Adaptive Camouflage system.
+
+The Emotion Engine differs from the Stress Gauge:
+    - Stress Gauge: raw signal aggregation (hypothalamus, simple)
+    - Emotion Engine: contextual interpretation (amygdala, nuanced)
+
+    Same stress level can produce different emotions:
+    - High stress from DDoS → ANGRY (we know how to fight this)
+    - High stress from novel APT → FEARFUL (unknown threat, maximize camo)
+    - High stress from scan burst → ANXIOUS (reconnaissance, uncertain intent)
+
+Author: HookProbe Team
+License: Proprietary
+Version: 1.0.0
+"""
+
+import logging
+import math
+import os
+import re
+import time
+from typing import Any, Callable, Dict, Optional, Tuple
+from urllib.request import Request, urlopen
+
+from .types import EmotionState, StressState
+
+logger = logging.getLogger(__name__)
+
+# ClickHouse config
+CH_HOST = os.environ.get('CLICKHOUSE_HOST', '127.0.0.1')
+CH_PORT = os.environ.get('CLICKHOUSE_PORT', '8123')
+CH_DB = os.environ.get('CLICKHOUSE_DB', 'hookprobe_ids')
+CH_USER = os.environ.get('CLICKHOUSE_USER', 'ids')
+CH_PASSWORD = os.environ.get('CLICKHOUSE_PASSWORD', '')
+from core.common.clickhouse import ch_post as _ch_post
+
+# Validate CH_DB is a safe identifier
+if not re.match(r'^[A-Za-z0-9_]+$', CH_DB):
+    raise ValueError(f"Unsafe CLICKHOUSE_DB value: {CH_DB!r}")
+
+# Circumplex parameters
+# Decay rates are per-evaluation (every EMOTION_EVAL_INTERVAL_S).
+# Too fast → emotions never accumulate from sparse stimuli.
+# Too slow → organism stays angry/fearful long after threats pass.
+# Decay rates — v2 retuned for Alexandria audit. Previous values (0.01/0.015)
+# were too slow to recover from the constant stream of CognitiveDefense
+# block stimuli (~50K blocklist entries generating routine threat_detected
+# events). The organism stayed anxious/fearful permanently.
+# New rates: 2.5× faster, so valence reaches neutral in ~2.5 min of calm
+# instead of ~5.5 min. This allows the all_clear signal (every 10s when
+# threat_ratio < 5%) to actually pull the organism toward serene.
+VALENCE_DECAY = 0.025          # Valence drifts toward 0 per cycle (neutral)
+AROUSAL_DECAY = 0.025          # Arousal decays toward 0 per cycle
+EMOTION_HYSTERESIS_S = 20.0    # Min dwell time before emotion transition
+EMOTION_EVAL_INTERVAL_S = 5.0  # Evaluate every 5 seconds
+# Ch 24 §P3 G9 — heartbeat row to cno_emotion_log so the table reflects
+# liveness during long stable periods. Mirrors stress_gauge's pattern
+# (see stress_gauge.py:HEARTBEAT_INTERVAL_S). Without this, an organism
+# locked in SERENE for hours produces zero emotion_log rows and the
+# watchdog can't distinguish "healthy but quiet" from "EmotionEngine
+# thread dead".
+EMOTION_HEARTBEAT_INTERVAL_S = float(
+    os.environ.get('CNO_EMOTION_HEARTBEAT_S', '60')
+)
+
+
+class EmotionEngine:
+    """The amygdala — interprets stress context into emotional state.
+
+    Uses Russell's circumplex model with two continuous dimensions:
+        valence: -1.0 (negative/threat) to +1.0 (positive/safe)
+        arousal: 0.0 (calm/sleepy) to 1.0 (activated/alert)
+
+    The (valence, arousal) point maps to discrete emotions:
+        SERENE:   valence > 0.2, arousal < 0.3
+        VIGILANT: |valence| < 0.3, 0.3 <= arousal < 0.6
+        ANXIOUS:  valence < -0.2, 0.4 <= arousal < 0.7
+        FEARFUL:  valence < -0.4, arousal >= 0.7
+        ANGRY:    valence < -0.3, arousal >= 0.6, has_known_threat=True
+    """
+
+    def __init__(self, on_emotion_change: Optional[Callable] = None):
+        self._valence = 0.5       # Start positive (safe)
+        self._arousal = 0.1       # Start calm
+        self._emotion = EmotionState.SERENE
+        self._emotion_entered_at = time.monotonic()
+        self._on_change = on_emotion_change
+
+        # Context flags that influence emotion selection
+        self._has_known_threat = False    # We recognize the attack type
+        self._has_novel_threat = False    # Unknown/zero-day pattern
+        self._active_scan = False        # Reconnaissance detected
+        self._data_exfil = False         # Exfiltration detected
+
+        self._stats = {
+            'evaluations': 0,
+            'transitions': 0,
+            'heartbeats': 0,
+        }
+        # Last heartbeat timestamp (monotonic). Initialised in the past
+        # so the first evaluate() after construction emits one row,
+        # giving the watchdog an immediate liveness signal without
+        # waiting a full HEARTBEAT_INTERVAL_S.
+        self._last_heartbeat_at = time.monotonic() - EMOTION_HEARTBEAT_INTERVAL_S
+
+        logger.info("EmotionEngine initialized (valence=%.1f, arousal=%.1f)",
+                     self._valence, self._arousal)
+
+    @property
+    def emotion(self) -> EmotionState:
+        return self._emotion
+
+    @property
+    def valence(self) -> float:
+        return self._valence
+
+    @property
+    def arousal(self) -> float:
+        return self._arousal
+
+    # ------------------------------------------------------------------
+    # Stimulus Processing
+    # ------------------------------------------------------------------
+
+    def process_stimulus(self, stimulus_type: str, intensity: float,
+                         context: Optional[Dict[str, Any]] = None) -> None:
+        """Process a threat stimulus and update valence/arousal.
+
+        Args:
+            stimulus_type: Type of stimulus (see below)
+            intensity: 0.0 - 1.0 (stimulus strength)
+            context: Optional context dict
+        """
+        ctx = context or {}
+
+        # Clamp intensity
+        intensity = max(0.0, min(1.0, intensity))
+
+        if stimulus_type == 'threat_detected':
+            # Threat pushes valence negative, arousal up
+            self._valence -= intensity * 0.3
+            self._arousal += intensity * 0.4
+            if ctx.get('kill_chain_stage') in ('command_control', 'action_on_objectives'):
+                self._has_known_threat = True
+                self._arousal += 0.15  # Known late-stage = higher arousal
+
+        elif stimulus_type == 'novel_pattern':
+            # Unknown pattern → anxiety (negative valence, high arousal)
+            self._valence -= intensity * 0.25
+            self._arousal += intensity * 0.35
+            self._has_novel_threat = True
+
+        elif stimulus_type == 'scan_detected':
+            # Scanning → vigilance
+            self._valence -= intensity * 0.1
+            self._arousal += intensity * 0.2
+            self._active_scan = True
+
+        elif stimulus_type == 'exfiltration_detected':
+            # Data exfiltration → fear
+            self._valence -= intensity * 0.5
+            self._arousal += intensity * 0.5
+            self._data_exfil = True
+
+        elif stimulus_type == 'ddos_detected':
+            # DDoS → anger (we know how to fight this)
+            self._valence -= intensity * 0.2
+            self._arousal += intensity * 0.3
+            self._has_known_threat = True
+
+        elif stimulus_type in ('threat_resolved', 'block_success'):
+            # Resolution / successful defense → positive shift.
+            # v2 Alexandria fix: successful blocks should feel GOOD —
+            # the organism handled the threat. This counterbalances the
+            # negative accumulation from routine defense operations.
+            self._valence += intensity * 0.4
+            self._arousal -= intensity * 0.25
+
+        elif stimulus_type == 'high_activity':
+            # Phase 3: sustained defense activity → healthy vigilance.
+            # The organism is actively processing threats — it should feel
+            # alert (aroused) but NOT afraid (valence stays neutral/mild-
+            # negative). This creates the VIGILANT state (|valence| < 0.3,
+            # arousal 0.3-0.6) which was previously unreachable because
+            # every stimulus was either fear-inducing or resolution-calming.
+            self._valence -= intensity * 0.08  # mild negative (we're busy)
+            self._arousal += intensity * 0.35  # moderate arousal (alert)
+
+        elif stimulus_type == 'all_clear':
+            # Phase 3 v2: scaled down from fixed +0.2 to +0.08. The
+            # previous +0.2 per cycle overpowered ALL negative stimuli
+            # and locked the organism in permanent serenity even during
+            # 50K malicious verdicts/hour. At +0.08, all_clear still
+            # recovers to serene within ~5 minutes of quiet, but
+            # high_activity can compete during active defense.
+            self._valence += 0.08
+            self._arousal -= 0.08
+
+        elif stimulus_type == 'stress_change':
+            # Direct stress state mapping
+            stress = ctx.get('stress_state')
+            if stress == StressState.CALM:
+                self._valence += 0.05
+                self._arousal -= 0.1
+            elif stress == StressState.ALERT:
+                self._valence -= 0.05
+                self._arousal += 0.1
+            elif stress == StressState.FIGHT:
+                self._valence -= 0.2
+                self._arousal += 0.3
+            elif stress == StressState.RECOVERY:
+                self._valence += 0.1
+                self._arousal -= 0.05
+
+        # Clamp to valid ranges
+        self._valence = max(-1.0, min(1.0, self._valence))
+        self._arousal = max(0.0, min(1.0, self._arousal))
+
+    def decay(self) -> None:
+        """Apply natural decay — organism calms down over time."""
+        # Valence drifts toward neutral (0)
+        if self._valence > 0:
+            self._valence = max(0.0, self._valence - VALENCE_DECAY)
+        elif self._valence < 0:
+            self._valence = min(0.0, self._valence + VALENCE_DECAY)
+
+        # Arousal decays toward 0 (calm)
+        self._arousal = max(0.0, self._arousal - AROUSAL_DECAY)
+
+        # Reset context flags gradually
+        if self._arousal < 0.2:
+            self._has_known_threat = False
+            self._has_novel_threat = False
+            self._active_scan = False
+            self._data_exfil = False
+
+    # ------------------------------------------------------------------
+    # Emotion Classification
+    # ------------------------------------------------------------------
+
+    def _classify_emotion(self) -> EmotionState:
+        """Map (valence, arousal) + context to discrete emotion.
+
+        Phase 3 rewrite: the previous classifier had gaps where
+        positive-valence + high-arousal or neutral-valence + extreme-
+        arousal fell through all checks to a SERENE default. This
+        meant the organism reported SERENE at arousal=1.0.
+
+        New approach: check arousal FIRST as a primary axis, then
+        refine by valence and context flags. SERENE is only possible
+        when arousal < 0.3 — otherwise the organism is activated.
+        """
+        v = self._valence
+        a = self._arousal
+
+        # ── Low arousal: SERENE (the only calm state) ──────────
+        if a < 0.3 and v > -0.2:
+            return EmotionState.SERENE
+
+        # ── High arousal (a >= 0.3): classify by valence + context ──
+
+        # ANGRY: negative valence + known threat (we can fight it)
+        if v < -0.3 and a >= 0.6 and self._has_known_threat and not self._has_novel_threat:
+            return EmotionState.ANGRY
+
+        # FEARFUL: very negative valence + very high arousal
+        if v < -0.4 and a >= 0.7:
+            return EmotionState.FEARFUL
+        if self._data_exfil and a >= 0.5:
+            return EmotionState.FEARFUL
+
+        # ANXIOUS: negative valence + moderate arousal
+        if v < -0.2 and a >= 0.4:
+            return EmotionState.ANXIOUS
+        if self._active_scan and a >= 0.3:
+            return EmotionState.ANXIOUS
+
+        # VIGILANT: everything else with elevated arousal.
+        # This covers: neutral/positive valence + any arousal >= 0.3.
+        # The organism is alert and processing but not threatened.
+        if a >= 0.3:
+            return EmotionState.VIGILANT
+
+        # Fallback (low arousal + mildly negative valence)
+        return EmotionState.SERENE
+
+    def evaluate(self) -> Tuple[EmotionState, float, float]:
+        """Evaluate current emotion with hysteresis.
+
+        Returns (emotion, valence, arousal).
+        """
+        self._stats['evaluations'] += 1
+        self.decay()
+
+        candidate = self._classify_emotion()
+        now = time.monotonic()
+        dwell = now - self._emotion_entered_at
+
+        if candidate != self._emotion and dwell >= EMOTION_HYSTERESIS_S:
+            old = self._emotion
+            self._emotion = candidate
+            self._emotion_entered_at = now
+            self._stats['transitions'] += 1
+
+            logger.info(
+                "EMOTION: %s → %s (valence=%.2f, arousal=%.2f, dwell=%.1fs)",
+                old.value, candidate.value, self._valence, self._arousal, dwell,
+            )
+
+            # Log transition
+            self._log_transition(old, candidate)
+            # Reset heartbeat clock — a transition row already proves
+            # liveness so we don't need a separate heartbeat for another
+            # full interval.
+            self._last_heartbeat_at = now
+
+            # Notify callback
+            if self._on_change:
+                try:
+                    self._on_change(old, candidate, self._valence, self._arousal)
+                except Exception as e:
+                    logger.error("Emotion change callback failed: %s", e)
+        elif now - self._last_heartbeat_at >= EMOTION_HEARTBEAT_INTERVAL_S:
+            # Ch 24 §P3 G9 — heartbeat write so cno_emotion_log isn't
+            # silent during stable periods. Same row schema as a
+            # transition; trigger_event='heartbeat' makes the two
+            # distinguishable downstream.
+            self._log_heartbeat(self._emotion)
+            self._last_heartbeat_at = now
+            self._stats['heartbeats'] += 1
+
+        return self._emotion, self._valence, self._arousal
+
+    def _log_transition(self, old: EmotionState, new: EmotionState) -> None:
+        """Log emotion transition to ClickHouse."""
+        self._write_emotion_row(old, new, "emotion_transition")
+
+    def _log_heartbeat(self, current: EmotionState) -> None:
+        """Periodic liveness row — same emotion in old + new fields,
+        trigger_event='heartbeat' for downstream filtering."""
+        self._write_emotion_row(current, current, "heartbeat")
+
+    def _write_emotion_row(
+        self, old: EmotionState, new: EmotionState, trigger: str,
+    ) -> None:
+        try:
+            import json
+            actions = self.get_camouflage_profile().get('techniques', [])
+            actions_json = json.dumps(actions)
+            query = (
+                f"INSERT INTO {CH_DB}.cno_emotion_log "
+                f"(timestamp, old_emotion, new_emotion, valence, arousal, "
+                f"trigger_event, camouflage_actions) "
+                f"VALUES (now64(3), '{old.value}', '{new.value}', "
+                f"{self._valence}, {self._arousal}, "
+                f"'{trigger}', '{_ch_escape(actions_json)}')"
+            )
+            # _ch_post returns False on any failure and now logs the cause
+            # itself; we no longer need to inspect the return here.
+            _ch_post(query)
+        except Exception as e:
+            # Was logger.debug — silently lost ~10 days of emotion writes
+            # (cno_emotion_log went stale 2026-04-23 → 2026-05-03 with no
+            # visibility). Surface at WARNING so the next failure mode is
+            # diagnosable from container logs.
+            logger.warning("Emotion log failed (trigger=%s): %s", trigger, e)
+
+    # ------------------------------------------------------------------
+    # Camouflage Profile (what the Adaptive Camouflage system should do)
+    # ------------------------------------------------------------------
+
+    def get_camouflage_profile(self) -> Dict[str, Any]:
+        """Return the camouflage configuration for the current emotion.
+
+        Each emotion maps to specific defensive techniques.
+        """
+        profiles = {
+            EmotionState.SERENE: {
+                'level': 0,
+                'techniques': [],
+                'description': 'No camouflage — normal operations',
+            },
+            EmotionState.VIGILANT: {
+                'level': 1,
+                'techniques': ['enhanced_logging'],
+                'description': 'Enhanced logging, no active camouflage',
+            },
+            EmotionState.ANXIOUS: {
+                'level': 2,
+                'techniques': [
+                    'ttl_jitter',          # ±16 TTL randomization
+                    'window_randomize',     # TCP window size variation
+                ],
+                'description': 'Passive camouflage — defeat OS fingerprinting',
+            },
+            EmotionState.FEARFUL: {
+                'level': 3,
+                'techniques': [
+                    'ttl_jitter',
+                    'window_randomize',
+                    'banner_mutation',      # Randomize service banners
+                    'honeypot_deploy',      # Spin up decoy services
+                    'timing_perturbation',  # Vary response times
+                ],
+                'description': 'Full camouflage — maximum deception',
+            },
+            EmotionState.ANGRY: {
+                'level': 4,
+                'techniques': [
+                    'ttl_jitter',
+                    'window_randomize',
+                    'banner_mutation',
+                    'tarpit_activation',    # Slow down attacker connections
+                    'canary_tokens',        # Deploy tracking tokens
+                    'attacker_fingerprint', # Detailed interaction logging
+                ],
+                'description': 'Active counter-intelligence — hunt the hunter',
+            },
+        }
+        return profiles.get(self._emotion, profiles[EmotionState.SERENE])
+
+    # ------------------------------------------------------------------
+    # Status
+    # ------------------------------------------------------------------
+
+    def get_status(self) -> Dict[str, Any]:
+        profile = self.get_camouflage_profile()
+        return {
+            'emotion': self._emotion.value,
+            'valence': round(self._valence, 3),
+            'arousal': round(self._arousal, 3),
+            'camouflage_level': profile['level'],
+            'active_techniques': profile['techniques'],
+            'context': {
+                'has_known_threat': self._has_known_threat,
+                'has_novel_threat': self._has_novel_threat,
+                'active_scan': self._active_scan,
+                'data_exfil': self._data_exfil,
+            },
+            'dwell_s': round(time.monotonic() - self._emotion_entered_at, 1),
+            'stats': dict(self._stats),
+        }
+
+
+# ------------------------------------------------------------------
+# Helpers
+# ------------------------------------------------------------------
+
+def _ch_escape(s: str) -> str:
+    if not s:
+        return ''
+    return (s.replace('\\', '\\\\').replace("'", "\\'")
+             .replace('\n', '\\n').replace('\r', '\\r')
+             .replace('\t', '\\t').replace('\0', ''))
+
+
+_CH_POST_FAILURES = 0  # module-level counter, surfaced via /status
+
+
+def get_ch_post_failures() -> int:
+    """Read the module-level failure counter. Exposed for /status payload."""
+    return _CH_POST_FAILURES

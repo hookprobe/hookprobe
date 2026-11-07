@@ -1,0 +1,29 @@
+[Unit]
+Description=HookProbe HTP Mesh Gateway
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/shared/mesh/htp_gateway.py \
+    --config /etc/hookprobe/mesh-gateway.conf
+Restart=always
+RestartSec=10
+User=root
+Group=root
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mesh-gateway
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,56 @@
+# POD-002: Logto IAM Infrastructure
+#
+# Centralized Identity and Access Management for HookProbe
+#
+# Usage:
+#   cd /home/ubuntu/hookprobe/infrastructure/pod-002-iam
+#   sudo podman-compose up -d
+#
+# Admin Console: http://localhost:3002
+# API Endpoint: http://localhost:3001
+
+version: '3.8'
+
+services:
+  logto:
+    image: docker.io/svhd/logto:1.14
+    container_name: hookprobe-logto
+    hostname: logto
+    restart: unless-stopped
+    ports:
+      - "3001:3001"  # Logto Core API
+      - "3002:3002"  # Logto Admin Console
+    environment:
+      # Logto Endpoints (public URLs)
+      - ENDPOINT=${LOGTO_ENDPOINT:-http://localhost:3001}
+      - ADMIN_ENDPOINT=${LOGTO_ADMIN_ENDPOINT:-http://localhost:3002}
+
+      # PostgreSQL Connection (POD-003)
+      - DB_URL=postgres://${POSTGRES_USER:-logto}:${POSTGRES_PASSWORD}@${POSTGRES_HOST:-10.200.3.12}:${POSTGRES_PORT:-5432}/${POSTGRES_DB:-logto}
+
+      # Trust proxy headers (for nginx/cloudflare)
+      - TRUST_PROXY_HEADER=1
+
+      # Disable telemetry
+      - DISABLE_TELEMETRY=1
+    volumes:
+      - logto-connectors:/etc/logto/packages/core/connectors
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - hookprobe-iam
+
+networks:
+  hookprobe-iam:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.2.0/24
+
+volumes:
+  logto-connectors:
+    name: hookprobe-logto-connectors

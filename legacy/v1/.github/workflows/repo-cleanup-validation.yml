@@ -1,0 +1,97 @@
+name: Repository Cleanup Validation
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  schedule:
+    - cron: '0 0 * * 0'  # Every Sunday at midnight
+  workflow_dispatch:
+    inputs:
+      full_scan:
+        description: 'Run full deep scan'
+        required: false
+        default: 'true'
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  validate-repo-structure:
+    name: Validate Repository Structure
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Run Quick Validation
+        id: quick-check
+        run: |
+          chmod +x scripts/repo-cleanup-validator.sh
+          echo "## Quick Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ./scripts/repo-cleanup-validator.sh --quick 2>&1 | tee validation-quick.log || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Run Full Validation
+        id: full-check
+        if: github.event_name == 'pull_request' || github.event.inputs.full_scan == 'true' || github.event_name == 'schedule'
+        run: |
+          echo "## Full Validation Results" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          ./scripts/repo-cleanup-validator.sh --verbose 2>&1 | tee validation-full.log || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Check for Required Files
+        run: |
+          echo "Checking critical installation files..."
+          missing=0
+
+          for file in install.sh uninstall.sh products/guardian/scripts/setup.sh products/fortress/install.sh products/nexus/setup.sh products/sentinel/bootstrap.sh; do
+            if [ ! -f "$file" ]; then
+              echo "::error::Missing required file: $file"
+              missing=$((missing + 1))
+            else
+              echo "Found: $file"
+            fi
+          done
+
+          if [ $missing -gt 0 ]; then
+            echo "::error::$missing required installation files are missing!"
+            exit 1
+          fi
+
+      - name: Validate Shell Scripts Syntax
+        run: |
+          echo "Validating shell script syntax..."
+          errors=0
+
+          for script in $(find . -name "*.sh" -type f ! -path "./.git/*"); do
+            if ! bash -n "$script" 2>/dev/null; then
+              echo "::error::Syntax error in $script"
+              errors=$((errors + 1))
+            fi
+          done
+
+          if [ $errors -gt 0 ]; then
+            echo "::error::$errors shell scripts have syntax errors"
+            exit 1
+          fi
+
+          echo "All shell scripts have valid syntax"
+
+      - name: Upload Validation Logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: validation-logs
+          path: |
+            validation-quick.log
+            validation-full.log
+          retention-days: 7
+          if-no-files-found: ignore

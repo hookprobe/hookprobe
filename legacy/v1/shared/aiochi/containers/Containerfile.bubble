@@ -1,0 +1,91 @@
+# ==============================================================================
+# AIOCHI Ecosystem Bubble Manager Container
+# ==============================================================================
+# Same-user device detection using NAPSE event bus (NO host network!)
+#
+# Key features:
+#   - Reads mDNS and connections from NAPSE event bus
+#   - Uses bridge network (no port conflicts)
+#   - Non-interfering traffic analysis
+#
+# Build:
+#   podman build -f Containerfile.bubble -t aiochi-bubble:latest ..
+#
+# Run:
+#   podman run --network=aiochi-internal aiochi-bubble:latest
+# ==============================================================================
+
+FROM python:3.11-slim-bookworm AS builder
+
+# Build dependencies for scikit-learn
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create virtual environment
+RUN python -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Install dependencies (NO zeroconf - we use NAPSE event bus!)
+RUN pip install --no-cache-dir \
+    "numpy>=1.24.0,<2.0.0" \
+    "scikit-learn>=1.3.0,<2.0.0" \
+    "clickhouse-connect>=0.7.0,<1.0.0" \
+    "watchdog>=3.0.0,<5.0.0" \
+    "flask>=3.0.0,<4.0.0"
+
+# ==============================================================================
+# Production image
+# ==============================================================================
+FROM python:3.11-slim-bookworm
+
+# Install OVS tools for OpenFlow rule management
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    openvswitch-switch \
+    curl \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd -u 1000 -g nogroup -d /opt/hookprobe -s /sbin/nologin bubble
+
+# Copy virtual environment from builder
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Create directory structure
+RUN mkdir -p /opt/hookprobe/shared/aiochi/bubble \
+             /opt/hookprobe/fortress/lib \
+             /opt/hookprobe/data \
+             /var/lib/hookprobe \
+             /var/lib/fortress \
+             /var/log/hookprobe \
+             /etc/hookprobe \
+    && chown -R bubble:nogroup /opt/hookprobe /var/lib/hookprobe /var/lib/fortress /var/log/hookprobe
+
+# Copy shared AIOCHI bubble module
+COPY --chown=bubble:nogroup bubble/ /opt/hookprobe/shared/aiochi/bubble/
+COPY --chown=bubble:nogroup __init__.py /opt/hookprobe/shared/aiochi/
+
+# Copy entrypoint
+# NOTE: core/napse/ is mounted at runtime via podman-compose volumes
+COPY --chown=bubble:nogroup containers/scripts/bubble_entrypoint.py /opt/hookprobe/
+
+# Environment
+ENV PYTHONPATH="/opt/hookprobe:/opt/hookprobe/shared"
+ENV PYTHONUNBUFFERED=1
+ENV FORTRESS_CONFIG=/etc/hookprobe/fortress.conf
+
+# Verify setup
+RUN python -c "import numpy; import sklearn; print('AIOCHI Bubble manager dependencies ready')"
+
+# Health endpoint port
+EXPOSE 8070
+
+# Health check - verify process OR health endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD curl -sf http://localhost:8070/health || pgrep -f "bubble" > /dev/null || exit 1
+
+WORKDIR /opt/hookprobe
+
+# Run as root for OVS access (ovs-ofctl requires root)
+# NOTE: Bridge network, NOT host - uses NAPSE event bus
+ENTRYPOINT ["python3", "/opt/hookprobe/bubble_entrypoint.py"]

@@ -1,0 +1,1341 @@
+"""
+Fortress Dashboard Views
+Main overview page with widgets and stats - Uses real system data.
+"""
+
+import json
+import time
+import logging
+import sys
+from pathlib import Path
+from datetime import datetime
+
+from flask import render_template, jsonify
+from flask_login import login_required
+
+from . import dashboard_bp
+from ...security_utils import safe_error_message
+
+logger = logging.getLogger(__name__)
+
+# Add lib path for device_policies import
+lib_path = Path(__file__).parent.parent.parent.parent / 'lib'
+if lib_path.exists() and str(lib_path) not in sys.path:
+    sys.path.insert(0, str(lib_path))
+
+# Import device policies module (same as SDN module uses)
+DEVICE_POLICIES_AVAILABLE = False
+try:
+    from device_policies import (
+        get_all_devices as get_all_devices_from_db,
+        get_device_stats,
+        set_device_policy,
+        NetworkPolicy,
+        POLICY_INFO,
+    )
+    DEVICE_POLICIES_AVAILABLE = True
+    logger.info("Dashboard: device_policies module loaded successfully")
+except ImportError as e:
+    logger.warning(f"Dashboard: device_policies module not available: {e}")
+
+    # Stub functions for when module not available
+    def get_all_devices_from_db():
+        return []
+
+    def set_device_policy(mac, policy):
+        return None
+
+# Import SDN Auto Pilot module (premium heuristic scoring engine)
+# This is the PRIMARY data source for devices - same as SDN page
+SDN_AUTOPILOT_AVAILABLE = False
+try:
+    from sdn_autopilot import (
+        get_autopilot as get_sdn_autopilot,
+        SDNAutoPilot,
+    )
+    SDN_AUTOPILOT_AVAILABLE = True
+    logger.info("Dashboard: SDN Auto Pilot module loaded successfully")
+except ImportError as e:
+    logger.warning(f"Dashboard: SDN Auto Pilot module not available: {e}")
+
+    # Stub function to prevent NameError
+    def get_sdn_autopilot():
+        return None
+
+# Import AIOCHI Bubble API client (consolidated bubble logic in aiochi-bubble container)
+# All bubble functionality now accessed via REST API at localhost:8070
+ECOSYSTEM_BUBBLE_AVAILABLE = False
+try:
+    from aiochi_bubble_client import (
+        get_aiochi_bubble_client,
+        get_ecosystem_bubbles,
+        get_bubble_manager,
+        is_aiochi_available,
+    )
+    if is_aiochi_available():
+        ECOSYSTEM_BUBBLE_AVAILABLE = True
+        logger.info("Dashboard: AIOCHI bubble API connected (localhost:8070)")
+    else:
+        logger.warning("Dashboard: AIOCHI bubble container not available")
+except ImportError as e:
+    logger.warning(f"Dashboard: aiochi_bubble_client not available: {e}")
+
+    # Stub functions when API client not available
+    def get_ecosystem_bubbles():
+        return []
+
+    def get_bubble_manager():
+        return None
+
+    def is_aiochi_available():
+        return False
+
+# Import D2D communication client (for device cluster coloring)
+D2D_CLIENT_AVAILABLE = False
+try:
+    from aiochi_bubble_client import (
+        get_d2d_client,
+        get_device_colors as get_d2d_device_colors,
+    )
+    D2D_CLIENT_AVAILABLE = True
+    logger.info("Dashboard: D2D communication client available")
+except ImportError as e:
+    logger.debug(f"Dashboard: D2D client not available: {e}")
+
+    # Stub functions
+    def get_d2d_client():
+        return None
+
+    def get_d2d_device_colors():
+        return {}
+
+# Import hostname decoder for dnsmasq octal escapes
+try:
+    from hostname_decoder import decode_dnsmasq_hostname, clean_device_name
+except ImportError:
+    # Fallback implementations if module not found
+    import re as _re
+    def decode_dnsmasq_hostname(hostname):
+        if not hostname or '\\' not in hostname:
+            return hostname
+        try:
+            result = b''
+            i = 0
+            while i < len(hostname):
+                if hostname[i] == '\\' and i + 3 < len(hostname):
+                    octal_str = hostname[i+1:i+4]
+                    if all(c in '01234567' for c in octal_str):
+                        result += bytes([int(octal_str, 8)])
+                        i += 4
+                        continue
+                result += hostname[i].encode('utf-8', errors='replace')
+                i += 1
+            return result.decode('utf-8', errors='replace').strip()
+        except Exception:
+            return hostname
+
+    def clean_device_name(hostname, max_length=32):
+        if not hostname:
+            return "Unknown Device"
+        name = decode_dnsmasq_hostname(hostname)
+        if not name:
+            return "Unknown Device"
+        name = _re.sub(r'[_-][0-9a-fA-F]{6,}(?:[_-]\d+)?$', '', name)
+        if name.endswith('.local'):
+            name = name[:-6]
+        name = _re.sub(r'\s+', ' ', name).strip()
+        return name[:max_length-3] + '...' if len(name) > max_length else name or "Unknown Device"
+
+# Data directory - shared volume from fts-qsecbit agent
+DATA_DIR = Path('/opt/hookprobe/fortress/data')
+
+# Cache for local data
+_local_cache = {}
+CACHE_TIMEOUT = 30
+
+
+def _get_cached(key, ttl=CACHE_TIMEOUT):
+    """Get cached value if not expired."""
+    if key in _local_cache:
+        value, timestamp = _local_cache[key]
+        if time.time() - timestamp < ttl:
+            return value
+    return None
+
+
+def _set_cached(key, value):
+    """Set cached value."""
+    _local_cache[key] = (value, time.time())
+
+
+def get_tunnel_status():
+    """Get Cloudflare Tunnel status."""
+    config_file = Path('/opt/hookprobe/fortress/tunnel/config.json')
+    if config_file.exists():
+        try:
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            return {
+                'state': 'configured',
+                'hostname': config.get('hostname'),
+                'cloudflared_version': None
+            }
+        except Exception:
+            pass
+    return {'state': 'unconfigured', 'hostname': None, 'cloudflared_version': None}
+
+
+def get_qsecbit_stats():
+    """Load QSecBit stats from file (written by fts-qsecbit agent)."""
+    cached = _get_cached('qsecbit_stats', 10)
+    if cached is not None:
+        return cached
+
+    stats_file = DATA_DIR / 'qsecbit_stats.json'
+    try:
+        if stats_file.exists():
+            with open(stats_file, 'r') as f:
+                result = json.load(f)
+                _set_cached('qsecbit_stats', result)
+                return result
+    except Exception as e:
+        logger.debug(f"Could not read qsecbit_stats.json: {e}")
+
+    # Default when no data available
+    return {'score': 0, 'rag_status': 'UNKNOWN', 'threats_detected': 0, 'vlan_violations': 0}
+
+
+def get_device_count():
+    """Get count of connected devices from database, ARP table or device manager data."""
+    cached = _get_cached('device_count', CACHE_TIMEOUT)
+    if cached is not None:
+        return cached
+
+    # Use device_policies module (same as SDN dashboard)
+    if DEVICE_POLICIES_AVAILABLE:
+        try:
+            devices = get_all_devices_from_db()
+            count = len(devices)
+            _set_cached('device_count', count)
+            return count
+        except Exception:
+            pass
+
+    # Fallback: Try reading from device manager data file
+    devices_file = DATA_DIR / 'devices.json'
+    try:
+        if devices_file.exists():
+            with open(devices_file, 'r') as f:
+                devices = json.load(f)
+                count = len(devices) if isinstance(devices, list) else devices.get('total', 0)
+                _set_cached('device_count', count)
+                return count
+    except Exception:
+        pass
+
+    # Final fallback: count from ARP neighbor table (works in container with host network)
+    try:
+        import subprocess
+        result = subprocess.run(['ip', 'neigh', 'show'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            count = len([l for l in result.stdout.strip().split('\n') if l and 'FAILED' not in l])
+            _set_cached('device_count', count)
+            return count
+    except Exception:
+        pass
+
+    return 0
+
+
+def _load_device_status_cache():
+    """Load device status from host-generated cache file.
+
+    Same implementation as SDN module to ensure consistent device data.
+    Uses ARP status as primary source for real-time online detection.
+    """
+    cache = {}
+
+    # Primary: Load ARP status (real-time, updated every 5s)
+    arp_file = Path('/var/lib/hookprobe/arp-status.json')
+    arp_status = {}
+    try:
+        if arp_file.exists():
+            arp_status = json.loads(arp_file.read_text())
+            logger.debug(f"Loaded {len(arp_status)} devices from ARP status")
+    except Exception as e:
+        logger.debug(f"Failed to load ARP status: {e}")
+
+    # DHCP devices file (updated by dhcp-event.sh)
+    dhcp_file = DATA_DIR / 'devices.json'
+    try:
+        if dhcp_file.exists():
+            data = json.loads(dhcp_file.read_text())
+            if isinstance(data, dict):
+                for mac, device in data.items():
+                    if isinstance(device, dict):
+                        mac_upper = mac.upper()
+                        # Use ARP status for online detection (priority)
+                        arp_info = arp_status.get(mac_upper, {})
+                        is_online = arp_info.get('online', device.get('is_active', False))
+                        cache[mac_upper] = {
+                            'status': 'online' if is_online else 'offline',
+                            'ip': arp_info.get('ip', '') or device.get('ip_address', ''),
+                            'hostname': clean_device_name(device.get('hostname', '')),
+                            'dhcp_fingerprint': device.get('dhcp_fingerprint', ''),
+                            'vendor_class': device.get('vendor_class', ''),
+                            'arp_state': arp_info.get('state', 'UNKNOWN'),
+                        }
+    except Exception as e:
+        logger.debug(f"Failed to load DHCP devices: {e}")
+
+    # Add devices from ARP that weren't in DHCP (recently joined without DHCP refresh)
+    for mac, arp_info in arp_status.items():
+        if mac not in cache:
+            cache[mac] = {
+                'status': 'online' if arp_info.get('online', False) else 'offline',
+                'ip': arp_info.get('ip', ''),
+                'hostname': '',
+                'arp_state': arp_info.get('state', 'UNKNOWN'),
+            }
+
+    # Device status cache (updated by device-status-updater.sh) - additional metadata only
+    status_file = Path('/opt/hookprobe/fortress/data/device_status.json')
+    try:
+        if status_file.exists():
+            data = json.loads(status_file.read_text())
+            for device in data.get('devices', []):
+                mac = device.get('mac', '').upper()
+                if mac:
+                    if mac in cache:
+                        # Only update hostname if not already set, keep ARP-based status
+                        if not cache[mac].get('hostname'):
+                            cache[mac]['hostname'] = clean_device_name(device.get('hostname', ''))
+                        if not cache[mac].get('ip'):
+                            cache[mac]['ip'] = device.get('ip', '')
+                    else:
+                        # Device not in ARP - check ARP status for online
+                        arp_info = arp_status.get(mac, {})
+                        is_online = arp_info.get('online', device.get('status') == 'online')
+                        cache[mac] = {
+                            'status': 'online' if is_online else 'offline',
+                            'ip': device.get('ip', ''),
+                            'hostname': clean_device_name(device.get('hostname', '')),
+                            'arp_state': arp_info.get('state', 'UNKNOWN'),
+                        }
+    except Exception as e:
+        logger.debug(f"Failed to load status cache: {e}")
+
+    return cache
+
+
+def _load_wifi_signals():
+    """Load WiFi signal data from host-generated file."""
+    signals = {}
+    wifi_file = Path('/opt/hookprobe/fortress/data/wifi_signals.json')
+    try:
+        if wifi_file.exists():
+            data = json.loads(wifi_file.read_text())
+            for station in data.get('stations', []):
+                mac = station.get('mac', '').upper()
+                if mac:
+                    signals[mac] = {
+                        'wifi_rssi': station.get('rssi'),
+                        'wifi_quality': station.get('quality'),
+                        'wifi_proximity': station.get('proximity'),
+                        'wifi_interface': station.get('interface'),
+                        'wifi_band': station.get('band'),
+                    }
+    except Exception as e:
+        logger.debug(f"Failed to load WiFi signals: {e}")
+    return signals
+
+
+def get_all_devices():
+    """Get list of all connected devices.
+
+    Priority (same as SDN page for consistency):
+    1. SDN Auto Pilot (autopilot.db) - PRIMARY source with device classification
+    2. device_policies module (devices.db) - fallback
+    3. JSON file from agent - fallback
+    4. ARP table - final fallback
+
+    Each device includes D2D cluster colors if available.
+    """
+    devices = []
+
+    # Load device status and WiFi signals from host-generated files
+    status_cache = _load_device_status_cache()
+    wifi_signals = _load_wifi_signals()
+
+    # Load D2D communication cluster colors (for device coloring)
+    d2d_colors = {}
+    if D2D_CLIENT_AVAILABLE:
+        try:
+            d2d_colors = get_d2d_device_colors()
+            logger.debug(f"Loaded D2D colors for {len(d2d_colors)} devices")
+        except Exception as e:
+            logger.debug(f"Could not load D2D colors: {e}")
+
+    # Primary: Use SDN Auto Pilot (autopilot.db) - same as SDN page
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                # Sync devices from status cache to database
+                if status_cache:
+                    devices_to_sync = [
+                        {
+                            'mac': mac,
+                            'ip': info.get('ip', ''),
+                            'hostname': clean_device_name(info.get('hostname', '')),
+                            'dhcp_fingerprint': info.get('dhcp_fingerprint', ''),
+                            'vendor_class': info.get('vendor_class', ''),
+                        }
+                        for mac, info in status_cache.items()
+                    ]
+                    autopilot.sync_from_device_list(devices_to_sync)
+
+                # Get all devices from autopilot.db
+                db_devices = autopilot.get_all_devices()
+
+                for d in db_devices:
+                    policy = d.get('policy', 'quarantine')
+                    mac = d.get('mac', '').upper()
+
+                    # Get policy info for display
+                    policy_info = {}
+                    if DEVICE_POLICIES_AVAILABLE:
+                        try:
+                            policy_info = POLICY_INFO.get(NetworkPolicy(policy), {})
+                        except ValueError:
+                            pass
+
+                    # Get status from cache
+                    cached = status_cache.get(mac, {})
+                    status = cached.get('status') or d.get('status', 'offline')
+                    is_online = status == 'online'
+
+                    # Get WiFi signal data
+                    wifi_data = wifi_signals.get(mac, {})
+
+                    # Get D2D cluster color for device
+                    d2d_info = d2d_colors.get(mac, {})
+
+                    devices.append({
+                        'mac_address': mac,
+                        'ip_address': d.get('ip', ''),
+                        'hostname': clean_device_name(d.get('friendly_name') or d.get('hostname', '')) or d.get('device_type', 'Unknown'),
+                        'manufacturer': d.get('vendor', 'Unknown'),
+                        'device_type': d.get('device_type') or d.get('category', 'unknown'),
+                        'policy': policy,
+                        'policy_name': policy_info.get('name', policy.replace('_', ' ').title()),
+                        'policy_color': policy_info.get('color', 'secondary'),
+                        'vlan_id': 200 if policy == 'full_access' else 100,
+                        'state': 'REACHABLE' if is_online else 'STALE',
+                        'is_online': is_online,
+                        'is_wifi': bool(wifi_data.get('wifi_interface')),
+                        'interface': wifi_data.get('wifi_interface', ''),
+                        'first_seen': d.get('first_seen'),
+                        'last_seen': d.get('last_seen'),
+                        'wifi_rssi': wifi_data.get('wifi_rssi'),
+                        'wifi_quality': wifi_data.get('wifi_quality'),
+                        # D2D communication cluster (for visual grouping)
+                        'd2d_cluster_id': d2d_info.get('cluster_id'),
+                        'd2d_cluster_color': d2d_info.get('cluster_color'),
+                        'd2d_ecosystem': d2d_info.get('ecosystem'),
+                    })
+
+                if devices:
+                    logger.debug(f"Loaded {len(devices)} devices from autopilot.db")
+                    return devices
+        except Exception as e:
+            logger.warning(f"Failed to load from autopilot.db: {e}")
+
+    # Fallback: Use device_policies module (devices.db)
+    if DEVICE_POLICIES_AVAILABLE:
+        try:
+            db_devices = get_all_devices_from_db()
+            if db_devices:
+                for d in db_devices:
+                    mac = d.get('mac_address', '').upper()
+                    wifi_data = wifi_signals.get(mac, {})
+                    cached = status_cache.get(mac, {})
+                    d2d_info = d2d_colors.get(mac, {})
+
+                    devices.append({
+                        'mac_address': mac,
+                        'ip_address': d.get('ip_address', ''),
+                        'hostname': clean_device_name(d.get('hostname', '')),
+                        'manufacturer': d.get('manufacturer', 'Unknown'),
+                        'device_type': d.get('device_type', 'unknown'),
+                        'policy': d.get('policy', 'quarantine'),
+                        'policy_name': d.get('policy_name', 'Quarantine'),
+                        'policy_color': d.get('policy_color', 'danger'),
+                        'vlan_id': 200 if d.get('policy') == 'full_access' else 100,
+                        'state': 'REACHABLE' if d.get('is_online') else 'STALE',
+                        'is_online': d.get('is_online', False),
+                        'is_wifi': bool(wifi_data.get('wifi_interface')) or d.get('interface', '').startswith('wlan'),
+                        'interface': wifi_data.get('wifi_interface') or d.get('interface', ''),
+                        'first_seen': d.get('first_seen'),
+                        'last_seen': d.get('last_seen'),
+                        'wifi_rssi': wifi_data.get('wifi_rssi'),
+                        'wifi_quality': wifi_data.get('wifi_quality'),
+                        # D2D communication cluster
+                        'd2d_cluster_id': d2d_info.get('cluster_id'),
+                        'd2d_cluster_color': d2d_info.get('cluster_color'),
+                        'd2d_ecosystem': d2d_info.get('ecosystem'),
+                    })
+
+                if devices:
+                    logger.debug(f"Loaded {len(devices)} devices from device_policies")
+                    return devices
+        except Exception as e:
+            logger.warning(f"Failed to get devices from database: {e}")
+
+    # Final fallback: build from status cache (from ARP/DHCP data)
+    if status_cache:
+        for mac, info in status_cache.items():
+            wifi_data = wifi_signals.get(mac, {})
+            d2d_info = d2d_colors.get(mac, {})
+            devices.append({
+                'mac_address': mac,
+                'ip_address': info.get('ip', ''),
+                'hostname': clean_device_name(info.get('hostname', '')),
+                'manufacturer': 'Unknown',
+                'device_type': 'unknown',
+                'policy': 'quarantine',
+                'policy_name': 'Quarantine',
+                'policy_color': 'danger',
+                'vlan_id': 100,
+                'state': 'REACHABLE' if info.get('status') == 'online' else 'STALE',
+                'is_online': info.get('status') == 'online',
+                'is_wifi': bool(wifi_data.get('wifi_interface')),
+                'interface': wifi_data.get('wifi_interface', ''),
+                'first_seen': None,
+                'last_seen': None,
+                # D2D communication cluster
+                'd2d_cluster_id': d2d_info.get('cluster_id'),
+                'd2d_cluster_color': d2d_info.get('cluster_color'),
+                'd2d_ecosystem': d2d_info.get('ecosystem'),
+            })
+
+    return devices
+
+
+def get_dns_blocked_count():
+    """Get count of DNS queries blocked today from dnsXai."""
+    cached = _get_cached('dns_blocked', CACHE_TIMEOUT)
+    if cached is not None:
+        return cached
+
+    # Try to read from dnsXai stats file
+    stats_file = DATA_DIR / 'dnsxai_stats.json'
+    try:
+        if stats_file.exists():
+            with open(stats_file, 'r') as f:
+                data = json.load(f)
+                result = data.get('blocked_today', 0)
+                _set_cached('dns_blocked', result)
+                return result
+    except Exception:
+        pass
+
+    return 0
+
+
+def get_vlan_count():
+    """Get count of configured VLANs."""
+    cached = _get_cached('vlan_count', CACHE_TIMEOUT * 2)
+    if cached is not None:
+        return cached
+
+    # Try reading from config or data file
+    vlans_file = DATA_DIR / 'vlans.json'
+    try:
+        if vlans_file.exists():
+            with open(vlans_file, 'r') as f:
+                vlans = json.load(f)
+                count = len(vlans) if isinstance(vlans, list) else 0
+                _set_cached('vlan_count', count)
+                return count
+    except Exception:
+        pass
+
+    # Default: assume standard VLAN setup
+    return 5
+
+
+def get_sdn_autopilot_summary():
+    """Get SDN AutoPilot summary stats from autopilot database."""
+    cached = _get_cached('sdn_autopilot_summary', CACHE_TIMEOUT)
+    if cached is not None:
+        return cached
+
+    result = {
+        'total_devices': 0,
+        'online_devices': 0,
+        'policies_applied': 0,
+        'quarantined': 0,
+        'internet_only': 0,
+        'full_access': 0,
+        'autopilot_enabled': False
+    }
+
+    # Try reading from autopilot database
+    autopilot_db = Path('/var/lib/hookprobe/autopilot.db')
+    try:
+        if autopilot_db.exists():
+            import sqlite3
+            conn = sqlite3.connect(str(autopilot_db), timeout=2)
+            cursor = conn.cursor()
+
+            # Total devices
+            cursor.execute("SELECT COUNT(*) FROM device_identity")
+            result['total_devices'] = cursor.fetchone()[0]
+
+            # Online devices (seen in last 5 minutes)
+            cursor.execute("""
+                SELECT COUNT(*) FROM device_identity
+                WHERE datetime(last_seen) > datetime('now', '-5 minutes')
+            """)
+            result['online_devices'] = cursor.fetchone()[0]
+
+            # Policy counts
+            cursor.execute("""
+                SELECT policy, COUNT(*) FROM device_identity
+                WHERE policy IS NOT NULL AND policy != ''
+                GROUP BY policy
+            """)
+            for policy, count in cursor.fetchall():
+                if policy in ('quarantine', 'isolated'):
+                    result['quarantined'] += count
+                elif policy == 'internet_only':
+                    result['internet_only'] += count
+                elif policy in ('full_access', 'smart_home'):
+                    result['full_access'] += count
+                result['policies_applied'] += count
+
+            result['autopilot_enabled'] = True
+            conn.close()
+    except Exception as e:
+        logger.debug(f"Could not read autopilot.db: {e}")
+
+    _set_cached('sdn_autopilot_summary', result)
+    return result
+
+
+def get_dnsxai_summary():
+    """Get dnsXai summary stats.
+
+    Fetches from dnsXai container API (/api/stats) and maps response fields.
+    Falls back to file-based stats or basic dnsmasq detection.
+    """
+    cached = _get_cached('dnsxai_summary', CACHE_TIMEOUT)
+    if cached is not None:
+        return cached
+
+    result = {
+        'enabled': False,
+        'blocked_today': 0,
+        'blocked_total': 0,
+        'queries_today': 0,
+        'block_rate': 0,
+        'top_blocked_category': 'N/A',
+        'protection_level': 'N/A'
+    }
+
+    # Protection level names
+    PROTECTION_LEVELS = {
+        0: 'Disabled',
+        1: 'Base',
+        2: 'Enhanced',
+        3: 'Standard',
+        4: 'Strong',
+        5: 'Maximum'
+    }
+
+    # Primary: Try fetching from dnsXai container API
+    try:
+        import os
+        import urllib.request
+        dnsxai_url = os.environ.get('DNSXAI_API_URL', 'http://fts-dnsxai:8080')
+        req = urllib.request.Request(f"{dnsxai_url}/api/stats")
+        with urllib.request.urlopen(req, timeout=2) as response:
+            data = json.loads(response.read().decode())
+            # Map API response fields to dashboard format
+            result['enabled'] = data.get('protection_enabled', True)
+            result['blocked_today'] = data.get('blocked_queries', 0)
+            result['blocked_total'] = data.get('blocked_queries', 0)  # API only has current session
+            result['queries_today'] = data.get('total_queries', 0)
+            result['block_rate'] = data.get('block_rate', 0)
+            level = data.get('protection_level', 3)
+            result['protection_level'] = PROTECTION_LEVELS.get(level, 'Standard')
+            result['top_blocked_category'] = 'Ads & Trackers'  # Default category
+            logger.debug(f"dnsXai API stats: {result['blocked_today']} blocked / {result['queries_today']} queries")
+    except Exception as e:
+        logger.debug(f"Could not fetch dnsXai API: {e}")
+
+    # Fallback: Try reading from stats file
+    if not result['enabled']:
+        stats_file = DATA_DIR / 'dnsxai_stats.json'
+        try:
+            if stats_file.exists():
+                with open(stats_file, 'r') as f:
+                    data = json.load(f)
+                    result['enabled'] = True
+                    result['blocked_today'] = data.get('blocked_today', data.get('blocked_queries', 0))
+                    result['blocked_total'] = data.get('blocked_total', 0)
+                    result['queries_today'] = data.get('queries_today', data.get('total_queries', 0))
+                    result['top_blocked_category'] = data.get('top_category', 'Ads & Trackers')
+                    result['protection_level'] = data.get('protection_level', 'Standard')
+                    if result['queries_today'] > 0:
+                        result['block_rate'] = round(
+                            (result['blocked_today'] / result['queries_today']) * 100, 1
+                        )
+        except Exception as e:
+            logger.debug(f"Could not read dnsxai_stats.json: {e}")
+
+    # Final fallback: Check if dnsmasq is running (basic protection active)
+    if not result['enabled']:
+        try:
+            import subprocess
+            proc = subprocess.run(['pgrep', '-x', 'dnsmasq'], capture_output=True, timeout=2)
+            if proc.returncode == 0:
+                result['enabled'] = True
+                result['protection_level'] = 'Basic (dnsmasq)'
+        except Exception:
+            pass
+
+    _set_cached('dnsxai_summary', result)
+    return result
+
+
+def get_wan_stats():
+    """Get WAN interface statistics from agent data."""
+    cached = _get_cached('wan_stats', 10)
+    if cached is not None:
+        return cached
+
+    result = {
+        'primary_health': 0,
+        'backup_health': 0,
+        'inbound': '0 B',
+        'outbound': '0 B',
+        'status': 'unknown'
+    }
+
+    # Read WAN health from agent data file
+    wan_file = DATA_DIR / 'wan_health.json'
+    try:
+        if wan_file.exists():
+            with open(wan_file, 'r') as f:
+                data = json.load(f)
+                primary = data.get('primary', {})
+                backup = data.get('backup', {})
+                result['primary_health'] = int((primary.get('health_score', 0)) * 100)
+                result['backup_health'] = int((backup.get('health_score', 0)) * 100)
+                result['status'] = data.get('state', 'unknown')
+    except Exception:
+        pass
+
+    # Read traffic from interface_traffic.json
+    traffic_file = DATA_DIR / 'interface_traffic.json'
+    try:
+        if traffic_file.exists():
+            with open(traffic_file, 'r') as f:
+                data = json.load(f)
+                interfaces = data.get('interfaces', [])
+                for iface in interfaces:
+                    if iface.get('type') == 'wan':
+                        rx = iface.get('rx_bps', 0)
+                        tx = iface.get('tx_bps', 0)
+                        result['inbound'] = _format_rate(rx)
+                        result['outbound'] = _format_rate(tx)
+                        break
+    except Exception:
+        pass
+
+    _set_cached('wan_stats', result)
+    return result
+
+
+def _format_rate(bytes_per_sec):
+    """Format bytes/sec as human readable rate."""
+    if bytes_per_sec > 1e9:
+        return f'{bytes_per_sec / 1e9:.1f} GB/s'
+    if bytes_per_sec > 1e6:
+        return f'{bytes_per_sec / 1e6:.1f} MB/s'
+    if bytes_per_sec > 1e3:
+        return f'{bytes_per_sec / 1e3:.1f} KB/s'
+    return f'{bytes_per_sec:.0f} B/s'
+
+
+def get_recent_threats():
+    """Get list of recent threats from QSecBit."""
+    cached = _get_cached('recent_threats', CACHE_TIMEOUT)
+    if cached is not None:
+        return cached
+
+    # Try qsecbit_stats.json first (has recent_threats field)
+    stats_file = DATA_DIR / 'qsecbit_stats.json'
+    try:
+        if stats_file.exists():
+            with open(stats_file, 'r') as f:
+                data = json.load(f)
+                threats = data.get('recent_threats', [])[:5]
+                _set_cached('recent_threats', threats)
+                return threats
+    except Exception:
+        pass
+
+    # Try dedicated threats file
+    threats_file = DATA_DIR / 'recent_threats.json'
+    try:
+        if threats_file.exists():
+            with open(threats_file, 'r') as f:
+                result = json.load(f)[:5]
+                _set_cached('recent_threats', result)
+                return result
+    except Exception:
+        pass
+
+    return []
+
+
+def get_recent_devices():
+    """Get list of recently connected devices."""
+    devices = get_all_devices()
+
+    # Sort by state (REACHABLE first) and take top 5
+    devices.sort(key=lambda x: (0 if x.get('state') == 'REACHABLE' else 1, x.get('last_seen', '')), reverse=True)
+
+    recent = []
+    for d in devices[:5]:
+        vlan_id = d.get('vlan_id', 100)
+        vlan_names = {100: 'LAN', 200: 'MGMT'}
+
+        # Determine icon based on device type
+        device_type = d.get('device_type', 'unknown')
+        icon = 'laptop'
+        if device_type in ['phone', 'apple_device']:
+            icon = 'mobile-alt'
+        elif device_type == 'tablet':
+            icon = 'tablet-alt'
+        elif device_type in ['tv', 'smart_speaker']:
+            icon = 'tv'
+        elif device_type == 'printer':
+            icon = 'print'
+        elif device_type in ['camera', 'iot']:
+            icon = 'video'
+        elif device_type == 'desktop':
+            icon = 'desktop'
+
+        recent.append({
+            'name': clean_device_name(d.get('hostname', '')) or d.get('manufacturer') or 'Unknown Device',
+            'ip': d.get('ip_address', ''),
+            'mac': d.get('mac_address', ''),
+            'vlan': vlan_names.get(vlan_id, f'VLAN {vlan_id}'),
+            'state': d.get('state', 'UNKNOWN'),
+            'device_type': device_type,
+            'manufacturer': d.get('manufacturer'),
+            'icon': icon,
+            'is_wifi': d.get('is_wifi', False),
+            'time': _format_time_ago(d.get('last_seen')),
+        })
+
+    return recent
+
+
+def _format_time_ago(timestamp):
+    """Format timestamp as relative time."""
+    if not timestamp:
+        return 'Unknown'
+    try:
+        if isinstance(timestamp, str):
+            dt = datetime.fromisoformat(timestamp.replace('Z', '+00:00'))
+        else:
+            dt = timestamp
+        delta = datetime.now() - dt.replace(tzinfo=None)
+        if delta.seconds < 60:
+            return 'Just now'
+        elif delta.seconds < 3600:
+            return f'{delta.seconds // 60} min ago'
+        elif delta.seconds < 86400:
+            return f'{delta.seconds // 3600} hours ago'
+        else:
+            return f'{delta.days} days ago'
+    except Exception:
+        return 'Just now'
+
+
+def _check_data_available():
+    """Check if data files from agent are available."""
+    qsecbit_file = DATA_DIR / 'qsecbit_stats.json'
+    return qsecbit_file.exists()
+
+
+@dashboard_bp.route('/dashboard')
+@login_required
+def index():
+    """Main dashboard page - uses real system data from agent."""
+    data_available = _check_data_available()
+
+    stats = get_qsecbit_stats()
+    device_count = get_device_count()
+    wan = get_wan_stats()
+    tunnel = get_tunnel_status()
+    sdn_summary = get_sdn_autopilot_summary()
+    dnsxai_summary = get_dnsxai_summary()
+
+    return render_template('dashboard/index.html',
+                           qsecbit_score=stats.get('score', 0),
+                           qsecbit_status=stats.get('rag_status', 'GREEN'),
+                           device_count=device_count,
+                           threats_blocked=stats.get('threats_detected', 0),
+                           dns_blocked=get_dns_blocked_count(),
+                           recent_devices=get_recent_devices(),
+                           recent_threats=get_recent_threats(),
+                           tunnel_status=tunnel,
+                           vlan_count=get_vlan_count(),
+                           wan_backup_health=wan.get('backup_health', 0),
+                           wan_inbound=wan.get('inbound', '0 B/s'),
+                           wan_outbound=wan.get('outbound', '0 B/s'),
+                           wan_status=wan.get('status', 'unknown'),
+                           sdn_summary=sdn_summary,
+                           dnsxai_summary=dnsxai_summary,
+                           system_data_available=data_available)
+
+
+@dashboard_bp.route('/api/dashboard/stats')
+@login_required
+def api_stats():
+    """API endpoint for dashboard stats with caching."""
+    stats = get_qsecbit_stats()
+    tunnel = get_tunnel_status()
+    wan = get_wan_stats()
+
+    return jsonify({
+        'qsecbit': {
+            'score': stats.get('score', 0),
+            'status': stats.get('rag_status', 'GREEN'),
+            'components': stats.get('components', {})
+        },
+        'device_count': get_device_count(),
+        'threats_blocked': stats.get('threats_detected', 0),
+        'dns_blocked': get_dns_blocked_count(),
+        'tunnel': tunnel,
+        'vlan_count': get_vlan_count(),
+        'wan_status': wan.get('status', 'unknown'),
+        'wan_primary_health': wan.get('primary_health', 0),
+        'wan_backup_health': wan.get('backup_health', 0),
+        'wan_inbound': wan.get('inbound', '0 B/s'),
+        'wan_outbound': wan.get('outbound', '0 B/s'),
+        'notification_count': len(get_recent_threats()),
+        'data_available': _check_data_available(),
+        'timestamp': datetime.now().isoformat()
+    })
+
+
+@dashboard_bp.route('/api/dashboard/refresh')
+@login_required
+def api_refresh():
+    """Force refresh all cached data."""
+    # Modify dict in-place, no global needed
+    _local_cache.clear()
+    return jsonify({'success': True, 'message': 'Cache cleared'})
+
+
+def get_network_interfaces():
+    """Get all network interfaces with their status."""
+    interfaces = []
+    try:
+        import subprocess
+        # Get interface list
+        result = subprocess.run(['ip', '-j', 'link', 'show'], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            links = json.loads(result.stdout)
+            for link in links:
+                name = link.get('ifname', '')
+                # Skip loopback and virtual interfaces we don't care about
+                if name in ('lo', 'podman0', 'veth*') or name.startswith('veth'):
+                    continue
+
+                state = link.get('operstate', 'UNKNOWN')
+                interfaces.append({
+                    'name': name,
+                    'state': state,
+                    'mac': link.get('address', ''),
+                    'type': _classify_interface_type(name)
+                })
+    except Exception as e:
+        logger.debug(f"Could not get interfaces: {e}")
+
+    return interfaces
+
+
+def _classify_interface_type(name):
+    """Classify interface type based on name."""
+    if name.startswith(('eth', 'enp', 'eno', 'ens')):
+        return 'wan' if '0' in name or '1' in name else 'lan'
+    elif name.startswith('wwan') or name.startswith('ww'):
+        return 'lte'
+    elif name.startswith('wlan') or name.startswith('wl'):
+        return 'wifi'
+    elif name.startswith('vlan'):
+        return 'vlan'
+    elif name in ('FTS', 'br0', 'ovs-system'):
+        return 'bridge'
+    return 'other'
+
+
+def get_ecosystem_bubbles():
+    """Get active ecosystem bubbles for same-user device grouping.
+
+    Returns list of bubbles with their member devices.
+    """
+    bubbles = []
+
+    if ECOSYSTEM_BUBBLE_AVAILABLE:
+        try:
+            manager = get_bubble_manager()
+            if manager is None:
+                raise ValueError("Bubble manager not available")
+            active_bubbles = manager.get_active_bubbles()
+            for bubble in active_bubbles:
+                bubbles.append({
+                    'bubble_id': bubble.bubble_id,
+                    'ecosystem': bubble.ecosystem,
+                    'devices': list(bubble.devices),  # MAC addresses
+                    'state': bubble.state.value,
+                    'confidence': bubble.confidence,
+                    'owner_hint': bubble.owner_hint,
+                    'device_count': len(bubble.devices),
+                    # Ecosystem-specific colors (30% opacity applied in frontend)
+                    'color': {
+                        'apple': '#A2AAAD',      # Apple gray
+                        'google': '#4285F4',     # Google blue
+                        'amazon': '#FF9900',     # Amazon orange
+                        'samsung': '#1428A0',    # Samsung blue
+                        'microsoft': '#00A4EF',  # Microsoft blue
+                        'mixed': '#6c757d',      # Gray for mixed ecosystems
+                    }.get(bubble.ecosystem, '#6c757d'),
+                })
+        except Exception as e:
+            logger.warning(f"Failed to get ecosystem bubbles: {e}")
+
+    # Fallback: Try reading from clustering database directly
+    if not bubbles:
+        try:
+            import sqlite3
+            clustering_db = Path('/var/lib/hookprobe/clustering.db')
+            if clustering_db.exists():
+                conn = sqlite3.connect(str(clustering_db), timeout=2)
+                cursor = conn.cursor()
+                # Get recent clusters (last 24 hours)
+                cursor.execute('''
+                    SELECT DISTINCT bubble_id, ecosystem, devices_json, confidence
+                    FROM cluster_history
+                    WHERE datetime(created_at) > datetime('now', '-24 hours')
+                    AND bubble_id IS NOT NULL
+                    ORDER BY created_at DESC
+                ''')
+                seen_bubbles = set()
+                for row in cursor.fetchall():
+                    bubble_id, ecosystem, devices_json, confidence = row
+                    if bubble_id and bubble_id not in seen_bubbles:
+                        seen_bubbles.add(bubble_id)
+                        devices = json.loads(devices_json) if devices_json else []
+                        if len(devices) >= 2:  # Only bubbles with 2+ devices
+                            bubbles.append({
+                                'bubble_id': bubble_id,
+                                'ecosystem': ecosystem or 'mixed',
+                                'devices': devices,
+                                'state': 'active',
+                                'confidence': confidence or 0.5,
+                                'owner_hint': None,
+                                'device_count': len(devices),
+                                'color': {
+                                    'apple': '#A2AAAD',
+                                    'google': '#4285F4',
+                                    'amazon': '#FF9900',
+                                    'samsung': '#1428A0',
+                                    'microsoft': '#00A4EF',
+                                    'mixed': '#6c757d',
+                                }.get(ecosystem, '#6c757d'),
+                            })
+                conn.close()
+        except Exception as e:
+            logger.debug(f"Could not read clustering database: {e}")
+
+    return bubbles
+
+
+def get_topology_data():
+    """Build network topology data for D3.js visualization.
+
+    Shows FTS Bridge with connected devices organized by policy zones.
+    WAN interfaces are excluded - focus on internal network visibility.
+    Devices are colored by D2D communication clusters.
+    """
+    # Get devices from autopilot database (same source as SDN page)
+    # Devices already include D2D cluster colors from get_all_devices()
+    devices = get_all_devices()
+
+    # Get ecosystem bubbles (same-user device groupings)
+    ecosystem_bubbles = get_ecosystem_bubbles()
+
+    # Get D2D communication clusters for visualization
+    d2d_clusters = []
+    if D2D_CLIENT_AVAILABLE:
+        try:
+            client = get_d2d_client()
+            if client:
+                d2d_clusters = client.get_communication_clusters()
+        except Exception as e:
+            logger.debug(f"Could not load D2D clusters: {e}")
+
+    # Build MAC -> bubble_id mapping
+    mac_to_bubble = {}
+    for bubble in ecosystem_bubbles:
+        for mac in bubble['devices']:
+            mac_to_bubble[mac.upper()] = bubble['bubble_id']
+
+    # Get SDN summary for policy counts
+    sdn = get_sdn_autopilot_summary()
+
+    # Build nodes and links for D3
+    nodes = []
+    links = []
+
+    # Add FTS Bridge (central hub) - no WAN interfaces shown
+    bridge_id = 'bridge_fts'
+    nodes.append({
+        'id': bridge_id,
+        'type': 'bridge',
+        'label': 'FTS Bridge',
+        'status': 'online',
+        'icon': 'network-wired'
+    })
+
+    # Define policies
+    policies = [
+        {'id': 'policy_quarantine', 'name': 'quarantine', 'label': 'Quarantine', 'color': '#dc3545', 'icon': 'ban'},
+        {'id': 'policy_internet_only', 'name': 'internet_only', 'label': 'Internet Only', 'color': '#17a2b8', 'icon': 'globe'},
+        {'id': 'policy_lan_only', 'name': 'lan_only', 'label': 'LAN Only', 'color': '#ffc107', 'icon': 'home'},
+        {'id': 'policy_smart_home', 'name': 'smart_home', 'label': 'Smart Home', 'color': '#28a745', 'icon': 'check-circle'},
+        {'id': 'policy_full_access', 'name': 'full_access', 'label': 'Full Access', 'color': '#007bff', 'icon': 'shield-alt'},
+    ]
+
+    # Add policy nodes
+    for policy in policies:
+        nodes.append({
+            'id': policy['id'],
+            'type': 'policy',
+            'name': policy['name'],
+            'label': policy['label'],
+            'color': policy['color'],
+            'icon': policy['icon'],
+            'device_count': 0
+        })
+        # Link policy to bridge
+        links.append({
+            'source': bridge_id,
+            'target': policy['id'],
+            'type': 'policy_link'
+        })
+
+    # Add devices and link them to policies
+    # (VLANs not shown separately - devices shown by policy zone)
+    policy_counts = {p['name']: 0 for p in policies}
+
+    for i, device in enumerate(devices):
+        mac = device.get('mac_address', f'unknown_{i}')
+        device_id = f"device_{mac.replace(':', '_')}"
+        policy = device.get('policy', 'smart_home')
+        vlan_id = device.get('vlan_id', 100)
+
+        # Determine device icon
+        device_type = device.get('device_type', 'unknown')
+        icon = 'laptop'
+        if device_type in ['phone', 'apple_device', 'mobile']:
+            icon = 'mobile-alt'
+        elif device_type == 'tablet':
+            icon = 'tablet-alt'
+        elif device_type in ['tv', 'smart_tv']:
+            icon = 'tv'
+        elif device_type == 'printer':
+            icon = 'print'
+        elif device_type in ['camera', 'iot', 'smart_home']:
+            icon = 'video'
+        elif device_type == 'desktop':
+            icon = 'desktop'
+        elif device_type == 'server':
+            icon = 'server'
+        elif device_type == 'gaming':
+            icon = 'gamepad'
+
+        # Check if device belongs to an ecosystem bubble
+        bubble_id = mac_to_bubble.get(mac.upper())
+
+        nodes.append({
+            'id': device_id,
+            'type': 'device',
+            'label': clean_device_name(device.get('hostname', '')) or device.get('manufacturer') or 'Unknown',
+            'mac': mac,
+            'ip': device.get('ip_address', ''),
+            'policy': policy,
+            'vlan_id': vlan_id,
+            'device_type': device_type,
+            'manufacturer': device.get('manufacturer'),
+            'status': 'online' if device.get('state') in ['REACHABLE', 'STALE'] else 'offline',
+            'icon': icon,
+            'is_wifi': device.get('is_wifi', False),
+            'bubble_id': bubble_id,  # Ecosystem bubble membership
+            # D2D communication cluster (for visual grouping/coloring)
+            'd2d_cluster_id': device.get('d2d_cluster_id'),
+            'd2d_cluster_color': device.get('d2d_cluster_color'),
+            'd2d_ecosystem': device.get('d2d_ecosystem'),
+        })
+
+        # Link device to its policy
+        policy_id = f"policy_{policy}"
+        if policy in policy_counts:
+            policy_counts[policy] += 1
+        links.append({
+            'source': policy_id,
+            'target': device_id,
+            'type': 'device_link'
+        })
+
+    # Update policy device counts
+    for node in nodes:
+        if node['type'] == 'policy' and node.get('name') in policy_counts:
+            node['device_count'] = policy_counts[node['name']]
+
+    return {
+        'nodes': nodes,
+        'links': links,
+        'ecosystem_bubbles': ecosystem_bubbles,  # Same-user device groupings (30% opacity)
+        'd2d_clusters': d2d_clusters,  # D2D communication clusters with colors
+        'stats': {
+            'total_devices': len(devices),
+            'online_devices': len([d for d in devices if d.get('state') in ['REACHABLE', 'STALE'] or d.get('is_online')]),
+            'policy_counts': policy_counts,
+            'bubble_count': len(ecosystem_bubbles),
+            'd2d_cluster_count': len(d2d_clusters),
+        }
+    }
+
+
+@dashboard_bp.route('/api/dashboard/topology')
+@login_required
+def api_topology():
+    """Get network topology data for D3.js visualization."""
+    return jsonify(get_topology_data())
+
+
+@dashboard_bp.route('/api/dashboard/device/<mac>/policy', methods=['PATCH'])
+@login_required
+def api_update_device_policy(mac):
+    """Update device policy via drag-and-drop.
+
+    IMPORTANT: Uses SDN Autopilot as the SINGLE SOURCE OF TRUTH for policies.
+    This ensures consistency with the SDN dashboard and all other pages.
+
+    The autopilot.db database is authoritative for:
+    1. Policy storage (persisted in device_identity table)
+    2. OpenFlow rule application for network enforcement
+    """
+    from flask import request
+
+    data = request.get_json()
+    new_policy = data.get('policy')
+
+    if not new_policy:
+        return jsonify({'success': False, 'error': 'Policy required'}), 400
+
+    valid_policies = ['quarantine', 'internet_only', 'lan_only', 'smart_home', 'full_access']
+    if new_policy not in valid_policies:
+        return jsonify({'success': False, 'error': f'Invalid policy: {new_policy}'}), 400
+
+    # CRITICAL: Use SDN Autopilot as the single source of truth for policies
+    # This ensures Dashboard, SDN page, and AIOCHI all read/write the same data
+    if SDN_AUTOPILOT_AVAILABLE:
+        try:
+            autopilot = get_sdn_autopilot()
+            if autopilot:
+                # Normalize MAC address
+                mac_normalized = mac.upper().replace('-', ':')
+
+                # Update policy via SDN Autopilot (writes to autopilot.db)
+                result = autopilot.set_policy(mac_normalized, new_policy)
+
+                if result:
+                    # Clear cache to reflect change
+                    _local_cache.clear()
+
+                    # SYNC: Also update devices.db for consistency across all views
+                    if DEVICE_POLICIES_AVAILABLE:
+                        try:
+                            set_device_policy(mac_normalized, new_policy)
+                            logger.debug(f"Synced policy to devices.db: {mac_normalized} -> {new_policy}")
+                        except Exception as e:
+                            logger.warning(f"Failed to sync policy to devices.db: {e}")
+
+                    # SYNC: Update bubbles.db for quarantine group membership
+                    try:
+                        from modules.aiochi.views import move_device_in_module, BUBBLES_MODULE_AVAILABLE
+                        if BUBBLES_MODULE_AVAILABLE:
+                            if new_policy == 'quarantine':
+                                # Move to quarantine bubble
+                                move_device_in_module(mac_normalized, None, 'SYSTEM-QUARANTINE')
+                                logger.debug(f"Moved {mac_normalized} to SYSTEM-QUARANTINE bubble")
+                            else:
+                                # Remove from quarantine bubble if currently there
+                                from modules.aiochi.views import remove_device_from_bubble_in_module
+                                remove_device_from_bubble_in_module('SYSTEM-QUARANTINE', mac_normalized)
+                                logger.debug(f"Removed {mac_normalized} from SYSTEM-QUARANTINE bubble")
+                    except ImportError:
+                        pass  # Bubbles module not available
+                    except Exception as e:
+                        logger.warning(f"Failed to sync quarantine bubble membership: {e}")
+
+                    # Get updated device info for response
+                    device = autopilot.get_device(mac_normalized)
+
+                    return jsonify({
+                        'success': True,
+                        'message': f'Policy updated to {new_policy}',
+                        'device': {
+                            'mac': mac_normalized,
+                            'policy': new_policy,
+                            'friendly_name': device.get('friendly_name') if device else None,
+                        }
+                    })
+                else:
+                    return jsonify({'success': False, 'error': 'Device not found or update failed'}), 404
+        except ValueError as e:
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 400
+        except Exception as e:
+            logger.error(f"Failed to update device policy via SDN Autopilot: {e}")
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+    # Fallback to legacy device_policies module if SDN Autopilot unavailable
+    if DEVICE_POLICIES_AVAILABLE:
+        try:
+            mac_normalized = mac.upper().replace('-', ':')
+            result = set_device_policy(mac_normalized, new_policy)
+            if result:
+                _local_cache.clear()
+                return jsonify({
+                    'success': True,
+                    'message': f'Policy updated to {new_policy} (legacy mode)',
+                    'device': result
+                })
+            else:
+                return jsonify({'success': False, 'error': 'Device not found'}), 404
+        except Exception as e:
+            logger.error(f"Failed to update device policy: {e}")
+            return jsonify({'success': False, 'error': safe_error_message(e)}), 500
+
+    return jsonify({'success': False, 'error': 'No policy management module available'}), 500

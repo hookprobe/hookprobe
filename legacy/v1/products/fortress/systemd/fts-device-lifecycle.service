@@ -1,0 +1,42 @@
+[Unit]
+Description=HookProbe Fortress Device Lifecycle Manager
+Documentation=https://hookprobe.com/docs/fortress/device-lifecycle
+# Wait for fortress.service which runs postgres via podman-compose
+After=network.target fortress.service
+Wants=fortress.service
+# Rate limiting (in [Unit] section for older systemd compatibility)
+StartLimitBurst=3
+StartLimitIntervalSec=60
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# Load base config, then host-specific overrides (container IPs vs DNS names)
+Environment=PYTHONPATH=/opt/hookprobe/fortress/lib
+EnvironmentFile=-/etc/hookprobe/fortress.conf
+EnvironmentFile=-/etc/hookprobe/host-services.env
+
+# Run the device lifecycle daemon
+ExecStart=/usr/bin/python3 -m device_lifecycle --daemon --verbose
+WorkingDirectory=/opt/hookprobe/fortress/lib
+
+# Restart policy
+Restart=on-failure
+RestartSec=10
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-device-lifecycle
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/log/fortress /var/lib/hookprobe
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

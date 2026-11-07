@@ -1,0 +1,27 @@
+[Unit]
+Description=FTS Host Agent - Hostapd Control Bridge
+Documentation=https://hookprobe.com/fortress
+After=network.target fts-hostapd-24ghz.service fts-hostapd-5ghz.service
+Requires=fts-host-agent.socket
+PartOf=fortress.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/fortress/scripts/fts-host-agent.py
+Restart=on-failure
+RestartSec=5
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/run /var/log/fortress
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=fts-host-agent
+
+[Install]
+WantedBy=multi-user.target

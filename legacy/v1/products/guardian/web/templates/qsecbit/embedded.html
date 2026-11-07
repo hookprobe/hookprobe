@@ -1,0 +1,464 @@
+<!-- Qsecbit Live - Embedded View for Guardian Tab Panel -->
+<style>
+    .qsecbit-container {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: 20px;
+        min-height: 500px;
+    }
+
+    .qsecbit-header {
+        text-align: center;
+        margin-bottom: 20px;
+    }
+
+    .qsecbit-header h2 {
+        font-size: 1.25rem;
+        font-weight: 600;
+        color: var(--text-secondary, #94a3b8);
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        margin: 0;
+    }
+
+    .qsecbit-header .subtitle {
+        font-size: 0.875rem;
+        color: var(--text-muted, #64748b);
+        margin-top: 5px;
+    }
+
+    .qsecbit-datetime {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 15px;
+        margin-top: 12px;
+        padding: 8px 20px;
+        background: var(--bg-secondary, rgba(255, 255, 255, 0.05));
+        border-radius: 20px;
+    }
+
+    .qsecbit-date {
+        font-size: 0.85rem;
+        font-weight: 600;
+        color: var(--text-primary, #fff);
+    }
+
+    .qsecbit-time {
+        font-size: 1.1rem;
+        font-weight: 700;
+        color: var(--accent-color, #F05B2D);
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* Score Circle */
+    .qsecbit-score-container {
+        position: relative;
+        width: 240px;
+        height: 240px;
+        margin: 15px auto;
+    }
+
+    .qsecbit-score-ring {
+        width: 100%;
+        height: 100%;
+        transform: rotate(-90deg);
+    }
+
+    .qsecbit-ring-bg {
+        fill: none;
+        stroke: var(--bg-tertiary, #2d3748);
+        stroke-width: 10;
+    }
+
+    .qsecbit-ring-progress {
+        fill: none;
+        stroke-width: 10;
+        stroke-linecap: round;
+        stroke-dasharray: 628;
+        stroke-dashoffset: 628;
+        transition: stroke-dashoffset 1s ease, stroke 0.5s ease;
+    }
+
+    .qsecbit-ring-progress.qsecbit-green { stroke: #10b981; }
+    .qsecbit-ring-progress.qsecbit-amber { stroke: #f59e0b; }
+    .qsecbit-ring-progress.qsecbit-red { stroke: #ef4444; }
+
+    .qsecbit-score-center {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        text-align: center;
+    }
+
+    .qsecbit-score-value {
+        font-size: 3rem;
+        font-weight: 700;
+        line-height: 1;
+        transition: color 0.5s ease;
+    }
+
+    .qsecbit-score-value.qsecbit-green { color: #10b981; }
+    .qsecbit-score-value.qsecbit-amber { color: #f59e0b; }
+    .qsecbit-score-value.qsecbit-red { color: #ef4444; }
+
+    .qsecbit-score-label {
+        font-size: 0.75rem;
+        color: var(--text-muted, #64748b);
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 5px;
+    }
+
+    /* Status Badge */
+    .qsecbit-status-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 20px;
+        border-radius: 50px;
+        font-weight: 600;
+        font-size: 0.875rem;
+        margin: 15px 0;
+        transition: all 0.5s ease;
+    }
+
+    .qsecbit-status-badge.qsecbit-green {
+        background: rgba(16, 185, 129, 0.15);
+        color: #10b981;
+    }
+
+    .qsecbit-status-badge.qsecbit-amber {
+        background: rgba(245, 158, 11, 0.15);
+        color: #f59e0b;
+    }
+
+    .qsecbit-status-badge.qsecbit-red {
+        background: rgba(239, 68, 68, 0.15);
+        color: #ef4444;
+        animation: qsecbit-pulse 2s infinite;
+    }
+
+    @keyframes qsecbit-pulse {
+        0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.2); }
+        50% { box-shadow: 0 0 25px rgba(239, 68, 68, 0.4); }
+    }
+
+    .qsecbit-status-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: currentColor;
+        animation: qsecbit-blink 2s infinite;
+    }
+
+    @keyframes qsecbit-blink {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
+
+    /* Layer Bars */
+    .qsecbit-layers {
+        width: 100%;
+        max-width: 350px;
+        margin: 20px auto;
+    }
+
+    .qsecbit-layer-item {
+        display: flex;
+        align-items: center;
+        margin-bottom: 10px;
+    }
+
+    .qsecbit-layer-label {
+        width: 45px;
+        font-size: 0.7rem;
+        font-weight: 600;
+        color: var(--text-secondary, #94a3b8);
+    }
+
+    .qsecbit-layer-bar-bg {
+        flex: 1;
+        height: 6px;
+        background: var(--bg-tertiary, #2d3748);
+        border-radius: 3px;
+        overflow: hidden;
+        margin: 0 8px;
+    }
+
+    .qsecbit-layer-bar {
+        height: 100%;
+        border-radius: 3px;
+        transition: width 0.5s ease, background 0.5s ease;
+    }
+
+    .qsecbit-layer-bar.qsecbit-green { background: #10b981; }
+    .qsecbit-layer-bar.qsecbit-amber { background: #f59e0b; }
+    .qsecbit-layer-bar.qsecbit-red { background: #ef4444; }
+
+    .qsecbit-layer-value {
+        width: 35px;
+        font-size: 0.7rem;
+        text-align: right;
+        color: var(--text-muted, #64748b);
+    }
+
+    /* Stats */
+    .qsecbit-stats {
+        display: flex;
+        justify-content: center;
+        gap: 30px;
+        margin: 20px 0;
+        padding: 15px;
+        background: var(--bg-secondary, rgba(255, 255, 255, 0.05));
+        border-radius: 10px;
+        width: 100%;
+        max-width: 350px;
+    }
+
+    .qsecbit-stat {
+        text-align: center;
+    }
+
+    .qsecbit-stat-value {
+        font-size: 1.25rem;
+        font-weight: 700;
+        color: var(--text-primary, #fff);
+    }
+
+    .qsecbit-stat-label {
+        font-size: 0.65rem;
+        color: var(--text-muted, #64748b);
+        text-transform: uppercase;
+        margin-top: 2px;
+    }
+
+    .qsecbit-footer {
+        margin-top: auto;
+        padding-top: 15px;
+        font-size: 0.7rem;
+        color: var(--text-muted, #475569);
+    }
+
+    /* Standalone link */
+    .qsecbit-standalone-link {
+        display: inline-block;
+        margin-top: 15px;
+        padding: 8px 16px;
+        background: var(--accent-color, #F05B2D);
+        color: #fff;
+        text-decoration: none;
+        border-radius: 5px;
+        font-size: 0.8rem;
+        font-weight: 500;
+        transition: opacity 0.3s;
+    }
+
+    .qsecbit-standalone-link:hover {
+        opacity: 0.9;
+    }
+</style>
+
+<div class="qsecbit-container">
+    <div class="qsecbit-header">
+        <h2>Qsecbit Live</h2>
+        <div class="subtitle">Real-Time 5.0 Protection Score</div>
+        <div class="qsecbit-datetime" id="qsecbit-datetime">
+            <span class="qsecbit-date" id="qsecbit-date"></span>
+            <span class="qsecbit-time" id="qsecbit-time"></span>
+        </div>
+    </div>
+
+    <!-- Score Circle -->
+    <div class="qsecbit-score-container">
+        <svg class="qsecbit-score-ring" viewBox="0 0 220 220">
+            <circle class="qsecbit-ring-bg" cx="110" cy="110" r="100"/>
+            <circle class="qsecbit-ring-progress qsecbit-green" id="qsecbit-progress" cx="110" cy="110" r="100"/>
+        </svg>
+        <div class="qsecbit-score-center">
+            <div class="qsecbit-score-value qsecbit-green" id="qsecbit-value">0.00</div>
+            <div class="qsecbit-score-label">Protection</div>
+        </div>
+    </div>
+
+    <!-- Status Badge -->
+    <div class="qsecbit-status-badge qsecbit-green" id="qsecbit-badge">
+        <span class="qsecbit-status-dot"></span>
+        <span id="qsecbit-status-text">PROTECTED</span>
+    </div>
+
+    <!-- Layer Breakdown -->
+    <div class="qsecbit-layers" id="qsecbit-layers">
+        <div class="qsecbit-layer-item" data-layer="L2">
+            <span class="qsecbit-layer-label">L2</span>
+            <div class="qsecbit-layer-bar-bg">
+                <div class="qsecbit-layer-bar qsecbit-green" style="width: 0%"></div>
+            </div>
+            <span class="qsecbit-layer-value">0.00</span>
+        </div>
+        <div class="qsecbit-layer-item" data-layer="L3">
+            <span class="qsecbit-layer-label">L3</span>
+            <div class="qsecbit-layer-bar-bg">
+                <div class="qsecbit-layer-bar qsecbit-green" style="width: 0%"></div>
+            </div>
+            <span class="qsecbit-layer-value">0.00</span>
+        </div>
+        <div class="qsecbit-layer-item" data-layer="L4">
+            <span class="qsecbit-layer-label">L4</span>
+            <div class="qsecbit-layer-bar-bg">
+                <div class="qsecbit-layer-bar qsecbit-green" style="width: 0%"></div>
+            </div>
+            <span class="qsecbit-layer-value">0.00</span>
+        </div>
+        <div class="qsecbit-layer-item" data-layer="L5">
+            <span class="qsecbit-layer-label">L5</span>
+            <div class="qsecbit-layer-bar-bg">
+                <div class="qsecbit-layer-bar qsecbit-green" style="width: 0%"></div>
+            </div>
+            <span class="qsecbit-layer-value">0.00</span>
+        </div>
+        <div class="qsecbit-layer-item" data-layer="L7">
+            <span class="qsecbit-layer-label">L7</span>
+            <div class="qsecbit-layer-bar-bg">
+                <div class="qsecbit-layer-bar qsecbit-green" style="width: 0%"></div>
+            </div>
+            <span class="qsecbit-layer-value">0.00</span>
+        </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="qsecbit-stats">
+        <div class="qsecbit-stat">
+            <div class="qsecbit-stat-value" id="qsecbit-threats">0</div>
+            <div class="qsecbit-stat-label">Threats</div>
+        </div>
+        <div class="qsecbit-stat">
+            <div class="qsecbit-stat-value" id="qsecbit-chains">0</div>
+            <div class="qsecbit-stat-label">Chains</div>
+        </div>
+        <div class="qsecbit-stat">
+            <div class="qsecbit-stat-value" id="qsecbit-version">v6</div>
+            <div class="qsecbit-stat-label">Engine</div>
+        </div>
+    </div>
+
+    <div class="qsecbit-footer" id="qsecbit-update">Connecting...</div>
+
+    <a href="/qsecbit/live" target="_blank" class="qsecbit-standalone-link">
+        Open Fullscreen View
+    </a>
+</div>
+
+<script>
+(function() {
+    // Qsecbit Live - Embedded Script (IIFE to avoid global pollution)
+    const POLL_INTERVAL = 5000;
+    const API_URL = '/qsecbit/api/score';
+    const CIRCUMFERENCE = 628; // 2 * PI * 100
+
+    const elements = {
+        value: document.getElementById('qsecbit-value'),
+        progress: document.getElementById('qsecbit-progress'),
+        badge: document.getElementById('qsecbit-badge'),
+        statusText: document.getElementById('qsecbit-status-text'),
+        threats: document.getElementById('qsecbit-threats'),
+        chains: document.getElementById('qsecbit-chains'),
+        version: document.getElementById('qsecbit-version'),
+        update: document.getElementById('qsecbit-update'),
+        layers: document.getElementById('qsecbit-layers')
+    };
+
+    function getStatusClass(status) {
+        return 'qsecbit-' + status.toLowerCase();
+    }
+
+    function getStatusMessage(status) {
+        if (status === 'GREEN') return 'PROTECTED';
+        if (status === 'AMBER') return 'ELEVATED RISK';
+        if (status === 'RED') return 'THREAT DETECTED';
+        return 'UNKNOWN';
+    }
+
+    function updateQsecbitUI(data) {
+        const score = data.score;
+        const status = data.status;
+        const statusClass = getStatusClass(status);
+
+        // Score value
+        elements.value.textContent = score.toFixed(2);
+        elements.value.className = 'qsecbit-score-value ' + statusClass;
+
+        // Ring progress (inverted: 0 = full, 1 = empty)
+        const progress = 1 - score;
+        const offset = CIRCUMFERENCE - (progress * CIRCUMFERENCE);
+        elements.progress.style.strokeDashoffset = offset;
+        elements.progress.className = 'qsecbit-ring-progress ' + statusClass;
+
+        // Status badge
+        elements.badge.className = 'qsecbit-status-badge ' + statusClass;
+        elements.statusText.textContent = getStatusMessage(status);
+
+        // Stats
+        elements.threats.textContent = data.threats_active || 0;
+        elements.chains.textContent = data.attack_chains || 0;
+        elements.version.textContent = data.v6 ? '5.0' : 'v5';
+
+        // Layers
+        if (data.layers && elements.layers) {
+            Object.entries(data.layers).forEach(([layer, info]) => {
+                const item = elements.layers.querySelector(`[data-layer="${layer}"]`);
+                if (item) {
+                    const bar = item.querySelector('.qsecbit-layer-bar');
+                    const val = item.querySelector('.qsecbit-layer-value');
+                    const layerScore = typeof info === 'object' ? info.score : info;
+                    const layerStatus = typeof info === 'object' ? info.status : status;
+
+                    bar.style.width = (layerScore * 100) + '%';
+                    bar.className = 'qsecbit-layer-bar ' + getStatusClass(layerStatus || 'GREEN');
+                    val.textContent = layerScore.toFixed(2);
+                }
+            });
+        }
+
+        // Timestamp
+        elements.update.textContent = 'Updated: ' + new Date().toLocaleTimeString();
+    }
+
+    async function fetchQsecbitScore() {
+        try {
+            const response = await fetch(API_URL);
+            if (!response.ok) throw new Error('API error');
+            const data = await response.json();
+            updateQsecbitUI(data);
+        } catch (error) {
+            console.error('Qsecbit fetch error:', error);
+            elements.update.textContent = 'Connection error...';
+        }
+    }
+
+    // Clock update
+    function updateQsecbitClock() {
+        const now = new Date();
+        const dateEl = document.getElementById('qsecbit-date');
+        const timeEl = document.getElementById('qsecbit-time');
+        if (dateEl) {
+            dateEl.textContent = now.toLocaleDateString('en-GB', {
+                weekday: 'short', day: 'numeric', month: 'short', year: 'numeric'
+            });
+        }
+        if (timeEl) {
+            timeEl.textContent = now.toLocaleTimeString('en-GB', {
+                hour: '2-digit', minute: '2-digit', second: '2-digit'
+            });
+        }
+    }
+
+    // Initial fetch and polling
+    fetchQsecbitScore();
+    updateQsecbitClock();
+    setInterval(fetchQsecbitScore, POLL_INTERVAL);
+    setInterval(updateQsecbitClock, 1000);
+})();
+</script>
