@@ -34,10 +34,15 @@ pub struct Event {
     /// Tri-state class behind `verdict` (`verdict::CLASS_*`, 0 = unknown): Observe vs an
     /// under/over-limit RateLimit vs FrameDrop vs Quarantine vs the Allowlisted floor.
     pub class: u8,
+    /// IPv4 destination (host order) and L4 destination port of the frame that fired (0 = not
+    /// IPv4 / no ports). Fits the struct's former padding: still 24 bytes. Not in the 16-byte
+    /// persist/export image (those stay unchanged).
+    pub dport: u16, // offset 18 (existing offsets 0..17 unchanged)
+    pub dst: u32,   // offset 20
 }
 
 impl Event {
-    pub const EMPTY: Event = Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0, class: 0 };
+    pub const EMPTY: Event = Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0, class: 0, dst: 0, dport: 0 };
 }
 const EMPTY: Event = Event::EMPTY;
 
@@ -54,6 +59,17 @@ fn cntpct() -> u64 {
     c
 }
 
+// The frame being classified (set by `packet::classify` around the rule tiers, single core, IRQs
+// off in the datapath): every hit recorded meanwhile carries its destination.
+static CTX_DST: AtomicU32 = AtomicU32::new(0);
+static CTX_DPORT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
+
+/// Set (or clear with 0, 0) the destination context stamped onto hits.
+pub fn set_ctx(dst: u32, dport: u16) {
+    CTX_DST.store(dst, Ordering::Relaxed);
+    CTX_DPORT.store(dport, Ordering::Relaxed);
+}
+
 /// Producer (in the TCB): record a rule hit. Non-blocking — full ring ⇒ count an
 /// overrun and drop the export. Stamps the timestamp internally.
 pub fn push_hit(rule_id: u16, severity: u8, verdict: u8, class: u8, src: u32) {
@@ -63,7 +79,7 @@ pub fn push_hit(rule_id: u16, severity: u8, verdict: u8, class: u8, src: u32) {
         OVERRUN.fetch_add(1, Ordering::Relaxed);
         return;
     }
-    let ev = Event { ts: cntpct(), src, rule_id, severity, verdict, class };
+    let ev = Event { ts: cntpct(), src, rule_id, severity, verdict, class, dst: CTX_DST.load(Ordering::Relaxed), dport: CTX_DPORT.load(Ordering::Relaxed) };
     unsafe { core::ptr::write_volatile(addr_of_mut!(BUF).cast::<Event>().add((h as usize) % RING), ev) };
     HEAD.store(h.wrapping_add(1), Ordering::Release); // publish (release)
 }
@@ -110,3 +126,5 @@ pub fn peek_last() -> Option<Event> {
 pub fn overruns() -> u32 {
     OVERRUN.load(Ordering::Relaxed)
 }
+
+const _: () = assert!(core::mem::size_of::<Event>() == 24);

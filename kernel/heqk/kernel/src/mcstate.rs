@@ -107,6 +107,8 @@ pub struct Det {
     pub class: u8,
     /// Wall-clock-anchored row (restored from a prior boot): a clock step never moves it.
     pub abs: bool,
+    pub dst: u32,
+    pub dport: u16,
 }
 
 /// No real reply can predate this build era (2026-01-01T00:00:00Z): an older time is a forged or
@@ -173,7 +175,7 @@ pub const MAX_RESYNC_STEP_MS: i64 = 3_600_000;
 impl McState {
     pub const fn new() -> Self {
         McState {
-            dets: [Det { seq: 0, ts_ms: 0, src: 0, rule_id: 0, sev_points: 0, verdict: 0, class: 0, abs: false }; DET_CAP],
+            dets: [Det { seq: 0, ts_ms: 0, src: 0, rule_id: 0, sev_points: 0, verdict: 0, class: 0, abs: false, dst: 0, dport: 0 }; DET_CAP],
             dhead: 0,
             dlen: 0,
             next_seq: 0,
@@ -254,6 +256,8 @@ impl McState {
             verdict: ev.verdict,
             class: ev.class,
             abs,
+            dst: ev.dst,
+            dport: ev.dport,
         };
         self.next_seq += 1;
         self.dets[(self.dhead + self.dlen) % DET_CAP] = d;
@@ -391,7 +395,11 @@ impl McState {
         out.string(info.mitre);
         out.raw(",\"src_ip\":");
         out.string(src);
-        let _ = write!(out, ",\"dst_ip\":\"\",\"dst_port\":0,\"confidence\":{}}}", Self::class_confidence(d.class));
+        let mut tmp2 = [0u8; 16];
+        let dst = if d.dst == 0 { "" } else { ipv4(d.dst, &mut tmp2) };
+        out.raw(",\"dst_ip\":");
+        out.string(dst);
+        let _ = write!(out, ",\"dst_port\":{},\"confidence\":{}}}", d.dport, Self::class_confidence(d.class));
     }
 
     /// `GET /api/detections` → `{count, detections (newest first)}`. Rows that would overflow the

@@ -7,8 +7,10 @@
  * Designed to ~/hookprobe-v2-dashboard.png (left rail, logo, active glow).
  */
 
-import { type Component, For, Show } from 'solid-js';
-import { qsecbit } from '../store/mock';
+import { type Component, For, Show, onMount } from 'solid-js';
+import { qsecbit, protectionStatus, deployMode, substrate } from '../store/mock';
+import { loadHealth } from '../store/health';
+import { startLiveUpdates } from '../store/live';
 
 export type DeployMode = 'standalone' | 'cloud-linked' | 'self-hosted';
 
@@ -39,7 +41,13 @@ interface Props {
 }
 
 const LeftRail: Component<Props> = (props) => {
-  const visible = () => NAV.filter(n => !n.modes || n.modes.includes(props.mode));
+  // The device's own answer wins over the page's design-time default once /api/health replied.
+  const mode = (): DeployMode => (substrate() ? deployMode() : props.mode);
+  onMount(() => {
+    void loadHealth();
+    void startLiveUpdates(); // idempotent: the score/pill track the live device on every workspace
+  });
+  const visible = () => NAV.filter(n => !n.modes || n.modes.includes(mode()));
   const isActive = (href: string) => props.active.startsWith(href.split('/').slice(0, 2).join('/'));
 
   return (
@@ -51,9 +59,9 @@ const LeftRail: Component<Props> = (props) => {
       </a>
 
       {/* Organism status pill → Mission Control */}
-      <a href="/mission" class="rail-organism" aria-label={`Organism status: protected, QSecBit ${qsecbit()}`}>
+      <a href="/mission" class={`rail-organism rail-organism--${protectionStatus()}`} aria-label={`Organism status: ${protectionStatus()}, QSecBit ${qsecbit()}`}>
         <span class="rail-organism-dot" aria-hidden="true" />
-        <span class="rail-organism-label">PROTECTED</span>
+        <span class="rail-organism-label">{protectionStatus() === 'protected' ? 'PROTECTED' : protectionStatus() === 'needs-attention' ? 'ATTENTION' : 'UNDER ATTACK'}</span>
         <span class="rail-organism-score">{qsecbit()}</span>
       </a>
 
@@ -84,9 +92,7 @@ const LeftRail: Component<Props> = (props) => {
             <span class="rail-identity-role">Super Admin</span>
           </div>
         </div>
-        <div class={`rail-mode rail-mode--${props.mode}`}>
-          <Show when={props.mode === 'standalone'} fallback={<>● {props.mode}</>}>● standalone</Show>
-        </div>
+        <div class={`rail-mode rail-mode--${mode()}`}>● {mode()}</div>
       </div>
     </aside>
   );

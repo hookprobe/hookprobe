@@ -287,6 +287,23 @@ pub fn prod_datapath_selftest() -> (bool, u32, u32) {
 }
 
 fn classify(frame: &[u8]) -> (u16, u16) {
+    // Destination context for any hit the tiers record (the UI's dst column), cleared after.
+    // (eth_ipv4_dst + net::parse walk VLAN tags themselves: no strip/copy on the hot path.)
+    {
+        let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
+        let dport = if dst != 0 {
+            crate::net::parse(frame).filter(|m| m.has_l4_ports()).map_or(0, |m| m.dst_port)
+        } else {
+            0
+        };
+        crate::events::set_ctx(dst, dport);
+    }
+    let r = classify_tiers(frame);
+    crate::events::set_ctx(0, 0);
+    r
+}
+
+fn classify_tiers(frame: &[u8]) -> (u16, u16) {
     // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view.
     let mut nbuf = [0u8; FRAME_SZ];
     let nframe = strip_vlan(frame, &mut nbuf);

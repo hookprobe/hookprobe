@@ -9,29 +9,15 @@
  */
 
 import { onMount, type Component } from 'solid-js';
-import { qsecbit, protectionStatus, deployMode, setDeployMode, setSubstrate, currentUser } from '../store/mock';
-import { fetchJson } from '../store/api';
-import type { DeployMode } from './LeftRail';
-
-const MODES: readonly DeployMode[] = ['standalone', 'cloud-linked', 'self-hosted'];
-
-/** Read the device's real deployment mode; keep the default when the API has no `mode` field. */
-async function loadMode(): Promise<void> {
-  try {
-    const h = await fetchJson<{ mode?: string; substrate?: string }>('/api/health');
-    if (h.substrate) setSubstrate(h.substrate);
-    if (h.mode && (MODES as readonly string[]).includes(h.mode)) setDeployMode(h.mode as DeployMode);
-  } catch {
-    /* offline / unauthenticated: the badge keeps its default rather than inventing a mode */
-  }
-}
+import { qsecbit, protectionStatus, deployMode, currentUser } from '../store/mock';
+import { loadHealth } from '../store/health';
 
 interface Props {
   onOpenCopilot: () => void;
 }
 
 const TopBar: Component<Props> = (props) => {
-  onMount(() => void loadMode());
+  onMount(() => void loadHealth());
   return (
   <header class="topbar">
     {/* Brand */}

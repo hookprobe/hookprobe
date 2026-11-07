@@ -487,7 +487,13 @@ fn end0_rx(out: &mut [u8]) -> Option<usize> {
             // Only what the management stack can act on: ARP, or unicast to our MAC. Multicast / IPv6 ND /
             // other hosts' unicast on the management VLAN never occupy the queue (it filled at boot, metal
             // 2026-11-05: mgmtq full=18).
-            let is_arp = n >= 14 && out[12] == 0x08 && out[13] == 0x06;
+            // ARP: a reply, or a request for OUR management address — other hosts' who-has broadcasts
+            // on the management VLAN never take a slot (they starved DHCP/ping at boot).
+            let my_ip = unsafe { (*core::ptr::addr_of!(MGMT)).as_ref().map(|m| m.ip).unwrap_or([0; 4]) };
+            let is_arp = n >= 42 && out[12] == 0x08 && out[13] == 0x06 && {
+                let op = u16::from_be_bytes([out[20], out[21]]);
+                op == 2 || (op == 1 && my_ip != [0; 4] && out[38..42] == my_ip)
+            };
             // DHCP replies may be broadcast (bootp broadcast flag): UDP to port 68.
             let is_dhcp = n >= 42 && out[12] == 0x08 && out[13] == 0x00 && out[23] == 17 && {
                 let l4 = 14 + ((out[14] & 0x0f) as usize) * 4;
