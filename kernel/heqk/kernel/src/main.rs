@@ -129,7 +129,7 @@ mod verdict;
 use alloc::vec::Vec;
 use core::panic::PanicInfo;
 use core::ptr::{read_volatile, write_volatile};
-use core::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use hal::{Console, IrqController, Mmu, Timer};
 
 /// Formatted print to the early console (arch seam).
@@ -5764,6 +5764,8 @@ pub extern "C" fn kmain() -> ! {
 
     // --- P3: EL0 userspace + SVC syscalls (incl. capability invocation) + fault ---
     p3_user_demo();
+    #[cfg(not(feature = "cm5"))]
+    exc_bound_selftest();
 
     // Verify the signed threat rule BEFORE the datapath ever runs it (verify-
     // then-run; any future third-party rule must clear the verifier + JIT too).
@@ -9845,6 +9847,20 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
     let gic = arch_aarch64::Gic;
     let intid = gic.ack();
 
+    // ADR 0050 D5 — EL0 excursion WATCHDOG. A bounded excursion runs EL0 with only this timer able to
+    // interrupt; on expiry the excursion is abandoned (longjmp back to `excursion_bounded`'s caller via
+    // resume_kernel) and counted — a spinning EL0 service can no longer wedge an IRQs-off kernel loop.
+    if intid == arch_aarch64::timer::VTIMER_INTID {
+        arch_aarch64::timer::watchdog_disarm();
+        gic.eoi(intid);
+        if EXC_WD_ACTIVE.swap(false, Ordering::SeqCst) {
+            EXC_TIMED_OUT.store(true, Ordering::SeqCst);
+            EXC_TIMEOUTS.fetch_add(1, Ordering::Relaxed);
+            unsafe { arch_aarch64::syscall::resume_kernel() };
+        }
+        return sp; // a stale expiry with no excursion running: ignore
+    }
+
     if intid == arch_aarch64::timer::TIMER_INTID {
         arch_aarch64::GenericTimer.rearm();
         let n = TICKS.fetch_add(1, Ordering::Relaxed) + 1;
@@ -11870,6 +11886,108 @@ fn m5_detect_el0_spawn() {
     EL0_SCHED_MODE.store(true, Ordering::Relaxed);
 }
 
+// ---------------------------------------------------------------- bounded EL0 excursion (ADR 0050 D5)
+
+static EXC_WD_ACTIVE: AtomicBool = AtomicBool::new(false);
+static EXC_TIMED_OUT: AtomicBool = AtomicBool::new(false);
+static EXC_FAULTED: AtomicBool = AtomicBool::new(false);
+/// Watchdog expiries since boot (reported by the services that use bounded excursions).
+pub static EXC_TIMEOUTS: AtomicU64 = AtomicU64::new(0);
+
+/// How a bounded excursion ended.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Excursion {
+    /// The EL0 program returned control itself (SYS_EXIT_USER / a reporting syscall that exits).
+    Exited,
+    /// It ran past its budget and was preempted by the watchdog (the service fails closed).
+    Timeout,
+    /// It faulted (contained by `handle_lower_sync`).
+    Fault,
+}
+
+/// Run EL0 at `entry`/`sp` for at most `budget_us` microseconds. Only the watchdog timer can interrupt
+/// the EL0 code; on return the kernel is back at EL1 with IRQs masked, exactly as after `enter_user`.
+pub fn excursion_bounded(entry: usize, sp: usize, budget_us: u64) -> Excursion {
+    use hal::IrqController;
+    let frq: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) frq) };
+    let ticks = (frq / 1_000_000).max(1) * budget_us.max(1);
+    // Distributor + CPU interface on (idempotent — the excursion may run before the scheduler's GIC
+    // bring-up), then the watchdog PPI.
+    arch_aarch64::Gic.init();
+    arch_aarch64::Gic.enable(arch_aarch64::timer::VTIMER_INTID);
+    EXC_TIMED_OUT.store(false, Ordering::SeqCst);
+    EXC_FAULTED.store(false, Ordering::SeqCst);
+    EXC_WD_ACTIVE.store(true, Ordering::SeqCst);
+    arch_aarch64::timer::watchdog_arm(ticks);
+    unsafe { arch_aarch64::syscall::enter_user_irq(entry, sp) };
+    arch_aarch64::timer::watchdog_disarm();
+    EXC_WD_ACTIVE.store(false, Ordering::SeqCst);
+    if EXC_TIMED_OUT.load(Ordering::SeqCst) {
+        Excursion::Timeout
+    } else if EXC_FAULTED.load(Ordering::SeqCst) {
+        Excursion::Fault
+    } else {
+        Excursion::Exited
+    }
+}
+
+/// `[P-exc-bound]` — a spinning EL0 program is preempted by the watchdog within its budget and the kernel
+/// continues; a well-behaved one exits normally (the watchdog never fires); a faulting one is contained;
+/// and a spin AFTER a fault is still bounded (state resets per excursion).
+#[cfg(not(feature = "cm5"))]
+fn exc_bound_selftest() {
+    let mmu = arch_aarch64::Mmu;
+    let code = mmu.alloc_frame();
+    let stack = mmu.alloc_frame();
+    if code == 0 || stack == 0 {
+        kprint!(" [P-exc-bound] FAIL: no frames\n");
+        return;
+    }
+    // Three tiny A64 programs at fixed offsets of one RO+X page.
+    const SPIN: [u32; 1] = [0x1400_0000]; // b .
+    const EXIT: [u32; 3] = [0xD280_00C8, 0xD400_0001, 0x1400_0000]; // mov x8,#6 (SYS_EXIT_USER); svc #0; b .
+    const FAULT: [u32; 3] = [0xD280_0000, 0xF940_0001, 0x1400_0000]; // mov x0,#0; ldr x1,[x0]; b .
+    unsafe {
+        let w = |off: usize, prog: &[u32]| {
+            for (i, ins) in prog.iter().enumerate() {
+                core::ptr::write_volatile((code + off + i * 4) as *mut u32, *ins);
+            }
+        };
+        w(0x000, &SPIN);
+        w(0x100, &EXIT);
+        w(0x200, &FAULT);
+    }
+    arch_aarch64::mmu::sync_instruction_cache(code, 0x1000);
+    const CODE_VA: usize = 0xD010_0000;
+    const STACK_VA: usize = 0xD010_1000;
+    mmu.map_user_code_page(CODE_VA, code);
+    mmu.map_user_data_page(STACK_VA, stack);
+    let frq: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) frq) };
+    let now = || {
+        let c: u64;
+        unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) c) };
+        c
+    };
+    let budget_us = 20_000u64;
+    let before = EXC_TIMEOUTS.load(Ordering::Relaxed);
+    let exit = excursion_bounded(CODE_VA + 0x100, STACK_VA + 0x1000, budget_us);
+    let fault = excursion_bounded(CODE_VA + 0x200, STACK_VA + 0x1000, budget_us);
+    kprint!(" [P-exc-bound] exit -> {:?}, fault -> {:?}; now a spinning EL0 program...\n", exit, fault);
+    let t0 = now();
+    let spin = excursion_bounded(CODE_VA, STACK_VA + 0x1000, budget_us);
+    let spin_us = (now() - t0) * 1_000_000 / frq.max(1);
+    let spin2 = excursion_bounded(CODE_VA, STACK_VA + 0x1000, budget_us);
+    let counted = EXC_TIMEOUTS.load(Ordering::Relaxed) - before;
+    // The spin must end AFTER its budget (it really ran) and well before 10x the budget (bounded).
+    let bounded = spin_us >= budget_us && spin_us < budget_us * 10;
+    let pass = spin == Excursion::Timeout && exit == Excursion::Exited && fault == Excursion::Fault
+        && spin2 == Excursion::Timeout && counted == 2 && bounded;
+    kprint!(" [P-exc-bound] {} — bounded EL0 excursion (ADR 0050 D5): spinning EL0 -> {:?} after {} us (budget {} us), clean exit -> {:?}, fault -> {:?}, spin after fault -> {:?}, watchdog expiries counted={} — the kernel kept running\n",
+        if pass { "PASS" } else { "FAIL" }, spin, spin_us, budget_us, exit, fault, spin2, counted);
+}
+
 fn p3_user_demo() {
     let mmu = arch_aarch64::Mmu;
     extern "C" {
@@ -12021,6 +12139,7 @@ pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
     let far: u64;
     unsafe { core::arch::asm!("mrs {}, far_el1", out(reg) far) };
     kprint!("   [EL0 fault] contained: EC={:#04x} FAR={:#x} (kernel survives)\n", ec, far);
+    EXC_FAULTED.store(true, Ordering::SeqCst);
     telemetry::emit(telemetry::Event::Fault); // the OS senses its own fault
 
     // P7c step 4b/4c: a *scheduled* EL0 driver TCB — RESTART it (rebuild a fresh

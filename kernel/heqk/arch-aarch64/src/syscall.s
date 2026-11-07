@@ -60,6 +60,58 @@ enter_user:                          // x0 = entry, x1 = user_sp
     mov     x30, xzr
     eret
 
+.global enter_user_irq
+enter_user_irq:                          // x0 = entry, x1 = user_sp
+    adrp    x2, KRESUME
+    add     x2, x2, #:lo12:KRESUME
+    stp     x19, x20, [x2, #0]
+    stp     x21, x22, [x2, #16]
+    stp     x23, x24, [x2, #32]
+    stp     x25, x26, [x2, #48]
+    stp     x27, x28, [x2, #64]
+    stp     x29, x30, [x2, #80]
+    mov     x3, sp
+    str     x3, [x2, #96]
+    msr     sp_el0, x1               // user stack
+    msr     elr_el1, x0              // user entry
+    mov     x3, #0x340               // SPSR = EL0t, D/A/F masked, IRQ UNMASKED (watchdog-bounded)
+    msr     spsr_el1, x3
+    // Scrub kernel register state before dropping to EL0 — otherwise EL0 starts
+    // with x2=&KRESUME (a kernel pointer) and x4..x30 holding live kernel values,
+    // an information leak that hands EL0 a fixed kernel anchor. Zero x0..x30.
+    mov     x0, xzr
+    mov     x1, xzr
+    mov     x2, xzr
+    mov     x3, xzr
+    mov     x4, xzr
+    mov     x5, xzr
+    mov     x6, xzr
+    mov     x7, xzr
+    mov     x8, xzr
+    mov     x9, xzr
+    mov     x10, xzr
+    mov     x11, xzr
+    mov     x12, xzr
+    mov     x13, xzr
+    mov     x14, xzr
+    mov     x15, xzr
+    mov     x16, xzr
+    mov     x17, xzr
+    mov     x18, xzr
+    mov     x19, xzr
+    mov     x20, xzr
+    mov     x21, xzr
+    mov     x22, xzr
+    mov     x23, xzr
+    mov     x24, xzr
+    mov     x25, xzr
+    mov     x26, xzr
+    mov     x27, xzr
+    mov     x28, xzr
+    mov     x29, xzr
+    mov     x30, xzr
+    eret
+
 // -------- P3 user program: position-independent, copied into an EL0 page ------
 // Does 3 syscalls (hello, getval, printval) then triggers a contained fault.
 .global user_stub

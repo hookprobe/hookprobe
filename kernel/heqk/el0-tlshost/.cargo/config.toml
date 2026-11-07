@@ -1,0 +1,10 @@
+# Self-contained build config for the detached EL0 Wasm-host crate: the kernel's build.rs
+# invokes `cargo build` here in a CLEAN env, so this crate must fully specify its own
+# bare-metal target + build-std (it does NOT rely on the parent kernel config). The linker
+# script is passed by build.rs as an ABSOLUTE -T path (repo convention).
+[build]
+target = "aarch64-unknown-none-softfloat"
+
+[unstable]
+build-std          = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]

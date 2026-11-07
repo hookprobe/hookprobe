@@ -8,6 +8,27 @@ pub const TIMER_INTID: u32 = 30;
 
 static INTERVAL: AtomicU64 = AtomicU64::new(0);
 
+/// GIC interrupt id of the EL1 VIRTUAL timer (PPI 11 -> INTID 27) — the EL0 EXCURSION WATCHDOG
+/// (ADR 0050 D5). Separate from the scheduler's physical timer so the two never share state.
+pub const VTIMER_INTID: u32 = 27;
+
+/// Arm the excursion watchdog: fire VTIMER_INTID after `ticks` counter ticks.
+pub fn watchdog_arm(ticks: u64) {
+    unsafe {
+        core::arch::asm!("msr cntv_tval_el0, {}", in(reg) ticks);
+        core::arch::asm!("msr cntv_ctl_el0, {}", in(reg) 1u64); // ENABLE=1, IMASK=0
+        core::arch::asm!("isb");
+    }
+}
+
+/// Disarm the watchdog (also deasserts a pending level-triggered timer IRQ).
+pub fn watchdog_disarm() {
+    unsafe {
+        core::arch::asm!("msr cntv_ctl_el0, {}", in(reg) 0u64);
+        core::arch::asm!("isb");
+    }
+}
+
 #[inline]
 fn cntfrq() -> u64 {
     let f: u64;
