@@ -419,6 +419,11 @@ impl McNode {
         changed
     }
 
+    /// No SNTP from this node (the AP's node lives on the LAN side; its gateway is itself).
+    pub fn disable_sntp(&mut self) {
+        self.ntp.next_ms = i64::MAX;
+    }
+
     /// A validated wall-clock reading (Unix ms at the moment it was taken), once per reply. The
     /// caller applies it with `McState::sync_clock(ms, cntpct())`.
     pub fn take_time(&mut self) -> Option<u64> {
