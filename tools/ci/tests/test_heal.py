@@ -104,6 +104,32 @@ class Guard(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(self.ev(diff), f"guard let '{name}' through")
 
+    def test_rename_or_delete_a_protected_file_is_blocked(self):
+        rename = ("diff --git a/tools/ci/deny.toml b/notes.toml\nsimilarity index 100%\n"
+                  "rename from tools/ci/deny.toml\nrename to notes.toml\n")
+        delete = ("diff --git a/tools/ci/deny.toml b/tools/ci/deny.toml\ndeleted file mode 100644\n"
+                  "--- a/tools/ci/deny.toml\n+++ /dev/null\n@@ -1 +0,0 @@\n-[advisories]\n")
+        # header-only: the protected source appears ONLY as the a/ side (no rename lines) —
+        # each defence layer must hold on its own.
+        header_only = ("diff --git a/tools/ci/deny.toml b/notes.toml\n--- a/tools/ci/deny.toml\n"
+                       "+++ b/notes.toml\n@@ -1 +1 @@\n-[advisories]\n+[advisories]\n")
+        for name, d in (("rename away", rename), ("delete", delete), ("header only", header_only)):
+            with self.subTest(name=name):
+                self.assertTrue(any(v.startswith("A1") for v in self.ev(d)), name)
+
+    def test_unparseable_header_fails_closed(self):
+        d = 'diff --git "a/odd name" "b/odd name"\n--- a/x\n+++ b/x\n@@ -1 +1 @@\n+y\n'
+        self.assertTrue(any("could not be parsed" in v for v in self.ev(d)))
+
+    def test_guard_is_always_the_trusted_copy(self):
+        # heal.py must run the guard from its own (operator) tree, and ci.yml from the base branch —
+        # never the copy inside the change under review (an agent could rewrite it to pass).
+        heal_src = open(os.path.join(CI, "heal", "heal.py")).read()
+        self.assertIn('os.path.join(HERE, "autofix_guard.py")', heal_src)
+        self.assertNotIn('os.path.join(wt, "tools/ci/heal/autofix_guard.py")', heal_src)
+        ci_yml = open(os.path.join(CI, "..", "..", ".github", "workflows", "ci.yml")).read()
+        self.assertIn('git show "origin/$BASE_REF:tools/ci/heal/autofix_guard.py"', ci_yml)
+
     def test_wrong_branch_blocked(self):
         self.assertTrue(any(v.startswith("A5") for v in self.ev(DIFF_OK, branch="main")))
 
