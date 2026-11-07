@@ -38,7 +38,7 @@ mod caps;
 mod corroboration;
 mod devq;
 mod dnssink;
-mod dnsblock;
+mod shield;
 // M5.1 (Track C) — minimal bounds-safe ELF64/aarch64 static loader (the userspace-server
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
 // backends but the loader/mapping path is QEMU-only (see load_into's cfg).
@@ -3027,13 +3027,20 @@ fn cm5_p10_probe() {
                                 }
                                 None => kprint!(" [POLICY] no POLICY.TXT — no operator ACLs / routes\n"),
                             }
-                            // Shield: the DNS blocklist (BLOCK.TXT, operator-signed like POLICY.TXT).
-                            match dnsblock::load(&dev) {
-                                Some(Ok(l)) => kprint!(" [SHIELD] DNS blocklist: {} domains{}{} — blocked names answered 0.0.0.0 / NODATA by the AP\n", l.domains,
-                                    if l.signed { " (signature OK, operator key)" } else { " (unsigned — standalone image)" },
-                                    if l.truncated > 0 { " — list longer than the table, rest ignored" } else { "" }),
-                                Some(Err(e)) => kprint!(" [SHIELD] BLOCK.TXT REFUSED ({:?}) — Shield OFF, nothing blocked (a tampered list must not black-hole names)\n", e),
-                                None => kprint!(" [SHIELD] no BLOCK.TXT — Shield counts DNS queries but blocks nothing\n"),
+                            // Shield v2 (ADR 0052): BLOCK.TXT (+ directives) and ALLOW.TXT, operator-signed.
+                            {
+                                let li = shield::load(&dev);
+                                let p = shield::policy();
+                                kprint!(" [SHIELD] v2: {} blocked + {} allowed domains | BLOCK.TXT {} ALLOW.TXT {}{}{} | encrypted DNS {} | Private Relay {} | DDR + Firefox canary answered, system floor on\n",
+                                    shield::block_len(), shield::allow_len(),
+                                    ["absent", "loaded", "REFUSED"][li.block_file as usize % 3], ["absent", "loaded", "REFUSED"][li.allow_file as usize % 3],
+                                    if li.signed { " (operator signature OK)" } else if li.block_file == 1 { " (unsigned — standalone image)" } else { "" },
+                                    if li.skipped_lines > 0 || li.truncated > 0 { " — some lines skipped/truncated, see /api/dns" } else { "" },
+                                    if p.encrypted_dns_block { "refused (DoT 853, DoH hostnames)" } else { "allowed + reported" },
+                                    if p.private_relay_block { "blocked" } else { "reported" });
+                                if let Some(e) = li.refused {
+                                    kprint!(" [SHIELD] list REFUSED ({:?}) — not loaded (a tampered list must not black-hole names); DNS keeps working\n", e);
+                                }
                             }
                         }
                         {
@@ -3292,11 +3299,6 @@ fn cm5_p10_probe() {
                         let mut pol_drop = [0u32; 4];
                         let mut pol_block = [0u32; 4];
                         let mut pol_via_mgmt = 0u32; // flows routed out the management sub-interface
-                        let mut dns_blocked = 0u32; // Shield: client DNS queries answered as blocked
-                        let mut dns_seen = 0u32;
-                        let mut dns_last = [0u8; 48];
-                        let mut dns_last_len = 0usize;
-                        let mut dns_last_act = 0u8;
                         let mut pol_mgmt_nh_miss = 0u32; // routed to mgmt but the next hop is not resolved yet
                         let mut pol_block_as_drop = 0u32; // `out` blocks after un-NAT act as drops (see the note)
                         let mut last_wan_probe = 0u64;
@@ -3331,28 +3333,24 @@ fn cm5_p10_probe() {
                                 // Shield: an allowed client DNS query for a blocklisted name is answered here
                                 // (0.0.0.0 / NODATA, from the resolver it asked) and never leaves the device.
                                 let mut shield = false;
-                                // Shield diagnostics: every client UDP/53 query reaching this hook, and its name.
-                                if frame.len() >= 42 && frame[23] == 17 {
-                                    let u = 14 + ((frame[14] & 0x0f) as usize) * 4;
-                                    if u + 8 + 13 <= frame.len() && frame[u + 2] == 0 && frame[u + 3] == 53 {
-                                        dns_seen += 1;
-                                        let mut nm = [0u8; 256];
-                                        if let Some(l) = dnssink::parse_qname(&frame[u + 8..], &mut nm) {
-                                            let l = l.min(dns_last.len());
-                                            dns_last[..l].copy_from_slice(&nm[..l]);
-                                            dns_last_len = l;
-                                            dns_last_act = act as u8;
-                                        }
-                                    }
-                                }
-                                if act == PAct::Allow && dnsblock::len() > 0 {
+                                // Shield v2 (ADR 0052): every client DNS query (any resolver, UDP and TCP), DoT, DoH names.
+                                if act == PAct::Allow {
                                     let me = if $pif == PIf::Eth1 { uplink::ETH1_MAC } else { ap.bssid };
                                     let mut dr = [0u8; 600];
-                                    if let Some(k) = dnssink::block_reply_frame(frame, &me, &mut dr, &dnsblock::blocked) {
-                                        dns_blocked += 1;
-                                        let _ = $reply!(&dr[..k]);
-                                        act = PAct::Drop;
-                                        shield = true;
+                                    match shield::on_client_frame(frame, &me, &mut dr, cyw43::ticks()) {
+                                        shield::Act::Pass => {}
+                                        shield::Act::Answer(k) => {
+                                            let _ = $reply!(&dr[..k]);
+                                            act = PAct::Drop;
+                                            shield = true;
+                                        }
+                                        shield::Act::Reject => {
+                                            if let Some(k) = arch_aarch64::reject::reject4(frame, &our_ip, &me, &mut dr) {
+                                                let _ = $reply!(&dr[..k]);
+                                            }
+                                            act = PAct::Drop;
+                                            shield = true;
+                                        }
                                     }
                                 }
                                 match act {
@@ -3960,6 +3958,7 @@ fn cm5_p10_probe() {
                                                         wan_big_unnat += 1;
                                                     }
                                                     rules::scan_response_hook(&nbuf[..m]); // ADR 0049 D3: credit the real prober
+                                                    let m = shield::on_reply_frame(&mut nbuf, m, cyw43::ticks()); // ADR 0052 D6: CNAME cloaking
                                                     if in_if == nat::IF_ETH1 {
                                                         if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
                                                             lan_tx_fail += 1;
@@ -4013,7 +4012,7 @@ fn cm5_p10_probe() {
                                         let w6 = unsafe { uplink::WAN6 };
                                         if let Some((pd, plen, valid)) = w6.pd {
                                             if up.usable() && (!v6.up || v6.prefix[..8] != pd[..8]) {
-                                                v6.configure(&pd, plen, valid, &ap.bssid, w6.dns.as_ref());
+                                                v6.configure(&pd, plen, valid, &ap.bssid, None); // ADR 0052 D1: no RDNSS to the ISP resolver — clients resolve via the AP (Shield)
                                                 let g = |k: usize| u16::from_be_bytes([v6.gua[2 * k], v6.gua[2 * k + 1]]);
                                                 kprint!(" [V6LAN] LAN numbered from {:x?}/{}: router {:x}:{:x}:{:x}:{:x}::1/64 — RA (SLAAC, MTU {}, RDNSS={}) on the AP, stateful firewall default-deny inbound\n",
                                                     &pd[..8], plen, g(0), g(1), g(2), g(3), arch_aarch64::ip6lan::LAN_MTU, v6.has_dns);
@@ -4210,13 +4209,22 @@ fn cm5_p10_probe() {
                                                 pkts_out: nst.out_fwd as u64,
                                                 pkts_in: nst.in_fwd as u64,
                                                 dns_inspected: nst.dns_redirect as u64,
-                                                dns_blocked: dns_blocked as u64,
-                                                blocklist: dnsblock::len() as u32,
+                                                dns_blocked: shield::totals().1,
+                                                blocklist: shield::block_len() as u32,
                                             });
                                         }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
-                                        kprint!("   [SHIELD] list={} queries_seen={} blocked={} last={} (act {})\n", dnsblock::len(), dns_seen, dns_blocked,
-                                            core::str::from_utf8(&dns_last[..dns_last_len]).unwrap_or("?"), dns_last_act);
+                                        {
+                                            let (q, b, by) = shield::totals();
+                                            let mut lb = [0u8; 64];
+                                            let (ll, lc) = shield::last_blocked(&mut lb);
+                                            kprint!("   [SHIELD] list={} allow={} queries={} blocked={} (cname {} tcp {}) bypass-signals={} (ddr {} canary {} relay {} doh {} dot {}) last_blocked={} from {}.{}.{}.{}\n",
+                                                shield::block_len(), shield::allow_len(), q, b, shield::counter(shield::Verdict::BlockedCname), shield::counter(shield::Verdict::Tcp53Refused), by,
+                                                shield::counter(shield::Verdict::Ddr), shield::counter(shield::Verdict::Canary),
+                                                shield::counter(shield::Verdict::RelaySeen) + shield::counter(shield::Verdict::RelayBlocked),
+                                                shield::counter(shield::Verdict::DohSeen) + shield::counter(shield::Verdict::DohBlocked), shield::counter(shield::Verdict::DotRefused),
+                                                core::str::from_utf8(&lb[..ll]).unwrap_or("?"), lc >> 24, (lc >> 16) & 0xff, (lc >> 8) & 0xff, lc & 0xff);
+                                        }
                                         kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} dns_redir={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
@@ -6110,7 +6118,7 @@ pub extern "C" fn kmain() -> ! {
         wancfg_selftest();
         policy_selftest();
         let _ = policysig::selftest();
-        let _ = dnsblock::selftest();
+        let _ = shield::selftest();
         md5_selftest();
         pppoe_selftest();
         ip6_selftest();
@@ -13803,37 +13811,60 @@ fn fuzz_selftest() {
             n_frames += 1;
         }
     }
-    // 4b. Shield: the DNS block-answer builder (client UDP/53 queries, everything "blocked").
+    // 4b. Shield v2 (ADR 0052): client DNS frames (UDP + TCP/53, DoT) and DNS replies (CNAME walk).
     {
         let mut o = [0u8; 600];
-        let mut q = [0u8; 200];
-        let base = dnssink::test_query_frame(b"ads.tracker.example", 1, &mut q);
+        let mut q = [0u8; 400];
+        let base = shield::test_query(b"ads.tracker.example", 1, true, [1, 1, 1, 1], &mut q);
+        let _ = shield::load_text(b"ads.tracker.example\nexample.org\n", b"");
         for i in 0..N {
-            let n = if i % 2 == 0 {
-                // a real query, mutated: lengths, labels, counts, flags
-                buf[..base].copy_from_slice(&q[..base]);
-                for _ in 0..(1 + next() % 4) {
-                    let at = (next() as usize) % base;
-                    buf[at] = next() as u8;
-                }
-                (base as u64 - next() % 4) as usize
-            } else {
-                let n = frame(&mut next, &mut buf);
-                if n > 40 {
-                    buf[23] = 17;
-                    let ihl = ((buf[14] & 0x0f) as usize) * 4;
-                    if 14 + ihl + 4 <= n {
-                        buf[14 + ihl + 2] = 0;
-                        buf[14 + ihl + 3] = 53;
+            let n = match i % 3 {
+                0 => {
+                    buf[..base].copy_from_slice(&q[..base]);
+                    for _ in 0..(1 + next() % 4) {
+                        let at = (next() as usize) % base;
+                        buf[at] = next() as u8;
                     }
+                    (base as u64 - next() % 4) as usize
                 }
-                n
+                1 => {
+                    let n = frame(&mut next, &mut buf);
+                    if n > 40 {
+                        buf[23] = if next() & 1 == 0 { 17 } else { 6 };
+                        let ihl = ((buf[14] & 0x0f) as usize) * 4;
+                        if 14 + ihl + 4 <= n {
+                            buf[14 + ihl + 2] = if next() & 1 == 0 { 0 } else { 3 };
+                            buf[14 + ihl + 3] = if next() & 1 == 0 { 53 } else { 85 };
+                        }
+                    }
+                    n
+                }
+                _ => {
+                    // a reply: src port 53 with a mutated answer section (compression pointers, counts)
+                    let n = frame(&mut next, &mut buf);
+                    if n > 60 {
+                        buf[14] = 0x45;
+                        buf[23] = 17;
+                        buf[34] = 0;
+                        buf[35] = 53;
+                        buf[44] |= 0x80;
+                        buf[45] &= 0xf0;
+                        buf[46] = 0;
+                        buf[47] = 1;
+                    }
+                    let _ = shield::on_reply_frame(&mut buf, n, i as u64);
+                    n_frames += 1;
+                    continue;
+                }
             };
-            if let Some(k) = dnssink::block_reply_frame(&buf[..n], &[2, 0, 0, 0, 0, 1], &mut o, &|_| true) {
-                assert!(k <= o.len() && k >= 54);
+            match shield::on_client_frame(&buf[..n], &[2, 0, 0, 0, 0, 1], &mut o, i as u64) {
+                shield::Act::Answer(k) => assert!(k <= o.len() && k >= 54),
+                _ => {}
             }
             n_frames += 1;
         }
+        let _ = shield::load_text(b"", b"");
+        shield::reset_stats();
     }
     // 5. HTTP request parse (Mission Control, reachable on :80).
     let mut n_http = 0u32;
@@ -13877,7 +13908,7 @@ fn fuzz_selftest() {
             n_cfg += 1;
         }
     }
-    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler, Shield DNS block answers; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
+    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler, Shield v2 client queries + DNS replies (CNAME walk); {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
         n_frames, n_http, n_cfg);
 }
 

@@ -40,6 +40,7 @@ OWNER_TOKEN=""
 WAN_FILE=""
 POLICY_FILE=""
 BLOCK_FILE=""
+ALLOW_FILE=""
 MCTLS_FILE=""
 POLICY_KEY=""
 POLICY_GEN="1"
@@ -54,7 +55,8 @@ while [ $# -gt 0 ]; do
     --policy-key) POLICY_KEY="$2"; shift ;;
     --policy-gen) POLICY_GEN="$2"; shift ;;
     --blocklist-file) BLOCK_FILE="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT]" >&2; exit 2 ;;
+    --allowlist-file) ALLOW_FILE="$2"; shift ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -201,13 +203,20 @@ PY
 if [ -n "$POLICY_KEY" ]; then
   python3 -I "$HEQK/tools/policy-sign.py" sign "$POLICY_KEY" "$STAGE/POLICY.TXT" "$POLICY_GEN" "$STAGE/POLICY.SIG" >/dev/null || { echo "FATAL: signing POLICY.TXT failed"; exit 1; }
 fi
-# BLOCK.TXT — Shield's DNS blocklist (one domain or hosts-file line per line, <= 4 MiB), signed with the
+# BLOCK.TXT / ALLOW.TXT — Shield v2 lists (ADR 0052: hosts / adblock ||d^ / @@ / bare lines, <= 16 MiB), signed with the
 # operator key like POLICY.TXT (BLOCK.SIG); absent = Shield counts DNS queries but blocks nothing.
 if [ -n "$BLOCK_FILE" ]; then
-  [ "$(stat -c %s "$BLOCK_FILE")" -le $((4 << 20)) ] || { echo "FATAL: --blocklist-file larger than 4 MiB"; exit 1; }
+  [ "$(stat -c %s "$BLOCK_FILE")" -le $((16 << 20)) ] || { echo "FATAL: --blocklist-file larger than 16 MiB"; exit 1; }
   cp "$BLOCK_FILE" "$STAGE/BLOCK.TXT"
   if [ -n "$POLICY_KEY" ]; then
     python3 -I "$HEQK/tools/policy-sign.py" sign-blocklist "$POLICY_KEY" "$STAGE/BLOCK.TXT" "$POLICY_GEN" "$STAGE/BLOCK.SIG" >/dev/null || { echo "FATAL: signing BLOCK.TXT failed"; exit 1; }
+  fi
+fi
+if [ -n "$ALLOW_FILE" ]; then
+  [ "$(stat -c %s "$ALLOW_FILE")" -le $((16 << 20)) ] || { echo "FATAL: --allowlist-file larger than 16 MiB"; exit 1; }
+  cp "$ALLOW_FILE" "$STAGE/ALLOW.TXT"
+  if [ -n "$POLICY_KEY" ]; then
+    python3 -I "$HEQK/tools/policy-sign.py" sign-allowlist "$POLICY_KEY" "$STAGE/ALLOW.TXT" "$POLICY_GEN" "$STAGE/ALLOW.SIG" >/dev/null || { echo "FATAL: signing ALLOW.TXT failed"; exit 1; }
   fi
 fi
 # MCTLS.CRT — the Mission Control HTTPS certificate (ADR 0051): fixed 4096 B so the flasher patches it in
@@ -222,7 +231,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
