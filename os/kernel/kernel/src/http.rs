@@ -287,6 +287,17 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             }
         }
         "/api/reports" => json(scratch, |w| st.render_reports(limit(200, 32), w)),
+        // Parity G7/G9: the operator-signed intel + device-policy files and what they matched.
+        "/api/intel" => json(scratch, |w| {
+            use core::fmt::Write;
+            let i = crate::ioc::info();
+            let d = crate::devpolicy::info();
+            let dn = crate::devpolicy::denied();
+            let f = |x: u8| ["none", "loaded", "refused"][x as usize % 3];
+            let _ = write!(w, "{{\"ioc\":{{\"file\":\"{}\",\"signed\":{},\"generation\":{},\"ipv4_prefixes\":{},\"domains\":{},\"skipped_lines\":{},\"mode\":\"detect-only\"}},\"devices\":{{\"file\":\"{}\",\"signed\":{},\"generation\":{},\"entries\":{},\"skipped_lines\":{},\"denied\":{{\"internet_only\":{},\"lan_only\":{},\"quarantine\":{}}}}}}}",
+                f(i.file), i.signed, i.generation, crate::ioc::v4_len(), crate::ioc::dom_len(), i.skipped,
+                f(d.file), d.signed, d.generation, crate::devpolicy::len(), d.skipped, dn[1], dn[2], dn[3]);
+        }),
         // Parity G23: who the device is enforcing against RIGHT NOW (read-only; everything self-reverts).
         "/api/enforcement" => json(scratch, |w| {
             use core::fmt::Write;

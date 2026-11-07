@@ -5,7 +5,7 @@
 # No Linux anywhere in the device path (QEMU emulates the hardware only).
 #
 #   tools/mc-e2e.sh            build + boot + API assertions (+ browser assertions if available)
-#   MC_E2E_KEEP=1 tools/...    leave the VM running afterwards (open http://127.0.0.1:18080)
+#   MC_E2E_KEEP=1 tools/...    leave the VM running afterwards (the URL is printed)
 #
 # Browser leg: needs node (~/.local/node/bin) + Playwright Chromium (tools/mc-e2e/). Without them
 # the script says so and reports the API leg only — never a silent pass.
@@ -14,7 +14,18 @@ cd "$(dirname "$0")/.."
 [ -f "$HOME/.cargo/env" ] && . "$HOME/.cargo/env"
 export PATH="$HOME/.local/node/bin:$PATH"
 
-HOST=127.0.0.1; HTTP=18080; P4444=14444; P23=12323
+# Per-run host ports + temp files: several sessions/CI jobs run this concurrently on one machine.
+# MC_E2E_PORT_BASE pins them (default: the first base in 18000..19900 with all four ports free).
+port_free() { ! ss -ltnH 2>/dev/null | awk '{print $4}' | grep -qE "[:.]$1\$"; }
+if [ -z "${MC_E2E_PORT_BASE:-}" ]; then
+  for b in $(seq 18000 100 19900); do
+    if port_free $((b+80)) && port_free $((b+444)) && port_free $((b+323)) && port_free $((b+443)); then MC_E2E_PORT_BASE=$b; break; fi
+  done
+fi
+PB=${MC_E2E_PORT_BASE:-18000}
+HOST=127.0.0.1; HTTP=$((PB+80)); P4444=$((PB+444)); P23=$((PB+323)); HTTPS_PORT=$((PB+443))
+RUN=$(mktemp -d /tmp/mc-e2e-run.XXXX)
+echo "  (host ports ${HTTP}/${HTTPS_PORT}/${P4444}/${P23}, run dir ${RUN})"
 B="http://$HOST:$HTTP"
 LOG=$(mktemp /tmp/mc-e2e-qemu.XXXX.log)
 FAILS=0
@@ -30,7 +41,7 @@ if [ ! -f "$UI/dist/index.html" ]; then
 fi
 # Private target dir: never overwrite the shared target/ other builders/sessions flash from.
 export CARGO_TARGET_DIR=target/mc
-cargo build -p kernel --features mcserve >/tmp/mc-e2e-build.log 2>&1 || { tail -20 /tmp/mc-e2e-build.log; exit 2; }
+cargo build -p kernel --features mcserve >"$RUN/build.log" 2>&1 || { tail -20 "$RUN/build.log"; exit 2; }
 KERNEL=target/mc/aarch64-unknown-none-softfloat/debug/kernel
 
 echo "[1b] boot disk with an owner key (ADR 0037 D3: the device stores only a salted verifier)"
@@ -117,6 +128,9 @@ echo "$ES" | jget "d['nodes']['detections']>=5 and d['nodes']['incidents']>=1 an
 EG=$(curl -s -m 10 $C "$B/api/evidence/graph?node=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$IID")")
 echo "$EG" | jget "d['node_count']>=2 and any(n['type']=='Threat' for n in d['nodes'])" | grep -q True \
   && ok "/api/evidence/graph drills from the incident to its rules and targets" || bad "/api/evidence/graph: $EG"
+IN=$(curl -s -m 10 $C "$B/api/intel")
+echo "$IN" | jget "d['ioc']['mode']=='detect-only' and 'devices' in d and d['ioc']['file'] in ('none','loaded','refused')" | grep -q True \
+  && ok "/api/intel reports the IOC pack (detect-only) and the device-policy file" || bad "/api/intel: $IN"
 EF=$(curl -s -m 10 $C "$B/api/enforcement")
 echo "$EF" | jget "'policy' in d and isinstance(d['sources'],list) and d['count']==len(d['sources'])" | grep -q True \
   && ok "/api/enforcement lists live enforcement (self-reverting, read-only)" || bad "/api/enforcement: $EF"
@@ -133,7 +147,7 @@ echo "[6] the unchanged Mission Control UI, loaded FROM the device, shows the li
 BROWSER=skipped
 if [ -d tools/mc-e2e/node_modules/playwright ] && command -v node >/dev/null; then
   BROWSER=ran
-  (cd tools/mc-e2e && node ui-check.mjs "$B" "$TOKEN") && ok "browser: UI rendered live heqk data (screenshots in /tmp/mc-e2e-*.png)" || bad "browser assertions failed"
+  (cd tools/mc-e2e && MC_E2E_SHOTS="$RUN" node ui-check.mjs "$B" "$TOKEN") && ok "browser: UI rendered live heqk data (screenshots in $RUN)" || bad "browser assertions failed"
 else
   echo "  SKIP  browser leg — Playwright not installed (cd tools/mc-e2e && npm i && npx playwright install chromium)"
 fi
@@ -156,7 +170,7 @@ kill "$QPID" 2>/dev/null; wait "$QPID" 2>/dev/null
 # second boot: same image, the boot disk now carries MCTLS.CRT
 PART=$(mktemp); dd if="$DISK" of="$PART" bs=512 skip=2048 count=129024 status=none
 mcopy -i "$PART" "$TLSD/MCTLS.CRT" ::MCTLS.CRT && dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none; rm -f "$PART"
-LOG2=$(mktemp /tmp/mc-e2e-qemu-tls.XXXX.log); HTTPS=18443; BS="https://heqk.local:$HTTPS"
+LOG2=$(mktemp /tmp/mc-e2e-qemu-tls.XXXX.log); HTTPS=$HTTPS_PORT; BS="https://heqk.local:$HTTPS"
 qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
   -global virtio-mmio.force-legacy=false \
   -netdev user,id=n0,hostfwd=tcp:$HOST:$HTTP-:80,hostfwd=tcp:$HOST:$HTTPS-:443,hostfwd=tcp:$HOST:$P4444-:4444 \
@@ -194,7 +208,7 @@ HS2=$(curl "${C[@]}" "$BS/api/health")
 [ "$(echo "$HS2" | jget "d['substrate']")" = heqk ] && ok "garbage on :443 fails that connection only — HTTPS keeps serving" || bad "https after garbage: $HS2"
 if [ "$BROWSER" = ran ]; then
   SPKI=$(openssl x509 -in <(dd if="$TLSD/MCTLS.CRT" bs=1 skip=12 count=$(python3 -I -c "import struct,sys;print(struct.unpack('<H',open(sys.argv[1],'rb').read()[10:12])[0])" "$TLSD/MCTLS.CRT") status=none) -inform DER -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | base64)
-  (cd tools/mc-e2e && MC_E2E_SPKI="$SPKI" node ui-check.mjs "https://heqk.local:$HTTPS" "$TOKEN") && ok "browser: the UI over https (pinned to the device key) rendered live heqk data" || bad "browser over https failed"
+  (cd tools/mc-e2e && MC_E2E_SHOTS="$RUN" MC_E2E_SPKI="$SPKI" node ui-check.mjs "https://heqk.local:$HTTPS" "$TOKEN") && ok "browser: the UI over https (pinned to the device key) rendered live heqk data" || bad "browser over https failed"
 fi
 sleep 11
 TH=$(tr -d '\r' < "$LOG2" | grep -a "MC-TLS hb" | tail -1)

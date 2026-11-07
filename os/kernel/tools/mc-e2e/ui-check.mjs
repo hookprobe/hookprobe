@@ -31,7 +31,7 @@ const c2 = page.locator('.det-title', { hasText: 'Known C2 port 4444 (DROP, fram
 // isVisible() does NOT wait; waitFor does (the rows arrive after /api/detections answers).
 check(await c2.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false), 'Detect feed shows the heqk C2-4444 detection (rule msg + wire action + class)');
 check(!(await page.getByText('Live detections unavailable').isVisible().catch(() => false)), 'Detect feed is LIVE (no "unavailable" fallback)');
-await page.screenshot({ path: '/tmp/mc-e2e-detect.png', fullPage: true });
+await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-detect.png`, fullPage: true });
 
 // Home: the "Needs you" queue counts the device's real open incidents (mock says "Nothing to approve").
 await page.goto(`${base}/`, { waitUntil: 'load' });
@@ -41,14 +41,14 @@ await needs.waitFor({ timeout: 15000 });
 await page.waitForFunction(() => /need your review/.test(document.querySelector('.needs-msg')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
 const txt = (await needs.textContent())?.trim() ?? '';
 check(/^\d+ incidents? need your review\.$/.test(txt), `Home "Needs you" is live: "${txt}"`);
-await page.screenshot({ path: '/tmp/mc-e2e-home.png', fullPage: true });
+await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-home.png`, fullPage: true });
 
 // Shield v2 (ADR 0052): the DNS page renders the device's live data, not the sample layout.
 await page.goto(`${base}/network/dns`, { waitUntil: 'load' });
 const live = page.getByText(/DNS queries since boot/);
 check(await live.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false), 'Shield page renders LIVE device data (/api/dns)');
 check(!(await page.getByText('Sample data').first().isVisible().catch(() => false)), 'Shield page shows no "Sample data" notice');
-await page.screenshot({ path: '/tmp/mc-e2e-shield.png', fullPage: true });
+await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-shield.png`, fullPage: true });
 
 check(apiCalls.some((c) => c.startsWith('200 /api/detections')) && apiCalls.some((c) => c.startsWith('200 /api/incidents')) && apiCalls.some((c) => c.startsWith('200 /api/dns')),
   `the UI fetched its data from the device: ${[...new Set(apiCalls)].join(', ')}`);
