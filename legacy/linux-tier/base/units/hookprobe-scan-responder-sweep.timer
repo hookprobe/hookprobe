@@ -1,0 +1,12 @@
+[Unit]
+Description=Run the AEGIS scan-responder TTL sweep every 60s (auto-revert independent of new scans)
+Documentation=file:///usr/share/hookprobe/docs/adr/0023-enforcement-separation.md
+
+[Timer]
+OnBootSec=60s
+OnUnitActiveSec=60s
+AccuracySec=5s
+Unit=hookprobe-scan-responder-sweep.service
+
+[Install]
+WantedBy=timers.target

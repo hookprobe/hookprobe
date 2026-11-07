@@ -1,0 +1,86 @@
+#!/usr/bin/env bash
+# ovs-bringup — manifest-driven OVS bridge/datapath bring-up + per-segment fail-mode.
+# Runs from hookprobe-ovs.service. Detect-once: reads the manifest, never probes.
+#
+# FAIL-MODE is the load-bearing safety knob and maps directly onto OVS's own bridge
+# fail_mode (Readme "Data plane": fail-open default / fail-closed policy choice):
+#
+#   OVS fail_mode=standalone  == HookProbe FAIL-OPEN  (default).
+#       If ovs-vswitchd loses its OpenFlow controller, the bridge acts like a normal
+#       learning L2 switch -> traffic keeps flowing. An edge box never takes the net down.
+#
+#   OVS fail_mode=secure      == HookProbe FAIL-CLOSED (high-security segments).
+#       If the controller is gone, the bridge keeps ONLY existing flows and installs no
+#       new ones -> unknown traffic is dropped. The segment "blocks" when control is down.
+#
+# Out-of-band vs inline: OVS itself is an INLINE element (it forwards). For a purely
+# out-of-band posture you mirror to OVS via a SPAN/mirror port (the NAPSE capture path),
+# leaving production forwarding to the OS. Inline OVS forwarding is the opt-in.
+#
+# HONESTY: cannot run here (no OVS, no root, no datapath). Reviewed control flow only;
+# every ovs-* call is delegated and TODO-marked where real hardware behavior matters.
+set -euo pipefail
+
+MANIFEST=${MANIFEST:-/var/lib/hookprobe/manifest.json}
+SEGMENTS=${SEGMENTS:-/usr/lib/hookprobe/ovs/segments.yaml}   # default segment plan (RO)
+log() { echo "ovs-bringup: $*" >&2; }
+
+granted() { [[ "$(jq -r --arg t "$1" '.capabilities[$t].state // "absent"' "$MANIFEST")" == "granted" ]]; }
+
+bringup() {
+  granted openvswitch || { log "openvswitch not granted -> not bringing up OVS"; exit 0; }
+
+  # Ensure the kernel datapath module is present; fall back to userspace (netdev) datapath.
+  if ! modprobe openvswitch 2>/dev/null; then
+    log "kernel openvswitch module unavailable -> will use netdev (userspace) datapath"
+    # TODO: set datapath_type=netdev on bridges below when kernel datapath is absent.
+  fi
+
+  # Default management bridge. --may-exist makes this idempotent (reconciler-safe).
+  ovs-vsctl --may-exist add-br hp-br0
+  # Default posture = FAIL-OPEN (standalone): edge safety first.
+  ovs-vsctl set bridge hp-br0 fail_mode=standalone
+
+  # Per-segment fail-mode from the manifest interfaces (role/fail_mode) + segment plan.
+  # role=inline + fail_mode=fail-closed  -> OVS fail_mode=secure on that segment's bridge.
+  jq -c '.network.interfaces[]? | {name,role,fail_mode,state}' "$MANIFEST" \
+  | while read -r iface; do
+      name=$(jq -r '.name' <<<"$iface")
+      role=$(jq -r '.role' <<<"$iface")
+      fm=$(jq -r '.fail_mode // "fail-open"' <<<"$iface")
+      state=$(jq -r '.state' <<<"$iface")
+      [[ "$state" == "up" ]] || continue
+      case "$role" in
+        inline)
+          ovs-vsctl --may-exist add-port hp-br0 "$name"
+          if [[ "$fm" == "fail-closed" ]]; then
+            ovs-vsctl set bridge hp-br0 fail_mode=secure
+            log "$name inline FAIL-CLOSED -> OVS fail_mode=secure (segment blocks if controller down)"
+          else
+            log "$name inline FAIL-OPEN -> OVS fail_mode=standalone (learning switch if controller down)"
+          fi
+          ;;
+        out-of-band|"")
+          # Out-of-band: do NOT add to the forwarding bridge. Mirror a copy instead so
+          # production forwarding stays on the host (zero connectivity risk).
+          # TODO: create a mirror to a SPAN port feeding the NAPSE capture interface.
+          log "$name out-of-band -> mirror only (no inline forwarding)"
+          ;;
+      esac
+    done
+  # TODO: apply $SEGMENTS (VLAN/segment plan) once the segment schema is locked; OpenFlow
+  #       flow programming itself goes through the OS-Agent bridge (Architecture §4.4),
+  #       NOT this oneshot — this only creates bridges/ports + sets fail-mode.
+}
+
+teardown() {
+  # Conservative: leave bridges in place (removing them mid-flight could drop traffic).
+  # Only relevant on explicit operator teardown. TODO: confirm desired stop semantics.
+  log "stop requested; leaving bridges intact (fail-open) — operator removes explicitly"
+}
+
+case "${1:-up}" in
+  up)   bringup ;;
+  down) teardown ;;
+  *)    log "usage: $0 {up|down}"; exit 2 ;;
+esac

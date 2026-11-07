@@ -1,0 +1,16 @@
+[Unit]
+Description=Run the AEGIS resource-shed reconcile every 10s (resource-reality DDoS/flood shed)
+Documentation=file:///usr/share/hookprobe/docs/adr/0023-enforcement-separation.md
+
+[Timer]
+# 10s cadence: frequent enough to react to a fast-onset volumetric flood without waiting a whole
+# minute, cheap enough to run every cycle (re-samples /proc/pressure + two sysctls + `conntrack -L`,
+# all lightweight reads — no packet-path work happens in this process itself). PSI's own avg60
+# smoothing already filters transient noise, so a 10s poll cannot itself cause flapping.
+OnBootSec=10s
+OnUnitActiveSec=10s
+AccuracySec=1s
+Unit=hookprobe-resource-shed.service
+
+[Install]
+WantedBy=timers.target

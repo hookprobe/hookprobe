@@ -1,0 +1,29 @@
+[package]
+name = "hookprobe-hydra"
+version = "0.1.0"
+edition = "2021"
+description = "HookProbe OS HYDRA — the IOC/threat-intel enrichment half of Intelligence (ADR 0027). Matches a bundled, dated indicator feed against the evidence graph's own flow/application data; folds enriched detections back into the SAME evidence graph hookprobe-exploit (the CVE-lens) already writes to. Standalone/air-gapped by default; a live STIX/TAXII/MISP fetch is additive, not built here."
+
+[[bin]]
+name = "hookprobe-hydra"
+path = "src/main.rs"
+
+[lib]
+name = "hookprobe_hydra"
+path = "src/lib.rs"
+
+[dependencies]
+# Read the flow/application candidates + fold matches back into the ONE evidence graph via the
+# SAME ingest_detection path every other engine uses.
+hookprobe-evidence = { path = "../hookprobe-evidence" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# Finding-1 (2026-07-10) verdict-shaping: the SAME dependency-free mgmt-allowlist predicate the
+# scan-responder/aegis-guard enforcement paths use — the single source of truth for "never
+# quarantine the management path", reused so HYDRA's enforcement gate can't drift from theirs.
+hookprobe-mgmt-guard = { path = "../hookprobe-mgmt-guard" }
+# Operator-tunable HYDRA→trust policy (thresholds/weights) parses from YAML, matching the existing
+# `trust::TrustPolicy`/`aegis` policy convention.
+serde_yaml = "0.9"

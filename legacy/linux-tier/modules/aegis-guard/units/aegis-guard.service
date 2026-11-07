@@ -1,0 +1,56 @@
+[Unit]
+Description=AEGIS guard - reflex response decisions from detections (sandboxed Wasm)
+After=napse.service hookprobe-precompile.service
+# Best-effort ordering only (After=, not Requires=): a missing/stale .cwasm falls back to JIT
+# (ADR 0009 gap 2), so aegis-guard must still start even if precompiling hasn't run yet or failed.
+[Service]
+# 2026-07-07 backend-audit gap 2 (sd_notify watchdog, Architecture.md §4.4): the sender of
+# READY=1/WATCHDOG=1 is `hookprobe-supervisor --run-wasm aegis-guard` (see
+# `wasm_loader::run_wasi_module_streaming`'s doc comment) — a GRANDCHILD of this unit's tracked
+# main PID (the ExecStart pipeline forks a process per stage). NotifyAccess=all is the correct,
+# documented systemd knob for exactly this shape, not a workaround. TA2 (2026-07-17 field fix):
+# WATCHDOG=1 is now driven by a TIMER thread (WATCHDOG_USEC/2) inside the supervisor, NOT the wasm
+# epoch callback. The old epoch-gated ping was BACKWARDS for this module: aegis-guard's input
+# (`events`) is attack-driven, so a quiet, well-defended network legitimately produces none for a
+# long stretch — the module then blocks on stdin (healthy), no wasm executes, no ping fired, and
+# systemd SIGABRT-killed it every WatchdogSec (observed crash-looping on Pi4+CM5). A timer heartbeat
+# proves the process is alive; a compute-wedged guest is bounded by the epoch/fuel wall. WatchdogSec
+# now only needs to exceed the heartbeat interval (it does, comfortably).
+Type=notify
+NotifyAccess=all
+WatchdogSec=1800s
+ExecStart=/bin/bash -c 'set -o pipefail; exec tail -n0 -F /var/lib/hookprobe/events | /usr/lib/hookprobe/aegis-feed.sh | /usr/lib/hookprobe/hookprobe-supervisor --run-wasm aegis-guard --modules /usr/lib/hookprobe/modules --trust /usr/share/hookprobe/trust >> /var/lib/hookprobe/aegis-verdicts'
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# GAP-3 (2026-07-16 hardening): this unit processes UNTRUSTED event data (every NAPSE finding) but
+# ran root with the full capability bounding set. Mirror the supervisor's proven sandbox block —
+# CapabilityBoundingSet= empty (a wasm reflex engine needs no capability); MDWE stays OFF because
+# Wasmtime JITs (W^X). It reads/appends /var/lib/hookprobe only.
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io
+ReadWritePaths=/var/lib/hookprobe
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=64M
+# 2026-07-07 backend-audit fix: this long-running (Restart=always) wasm-reflex engine had NO
+# Slice= -- it ran in the default system.slice, outside the two-wall resource model entirely
+# (Architecture.md §4.3's outer host wall / hookprobe.slice's aggregate MemoryHigh=80% guard
+# never covered it). hookprobe-live.slice is its documented home ("supervisor, local backend,
+# live detection (Wasm) modules").
+Slice=hookprobe-live.slice
+[Install]
+WantedBy=multi-user.target

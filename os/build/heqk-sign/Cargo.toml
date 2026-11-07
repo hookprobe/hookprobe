@@ -1,0 +1,16 @@
+[package]
+name = "heqk-sign"
+version = "1.0.0"
+edition = "2021"
+description = "HEQK secure-boot signer: hybrid ed25519 + SLH-DSA (FIPS 205)"
+
+[dependencies]
+ed25519-compact = "2"
+fips205 = "0.4"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 2
+
+# Standalone host tool (std, stable) — NOT part of the no_std aarch64 kernel workspace.
+[workspace]

@@ -1,0 +1,18 @@
+# heqk boot/AK DEV-key fingerprint block-list — ADR 0046 / docs/design/heqk-signing-identity.md.
+#
+# SHA-256 of the raw key bytes for DEV heqk signing keys that must NEVER appear compiled into a
+# RELEASE hboot image (os/kernel/hboot/src/trusted_keys.rs = boot root-of-trust pubkeys;
+# attest_keys.rs = software-AK keys, INCLUDING private *_SK). Enforced (release-blocking) by
+# os/build/heqk-boot-key-check.sh. os/build/gen-heqk-dev-keys.sh appends every dev key it
+# generates here, so the block-list stays complete.
+#
+# Rationale (security-auditor decision #5, raised to release-blocker): the dev private keys live
+# unencrypted under ~/heqk-sign/keys — if an image built with them ever ships, the operator's
+# laptop key becomes a production boot-RoT / AK master key.
+#
+# Format:  <sha256-of-key-bytes>  # <NAME> (<size>, public|SECRET) — provenance
+12e2111615e9a940a3a30a928049a6beefa365c78974ae4008e6b2d6636dff86  # ED25519_PUBKEY (32B, public) — dev keygen 2026-07-21
+ff16a33b95d035ff9961e46d73ec6f39a83fe0bb12b6696bbde37b46d7ff7189  # SLHDSA_PUBKEY (32B, public) — dev keygen 2026-07-21
+a6b68d3961b090e9c6ffce26b4e2d88273cb382e8de99e11770909f0ffb4fd2c  # AK_ED25519_SK (64B, SECRET) — dev keygen 2026-07-21
+75213d2130b1b05f4e8ace4504b916aba24c484f2703c36be698be003dcf8f58  # AK_SLHDSA_SK (64B, SECRET) — dev keygen 2026-07-21
+26d3e3076bd2cb4913b21c80ca94d2452574cec71d098dec6e43ff0e1e809a2e  # AK_SLHDSA_PK (32B, public) — dev keygen 2026-07-21

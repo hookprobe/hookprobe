@@ -1,286 +1,65 @@
-# HookProbe .gitignore
-# Prevents committing sensitive data, temporary files, and build artifacts
-
-# ============================================================
-# CRITICAL: SECRETS AND CREDENTIALS
-# ============================================================
-# Never commit files with actual credentials
-*CHANGE_ME*
-*.key
-*.pem
-*.crt
-*.p12
-*.pfx
-.env
-.env.*
-!.env.example
-secrets/
-credentials/
-*.secret
-
-# SSH keys
-id_rsa
-id_rsa.pub
-id_ed25519
-id_ed25519.pub
-*.ppk
-
-# ============================================================
-# PYTHON
-# ============================================================
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-# Python packaging (not our products/*/lib/ directories)
-/lib/
-/lib64/
-parts/
-sdist/
-var/
-wheels/
-pip-wheel-metadata/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
-
-# PyInstaller
-*.manifest
-*.spec
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.log
-.hypothesis/
-.pytest_cache/
-test-results/
-junit.xml
-
-# Virtual environments
-venv/
-env/
-ENV/
-env.bak/
-venv.bak/
-.venv/
-pip-log.txt
-pip-delete-this-directory.txt
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# ============================================================
-# EDITORS AND IDEs
-# ============================================================
-# VSCode
-.vscode/
-*.code-workspace
-.history/
-
-# IntelliJ / PyCharm
-.idea/
-*.iml
-*.iws
-out/
-
-# Vim
-*.swp
-*.swo
-*~
-.*.swp
-.*.swo
-Session.vim
-
-# Emacs
-*~
-\#*\#
-/.emacs.desktop
-/.emacs.desktop.lock
-*.elc
-auto-save-list
-tramp
-.\#*
-
-# Sublime Text
-*.sublime-project
-*.sublime-workspace
-
-# ============================================================
-# OPERATING SYSTEMS
-# ============================================================
-# macOS
-.DS_Store
-.AppleDouble
-.LSOverride
-._*
-.DocumentRevisions-V100
-.fseventsd
-.Spotlight-V100
-.TemporaryItems
-.Trashes
-.VolumeIcon.icns
-.com.apple.timemachine.donotpresent
-.AppleDB
-.AppleDesktop
-Network Trash Folder
-Temporary Items
-.apdisk
-
-# Windows
-Thumbs.db
-Thumbs.db:encryptable
-ehthumbs.db
-ehthumbs_vista.db
-*.stackdump
-[Dd]esktop.ini
-$RECYCLE.BIN/
-*.lnk
-
-# Linux
-*~
-.directory
-.Trash-*
-.nfs*
-
-# ============================================================
-# HOOKPROBE SPECIFIC
-# ============================================================
-# Deployment artifacts
-/var/log/hookprobe/
-/var/lib/hookprobe/
-/opt/hookprobe/
-/tmp/hookprobe-*
-/tmp/n8n-workflows/
-/tmp/mcp-server-build/
-
-# Container volumes and data
-*.tar
-*.tar.gz
-*-backup.tar
-*-backup.tar.gz
-hookprobe-backup-*/
-n8n-data-backup.tar
-n8n-db-backup.tar
-grafana-data/
-postgres-data/
-victoriametrics-data/
-redis-data/
-
-# OVS and network configs (if generated)
-ovs-db-backup/
-network-state-*.json
-
-# Logs
-*.log
-logs/
-*.out
-*.err
-
-# Temporary files
-tmp/
-temp/
-*.tmp
-*.bak
-*.backup
-
-# Generated documentation
-docs/_build/
-site/
-
-# Test artifacts
-.coverage
-htmlcov/
-.pytest_cache/
-test-output/
-bandit-report.json
-shellcheck-report.txt
-
-# ============================================================
-# PACKAGE MANAGERS AND DEPENDENCIES
-# ============================================================
-# Node.js (if used for n8n development)
+target/
 node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-package-lock.json
-yarn.lock
-
-# ============================================================
-# SECURITY AND CERTIFICATES
-# ============================================================
-# SSL/TLS certificates (except examples)
-*.csr
-*.der
-!example.crt
-!example.key
-
-# GPG
-*.gpg
-*.asc
-!*.asc.example
-
-# ============================================================
-# MISC
-# ============================================================
-# Archives
-*.zip
-*.gz
-*.bz2
-*.7z
-*.rar
-*.iso
-*.dmg
-
-# Database files
-*.db
-*.sqlite
-*.sqlite3
-*.db-journal
-
-# Core dumps (not our core/ directory)
-*.core
-core.[0-9]*
-
-# Local configuration overrides
-local.conf
-*.local
-config.local.sh
-
-# IDE-specific debugging
-.vscode/launch.json
-.idea/workspace.xml
-
-# Git merge artifacts
+os/mission-control/dist/
+legacy/linux-tier/builder/kernel-build/build-*/
+legacy/linux-tier/builder/kernel-build/debroot-*/
+legacy/linux-tier/builder/kernel-build/linux-*/
+legacy/linux-tier/builder/kernel-build/*.deb
+legacy/linux-tier/builder/kernel-build/*.tar.gz
+legacy/linux-tier/builder/mkosi*/*.img
+legacy/linux-tier/builder/mkosi*/*.raw
+legacy/linux-tier/builder/mkosi*/*.efi
+legacy/linux-tier/builder/mkosi*/*.initrd
+legacy/linux-tier/builder/mkosi*/*.vmlinuz
+legacy/linux-tier/builder/mkosi*/pi-kernel-cache/
 *.orig
+*.old
 
-# MacOS network storage
-._.DS_Store
-.claude.local
-.claude/settings.local.json
-.claude/agent-memory/
+# ADR 0043 M1: heqk build-seam staging output
+legacy/linux-tier/builder/generated/
+os/build/generated/
+
+# Product-Cortex RUNTIME telemetry — logs session/transcript content (user prompts,
+# agent summaries) + a 4MB lifecycle SQLite DB. MUST NOT be in a public repo (it
+# captured the scrubbed dev credential via an agent report). Keep .claude/agents,
+# .claude/workflows, .claude/hooks, .claude/settings.json — those are project canon.
+.claude/cortex/
+.claude/**/*.db
+.claude/**/*.db-journal
+
+# ── ADR 0044 / Phase-0 GitHub-prep hardening (2026-07-25) ─────────────────────
+# History was purged with git-filter-repo (2026-07-25): builder/release.key*, the
+# kernel-build .deb bloat, .claude/cortex/ telemetry, and a personal dev credential
+# (both the operator username and a hardcoded wifi password) are gone from ALL
+# commits — including the inherited HEQK history (verified clean). These rules keep
+# them from ever re-entering the tree.
+#
+# Secrets / private key material — MUST NEVER be tracked (defense-in-depth; the
+# committed signing keys were purged from history — production signs via HSM/keyless).
+**/release.key
+**/release.key*
+*.key
+!**/*.pub
+!**/*public*.pem
+cosign.key
+*.sk
+*.pem
+.env
+!os/mission-control/.env.example
+.netrc
+id_rsa
+id_ed25519
+id_ecdsa
+
+# Build-artifact catch-alls (path-scoped rules above stay authoritative; these are
+# defense-in-depth for the whole tree — e.g. a stray backup tarball like
+# heqk-git-history-backup-*.tar.gz must never be added).
+legacy/linux-tier/builder/kernel-build/out/
+*.img
+*.raw
+*.qcow2
+*.tar.gz
+!legacy/linux-tier/base/drivers/**/*.tar.gz          # pinned vendored-driver sources (legacy/linux-tier/base/drivers/SOURCES.md) are legitimate
+
+# heqk dev boot-signing keydir (os/build/gen-heqk-dev-keys.sh) — private key material, never tracked
+os/build/.heqk-dev-keys/

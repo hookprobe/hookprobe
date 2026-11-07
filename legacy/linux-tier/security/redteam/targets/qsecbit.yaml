@@ -1,0 +1,10 @@
+# security/redteam/targets/qsecbit.yaml — per-DUT-component descriptor (ADR 0020 D2).
+component: qsecbit
+description: >
+  QSECBIT composite cyber-resilience score (modules/qsecbit). ADR 0020 D7 adds an OPTIONAL
+  resilience-evidence input (per-layer withstand ratio) to its composite score, populated from the
+  latest attack_run verdict. NOT wired in this pass (D7 is deliberately scoped out of this build to
+  keep Phase-1b to the ROE + netns DUT + evidence loop + Gate R + L2-L4 probes the ADR's "Build, in
+  this order" actually asked for) — tracked here as the next concrete step, not implemented.
+status: roadmap
+reason: "D7 QSECBIT resilience-input wiring not yet implemented in this pass; qsecbit itself has no direct on-wire attack surface of its own (it consumes readings, it does not parse untrusted network input)."

@@ -1,0 +1,18 @@
+#!/bin/sh
+# initramfs-tools HOOK (build time) — pull the dm-verity toolchain into the initrd so the boot script
+# can mount a read-only, hash-verified /usr while / stays writable. The CORRECT immutable-OS model
+# (ostree/composefs): verity protects /usr (code) only; /etc + /var are writable. See ADR 0006 (H3).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+. /usr/share/initramfs-tools/hook-functions
+
+copy_exec /sbin/veritysetup /sbin 2>/dev/null || copy_exec /usr/sbin/veritysetup /sbin
+copy_exec /sbin/dmsetup /sbin 2>/dev/null || copy_exec /usr/sbin/dmsetup /sbin
+# blkid: resolve /usr + boot by LABEL (mmcblk0/mmcblk1 enumeration is non-deterministic on the Pi 4).
+copy_exec /sbin/blkid /sbin 2>/dev/null || copy_exec /usr/sbin/blkid /sbin
+manual_add_modules dm_verity
+manual_add_modules dm_mod
+# loop: veritysetup attaches the hash-tree FILE via a loopback device (open failed in the initramfs
+# without it: "Attaching loopback device failed"). devtmpfs creates /dev/loop* when the module loads.
+manual_add_modules loop

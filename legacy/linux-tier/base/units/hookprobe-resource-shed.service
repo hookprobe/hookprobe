@@ -1,0 +1,49 @@
+[Unit]
+Description=AEGIS reflex: resource-REALITY DDoS/flood shed (conntrack-fill + PSI, never identity; nft software-floor fallback + defence-in-depth alongside eBPF shed-v2 where resource_shed_v2 is granted — ADR 0031 §E)
+Documentation=file:///usr/share/hookprobe/docs/adr/0023-enforcement-separation.md
+Documentation=file:///usr/share/hookprobe/docs/adr/0031-dataplane-performance-strategy.md
+# Needs the data partition (resource-shed state, responses) — same bootstrap ordering discipline
+# every other AEGIS reflex unit in this repo uses (belt-and-braces: this unit has no alert-stream
+# dependency on napse-dpi at all, unlike hookprobe-scan-responder.service, since it reacts to
+# resource facts, not detections — but it still needs the manifest + data mount to exist).
+After=var-lib-hookprobe.mount hookprobe-bootstrap.service hookprobe-network-reconcile.service
+Wants=hookprobe-bootstrap.service hookprobe-network-reconcile.service
+ConditionPathExists=/var/lib/hookprobe/manifest.json
+
+[Service]
+Type=oneshot
+# Timer-driven (hookprobe-resource-shed.timer, 10s cadence) — this unit itself just does ONE
+# reconcile cycle and exits; RESOURCE_SHED_APPLY=1 below actually executes the generated nft
+# (Layer 1's blanket bootstrap + Layer 2/3's shed_ips element diff), matching
+# hookprobe-scan-responder.service's APPLY=1-by-default rationale: the enforcement here is
+# resource-reality-keyed and self-reverting by construction (never a durable/identity block), so
+# turning it on by default is safe — see crates/hookprobe-manifest/src/scan_responder.rs's
+# "RESOURCE-REALITY ENFORCEMENT" module doc for the full invariant proof.
+#Environment=RESOURCE_SHED_TTL_SECS=60
+#Environment=RESOURCE_SHED_NEW_CONN_PPS=400
+#Environment=RESOURCE_SHED_CAP_PPS=50
+#Environment=RESOURCE_SHED_CONNTRACK_SATURATION_PCT=80
+#Environment=RESOURCE_SHED_TOP_TALKER_MIN_ENTRIES=200
+#Environment=RESOURCE_SHED_CPU_AVG60_PCT=40
+#Environment=RESOURCE_SHED_MEM_AVG60_PCT=15
+#Environment=LAN_IFACE=wlan0
+#Environment=WAN_IFACE=end0
+# 2026-07-07 cross-platform convention (matches hookprobe-scan-responder.service): LAN_IFACE/
+# WAN_IFACE resolve to THIS device's manifest-classified interfaces, written by
+# hookprobe-network-reconcile.service from the SAME reconcile pass that classifies the WAN uplink
+# + LAN bridge/routed-AP radio — EnvironmentFile= always overrides Environment= per systemd.exec(5).
+EnvironmentFile=-/var/lib/hookprobe/ifaces.env
+Environment=RESOURCE_SHED_APPLY=1
+ExecStart=/usr/lib/hookprobe/resource-shed-reconcile.sh
+Nice=10
+# Only privilege needed: nft (CAP_NET_ADMIN) + `conntrack -L` (also CAP_NET_ADMIN) — /proc/pressure
+# and the two conntrack sysctl reads need no capability at all.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+PrivateTmp=yes
+MemoryMax=32M
+Slice=hookprobe-live.slice

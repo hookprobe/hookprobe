@@ -1,0 +1,21 @@
+[Unit]
+Description=Run the HookProbe product-health beacon export once a day (ADR 0012 D5)
+Documentation=file:///usr/share/hookprobe/docs/adr/0012-release-definition-cortex-pass.md
+
+[Timer]
+# Daily cadence — a product-health beacon, not a live-detection reconciler (contrast
+# hookprobe-trust-reconcile.timer's 30s). Give the box time to settle after boot before
+# the first run; Persistent=true catches up if the device was off at the scheduled time
+# (edge devices reboot/power-cycle often). RandomizedDelaySec spreads daily wakeups
+# across a fleet instead of a synchronized burst — harmless here (each run is a fast,
+# local, consent-gated no-op or a small local write), but it's the right habit for
+# anything that runs on a calendar across many devices.
+OnBootSec=10min
+OnUnitActiveSec=1d
+Persistent=true
+RandomizedDelaySec=30min
+AccuracySec=1h
+Unit=hookprobe-beacon.service
+
+[Install]
+WantedBy=timers.target

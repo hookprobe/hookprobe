@@ -1,0 +1,15 @@
+# Pin the ONBOARD radio to a stable name so it is ALWAYS the station/uplink,
+# regardless of USB-vs-SDIO enumeration order across reboots.
+#
+# The Pi / CM5 / Pi5 onboard radio is always the `brcmfmac` driver. Matching the
+# driver (not the wlanN name) is reboot-stable. Result: `wlan-sta` — bind
+# wpa_supplicant (station/client) here.
+#
+# Baked into the image at /etc/systemd/network/10-hookprobe-wlan-station.link
+# (Containerfile: COPY base/network/*.link /etc/systemd/network/).
+
+[Match]
+Driver=brcmfmac
+
+[Link]
+Name=wlan-sta

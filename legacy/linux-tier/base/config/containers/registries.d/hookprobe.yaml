@@ -1,0 +1,12 @@
+# registries.d/hookprobe.yaml — where to find signatures for HookProbe registries.
+# Pairs with /etc/containers/policy.json (sigstoreSigned). For cosign/sigstore the
+# signatures travel as OCI artifacts alongside the image, so use the sigstore
+# attachment mode rather than a separate signature store.
+
+docker:
+  ghcr.io/hookprobe:
+    use-sigstore-attachments: true
+  registry.hookprobe.com:
+    use-sigstore-attachments: true
+# TODO: if the release publishes detached signatures to a lookaside store instead,
+#       set `lookaside:` here and align with the cosign publish step in CI.

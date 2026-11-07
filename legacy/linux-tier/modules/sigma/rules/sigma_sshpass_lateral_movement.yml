@@ -1,0 +1,28 @@
+title: Automated SSH Login With an Embedded Credential (sshpass)
+id: 47c1b52b-ea16-4213-8551-4688f308451e
+status: experimental
+description: >
+  Exec of `sshpass -p`/`sshpass -f` — a wrapper that feeds a password to `ssh`
+  non-interactively, the standard way to script mass/automated SSH logins with an
+  embedded plaintext credential. A HOST-side, process-exec angle on lateral movement
+  (T1021.004 Remote Services: SSH), distinct from `napse-capture::lateral`'s
+  NETWORK-flow-based lateral-movement detector (rule_id 1_000_041, which watches
+  connection-fanout patterns on the wire) — host_edr explicitly documents that it adds
+  no host-side lateral-movement signal of its own (see its module doc's honest gap
+  list). Real NEW coverage: this is the compromised device itself being used to pivot
+  onward with a harvested/embedded credential.
+  HONEST FALSE-POSITIVE NOTE: some legitimate CI/CD and fleet-automation scripts use
+  `sshpass` (discouraged but real) — kept `experimental`/`medium`.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - "sshpass -p"
+      - "sshpass -f"
+  condition: selection
+level: medium
+tags:
+  - attack.lateral-movement
+  - attack.t1021.004

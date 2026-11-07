@@ -1,0 +1,47 @@
+[Unit]
+Description=Senzorium software flow capture (conntrack → /var/lib/hookprobe/flows)
+Documentation=file:///usr/share/hookprobe/docs/senzorium-flow.md
+# Zero-trust "everything is rogue" observation: normalize every conntrack flow to the
+# common event schema NAPSE consumes. The honest fallback when the XDP capture sysext
+# (napse-capture) isn't present — passive, reads the kernel conntrack table the routed
+# AP already populates. The supervisor enables this ONLY when `soc`/`capture` is granted.
+After=hookprobe-network-reconcile.service nftables.service systemd-modules-load.service
+Wants=hookprobe-network-reconcile.service
+# 2026-07-05 FIX (backend-audit P2 #7 — silent-skip gate #1): this used to depend on
+# something ELSE having already auto-loaded `nf_conntrack` (no failure/warning if it
+# hadn't — a genuinely silent gap on a kernel that ships the module but never
+# auto-triggers it). `nf_conntrack` is now loaded explicitly at boot
+# (modules/senzorium-flow/60-hookprobe-nf-conntrack.conf, systemd-modules-load.service,
+# ordered before this unit above), so this condition is now reliably true whenever the
+# kernel supports conntrack at all — a kernel genuinely built WITHOUT it still degrades
+# gracefully (skipped, not a hard failure).
+ConditionPathExists=/proc/net/nf_conntrack
+# Mutually exclusive with the eBPF fast path: when napse_detect.bpf.o is present, napse-capture emits
+# the conn records and this software floor would double-count. Run ONLY when the object is absent.
+# CAVEAT (backend-audit P2 #7 — silent-skip gate #2, NOT fully closed here): this checks the
+# object's mere EXISTENCE, not whether napse-capture is actually PRODUCING flows from it — a
+# present-but-not-actually-running XDP path would leave BOTH capture paths dark with no signal.
+# Lower blast radius today than it looks: `napse-capture`'s `module.yaml` does not currently
+# stage `napse_detect.bpf.o`/the XDP loader at all (only the AF_PACKET `napse-dpi` sensor is
+# staged — see modules/napse-capture/module.yaml), so this file realistically never exists on a
+# built image yet and this condition is almost always true in practice. Deferred (lowest
+# priority, P2): a real fix needs a liveness signal from the XDP loader itself (adjacent to the
+# napse-capture/loader ownership boundary), not just a path-existence check.
+ConditionPathExists=!/usr/lib/hookprobe/xdp/napse_detect.bpf.o
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/hookprobe/senzorium-flow-export.sh
+Restart=on-failure
+RestartSec=5
+# Read-only host except the flows event store + its /run scratch. No privileges needed:
+# reading /proc/net/nf_conntrack is unprivileged; we only append normalized records.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe /run/hookprobe
+CapabilityBoundingSet=
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

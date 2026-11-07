@@ -1,0 +1,20 @@
+# raspberrypi.sources — SCOPED apt source for the Raspberry Pi downstream kernel (ADR 0029 D3).
+#
+# Consumed ONLY by builder/mkosi-arm64/make-pi-image.sh's cached, non-privileged
+# `podman ... apt-get download` staging step — NEVER added to mkosi.conf, so the arm64-UEFI/
+# virt rootfs (and every other platform) stays 100% Debian-canon (ADR 0029 D2). This file is
+# copied into a throwaway podman container for the fetch only; it is never installed on a
+# shipped device.
+#
+# Signed-By is pinned to rpi-keyring/raspberrypi-archive-keyring.gpg (vendored in this repo,
+# pinned + SHA-256'd in base/drivers/SOURCES.md — fingerprint
+# CF8A 1AF5 02A2 AA2D 763B AE7E 82B1 2992 7FA3 303E, "Raspberry Pi Archive Signing Key",
+# confirmed 2026-07-08 by direct extraction from raspberrypi-archive-keyring_2021.1.1+rpt1_all.deb).
+# Scoping the key to THIS file only means it can verify RPi-repo packages and nothing else —
+# it never becomes a system-wide trust anchor (ADR 0029 D3.2).
+Types: deb
+URIs: https://archive.raspberrypi.com/debian
+Suites: bookworm
+Components: main
+Architectures: arm64
+Signed-By: /rpi-keyring/raspberrypi-archive-keyring.gpg

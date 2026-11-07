@@ -1,0 +1,22 @@
+# hookprobe-control.socket — the admin-only READ/WRITE control socket (Architecture
+# C9, ADR 0003 §exposure). Intent submission + reconcile triggers come in here; the
+# AI planner proposes a plan-as-a-diff, the deterministic reconciler enforces. NEVER
+# bound to 0.0.0.0 — a local UNIX socket gated by filesystem perms + SO_PEERCRED.
+# Mode 0600 (admin only). This is the counterpart to the world-readable manifest
+# socket: changing intent must be privileged; reading the manifest must not be.
+
+[Unit]
+Description=HookProbe admin-only control socket (intent + reconcile)
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/architecture/Architecture.md
+
+[Socket]
+ListenStream=/run/hookprobe/control.sock
+SocketMode=0600
+SocketUser=hookprobe
+SocketGroup=hookprobe
+Service=hookprobe-supervisor.service
+# TODO: confirm whether the local backend (Rust/Axum, Phase 3) owns this socket
+#       instead of the supervisor; the reverse-proxy UDS↔HTTP/2 bridge sits in front.
+
+[Install]
+WantedBy=sockets.target

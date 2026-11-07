@@ -1,0 +1,73 @@
+#!/bin/sh
+# initramfs-tools local-bottom (boot) — mount a READ-ONLY, dm-verity-verified /usr at ${rootmnt}/usr
+# BEFORE switch_root, while / (${rootmnt}) stays a normal writable ext4. Correct immutable-OS model:
+#   • /usr (code) is immutable + hash-verified — every block read checked, fail-closed.
+#   • / , /etc, /var stay writable — AEGIS writes its generated config freely.
+#   • /usr is ALWAYS mounted READ-ONLY (verity, or plain-RO fallback) → the /usr device is NEVER
+#     written → never drifts from the build hash → verity is RETRYABLE every boot (no self-poisoning).
+# Devices resolved by LABEL (the Pi 4's two SDHCI controllers enumerate mmcblk0/mmcblk1 non-
+# deterministically — hardcoding /dev paths was the boot failure). Hash tree lives on the EXT4 root
+# /boot (already mounted here) — NOT the FAT boot partition — so no vfat/nls codepage dependency in
+# the initramfs (that was the second failure: FAT mount → couldn't read the hash tree → fell back).
+# See docs/adr/0006-os-hardening.md (H3).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+. /scripts/functions
+
+RH=""; UDATA=""; HASHFILE="usr.verity"
+for x in $(cat /proc/cmdline); do
+  case "$x" in
+    usrverity.roothash=*) RH="${x#usrverity.roothash=}" ;;
+    usrverity.data=*)     UDATA="${x#usrverity.data=}" ;;
+    usrverity.hashfile=*) HASHFILE="${x#usrverity.hashfile=}" ;;
+  esac
+done
+[ -n "$RH" ] || exit 0                 # no /usr-verity requested → normal boot
+
+modprobe dm_verity 2>/dev/null; modprobe dm_mod 2>/dev/null
+modprobe loop 2>/dev/null   # veritysetup loop-attaches the hash-tree FILE (needs /dev/loop*)
+command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=30 2>/dev/null
+
+# Resolve the /usr device by LABEL (robust to mmcblk0/mmcblk1). Accept LABEL=x or a /dev path.
+resolve() {
+  case "$1" in
+    LABEL=*) blkid -L "${1#LABEL=}" 2>/dev/null ;;
+    /dev/*)  [ -b "$1" ] && echo "$1" ;;
+    ?*)      blkid -L "$1" 2>/dev/null ;;
+  esac
+}
+: "${UDATA:=LABEL=hp-usr}"; USPEC="$UDATA"
+i=0; while [ $i -lt 600 ]; do            # up to ~60s for the label to resolve to a real block device
+  UDATA=$(resolve "$USPEC")
+  [ -b "$UDATA" ] && break
+  [ $((i % 50)) -eq 0 ] && command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=5 2>/dev/null
+  sleep 0.1; i=$((i+1))
+done
+
+HT="${rootmnt}/boot/$HASHFILE"           # hash tree on the ext4 root — no FAT mount needed
+LOG="${rootmnt}/boot/usr-verity-boot.log"
+
+usr_fallback() {
+    echo "FALLBACK: $1" >> "$LOG" 2>/dev/null
+    log_warning_msg "hookprobe-usr-verity: $1 — mounting /usr READ-ONLY without verity (device pristine, retryable)"
+    mount -o ro "$UDATA" "${rootmnt}/usr" 2>/dev/null \
+      || log_warning_msg "hookprobe-usr-verity: could not mount /usr at all (${rootmnt}/usr)"
+    exit 0
+}
+
+[ -b "$UDATA" ] || usr_fallback "usr device (LABEL $USPEC) did not resolve"
+[ -f "$HT" ]    || usr_fallback "hash tree $HT missing"
+
+verr=$(veritysetup open "$UDATA" hpusr "$HT" "$RH" 2>&1)
+if [ $? -eq 0 ]; then
+    if mount -o ro /dev/mapper/hpusr "${rootmnt}/usr" 2>/dev/null; then
+        echo "OK: /usr verified (dm-verity) from $UDATA" >> "$LOG" 2>/dev/null
+        log_success_msg "hookprobe-usr-verity: /usr VERIFIED (dm-verity, read-only)"
+    else
+        veritysetup close hpusr 2>/dev/null
+        usr_fallback "verity opened but /usr mount failed"
+    fi
+else
+    usr_fallback "verity open failed: $verr"
+fi

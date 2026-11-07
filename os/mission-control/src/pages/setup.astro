@@ -1,0 +1,21 @@
+---
+/**
+ * /setup — System Setup (first-run wizard / Provisioning lens).
+ *
+ * The zero-touch onboarding surface (ADR 0010). Rendered inside the Mission
+ * Control shell — the setup portal is a lens, not a separate app. Reachable at
+ * os.hookprobe.local on first boot (captive), then setup.hookprobe.local.
+ * Spec: docs/architecture/MissionControl.md §12 (Administration → Provisioning, "First run").
+ */
+
+import Shell from '../layouts/Shell.astro';
+import SystemSetupApp from '../components/SystemSetupApp';
+import '../styles/setup.css';
+---
+
+<Shell
+  title="System Setup — HookProbe OS"
+  description="Zero-touch first-run setup: identity, Wi-Fi, LAN, WAN, encryption — applied as a verified plan by the reconciler."
+>
+  <SystemSetupApp client:load />
+</Shell>

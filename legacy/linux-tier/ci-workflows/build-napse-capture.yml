@@ -1,0 +1,183 @@
+# build-napse-capture — compile + VERIFY the unified CO-RE detection engine (ADR 0005), build the
+# userspace loader/DPI/feed for BOTH arches, and package them into the cosign-signed napse-capture
+# sysext. This fills the eBPF/CO-RE gap build-modules.yml flags: it needs clang -target bpf + libbpf +
+# a kernel >= 5.19 (the bpf_ct_lookup kfuncs). ubuntu-24.04 ships >= 6.x (>= 5.19 ✓).
+#
+# The aarch64 loader is built NATIVELY on an arm64 runner (ubuntu-24.04-arm) — libbpf-sys links native
+# libbpf/libelf/zlib, so cross-compiling is painful; a native build is clean. The CO-RE .bpf.o itself
+# is arch-neutral (bpfel), built once on x86 and shipped to every target.
+#
+# Pipeline: bpf-object (compile+verify+BTFGen) → loader-x86 (gate) + loader-arm64 (native) → sysext
+# (assemble + squashfs + cosign + push OCI, reusing build-modules.yml's keyless-cosign path).
+name: build-napse-capture
+
+on:
+  push:
+    paths:
+      - "modules/napse-capture/**"
+      - "crates/hookprobe-manifest/**"
+      - ".github/workflows/build-napse-capture.yml"
+  pull_request:
+    paths:
+      - "modules/napse-capture/**"
+      - "crates/hookprobe-manifest/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write          # keyless cosign for the sysext (ADR 0002)
+  attestations: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  # 1) Compile the ONE CO-RE object (xdp + tc) and prove it is verifier-clean on a real >= 5.19 kernel
+  #    with nf_conntrack loaded (so the ct-lookup kfuncs resolve). This is the real gate.
+  bpf-object:
+    name: "CO-RE object · napse_detect.bpf.o (compile + verify)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install BPF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev dwarves \
+                                  linux-tools-common "linux-tools-$(uname -r)" || \
+          sudo apt-get install -y clang llvm libbpf-dev libelf-dev zlib1g-dev dwarves linux-tools-generic
+          clang --version | head -1
+
+      - name: Resolve a WORKING bpftool
+        # The /usr/sbin/bpftool wrapper only works if a matching linux-tools-<kver> is installed;
+        # otherwise it errors ("bpftool not found for kernel …"). Pick a real one that prints a version.
+        run: |
+          BPFTOOL=""
+          for c in bpftool $(ls /usr/lib/linux-tools-*/bpftool 2>/dev/null); do
+            if "$c" version 2>/dev/null | grep -q '^bpftool v'; then BPFTOOL="$c"; break; fi
+          done
+          [ -n "$BPFTOOL" ] || { echo "no working bpftool found"; exit 1; }
+          echo "BPFTOOL=$BPFTOOL" >> "$GITHUB_ENV"
+          echo "using $BPFTOOL ($($BPFTOOL version | head -1))"
+
+      - name: vmlinux.h from the runner's BTF + compile (make bpf-unified)
+        working-directory: modules/napse-capture
+        run: |
+          make bpf-unified BPFTOOL="$BPFTOOL" CLANG=clang
+          OBJ=sysext/usr/lib/hookprobe/xdp/napse_detect.bpf.o
+          test -f "$OBJ"
+          llvm-objdump -h "$OBJ" | grep -E "xdp|tc|\.maps"
+
+      - name: Verifier load-test on a veth (the real gate — kfuncs, bounds, direct pkt access)
+        working-directory: modules/napse-capture
+        run: |
+          set -x
+          OBJ=sysext/usr/lib/hookprobe/xdp/napse_detect.bpf.o
+          sudo modprobe nf_conntrack
+          sudo ip link add veth-a type veth peer name veth-b
+          sudo ip link set veth-a up; sudo ip link set veth-b up
+          sudo mkdir -p /sys/fs/bpf/napse
+          sudo "$BPFTOOL" prog loadall "$OBJ" /sys/fs/bpf/napse
+          sudo "$BPFTOOL" prog show | grep -E "napse_xdp|napse_tc"
+          sudo rm -rf /sys/fs/bpf/napse; sudo ip link del veth-a
+
+      - name: BTFGen — minimal BTF for BSP kernels without CONFIG_DEBUG_INFO_BTF (ADR 0005)
+        working-directory: modules/napse-capture
+        run: |
+          make btfgen BPFTOOL="$BPFTOOL" || echo "btfgen needs a btfhub-archive corpus in CI cache"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napse-detect-object
+          path: modules/napse-capture/sysext/usr/lib/hookprobe/xdp/
+
+  # 2a) Fast gate: tests + clippy + the bpf-featured build on x86 (catches API/logic regressions).
+  loader-x86:
+    name: "loader gate · x86 (tests + clippy + --features bpf)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libbpf-dev libelf-dev zlib1g-dev clang pkg-config
+      - name: Pure tests (event/plan/dpi/feed) + clippy
+        run: |
+          cargo test -p napse-loader --locked
+          cargo clippy -p napse-loader --features bpf -- -D warnings
+      - name: Build --features bpf (x86, proves the libbpf-rs binding compiles)
+        run: cargo build --release -p napse-loader --features bpf --locked
+
+  # 2b) The DEPLOYABLE aarch64 loader — built NATIVELY on an arm64 runner (no cross-libbpf).
+  loader-arm64:
+    name: "loader · aarch64 (native, --features bpf)"
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libbpf-dev libelf-dev zlib1g-dev clang pkg-config make
+      - name: Build + install napse-loader + napse-dpi into the sysext bin
+        # `make loader` = cargo build -p napse-loader --features bpf + install both into
+        # sysext/usr/lib/hookprobe/bin/ where napse-capture.service / napse-dpi.service exec them.
+        run: make -C modules/napse-capture loader
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napse-capture-bin-aarch64
+          path: modules/napse-capture/sysext/usr/lib/hookprobe/bin/
+
+  # 3) Assemble + sign the sysext: the CO-RE object + BTF blobs + the aarch64 binaries + the units →
+  #    a squashfs /usr overlay, cosign-signed and pushed as a per-arch OCI artifact (build-modules.yml
+  #    cosign path). systemd-sysext merges it at boot; napse-capture.service then activates (its
+  #    ConditionPathExists on napse_detect.bpf.o is now satisfied).
+  sysext:
+    name: "sysext · package + cosign (aarch64)"
+    needs: [bpf-object, loader-arm64, loader-x86]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update && sudo apt-get install -y squashfs-tools
+      - uses: sigstore/cosign-installer@v3
+      - uses: oras-project/setup-oras@v1
+
+      - uses: actions/download-artifact@v4
+        with: { name: napse-detect-object, path: modules/napse-capture/sysext/usr/lib/hookprobe/xdp/ }
+      - uses: actions/download-artifact@v4
+        with: { name: napse-capture-bin-aarch64, path: modules/napse-capture/sysext/usr/lib/hookprobe/bin/ }
+
+      - name: Assemble the sysext tree (object + binaries + units + extension-release)
+        working-directory: modules/napse-capture
+        run: |
+          chmod +x sysext/usr/lib/hookprobe/bin/* 2>/dev/null || true
+          # Stamp the arch so systemd-sysext refuses to merge this arm64 sysext on the wrong arch
+          # (systemd arch names: arm64 / x86-64 / riscv64).
+          sed -i 's/^ARCHITECTURE=.*/ARCHITECTURE=arm64/' sysext/usr/lib/extension-release.d/extension-release.napse-capture
+          # The units + extension-release are already checked into sysext/; just confirm the assembly.
+          test -f sysext/usr/lib/hookprobe/xdp/napse_detect.bpf.o || { echo "missing CO-RE object"; exit 1; }
+          test -x sysext/usr/lib/hookprobe/bin/napse-loader || { echo "missing napse-loader"; exit 1; }
+          echo "--- extension-release ---"; cat sysext/usr/lib/extension-release.d/extension-release.napse-capture
+          echo "--- sysext contents ---"; find sysext -type f | sort
+
+      - name: Build the squashfs sysext image
+        working-directory: modules/napse-capture
+        run: |
+          mksquashfs sysext napse-capture-aarch64.sysext.raw -all-root -noappend -quiet
+          ls -la napse-capture-aarch64.sysext.raw
+
+      - name: Cosign-sign + push OCI
+        if: github.event_name != 'pull_request'
+        working-directory: modules/napse-capture
+        env: { GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}" }
+        run: |
+          REF="${REGISTRY}/${{ github.repository_owner }}/sysext/napse-capture:aarch64"
+          echo "${GH_TOKEN}" | oras login "${REGISTRY}" -u "${{ github.actor }}" --password-stdin
+          oras push "$REF" \
+            --artifact-type application/vnd.hookprobe.sysext \
+            napse-capture-aarch64.sysext.raw:application/vnd.squashfs
+          cosign sign --yes "$REF"
+          echo "signed + pushed $REF — devices merge it via systemd-sysext; napse-capture.service activates"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: napse-capture-sysext-aarch64
+          path: modules/napse-capture/napse-capture-aarch64.sysext.raw

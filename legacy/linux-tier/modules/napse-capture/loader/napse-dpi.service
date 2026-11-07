@@ -1,0 +1,56 @@
+[Unit]
+Description=NAPSE deep-packet sensor on the mirror sink (DNS/TLS/HTTP → flows; SYN port-scan → events)
+Documentation=file:///usr/share/hookprobe/docs/adr/0005-unified-ebpf-detection.md
+# Reads the tc-mirred mirror sink (hp-mirror = a copy of every forwarding NIC, ADR 0005) via
+# AF_PACKET and appends dns/tls/http records to the NAPSE flow stream. Out-of-band, read-only on the
+# wire. This is the userspace DEEP layer the XDP/TC fast-path can't do inline; it needs no BPF object,
+# so it runs today. Ordered after the reconcile that creates the mirror; retries until it exists.
+#
+# Also runs the packet-layer SYN port-scan detector (rule 1000003, identical to NAPSE's wasm engine
+# rule): a fast scan's closed-port SYNs get RST'd before conntrack (senzorium-flow, polled every 5s)
+# ever accumulates them, but the raw SYNs are visible right here — so alerts go to EVENTS (NOT
+# FLOWS), matching where every other NAPSE alert lands, for the evidence-graph ingester.
+After=hookprobe-network-reconcile.service
+Wants=hookprobe-network-reconcile.service
+
+[Service]
+# 2026-07-07 backend-audit gap 2 (sd_notify watchdog, Architecture.md §4.4): napse-dpi now sends
+# READY=1 once the mirror socket is bound, and WATCHDOG=1 (rate-limited, ≥20s apart) from INSIDE
+# the recv() loop, ONLY after a real frame is received — a genuine "still reading the wire" proof,
+# not a dumb timer (see the binary's own doc comment above `notify_ready()`). WatchdogSec=300s is
+# sized generously: any real LAN/AP has background ARP/mDNS/broadcast chatter well inside 5
+# minutes, so this only fires on a genuinely dead mirror feed (the exact "F1 dead-ingress-mirror"
+# class of bug this codebase has hit before) or a truly wedged process — never routine idle.
+Type=notify
+NotifyAccess=main
+WatchdogSec=300s
+Environment=MIRROR_IFACE=hp-mirror
+Environment=FLOWS=/var/lib/hookprobe/flows
+Environment=EVENTS=/var/lib/hookprobe/events
+# Port-scan fan-out knobs (all optional; these are the compiled-in defaults, matching wasm rule
+# 1000003's ≥50-unique-dports threshold):
+#Environment=NAPSE_PORTSCAN_THRESHOLD=50
+#Environment=NAPSE_PORTSCAN_WINDOW_SECS=10
+#Environment=NAPSE_PORTSCAN_COOLDOWN_SECS=30
+# roadmap-D trigger-to-evidence pcap: load the reconciler-generated capture knobs
+# (NAPSE_CAPTURE_ENABLED/WINDOW_SECS/CAP_MB from inspect::render_capture_env). The leading `-` makes
+# it optional — if the reconciler hasn't written it yet, napse-dpi falls back to its compiled
+# defaults (capture ENABLED, bounded), so this never blocks startup. EnvironmentFile overrides
+# Environment= per systemd.exec(5). Capture writes under /var/lib/hookprobe/pcap/ (ReadWritePaths ok).
+EnvironmentFile=-/var/lib/hookprobe/napse-capture.env
+ExecStart=/usr/lib/hookprobe/napse-dpi
+# Retry until the mirror sink exists (created by network-apply's 70-mirror.plan). Also covers a
+# WatchdogSec= timeout (systemd's Result=watchdog IS a failure for Restart=on-failure purposes).
+Restart=on-failure
+RestartSec=5
+# Only privilege needed: raw-frame capture. Nothing else.
+AmbientCapabilities=CAP_NET_RAW
+CapabilityBoundingSet=CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+Slice=hookprobe-dataplane.slice
+
+[Install]
+WantedBy=multi-user.target

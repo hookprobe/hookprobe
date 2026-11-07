@@ -1,0 +1,48 @@
+[Unit]
+Description=HookProbe base-tier dataplane tuning (threaded NAPI, cpusets, GRO/RPS) — ADR 0031 §C
+Documentation=file:///usr/share/hookprobe/docs/adr/0031-dataplane-performance-strategy.md
+Documentation=file:///usr/share/hookprobe/docs/roadmap/base-tier-build-ticket.md
+# base-tier-build-ticket.md Phase 1 — a manifest-keyed oneshot that tunes the single-queue
+# macb (Pi5/CM5, behind RP1) / RK3588 dataplane for the box's real CPU topology, inside the
+# cgroup-v2 budget model. CONFIG-ONLY: no isolcpus=/nohz_full= kernel command-line change —
+# everything here is sysfs/procfs knobs + `systemctl set-property --runtime` cpusets, both
+# reversible every boot from the signed manifest.
+#
+# Keyed off the Platform Manifest exactly like hookprobe-resource-shed.service/
+# hookprobe-scan-responder.service: needs the manifest + the classified WAN/LAN interfaces
+# (ifaces.env, written by hookprobe-network-reconcile.service's ExecStartPost) to exist
+# first. `network-pre.target` per the ticket's own ordering intent (tune the dataplane
+# before it's fully live); the REAL functional dependency is network-reconcile (for
+# ifaces.env) and bootstrap (for the manifest), so both are also named explicitly.
+After=var-lib-hookprobe.mount hookprobe-bootstrap.service hookprobe-network-reconcile.service network-pre.target
+Wants=hookprobe-bootstrap.service hookprobe-network-reconcile.service
+ConditionPathExists=/var/lib/hookprobe/manifest.json
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# dataplane-tune-apply.sh internally gates on `tc_bpf` granted + this profile shipping a
+# `dataplane_tuning:` block in platforms/<profile>.yaml — a clean, silent, always-exit-0
+# no-op on n100/generic/cloud/rpi4/any platform that opts out. Never fails the unit: every
+# step inside is individually best-effort/logged (perf tuning must never gate boot health).
+ExecStart=/usr/lib/hookprobe/dataplane-tune-apply.sh
+SuccessExitStatus=0
+
+# Needs: CAP_NET_ADMIN (ethtool GRO toggle, NIC sysfs attributes are net-scoped) and
+# CAP_SYS_ADMIN (IRQ affinity via /proc/irq/*/smp_affinity_list on some kernels). No file
+# writes under `/` at all (only /sys, /proc/irq, and a `systemctl set-property --runtime`
+# D-Bus call to pin the live/background slice cpusets) — so ProtectSystem=strict needs no
+# ReadWritePaths grant. Deliberately NOT ProtectKernelTunables=yes: that option remounts
+# /proc/sys AND /sys read-only, which would silently defeat every sysfs knob this unit sets
+# (threaded NAPI, GRO/RPS, IRQ affinity) — the one thing this unit must not carry.
+AmbientCapabilities=CAP_NET_ADMIN CAP_SYS_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_SYS_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+MemoryMax=32M
+Slice=hookprobe-live.slice
+
+[Install]
+WantedBy=multi-user.target

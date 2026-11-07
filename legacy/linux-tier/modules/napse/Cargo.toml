@@ -1,0 +1,24 @@
+[package]
+name = "napse"
+version = "0.1.0"
+edition = "2021"
+description = "NAPSE detection-synthesis engine — HookProbe OS V2 IDS/IPS module"
+license = "Apache-2.0"
+
+# Library: deterministic detection engine, shared by the WASI binary and tests.
+# Tests run on the native target; the binary is built for wasm32-wasip1.
+[lib]
+name = "napse"
+crate-type = ["rlib"]
+
+# WASI binary: reads normalized flow/event records from stdin, writes JSON
+# alert verdicts to stdout.
+[[bin]]
+name = "napse"
+path = "src/main.rs"
+
+# Zero external dependencies — keeps the .wasm binary small and the security
+# surface minimal (no supply-chain exposure beyond std).
+# Release profile (opt-level="s", lto, panic="abort", strip) is declared at
+# the workspace root Cargo.toml and applies to all members.
+[dependencies]

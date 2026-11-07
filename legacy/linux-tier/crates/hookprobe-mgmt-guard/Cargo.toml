@@ -1,0 +1,18 @@
+[package]
+name = "hookprobe-mgmt-guard"
+version = "0.1.0"
+edition = "2021"
+description = "Shared management-path allowlist predicate (mgmt subnet / gateway / WAN-self) — reused by hookprobe-manifest's scan-responder and the aegis-guard Wasm reflex module so the two enforcement paths can never diverge on what counts as 'never quarantine this'."
+license = "Apache-2.0"
+
+[lib]
+name = "hookprobe_mgmt_guard"
+crate-type = ["rlib"]
+
+# Zero external dependencies — deliberately. This crate is linked into `aegis-guard`, a
+# capability-sandboxed Wasm module whose own Cargo.toml commits to "zero external dependencies /
+# minimal security surface". A single, first-party, dependency-free predicate crate is how
+# `scan_responder` (hookprobe-manifest) and `aegis-guard` share the SAME mgmt-allowlist logic
+# without either duplicating it or pulling hookprobe-manifest's much heavier dependency tree
+# (serde/sha2/ml-dsa/ed25519-dalek/...) into the Wasm module.
+[dependencies]

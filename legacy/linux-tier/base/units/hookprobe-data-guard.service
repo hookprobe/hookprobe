@@ -1,0 +1,15 @@
+[Unit]
+Description=HookProbe data-volume fail-closed guard (encrypted-or-tmpfs, never plaintext) — ADR 0007
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/adr/0007-data-at-rest-encryption.md
+DefaultDependencies=no
+# AFTER the mount attempt; BEFORE every writer of /var/lib/hookprobe (manifest, keys, captures, secrets).
+After=var-lib-hookprobe.mount hookprobe-unlock-data.service
+Before=hookprobe-bootstrap.service hookprobe-supervisor.service hookprobe-network-reconcile.service hookprobe-depmod.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/data-guard.sh
+
+[Install]
+WantedBy=local-fs.target

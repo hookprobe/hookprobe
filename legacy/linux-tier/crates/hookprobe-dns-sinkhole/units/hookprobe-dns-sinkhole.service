@@ -1,0 +1,32 @@
+[Unit]
+Description=DNS sinkhole / RPZ generator (roadmap A1) — dnsxai BLOCK_INSTANT + HYDRA domain IOCs, allowlist-guarded
+# Needs dnsxai's verdict stream and the evidence DB's schema in place; best-effort ordering only
+# (After=, not Requires=) — every input this binary reads degrades gracefully when absent (see
+# main.rs's doc comment), so it must still start even if dnsxai hasn't produced a verdict yet.
+After=hookprobe-bootstrap.service dnsxai.service hookprobe-evidence.service
+Wants=hookprobe-evidence.service
+# Air-gapped by default: reads only the bundled HYDRA feed + this device's own dnsxai verdict
+# stream — no network dependency, same posture as hookprobe-hydra.service.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/lib/hookprobe/hookprobe-dns-sinkhole \
+  --verdicts /var/lib/hookprobe/dns-verdicts \
+  --hydra-feed /usr/share/hookprobe/threat-intel/ioc-feed.json \
+  --allowlist /etc/hookprobe/dns-sinkhole-allowlist.yaml \
+  --out-dir /var/lib/hookprobe/dns-sinkhole \
+  --responses /var/lib/hookprobe/responses
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/hookprobe
+ReadOnlyPaths=/etc/hookprobe
+MemoryMax=64M
+# Deferrable, low-priority generation — same slice as HYDRA's own enrichment pass (Architecture.md
+# §4.3). This unit ONLY writes files (RPZ zone, dnsmasq conf, evidence-graph response records) —
+# no CAP_NET_ADMIN/CAP_BPF, no nft/tc access, never touches the packet-drop enforcement path.
+Slice=hookprobe-background.slice
+
+[Install]
+WantedBy=multi-user.target

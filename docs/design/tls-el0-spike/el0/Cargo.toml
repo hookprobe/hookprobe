@@ -1,0 +1,15 @@
+[package]
+name = "tlsspike"
+version = "0.1.0"
+edition = "2021"
+[workspace]
+[dependencies]
+rustls = { version = "0.23", default-features = false }
+rustls-rustcrypto = { version = "0.0.2-alpha", default-features = false, features = ["alloc", "tls12"] }
+talc = { version = "4", default-features = false, features = ["lock_api"] }
+spin = { version = "0.9", default-features = false, features = ["lock_api", "spin_mutex"] }
+getrandom = { version = "0.2", default-features = false, features = ["custom"] }
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true

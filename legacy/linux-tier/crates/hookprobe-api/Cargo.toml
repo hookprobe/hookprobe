@@ -1,0 +1,38 @@
+[package]
+name = "hookprobe-api"
+version = "0.1.0"
+edition = "2021"
+description = "HookProbe OS Mission Control read-API (ADR 0001: Rust/Axum) — read-only HTTP+SSE over the hookprobe-evidence graph, capability/mode-aware via the Platform Manifest."
+
+[[bin]]
+name = "hookprobe-api"
+path = "src/main.rs"
+
+[lib]
+name = "hookprobe_api"
+path = "src/lib.rs"
+
+[dependencies]
+hookprobe-evidence = { path = "../hookprobe-evidence" }
+hookprobe-manifest = { path = "../hookprobe-manifest" }
+# RBAC enforcement seam (ADR 0008 + ADR 0028) — standalone-loopback stays permissive; enforces the
+# moment a bearer identity or a non-loopback peer is observed. See `hookprobe_rbac`'s own doc.
+hookprobe-rbac = { path = "../hookprobe-rbac" }
+# Small, edge-friendly async HTTP stack (ADR 0001). Default features only (http1 + json + query +
+# tokio) — no http2/multipart/ws extras this read-API doesn't use.
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+# CORS only (no tracing/compression layers) — the UI's dev server (Astro :4321) and the on-device
+# static-asset origin both need to call this API; kept to the one feature actually used.
+tower-http = { version = "0.6", features = ["cors"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+# In-process router tests (no real TCP bind needed): `Router::oneshot` + reading the SSE body's
+# frames directly. Both are already deep transitive deps of axum/hyper — this just names them.
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

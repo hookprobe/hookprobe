@@ -1,0 +1,20 @@
+# Provisions the persistent data partition (hookprobe-data) at first boot for flows
+# where the installer didn't pre-create it (SD-card / raw-image SBC flows). Idempotent
+# and gated: only runs when the labelled partition is ABSENT, before the mount.
+
+[Unit]
+Description=HookProbe first-boot data-partition provisioning
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/base/units/var-lib-hookprobe.mount
+DefaultDependencies=no
+After=local-fs-pre.target
+Before=var-lib-hookprobe.mount hookprobe-bootstrap.service
+# Idempotent gate: skip entirely once the data partition exists.
+ConditionPathExists=!/dev/disk/by-label/hookprobe-data
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/firstboot-provision-data.sh
+
+[Install]
+WantedBy=local-fs.target

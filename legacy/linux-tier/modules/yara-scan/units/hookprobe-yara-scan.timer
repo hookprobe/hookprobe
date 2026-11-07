@@ -1,0 +1,15 @@
+[Unit]
+Description=HookProbe YARA engine — periodic scan sweep timer
+Documentation=file:///usr/share/hookprobe/docs/adr/0026-sigma-yara-detection.md
+
+[Timer]
+# Every 15 minutes — file scanning is I/O/CPU-heavy (ADR 0003 edge resource budgets); a bounded
+# sweep this often is a reasonable tradeoff on Pi-class hardware without competing with the live
+# detection path. RandomizedDelaySec avoids every device in a fleet waking at exactly :00/:15/:30/:45.
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=60
+Persistent=false
+
+[Install]
+WantedBy=timers.target

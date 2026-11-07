@@ -1,0 +1,52 @@
+[Unit]
+Description=dnsXai - DNS/DGA classifier (sandboxed Wasm)
+After=napse-dpi.service hookprobe-precompile.service
+# Best-effort ordering only (After=, not Requires=): a missing/stale .cwasm falls back to JIT
+# (ADR 0009 gap 2), so dnsxai must still start even if precompiling hasn't run yet or failed.
+[Service]
+# 2026-07-07 backend-audit gap 2 (sd_notify watchdog, Architecture.md §4.4): the sender of
+# READY=1/WATCHDOG=1 is `hookprobe-supervisor --run-wasm dnsxai` (see
+# `wasm_loader::run_wasi_module_streaming`'s doc comment) — a GRANDCHILD of this unit's tracked
+# main PID (the ExecStart pipeline forks a process per stage). NotifyAccess=all is the correct,
+# documented systemd knob for exactly this shape, not a workaround. TA2 (2026-07-17 field fix):
+# WATCHDOG=1 is now driven by a TIMER thread (WATCHDOG_USEC/2) inside the supervisor, NOT the wasm
+# epoch callback — the old epoch-gated ping SIGABRT-killed the module whenever `flows` went quiet and
+# it blocked on stdin (healthy), which was observed crash-looping on Pi4+CM5. dnsxai's input (`flows`
+# filtered by dnsxai-feed.sh) is usually frequent (background DNS chatter), but "usually" is not
+# "always" — a timer heartbeat removes the dependence on input arrival entirely. WatchdogSec=900s now
+# only needs to exceed the heartbeat interval.
+Type=notify
+NotifyAccess=all
+WatchdogSec=900s
+ExecStart=/bin/bash -c 'set -o pipefail; exec tail -n0 -F /var/lib/hookprobe/flows | /usr/lib/hookprobe/dnsxai-feed.sh | /usr/lib/hookprobe/hookprobe-supervisor --run-wasm dnsxai --modules /usr/lib/hookprobe/modules --trust /usr/share/hookprobe/trust >> /var/lib/hookprobe/dns-verdicts'
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+# GAP-3 (2026-07-16 hardening): processes UNTRUSTED flow/DNS data but ran root with the full cap
+# bounding set. Mirror the supervisor's proven sandbox; CapabilityBoundingSet= empty (wasm needs no
+# capability); MDWE stays OFF (Wasmtime JITs). Reads/appends /var/lib/hookprobe only.
+CapabilityBoundingSet=
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io
+ReadWritePaths=/var/lib/hookprobe
+RestrictAddressFamilies=AF_UNIX
+MemoryMax=64M
+# 2026-07-07 backend-audit fix: same gap as aegis-guard.service -- no Slice= meant this
+# long-running wasm detection engine ran unaccounted in system.slice, outside the two-wall
+# resource model.
+Slice=hookprobe-live.slice
+[Install]
+WantedBy=multi-user.target

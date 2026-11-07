@@ -1,0 +1,388 @@
+/*
+ * HookProbe OS V2 — Customers (§9) workspace styles
+ *
+ * Spec: docs/architecture/MissionControl.md §9 — recursive multi-tenant portal.
+ * Theme: cyber-industrial (void-black, cyan #00B4FF + green #00FF9D,
+ *        JetBrains Mono, terminal-window panels with hookprobe@edge ~ ctx).
+ *
+ * All classes prefixed .cst-. Tokens consumed from global.css only.
+ * Do NOT import from or modify global.css.
+ *
+ * Panels in this workspace:
+ *   KPI row · Managed Customers table · Tenant Inheritance Tree · SLA/Compliance
+ */
+
+/* ===========================================================================
+ * KPI row — 5 columns spanning the full 12-col mc-grid
+ * ======================================================================== */
+.cst-kpis {
+  grid-column: span 12 !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+}
+
+/* ===========================================================================
+ * Managed Customers — table panel (span 8)
+ * Echoes the mc-cust card look: large mono score, muted meta line, status badge.
+ * ======================================================================== */
+
+/* Column header row */
+.cst-managed-head {
+  display: grid;
+  grid-template-columns: 1fr 52px 80px 48px 76px 60px 76px 20px;
+  gap: 10px;
+  padding: 0 6px 8px;
+  border-bottom: 1px solid var(--hp-border);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--hp-text-muted);
+  font-family: var(--hp-font-mono);
+}
+
+.cst-managed-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 8px;
+}
+
+/* Each customer row — same column template as the header */
+.cst-managed-row {
+  display: grid;
+  grid-template-columns: 1fr 52px 80px 48px 76px 60px 76px 20px;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 6px;
+  border-radius: var(--hp-radius-sm);
+  transition: background 0.1s;
+}
+.cst-managed-row:hover { background: rgba(255, 255, 255, 0.03); }
+
+/* Name cell: stacked name + meta */
+.cst-cust-name-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.cst-cust-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--hp-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cst-cust-meta {
+  font-size: 9.5px;
+  color: var(--hp-text-muted);
+  font-family: var(--hp-font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* QSecBit score — large mono number, colored by tone (echoes mc-cust-score) */
+.cst-score {
+  font-family: var(--hp-font-mono);
+  font-size: 20px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1;
+}
+
+/* Generic mono value cell (endpoints, compliance, SLA) */
+.cst-col-mono {
+  font-family: var(--hp-font-mono);
+  font-size: 11.5px;
+  color: var(--hp-text-secondary);
+}
+
+/* Policy drift: 0 = ok (muted dash), 1–5 = warn, 6+ = critical */
+.cst-drift {
+  font-family: var(--hp-font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+}
+.cst-drift--ok   { color: var(--hp-text-muted); }
+.cst-drift--warn { color: var(--hp-amber); }
+.cst-drift--crit { color: var(--hp-red); }
+
+/* Status badge */
+.cst-status-badge {
+  display: inline-block;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: center;
+}
+.cst-st--healthy  { color: var(--hp-green);  background: rgba(0, 255, 157, 0.10);  }
+.cst-st--warning  { color: var(--hp-amber);  background: rgba(255, 170, 0, 0.10);  }
+.cst-st--critical { color: var(--hp-red);    background: rgba(255, 107, 107, 0.12); }
+
+/* ===========================================================================
+ * Tenant Inheritance Tree — recursive panel (span 4)
+ * CSS border-left lines create the visual hierarchy; no depth limit.
+ * ======================================================================== */
+
+.cst-tree {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  font-family: var(--hp-font-mono);
+}
+
+.cst-tree-node {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Node row */
+.cst-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 6px;
+  border-radius: var(--hp-radius-sm);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.cst-tree-row:hover { background: rgba(255, 255, 255, 0.03); }
+
+/* Nested children: indented with a faint left border as the tree connector */
+.cst-tree-children {
+  list-style: none;
+  margin-left: 18px;
+  border-left: 1px solid rgba(0, 180, 255, 0.15);
+  padding-left: 12px;
+}
+
+/* Node type icon (◫ = MSSP / · = leaf customer) */
+.cst-tree-icon {
+  font-size: 12px;
+  color: var(--hp-text-muted);
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+/* Node name */
+.cst-tree-name {
+  flex: 1;
+  font-size: 12px;
+  color: var(--hp-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.cst-tree-row:hover .cst-tree-name { color: var(--hp-text-primary); }
+
+/* Score number */
+.cst-tree-score {
+  font-size: 12px;
+  font-weight: 800;
+  flex-shrink: 0;
+  font-family: var(--hp-font-mono);
+}
+
+/* MSSP tier badge */
+.cst-tree-mssp-badge {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--hp-cyan);
+  background: rgba(0, 180, 255, 0.08);
+  border: 1px solid rgba(0, 180, 255, 0.18);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ROOT operator badge */
+.cst-tree-root-badge {
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  color: var(--hp-green);
+  background: rgba(0, 255, 157, 0.08);
+  border: 1px solid rgba(0, 255, 157, 0.18);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* Root-level node gets a subtle green outline to distinguish operator from tenants */
+.cst-tree > .cst-tree-node > .cst-tree-row {
+  padding: 7px 8px;
+  margin-bottom: 5px;
+  background: rgba(0, 255, 157, 0.04);
+  border: 1px solid rgba(0, 255, 157, 0.12);
+  border-radius: var(--hp-radius);
+}
+.cst-tree > .cst-tree-node > .cst-tree-row .cst-tree-name {
+  color: var(--hp-text-primary);
+  font-weight: 700;
+}
+
+/* ===========================================================================
+ * SLA / Compliance Summary — full-width panel (span 12)
+ * Left: 4 aggregate stats. Right: per-customer SLA bar rows.
+ * ======================================================================== */
+
+.cst-sla-wrap {
+  display: flex;
+  gap: 32px;
+  align-items: flex-start;
+}
+
+/* Aggregate stat block */
+.cst-sla-summary {
+  display: flex;
+  gap: 28px;
+  flex-shrink: 0;
+  padding-right: 32px;
+  border-right: 1px solid var(--hp-border);
+  align-items: flex-start;
+}
+
+.cst-sla-summary-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cst-sla-summary-val {
+  font-family: var(--hp-font-mono);
+  font-size: 26px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.cst-sla-summary-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--hp-text-muted);
+  font-weight: 600;
+}
+
+/* Per-customer SLA rows */
+.cst-sla-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.cst-sla-row {
+  display: grid;
+  grid-template-columns: 128px 80px 1fr 54px 22px;
+  align-items: center;
+  gap: 10px;
+  font-size: 11.5px;
+}
+
+.cst-sla-name {
+  color: var(--hp-text-secondary);
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cst-sla-target {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+  white-space: nowrap;
+}
+
+/* Progress bar track */
+.cst-sla-bar {
+  height: 6px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+/* Progress bar fill — color set inline by tone */
+.cst-sla-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.35s ease;
+}
+
+.cst-sla-actual {
+  font-family: var(--hp-font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  text-align: right;
+}
+
+.cst-sla-badge {
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+  line-height: 1;
+}
+.cst-sla-badge--met  { color: var(--hp-green); }
+.cst-sla-badge--miss { color: var(--hp-red);   }
+
+/* ===========================================================================
+ * Responsive
+ * ======================================================================== */
+
+@media (max-width: 1180px) {
+  .cst-kpis { grid-template-columns: repeat(3, 1fr) !important; }
+
+  .cst-sla-wrap { flex-direction: column; gap: 18px; }
+  .cst-sla-summary {
+    border-right: none;
+    border-bottom: 1px solid var(--hp-border);
+    padding-right: 0;
+    padding-bottom: 16px;
+    flex-wrap: wrap;
+  }
+}
+
+/* Collapse secondary columns on narrower main area */
+@media (max-width: 1000px) {
+  .cst-managed-head,
+  .cst-managed-row {
+    grid-template-columns: 1fr 52px 80px auto 20px;
+  }
+  /* Hide: Drift (4th), Compliance (5th), SLA (6th) */
+  .cst-managed-head > :nth-child(4),
+  .cst-managed-head > :nth-child(5),
+  .cst-managed-head > :nth-child(6),
+  .cst-managed-row  > :nth-child(4),
+  .cst-managed-row  > :nth-child(5),
+  .cst-managed-row  > :nth-child(6) { display: none; }
+}
+
+@media (max-width: 720px) {
+  .cst-kpis { grid-template-columns: 1fr 1fr !important; }
+  .cst-sla-row { grid-template-columns: 1fr 1fr 22px; }
+  .cst-sla-target,
+  .cst-sla-bar { display: none; }
+}
+
+/* Honor reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  .cst-sla-fill { transition: none; }
+}

@@ -1,0 +1,32 @@
+[Unit]
+Description=HookProbe 5GHz channel-optimizer DFS-LKG post-boot restore (ADR 0034 D31) on %i
+Documentation=file:///usr/share/hookprobe/docs/adr/0034-adaptive-wifi-regdomain-and-calibration.md
+# D31: the boot calibrate ladder (hookprobe-wifi-calibrate@) always boots FAST on the non-DFS ch40
+# anchor — it never runs a boot-time DFS Channel-Availability-Check. If the optimizer previously
+# VALIDATED a DFS channel (persisted to wifi-channel-lkg-<iface>.json), this oneshot silently
+# upgrades ch40 -> that DFS channel within one CAC window of boot (`reapply` mode: SKIPS the
+# survey/scoring, goes straight to re-validating the persisted channel). On success the AP simply
+# ends up on the better channel a little after boot; on any failure it stays on ch40 and clears
+# the disproven LKG — never a slow or dead boot. A no-op (near-instant exit) when there is no
+# DFS channel-LKG, which is the common case. Started ONCE per boot by network-apply.sh right after
+# hostapd/wifi-calibrate@, --no-block (never blocks bring-up).
+After=hookprobe-network-reconcile.service sys-subsystem-net-devices-%i.device hookprobe-hostapd@%i.service
+ConditionPathExists=/etc/hostapd/hostapd-%i.conf
+ConditionPathExists=/usr/sbin/hostapd
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+ExecStart=/usr/lib/hookprobe/wifi-optimize.sh %i reapply
+AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+NoNewPrivileges=yes
+ProtectHome=yes
+ProtectSystem=strict
+ReadWritePaths=-/etc/hostapd -/var/lib/hookprobe -/run
+Slice=hookprobe-dataplane.slice
+
+# No [Install] section — this is triggered directly by network-apply.sh's `systemctl start
+# --no-block`, never boot-time preset policy (mirrors hookprobe-scan-responder-sweep.service's own
+# no-[Install] pattern for a directly-triggered oneshot). `ignore`d in the base preset like every
+# other per-AP-iface template (hookprobe-hostapd@, hookprobe-wifi-calibrate@,
+# hookprobe-wifi-optimize@) — there is no single "the" AP interface to bake into boot-time policy.

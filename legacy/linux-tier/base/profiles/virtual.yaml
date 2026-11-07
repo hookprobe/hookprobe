@@ -1,0 +1,38 @@
+# profiles/virtual.yaml — VM guest for labs / demos / on-prem hypervisors
+# (KVM/libvirt, VMware, Proxmox). Maps to platform.class = virtual (ADR 0003).
+# The fastest way to a running SOC for evaluation: import the qcow2 and boot.
+
+profile: virtual
+class: virtual
+target_arch: amd64
+
+build_args:
+  PROFILE: virtual
+  TARGETARCH: amd64
+
+packages:
+  include:
+    - qemu-guest-agent
+    - cloud-init           # libvirt/Proxmox commonly seed via cloud-init NoCloud
+  exclude:
+    # `crda` dropped repo-wide 2026-07-07 — obsolete on kernel >=4.15; never
+    # installed, nothing to exclude it FROM.
+    - hostapd
+    - wireless-regdb
+
+kargs_extra:
+  - "console=ttyS0,115200"
+  - "console=tty1"
+
+bib:
+  variants:
+    - arch: x86_64
+      types: ["qcow2", "vmdk"]   # qcow2 (KVM/Proxmox) + vmdk (VMware)
+  filesystem:
+    - mountpoint: /
+      minsize: "8 GiB"
+    - mountpoint: /var/lib/hookprobe
+      label: hookprobe-data
+      minsize: "16 GiB"
+      type: ext4
+  seed_engine: cloud-init        # NoCloud datasource for libvirt/Proxmox; clean before imaging

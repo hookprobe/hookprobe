@@ -1,0 +1,78 @@
+[Unit]
+Description=AEGIS reflex: NAPSE port-scan responder (ENRICH host intel + DROP via nft, TTL auto-revert + DOCUMENT)
+Documentation=file:///usr/share/hookprobe/docs/adr/0023-enforcement-separation.md
+# Needs the data partition (manifest, events, quarantine state, host-intel) and the port-scan
+# detector's alert stream — napse-dpi's rule-1000003 SYN-scan alerts land in EVENTS, alongside
+# every other NAPSE alert (After=, not Requires=: a missing/late napse-dpi just means no alerts
+# arrive yet, not a failed unit — the tail loop retries the file open on its own).
+#
+# ALSO explicitly After=/Wants= the bootstrap+network-reconcile chain directly (belt-and-braces,
+# 2026-07-05 live-hunt fix): ordering purely via `After=napse-dpi.service` is transitive through
+# napse-dpi's OWN `After=hookprobe-network-reconcile.service` — but if napse-dpi's start job is
+# ever SKIPPED (e.g. the `capture` platform capability isn't granted on a given box), systemd
+# resolves that dependency instantly without actually waiting on network-reconcile, and this unit
+# could then race hookprobe-bootstrap.service (ConditionPathExists=manifest.json would fail and
+# the unit goes inactive for the rest of the boot, with nothing left to retry it). Declaring the
+# bootstrap+reconcile ordering here too makes it hold regardless of napse-dpi's own outcome.
+After=var-lib-hookprobe.mount hookprobe-bootstrap.service hookprobe-network-reconcile.service napse-dpi.service
+Wants=hookprobe-bootstrap.service hookprobe-network-reconcile.service napse-dpi.service
+ConditionPathExists=/var/lib/hookprobe/manifest.json
+
+[Service]
+# 2026-07-07 backend-audit gap 2 (sd_notify watchdog, Architecture.md §4.4): the actual sender of
+# READY=1/WATCHDOG=1 is `hookprobe-supervisor --scan-respond` (see its own doc comment above
+# `notify_ready()` in supervisor/src/main.rs) — a GRANDCHILD of this unit's tracked main PID
+# (scan-responder.sh execs a `tail -F events | ... | hookprobe-supervisor >> responses` pipeline;
+# each pipe stage is its own process). NotifyAccess=all is the correct, documented systemd knob
+# for exactly this shape (any process in the unit's cgroup may notify, not just the main PID) —
+# NOT a workaround. WATCHDOG=1 is pinged ONLY after this process reads+processes a REAL line off
+# `events` (rate-limited, ≥20s apart) — never a dumb timer. Honest tradeoff: `events` carries EVERY
+# NAPSE finding (port-scan, L1/L2, …), which is attack-detection-driven, not routine-traffic-driven
+# — a well-defended, quiet network can legitimately produce none for a long stretch, so
+# WatchdogSec=1800s (30 min) is deliberately generous to keep that the rare case, not routine
+# restart noise; Restart=on-failure already covers a watchdog timeout as a failure.
+Type=notify
+NotifyAccess=all
+WatchdogSec=1800s
+# Env knobs (all optional; these are scan-responder.sh's compiled-in defaults — this Pi's
+# routed AP is wlan0, hp-br0 is DOWN; end0 is the wired WAN uplink):
+#Environment=QUARANTINE_TTL_SECS=300
+#Environment=LAN_IFACE=wlan0
+#Environment=WAN_IFACE=end0
+#Environment=FEEDS_DIR=/var/lib/hookprobe/feeds
+#Environment=PROTECT_CIDRS="10.200.0.0/28"
+#Environment=PROTECT_IPS="10.66.0.1"
+# 2026-07-07 cross-platform fix: LAN_IFACE/WAN_IFACE resolve to THIS device's manifest-classified
+# interfaces (never the Pi's wlan0/end0 above — those are scan-responder.sh's own last-resort
+# defaults, only reached if this file is absent). Written by hookprobe-network-reconcile.service
+# from the SAME reconcile pass that classifies the WAN uplink + LAN bridge/routed-AP radio
+# (aegis::reconcile_network's `ifaces.env` artifact) — per systemd.exec(5), EnvironmentFile=
+# settings override Environment= unconditionally, so this always wins once it exists. This is the
+# fix for the nft quarantine rules matching an interface that never carried traffic on any
+# non-Pi platform (confirmed live on an amd64 VM, interfaces enp0s2/enp0s3).
+EnvironmentFile=-/var/lib/hookprobe/ifaces.env
+# APPLY=1 by default (2026-07-05 live-hunt fix): without this, scan-responder.sh only ever PRINTS
+# the nft plan (bootstrap table/sets/chains AND every per-alert quarantine add/revert) — napse-
+# quarantine's TC-bpf enforcement stays attached but permanently starved, so a confirmed detection
+# never becomes an actual drop. `decide()` (hookprobe_manifest::scan_responder) already refuses to
+# enforce on anything but a confirmed, non-martian, non-allowlisted scanner (docs/adr/0018), and
+# the mgmt subnet (10.200.0.0/28) + gateway + auto-resolved upstream are always exempted — so
+# turning APPLY on by default is safe; override to 0 for an observe-only/dev deployment.
+Environment=SCAN_RESPOND_APPLY=1
+ExecStart=/usr/lib/hookprobe/scan-responder.sh
+Restart=on-failure
+RestartSec=5
+# Only privilege needed: nft quarantine (CAP_NET_ADMIN). `ip neigh show`/`/proc/net/arp`/
+# `getent hosts` reads and the host-intel/response file writes need no capability at all.
+AmbientCapabilities=CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_ADMIN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe
+PrivateTmp=yes
+MemoryMax=64M
+Slice=hookprobe-live.slice
+
+[Install]
+WantedBy=multi-user.target

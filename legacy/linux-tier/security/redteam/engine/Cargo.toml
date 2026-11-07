@@ -1,0 +1,29 @@
+[package]
+name = "redteam-engine"
+version = "0.1.0"
+edition = "2021"
+description = "HookProbe OS adversarial-resilience harness (ADR 0020) -- ROE-gated, netns/veth-only campaign runner. Dev/CI tool ONLY: never staged into a shipped image, never in the module registry (ADR 0020 D2)."
+publish = false
+
+[[bin]]
+name = "redteam-engine"
+path = "src/bin/redteam-engine.rs"
+
+[lib]
+name = "redteam_engine"
+path = "src/lib.rs"
+
+[dependencies]
+# D4: native Rust+tokio, no Metasploit/heavy external framework in the enforced path. tokio only for
+# the campaign clock/kill-switch signal handling; probe sends are synchronous libc raw-socket calls
+# (same seam napse-dpi/napse-loader already use), never handed to an opaque third-party binary.
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "signal", "sync"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = "1"
+anyhow = "1"
+libc = "0.2"
+clap = { version = "4", features = ["derive"] }
+
+# No dev-dependencies: tests use std::env::temp_dir() + a per-test-unique filename instead of
+# pulling in a new crate (dependency-light, D4's own rationale applied to the engine's own tests).

@@ -1,0 +1,32 @@
+# modules/inline-guard/module.yaml — inline segmentation / IPS guard.
+# Requires `inline_ips` -> loads on n100 (igc NIC known-good = granted), REFUSED on
+# rk3588 (inline_ips=present_unsafe: NIC offload not validated). Demonstrates that
+# present_unsafe is NOT granted: the supervisor refuses with the reason.
+#
+# status: stub (ADR 0015 D3 escape hatch): only module.yaml + module.sig exist under
+# modules/inline-guard/ (no Cargo.toml/src) — no wasm artifact can be built yet.
+# gen-staging.sh stages nothing for this id; verify-staging.sh exempts it from the
+# orphan check (BuildPlan Track-B: not yet built).
+id: inline-guard
+version: 0.2.0
+title: "Inline segmentation / IPS guard"
+runtime: wasm
+artifact: registry.hookprobe.com/modules/inline-guard:0.2.0
+status: stub
+
+requires:
+  capabilities: [soc, inline_ips]
+  min_memory_mb: 128
+
+grants:
+  - net-admin: inline
+
+provides:
+  capabilities: [segmentation]
+
+resources:
+  cpu_pct: 25
+  memory_mb: 128
+  epoch_ms: 50
+
+signature: required
