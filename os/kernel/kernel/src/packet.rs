@@ -370,7 +370,10 @@ fn classify_tiers(frame: &[u8]) -> (u16, u16) {
             // affect the drop decision — call-and-continue; each fires its own event when it
             // trips (SEPDIAG-visible). NTP:123 is exempt inside beacon_observe_at (row L8).
             let dst = crate::net::eth_ipv4_dst(nframe).unwrap_or(0);
-            if m.ip_proto == crate::net::IPPROTO_TCP {
+            // One observation per CONNECTION (a pure SYN), not per packet: a keep-alive or a long
+            // transfer is not a series of beacons (parity G4; V1's per-packet lateral was an FP factory).
+            let syn = frame.get(m.l4_off + 13).map_or(false, |&f| f & 0x12 == 0x02);
+            if m.ip_proto == crate::net::IPPROTO_TCP && syn {
                 let _ = crate::rules::beacon_verdict(src, dst, m.dst_port);
                 let _ = crate::rules::lateral_verdict(src, dst, m.dst_port);
             } else if m.dst_port == 53 {

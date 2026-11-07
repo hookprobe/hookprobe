@@ -39,6 +39,8 @@ mod corroboration;
 mod devq;
 mod dnssink;
 mod shield;
+// Parity G8: DGA / lookalike / tunnel scoring of Shield queries (detection only).
+mod dga;
 // M5.1 (Track C) — minimal bounds-safe ELF64/aarch64 static loader (the userspace-server
 // substrate beachhead). Only driven by the QEMU [P-elf] gate; the parser compiles on all
 // backends but the loader/mapping path is QEMU-only (see load_into's cfg).
@@ -82,6 +84,9 @@ mod netsvc;
 mod rulecat;
 #[cfg(feature = "netsvc")]
 mod mcstate;
+// Parity G11: SNTP over the WAN uplink for the AP image (its Mission Control node is LAN-side).
+#[cfg(feature = "netsvc")]
+mod wanntp;
 #[cfg(feature = "netsvc")]
 mod mcauth;
 #[cfg(feature = "netsvc")]
@@ -3332,6 +3337,12 @@ fn cm5_p10_probe() {
                                 let pi = ($pif) as usize;
                                 // Shield: an allowed client DNS query for a blocklisted name is answered here
                                 // (0.0.0.0 / NODATA, from the resolver it asked) and never leaves the device.
+                                // Exfil (parity G3): outbound bytes per inside source, observe-only + cooldown.
+                                if act == PAct::Allow && frame.len() >= 34 {
+                                    let src = u32::from_be_bytes([frame[26], frame[27], frame[28], frame[29]]);
+                                    let dst = u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]);
+                                    let _ = rules::exfil_verdict(src, dst, u16::from_be_bytes([frame[16], frame[17]]) as u64);
+                                }
                                 let mut shield = false;
                                 // Shield v2 (ADR 0052): every client DNS query (any resolver, UDP and TCP), DoT, DoH names.
                                 if act == PAct::Allow {
@@ -3454,6 +3465,8 @@ fn cm5_p10_probe() {
                                 None => None,
                             }
                         };
+                        #[cfg(feature = "mcserve")]
+                        let mut wntp = wanntp::WanNtp::new();
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
                         // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
                         let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
@@ -3669,7 +3682,7 @@ fn cm5_p10_probe() {
                                         kprint!(" [P11-AP3] PASS — client {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} leased {}.{}.{}.{} (DORA {}/{}/{}/{}, leases={}, arp_replies={}) — WPA2 AP live\n",
                                             dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
-                                            dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.nleases, dh.arp_replies);
+                                            dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.active(), dh.arp_replies);
                                     } else if act == 0 && frame.len() >= 54 && frame[12] == 0x86 && frame[13] == 0xdd && unsafe { V6.up } {
                                         // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
                                         // verdict and out the PPPoE session (no NAT; the module records the flow so the
@@ -3717,7 +3730,7 @@ fn cm5_p10_probe() {
                                         smac.copy_from_slice(&frame[6..12]);
                                         let mut sip = [0u8; 4];
                                         sip.copy_from_slice(&frame[26..30]);
-                                        if !dh.binding_ok(&smac, &sip) {
+                                        if { dh.now = cyw43::now_secs(); dh.seen(&smac); !dh.binding_ok(&smac, &sip) } {
                                             bind_drop += 1;
                                         } else if net::parse(frame).is_none() {
                                             trunc_drop += 1; // truncated/oversize: fail-closed, but NOT a rule drop
@@ -3812,7 +3825,7 @@ fn cm5_p10_probe() {
                                                     smac.copy_from_slice(&ebuf[6..12]);
                                                     let mut sip = [0u8; 4];
                                                     sip.copy_from_slice(&ebuf[26..30]);
-                                                    if !dh.binding_ok(&smac, &sip) {
+                                                    if { dh.now = cyw43::now_secs(); dh.seen(&smac); !dh.binding_ok(&smac, &sip) } {
                                                         bind_drop += 1;
                                                     } else if packet::verdict(&ebuf[..n]).1 == packet::DROP {
                                                         ids_drop_out += 1;
@@ -3905,7 +3918,21 @@ fn cm5_p10_probe() {
                                                     }
                                                 }};
                                             }
-                                            if n >= 54 && wbuf[12] == 0x86 && wbuf[13] == 0xdd {
+                                            #[cfg(feature = "mcserve")]
+                                            let ntp_ours = wanntp::is_ours(&wbuf[..n], up.dhcp.yiaddr);
+                                            #[cfg(not(feature = "mcserve"))]
+                                            let ntp_ours = false;
+                                            if ntp_ours {
+                                                // Parity G11: our SNTP answer (validated: server asked, port 123, our nonce).
+                                                #[cfg(feature = "mcserve")]
+                                                if let Some(ms) = wntp.on_frame(&wbuf[..n], up.dhcp.yiaddr, cyw43::now_secs()) {
+                                                    match mcserve::state().sync_clock(ms, now()) {
+                                                        Some(step) => kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
+                                                            wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step),
+                                                        None => kprint!(" [AP-NTP] reply refused: step larger than the re-sync bound\n"),
+                                                    }
+                                                }
+                                            } else if n >= 54 && wbuf[12] == 0x86 && wbuf[13] == 0xdd {
                                                 // IPv6 from the ISP: the stateful firewall + neighbor table decide; then the IDS.
                                                 let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                                 let nms = now() * 1000 / freq;
@@ -4200,12 +4227,22 @@ fn cm5_p10_probe() {
                                             st.forwarded = nst.out_fwd as u64 + nst.in_fwd as u64;
                                             st.dropped = (ids_drop_out + ids_drop_in) as u64;
                                             st.sample_qsecbit(now(), telemetry::score());
+                                            st.set_leases(&dh);
+                                            // Parity G11: ask for the time over the WAN (retry 15 s until set, then hourly).
+                                            if up.usable() && up.gw_mac != [0u8; 6] {
+                                                if let Some(nonce) = arch_aarch64::rng200::next_word_strict() {
+                                                    let mut tb = [0u8; 128];
+                                                    if let Some(k) = wntp.request(cyw43::now_secs(), nonce, up.dhcp.router, up.dhcp.yiaddr, &up.mac, &up.gw_mac, &mut tb) {
+                                                        let _ = uplink::wan_tx(&up, &tb[..k]);
+                                                    }
+                                                }
+                                            }
                                             st.wan = Some(mcstate::WanFacts {
                                                 up: up.usable(),
                                                 ip: up.dhcp.yiaddr,
                                                 mode: match wan_mode { hal::WanMode::Dhcp => 0, hal::WanMode::Static { .. } => 1, _ => 2 },
                                                 ipv6: unsafe { V6.up },
-                                                clients: dh.nleases as u32,
+                                                clients: dh.active() as u32,
                                                 pkts_out: nst.out_fwd as u64,
                                                 pkts_in: nst.in_fwd as u64,
                                                 dns_inspected: nst.dns_redirect as u64,
@@ -4230,7 +4267,7 @@ fn cm5_p10_probe() {
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
                                             nst.out_fwd, nst.in_fwd, nst.out_drop, nst.in_drop, nst.in_too_big, nst.mss_clamped, nst.table_alloc, nst.table_evict, nst.dns_redirect,
                                             nat_tx_fail, nat_wifi_tx_fail, wan_retries, wan_renewals, ids_drop_out, ids_drop_in, bind_drop,
-                                            lan_frames, lan_served, lan_tx_fail, dh.nleases, cyw43::AP_LEASES);
+                                            lan_frames, lan_served, lan_tx_fail, dh.active(), cyw43::AP_LEASES);
                                         last_beat = t;
                                     }
                                     if !rx_busy {
@@ -6119,6 +6156,10 @@ pub extern "C" fn kmain() -> ! {
         policy_selftest();
         let _ = policysig::selftest();
         let _ = shield::selftest();
+        let _ = dga::selftest();
+        let _ = arch_aarch64::dhcpd::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = wanntp::selftest();
         md5_selftest();
         pppoe_selftest();
         ip6_selftest();
@@ -8404,6 +8445,18 @@ fn p8_l7behav() -> bool {
     ok &= c_exfil;
     kprint!("   EXFIL bulk internal->external ({}B) -> {:?} wire PASS; internal->internal fired={} (must be None) [{}]\n",
         behavioral::EXFIL_BYTES_THRESH + 1, exfil_fired, e_internal.is_some(), if c_exfil { "ok" } else { "BUG" });
+    // G4 refire cooldown: a (rule, source) alerts once per window; other sources/rules are independent.
+    rules::refire_reset();
+    let src9 = ip(10, 30, 0, 9);
+    let c_cool = rules::refire_ok(116, src9, 1000)
+        && !rules::refire_ok(116, src9, 1000 + 100)
+        && rules::refire_ok(117, src9, 1000 + 100)
+        && rules::refire_ok(116, ip(10, 30, 0, 10), 1000 + 100)
+        && rules::refire_ok(116, src9, 1000 + rules::BEHAVIORAL_COOLDOWN_SECS);
+    ok &= c_cool;
+    rules::refire_reset();
+    kprint!("   REFIRE cooldown {}s per (rule, source): suppresses repeats, other rules/sources independent, re-arms after the window [{}]\n",
+        rules::BEHAVIORAL_COOLDOWN_SECS, if c_cool { "ok" } else { "BUG" });
 
     // === DNS analytics: a DGA-shaped + a tunneling-shaped QNAME fire -> Observe/PASS; a
     //     normal "www.google.com" does NOT. Full UDP:53 frame, QNAME parsed in-kernel. ===
@@ -13761,6 +13814,7 @@ fn fuzz_selftest() {
             let _ = parse_dhcp_reply(&buf[..n], &xid, &mac, &mut r);
             let (mut cm, mut cx, mut ci) = ([0u8; 6], [0u8; 4], [0u8; 4]);
             let _ = parse_client_dhcp(&buf[..n], &mut cm, &mut cx, &mut ci);
+            let _ = arch_aarch64::dhcpd::client_identity(&buf[..n]);
             let doff = (next() as usize) % 64;
             let _ = parse_ap_event(&buf[..n], doff);
             let mut eb = [0u8; 256];
