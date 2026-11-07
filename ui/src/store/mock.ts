@@ -63,7 +63,12 @@ export interface TimelineStats {
 // ── Reactive signals ─────────────────────────────────────────────────────────
 
 export const [qsecbit,         setQsecbit]         = createSignal<number>(92);
-export const [protectionStatus]                     = createSignal<ProtectionStatus>('protected');
+/** Derived from the live resilience % with the device's own bands (risk < 0.3 GREEN, < 0.7 AMBER,
+ *  else RED — `mcstate.rs` `band`), so the pill can never say PROTECTED under attack. */
+export const protectionStatus = (): ProtectionStatus => {
+  const pct = qsecbit();
+  return pct > 70 ? 'protected' : pct > 30 ? 'needs-attention' : 'critical';
+};
 // Default 'standalone' until the device says otherwise: TopBar reads the real mode from
 // `/api/health` (heqk: `mode` = cloud-linked only while the MSSP session is Established).
 export const [deployMode,      setDeployMode]       = createSignal<DeployMode>('standalone');

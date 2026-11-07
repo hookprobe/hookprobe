@@ -67,13 +67,13 @@ const TopBar: Component<Props> = (props) => {
     <div class="topbar-right">
       {/* Organism status pill — links to Mission Control root */}
       <button
-        class="organism-pill"
+        class={`organism-pill organism-pill--${protectionStatus()}`}
         onClick={() => { /* navigate to /mission */ }}
         aria-label={`Security status: ${protectionStatus()} — QSecBit score ${qsecbit()}`}
       >
         <div class="organism-pill-dot" aria-hidden="true" />
         <span aria-hidden="true">{qsecbit()}</span>
-        <span>PROTECTED</span>
+        <span>{protectionStatus() === 'protected' ? 'PROTECTED' : protectionStatus() === 'needs-attention' ? 'NEEDS ATTENTION' : 'UNDER ATTACK'}</span>
       </button>
 
       {/* Mode badge — standalone hides scope switcher per spec */}
