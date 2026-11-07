@@ -1,0 +1,12 @@
+# Default to the bare-metal aarch64 target and build core/alloc from source.
+[build]
+target = "aarch64-unknown-none-softfloat"
+
+[unstable]
+build-std          = ["core", "alloc", "compiler_builtins"]
+build-std-features = ["compiler-builtins-mem"]   # provides memcpy/memset/memmove/memcmp
+
+# `cargo run` / `cargo test` boot the ELF under QEMU's `virt` machine.
+# The binary path is appended after `-kernel` by cargo.
+[target.aarch64-unknown-none-softfloat]
+runner = "qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 -kernel"

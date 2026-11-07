@@ -1,0 +1,697 @@
+# =============================================================================
+# build-os.yml — the HookProbe OS image pipeline (Readme "The Builder": one
+# Containerfile, many outputs; ADR 0002 supply chain; Architecture §6 Phase 1/6).
+# =============================================================================
+#
+# Stages (each link maps to security/README.md "the supply-chain chain"):
+#   build (matrix arm64+amd64) → bootc container lint (HARD GATE)
+#     → SBOM (syft/CycloneDX) → CBOM (security/cbom/gen-cbom.py) → cosign SIGN
+#     → attest SBOM/CBOM/SLSA → push → bootc-image-builder per profile
+#     → boot smoke-test (qemu: manifest validates + supervisor notify-ready)
+#     → health-gated promotion.
+#
+# HONESTY: this CANNOT run on the dev box (no git remote, no registry, no cosign
+# identity, no privileged bootc-image-builder, no arm64 runner). It is the canonical
+# build definition; it runs when the repo is pushed to GitHub with the secrets/identity
+# below. Genuine unknowns are marked `# TODO`. Reuses manifest/validate.py as a CI gate.
+# =============================================================================
+name: build-os
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - "base/**"
+      - "bootstrap/**"
+      - "supervisor/**"
+      - "crates/**"
+      - "modules/**"            # workspace resolution needs all member manifests
+      - "platforms/**"          # baked RO into the image (Layer E)
+      - "manifest/**"           # baked schema + used as the smoke-test gate
+      - "security/**"           # SBOM/CBOM tooling + crypto suite
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/build-os.yml"
+  pull_request:
+    paths:
+      - "base/**"
+      - ".github/workflows/build-os.yml"
+  workflow_dispatch:
+    inputs:
+      channel:
+        description: "Release channel to promote to (ADR 0012 D2)"
+        required: false
+        default: stable
+        type: choice
+        options: [stable, beta]
+
+# Keyless cosign + SLSA provenance need id-token; pushing to GHCR needs packages.
+# For the KMS/HSM identity model (ADR 0002 §3, regulated line) drop id-token and add a
+# scoped KMS credential secret instead — see security/cosign/README.md.
+permissions:
+  contents: read
+  packages: write
+  id-token: write          # keyless cosign (Fulcio/Rekor) + OIDC provenance
+  attestations: write      # actions/attest-build-provenance (SLSA)
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: hookprobe/os
+  # Active crypto suite the CBOM is generated from (ADR 0002 §1).
+  CRYPTO_SUITE: security/cbom/suites/hookprobe-pqc-hybrid-2026.yaml
+  # IMAGE_VERSION is NOT a static value here anymore — see the `version` job below
+  # (ADR 0012 D1: one calendar scheme YYYY.M[.patch], derived from the `v*` git
+  # tag; the `vX.Y.Z` semver phrasing this TODO used to carry is explicitly
+  # superseded — no independently-versioned components to semver against). Jobs
+  # that need it read `needs.version.outputs.image_version`.
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # 0) Version (ADR 0012 D1). ONE versioning scheme: calendar YYYY.M[.patch],
+  #    derived from the triggering `v*` tag (`${GITHUB_REF_NAME#v}`) — the
+  #    `vX.Y.Z` semver TODO this workflow used to carry is explicitly superseded
+  #    (ADR 0012 D1: no independently-versioned components to semver against).
+  #    Non-tag triggers (push to main, PRs, manual workflow_dispatch off a
+  #    branch) get a clearly-non-release fallback so a build never masquerades
+  #    as a numbered release.
+  # ---------------------------------------------------------------------------
+  version:
+    name: "version"
+    runs-on: ubuntu-24.04
+    outputs:
+      image_version: ${{ steps.ver.outputs.image_version }}
+    steps:
+      - name: Derive IMAGE_VERSION from the tag (ADR 0012 D1)
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "image_version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            SHORT_SHA="${GITHUB_SHA:0:7}"
+            echo "image_version=0.0.0-dev-${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # 1) Build + sign the OS image, per (profile, arch). The image is largely
+  #    profile-agnostic (PROFILE only tunes optional packages/slices; the SAME image
+  #    self-detects hardware), so this matrix is small + representative.
+  #    TODO: GENERATE this matrix from base/profiles/*.yaml `bib.variants` so adding a
+  #          platform stays "one file in platforms/ + its profile" (the design test).
+  # ---------------------------------------------------------------------------
+  build-image:
+    name: "image · ${{ matrix.profile }} · ${{ matrix.arch }}"
+    needs: version
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    # TODO: confirm the arm64 hosted runner label (or fall back to qemu emulation on
+    #       amd64 — much slower; uncomment the setup-qemu step below if so).
+    env:
+      IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { profile: edge-pro, arch: arm64 }
+          - { profile: edge-pro, arch: amd64 }
+          - { profile: cloud,    arch: amd64 }
+          - { profile: virtual,  arch: amd64 }   # feeds the boot smoke-test (qcow2)
+    outputs:
+      # expose the virtual/amd64 digest for the smoke-test + disk jobs.
+      digest_virtual_amd64: ${{ steps.publish.outputs.digest_virtual_amd64 }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Cross-arch build/run support when the runner arch != target arch (and to let
+      # the amd64 runner `podman run` the arm64 image for `bootc container lint`).
+      - name: Set up QEMU (cross-arch)
+        if: matrix.arch == 'arm64' && runner.arch != 'ARM64'
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Install podman + tooling
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          # TODO: pin podman >= 5 (bootc image builds + lint expect a recent podman);
+          #       ubuntu-24.04 ships an older podman — may need the kubic/opensuse repo
+          #       or a containerized podman. This is a REAL gate to resolve in CI.
+          sudo apt-get install -y --no-install-recommends podman jq python3 python3-pip xz-utils
+          pip install --user -r security/cbom/requirements.txt -r manifest/requirements.txt
+
+      - name: Install syft (SBOM)
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/anchore/syft/main/install.sh \
+            | sh -s -- -b "$HOME/.local/bin"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          # TODO: pin the syft version + verify its checksum (reproducible-SBOM req).
+
+      - uses: sigstore/cosign-installer@v3
+        # TODO: pin cosign version to match base/Containerfile COSIGN_VERSION.
+
+      - name: Registry login
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | podman login "$REGISTRY" \
+            -u "${{ github.actor }}" --password-stdin
+
+      - name: Generate the staging plan (ADR 0015 — registry-driven module inclusion)
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          # ONE generator, read by base/Containerfile's `build` stage (COPY
+          # builder/generated/staging-plan.json) — the same plan build-arm64.sh /
+          # build-vm.sh consume, so this arch's bootc image stages the identical
+          # (by id) module set as the arm64/amd64 mkosi images (D2 parity).
+          builder/gen-staging.sh --arch "${ARCH}" \
+            --out        builder/generated/staging-plan.json \
+            --preset-out builder/generated/85-hookprobe-modules.preset
+
+      - name: Build bootc image
+        id: build
+        env:
+          PROFILE: ${{ matrix.profile }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          # PROFILE.TARGETARCH build args come straight from base/profiles/<profile>.yaml.
+          LOCAL_TAG="hookprobe-os:${IMAGE_VERSION}-${PROFILE}-${ARCH}"
+          podman build \
+            --platform "linux/${ARCH}" \
+            -f base/Containerfile \
+            --build-arg "PROFILE=${PROFILE}" \
+            --build-arg "TARGETARCH=${ARCH}" \
+            -t "${LOCAL_TAG}" \
+            .
+          echo "local_tag=${LOCAL_TAG}" >> "$GITHUB_OUTPUT"
+
+      - name: Verify staging completeness (ADR 0015 D3 gate — pre-lint, plan-consistency pass)
+        run: |
+          set -euxo pipefail
+          builder/verify-staging.sh --plan builder/generated/staging-plan.json
+
+      - name: Upload the staging plan (audit artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: "staging-plan-${{ matrix.profile }}-${{ matrix.arch }}"
+          path: |
+            builder/generated/staging-plan.json
+            builder/generated/85-hookprobe-modules.preset
+          if-no-files-found: error
+
+      - name: bootc container lint (HARD GATE)
+        run: |
+          set -euxo pipefail
+          # The Containerfile runs `bootc container lint || warn` at build time as a
+          # scaffold; HERE we make it FATAL (base/README.md "make it a hard CI gate").
+          # Cross-arch arm64 image runs under QEMU on an amd64 runner.
+          podman run --rm "${{ steps.build.outputs.local_tag }}" bootc container lint
+
+      - name: Push image + capture digest
+        id: publish
+        env:
+          PROFILE: ${{ matrix.profile }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          REMOTE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_VERSION}-${PROFILE}-${ARCH}"
+          podman push "${{ steps.build.outputs.local_tag }}" "${REMOTE}"
+          # Resolve the immutable digest — everything downstream binds to @sha256:...
+          DIGEST="$(podman inspect --format '{{ index .RepoDigests 0 }}' "${{ steps.build.outputs.local_tag }}" | sed 's/.*@//')"
+          REF="${REGISTRY}/${IMAGE_NAME}@${DIGEST}"
+          echo "ref=${REF}"     >> "$GITHUB_OUTPUT"
+          echo "remote=${REMOTE}" >> "$GITHUB_OUTPUT"
+          if [ "${PROFILE}" = "virtual" ] && [ "${ARCH}" = "amd64" ]; then
+            echo "digest_virtual_amd64=${DIGEST}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Record digest for the release pass (ADR 0012 D3 — consumed by `promote`)
+        env:
+          PROFILE: ${{ matrix.profile }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          jq -n --arg profile "$PROFILE" --arg arch "$ARCH" \
+                --arg ref "${{ steps.publish.outputs.ref }}" \
+                '{profile: $profile, arch: $arch, ref: $ref}' > digest.json
+
+      - name: Upload digest artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: "digest-${{ matrix.profile }}-${{ matrix.arch }}"
+          path: digest.json
+          if-no-files-found: error
+
+      - name: Generate SBOM (CycloneDX + SPDX)
+        run: |
+          set -euxo pipefail
+          syft -c security/sbom/syft.yaml "${{ steps.publish.outputs.ref }}" \
+            -o cyclonedx-json=sbom.cdx.json \
+            -o spdx-json=sbom.spdx.json
+
+      - name: Generate CBOM (crypto suite + SBOM cross-reference)
+        run: |
+          set -euxo pipefail
+          python3 security/cbom/gen-cbom.py \
+            --suite "${CRYPTO_SUITE}" \
+            --image "${{ steps.publish.outputs.ref }}" \
+            --sbom  sbom.cdx.json \
+            --out   cbom.cdx.json
+          # TODO: ALSO bake the policy-only CBOM into the image at
+          #       /usr/share/hookprobe/cbom.json (Containerfile Layer E TODO). That needs
+          #       either a 2-pass build (CBOM depends on the image SBOM → chicken/egg) or
+          #       a policy-only pre-pass CBOM (suite alone, no --sbom). The ATTESTED CBOM
+          #       here is the richer one (includes shipped crypto libraries).
+
+      - name: cosign SIGN image
+        run: |
+          set -euxo pipefail
+          # Keyless (Fulcio/Rekor) — the default for the open-core image. For the
+          # KMS/HSM line use: cosign sign --key "$KMS_REF" ... (security/cosign/README.md).
+          cosign sign --yes "${{ steps.publish.outputs.ref }}"
+          # TODO(PQC): attach the composite ML-DSA-65 leg once sigstore native PQC lands;
+          #            interim = classical signature above (ADR 0002 §3 consequences).
+
+      - name: cosign ATTEST SBOM + CBOM
+        run: |
+          set -euxo pipefail
+          cosign attest --yes --type cyclonedx \
+            --predicate sbom.cdx.json "${{ steps.publish.outputs.ref }}"
+          cosign attest --yes --type "https://cyclonedx.org/bom" \
+            --predicate cbom.cdx.json "${{ steps.publish.outputs.ref }}"
+          # TODO: finalize whether the CBOM uses a custom predicateType or shares
+          #       cyclonedx/bom with the SBOM (security/cosign/verify.sh notes this).
+
+      - name: SLSA build provenance
+        uses: actions/attest-build-provenance@v1
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: sha256:${{ steps.publish.outputs.ref && '' }}${{ steps.publish.outputs.digest_virtual_amd64 }}
+          # NOTE: subject-digest must be the bare sha256 of THIS matrix image; the
+          # expression above is a placeholder. TODO: pass the digest captured in
+          # `publish` cleanly (e.g. export DIGEST as a step output and reference it).
+          push-to-registry: true
+
+      - name: Upload SBOM/CBOM artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: "bom-${{ matrix.profile }}-${{ matrix.arch }}"
+          path: |
+            sbom.cdx.json
+            sbom.spdx.json
+            cbom.cdx.json
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 2) bootc-image-builder: turn the signed OS image into disk artifacts per profile
+  #    (Readme "The Builder"; base/README.md "Build → sign → ship → image").
+  #    Runs --privileged, which caps the achievable SLSA level (security/slsa/README.md).
+  # ---------------------------------------------------------------------------
+  build-disk:
+    name: "disk · ${{ matrix.profile }} · ${{ matrix.arch }} · ${{ matrix.type }}"
+    needs: [version, build-image]
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    env:
+      IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Derived from base/profiles/*.yaml `bib.variants`. TODO: generate dynamically.
+        include:
+          - { profile: edge-pro, arch: aarch64, type: raw,          ext: img.xz }
+          - { profile: edge-pro, arch: x86_64,  type: anaconda-iso, ext: iso }
+          - { profile: cloud,    arch: x86_64,  type: ami,          ext: raw }
+          - { profile: virtual,  arch: x86_64,  type: qcow2,        ext: qcow2 }   # smoke-test input
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install podman + cosign
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends podman jq xz-utils
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Registry login
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | podman login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: Generate bootc-image-builder config from the profile
+        run: |
+          set -euxo pipefail
+          # base/profiles/<profile>.yaml carries a `bib:` block (filesystem incl. the
+          # labelled `hookprobe-data` partition, seed_engine). Translate it to bib's
+          # config.toml. TODO(REAL): the bib filesystem-customization + ISO-installer
+          # partitioning syntax must be validated against the PINNED bib version — the
+          # `bib:` block is intent, not a verified config.toml (base/README.md TODO).
+          mkdir -p out config
+          python3 - "${{ matrix.profile }}" > config/bib.toml <<'PY'
+          import sys, json
+          # Minimal placeholder translator. TODO: real YAML->TOML of the `bib:` block,
+          # including the `hookprobe-data` labelled partition (ADR 0003 data split).
+          prof = sys.argv[1]
+          print(f'# bootc-image-builder config for profile={prof} (PLACEHOLDER — TODO)')
+          print('[[customizations.filesystem]]')
+          print('mountpoint = "/"')
+          print('minsize = "8 GiB"')
+          print('[[customizations.filesystem]]')
+          print('mountpoint = "/var/lib/hookprobe"')
+          print('minsize = "16 GiB"')
+          PY
+
+      - name: Build disk artifact (bootc-image-builder, privileged)
+        env:
+          PROFILE: ${{ matrix.profile }}
+          IMG_ARCH: ${{ matrix.arch }}
+          BIB_TYPE: ${{ matrix.type }}
+        run: |
+          set -euxo pipefail
+          REMOTE="${REGISTRY}/${IMAGE_NAME}:${IMAGE_VERSION}-${PROFILE}-$( [ "$IMG_ARCH" = aarch64 ] && echo arm64 || echo amd64 )"
+          podman pull "${REMOTE}"
+          sudo podman run --rm --privileged \
+            -v "$PWD/out:/output" \
+            -v "$PWD/config:/config" \
+            -v /var/lib/containers/storage:/var/lib/containers/storage \
+            quay.io/centos-bootc/bootc-image-builder:latest \
+            --type "${BIB_TYPE}" \
+            --target-arch "${IMG_ARCH}" \
+            --config /config/bib.toml \
+            --local "${REMOTE}"
+          # TODO: pin bootc-image-builder by digest. TODO(Pi): SBC profiles likely need
+          #       bootupd/firmware handling (base/README.md) — not covered here.
+
+      - name: Compress + name artifact
+        id: pack
+        env:
+          PROFILE: ${{ matrix.profile }}
+          IMG_ARCH: ${{ matrix.arch }}
+          EXT: ${{ matrix.ext }}
+        run: |
+          set -euxo pipefail
+          # Locate bib output (path varies by type). TODO: confirm output layout per type.
+          SRC="$(find out -type f \( -name '*.raw' -o -name '*.qcow2' -o -name '*.iso' \) | head -n1)"
+          NAME="hookprobe-${PROFILE}-${IMG_ARCH}.${EXT}"
+          case "${EXT}" in
+            img.xz) xz -T0 -c "$SRC" > "$NAME" ;;
+            *)      cp "$SRC" "$NAME" ;;
+          esac
+          sha256sum "$NAME" > "${NAME}.sha256"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+
+      - name: cosign sign-blob the disk artifact
+        run: |
+          set -euxo pipefail
+          # Disk images are blobs, not OCI — sign with sign-blob. The OS image they
+          # derive from is already cosign-signed; this protects the flashable artifact.
+          cosign sign-blob --yes \
+            --output-signature "${{ steps.pack.outputs.name }}.sig" \
+            --output-certificate "${{ steps.pack.outputs.name }}.pem" \
+            "${{ steps.pack.outputs.name }}"
+
+      - name: Upload disk artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: "disk-${{ matrix.profile }}-${{ matrix.arch }}-${{ matrix.type }}"
+          path: |
+            ${{ steps.pack.outputs.name }}
+            ${{ steps.pack.outputs.name }}.sha256
+            ${{ steps.pack.outputs.name }}.sig
+            ${{ steps.pack.outputs.name }}.pem
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 3) Boot smoke-test (Architecture §6; base/README.md "What CI needs" #7).
+  #    Boot the virtual qcow2 in qemu and assert the boot→runtime spine works:
+  #      (a) first-boot bootstrap wrote a manifest that PASSES manifest/validate.py;
+  #      (b) hookprobe-supervisor reached `notify` readiness.
+  #    KEY INSIGHT: hookprobe-supervisor.service is Type=notify, so `systemctl is-active`
+  #    returns "active" ONLY after the binary calls sd_notify(READY=1) from its real
+  #    reconcile loop (C15). So is-active==active IS the notify-ready assertion.
+  # ---------------------------------------------------------------------------
+  smoke-test:
+    name: "boot smoke-test (qemu)"
+    needs: build-disk
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the virtual qcow2
+        uses: actions/download-artifact@v4
+        with:
+          name: disk-virtual-x86_64-qcow2
+
+      - name: Install qemu + libguestfs + python deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-system-x86 qemu-utils libguestfs-tools openssh-client cloud-image-utils python3-pip
+          pip install --user -r manifest/requirements.txt
+
+      - name: Prepare seed (Ignition/cloud-init) for headless boot + SSH
+        run: |
+          set -euxo pipefail
+          # Inject ONLY machine-specific seed (Architecture §4.1: seed, don't configure):
+          # an SSH key + serial console so CI can reach the box. cloud-init clean is
+          # implied by first-boot. TODO: prefer Ignition (Architecture primary) — emit a
+          # Butane->Ignition seed once the seed contract is finalized.
+          ssh-keygen -t ed25519 -N '' -f smoke_key
+          cat > user-data <<EOF
+          #cloud-config
+          ssh_authorized_keys:
+            - $(cat smoke_key.pub)
+          EOF
+          cloud-localds seed.iso user-data
+          # TODO: confirm the qcow2 honors cloud-init/Ignition as built by bib for the
+          #       virtual profile (seed_engine: ignition in profiles/virtual.yaml).
+
+      - name: Boot the image (headless qemu) + wait for first-boot
+        id: boot
+        run: |
+          set -euxo pipefail
+          IMG="$(ls *.qcow2 | head -n1)"
+          qemu-system-x86_64 \
+            -machine q35,accel=tcg -cpu max -smp 2 -m 2048 \
+            -drive file="$IMG",if=virtio,format=qcow2 \
+            -drive file=seed.iso,if=virtio,format=raw \
+            -netdev user,id=n0,hostfwd=tcp::2222-:22 -device virtio-net-pci,netdev=n0 \
+            -nographic -serial file:serial.log &
+          echo "qemu_pid=$!" >> "$GITHUB_OUTPUT"
+          # Poll SSH for up to ~5 min for first boot (bootstrap is a oneshot; supervisor
+          # then comes up). TODO: tune the timeout to real first-boot timing on TCG
+          # (no KVM nesting on hosted runners → slow).
+          for i in $(seq 1 60); do
+            if ssh -i smoke_key -o StrictHostKeyChecking=no -o ConnectTimeout=5 \
+                 -p 2222 root@127.0.0.1 true 2>/dev/null; then
+              echo "ssh-up after ${i} tries"; break
+            fi
+            sleep 5
+          done
+
+      - name: ASSERT — manifest written + schema-valid (reuse manifest/validate.py)
+        run: |
+          set -euxo pipefail
+          SSH="ssh -i smoke_key -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1"
+          # (a) bootstrap wrote the manifest on the persistent data partition.
+          $SSH 'test -f /var/lib/hookprobe/manifest.json' \
+            || { echo "FAIL: bootstrap did not write /var/lib/hookprobe/manifest.json"; cat serial.log; exit 1; }
+          $SSH 'cat /var/lib/hookprobe/manifest.json' > booted.manifest.json
+          # Reuse the EXISTING manifest harness as the CI gate (validates schema + the
+          # ADR 0003 semantic invariants). manifest-validate.yml uses the same script.
+          python3 manifest/validate.py booted.manifest.json
+
+      - name: ASSERT — supervisor reached notify readiness (Type=notify => active)
+        run: |
+          set -euxo pipefail
+          SSH="ssh -i smoke_key -o StrictHostKeyChecking=no -p 2222 root@127.0.0.1"
+          # Type=notify: `active` only after sd_notify(READY=1) from the real loop (C15).
+          $SSH 'systemctl is-active hookprobe-supervisor.service' \
+            || { echo "FAIL: supervisor not notify-ready"; $SSH 'journalctl -u hookprobe-supervisor --no-pager' || true; cat serial.log; exit 1; }
+          # Bonus: confirm bootstrap oneshot succeeded.
+          $SSH 'systemctl is-active hookprobe-bootstrap.service || systemctl show hookprobe-bootstrap.service -p Result' || true
+
+      - name: Fallback assert via libguestfs (if SSH never came up)
+        if: failure()
+        run: |
+          set +e
+          # If networking/seed failed, still try to read the manifest offline so we get a
+          # signal instead of a blind failure. TODO: make this the PRIMARY path if the
+          # seed/SSH route proves flaky on hosted runners.
+          IMG="$(ls *.qcow2 | head -n1)"
+          sudo guestfish --ro -a "$IMG" -i cat /var/lib/hookprobe/manifest.json > offline.manifest.json 2>/dev/null
+          if [ -s offline.manifest.json ]; then
+            echo "recovered manifest offline; validating:"
+            python3 manifest/validate.py offline.manifest.json || true
+          fi
+          echo "--- serial.log tail ---"; tail -n 100 serial.log || true
+
+      - name: Stop qemu
+        if: always()
+        run: kill "${{ steps.boot.outputs.qemu_pid }}" 2>/dev/null || true
+
+      - name: Upload smoke-test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-test-evidence
+          path: |
+            serial.log
+            booted.manifest.json
+            offline.manifest.json
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # 4) Promotion (ADR 0012 D2/D3): re-point the channel tag (:stable/:beta) at
+  #    the ALREADY-BUILT, ALREADY-SIGNED digest for each (profile, arch). Only
+  #    runs after `smoke-test` is green (health-gated, mirrors the fleet "rings,
+  #    health-gated" model — Readme "Fleet & scale"). This is the only place a
+  #    digest is blessed for fleet rollout (canary→ring→fleet); the ring WINDOW
+  #    itself is enforced later, on-device, by `crate::fleet::diff` (ADR 0012
+  #    D2/build-step-3) — not here. Tags can be re-cut; a promoted digest cannot
+  #    silently change under a channel name (ADR 0012 D1 "what gets blessed").
+  #
+  #    GOVERNANCE (ADR 0011 D3): 🔴 Red — never autonomous. `environment:
+  #    release-promotion` below is a GitHub *reviewer-gated* deployment
+  #    environment (configure required reviewers on it in repo Settings →
+  #    Environments): the job PAUSES here until a human approves. That approval
+  #    is what stands in, today, for the four Ring-1 release-pass attestations
+  #    (verification-engineer / security-auditor / release-engineer /
+  #    product-steward — ADR 0012 D3) — one coarse-grained gate, not four
+  #    discrete ones. HONESTY: this is a simplification, called out so nobody
+  #    reads "gated" as "four people signed off individually." TODO: once the
+  #    lifecycle graph exists (ADR 0011 build step 2), require four separately
+  #    recorded approvals and pass them through as four `--attest <role>` flags
+  #    to `builder/release-pass.sh` (the `release-pass` job below) instead of
+  #    one environment gate standing in for all four.
+  #
+  #    HONESTY: this job cannot run on the dev box (no registry, no cosign
+  #    identity, no `release-promotion` environment configured) — it is the
+  #    canonical definition; assumptions are marked inline.
+  # ---------------------------------------------------------------------------
+  promote:
+    name: "promote · ${{ matrix.profile }} · ${{ matrix.arch }} · channel=${{ inputs.channel }}"
+    needs: [version, build-image, smoke-test]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment: release-promotion   # reviewer-gated — see governance note above
+    env:
+      IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+      # `inputs.channel` only exists for workflow_dispatch runs; tag-push runs
+      # (the normal release path) fall back to `stable` (ADR 0012 D2 default).
+      # NOTE: referencing `inputs.*` on a non-workflow_dispatch trigger is a
+      # documented soft-warning in the Actions UI ("context access might be
+      # invalid"), not a hard failure — it evaluates to empty → `|| 'stable'`.
+      CHANNEL: ${{ inputs.channel || 'stable' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Same (profile, arch) set as build-image's matrix MINUS `virtual` — that
+        # profile only feeds the boot smoke-test (qemu) and is never a real
+        # fleet-rollout artifact, so it is never promoted.
+        include:
+          - { profile: edge-pro, arch: arm64 }
+          - { profile: edge-pro, arch: amd64 }
+          - { profile: cloud,    arch: amd64 }
+    steps:
+      - name: Install skopeo + jq
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends skopeo jq
+      - uses: sigstore/cosign-installer@v3
+
+      - name: Download this leg's built-and-signed digest (from build-image)
+        uses: actions/download-artifact@v4
+        with:
+          name: "digest-${{ matrix.profile }}-${{ matrix.arch }}"
+
+      - name: Registry login (skopeo shares podman's containers/auth.json store)
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login "$REGISTRY" -u "${{ github.actor }}" --password-stdin
+
+      - name: skopeo copy — promote digest to the channel tag
+        id: promote_copy
+        env:
+          PROFILE: ${{ matrix.profile }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euxo pipefail
+          SRC_REF="$(jq -r .ref digest.json)"   # digest-pinned source, e.g. ghcr.io/.../os@sha256:...
+          DST_TAG="${REGISTRY}/${IMAGE_NAME}:${CHANNEL}-${PROFILE}-${ARCH}"
+          skopeo copy --all "docker://${SRC_REF}" "docker://${DST_TAG}"
+          # skopeo copy re-points the tag at the SAME content — resolve the digest
+          # back out so release.json records the blessed digest, not just the tag.
+          DST_DIGEST="$(skopeo inspect --format '{{.Digest}}' "docker://${DST_TAG}")"
+          echo "promoted_ref=${DST_TAG}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DST_DIGEST}"    >> "$GITHUB_OUTPUT"
+
+      - name: cosign sign the promoted channel tag
+        run: cosign sign --yes "${{ steps.promote_copy.outputs.promoted_ref }}"
+
+      - name: Write promotion record (for the release-pass job)
+        env:
+          PROFILE: ${{ matrix.profile }}
+          ARCH: ${{ matrix.arch }}
+        run: |
+          jq -n --arg profile "$PROFILE" --arg arch "$ARCH" \
+                --arg digest "${{ steps.promote_copy.outputs.digest }}" \
+                --arg ref "${{ steps.promote_copy.outputs.promoted_ref }}" \
+                '{profile: $profile, arch: $arch, digest: $digest, ref: $ref}' > promoted.json
+
+      - name: Upload promotion record
+        uses: actions/upload-artifact@v4
+        with:
+          name: "promoted-${{ matrix.profile }}-${{ matrix.arch }}"
+          path: promoted.json
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # 5) Release pass (ADR 0012 D3, "enable Cortex at every release"): assemble the
+  #    `release.json` evidence bundle (schema 1) that closes ADR 0011's dangling
+  #    "who emits release_image" question — one `release_image` node per release,
+  #    `validated_by` edges to a `gate_result` per gate-ladder stage that ran,
+  #    `shipped_in` edges once `hookprobe-evidence` grows the lifecycle types
+  #    (ADR 0011 build step 2 — not landed yet; this job only WRITES the bundle,
+  #    it does not ingest it). Reuses `builder/release-pass.sh` — the SAME
+  #    emitter release-engineer runs locally for dry-run/rehearsal (ADR 0012 D3
+  #    "two paths, same bundle shape") — so there is exactly one place that knows
+  #    the release.json shape.
+  # ---------------------------------------------------------------------------
+  release-pass:
+    name: "release pass (Cortex, ADR 0012 D3)"
+    needs: [version, promote]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment: release-promotion   # same reviewer gate as `promote` — see its comment
+    env:
+      IMAGE_VERSION: ${{ needs.version.outputs.image_version }}
+      CHANNEL: ${{ inputs.channel || 'stable' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all promotion records
+        uses: actions/download-artifact@v4
+        with:
+          pattern: "promoted-*"
+
+      - name: Assemble release.json (builder/release-pass.sh, schema 1)
+        run: |
+          set -euxo pipefail
+          ARGS=(--version "${IMAGE_VERSION}" --channel "${CHANNEL}" --out release.json)
+          for f in promoted-*/promoted.json; do
+            profile="$(jq -r .profile "$f")"; arch="$(jq -r .arch "$f")"; digest="$(jq -r .digest "$f")"
+            ARGS+=(--digest "${profile}:${arch}:${digest}")
+          done
+          # Gate results this job can actually see: the build-image + smoke-test
+          # jobs it `needs` (transitively, via `promote`) already had to be green
+          # for this job to be reached. TODO: pull real per-stage detail (test
+          # counts, clippy verdict) from those jobs' own outputs once they export
+          # it — today this only records that they ran and passed, not detail.
+          ARGS+=(--gate "build-and-sign:pass:build-image matrix green (bootc lint hard gate, cosign sign, SBOM+CBOM attested)")
+          ARGS+=(--gate "smoke-test:pass:qemu boot + manifest schema-valid + supervisor notify-ready")
+          # The `environment: release-promotion` reviewer approval on this job and
+          # on `promote` IS the Ring-1 sign-off stand-in today (see `promote`'s
+          # governance comment) — hence `--attest all` here, not four individual
+          # role flags yet.
+          "$GITHUB_WORKSPACE/builder/release-pass.sh" "${ARGS[@]}" --attest all
+
+      - name: Upload release.json evidence bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-evidence
+          path: release.json
+          if-no-files-found: error

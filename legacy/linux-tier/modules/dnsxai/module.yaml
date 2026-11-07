@@ -1,0 +1,83 @@
+# modules/dnsxai/module.yaml — DNS / DGA anomaly classifier.
+#
+# V2 port of V1 shared/dnsXai (Python, LightGBM + neural ensemble).
+# This first cut is a pure-Rust heuristic classifier (no model file).
+# Upgrade path: load a trained ONNX/GGML model via wasi-nn: cpu once
+# one is exported from V1's LightGBM/neural ensemble.
+#
+# The supervisor resolves requires/grants/provides against the signed manifest
+# (Architecture.md C10). The capability token `dns_filtering` is defined in
+# the manifest capability contract (being added by the main thread concurrently).
+id: dnsxai
+version: 0.1.0
+title: "dnsXai — DNS/DGA Anomaly Classifier"
+runtime: wasm
+artifact: registry.hookprobe.com/modules/dnsxai:0.1.0
+
+# `soc` is the minimum viable platform (CPU + memory available for DNS interception).
+# `dns_filtering` is granted when the DNS interception path is available on the host.
+# The supervisor will refuse to load this module if either token is not granted.
+requires:
+  capabilities: [soc]
+  min_memory_mb: 128
+
+grants:                         # the ONLY host access this module receives (WASI caps)
+  - read: /var/lib/hookprobe/events   # reads DNS query events written by Senzorium
+  - wasi-nn: cpu                      # reserved for the WASI-NN upgrade path (heuristic-only today)
+
+provides:
+  capabilities: [dns_filtering]
+
+# wasm-S budget (ADR 0003 defaults: 25%/128MB/50ms).
+# Feature extraction + heuristic scoring is O(domain_len) — well within epoch_ms=50.
+resources:
+  cpu_pct: 25
+  memory_mb: 128
+  epoch_ms: 50
+
+# Payload digest (ADR 0016) — refreshed by
+# `hookprobe-supervisor --write-artifact-digests dnsxai` (builder/sign-release.sh runs it
+# BEFORE --sign-modules); never hand-edit `value`.
+artifacts:
+  - path: dnsxai.wasm
+    role: executable
+    digest:
+      alg: sha256
+      value: "2cd1df5db023c820bc0c6ee8f2220d0c9412df48915edc84513cf705bcd69b73"
+
+  # ADR 0017 — build-time-precompiled AOT blob, arch-qualified (one entry per built arch; the
+  # supervisor consults only the entry matching its own running arch, falls back to the verified
+  # `.wasm` JIT floor on any doubt). Populated by `--write-artifact-digests dnsxai`; never
+  # hand-edit `value`. arm64/riscv64 entries land via their own arch's CI/build run.
+  - path: dnsxai.cwasm
+    role: aot
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "95da8edd2538e7fc8187ddbfb21553187dd82ce458080f3bb96e4f95db811802"
+
+  # arm64 leg (ADR 0017 D3/D1 — closes the "amd64-only role:aot" gap: without this entry every
+  # Pi/RK3588 device had NO arm64 `role: aot` to match, silently falling back to verified-JIT
+  # forever, never the AOT fast path). Populated by
+  # `hookprobe-supervisor --write-artifact-digests dnsxai` run AS arm64 (native arm64 CI runner,
+  # or this dev box's qemu-aarch64-static stand-in via `builder/refresh-aot.sh --arch arm64`);
+  # never hand-edit `value`.
+  - path: dnsxai.cwasm
+    role: aot
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "afe669193523db0b6b7be8e5d695c7590bdf9357bdd08ba1782775b0ebbb714c"
+
+# All modules must be cosign-signed before the supervisor will load them.
+  - path: dnsxai.a76.cwasm
+    role: aot
+    arch: arm64
+    cpu: cortex-a76  # A76-tier (LSE) variant of the same path's A72-safe baseline;
+                     # defaults to A72-safe when `cpu:` is absent (every other entry).
+                     # informational until the Rust-side selection lands (see
+                     # builder/refresh-aot.sh --with-a76's doc header).
+    digest:
+      alg: sha256
+      value: "37d7f9ee362080946c5fdc74418c4c810baa312b320b072395157dd1c6c3870e"
+signature: required

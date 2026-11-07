@@ -1,0 +1,22 @@
+---
+/**
+ * / — Mission Control Layer 0 (calm landing).
+ *
+ * Astro owns the outer HTML shell; the interactive surface is the single
+ * Solid island (client:load). Static output means this page is pre-rendered
+ * to HTML at `astro build` time; Solid hydrates on the client.
+ *
+ * Route map (MissionControl.md §Appendix):
+ *   /  → this page (Layer 0 landing; all five pillar cards)
+ *   /mission → full Mission Control (Layer 2 — stub in Phase 1)
+ *   /network/dns, /network/map, /network/wan  → stub routes (Phase 2)
+ *   /investigate/queue, /observe/events       → stub routes (Phase 2)
+ */
+
+import Shell from '../layouts/Shell.astro';
+import App   from '../components/App';
+---
+
+<Shell>
+  <App client:load />
+</Shell>

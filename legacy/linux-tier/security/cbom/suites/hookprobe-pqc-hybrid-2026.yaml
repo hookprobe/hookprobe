@@ -1,0 +1,127 @@
+# security/cbom/suites/hookprobe-pqc-hybrid-2026.yaml
+# =============================================================================
+# The ACTIVE crypto POLICY (ADR 0002 §1) — NOT a claim that every leg below ships today.
+# =============================================================================
+#
+# ADR 0002 §1: "The Platform Manifest's `crypto` block declares the active algorithm
+# set ... A swap is an edit to this policy + a re-sign + a regenerated CBOM — never a
+# code change." This file IS that policy, authored once at the repo level.
+#
+# HONESTY (2026-07-05 F5 audit fix): "the ACTIVE crypto suite" used to be read as "the crypto
+# this device ships" — it isn't; it is the operator-CHOSEN target. Whether a given leg is actually
+# implemented is decided in EXACTLY ONE place, `security/cbom/gen-cbom.py`'s `IMPLEMENTED_ALGOS`
+# map, which `gen-cbom.py` cross-references against this file to tag every emitted CBOM component
+# `hookprobe:status: implemented | roadmap` and to force `hookprobe:quantum_resistant: false` for
+# anything not shipped. The per-domain comments below summarize that map for a human reader; if
+# they ever disagree, `gen-cbom.py`'s `IMPLEMENTED_ALGOS` is the one that is load-bearing — fix the
+# comment, don't trust it blindly.
+#
+# TWO consumers read the SAME suite (so device crypto == build-time CBOM, by construction):
+#   1. `hookprobe-bootstrap` embeds this block (by `suite_id`) into the per-device
+#      manifest's `crypto` field at first boot (manifest is generated, not in this repo).
+#   2. `security/cbom/gen-cbom.py` turns it into the CBOM that ships at
+#      /usr/share/hookprobe/cbom.json (referenced by manifest `crypto.cbom`).
+#
+# Mirrors ADR 0002 §1 verbatim in intent. If you change an algorithm here you MUST:
+#   - bump `suite_id` (publish a NEW named suite — never mutate an in-use one),
+#   - regenerate the CBOM (build-os.yml does this), and
+#   - roll out through fleet rings (ADR 0002 "crypto-agility mechanism").
+#
+# TODO(shared-source): the canonical home for this suite is arguably alongside the
+# manifest schema (manifest/ or crates/hookprobe-manifest) so bootstrap and gen-cbom
+# load ONE file. It lives under security/ for now because this work is scoped to
+# security/** + .github/workflows/**. When the manifest crate gains a suite loader,
+# point both at one path and delete the duplicate. Flagged, not silently resolved.
+
+suite_id: "hookprobe-pqc-hybrid-2026"
+agility: true
+description: >-
+  Hybrid (composite) PQC + classical posture for 2026, PHASED: module signing ships
+  hybrid ML-DSA-65 + Ed25519 today (fail-closed, both legs enforced — see
+  crates/hookprobe-manifest/src/module_sig.rs); image signing is real cosign KEYLESS
+  ECDSA-P256 (not PQC yet — sigstore's own PQC signing is still maturing, ADR 0002
+  Consequences); boot signing (LMS) and transport (ML-KEM/ML-DSA TLS) are ROADMAP, no
+  code today. See `hookprobe:status`/`hookprobe:domain_status` in the generated CBOM
+  for the authoritative per-leg implemented/roadmap verdict.
+
+# Per-domain primitives. Each entry feeds one or more CycloneDX cryptographic-assets.
+# `primitive` + `function` map to CycloneDX algorithmProperties; `nist_level` is the
+# NIST PQC category (0 = classical / quantum-vulnerable). `standard` is for the CBOM
+# evidence trail. `key_custody` records WHERE the private/signing key lives (ADR 0002 §5).
+domains:
+  image_signing:
+    # IMPLEMENTED, but NOT what this domain used to declare. The REAL mechanism is cosign
+    # KEYLESS signing (`cosign sign --yes` in .github/workflows/build-os.yml): Fulcio issues a
+    # short-lived certificate over an OIDC identity, signed with ECDSA-P256, logged to Rekor.
+    # There is no ML-DSA leg here — sigstore/cosign PQC signing is still maturing upstream (ADR
+    # 0002 Consequences); claiming ML-DSA for image signing would be exactly the F5 audit finding
+    # this suite is fixing. Revisit this domain (and re-bump suite_id) once cosign ships a PQC or
+    # hybrid signing mode.
+    algorithms:
+      - { name: "ECDSA-P256", primitive: signature, function: [sign, verify], nist_level: 0, standard: "FIPS 186-5 (cosign/Fulcio keyless)", pq: false }
+    key_custody: "cosign-keyless-fulcio-ephemeral"   # short-lived cert from OIDC identity, never a long-lived on-device or repo key
+
+  module_signing:
+    # IMPLEMENTED — hybrid, BOTH legs fail-closed-enforced (Part A of the F5 fix):
+    # crates/hookprobe-manifest/src/module_sig.rs `verify_module_for_suite` requires every leg
+    # named here to verify; a module missing `module.mldsa.sig` under THIS suite is refused, never
+    # silently downgraded to Ed25519-only (the anti-downgrade property the audit called for).
+    algorithms:
+      - { name: "ML-DSA-65",  primitive: signature, function: [sign, verify], nist_level: 3, standard: "FIPS 204",  pq: true }
+      - { name: "Ed25519",    primitive: signature, function: [sign, verify], nist_level: 0, standard: "RFC 8032",  pq: false }
+    key_custody: "release-pipeline-hsm"   # OFF-device; devices only VERIFY
+
+  boot_signing:
+    # ROADMAP — no code in this repo implements LMS today. Left named here (not deleted) because
+    # it is the genuine 2027 CNSA 2.0 firmware-signing target and the stateful-HBS key-custody
+    # design (release-HSM-only, leaf index never forked) is already decided in ADR 0002 §5; only
+    # the implementation itself is future work. `gen-cbom.py` marks this `roadmap` and does NOT
+    # count it quantum-resistant until it ships.
+    algorithms:
+      - { name: "LMS",        primitive: signature, function: [sign, verify], nist_level: 5, standard: "SP 800-208", pq: true, stateful: true }
+    key_custody: "release-pipeline-hsm-stateful"
+
+  tls_kex:
+    # ROADMAP — no TLS/rustls stack exists in this tree yet, so there is nothing to do the hybrid
+    # KEX. Named here as the transport target once a control-plane TLS stack lands.
+    algorithms:
+      - { name: "ML-KEM-768+X25519", primitive: kem, function: [encapsulate, decapsulate], nist_level: 3, standard: "FIPS 203 + IETF hybrid", pq: true, hybrid: true }
+    key_custody: "ephemeral"   # both ends; never persisted
+
+  tls_auth:
+    # ROADMAP — same reason as tls_kex: no TLS stack to carry these cert chains yet.
+    algorithms:
+      - { name: "ML-DSA-65",  primitive: signature, function: [sign, verify], nist_level: 3, standard: "FIPS 204",  pq: true }
+      - { name: "ECDSA-P256", primitive: signature, function: [sign, verify], nist_level: 0, standard: "FIPS 186-5", pq: false }
+    key_custody: "ephemeral-cert-chain"
+
+  device_identity:
+    # PARTIAL. `crates/hookprobe-manifest/src/identity.rs` IMPLEMENTS a software-PUF: a
+    # deterministic Ed25519 keypair re-derived from hardware fingerprints every boot, never
+    # stored. It is NOT TPM-sealed on TPM-less boards (Pi 4/5 have no TPM) — see ADR 0002/Part D:
+    # the "TPM-sealed" and "ML-DSA" claims for this domain were both aspirational. The ML-DSA-65
+    # leg here is ROADMAP (identity.rs has no PQC signing at all yet); ONLY Ed25519 is implemented.
+    algorithms:
+      - { name: "ML-DSA-65",  primitive: signature, function: [sign, verify], nist_level: 3, standard: "FIPS 204",  pq: true }
+      - { name: "Ed25519",    primitive: signature, function: [sign, verify], nist_level: 0, standard: "RFC 8032",  pq: false }
+    key_custody: "software-puf-or-tpm-sealed-where-present"   # honest per-device: TPM-sealed where a TPM exists, software-PUF otherwise (never claimed uniformly TPM-sealed)
+
+  data_at_rest:
+    # IMPLEMENTED — LUKS2 + Clevis/TPM sealing of the persistent data partition
+    # (security/crypt/*.sh, base/scripts/{firstboot-provision-data,unlock-data,data-guard,key-anchor}.sh).
+    algorithms:
+      - { name: "AES-256-GCM", primitive: ae, function: [encrypt, decrypt], nist_level: 0, classical_bits: 256, standard: "FIPS 197", pq: true }
+      # ^ pq:true because Grover only halves symmetric strength → AES-256 ≈ 128-bit PQ.
+    key_custody: "on-device-tpm-sealed"
+
+  hash:
+    # IMPLEMENTED — crates/hookprobe-manifest/src/module_sig.rs::digest_hex names exactly these
+    # three algorithms (ADR 0016 artifact-hash signing) and fail-closed-rejects anything else.
+    algorithms:
+      - { name: "SHA-256",   primitive: hash, function: [digest], nist_level: 0, standard: "FIPS 180-4", pq: true }
+      - { name: "SHA-384",   primitive: hash, function: [digest], nist_level: 0, standard: "FIPS 180-4", pq: true }
+      - { name: "SHA3-256",  primitive: hash, function: [digest], nist_level: 0, standard: "FIPS 202",   pq: true }
+
+# Optional regulated override: pin FIPS-validated providers (aws-lc-rs FIPS on Ubuntu
+# Pro FIPS) by publishing a sibling suite, e.g. hookprobe-pqc-hybrid-2026-fips. ADR 0002.
+fips_variant: "hookprobe-pqc-hybrid-2026-fips"   # TODO: author when a FIPS base is pinned

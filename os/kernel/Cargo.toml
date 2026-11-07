@@ -1,0 +1,13 @@
+# HookProbe microkernel — Cargo workspace (see buildPlan.md §2, ARCHITECTURE.md §1).
+# Layout: kernel (bin + agnostic logic) · hal (traits) · arch-aarch64 (impl) · abi (shared).
+[workspace]
+resolver = "2"
+members = ["kernel", "hal", "arch-aarch64", "abi", "hboot", "boot-abi"]
+
+# Bare-metal: no unwinding runtime — panic must abort.
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+lto = true

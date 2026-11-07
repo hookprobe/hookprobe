@@ -1,0 +1,120 @@
+# modules/napse-l2guard/module.yaml — Ring-0 TC-bpf DETERMINISTIC malformed-frame / malformed-ARP
+# drop (the real enforcement point crates/hookprobe-manifest/src/l2_responder.rs's
+# `render_frame_drop_todo` stub named as still missing).
+#
+# Same class of exception as napse-quarantine/napse-capture: an in-kernel TC-bpf program cannot
+# run inside a Wasm/WASI sandbox, so this ships as a systemd-sysext extending /usr (Pillar 1),
+# gated by capability and self-gated by the loader — not sandbox-loaded like a Wasm module.
+#
+# Canon: crates/hookprobe-manifest/src/l2_responder.rs (the L2Verdict::FrameDrop verdict this
+# module enforces — it decides nothing on its own, C9), modules/napse-capture/loader/src/dpi.rs +
+# l2guard.rs (the EXACT predicates this program mirrors — see bpf/l2guard.h and
+# loader/src/predicates.rs for the anti-drift discipline), modules/napse-quarantine (the sibling
+# Ring-0 TC-bpf attach pattern this mirrors — SEPARATE program/table on purpose: that module drops
+# a spoofable IDENTITY, this one drops a structurally-bad FRAME regardless of identity).
+
+id: napse-l2guard
+version: 0.1.0
+title: "NAPSE l2guard — Ring-0 TC-bpf malformed-frame / malformed-ARP drop"
+runtime: sysext               # kernel/eBPF; NOT Wasm. /usr overlay merged at boot.
+artifact: registry.hookprobe.com/sysext/napse-l2guard:0.1.0   # per-arch OCI sysext image
+
+requires:
+  capabilities: [capture, ddos_mitigation]
+                              # Reuses the SAME two tokens napse-quarantine's module.yaml settled
+                              # on (ADR 0015 C5 rationale, unchanged): `capture` alone is
+                              # `policy: enabled` even on a single-NIC cloud/VM box, so
+                              # `ddos_mitigation` (edge-vs-cloud proxy: enabled on
+                              # rpi4/rpi5/rk3588/n100, DISABLED on cloud/generic — platforms/*.yaml)
+                              # is what actually gates this OFF-with-a-reason on cloud instead of
+                              # silently-active-but-inert — without inventing a new capability
+                              # token for what is, functionally, the same edge-LAN-defense
+                              # question napse-quarantine already answers.
+  min_kernel: "4.1"           # TC-bpf/clsact (BPF_PROG_TYPE_SCHED_CLS) landed in 4.1 — this
+                              # program touches no ct-lookup kfunc (unlike napse_detect.bpf.c) and
+                              # no map beyond a 2-entry stats array, so it needs none of ADR 0005's
+                              # 5.19 floor either.
+
+grants:                       # HOST capabilities — a Wasm module can never hold these. Scoped to
+                              # THIS loader process only (AmbientCapabilities in the unit).
+  - cap: [bpf, net_admin]
+      # bpf      → bpf(2): load the TC program, create the 2-entry stats array.
+      # net_admin→ attach/detach at clsact ingress on wlan0/end0.
+
+provides:
+  capabilities: [l2_frame_drop_enforcement]   # the SERVICE this module materializes: line-rate,
+                                               # kernel-level drop of any frame `napse_loader::dpi`
+                                               # would flag as l2_malformed/arp_spoof(malformed_
+                                               # fields|eth_mismatch) — see
+                                               # crates/hookprobe-manifest/src/l2_responder.rs's
+                                               # updated doc for the consumer of this fact
+                                               # (`render_l2_response_json`'s `mechanism`/`status`
+                                               # for `L2Verdict::FrameDrop`).
+  feeds:
+    - /sys/fs/bpf/napse-l2guard/stats    # pinned l2guard_stats map ([pass, drop] u64 counters)
+
+resources:
+  slice: hookprobe-dataplane.slice    # same host slice as napse-quarantine/napse-capture — the
+                                      # in-kernel TC program itself is not cgroup-accountable;
+                                      # only the tiny userspace loader is (MemoryMax=32M in the unit).
+
+signature: required           # the sysext OCI image is cosign-signed (ADR 0002 module_signing);
+                              # the device VERIFIES, never signs.
+
+staging:
+  build:
+    - crate: napse-l2guard
+      features: [bpf]
+      toolchain: gnu
+  artifacts:
+    - { src: "{gnu_bin}/napse-l2guard", dest: "/usr/lib/hookprobe/bin/napse-l2guard", mode: "0755" }
+    - { src: "modules/napse-l2guard/sysext/usr/lib/hookprobe/bpf/l2guard.bpf.o",
+        dest: "/usr/lib/hookprobe/bpf/l2guard.bpf.o", mode: "0644" }
+  units:
+    - "modules/napse-l2guard/sysext/usr/lib/systemd/system/napse-l2guard.service"
+  # arch F4 fix (same as napse-quarantine): the supervisor never starts a `managed` sysext unit —
+  # `self_gated: true` tells gen-staging.sh this module's OWN loader (loader/src/main.rs's
+  # `granted("ddos_mitigation")`) already checks capabilities at startup and exits 0 cleanly when
+  # not granted, so the generator emits a plain `enable` (not `managed`): harmless everywhere (a
+  # capability-checked no-op on cloud/single-NIC), and it actually RUNS everywhere the capability
+  # IS granted, instead of sitting staged and never started.
+  self_gated: true
+
+# Payload digests (ADR 0016, arch-qualified per ADR 0021) — on-device dest paths (matches
+# staging.artifacts[].dest above).
+#
+# `loader` carries one entry per built arch (ADR 0021 generalization of `role: aot`'s
+# arch-qualifier to native binaries) — both `value`s below are REAL sha256 of this loader
+# cross-built fresh in this pass (`cargo build --release --target aarch64-unknown-linux-gnu -p
+# napse-l2guard --features bpf` via the exact-glibc-2.36 sysroot wrapper
+# modules/napse-quarantine/README.md documents, and `cargo build --release --target
+# x86_64-unknown-linux-gnu -p napse-l2guard --features bpf` for amd64 — both via
+# `hookprobe-supervisor --write-artifact-digests napse-l2guard`, never hand-`sha256sum`'d).
+#
+# `bpf-object` stays a SINGLE arch-less entry: `l2guard.bpf.c` contains no PT_REGS/register-layout
+# macro dependency (TC-bpf on `__sk_buff`/`ethhdr`/`iphdr`/`vlan_hdr` only) — VERIFIED this pass by
+# rebuilding it with both `-D__TARGET_ARCH_arm64` and `-D__TARGET_ARCH_x86` and diffing:
+# byte-identical output either way (same proof napse-quarantine's own module.yaml documents for
+# its object). Compile-proven (clean `clang -target bpf` build, 0 errors/0 warnings) this pass;
+# NOT yet verifier-load-tested on this dev box (no root/CAP_BPF here — `bpftool prog load` failed
+# with "Operation not permitted", the missing-privilege case, not a program defect) — see this
+# module's README for the full honesty accounting, matching napse-quarantine's own pre-live-test
+# posture.
+artifacts:
+  - path: /usr/lib/hookprobe/bin/napse-l2guard
+    role: loader
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "96543a82fb6970d136487dfd35c2a85010c5f47cb8a5a769d6fa7d3a83cd23a0"
+  - path: /usr/lib/hookprobe/bin/napse-l2guard
+    role: loader
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "46d88eaac9535d15031bcf78d292713b05a794df84cbd8d789f033be0d6ec26b"
+  - path: /usr/lib/hookprobe/bpf/l2guard.bpf.o
+    role: bpf-object
+    digest:
+      alg: sha256
+      value: "f636a9226b8b3595c42fbc739f49ddcec75e402c1d0e782e3a8d678bb34c390c"

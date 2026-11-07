@@ -1,0 +1,70 @@
+# security/redteam/rules-of-engagement.yaml — the ENFORCED scope contract for the adversarial
+# resilience harness (ADR 0020 D3). This file is default-deny and is parsed + enforced IN CODE by
+# `engine/src/target_guard.rs` BEFORE the first byte of any probe leaves the process — before raw
+# socket creation, before any AF_PACKET/AF_XDP send, before any TCP connect.
+#
+# There is NO --force / override flag / env bypass anywhere in the engine for anything this file
+# forbids. A missing/malformed file, or `mode != dut-self-test`, is a hard refuse-to-start
+# (non-zero exit), exactly like ADR 0016's digest-mismatch discipline: absence-of-permission is a
+# hard stop, not a warning.
+#
+# The six threat-model conditions (2026-07-05 security-auditor sign-off, ADR 0020 §"Threat-model
+# sign-off") are embedded below and cross-referenced by comment; `target_guard.rs` enforces every
+# one of them fail-closed, not just this file's presence.
+
+version: 1
+mode: dut-self-test          # the ONLY supported mode; any other value -> engine refuses to start
+
+# Condition 3 (IP/CIDR LITERALS ONLY, no DNS ever): every entry below is a numeric literal. A
+# hostname/FQDN here is a hard parse error at load time, not merely "not matched" at validate time.
+allowed_targets:
+  - cidr: 10.99.0.0/24
+    interface: veth-dut       # the HOST-side veth of the netns DUT pair (see dut/netns-dut.sh)
+  - netns: hookprobe-dut       # probes that need to run *inside* the DUT netns declare this; its
+                                # only route is the DUT veth peer (asserted via topology, not trusted
+                                # from this string — condition 2).
+
+# Per-DUT-component descriptors (ADR 0020 D2) - which telemetry proves a defense fired, which
+# thresholds are RED. Never names an out-of-scope host; that is this file's job to reject, not
+# theirs to declare.
+allowed_target_files:
+  - targets/napse.yaml
+  - targets/hydra.yaml
+  - targets/qsecbit.yaml
+  - targets/htp.yaml
+
+# Condition 1 (MANDATORY) — a missing or zero field here is ITSELF a refuse-to-start. The engine
+# aborts fail-closed the instant any ceiling is breached mid-campaign.
+limits:
+  max_pps_per_probe: 50000
+  max_frames_per_campaign: 5000000
+  max_bytes_per_campaign: 4294967296
+  max_wall_clock_seconds: 300
+  max_concurrency: 4
+
+kill_switch:
+  file: /run/redteam/STOP
+  signal: SIGTERM
+
+# Condition 3 continued: `dns_resolution: true` here means DNS resolution is HARD FORBIDDEN
+# (the field name reads as "this hard-deny is active", not "DNS is allowed") — kept in this exact
+# shape because it mirrors the literal ADR 0020 D3 YAML shape verbatim; `target_guard.rs`'s loader
+# asserts the value IS `true` and refuses to start otherwise (a `false` here would silently defeat
+# the harness's single most important control, so it is checked, not merely read).
+hard_deny:
+  any_public_ip: true         # RFC1918/CGNAT/loopback/link-local ONLY; a routable dst -> refuse
+  wan_interface: true         # binding/targeting any interface classified WAN -> refuse
+  dns_resolution: true        # condition 3 -- resolving ANY target name is forbidden, always
+
+# Condition 2 (L2 topology MUST be asserted via netlink/`ip -j`, never trusted from this string):
+require_isolation:
+  network_namespace: true     # engine refuses to send a raw frame outside a dedicated netns
+  l2_egress_must_be_veth: true
+
+# Condition 6 (hard rule, largest residual risk per the sign-off): destructive L1/L2 floods run
+# against a netns/QEMU DUT BY DEFAULT. Hardware-in-the-loop against a real device, if ever done,
+# is NOT configured by this file at all today -- there is no HIL target class below. Adding one
+# requires a dedicated link/VLAN descriptor off the mgmt path and a fresh security-auditor review;
+# it is intentionally absent, not merely unset.
+hil:
+  enabled: false

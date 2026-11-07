@@ -1,0 +1,26 @@
+title: Download-and-Exec Piped to a Shell
+id: 3a1b2c3d-4e5f-4061-8a2b-9c8d7e6f5a4b
+status: stable
+description: >
+  A fetch tool (curl/wget) whose output is piped straight into a shell interpreter —
+  the classic "curl | bash" install/dropper idiom. AND across two selections proves
+  this crate's multi-selection condition support.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  sel_fetch:
+    CommandLine|contains:
+      - "curl "
+      - "wget "
+  sel_pipe:
+    CommandLine|contains:
+      - "| sh"
+      - "| bash"
+      - "|sh"
+      - "|bash"
+  condition: sel_fetch and sel_pipe
+level: high
+tags:
+  - attack.execution
+  - attack.t1105

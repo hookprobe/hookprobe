@@ -1,0 +1,17 @@
+[Unit]
+Description=HookProbe autonomous 5GHz channel optimizer schedule (ADR 0034 D25) on %i
+Documentation=file:///usr/share/hookprobe/docs/adr/0034-adaptive-wifi-regdomain-and-calibration.md
+# D25: 03:00 local time daily, jittered so a fleet flashed from one image does not survey in
+# lockstep. Persistent=false — a missed run (box was off at 03:00) is NOT run late during busy
+# daytime; it simply waits for the next 03:00 (never a surprise mid-day channel switch). The
+# interface is the template instance (%i); enabled/started per-AP-iface by network-apply.sh, the
+# same pattern as hookprobe-hostapd@ and hookprobe-wifi-calibrate@ (there is no single "the" AP
+# interface to bake into the base preset). The .service's own ConditionPathExists (hostapd conf +
+# binary) makes this a safe no-op on a radioless/hostapd-less image even if ever started in error.
+[Timer]
+OnCalendar=*-*-* 03:00:00
+RandomizedDelaySec=1800
+Persistent=false
+
+[Install]
+WantedBy=timers.target

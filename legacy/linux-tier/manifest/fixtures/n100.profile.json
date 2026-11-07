@@ -1,0 +1,97 @@
+{
+  "_comment": "probert-style RAW scanner output for an Intel N100 appliance (pre-classification).",
+  "scan": {
+    "device_tree_compatible": [],
+    "dmi": {
+      "sys_vendor": "AAEON",
+      "product_name": "UPN100",
+      "board_name": "UPN100-A10"
+    },
+    "arch": "amd64",
+    "cpu": {
+      "model": "Intel(R) N100",
+      "cores": 4
+    },
+    "memory_mb": 16384,
+    "storage": [
+      {
+        "dev": "nvme0n1",
+        "size_gb": 128,
+        "type": "nvme"
+      }
+    ],
+    "tpm": {
+      "present": true,
+      "version": "2.0",
+      "kind": "firmware"
+    },
+    "secure_boot": {
+      "supported": true,
+      "enabled": true
+    },
+    "npu": {
+      "present": false,
+      "driver_ready": false,
+      "vendor": null,
+      "model": null
+    },
+    "virt": "none",
+    "interfaces": [
+      {
+        "name": "enp1s0",
+        "mac": "00:1e:06:aa:bb:01",
+        "type": "ethernet",
+        "driver": "igc",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "mgmt",
+        "state": "up"
+      },
+      {
+        "name": "enp2s0",
+        "mac": "00:1e:06:aa:bb:02",
+        "type": "ethernet",
+        "driver": "igc",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "out-of-band",
+        "state": "up"
+      },
+      {
+        "name": "enp3s0",
+        "mac": "00:1e:06:aa:bb:03",
+        "type": "ethernet",
+        "driver": "igc",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "inline",
+        "state": "up"
+      },
+      {
+        "name": "enp4s0",
+        "mac": "00:1e:06:aa:bb:04",
+        "type": "ethernet",
+        "driver": "igc",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "unassigned",
+        "state": "down"
+      }
+    ],
+    "wifi": {
+      "present": false
+    },
+    "lte": {
+      "present": false
+    },
+    "kernel_release": "6.6.0-generic"
+  }
+}

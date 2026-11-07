@@ -1,0 +1,59 @@
+[package]
+name = "hookprobe-planner"
+version = "0.1.0"
+edition = "2021"
+description = "AEGIS BYO-LLM planner (assistive, never in the enforcement path) — an OpenAI-compatible chat-completions adapter that turns an operator's natural-language intent into a plan-as-diff the deterministic reconciler (hookprobe_manifest::aegis::reconcile_network) computes and the operator approves. See docs/adr/0025-aegis-byo-llm-planner.md."
+
+[[bin]]
+name = "hookprobe-planner"
+path = "src/main.rs"
+
+[lib]
+name = "hookprobe_planner"
+path = "src/lib.rs"
+
+[dependencies]
+# The EXISTING deterministic reconciler + intent schema (NetworkIntent, aegis::reconcile_network,
+# Manifest, CapabilityState) — reused verbatim, never reimplemented. This crate's whole point is
+# that the model's proposal is validated BY deserializing into this schema and computed BY this
+# same pure function; nothing here reimplements reconciliation logic.
+hookprobe-manifest = { path = "../hookprobe-manifest" }
+# Read AND (one narrow, additive) write path: EvidenceGraph::record_ai_explanation is the ONLY
+# writer this crate calls — it attaches an explanation to an EXISTING incident, never creates one,
+# never touches enforcement state. Everything else this crate does is pure computation.
+hookprobe-evidence = { path = "../hookprobe-evidence" }
+# BYO-LLM HTTP client. rustls (the default TLS backend) keeps this crate free of a native-openssl
+# build dependency — plain HTTP (no TLS at all) is exercised for a local Ollama/llama.cpp endpoint,
+# matching the air-gap use case; rustls only engages for an https:// hosted endpoint.
+ureq = { version = "3", default-features = false, features = ["rustls", "json"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# The HTTP surface this planner exposes to the UI (POST /api/planner/propose, etc.) — same stack
+# as hookprobe-api (ADR 0001), a DIFFERENT service/port: hookprobe-api stays read-only-by-construction
+# (SQLITE_OPEN_READ_ONLY); this binary is the one narrow, additive write surface (see module doc).
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "signal", "sync"] }
+tower-http = { version = "0.6", features = ["cors"] }
+# RBAC enforcement seam (ADR 0008 + ADR 0028) — the Red-action gate: `POST /api/planner/approve`
+# (staging an AEGIS plan-as-diff for operator review) requires the `configure` verb (tenant-admin/
+# admin only); `/propose` and `/explain` require `investigate` (analyst+). Standalone-loopback with
+# no bearer token stays fully permissive, same invariant as hookprobe-api. See `hookprobe_rbac`.
+hookprobe-rbac = { path = "../hookprobe-rbac" }
+
+[features]
+# Exposes `adapter::test_server` (a tiny dependency-free HTTP fixture server) as `pub` instead of
+# `pub(crate)`-under-`cfg(test)` — needed so `src/main.rs`'s OWN test module (a separate
+# compilation of this package's `[[bin]]` target) can use the SAME fixture the lib's `cfg(test)`
+# unit tests use. Never enabled in a normal (non-dev) build.
+test-util = []
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+# Self dev-dependency (the standard workaround for sharing `cfg(test)`-only fixtures across a
+# package's own lib+bin targets, since `cargo test --bin` compiles the lib WITHOUT `--cfg test`):
+# enables `test-util` only when building THIS crate's own tests.
+hookprobe-planner = { path = ".", features = ["test-util"] }

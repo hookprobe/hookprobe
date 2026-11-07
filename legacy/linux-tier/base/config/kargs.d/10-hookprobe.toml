@@ -1,0 +1,34 @@
+# 10-hookprobe.toml — kernel command-line args applied by bootc to the boot entry
+# (bootc reads /usr/lib/bootc/kargs.d/*.toml). Keep this minimal and arch-aware;
+# board-specific kargs (console, DTB) belong in the per-profile / platforms layer.
+
+kargs = [
+  # Unified cgroup v2 hierarchy — required for the two-wall budget model
+  # (cgroups v2 CPUQuota/MemoryHigh outer wall, Architecture C11). Modern systemd
+  # defaults to this, but assert it so the budget contract is never silently broken.
+  "systemd.unified_cgroup_hierarchy=1",
+
+  # Enable PSI (pressure stall information) so the supervisor can read CPU/IO/memory
+  # pressure and drive throttle→pause→evict (Architecture §4.3).
+  "psi=1",
+
+  # Quiet, predictable boot for an appliance.
+  "rd.systemd.show_status=auto",
+
+  # --- KSPP runtime kernel hardening (GAP-8, ADR 0006) — cheap, no functional break ---
+  "init_on_alloc=1",           # zero heap pages on alloc (use-after-free / infoleak mitigation)
+  "init_on_free=1",            # zero on free too (KSPP pair)
+  "slab_nomerge",              # don't merge slab caches — raises the bar for heap-spray exploits
+  "randomize_kstack_offset=1", # per-syscall kernel stack offset randomization
+  "page_alloc.shuffle=1",      # randomize the free-list page order
+  # lockdown=INTEGRITY (not confidentiality) — deliberate (audit GAP-2): integrity mode enforces
+  # signed-module-load + blocks kexec/hibernate/`/dev/mem` writes (the goal), while STILL permitting
+  # the BPF kernel-memory READS the eBPF detection stack needs (execsnoop's bpf_probe_read, TC/XDP
+  # map reads). confidentiality mode would break the EDR by blocking those reads. Active once
+  # CONFIG_SECURITY_LOCKDOWN_LSM lands in the edge kernels (this same GAP-2 rebuild); harmless before.
+  "lockdown=integrity",
+]
+
+# Example of arch/board-conditional kargs (bootc supports match-architectures).
+# TODO: add real console/DTB kargs per board in the platforms/profile layer, not here.
+# [[partitions]] / serial console examples are board-specific and intentionally omitted.

@@ -1,0 +1,20 @@
+title: (Deliberately Unsupported) Repeated Failed Auth Aggregation
+id: 1e2d3c4b-5a69-4a3b-8c7d-6e5f4a3b2c1d
+status: unsupported-fixture
+description: >
+  DELIBERATE fixture proving the "skip with a warning, never mis-fire" honesty contract:
+  a `count() by` aggregation condition, which needs windowed/grouped state this v1 engine
+  does not carry. `hookprobe_sigma::load_bundled_rules` must SKIP this rule at load time
+  (see `bundled_rules_load_and_the_deliberately_unsupported_fixture_is_skipped_with_a_reason`
+  in lib.rs's test module) — never silently evaluate it as an always-false/garbage rule.
+logsource:
+  category: network_connection
+  product: linux
+detection:
+  selection:
+    dst_port: 22
+  condition: selection | count() by src_ip > 5
+level: high
+tags:
+  - attack.credential-access
+  - attack.t1110

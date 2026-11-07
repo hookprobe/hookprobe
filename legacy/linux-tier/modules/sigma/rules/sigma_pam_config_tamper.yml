@@ -1,0 +1,21 @@
+title: Write to a PAM Configuration File (/etc/pam.d/)
+id: 97ff6595-8133-4475-af26-b67ef7da16f9
+status: stable
+description: >
+  A write under /etc/pam.d/ — the pluggable-authentication-module stack every login path
+  (sshd, sudo, su, login, polkit, …) consults. A classic Linux backdoor technique
+  (a modified pam_unix.so config, or a rogue "pam_permit"/"pam_exec" line accepting a
+  magic password) hides here. Not watched by hookprobe_evidence::host_edr::
+  classify_persistence — real, non-duplicate NEW coverage. `path|startswith` again, same
+  idiom as the sudoers rule.
+logsource:
+  category: file_event
+  product: linux
+detection:
+  selection:
+    path|startswith: "/etc/pam.d/"
+  condition: selection
+level: high
+tags:
+  - attack.persistence
+  - attack.t1556.003

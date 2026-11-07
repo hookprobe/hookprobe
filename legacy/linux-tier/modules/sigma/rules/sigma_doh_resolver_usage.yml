@@ -1,0 +1,35 @@
+title: TLS Connection to a Public DNS-over-HTTPS Resolver
+id: c592e765-96ce-4af9-b8ab-e3de17c3c210
+status: experimental
+description: >
+  An outbound TLS connection on port 443 whose SNI names a well-known public
+  DNS-over-HTTPS (DoH) resolver (Google, Cloudflare, OpenDNS, Quad9, dns.sb, Mullvad) —
+  a technique used to bypass local/on-path DNS monitoring and policy (queries never hit
+  the device's own DNS resolver path, so dnsxai/the DNS-based Sigma rules never see
+  them). Uses the SAME `network_connection` category + `tls_sni` field the bundled
+  cleartext_telnet rule's sibling engines already populate (`event_from_flow_json`'s
+  `tls_sni` field, sourced from `modules/napse-capture`'s TLS ClientHello SNI parse) —
+  AND across dst_port + tls_sni, same two-selection idiom as sigma_suspicious_download_exec.
+  HONEST FALSE-POSITIVE NOTE: some browsers/OSes now default to DoH for legitimate
+  privacy reasons — this is a real, documented false-positive surface, not a bug; kept
+  `experimental`/`low` as a policy-visibility signal (operators who have NOT opted into
+  DoH for their fleet want to know it's happening), never an enforcement trigger.
+logsource:
+  category: network_connection
+  product: linux
+detection:
+  sel_port:
+    dst_port: 443
+  sel_doh:
+    tls_sni|contains:
+      - "dns.google"
+      - "cloudflare-dns.com"
+      - "doh.opendns.com"
+      - "dns.quad9.net"
+      - "doh.dns.sb"
+      - "mullvad.net"
+  condition: sel_port and sel_doh
+level: low
+tags:
+  - attack.command-and-control
+  - attack.t1071.004

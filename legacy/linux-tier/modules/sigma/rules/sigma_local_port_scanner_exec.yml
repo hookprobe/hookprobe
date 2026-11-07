@@ -1,0 +1,29 @@
+title: Network/Port Scanner Tool Executed On-Host
+id: 8fad0e7f-03d0-41dd-bb8f-77014de6f378
+status: stable
+description: >
+  A local exec of a well-known network/port-scanning tool (nmap, masscan, zmap) or
+  netcat used in its scanning mode (`nc -z`/`ncat -z`) — an attacker who already has
+  exec access on this device using it as a pivot to enumerate the rest of the network
+  (T1046, distinct from the pure network-layer portscan detector in `modules/napse-capture`
+  which watches inbound SYN patterns on the wire, not local process exec — this catches
+  the device itself being used as the scanning platform). Neither host_edr nor any other
+  bundled Sigma rule currently watches process exec for scanner tool names — real NEW
+  coverage. Most Linux servers/edge appliances have no legitimate reason to run these
+  tools outside a deliberate, operator-initiated diagnostic — kept `stable`/`medium`.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - "nmap "
+      - "masscan "
+      - "zmap "
+      - "nc -z"
+      - "ncat -z"
+  condition: selection
+level: medium
+tags:
+  - attack.discovery
+  - attack.t1046

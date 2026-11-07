@@ -1,0 +1,53 @@
+[package]
+name = "napse-loader"
+version = "0.1.0"
+edition = "2021"
+
+# The userspace half of napse-capture: probe each NIC → attach the CO-RE detection object as native
+# XDP or TC-bpf → populate the role/config maps → drain the events ringbuf → /var/lib/hookprobe/flows.
+# The libbpf glue is behind the `bpf` feature (needs libbpf + the compiled napse_detect.bpf.o, so it
+# builds in CI only). The pure logic (event→FlowRecord, manifest→attach-plan) builds + tests anywhere.
+[[bin]]
+name = "napse-loader"
+path = "src/main.rs"
+
+# The mirror-sink deep-packet sensor (AF_PACKET → dns/tls/http records). Separate bin, shared crate.
+[[bin]]
+name = "napse-dpi"
+path = "src/bin/napse-dpi.rs"
+
+# HYDRA threat-feed → BPF blocklist map sync. Parses CIDR feeds, updates the pinned blocklist map.
+[[bin]]
+name = "hydra-feedsync"
+path = "src/bin/hydra-feedsync.rs"
+
+# Shed-v2 PSI pressure watcher (base-tier-build-ticket.md Phase 2) — writes tier/rate/heartbeat
+# into the pinned shed_ctrl map napse_detect.bpf.c's fast-loop token bucket reads. Own directory
+# (not a flat src/bin/hookprobe-psid.rs) because it has its own `bpf`-feature-only submodule
+# (shed_ctrl_map.rs) — a crate-root file's `mod x;` resolves flat within ITS OWN directory, so
+# giving it `src/bin/hookprobe-psid/{main,shed_ctrl_map}.rs` avoids a naming collision with the
+# OTHER bins' flat src/bin/*.rs files that autobins discovery would otherwise also pick up.
+[[bin]]
+name = "hookprobe-psid"
+path = "src/bin/hookprobe-psid/main.rs"
+
+[dependencies]
+hookprobe-manifest = { path = "../../../crates/hookprobe-manifest" }
+serde_json = "1"
+anyhow = "1"
+libc = "0.2"
+# The JA4/JA4S/JA4H fingerprint suite (dpi.rs) needs a real truncated-SHA256, unlike JA3's MD5
+# (`hookprobe_manifest::md5` — kept ONLY for V1 blocked-MAC compat, see that module's doc). Pure
+# Rust, no libbpf/vendored-C dependency — builds everywhere this crate already builds, same as
+# `hookprobe-manifest`/`hookprobe-rbac`'s existing `sha2` use.
+sha2 = "0.10"
+# BPF orchestration — optional so the default (and this dev box) builds the pure parts without libbpf.
+libbpf-rs = { version = "0.24", optional = true }
+
+[features]
+default = []
+# `hookprobe-manifest/bpf` pulls in the shared `xdp::apply_btf_custom_path` wiring (libbpf
+# `btf_custom_path` for RPi BSP kernels that lack /sys/kernel/btf/vmlinux — ADR 0029/0030).
+# napse_detect.bpf.c is CO-RE (vmlinux.h + bpf_{skb,xdp}_ct_lookup kfuncs, which REQUIRE BTF), so
+# without this the detection engine crash-loops `kernel BTF is missing -ESRCH` on Pi kernels.
+bpf = ["dep:libbpf-rs", "hookprobe-manifest/bpf"]      # CI enables this once napse_detect.bpf.o is compiled + libbpf is present.

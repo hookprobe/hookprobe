@@ -1,0 +1,80 @@
+// HookProbe OS boot splash — an APPLIANCE experience (like FortiOS/PAN-OS), not a Linux boot.
+// Text-forward (Image.Text needs no PNG assets → renders on any framebuffer: Pi/RK3588/N100 console).
+// Matches the product mockup: rules · wordmark · "AI-Native Security" · hexagon · status · real
+// progress bar · a SERVICE CHECKLIST (✓ done / • pending) ticking through the boot. See ADR 0006.
+
+Window.SetBackgroundTopColor(0.02, 0.05, 0.09);
+Window.SetBackgroundBottomColor(0.0, 0.01, 0.03);
+cx = Window.GetWidth()  / 2;
+top = Window.GetHeight() / 2 - 190;      // anchor the block, roughly centred
+
+fun centred(y, img) { s = Sprite(img); s.SetX(cx - img.GetWidth() / 2); s.SetY(y); return s; }
+
+// ── top rule + wordmark + subtitle ───────────────────────────────────
+rule = "──────────────────────────────────────────────";
+centred(top,        Image.Text(rule,                 0.15, 0.30, 0.40));
+centred(top + 34,   Image.Text("H O O K P R O B E   O S", 0.35, 0.85, 1.0));
+centred(top + 66,   Image.Text("AI-Native Security",  0.40, 0.55, 0.65));
+
+// ── pulsing hexagon mark ─────────────────────────────────────────────
+hexs = Sprite(); _p = 0;
+fun refresh() {
+    _p++; a = 0.45 + 0.35 * Math.Sin(_p / 14);
+    h = Image.Text("⬡", 0.20, a + 0.35, a + 0.45);
+    hexs.SetImage(h); hexs.SetX(cx - h.GetWidth() / 2); hexs.SetY(top + 100);
+}
+Plymouth.SetRefreshFunction(refresh);
+
+// ── status line + progress bar + percent ─────────────────────────────
+status = Sprite(); bar = Sprite(); pctS = Sprite();
+SERVICES = ["Linux Kernel", "eBPF Runtime", "Packet Capture", "Threat Detection", "AI Engine", "Dashboard", "Policy Sync"];
+NS = 7;
+rows = [];
+for (i = 0; i < NS; i++) rows[i] = Sprite();
+
+fun draw(done, progress) {
+    // status: "Initializing <first pending service>..."
+    which = done; if (which >= NS) which = NS - 1;
+    st = Image.Text("Initializing " + SERVICES[which] + "...", 0.45, 0.55, 0.62);
+    status.SetImage(st); status.SetX(cx - st.GetWidth() / 2); status.SetY(top + 138);
+    // bar
+    n = 28; filled = Math.Int(progress * n); s = "";
+    for (i = 0; i < n; i++) { if (i < filled) s += "█"; else s += "░"; }
+    b = Image.Text(s, 0.25, 0.65, 0.85);
+    bar.SetImage(b); bar.SetX(cx - b.GetWidth() / 2); bar.SetY(top + 168);
+    pc = Image.Text(Math.Int(progress * 100) + "%", 0.5, 0.6, 0.7);
+    pctS.SetImage(pc); pctS.SetX(cx - pc.GetWidth() / 2); pctS.SetY(top + 196);
+    // checklist (✓ done = green, • pending = muted)
+    for (i = 0; i < NS; i++) {
+        if (i < done) { m = "✓ "; r = 0.20; g = 0.80; b2 = 0.45; }
+        else          { m = "• "; r = 0.35; g = 0.40; b2 = 0.48; }
+        li = Image.Text(m + SERVICES[i], r, g, b2);
+        rows[i].SetImage(li); rows[i].SetX(cx - 90); rows[i].SetY(top + 226 + i * 22);
+    }
+}
+// bottom rule (below the 7 rows)
+centred(top + 226 + NS * 22 + 8, Image.Text(rule, 0.15, 0.30, 0.40));
+
+// Plymouth feeds real boot progress 0..1 → tick services off in step with it.
+fun boot_progress(duration, progress) {
+    done = 1 + Math.Int(progress * (NS - 1) + 0.5);   // kernel already up when splash draws
+    if (done > NS) done = NS;
+    draw(done, progress);
+}
+Plymouth.SetBootProgressFunction(boot_progress);
+draw(1, 0.0);
+
+// systemd "Starting <unit>" messages (optional finer status)
+msgS = Sprite();
+fun message(text) {
+    mm = Image.Text(text, 0.35, 0.40, 0.47);
+    msgS.SetImage(mm); msgS.SetX(cx - mm.GetWidth() / 2); msgS.SetY(top + 226 + NS * 22 + 34);
+}
+Plymouth.SetMessageFunction(message);
+
+// LUKS/password prompt (encrypted data partition, H3c)
+fun display_password(prompt, bullets) {
+    pp = Image.Text(prompt + "  " + StringLength(bullets) * "•", 0.8, 0.8, 0.8);
+    centred(top + 226 + NS * 22 + 58, pp);
+}
+Plymouth.SetDisplayPasswordFunction(display_password);

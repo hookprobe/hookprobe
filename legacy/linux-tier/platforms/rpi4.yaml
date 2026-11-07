@@ -1,0 +1,81 @@
+# platforms/rpi4.yaml — Raspberry Pi 4 / CM4 (Broadcom BCM2711, arm64).
+# Guardian-class home/travel gateway. See rk3588.yaml for field-by-field notes.
+# Validated live (read-only) against a real Pi 4 (10.200.0.4, 2026-07-07): dt compatible
+# "raspberrypi,4-model-b brcm,bcm2711", 4c/3796 MB, no TPM, no EFI, end0 (onboard eth) +
+# wlan0 (single onboard Broadcom brcmfmac43455 radio, dual-BAND 2.4/5 GHz — NOT two radios).
+
+profile: rpi4
+class: edge-lite
+sku: HP-GD-001
+
+# Retirement audit #8 (2026-07-08): honesty marker distinguishing a REAL on-silicon
+# boot+selftest gate record from classification-only testing. rpi4 is the ONLY profile
+# with one — see docs/roadmap/BuildPlan.md 2026-07-05/07-06 entries (SELFTEST PASS, hybrid
+# ML-DSA+Ed25519 modules verified→running→healthy on real Pi4 10.200.0.4, repeated
+# across multiple images/re-validations).
+hardware_validated: true
+validation_note: >-
+  Boot-gate proven on real silicon: Pi4 (10.200.0.4) SELFTEST PASS, hybrid PQC
+  modules verified+running+healthy, TC-bpf enforcement live — see docs/roadmap/BuildPlan.md.
+
+match:
+  method: device-tree
+  device_tree_compatible:
+    - raspberrypi,4-model-b
+    - raspberrypi,4-compute-module
+    - brcm,bcm2711
+
+spec:
+  min:         { cores: 4, memory_mb: 2048, storage_gb: 8 }
+  recommended: { cores: 4, memory_mb: 4096, storage_gb: 32 }
+
+# 4 cores, often 4 GB → leaner reserve than edge-pro.
+resources:
+  reserved:  { cpu_pct: 100, memory_mb: 1024 }
+  defaults:
+    wasm:      { cpu_pct: 20, memory_mb: 96,  epoch_ms: 50 }
+    container: { cpu_pct: 75, memory_mb: 384 }
+
+capabilities:
+  soc:         { requires: [cpu, memory_mb], policy: enabled }
+  ids:         { requires: [soc], policy: enabled }
+  openvswitch: { requires: [arch, "network.interfaces>=2"], policy: enabled }   # end0 + wlan0 = 2 ifaces ⇒ granted
+  wifi_ap:     { requires: ["wifi.present"], policy: enabled }
+  edge_ai:     { requires: ["npu.driver_ready", "memory_mb>=8192"], policy: enabled }   # absent: no NPU on Pi 4
+  inline_ips:
+    requires: ["network.role:inline"]
+    policy: enabled
+    # bcmgenet (onboard) is SKB-only XDP, offload not validated → present_unsafe.
+    known_good_nic_drivers: []
+  capture:         { requires: [soc], policy: enabled }
+  host_telemetry:  { requires: [soc], policy: enabled }
+  # `ml_cpu` — base-tier-build-ticket.md Phase 4 (ADR 0014 D6): dga-lm's int8 SDOT fast path.
+  # Pi 4/CM4 is Cortex-A72 (no `cpu_tier` line in this file -> baseline, no dotprod), so the
+  # mapper's `ml_cpu` known-good step (capabilities::compute_one) resolves `present_unsafe`
+  # here, not `granted` — dga-lm still ships/loads but QSECBIT's p_attack stays 0.0 on this
+  # tier (scoped, not forced; see modules/qsecbit).
+  ml_cpu:          { requires: [soc], policy: enabled }
+  # `ptp_hw` — base-tier-build-ticket.md Phase 3 (ADR 0031 §B). Pi 4/CM4's onboard NIC is
+  # bcmgenet, not the RP1 macb this token targets, so `ethtool -T` on a real device is
+  # expected to report no hardware rx/tx timestamping + PHC — the fact-gate (not a hardcoded
+  # per-platform guess) is what actually decides; declared here so the token is uniformly
+  # present across the base tier, same as `ml_cpu` above.
+  # STATUS 2026-07-16 (Pi4+CM5 metal): policy DECLARED but FACT-GATED — `ethtool -T` on the macb
+  # reports no hardware timestamping (TSU not exposed behind RP1/GEM), so capabilities.rs keeps
+  # `ptp_hw` UNGRANTED and ptp4l/phc2sys cleanly no-op. NOT a shipping HW-sync capability yet.
+  ptp_hw:          { requires: ["network.hw_timestamping"], policy: enabled }
+  ddos_mitigation: { requires: [capture], policy: enabled }
+  sdn:             { requires: [openvswitch], policy: enabled }
+  wifi_dfs:        { requires: [wifi_ap], policy: enabled }
+  dns_filtering:   { requires: [soc], policy: enabled }
+  threat_intel:    { requires: [soc], policy: enabled }
+  deception:       { requires: [soc], policy: enabled }
+  multi_wan:       { requires: ["network.interfaces>=2"], policy: enabled }
+  ai_planner:      { requires: [soc], policy: enabled }
+  secure_tunnel:   { requires: [soc], policy: enabled }
+  fleet_mesh:      { requires: [soc], policy: disabled }
+
+crypto_suite: hookprobe-pqc-hybrid-2026
+
+retention:
+  tier_fractions: { pcap: 0.12, events: 0.35, evidence: 0.30 }

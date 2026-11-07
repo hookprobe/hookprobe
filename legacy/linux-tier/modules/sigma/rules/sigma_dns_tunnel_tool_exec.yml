@@ -1,0 +1,29 @@
+title: DNS Tunneling Tool Executed
+id: 1f9555b2-cfe5-472e-a4b5-0d64483c3956
+status: stable
+description: >
+  Exec of a well-known DNS-tunneling client/server binary by name (iodine/iodined,
+  dnscat2, dns2tcp, ozymandns, heyoka) — a process-exec angle on protocol tunneling
+  (T1572) that is materially distinct from the bundled sigma_suspicious_tld_dns.yml's
+  DNS-QUERY-pattern angle (that rule watches the `dns_query` category's `query` field
+  for abuse-prone TLDs; this rule watches `process_creation`'s `cmdline`/`name` for the
+  tool itself being launched — two different event categories, two different fields,
+  same broad C2/exfil family). Not covered by host_edr or any bundled rule — real NEW
+  coverage. Low-noise: these tool names essentially never appear in benign traffic.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - "iodine "
+      - "iodined "
+      - "dnscat2"
+      - "dns2tcp"
+      - "ozymandns"
+      - "heyoka"
+  condition: selection
+level: high
+tags:
+  - attack.command-and-control
+  - attack.t1572

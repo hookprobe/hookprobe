@@ -1,0 +1,21 @@
+mkosi.extra/
+mkosi.output/
+mkosi.cache/
+mkosi.builddir/
+*.raw
+*.qcow2
+# ADR 0029 unified Pi factory — fetched/cached, NOT vendored (re-fetched + digest-verified from
+# base/drivers/SOURCES.md's pins on every clean build host). rpi-keyring/ and raspberrypi.sources
+# are pinned/vendored INPUTS and must stay tracked — do not add them here.
+pi-kernel-cache/
+pi-firmware-cache/
+hookprobe-os-pi.img
+hookprobe-os-pi*.img
+# sign-and-sbom.sh sidecar outputs (security/local-release/) — not secret themselves, but
+# this build is undisclosed so far; keep everything image-derived out of any future commit
+# until the operator decides otherwise.
+*.img.sha256
+*.img.sig
+*.img.pem
+*.img.sbom.cdx.json
+*.img.sbom.spdx.json

@@ -1,0 +1,152 @@
+# hookprobe.yaml — the declarative NETWORK intent (AEGIS reconciles this).
+# Copy to /etc/hookprobe/network.yaml and edit. "Operated by intent, not configured":
+# you declare WHAT you want; `hookprobe-supervisor --reconcile-network` generates every
+# config artifact (WAN failover, Wi-Fi, fabric, microsegmentation) from the SIGNED
+# manifest + this file, in one pass. Config is a generated artifact — never hand-edited.
+#
+# Every section is OPTIONAL. Omit one and its reconciler uses safe defaults (auto fabric,
+# manifest WAN order, idle Wi-Fi, identity-driven microseg). Apply with:
+#   hookprobe-supervisor /var/lib/hookprobe/manifest.json \
+#     --reconcile-network /etc/hookprobe/network.yaml --network-write /run/hookprobe/network
+
+network:
+  # --- WAN failover (multi-WAN). Uplinks come from the manifest; override priority here. ---
+  wan:
+    # prefer: [ { name: wwan0, priority: 25 } ]   # promote cellular on a cellular site
+    disable: []                                    # e.g. [cellular] to hold the metered modem
+
+  # --- Wi-Fi. Roles (station/AP) are decided by stable identity in the manifest. ---
+  wifi:
+    ap:
+      # ssid: omitted on purpose. Two devices flashed from the SAME image must NOT broadcast
+      # the same SSID (a phone can't tell them apart and they collide on-air) — so when `ssid`
+      # is absent (or empty) here, the reconciler derives a stable per-device default
+      # (`HookProbe-XXXXXX`) from this device's own signed manifest identity. Same device →
+      # same SSID across reboots; two different devices → two different SSIDs, no operator
+      # action needed. Uncomment the line below ONLY to force one explicit SSID for every
+      # device provisioned from this file (it always wins over the derived default):
+      # ssid: HookProbe
+      # WPA2-PSK:
+      passphrase: change-me-1234567
+      # Band (ADR 0034 D15, 2026-07-15). Default `auto` — fight for 5 GHz, fall back to 2.4 GHz
+      # ONLY if this radio+regdomain genuinely can't serve it; the AP always ends up joinable
+      # either way (the 2.4 GHz/HT20 floor is a terminal, always-accepted rung — never left down).
+      # Proven on real Pi4/CM5 metal (2026-07-12): the brcmfmac (Cypress) FullMAC radio holds a
+      # stable 5 GHz/HT40 (ch36, ~150 Mbit/s) once the AP-radio supplicant is masked (the actual
+      # root cause of the earlier VHT80 "collapse" — see ADR 0034); the `wifi-calibrate` loop
+      # discovers and verifies the best-holding rung at runtime (widest → safest, retried, then
+      # stepped down), so the box no longer needs to be told which band its own radio can serve.
+      # `band: "5"` / `band: "2.4"` remain explicit power-user PINS that DISABLE this auto-ladder
+      # entirely (honored exactly): `"5"` tries only 5 GHz rungs and MAY leave the AP down on a
+      # radio/regdomain that truly cannot serve 5 GHz (not recommended); `"2.4"` is the old blunt
+      # single-band floor. Leave `auto` unless you have a specific reason to pin.
+      band: auto
+      # channel: 100   # (ADR 0034 D24) operator HARD PIN — always wins, disables the optimizer's
+      # channel authority below (it may still record advisory scores). A pinned DFS channel is
+      # still CAC-validated and still reverts to ch40 if it can't hold — the always-joinable
+      # invariant outranks even a pin. Leave commented to let the ladder/optimizer decide.
+      # …or 802.1X / WPA2-Enterprise (durable identity, survives MAC randomization):
+      # auth: eap
+      # radius_server: 127.0.0.1
+      # radius_secret: change-me
+      # Autonomous 5GHz channel optimizer (ADR 0034 D24-D33, extension 2026-07-15): "scan at 3AM,
+      # find the least-congested VHT80 block, self-validate, else stay on ch40." Strictly
+      # ADDITIVE above the boot ladder above (which stays fast + DFS-free) — this only ever runs
+      # on its own schedule/on-demand/on-regdomain-change, and it can only ever hand the AP a
+      # channel it has itself validated (a DFS test-and-learn state machine + revert-to-ch40 chain
+      # means even imperfect scoring can never break the AP). In every ETSI (RO/EU/GB) domain the
+      # ONLY non-DFS 80MHz block is 36-48/ch40 — reaching a cleaner/higher-power block therefore
+      # requires allow_dfs (the default); the DFS safety net is what makes that safe.
+      optimize:
+        enabled: true       # default true when band is 5/auto on a 5GHz-capable radio
+        at: "03:00"         # local time-of-day for the nightly survey
+        allow_dfs: false    # DEFAULT OFF (2026-07-17 exhaustive metal test, root-caused in ADR 0034
+                            # Extension RC-DFS): the onboard brcmfmac BCM43455 FullMAC CANNOT bring up
+                            # a DFS channel in AP mode — every DFS channel (52-140) failed on both
+                            # Pi4+CM5 (hostapd stuck `activating`, `iw reg get` = `country 00 DFS-UNSET`
+                            # despite `iw reg set RO`). NOT a config bug on our side: the stock Cypress
+                            # CLM blob (CLM 1.29.4) doesn't enable DFS-AP (and is byte-identical to the
+                            # CURRENT upstream — updating it changes nothing), AND the in-channel
+                            # firmware (7.45.234/.265) has the #6669 "Firmware rejected country setting"
+                            # bug; the fix (Infineon 7.45.286) is an out-of-tree unsigned blob we won't
+                            # vendor. So DFS just wastes a 3AM cycle + briefly disrupts the AP. Set
+                            # `true` ONLY on a SoftMAC/mac80211 radio (USB adapter) that genuinely does
+                            # DFS AP; the onboard brcmfmac stays UNII-1 (36/40/44/48).
+        allow_meteo: false  # the 600s-CAC 116-128 sub-band stays opt-in (near-excluded by scoring anyway)
+        min_improvement: 20 # required busy-% improvement over the current channel to switch (hysteresis)
+    # station: { ssid: UpstreamSSID, psk: upstream-pass }   # only used if Wi-Fi is the sole uplink
+    # Regulatory domain (ADR 0034). Do NOT hardcode a country: this is a PORTABLE SASE edge that
+    # may cross borders, and the regdomain is a legal property of the box's CURRENT location. Leave
+    # it `auto` (the default): `hookprobe-regdomain.service` DETECTS the country at boot — cellular
+    # MCC → WAN GeoIP (opt-in) → system timezone → world `00` — sets `iw reg set <CC>` BEFORE
+    # hostapd starts, and the reconciler writes the SAME CC into hostapd `country_code` (never
+    # `auto`). To PIN a country regardless of location, put a real ISO-3166 alpha-2 here (e.g. `GB`,
+    # `RO`); an explicit code always wins over detection.
+    country: auto
+
+  # --- Fabric: L2 switching (OVS, ≥2 LAN carriers) and/or L3 VRF. auto = topology-driven. ---
+  # ovs-bridge: force a flat OVS bridge so the onboard AP radio + clients land on hp-br0 with
+  # the LAN gateway + per-device NAC + RA-Guard plane (the portable-edge default). `auto` would
+  # pick L3 VRF on a single-carrier box with segments; we want the L2 bridge for the AP.
+  fabric:
+    # auto: each device picks its plane by hardware — a multi-port wired box (N100) BRIDGES its LAN
+    # (OVS + OpenFlow + VLAN segments); a Wi-Fi-only edge (Pi 4, onboard brcmfmac that can't bridge
+    # AP unicast) ROUTES its AP radio (gateway on the radio + nft NAC). Same intent, both planes.
+    kind: auto
+    mirror_to: dummy-mirror        # out-of-band IDS tap (NAPSE capture path)
+    unknown_segment: onboarding    # where un-identified devices land (not silent drop)
+    segments:
+      - { name: onboarding, vlan: 99 }
+      - { name: trusted,    vlan: 10 }
+      - { name: byod,       vlan: 60 }
+      - { name: iot,        vlan: 20 }
+      - { name: cameras,    vlan: 30, fail: fail-closed }
+      - { name: quarantine, vlan: 666, fail: fail-closed }
+    mac_bindings:
+      # Stable-OUI IoT can bind by MAC; randomizing clients use 802.1X (via: dot1x).
+      # - { mac: "9c:8e:cd:11:22:33", segment: cameras }
+
+  # --- Microsegmentation: east-west isolation. Omit `policies` for identity-driven defaults. ---
+  microseg:
+    gateway: 10.66.0.1             # the AP-LAN gateway (hp-br0); NAT'd out to the WAN
+    # policies:
+    #   - { segment: cameras, mode: allowlist, allow: [ { from: nvr, to: cameras, proto: tcp, port: 554 } ] }
+
+  # --- Per-device NAC (north-south LAN/internet access). V2's durable-identity improvement of
+  # V1's MAC-set NAC: policy keys on the device FINGERPRINT (survives MAC randomization), with
+  # least-privilege egress allowlists + an admin override. Devices are normally auto-populated by
+  # the fingerprint feed; declare overrides here. Policies: full_access | lan_only | internet_only
+  # | streaming | isolated. `class` (from fingerprinting) sets the default when `policy` is omitted.
+  nac:
+    devices: []
+    # examples (uncomment + edit; normally the fingerprint feed populates these):
+    #   - { identity: nvr-rack,  class: sbc,        policy: full_access }
+    #   - { identity: front-cam, class: iot-camera, allow: [ 10.66.0.50 ] }   # camera → only its NVR
+
+  # --- Inspection: zero-trust "everything is rogue". Mirror every forwarding NIC to the SOC sink
+  #     (tc-mirred, XDP-free → works on brcmfmac & any card) for full-packet DPI; the per-NIC fast
+  #     path auto-upgrades to XDP as drivers gain it. Empty {} = full zero-trust posture. ---
+  inspect:
+    mirror_sink: hp-mirror      # dummy sink the DPI sensor reads (V1 dummy-mirror, generalized)
+    mirror: true                # copy all forwarding-NIC traffic to the sink
+    inline_enforce: false       # observe first; XDP/nft inline drop is opt-in per policy
+    # Trigger-to-evidence pcap capture (roadmap D): on a network/L1-L2 detection, napse-dpi flushes
+    # a small bounded per-source ring (recent history) + a short bounded post-trigger tail to
+    # /var/lib/hookprobe/pcap/, linked into the evidence graph for that detection. Default ON —
+    # this is an IDS, and it is bounded on both ends: a small in-memory ring here (capture_cap_mb),
+    # and ADR 0003's ~24h/8 GB on-disk directory retention swept independently by
+    # hookprobe-evidence-prune.timer regardless of this setting. Set capture: false on a
+    # storage/CPU-constrained edge device that wants zero pcap-writing overhead — detection and
+    # response are completely unaffected either way (pcap is evidence-only, never in the
+    # enforcement path). HYDRA-IOC/host-EDR triggers are OUT OF SCOPE (no packet in hand when they
+    # fire, days after the fact) — this only covers napse-dpi's own live packet-layer detectors.
+    capture: true
+    capture_window_secs: 10     # 0/omitted = napse-dpi's own default (10s pre + 10s post ≈ 20s span)
+    capture_cap_mb: 16          # 0/omitted = napse-dpi's own default; in-memory ring ceiling, NOT
+                                 # the (much larger, gigabyte-scale) on-disk directory retention cap
+
+  # --- Continuous trust: posture → dynamic quarantine (runs on its own 30s timer). ---
+  trust:
+    risk_threshold: 70
+    quarantine_segment: quarantine
+    quarantine_vlan: 666

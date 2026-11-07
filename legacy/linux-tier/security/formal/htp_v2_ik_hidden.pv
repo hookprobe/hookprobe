@@ -1,0 +1,209 @@
+(* ============================================================================
+   HTP v2 -- IK handshake, HIDDEN-RESPONDER variant -- ProVerif model
+   ----------------------------------------------------------------------------
+   Companion to htp_v2_ik.pv.  This file exercises the FINDING-1 property:
+   RESPONDER-IDENTITY SECRECY, enabled by the two-transcript split (SS2.3/SS2.4,
+   SS8 Finding 1).  Tested with ProVerif 2.05.
+
+   The gateway identity bundle gw_static_pub + gw_sig + gw_mac is sent in
+   CHALLENGE as a ChaCha20-Poly1305 record under the DIRECTIONAL handshake key
+   k_hs_g2c.  k_hs_g2c is derived from PRK, and PRK is salted by th_ks -- the
+   KEY-SHARE transcript, which EXCLUDES the gateway identity.  Hence:
+     * the gateway can derive k_hs_g2c BEFORE touching its identity;
+     * the client (holding its ephemeral esk/dk_pq) re-derives k_hs_g2c from the
+       key-share fields ALONE, decrypts the identity block, THEN verifies it;
+     * a Dolev-Yao attacker, lacking the ephemeral secrets, cannot derive
+       k_hs_g2c and therefore cannot learn which gateway responded.
+   This is exactly the non-circularity Finding 1 demanded: if the key schedule
+   had salted with a transcript INCLUDING gw_static_pub (the pre-fix design),
+   deriving k_hs_g2c would require the very value it must hide -> unimplementable.
+
+   The gateway's public identity is therefore kept secret from the network here
+   (it is a pinned anchor the device already knows -- IK).  No gateway-key reveal
+   is offered in this file (that would trivially publish the identity); KCI and
+   forward secrecy are covered in htp_v2_ik.pv.
+
+   Modelling assumptions are identical to htp_v2_ik.pv (Dolev-Yao, perfect
+   crypto, hybrid sig/KEM abstracted symbolically).
+   ============================================================================ *)
+
+set ignoreTypes = false.
+
+free c: channel.
+
+const V2: bitstring.
+const suiteStrong: bitstring.
+const pubNode: bitstring.
+const ctx_srv:   bitstring.
+const ctx_cli:   bitstring.
+const ctx_srvid: bitstring.
+const ctx_cliid: bitstring.
+const lbl_hs_c2g: bitstring.
+const lbl_hs_g2c: bitstring.
+const lbl_mac:    bitstring.
+const lbl_c2g:    bitstring.
+const lbl_g2c:    bitstring.
+const aad_attest: bitstring.
+const aad_accept: bitstring.
+const aad_chal:   bitstring.   (* AAD for the encrypted CHALLENGE identity block *)
+const aad_data:   bitstring.
+
+(* DH *)
+type G.  type exponent.
+const g: G [data].
+fun dhexp(G, exponent): G.
+equation forall x: exponent, y: exponent; dhexp(dhexp(g,x),y) = dhexp(dhexp(g,y),x).
+
+(* KEM (ML-KEM-768) *)
+type skem. type pkem. type kemct. type kemkey.
+fun kempk(skem): pkem.
+fun encap(pkem, kemkey): kemct.
+reduc forall sk: skem, ss: kemkey; decap(sk, encap(kempk(sk), ss)) = ss.
+
+(* hybrid signatures (single symbolic primitive) *)
+type sskey. type spkey.
+fun spk(sskey): spkey.
+fun sign(bitstring, sskey): bitstring.
+reduc forall m: bitstring, k: sskey; checksign(sign(m,k), spk(k)) = m.
+fun spk2b(spkey): bitstring [typeConverter].
+
+(* symmetric material *)
+type key.
+fun extract(bitstring, bitstring): bitstring.
+fun kdfexp(bitstring, bitstring): key.
+fun ikm(G, kemkey, bitstring): bitstring.
+fun mac(key, bitstring): bitstring.
+fun aenc(bitstring, key, bitstring): bitstring.
+reduc forall m: bitstring, k: key, ad: bitstring; adec(aenc(m,k,ad), k, ad) = m.
+
+(* transcripts (two-transcript split) *)
+fun th_ks(bitstring,bitstring,bitstring,bitstring,bitstring,
+          bitstring,bitstring,G,G,pkem,kemct): bitstring.
+fun th_auth_gw(bitstring, spkey): bitstring.
+fun th_auth_cl(bitstring, spkey, bitstring, bitstring, spkey): bitstring.
+fun cat(bitstring, bitstring): bitstring.
+fun attestpack(spkey, bitstring, bitstring): bitstring [data].
+fun idblock(spkey, bitstring, bitstring): bitstring [data].  (* gw identity flight *)
+
+(* the gateway long-term key is a PRIVATE free name: its public bundle must NOT
+   leak to the attacker (that is the property under test).                     *)
+free gskG: sskey [private].
+
+free secretC2G: bitstring [private].
+free secretG2C: bitstring [private].
+const acceptOK: bitstring.
+free psk: bitstring [private].
+
+event ClientRunForGw(spkey, spkey, bitstring).
+event GwAcceptClient(spkey, spkey, bitstring).
+event GwRunForClient(spkey, bitstring, bitstring).
+event ClientAcceptGw(spkey, bitstring, bitstring).
+event ClientDone().
+event GwDone().
+
+(* ===== QUERIES ===== *)
+
+(* (6) RESPONDER-IDENTITY SECRECY (Finding 1): the attacker never learns the
+       gateway's public identity bundle.  "false" = cannot derive = hidden.    *)
+query attacker(spk(gskG)).
+
+(* mutual authentication still holds in the hidden variant (no key reveal here) *)
+query pkC: spkey, pkG: spkey, sid: bitstring;
+  inj-event(GwAcceptClient(pkC, pkG, sid)) ==> inj-event(ClientRunForGw(pkC, pkG, sid)).
+query pkG: spkey, sid: bitstring, sel: bitstring;
+  inj-event(ClientAcceptGw(pkG, sid, sel)) ==> inj-event(GwRunForClient(pkG, sid, sel)).
+
+(* session-key secrecy *)
+query attacker(secretC2G).
+query attacker(secretG2C).
+
+(* non-vacuity: the hidden-responder handshake must still complete -> FALSE *)
+query event(ClientDone()) ==> false.
+query event(GwDone()) ==> false.
+
+(* ===== ROLES ===== *)
+
+let Client(csk: sskey, pkGanchor: spkey) =
+  let pkC = spk(csk) in
+  new nC: bitstring;
+  new x: exponent;   let epkC = dhexp(g, x) in
+  new dkC: skem;     let ekpqC = kempk(dkC) in
+  new flow: bitstring;
+  let offered = suiteStrong in
+  out(c, (V2, offered, pubNode, flow, nC, epkC, ekpqC));               (* HELLO *)
+
+  (* CHALLENGE: key-share fields in clear, gw identity block ENCRYPTED under k_hs_g2c *)
+  in(c, (=V2, selected: bitstring, nG: bitstring, epkG: G, ctpq: kemct, idrec: bitstring));
+  let ss_dh = dhexp(epkG, x) in
+  let ss_pq = decap(dkC, ctpq) in
+  let sid   = th_ks(V2, offered, selected, pubNode, flow, nC, nG, epkC, epkG, ekpqC, ctpq) in
+  let prk   = extract(sid, ikm(ss_dh, ss_pq, psk)) in
+  let k_hs_c2g = kdfexp(prk, lbl_hs_c2g) in
+  let k_hs_g2c = kdfexp(prk, lbl_hs_g2c) in    (* derivable from key-share only -> non-circular *)
+  let k_mac    = kdfexp(prk, lbl_mac) in
+  let k_c2g    = kdfexp(prk, lbl_c2g) in
+  let k_g2c    = kdfexp(prk, lbl_g2c) in
+  (* decrypt the responder identity flight, THEN authenticate it *)
+  let idblock(=pkGanchor, gw_sig: bitstring, gw_mac: bitstring) = adec(idrec, k_hs_g2c, aad_chal) in
+  let ta_gw = th_auth_gw(sid, pkGanchor) in
+  let (=cat(ctx_srv, ta_gw)) = checksign(gw_sig, pkGanchor) in
+  let (=gw_mac) = mac(k_mac, cat(ctx_srvid, spk2b(pkGanchor))) in
+  event ClientAcceptGw(pkGanchor, sid, selected);
+
+  event ClientRunForGw(pkC, pkGanchor, sid);
+  let ta_cl = th_auth_cl(sid, pkGanchor, gw_sig, gw_mac, pkC) in
+  let client_sig = sign(cat(ctx_cli, ta_cl), csk) in
+  let client_mac = mac(k_mac, cat(ctx_cliid, spk2b(pkC))) in
+  out(c, (V2, flow, aenc(attestpack(pkC, client_sig, client_mac), k_hs_c2g, aad_attest)));   (* ATTEST *)
+
+  in(c, (=V2, accept_rec: bitstring));                                 (* ACCEPT *)
+  let (=acceptOK) = adec(accept_rec, k_hs_g2c, aad_accept) in
+  out(c, aenc(secretC2G, k_c2g, aad_data));
+  event ClientDone();
+  0.
+
+let Gateway(gskGl: sskey) =
+  let pkG = spk(gskGl) in
+  in(c, (=V2, offered: bitstring, nodeid: bitstring, flow: bitstring,
+         nC: bitstring, epkC: G, ekpqC: pkem));                        (* HELLO *)
+  new nG: bitstring;
+  new y: exponent;        let epkG = dhexp(g, y) in
+  new ss_pq: kemkey;      let ctpq = encap(ekpqC, ss_pq) in
+  let selected = offered in
+  let ss_dh = dhexp(epkC, y) in
+  let sid = th_ks(V2, offered, selected, nodeid, flow, nC, nG, epkC, epkG, ekpqC, ctpq) in
+  let prk = extract(sid, ikm(ss_dh, ss_pq, psk)) in
+  let k_hs_c2g = kdfexp(prk, lbl_hs_c2g) in
+  let k_hs_g2c = kdfexp(prk, lbl_hs_g2c) in
+  let k_mac    = kdfexp(prk, lbl_mac) in
+  let k_c2g    = kdfexp(prk, lbl_c2g) in
+  let k_g2c    = kdfexp(prk, lbl_g2c) in
+  let ta_gw  = th_auth_gw(sid, pkG) in
+  let gw_sig = sign(cat(ctx_srv, ta_gw), gskGl) in
+  let gw_mac = mac(k_mac, cat(ctx_srvid, spk2b(pkG))) in
+  event GwRunForClient(pkG, sid, selected);
+  (* identity bundle sent ENCRYPTED under k_hs_g2c -> responder-identity hiding *)
+  out(c, (V2, selected, nG, epkG, ctpq, aenc(idblock(pkG, gw_sig, gw_mac), k_hs_g2c, aad_chal)));
+
+  in(c, (=V2, =flow, attest_rec: bitstring));                          (* ATTEST *)
+  let attestpack(pkC: spkey, client_sig: bitstring, client_mac: bitstring) =
+        adec(attest_rec, k_hs_c2g, aad_attest) in
+  let ta_cl = th_auth_cl(sid, pkG, gw_sig, gw_mac, pkC) in
+  let (=cat(ctx_cli, ta_cl)) = checksign(client_sig, pkC) in
+  let (=client_mac) = mac(k_mac, cat(ctx_cliid, spk2b(pkC))) in
+  event GwAcceptClient(pkC, pkG, sid);
+
+  out(c, (V2, aenc(acceptOK, k_hs_g2c, aad_accept)));                  (* ACCEPT *)
+  out(c, aenc(secretG2C, k_g2c, aad_data));
+  event GwDone();
+  0.
+
+let ClientPrincipal(pkGanchor: spkey) =
+  new csk: sskey;
+  out(c, spk(csk));                 (* device identity may be public; responder is the hidden party *)
+  !Client(csk, pkGanchor).
+
+process
+  ( !Gateway(gskG)
+  | !ClientPrincipal(spk(gskG))     (* devices hold the gateway anchor privately (IK pinning) *)
+  )

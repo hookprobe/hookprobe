@@ -1,0 +1,23 @@
+---
+/**
+ * /network/map — My Network (Pillar 2) device map + zones.
+ *
+ * Astro shell: same pattern as index.astro — static pre-render, one Solid
+ * client:load island hydrates the interactive surface.
+ *
+ * Navigation: PillarGrid's "My Network" card links here via href="/network/map".
+ * No SSR adapter, no routing library — static HTML, client-side Solid island.
+ *
+ * Spec: docs/research/v2-customer-experience.md §3.2 · docs/architecture/MissionControl.md §6b
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import NetworkMapApp from '../../components/NetworkMapApp';
+---
+
+<Shell
+  title="My Network — HookProbe OS"
+  description="Device map and zones — manage your LAN, segment devices, control Apple ecosystem and access policy."
+>
+  <NetworkMapApp client:load />
+</Shell>

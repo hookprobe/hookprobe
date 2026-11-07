@@ -1,0 +1,240 @@
+[package]
+name = "kernel"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hal          = { path = "../hal" }
+arch-aarch64 = { path = "../arch-aarch64" }
+abi          = { path = "../abi" }
+boot-abi     = { path = "../boot-abi" }
+# Runtime attestation service (B-2): the kernel signs verifier-supplied
+# challenge nonces with a per-boot EPHEMERAL ed25519 key (fast/small — no
+# SLH-DSA in the kernel; the device AK stays in HBoot). Bare-metal, no std/RNG.
+ed25519-compact = { version = "2", default-features = false }
+# PH6 — smoltcp TCP/IP stack for the net service (behind `netsvc`, OFF by default so the
+# default/prod kernel TCB is untouched). no_std, no heap. The production target runs this
+# as an EL0-ISOLATED service over the P17 rule-plane-gated netq; the `netsvc` build gates
+# the stack integration on QEMU (smoltcp answers an ARP under packet::verdict both ways).
+smoltcp = { version = "0.13", default-features = false, features = [
+    "proto-ipv4", "medium-ethernet", "socket-udp", "socket-dhcpv4", "socket-tcp",
+], optional = true }
+# M4.2a — PQC secure-channel crypto PRIMITIVES (KEX + AEAD), FRAMING-AGNOSTIC (the
+# identical primitives feed BOTH the ADR-0002 rustls-hybrid path AND the ADR-0004
+# Noise path; the handshake itself is M4.2b). All no_std, behind `securechannel`,
+# OFF by default so the base kernel TCB pulls in none of this. See
+# docs/design/heqk-control-plane.md §2 + ADR 0002 (hybrid ML-KEM-768 + X25519 KEX).
+#   ml-kem          — FIPS 203 ML-KEM-768 (RustCrypto), no_std; deterministic KAT API.
+#   x25519-dalek    — RFC 7748 X25519 (no_std, serial backend on aarch64 softfloat).
+#   chacha20poly1305— RFC 8439 AEAD (no AES-NI dependence — right for a softfloat edge).
+ml-kem           = { version = "0.2", default-features = false, features = ["deterministic"], optional = true }
+# The RustCrypto `kem` traits (Encapsulate/Decapsulate) that ml-kem's key types
+# implement but does NOT re-export — needed in scope to call `.decapsulate()`.
+# no_std + forbid(unsafe_code); pinned to the exact rev ml-kem 0.2.3 resolves.
+kem              = { version = "=0.3.0-pre.0", default-features = false, optional = true }
+x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
+chacha20poly1305 = { version = "0.10", default-features = false, optional = true }
+# M5.2 (Track C) — the Wasm-host BEACHHEAD ships a BESPOKE MINIMAL no_std interpreter
+# (kernel/src/wasmhost.rs) with ZERO external dependencies. FEASIBILITY was assessed
+# first: `wasmi` 0.32 (pure-Rust no_std interpreter) DOES build for
+# aarch64-unknown-none-softfloat under build-std with `alloc` only (zero std leakage /
+# no getrandom) and runs a memoryless module in ~7 KiB heap — but folding it in adds
+# ~2 MiB of `.text` (~15 crates) AND overran the QEMU MMU's single-2-MiB-block W^X map
+# (build_wx_ram), faulting at MMU-enable. That TCB expansion + MMU rework is
+# disproportionate for a ONE-MODULE proof, so the sliver stays dependency-free; wasmi
+# is the documented path for the eventual FULL host once the MMU multi-block-W^X fix +
+# an explicit TCB-expansion decision land. See docs/design/heqk-module-runtime.md §M5.2.
+
+# --- build-time fixture signer (host, NOT in the kernel TCB) ------------------
+# M5.2: build.rs hand-assembles the .wasm fixture AND signs it (Ed25519, the
+# classical leg of heqk's real per-artifact hybrid — see the module header for the
+# honest signature-primitive note). Host build-dep only; the kernel VERIFIES with
+# its always-on `ed25519-compact`. No committed binary, no external toolchain.
+# default-features=false: we only use deterministic KeyPair::from_seed + sign (no RNG),
+# so the host signer pulls in NO getrandom/wasm-bindgen — keeps Cargo.lock lean.
+[build-dependencies]
+ed25519-compact = { version = "2", default-features = false }
+
+[features]
+# M5.2 (Track C): compile the Wasm-host beachhead + its [P-wasm] QEMU gate — a
+# signed `.wasm` module is Ed25519-VERIFIED (fail-closed), then its exported fn is
+# executed by the bespoke minimal no_std interpreter in-kernel and the result checked
+# against a known vector. Dependency-free; OFF by default (base kernel untouched).
+wasmhost = []
+# P8 GEM TX burst diagnostics (tx_diag_burst + 200/1000/5000-frame bursts = ~6,200 broadcast
+# frames out end0 every boot). end0 is the WAN uplink: on a fortress with l2guard/mac-flood/
+# resource-shed that burst can get end0's MAC rate-limited seconds before the DHCP lease.
+# Off by default; opt-in for GEM TX bench work only.
+txdiag = []
+# PH6: compile the smoltcp net-service integration + its [PH6-net] QEMU gate.
+netsvc = ["dep:smoltcp"]
+# ADR 0047 D2 — heqk serves Mission Control itself (QEMU virt today): boots straight into the
+# IPS-gated datapath + SOAR → evidence state + an HTTP server for the embedded UI (os/mission-control/dist, built
+# with PUBLIC_API_BASE='') and the UI's API. Run: tools/mc-e2e.sh. Not a validate.sh flavour (the
+# serve loop never exits); its pure logic is the [P-mc] gate.
+# ADR 0051 — Mission Control HTTPS: embed the EL0 TLS server (el0-tlshost) and the :443 pump.
+mctls = []
+mcserve = ["netsvc", "mctls"]
+# M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
+# prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
+# (smoltcp) into the cm5 build; prod stays byte-identical without it. os-architect design
+# 2026-09-08. Off by default; opt-in for the first-light validation image.
+netmetal = ["prod", "netsvc"]
+# M4.2a: compile the PQC secure-channel crypto primitives + the [P19-pqc-kat] gate
+# (ML-KEM-768 round-trip + KAT, X25519 RFC-7748 vector, ChaCha20-Poly1305 RFC-8439
+# vector, hybrid HKDF combiner Alice==Bob). Framing-agnostic; the handshake is M4.2b.
+securechannel = ["dep:ml-kem", "dep:kem", "dep:x25519-dalek", "dep:chacha20poly1305"]
+# M4.3: the secure-channel SELFTEST surface — the [P19-noise] + [P19-enroll] gates,
+# their deterministic seeded ephemerals, the `TestEntropy`/`StubTrng` doubles, and
+# `CipherState::key_for_test`. This is the "seed" path the M4.2b auditor (condition
+# #6) warns must NEVER reach metal: `entropy.rs` carries a `compile_error!` that
+# refuses to build if this is enabled together with the `cm5` (metal) profile.
+# validate.sh's QEMU builds enable it; the prod/cm5 image MUST NOT.
+securechannel-selftest = ["securechannel"]
+# Bench Wi-Fi modes (CM5 metal bench only — refused together with `prod`, see main.rs):
+#   apmode  — heqk as WPA2 AP + SNAT to the end0 uplink. Its serve loop never returns and
+#             NATs client traffic WITHOUT packet::verdict, so it REPLACES the IPS service;
+#             needs HEQK_AP_PSK (8..63 chars) in the build environment.
+#   stajoin — P10-E WPA2 STA join proof; needs HEQK_JOIN_SSID + HEQK_JOIN_PSK at build time.
+# Credentials are build-time env only — never source literals (ADR 0045).
+apmode = ["cm5"]
+# Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
+apmc = ["apmode", "mcserve"]
+# Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
+# Default builds read once and never block (peer review COR-L1).
+stalldiag = ["apmode"]
+stajoin = ["cm5"]
+# Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
+# addresses + linker load address, and boots a minimal serial "hello" first.
+cm5 = ["arch-aarch64/cm5"]
+# Launched by HBoot (heqk-boot): link at 0x1000000, enter at EL1 with console
+# already up, consume the typed BootInfo handoff.
+hboot = ["cm5", "arch-aarch64/hboot"]
+# P10-BT (CYW43455 Bluetooth over HCI-UART). PROVEN on metal 2026-07-24:
+# HCI Reset + 3 Mbaud both acked, LE scan saw 17 BLE devices, 0 faults, boot reached
+# a clean end. The first attempt SError'd because it muxed the WRONG pins (gio
+# namespace); the fix muxes gpio24-27 -> uart0 on pinctrl 0x7d504100 BEFORE the first
+# UART access (that also un-gates the block), plus esb/DISR containment as defense.
+# Kept as an explicit feature (the LE scan adds ~30s to boot):
+#   cargo build -p kernel --features hboot,p10bt --release
+p10bt = []
+# P15 sealed storage WRITE path — OFF by default. Compiles the eMMC write_block +
+# the store-layer one-shot narrowing write window + read-back verify. Even when
+# built, writes are hard-clamped to LBA 2016..2047 by two independent gates.
+#   cargo build -p kernel --features hboot,p15-write --release
+# Also pulls in the SHARED hybrid verifier (boot-abi::verify) for the M3.4 OTA
+# pre-flight verify — the SAME verifier + trust root HBoot uses (no second trust
+# root). The default (non-p15-write) kernel links neither ed25519 nor SLH-DSA
+# beyond its existing ephemeral-attest use, keeping the base TCB untouched.
+p15-write = ["arch-aarch64/p15-write", "boot-abi/otaverify"]
+# task #27 (F1/F5): the CM5 eMMC WRITE SELF-TESTS (two-boot cookie @2040, sealed Event @2016, DataVolume
+# region self-test) are BENCH proofs. They used to run under p15-write — and so on every prod-mc boot,
+# where the sealed Event at 2016 clobbered the ProdFull snapshot (it never restored) and the DataVolume
+# test wrote a hard-coded LBA outside every partition. Production keeps p15-write (real persistence);
+# the self-tests need p15-bench (or the sepdiag bench profile).
+p15-bench = ["p15-write"]
+# otaflip — M3.4 ON-DEVICE forward tryboot-flip metal proof (opt-in; SELF-REBOOTS once).
+# Drives the OtaState state machine through a REAL firmware one-shot tryboot into the
+# existing valid slot B, confirm+commit, keystore-persisted + loop-guarded. Distinct from
+# p15-write so a normal sepdiag image never self-reboots. See cm5_p15_block_seal.
+otaflip = ["p15-write"]
+# PH1 — PRODUCTION service profile. Instead of the P0-P17 self-test sequence that
+# reboots at the end, boot into the persistent RX->classify->verdict->ENFORCE sensor
+# datapath: an isolated EL0 GEM driver feeds real frames to the verified rule plane,
+# PASS is forwarded on the wire, a threat verdict is dropped, the driver self-heals on
+# crash, and the loop NEVER halts. Implies hboot (metal, EL2-launched, measured boot).
+#   cargo build -p kernel --features prod --release
+prod = ["hboot"]
+# prod-full — the PH1 sensor loop PLUS the M3/M4/M6 subsystems actually WIRED IN.
+#
+# WHY THIS IS A SEPARATE FEATURE, not just added to `prod`: on the cm5 profile the
+# M3/M4/M6 entry points are only reachable from the QEMU self-test sequence that
+# `prod` replaces, so building `prod,p15-write,securechannel,netsvc` moves the binary
+# by EIGHTY BYTES — everything is dead-stripped. `prodfull.rs` is the missing caller.
+# Keeping it behind its own flag means the M1 flash image (`prod`) stays BYTE-IDENTICAL
+# to the one validated in QEMU, so the first-ever on-silicon run of the cm5 W^X mapping
+# is not confounded by newly-wired storage/crypto paths. Promote to `prod` only after
+# M1 is green on metal.
+#
+#   cargo build -p kernel --features prod-full --release
+prod-full = ["prod", "p15-write", "securechannel", "netsvc"]
+# M6 B2 evidence export on metal: prod-full (sealed snapshot + real SOAR events) + netmetal (GEM
+# bridge + the Noise control plane). Enrolls on the handshake (tenant from msg2), then streams
+# HQXR datagram records unicast to the MSSP (onboarding/enrollment/responder-sim --live receives them).
+prod-export = ["prod-full", "netmetal"]
+# ADR 0047 D2 + ADR 0037 D4 — THE production CM5 profile: prod-full (sealed snapshot, real SOAR
+# events) + heqk serving Mission Control itself on the GEM (DHCP, SRK-derived MAC, embedded UI,
+# the UI's API) in PASSIVE-FIRST mode (PASS frames observed, never re-transmitted). Built by the
+# image factory (FEATURES=prod-mc) and CI.
+prod-mc = ["prod-full", "mcserve"]
+# BENCH-ONLY: the two-boot A/B commit proof on the CM5 eMMC ([P15-abcommit-metal]). Rewrites
+# config.txt/tryboot.txt every boot — never shipped; reflash the production image afterwards.
+abcommit-metal = ["cm5", "p15-write"]
+# Audit B1 — confirm the A/B trial boot only from the HEALTHY prod loop (rules armed + GEM loop
+# >= 2 s faults=0 + Mission Control up) instead of right after rules::init. OFF BY DEFAULT: hboot's
+# watchdog is armed on every boot (15 s), so this ships only after the bench measures the
+# [BOOT-TIMING] markers and the healthy point lands inside the budget with margin. Ignored under
+# `apmode` (the AP pump never reaches the prod loop).
+late-confirm = []
+# rollback-test — M1 CRITERION 4 ONLY. Arms the firmware's one-shot tryboot flag and
+# resets, so the NEXT boot loads tryboot.txt (SLOT B) instead of config.txt (SLOT A).
+#
+# ⚠️ THIS IMAGE DELIBERATELY REBOOTS ITSELF. It exists to prove forced-bad-boot rollback
+# and MUST NOT ship. It also LOOPS by construction: after the rollback returns to SLOT A,
+# this same image arms tryboot again. That is intentional — each cycle is a complete
+# demonstration — but it means the operator observes a cycle or two, powers off, and
+# reflashes a normal image. There is no brick path: SLOT A is always the known-good
+# image and the tryboot flag is one-shot, so the board can only ever land back on A.
+#
+#   cargo build -p kernel --features rollback-test --release
+rollback-test = ["prod"]
+# rxprof — per-phase cntpct instrumentation of the prod RX->verdict->forward loop.
+# PURE MEASUREMENT, zero behaviour change: times stub-reload / EL0-excursion / rx-status /
+# frame-copy / verdict / tx / recycle and reports per-phase averages in the heartbeat.
+# Exists because RX throughput was guessed wrong THREE times; measure the path before
+# restructuring it. Additive to prod; not shipped.
+#   FEATURES=prod,rxprof os/build/make-cm5-heqk-image.sh
+rxprof = ["prod"]
+# mipdump — READ-ONLY dump of the RP1 MIP (MSI-X) register region, to discover the DRV-1
+# interrupt-config layout on metal WITHOUT any write (no scribble risk). Additive to prod;
+# never shipped. See gem::mip_dump + the [DRV1-mipdump] probe.
+mipdump = ["prod", "arch-aarch64/mipdump"]
+# txsram — route GEM TX through RP1 internal SRAM (PCIe-read-path discriminator). Additive.
+# ⚠️ SUPERSEDED by txsweep (2026-09-09): the SRAM address used was the AXI-peripheral region,
+# not the shared SRAM. Do not flash a txsram image.
+txsram = ["arch-aarch64/txsram"]
+# txsweep — the host-RAM GEM-TX size/alignment sweep (main.rs, pre-sensor-loop). Emits stepped-
+# length / stepped-alignment UDP broadcasts through the proven tx_frame path (buffer overridden)
+# to determine whether the >90 B TX cliff tracks frame LENGTH (GEM FIFO/fetch) or DMA ADDRESS
+# (RP1 AXI/PCIe 256-byte-boundary read path). Needs the metal net stack; additive; never shipped.
+txsweep = ["netmetal", "arch-aarch64/txsweep"]
+# M-NAT4 TX bench: full-MTU frames to Wi-Fi stations via block-mode CMD53 (see arch-aarch64).
+wifi-bigtx = ["apmode", "wifi-bigrx", "arch-aarch64/wifi-bigtx"]
+# Full-MTU RX from stations (block-mode read), TX > 512 B refused + counted — the AP default
+# until block-mode WRITE is proven (it wedged the firmware on metal 2026-11-04).
+wifi-bigrx = ["apmode", "arch-aarch64/wifi-bigrx"]
+# sepdiag — M2 Gate-R metal observability. Drains the per-rule event ring in the prod
+# heartbeat and prints {rule_id, verdict(PASS/DROP), src, sev} so a separation-matrix row's
+# verdict can be ATTRIBUTED on metal (prod exposes only aggregate counters otherwise). Also
+# attributes the truncated-frame fail-closed drop (SG-2). Additive to prod; NEVER shipped.
+sepdiag = ["prod"]
+# segmetal — M4.5 SEGMENTATION ARMING over the live Session (the U2b metal proof). Additive to
+# the netmetal+securechannel ControlPlane: once Established, the device sends an encrypted
+# reach-policy REQ over the Session, the host `responder-sim --live` answers with an operator-
+# signed ReachPolicy, and the device verifies (op-sig → tenant → gen>floor) + arms segment.rs.
+# Pulls p15-write for the anti-rollback floor (C11/C12) in the eMMC sealed store. Never shipped.
+#   FEATURES=segmetal os/build/make-cm5-heqk-image.sh
+segmetal = ["netmetal", "securechannel", "p15-write"]
+# dnssink — M4 DNS-sinkhole/RPZ ON THE WIRE. Additive to netmetal: a transiting DNS query for an
+# RPZ-blocked name (dnssink::RPZ_LIST) is answered with a spoofed sinkhole reply (A -> SINKHOLE_IP)
+# and not forwarded; legit names flow untouched (ADR 0023). Never shipped; metal opt-in.
+#   FEATURES=dnssink os/build/make-cm5-heqk-image.sh
+dnssink = ["netmetal"]
+# dhcp — M4 DHCPv4 CLIENT on the bridge. heqk obtains its IPv4 lease (DORA) via smoltcp's dhcpv4
+# socket over the real GEM, rule-gated both ways. Additive to netmetal; never shipped; metal opt-in.
+#   FEATURES=dhcp os/build/make-cm5-heqk-image.sh
+dhcp = ["netmetal"]
+
+[[bin]]
+name = "kernel"
+path = "src/main.rs"

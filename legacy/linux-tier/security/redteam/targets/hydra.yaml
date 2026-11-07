@@ -1,0 +1,11 @@
+# security/redteam/targets/hydra.yaml — per-DUT-component descriptor (ADR 0020 D2).
+component: hydra
+description: >
+  HYDRA threat-intelligence/enrichment pipeline (Intelligence workspace, ADR 0015 C1). `status:
+  stub` in modules/hydra/module.yaml today (BuildPlan Track-B) — there is no running enforcement
+  surface to attack yet.
+status: roadmap
+reason: >
+  hydra's IOC/blocklist-feed sync (hydra-feedsync) has no ROE-in-scope DUT target defined; building
+  a probe against it is deferred until the module leaves `status: stub`. Never fabricate a
+  finding against a component that isn't built.

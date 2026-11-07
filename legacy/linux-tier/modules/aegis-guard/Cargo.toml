@@ -1,0 +1,29 @@
+[package]
+name = "aegis-guard"
+version = "0.1.0"
+edition = "2021"
+description = "AEGIS deterministic policy guard — HookProbe OS V2 module"
+license = "Apache-2.0"
+
+# Library: the guard + reflex engine, shared by the WASI binary and tests.
+# Tests run on the native target; the binary is built for wasm32-wasip1.
+[lib]
+name = "aegis_guard"
+crate-type = ["rlib"]
+
+# WASI binary: reads action/reflex events from stdin, writes JSON decisions to stdout.
+[[bin]]
+name = "aegis-guard"
+path = "src/main.rs"
+
+# Zero THIRD-PARTY dependencies — keeps the .wasm binary small and the security surface minimal
+# (no supply-chain exposure beyond std). The one dependency below is a first-party, itself-
+# zero-dependency in-workspace crate (no new external code, no proc-macros, no build scripts) —
+# shared with `hookprobe-manifest::scan_responder` so the mgmt-path "never enforce against this
+# address" predicate can't silently diverge between the scan-responder's quarantine path and
+# this module's reflex path (2026-07 audit fix: a live DISCONNECT/block_ip verdict was logged
+# against the operator's own mgmt gateway).
+# Release profile (opt-level="s", lto, panic="abort", strip) is declared at
+# the workspace root Cargo.toml and applies to all members.
+[dependencies]
+hookprobe-mgmt-guard = { path = "../../crates/hookprobe-mgmt-guard" }

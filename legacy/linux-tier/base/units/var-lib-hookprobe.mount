@@ -1,0 +1,35 @@
+# var-lib-hookprobe.mount — mounts the PERSISTENT DATA PARTITION at /var/lib/hookprobe.
+# This is the "persistent data partition separate from the immutable rootfs" (Readme
+# "Data & retention"; ADR 0003 — manifest, events, pcap, evidence, secrets live here).
+# `bootc upgrade`/`rollback` swaps the immutable rootfs but NEVER touches this partition.
+#
+# The partition is created by bootc-image-builder per profile (filesystem
+# customization) and labelled `hookprobe-data`. On flows where the installer cannot
+# pre-create it (SD-card / raw-image SBC flows), `hookprobe-firstboot-data.service`
+# grows the disk's free space into it at first boot (idempotent), then this mount
+# activates by-label.
+
+[Unit]
+Description=HookProbe persistent data partition
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/adr/0003-platform-manifest-schema.md
+Before=hookprobe-bootstrap.service hookprobe-supervisor.service
+# Don't fail the boot if the data partition is absent on a minimal/first run; the
+# first-boot provisioning step (TODO) creates it, then this mount activates.
+DefaultDependencies=no
+# hookprobe-unlock-data.service opens the plain-dm-crypt volume (ADR 0007 E1); the ext4 label lives on
+# the DECRYPTED mapper, so /dev/disk/by-label/hookprobe-data resolves once the crypt is open.
+After=local-fs-pre.target hookprobe-firstboot-data.service hookprobe-unlock-data.service
+Wants=local-fs-pre.target hookprobe-firstboot-data.service hookprobe-unlock-data.service
+
+[Mount]
+What=/dev/disk/by-label/hookprobe-data
+Where=/var/lib/hookprobe
+Type=ext4
+# TODO: lock the filesystem choice (ext4 default; consider f2fs on raw flash/SBC for
+#       wear levelling). Options below favour integrity + flash longevity.
+# `nofail` + a bounded device-timeout so a provisioning failure DEGRADES the boot instead
+# of HANGING it forever (.device units otherwise wait indefinitely for the partition).
+Options=defaults,noatime,nodev,nosuid,nofail,x-systemd.device-timeout=30s
+
+[Install]
+WantedBy=local-fs.target

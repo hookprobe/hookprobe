@@ -1,0 +1,46 @@
+[package]
+name = "hookprobe-manifest"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+sha2 = "0.10"
+sha3 = "0.10"
+hex = "0.4"
+ed25519-dalek = "2"
+anyhow = "1"
+# FIPS 204 ML-DSA-65 — the hybrid module-signing PQC leg (Part A). Pure Rust (RustCrypto),
+# no liboqs/C. default-features off: we don't need pkcs8/getrandom (dev+release keys are
+# deterministic 32-byte seeds via `from_seed`, mirroring the existing ed25519 dev-key
+# convention) — keeps the dependency tree and binary size minimal.
+ml-dsa = { version = "0.1.1", default-features = false, features = ["alloc"] }
+# Shared, dependency-free mgmt-allowlist predicate (mgmt subnet / gateway / WAN-self) — the
+# single source of truth for "never quarantine/block this address", reused by `aegis-guard`'s
+# reflex engine so the two enforcement paths can't silently diverge.
+hookprobe-mgmt-guard = { path = "../hookprobe-mgmt-guard" }
+# OPTIONAL, off by default: only pulled in when a napse eBPF loader enables `hookprobe-manifest/bpf`
+# (which it does exactly when its own `--features bpf` is on). Gives `xdp::apply_btf_custom_path` a
+# way to poke libbpf's `bpf_object_open_opts.btf_custom_path` so BOTH loaders share ONE wiring fn
+# instead of copy-pasting it. `vendored` mirrors the loaders' own libbpf-rs stanza (vendors
+# libbpf+libelf+zlib from source — needed for the aarch64 cross-build). Every non-bpf consumer of
+# this crate (bootstrap, supervisor, api, Wasm modules) never compiles libbpf-rs at all.
+libbpf-rs = { version = "0.24", optional = true, features = ["vendored"] }
+
+[features]
+default = []
+bpf = ["dep:libbpf-rs"]
+
+[dev-dependencies]
+# tests load fixture files via include_str!
+# 2026-07-07 enforcement-separation validation matrix (crates/hookprobe-manifest/tests/
+# separation_matrix.rs): exercises the REAL packet-layer trackers (MacFloodTracker,
+# BroadcastStormTracker, PortScanTracker, BeaconTracker, LateralMovementTracker) that feed this
+# crate's responders, so the matrix calls the actual detector -> responder pipeline end to end
+# instead of hand-constructing alerts. A dev-dependency cycle (napse-loader's OWN normal
+# dependency is this crate) is fine — Cargo already allows this exact shape workspace-wide (see
+# modules/napse-l2guard/loader/Cargo.toml's identical dev-dependency on napse-loader): dev-deps
+# are excluded from the normal build graph, so there is no real cycle to resolve.
+napse-loader = { path = "../../modules/napse-capture/loader" }

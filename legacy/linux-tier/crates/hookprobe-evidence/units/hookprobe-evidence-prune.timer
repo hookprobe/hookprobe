@@ -1,0 +1,8 @@
+[Unit]
+Description=Prune the HookProbe evidence graph (retention + VACUUM) once a day
+[Timer]
+OnBootSec=15min
+OnUnitActiveSec=1d
+Persistent=true
+[Install]
+WantedBy=timers.target
