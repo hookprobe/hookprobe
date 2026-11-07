@@ -118,6 +118,8 @@ new-gate candidates: every new failure class gets a classifier rule + fixture te
 | g4r reproducible shipped kernel | PASS — two clean `prod` builds, identical sha256 `a860f68c…8cb2` |
 | Fresh-clone shipped build (`build-heqk` step) | PASS — firmware staged from the pinned package; `prod` + `prod-mc` compile |
 | Heal drill (seeded real defect) | 4/4: transient→cleared, secret→human, budget→exhausted, honest→**proposed**, `#[ignore]`→**rejected**, ratchet-lowering→**rejected** |
+| Heal drill with the **real Claude Code agent** | **proposed** — correct root cause (compressed SEC1 point breaks the 65-byte contract → provisioning publishes nothing), 1-line fix, no test touched, trusted guard PASS, g1 re-ran green in isolation; a human merges |
+| mc-e2e after the SSE slot fix | 4/4 PASS, all 8 HTTPS slots recycled; validate.sh all phases green |
 | Independent adversarial review | 8 findings (1 Critical, 2 High, 4 Medium, 2 Low) — all fixed + regression-tested |
 
 **Defects found and fixed by the new gates on day one:** RUSTSEC-2026-0387 on the device TLS key
