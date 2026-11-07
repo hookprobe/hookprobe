@@ -3055,56 +3055,14 @@ pub fn ap_stop() -> bool {
 // lease so it leaves 169.254 and shows "connected". Inverts the STA DHCP client; same
 // channel-2 encrypted data path (fw does CCMP once WPA2 keys are set; open for now).
 
-/// Inside-side DHCP server state: a small MAC-bound lease table shared by every inside
-/// link (WiFi AP, eth1 LAN). A client always gets the SAME address back (keyed on its
-/// MAC), and the NAT leg checks the (MAC, IP) binding on every forwarded frame so one
-/// client cannot source traffic as another (flow hijack).
-pub const AP_LEASES: usize = 16;
-pub struct ApDhcp {
-    pub arp_replies: u32,
-    pub discovers: u32,
-    pub offers_tx: u32,
-    pub requests: u32,
-    pub acks_tx: u32,
-    pub naks_tx: u32,
-    pub client_mac: [u8; 6], // the most recent client
-    pub leased_ip: [u8; 4],  // the most recent lease
-    pub leases: [([u8; 6], [u8; 4]); AP_LEASES],
-    pub nleases: usize,
-    pub pool_full: u32,
-}
+/// Inside-side DHCP server state: the pure lease table in `dhcpd` (expiry, reclaim, RELEASE, identity).
+pub use crate::dhcpd::{ApDhcp, LEASES as AP_LEASES};
 
-impl ApDhcp {
-    pub fn new() -> Self {
-        ApDhcp {
-            arp_replies: 0, discovers: 0, offers_tx: 0, requests: 0, acks_tx: 0, naks_tx: 0,
-            client_mac: [0; 6], leased_ip: [0; 4], leases: [([0; 6], [0; 4]); AP_LEASES], nleases: 0, pool_full: 0,
-        }
-    }
-    /// The address bound to `mac`, if it has one.
-    pub fn lease_for(&self, mac: &[u8; 6]) -> Option<[u8; 4]> {
-        self.leases[..self.nleases].iter().find(|(m, _)| m == mac).map(|(_, ip)| *ip)
-    }
-    /// The address for `mac`: its existing binding, else the next free one from
-    /// `pool_base`+1 .. (pool is `AP_LEASES` long). None when the pool is exhausted.
-    pub fn alloc_for(&mut self, mac: &[u8; 6], pool_base: &[u8; 4]) -> Option<[u8; 4]> {
-        if let Some(ip) = self.lease_for(mac) {
-            return Some(ip);
-        }
-        if self.nleases >= AP_LEASES {
-            self.pool_full += 1;
-            return None;
-        }
-        let mut ip = *pool_base;
-        ip[3] = pool_base[3].wrapping_add(self.nleases as u8);
-        self.leases[self.nleases] = (*mac, ip);
-        self.nleases += 1;
-        Some(ip)
-    }
-    /// Is (mac, ip) a lease we handed out? The NAT leg's anti-hijack check.
-    pub fn binding_ok(&self, mac: &[u8; 6], ip: &[u8; 4]) -> bool {
-        self.lease_for(mac).map_or(false, |l| l == *ip)
-    }
+/// Monotonic seconds (cntpct / cntfrq) — the DHCP lease clock.
+pub fn now_secs() -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    ticks() / f.max(1)
 }
 
 /// Build an ARP reply: "`our_ip` is at `our_mac`", unicast to the requester.
@@ -3143,8 +3101,9 @@ fn build_dhcp_server(buf: &mut [u8], our_mac: &[u8; 6], client_mac: &[u8; 6], ou
         // (a NAK carries only the message type + server id, RFC 2131 §4.3.2)
         buf[o] = 1; buf[o + 1] = 4; buf[o + 2] = 255; buf[o + 3] = 255; buf[o + 4] = 255; buf[o + 5] = 0; o += 6; // mask /24
         buf[o] = 3; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // router = us
-        buf[o] = 6; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(dns); o += 6; // DNS = the upstream resolver (WAN lease option 6; 8.8.8.8 until a lease exists)
-        buf[o] = 51; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(&3600u32.to_be_bytes()); o += 6; // lease 1h
+        buf[o] = 6; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(dns); o += 6; // DNS = the AP itself (Shield, ADR 0052)
+        buf[o] = 51; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(&(crate::dhcpd::LEASE_SECS as u32).to_be_bytes()); o += 6; // lease time
+        buf[o] = 15; buf[o + 1] = 9; buf[o + 2..o + 11].copy_from_slice(b"home.arpa"); o += 11; // domain name (RFC 8375)
     }
     buf[o] = 54; buf[o + 1] = 4; buf[o + 2..o + 6].copy_from_slice(our_ip); o += 6;   // server id
     buf[o] = 255; o += 1;
@@ -3747,7 +3706,12 @@ pub fn ap_handle_data_into(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], pool
     let mut cmac = [0u8; 6];
     let mut xid = [0u8; 4];
     let mut req_ip = [0u8; 4];
+    out.now = now_secs();
     match parse_client_dhcp(eth, &mut cmac, &mut xid, &mut req_ip) {
+        7 => {
+            out.release(&cmac); // DHCPRELEASE: the address is free at once
+            (0, 0)
+        }
         1 => {
             out.discovers += 1;
             let ip = match out.alloc_for(&cmac, pool_base) {
@@ -3771,6 +3735,8 @@ pub fn ap_handle_data_into(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], pool
             }
             out.client_mac = cmac;
             out.leased_ip = ip;
+            out.commit(&cmac);
+            out.note_identity(&cmac, &crate::dhcpd::client_identity(eth));
             let n = build_dhcp_server(reply, our_mac, &cmac, our_ip, &ip, dns, &xid, 5); // ACK
             (b'K', n)
         }

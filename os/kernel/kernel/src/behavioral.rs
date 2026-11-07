@@ -86,7 +86,7 @@ pub const BEACON_MIN_MEAN_INTERVAL: u64 = 8;
 /// NTP — exempt by default regardless of how regular the interval (FP guard #4 / L8).
 pub const BEACON_NTP_PORT: u16 = 123;
 
-const BEACON_KEYS: usize = 16;
+const BEACON_KEYS: usize = 256;
 /// Ring depth: last N timestamps → up to N-1 intervals. 8 holds MIN_CONNECTIONS (6) with
 /// headroom while keeping the per-key state tiny.
 const BEACON_RING: usize = 8;
@@ -207,7 +207,7 @@ pub const LATERAL_PORTS: &[u16] = &[22, 445, 3389, 5900, 5985, 5986];
 /// server / jump host → distinct==1, can never cross this).
 pub const LATERAL_THRESHOLD: u64 = 5;
 
-const LAT_SRCS: usize = 16;
+const LAT_SRCS: usize = 64;
 const LAT_PEER_SET: usize = 64;
 /// A short window — a real sweep is fast (parity with `DEFAULT_LATERAL_WINDOW_SECS`=300s).
 const LAT_WINDOW_SECS: u64 = 300;
@@ -297,7 +297,7 @@ pub fn lateral_distinct_peers(src: u32) -> u64 {
 /// bulk-exfil candidate. A conservative bar; observe-only, so a generous default only
 /// affects alert volume, never the wire.
 pub const EXFIL_BYTES_THRESH: u64 = 50_000_000; // 50 MB / window
-const EXFIL_SRCS: usize = 16;
+const EXFIL_SRCS: usize = 64;
 const EXFIL_WINDOW_SECS: u64 = 60;
 
 static EX_WIN: [AtomicU64; EXFIL_SRCS] = [const { AtomicU64::new(0) }; EXFIL_SRCS];
