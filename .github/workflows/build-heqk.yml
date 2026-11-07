@@ -68,7 +68,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools
-          targets: aarch64-unknown-none-softfloat
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
 
       - uses: Swatinem/rust-cache@v2
         with:
