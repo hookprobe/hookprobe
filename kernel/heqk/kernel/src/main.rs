@@ -3614,6 +3614,16 @@ fn cm5_p10_probe() {
                                     let client_dns = our_ip;
                                     let frame = &rx[off..off + len];
                                     let act = cyw43::ap_handle_data(frame, &ap.bssid, &our_ip, &pool_base, &client_dns, &mut dh);
+                                    // The Mission Control node (smoltcp) learns a client's MAC ONLY from ARP (smoltcp 0.13
+                                    // `process_arp`); the AP answers ARP for its address itself, so hand those ARP frames
+                                    // (requests for us + replies to us) to the node too — metal 2026-11-07: without this the
+                                    // node never resolved the iPhone and http://10.99.0.1 never loaded.
+                                    #[cfg(feature = "mcserve")]
+                                    if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 && frame[38..42] == our_ip {
+                                        if let Some(n) = mcn.as_mut() {
+                                            n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
+                                        }
+                                    }
                                     if act == b'K' {
                                         kprint!(" [P11-AP3] PASS — client {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} leased {}.{}.{}.{} (DORA {}/{}/{}/{}, leases={}, arp_replies={}) — WPA2 AP live\n",
                                             dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
