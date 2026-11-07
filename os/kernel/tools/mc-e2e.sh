@@ -108,6 +108,23 @@ DNS=$(curl -s -m 10 $C "$B/api/dns")
 echo "$DNS" | jget "'lists' in d and 'counters' in d and isinstance(d['recent'],list) and d['policy']['encrypted_dns'] in ('block','allow')" | grep -q True \
   && ok "Shield v2 /api/dns answers (lists, counters, policy, query log)" || bad "/api/dns: $DNS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/dns")" = 401 ] && ok "/api/dns requires the owner session" || bad "/api/dns reachable without a session"
+EN=$(curl -s -m 10 $C "$B/api/engines")
+echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=5 for e in d['engines'])" | grep -q True \
+  && ok "/api/engines: the device's real detection tiers, signature hits counted" || bad "/api/engines: $EN"
+ES=$(curl -s -m 10 $C "$B/api/evidence/stats")
+echo "$ES" | jget "d['nodes']['detections']>=5 and d['nodes']['incidents']>=1 and d['last_prune'] is None" | grep -q True \
+  && ok "/api/evidence/stats from live evidence (no prune fabricated)" || bad "/api/evidence/stats: $ES"
+EG=$(curl -s -m 10 $C "$B/api/evidence/graph?node=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$IID")")
+echo "$EG" | jget "d['node_count']>=2 and any(n['type']=='Threat' for n in d['nodes'])" | grep -q True \
+  && ok "/api/evidence/graph drills from the incident to its rules and targets" || bad "/api/evidence/graph: $EG"
+EF=$(curl -s -m 10 $C "$B/api/enforcement")
+echo "$EF" | jget "'policy' in d and isinstance(d['sources'],list) and d['count']==len(d['sources'])" | grep -q True \
+  && ok "/api/enforcement lists live enforcement (self-reverting, read-only)" || bad "/api/enforcement: $EF"
+RL=$(curl -s -m 10 $C "$B/api/reports")
+RID=$(echo "$RL" | jget "d['reports'][0]['id']")
+RD=$(curl -s -m 10 $C "$B/api/reports/$RID")
+echo "$RD" | jget "d['report']['device_ip']=='10.0.2.2' and len(d['report']['evidence_node_ids'])>=5 and len(d['report']['response_taken'])>=1" | grep -q True \
+  && ok "/api/reports/:id: a deterministic incident report with evidence ids and the actions taken" || bad "report: $RD"
 sleep 2
 Q=$(curl -s -m 10 $C "$B/api/qsecbit")
 echo "$Q" | jget "d['latest'] is not None and d['latest']['score']>0" | grep -q True && ok "QSecBit-lite risk rose under attack ($(echo "$Q" | jget "d['latest']"))" || bad "qsecbit: $Q"

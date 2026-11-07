@@ -93,8 +93,8 @@ pub const DET_CAP: usize = 256;
 const QS_CAP: usize = 64;
 /// Raw-score samples kept for the windowed risk (one per heartbeat, ~1 s apart).
 const RAW_CAP: usize = 64;
-/// Risk window: score points gained in the last `RISK_WINDOW_MS`.
-const RISK_WINDOW_MS: u64 = 60_000;
+/// Risk decay half-life (parity G5): a burst of detections fades to half its weight in 5 minutes.
+pub const RISK_HALF_LIFE_MS: u64 = 300_000;
 /// Points-in-window at which risk reaches 0.5 (risk = p / (p + K)).
 const RISK_HALF_POINTS: u64 = 20;
 const MAX_INCIDENTS: usize = 32;
@@ -178,6 +178,10 @@ pub struct McState {
     qhead: usize,
     qlen: usize,
     raw: [(u64, u32); RAW_CAP],
+    /// Decaying risk accumulator (points × 1000), the last raw score and when it was sampled.
+    q_acc: u64,
+    q_last_raw: u32,
+    q_last_ms: u64,
     rhead: usize,
     rlen: usize,
     boot_epoch_ms: u64,
@@ -199,6 +203,11 @@ pub struct McState {
     pub sealed_cap: u16,
     /// Passive inventory: (IPv4 host order, last seen epoch ms). 0 = empty slot.
     /// (ip, first seen, last seen) — epoch ms, or ms since the anchor before the clock syncs.
+    /// DHCP leases (AP/LAN images): the real device inventory (MAC, name, fingerprint). Lease times are
+    /// monotonic seconds; `lease_secs_at` is the cntpct-seconds of the copy for activity.
+    leases: [arch_aarch64::dhcpd::Lease; arch_aarch64::dhcpd::LEASES],
+    nleases: usize,
+    lease_now: u64,
     hosts: [(u32, u64, u64); HOST_CAP],
 }
 
@@ -217,6 +226,9 @@ impl McState {
             qhead: 0,
             qlen: 0,
             raw: [(0, 0); RAW_CAP],
+            q_acc: 0,
+            q_last_raw: 0,
+            q_last_ms: 0,
             rhead: 0,
             rlen: 0,
             boot_epoch_ms: 0,
@@ -231,6 +243,9 @@ impl McState {
             wan: None,
             sealed_cap: 0,
             hosts: [(0, 0, 0); HOST_CAP],
+            leases: [arch_aarch64::dhcpd::LEASE0; arch_aarch64::dhcpd::LEASES],
+            nleases: 0,
+            lease_now: 0,
         }
     }
 
@@ -351,7 +366,64 @@ impl McState {
     /// `GET /api/devices` → `{devices (most recently seen first), count}` — the LAN hosts this
     /// device has actually observed (IP only: heqk keeps no MAC per host, so `mac` is null rather
     /// than invented). Timestamps in epoch seconds, like `/api/detections`.
+    /// Copy the DHCP lease table (AP/LAN images) — the device inventory `/api/devices` serves.
+    pub fn set_leases(&mut self, d: &arch_aarch64::dhcpd::ApDhcp) {
+        self.nleases = d.nleases;
+        self.leases[..d.nleases].copy_from_slice(&d.leases[..d.nleases]);
+        self.lease_now = d.now;
+        self.change += 1;
+    }
+
+    fn render_lease_devices(&self, limit: usize, out: &mut JsonBuf) {
+        use arch_aarch64::dhcpd::{mac_is_private, os_guess};
+        let mut idx = [0u16; arch_aarch64::dhcpd::LEASES];
+        let mut n = 0usize;
+        for (i, l) in self.leases[..self.nleases].iter().enumerate() {
+            if l.used {
+                idx[n] = i as u16;
+                n += 1;
+            }
+        }
+        idx[..n].sort_unstable_by(|&a, &b| self.leases[b as usize].last.cmp(&self.leases[a as usize].last));
+        out.raw("{\"devices\":[");
+        let mut k = 0usize;
+        for &i in idx[..n].iter().take(limit) {
+            let l = &self.leases[i as usize];
+            let m = out.mark();
+            if k > 0 {
+                out.raw(",");
+            }
+            let [a, b, c, d] = l.ip;
+            let mm = l.mac;
+            let ep = |s: u64| self.epoch_ms(s.saturating_mul(self.cntfrq)) / 1000;
+            let _ = write!(out, "{{\"id\":\"dev-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\",\"ip\":\"{a}.{b}.{c}.{d}\",\"mac\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"first_seen\":{},\"last_seen\":{},\"hostname\":",
+                mm[0], mm[1], mm[2], mm[3], mm[4], mm[5], mm[0], mm[1], mm[2], mm[3], mm[4], mm[5], ep(l.first), ep(l.last));
+            if l.hlen > 0 {
+                out.string(core::str::from_utf8(&l.host[..l.hlen as usize]).unwrap_or(""));
+            } else {
+                out.raw("null");
+            }
+            let os = os_guess(&l.vendor[..l.vlen as usize], &l.prl[..l.plen as usize]);
+            out.raw(",\"os\":");
+            if os.is_empty() {
+                out.raw("null");
+            } else {
+                out.string(os);
+            }
+            let _ = write!(out, ",\"private_mac\":{},\"active\":{},\"source\":\"dhcp\"}}", mac_is_private(&l.mac), l.expires > self.lease_now);
+            if out.overflow || out.len + 32 > out.buf.len() {
+                out.rewind(m);
+                break;
+            }
+            k += 1;
+        }
+        let _ = write!(out, "],\"count\":{}}}", k);
+    }
+
     pub fn render_devices(&self, limit: usize, out: &mut JsonBuf) {
+        if self.nleases > 0 {
+            return self.render_lease_devices(limit, out);
+        }
         let mut idx = [0u16; HOST_CAP];
         let mut n = 0usize;
         for (i, h) in self.hosts.iter().enumerate() {
@@ -410,9 +482,11 @@ impl McState {
         Some(&self.dets[(self.dhead + self.dlen - 1 - i) % DET_CAP])
     }
 
-    /// Sample the kernel's lifetime QSecBit-lite score (a saturating, never-decaying sum) and
-    /// derive the CURRENT risk from its growth over the last minute: 0 on a quiet link, rising
-    /// under attack, falling back on its own when the attack stops.
+    /// Sample the kernel's lifetime QSecBit-lite score (a saturating, never-decaying sum of rule-hit
+    /// severity points + faults) and derive the CURRENT risk (parity G5): new points enter a decaying
+    /// accumulator (half-life `RISK_HALF_LIFE_MS`), so risk rises under attack and falls back smoothly
+    /// after it — not to GREEN a minute later (the old hard 60-s window). Every detection now scores by
+    /// severity whatever its wire verdict (`rules::fire`), so observe-only threats move the score too.
     pub fn sample_qsecbit(&mut self, now_ticks: u64, raw_score: u32) {
         let now = self.epoch_ms(now_ticks);
         self.raw[(self.rhead + self.rlen) % RAW_CAP] = (now, raw_score);
@@ -421,17 +495,21 @@ impl McState {
         } else {
             self.rhead = (self.rhead + 1) % RAW_CAP;
         }
-        // Oldest sample still inside the window.
-        let mut base = raw_score;
-        for i in 0..self.rlen {
-            let (t, s) = self.raw[(self.rhead + i) % RAW_CAP];
-            if now.saturating_sub(t) <= RISK_WINDOW_MS {
-                base = s;
-                break;
-            }
+        if self.q_last_ms == 0 && self.q_last_raw == 0 && self.q_acc == 0 {
+            self.q_last_raw = raw_score; // first sample: the baseline, not an attack
+            self.q_last_ms = now; // a lifetime score that predates the first sample is not current risk
         }
-        let p = raw_score.saturating_sub(base) as u64;
-        let risk = (p * 1000 / (p + RISK_HALF_POINTS)) as u32;
+        let dt = now.saturating_sub(self.q_last_ms);
+        let mut acc = self.q_acc;
+        let halvings = dt / RISK_HALF_LIFE_MS;
+        acc = if halvings >= 64 { 0 } else { acc >> halvings };
+        let rem = dt % RISK_HALF_LIFE_MS;
+        acc -= acc.saturating_mul(rem) / (2 * RISK_HALF_LIFE_MS); // linear within one half-life (≤ 2 % off)
+        acc = acc.saturating_add(raw_score.saturating_sub(self.q_last_raw) as u64 * 1000);
+        self.q_acc = acc;
+        self.q_last_raw = raw_score;
+        self.q_last_ms = now;
+        let risk = (acc * 1000 / (acc + RISK_HALF_POINTS * 1000)) as u32;
         self.qs[(self.qhead + self.qlen) % QS_CAP] = (now, risk);
         if self.qlen < QS_CAP {
             self.qlen += 1;
@@ -439,6 +517,11 @@ impl McState {
             self.qhead = (self.qhead + 1) % QS_CAP;
         }
         self.change += 1;
+    }
+
+    /// The latest risk sample (0..1000), 0 if none.
+    pub fn latest_risk(&self) -> u32 {
+        if self.qlen == 0 { 0 } else { self.qs[(self.qhead + self.qlen - 1) % QS_CAP].1 }
     }
 
     fn band(risk_milli: u32) -> &'static str {
@@ -767,8 +850,58 @@ impl McState {
             }
         }
         // attack path: source -> each target; each rule -> source
-        let _ = write!(out, "]}},\"attack_path\":{{\"incident\":\"inc:heqk:{}\",\"node_count\":{},\"edge_count\":{},\"nodes\":[", ip, 1 + nt + nr, nt + nr);
+        let _ = write!(out, "]}},\"attack_path\":{{\"incident\":\"inc:heqk:{}\",", ip);
+        self.path_json(src, out);
+        out.raw("}}"); // closes attack_path and the incident object
+        !out.overflow
+    }
+
+    /// Distinct rules and (target, port) pairs a source triggered, newest first (bounded).
+    fn path_parts(&self, src: u32) -> ([u16; 8], usize, [(u32, u16); 8], usize) {
+        let mut rules: [u16; 8] = [0; 8];
+        let mut nr = 0usize;
+        let mut tgts: [(u32, u16); 8] = [(0, 0); 8];
+        let mut nt = 0usize;
+        for i in 0..self.dlen {
+            let Some(d) = self.newest(i) else { break };
+            if d.src != src || rulecat::src_is_mac_hash(d.rule_id) {
+                continue;
+            }
+            if nr < rules.len() && !rules[..nr].contains(&d.rule_id) {
+                rules[nr] = d.rule_id;
+                nr += 1;
+            }
+            if d.dst != 0 && nt < tgts.len() && !tgts[..nt].contains(&(d.dst, d.dport)) {
+                tgts[nt] = (d.dst, d.dport);
+                nt += 1;
+            }
+        }
+        (rules, nr, tgts, nt)
+    }
+
+    /// `"node_count":N,"edge_count":E,"nodes":[…],"edges":[…]` for a source's subgraph: the source
+    /// device, every target it touched, every rule that fired on it (+ the device's DHCP identity).
+    fn path_json(&self, src: u32, out: &mut JsonBuf) {
+        let (rules, nr, tgts, nt) = self.path_parts(src);
+        let mut tmp = [0u8; 16];
+        let ip = ipv4(src, &mut tmp);
+        let lease = self.leases[..self.nleases].iter().find(|l| l.used && u32::from_be_bytes(l.ip) == src);
+        let nl = lease.is_some() as usize;
+        let _ = write!(out, "\"node_count\":{},\"edge_count\":{},\"nodes\":[", 1 + nt + nr + nl, nt + nr + nl);
         let _ = write!(out, "{{\"id\":\"ip:{}\",\"type\":\"Device\",\"label\":\"{}\"}}", ip, ip);
+        if let Some(l) = lease {
+            let m = l.mac;
+            let _ = write!(out, ",{{\"id\":\"dev-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\",\"type\":\"Interface\",\"label\":", m[0], m[1], m[2], m[3], m[4], m[5]);
+            let mut lb = [0u8; 64];
+            let mut lw = JsonBuf::new(&mut lb[..]);
+            if l.hlen > 0 {
+                let _ = write!(lw, "{} ", core::str::from_utf8(&l.host[..l.hlen as usize]).unwrap_or(""));
+            }
+            let _ = write!(lw, "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5]);
+            let ll = lw.len;
+            out.string(core::str::from_utf8(&lb[..ll]).unwrap_or("device"));
+            out.raw("}");
+        }
         for &(d, p) in &tgts[..nt] {
             let mut t2 = [0u8; 16];
             let dip = ipv4(d, &mut t2);
@@ -781,6 +914,11 @@ impl McState {
         }
         out.raw("],\"edges\":[");
         let mut e = 0;
+        if let Some(l) = lease {
+            let m = l.mac;
+            let _ = write!(out, "{{\"src\":\"dev-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\",\"type\":\"has_address\",\"dst\":\"ip:{}\"}}", m[0], m[1], m[2], m[3], m[4], m[5], ip);
+            e += 1;
+        }
         for &(d, p) in &tgts[..nt] {
             let mut t2 = [0u8; 16];
             let dip = ipv4(d, &mut t2);
@@ -791,7 +929,278 @@ impl McState {
             let _ = write!(out, "{}{{\"src\":\"rule:{}\",\"type\":\"detected_on\",\"dst\":\"ip:{}\"}}", if e > 0 { "," } else { "" }, rulecat::HEQK_RULE_BAND + r as u32, ip);
             e += 1;
         }
-        out.raw("]}}");
+        out.raw("]");
+    }
+
+    /// Detection tiers (by catalogue category) for `/api/engines`.
+    const TIERS: [(&'static str, &'static str, &'static [&'static str]); 5] = [
+        ("Signature rules (BPF)", "signature", &["signature", "ioc_match"]),
+        ("Scan & flood detection", "stateful", &["port_scan", "syn_flood", "evasion"]),
+        ("Behavioral (beacon / lateral / exfil / DGA)", "behavioral", &["beaconing", "lateral_movement", "exfiltration", "dns_dga"]),
+        ("L2 guard (ARP / MAC flood / storm / RA)", "l2", &["arp_spoof", "mac_flood", "bcast_storm", "malformed_frame", "ra_flood", "rogue_ra"]),
+        ("Resource shed (DoS / exhaustion)", "shed", &["resource_shed"]),
+    ];
+
+    /// `GET /api/engines` — the device's real detection tiers: catalogue rules per tier, hits in the
+    /// retained detections, last hit; plus Shield (DNS). `source` is always `"real"` (heqk-served).
+    pub fn render_engines(&self, shield: (usize, u64), out: &mut JsonBuf) {
+        out.raw("{\"engines\":[");
+        for (k, (name, kind, cats)) in Self::TIERS.iter().enumerate() {
+            let mut rules = 0u32;
+            for id in 0u16..1024 {
+                if rulecat::lookup(id).map_or(false, |r| cats.contains(&r.category)) {
+                    rules += 1;
+                }
+            }
+            if *kind == "signature" {
+                rules = rules.max(crate::rules::active_rules() as u32);
+            }
+            let (mut hits, mut last) = (0u32, 0u64);
+            for i in 0..self.dlen {
+                let Some(d) = self.newest(i) else { break };
+                if cats.contains(&rulecat::lookup_or_generic(d.rule_id).category) {
+                    hits += 1;
+                    last = last.max(d.ts_ms);
+                }
+            }
+            out.raw(if k > 0 { ",{\"name\":" } else { "{\"name\":" });
+            out.string(name);
+            let _ = write!(out, ",\"kind\":\"{}\",\"source\":\"real\",\"status\":\"{}\",\"loaded_rules\":{},\"skipped_rules\":0,\"hits\":{},\"last_run_ts\":",
+                kind, if rules > 0 { "active" } else { "not_yet_run" }, rules, hits);
+            if last > 0 {
+                ts(out, last);
+            } else {
+                out.raw("null");
+            }
+            out.raw("}");
+        }
+        let _ = write!(out, ",{{\"name\":\"Shield DNS (ADR 0052)\",\"kind\":\"dns\",\"source\":\"real\",\"status\":\"{}\",\"loaded_rules\":{},\"skipped_rules\":0,\"hits\":{},\"last_run_ts\":null}}]}}",
+            if shield.0 > 0 { "active" } else { "not_yet_run" }, shield.0, shield.1);
+    }
+
+    /// Distinct attributed sources (incidents) in the ring.
+    fn incident_sources(&self, out: &mut [u32; MAX_INCIDENTS]) -> usize {
+        let mut n = 0;
+        for i in 0..self.dlen {
+            let Some(d) = self.newest(i) else { break };
+            if d.src == 0 || rulecat::src_is_mac_hash(d.rule_id) || out[..n].contains(&d.src) {
+                continue;
+            }
+            if n < MAX_INCIDENTS {
+                out[n] = d.src;
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// `GET /api/evidence/stats` — what the device holds in memory now (no database: RAM rings, never
+    /// pruned — oldest overwritten; `last_prune` is therefore null, never fabricated).
+    pub fn render_evidence_stats(&self, flows: usize, dns_queries: u64, out: &mut JsonBuf) {
+        let mut inc = [0u32; MAX_INCIDENTS];
+        let ni = self.incident_sources(&mut inc);
+        let devices = if self.nleases > 0 { self.leases[..self.nleases].iter().filter(|l| l.used).count() } else { self.hosts.iter().filter(|h| h.0 != 0).count() };
+        let attributed = (0..self.dlen).filter_map(|i| self.newest(i)).filter(|d| d.src != 0 && !rulecat::src_is_mac_hash(d.rule_id)).count();
+        let targeted = (0..self.dlen).filter_map(|i| self.newest(i)).filter(|d| d.dst != 0).count();
+        let bytes = core::mem::size_of::<Det>() * DET_CAP + core::mem::size_of_val(&self.leases);
+        let _ = write!(out, "{{\"nodes\":{{\"devices\":{},\"detections\":{},\"incidents\":{},\"flows\":{},\"dns_queries\":{},\"reports\":{}}},\"total_edges\":{},\"edges_by_type\":{{\"incident_includes_detection\":{},\"detection_targets\":{}}},\"db_size_bytes\":{},\"storage\":\"ram\",\"last_prune\":null}}",
+            devices, self.dlen, ni, flows, dns_queries, ni, attributed + targeted, attributed, targeted, bytes);
+    }
+
+    /// `GET /api/evidence/graph?node=<id>` — the subgraph around any node id the UI shows:
+    /// `inc:heqk:IP`, `ip:IP`, `rep:heqk:IP`, `det:heqk:SEQ`, `dev-<mac>`, `rule:ID`. None = unknown node.
+    pub fn render_graph(&self, node: &str, out: &mut JsonBuf) -> bool {
+        let node_dec = |p: &str| -> Option<u32> {
+            let mut v = 0u32;
+            let mut parts = 0;
+            for t in p.split('.') {
+                let o: u32 = t.parse().ok().filter(|&o| o <= 255 && !t.is_empty() && t.len() <= 3)?;
+                v = (v << 8) | o;
+                parts += 1;
+            }
+            (parts == 4).then_some(v)
+        };
+        let src = if let Some(r) = node.strip_prefix("inc:heqk:").or_else(|| node.strip_prefix("rep:heqk:")).or_else(|| node.strip_prefix("ip:")) {
+            node_dec(r)
+        } else if let Some(r) = node.strip_prefix("det:heqk:") {
+            let seq: u64 = r.parse().ok().unwrap_or(u64::MAX);
+            (0..self.dlen).filter_map(|i| self.newest(i)).find(|d| d.seq == seq).map(|d| d.src).filter(|&s| s != 0)
+        } else if let Some(r) = node.strip_prefix("dev-") {
+            self.leases[..self.nleases].iter().find(|l| {
+                let mut hb = [0u8; 12];
+                for (k, b) in l.mac.iter().enumerate() {
+                    hb[2 * k] = b"0123456789abcdef"[(b >> 4) as usize];
+                    hb[2 * k + 1] = b"0123456789abcdef"[(b & 15) as usize];
+                }
+                l.used && r.as_bytes() == &hb[..]
+            }).map(|l| u32::from_be_bytes(l.ip))
+        } else if let Some(r) = node.strip_prefix("rule:") {
+            // a rule: the rule + every source it fired on
+            let Some(id) = r.parse::<u32>().ok().and_then(|v| v.checked_sub(rulecat::HEQK_RULE_BAND)).filter(|&v| v <= u16::MAX as u32) else { return false };
+            let id = id as u16;
+            let mut srcs = [0u32; 16];
+            let mut n = 0;
+            for i in 0..self.dlen {
+                let Some(d) = self.newest(i) else { break };
+                if d.rule_id == id && d.src != 0 && !srcs[..n].contains(&d.src) && n < 16 {
+                    srcs[n] = d.src;
+                    n += 1;
+                }
+            }
+            if n == 0 {
+                return false;
+            }
+            out.raw("{\"node\":");
+            out.string(node);
+            out.raw(",\"incident\":");
+            out.string(node);
+            let _ = write!(out, ",\"node_count\":{},\"edge_count\":{},\"nodes\":[{{\"id\":\"rule:{}\",\"type\":\"Threat\",\"label\":", 1 + n, n, rulecat::HEQK_RULE_BAND + id as u32);
+            out.string(rulecat::lookup_or_generic(id).msg);
+            out.raw("}");
+            for &sv in &srcs[..n] {
+                let mut t = [0u8; 16];
+                let sp = ipv4(sv, &mut t);
+                let _ = write!(out, ",{{\"id\":\"ip:{}\",\"type\":\"Device\",\"label\":\"{}\"}}", sp, sp);
+            }
+            out.raw("],\"edges\":[");
+            for (k, &sv) in srcs[..n].iter().enumerate() {
+                let mut t = [0u8; 16];
+                let _ = write!(out, "{}{{\"src\":\"rule:{}\",\"type\":\"detected_on\",\"dst\":\"ip:{}\"}}", if k > 0 { "," } else { "" }, rulecat::HEQK_RULE_BAND + id as u32, ipv4(sv, &mut t));
+            }
+            out.raw("]}");
+            return !out.overflow;
+        } else {
+            None
+        };
+        let Some(src) = src else { return false };
+        let known = (0..self.dlen).filter_map(|i| self.newest(i)).any(|d| d.src == src)
+            || self.leases[..self.nleases].iter().any(|l| l.used && u32::from_be_bytes(l.ip) == src);
+        if !known {
+            return false;
+        }
+        out.raw("{\"node\":");
+        out.string(node);
+        out.raw(",\"incident\":");
+        out.string(node);
+        out.raw(",");
+        self.path_json(src, out);
+        out.raw("}");
+        !out.overflow
+    }
+
+    /// `GET /api/reports` — one deterministic report per incident (generated on demand from the evidence).
+    pub fn render_reports(&self, limit: usize, out: &mut JsonBuf) {
+        let mut inc = [0u32; MAX_INCIDENTS];
+        let ni = self.incident_sources(&mut inc);
+        out.raw("{\"reports\":[");
+        let mut k = 0;
+        for &src in inc[..ni].iter().take(limit) {
+            let Some((worst, last, count, rule)) = self.incident_of(src) else { continue };
+            let m = out.mark();
+            let mut t = [0u8; 16];
+            let ip = ipv4(src, &mut t);
+            let _ = write!(out, "{}{{\"id\":\"rep:heqk:{}\",\"ts\":", if k > 0 { "," } else { "" }, ip);
+            ts(out, last);
+            let _ = write!(out, ",\"incident_id\":\"inc:heqk:{}\",\"title\":", ip);
+            let mut tb = [0u8; 128];
+            let mut tw = JsonBuf::new(&mut tb[..]);
+            let _ = write!(tw, "Incident report — {} from {}", rulecat::lookup_or_generic(rule).msg, ip);
+            let tl = tw.len;
+            out.string(core::str::from_utf8(&tb[..tl]).unwrap_or("Incident report"));
+            out.raw(",\"summary\":");
+            let mut sb = [0u8; 200];
+            let mut sw = JsonBuf::new(&mut sb[..]);
+            let _ = write!(sw, "{} detection(s); worst severity {}; generated on this device from its own evidence (deterministic, no AI).", count, worst);
+            let sl = sw.len;
+            out.string(core::str::from_utf8(&sb[..sl]).unwrap_or(""));
+            out.raw("}");
+            if out.overflow || out.len + 32 > out.buf.len() {
+                out.rewind(m);
+                break;
+            }
+            k += 1;
+        }
+        let _ = write!(out, "],\"count\":{}}}", k);
+    }
+
+    /// `GET /api/reports/:id` — the incident frozen into a report: MITRE techniques, the timeline, the
+    /// responses the device actually took (from each detection's wire verdict/class), evidence ids.
+    pub fn render_report(&self, src: u32, now_ticks: u64, out: &mut JsonBuf) -> bool {
+        let Some((worst, last, count, rule)) = self.incident_of(src) else { return false };
+        let mut t = [0u8; 16];
+        let ip = ipv4(src, &mut t);
+        let worst = worst.clamp(1, 5);
+        let _ = write!(out, "{{\"id\":\"rep:heqk:{}\",\"ts\":", ip);
+        ts(out, last);
+        let _ = write!(out, ",\"incident_id\":\"inc:heqk:{}\",\"title\":", ip);
+        let mut tb = [0u8; 128];
+        let mut tw = JsonBuf::new(&mut tb[..]);
+        let _ = write!(tw, "Incident report — {} from {}", rulecat::lookup_or_generic(rule).msg, ip);
+        let tl = tw.len;
+        let title = core::str::from_utf8(&tb[..tl]).unwrap_or("Incident report");
+        out.string(title);
+        let _ = write!(out, ",\"summary\":\"{} detection(s) attributed to {}\",\"report\":{{\"incident_id\":\"inc:heqk:{}\",\"title\":", count, ip, ip);
+        out.string(title);
+        let conf = (0..self.dlen).filter_map(|i| self.newest(i)).filter(|d| d.src == src).any(|d| Self::class_confidence(d.class) == "0.9");
+        let _ = write!(out, ",\"device_ip\":\"{}\",\"priority\":\"{}\",\"status\":\"open\",\"confidence\":{},\"mitre_techniques\":[", ip,
+            if worst <= rulecat::SEV_HIGH { "High" } else { "Medium" }, if conf { "0.9" } else { "0.5" });
+        let (rules, nr, _, _) = self.path_parts(src);
+        let mut seen: [&str; 8] = [""; 8];
+        let mut ns = 0;
+        for &r in &rules[..nr] {
+            let m = rulecat::lookup_or_generic(r).mitre;
+            if !m.is_empty() && !seen[..ns].contains(&m) && ns < 8 {
+                seen[ns] = m;
+                ns += 1;
+            }
+        }
+        for (k, m) in seen[..ns].iter().enumerate() {
+            if k > 0 {
+                out.raw(",");
+            }
+            out.string(m);
+        }
+        out.raw("],\"timeline\":");
+        let tm = out.mark();
+        // reuse the timeline renderer, then keep only its events array
+        let mut tlb = [0u8; 8192];
+        let mut tlw = JsonBuf::new(&mut tlb[..]);
+        self.render_timeline(src, now_ticks, &mut tlw);
+        let tj = core::str::from_utf8(tlw.bytes()).unwrap_or("");
+        match (tj.find("\"events\":"), tj.rfind("],\"count\"")) {
+            (Some(a), Some(b)) if b > a => out.raw(&tj[a + 9..b + 1]),
+            _ => {
+                out.rewind(tm);
+                out.raw("[]");
+            }
+        }
+        out.raw(",\"process_tree\":[],\"response_taken\":[");
+        let mut k = 0;
+        for i in 0..self.dlen {
+            let Some(d) = self.newest(i) else { break };
+            if d.src != src || k >= 20 {
+                continue;
+            }
+            let action = if d.verdict == 2 { Self::class_name(d.class) } else { "observed" };
+            let _ = write!(out, "{}{{\"id\":\"resp:heqk:{}\",\"ts\":", if k > 0 { "," } else { "" }, d.seq);
+            ts(out, d.ts_ms);
+            let _ = write!(out, ",\"action\":\"{}\",\"target\":\"{}\",\"mechanism\":\"heqk inline verdict\",\"detail\":", action, ip);
+            out.string(rulecat::lookup_or_generic(d.rule_id).msg);
+            let _ = write!(out, ",\"status\":\"{}\"}}", if d.verdict == 2 { "enforced" } else { "observe-only" });
+            k += 1;
+        }
+        out.raw("],\"evidence_node_ids\":[");
+        let mut k = 0;
+        for i in 0..self.dlen {
+            let Some(d) = self.newest(i) else { break };
+            if d.src == src && k < 32 {
+                let _ = write!(out, "{}\"det:heqk:{}\"", if k > 0 { "," } else { "" }, d.seq);
+                k += 1;
+            }
+        }
+        out.raw("],\"generated_ts\":");
+        ts(out, self.epoch_ms(now_ticks));
+        out.raw("}}");
         !out.overflow
     }
 
