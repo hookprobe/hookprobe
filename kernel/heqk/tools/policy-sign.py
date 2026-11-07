@@ -4,10 +4,12 @@
   policy-sign.py keygen KEYFILE              # new Ed25519 operator key (mode 600); prints the public key hex
   policy-sign.py pubkey KEYFILE              # public key hex (-> HEQK_POLICY_PUBKEY for the image factory)
   policy-sign.py sign KEYFILE POLICY.TXT GEN OUT.SIG   # POLICY.TXT = the exact 4096-byte staged file
+  policy-sign.py sign-blocklist KEYFILE BLOCK.TXT GEN OUT.SIG   # Shield DNS blocklist (any length <= 4 MiB)
 
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
-and refuses a generation below the image's floor. Keep KEYFILE off the device (it is the operator's authority).
+and refuses a generation below the image's floor.
+BLOCK.SIG (512 B): "HQBSIG1\\0" | gen u64 LE | len u64 LE | sha256(BLOCK.TXT) | Ed25519(key, "HQBLK1"|gen|len|sha256) | 0-pad. Keep KEYFILE off the device (it is the operator's authority).
 """
 import hashlib, os, struct, sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -42,6 +44,15 @@ def main():
         sig = k.sign(b"HQPOL1" + struct.pack("<Q", gen) + d)
         open(out, "wb").write((b"HQPSIG1\0" + struct.pack("<Q", gen) + d + sig).ljust(512, b"\0"))
         print(f"POLICY.SIG written (generation {gen})")
+    elif a[:1] == ["sign-blocklist"] and len(a) == 5:
+        k, body, gen, out = load(a[1]), open(a[2], "rb").read(), int(a[3]), a[4]
+        if len(body) > 4 << 20:
+            sys.exit("BLOCK.TXT larger than 4 MiB")
+        d = hashlib.sha256(body).digest()
+        meta = struct.pack("<QQ", gen, len(body))
+        sig = k.sign(b"HQBLK1" + meta + d)
+        open(out, "wb").write((b"HQBSIG1\0" + meta + d + sig).ljust(512, b"\0"))
+        print(f"BLOCK.SIG written (generation {gen}, {len(body)} bytes)")
     else:
         sys.exit(__doc__)
 

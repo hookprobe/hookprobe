@@ -103,11 +103,11 @@ const PillarGrid: Component = () => {
           ctx="shield"
           title="Shield"
           icon="🛡"
-          kpi={unreported() ? (devWan() ? devWan()!.dnsInspected.toLocaleString() : NA.kpi) : shield().adsBlocked.toLocaleString()}
-          sub={unreported() ? (devWan() ? 'DNS queries inspected by the IDS' : NA.sub) : `ads, trackers & ${shield().malwareStopped} malware sites blocked today`}
-          detail={unreported() ? (devWan() ? 'every client resolves through this device · no blocklist yet' : undefined) : 'dnsXai resolver · protecting all devices · on since setup'}
-          badge={unreported() ? (devWan() ? 'Inspecting' : NA.badge) : 'Active'}
-          badgeClass={unreported() ? (devWan() ? 'badge--blue' : NA.badgeClass) : 'badge--green'}
+          kpi={unreported() ? (devWan() ? (devWan()!.blocklist > 0 ? devWan()!.dnsBlocked : devWan()!.dnsInspected).toLocaleString() : NA.kpi) : shield().adsBlocked.toLocaleString()}
+          sub={unreported() ? (devWan() ? (devWan()!.blocklist > 0 ? `blocked of ${devWan()!.dnsInspected.toLocaleString()} DNS queries` : 'DNS queries inspected by the IDS') : NA.sub) : `ads, trackers & ${shield().malwareStopped} malware sites blocked today`}
+          detail={unreported() ? (devWan() ? (devWan()!.blocklist > 0 ? `blocklist: ${devWan()!.blocklist.toLocaleString()} domains · answered on this device` : 'every client resolves through this device · no blocklist loaded') : undefined) : 'dnsXai resolver · protecting all devices · on since setup'}
+          badge={unreported() ? (devWan() ? (devWan()!.blocklist > 0 ? 'Active' : 'Inspecting') : NA.badge) : 'Active'}
+          badgeClass={unreported() ? (devWan() ? (devWan()!.blocklist > 0 ? 'badge--green' : 'badge--blue') : NA.badgeClass) : 'badge--green'}
           href="/network/dns"
           action="Manage"
         />
