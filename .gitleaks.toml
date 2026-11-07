@@ -8,12 +8,17 @@
 # allows (path/regex, never a blanket rule-disable) so a genuine new leak is
 # never masked by an over-broad allowlist.
 #
+# Format: gitleaks v8 — ONE [allowlist] table with `paths` (file-path regexes).
+# (The previous `[[allowlist.paths]]` array-of-tables form is not valid gitleaks
+# config: the CLI refused to load it — "AllowList.Paths[0] expected type string".)
+# Verify locally:  podman run --rm -v "$PWD:/repo:ro,Z" -w /repo \
+#   ghcr.io/gitleaks/gitleaks:v8.30.1 dir --config .gitleaks.toml .
+#
 # Consumed by:
-#   .github/workflows/secrets-scan.yml  (gitleaks/gitleaks-action@v2, CI gate)
-#   tools/build/git-hooks/pre-push               (local grep tripwire mirrors the same
-#                                          patterns/intent, pure-grep -- see that
-#                                          script's header for why it can't run
-#                                          the real gitleaks binary on this box)
+#   .github/workflows/secrets-scan.yml       (gitleaks CLI, CI gate)
+#   tools/build/git-hooks/pre-push           (local grep tripwire mirrors the same
+#                                             patterns/intent, pure grep — see that
+#                                             script's header)
 # =============================================================================
 
 title = "HookProbe OS gitleaks config"
@@ -25,50 +30,26 @@ title = "HookProbe OS gitleaks config"
 useDefault = true
 
 [allowlist]
-# Global (non-path-scoped) regex allowlist, description-commented per entry.
-# Keep this list SHORT -- prefer the path-scoped `[[rules]]`-style targeted
-# allowlists below wherever possible; only use `regexes` here for a pattern
-# that must be exempted anywhere it appears (e.g. a fully-qualified filename
-# glob gitleaks can match regardless of directory depth).
-regexes = [
-  # Any public key material -- a `.pub` file or a filename containing
-  # "public" is, by definition, not a secret. Mirrors .gitignore's own
-  # `!**/*.pub` / `!**/*public*.pem` allow-exceptions on the tracking side.
+description = "Verified-safe, path-scoped exceptions (each one justified below)"
+paths = [
+  # (a) Public key material -- any *.pub file, or any *.pem with "public" in its
+  # name. Public keys are meant to be public (trust stores and release-verification
+  # keys are baked into shipped images on purpose). Mirrors .gitignore's own
+  # `!**/*.pub` / `!**/*public*.pem` exceptions on the tracking side.
   '''.*\.pub$''',
   '''.*public.*\.pem$''',
-]
 
-[[allowlist.paths]]
-# (b) Any *.pub file, or any *.pem file with "public" in its name, anywhere
-# in the tree -- public keys are meant to be public (trust stores, release
-# verification keys, etc. are baked into shipped images on purpose). This is
-# a path-based mirror of the `regexes` entry above, kept for gitleaks rule
-# variants that match on path rather than content.
-paths = [
-  '''.*\.pub$''',
-  '''.*public.*\.pem$''',
-]
-
-[[allowlist.paths]]
-# (c) builder/release.key(.mldsa) -- the DETERMINISTIC dev module-signing key
-# (see docs/adr/0046-github-migration-and-key-custody.md, "Deterministic dev
-# release-signing key" note; derived in
-# crates/hookprobe-manifest/src/module_sig.rs::load_or_create_release_key from
-# Sha256("hookprobe-dev-release-key-v1")). It is PUBLIC-BY-DESIGN: anyone can
-# regenerate the byte-identical key from that published constant, so it is
-# not secret material by definition and gitleaks flagging it as a "private
-# key" would be a pure false positive. NOTE: this key was ALSO purged from
-# git history in the 2026-07-25 filter-repo pass as supply-chain hygiene (a
-# public repo should not ship key-shaped blobs even non-secret ones) and
-# .gitignore keeps it untracked going forward -- so in the normal case this
-# allowlist entry never actually matches anything in the tree; it exists so
-# that IF a developer's local dev build regenerates builder/release.key and
-# it is accidentally staged, the CI gate fails on "should not be committed"
-# grounds via .gitignore/review, not on a misleading "you leaked a secret"
-# gitleaks false-positive that would send someone down a rotation fire-drill
-# for a key that was never secret. Real production signing NEVER uses this
-# key (HSM-held keys + cosign keyless-OIDC only, ADR 0002 §3 / ADR 0046 D4).
-paths = [
+  # (b) legacy/linux-tier/builder/release.key(.mldsa) -- the DETERMINISTIC dev
+  # module-signing key (docs/adr/0046-github-migration-and-key-custody.md,
+  # "Deterministic dev release-signing key"; derived in
+  # legacy/linux-tier/crates/hookprobe-manifest/src/module_sig.rs from
+  # Sha256("hookprobe-dev-release-key-v1")). PUBLIC-BY-DESIGN: anyone can regenerate
+  # the byte-identical key from that published constant. It was also purged from
+  # history (2026-07-25) and .gitignore keeps it untracked, so normally this entry
+  # matches nothing; it exists so an accidentally staged dev key fails review on
+  # "should not be committed" grounds rather than as a misleading "leaked secret"
+  # that would trigger a rotation fire-drill for a key that was never secret.
+  # Production signing NEVER uses it (HSM keys + cosign keyless only, ADR 0002/0046).
   '''^legacy/linux-tier/builder/release\.key$''',
   '''^legacy/linux-tier/builder/release\.key\.mldsa$''',
 ]
