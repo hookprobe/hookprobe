@@ -82,6 +82,11 @@ jobs:
       - name: heqk validate.sh (build + QEMU boot + phase-gate report)
         run: ./validate.sh
         working-directory: os/kernel
+        env:
+          # GitHub runners emulate aarch64 under TCG with no acceleration: several times slower
+          # than the dev box, so the 150 s default boot budget cuts the long main boot short and
+          # late markers go "missing" (phantom FAILs). validate.sh annotates the failing gates.
+          HEQK_QEMU_TIMEOUT: "900"
 
       # validate.sh boots the QEMU flavor only; the SHIPPED image is `--features prod`
       # (os/build/make-cm5-heqk-image.sh). This gate keeps the shipped flavor building and
