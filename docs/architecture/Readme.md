@@ -475,28 +475,27 @@ The architecture is built to *support* certification, not to claim it: immutable
 
 ## Repository layout
 
+Merged repo `hookprobe` (2026-11-07; old → new paths in [`docs/PATHS.md`](../PATHS.md)):
+
 ```
-hookprobe-os/
-├── base/                  # Containerfile(s): Debian bootc base, kernel, runtimes
-│   └── profiles/          # edge-lite | edge-pro | cloud | virtual | dev
-├── bootstrap/             # hardware discovery + signed manifest generation
-├── supervisor/            # reconciler: hookprobe.yaml ↔ manifest ↔ modules
-├── manifest/              # JSON Schema + signing for the Platform Manifest
-├── modules/               # one dir per module (module.yaml + Rust/TinyGo or Containerfile)
-│   ├── napse/             # runtime: wasm
-│   ├── hydra/             # runtime: wasm
-│   └── ovs/               # image layer / sysext
-├── builder/               # CI + bootc-image-builder + thin builder.hookprobe.com
-├── ui/                    # Mission Control (manifest-driven)
-├── fleet/                 # GitOps agent + desired-state schema
-├── security/              # SBOM/CBOM generation, signing, SLSA provenance, crypto policy
-└── platforms/             # one manifest YAML per board/SKU
-    ├── rpi5.yaml
-    ├── rk3588.yaml
-    └── edge-pro.yaml      # future HookProbe hardware = just another file
+hookprobe/
+├── os/
+│   ├── kernel/            # heqk: the microkernel substrate + app host (ADR 0043/0044/0047)
+│   ├── mission-control/   # Mission Control UI, embedded into and served by heqk
+│   ├── build/             # image build engine: signed boot set + factory disk image
+│   └── drivers/ networking/ security/ device-identity/ provisioning/   # indexes into os/kernel
+├── appliance/             # hardware profiles: cm5/, waveshare-dual-eth/
+├── onboarding/            # wifi/, enrollment/ (+ host control-plane responder), setup-ui/
+├── docs/                  # architecture/, getting-started/, security/, roadmap/, adr/, design/
+├── tools/                 # build/, flash/, diagnostics/
+└── legacy/
+    ├── v1/                # the original HookProbe (Python/Zig)
+    └── linux-tier/        # the bootc/Debian tier described in parts of this doc: base/, bootstrap/,
+                           # supervisor/, manifest/, modules/, builder/, fleet/, security/, platforms/,
+                           # crates/ (hookprobe-api = the API contract heqk implements)
 ```
 
-**Adding future hardware = one file in `platforms/`.** No UI, installer, or API change. That is the test that the design worked.
+**Adding future hardware = one profile in `appliance/`.** No UI, installer, or API change. That is the test that the design worked.
 
 ---
 
