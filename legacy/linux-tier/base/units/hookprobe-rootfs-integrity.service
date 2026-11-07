@@ -1,0 +1,18 @@
+[Unit]
+Description=HookProbe OS rootfs integrity posture (dm-verity → QSECBIT)
+# Reports whether the rootfs is dm-verity-enforced / offline-verified / unprotected. On the Pi this is
+# the primary boot-integrity signal (no TPM/UEFI-SB). See ADR 0006 (H3).
+After=local-fs.target var-lib-hookprobe.mount
+Wants=var-lib-hookprobe.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/rootfs-integrity-check.sh
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hookprobe
+ProtectHome=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,40 @@
+---
+/**
+ * Shell — HTML document wrapper.
+ *
+ * Provides: <html>, <head> (charset, viewport, meta, CSS import), <body>.
+ * JS is supplied by the page's Solid client:load island plus the SampleDataNotice island
+ * (heqk honesty label: which views are sample data).
+ */
+
+import '../styles/global.css';
+import SampleDataNotice from '../components/SampleDataNotice';
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title       = 'Mission Control — HookProbe OS',
+  description = 'HookProbe OS V2: the operating system. SOC is its default workspace. Hardware only unlocks capabilities.',
+} = Astro.props;
+---
+
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content={description} />
+    <!-- Dark mode only; never flash white -->
+    <meta name="color-scheme" content="dark" />
+    <title>{title}</title>
+    <!-- Favicon: minimal HookProbe glyph -->
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  </head>
+  <body>
+    <slot />
+    <SampleDataNotice client:load />
+  </body>
+</html>

@@ -1,0 +1,58 @@
+#!/bin/sh
+# initramfs-tools local-top (boot) — set up /dev/mapper/hpverity as a READ-ONLY, dm-verity-verified
+# view of the rootfs so root=/dev/mapper/hpverity mounts a tamper-evident root. FALLBACK-SAFE: on ANY
+# failure it creates hpverity as a plain dm-linear passthrough so the Pi still boots (unverified) —
+# it can never brick. Params come from cmdline: verity.roothash / verity.data / verity.boot /
+# verity.hashfile. See docs/adr/0006-os-hardening.md (H3b).
+PREREQ=""
+prereqs() { echo "$PREREQ"; }
+case "${1:-}" in prereqs) prereqs; exit 0 ;; esac
+. /scripts/functions
+
+ROOTHASH=""; VDATA=""; HASHFILE="rootfs.verity"; BOOTDEV=""
+for x in $(cat /proc/cmdline); do
+  case "$x" in
+    verity.roothash=*) ROOTHASH="${x#verity.roothash=}" ;;
+    verity.data=*)     VDATA="${x#verity.data=}" ;;
+    verity.hashfile=*) HASHFILE="${x#verity.hashfile=}" ;;
+    verity.boot=*)     BOOTDEV="${x#verity.boot=}" ;;
+  esac
+done
+
+[ -n "$ROOTHASH" ] || exit 0            # no verity requested → normal root= mount proceeds
+: "${VDATA:=/dev/mmcblk0p2}"
+: "${BOOTDEV:=/dev/mmcblk0p1}"
+
+# Bring up + SETTLE the SD/MMC stack before touching the block devices. The previous 10s spin failed
+# because udev hadn't created /dev/mmcblk0p* yet → veritysetup + the fallback both saw "no such device"
+# → hpverity never appeared → "waiting for root filesystem". Mirror the initramfs's own robust wait:
+# explicit modprobe of the Pi SD drivers + `udevadm settle` + a long device-appear wait.
+for m in sdhci_iproc sdhci-of-arasan sdhci_pltfm mmc_block bcm2835 dwc2 dm_verity dm_mod vfat; do
+  modprobe "$m" 2>/dev/null
+done
+command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=30 2>/dev/null
+
+i=0; while [ $i -lt 600 ]; do            # up to ~60s for the SD partitions to enumerate
+  [ -b "$VDATA" ] && [ -b "$BOOTDEV" ] && break
+  [ $((i % 50)) -eq 0 ] && command -v udevadm >/dev/null 2>&1 && udevadm settle --timeout=5 2>/dev/null
+  sleep 0.1; i=$((i+1))
+done
+
+fallback() {
+  log_warning_msg "hookprobe-verity: $1 — FALLBACK to plain root (unverified, still boots)"
+  dmsetup create hpverity --table "0 $(blockdev --getsz "$VDATA") linear $VDATA 0" 2>/dev/null
+  exit 0
+}
+
+[ -b "$VDATA" ] || fallback "data device $VDATA absent"
+mkdir -p /vboot
+mount -t vfat -o ro "$BOOTDEV" /vboot 2>/dev/null || fallback "cannot mount boot $BOOTDEV"
+[ -f "/vboot/$HASHFILE" ] || { umount /vboot 2>/dev/null; fallback "hash tree /$HASHFILE missing"; }
+cp "/vboot/$HASHFILE" /run/rootfs.verity 2>/dev/null
+umount /vboot 2>/dev/null
+
+if veritysetup open "$VDATA" hpverity /run/rootfs.verity "$ROOTHASH" 2>/dev/null; then
+  log_success_msg "hookprobe-verity: root VERIFIED (dm-verity, read-only)"
+  exit 0
+fi
+fallback "verity open failed (tamper or wrong root hash)"

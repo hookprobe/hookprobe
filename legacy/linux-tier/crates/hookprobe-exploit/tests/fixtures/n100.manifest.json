@@ -1,0 +1,334 @@
+{
+  "schema_version": 2,
+  "identity": {
+    "device_id": "hp-6956747d16aaa7b915688a293d40ebc8",
+    "serial": null,
+    "idevid": {
+      "type": "tpm",
+      "pubkey_fpr": "SHA256:3e42e5c66bfff805810fdd22f2829fddf786287eaecf65a9601d42ec8b5c879b",
+      "sealed": true
+    },
+    "claim_state": "unclaimed",
+    "tenant": null
+  },
+  "platform": {
+    "class": "edge-pro",
+    "profile": "n100",
+    "sku": "HP-FT-001",
+    "match": {
+      "method": "dmi-tuple",
+      "key": "AAEON;UPN100;UPN100-A10"
+    }
+  },
+  "hardware": {
+    "arch": "amd64",
+    "cpu": {
+      "model": "Intel(R) N100",
+      "cores": 4
+    },
+    "memory_mb": 16384,
+    "storage": [
+      {
+        "dev": "nvme0n1",
+        "size_gb": 128,
+        "type": "nvme"
+      }
+    ],
+    "tpm": {
+      "present": true,
+      "version": "2.0",
+      "kind": "firmware"
+    },
+    "secure_boot": {
+      "supported": true,
+      "enabled": true
+    },
+    "npu": {
+      "present": false,
+      "driver_ready": false,
+      "vendor": null,
+      "model": null
+    },
+    "virt": "none",
+    "fingerprint": "SHA256:6956747d16aaa7b915688a293d40ebc8429395029fdb3b8ef5ed6fe31aab1d62"
+  },
+  "network": {
+    "interfaces": [
+      {
+        "name": "enp1s0",
+        "mac": "00:1e:06:aa:bb:01",
+        "type": "ethernet",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "mgmt",
+        "fail_mode": null,
+        "state": "up"
+      },
+      {
+        "name": "enp2s0",
+        "mac": "00:1e:06:aa:bb:02",
+        "type": "ethernet",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "out-of-band",
+        "fail_mode": null,
+        "state": "up"
+      },
+      {
+        "name": "enp3s0",
+        "mac": "00:1e:06:aa:bb:03",
+        "type": "ethernet",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "inline",
+        "fail_mode": "fail-open",
+        "state": "up"
+      },
+      {
+        "name": "enp4s0",
+        "mac": "00:1e:06:aa:bb:04",
+        "type": "ethernet",
+        "supported_modes": [
+          "1000baseT/Full",
+          "2500baseT/Full"
+        ],
+        "role": "unassigned",
+        "fail_mode": null,
+        "state": "down"
+      }
+    ],
+    "wifi": {
+      "present": false
+    },
+    "lte": {
+      "present": false
+    }
+  },
+  "capabilities": {
+    "soc": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "cpu",
+        "memory_mb"
+      ]
+    },
+    "ids": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "openvswitch": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "arch",
+        "network.interfaces>=2"
+      ]
+    },
+    "wifi_ap": {
+      "state": "absent",
+      "reason": "no Wi-Fi radio present",
+      "evidence": [
+        "wifi.present=false"
+      ]
+    },
+    "edge_ai": {
+      "state": "absent",
+      "reason": "no NPU/accelerator present",
+      "evidence": [
+        "npu.present=false"
+      ]
+    },
+    "inline_ips": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "network.role:inline",
+        "nic:igc known-good"
+      ]
+    },
+    "capture": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "host_telemetry": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "ddos_mitigation": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "capture"
+      ]
+    },
+    "sdn": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "openvswitch"
+      ]
+    },
+    "wifi_dfs": {
+      "state": "absent",
+      "reason": "requires not met: wifi_ap",
+      "evidence": [
+        "wifi_ap"
+      ]
+    },
+    "dns_filtering": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "threat_intel": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "deception": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "multi_wan": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "network.interfaces>=2"
+      ]
+    },
+    "ai_planner": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "secure_tunnel": {
+      "state": "granted",
+      "reason": null,
+      "evidence": [
+        "soc"
+      ]
+    },
+    "fleet_mesh": {
+      "state": "policy_denied",
+      "reason": "withheld on 'edge-pro' platform class by policy",
+      "evidence": [
+        "soc"
+      ]
+    }
+  },
+  "resources": {
+    "total": {
+      "cpu_pct": 400,
+      "memory_mb": 16384
+    },
+    "reserved": {
+      "cpu_pct": 150,
+      "memory_mb": 2048
+    },
+    "allocatable": {
+      "cpu_pct": 250,
+      "memory_mb": 14336
+    },
+    "defaults": {
+      "wasm": {
+        "cpu_pct": 25,
+        "memory_mb": 128,
+        "epoch_ms": 50
+      },
+      "container": {
+        "cpu_pct": 100,
+        "memory_mb": 512
+      }
+    }
+  },
+  "crypto": {
+    "agility": true,
+    "suite_id": "hookprobe-pqc-hybrid-2026",
+    "image_signing": [
+      "ecdsa-p256"
+    ],
+    "module_signing": [
+      "ml-dsa-65",
+      "ed25519"
+    ],
+    "boot_signing": "lms",
+    "tls_kex": [
+      "ml-kem-768+x25519"
+    ],
+    "tls_auth": [
+      "ml-dsa-65",
+      "ecdsa-p256"
+    ],
+    "data_at_rest": "aes-256-gcm",
+    "hash": [
+      "sha-256",
+      "sha-384",
+      "sha3-256"
+    ],
+    "device_identity": [
+      "ml-dsa-65",
+      "ed25519"
+    ],
+    "cbom": "/usr/share/hookprobe/cbom.json"
+  },
+  "retention": {
+    "tiers": [
+      {
+        "name": "pcap",
+        "cap_gb": 20,
+        "window": "~1 day"
+      },
+      {
+        "name": "events",
+        "cap_gb": 36,
+        "window": "~1-2 months"
+      },
+      {
+        "name": "evidence",
+        "cap_gb": 26,
+        "window": "year+"
+      }
+    ],
+    "computed_at": "2026-06-27T12:00:00+00:00"
+  },
+  "modules": [],
+  "provenance": {
+    "image_ref": "ghcr.io/hookprobe/os:dev",
+    "image_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+    "generated_at": "2026-06-27T12:00:00+00:00",
+    "generator": "bootstrap-ref/0.1.0",
+    "schema_version": 2
+  },
+  "signature": {
+    "method": "cosign",
+    "sig": "UNSIGNED-REFERENCE-BUILD",
+    "cert": "UNSIGNED-REFERENCE-BUILD",
+    "tpm_sealed": false,
+    "pcr_policy": null
+  }
+}

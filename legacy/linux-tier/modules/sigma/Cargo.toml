@@ -1,0 +1,31 @@
+[package]
+name = "hookprobe-sigma"
+version = "0.1.0"
+edition = "2021"
+description = "Sigma rule ingestion + evaluation — HookProbe OS V2 detection module (a practical Sigma subset, native host binary)."
+license = "Apache-2.0"
+
+# Library: rule parsing (YAML -> internal AST) + evaluation, shared by the binary and tests.
+[lib]
+name = "hookprobe_sigma"
+path = "src/lib.rs"
+
+# Native binary: merges the flows/host-events streams on stdin, evaluates every loaded rule
+# against each event, writes JSON alert lines to stdout (same detection schema NAPSE/host-EDR
+# already use — ingested by `hookprobe-evidence`'s EXISTING `ingest_detection` path, no evidence-
+# graph changes needed).
+[[bin]]
+name = "hookprobe-sigma"
+path = "src/main.rs"
+
+[dependencies]
+# Sigma rules are YAML with real nested-map/list structure (`detection:` selections, modifiers,
+# `condition:` strings, `logsource:`, `tags:`). Hand-rolling a YAML parser (the zero-dependency
+# convention `modules/napse`/`modules/dnsxai`'s *Wasm* binaries use) would be far MORE risk than
+# using a maintained one here — this module runs as a NATIVE `runtime: host` binary (see
+# module.yaml's doc header for why: same tier as `modules/senzorium-flow`/`modules/evidence`,
+# not the Wasm sandbox), so the zero-dep floor that exists specifically to keep the *sandboxed*
+# hot path minimal does not apply. `serde_yaml`/`serde_json` are already first-class, vetted
+# dependencies elsewhere in this workspace (`hookprobe-manifest`, `supervisor`) — same versions.
+serde_json = "1"
+serde_yaml = "0.9"

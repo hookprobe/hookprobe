@@ -1,0 +1,113 @@
+{
+  "format": "hookprobe-ioc-v1",
+  "generated": "2026-07-08",
+  "source_summary": "Bundled FIRST-VERSION seed (ADR 0027): 3 real, currently-public botnet C2 IPs from abuse.ch Feodo Tracker (a redistribution-friendly public feed this repo already fetches live in modules/hydra/hydra-feed-fetch.sh) + 4 HookProbe-owned canary/test indicators (RFC 5737/2606 reserved values + the public EICAR test-file hash) that prove every indicator TYPE parses and matches without needing, or shipping, a live real-malware sample. NOT a full MISP/OTX/TAXII feed — see security/threat-intel/README.md for the honest scope.",
+  "indicators": [
+    {
+      "value": "162.243.103.246",
+      "ioc_type": "ip",
+      "family": "Emotet",
+      "source": "abuse.ch Feodo Tracker",
+      "confidence": 0.9,
+      "first_seen": "2022-06-04",
+      "active": false,
+      "mitre": "T1071.001",
+      "tlp": "clear",
+      "note": "reported offline by the source feed as of the snapshot date; kept as a lower-priority historical indicator, not dropped."
+    },
+    {
+      "value": "50.16.16.211",
+      "ioc_type": "ip",
+      "family": "QakBot",
+      "source": "abuse.ch Feodo Tracker",
+      "confidence": 0.9,
+      "first_seen": "2025-12-30",
+      "active": true,
+      "mitre": "T1071.001",
+      "tlp": "clear"
+    },
+    {
+      "value": "34.204.119.63",
+      "ioc_type": "ip",
+      "family": "QakBot",
+      "source": "abuse.ch Feodo Tracker",
+      "confidence": 0.9,
+      "first_seen": "2026-01-13",
+      "active": false,
+      "mitre": "T1071.001",
+      "tlp": "clear"
+    },
+    {
+      "value": "203.0.113.66",
+      "ioc_type": "ip",
+      "family": "hookprobe-test-canary",
+      "source": "hookprobe-bundled-seed",
+      "confidence": 0.95,
+      "first_seen": "2026-07-08",
+      "active": true,
+      "mitre": "",
+      "tlp": "clear",
+      "note": "RFC 5737 TEST-NET-3 — guaranteed never a real internet host. Proves the IP matcher fires end-to-end without shipping a live indicator."
+    },
+    {
+      "value": "hookprobe-ioc-test.invalid",
+      "ioc_type": "domain",
+      "family": "hookprobe-test-canary",
+      "source": "hookprobe-bundled-seed",
+      "confidence": 0.95,
+      "first_seen": "2026-07-08",
+      "active": true,
+      "mitre": "",
+      "tlp": "clear",
+      "note": "RFC 2606 .invalid TLD — guaranteed never to resolve. Proves the domain matcher (SNI/HTTP-Host) fires without shipping a live indicator."
+    },
+    {
+      "value": "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",
+      "ioc_type": "sha256",
+      "family": "eicar-test-canary",
+      "source": "EICAR (public AV-test standard, eicar.org)",
+      "confidence": 1.0,
+      "first_seen": "1990-01-01",
+      "active": true,
+      "mitre": "",
+      "tlp": "clear",
+      "note": "The same public EICAR test string modules/yara-scan/rules/eicar_test_string.yar already ships, by its sha256. Proves the hash matcher's SHAPE and parsing; NOT currently wired to a live host-telemetry event (see the crate's honest-limits doc — hookprobe-evidence's `files` table carries no hash column yet)."
+    },
+    {
+      "value": "e7d705a3286e19ea42f587b344ee6865",
+      "ioc_type": "ja3",
+      "family": "hookprobe-test-canary",
+      "source": "hookprobe-bundled-seed",
+      "confidence": 0.9,
+      "first_seen": "2026-07-08",
+      "active": true,
+      "mitre": "",
+      "tlp": "clear",
+      "note": "A synthetic 32-hex canary value in the real JA3 (MD5) shape — NOT a captured real-malware fingerprint. Proves the ja3 matcher fires against the Application pivot's ja3 field without a fabricated 'real' sample being claimed as such."
+    },
+    {
+      "value": "t13d0204h2_62ed6f6ca7ad_3953dc75acc4",
+      "ioc_type": "ja4",
+      "family": "hookprobe-test-canary",
+      "source": "hookprobe-bundled-seed",
+      "confidence": 0.9,
+      "first_seen": "2026-07-16",
+      "active": true,
+      "mitre": "",
+      "tlp": "clear",
+      "note": "A canary in valid FoxIO JA4 TLS-CLIENT shape (t<ver><sni><nc><ne><alpn>_<ciphers>_<exts+sigalgs>) — this is the repo's own JA4 golden reference vector (dpi.rs `ja4_client_matches_the_foxio_reference_algorithm`), NOT a captured real-malware fingerprint. It is the SAME value napse_loader::dpi computes for the reference ClientHello, so it proves the ja4 matcher fires end-to-end against the Application pivot's ja4 field. Real modern-C2 JA4 fingerprints are fetched live by modules/hydra/hydra-feed-fetch.sh; this seed ships only the honest canary."
+    },
+    {
+      "value": "t1303h2_1302_02a34fb8a812",
+      "ioc_type": "ja4s",
+      "family": "hookprobe-test-canary",
+      "source": "hookprobe-bundled-seed",
+      "confidence": 0.9,
+      "first_seen": "2026-07-16",
+      "active": true,
+      "mitre": "",
+      "tlp": "clear",
+      "note": "A canary in valid FoxIO JA4S TLS-SERVER shape (t<ver><ne><alpn>_<cipher>_<exts>) — the repo's JA4S golden reference vector (dpi.rs `ja4s_matches_the_foxio_reference_algorithm_and_keeps_grease`), NOT a captured real-malware fingerprint. Proves the ja4s matcher fires against the ServerHello-derived ja4s field. JA4H is deliberately NOT shipped as a threat-intel type (see crates/hookprobe-hydra/src/feed.rs — HTTP-client fingerprints are too high false-positive for IOC matching)."
+    }
+  ]
+}

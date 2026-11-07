@@ -1,0 +1,39 @@
+[package]
+name = "hookprobe-evidence"
+version = "0.1.0"
+edition = "2021"
+description = "HookProbe OS evidence graph — the track/trace spine (ADR 0009 step 2). SQLite (edge tier)."
+
+[[bin]]
+name = "hookprobe-evidence"
+path = "src/main.rs"
+
+# Standalone read-only MCP server (ADR 0013 D4a) — stdio JSON-RPC 2.0, exposes the graph as tools
+# for Claude Code / Cursor / the future AEGIS planner. Separate binary (not a --serve flag on the
+# main one) so the ingest tool's timer-driven, one-shot CLI story and the long-running stdio server
+# story never share a process model.
+[[bin]]
+name = "mcp-server"
+path = "src/bin/mcp-server.rs"
+
+[lib]
+name = "hookprobe_evidence"
+path = "src/lib.rs"
+
+[dependencies]
+# Embedded store for the EDGE tier (ADR 0009 revised): SQLite — ~1 MB static, no server, instant
+# standalone SOC, cross-compiles to aarch64-musl like the rest of the image (no g++/no shipped .so).
+# Does everything the edge needs: recursive-CTE attack_path, nodes/edges, point queries. The cloud
+# tier is ClickHouse (mssp.hookprobe.com); offload is JSONEachRow (which ClickHouse ingests natively),
+# so DuckDB's only edge over SQLite (native Parquet) is moot.
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+# The SAME canonical LAN/WAN source-classification predicate the scan-responder/aegis-guard
+# enforcement paths already share (see that crate's own doc comment) — reused here (never
+# reimplemented) for the evidence graph's Interface node, so "which side of the network this flow
+# crossed" can never silently drift from what the enforcement path itself believes. Zero transitive
+# dependencies (see hookprobe-mgmt-guard's own Cargo.toml) — negligible weight on this crate.
+hookprobe-mgmt-guard = { path = "../hookprobe-mgmt-guard" }

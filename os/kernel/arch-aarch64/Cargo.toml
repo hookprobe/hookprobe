@@ -1,0 +1,36 @@
+[package]
+name = "arch-aarch64"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+hal = { path = "../hal" }
+
+[features]
+cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt
+hboot = ["cm5"] # entered by HBoot (heqk-boot) at EL1, console already up
+# P15 eMMC WRITE path — OFF by default (read-only, no brick risk). The only
+# sectors ever writable are 2016..2047; LBA 0 + partitions are never touched.
+p15-write = []
+# DRV-1 recon: the read-only MIP dump + rp1.c-exact MSIX_CFG enable (gem::rx_msix_setup).
+mipdump = ["cm5"]
+# DISCRIMINATOR EXPERIMENT: route the GEM TX frame through RP1 internal SRAM (0xC0_4040_0000)
+# instead of host RAM, so the DMA read never crosses PCIe — isolates the large-frame TX bug to
+# the PCIe read path vs the GEM. Additive; never shipped.
+# ⚠️ SUPERSEDED (2026-09-09): the SRAM address was wrong (that base is the RP1 AXI-peripheral
+# region, not the shared SRAM at proc 0x2000_0000 / system 0xC0_2000_0000). Use `txsweep`.
+txsram = ["cm5"]
+# DISCRIMINATOR (host-RAM): tx_frame reads a per-frame buffer OVERRIDE (set_tx_override) instead
+# of its own ring buffer, so a size/alignment sweep can move the DMA source across 64/128/256-byte
+# boundaries while staying on the exact failing GEM→RP1-AXI→PCIe→host-RAM read path. Additive; never shipped.
+txsweep = ["cm5"]
+# M-NAT4 TX half — BENCH EXPERIMENT: send >512-B SDPCM data frames to a station with ONE
+# block-mode CMD53 (N x 512-B blocks, PIO per block). Metal 2026-10-09 showed that
+# chunking a frame into consecutive byte-mode CMD53s desyncs the 43455's SDPCM stream;
+# block mode is the correct form (brcmfmac uses it for every transfer >= the block size)
+# but this SDHCI's multi-block PIO flow is unproven on F2. Off by default: a desync kills
+# every later unicast for that boot. Dedicated flash, then fold in.
+# Block-mode CMD53 READ of a frame remainder > 512 B (metal-proven 2026-11-04: frames read
+# whole, stream healthy). TX > 512 B stays refused unless `wifi-bigtx`.
+wifi-bigrx = ["cm5"]
+wifi-bigtx = ["cm5", "wifi-bigrx"]

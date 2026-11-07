@@ -1,0 +1,24 @@
+# ADR 0051 D1 — heqk's THIN rustls CryptoProvider: server-only, TLS 1.3 only, ONE suite
+# (TLS13_CHACHA20_POLY1305_SHA256), X25519 key exchange, ECDSA P-256/SHA-256 certificate signature.
+# Glue only — every primitive comes from a RustCrypto / dalek crate (no hand-written crypto).
+# Detached (own [workspace]) so it never enters the kernel's build graph; the EL0 TLS server links it.
+[package]
+name = "heqk-tlsprov"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[dependencies]
+rustls = { version = "0.23", default-features = false }
+chacha20poly1305 = { version = "0.10", default-features = false }
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets", "zeroize"] }
+sha2 = { version = "0.10", default-features = false }
+hmac = { version = "0.12", default-features = false }
+ml-kem = { version = "0.2", default-features = false, features = ["deterministic"] }
+p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
+
+[dev-dependencies]
+kem = "=0.3.0-pre.0"
+rustls = { version = "0.23", default-features = false, features = ["std"] }

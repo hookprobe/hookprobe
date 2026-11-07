@@ -1,0 +1,293 @@
+/**
+ * knw.css — Knowledge workspace (§11) styles.
+ *
+ * All classes are prefixed .knw-. Zero edits to global.css.
+ * Reuses: --hp-* tokens, .hp-terminal, .hp-terminal-bar, .hp-terminal-body,
+ * .hp-dot, .hp-prompt, .mc-panel, .mc-panel-title, .mc-panel-body,
+ * .mc-grid, .mc-kpi, .mc-cell--kpis, .det-link.
+ *
+ * Theme: cyber-industrial — void-black canvas, cyan #00B4FF + green #00FF9D
+ * accents, JetBrains Mono, terminal-window panels with hookprobe@edge ~ <ctx>.
+ */
+
+/* ── KPI row — full-width, 5 columns ──────────────────────────────────────── */
+
+.knw-kpis {
+  grid-column: span 12 !important;
+  grid-template-columns: repeat(5, 1fr) !important;
+}
+
+/* ── Content list (posts / runbooks / docs / wiki / SOPs) ─────────────────── */
+
+.knw-content {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.knw-content-row {
+  display: grid;
+  grid-template-columns: 58px 1fr 70px 34px 18px;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 6px;
+  border-radius: var(--hp-radius-sm);
+}
+
+.knw-content-row:hover { background: rgba(255, 255, 255, 0.03); }
+
+.knw-content-body { min-width: 0; }
+
+.knw-content-title {
+  font-size: 12.5px;
+  color: var(--hp-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.knw-content-meta {
+  font-family: var(--hp-font-mono);
+  font-size: 10.5px;
+  color: var(--hp-text-muted);
+}
+
+/* Type badge — colour-coded by content type */
+.knw-type-badge {
+  font-family: var(--hp-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: var(--hp-radius-sm);
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--hp-grey);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.knw-type-badge[data-type="post"]    { color: var(--hp-cyan);   background: rgba(0,   180, 255, 0.08); }
+.knw-type-badge[data-type="runbook"] { color: var(--hp-green);  background: rgba(0,   255, 157, 0.08); }
+.knw-type-badge[data-type="sop"]     { color: var(--hp-amber);  background: rgba(255, 170,   0, 0.08); }
+.knw-type-badge[data-type="wiki"]    { color: var(--hp-purple); background: rgba(168,  85, 247, 0.08); }
+.knw-type-badge[data-type="doc"]     { color: var(--hp-grey);   background: rgba(90,   90, 106, 0.12); }
+
+/* Status text */
+.knw-status-badge {
+  font-family: var(--hp-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* SEO score — numeric, colour reflects health */
+.knw-seo-score {
+  font-family: var(--hp-font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  text-align: right;
+}
+
+/* ── SEO Keywords ──────────────────────────────────────────────────────────── */
+
+.knw-kw {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.knw-kw-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.knw-kw-body { min-width: 0; }
+
+.knw-kw-term {
+  font-size: 12px;
+  color: var(--hp-text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.knw-kw-vol {
+  font-family: var(--hp-font-mono);
+  font-size: 10px;
+  color: var(--hp-text-muted);
+  margin-top: 1px;
+}
+
+/* Difficulty pill */
+.knw-kw-diff {
+  font-family: var(--hp-font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 7px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.knw-diff--easy   { color: var(--hp-green);  background: rgba(0,   255, 157, 0.10); }
+.knw-diff--medium { color: var(--hp-amber);  background: rgba(255, 170,   0, 0.10); }
+.knw-diff--hard   { color: var(--hp-red);    background: rgba(255, 107, 107, 0.10); }
+
+/* Rank + delta */
+.knw-kw-rank {
+  font-family: var(--hp-font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--hp-text-primary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  justify-content: flex-end;
+  min-width: 56px;
+  white-space: nowrap;
+}
+
+.knw-kw-delta {
+  font-size: 9px;
+  font-weight: 700;
+  color: var(--hp-grey);
+}
+
+.knw-delta--up   { color: var(--hp-green); }   /* rank number went down → improved */
+.knw-delta--down { color: var(--hp-red);   }   /* rank number went up   → declined */
+
+/* ── AI Writer ─────────────────────────────────────────────────────────────── */
+
+.knw-writer {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Suggestion chips row */
+.knw-writer-suggestions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.knw-suggestions-label {
+  font-family: var(--hp-font-mono);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+  color: var(--hp-text-muted);
+  flex-shrink: 0;
+}
+
+.knw-suggestion {
+  font-size: 11px;
+  padding: 4px 10px;
+  border-radius: var(--hp-radius-sm);
+  border: 1px solid var(--hp-border);
+  background: rgba(168, 85, 247, 0.06);
+  color: var(--hp-purple);
+  cursor: pointer;
+  font-family: var(--hp-font);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 340px;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.knw-suggestion:hover {
+  border-color: rgba(168, 85, 247, 0.5);
+  background: rgba(168, 85, 247, 0.12);
+}
+
+/* Terminal-style input row */
+.knw-writer-input-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--hp-void);
+  border: 1px solid var(--hp-border-accent);
+  border-radius: var(--hp-radius-sm);
+  padding: 8px 12px;
+}
+
+.knw-writer-input {
+  flex: 1;
+  background: none;
+  border: none;
+  outline: none;
+  font-family: var(--hp-font-mono);
+  font-size: 13px;
+  color: var(--hp-text-primary);
+  caret-color: var(--hp-green);
+}
+
+.knw-writer-input::placeholder { color: var(--hp-text-muted); }
+
+.knw-writer-run {
+  font-family: var(--hp-font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 5px 14px;
+  border-radius: var(--hp-radius-sm);
+  border: 1px solid var(--hp-border-accent);
+  background: rgba(0, 180, 255, 0.10);
+  color: var(--hp-cyan);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.knw-writer-run:hover {
+  background: rgba(0, 180, 255, 0.18);
+  box-shadow: var(--hp-glow-cyan);
+}
+
+/* Writer output — green terminal text on near-black */
+.knw-writer-output {
+  font-family: var(--hp-font-mono);
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--hp-green);
+  background: rgba(0, 255, 157, 0.04);
+  border: 1px solid rgba(0, 255, 157, 0.15);
+  border-radius: var(--hp-radius-sm);
+  padding: 12px 16px;
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Responsive ────────────────────────────────────────────────────────────── */
+
+@media (max-width: 900px) {
+  .knw-kpis {
+    grid-template-columns: repeat(3, 1fr) !important;
+  }
+
+  .knw-content-row {
+    grid-template-columns: 50px 1fr auto auto 18px;
+    gap: 8px;
+  }
+
+  .knw-suggestion {
+    max-width: 220px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .knw-suggestion,
+  .knw-writer-run { transition: none; }
+}

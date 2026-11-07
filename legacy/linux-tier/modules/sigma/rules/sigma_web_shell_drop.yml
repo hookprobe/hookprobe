@@ -1,0 +1,39 @@
+title: Server-Side Script File Written Under a Web Root
+id: 77cee8ed-843b-4de6-b871-b09b843e3601
+status: experimental
+description: >
+  A file ending in a server-executed script extension (.php/.phtml/.php5/.jsp/.jspx/.aspx)
+  written under a common web-root path — the generic "web shell drop" pattern (an
+  attacker who achieved arbitrary-file-write on a web app plants an interpreter-executed
+  script for follow-on RCE). AND across two selections (extension x path), same idiom as
+  the bundled sigma_suspicious_download_exec.yml's sel_fetch/sel_pipe pair.
+  HONEST FALSE-POSITIVE NOTE: this is a genuinely noisy signal — routine web-app
+  deployment, CMS/plugin updates, and CI/CD pushes ALSO write files matching this pattern.
+  It is not watched by any native detector (host_edr's file watchlist is config/persistence
+  paths only, never application content), so it is real NEW coverage, but is deliberately
+  kept `status: experimental` / `level: low` and intended as a corroborating signal for
+  Investigate-workspace correlation, never a stand-alone high-confidence alert or an
+  enforcement trigger (Sigma is alert-only in this OS regardless — ADR 0023).
+logsource:
+  category: file_event
+  product: linux
+detection:
+  sel_ext:
+    path|endswith:
+      - ".php"
+      - ".phtml"
+      - ".php5"
+      - ".jsp"
+      - ".jspx"
+      - ".aspx"
+  sel_webroot:
+    path|contains:
+      - "/var/www/"
+      - "/htdocs/"
+      - "public_html"
+      - "/srv/http/"
+  condition: sel_ext and sel_webroot
+level: low
+tags:
+  - attack.persistence
+  - attack.t1505.003

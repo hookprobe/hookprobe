@@ -1,0 +1,50 @@
+[Unit]
+Description=HookProbe Mission Control read-API (ADR 0001: Rust/Axum) — read-only HTTP+SSE over the evidence graph
+Documentation=file:///usr/share/hookprobe/docs/architecture/MissionControl.md
+# Needs the data partition (evidence.db, manifest.json, claim.json) and the evidence graph
+# writer to have created evidence.db at least once. After=, not Requires=: a missing/late
+# hookprobe-evidence.service just means an empty graph to serve, not a failed unit — this API
+# never creates evidence.db itself (see hookprobe_api::AppState::open — read-only, no schema init).
+After=var-lib-hookprobe.mount hookprobe-evidence.service
+Wants=hookprobe-evidence.service
+ConditionPathExists=/var/lib/hookprobe/evidence.db
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/hookprobe/hookprobe-api \
+    --db /var/lib/hookprobe/evidence.db \
+    --manifest /var/lib/hookprobe/manifest.json \
+    --claim /var/lib/hookprobe/claim.json \
+    --listen 127.0.0.1:8420
+Restart=on-failure
+RestartSec=5
+
+# Hardening: this process NEVER writes to the data partition (its only DB handle is opened
+# SQLITE_OPEN_READ_ONLY — see EvidenceGraph::open_readonly) — ReadOnlyPaths, not ReadWritePaths,
+# is the correct + narrower grant here, and doubles as a systemd-level assertion of the read-only
+# contract the code already enforces at the SQLite layer.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadOnlyPaths=/var/lib/hookprobe
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@mount @reboot @swap @raw-io
+MemoryMax=64M
+Slice=hookprobe-live.slice
+
+[Install]
+WantedBy=multi-user.target

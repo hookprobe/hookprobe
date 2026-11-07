@@ -1,0 +1,197 @@
+# 80-hookprobe.preset — bake HookProbe BASE-UNIT enablement into the image so first boot
+# is deterministic (no runtime `systemctl enable`). Applied by `systemctl preset-all`
+# in the Containerfile. Slices need no enablement (pulled in by Slice= references).
+#
+# 2026-07-07 backend-audit FIX: every base unit with an [Install] WantedBy= now gets an
+# EXPLICIT enable/disable/ignore line below — no more silent omissions. Verified empirically
+# (systemd 255, `systemctl --root=<scratch> preset <unit>` against a preset dir that has OTHER
+# rules but none matching this unit): a unit with NO matching line in ANY preset file is
+# ENABLED by the fallback default, not left alone/disabled. That is the OPPOSITE of what this
+# file's own prior comments assumed for `hookprobe-precompile.service` ("DELIBERATELY NOT
+# enabled here" — it was, in fact, enabled on every image, because omission ≠ disable). Treat
+# every future base unit the same way: never rely on "I didn't add a line" to mean "off".
+#
+# ADR 0015 (registry-driven module inclusion), C4 resolved: the MODULE-enable lines that
+# used to live here (senzorium-flow, napse-dpi, napse, qsecbit, dnsxai, aegis-guard,
+# host-telemetry, hookprobe-retention.timer, hookprobe-evidence.timer, napse-quarantine)
+# are now GENERATED into builder/generated/85-hookprobe-modules.preset by
+# builder/gen-staging.sh from modules/*/module.yaml — the single source of truth for
+# module inclusion (D0). This file keeps ONLY the base-unit lines (units shipped
+# unconditionally from base/units/, never from a module.yaml): bootstrap, supervisor,
+# mounts, measured-boot, network-reconcile, and the handful of apt/systemd-provided units
+# below. Both preset files are copied into /usr/lib/systemd/system-preset/ and
+# `systemctl preset-all` applies them together — see base/Containerfile Layer F,
+# builder/mkosi-arm64/build-arm64.sh, builder/mkosi/build-vm.sh.
+#
+# napse-quarantine's `enable` line (hand-added 2026-07-03, staging-block bake) is
+# DELIBERATELY not restored here: ADR 0015 C5 added `ddos_mitigation` to its
+# `requires.capabilities`, so the generator now correctly classifies it as
+# supervisor-managed (staged, not preset-enabled — see the generated preset's comment)
+# instead of unconditionally enabled on single-NIC cloud/VM boxes where it would load
+# inertly (no edge LAN to quarantine).
+
+enable hookprobe-bootstrap.service
+enable hookprobe-supervisor.service
+# Console boot banner (headless serial/tty identity; display units use the Plymouth splash).
+enable hookprobe-banner.service
+# Measured-boot attestation (ADR 0006 H2): capture TPM PCRs / software posture → QSECBIT score.
+enable hookprobe-measured-boot.service
+# systemd boot-phase PCR measurement (→ PCR 11) — no-ops without a TPM, so safe on the Pi too.
+enable systemd-pcrphase.service
+enable systemd-pcrphase-sysinit.service
+# dm-verity rootfs integrity posture (ADR 0006 H3) — the Pi's primary boot-integrity signal.
+enable hookprobe-rootfs-integrity.service
+enable hookprobe-manifest.socket
+enable hookprobe-control.socket
+enable var-lib-hookprobe.mount
+
+# First-boot persistent data partition (idempotent; gated by its own ConditionPathExists).
+enable hookprobe-firstboot-data.service
+# Unlock the encrypted data volume (ADR 0007 E1, plain dm-crypt) before var-lib-hookprobe.mount.
+enable hookprobe-unlock-data.service
+# Fail-closed guard (flow-analysis gap #1): /var/lib/hookprobe is encrypted-mount or tmpfs, never plaintext.
+enable hookprobe-data-guard.service
+# Secrets on the encrypted volume (ADR 0007 E2): SSH host keys → dm-crypt, not the plaintext root.
+enable hookprobe-secrets.service
+# RBAC OS-separation audit (ADR 0008 E4a): admin-only OS; operators dashboard-only.
+enable hookprobe-rbac-check.service
+# AEGIS network reconcile (intent → artifacts → apply) + continuous-trust timer. These are
+# the units that make the reconcilers actually run on-device. Each is internally gated
+# (ConditionPathExists on the manifest/intent; OVS steps gated on the openvswitch capability).
+enable hookprobe-network-reconcile.service
+# ADR 0034: regulatory-domain detection + `iw reg set` BEFORE hostapd (ordered Before the reconcile
+# so both the kernel regdomain AND hostapd's country_code are set before the radio comes up — a
+# runtime `iw reg set` triggers the brcmfmac DFS bounce). Runs world-`00` harmlessly on radioless
+# boxes. The hookprobe-wifi-calibrate@ TEMPLATE is intentionally NOT preset-enabled (it is the
+# roadmap runtime step-down loop, started explicitly, like hookprobe-hostapd@).
+enable hookprobe-regdomain.service
+# ADR 0034 D11 (W1) phase (b): re-resolve the regdomain once the WAN is actually up (After=
+# network-online.target) — the boot-phase oneshot above runs BEFORE the WAN and so can never reach
+# the offline-GeoIP-of-the-WAN-exit-IP rung. Idempotent no-op when the CC hasn't changed.
+enable hookprobe-regdomain-reresolve.service
+# base-tier-build-ticket.md Phase 1 (ADR 0031 §C): dataplane tuning recipe (threaded
+# NAPI/GRO/RPS/IRQ-affinity/detection+housekeeping cpusets). Shipped + enabled on EVERY
+# image — base/scripts/dataplane-tune-apply.sh internally gates on `tc_bpf` granted + this
+# profile shipping a `dataplane_tuning:` block in platforms/<profile>.yaml, so it is a
+# silent, always-exit-0 no-op on n100/generic/cloud/rpi4/any platform that opts out
+# (same "enable unconditionally, self-gate internally" pattern as hookprobe-cellular.service
+# below).
+enable hookprobe-tune-bcm2712.service
+enable hookprobe-trust-reconcile.timer
+# hookprobe-selftest.service/.timer: the on-boot health verdict (base/scripts/selftest-boot.sh)
+# + its 2026-07-07 periodic re-run (base/units/hookprobe-selftest.timer — catches a SOC engine
+# that wedges hours into uptime, not just at boot). EXPLICIT now (was previously enabled only
+# via the mkosi tier's mkosi.postinst hand-enable + the systemd no-match-fallback on the
+# Containerfile/bootc tier, which had NO equivalent hand-enable — this line makes both tiers
+# deterministic and identical instead of one of them depending on an undocumented fallback).
+enable hookprobe-selftest.service
+enable hookprobe-selftest.timer
+# hookprobe-depmod.service: regenerate modules.dep for baked out-of-tree Wi-Fi dongle drivers
+# when /usr was read-only at build time. Was already enabled via the mkosi tier's postinst
+# hand-enable + the same no-match fallback on the Containerfile/bootc tier; explicit now for
+# the same determinism reason as selftest above.
+enable hookprobe-depmod.service
+# hookprobe-precompile.service: MUST be OFF by default (ADR 0017 D4). Signed wasm modules ship
+# their `.cwasm` build-time-precompiled INSIDE the signed module.yaml/RO rootfs (base/
+# Containerfile Layer D2 + modules/*/module.yaml `role: aot`) — there is nothing left for a
+# first-boot writable-partition precompile to usefully produce for them, and ADR 0016 Fix A
+# already made that writable cache untrusted for `signature: required` modules regardless.
+# CONFIRMED BUG (2026-07-07 backend-audit): this unit's own ConditionPathExists=.../napse.wasm
+# is true on EVERY image (napse.wasm always ships), so it does NOT self-gate against running on
+# a signed/production device — it was actually executing `--precompile all` on every boot before
+# this explicit `disable` line existed, burning first-boot CPU on constrained ARM edge hardware
+# for a cache ADR 0016 Fix A already made untrusted/unused for every signed module. The unit
+# remains an opt-in DEV convenience for local `signature: unsigned` modules only
+# (`systemctl enable hookprobe-precompile.service` by hand) — see base/units/
+# hookprobe-precompile.service's own header for the full rationale. Net effect of this line: a
+# shipped device does ZERO JIT/AOT compilation at first boot for its signed SOC, for real now.
+disable hookprobe-precompile.service
+# hookprobe-hostapd@.service is a TEMPLATE unit — instances (hookprobe-hostapd@wlan0.service
+# etc.) are enabled at RUNTIME by base/scripts/network-apply.sh once the reconciler has decided
+# which radio is the AP, never by boot-time preset policy (there is no single "the" AP interface
+# to bake in). `ignore` documents that this is deliberate, not an omission.
+disable hookprobe-hostapd@.service
+# hookprobe-wifi-calibrate@.service (ADR 0034) is likewise a TEMPLATE, started explicitly per AP
+# interface (the roadmap runtime step-down loop), never boot-time preset policy — `ignore` documents
+# that this omission is deliberate, mirroring hookprobe-hostapd@ above.
+disable hookprobe-wifi-calibrate@.service
+# hookprobe-wifi-optimize@.{service,timer} + hookprobe-wifi-optimize-reapply@.service (ADR 0034
+# D24-D33, the autonomous survey-based 5GHz channel optimizer) are TEMPLATEs, started/enabled
+# explicitly per AP interface by network-apply.sh — same reasoning as hookprobe-wifi-calibrate@
+# above (no single "the" AP interface to bake into boot-time policy). The optimizer itself ships
+# enabled-by-default (its own D24 guards, not preset policy, decide skip/run per boot: disabled by
+# intent, a 2.4GHz band pin, an operator channel pin, or a non-5GHz radio all no-op it safely).
+disable hookprobe-wifi-optimize@.service
+disable hookprobe-wifi-optimize@.timer
+disable hookprobe-wifi-optimize-reapply@.service
+# AEGIS reflex: NAPSE port-scan responder (ENRICH host intel + DROP via nft, TTL auto-revert +
+# DOCUMENT). A native host binary (needs CAP_NET_ADMIN for nft — not sandboxable in Wasm, same
+# reasoning as napse-capture's sysext). The sweep timer releases quarantine even with no new scans.
+# NOTE: this is a BASE unit (base/units/), not a modules/*/module.yaml entry — out of ADR 0015's
+# registry-driven scope; the quarantine ENFORCEMENT it decides for is the registry-driven
+# napse-quarantine module (see builder/generated/85-hookprobe-modules.preset).
+enable hookprobe-scan-responder.service
+enable hookprobe-scan-responder-sweep.timer
+# AEGIS reflex: resource-REALITY DDoS/flood shed (2026-07-07) — conntrack-fill + PSI-triggered,
+# self-reverting, NEVER identity-keyed (see crates/hookprobe-manifest/src/scan_responder.rs's
+# "RESOURCE-REALITY ENFORCEMENT" module doc). Timer-driven (10s cadence); the .service itself has
+# no [Install] section (triggered directly by the timer's Unit=, same pattern as
+# hookprobe-scan-responder-sweep.service above), so only the .timer needs a preset line.
+enable hookprobe-resource-shed.timer
+# base-tier-build-ticket.md Phase 2 (ADR 0031 §E): shed-v2 PSI pressure watcher, bridges
+# /proc/pressure/{cpu,memory} into the pinned `shed_ctrl` eBPF map the fast-loop token
+# bucket reads. Shipped + enabled on EVERY image — self-gates on `resource_shed_v2` granted
+# and is a harmless no-op-retry (Restart=on-failure) if the pinned map isn't there yet, same
+# "enable unconditionally, self-gate internally" pattern as hookprobe-tune-bcm2712 above.
+# DISABLED 2026-07-16 (pre-flash audit): hookprobe-psid's binary was never staged into the image
+# (build-arm64.sh line-55 hand-staging omission) AND its /sys/fs/bpf/hookprobe/shed_ctrl map is
+# pinned only by napse-capture's XDP loader, which is "documented but NOT wired into the plan yet"
+# (its module.yaml). Enabled, it crash-loops 226/NAMESPACE every 5s (Restart=on-failure, unbounded)
+# on EVERY boot/platform — proven live in arm64 QEMU. Disable until BOTH the binary is staged AND
+# the shed_ctrl pin path is wired; same "disable a template/unit whose dep isn't ready" pattern as
+# the wifi templates below. Not in selftest's SOC_ALLOW_UNITS, so this is noise/CPU-waste, not a
+# boot-blocker — but it must not ship enabled.
+disable hookprobe-psid.service
+# base-tier-build-ticket.md Phase 3 (ADR 0031 §B): PTP (IEEE-1588) time-truth wiring on the
+# Phase-0 macb PHC — `hookprobe-ptp4l`/`hookprobe-phc2sys`. Shipped + enabled on EVERY image
+# (same "enable unconditionally, self-gate internally" pattern as hookprobe-tune-bcm2712/
+# hookprobe-psid above), NOT a build-time hardware branch: each unit's own `ExecCondition=`
+# checks `ptp_hw.state == "granted"` in the signed manifest and cleanly no-ops (condition-not-
+# met, not a unit failure) everywhere `ptp_hw` isn't granted — which, as of this phase, is
+# EVERY platform, since crates/hookprobe-manifest/src/capabilities.rs conservatively keeps
+# `ptp_hw` at `present_unsafe` until a real macb-hardware-timestamping scan fact lands (no
+# fabricated grant — see that file's own comment). Explicit `enable` here (not an omission) so
+# lint-units.sh's preset-fallback check (finding class 4, the hookprobe-precompile.service
+# incident) never has to guess this unit's intent.
+enable hookprobe-ptp4l.service
+enable hookprobe-phc2sys.service
+# Cellular bring-up (ModemManager) — gated on a cellular modem being present.
+enable hookprobe-cellular.service
+# Product-health beacon (ADR 0012 D5): the TIMER/SERVICE are scheduled on every device — that
+# is safe and intentional because beacon-export.sh itself is consent-gated (no consent marker
+# at /var/lib/hookprobe/consent/beacon-v1 -> logs one line, collects/writes NOTHING, exits 0).
+# `enable` here just makes that self-gating deliberate/documented instead of an accident of the
+# preset-fallback default (same fix pattern as precompile/selftest above) — it does NOT turn
+# telemetry on; only the operator's own `beacon-export.sh enable` consent action does that.
+enable hookprobe-beacon.timer
+
+# --- Module-enable lines below THIS line are GENERATED, not hand-maintained ---
+# See builder/generated/85-hookprobe-modules.preset (builder/gen-staging.sh output),
+# copied alongside this file into /usr/lib/systemd/system-preset/. senzorium-flow,
+# napse-dpi, napse, qsecbit (+hookprobe-telemetry), dnsxai, aegis-guard, host-telemetry,
+# hookprobe-retention.timer, hookprobe-evidence.timer, napse-quarantine (now correctly
+# supervisor-managed, C5) all live there now — do not re-add them here.
+
+# Host-integral dataplane: OVS is image-layer, started on demand by the supervisor
+# only when the `openvswitch`/`sdn` capability is granted — NOT enabled globally, so
+# a box with no SDN need never runs the switch. TODO: confirm conditional-start path.
+disable openvswitch-switch.service
+# wpa_supplicant.service (the GENERIC, all-radio D-Bus instance) MUST be OFF (2026-07-10, CM5
+# on-metal): when it auto-started it periodically SCANNED the AP radio (wlan0) and yanked hostapd
+# off-channel, collapsing a stable VHT80 (ch40/80MHz, 351 Mbit/s) down to ch140/20MHz — it LOOKED
+# like a brcmfmac 20MHz firmware cap but was supplicant contention. HookProbe uses systemd-networkd
+# (not NetworkManager) and drives any STATION uplink via the per-interface template
+# `wpa_supplicant@<iface>.service` — the generic instance is never needed and only harms the AP.
+# `disable` here + the /dev/null MASK baked by build-arm64.sh (belt-and-suspenders vs D-Bus
+# activation). Does NOT affect the `wpa_supplicant@.service` TEMPLATE used for station radios.
+disable wpa_supplicant.service

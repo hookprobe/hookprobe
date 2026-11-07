@@ -1,0 +1,35 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hookprobe.com/schema/redteam-finding.schema.json",
+  "title": "HookProbe OS ADR 0020 adversarial-resilience finding",
+  "description": "One probe outcome, emitted by security/redteam/engine (findings.jsonl, one object per line) and ingested by hookprobe-evidence::ingest_finding into the `findings` node table. See docs/adr/0020-adversarial-resilience-harness.md D6 for the full rationale.",
+  "type": "object",
+  "required": ["id", "attack_run", "ts", "layer", "probe", "target_component", "outcome", "severity", "verified_fired", "evidence_ref", "repro_seed"],
+  "properties": {
+    "id": { "type": "string", "description": "stable finding id" },
+    "attack_run": { "type": "string", "description": "the parent attack_run's id" },
+    "ts": { "type": "string", "format": "date-time" },
+    "layer": { "type": "string", "enum": ["l1", "l2", "l3", "l4", "l5", "l6", "l7"] },
+    "probe": { "type": "string", "description": "e.g. 'mac-flood', 'syn-flood-state-exhaustion'" },
+    "target_component": { "type": "string", "description": "e.g. 'napse-dpi', 'napse-quarantine'" },
+    "outcome": {
+      "type": "string",
+      "enum": ["withstood", "breached", "inconclusive"],
+      "description": "MUST be 'inconclusive' whenever verified_fired=false, regardless of any claim -- the engine's Finding::new and hookprobe-evidence's ingest_finding both re-derive this defensively; a producer's claimed outcome is never trusted over the verified_fired bit."
+    },
+    "severity": {
+      "type": "string",
+      "enum": ["red", "amber", "info"],
+      "description": "the Gate R threshold class if breached/inconclusive; 'red' + non-withstood blocks Gate R (ADR 0020 D5)"
+    },
+    "verified_fired": {
+      "type": "boolean",
+      "description": "did we OBSERVE the DUT's own defense act (read from ITS telemetry, never inferred from the attacker's own success/failure)? false forces outcome=inconclusive."
+    },
+    "evidence_ref": { "type": "string", "description": "a DUT-side event/response id or matched log line proving the outcome" },
+    "mitre_attck": { "type": "string", "description": "optional MITRE ATT&CK technique id, e.g. T1595.001" },
+    "repro_seed": { "type": "integer", "description": "deterministic replay seed" },
+    "validates_adr": { "type": "string", "description": "optional ADR number this finding confirms still holds (D6 `validates` edge), e.g. '0018'" }
+  },
+  "additionalProperties": false
+}

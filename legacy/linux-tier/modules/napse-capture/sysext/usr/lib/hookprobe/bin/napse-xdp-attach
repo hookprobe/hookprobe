@@ -1,0 +1,105 @@
+#!/usr/bin/env bash
+# napse-xdp-attach — manifest-driven XDP attach planner (runs in napse-capture.service).
+#
+# "Detect once, query forever": this NEVER probes hardware. It reads the signed
+# manifest that bootstrap already wrote and converts manifest FACTS + GRANTS into a set
+# of running napse-capture@<iface> workers, each with a resolved posture env file.
+#
+# Posture rules (Readme "Data plane"; ADR 0003 network.interfaces[]):
+#   - capture must be GRANTED (else nothing to do; supervisor would not have enabled us).
+#   - role=out-of-band  -> attach PASSIVE inspect object (always XDP_PASS). Always allowed
+#                          when `capture` is granted. Zero connectivity risk.
+#   - role=inline       -> drop fast path. Requires ddos_mitigation GRANTED. fail_mode
+#                          decides crash behavior: fail-open (default, just detach) vs
+#                          fail-closed (install OnFailure drop-all handler).
+#
+# HONESTY: cannot run here (no manifest with real NICs, no jq guarantee, no BPF). This is
+# the reviewed control flow; hardware-touching steps are delegated to napse-xdp-loader.
+set -euo pipefail
+
+MANIFEST=${MANIFEST:-/var/lib/hookprobe/manifest.json}
+XDP_DIR=/usr/lib/hookprobe/xdp
+RUN_DIR=/run/hookprobe/napse-capture
+DROPIN_DIR=/run/systemd/system            # transient drop-ins for fail-closed
+PASSIVE_OBJ="$XDP_DIR/aegis_xdp.o"        # out-of-band passive inspect (always XDP_PASS)
+DROP_OBJ="$XDP_DIR/xdp_synwall.o"         # inline drop fast path (ddos_mitigation)
+
+log() { echo "napse-xdp-attach: $*" >&2; }
+
+granted() {  # granted <token> -> manifest capabilities[token].state == "granted"
+  [[ "$(jq -r --arg t "$1" '.capabilities[$t].state // "absent"' "$MANIFEST")" == "granted" ]]
+}
+
+# Preferred XDP attach mode from NIC support: native (driver) else skb (generic).
+# TODO: derive from manifest network.interfaces[].supported_modes / a known-good NIC list
+#       (the pfSense TSO/LRO lesson: "supports native XDP" != "safe"). For now: skb.
+xdp_mode_for() { echo "skb"; }
+
+attach_up() {
+  granted capture || { log "capture not granted; nothing to attach"; exit 0; }
+  mkdir -p "$RUN_DIR"
+  local ddos="no"; granted ddos_mitigation && ddos="yes"
+
+  # Iterate interfaces from the manifest (facts written once by bootstrap).
+  jq -c '.network.interfaces[]? | {name,role,fail_mode,state}' "$MANIFEST" \
+  | while read -r iface; do
+      local name role fail state mode obj
+      name=$(jq -r '.name'      <<<"$iface")
+      role=$(jq -r '.role'      <<<"$iface")
+      fail=$(jq -r '.fail_mode // "fail-open"' <<<"$iface")
+      state=$(jq -r '.state'    <<<"$iface")
+      [[ "$state" == "up" ]] || { log "$name down; skip"; continue; }
+      mode=$(xdp_mode_for "$name")
+
+      case "$role" in
+        out-of-band|"")
+          obj="$PASSIVE_OBJ"; fail="fail-open"        # passive copy = inherently fail-open
+          ;;
+        inline)
+          if [[ "$ddos" != "yes" ]]; then
+            log "$name role=inline but ddos_mitigation NOT granted -> passive copy only"
+            obj="$PASSIVE_OBJ"; role="out-of-band"; fail="fail-open"
+          else
+            obj="$DROP_OBJ"
+          fi
+          ;;
+        *) log "$name unknown role=$role; skip"; continue ;;
+      esac
+
+      # Write the resolved posture the worker reads.
+      cat > "$RUN_DIR/$name.env" <<EOF
+NAPSE_XDP_MODE=$mode
+NAPSE_ROLE=$role
+NAPSE_FAIL_MODE=$fail
+NAPSE_XDP_OBJECT=$obj
+EOF
+
+      # Wire fail-closed ONLY for inline+fail-closed: install an OnFailure drop-in.
+      if [[ "$role" == "inline" && "$fail" == "fail-closed" ]]; then
+        mkdir -p "$DROPIN_DIR/napse-capture@$name.service.d"
+        cat > "$DROPIN_DIR/napse-capture@$name.service.d/10-failclosed.conf" <<EOF
+[Unit]
+OnFailure=napse-capture-failclosed@$name.service
+EOF
+        log "$name: inline FAIL-CLOSED (segment blocks if worker dies)"
+      else
+        rm -f "$DROPIN_DIR/napse-capture@$name.service.d/10-failclosed.conf" 2>/dev/null || true
+        log "$name: $role $fail"
+      fi
+
+      systemctl daemon-reload
+      systemctl start "napse-capture@$name.service"
+    done
+}
+
+attach_down() {
+  # Stop all workers; ExecStopPost in the worker detaches XDP (fail-open teardown).
+  systemctl stop 'napse-capture@*.service' 2>/dev/null || true
+  rm -rf "$RUN_DIR"
+}
+
+case "${1:-up}" in
+  up)   attach_up ;;
+  down) attach_down ;;
+  *)    log "usage: $0 {up|down}"; exit 2 ;;
+esac

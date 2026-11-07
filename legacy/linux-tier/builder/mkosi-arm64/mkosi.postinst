@@ -1,0 +1,133 @@
+#!/bin/sh
+# Runs inside the image chroot during the mkosi build (after packages + mkosi.extra/).
+# Finalizes the HookProbe install: exec bits, /usr/bin symlinks, the service user, and
+# unit enablement (so the self-provisioning chain fires on first boot).
+set -eux
+# NOTE: /usr is READ-ONLY in the final postinst, so exec bits + /usr/bin symlinks are
+# pre-baked into mkosi.extra/ (see build-vm.sh). Here we only touch writable /etc + /var.
+
+getent group hookprobe >/dev/null || groupadd -r hookprobe
+id hookprobe >/dev/null 2>&1 || useradd -r -g hookprobe -d /var/lib/hookprobe -s /usr/sbin/nologin hookprobe
+mkdir -p /var/lib/hookprobe /etc/hookprobe
+
+# Enable the HookProbe units (preset file ships in /usr/lib/systemd/system-preset).
+systemctl preset-all 2>/dev/null || true
+systemctl enable \
+  hookprobe-firstboot-data.service \
+  hookprobe-bootstrap.service \
+  hookprobe-supervisor.service \
+  hookprobe-network-reconcile.service \
+  hookprobe-trust-reconcile.timer 2>/dev/null || true
+
+# A one-shot that prints a clear self-test verdict to the console after the chain settles,
+# so the qemu serial log shows PASS/FAIL without anyone logging in.
+systemctl enable hookprobe-selftest.service 2>/dev/null || true
+
+# Out-of-tree USB-Wi-Fi-dongle .ko (staged by build-dongle-drivers.sh into
+# /usr/lib/modules/<ver>/updates/hookprobe) are copied in with mkosi.extra AFTER the kernel
+# package's own depmod ran — so modules.dep must be regenerated. /usr may be read-only here;
+# if so the hookprobe-depmod.service oneshot redoes it at first boot (image root is rw).
+for kv in /usr/lib/modules/*/; do
+  kv=$(basename "$kv")
+  if [ -d "/usr/lib/modules/$kv/updates/hookprobe" ]; then
+    echo "hookprobe: depmod for baked dongle drivers ($kv)"
+    depmod -a "$kv" 2>/dev/null && echo "hookprobe: depmod ok at build" \
+      || echo "hookprobe: depmod deferred to first boot (/usr RO at build)"
+  fi
+done
+systemctl enable hookprobe-depmod.service 2>/dev/null || true
+
+# ---- ADMIN ACCESS — GATED, CLEAN-BY-DEFAULT (release security fix, 2026-07-07; backend
+# audit F1; credentials neutralized to the default hookprobe/hookprobe login per ADR 0045,
+# 2026-07-25) ---------------------------------------------------------------------------------
+# This base rootfs must be BORN clean: sanitization is a property of the artifact, not a
+# downstream strip performed later by make-pi4-image.sh. Default (HOOKPROBE_DEBUG_ACCESS
+# unset/0) = RELEASE: root locked, no login account, no password-auth sshd drop-in. Only when
+# the operator explicitly opts in (HOOKPROBE_DEBUG_ACCESS=1, passed through by mkosi.conf's
+# `Environment=HOOKPROBE_DEBUG_ACCESS`) does the first-hardware-boot debug workflow appear —
+# reachable over the LAN after the device DHCPs, so we can SSH in and debug live without a
+# serial cable. This mirrors make-pi4-image.sh's own HOOKPROBE_DEBUG_ACCESS gate (same env
+# var, same password hash) so the two build paths never disagree.
+#   debug build:  HOOKPROBE_DEBUG_ACCESS=1 sudo mkosi --force build
+#                 ssh hookprobe@<pi4-ip>  password: hookprobe   (elevates the existing
+#                 hookprobe SERVICE account — created unconditionally at line 10 — into a
+#                 login admin; no second account is created)
+#                 ssh root@<pi4-ip>       password: hookprobe
+#   release (default):  root locked (no password, no hash) · hookprobe reverted to a
+#                        no-login service account · sshd publickey-only, no root login.
+# `useradd`/`chpasswd` are unreliable in this emulated arm64 chroot (useradd -m silently
+# no-ops; chpasswd needs PAM → pam_start failure 26), so both branches write /etc/{passwd,
+# shadow,group} directly — bulletproof in any chroot.
+R_HASH="$(openssl passwd -6 -salt qEkJ33cMtCvXHNnx hookprobe)"  # ADR 0045 public dev login hookprobe/hookprobe, DERIVED (no literal hash in the tree)
+case "$R_HASH" in '$6$'*) ;; *) echo "FATAL: openssl passwd failed; refusing to bake an empty debug password" >&2; exit 1 ;; esac
+mkdir -p /etc/ssh/sshd_config.d /etc/hookprobe
+# 2026-07-07 regression fix: mkosi runs this postinst ("final") in a SANDBOX where bare /etc is
+# NOT the image's account DB (mkosi overlays the host's /usr, and /etc/{passwd,shadow,group} are
+# absent) — the earlier unconditional grep/sed here exited 2 under `set -e` and failed
+# `mkosi build`. The AUTHORITATIVE debug/release account hardening runs in make-pi4-image.sh
+# against the MOUNTED image rootfs ($RT/etc), and mkosi.conf no longer bakes a root password, so
+# the base .raw is already clean-by-default. Only run the block below when bare /etc really is a
+# writable account DB (e.g. a genuine chroot); otherwise skip cleanly.
+if [ ! -f /etc/shadow ]; then
+  echo "hookprobe: postinst account block skipped — no image /etc in this mkosi phase (make-pi4-image.sh owns it)"
+elif [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ]; then
+  # DEBUG-ONLY: elevate the existing hookprobe SERVICE account (nologin, created at line 10)
+  # into a login admin — cracked-by-design credentials. NEVER set this flag for a release build.
+  awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/bin/bash"} 1' /etc/passwd > /etc/passwd.new && mv /etc/passwd.new /etc/passwd
+  sed -i "s|^hookprobe:[^:]*:|hookprobe:${R_HASH}:|" /etc/shadow
+  # add hookprobe to the sudo group member list (clean: empty→hookprobe, else append ,hookprobe).
+  # Root SSH is also enabled below, so this is convenience, not critical.
+  if grep -q '^sudo:' /etc/group; then
+    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{ if($4=="") $4="hookprobe"; else if($4 !~ /(^|,)hookprobe(,|$)/) $4=$4",hookprobe" } 1' /etc/group > /etc/group.new && mv /etc/group.new /etc/group
+  fi
+  sed -i "s|^root:[^:]*:|root:${R_HASH}:|" /etc/shadow
+  rm -f /etc/ssh/sshd_config.d/10-hookprobe-hardened.conf
+  cat > /etc/ssh/sshd_config.d/10-hookprobe-debug.conf <<'SSHD'
+# HookProbe first-boot DEBUG — permissive on purpose; remove for production.
+PermitRootLogin yes
+PasswordAuthentication yes
+SSHD
+  echo "debug" > /etc/hookprobe/build-mode
+  echo "hookprobe: ADMIN ACCESS = DEBUG (hookprobe sudo + root, password SSH) — HOOKPROBE_DEBUG_ACCESS=1"
+else
+  # RELEASE (default): root LOCKED (no password, no hash — '!' in shadow); the hookprobe
+  # service account is reverted to a no-login account (nologin shell, locked password, no
+  # sudo), sshd hardened to publickey-only / no root login. Defense-in-depth: also strip any
+  # leftover legacy 'andrei' entry (pre-ADR-0045) in case this postinst runs against a rootfs
+  # that already carries one (e.g. a persisted/incremental mkosi build tree flipping from a
+  # debug run to a release run).
+  if grep -q '^hookprobe:' /etc/passwd; then
+    awk -F: 'BEGIN{OFS=":"} $1=="hookprobe"{$7="/usr/sbin/nologin"} 1' /etc/passwd > /etc/passwd.new && mv /etc/passwd.new /etc/passwd
+  fi
+  sed -i 's|^hookprobe:[^:]*:|hookprobe:!:|' /etc/shadow 2>/dev/null || true
+  if grep -q '^andrei:' /etc/passwd; then
+    sed -i '/^andrei:/d' /etc/passwd
+    sed -i '/^andrei:/d' /etc/shadow
+    sed -i '/^andrei:/d' /etc/group
+    rm -rf /home/andrei
+  fi
+  if grep -q '^sudo:' /etc/group; then
+    awk -F: 'BEGIN{OFS=":"} $1=="sudo"{c=split($4,a,","); out=""; for(i=1;i<=c;i++) if(a[i]!="" && a[i]!="hookprobe" && a[i]!="andrei") out=(out==""?a[i]:out","a[i]); $4=out} 1' /etc/group > /etc/group.new && mv /etc/group.new /etc/group
+  fi
+  sed -i 's|^root:[^:]*:|root:!:|' /etc/shadow
+  rm -f /etc/ssh/sshd_config.d/10-hookprobe-debug.conf
+  printf 'PermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication no\n' \
+    > /etc/ssh/sshd_config.d/10-hookprobe-hardened.conf
+  echo "release" > /etc/hookprobe/build-mode
+  echo "hookprobe: ADMIN ACCESS = RELEASE (root locked, no login account, key-only SSH) — default; set HOOKPROBE_DEBUG_ACCESS=1 for a debug image"
+fi
+# GAP-1 (2026-07-16, audit): sshd exposure. A RELEASE image has NO login user and root is LOCKED,
+# so a running sshd is pure pre-auth WAN attack surface (regreSSHion-class) with zero function. Only
+# a DEBUG image (trusted-LAN validation) should run it. Gate enablement on the build mode instead of
+# enabling unconditionally, and MASK it on release so nothing can start it. (Enrollment can
+# re-provision remote access later; until then the internet-facing uplink exposes no sshd.)
+if [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = "1" ]; then
+  systemctl enable ssh.service 2>/dev/null || systemctl enable sshd.service 2>/dev/null || true
+else
+  systemctl disable ssh.service 2>/dev/null || systemctl disable sshd.service 2>/dev/null || true
+  systemctl mask ssh.service 2>/dev/null || systemctl mask sshd.service 2>/dev/null || true
+  # Also mask ssh.SOCKET (audit MEDIUM): a masked ssh.service is bypassed by socket-activation if the
+  # base ever ships socket-activated sshd (Debian trixie / newer openssh trend), re-exposing port 22
+  # on a release image with no login user. Mask both so no path can start sshd.
+  systemctl mask ssh.socket 2>/dev/null || systemctl mask sshd.socket 2>/dev/null || true
+fi

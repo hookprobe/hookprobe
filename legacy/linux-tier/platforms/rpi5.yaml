@@ -1,0 +1,132 @@
+# platforms/rpi5.yaml — Raspberry Pi 5 AND Compute Module 5 (Broadcom BCM2712, arm64).
+#
+# This profile is shaped for the planned **CM5 mini edge router** (CM5 on a
+# dual-NIC carrier: 2×LAN + Wi-Fi). Nothing is board-coded: with two interfaces
+# detected the mapper grants `openvswitch` + `multi_wan`; with a Wi-Fi radio it
+# grants `wifi_ap` — all from probed facts. When the CM5 is procured, dropping it
+# in needs zero code: it matches `raspberrypi,5-compute-module` / `brcm,bcm2712`
+# here, the live prober reports its 2 NICs + Wi-Fi, and the router capabilities
+# light up automatically.
+
+profile: rpi5
+class: edge-pro
+sku: HP-GD-005
+
+# CPU microarch tier for per-tier AOT blob selection (ADR 0017/0021). The Pi 5 / CM5's
+# Cortex-A76 (BCM2712) is ARMv8.2 with LSE atomics, so the loader may select the faster
+# `<id>.a76.cwasm` blob (built by `builder/refresh-aot.sh --with-a76`) over the A72-safe
+# baseline. Data-driven: this one line is all it takes — the manifest freezes it into
+# `hardware.cpu.tier` and the loader fails closed to the baseline if the A76 blob is absent.
+cpu_tier: cortex-a76
+
+# Retirement audit #8 (2026-07-08): honesty marker — only platforms/rpi4.yaml carries a
+# real on-silicon boot+selftest gate record (docs/roadmap/BuildPlan.md). rpi5/CM5 hardware has
+# not been procured/booted yet; do not present this profile as equally proven.
+hardware_validated: false
+validation_note: "classification-tested; no on-silicon boot-gate record yet"
+
+match:
+  method: device-tree
+  device_tree_compatible:
+    - raspberrypi,5-model-b
+    - raspberrypi,5-compute-module
+    - brcm,bcm2712
+
+spec:
+  min:         { cores: 4, memory_mb: 4096, storage_gb: 16 }
+  recommended: { cores: 4, memory_mb: 8192, storage_gb: 64 }
+
+resources:
+  reserved:  { cpu_pct: 120, memory_mb: 1536 }
+  defaults:
+    wasm:      { cpu_pct: 25,  memory_mb: 128, epoch_ms: 50 }
+    container: { cpu_pct: 100, memory_mb: 512 }
+
+capabilities:
+  soc:         { requires: [cpu, memory_mb], policy: enabled }
+  ids:         { requires: [soc], policy: enabled }
+  openvswitch: { requires: [arch, "network.interfaces>=2"], policy: enabled }   # CM5 2×LAN ⇒ granted
+  wifi_ap:     { requires: ["wifi.present"], policy: enabled }
+  edge_ai:     { requires: ["npu.driver_ready", "memory_mb>=8192"], policy: enabled }   # absent unless an AI HAT
+  inline_ips:
+    requires: ["network.role:inline"]
+    policy: enabled
+    # Validate the CM5 carrier's NIC driver before enabling inline (TSO/LRO).
+    known_good_nic_drivers: []
+  capture:         { requires: [soc], policy: enabled }
+  host_telemetry:  { requires: [soc], policy: enabled }
+  # base-tier-build-ticket.md Phase 1/2 (ADR 0003 "Base-tier capability tokens", ADR 0031 §C/§E).
+  # `tc_bpf` — the eBPF/TC-BPF detection floor `dataplane-tune-apply.sh` already gates its whole
+  # tuning recipe on (`capability_state tc_bpf`) and `hookprobe-tune-bcm2712.service` depends on;
+  # it was documented in ADR 0003 but never actually added to this file's `capabilities:` map, so
+  # that gate always resolved `absent` and the Phase-1 tuning recipe silently never ran on a real
+  # device — fixed here as a direct, load-bearing prerequisite of `resource_shed_v2` below (flagged,
+  # not silently folded in: this line existed nowhere before this pass). Grant basis: `capture`
+  # already requires `soc` and represents the BPF+BTF-capable capture path this token names; there
+  # is no finer-grained `btf.present` fact in the requirement-expression grammar today (a real gap,
+  # not modelled here — os-architect TODO).
+  tc_bpf:           { requires: [capture], policy: enabled }
+  # `resource_shed_v2` — the eBPF PSI pressure-valve path (this phase's shed-v2 fast loop +
+  # `hookprobe-psid`'s pinned `shed_ctrl` writes) riding on the SAME `tc_bpf` floor.
+  resource_shed_v2: { requires: [tc_bpf], policy: enabled }
+  # `ml_cpu` — base-tier-build-ticket.md Phase 4 (ADR 0014 D6): the dga-lm int8 DGA classifier's
+  # pure-CPU SDOT fast path. Grant is gated in the mapper (crates/hookprobe-manifest's
+  # `capabilities::compute_one` `ml_cpu` known-good step) on this file's own `cpu_tier:
+  # cortex-a76` above — granted here, `present_unsafe` on the A72 baseline (rpi4).
+  ml_cpu:           { requires: [soc], policy: enabled }
+  # `ptp_hw` — base-tier-build-ticket.md Phase 3 (ADR 0031 §B): the macb/GEM (behind RP1)
+  # hardware-PTP time-truth source. Grant is keyed on a REAL per-board scan fact, not a
+  # platform-class guess — `network.hw_timestamping` is `true` only when `ethtool -T <iface>`
+  # (bootstrap's `probe::ethtool_hw_timestamping`) reports hardware rx/tx timestamping AND a
+  # bound PHC index on THIS device (Phase-0 §5's metal gate). Absent otherwise — never fabricated.
+  # STATUS 2026-07-16 (Pi4+CM5 metal): policy DECLARED but FACT-GATED — `ethtool -T` on the macb
+  # reports no hardware timestamping (TSU not exposed behind RP1/GEM), so capabilities.rs keeps
+  # `ptp_hw` UNGRANTED and ptp4l/phc2sys cleanly no-op. NOT a shipping HW-sync capability yet.
+  ptp_hw:           { requires: ["network.hw_timestamping"], policy: enabled }
+  ddos_mitigation: { requires: [capture], policy: enabled }
+  sdn:             { requires: [openvswitch], policy: enabled }
+  wifi_dfs:        { requires: [wifi_ap], policy: enabled }
+  dns_filtering:   { requires: [soc], policy: enabled }
+  threat_intel:    { requires: [soc], policy: enabled }
+  deception:       { requires: [soc], policy: enabled }
+  multi_wan:       { requires: ["network.interfaces>=2"], policy: enabled }   # CM5 2×LAN ⇒ granted
+  ai_planner:      { requires: [soc], policy: enabled }
+  secure_tunnel:   { requires: [soc], policy: enabled }
+  fleet_mesh:      { requires: [soc], policy: disabled }
+
+crypto_suite: hookprobe-pqc-hybrid-2026
+
+retention:
+  tier_fractions: { pcap: 0.15, events: 0.35, evidence: 0.30 }
+
+# base-tier-build-ticket.md Phase 1 (ADR 0031 amendment §C) — single-queue macb (Cadence
+# GEM behind RP1) tuning recipe, consumed by base/scripts/dataplane-tune-apply.sh via
+# hookprobe-tune-bcm2712.service. Applied ONLY where `tc_bpf` is granted; a flat, hand-
+# authored scalar block (awk/sed-parsed, no YAML library — see the Containerfile Layer A4
+# profile-package-overlay parser for the same convention). Uniform 4×Cortex-A76 — no
+# big.LITTLE split on this SoC, so `housekeeping_allowed_cpus` is deliberately empty (the
+# reconciler-owned `hookprobe-background.slice` cpuset stays whatever systemd's default
+# is; nothing to pin against a LITTLE cluster that doesn't exist here).
+dataplane_tuning:
+  napi_threaded: true
+  gro: true
+  # NIC RX IRQ (the macb behind RP1) pinned to core 0 — keeps softirq off the detection
+  # cpuset below and off core 1 (the RPS opt-in target), per ADR 0031 §C.
+  irq_affinity_cpus: 0
+  # QSECBIT/NAPSE epoch workers (hookprobe-live.slice) — cores 2-3, away from IRQ/RPS.
+  detection_allowed_cpus: 2-3
+  # RPS default OFF (ADR 0031 §C reconciliation: the draft's default-on is NOT adopted —
+  # at 1 GbE a single A76 core handles RX softirq; RPS adds IPI + cache-bounce and can be
+  # a net loss). Opt-in only; when enabled, core 1 ONLY (never shares with cores 0/2-3).
+  rps_default: false
+  rps_cpu_mask: 1
+  housekeeping_allowed_cpus:
+
+# ADR 0043 / MIGRATION-heqk.md Phase M1 — substrate selector for the rpi-native tier.
+# `linux` (DEFAULT, shipping): the Debian/hookprobe-edge kernel via make-pi-image.sh.
+# `heqk`: the heqk microkernel substrate (os/kernel) via os/build/make-cm5-heqk-image.sh —
+# a PARALLEL variant that produces config.txt kernel=heqk8.img. Do NOT promote heqk to the
+# default until the M2 gates (P8 rule-parity + the 0.7 enforcement-separation matrix + Gate R)
+# pass on heqk metal. The CM5 (raspberrypi,5-compute-module / brcm,bcm2712) matches this rpi5
+# profile; the substrate only swaps the kernel+boot wrapper, the rootfs/brain is shared.
+substrate: linux

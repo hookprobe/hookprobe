@@ -1,0 +1,20 @@
+[Unit]
+Description=HookProbe OS measured-boot attestation (TPM PCR capture → boot-attestation.json)
+# Runs on EVERY platform: captures the TPM PCRs where present, reports the honest software posture
+# where not (Pi). Feeds the QSECBIT integrity score + remote attestation. See ADR 0006 (H2).
+After=systemd-remount-fs.service var-lib-hookprobe.mount
+Wants=var-lib-hookprobe.mount
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/hookprobe/measured-boot-report.sh
+# Read-only except the attestation output; no privileges needed to read sysfs PCRs + efivars.
+ProtectSystem=strict
+ReadWritePaths=/var/lib/hookprobe
+ProtectHome=yes
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,8 @@
+# HEQK cold-boot default (Linux files intact; restore config.txt.linux to revert)
+arm_64bit=1
+enable_uart=1
+pciex4_reset=0
+enable_rp1_uart=1
+kernel=heqk8.img
+device_tree=bcm2712-rpi-cm5-cm5io.dtb
+os_check=0

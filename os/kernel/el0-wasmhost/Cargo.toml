@@ -1,0 +1,43 @@
+# M5.3 (Track C) — the EL0 Wasm-HOST binary: a no_std aarch64 EL0 program that links a
+# REAL wasmi 0.32 interpreter and runs ONE signed .wasm module handed to it by the kernel.
+#
+# KEY ARCHITECTURAL INSIGHT (ADR 0044 D4 #2): the Wasm host is an EL0 SERVER, so wasmi
+# lives HERE — in this EL0 binary, loaded via the M5.1 ELF loader — NOT in the kernel. The
+# ~326 KiB of wasmi .text stays OUT of the kernel TCB entirely; the kernel gains ONLY the
+# `include_bytes!` of this image. This is a DETACHED workspace (own `[workspace]` table) so
+# it never enters the kernel's build graph / Cargo.lock; the kernel's build.rs invokes
+# `cargo build` on it in a clean env and embeds the resulting ELF (no committed binary).
+[package]
+name = "el0-wasmhost"
+version = "0.1.0"
+edition = "2021"
+
+# Detach from the kernel workspace: this crate is built SEPARATELY (by the kernel's
+# build.rs) with its own target dir, so it must not be a workspace member of ../Cargo.toml.
+[workspace]
+
+[[bin]]
+name = "el0-wasmhost"
+path = "src/main.rs"
+
+# M5.5 (Track C, U5) — the CM5 SYNCHRONOUS-EXCURSION ABI. Default (no feature) keeps the
+# QEMU-proven IPC-server ABI (SYS_CALL on an Endpoint cap, run under the scheduler). Under
+# `syncabi` the host instead runs classify ONCE and reports the verdict via a single
+# SYS_DRIVER_REPORT svc — matching CM5 prod's IRQs-off, no-scheduler `enter_user` excursion
+# (the same primitive the isolated EL0 GEM driver uses). Selects link-cm5.ld (GB5 window).
+[features]
+syncabi = []
+
+[dependencies]
+# The REAL runtime. no_std, alloc-only (default-features=false drops std + getrandom); the
+# M4.2a feasibility proof + M5.3's own measurement show it builds for
+# aarch64-unknown-none-softfloat under build-std and runs the memoryless classify module in
+# ~9.5 KiB of bump-heap high-water.
+wasmi = { version = "0.32", default-features = false }
+
+[profile.release]
+panic = "abort"      # bare-metal EL0: no unwinder
+opt-level = "z"      # size — keeps .text ~326 KiB so the loader's raised cap stays modest
+lto = true
+codegen-units = 1
+strip = true         # no symbols/debug in the embedded image

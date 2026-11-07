@@ -1,0 +1,41 @@
+title: SSH Private Key File Referenced Outside the Normal SSH Toolchain
+id: de6f89f5-949f-4187-9c78-f5126fed8459
+status: experimental
+description: >
+  A process's argv references a default SSH private-key filename (id_rsa/id_dsa/
+  id_ecdsa/id_ed25519) and the exec'ing process is NOT one of the tools that normally
+  takes `-i <keyfile>`/manages key permissions as its designed job (ssh/scp/sftp/rsync/
+  ssh-add/ssh-keygen/chmod/chown) — e.g. `cat ~/.ssh/id_rsa`, `cp ~/.ssh/id_ed25519 /tmp/`,
+  a tar/base64 archive-and-exfil of the key material. Demonstrates the same
+  `selection and not filter` idiom as the bundled sigma_root_shell_not_cron.yml, filtering
+  by the process's OWN name (`Image`/`name`) rather than its parent. host_edr's
+  credential-access check only watches /etc/shadow (CREDENTIAL_ACCESS_SHADOW_RULE_ID) —
+  private SSH key material is a distinct target, real NEW coverage.
+  HONEST FALSE-POSITIVE NOTE: a legitimate backup/config-management job that copies a
+  key file via a tool NOT in the filter allowlist (e.g. a bespoke Python/Ansible module
+  invoking `cp` directly) will also fire — document and tune the filter for such jobs.
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|contains:
+      - ".ssh/id_rsa"
+      - ".ssh/id_dsa"
+      - ".ssh/id_ecdsa"
+      - ".ssh/id_ed25519"
+  filter:
+    Image:
+      - "ssh"
+      - "scp"
+      - "sftp"
+      - "rsync"
+      - "ssh-add"
+      - "ssh-keygen"
+      - "chmod"
+      - "chown"
+  condition: selection and not filter
+level: medium
+tags:
+  - attack.credential-access
+  - attack.t1552.004

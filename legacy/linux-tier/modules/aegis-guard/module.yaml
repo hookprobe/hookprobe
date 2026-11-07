@@ -1,0 +1,92 @@
+# modules/aegis-guard/module.yaml — AEGIS Deterministic Policy Guard.
+#
+# V2 port of V1 core/aegis/principle_guard.py (principle checks + CONFIRMATION_REQUIRED)
+# and core/aegis/reflex/ (scored interference levels with velocity adjustment).
+#
+# This module is the DETERMINISTIC GUARD HALF of AEGIS ONLY.
+# The AI planner (BYO-LLM, assistive, never in the enforcement path) stays as a
+# container service and attaches at the TODO(ai-planner) hook in lib.rs.
+# The guard works completely model-free.
+#
+# Architecture.md C9: "actions are policy-gated — low-impact auto-apply,
+# high-impact require approval, principle violations are hard-blocked."
+# The LLM planner may suggest a course of action for RequireApproval cases,
+# but the Deny verdict is final and cannot be overridden by the planner or LLM.
+id: aegis-guard
+version: 0.1.0
+title: "AEGIS Guard — Deterministic Policy Guard & Reflex"
+runtime: wasm
+artifact: registry.hookprobe.com/modules/aegis-guard:0.1.0
+
+# `soc` is the minimum viable platform (CPU + memory for event processing).
+# The supervisor refuses to load this module if `soc` is not granted.
+requires:
+  capabilities: [soc]
+  min_memory_mb: 64
+
+grants:                              # ONLY host access this module receives (WASI caps)
+  - read: /var/lib/hookprobe/policy  # reads active policy / desired-state from AEGIS reconciler
+  - read: /var/lib/hookprobe/events  # reads normalized telemetry events from Senzorium
+
+provides:
+  capabilities: [policy_guard]  # downstream modules / UI can gate on this token
+                                 # module-declared; no new platform token change needed
+                                 # (follows same pattern as qsecbit provides `qsecbit`)
+
+# wasm-XS budget: pure deterministic math, no ML, no I/O beyond stdin.
+# Principle checks are O(actions * principles) — constant per tick, well within
+# epoch_ms=5 even on a Pi 5 or N100.
+resources:
+  cpu_pct: 10
+  memory_mb: 64
+  epoch_ms: 5
+
+# Payload digest (ADR 0016) — refreshed by
+# `hookprobe-supervisor --write-artifact-digests aegis-guard` (builder/sign-release.sh runs it
+# BEFORE --sign-modules); never hand-edit `value`.
+artifacts:
+  - path: aegis-guard.wasm
+    role: executable
+    digest:
+      alg: sha256
+      value: "91dd4fa793d67de019dd5c6b6aeb0538b073e8de44a94b7d8b97ac5347e9b941"
+
+  # ADR 0017 — build-time-precompiled AOT blob, arch-qualified (one entry per built arch; the
+  # supervisor consults only the entry matching its own running arch, falls back to the verified
+  # `.wasm` JIT floor on any doubt). Populated by `--write-artifact-digests aegis-guard`; never
+  # hand-edit `value`. arm64/riscv64 entries land via their own arch's CI/build run.
+  - path: aegis-guard.cwasm
+    role: aot
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "e8debb9b0da1050a2a75cd21c5c77bc0d43b93334be0612a520783b9368b22cc"
+
+  # arm64 leg (ADR 0017 D3/D1 — the "every AOT-eligible module gets ONE `role: aot` entry per
+  # built arch" convention closed here, mirroring napse-quarantine/host-telemetry's `role:
+  # executable`/`loader` generalization, ADR 0021): without this entry a Pi/RK3588 device had NO
+  # `role: aot` to match at all — `verify_aot_binding` correctly treats "absent for this arch" as
+  # the safe WARN-only case (ADR 0017 D3), but that meant AOT NEVER engaged on any arm64 device,
+  # silently regressing every arm64 boot to the (still fail-closed, but far slower) verified-JIT
+  # floor forever. Populated by `hookprobe-supervisor --write-artifact-digests aegis-guard` run AS
+  # arm64 (native arm64 CI runner, or this dev box's qemu-aarch64-static + exact-glibc-2.36
+  # sysroot stand-in, `builder/refresh-aot.sh --arch arm64`); never hand-edit `value`.
+  - path: aegis-guard.cwasm
+    role: aot
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "afd1b0e543bd51f7ec7060b5fd043456068834c8f3533611fdbf6244fb6d60c6"
+
+# All modules must be cosign-signed before the supervisor will load them.
+  - path: aegis-guard.a76.cwasm
+    role: aot
+    arch: arm64
+    cpu: cortex-a76  # A76-tier (LSE) variant of the same path's A72-safe baseline;
+                     # defaults to A72-safe when `cpu:` is absent (every other entry).
+                     # informational until the Rust-side selection lands (see
+                     # builder/refresh-aot.sh --with-a76's doc header).
+    digest:
+      alg: sha256
+      value: "0ac08d67987950e00713117dc7d1573eefbc701effa484781b468932c3fc7d0d"
+signature: required

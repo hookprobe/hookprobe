@@ -1,0 +1,21 @@
+title: Interactive Shell Invocation Outside of Cron
+id: 9d8c7b6a-5e4f-4a3b-9c2d-1e0f9a8b7c6d
+status: experimental
+description: >
+  A `/bin/sh -c` invocation NOT spawned by cron. Demonstrates startswith + a `filter`
+  selection combined with `and not` — cron-spawned scheduled jobs legitimately do this
+  as their normal job and must not be flagged (the same false-positive-guard discipline
+  hookprobe_evidence::host_edr's allowlists use, expressed here as a Sigma filter).
+logsource:
+  category: process_creation
+  product: linux
+detection:
+  selection:
+    CommandLine|startswith: "/bin/sh -c"
+  filter:
+    ParentImage|contains: "cron"
+  condition: selection and not filter
+level: low
+tags:
+  - attack.execution
+  - attack.t1059.004

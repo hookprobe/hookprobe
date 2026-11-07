@@ -1,0 +1,23 @@
+{
+  "_comment": "probert-style RAW scanner output for an RK3588 board (pre-classification). Input to the bootstrap generator; replayable for offline testing.",
+  "scan": {
+    "device_tree_compatible": ["rockchip,rk3588", "rockchip,rk3588-evb"],
+    "dmi": null,
+    "arch": "arm64",
+    "cpu": { "model": "RK3588", "cores": 8 },
+    "memory_mb": 16384,
+    "storage": [ { "dev": "mmcblk0", "size_gb": 64, "type": "emmc" } ],
+    "tpm": { "present": true, "version": "2.0", "kind": "discrete" },
+    "secure_boot": { "supported": true, "enabled": true },
+    "npu": { "present": true, "driver_ready": true, "vendor": "rockchip", "model": "rknpu" },
+    "virt": "none",
+    "interfaces": [
+      { "name": "eth0", "mac": "dc:a6:32:01:02:03", "type": "ethernet", "driver": "stmmac",
+        "supported_modes": ["1000baseT/Full", "2500baseT/Full"], "role": "out-of-band", "state": "up" },
+      { "name": "eth1", "mac": "dc:a6:32:01:02:04", "type": "ethernet", "driver": "stmmac",
+        "supported_modes": ["1000baseT/Full"], "role": "inline", "state": "up" }
+    ],
+    "wifi": { "present": true, "max_standard": "wifi7" },
+    "lte": { "present": false }
+  }
+}

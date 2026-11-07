@@ -1,0 +1,46 @@
+# profiles/cloud.yaml — cloud / aggregation node (AWS, GCP, Azure, generic IaaS).
+# Maps to platform.class = cloud (ADR 0003). Elastic CPU/memory; no physical Wi-Fi,
+# no AP, no inline NIC bypass — this tier aggregates telemetry from edge fleets and
+# can host multi-tenant workloads (cloud-linked mode). Seeded by cloud-init.
+
+profile: cloud
+class: cloud
+target_arch: amd64         # CI also builds arm64 (Graviton). See bib.variants.
+
+build_args:
+  PROFILE: cloud
+  TARGETARCH: amd64
+
+packages:
+  include:
+    - cloud-init           # cloud platforms expect cloud-init seeding
+    - qemu-guest-agent     # IaaS hypervisor integration
+  exclude:
+    # No Wi-Fi/AP/regulatory bits on cloud. (`crda` dropped repo-wide 2026-07-07 —
+    # obsolete on kernel >=4.15; never install it, nothing to exclude it FROM.)
+    - hostapd
+    - wireless-regdb
+    - iw
+
+# resources.total is ELASTIC on cloud (ADR 0003 open-Q 3): the manifest reconciles
+# the real envelope at runtime rather than trusting a fixed core count.
+kargs_extra:
+  - "console=ttyS0,115200"   # serial console is the norm for cloud instances
+
+bib:
+  variants:
+    - arch: x86_64
+      types: ["raw", "ami"]   # .raw for generic IaaS import; .ami for AWS
+    - arch: aarch64
+      types: ["raw"]          # Graviton
+  filesystem:
+    - mountpoint: /
+      minsize: "10 GiB"
+    - mountpoint: /var/lib/hookprobe
+      label: hookprobe-data
+      minsize: "32 GiB"       # aggregation node retains more; offload to object store beyond
+      type: ext4
+  # TODO: AMI publishing (register snapshot → AMI) is a separate CI step after the
+  #       .raw build; confirm bootc-image-builder emits an importable image vs needs
+  #       a post-process. Cloud often prefers a single root volume + attached data EBS.
+  seed_engine: cloud-init     # `cloud-init clean` MANDATORY before imaging (shared SSH host-key footgun)

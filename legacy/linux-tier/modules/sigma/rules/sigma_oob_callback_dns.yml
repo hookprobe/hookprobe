@@ -1,0 +1,34 @@
+title: DNS Query to a Known Out-of-Band Interaction/Callback Service
+id: dd05e4da-79f3-4efb-b9c9-6462e2589d73
+status: stable
+description: >
+  A DNS query naming a well-known out-of-band interaction/callback service
+  (burpcollaborator.net, oastify.com, interact.sh, canarytokens.com, requestbin.net,
+  webhook.site, ngrok.io/ngrok-free.app, pipedream.net) — these services exist
+  specifically to confirm blind/out-of-band exploitation (SSRF/RCE/XXE) or to exfiltrate
+  a beacon over DNS, and a device legitimately resolving one is rare. EXTENDS the
+  bundled sigma_suspicious_tld_dns.yml's DNS/C2 family with a materially different,
+  disjoint indicator set — specific known-service domains rather than any registration
+  under a cheap TLD — so this is additive coverage, not a duplicate (a query to
+  `interact.sh` itself would never match the TLD rule's `.tk/.ml/.ga/.cf/.gq/.xyz/.top`
+  suffix list). `query|contains`, same modifier the bundled TLD rule already proves.
+logsource:
+  category: dns_query
+  product: linux
+detection:
+  selection:
+    query|contains:
+      - "burpcollaborator.net"
+      - "oastify.com"
+      - "interact.sh"
+      - "canarytokens.com"
+      - "requestbin.net"
+      - "webhook.site"
+      - "ngrok.io"
+      - "ngrok-free.app"
+      - "pipedream.net"
+  condition: selection
+level: medium
+tags:
+  - attack.command-and-control
+  - attack.t1071.004

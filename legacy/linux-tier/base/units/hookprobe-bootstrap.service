@@ -1,0 +1,103 @@
+# hookprobe-bootstrap.service — hardware probe → signed Platform Manifest.
+# Architecture C3–C7: as root, after udev has settled; scans hardware, classifies
+# against /usr/share/hookprobe/platforms/*.yaml, maps capabilities (grant = presence
+# ∧ known-good ∧ policy), allocates budgets, writes + cosign-signs + TPM-seals (where
+# present) /var/lib/hookprobe/manifest.json. "Detect once, query forever": the real
+# probe (ExecStart) runs ONLY when ExecCondition decides a re-probe is actually
+# needed — see below — nothing else re-probes hardware.
+
+[Unit]
+Description=HookProbe hardware probe and Platform Manifest generator
+Documentation=https://github.com/hookprobe/hookprobe-os/blob/main/docs/adr/0003-platform-manifest-schema.md
+
+# Run on EVERY boot, but the real hardware probe (ExecStart) fires only when
+# ExecCondition (below) says a re-probe is actually needed. This unit used to gate
+# on `ConditionFirstBoot=yes` alone, which made two recovery-path claims in this
+# file's own comments FALSE in practice (2026-07-05, backend-audit P1 #5):
+#   (a) "a missing manifest after a data-partition wipe is re-created by the
+#       binary's own check on next start" — FALSE: `ConditionFirstBoot` is keyed to
+#       the OS installation, not the data partition; after a data-partition-only
+#       wipe (rootfs/machine-id untouched) this condition is FALSE FOREVER, so a
+#       missing manifest was never regenerated.
+#   (b) "a hardware-fingerprint change triggers a re-probe inside the binary" —
+#       FALSE: no such check existed in the binary at all.
+# Both are now real. Recovery path (a): ExecCondition's own
+# `hookprobe-bootstrap --check-rules-version` reads the manifest and treats an
+# ABSENT/unreadable/unparseable file as "needs a re-probe" (exit 0 → proceed) — the
+# same effect `ConditionPathExists=!/var/lib/hookprobe/manifest.json` would give,
+# expressed as a scriptable condition (see immediately below for why). Recovery
+# path (b): the SAME check also proceeds when the manifest's recorded
+# `platform.platform_rules_version` (`hookprobe_manifest::builder`) is older than
+# THIS image's own — i.e. a classification/capability-mapping fix shipped in a
+# later image reaches an already-provisioned device on its next boot, without
+# waiting for a genuine hardware change. Native `ConditionPathExists=!<manifest>`
+# ALONE cannot express "OR the rules version is stale" (systemd Condition
+# directives test a path/fact, not an arbitrary predicate) — `ExecCondition=` is the
+# correct systemd idiom for a richer-than-file-existence gate, and it composes both
+# cases into ONE cheap (one JSON read, no hardware access), boot-time-safe check
+# that runs every boot: non-zero exit (1) skips ExecStart without marking the unit
+# failed (systemd's documented `ExecCondition=` convention), so the OVERWHELMINGLY
+# common steady-state boot (manifest present + current) is still a fast no-op.
+# 2026-07-06 FIX: `ExecCondition=` is a [Service] directive — systemd IGNORES it in [Unit]
+# ("Unknown key 'ExecCondition' in section [Unit], ignoring"), which silently disabled this whole
+# re-probe gate and made bootstrap re-probe hardware on EVERY boot. Moved to [Service] below.
+
+# Order after udev COLDPLUG (systemd-udev-trigger) so /sys is populated before we probe —
+# WITHOUT the deprecated systemd-udev-settle, which a real-boot test showed hangs ~120s
+# (no daemon reply) and cascades into a jammed boot. We only ORDER after the trigger (not
+# Requires it), so a slow/failed udev degrades the probe rather than blocking the system.
+After=systemd-udev-trigger.service
+After=local-fs.target var-lib-hookprobe.mount
+Wants=var-lib-hookprobe.mount
+
+# The supervisor must not start before a manifest exists.
+Before=hookprobe-supervisor.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Re-probe gate (rationale in the [Unit] comments above). Runs every boot, cheap (one JSON read,
+# no hardware access): exit 0 → re-probe needed (manifest absent OR its platform-rules version is
+# older than this image's) → ExecStart runs; exit 1 → skip ExecStart WITHOUT marking the unit
+# failed (systemd's documented ExecCondition= convention). MUST live in [Service] — systemd ignores
+# it in [Unit], which is exactly the bug this line fixes.
+ExecCondition=/usr/lib/hookprobe/hookprobe-bootstrap --check-rules-version /var/lib/hookprobe/manifest.json
+
+# The real scanner needs broad read access to hardware (DMI, device-tree, PCI/USB,
+# ethtool, iw, TPM) and must write/sign the manifest on the data partition. It runs
+# as root by necessity; hardening is therefore lighter than the supervisor's, but we
+# still constrain what we can. TODO: tighten with a capability bounding set once the
+# exact probe syscalls are known (likely CAP_SYS_RAWIO/CAP_SYS_ADMIN for some probes,
+# CAP_DAC_READ_SEARCH; TPM access via /dev/tpmrm0).
+ExecStart=/usr/lib/hookprobe/hookprobe-bootstrap \
+    --out /var/lib/hookprobe/manifest.json \
+    --platforms /usr/share/hookprobe/platforms
+# NOTE: the shipping binary scans real hardware; the current scaffold binary reads a
+# probert-style fixture (see bootstrap/src/main.rs TODO). The flags above are the
+# target CLI; CI/integration wires the real scanner. TODO: finalize flag contract.
+
+StateDirectory=hookprobe
+StateDirectoryMode=0750
+
+# Light hardening (root is required for probing; do not over-restrict the scan).
+NoNewPrivileges=no
+ProtectHome=yes
+ProtectKernelLogs=no
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+# A failed first-boot probe is fatal to bringing the SOC up — surface it loudly,
+# but do not loop forever (a hardware fault should page the operator, not burn the
+# SD card). Recovery if a bad image broke probing depends on the tier (ADR 0019
+# D2/D3): a REAL `bootc rollback` only exists on a bootc-managed UEFI deployment;
+# on today's shipping rpi-native/mkosi image there is no second slot yet, so the
+# honest recovery path is a manual reflash until the A/B image-sync agent ships
+# (ADR 0019 Phase 3) — see base/greenboot/README.md and selftest-boot.sh.
+TimeoutStartSec=180
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

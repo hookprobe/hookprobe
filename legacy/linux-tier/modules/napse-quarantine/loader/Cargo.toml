@@ -1,0 +1,40 @@
+[package]
+name = "napse-quarantine"
+version = "0.1.0"
+edition = "2021"
+
+# Ring-0 line-rate quarantine enforcement (ADR 0009). Mirrors napse-capture/loader's split: the
+# manifest/state → BPF-map key logic (state.rs) is pure and builds+tests anywhere; the libbpf glue
+# (bpf.rs) is behind the `bpf` feature (needs libbpf + the compiled quarantine.bpf.o — CI, or this
+# dev box, which happens to carry clang/bpftool/libbpf-dev).
+[[bin]]
+name = "napse-quarantine"
+path = "src/main.rs"
+
+[dependencies]
+# Reuses hookprobe_manifest::scan_responder::QuarantineEntry directly — the EXACT schema
+# scan-responder.sh/hookprobe-supervisor already write to /var/lib/hookprobe/scan-quarantine.json.
+# No second definition of that struct anywhere in the tree.
+hookprobe-manifest = { path = "../../../crates/hookprobe-manifest" }
+serde_json = "1"
+# ADR 0016 Fix C: this loader reads its OWN module.yaml (YAML) to self-verify its artifact
+# digests before attaching the BPF program — same crate version every other module.yaml
+# consumer in this workspace already depends on.
+serde_yaml = "0.9"
+anyhow = "1"
+# `vendored` (not just the crate default `vendored-libbpf`) also vendors libelf+zlib from
+# source — needed for aarch64 cross-compilation on this dev box, which has no aarch64 system
+# libelf/libz (`-lelf`/`-lz` link failures otherwise; see the module README for the exact error).
+libbpf-rs = { version = "0.24", optional = true, features = ["vendored"] }
+
+[dev-dependencies]
+# ADR 0016 Fix C regression tests build fixture digests the same way `--write-artifact-digests`
+# would — same crate versions `hookprobe-manifest::module_sig` already pulls in.
+sha2 = "0.10"
+hex = "0.4"
+
+[features]
+default = []
+# `hookprobe-manifest/bpf` pulls in the shared `xdp::apply_btf_custom_path` wiring (libbpf
+# `btf_custom_path` for RPi BSP kernels that lack /sys/kernel/btf/vmlinux — ADR 0029/0030).
+bpf = ["dep:libbpf-rs", "hookprobe-manifest/bpf"]      # enabled once quarantine.bpf.o is built + libbpf is present.

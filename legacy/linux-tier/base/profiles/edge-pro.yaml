@@ -1,0 +1,66 @@
+# profiles/edge-pro.yaml — full local SOC for capable edge hardware (RK3588 SBC,
+# Intel N100 appliance). Maps to platform.class = edge-pro (ADR 0003). This is the
+# flagship tier: OVS/SDN, Wi-Fi AP, inline IPS (where the NIC is known-good), edge AI
+# via NPU/WASI-NN. Built for BOTH arm64 (RK3588 → .img.xz) and amd64 (N100 → .iso).
+
+profile: edge-pro
+class: edge-pro
+target_arch: arm64         # CI also builds the amd64 face for N100 (see bib.variants)
+
+build_args:
+  PROFILE: edge-pro
+  TARGETARCH: arm64
+
+packages:
+  include:
+    # Wi-Fi AP dataplane (hostapd-over-OVS, runtime-engine-map: image-layer).
+    # `crda` intentionally NOT listed: obsolete on kernel >=4.15 (the in-kernel
+    # cfg80211 regulatory database + `wireless-regdb` alone are sufficient) —
+    # dropped 2026-07-07 packaging audit; matches builder/mkosi-arm64/mkosi.conf,
+    # which never carried crda either (proven on the shipping Pi image).
+    - hostapd
+    - wireless-regdb
+    # Inline-path helpers (bridge utils for software fail-open/closed bypass).
+    - bridge-utils
+    # Driver FIRMWARE for the long tail of edge radios/NICs whose IN-TREE drivers
+    # need a blob (ath12k/iwlwifi/mt76/brcm Wi-Fi, Realtek/Atheros NICs). The image
+    # can't ship every driver — this covers the common case; out-of-tree drivers
+    # need a driver sysext or a custom variant. See docs/architecture/driver-strategy.md.
+    - firmware-linux-free
+    - firmware-misc-nonfree
+    - firmware-realtek
+    - firmware-atheros
+    - firmware-iwlwifi
+    - firmware-brcm80211
+    # Cellular (5G/LTE) modems: ModemManager + QMI/MBIM tooling + USB mode-switch.
+    - modemmanager
+    - libqmi-utils
+    - libmbim-utils
+    - usb-modeswitch
+  exclude: []
+
+slices_extra: []           # live/background defaults suffice
+
+kargs_extra:
+  - "console=ttyS2,1500000"   # RK3588 common debug UART. TODO: confirm per board (platforms/)
+  - "console=tty1"
+
+bib:
+  # arm64 SBC → flashable image; amd64 appliance → installer ISO.
+  variants:
+    - arch: aarch64
+      types: ["raw"]
+      compress: xz          # hookprobe-edge-pro-arm64.img.xz (RK3588)
+    - arch: x86_64
+      types: ["anaconda-iso"]   # hookprobe-edge-pro-amd64.iso (N100, UEFI USB install)
+  filesystem:
+    - mountpoint: /
+      minsize: "8 GiB"
+    - mountpoint: /var/lib/hookprobe
+      label: hookprobe-data
+      minsize: "16 GiB"
+      type: ext4
+  # TODO: confirm filesystem-customization syntax for BOTH output types in the
+  #       pinned bootc-image-builder; ISO installers may need a kickstart/ignition
+  #       partitioning override rather than the raw filesystem list.
+  seed_engine: ignition     # preferred declarative seed (Architecture §4.1); cloud-init fallback

@@ -1,0 +1,26 @@
+# extension-release marker for the napse-capture systemd-sysext.
+# systemd-sysext refuses to merge an extension unless this matches the host os-release
+# (so a sysext built for the wrong OS can't be merged). It lives at
+# /usr/lib/extension-release.d/extension-release.<IMAGE-NAME> INSIDE the sysext image,
+# and the filename suffix MUST equal the image name (napse-capture).
+#
+# Fields are matched against /etc/os-release (or /usr/lib/os-release) on the host.
+# See systemd-sysext(8) and os-release(5).
+
+# The base mkosi image is Debian-based (os-release ID=debian), so matching a specific ID would
+# require customizing the base os-release. Use systemd's `ID=_any` escape hatch — it SKIPS the
+# OS-match check entirely. Trust comes from the sysext's cosign signature + the ARCHITECTURE match
+# below, not from os-release. (If/when the base ships ID=hookprobe, pin ID/VERSION_ID here instead.)
+ID=_any
+
+# SYSEXT_LEVEL lets the sysext track an extension-API level independent of VERSION_ID;
+# pair it with a matching SYSEXT_LEVEL in the base os-release so OS minor bumps don't
+# silently invalidate every sysext. TODO(CI): mirror this in base os-release.
+SYSEXT_LEVEL=1
+
+# Per-arch: CI stamps the built arch so a sysext can't be merged on the wrong arch.
+# TODO(CI): set per build to aarch64 | x86-64 | riscv64.
+ARCHITECTURE=_any
+
+# Merge the /usr hierarchy (default). We extend /usr only; /etc and /var are untouched.
+EXTENSION_RELOAD_MANAGER=1

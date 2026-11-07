@@ -1,0 +1,109 @@
+# modules/planner/module.yaml — registry entry for `hookprobe-planner` (AEGIS BYO-LLM planner,
+# ADR 0025), wired into the staging registry 2026-07-08 (release-engineer, arm64 image build pass:
+# the crate + unit existed under `crates/hookprobe-planner/` but were staged on NEITHER build path).
+#
+# RESOLUTION (mirrors modules/api/module.yaml + modules/evidence/module.yaml's own C3 precedent
+# exactly, same reasoning): `hookprobe-planner`'s SOURCE lives under `crates/hookprobe-planner/`
+# (a workspace crate — it began life next to `hookprobe-manifest`/`hookprobe-evidence`, the
+# reconciler + graph it reads/writes, rather than under `modules/`), not under `modules/planner/`.
+# Per ADR 0015's own implementation spec, this file is the lower-disruption "reference entry"
+# option: a `modules/planner/module.yaml` that points at the crate's artifact/unit in place via the
+# `staging:` override block, rather than relocating `crates/hookprobe-planner/` wholesale (still the
+# ALTERNATIVE NOT APPLIED, flagged for product-steward, same as api/evidence's own header says).
+#
+# Canon: docs/adr/0025-aegis-byo-llm-planner.md (this crate's own ADR — assistive, BYO-LLM,
+# NEVER in the enforcement path; the deterministic reconciler computes every plan), CLAUDE.md
+# ("AEGIS = deterministic reconciler ... + AI planner (BYO LLM, assistive, never in the
+# enforcement path)"), docs/adr/0015-registry-driven-module-inclusion.md (C3 pattern).
+
+id: planner
+version: 0.1.0
+title: "AEGIS BYO-LLM planner — assistive intent-to-diff HTTP surface (ADR 0025)"
+runtime: host                  # host-integral binary + unit; ordinary file I/O + a loopback HTTP
+                                # bind + (only when an operator configures a remote endpoint)
+                                # outbound HTTP to the BYO-LLM — matches evidence's/api's own
+                                # `runtime: host` classification, not the Wasm sandbox (this
+                                # crate's own adapter.rs note: a DIFFERENT, additive write surface).
+artifact: base                 # host-integral; delivered IN the bootc image (no separate OCI)
+
+requires:
+  capabilities: [soc, evidence]  # baseline SOC + the evidence graph this planner reads context
+                                  # from and attaches AI explanations to (record_ai_explanation,
+                                  # the ONE narrow write path — see the unit's own hardening note).
+  min_memory_mb: 128              # matches the unit's own hand-authored MemoryMax=128M.
+
+grants:                           # the ONLY host access this binary opens (see the unit's own
+                                  # hardening: ProtectSystem=strict, ReadOnlyPaths=/var/lib/hookprobe
+                                  # /etc/hookprobe, ReadWritePaths scoped to evidence.db + its own
+                                  # staging dir).
+  - read:  /var/lib/hookprobe/manifest.json
+  - read:  /etc/hookprobe/network.yaml
+  - write: /var/lib/hookprobe/evidence.db
+  - write: /var/lib/hookprobe/planner
+
+provides:
+  capabilities: [aegis_planner]   # downstream: Mission Control's intent bar (POST
+                                  # /api/planner/propose) gates on this token; the deterministic
+                                  # reconciler (hookprobe_manifest::aegis::reconcile_network) is
+                                  # ALWAYS present regardless — this token only gates the
+                                  # assistive natural-language-to-diff HTTP front end.
+
+resources:
+  cpu_pct: 10
+  memory_mb: 128                 # matches the unit's own MemoryMax=128M — the resource-budget
+                                  # cgroup-dropin generator emits an ADDITIVE drop-in with the
+                                  # SAME numbers, not a conflict (same convention as api/evidence).
+
+# staging: — the crate lives OUTSIDE modules/ (see header), so this cannot use the wasm
+# convention; one of the five explicit override blocks ADR 0015 D1 calls for (same shape as
+# modules/api/module.yaml's own staging: block — hookprobe-planner depends on hookprobe-evidence
+# + hookprobe-manifest, both of which already need the SAME glibc/bundled-rusqlite toolchain).
+staging:
+  build:
+    - crate: hookprobe-planner
+      toolchain: gnu            # transitively pulls hookprobe-evidence's bundled SQLite
+                                # (rusqlite `bundled`) — needs a glibc target, NOT musl, same
+                                # aarch64-GNU cross-recipe as hookprobe-evidence/hookprobe-api
+                                # (module_sig::resolve_staging_src `{gnu_bin}` placeholder
+                                # resolves to the `-unknown-linux-gnu` triple).
+  artifacts:
+    - { src: "{gnu_bin}/hookprobe-planner", dest: "/usr/lib/hookprobe/hookprobe-planner", mode: "0755" }
+  units:
+    - "crates/hookprobe-planner/units/hookprobe-planner.service"
+  # No `preset:` override needed — `hookprobe-planner.service` has an `[Install]` section and this
+  # module's `requires.capabilities` ([soc, evidence]) hits neither of gen-staging.sh's
+  # HARDWARE_GATED_CAPS, so the generator's own default_verb ("enable") already applies, matching
+  # every other always-on baseline SOC service (napse/qsecbit/dnsxai/evidence/api).
+
+# Payload digest (ADR 0016, arch-qualified per ADR 0021) — on-device dest path (this crate lives
+# outside modules/, see header, so its module.yaml is never co-located with the compiled binary
+# either — same convention as modules/api/module.yaml's own artifacts: block).
+#
+# Both `value`s are REAL sha256 of `hookprobe-planner` built fresh in this pass for
+# x86_64-unknown-linux-gnu (native) and aarch64-unknown-linux-gnu (the same exact-glibc-2.36
+# sysroot wrapper modules/napse-quarantine/README.md's trail documents), each written by its own
+# arch's `hookprobe-supervisor --write-artifact-digests planner` run (arm64 via
+# qemu-aarch64-static/binfmt so `module_sig::running_arch()` reports `arm64` correctly) — never
+# hand-`sha256sum`'d. A compiled binary's bytes remain toolchain/version-sensitive; a real release
+# pipeline re-runs `--write-artifact-digests` + `--sign-modules` against its OWN build of each arch
+# before shipping.
+artifacts:
+  - path: /usr/lib/hookprobe/hookprobe-planner
+    role: executable
+    arch: amd64
+    digest:
+      alg: sha256
+      value: "1aebbf542327fd5891253df39f318f781e6eb9dc35e68d7c92b05527854faeba"
+  - path: /usr/lib/hookprobe/hookprobe-planner
+    role: executable
+    arch: arm64
+    digest:
+      alg: sha256
+      value: "075ed4a80d1038e0a476ae630c39864b8dfd41845b95342058f57f84c10ed7a9"
+
+signature: required             # cosign-signed like every other staged artifact; the
+                                # device VERIFIES, never signs (ADR 0002 §5). Digests above are
+                                # placeholders until --write-artifact-digests is run per arch
+                                # (this build pass, see builder/RUNBOOK.md workflow); signing
+                                # (builder/sign-release.sh / --sign-modules) MUST run AFTER that,
+                                # never before (D3's build -> digest -> sign order).

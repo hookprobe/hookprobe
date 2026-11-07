@@ -1,0 +1,4 @@
+# Dependencies for security/cbom/gen-cbom.py
+# (PyYAML is already pinned by manifest/requirements.txt; repeated here so the CBOM
+#  tool is installable standalone in a job that doesn't install the manifest harness.)
+PyYAML>=6.0

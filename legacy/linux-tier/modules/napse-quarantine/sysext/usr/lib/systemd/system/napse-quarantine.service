@@ -1,0 +1,75 @@
+# napse-quarantine.service — Ring-0 line-rate quarantine enforcement (ADR 0009), the fix for the
+# 2026-07-03 live finding (a port scan outran the reactive detect->nft-drop loop). Attaches the
+# tiny CO-RE `quarantine_ingress` TC-bpf program at clsact INGRESS on wlan0 (Wi-Fi/LAN — ADR 0005:
+# brcmfmac has no native XDP) and end0 (WAN), then mirrors
+# /var/lib/hookprobe/scan-quarantine.json (the scan-responder's own state, unchanged) into the two
+# BPF hash maps that program enforces from. C9: this unit enforces; it never decides.
+#
+# COEXISTS WITH, DOES NOT REPLACE, hookprobe-scan-responder.service's nft quarantine: this is now
+# the PRIMARY, earliest-kernel-point layer; nft stays as defense-in-depth if this loader ever
+# fails to load/attach on a given boot (fail-open — see loader/src/bpf.rs's doc comment).
+#
+# arch F4 fix: preset-ENABLED everywhere (builder/gen-staging.sh, module.yaml `staging.
+# self_gated: true`) — the supervisor has no runtime path that starts a `managed` unit, so
+# this unit self-gates instead: loader/src/main.rs reads the manifest at startup and exits 0
+# cleanly unless capabilities.ddos_mitigation.state == "granted" (mirrors modules/ovs/config/
+# ovs-bringup's `granted <cap> || exit 0`, and napse-capture's own capability requirement).
+# Stays inactive/no-op until BOTH that capability is granted AND the signed sysext delivers
+# quarantine.bpf.o (ConditionPathExists below).
+
+[Unit]
+Description=NAPSE quarantine — Ring-0 TC-bpf enforcement of the scan-responder's quarantine set
+Documentation=file:///usr/share/hookprobe/docs/adr/0009-soc-brain-edge-cloud.md
+Requires=systemd-sysext.service
+After=systemd-sysext.service hookprobe-bootstrap.service hookprobe-network-reconcile.service
+Wants=hookprobe-bootstrap.service hookprobe-scan-responder.service
+ConditionPathExists=/var/lib/hookprobe/manifest.json
+ConditionPathExists=/usr/lib/hookprobe/bpf/quarantine.bpf.o
+
+[Service]
+Type=simple
+Environment=NAPSE_QUARANTINE_OBJ=/usr/lib/hookprobe/bpf/quarantine.bpf.o
+# 2026-07-05 threat-model fix (docs/adr/0018 D3): NAMED lan/wan interfaces, not a generic list —
+# enforcement is now ifindex-scoped per plane, so the loader needs to know WHICH is which.
+#
+# 2026-07-07 cross-platform fix: these `wlan0`/`end0` values are the Pi's names — a LAST-RESORT
+# default only, for the (should-never-happen) case ifaces.env doesn't exist yet. The REAL source
+# of truth is `/var/lib/hookprobe/ifaces.env`, written by `hookprobe-network-reconcile.service`
+# from THIS SAME manifest's classified WAN uplink + LAN bridge/routed-AP radio
+# (`aegis::reconcile_network`'s `render_ifaces_env`) — per systemd.exec(5) "Settings from these
+# files [EnvironmentFile=] override settings made with Environment=", so ifaces.env ALWAYS wins
+# over the two lines below once it exists, regardless of directive order in this file. Without
+# this override, every non-Pi platform (confirmed live on an amd64 VM:
+# `read ifindex for wlan0: No such file or directory` — enforcement was silently a no-op) was
+# permanently stuck on the Pi's interface names.
+Environment=NAPSE_QUARANTINE_LAN_IFACE=wlan0
+Environment=NAPSE_QUARANTINE_WAN_IFACE=end0
+EnvironmentFile=-/var/lib/hookprobe/ifaces.env
+Environment=QUARANTINE_STATE_FILE=/var/lib/hookprobe/scan-quarantine.json
+Environment=NAPSE_QUARANTINE_PIN_DIR=/sys/fs/bpf/napse-quarantine
+Environment=NAPSE_QUARANTINE_POLL_MS=500
+ExecStart=/usr/lib/hookprobe/bin/napse-quarantine
+# Fail-open: a load/attach error just ends the process (see bpf.rs) — Restart retries on its own
+# schedule; nothing about the existing datapath (nft quarantine included) is ever touched by a
+# failed attempt.
+Restart=on-failure
+RestartSec=5
+Slice=hookprobe-dataplane.slice
+
+# The narrow privileged surface: load the object (CAP_BPF), attach TC at clsact (CAP_NET_ADMIN),
+# read/observe (CAP_PERFMON — BTF/CO-RE relocation + map introspection). No CAP_NET_RAW: this
+# program only reads existing skbs handed to it by the TC hook, it never opens a raw socket.
+AmbientCapabilities=CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+CapabilityBoundingSet=CAP_BPF CAP_NET_ADMIN CAP_PERFMON
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/hookprobe -/sys/fs/bpf
+# scan-quarantine.json is created lazily by scan-responder on the first port-scan alert, so it is
+# absent on a fresh boot — the `-` optional prefix lets the mount namespace set up without it
+# (without it, systemd fails the unit 226/NAMESPACE and the Ring-0 TC-bpf enforcement never starts).
+ReadOnlyPaths=/var/lib/hookprobe/manifest.json -/var/lib/hookprobe/scan-quarantine.json
+MemoryMax=32M
+
+[Install]
+WantedBy=multi-user.target
