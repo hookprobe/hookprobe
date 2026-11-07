@@ -2907,7 +2907,7 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     // The AP MAC = the src of every AP-served frame (M1, ARP reply, DHCP OFFER/ACK).
     // Take it from the scan phase's ESTABLISHED MAC (`MAC_DIAG.1`: the OTP MAC, or the
     // LAA fallback it SET) — NOT a fresh cur_etheraddr GET. Metal 2026-09-11: the scan
-    // read OTP=b8:27:eb:74:f2:6c fine, yet this GET a few seconds later returned ZERO
+    // read OTP=<board MAC> fine, yet this GET a few seconds later returned ZERO
     // → bssid 00:00:00:00:00:00 → the AP served zero-sourced frames and the phone
     // could never key/lease. That intermittent GET is the "AP sometimes doesn't
     // work on a boot" flake (gap #2). The live GET is only a fallback.
