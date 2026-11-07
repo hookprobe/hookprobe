@@ -24,6 +24,9 @@ impl<'a> JsonBuf<'a> {
     pub fn new(buf: &'a mut [u8]) -> Self {
         JsonBuf { buf, len: 0, overflow: false }
     }
+    pub fn capacity(&self) -> usize {
+        self.buf.len()
+    }
     pub fn bytes(&self) -> &[u8] {
         &self.buf[..self.len]
     }

@@ -43,7 +43,14 @@ const txt = (await needs.textContent())?.trim() ?? '';
 check(/^\d+ incidents? need your review\.$/.test(txt), `Home "Needs you" is live: "${txt}"`);
 await page.screenshot({ path: '/tmp/mc-e2e-home.png', fullPage: true });
 
-check(apiCalls.some((c) => c.startsWith('200 /api/detections')) && apiCalls.some((c) => c.startsWith('200 /api/incidents')),
+// Shield v2 (ADR 0052): the DNS page renders the device's live data, not the sample layout.
+await page.goto(`${base}/network/dns`, { waitUntil: 'load' });
+const live = page.getByText(/DNS queries since boot/);
+check(await live.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false), 'Shield page renders LIVE device data (/api/dns)');
+check(!(await page.getByText('Sample data').first().isVisible().catch(() => false)), 'Shield page shows no "Sample data" notice');
+await page.screenshot({ path: '/tmp/mc-e2e-shield.png', fullPage: true });
+
+check(apiCalls.some((c) => c.startsWith('200 /api/detections')) && apiCalls.some((c) => c.startsWith('200 /api/incidents')) && apiCalls.some((c) => c.startsWith('200 /api/dns')),
   `the UI fetched its data from the device: ${[...new Set(apiCalls)].join(', ')}`);
 await browser.close();
 process.exit(fails ? 1 : 0);
