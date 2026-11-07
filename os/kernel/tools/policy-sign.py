@@ -6,6 +6,8 @@
   policy-sign.py sign KEYFILE POLICY.TXT GEN OUT.SIG   # POLICY.TXT = the exact 4096-byte staged file
   policy-sign.py sign-blocklist KEYFILE BLOCK.TXT GEN OUT.SIG   # Shield blocklist (<= 16 MiB; ADR 0052)
   policy-sign.py sign-allowlist KEYFILE ALLOW.TXT GEN OUT.SIG   # Shield allowlist (<= 16 MiB)
+  policy-sign.py sign-ioc KEYFILE IOC.TXT GEN OUT.SIG           # threat-intel IOC pack (<= 16 MiB)
+  policy-sign.py sign-devices KEYFILE DEVICES.TXT GEN OUT.SIG   # per-device policy (<= 16 KiB)
 
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
@@ -46,17 +48,21 @@ def main():
         sig = k.sign(b"HQPOL1" + struct.pack("<Q", gen) + d)
         open(out, "wb").write((b"HQPSIG1\0" + struct.pack("<Q", gen) + d + sig).ljust(512, b"\0"))
         print(f"POLICY.SIG written (generation {gen})")
-    elif a[:1] in (["sign-blocklist"], ["sign-allowlist"]) and len(a) == 5:
+    elif a[:1] in (["sign-blocklist"], ["sign-allowlist"], ["sign-ioc"], ["sign-devices"]) and len(a) == 5:
         k, body, gen, out = load(a[1]), open(a[2], "rb").read(), int(a[3]), a[4]
-        allow = a[0] == "sign-allowlist"
-        if len(body) > 16 << 20:
-            sys.exit("list larger than 16 MiB")
+        tag, magic, cap = {
+            "sign-blocklist": (b"HQBLK1", b"HQBSIG1\0", 16 << 20),
+            "sign-allowlist": (b"HQALW1", b"HQASIG1\0", 16 << 20),
+            "sign-ioc": (b"HQIOC1", b"HQISIG1\0", 16 << 20),
+            "sign-devices": (b"HQDEV1", b"HQDSIG1\0", 16 << 10),
+        }[a[0]]
+        if len(body) > cap:
+            sys.exit(f"file larger than {cap} bytes")
         d = hashlib.sha256(body).digest()
         meta = struct.pack("<QQ", gen, len(body))
-        tag, magic = (b"HQALW1", b"HQASIG1\0") if allow else (b"HQBLK1", b"HQBSIG1\0")
         sig = k.sign(tag + meta + d)
         open(out, "wb").write((magic + meta + d + sig).ljust(512, b"\0"))
-        print(f"{'ALLOW' if allow else 'BLOCK'}.SIG written (generation {gen}, {len(body)} bytes)")
+        print(f"{a[0][5:].upper()} signature written (generation {gen}, {len(body)} bytes)")
     else:
         sys.exit(__doc__)
 
