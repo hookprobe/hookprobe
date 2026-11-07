@@ -183,3 +183,17 @@ build box). Everything in this block is METAL-PENDING.
 Gates: `validate.sh` exit 0 (84 phases PASS); `prod`, `prod-mc`, `hboot,apmode`, `hboot,stalldiag`,
 `sepdiag,p15-write`, `hboot,stajoin` build. METAL-PENDING: SNTP against a real router/Internet, restore
 across a power cycle, drain latency.
+
+### Metal (2026-11-07 morning, CM5 prod-mc, fortress port 4 = 10.200.0.6)
+
+- `7c1a0fa`: SNTP request well-formed on the wire (NTPv4 client, port 40123), server rotation correct
+  (gateway → 162.159.200.123 → gateway, 16 s); fortress NAC `lan_only` dropped the public servers —
+  a fortress policy, not a device fault. Synced against a LAN responder on 10.200.0.1. Detections at the
+  correct wall time within ~1 s. **D1 metal-proven:** power cycle → `5 detection(s) restored`, the four
+  test detections back with identical ms timestamps, unmoved by the later sync; 64/59 never-synced rows
+  hidden (counted). eMMC wear PRE_EOL normal, 0–10 %. On the ISP ONT (wrong cable) rx_lost res_err read
+  262143 (saturated counter, constant) — report a delta (open item).
+- Found: the boot `[P8]` IPS self-test's synthetic :4444 frame (src 0.0.0.0) was recorded as a real
+  detection every boot. Fixed `0cf4f3b`; **metal-proven**: `self-test events discarded: 1`, detections 0.
+- `0cf4f3b` under NAC `internet_only`: **SNTP synced unaided** from the public server
+  (`clock synced by SNTP`), `/api/health` `clock:"ntp"`, API sample within 2.5 s of fortress time.
