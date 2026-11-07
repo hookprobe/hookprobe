@@ -116,7 +116,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { fetch-depth: 0 }
-      - run: python3 tools/ci/heal/autofix_guard.py --base "origin/${{ github.base_ref }}" --head HEAD --require-branch
+      # The guard + its policy are taken from the BASE branch: the PR under review must not be
+      # able to rewrite the very guard that judges it.
+      - name: Guard (trusted copy from the base branch)
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          git show "origin/$BASE_REF:tools/ci/heal/autofix_guard.py" > "$RUNNER_TEMP/guard.py"
+          git show "origin/$BASE_REF:tools/ci/heal/protected-paths.txt" > "$RUNNER_TEMP/protected.txt"
+          python3 -I "$RUNNER_TEMP/guard.py" --protected "$RUNNER_TEMP/protected.txt" \
+            --base "origin/$BASE_REF" --head HEAD --branch "$HEAD_REF" --require-branch
 
   ci-ok:
     name: ci-ok
