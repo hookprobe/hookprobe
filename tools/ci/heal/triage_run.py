@@ -54,6 +54,36 @@ def issue_title(d: dict) -> str:
     return f"[ci-autoheal] {d['gate']} {d['category']} ({d['signature']})"
 
 
+def sanitize(line: str) -> str:
+    """Pure: log text is untrusted — it must not break out of the fence or @-mention anyone."""
+    return line.replace("~~~", "~ ~ ~").replace("```", "` ` `").replace("@", "(at)")
+
+
+def issue_body(d: dict, run_url: str, run: dict) -> str:
+    ev = "\n".join(sanitize(e) for e in d["evidence"][:12])
+    return (f"**{d['category']}** in gate `{d['gate']}` (job: {sanitize(str(d.get('job')))}) → action "
+            f"**{d['action']}**\n\n- run: {run_url}\n- branch: `{sanitize(str(run.get('head_branch')))}` at "
+            f"`{run.get('head_sha', '')[:12]}`\n- ids: {', '.join(d['ids']) or '-'}\n\n~~~~text\n{ev}\n~~~~\n")
+
+
+def autofix_eligible(run: dict, default_branch: str, repo: str, compare=None) -> bool:
+    """Autofix only for a failure of code that IS on the default branch (security-auditor M2):
+    a push/schedule run whose head_sha is reachable from the default branch tip. A branch name
+    alone is not proof (a tag can be called `main`); workflow_dispatch can target any ref."""
+    if run.get("event") not in ("push", "schedule") or run.get("head_branch") != default_branch:
+        return False
+    sha = run.get("head_sha", "")
+    if not re.fullmatch(r"[0-9a-f]{40}", sha):
+        return False
+    if compare is None:
+        def compare(s):
+            return json.loads(gh("api", f"repos/{repo}/compare/{s}...{default_branch}", "-q", "{status}"))["status"]
+    try:
+        return compare(sha) in ("identical", "ahead")   # default branch == or is ahead of head_sha
+    except Exception:
+        return False   # fail-closed
+
+
 def gh(*args, input_text=None):
     p = subprocess.run(["gh", *args], capture_output=True, text=True, input=input_text)
     if p.returncode != 0:
@@ -94,26 +124,26 @@ def main() -> int:
         json.dump(decisions, f, indent=2)
     top = pick(decisions)
     run_url = run.get("html_url", "")
-    is_default = run.get("head_branch") == default_branch and run.get("event") in ("push", "schedule", "workflow_dispatch")
+    is_default = autofix_eligible(run, default_branch, a.repo)
     issue, attempts = "", 0
     if not a.dry_run:
         gh("label", "create", "ci-autoheal", "--repo", a.repo, "--color", "B60205", "--force",
            "--description", "Opened by the ADR 0048 heal loop")
         for d in decisions:
             title = issue_title(d)
-            found = json.loads(gh("issue", "list", "--repo", a.repo, "--state", "open", "--label", "ci-autoheal",
-                                  "--search", d["signature"], "--json", "number,title,comments"))
-            body = (f"**{d['category']}** in gate `{d['gate']}` (job: {d.get('job')}) → action **{d['action']}**\n\n"
-                    f"- run: {run_url}\n- branch: `{run.get('head_branch')}` @ `{run.get('head_sha', '')[:12]}`\n"
-                    f"- ids: {', '.join(d['ids']) or '-'}\n\n```\n" + "\n".join(d["evidence"][:12]) + "\n```\n")
+            # ALL states: closing the issue must not reset the attempt budget (security-auditor L2).
+            hist = json.loads(gh("issue", "list", "--repo", a.repo, "--state", "all", "--label", "ci-autoheal",
+                                 "--search", d["signature"], "--json", "number,title,state,comments"))
+            found = [i for i in hist if i.get("state", "").upper() == "OPEN"]
+            body = issue_body(d, run_url, run)
+            n_att = sum(1 for i in hist for c in i.get("comments", []) if ATTEMPT_MARK in (c.get("body") or ""))
             if found:
                 num = found[0]["number"]
                 gh("issue", "comment", str(num), "--repo", a.repo, "--body", "Recurred.\n\n" + body)
-                n_att = sum(1 for c in found[0].get("comments", []) if ATTEMPT_MARK in (c.get("body") or ""))
             else:
                 url = gh("issue", "create", "--repo", a.repo, "--title", title, "--label", "ci-autoheal",
                          "--body", body + "\n_Deterministic triage by tools/ci/heal/triage_run.py (ADR 0048)._").strip()
-                num, n_att = url.rsplit("/", 1)[-1], 0
+                num = url.rsplit("/", 1)[-1]
             if d is top:
                 issue, attempts = str(num), n_att
     out = {"action": top["action"], "gate": top["gate"], "category": top["category"],

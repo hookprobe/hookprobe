@@ -18,14 +18,16 @@ Cortex lifecycle log.
 """
 import argparse
 import datetime
+import hashlib
 import json
+import tempfile
 import os
 import shutil
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+ROOT = os.path.abspath(os.path.join(HERE, "..", "..", ".."))   # tools/ci/heal → repo root
 sys.path.insert(0, HERE)
 import classify  # noqa: E402  (sibling module)
 import autofix_guard  # noqa: E402
@@ -45,11 +47,60 @@ def sh(cmd, cwd=ROOT, env=None, timeout=None, check=False):
     return p
 
 
+# git with hooks disabled: an agent-planted hook in the shared .git/hooks must never run.
+GIT = ["git", "-c", "core.hooksPath=/dev/null"]
+
+# Environment ALLOW-list for anything that executes agent-influenced code (the agent itself and
+# the gate re-run, which builds/tests the agent's tree incl. build.rs). Tokens are never passed:
+# no GH_TOKEN/GITHUB_TOKEN/AUTOFIX_TOKEN, no cloud creds. (security-auditor C1, 2026-11-08)
+SAFE_ENV_KEYS = {"PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TERM", "TMPDIR", "SHELL",
+                 "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "CARGO_TERM_COLOR", "CI", "CI_STRICT",
+                 "HEQK_QEMU_TIMEOUT", "CI_TARGET_ROOT", "PLAYWRIGHT_BROWSERS_PATH", "XDG_CACHE_HOME",
+                 "XDG_CONFIG_HOME", "RUNNER_TEMP"}
+
+
+def safe_env(**extra):
+    env = {k: v for k, v in os.environ.items() if k in SAFE_ENV_KEYS}
+    env.update(extra)
+    return env
+
+
 def run_gates(gates, cwd, ci_out):
-    env = dict(os.environ, CI_OUT=ci_out)
-    p = subprocess.run(["tools/ci/gates.sh", *gates.split()], cwd=cwd, env=env, text=True,
-                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    p = subprocess.run(["tools/ci/gates.sh", *gates.split()], cwd=cwd, env=safe_env(CI_OUT=ci_out),
+                       text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
     return p.returncode, os.path.join(ci_out, "gate-results.json"), p.stdout
+
+
+def trusted_snapshot():
+    """sha256 of everything that judges an autofix (gate machinery + git hooks/config) in the TRUSTED
+    tree. Compared before/after the agent and the re-gate: any change = tamper → no proposal."""
+    common = sh(["git", "rev-parse", "--git-common-dir"], check=True).stdout.strip()
+    common = common if os.path.isabs(common) else os.path.join(ROOT, common)
+    roots = [os.path.join(ROOT, "tools", "ci"), os.path.join(ROOT, ".github"),
+             os.path.join(common, "hooks"), os.path.join(common, "config")]
+    h = hashlib.sha256()
+    for r in roots:
+        paths = [r] if os.path.isfile(r) else sorted(
+            os.path.join(dp, f) for dp, dns, fs in os.walk(r) for f in fs if "__pycache__" not in dp)
+        for p in paths:
+            h.update(p.encode())
+            with open(p, "rb") as f:
+                h.update(f.read())
+    return h.hexdigest()
+
+
+def read_agent_file(path, limit=4000):
+    """Agent-written note files: regular files only (a symlink to .git/config would leak a token
+    into a public PR body), size-capped. Always removed from the tree afterwards."""
+    if not os.path.lexists(path):
+        return None
+    try:
+        if os.path.islink(path) or not os.path.isfile(path):
+            return "(rejected: not a regular file)"
+        with open(path, errors="replace") as f:
+            return f.read(limit).strip()
+    finally:
+        os.remove(path)
 
 
 def render_prompt(decision, log_text):
@@ -68,8 +119,11 @@ def render_prompt(decision, log_text):
 
 
 def invoke_agent(agent, wt, prompt_file, decision_file, timeout):
-    env = dict(os.environ, HEAL_PROMPT_FILE=prompt_file, HEAL_DECISION_FILE=decision_file, HEAL_WORKTREE=wt)
+    env = safe_env(HEAL_PROMPT_FILE=prompt_file, HEAL_DECISION_FILE=decision_file, HEAL_WORKTREE=wt)
     if agent == "claude":
+        # The model key is the ONLY secret the agent process gets (use a dedicated, spend-limited key).
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            env["ANTHROPIC_API_KEY"] = os.environ["ANTHROPIC_API_KEY"]
         with open(prompt_file) as f:
             prompt = f.read()
         # Hard spend cap per attempt (the attempt budget caps the count; this caps the cost).
@@ -104,32 +158,36 @@ def autofix(decision, log_text, args, state, outdir):
 
     base = sh(["git", "rev-parse", args.base], check=True).stdout.strip()
     branch = f"autofix/{sig}-a{n}"
-    wt = os.path.join(outdir, "wt", f"{sig}-a{n}")
+    # Worktrees live OUTSIDE the repository, so no relative path from the agent's cwd reaches the
+    # trusted tree; the tamper snapshot catches absolute-path writes.
+    wt = os.path.join(args.wt_root, f"{sig}-a{n}")
     if os.path.exists(wt):
         sh(["git", "worktree", "remove", "--force", wt])
     sh(["git", "branch", "-D", branch])
-    sh(["git", "worktree", "add", "-q", "-b", branch, wt, base], check=True)
+    os.makedirs(args.wt_root, exist_ok=True)
+    sh(GIT + ["worktree", "add", "-q", "-b", branch, wt, base], check=True)
+    before = trusted_snapshot()
     rc, agent_out = invoke_agent(args.agent, wt, pf, df, args.agent_timeout)
     with open(os.path.join(outdir, f"{sig}-a{n}.agent.log"), "w") as f:
         f.write(agent_out)
 
     res = {"branch": branch, "worktree": wt, "base": base, "agent_rc": rc}
-    blocked = os.path.join(wt, "AUTOFIX-BLOCKED.md")
-    notes_p = os.path.join(wt, "AUTOFIX-NOTES.md")
-    notes = open(notes_p).read().strip() if os.path.exists(notes_p) else "(agent left no notes)"
-    for p in (notes_p,):
-        if os.path.exists(p):
-            os.remove(p)
-    if os.path.exists(blocked):
-        res.update(status="blocked_needs_human", detail=open(blocked).read().strip()[:2000])
+    if trusted_snapshot() != before:
+        res.update(status="tamper_detected",
+                   detail="the agent modified the trusted gate machinery / git hooks / git config — aborted, nothing proposed")
         return res
-    sh(["git", "add", "-A"], cwd=wt, check=True)
-    if sh(["git", "diff", "--cached", "--quiet"], cwd=wt).returncode == 0:
+    blocked = read_agent_file(os.path.join(wt, "AUTOFIX-BLOCKED.md"), 2000)
+    notes = read_agent_file(os.path.join(wt, "AUTOFIX-NOTES.md")) or "(agent left no notes)"
+    if blocked is not None:
+        res.update(status="blocked_needs_human", detail=blocked)
+        return res
+    sh(GIT + ["add", "-A"], cwd=wt, check=True)
+    if sh(GIT + ["diff", "--cached", "--quiet"], cwd=wt).returncode == 0:
         res.update(status="no_change", detail="agent made no change")
         return res
     msg = f"autofix({decision['category']}): heal {decision['gate']} [{sig}]\n\n{notes}\n\nGenerated-by: tools/ci/heal (ADR 0048)"
-    sh(["git", "-c", "user.name=hookprobe-autofix", "-c", "user.email=autofix@hookprobe.invalid",
-        "commit", "-q", "-m", msg], cwd=wt, check=True)
+    sh(GIT + ["-c", "user.name=hookprobe-autofix", "-c", "user.email=autofix@hookprobe.invalid",
+              "commit", "-q", "--no-verify", "-m", msg], cwd=wt, check=True)
     # The guard and its policy come from the TRUSTED tree running this loop (HERE), never from the
     # worktree the agent just edited — otherwise an agent could rewrite the guard to pass itself.
     g = sh([sys.executable, "-I", os.path.join(HERE, "autofix_guard.py"), "--base", base,
@@ -141,12 +199,26 @@ def autofix(decision, log_text, args, state, outdir):
         return res
     grc, _, gout = run_gates(decision["gate"], wt, os.path.join(wt, "out", "ci"))
     res["regate_tail"] = "\n".join(gout.splitlines()[-15:])
+    if trusted_snapshot() != before:  # the re-gate builds/runs the agent's code (build.rs, tests)
+        res.update(status="tamper_detected", detail="trusted machinery changed during the gate re-run — aborted")
+        return res
     if grc != 0:
         res.update(status="fix_did_not_turn_gate_green", detail=res["regate_tail"])
         return res
     res.update(status="proposed", detail=notes)
+    if args.emit_patch:
+        # CI job split: this job holds no write token; the propose job applies this patch to a clean
+        # checkout, re-runs the trusted guard there, and only then pushes (autoheal.yml).
+        os.makedirs(args.emit_patch, exist_ok=True)
+        patch = sh(GIT + ["format-patch", "-1", "--stdout", "HEAD"], cwd=wt, check=True).stdout
+        with open(os.path.join(args.emit_patch, "autofix.patch"), "w") as f:
+            f.write(patch)
+        with open(os.path.join(args.emit_patch, "meta.json"), "w") as f:
+            json.dump({"branch": branch, "base": base, "signature": sig, "gate": decision["gate"],
+                       "category": decision["category"], "notes": notes}, f, indent=2)
+        res["patch"] = os.path.join(args.emit_patch, "autofix.patch")
     if args.push:
-        pr = sh(["git", "push", "-q", "-u", "origin", branch], cwd=wt)
+        pr = sh(GIT + ["push", "--no-verify", "-q", "-u", "origin", branch], cwd=wt)
         res["pushed"] = pr.returncode == 0
         if pr.returncode == 0 and shutil.which("gh"):
             body = f"**Autofix proposal (ADR 0048 L2)** — DRAFT, needs human review.\n\n{notes}\n\n" \
@@ -167,7 +239,10 @@ def main() -> int:
     ap.add_argument("--agent-timeout", type=int, default=3600)
     ap.add_argument("--base", default="HEAD")
     ap.add_argument("--pr-base", default="main")
-    ap.add_argument("--push", action="store_true")
+    ap.add_argument("--push", action="store_true", help="LOCAL use only: push + draft PR from this process")
+    ap.add_argument("--emit-patch", help="write the proposed fix as a patch + meta.json here (CI job split)")
+    ap.add_argument("--wt-root", default=os.path.join(tempfile.gettempdir(), f"hookprobe-heal-{os.getuid()}"),
+                    help="where autofix worktrees are created (outside the repository)")
     ap.add_argument("--out", default=os.path.join(os.environ.get("CI_OUT", os.path.join(ROOT, "out", "ci")), "heal"))
     a = ap.parse_args()
     os.makedirs(a.out, exist_ok=True)
