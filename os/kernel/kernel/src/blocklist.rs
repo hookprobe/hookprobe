@@ -26,6 +26,11 @@ const BLOCKS: &[(u32, u8)] = &[
 /// it back to network order before the prefix scan. Returns 1 if blocked, else 0.
 pub fn ip_blocked(ip_le: u64) -> u64 {
     let net = (ip_le as u32).swap_bytes();
+    // Parity G7: the operator-signed IOC pack (IOC.TXT) — the built-in TEST-NET seed below stays as the
+    // self-test corpus.
+    if crate::ioc::ip_listed(net) {
+        return 1;
+    }
     for &(prefix, len) in BLOCKS {
         let mask = if len == 0 { 0 } else { u32::MAX << (32 - len as u32) };
         if (net & mask) == (prefix & mask) {

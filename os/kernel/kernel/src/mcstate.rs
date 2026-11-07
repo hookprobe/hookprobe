@@ -410,7 +410,16 @@ impl McState {
             } else {
                 out.string(os);
             }
-            let _ = write!(out, ",\"private_mac\":{},\"active\":{},\"source\":\"dhcp\"}}", mac_is_private(&l.mac), l.expires > self.lease_now);
+            let pol = crate::devpolicy::policy_of(&l.mac);
+            let mut lb = [0u8; 31];
+            let ll = crate::devpolicy::label_of(&l.mac, &mut lb);
+            let _ = write!(out, ",\"private_mac\":{},\"active\":{},\"source\":\"dhcp\",\"policy\":\"{}\",\"label\":", mac_is_private(&l.mac), l.expires > self.lease_now, pol.name());
+            if ll > 0 {
+                out.string(core::str::from_utf8(&lb[..ll]).unwrap_or(""));
+            } else {
+                out.raw("null");
+            }
+            out.raw("}");
             if out.overflow || out.len + 32 > out.buf.len() {
                 out.rewind(m);
                 break;
