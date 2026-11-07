@@ -225,6 +225,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         "/api/incidents" => json(scratch, |w| st.render_incidents(limit(50, 500), w)),
         "/api/qsecbit" => json(scratch, |w| st.render_qsecbit(limit(20, 1000), w)),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
+        "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
         "/api/flows" => json(scratch, |w| st.render_flows(st.ticks_at_ms(now_ms), limit(100, 256), w)),
         p if p.starts_with("/api/incidents/") => {
             let rest = &p["/api/incidents/".len()..];
