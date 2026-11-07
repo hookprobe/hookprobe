@@ -1,0 +1,15 @@
+# Every live dependency lockfile the G4 supply-chain gate scans (ADR 0048).
+# G0 (g0_wiring.py) FAILS if a Cargo.lock / package-lock.json outside legacy/,
+# docs/ and node_modules/ exists that is not listed here — so a new detached
+# workspace can never silently escape vulnerability scanning.
+#
+# <ecosystem> <directory relative to repo root>
+cargo os/kernel
+cargo os/kernel/tlsprov
+cargo os/kernel/el0-tlshost
+cargo os/kernel/el0-wasmhost
+cargo os/kernel/wasip1-fixture
+cargo os/build/heqk-sign
+cargo onboarding/enrollment/responder-sim
+npm   os/mission-control
+npm   os/kernel/tools/mc-e2e
