@@ -232,11 +232,16 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             // An unarmed rule plane (0 active rules) passes everything — report it, never hide it.
             let rules = crate::rules::active_rules();
             let now_epoch = st.epoch_at_ms(now_ms);
-            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"mode\":\"{}\",\"clock\":\"{}\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{},\"hosts_active\":{},\"detections_cap\":{},\"oldest_detection\":{},\"sealed_cap\":{}}}",
+            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"mode\":\"{}\",\"clock\":\"{}\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{},\"hosts_active\":{},\"detections_cap\":{},\"oldest_detection\":{},\"sealed_cap\":{}",
                 if rules == 0 { "degraded: rule plane not armed" } else { "ok" },
                 if st.cloud_linked { "cloud-linked" } else { "standalone" },
                 if st.clock_synced { "ntp" } else { "unsynced" }, rules, st.seen, st.forwarded, st.dropped, st.detections(),
                 st.hosts_active(now_epoch), st.retention().1, st.retention().2 / 1000, st.sealed_cap);
+            if let Some(f) = st.wan {
+                let _ = write!(w, ",\"wan\":{{\"up\":{},\"ip\":\"{}.{}.{}.{}\",\"mode\":\"{}\",\"ipv6\":{},\"clients\":{},\"pkts_out\":{},\"pkts_in\":{},\"dns_inspected\":{}}}",
+                    f.up, f.ip[0], f.ip[1], f.ip[2], f.ip[3], ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ipv6, f.clients, f.pkts_out, f.pkts_in, f.dns_inspected);
+            }
+            w.raw("}");
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
         p if p.starts_with("/api/") => json(scratch, |w| w.raw("{\"error\":\"not implemented on heqk\"}")).with_status(404),
@@ -546,7 +551,12 @@ pub fn mc_selftest() -> bool {
         let kept = has(&hh[..k], "Connection: keep-alive\r\nKeep-Alive: timeout=15, max=100\r\n");
         let c = write_head_ka(&h1, &mut hh, false, false);
         let closed = has(&hh[..c], "Connection: close\r\n") && !has(&hh[..c], "Keep-Alive");
-        red && v6 && bad && sec && plain && ka && kept && closed
+        // AP image: the WAN facts reach /api/health for the Get Online / Shield tiles.
+        let mut sw = McState::new();
+        sw.wan = Some(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7 });
+        let hw = handle(&parse(b"GET /api/health HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &sw, &mut auth, 1, || Some([0; 16]), &mut scratch);
+        let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7}}"));
+        red && v6 && bad && sec && plain && ka && kept && closed && wan_ok
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;
     kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS) + keep-alive(1.1 default, close/1.0 end it, pipelined bytes kept, limits advertised)={} (ui assets embedded: {})\n",

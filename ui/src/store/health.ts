@@ -18,6 +18,7 @@ interface Health {
   detections_cap?: number;
   oldest_detection?: number;
   sealed_cap?: number;
+  wan?: { up: boolean; ip: string; mode: string; ipv6: boolean; clients: number; pkts_out: number; pkts_in: number; dns_inspected: number };
 }
 
 async function readHealth(): Promise<void> {
@@ -32,6 +33,8 @@ async function readHealth(): Promise<void> {
         detectionsCap: h.detections_cap,
         oldestDetection: h.oldest_detection ?? 0,
         sealedCap: h.sealed_cap ?? 0,
+        wan: h.wan ? { up: h.wan.up, ip: h.wan.ip, mode: h.wan.mode, ipv6: h.wan.ipv6, clients: h.wan.clients,
+                       pktsOut: h.wan.pkts_out, pktsIn: h.wan.pkts_in, dnsInspected: h.wan.dns_inspected } : null,
       });
     }
   } catch {

@@ -76,7 +76,8 @@ export const [deployMode,      setDeployMode]       = createSignal<DeployMode>('
 // live (detections/incidents/QSecBit); tiles without a device source say so instead of demo data.
 export const [substrate,       setSubstrate]        = createSignal<string>('');
 /** Device-reported facts for the home tiles (heqk `/api/health`); null until the device answers. */
-export interface DeviceStats { hostsActive: number; detections: number; detectionsCap: number; oldestDetection: number; sealedCap: number }
+export interface WanFacts { up: boolean; ip: string; mode: string; ipv6: boolean; clients: number; pktsOut: number; pktsIn: number; dnsInspected: number }
+export interface DeviceStats { hostsActive: number; detections: number; detectionsCap: number; oldestDetection: number; sealedCap: number; wan: WanFacts | null }
 export const [deviceStats,     setDeviceStats]      = createSignal<DeviceStats | null>(null);
 export const [currentUser]                          = createSignal<string>('Admin');
 export const [lastChecked,     setLastChecked]      = createSignal<string>('just now');

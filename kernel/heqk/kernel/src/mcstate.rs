@@ -145,6 +145,21 @@ pub const HOST_CAP: usize = 256;
 /// A host counts as active if it was seen within this window.
 pub const HOST_ACTIVE_MS: u64 = 600_000;
 
+/// What the AP knows about its WAN, for the "Get Online" tile.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WanFacts {
+    pub up: bool,
+    pub ip: [u8; 4],
+    /// 0 DHCP, 1 static, 2 PPPoE
+    pub mode: u8,
+    pub ipv6: bool,
+    pub clients: u32,
+    pub pkts_out: u64,
+    pub pkts_in: u64,
+    /// Client DNS queries the AP answered by forwarding them upstream through the IDS.
+    pub dns_inspected: u64,
+}
+
 /// The device's Mission Control state. One instance, owned by the serve loop.
 pub struct McState {
     dets: [Det; DET_CAP],
@@ -171,6 +186,8 @@ pub struct McState {
     pub cloud_linked: bool,
     /// True once a validated SNTP reply has set the wall clock (the UI shows "unsynced" otherwise).
     pub clock_synced: bool,
+    /// The device's own WAN (the AP image): None on a passive sensor.
+    pub wan: Option<WanFacts>,
     /// How many of the newest detections the device seals across a reboot (0 = none persisted).
     pub sealed_cap: u16,
     /// Passive inventory: (IPv4 host order, last seen epoch ms). 0 = empty slot.
@@ -203,6 +220,7 @@ impl McState {
             change: 0,
             cloud_linked: false,
             clock_synced: false,
+            wan: None,
             sealed_cap: 0,
             hosts: [(0, 0); HOST_CAP],
         }

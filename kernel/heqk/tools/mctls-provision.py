@@ -59,7 +59,10 @@ def main():
     pt = bytes.fromhex(a.pub.strip())
     if len(pt) != 65 or pt[0] != 4:
         sys.exit("--pub must be the 65-byte uncompressed P-256 point (starts with 04)")
-    key, pem = ensure_ca(a.ca_dir, a.permit_dns or a.name, a.permit_ip)
+    # Default CA constraints: the device names + private address space only (RFC 1918 + link-local) — the CA
+    # can certify any LAN address a HookProbe device uses (port, AP, management VLAN) but never a public site.
+    permit_ip = a.permit_ip or ["10.0.0.0/255.0.0.0", "172.16.0.0/255.240.0.0", "192.168.0.0/255.255.0.0", "169.254.0.0/255.255.0.0"]
+    key, pem = ensure_ca(a.ca_dir, a.permit_dns or a.name or ["heqk.local"], permit_ip)
     with tempfile.TemporaryDirectory() as t:
         pub = os.path.join(t, "dev.pub.der")
         open(pub, "wb").write(SPKI_P256_PREFIX + pt)

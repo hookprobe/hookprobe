@@ -3389,6 +3389,30 @@ fn cm5_p10_probe() {
                         let freq: u64;
                         unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack)) };
                         let now = || -> u64 { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
+                        // Mission Control served BY the AP to its Wi-Fi clients at the AP address (feature `apmc`):
+                        // owner verifier + MCTLS.CRT from the boot partition, HTTP + the EL0 TLS server.
+                        #[cfg(feature = "mcserve")]
+                        let mc_t0 = now();
+                        #[cfg(feature = "mcserve")]
+                        let mut mcn: Option<mcserve::McNode> = {
+                            if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
+                                let owner = crate::mcauth::load_owner(&dev);
+                                mcserve::set_owner(owner);
+                                kprint!(" [AP-MC] owner: {}\n", if owner.is_some() { "CLAIMED — sign-in required" } else { "UNCLAIMED — protected routes refuse" });
+                                #[cfg(feature = "mctls")]
+                                crate::tlshost::bring_up(Some(&dev));
+                            }
+                            mcserve::state().set_clock(0, mc_t0, freq);
+                            let seed = arch_aarch64::rng200::next_word_strict().unwrap_or(0) ^ mc_t0;
+                            match mcserve::McNode::new(ap.bssid, mcserve::NetMode::Static { ip: our_ip, prefix: 24, gw: our_ip }, seed) {
+                                Some(mut n) => {
+                                    n.disable_sntp();
+                                    kprint!(" [AP-MC] Mission Control on http://{}.{}.{}.{}/ for Wi-Fi clients (served by heqk)\n", our_ip[0], our_ip[1], our_ip[2], our_ip[3]);
+                                    Some(n)
+                                }
+                                None => None,
+                            }
+                        };
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
                         // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
                         let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
@@ -3648,6 +3672,12 @@ fn cm5_p10_probe() {
                                             trunc_drop += 1; // truncated/oversize: fail-closed, but NOT a rule drop
                                         } else if packet::verdict(frame).1 == packet::DROP {
                                             ids_drop_out += 1;
+                                        } else if mc_bound(frame, &our_ip) {
+                                            // Mission Control on the AP address (after the lease binding + IDS gates).
+                                            #[cfg(feature = "mcserve")]
+                                            if let Some(n) = mcn.as_mut() {
+                                                n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
+                                            }
                                         } else if fwd4!(frame, PIf::Lan, nat::IF_WIFI, wifi_send) && nst.out_fwd == 1 {
                                             kprint!(" [M-NAT1] first client frame forwarded out end0 (proto {})\n", nbuf[23]);
                                         }
@@ -3659,6 +3689,12 @@ fn cm5_p10_probe() {
                                 cyw43::ApEvent::Idle => {}
                             }
                             // Housekeeping + WAN drain run EVERY iteration (was Idle-arm only; see the WAN drain note).
+                            #[cfg(feature = "mcserve")]
+                            if let Some(n) = mcn.as_mut() {
+                                let ms = (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64;
+                                let _ = n.service(mcserve::state(), ms);
+                                n.flush(|f| wifi_send!(f));
+                            }
                             {
                                     // Plug-and-play WAN: the boot-time bringup is not the only chance. If the
                                     // uplink isn't usable and end0 now has a link, retry the lease every 10 s —
@@ -3994,6 +4030,8 @@ fn cm5_p10_probe() {
                                                 break;
                                             }
                                             for e in &evs[..k] {
+                                                #[cfg(feature = "mcserve")]
+                                                mcserve::state().push_event(e);
                                                 if e.verdict != 2 {
                                                     continue;
                                                 }
@@ -4103,6 +4141,24 @@ fn cm5_p10_probe() {
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
                                             rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
                                         ratelimit::set_local_ip(1, u32::from_be_bytes(up.dhcp.yiaddr));
+                                        #[cfg(feature = "mcserve")]
+                                        {
+                                            let st = mcserve::state();
+                                            st.seen = wifi_frames as u64;
+                                            st.forwarded = nst.out_fwd as u64 + nst.in_fwd as u64;
+                                            st.dropped = (ids_drop_out + ids_drop_in) as u64;
+                                            st.sample_qsecbit(now(), telemetry::score());
+                                            st.wan = Some(mcstate::WanFacts {
+                                                up: up.usable(),
+                                                ip: up.dhcp.yiaddr,
+                                                mode: match wan_mode { hal::WanMode::Dhcp => 0, hal::WanMode::Static { .. } => 1, _ => 2 },
+                                                ipv6: unsafe { V6.up },
+                                                clients: dh.nleases as u32,
+                                                pkts_out: nst.out_fwd as u64,
+                                                pkts_in: nst.in_fwd as u64,
+                                                dns_inspected: nst.dns_redirect as u64,
+                                            });
+                                        }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
                                         kprint!("   [P11-AP3 beat] assocs={} keyed={} leaves={} wifi_frames={} leases={} arp_replies={} | wan lease={}.{}.{}.{} arp_answered={} gw_refresh={} | nat out={} in={} out_drop={} in_drop={} too_big={} mss={} alloc={} evict={} dns_redir={} gem_tx_fail={} wifi_tx_fail={} wan_retries={} renewals={} | ids_drop out={} in={} bind_drop={} | lan frames={} served={} tx_fail={} pool={}/{}\n",
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
@@ -12953,6 +13009,18 @@ fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::
     Some(hal::parse_wan_link(&sec))
 }
 
+/// A station frame for Mission Control on the AP address: IPv4 TCP to `our_ip`:80/443.
+#[allow(dead_code)]
+fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
+    if !cfg!(feature = "mcserve") || f.len() < 38 || f[12] != 0x08 || f[13] != 0x00 || f[23] != 6 || &f[30..34] != our_ip {
+        return false;
+    }
+    let ihl = ((f[14] & 0x0f) as usize) * 4;
+    let Some(p) = f.get(14 + ihl + 2..14 + ihl + 4) else { return false };
+    let dport = u16::from_be_bytes([p[0], p[1]]);
+    dport == 80 || dport == 443
+}
+
 /// POLICY.TXT (up to 4 KiB, contiguous on the FAT boot partition) -> POLICY. None = no file.
 fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::PolicyErr>> {
     let mut sec = [0u8; 512];
@@ -13634,6 +13702,49 @@ fn fuzz_selftest() {
             n_frames += 1;
         }
     }
+    // 4c. The management sub-interface handler (ARP for our address, ping under policy, hand-up) with every
+    //     policy outcome — moved out of the CM5-only uplink so it is fuzzable (arch-aarch64::mgmtproto).
+    {
+        use arch_aarch64::mgmtproto::{mgmt_frame, Mgmt};
+        let me = [192u8, 168, 200, 10];
+        let mut m = Mgmt { ip: me, prefix: 24, gw: [192, 168, 200, 1], gw_mac: None, mac: [2, 0, 0, 0, 0, 2],
+            last_arp: 0, nh: [([0; 4], [0; 6]); 4], nh_last_arp: 0, dhcp: None, stats: [0; 7] };
+        let mut o = [0u8; 1600];
+        for i in 0..N {
+            let n = frame(&mut next, &mut buf);
+            if n >= 42 && i % 2 == 0 {
+                buf[0..6].copy_from_slice(&[2, 0, 0, 0, 0, 2]);
+                let k = next();
+                if k & 1 == 0 {
+                    buf[12] = 0x08;
+                    buf[13] = 0x06; // ARP: request or reply, often for our address
+                    buf[20] = 0;
+                    buf[21] = 1 + (k as u8 & 1);
+                    if k & 4 == 0 {
+                        buf[38..42].copy_from_slice(&me);
+                    }
+                } else {
+                    buf[12] = 0x08;
+                    buf[13] = 0x00;
+                    buf[30..34].copy_from_slice(&me); // IPv4 to us; ICMP echo often
+                    if k & 2 == 0 {
+                        buf[23] = 1;
+                        let ihl = ((buf[14] & 0x0f) as usize) * 4;
+                        if 14 + ihl < n {
+                            buf[14 + ihl] = 8;
+                        }
+                    }
+                }
+            }
+            let act = match next() % 3 {
+                0 => hal::policy::Act::Allow,
+                1 => hal::policy::Act::Block,
+                _ => hal::policy::Act::Drop,
+            };
+            let _ = mgmt_frame(&mut m, &mut buf[..], n, i as u64, &mut |_| act, &mut o, &mut |_| true);
+            n_frames += 1;
+        }
+    }
     // 5. HTTP request parse (Mission Control, reachable on :80).
     let mut n_http = 0u32;
     #[cfg(feature = "netsvc")]
@@ -13676,7 +13787,7 @@ fn fuzz_selftest() {
             n_cfg += 1;
         }
     }
-    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
+    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler; {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
         n_frames, n_http, n_cfg);
 }
 
