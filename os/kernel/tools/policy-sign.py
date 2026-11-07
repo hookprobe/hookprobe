@@ -8,6 +8,7 @@
   policy-sign.py sign-allowlist KEYFILE ALLOW.TXT GEN OUT.SIG   # Shield allowlist (<= 16 MiB)
   policy-sign.py sign-ioc KEYFILE IOC.TXT GEN OUT.SIG           # threat-intel IOC pack (<= 16 MiB)
   policy-sign.py sign-devices KEYFILE DEVICES.TXT GEN OUT.SIG   # per-device policy (<= 16 KiB)
+  policy-sign.py sign-wifi KEYFILE WIFI.TXT GEN OUT.SIG         # AP SSID / PSK / channel (<= 1 KiB)
 
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
@@ -48,13 +49,14 @@ def main():
         sig = k.sign(b"HQPOL1" + struct.pack("<Q", gen) + d)
         open(out, "wb").write((b"HQPSIG1\0" + struct.pack("<Q", gen) + d + sig).ljust(512, b"\0"))
         print(f"POLICY.SIG written (generation {gen})")
-    elif a[:1] in (["sign-blocklist"], ["sign-allowlist"], ["sign-ioc"], ["sign-devices"]) and len(a) == 5:
+    elif a[:1] in (["sign-blocklist"], ["sign-allowlist"], ["sign-ioc"], ["sign-devices"], ["sign-wifi"]) and len(a) == 5:
         k, body, gen, out = load(a[1]), open(a[2], "rb").read(), int(a[3]), a[4]
         tag, magic, cap = {
             "sign-blocklist": (b"HQBLK1", b"HQBSIG1\0", 16 << 20),
             "sign-allowlist": (b"HQALW1", b"HQASIG1\0", 16 << 20),
             "sign-ioc": (b"HQIOC1", b"HQISIG1\0", 16 << 20),
             "sign-devices": (b"HQDEV1", b"HQDSIG1\0", 16 << 10),
+            "sign-wifi": (b"HQWIF1", b"HQWSIG1\0", 1 << 10),
         }[a[0]]
         if len(body) > cap:
             sys.exit(f"file larger than {cap} bytes")

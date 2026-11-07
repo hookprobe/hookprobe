@@ -1,4 +1,7 @@
-# heqk — remaining gaps (living list, 2026-11-07 night)
+# heqk — remaining gaps (living list, 2026-11-08)
+
+> Superseded for software gaps by `heqk-parity-gaps.md` (legacy parity inventory + fix loop) and for
+> board work by `heqk-metal-test-plan.md`. This table keeps the original security/architecture items.
 
 Legend — **Board**: needs the CM5 (flash / power-cycle / bench). **Decision**: needs the operator.
 Status `built` = committed + QEMU/host-proven, not yet on silicon.
@@ -22,7 +25,7 @@ Status `built` = committed + QEMU/host-proven, not yet on silicon.
 | 8 | Shield + Get Online tiles | **metal: AP Mission Control served** (`74cb1a9`) | — | Get Online = WAN facts; Shield = queries inspected + blocked (see #20) |
 | 9 | HTTPS on the AP image | **metal PASS** — iPhone on the heqk AP: http://10.99.0.1 → https, owner sign-in, pages + sub-pages load (`74cb1a9`; needed the ARP-to-node fix) | — | cert SANs heqk.local / 10.99.0.1 / 10.200.0.6; owner CA re-issued with private-range constraints |
 | 10 | IPv6 on the management VLAN | blocked on #4 | — | |
-| 20 | Shield DNS blocklist on the AP | **built** — operator-signed BLOCK.TXT (≤ 65,536 domains, label-suffix match), blocked queries answered on-device (A → 0.0.0.0, else NODATA), Shield tile shows blocked/inspected; `[P-dnsblock]` + fuzz | **Board** | metal 2026-11-07 (`22425ea5` `[SHIELD]` heartbeat): list loads (7, signature OK), 131 iPhone queries reach the hook, `blocked=0` — **no plain query for example.org ever arrived**; the iPhone was resolving Safari through iCloud Private Relay (`mask.apple-dns.net` seen). Pending: confirm with Chrome/Firefox or Private Relay off globally. Product follow-up: show 'client uses encrypted DNS / Private Relay' in Shield (DoH/DoT/Relay bypass any DNS filter) |
+| 20 | Shield DNS protection on the AP | **rebuilt as Shield v2** (ADR 0052, `f9de855e`): AP is the resolver of record, all client DNS (any resolver, UDP+TCP/53) decided, DDR/canary/Private-Relay/DoH/DoT controls, NXDOMAIN+EDE15, CNAME-cloak check, query log + `/api/dns` + live Shield page; `[P-shield]` + fuzz. The v1 metal miss (blocked=0) is diagnosable now via the query log | **Board** | metal plan A1–A10 (`heqk-metal-test-plan.md`) |
 | 21 | Flows + incident drill-down served by heqk | **built** — `/api/flows` (AP NAT table: first/last seen, bytes each way), `/api/incidents/:id` (explanation: deterministic rule match, `model: null`; attack path), `/timeline` (detections + the source's flows), `/processes` (honest empty: no host EDR) | **Board** | passive-sensor images keep no per-flow table → flows empty there |
 | 19 | Workspaces without a heqk API showed sample data unlabeled | **built** — `/api/devices` from the host inventory (first/last seen, MAC never invented) + a "Sample data" notice on every view heqk does not back | Board (re-flash) | still sample on heqk: Protect, Automate, Intelligence, Knowledge, Business, Customers, Admin, network map/DNS |
 
