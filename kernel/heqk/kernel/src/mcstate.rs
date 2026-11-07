@@ -158,6 +158,10 @@ pub struct WanFacts {
     pub pkts_in: u64,
     /// Client DNS queries the AP answered by forwarding them upstream through the IDS.
     pub dns_inspected: u64,
+    /// Shield: client queries answered as blocked (blocklisted name) — they never left the device.
+    pub dns_blocked: u64,
+    /// Domains in the active blocklist (0 = Shield off: counting only).
+    pub blocklist: u32,
 }
 
 /// The device's Mission Control state. One instance, owned by the serve loop.
@@ -267,6 +271,11 @@ impl McState {
     /// `now_ms` convention.
     pub fn epoch_at_ms(&self, ms_since_anchor: u64) -> u64 {
         self.boot_epoch_ms.saturating_add(ms_since_anchor)
+    }
+
+    /// The `cntpct` value at `ms_since_anchor` (the serve loop's `now_ms`).
+    pub fn ticks_at_ms(&self, ms_since_anchor: u64) -> u64 {
+        self.boot_ticks.saturating_add(ms_since_anchor.saturating_mul(self.cntfrq) / 1000)
     }
 
     pub fn epoch_ms(&self, ticks: u64) -> u64 {
@@ -593,6 +602,263 @@ impl McState {
             let score = match worst { 1 => "1.0", 2 => "0.8", 3 => "0.6", 4 => "0.4", _ => "0.2" };
             let _ = write!(out, ",\"priority\":\"{}\",\"status\":\"open\",\"threat_score\":{}}}",
                 if worst <= rulecat::SEV_HIGH { "High" } else { "Medium" }, score);
+        }
+        let _ = write!(out, "],\"count\":{}}}", n);
+    }
+
+    /// `GET /api/flows` → the AP's live translated flows (NAT table), most recent first. Empty on
+    /// images without the AP data path (the passive sensor keeps no per-flow table).
+    pub fn render_flows(&self, now_ticks: u64, limit: usize, out: &mut JsonBuf) {
+        let mut v: [Option<arch_aarch64::nat::FlowView>; 256] = [None; 256];
+        let mut n = 0usize;
+        arch_aarch64::nat::for_each_flow(now_ticks, &mut |f| {
+            if n < v.len() {
+                v[n] = Some(*f);
+                n += 1;
+            }
+        });
+        let flows = &mut v[..n];
+        flows.sort_unstable_by(|a, b| b.map(|x| x.last).cmp(&a.map(|x| x.last)));
+        out.raw("{\"flows\":[");
+        let mut k = 0usize;
+        for f in flows.iter().take(limit).flatten() {
+            let m = out.mark();
+            if k > 0 {
+                out.raw(",");
+            }
+            self.flow_row(out, f, now_ticks);
+            if out.overflow || out.len + 32 > out.buf.len() {
+                out.rewind(m);
+                break;
+            }
+            k += 1;
+        }
+        let _ = write!(out, "],\"count\":{}}}", k);
+    }
+
+    fn flow_row(&self, out: &mut JsonBuf, f: &arch_aarch64::nat::FlowView, now_ticks: u64) {
+        let (a, b) = (f.src, f.dst);
+        let _ = write!(out, "{{\"id\":\"flow:heqk:{}:{}\",\"ts\":", f.slot, f.first);
+        ts(out, self.epoch_ms(f.first));
+        let idle = now_ticks.saturating_sub(f.last) > 30 * self.cntfrq;
+        let _ = write!(out, ",\"src_ip\":\"{}.{}.{}.{}\",\"src_port\":{},\"dst_ip\":\"{}.{}.{}.{}\",\"dst_port\":{},\"proto\":\"{}\",\"conn_state\":\"{}\",\"orig_bytes\":{},\"resp_bytes\":{}}}",
+            a[0], a[1], a[2], a[3], if f.proto == 1 { 0 } else { f.sport }, b[0], b[1], b[2], b[3], f.dport,
+            match f.proto { 6 => "tcp", 17 => "udp", 1 => "icmp", _ => "ip" },
+            if idle { "idle" } else { "active" }, f.bytes_out, f.bytes_in);
+    }
+
+    /// The incident for source `src` (as `/api/incidents` aggregates it): (worst severity, newest ts,
+    /// detections, worst rule). None = no detections from that source.
+    fn incident_of(&self, src: u32) -> Option<(u8, u64, u32, u16)> {
+        let mut r: Option<(u8, u64, u32, u16)> = None;
+        for i in 0..self.dlen {
+            let Some(d) = self.newest(i) else { break };
+            if d.src != src || rulecat::src_is_mac_hash(d.rule_id) {
+                continue;
+            }
+            let sev = rulecat::lookup_or_generic(d.rule_id).severity;
+            r = Some(match r {
+                None => (sev, d.ts_ms, 1, d.rule_id),
+                Some((w, t, c, rl)) => if sev < w { (sev, t, c + 1, d.rule_id) } else { (w, t, c + 1, rl) },
+            });
+        }
+        r
+    }
+
+    /// `inc:heqk:a.b.c.d` (URL-decoded `:`) → the source address.
+    pub fn parse_incident_id(id: &str) -> Option<u32> {
+        let mut buf = [0u8; 40];
+        let mut n = 0usize;
+        let b = id.as_bytes();
+        let mut i = 0usize;
+        while i < b.len() {
+            let c = if b[i] == b'%' && b.get(i + 1..i + 3).map_or(false, |h| h.eq_ignore_ascii_case(b"3A")) {
+                i += 3;
+                b':'
+            } else {
+                i += 1;
+                b[i - 1]
+            };
+            if n >= buf.len() {
+                return None;
+            }
+            buf[n] = c;
+            n += 1;
+        }
+        let ip = core::str::from_utf8(&buf[..n]).ok()?.strip_prefix("inc:heqk:")?;
+        let mut v = 0u32;
+        let mut parts = 0;
+        for p in ip.split('.') {
+            if p.is_empty() || p.len() > 3 || !p.bytes().all(|c| c.is_ascii_digit()) {
+                return None;
+            }
+            let o: u32 = p.parse().ok()?;
+            if o > 255 {
+                return None;
+            }
+            v = (v << 8) | o;
+            parts += 1;
+        }
+        if parts == 4 { Some(v) } else { None }
+    }
+
+    /// `GET /api/incidents/:id` — the incident with its explanation (deterministic: the rule
+    /// matches on this device; no AI planner has run, so `model` is null) and its attack path
+    /// (source → targets it touched, rules that fired). None = unknown incident (404).
+    pub fn render_incident(&self, src: u32, out: &mut JsonBuf) -> bool {
+        let Some((worst, last, count, rule)) = self.incident_of(src) else { return false };
+        let mut tmp = [0u8; 16];
+        let ip = ipv4(src, &mut tmp);
+        let worst = worst.clamp(1, 5);
+        let score = match worst { 1 => "1.0", 2 => "0.8", 3 => "0.6", 4 => "0.4", _ => "0.2" };
+        let _ = write!(out, "{{\"id\":\"inc:heqk:{}\",\"ts\":", ip);
+        ts(out, last);
+        out.raw(",\"title\":");
+        let mut tb = [0u8; 96];
+        let mut tw = JsonBuf::new(&mut tb[..]);
+        let _ = write!(tw, "{} from {} ({} detections)", rulecat::lookup_or_generic(rule).msg, ip, count);
+        let tl = tw.len;
+        out.string(core::str::from_utf8(&tb[..tl]).unwrap_or("heqk incident"));
+        let _ = write!(out, ",\"device_ip\":\"{}\",\"priority\":\"{}\",\"status\":\"open\",\"threat_score\":{}", ip,
+            if worst <= rulecat::SEV_HIGH { "High" } else { "Medium" }, score);
+        // distinct rules + targets, newest first (bounded)
+        let mut rules: [u16; 8] = [0; 8];
+        let mut nr = 0usize;
+        let mut tgts: [(u32, u16); 8] = [(0, 0); 8];
+        let mut nt = 0usize;
+        let mut conf = "0.5";
+        for i in 0..self.dlen {
+            let Some(d) = self.newest(i) else { break };
+            if d.src != src || rulecat::src_is_mac_hash(d.rule_id) {
+                continue;
+            }
+            if nr < rules.len() && !rules[..nr].contains(&d.rule_id) {
+                rules[nr] = d.rule_id;
+                nr += 1;
+            }
+            if d.dst != 0 && nt < tgts.len() && !tgts[..nt].contains(&(d.dst, d.dport)) {
+                tgts[nt] = (d.dst, d.dport);
+                nt += 1;
+            }
+            if Self::class_confidence(d.class) == "0.9" {
+                conf = "0.9";
+            }
+        }
+        out.raw(",\"explanation\":{\"why\":");
+        let mut wb = [0u8; 320];
+        let mut ww = JsonBuf::new(&mut wb[..]);
+        let _ = write!(ww, "{} detection(s) from {} matched {} rule(s) on this device:", count, ip, nr);
+        for (k, r) in rules[..nr].iter().enumerate().take(3) {
+            let _ = write!(ww, "{} {}", if k > 0 { ";" } else { "" }, rulecat::lookup_or_generic(*r).msg);
+        }
+        let _ = write!(ww, ". Deterministic rule match (no AI planner run).");
+        let wl = ww.len;
+        out.string(core::str::from_utf8(&wb[..wl]).unwrap_or("rule match"));
+        let _ = write!(out, ",\"confidence\":{},\"evidence\":{},\"model\":null,\"related_events\":[", conf, count);
+        let mut k = 0;
+        for i in 0..self.dlen {
+            let Some(d) = self.newest(i) else { break };
+            if d.src == src && !rulecat::src_is_mac_hash(d.rule_id) && k < 10 {
+                let _ = write!(out, "{}\"det:heqk:{}\"", if k > 0 { "," } else { "" }, d.seq);
+                k += 1;
+            }
+        }
+        // attack path: source -> each target; each rule -> source
+        let _ = write!(out, "]}},\"attack_path\":{{\"incident\":\"inc:heqk:{}\",\"node_count\":{},\"edge_count\":{},\"nodes\":[", ip, 1 + nt + nr, nt + nr);
+        let _ = write!(out, "{{\"id\":\"ip:{}\",\"type\":\"Device\",\"label\":\"{}\"}}", ip, ip);
+        for &(d, p) in &tgts[..nt] {
+            let mut t2 = [0u8; 16];
+            let dip = ipv4(d, &mut t2);
+            let _ = write!(out, ",{{\"id\":\"conn:{}:{}\",\"type\":\"Connection\",\"label\":\"{}:{}\"}}", dip, p, dip, p);
+        }
+        for &r in &rules[..nr] {
+            let _ = write!(out, ",{{\"id\":\"rule:{}\",\"type\":\"Threat\",\"label\":", rulecat::HEQK_RULE_BAND + r as u32);
+            out.string(rulecat::lookup_or_generic(r).msg);
+            out.raw("}");
+        }
+        out.raw("],\"edges\":[");
+        let mut e = 0;
+        for &(d, p) in &tgts[..nt] {
+            let mut t2 = [0u8; 16];
+            let dip = ipv4(d, &mut t2);
+            let _ = write!(out, "{}{{\"src\":\"ip:{}\",\"type\":\"connected_to\",\"dst\":\"conn:{}:{}\"}}", if e > 0 { "," } else { "" }, ip, dip, p);
+            e += 1;
+        }
+        for &r in &rules[..nr] {
+            let _ = write!(out, "{}{{\"src\":\"rule:{}\",\"type\":\"detected_on\",\"dst\":\"ip:{}\"}}", if e > 0 { "," } else { "" }, rulecat::HEQK_RULE_BAND + r as u32, ip);
+            e += 1;
+        }
+        out.raw("]}}");
+        !out.overflow
+    }
+
+    /// `GET /api/incidents/:id/timeline` — the source's detections and its live flows, oldest first.
+    pub fn render_timeline(&self, src: u32, now_ticks: u64, out: &mut JsonBuf) {
+        let found = self.incident_of(src).is_some();
+        let mut tmp = [0u8; 16];
+        let ip = ipv4(src, &mut tmp);
+        let _ = write!(out, "{{\"incident\":\"inc:heqk:{}\",\"found\":{},\"events\":[", ip, found);
+        // (ts_ms, is_flow, index)
+        let mut ev: [(u64, bool, u16); 96] = [(0, false, 0); 96];
+        let mut n = 0usize;
+        if found {
+            for i in (0..self.dlen).rev() {
+                let Some(d) = self.newest(i) else { continue };
+                if d.src == src && !rulecat::src_is_mac_hash(d.rule_id) && n < 64 {
+                    ev[n] = (d.ts_ms, false, i as u16);
+                    n += 1;
+                }
+            }
+            let srcb = src.to_be_bytes();
+            let mut fl: [Option<arch_aarch64::nat::FlowView>; 32] = [None; 32];
+            let mut nf = 0usize;
+            arch_aarch64::nat::for_each_flow(now_ticks, &mut |f| {
+                if (f.src == srcb || f.dst == srcb) && nf < fl.len() {
+                    fl[nf] = Some(*f);
+                    nf += 1;
+                }
+            });
+            for (j, f) in fl[..nf].iter().flatten().enumerate() {
+                if n < ev.len() {
+                    ev[n] = (self.epoch_ms(f.first), true, j as u16);
+                    n += 1;
+                }
+            }
+            ev[..n].sort_unstable_by_key(|e| e.0);
+            for (k, &(t, is_flow, idx)) in ev[..n].iter().enumerate() {
+                let m = out.mark();
+                if k > 0 {
+                    out.raw(",");
+                }
+                if is_flow {
+                    let f = fl[idx as usize].unwrap();
+                    let _ = write!(out, "{{\"id\":\"flow:heqk:{}:{}\",\"ts\":", f.slot, f.first);
+                    ts(out, t);
+                    let _ = write!(out, ",\"kind\":\"flow\",\"label\":\"{} {}.{}.{}.{} -> {}.{}.{}.{}:{} ({} B out / {} B in)\"}}",
+                        match f.proto { 6 => "TCP", 17 => "UDP", 1 => "ICMP", _ => "IP" },
+                        f.src[0], f.src[1], f.src[2], f.src[3], f.dst[0], f.dst[1], f.dst[2], f.dst[3], f.dport, f.bytes_out, f.bytes_in);
+                } else {
+                    let Some(d) = self.newest(idx as usize) else { continue };
+                    let _ = write!(out, "{{\"id\":\"det:heqk:{}\",\"ts\":", d.seq);
+                    ts(out, t);
+                    out.raw(",\"kind\":\"detection\",\"label\":");
+                    let mut lb = [0u8; 160];
+                    let mut lw = JsonBuf::new(&mut lb[..]);
+                    let mut t2 = [0u8; 16];
+                    let _ = write!(lw, "{} ({}, {})", rulecat::lookup_or_generic(d.rule_id).msg, if d.verdict == 2 { "DROP" } else { "PASS" }, Self::class_name(d.class));
+                    if d.dst != 0 {
+                        let _ = write!(lw, " -> {}:{}", ipv4(d.dst, &mut t2), d.dport);
+                    }
+                    let ll = lw.len;
+                    out.string(core::str::from_utf8(&lb[..ll]).unwrap_or("detection"));
+                    out.raw("}");
+                }
+                if out.overflow || out.len + 32 > out.buf.len() {
+                    out.rewind(m);
+                    n = k;
+                    break;
+                }
+            }
         }
         let _ = write!(out, "],\"count\":{}}}", n);
     }

@@ -1,0 +1,10 @@
+# Shield bench blocklist (heqk AP). One domain per line, or hosts-file lines.
+# Visible test: example.org must fail on a client while example.com still loads.
+example.org
+# common ad / tracking domains
+doubleclick.net
+googlesyndication.com
+googleadservices.com
+adservice.google.com
+0.0.0.0 ads.yahoo.com
+0.0.0.0 app-measurement.com
