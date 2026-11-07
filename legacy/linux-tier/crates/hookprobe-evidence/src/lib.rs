@@ -423,7 +423,7 @@ fn migrate_additive_columns(conn: &Connection) -> Result<()> {
 
 /// The heqk rule catalogue, compiled from the KERNEL's own file so the meaning of a rule can never
 /// drift between the device's Mission Control and this aggregator.
-#[path = "../../../os/kernel/kernel/src/rulecat.rs"]
+#[path = "../../../../../os/kernel/kernel/src/rulecat.rs"]
 #[allow(dead_code)]
 mod rulecat;
 
