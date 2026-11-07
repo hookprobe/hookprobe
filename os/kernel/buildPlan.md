@@ -172,7 +172,7 @@ qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic \
 
 ### P7-TOOL — the "Linux-as-oracle" bring-up methodology (reusable asset)
 Five rounds of documentation-based guessing on the GEM descriptor bug all failed; **booting Linux on the target and *observing* the working driver** cracked it in one pass. This is now a standing tool for RP1/BCM2712 hardware bring-up:
-- The **hookprobe-edge kernel** (RPi downstream + BTF, full RP1 support; `~/hookprobe-os/builder/kernel-build/out/*.deb`) + the on-eMMC `hookprobe-root` rootfs boot on the CM5 with a swapped `config.txt` (kernel restored via `config.txt.heqk`). The exact `macb` driver **source** is at `~/hookprobe-os/builder/kernel-build/linux-*`.
+- The **hookprobe-edge kernel** (RPi downstream + BTF, full RP1 support; `~/hookprobe-os/legacy/linux-tier/builder/kernel-build/out/*.deb`) + the on-eMMC `hookprobe-root` rootfs boot on the CM5 with a swapped `config.txt` (kernel restored via `config.txt.heqk`). The exact `macb` driver **source** is at `~/hookprobe-os/legacy/linux-tier/builder/kernel-build/linux-*`.
 - Method: boot Linux, confirm the peripheral works (e.g. `end0` got a DHCP lease, `rx_length_errors=0` ⇒ the HW *can* do it), then read the driver source for the exact register/descriptor recipe and mirror it in HEQK. Use `iomem=relaxed` + `busybox devmem` for live register dumps (STRICT_DEVMEM blocks it otherwise).
 - **Directly de-risks P9** (the RTL8111H 2nd port): Linux already brings it up as `enP1p1s0` on the external PCIe RC1 — boot the oracle, read `r8169` + the brcmstb PCIe-RC init, mirror it.
 
