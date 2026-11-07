@@ -160,3 +160,26 @@ correctly idle (infinite lifetimes). Deferred-frame ring: parked 51 = delivered 
 Gate run at the end of the block: `validate.sh` exit 0 (all implemented phases GREEN); `prod`, `prod-mc`,
 `hboot,apmode`, `hboot,stalldiag` release builds OK. The UI change is not typechecked here (no Node on the
 build box). Everything in this block is METAL-PENDING.
+
+### Task #21 block (no metal, 2026-11-07, after the operator's "fix all gaps without rpiboot")
+
+- **N4 wall clock on prod-mc.** prod-mc had no time source (epoch 0 → the UI showed 1970). The Mission
+  Control node now runs an SNTP client (RFC 4330) on its own UDP socket: the DHCP router first, then
+  162.159.200.1 / .123. A reply is accepted only from the server asked, port 123, server mode, LI≠3, stratum
+  1..15, Originate == our random nonce, time ≥ 2026-01-01. The first sync moves every pre-sync row; a later
+  step > 1 h is refused. `/api/health` reports `clock: ntp|unsynced`. Air-gapped: stays `unsynced` (honest).
+  `[P-mc]` covers parse/refusals/row-shift/re-step refusal.
+- **D1 detections survive a reboot.** Snapshot events are stamped in wall-clock ms once the clock is known
+  (verdict-byte flag; this boot's earlier events converted at sync). On boot the restored ones go back into
+  the UI as fixed-time rows (a clock step never moves them). A prior boot that never synced is restored as
+  "time unknown" and not shown (counted in the boot line). Snapshot format unchanged. `[P-snapshot]` covers it.
+- **D2 on-demand SOAR drain.** One drain body (macro) for the heartbeat and on demand (ring ≥ 1/4 full or
+  250 ms): detections reach the UI within ~250 ms instead of up to 5 s, and a burst between heartbeats no
+  longer overruns the 64-slot ring.
+- **Bench automation.** `tools/cm5-relay.py`: 2-channel USB relay (CH340 "LCUS" serial or HID USBRelay2)
+  for power-cycle and rpiboot (asserts nRPIBOOT, cycles, waits for the 0a5c:2712 ROM, releases). Refuses
+  the console tty.
+
+Gates: `validate.sh` exit 0 (84 phases PASS); `prod`, `prod-mc`, `hboot,apmode`, `hboot,stalldiag`,
+`sepdiag,p15-write`, `hboot,stajoin` build. METAL-PENDING: SNTP against a real router/Internet, restore
+across a power cycle, drain latency.

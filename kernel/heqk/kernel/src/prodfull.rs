@@ -68,6 +68,16 @@ pub use crate::snapshot::{Counters, Snapshot, SNAP_LEN};
 const PERSIST_INTERVAL_S: u64 = 300;
 
 /// The `prod-full` runtime state, owned by the sensor loop.
+/// Boot-local `ticks` -> Unix ms given that `epoch_ms` was true at `at` (ticks may precede `at`).
+pub fn tick_to_ms(ticks: u64, epoch_ms: u64, at: u64, frq: u64) -> u64 {
+    let frq = frq.max(1) as u128;
+    if ticks >= at {
+        epoch_ms.saturating_add(((ticks - at) as u128 * 1000 / frq) as u64)
+    } else {
+        epoch_ms.saturating_sub(((at - ticks) as u128 * 1000 / frq) as u64)
+    }
+}
+
 pub struct ProdFull {
     /// Generation of the last committed A/B snapshot slot (task #27; 0 = none this boot).
     pub last_gen: u64,
@@ -76,6 +86,8 @@ pub struct ProdFull {
     policy: Policy,
     /// Accumulates across boots (restored + 1 at init).
     pub snap: Snapshot,
+    /// (Unix ms, ticks, cntfrq) once SNTP set the wall clock this boot.
+    clock: Option<(u64, u64, u64)>,
     last_persist_s: u64,
     dirty: bool,
     /// M4 posture. `Unenrolled` is a fully valid steady state (air-gap invariant).
@@ -108,6 +120,7 @@ impl ProdFull {
             srk,
             policy,
             snap: Snapshot::new(),
+            clock: None,
             last_persist_s: 0,
             dirty: false,
             // Air-gap default. Enrollment is additive and never a boot precondition.
@@ -156,6 +169,7 @@ impl ProdFull {
                                             prev.qsecbit, prev.nev
                                         );
                                         pf.snap = prev;
+                                        pf.snap.forget_prior_ticks();
                                     }
                                     None => kprint!(
                                         "   [PROD-FULL] M3: sealed blob unsealed but is not a v1/v2 snapshot — starting fresh (fail-closed)\n"
@@ -224,7 +238,24 @@ impl ProdFull {
 
     /// Record a threat verdict as a persisted event. Cheap: RAM only, marks dirty.
     pub fn on_threat(&mut self, ev: &events::Event) {
-        self.snap.push_event(ev);
+        match self.clock {
+            Some((ms, ticks, frq)) => {
+                let mut e = *ev;
+                e.ts = tick_to_ms(ev.ts, ms, ticks, frq);
+                e.verdict |= crate::snapshot::IMG_EPOCH;
+                self.snap.push_event(&e);
+            }
+            None => self.snap.push_event(ev),
+        }
+        self.dirty = true;
+    }
+
+    /// The wall clock became known (SNTP): `epoch_ms` is true at `ticks`. This boot's events
+    /// recorded before it are converted now; later ones are stamped at record time.
+    pub fn set_clock(&mut self, epoch_ms: u64, ticks: u64, frq: u64) {
+        let frq = frq.max(1);
+        self.clock = Some((epoch_ms, ticks, frq));
+        self.snap.anchor_events(|t| tick_to_ms(t, epoch_ms, ticks, frq));
         self.dirty = true;
     }
 

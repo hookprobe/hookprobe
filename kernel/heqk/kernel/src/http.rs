@@ -212,9 +212,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             use core::fmt::Write;
             // An unarmed rule plane (0 active rules) passes everything — report it, never hide it.
             let rules = crate::rules::active_rules();
-            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"mode\":\"{}\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{}}}",
+            let _ = write!(w, "{{\"status\":\"{}\",\"substrate\":\"heqk\",\"mode\":\"{}\",\"clock\":\"{}\",\"rules_active\":{},\"seen\":{},\"forwarded\":{},\"dropped\":{},\"detections\":{}}}",
                 if rules == 0 { "degraded: rule plane not armed" } else { "ok" },
-                if st.cloud_linked { "cloud-linked" } else { "standalone" }, rules, st.seen, st.forwarded, st.dropped, st.detections());
+                if st.cloud_linked { "cloud-linked" } else { "standalone" },
+                if st.clock_synced { "ntp" } else { "unsynced" }, rules, st.seen, st.forwarded, st.dropped, st.detections());
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
         p if p.starts_with("/api/") => json(scratch, |w| w.raw("{\"error\":\"not implemented on heqk\"}")).with_status(404),
@@ -407,8 +408,48 @@ pub fn mc_selftest() -> bool {
     let mut tiny = [0u8; 8];
     let big = handle(&parse(b"GET /api/detections HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &st, &mut auth, 1, || Some([0; 16]), &mut tiny);
     let ovf_ok = shed_ok && big.status == 500;
-    let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok;
-    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} (ui assets embedded: {})\n",
-        if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, UI_ASSETS.len());
+    // N4 — wall clock: a strict SNTP reply sets it and moves pre-sync rows; forged replies refused.
+    let time_ok = {
+        let nonce = 0x1122_3344_5566_7788u64;
+        let mut r = [0u8; 48];
+        r[0] = 0x24; // LI 0 | VN 4 | Mode 4 (server)
+        r[1] = 2;
+        r[24..32].copy_from_slice(&nonce.to_be_bytes());
+        let ntp_secs = 1_800_000_000u64 + 2_208_988_800;
+        r[40..44].copy_from_slice(&(ntp_secs as u32).to_be_bytes());
+        r[44..48].copy_from_slice(&0x8000_0000u32.to_be_bytes()); // .5 s
+        let good = crate::mcstate::sntp_parse_strict(&r, nonce) == Some(1_800_000_000_500);
+        let wrong_nonce = crate::mcstate::sntp_parse_strict(&r, nonce ^ 1).is_none();
+        let mut kod = r;
+        kod[1] = 0; // kiss-o'-death
+        let mut client = r;
+        client[0] = 0x23;
+        let mut old = r;
+        old[40..44].copy_from_slice(&((1_600_000_000u64 + 2_208_988_800) as u32).to_be_bytes());
+        let refused = crate::mcstate::sntp_parse_strict(&kod, nonce).is_none()
+            && crate::mcstate::sntp_parse_strict(&client, nonce).is_none()
+            && crate::mcstate::sntp_parse_strict(&old, nonce).is_none()
+            && crate::mcstate::sntp_parse_strict(&r[..47], nonce).is_none();
+        // An unsynced state at epoch 0: a detection at tick 5_000 reads 5_000 ms; syncing to
+        // 1.8e12 at tick 10_000 moves it to 1.8e12 - 5_000. A later 2-h step is refused.
+        let mut t = McState::new();
+        t.set_clock(0, 0, 1000);
+        t.push_event(&crate::events::Event { ts: 5_000, src: 1, rule_id: 1, severity: 5, verdict: 2, class: crate::verdict::CLASS_FRAMEDROP });
+        let before = t.health_ts(0);
+        let step = t.sync_clock(1_800_000_000_000, 10_000);
+        let after = t.health_ts(0);
+        let synced = step == Some(1_800_000_000_000 - 10_000) && before == Some(5_000) && after == Some(1_799_999_995_000) && t.clock_synced;
+        let small = t.sync_clock(1_800_000_000_000 + 20_000 + 1_000, 30_000) == Some(1_000);
+        let big = t.sync_clock(1_800_000_000_000 + 7_200_000 + 40_000, 40_000).is_none();
+        // A restored (prior-boot, wall-clock) row is never moved by this boot's clock step.
+        let mut r2 = McState::new();
+        r2.push_restored(&crate::events::Event { ts: 0, src: 1, rule_id: 1, severity: 5, verdict: 2, class: 0 }, 1_799_000_000_000);
+        let _ = r2.sync_clock(1_800_000_000_000, 10_000);
+        let pinned = r2.health_ts(0) == Some(1_799_000_000_000);
+        good && wrong_nonce && refused && synced && small && big && pinned
+    };
+    let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok;
+    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} (ui assets embedded: {})\n",
+        if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, time_ok, UI_ASSETS.len());
     pass
 }

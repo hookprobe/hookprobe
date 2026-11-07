@@ -19,7 +19,7 @@ use crate::{events, packet};
 use crate::telemetry;
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet, SocketStorage};
 use smoltcp::phy::{self, ChecksumCapabilities, Device, DeviceCapabilities, Medium};
-use smoltcp::socket::tcp;
+use smoltcp::socket::{tcp, udp};
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, HardwareAddress, IpAddress, IpCidr, Ipv4Address};
 
@@ -146,7 +146,12 @@ enum Conn {
     Sse { last_change: u64, last_ping_ms: u64 },
 }
 
-static mut STORAGE: [SocketStorage<'static>; CONNS] = [SocketStorage::EMPTY; CONNS];
+static mut STORAGE: [SocketStorage<'static>; CONNS + 1] = [SocketStorage::EMPTY; CONNS + 1];
+// The SNTP client's one UDP socket (the +1 storage slot): two packets of 48 B each way.
+static mut NTP_RX_META: [udp::PacketMetadata; 2] = [udp::PacketMetadata::EMPTY; 2];
+static mut NTP_RX_BUF: [u8; 128] = [0; 128];
+static mut NTP_TX_META: [udp::PacketMetadata; 2] = [udp::PacketMetadata::EMPTY; 2];
+static mut NTP_TX_BUF: [u8; 128] = [0; 128];
 static mut TCP_RX_BUF: [[u8; TCP_RX]; CONNS] = [[0; TCP_RX]; CONNS];
 static mut TCP_TX_BUF: [[u8; TCP_TX]; CONNS] = [[0; TCP_TX]; CONNS];
 static mut REQ: [[u8; 4096]; CONNS] = [[0; 4096]; CONNS];
@@ -222,6 +227,21 @@ pub enum NetMode {
 
 /// RFC 3927 link-local fallback while DHCP has not answered (operator can still reach the box
 /// on a direct cable). The exact host part is derived from the MAC so two devices differ.
+const NTP_LOCAL_PORT: u16 = 40123;
+const NTP_RETRY_MS: i64 = 16_000;
+const NTP_RESYNC_MS: i64 = 3_600_000;
+struct Sntp {
+    sock: SocketHandle,
+    /// Our outstanding request's transmit timestamp (0 = none outstanding).
+    nonce: u64,
+    rng: u64,
+    server: Option<[u8; 4]>,
+    next_ms: i64,
+    tries: u32,
+    synced_once: bool,
+    result: Option<u64>,
+}
+
 fn link_local(mac: [u8; 6]) -> [u8; 4] {
     [169, 254, 1 + (mac[4] % 254), 1 + (mac[5] % 254)]
 }
@@ -239,6 +259,8 @@ pub struct McNode {
     mac: [u8; 6],
     pub ip: [u8; 4],
     pub leased: bool,
+    gw: Option<[u8; 4]>,
+    ntp: Sntp,
 }
 
 static NODE_TAKEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -279,7 +301,17 @@ impl McNode {
             NetMode::Dhcp => Some(sockets.add(smoltcp::socket::dhcpv4::Socket::new())),
             NetMode::Static { .. } => None,
         };
-        Some(McNode { iface, sockets, handles, conns: [Conn::Reading { got: 0 }; CONNS], dhcp, mac, ip, leased: dhcp.is_none() })
+        let ntp_sock = {
+            let rx = udp::PacketBuffer::new(unsafe { &mut NTP_RX_META[..] }, unsafe { &mut NTP_RX_BUF[..] });
+            let tx = udp::PacketBuffer::new(unsafe { &mut NTP_TX_META[..] }, unsafe { &mut NTP_TX_BUF[..] });
+            let mut u = udp::Socket::new(rx, tx);
+            let _ = u.bind(NTP_LOCAL_PORT);
+            sockets.add(u)
+        };
+        Some(McNode {
+            iface, sockets, handles, conns: [Conn::Reading { got: 0 }; CONNS], dhcp, mac, ip, leased: dhcp.is_none(), gw,
+            ntp: Sntp { sock: ntp_sock, nonce: 0, rng: seed | 1, server: None, next_ms: 0, tries: 0, synced_once: false, result: None },
+        })
     }
 
     /// Does this frame belong to the node (our MAC or broadcast)?
@@ -315,6 +347,8 @@ impl McNode {
                     if let Some(r) = c.router {
                         let _ = self.iface.routes_mut().add_default_ipv4_route(r);
                     }
+                    self.gw = c.router.map(|r| r.octets());
+                    self.ntp.next_ms = 0; // a new lease: try time right away
                     self.ip = a;
                     self.leased = true;
                     changed = true;
@@ -326,6 +360,7 @@ impl McNode {
                         let _ = v.push(IpCidr::new(IpAddress::v4(ll[0], ll[1], ll[2], ll[3]), 16));
                     });
                     self.iface.routes_mut().remove_default_ipv4_route();
+                    self.gw = None;
                     self.ip = ll;
                     self.leased = false;
                     changed = true;
@@ -343,9 +378,64 @@ impl McNode {
             }
             serve_conn(i, s, &mut self.conns[i], st, now_ms as u64);
         }
+        if self.leased {
+            self.sntp_step(now_ms);
+        }
         let dev = unsafe { &mut DEV };
         self.iface.poll(Instant::from_millis(now_ms), dev, &mut self.sockets);
         changed
+    }
+
+    /// A validated wall-clock reading (Unix ms at the moment it was taken), once per reply. The
+    /// caller applies it with `McState::sync_clock(ms, cntpct())`.
+    pub fn take_time(&mut self) -> Option<u64> {
+        self.ntp.result.take()
+    }
+
+    /// The SNTP client (RFC 4330): ask the DHCP router first, then the public anycast servers;
+    /// accept ONLY a reply from the server asked, from port 123, that echoes our nonce.
+    fn sntp_step(&mut self, now_ms: i64) {
+        let n = &mut self.ntp;
+        let u = self.sockets.get_mut::<udp::Socket>(n.sock);
+        let mut buf = [0u8; 64];
+        while let Ok((len, meta)) = u.recv_slice(&mut buf) {
+            #[allow(unreachable_patterns)]
+            let from = match meta.endpoint.addr {
+                IpAddress::Ipv4(a) => a.octets(),
+                _ => continue,
+            };
+            let asked = n.server.map_or(false, |s| s == from);
+            if !asked || meta.endpoint.port != 123 || n.nonce == 0 {
+                continue;
+            }
+            if let Some(ms) = crate::mcstate::sntp_parse_strict(&buf[..len], n.nonce) {
+                n.result = Some(ms);
+                n.nonce = 0; // one answer per request (a replayed copy is refused)
+                n.synced_once = true;
+                n.tries = 0;
+                n.next_ms = now_ms + NTP_RESYNC_MS;
+            }
+        }
+        if now_ms < n.next_ms {
+            return;
+        }
+        // Candidate list: the router this lease named, then two anycast servers.
+        let cands: [Option<[u8; 4]>; 3] = [self.gw, Some([162, 159, 200, 1]), Some([162, 159, 200, 123])];
+        let pick = cands.iter().cycle().skip(n.tries as usize % 3).take(3).flatten().next().copied();
+        let Some(srv) = pick else { return };
+        n.rng ^= n.rng << 13;
+        n.rng ^= n.rng >> 7;
+        n.rng ^= n.rng << 17;
+        n.nonce = n.rng | 1;
+        let mut req = [0u8; 48];
+        req[0] = 0x23; // LI 0 | VN 4 | Mode 3 (client)
+        req[40..48].copy_from_slice(&n.nonce.to_be_bytes()); // transmit timestamp = our nonce
+        let ep = (IpAddress::v4(srv[0], srv[1], srv[2], srv[3]), 123u16);
+        if u.send_slice(&req, ep).is_ok() {
+            n.server = Some(srv);
+        }
+        n.tries = n.tries.wrapping_add(1);
+        n.next_ms = now_ms + if n.synced_once { NTP_RESYNC_MS } else { NTP_RETRY_MS };
     }
 
     /// Put queued egress frames on the NIC via `tx` (returns false when the NIC cannot take one
@@ -442,6 +532,12 @@ pub fn run() -> ! {
         if now - last_sample >= 1000 {
             last_sample = now;
             st.sample_qsecbit(cntpct(), telemetry::score());
+        }
+        if let Some(ms) = node.take_time() {
+            match st.sync_clock(ms, cntpct()) {
+                Some(step) => kprint!(" [MC] clock synced by SNTP (step {} ms)\n", step),
+                None => kprint!(" [MC] SNTP re-sync REFUSED (step > 1 h)\n"),
+            }
         }
         if node.service(st, now) {
             kprint!(" [MC] heqk Mission Control serving on http://{}.{}.{}.{}:{} ({})\n",

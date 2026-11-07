@@ -68,6 +68,15 @@ pub fn push_hit(rule_id: u16, severity: u8, verdict: u8, class: u8, src: u32) {
     HEAD.store(h.wrapping_add(1), Ordering::Release); // publish (release)
 }
 
+/// Events waiting in the ring (the serve loop drains on demand once this passes a threshold, so
+/// a burst between heartbeats does not overrun the 64-slot ring).
+pub fn pending() -> usize {
+    HEAD.load(Ordering::Acquire).wrapping_sub(TAIL.load(Ordering::Relaxed)) as usize
+}
+
+/// Ring capacity.
+pub const CAPACITY: usize = RING;
+
 /// Consumer (the EL0 Telemetry Exporter): drain up to `out.len()` events into
 /// `out`, returning the count. Zero-copy read + release the slot.
 pub fn drain(out: &mut [Event]) -> usize {

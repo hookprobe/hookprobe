@@ -98,7 +98,51 @@ impl Default for Snapshot {
     }
 }
 
+/// Verdict-byte flag on a persisted event image: its `ts` is wall-clock Unix ms (an SNTP-synced
+/// clock was known), not boot-local ticks. `ts == 0` with the flag = "time unknown" (a prior
+/// boot that never synced). Verdicts are 0..=2, so the bit is free; it never leaves the device.
+pub const IMG_EPOCH: u8 = 0x80;
+
 impl Snapshot {
+    /// Rewrite this boot's tick-stamped events to wall-clock ms via `to_ms` (called once when the
+    /// clock first becomes known). Already-converted images are untouched.
+    pub fn anchor_events(&mut self, to_ms: impl Fn(u64) -> u64) {
+        for i in 0..self.nev {
+            let o = (self.head + SNAP_EVENTS - self.nev + i) % SNAP_EVENTS;
+            let img = &mut self.events[o];
+            if img[15] & IMG_EPOCH == 0 {
+                let ts = u64::from_le_bytes(img[0..8].try_into().unwrap());
+                img[0..8].copy_from_slice(&to_ms(ts).to_le_bytes());
+                img[15] |= IMG_EPOCH;
+            }
+        }
+    }
+
+    /// After a restore: a prior boot's tick-stamped images can never be placed in time (its tick
+    /// counter is gone) — mark them "time unknown" so nothing renders them at a fake time.
+    pub fn forget_prior_ticks(&mut self) {
+        for i in 0..self.nev {
+            let o = (self.head + SNAP_EVENTS - self.nev + i) % SNAP_EVENTS;
+            let img = &mut self.events[o];
+            if img[15] & IMG_EPOCH == 0 {
+                img[0..8].copy_from_slice(&0u64.to_le_bytes());
+                img[15] |= IMG_EPOCH;
+            }
+        }
+    }
+
+    /// The `i`-th oldest event with a known wall-clock time: (event, Unix ms).
+    pub fn timed_event(&self, i: usize) -> Option<(events::Event, u64)> {
+        let img = self.event_in_order(i)?;
+        if img[15] & IMG_EPOCH == 0 {
+            return None;
+        }
+        let ms = u64::from_le_bytes(img[0..8].try_into().ok()?);
+        let mut ev = export::image_to_ev(img)?;
+        ev.verdict &= !IMG_EPOCH;
+        (ms != 0).then_some((ev, ms))
+    }
+
     pub const fn new() -> Self {
         Snapshot {
             boots: 0,
@@ -247,10 +291,29 @@ pub fn snapshot_selftest() -> bool {
     bad[O_HEAD..O_HEAD + 4].copy_from_slice(&(SNAP_EVENTS as u32).to_le_bytes());
     let bad_refused = Snapshot::parse(&bad).is_none();
 
-    let pass = evicted && restored_order && after && legacy && bad_refused;
+    // D1 wall clock: a boot that synced persists Unix ms; one that never synced restores as
+    // "time unknown" (never rendered at a fake time); verdicts come back without the flag.
+    let timed = {
+        let mut a = Snapshot::new();
+        a.push_event(&ev(1_000)); // before the sync: ticks
+        a.anchor_events(|t| 1_800_000_000_000 + t); // the sync converts it
+        let mut e2 = ev(2_000);
+        e2.ts = 1_800_000_002_000;
+        e2.verdict |= IMG_EPOCH; // after the sync: stamped at record time
+        a.push_event(&e2);
+        a.push_event(&ev(3_000)); // a tick-stamped event left over (a prior boot, never synced)
+        let mut blob = [0u8; SNAP_LEN];
+        a.serialize(&mut blob);
+        let mut b = Snapshot::parse(&blob).unwrap();
+        b.forget_prior_ticks();
+        let first = b.timed_event(0).map(|(e, ms)| (e.verdict, ms));
+        let second = b.timed_event(1).map(|(e, ms)| (e.rule_id, ms));
+        first == Some((2, 1_800_000_001_000)) && second == Some((2_000u16, 1_800_000_002_000)) && b.timed_event(2).is_none()
+    };
+    let pass = evicted && restored_order && after && legacy && bad_refused && timed;
     kprint!(
-        " [P-snapshot] {} — M3 evidence snapshot v2: wrapped ring restores IN ORDER across persist/restore={} post-restore push keeps order={} eviction+overruns counted={} legacy-v1-restores={} corrupt-cursor-refused={}\n",
-        if pass { "PASS" } else { "FAIL" }, restored_order, after, evicted, legacy, bad_refused
+        " [P-snapshot] {} — M3 evidence snapshot v2: wrapped ring restores IN ORDER across persist/restore={} post-restore push keeps order={} eviction+overruns counted={} legacy-v1-restores={} corrupt-cursor-refused={} wall-clock rows restore + unsynced never faked={}\n",
+        if pass { "PASS" } else { "FAIL" }, restored_order, after, evicted, legacy, bad_refused, timed
     );
     pass
 }

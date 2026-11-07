@@ -1798,6 +1798,16 @@ fn cm5_prod_service() -> ! {
             // every protected route refuses — never an open claim window.
             let owner = pf.read_owner();
             mcserve::set_owner(owner);
+            // D1: the prior boot's wall-clock-stamped detections come back into the UI.
+            let mut restored = 0usize;
+            for i in 0..crate::snapshot::SNAP_EVENTS {
+                if let Some((ev, ms)) = pf.snap.timed_event(i) {
+                    mcserve::state().push_restored(&ev, ms);
+                    restored += 1;
+                }
+            }
+            kprint!(" [MC] {} detection(s) restored from the sealed snapshot ({} without a known time not shown)\n",
+                restored, pf.snap.nev - restored);
             kprint!(" [MC] owner: {}\n", if owner.is_some() { "CLAIMED — sign-in required" } else { "UNCLAIMED — access refused until flashed with an owner key" });
             let n = mcserve::McNode::new(mac, mcserve::NetMode::Dhcp, seed);
             if let Some(ref node) = n {
@@ -1811,6 +1821,37 @@ fn cm5_prod_service() -> ! {
             None
         }
     };
+    // D2 (task #21) — ONE drain body for the SOAR ring, called on the heartbeat AND on demand
+    // (ring >= 1/4 full or 250 ms since the last drain): the UI sees a detection within ~250 ms
+    // and a burst between heartbeats no longer overruns the 64-slot ring.
+    #[cfg(any(feature = "sepdiag", feature = "prod-full"))]
+    macro_rules! soar_drain {
+        () => {
+            {
+                let mut evs = [crate::events::Event::EMPTY; 32];
+                loop {
+                    let n = crate::events::drain(&mut evs);
+                    if n == 0 { break; }
+                    for e in &evs[..n] {
+                        #[cfg(feature = "sepdiag")]
+                        kprint!("   [SEPDIAG] rule={} verdict={} src={:#010x} sev={} class={}\n",
+                            e.rule_id, if e.verdict == 2 { "DROP" } else { "PASS" }, e.src, e.severity, e.class);
+                        #[cfg(feature = "prod-full")]
+                        pf.on_threat(e);
+                        #[cfg(feature = "prod-mc")]
+                        mcserve::state().push_event(e);
+                        #[cfg(all(feature = "prod-full", feature = "netmetal"))]
+                        if let Some(x) = exporter.as_mut() {
+                            x.push(e);
+                        }
+                    }
+                    if n < evs.len() { break; }
+                }
+            }
+        };
+    }
+    #[cfg(any(feature = "sepdiag", feature = "prod-full"))]
+    let mut last_drain: u64 = 0;
     kprint!(" [BOOT-TIMING] prod loop entered at t=+{} ms\n", boot_ms());
     #[cfg(all(feature = "late-confirm", not(feature = "apmode")))]
     let mut confirmed = false;
@@ -1818,6 +1859,13 @@ fn cm5_prod_service() -> ! {
         // Liveness heartbeat (~5 s) — fires even when every RX window is empty, so the
         // running sensor proves it is looping on metal, not hung.
         let now = prod_cntpct();
+        #[cfg(any(feature = "sepdiag", feature = "prod-full"))]
+        if crate::events::pending() >= crate::events::CAPACITY / 4 || now.wrapping_sub(last_drain) >= cntfrq / 4 {
+            if crate::events::pending() > 0 {
+                soar_drain!();
+            }
+            last_drain = now;
+        }
         // late-confirm: commit this boot only once the sensor is demonstrably HEALTHY — rule plane
         // armed, the GEM loop running >= 2 s with zero contained faults, and (prod-mc) the
         // Mission Control node up. Otherwise hboot's watchdog fires and the trial rolls back.
@@ -1837,6 +1885,15 @@ fn cm5_prod_service() -> ! {
         #[cfg(feature = "prod-mc")]
         if let Some(node) = mc.as_mut() {
             let now_ms = (now.wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
+            if let Some(ms) = node.take_time() {
+                match mcserve::state().sync_clock(ms, now) {
+                    Some(step) => {
+                        pf.set_clock(ms, now, cntfrq);
+                        kprint!(" [MC] clock synced by SNTP (step {} ms)\n", step);
+                    }
+                    None => kprint!(" [MC] SNTP re-sync REFUSED (step > 1 h)\n"),
+                }
+            }
             if node.service(mcserve::state(), now_ms) {
                 kprint!(" [MC] heqk Mission Control serving on http://{}.{}.{}.{}:80 ({})\n",
                     node.ip[0], node.ip[1], node.ip[2], node.ip[3], if node.leased { "DHCP lease" } else { "link-local fallback" });
@@ -2043,26 +2100,10 @@ fn cm5_prod_service() -> ! {
             // severity / class) feeds the sepdiag console, the M3 snapshot (prod-full) and the
             // M6 exporter (prod-export). A second drainer would silently steal events.
             #[cfg(any(feature = "sepdiag", feature = "prod-full"))]
+            soar_drain!();
+            #[cfg(any(feature = "sepdiag", feature = "prod-full"))]
             {
-                let mut evs = [crate::events::Event::EMPTY; 32];
-                loop {
-                    let n = crate::events::drain(&mut evs);
-                    if n == 0 { break; }
-                    for e in &evs[..n] {
-                        #[cfg(feature = "sepdiag")]
-                        kprint!("   [SEPDIAG] rule={} verdict={} src={:#010x} sev={} class={}\n",
-                            e.rule_id, if e.verdict == 2 { "DROP" } else { "PASS" }, e.src, e.severity, e.class);
-                        #[cfg(feature = "prod-full")]
-                        pf.on_threat(e);
-                        #[cfg(feature = "prod-mc")]
-                        mcserve::state().push_event(e);
-                        #[cfg(all(feature = "prod-full", feature = "netmetal"))]
-                        if let Some(x) = exporter.as_mut() {
-                            x.push(e);
-                        }
-                    }
-                    if n < evs.len() { break; }
-                }
+                last_drain = now;
             }
             // DRV-1 sink experiment readout — a nonzero value identifies the RP1 ETH MSI
             // sink + vector (the fact the unreadable MSI-X table could not give us).
