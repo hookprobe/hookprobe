@@ -64,6 +64,6 @@ legacy/linux-tier/builder/kernel-build/out/
 # heqk dev boot-signing keydir (os/build/gen-heqk-dev-keys.sh) — private key material, never tracked
 os/build/.heqk-dev-keys/
 
-# ADR 0048: gate-spine output (tools/ci/gates.sh results, logs, SBOMs, heal worktrees)
+# ADR 0052: gate-spine output (tools/ci/gates.sh results, logs, SBOMs, heal worktrees)
 out/ci/
 __pycache__/

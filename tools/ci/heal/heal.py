@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L2 heal loop driver (ADR 0048): gates → classify → rerun | autofix-in-isolation | escalate.
+"""L2 heal loop driver (ADR 0052): gates → classify → rerun | autofix-in-isolation | escalate.
 
     tools/ci/heal/heal.py                         run the PR gate set, heal what's red
     tools/ci/heal/heal.py --gates "g1 g4"         specific gates
@@ -161,8 +161,13 @@ def autofix(decision, log_text, args, state, outdir):
     # Worktrees live OUTSIDE the repository, so no relative path from the agent's cwd reaches the
     # trusted tree; the tamper snapshot catches absolute-path writes.
     wt = os.path.join(args.wt_root, f"{sig}-a{n}")
+    sh(GIT + ["worktree", "prune"])
     if os.path.exists(wt):
-        sh(["git", "worktree", "remove", "--force", wt])
+        sh(GIT + ["worktree", "remove", "--force", wt])
+        # A leftover from a run whose repository is gone is not a registered worktree, so `remove`
+        # cannot clear it. Only ever delete inside our own worktree root.
+        if os.path.exists(wt) and os.path.realpath(wt).startswith(os.path.realpath(args.wt_root) + os.sep):
+            shutil.rmtree(wt)
     sh(["git", "branch", "-D", branch])
     os.makedirs(args.wt_root, exist_ok=True)
     sh(GIT + ["worktree", "add", "-q", "-b", branch, wt, base], check=True)
@@ -185,7 +190,7 @@ def autofix(decision, log_text, args, state, outdir):
     if sh(GIT + ["diff", "--cached", "--quiet"], cwd=wt).returncode == 0:
         res.update(status="no_change", detail="agent made no change")
         return res
-    msg = f"autofix({decision['category']}): heal {decision['gate']} [{sig}]\n\n{notes}\n\nGenerated-by: tools/ci/heal (ADR 0048)"
+    msg = f"autofix({decision['category']}): heal {decision['gate']} [{sig}]\n\n{notes}\n\nGenerated-by: tools/ci/heal (ADR 0052)"
     sh(GIT + ["-c", "user.name=hookprobe-autofix", "-c", "user.email=autofix@hookprobe.invalid",
               "commit", "-q", "--no-verify", "-m", msg], cwd=wt, check=True)
     # The guard and its policy come from the TRUSTED tree running this loop (HERE), never from the
@@ -221,7 +226,7 @@ def autofix(decision, log_text, args, state, outdir):
         pr = sh(GIT + ["push", "--no-verify", "-q", "-u", "origin", branch], cwd=wt)
         res["pushed"] = pr.returncode == 0
         if pr.returncode == 0 and shutil.which("gh"):
-            body = f"**Autofix proposal (ADR 0048 L2)** — DRAFT, needs human review.\n\n{notes}\n\n" \
+            body = f"**Autofix proposal (ADR 0052 L2)** — DRAFT, needs human review.\n\n{notes}\n\n" \
                    f"- signature: `{sig}`\n- guard: PASS\n- gate `{decision['gate']}` re-ran green in isolation\n"
             p = sh(["gh", "pr", "create", "--draft", "--base", args.pr_base, "--head", branch,
                     "--title", f"autofix({decision['category']}): heal {decision['gate']}", "--body", body,
@@ -268,7 +273,12 @@ def main() -> int:
             rc, _, _ = run_gates(d["gate"], ROOT, os.path.join(a.out, "rerun"))
             r = {"status": "transient_cleared" if rc == 0 else "rerun_still_red_escalate"}
         elif d["action"] == "autofix":
-            r = autofix(d, log_text, a, state, a.out)
+            # A harness failure must still produce a report (and count against the budget) —
+            # a heal loop that crashes silently is the failure mode it exists to remove.
+            try:
+                r = autofix(d, log_text, a, state, a.out)
+            except Exception as e:  # noqa: BLE001
+                r = {"status": "harness_error", "detail": f"{type(e).__name__}: {str(e)[-1200:]}"}
         else:
             r = {"status": "escalated_to_human", "detail": "classified as a decision, not a defect"}
         r.update(decision=d, ts=now())

@@ -1,4 +1,4 @@
-# Paths an AUTOFIX change may never touch (ADR 0048 L2 guardrail, enforced by autofix_guard.py).
+# Paths an AUTOFIX change may never touch (ADR 0052 L2 guardrail, enforced by autofix_guard.py).
 #
 # The failure mode of every autonomous fixer is "make the check green" instead of
 # "make the code right": weaken the gate, add an ignore, delete the test. Everything

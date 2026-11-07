@@ -1,4 +1,4 @@
-# ADR 0048 — Autonomous CI/CD: one deterministic gate spine, five lifecycle loops
+# ADR 0052 — Autonomous CI/CD: one deterministic gate spine, five lifecycle loops
 
 **Status:** 🟡 **Proposed (2026-11-08)** — operator review. Implementation landed on branch
 `worktree-autonomous-cicd` (tools/ci/**, 5 new workflows, root dependabot) and was validated
@@ -72,8 +72,15 @@ lockfile. G4r: the shipped `prod` kernel must build bit-identically twice (ADR 0
 4. Only then: a **draft PR**. Merge is Red tier — always a human. Max 2 attempts/signature;
    per-attempt spend cap (`HEAL_MAX_BUDGET_USD`).
 5. On GitHub (`autoheal.yml`, `workflow_run`): only trusted default-branch code executes; the
-   failing run's logs are data; fork runs ignored; autofix only for default-branch failures
-   (PR authors own their PRs and get the classification as an issue).
+   failing run's logs are data; fork runs ignored; autofix only for push/schedule failures whose
+   commit is verified reachable from the default branch (PR authors own their PRs).
+6. **The adversarial boundary is privilege separation, not the guard.** An agent that may run
+   `cargo`/`python3` can do anything its job can, so autofix is three jobs: `agent` (model key
+   only, no write token, no persisted credentials → a patch), `regate` (no secrets; trusted guard
+   copied out before the patch is applied; the red gate must pass), `propose` (write token; never
+   executes agent code; re-guards; hooks off; draft PR). Locally `heal.py` mirrors this with an
+   env allow-list, worktrees outside the repo, hooks off and a tamper snapshot. Every action in a
+   privileged job is SHA-pinned (G0 W2b).
 
 ### D6 · L3 Watch / L4 Release / G6 Metal
 `nightly.yml` re-runs the whole ladder on `main` against today's advisory DB (new CVE, unchanged
@@ -98,5 +105,31 @@ new-gate candidates: every new failure class gets a classifier rule + fixture te
 - **−** Regex classification will meet unknown failures — those go to a human (fail-safe), and
   each one is a prompt to add a rule.
 
-## Evidence
-(filled from the 2026-11-08 validation run — see below)
+## Evidence (local validation, fortress001, 2026-11-08 — GitHub-side runs pending merge)
+
+| What | Result |
+|---|---|
+| g0 wiring meta-gate + CI-tooling self-tests + shellcheck | PASS — 7 workflows, 9 lockfiles, 0 problems; 40+ self-tests |
+| Self-tests can fail (mutation check) | **18/18** injected regressions killed (guard, classifier, ratchets, W2b, C1/H2/M2/L1 fixes) |
+| g1 clippy + phase ratchets, host tests | PASS — 231-finding floor, 91 impl-phase floor; tlsprov 5/5 (incl. RFC 6979 KAT), responder-sim, heqk-sign |
+| g2 validate.sh (QEMU) | PASS — "all implemented phases GREEN" (475 s) |
+| g3 mc-e2e incl. real browser over HTTPS (device ECDSA cert, TLS 1.3, X25519MLKEM768) | PASS with p256 0.14; alternating A/B vs p256 0.13: 4/4 vs 4/4, same TLS counters |
+| g4 supply chain | PASS — cargo-deny 7/7 lockfiles, npm audit 2/2, SBOM completeness 9/9 |
+| g4r reproducible shipped kernel | PASS — two clean `prod` builds, identical sha256 `a860f68c…8cb2` |
+| Fresh-clone shipped build (`build-heqk` step) | PASS — firmware staged from the pinned package; `prod` + `prod-mc` compile |
+| Heal drill (seeded real defect) | 4/4: transient→cleared, secret→human, budget→exhausted, honest→**proposed**, `#[ignore]`→**rejected**, ratchet-lowering→**rejected** |
+| Independent adversarial review | 8 findings (1 Critical, 2 High, 4 Medium, 2 Low) — all fixed + regression-tested |
+
+**Defects found and fixed by the new gates on day one:** RUSTSEC-2026-0387 on the device TLS key
+path; flaky tlsprov tests (shared global RNG); 12 clippy deny-level errors blocking any lint run;
+inert nested `.github/`; the shipped flavours unbuildable from a fresh checkout (gitignored
+firmware); an SBOM loop silently scanning 1 of 9 lockfiles (stdin swallowed — now completeness-
+checked); HTTPS slots held after a browser closed an SSE stream (mc-e2e slot assertion race).
+
+**Incident (own tooling, contained the same hour):** a repo-root depth bug in `drill.sh` made its
+private clone fail, so its git commands fell through to the operator's repository — one stray
+commit (folded back) and `git remote remove origin` on the shared config (origin, refs and the
+main / fix/ci-qemu-timeout upstreams restored; `feat/shield-v2`'s prior upstream, if any, could
+not be reconstructed). Defences: drill dir outside the repo, uniquely-named clone remote,
+own-clone check before every git write — pinned by a test. Lesson recorded: *any automation that
+runs git must prove where it is before it writes.*

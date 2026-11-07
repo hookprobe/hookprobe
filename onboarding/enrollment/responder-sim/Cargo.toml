@@ -9,7 +9,7 @@
 name = "responder-sim"
 version = "0.1.0"
 edition = "2021"
-publish = false  # first-party: never published to crates.io (ADR 0048 G4)
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 # Standalone workspace — do NOT get absorbed by the parent aarch64-none heqk workspace.
 [workspace]

@@ -1,4 +1,4 @@
-"""Self-tests for the L2 heal loop: classifier, autofix guard, GitHub triage mapping (ADR 0048)."""
+"""Self-tests for the L2 heal loop: classifier, autofix guard, GitHub triage mapping (ADR 0052)."""
 import os
 import sys
 import unittest

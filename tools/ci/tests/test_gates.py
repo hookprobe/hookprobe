@@ -1,4 +1,4 @@
-"""Self-tests for the gate spine tooling: wiring meta-gate, ratchets, Cortex feed (ADR 0048)."""
+"""Self-tests for the gate spine tooling: wiring meta-gate, ratchets, Cortex feed (ADR 0052)."""
 import json
 import os
 import sys

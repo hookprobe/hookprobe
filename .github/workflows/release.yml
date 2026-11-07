@@ -1,5 +1,5 @@
 # =============================================================================
-# release.yml — L4 Release (ADR 0048, ADR 0012, ADR 0046 key custody).
+# release.yml — L4 Release (ADR 0052, ADR 0012, ADR 0046 key custody).
 #
 # A `v*` tag builds the release CANDIDATE and STOPS before signing:
 #   gates  g0 g1 g4 + reproducibility (g4r) must be green on the tagged commit

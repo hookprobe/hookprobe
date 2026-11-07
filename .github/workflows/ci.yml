@@ -1,5 +1,5 @@
 # =============================================================================
-# ci.yml — the PR / main gate spine (ADR 0048 L1). Every job is a thin wrapper
+# ci.yml — the PR / main gate spine (ADR 0052 L1). Every job is a thin wrapper
 # around tools/ci/gates.sh so CI and a developer box run the IDENTICAL command.
 #
 #   g0  hygiene + CI wiring meta-gate + CI-tooling self-tests

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L2 heal loop — deterministic failure classifier (ADR 0048).
+"""L2 heal loop — deterministic failure classifier (ADR 0052).
 
 Turns a red gate log into ONE decision the rest of the loop can act on:
 

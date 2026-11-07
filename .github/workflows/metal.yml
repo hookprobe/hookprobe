@@ -1,5 +1,5 @@
 # =============================================================================
-# metal.yml — G6, the metal gate (ADR 0048). "Passes QEMU, fails on metal" was the
+# metal.yml — G6, the metal gate (ADR 0052). "Passes QEMU, fails on metal" was the
 # dominant failure mode of 2026 (on-metal pentest, CM5 first boot); this runs the
 # real-hardware proof on the self-hosted CM5 bench every night and on demand.
 #

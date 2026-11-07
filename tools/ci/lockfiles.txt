@@ -1,4 +1,4 @@
-# Every live dependency lockfile the G4 supply-chain gate scans (ADR 0048).
+# Every live dependency lockfile the G4 supply-chain gate scans (ADR 0052).
 # G0 (g0_wiring.py) FAILS if a Cargo.lock / package-lock.json outside legacy/,
 # docs/ and node_modules/ exists that is not listed here — so a new detached
 # workspace can never silently escape vulnerability scanning.

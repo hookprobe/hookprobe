@@ -1,4 +1,4 @@
-"""Regression tests for the security-auditor findings on the heal loop (ADR 0048, 2026-11-08).
+"""Regression tests for the security-auditor findings on the heal loop (ADR 0052, 2026-11-08).
 
 Each test pins one finding so it can never silently come back: C1 (secrets around agent code),
 H1 (.gitattributes blinding), H2 (gate-feeding files / comment-out / lint tables / PASS markers),
