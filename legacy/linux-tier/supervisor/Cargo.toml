@@ -18,8 +18,8 @@ serde_json = "1"
 serde_yaml = "0.9"
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
-wasmtime = { version = "27", optional = true }
-wasmtime-wasi = { version = "27", optional = true }
+wasmtime = { version = "50", optional = true }
+wasmtime-wasi = { version = "50", optional = true }
 # .cwasm <-> .wasm sha256 binding sidecar (ADR 0009 gap 2) — same versions hookprobe-manifest
 # already pulls in for module_sig.rs, so this adds no new dependency *tree*, just a direct edge.
 sha2 = { version = "0.10", optional = true }
