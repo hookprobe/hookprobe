@@ -212,3 +212,13 @@ across a power cycle, drain latency.
 
 Gates: `validate.sh` 85 PASS (new `Pdefer`; `Pmc` asserts dst + host inventory), `mc-e2e` PASS incl. browser,
 all six kernel profiles build. METAL-PENDING: everything in this block.
+
+### Metal (2026-11-07 08:33, prod-mc `07e2327`, fortress port 4)
+
+**MC-METAL: PASS** (`tools/mc-e2e-metal.sh`, browser leg incl.). Proven on silicon: self-test hit discarded;
+boot RX loss reported once (0 on this port) and heartbeat `rx_lost` 0/0; SNTP unaided; `/api/health`
+`hosts_active:4` (fortress neighbour table shows 5 other LAN hosts — the passive sensor counts what reaches
+its switch port), `sealed_cap:64`, `oldest_detection` set; detections carry dst
+(`10.200.0.1 → 10.200.0.6:4444` / `:23`); legit operator traffic served during the attack; home renders
+UNDER ATTACK 26 (pill + hero agree), STANDALONE, "4 devices", "14 detections kept · newest 64 sealed".
+Cosmetic left: the orb arc stays green under attack.
