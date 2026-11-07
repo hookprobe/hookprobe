@@ -1,5 +1,9 @@
 # HEQK Gap Register — deep sweep 2026-07-24
 
+> **Historical (July 2026).** Current gap tracking: `docs/design/heqk-parity-gaps.md` (legacy parity +
+> the fix loop, every item with its validate phase) and `docs/design/heqk-metal-test-plan.md` (what awaits
+> the CM5). Kept for the record of how each early gap was closed.
+
 Consolidated from a 5-way parallel audit (CORE / DET / DRV / SEC / DSN+XC), each
 cross-checked against HEQK_REMEDIATION_PLAN.md and commit e1da341 so only
 STILL-OPEN gaps are listed. Closing top-down, one gap per change.

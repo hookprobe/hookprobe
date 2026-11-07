@@ -256,6 +256,17 @@ pub struct Policy {
     pub nroutes: usize,
     /// Prefix-list refusals per binding.
     pub pl_drops: [u32; BIND_MAX],
+    /// Parity G15: `export syslog <ipv4> <port> via wan|mgmt [json]` — the SIEM collector (one).
+    pub export: Option<Export>,
+}
+
+/// A SIEM collector: detections are sent there as RFC 5424 syslog (or OCSF JSON) over UDP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Export {
+    pub ip: [u8; 4],
+    pub port: u16,
+    pub via: If,
+    pub json: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,6 +309,7 @@ impl Policy {
             routes: [Route { dst: Prefix { addr: Addr { v6: false, a: [0; 16] }, len: 0 }, src: AddrMatch::Any, via: If::Lan, gw: None, metric: 0 }; ROUTE_MAX],
             nroutes: 0,
             pl_drops: [0; BIND_MAX],
+            export: None,
         }
     }
 
@@ -750,6 +762,28 @@ pub fn parse_policy(buf: &[u8], out: &mut Policy) -> Result<(), PolicyErr> {
                 }
                 out.bind[out.nbind] = b;
                 out.nbind += 1;
+            }
+            b"export" => {
+                // export syslog <ipv4> <port> via wan|mgmt [json]
+                if !(nt == 6 || nt == 7) || t[1] != b"syslog" || t[4] != b"via" || out.export.is_some() {
+                    return Err(bad);
+                }
+                let ip = parse_v4(t[2]).ok_or(bad)?;
+                let port = core::str::from_utf8(t[3]).ok().and_then(|p| p.parse::<u16>().ok()).filter(|&p| p != 0).ok_or(bad)?;
+                let via = match t[5] {
+                    b"wan" => If::Wan,
+                    b"mgmt" => If::Mgmt,
+                    _ => return Err(bad),
+                };
+                let json = match t.get(6) {
+                    None => false,
+                    Some(&b"json") => true,
+                    _ => return Err(bad),
+                };
+                if ip == [0; 4] || ip[0] >= 224 || ip == [255; 4] {
+                    return Err(bad);
+                }
+                out.export = Some(Export { ip, port, via, json });
             }
             b"route" => {
                 // route DST [from SRC] via IF [gw ADDR] [metric N]

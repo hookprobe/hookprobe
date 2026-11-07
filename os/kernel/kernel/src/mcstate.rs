@@ -701,6 +701,17 @@ impl McState {
         let _ = write!(out, "],\"count\":{}}}", n);
     }
 
+    /// Detections with `seq > after`, oldest first (SIEM export cursor, parity G15). `f` gets
+    /// (det, epoch ms or 0 when the clock is not set).
+    pub fn for_each_det_after(&self, after: Option<u64>, f: &mut dyn FnMut(&Det, u64)) {
+        for i in (0..self.dlen).rev() {
+            let Some(d) = self.newest(i) else { continue };
+            if after.map_or(true, |a| d.seq > a) {
+                f(d, if self.clock_synced || d.abs { d.ts_ms } else { 0 });
+            }
+        }
+    }
+
     /// `GET /api/flows` → the AP's live translated flows (NAT table), most recent first. Empty on
     /// images without the AP data path (the passive sensor keeps no per-flow table).
     pub fn render_flows(&self, now_ticks: u64, limit: usize, out: &mut JsonBuf) {
