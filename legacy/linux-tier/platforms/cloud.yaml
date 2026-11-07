@@ -1,0 +1,60 @@
+# platforms/cloud.yaml — virtualized / cloud instances (the MSSP control-plane tier).
+# Matched by VIRTUALIZATION, not board: any VM with no edge NICs/radios. Validated
+# live (read-only) against the real cloud VM: arm64, QEMU/KVM, 24 GB, 1×virtio NIC.
+# Edge-router capabilities are withheld; SOC, threat-intel, AI planner and fleet
+# coordination are enabled — this is where HYDRA + the fleet coordinator live.
+
+profile: cloud
+class: cloud
+sku: HP-CL-001
+
+# Retirement audit #8 (2026-07-08): honesty marker — only platforms/rpi4.yaml carries a
+# real ON-SILICON boot+selftest gate record (docs/roadmap/BuildPlan.md); "cloud" is a VM tier by
+# definition, so "hardware validation" doesn't apply the same way, but per the audit's
+# rule we do not claim a gate record this profile does not have.
+hardware_validated: false
+validation_note: "classification-tested (live VM boot); no on-silicon boot-gate record (N/A — cloud is virtualized by design)"
+
+match:
+  method: virt
+  virt: [kvm, qemu, vmware, xen, oracle, microsoft, aws, gce]
+
+spec:
+  min:         { cores: 2, memory_mb: 4096,  storage_gb: 32 }
+  recommended: { cores: 8, memory_mb: 16384, storage_gb: 256 }
+
+# Resource-rich tier: larger reserve + bigger default budgets.
+resources:
+  reserved:  { cpu_pct: 200, memory_mb: 4096 }
+  defaults:
+    wasm:      { cpu_pct: 50,  memory_mb: 256,  epoch_ms: 50 }
+    container: { cpu_pct: 200, memory_mb: 1024 }
+
+capabilities:
+  soc: { requires: [cpu, memory_mb], policy: enabled }
+  ids: { requires: [soc], policy: enabled }
+  # Edge-router features are N/A inside a cloud VM (single virtio NIC, no radios):
+  openvswitch: { requires: [arch, "network.interfaces>=2"], policy: disabled }
+  wifi_ap:     { requires: ["wifi.present"], policy: disabled }
+  edge_ai:     { requires: ["npu.driver_ready", "memory_mb>=8192"], policy: disabled }
+  inline_ips:
+    requires: ["network.role:inline"]
+    policy: disabled
+    known_good_nic_drivers: []
+  capture:         { requires: [soc], policy: enabled }    # ingests fleet telemetry
+  host_telemetry:  { requires: [soc], policy: enabled }
+  ddos_mitigation: { requires: [capture], policy: disabled }
+  sdn:             { requires: [openvswitch], policy: disabled }
+  wifi_dfs:        { requires: [wifi_ap], policy: disabled }
+  dns_filtering:   { requires: [soc], policy: enabled }
+  threat_intel:    { requires: [soc], policy: enabled }    # HYDRA enrichment pipeline lives here
+  deception:       { requires: [soc], policy: enabled }
+  multi_wan:       { requires: ["network.interfaces>=2"], policy: disabled }
+  ai_planner:      { requires: [soc], policy: enabled }
+  secure_tunnel:   { requires: [soc], policy: enabled }
+  fleet_mesh:      { requires: [soc], policy: enabled }    # the cloud IS the fleet coordinator
+
+crypto_suite: hookprobe-pqc-hybrid-2026
+
+retention:
+  tier_fractions: { pcap: 0.05, events: 0.45, evidence: 0.40 }

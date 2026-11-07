@@ -7,7 +7,7 @@ decide the late-confirm default. One flash, ~30 minutes. Operator-run (flashing 
 
 ## What is ready
 
-| Image (`builder/generated/cm5-heqk/`) | Purpose |
+| Image (`os/build/generated/cm5-heqk/`) | Purpose |
 |---|---|
 | `hookprobe-heqk-cm5-e690e4d-zerolinux.img` (sha256 `7f5f4d32…`) | **Primary — METAL-PROVEN 2026-11-04.** No devicetree, no Linux artifact. Contains the hboot payload-bound fix 7da4f1f. |
 | ~~`hookprobe-heqk-cm5-bf6bcaf*.img`~~ | **Do not use:** hboot's stale 2 MiB cap refuses the 2.06 MB prod-mc kernel ("payload: INSANE SIZE", reset loop). |
@@ -16,8 +16,8 @@ Each image has a `.sha256`, a `.json` manifest, and its own `.owner-key` (mode 6
 that device's sign-in key. Both are `prod-mc` (Mission Control on GEM, passive-first, owner auth),
 signed with the DEV boot keys (bench only — production keys are the K1 ceremony).
 
-Tools: `kernel/heqk/cm5-boot/flash-image.sh` (guarded whole-eMMC write + read-back verify) and
-`kernel/heqk/tools/mc-e2e-metal.sh` (the acceptance run; rehearsed against QEMU — PASS).
+Tools: `os/kernel/cm5-boot/flash-image.sh` (guarded whole-eMMC write + read-back verify) and
+`os/kernel/tools/mc-e2e-metal.sh` (the acceptance run; rehearsed against QEMU — PASS).
 
 ## Before you start
 
@@ -32,11 +32,11 @@ Tools: `kernel/heqk/cm5-boot/flash-image.sh` (guarded whole-eMMC write + read-ba
 
 ```bash
 cd ~/hookprobe-os/.claude/worktrees/heqk-premetal-gaps
-IMG=builder/generated/cm5-heqk/hookprobe-heqk-cm5-e690e4d-zerolinux.img
+IMG=os/build/generated/cm5-heqk/hookprobe-heqk-cm5-e690e4d-zerolinux.img
 LOG=~/heqk-metal-logs/$(date +%Y%m%d)-prod-mc-serial.log
 
 # 1. Flash (nRPIBOOT jumper on, power-cycle when prompted). ~5 min + backup time.
-sudo kernel/heqk/cm5-boot/flash-image.sh "$IMG" --backup ~/heqk-emmc-backup-$(date +%Y%m%d).img
+sudo os/kernel/cm5-boot/flash-image.sh "$IMG" --backup ~/heqk-emmc-backup-$(date +%Y%m%d).img
 #    must end with: VERIFIED: eMMC content == image
 
 # 2. Serial capture in a second terminal (CM5 console = FTDI /dev/ttyUSB2, 115200 8N1):
@@ -51,7 +51,7 @@ sudo stty -F /dev/ttyUSB2 115200 raw -echo && sudo cat /dev/ttyUSB2 | tee "$LOG"
 #    [MC] heqk Mission Control serving on http://<IP>:80 (DHCP lease)
 
 # 4. Acceptance run (from this host, which is on the same segment via enp4s0):
-kernel/heqk/tools/mc-e2e-metal.sh --ip <IP> --key-file "$IMG.owner-key" --serial-log "$LOG"
+os/kernel/tools/mc-e2e-metal.sh --ip <IP> --key-file "$IMG.owner-key" --serial-log "$LOG"
 #    must end with: MC-METAL: PASS   (results file is written under ~/heqk-metal-logs/)
 
 # 5. Optional: open http://<IP>/ in a browser, sign in with the key from "$IMG.owner-key".

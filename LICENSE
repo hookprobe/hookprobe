@@ -11,7 +11,7 @@ core innovations are proprietary and require a commercial license, and running
 HookProbe OS as a service to third parties requires a commercial license under
 the AGPL network-copyleft clause. For the dual-license terms, the list of
 proprietary components, and commercial-license contact, see LICENSING.md.
-The HEQK microkernel under kernel/heqk/ carries its own component-scoped
+The HEQK microkernel under os/kernel/ carries its own component-scoped
 LICENSE/LICENSING.md that follows this same model.
 
 ================================================================================

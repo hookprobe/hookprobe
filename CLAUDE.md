@@ -6,8 +6,8 @@
 **Positioning sentence (use everywhere):** *HookProbe OS is the operating system. SOC is its default workspace. Hardware only unlocks capabilities.*
 
 The canonical architecture lives in:
-- `docs/Readme.md` — the OS architecture (bootc, Wasm, intent, supply chain, PQC).
-- `docs/MissionControl.md` — **the target dashboard/UI spec.** This is what Mission Control should look like; all UI work adapts to it (workspaces, evidence graph, telemetry fabric, route map).
+- `docs/architecture/Readme.md` — the OS architecture (bootc, Wasm, intent, supply chain, PQC).
+- `docs/architecture/MissionControl.md` — **the target dashboard/UI spec.** This is what Mission Control should look like; all UI work adapts to it (workspaces, evidence graph, telemetry fabric, route map).
 
 When these docs and this file disagree, **the docs win** — update this file to match.
 
@@ -15,9 +15,9 @@ When these docs and this file disagree, **the docs win** — update this file to
 
 ## The three load-bearing decisions
 
-> 🛑 **ADR 0047 (ratified 2026-10-09) supersedes the tier split below.** **heqk replaces Linux on EVERY platform** (QEMU/VM, CM5, RK3588, N100/x86_64, cloud), and **Mission Control (UI + API) is served by heqk on the device**: browser → device, no Linux in the path, standalone by default. The bootc/Debian/Podman/Quadlet/systemd material below is the **transitional Linux tier**: bug and security fixes only, **no new feature work**. New capability lands in `kernel/heqk`. Linux is acceptable only as a build/dev host. The `crates/hookprobe-api` contract is now the *interface spec* the on-device server implements. Port order and real scale: `docs/design/heqk-everywhere-report-2026-10-09.md`. Do not plan or build product features on the Linux tier.
+> 🛑 **ADR 0047 (ratified 2026-10-09) supersedes the tier split below.** **heqk replaces Linux on EVERY platform** (QEMU/VM, CM5, RK3588, N100/x86_64, cloud), and **Mission Control (UI + API) is served by heqk on the device**: browser → device, no Linux in the path, standalone by default. The bootc/Debian/Podman/Quadlet/systemd material below is the **transitional Linux tier**: bug and security fixes only, **no new feature work**. New capability lands in `os/kernel`. Linux is acceptable only as a build/dev host. The `legacy/linux-tier/crates/hookprobe-api` contract is now the *interface spec* the on-device server implements. Port order and real scale: `docs/design/heqk-everywhere-report-2026-10-09.md`. Do not plan or build product features on the Linux tier.
 >
-> ⚠️ **Substrate pivot (ADR 0043 + ADR 0044, ratified 2026-07-25)** *(scope widened by ADR 0047 above)*. HookProbe OS now runs on **two substrates**, and decisions #1/#2 below are **tier-scoped, not universal — "don't relitigate" applies only to the Linux/UEFI tier.** On the **UEFI + amd64/N100/cloud** tier: bootc/Debian, Wasm+Podman, exactly as written (canonical + permanent). On the **rpi-native tier (CM5 only, ADR 0044 D2)**: Linux is being **replaced entirely by the heqk microkernel** — a from-scratch Rust aarch64 capability microkernel as substrate **and** app-host (**zero Linux on CM5, not even a guest**, ADR 0044 D1). See `docs/BuildPlan.md` **Track C** and `docs/MIGRATION-heqk.md`. **Do not read #1/#2 as universal.**
+> ⚠️ **Substrate pivot (ADR 0043 + ADR 0044, ratified 2026-07-25)** *(scope widened by ADR 0047 above)*. HookProbe OS now runs on **two substrates**, and decisions #1/#2 below are **tier-scoped, not universal — "don't relitigate" applies only to the Linux/UEFI tier.** On the **UEFI + amd64/N100/cloud** tier: bootc/Debian, Wasm+Podman, exactly as written (canonical + permanent). On the **rpi-native tier (CM5 only, ADR 0044 D2)**: Linux is being **replaced entirely by the heqk microkernel** — a from-scratch Rust aarch64 capability microkernel as substrate **and** app-host (**zero Linux on CM5, not even a guest**, ADR 0044 D1). See `docs/roadmap/BuildPlan.md` **Track C** and `docs/architecture/MIGRATION-heqk.md`. **Do not read #1/#2 as universal.**
 
 1. **The OS is a Containerfile — on the Linux/UEFI tier.** One signed OCI image is the source of truth; build with `podman build`, ship to a registry. The *update mechanism* splits by boot model (**ADR 0019**): on **UEFI** platforms (amd64/N100/VM/cloud, arm64-virt) bootc performs `upgrade`/`rollback` against a self-built Debian-bootc base; on **Raspberry-Pi-native Linux** an OCI-derived **A/B image-sync** delivers equivalent transactional update + rollback — bootc architecturally cannot manage the Pi's MBR/`config.txt`/SoC-firmware boot. Base distro **Debian/Ubuntu**; composefs-native backend pinned + tracked (experimental). mkosi/make-pi4 remains the factory first-flash. **⚠️ Superseded on the CM5/rpi-native tier (ADR 0043/0044):** heqk is a **third boot model** — bare-metal aarch64, `config.txt kernel=heqk8.img`, A/B tryboot + `hboot` — **no bootc/OCI/composefs/systemd/Debian.** *(Linux/UEFI: refined + accepted, not reopened. CM5: replaced by heqk.)*
 2. **Logic & detection are Wasm components (WASI 0.2/0.3, WIT).** One `.wasm` runs on arm64/amd64/riscv64; capability-sandboxed by default; ~1–5 ms cold start; inference via WASI-NN (no GPU drivers). Heavy stateful services run as **rootless Podman containers (Quadlet)**; host-integral pieces (OVS, kernel bits) layer into the bootc image (`sysext`). **⚠️ On the CM5/heqk tier (ADR 0044):** the on-device Wasm host is a build target (Track C M5); detection rules are portable via the **RFC 9669 BPF ISA** (ADR 0043 D2, not Linux eBPF); and heavy services run **native-on-heqk or hosted off-device (ADR 0044 D3) — NOT in Podman/Quadlet and NOT in a Linux guest.**
@@ -59,7 +59,7 @@ Everything above "Substrate" is identical **from the operator's view** on every 
 | **Supervisor** | Resolves module `requires`/`grants`/`provides` vs manifest; reconciles modules; *is* the Marketplace backend | — |
 | **Mission Control** | Manifest-driven operator UX | — |
 
-> ⚠️ **Mapping corrected against production (2026-06-29; see `docs/v2-reconciliation.md`).** **HYDRA = threat-intelligence / enrichment** → the **Intelligence** workspace (confirmed 4× on real devices: `fortress-ids`, `guardian-hydra-lite "Threat Feed Sync"`, and the cloud's 11-service `ids-hydra-*` pipeline). The **Automate** workspace is a *net-new* automation/SOAR concern — no V1 "HYDRA automation" engine exists; seed it from the proven reconcilers (`sdn_autopilot`/`organism_selfheal`/`nac-policy-sync`) under AEGIS. The earlier "HYDRA = automation" resolution was wrong against reality and is reverted.
+> ⚠️ **Mapping corrected against production (2026-06-29; see `docs/research/v2-reconciliation.md`).** **HYDRA = threat-intelligence / enrichment** → the **Intelligence** workspace (confirmed 4× on real devices: `fortress-ids`, `guardian-hydra-lite "Threat Feed Sync"`, and the cloud's 11-service `ids-hydra-*` pipeline). The **Automate** workspace is a *net-new* automation/SOAR concern — no V1 "HYDRA automation" engine exists; seed it from the proven reconcilers (`sdn_autopilot`/`organism_selfheal`/`nac-policy-sync`) under AEGIS. The earlier "HYDRA = automation" resolution was wrong against reality and is reverted.
 
 ## Mission Control — one app, many lenses
 
@@ -69,7 +69,7 @@ Workspaces: Mission Control · Workspace · Observe · Detect · Investigate · 
 
 Lifecycle maps onto workspaces: **Build/Deploy** → Administration (Builder, Images, Modules, Provisioning, Enrollment, Edge Nodes); **Run** → Mission Control/Observe/Detect/Investigate/Protect/Automate/Intelligence; **Manage** → Administration/Customers/Business/Knowledge.
 
-UX rules: capability-gated rendering · everything clickable (drills to evidence graph) · AI explanation panel everywhere (*why · confidence · evidence · model · related events*) · intent bar produces a **plan as a diff** the reconciler applies & verifies · mode-aware (standalone hides fleet/tenant/business). Route map is in `docs/MissionControl.md` appendix.
+UX rules: capability-gated rendering · everything clickable (drills to evidence graph) · AI explanation panel everywhere (*why · confidence · evidence · model · related events*) · intent bar produces a **plan as a diff** the reconciler applies & verifies · mode-aware (standalone hides fleet/tenant/business). Route map is in `docs/architecture/MissionControl.md` appendix.
 
 ## Deployment modes
 
@@ -85,29 +85,43 @@ UX rules: capability-gated rendering · everything clickable (drills to evidence
 
 Software name is **always HookProbe OS**. *Guardian / Fortress / Virtual / Cloud* are marketing SKU names (hardware/target), never separate software.
 
-## Repository layout (target; repo is currently docs-only)
+## Repository layout (merged repo `hookprobe`, 2026-11-07)
+
+This repo is `github.com/hookprobe/hookprobe`. HookProbe OS is the top level, and the old V1
+repo lives under `legacy/v1/`. Old → new paths: `docs/PATHS.md`.
 
 ```
-base/ bootstrap/ supervisor/ manifest/ modules/{napse,hydra,ovs,…}
-builder/ ui/ fleet/ security/ platforms/{rpi5.yaml,rk3588.yaml,edge-pro.yaml}
+os/kernel/          heqk: ONE self-contained nightly no_std Cargo workspace (never split it)
+os/mission-control/ the UI, embedded into heqk by os/kernel/kernel/build.rs
+os/build/           image build engine (make-cm5-heqk-image.sh / -disk.sh, heqk-sign)
+os/{drivers,networking,security,device-identity,provisioning}/   index READMEs into os/kernel
+                    (os/drivers/firmware/ holds the CYW43455 blobs)
+appliance/{cm5,waveshare-dual-eth}/   hardware profiles
+onboarding/{wifi,enrollment,setup-ui}/  enrollment/responder-sim = host control-plane responder
+docs/{architecture,getting-started,security,roadmap,adr,design,research}/
+tools/{build,flash,diagnostics}/
+legacy/v1/          the original Python/Zig HookProbe (frozen)
+legacy/linux-tier/  V2 bootc/Debian tier: its own Cargo workspace (crates/, modules/, base/,
+                    builder/, platforms/…); bug + security fixes only (ADR 0047)
 ```
-**The design test:** adding new hardware = *one file* in `platforms/`. No UI, installer, or API change.
+New capability lands in `os/` (ADR 0047). **The design test:** adding new hardware = one profile
+in `appliance/`. No UI, installer, or API change.
 
 ---
 
 ## Project agents (`.claude/agents/`) — the Product Cortex, Ring 1
 
 Eleven personas drive the V2 lifecycle (**ADR 0011 — Product Cortex**: agentic PLM as a lens on the evidence graph; roster **capped at 11 (ADR 0013)** — the requirement→retirement extension; new roles need an ADR). Delegate by role:
-- **`product-steward`** — PLM brain: `docs/BuildPlan.md` status truth, ADR hygiene, cross-doc reconciliation, traceability, roadmap reviews. Canon: `docs/BuildPlan.md` + `docs/adr/0011-product-cortex.md`.
-- **`ux-architect`** — interaction design, flows, wireframes, navigation, "fewer-steps" simplification, competitive UX positioning. Canon: `docs/MissionControl.md` (the target dashboard).
-- **`os-architect`** — OS/RTOS architecture: bootc image, Wasm module model, Platform Manifest, supervisor/reconciler, data plane, retention, supply chain/PQC, fleet. Canon: `docs/Readme.md`.
+- **`product-steward`** — PLM brain: `docs/roadmap/BuildPlan.md` status truth, ADR hygiene, cross-doc reconciliation, traceability, roadmap reviews. Canon: `docs/roadmap/BuildPlan.md` + `docs/adr/0011-product-cortex.md`.
+- **`ux-architect`** — interaction design, flows, wireframes, navigation, "fewer-steps" simplification, competitive UX positioning. Canon: `docs/architecture/MissionControl.md` (the target dashboard).
+- **`os-architect`** — OS/RTOS architecture: bootc image, Wasm module model, Platform Manifest, supervisor/reconciler, data plane, retention, supply chain/PQC, fleet. Canon: `docs/architecture/Readme.md`.
 - **`code-developer`** — implements Mission Control + modules; benchmarks the stack before committing (see below).
 - **`security-auditor`** — adversarial reviews: threat models, supply chain (cosign/SBOM/CBOM/SLSA), PQC posture, eBPF/Wasm privilege boundaries, RBAC/encryption.
 - **`verification-engineer`** — the gate ladder (tests → smoketest → QEMU boots → greenboot → hardware gates), CI, benchmark honesty.
 - **`release-engineer`** — `builder/` pipeline, signing/trust store, image variants, rollout rings, changelog discipline.
 - **`telemetry-analyst`** — field/test evidence → lifecycle feedback: perf regressions, capability-tier truth per platform, evidence-graph queries (read-only on live devices).
 - **`ideation-scout`** — upstream signal → candidate requirements: market/CVE/MITRE-ATT&CK/competitor/GitHub-issue scanning, proposes `idea`/`requirement` nodes (ADR 0013 D3).
-- **`market-intelligence`** — positioning & competitive tracking, the hookprobe.com narrative; owns `docs/product-cortex-competitive.md` (ADR 0013 D3/D5).
+- **`market-intelligence`** — positioning & competitive tracking, the hookprobe.com narrative; owns `docs/research/product-cortex-competitive.md` (ADR 0013 D3/D5).
 - **`retirement-agent`** — downstream EOL: finds dead APIs/features/stale rules/unsupported hardware → proposes `retirement` events (ADR 0013 D3).
 
 Cortex governance (all agents): **AI proposes, the deterministic gates enforce** (contract C9). Green = docs/analysis; Amber = code/ADR/roadmap changes (operator reviews); Red = commits, releases, flashing — never autonomous.
@@ -118,11 +132,11 @@ Mission Control's stack is **not yet locked.** Starting hypothesis: **Astro + Re
 
 ## Design north star (V2)
 
-**Customer-first, less-is-more, fewer steps.** Position as a **"SOC on a budget" that is ahead of FortiSOC / Microsoft Sentinel / Defender XDR** — zero-setup SOC from first boot, intent/natural-language instead of query languages, one unified console instead of many, capability-gated simplicity. `docs/MissionControl.md` is the guiding spec.
+**Customer-first, less-is-more, fewer steps.** Position as a **"SOC on a budget" that is ahead of FortiSOC / Microsoft Sentinel / Defender XDR** — zero-setup SOC from first boot, intent/natural-language instead of query languages, one unified console instead of many, capability-gated simplicity. `docs/architecture/MissionControl.md` is the guiding spec.
 
 ## Working conventions for this repo
 
-- Treat `docs/Readme.md` + `docs/MissionControl.md` as canonical; keep them and this file in sync, and flag (don't silently resolve) any new contradictions.
+- Treat `docs/architecture/Readme.md` + `docs/architecture/MissionControl.md` as canonical; keep them and this file in sync, and flag (don't silently resolve) any new contradictions.
 - Capability-gate, don't hardware-branch. Manifest is the single source of truth.
 - Default to `runtime: wasm` for detection/policy/enrichment; `container` only for heavy stateful services; `sysext`/image layer for host-integral pieces.
 - Everything signed (cosign); every image carries SBOM + CBOM; crypto choices are policy, not hardcoded.

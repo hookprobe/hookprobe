@@ -32,12 +32,12 @@ never a model).
 This is a **product-posture** decision, not a detail: a security appliance that false-drops a paying
 customer's iPhone is worse than one that misses a slow scan, because the first failure is visible,
 immediate, and erodes the trust the whole product depends on ("an edge box must never be able to take
-the network down with it" — `docs/Readme.md:307`). The rule inverts the naive IPS default ("when
+the network down with it" — `docs/architecture/Readme.md:307`). The rule inverts the naive IPS default ("when
 suspicious, block"): here, suspicion alone is never sufficient to touch the wire.
 
 ### Why this needed an ADR
 The posture was, before this session, enforced **only by a test gate** and a scatter of D-labelled
-inline fixes. It contradicted the older, blunter invariant wording in `CLAUDE.md`/`docs/Readme.md`
+inline fixes. It contradicted the older, blunter invariant wording in `CLAUDE.md`/`docs/architecture/Readme.md`
 ("data plane out-of-band by default, inline opt-in; per-interface fail-open/fail-closed") which does
 not describe the *new* inline, self-reverting, resource-keyed drop the resource-shed introduced. A
 load-bearing change with no ADR and a stale spec is exactly the C9 Amber violation the Cortex audit
@@ -215,7 +215,7 @@ release-blocking by itself.
   - **Resource-shed response-record coverage** — Layer 1's blanket meter emits no per-hit event (nft
     does not push one); only Layers 2/3 emit first-class response records. Documented, not fabricated
     (`scan_responder.rs:1296`).
-- **Supersession:** this ADR **refines** the older `CLAUDE.md`/`docs/Readme.md` invariant wording
+- **Supersession:** this ADR **refines** the older `CLAUDE.md`/`docs/architecture/Readme.md` invariant wording
   ("data plane out-of-band by default, inline opt-in; per-interface fail-open/fail-closed"). That
   framing remains true for the *inline-IPS opt-in* posture, but it did not describe the
   observe-by-default enforcement-separation rule nor the new inline, self-reverting, resource-keyed

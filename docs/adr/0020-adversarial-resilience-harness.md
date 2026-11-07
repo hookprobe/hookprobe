@@ -468,9 +468,9 @@ Until that separate ADR exists and is accepted, the harness's only outputs remai
   composite score; "never attacked" = unknown, never 1.0.
 
 **Docs:**
-- `docs/Readme.md` — add the adversarial-resilience harness to the supply-chain/verification section
+- `docs/architecture/Readme.md` — add the adversarial-resilience harness to the supply-chain/verification section
   (Gate R; "prove your defenses fire before you ship").
-- `docs/BuildPlan.md` — a phased work item (D8) under verification-engineer, blocked on the
+- `docs/roadmap/BuildPlan.md` — a phased work item (D8) under verification-engineer, blocked on the
   security-auditor threat-model sign-off.
 - `.claude/agents/verification-engineer.md` — note the new AI-interpretation remit (C9-bound; no new
   agent — ADR 0013 11-cap holds).

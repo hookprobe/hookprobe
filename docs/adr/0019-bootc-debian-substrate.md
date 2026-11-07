@@ -4,7 +4,7 @@
 
 **Status:** ✅ Accepted (2026-07-05) — **⚠️ Phase-1 base only.** The Containerfile base is switched to `docker.io/library/debian:trixie`, but **bootc / composefs / bootupd are absent**, and **`bootc upgrade`/`rollback` (UEFI) + the Pi A/B image-sync agent are ⬜ NOT BUILT.** Images boot today via the non-bootc mkosi path; the transactional-update/rollback promise this whole "OS is a Containerfile" decision rests on does not yet run end-to-end (needs a CI-egress build env for the self-built Debian-bootc base, and UEFI/Pi hardware to validate).
 **Deciders:** os-architect (author), release-engineer, verification-engineer, security-auditor.
-**Relates to:** `docs/Readme.md` Pillar 1 ("The OS is a Containerfile (bootc)"), CLAUDE.md load-bearing decision #1, `docs/driver-strategy.md` (the "UEFI everywhere" boot-model note), [ADR 0006](0006-os-hardening.md) (/usr dm-verity — the composefs/ostree integrity complement), [ADR 0016](0016-artifact-hash-signing.md) + [ADR 0017](0017-authenticated-aot-cache.md) (module signing — the layer bootc's *image* signature composes with), [ADR 0012](0012-release-definition-cortex-pass.md) (release = an OCI digest; `bootc upgrade --check` in the ring gate), [ADR 0015](0015-registry-driven-module-inclusion.md) (the OCI image is the single source of truth for module inclusion).
+**Relates to:** `docs/architecture/Readme.md` Pillar 1 ("The OS is a Containerfile (bootc)"), CLAUDE.md load-bearing decision #1, `docs/architecture/driver-strategy.md` (the "UEFI everywhere" boot-model note), [ADR 0006](0006-os-hardening.md) (/usr dm-verity — the composefs/ostree integrity complement), [ADR 0016](0016-artifact-hash-signing.md) + [ADR 0017](0017-authenticated-aot-cache.md) (module signing — the layer bootc's *image* signature composes with), [ADR 0012](0012-release-definition-cortex-pass.md) (release = an OCI digest; `bootc upgrade --check` in the ring gate), [ADR 0015](0015-registry-driven-module-inclusion.md) (the OCI image is the single source of truth for module inclusion).
 
 This ADR grounds and, where reality demands, **refines** the single most load-bearing claim in the project. It does not relitigate that the OS is a signed OCI image — that survives intact. It resolves *how that image boots and updates on each hardware tier*, because the literal "every device runs `bootc upgrade`" claim does **not** survive contact with the Raspberry Pi.
 
@@ -44,7 +44,7 @@ Prior work established two boot models, and they diverge exactly where bootc's a
 bootc is architecturally UEFI-first: `bootc install` "will always run **bootupd** to handle bootloader installation," DPS auto-discovery requires **GRUB 2.12+ (bli, EFI-only) or systemd-boot**, and every Debian/Ubuntu-bootc guide is ESP + `efibootmgr` + systemd-boot. **No bootc documentation addresses Raspberry Pi `config.txt`/u-boot/direct-kernel boot at all.** The rpi-native path bootc cannot touch: there is no bootloader for bootupd to own and no ESP for composefs deployments to hang off in the way bootc expects.
 
 There are exactly two ways to reconcile the Pi with bootc, and both have real cost:
-- **(a) pftf/EDK2 UEFI firmware on the Pi's ESP** — the "UEFI everywhere" convergence `docs/driver-strategy.md` already names as the bootc-aligned option. It would let one bootc model span the Pi. But it inserts a *third-party firmware layer HookProbe does not control* under its immutable OS; pftf's Pi5/CM5 support lags the Pi4's; and the operator already shipped the raspi-native path *because* the UEFI-on-Pi route was flaky enough to be the "fallback if pftf proves flaky." Shipping a customer appliance on someone else's beta UEFI is a durable risk.
+- **(a) pftf/EDK2 UEFI firmware on the Pi's ESP** — the "UEFI everywhere" convergence `docs/architecture/driver-strategy.md` already names as the bootc-aligned option. It would let one bootc model span the Pi. But it inserts a *third-party firmware layer HookProbe does not control* under its immutable OS; pftf's Pi5/CM5 support lags the Pi4's; and the operator already shipped the raspi-native path *because* the UEFI-on-Pi route was flaky enough to be the "fallback if pftf proves flaky." Shipping a customer appliance on someone else's beta UEFI is a durable risk.
 - **(b) A different update mechanism for the rpi-native tier**, unified under the same OCI source of truth (see the Decision).
 
 ### F3 · What bootc buys that the mkosi/make-pi4 path does **not** have today
@@ -135,9 +135,9 @@ Until the operator accepts this, CLAUDE.md and Readme Pillar 1 **overstate** boo
 - **`builder/mkosi-arm64/make-pi4-image.sh`** — add the A/B slot layout (dual root + active-slot pointer in `config.txt`/`cmdline.txt`) for the D3 image-sync path.
 - **New rpi-native image-sync agent** (`fleet/` or `base/`) — registry pull → inactive-slot unpack → cosign verify → slot flip; greenboot flips back on bad boot.
 - **`base/config/containers/policy.json`** + CI — inject the real release cosign identity (existing Layer-H TODO) so both bootc and image-sync verify the image (D4).
-- **`docs/Readme.md`** Pillar 1 — refine the universal "bootc upgrade everywhere" claim to the UEFI-bootc + rpi-native-image-sync split; fix the illustrative `FROM`.
+- **`docs/architecture/Readme.md`** Pillar 1 — refine the universal "bootc upgrade everywhere" claim to the UEFI-bootc + rpi-native-image-sync split; fix the illustrative `FROM`.
 - **`CLAUDE.md`** decision #1 — the wording refinement above (operator-gated).
-- **`docs/BuildPlan.md`** — bootc-substrate rows; the phased plan status.
+- **`docs/roadmap/BuildPlan.md`** — bootc-substrate rows; the phased plan status.
 
 ---
 

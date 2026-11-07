@@ -18,7 +18,7 @@
 >   DHCP/DNS server, a real MSSP endpoint, EL0-isolation of the net service, and real-network
 >   timing are **Gate R (CM5 silicon + a real network)**.
 > - **Docs-ahead-of-kernel (Track-C standing caveat):** this is a SCOPING doc. M4 is `⬜ (no
->   TCP/TLS today)` in `docs/BuildPlan.md` Track C. Nothing below is built yet except the smoltcp
+>   TCP/TLS today)` in `docs/roadmap/BuildPlan.md` Track C. Nothing below is built yet except the smoltcp
 >   ARP selftest (`PH6-net`, behind the `netsvc` feature, OFF by default).
 
 **Milestone:** Track C / **M4 — Control-plane connectivity.**
@@ -27,7 +27,7 @@
 explicitly M4's job**, `kernel/src/ota.rs` §"The pull source").
 **Canon:** ADR 0002 (crypto/PQC posture), ADR 0004 (secure-edge envelope — HTP-evolved,
 kill-switch/PBR/NAT/TUN), ADR 0009 (edge/cloud split), ADR 0043/0044 (heqk substrate),
-`docs/design/heqk-persistence.md` (M3.4 OTA), `docs/BuildPlan.md` Track C M4 row.
+`docs/design/heqk-persistence.md` (M3.4 OTA), `docs/roadmap/BuildPlan.md` Track C M4 row.
 **Author:** os-architect. **Deciders (build-time):** os-architect / security-auditor.
 
 ---
@@ -73,7 +73,7 @@ the stack emits is put on the wire **only if it PASSes again** (`TxTok::consume`
   (`netsvc_selftest`), plus a negative case proving the gate DROPs a UDP:4444 threat. **No TCP
   connection has ever been opened** — smoltcp *can* do TCP; heqk has never driven it.
 - **No DHCP client** — the IP is hardcoded (`192.0.2.1/24`) in the selftest.
-- **No DNS client / resolver** — `docs/BuildPlan.md` marks the sinkhole/RPZ line `⬜ no resolver`.
+- **No DNS client / resolver** — `docs/roadmap/BuildPlan.md` marks the sinkhole/RPZ line `⬜ no resolver`.
 - **No NTP / time-sync client** — the kernel has `CNTPCT_EL0` monotonic ticks only; no wall clock.
 - **No TLS of any kind** (see §2).
 - **No enrollment / control-plane / MSSP client, no HTTP(S) fetch** — the M3.4 OTA `pull` is a
@@ -152,7 +152,7 @@ Drive smoltcp's TCP/UDP for real for the first time; add three client state mach
 - **DHCPv4/v6 client** — obtain address/route/DNS over UDP (smoltcp has a DHCP socket). Must
   degrade to **static / link-local / last-known** when no server answers (standalone path).
 - **DNS stub resolver** — A/AAAA/PTR over UDP:53; feeds the "refuse a NAME, never a PACKET"
-  sinkhole line (`docs/BuildPlan.md`). No lease/resolver ⇒ device still fully local.
+  sinkhole line (`docs/roadmap/BuildPlan.md`). No lease/resolver ⇒ device still fully local.
 - **SNTP client** — set a wall clock from NTP (UDP:123); until then, `CNTPCT_EL0` monotonic
   only. A trustworthy clock matters for TLS cert validity in M4.2 (chicken/egg: bootstrap with
   a signed roughtime-style or build-stamped floor, then refine — surface in the M4.2 sub-plan).

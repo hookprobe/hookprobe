@@ -3,7 +3,7 @@
 **Status:** ✅ Accepted (2026-06-27) — **schema_version 2**. The Phase-1 contract; build against this.
 **Date:** 2026-06-27
 **Deciders:** os-architect (author), code-developer, security
-**Relates to:** [`Readme.md`](../Readme.md) (manifest concept), [`Architecture.md`](../Architecture.md) (connections C4–C8), [ADR 0002](0002-crypto-agility-pqc.md) (the `crypto` block). The Readme's inline manifest snippet is *illustrative*; **this ADR is the canonical schema** — the Readme should point here.
+**Relates to:** [`Readme.md`](../architecture/Readme.md) (manifest concept), [`Architecture.md`](../architecture/Architecture.md) (connections C4–C8), [ADR 0002](0002-crypto-agility-pqc.md) (the `crypto` block). The Readme's inline manifest snippet is *illustrative*; **this ADR is the canonical schema** — the Readme should point here.
 
 ## Context
 
@@ -292,7 +292,7 @@ Build-team split: (a) **writer** = `bootstrap/` consumes a hardware profile + `p
 
 ## Sources / prior art
 
-JSON Schema 2020-12; OpenWrt `board.json` (detect-once fact file); Canonical `probert` (replayable profile); systemd `hwdb` (static RO tables); Android system-feature tokens (`hasSystemFeature`); sigstore/cosign; TCG TPM 2.0 PCR sealing; ADR 0002 (crypto block). Consistent with [`Architecture.md`](../Architecture.md) connections C4–C11.
+JSON Schema 2020-12; OpenWrt `board.json` (detect-once fact file); Canonical `probert` (replayable profile); systemd `hwdb` (static RO tables); Android system-feature tokens (`hasSystemFeature`); sigstore/cosign; TCG TPM 2.0 PCR sealing; ADR 0002 (crypto block). Consistent with [`Architecture.md`](../architecture/Architecture.md) connections C4–C11.
 
 ---
 

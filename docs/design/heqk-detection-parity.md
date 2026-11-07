@@ -20,15 +20,15 @@
 >   Linux mechanisms (PSI, `nf_conntrack`, nft, tc-bpf) are replaced by heqk-native primitives.
 > - `docs/adr/0043-heqk-microkernel-substrate.md` + `docs/adr/0044-zero-linux-rpi-native-cm5.md` —
 >   the substrate pivot (zero Linux on CM5; host-EDR routed off-device, ADR 0044 D3).
-> - **Code (the single decision seam):** `kernel/heqk/kernel/src/verdict.rs` `decide_core()`,
->   `kernel/heqk/kernel/src/rules.rs` (the rule corpus + tiers), `kernel/heqk/kernel/src/packet.rs`
+> - **Code (the single decision seam):** `os/kernel/kernel/src/verdict.rs` `decide_core()`,
+>   `os/kernel/kernel/src/rules.rs` (the rule corpus + tiers), `os/kernel/kernel/src/packet.rs`
 >   `classify()` (the wiring).
 > - **Metal evidence:** `~/heqk-metal-logs/20260908-GATE-R-A3-wiring-evidence.txt` (SEPDIAG
 >   rule/verdict + the A7/A8/L9 resource-shed self-test) and the matrix-runner result files
 >   `~/heqk-metal-logs/20260907-m2-matrix-run3-final.txt` / `-postbatchdrain-clean.txt` (per-row
 >   `drop+=` / PASS on the isolated CM5 DUT link).
-> - **Reproducible harness (tracked):** `kernel/heqk/tools/gate-r-frames.py` +
->   `kernel/heqk/tools/gate-r-matrix.sh` — one named stimulus kind per row.
+> - **Reproducible harness (tracked):** `os/kernel/tools/gate-r-frames.py` +
+>   `os/kernel/tools/gate-r-matrix.sh` — one named stimulus kind per row.
 
 ---
 
@@ -231,13 +231,13 @@ Legend: **M** PROVEN-ON-METAL · **Q** QEMU-proven / metal-pending or metal-not-
 1. Build the sepdiag image (SEPDIAG gates the per-verdict `[SEPDIAG]`/`[SEPDIAG-SHED]` console lines;
    `prod` is the real sensor loop):
    ```
-   FEATURES="prod,sepdiag" HOOKPROBE_DEBUG_ACCESS=1 bash builder/make-cm5-heqk-image.sh
+   FEATURES="prod,sepdiag" HOOKPROBE_DEBUG_ACCESS=1 bash os/build/make-cm5-heqk-image.sh
    ```
 2. Flash + boot on a CM5 with an **isolated DUT link** (the harness assumes a dedicated interface —
    do NOT run L2/broadcast floods on a shared mgmt segment; ADR 0020 ROE).
 3. Drive the matrix from the host, one named stimulus per row:
    ```
-   kernel/heqk/tools/gate-r-matrix.sh        # calls gate-r-frames.py per row
+   os/kernel/tools/gate-r-matrix.sh        # calls gate-r-frames.py per row
    ```
    Send **A3 (bcast-storm) last and alone** — its bounded burst crosses the 10s broadcast window and
    any other broadcast-dst row sent within that window is also counted toward the storm.

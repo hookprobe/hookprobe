@@ -50,9 +50,9 @@ fast-forwarding `master` is an operator (Red) decision.
 
 ## Stage 3: Linux tier wiring — SUPERSEDED by ADR 0047 (2026-10-09)
 
-> Not done, by decision: the Linux tier is transitional (bug and security fixes only). The UI is now served by heqk on the device (`kernel/heqk/src/{mcserve,http,mcstate}.rs`, proven by `tools/mc-e2e.sh`). The open UI/device gaps are tracked in `docs/design/heqk-everywhere-report-2026-10-09.md` §4. The items below are kept for the record only.
+> Not done, by decision: the Linux tier is transitional (bug and security fixes only). The UI is now served by heqk on the device (`os/kernel/src/{mcserve,http,mcstate}.rs`, proven by `tools/mc-e2e.sh`). The open UI/device gaps are tracked in `docs/design/heqk-everywhere-report-2026-10-09.md` §4. The items below are kept for the record only.
 
-1. Serve `ui/dist` from hookprobe-api on a LAN listener, with `API_BASE=''` and a cookie session (SSE can't send headers). Today an off-box browser silently falls back to mock data.
+1. Serve `os/mission-control/dist` from hookprobe-api on a LAN listener, with `API_BASE=''` and a cookie session (SSE can't send headers). Today an off-box browser silently falls back to mock data.
 2. Capability gating from `/api/manifest` (a `useManifest()` store). UI capability names (`firewall`, `vpn`, `segmentation`, …) don't exist in `platforms/*.yaml`; reconcile the vocabularies.
 3. `--run-wasm` must verify the manifest, `resolve` the module grant, and take crypto policy from the manifest. The planner runs even where `ai_planner` is denied.
 4. Manifest origin: compare the embedded cert with the re-derived `DeviceIdentity` fingerprint (integrity ≠ origin today).

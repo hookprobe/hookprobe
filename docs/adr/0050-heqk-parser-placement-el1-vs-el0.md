@@ -93,7 +93,7 @@ fault is available as an explicit per-interface policy.
 - Cost: one IPC round-trip per control message (low rate — negligible) and per HTTP request; HTTP throughput is
   not a goal.
 - TLS lands later than "add rustls to the kernel" would, but without a freeing allocator in the TCB.
-- Until D4 lands, `kernel/heqk/SECURITY.md` and BuildPlan status must keep saying the control protocols run in
+- Until D4 lands, `os/kernel/SECURITY.md` and BuildPlan status must keep saying the control protocols run in
   EL1 (ADR 0044 D5 honesty floor).
 
 ## References

@@ -75,7 +75,7 @@ CONDITIONAL-GO, M6 export plane, SRK-derived device identity, prod-mc on CM5, AD
 | sepdiag DataVolume self-test writes outside every partition on the factory layout | MED | same task |
 | GEM ring overflow (`rsr=0x7`) invisible to `faults=0` — needs an `rx_overrun` counter on prod-mc (the AP-loop drain cause is fixed, `1c1594c`) | MED | same task |
 | Firmware TX stall: trigger still unknown; the 100 ms control-frame kick is a mitigation, not a root cause | MED | AP session |
-| `kernel/heqk/SECURITY.md:393-515` publishes stale GDPR / "no behavioral profiling" claims; ADR 0007 says Apache-2.0 vs AGPL | docs | to reconcile in/with ADR 0048 |
+| `os/kernel/SECURITY.md:393-515` publishes stale GDPR / "no behavioral profiling" claims; ADR 0007 says Apache-2.0 vs AGPL | docs | to reconcile in/with ADR 0048 |
 | `responder-sim` trusts the device's self-claimed `device_fp`; `src_mac_hash` is the raw first 4 MAC octets; evidence `dev:` ids are unkeyed FNV over raw IP | MED | before any multi-device receiver / BOI Phase 1 |
 | Upstream NAC admission of heqk's WAN MAC remains a manual operator step | UX | gap 1 |
 | Late boot-confirm stays opt-in: prod loop reached at +70 s vs hboot's 15 s trial watchdog | design | shorten boot or keep opt-in |

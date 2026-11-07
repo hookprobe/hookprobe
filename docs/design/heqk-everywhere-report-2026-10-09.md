@@ -10,7 +10,7 @@ Tags: **PROVEN** = a reproducible gate passes · **BUILT** = compiles, no live p
 |---|---|---|
 | heqk boots, schedules, isolates (caps, EL0, IPC, W^X, ELF loader) | PROVEN (QEMU) · metal-proven earlier on CM5 | `validate.sh` (0 failing) |
 | Inline IPS: detect + tri-state `decide()` + self-reverting shed + legit-never-dropped | PROVEN (QEMU) · 31/31 heqk-plane rows on CM5 metal (M2) | `[P8-*]`, Gate-R logs |
-| **End to end through the UI, no Linux in the device path:** real attack → `packet::verdict` drop → SOAR → device evidence → heqk HTTP API → unchanged Mission Control UI in a browser | **PROVEN (QEMU)** | `kernel/heqk/tools/mc-e2e.sh` → `MC-E2E: PASS` (screenshots: Detect feed shows "Known C2 port 4444 (DROP, framedrop)"; Home "1 incident need your review.") |
+| **End to end through the UI, no Linux in the device path:** real attack → `packet::verdict` drop → SOAR → device evidence → heqk HTTP API → unchanged Mission Control UI in a browser | **PROVEN (QEMU)** | `os/kernel/tools/mc-e2e.sh` → `MC-E2E: PASS` (screenshots: Detect feed shows "Known C2 port 4444 (DROP, framedrop)"; Home "1 incident need your review.") |
 | On-device API logic (detections/incidents/QSecBit/SSE/static UI) | PROVEN (QEMU) | `[P-mc]` |
 | Evidence persistence (sealed snapshot v2, in-order after wrap) | PROVEN (QEMU) · sealed store metal-proven (M3) | `[P-snapshot]`, `[P15-*]` |
 | Fleet export (loss-tolerant v2 records, SRK identity) → receiver → evidence graph | PROVEN (QEMU/host) · live run = metal day | `[P-m6-export]`, `responder-sim` tests, cross-crate e2e |
@@ -20,7 +20,7 @@ Tags: **PROVEN** = a reproducible gate passes · **BUILT** = compiles, no live p
 ## 2. How to validate it yourself
 
 ```bash
-cd kernel/heqk
+cd os/kernel
 tools/mc-e2e.sh                 # build UI + heqk, boot QEMU, attack, assert API + browser
 MC_E2E_KEEP=1 tools/mc-e2e.sh   # then open http://127.0.0.1:18080 — Mission Control served by heqk
 ```
@@ -74,7 +74,7 @@ The browser leg needs Node + Playwright Chromium (`~/.local/node`, `tools/mc-e2e
 `retirement-agent` owns turning the RETIRE row into EOL events; nothing is deleted until its heqk replacement passes the platform's metal gate.
 
 ## 6. Documents superseded by ADR 0047 (marked, not deleted)
-CLAUDE.md (banner) · ADR 0044 D2/D3 · ADR 0043 tier split · ADR 0019 (bootc substrate, now transitional) · docs/BuildPlan.md Track B "canonical + permanent" · docs/MIGRATION-heqk.md rpi-only scope · docs/Readme.md Pillar 1 · ADR 0001 (the Axum backend becomes the interface spec; heqk `http.rs` is the device server). Each carries a pointer to ADR 0047.
+CLAUDE.md (banner) · ADR 0044 D2/D3 · ADR 0043 tier split · ADR 0019 (bootc substrate, now transitional) · docs/roadmap/BuildPlan.md Track B "canonical + permanent" · docs/architecture/MIGRATION-heqk.md rpi-only scope · docs/architecture/Readme.md Pillar 1 · ADR 0001 (the Axum backend becomes the interface spec; heqk `http.rs` is the device server). Each carries a pointer to ADR 0047.
 
 ## 7. Recommended next phases
 1. **P0 auth + TLS** on the device UI (gap 1). Small, and it unblocks real-network use.

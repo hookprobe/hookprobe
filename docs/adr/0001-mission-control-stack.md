@@ -63,4 +63,4 @@ js-framework-benchmark (krausest); PkgPulse "Solid vs Svelte 5 vs React reactivi
 
 ## heqk migration — see [ADR 0043](0043-heqk-microkernel-substrate.md)
 
-**Coupling: SOFT.** The dashboard survives; Astro/Solid is substrate-independent, but the Axum/Tokio/hyper/rustls backend needs a std-or-shim runtime on heqk — or (the planned path) it runs in the Zone-4 monitored Linux guest / a hosted control node while heqk is the sensor. → **Phase M6** in `docs/MIGRATION-heqk.md`.
+**Coupling: SOFT.** The dashboard survives; Astro/Solid is substrate-independent, but the Axum/Tokio/hyper/rustls backend needs a std-or-shim runtime on heqk — or (the planned path) it runs in the Zone-4 monitored Linux guest / a hosted control node while heqk is the sensor. → **Phase M6** in `docs/architecture/MIGRATION-heqk.md`.

@@ -1253,7 +1253,7 @@ truth of which configs each radio really holds, accumulated rather than last-onl
 - **Adding a radio stays one manifest fact** — `RadioCaps` from `iw phy` drives the ladder; no new
   branch per chip.
 - **Consistency with "operated by intent / config is a generated artifact"
-  (`docs/Readme.md:150,181`, CLAUDE.md decision #3) — flagged, product-steward.** D11 phase (b)
+  (`docs/architecture/Readme.md:150,181`, CLAUDE.md decision #3) — flagged, product-steward.** D11 phase (b)
   fires `hookprobe-regdomain-reresolve.service` on `network-online` and, if a better/valid CC
   resolves, autonomously STOPs hostapd + `iw reg set` + re-runs the reconcile **without** an
   operator-approved plan-as-a-diff. This is CONSISTENT with the model: the regdomain is an
