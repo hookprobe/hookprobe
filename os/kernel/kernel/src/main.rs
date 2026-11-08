@@ -6441,6 +6441,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = mcmgmt::selftest();
         let _ = arch_aarch64::wan6eth::selftest();
         let _ = srckey::selftest();
+        let _ = behavioral::brute_selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();
