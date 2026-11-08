@@ -141,7 +141,7 @@ def score_channel():
         })
     except Exception as e:
         logger.error(f"Error scoring channel {channel}: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route('/best', methods=['POST'])
@@ -184,7 +184,7 @@ def best_channel():
         })
     except Exception as e:
         logger.error(f"Error getting best channel: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route('/rank', methods=['GET'])
@@ -228,7 +228,7 @@ def rank_channels():
         return jsonify({"rankings": results})
     except Exception as e:
         logger.error(f"Error ranking channels: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 # ============================================================
@@ -285,7 +285,7 @@ def log_radar():
         })
     except Exception as e:
         logger.error(f"Error logging radar event: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route('/nop', methods=['GET'])
@@ -304,7 +304,7 @@ def get_nop():
         })
     except Exception as e:
         logger.error(f"Error getting NOP channels: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route('/history', methods=['GET'])
@@ -340,7 +340,7 @@ def get_history():
         })
     except Exception as e:
         logger.error(f"Error getting radar history: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 # ============================================================
@@ -382,7 +382,7 @@ def train_model():
             }), 400
     except Exception as e:
         logger.error(f"Error training model: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 @app.route('/predict', methods=['POST'])
@@ -430,7 +430,7 @@ def predict():
         })
     except Exception as e:
         logger.error(f"Error predicting: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 # ============================================================
@@ -486,7 +486,7 @@ def get_channel_stats(channel):
         })
     except Exception as e:
         logger.error(f"Error getting channel stats: {e}")
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": "internal error"}), 500
 
 
 # ============================================================
