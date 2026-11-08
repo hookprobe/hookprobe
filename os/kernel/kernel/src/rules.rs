@@ -160,7 +160,7 @@ fn compile_set(rules: &[Rule], state: *mut RState) -> (usize, usize) {
         let st = match bpf::verify_prevail(rules[i].prog) {
             Ok(min_len) => {
                 verified += 1;
-                let jit = arch_aarch64::bpf_jit::compile(rules[i].prog).unwrap_or(0);
+                let jit = arch_aarch64::bpf_jit::compile_with_helper(rules[i].prog, crate::ratelimit::call_helper_c as usize, crate::ratelimit::JIT_HELPERS).unwrap_or(0);
                 if jit != 0 {
                     jitted += 1;
                 }
@@ -948,4 +948,116 @@ pub fn active() -> usize {
     let d = (0..NRULES_FLOW.load(Ordering::Relaxed))
         .filter(|&i| rstate(addr_of_mut!(RSTATE_FLOW).cast::<RState>(), i).verified).count();
     a + b + c + d
+}
+
+/// `[P8-JIT-CALL]` — the JIT's BPF CALL support, differential against the interpreter (QEMU + metal):
+/// (1) `ip-blocklist` (helper 2) over 4096 frames — listed / unlisted sources, non-IPv4; (2) `syn-flood-per-src`
+/// (helper 1, stateful) — the same verdict sequence across the rate limit from a fresh key on each side;
+/// (3) register preservation — R3..R9 set, a CALL, then summed: 42 on both; (4) plain `compile` still declines.
+pub fn jit_call_selftest() -> bool {
+    use crate::bpf::{insn, run, IP_BLOCKLIST, SYN_LIMIT, TCP_SYN_FLOOD_SRC};
+    let comp = |p: &[u64]| arch_aarch64::bpf_jit::compile_with_helper(p, crate::ratelimit::call_helper_c as usize, crate::ratelimit::JIT_HELPERS);
+    let call = |va: usize, f: &[u8]| -> u64 {
+        let fun: extern "C" fn(*const u8) -> u64 = unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(va) };
+        fun(f.as_ptr())
+    };
+    let mut f = [0u8; 64];
+    let ipv4 = |f: &mut [u8; 64], src: [u8; 4], proto: u8, flags: u8| {
+        f.fill(0);
+        f[12] = 0x08;
+        f[14] = 0x45;
+        f[23] = proto;
+        f[26..30].copy_from_slice(&src);
+        f[47] = flags;
+    };
+    // (1) blocklist
+    let mut bl_ok = false;
+    let mut bl_mis = 0u32;
+    let mut bl_hits = 0u32;
+    if let Some(va) = comp(&IP_BLOCKLIST) {
+        bl_ok = true;
+        for i in 0u32..4096 {
+            let b = (i & 0xff) as u8;
+            let src = match i % 5 {
+                0 => [192, 0, 2, b],
+                1 => [10, 66, 66, b],
+                2 => [203, 0, 113, b],
+                3 => [100, 64, (i >> 8) as u8, b],
+                _ => [b, (i >> 8) as u8, 7, 9],
+            };
+            ipv4(&mut f, src, 6, 0x10);
+            if i % 97 == 0 {
+                f[12] = 0x08;
+                f[13] = 0x06; // ARP: the no-call path
+            }
+            let (j, r) = (call(va, &f), run(&IP_BLOCKLIST, f.as_ptr(), f.len()));
+            bl_hits += (r == crate::bpf::DROP) as u32;
+            if j != r {
+                bl_mis += 1;
+            }
+        }
+    }
+    // (2) per-source SYN flood: interpreter on key A, JIT on key B, same sequence
+    let mut syn_ok = false;
+    let mut syn_mis = 0u32;
+    let mut drops = 0u32;
+    if let Some(va) = comp(&TCP_SYN_FLOOD_SRC) {
+        syn_ok = true;
+        let n = SYN_LIMIT as usize + 20;
+        let mut seq = [0u64; 512];
+        ipv4(&mut f, [100, 127, 1, 1], 6, 0x02);
+        for v in seq.iter_mut().take(n) {
+            *v = run(&TCP_SYN_FLOOD_SRC, f.as_ptr(), f.len());
+        }
+        ipv4(&mut f, [100, 127, 1, 2], 6, 0x02);
+        for v in seq.iter().take(n) {
+            let j = call(va, &f);
+            drops += (j == crate::bpf::DROP) as u32;
+            syn_mis += (j != *v) as u32;
+        }
+    }
+    // (2b) regression: a flooder on a busy LAN. The slot used to be the FIRST octet, so 10.0.0.10's SYNs reset
+    // 10.0.0.66's count and the per-source limiter never tripped. Now it must.
+    let mut busy_drops = 0u32;
+    for k in 0..(SYN_LIMIT as u32 + 40) {
+        ipv4(&mut f, [10, 0, 0, 66], 6, 0x02);
+        busy_drops += (run(&TCP_SYN_FLOOD_SRC, f.as_ptr(), f.len()) == crate::bpf::DROP) as u32;
+        if k % 4 == 0 {
+            ipv4(&mut f, [10, 0, 0, 10], 6, 0x02);
+            let _ = run(&TCP_SYN_FLOOD_SRC, f.as_ptr(), f.len());
+        }
+    }
+    // (3) register preservation across CALL
+    let prog: [u64; 18] = [
+        insn(0xb7, 3, 0, 0, 3),
+        insn(0xb7, 4, 0, 0, 4),
+        insn(0xb7, 5, 0, 0, 5),
+        insn(0xb7, 6, 0, 0, 6),
+        insn(0xb7, 7, 0, 0, 7),
+        insn(0xb7, 8, 0, 0, 8),
+        insn(0xb7, 9, 0, 0, 9),
+        insn(0xb7, 1, 0, 0, 0),
+        insn(0xb7, 2, 0, 0, 0),
+        insn(0x85, 0, 0, 0, crate::ratelimit::HELPER_IP_BLOCKED as i32),
+        insn(0x0f, 0, 3, 0, 0),
+        insn(0x0f, 0, 4, 0, 0),
+        insn(0x0f, 0, 5, 0, 0),
+        insn(0x0f, 0, 6, 0, 0),
+        insn(0x0f, 0, 7, 0, 0),
+        insn(0x0f, 0, 8, 0, 0),
+        insn(0x0f, 0, 9, 0, 0),
+        insn(0x95, 0, 0, 0, 0),
+    ];
+    let interp = run(&prog, f.as_ptr(), f.len());
+    let regs = comp(&prog).map(|va| call(va, &f));
+    let regs_ok = interp == 42 && regs == Some(42);
+    // (4) the call-less entry point still declines CALL; a helper outside the allowlist declines too
+    let declines = arch_aarch64::bpf_jit::compile(&TCP_SYN_FLOOD_SRC).is_none()
+        && arch_aarch64::bpf_jit::compile_with_helper(&IP_BLOCKLIST, crate::ratelimit::call_helper_c as usize, 1 << crate::ratelimit::HELPER_SYN_RATE_OVER).is_none();
+    let pass = bl_ok && bl_mis == 0 && bl_hits > 0 && syn_ok && syn_mis == 0 && drops > 0 && busy_drops > 0 && regs_ok && declines;
+    arch_aarch64::_print(format_args!(
+        " [P8-JIT-CALL] {} — BPF CALL in the JIT (scalar helpers 1/2, x1..x10 preserved, frame per calling rule): ip-blocklist 4096 frames {} mismatches ({} listed) | syn-flood-per-src {} SYNs {} mismatches ({} over the limit) | busy-LAN flooder trips the limiter ({} drops) | registers across CALL interp={} jit={:?} | call-less compile + off-allowlist helper decline={}\n",
+        if pass { "PASS" } else { "FAIL" }, bl_mis, bl_hits, SYN_LIMIT as u32 + 20, syn_mis, drops, busy_drops, interp, regs, declines
+    ));
+    pass
 }

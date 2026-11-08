@@ -21,6 +21,16 @@ use core::sync::atomic::{AtomicU64, Ordering};
 // EVICT another's in-flight window — acceptable vs the count-min complexity at this
 // tier; enlarge SLOTS or move to a sketch if that eviction ever matters.
 const SLOTS: usize = 256; // power of two
+
+/// Slot index for a source key. Every table here used `key % N`: for the BPF SYN limiter the key is the IPv4
+/// source loaded little-endian (low byte = FIRST octet), so every 10.x.x.x client shared ONE slot and each
+/// other client's SYN reset a flooder's count (the per-source limiter never tripped on a busy LAN); the
+/// flow/scan tables (big-endian keys, 16 slots) collided on hosts 16 addresses apart. A multiplicative hash
+/// makes collisions rare and random; the per-slot KEY tag still keeps an aliasing source from sharing counts.
+#[inline]
+pub fn slot(key: u64, n: usize) -> usize {
+    ((key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize) % n
+}
 static WIN_START: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static COUNT: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static KEY: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
@@ -43,7 +53,7 @@ fn cntfrq() -> u64 {
 /// `cntfrq` ticks have elapsed since it opened, so a sustained flood trips it but
 /// a normal low rate never accumulates across windows.
 pub fn syn_rate_over(key: u64, limit: u64) -> u64 {
-    let i = (key as usize) % SLOTS;
+    let i = slot(key, SLOTS);
     let now = cntpct();
     let win = cntfrq().max(1); // ~1 second in counter ticks
     let start = WIN_START[i].load(Ordering::Relaxed);
@@ -74,6 +84,15 @@ pub fn call_helper(id: u32, r1: u64, r2: u64) -> u64 {
         _ => 0,
     }
 }
+
+/// The JIT's view of `call_helper` (stable C ABI: x0 = id, x1 = R1, x2 = R2 -> x0).
+pub extern "C" fn call_helper_c(id: u64, r1: u64, r2: u64) -> u64 {
+    call_helper(id as u32, r1, r2)
+}
+
+/// Helper ids the JIT may call natively: the SCALAR-argument ones. `payload_match` (3) dereferences a packet
+/// pointer and keeps the interpreter's extra per-call bounds check, so its rules stay interpreted.
+pub const JIT_HELPERS: u64 = (1 << HELPER_SYN_RATE_OVER) | (1 << HELPER_IP_BLOCKED);
 
 /// Helper id: `R0 = syn_rate_over(R1=key, R2=limit)`.
 pub const HELPER_SYN_RATE_OVER: u32 = 1;
@@ -190,7 +209,7 @@ pub fn bcast_over(port: u64, threshold: u64) -> u64 {
 
 /// Distinct source slots (direct-mapped by IP low bits, gen-tagged, collision-reset —
 /// a colliding source EVICTS the slot's prior occupant, never counts against it).
-const FLOW_SRCS: usize = 16;
+const FLOW_SRCS: usize = 64; // per-source flow/scan state (was 16: fewer slots than devices on a home LAN)
 /// Per-source distinct-dst-port set (gen-tagged so a new window is an O(1) generation
 /// bump, never an O(N) clear). 256 slots hold the confirm bar (>=100) with headroom.
 const SCAN_PORT_SET: usize = 256;
@@ -320,7 +339,7 @@ pub fn flow_new() {
 /// never counted against another's.
 #[inline]
 fn touch_scan_slot(src: u64) -> usize {
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src as u64, FLOW_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(SCAN_WINDOW_SECS);
     let start = SCAN_WIN[s].load(Ordering::Relaxed);
@@ -381,7 +400,7 @@ pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
     if scanner == 0 {
         return;
     }
-    let s = (scanner as usize) % FLOW_SRCS;
+    let s = slot(scanner as u64, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != scanner {
         return;
     }
@@ -403,7 +422,7 @@ pub fn flow_ack_observe(src: u64, dst_port: u16) {
     if src == 0 {
         return;
     }
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src as u64, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return;
     }
@@ -419,7 +438,7 @@ pub fn scan_distinct_ports(src: u64) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src as u64, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return 0;
     }
@@ -431,7 +450,7 @@ pub fn flow_established_count(src: u64) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src as u64, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return 0;
     }
@@ -561,7 +580,7 @@ pub fn conn_rate_over_at(src: u64, cap: u64, now: u64, win: u64) -> bool {
     if src == 0 {
         return false;
     }
-    let i = (src as usize) % CR_SLOTS;
+    let i = slot(src as u64, CR_SLOTS);
     let start = CR_WIN[i].load(Ordering::Relaxed);
     if CR_KEY[i].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
         CR_KEY[i].store(src, Ordering::Relaxed);
@@ -655,7 +674,7 @@ static TOP_WIN: AtomicU64 = AtomicU64::new(0);
 #[inline]
 #[inline]
 fn ct_touch_at(src: u64, now: u64, win: u64) -> usize {
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src as u64, FLOW_SRCS);
     let start = CT_WIN[s].load(Ordering::Relaxed);
     if CT_SRC[s].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
         CT_SRC[s].store(src, Ordering::Relaxed);
