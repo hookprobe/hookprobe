@@ -3888,6 +3888,7 @@ fn cm5_p10_probe() {
                                     if let Some(m) = unsafe { (*core::ptr::addr_of!(uplink::MGMT)).as_ref() } {
                                         if m.ip != [0; 4] && n.add_address(m.ip, m.prefix) {
                                             mc_mgmt = Some((m.ip, m.prefix));
+                                            actions::set_mgmt_net(u32::from_be_bytes(m.ip), m.prefix);
                                             kprint!(" [AP-MC] Mission Control also on https://{}.{}.{}.{}/ (management VLAN; the signed `mgmt in` policy applies)\n", m.ip[0], m.ip[1], m.ip[2], m.ip[3]);
                                         }
                                     }

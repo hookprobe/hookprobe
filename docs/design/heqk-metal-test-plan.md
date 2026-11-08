@@ -79,6 +79,8 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 
 ## H. Operator actions (G14, ADR 0053)
 
+**Metal 2026-11-08 (unattended relay round, `metal-evidence/20261108-relay-round-h10.md`): H7, H8, H9, H10, H5-negative, revoke PASS from the management laptop.** First run found H10 accepted (the floor default did not cover the live management subnet) — fixed and re-proven.
+
 | ID | Test | Expected | Evidence |
 |---|---|---|---|
 | H1 | Shield → DNS clients → "Hold 1 h" on a test client (reason entered) | that client's traffic stops (WAN + LAN); the Actions panel lists it with a countdown; audit row shows session, kind, target, reason | phone browsing + UI |
@@ -93,6 +95,8 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | H10 | Hold an address inside the management floor (e.g. the mgmt laptop) | refused "management floor" (audited); management access never interrupted | curl + browser |
 
 ## I. AP provisioning (G12, ADR 0054)
+
+**Metal 2026-11-08:** I1 PASS (`HookProbe-Setup-R3Q1`), I3 PASS (same SSID + passphrase after re-flash), I6 PASS (`https://192.168.200.146/api/health` 200 from the management laptop, UI 302 to sign-in, http 308), I8 PASS (`[WIFI] per-device MAC 76:0d:02:f8:d2:da`), I9 PASS.
 
 | ID | Test | Expected | Evidence |
 |---|---|---|---|
