@@ -295,10 +295,15 @@ pub fn mgmt_nexthop(ip: [u8; 4]) -> Option<[u8; 6]> {
 
 /// Service the management sub-interface: ARP, gateway resolution, ping (policy-checked by `decide`).
 /// `decide` returns the policy action for a packet arriving on mgmt (Allow / Block / Drop).
+// G34: scratch for mgmt_poll / eth6_tx. Both used to zero a 1.6 KB stack array on EVERY call — mgmt_poll runs
+// up to 8x per AP-loop iteration even when idle, eth6_tx once per forwarded IPv6 packet. Single datapath context.
+static mut MGMT_O: [u8; 1600] = [0; 1600];
+static mut ETH6_F: [u8; 1600] = [0; 1600];
+
 pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::Act) -> MgmtEvent {
     use hal::policy::Act;
     let Some(m) = (unsafe { (*core::ptr::addr_of_mut!(MGMT)).as_mut() }) else { return MgmtEvent::Idle };
-    let mut o = [0u8; 1600];
+    let o = unsafe { &mut *core::ptr::addr_of_mut!(MGMT_O) };
     let now = ms_now();
     // `mgmt=dhcp`: no address yet (or renewing) — run the client; replies are consumed there.
     if m.dhcp.is_some() {
@@ -311,16 +316,16 @@ pub fn mgmt_poll(buf: &mut [u8], decide: &mut dyn FnMut(&[u8]) -> hal::policy::A
             return MgmtEvent::Idle;
         }
         // a non-DHCP frame while bound: fall through with it
-        return crate::mgmtproto::mgmt_frame(m, buf, got.unwrap(), now, decide, &mut o, &mut |f| mgmt_tx(f));
+        return crate::mgmtproto::mgmt_frame(m, buf, got.unwrap(), now, decide, o, &mut |f| mgmt_tx(f));
     }
     if m.gw_mac.is_none() && m.ip != [0; 4] && now.wrapping_sub(m.last_arp) >= 2000 {
         m.last_arp = now;
-        let n = arp_frame(&mut o, 1, &m.mac, &m.ip, &[0; 6], &m.gw, &[0xff; 6]);
+        let n = arp_frame(o, 1, &m.mac, &m.ip, &[0; 6], &m.gw, &[0xff; 6]);
         let _ = mgmt_tx(&o[..n]);
         m.stats[1] += 1;
     }
     let Some(n) = mgmt_rx(buf) else { return MgmtEvent::Idle };
-    crate::mgmtproto::mgmt_frame(m, buf, n, now, decide, &mut o, &mut |f| mgmt_tx(f))
+    crate::mgmtproto::mgmt_frame(m, buf, n, now, decide, o, &mut |f| mgmt_tx(f))
 }
 
 
@@ -549,8 +554,8 @@ pub fn bringup_with(nic: Nic, inet_ip: &[u8; 4], mode: &hal::WanMode, out: &mut 
 
 /// Send one bare IPv6 packet on the Ethernet WAN to `dmac`.
 fn eth6_tx(nic: Nic, src: &[u8; 6], dmac: &[u8; 6], ip: &[u8]) -> bool {
-    let mut f = [0u8; 1600];
-    let k = crate::wan6eth::eth6(dmac, src, ip, &mut f);
+    let f = unsafe { &mut *core::ptr::addr_of_mut!(ETH6_F) };
+    let k = crate::wan6eth::eth6(dmac, src, ip, f);
     k > 0 && nic_tx(nic, &f[..k])
 }
 
@@ -1309,12 +1314,16 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         let e = unsafe { &mut *core::ptr::addr_of_mut!(WAN6_ETH) };
         let mut smac = [0u8; 6];
         smac.copy_from_slice(&buf[6..12]);
-        let mut ans = [0u8; 1600];
-        if let crate::wan6eth::Answer::Reply(k, d) = crate::wan6eth::answer(&buf[14..n], &smac, &e.ll, &up.mac, &mut ans) {
-            if eth6_tx(nic, &up.mac, &d, &ans[..k]) {
-                if ans[40] == 136 { e.na_tx += 1 } else { e.echo_tx += 1 }
+        // only an ICMPv6 NS (135) or echo request (128) can need an answer: no 1.6 KB buffer for every other frame
+        let icmp_ask = buf[20] == 58 && n > 54 && (buf[54] == 135 || buf[54] == 128);
+        if icmp_ask {
+            let mut ans = [0u8; 1600];
+            if let crate::wan6eth::Answer::Reply(k, d) = crate::wan6eth::answer(&buf[14..n], &smac, &e.ll, &up.mac, &mut ans) {
+                if eth6_tx(nic, &up.mac, &d, &ans[..k]) {
+                    if ans[40] == 136 { e.na_tx += 1 } else { e.echo_tx += 1 }
+                }
+                return WanEvent::Idle;
             }
-            return WanEvent::Idle;
         }
         if let Some(ra) = crate::ip6::parse_ra(&buf[14..n]) {
             if ra.router == e.router_ll && smac != e.router_mac {
