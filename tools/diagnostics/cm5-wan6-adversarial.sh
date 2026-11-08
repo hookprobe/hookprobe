@@ -22,7 +22,7 @@ wait_beat() { # wait until a beat line newer than $1 appears (beats are ~5 s apa
   local before="$1" t0; t0=$(date +%s)
   while [ "$(v6beat)" = "$before" ] && [ $(( $(date +%s) - t0 )) -lt 30 ]; do sleep 2; done
 }
-ok=0; need=4
+ok=0; need=5
 chk() { if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 
 out=$(rs bash "$BENCH" v6route); echo "$out" | sed 's/^/   /'
@@ -48,5 +48,9 @@ B1=$(v6beat); NF1=$(field 'no_flow' "$B1")
 own=$(ip -6 addr show dev "$IF" | awk '/inet6/ {sub("/.*","",$2); print $2}')
 LL=$(ip -6 neigh show dev "$IF" | awk '/^fe80::/ && !/router/ {print $1}' | grep -vxF "$own" | head -1)
 [ -n "$LL" ] && ping -6 -c 2 -W 2 "$LL%$IF" > /dev/null 2>&1; chk $? "the CM5 WAN link-local ${LL:-?} still answers"
+# 4. ADR 0049 D2/D3 (observe-only scan tier): those SYNs were one-sided (no host answered) -> never counted
+SO=$(grep -oE 'v6 scan \(observe-only\) over=[0-9]+' <<<"$B1" | grep -oE '[0-9]+$')
+if [ -z "$SO" ]; then echo "   (image without the D2 counters — row skipped)"; ok=$((ok + 1)); else
+  [ "$SO" = 0 ]; chk $? "one-sided v6 SYN sweep never counted as a scan (v6 scan over=$SO)"; fi
 echo "   after:  $(grep -oE 'drop no_flow=[0-9]+ no_neigh=[0-9]+ hop=[0-9]+ src=[0-9]+' <<<"$B1")"
 [ "$ok" -eq "$need" ] && { echo "WAN6-ADVERSARIAL: PASS"; exit 0; } || { echo "WAN6-ADVERSARIAL: FAIL ($ok/$need)"; exit 1; }
