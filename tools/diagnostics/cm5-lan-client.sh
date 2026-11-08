@@ -30,7 +30,8 @@ echo "== LAN client $PIIP on $IF (Wi-Fi via the CM5)"
 
 # 1. connectivity through heqk (v4 + v6)
 pi "curl -4 -s -m 10 -o /dev/null -w '%{http_code}' http://example.com/" | grep -q 200; chk $? "IPv4 web through the CM5"
-pi "ip -6 route | grep -q 'default.*$IF' && ping -6 -c2 -W3 2001:db8:100::1 >/dev/null"; chk $? "IPv6 (delegated prefix, SLAAC) reaches the WAN-side router"
+r=1; for _ in $(seq 1 15); do pi "ip -6 route | grep -q 'default.*$IF' && ping -6 -c2 -W3 2001:db8:100::1 >/dev/null" && { r=0; break; }; sleep 3; done   # PD -> RA -> SLAAC after a boot
+chk $r "IPv6 (delegated prefix, SLAAC) reaches the WAN-side router"
 
 # 2. Shield: blocked name -> NXDOMAIN, allowed name resolves
 R=$(pi "dig +time=3 +tries=1 @10.99.0.1 $BLOCKED A" )
