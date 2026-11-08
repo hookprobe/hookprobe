@@ -51,6 +51,7 @@ mod wificfg;
 mod rulepack;
 // ADR 0053: reversible, time-bounded operator actions (store + audit) and their guarded write path.
 mod actions;
+mod apcred;
 #[cfg(feature = "netsvc")]
 mod actionapi;
 // Parity G16: WAN health with hysteresis.
@@ -2982,11 +2983,22 @@ fn cm5_p10_probe() {
                             None => None,
                         };
                         let build_psk: &[u8] = match option_env!("HEQK_AP_PSK") { Some(s) => s.as_bytes(), None => b"" };
-                        let ap_ssid: &[u8] = match &wifi { Some(c) => &c.ssid[..c.ssid_len as usize], None => b"heqk-ap" };
-                        let ap_psk: &[u8] = match &wifi { Some(c) => &c.psk[..c.psk_len as usize], None => build_psk };
+                        // Parity G12 (ADR 0054): with no signed WIFI.TXT and no bench PSK, the per-device SETUP
+                        // AP credential derived from the SRK (none without an OTP-backed SRK: the AP stays off).
+                        #[cfg(feature = "hboot")]
+                        let setup = if wifi.is_none() && build_psk.len() < 8 { seal_srk().and_then(|k| apcred::derive(&k)) } else { None };
+                        #[cfg(not(feature = "hboot"))]
+                        let setup: Option<apcred::Cred> = None;
+                        if let Some(c) = &setup {
+                            let mut qb = [0u8; 64];
+                            kprint!(" [WIFI] setup AP \"{}\" — per-device passphrase {} (label / QR: {})\n", c.ssid_str(), c.psk_str(), apcred::qr_payload(c, &mut qb));
+                        }
+                        let ap_ssid: &[u8] = match (&wifi, &setup) { (Some(c), _) => &c.ssid[..c.ssid_len as usize], (None, Some(s)) => &s.ssid, _ => b"heqk-ap" };
+                        let ap_psk: &[u8] = match (&wifi, &setup) { (Some(c), _) => &c.psk[..c.psk_len as usize], (None, Some(s)) => &s.psk, _ => build_psk };
+                        let psk_src: &str = if wifi.is_some() { "WIFI.TXT" } else if setup.is_some() { "the per-device setup credential" } else { "the build env" };
                         let wifi_chan: u32 = wifi.map_or(0, |c| c.channel as u32);
                         if ap_psk.len() < 8 {
-                            kprint!(" [WIFI] no WIFI.TXT and no build-time PSK — the AP will NOT start (it never runs open)\n");
+                            kprint!(" [WIFI] no WIFI.TXT, no build-time PSK and no device-unique key — the AP will NOT start (it never runs open, never a shared password)\n");
                             loop {
                                 unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
                             }
@@ -3260,7 +3272,7 @@ fn cm5_p10_probe() {
                                 let rb = cyw43::current_chanspec();
                                 kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
                                     rb.unwrap_or(0), ap_cs, if rb == Some(ap_cs) { "ON THE CHOSEN CHANNEL" } else { "MISMATCH" });
-                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"{}\" (PSK from {}); client isolation (ap_isolate) {}\n", ap_tries, core::str::from_utf8(ap_ssid).unwrap_or("?"), if wifi.is_some() { "WIFI.TXT" } else { "the build env" },
+                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"{}\" (PSK from {}); client isolation (ap_isolate) {}\n", ap_tries, core::str::from_utf8(ap_ssid).unwrap_or("?"), psk_src,
                                     if ap.isolate_ok { "ON — stations reach each other only through heqk" } else { "REFUSED by the firmware — intra-BSS traffic may bypass the IDS" });
                                 break;
                             }
@@ -6330,6 +6342,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = rulepack::selftest();
         #[cfg(feature = "netsvc")]
         let _ = actionapi::selftest();
+        let _ = apcred::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();
