@@ -606,6 +606,19 @@ pub fn behavioral_observe6(frame: &[u8], lease: u32) {
     let _ = brute_verdict(lease, peer, m.dst_port);
 }
 
+/// G24a: an IPv6 peer on the signed IOC pack — the same observe-only IOC detection (rule 302, identity
+/// reputation: never a drop) the IPv4 flow tier raises, attributed to the LAN device's IPv4 lease.
+pub fn ioc_v6_hit(lease: u32, peer: &[u8; 16]) -> bool {
+    if lease == 0 || !crate::ioc::ip6_listed(peer) {
+        return false;
+    }
+    let v = verdict::decide(FindingClass::IdentityReputation, DecideCtx::for_src(lease));
+    if refire_ok(302, lease, crate::behavioral::now_secs()) {
+        fire(302, SEV_HIGH, v, lease);
+    }
+    true
+}
+
 /// G36: an inbound IPv6 SYN-ACK to a LAN device = the D3 evidence that the service it is hammering exists.
 pub fn brute_answer6(frame: &[u8], lease: u32) {
     if lease == 0 || frame.len() < 54 {

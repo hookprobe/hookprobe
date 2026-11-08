@@ -3859,6 +3859,8 @@ fn cm5_p10_probe() {
                                                         crate::ja4::observe6(frame, lease);
                                                         rules::behavioral_observe6(frame, lease); // G36: beacon + brute force over IPv6
                                                     }
+                                                    // G24a: a LAN device talking to an IPv6 address on the signed IOC pack
+                                                    let _ = rules::ioc_v6_hit(dh.lease_for(&sm).map_or(0, u32::from_be_bytes), &d6);
                                                 }
                                                 match pa {
                                                     (PAct::Allow, _) => {
@@ -4158,6 +4160,8 @@ fn cm5_p10_probe() {
                                                         let lease = dmac.and_then(|m| dh.lease_for(&m)).map_or(0, u32::from_be_bytes);
                                                         rules::brute_answer6(&wbuf[..n], lease); // G36: the answer that makes v6 brute force count
                                                     }
+                                                    // G24a: an IOC-listed IPv6 source reaching a LAN device (attributed to that device)
+                                                    let _ = rules::ioc_v6_hit(dmac.and_then(|m| dh.lease_for(&m)).map_or(0, u32::from_be_bytes), &s6);
                                                 }
                                                 let v6a = v6.on_wan(&wbuf[14..n], nms, &mut v6buf);
                                                 // `wan in` judges only genuinely NEW inbound traffic (no flow). A neighbor-table
