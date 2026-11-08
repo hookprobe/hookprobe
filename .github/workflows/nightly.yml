@@ -33,7 +33,7 @@ jobs:
     name: "g0 · hygiene + CI wiring"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: tools/ci/gates.sh g0
       - if: always()
         uses: actions/upload-artifact@v4
@@ -43,7 +43,7 @@ jobs:
     name: "g1 · clippy ratchet + unit tests + phase ratchet"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -62,7 +62,7 @@ jobs:
       contents: write          # only for the matrix PR branch
       pull-requests: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4 (main only — trusted; create-pull-request pushes with these credentials)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v4 (main only — trusted; create-pull-request pushes with these credentials)
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
         with:
           toolchain: nightly
@@ -95,7 +95,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools
@@ -115,7 +115,7 @@ jobs:
     name: "g4 · supply chain (fresh advisory DB)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-deny }
@@ -132,7 +132,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 1 }
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -149,7 +149,7 @@ jobs:
     needs: [g0, g1, g2, g3, g4, g4r]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v4
         with: { pattern: nightly-*, path: in }
       - run: |
