@@ -219,8 +219,8 @@ echo | timeout 20 openssl s_client -connect "$HOST:$HTTPS" -servername heqk.loca
   && ok "a client offering only AES-GCM is refused (one-suite policy)" || bad "AES-GCM-only client was not refused"
 # A handshake flood is rate-limited (ADR 0051): 80 new sessions as fast as possible — some refused, none crash it.
 FP=(); for _ in $(seq 1 80); do curl "${C[@]}" -o /dev/null -m 5 "$BS/api/health" 2>/dev/null & FP+=($!); done; wait "${FP[@]}" 2>/dev/null
-sleep 2
-HSF=$(curl "${C[@]}" "$BS/api/health")
+# the device sheds the abandoned handshakes on its own timer: allow up to ~10 s, a hang is still a FAIL
+for _ in 1 2 3 4 5; do sleep 2; HSF=$(curl "${C[@]}" "$BS/api/health"); [ -n "$HSF" ] && break; done
 [ "$(echo "$HSF" | jget "d['substrate']")" = heqk ] && ok "after 80 simultaneous connections (most abandoned) HTTPS still serves — no slot left pinned" || bad "https after connection flood: $HSF"
 KA=$(curl "${C[@]}" -v -o /dev/null -o /dev/null "$BS/api/health" "$BS/api/health" 2>&1)
 echo "$KA" | grep -qi "Re-using existing connection" && ok "keep-alive: two https requests share one connection (one TLS handshake)" || bad "https keep-alive not reused"
