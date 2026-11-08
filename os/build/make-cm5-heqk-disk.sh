@@ -42,6 +42,7 @@ POLICY_FILE=""
 BLOCK_FILE=""
 ALLOW_FILE=""
 IOC_FILE=""
+OUI_FILE=""
 DEVICES_FILE=""
 WIFI_FILE=""
 RULES_FILE=""
@@ -61,10 +62,11 @@ while [ $# -gt 0 ]; do
     --blocklist-file) BLOCK_FILE="$2"; shift ;;
     --allowlist-file) ALLOW_FILE="$2"; shift ;;
     --ioc-file) IOC_FILE="$2"; shift ;;
+    --oui-file) OUI_FILE="$2"; shift ;;
     --devices-file) DEVICES_FILE="$2"; shift ;;
     --wifi-file) WIFI_FILE="$2"; shift ;;
     --rules-file) RULES_FILE="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT] [--ioc-file IOC.TXT] [--devices-file DEVICES.TXT] [--wifi-file WIFI.TXT] [--rules-file RULES.TXT]" >&2; exit 2 ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT] [--ioc-file IOC.TXT] [--oui-file OUI.TXT] [--devices-file DEVICES.TXT] [--wifi-file WIFI.TXT] [--rules-file RULES.TXT]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -230,6 +232,7 @@ stage_signed() { # src dst-name sign-subcommand max-bytes
   fi
 }
 stage_signed "$IOC_FILE" IOC sign-ioc $((16 << 20))
+stage_signed "$OUI_FILE" OUI sign-oui $((4 << 20))   # IEEE vendor registry (discovery D3; gen: os/build/fpgen/gen_oui.py)
 stage_signed "$DEVICES_FILE" DEVICES sign-devices $((16 << 10))
 stage_signed "$WIFI_FILE" WIFI sign-wifi 1024   # SSID / PSK / channel (contains the PSK: never commit one)
 # RULES.BIN — the field-updatable rule pack (parity G6): compiled from readable RULES.TXT, then signed.
@@ -258,7 +261,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/OUI.TXT "$STAGE"/OUI.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none

@@ -19,7 +19,7 @@ pub struct Ident {
     pub os: &'static str,
     /// 0..=100
     pub confidence: u8,
-    /// "vendor-class" | "pinned-oui" | "option-55" | "hostname" | "oui" | "os-guess" | ""
+    /// "vendor-class" | "pinned-oui" | "option-55" | "hostname" | "oui" | "ieee-oui" | "os-guess" | ""
     pub source: &'static str,
     pub identity: u64,
     /// "high" | "low" | "none"
@@ -177,8 +177,14 @@ pub fn classify(mac: &[u8; 6], host: &[u8], vendor_class: &[u8], prl: &[u8]) -> 
         let v = if v.is_empty() { oui_vendor(mac) } else { v };
         return mk((m, v, c, o, conf), "hostname");
     }
-    // 4. OUI vendor alone
+    // 4. OUI vendor alone (curated first; else the full IEEE registry from the signed OUI.TXT, lower confidence)
     let v = oui_vendor(mac);
+    if v.is_empty() {
+        let v = crate::oui::vendor(mac);
+        if !v.is_empty() {
+            return mk(("", v, "", osg, 40), "ieee-oui");
+        }
+    }
     if !v.is_empty() {
         return mk(("", v, "", osg, 50), "oui");
     }
