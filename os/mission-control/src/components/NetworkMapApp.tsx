@@ -42,9 +42,11 @@
 
 import {
   type Component, type Accessor,
-  createSignal, createMemo, For, Show, batch,
+  createSignal, createMemo, For, Show, batch, onMount, onCleanup,
 } from 'solid-js';
 import TopBar from './TopBar';
+import NetworkLive from './NetworkLive';
+import { refetch, devicesStatus } from '../store/obsLive';
 import CommandPalette from './CommandPalette';
 import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
 import {
@@ -554,7 +556,7 @@ const AiSuggestionBanner: Component<SuggestionProps> = (props) => (
 
 // ── NetworkMapApp (root island) ───────────────────────────────────────────────
 
-const NetworkMapApp: Component = () => {
+const NetworkMapSample: Component = () => {
   // Component-local signals — avoids SSR/hydration sharing issues between pages.
   const [zones,      setZones]      = createSignal<Zone[]>(INITIAL_ZONES);
   const [devices,    setDevices]    = createSignal<Device[]>(INITIAL_DEVICES);
@@ -888,6 +890,29 @@ const NetworkMapApp: Component = () => {
         onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
       />
     </>
+  );
+};
+
+/** On a device: the live inventory (NetworkLive); the sample map only when no device API answers. */
+const NetworkMapApp: Component = () => {
+  const [fails, setFails] = createSignal(0);
+  onMount(() => {
+    const tick = async () => {
+      await refetch();
+      if (devicesStatus() === 'error') setFails((n) => n + 1);
+    };
+    void tick();
+    const t = setInterval(() => void tick(), 10_000);
+    onCleanup(() => clearInterval(t));
+  });
+  return (
+    <Show when={devicesStatus() === 'live'} fallback={
+      <Show when={fails() >= 2} fallback={<div class="shield-empty" role="status">Loading devices from this device…</div>}>
+        <NetworkMapSample />
+      </Show>
+    }>
+      <NetworkLive />
+    </Show>
   );
 };
 
