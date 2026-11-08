@@ -1821,6 +1821,9 @@ pub fn reg_diag() -> (bool, u32, bool, u32, u32) {
     unsafe { REG_DIAG }
 }
 static mut MAC_DIAG: ([u8; 6], [u8; 6], bool) = ([0; 6], [0; 6], false);
+/// Per-device Wi-Fi MAC set by the kernel before the radio comes up (locally administered, unicast).
+/// None = keep the OTP / NVRAM / fallback behaviour.
+pub static mut DEVICE_MAC: Option<[u8; 6]> = None;
 /// (OTP cur_etheraddr readback, MAC actually in use, OTP was valid). If OTP invalid, a
 /// locally-administered MAC is set so the primary bsscfg can enable (else escan NOTUPs).
 pub fn mac_diag() -> ([u8; 6], [u8; 6], bool) {
@@ -2497,7 +2500,16 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
     let _ = bcdc_iovar_get(b"cur_etheraddr", &mut otp_mac);
     let mac_valid = (otp_mac[0] & 1) == 0 && otp_mac.iter().any(|&b| b != 0);
     let mut mac = otp_mac;
-    if !mac_valid {
+    // A per-device MAC from the kernel (derived from the device secret) always wins: the NVRAM carries only a
+    // generic placeholder (the same on every unit) and the OTP MAC is unprogrammed on the CM5.
+    if let Some(dm) = unsafe { DEVICE_MAC } {
+        mac = dm;
+        let mut iobmac = [0u8; 32];
+        let nmac = iovar_buf(b"cur_etheraddr", &mac, &mut iobmac);
+        if !bcdc_iovar_set(&iobmac[..nmac]) {
+            let _ = bcdc_iovar_set(&iobmac[..nmac]); // one retry (a discarded reply, not a refusal)
+        }
+    } else if !mac_valid {
         // Fixed LAA unicast MAC (02 = locally administered, bit0 clear = unicast). Stable
         // across boots so the device keeps one identity; derived tail keeps it distinctive.
         mac = [0x02, 0x43, 0x45, 0x48, 0x51, 0x4b]; // 02:43:45:48:51:4b ("CEHQK")
