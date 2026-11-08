@@ -64,7 +64,7 @@ jobs:
     name: "heqk QEMU gate (validate.sh — NOT a metal gate)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned nightly toolchain (os/kernel/rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
