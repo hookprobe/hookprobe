@@ -31,6 +31,23 @@ LOGS = {
 }
 
 
+# Real lines from GitHub Actions logs (2026-11-08) that the classifier got wrong.
+DTOLNAY_STEP = "2026-11-08T05:34:12.6Z ##[start-action display=Work around spurious network errors in curl 8.0;id=x]"
+REAL = {
+    "clippy_regression": DTOLNAY_STEP + "\n  RATCHET VIOLATION: kernel@mcserve: clippy::needless_range_loop 12 -> 18 (+6)",
+    "clippy_regression#base": DTOLNAY_STEP + "\n  RATCHET VIOLATION (new vs base): hal@netsvc: clippy::needless_range_loop 1 -> 2 (+1)",
+    "unknown": DTOLNAY_STEP + "\nsomething nobody has seen before\nexit 1",
+    "infra_transient": "warning: spurious network error (2 tries remaining): [6] Could not resolve host: x",
+}
+
+
+class RealLogLines(unittest.TestCase):
+    def test_real_ci_lines(self):
+        for cat, text in REAL.items():
+            with self.subTest(cat=cat):
+                self.assertEqual(classify.classify_text(text)["category"], cat.split("#")[0])
+
+
 class Classifier(unittest.TestCase):
     def test_every_category_is_recognised(self):
         for cat, text in LOGS.items():
