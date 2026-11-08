@@ -1475,6 +1475,10 @@ class APIHandler(BaseHTTPRequestHandler):
         if not origin:
             return True  # Same-origin requests have no Origin header
 
+        # Reject CR/LF (header injection / response splitting)
+        if '\r' in origin or '\n' in origin:
+            return False
+
         try:
             parsed = urlparse(origin)
             hostname = parsed.hostname
