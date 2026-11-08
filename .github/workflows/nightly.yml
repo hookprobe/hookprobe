@@ -152,7 +152,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with: { pattern: nightly-*, path: in }
       - run: |
           for r in in/*/gate-results.json; do
