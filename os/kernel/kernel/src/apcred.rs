@@ -55,6 +55,19 @@ pub fn derive(srk: &[u8; 32]) -> Option<Cred> {
     Some(c)
 }
 
+/// Per-device Wi-Fi MAC: `HKDF(SRK, "HQ-WIFI-MAC")`, locally administered + unicast (02-bit set, 01-bit
+/// clear). None for a shared/synthetic key (then the radio keeps its existing fallback).
+pub fn wifi_mac(srk: &[u8; 32]) -> Option<[u8; 6]> {
+    if is_shared_key(srk) {
+        return None;
+    }
+    let prk = boot_abi::kdf::hkdf_extract(b"HQ-WIFI-MAC", srk);
+    let k = boot_abi::kdf::hkdf_expand32(&prk, b"v1");
+    let mut m = [k[0], k[1], k[2], k[3], k[4], k[5]];
+    m[0] = (m[0] | 0x02) & !0x01;
+    Some(m)
+}
+
 /// The standard Wi-Fi QR payload (`WIFI:T:WPA;S:...;P:...;;`) for the label / Mission Control.
 /// Our SSID and passphrase alphabets need no escaping.
 pub fn qr_payload<'a>(c: &Cred, out: &'a mut [u8; 64]) -> &'a str {
@@ -89,10 +102,14 @@ pub fn selftest() -> bool {
         let q = qr_payload(c, &mut qb);
         q.starts_with("WIFI:T:WPA;S:HookProbe-Setup-") && q.ends_with(";;") && q.contains(c.psk_str())
     });
-    let pass = stable && distinct && valid && shared_refused && qr_ok;
+    let mac_ok = match (wifi_mac(&k1), wifi_mac(&k1), wifi_mac(&k2)) {
+        (Some(m1), Some(m1b), Some(m2)) => m1 == m1b && m1 != m2 && m1[0] & 0x03 == 0x02 && m2[0] & 0x03 == 0x02,
+        _ => false,
+    } && wifi_mac(&[0x5a; 32]).is_none();
+    let pass = stable && distinct && valid && shared_refused && qr_ok && mac_ok;
     arch_aarch64::_print(format_args!(
-        " [P-apcred] {} — G12 setup-AP credential: derived per device from the SRK (stable={} distinct across devices={} valid WPA2 passphrase, 80 bits={} shared/synthetic key refused={} QR payload={})\n",
-        if pass { "PASS" } else { "FAIL" }, stable, distinct, valid, shared_refused, qr_ok
+        " [P-apcred] {} — G12 setup-AP credential: derived per device from the SRK (stable={} distinct across devices={} valid WPA2 passphrase, 80 bits={} shared/synthetic key refused={} QR payload={} | per-device Wi-Fi MAC (local, unicast, stable, distinct)={})\n",
+        if pass { "PASS" } else { "FAIL" }, stable, distinct, valid, shared_refused, qr_ok, mac_ok
     ));
     pass
 }
