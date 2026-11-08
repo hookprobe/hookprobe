@@ -79,7 +79,7 @@ jobs:
       - name: Install qemu-system-aarch64
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk   # mkfs.vfat/mcopy/sfdisk: validate.sh P15 OTA + A/B phases build a real FAT32 image
 
       - name: heqk validate.sh (build + QEMU boot + phase-gate report)
         run: ./validate.sh
