@@ -108,6 +108,17 @@ class HealC1(unittest.TestCase):
         self.assertIn("tamper_detected", src)
 
 
+class ClippyBaseIsolation(unittest.TestCase):
+    def test_base_never_shares_the_head_target_dir(self):
+        # CI 2026-11-08: a shared target dir made cargo REPLAY the head's cached diagnostics for the
+        # base (path-crates hash relative to the workspace root; git-archive mtimes look fresh), so
+        # every base-vs-head comparison read equal and the ratchet could never fail.
+        with open(os.path.join(CI, "clippy_ratchet.py")) as f:
+            src = f.read()
+        self.assertIn('run_clippy(bdir, fsets, os.path.join(tr, "base"))', src)
+        self.assertNotIn("run_clippy(bdir, fsets, tr)", src)
+
+
 class TriageM2L1(unittest.TestCase):
     SHA = "a" * 40
 

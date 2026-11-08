@@ -104,7 +104,8 @@ for s in $SCEN; do
       # a leaked secret, and a signature whose attempt budget is already spent.
       T="$D/triage"; mkdir -p "$T/logs" "$T/heal"
       echo "error: failed to download from https://static.crates.io/x — Could not resolve host: static.crates.io" > "$T/logs/g0.log"
-      echo "::error::SECRET TRIPWIRE [AWS access key] matched: ./cfg:1:AKIAXXXXXXXXXXXXXXXX" > "$T/logs/secrets.log"
+      # built at runtime: a literal key-shaped string would (rightly) trip the repo's own secrets tripwire
+      printf '::error::SECRET TRIPWIRE [AWS access key] matched: ./cfg:1:%s%s\n' AKIA XXXXXXXXXXXXXXXX > "$T/logs/secrets.log"
       echo "test result: FAILED. 3 passed; 1 failed" > "$T/logs/g1.log"
       python3 -I - "$T" <<'PY'
 import json, sys, os
