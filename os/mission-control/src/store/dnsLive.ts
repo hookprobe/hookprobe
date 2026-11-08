@@ -56,7 +56,7 @@ export const VERDICT_LABEL: Record<string, string> = {
   allowed: 'allowed', floor: 'always allowed', 'allow-rule': 'allowed by rule', blocked: 'blocked',
   'blocked-cname': 'blocked (hidden tracker)', ddr: 'encrypted-DNS discovery answered', canary: 'browser DoH switched off',
   'relay-seen': 'Private Relay in use', 'relay-blocked': 'Private Relay blocked', 'doh-seen': 'DoH resolver in use',
-  'doh-blocked': 'DoH resolver blocked', 'dot-refused': 'DNS-over-TLS refused', 'tcp53-refused': 'blocked (DNS over TCP)',
+  'doh-blocked': 'DoH resolver blocked', 'dot-refused': 'DNS-over-TLS refused', 'tcp53-refused': 'blocked (DNS over TCP)', paused: 'allowed (Shield paused for this device)',
 };
 
 export const QTYPE: Record<number, string> = { 1: 'A', 28: 'AAAA', 5: 'CNAME', 12: 'PTR', 15: 'MX', 16: 'TXT', 33: 'SRV', 64: 'SVCB', 65: 'HTTPS', 0: '—' };

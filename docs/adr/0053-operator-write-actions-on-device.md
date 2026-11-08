@@ -57,6 +57,6 @@ Requires: CSRF token plumbing in `http.rs`/`mcauth.rs`, a typed action table, th
 | S7 | A temporary exception never silently becomes permanent | no action kind writes a file or changes WAN / firewall / trust; there is no "make permanent" path; no kind disables enforcement |
 | S8 | (ADR 0023) the management path always passes | `hold_ip` on an address inside the management floor is refused at submit and ignored by the hook (`[P-actions]` sub-check) |
 
-Kinds built: `ack`, `hold_ip` (TTL), `isolate` (TTL, re-auth → quarantine policy, DHCP/DNS still work), `shield_allow`
+Kinds built: `ack`, `hold_ip` (TTL), `isolate` (TTL, re-auth → quarantine policy, DHCP/DNS still work), `shield_pause` (G22: ≤ 1 h kernel-enforced, re-auth, lifts only the blocklists for one client — logged as `paused`), `shield_allow`
 (TTL, re-auth, never overrides DDR/canary/relay/DoH controls). UI: Investigate (Acknowledge, Hold source 1 h),
 Shield (Hold 1 h per client, Allow 1 h per blocked name, active actions with "End now", audit log).

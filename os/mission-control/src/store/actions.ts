@@ -28,7 +28,7 @@ async function post(path: string, fields: Record<string, string>): Promise<{ ok:
 }
 
 /** Run one action. `ownerKey` is required for isolate / shield_allow (re-authentication). */
-export function runAction(kind: 'ack' | 'hold_ip' | 'isolate' | 'shield_allow', target: string, ttlS: number, reason: string, ownerKey?: string) {
+export function runAction(kind: 'ack' | 'hold_ip' | 'isolate' | 'shield_allow' | 'shield_pause', target: string, ttlS: number, reason: string, ownerKey?: string) {
   const f: Record<string, string> = { kind, target, ttl: String(ttlS), reason };
   if (ownerKey) f.owner_key = ownerKey;
   return post('/api/actions', f);
@@ -39,11 +39,11 @@ export function revokeAction(id: number) {
 }
 
 /** Ask for a reason (and the owner key when needed), then run. Returns a message for the UI. */
-export async function promptAndRun(kind: 'ack' | 'hold_ip' | 'isolate' | 'shield_allow', target: string, ttlS: number): Promise<string> {
+export async function promptAndRun(kind: 'ack' | 'hold_ip' | 'isolate' | 'shield_allow' | 'shield_pause', target: string, ttlS: number): Promise<string> {
   const reason = window.prompt(`Reason for ${kind.replace('_', ' ')} on ${target} (recorded in the audit log):`, '');
   if (!reason || reason.trim().length < 3) return 'Cancelled — a reason is required.';
   let key: string | undefined;
-  if (kind === 'isolate' || kind === 'shield_allow') {
+  if (kind === 'isolate' || kind === 'shield_allow' || kind === 'shield_pause') {
     key = window.prompt('This action needs your owner key again:', '') ?? undefined;
     if (!key) return 'Cancelled — owner key required.';
   }

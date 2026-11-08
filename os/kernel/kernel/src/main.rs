@@ -4219,10 +4219,15 @@ fn cm5_p10_probe() {
                                         let w6 = unsafe { uplink::WAN6 };
                                         if let Some((pd, plen, valid)) = w6.pd {
                                             if up.usable() && (!v6.up || v6.prefix[..8] != pd[..8]) {
+                                                // G17.2: the LAN MTU follows the WAN — 1492 inside PPPoE, else the router's RA MTU
+                                                // (bounded 1280..1500) or 1500.
+                                                v6.mtu = if up.mode == 2 { arch_aarch64::ip6lan::LAN_MTU } else {
+                                                    match w6.ra.map(|r| r.mtu) { Some(m) if (1280..=1500).contains(&m) => m, _ => 1500 }
+                                                };
                                                 v6.configure(&pd, plen, valid, &ap.bssid, None); // ADR 0052 D1: no RDNSS to the ISP resolver — clients resolve via the AP (Shield)
                                                 let g = |k: usize| u16::from_be_bytes([v6.gua[2 * k], v6.gua[2 * k + 1]]);
                                                 kprint!(" [V6LAN] LAN numbered from {:x?}/{}: router {:x}:{:x}:{:x}:{:x}::1/64 — RA (SLAAC, MTU {}, RDNSS={}) on the AP, stateful firewall default-deny inbound\n",
-                                                    &pd[..8], plen, g(0), g(1), g(2), g(3), arch_aarch64::ip6lan::LAN_MTU, v6.has_dns);
+                                                    &pd[..8], plen, g(0), g(1), g(2), g(3), v6.mtu, v6.has_dns);
                                             }
                                         } else if v6.up && !up.usable() {
                                             v6.up = false;
