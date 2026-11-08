@@ -25,6 +25,7 @@ import {
 } from 'solid-js';
 import TopBar from './TopBar';
 import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive } from '../store/dnsLive';
+import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
 import CommandPalette from './CommandPalette';
 import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
 import {
@@ -163,6 +164,8 @@ const isBlock = (v: string) => v === 'blocked' || v === 'blocked-cname' || v ===
 const isBypass = (v: string) => ['ddr', 'canary', 'relay-seen', 'relay-blocked', 'doh-seen', 'doh-blocked', 'dot-refused'].includes(v);
 
 const ShieldLive: Component<{ d: DnsLive }> = (props) => {
+  const [msg, setMsg] = createSignal('');
+  onMount(() => { void refreshActions(); });
   const c = () => props.d.counters;
   const queries = () => Object.entries(c()).filter(([k]) => k !== 'unparsable').reduce((s, [, v]) => s + v, 0);
   const blocked = () => (c()['blocked'] ?? 0) + (c()['blocked-cname'] ?? 0) + (c()['tcp53-refused'] ?? 0);
@@ -222,6 +225,8 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
                   <li class="shield-list-row">
                     <span class="shield-domain">{x.ip}</span>
                     <span>{x.queries.toLocaleString()} queries · {x.blocked.toLocaleString()} blocked{x.bypass > 0 ? ` · ${x.bypass} bypass signals` : ''}</span>
+                    <button class="shield-remove" title="Hold all traffic of this address for 1 hour (expires on its own)"
+                      onClick={async () => setMsg(await promptAndRun('hold_ip', x.ip, 3600))}>Hold 1 h</button>
                   </li>
                 )}
               </For>
@@ -238,8 +243,36 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
                 <li class={`shield-list-row${isBlock(r.verdict) ? ' shield-cat-row--threat' : ''}`}>
                   <span class="shield-domain">{r.name}</span>
                   <span>{QTYPE[r.qtype] ?? r.qtype} · {r.client} · {time(r.ts)} · {isBlock(r.verdict) || isBypass(r.verdict) ? <strong>{VERDICT_LABEL[r.verdict] ?? r.verdict}</strong> : (VERDICT_LABEL[r.verdict] ?? r.verdict)}</span>
+                  <Show when={r.verdict === 'blocked' || r.verdict === 'blocked-cname'}>
+                    <button class="shield-remove" title="Let this name through for 1 hour (owner key required)"
+                      onClick={async () => setMsg(await promptAndRun('shield_allow', r.name, 3600))}>Allow 1 h</button>
+                  </Show>
                 </li>
               )}
+            </For>
+          </ul>
+        </Show>
+      </TermPanel>
+
+      <Show when={msg()}><div class="shield-scope-note" role="status">{msg()}</div></Show>
+      <TermPanel ctx="actions">
+        <Show when={(actionsView()?.active.length ?? 0) > 0} fallback={<div class="shield-empty">No temporary actions in force. Every action expires on its own; a reboot clears them all.</div>}>
+          <ul class="shield-list">
+            <For each={actionsView()!.active}>
+              {(a) => (
+                <li class="shield-list-row">
+                  <span class="shield-domain">{a.kind.replace('_', ' ')} · {a.target}</span>
+                  <span>{a.expires_in_s ? `${Math.ceil(a.expires_in_s / 60)} min left` : 'acknowledged'}</span>
+                  <button class="shield-remove" onClick={async () => { await revokeAction(a.id); }}>End now</button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+        <Show when={(actionsView()?.audit.length ?? 0) > 0}>
+          <ul class="shield-list" aria-label="Audit log, newest first">
+            <For each={actionsView()!.audit.slice(0, 15)}>
+              {(x) => <li class="shield-list-row"><span>{x.kind.replace('_', ' ')} · {x.target}</span><span>{x.ok ? 'accepted' : `refused: ${x.result}`} · "{x.reason}" · session {x.session}</span></li>}
             </For>
           </ul>
         </Show>

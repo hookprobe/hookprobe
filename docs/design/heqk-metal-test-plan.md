@@ -77,6 +77,21 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | G3 | Client isolation (G10): AP start line | `client isolation (ap_isolate) ON`; phone A cannot ping phone B directly (only through heqk, visible to the IDS) | serial + ping |
 | G4 | Sign out (G28) from the top bar | back to /login; the old cookie gets 401; another signed-in device stays signed in | browser |
 
+## H. Operator actions (G14, ADR 0053)
+
+| ID | Test | Expected | Evidence |
+|---|---|---|---|
+| H1 | Shield → DNS clients → "Hold 1 h" on a test client (reason entered) | that client's traffic stops (WAN + LAN); the Actions panel lists it with a countdown; audit row shows session, kind, target, reason | phone browsing + UI |
+| H2 | "End now" on the hold | traffic resumes at once; audit shows the revoke | phone + UI |
+| H3 | Hold with TTL 60 s (curl, see below), wait | expires by itself after ~60 s without any UI action | UI countdown + phone |
+| H4 | Hold active, power cycle the board | after boot no action is active (RAM-only, S2/S6) | UI |
+| H5 | Shield query log → "Allow 1 h" on a blocked name; owner key entered | the name now resolves; a wrong owner key is refused ("re-authentication failed") and audited | phone + UI |
+| H6 | Investigate → incident → "Acknowledge" | status "acknowledged"; no traffic change | UI |
+| H7 | curl replay of an accepted POST (same seq) | 409, audited as refused | curl |
+| H8 | curl POST with `Origin: https://evil.example` or no `X-HQ-CSRF` | 403, nothing applied | curl |
+| H9 | curl POST `ttl=999999` | 400 "ttl out of bounds" | curl |
+| H10 | Hold an address inside the management floor (e.g. the mgmt laptop) | refused "management floor" (audited); management access never interrupted | curl + browser |
+
 ## E. Platform (from earlier sessions, still open)
 
 | ID | Test | Expected |

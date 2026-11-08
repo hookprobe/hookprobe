@@ -105,7 +105,8 @@ pub fn label_of(mac: &[u8; 6], out: &mut [u8; 31]) -> usize {
 
 /// Check + count: does `mac`'s policy allow `d`?
 pub fn check(mac: &[u8; 6], d: Dest) -> bool {
-    let p = policy_of(mac);
+    // ADR 0053: a session-made, TTL-bound isolation puts the device in quarantine until it expires
+    let p = if crate::actions::isolated(mac) { Pol::Quarantine } else { policy_of(mac) };
     let ok = allows(p, d);
     if !ok {
         unsafe { DENIED[p as usize] += 1 };

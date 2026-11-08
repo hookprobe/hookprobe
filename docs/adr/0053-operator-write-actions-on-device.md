@@ -1,6 +1,6 @@
 # ADR 0053 — Operator write actions in on-device Mission Control (parity gap G14)
 
-**Status:** 🟡 Proposed (2026-11-08) — **needs an operator decision** (D1). Nothing is built until accepted.
+**Status:** 🟢 Accepted with modifications (operator, 2026-11-08) — built: `actions.rs`, `actionapi.rs`, `[P-actions]`, mc-e2e checks.
 **Related:** ADR 0037 D3 (owner auth), ADR 0049 D1 (operator-signed files), ADR 0051 (HTTPS), ADR 0023
 (enforcement separation), ADR 0052 (Shield). Parity source: V1 Fortress/Guardian web write routes.
 
@@ -43,3 +43,20 @@ so ("expires at … / until reboot").
 
 Closes V1 parity for day-to-day operations without making a stolen session able to change durable policy.
 Requires: CSRF token plumbing in `http.rs`/`mcauth.rs`, a typed action table, the audit ring, UI buttons.
+
+## Operator modifications (2026-11-08) and how they are met
+
+| # | Safeguard | Implementation |
+|---|---|---|
+| S1 | Maximum TTL enforced by the kernel, not the UI | `actions::MIN_TTL_S..MAX_TTL_S` (60 s..24 h); out-of-range is **refused**, not clamped |
+| S2 | Quarantine expires automatically, including after a reboot | actions live in RAM on the monotonic clock; a reboot clears them; nothing is persisted |
+| S3 | Authenticated, authorized, CSRF- and replay-protected | owner session + `Origin` must equal `Host` + per-session CSRF token (`X-HQ-CSRF`, derived from the session) + strictly increasing per-session `seq` |
+| S4 | Who, when, which device, why | audit ring: session tag, time, kind, target, TTL, mandatory reason, result — refusals included |
+| S5 | Re-authentication for high-impact operations | `isolate` and `shield_allow` require the owner key again (shared login throttle) |
+| S6 | Emergency recovery independent of Mission Control | power cycle clears every session action; signed files remain the authority |
+| S7 | A temporary exception never silently becomes permanent | no action kind writes a file or changes WAN / firewall / trust; there is no "make permanent" path; no kind disables enforcement |
+| S8 | (ADR 0023) the management path always passes | `hold_ip` on an address inside the management floor is refused at submit and ignored by the hook (`[P-actions]` sub-check) |
+
+Kinds built: `ack`, `hold_ip` (TTL), `isolate` (TTL, re-auth → quarantine policy, DHCP/DNS still work), `shield_allow`
+(TTL, re-auth, never overrides DDR/canary/relay/DoH controls). UI: Investigate (Acknowledge, Hold source 1 h),
+Shield (Hold 1 h per client, Allow 1 h per blocked name, active actions with "End now", audit log).
