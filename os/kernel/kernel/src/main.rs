@@ -58,6 +58,7 @@ mod idsbench;
 mod ja4;
 mod fpdb;
 mod devid;
+mod discovery;
 #[cfg(feature = "netsvc")]
 mod actionapi;
 // Parity G16: WAN health with hysteresis.
@@ -3804,6 +3805,7 @@ fn cm5_p10_probe() {
                                     let client_dns = our_ip;
                                     let frame = &rx[off..off + len];
                                     let act = cyw43::ap_handle_data(frame, &ap.bssid, &our_ip, &pool_base, &client_dns, &mut dh);
+                                    discovery::observe(frame); // D2: what the device announces (mDNS / SSDP), passive
                                     // The Mission Control node (smoltcp) learns a client's MAC ONLY from ARP (smoltcp 0.13
                                     // `process_arp`); the AP answers ARP for its address itself, so hand those ARP frames
                                     // (requests for us + replies to us) to the node too — metal 2026-11-07: without this the
@@ -3989,6 +3991,7 @@ fn cm5_p10_probe() {
                                                 let client_dns = our_ip; // the AP/LAN gateway resolves (forwarded upstream)
                                                 let lan_mac = uplink::ETH1_MAC;
                                                 let (act, m) = cyw43::ap_handle_data_into(&ebuf[..n], &lan_mac, &our_ip, &pool_base, &client_dns, &mut dh, &mut erep);
+                                                discovery::observe(&ebuf[..n]); // D2 on the wired LAN too
                                                 if m > 0 {
                                                     if arch_aarch64::rtl8111::tx_frame(&erep[..m]) {
                                                         lan_served += 1;
@@ -6447,6 +6450,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = behavioral::brute_selftest();
         let _ = ja4::selftest();
         let _ = devid::selftest();
+        let _ = discovery::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();

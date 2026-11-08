@@ -68,10 +68,11 @@ const NetworkLive: Component = () => {
                   <For each={grouped().get(g.key) ?? []}>
                     {(d) => (
                       <li class="shield-list-row">
-                        <span class="shield-domain">{d.label || d.hostname || d.model || d.ip}</span>
+                        <span class="shield-domain">{d.label || d.mdns_name || d.hostname || d.mdns_model || d.model || d.ip}</span>
                         <span>
                           {d.ip}{d.mac ? ` · ${d.mac}` : ''}{d.private_mac ? ' (private address)' : ''}{d.os ? ` · ${d.os}` : ''}
-                          {d.model || d.vendor || d.category ? ` · ${[d.model, d.vendor, d.category].filter(Boolean).join(' · ')}` : ''}
+                          {d.mdns_model || d.model || d.vendor || d.category ? ` · ${[d.mdns_model || d.model, d.vendor, d.category].filter(Boolean).join(' · ')}` : ''}
+                          {d.ssdp_server ? ` · ${d.ssdp_server}` : ''}
                           {d.confidence ? ` (${d.confidence}% via ${d.id_source})` : ''}
                           {twins(d) ? ` · same device as ${twins(d)} (private address rotated)` : ''}
                           {' · last seen '}{formatTime(d.last_seen)}{d.active === false ? ' · lease expired' : ''}

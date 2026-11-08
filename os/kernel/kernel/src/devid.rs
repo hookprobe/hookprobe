@@ -136,7 +136,20 @@ pub fn classify(mac: &[u8; 6], host: &[u8], vendor_class: &[u8], prl: &[u8]) -> 
         fnv(&mut h, mac);
         (h, "none")
     };
-    let mk = |f: fpdb::Fp, src: &'static str| Ident { model: f.0, vendor: f.1, category: f.2, os: f.3, confidence: f.4, source: src, identity, identity_basis: basis };
+    // D2: what the device announced (mDNS / SSDP) — an mDNS name is the strongest identity across private-MAC
+    // rotations (legacy rule 2); an advertised model names the product better than any DHCP fingerprint.
+    let disc = crate::discovery::lookup(mac);
+    let (identity, basis) = match &disc {
+        Some(d) if d.nl > 0 => {
+            let mut h = 0xcbf2_9ce4_8422_2325u64;
+            fnv(&mut h, b"mdns|");
+            fnv(&mut h, &d.name[..d.nl as usize]);
+            (h, "high")
+        }
+        _ => (identity, basis),
+    };
+    let disc_cat = disc.map_or("", |d| crate::discovery::category(d.services));
+    let mk = |f: fpdb::Fp, src: &'static str| Ident { model: f.0, vendor: f.1, category: if f.2.is_empty() { disc_cat } else { f.2 }, os: f.3, confidence: f.4, source: src, identity, identity_basis: basis };
     // 0. vendor class (option 60): explicit, highest priority
     let osg = arch_aarch64::dhcpd::os_guess(vendor_class, prl);
     if !vendor_class.is_empty() && !osg.is_empty() && (vendor_class.starts_with(b"MSFT") || vendor_class.starts_with(b"android-dhcp")) {
