@@ -820,6 +820,30 @@ pub fn rx_init() -> (usize, u16, u32) {
     (ring, auxstat, link_status())
 }
 
+/// Re-sync the MAC to the PHY's negotiated speed after a link change (Linux phylib does this on every
+/// link-up). `rx_init` chose the speed once at boot: with no cable then, the PHY reported nothing, the MAC
+/// stayed in 100M mode, and a cable plugged later at 1G received NOTHING (metal 2026-11-08: plug-after-boot
+/// left the WAN and the management VLAN dead until a power-cycle). Returns Some(is_gig) when the link is up
+/// (and whether anything changed), None when there is no link.
+pub fn sync_speed() -> Option<(bool, bool)> {
+    if !phy_link_up(0) {
+        return None;
+    }
+    let auxstat = phy_read(0, 0x19);
+    let is_gig = ((auxstat >> 8) & 0x7) >= 6;
+    let clkgen = r(ETH_CFG, 0x14);
+    let spd_ovr = if is_gig { 2 } else { 1 };
+    let want_clk = (clkgen & !0x3) | (1 << 3) | spd_ovr;
+    let ncfgr = r(GEM, NCFGR);
+    let want_ncfgr = if is_gig { ncfgr | NCFGR_GBE } else { ncfgr & !NCFGR_GBE };
+    let changed = want_clk != clkgen || want_ncfgr != ncfgr;
+    if changed {
+        w(ETH_CFG, 0x14, want_clk);
+        w(GEM, NCFGR, want_ncfgr);
+    }
+    Some((is_gig, changed))
+}
+
 /// Poll the RX ring once. Returns Some((len, w0, w1, w2, w3)) with the raw
 /// descriptor words for diagnosis, and fills `out` with the frame. None = none.
 pub fn poll_rx(out: &mut [u8]) -> Option<(usize, u32, u32, u32, u32)> {
