@@ -35,11 +35,11 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 | G15 | Local SIEM export (RFC 5424 syslog / OCSF JSON) — beats both legacy tiers | M | **closed** (batch 4) [P-siem] |
 | G12 | Converge AP + prod-full into one shippable image | L | **accepted** (register 2026-11-08) — ADR 0054: per-device setup credential + MAC (`bed9c46e`, `d784ab2e`), MC on the management VLAN (G12-M); metal I1/I3/I6/I8/I9 PASS. Remaining: MC QR panel, setup→client hand-off UI |
 | G16 | WAN health probes (ICMP/DNS) with hysteresis | M | **closed** (batch 4) [P-wanhealth] |
-| G17 | IPv6 (RS + DHCPv6-PD) on DHCP/static WAN, not only PPPoE | M | **stage 1 done + metal** (`451c64ea`): RS/RA, DHCPv6-PD, WAN ND/echo responder on an Ethernet WAN — PD /60 from the bench kea, LAN numbered, ping6 to the WAN link-local (`metal-evidence/20261108-g17-wan6-ethernet.md`). G17.2 LAN MTU from the WAN type (in test). Next: G17.3 IPv6 firewall parity + adversarial tests, G17.4 renewal on metal |
+| G17 | IPv6 (RS + DHCPv6-PD) on DHCP/static WAN, not only PPPoE | M | **done + metal** — G17.1 RS/RA/PD/ND (`451c64ea`), G17.2 LAN MTU follows the WAN, G17.3 inbound default-deny attacked from the WAN (no answer, counted, hop-1 dropped), G17.4 PD renewed at T1 (`9247fc4e`); evidence in `metal-evidence/20261108-g17-*`, `…-g22-g17-2-g17-4.md` |
 | G24a/G18 | ADR 0049 D2 IPv6 source identity → IPv6 scan/behaviour/IOC detection | M/L | open |
 | G13e | Deterministic incident reports | M | **closed** `fb417999` (deterministic reports) |
 | G20 | Signed WIFI.TXT (SSID, PSK, channel, guest) instead of build-time env | S | **closed** (batch 4) [P-wificfg] — AP builds without a build-time PSK |
-| G22 | Shield per-client profiles, pause, list refresh | M | **pause built** — `shield_pause` ADR 0053 action (≤ 1 h kernel-enforced, owner re-auth, blocklists only — floor + bypass controls stay), `Paused` verdict, UI button (in test). Profiles + list refresh: next |
+| G22 | Shield per-client profiles, pause, list refresh | M | **pause done + metal** (`9247fc4e`, H11a–c). Open: per-client profiles (signed DEVICES/BLOCK extension) and list refresh without re-flash |
 | G24b | ADR 0050 D4 EL0 steps 1-4 (HTTP, DHCP/DNS, PPPoE/DHCP clients, Noise) | L each | open |
 | G24c, G28 | crypto audit / libcrux ML-KEM; logout / session list / owner-key rotation | M / S | G28 logout **closed** (batch 5); key rotation needs G14; G24c **decision** |
 | G19 | HTP/SASE tunnel over the Noise channel | L | open |
