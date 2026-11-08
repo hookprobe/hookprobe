@@ -45,9 +45,9 @@ jobs:
         with: { tool: cargo-deny }
       - id: syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c   # v0.24.3
-        continue-on-error: true   # GitHub release CDN 5xx (2026-11-08) — one retry below
-      - if: steps.syft.outcome == 'failure'
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c   # v0.24.3
+        continue-on-error: true   # GitHub release CDN 5xx (2026-11-08) — container fallback below
+      - if: steps.syft.outcome == 'failure'   # release CDN down → digest-pinned container image
+        run: tools/ci/syft-fallback.sh
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1   # v7.1.0
         with: { node-version: "24" }
       - run: tools/ci/gates.sh g0 g1 g4 g4r
@@ -78,9 +78,9 @@ jobs:
         with: { node-version: "24" }
       - id: syft
         uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c   # v0.24.3
-        continue-on-error: true   # GitHub release CDN 5xx (2026-11-08) — one retry below
-      - if: steps.syft.outcome == 'failure'
-        uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c   # v0.24.3
+        continue-on-error: true   # GitHub release CDN 5xx (2026-11-08) — container fallback below
+      - if: steps.syft.outcome == 'failure'   # release CDN down → digest-pinned container image
+        run: tools/ci/syft-fallback.sh
       - name: Build the shipped CM5 profile (prod-mc)
         run: |
           tools/ci/stage-firmware.sh     # pinned + sha256-verified CYW43455 firmware (gitignored blobs)
