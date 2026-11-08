@@ -50,9 +50,10 @@ Fixed in this change set; per-alert outcome in `code-scanning-triage-2026-11-08-
 At 05:53–05:54 on 2026-11-08 all 328 alerts were bulk-dismissed in the GitHub UI as "used in tests".
 That label is accurate for only a minority; **this file and the `-v1.json` are the authoritative
 per-alert record**. In particular the 44 V1 alerts marked `fixed` were real vulnerabilities and are
-fixed in code by this change set (dismissal does not remove a bug). Two `needs_human` items remain:
-#975/#976 — third-party CDN scripts in `fortress/web/templates/base.html` load without SRI
-(`integrity=`); add hashes or vendor the files locally.
+fixed in code by this change set (dismissal does not remove a bug), as are #975/#976: all 10
+version-pinned CDN assets in `fortress/web/templates/base.html` now carry SRI `integrity=sha384`
+(jQuery 3.6.0 and Bootstrap 4.6.0 hashes cross-checked against their published values). Total:
+46 real defects fixed.
 
 ## How to re-check
 `gh api "repos/hookprobe/hookprobe/code-scanning/alerts?state=open&per_page=100" --paginate`
