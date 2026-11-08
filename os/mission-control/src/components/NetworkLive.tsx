@@ -35,6 +35,11 @@ const NetworkLive: Component = () => {
     return m;
   });
   const active = createMemo(() => devices().filter((d) => d.active !== false).length);
+  /** Other entries with the same high-confidence identity: one device seen under rotating private MACs. */
+  const twins = (d: DeviceRow): string => {
+    if (!d.identity || d.identity_basis !== 'high') return '';
+    return devices().filter((o) => o !== d && o.identity === d.identity).map((o) => o.ip).join(', ');
+  };
   return (
     <>
       <TopBar onOpenCopilot={() => setCopilotOpen(true)} />
@@ -63,9 +68,12 @@ const NetworkLive: Component = () => {
                   <For each={grouped().get(g.key) ?? []}>
                     {(d) => (
                       <li class="shield-list-row">
-                        <span class="shield-domain">{d.label || d.hostname || d.ip}</span>
+                        <span class="shield-domain">{d.label || d.hostname || d.model || d.ip}</span>
                         <span>
                           {d.ip}{d.mac ? ` · ${d.mac}` : ''}{d.private_mac ? ' (private address)' : ''}{d.os ? ` · ${d.os}` : ''}
+                          {d.model || d.vendor || d.category ? ` · ${[d.model, d.vendor, d.category].filter(Boolean).join(' · ')}` : ''}
+                          {d.confidence ? ` (${d.confidence}% via ${d.id_source})` : ''}
+                          {twins(d) ? ` · same device as ${twins(d)} (private address rotated)` : ''}
                           {' · last seen '}{formatTime(d.last_seen)}{d.active === false ? ' · lease expired' : ''}
                         </span>
                         <Show when={d.mac && g.key !== 'quarantine'}>
