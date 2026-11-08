@@ -151,6 +151,14 @@ export interface DeviceRow {
   source?: string;
   policy?: string;
   label?: string | null;
+  /** discovery D1: identification + the key that links private-MAC rotations */
+  model?: string | null;
+  vendor?: string | null;
+  category?: string | null;
+  confidence?: number;
+  id_source?: string;
+  identity?: string;
+  identity_basis?: 'high' | 'low' | 'none';
 }
 export interface DevicesResponse {
   count: number;

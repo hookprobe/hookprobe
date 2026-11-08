@@ -403,13 +403,20 @@ impl McState {
             } else {
                 out.raw("null");
             }
-            let os = os_guess(&l.vendor[..l.vlen as usize], &l.prl[..l.plen as usize]);
-            out.raw(",\"os\":");
-            if os.is_empty() {
-                out.raw("null");
-            } else {
-                out.string(os);
-            }
+            // Discovery D1 (legacy Fingerbank parity): model / vendor / category / OS with its source and
+            // confidence, and an identity key that links a device across private-MAC rotations.
+            let id = crate::devid::classify(&l.mac, &l.host[..l.hlen as usize], &l.vendor[..l.vlen as usize], &l.prl[..l.plen as usize]);
+            let os = if id.os.is_empty() { os_guess(&l.vendor[..l.vlen as usize], &l.prl[..l.plen as usize]) } else { id.os };
+            let opt = |out: &mut JsonBuf, k: &str, v: &str| {
+                let _ = write!(out, ",\"{}\":", k);
+                if v.is_empty() { out.raw("null") } else { out.string(v) }
+            };
+            opt(out, "os", os);
+            opt(out, "model", id.model);
+            opt(out, "vendor", id.vendor);
+            opt(out, "category", id.category);
+            let _ = write!(out, ",\"confidence\":{},\"id_source\":\"{}\",\"identity\":\"{:016x}\",\"identity_basis\":\"{}\"",
+                id.confidence, id.source, id.identity, id.identity_basis);
             let pol = crate::devpolicy::policy_of(&l.mac);
             let mut lb = [0u8; 31];
             let ll = crate::devpolicy::label_of(&l.mac, &mut lb);
