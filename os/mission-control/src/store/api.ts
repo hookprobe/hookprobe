@@ -143,6 +143,14 @@ export interface DeviceRow {
   mac: string | null;
   first_seen: number;
   last_seen: number;
+  /** AP/LAN images (DHCP leases): name, OS guess, policy from the signed DEVICES.TXT. */
+  hostname?: string | null;
+  os?: string | null;
+  private_mac?: boolean;
+  active?: boolean;
+  source?: string;
+  policy?: string;
+  label?: string | null;
 }
 export interface DevicesResponse {
   count: number;
