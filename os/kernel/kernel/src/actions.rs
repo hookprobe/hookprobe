@@ -89,7 +89,8 @@ struct Store {
     now_ms: u64,
 }
 
-static mut STORE: Store = Store { e: [EMPTY; SLOTS], next_id: 1, now_ms: 0 };
+// All-zero initializer on purpose: the store lives in .bss and costs no image bytes.
+static mut STORE: Store = Store { e: [EMPTY; SLOTS], next_id: 0, now_ms: 0 };
 
 fn store() -> &'static mut Store {
     unsafe { &mut *core::ptr::addr_of_mut!(STORE) }
@@ -115,8 +116,8 @@ pub fn add(kind: Kind, target: Target, ttl_s: u64) -> Option<u32> {
     let s = store();
     let now = s.now_ms;
     let slot = s.e.iter().position(|e| !active(e, now))?;
-    let id = s.next_id;
     s.next_id = s.next_id.wrapping_add(1).max(1);
+    let id = s.next_id;
     let expires_ms = if kind.has_ttl() { now + clamp_ttl(ttl_s) * 1000 } else { 0 };
     s.e[slot] = Entry { id, kind, target, created_ms: now, expires_ms, live: true };
     Some(id)
@@ -175,7 +176,7 @@ pub fn for_each(f: &mut dyn FnMut(&Entry, u64)) {
 pub fn reset() {
     let s = store();
     s.e = [EMPTY; SLOTS];
-    s.next_id = 1;
+    s.next_id = 0;
 }
 
 // ---- audit log: every attempt, accepted or refused ----
@@ -188,14 +189,14 @@ pub struct Audit {
     pub target: Target,
     pub ttl_s: u64,
     pub ok: bool,
-    /// why it was refused ("" when accepted)
-    pub refusal: &'static str,
+    /// why it was refused (None when accepted). An Option so the static log is all-zero (.bss, not image bytes).
+    pub refusal: Option<&'static str>,
     pub reason: [u8; 64],
     pub rlen: u8,
 }
 
 const LOG: usize = 128;
-const A0: Audit = Audit { ms: 0, session: [0; 4], kind: Kind::Ack, target: Target::Incident(0), ttl_s: 0, ok: false, refusal: "", reason: [0; 64], rlen: 0 };
+const A0: Audit = Audit { ms: 0, session: [0; 4], kind: Kind::Ack, target: Target::Incident(0), ttl_s: 0, ok: false, refusal: None, reason: [0; 64], rlen: 0 };
 
 struct Log {
     e: [Audit; LOG],
@@ -208,7 +209,7 @@ static mut AUDIT_LOG: Log = Log { e: [A0; LOG], head: 0, len: 0 };
 /// Record one attempt. `reason` is the operator's text (printable ASCII kept, ≤ 64 bytes).
 pub fn audit(session: [u8; 4], kind: Kind, target: Target, ttl_s: u64, ok: bool, refusal: &'static str, reason: &[u8]) {
     let l = unsafe { &mut *core::ptr::addr_of_mut!(AUDIT_LOG) };
-    let mut a = Audit { ms: store().now_ms, session, kind, target, ttl_s, ok, refusal, reason: [0; 64], rlen: 0 };
+    let mut a = Audit { ms: store().now_ms, session, kind, target, ttl_s, ok, refusal: if ok { None } else { Some(refusal) }, reason: [0; 64], rlen: 0 };
     let mut n = 0;
     for &c in reason {
         if n >= a.reason.len() {
