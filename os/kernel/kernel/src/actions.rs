@@ -142,10 +142,36 @@ fn any(f: impl Fn(&Entry) -> bool) -> bool {
     s.e.iter().any(|e| active(e, now) && f(e))
 }
 
+// The management sub-interface's own subnet (set once it has an address). A session can never hold an
+// address on the management path — the compile-time / WAN.TXT floor alone does not cover it (metal
+// 2026-11-08: the floor was the 10.200.0.0/24 default while management ran on 192.168.200.0/24).
+static MGMT_NET: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// Record the management sub-interface subnet (`ip/prefix`); 0 prefix clears it.
+pub fn set_mgmt_net(ip: u32, prefix: u8) {
+    let v = if prefix == 0 { 0 } else { ((ip as u64) << 8) | prefix.min(32) as u64 };
+    MGMT_NET.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// Is this address on the management path (the floor, or the management sub-interface subnet)?
+pub fn on_mgmt_path(ip: u32) -> bool {
+    if crate::verdict::is_allowlisted(ip) {
+        return true;
+    }
+    let v = MGMT_NET.load(core::sync::atomic::Ordering::Relaxed);
+    let prefix = (v & 0xff) as u32;
+    if prefix == 0 {
+        return false;
+    }
+    let net = (v >> 8) as u32;
+    let mask = u32::MAX << (32 - prefix);
+    (ip & mask) == (net & mask)
+}
+
 /// Is traffic from/to this IPv4 address held right now?
 pub fn ip_held(ip: u32) -> bool {
     // Defence in depth: the management floor is never held, whatever is in the store.
-    ip != 0 && !crate::verdict::is_allowlisted(ip) && any(|e| e.kind == Kind::HoldIp && e.target == Target::Ip(ip))
+    ip != 0 && !on_mgmt_path(ip) && any(|e| e.kind == Kind::HoldIp && e.target == Target::Ip(ip))
 }
 
 /// Is this device isolated right now?
