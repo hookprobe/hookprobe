@@ -106,6 +106,12 @@ def stabilise_signature(d):
     return d
 
 
+def needs_issue(d, run):
+    """Pure: a transient failure (action 'rerun') files an issue only if it SURVIVED the rerun
+    (run_attempt > 1). On attempt 1 the rerun job retries it; an issue would just be noise (#889)."""
+    return d["action"] != "rerun" or int(run.get("run_attempt", 1) or 1) > 1
+
+
 def should_file_issues(run, default_branch):
     """Pure: file/annotate issues only for push/schedule/dispatch runs ON the default branch."""
     return run.get("head_branch") == default_branch and run.get("event") in ("push", "schedule", "workflow_dispatch")
@@ -163,6 +169,9 @@ def main() -> int:
            "--description", "Opened by the ADR 0052 heal loop")
         created = 0
         for d in sorted(decisions, key=lambda d: SEVERITY.index(d["category"]) if d["category"] in SEVERITY else 99):
+            if not needs_issue(d, run):
+                print(f"{d['signature']}: transient on attempt 1 — the rerun job handles it, no issue")
+                continue
             title = issue_title(d)
             # ALL states: closing the issue must not reset the attempt budget (security-auditor L2).
             hist = json.loads(gh("issue", "list", "--repo", a.repo, "--state", "all", "--label", "ci-autoheal",
