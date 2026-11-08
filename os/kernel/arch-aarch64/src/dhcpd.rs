@@ -69,6 +69,11 @@ impl ApDhcp {
         self.slot(mac).map(|i| self.leases[i].ip)
     }
 
+    /// The station holding a LIVE lease on `ip` (G10 LAN relay: proxy-ARP / station-to-station forwarding).
+    pub fn mac_for_ip(&self, ip: &[u8; 4]) -> Option<[u8; 6]> {
+        self.leases[..self.nleases].iter().find(|l| self.live(l) && l.ip == *ip).map(|l| l.mac)
+    }
+
     fn live(&self, l: &Lease) -> bool {
         l.used && (l.expires == 0 || self.now < l.expires.saturating_add(GRACE_SECS))
     }

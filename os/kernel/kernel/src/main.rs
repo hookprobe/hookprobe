@@ -59,6 +59,7 @@ mod ja4;
 mod fpdb;
 mod devid;
 mod oui;
+mod lanrelay;
 mod discovery;
 #[cfg(feature = "netsvc")]
 mod actionapi;
@@ -3828,6 +3829,14 @@ fn cm5_p10_probe() {
                                             dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
                                             dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.active(), dh.arp_replies);
+                                    } else if act == 0 && frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
+                                        // G10: an ARP request for ANOTHER station — answer for it (proxy-ARP) so the pair can
+                                        // talk THROUGH heqk (the firmware's ap_isolate keeps them from talking directly).
+                                        let mut ab = [0u8; 64];
+                                        let k = lanrelay::proxy_arp(frame, &dh, &mut ab);
+                                        if k > 0 {
+                                            let _ = wifi_send!(&ab[..k]);
+                                        }
                                     } else if act == 0 && frame.len() >= 54 && frame[12] == 0x86 && frame[13] == 0xdd && unsafe { V6.up } {
                                         // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
                                         // verdict and out the PPPoE session (no NAT; the module records the flow so the
@@ -3906,6 +3915,9 @@ fn cm5_p10_probe() {
                                             if let Some(n) = mcn.as_mut().filter(|_| mc_wifi) {
                                                 n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
                                             }
+                                        } else if lanrelay::relay_target(frame, &dh) {
+                                            // G10: station -> station, after the lease + IDS (incl. segmentation reach) gates
+                                            let _ = wifi_send!(frame);
                                         } else if fwd4!(frame, PIf::Lan, nat::IF_WIFI, wifi_send) && nst.out_fwd == 1 {
                                             kprint!(" [M-NAT1] first client frame forwarded out end0 (proto {})\n", nbuf[23]);
                                         }
@@ -6461,6 +6473,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = dga::selftest();
         let _ = ioc::selftest();
         let _ = oui::selftest();
+        let _ = lanrelay::selftest();
         let _ = rules::jit_call_selftest();
         let _ = behavioral::beacon_busy_selftest();
         let _ = devpolicy::selftest();
