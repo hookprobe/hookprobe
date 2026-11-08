@@ -27,6 +27,14 @@ updates:
     groups:
       rustcrypto:
         patterns: ["p256", "ecdsa", "elliptic-curve", "crypto-bigint", "sha2", "hmac", "digest", "chacha20poly1305", "ml-kem", "x25519-dalek"]
+    # Patch updates only. For 0.x crates a "minor" bump IS a breaking API change (rand_core 0.6→0.10,
+    # smoltcp 0.13→0.14, x25519-dalek 2→3, chacha20poly1305 0.10→0.11 all merged red on 2026-11-08
+    # and broke the heqk kernel build). Majors/minors of the kernel's crypto + network stack are a
+    # deliberate porting PR with QEMU + metal validation. Vulnerabilities are still caught nightly by
+    # RustSec (g4) and Dependabot security alerts — and a security fix is applied by hand (cf. p256 0.14).
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
 
   - package-ecosystem: "npm"
     directories:
