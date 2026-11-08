@@ -1940,6 +1940,15 @@ async function applyPrivacyPreset(preset) {
 }
 
 // === WHITELIST ===
+function escapeHtml(v) {
+    return String(v).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+// Safe for a single-quoted JS string literal inside an HTML attribute (onclick="f('...')")
+function escapeJsAttr(v) {
+    return escapeHtml(String(v).replace(/\\/g, '\\\\').replace(/'/g, "\\'"));
+}
+
 async function loadWhitelist() {
     const tbody = document.getElementById('whitelist-body');
     if (!tbody) return;
@@ -1969,9 +1978,9 @@ async function loadWhitelist() {
         } else {
             tbody.innerHTML = list.map(d => `
                 <tr>
-                    <td class="text-monospace">${d}</td>
+                    <td class="text-monospace">${escapeHtml(d)}</td>
                     <td class="text-right">
-                        <button class="btn btn-xs btn-danger" onclick="removeWhitelist('${d.replace(/'/g, "\\'")}')">
+                        <button class="btn btn-xs btn-danger" onclick="removeWhitelist('${escapeJsAttr(d)}')">
                             <i class="fas fa-times"></i>
                         </button>
                     </td>
@@ -2104,11 +2113,11 @@ function renderBlocked(domains) {
     }
 
     tbody.innerHTML = domains.map(d => {
-        const esc = d.domain.replace(/'/g, "\\'");
+        const esc = escapeJsAttr(d.domain);
         const badge = d.ml_classified ? '<span class="badge badge-primary">ML</span>' : '<span class="badge badge-secondary">List</span>';
         return `
             <tr>
-                <td class="text-monospace" style="font-size:0.8em;word-break:break-all;">${d.domain}</td>
+                <td class="text-monospace" style="font-size:0.8em;word-break:break-all;">${escapeHtml(d.domain)}</td>
                 <td>${badge}</td>
                 <td class="text-center text-nowrap">
                     <button class="btn btn-xs btn-success" onclick="whitelistBlocked('${esc}')" title="Whitelist"><i class="fas fa-check"></i></button>
@@ -2168,15 +2177,15 @@ async function loadRecentBlocked() {
         }
 
         container.innerHTML = recentBlockedCache.map(d => {
-            const esc = d.domain.replace(/'/g, "\\'");
+            const esc = escapeJsAttr(d.domain);
             const badge = d.ml_classified
                 ? '<span class="badge badge-primary" title="ML Classified">ML</span>'
                 : '<span class="badge badge-secondary" title="Blocklist Match">List</span>';
             const time = d.timestamp ? formatTimeAgo(d.timestamp) : '';
 
             return `
-                <div class="blocked-domain-item" id="blocked-${esc.replace(/[^a-z0-9]/gi, '_')}">
-                    <div class="blocked-domain-name">${d.domain}</div>
+                <div class="blocked-domain-item" id="blocked-${String(d.domain).replace(/[^a-z0-9]/gi, '_')}">
+                    <div class="blocked-domain-name">${escapeHtml(d.domain)}</div>
                     <div class="blocked-domain-meta">
                         ${time ? `<span class="blocked-time">${time}</span>` : ''}
                         ${badge}
