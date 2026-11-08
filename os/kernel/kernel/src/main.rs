@@ -55,6 +55,7 @@ mod apcred;
 mod mcmgmt;
 mod srckey;
 mod idsbench;
+mod ja4;
 #[cfg(feature = "netsvc")]
 mod actionapi;
 // Parity G16: WAN health with hysteresis.
@@ -6442,6 +6443,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = arch_aarch64::wan6eth::selftest();
         let _ = srckey::selftest();
         let _ = behavioral::brute_selftest();
+        let _ = ja4::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();

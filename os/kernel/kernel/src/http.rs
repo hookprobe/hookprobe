@@ -226,6 +226,25 @@ fn target_json(w: &mut JsonBuf, t: &crate::actions::Target) {
     }
 }
 
+/// `GET /api/tls` — TLS clients seen (JA4 + SNI per client), most recent first; IOC / Shield-bypass flags.
+fn render_tls(w: &mut JsonBuf) {
+    use core::fmt::Write;
+    let _ = write!(w, "{{\"hellos\":{},\"clients\":[", crate::ja4::hellos());
+    let mut first = true;
+    crate::ja4::for_each(&mut |e| {
+        if !first {
+            w.raw(",");
+        }
+        first = false;
+        let c = e.client;
+        let _ = write!(w, "{{\"client\":\"{}.{}.{}.{}\",\"ja4\":\"{}\",\"sni\":\"{}\",\"count\":{},\"last_ms\":{},\"ioc\":{},\"shield_bypass\":{}}}",
+            c >> 24, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff,
+            core::str::from_utf8(&e.ja4).unwrap_or(""), core::str::from_utf8(&e.sni[..e.sni_len as usize]).unwrap_or(""),
+            e.count, e.last_ms, e.ioc, e.bypass);
+    });
+    w.raw("]}");
+}
+
 /// `GET /api/actions` — active actions (time left) + the audit log, newest first.
 fn render_actions(w: &mut JsonBuf) {
     use core::fmt::Write;
@@ -337,6 +356,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }),
         "/api/actions" => json(scratch, |w| render_actions(w)),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
+        "/api/tls" => json(scratch, |w| render_tls(w)),
         "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
         "/api/flows" => json(scratch, |w| st.render_flows(st.ticks_at_ms(now_ms), limit(100, 256), w)),
         p if p.starts_with("/api/incidents/") => {
