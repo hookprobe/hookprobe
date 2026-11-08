@@ -86,8 +86,9 @@ gate_g1() {
   tdir() { if [ -n "$T" ]; then echo "$T/$1"; else echo target/ci; fi; }
   step "clippy ratchet (heqk kernel workspace)" python3 -I tools/ci/clippy_ratchet.py --root "$ROOT"
   step "validate.sh phase ratchet"     python3 -I tools/ci/phase_ratchet.py --root "$ROOT"
-  # Host unit tests. tlsprov is built exactly as its README documents (nightly + build-std).
-  step "host tests: heqk-tlsprov"      bash -c "cd os/kernel/tlsprov && CARGO_TARGET_DIR=$(tdir tlsprov) cargo test --release --target x86_64-unknown-linux-gnu -Z build-std=std,panic_abort"
+  # Host unit tests on STABLE: nightly build-std of std for the host broke on a newer nightly in CI
+  # (E0152 duplicate lang item `sized`, 2026-11-08) and host tests need no build-std at all.
+  step "host tests: heqk-tlsprov"      bash -c "cd os/kernel/tlsprov && CARGO_TARGET_DIR=$(tdir tlsprov) cargo +stable test --release --target x86_64-unknown-linux-gnu"
   step "host tests: responder-sim"     bash -c "cd onboarding/enrollment/responder-sim && CARGO_TARGET_DIR=$(tdir responder-sim) cargo +stable test --release"
   step "host tests: heqk-sign"         bash -c "cd os/build/heqk-sign && CARGO_TARGET_DIR=$(tdir heqk-sign) cargo +stable test --release"
 }
