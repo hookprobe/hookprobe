@@ -53,6 +53,8 @@ mod rulepack;
 mod actions;
 mod apcred;
 mod mcmgmt;
+mod srckey;
+mod idsbench;
 #[cfg(feature = "netsvc")]
 mod actionapi;
 // Parity G16: WAN health with hysteresis.
@@ -3099,6 +3101,8 @@ fn cm5_p10_probe() {
                                 kprint!(" [RULES] rule pack: {} rules armed{}{}\n", ri.loaded,
                                     match ri.file { 0 => " (no RULES.BIN — built-in corpus only)", 1 => if ri.signed { " (operator signature OK)" } else { " (unsigned — standalone image)" }, _ => " (RULES.BIN REFUSED — built-in corpus only)" },
                                     if ri.refused_verify + ri.refused_meta > 0 { " — some rules refused (verifier / metadata)" } else { "" });
+                                // IDS/IPS cost on this core, with the signed rule pack armed (optimisation baseline).
+                                let _ = idsbench::run(2000);
                                 let ii = ioc::load(&dev);
                                 kprint!(" [INTEL] IOC pack: {} IPv4 prefixes + {} domains {} — matches are DETECTIONS (ioc_match), never drops\n",
                                     ioc::v4_len(), ioc::dom_len(),
@@ -3830,6 +3834,14 @@ fn cm5_p10_probe() {
                                                     let a = pol.check(PIf::Lan, PDir::In, &p).0;
                                                     if a == PAct::Allow { (pol.check(PIf::Wan, PDir::Out, &p).0, 2usize) } else { (a, 0usize) }
                                                 }).unwrap_or((PAct::Allow, 0));
+                                                // ADR 0049 D2 (observe-only): the IPv6 scan shape of a LAN device, keyed on its MAC.
+                                                if frame.len() >= 54 {
+                                                    let mut sm = [0u8; 6];
+                                                    sm.copy_from_slice(&frame[6..12]);
+                                                    let mut d6 = [0u8; 16];
+                                                    d6.copy_from_slice(&frame[38..54]);
+                                                    let _ = rules::flow_scan_observe6(frame, srckey::dev(&sm), srckey::v6net(&d6));
+                                                }
                                                 match pa {
                                                     (PAct::Allow, _) => {
                                                         if packet::verdict(frame).1 == packet::DROP {
@@ -4113,6 +4125,16 @@ fn cm5_p10_probe() {
                                                 let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                                 let nms = now() * 1000 / freq;
                                                 let no_flow0 = v6.stats.drop_no_flow;
+                                                // ADR 0049 D2 (observe-only): an internet source is keyed on its /64; an answer to a
+                                                // LAN device's probe credits that device (SAVI table: address -> MAC).
+                                                {
+                                                    let mut s6 = [0u8; 16];
+                                                    s6.copy_from_slice(&wbuf[22..38]);
+                                                    let mut d6 = [0u8; 16];
+                                                    d6.copy_from_slice(&wbuf[38..54]);
+                                                    let dk = v6.mac_of(&d6).map(|m| srckey::dev(&m)).unwrap_or(0);
+                                                    let _ = rules::flow_scan_observe6(&wbuf[..n], srckey::v6net(&s6), dk);
+                                                }
                                                 let v6a = v6.on_wan(&wbuf[14..n], nms, &mut v6buf);
                                                 // `wan in` judges only genuinely NEW inbound traffic (no flow). A neighbor-table
                                                 // miss / hop-limit / malformed drop is not a policy event and must never turn into
@@ -4345,10 +4367,10 @@ fn cm5_p10_probe() {
                                             {
                                                 let s = unsafe { V6.stats };
                                                 let l = unsafe { uplink::WAN6_LIVE };
-                                                kprint!("   [P11-AP3 v6] pd renew tx={} ok={} t1={}s | up={} ra_tx={} rs_rx={} na_tx={} ns_tx={} out={} in={} in_icmp_err={} | drop no_flow={} no_neigh={} hop={} src={} (savi={}) bad={} ids_out={} ids_in={} evict={} | WAN live: v6 rx={} RAs rx={} tx ok={} fail={}\n",
+                                                kprint!("   [P11-AP3 v6] pd renew tx={} ok={} t1={}s | up={} ra_tx={} rs_rx={} na_tx={} ns_tx={} out={} in={} in_icmp_err={} | drop no_flow={} no_neigh={} hop={} src={} (savi={}) bad={} ids_out={} ids_in={} evict={} | WAN live: v6 rx={} RAs rx={} tx ok={} fail={} | v6 scan (observe-only) over={} confirmed={}\n",
                                                     unsafe { uplink::WAN6 }.renew_tx, unsafe { uplink::WAN6 }.renew_ok, unsafe { uplink::WAN6 }.t1,
                                                     unsafe { V6.up }, s.ra_tx, s.rs_rx, s.na_tx, s.ns_tx, s.out_fwd, s.in_fwd, s.in_icmp_err, s.drop_no_flow, s.drop_no_neigh, s.drop_hop, s.drop_src, s.savi_refused, s.drop_bad,
-                                                    v6_ids_drop[0], v6_ids_drop[1], s.flow_evict, l[0], l[1], l[2], l[3]);
+                                                    v6_ids_drop[0], v6_ids_drop[1], s.flow_evict, l[0], l[1], l[2], l[3], srckey::V6_SCAN_OVER.load(core::sync::atomic::Ordering::Relaxed), srckey::V6_SCAN_CONFIRMED.load(core::sync::atomic::Ordering::Relaxed));
                                                 if let Some(ra) = unsafe { uplink::WAN6_FIRST_RA } {
                                                     kprint!("   [P11-AP3 v6] ISP RA seen: router {:02x?} lifetime={}s M={} O={} prefix={} /{} mtu={}\n", &ra.router[..], ra.lifetime, ra.managed, ra.other, ra.has_prefix, ra.plen, ra.mtu);
                                                 }
@@ -6418,6 +6440,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcred::selftest();
         let _ = mcmgmt::selftest();
         let _ = arch_aarch64::wan6eth::selftest();
+        let _ = srckey::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();
