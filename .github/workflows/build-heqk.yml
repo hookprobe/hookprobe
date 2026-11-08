@@ -51,6 +51,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # validate.sh reports a broken build by grepping `^error` in cargo's output; coloured output hides
+  # the prefix, so CI issues said only "GAP: build broken" with no compiler message (2026-11-08).
+  CARGO_TERM_COLOR: never
+
 jobs:
   # ---------------------------------------------------------------------------
   # heqk-qemu-gate — THE primary, must-work M1 job. Builds heqk (--features
