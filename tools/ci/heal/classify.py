@@ -95,13 +95,13 @@ def classify_text(text: str, gate_hint: str = None) -> dict:
             "action": action,
             "fixable": action == "autofix",
             "gate": gate_hint or gate or "?",
-            "signature": f"{cat}-" + hashlib.sha1(key.encode()).hexdigest()[:12],
+            "signature": f"{cat}-" + hashlib.sha256(key.encode()).hexdigest()[:12],
             "ids": ids,
             "evidence": evidence,
             "hits": len(hits),
         }
     return {"category": "unknown", "action": "human", "fixable": False, "gate": gate_hint or "?",
-            "signature": "unknown-" + hashlib.sha1("\n".join(normalize(l) for l in lines[-20:]).encode()).hexdigest()[:12],
+            "signature": "unknown-" + hashlib.sha256("\n".join(normalize(l) for l in lines[-20:]).encode()).hexdigest()[:12],
             "ids": [], "evidence": [normalize(l)[:300] for l in lines[-12:] if l.strip()], "hits": 0}
 
 

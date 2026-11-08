@@ -1,0 +1,717 @@
+[
+ {
+  "number": 969,
+  "status": "fixed",
+  "reason": "untrusted values passed through escapeHtml before innerHTML"
+ },
+ {
+  "number": 970,
+  "status": "fixed",
+  "reason": "untrusted values passed through escapeHtml before innerHTML"
+ },
+ {
+  "number": 971,
+  "status": "fixed",
+  "reason": "untrusted values passed through escapeHtml before innerHTML"
+ },
+ {
+  "number": 972,
+  "status": "fixed",
+  "reason": "replaced single-quote-only replace with escapeJsAttr (escapes backslash, quote, HTML) and escapeHtml"
+ },
+ {
+  "number": 973,
+  "status": "fixed",
+  "reason": "replaced single-quote-only replace with escapeJsAttr (escapes backslash, quote, HTML) and escapeHtml"
+ },
+ {
+  "number": 974,
+  "status": "fixed",
+  "reason": "replaced single-quote-only replace with escapeJsAttr (escapes backslash, quote, HTML) and escapeHtml"
+ },
+ {
+  "number": 975,
+  "status": "fixed",
+  "reason": "SRI integrity=sha384 added to all 10 version-pinned CDN assets (hashes computed from the pinned URLs; jQuery 3.6.0 + Bootstrap 4.6.0 cross-checked against published SRI). Google Fonts CSS is per-UA and cannot carry SRI."
+ },
+ {
+  "number": 976,
+  "status": "fixed",
+  "reason": "SRI integrity=sha384 added to all 10 version-pinned CDN assets (hashes computed from the pinned URLs; jQuery 3.6.0 + Bootstrap 4.6.0 cross-checked against published SRI). Google Fonts CSS is per-UA and cannot carry SRI."
+ },
+ {
+  "number": 977,
+  "status": "false_positive",
+  "reason": "logs counts only (no secret)"
+ },
+ {
+  "number": 978,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 979,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 980,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 981,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 982,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 983,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 984,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 985,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 986,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 987,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 988,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 989,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 990,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 991,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 992,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 993,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 994,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 995,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 996,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 997,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 998,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 999,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1000,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1001,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1002,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1003,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1004,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1005,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1006,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1007,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1008,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1009,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1010,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1011,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1012,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1013,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1014,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1015,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1016,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1017,
+  "status": "fixed",
+  "reason": "Fingerbank API key prefix no longer logged; only length"
+ },
+ {
+  "number": 1018,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1019,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1020,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1021,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1022,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1023,
+  "status": "false_positive",
+  "reason": "logs node id/tier/coordinates; not a secret"
+ },
+ {
+  "number": 1024,
+  "status": "false_positive",
+  "reason": "logs counts only (no secret)"
+ },
+ {
+  "number": 1025,
+  "status": "false_positive",
+  "reason": "logs device policy/identity (MAC, type); not a credential"
+ },
+ {
+  "number": 1026,
+  "status": "false_positive",
+  "reason": "logs device policy/identity (MAC, type); not a credential"
+ },
+ {
+  "number": 1027,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1028,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1029,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1030,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1031,
+  "status": "false_positive",
+  "reason": "logs first 50 chars of a rejected tool argument; not a credential"
+ },
+ {
+  "number": 1032,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1033,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1034,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1035,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1036,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1037,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1038,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1039,
+  "status": "false_positive",
+  "reason": "logs ip/ovs command line and stderr; no secrets in these commands"
+ },
+ {
+  "number": 1040,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1041,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1042,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1043,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1044,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1045,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1046,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1047,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1048,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1049,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1050,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1051,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1052,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1053,
+  "status": "false_positive",
+  "reason": "\"sensitive\" = MAC address/device inventory data (already masked in most call sites); not a credential"
+ },
+ {
+  "number": 1054,
+  "status": "wont_fix",
+  "reason": "storage inherent (device config); file already chmod 0600 right after write"
+ },
+ {
+  "number": 1055,
+  "status": "false_positive",
+  "reason": "writes MAC+policy trigger, not a secret"
+ },
+ {
+  "number": 1056,
+  "status": "fixed",
+  "reason": "hostapd config (contains WPA passphrase) now created with mode 0600"
+ },
+ {
+  "number": 1057,
+  "status": "wont_fix",
+  "reason": "storage inherent (device config); file already chmod 0600 right after write"
+ },
+ {
+  "number": 1058,
+  "status": "fixed",
+  "reason": "hostapd config (contains WPA passphrase) now created with mode 0600"
+ },
+ {
+  "number": 1059,
+  "status": "false_positive",
+  "reason": "RADIUS Tunnel-Private-Group-Id is a VLAN id, not a secret"
+ },
+ {
+  "number": 1060,
+  "status": "false_positive",
+  "reason": "binds to a specific source IP (guarded by `if src_ip`), not all interfaces"
+ },
+ {
+  "number": 1061,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1062,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1063,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1064,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1065,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1066,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1067,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1068,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1069,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1070,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1071,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1072,
+  "status": "false_positive",
+  "reason": "intentional: mesh/VPN/STUN/NAT-traversal/collector service must listen on all interfaces (bind host configurable via env where applicable)"
+ },
+ {
+  "number": 1073,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1074,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1075,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1076,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1077,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1078,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1079,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1080,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1081,
+  "status": "fixed",
+  "reason": "handler returned str(e); now generic \"internal error\" (still logged server-side)"
+ },
+ {
+  "number": 1082,
+  "status": "fixed",
+  "reason": "git_ops.run_command no longer returns str(e); generic message, logged"
+ },
+ {
+  "number": 1083,
+  "status": "fixed",
+  "reason": "git_ops.run_command no longer returns str(e); generic message, logged"
+ },
+ {
+  "number": 1084,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1085,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1086,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1087,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1088,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1089,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1090,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1091,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1092,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1093,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1094,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1095,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1096,
+  "status": "fixed",
+  "reason": "_api_call no longer returns str(e) to the client; generic message, logged"
+ },
+ {
+  "number": 1097,
+  "status": "fixed",
+  "reason": "apply helpers no longer return str(e)/subprocess stderr; logged server-side"
+ },
+ {
+  "number": 1098,
+  "status": "fixed",
+  "reason": "apply helpers no longer return str(e)/subprocess stderr; logged server-side"
+ },
+ {
+  "number": 1099,
+  "status": "fixed",
+  "reason": "ml_engine train() no longer returns str(e); generic message, logged"
+ },
+ {
+  "number": 1100,
+  "status": "fixed",
+  "reason": "command executor exception text replaced with generic message; logged"
+ },
+ {
+  "number": 1101,
+  "status": "fixed",
+  "reason": "command executor exception text replaced with generic message; logged"
+ },
+ {
+  "number": 1102,
+  "status": "fixed",
+  "reason": "execute_quick_action no longer returns str(e) in details; logged"
+ },
+ {
+  "number": 1103,
+  "status": "fixed",
+  "reason": "debug endpoint errors list now generic; details logged"
+ },
+ {
+  "number": 1104,
+  "status": "false_positive",
+  "reason": "subprocess.run with argument list (no shell), fixed absolute binaries; all callers pass lists"
+ },
+ {
+  "number": 1105,
+  "status": "fixed",
+  "reason": "ssl context minimum_version set to TLS 1.2"
+ },
+ {
+  "number": 1106,
+  "status": "fixed",
+  "reason": "ssl context minimum_version set to TLS 1.2"
+ },
+ {
+  "number": 1107,
+  "status": "false_positive",
+  "reason": "sha256 derives a non-secret key id from already HKDF-derived key material; not password hashing"
+ },
+ {
+  "number": 1108,
+  "status": "false_positive",
+  "reason": "test code: substring check of dnsmasq config text, not URL sanitization"
+ },
+ {
+  "number": 1109,
+  "status": "false_positive",
+  "reason": "test code: substring check of dnsmasq config text, not URL sanitization"
+ },
+ {
+  "number": 1110,
+  "status": "fixed",
+  "reason": "Origin rejected if it contains CR/LF (in addition to existing allow-list)"
+ },
+ {
+  "number": 1111,
+  "status": "fixed",
+  "reason": "Origin rejected if it contains CR/LF (in addition to existing allow-list)"
+ }
+]
