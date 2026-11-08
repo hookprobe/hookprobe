@@ -58,6 +58,13 @@ sleep 1
 echo "A=$A_IF/$A_IP B=$B_IF/$B_PHY/$B_IP"
 echo "BIP=$B_IP"
 if ip netns exec hqbss ping -c 4 -W 2 "$A_IP" >/dev/null; then echo "PING ok"; else echo "PING fail"; fi
+# IPv6 link-local station -> station (what mDNS AAAA records point at)
+A_LL=$(ip -6 addr show dev "$A_IF" scope link | awk '/inet6/ {print $2; exit}' | cut -d/ -f1)
+# B's link-local must have finished duplicate-address detection first (a tentative address cannot source pings)
+for _ in $(seq 1 10); do ip netns exec hqbss ip -6 addr show dev "$B_IF" tentative | grep -q inet6 || break; sleep 1; done
+P6=fail
+for _ in 1 2 3; do [ -n "$A_LL" ] && ip netns exec hqbss ping -6 -c 3 -W 2 "$A_LL%$B_IF" >/dev/null && { P6=ok; break; }; sleep 1; done
+echo "PING6 $P6"
 for _ in 1 2 3; do ip netns exec hqbss timeout 2 bash -c "</dev/tcp/$A_IP/4444" 2>/dev/null; done
 # multicast discovery (SSDP group 239.255.255.250:1900): does B's announcement reach A?
 python3 - "$A_IP" > /run/hqbss-mc.out 2>&1 <<'PY' &
@@ -92,9 +99,9 @@ EOS
 )
 # send the sudo password only when sudo asks for one (otherwise bash would read it as a command)
 if ssh -o BatchMode=yes "$PI" 'sudo -n true' 2>/dev/null; then
-  OUT=$(echo "$REMOTE" | ssh -o BatchMode=yes "$PI" "sudo -n bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|MCAST|RESULT)")
+  OUT=$(echo "$REMOTE" | ssh -o BatchMode=yes "$PI" "sudo -n bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|PING6|MCAST|RESULT)")
 else
-  OUT=$( (cat "$PI_SUDO_FILE"; echo "$REMOTE") | ssh -o BatchMode=yes "$PI" "sudo -S -p '' bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|MCAST|RESULT)")
+  OUT=$( (cat "$PI_SUDO_FILE"; echo "$REMOTE") | ssh -o BatchMode=yes "$PI" "sudo -S -p '' bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|PING6|MCAST|RESULT)")
 fi
 echo "$OUT" | sed 's/^/  /'
 grep -q "RESULT ran" <<<"$OUT" || { echo "INTRA-BSS: INCONCLUSIVE (setup)"; exit 2; }
@@ -105,8 +112,10 @@ curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$MC/api/logi
 D=$(curl -sk -m 10 -b "$J" "$MC/api/detections?limit=200")
 if grep -q "\"rule_id\":1200001[^}]*\"src_ip\":\"$B_IP\"" <<<"$D"; then
   echo "INTRA-BSS: PASS — station-to-station traffic went through heqk (4444 detection from $B_IP)"
-  if grep -q "MCAST got" <<<"$OUT"; then echo "INTRA-BSS-MCAST: PASS — B's SSDP announcement reached A (discovery relay)"; exit 0; fi
-  echo "INTRA-BSS-MCAST: FAIL — B's SSDP announcement never reached A"; exit 4
+  rc=0
+  if grep -q "MCAST got" <<<"$OUT"; then echo "INTRA-BSS-MCAST: PASS — B's SSDP announcement reached A (discovery relay)"; else echo "INTRA-BSS-MCAST: FAIL — B's SSDP announcement never reached A"; rc=4; fi
+  if grep -q "PING6 ok" <<<"$OUT"; then echo "INTRA-BSS-V6: PASS — B reached A's IPv6 link-local address through heqk"; else echo "INTRA-BSS-V6: FAIL — no IPv6 station-to-station"; rc=5; fi
+  exit $rc
 elif grep -q "PING ok" <<<"$OUT"; then
   echo "INTRA-BSS: FAIL — B reached A but heqk never saw it: the firmware bridged it (IDS bypass)"; exit 1
 else

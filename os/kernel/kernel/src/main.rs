@@ -3813,6 +3813,11 @@ fn cm5_p10_probe() {
                                     let client_dns = our_ip;
                                     let frame = &rx[off..off + len];
                                     let act = cyw43::ap_handle_data(frame, &ap.bssid, &our_ip, &pool_base, &client_dns, &mut dh);
+                                    // G10: an IPv6 Neighbour Solicitation from one station also goes to the others (as the
+                                    // firmware's isolation would swallow it); the frame still continues to heqk's IPv6 LAN below.
+                                    if act == 0 && lanrelay::is_ns_mcast(frame) && packet::verdict(frame).1 != packet::DROP {
+                                        let _ = lanrelay::relay_discovery(frame, &dh, cyw43::now_secs(), &mut |f| wifi_send!(f));
+                                    }
                                     discovery::observe(frame); // D2: what the device announces (mDNS / SSDP), passive
                                     // The Mission Control node (smoltcp) learns a client's MAC ONLY from ARP (smoltcp 0.13
                                     // `process_arp`); the AP answers ARP for its address itself, so hand those ARP frames
@@ -3833,6 +3838,11 @@ fn cm5_p10_probe() {
                                         // G10: mDNS / SSDP / LLMNR from a station -> the other stations (IDS verdict first)
                                         if packet::verdict(frame).1 != packet::DROP {
                                             let _ = lanrelay::relay_discovery(frame, &dh, cyw43::now_secs(), &mut |f| wifi_send!(f));
+                                        }
+                                    } else if act == 0 && lanrelay::relay_target6(frame, &dh) {
+                                        // G10: IPv6 station -> station (link-local / ULA / global), IDS verdict first
+                                        if packet::verdict(frame).1 != packet::DROP {
+                                            let _ = wifi_send!(frame);
                                         }
                                     } else if act == 0 && frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
                                         // G10: an ARP request for ANOTHER station — answer for it (proxy-ARP) so the pair can

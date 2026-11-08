@@ -121,10 +121,43 @@ pub fn is_discovery_mcast(frame: &[u8]) -> bool {
     frame.len() >= 14 && DISCOVERY_MACS.iter().any(|m| frame[0..6] == m[..])
 }
 
+/// IPv6 neighbour discovery between stations: a Neighbour Solicitation to a solicited-node group
+/// (33:33:ff:xx:xx:xx) — the IPv6 ARP. Relayed like discovery so stations resolve each other's link-local /
+/// ULA / global addresses (mDNS hands out link-local AAAA records: casting often runs over IPv6).
+/// (A side-effect relay: the caller still hands the NS to heqk's own IPv6 LAN, which answers for the router.)
+pub fn is_ns_mcast(frame: &[u8]) -> bool {
+    frame.len() >= 78 && frame[0..3] == [0x33, 0x33, 0xff] && frame[12..14] == [0x86, 0xdd] && frame[20] == 58 && frame[54] == 135
+}
+
+/// Is this IPv6 frame unicast to ANOTHER live station (dst MAC = a leased station's MAC) that may receive it?
+/// The caller runs the IDS verdict first. (IPv6 has no lease per address; the MAC lease + policy decide.)
+pub fn relay_target6(frame: &[u8], dh: &ApDhcp) -> bool {
+    if frame.len() < 54 || frame[12..14] != [0x86, 0xdd] || frame[0] & 1 != 0 {
+        return false;
+    }
+    let mut dmac = [0u8; 6];
+    dmac.copy_from_slice(&frame[0..6]);
+    let mut smac = [0u8; 6];
+    smac.copy_from_slice(&frame[6..12]);
+    if dmac == smac || dh.lease_for(&dmac).is_none() {
+        return false; // not a station: the router path (heqk's own IPv6 LAN) decides
+    }
+    if dh.lease_for(&smac).is_none() {
+        bump(3);
+        return false;
+    }
+    if !lan_ok(&smac, &dmac) {
+        bump(2);
+        return false;
+    }
+    bump(1);
+    true
+}
+
 /// Relay a discovery multicast frame from one station to the others: calls `send` with each L2-unicast copy.
 /// The caller has already run the IDS verdict on it. Returns the number of copies sent.
 pub fn relay_discovery(frame: &[u8], dh: &ApDhcp, now_s: u64, send: &mut dyn FnMut(&[u8]) -> bool) -> u32 {
-    if !is_discovery_mcast(frame) || frame.len() > 1514 {
+    if !(is_discovery_mcast(frame) || is_ns_mcast(frame)) || frame.len() > 1514 {
         return 0;
     }
     let mut smac = [0u8; 6];
@@ -265,11 +298,30 @@ pub fn selftest() -> bool {
     crate::devpolicy::load_text(b"02:00:00:00:00:0c internet_only\n");
     let mc_pol = relay_discovery(&m, &dh, 102, &mut |_| true) == 1; // C (internet_only) gets no copy
     crate::devpolicy::load_text(b"");
+    // IPv6 between stations: an NS to a solicited-node group fans out; a unicast frame to B's MAC is relayed
+    let mut ns = [0u8; 86];
+    ns[0..6].copy_from_slice(&[0x33, 0x33, 0xff, 0, 0, 0x0b]);
+    ns[6..12].copy_from_slice(&a_mac);
+    ns[12] = 0x86;
+    ns[13] = 0xdd;
+    ns[14] = 0x60;
+    ns[20] = 58;
+    ns[54] = 135;
+    let ns_ok = relay_discovery(&ns, &dh, 103, &mut |_| true) == 2;
+    let mut u6 = [0u8; 74];
+    u6[0..6].copy_from_slice(&b_mac);
+    u6[6..12].copy_from_slice(&a_mac);
+    u6[12] = 0x86;
+    u6[13] = 0xdd;
+    u6[14] = 0x60;
+    let mut u6_router = u6;
+    u6_router[0..6].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]); // the AP / unknown: not relayed
+    let v6_ok = relay_target6(&u6, &dh) && !relay_target6(&u6_router, &dh);
     unsafe { STATS = [0; 6] };
-    let pass = proxied && spoof && squat && unknown && own && relay && mismatch && not_lan && pol && mc_fanout && mc_spoof && mc_other && mc_rate && mc_pol;
+    let pass = proxied && spoof && squat && unknown && own && relay && mismatch && not_lan && pol && mc_fanout && mc_spoof && mc_other && mc_rate && mc_pol && ns_ok && v6_ok;
     arch_aarch64::_print(format_args!(
-        " [P-lanrelay] {} — G10 Wi-Fi station-to-station THROUGH heqk: proxy-ARP with the peer's real MAC={} | refused: spoofed sender={} sender IP not its lease={} unknown target={} own address={} | unicast relay to the lease holder={} wrong dst MAC={} internet dst left to NAT={} | internet_only peer: no ARP, no relay={} | discovery multicast as unicast copies to the other stations, never back={} spoofed sender={} non-discovery group={} per-source rate cap={} internet_only receiver skipped={}\n",
-        if pass { "PASS" } else { "FAIL" }, proxied, spoof, squat, unknown, own, relay, mismatch, not_lan, pol, mc_fanout, mc_spoof, mc_other, mc_rate, mc_pol
+        " [P-lanrelay] {} — G10 Wi-Fi station-to-station THROUGH heqk: proxy-ARP with the peer's real MAC={} | refused: spoofed sender={} sender IP not its lease={} unknown target={} own address={} | unicast relay to the lease holder={} wrong dst MAC={} internet dst left to NAT={} | internet_only peer: no ARP, no relay={} | discovery multicast as unicast copies to the other stations, never back={} spoofed sender={} non-discovery group={} per-source rate cap={} internet_only receiver skipped={} | IPv6: NS fan-out={} unicast to a station relayed, router/unknown left alone={}\n",
+        if pass { "PASS" } else { "FAIL" }, proxied, spoof, squat, unknown, own, relay, mismatch, not_lan, pol, mc_fanout, mc_spoof, mc_other, mc_rate, mc_pol, ns_ok, v6_ok
     ));
     pass
 }
