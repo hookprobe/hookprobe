@@ -61,7 +61,11 @@ RULES = [
 
 _NOISE = [
     (re.compile(r"\x1b\[[0-9;]*m"), ""),                                  # ANSI colour
-    (re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z\s*"), ""),                    # GH log timestamps
+    # `gh run view --log` prefixes every line with "<job>\t<step>\t<timestamp> " — the timestamp sits
+    # MID-line, so a start-anchored pattern missed it and every run got a new signature (duplicate
+    # issues #868/#876, #872/#874 on 2026-11-08). Drop the job/step columns, then any timestamp.
+    (re.compile(r"^[^\t\n]*\t[^\t\n]*\t"), ""),                          # job \t step \t
+    (re.compile(r"\d{4}-\d\d-\d\dT[\d:.]+Z\s*"), ""),                    # GH log timestamps (anywhere)
     (re.compile(r"\b0x[0-9a-fA-F]+\b"), "0x?"),
     (re.compile(r"\b\d+(\.\d+)?s\b"), "?s"),                              # durations
     (re.compile(r"/tmp/[\w.-]+"), "/tmp/?"),
