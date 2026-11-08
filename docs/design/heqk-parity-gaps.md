@@ -36,7 +36,7 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 | G12 | Converge AP + prod-full into one shippable image | L | **accepted** (register 2026-11-08) — ADR 0054: per-device setup credential + MAC (`bed9c46e`, `d784ab2e`), MC on the management VLAN (G12-M); metal I1/I3/I6/I8/I9 PASS. Remaining: MC QR panel, setup→client hand-off UI |
 | G16 | WAN health probes (ICMP/DNS) with hysteresis | M | **closed** (batch 4) [P-wanhealth] |
 | G17 | IPv6 (RS + DHCPv6-PD) on DHCP/static WAN, not only PPPoE | M | **done + metal** — G17.1 RS/RA/PD/ND (`451c64ea`), G17.2 LAN MTU follows the WAN, G17.3 inbound default-deny attacked from the WAN (no answer, counted, hop-1 dropped), G17.4 PD renewed at T1 (`9247fc4e`); evidence in `metal-evidence/20261108-g17-*`, `…-g22-g17-2-g17-4.md` |
-| G24a/G18 | ADR 0049 D2 IPv6 source identity → IPv6 scan/behaviour/IOC detection | M/L | open |
+| G24a/G18 | ADR 0049 D2 IPv6 source identity → IPv6 scan/behaviour/IOC detection | M/L | **done + metal**: scan shape (`0a74b9ad`), JA4 + brute force + beacon (G35/G36), IOC IPv6 prefixes (signed pack `ip`/`cidr` v6, LPM + expiry; outbound dst + inbound src on the AP, attributed to the lease; LAN-client 16/16). Open: lateral LAN↔LAN v6 (see G10), IPv6-only devices (no lease to attribute) |
 | G13e | Deterministic incident reports | M | **closed** `fb417999` (deterministic reports) |
 | G20 | Signed WIFI.TXT (SSID, PSK, channel, guest) instead of build-time env | S | **closed** (batch 4) [P-wificfg] — AP builds without a build-time PSK |
 | G22 | Shield per-client profiles, pause, list refresh | M | **pause done + metal** (`9247fc4e`, H11a–c). Open: per-client profiles (signed DEVICES/BLOCK extension) and list refresh without re-flash |
@@ -47,9 +47,9 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 
 ## Needs the board
 
-G10 intra-BSS bridging (`ap_isolate`=1 now set at AP start, batch 5 — the board shows whether the firmware honours it); Shield on a non-Relay client; `/api/flows` + drill-down on metal;
+G10 intra-BSS bridging (test: `tools/diagnostics/cm5-intrabss-check.sh`; `ap_isolate`=1 now set at AP start, batch 5 — the board shows whether the firmware honours it); Shield on a non-Relay client; `/api/flows` + drill-down on metal;
 eth1 traffic; Wi-Fi TX-stall root cause; WPA3-SAE/PMF + guest SSID; LTE/USB WAN; native-IPv6 ISP (G17);
-RPMB floor (G24d, operator decision, irreversible); P-256 dudect run; WPA2 authenticator → EL0; G12 final
+RPMB floor (G24d, operator decision, irreversible); P-256 constant time — **done on the host** (`metal-evidence/20261108-p256-ct.md`: only validity-flag declassifications); WPA2 authenticator → EL0; G12 final
 acceptance (persistence across power cycle, OTA tryboot); re-flash validation of every AP-side fix.
 
 ## Legacy lessons carried into every fix

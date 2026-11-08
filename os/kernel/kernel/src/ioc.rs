@@ -29,6 +29,19 @@ static mut V4: [P4; V4_CAP] = [P0; V4_CAP];
 static mut V4N: usize = 0;
 /// Bitmask of prefix lengths present (bit L set = some /L entry exists).
 static mut LENS: u64 = 0;
+/// IPv6 IOC prefixes (G24a: the pack was IPv4-only, so a C2 reachable over IPv6 never matched).
+pub const V6_CAP: usize = 16_384;
+#[derive(Clone, Copy)]
+struct P6 {
+    net: u128,
+    len: u8,
+    exp: u32,
+}
+const Q0: P6 = P6 { net: 0, len: 0, exp: 0 };
+static mut V6: [P6; V6_CAP] = [Q0; V6_CAP];
+static mut V6N: usize = 0;
+/// Prefix lengths present, bit L of the 129-bit set (lengths 0..=128).
+static mut LENS6: [u64; 3] = [0; 3];
 static mut DOM: [(u64, u32); DOM_CAP] = [(0, 0); DOM_CAP];
 static mut DOMN: usize = 0;
 /// Wall clock (unix s) for expiry; 0 = unknown → expiry not enforced (honest: we cannot tell).
@@ -51,6 +64,9 @@ pub fn info() -> Info {
 pub fn v4_len() -> usize {
     unsafe { V4N }
 }
+pub fn v6_len() -> usize {
+    unsafe { V6N }
+}
 pub fn dom_len() -> usize {
     unsafe { DOMN }
 }
@@ -71,6 +87,90 @@ fn fnv(name: &[u8]) -> u64 {
 fn live(exp: u32) -> bool {
     let now = unsafe { NOW_UNIX };
     exp == 0 || now == 0 || now < exp
+}
+
+fn mask6(len: u8) -> u128 {
+    if len == 0 { 0 } else { u128::MAX << (128 - len as u32) }
+}
+
+/// Is this IPv6 address inside a live IOC prefix? Longest prefix first.
+pub fn ip6_listed(a: &[u8; 16]) -> bool {
+    let (t, lens) = unsafe { (&(&*core::ptr::addr_of!(V6))[..V6N], LENS6) };
+    if t.is_empty() {
+        return false;
+    }
+    let ip = u128::from_be_bytes(*a);
+    for len in (0..=128u8).rev() {
+        if lens[len as usize / 64] & (1u64 << (len % 64)) == 0 {
+            continue;
+        }
+        let key = (ip & mask6(len), len);
+        if let Ok(i) = t.binary_search_by(|p| (p.net, p.len).cmp(&key)) {
+            if live(t[i].exp) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// RFC 4291 text form (hex groups, one `::`, optional /len). No embedded IPv4, no zone.
+fn parse_v6(s: &[u8]) -> Option<(u128, u8)> {
+    let (addr, len) = match s.iter().position(|&c| c == b'/') {
+        Some(p) => (&s[..p], core::str::from_utf8(&s[p + 1..]).ok()?.parse::<u8>().ok().filter(|&l| l <= 128)?),
+        None => (s, 128u8),
+    };
+    if !addr.contains(&b':') || addr.len() > 39 {
+        return None;
+    }
+    let group = |g: &[u8]| -> Option<u16> {
+        if g.is_empty() || g.len() > 4 || !g.iter().all(|c| c.is_ascii_hexdigit()) {
+            return None;
+        }
+        u16::from_str_radix(core::str::from_utf8(g).ok()?, 16).ok()
+    };
+    let mut head = [0u16; 8];
+    let mut tail = [0u16; 8];
+    let (mut nh, mut nt) = (0usize, 0usize);
+    let dbl = addr.windows(2).position(|w| w == b"::");
+    let (left, right): (&[u8], &[u8]) = match dbl {
+        Some(p) => {
+            if addr[p + 2..].windows(2).any(|w| w == b"::") {
+                return None; // two "::"
+            }
+            (&addr[..p], &addr[p + 2..])
+        }
+        None => (addr, &[]),
+    };
+    if !left.is_empty() {
+        for g in left.split(|&c| c == b':') {
+            if nh == 8 {
+                return None;
+            }
+            head[nh] = group(g)?;
+            nh += 1;
+        }
+    }
+    if !right.is_empty() {
+        for g in right.split(|&c| c == b':') {
+            if nt == 8 {
+                return None;
+            }
+            tail[nt] = group(g)?;
+            nt += 1;
+        }
+    }
+    if (dbl.is_some() && nh + nt > 7) || (dbl.is_none() && nh != 8) {
+        return None;
+    }
+    let mut g = [0u16; 8];
+    g[..nh].copy_from_slice(&head[..nh]);
+    g[8 - nt..].copy_from_slice(&tail[..nt]);
+    let mut v = 0u128;
+    for x in g {
+        v = (v << 16) | x as u128;
+    }
+    Some((v & mask6(len), len))
 }
 
 fn mask(len: u8) -> u32 {
@@ -160,6 +260,7 @@ fn valid_domain(d: &[u8]) -> Option<&[u8]> {
 enum Line<'a> {
     Skip,
     V4(u32, u8, u32),
+    V6(u128, u8, u32),
     Dom(&'a [u8], u32),
     /// a JA4 TLS-client fingerprint (hash in the domain table's "ja4:" namespace)
     Ja4(u64, u32),
@@ -196,7 +297,7 @@ fn parse_line(line: &[u8]) -> Line<'_> {
     let Some(mut first) = toks.next() else { return Line::Skip };
     let mut kind = 0u8; // 0 auto, 1 ip, 2 domain
     match first {
-        b"ip" | b"cidr" | b"ipv4" => kind = 1,
+        b"ip" | b"cidr" | b"ipv4" | b"ipv6" => kind = 1,
         b"domain" | b"host" => kind = 2,
         b"ja4" => kind = 3,
         _ => {}
@@ -218,6 +319,9 @@ fn parse_line(line: &[u8]) -> Line<'_> {
     if kind != 2 {
         if let Some((n, l)) = parse_v4(first) {
             return Line::V4(n, l, exp);
+        }
+        if let Some((n, l)) = parse_v6(first) {
+            return Line::V6(n, l, exp);
         }
         if kind == 1 {
             return Line::Bad;
@@ -253,6 +357,15 @@ impl Builder {
                         (*core::ptr::addr_of_mut!(V4))[V4N] = P4 { net: n, len: l, exp: e };
                         V4N += 1;
                         LENS |= 1u64 << l;
+                    } else {
+                        self.truncated += 1;
+                    }
+                },
+                Line::V6(n, l, e) => unsafe {
+                    if V6N < V6_CAP {
+                        (*core::ptr::addr_of_mut!(V6))[V6N] = P6 { net: n, len: l, exp: e };
+                        V6N += 1;
+                        LENS6[l as usize / 64] |= 1u64 << (l % 64);
                     } else {
                         self.truncated += 1;
                     }
@@ -307,6 +420,18 @@ fn seal() {
             }
         }
         V4N = w;
+        let v6 = &mut (&mut *core::ptr::addr_of_mut!(V6))[..V6N];
+        v6.sort_unstable_by(|a, b| (a.net, a.len).cmp(&(b.net, b.len)));
+        let mut w = 0;
+        for r in 0..v6.len() {
+            if w == 0 || (v6[r].net, v6[r].len) != (v6[w - 1].net, v6[w - 1].len) {
+                v6[w] = v6[r];
+                w += 1;
+            } else if v6[r].exp == 0 || (v6[w - 1].exp != 0 && v6[r].exp > v6[w - 1].exp) {
+                v6[w - 1].exp = v6[r].exp;
+            }
+        }
+        V6N = w;
         let d = &mut (&mut *core::ptr::addr_of_mut!(DOM))[..DOMN];
         d.sort_unstable_by_key(|e| e.0);
         let mut w = 0;
@@ -323,6 +448,8 @@ fn seal() {
 fn reset() {
     unsafe {
         V4N = 0;
+        V6N = 0;
+        LENS6 = [0; 3];
         DOMN = 0;
         LENS = 0;
     }
@@ -470,12 +597,28 @@ pub fn selftest() -> bool {
     let mut wrong = sig;
     wrong[..8].copy_from_slice(b"HQBSIG1\0");
     let sig_x = check_sig(&wrong, &pk, &mut dig).is_err();
+    // G24a: IPv6 entries — full, ::-compressed and /len forms; junk (two '::', 9 groups, 5-hex group, /129) refused
+    let (sk6, _) = load_text(b"ip 2001:db8:bad::7\ncidr 2001:db8:c2::/48\n2001:0db8:0000:0000:0000:0000:0000:0042 exp=1700000000\nipv6 ::1\n2001:db8::1::2\n1:2:3:4:5:6:7:8:9\n2001:db8:12345::1\nip 2001:db8::/129\n");
+    let a6 = |s: [u16; 8]| -> [u8; 16] {
+        let mut b = [0u8; 16];
+        for (i, g) in s.iter().enumerate() {
+            b[2 * i..2 * i + 2].copy_from_slice(&g.to_be_bytes());
+        }
+        b
+    };
+    set_now_unix(0);
+    let v6 = v6_len() == 4 && sk6 == 4
+        && ip6_listed(&a6([0x2001, 0xdb8, 0xbad, 0, 0, 0, 0, 7])) && !ip6_listed(&a6([0x2001, 0xdb8, 0xbad, 0, 0, 0, 0, 8]))
+        && ip6_listed(&a6([0x2001, 0xdb8, 0xc2, 0xffff, 1, 2, 3, 4])) && !ip6_listed(&a6([0x2001, 0xdb8, 0xc3, 0, 0, 0, 0, 1]))
+        && ip6_listed(&a6([0, 0, 0, 0, 0, 0, 0, 1]))
+        && ip6_listed(&a6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x42])) // clock unknown: expiry not enforced
+        && { set_now_unix(1_800_000_000); let e = !ip6_listed(&a6([0x2001, 0xdb8, 0, 0, 0, 0, 0, 0x42])); set_now_unix(0); e };
     reset();
-    let empty = !ip_listed(0xCB00_7107) && !domain_listed(b"bad.example");
-    let pass = parsed && lpm && expiry_unknown_clock && expired && doms && dom_exp && sig_ok && sig_bad && sig_x && empty;
+    let empty = !ip_listed(0xCB00_7107) && !domain_listed(b"bad.example") && !ip6_listed(&a6([0, 0, 0, 0, 0, 0, 0, 1]));
+    let pass = parsed && lpm && expiry_unknown_clock && expired && doms && dom_exp && sig_ok && sig_bad && sig_x && empty && v6;
     arch_aarch64::_print(format_args!(
-        " [P-ioc] {} — signed IOC pack (parity G7, replaces the 4-CIDR stub; observe-only): parse (ip / cidr / domain / bare, exp=, junk refused) ok={} | longest-prefix match={} expiry not enforced without a wall clock={} expired entry stops matching={} | domains incl. subdomains, label-boundary={} domain expiry={} | IOC.SIG ok={} tampered refused={} other-file signature refused={} | empty pack matches nothing={}\n",
-        if pass { "PASS" } else { "FAIL" }, parsed, lpm, expiry_unknown_clock, expired, doms, dom_exp, sig_ok, sig_bad, sig_x, empty
+        " [P-ioc] {} — signed IOC pack (parity G7, replaces the 4-CIDR stub; observe-only): parse (ip / cidr / domain / bare, exp=, junk refused) ok={} | longest-prefix match={} expiry not enforced without a wall clock={} expired entry stops matching={} | domains incl. subdomains, label-boundary={} domain expiry={} | IOC.SIG ok={} tampered refused={} other-file signature refused={} | empty pack matches nothing={} | IPv6 prefixes (::, /len, expiry, junk refused)={}\n",
+        if pass { "PASS" } else { "FAIL" }, parsed, lpm, expiry_unknown_clock, expired, doms, dom_exp, sig_ok, sig_bad, sig_x, empty, v6
     ));
     pass
 }
