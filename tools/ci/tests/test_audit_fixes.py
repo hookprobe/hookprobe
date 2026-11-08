@@ -119,6 +119,34 @@ class ClippyBaseIsolation(unittest.TestCase):
         self.assertNotIn("run_clippy(bdir, fsets, tr)", src)
 
 
+class TriageNoise(unittest.TestCase):
+    """The 2026-11-08 issue floods (42 'unknown' issues; then #889). Re-added: lost in a merge."""
+
+    def test_issues_only_for_default_branch_failures(self):
+        self.assertTrue(triage_run.should_file_issues({"head_branch": "main", "event": "push"}, "main"))
+        self.assertFalse(triage_run.should_file_issues({"head_branch": "dependabot/x", "event": "pull_request"}, "main"))
+        self.assertFalse(triage_run.should_file_issues({"head_branch": "main", "event": "pull_request"}, "main"))
+
+    def test_unknown_signature_is_stable_per_gate(self):
+        import classify
+        a = triage_run.stabilise_signature(classify.classify_text("run 1 weird\nexit 1", "g1"))
+        b = triage_run.stabilise_signature(classify.classify_text("run 2 other\nexit 9", "g1"))
+        self.assertEqual((a["signature"], b["signature"]), ("unknown-g1", "unknown-g1"))
+
+    def test_caps_aggregator_and_log_fetch(self):
+        self.assertLessEqual(triage_run.MAX_NEW_ISSUES_PER_RUN, 3)
+        self.assertIn("ci-ok", triage_run.AGGREGATOR_JOBS)
+        with open(os.path.join(CI, "heal", "triage_run.py")) as f:
+            self.assertIn('"run", "view"', f.read())   # gh api …/logs refuses ANSI → every triage 'unknown'
+
+    def test_transient_files_only_after_the_rerun_fails(self):
+        d = {"action": "rerun", "category": "infra_transient"}
+        self.assertFalse(triage_run.needs_issue(d, {"run_attempt": 1}))   # the rerun job handles it
+        self.assertTrue(triage_run.needs_issue(d, {"run_attempt": 2}))    # it survived the rerun
+        self.assertTrue(triage_run.needs_issue({"action": "autofix"}, {"run_attempt": 1}))
+        self.assertTrue(triage_run.needs_issue({"action": "human"}, {"run_attempt": 1}))
+
+
 class TriageM2L1(unittest.TestCase):
     SHA = "a" * 40
 
