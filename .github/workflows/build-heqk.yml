@@ -64,7 +64,7 @@ jobs:
     name: "heqk QEMU gate (validate.sh — NOT a metal gate)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned nightly toolchain (os/kernel/rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
@@ -79,7 +79,7 @@ jobs:
       - name: Install qemu-system-aarch64
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk   # mkfs.vfat/mcopy/sfdisk: validate.sh P15 OTA + A/B phases build a real FAT32 image
 
       - name: heqk validate.sh (build + QEMU boot + phase-gate report)
         run: ./validate.sh
