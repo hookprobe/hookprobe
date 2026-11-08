@@ -72,6 +72,10 @@ pi "for i in \$(seq 1 30); do timeout 2 bash -c '</dev/tcp/2001:db8:100::1/22' 2
 sleep 3
 r=1; for _ in 1 2 3 4 5; do api "/api/detections?limit=200" | grep -q "\"rule_id\":1200124[^}]*\"src_ip\":\"$PIIP\"" && { r=0; break; }; sleep 2; done; chk $r "G36 rule 124 over IPv6: 30 answered attempts to [2001:db8:100::1]:22 detected, attributed to $PIIP"
 
+# 5b. G24a: an IPv6 peer on the signed IOC pack (bench: the WAN-side router, contacted over IPv6 above)
+r=1; for _ in 1 2 3 4 5; do api "/api/detections?limit=200" | grep -q "\"rule_id\":1200302[^}]*\"src_ip\":\"$PIIP\"" && { r=0; break; }; sleep 2; done
+chk $r "G24a IOC over IPv6: the Pi's IPv6 connection to a listed address raised the IOC detection (302), attributed to $PIIP"
+
 # 5. rule 124: brute force on one answering SSH service (the bench host's sshd on the WAN side)
 pi "for i in \$(seq 1 30); do timeout 2 bash -c '</dev/tcp/$SSHT/22' 2>/dev/null; done; true"
 sleep 3
