@@ -1,0 +1,16 @@
+# Phase 2 (operator decision 2026-11-08): libcrux ML-KEM-768 evaluated IN PARALLEL with the shipping
+# RustCrypto ml-kem — differential + determinism gates on the host. Not part of any device build.
+[package]
+name = "kem-diff"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false
+
+[workspace]
+
+[dependencies]
+ml-kem = { version = "=0.2.3", default-features = false, features = ["deterministic"] }
+kem = "=0.3.0-pre.0"
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+sha2 = "0.10"
