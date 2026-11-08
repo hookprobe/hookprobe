@@ -122,7 +122,11 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-deny }
-      - uses: anchore/sbom-action/download-syft@v0
+      - id: syft
+        uses: anchore/sbom-action/download-syft@v0
+        continue-on-error: true   # GitHub release CDN 5xx (2026-11-08) — container fallback below
+      - if: steps.syft.outcome == 'failure'   # release CDN down → digest-pinned container image
+        run: tools/ci/syft-fallback.sh
       - uses: actions/setup-node@v7.1.0
         with: { node-version: "24" }
       - run: tools/ci/gates.sh g4
