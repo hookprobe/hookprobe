@@ -143,6 +143,20 @@ Code, testing, documentation, and carefully investigated issue reports are welco
 Please report vulnerabilities privately using the [security policy](SECURITY.md), not in a public
 issue.
 
+## Project growth
+
+Repository stars over time:
+
+<p align="center">
+  <a href="https://star-history.com/#hookprobe/hookprobe&Date">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date" />
+      <img alt="HookProbe GitHub star history over time" src="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date&theme=dark" width="800" />
+    </picture>
+  </a>
+</p>
+
 ## License
 
 HookProbe is licensed under **AGPL-3.0**. Offering it as a service to others may require a commercial
