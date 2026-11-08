@@ -226,6 +226,40 @@ fn target_json(w: &mut JsonBuf, t: &crate::actions::Target) {
     }
 }
 
+/// RFC 5952 text form of an IPv6 address (lower-case hex, the longest run of >= 2 zero groups as `::`).
+fn write_ip6(w: &mut JsonBuf, a: &[u8; 16]) {
+    use core::fmt::Write;
+    let g = |i: usize| ((a[2 * i] as u16) << 8) | a[2 * i + 1] as u16;
+    let (mut bs, mut bl, mut i) = (8usize, 0usize, 0usize);
+    while i < 8 {
+        if g(i) == 0 {
+            let s = i;
+            while i < 8 && g(i) == 0 {
+                i += 1;
+            }
+            if i - s > bl && i - s >= 2 {
+                bs = s;
+                bl = i - s;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    let mut i = 0;
+    while i < 8 {
+        if i == bs {
+            w.raw("::");
+            i += bl;
+            continue;
+        }
+        if i > 0 && i != bs + bl {
+            w.raw(":");
+        }
+        let _ = write!(w, "{:x}", g(i));
+        i += 1;
+    }
+}
+
 /// `GET /api/tls` — TLS clients seen (JA4 + SNI per client), most recent first; IOC / Shield-bypass flags.
 fn render_tls(w: &mut JsonBuf) {
     use core::fmt::Write;
@@ -237,8 +271,15 @@ fn render_tls(w: &mut JsonBuf) {
         }
         first = false;
         let c = e.client;
-        let _ = write!(w, "{{\"client\":\"{}.{}.{}.{}\",\"ja4\":\"{}\",\"sni\":\"{}\",\"count\":{},\"last_ms\":{},\"ioc\":{},\"shield_bypass\":{}}}",
-            c >> 24, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff,
+        w.raw("{\"client\":\"");
+        if e.client6 != [0; 16] {
+            write_ip6(w, &e.client6);
+            // the same device's IPv4 lease (detections are attributed to it)
+            let _ = write!(w, "\",\"lease\":\"{}.{}.{}.{}", c >> 24, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff);
+        } else {
+            let _ = write!(w, "{}.{}.{}.{}", c >> 24, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff);
+        }
+        let _ = write!(w, "\",\"ja4\":\"{}\",\"sni\":\"{}\",\"count\":{},\"last_ms\":{},\"ioc\":{},\"shield_bypass\":{}}}",
             core::str::from_utf8(&e.ja4).unwrap_or(""), core::str::from_utf8(&e.sni[..e.sni_len as usize]).unwrap_or(""),
             e.count, e.last_ms, e.ioc, e.bypass);
     });

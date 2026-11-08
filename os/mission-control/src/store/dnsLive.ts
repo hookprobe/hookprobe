@@ -4,7 +4,7 @@
  * its sample layout there. Nothing here is invented: every number is the device's.
  */
 import { createSignal } from 'solid-js';
-import { fetchJson } from './api';
+import { API_BASE, fetchJson } from './api';
 
 export interface DnsLists {
   blocked_domains: number; allowed_domains: number;
@@ -29,15 +29,25 @@ export const [dnsLive, setDnsLive] = createSignal<DnsLive | null>(null);
  *  the sample layout is shown ONLY then, never on a device where it would look like real controls). */
 export const [dnsState, setDnsState] = createSignal<'loading' | 'live' | 'absent'>('loading');
 let failures = 0;
+/** consecutive failed reads (UI: 'still waiting' instead of an endless spinner) */
+export const [dnsFailures, setDnsFailures] = createSignal(0);
 
 async function read(): Promise<void> {
   try {
     setDnsLive(await fetchJson<DnsLive>('/api/dns?limit=100'));
     setDnsState('live');
     failures = 0;
-  } catch {
+    setDnsFailures(0);
+  } catch (e) {
     failures += 1;
-    if (dnsState() === 'loading' && failures >= 3) setDnsState('absent');
+    setDnsFailures(failures);
+    // A device build (same-origin API) is NEVER 'absent': a slow TLS handshake or a read before the
+    // session cookie lands used to flip a real device to the sample layout, whose demo controls (the
+    // relaxed/balanced/strict buttons) then vanished when the next read succeeded. On a device we keep
+    // the last real data and say we're reconnecting; 'absent' is only for a dev box with no API, or an
+    // API that answers 404 (no Shield on this build).
+    const notFound = e instanceof Error && / HTTP 404$/.test(e.message);
+    if (dnsState() === 'loading' && (notFound || (API_BASE !== '' && failures >= 3))) setDnsState('absent');
   }
 }
 

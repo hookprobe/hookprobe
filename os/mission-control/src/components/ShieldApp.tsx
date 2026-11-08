@@ -24,7 +24,7 @@ import {
   createSignal, createMemo, For, Show, batch, onMount,
 } from 'solid-js';
 import TopBar from './TopBar';
-import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState } from '../store/dnsLive';
+import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState, dnsFailures } from '../store/dnsLive';
 import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
 import CommandPalette from './CommandPalette';
 import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
@@ -360,7 +360,7 @@ const ShieldApp: Component = () => {
         </div>
 
         <Show when={dnsLive()} fallback={
-        <Show when={dnsState() === 'absent'} fallback={<div class="shield-empty" role="status">Loading Shield data from the device…</div>}>
+        <Show when={dnsState() === 'absent'} fallback={<div class="shield-empty" role="status">{dnsFailures() >= 3 ? 'Still waiting for the device — retrying every 10 s…' : 'Loading Shield data from the device…'}</div>}>
         <div class="shield-grid">
 
           {/* Hero — blocked today + protection level */}

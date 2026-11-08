@@ -37,6 +37,13 @@ pub fn v6net(addr: &[u8; 16]) -> u64 {
     TAG_V6NET | (fnv(&addr[..8]) & LOW).max(1)
 }
 
+/// G36: an IPv6 internet PEER folded into 240.0.0.0/4 (reserved, never routed, never `is_internal`) so the
+/// IPv4-keyed behavioural tables (beacon / brute force) can hold a dual-stack device's IPv6 connections
+/// without ever colliding with a real IPv4 address.
+pub fn v6_peer(addr: &[u8; 16]) -> u32 {
+    0xF000_0000 | ((fnv(addr) as u32) & 0x0FFF_FFFF).max(1)
+}
+
 /// Is this an IPv6 key (observe-only)?
 pub fn is_v6(k: u64) -> bool {
     k & (TAG_DEV | TAG_V6NET) != 0

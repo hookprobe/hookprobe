@@ -2354,3 +2354,6 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 @media (prefers-reduced-motion: reduce) {
   .hp-live-state-icon--spin { animation: none; }
 }
+
+/* My Network — TLS flags (rule 125 known-bad TLS client, rule 126 Shield bypass) */
+.net-flag { color: var(--hp-red); font-weight: 600; }
