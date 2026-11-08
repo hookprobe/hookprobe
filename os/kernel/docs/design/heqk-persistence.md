@@ -1,5 +1,9 @@
 # heqk M3 — persistence (eMMC block storage, sealed store, A/B OTA)
 
+> **2026-11-08 decision:** eMMC RPMB key programming is DEFERRED (irreversible); the boot SVN compile-time
+> floor is active and the BCM2712 OTP thermometer path exists unprovisioned. Register: repo docs/design,
+> heqk-decisions-2026-11-08.md §A.
+
 > **Status: reconstructed 2026-09-11 from the authoritative in-tree sources.** Code
 > is the source of truth. The **frozen hardware/write-safety design is
 > `SEALED_STORAGE.md`** (read that first); this doc is the M3 status + map onto the
