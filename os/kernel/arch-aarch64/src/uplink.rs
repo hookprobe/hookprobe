@@ -541,6 +541,121 @@ pub fn bringup_with(nic: Nic, inet_ip: &[u8; 4], mode: &hal::WanMode, out: &mut 
             pppoe_bringup(nic, inet_ip, &user[..user_len as usize], &pass[..pass_len as usize], out);
         }
     }
+    // G17: IPv6 on an Ethernet WAN (PPPoE runs its own probe inside the session).
+    if out.mode != 2 && out.usable() {
+        eth_v6_probe(nic, out);
+    }
+}
+
+/// Send one bare IPv6 packet on the Ethernet WAN to `dmac`.
+fn eth6_tx(nic: Nic, src: &[u8; 6], dmac: &[u8; 6], ip: &[u8]) -> bool {
+    let mut f = [0u8; 1600];
+    let k = crate::wan6eth::eth6(dmac, src, ip, &mut f);
+    k > 0 && nic_tx(nic, &f[..k])
+}
+
+/// IPv6 over an Ethernet WAN — PROBE ONLY (12-s cap, never fatal, IPv4 already works): RS -> RA (the
+/// router and its MAC), then DHCPv6 Solicit with IA_PD -> Advertise -> Request -> Reply (the delegated
+/// prefix for the LAN, DNS). Neighbor Solicitations for our link-local are answered meanwhile, so the
+/// server's unicast replies reach us. Same exchange as `pppoe_v6_probe`, Ethernet-framed.
+fn eth_v6_probe(nic: Nic, out: &UplinkResult) {
+    use crate::{ip6, wan6eth};
+    let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
+    let e = unsafe { &mut *core::ptr::addr_of_mut!(WAN6_ETH) };
+    let iid = ip6::eui64(&out.mac);
+    *w = Wan6 { ran: true, ip6cp_up: false, ip6cp_off: false, my_iid: iid, peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0, t1: 0, sid: [0; 64], sid_len: 0, xid: 0, got_ms: 0, renew_tx: 0, renew_ok: 0, last_renew_ms: 0 };
+    *e = Wan6Eth { up: false, iid, ll: ip6::link_local(&iid), router_mac: [0; 6], router_ll: [0; 16], na_tx: 0, echo_tx: 0 };
+    // 5 s budget; a router that answers extends it to 12 s (a WAN without IPv6 never costs more than 5 s).
+    let mut cap = cntpct() + ticks_ms(5_000);
+    let mut buf = [0u8; 2048];
+    let mut pkt = [0u8; 400];
+    let mut ans = [0u8; 1600];
+    let xid = (cntpct() as u32) & 0x00ff_ffff | 0x0200_0000;
+    let iaid = u32::from_be_bytes([out.mac[2], out.mac[3], out.mac[4], out.mac[5]]);
+    let (mut next_rs, mut next_dhcp) = (0u64, 0u64);
+    let mut sid = [0u8; 64];
+    let mut sid_len = 0usize;
+    let mut adv_pd: Option<([u8; 16], u8)> = None;
+    while cntpct() < cap && !w.reply {
+        let now = cntpct();
+        if w.ra.is_none() && w.rs_tx < 3 && now >= next_rs {
+            let n = ip6::build_rs(&iid, &mut pkt);
+            if eth6_tx(nic, &out.mac, &wan6eth::MAC_ALL_ROUTERS, &pkt[..n]) {
+                w.rs_tx += 1;
+            }
+            next_rs = now + ticks_ms(1_500);
+        }
+        if w.dhcp_tx < 6 && now >= next_dhcp && (w.ra.is_some() || w.rs_tx >= 3) {
+            let (msg, pd) = if w.advertise { (ip6::DHCP6_REQUEST, adv_pd) } else { (ip6::DHCP6_SOLICIT, None) };
+            let n = ip6::build_dhcp6(msg, xid, &out.mac, &iid, iaid, &sid[..sid_len], pd.as_ref().map(|(p, l)| (p, *l)), !w.advertise, &mut pkt);
+            if eth6_tx(nic, &out.mac, &wan6eth::MAC_ALL_DHCP, &pkt[..n]) {
+                w.dhcp_tx += 1;
+            }
+            next_dhcp = now + ticks_ms(2_000);
+        }
+        let Some(n) = nic_rx(nic, &mut buf) else { continue };
+        let n = n.min(buf.len());
+        if n < 14 + 40 || buf[12] != 0x86 || buf[13] != 0xdd {
+            continue; // IPv4 during the probe: the lease is already up, nothing pending on it
+        }
+        let mut smac = [0u8; 6];
+        smac.copy_from_slice(&buf[6..12]);
+        let ip = &buf[14..n];
+        w.v6_frames_rx += 1;
+        if let wan6eth::Answer::Reply(k, d) = wan6eth::answer(ip, &smac, &e.ll, &out.mac, &mut ans) {
+            if eth6_tx(nic, &out.mac, &d, &ans[..k]) {
+                e.na_tx += 1;
+            }
+            continue;
+        }
+        if let Some(ra) = ip6::parse_ra(ip) {
+            if w.ra.is_none() {
+                w.ra = Some(ra);
+                e.router_mac = smac;
+                e.router_ll = ra.router;
+                e.up = true;
+                cap = cntpct() + ticks_ms(12_000);
+                next_dhcp = 0; // DHCPv6 right away
+            }
+            continue;
+        }
+        if let Some(d) = ip6::parse_dhcp6(ip, xid) {
+            w.dhcp_rx += 1;
+            if d.status != 0 {
+                w.status = d.status;
+            }
+            if d.has_dns {
+                w.dns = Some(d.dns);
+            }
+            if d.msg == ip6::DHCP6_ADVERTISE && !w.advertise {
+                w.advertise = true;
+                sid_len = d.sid_len;
+                sid[..sid_len].copy_from_slice(&d.server_id[..sid_len]);
+                if d.has_pd {
+                    adv_pd = Some((d.prefix, d.plen));
+                }
+                next_dhcp = 0; // Request now
+            } else if d.msg == ip6::DHCP6_REPLY {
+                w.reply = true;
+                w.t1 = d.t1;
+                if d.sid_len > 0 {
+                    w.sid[..d.sid_len].copy_from_slice(&d.server_id[..d.sid_len]);
+                    w.sid_len = d.sid_len;
+                } else {
+                    w.sid[..sid_len].copy_from_slice(&sid[..sid_len]);
+                    w.sid_len = sid_len;
+                }
+                w.xid = xid;
+                w.got_ms = ms_now();
+                if d.has_pd {
+                    w.pd = Some((d.prefix, d.plen, d.valid));
+                }
+                if d.has_na {
+                    w.na = Some(d.na);
+                }
+            }
+        }
+    }
 }
 
 /// The live PPPoE session (engine state: session id, AC, negotiated addresses, LCP state).
@@ -683,6 +798,21 @@ pub static mut WAN6: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false
 /// Router Advertisement from the ISP — answers "does Digi ever send an RA?" — plus WAN v6 TX outcomes.
 /// [v6 rx, RAs rx, v6 tx ok, v6 tx fail]
 pub static mut WAN6_LIVE: [u32; 4] = [0; 4];
+
+/// G17: IPv6 on an Ethernet WAN (DHCP / static) — our link-local and the router learned from its RA.
+#[derive(Clone, Copy)]
+pub struct Wan6Eth {
+    /// A router answered (RA seen): IPv6 egress + ND answering are live.
+    pub up: bool,
+    pub iid: [u8; 8],
+    pub ll: [u8; 16],
+    pub router_mac: [u8; 6],
+    pub router_ll: [u8; 16],
+    /// Neighbor Advertisements / echo replies sent for our link-local.
+    pub na_tx: u32,
+    pub echo_tx: u32,
+}
+pub static mut WAN6_ETH: Wan6Eth = Wan6Eth { up: false, iid: [0; 8], ll: [0; 16], router_mac: [0; 6], router_ll: [0; 16], na_tx: 0, echo_tx: 0 };
 pub static mut WAN6_FIRST_RA: Option<crate::ip6::Ra> = None;
 
 /// IPv6 over the open PPPoE session — PROBE ONLY (12-s cap, never fatal, IPv4 already works):
@@ -818,7 +948,8 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
 /// a Reply refreshes it (pppoe_poll). T1 = 0 (server's choice) -> renew at half the valid lifetime;
 /// T1 = infinite (Digi) -> never. Call from the serve loop; cheap when nothing is due.
 pub fn wan6_tick(up: &UplinkResult) {
-    if up.mode != 2 {
+    let eth = up.mode != 2;
+    if eth && !unsafe { WAN6_ETH.up } {
         return;
     }
     let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
@@ -829,6 +960,17 @@ pub fn wan6_tick(up: &UplinkResult) {
     }
     let now = ms_now();
     if now.wrapping_sub(w.got_ms) < t1 as u64 * 1000 || (w.last_renew_ms != 0 && now.wrapping_sub(w.last_renew_ms) < 10_000) {
+        return;
+    }
+    if eth {
+        let e = unsafe { WAN6_ETH };
+        let iaid = u32::from_be_bytes([up.mac[2], up.mac[3], up.mac[4], up.mac[5]]);
+        let mut pkt = [0u8; 400];
+        let n = crate::ip6::build_dhcp6(crate::ip6::DHCP6_RENEW, w.xid, &up.mac, &e.iid, iaid, &w.sid[..w.sid_len], Some((&pfx, plen)), false, &mut pkt);
+        if eth6_tx(up.nic, &up.mac, &crate::wan6eth::MAC_ALL_DHCP, &pkt[..n]) {
+            w.renew_tx += 1;
+        }
+        w.last_renew_ms = now.max(1);
         return;
     }
     unsafe {
@@ -851,7 +993,9 @@ pub fn wan6_tick(up: &UplinkResult) {
 /// Send a bare IPv6 packet into the PPPoE session (the LAN v6 router's forward path). PPPoE only.
 pub fn wan_tx6(up: &UplinkResult, ip6: &[u8]) -> bool {
     if up.mode != 2 {
-        return false;
+        // G17: Ethernet WAN — to the router learned from its RA.
+        let e = unsafe { WAN6_ETH };
+        return e.up && eth6_tx(up.nic, &up.mac, &e.router_mac, ip6);
     }
     unsafe {
         let Some(e) = (*core::ptr::addr_of!(PPP)).as_ref() else { return false };
@@ -1159,6 +1303,39 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
     };
     if n < 14 {
         return WanEvent::Idle;
+    }
+    // G17: IPv6 for us on an Ethernet WAN — ND/echo for our link-local, RA (router move), renew replies.
+    if buf[12] == 0x86 && buf[13] == 0xdd && n >= 14 + 40 && unsafe { WAN6_ETH.up } {
+        let e = unsafe { &mut *core::ptr::addr_of_mut!(WAN6_ETH) };
+        let mut smac = [0u8; 6];
+        smac.copy_from_slice(&buf[6..12]);
+        let mut ans = [0u8; 1600];
+        if let crate::wan6eth::Answer::Reply(k, d) = crate::wan6eth::answer(&buf[14..n], &smac, &e.ll, &up.mac, &mut ans) {
+            if eth6_tx(nic, &up.mac, &d, &ans[..k]) {
+                if ans[40] == 136 { e.na_tx += 1 } else { e.echo_tx += 1 }
+            }
+            return WanEvent::Idle;
+        }
+        if let Some(ra) = crate::ip6::parse_ra(&buf[14..n]) {
+            if ra.router == e.router_ll && smac != e.router_mac {
+                e.router_mac = smac; // the router's MAC changed (failover)
+            }
+            unsafe { WAN6_LIVE[1] += 1 };
+            return WanEvent::Idle;
+        }
+        let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
+        if w.pd.is_some() && w.renew_tx > 0 {
+            if let Some(d) = crate::ip6::parse_dhcp6(&buf[14..n], w.xid) {
+                if d.msg == crate::ip6::DHCP6_REPLY && d.has_pd && d.status == 0 {
+                    w.pd = Some((d.prefix, d.plen, d.valid));
+                    w.t1 = d.t1;
+                    w.got_ms = ms_now();
+                    w.renew_ok += 1;
+                    return WanEvent::Idle;
+                }
+            }
+        }
+        unsafe { WAN6_LIVE[0] += 1 };
     }
     if buf[12] != 0x08 || buf[13] != 0x06 {
         return WanEvent::Frame(n);

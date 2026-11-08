@@ -3135,6 +3135,11 @@ fn cm5_p10_probe() {
                             }
                             {
                                 let w = unsafe { uplink::WAN6 };
+                                let e6 = unsafe { uplink::WAN6_ETH };
+                                if w.ran && up.mode != 2 {
+                                    kprint!(" [WAN6] Ethernet WAN: link-local fe80::{:02x?} | router {} {:02x?} | RS tx={} DHCPv6 tx={} rx={} reply={}\n",
+                                        e6.iid, if e6.up { "seen" } else { "NOT seen" }, e6.router_mac, w.rs_tx, w.dhcp_tx, w.dhcp_rx, w.reply);
+                                }
                                 if w.ran {
                                     let h = |a: &[u8; 16]| {
                                         let g = |k: usize| u16::from_be_bytes([a[2 * k], a[2 * k + 1]]);
@@ -6407,6 +6412,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = actionapi::selftest();
         let _ = apcred::selftest();
         let _ = mcmgmt::selftest();
+        let _ = arch_aarch64::wan6eth::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();
