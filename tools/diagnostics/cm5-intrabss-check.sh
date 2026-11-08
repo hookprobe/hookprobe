@@ -113,6 +113,7 @@ D=$(curl -sk -m 10 -b "$J" "$MC/api/detections?limit=200")
 if grep -q "\"rule_id\":1200001[^}]*\"src_ip\":\"$B_IP\"" <<<"$D"; then
   echo "INTRA-BSS: PASS — station-to-station traffic went through heqk (4444 detection from $B_IP)"
   rc=0
+  echo "  relay counters: $(curl -sk -m 10 -b "$J" "$MC/api/health" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("lan_relay"))' 2>/dev/null)"
   if grep -q "MCAST got" <<<"$OUT"; then echo "INTRA-BSS-MCAST: PASS — B's SSDP announcement reached A (discovery relay)"; else echo "INTRA-BSS-MCAST: FAIL — B's SSDP announcement never reached A"; rc=4; fi
   if grep -q "PING6 ok" <<<"$OUT"; then echo "INTRA-BSS-V6: PASS — B reached A's IPv6 link-local address through heqk"; else echo "INTRA-BSS-V6: FAIL — no IPv6 station-to-station"; rc=5; fi
   exit $rc
