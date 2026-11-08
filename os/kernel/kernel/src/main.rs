@@ -6485,6 +6485,7 @@ pub extern "C" fn kmain() -> ! {
         policy_selftest();
         let _ = policysig::selftest();
         let _ = shield::selftest();
+        let _ = shield::profile_selftest();
         let _ = dga::selftest();
         let _ = ioc::selftest();
         let _ = oui::selftest();
