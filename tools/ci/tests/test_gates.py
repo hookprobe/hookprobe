@@ -44,6 +44,13 @@ class Wiring(unittest.TestCase):
             with self.subTest(name=name):
                 self.assertTrue(g0_wiring.check_workflow("x.yml", wf), f"{name} not caught")
 
+    def test_g1_job_needs_full_history(self):
+        g1 = GOOD_WF.replace("tools/ci/gates.sh g0", "tools/ci/gates.sh g1")
+        self.assertTrue(any("W2c" in e for e in g0_wiring.check_workflow("x.yml", g1)))
+        ok = g1.replace("      - uses: actions/checkout@v4\n",
+                        "      - uses: actions/checkout@v4\n        with: { fetch-depth: 0 }\n")
+        self.assertEqual(g0_wiring.check_workflow("x.yml", ok), [])
+
     def test_bare_on_key_parsed(self):  # YAML 1.1 turns `on:` into True
         self.assertEqual(g0_wiring.check_workflow("x.yml", GOOD_WF.replace("on: [push]", "on:\n  push: {}")), [])
 
