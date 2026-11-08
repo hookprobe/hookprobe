@@ -324,10 +324,36 @@ pub fn selftest() -> bool {
     let mut junk = rec;
     junk[0] = 23;
     safe &= client_hello(&junk[..n]).is_none() && client_hello(&[0xff; 300]).is_none();
-    let pass = kat && gr && safe;
+    // IPv6 leg: the same hello inside Ethernet/IPv6/TCP is fingerprinted under its v6 source + lease.
+    let mut f = [0u8; 74 + 256];
+    f[12] = 0x86;
+    f[13] = 0xdd;
+    f[14] = 0x60;
+    f[18..20].copy_from_slice(&((20 + n) as u16).to_be_bytes());
+    f[20] = 6;
+    f[21] = 64;
+    f[22] = 0x20;
+    f[23] = 0x01;
+    f[37] = 0x77; // src 2001::77
+    f[66] = 0x50; // TCP data offset 5
+    f[67] = 0x18;
+    f[74..74 + n].copy_from_slice(&rec[..n]);
+    let before = hellos();
+    observe6(&f[..74 + n], 0x0a63_0042);
+    let mut seen6 = false;
+    for_each(&mut |e| seen6 |= e.client6[0] == 0x20 && e.client6[15] == 0x77 && e.client == 0x0a63_0042);
+    let v6 = hellos() == before + 1 && seen6;
+    // leave the live table as it was: the device's /api/tls must never show a selftest client
+    for e in unsafe { (*core::ptr::addr_of_mut!(SEEN)).iter_mut() } {
+        if e.client6[0] == 0x20 && e.client6[15] == 0x77 && e.client == 0x0a63_0042 {
+            *e = S0;
+        }
+    }
+    unsafe { HELLOS = before };
+    let pass = kat && gr && safe && v6;
     arch_aarch64::_print(format_args!(
-        " [P-ja4] {} — passive TLS ClientHello fingerprint (FoxIO JA4, linux-tier/reference vector) t13d0204h2_62ed6f6ca7ad_3953dc75acc4 + SNI={} | GREASE ignored={} | every truncation + non-handshake + garbage safe={}\n",
-        if pass { "PASS" } else { "FAIL" }, kat, gr, safe
+        " [P-ja4] {} — passive TLS ClientHello fingerprint (FoxIO JA4, linux-tier/reference vector) t13d0204h2_62ed6f6ca7ad_3953dc75acc4 + SNI={} | GREASE ignored={} | every truncation + non-handshake + garbage safe={} | IPv6 client fingerprinted={}\n",
+        if pass { "PASS" } else { "FAIL" }, kat, gr, safe, v6
     ));
     pass
 }
@@ -337,7 +363,10 @@ pub fn selftest() -> bool {
 
 #[derive(Clone, Copy)]
 pub struct Seen {
+    /// IPv4 client (for an IPv6 client: the same device's IPv4 lease, 0 if it has none)
     pub client: u32,
+    /// IPv6 client address (all-zero for an IPv4 observation)
+    pub client6: [u8; 16],
     pub ja4: [u8; 36],
     pub sni: [u8; 64],
     pub sni_len: u8,
@@ -347,7 +376,7 @@ pub struct Seen {
     pub ioc: bool,
     pub bypass: bool,
 }
-const S0: Seen = Seen { client: 0, ja4: [0; 36], sni: [0; 64], sni_len: 0, count: 0, first_ms: 0, last_ms: 0, ioc: false, bypass: false };
+const S0: Seen = Seen { client: 0, client6: [0; 16], ja4: [0; 36], sni: [0; 64], sni_len: 0, count: 0, first_ms: 0, last_ms: 0, ioc: false, bypass: false };
 const RING: usize = 64;
 static mut SEEN: [Seen; RING] = [S0; RING];
 static mut HELLOS: u64 = 0;
@@ -366,6 +395,27 @@ fn ms() -> u64 {
 /// device reached it without Shield: DoH, a hard-coded IP or a stale answer) fire observe-only.
 /// Cost on every other segment: two byte compares.
 pub fn observe(payload: &[u8], src: u32) {
+    observe_at(payload, src, [0; 16]);
+}
+
+/// An IPv6 TCP frame from a LAN client (Ethernet/IPv6, no extension headers on the TLS path). `attrib` is the
+/// device's IPv4 lease (by MAC) so detections land on the device the owner knows; 0 when it has none.
+pub fn observe6(frame: &[u8], attrib: u32) {
+    let Some(m) = crate::net::parse(frame) else { return };
+    if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || frame.len() < 38 {
+        return;
+    }
+    let Some(&off) = frame.get(m.l4_off + 12) else { return };
+    let pay = m.l4_off + ((off >> 4) as usize) * 4;
+    if pay >= frame.len() {
+        return;
+    }
+    let mut s6 = [0u8; 16];
+    s6.copy_from_slice(&frame[22..38]);
+    observe_at(&frame[pay..], attrib, s6);
+}
+
+fn observe_at(payload: &[u8], src: u32, src6: [u8; 16]) {
     if payload.len() < 43 || payload[0] != 22 || payload[5] != 1 {
         return;
     }
@@ -375,12 +425,12 @@ pub fn observe(payload: &[u8], src: u32) {
     let bypass = h.sni_len > 0 && crate::shield::decide(&h.sni[..h.sni_len as usize]) == crate::shield::Verdict::Blocked;
     let now = ms();
     let t = unsafe { &mut *core::ptr::addr_of_mut!(SEEN) };
-    let slot = t.iter().position(|e| e.count > 0 && e.client == src && e.ja4 == h.ja4 && e.sni[..e.sni_len as usize] == h.sni[..h.sni_len as usize])
+    let slot = t.iter().position(|e| e.count > 0 && e.client == src && e.client6 == src6 && e.ja4 == h.ja4 && e.sni[..e.sni_len as usize] == h.sni[..h.sni_len as usize])
         .or_else(|| t.iter().position(|e| e.count == 0))
         .unwrap_or_else(|| (0..RING).min_by_key(|&i| t[i].last_ms).unwrap_or(0));
     let e = &mut t[slot];
-    if e.count == 0 || e.client != src || e.ja4 != h.ja4 {
-        *e = Seen { client: src, ja4: h.ja4, sni: h.sni, sni_len: h.sni_len, count: 0, first_ms: now, last_ms: now, ioc, bypass };
+    if e.count == 0 || e.client != src || e.client6 != src6 || e.ja4 != h.ja4 {
+        *e = Seen { client: src, client6: src6, ja4: h.ja4, sni: h.sni, sni_len: h.sni_len, count: 0, first_ms: now, last_ms: now, ioc, bypass };
     }
     e.count = e.count.saturating_add(1);
     e.last_ms = now;

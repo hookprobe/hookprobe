@@ -2,3 +2,6 @@
 # and traffic to 203.0.113.0/24 (TEST-NET-3) is tagged rule 302 — neither is ever dropped.
 domain c2.ioc-test.example
 cidr 203.0.113.0/24
+# Rule 125 bench: the bench Pi's `openssl s_client -4` ClientHello (no ALPN) is the "known-bad" TLS client.
+# Its curl (h2 ALPN, different JA4) is the negative control and must NOT match.
+ja4 t13d301000_1d37bd780c83_44bd9d9dad66

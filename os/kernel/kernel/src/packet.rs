@@ -214,7 +214,8 @@ pub fn verdict(frame: &[u8]) -> (u16, u16) {
     // plane is ARMED (C7) by an authenticated authority; fail-open (Full default / mgmt floor
     // / infra carve-out) otherwise. A threat DROP is never second-guessed here (threats drop
     // regardless of reach). Keyed on the frame's OWN src MAC (no victim-framing path).
-    if v == PASS && frame.len() >= 12 {
+    // G34: while the plane is disarmed reach_allow is `true` for every frame — skip the address work.
+    if v == PASS && frame.len() >= 12 && crate::segment::reach_armed() {
         let mac_key = crate::ratelimit::mac_hash(&frame[6..12]);
         let (src, dst) = with_normalized(frame, |nframe| (crate::net::eth_ipv4_src(nframe), crate::net::eth_ipv4_dst(nframe).unwrap_or(0)));
         let dst_internal = dst != 0 && crate::behavioral::is_internal(dst);
@@ -309,26 +310,19 @@ pub fn prod_datapath_selftest() -> (bool, u32, u32) {
 fn classify(frame: &[u8]) -> (u16, u16) {
     // Destination context for any hit the tiers record (the UI's dst column), cleared after.
     // (eth_ipv4_dst + net::parse walk VLAN tags themselves: no strip/copy on the hot path.)
-    {
-        let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
-        let dport = if dst != 0 {
-            crate::net::parse(frame).filter(|m| m.has_l4_ports()).map_or(0, |m| m.dst_port)
-        } else {
-            0
-        };
-        crate::events::set_ctx(dst, dport);
-    }
-    let r = classify_tiers(frame);
+    // G34 step 2: the headers are parsed ONCE here and the result handed to every tier (this used to
+    // run net::parse twice and the IPv4-dst walk three times per frame).
+    let meta = crate::net::parse(frame);
+    let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
+    let dport = if dst != 0 { meta.filter(|m| m.has_l4_ports()).map_or(0, |m| m.dst_port) } else { 0 };
+    crate::events::set_ctx(dst, dport);
+    // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view (G34: no per-packet zeroing).
+    let r = with_normalized(frame, |nframe| classify_tiers_n(frame, nframe, meta, dst));
     crate::events::set_ctx(0, 0);
     r
 }
 
-fn classify_tiers(frame: &[u8]) -> (u16, u16) {
-    // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view (G34: no per-packet zeroing).
-    with_normalized(frame, |nframe| classify_tiers_n(frame, nframe))
-}
-
-fn classify_tiers_n(frame: &[u8], nframe: &[u8]) -> (u16, u16) {
+fn classify_tiers_n(frame: &[u8], nframe: &[u8], meta: Option<crate::net::PacketMeta>, dst: u32) -> (u16, u16) {
     // DET-11: the IPv4 source (0 if not IPv4), attributed on any detection below.
     let src = crate::net::eth_ipv4_src(nframe);
     // M2.1 — structural + stateful L2 tier (F6/F7/F8 structural anomalies + mac-flood
@@ -384,14 +378,14 @@ fn classify_tiers_n(frame: &[u8], nframe: &[u8]) -> (u16, u16) {
             return (0, DROP);
         }
     }
-    match crate::net::parse(frame) {
+    match meta {
         Some(m) if m.has_l4_ports() => {
             // M2.4 BEHAVIORAL tier (A10 lateral / L8 beacon / DNS) — DETECTION half, wired
             // live off the connection-observation stream. Observe-ONLY by construction
             // (FindingClass::Behavioral → unconditional Observe; verdict.rs), so these NEVER
             // affect the drop decision — call-and-continue; each fires its own event when it
             // trips (SEPDIAG-visible). NTP:123 is exempt inside beacon_observe_at (row L8).
-            let dst = crate::net::eth_ipv4_dst(nframe).unwrap_or(0);
+            // (dst: parsed once in classify — eth_ipv4_dst walks the VLAN tags itself)
             // One observation per CONNECTION (a pure SYN), not per packet: a keep-alive or a long
             // transfer is not a series of beacons (parity G4; V1's per-packet lateral was an FP factory).
             let syn = frame.get(m.l4_off + 13).map_or(false, |&f| f & 0x12 == 0x02);
