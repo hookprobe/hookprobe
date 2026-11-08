@@ -37,8 +37,11 @@ build env (`HEQK_AP_PSK`, bench images only) > the per-device **setup AP** crede
 is visibly different (SSID prefix `HookProbe-Setup-`).
 
 **D4 — owner auth stays separate.** Joining the Wi-Fi gives network access only; Mission Control still needs
-the owner key (ADR 0037 D3) and runs on the management path. Client isolation (`ap_isolate`, G10) is on.
-There is no WPS code in heqk.
+the owner key (ADR 0037 D3). Client isolation (`ap_isolate`, G10) is on. There is no WPS code in heqk.
+**Open gap (metal 2026-11-08):** in the AP image Mission Control is served to Wi-Fi clients
+(`http://10.99.0.1/`) and NOT on the management VLAN (which answers ping only). Management isolation as the
+operator required means: serve MC on the management interface, and on the client AP only behind an explicit
+operator choice. Tracked as G12-M (next increment).
 
 **D5 — later increments.** (a) Mission Control "Wi-Fi" panel showing the setup credential + QR behind owner
 re-authentication (ADR 0053 guards); (b) setup → client hand-off: once a signed WIFI.TXT is present the setup
