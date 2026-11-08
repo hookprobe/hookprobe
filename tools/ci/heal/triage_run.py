@@ -84,6 +84,33 @@ def autofix_eligible(run: dict, default_branch: str, repo: str, compare=None) ->
         return False   # fail-closed
 
 
+MAX_NEW_ISSUES_PER_RUN = 3
+AGGREGATOR_JOBS = {"ci-ok"}
+
+
+def fetch_job_log(repo, run_id, job_id):
+    """A job's log text. `gh api …/jobs/N/logs` REFUSES output containing ANSI escapes (every Actions
+    log has them) — that made every 2026-11-08 triage 'unknown'. `gh run view --log` returns the text."""
+    p = subprocess.run(["gh", "run", "view", str(run_id), "--repo", repo, "--job", str(job_id), "--log"],
+                       capture_output=True, text=True)
+    if p.returncode == 0 and p.stdout.strip():
+        return p.stdout
+    return f"(log unavailable: {p.stderr.strip()[:300]})"
+
+
+def stabilise_signature(d):
+    """Pure: an UNKNOWN failure gets one signature per gate. Its default signature hashes the log tail
+    (run ids, timings), so every recurrence looked new and opened another issue."""
+    if d["category"] == "unknown":
+        d["signature"] = f"unknown-{d['gate']}".replace("?", "unmapped")
+    return d
+
+
+def should_file_issues(run, default_branch):
+    """Pure: file/annotate issues only for push/schedule/dispatch runs ON the default branch."""
+    return run.get("head_branch") == default_branch and run.get("event") in ("push", "schedule", "workflow_dispatch")
+
+
 def gh(*args, input_text=None):
     p = subprocess.run(["gh", *args], capture_output=True, text=True, input=input_text)
     if p.returncode != 0:
@@ -107,15 +134,15 @@ def main() -> int:
                          "-q", "[.jobs[] | select(.conclusion==\"failure\") | {id, name}]") or "[]")
     decisions = []
     for j in jobs:
+        if j["name"] in AGGREGATOR_JOBS:
+            continue  # fails whenever another job fails — derivative, carries no failure of its own
         lp = os.path.join(a.logs_dir, f"{j['id']}.log")
-        try:
-            text = gh("api", f"repos/{a.repo}/actions/jobs/{j['id']}/logs")
-        except RuntimeError as e:
-            text = f"(log unavailable: {e})"
+        text = fetch_job_log(a.repo, a.run_id, j["id"])
         with open(lp, "w") as f:
             f.write(text)
         d = classify.classify_text(text, gate_for(workflow, j["name"]))
         d.update(job=j["name"], job_id=j["id"])
+        stabilise_signature(d)
         decisions.append(d)
     if not decisions:
         print("no failed jobs found (cancelled run?) — nothing to triage")
@@ -126,10 +153,16 @@ def main() -> int:
     run_url = run.get("html_url", "")
     is_default = autofix_eligible(run, default_branch, a.repo)
     issue, attempts = "", 0
-    if not a.dry_run:
+    # Issues are for failures of code ON the default branch only. A PR / Dependabot failure is already
+    # visible on the PR itself; filing issues for it flooded the tracker (42 issues in 35 min, 2026-11-08).
+    file_issues = should_file_issues(run, default_branch) and not a.dry_run
+    if not file_issues:
+        print(f"not filing issues for event={run.get('event')} branch={run.get('head_branch')} (default-branch failures only)")
+    if file_issues:
         gh("label", "create", "ci-autoheal", "--repo", a.repo, "--color", "B60205", "--force",
            "--description", "Opened by the ADR 0052 heal loop")
-        for d in decisions:
+        created = 0
+        for d in sorted(decisions, key=lambda d: SEVERITY.index(d["category"]) if d["category"] in SEVERITY else 99):
             title = issue_title(d)
             # ALL states: closing the issue must not reset the attempt budget (security-auditor L2).
             hist = json.loads(gh("issue", "list", "--repo", a.repo, "--state", "all", "--label", "ci-autoheal",
@@ -140,10 +173,14 @@ def main() -> int:
             if found:
                 num = found[0]["number"]
                 gh("issue", "comment", str(num), "--repo", a.repo, "--body", "Recurred.\n\n" + body)
+            elif created >= MAX_NEW_ISSUES_PER_RUN:
+                print(f"issue cap reached ({MAX_NEW_ISSUES_PER_RUN}/run) — not filing {d['signature']}")
+                continue
             else:
                 url = gh("issue", "create", "--repo", a.repo, "--title", title, "--label", "ci-autoheal",
                          "--body", body + "\n_Deterministic triage by tools/ci/heal/triage_run.py (ADR 0052)._").strip()
                 num = url.rsplit("/", 1)[-1]
+                created += 1
             if d is top:
                 issue, attempts = str(num), n_att
     out = {"action": top["action"], "gate": top["gate"], "category": top["category"],
