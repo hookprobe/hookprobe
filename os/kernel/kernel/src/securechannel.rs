@@ -499,6 +499,16 @@ pub fn securechannel_selftest() -> bool {
         if mlkem_kat { "OK" } else { "MISMATCH" }
     );
     all &= mlkem_rt && mlkem_kat;
+    // FIPS 203 §7.2: an honest encapsulation key passes, one with a coefficient = q (3329) is refused.
+    let (_, ek) = MlKem768::generate_deterministic(&Array(d), &Array(z));
+    let honest = ek.as_bytes();
+    let mut bad = [0u8; 1184];
+    bad.copy_from_slice(honest.as_slice());
+    bad[0] = 0x01;
+    bad[1] = (bad[1] & 0xf0) | 0x0d;
+    let ek_check = ek_from_bytes(honest.as_slice()).is_some() && ek_from_bytes(&bad).is_none();
+    kprint!("   [1b] ML-KEM-768 encapsulation-key check (FIPS 203 §7.2): honest accepted, unreduced refused {}\n", if ek_check { "OK" } else { "FAIL" });
+    all &= ek_check;
 
     // 2. X25519: RFC 7748 §5.2 single-computation vector.
     let x_out = x25519(X25519_RFC7748_SCALAR, X25519_RFC7748_U);
@@ -1229,7 +1239,22 @@ pub struct Session {
 // ml-kem wire (de)serialization helpers.
 // ---------------------------------------------------------------------------
 
+/// FIPS 203 §7.2 encapsulation-key input check (RustCrypto ml-kem 0.2.3 `from_bytes` does not do it): every
+/// 12-bit coefficient of the 1152-byte t-part must be < q. Same rule as tlsprov's `mlkem_ek_ok`; both checked
+/// against NIST's ACVP encapsulationKeyCheck vectors (os/build/kem-diff `acvp`).
+fn ek_modulus_ok(b: &[u8]) -> bool {
+    b.len() == 1184
+        && b[..1152].chunks_exact(3).all(|c| {
+            let a = c[0] as u16 | ((c[1] as u16 & 0x0f) << 8);
+            let d = (c[1] as u16 >> 4) | ((c[2] as u16) << 4);
+            a < 3329 && d < 3329
+        })
+}
+
 fn ek_from_bytes(b: &[u8]) -> Option<MlEk> {
+    if !ek_modulus_ok(b) {
+        return None; // a peer key with an unreduced coefficient: refuse before any encapsulation
+    }
     let enc = ml_kem::Encoded::<MlEk>::try_from(b).ok()?;
     Some(<MlEk as EncodedSizeUser>::from_bytes(&enc))
 }
