@@ -555,6 +555,36 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     Some(v)
 }
 
+/// ADR 0049 D2 (parity G24a/G18) — the same scan SHAPE for an IPv6 TCP frame, OBSERVE-ONLY. `src` is the
+/// tagged key of the frame's sender (`srckey::dev` on our LAN, `srckey::v6net` from the internet) and
+/// `dst` the key of its receiver — used when the frame is an ANSWER (RST / SYN-ACK), which credits the prober
+/// exactly as `flow_scan_verdict` does for IPv4 (ADR 0049 D3: no answer, no count). Never a wire action:
+/// IPv6 sources stay observe-only until the separation matrix has its IPv6 rows on metal. Returns true when
+/// `src` is over the scan wall.
+pub fn flow_scan_observe6(frame: &[u8], src: u64, dst: u64) -> bool {
+    if src == 0 {
+        return false;
+    }
+    let Some(meta) = crate::net::parse(frame) else { return false };
+    if meta.ethertype != crate::net::ETHERTYPE_IPV6 || meta.ip_proto != crate::net::IPPROTO_TCP || !meta.has_l4_ports() {
+        return false;
+    }
+    let Some(&flags) = frame.get(meta.l4_off + 13) else { return false };
+    if flags & 0x04 != 0 || (flags & 0x02 != 0 && flags & 0x10 != 0) {
+        crate::ratelimit::scan_response_observe(dst, meta.src_port, flags & 0x02 != 0);
+        return false;
+    } else if flags & 0x10 != 0 {
+        crate::ratelimit::flow_ack_observe(src, meta.dst_port);
+    } else if flags & 0x02 != 0 {
+        crate::ratelimit::syn_scan_observe(src, meta.dst_port, false);
+    }
+    if crate::ratelimit::scan_over_ratelimit(src) {
+        crate::srckey::note_v6_scan(src, crate::ratelimit::scan_confirmed(src));
+        return true;
+    }
+    false
+}
+
 /// ADR 0049 D3 on the AP's NAT path: the IDS sees inbound answers BEFORE un-NAT (addressed to the WAN IP),
 /// so a LAN client's probes could never be matched. The un-NATed frame (addressed to the client) is fed here
 /// so the target's RST / SYN-ACK credits the right prober. Observation only — no verdict.
