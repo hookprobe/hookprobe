@@ -34,7 +34,8 @@ setup)
   ;;
 v6up)
   mkdir -p /run/hqbench
-  sysctl -qw "net/ipv6/conf/$P.100/accept_ra=0" "net/ipv6/conf/$P.100/forwarding=1"
+  # keep_addr_on_down: a port down/up (the late-link test) must not flush the bench address
+  sysctl -qw "net/ipv6/conf/$P.100/accept_ra=0" "net/ipv6/conf/$P.100/forwarding=1" "net/ipv6/conf/$P.100/keep_addr_on_down=1"
   ip -6 addr replace 2001:db8:100::1/64 dev $P.100
   cat > /run/hqbench/radvd.conf <<CONF
 interface $P.100 {
@@ -69,7 +70,9 @@ v6route)
   # route every delegated prefix in the kea lease file to the client's link-local next hop
   [ -f /var/lib/kea/kea-leases6.csv ] || { echo "no leases"; exit 0; }
   awk -F, 'NR>1 && $7==2 {print $1"/"$9}' /var/lib/kea/kea-leases6.csv | sort -u | while read -r pfx; do
-    nh=$(ip -6 neigh show dev $P.100 | awk '/fe80::/ {print $1; exit}')
+    # the client's link-local: a neighbour that is not one of our own addresses (OVS mirrors can echo ours)
+    own=$(ip -6 addr show dev $P.100 | awk '/inet6/ {sub("/.*","",$2); print $2}')
+    nh=$(ip -6 neigh show dev $P.100 | awk '/^fe80::/ && !/router/ {print $1}' | grep -vxF "$own" | head -1)
     [ -n "$nh" ] && ip -6 route replace "$pfx" via "$nh" dev $P.100 && echo "route $pfx via $nh"
   done
   ;;
