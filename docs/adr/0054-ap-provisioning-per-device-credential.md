@@ -38,10 +38,17 @@ is visibly different (SSID prefix `HookProbe-Setup-`).
 
 **D4 — owner auth stays separate.** Joining the Wi-Fi gives network access only; Mission Control still needs
 the owner key (ADR 0037 D3). Client isolation (`ap_isolate`, G10) is on. There is no WPS code in heqk.
-**Open gap (metal 2026-11-08):** in the AP image Mission Control is served to Wi-Fi clients
-(`http://10.99.0.1/`) and NOT on the management VLAN (which answers ping only). Management isolation as the
-operator required means: serve MC on the management interface, and on the client AP only behind an explicit
-operator choice. Tracked as G12-M (next increment).
+**G12-M — management isolation (built 2026-11-08, metal pending).** Found on metal: the AP image served
+Mission Control only to Wi-Fi clients (`http://10.99.0.1/`); the management VLAN answered ping only. Now the
+single MC node is multi-homed (`McNode::add_address`): once the management sub-interface has an address, MC
+answers there too (HTTP/HTTPS only, after the signed `mgmt in` policy and the IDS verdict); its replies leave
+on the management VLAN, never on Wi-Fi (`mcmgmt.rs`, `[P-mcmgmt]`). On the **client AP** (signed WIFI.TXT)
+with a management VLAN, MC is **not** served on Wi-Fi; the **setup AP** keeps it on Wi-Fi because onboarding
+happens there.
+
+**Per-device Wi-Fi MAC.** The radio's MAC (and so the AP BSSID) is `HKDF(SRK, "HQ-WIFI-MAC")`, locally
+administered + unicast, set before `WLC_UP`; the NVRAM carries only the generic placeholder. Before this,
+every unit shared one MAC (the placeholder or the fixed fallback).
 
 **D5 — later increments.** (a) Mission Control "Wi-Fi" panel showing the setup credential + QR behind owner
 re-authentication (ADR 0053 guards); (b) setup → client hand-off: once a signed WIFI.TXT is present the setup

@@ -101,6 +101,10 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | I3 | Power cycle / re-flash the same board | same SSID + passphrase (device-unique, stable); never a shared default | serial |
 | I4 | Same image on a second board (when available) | different SSID suffix + passphrase | serial |
 | I5 | Image with a signed WIFI.TXT | the client AP (operator SSID) replaces the setup AP | serial + phone |
+| I6 | Setup AP image, management VLAN up: from fortress `curl -k https://<mgmt ip>/api/health` (and the browser) | `[AP-MC] Mission Control also on https://<mgmt ip>/`; sign-in works from the mgmt laptop; a non-ADMINS source is refused by `mgmt in` | curl + browser |
+| I7 | Client AP image (signed WIFI.TXT) + management VLAN | `[AP-MC] ... served on the management VLAN only`; http://10.99.0.1 does not answer from the phone; mgmt laptop still works | phone + browser |
+| I8 | Per-device MAC | `[WIFI] per-device MAC 02:..` (or x2/x6/xa/xe first octet); the phone sees that BSSID; same value after a power cycle | serial + phone |
+| I9 | Request-level G14 checks from the mgmt laptop: `os/kernel/tools/actions-metal.sh <owner-key-file> https://<mgmt ip>` (H7–H10) | replay 409, foreign Origin 403, missing CSRF 403, TTL 400, mgmt-floor hold refused, wrong owner key refused | curl |
 
 ## E. Platform (from earlier sessions, still open)
 
