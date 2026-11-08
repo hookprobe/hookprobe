@@ -75,6 +75,14 @@ class Classifier(unittest.TestCase):
         b = classify.classify_text("2026-11-08T03:17:44.999Z test result: FAILED. took 9.87s at 0xcafef00d")
         self.assertEqual(a["signature"], b["signature"])
 
+    def test_signature_stable_across_gh_run_view_lines(self):
+        # The exact lines of duplicate issues #868 and #876 (two main runs, same cause).
+        j = "g1 · clippy ratchet + unit tests + phase ratchet\tRun tools/ci/gates.sh g1\t"
+        a = classify.classify_text(j + "2026-11-08T06:22:28.9505787Z RATCHET VIOLATION: kernel@mcserve: clippy::needless_range_loop 12 -> 18 (+6)")
+        b = classify.classify_text(j + "2026-11-08T06:34:16.0788320Z RATCHET VIOLATION: kernel@mcserve: clippy::needless_range_loop 12 -> 18 (+6)")
+        self.assertEqual(a["category"], "clippy_regression")
+        self.assertEqual(a["signature"], b["signature"])
+
     def test_unknown_goes_to_human(self):
         d = classify.classify_text("something odd happened\nexit 1")
         self.assertEqual((d["category"], d["action"]), ("unknown", "human"))
