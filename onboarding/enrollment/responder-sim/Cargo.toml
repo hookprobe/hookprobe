@@ -31,7 +31,7 @@ kem              = { version = "=0.3.0-pre.0", default-features = false }
 x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"] }
 chacha20poly1305 = { version = "0.10", default-features = false }
 ed25519-compact  = { version = "2", default-features = false }
-getrandom        = "0.2"
+getrandom        = "0.4"
 serde_json       = "1"
 # Host stub so securechannel.rs's `arch_aarch64::_print` (its KAT printer) resolves on the host.
 arch_aarch64     = { path = "arch-stub", package = "arch-stub" }

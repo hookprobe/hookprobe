@@ -21,6 +21,7 @@ LOGS = {
     "phase_downgrade": "  RATCHET VIOLATION: phase P8sep was downgraded impl -> plan",
     "clippy_regression": "clippy findings: 232 (baseline 231)\n  RATCHET VIOLATION: kernel: clippy::op_ref 9 -> 10 (+1)",
     "toolchain_env": "error: 'cargo-clippy' is not installed for the toolchain 'nightly-x86_64-unknown-linux-gnu'.",
+    "toolchain_env#skip": "[P15-otafat] FAT32 locate ... skip (no mkfs.vfat/mcopy/dd, or no p15-write kernel)\n VERDICT: REGRESSION — heal required",
     "infra_transient": "error: failed to download from `https://static.crates.io/x`\nCaused by: Could not resolve host: static.crates.io",
     "qemu_budget": "TIMEOUT after 150s (load: 7.9) — missing markers below may be phantom",
     "build_error": "error[E0599]: no method named `to_encoded_point` found\nerror: could not compile `heqk-tlsprov`",
@@ -34,10 +35,10 @@ class Classifier(unittest.TestCase):
     def test_every_category_is_recognised(self):
         for cat, text in LOGS.items():
             with self.subTest(cat=cat):
-                self.assertEqual(classify.classify_text(text)["category"], cat)
+                self.assertEqual(classify.classify_text(text)["category"], cat.split("#")[0])
 
     def test_actions(self):
-        act = {c: classify.classify_text(t)["action"] for c, t in LOGS.items()}
+        act = {c.split("#")[0]: classify.classify_text(t)["action"] for c, t in LOGS.items()}
         for c in ("secret_leak", "supply_chain_policy", "ci_wiring", "phase_downgrade", "toolchain_env"):
             self.assertEqual(act[c], "human", c)   # decisions, never autofixed
         for c in ("infra_transient", "qemu_budget"):
