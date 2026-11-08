@@ -3919,11 +3919,20 @@ fn cm5_p10_probe() {
                                         if t.wrapping_sub(last_wan_try) > 10 * freq && arch_aarch64::gem::phy_link_up(0) {
                                             last_wan_try = t;
                                             wan_retries += 1;
+                                            // A cable plugged after boot: the MAC still has the boot-time speed.
+                                            if let Some((gig, changed)) = arch_aarch64::gem::sync_speed() {
+                                                if changed {
+                                                    kprint!(" [WAN] link up after boot: MAC re-synced to {} (retry {})\n", if gig { "1 Gb/s" } else { "100 Mb/s" }, wan_retries);
+                                                }
+                                            }
                                             let mut again = uplink::UplinkResult::new(Nic::End0);
                                             uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
                                             if let Some((ph, why, ..)) = uplink::pppoe_info().filter(|_| matches!(wan_mode, hal::WanMode::Pppoe { .. })) {
                                                 let st = uplink::pppoe_info().map(|i| i.9).unwrap_or_default();
                                                 kprint!(" [WAN] PPPoE retry {}: phase={:?} why={:?} stale_padt={} (PADT sent for a session the AC still held)\n", wan_retries, ph, why, st.stale_padt);
+                                            }
+                                            if !again.usable() && (wan_retries <= 3 || wan_retries % 30 == 0) {
+                                                kprint!(" [WAN] retry {} after link-up: no lease yet\n", wan_retries);
                                             }
                                             if again.usable() {
                                                 kprint!(" [M-NAT0] WAN came up after boot (retry {}): leased {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{} inet_echo={}\n",
