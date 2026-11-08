@@ -20,6 +20,7 @@ mkdir -p "$CARGO_TARGET_DIR"
 exec 9>"$CARGO_TARGET_DIR/.validate.lock"
 if ! flock -n 9; then echo "[lock] another validate.sh run holds $CARGO_TARGET_DIR — waiting for it..."; flock 9; fi
 KERNEL=$CARGO_TARGET_DIR/aarch64-unknown-none-softfloat/debug/kernel
+BUILD_LOG="$CARGO_TARGET_DIR/validate-build.log"
 LOG="$(mktemp)"
 # virtio-net (v2) attached for P5b: the kernel ARPs the gateway and RXes the reply.
 QEMU="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
@@ -127,8 +128,8 @@ echo "==================================================================="
 
 # --- Stage 1: build -------------------------------------------------------
 echo -n "[build] cargo build ... "
-if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost >/tmp/hp_build.log 2>&1; then
-  echo "FAIL"; echo "  --- build errors ---"; grep -E '^error' /tmp/hp_build.log | head;
+if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost >"$BUILD_LOG" 2>&1; then
+  echo "FAIL"; echo "  --- build output (last 100 lines) ---"; tail -n 100 "$BUILD_LOG"
   echo "GAP: build broken — cannot validate. Fix compile errors first."; exit 2
 fi
 echo "ok"
