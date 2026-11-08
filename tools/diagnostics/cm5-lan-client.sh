@@ -38,6 +38,13 @@ R=$(pi "dig +time=3 +tries=1 @10.99.0.1 $BLOCKED A" )
 grep -q "status: NXDOMAIN" <<<"$R"; chk $? "Shield: $BLOCKED -> NXDOMAIN"
 pi "dig +short +time=3 +tries=1 @10.99.0.1 debian.org A | grep -qE '^[0-9.]+$'"; chk $? "Shield: an allowed name resolves"
 
+# 2b. G22 per-client Shield profile: the bench DEVICES.TXT gives the Pi shield=strict, so Private Relay (only
+#     reported under the global policy) is blocked FOR IT; /api/devices shows the profile
+R=$(pi "dig +time=3 +tries=1 @10.99.0.1 mask.icloud.com A")
+grep -q "status: NOERROR" <<<"$R" && grep -q "IN.*A.*[0-9]" <<<"$R"; [ $? -ne 0 ]; chk $? "G22 shield=strict: Private Relay (mask.icloud.com) not resolved for the Pi"
+MACNOW=$(pi "cat /sys/class/net/$IF/address")
+api "/api/devices?limit=50" | grep -q "\"mac\":\"$MACNOW\"[^}]*\"shield_profile\":\"strict\""; chk $? "G22: /api/devices reports shield_profile strict for the Pi"
+
 # 3. JA4: the Pi's TLS ClientHellos are fingerprinted
 pi "curl -s -m 10 -o /dev/null https://www.debian.org/ ; curl -s -m 10 -o /dev/null https://example.com/" || true
 sleep 2
