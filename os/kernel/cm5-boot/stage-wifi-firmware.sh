@@ -64,6 +64,17 @@ NV="$HERE/../drivers/firmware/brcm-firmware-rpt/brcmfmac43455-sdio.raspberrypi,5
 [ -e "$NV" ] || NV=/lib/firmware/brcm/brcmfmac43455-sdio.raspberrypi,5-compute-module.txt
 cp -f "$NV" "$OUT/cyw43455-sdio-cm5.nvram.txt"
 
+# The vendored NVRAM has no macaddr (scrubbed: a real unit's MAC must never ship). Linux brcmfmac
+# fills one in; HEQK uploads the NVRAM verbatim, and this firmware does not bring F2 up without a
+# macaddr (metal 2026-11-08: "F2 not ready" on every boot after the folder migration). Insert
+# Broadcom's generic placeholder (the linux-firmware default, not any real device's). It is the
+# same on every device: a per-device MAC (derived from the device secret) is a tracked follow-up.
+if ! grep -qE '^[[:space:]]*macaddr=' "$OUT/cyw43455-sdio-cm5.nvram.txt"; then
+  awk '{print} /^[[:space:]]*prodid=/ && !done {print "macaddr=00:90:4c:c5:12:38"; done=1}' "$OUT/cyw43455-sdio-cm5.nvram.txt" > "$OUT/.nv.tmp" && mv "$OUT/.nv.tmp" "$OUT/cyw43455-sdio-cm5.nvram.txt"
+  grep -q '^macaddr=' "$OUT/cyw43455-sdio-cm5.nvram.txt" || { echo "ABORT: could not insert the placeholder macaddr"; exit 1; }
+  echo "== inserted placeholder macaddr (generic Broadcom default) into the NVRAM"
+fi
+
 # Bake the regdomain into the NVRAM (idempotent): strip any existing ccode/regrev,
 # then append ours. On HEQK's verbatim loader this is the firmware boot country.
 sed -i -E '/^[[:space:]]*(ccode|regrev)=/d' "$OUT/cyw43455-sdio-cm5.nvram.txt"
