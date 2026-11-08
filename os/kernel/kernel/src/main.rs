@@ -6458,6 +6458,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = ioc::selftest();
         let _ = oui::selftest();
         let _ = rules::jit_call_selftest();
+        let _ = behavioral::beacon_busy_selftest();
         let _ = devpolicy::selftest();
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();
