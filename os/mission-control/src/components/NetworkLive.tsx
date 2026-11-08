@@ -12,6 +12,7 @@ import { setCopilotOpen } from '../store/mock';
 import { devices } from '../store/obsLive';
 import { formatTime, type DeviceRow } from '../store/api';
 import { promptAndRun } from '../store/actions';
+import { tlsFor } from '../store/tlsLive';
 
 const GROUPS: { key: string; label: string; blurb: string }[] = [
   { key: 'full', label: 'Full access', blurb: 'Internet and the local network.' },
@@ -76,6 +77,27 @@ const NetworkLive: Component = () => {
                           {d.confidence ? ` (${d.confidence}% via ${d.id_source})` : ''}
                           {twins(d) ? ` · same device as ${twins(d)} (private address rotated)` : ''}
                           {' · last seen '}{formatTime(d.last_seen)}{d.active === false ? ' · lease expired' : ''}
+                          {(() => {
+                            const t = tlsFor(d.ip);
+                            if (t.fingerprints === 0) return null;
+                            const shown = t.names.slice(0, 4).join(', ');
+                            return (
+                              <span class="net-tls">
+                                {` · TLS: ${t.fingerprints} client program${t.fingerprints > 1 ? 's' : ''}`}
+                                {shown ? ` to ${shown}${t.names.length > 4 ? ` +${t.names.length - 4}` : ''}` : ''}
+                                <Show when={t.ioc.length > 0}>
+                                  <strong class="net-flag" title={`JA4 ${t.ioc.map((x) => x.ja4).join(', ')} is on your signed threat-intel list (rule 125)`}>
+                                    {' · known-bad TLS client'}
+                                  </strong>
+                                </Show>
+                                <Show when={t.bypass.length > 0}>
+                                  <strong class="net-flag" title="It connected to a name Shield blocks, so it got the address another way (rule 126)">
+                                    {` · bypassed Shield: ${[...new Set(t.bypass.map((x) => x.sni))].join(', ')}`}
+                                  </strong>
+                                </Show>
+                              </span>
+                            );
+                          })()}
                         </span>
                         <Show when={d.mac && g.key !== 'quarantine'}>
                           <button class="shield-remove" title="Put this device in quarantine for 1 hour (owner key; DHCP and DNS keep working; expires on its own)"

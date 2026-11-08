@@ -47,6 +47,7 @@ import {
 import TopBar from './TopBar';
 import NetworkLive from './NetworkLive';
 import { refetch, devicesStatus } from '../store/obsLive';
+import { refetchTls } from '../store/tlsLive';
 import CommandPalette from './CommandPalette';
 import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
 import {
@@ -898,7 +899,7 @@ const NetworkMapApp: Component = () => {
   const [fails, setFails] = createSignal(0);
   onMount(() => {
     const tick = async () => {
-      await refetch();
+      await Promise.all([refetch(), refetchTls()]);
       if (devicesStatus() === 'error') setFails((n) => n + 1);
     };
     void tick();

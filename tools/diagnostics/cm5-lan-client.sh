@@ -44,12 +44,33 @@ sleep 2
 T=$(api /api/tls)
 grep -q "\"client\":\"$PIIP\",\"ja4\":\"t1" <<<"$T"; chk $? "JA4: the Pi's TLS clients appear in /api/tls ($(grep -o '"hellos":[0-9]*' <<<"$T"))"
 
+# 3b. rule 125: a TLS client whose JA4 is on the IOC pack (bench: openssl s_client, no ALPN) — curl stays clean
+pi "echo | timeout 8 openssl s_client -4 -connect example.net:443 -servername example.net >/dev/null 2>&1" || true
+sleep 2
+T=$(api /api/tls)
+grep -q "\"client\":\"$PIIP\",\"ja4\":\"t13d301000_[^\"]*\",\"sni\":\"example.net\"[^}]*\"ioc\":true" <<<"$T"; chk $? "rule 125: the IOC-listed TLS client (openssl) is flagged ioc"
+! grep -q "\"client\":\"$PIIP\",\"ja4\":\"t13d3011h2_[^}]*\"ioc\":true" <<<"$T"; chk $? "rule 125 negative: curl's JA4 is not flagged"
+r=1; for _ in 1 2 3 4 5; do api "/api/detections?limit=200" | grep -q '"rule_id":1200125' && { r=0; break; }; sleep 2; done; chk $r "rule 125 detection raised"
+
+# 3c. JA4 over IPv6: a v6 TLS client is fingerprinted under its v6 address and tied to the device's IPv4 lease
+# (the bench IPv6 is a lab prefix with no internet route: aim at the WAN-side router's sshd — the ClientHello is
+# sent as soon as TCP connects, which is all the fingerprint needs)
+pi "echo | timeout 6 openssl s_client -connect '[2001:db8:100::1]:22' -servername example.net >/dev/null 2>&1" || true
+sleep 2
+api /api/tls | grep -q "\"client\":\"[0-9a-f:]*:[0-9a-f:]*\",\"lease\":\"$PIIP\",\"ja4\":\"t13d301000_[^\"]*\",\"sni\":\"example.net\""; chk $? "JA4 over IPv6: the Pi's v6 TLS client fingerprinted + attributed to its lease"
+
 # 4. rule 126: TLS to a Shield-blocked name without Shield (resolved elsewhere -> pinned IP)
 IP=$(dig +short "$BLOCKED" A @1.1.1.1 | grep -E '^[0-9.]+$' | head -1)
 [ -n "$IP" ] && pi "curl -s -m 10 -o /dev/null --resolve $BLOCKED:443:$IP https://$BLOCKED/" || true
 sleep 2
 api /api/tls | grep -q "\"sni\":\"$BLOCKED\".*\"shield_bypass\":true"; chk $? "rule 126: TLS to $BLOCKED (DNS bypassed via a pinned IP) flagged shield_bypass"
 r=1; for _ in 1 2 3 4 5; do api "/api/detections?limit=200" | grep -q '"rule_id":1200126' && { r=0; break; }; sleep 2; done; chk $r "rule 126 detection raised"
+
+# 5a. G36: rule 124 over IPv6 — 30 answered attempts to the bench host's sshd on its v6 address, attributed to the
+# Pi's IPv4 lease (runs FIRST: the rule then cools down per source, so the IPv4 run below re-proves only the path)
+pi "for i in \$(seq 1 30); do timeout 2 bash -c '</dev/tcp/2001:db8:100::1/22' 2>/dev/null; done; true"
+sleep 3
+r=1; for _ in 1 2 3 4 5; do api "/api/detections?limit=200" | grep -q "\"rule_id\":1200124[^}]*\"src_ip\":\"$PIIP\"" && { r=0; break; }; sleep 2; done; chk $r "G36 rule 124 over IPv6: 30 answered attempts to [2001:db8:100::1]:22 detected, attributed to $PIIP"
 
 # 5. rule 124: brute force on one answering SSH service (the bench host's sshd on the WAN side)
 pi "for i in \$(seq 1 30); do timeout 2 bash -c '</dev/tcp/$SSHT/22' 2>/dev/null; done; true"

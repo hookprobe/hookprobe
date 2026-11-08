@@ -585,6 +585,44 @@ pub fn flow_scan_observe6(frame: &[u8], src: u64, dst: u64) -> bool {
     false
 }
 
+/// G36: the IPv6 half of the behavioural tier for a dual-stack LAN device. Its IPv6 connection attempts
+/// (pure SYNs) feed beacon + brute force under the device's IPv4 `lease` (the identity the owner knows),
+/// the peer folded by `srckey::v6_peer`. Observe-only like the IPv4 tier; a device with no lease is skipped.
+pub fn behavioral_observe6(frame: &[u8], lease: u32) {
+    if lease == 0 || frame.len() < 54 {
+        return;
+    }
+    let Some(m) = crate::net::parse(frame) else { return };
+    if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || !m.has_l4_ports() {
+        return;
+    }
+    if frame.get(m.l4_off + 13).map_or(true, |&f| f & 0x12 != 0x02) {
+        return;
+    }
+    let mut d6 = [0u8; 16];
+    d6.copy_from_slice(&frame[38..54]);
+    let peer = crate::srckey::v6_peer(&d6);
+    let _ = beacon_verdict(lease, peer, m.dst_port);
+    let _ = brute_verdict(lease, peer, m.dst_port);
+}
+
+/// G36: an inbound IPv6 SYN-ACK to a LAN device = the D3 evidence that the service it is hammering exists.
+pub fn brute_answer6(frame: &[u8], lease: u32) {
+    if lease == 0 || frame.len() < 54 {
+        return;
+    }
+    let Some(m) = crate::net::parse(frame) else { return };
+    if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || !m.has_l4_ports() {
+        return;
+    }
+    if frame.get(m.l4_off + 13).map_or(true, |&f| f & 0x12 != 0x12) {
+        return;
+    }
+    let mut s6 = [0u8; 16];
+    s6.copy_from_slice(&frame[22..38]);
+    crate::behavioral::brute_answer_at(crate::srckey::v6_peer(&s6), lease, m.src_port, crate::behavioral::now_secs());
+}
+
 /// ADR 0049 D3 on the AP's NAT path: the IDS sees inbound answers BEFORE un-NAT (addressed to the WAN IP),
 /// so a LAN client's probes could never be matched. The un-NATed frame (addressed to the client) is fed here
 /// so the target's RST / SYN-ACK credits the right prober. Observation only — no verdict.
