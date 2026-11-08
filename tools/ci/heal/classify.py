@@ -37,7 +37,7 @@ RULES = [
     ("ci_wiring", "human", "g0", [r"FAIL: W[1-7] "]),
     ("shell_lint", "autofix", "g0", [r"\bSC\d{4} \((?:error|warning)\)"]),
     ("phase_downgrade", "human", "g1", [r"RATCHET VIOLATION: phase \S+ (?:was downgraded|.*GONE)"]),
-    ("clippy_regression", "autofix", "g1", [r"RATCHET VIOLATION: \w+: ", r"ERROR-LEVEL: "]),
+    ("clippy_regression", "autofix", "g1", [r"RATCHET VIOLATION(?: \([^)]*\))?: [\w@.-]+: ", r"ERROR-LEVEL: "]),
     ("toolchain_env", "human", None, [
         r"is not installed for the toolchain", r"can't find crate for `(?:core|std)`",
         r"required tool '\S+' not installed", r"command not found",
@@ -46,7 +46,10 @@ RULES = [
         r"Could not resolve host", r"Connection (?:reset|refused|timed out)", r"ETIMEDOUT|ECONNRESET|EAI_AGAIN",
         r"\b(?:502|503|504) (?:Bad Gateway|Service Unavailable|Gateway Time-out)",
         r"API rate limit exceeded", r"The runner has received a shutdown signal",
-        r"No space left on device", r"failed to download", r"spurious network error",
+        r"No space left on device", r"failed to download",
+        # cargo's real warning only: a bare "spurious network error" also matched the dtolnay toolchain
+        # STEP NAME present in every log, turning any unclassified failure into a "transient" rerun.
+        r"warning: spurious network error \(",
         r"The operation was canceled"]),
     ("qemu_budget", "rerun", "g2", [r"TIMEOUT after \d+s", r"qemu.*timed out"]),
     ("build_error", "autofix", None, [
