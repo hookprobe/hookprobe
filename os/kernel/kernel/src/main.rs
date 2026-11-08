@@ -3109,8 +3109,8 @@ fn cm5_p10_probe() {
                                     match ri.file { 0 => " (no RULES.BIN — built-in corpus only)", 1 => if ri.signed { " (operator signature OK)" } else { " (unsigned — standalone image)" }, _ => " (RULES.BIN REFUSED — built-in corpus only)" },
                                     if ri.refused_verify + ri.refused_meta > 0 { " — some rules refused (verifier / metadata)" } else { "" });
                                 let ii = ioc::load(&dev);
-                                kprint!(" [INTEL] IOC pack: {} IPv4 prefixes + {} domains {} — matches are DETECTIONS (ioc_match), never drops\n",
-                                    ioc::v4_len(), ioc::dom_len(),
+                                kprint!(" [INTEL] IOC pack: {} IPv4 prefixes + {} IPv6 prefixes + {} domains/JA4 {} — matches are DETECTIONS (ioc_match), never drops\n",
+                                    ioc::v4_len(), ioc::v6_len(), ioc::dom_len(),
                                     match ii.file { 0 => "(no IOC.TXT)", 1 => if ii.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(IOC.TXT REFUSED — not loaded)" });
                                 // IDS/IPS cost on this core with the signed rule pack AND the signed IOC pack armed
                                 // (optimisation baseline: the state a customer's traffic actually meets).
@@ -14365,8 +14365,88 @@ fn fuzz_selftest() {
             n_cfg += 1;
         }
     }
-    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler, Shield v2 client queries + DNS replies (CNAME walk); {} mutated HTTP requests; {} mutated POLICY/WAN files — 0 panics (fixed seed, ADR 0050 D3)\n",
-        n_frames, n_http, n_cfg);
+    // 6. (2026-11-08) the parsers added since: Wi-Fi station-to-station relay (proxy-ARP, IPv4/IPv6 unicast,
+    //    discovery multicast + NS fan-out), IPv6 JA4 / brute force / beacon / IOC hooks, passive mDNS/SSDP
+    //    discovery, IPv4 JA4 — frames biased towards lease MACs and the discovery / solicited-node groups.
+    let mut n_new = 0u32;
+    {
+        let mut dh = arch_aarch64::dhcpd::ApDhcp::new();
+        let macs = [[0x02u8, 0, 0, 0, 0, 0x0a], [0x02, 0, 0, 0, 0, 0x0b], [0x02, 0, 0, 0, 0, 0x0c]];
+        for (i, m) in macs.iter().enumerate() {
+            dh.leases[i].used = true;
+            dh.leases[i].mac = *m;
+            dh.leases[i].ip = [10, 99, 0, 10 + i as u8];
+        }
+        dh.nleases = 3;
+        const DST: [[u8; 6]; 4] = [[0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb], [0x33, 0x33, 0xff, 0, 0, 0x0b], [0x01, 0x00, 0x5e, 0x7f, 0xff, 0xfa], [0xff; 6]];
+        let mut ab = [0u8; 64];
+        for i in 0..N {
+            let n = frame(&mut next, &mut buf);
+            if n >= 12 {
+                let k = next();
+                buf[6..12].copy_from_slice(&macs[(k % 3) as usize]);
+                match (k >> 8) % 4 {
+                    0 => buf[0..6].copy_from_slice(&macs[((k >> 4) % 3) as usize]),
+                    1 => buf[0..6].copy_from_slice(&DST[((k >> 12) % 4) as usize]),
+                    _ => {}
+                }
+                if n >= 34 && k & 0x10000 != 0 {
+                    buf[26..30].copy_from_slice(&[10, 99, 0, 10 + ((k >> 20) % 3) as u8]);
+                }
+            }
+            let f = &buf[..n];
+            let _ = lanrelay::proxy_arp(f, &dh, &mut ab);
+            let _ = lanrelay::relay_target(f, &dh);
+            let _ = lanrelay::relay_target6(f, &dh);
+            let _ = lanrelay::relay_discovery(f, &dh, i as u64 / 64, &mut |_| true);
+            discovery::observe(f);
+            ja4::observe6(f, 0x0a63_000a);
+            rules::behavioral_observe6(f, 0x0a63_000a);
+            rules::brute_answer6(f, 0x0a63_000a);
+            if n >= 54 {
+                let mut a6 = [0u8; 16];
+                a6.copy_from_slice(&buf[38..54]);
+                let _ = rules::ioc_v6_hit(0x0a63_000a, &a6);
+            }
+            if n > 54 {
+                ja4::observe(&buf[54..n], 0x0a63_000a);
+            }
+            n_new += 1;
+        }
+    }
+    // 7. the signed config inputs added since: OUI.TXT, IPv6 IOC lines, DEVICES.TXT shield= tokens (mutated text)
+    {
+        let seeds: [&[u8]; 3] = [
+            b"000393 Apple, Inc.\nB827EB Raspberry Pi Foundation\nA82948 TP-Link Systems Inc.\n",
+            b"ip 2001:db8:bad::7\ncidr 2001:db8:c2::/48\nipv6 ::1 exp=1900000000\nfe80::1%eth0\n",
+            b"02:00:00:00:00:a1 full kids-tablet shield=off\n02:00:00:00:00:b2 internet_only shield=strict\n",
+        ];
+        let mut b = [0u8; 256];
+        for i in 0..N {
+            let src = seeds[i as usize % 3];
+            let n = src.len();
+            b[..n].copy_from_slice(src);
+            for _ in 0..1 + next() % 6 {
+                let at = (next() as usize) % n;
+                b[at] = match next() % 5 { 0 => b'\n', 1 => b' ', 2 => b':', 3 => b'=', _ => next() as u8 };
+            }
+            let cut = n - (next() as usize % 12).min(n);
+            match i % 3 {
+                0 => { let _ = oui::load_text(&b[..cut]); }
+                1 => { let _ = ioc::load_text(&b[..cut]); }
+                _ => { let _ = devpolicy::load_text(&b[..cut]); }
+            }
+            n_new += 1;
+        }
+        let _ = oui::load_text(b"");
+        let _ = ioc::load_text(b"");
+        let _ = devpolicy::load_text(b"");
+    }
+    rules::refire_reset();
+    behavioral::brute_reset();
+    behavioral::beacon_reset_for_test();
+    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler, Shield v2 client queries + DNS replies (CNAME walk); {} mutated HTTP requests; {} mutated POLICY/WAN files; {} through the 2026-11-08 additions (LAN relay v4/v6/multicast, IPv6 JA4/brute/beacon/IOC, mDNS/SSDP discovery, JA4; OUI/IOC-v6/shield= config) — 0 panics (fixed seed, ADR 0050 D3)\n",
+        n_frames, n_http, n_cfg, n_new);
 }
 
 fn pppoe_selftest() {
