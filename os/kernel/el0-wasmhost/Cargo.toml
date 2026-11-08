@@ -11,6 +11,7 @@
 name = "el0-wasmhost"
 version = "0.1.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 # Detach from the kernel workspace: this crate is built SEPARATELY (by the kernel's
 # build.rs) with its own target dir, so it must not be a workspace member of ../Cargo.toml.

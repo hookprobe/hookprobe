@@ -1,0 +1,57 @@
+# =============================================================================
+# metal.yml — G6, the metal gate (ADR 0052). "Passes QEMU, fails on metal" was the
+# dominant failure mode of 2026 (on-metal pentest, CM5 first boot); this runs the
+# real-hardware proof on the self-hosted CM5 bench every night and on demand.
+#
+# Runner: a self-hosted runner labelled [self-hosted, linux, cm5-bench] on the bench
+# host, with the CM5 on usbboot + serial (os/kernel/tools/usbboot, tools/diagnostics/
+# cm5-relay.py) and HEQK_METAL=1 in its environment.
+#
+# SECURITY: never triggered by pull_request (G0 W2 enforces it) — untrusted code must
+# never reach a runner wired to physical hardware and the LAN. Flashing a DUT is the
+# only Red action here; the bench DUT is a dedicated test board, never a customer device.
+# Gate-R (the attended 33-row separation matrix) stays operator-run: `dispatch → gate_r`.
+# =============================================================================
+name: metal
+
+on:
+  schedule:
+    - cron: "41 4 * * *"
+  workflow_dispatch:
+    inputs:
+      gate_r:
+        description: "Also run the Gate-R separation matrix (attended: operator watching the bench)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: metal-bench
+  cancel-in-progress: false
+
+jobs:
+  g6:
+    name: "g6 · CM5 metal (mc-e2e-metal)"
+    # main ONLY (security-auditor M1): workflow_dispatch can otherwise target any branch, and the
+    # bench runner is wired to hardware + the LAN. Also configure, operator-side:
+    #   - environment `metal-bench` with a required reviewer,
+    #   - a runner group restricted to `.github/workflows/metal.yml@refs/heads/main`.
+    if: github.repository == 'hookprobe/hookprobe' && github.ref == 'refs/heads/main'
+    environment: metal-bench
+    runs-on: [self-hosted, linux, cm5-bench]
+    timeout-minutes: 90
+    env:
+      CI_STRICT: "1"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with: { persist-credentials: false }
+      - run: tools/ci/gates.sh g6
+      - name: Gate-R separation matrix (attended)
+        if: inputs.gate_r
+        working-directory: os/kernel
+        run: ./tools/gate-r-matrix.sh | tee ../../out/ci/gate-r.log
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with: { name: metal-g6, path: out/ci, if-no-files-found: ignore }

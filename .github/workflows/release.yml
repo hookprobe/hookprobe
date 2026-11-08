@@ -1,0 +1,101 @@
+# =============================================================================
+# release.yml — L4 Release (ADR 0052, ADR 0012, ADR 0046 key custody).
+#
+# A `v*` tag builds the release CANDIDATE and STOPS before signing:
+#   gates  g0 g1 g4 + reproducibility (g4r) must be green on the tagged commit
+#   build  the shipped CM5 profile (`prod-mc`: heqk + embedded Mission Control)
+#   prove  SBOM (CycloneDX) + SLSA build provenance attestation + sha256 manifest
+#   draft  a DRAFT GitHub release with the UNSIGNED candidate + SIGNING-CHECKLIST.md
+#
+# Signing is Red tier: heqk boot signing (Ed25519 + SLH-DSA, os/build/heqk-sign) needs
+# the offline operator KEYDIR, which never exists in CI (ADR 0046 D4). The operator
+# downloads the candidate, verifies provenance, signs offline, and attaches heqk8.img.
+# Rollout then follows the rings (canary → ring → fleet, ADR 0012).
+# =============================================================================
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  CI_STRICT: "1"
+  CARGO_TERM_COLOR: never
+
+jobs:
+  gates:
+    name: "release gates (g0 g1 g4 g4r)"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
+        with: { toolchain: stable }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
+        with:
+          toolchain: nightly
+          components: rust-src, llvm-tools, clippy
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2   # v2
+        with: { tool: cargo-deny }
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610   # v0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with: { node-version: "24" }
+      - run: tools/ci/gates.sh g0 g1 g4 g4r
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with: { name: release-gates, path: out/ci, if-no-files-found: ignore }
+
+  candidate:
+    name: "build unsigned candidate + provenance"
+    needs: gates
+    # Tags only (security-auditor M3): a dispatch on an arbitrary branch may rehearse the gates
+    # but must never mint an SLSA attestation. Protect `v*` with a tag ruleset (operator).
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write        # draft release
+      id-token: write        # keyless provenance attestation (Sigstore)
+      attestations: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with: { persist-credentials: false }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
+        with:
+          toolchain: nightly
+          components: rust-src, llvm-tools
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with: { node-version: "24" }
+      - uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610   # v0
+      - name: Build the shipped CM5 profile (prod-mc)
+        run: |
+          tools/ci/stage-firmware.sh     # pinned + sha256-verified CYW43455 firmware (gitignored blobs)
+          (cd os/mission-control && npm ci --no-audit --no-fund && PUBLIC_API_BASE='' npm run build)
+          (cd os/kernel && cargo build -p kernel --features prod-mc --release)
+          mkdir -p dist-release
+          cp os/kernel/target/aarch64-unknown-none-softfloat/release/kernel "dist-release/heqk-${GITHUB_REF_NAME}-prod-mc.elf"
+          syft scan dir:. -q -o "cyclonedx-json=dist-release/sbom-${GITHUB_REF_NAME}.cdx.json"
+          (cd dist-release && sha256sum * > SHA256SUMS)
+          cat > dist-release/SIGNING-CHECKLIST.md <<EOF
+          # Release ${GITHUB_REF_NAME} — operator signing checklist (Red tier, offline)
+          1. Verify provenance is THIS tag built by THIS workflow (not just "some build of the repo"):
+             \`gh attestation verify heqk-${GITHUB_REF_NAME}-prod-mc.elf --repo ${GITHUB_REPOSITORY} --source-ref refs/tags/${GITHUB_REF_NAME} --signer-workflow ${GITHUB_REPOSITORY}/.github/workflows/release.yml\`
+          2. \`sha256sum -c SHA256SUMS\`; rebuild locally and compare (tools/ci/repro.sh).
+          3. Sign offline: \`os/build/make-cm5-heqk-image.sh\` with the operator HEQK_KEYDIR (never in CI).
+          4. Attach heqk8.img + signature; publish to the canary ring first (ADR 0012).
+          EOF
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be   # v2
+        with: { subject-path: "dist-release/heqk-*.elf" }
+      - name: Draft release (unsigned candidate — never auto-published)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist-release/* --draft --verify-tag \
+            --title "HookProbe OS $GITHUB_REF_NAME (candidate — awaiting offline signing)" \
+            --notes-file dist-release/SIGNING-CHECKLIST.md

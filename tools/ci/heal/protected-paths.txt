@@ -1,0 +1,43 @@
+# Paths an AUTOFIX change may never touch (ADR 0052 L2 guardrail, enforced by autofix_guard.py).
+#
+# The failure mode of every autonomous fixer is "make the check green" instead of
+# "make the code right": weaken the gate, add an ignore, delete the test. Everything
+# that DEFINES or FEEDS a gate is therefore out of reach of the heal loop; changes here
+# always need a human-authored PR.
+# Syntax: `dir/` = prefix · plain path = exact · anything with `*` = fnmatch (`*` crosses `/`).
+
+# the gate machinery itself
+.github/
+tools/ci/
+tools/build/git-hooks/
+os/kernel/validate.sh
+# everything the gate scripts execute or read: mc-e2e (incl. the browser assertions in
+# tools/mc-e2e/ui-check.mjs + its package.json/lock), Gate-R, gen-validation, mctls-provision,
+# the verifier/KAT harnesses validate.sh compiles (security-auditor H2, 2026-11-08)
+os/kernel/tools/
+
+# build-time code + configuration that can rewrite what gets tested or how it is linted
+*build.rs
+*/.cargo/*
+.cargo/*
+*clippy.toml
+*rust-toolchain*
+.gitattributes
+*/.gitattributes
+
+# secret + supply-chain policy
+.gitleaks.toml
+
+# signing, keys, trust anchors (Red tier — never autonomous)
+os/build/heqk-sign/
+os/build/make-cm5-heqk-image.sh
+os/build/make-cm5-heqk-disk.sh
+os/kernel/hboot/src/attest_keys.rs
+
+# governance
+docs/adr/
+LICENSE
+LICENSING.md
+SECURITY.md
+CLAUDE.md
+.claude/

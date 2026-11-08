@@ -2,6 +2,7 @@
 name = "hboot"
 version = "0.1.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 [dependencies]
 # `otaverify` pulls in the SHARED hybrid verifier (boot-abi::verify) — the same
