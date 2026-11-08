@@ -139,6 +139,13 @@ RID=$(echo "$RL" | jget "d['reports'][0]['id']")
 RD=$(curl -s -m 10 $C "$B/api/reports/$RID")
 echo "$RD" | jget "d['report']['device_ip']=='10.0.2.2' and len(d['report']['evidence_node_ids'])>=5 and len(d['report']['response_taken'])>=1" | grep -q True \
   && ok "/api/reports/:id: a deterministic incident report with evidence ids and the actions taken" || bad "report: $RD"
+# G28 logout: a second session ends only itself; the cookie is expired and refused afterwards.
+JAR3=$(mktemp); curl -s -o /dev/null -m 10 -d "token=$TOKEN" "$B/api/login" -c "$JAR3"
+LO=$(curl -s -m 10 -b "$JAR3" -c "$JAR3" -X POST -D - "$B/api/logout")
+echo "$LO" | grep -qi "Max-Age=0" && echo "$LO" | grep -q '"logged_out":true' && ok "logout ends the session and expires the cookie" || bad "logout: $LO"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -b "$JAR3" "$B/api/detections")" = 401 ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 $C "$B/api/detections")" = 200 ] \
+  && ok "after logout that session is refused; the other session still works" || bad "post-logout session state"
+rm -f "$JAR3"
 sleep 2
 Q=$(curl -s -m 10 $C "$B/api/qsecbit")
 echo "$Q" | jget "d['latest'] is not None and d['latest']['score']>0" | grep -q True && ok "QSecBit-lite risk rose under attack ($(echo "$Q" | jget "d['latest']"))" || bad "qsecbit: $Q"

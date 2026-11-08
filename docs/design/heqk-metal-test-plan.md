@@ -68,6 +68,15 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | F6 | SIEM export (G15): `nc -ulk 514` on fortress (VLAN 200), run the C2 scan | RFC 5424 lines with rule/MITRE/src/dst arrive; `[SIEM] … sent=N lost=0` | nc capture |
 | F7 | WAN health (G16): unplug the fortress uplink behind a live VLAN 100 gateway (or drop ICMP to 1.1.1.1/9.9.9.9 on fortress) | `[WAN-HEALTH] down` after 3 probes, traffic fails over to the mgmt route; `up` again after 2 good probes | serial + speed test |
 
+## G. Batch 5
+
+| ID | Test | Expected | Evidence |
+|---|---|---|---|
+| G1 | Rule pack: image with `--rules-file docs/design/bench-task26/rules-bench.txt` | `[RULES] rule pack: 10 rules armed (operator signature OK)`; Detect → engines shows "Signed rule pack" 10 rules | serial + UI |
+| G2 | From a client: `nc -vz <internet host> 6667` | `IRC C2 channel (6667)` detection, observe-only (connection not dropped) | Detect feed |
+| G3 | Client isolation (G10): AP start line | `client isolation (ap_isolate) ON`; phone A cannot ping phone B directly (only through heqk, visible to the IDS) | serial + ping |
+| G4 | Sign out (G28) from the top bar | back to /login; the old cookie gets 401; another signed-in device stays signed in | browser |
+
 ## E. Platform (from earlier sessions, still open)
 
 | ID | Test | Expected |
