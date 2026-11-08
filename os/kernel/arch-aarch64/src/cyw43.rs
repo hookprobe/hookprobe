@@ -2851,6 +2851,9 @@ pub struct ApResult {
     pub bssid_verified: bool, // WLC_GET_BSSID after UP+SSID == bssid (fw may read 0: informative)
     pub bssid_readback: [u8; 6],
     pub gtk_set: bool,      // the group key was installed once at AP start (ap_install_gtk)
+    /// Parity G10: "ap_isolate"=1 accepted — the firmware no longer bridges station-to-station frames
+    /// itself (they would bypass heqk's IDS + device policy). Metal confirms whether it is honoured.
+    pub isolate_ok: bool,
 }
 
 impl ApResult {
@@ -2859,7 +2862,7 @@ impl ApResult {
             cap_has_ap: false, down_ok: false, apsta_ok: false, set_ap_ok: false, infra_ok: false,
             chan_ok: false, chanspec_ok: false, chan_fallback20: false, wsec_ok: false, wpa_auth_ok: false, up_ok: false, ssid_ok: false,
             get_ap: 0, get_ap_ok: false, bssid: [0; 6], mac_set_ok: false, ev_ok: false,
-            bssid_verified: false, bssid_readback: [0; 6], gtk_set: false,
+            bssid_verified: false, bssid_readback: [0; 6], gtk_set: false, isolate_ok: false,
         }
     }
     /// The BSS is up AND the two things a client join silently depends on are in place:
@@ -3012,6 +3015,9 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     let (sok, _st) = bcdc_dcmd(WLC_SET_SSID, BCDC_SET, &sb[..4 + slen], &mut []);
     out.ssid_ok = sok;
     let _ = iovar_set_u32(b"closednet", 0); // broadcast the SSID (Linux sets it after SET_SSID)
+    // Parity G10 (V1 hostapd ap_isolate=1): stations talk to each other only THROUGH heqk (IDS + device
+    // policy), never via an in-firmware bridge. Recorded so the boot log says whether the fw took it.
+    out.isolate_ok = iovar_set_u32(b"ap_isolate", 1);
     delay(50_000);
 
     // Read back AP state + our BSSID for the verdict.

@@ -1,0 +1,11 @@
+# NAPSE-derived starter pack (legacy/linux-tier/modules/napse) — observe-only unless confirmed-bad.
+rule 1001 dport 6667 class behavioral sev 5 name "IRC C2 channel (6667)"
+rule 1002 dport-range 3333-3334 class behavioral sev 5 name "Crypto-mining stratum (3333)"
+rule 1003 dport 14444 class behavioral sev 5 name "Crypto-mining stratum (14444)"
+rule 1004 dport 9050 class behavioral sev 3 name "Tor SOCKS (9050)"
+rule 1005 dport 9001 class behavioral sev 3 name "Tor relay ORPort (9001)"
+rule 1006 dport 3389 class behavioral sev 3 name "RDP outbound (3389)"
+rule 1007 dport 5900 class behavioral sev 3 name "VNC outbound (5900)"
+rule 1008 dport 2323 class behavioral sev 5 name "Telnet alt (2323, Mirai)"
+rule 1009 dport 445 class behavioral sev 5 name "SMB to the internet (445)"
+rule 1010 tcp-flags 0x3f class scan_shape sev 5 name "All TCP flags set (scan / evasion)"

@@ -994,6 +994,9 @@ impl McState {
             }
             out.raw("}");
         }
+        let rp = crate::rulepack::info();
+        let _ = write!(out, ",{{\"name\":\"Signed rule pack (RULES.BIN)\",\"kind\":\"rule_pack\",\"source\":\"real\",\"status\":\"{}\",\"loaded_rules\":{},\"skipped_rules\":{},\"hits\":null,\"last_run_ts\":null}}",
+            if rp.loaded > 0 { "active" } else { "not_yet_run" }, rp.loaded, rp.refused_verify + rp.refused_meta);
         let _ = write!(out, ",{{\"name\":\"Shield DNS (ADR 0052)\",\"kind\":\"dns\",\"source\":\"real\",\"status\":\"{}\",\"loaded_rules\":{},\"skipped_rules\":0,\"hits\":{},\"last_run_ts\":null}}]}}",
             if shield.0 > 0 { "active" } else { "not_yet_run" }, shield.0, shield.1);
     }

@@ -60,6 +60,11 @@ unsafe impl GlobalAlloc for Bump {
     }
 }
 
+/// Bytes still available (the heap never frees: callers that could exhaust it check first).
+pub fn remaining() -> usize {
+    HEAP_SIZE.saturating_sub(used())
+}
+
 /// Bytes handed out so far (for diagnostics).
 pub fn used() -> usize {
     ALLOCATOR.off.load(Ordering::Relaxed)

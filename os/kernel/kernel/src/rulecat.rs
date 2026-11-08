@@ -62,7 +62,12 @@ pub fn lookup(id: u16) -> Option<RuleInfo> {
 
 /// `lookup`, or a generic MEDIUM entry for an id this catalogue does not know yet.
 pub fn lookup_or_generic(id: u16) -> RuleInfo {
-    lookup(id).unwrap_or(r("heqk rule (uncatalogued)", "heqk", "", SEV_MEDIUM))
+    lookup(id)
+        .or_else(|| {
+            // parity G6: a signed rule-pack rule (names + severity points from RULES.BIN)
+            crate::rulepack::lookup(id).map(|(name, pts)| r(name, "rule_pack", "", match pts { 7.. => SEV_CRITICAL, 5..=6 => SEV_HIGH, 3..=4 => SEV_MEDIUM, _ => SEV_LOW }))
+        })
+        .unwrap_or(r("heqk rule (uncatalogued)", "heqk", "", SEV_MEDIUM))
 }
 
 /// heqk rule ids whose event `src` is a src-MAC hash, never an IPv4 address (IPv6 RA rules —
