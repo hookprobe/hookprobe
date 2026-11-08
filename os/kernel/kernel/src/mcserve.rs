@@ -338,6 +338,20 @@ impl McNode {
         })
     }
 
+    /// Multi-home the node: also answer on `ip/prefix` (G12-M: the management sub-interface). The primary
+    /// address is untouched. Returns false when the interface has no room (smoltcp keeps 2 by default) or
+    /// the address is already present.
+    pub fn add_address(&mut self, ip: [u8; 4], prefix: u8) -> bool {
+        let cidr = IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), prefix);
+        let mut ok = false;
+        self.iface.update_ip_addrs(|v| {
+            if !v.iter().any(|c| *c == cidr) {
+                ok = v.push(cidr).is_ok();
+            }
+        });
+        ok
+    }
+
     /// Does this frame belong to the node (our MAC or broadcast)?
     pub fn wants(&self, frame: &[u8]) -> bool {
         is_for_us(frame, self.mac)

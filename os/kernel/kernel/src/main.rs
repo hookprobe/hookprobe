@@ -52,6 +52,7 @@ mod rulepack;
 // ADR 0053: reversible, time-bounded operator actions (store + audit) and their guarded write path.
 mod actions;
 mod apcred;
+mod mcmgmt;
 #[cfg(feature = "netsvc")]
 mod actionapi;
 // Parity G16: WAN health with hysteresis.
@@ -2807,6 +2808,12 @@ fn cm5_p9_rx() {
 #[cfg(feature = "cm5")]
 fn cm5_p10_probe() {
     use arch_aarch64::cyw43;
+    // Per-device Wi-Fi MAC (ADR 0054): derived from the device secret, set before the radio comes up.
+    #[cfg(feature = "hboot")]
+    if let Some(m) = seal_srk().and_then(|k| apcred::wifi_mac(&k)) {
+        unsafe { arch_aarch64::cyw43::DEVICE_MAC = Some(m) };
+        kprint!(" [WIFI] per-device MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (locally administered, derived from the device secret)\n", m[0], m[1], m[2], m[3], m[4], m[5]);
+    }
     kprint!(" [P10] CYW43455 WiFi (SDIO) — power on radio (WL_ON gpio28 + clk_emmc2), then Stage A\n");
     let clk = cyw43::radio_power_on();
     kprint!(" [P10] WL_ON asserted; clk_emmc2 = {} Hz {}\n", clk, if clk > 0 { "(clock live)" } else { "(clock OFF — mailbox failed?)" });
@@ -3568,6 +3575,18 @@ fn cm5_p10_probe() {
                                 None => None,
                             }
                         };
+                        // G12-M (ADR 0054): on the client AP (operator-signed WIFI.TXT) with a management VLAN, Mission
+                        // Control is served on management only; the setup AP keeps it on Wi-Fi (onboarding happens there).
+                        #[cfg(feature = "mcserve")]
+                        let mc_wifi = wifi.is_none() || unsafe { (*core::ptr::addr_of!(uplink::MGMT)).is_none() };
+                        #[cfg(feature = "mcserve")]
+                        let mut mc_mgmt: Option<([u8; 4], u8)> = None;
+                        #[cfg(feature = "mcserve")]
+                        if !mc_wifi {
+                            kprint!(" [AP-MC] client AP + management VLAN: Mission Control is served on the management VLAN only (G12-M)\n");
+                        }
+                        #[cfg(feature = "mcserve")]
+                        let mut mcbuf = [0u8; 1600];
                         #[cfg(feature = "mcserve")]
                         let mut wntp = wanntp::WanNtp::new();
                         #[cfg(feature = "mcserve")]
@@ -3844,9 +3863,10 @@ fn cm5_p10_probe() {
                                         } else if mc_bound(frame, &our_ip) && !devpolicy::check(&smac, devpolicy::Dest::DeviceMgmt) {
                                             // Parity G9: internet_only / quarantine devices may not reach Mission Control.
                                         } else if mc_bound(frame, &our_ip) {
-                                            // Mission Control on the AP address (after the lease binding + IDS gates).
+                                            // Mission Control on the AP address (after the lease binding + IDS gates);
+                                            // not on the client AP when management is configured (G12-M).
                                             #[cfg(feature = "mcserve")]
-                                            if let Some(n) = mcn.as_mut() {
+                                            if let Some(n) = mcn.as_mut().filter(|_| mc_wifi) {
                                                 n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
                                             }
                                         } else if fwd4!(frame, PIf::Lan, nat::IF_WIFI, wifi_send) && nst.out_fwd == 1 {
@@ -3863,8 +3883,31 @@ fn cm5_p10_probe() {
                             #[cfg(feature = "mcserve")]
                             if let Some(n) = mcn.as_mut() {
                                 let ms = (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64;
+                                // G12-M: once the management sub-interface has an address, the node answers there too.
+                                if mc_mgmt.is_none() {
+                                    if let Some(m) = unsafe { (*core::ptr::addr_of!(uplink::MGMT)).as_ref() } {
+                                        if m.ip != [0; 4] && n.add_address(m.ip, m.prefix) {
+                                            mc_mgmt = Some((m.ip, m.prefix));
+                                            kprint!(" [AP-MC] Mission Control also on https://{}.{}.{}.{}/ (management VLAN; the signed `mgmt in` policy applies)\n", m.ip[0], m.ip[1], m.ip[2], m.ip[3]);
+                                        }
+                                    }
+                                }
                                 let _ = n.service(mcserve::state(), ms);
-                                n.flush(|f| wifi_send!(f));
+                                let mut arp_back = [[0u8; 64]; 4];
+                                let mut na = 0usize;
+                                n.flush(|f| match mcmgmt::route(f, mc_mgmt) {
+                                    mcmgmt::Route::Wifi => wifi_send!(f),
+                                    mcmgmt::Route::ArpLocal => {
+                                        if na < arp_back.len() && mcmgmt::arp_reply(f, ap.bssid, &mut arp_back[na]).is_some() {
+                                            na += 1;
+                                        }
+                                        true
+                                    }
+                                    mcmgmt::Route::Mgmt(dst) => mc_mgmt_tx(f, dst),
+                                });
+                                for r in arp_back.iter().take(na) {
+                                    n.ingress(&r[..60], ms);
+                                }
                             }
                             {
                                     // Plug-and-play WAN: the boot-time bringup is not the only chance. If the
@@ -4183,8 +4226,18 @@ fn cm5_p10_probe() {
                                                         let lan_mac = uplink::ETH1_MAC;
                                                         let nat_r = nat::inbound(&mbuf[..k], &mg.ip, &mg.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst);
                                                         if nat_r.is_none() {
-                                                            if decide(&mbuf[..k]) != PAct::Allow {
+                                                            let allow = decide(&mbuf[..k]) == PAct::Allow;
+                                                            if !allow {
                                                                 pol_drop[3] += 1;
+                                                            }
+                                                            // G12-M: Mission Control on the management address (after `mgmt in`).
+                                                            #[cfg(feature = "mcserve")]
+                                                            if allow && mc_mgmt.is_some() {
+                                                                if let (Some(n), Some(l)) = (mcn.as_mut(), mcmgmt::ingress(&mbuf[..k], mg.ip, ap.bssid, &mut mcbuf)) {
+                                                                    if packet::verdict(&mcbuf[..l]).1 != packet::DROP {
+                                                                        n.ingress(&mcbuf[..l], (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
+                                                                    }
+                                                                }
                                                             }
                                                             continue;
                                                         }
@@ -6343,6 +6396,7 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(feature = "netsvc")]
         let _ = actionapi::selftest();
         let _ = apcred::selftest();
+        let _ = mcmgmt::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();
@@ -13337,6 +13391,21 @@ fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::
 
 /// A station frame for Mission Control on the AP address: IPv4 TCP to `our_ip`:80/443.
 #[allow(dead_code)]
+/// G12-M: put a Mission Control frame on the management VLAN (re-addressed to the resolved next hop).
+/// false (dropped; TCP retransmits) while the next hop is still being resolved.
+#[cfg(all(feature = "mcserve", feature = "cm5"))]
+fn mc_mgmt_tx(f: &[u8], dst: [u8; 4]) -> bool {
+    let Some(m) = (unsafe { *core::ptr::addr_of!(arch_aarch64::uplink::MGMT) }) else { return false };
+    let mask = if m.prefix == 0 { 0 } else { u32::MAX << (32 - m.prefix.min(32)) };
+    let on_link = (u32::from_be_bytes(dst) & mask) == (u32::from_be_bytes(m.ip) & mask);
+    let Some(nh) = arch_aarch64::uplink::mgmt_nexthop(if on_link { dst } else { m.gw }) else { return false };
+    let n = f.len().min(1600);
+    let mut b = [0u8; 1600];
+    b[..n].copy_from_slice(&f[..n]);
+    mcmgmt::to_wire(&mut b[..n], m.mac, nh);
+    arch_aarch64::uplink::mgmt_tx(&b[..n])
+}
+
 fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
     if !cfg!(feature = "mcserve") || f.len() < 38 || f[12] != 0x08 || f[13] != 0x00 || f[23] != 6 || &f[30..34] != our_ip {
         return false;
