@@ -31,7 +31,7 @@ Tools: `os/kernel/cm5-boot/flash-image.sh` (guarded whole-eMMC write + read-back
 ## Steps
 
 ```bash
-cd ~/hookprobe-os/.claude/worktrees/heqk-premetal-gaps
+cd ~/hookprobe   # repo root; every path below is root-relative
 IMG=os/build/generated/cm5-heqk/hookprobe-heqk-cm5-e690e4d-zerolinux.img
 LOG=~/heqk-metal-logs/$(date +%Y%m%d)-prod-mc-serial.log
 
