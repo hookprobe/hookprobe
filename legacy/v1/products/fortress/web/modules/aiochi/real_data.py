@@ -1160,7 +1160,7 @@ def execute_quick_action(action_id: str, activate: bool) -> Dict[str, Any]:
         return result
     except Exception as e:
         logger.error(f"Quick action {action_id} failed: {e}")
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': 'Action failed (see server log)'}
 
 
 def _execute_pause_kids(activate: bool) -> Dict[str, Any]:
