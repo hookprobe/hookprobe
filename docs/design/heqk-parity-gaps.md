@@ -31,15 +31,15 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 | G9 | Local NAC: signed DEVICES.TXT (MAC → full/internet_only/lan_only/quarantine) arming `segment` without enrollment | M | **closed** `4b23f618` [P-devpolicy] |
 | G23 | Read-only `/api/enforcement` (rate-limited / quarantined sources + time left) | S | **closed** `fb417999` (/api/enforcement) |
 | G6 | Signed dynamic rule pack (RULES.BIN via the DET-2 gate) + NAPSE rule port; `MAX_RULES` 16 → 256 | M/L | **closed** (batch 5) [P-rulepack] — signed RULES.BIN + tools/rulepack.py + NAPSE-derived starter pack; heap-safe loader |
-| G14 | Operator write APIs (logout, incident ack, quarantine/release, Shield allow/pause) + Origin check + audit ring | M | **decision** — ADR 0053 proposed (option C recommended) |
+| G14 | Operator write APIs (logout, incident ack, quarantine/release, Shield allow/pause) + Origin check + audit ring | M | **done + metal** — ADR 0053 accepted with safeguards (`4cc172ba`, `1e36a1f9`); H7–H10 + H5-neg PASS unattended on the relay rig (`metal-evidence/20261108-relay-round-h10.md`) |
 | G15 | Local SIEM export (RFC 5424 syslog / OCSF JSON) — beats both legacy tiers | M | **closed** (batch 4) [P-siem] |
-| G12 | Converge AP + prod-full into one shippable image | L | **decision** — the AP is a bench-only mode by rule (ADR 0023/0045); G20 removed the credential blocker; making the AP a shipping mode needs an ADR |
+| G12 | Converge AP + prod-full into one shippable image | L | **accepted** (register 2026-11-08) — ADR 0054: per-device setup credential + MAC (`bed9c46e`, `d784ab2e`), MC on the management VLAN (G12-M); metal I1/I3/I6/I8/I9 PASS. Remaining: MC QR panel, setup→client hand-off UI |
 | G16 | WAN health probes (ICMP/DNS) with hysteresis | M | **closed** (batch 4) [P-wanhealth] |
-| G17 | IPv6 (RS + DHCPv6-PD) on DHCP/static WAN, not only PPPoE | M | open |
+| G17 | IPv6 (RS + DHCPv6-PD) on DHCP/static WAN, not only PPPoE | M | **stage 1 done + metal** (`451c64ea`): RS/RA, DHCPv6-PD, WAN ND/echo responder on an Ethernet WAN — PD /60 from the bench kea, LAN numbered, ping6 to the WAN link-local (`metal-evidence/20261108-g17-wan6-ethernet.md`). G17.2 LAN MTU from the WAN type (in test). Next: G17.3 IPv6 firewall parity + adversarial tests, G17.4 renewal on metal |
 | G24a/G18 | ADR 0049 D2 IPv6 source identity → IPv6 scan/behaviour/IOC detection | M/L | open |
 | G13e | Deterministic incident reports | M | **closed** `fb417999` (deterministic reports) |
 | G20 | Signed WIFI.TXT (SSID, PSK, channel, guest) instead of build-time env | S | **closed** (batch 4) [P-wificfg] — AP builds without a build-time PSK |
-| G22 | Shield per-client profiles, pause, list refresh | M | open (after G14) |
+| G22 | Shield per-client profiles, pause, list refresh | M | **pause built** — `shield_pause` ADR 0053 action (≤ 1 h kernel-enforced, owner re-auth, blocklists only — floor + bypass controls stay), `Paused` verdict, UI button (in test). Profiles + list refresh: next |
 | G24b | ADR 0050 D4 EL0 steps 1-4 (HTTP, DHCP/DNS, PPPoE/DHCP clients, Noise) | L each | open |
 | G24c, G28 | crypto audit / libcrux ML-KEM; logout / session list / owner-key rotation | M / S | G28 logout **closed** (batch 5); key rotation needs G14; G24c **decision** |
 | G19 | HTP/SASE tunnel over the Noise channel | L | open |
@@ -68,3 +68,5 @@ path broke subdomain matching · V1 HTP VPN fell back to an all-zero Kyber key �
 | `make-cm5-heqk-disk.sh` | file-offset locators read only the FIRST root-directory sector (16 entries); 18+ files made MCTLS.CRT "missing" — the browser flasher's own locator may share this assumption (task #20) | one walker over the whole root cluster chain |
 | `rulepack.rs` | the BPF verifier (~4 KiB) and JIT allocate from the never-freeing heap; a large pack could exhaust it and PANIC at boot | heap-margin guard: verify only with margin, JIT only with margin (else interpreter), refusals counted |
 | `mc-e2e.sh` | fixed host ports + /tmp files collided across concurrent sessions | per-run ports and run dir |
+
+| G25 | Cable plugged after boot left WAN + management dead (GEM speed chosen once) | S | **done + metal** (`b6ebdcba`): `gem::sync_speed` on link-up; unattended late-link test re-leased 8 s after link-up (`metal-evidence/20261108-latelink.md`) |
