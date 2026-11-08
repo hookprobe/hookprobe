@@ -1,0 +1,237 @@
+# =============================================================================
+# autoheal.yml — the L2 heal loop on GitHub (ADR 0052).
+#
+#   red run ──► triage (deterministic classify, one issue per failure signature)
+#                 ├─ rerun    → re-run the failed jobs once (transient infra / TCG budget)
+#                 ├─ autofix  → THREE jobs, split by privilege (security-auditor C1, 2026-11-08):
+#                 │     agent    runs the model; executes code; holds ONLY the model key —
+#                 │              no write token, no persisted git credentials. Output: a patch.
+#                 │     regate   applies the patch to a clean default-branch checkout, runs the
+#                 │              TRUSTED guard + the red gate. Executes agent code; holds NO secrets.
+#                 │     propose  never executes agent code: applies the patch, re-runs the trusted
+#                 │              guard (copied out BEFORE applying), pushes autofix/*, opens a DRAFT PR.
+#                 └─ human    → the issue IS the escalation (secret, licence, wiring, unknown)
+#
+# Autofix only for failures of code already ON the default branch (push/schedule, head_sha
+# verified reachable from the tip — triage_run.autofix_eligible). Max 2 attempts per signature,
+# counted across open AND closed issues; per-attempt spend cap. Merge is always a human.
+# Every action is pinned to a commit SHA here (jobs hold secrets / write tokens — G0 W2b).
+# Needs secrets.ANTHROPIC_API_KEY (a dedicated, spend-limited key) for autofix; optional
+# secrets.AUTOFIX_TOKEN so the draft PR's own ci.yml runs (GITHUB_TOKEN PRs trigger nothing).
+# =============================================================================
+name: autoheal
+
+on:
+  workflow_run:
+    workflows: [ci, nightly, build-heqk, secrets-scan]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: autoheal-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: read
+      issues: write
+    outputs:
+      action: ${{ steps.t.outputs.action }}
+      gate: ${{ steps.t.outputs.gate }}
+      signature: ${{ steps.t.outputs.signature }}
+      attempts: ${{ steps.t.outputs.attempts }}
+      issue: ${{ steps.t.outputs.issue }}
+      is_default_branch: ${{ steps.t.outputs.is_default_branch }}
+      run_attempt: ${{ steps.t.outputs.run_attempt }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4 — default branch: trusted code only
+        with: { persist-credentials: false }
+      - id: t
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 -I tools/ci/heal/triage_run.py --repo "${{ github.repository }}" --run-id "${{ github.event.workflow_run.id }}"
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with: { name: autoheal-triage, path: out/ci/triage, if-no-files-found: ignore }
+
+  rerun:
+    needs: triage
+    if: needs.triage.outputs.action == 'rerun' && needs.triage.outputs.run_attempt == '1'
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run rerun "${{ github.event.workflow_run.id }}" --failed --repo "${{ github.repository }}"
+
+  # ---------------------------------------------------------------- 1/3 agent (model key only)
+  agent:
+    needs: triage
+    if: >-
+      needs.triage.outputs.action == 'autofix' &&
+      needs.triage.outputs.is_default_branch == 'true' &&
+      fromJSON(needs.triage.outputs.attempts) < 2
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    outputs:
+      proposed: ${{ steps.heal.outputs.proposed }}
+    env:
+      HEQK_QEMU_TIMEOUT: "900"
+      HEAL_MAX_BUDGET_USD: "5"
+    steps:
+      - id: key
+        env: { K: "${{ secrets.ANTHROPIC_API_KEY }}" }
+        run: |
+          if [ -z "$K" ]; then echo "no ANTHROPIC_API_KEY — the heal loop stays triage + rerun"; echo "ok=false" >> "$GITHUB_OUTPUT"
+          else echo "ok=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.key.outputs.ok == 'true'
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4 — the default-branch tip
+        with: { fetch-depth: 0, persist-credentials: false }
+      - if: steps.key.outputs.ok == 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
+        with: { toolchain: stable }
+      - if: steps.key.outputs.ok == 'true'
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
+        with:
+          toolchain: nightly
+          components: rust-src, llvm-tools, clippy
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - if: steps.key.outputs.ok == 'true'
+        uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2   # v2
+        with: { tool: cargo-deny }
+      - if: steps.key.outputs.ok == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with: { node-version: "24" }
+      - if: steps.key.outputs.ok == 'true'
+        run: |
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools
+          npm install -g @anthropic-ai/claude-code@2.1.319
+      - if: steps.key.outputs.ok == 'true'
+        id: heal
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # the ONLY secret in this job; heal.py hands it to the model process alone
+        run: |
+          set +e
+          python3 -I tools/ci/heal/heal.py --gates "${{ needs.triage.outputs.gate }}" --agent claude \
+            --max-attempts 1 --emit-patch out/ci/patch
+          [ -s out/ci/patch/autofix.patch ] && echo "proposed=true" >> "$GITHUB_OUTPUT" || echo "proposed=false" >> "$GITHUB_OUTPUT"
+          exit 0
+      - if: always() && steps.key.outputs.ok == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with: { name: autofix-patch, path: out/ci/patch, if-no-files-found: ignore }
+      - if: always() && steps.key.outputs.ok == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02   # v4
+        with: { name: autofix-report, path: out/ci/heal/report.md, if-no-files-found: ignore }
+
+  # ---------------------------------------------------------------- 2/3 regate (NO secrets)
+  regate:
+    needs: [triage, agent]
+    if: needs.agent.outputs.proposed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    env:
+      CI_STRICT: "1"
+      HEQK_QEMU_TIMEOUT: "900"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4
+        with:
+          name: autofix-patch
+          path: ${{ runner.temp }}/patch
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
+        with: { toolchain: stable }
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
+        with:
+          toolchain: nightly
+          components: rust-src, llvm-tools, clippy
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2   # v2
+        with: { tool: cargo-deny }
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+        with: { node-version: "24" }
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools
+      - name: Trusted guard (copied out BEFORE the patch is applied)
+        run: |
+          cp tools/ci/heal/autofix_guard.py tools/ci/heal/protected-paths.txt "$RUNNER_TEMP/"
+          BASE=$(git rev-parse HEAD)
+          git -c core.hooksPath=/dev/null -c user.name=autofix -c user.email=autofix@invalid am --no-verify "$RUNNER_TEMP/patch/autofix.patch"
+          git checkout -q -b "autofix/regate"
+          python3 -I "$RUNNER_TEMP/autofix_guard.py" --protected "$RUNNER_TEMP/protected-paths.txt" \
+            --base "$BASE" --head HEAD --branch autofix/regate --require-branch
+      - name: The originally red gate must now pass (agent code runs here — no secrets present)
+        run: tools/ci/gates.sh "${{ needs.triage.outputs.gate }}"
+
+  # ---------------------------------------------------------------- 3/3 propose (write; runs NO agent code)
+  propose:
+    needs: [triage, agent, regate]
+    if: needs.regate.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.AUTOFIX_TOKEN || github.token }}
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4
+        with:
+          name: autofix-patch
+          path: ${{ runner.temp }}/patch
+      - name: Apply, re-guard, push autofix/*, open a DRAFT PR
+        env:
+          GH_TOKEN: ${{ secrets.AUTOFIX_TOKEN || github.token }}
+          SIG: ${{ needs.triage.outputs.signature }}
+          GATE: ${{ needs.triage.outputs.gate }}
+          ISSUE: ${{ needs.triage.outputs.issue }}
+        run: |
+          set -euo pipefail
+          cp tools/ci/heal/autofix_guard.py tools/ci/heal/protected-paths.txt "$RUNNER_TEMP/"
+          BASE=$(git rev-parse HEAD)
+          BR="autofix/${SIG}-r${GITHUB_RUN_ID}"
+          git checkout -q -b "$BR"
+          git -c core.hooksPath=/dev/null -c user.name=hookprobe-autofix -c user.email=autofix@users.noreply.github.com \
+            am --no-verify "$RUNNER_TEMP/patch/autofix.patch"
+          python3 -I "$RUNNER_TEMP/autofix_guard.py" --protected "$RUNNER_TEMP/protected-paths.txt" \
+            --base "$BASE" --head HEAD --branch "$BR" --require-branch
+          git -c core.hooksPath=/dev/null push --no-verify -q origin "$BR"
+          python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m["notes"])' "$RUNNER_TEMP/patch/meta.json" \
+            | sed 's/@/(at)/g' > "$RUNNER_TEMP/notes.md"
+          { echo "**Autofix proposal (ADR 0052 L2) — DRAFT, needs human review.**"; echo
+            cat "$RUNNER_TEMP/notes.md"; echo
+            echo "- signature: \`$SIG\` · gate \`$GATE\` re-ran green with no secrets present · trusted guard: PASS (twice)"
+            [ -n "$ISSUE" ] && echo "- tracking issue: #$ISSUE"; } > "$RUNNER_TEMP/body.md"
+          gh pr create --draft --base "${{ github.event.repository.default_branch }}" --head "$BR" \
+            --title "autofix: heal $GATE ($SIG)" --body-file "$RUNNER_TEMP/body.md"
+
+  record:
+    needs: [triage, agent, regate, propose]
+    if: always() && needs.agent.result != 'skipped' && needs.triage.outputs.issue != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          R_AGENT: ${{ needs.agent.result }}
+          R_PROPOSED: ${{ needs.agent.outputs.proposed }}
+          R_REGATE: ${{ needs.regate.result }}
+          R_PROPOSE: ${{ needs.propose.result }}
+        run: |
+          { echo "<!-- autofix-attempt -->"
+            echo "**Autofix attempt** (run ${{ github.run_id }}): agent=$R_AGENT proposed=$R_PROPOSED regate=$R_REGATE propose=$R_PROPOSE"; } > "$RUNNER_TEMP/a.md"
+          gh issue comment "${{ needs.triage.outputs.issue }}" --repo "${{ github.repository }}" --body-file "$RUNNER_TEMP/a.md"

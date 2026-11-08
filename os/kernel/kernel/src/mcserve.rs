@@ -695,7 +695,10 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
             *c = Conn::Sending { hlen, hoff, body, boff, keep, carry, served };
         }
         Conn::Sse { last_change, last_ping_ms } => {
-            if !s.may_send() {
+            // SSE is server→client only: a client FIN means the EventSource is gone. Without the
+            // peer_closed() check a closed tab/reload held its slot (CloseWait) until the next 15 s ping
+            // drew an RST — HTTPS has only TLS_N slots (mc-e2e "slots not recycled", 2026-11-08).
+            if !s.may_send() || s.peer_closed() {
                 s.close();
                 return;
             }
@@ -873,6 +876,11 @@ mod tls_side {
         }
         fn room(&self) -> usize {
             (self.s.send_capacity() - self.s.send_queue()).saturating_sub(64)
+        }
+        /// FIN received AND every decrypted byte consumed — same contract as the plain-TCP pipe, so
+        /// kept-alive / SSE connections over TLS are released on client close, not by a timer.
+        fn peer_closed(&self) -> bool {
+            self.s.state() == tcp::State::CloseWait && unsafe { RXN[self.slot] } == 0
         }
         fn close(&mut self) {
             if *self.open {
