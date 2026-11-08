@@ -244,6 +244,11 @@ impl V6Lan {
 
     /// A station left (deauth / disassoc): release its address bindings (re-review M1 — a client that
     /// re-joins with a new private MAC must not be refused its own address for 30 min).
+    /// The MAC of the LAN station that holds `ip` (SAVI binding table), if known — ADR 0049 D2 device key.
+    pub fn mac_of(&self, ip: &[u8; 16]) -> Option<[u8; 6]> {
+        self.neigh.iter().find(|n| n.ip == *ip && n.mac != [0; 6]).map(|n| n.mac)
+    }
+
     pub fn forget_mac(&mut self, mac: &[u8; 6]) {
         for n in self.neigh.iter_mut() {
             if n.mac == *mac {
