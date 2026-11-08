@@ -2,6 +2,8 @@
 import os
 import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 CI = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path[:0] = [CI, os.path.join(CI, "heal")]
@@ -180,6 +182,18 @@ class Triage(unittest.TestCase):
     def test_most_severe_wins(self):
         ds = [classify.classify_text(LOGS["infra_transient"]), classify.classify_text(LOGS["vulnerable_dependency"])]
         self.assertEqual(triage_run.pick(ds)["category"], "vulnerable_dependency")
+
+    @patch.object(triage_run.subprocess, "run")
+    def test_log_fetch_handles_action_ansi_output(self, run):
+        log = "compiler \x1b[31merror\x1b[0m\n"
+        run.return_value = SimpleNamespace(returncode=0, stdout=log, stderr="")
+
+        self.assertEqual(triage_run.fetch_job_log("hookprobe/hookprobe", 42, 99), log)
+        run.assert_called_once_with(
+            ["gh", "run", "view", "42", "--repo", "hookprobe/hookprobe", "--job", "99", "--log"],
+            capture_output=True,
+            text=True,
+        )
 
 
 if __name__ == "__main__":
