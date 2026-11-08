@@ -23,7 +23,7 @@ heqk-tlsprov = { path = "../tlsprov" }
 rustls = { version = "0.23", default-features = false }
 hal = { path = "../hal" }
 talc = { version = "4", default-features = false, features = ["lock_api"] }
-spin = { version = "0.9", default-features = false, features = ["lock_api", "spin_mutex"] }
+spin = { version = "0.12", default-features = false, features = ["lock_api", "spin_mutex"] }
 
 [profile.release]
 panic = "abort"
