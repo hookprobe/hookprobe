@@ -70,7 +70,7 @@ jobs:
           toolchain: nightly
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020   # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1   # v7.1.0
         with: { node-version: "24" }
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c   # v0.24.3
       - name: Build the shipped CM5 profile (prod-mc)
