@@ -58,6 +58,7 @@ mod idsbench;
 mod ja4;
 mod fpdb;
 mod devid;
+mod oui;
 mod discovery;
 #[cfg(feature = "netsvc")]
 mod actionapi;
@@ -3111,6 +3112,10 @@ fn cm5_p10_probe() {
                                 kprint!(" [INTEL] IOC pack: {} IPv4 prefixes + {} domains {} — matches are DETECTIONS (ioc_match), never drops\n",
                                     ioc::v4_len(), ioc::dom_len(),
                                     match ii.file { 0 => "(no IOC.TXT)", 1 => if ii.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(IOC.TXT REFUSED — not loaded)" });
+                                let oi = oui::load(&dev);
+                                kprint!(" [OUI] vendor registry: {} assignments {}{}\n", oui::len(),
+                                    match oi.file { 0 => "(no OUI.TXT — curated vendors only)", 1 => if oi.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(OUI.TXT REFUSED — curated vendors only)" },
+                                    if oi.skipped + oi.truncated > 0 { " — some lines skipped" } else { "" });
                                 let di = devpolicy::load(&dev);
                                 kprint!(" [DEVICES] per-device policy: {} devices {}\n", devpolicy::len(),
                                     match di.file { 0 => "(no DEVICES.TXT — every device full access)", 1 => if di.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(DEVICES.TXT REFUSED — every device full access)" });
@@ -6449,6 +6454,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = shield::selftest();
         let _ = dga::selftest();
         let _ = ioc::selftest();
+        let _ = oui::selftest();
         let _ = devpolicy::selftest();
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();

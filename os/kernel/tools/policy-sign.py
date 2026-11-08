@@ -10,6 +10,7 @@
   policy-sign.py sign-devices KEYFILE DEVICES.TXT GEN OUT.SIG   # per-device policy (<= 16 KiB)
   policy-sign.py sign-wifi KEYFILE WIFI.TXT GEN OUT.SIG         # AP SSID / PSK / channel (<= 1 KiB)
   policy-sign.py sign-rules KEYFILE RULES.BIN GEN OUT.SIG       # compiled rule pack (tools/rulepack.py, <= 64 KiB)
+  policy-sign.py sign-oui KEYFILE OUI.TXT GEN OUT.SIG           # IEEE OUI vendor registry (<= 4 MiB; os/build/fpgen/gen_oui.py)
 
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
@@ -50,7 +51,7 @@ def main():
         sig = k.sign(b"HQPOL1" + struct.pack("<Q", gen) + d)
         open(out, "wb").write((b"HQPSIG1\0" + struct.pack("<Q", gen) + d + sig).ljust(512, b"\0"))
         print(f"POLICY.SIG written (generation {gen})")
-    elif a[:1] in (["sign-blocklist"], ["sign-allowlist"], ["sign-ioc"], ["sign-devices"], ["sign-wifi"], ["sign-rules"]) and len(a) == 5:
+    elif a[:1] in (["sign-blocklist"], ["sign-allowlist"], ["sign-ioc"], ["sign-devices"], ["sign-wifi"], ["sign-rules"], ["sign-oui"]) and len(a) == 5:
         k, body, gen, out = load(a[1]), open(a[2], "rb").read(), int(a[3]), a[4]
         tag, magic, cap = {
             "sign-blocklist": (b"HQBLK1", b"HQBSIG1\0", 16 << 20),
@@ -59,6 +60,7 @@ def main():
             "sign-devices": (b"HQDEV1", b"HQDSIG1\0", 16 << 10),
             "sign-wifi": (b"HQWIF1", b"HQWSIG1\0", 1 << 10),
             "sign-rules": (b"HQRUL1", b"HQRSIG1\0", 64 << 10),
+            "sign-oui": (b"HQOUI1", b"HQOSIG1\0", 4 << 20),
         }[a[0]]
         if len(body) > cap:
             sys.exit(f"file larger than {cap} bytes")
