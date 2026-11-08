@@ -94,6 +94,10 @@ gate_g1() {
 
 gate_g2() {
   need qemu-system-aarch64 || return 0
+  # The P15 OTA / A-B phases build a real FAT32 disk; without these tools validate.sh SKIPS them and
+  # then reports them as "missing marker" — a phantom kernel regression (CI, 2026-11-08). Under
+  # CI_STRICT a missing tool fails here, by name.
+  local t; for t in mkfs.vfat mcopy sfdisk; do need "$t" || return 0; done
   step "heqk validate.sh (QEMU)"       bash -c 'cd os/kernel && ./validate.sh'
 }
 
