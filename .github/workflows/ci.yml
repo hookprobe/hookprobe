@@ -38,7 +38,7 @@ jobs:
     name: "g0 · hygiene + CI wiring"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: tools/ci/gates.sh g0
       - if: always()
         uses: actions/upload-artifact@v4
@@ -48,7 +48,7 @@ jobs:
     name: "g1 · clippy ratchet + unit tests + phase ratchet"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -73,7 +73,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools
@@ -97,7 +97,7 @@ jobs:
     name: "g4 · supply chain (RustSec, npm audit, SBOM)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-deny }
@@ -114,7 +114,7 @@ jobs:
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'autofix/')
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       # The guard + its policy are taken from the BASE branch: the PR under review must not be
       # able to rewrite the very guard that judges it.
