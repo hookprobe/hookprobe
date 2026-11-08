@@ -29,9 +29,20 @@ static mut INSN: [u64; POOL] = [0; POOL];
 static mut INSN_N: usize = 0;
 static mut NAME: [u8; NAMES] = [0; NAMES];
 static mut NAME_N: usize = 0;
-const R0: Rule = Rule { id: 0, name: "", prog: &[], severity: 0, class: FindingClass::Behavioral };
-const ROW: [Rule; DYN_MAX] = [R0; DYN_MAX];
-pub(crate) static mut DYN: [[Rule; DYN_MAX]; 4] = [ROW, ROW, ROW, ROW];
+// Zeroed, not `[Rule; N]` literals: a Rule holds &str/&[] (non-null), which would put the whole table in
+// .data (10 KiB of image). Only slots below DYN_N[t] are ever written and read, via raw pointers (dyn_slot).
+pub(crate) static mut DYN: core::mem::MaybeUninit<[[Rule; DYN_MAX]; 4]> = core::mem::MaybeUninit::zeroed();
+
+#[inline]
+fn dyn_slot(t: usize, i: usize) -> *mut Rule {
+    debug_assert!(t < 4 && i < DYN_MAX);
+    unsafe { (core::ptr::addr_of_mut!(DYN) as *mut Rule).add(t * DYN_MAX + i) }
+}
+
+/// The armed rules of tier `t` (only the written prefix).
+fn dyn_rules(t: usize, n: usize) -> &'static [Rule] {
+    unsafe { core::slice::from_raw_parts(dyn_slot(t, 0) as *const Rule, n.min(DYN_MAX)) }
+}
 pub(crate) static mut DYN_N: [usize; 4] = [0; 4];
 pub(crate) static mut DYN_STATE: [[RState; DYN_MAX]; 4] = [[RState::EMPTY; DYN_MAX]; 4];
 
@@ -74,7 +85,7 @@ pub fn lookup(id: u16) -> Option<(&'static str, u32)> {
     }
     for t in 0..4 {
         let n = unsafe { DYN_N[t] };
-        for r in unsafe { &(&*core::ptr::addr_of!(DYN))[t][..n] } {
+        for r in dyn_rules(t, n) {
             if r.id == id {
                 return Some((r.name, r.severity));
             }
@@ -171,7 +182,7 @@ fn load_body_jit(body: &[u8], jit: bool, arm: bool) -> Result<PackInfo, &'static
         unsafe {
             let t = tier as usize;
             let i = DYN_N[t];
-            (*core::ptr::addr_of_mut!(DYN))[t][i] = Rule { id, name: nm, prog, severity: sev as u32, class: class_of(class).unwrap() };
+            dyn_slot(t, i).write(Rule { id, name: nm, prog, severity: sev as u32, class: class_of(class).unwrap() });
             (*core::ptr::addr_of_mut!(DYN_STATE))[t][i] = st;
             DYN_N[t] += 1;
         }
@@ -259,7 +270,7 @@ pub fn verdict(tier: usize, pkt: &[u8], src: u32, decide_fn: fn(FindingClass, cr
     if n == 0 {
         return None;
     }
-    let rules = unsafe { &(&*core::ptr::addr_of!(DYN))[tier][..n] };
+    let rules = dyn_rules(tier, n);
     let st = unsafe { core::ptr::addr_of_mut!(DYN_STATE).cast::<[RState; DYN_MAX]>().add(tier).cast::<RState>() };
     crate::rules::run_set_verdict_pub(rules, st, n, pkt, src, decide_fn)
 }
