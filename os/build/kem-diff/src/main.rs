@@ -10,10 +10,38 @@
 //!
 //!   cargo run --release -- [N]        (default 1000)
 //!   cargo run --release -- fuzz [N]   differential fuzz: random / mutated ciphertexts + keys (default 200 000)
-use kem::Decapsulate;
-use ml_kem::EncapsulateDeterministic;
-use ml_kem::array::Array;
-use ml_kem::{EncodedSizeUser, KemCore, MlKem768};
+/// Byte-level view of the shipping RustCrypto ml-kem 0.3.4 (0.3 keys are seed-based; the expanded 2400-byte
+/// decapsulation key is the deprecated-but-supported FIPS 203 encoding the vectors use).
+#[allow(deprecated)]
+mod rc {
+    use ml_kem::ml_kem_768::{DecapsulationKey, EncapsulationKey};
+    use ml_kem::{Decapsulate, ExpandedKeyEncoding, KeyExport};
+    pub fn keygen(d: &[u8; 32], z: &[u8; 32]) -> ([u8; 1184], [u8; 2400]) {
+        let mut seed = [0u8; 64];
+        seed[..32].copy_from_slice(d);
+        seed[32..].copy_from_slice(z);
+        let dk = DecapsulationKey::from_seed(seed.into());
+        let ek: [u8; 1184] = dk.encapsulation_key().to_bytes().as_slice().try_into().unwrap();
+        (ek, dk.to_expanded_bytes().as_slice().try_into().unwrap())
+    }
+    /// None = the library refuses the key (0.3 validates FIPS 203 §7.2 in `EncapsulationKey::new`).
+    pub fn encaps(ek: &[u8; 1184], m: &[u8; 32]) -> Option<([u8; 1088], [u8; 32])> {
+        let ek = EncapsulationKey::new(&(*ek).into()).ok()?;
+        let (ct, ss) = ek.encapsulate_deterministic(&(*m).into());
+        Some((ct.as_slice().try_into().unwrap(), ss.as_slice().try_into().unwrap()))
+    }
+    /// None = the library refuses the expanded key (0.3 checks H(ek) per FIPS 203 §7.3).
+    pub fn decaps(dk: &[u8; 2400], ct: &[u8; 1088]) -> Option<[u8; 32]> {
+        let dk = DecapsulationKey::from_expanded_bytes(&(*dk).into()).ok()?;
+        Some(dk.decapsulate(&(*ct).into()).as_slice().try_into().unwrap())
+    }
+    pub fn ek_valid(ek: &[u8]) -> bool {
+        <[u8; 1184]>::try_from(ek).ok().is_some_and(|e| EncapsulationKey::new(&e.into()).is_ok())
+    }
+    pub fn dk_valid(dk: &[u8]) -> bool {
+        <[u8; 2400]>::try_from(dk).ok().is_some_and(|d| DecapsulationKey::from_expanded_bytes(&d.into()).is_ok())
+    }
+}
 use sha2::{Digest, Sha256};
 use std::time::{Duration, Instant};
 
@@ -42,9 +70,9 @@ fn main() {
 
         // RustCrypto
         let t0 = Instant::now();
-        let (rc_dk, rc_ek) = MlKem768::generate_deterministic(&Array(d), &Array(z));
-        let (rc_ct, rc_ss) = rc_ek.encapsulate_deterministic(&Array(m)).unwrap();
-        let rc_back = rc_dk.decapsulate(&rc_ct).unwrap();
+        let (rc_ek_b, rc_dk_b) = rc::keygen(&d, &z);
+        let (rc_ct, rc_ss) = rc::encaps(&rc_ek_b, &m).unwrap();
+        let rc_back = rc::decaps(&rc_dk_b, &rc_ct).unwrap();
         t_rc += t0.elapsed();
 
         // libcrux (portable code path on this host build as well as the CM5 softfloat target)
@@ -57,23 +85,20 @@ fn main() {
         let lc_back = libcrux_ml_kem::mlkem768::decapsulate(kp.private_key(), &lc_ct);
         t_lc += t1.elapsed();
 
-        let rc_ek_b = rc_ek.as_bytes();
-        let rc_dk_b = rc_dk.as_bytes();
         let keys_eq = rc_ek_b.as_slice() == kp.public_key().as_slice() && rc_dk_b.as_slice() == kp.private_key().as_slice();
         let enc_eq = rc_ct.as_slice() == lc_ct.as_slice() && rc_ss.as_slice() == lc_ss.as_slice();
         let self_ok = rc_back == rc_ss && lc_back == lc_ss;
 
         // cross-decapsulation
-        let lc_ct_as_rc = ml_kem::Ciphertext::<MlKem768>::try_from(lc_ct.as_slice().as_slice()).unwrap();
-        let cross_rc = rc_dk.decapsulate(&lc_ct_as_rc).unwrap();
-        let rc_ct_as_lc = libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from(<[u8; 1088]>::try_from(rc_ct.as_slice()).unwrap());
+        let cross_rc = rc::decaps(&rc_dk_b, lc_ct.as_slice()).unwrap();
+        let rc_ct_as_lc = libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from(rc_ct);
         let cross_lc = libcrux_ml_kem::mlkem768::decapsulate(kp.private_key(), &rc_ct_as_lc);
         let cross_ok = cross_rc.as_slice() == lc_ss.as_slice() && cross_lc == rc_ss.as_slice();
 
         // implicit rejection on a tampered ciphertext
-        let mut bad = <[u8; 1088]>::try_from(rc_ct.as_slice()).unwrap();
+        let mut bad = rc_ct;
         bad[(i as usize * 7) % 1088] ^= 1 << (i % 8);
-        let rej_rc = rc_dk.decapsulate(&ml_kem::Ciphertext::<MlKem768>::try_from(&bad[..]).unwrap()).unwrap();
+        let rej_rc = rc::decaps(&rc_dk_b, &bad).unwrap();
         let rej_lc = libcrux_ml_kem::mlkem768::decapsulate(kp.private_key(), &libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from(bad));
         let rej_ok = rej_rc.as_slice() == rej_lc.as_slice() && rej_rc != rc_ss;
 
@@ -86,10 +111,10 @@ fn main() {
                 eprintln!("seed {i}: keys={keys_eq} encaps={enc_eq} self={self_ok} cross={cross_ok} rejection={rej_ok} pk-valid={valid_ok}");
             }
         }
-        transcript.update(rc_ek_b.as_slice());
-        transcript.update(rc_ct.as_slice());
-        transcript.update(rc_ss.as_slice());
-        transcript.update(rej_rc.as_slice());
+        transcript.update(rc_ek_b);
+        transcript.update(rc_ct);
+        transcript.update(rc_ss);
+        transcript.update(rej_rc);
     }
 
     // A public key with one coefficient set to q = 3329 (not reduced) must be rejected.
@@ -164,8 +189,8 @@ fn acvp(dir: &str) -> bool {
         for t in g["tests"].as_array().unwrap() {
             let tc = t["tcId"].as_u64().unwrap();
             let (d, z, ek, dk) = (h(t, "d"), h(t, "z"), h(t, "ek"), h(t, "dk"));
-            let (rc_dk, rc_ek) = MlKem768::generate_deterministic(&Array(d.clone().try_into().unwrap()), &Array(z.clone().try_into().unwrap()));
-            tally(rc_ek.as_bytes().as_slice() == &ek[..] && rc_dk.as_bytes().as_slice() == &dk[..], "keyGen RustCrypto", tc);
+            let (rc_ek, rc_dk) = rc::keygen(&d.clone().try_into().unwrap(), &z.clone().try_into().unwrap());
+            tally(rc_ek[..] == ek[..] && rc_dk[..] == dk[..], "keyGen RustCrypto", tc);
             let mut dz = [0u8; 64];
             dz[..32].copy_from_slice(&d);
             dz[32..].copy_from_slice(&z);
@@ -183,20 +208,16 @@ fn acvp(dir: &str) -> bool {
             match func {
                 "encapsulation" => {
                     let (ek, m, c, k) = (h(t, "ek"), h(t, "m"), h(t, "c"), h(t, "k"));
-                    let enc = ml_kem::Encoded::<<MlKem768 as KemCore>::EncapsulationKey>::try_from(&ek[..]).unwrap();
-                    let rc_ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&enc);
-                    let (rc_c, rc_k) = rc_ek.encapsulate_deterministic(&Array(m.clone().try_into().unwrap())).unwrap();
-                    tally(rc_c.as_slice() == &c[..] && rc_k.as_slice() == &k[..], "encaps RustCrypto", tc);
+                    let r = rc::encaps(&ek.clone().try_into().unwrap(), &m.clone().try_into().unwrap());
+                    tally(r.is_some_and(|(rc_c, rc_k)| rc_c[..] == c[..] && rc_k[..] == k[..]), "encaps RustCrypto", tc);
                     let pk = libcrux_ml_kem::mlkem768::MlKem768PublicKey::from(<[u8; 1184]>::try_from(&ek[..]).unwrap());
                     let (lc_c, lc_k) = libcrux_ml_kem::mlkem768::encapsulate(&pk, m.try_into().unwrap());
                     tally(lc_c.as_slice() == &c[..] && lc_k.as_slice() == &k[..], "encaps libcrux", tc);
                 }
                 "decapsulation" => {
                     let (dk, c, k) = (h(t, "dk"), h(t, "c"), h(t, "k"));
-                    let enc = ml_kem::Encoded::<<MlKem768 as KemCore>::DecapsulationKey>::try_from(&dk[..]).unwrap();
-                    let rc_dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(&enc);
-                    let rc_k = rc_dk.decapsulate(&ml_kem::Ciphertext::<MlKem768>::try_from(&c[..]).unwrap()).unwrap();
-                    tally(rc_k.as_slice() == &k[..], "decaps RustCrypto", tc);
+                    let r = rc::decaps(&dk.clone().try_into().unwrap(), &c.clone().try_into().unwrap());
+                    tally(r.is_some_and(|rc_k| rc_k[..] == k[..]), "decaps RustCrypto", tc);
                     let sk = libcrux_ml_kem::mlkem768::MlKem768PrivateKey::from(<[u8; 2400]>::try_from(&dk[..]).unwrap());
                     let ct = libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from(<[u8; 1088]>::try_from(&c[..]).unwrap());
                     tally(libcrux_ml_kem::mlkem768::decapsulate(&sk, &ct).as_slice() == &k[..], "decaps libcrux", tc);
@@ -204,6 +225,7 @@ fn acvp(dir: &str) -> bool {
                 "encapsulationKeyCheck" => {
                     let (ek, want) = (h(t, "ek"), t["testPassed"].as_bool().unwrap());
                     tally(ek_modulus_ok(&ek) == want, "ekCheck heqk helper", tc);
+                    tally(rc::ek_valid(&ek) == want, "ekCheck RustCrypto 0.3.4", tc);
                     let ok = ek.len() == 1184
                         && libcrux_ml_kem::mlkem768::validate_public_key(&libcrux_ml_kem::mlkem768::MlKem768PublicKey::from(<[u8; 1184]>::try_from(&ek[..]).unwrap()));
                     tally(ok == want, "ekCheck libcrux", tc);
@@ -211,6 +233,7 @@ fn acvp(dir: &str) -> bool {
                 "decapsulationKeyCheck" => {
                     let (dk, want) = (h(t, "dk"), t["testPassed"].as_bool().unwrap());
                     tally(dk_hash_ok(&dk) == want, "dkCheck heqk helper", tc);
+                    tally(rc::dk_valid(&dk) == want, "dkCheck RustCrypto 0.3.4", tc);
                     let ok = dk.len() == 2400
                         && libcrux_ml_kem::mlkem768::validate_private_key(&libcrux_ml_kem::mlkem768::MlKem768PrivateKey::from(<[u8; 2400]>::try_from(&dk[..]).unwrap()), &libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from([0u8; 1088]));
                     tally(ok == want, "dkCheck libcrux", tc);
@@ -268,10 +291,9 @@ fn mutate(r: &mut Rng, b: &mut [u8]) {
     }
 }
 
-fn rc_decaps(dk: &[u8; 2400], ct: &[u8; 1088]) -> [u8; 32] {
-    let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(&Array::try_from(&dk[..]).unwrap());
-    let ss = dk.decapsulate(&ml_kem::Ciphertext::<MlKem768>::try_from(&ct[..]).unwrap()).unwrap();
-    ss.as_slice().try_into().unwrap()
+/// The shipping library: None when it refuses the key (0.3 validates expanded keys, unlike 0.2.3).
+fn rc_decaps(dk: &[u8; 2400], ct: &[u8; 1088]) -> Option<[u8; 32]> {
+    rc::decaps(dk, ct)
 }
 
 fn lc_decaps(dk: &[u8; 2400], ct: &[u8; 1088]) -> [u8; 32] {
@@ -279,10 +301,8 @@ fn lc_decaps(dk: &[u8; 2400], ct: &[u8; 1088]) -> [u8; 32] {
     libcrux_ml_kem::mlkem768::decapsulate(&dk, &libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from(*ct))
 }
 
-fn rc_encaps(ek: &[u8; 1184], m: &[u8; 32]) -> ([u8; 1088], [u8; 32]) {
-    let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&Array::try_from(&ek[..]).unwrap());
-    let (ct, ss) = ek.encapsulate_deterministic(&Array(*m)).unwrap();
-    (ct.as_slice().try_into().unwrap(), ss.as_slice().try_into().unwrap())
+fn rc_encaps(ek: &[u8; 1184], m: &[u8; 32]) -> Option<([u8; 1088], [u8; 32])> {
+    rc::encaps(ek, m)
 }
 
 fn lc_encaps(ek: &[u8; 1184], m: &[u8; 32]) -> ([u8; 1088], [u8; 32]) {
@@ -321,7 +341,7 @@ fn fuzz(n: u64) -> bool {
                 0..=5 => {
                     let mut ct = *ct0;
                     if kind == 5 { rr.fill(&mut ct) } else { mutate(&mut rr, &mut ct) }
-                    (0, rc_decaps(dk, &ct) == lc_decaps(dk, &ct))
+                    (0, rc_decaps(dk, &ct) == Some(lc_decaps(dk, &ct)))
                 }
                 // 6-7: encapsulation to a mutated / random public key
                 6 | 7 => {
@@ -329,14 +349,20 @@ fn fuzz(n: u64) -> bool {
                     if kind == 7 { rr.fill(&mut e) } else { mutate(&mut rr, &mut e) }
                     let mut m = [0u8; 32];
                     rr.fill(&mut m);
-                    let same = rc_encaps(&e, &m) == lc_encaps(&e, &m);
-                    (if ek_modulus_ok(&e) { 1 } else { 2 }, same)
+                    // a key that passes §7.2 must be accepted by the shipping library AND agree with libcrux;
+                    // one that fails it must be REFUSED by the shipping library (0.3 validates itself)
+                    if ek_modulus_ok(&e) {
+                        (1, rc_encaps(&e, &m) == Some(lc_encaps(&e, &m)))
+                    } else {
+                        (2, rc_encaps(&e, &m).is_none())
+                    }
                 }
                 // 8-9: decapsulation with a mutated private key (outside FIPS 203 §7.3 — reported only)
                 _ => {
                     let mut d = *dk;
                     mutate(&mut rr, &mut d);
-                    (3, rc_decaps(&d, ct0) == lc_decaps(&d, ct0))
+                    // outside §7.3: the shipping library may refuse (H(ek) check) — compare only what it accepts
+                    (3, rc_decaps(&d, ct0).map_or(true, |k| k == lc_decaps(&d, ct0)))
                 }
             }
         }));
@@ -367,7 +393,7 @@ fn fuzz(n: u64) -> bool {
             }
             Ok((2, same)) => {
                 ek_invalid += 1;
-                ek_invalid_diff += !same as u64;
+                ek_invalid_diff += !same as u64; // here: NOT refused by the shipping library
             }
             Ok((_, same)) => {
                 dk_cases += 1;
@@ -375,10 +401,10 @@ fn fuzz(n: u64) -> bool {
             }
         }
     }
-    let pass = panics == 0 && ct_bad == 0 && ek_valid_bad == 0;
+    let pass = panics == 0 && ct_bad == 0 && ek_valid_bad == 0 && ek_invalid_diff == 0;
     println!("kem-diff fuzz: {n} iterations in {:.1} s, seed {fseed:#x}", t0.elapsed().as_secs_f64());
     println!("  hostile ciphertexts vs honest keys: {ct_cases}, disagreements {ct_bad}");
-    println!("  encapsulation to mutated/random keys: {ek_valid} pass the FIPS 203 §7.2 check (disagreements {ek_valid_bad}), {ek_invalid} fail it (differ {ek_invalid_diff} — refused before use in production)");
+    println!("  encapsulation to mutated/random keys: {ek_valid} pass the FIPS 203 §7.2 check (disagreements {ek_valid_bad}), {ek_invalid} fail it (accepted by the shipping library: {ek_invalid_diff} — must be 0)");
     println!("  decapsulation with mutated private keys (outside §7.3, reported only): {dk_cases}, differ {dk_diff}");
     println!("  panics: {panics}");
     println!("KEM-FUZZ: {}", if pass { "PASS" } else { "FAIL" });
