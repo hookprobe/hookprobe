@@ -38,17 +38,17 @@ jobs:
     name: "g0 · hygiene + CI wiring"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: tools/ci/gates.sh g0
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: gates-g0, path: out/ci, if-no-files-found: ignore }
 
   g1:
     name: "g1 · clippy ratchet + unit tests + phase ratchet"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: dtolnay/rust-toolchain@nightly
         with:
@@ -65,7 +65,7 @@ jobs:
       - if: always()
         run: python3 tools/ci/cortex/ci_to_cortex.py out/ci/gate-results.json --out out/ci/cortex-events.jsonl
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: gates-g1, path: out/ci, if-no-files-found: ignore }
 
   g3:
@@ -73,40 +73,40 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
         with: { workspaces: "os/kernel -> target/mc" }
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "24" }
       - name: QEMU + disk tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk
       - name: Playwright Chromium (browser leg)
         run: cd os/kernel/tools/mc-e2e && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
       - run: tools/ci/gates.sh g3
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: gates-g3, path: out/ci, if-no-files-found: ignore }
 
   g4:
     name: "g4 · supply chain (RustSec, npm audit, SBOM)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-deny }
       - uses: anchore/sbom-action/download-syft@v0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "24" }
       - run: tools/ci/gates.sh g4
       - if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with: { name: gates-g4-sbom, path: out/ci, if-no-files-found: ignore }
 
   autofix-guard:
@@ -114,7 +114,7 @@ jobs:
     if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'autofix/')
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with: { fetch-depth: 0 }
       # The guard + its policy are taken from the BASE branch: the PR under review must not be
       # able to rewrite the very guard that judges it.
