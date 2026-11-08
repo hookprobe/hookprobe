@@ -133,6 +133,29 @@ pub fn consume_one(pool_base: usize) -> Option<(u16, u16)> {
 /// ARP-guard, the rate-limiter and the threat-feed. Normalize by STRIPPING VLAN tags
 /// into `buf` so those tiers always see a canonical untagged frame. Returns the raw
 /// frame unchanged on the fast path (no tags → no copy).
+// G34: the VLAN-normalised view used to live in a ZEROED 2 KB stack array — twice per packet (verdict +
+// classify_tiers), ~4 KB of memset on every frame even when the frame is untagged and the buffer is never
+// touched. The datapath is single-core with IRQs off, so one static scratch serves both; a re-entrancy guard
+// falls back to a stack buffer if that assumption is ever broken (correctness never depends on it).
+static mut SCRATCH: [u8; FRAME_SZ] = [0; FRAME_SZ];
+static SCRATCH_BUSY: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Run `f` with the VLAN-normalised view of `frame`.
+fn with_normalized<R>(frame: &[u8], f: impl FnOnce(&[u8]) -> R) -> R {
+    use core::sync::atomic::Ordering;
+    let et = if frame.len() >= 14 { ((frame[12] as u16) << 8) | frame[13] as u16 } else { 0 };
+    if et != crate::net::ETHERTYPE_VLAN && et != crate::net::ETHERTYPE_QINQ {
+        return f(frame); // untagged (the common case): no copy, no buffer
+    }
+    if SCRATCH_BUSY.swap(true, Ordering::Acquire) {
+        let mut local = [0u8; FRAME_SZ];
+        return f(strip_vlan(frame, &mut local));
+    }
+    let r = f(strip_vlan(frame, unsafe { &mut *core::ptr::addr_of_mut!(SCRATCH) }));
+    SCRATCH_BUSY.store(false, Ordering::Release);
+    r
+}
+
 fn strip_vlan<'a>(frame: &'a [u8], buf: &'a mut [u8]) -> &'a [u8] {
     use crate::net::{ETHERTYPE_QINQ, ETHERTYPE_VLAN, MAX_VLAN_TAGS};
     if frame.len() < 16 {
@@ -193,10 +216,7 @@ pub fn verdict(frame: &[u8]) -> (u16, u16) {
     // regardless of reach). Keyed on the frame's OWN src MAC (no victim-framing path).
     if v == PASS && frame.len() >= 12 {
         let mac_key = crate::ratelimit::mac_hash(&frame[6..12]);
-        let mut nbuf = [0u8; FRAME_SZ];
-        let nframe = strip_vlan(frame, &mut nbuf);
-        let src = crate::net::eth_ipv4_src(nframe);
-        let dst = crate::net::eth_ipv4_dst(nframe).unwrap_or(0);
+        let (src, dst) = with_normalized(frame, |nframe| (crate::net::eth_ipv4_src(nframe), crate::net::eth_ipv4_dst(nframe).unwrap_or(0)));
         let dst_internal = dst != 0 && crate::behavioral::is_internal(dst);
         if !crate::segment::reach_allow(src, mac_key, dst, dst_internal) {
             // Segmentation POLICY drop — a distinct INFO event (C5), NOT a threat: it must not
@@ -304,9 +324,11 @@ fn classify(frame: &[u8]) -> (u16, u16) {
 }
 
 fn classify_tiers(frame: &[u8]) -> (u16, u16) {
-    // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view.
-    let mut nbuf = [0u8; FRAME_SZ];
-    let nframe = strip_vlan(frame, &mut nbuf);
+    // DET-4: run the fixed-offset L2 + FLOW tiers on a VLAN-normalized view (G34: no per-packet zeroing).
+    with_normalized(frame, |nframe| classify_tiers_n(frame, nframe))
+}
+
+fn classify_tiers_n(frame: &[u8], nframe: &[u8]) -> (u16, u16) {
     // DET-11: the IPv4 source (0 if not IPv4), attributed on any detection below.
     let src = crate::net::eth_ipv4_src(nframe);
     // M2.1 — structural + stateful L2 tier (F6/F7/F8 structural anomalies + mac-flood
