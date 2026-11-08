@@ -63,3 +63,4 @@ legacy/linux-tier/builder/kernel-build/out/
 
 # heqk dev boot-signing keydir (os/build/gen-heqk-dev-keys.sh) — private key material, never tracked
 os/build/.heqk-dev-keys/
+__pycache__/

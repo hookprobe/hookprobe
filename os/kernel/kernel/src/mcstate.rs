@@ -695,8 +695,8 @@ impl McState {
             // threat_score = (6 - worst severity) / 5, the evidence graph's formula.
             let worst = e.1.clamp(1, 5);
             let score = match worst { 1 => "1.0", 2 => "0.8", 3 => "0.6", 4 => "0.4", _ => "0.2" };
-            let _ = write!(out, ",\"priority\":\"{}\",\"status\":\"open\",\"threat_score\":{}}}",
-                if worst <= rulecat::SEV_HIGH { "High" } else { "Medium" }, score);
+            let _ = write!(out, ",\"priority\":\"{}\",\"status\":\"{}\",\"threat_score\":{}}}",
+                if worst <= rulecat::SEV_HIGH { "High" } else { "Medium" }, if crate::actions::acked(e.0) { "acknowledged" } else { "open" }, score);
         }
         let _ = write!(out, "],\"count\":{}}}", n);
     }
@@ -825,8 +825,8 @@ impl McState {
         let _ = write!(tw, "{} from {} ({} detections)", rulecat::lookup_or_generic(rule).msg, ip, count);
         let tl = tw.len;
         out.string(core::str::from_utf8(&tb[..tl]).unwrap_or("heqk incident"));
-        let _ = write!(out, ",\"device_ip\":\"{}\",\"priority\":\"{}\",\"status\":\"open\",\"threat_score\":{}", ip,
-            if worst <= rulecat::SEV_HIGH { "High" } else { "Medium" }, score);
+        let _ = write!(out, ",\"device_ip\":\"{}\",\"priority\":\"{}\",\"status\":\"{}\",\"threat_score\":{}", ip,
+            if worst <= rulecat::SEV_HIGH { "High" } else { "Medium" }, if crate::actions::acked(src) { "acknowledged" } else { "open" }, score);
         // distinct rules + targets, newest first (bounded)
         let mut rules: [u16; 8] = [0; 8];
         let mut nr = 0usize;
