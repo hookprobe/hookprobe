@@ -31,13 +31,13 @@
  },
  {
   "number": 975,
-  "status": "needs_human",
-  "reason": "CDN script needs SRI hash; cannot compute offline (or vendor locally); would also need CSP/offline-appliance decision"
+  "status": "fixed",
+  "reason": "SRI integrity=sha384 added to all 10 version-pinned CDN assets (hashes computed from the pinned URLs; jQuery 3.6.0 + Bootstrap 4.6.0 cross-checked against published SRI). Google Fonts CSS is per-UA and cannot carry SRI."
  },
  {
   "number": 976,
-  "status": "needs_human",
-  "reason": "CDN script needs SRI hash; cannot compute offline (or vendor locally); would also need CSP/offline-appliance decision"
+  "status": "fixed",
+  "reason": "SRI integrity=sha384 added to all 10 version-pinned CDN assets (hashes computed from the pinned URLs; jQuery 3.6.0 + Bootstrap 4.6.0 cross-checked against published SRI). Google Fonts CSS is per-UA and cannot carry SRI."
  },
  {
   "number": 977,
