@@ -276,6 +276,24 @@ fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &
     println!("cargo:rerun-if-changed={}", crate_dir.join("link.ld").display());
     println!("cargo:rerun-if-changed={}", crate_dir.join("build.rs").display());
     println!("cargo:rerun-if-changed={}", crate_dir.join(".cargo/config.toml").display());
+    // ...and the whole src/ tree, the lockfile, link-cm5.ld, and every local `path = "..."` dependency (e.g.
+    // el0-tlshost -> tlsprov). Without these a crypto change in tlsprov, or a lockfile bump, silently shipped
+    // the STALE TLS server binary (found while moving ML-KEM to 0.3.4: the lock still said 0.2.3).
+    println!("cargo:rerun-if-changed={}", crate_dir.join("src").display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("Cargo.lock").display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("link-cm5.ld").display());
+    if let Ok(m) = std::fs::read_to_string(&manifest) {
+        for line in m.lines() {
+            if let Some(i) = line.find("path = \"") {
+                let rest = &line[i + 8..];
+                if let Some(j) = rest.find('"') {
+                    let dep = crate_dir.join(&rest[..j]);
+                    println!("cargo:rerun-if-changed={}", dep.join("src").display());
+                    println!("cargo:rerun-if-changed={}", dep.join("Cargo.toml").display());
+                }
+            }
+        }
+    }
 
     let mut cmd = Command::new("cargo");
     cmd.arg("build")

@@ -307,19 +307,16 @@ impl SupportedKxGroup for X25519MlKem768 {
         Err(Error::General("X25519MLKEM768: server role only".into()))
     }
     fn start_and_complete(&self, client_share: &[u8]) -> Result<rustls::crypto::CompletedKeyExchange, Error> {
-        use ml_kem::{EncapsulateDeterministic, EncodedSizeUser, KemCore, MlKem768};
+        use ml_kem::ml_kem_768::EncapsulationKey;
         if client_share.len() != MLKEM_EK + 32 || !mlkem_ek_ok(&client_share[..MLKEM_EK]) {
             return Err(PeerMisbehaved::InvalidKeyShare.into());
         }
         let (ek_bytes, x_peer) = client_share.split_at(MLKEM_EK);
-        let ek_arr = ml_kem::Encoded::<<MlKem768 as KemCore>::EncapsulationKey>::try_from(ek_bytes)
-            .map_err(|_| PeerMisbehaved::InvalidKeyShare)?;
-        let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&ek_arr);
+        let ek_arr = ml_kem::Key::<EncapsulationKey>::try_from(ek_bytes).map_err(|_| PeerMisbehaved::InvalidKeyShare)?;
+        let ek = EncapsulationKey::new(&ek_arr).map_err(|_| PeerMisbehaved::InvalidKeyShare)?;
         let mut m = [0u8; 32];
         Rng.fill(&mut m).map_err(|_| Error::FailedToGetRandomBytes)?;
-        let (ct, kem_ss) = ek
-            .encapsulate_deterministic(&m.into())
-            .map_err(|_| Error::General("ML-KEM encapsulate".into()))?;
+        let (ct, kem_ss) = ek.encapsulate_deterministic(&m.into());
         m.fill(0);
         // X25519 half (same contributory check as the plain group).
         let mut seed = [0u8; 32];
@@ -459,8 +456,7 @@ mod tests {
 
     #[test]
     fn hybrid_x25519_mlkem768_agrees_with_a_client() {
-        use kem::Decapsulate;
-        use ml_kem::{EncodedSizeUser, KemCore, MlKem768};
+        use ml_kem::{Decapsulate, KeyExport, MlKem768};
         set_rng(|b| {
             for (i, x) in b.iter_mut().enumerate() {
                 *x = (i as u8).wrapping_mul(37) ^ 0xa5;
@@ -468,10 +464,13 @@ mod tests {
             true
         });
         // The client: an ML-KEM-768 key pair + an X25519 key.
-        let (dk, ek) = MlKem768::generate_deterministic(&[1u8; 32].into(), &[2u8; 32].into());
+        let mut seed = [1u8; 64];
+        seed[32..].fill(2); // d = [1; 32], z = [2; 32] — the same key pair as 0.2's generate_deterministic(d, z)
+        let dk = ml_kem::ml_kem_768::DecapsulationKey::from_seed(seed.into());
+        let ek = dk.encapsulation_key().clone();
         let csec = x25519_dalek::StaticSecret::from([9u8; 32]);
         let cpub = x25519_dalek::PublicKey::from(&csec).to_bytes();
-        let mut share = ek.as_bytes().to_vec();
+        let mut share = ek.to_bytes().to_vec();
         share.extend_from_slice(&cpub);
         assert_eq!(share.len(), 1216);
         let done = X25519_MLKEM768.start_and_complete(&share).unwrap();
@@ -479,7 +478,7 @@ mod tests {
         assert_eq!(done.pub_key.len(), 1088 + 32);
         // The client completes: decapsulate the ciphertext, X25519 with the server's half.
         let ct = ml_kem::Ciphertext::<MlKem768>::try_from(&done.pub_key[..1088]).unwrap();
-        let kss = dk.decapsulate(&ct).unwrap();
+        let kss = dk.decapsulate(&ct);
         let spub: [u8; 32] = done.pub_key[1088..].try_into().unwrap();
         let xss = csec.diffie_hellman(&x25519_dalek::PublicKey::from(spub));
         let mut want = kss.as_slice().to_vec();
