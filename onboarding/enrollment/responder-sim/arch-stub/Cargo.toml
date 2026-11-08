@@ -6,6 +6,7 @@
 name = "arch-stub"
 version = "0.1.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 [lib]
 name = "arch_aarch64"
