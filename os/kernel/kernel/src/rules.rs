@@ -85,10 +85,13 @@ pub static FLOW_RULES: &[Rule] = &[
 
 const MAX_RULES: usize = 16;
 #[derive(Clone, Copy)]
-struct RState {
-    verified: bool,
-    min_len: u64,
-    jit: usize, // compiled fn VA, or 0 => interpreter only
+pub(crate) struct RState {
+    pub(crate) verified: bool,
+    pub(crate) min_len: u64,
+    pub(crate) jit: usize, // compiled fn VA, or 0 => interpreter only
+}
+impl RState {
+    pub(crate) const EMPTY: RState = RState { verified: false, min_len: 0, jit: 0 };
 }
 static mut RSTATE: [RState; MAX_RULES] =
     [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
@@ -206,6 +209,12 @@ pub fn init() -> (usize, usize) {
 /// Only a drop-verdict scores a QSecBit hit; every fire (observe or drop) is
 /// exported to the SOAR ring with its REAL wire verdict, so an observed threat is
 /// still reported to the SIEM without touching the wire.
+/// The shared evaluation step, for the signed dynamic rule pack (parity G6) — same min_len gate,
+/// JIT/interpreter choice, decide() graduation and alerting as the built-in corpus.
+pub(crate) fn run_set_verdict_pub(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8], src: u32, decide_fn: fn(FindingClass, DecideCtx) -> Verdict) -> Option<Verdict> {
+    run_set_verdict(rules, state, n, pkt, src, decide_fn)
+}
+
 fn run_set_verdict(
     rules: &[Rule],
     state: *mut RState,
@@ -286,21 +295,25 @@ fn run_set_verdict(
 /// `Allowlisted` floor). `None` = clean.
 pub fn verdict_l4(l4: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(RULES, addr_of_mut!(RSTATE).cast::<RState>(), NRULES.load(Ordering::Relaxed), l4, src, verdict::decide)
+        .or_else(|| crate::rulepack::verdict(0, l4, src, verdict::decide))
 }
 
 /// L2 frame-tier verdict (`napse-l2guard` parity: malformed-ARP / ARP-spoof).
 pub fn verdict_l2(frame: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(L2_RULES, addr_of_mut!(RSTATE_L2).cast::<RState>(), NRULES_L2.load(Ordering::Relaxed), frame, src, verdict::decide_l2)
+        .or_else(|| crate::rulepack::verdict(1, frame, src, verdict::decide_l2))
 }
 
 /// TCP-flag scan-tier verdict (NULL/FIN/Xmas/SYN-FIN). classify runs this ONLY on TCP.
 pub fn verdict_tcp(tcp: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), NRULES_TCP.load(Ordering::Relaxed), tcp, src, verdict::decide)
+        .or_else(|| crate::rulepack::verdict(2, tcp, src, verdict::decide))
 }
 
 /// Stateful flow-tier verdict (per-source SYN-flood rate-limit, blocklist).
 pub fn verdict_flow(frame: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame, src, verdict::decide)
+        .or_else(|| crate::rulepack::verdict(3, frame, src, verdict::decide))
 }
 
 // ---- On-wire (u16) wrappers — the datapath (`packet::classify`, `netq`) consumes
