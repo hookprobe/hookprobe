@@ -17,7 +17,7 @@ ed25519-compact = { version = "2", default-features = false }
 # default/prod kernel TCB is untouched). no_std, no heap. The production target runs this
 # as an EL0-ISOLATED service over the P17 rule-plane-gated netq; the `netsvc` build gates
 # the stack integration on QEMU (smoltcp answers an ARP under packet::verdict both ways).
-smoltcp = { version = "0.13", default-features = false, features = [
+smoltcp = { version = "0.14", default-features = false, features = [
     "proto-ipv4", "medium-ethernet", "socket-udp", "socket-dhcpv4", "socket-tcp",
 ], optional = true }
 # M4.2a — PQC secure-channel crypto PRIMITIVES (KEX + AEAD), FRAMING-AGNOSTIC (the
