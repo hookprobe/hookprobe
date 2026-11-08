@@ -205,6 +205,9 @@ fn json(scratch: &mut [u8], f: impl FnOnce(&mut JsonBuf)) -> Response {
     }
 }
 
+/// `set_cookie` sentinel: expire the session cookie (logout).
+pub const CLEAR_COOKIE: [u8; 32] = [b'-'; 32];
+
 /// Route one request against the device state, enforcing owner authentication (ADR 0037 D3).
 /// `scratch` receives rendered JSON; `rand16` mints a session id on a successful login.
 pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>, scratch: &mut [u8]) -> Response {
@@ -212,6 +215,14 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     match (req.path, req.get, req.post) {
         ("/login", true, _) => return Response::page(200, LOGIN_HTML),
         ("/api/login", _, true) => return login(req, auth, now_ms, rand16, scratch),
+        // Parity G28: logout ends this session (`?all=1`: every session) and expires the cookie.
+        ("/api/logout", _, true) => {
+            let all = query_u32(req.query, "all") == Some(1);
+            let ended = auth.logout(req.session, all, now_ms);
+            let mut r = json(scratch, |w| w.raw(if ended { "{\"logged_out\":true}" } else { "{\"logged_out\":false}" }));
+            r.set_cookie = Some(CLEAR_COOKIE);
+            return if ended { r } else { r.with_status(401) };
+        }
         ("/api/health", true, _) if !auth.check(req.session, now_ms) => {
             let claimed = auth.claimed();
             return json(scratch, |w| {
@@ -434,8 +445,13 @@ pub fn write_head_ka(resp: &Response, out: &mut [u8], secure: bool, keep: bool) 
         let _ = write!(w, "Location: {}\r\n", l);
     }
     if let Some(c) = resp.set_cookie {
-        let _ = write!(w, "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{}\r\n",
-            mcauth::COOKIE, core::str::from_utf8(&c).unwrap_or(""), if secure { "; Secure" } else { "" });
+        if c == CLEAR_COOKIE {
+            // logout: expire the cookie in the browser too
+            let _ = write!(w, "Set-Cookie: {}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{}\r\n", mcauth::COOKIE, if secure { "; Secure" } else { "" });
+        } else {
+            let _ = write!(w, "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{}\r\n",
+                mcauth::COOKIE, core::str::from_utf8(&c).unwrap_or(""), if secure { "; Secure" } else { "" });
+        }
     }
     match resp.body_len() {
         Some(n) => {

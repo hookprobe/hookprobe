@@ -44,6 +44,7 @@ ALLOW_FILE=""
 IOC_FILE=""
 DEVICES_FILE=""
 WIFI_FILE=""
+RULES_FILE=""
 MCTLS_FILE=""
 POLICY_KEY=""
 POLICY_GEN="1"
@@ -62,7 +63,8 @@ while [ $# -gt 0 ]; do
     --ioc-file) IOC_FILE="$2"; shift ;;
     --devices-file) DEVICES_FILE="$2"; shift ;;
     --wifi-file) WIFI_FILE="$2"; shift ;;
-    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT] [--ioc-file IOC.TXT] [--devices-file DEVICES.TXT] [--wifi-file WIFI.TXT]" >&2; exit 2 ;;
+    --rules-file) RULES_FILE="$2"; shift ;;
+    *) echo "usage: $0 [--zero-linux] [--size-mib N] [--owner-token auto|TOKEN] [--wan-file WAN.TXT] [--policy-file POLICY.TXT] [--mctls-file MCTLS.CRT] [--policy-key OPERATOR.key [--policy-gen N]] [--blocklist-file BLOCK.TXT] [--allowlist-file ALLOW.TXT] [--ioc-file IOC.TXT] [--devices-file DEVICES.TXT] [--wifi-file WIFI.TXT] [--rules-file RULES.TXT]" >&2; exit 2 ;;
   esac
   shift
 done
@@ -230,6 +232,13 @@ stage_signed() { # src dst-name sign-subcommand max-bytes
 stage_signed "$IOC_FILE" IOC sign-ioc $((16 << 20))
 stage_signed "$DEVICES_FILE" DEVICES sign-devices $((16 << 10))
 stage_signed "$WIFI_FILE" WIFI sign-wifi 1024   # SSID / PSK / channel (contains the PSK: never commit one)
+# RULES.BIN — the field-updatable rule pack (parity G6): compiled from readable RULES.TXT, then signed.
+if [ -n "$RULES_FILE" ]; then
+  python3 -I "$HEQK/tools/rulepack.py" compile "$RULES_FILE" "$STAGE/RULES.BIN" >/dev/null || { echo "FATAL: compiling $RULES_FILE failed"; exit 1; }
+  if [ -n "$POLICY_KEY" ]; then
+    python3 -I "$HEQK/tools/policy-sign.py" sign-rules "$POLICY_KEY" "$STAGE/RULES.BIN" "$POLICY_GEN" "$STAGE/RULES.SIG" >/dev/null || { echo "FATAL: signing RULES.BIN failed"; exit 1; }
+  fi
+fi
 if [ -n "$ALLOW_FILE" ]; then
   [ "$(stat -c %s "$ALLOW_FILE")" -le $((16 << 20)) ] || { echo "FATAL: --allowlist-file larger than 16 MiB"; exit 1; }
   cp "$ALLOW_FILE" "$STAGE/ALLOW.TXT"
@@ -249,7 +258,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
@@ -288,69 +297,44 @@ else
 fi
 
 # Byte offset of OWNER.TXT's data inside the image (the flasher's patch target).
-OWNER_OFF="$(python3 -I - "$IMG" $P1_START <<'PY'
+# Byte offset of a file's data on p1 (8.3 NAME, e.g. "OWNER   TXT"): walks the WHOLE root directory
+# cluster chain (the first sector only holds 16 entries — the boot set now has more files than that).
+fat_off() {
+python3 -I - "$IMG" $P1_START "$1" <<'PY'
 import struct, sys
-f = open(sys.argv[1], 'rb'); P = int(sys.argv[2])
+f = open(sys.argv[1], 'rb'); P = int(sys.argv[2]); want = sys.argv[3].encode()
 def sec(l): f.seek(l * 512); return f.read(512)
 b = sec(P); rsv = struct.unpack_from('<H', b, 14)[0]; nf = b[16]; fsz = struct.unpack_from('<I', b, 36)[0]
-spc = b[13]; data = P + rsv + nf * fsz; root = struct.unpack_from('<I', b, 44)[0]
-d = sec(data + (root - 2) * spc)
-for i in range(0, 512, 32):
-    e = d[i:i+32]
-    if e[:11] == b"OWNER   TXT":
-        c = (struct.unpack_from('<H', e, 20)[0] << 16) | struct.unpack_from('<H', e, 26)[0]
-        print((data + (c - 2) * spc) * 512); break
+spc = b[13]; data = P + rsv + nf * fsz; c = struct.unpack_from('<I', b, 44)[0]
+def nxt(c):
+    o = c * 4; s = P + rsv + o // 512
+    return struct.unpack_from('<I', sec(s), o % 512)[0] & 0x0FFFFFFF
+for _ in range(4096):
+    for k in range(spc):
+        d = sec(data + (c - 2) * spc + k)
+        for i in range(0, 512, 32):
+            e = d[i:i+32]
+            if e[0] == 0:
+                sys.exit(0)
+            if e[:11] == want and not e[11] & 0x08:
+                fc = (struct.unpack_from('<H', e, 20)[0] << 16) | struct.unpack_from('<H', e, 26)[0]
+                print((data + (fc - 2) * spc) * 512); sys.exit(0)
+    c = nxt(c)
+    if c >= 0x0FFFFFF8:
+        break
 PY
-)"
+}
+OWNER_OFF="$(fat_off "OWNER   TXT")"
 check "OWNER.TXT located at byte $OWNER_OFF (128 B, the flasher's in-place patch target)" \
   "[ -n '$OWNER_OFF' ] && dd if='$IMG' bs=1 skip=$OWNER_OFF count=6 status=none | grep -q '^HQOWN'"
-WAN_OFF="$(python3 -I - "$IMG" $P1_START <<'PY'
-import struct, sys
-f = open(sys.argv[1], 'rb'); P = int(sys.argv[2])
-def sec(l): f.seek(l * 512); return f.read(512)
-b = sec(P); rsv = struct.unpack_from('<H', b, 14)[0]; nf = b[16]; fsz = struct.unpack_from('<I', b, 36)[0]
-spc = b[13]; data = P + rsv + nf * fsz; root = struct.unpack_from('<I', b, 44)[0]
-d = sec(data + (root - 2) * spc)
-for i in range(0, 512, 32):
-    e = d[i:i+32]
-    if e[:11] == b"WAN     TXT":
-        c = (struct.unpack_from('<H', e, 20)[0] << 16) | struct.unpack_from('<H', e, 26)[0]
-        print((data + (c - 2) * spc) * 512); break
-PY
-)"
+WAN_OFF="$(fat_off "WAN     TXT")"
 check "WAN.TXT located at byte $WAN_OFF (512 B, mode=$(grep -a -m1 '^mode=' "$STAGE/WAN.TXT" | cut -d= -f2))" \
   "[ -n '$WAN_OFF' ] && dd if='$IMG' bs=1 skip=$WAN_OFF count=6 status=none | grep -q '^HQWAN1'"
-POL_OFF="$(python3 -I - "$IMG" $P1_START <<'PY'
-import struct, sys
-f = open(sys.argv[1], 'rb'); P = int(sys.argv[2])
-def sec(l): f.seek(l * 512); return f.read(512)
-b = sec(P); rsv = struct.unpack_from('<H', b, 14)[0]; nf = b[16]; fsz = struct.unpack_from('<I', b, 36)[0]
-spc = b[13]; data = P + rsv + nf * fsz; root = struct.unpack_from('<I', b, 44)[0]
-d = sec(data + (root - 2) * spc)
-for i in range(0, 512, 32):
-    e = d[i:i+32]
-    if e[:11] == b"POLICY  TXT":
-        c = (struct.unpack_from('<H', e, 20)[0] << 16) | struct.unpack_from('<H', e, 26)[0]
-        print((data + (c - 2) * spc) * 512); break
-PY
-)"
+POL_OFF="$(fat_off "POLICY  TXT")"
 check "POLICY.TXT located at byte $POL_OFF (4096 B, $(grep -ac '^acl ' "$STAGE/POLICY.TXT") acl lines, $(grep -ac '^route ' "$STAGE/POLICY.TXT") routes)" \
   "[ -n '$POL_OFF' ] && dd if='$IMG' bs=1 skip=$POL_OFF count=6 status=none | grep -q '^HQPOL1'"
 
-TLS_OFF="$(python3 -I - "$IMG" $P1_START <<'PY'
-import struct, sys
-f = open(sys.argv[1], 'rb'); P = int(sys.argv[2])
-def sec(l): f.seek(l * 512); return f.read(512)
-b = sec(P); rsv = struct.unpack_from('<H', b, 14)[0]; nf = b[16]; fsz = struct.unpack_from('<I', b, 36)[0]
-spc = b[13]; data = P + rsv + nf * fsz; root = struct.unpack_from('<I', b, 44)[0]
-d = sec(data + (root - 2) * spc)
-for i in range(0, 512, 32):
-    e = d[i:i+32]
-    if e[:11] == b"MCTLS   CRT":
-        c = (struct.unpack_from('<H', e, 20)[0] << 16) | struct.unpack_from('<H', e, 26)[0]
-        print((data + (c - 2) * spc) * 512); break
-PY
-)"
+TLS_OFF="$(fat_off "MCTLS   CRT")"
 MCTLS_PROV=$(head -c 6 "$STAGE/MCTLS.CRT" | grep -q '^HQCRT1' && echo True || echo False)
 check "MCTLS.CRT located at byte $TLS_OFF (4096 B, provisioned=$MCTLS_PROV)" \
   "[ -n '$TLS_OFF' ] && [ \"\$(dd if='$IMG' bs=1 skip=$TLS_OFF count=4096 status=none | sha256sum | cut -d' ' -f1)\" = \"\$(sha256sum '$STAGE/MCTLS.CRT' | cut -d' ' -f1)\" ]"
