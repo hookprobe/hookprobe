@@ -14,7 +14,7 @@ fn cntfrq() -> u64 {
     v
 }
 
-const SRC: [u8; 4] = [192, 0, 2, 77]; // TEST-NET-1
+const SRC: [u8; 4] = [100, 64, 0, 77]; // RFC 6598, on no threat list: the bench times NORMAL traffic, not an IOC alert
 const DST: [u8; 4] = [198, 51, 100, 10]; // TEST-NET-2
 
 fn eth(out: &mut [u8], et: u16) {
