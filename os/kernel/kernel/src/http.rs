@@ -496,6 +496,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = write!(w, ",\"wan\":{{\"up\":{},\"ip\":\"{}.{}.{}.{}\",\"mode\":\"{}\",\"ipv6\":{},\"clients\":{},\"pkts_out\":{},\"pkts_in\":{},\"dns_inspected\":{},\"dns_blocked\":{},\"blocklist\":{}}}",
                     f.up, f.ip[0], f.ip[1], f.ip[2], f.ip[3], ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ipv6, f.clients, f.pkts_out, f.pkts_in, f.dns_inspected, f.dns_blocked, f.blocklist);
             }
+            // G10: the Wi-Fi station-to-station relay (all after the lease + IDS + DEVICES.TXT gates)
+            let r = crate::lanrelay::stats();
+            let _ = write!(w, ",\"lan_relay\":{{\"arp_proxied\":{},\"relayed\":{},\"refused_policy\":{},\"refused_not_leased\":{},\"discovery_copies\":{},\"discovery_rate_limited\":{}}}",
+                r[0], r[1], r[2], r[3], r[4], r[5]);
             w.raw("}");
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
@@ -917,7 +921,7 @@ pub fn mc_selftest() -> bool {
         let mut sw = McState::new();
         sw.wan = Some(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7, dns_blocked: 2, blocklist: 3 });
         let hw = handle(&parse(b"GET /api/health HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &sw, &mut auth, 1, || Some([0; 16]), &mut scratch);
-        let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3}}"));
+        let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3},\"lan_relay\":{\"arp_proxied\":"));
         red && v6 && bad && sec && plain && ka && kept && closed && wan_ok
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;

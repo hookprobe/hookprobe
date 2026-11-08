@@ -86,6 +86,7 @@ echo "[3] device health: served by heqk, rule plane armed"
 H=$(curl -s -m 10 $C "$B/api/health")
 [ "$(echo "$H" | jget "d['substrate']")" = heqk ] && ok "API answered by heqk ($H)" || bad "health: $H"
 [ "$(echo "$H" | jget "d['rules_active']")" -gt 0 ] 2>/dev/null && ok "rule plane armed" || bad "rule plane NOT armed (IPS would pass everything)"
+echo "$H" | jget "all(k in d['lan_relay'] for k in ('arp_proxied','relayed','refused_policy','refused_not_leased','discovery_copies','discovery_rate_limited'))" | grep -q True && ok "/api/health reports the Wi-Fi station relay counters" || bad "health: no lan_relay counters"
 D0=$(curl -s -m 10 $C "$B/api/detections" | jget "d['count']")
 # A baseline that could not be read must FAIL the run, never default to 0 (a vacuous pass).
 [[ "$D0" =~ ^[0-9]+$ ]] || { bad "could not read the baseline detection count ($D0)"; D0=999999; }
