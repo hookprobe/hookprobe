@@ -25,6 +25,10 @@ fn seed(tag: &[u8], i: u32) -> [u8; 32] {
 }
 
 fn main() {
+    if std::env::args().nth(1).as_deref() == Some("acvp") {
+        let dir = std::env::args().nth(2).unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/acvp").into());
+        std::process::exit(if acvp(&dir) { 0 } else { 1 });
+    }
     let n: u32 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(1000);
     let mut transcript = Sha256::new();
     let (mut fails, mut t_rc, mut t_lc) = (0u32, Duration::ZERO, Duration::ZERO);
@@ -105,4 +109,111 @@ fn main() {
         println!("KEM-DIFF: FAIL");
         std::process::exit(1);
     }
+}
+
+// ---------------------------------------------------------------- NIST ACVP (FIPS 203), ML-KEM-768
+
+fn unhex(s: &str) -> Vec<u8> {
+    (0..s.len() / 2).map(|i| u8::from_str_radix(&s[2 * i..2 * i + 2], 16).unwrap()).collect()
+}
+
+/// FIPS 203 §7.2 encapsulation-key input check: every 12-bit coefficient of the 1152-byte t-part < q.
+pub fn ek_modulus_ok(ek: &[u8]) -> bool {
+    ek.len() == 1184
+        && ek[..1152].chunks(3).all(|c| {
+            let a = u16::from(c[0]) | (u16::from(c[1] & 0x0f) << 8);
+            let b = u16::from(c[1] >> 4) | (u16::from(c[2]) << 4);
+            a < 3329 && b < 3329
+        })
+}
+
+/// FIPS 203 §7.3 decapsulation-key input check: length, and H(ek) stored inside dk == SHA3-256(ek inside dk).
+pub fn dk_hash_ok(dk: &[u8]) -> bool {
+    use sha3::{Digest as _, Sha3_256};
+    if dk.len() != 2400 {
+        return false;
+    }
+    let ek = &dk[1152..1152 + 1184];
+    let h = &dk[1152 + 1184..1152 + 1184 + 32];
+    Sha3_256::digest(ek).as_slice() == h
+}
+
+fn acvp(dir: &str) -> bool {
+    let load = |f: &str| -> serde_json::Value {
+        serde_json::from_str(&std::fs::read_to_string(format!("{dir}/{f}.json")).unwrap_or_else(|e| panic!("{dir}/{f}.json: {e} (run fetch-acvp.sh)"))).unwrap()
+    };
+    let (mut pass, mut fail) = (0u32, 0u32);
+    let mut tally = |ok: bool, what: &str, tc: u64| {
+        if ok {
+            pass += 1;
+        } else {
+            fail += 1;
+            eprintln!("ACVP FAIL {what} tcId {tc}");
+        }
+    };
+    let h = |t: &serde_json::Value, k: &str| unhex(t[k].as_str().unwrap());
+    for g in load("ML-KEM-keyGen-FIPS203")["testGroups"].as_array().unwrap() {
+        if g["parameterSet"] != "ML-KEM-768" {
+            continue;
+        }
+        for t in g["tests"].as_array().unwrap() {
+            let tc = t["tcId"].as_u64().unwrap();
+            let (d, z, ek, dk) = (h(t, "d"), h(t, "z"), h(t, "ek"), h(t, "dk"));
+            let (rc_dk, rc_ek) = MlKem768::generate_deterministic(&Array(d.clone().try_into().unwrap()), &Array(z.clone().try_into().unwrap()));
+            tally(rc_ek.as_bytes().as_slice() == &ek[..] && rc_dk.as_bytes().as_slice() == &dk[..], "keyGen RustCrypto", tc);
+            let mut dz = [0u8; 64];
+            dz[..32].copy_from_slice(&d);
+            dz[32..].copy_from_slice(&z);
+            let kp = libcrux_ml_kem::mlkem768::generate_key_pair(dz);
+            tally(kp.public_key().as_slice() == &ek[..] && kp.private_key().as_slice() == &dk[..], "keyGen libcrux", tc);
+        }
+    }
+    for g in load("ML-KEM-encapDecap-FIPS203")["testGroups"].as_array().unwrap() {
+        if g["parameterSet"] != "ML-KEM-768" {
+            continue;
+        }
+        let func = g["function"].as_str().unwrap_or("");
+        for t in g["tests"].as_array().unwrap() {
+            let tc = t["tcId"].as_u64().unwrap();
+            match func {
+                "encapsulation" => {
+                    let (ek, m, c, k) = (h(t, "ek"), h(t, "m"), h(t, "c"), h(t, "k"));
+                    let enc = ml_kem::Encoded::<<MlKem768 as KemCore>::EncapsulationKey>::try_from(&ek[..]).unwrap();
+                    let rc_ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&enc);
+                    let (rc_c, rc_k) = rc_ek.encapsulate_deterministic(&Array(m.clone().try_into().unwrap())).unwrap();
+                    tally(rc_c.as_slice() == &c[..] && rc_k.as_slice() == &k[..], "encaps RustCrypto", tc);
+                    let pk = libcrux_ml_kem::mlkem768::MlKem768PublicKey::from(<[u8; 1184]>::try_from(&ek[..]).unwrap());
+                    let (lc_c, lc_k) = libcrux_ml_kem::mlkem768::encapsulate(&pk, m.try_into().unwrap());
+                    tally(lc_c.as_slice() == &c[..] && lc_k.as_slice() == &k[..], "encaps libcrux", tc);
+                }
+                "decapsulation" => {
+                    let (dk, c, k) = (h(t, "dk"), h(t, "c"), h(t, "k"));
+                    let enc = ml_kem::Encoded::<<MlKem768 as KemCore>::DecapsulationKey>::try_from(&dk[..]).unwrap();
+                    let rc_dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(&enc);
+                    let rc_k = rc_dk.decapsulate(&ml_kem::Ciphertext::<MlKem768>::try_from(&c[..]).unwrap()).unwrap();
+                    tally(rc_k.as_slice() == &k[..], "decaps RustCrypto", tc);
+                    let sk = libcrux_ml_kem::mlkem768::MlKem768PrivateKey::from(<[u8; 2400]>::try_from(&dk[..]).unwrap());
+                    let ct = libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from(<[u8; 1088]>::try_from(&c[..]).unwrap());
+                    tally(libcrux_ml_kem::mlkem768::decapsulate(&sk, &ct).as_slice() == &k[..], "decaps libcrux", tc);
+                }
+                "encapsulationKeyCheck" => {
+                    let (ek, want) = (h(t, "ek"), t["testPassed"].as_bool().unwrap());
+                    tally(ek_modulus_ok(&ek) == want, "ekCheck heqk helper", tc);
+                    let ok = ek.len() == 1184
+                        && libcrux_ml_kem::mlkem768::validate_public_key(&libcrux_ml_kem::mlkem768::MlKem768PublicKey::from(<[u8; 1184]>::try_from(&ek[..]).unwrap()));
+                    tally(ok == want, "ekCheck libcrux", tc);
+                }
+                "decapsulationKeyCheck" => {
+                    let (dk, want) = (h(t, "dk"), t["testPassed"].as_bool().unwrap());
+                    tally(dk_hash_ok(&dk) == want, "dkCheck heqk helper", tc);
+                    let ok = dk.len() == 2400
+                        && libcrux_ml_kem::mlkem768::validate_private_key(&libcrux_ml_kem::mlkem768::MlKem768PrivateKey::from(<[u8; 2400]>::try_from(&dk[..]).unwrap()), &libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from([0u8; 1088]));
+                    tally(ok == want, "dkCheck libcrux", tc);
+                }
+                _ => {}
+            }
+        }
+    }
+    println!("ACVP ML-KEM-768 (FIPS 203): {pass} checks passed, {fail} failed");
+    fail == 0 && pass > 0
 }
