@@ -62,6 +62,8 @@ jobs:
             onboarding/enrollment/responder-sim -> target/ci
             os/build/heqk-sign -> target/ci
       - run: tools/ci/gates.sh g1
+        env:
+          CI_BASE_REF: ${{ github.base_ref && format('origin/{0}', github.base_ref) || '' }}
       - if: always()
         run: python3 tools/ci/cortex/ci_to_cortex.py out/ci/gate-results.json --out out/ci/cortex-events.jsonl
       - if: always()

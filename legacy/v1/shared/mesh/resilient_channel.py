@@ -359,6 +359,7 @@ class ResilientChannel:
     ) -> ssl.SSLSocket:
         """Wrap socket in TLS."""
         context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
 
         # Set ALPN protocols if specified
         if port_config.tls_alpn:
