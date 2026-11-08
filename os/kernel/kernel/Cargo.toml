@@ -24,14 +24,13 @@ smoltcp = { version = "0.13", default-features = false, features = [
 # Noise path; the handshake itself is M4.2b). All no_std, behind `securechannel`,
 # OFF by default so the base kernel TCB pulls in none of this. See
 # docs/design/heqk-control-plane.md §2 + ADR 0002 (hybrid ML-KEM-768 + X25519 KEX).
-#   ml-kem          — FIPS 203 ML-KEM-768 (RustCrypto), no_std; deterministic KAT API.
+#   ml-kem          — FIPS 203 ML-KEM-768 (RustCrypto), no_std; deterministic KAT API (encapsulate_deterministic).
 #   x25519-dalek    — RFC 7748 X25519 (no_std, serial backend on aarch64 softfloat).
 #   chacha20poly1305— RFC 8439 AEAD (no AES-NI dependence — right for a softfloat edge).
-ml-kem           = { version = "0.2", default-features = false, features = ["deterministic"], optional = true }
-# The RustCrypto `kem` traits (Encapsulate/Decapsulate) that ml-kem's key types
-# implement but does NOT re-export — needed in scope to call `.decapsulate()`.
-# no_std + forbid(unsafe_code); pinned to the exact rev ml-kem 0.2.3 resolves.
-kem              = { version = "=0.3.0-pre.0", default-features = false, optional = true }
+# 0.3.4 (was 0.2.3): 0.3.3 removed a secret-indexed table lookup in SamplePolyCBD (RustCrypto/KEMs#386, found
+# independently by os/build/kem-diff/ctgrind); 0.3.4 hardens equality, reduction and zeroization. Re-exports the
+# `kem` traits, so no separate `kem` pin.
+ml-kem           = { version = "=0.3.4", default-features = false, optional = true }
 x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
 chacha20poly1305 = { version = "0.10", default-features = false, optional = true }
 # M5.2 (Track C) — the Wasm-host BEACHHEAD ships a BESPOKE MINIMAL no_std interpreter
@@ -83,7 +82,7 @@ netmetal = ["prod", "netsvc"]
 # M4.2a: compile the PQC secure-channel crypto primitives + the [P19-pqc-kat] gate
 # (ML-KEM-768 round-trip + KAT, X25519 RFC-7748 vector, ChaCha20-Poly1305 RFC-8439
 # vector, hybrid HKDF combiner Alice==Bob). Framing-agnostic; the handshake is M4.2b.
-securechannel = ["dep:ml-kem", "dep:kem", "dep:x25519-dalek", "dep:chacha20poly1305"]
+securechannel = ["dep:ml-kem", "dep:x25519-dalek", "dep:chacha20poly1305"]
 # M4.3: the secure-channel SELFTEST surface — the [P19-noise] + [P19-enroll] gates,
 # their deterministic seeded ephemerals, the `TestEntropy`/`StubTrng` doubles, and
 # `CipherState::key_for_test`. This is the "seed" path the M4.2b auditor (condition
