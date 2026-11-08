@@ -9,6 +9,7 @@
 //! Prints a SHA-256 over the whole transcript (pin it to catch silent drift) and host timings.
 //!
 //!   cargo run --release -- [N]        (default 1000)
+//!   cargo run --release -- fuzz [N]   differential fuzz: random / mutated ciphertexts + keys (default 200 000)
 use kem::Decapsulate;
 use ml_kem::EncapsulateDeterministic;
 use ml_kem::array::Array;
@@ -28,6 +29,10 @@ fn main() {
     if std::env::args().nth(1).as_deref() == Some("acvp") {
         let dir = std::env::args().nth(2).unwrap_or_else(|| concat!(env!("CARGO_MANIFEST_DIR"), "/acvp").into());
         std::process::exit(if acvp(&dir) { 0 } else { 1 });
+    }
+    if std::env::args().nth(1).as_deref() == Some("fuzz") {
+        let n: u64 = std::env::args().nth(2).and_then(|s| s.parse().ok()).unwrap_or(200_000);
+        std::process::exit(if fuzz(n) { 0 } else { 1 });
     }
     let n: u32 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(1000);
     let mut transcript = Sha256::new();
@@ -216,4 +221,166 @@ fn acvp(dir: &str) -> bool {
     }
     println!("ACVP ML-KEM-768 (FIPS 203): {pass} checks passed, {fail} failed");
     fail == 0 && pass > 0
+}
+
+// ---------------------------------------------------------------- differential fuzz (gate: "Fuzzing")
+
+struct Rng(u64);
+impl Rng {
+    fn next(&mut self) -> u64 {
+        // xorshift64* — reproducible from the printed seed
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_f491_4f6c_dd1d)
+    }
+    fn fill(&mut self, b: &mut [u8]) {
+        for c in b.chunks_mut(8) {
+            let v = self.next().to_le_bytes();
+            c.copy_from_slice(&v[..c.len()]);
+        }
+    }
+    fn below(&mut self, n: usize) -> usize {
+        (self.next() % n as u64) as usize
+    }
+}
+
+/// Mutate `b` the way a fuzzer would: bit flips, byte sets, a random run, all-0x00 / all-0xff stretches.
+fn mutate(r: &mut Rng, b: &mut [u8]) {
+    for _ in 0..1 + r.below(4) {
+        let i = r.below(b.len());
+        match r.below(5) {
+            0 => b[i] ^= 1 << r.below(8),
+            1 => b[i] = r.next() as u8,
+            2 => {
+                let l = (1 + r.below(64)).min(b.len() - i);
+                r.fill(&mut b[i..i + l]);
+            }
+            3 => {
+                let l = (1 + r.below(64)).min(b.len() - i);
+                b[i..i + l].fill(0);
+            }
+            _ => {
+                let l = (1 + r.below(64)).min(b.len() - i);
+                b[i..i + l].fill(0xff);
+            }
+        }
+    }
+}
+
+fn rc_decaps(dk: &[u8; 2400], ct: &[u8; 1088]) -> [u8; 32] {
+    let dk = <MlKem768 as KemCore>::DecapsulationKey::from_bytes(&Array::try_from(&dk[..]).unwrap());
+    let ss = dk.decapsulate(&ml_kem::Ciphertext::<MlKem768>::try_from(&ct[..]).unwrap()).unwrap();
+    ss.as_slice().try_into().unwrap()
+}
+
+fn lc_decaps(dk: &[u8; 2400], ct: &[u8; 1088]) -> [u8; 32] {
+    let dk = libcrux_ml_kem::mlkem768::MlKem768PrivateKey::from(*dk);
+    libcrux_ml_kem::mlkem768::decapsulate(&dk, &libcrux_ml_kem::mlkem768::MlKem768Ciphertext::from(*ct))
+}
+
+fn rc_encaps(ek: &[u8; 1184], m: &[u8; 32]) -> ([u8; 1088], [u8; 32]) {
+    let ek = <MlKem768 as KemCore>::EncapsulationKey::from_bytes(&Array::try_from(&ek[..]).unwrap());
+    let (ct, ss) = ek.encapsulate_deterministic(&Array(*m)).unwrap();
+    (ct.as_slice().try_into().unwrap(), ss.as_slice().try_into().unwrap())
+}
+
+fn lc_encaps(ek: &[u8; 1184], m: &[u8; 32]) -> ([u8; 1088], [u8; 32]) {
+    let (ct, ss) = libcrux_ml_kem::mlkem768::encapsulate(&libcrux_ml_kem::mlkem768::MlKem768PublicKey::from(*ek), *m);
+    (*ct.as_slice(), ss)
+}
+
+/// Differential fuzz. HARD failures (exit 1): any panic, or any disagreement on inputs a production caller can
+/// reach — a hostile ciphertext against an honest key, an encapsulation key that passes the §7.2 check.
+/// REPORTED only: keys outside FIPS 203 input checks (production refuses them before use).
+fn fuzz(n: u64) -> bool {
+    let fseed: u64 = 0x6865_716b_2d6b_656d; // "heqk-kem"
+    let mut r = Rng(fseed);
+    let keys: Vec<([u8; 1184], [u8; 2400], [u8; 1088])> = (0..16u32)
+        .map(|i| {
+            let mut dz = [0u8; 64];
+            dz[..32].copy_from_slice(&seed(b"fz-d", i));
+            dz[32..].copy_from_slice(&seed(b"fz-z", i));
+            let kp = libcrux_ml_kem::mlkem768::generate_key_pair(dz);
+            let (ct, _) = libcrux_ml_kem::mlkem768::encapsulate(kp.public_key(), seed(b"fz-m", i));
+            (*kp.public_key().as_slice(), *kp.private_key().as_slice(), *ct.as_slice())
+        })
+        .collect();
+    let (mut ct_cases, mut ct_bad) = (0u64, 0u64);
+    let (mut ek_valid, mut ek_valid_bad, mut ek_invalid, mut ek_invalid_diff) = (0u64, 0u64, 0u64, 0u64);
+    let (mut dk_cases, mut dk_diff) = (0u64, 0u64);
+    let mut panics = 0u64;
+    let t0 = Instant::now();
+    for it in 0..n {
+        let (ek, dk, ct0) = &keys[r.below(keys.len())];
+        let kind = r.below(10);
+        let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> (u8, bool) {
+            let mut rr = Rng(fseed ^ it.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1);
+            match kind {
+                // 0-5: hostile ciphertext (mutated honest one, or fully random) against an honest key
+                0..=5 => {
+                    let mut ct = *ct0;
+                    if kind == 5 { rr.fill(&mut ct) } else { mutate(&mut rr, &mut ct) }
+                    (0, rc_decaps(dk, &ct) == lc_decaps(dk, &ct))
+                }
+                // 6-7: encapsulation to a mutated / random public key
+                6 | 7 => {
+                    let mut e = *ek;
+                    if kind == 7 { rr.fill(&mut e) } else { mutate(&mut rr, &mut e) }
+                    let mut m = [0u8; 32];
+                    rr.fill(&mut m);
+                    let same = rc_encaps(&e, &m) == lc_encaps(&e, &m);
+                    (if ek_modulus_ok(&e) { 1 } else { 2 }, same)
+                }
+                // 8-9: decapsulation with a mutated private key (outside FIPS 203 §7.3 — reported only)
+                _ => {
+                    let mut d = *dk;
+                    mutate(&mut rr, &mut d);
+                    (3, rc_decaps(&d, ct0) == lc_decaps(&d, ct0))
+                }
+            }
+        }));
+        match res {
+            Err(_) => {
+                panics += 1;
+                if panics <= 5 {
+                    eprintln!("iteration {it} kind {kind}: PANIC");
+                }
+            }
+            Ok((0, same)) => {
+                ct_cases += 1;
+                if !same {
+                    ct_bad += 1;
+                    if ct_bad <= 5 {
+                        eprintln!("iteration {it}: hostile ciphertext — implementations DISAGREE");
+                    }
+                }
+            }
+            Ok((1, same)) => {
+                ek_valid += 1;
+                if !same {
+                    ek_valid_bad += 1;
+                    if ek_valid_bad <= 5 {
+                        eprintln!("iteration {it}: valid public key — encapsulation DISAGREES");
+                    }
+                }
+            }
+            Ok((2, same)) => {
+                ek_invalid += 1;
+                ek_invalid_diff += !same as u64;
+            }
+            Ok((_, same)) => {
+                dk_cases += 1;
+                dk_diff += !same as u64;
+            }
+        }
+    }
+    let pass = panics == 0 && ct_bad == 0 && ek_valid_bad == 0;
+    println!("kem-diff fuzz: {n} iterations in {:.1} s, seed {fseed:#x}", t0.elapsed().as_secs_f64());
+    println!("  hostile ciphertexts vs honest keys: {ct_cases}, disagreements {ct_bad}");
+    println!("  encapsulation to mutated/random keys: {ek_valid} pass the FIPS 203 §7.2 check (disagreements {ek_valid_bad}), {ek_invalid} fail it (differ {ek_invalid_diff} — refused before use in production)");
+    println!("  decapsulation with mutated private keys (outside §7.3, reported only): {dk_cases}, differ {dk_diff}");
+    println!("  panics: {panics}");
+    println!("KEM-FUZZ: {}", if pass { "PASS" } else { "FAIL" });
+    pass
 }
