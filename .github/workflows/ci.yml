@@ -85,7 +85,7 @@ jobs:
       - name: QEMU + disk tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk
       - name: Playwright Chromium (browser leg)
         run: cd os/kernel/tools/mc-e2e && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
       - run: tools/ci/gates.sh g3
