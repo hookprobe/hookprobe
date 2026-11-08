@@ -70,3 +70,19 @@ path broke subdomain matching · V1 HTP VPN fell back to an all-zero Kyber key �
 | `mc-e2e.sh` | fixed host ports + /tmp files collided across concurrent sessions | per-run ports and run dir |
 
 | G25 | Cable plugged after boot left WAN + management dead (GEM speed chosen once) | S | **done + metal** (`b6ebdcba`): `gem::sync_speed` on link-up; unattended late-link test re-leased 8 s after link-up (`metal-evidence/20261108-latelink.md`) |
+
+## Detection + discovery vs legacy (2026-11-08)
+
+Legacy inventory (agents, path:line evidence): V1 NAPSE ran as a per-packet Python sniffer on a mirror port
+(IPv4 + DNS name only, ~10 thresholds), XDP in monitor mode on the mirror, Zig/Mojo scaffolds, three
+QSECBIT formulas with stubbed inputs, no measured benchmark anywhere. heqk inspects inline; first measured
+cost: ~0.8 µs/pkt for every tier on the CM5 A76 (`metal-evidence/20261108-ids-bench-baseline.md`).
+
+| # | Gap | Size | Status |
+|---|---|---|---|
+| G29 | Brute force on one login service (legacy: >50 SYN to admin ports, no evidence) | S | **done + metal** rule 124, answered-only (D3), un-NAT fix found on metal (`74f61a68`, `d6a62268`) |
+| G30 | TLS client fingerprint (legacy JA3 never started; linux-tier JA4) | M | **done + metal** JA4 + SNI inline, `/api/tls`, IOC `ja4` lines → rule 125 (`d6a62268`) |
+| G31 | Shield bypass visibility (DoH / pinned IP) | S | **done + metal** rule 126 SNI-vs-Shield (`d6a62268`); enforcing on SNI = operator decision |
+| G32 | Device discovery parity (Fingerbank opt 55/60, OUI, pinned OUI, private-MAC linking) | M | **D1 done + metal** (`49cd473e`). Next: D2 passive mDNS/SSDP names, full IEEE OUI as a signed data-partition file, JA4 as an identity signal |
+| G33 | Real LAN-client test path | S | **done** Pi 4 on the CM5 AP, `tools/diagnostics/cm5-lan-client.sh` 10/10 |
+| G34 | Parse each packet once (≈ −30 % IDS CPU) | S | open (not a bottleneck: ~1 % of a core at Wi-Fi rate) |
