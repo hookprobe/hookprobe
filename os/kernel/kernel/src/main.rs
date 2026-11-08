@@ -47,6 +47,8 @@ mod dga;
 mod ioc;
 // Parity G20: operator-signed WIFI.TXT (SSID / PSK / channel).
 mod wificfg;
+// Parity G6: operator-signed field-updatable rule pack (RULES.BIN).
+mod rulepack;
 // Parity G16: WAN health with hysteresis.
 mod wanhealth;
 // Parity G15: local SIEM export formats (RFC 5424 / OCSF JSON).
@@ -3070,6 +3072,10 @@ fn cm5_p10_probe() {
                             }
                             // Shield v2 (ADR 0052): BLOCK.TXT (+ directives) and ALLOW.TXT, operator-signed.
                             {
+                                let ri = rulepack::load(&dev);
+                                kprint!(" [RULES] rule pack: {} rules armed{}{}\n", ri.loaded,
+                                    match ri.file { 0 => " (no RULES.BIN — built-in corpus only)", 1 => if ri.signed { " (operator signature OK)" } else { " (unsigned — standalone image)" }, _ => " (RULES.BIN REFUSED — built-in corpus only)" },
+                                    if ri.refused_verify + ri.refused_meta > 0 { " — some rules refused (verifier / metadata)" } else { "" });
                                 let ii = ioc::load(&dev);
                                 kprint!(" [INTEL] IOC pack: {} IPv4 prefixes + {} domains {} — matches are DETECTIONS (ioc_match), never drops\n",
                                     ioc::v4_len(), ioc::dom_len(),
@@ -3250,7 +3256,8 @@ fn cm5_p10_probe() {
                                 let rb = cyw43::current_chanspec();
                                 kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
                                     rb.unwrap_or(0), ap_cs, if rb == Some(ap_cs) { "ON THE CHOSEN CHANNEL" } else { "MISMATCH" });
-                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"{}\" (PSK from {})\n", ap_tries, core::str::from_utf8(ap_ssid).unwrap_or("?"), if wifi.is_some() { "WIFI.TXT" } else { "the build env" });
+                                kprint!(" [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try {}); join \"{}\" (PSK from {}); client isolation (ap_isolate) {}\n", ap_tries, core::str::from_utf8(ap_ssid).unwrap_or("?"), if wifi.is_some() { "WIFI.TXT" } else { "the build env" },
+                                    if ap.isolate_ok { "ON — stations reach each other only through heqk" } else { "REFUSED by the firmware — intra-BSS traffic may bypass the IDS" });
                                 break;
                             }
                             kprint!(" [P11-AP2] AP config INCOMPLETE (try {}: get_ap={} ssid_ok={} bssid_nonzero={} ev_ok={} gtk_set={})\n",
@@ -6302,6 +6309,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = ioc::selftest();
         let _ = devpolicy::selftest();
         let _ = wificfg::selftest();
+        let _ = rulepack::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();
