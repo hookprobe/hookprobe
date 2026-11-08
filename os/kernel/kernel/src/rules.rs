@@ -722,6 +722,11 @@ pub fn resource_shed_verdict(src: u32) -> Option<Verdict> {
     }
     let s = src as u64;
     crate::ratelimit::flow_record(s); // top-talker census (windowed → self-reverting)
+    // G34: both triggers below also require `s` to be THE top talker — two atomic loads. Almost every packet
+    // is not, so answer that first and skip the flow-count clock read and the run-queue query (same verdict).
+    if !crate::ratelimit::is_top_talker(s) {
+        return None;
+    }
     let saturated = crate::ratelimit::saturation_shed(
         s,
         crate::ratelimit::flow_count(),
