@@ -1,16 +1,11 @@
 <p align="center">
-  <img src="assets/hookprobe-logo.svg" alt="HookProbe OS" width="360"/>
+  <img src="assets/hookprobe-logo.svg" alt="HookProbe OS" width="260"/>
 </p>
 
 <h1 align="center">One Node's Detection → Everyone's Protection</h1>
 
 <p align="center">
-  <strong>HookProbe OS is the operating system. SOC is its default workspace. Hardware only unlocks capabilities.</strong>
-</p>
-
-<p align="center">
-  A local-first security OS built on heqk, a Rust capability microkernel. It brings network
-  signals, detections, and evidence into Mission Control on the device.
+  <strong>One security operating system. One shared evidence model. Multiple operator workspaces.</strong>
 </p>
 
 <p align="center">
@@ -20,129 +15,143 @@
 </p>
 
 <p align="center">
+  <a href="#what-hookprobe-can-do">What it can do</a> ·
+  <a href="#system-architecture">Architecture</a> ·
   <a href="#try-hookprobe">Try HookProbe</a> ·
-  <a href="docs/roadmap/BuildPlan.md">Project status</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
 ---
 
-> **Development status:** HookProbe OS is under active development; a public signed CM5 image is
-> not yet available. See the validation record and developer paths below.
+## What HookProbe can do
 
-## The mission behind the system
+HookProbe OS is designed to put practical security within reach: a local-first security operating
+system that can observe a network, identify suspicious activity, connect detections to evidence,
+and give an operator one place to understand and control what happens next.
 
-Security should not be a privilege reserved for organizations with large budgets. People should
-not have to trust opaque systems with their safety and data, or face shared threats in isolation.
-HookProbe exists to make protection more accessible, understandable, and collaborative.
+**The operating system is HookProbe OS. SOC is its default workspace. Hardware only unlocks capabilities.**
 
-Our long-term vision is for defenders to share validated, privacy-preserving threat knowledge by
-choice—so one node's detection can help protect others. A live global mesh or instant threat-sharing
-service is **not** available today; the current work is building the local-first OS and security
-foundation for that future.
+### Protect locally
 
-For the values and broader vision behind the project, read the
-[HookProbe Manifesto](legacy/v1/MANIFESTO.md). Its technical descriptions refer to the earlier V1
-implementation; the current architecture and implementation status are documented below.
+Inspect and respond at the device, without making cloud connectivity, an account, or an AI service a
+precondition for local protection. Detection is designed to be observable by default; enforcement
+is a separate, policy-controlled decision that protects legitimate traffic and management access.
 
-## What HookProbe is
+### Turn signals into an understandable story
 
-HookProbe OS brings network observation, detection, evidence, and operator controls together in one
-system. It can operate locally without an account or cloud connection; enrolling with a control
-plane is optional for fleet operations.
+Bring supported network and device signals into a shared evidence model. Link a detection to its
+flows, affected assets, related events, and response so an operator can move from “something
+happened” to “why it matters” without jumping between disconnected tools.
 
-The design is **one OS, one evidence model, many workspaces**. Hardware-specific capabilities are
-described by a platform manifest, rather than exposed as separate products. Detection is designed
-to be observable by default, with enforcement constrained to confirmed attacks and resource
-exhaustion.
+### Operate one system through many workspaces
 
-For the system-wide design—from HookProbe's mission and operating model to its shared services,
-trust boundaries, and platform strategy—read the
-[HookProbe high-level design](docs/design/hookprobe-high-level-design.md).
+Mission Control is the operator's home. Observe, Detect, Investigate, Protect, Network, Intelligence,
+and other workspaces are views over shared system state—not separate products with separate data.
+The same evidence can support a responder's investigation and an operator's broader view.
 
-## Inside HookProbe OS
+### Make security decisions reviewable
+
+State an outcome instead of hand-editing a pile of device settings. AEGIS is designed to reconcile
+authorized desired state deterministically; an optional AI planner can help turn intent into an
+explainable plan. The kernel—not an AI model—remains responsible for enforcing authorized policy.
+
+### Grow from one device to a fleet
+
+Start standalone, including in disconnected environments. Add a cloud-linked or self-hosted control
+plane when fleet coordination is useful. The longer-term vision is opt-in sharing of validated,
+privacy-preserving threat knowledge, so one node's detection can help protect others; a live global
+threat-sharing mesh is not a prerequisite for the product.
+
+## System architecture
+
+HookProbe connects local signals to local decisions and operator-visible evidence. Hardware
+capabilities shape what a device can do; they do not turn it into a different product.
 
 <p align="center">
-  <img src="assets/hookprobe-os-architecture.svg" alt="Network and device signals feed the local heqk operating system and shared evidence graph, which powers Mission Control workspaces. Fleet enrollment is optional." width="900"/>
+  <img src="docs/design/images/hookprobe-os-system-architecture.png" alt="HookProbe OS high-level system architecture: network and device signals flow through the heqk-based operating system into observation, detection, shared evidence and operator workspaces; fleet coordination is optional." width="900"/>
 </p>
 
-<p align="center"><em>Signals become evidence; the same evidence powers each operator view.</em></p>
+<p align="center"><em>One local system, one evidence model, many views. Fleet coordination is additive.</em></p>
 
-The heqk microkernel owns the on-device packet path and hosts the local security system, including
-Mission Control. The diagram shows the intended product model; the status below distinguishes
-validated behavior from work that is not yet publicly released.
-
-Read the [OS architecture](docs/architecture/Readme.md) and
-[Mission Control specification](docs/architecture/MissionControl.md) for the full design.
-For the kernel, device, and packet-path details, see the
-[heqk low-level design](docs/design/heqk-low-level-design.md). It distinguishes the conceptual
-target architecture from the portions validated on QEMU and CM5.
-
-## What has been demonstrated
-
-| Area | Current evidence |
+| Part of the system | Responsibility |
 |---|---|
-| **CM5 boot and Mission Control** | A bench image booted without Linux, served Mission Control, and accepted owner-key sign-in. |
-| **Detection and response** | A live test attack was dropped and its detection appeared in the browser during the CM5 acceptance run. |
-| **QEMU development** | The kernel validation gates and browser end-to-end flow can be run without physical hardware. |
-| **Public device image** | Not available yet. The CM5 result used development signing keys, not production release keys. |
+| **heqk and platform capabilities** | The intended common OS substrate. A platform contributes its hardware port and the capabilities it can safely provide. |
+| **Local packet and policy path** | Examines supported traffic and applies an explicit, locally enforceable verdict. It does not depend on a browser, cloud, or model response. |
+| **Senzorium** | Observation and telemetry: bring supported signals into a useful, normalized form. |
+| **NAPSE, QSecBit, and HYDRA** | Network threat detection, security-posture signals, and threat-intelligence enrichment. |
+| **Evidence graph** | Connects assets, events, detections, incidents, and responses so each workspace can follow the same facts. |
+| **AEGIS** | Reconciles authorized intent into system state; optional AI assists planning but does not enforce it. |
+| **Mission Control** | The on-device operator experience, with workspaces for understanding and managing the system. |
+| **Optional control plane** | Adds fleet enrollment and coordination without becoming a requirement for local operation. |
 
-See the [CM5 bench acceptance record](docs/design/bench-runbook-prod-mc-2026-11.md) and the
-[roadmap](docs/roadmap/BuildPlan.md) for scope and status.
+These are architectural responsibilities, not a promise that every named service is already a
+separate process on every device. The [high-level design](docs/design/hookprobe-high-level-design.md)
+explains the product boundaries; the [heqk low-level design](docs/design/heqk-low-level-design.md)
+covers the kernel, hardware, and packet path. The current platform and milestone plan is in the
+[Build Plan](docs/roadmap/BuildPlan.md).
+
+## The mission
+
+Security should not be a privilege reserved for organizations with large budgets. People should not
+have to depend on opaque systems for their safety and data, or face shared threats in isolation.
+
+HookProbe aims to make protection more accessible, understandable, and collaborative. The long-term
+vision is that defenders can choose to share validated, privacy-preserving threat knowledge—turning
+one node's detection into protection for others.
+
+Read the [HookProbe Manifesto](legacy/v1/MANIFESTO.md) for the project's original mission and values.
+Its technical descriptions refer to the earlier V1 implementation; this repository's current
+architecture is documented in the designs linked above.
 
 ## Try HookProbe
 
 ### Explore the dashboard demo
 
-[Open the hosted demo](https://mssp.hookprobe.com/?site=demo-site). It uses simulated data to show
-the fleet dashboard; it is **not** the on-device OS or a live security sensor.
+[Open the hosted demo](https://mssp.hookprobe.com/?site=demo-site). It uses simulated data to
+illustrate the fleet dashboard; it is not a live security sensor or the on-device operating system.
 
-### Build and validate in QEMU
+### Build and explore in QEMU
 
-Install the project's pinned Rust toolchain and `qemu-system-aarch64`. The browser test also needs
-Node.js and Playwright Chromium. See the [developer setup guide](os/kernel/HACKING.md), then run:
+For the developer environment and prerequisites, see the [heqk setup guide](os/kernel/HACKING.md).
+Then run:
 
 ```sh
 os/kernel/validate.sh
 os/kernel/tools/mc-e2e.sh
 ```
 
-The first command runs the QEMU phase gates. The second exercises the browser flow from test attack
-through heqk detection to evidence in Mission Control.
+The first command validates implemented kernel phases under QEMU. The second exercises a browser
+flow from a test attack through heqk detection to evidence in Mission Control.
 
-### Run on CM5 hardware
+### Explore the design
 
-See [Getting started](docs/getting-started/README.md) for hardware requirements and the
-developer-image procedure.
+- [HookProbe high-level design](docs/design/hookprobe-high-level-design.md)
+- [heqk low-level design](docs/design/heqk-low-level-design.md)
+- [OS architecture](docs/architecture/Readme.md)
+- [Mission Control specification](docs/architecture/MissionControl.md)
+- [CM5 bench acceptance record](docs/design/bench-runbook-prod-mc-2026-11.md)
+- [Current roadmap and engineering gaps](docs/roadmap/BuildPlan.md)
 
 ## Contribute
 
-Code, testing, documentation, and careful issue reports are welcome. Read the
-[contributing guide](CONTRIBUTING.md), then browse
-[open issues](https://github.com/hookprobe/hookprobe/issues) or
-[discussions](https://github.com/hookprobe/hookprobe/discussions).
+Code, testing, documentation, and carefully investigated issue reports are welcome.
+
+- Read the [contributing guide](CONTRIBUTING.md).
+- Browse [open issues](https://github.com/hookprobe/hookprobe/issues).
+- Join [GitHub Discussions](https://github.com/hookprobe/hookprobe/discussions).
 
 Please report vulnerabilities privately using the [security policy](SECURITY.md), not in a public
 issue.
 
-## License and further reading
+## License
 
-Use HookProbe for personal or internal business protection under AGPL-3.0. Offering it as a
-service to others may require a commercial license; see [LICENSING.md](LICENSING.md) and
-[LICENSE](LICENSE). The original HookProbe V1 implementation is preserved in
-[`legacy/v1/`](legacy/v1/). Visit [hookprobe.com](https://hookprobe.com) or
-[sponsor development](https://github.com/sponsors/hookprobe).
-
-## Project growth
-
-Repository stars over time:
+HookProbe is licensed under **AGPL-3.0**. Offering it as a service to others may require a commercial
+license; see [LICENSING.md](LICENSING.md) and [LICENSE](LICENSE). The original HookProbe V1
+implementation is preserved in [`legacy/v1/`](legacy/v1/).
 
 <p align="center">
-  <a href="https://star-history.com/#hookprobe/hookprobe&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date" />
-      <img alt="HookProbe GitHub star history over time" src="https://api.star-history.com/svg?repos=hookprobe/hookprobe&type=Date&theme=dark" width="800" />
-    </picture>
-  </a>
+  <strong>HookProbe OS</strong><br/>
+  Local protection. Shared intelligence. Evidence-driven security.<br/>
+  <a href="https://hookprobe.com/">hookprobe.com</a> ·
+  <a href="https://github.com/sponsors/hookprobe">Sponsor development</a>
 </p>
