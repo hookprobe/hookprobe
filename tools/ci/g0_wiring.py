@@ -157,6 +157,16 @@ def check_workflow(name, text):
         for st in job.get("steps") or []:
             if isinstance(st, dict) and isinstance(st.get("uses"), str):
                 refs.append(st["uses"])
+        # W2c: g1's clippy ratchet lints the git BASE, so any job running g1 needs full history.
+        # (2026-11-08: Dependabot's checkout@v7 bumps collided with `with: fetch-depth: 0` in merge
+        # conflicts and silently dropped it — the ratchet then fell back to a stale stored count.)
+        runs_g1 = any(isinstance(st, dict) and re.search(r"gates\.sh\b[^\n]*\b(g1|pr|full|nightly)\b", str(st.get("run", "")))
+                      for st in job.get("steps") or [])
+        if runs_g1:
+            co = [st for st in job.get("steps") or [] if isinstance(st, dict)
+                  and str(st.get("uses", "")).startswith("actions/checkout@")]
+            if not co or str((co[0].get("with") or {}).get("fetch-depth")) != "0":
+                errs.append(f"{name}:{jid}: runs g1 but checkout lacks `fetch-depth: 0` (W2c — the clippy ratchet needs the base commit)")
         privileged = job_is_privileged(doc, job)
         for u in refs:
             if u.startswith("./") or u.startswith("docker://"):
