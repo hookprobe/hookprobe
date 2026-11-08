@@ -151,6 +151,24 @@ impl Auth {
         Ok(id)
     }
 
+    /// ADR 0053: re-check the owner key for a high-impact action (no new session; shares the login
+    /// throttle so it cannot be used to guess the key faster).
+    pub fn reauth(&mut self, token: &[u8], now_ms: u64) -> bool {
+        let Some(owner) = self.owner else { return false };
+        if now_ms.saturating_sub(self.fail_window_start) >= FAIL_WINDOW_MS {
+            self.fail_window_start = now_ms;
+            self.fails = 0;
+        }
+        if self.fails >= MAX_FAILS_PER_WINDOW {
+            return false;
+        }
+        let ok = ct_eq(&verifier_for(&owner.salt, token), &owner.verifier);
+        if !ok {
+            self.fails += 1;
+        }
+        ok
+    }
+
     /// Parity G28: end this session (logout), or every session ("log out everywhere"). Returns
     /// whether a live session was ended.
     pub fn logout(&mut self, cookie_hex: Option<&str>, all: bool, now_ms: u64) -> bool {
@@ -259,4 +277,39 @@ pub fn mcauth_selftest() -> bool {
     kprint!(" [P-mcauth] {} — owner auth (ADR 0037 D3): verifier parsed={} placeholder=unclaimed={} unclaimed refuses login={} bad token refused={} token→session={} session cookie valid/forged/absent/expired={} throttle+recovery={} logout (this session / everywhere / forged ends nothing)={}\n",
         if pass { "PASS" } else { "FAIL" }, owner.is_some(), placeholder_unclaimed, unclaimed_refused, bad, good, session_ok, throttled, logout_ok);
     pass
+}
+
+/// ADR 0053: a short, non-secret tag naming a session in the audit log (first 4 bytes of its id).
+pub fn session_tag(cookie_hex: Option<&str>) -> [u8; 4] {
+    match cookie_hex.and_then(|c| unhex::<16>(c.as_bytes())) {
+        Some(id) => [id[0], id[1], id[2], id[3]],
+        None => [0; 4],
+    }
+}
+
+/// ADR 0053: the CSRF token for a session — derived from the session id, so it needs no extra state.
+/// Pages read it with a same-origin GET; a cross-site page cannot (no CORS), so it cannot forge writes.
+pub fn csrf_token(cookie_hex: Option<&str>, out: &mut [u8; 32]) -> bool {
+    let Some(id) = cookie_hex.and_then(|c| unhex::<16>(c.as_bytes())) else { return false };
+    let mut m = [0u8; 23];
+    m[..7].copy_from_slice(b"HQCSRF1");
+    m[7..].copy_from_slice(&id);
+    let d = boot_abi::sha256::digest(&m);
+    let mut t = [0u8; 16];
+    t.copy_from_slice(&d[..16]);
+    session_hex(&t, out);
+    true
+}
+
+/// Constant-time comparison of a presented CSRF token with the session's.
+pub fn csrf_ok(cookie_hex: Option<&str>, presented: &str) -> bool {
+    let mut want = [0u8; 32];
+    if !csrf_token(cookie_hex, &mut want) || presented.len() != 32 {
+        return false;
+    }
+    let mut d = 0u8;
+    for (a, b) in want.iter().zip(presented.as_bytes()) {
+        d |= a ^ b;
+    }
+    d == 0
 }

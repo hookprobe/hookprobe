@@ -139,6 +139,20 @@ RID=$(echo "$RL" | jget "d['reports'][0]['id']")
 RD=$(curl -s -m 10 $C "$B/api/reports/$RID")
 echo "$RD" | jget "d['report']['device_ip']=='10.0.2.2' and len(d['report']['evidence_node_ids'])>=5 and len(d['report']['response_taken'])>=1" | grep -q True \
   && ok "/api/reports/:id: a deterministic incident report with evidence ids and the actions taken" || bad "report: $RD"
+# ADR 0053 operator actions over real HTTP: session bootstrap, guards, audit, revoke.
+SS=$(curl -s -m 10 $C "$B/api/session"); CS=$(echo "$SS" | jget "d['csrf']"); SQ=$(echo "$SS" | jget "d['next_seq']")
+ACT() { curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $1" -o /dev/null -w '%{http_code}' --data "$2" "$B/api/actions"; }
+[ "$(ACT "$CS" "kind=hold_ip&target=203.0.113.9&ttl=600&reason=e2e+scanner&seq=$SQ")" = 200 ] && ok "action accepted: hold_ip with TTL + reason (origin, CSRF, sequence verified)" || bad "hold_ip refused"
+[ "$(ACT "$CS" "kind=hold_ip&target=203.0.113.10&ttl=600&reason=e2e+again&seq=$SQ")" = 409 ] && ok "a replayed sequence number is refused (409)" || bad "replay not refused"
+[ "$(curl -s -m 10 $C -H 'Origin: https://evil.example' -H "X-HQ-CSRF: $CS" -o /dev/null -w '%{http_code}' --data "kind=ack&target=10.0.2.2&reason=x+y+z&seq=$((SQ+1))" "$B/api/actions")" = 403 ] && ok "a foreign Origin is refused (403)" || bad "foreign origin accepted"
+[ "$(ACT "" "kind=ack&target=10.0.2.2&reason=x+y+z&seq=$((SQ+2))")" = 403 ] && ok "a missing CSRF token is refused (403)" || bad "missing csrf accepted"
+[ "$(ACT "$CS" "kind=hold_ip&target=203.0.113.11&ttl=999999&reason=too+long&seq=$((SQ+3))")" = 400 ] && ok "a TTL above 24 h is refused by the kernel (400)" || bad "over-long TTL accepted"
+AL=$(curl -s -m 10 $C "$B/api/actions")
+echo "$AL" | jget "any(a['kind']=='hold_ip' and a['target']=='203.0.113.9' and 0 < a['expires_in_s'] <= 600 for a in d['active']) and sum(1 for x in d['audit'] if not x['ok']) >= 4 and any(x['reason']=='e2e scanner' for x in d['audit'])" | grep -q True \
+  && ok "active actions show time left; the audit log records accepted AND refused attempts with reasons" || bad "actions/audit: $AL"
+AID=$(echo "$AL" | jget "[a['id'] for a in d['active'] if a['target']=='203.0.113.9'][0]")
+[ "$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CS" -o /dev/null -w '%{http_code}' --data "id=$AID&seq=$((SQ+4))" "$B/api/actions/revoke")" = 200 ] \
+  && [ "$(curl -s -m 10 $C "$B/api/actions" | jget "len(d['active'])")" = 0 ] && ok "revoke ends the action at once" || bad "revoke"
 # G28 logout: a second session ends only itself; the cookie is expired and refused afterwards.
 JAR3=$(mktemp); curl -s -o /dev/null -m 10 -d "token=$TOKEN" "$B/api/login" -c "$JAR3"
 LO=$(curl -s -m 10 -b "$JAR3" -c "$JAR3" -X POST -D - "$B/api/logout")

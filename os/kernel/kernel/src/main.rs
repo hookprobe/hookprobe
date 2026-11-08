@@ -49,6 +49,10 @@ mod ioc;
 mod wificfg;
 // Parity G6: operator-signed field-updatable rule pack (RULES.BIN).
 mod rulepack;
+// ADR 0053: reversible, time-bounded operator actions (store + audit) and their guarded write path.
+mod actions;
+#[cfg(feature = "netsvc")]
+mod actionapi;
 // Parity G16: WAN health with hysteresis.
 mod wanhealth;
 // Parity G15: local SIEM export formats (RFC 5424 / OCSF JSON).
@@ -3403,7 +3407,15 @@ fn cm5_p10_probe() {
                                 let mut shield = false; // answered/refused by Shield or a device policy (not an ACL drop)
                                 // Parity G9: the device's declared policy (DEVICES.TXT, by MAC). DNS is infrastructure
                                 // (Shield answers it); everything this macro forwards goes to the internet.
-                                if act == PAct::Allow && frame.len() >= 34 && devpolicy::len() > 0 {
+                                // ADR 0053: a session-made, TTL-bound hold on an IPv4 address (either direction).
+                                if act == PAct::Allow && frame.len() >= 34 {
+                                    let (a, b) = (u32::from_be_bytes([frame[26], frame[27], frame[28], frame[29]]), u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]));
+                                    if actions::ip_held(a) || actions::ip_held(b) {
+                                        act = PAct::Drop;
+                                        shield = true;
+                                    }
+                                }
+                                if act == PAct::Allow && frame.len() >= 34 {
                                     let mut smac = [0u8; 6];
                                     smac.copy_from_slice(&frame[6..12]);
                                     let dns = frame[23] == 17 && {
@@ -3521,8 +3533,9 @@ fn cm5_p10_probe() {
                         let now = || -> u64 { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
                         // Mission Control served BY the AP to its Wi-Fi clients at the AP address (feature `apmc`):
                         // owner verifier + MCTLS.CRT from the boot partition, HTTP + the EL0 TLS server.
+                        let mc_t0_any = now(); // the Mission Control clock anchor (ADR 0053 action expiry uses it too)
                         #[cfg(feature = "mcserve")]
-                        let mc_t0 = now();
+                        let mc_t0 = mc_t0_any;
                         #[cfg(feature = "mcserve")]
                         let mut mcn: Option<mcserve::McNode> = {
                             if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
@@ -4053,6 +4066,10 @@ fn cm5_p10_probe() {
                                                         let _ = wifi_send!(&v6buf[..k]);
                                                     }
                                                 }
+                                            } else if n >= 34 && wbuf[12] == 0x08 && wbuf[13] == 0x00
+                                                && actions::ip_held(u32::from_be_bytes([wbuf[26], wbuf[27], wbuf[28], wbuf[29]])) {
+                                                // ADR 0053: inbound from a held address (TTL-bound, session-made) — dropped
+                                                ids_drop_in += 1;
                                             } else if packet::verdict(&wbuf[..n]).1 == packet::DROP {
                                                 ids_drop_in += 1;
                                             } else {
@@ -4384,6 +4401,7 @@ fn cm5_p10_probe() {
                                             });
                                         }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
+                                        actions::tick((now().wrapping_sub(mc_t0_any) / (freq / 1000).max(1)) as u64); // ADR 0053 expiry
                                         // Parity G16: the previous probe unanswered = a failure; then send the next one.
                                         if let Some((_, internet)) = wh_out.take() {
                                             if let Some(st) = whealth.report(internet, false, 0) {
@@ -6310,6 +6328,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = devpolicy::selftest();
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = actionapi::selftest();
         let _ = wanhealth::selftest();
         #[cfg(feature = "netsvc")]
         let _ = siem::selftest();
