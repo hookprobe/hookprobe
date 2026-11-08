@@ -51,7 +51,7 @@ jobs:
       is_default_branch: ${{ steps.t.outputs.is_default_branch }}
       run_attempt: ${{ steps.t.outputs.run_attempt }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4 — default branch: trusted code only
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v4 — default branch: trusted code only
         with: { persist-credentials: false }
       - id: t
         env:
@@ -95,7 +95,7 @@ jobs:
           if [ -z "$K" ]; then echo "no ANTHROPIC_API_KEY — the heal loop stays triage + rerun"; echo "ok=false" >> "$GITHUB_OUTPUT"
           else echo "ok=true" >> "$GITHUB_OUTPUT"; fi
       - if: steps.key.outputs.ok == 'true'
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4 — the default-branch tip
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v4 — the default-branch tip
         with: { fetch-depth: 0, persist-credentials: false }
       - if: steps.key.outputs.ok == 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
@@ -145,7 +145,7 @@ jobs:
       CI_STRICT: "1"
       HEQK_QEMU_TIMEOUT: "900"
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with: { fetch-depth: 0, persist-credentials: false }
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093   # v4
         with:
@@ -184,7 +184,7 @@ jobs:
       pull-requests: write
       issues: write
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262   # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
         with:
           fetch-depth: 0
           token: ${{ secrets.AUTOFIX_TOKEN || github.token }}
