@@ -7,8 +7,8 @@ description = "HEQK secure-boot signer: hybrid ed25519 + SLH-DSA (FIPS 205)"
 
 [dependencies]
 ed25519-compact = "2"
-fips205 = "0.4"
-sha2 = "0.10"
+fips205 = "0.5"
+sha2 = "0.11"
 
 [profile.release]
 opt-level = 2
