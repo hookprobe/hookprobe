@@ -5,7 +5,8 @@ vectors, no_std/CM5 build, memory, CM5 benchmarks, Chromium hybrid interop, diff
 review; keep `X25519MLKEM768` hybrid, never ML-KEM alone. **Nothing is switched.** The shipping
 implementation stays RustCrypto `ml-kem 0.2.3` (kernel `securechannel`, TLS provider `tlsprov`).
 
-Harness: `os/build/kem-diff/` (host differential) and `os/build/kem-diff/nostd-check/` (CM5-target build).
+Harness: `os/build/kem-diff/` (host differential, `acvp`, `fuzz`), `os/build/kem-diff/nostd-check/` (CM5-target build),
+`os/build/kem-diff/ctgrind/` (constant-time under valgrind).
 
 ## Gate status (2026-11-08)
 
@@ -17,11 +18,12 @@ Harness: `os/build/kem-diff/` (host differential) and `os/build/kem-diff/nostd-c
 | Code size | measured | portable keygen+encaps+decaps: **77 KB** .text (opt-z, LTO); the NEON build is 189 KB |
 | FIPS 203 / NIST ACVP vectors run directly | **PASS** | `kem-diff acvp` (vectors via `fetch-acvp.sh`, NIST ACVP-Server internalProjection): ML-KEM-768 keyGen 25, encapsulation 25, decapsulation 10 (incl. implicit rejection), encapsulationKeyCheck 10, decapsulationKeyCheck 10 — **160/160** on RustCrypto and libcrux |
 | FIPS 203 input checks in the shipping code | **fixed** | RustCrypto ml-kem 0.2.3 `from_bytes` performs no §7.2 encapsulation-key check. `tlsprov` already checked the client share (`mlkem_ek_ok`); the kernel control-plane channel (`securechannel::ek_from_bytes`) did not — added, with a `[P19-pqc-kat]` sub-check. Both helpers agree with NIST's encapsulationKeyCheck verdicts |
-| Fuzzing | open | a cargo-fuzz target over decapsulate (malformed ciphertexts / keys) on both implementations |
+| Fuzzing (differential) | **PASS** | `kem-diff fuzz 1000000` (288 s, seed `0x6865716b2d6b656d`, reproducible): 600 301 hostile ciphertexts (mutated + random) against honest keys → 0 disagreements (implicit rejection identical); 32 567 encapsulations to mutated/random public keys that pass the FIPS 203 §7.2 check → 0 disagreements; 0 panics. Keys that FAIL §7.2 (167 074) give different results in every case — each library treats out-of-range input its own way — which is why the §7.2 check added to the shipping code (`5545d122`) is load-bearing, not cosmetic. Coverage-guided cargo-fuzz still open (no cargo-fuzz on the build host) |
 | Stack / memory on the device | open | needs an EL0 TLS-host build with libcrux and a stack watermark |
 | CM5 benchmarks | open (metal) | host only so far: portable libcrux 272 µs vs RustCrypto 360 µs per keygen+encaps+decaps (x86-64) |
 | Chromium hybrid interop | open | the mc-e2e HTTPS leg already negotiates `X25519MLKEM768` with Chromium on RustCrypto; repeat with a libcrux-backed tlsprov |
-| Secret-independence review | open | libcrux ships a `check-secret-independence` feature (type-level secret tracking) — build with it and review |
+| Secret-independence (type-level) | **PASS with a caveat** | `check-secret-independence` does not build in the published 0.0.11 (its generic KEM-trait impl uses `u8` where the trait expects `Secret<u8>`); with that one macro removed, the whole ML-KEM-768 portable code builds for `aarch64-unknown-none-softfloat` under the checker (feature confirmed active via `cargo tree`). Caveat: 0.0.11 classifies only in the polynomial/vector layer |
+| Constant time (dynamic, ctgrind-style) | **libcrux PASS; shipping RustCrypto FLAGGED** | `os/build/kem-diff/ctgrind` under valgrind memcheck, secrets marked undefined at the API boundary (decapsulation key s and z, encapsulation randomness m; public ek/ct declared defined). libcrux 0.0.11: **0 errors**. RustCrypto ml-kem 0.2.3: 32 256 errors from 84 contexts, ALL one root cause — SamplePolyCBD (FIPS 203 Alg. 7) is a table lookup indexed by secret bits (`Eta::ONES[val.0 as usize]`, `algebra.rs:148`): a secret-dependent load plus its bounds-check branch, in encaps and in decaps' re-encryption (`kem.rs:97`). The table is 16 × u16 = 32 bytes (one cache line when aligned), so a practical cache attack is hard — but it is exactly what a constant-time review must not pass. Positive control (a branch on a classified byte) is flagged, so the harness is live. Marking keygen seeds too gives false positives by design (ρ is derived from d but public: matrix rejection sampling) |
 
 ## Finding: libcrux forces NEON on every aarch64 build
 
@@ -37,6 +39,13 @@ FP/SIMD trap. Two traps in one:
 
 If libcrux is adopted, the build must assert the result (no SIMD instructions in the linked libcrux code),
 the same way `build.rs` now refuses a dev-API UI bundle.
+
+## Finding: the shipping ML-KEM has a secret-indexed table lookup (2026-11-08)
+
+See the constant-time row. Options, for the operator (decision register §B): (a) switch to libcrux behind the
+feature once the device gates are green — it is the implementation that passes the constant-time check; (b) carry
+a one-function patch of RustCrypto's `sample_cbd` (arithmetic popcount instead of the table) proven by kem-diff
+(ACVP 160/160, differential vs libcrux, ctgrind 0 errors) until then; (c) report upstream either way.
 
 ## Recommendation
 
