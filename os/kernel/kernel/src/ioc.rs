@@ -161,7 +161,30 @@ enum Line<'a> {
     Skip,
     V4(u32, u8, u32),
     Dom(&'a [u8], u32),
+    /// a JA4 TLS-client fingerprint (hash in the domain table's "ja4:" namespace)
+    Ja4(u64, u32),
     Bad,
+}
+
+/// Hash of a JA4 IOC: its own namespace inside the domain table (never collides with a name).
+fn ja4_key(v: &[u8]) -> u64 {
+    let mut h: u64 = 0x6a61_343a_0000_0001; // "ja4:" seed
+    for &b in v {
+        h ^= b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// A well-formed JA4 string: 36 chars [a-z0-9_], '_' at 10 and 23.
+fn valid_ja4(v: &[u8]) -> bool {
+    v.len() == 36 && v[10] == b'_' && v[23] == b'_' && v.iter().all(|&c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+}
+
+/// Is this TLS client fingerprint a live IOC? (rule 125)
+pub fn ja4_listed(ja4: &[u8]) -> bool {
+    let t = unsafe { &(&*core::ptr::addr_of!(DOM))[..DOMN] };
+    !t.is_empty() && t.binary_search_by(|e| e.0.cmp(&ja4_key(ja4))).map_or(false, |i| live(t[i].1))
 }
 
 fn parse_line(line: &[u8]) -> Line<'_> {
@@ -175,6 +198,7 @@ fn parse_line(line: &[u8]) -> Line<'_> {
     match first {
         b"ip" | b"cidr" | b"ipv4" => kind = 1,
         b"domain" | b"host" => kind = 2,
+        b"ja4" => kind = 3,
         _ => {}
     }
     if kind != 0 {
@@ -187,6 +211,9 @@ fn parse_line(line: &[u8]) -> Line<'_> {
             Some(e) => exp = e,
             None => return Line::Bad,
         }
+    }
+    if kind == 3 {
+        return if valid_ja4(first) { Line::Ja4(ja4_key(first), exp) } else { Line::Bad };
     }
     if kind != 2 {
         if let Some((n, l)) = parse_v4(first) {
@@ -226,6 +253,14 @@ impl Builder {
                         (*core::ptr::addr_of_mut!(V4))[V4N] = P4 { net: n, len: l, exp: e };
                         V4N += 1;
                         LENS |= 1u64 << l;
+                    } else {
+                        self.truncated += 1;
+                    }
+                },
+                Line::Ja4(k, e) => unsafe {
+                    if DOMN < DOM_CAP {
+                        (*core::ptr::addr_of_mut!(DOM))[DOMN] = (k, e);
+                        DOMN += 1;
                     } else {
                         self.truncated += 1;
                     }
