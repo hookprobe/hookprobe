@@ -100,7 +100,7 @@ jobs:
         with:
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "24" }
       - run: |
           sudo apt-get update
@@ -120,7 +120,7 @@ jobs:
       - uses: taiki-e/install-action@v2
         with: { tool: cargo-deny }
       - uses: anchore/sbom-action/download-syft@v0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with: { node-version: "24" }
       - run: tools/ci/gates.sh g4
       - if: always()
