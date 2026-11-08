@@ -24,7 +24,7 @@ import {
   createSignal, createMemo, For, Show, batch, onMount,
 } from 'solid-js';
 import TopBar from './TopBar';
-import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive } from '../store/dnsLive';
+import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState } from '../store/dnsLive';
 import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
 import CommandPalette from './CommandPalette';
 import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
@@ -187,6 +187,10 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
               {l().blocked_domains.toLocaleString()} blocked + {l().allowed_domains.toLocaleString()} allowed domains
               {' · '}lists {l().block_file === 'loaded' ? (l().signed ? `signed by your operator key (generation ${l().generation})` : 'unsigned (standalone)') : l().block_file === 'refused' ? `REFUSED (${l().refused}) — not loaded` : 'none loaded'}
               {' · '}encrypted DNS {props.d.policy.encrypted_dns === 'block' ? 'refused' : 'allowed'} · Private Relay {props.d.policy.private_relay === 'block' ? 'blocked' : 'reported'}
+            </div>
+            <div class="shield-statline">
+              Protection settings (block / allow lists, encrypted-DNS and Private Relay policy) come from the files signed with your
+              operator key — change them by re-signing. For a temporary exception use "Allow 1 h" on a blocked query below; it expires by itself.
             </div>
           </div>
         </div>
@@ -354,6 +358,7 @@ const ShieldApp: Component = () => {
         </div>
 
         <Show when={dnsLive()} fallback={
+        <Show when={dnsState() === 'absent'} fallback={<div class="shield-empty" role="status">Loading Shield data from the device…</div>}>
         <div class="shield-grid">
 
           {/* Hero — blocked today + protection level */}
@@ -451,11 +456,13 @@ const ShieldApp: Component = () => {
             <a href="/network/map">My Network →</a>
           </div>
         </div>
+        </Show>
         }>
           {(d) => <ShieldLive d={d()} />}
         </Show>
 
-        {/* Footer hint */}
+        {/* Footer hint (sample layout only — on a device the lists are operator-signed files) */}
+        <Show when={dnsState() === 'absent'}>
         <div class="net-footer-hint" aria-hidden="true">
           Add a domain to block or allow — every change shows a preview before it applies.
           <span class="net-footer-sep"> · </span>
@@ -463,6 +470,7 @@ const ShieldApp: Component = () => {
             ⌘K — "unblock youtube on the kids' iPad"
           </button>
         </div>
+        </Show>
 
       </main>
 
