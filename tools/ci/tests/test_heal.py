@@ -40,6 +40,8 @@ REAL = {
     "clippy_regression#base": DTOLNAY_STEP + "\n  RATCHET VIOLATION (new vs base): hal@netsvc: clippy::needless_range_loop 1 -> 2 (+1)",
     "unknown": DTOLNAY_STEP + "\nsomething nobody has seen before\nexit 1",
     "infra_transient": "warning: spurious network error (2 tries remaining): [6] Could not resolve host: x",
+    "infra_transient#gitleaks": DTOLNAY_STEP + "\ncurl: (22) The requested URL returned error: 504",
+    "infra_transient#syft": "[error] received HTTP status=504 for url='https://github.com/anchore/syft/releases/x'",
 }
 
 
