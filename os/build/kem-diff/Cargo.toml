@@ -14,3 +14,5 @@ ml-kem = { version = "=0.2.3", default-features = false, features = ["determinis
 kem = "=0.3.0-pre.0"
 libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
 sha2 = "0.10"
+serde_json = "1"
+sha3 = "0.10"
