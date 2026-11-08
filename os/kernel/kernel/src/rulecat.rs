@@ -51,6 +51,8 @@ pub fn lookup(id: u16) -> Option<RuleInfo> {
         122 => r("IPv6 RA flood", "ra_flood", "T1498", SEV_MEDIUM),
         123 => r("Unparseable IPv6 (evasion attempt)", "evasion", "", SEV_LOW),
         124 => r("Brute force on a login service", "brute_force", "T1110", SEV_HIGH),
+        125 => r("Known-malicious TLS client (JA4)", "ioc_match", "T1071.001", SEV_HIGH),
+        126 => r("TLS to a Shield-blocked name (DNS bypass)", "dns_bypass", "T1572", SEV_MEDIUM),
         201 => r("TCP NULL scan", "port_scan", "T1046", SEV_MEDIUM),
         202 => r("TCP FIN scan", "port_scan", "T1046", SEV_MEDIUM),
         203 => r("TCP Xmas scan", "port_scan", "T1046", SEV_MEDIUM),

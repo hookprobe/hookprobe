@@ -383,6 +383,15 @@ fn classify_tiers(frame: &[u8]) -> (u16, u16) {
             } else if m.dst_port == 53 {
                 let _ = crate::rules::dns_verdict(frame);
             }
+            // Passive TLS ClientHello fingerprint (JA4 + SNI): two byte compares on every other segment.
+            if m.ip_proto == crate::net::IPPROTO_TCP {
+                if let Some(&off) = frame.get(m.l4_off + 12) {
+                    let pay = m.l4_off + ((off >> 4) as usize) * 4;
+                    if pay < frame.len() {
+                        crate::ja4::observe(&frame[pay..], src);
+                    }
+                }
+            }
             // Run the signed rule set on a normalized L4 view: R1 = L4 header, so
             // each rule reads dst-port at a fixed offset regardless of eth/VLAN/IHL.
             let l4 = &frame[m.l4_off..];

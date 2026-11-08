@@ -597,6 +597,13 @@ pub fn scan_response_hook(frame: &[u8]) {
     if flags & 0x04 != 0 || (flags & 0x02 != 0 && flags & 0x10 != 0) {
         let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
         crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & 0x02 != 0);
+        // Rule 124's evidence too: on the AP the IDS sees the server's SYN-ACK BEFORE un-NAT (addressed to the
+        // WAN IP), so the answer must be credited here, to the real LAN client (metal 2026-11-08: a 30-attempt
+        // SSH burst from a LAN client was missed until this).
+        if flags & 0x12 == 0x12 {
+            let server = crate::net::eth_ipv4_src(frame);
+            crate::behavioral::brute_answer_at(server, dst, meta.src_port, crate::behavioral::now_secs());
+        }
     }
 }
 
@@ -658,6 +665,8 @@ pub const RULE_BEACON: u16 = 116; // parity: napse-capture beacon 1000040 (A10/L
 pub const RULE_LATERAL: u16 = 117; // parity: napse-capture lateral 1000041 (A10)
 pub const RULE_EXFIL: u16 = 118; // parity: bulk outbound exfil 1000025
 pub const RULE_DNS: u16 = 119; // parity: DNS tunneling/DGA 1000002/1000021/1000011
+pub const RULE_TLS_IOC: u16 = 125; // known-malicious TLS client (JA4 in the signed IOC pack)
+pub const RULE_TLS_BYPASS: u16 = 126; // TLS to a name Shield blocks: the device resolved it without Shield
 pub const RULE_BRUTE: u16 = 124; // brute force on one admin service (T1110), observe-only
 pub const RULE_TRUNCATED: u16 = 120; // SG-2: net::parse None -> fail-closed drop (matrix F4)
 
@@ -757,6 +766,17 @@ pub fn beacon_verdict_at(src: u32, dst: u32, dst_port: u16, now: u64) -> Option<
 /// but sources `now` from the real monotonic clock instead of an injected test value.
 pub fn beacon_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
     beacon_verdict_at(src, dst, dst_port, crate::behavioral::now_secs())
+}
+
+/// Rule 125 — a TLS ClientHello whose JA4 is in the signed IOC pack (observe-only, like every IOC match).
+pub fn tls_ioc_verdict(src: u32) {
+    let _ = behavioral_verdict(RULE_TLS_IOC, src, crate::corroboration::AXIS_BEACON);
+}
+
+/// Rule 126 — TLS to a Shield-blocked name: DNS protection was bypassed (DoH / hard-coded IP / stale
+/// answer). Observe-only; enforcing on SNI would be a separate policy decision.
+pub fn tls_bypass_verdict(src: u32) {
+    let _ = behavioral_verdict(RULE_TLS_BYPASS, src, crate::corroboration::AXIS_BEACON);
 }
 
 /// Rule 124 brute force — a connection ATTEMPT (SYN-only) to an admin service; fires (observe-only) once per
