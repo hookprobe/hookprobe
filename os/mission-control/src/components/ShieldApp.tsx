@@ -231,6 +231,8 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
                     <span>{x.queries.toLocaleString()} queries · {x.blocked.toLocaleString()} blocked{x.bypass > 0 ? ` · ${x.bypass} bypass signals` : ''}</span>
                     <button class="shield-remove" title="Hold all traffic of this address for 1 hour (expires on its own)"
                       onClick={async () => setMsg(await promptAndRun('hold_ip', x.ip, 3600))}>Hold 1 h</button>
+                    <button class="shield-remove" title="Pause Shield's blocklists for this device for 1 hour (owner key; bypass controls stay on)"
+                      onClick={async () => setMsg(await promptAndRun('shield_pause', x.ip, 3600))}>Pause 1 h</button>
                   </li>
                 )}
               </For>

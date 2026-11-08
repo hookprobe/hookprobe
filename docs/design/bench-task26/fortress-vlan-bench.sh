@@ -33,6 +33,8 @@ setup)
   echo "bench up: $P.100 10.100.0.1/24 (DHCP .50-.150), $P.200 192.168.200.1/24"
   ;;
 v6up)
+  # V6_FAST=1: short DHCPv6 timers (T1 60 s) so a renewal can be observed in a test round
+  if [ "${V6_FAST:-0}" = 1 ]; then V6_T1=60; V6_T2=90; V6_PREF=120; V6_VALID=180; fi
   mkdir -p /run/hqbench
   # keep_addr_on_down: a port down/up (the late-link test) must not flush the bench address
   sysctl -qw "net/ipv6/conf/$P.100/accept_ra=0" "net/ipv6/conf/$P.100/forwarding=1" "net/ipv6/conf/$P.100/keep_addr_on_down=1"
@@ -52,7 +54,7 @@ CONF
     "interfaces-config": { "interfaces": [ "$P.100" ] },
     "lease-database": { "type": "memfile", "persist": true, "name": "/var/lib/kea/kea-leases6.csv" },
     "control-socket": { "socket-type": "unix", "socket-name": "/run/kea/kea6-ctrl-socket" },
-    "preferred-lifetime": 1800, "valid-lifetime": 3600, "renew-timer": 900, "rebind-timer": 1440,
+    "preferred-lifetime": ${V6_PREF:-1800}, "valid-lifetime": ${V6_VALID:-3600}, "renew-timer": ${V6_T1:-900}, "rebind-timer": ${V6_T2:-1440},
     "subnet6": [ { "id": 1, "subnet": "2001:db8:100::/64", "interface": "$P.100",
         "pd-pools": [ { "prefix": "2001:db8:ff00::", "prefix-len": 48, "delegated-len": 60 } ] } ],
     "loggers": [ { "name": "kea-dhcp6", "output_options": [ { "output": "/var/log/kea/kea-dhcp6.log" } ], "severity": "INFO" } ]

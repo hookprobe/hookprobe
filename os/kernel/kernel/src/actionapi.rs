@@ -109,7 +109,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<u3
     let seq: u64 = form_get(body, "seq", &mut sb).and_then(|v| v.parse().ok()).unwrap_or(0);
     let k = kind.unwrap_or(Kind::Ack);
     let target = match k {
-        Kind::Ack | Kind::HoldIp => ipv4(target_s).map(|v| if k == Kind::Ack { Target::Incident(v) } else { Target::Ip(v) }),
+        Kind::Ack | Kind::HoldIp | Kind::ShieldPause => ipv4(target_s).map(|v| if k == Kind::Ack { Target::Incident(v) } else { Target::Ip(v) }),
         Kind::Isolate => mac(target_s).map(Target::Mac),
         Kind::ShieldAllow => domain_hash(target_s).map(Target::Domain),
     };
@@ -142,7 +142,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<u3
             return refuse("target");
         }
     }
-    if k.has_ttl() && !(actions::MIN_TTL_S..=actions::MAX_TTL_S).contains(&ttl_s) {
+    if k.has_ttl() && !(actions::MIN_TTL_S..=k.max_ttl_s()).contains(&ttl_s) {
         return refuse("ttl out of bounds");
     }
     if k.needs_reauth() {
@@ -266,17 +266,23 @@ pub fn selftest() -> bool {
     let subnet_hook = actions::add(Kind::HoldIp, Target::Ip(0xC0A8_C801), 600).is_some() && !actions::ip_held(0xC0A8_C801);
     actions::set_mgmt_net(0, 0);
     let floor = floor_refused && floor_hook && subnet_refused && subnet_hook;
+    // G22: Shield pause — at most 1 h, owner key again, and it only lifts blocklists for that client
+    let pz_long = submit(&good, b"kind=shield_pause&target=10.99.0.20&ttl=7200&reason=homework+site&owner_key=owner-key-for-the-actions-test&seq=14", &mut auth) == Err("ttl out of bounds");
+    let pz_noauth = submit(&good, b"kind=shield_pause&target=10.99.0.20&ttl=3600&reason=homework+site&seq=15", &mut auth) == Err("re-authentication failed");
+    let pz_ok = submit(&good, b"kind=shield_pause&target=10.99.0.20&ttl=3600&reason=homework+site&owner_key=owner-key-for-the-actions-test&seq=16", &mut auth).is_ok()
+        && actions::shield_paused(0x0A63_0014) && !actions::shield_paused(0x0A63_0015);
+    let pause = pz_long && pz_noauth && pz_ok;
     // every attempt is audited, refusals included
     let mut total = 0;
     let mut refused = 0;
     actions::for_each_audit(&mut |a| { total += 1; if !a.ok { refused += 1; } });
     let audited = total >= 15 && refused >= 10;
-    let pass = o && no_origin && bad_csrf && ack && replay && no_reason && ttl_hi && ttl_lo && hold && iso_noauth && iso && allow && bad_target && unknown && still && expired && revoked && audited && floor;
+    let pass = o && no_origin && bad_csrf && ack && replay && no_reason && ttl_hi && ttl_lo && hold && iso_noauth && iso && allow && bad_target && unknown && still && expired && revoked && audited && floor && pause;
     actions::reset();
     actions::reset_audit();
     arch_aarch64::_print(format_args!(
-        " [P-actions] {} — ADR 0053 operator actions: refused for origin={} missing origin={} csrf={} replay={} no reason={} TTL > 24 h={} TTL < 60 s={} bad target={} unknown kind={} | ack={} hold_ip={} isolate needs the owner key again={} isolate -> quarantine policy (DHCP/DNS still work)={} shield exception={} | expiry by the kernel clock={}/{} revoke={} management floor never held={} every attempt audited incl. refusals={}\n",
-        if pass { "PASS" } else { "FAIL" }, o, no_origin, bad_csrf, replay, no_reason, ttl_hi, ttl_lo, bad_target, unknown, ack, hold, iso_noauth, iso, allow, still, expired, revoked, floor, audited
+        " [P-actions] {} — ADR 0053 operator actions: refused for origin={} missing origin={} csrf={} replay={} no reason={} TTL > 24 h={} TTL < 60 s={} bad target={} unknown kind={} | ack={} hold_ip={} isolate needs the owner key again={} isolate -> quarantine policy (DHCP/DNS still work)={} shield exception={} | expiry by the kernel clock={}/{} revoke={} management floor never held={} Shield pause (<=1 h, owner key, one client)={} every attempt audited incl. refusals={}\n",
+        if pass { "PASS" } else { "FAIL" }, o, no_origin, bad_csrf, replay, no_reason, ttl_hi, ttl_lo, bad_target, unknown, ack, hold, iso_noauth, iso, allow, still, expired, revoked, floor, pause, audited
     ));
     pass
 }

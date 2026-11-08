@@ -447,11 +447,16 @@ pub enum Verdict {
     DohBlocked = 10,
     DotRefused = 11,
     Tcp53Refused = 12,
+    /// A blocklist hit for a client whose Shield is paused (ADR 0053 action, parity G22): forwarded, logged.
+    Paused = 13,
 }
+
+/// Every verdict in discriminant order (counters, labels).
+const ALL: [Verdict; 14] = [Verdict::Allowed, Verdict::Floor, Verdict::AllowRule, Verdict::Blocked, Verdict::BlockedCname, Verdict::Ddr, Verdict::Canary, Verdict::RelaySeen, Verdict::RelayBlocked, Verdict::DohSeen, Verdict::DohBlocked, Verdict::DotRefused, Verdict::Tcp53Refused, Verdict::Paused];
 
 impl Verdict {
     pub fn name(self) -> &'static str {
-        ["allowed", "floor", "allow-rule", "blocked", "blocked-cname", "ddr", "canary", "relay-seen", "relay-blocked", "doh-seen", "doh-blocked", "dot-refused", "tcp53-refused"][self as usize]
+        ["allowed", "floor", "allow-rule", "blocked", "blocked-cname", "ddr", "canary", "relay-seen", "relay-blocked", "doh-seen", "doh-blocked", "dot-refused", "tcp53-refused", "paused"][self as usize]
     }
     /// Answered by the AP instead of forwarded.
     pub fn answered(self) -> bool {
@@ -460,6 +465,13 @@ impl Verdict {
     fn bypass(self) -> bool {
         matches!(self, Verdict::Ddr | Verdict::Canary | Verdict::RelaySeen | Verdict::RelayBlocked | Verdict::DohSeen | Verdict::DohBlocked | Verdict::DotRefused)
     }
+}
+
+/// The decision for one client: a blocklist hit becomes `Paused` while that client's Shield is paused.
+/// Never relaxes the system floor or the bypass controls.
+pub fn decide_for(name: &[u8], client: u32) -> Verdict {
+    let v = decide(name);
+    if v == Verdict::Blocked && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
 }
 
 /// The decision for a normalised (lowercase, no trailing dot) name.
@@ -700,7 +712,7 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
                 stat_unparsable();
                 return Act::Pass;
             };
-            let v = decide(&q.name[..q.nl]);
+            let v = decide_for(&q.name[..q.nl], client);
             record(now, client, q.qtype, &q.name[..q.nl], v);
             // Parity G7: threat-intel domain (IOC pack) — detection only, the name is still answered.
             if crate::ioc::domain_listed(&q.name[..q.nl]) {
@@ -741,7 +753,7 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
             let dl = u16::from_be_bytes([f[p], f[p + 1]]) as usize;
             let dns = &f[p + 2..(p + 2 + dl).min(14 + tot)];
             let Some(q) = parse_query(dns) else { return Act::Pass };
-            let v = decide(&q.name[..q.nl]);
+            let v = decide_for(&q.name[..q.nl], client);
             if v.answered() {
                 record(now, client, q.qtype, &q.name[..q.nl], Verdict::Tcp53Refused);
                 return Act::Reject;
@@ -770,6 +782,10 @@ pub fn on_reply_frame(buf: &mut [u8], len: usize, now: u64) -> usize {
         return len;
     }
     let dns = &f[42..34 + ulen];
+    // a paused client gets its answers untouched (no CNAME-cloak rewrite either)
+    if crate::actions::shield_paused(u32::from_be_bytes([f[30], f[31], f[32], f[33]])) {
+        return len;
+    }
     if dns[2] & 0x80 == 0 || dns[3] & 0x0f != 0 || u16::from_be_bytes([dns[4], dns[5]]) != 1 {
         return len; // not a successful response with one question
     }
@@ -829,8 +845,8 @@ pub fn on_reply_frame(buf: &mut [u8], len: usize, now: u64) -> usize {
 // ---------------------------------------------------------------------------------------------------
 // Visibility (ADR 0052 D7)
 
-const NC: usize = 14;
-const C_UNPARSABLE: usize = 13;
+const NC: usize = 15;
+const C_UNPARSABLE: usize = 14;
 const RING: usize = 256;
 const TOPK: usize = 32;
 const CLIENTS: usize = 64;
@@ -1004,7 +1020,7 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
     let _ = write!(out, "}},\"policy\":{{\"encrypted_dns\":\"{}\",\"private_relay\":\"{}\"}},\"counters\":{{",
         if p.encrypted_dns_block { "block" } else { "allow" }, if p.private_relay_block { "block" } else { "report" });
     for k in 0..NC {
-        let name = if k == C_UNPARSABLE { "unparsable" } else { [Verdict::Allowed, Verdict::Floor, Verdict::AllowRule, Verdict::Blocked, Verdict::BlockedCname, Verdict::Ddr, Verdict::Canary, Verdict::RelaySeen, Verdict::RelayBlocked, Verdict::DohSeen, Verdict::DohBlocked, Verdict::DotRefused, Verdict::Tcp53Refused][k].name() };
+        let name = if k == C_UNPARSABLE { "unparsable" } else { ALL[k].name() };
         let _ = write!(out, "{}\"{}\":{}", if k > 0 { "," } else { "" }, name, s.c[k]);
     }
     out.raw("},\"top_blocked\":[");
@@ -1025,7 +1041,7 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
         ip4(out, c.ip);
         let _ = write!(out, ",\"queries\":{},\"blocked\":{},\"bypass\":{}", c.queries, c.blocked, c.bypass);
         if c.bypass > 0 {
-            let _ = write!(out, ",\"last_bypass\":\"{}\"", [Verdict::Allowed, Verdict::Floor, Verdict::AllowRule, Verdict::Blocked, Verdict::BlockedCname, Verdict::Ddr, Verdict::Canary, Verdict::RelaySeen, Verdict::RelayBlocked, Verdict::DohSeen, Verdict::DohBlocked, Verdict::DotRefused, Verdict::Tcp53Refused][c.last_bypass as usize % 13].name());
+            let _ = write!(out, ",\"last_bypass\":\"{}\"", ALL[c.last_bypass as usize % ALL.len()].name());
         }
         out.raw("}");
     }
@@ -1041,7 +1057,7 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
         ip4(out, e.client);
         let _ = write!(out, ",\"qtype\":{},\"name\":", e.qtype);
         out.string(core::str::from_utf8(&e.name[..e.nl as usize]).unwrap_or("?"));
-        let vn = [Verdict::Allowed, Verdict::Floor, Verdict::AllowRule, Verdict::Blocked, Verdict::BlockedCname, Verdict::Ddr, Verdict::Canary, Verdict::RelaySeen, Verdict::RelayBlocked, Verdict::DohSeen, Verdict::DohBlocked, Verdict::DotRefused, Verdict::Tcp53Refused][e.v as usize % 13].name();
+        let vn = ALL[e.v as usize % ALL.len()].name();
         let _ = write!(out, ",\"verdict\":\"{}\"}}", vn);
         if out.overflow || out.len + 48 > out.capacity() {
             out.rewind(m);

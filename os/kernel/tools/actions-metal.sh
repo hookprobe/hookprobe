@@ -19,9 +19,12 @@ echo "H8b    missing CSRF:                    $(P "" "kind=ack&target=203.0.113.
 echo "H9     ttl=999999:                      $(P "$CS" "kind=hold_ip&target=203.0.113.9&ttl=999999&reason=metal+H9&seq=$((SQ+3))")"
 echo "H10    hold mgmt 192.168.200.1:         $(P "$CS" "kind=hold_ip&target=192.168.200.1&ttl=120&reason=metal+H10&seq=$((SQ+4))")"
 echo "H5neg  shield_allow wrong owner key:    $(P "$CS" "kind=shield_allow&target=example.org&ttl=600&reason=metal+H5&owner_key=WRONG-KEY&seq=$((SQ+5))")"
+echo "H11a   shield_pause 2 h (max 1 h):    $(P "$CS" "kind=shield_pause&target=10.99.0.250&ttl=7200&reason=metal+H11&owner_key=$TOKEN&seq=$((SQ+7))")"
+echo "H11b   shield_pause no owner key:       $(P "$CS" "kind=shield_pause&target=10.99.0.250&ttl=600&reason=metal+H11&seq=$((SQ+8))")"
+echo "H11c   shield_pause 10 min (owner key): $(P "$CS" "kind=shield_pause&target=10.99.0.250&ttl=600&reason=metal+H11&owner_key=$TOKEN&seq=$((SQ+9))")"
 A=$(curl -s -m 10 $C "$B/api/actions"); echo "actions: $(echo "$A" | head -c 1500)"
 AID=$(python3 -c 'import json,sys;a=json.loads(sys.argv[1])["active"];print(next((x["id"] for x in a if x["target"]=="203.0.113.9"),0))' "$A")
-echo "revoke $AID: $(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CS" -w ' [%{http_code}]' --data "id=$AID&seq=$((SQ+6))" "$B/api/actions/revoke")"
+echo "revoke $AID: $(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CS" -w ' [%{http_code}]' --data "id=$AID&seq=$((SQ+10))" "$B/api/actions/revoke")"
 echo "active after revoke: $(curl -s -m 10 $C "$B/api/actions" | python3 -c 'import json,sys;print(len(json.load(sys.stdin)["active"]))')"
 curl -s -o /dev/null -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CS" --data "" "$B/api/logout"
 rm -f "$JAR"

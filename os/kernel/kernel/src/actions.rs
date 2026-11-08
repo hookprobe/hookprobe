@@ -21,6 +21,9 @@ pub enum Kind {
     Isolate = 2,
     /// Let one domain through Shield for a while.
     ShieldAllow = 3,
+    /// Pause Shield's blocklists for one client (by IPv4) for at most an hour (parity G22). The system
+    /// floor and the bypass controls (DDR, canary, Private Relay, DoH, DoT) keep applying.
+    ShieldPause = 4,
 }
 
 impl Kind {
@@ -30,6 +33,7 @@ impl Kind {
             "hold_ip" => Some(Kind::HoldIp),
             "isolate" => Some(Kind::Isolate),
             "shield_allow" => Some(Kind::ShieldAllow),
+            "shield_pause" => Some(Kind::ShieldPause),
             _ => None,
         }
     }
@@ -40,12 +44,18 @@ impl Kind {
             Kind::HoldIp => "hold_ip",
             Kind::Isolate => "isolate",
             Kind::ShieldAllow => "shield_allow",
+            Kind::ShieldPause => "shield_pause",
         }
     }
 
     /// Kinds that need the owner key entered again (re-authentication).
     pub fn needs_reauth(self) -> bool {
-        matches!(self, Kind::Isolate | Kind::ShieldAllow)
+        matches!(self, Kind::Isolate | Kind::ShieldAllow | Kind::ShieldPause)
+    }
+
+    /// The longest lifetime the kernel allows for this kind (ADR 0053 D1: a Shield pause is at most 1 h).
+    pub fn max_ttl_s(self) -> u64 {
+        if self == Kind::ShieldPause { 3600 } else { MAX_TTL_S }
     }
 
     /// Kinds that carry a lifetime (an ack does not expire).
@@ -182,6 +192,11 @@ pub fn isolated(mac: &[u8; 6]) -> bool {
 /// Is this domain hash allowed through Shield right now?
 pub fn shield_allowed(hash: u64) -> bool {
     any(|e| e.kind == Kind::ShieldAllow && e.target == Target::Domain(hash))
+}
+
+/// Is Shield paused for this client right now?
+pub fn shield_paused(ip: u32) -> bool {
+    ip != 0 && any(|e| e.kind == Kind::ShieldPause && e.target == Target::Ip(ip))
 }
 
 /// Has this incident (keyed by source address) been acknowledged?
