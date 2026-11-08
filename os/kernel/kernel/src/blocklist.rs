@@ -14,6 +14,17 @@ const fn ip(a: u8, b: u8, c: u8, d: u8) -> u32 {
 /// The signed block set: (network-order prefix, prefix length). Examples use the
 /// documentation/TEST-NET ranges + a stand-in C2 subnet; a real deployment
 /// replaces this with the HYDRA-synced feed.
+/// The built-in seed below is the SELF-TEST corpus only. It used to stay live on devices too: every packet
+/// from a LAN that happens to use 10.66.66.0/24 raised an IOC detection (and the IDS bench, sourced from
+/// TEST-NET-1, timed the alert path instead of normal traffic). A device's boot calls `ioc::load` — with or
+/// without an IOC.TXT — which switches the seed off; from then on only the operator-signed pack counts.
+static SEED_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// Production threat intel is now authoritative: the self-test seed no longer matches anything.
+pub fn seed_off() {
+    SEED_ON.store(false, core::sync::atomic::Ordering::Relaxed);
+}
+
 const BLOCKS: &[(u32, u8)] = &[
     (ip(192, 0, 2, 0), 24),    // TEST-NET-1 (RFC 5737) — example malicious range
     (ip(198, 51, 100, 0), 24), // TEST-NET-2
@@ -26,6 +37,9 @@ const BLOCKS: &[(u32, u8)] = &[
 /// it back to network order before the prefix scan. Returns 1 if blocked, else 0.
 pub fn ip_blocked(ip_le: u64) -> u64 {
     let net = (ip_le as u32).swap_bytes();
+    if !SEED_ON.load(core::sync::atomic::Ordering::Relaxed) {
+        return crate::ioc::ip_listed(net) as u64;
+    }
     // Parity G7: the operator-signed IOC pack (IOC.TXT) — the built-in TEST-NET seed below stays as the
     // self-test corpus.
     if crate::ioc::ip_listed(net) {
