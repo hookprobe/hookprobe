@@ -484,6 +484,10 @@ pub fn decide(name: &[u8]) -> Verdict {
     if suffix_in(name, DOH) {
         return if p.encrypted_dns_block { Verdict::DohBlocked } else { Verdict::DohSeen };
     }
+    // ADR 0053: a session-made, TTL-bound exception for exactly this name (never for the controls above)
+    if crate::actions::shield_allowed(fnv(name)) {
+        return Verdict::AllowRule;
+    }
     // longest match between ALLOW and BLOCK (ties -> allow); a bare TLD never matches
     let (bt, at) = (block_table(), allow_table());
     if bt.is_empty() && at.is_empty() {

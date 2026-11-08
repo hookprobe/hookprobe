@@ -38,10 +38,14 @@ pub struct Req<'a> {
     /// Bytes of the input this request occupies (header block + body) — anything after it is the next
     /// (pipelined) request and must be kept.
     pub consumed: usize,
+    /// The `Origin` header (ADR 0053: writes must come from this device's own pages).
+    pub origin: &'a str,
+    /// The `X-HQ-CSRF` header (ADR 0053 per-session token).
+    pub csrf: &'a str,
 }
 
-/// Largest accepted request body (the login form; nothing else posts).
-pub const MAX_BODY: usize = 512;
+/// Largest accepted request body (the login form and ADR 0053 action forms).
+pub const MAX_BODY: usize = 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseErr {
@@ -75,6 +79,8 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
     let mut host = "";
     let mut conn_close = false;
     let mut clen = 0usize;
+    let mut origin = "";
+    let mut csrf = "";
     for h in head.split("\r\n").skip(1) {
         let Some((k, v)) = h.split_once(':') else { continue };
         let v = v.trim();
@@ -95,6 +101,10 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
             }
         } else if k.eq_ignore_ascii_case("content-length") {
             clen = v.parse().map_err(|_| ParseErr::Bad)?;
+        } else if k.eq_ignore_ascii_case("origin") {
+            origin = v;
+        } else if k.eq_ignore_ascii_case("x-hq-csrf") {
+            csrf = v;
         } else if k.eq_ignore_ascii_case("connection") {
             conn_close = v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close"));
         }
@@ -108,7 +118,7 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
     }
     let body = &buf[body_start..body_start + clen];
     let keep_alive = version == "HTTP/1.1" && !conn_close;
-    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host, keep_alive, consumed: body_start + clen })
+    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host, keep_alive, consumed: body_start + clen, origin, csrf })
 }
 
 /// `key=<u32>` from a query string.
@@ -205,6 +215,45 @@ fn json(scratch: &mut [u8], f: impl FnOnce(&mut JsonBuf)) -> Response {
     }
 }
 
+fn target_json(w: &mut JsonBuf, t: &crate::actions::Target) {
+    use core::fmt::Write;
+    use crate::actions::Target;
+    let ip = |w: &mut JsonBuf, v: u32| { let _ = write!(w, "\"{}.{}.{}.{}\"", v >> 24, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff); };
+    match *t {
+        Target::Incident(v) | Target::Ip(v) => ip(w, v),
+        Target::Mac(m) => { let _ = write!(w, "\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\"", m[0], m[1], m[2], m[3], m[4], m[5]); }
+        Target::Domain(h) => { let _ = write!(w, "\"domain#{:016x}\"", h); }
+    }
+}
+
+/// `GET /api/actions` — active actions (time left) + the audit log, newest first.
+fn render_actions(w: &mut JsonBuf) {
+    use core::fmt::Write;
+    w.raw("{\"active\":[");
+    let mut k = 0;
+    crate::actions::for_each(&mut |e, now| {
+        let _ = write!(w, "{}{{\"id\":{},\"kind\":\"{}\",\"target\":", if k > 0 { "," } else { "" }, e.id, e.kind.name());
+        target_json(w, &e.target);
+        let left = if e.expires_ms == 0 { 0 } else { e.expires_ms.saturating_sub(now) / 1000 };
+        let _ = write!(w, ",\"expires_in_s\":{}}}", left);
+        k += 1;
+    });
+    w.raw("],\"audit\":[");
+    let mut n = 0;
+    crate::actions::for_each_audit(&mut |a| {
+        if n >= 50 {
+            return;
+        }
+        let _ = write!(w, "{}{{\"session\":\"{:02x}{:02x}{:02x}{:02x}\",\"kind\":\"{}\",\"target\":", if n > 0 { "," } else { "" },
+            a.session[0], a.session[1], a.session[2], a.session[3], a.kind.name());
+        target_json(w, &a.target);
+        let _ = write!(w, ",\"ttl_s\":{},\"ok\":{},\"result\":\"{}\",\"reason\":\"{}\"}}", a.ttl_s, a.ok,
+            if a.ok { "accepted" } else { a.refusal }, core::str::from_utf8(&a.reason[..a.rlen as usize]).unwrap_or(""));
+        n += 1;
+    });
+    w.raw("]}");
+}
+
 /// `set_cookie` sentinel: expire the session cookie (logout).
 pub const CLEAR_COOKIE: [u8; 32] = [b'-'; 32];
 
@@ -248,6 +297,27 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             Response { status: 302, ctype: "text/plain", body: Body::Scratch(0), location: Some("/login"), set_cookie: None }
         };
     }
+    crate::actions::tick(now_ms);
+    // ADR 0053: the only writes — reversible, TTL-bound actions behind origin + CSRF + replay guards.
+    if req.post && (req.path == "/api/actions" || req.path == "/api/actions/revoke") {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let r = if req.path == "/api/actions" {
+            crate::actionapi::submit(&c, req.body, auth).map(|id| id as u64)
+        } else {
+            crate::actionapi::revoke(&c, req.body).map(|_| 0)
+        };
+        return match r {
+            Ok(id) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"id\":{}}}", id);
+            }),
+            Err(why) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":false,\"refused\":\"{}\"}}", why);
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
     if !req.get {
         return json(scratch, |w| w.raw("{\"error\":\"method not allowed\"}")).with_status(405);
     }
@@ -256,6 +326,16 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         "/api/detections" => json(scratch, |w| st.render_detections(limit(200, 500), w)),
         "/api/incidents" => json(scratch, |w| st.render_incidents(limit(50, 500), w)),
         "/api/qsecbit" => json(scratch, |w| st.render_qsecbit(limit(20, 1000), w)),
+        "/api/session" => json(scratch, |w| {
+            use core::fmt::Write;
+            let mut t = [0u8; 32];
+            let _ = crate::mcauth::csrf_token(req.session, &mut t);
+            let tag = crate::mcauth::session_tag(req.session);
+            let _ = write!(w, "{{\"csrf\":\"{}\",\"next_seq\":{},\"live_sessions\":{},\"min_ttl_s\":{},\"max_ttl_s\":{}}}",
+                core::str::from_utf8(&t).unwrap_or(""), crate::actions::last_seq(tag) + 1, auth.live_sessions(now_ms),
+                crate::actions::MIN_TTL_S, crate::actions::MAX_TTL_S);
+        }),
+        "/api/actions" => json(scratch, |w| render_actions(w)),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
         "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
         "/api/flows" => json(scratch, |w| st.render_flows(st.ticks_at_ms(now_ms), limit(100, 256), w)),
