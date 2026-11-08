@@ -25,12 +25,19 @@ export interface DnsLive {
 }
 
 export const [dnsLive, setDnsLive] = createSignal<DnsLive | null>(null);
+/** 'loading' until the first answer; 'absent' only when the device API never answered (dev box —
+ *  the sample layout is shown ONLY then, never on a device where it would look like real controls). */
+export const [dnsState, setDnsState] = createSignal<'loading' | 'live' | 'absent'>('loading');
+let failures = 0;
 
 async function read(): Promise<void> {
   try {
     setDnsLive(await fetchJson<DnsLive>('/api/dns?limit=100'));
+    setDnsState('live');
+    failures = 0;
   } catch {
-    /* no device API: keep null */
+    failures += 1;
+    if (dnsState() === 'loading' && failures >= 3) setDnsState('absent');
   }
 }
 
@@ -38,6 +45,9 @@ let timer: ReturnType<typeof setInterval> | null = null;
 export function startDnsLive(): void {
   if (timer) return;
   void read();
+  // quick retries until the first answer, then every 10 s
+  setTimeout(() => void read(), 1500);
+  setTimeout(() => void read(), 4000);
   timer = setInterval(() => void read(), 10_000);
 }
 
