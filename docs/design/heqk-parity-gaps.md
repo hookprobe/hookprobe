@@ -39,7 +39,7 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 | G24a/G18 | ADR 0049 D2 IPv6 source identity → IPv6 scan/behaviour/IOC detection | M/L | **done + metal**: scan shape (`0a74b9ad`), JA4 + brute force + beacon (G35/G36), IOC IPv6 prefixes (signed pack `ip`/`cidr` v6, LPM + expiry; outbound dst + inbound src on the AP, attributed to the lease; LAN-client 16/16). Open: lateral LAN↔LAN v6 (see G10), IPv6-only devices (no lease to attribute) |
 | G13e | Deterministic incident reports | M | **closed** `fb417999` (deterministic reports) |
 | G20 | Signed WIFI.TXT (SSID, PSK, channel, guest) instead of build-time env | S | **closed** (batch 4) [P-wificfg] — AP builds without a build-time PSK |
-| G22 | Shield per-client profiles, pause, list refresh | M | **pause done + metal** (`9247fc4e`, H11a–c). Open: per-client profiles (signed DEVICES/BLOCK extension) and list refresh without re-flash |
+| G22 | Shield per-client profiles, pause, list refresh | M | **pause done + metal** (`9247fc4e`, H11a–c); **per-client profiles done + metal**: signed DEVICES.TXT `shield=standard|off|strict`, `/api/devices` `shield_profile` (UI: for the designer). Open: list refresh without re-flash — needs the HTTPS upload channel of task #20 |
 | G24b | ADR 0050 D4 EL0 steps 1-4 (HTTP, DHCP/DNS, PPPoE/DHCP clients, Noise) | L each | open |
 | G24c, G28 | crypto audit / libcrux ML-KEM; logout / session list / owner-key rotation | M / S | G28 logout **closed** (batch 5); key rotation needs G14; G24c **decision** |
 | G19 | HTP/SASE tunnel over the Noise channel | L | open |
@@ -47,7 +47,7 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 
 ## Needs the board
 
-G10 intra-BSS — **unicast done + metal** (firmware honours `ap_isolate`; heqk now relays station↔station after the lease + IDS gates: proxy-ARP + unicast relay, `tools/diagnostics/cm5-intrabss-check.sh` PASS, the IDS saw B's 4444 attempt at A); multicast discovery relay next (`ap_isolate`=1 now set at AP start, batch 5 — the board shows whether the firmware honours it); Shield on a non-Relay client; `/api/flows` + drill-down on metal;
+G10 intra-BSS — **unicast done + metal** (firmware honours `ap_isolate`; heqk now relays station↔station after the lease + IDS gates: proxy-ARP + unicast relay, `tools/diagnostics/cm5-intrabss-check.sh` PASS, the IDS saw B's 4444 attempt at A); **multicast discovery (mDNS/SSDP/LLMNR) + IPv6 station↔station done + metal** (`076f1fd8`, `e7a495d5`) (`ap_isolate`=1 now set at AP start, batch 5 — the board shows whether the firmware honours it); Shield on a non-Relay client; `/api/flows` + drill-down on metal;
 eth1 traffic; Wi-Fi TX-stall root cause; WPA3-SAE/PMF + guest SSID; LTE/USB WAN; native-IPv6 ISP (G17);
 RPMB floor (G24d, operator decision, irreversible); P-256 constant time — **done on the host** (`metal-evidence/20261108-p256-ct.md`: only validity-flag declassifications); WPA2 authenticator → EL0; G12 final
 acceptance (persistence across power cycle, OTA tryboot); re-flash validation of every AP-side fix.
