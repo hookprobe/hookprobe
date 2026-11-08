@@ -658,6 +658,7 @@ pub const RULE_BEACON: u16 = 116; // parity: napse-capture beacon 1000040 (A10/L
 pub const RULE_LATERAL: u16 = 117; // parity: napse-capture lateral 1000041 (A10)
 pub const RULE_EXFIL: u16 = 118; // parity: bulk outbound exfil 1000025
 pub const RULE_DNS: u16 = 119; // parity: DNS tunneling/DGA 1000002/1000021/1000011
+pub const RULE_BRUTE: u16 = 124; // brute force on one admin service (T1110), observe-only
 pub const RULE_TRUNCATED: u16 = 120; // SG-2: net::parse None -> fail-closed drop (matrix F4)
 
 /// M2.3 L2/L3 RESOURCE-SHED (matrix A7 conntrack-saturation / A8 scheduler-pressure / L9
@@ -756,6 +757,15 @@ pub fn beacon_verdict_at(src: u32, dst: u32, dst_port: u16, now: u64) -> Option<
 /// but sources `now` from the real monotonic clock instead of an injected test value.
 pub fn beacon_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
     beacon_verdict_at(src, dst, dst_port, crate::behavioral::now_secs())
+}
+
+/// Rule 124 brute force — a connection ATTEMPT (SYN-only) to an admin service; fires (observe-only) once per
+/// answered burst. `brute_answer` records the server's SYN-ACK (the D3 evidence the service exists).
+pub fn brute_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
+    if !crate::behavioral::brute_attempt_at(src, dst, dst_port, crate::behavioral::now_secs()) {
+        return None;
+    }
+    Some(behavioral_verdict(RULE_BRUTE, src, crate::corroboration::AXIS_LATERAL))
 }
 
 /// M2.4 / LATERAL (A10 detection-half) — one internal source fanning out across many
