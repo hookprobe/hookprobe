@@ -86,7 +86,11 @@ pub const BEACON_MIN_MEAN_INTERVAL: u64 = 8;
 /// NTP — exempt by default regardless of how regular the interval (FP guard #4 / L8).
 pub const BEACON_NTP_PORT: u16 = 123;
 
-const BEACON_KEYS: usize = 256;
+/// 2-way set-associative (was 256 direct-mapped by `key % 256` — the low 8 bits of the key are the SOURCE's
+/// last octet only, so every (dst, port) a host used landed in ONE slot and evicted the last: a host that
+/// talked to anything besides its C2 never accumulated a beacon ring). 4096 slots, hashed sets, and a miss
+/// evicts the candidate with the shorter history, so a ring that is building towards a verdict survives churn.
+const BEACON_KEYS: usize = 4096;
 /// Ring depth: last N timestamps → up to N-1 intervals. 8 holds MIN_CONNECTIONS (6) with
 /// headroom while keeping the per-key state tiny.
 const BEACON_RING: usize = 8;
@@ -100,7 +104,7 @@ static BC_TS: [[AtomicU64; BEACON_RING]; BEACON_KEYS] =
 /// Fold (src,dst,port) into a non-zero per-destination key (bit 48 set distinguishes any
 /// real key from the empty-slot sentinel). Per-`(src,dst,port)` scoping mirrors the Linux
 /// tracker: independent periodic services on one host are judged separately, never
-/// conflated. Direct-mapped by `key % BEACON_KEYS`; a colliding key evicts (documented).
+/// conflated. Placed by `beacon_observe_at` (2-way, hashed); a colliding key evicts the shorter history.
 #[inline]
 pub fn beacon_key(src: u32, dst: u32, port: u16) -> u64 {
     (((src as u64) ^ ((dst as u64) << 16) ^ ((port as u64) << 33)) & ((1u64 << 48) - 1)) | (1u64 << 48)
@@ -119,8 +123,17 @@ pub fn beacon_observe_at(src: u32, dst: u32, dst_port: u16, now: u64) -> bool {
         return false;
     }
     let key = beacon_key(src, dst, dst_port);
-    let i = (key as usize) % BEACON_KEYS;
-    // Collision-reset: a different (src,dst,port) aliasing this slot evicts the prior
+    let set = crate::ratelimit::slot(key, BEACON_KEYS / 2) * 2;
+    let i = if BC_KEY[set].load(Ordering::Relaxed) == key {
+        set
+    } else if BC_KEY[set + 1].load(Ordering::Relaxed) == key {
+        set + 1
+    } else if BC_FILL[set + 1].load(Ordering::Relaxed) < BC_FILL[set].load(Ordering::Relaxed) {
+        set + 1 // evict the shorter history
+    } else {
+        set
+    };
+    // Collision-reset: a different (src,dst,port) taking this slot evicts the prior
     // occupant's ring so one destination's timing is never counted against another's.
     if BC_KEY[i].load(Ordering::Relaxed) != key {
         BC_KEY[i].store(key, Ordering::Relaxed);
@@ -235,7 +248,7 @@ fn lat_is_tracked_port(port: u16) -> bool {
 
 #[inline]
 fn lat_touch(src: u64) -> usize {
-    let s = (src as usize) % LAT_SRCS;
+    let s = crate::ratelimit::slot(src as u64, LAT_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(LAT_WINDOW_SECS);
     let start = LAT_WIN[s].load(Ordering::Relaxed);
@@ -263,7 +276,7 @@ pub fn lateral_observe(src: u32, dst: u32, dst_port: u16) -> bool {
     let s = lat_touch(src as u64);
     let gen = LAT_GEN[s].load(Ordering::Relaxed);
     let pk = (dst as u64) | (1u64 << 48); // non-zero peer key
-    let i = (dst as usize) % LAT_PEER_SET;
+    let i = crate::ratelimit::slot(dst as u64, LAT_PEER_SET);
     let seen = LAT_PEER_GEN[s][i].load(Ordering::Relaxed) == gen
         && LAT_PEER_KEY[s][i].load(Ordering::Relaxed) == pk;
     if !seen {
@@ -280,7 +293,7 @@ pub fn lateral_distinct_peers(src: u32) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = (src as usize) % LAT_SRCS;
+    let s = crate::ratelimit::slot(src as u64, LAT_SRCS);
     if LAT_SRC[s].load(Ordering::Relaxed) != src as u64 {
         return 0;
     }
@@ -316,7 +329,7 @@ pub fn exfil_observe(src: u32, dst: u32, bytes: u64) -> bool {
     if !is_internal(src) || is_internal(dst) {
         return false;
     }
-    let s = (src as usize) % EXFIL_SRCS;
+    let s = crate::ratelimit::slot(src as u64, EXFIL_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(EXFIL_WINDOW_SECS);
     let start = EX_WIN[s].load(Ordering::Relaxed);
@@ -545,6 +558,47 @@ pub fn brute_selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-brute] {} — rule 124 brute force (T1110, observe-only): answered 40-attempt burst on :22 fires once={} | closed service (never answered) silent={} | 5 legit logins silent={} | one-per-port spread silent={} | management floor exempt={}\n",
         if pass { "PASS" } else { "FAIL" }, burst, !closed, !few, !spread, !mgmt
+    ));
+    pass
+}
+
+/// `[P-beacon-busy]` — beaconing from a BUSY host. Before the fix every (dst, port) of one source shared a single
+/// slot, so a host that did anything besides beaconing never accumulated a ring. Here a host beacons to its C2
+/// every 60 s (8 beats) while opening 40 connections to other destinations between beats: it must be detected;
+/// a host with the same churn and no regular destination must not be.
+#[cfg(not(feature = "cm5"))]
+pub fn beacon_busy_selftest() -> bool {
+    beacon_reset_for_test();
+    let host = u32::from_be_bytes([10, 99, 0, 10]);
+    let c2 = u32::from_be_bytes([203, 0, 113, 50]);
+    let mut fired = false;
+    let mut t = 1_000u64;
+    for beat in 0..8u32 {
+        fired |= beacon_observe_at(host, c2, 443, t);
+        for k in 0..40u32 {
+            // browsing: distinct destinations, irregular times (never a beacon themselves)
+            let d = u32::from_be_bytes([100, 64, (beat * 40 + k) as u8, (k * 7) as u8]);
+            let _ = beacon_observe_at(host, d, 443, t + 1 + (k as u64 * 13) % 50);
+        }
+        t += 60;
+    }
+    // control: the same churn, no regular destination -> no beacon
+    beacon_reset_for_test();
+    let quiet = u32::from_be_bytes([10, 99, 0, 11]);
+    let mut false_pos = false;
+    let mut t = 1_000u64;
+    for beat in 0..8u32 {
+        for k in 0..40u32 {
+            let d = u32::from_be_bytes([100, 65, (beat * 40 + k) as u8, (k * 7) as u8]);
+            false_pos |= beacon_observe_at(quiet, d, 443, t + 1 + (k as u64 * 13) % 50);
+        }
+        t += 60;
+    }
+    beacon_reset_for_test();
+    let pass = fired && !false_pos;
+    arch_aarch64::_print(format_args!(
+        " [P-beacon-busy] {} — beaconing from a busy host (C2 every 60 s x8 + 40 other connections between beats) detected={} | same churn, no regular destination, no beacon={}\n",
+        if pass { "PASS" } else { "FAIL" }, fired, !false_pos
     ));
     pass
 }
