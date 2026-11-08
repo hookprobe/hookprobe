@@ -33,8 +33,8 @@ ml-kem           = { version = "0.2", default-features = false, features = ["det
 # implement but does NOT re-export — needed in scope to call `.decapsulate()`.
 # no_std + forbid(unsafe_code); pinned to the exact rev ml-kem 0.2.3 resolves.
 kem              = { version = "=0.3.0-pre.0", default-features = false, optional = true }
-x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"], optional = true }
-chacha20poly1305 = { version = "0.10", default-features = false, optional = true }
+x25519-dalek     = { version = "3", default-features = false, features = ["static_secrets"], optional = true }
+chacha20poly1305 = { version = "0.11", default-features = false, optional = true }
 # M5.2 (Track C) — the Wasm-host BEACHHEAD ships a BESPOKE MINIMAL no_std interpreter
 # (kernel/src/wasmhost.rs) with ZERO external dependencies. FEASIBILITY was assessed
 # first: `wasmi` 0.32 (pure-Rust no_std interpreter) DOES build for
