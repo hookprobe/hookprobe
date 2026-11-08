@@ -417,6 +417,13 @@ impl McState {
             opt(out, "category", id.category);
             let _ = write!(out, ",\"confidence\":{},\"id_source\":\"{}\",\"identity\":\"{:016x}\",\"identity_basis\":\"{}\"",
                 id.confidence, id.source, id.identity, id.identity_basis);
+            // D2: what the device announced about itself (mDNS / SSDP), verbatim (sanitised, bounded)
+            if let Some(d) = crate::discovery::lookup(&l.mac) {
+                opt(out, "mdns_name", core::str::from_utf8(&d.name[..d.nl as usize]).unwrap_or(""));
+                opt(out, "mdns_model", core::str::from_utf8(&d.model[..d.ml as usize]).unwrap_or(""));
+                opt(out, "ssdp_server", core::str::from_utf8(&d.server[..d.sl as usize]).unwrap_or(""));
+                let _ = write!(out, ",\"services\":{}", d.services);
+            }
             let pol = crate::devpolicy::policy_of(&l.mac);
             let mut lb = [0u8; 31];
             let ll = crate::devpolicy::label_of(&l.mac, &mut lb);

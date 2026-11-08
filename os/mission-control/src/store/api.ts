@@ -159,6 +159,11 @@ export interface DeviceRow {
   id_source?: string;
   identity?: string;
   identity_basis?: 'high' | 'low' | 'none';
+  /** discovery D2: what the device announced (mDNS / SSDP) */
+  mdns_name?: string | null;
+  mdns_model?: string | null;
+  ssdp_server?: string | null;
+  services?: number;
 }
 export interface DevicesResponse {
   count: number;
