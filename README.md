@@ -56,6 +56,10 @@ described by a platform manifest, rather than exposed as separate products. Dete
 to be observable by default, with enforcement constrained to confirmed attacks and resource
 exhaustion.
 
+For the system-wide design—from HookProbe's mission and operating model to its shared services,
+trust boundaries, and platform strategy—read the
+[HookProbe high-level design](docs/design/hookprobe-high-level-design.md).
+
 ## Inside HookProbe OS
 
 <p align="center">
@@ -70,6 +74,9 @@ validated behavior from work that is not yet publicly released.
 
 Read the [OS architecture](docs/architecture/Readme.md) and
 [Mission Control specification](docs/architecture/MissionControl.md) for the full design.
+For the kernel, device, and packet-path details, see the
+[heqk low-level design](docs/design/heqk-low-level-design.md). It distinguishes the conceptual
+target architecture from the portions validated on QEMU and CM5.
 
 ## What has been demonstrated
 
