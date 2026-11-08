@@ -10679,15 +10679,33 @@ static DRIVER_REPORT: AtomicU32 = AtomicU32::new(0);
 // prerequisite for P12 ("a publisher may hold Topic{W} but not Topic{R}"). Steps 1-3
 // of PER_TCB_CSPACE.md: behavior-preserving (the root task is tid 0), with the
 // per-spawn `mint` + the [P3-iso] isolation gate as the completion step.
-static mut CSPACE: [Option<caps::CapSpace>; scheduler::MAX_THREADS] =
-    [const { None }; scheduler::MAX_THREADS];
+//
+// Image budget: `[None; N]` of Option<CapSpace> is NOT all-zero bytes (the None niche lives inside
+// CapSpace), which put the whole ~212 KiB table in .data — inside the signed boot image (hboot caps it
+// at 5 MiB). The table is now zero-filled (.bss) and every slot is written to `None` on first access.
+static mut CSPACE: core::mem::MaybeUninit<[Option<caps::CapSpace>; scheduler::MAX_THREADS]> =
+    core::mem::MaybeUninit::zeroed();
+static CSPACE_INIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// The per-tid CSpace table, initialised to all-`None` on first use.
+fn cspace_tab() -> &'static mut [Option<caps::CapSpace>; scheduler::MAX_THREADS] {
+    use core::sync::atomic::Ordering;
+    let base = unsafe { core::ptr::addr_of_mut!(CSPACE) as *mut Option<caps::CapSpace> };
+    if !CSPACE_INIT.load(Ordering::Acquire) {
+        for i in 0..scheduler::MAX_THREADS {
+            unsafe { base.add(i).write(None) };
+        }
+        CSPACE_INIT.store(true, Ordering::Release);
+    }
+    unsafe { &mut *(base as *mut [Option<caps::CapSpace>; scheduler::MAX_THREADS]) }
+}
 
 /// The CSpace of thread `tid`, if it has one.
 fn cspace_of(tid: usize) -> Option<&'static caps::CapSpace> {
     if tid >= scheduler::MAX_THREADS {
         return None;
     }
-    unsafe { (*core::ptr::addr_of!(CSPACE)).get(tid).and_then(|c| c.as_ref()) }
+    cspace_tab().get(tid).and_then(|c| c.as_ref())
 }
 
 /// The currently-running thread's CSpace (what a cap syscall resolves against).
@@ -10708,7 +10726,7 @@ fn install_cspace(tid: usize, cs: caps::CapSpace) {
     if tid >= scheduler::MAX_THREADS {
         return;
     }
-    unsafe { (*core::ptr::addr_of_mut!(CSPACE))[tid] = Some(cs) };
+    cspace_tab()[tid] = Some(cs);
 }
 
 /// CORE-2 teardown (A1a) — DROP a thread's CSpace on its FINAL exit. Without this a reused
@@ -10723,7 +10741,7 @@ fn clear_cspace(tid: usize) {
     if tid >= scheduler::MAX_THREADS {
         return;
     }
-    unsafe { (*core::ptr::addr_of_mut!(CSPACE))[tid] = None };
+    cspace_tab()[tid] = None;
 }
 
 /// Build the root task's CSpace: retype real-frame-backed caps from an Untyped
@@ -10746,7 +10764,7 @@ fn build_root_cspace() {
         base, fbase, if ok { "verified" } else { "FAIL" }
     );
     // CORE-2: the root task is scheduler tid 0.
-    unsafe { (*core::ptr::addr_of_mut!(CSPACE))[0] = Some(cs) };
+    cspace_tab()[0] = Some(cs);
 }
 
 /// CORE-2 `[P2-iso]` — prove the property per-TCB CSpaces exist for: two DISTINCT
