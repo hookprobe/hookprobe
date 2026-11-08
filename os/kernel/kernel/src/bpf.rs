@@ -15,7 +15,7 @@ pub const DROP: u64 = 2;
 pub const INVALID: u64 = 0; // OOB / unknown op / step limit — caller fails safe
 
 // BPF instruction encoding: u8 opcode | u4 dst | u4 src | i16 off | i32 imm.
-const fn insn(op: u8, dst: u8, src: u8, off: i16, imm: i32) -> u64 {
+pub const fn insn(op: u8, dst: u8, src: u8, off: i16, imm: i32) -> u64 {
     (op as u64)
         | ((dst as u64) << 8)
         | ((src as u64) << 12)

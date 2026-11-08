@@ -161,7 +161,7 @@ fn load_body_jit(body: &[u8], jit: bool, arm: bool) -> Result<PackInfo, &'static
                 // only with a safe margin left (64 KiB), else arm the rule on the interpreter (same
                 // verdicts, slower) — a big pack must never take the kernel down at boot.
                 let room = crate::heap::remaining() > JIT_HEAP_MARGIN + ni * 64;
-                let j = if jit && room { arch_aarch64::bpf_jit::compile(prog).unwrap_or(0) } else { 0 };
+                let j = if jit && room { arch_aarch64::bpf_jit::compile_with_helper(prog, crate::ratelimit::call_helper_c as usize, crate::ratelimit::JIT_HELPERS).unwrap_or(0) } else { 0 };
                 if jit && !room {
                     info.interp_only += 1;
                 }

@@ -2708,6 +2708,7 @@ fn cm5_p8_verify() {
             let wx_ok = ro(exec_desc) && ro(alias_desc);
             kprint!(" [P8-WX] {} — JIT code RO+X; frame {:#x} alias sealed RO (no writable alias): exec_ro={} alias_ro={} (B-9)\n",
                 if wx_ok { "PASS" } else { "FAIL" }, frame_pa, ro(exec_desc), ro(alias_desc));
+            let _ = rules::jit_call_selftest(); // BPF CALL in the JIT, differential on silicon
         }
         None => kprint!(" [P8-JIT] FAIL — JIT compile returned None on metal\n"),
     }
@@ -6456,6 +6457,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = dga::selftest();
         let _ = ioc::selftest();
         let _ = oui::selftest();
+        let _ = rules::jit_call_selftest();
         let _ = devpolicy::selftest();
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();
