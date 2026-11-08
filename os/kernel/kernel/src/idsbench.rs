@@ -108,5 +108,50 @@ pub fn run(iters: u32) -> u64 {
         iters, NAMES[0], ns[0], NAMES[1], ns[1], NAMES[2], ns[2], NAMES[3], ns[3], NAMES[4], ns[4],
         mix, if mix > 0 { 1_000_000 / mix } else { 0 }, if mix > 0 { 1_000_000 / mix * 1400 * 8 / 1000 } else { 0 }
     ));
+    tiers(iters);
     mix
+}
+
+/// Where the time goes: each tier the datapath runs on the dominant frame (TCP data, 60 % of the mix), timed
+/// alone on the same frame. Sum ≈ the verdict cost minus dispatch; tells the next optimisation what to target.
+fn tiers(iters: u32) {
+    use crate::rules as r;
+    let fr = cntfrq().max(1);
+    let mut f = [0u8; 1514];
+    let n = build(0, &mut f);
+    let fr_ = &f[..n];
+    let src = crate::net::eth_ipv4_src(fr_);
+    let role = crate::verdict::port_role_for(0);
+    let l4off = 34usize;
+    let pay = 54usize;
+    let mut t = [0u64; 10];
+    let time = |k: &mut u64, g: &mut dyn FnMut() -> u32| {
+        let _ = g();
+        let t0 = cntpct();
+        let mut acc = 0u32;
+        for _ in 0..iters {
+            acc = acc.wrapping_add(g());
+        }
+        let dt = cntpct().wrapping_sub(t0);
+        core::hint::black_box(acc);
+        *k = dt.saturating_mul(1_000_000_000) / fr / iters.max(1) as u64;
+    };
+    time(&mut t[0], &mut || crate::net::parse(fr_).map_or(0, |m| m.dst_port as u32));
+    time(&mut t[1], &mut || r::l2_stateful_verdict(fr_, src, 0, role).map_or(0, |v| v.is_drop() as u32));
+    time(&mut t[2], &mut || r::run_l2(fr_, src) as u32);
+    time(&mut t[3], &mut || r::run_flow(fr_, src) as u32);
+    time(&mut t[4], &mut || r::flow_scan_verdict(fr_, src).map_or(0, |v| v.is_drop() as u32));
+    time(&mut t[5], &mut || r::conn_rate_shed_verdict(fr_, src).map_or(0, |v| v.is_drop() as u32));
+    time(&mut t[6], &mut || r::resource_shed_verdict(src).map_or(0, |v| v.is_drop() as u32));
+    time(&mut t[7], &mut || {
+        crate::ja4::observe(&fr_[pay..], src);
+        0
+    });
+    time(&mut t[8], &mut || r::run_tcp(&fr_[l4off..], src) as u32);
+    time(&mut t[9], &mut || r::run_l4(&fr_[l4off..], src) as u32);
+    let sum: u64 = t.iter().sum();
+    arch_aarch64::_print(format_args!(
+        " [IDS-TIERS] tcp-data ns per tier: parse={} l2-stateful={} l2={} flow={} scan={} conn-rate={} resource-shed={} ja4={} tcp-flags={} l4-rules={} | sum={}\n",
+        t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], t[9], sum
+    ));
 }
