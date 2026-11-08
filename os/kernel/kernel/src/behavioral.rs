@@ -433,3 +433,118 @@ pub fn beacon_reset_for_test() {
         i += 1;
     }
 }
+
+
+// =====================================================================================
+// BRUTE FORCE (rule 124, T1110) — many connection attempts from ONE source to ONE admin service on ONE
+// server: password guessing against SSH / RDP / VNC / SMB / databases / mail. The port-scan tier counts
+// DISTINCT ports, so a single-port guessing burst never reaches it. Legacy NAPSE counted > 50 SYN-only
+// packets to an admin port with no evidence the service exists. Here (ADR 0049 D3 rule): it fires only if
+// that server ANSWERED at least once in the window (a SYN-ACK was seen) — hammering a closed or absent
+// service is noise, not a login attempt. Observe-only (behavioural, ADR 0023); the management floor is
+// exempt (the operator's own SSH); a refire cooldown keeps one burst one alert.
+// =====================================================================================
+
+pub const BRUTE_PORTS: &[u16] = &[21, 22, 23, 25, 110, 143, 445, 465, 587, 993, 995, 1433, 3306, 3389, 5432, 5900, 6379, 27017];
+/// Attempts to one service within the window that make a burst.
+pub const BRUTE_THRESHOLD: u64 = 20;
+const BRUTE_WINDOW_SECS: u64 = 60;
+const BRUTE_COOLDOWN_SECS: u64 = 600;
+const BRUTE_SLOTS: usize = 128;
+
+static BF_KEY: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_WIN: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_COUNT: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_ANSWERED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_FIRED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+
+fn brute_key(src: u32, dst: u32, port: u16) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in src.to_be_bytes().iter().chain(dst.to_be_bytes().iter()).chain(port.to_be_bytes().iter()) {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h | 1
+}
+
+/// The admin SERVER answered `client` on `port` (a SYN-ACK from server -> client).
+pub fn brute_answer_at(server: u32, client: u32, port: u16, now: u64) {
+    if !BRUTE_PORTS.contains(&port) || client == 0 {
+        return;
+    }
+    let k = brute_key(client, server, port);
+    let s = (k as usize) % BRUTE_SLOTS;
+    if BF_KEY[s].load(Ordering::Relaxed) == k && now.saturating_sub(BF_WIN[s].load(Ordering::Relaxed)) < BRUTE_WINDOW_SECS {
+        BF_ANSWERED[s].store(1, Ordering::Relaxed);
+    }
+}
+
+/// A connection attempt (SYN-only) from `src` to `dst:port`. True once per burst (then cooldown).
+pub fn brute_attempt_at(src: u32, dst: u32, port: u16, now: u64) -> bool {
+    if src == 0 || !BRUTE_PORTS.contains(&port) || crate::verdict::is_allowlisted(src) {
+        return false;
+    }
+    let k = brute_key(src, dst, port);
+    let s = (k as usize) % BRUTE_SLOTS;
+    if BF_KEY[s].load(Ordering::Relaxed) != k || now.saturating_sub(BF_WIN[s].load(Ordering::Relaxed)) >= BRUTE_WINDOW_SECS {
+        BF_KEY[s].store(k, Ordering::Relaxed);
+        BF_WIN[s].store(now, Ordering::Relaxed);
+        BF_COUNT[s].store(1, Ordering::Relaxed);
+        BF_ANSWERED[s].store(0, Ordering::Relaxed);
+        return false;
+    }
+    let n = BF_COUNT[s].fetch_add(1, Ordering::Relaxed) + 1;
+    if n < BRUTE_THRESHOLD || BF_ANSWERED[s].load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    let last = BF_FIRED[s].load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < BRUTE_COOLDOWN_SECS {
+        return false;
+    }
+    BF_FIRED[s].store(now.max(1), Ordering::Relaxed);
+    true
+}
+
+/// Clear the table (tests).
+pub fn brute_reset() {
+    for s in 0..BRUTE_SLOTS {
+        BF_KEY[s].store(0, Ordering::Relaxed);
+        BF_FIRED[s].store(0, Ordering::Relaxed);
+    }
+}
+
+/// `[P-brute]`: fires on an answered single-service burst, once; silent on a closed service, a few
+/// logins, a different-ports pattern, and the management floor.
+pub fn brute_selftest() -> bool {
+    brute_reset();
+    let (att, srv) = (0xC633_6401u32, 0x0A63_000Au32); // 198.51.100.1 -> 10.99.0.10
+    let t = 1_000u64;
+    let _ = brute_attempt_at(att, srv, 22, t);
+    brute_answer_at(srv, att, 22, t);
+    let mut fired = 0;
+    for i in 1..40u64 {
+        if brute_attempt_at(att, srv, 22, t + i) { fired += 1; }
+        brute_answer_at(srv, att, 22, t + i);
+    }
+    let burst = fired == 1;
+    // closed service: 40 SYNs, never answered
+    let mut closed = false;
+    for i in 0..40u64 { closed |= brute_attempt_at(att, srv, 3389, t + i); }
+    // a few legit logins
+    let mut few = false;
+    for i in 0..5u64 { few |= brute_attempt_at(0x0A63_0014, srv, 22, t + i); brute_answer_at(srv, 0x0A63_0014, 22, t + i); }
+    // one attempt per port across ports (the scan tier's case, not brute force)
+    let mut spread = false;
+    for (i, p) in BRUTE_PORTS.iter().enumerate() { spread |= brute_attempt_at(0xC633_6402, srv, *p, t + i as u64); brute_answer_at(srv, 0xC633_6402, *p, t + i as u64); }
+    // management floor source never fires
+    let (fnet, _, _) = crate::verdict::mgmt_floor();
+    let mut mgmt = false;
+    for i in 0..40u64 { mgmt |= brute_attempt_at(fnet | 5, srv, 22, t + i); brute_answer_at(srv, fnet | 5, 22, t + i); }
+    brute_reset();
+    let pass = burst && !closed && !few && !spread && !mgmt;
+    arch_aarch64::_print(format_args!(
+        " [P-brute] {} — rule 124 brute force (T1110, observe-only): answered 40-attempt burst on :22 fires once={} | closed service (never answered) silent={} | 5 legit logins silent={} | one-per-port spread silent={} | management floor exempt={}\n",
+        if pass { "PASS" } else { "FAIL" }, burst, !closed, !few, !spread, !mgmt
+    ));
+    pass
+}

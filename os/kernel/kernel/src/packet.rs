@@ -376,6 +376,10 @@ fn classify_tiers(frame: &[u8]) -> (u16, u16) {
             if m.ip_proto == crate::net::IPPROTO_TCP && syn {
                 let _ = crate::rules::beacon_verdict(src, dst, m.dst_port);
                 let _ = crate::rules::lateral_verdict(src, dst, m.dst_port);
+                let _ = crate::rules::brute_verdict(src, dst, m.dst_port);
+            } else if m.ip_proto == crate::net::IPPROTO_TCP && frame.get(m.l4_off + 13).map_or(false, |&f| f & 0x12 == 0x12) {
+                // a SYN-ACK: the admin service answered (rule 124's evidence; server = src, client = dst)
+                crate::behavioral::brute_answer_at(src, dst, m.src_port, crate::behavioral::now_secs());
             } else if m.dst_port == 53 {
                 let _ = crate::rules::dns_verdict(frame);
             }
