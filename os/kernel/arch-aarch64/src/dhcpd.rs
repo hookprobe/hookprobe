@@ -69,6 +69,15 @@ impl ApDhcp {
         self.slot(mac).map(|i| self.leases[i].ip)
     }
 
+    /// Every station holding a live lease (G10 multicast discovery relay).
+    pub fn for_each_live(&self, f: &mut dyn FnMut(&[u8; 6], &[u8; 4])) {
+        for l in self.leases[..self.nleases].iter() {
+            if self.live(l) {
+                f(&l.mac, &l.ip);
+            }
+        }
+    }
+
     /// The station holding a LIVE lease on `ip` (G10 LAN relay: proxy-ARP / station-to-station forwarding).
     pub fn mac_for_ip(&self, ip: &[u8; 4]) -> Option<[u8; 6]> {
         self.leases[..self.nleases].iter().find(|l| self.live(l) && l.ip == *ip).map(|l| l.mac)

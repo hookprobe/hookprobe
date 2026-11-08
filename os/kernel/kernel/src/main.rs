@@ -3829,6 +3829,11 @@ fn cm5_p10_probe() {
                                             dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
                                             dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.active(), dh.arp_replies);
+                                    } else if act == 0 && lanrelay::is_discovery_mcast(frame) {
+                                        // G10: mDNS / SSDP / LLMNR from a station -> the other stations (IDS verdict first)
+                                        if packet::verdict(frame).1 != packet::DROP {
+                                            let _ = lanrelay::relay_discovery(frame, &dh, cyw43::now_secs(), &mut |f| wifi_send!(f));
+                                        }
                                     } else if act == 0 && frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
                                         // G10: an ARP request for ANOTHER station — answer for it (proxy-ARP) so the pair can
                                         // talk THROUGH heqk (the firmware's ap_isolate keeps them from talking directly).
