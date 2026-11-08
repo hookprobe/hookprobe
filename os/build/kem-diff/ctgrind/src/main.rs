@@ -66,6 +66,7 @@ fn lc(i: u8) -> bool {
 
 fn main() {
     let which = std::env::args().nth(1).unwrap_or_default();
-    let ok = (0..3u8).all(|i| if which == "lc" { lc(i) } else { rc(i) });
-    println!("kem-ctgrind {}: functional {}", if which == "lc" { "libcrux" } else { "RustCrypto" }, if ok { "ok" } else { "WRONG" });
+    let ok = (0..3u8).all(|i| match which.as_str() { "lc" => lc(i), _ => rc(i) });
+    let name = match which.as_str() { "lc" => "libcrux 0.0.11", _ => "RustCrypto ml-kem 0.2.3" };
+    println!("kem-ctgrind {name}: functional {}", if ok { "ok" } else { "WRONG" });
 }

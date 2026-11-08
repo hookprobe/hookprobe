@@ -1,0 +1,16 @@
+# Constant-time (ctgrind-style) check of RustCrypto ml-kem 0.3.4 — the shipping ML-KEM since 2026-11-08.
+# Separate crate: 0.3.x needs kem 0.3.0, which cannot coexist with 0.2.3's exact kem 0.3.0-pre.0 pin.
+[package]
+name = "kem-ctgrind-034"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+ml-kem = { version = "=0.3.4", default-features = false }
+crabgrind = "=0.3.1"
+
+[profile.release]
+debug = true
