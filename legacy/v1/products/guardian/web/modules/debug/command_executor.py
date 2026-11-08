@@ -7,6 +7,7 @@ Security model:
 - Output is streamed for long-running commands
 - Rate limiting prevents abuse
 """
+import logging
 import os
 import re
 import shlex
@@ -666,7 +667,8 @@ def execute_command(command_line: str) -> Generator[str, None, None]:
     except subprocess.TimeoutExpired:
         yield "[TIMEOUT] Command did not complete\n"
     except Exception as e:
-        yield f"[ERROR] {str(e)}\n"
+        logging.getLogger(__name__).exception("Command execution failed")
+        yield "[ERROR] Command execution failed\n"
 
 
 def get_command_categories() -> Dict[str, List[Dict]]:
