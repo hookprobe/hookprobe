@@ -92,6 +92,16 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | H9 | curl POST `ttl=999999` | 400 "ttl out of bounds" | curl |
 | H10 | Hold an address inside the management floor (e.g. the mgmt laptop) | refused "management floor" (audited); management access never interrupted | curl + browser |
 
+## I. AP provisioning (G12, ADR 0054)
+
+| ID | Test | Expected | Evidence |
+|---|---|---|---|
+| I1 | Image with no WIFI.TXT and no build PSK | serial `[WIFI] setup AP "HookProbe-Setup-XXXX" — per-device passphrase …`; that SSID is visible on the phone | serial + phone |
+| I2 | Join with the printed passphrase (or scan the QR payload) | joins, DHCP lease, internet; Mission Control still asks for the owner key | phone |
+| I3 | Power cycle / re-flash the same board | same SSID + passphrase (device-unique, stable); never a shared default | serial |
+| I4 | Same image on a second board (when available) | different SSID suffix + passphrase | serial |
+| I5 | Image with a signed WIFI.TXT | the client AP (operator SSID) replaces the setup AP | serial + phone |
+
 ## E. Platform (from earlier sessions, still open)
 
 | ID | Test | Expected |

@@ -248,7 +248,7 @@ fn render_actions(w: &mut JsonBuf) {
             a.session[0], a.session[1], a.session[2], a.session[3], a.kind.name());
         target_json(w, &a.target);
         let _ = write!(w, ",\"ttl_s\":{},\"ok\":{},\"result\":\"{}\",\"reason\":\"{}\"}}", a.ttl_s, a.ok,
-            if a.ok { "accepted" } else { a.refusal }, core::str::from_utf8(&a.reason[..a.rlen as usize]).unwrap_or(""));
+            if a.ok { "accepted" } else { a.refusal.unwrap_or("refused") }, core::str::from_utf8(&a.reason[..a.rlen as usize]).unwrap_or(""));
         n += 1;
     });
     w.raw("]}");
