@@ -11,7 +11,7 @@ Status `built` = committed + QEMU/host-proven, not yet on silicon.
 | # | Gap | Status | Board? | Notes |
 |---|---|---|---|---|
 | 1 | ADR 0049 D1 signed POLICY.TXT — metal check | **metal: signature OK** (AP image `74cb1a9`, `[POLICY] signature OK — operator key, generation 2 (floor 2)`) | — | **tampered POLICY.TXT metal PASS** (admin prefix widened /32→/24, signature untouched): `signature REFUSED (DigestMismatch)` → management LOCKED; fortress mgmt ping 4/4 before → 0/4 after (`dropped=4`); AP + HTTPS still up. Evidence `~/heqk-metal-logs/20261107-ADR0049-D1-tampered-policy-metal.txt` |
-| 2 | POLICY.TXT anti-rollback floor **persisted** | partial (floor compiled into the image) | **Decision** | a floor an attacker with the card cannot roll back needs the eMMC **RPMB** partition — programming its key is irreversible |
+| 2 | POLICY.TXT generation floor **persisted** (≠ the boot SVN floor) | compile-time floor in the image | **Deferred** (decision 2026-11-08) | RPMB key programming deferred; the boot SVN compile floor is active and the OTP thermometer path exists unprovisioned — see `heqk-decisions-2026-11-08.md` §A |
 | 3 | ADR 0049 D3 response-observed scans — metal check | **metal: nmap sweep fired rule 113 (93 drops)** | Board (optional) | real `nmap -sS` / `-sT` across the passive sensor + through the AP; confirm one-sided traffic stays uncounted |
 | 4 | ADR 0049 D2 IPv6 source identity (device-keyed LAN, /64 WAN) | **designed** (ADR 0049 D2 detailed design) | no | build later per operator (gap 13) |
 | 5 | P-256 signing timing review | **source review done** — no secret-dependent branch/index | Board (empirical) | residual: compiler/µarch; a dudect-style timing run on the CM5 |

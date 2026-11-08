@@ -34,7 +34,7 @@ SVN bound into signed message; load geometry pinned; AK zeroized (moot under SEC
 | ID | Sev | File:line | Gap | Fix |
 |---|---|---|---|---|
 | SEC-1 (V2) | High | ak_derive.rs:203 | first-boot OTP burn discards TRNG liveness → predictable per-device AK fused irreversibly | check live-word count; skip burn + SW-AK fallback if live<8 |
-| SEC-2 (V3) | High | stage2.rs:63 | EL1 can read OTP secret via VC mailbox (GB4..511 RW) → reconstructs "non-extractable" AK | invalidate mailbox page in stage-2; expose OTP only via hvc |
+| SEC-2 (V3) | ~~High~~ **CLOSED 2026-09-10 (metal: EL2 mailbox proxy + stage-2 carve)** | stage2.rs:63 | EL1 can read OTP secret via VC mailbox (GB4..511 RW) → reconstructs "non-extractable" AK | invalidate mailbox page in stage-2; expose OTP only via hvc |
 | SEC-3 (V4) | High | config.txt:33 | os_check=0 + unsigned hboot8.img → whole chain TOFU | enable BCM2712 signed-boot; until then document TOFU |
 | SEC-4 (V7a) | High | main.rs:286→344 | measure→launch TOCTOU: payload hashed then copied, never re-hashed before EL1 entry | re-sha256(load_pa,size) after copy, park on mismatch |
 | SEC-5 (V5) | Med | ak_derive.rs:147 | AK = KDF(OTP) only, no PCR0 binding → tampered HBoot derives same AK | ak_seed = KDF(OTP, PCR0_after_self_measure) |
