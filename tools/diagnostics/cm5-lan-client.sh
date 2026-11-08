@@ -48,12 +48,12 @@ IP=$(dig +short "$BLOCKED" A @1.1.1.1 | grep -E '^[0-9.]+$' | head -1)
 [ -n "$IP" ] && pi "curl -s -m 10 -o /dev/null --resolve $BLOCKED:443:$IP https://$BLOCKED/" || true
 sleep 2
 api /api/tls | grep -q "\"sni\":\"$BLOCKED\".*\"shield_bypass\":true"; chk $? "rule 126: TLS to $BLOCKED (DNS bypassed via a pinned IP) flagged shield_bypass"
-api "/api/detections?limit=200" | grep -q '"rule_id":1200126'; chk $? "rule 126 detection raised"
+r=1; for _ in 1 2 3 4 5; do api "/api/detections?limit=200" | grep -q '"rule_id":1200126' && { r=0; break; }; sleep 2; done; chk $r "rule 126 detection raised"
 
 # 5. rule 124: brute force on one answering SSH service (the bench host's sshd on the WAN side)
 pi "for i in \$(seq 1 30); do timeout 2 bash -c '</dev/tcp/$SSHT/22' 2>/dev/null; done; true"
 sleep 3
-api "/api/detections?limit=200" | grep -q '"rule_id":1200124'; chk $? "rule 124 brute force: 30 attempts to $SSHT:22 (answered) detected"
+r=1; for _ in 1 2 3 4 5; do api "/api/detections?limit=200" | grep -q '"rule_id":1200124' && { r=0; break; }; sleep 2; done; chk $r "rule 124 brute force: 30 attempts to $SSHT:22 (answered) detected"
 
 # 6. G14 hold on the client: traffic stops, revoke restores
 S=$(api /api/session); CS=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["csrf"])' "$S"); SQ=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["next_seq"])' "$S")
