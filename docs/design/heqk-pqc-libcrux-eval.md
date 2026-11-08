@@ -15,7 +15,8 @@ Harness: `os/build/kem-diff/` (host differential) and `os/build/kem-diff/nostd-c
 | Public-key validation (FIPS 203 §7.2) | **PASS** | honest keys accepted; a key with an unreduced coefficient (q = 3329) rejected |
 | no_std build for the CM5 target | **PASS, with a mandatory flag** | builds for `aarch64-unknown-none-softfloat` (core only) — see the NEON finding |
 | Code size | measured | portable keygen+encaps+decaps: **77 KB** .text (opt-z, LTO); the NEON build is 189 KB |
-| FIPS 203 / NIST ACVP vectors run directly | open | the differential proves equality with RustCrypto (which carries its own KATs); running the ACVP JSON vectors against libcrux directly is the next step |
+| FIPS 203 / NIST ACVP vectors run directly | **PASS** | `kem-diff acvp` (vectors via `fetch-acvp.sh`, NIST ACVP-Server internalProjection): ML-KEM-768 keyGen 25, encapsulation 25, decapsulation 10 (incl. implicit rejection), encapsulationKeyCheck 10, decapsulationKeyCheck 10 — **160/160** on RustCrypto and libcrux |
+| FIPS 203 input checks in the shipping code | **fixed** | RustCrypto ml-kem 0.2.3 `from_bytes` performs no §7.2 encapsulation-key check. `tlsprov` already checked the client share (`mlkem_ek_ok`); the kernel control-plane channel (`securechannel::ek_from_bytes`) did not — added, with a `[P19-pqc-kat]` sub-check. Both helpers agree with NIST's encapsulationKeyCheck verdicts |
 | Fuzzing | open | a cargo-fuzz target over decapsulate (malformed ciphertexts / keys) on both implementations |
 | Stack / memory on the device | open | needs an EL0 TLS-host build with libcrux and a stack watermark |
 | CM5 benchmarks | open (metal) | host only so far: portable libcrux 272 µs vs RustCrypto 360 µs per keygen+encaps+decaps (x86-64) |
