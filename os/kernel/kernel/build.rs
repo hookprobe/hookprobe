@@ -518,6 +518,15 @@ fn gen_ui_assets(manifest_dir: &str, out_dir: &str) {
         }
         files.sort();
         for f in files {
+            // A bundle built without PUBLIC_API_BASE='' calls the dev API on the BROWSER's localhost: the page
+            // renders, but every view silently stays on sample data (mc-e2e 2026-11-08). Never embed one.
+            if f.extension().and_then(|e| e.to_str()) == Some("js") {
+                let body = std::fs::read(&f).unwrap();
+                if body.windows(14).any(|w| w == b"127.0.0.1:8420") {
+                    panic!("{} was built for the dev API (127.0.0.1:8420). Rebuild the UI for the device: \
+                            (cd os/mission-control && PUBLIC_API_BASE='' npm run build)", f.display());
+                }
+            }
             let rel = f.strip_prefix(&dist).unwrap().to_string_lossy().replace('\\', "/");
             let ctype = match f.extension().and_then(|e| e.to_str()).unwrap_or("") {
                 "html" => "text/html; charset=utf-8",
