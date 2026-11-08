@@ -45,6 +45,9 @@ RULES = [
     ("infra_transient", "rerun", None, [
         r"Could not resolve host", r"Connection (?:reset|refused|timed out)", r"ETIMEDOUT|ECONNRESET|EAI_AGAIN",
         r"\b(?:502|503|504) (?:Bad Gateway|Service Unavailable|Gateway Time-out)",
+        # forms seen in the 2026-11-08 GitHub release-CDN outage (gitleaks / syft downloads → 504)
+        r"curl: \(\d+\) The requested URL returned error: 5\d\d", r"HTTP status=5\d\d",
+        r"could not download asset",
         r"API rate limit exceeded", r"The runner has received a shutdown signal",
         r"No space left on device", r"failed to download",
         # cargo's real warning only: a bare "spurious network error" also matched the dtolnay toolchain
