@@ -51,7 +51,8 @@ def run_command(cmd, timeout=30):
     except subprocess.TimeoutExpired:
         return "Command timed out", False
     except Exception as e:
-        return str(e), False
+        logger.warning(f"run_command failed: {e}")
+        return "Command failed", False
 
 
 # Configuration

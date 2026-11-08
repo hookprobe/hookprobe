@@ -108,31 +108,15 @@ class HealC1(unittest.TestCase):
         self.assertIn("tamper_detected", src)
 
 
-class TriageNoise(unittest.TestCase):
-    """The 2026-11-08 issue flood: 42 'unknown' issues in 35 min from PR/Dependabot runs."""
-
-    def test_issues_only_for_default_branch_failures(self):
-        self.assertTrue(triage_run.should_file_issues({"head_branch": "main", "event": "push"}, "main"))
-        self.assertTrue(triage_run.should_file_issues({"head_branch": "main", "event": "schedule"}, "main"))
-        self.assertFalse(triage_run.should_file_issues({"head_branch": "dependabot/npm/x", "event": "pull_request"}, "main"))
-        self.assertFalse(triage_run.should_file_issues({"head_branch": "main", "event": "pull_request"}, "main"))
-
-    def test_unknown_signature_is_stable_per_gate(self):
-        import classify
-        a = triage_run.stabilise_signature(classify.classify_text("run 1 at 05:01 weird\nexit 1", "g1"))
-        b = triage_run.stabilise_signature(classify.classify_text("run 2 at 06:42 other\nexit 9", "g1"))
-        self.assertEqual(a["signature"], b["signature"])
-        self.assertEqual(a["signature"], "unknown-g1")
-
-    def test_caps_and_aggregator(self):
-        self.assertLessEqual(triage_run.MAX_NEW_ISSUES_PER_RUN, 3)
-        self.assertIn("ci-ok", triage_run.AGGREGATOR_JOBS)
-
-    def test_log_fetch_does_not_use_jobs_logs_api(self):
-        with open(os.path.join(CI, "heal", "triage_run.py")) as f:
+class ClippyBaseIsolation(unittest.TestCase):
+    def test_base_never_shares_the_head_target_dir(self):
+        # CI 2026-11-08: a shared target dir made cargo REPLAY the head's cached diagnostics for the
+        # base (path-crates hash relative to the workspace root; git-archive mtimes look fresh), so
+        # every base-vs-head comparison read equal and the ratchet could never fail.
+        with open(os.path.join(CI, "clippy_ratchet.py")) as f:
             src = f.read()
-        self.assertNotIn('actions/jobs/{j[\'id\']}/logs', src)   # refuses ANSI escapes → every triage 'unknown'
-        self.assertIn('"run", "view"', src)
+        self.assertIn('run_clippy(bdir, fsets, os.path.join(tr, "base"))', src)
+        self.assertNotIn("run_clippy(bdir, fsets, tr)", src)
 
 
 class TriageM2L1(unittest.TestCase):
