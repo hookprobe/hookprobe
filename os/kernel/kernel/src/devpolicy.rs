@@ -2,7 +2,9 @@
 //!
 //! `DEVICES.TXT` on the boot partition, operator-signed (`DEVICES.SIG`, magic HQDSIG1 / tag HQDEV1, never
 //! interchangeable with the other signed files). One device per line:
-//!   `aa:bb:cc:dd:ee:ff  internet_only  kids-tablet`      (label optional, [A-Za-z0-9._-], ≤ 31)
+//!   `aa:bb:cc:dd:ee:ff  internet_only  kids-tablet  shield=strict`   (label optional, [A-Za-z0-9._-], ≤ 31;
+//!   `shield=` optional: `standard` (default) | `off` (Shield never blocks for it) | `strict` (also blocks
+//!   encrypted DNS / Private Relay that the global POLICY only reports) — G22 per-client Shield profiles)
 //! Policies (by MAC — a client can change its IP, the AP keys stations by MAC):
 //!   full           everything (the default for unlisted devices)
 //!   internet_only  the internet, but not this device's management (Mission Control) nor other LAN hosts
@@ -29,6 +31,21 @@ pub enum Pol {
 impl Pol {
     pub fn name(self) -> &'static str {
         ["full", "internet_only", "lan_only", "quarantine"][self as usize]
+    }
+}
+
+/// G22: this device's Shield profile (from its DEVICES.TXT line; `Standard` when unlisted).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum ShieldProfile {
+    Standard = 0,
+    Off = 1,
+    Strict = 2,
+}
+
+impl ShieldProfile {
+    pub fn name(self) -> &'static str {
+        ["standard", "off", "strict"][self as usize]
     }
 }
 
@@ -62,8 +79,9 @@ struct Ent {
     pol: Pol,
     label: [u8; 31],
     llen: u8,
+    shield: ShieldProfile,
 }
-const E0: Ent = Ent { mac: [0; 6], pol: Pol::Full, label: [0; 31], llen: 0 };
+const E0: Ent = Ent { mac: [0; 6], pol: Pol::Full, label: [0; 31], llen: 0, shield: ShieldProfile::Standard };
 static mut T: [Ent; CAP] = [E0; CAP];
 static mut N: usize = 0;
 static mut DENIED: [u64; 4] = [0; 4];
@@ -89,6 +107,12 @@ pub fn len() -> usize {
 pub fn policy_of(mac: &[u8; 6]) -> Pol {
     let t = unsafe { &(&*core::ptr::addr_of!(T))[..N] };
     t.binary_search_by(|e| e.mac.cmp(mac)).map_or(Pol::Full, |i| t[i].pol)
+}
+
+/// G22: the device's Shield profile.
+pub fn shield_profile(mac: &[u8; 6]) -> ShieldProfile {
+    let t = unsafe { &(&*core::ptr::addr_of!(T))[..N] };
+    t.binary_search_by(|e| e.mac.cmp(mac)).map_or(ShieldProfile::Standard, |i| t[i].shield)
 }
 
 /// The label for `mac`, if any.
@@ -153,15 +177,27 @@ fn parse_line(line: &[u8]) -> Result<Option<Ent>, ()> {
         _ => return Err(()),
     };
     let mut e = Ent { mac, pol, ..E0 };
-    if let Some(l) = t.next() {
-        if l.len() > 31 || !l.iter().all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')) {
-            return Err(());
+    let (mut have_label, mut have_shield) = (false, false);
+    for tok in t {
+        if let Some(v) = tok.strip_prefix(b"shield=") {
+            if have_shield {
+                return Err(());
+            }
+            e.shield = match v {
+                b"standard" => ShieldProfile::Standard,
+                b"off" => ShieldProfile::Off,
+                b"strict" => ShieldProfile::Strict,
+                _ => return Err(()),
+            };
+            have_shield = true;
+        } else {
+            if have_label || tok.len() > 31 || !tok.iter().all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')) {
+                return Err(());
+            }
+            e.label[..tok.len()].copy_from_slice(tok);
+            e.llen = tok.len() as u8;
+            have_label = true;
         }
-        e.label[..l.len()].copy_from_slice(l);
-        e.llen = l.len() as u8;
-    }
-    if t.next().is_some() {
-        return Err(());
     }
     Ok(Some(e))
 }
