@@ -469,6 +469,41 @@ impl Verdict {
 
 /// The decision for one client: a blocklist hit becomes `Paused` while that client's Shield is paused.
 /// Never relaxes the system floor or the bypass controls.
+/// G22: the decision for a client device — its DEVICES.TXT Shield profile, then the session pause.
+///   off    — Shield never blocks for it (blocks become the pause verdict; encrypted DNS / Relay only reported)
+///   strict — encrypted DNS / Private Relay that the global POLICY only reports are blocked for it
+pub fn decide_for_dev(name: &[u8], client: u32, mac: &[u8; 6]) -> Verdict {
+    use crate::devpolicy::ShieldProfile;
+    let v = match (decide(name), crate::devpolicy::shield_profile(mac)) {
+        (Verdict::Blocked | Verdict::BlockedCname, ShieldProfile::Off) => Verdict::Paused,
+        (Verdict::DohBlocked, ShieldProfile::Off) => Verdict::DohSeen,
+        (Verdict::RelayBlocked, ShieldProfile::Off) => Verdict::RelaySeen,
+        (Verdict::DohSeen, ShieldProfile::Strict) => Verdict::DohBlocked,
+        (Verdict::RelaySeen, ShieldProfile::Strict) => Verdict::RelayBlocked,
+        (v, _) => v,
+    };
+    if v == Verdict::Blocked && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
+}
+
+/// `[P-shield-profile]` — G22 per-client Shield profiles from the signed DEVICES.TXT.
+pub fn profile_selftest() -> bool {
+    load_text(b"ads.example\n", b"");
+    let (a, b, c) = ([0x02, 0, 0, 0, 0, 0xa1], [0x02, 0, 0, 0, 0, 0xb2], [0x02, 0, 0, 0, 0, 0xc3]);
+    let parsed = crate::devpolicy::load_text(b"02:00:00:00:00:a1 full kids-tablet shield=off\n02:00:00:00:00:b2 full shield=strict\n02:00:00:00:00:d4 full shield=lax\n02:00:00:00:00:e5 full shield=off shield=strict\n") == 2;
+    let off = decide_for_dev(b"ads.example", 1, &a) == Verdict::Paused && decide_for_dev(b"mask.icloud.com", 1, &a) == Verdict::RelaySeen;
+    let std = decide_for_dev(b"ads.example", 1, &c) == Verdict::Blocked && decide_for_dev(b"mask.icloud.com", 1, &c) == decide(b"mask.icloud.com");
+    let strict = decide_for_dev(b"ads.example", 1, &b) == Verdict::Blocked && decide_for_dev(b"mask.icloud.com", 1, &b) == Verdict::RelayBlocked;
+    let label_kept = { let mut l = [0u8; 31]; crate::devpolicy::label_of(&a, &mut l) == 11 };
+    crate::devpolicy::load_text(b"");
+    load_text(b"", b"");
+    let pass = parsed && off && std && strict && label_kept;
+    arch_aarch64::_print(format_args!(
+        " [P-shield-profile] {} — G22 per-client Shield profiles (signed DEVICES.TXT shield=): parse (unknown / duplicate refused)={} off: blocks become allowed, Relay only reported={} standard unchanged={} strict: Private Relay blocked for it={} label still parsed={}\n",
+        if pass { "PASS" } else { "FAIL" }, parsed, off, std, strict, label_kept
+    ));
+    pass
+}
+
 pub fn decide_for(name: &[u8], client: u32) -> Verdict {
     let v = decide(name);
     if v == Verdict::Blocked && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
@@ -689,6 +724,10 @@ pub enum Act {
 
 /// A client frame on its way out (Ethernet/IPv4). `now` = cntpct ticks.
 pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act {
+    let mut smac = [0u8; 6];
+    if f.len() >= 12 {
+        smac.copy_from_slice(&f[6..12]); // G22: the device's Shield profile is keyed on its MAC
+    }
     if f.len() < 14 + 20 + 8 || f[12..14] != [0x08, 0x00] || f[14] >> 4 != 4 {
         return Act::Pass;
     }
@@ -712,7 +751,7 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
                 stat_unparsable();
                 return Act::Pass;
             };
-            let v = decide_for(&q.name[..q.nl], client);
+            let v = decide_for_dev(&q.name[..q.nl], client, &smac);
             record(now, client, q.qtype, &q.name[..q.nl], v);
             // Parity G7: threat-intel domain (IOC pack) — detection only, the name is still answered.
             if crate::ioc::domain_listed(&q.name[..q.nl]) {
@@ -753,7 +792,7 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
             let dl = u16::from_be_bytes([f[p], f[p + 1]]) as usize;
             let dns = &f[p + 2..(p + 2 + dl).min(14 + tot)];
             let Some(q) = parse_query(dns) else { return Act::Pass };
-            let v = decide_for(&q.name[..q.nl], client);
+            let v = decide_for_dev(&q.name[..q.nl], client, &smac);
             if v.answered() {
                 record(now, client, q.qtype, &q.name[..q.nl], Verdict::Tcp53Refused);
                 return Act::Reject;
