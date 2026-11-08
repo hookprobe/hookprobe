@@ -23,7 +23,7 @@ fips205 = { version = "0.4", default-features = false, features = ["slh_dsa_sha2
 # rand_core::Error) are the 0.6 shape, and fips205's try_*_with_rng bounds are
 # rand_core-0.6 CryptoRngCore. Pinning 0.10 pulled in an incompatible reworked
 # crate (RngCore is a method-less marker there) and broke the build.
-rand_core = { version = "0.6", default-features = false }
+rand_core = { version = "0.10", default-features = false }
 
 [[bin]]
 name = "hboot"
