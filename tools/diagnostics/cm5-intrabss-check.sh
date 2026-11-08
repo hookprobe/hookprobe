@@ -59,14 +59,42 @@ echo "A=$A_IF/$A_IP B=$B_IF/$B_PHY/$B_IP"
 echo "BIP=$B_IP"
 if ip netns exec hqbss ping -c 4 -W 2 "$A_IP" >/dev/null; then echo "PING ok"; else echo "PING fail"; fi
 for _ in 1 2 3; do ip netns exec hqbss timeout 2 bash -c "</dev/tcp/$A_IP/4444" 2>/dev/null; done
+# multicast discovery (SSDP group 239.255.255.250:1900): does B's announcement reach A?
+python3 - "$A_IP" > /run/hqbss-mc.out 2>&1 <<'PY' &
+import socket, struct, sys
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("", 1900))
+s.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, struct.pack("4s4s", socket.inet_aton("239.255.255.250"), socket.inet_aton(sys.argv[1])))
+s.settimeout(8)
+try:
+    while True:
+        d, a = s.recvfrom(2048)
+        if b"hqbss-probe" in d:
+            print("MCAST got from", a[0]); break
+except Exception:
+    print("MCAST none")
+PY
+sleep 1
+ip netns exec hqbss python3 - "$B_IP" <<'PY'
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF, socket.inet_aton(sys.argv[1]))
+s.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+for _ in range(4):
+    s.sendto(b"M-SEARCH * HTTP/1.1\r\nHOST: 239.255.255.250:1900\r\nST: hqbss-probe\r\n\r\n", ("239.255.255.250", 1900))
+    time.sleep(0.5)
+PY
+wait
+cat /run/hqbss-mc.out; rm -f /run/hqbss-mc.out
 echo "RESULT ran"
 EOS
 )
 # send the sudo password only when sudo asks for one (otherwise bash would read it as a command)
 if ssh -o BatchMode=yes "$PI" 'sudo -n true' 2>/dev/null; then
-  OUT=$(echo "$REMOTE" | ssh -o BatchMode=yes "$PI" "sudo -n bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|RESULT)")
+  OUT=$(echo "$REMOTE" | ssh -o BatchMode=yes "$PI" "sudo -n bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|MCAST|RESULT)")
 else
-  OUT=$( (cat "$PI_SUDO_FILE"; echo "$REMOTE") | ssh -o BatchMode=yes "$PI" "sudo -S -p '' bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|RESULT)")
+  OUT=$( (cat "$PI_SUDO_FILE"; echo "$REMOTE") | ssh -o BatchMode=yes "$PI" "sudo -S -p '' bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|MCAST|RESULT)")
 fi
 echo "$OUT" | sed 's/^/  /'
 grep -q "RESULT ran" <<<"$OUT" || { echo "INTRA-BSS: INCONCLUSIVE (setup)"; exit 2; }
@@ -76,7 +104,9 @@ J=$(mktemp); trap 'rm -f "$J"' EXIT
 curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$MC/api/login" -c "$J"
 D=$(curl -sk -m 10 -b "$J" "$MC/api/detections?limit=200")
 if grep -q "\"rule_id\":1200001[^}]*\"src_ip\":\"$B_IP\"" <<<"$D"; then
-  echo "INTRA-BSS: PASS — station-to-station traffic went through heqk (4444 detection from $B_IP)"; exit 0
+  echo "INTRA-BSS: PASS — station-to-station traffic went through heqk (4444 detection from $B_IP)"
+  if grep -q "MCAST got" <<<"$OUT"; then echo "INTRA-BSS-MCAST: PASS — B's SSDP announcement reached A (discovery relay)"; exit 0; fi
+  echo "INTRA-BSS-MCAST: FAIL — B's SSDP announcement never reached A"; exit 4
 elif grep -q "PING ok" <<<"$OUT"; then
   echo "INTRA-BSS: FAIL — B reached A but heqk never saw it: the firmware bridged it (IDS bypass)"; exit 1
 else

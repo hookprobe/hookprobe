@@ -11,10 +11,11 @@
 //!     segmentation reach gate), and only if both devices' policies allow LAN.
 use arch_aarch64::dhcpd::ApDhcp;
 
-static mut STATS: [u64; 4] = [0; 4]; // proxied ARP, relayed frames, refused by policy, refused (not a lease)
+static mut STATS: [u64; 6] = [0; 6]; // proxied ARP, relayed frames, refused by policy, refused (not a lease), multicast copies, multicast rate-limited
 
-/// (proxy-ARP answers, frames relayed, refused by device policy, refused: not a live lease / spoofed)
-pub fn stats() -> [u64; 4] {
+/// (proxy-ARP answers, frames relayed, refused by device policy, refused: not a live lease / spoofed,
+///  multicast discovery copies sent, multicast frames rate-limited)
+pub fn stats() -> [u64; 6] {
     unsafe { STATS }
 }
 
@@ -95,6 +96,88 @@ pub fn relay_target(frame: &[u8], dh: &ApDhcp) -> bool {
     true
 }
 
+// ---- multicast DISCOVERY relay (mDNS, SSDP, LLMNR — v4 and v6) ----
+// The firmware does not repeat one station's multicast to the others under ap_isolate (metal: an SSDP
+// announcement from B never reached A), so casting / AirPlay / printer discovery needs heqk to relay it.
+// Only these discovery groups, only from a leased sender allowed the LAN, as L2-UNICAST copies to each other
+// station allowed the LAN (the multicast-to-unicast technique: the sender never hears its own probe back, which
+// mDNS would read as a name conflict), rate-limited so one device cannot turn the AP into an amplifier.
+
+const DISCOVERY_MACS: [[u8; 6]; 6] = [
+    [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb], // mDNS 224.0.0.251
+    [0x01, 0x00, 0x5e, 0x7f, 0xff, 0xfa], // SSDP 239.255.255.250
+    [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfc], // LLMNR 224.0.0.252
+    [0x33, 0x33, 0x00, 0x00, 0x00, 0xfb], // mDNS ff02::fb
+    [0x33, 0x33, 0x00, 0x00, 0x00, 0x0c], // SSDP ff02::c
+    [0x33, 0x33, 0x00, 0x01, 0x00, 0x03], // LLMNR ff02::1:3
+];
+const MC_PER_SRC_PER_SEC: u32 = 30;
+const MC_COPIES_PER_SEC: u32 = 300;
+static mut MC_WIN: u64 = 0;
+static mut MC_COPIES: u32 = 0;
+static mut MC_SRC: [([u8; 6], u32); 16] = [([0; 6], 0); 16];
+
+pub fn is_discovery_mcast(frame: &[u8]) -> bool {
+    frame.len() >= 14 && DISCOVERY_MACS.iter().any(|m| frame[0..6] == m[..])
+}
+
+/// Relay a discovery multicast frame from one station to the others: calls `send` with each L2-unicast copy.
+/// The caller has already run the IDS verdict on it. Returns the number of copies sent.
+pub fn relay_discovery(frame: &[u8], dh: &ApDhcp, now_s: u64, send: &mut dyn FnMut(&[u8]) -> bool) -> u32 {
+    if !is_discovery_mcast(frame) || frame.len() > 1514 {
+        return 0;
+    }
+    let mut smac = [0u8; 6];
+    smac.copy_from_slice(&frame[6..12]);
+    // a leased sender (IPv4: its source address must be its lease too); allowed the LAN
+    let Some(sip) = dh.lease_for(&smac) else { return 0 };
+    if frame[12..14] == [0x08, 0x00] && (frame.len() < 34 || frame[26..30] != sip) {
+        bump(3);
+        return 0;
+    }
+    if !crate::devpolicy::check(&smac, crate::devpolicy::Dest::Lan) {
+        bump(2);
+        return 0;
+    }
+    // rate limits (per second): per source, and copies overall
+    unsafe {
+        if MC_WIN != now_s {
+            MC_WIN = now_s;
+            MC_COPIES = 0;
+            (*core::ptr::addr_of_mut!(MC_SRC)).iter_mut().for_each(|e| e.1 = 0);
+        }
+        let t = &mut *core::ptr::addr_of_mut!(MC_SRC);
+        let i = t.iter().position(|e| e.0 == smac).or_else(|| t.iter().position(|e| e.1 == 0)).unwrap_or(0);
+        if t[i].0 != smac {
+            t[i] = (smac, 0);
+        }
+        if t[i].1 >= MC_PER_SRC_PER_SEC {
+            bump(5);
+            return 0;
+        }
+        t[i].1 += 1;
+    }
+    let mut copy = [0u8; 1514];
+    let n = frame.len();
+    copy[..n].copy_from_slice(frame);
+    let mut sent = 0u32;
+    dh.for_each_live(&mut |mac, _| {
+        if *mac == smac || !crate::devpolicy::check(mac, crate::devpolicy::Dest::Lan) {
+            return;
+        }
+        if unsafe { MC_COPIES } >= MC_COPIES_PER_SEC {
+            return;
+        }
+        copy[0..6].copy_from_slice(mac);
+        if send(&copy[..n]) {
+            sent += 1;
+            unsafe { MC_COPIES += 1 };
+        }
+    });
+    unsafe { STATS[4] += sent as u64 };
+    sent
+}
+
 /// `[P-lanrelay]`
 pub fn selftest() -> bool {
     let mut dh = ApDhcp::new();
@@ -145,11 +228,48 @@ pub fn selftest() -> bool {
     crate::devpolicy::load_text(b"02:00:00:00:00:0b internet_only\n");
     let pol = proxy_arp(&arp(a_mac, a_mac, a_ip, b_ip), &dh, &mut out) == 0 && !relay_target(&f, &dh);
     crate::devpolicy::load_text(b"");
-    unsafe { STATS = [0; 4] };
-    let pass = proxied && spoof && squat && unknown && own && relay && mismatch && not_lan && pol;
+    // multicast discovery: a third station C; A's mDNS goes to B and C as unicast copies, never back to A
+    let c_mac = [0x02, 0, 0, 0, 0, 0x0c];
+    dh.leases[2].used = true;
+    dh.leases[2].mac = c_mac;
+    dh.leases[2].ip = [10, 99, 0, 12];
+    dh.nleases = 3;
+    let mut m = [0u8; 60];
+    m[0..6].copy_from_slice(&[0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]);
+    m[6..12].copy_from_slice(&a_mac);
+    m[12] = 0x08;
+    m[14] = 0x45;
+    m[26..30].copy_from_slice(&a_ip);
+    m[30..34].copy_from_slice(&[224, 0, 0, 251]);
+    let mut to = [[0u8; 6]; 4];
+    let mut k = 0usize;
+    let sent = relay_discovery(&m, &dh, 100, &mut |f: &[u8]| {
+        if k < 4 {
+            to[k].copy_from_slice(&f[0..6]);
+            k += 1;
+        }
+        true
+    });
+    let mc_fanout = sent == 2 && to[..2].contains(&b_mac) && to[..2].contains(&c_mac) && !to[..k].contains(&a_mac);
+    let mut spoofed = m;
+    spoofed[26..30].copy_from_slice(&[10, 99, 0, 99]);
+    let mc_spoof = relay_discovery(&spoofed, &dh, 100, &mut |_| true) == 0;
+    let mut other = m;
+    other[0..6].copy_from_slice(&[0x01, 0x00, 0x5e, 0x01, 0x02, 0x03]); // not a discovery group
+    let mc_other = relay_discovery(&other, &dh, 100, &mut |_| true) == 0;
+    let mut burst = 0u32;
+    for _ in 0..100 {
+        burst += relay_discovery(&m, &dh, 101, &mut |_| true);
+    }
+    let mc_rate = burst == MC_PER_SRC_PER_SEC * 2; // 30 frames x 2 receivers, then the source is capped
+    crate::devpolicy::load_text(b"02:00:00:00:00:0c internet_only\n");
+    let mc_pol = relay_discovery(&m, &dh, 102, &mut |_| true) == 1; // C (internet_only) gets no copy
+    crate::devpolicy::load_text(b"");
+    unsafe { STATS = [0; 6] };
+    let pass = proxied && spoof && squat && unknown && own && relay && mismatch && not_lan && pol && mc_fanout && mc_spoof && mc_other && mc_rate && mc_pol;
     arch_aarch64::_print(format_args!(
-        " [P-lanrelay] {} — G10 Wi-Fi station-to-station THROUGH heqk: proxy-ARP with the peer's real MAC={} | refused: spoofed sender={} sender IP not its lease={} unknown target={} own address={} | unicast relay to the lease holder={} wrong dst MAC={} internet dst left to NAT={} | internet_only peer: no ARP, no relay={}\n",
-        if pass { "PASS" } else { "FAIL" }, proxied, spoof, squat, unknown, own, relay, mismatch, not_lan, pol
+        " [P-lanrelay] {} — G10 Wi-Fi station-to-station THROUGH heqk: proxy-ARP with the peer's real MAC={} | refused: spoofed sender={} sender IP not its lease={} unknown target={} own address={} | unicast relay to the lease holder={} wrong dst MAC={} internet dst left to NAT={} | internet_only peer: no ARP, no relay={} | discovery multicast as unicast copies to the other stations, never back={} spoofed sender={} non-discovery group={} per-source rate cap={} internet_only receiver skipped={}\n",
+        if pass { "PASS" } else { "FAIL" }, proxied, spoof, squat, unknown, own, relay, mismatch, not_lan, pol, mc_fanout, mc_spoof, mc_other, mc_rate, mc_pol
     ));
     pass
 }
