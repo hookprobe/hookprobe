@@ -135,7 +135,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<u3
     let Some(target) = target else { return refuse("target") };
     if let Target::Ip(ip) = target {
         // The management path always passes (operator rule, ADR 0023): a session can never hold it.
-        if crate::verdict::is_allowlisted(ip) {
+        if actions::on_mgmt_path(ip) {
             return refuse("management floor");
         }
         if ip == 0 || ip >= 0xE000_0000 {
@@ -257,7 +257,15 @@ pub fn selftest() -> bool {
     m += tail.len();
     let floor_refused = submit(&good, &mb[..m], &mut auth) == Err("management floor");
     let floor_hook = actions::add(Kind::HoldIp, Target::Ip(fip), 600).is_some() && !actions::ip_held(fip);
-    let floor = floor_refused && floor_hook;
+    // ...and the management sub-interface's own subnet, which the floor default may not cover
+    actions::set_mgmt_net(0xC0A8_C892, 24); // 192.168.200.146/24
+    let mut sb2 = [0u8; 96];
+    let t2 = b"kind=hold_ip&target=192.168.200.1&ttl=600&reason=lockout+test&seq=13";
+    sb2[..t2.len()].copy_from_slice(t2);
+    let subnet_refused = submit(&good, &sb2[..t2.len()], &mut auth) == Err("management floor");
+    let subnet_hook = actions::add(Kind::HoldIp, Target::Ip(0xC0A8_C801), 600).is_some() && !actions::ip_held(0xC0A8_C801);
+    actions::set_mgmt_net(0, 0);
+    let floor = floor_refused && floor_hook && subnet_refused && subnet_hook;
     // every attempt is audited, refusals included
     let mut total = 0;
     let mut refused = 0;
