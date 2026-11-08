@@ -47,7 +47,7 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 
 ## Needs the board
 
-G10 intra-BSS bridging (test: `tools/diagnostics/cm5-intrabss-check.sh`; `ap_isolate`=1 now set at AP start, batch 5 — the board shows whether the firmware honours it); Shield on a non-Relay client; `/api/flows` + drill-down on metal;
+G10 intra-BSS — **unicast done + metal** (firmware honours `ap_isolate`; heqk now relays station↔station after the lease + IDS gates: proxy-ARP + unicast relay, `tools/diagnostics/cm5-intrabss-check.sh` PASS, the IDS saw B's 4444 attempt at A); multicast discovery relay next (`ap_isolate`=1 now set at AP start, batch 5 — the board shows whether the firmware honours it); Shield on a non-Relay client; `/api/flows` + drill-down on metal;
 eth1 traffic; Wi-Fi TX-stall root cause; WPA3-SAE/PMF + guest SSID; LTE/USB WAN; native-IPv6 ISP (G17);
 RPMB floor (G24d, operator decision, irreversible); P-256 constant time — **done on the host** (`metal-evidence/20261108-p256-ct.md`: only validity-flag declassifications); WPA2 authenticator → EL0; G12 final
 acceptance (persistence across power cycle, OTA tryboot); re-flash validation of every AP-side fix.

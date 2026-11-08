@@ -4,7 +4,8 @@
 #
 # The bench Pi has two Wi-Fi adapters. Station A = the adapter NetworkManager keeps on the CM5 AP. Station B = the
 # other adapter, moved into its own network namespace (otherwise Linux would deliver A<->B locally and nothing
-# would cross the air), joined to the same AP with its own wpa_supplicant and a static address. B then pings A and
+# would cross the air), joined to the same AP with its own wpa_supplicant and a DHCP lease from heqk (busybox
+# udhcpc) — heqk only relays for stations whose MAC and IP are a lease it handed out. B then pings A and
 # opens TCP to A:4444 (the C2-port signature). Verdict from the device's own view (Mission Control):
 #   - a 4444 detection from B's address  -> intra-BSS traffic goes through heqk (IDS sees it)       PASS
 #   - B reaches A but no detection        -> the firmware bridged it (IDS bypass)                    FAIL
@@ -17,11 +18,9 @@ KEY="${1:?owner key file}"
 PI="${2:-claude@10.200.0.4}"
 MC="${3:-https://192.168.200.146}"
 [ -f "${PI_SUDO_FILE:-}" ] || { echo "PI_SUDO_FILE (0600) required" >&2; exit 2; }
-B_IP=10.99.0.250
 
 REMOTE=$(cat <<'EOS'
 set -u
-B_IP="$1"
 A_IF=$(ip route | awk '/^default via 10.99.0.1/ {print $5; exit}')
 [ -n "$A_IF" ] || { echo "RESULT no-station-A"; exit 0; }
 A_IP=$(ip -4 -br addr show "$A_IF" | awk '{print $3}' | cut -d/ -f1)
@@ -46,19 +45,32 @@ iw phy "$B_PHY" set netns name hqbss
 ip netns exec hqbss ip link set lo up
 ip netns exec hqbss ip link set "$B_IF" up
 ip netns exec hqbss wpa_supplicant -B -D nl80211 -i "$B_IF" -c "$CONF" >/dev/null
-for _ in $(seq 1 30); do ip netns exec hqbss iw dev "$B_IF" link | grep -q "Connected to" && break; sleep 1; done
-ip netns exec hqbss iw dev "$B_IF" link | grep -q "Connected to" || { echo "RESULT b-not-associated"; exit 0; }
-ip netns exec hqbss ip addr add "$B_IP/24" dev "$B_IF"
-sleep 2
+# wait for the 4-way handshake (COMPLETED), not just association — DHCP before the keys are set is lost
+st=""
+for _ in $(seq 1 30); do st=$(ip netns exec hqbss wpa_cli -p /run/hqbss-wpa -i "$B_IF" status 2>/dev/null | sed -n 's/^wpa_state=//p'); [ "$st" = COMPLETED ] && break; sleep 1; done
+[ "$st" = COMPLETED ] || { echo "RESULT b-not-keyed ($st)"; exit 0; }
+# no udhcpc hook (/run may be noexec): take the address from its log line and apply it here
+B_IP=$(ip netns exec hqbss busybox udhcpc -i "$B_IF" -n -q -t 8 -T 2 -s /bin/true 2>&1 | sed -n 's/.*lease of \([0-9.]*\) obtained.*/\1/p' | tail -1)
+[ -n "$B_IP" ] && ip netns exec hqbss ip addr add "$B_IP/24" dev "$B_IF"
+B_IP=$(ip netns exec hqbss ip -4 -br addr show "$B_IF" | awk '{print $3}' | cut -d/ -f1)
+[ -n "$B_IP" ] || { echo "RESULT b-no-lease"; exit 0; }
+sleep 1
 echo "A=$A_IF/$A_IP B=$B_IF/$B_PHY/$B_IP"
+echo "BIP=$B_IP"
 if ip netns exec hqbss ping -c 4 -W 2 "$A_IP" >/dev/null; then echo "PING ok"; else echo "PING fail"; fi
 for _ in 1 2 3; do ip netns exec hqbss timeout 2 bash -c "</dev/tcp/$A_IP/4444" 2>/dev/null; done
 echo "RESULT ran"
 EOS
 )
-OUT=$( (cat "$PI_SUDO_FILE"; echo "$REMOTE") | ssh -o BatchMode=yes "$PI" "sudo -S -p '' bash -s -- $B_IP" 2>&1 | grep -E "^(A=|PING|RESULT)")
+# send the sudo password only when sudo asks for one (otherwise bash would read it as a command)
+if ssh -o BatchMode=yes "$PI" 'sudo -n true' 2>/dev/null; then
+  OUT=$(echo "$REMOTE" | ssh -o BatchMode=yes "$PI" "sudo -n bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|RESULT)")
+else
+  OUT=$( (cat "$PI_SUDO_FILE"; echo "$REMOTE") | ssh -o BatchMode=yes "$PI" "sudo -S -p '' bash -s" 2>&1 | grep -E "^(A=|BIP=|PING|RESULT)")
+fi
 echo "$OUT" | sed 's/^/  /'
 grep -q "RESULT ran" <<<"$OUT" || { echo "INTRA-BSS: INCONCLUSIVE (setup)"; exit 2; }
+B_IP=$(sed -n 's/^BIP=//p' <<<"$OUT")
 sleep 3
 J=$(mktemp); trap 'rm -f "$J"' EXIT
 curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$MC/api/login" -c "$J"
