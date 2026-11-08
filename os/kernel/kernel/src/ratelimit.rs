@@ -653,10 +653,9 @@ static TOP_FLOWS: AtomicU64 = AtomicU64::new(0);
 static TOP_WIN: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
-fn ct_touch(src: u64) -> usize {
+#[inline]
+fn ct_touch_at(src: u64, now: u64, win: u64) -> usize {
     let s = (src as usize) % FLOW_SRCS;
-    let now = cntpct();
-    let win = cntfrq().max(1).saturating_mul(CT_WINDOW_SECS);
     let start = CT_WIN[s].load(Ordering::Relaxed);
     if CT_SRC[s].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
         CT_SRC[s].store(src, Ordering::Relaxed);
@@ -674,7 +673,7 @@ pub fn flow_record(src: u64) {
     if src == 0 {
         return;
     }
-    // Window the global top slot alongside the per-source census.
+    // Window the global top slot alongside the per-source census (one clock read for both).
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(CT_WINDOW_SECS);
     if now.wrapping_sub(TOP_WIN.load(Ordering::Relaxed)) >= win {
@@ -682,7 +681,7 @@ pub fn flow_record(src: u64) {
         TOP_SRC.store(0, Ordering::Relaxed);
         TOP_FLOWS.store(0, Ordering::Relaxed);
     }
-    let s = ct_touch(src);
+    let s = ct_touch_at(src, now, win);
     let c = CT_COUNT[s].fetch_add(1, Ordering::Relaxed) + 1;
     if c > TOP_FLOWS.load(Ordering::Relaxed) {
         TOP_FLOWS.store(c, Ordering::Relaxed);
