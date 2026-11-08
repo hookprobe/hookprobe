@@ -34,7 +34,7 @@ syncabi = []
 # M4.2a feasibility proof + M5.3's own measurement show it builds for
 # aarch64-unknown-none-softfloat under build-std and runs the memoryless classify module in
 # ~9.5 KiB of bump-heap high-water.
-wasmi = { version = "2.0", default-features = false }
+wasmi = { version = "0.32", default-features = false }
 
 [profile.release]
 panic = "abort"      # bare-metal EL0: no unwinder
