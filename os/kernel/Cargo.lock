@@ -165,7 +165,7 @@ version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2f5626bf5534df4ebdbd2536465d7eaa8a9dc2cdeb7e036e0ecf291dcc80ffb6"
 dependencies = [
- "rand_core",
+ "rand_core 0.6.4",
  "sha2",
  "sha3",
  "zeroize",
@@ -201,7 +201,7 @@ dependencies = [
  "boot-abi",
  "ed25519-compact",
  "fips205",
- "rand_core",
+ "rand_core 0.10.1",
 ]
 
 [[package]]
@@ -247,7 +247,7 @@ version = "0.3.0-pre.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2b8645470337db67b01a7f966decf7d0bafedbae74147d33e641c67a91df239f"
 dependencies = [
- "rand_core",
+ "rand_core 0.6.4",
  "zeroize",
 ]
 
@@ -287,7 +287,7 @@ checksum = "8de49b3df74c35498c0232031bb7e85f9389f913e2796169c8ab47a53993a18f"
 dependencies = [
  "hybrid-array",
  "kem",
- "rand_core",
+ "rand_core 0.6.4",
  "sha3",
 ]
 
@@ -331,6 +331,12 @@ name = "rand_core"
 version = "0.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
+
+[[package]]
+name = "rand_core"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rustc_version"
@@ -439,7 +445,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c7e468321c81fb07fa7f4c636c3972b9100f0346e5b6a9f2bd0603a52f7ed277"
 dependencies = [
  "curve25519-dalek",
- "rand_core",
+ "rand_core 0.6.4",
 ]
 
 [[package]]
