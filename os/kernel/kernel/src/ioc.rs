@@ -385,6 +385,7 @@ fn check_sig(sig: &[u8], key: &[u8; 32], digest_of: &mut dyn FnMut(u64) -> Optio
 
 /// Boot: IOC.TXT (+ IOC.SIG when an operator key is compiled in). A refused pack is not loaded.
 pub fn load<D: BlockDev>(dev: &D) -> Info {
+    crate::blocklist::seed_off(); // a device: only the signed pack is threat intel from here on
     reset();
     let mut info = Info::default();
     let mut sec = [0u8; 512];

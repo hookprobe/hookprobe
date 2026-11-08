@@ -3106,12 +3106,13 @@ fn cm5_p10_probe() {
                                 kprint!(" [RULES] rule pack: {} rules armed{}{}\n", ri.loaded,
                                     match ri.file { 0 => " (no RULES.BIN — built-in corpus only)", 1 => if ri.signed { " (operator signature OK)" } else { " (unsigned — standalone image)" }, _ => " (RULES.BIN REFUSED — built-in corpus only)" },
                                     if ri.refused_verify + ri.refused_meta > 0 { " — some rules refused (verifier / metadata)" } else { "" });
-                                // IDS/IPS cost on this core, with the signed rule pack armed (optimisation baseline).
-                                let _ = idsbench::run(2000);
                                 let ii = ioc::load(&dev);
                                 kprint!(" [INTEL] IOC pack: {} IPv4 prefixes + {} domains {} — matches are DETECTIONS (ioc_match), never drops\n",
                                     ioc::v4_len(), ioc::dom_len(),
                                     match ii.file { 0 => "(no IOC.TXT)", 1 => if ii.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(IOC.TXT REFUSED — not loaded)" });
+                                // IDS/IPS cost on this core with the signed rule pack AND the signed IOC pack armed
+                                // (optimisation baseline: the state a customer's traffic actually meets).
+                                let _ = idsbench::run(2000);
                                 let oi = oui::load(&dev);
                                 kprint!(" [OUI] vendor registry: {} assignments {}{}\n", oui::len(),
                                     match oi.file { 0 => "(no OUI.TXT — curated vendors only)", 1 => if oi.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(OUI.TXT REFUSED — curated vendors only)" },
