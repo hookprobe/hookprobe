@@ -50,6 +50,13 @@ check(await live.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).
 check(!(await page.getByText('Sample data').first().isVisible().catch(() => false)), 'Shield page shows no "Sample data" notice');
 await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-shield.png`, fullPage: true });
 
+// My Network (parity G13): the device inventory, grouped by the signed DEVICES.TXT policy — not the sample map.
+await page.goto(`${base}/network/map`, { waitUntil: 'load' });
+const netLive = page.getByText(/grouped by the policy in your signed DEVICES\.TXT/);
+check(await netLive.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false), 'My Network renders the LIVE device inventory (/api/devices)');
+check(!(await page.getByText('Sample data').first().isVisible().catch(() => false)), 'My Network shows no "Sample data" notice');
+await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-network.png`, fullPage: true });
+
 check(apiCalls.some((c) => c.startsWith('200 /api/detections')) && apiCalls.some((c) => c.startsWith('200 /api/incidents')) && apiCalls.some((c) => c.startsWith('200 /api/dns')),
   `the UI fetched its data from the device: ${[...new Set(apiCalls)].join(', ')}`);
 await browser.close();

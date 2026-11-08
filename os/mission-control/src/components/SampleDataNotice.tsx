@@ -17,6 +17,7 @@ const LIVE: Record<string, 'live' | string> = {
   '/investigate/queue': 'live',
   '/observe/events': 'live',
   '/network/dns': 'live',
+  '/network/map': 'live',
 };
 
 function norm(p: string): string {
@@ -44,7 +45,7 @@ const SampleDataNotice: Component = () => {
           'backdrop-filter': 'blur(6px)',
         }}
       >
-        <strong>Sample data</strong> — {status()} Live on this device: Home, Detect, Investigate, Observe, Shield.
+        <strong>Sample data</strong> — {status()} Live on this device: Home, Detect, Investigate, Observe, Shield, My Network.
       </div>
     </Show>
   );
