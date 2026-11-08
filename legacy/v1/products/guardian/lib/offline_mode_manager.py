@@ -782,7 +782,10 @@ logger_syslog_level=2
         try:
             # Write to temp file first
             temp_path = "/tmp/hostapd.conf.new"
-            with open(temp_path, 'w') as f:
+            # 0600: config contains the hotspot passphrase
+            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, 'w') as f:
+                os.fchmod(f.fileno(), 0o600)
                 f.write(config)
 
             # Copy to actual location (requires sudo)

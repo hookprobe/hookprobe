@@ -66,7 +66,7 @@ def _api_call(method: str, endpoint: str, data: dict = None, timeout: int = API_
         return None, "dnsXai service timeout"
     except Exception as e:
         logger.warning(f"API call failed: {e}")
-        return None, str(e)
+        return None, "dnsXai service error"
 
 
 def load_json_file(path: Path, default=None):
