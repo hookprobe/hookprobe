@@ -3846,6 +3846,12 @@ fn cm5_p10_probe() {
                                                     let mut d6 = [0u8; 16];
                                                     d6.copy_from_slice(&frame[38..54]);
                                                     let _ = rules::flow_scan_observe6(frame, srckey::dev(&sm), srckey::v6net(&d6));
+                                                    // JA4 for IPv6 TLS clients too (was IPv4-only), attributed to the device's IPv4 lease
+                                                    if frame[20] == 6 {
+                                                        let lease = dh.lease_for(&sm).map_or(0, u32::from_be_bytes);
+                                                        crate::ja4::observe6(frame, lease);
+                                                        rules::behavioral_observe6(frame, lease); // G36: beacon + brute force over IPv6
+                                                    }
                                                 }
                                                 match pa {
                                                     (PAct::Allow, _) => {
@@ -4138,8 +4144,13 @@ fn cm5_p10_probe() {
                                                     s6.copy_from_slice(&wbuf[22..38]);
                                                     let mut d6 = [0u8; 16];
                                                     d6.copy_from_slice(&wbuf[38..54]);
-                                                    let dk = v6.mac_of(&d6).map(|m| srckey::dev(&m)).unwrap_or(0);
+                                                    let dmac = v6.mac_of(&d6);
+                                                    let dk = dmac.map(|m| srckey::dev(&m)).unwrap_or(0);
                                                     let _ = rules::flow_scan_observe6(&wbuf[..n], srckey::v6net(&s6), dk);
+                                                    if wbuf[20] == 6 {
+                                                        let lease = dmac.and_then(|m| dh.lease_for(&m)).map_or(0, u32::from_be_bytes);
+                                                        rules::brute_answer6(&wbuf[..n], lease); // G36: the answer that makes v6 brute force count
+                                                    }
                                                 }
                                                 let v6a = v6.on_wan(&wbuf[14..n], nms, &mut v6buf);
                                                 // `wan in` judges only genuinely NEW inbound traffic (no flow). A neighbor-table
