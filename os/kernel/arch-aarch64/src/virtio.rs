@@ -1,51 +1,23 @@
-//! P5b — minimal virtio-net (virtio-mmio, modern/v2) driver: bring the NIC up,
-//! ARP the gateway, and receive one real packet — proving the Packet Engine is
-//! fed by real hardware, not synthetic data. Poll-mode (no IRQ). Requires QEMU:
-//!   -netdev user,id=n0 -device virtio-net-device,netdev=n0
+//! P5b — minimal virtio-net driver: bring the NIC up, ARP the gateway, and receive one real
+//! packet — proving the Packet Engine is fed by real hardware, not synthetic data.
+//! Poll-mode (no IRQ). Transport-agnostic via `virtio_transport`: virtio-mmio v2 on the QEMU
+//! gates (`-device virtio-net-device`), virtio-pci modern on the arm64 cloud (OCI A1,
+//! feature `pci`).
 
 use crate::mmu;
+use crate::virtio_transport::Transport;
 use core::ptr::{read_volatile, write_volatile};
 
-const MMIO_BASE: usize = 0x0a00_0000;
-const MMIO_STRIDE: usize = 0x200;
-const MMIO_COUNT: usize = 32;
-
-// virtio-mmio registers
-const MAGIC: usize = 0x000;
-const DEVICE_ID: usize = 0x008;
-const DEV_FEAT: usize = 0x010;
-const DEV_FEAT_SEL: usize = 0x014;
-const DRV_FEAT: usize = 0x020;
-const DRV_FEAT_SEL: usize = 0x024;
-const QUEUE_SEL: usize = 0x030;
-const QUEUE_NUM: usize = 0x038;
-const QUEUE_READY: usize = 0x044;
-const QUEUE_NOTIFY: usize = 0x050;
-const STATUS: usize = 0x070;
-const Q_DESC_LO: usize = 0x080;
-const Q_DESC_HI: usize = 0x084;
-const Q_DRV_LO: usize = 0x090;
-const Q_DRV_HI: usize = 0x094;
-const Q_DEV_LO: usize = 0x0a0;
-const Q_DEV_HI: usize = 0x0a4;
-const CONFIG: usize = 0x100;
-
-const S_ACK: u32 = 1;
-const S_DRIVER: u32 = 2;
-const S_DRIVER_OK: u32 = 4;
-const S_FEAT_OK: u32 = 8;
+const S_ACK: u8 = 1;
+const S_DRIVER: u8 = 2;
+const S_DRIVER_OK: u8 = 4;
+const S_FEAT_OK: u8 = 8;
 
 const VIRTQ_DESC_F_WRITE: u16 = 2;
 const QSZ: usize = 8;
 const BUF_SZ: usize = 2048;
 const NET_HDR: usize = 12; // virtio_net_hdr (VERSION_1)
 
-unsafe fn r(base: usize, off: usize) -> u32 {
-    read_volatile((base + off) as *const u32)
-}
-unsafe fn w(base: usize, off: usize, v: u32) {
-    write_volatile((base + off) as *mut u32, v);
-}
 fn zero(base: usize, len: usize) {
     for i in 0..len {
         unsafe { write_volatile((base + i) as *mut u8, 0) };
@@ -55,60 +27,36 @@ fn barrier() {
     unsafe { core::arch::asm!("dsb sy") };
 }
 
-fn find() -> Option<usize> {
-    for i in 0..MMIO_COUNT {
-        let base = MMIO_BASE + i * MMIO_STRIDE;
-        unsafe {
-            if r(base, MAGIC) == 0x7472_6976 && r(base, DEVICE_ID) == 1 {
-                return Some(base);
-            }
-        }
-    }
-    None
-}
-
-unsafe fn setup_queue(base: usize, q: u32, desc: usize, avail: usize, used: usize) {
-    w(base, QUEUE_SEL, q);
-    w(base, QUEUE_NUM, QSZ as u32);
-    w(base, Q_DESC_LO, desc as u32);
-    w(base, Q_DESC_HI, (desc >> 32) as u32);
-    w(base, Q_DRV_LO, avail as u32);
-    w(base, Q_DRV_HI, (avail >> 32) as u32);
-    w(base, Q_DEV_LO, used as u32);
-    w(base, Q_DEV_HI, (used >> 32) as u32);
-    w(base, QUEUE_READY, 1);
-}
-
 /// Bring up virtio-net, ARP the gateway (10.0.2.2) from 10.0.2.15, and return
 /// the first received packet (payload after the virtio_net_hdr) in `out`.
 /// Returns the packet length, or None (no device / rejected / timeout).
 pub fn rx_one_packet(out: &mut [u8]) -> Option<usize> {
-    let base = find()?;
+    let t = Transport::find(1)?;
+    let (kind, base, bus, dev, func) = t.describe();
+    if kind == "virtio-pci" {
+        crate::_print(format_args!("   transport: {} {:02x}:{:02x}.{} (common cfg @ VA {:#x})\n", kind, bus, dev, func, base));
+    }
     unsafe {
         // Reset -> ACKNOWLEDGE -> DRIVER.
-        w(base, STATUS, 0);
-        w(base, STATUS, S_ACK);
-        w(base, STATUS, S_ACK | S_DRIVER);
+        t.set_status(0);
+        t.set_status(S_ACK);
+        t.set_status(S_ACK | S_DRIVER);
 
-        // Negotiate MAC (feat 5) + VERSION_1 (feat 32, required for v2 mmio).
-        w(base, DEV_FEAT_SEL, 0);
-        let dl = r(base, DEV_FEAT);
-        w(base, DEV_FEAT_SEL, 1);
-        let dh = r(base, DEV_FEAT);
-        w(base, DRV_FEAT_SEL, 0);
-        w(base, DRV_FEAT, dl & (1 << 5));
-        w(base, DRV_FEAT_SEL, 1);
-        w(base, DRV_FEAT, dh & 1); // bit 32 = VERSION_1
-        w(base, STATUS, S_ACK | S_DRIVER | S_FEAT_OK);
-        if r(base, STATUS) & S_FEAT_OK == 0 {
+        // Negotiate MAC (feat 5) + VERSION_1 (feat 32, required for modern transports).
+        let dl = t.dev_features(0);
+        let dh = t.dev_features(1);
+        t.set_drv_features(0, dl & (1 << 5));
+        t.set_drv_features(1, dh & 1); // bit 32 = VERSION_1
+        t.set_status(S_ACK | S_DRIVER | S_FEAT_OK);
+        if t.status() & S_FEAT_OK == 0 {
             crate::_print(format_args!("   features rejected (dl={:#x} dh={:#x})\n", dl, dh));
             return None; // device rejected our features
         }
 
         // Read the MAC from config space.
         let mut mac = [0u8; 6];
-        for i in 0..6 {
-            mac[i] = read_volatile((base + CONFIG + i) as *const u8);
+        for (i, b) in mac.iter_mut().enumerate() {
+            *b = t.config_u8(i);
         }
         crate::_print(format_args!(
             "   net up: MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
@@ -128,9 +76,13 @@ pub fn rx_one_packet(out: &mut [u8]) -> Option<usize> {
             zero(reg, 4096);
         }
 
-        setup_queue(base, 0, rx_desc, rx_avail, rx_used);
-        setup_queue(base, 1, tx_desc, tx_avail, tx_used);
-        w(base, STATUS, S_ACK | S_DRIVER | S_FEAT_OK | S_DRIVER_OK);
+        if !t.setup_queue(0, QSZ as u16, rx_desc, rx_avail, rx_used)
+            || !t.setup_queue(1, QSZ as u16, tx_desc, tx_avail, tx_used)
+        {
+            crate::_print(format_args!("   queue setup refused by device\n"));
+            return None;
+        }
+        t.set_status(S_ACK | S_DRIVER | S_FEAT_OK | S_DRIVER_OK);
 
         // Post RX buffers (device-writable), publish avail.idx, notify queue 0.
         for i in 0..QSZ {
@@ -143,7 +95,7 @@ pub fn rx_one_packet(out: &mut [u8]) -> Option<usize> {
         }
         write_volatile((rx_avail + 2) as *mut u16, QSZ as u16);
         barrier();
-        w(base, QUEUE_NOTIFY, 0);
+        t.notify(0);
 
         // Build an ARP request (broadcast) for the gateway, TX on queue 1.
         let p = tx_buf as *mut u8;
@@ -182,7 +134,7 @@ pub fn rx_one_packet(out: &mut [u8]) -> Option<usize> {
         write_volatile((tx_avail + 4) as *mut u16, 0);
         write_volatile((tx_avail + 2) as *mut u16, 1);
         barrier();
-        w(base, QUEUE_NOTIFY, 1);
+        t.notify(1);
         let _ = tx_used; // TX completion not polled (fire-and-forget for the demo)
 
         // Poll the RX used ring for the first completed buffer.
