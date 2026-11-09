@@ -558,6 +558,14 @@ impl BlockDev for Emmc {
         Ok(())
     }
     #[cfg(feature = "p15-write")]
+    fn admit_inactive_slot(&mut self) -> Option<(u64, u64, u32)> {
+        Emmc::admit_inactive_slot(self)
+    }
+    #[cfg(feature = "p15-write")]
+    fn revoke_inactive_slot(&mut self) {
+        Emmc::revoke_inactive_slot(self)
+    }
+    #[cfg(feature = "p15-write")]
     fn write_block(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {
         self.write_block_impl(lba, buf)
     }

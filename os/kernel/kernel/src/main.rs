@@ -116,6 +116,10 @@ mod ota;
 mod fat;
 #[allow(dead_code)] // A/B commit (B2): the on-device OTA commit + its QEMU two-boot proof
 mod abboot;
+/// OS-image update over the upload channel (ADR 0056 phase 2 / production phase 1).
+#[cfg(all(feature = "p15-write", feature = "netsvc"))]
+#[allow(dead_code)]
+mod otaimg;
 mod net;
 mod netq;
 #[cfg(feature = "netsvc")]
@@ -3691,7 +3695,26 @@ fn cm5_p10_probe() {
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
                         // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
                         let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
+                        // OS-image update (production phase 1): after an activation, give the HTTP
+                        // response 2 s to leave, then reboot ONCE into the slot tryboot.txt names.
+                        #[cfg(all(feature = "p15-write", feature = "mcserve"))]
+                        let mut trial_at: Option<u64> = None;
                         loop {
+                            #[cfg(all(feature = "p15-write", feature = "mcserve"))]
+                            {
+                                if upload::take_trial_reboot() {
+                                    trial_at = Some(now().wrapping_add(2 * freq));
+                                    kprint!(" [OTA] new image written to the inactive slot and verified from the slot — trial boot in 2 s (tryboot one-shot; an unhealthy trial falls back to this slot)\n");
+                                }
+                                if trial_at.is_some_and(|t| now() > t) {
+                                    let set = arch_aarch64::mailbox::set_reboot_flags(arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
+                                    let notified = arch_aarch64::mailbox::notify_reboot();
+                                    kprint!(" [OTA] tryboot flag set={:?} notify={} — rebooting into the trial slot\n", set, notified);
+                                    #[cfg(feature = "hboot")]
+                                    unsafe { core::arch::asm!("hvc #0") };
+                                    trial_at = None;
+                                }
+                            }
                             // Liveness net: an unconditional (cheap) WiFi read every ~250 ms in case an
                             // indication was lost — the peek alone stalled the pump after the first lease.
                             // Flush queued WiFi deliveries while credit lasts (a read just refreshed it).

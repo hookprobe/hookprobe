@@ -219,6 +219,12 @@ impl VirtioBlk {
 }
 
 impl BlockDev for VirtioBlk {
+    /// QEMU parity for the OTA flow: the same on-disk derivation as the eMMC driver. (virtio-blk
+    /// itself only refuses LBA 0 — the brick-safety enforcement is the eMMC driver's Gate 1.)
+    fn admit_inactive_slot(&mut self) -> Option<(u64, u64, u32)> {
+        let r = hal::abslot::inactive_slot_run(|l, b| self.read_block(l, b).is_ok())?;
+        Some((r.lo, r.hi, r.size))
+    }
     fn block_count(&self) -> u64 {
         self.sectors
     }

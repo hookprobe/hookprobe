@@ -34,6 +34,12 @@ impl BlockDev for DevRef {
     fn read_blocks(&self, lba: u64, out: &mut [u8]) -> Result<(), BlockErr> {
         unsafe { (*self.0).read_blocks(lba, out) }
     }
+    fn admit_inactive_slot(&mut self) -> Option<(u64, u64, u32)> {
+        unsafe { (*self.0).admit_inactive_slot() }
+    }
+    fn revoke_inactive_slot(&mut self) {
+        unsafe { (*self.0).revoke_inactive_slot() }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -56,6 +62,40 @@ struct Up {
     phase: Phase,
     gen: u64,
     len: u64,
+    /// An OS image (`os_image`), not a data pack: the container is the signed boot image itself.
+    os: bool,
+    #[cfg(feature = "p15-write")]
+    plan: Option<crate::otaimg::Plan>,
+}
+
+/// Audit code of the upload in flight (an OS image has no pack type).
+const OS_CODE: u8 = 0xfe;
+fn code(ty: Option<Ty>, os: bool) -> u8 {
+    if os { OS_CODE } else { ty.map_or(0xff, |t| t as u8) }
+}
+fn cur_code() -> u8 {
+    up().as_ref().map_or(0xff, |u| code(Some(u.ty), u.os))
+}
+
+/// Set by an `os_image` activation: the AP loop reboots into the trial slot once the HTTP
+/// response has gone out (`take_trial_reboot`).
+static mut TRIAL_REBOOT: bool = false;
+pub fn take_trial_reboot() -> bool {
+    unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(TRIAL_REBOOT), false) }
+}
+
+/// (running SVN, anti-rollback floor for an update, payload hash HBoot measured). Without an HBoot
+/// handoff (QEMU) there is no running measurement and the floor is the compile-time 1.
+fn boot_facts() -> (u64, u64, Option<[u8; 32]>) {
+    #[cfg(feature = "hboot")]
+    {
+        use boot_abi::{BootInfo, BOOTINFO_ADDR, BOOTINFO_MAGIC};
+        let bi = unsafe { &*(BOOTINFO_ADDR as *const BootInfo) };
+        if bi.magic == BOOTINFO_MAGIC {
+            return (bi.svn, bi.svn.max(bi.svn_floor).max(1), Some(bi.kernel_hash));
+        }
+    }
+    (0, 1, None)
 }
 
 static mut DEV: Option<DevRef> = None;
@@ -77,9 +117,9 @@ const EV0: Ev = Ev { ms: 0, session: [0; 4], step: "", ty: 0xff, ok: false, why:
 static mut EVS: [Ev; 32] = [EV0; 32];
 static mut EHEAD: usize = 0;
 
-fn audit(c: &Ctx, step: &'static str, ty: Option<Ty>, ok: bool, why: &'static str, gen: u64) {
+fn audit(c: &Ctx, step: &'static str, ty: u8, ok: bool, why: &'static str, gen: u64) {
     unsafe {
-        EVS[EHEAD % 32] = Ev { ms: c.now_ms, session: crate::mcauth::session_tag(c.session), step, ty: ty.map_or(0xff, |t| t as u8), ok, why, gen };
+        EVS[EHEAD % 32] = Ev { ms: c.now_ms, session: crate::mcauth::session_tag(c.session), step, ty, ok, why, gen };
         EHEAD += 1;
     }
 }
@@ -164,8 +204,9 @@ pub struct Begun {
 pub fn begin(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Begun, &'static str> {
     let r = begin_inner(c, body, auth);
     let mut b = [0u8; 192];
-    let ty = form_get(body, "type", &mut b).and_then(Ty::from_name);
-    audit(c, "begin", ty, r.is_ok(), r.as_ref().err().copied().unwrap_or(""), 0);
+    let name = form_get(body, "type", &mut b);
+    let ty = name.and_then(Ty::from_name);
+    audit(c, "begin", code(ty, name == Some("os_image")), r.is_ok(), r.as_ref().err().copied().unwrap_or(""), 0);
     r
 }
 fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Begun, &'static str> {
@@ -173,14 +214,24 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
     expire(c.now_ms);
     let mut b = [[0u8; 192]; 4];
     let [ref mut b0, ref mut b1, ref mut b2, ref mut b3] = b;
-    let ty = form_get(body, "type", b0).and_then(Ty::from_name).ok_or("type")?;
+    let name = form_get(body, "type", b0).ok_or("type")?;
+    let os = name == "os_image";
+    #[cfg(not(feature = "p15-write"))]
+    if os {
+        return Err("this image cannot update its OS over the network (read-only build)");
+    }
+    let ty = if os { Ty::Block } else { Ty::from_name(name).ok_or("type")? };
     let size: u64 = form_get(body, "size", b1).and_then(|v| v.parse().ok()).ok_or("size")?;
     let sha = form_get(body, "sha256", b2).and_then(hex32).ok_or("sha256")?;
     let key = form_get(body, "owner_key", b3).unwrap_or("");
     if crate::policysig::key().is_none() {
         return Err("no operator key in this image: unsigned packs are never accepted over the network");
     }
-    if size <= 512 || size > 512 + ty.info().cap {
+    #[cfg(feature = "p15-write")]
+    if os && !(crate::otaimg::IMG_MIN..=crate::otaimg::IMG_MAX).contains(&size) {
+        return Err("size");
+    }
+    if !os && (size <= 512 || size > 512 + ty.info().cap) {
         return Err("size");
     }
     let d = dev().ok_or("no artifact store (no DataVolume or a RAM-only image)")?;
@@ -203,7 +254,7 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
         m[12..20].copy_from_slice(&CTR.to_le_bytes());
         u64::from_le_bytes(boot_abi::sha256::digest(&m)[..8].try_into().unwrap()) | 1
     };
-    *up() = Some(Up { id, session: tag, ty, size, sha, got: 0, h: boot_abi::sha256::Hasher::new(), part: [0; 512], plen: 0, last_ms: c.now_ms, phase: Phase::Receiving, gen: 0, len: 0 });
+    *up() = Some(Up { id, session: tag, ty, size, sha, got: 0, h: boot_abi::sha256::Hasher::new(), part: [0; 512], plen: 0, last_ms: c.now_ms, phase: Phase::Receiving, gen: 0, len: 0, os, #[cfg(feature = "p15-write")] plan: None });
     Ok(Begun { id })
 }
 
@@ -250,7 +301,7 @@ pub struct Finished {
 
 /// `finish`: id, seq. Digest, then the module's own verifier, then anti-rollback (gen ≥ active).
 pub fn finish(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
-    let ty = up().as_ref().map(|u| u.ty);
+    let ty = cur_code();
     let r = finish_inner(c, body);
     audit(c, "finish", ty, r.is_ok(), r.as_ref().err().copied().unwrap_or(""), r.as_ref().map_or(0, |f| f.gen));
     if r.is_err() {
@@ -280,6 +331,17 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     let h = core::mem::replace(&mut u.h, boot_abi::sha256::Hasher::new());
     if h.finish() != u.sha {
         return Err("sha256 mismatch");
+    }
+    #[cfg(feature = "p15-write")]
+    if u.os {
+        let (svn, floor, running) = boot_facts();
+        let plan = crate::otaimg::check(&*d, slo, u.size, floor, running)?;
+        u.plan = Some(plan);
+        u.phase = Phase::Verified;
+        u.gen = plan.svn;
+        u.len = plan.len;
+        u.last_ms = c.now_ms;
+        return Ok(Finished { gen: plan.svn, active_gen: svn, len: plan.len });
     }
     let mut sig = [0u8; 512];
     d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
@@ -312,7 +374,7 @@ pub struct Activated {
 
 /// `activate`: id, owner_key, seq. Store A/B write + readback + manifest commit + live reload.
 pub fn activate(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Activated, &'static str> {
-    let ty = up().as_ref().map(|u| u.ty);
+    let ty = cur_code();
     let r = activate_inner(c, body, auth);
     audit(c, "activate", ty, r.is_ok(), r.as_ref().err().copied().unwrap_or(""), r.as_ref().map_or(0, |a| a.gen));
     r
@@ -332,6 +394,31 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     }
     let d = dev().ok_or("no artifact store")?;
     let (slo, _) = staging(d).ok_or("no staging region")?;
+    #[cfg(feature = "p15-write")]
+    if u.os {
+        let plan = u.plan.ok_or("not verified (finish first)")?;
+        *up() = None;
+        let (svn, _, _) = boot_facts();
+        let mut reason = [0u8; 64];
+        let rl = {
+            use core::fmt::Write;
+            let mut w = crate::mcstate::JsonBuf::new(&mut reason);
+            let _ = write!(w, "svn {}->{} slot {} sha256:{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", svn, plan.svn,
+                if plan.active == b'a' { 'b' } else { 'a' }, plan.hash[0], plan.hash[1], plan.hash[2], plan.hash[3], plan.hash[4], plan.hash[5], plan.hash[6], plan.hash[7]);
+            w.len
+        };
+        let tag = crate::mcauth::session_tag(c.session);
+        return match crate::otaimg::install(d, slo, &plan) {
+            Ok(()) => {
+                unsafe { TRIAL_REBOOT = true };
+                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, c.now_ms) })
+            }
+            Err(e) => {
+                let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, c.now_ms);
+                Err(e)
+            }
+        };
+    }
     let mut sig = [0u8; 512];
     d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
     let (ty, gen, len) = (u.ty, u.gen, u.len);
@@ -360,7 +447,7 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
 
 /// `abort`: id, seq.
 pub fn abort(c: &Ctx, body: &[u8]) -> Result<(), &'static str> {
-    let ty = up().as_ref().map(|u| u.ty);
+    let ty = cur_code();
     let r = (|| {
         guards(c, body)?;
         let mut b = [0u8; 192];
@@ -390,7 +477,7 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
     w.raw("],\"in_flight\":");
     match up() {
         Some(u) => {
-            let _ = write!(w, "{{\"id\":\"{:016x}\",\"type\":\"{}\",\"size\":{},\"received\":{},\"verified\":{}}}", u.id, u.ty.info().name, u.size, u.got, u.phase == Phase::Verified);
+            let _ = write!(w, "{{\"id\":\"{:016x}\",\"type\":\"{}\",\"size\":{},\"received\":{},\"verified\":{}}}", u.id, if u.os { "os_image" } else { u.ty.info().name }, u.size, u.got, u.phase == Phase::Verified);
         }
         None => w.raw("null"),
     }
@@ -398,7 +485,7 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
     let n = unsafe { EHEAD };
     for (k, i) in (n.saturating_sub(16)..n).rev().enumerate() {
         let e = unsafe { EVS[i % 32] };
-        let tn = Ty::from_u8(e.ty).map_or("?", |t| t.info().name);
+        let tn = if e.ty == OS_CODE { "os_image" } else { Ty::from_u8(e.ty).map_or("?", |t| t.info().name) };
         let _ = write!(w, "{}{{\"ms\":{},\"session\":\"{:02x}{:02x}{:02x}{:02x}\",\"step\":\"{}\",\"type\":\"{}\",\"ok\":{},\"generation\":{},\"why\":",
             if k > 0 { "," } else { "" }, e.ms, e.session[0], e.session[1], e.session[2], e.session[3], e.step, tn, e.ok, e.gen);
         w.string(e.why);
