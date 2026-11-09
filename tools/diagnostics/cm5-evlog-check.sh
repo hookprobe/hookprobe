@@ -10,6 +10,7 @@
 set -u -o pipefail
 KEY="${1:?owner key file}"; LOG="${2:?serial capture log}"; MC="${3:-https://192.168.200.146}"; PIIP="${4:-10.99.0.10}"
 HERE=$(cd "$(dirname "$0")" && pwd)
+"$HERE/pi-ensure-ap.sh" >/dev/null 2>&1 || true   # the checks need the Pi on the CM5 AP
 mark=$(stat -c %s "$LOG")
 echo "== waiting for the evidence log to seal detections (<= 3 min)"
 for _ in $(seq 1 36); do
