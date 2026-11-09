@@ -13,6 +13,7 @@ P15fs
 P15g
 P15ota
 P15otafat
+P15otaimg
 P15p
 P15sf
 P16sha
@@ -65,12 +66,15 @@ PH6mb
 PH6net
 PH7caps
 PHprod
+Pabslot
 Pabstore
 Pacs
 Pactions
 Palertdedup
+Panchor
 Papcore
 Papcorelan
+Papcorerelay
 Papcorewan
 Papcred
 Partstore
@@ -99,6 +103,8 @@ Pmc
 Pmcauth
 Pmcmgmt
 Pmd5
+Pnatindex
+Potaverify
 Poui
 Pownerapi
 Pownerjournal
@@ -106,6 +112,7 @@ Ppolicy
 Ppolsig
 Ppppoe
 Pr1ipc
+Prtwdog
 Prulepack
 Pshield
 Pshieldlevels
