@@ -34,9 +34,25 @@ own once-a-minute event where the destination is on the bench IOC pack). **1 fal
 benign frames** — a rogue-RA alert for the bench subnet's real router (on the AP an RA from a Wi-Fi client
 *is* rogue; the capture point differs from the AP's LAN side).
 
+## Evasive variants (second run, same day)
+`gen-attacks.py --evasive`: slow scan (1 port / 20 s for 30 min), jittered beacon (300 s ± 30 % for 2 h),
+low-and-slow exfil (8 MB/min for 15 min), DNS tunnel (300 long random labels of one domain in 5 min), slow
+SSH brute force (1 attempt / 30 s for 20 min). The first run detected only the beacon and the tunnel. Three
+slow tiers were added (all observe-only — the fast tiers keep enforcement):
+
+| Tier | Rule | Bar |
+|---|---|---|
+| slow scan | 113 | ≥ 40 distinct ports answered CLOSED (RST) to one scanner within 30 min |
+| low-and-slow exfil | 118 | > 100 MB from one inside source to ONE destination within 15 min (per destination, so many cloud services don't add up) |
+| slow brute force | 124 | ≥ 30 answered attempts on one (client, server, service) within 30 min |
+
+Result: all five evasive classes detected; real-traffic false positives unchanged (1 over 87,510 frames).
+`ci.sh` replays both sets; it fails if any class is missed or one rule raises > 30 alerts in one episode.
+Tuning note: the 15-min exfil tier will also flag a large single-destination cloud backup (e.g. a 100 MB+
+photo upload) — an informational, observe-only alert by design.
+
 ## Limits (honest)
-- The attacks are synthetic and modelled on common tool behaviour; evasive variants (slow scans, jittered
-  beacons, low-and-slow exfil under 50 MB/min) are not covered yet.
+- The attacks are synthetic and modelled on common tool behaviour (plus the evasive variants above).
 - The benign corpus is 10 minutes of one small subnet, not a household. Next: hours of real home traffic
   (phones, TVs, IoT, gaming, video calls, cloud backup — the last one tests the 50 MB/min exfil bar) and
   public datasets for attack breadth.
