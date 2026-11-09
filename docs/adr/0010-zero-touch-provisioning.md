@@ -4,7 +4,7 @@
 "zero-touch first boot" sketch there. Builds directly on machinery already validated on hardware:
 the SASE-edge built-in AP, the deterministic **intent → plan-as-diff → apply & verify** reconciler,
 and the self-detecting encryption **anchor tiers** (ADR 0007 E3). No new subsystem — a UI over the
-engine that already exists.
+engine that already exists. (The 2026-07-17 amendment below is 🟡 Proposed. On heqk, provisioning is now the signed `WIFI.TXT` + per-device `apcred` path — ADR 0054.)
 
 ## Context
 
@@ -112,7 +112,7 @@ falls out of the intent-reconciler DNA (previewed, verified, seamless), not bolt
 
 ## Amendment (2026-07-17) — the "simple experience": value before configuration
 
-**Status:** 🟡 Proposed (2026-07-17) — design-session posture pending operator ratification. Refines
+**Amendment status (not the ADR status):** 🟡 Proposed (2026-07-17) — design-session posture pending operator ratification. Refines
 (does not replace) Decisions 2/4/6 above with the "Apple of security" experience principles from a
 design exploration. **Relates to:** [ADR 0037](0037-zero-touch-onboarding-flasher-provisioning.md)
 (the flasher-as-factory provisioning mechanics that precede this portal), [ADR 0040](0040-experience-ux-ui-scope-gui-features.md)

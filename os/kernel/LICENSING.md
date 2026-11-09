@@ -244,7 +244,7 @@ For proprietary components: Modifications require commercial license.
 
 ## Third-Party Licenses
 
-See [3rd-party-licenses.md](3rd-party-licenses.md) for comprehensive third-party license documentation.
+A consolidated third-party license document is not yet published in this repo; dependency licenses can be enumerated from the Cargo lockfiles (e.g. `cargo license`).
 
 All third-party components are GPL-free and commercially compatible.
 

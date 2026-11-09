@@ -1,6 +1,7 @@
 # ADR 0052 — Shield v2: DNS protection on heqk, built on the dnsXai model and its lessons
 
 **Status:** 🟡 Proposed (2026-11-07) · **Supersedes:** the Shield v1 hook (`d2cee9b`, `os/kernel/kernel/src/dnsblock.rs`)
+**Status update 2026-11-09:** ✅ **Accepted / implemented.** Shield v2 runs on heqk (`os/kernel/kernel/src/shield.rs` + `dnssink.rs`); per-client profiles and pause are done + metal-proven per `docs/design/heqk-parity-gaps.md` **G22** (also G8 DGA scoring, G31 bypass visibility). Open: list refresh without re-flash (needs the HTTPS upload channel).
 **Related:** ADR 0023 (enforcement separation — refuse a NAME, never a customer's PACKET), ADR 0033 (DNS sinkhole/RPZ on
 the Linux tier), ADR 0049 D1 (operator-signed files), ADR 0050 (parser placement).
 

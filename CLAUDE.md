@@ -6,21 +6,23 @@
 **Positioning sentence (use everywhere):** *HookProbe OS is the operating system. SOC is its default workspace. Hardware only unlocks capabilities.*
 
 The canonical architecture lives in:
-- `docs/architecture/Readme.md` — the OS architecture (bootc, Wasm, intent, supply chain, PQC).
+- `docs/adr/0047-heqk-everywhere-on-device-mission-control.md` + `os/kernel/ARCHITECTURE.md` — the current product: heqk replaces Linux everywhere, Mission Control served on-device.
 - `docs/architecture/MissionControl.md` — **the target dashboard/UI spec.** This is what Mission Control should look like; all UI work adapts to it (workspaces, evidence graph, telemetry fabric, route map).
+- Status source of truth: `docs/design/heqk-parity-gaps.md` (gap register) + `docs/design/heqk-decisions-2026-11-08.md` (decision register). Gates: `os/kernel/validate.sh` (QEMU) + `os/kernel/tools/mc-e2e.sh` (API + browser).
+- `docs/architecture/Readme.md` — the **legacy Linux-tier** OS architecture (bootc, Podman, cosign). Historical; not canon for heqk.
 
 When these docs and this file disagree, **the docs win** — update this file to match.
 
 ---
 
-## The three load-bearing decisions
+## The three load-bearing decisions (#1 and #2 are LEGACY Linux-tier; see the ADR 0047 banner)
 
 > 🛑 **ADR 0047 (ratified 2026-10-09) supersedes the tier split below.** **heqk replaces Linux on EVERY platform** (QEMU/VM, CM5, RK3588, N100/x86_64, cloud), and **Mission Control (UI + API) is served by heqk on the device**: browser → device, no Linux in the path, standalone by default. The bootc/Debian/Podman/Quadlet/systemd material below is the **transitional Linux tier**: bug and security fixes only, **no new feature work**. New capability lands in `os/kernel`. Linux is acceptable only as a build/dev host. The `legacy/linux-tier/crates/hookprobe-api` contract is now the *interface spec* the on-device server implements. Port order and real scale: `docs/design/heqk-everywhere-report-2026-10-09.md`. Do not plan or build product features on the Linux tier.
 >
 > ⚠️ **Substrate pivot (ADR 0043 + ADR 0044, ratified 2026-07-25)** *(scope widened by ADR 0047 above)*. HookProbe OS now runs on **two substrates**, and decisions #1/#2 below are **tier-scoped, not universal — "don't relitigate" applies only to the Linux/UEFI tier.** On the **UEFI + amd64/N100/cloud** tier: bootc/Debian, Wasm+Podman, exactly as written (canonical + permanent). On the **rpi-native tier (CM5 only, ADR 0044 D2)**: Linux is being **replaced entirely by the heqk microkernel** — a from-scratch Rust aarch64 capability microkernel as substrate **and** app-host (**zero Linux on CM5, not even a guest**, ADR 0044 D1). See `docs/roadmap/BuildPlan.md` **Track C** and `docs/architecture/MIGRATION-heqk.md`. **Do not read #1/#2 as universal.**
 
-1. **The OS is a Containerfile — on the Linux/UEFI tier.** One signed OCI image is the source of truth; build with `podman build`, ship to a registry. The *update mechanism* splits by boot model (**ADR 0019**): on **UEFI** platforms (amd64/N100/VM/cloud, arm64-virt) bootc performs `upgrade`/`rollback` against a self-built Debian-bootc base; on **Raspberry-Pi-native Linux** an OCI-derived **A/B image-sync** delivers equivalent transactional update + rollback — bootc architecturally cannot manage the Pi's MBR/`config.txt`/SoC-firmware boot. Base distro **Debian/Ubuntu**; composefs-native backend pinned + tracked (experimental). mkosi/make-pi4 remains the factory first-flash. **⚠️ Superseded on the CM5/rpi-native tier (ADR 0043/0044):** heqk is a **third boot model** — bare-metal aarch64, `config.txt kernel=heqk8.img`, A/B tryboot + `hboot` — **no bootc/OCI/composefs/systemd/Debian.** *(Linux/UEFI: refined + accepted, not reopened. CM5: replaced by heqk.)*
-2. **Logic & detection are Wasm components (WASI 0.2/0.3, WIT).** One `.wasm` runs on arm64/amd64/riscv64; capability-sandboxed by default; ~1–5 ms cold start; inference via WASI-NN (no GPU drivers). Heavy stateful services run as **rootless Podman containers (Quadlet)**; host-integral pieces (OVS, kernel bits) layer into the bootc image (`sysext`). **⚠️ On the CM5/heqk tier (ADR 0044):** the on-device Wasm host is a build target (Track C M5); detection rules are portable via the **RFC 9669 BPF ISA** (ADR 0043 D2, not Linux eBPF); and heavy services run **native-on-heqk or hosted off-device (ADR 0044 D3) — NOT in Podman/Quadlet and NOT in a Linux guest.**
+1. **[LEGACY, Linux tier only] The OS is a Containerfile — on the Linux/UEFI tier.** One signed OCI image is the source of truth; build with `podman build`, ship to a registry. The *update mechanism* splits by boot model (**ADR 0019**): on **UEFI** platforms (amd64/N100/VM/cloud, arm64-virt) bootc performs `upgrade`/`rollback` against a self-built Debian-bootc base; on **Raspberry-Pi-native Linux** an OCI-derived **A/B image-sync** delivers equivalent transactional update + rollback — bootc architecturally cannot manage the Pi's MBR/`config.txt`/SoC-firmware boot. Base distro **Debian/Ubuntu**; composefs-native backend pinned + tracked (experimental). mkosi/make-pi4 remains the factory first-flash. **⚠️ Superseded on the CM5/rpi-native tier (ADR 0043/0044):** heqk is a **third boot model** — bare-metal aarch64, `config.txt kernel=heqk8.img`, A/B tryboot + `hboot` — **no bootc/OCI/composefs/systemd/Debian.** *(Linux/UEFI: refined + accepted, not reopened. CM5: replaced by heqk.)*
+2. **Logic & detection are Wasm components (WASI 0.2/0.3, WIT).** *(heqk today: signed Wasm via wasmi in an EL0 excursion; the Podman/Quadlet/sysext half of this item is LEGACY Linux tier.)* One `.wasm` runs on arm64/amd64/riscv64; capability-sandboxed by default; ~1–5 ms cold start; inference via WASI-NN (no GPU drivers). Heavy stateful services run as **rootless Podman containers (Quadlet)**; host-integral pieces (OVS, kernel bits) layer into the bootc image (`sysext`). **⚠️ On the CM5/heqk tier (ADR 0044):** the on-device Wasm host is a build target (Track C M5); detection rules are portable via the **RFC 9669 BPF ISA** (ADR 0043 D2, not Linux eBPF); and heavy services run **native-on-heqk or hosted off-device (ADR 0044 D3) — NOT in Podman/Quadlet and NOT in a Linux guest.**
 3. **Operated by intent, not configured.** The operator declares *what they want*; **AEGIS** reconciles it. Config is a generated artifact, never the interface.
 
 ## Architecture — three layers
@@ -44,7 +46,7 @@ Everything above "Substrate" is identical **from the operator's view** on every 
 - **Bounded & honest retention.** Local retention is capped by storage and the real window is shown to the operator; tiered (pcap → events → alerts/evidence); offload to SIEM/object store to exceed local capacity. Data lives on a persistent partition separate from the immutable rootfs.
 - **Data plane out-of-band by default**, inline opt-in; per-interface fail-open (default) / fail-closed (policy choice).
 - **Enforcement separation — observe by default; drop only a genuine attack or resource-exhaustion event (ADR 0023).** A legitimate customer connection must ALWAYS pass. Detectors emit alerts; a single `decide()` enforces, graduated by confidence into a tri-state verdict (`Observed` → `RateLimit` (bounded, self-reverting) → `Quarantine`/`FrameDrop` (confirmed, ADR 0018)), plus a management-safety `Allowlisted` floor. The **only** inline drops keyed on suspicion-free facts are: a confirmed port scan, a truly-malformed frame, a real L1/L2 flood, and the new **resource-shed** (per-source new-conn cap + conntrack-saturation guard + PSI CPU/mem pressure — self-reverting, keyed on RESOURCE REALITY, never identity). Beaconing/lateral/UDP-slow-ICMP-scan/host-EDR are observe-only by construction. Enforced by the release-blocking `0.7-separation-matrix` gate (33 rows: 22 verdict-level + 11 frame-level, legit-passes + attacks-caught, both directions).
-- **Trust nothing unsigned.** OS images, Wasm modules, and manifests are cosign-signed; SBOM + CBOM per image; SLSA provenance. **Crypto-agile / PQC-ready** posture (per ADR 0002): **implemented today** — hybrid **ML-DSA-65 + Ed25519** module signing (fail-closed, no downgrade) and a real hash-agility seam; the CBOM reports implemented-vs-roadmap honestly. **Roadmap** — ML-KEM KEX and LMS/XMSS boot signing (no code yet; marked roadmap, never fabricated). Image signing is cosign-keyless ECDSA-P256 today.
+- **Trust nothing unsigned.** **heqk (current):** boot/image signing is hybrid **Ed25519 + SLH-DSA-SHA2-128s** (FIPS 205), signed by `hboot`/`heqk-sign` (`os/build/heqk-sign`), verified fail-closed against the trust root in `os/kernel/boot-abi/src/verify.rs`. **ML-KEM is shipped:** ML-KEM-768 via RustCrypto `ml-kem =0.3.4` (`kem 0.3.0` final) in `securechannel` (Noise IK PQ-hybrid control channel) and `tlsprov` (TLS `X25519MLKEM768`, served by the EL0 TLS host). Crypto-agile per ADR 0002; the CBOM reports implemented-vs-roadmap honestly, never fabricated. *(Legacy Linux tier only: cosign-keyless ECDSA-P256 image signing, ML-DSA-65 + Ed25519 module signing, SBOM/SLSA via `builder/`.)*
 
 ## Components (all modules on one base — none is a separate product)
 
@@ -114,11 +116,11 @@ in `appliance/`. No UI, installer, or API change.
 Eleven personas drive the V2 lifecycle (**ADR 0011 — Product Cortex**: agentic PLM as a lens on the evidence graph; roster **capped at 11 (ADR 0013)** — the requirement→retirement extension; new roles need an ADR). Delegate by role:
 - **`product-steward`** — PLM brain: `docs/roadmap/BuildPlan.md` status truth, ADR hygiene, cross-doc reconciliation, traceability, roadmap reviews. Canon: `docs/roadmap/BuildPlan.md` + `docs/adr/0011-product-cortex.md`.
 - **`ux-architect`** — interaction design, flows, wireframes, navigation, "fewer-steps" simplification, competitive UX positioning. Canon: `docs/architecture/MissionControl.md` (the target dashboard).
-- **`os-architect`** — OS/RTOS architecture: bootc image, Wasm module model, Platform Manifest, supervisor/reconciler, data plane, retention, supply chain/PQC, fleet. Canon: `docs/architecture/Readme.md`.
+- **`os-architect`** — OS/RTOS architecture: heqk substrate (legacy: bootc image), Wasm module model, Platform Manifest, supervisor/reconciler, data plane, retention, supply chain/PQC, fleet. Canon: ADR 0047 + `os/kernel/ARCHITECTURE.md` (legacy tier: `docs/architecture/Readme.md`).
 - **`code-developer`** — implements Mission Control + modules; benchmarks the stack before committing (see below).
 - **`security-auditor`** — adversarial reviews: threat models, supply chain (cosign/SBOM/CBOM/SLSA), PQC posture, eBPF/Wasm privilege boundaries, RBAC/encryption.
-- **`verification-engineer`** — the gate ladder (tests → smoketest → QEMU boots → greenboot → hardware gates), CI, benchmark honesty.
-- **`release-engineer`** — `builder/` pipeline, signing/trust store, image variants, rollout rings, changelog discipline.
+- **`verification-engineer`** — the gates (`os/kernel/validate.sh` QEMU + `os/kernel/tools/mc-e2e.sh` API/browser → CM5 metal; legacy Linux tier: `builder/gate-ladder.sh`), CI, benchmark honesty.
+- **`release-engineer`** — `os/build/` pipeline (legacy: `builder/`), signing/trust store, image variants, rollout rings, changelog discipline.
 - **`telemetry-analyst`** — field/test evidence → lifecycle feedback: perf regressions, capability-tier truth per platform, evidence-graph queries (read-only on live devices).
 - **`ideation-scout`** — upstream signal → candidate requirements: market/CVE/MITRE-ATT&CK/competitor/GitHub-issue scanning, proposes `idea`/`requirement` nodes (ADR 0013 D3).
 - **`market-intelligence`** — positioning & competitive tracking, the hookprobe.com narrative; owns `docs/research/product-cortex-competitive.md` (ADR 0013 D3/D5).
@@ -126,9 +128,9 @@ Eleven personas drive the V2 lifecycle (**ADR 0011 — Product Cortex**: agentic
 
 Cortex governance (all agents): **AI proposes, the deterministic gates enforce** (contract C9). Green = docs/analysis; Amber = code/ADR/roadmap changes (operator reviews); Red = commits, releases, flashing — never autonomous.
 
-## Open decision — the application stack
+## The application stack (LOCKED)
 
-Mission Control's stack is **not yet locked.** Starting hypothesis: **Astro + React**. Constraints: dense real-time SOC dashboard (live telemetry, websockets/SSE) that must run on **edge hardware (Pi 5 / RK3588 / N100)** *and* a content-heavy CMS/SEO surface. `code-developer` is to benchmark frontend (React vs Solid/Svelte/Qwik vs Astro islands) and edge backend (Rust/Axum vs Go vs Node) and record an ADR. Bias: small edge footprint, fast live updates, alignment with the OS's existing Rust/Wasm posture.
+Mission Control's stack is **locked: Astro + SolidJS** (ADR 0001, 2026-06-27). The UI lives in `os/mission-control/` and is embedded into heqk; the backend/API is **served by heqk on the device** (ADR 0047 D2), not by a Linux-tier Rust/Axum service (that was the legacy-tier backend). Do not relitigate.
 
 ## Design north star (V2)
 
@@ -136,8 +138,8 @@ Mission Control's stack is **not yet locked.** Starting hypothesis: **Astro + Re
 
 ## Working conventions for this repo
 
-- Treat `docs/architecture/Readme.md` + `docs/architecture/MissionControl.md` as canonical; keep them and this file in sync, and flag (don't silently resolve) any new contradictions.
+- Treat ADR 0047 + `docs/architecture/MissionControl.md` as canonical (`docs/architecture/Readme.md` is the legacy Linux tier); keep them and this file in sync, and flag (don't silently resolve) any new contradictions.
 - Capability-gate, don't hardware-branch. Manifest is the single source of truth.
-- Default to `runtime: wasm` for detection/policy/enrichment; `container` only for heavy stateful services; `sysext`/image layer for host-integral pieces.
-- Everything signed (cosign); every image carries SBOM + CBOM; crypto choices are policy, not hardcoded.
+- Default to `runtime: wasm` for detection/policy/enrichment. *(Legacy Linux tier only: `container` for heavy stateful services, `sysext`/image layer for host-integral pieces; on heqk, heavy services are native-on-heqk or off-device per ADR 0044 D3.)*
+- Everything signed (heqk: Ed25519 + SLH-DSA via `os/build/heqk-sign`; legacy Linux tier: cosign); every image carries a CBOM; crypto choices are policy, not hardcoded.
 - Never gate the device on an account; cloud features are additive.
