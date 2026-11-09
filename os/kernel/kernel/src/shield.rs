@@ -1147,7 +1147,10 @@ struct Stats {
     dga: u64,
     ioc: u64,
 }
-static mut ST: Stats = Stats { c: [0; NC], ring: [ENT0; RING], rhead: 0, rlen: 0, top: [TOP0; TOPK], ntop: 0, cli: [CLI0; CLIENTS], ncli: 0, last_blocked: ENT0, dga: 0, ioc: 0 };
+// All-zero initializer (ENTZ, not ENT0's cat = CAT_NONE) keeps ST in .bss: ring rows are read only
+// after push() wrote them and last_blocked.cat is never read (image budget, ~27 KB).
+const ENTZ: Ent = Ent { cat: 0, ..ENT0 };
+static mut ST: Stats = Stats { c: [0; NC], ring: [ENTZ; RING], rhead: 0, rlen: 0, top: [TOP0; TOPK], ntop: 0, cli: [CLI0; CLIENTS], ncli: 0, last_blocked: ENTZ, dga: 0, ioc: 0 };
 
 fn st() -> &'static mut Stats {
     unsafe { &mut *core::ptr::addr_of_mut!(ST) }
