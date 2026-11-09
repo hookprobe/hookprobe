@@ -109,7 +109,9 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
             conn_close = v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close"));
         }
     }
-    if clen > MAX_BODY {
+    // ADR 0056: upload chunks carry raw bytes (still inside the 4 KiB request buffer)
+    let cap = if path == "/api/upload/chunk" { crate::upload::CHUNK_MAX } else { MAX_BODY };
+    if clen > cap {
         return Err(ParseErr::Bad);
     }
     let body_start = end + 4;
@@ -376,6 +378,47 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
+    if req.post && req.path.starts_with("/api/upload/") {
+        // ADR 0056: signed data-pack upload (same guards + re-auth on begin / activate)
+        use crate::upload as up;
+        enum Ok_ {
+            Begun(u64),
+            Chunk(u64),
+            Fin(up::Finished),
+            Act(up::Activated),
+            Abort,
+        }
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let r = match req.path {
+            "/api/upload/begin" => up::begin(&c, req.body, auth).map(|b| Ok_::Begun(b.id)),
+            "/api/upload/chunk" => up::chunk(&c, req.query, req.body).map(Ok_::Chunk),
+            "/api/upload/finish" => up::finish(&c, req.body).map(Ok_::Fin),
+            "/api/upload/activate" => up::activate(&c, req.body, auth).map(Ok_::Act),
+            "/api/upload/abort" => up::abort(&c, req.body).map(|_| Ok_::Abort),
+            _ => Err("unknown upload step"),
+        };
+        return match r {
+            Ok(o) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = match o {
+                    Ok_::Begun(id) => write!(w, "{{\"ok\":true,\"id\":\"{:016x}\",\"chunk_max\":{}}}", id, up::CHUNK_MAX),
+                    Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
+                    Ok_::Fin(f) => write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{}}}", f.gen, f.active_gen, f.len),
+                    Ok_::Act(a) => match a.journal_seq {
+                        Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":{}}}", a.gen, q),
+                        None => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":null}}", a.gen),
+                    },
+                    Ok_::Abort => write!(w, "{{\"ok\":true,\"aborted\":true}}"),
+                };
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
     if req.post && (req.path == "/api/actions" || req.path == "/api/actions/revoke") {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         let r = if req.path == "/api/actions" {
@@ -414,6 +457,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }),
         "/api/actions" => json(scratch, |w| render_actions(w)),
         "/api/owner-rules" => json(scratch, |w| crate::ownerapi::render(w)),
+        "/api/upload" => json(scratch, |w| crate::upload::render(w)),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
         "/api/tls" => json(scratch, |w| render_tls(w)),
         "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
