@@ -30,26 +30,53 @@ def main():
     if a.insecure:
         ctx.check_hostname = False
         ctx.verify_mode = ssl.CERT_NONE
-    jar = http.cookiejar.CookieJar()
-    op = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), urllib.request.HTTPCookieProcessor(jar))
+    # ONE kept-alive connection for the whole upload (an OS image is ~2,300 chunks: a fresh TLS handshake per
+    # chunk exhausted the device's HTTPS slots and the server reset the connection — bench 2026-11-10).
+    import http.client, time
+    u = urllib.parse.urlparse(a.mc.rstrip("/"))
+    conn = [None]
+    jar = {}
     key = open(a.owner_key_file).read().strip()
     mc = a.mc.rstrip("/")
 
+    def connect():
+        if u.scheme == "https":
+            conn[0] = http.client.HTTPSConnection(u.hostname, u.port or 443, context=ctx, timeout=30)
+        else:
+            conn[0] = http.client.HTTPConnection(u.hostname, u.port or 80, timeout=30)
+
     def req(path, data=None, headers=None, raw=False):
-        r = urllib.request.Request(mc + path, data=data, headers=headers or {}, method="POST" if data is not None else "GET")
-        try:
-            with op.open(r, timeout=30) as resp:
-                body = resp.read()
+        for attempt in range(5):
+            try:
+                if conn[0] is None:
+                    connect()
+                h = dict(headers or {})
+                if jar:
+                    h["Cookie"] = "; ".join(f"{k}={v}" for k, v in jar.items())
+                conn[0].request("POST" if data is not None else "GET", path, body=data, headers=h)
+                r = conn[0].getresponse()
+                body = r.read()
+                for sc in r.headers.get_all("Set-Cookie") or []:
+                    kv = sc.split(";", 1)[0]
+                    if "=" in kv:
+                        k, v = kv.split("=", 1)
+                        if v:
+                            jar[k.strip()] = v.strip()
+                        else:
+                            jar.pop(k.strip(), None)
+                if (r.getheader("Connection") or "").lower() == "close":
+                    conn[0].close()
+                    conn[0] = None
                 try:
                     return json.loads(body) if body else {}
                 except ValueError:
                     return {"raw": body[:200].decode(errors="replace")}  # e.g. the login answer
-        except urllib.error.HTTPError as e:
-            body = e.read()
-            try:
-                return json.loads(body)
-            except ValueError:
-                return {"ok": False, "refused": f"HTTP {e.code}"}
+            except (OSError, http.client.HTTPException):
+                if conn[0] is not None:
+                    conn[0].close()
+                conn[0] = None
+                time.sleep(1 + attempt)
+        return {"ok": False, "refused": "connection failed"}
 
     req("/api/login", urllib.parse.urlencode({"token": key}).encode())
     s = req("/api/session")
@@ -60,12 +87,18 @@ def main():
     if a.status:
         print(json.dumps(req("/api/upload"), indent=2))
         return 0
-    if not (a.type and a.sig and a.file):
-        sys.exit("--type, --sig and --file are required")
-    sig = open(a.sig, "rb").read()
-    if len(sig) != 512:
-        sys.exit("a pack signature file is exactly 512 bytes")
-    cont = sig + open(a.file, "rb").read()
+    if a.type == "os_image":
+        # An OS image carries its own hybrid signature: the container is the signed heqk8.img itself.
+        if not a.file:
+            sys.exit("--file (the signed heqk8.img) is required")
+        cont = open(a.file, "rb").read()
+    else:
+        if not (a.type and a.sig and a.file):
+            sys.exit("--type, --sig and --file are required")
+        sig = open(a.sig, "rb").read()
+        if len(sig) != 512:
+            sys.exit("a pack signature file is exactly 512 bytes")
+        cont = sig + open(a.file, "rb").read()
 
     def form(path, **kv):
         nonlocal seq
@@ -78,11 +111,21 @@ def main():
     if not b.get("ok"):
         return 1
     uid, step = b["id"], int(b["chunk_max"])
-    for off in range(0, len(cont), step):
+    off = 0
+    while off < len(cont):
         c = req(f"/api/upload/chunk?id={uid}&off={off}", cont[off:off + step], {**hdr, "Content-Type": "application/octet-stream"})
-        if not c.get("ok"):
-            print("chunk:", json.dumps(c))
-            return 1
+        if c.get("ok"):
+            off += len(cont[off:off + step])
+            continue
+        # a dropped connection may have delivered the chunk anyway: resume at what the device has
+        st = req("/api/upload").get("in_flight") or {}
+        if st.get("id") == f"{uid:016x}" if isinstance(uid, int) else st.get("id") == uid:
+            got = int(st.get("received", -1))
+            if got > off:
+                off = got
+                continue
+        print("chunk:", json.dumps(c))
+        return 1
     f = form("/api/upload/finish", id=uid)
     print("finish:", json.dumps(f))
     if not f.get("ok"):

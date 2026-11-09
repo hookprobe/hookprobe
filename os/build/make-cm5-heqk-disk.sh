@@ -33,6 +33,11 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 HEQK="$ROOT/os/kernel"
 OUT="${OUT:-$ROOT/os/build/generated/cm5-heqk}"
 FEATURES="${FEATURES:-prod}"
+# ADR 0054 / audit A6: a product image's only AP key is the per-device setup credential. A bench PSK in the
+# build environment would silently take precedence, so the factory refuses it unless explicitly opted in.
+if [ -n "${HEQK_AP_PSK:-}" ] && [ "${HEQK_ALLOW_BENCH_PSK:-0}" != 1 ]; then
+  echo "FATAL: HEQK_AP_PSK is set — a factory image never carries a bench Wi-Fi key (set HEQK_ALLOW_BENCH_PSK=1 for a bench-only image)"; exit 1
+fi
 SVN="${SVN:-1}"
 SIZE_MIB=512
 ZERO_LINUX=0
@@ -119,6 +124,11 @@ echo "== [factory] 3/5 canonical A/B boot config ($MODE_DESC)"
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
 cp "$BS/heqk8.img" "$STAGE/heqk8-a.img"
 cp "$BS/heqk8.img" "$STAGE/heqk8-b.img"           # both slots start identical; OTA replaces B
+# Pad both slot files to the full HBoot load window (5 MiB = 0x700000 - 0x200000). The device has no FAT
+# writer: an OS update overwrites the slot file's clusters in place and the firmware loads exactly the
+# directory-entry size, so a slot sized to TODAY's image could never take a larger update (audit A2).
+# HBoot reads only hdr.size payload bytes; the zero padding is never executed or measured.
+truncate -s 5242880 "$STAGE/heqk8-a.img" "$STAGE/heqk8-b.img"
 if [ "$ZERO_LINUX" = 1 ]; then
   TEMPLATE="$HEQK/cm5-boot/config-nolinux.txt"
 else
