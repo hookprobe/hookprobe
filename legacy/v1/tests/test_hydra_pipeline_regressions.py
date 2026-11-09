@@ -430,3 +430,22 @@ class TestCnoMirrorRecord:
         reason = "x'); DROP TABLE hydra_blocks; --"
         safe = _re.sub(r"[^A-Za-z0-9 _.:/,()-]", "", reason)[:200]
         assert "'" not in safe and ";" not in safe
+
+
+# ---------------------------------------------------------------------------
+# 2026-11-09: Cloudflare edge proxies were 93% of all 'suspicious' verdicts
+# (2,985/3,198 in 24h). CDN edges are trusted for SCORING; WARP egress
+# (104.28.0.0/16, real end users) and ordinary hosts are not.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize("ip,expected", [
+    ("162.158.14.190", True), ("172.68.192.249", True), ("173.245.48.1", True),
+    ("2606:4700::1", True),
+    ("104.28.106.147", False),   # Cloudflare WARP egress = real client
+    ("45.155.205.10", False), ("185.220.101.4", False), ("2001:db8::1", False),
+    ("not-an-ip", False),
+])
+def test_cdn_edge_is_trusted_for_scoring(ip, expected):
+    tn = pytest.importorskip("trusted_networks")
+    assert tn.is_cdn_edge(ip) is expected
+    if expected:
+        assert tn.is_trusted(ip) is True
