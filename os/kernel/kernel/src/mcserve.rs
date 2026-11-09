@@ -666,6 +666,8 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
                         s.close();
                         return;
                     }
+                    let mut r = r;
+                    r.peer = s.peer();
                     let resp = http::handle(&r, st, auth(), now_ms, rand16, &mut scratch[..]);
                     let keep = r.keep_alive && served + 1 < http::KEEPALIVE_MAX && !matches!(resp.body, Body::Sse);
                     let consumed = r.consumed.min(got);
@@ -748,6 +750,17 @@ trait Pipe {
     fn peer_closed(&self) -> bool {
         false
     }
+    /// The client's IPv4 address (0.0.0.0 if not known).
+    fn peer(&self) -> [u8; 4] {
+        [0; 4]
+    }
+}
+
+fn peer_v4(s: &tcp::Socket) -> [u8; 4] {
+    match s.remote_endpoint().map(|e| e.addr) {
+        Some(IpAddress::Ipv4(a)) => a.octets(),
+        _ => [0; 4],
+    }
 }
 
 /// HTTPS is up (a certificate is installed): plain :80 then only redirects (ADR 0051 D4).
@@ -785,6 +798,9 @@ impl Pipe for Plain<'_, '_> {
     fn peer_closed(&self) -> bool {
         // FIN received (a LISTENING socket also has !may_recv — it must never be closed here).
         self.0.state() == tcp::State::CloseWait
+    }
+    fn peer(&self) -> [u8; 4] {
+        peer_v4(self.0)
     }
 }
 
@@ -887,6 +903,9 @@ mod tls_side {
         }
         fn secure(&self) -> bool {
             true
+        }
+        fn peer(&self) -> [u8; 4] {
+            peer_v4(self.s)
         }
         fn room(&self) -> usize {
             (self.s.send_capacity() - self.s.send_queue()).saturating_sub(64)
