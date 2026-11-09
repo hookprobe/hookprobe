@@ -10,8 +10,10 @@
 #   behind a PCIe root port (bus 0x18 on OCI), virtio-gpu 1af4:1050, qemu-xhci.
 #
 # Usage: run-oci-a1.sh <disk.img> [extra qemu args...]
-#   env: OCI_SMP (4) OCI_MEM (2G; the real VM has 24G) OCI_SEMIHOST=1 (test exit; NOT on OCI)
+#   env: OCI_SMP (4) OCI_MEM (2G; the real VM has 24G) OCI_SEMIHOST=1 (only for kernels built
+#        WITHOUT `cloud`; a `cloud` kernel exits via PSCI and prints `[heqk-exit] code=N`)
 #        OCI_TIMEOUT (seconds, 0 = none)
+#   -no-reboot: a PSCI SYSTEM_RESET (heqk's fail-closed path) ends the run instead of looping.
 set -euo pipefail
 DISK=${1:?usage: run-oci-a1.sh <disk.img> [qemu args...]}; shift
 FW_CODE=${OCI_FW_CODE:-/usr/share/AAVMF/AAVMF_CODE.no-secboot.fd}
@@ -40,5 +42,5 @@ TO=()
   -device scsi-hd,drive=bootvol,bus=scsi0.0,bootindex=0 \
   -netdev user,id=n0 \
   -device virtio-net-pci,netdev=n0,mac=02:00:17:00:00:01,disable-legacy=on,disable-modern=off \
-  -display none -serial mon:stdio -nodefaults \
+  -display none -serial mon:stdio -nodefaults -no-reboot \
   "${SEMI[@]}" "$@"
