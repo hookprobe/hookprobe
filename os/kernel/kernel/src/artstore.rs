@@ -133,6 +133,11 @@ impl Manifest {
     }
 }
 
+/// [P-fuzz]: the manifest decoder on arbitrary sector content.
+pub fn fuzz_decode(s: &[u8; 512]) -> bool {
+    Manifest::decode(s).is_some()
+}
+
 /// The Store region of this device (from the MBR's 0xDA DataVolume), if any.
 pub fn store_region<D: BlockDev + ?Sized>(dev: &D) -> Option<(u64, u64)> {
     let mut mbr = [0u8; 512];
@@ -179,40 +184,33 @@ fn sig_gen<D: BlockDev + ?Sized>(dev: &D, lba: u64, magic: &[u8; 8]) -> Option<u
     (&s[..8] == magic).then(|| u64::from_le_bytes(s[8..16].try_into().unwrap()))
 }
 
-/// Where the active copy of a type lives: `Some((ty, sig_lba, data_lba, data_sect, from_store))`.
-fn active<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> Option<(u64, u64, u64, bool)> {
-    let i = t.info();
-    let fat_txt = if p1 != 0 { crate::fat::locate_contiguous(dev, p1, i.txt) } else { None };
-    let fat_sig = if p1 != 0 { crate::fat::locate_contiguous(dev, p1, i.sig) } else { None };
-    if !disabled(t) {
-        if let Some(store) = store_region(dev) {
-            let m = read_manifest(dev, store);
-            let e = m.e[t as usize];
-            if e.half != 0 {
-                let fat_gen = fat_sig.and_then(|(l, _)| sig_gen(dev, l, i.magic)).unwrap_or(0);
-                if e.gen >= fat_gen {
-                    let (s, d) = slot(store, t, e.half);
-                    return Some((s, d, t.data_sect(), true));
-                }
-            }
-        }
+/// The store's committed slot for a type, if it is at least as new as the boot-FAT copy:
+/// `Some((sig_lba, data_lba, data_sect))`. Touches only the small FAT `.SIG` file (never walks the
+/// pack's own cluster chain — a 4 MiB OUI.TXT walk costs seconds on the eMMC).
+fn store_copy<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> Option<(u64, u64, u64)> {
+    if disabled(t) {
+        return None;
     }
-    let (dl, dn) = fat_txt?;
-    Some((fat_sig.map_or(0, |(l, _)| l), dl, dn, false))
+    let store = store_region(dev)?;
+    let e = read_manifest(dev, store).e[t as usize];
+    if e.half == 0 {
+        return None;
+    }
+    let i = t.info();
+    let fat_gen = if p1 != 0 { crate::fat::locate_contiguous(dev, p1, i.sig).and_then(|(l, _)| sig_gen(dev, l, i.magic)) } else { None };
+    if e.gen < fat_gen.unwrap_or(0) {
+        return None;
+    }
+    let (s, d) = slot(store, t, e.half);
+    Some((s, d, t.data_sect()))
 }
 
 /// The loaders' file lookup (replaces `fat::locate_contiguous` for the pack files): the store's committed
 /// slot when it is at least as new as the boot-FAT copy, else the FAT file. Same `(lba, sectors)` shape.
 pub fn locate<D: BlockDev>(dev: &D, p1: u64, name: &[u8; 11]) -> Option<(u64, u64)> {
-    for t in ALL {
-        let i = t.info();
-        if name == i.txt || name == i.sig {
-            let (s, d, n, from_store) = active(dev, p1, t)?;
-            return if name == i.sig {
-                if from_store || s != 0 { Some((s, 1)) } else { None }
-            } else {
-                Some((d, n))
-            };
+    if let Some(t) = ALL.iter().copied().find(|t| name == t.info().txt || name == t.info().sig) {
+        if let Some((s, d, n)) = store_copy(dev, p1, t) {
+            return Some(if name == t.info().sig { (s, 1) } else { (d, n) });
         }
     }
     if p1 != 0 { crate::fat::locate_contiguous(dev, p1, name) } else { None }
@@ -220,13 +218,13 @@ pub fn locate<D: BlockDev>(dev: &D, p1: u64, name: &[u8; 11]) -> Option<(u64, u6
 
 /// The active generation of a type (store or FAT), 0 if none — the anti-rollback floor for an upload.
 pub fn active_gen<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> u64 {
-    match active(dev, p1, t) {
-        Some((s, _, _, _)) if s != 0 => sig_gen(dev, s, t.info().magic).unwrap_or(0),
-        _ => 0,
+    match locate(dev, p1, t.info().sig) {
+        Some((s, _)) => sig_gen(dev, s, t.info().magic).unwrap_or(0),
+        None => 0,
     }
 }
 pub fn from_store<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> bool {
-    active(dev, p1, t).map_or(false, |a| a.3)
+    store_copy(dev, p1, t).is_some()
 }
 
 // ---- verification (each module's OWN verifier — ADR 0056 D4: no second verifier) ----------------------
