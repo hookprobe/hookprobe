@@ -330,6 +330,135 @@ pub fn wan4<N: ApNic>(f: &[u8], inside_macs: [&[u8; 6]; 2], v6: &V6Us, pol: &mut
     Wan4::Deliver { len: m, eth1: false }
 }
 
+// ---- step 3a: the Wi-Fi client IPv4 gate chain ---------------------------------------------------------
+
+/// Mission Control on the AP address (TCP 80/443 to `our_ip`). False when the build serves no Mission Control.
+pub fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
+    if !cfg!(feature = "mcserve") || f.len() < 38 || f[12] != 0x08 || f[13] != 0x00 || f[23] != 6 || &f[30..34] != our_ip {
+        return false;
+    }
+    let ihl = ((f[14] & 0x0f) as usize) * 4;
+    let Some(p) = f.get(14 + ihl + 2..14 + ihl + 4) else { return false };
+    let dport = u16::from_be_bytes([p[0], p[1]]);
+    dport == 80 || dport == 443
+}
+
+/// The fate of one IPv4 frame from a Wi-Fi client that the AP itself did not answer (not DHCP / ARP for us).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Client4 {
+    /// (MAC, IP) is not a lease we handed out — anti-hijack.
+    BindDrop,
+    /// `net::parse` refused it (truncated / oversize) — fail-closed, not a rule drop.
+    Trunc,
+    /// The signed rule plane (IDS/IPS) dropped it.
+    IdsDrop,
+    /// Mission Control, but the device's policy (G9) forbids reaching it.
+    McDenied,
+    /// For Mission Control on the AP address — the caller hands it to the MC node.
+    ToMc,
+    /// Station → station (G10): the caller relays the frame on Wi-Fi unchanged.
+    Relay,
+    /// Through `forward4` (true = sent onward).
+    Forwarded(bool),
+}
+
+/// Lease binding → parse → IDS → Mission Control (device policy) → station relay → `forward4`, in that order.
+#[allow(clippy::too_many_arguments)]
+#[inline]
+pub fn client4<N: ApNic>(
+    frame: &[u8],
+    now_s: u64,
+    dh: &mut arch_aarch64::dhcpd::ApDhcp,
+    cfg: &FwdCfg,
+    pol: &mut Policy,
+    nst: &mut NatStats,
+    c: &mut FwdCounters,
+    nbuf: &mut [u8],
+    nic: &mut N,
+    reply: &mut dyn FnMut(&[u8]) -> bool,
+) -> Client4 {
+    let mut smac = [0u8; 6];
+    smac.copy_from_slice(&frame[6..12]);
+    let mut sip = [0u8; 4];
+    sip.copy_from_slice(&frame[26..30]);
+    dh.now = now_s;
+    dh.seen(&smac);
+    if !dh.binding_ok(&smac, &sip) {
+        return Client4::BindDrop;
+    }
+    if crate::net::parse(frame).is_none() {
+        return Client4::Trunc;
+    }
+    if crate::packet::verdict(frame).1 == crate::packet::DROP {
+        return Client4::IdsDrop;
+    }
+    if mc_bound(frame, &cfg.our_ip) {
+        return if crate::devpolicy::check(&smac, crate::devpolicy::Dest::DeviceMgmt) { Client4::ToMc } else { Client4::McDenied };
+    }
+    if crate::lanrelay::relay_target(frame, dh) {
+        return Client4::Relay;
+    }
+    Client4::Forwarded(forward4(frame, If::Lan, nat::IF_WIFI, cfg, pol, nst, c, nbuf, nic, reply))
+}
+
+/// `[P-apcore-lan]` — step 3a on the fake NIC.
+pub fn lan_selftest() -> bool {
+    use arch_aarch64::dhcpd::ApDhcp;
+    let cfg = FwdCfg { our_ip: [10, 99, 0, 1], me: [0x02, 0, 0, 0, 0, 0x01], inside_net: [10, 99, 0] };
+    let wan = WanView { ip: [100, 64, 7, 9], mac: [0x02, 0x77, 0, 0, 0, 0x09], gw_mac: [0x02, 0x77, 0, 0, 0, 0x01], dns: [1, 1, 1, 1] };
+    let mut nic = FakeNic { t: 9000, wan_up: true, wan, nexthop: None, mgmt: None, wan_ok: true, wan_n: 0, mgmt_n: 0, last: [0; 1600], last_len: 0 };
+    let mut pol = Policy::new();
+    let mut nst = NatStats::default();
+    let mut c = FwdCounters::default();
+    let mut nbuf = [0u8; 2048];
+    let mut dh = ApDhcp::new();
+    let (a_mac, b_mac) = ([0x02, 0, 0, 0, 0, 0x0a], [0x02, 0, 0, 0, 0, 0x0b]);
+    dh.now = 100;
+    let a_ip = dh.alloc_for(&a_mac, &[10, 99, 0, 10]).unwrap_or([0; 4]);
+    dh.commit(&a_mac);
+    let b_ip = dh.alloc_for(&b_mac, &[10, 99, 0, 10]).unwrap_or([0; 4]);
+    dh.commit(&b_mac);
+    crate::shield::load_text(b"", b"");
+    crate::devpolicy::load_text(b"");
+    let mut f = [0u8; 400];
+    let mut go = |fr: &[u8], dh: &mut ApDhcp, nic: &mut FakeNic, pol: &mut Policy| client4(fr, 100, dh, &cfg, pol, &mut nst, &mut c, &mut nbuf, nic, &mut |_| true);
+    // A (leased) to the internet: forwarded through NAT
+    let n = frame4(6, [93, 184, 216, 34], 443, &[], &mut f);
+    f[26..30].copy_from_slice(&a_ip);
+    let fwd = go(&f[..n], &mut dh, &mut nic, &mut pol) == Client4::Forwarded(true) && nic.wan_n == 1;
+    // the same frame claiming another IP (not its lease): bind drop, nothing sent
+    let mut spoof = f;
+    spoof[26..30].copy_from_slice(&[10, 99, 0, 77]);
+    let bind = go(&spoof[..n], &mut dh, &mut nic, &mut pol) == Client4::BindDrop && nic.wan_n == 1;
+    // a truncated frame (IPv4 total length past the end)
+    let mut tr = f;
+    tr[16..18].copy_from_slice(&1400u16.to_be_bytes());
+    let trunc = go(&tr[..n], &mut dh, &mut nic, &mut pol) == Client4::Trunc;
+    // Mission Control on the AP address: handed to the MC node — unless the device is internet_only
+    let mut mc = f;
+    mc[30..34].copy_from_slice(&cfg.our_ip);
+    mc[36..38].copy_from_slice(&443u16.to_be_bytes());
+    let r = go(&mc[..n], &mut dh, &mut nic, &mut pol);
+    let to_mc = if cfg!(feature = "mcserve") { r == Client4::ToMc } else { matches!(r, Client4::Forwarded(_)) }; // no MC in this build
+    crate::devpolicy::load_text(b"02:00:00:00:00:0a internet_only
+");
+    let mc_denied = !cfg!(feature = "mcserve") || go(&mc[..n], &mut dh, &mut nic, &mut pol) == Client4::McDenied;
+    crate::devpolicy::load_text(b"");
+    // A -> B (both leased, B's MAC as destination): station relay, not the internet path
+    let mut ab = f;
+    ab[0..6].copy_from_slice(&b_mac);
+    ab[30..34].copy_from_slice(&b_ip);
+    let w0 = nic.wan_n;
+    let relay = go(&ab[..n], &mut dh, &mut nic, &mut pol) == Client4::Relay && nic.wan_n == w0;
+    crate::shield::reset_stats();
+    let pass = fwd && bind && trunc && to_mc && mc_denied && relay;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-lan] {} — G0 step 3a: the Wi-Fi client IPv4 gate chain (lease binding -> parse -> IDS -> Mission Control + device policy -> station relay -> forward) on the fake NIC: leased client forwarded through NAT={} a frame claiming another IP dropped (anti-hijack)={} truncated frame fail-closed, not a rule drop={} Mission Control on the AP address handed to the MC node={} internet_only device kept off Mission Control={} station -> station relayed, not sent to the internet={}\n",
+        if pass { "PASS" } else { "FAIL" }, fwd, bind, trunc, to_mc, mc_denied, relay
+    ));
+    pass
+}
+
 // ---- [P-apcore] ---------------------------------------------------------------------------------------------
 
 /// A recording fake: every channel keeps a count and the last frame.
