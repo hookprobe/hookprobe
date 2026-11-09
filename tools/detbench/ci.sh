@@ -4,12 +4,12 @@
 set -u -o pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 D=$(mktemp -d); trap 'rm -rf "$D"' EXIT
-python3 -I "$HERE/gen-attacks.py" "$D" >/dev/null
+python3 -I "$HERE/gen-attacks.py" "$D" >/dev/null || { echo "gen-attacks.py failed"; exit 1; }
 L=""
 for c in dga portscan c2port ssh_brute beacon arp_spoof exfil lateral; do L="$L $c:$D/$c.pcap"; done
-python3 -I "$HERE/gen-attacks.py" "$D/ev" --evasive >/dev/null
+python3 -I "$HERE/gen-attacks.py" "$D/ev" --evasive >/dev/null || { echo "gen-attacks.py --evasive failed"; exit 1; }
 for c in slowscan jitterbeacon slowexfil dnstunnel slowbrute; do L="$L $c:$D/ev/$c.pcap"; done
-python3 -I "$HERE/pcap2hqdb.py" "$D/attacks.img" --stagger 7200 $L >/dev/null
+python3 -I "$HERE/pcap2hqdb.py" "$D/attacks.img" --stagger 7200 $L >/dev/null || { echo "pcap2hqdb.py failed"; exit 1; }
 bash "$HERE/run.sh" "$D/attacks.img" "$D/report.md" > "$D/out" 2>&1 || { cat "$D/out"; exit 1; }
 cat "$D/report.md"
 python3 - "$D/report.md" <<'PY'
