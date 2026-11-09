@@ -312,7 +312,7 @@ impl McNode {
         }
         // HTTPS listeners only when the EL0 TLS server is up with a certificate (ADR 0051).
         #[cfg(feature = "mctls")]
-        if crate::tlshost::host().map_or(false, |h| h.ready) {
+        if crate::tlshost::host().is_some_and(|h| h.ready) {
             for i in CONNS..ALL {
                 let rx = tcp::SocketBuffer::new(unsafe { &mut TCP_RX_BUF[i][..] });
                 let tx = tcp::SocketBuffer::new(unsafe { &mut TCP_TX_BUF[i][..] });
@@ -345,7 +345,7 @@ impl McNode {
         let cidr = IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), prefix);
         let mut ok = false;
         self.iface.update_ip_addrs(|v| {
-            if !v.iter().any(|c| *c == cidr) {
+            if !v.contains(&cidr) {
                 ok = v.push(cidr).is_ok();
             }
         });
@@ -456,7 +456,7 @@ impl McNode {
                 IpAddress::Ipv4(a) => a.octets(),
                 _ => continue,
             };
-            let asked = n.server.map_or(false, |s| s == from);
+            let asked = n.server == Some(from);
             if !asked || meta.endpoint.port != 123 || n.nonce == 0 {
                 continue;
             }
@@ -754,7 +754,7 @@ trait Pipe {
 fn https_ready() -> bool {
     #[cfg(feature = "mctls")]
     {
-        crate::tlshost::host().map_or(false, |h| h.ready)
+        crate::tlshost::host().is_some_and(|h| h.ready)
     }
     #[cfg(not(feature = "mctls"))]
     {
@@ -838,7 +838,7 @@ mod tls_side {
         }
         let ct = unsafe { &mut CT };
         h.read(OUT_TLS_OFF, &mut ct[..n]);
-        s.send_slice(&ct[..n]).map_or(false, |k| k == n)
+        s.send_slice(&ct[..n]) == Ok(n)
     }
 
     pub(super) struct TlsPipe<'a, 'b> {

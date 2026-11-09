@@ -50,7 +50,7 @@ pub fn produce(pool_base: usize, idx: usize) -> bool {
     let p = frame_ptr(pool_base, frame) as *mut u8;
     // A REAL Ethernet/IPv4/UDP frame with the dst port at its true L4 offset, so
     // the datapath exercises the parser + L4-offset rule end to end.
-    let port: u16 = if idx % 2 == 0 { BLOCKED_PORT } else { 80 };
+    let port: u16 = if idx.is_multiple_of(2) { BLOCKED_PORT } else { 80 };
     let flen = {
         let buf = unsafe { core::slice::from_raw_parts_mut(p, FRAME_SZ) };
         build_udp_frame(buf, port)
@@ -388,12 +388,12 @@ fn classify_tiers_n(frame: &[u8], nframe: &[u8], meta: Option<crate::net::Packet
             // (dst: parsed once in classify — eth_ipv4_dst walks the VLAN tags itself)
             // One observation per CONNECTION (a pure SYN), not per packet: a keep-alive or a long
             // transfer is not a series of beacons (parity G4; V1's per-packet lateral was an FP factory).
-            let syn = frame.get(m.l4_off + 13).map_or(false, |&f| f & 0x12 == 0x02);
+            let syn = frame.get(m.l4_off + 13).is_some_and(|&f| f & 0x12 == 0x02);
             if m.ip_proto == crate::net::IPPROTO_TCP && syn {
                 let _ = crate::rules::beacon_verdict(src, dst, m.dst_port);
                 let _ = crate::rules::lateral_verdict(src, dst, m.dst_port);
                 let _ = crate::rules::brute_verdict(src, dst, m.dst_port);
-            } else if m.ip_proto == crate::net::IPPROTO_TCP && frame.get(m.l4_off + 13).map_or(false, |&f| f & 0x12 == 0x12) {
+            } else if m.ip_proto == crate::net::IPPROTO_TCP && frame.get(m.l4_off + 13).is_some_and(|&f| f & 0x12 == 0x12) {
                 // a SYN-ACK: the admin service answered (rule 124's evidence; server = src, client = dst)
                 crate::behavioral::brute_answer_at(src, dst, m.src_port, crate::behavioral::now_secs());
             } else if m.dst_port == 53 {

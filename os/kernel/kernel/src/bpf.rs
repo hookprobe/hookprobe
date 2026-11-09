@@ -444,7 +444,7 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                             return Err("load below packet start");
                         }
                         let need_i = sat_add(sat_add(hi, off as i64), w);
-                        if need_i < 0 || need_i > 65536 {
+                        if !(0..=65536).contains(&need_i) {
                             return Err("load offset unbounded / exceeds max packet");
                         }
                         if need_i as u64 > min_len {
@@ -540,7 +540,7 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                                 return Err("payload_match arg1 below packet start");
                             }
                             let need_i = sat_add(hi, crate::l7::max_pattern_len() as i64);
-                            if need_i < 0 || need_i > 65536 {
+                            if !(0..=65536).contains(&need_i) {
                                 return Err("payload_match read offset unbounded");
                             }
                             if need_i as u64 > min_len {

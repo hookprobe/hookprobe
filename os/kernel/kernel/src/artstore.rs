@@ -448,7 +448,7 @@ pub fn selftest() -> bool {
     crate::policysig::selftest_key(Some(key));
     let d = test_disk();
     let store = store_region(d);
-    let fits = store.map_or(false, |s| half_span(s) >= need_per_half() && slot(s, Ty::Devices, 2).1 + Ty::Devices.data_sect() <= s.1);
+    let fits = store.is_some_and(|s| half_span(s) >= need_per_half() && slot(s, Ty::Devices, 2).1 + Ty::Devices.data_sect() <= s.1);
     let Some(store) = store else {
         crate::policysig::selftest_key(None);
         arch_aarch64::_print(format_args!(" [P-artstore] FAIL — no store region\n"));

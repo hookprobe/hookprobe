@@ -455,11 +455,11 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 core::str::from_utf8(&t).unwrap_or(""), crate::actions::last_seq(tag) + 1, auth.live_sessions(now_ms),
                 crate::actions::MIN_TTL_S, crate::actions::MAX_TTL_S);
         }),
-        "/api/actions" => json(scratch, |w| render_actions(w)),
-        "/api/owner-rules" => json(scratch, |w| crate::ownerapi::render(w)),
-        "/api/upload" => json(scratch, |w| crate::upload::render(w)),
+        "/api/actions" => json(scratch, render_actions),
+        "/api/owner-rules" => json(scratch, crate::ownerapi::render),
+        "/api/upload" => json(scratch, crate::upload::render),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
-        "/api/tls" => json(scratch, |w| render_tls(w)),
+        "/api/tls" => json(scratch, render_tls),
         "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
         "/api/flows" => json(scratch, |w| st.render_flows(st.ticks_at_ms(now_ms), limit(100, 256), w)),
         p if p.starts_with("/api/incidents/") => {
@@ -879,7 +879,7 @@ pub fn mc_selftest() -> bool {
         di.render_timeline(0x0A64_004D, 0, &mut tw2);
         let tj = core::str::from_utf8(tw2.bytes()).unwrap_or("");
         let timeline_ok = tj.contains("\"found\":true") && tj.contains("\"kind\":\"detection\"") && tj.ends_with("],\"count\":2}")
-            && tj.find("10.100.0.135:22").map_or(false, |a| tj.find("10.100.0.135:80").map_or(false, |b| a < b));
+            && tj.find("10.100.0.135:22").is_some_and(|a| tj.find("10.100.0.135:80").is_some_and(|b| a < b));
         // AP/LAN images: /api/devices from DHCP leases (MAC, hostname, OS guess, private MAC, active).
         let mut dl = McState::new();
         let mut dd = arch_aarch64::dhcpd::ApDhcp::new();
@@ -970,10 +970,10 @@ pub fn mc_selftest() -> bool {
         // keep-alive (HTTP/1.1 default, Connection: close / HTTP/1.0 end it; `consumed` spans head + body so a
         // pipelined next request survives; the header advertises the limits only when kept)
         let two = b"POST /api/login HTTP/1.1\r\nContent-Length: 5\r\n\r\nabcdeGET / HTTP/1.1\r\n\r\n";
-        let ka = parse(two).map_or(false, |r| r.keep_alive && r.consumed == two.len() - 18 && r.body == b"abcde")
-            && parse(b"GET / HTTP/1.1\r\nConnection: Close\r\n\r\n").map_or(false, |r| !r.keep_alive)
-            && parse(b"GET / HTTP/1.0\r\n\r\n").map_or(false, |r| !r.keep_alive)
-            && parse(b"GET / HTTP/1.1\r\nConnection: keep-alive, Upgrade\r\n\r\n").map_or(false, |r| r.keep_alive);
+        let ka = parse(two).is_ok_and(|r| r.keep_alive && r.consumed == two.len() - 18 && r.body == b"abcde")
+            && parse(b"GET / HTTP/1.1\r\nConnection: Close\r\n\r\n").is_ok_and(|r| !r.keep_alive)
+            && parse(b"GET / HTTP/1.0\r\n\r\n").is_ok_and(|r| !r.keep_alive)
+            && parse(b"GET / HTTP/1.1\r\nConnection: keep-alive, Upgrade\r\n\r\n").is_ok_and(|r| r.keep_alive);
         let h1 = handle(&parse(b"GET /api/health HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 0, || Some([0; 16]), &mut scratch);
         let k = write_head_ka(&h1, &mut hh, false, true);
         let kept = has(&hh[..k], "Connection: keep-alive\r\nKeep-Alive: timeout=15, max=100\r\n");

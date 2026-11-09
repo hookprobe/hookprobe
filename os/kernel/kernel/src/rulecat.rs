@@ -77,5 +77,5 @@ pub fn lookup_or_generic(id: u16) -> RuleInfo {
 /// heqk rule ids whose event `src` is a src-MAC hash, never an IPv4 address (IPv6 RA rules —
 /// see `events::Event::src`).
 pub fn src_is_mac_hash(id: u16) -> bool {
-    matches!(id, 121 | 122 | 123)
+    matches!(id, 121..=123)
 }

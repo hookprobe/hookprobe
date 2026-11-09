@@ -3,9 +3,10 @@
 //! The rate / scan / corroboration tables key on a `u64`. IPv4 sources keep their address (`< 2^32`), so
 //! IPv4 behaviour is byte-identical. IPv6 sources get their own, non-aliasing spaces:
 //!   * `Dev`   (bit 63) — a device on OUR link (Wi-Fi / eth1): hash of its MAC. Survives privacy-address
-//!                       rotation (RFC 8981): one phone is one key whatever IID it uses.
+//!     rotation (RFC 8981): one phone is one key whatever IID it uses.
 //!   * `V6Net` (bit 62) — an internet source: hash of its /64. One site controls a /64; keying on the /128
-//!                       would let a host present a fresh identity per probe.
+//!     would let a host present a fresh identity per probe.
+//!
 //! The management floor (`verdict::is_allowlisted`) only ever matches IPv4 keys.
 //! IPv6 keys are OBSERVE-ONLY until the ADR 0023 separation matrix has its IPv6 rows on metal.
 

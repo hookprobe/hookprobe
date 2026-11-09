@@ -99,13 +99,7 @@ pub enum Dest {
 
 /// The decision.
 pub fn allows(p: Pol, d: Dest) -> bool {
-    match (p, d) {
-        (_, Dest::Infra) => true,
-        (Pol::Full, _) => true,
-        (Pol::InternetOnly, Dest::Internet) => true,
-        (Pol::LanOnly, Dest::Lan | Dest::DeviceMgmt) => true,
-        _ => false,
-    }
+    matches!((p, d), (_, Dest::Infra) | (Pol::Full, _) | (Pol::InternetOnly, Dest::Internet) | (Pol::LanOnly, Dest::Lan | Dest::DeviceMgmt))
 }
 
 #[derive(Clone, Copy)]
@@ -274,7 +268,7 @@ pub fn load_text(text: &[u8]) -> u32 {
     }
     unsafe {
         let t = &mut (&mut *core::ptr::addr_of_mut!(T))[..N];
-        t.sort_by(|a, b| a.mac.cmp(&b.mac)); // stable: a later duplicate stays after the earlier one
+        t.sort_by_key(|a| a.mac); // stable: a later duplicate stays after the earlier one
         // duplicates: the LAST line for a MAC wins
         let mut w = 0usize;
         for r in 0..t.len() {
