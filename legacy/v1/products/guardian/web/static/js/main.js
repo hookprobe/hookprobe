@@ -315,6 +315,11 @@ if (typeof apiDelete === 'undefined') {
 // ============================================
 // NOTIFICATIONS / TOAST
 // ============================================
+function escapeHtml(v) {
+    return String(v === undefined || v === null ? '' : v).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
 function showToast(message, type = 'info', duration = 4000) {
     const container = document.getElementById('toast-container') || createToastContainer();
 
@@ -322,7 +327,7 @@ function showToast(message, type = 'info', duration = 4000) {
     toast.className = `toast toast-${type}`;
     toast.innerHTML = `
         <span class="toast-icon">${getToastIcon(type)}</span>
-        <span class="toast-message">${message}</span>
+        <span class="toast-message">${escapeHtml(message)}</span>
         <button class="toast-close" onclick="this.parentElement.remove()">&times;</button>
     `;
 
@@ -687,16 +692,16 @@ async function classifyDomain(domain) {
 
             resultEl.innerHTML = `
                 <div class="classify-result ${threatClass}">
-                    <div class="classify-domain">${domain}</div>
+                    <div class="classify-domain">${escapeHtml(domain)}</div>
                     <div class="classify-verdict">
-                        <span class="badge badge-${threatClass}">${result.classification.toUpperCase()}</span>
+                        <span class="badge badge-${threatClass}">${escapeHtml(result.classification.toUpperCase())}</span>
                         <span class="text-muted">Confidence: ${Math.round(result.confidence * 100)}%</span>
                     </div>
                     <div class="classify-score">Threat Score: ${(result.threat_score * 100).toFixed(1)}%</div>
                     ${result.reasons && result.reasons.length > 0 ? `
                         <div class="classify-reasons">
                             <strong>Reasons:</strong>
-                            <ul>${result.reasons.map(r => `<li>${r}</li>`).join('')}</ul>
+                            <ul>${result.reasons.map(r => `<li>${escapeHtml(r)}</li>`).join('')}</ul>
                         </div>
                     ` : ''}
                 </div>

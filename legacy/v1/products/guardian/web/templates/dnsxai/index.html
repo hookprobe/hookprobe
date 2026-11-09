@@ -638,7 +638,7 @@ async function checkPacketTarget() {
         });
 
         if (!result.success) {
-            resultContainer.innerHTML = `<p class="text-danger">Error: ${result.error}</p>`;
+            resultContainer.innerHTML = `<p class="text-danger">Error: ${escapeHtml(result.error)}</p>`;
             return;
         }
 
@@ -650,7 +650,7 @@ async function checkPacketTarget() {
         let html = `
             <div style="padding: var(--spacing-md); background: var(--bg-${isAd ? 'light' : 'tertiary'}); border-radius: var(--radius-md); border-left: 4px solid var(--hp-${isAd ? 'red' : 'green'});">
                 <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--spacing-sm);">
-                    <strong>${input}</strong>
+                    <strong>${escapeHtml(input)}</strong>
                     <span class="badge ${isAd ? 'badge-danger' : 'badge-success'}">
                         ${isAd ? 'AD/TRACKER' : 'CLEAN'}
                     </span>
@@ -659,7 +659,7 @@ async function checkPacketTarget() {
                     Confidence: <strong>${confidence}%</strong>
                 </div>
                 <div style="display: flex; flex-wrap: wrap; gap: var(--spacing-xs);">
-                    ${methods.map(m => `<span class="badge badge-secondary">${m.replace('_', ' ')}</span>`).join('')}
+                    ${methods.map(m => `<span class="badge badge-secondary">${escapeHtml(m.replace('_', ' '))}</span>`).join('')}
                 </div>
         `;
 
@@ -668,22 +668,22 @@ async function checkPacketTarget() {
             if (result.details.sni_check?.is_ad) {
                 html += `
                     <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
-                        SNI Pattern: <code>${result.details.sni_check.matched_pattern}</code>
+                        SNI Pattern: <code>${escapeHtml(result.details.sni_check.matched_pattern)}</code>
                     </div>
                 `;
             }
             if (result.details.ip_check?.is_ad) {
                 html += `
                     <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
-                        IP Network: ${result.details.ip_check.info}
+                        IP Network: ${escapeHtml(result.details.ip_check.info)}
                     </div>
                 `;
             }
             if (result.details.ml_classification?.is_suspicious) {
                 html += `
                     <div style="margin-top: var(--spacing-sm); font-size: 0.8125rem;" class="text-muted">
-                        ML Classification: ${result.details.ml_classification.classification}
-                        (${result.details.ml_classification.reasons?.join(', ') || 'suspicious pattern'})
+                        ML Classification: ${escapeHtml(result.details.ml_classification.classification)}
+                        (${escapeHtml(result.details.ml_classification.reasons?.join(', ') || 'suspicious pattern')})
                     </div>
                 `;
             }
@@ -695,7 +695,7 @@ async function checkPacketTarget() {
         if (isAd && isIP) {
             html += `
                 <div style="margin-top: var(--spacing-sm);">
-                    <button class="btn btn-sm btn-danger" onclick="blockAdIP('${input}')">Block This IP</button>
+                    <button class="btn btn-sm btn-danger" onclick="blockAdIP('${escapeHtml(input)}')">Block This IP</button>
                 </div>
             `;
         }
@@ -703,7 +703,7 @@ async function checkPacketTarget() {
         resultContainer.innerHTML = html;
 
     } catch (error) {
-        resultContainer.innerHTML = `<p class="text-danger">Check failed: ${error.message}</p>`;
+        resultContainer.innerHTML = `<p class="text-danger">Check failed: ${escapeHtml(error.message)}</p>`;
     }
 }
 

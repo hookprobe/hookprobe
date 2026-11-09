@@ -28,7 +28,8 @@ COPY hydra/bpf_map_ops.py hydra/feed_sync.py hydra/event_consumer.py \
      hydra/feature_extractor.py hydra/anomaly_detector.py \
      hydra/rdap_enricher.py hydra/baseline_profiler.py hydra/cve_enricher.py \
      hydra/temporal_memory.py hydra/sentinel_engine.py \
-     hydra/sentinel_lifecycle.py hydra/predictor_engine.py ./
+     hydra/sentinel_lifecycle.py hydra/predictor_engine.py \
+     hydra/flow_threats.py ./
 
 # Phase 2 canonical source — `from hydra.trusted_networks import ...`.
 # Keep both flat and namespaced paths so old + new imports work.

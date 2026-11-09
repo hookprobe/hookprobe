@@ -2100,7 +2100,8 @@ def api_debug_devices():
             if isinstance(result['raw_data'], dict):
                 result['device_count_in_file'] = len(result['raw_data'].get('devices', []))
         except Exception as e:
-            result['errors'].append(f"Failed to read raw file: {e}")
+            logger.error(f"Failed to read raw file: {e}")
+            result['errors'].append("Failed to read raw file")
 
     # Check device_policies module
     if DEVICE_POLICIES_AVAILABLE:
@@ -2112,7 +2113,8 @@ def api_debug_devices():
                 'devices': devices[:5] if devices else []  # First 5 only
             }
         except Exception as e:
-            result['errors'].append(f"get_all_devices() error: {e}")
+            logger.error(f"get_all_devices() error: {e}")
+            result['errors'].append("get_all_devices() error")
     else:
         result['errors'].append("device_policies module not available")
 

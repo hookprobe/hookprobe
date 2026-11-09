@@ -304,13 +304,14 @@ def apply_timezone(timezone: str) -> dict:
             logger.info(f"Timezone set to {timezone}")
             return {'success': True, 'message': f'Timezone set to {timezone}'}
         else:
-            return {'success': False, 'error': result.stderr or 'Failed to set timezone'}
+            logger.warning(f"timedatectl failed: {result.stderr}")
+            return {'success': False, 'error': 'Failed to set timezone'}
 
     except subprocess.TimeoutExpired:
         return {'success': False, 'error': 'Timeout setting timezone'}
     except Exception as e:
         logger.error(f"Failed to set timezone: {e}")
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': 'Operation failed (see server log)'}
 
 
 def apply_wifi_settings(ssid: str, password: str, channel: str = 'auto', band: str = 'dual') -> dict:
@@ -348,7 +349,8 @@ def apply_wifi_settings(ssid: str, password: str, channel: str = 'auto', band: s
             if result.returncode == 0:
                 results.append('hostapd configuration regenerated')
             else:
-                errors.append(f'hostapd-generator failed: {result.stderr}')
+                logger.warning(f"hostapd-generator failed: {result.stderr}")
+                errors.append('hostapd-generator failed')
 
         # Method 2: Direct config file update (fallback)
         else:
@@ -382,7 +384,7 @@ def apply_wifi_settings(ssid: str, password: str, channel: str = 'auto', band: s
 
     except Exception as e:
         logger.error(f"Failed to apply WiFi settings: {e}")
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': 'Operation failed (see server log)'}
 
 
 def update_hostapd_ssid(config_path: Path, ssid: str, password: str):
@@ -438,11 +440,12 @@ def apply_regulatory_domain(domain: str) -> dict:
             logger.info(f"Regulatory domain set to {domain}")
             return {'success': True, 'message': f'Regulatory domain set to {domain}'}
         else:
-            return {'success': False, 'error': result.stderr or 'Failed to set regulatory domain'}
+            logger.warning(f"iw reg set failed: {result.stderr}")
+            return {'success': False, 'error': 'Failed to set regulatory domain'}
 
     except Exception as e:
         logger.error(f"Failed to set regulatory domain: {e}")
-        return {'success': False, 'error': str(e)}
+        return {'success': False, 'error': 'Operation failed (see server log)'}
 
 
 def get_current_timezone() -> str:

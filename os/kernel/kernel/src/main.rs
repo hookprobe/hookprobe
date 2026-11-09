@@ -12704,7 +12704,13 @@ fn p3_user_demo() {
 /// Sync-from-EL0 handler (called from `lower_sync_entry`). SVC -> service the
 /// syscall and return (asm erets back to EL0). Any other fault -> contain it and
 /// resume the kernel (this call never returns for the fault path).
+///
+/// SAFETY contract: called ONLY from the `lower_sync_entry` asm vector stub, with `frame` pointing at
+/// the 34-word register frame that stub just pushed on the current kernel stack (always valid, aligned,
+/// exclusively owned for the duration of the call). No Rust code calls it, so the raw-pointer argument
+/// is an ABI fact, not an API — hence the scoped clippy allow rather than an `unsafe fn` (ADR 0052 G1).
 #[no_mangle]
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
     let esr: u64;
     unsafe { core::arch::asm!("mrs {}, esr_el1", out(reg) esr) };
@@ -13164,12 +13170,38 @@ fn flaky_component(attempt: u32) -> bool {
 fn driver_server_demo() -> bool {
     kprint!(" [DRV] driver isolation: an EL0 driver server drives device MMIO via a capability\n");
     let mmu = arch_aarch64::Mmu;
+    // Declare only the stub this build uses (an unused extern static is dead_code under the
+    // clippy ratchet's netsvc/mcserve passes).
+    #[cfg(not(feature = "cloud"))]
     extern "C" {
         static driver_stub: u8;
         static driver_stub_end: u8;
     }
-    let src = core::ptr::addr_of!(driver_stub) as usize;
-    let len = core::ptr::addr_of!(driver_stub_end) as usize - src;
+    #[cfg(feature = "cloud")]
+    extern "C" {
+        static driver_stub_pci: u8;
+        static driver_stub_pci_end: u8;
+    }
+    // arm64-cloud (virtio on PCI only): grant the NIC's PCI config page instead of the
+    // virtio-mmio page; the driver reads DeviceID there (modern virtio-net = 0x1041).
+    #[cfg(feature = "cloud")]
+    let (src, end, window_pa, expect) = {
+        let Some(t) = arch_aarch64::virtio_transport::Transport::find(1) else {
+            kprint!("   FAIL: no virtio-net on PCI\n");
+            return false;
+        };
+        let (_, _, bus, dev, func) = t.describe();
+        let pa = arch_aarch64::pci::config_page_pa(arch_aarch64::pci::Bdf { bus, dev, func });
+        (core::ptr::addr_of!(driver_stub_pci) as usize, core::ptr::addr_of!(driver_stub_pci_end) as usize, pa, 0x1041u64)
+    };
+    #[cfg(not(feature = "cloud"))]
+    let (src, end, window_pa, expect) = (
+        core::ptr::addr_of!(driver_stub) as usize,
+        core::ptr::addr_of!(driver_stub_end) as usize,
+        0x0a00_3000usize, // page holding virtio-mmio slot 31 (net)
+        1u64,
+    );
+    let len = end - src;
     let code = mmu.alloc_frame();
     let stack = mmu.alloc_frame();
     if code == 0 || stack == 0 {
@@ -13182,10 +13214,9 @@ fn driver_server_demo() -> bool {
     const DCODE_VA: usize = 0xD200_0000;
     const DSTACK_VA: usize = 0xD200_1000;
     const DEV_VA: usize = 0xE200_0000;
-    const NET_MMIO_PAGE: usize = 0x0a00_3000; // page holding virtio-mmio slot 31 (net)
     mmu.map_user_code_page(DCODE_VA, code);
     mmu.map_user_data_page(DSTACK_VA, stack);
-    mmu.map_user_device_page(DEV_VA, NET_MMIO_PAGE); // the ONLY hardware it can touch
+    mmu.map_user_device_page(DEV_VA, window_pa); // the ONLY hardware it can touch
     kprint!(
         "   EL0 driver: code@{:#x} stack@{:#x} device-window {:#x} -> NIC MMIO (nothing else granted)\n",
         DCODE_VA, DSTACK_VA, DEV_VA
@@ -13194,8 +13225,8 @@ fn driver_server_demo() -> bool {
     DRIVER_REPORT.store(0, Ordering::Relaxed);
     unsafe { arch_aarch64::syscall::enter_user(DCODE_VA, DSTACK_VA + 0x1000) };
     let id = DRIVER_REPORT.load(Ordering::Relaxed);
-    kprint!("   back in EL1; the isolated driver read NIC DeviceID = {} (expect 1 = virtio-net)\n", id);
-    let ok = id == 1;
+    kprint!("   back in EL1; the isolated driver read NIC DeviceID = {:#x} (expect {:#x} = virtio-net)\n", id, expect);
+    let ok = id as u64 == expect;
     kprint!(
         "   [DRV] {} — a driver ran at EL0 with ONLY a device capability; kernel untouched\n",
         if ok { "PASS" } else { "FAIL" }
@@ -14511,8 +14542,11 @@ fn fuzz_selftest() {
                 sec[..8].copy_from_slice(b"HQSTMAN1"); // reach the field parser, not just the magic check
             }
             let _ = artstore::fuzz_decode(&sec);
-            let mut f = [0u8; 192];
-            let _ = actionapi::form_get(&sec[..(next() as usize % 400).min(512)], "type", &mut f);
+            #[cfg(feature = "netsvc")]
+            {
+                let mut f = [0u8; 192];
+                let _ = actionapi::form_get(&sec[..(next() as usize % 400).min(512)], "type", &mut f);
+            }
             n_0909 += 1;
         }
     }

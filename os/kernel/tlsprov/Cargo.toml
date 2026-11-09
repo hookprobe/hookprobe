@@ -6,6 +6,7 @@
 name = "heqk-tlsprov"
 version = "0.1.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 license = "AGPL-3.0-only"
 
 [workspace]
@@ -18,7 +19,7 @@ sha2 = { version = "0.10", default-features = false }
 hmac = { version = "0.12", default-features = false }
 # 0.3.4: constant-time CBD sampling (0.3.3, RustCrypto/KEMs#386) + hardened equality/reduction/zeroization
 ml-kem = { version = "=0.3.4", default-features = false }
-p256 = { version = "0.13", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
+p256 = { version = "0.14", default-features = false, features = ["ecdsa", "pkcs8", "alloc"] }
 
 [dev-dependencies]
 rustls = { version = "0.23", default-features = false, features = ["std"] }

@@ -4,6 +4,7 @@ Config Module Views - WiFi, Network Configuration
 Includes offline mode management for congested environments where
 Guardian needs to start AP without pre-configured WAN connectivity.
 """
+import os
 import re
 import sys
 from pathlib import Path
@@ -750,7 +751,10 @@ def api_hotspot():
         ]
         config = '\n'.join(lines)
 
-        with open('/etc/hostapd/hostapd.conf', 'w') as f:
+        # 0600: config contains the hotspot passphrase
+        fd = os.open('/etc/hostapd/hostapd.conf', os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, 'w') as f:
+            os.fchmod(f.fileno(), 0o600)
             f.write(config)
 
         return jsonify({'success': True})

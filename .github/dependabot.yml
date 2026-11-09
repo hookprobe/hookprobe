@@ -1,0 +1,52 @@
+# Root Dependabot config (ADR 0052 L3 — Watch). GitHub ONLY reads this file at the repo root:
+# the old os/kernel/.github/dependabot.yml was inert after the 2026-11-07 merge. G0
+# (tools/ci/g0_wiring.py W5) fails if any lockfile in tools/ci/lockfiles.txt is not covered here.
+# Every Dependabot PR runs the full ci.yml gate spine; a red one is picked up by autoheal.yml.
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule: { interval: "weekly", day: "monday" }
+    labels: ["dependencies", "github-actions"]
+    commit-message: { prefix: "chore(deps)", include: "scope" }
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: "cargo"
+    directories:
+      - "/os/kernel"
+      - "/os/kernel/tlsprov"
+      - "/os/kernel/el0-tlshost"
+      - "/os/kernel/el0-wasmhost"
+      - "/os/kernel/wasip1-fixture"
+      - "/os/kernel/efiboot"
+      - "/os/build/heqk-sign"
+      - "/onboarding/enrollment/responder-sim"
+    schedule: { interval: "weekly", day: "monday" }
+    labels: ["dependencies", "rust"]
+    commit-message: { prefix: "chore(deps)", include: "scope" }
+    open-pull-requests-limit: 10
+    groups:
+      rustcrypto:
+        patterns: ["p256", "ecdsa", "elliptic-curve", "crypto-bigint", "sha2", "hmac", "digest", "chacha20poly1305", "ml-kem", "x25519-dalek"]
+    # Patch updates only. For 0.x crates a "minor" bump IS a breaking API change (rand_core 0.6→0.10,
+    # smoltcp 0.13→0.14, x25519-dalek 2→3, chacha20poly1305 0.10→0.11 all merged red on 2026-11-08
+    # and broke the heqk kernel build). Majors/minors of the kernel's crypto + network stack are a
+    # deliberate porting PR with QEMU + metal validation. Vulnerabilities are still caught nightly by
+    # RustSec (g4) and Dependabot security alerts — and a security fix is applied by hand (cf. p256 0.14).
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+
+  - package-ecosystem: "npm"
+    directories:
+      - "/os/mission-control"
+      - "/os/kernel/tools/mc-e2e"
+    schedule: { interval: "weekly", day: "monday" }
+    labels: ["dependencies", "javascript"]
+    commit-message: { prefix: "chore(deps)", include: "scope" }
+    open-pull-requests-limit: 5
+    ignore:
+      # @astrojs/check (latest 0.9.x) peers typescript "^5 || ^6": TS 7 breaks `npm ci` and therefore the
+      # Mission Control build + the shipped prod-mc image (#748, 2026-11-08). Lift once astro check supports 7.
+      - dependency-name: "typescript"
+        versions: [">=7"]
