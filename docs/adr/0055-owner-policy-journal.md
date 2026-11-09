@@ -47,7 +47,10 @@ line is not pinned. Session actions (ADR 0053) are TTL overlays evaluated with t
 value, mandatory reason (≤ 120 B), `ttl_s` (0 = permanent), `confirmed` flag, and
 `mac = HMAC-SHA256(K_journal, prev_mac ‖ record)` where `K_journal = HKDF(SRK, "HQ-owner-journal-v1")`.
 The chain is verified on load; replay stops at the first record whose MAC fails (power-loss tail or tampering),
-and that event is itself reported. Refusals are recorded too (as in ADR 0053 S4).
+and that event is itself reported. Refusals are recorded too (as in ADR 0053 S4) — *as built (stage A,
+2026-11-09)*: refusals go to a RAM ring shown in `GET /api/owner-rules` (`refused`), not to the journal, so a
+hostile client cannot fill the durable region with refused writes; every ACCEPTED change is durable. ADR 0056
+adds one audit-only kind, `artifact` (an upload activation / rollback), that never becomes a rule.
 
 **D4 — Storage.** A dedicated, registered eMMC region (the region registry is item #54: lifting the 16 KiB
 write clamp to named regions) — never the boot FAT, never the snapshot window. Layout: an append area plus

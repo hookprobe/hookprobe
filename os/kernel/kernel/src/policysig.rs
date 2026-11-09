@@ -100,3 +100,14 @@ pub fn selftest() -> bool {
     ));
     pass
 }
+
+/// The operator key the signed-pack loaders verify against: the one compiled into the signed image.
+/// `[P-artstore]` swaps in its own key for the duration of the self-test (boot, before any network
+/// service starts) and restores it; nothing else writes it.
+static mut TEST_KEY: Option<[u8; 32]> = None;
+pub fn key() -> Option<[u8; 32]> {
+    unsafe { TEST_KEY }.or(POLICY_PUBKEY)
+}
+pub fn selftest_key(k: Option<[u8; 32]>) {
+    unsafe { TEST_KEY = k };
+}

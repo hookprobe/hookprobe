@@ -26,6 +26,9 @@ pub enum Kind {
     ShieldAllow = 2,  // target = domain, value = 1
     ShieldBlock = 3,  // target = domain, value = 1
     ShieldProfile = 4, // target = MAC, value = devpolicy::ShieldProfile
+    /// ADR 0056 D6: an artifact activation (audit only — never a rule). target = pack type name,
+    /// value = 1 activated / 2 rolled back, reason = "gen A->B sha256:<16 hex>".
+    Artifact = 5,
 }
 
 impl Kind {
@@ -35,6 +38,7 @@ impl Kind {
             2 => Some(Kind::ShieldAllow),
             3 => Some(Kind::ShieldBlock),
             4 => Some(Kind::ShieldProfile),
+            5 => Some(Kind::Artifact),
             _ => None,
         }
     }
@@ -44,6 +48,7 @@ impl Kind {
             Kind::ShieldAllow => "shield_allow",
             Kind::ShieldBlock => "shield_block",
             Kind::ShieldProfile => "shield_profile",
+            Kind::Artifact => "artifact",
         }
     }
 }
@@ -148,7 +153,30 @@ pub struct Journal {
     next_idx: u64, // record index from `lo`
 }
 
+/// The latest artifact audit records (replayed with the rules; ADR 0056 D6).
+pub const ART_N: usize = 16;
+static mut ART: [Record; ART_N] = [R0; ART_N];
+static mut ART_LEN: usize = 0;
+pub fn for_each_artifact(f: &mut dyn FnMut(&Record)) {
+    let (a, n) = unsafe { (&*core::ptr::addr_of!(ART), ART_LEN) };
+    for r in a[..n].iter().rev() {
+        f(r);
+    }
+}
+
 fn apply(r: &Record) -> Result<(), JErr> {
+    if r.kind == Kind::Artifact as u8 {
+        let a = unsafe { &mut *core::ptr::addr_of_mut!(ART) };
+        unsafe {
+            if ART_LEN == ART_N {
+                a.copy_within(1.., 0);
+                ART_LEN -= 1;
+            }
+            a[ART_LEN] = *r;
+            ART_LEN += 1;
+        }
+        return Ok(());
+    }
     let t = unsafe { &mut *core::ptr::addr_of_mut!(RULES) };
     let n = unsafe { NRULES };
     let pos = t[..n].iter().position(|x| x.kind == r.kind && x.target[..x.tlen as usize] == *r.target());
@@ -186,7 +214,10 @@ impl Journal {
 
     /// Rebuild the rule table from the region: every record whose chained MAC verifies, in order.
     pub fn replay<D: BlockDev + ?Sized>(&mut self, dev: &D) -> Replay {
-        unsafe { NRULES = 0 };
+        unsafe {
+            NRULES = 0;
+            ART_LEN = 0;
+        }
         self.last_mac = [0; 32];
         self.next_seq = 1;
         self.next_idx = 0;
@@ -303,7 +334,10 @@ pub fn for_each(f: &mut dyn FnMut(&Rule)) {
 
 /// Test hook: forget every rule (the selftests share the global table).
 pub fn clear() {
-    unsafe { NRULES = 0 };
+    unsafe {
+        NRULES = 0;
+        ART_LEN = 0;
+    }
 }
 
 // ---- [P-ownerjournal] ----

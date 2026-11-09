@@ -62,10 +62,13 @@ mod fpdb;
 mod devid;
 mod oui;
 mod lanrelay;
+mod artstore;
 mod datavol;
 mod ownerjournal;
 #[cfg(feature = "netsvc")]
 mod ownerapi;
+#[cfg(feature = "netsvc")]
+mod upload;
 mod discovery;
 #[cfg(feature = "netsvc")]
 mod actionapi;
@@ -3131,6 +3134,24 @@ fn cm5_p10_probe() {
                                 kprint!(" [DEVICES] per-device policy: {} devices {}\n", devpolicy::len(),
                                     match di.file { 0 => "(no DEVICES.TXT — every device full access)", 1 => if di.signed { "(operator signature OK)" } else { "(unsigned — standalone image)" }, _ => "(DEVICES.TXT REFUSED — every device full access)" });
                                 let li = shield::load(&dev);
+                                // ADR 0056 D5: a pack from the artifact store that its loader refuses (tampered / torn
+                                // at rest) is disabled for this boot and the boot-FAT copy loaded instead.
+                                {
+                                    use artstore::Ty;
+                                    let mut sec = [0u8; 512];
+                                    let p1 = if hal::BlockDev::read_block(&dev, 0, &mut sec).is_ok() { store::parse_mbr(&sec)[0].start } else { 0 };
+                                    for (t, refused) in [(Ty::Rules, ri.file == 2), (Ty::Ioc, ii.file == 2), (Ty::Oui, oi.file == 2), (Ty::Devices, di.file == 2), (Ty::Block, li.block_file == 2), (Ty::Allow, li.allow_file == 2)] {
+                                        if artstore::boot_fallback(&dev, p1, t, refused) {
+                                            kprint!(" [AP-STORE] stored {} pack REFUSED by its loader — boot copy loaded instead\n", t.info().name);
+                                        }
+                                    }
+                                    for t in artstore::ALL {
+                                        if artstore::from_store(&dev, p1, t) {
+                                            kprint!(" [AP-STORE] {} from the artifact store (generation {})\n", t.info().name, artstore::active_gen(&dev, p1, t));
+                                        }
+                                    }
+                                }
+                                let li = shield::info();
                                 let p = shield::policy();
                                 kprint!(" [SHIELD] v2: {} blocked + {} allowed domains | BLOCK.TXT {} ALLOW.TXT {}{}{} | encrypted DNS {} | Private Relay {} | DDR + Firefox canary answered, system floor on\n",
                                     shield::block_len(), shield::allow_len(),
@@ -3617,6 +3638,36 @@ fn cm5_p10_probe() {
                             if !placed {
                                 ownerapi::install_ram(&[0u8; 32]);
                                 kprint!(" [AP-OWNER] owner policy journal: no device key or no DataVolume — RAM only (rules last until reboot)\n");
+                            }
+                        }
+                        // ADR 0056: the artifact store + upload staging — a THIRD eMMC handle whose Gate 2 covers
+                        // ONLY Store ∪ Staging (contiguous in the registry), so an upload bug can never write the
+                        // journal, the keystore or the boot partition. Without an operator key uploads are refused.
+                        #[cfg(feature = "appersist")]
+                        {
+                            static mut ART_DEV: Option<arch_aarch64::emmc::Emmc> = None;
+                            let mut armed = false;
+                            if let Ok(mut dev) = arch_aarch64::emmc::Emmc::probe() {
+                                let mut mbr = [0u8; 512];
+                                use hal::BlockDev;
+                                if dev.read_block(0, &mut mbr).is_ok() {
+                                    if let Some(dv) = datavol::DataVol::from_mbr(&mbr) {
+                                        let (blo, bhi) = dv.bounds();
+                                        dev.set_data_volume(blo, bhi);
+                                        let (lo, _) = dv.region(datavol::Region::Store);
+                                        let (_, hi) = dv.region(datavol::Region::Staging);
+                                        if dev.arm_write_window(lo, hi) == (lo, hi) {
+                                            let d: &'static mut dyn hal::BlockDev = unsafe { (*core::ptr::addr_of_mut!(ART_DEV)).insert(dev) };
+                                            upload::install(d);
+                                            armed = true;
+                                            kprint!(" [AP-STORE] artifact store + upload staging: LBA {}..{} (DataVolume){}\n", lo, hi,
+                                                if policysig::key().is_some() { "" } else { " — no operator key in this image: uploads refused" });
+                                        }
+                                    }
+                                }
+                            }
+                            if !armed {
+                                kprint!(" [AP-STORE] no DataVolume — signed packs update only by reflashing\n");
                             }
                         }
                         #[cfg(feature = "mcserve")]
@@ -6556,14 +6607,18 @@ pub extern "C" fn kmain() -> ! {
         let _ = policysig::selftest();
         let _ = shield::selftest();
         let _ = shield::profile_selftest();
+        let _ = shield::levels_selftest();
         let _ = dga::selftest();
         let _ = ioc::selftest();
         let _ = oui::selftest();
         let _ = lanrelay::selftest();
         let _ = datavol::selftest();
+        let _ = artstore::selftest();
         let _ = ownerjournal::selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = upload::selftest();
         let _ = rules::jit_call_selftest();
         let _ = behavioral::beacon_busy_selftest();
         let _ = devpolicy::selftest();
