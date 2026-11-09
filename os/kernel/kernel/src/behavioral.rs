@@ -338,7 +338,29 @@ pub fn exfil_observe(src: u32, dst: u32, bytes: u64) -> bool {
         return bytes > EXFIL_BYTES_THRESH;
     }
     let total = EX_BYTES[s].fetch_add(bytes, Ordering::Relaxed) + bytes;
-    total > EXFIL_BYTES_THRESH
+    total > EXFIL_BYTES_THRESH || exfil_slow(src, dst, bytes, now)
+}
+
+/// Low-and-slow tier (detection benchmark 2026-11-09: 8 MB/min for 15 min passed under the 50 MB/min bar):
+/// more than `EXFIL_SLOW_BYTES` from one inside source to ONE outside destination within
+/// `EXFIL_SLOW_SECS`. Per destination, so a household's many cloud services do not add up.
+pub const EXFIL_SLOW_BYTES: u64 = 100_000_000;
+const EXFIL_SLOW_SECS: u64 = 900;
+const EXS_N: usize = 64;
+static EXS_KEY: [AtomicU64; EXS_N] = [const { AtomicU64::new(0) }; EXS_N];
+static EXS_WIN: [AtomicU64; EXS_N] = [const { AtomicU64::new(0) }; EXS_N];
+static EXS_BYTES: [AtomicU64; EXS_N] = [const { AtomicU64::new(0) }; EXS_N];
+fn exfil_slow(src: u32, dst: u32, bytes: u64, now: u64) -> bool {
+    let key = ((src as u64) << 32) | dst as u64 | 1;
+    let i = crate::ratelimit::slot(key, EXS_N);
+    let win = cntfrq().max(1).saturating_mul(EXFIL_SLOW_SECS);
+    if EXS_KEY[i].load(Ordering::Relaxed) != key || now.wrapping_sub(EXS_WIN[i].load(Ordering::Relaxed)) >= win {
+        EXS_KEY[i].store(key, Ordering::Relaxed);
+        EXS_WIN[i].store(now, Ordering::Relaxed);
+        EXS_BYTES[i].store(bytes, Ordering::Relaxed);
+        return false;
+    }
+    EXS_BYTES[i].fetch_add(bytes, Ordering::Relaxed) + bytes > EXFIL_SLOW_BYTES
 }
 
 // =====================================================================================
@@ -468,6 +490,14 @@ static BF_WIN: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SL
 static BF_COUNT: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
 static BF_ANSWERED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
 static BF_FIRED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+/// Slow tier (detection benchmark 2026-11-09: one attempt every 30 s never reached 20 per minute): the same
+/// (client, server, service) with `BRUTE_SLOW_THRESHOLD` attempts in `BRUTE_SLOW_SECS`, answered.
+pub const BRUTE_SLOW_THRESHOLD: u64 = 30;
+const BRUTE_SLOW_SECS: u64 = 1800;
+static BFS_WIN: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BFS_COUNT: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BFS_KEY: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BFS_ANSWERED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
 
 fn brute_key(src: u32, dst: u32, port: u16) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -488,6 +518,9 @@ pub fn brute_answer_at(server: u32, client: u32, port: u16, now: u64) {
     if BF_KEY[s].load(Ordering::Relaxed) == k && now.saturating_sub(BF_WIN[s].load(Ordering::Relaxed)) < BRUTE_WINDOW_SECS {
         BF_ANSWERED[s].store(1, Ordering::Relaxed);
     }
+    if BFS_KEY[s].load(Ordering::Relaxed) == k && now.saturating_sub(BFS_WIN[s].load(Ordering::Relaxed)) < BRUTE_SLOW_SECS {
+        BFS_ANSWERED[s].store(1, Ordering::Relaxed);
+    }
 }
 
 /// A connection attempt (SYN-only) from `src` to `dst:port`. True once per burst (then cooldown).
@@ -497,6 +530,23 @@ pub fn brute_attempt_at(src: u32, dst: u32, port: u16, now: u64) -> bool {
     }
     let k = brute_key(src, dst, port);
     let s = (k as usize) % BRUTE_SLOTS;
+    // slow tier first (its own window; the fast path below may return early)
+    let slow = if BFS_KEY[s].load(Ordering::Relaxed) != k || now.saturating_sub(BFS_WIN[s].load(Ordering::Relaxed)) >= BRUTE_SLOW_SECS {
+        BFS_KEY[s].store(k, Ordering::Relaxed);
+        BFS_WIN[s].store(now, Ordering::Relaxed);
+        BFS_COUNT[s].store(1, Ordering::Relaxed);
+        BFS_ANSWERED[s].store(0, Ordering::Relaxed);
+        false
+    } else {
+        BFS_COUNT[s].fetch_add(1, Ordering::Relaxed) + 1 >= BRUTE_SLOW_THRESHOLD && BFS_ANSWERED[s].load(Ordering::Relaxed) != 0
+    };
+    if slow {
+        let last = BF_FIRED[s].load(Ordering::Relaxed);
+        if last == 0 || now.saturating_sub(last) >= BRUTE_COOLDOWN_SECS {
+            BF_FIRED[s].store(now.max(1), Ordering::Relaxed);
+            return true;
+        }
+    }
     if BF_KEY[s].load(Ordering::Relaxed) != k || now.saturating_sub(BF_WIN[s].load(Ordering::Relaxed)) >= BRUTE_WINDOW_SECS {
         BF_KEY[s].store(k, Ordering::Relaxed);
         BF_WIN[s].store(now, Ordering::Relaxed);
@@ -521,6 +571,7 @@ pub fn brute_reset() {
     for s in 0..BRUTE_SLOTS {
         BF_KEY[s].store(0, Ordering::Relaxed);
         BF_FIRED[s].store(0, Ordering::Relaxed);
+        BFS_KEY[s].store(0, Ordering::Relaxed);
     }
 }
 
