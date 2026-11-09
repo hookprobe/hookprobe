@@ -1,10 +1,16 @@
 # Shield bench blocklist (heqk AP). One domain per line, or hosts-file lines.
 # Visible test: example.org must fail on a client while example.com still loads.
+# ADR 0057: untagged lines are the `general` category; `#! category=` tags the lines that follow.
 example.org
+#! category=ads
 # common ad / tracking domains
 doubleclick.net
 googlesyndication.com
 googleadservices.com
 adservice.google.com
 0.0.0.0 ads.yahoo.com
+#! category=trackers
 0.0.0.0 app-measurement.com
+# bench stand-in for a confirmed-malicious listing (a harmless reserved name): blocks at EVERY level (D4)
+#! category=malware
+www.example.net

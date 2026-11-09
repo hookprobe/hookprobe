@@ -143,6 +143,27 @@ export interface DeviceRow {
   mac: string | null;
   first_seen: number;
   last_seen: number;
+  /** AP/LAN images (DHCP leases): name, OS guess, policy from the signed DEVICES.TXT. */
+  hostname?: string | null;
+  os?: string | null;
+  private_mac?: boolean;
+  active?: boolean;
+  source?: string;
+  policy?: string;
+  label?: string | null;
+  /** discovery D1: identification + the key that links private-MAC rotations */
+  model?: string | null;
+  vendor?: string | null;
+  category?: string | null;
+  confidence?: number;
+  id_source?: string;
+  identity?: string;
+  identity_basis?: 'high' | 'low' | 'none';
+  /** discovery D2: what the device announced (mDNS / SSDP) */
+  mdns_name?: string | null;
+  mdns_model?: string | null;
+  ssdp_server?: string | null;
+  services?: number;
 }
 export interface DevicesResponse {
   count: number;

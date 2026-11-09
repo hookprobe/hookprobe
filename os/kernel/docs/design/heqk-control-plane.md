@@ -68,7 +68,7 @@ The review's ranked conditions and where each closed (item numbers as cited in c
 | **#3** | `ResponderStatic::from_seeds` metal-reachable; dalek zeroize. | from_seeds now selftest-only (`[P19-edge]`); dalek-zeroize **partial, tracked**. |
 | **#9** | Anti-replay on the transport receiver. | CLOSED (`[P19-edge]`(1)): RFC 6479 sliding bitmap window (the WireGuard construction); replay/below-window rejected; a forged record fails AEAD and never advances the window (RFC 4303 §3.4.3 order). |
 | **N1** | msg1-replay DoS (asymmetric crypto forced by a flood). | CLOSED (`[P19-edge]`(2)): load-triggered stateless cookie + token bucket BEFORE ML-KEM/Ed25519 work (WireGuard / DTLS-1.3 RFC 9147 §5.1); 256-deep flood rejected pre-crypto. **Gate-R metal item:** the cookie lacks epoch/source-address binding (`PRODUCTION_READINESS.md`). |
-| **#4** | CBOM entry for `kem-0.3.0-pre`. | open, tracked. |
+| **#4** | CBOM entry for `kem-0.3.0-pre`. | **resolved 2026-11-09** — `kem` is now 0.3.0 final (`ml-kem =0.3.4`); no pre-release crate in the kernel lockfiles. |
 | **#10** | ML-DSA-65 co-signature on the channel. | open, tracked. |
 
 ## M4.3 — MSSP ENROLLMENT + authenticated update fetch (`[P19-enroll]`, `enroll.rs`)

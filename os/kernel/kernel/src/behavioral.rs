@@ -33,9 +33,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 #[inline]
 fn cntpct() -> u64 {
-    let v: u64;
-    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) };
-    v
+    crate::clock::ticks() // the hardware counter, or the replayed frame's time (detbench)
 }
 #[inline]
 fn cntfrq() -> u64 {
@@ -86,7 +84,11 @@ pub const BEACON_MIN_MEAN_INTERVAL: u64 = 8;
 /// NTP — exempt by default regardless of how regular the interval (FP guard #4 / L8).
 pub const BEACON_NTP_PORT: u16 = 123;
 
-const BEACON_KEYS: usize = 16;
+/// 2-way set-associative (was 256 direct-mapped by `key % 256` — the low 8 bits of the key are the SOURCE's
+/// last octet only, so every (dst, port) a host used landed in ONE slot and evicted the last: a host that
+/// talked to anything besides its C2 never accumulated a beacon ring). 4096 slots, hashed sets, and a miss
+/// evicts the candidate with the shorter history, so a ring that is building towards a verdict survives churn.
+const BEACON_KEYS: usize = 4096;
 /// Ring depth: last N timestamps → up to N-1 intervals. 8 holds MIN_CONNECTIONS (6) with
 /// headroom while keeping the per-key state tiny.
 const BEACON_RING: usize = 8;
@@ -100,7 +102,7 @@ static BC_TS: [[AtomicU64; BEACON_RING]; BEACON_KEYS] =
 /// Fold (src,dst,port) into a non-zero per-destination key (bit 48 set distinguishes any
 /// real key from the empty-slot sentinel). Per-`(src,dst,port)` scoping mirrors the Linux
 /// tracker: independent periodic services on one host are judged separately, never
-/// conflated. Direct-mapped by `key % BEACON_KEYS`; a colliding key evicts (documented).
+/// conflated. Placed by `beacon_observe_at` (2-way, hashed); a colliding key evicts the shorter history.
 #[inline]
 pub fn beacon_key(src: u32, dst: u32, port: u16) -> u64 {
     (((src as u64) ^ ((dst as u64) << 16) ^ ((port as u64) << 33)) & ((1u64 << 48) - 1)) | (1u64 << 48)
@@ -119,8 +121,16 @@ pub fn beacon_observe_at(src: u32, dst: u32, dst_port: u16, now: u64) -> bool {
         return false;
     }
     let key = beacon_key(src, dst, dst_port);
-    let i = (key as usize) % BEACON_KEYS;
-    // Collision-reset: a different (src,dst,port) aliasing this slot evicts the prior
+    let set = crate::ratelimit::slot(key, BEACON_KEYS / 2) * 2;
+    // our own way if present; else the other way if it holds us, or to evict the shorter history
+    let i = if BC_KEY[set].load(Ordering::Relaxed) != key
+        && (BC_KEY[set + 1].load(Ordering::Relaxed) == key || BC_FILL[set + 1].load(Ordering::Relaxed) < BC_FILL[set].load(Ordering::Relaxed))
+    {
+        set + 1
+    } else {
+        set
+    };
+    // Collision-reset: a different (src,dst,port) taking this slot evicts the prior
     // occupant's ring so one destination's timing is never counted against another's.
     if BC_KEY[i].load(Ordering::Relaxed) != key {
         BC_KEY[i].store(key, Ordering::Relaxed);
@@ -171,7 +181,7 @@ pub fn beacon_observe_at(src: u32, dst: u32, dst_port: u16, now: u64) -> bool {
         let ts = BC_TS[i][idx].load(Ordering::Relaxed);
         if k > 0 {
             let iv = ts.wrapping_sub(prev);
-            mad_sum += if iv >= mean { iv - mean } else { mean - iv };
+            mad_sum += iv.abs_diff(mean);
         }
         prev = ts;
     }
@@ -207,7 +217,7 @@ pub const LATERAL_PORTS: &[u16] = &[22, 445, 3389, 5900, 5985, 5986];
 /// server / jump host → distinct==1, can never cross this).
 pub const LATERAL_THRESHOLD: u64 = 5;
 
-const LAT_SRCS: usize = 16;
+const LAT_SRCS: usize = 64;
 const LAT_PEER_SET: usize = 64;
 /// A short window — a real sweep is fast (parity with `DEFAULT_LATERAL_WINDOW_SECS`=300s).
 const LAT_WINDOW_SECS: u64 = 300;
@@ -235,7 +245,7 @@ fn lat_is_tracked_port(port: u16) -> bool {
 
 #[inline]
 fn lat_touch(src: u64) -> usize {
-    let s = (src as usize) % LAT_SRCS;
+    let s = crate::ratelimit::slot(src, LAT_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(LAT_WINDOW_SECS);
     let start = LAT_WIN[s].load(Ordering::Relaxed);
@@ -263,7 +273,7 @@ pub fn lateral_observe(src: u32, dst: u32, dst_port: u16) -> bool {
     let s = lat_touch(src as u64);
     let gen = LAT_GEN[s].load(Ordering::Relaxed);
     let pk = (dst as u64) | (1u64 << 48); // non-zero peer key
-    let i = (dst as usize) % LAT_PEER_SET;
+    let i = crate::ratelimit::slot(dst as u64, LAT_PEER_SET);
     let seen = LAT_PEER_GEN[s][i].load(Ordering::Relaxed) == gen
         && LAT_PEER_KEY[s][i].load(Ordering::Relaxed) == pk;
     if !seen {
@@ -280,7 +290,7 @@ pub fn lateral_distinct_peers(src: u32) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = (src as usize) % LAT_SRCS;
+    let s = crate::ratelimit::slot(src as u64, LAT_SRCS);
     if LAT_SRC[s].load(Ordering::Relaxed) != src as u64 {
         return 0;
     }
@@ -297,7 +307,7 @@ pub fn lateral_distinct_peers(src: u32) -> u64 {
 /// bulk-exfil candidate. A conservative bar; observe-only, so a generous default only
 /// affects alert volume, never the wire.
 pub const EXFIL_BYTES_THRESH: u64 = 50_000_000; // 50 MB / window
-const EXFIL_SRCS: usize = 16;
+const EXFIL_SRCS: usize = 64;
 const EXFIL_WINDOW_SECS: u64 = 60;
 
 static EX_WIN: [AtomicU64; EXFIL_SRCS] = [const { AtomicU64::new(0) }; EXFIL_SRCS];
@@ -316,7 +326,7 @@ pub fn exfil_observe(src: u32, dst: u32, bytes: u64) -> bool {
     if !is_internal(src) || is_internal(dst) {
         return false;
     }
-    let s = (src as usize) % EXFIL_SRCS;
+    let s = crate::ratelimit::slot(src as u64, EXFIL_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(EXFIL_WINDOW_SECS);
     let start = EX_WIN[s].load(Ordering::Relaxed);
@@ -327,7 +337,29 @@ pub fn exfil_observe(src: u32, dst: u32, bytes: u64) -> bool {
         return bytes > EXFIL_BYTES_THRESH;
     }
     let total = EX_BYTES[s].fetch_add(bytes, Ordering::Relaxed) + bytes;
-    total > EXFIL_BYTES_THRESH
+    total > EXFIL_BYTES_THRESH || exfil_slow(src, dst, bytes, now)
+}
+
+/// Low-and-slow tier (detection benchmark 2026-11-09: 8 MB/min for 15 min passed under the 50 MB/min bar):
+/// more than `EXFIL_SLOW_BYTES` from one inside source to ONE outside destination within
+/// `EXFIL_SLOW_SECS`. Per destination, so a household's many cloud services do not add up.
+pub const EXFIL_SLOW_BYTES: u64 = 100_000_000;
+const EXFIL_SLOW_SECS: u64 = 900;
+const EXS_N: usize = 64;
+static EXS_KEY: [AtomicU64; EXS_N] = [const { AtomicU64::new(0) }; EXS_N];
+static EXS_WIN: [AtomicU64; EXS_N] = [const { AtomicU64::new(0) }; EXS_N];
+static EXS_BYTES: [AtomicU64; EXS_N] = [const { AtomicU64::new(0) }; EXS_N];
+fn exfil_slow(src: u32, dst: u32, bytes: u64, now: u64) -> bool {
+    let key = ((src as u64) << 32) | dst as u64 | 1;
+    let i = crate::ratelimit::slot(key, EXS_N);
+    let win = cntfrq().max(1).saturating_mul(EXFIL_SLOW_SECS);
+    if EXS_KEY[i].load(Ordering::Relaxed) != key || now.wrapping_sub(EXS_WIN[i].load(Ordering::Relaxed)) >= win {
+        EXS_KEY[i].store(key, Ordering::Relaxed);
+        EXS_WIN[i].store(now, Ordering::Relaxed);
+        EXS_BYTES[i].store(bytes, Ordering::Relaxed);
+        return false;
+    }
+    EXS_BYTES[i].fetch_add(bytes, Ordering::Relaxed) + bytes > EXFIL_SLOW_BYTES
 }
 
 // =====================================================================================
@@ -432,4 +464,189 @@ pub fn beacon_reset_for_test() {
         BC_POS[i].store(0, Ordering::Relaxed);
         i += 1;
     }
+}
+
+
+// =====================================================================================
+// BRUTE FORCE (rule 124, T1110) — many connection attempts from ONE source to ONE admin service on ONE
+// server: password guessing against SSH / RDP / VNC / SMB / databases / mail. The port-scan tier counts
+// DISTINCT ports, so a single-port guessing burst never reaches it. Legacy NAPSE counted > 50 SYN-only
+// packets to an admin port with no evidence the service exists. Here (ADR 0049 D3 rule): it fires only if
+// that server ANSWERED at least once in the window (a SYN-ACK was seen) — hammering a closed or absent
+// service is noise, not a login attempt. Observe-only (behavioural, ADR 0023); the management floor is
+// exempt (the operator's own SSH); a refire cooldown keeps one burst one alert.
+// =====================================================================================
+
+pub const BRUTE_PORTS: &[u16] = &[21, 22, 23, 25, 110, 143, 445, 465, 587, 993, 995, 1433, 3306, 3389, 5432, 5900, 6379, 27017];
+/// Attempts to one service within the window that make a burst.
+pub const BRUTE_THRESHOLD: u64 = 20;
+const BRUTE_WINDOW_SECS: u64 = 60;
+const BRUTE_COOLDOWN_SECS: u64 = 600;
+const BRUTE_SLOTS: usize = 128;
+
+static BF_KEY: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_WIN: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_COUNT: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_ANSWERED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BF_FIRED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+/// Slow tier (detection benchmark 2026-11-09: one attempt every 30 s never reached 20 per minute): the same
+/// (client, server, service) with `BRUTE_SLOW_THRESHOLD` attempts in `BRUTE_SLOW_SECS`, answered.
+pub const BRUTE_SLOW_THRESHOLD: u64 = 30;
+const BRUTE_SLOW_SECS: u64 = 1800;
+static BFS_WIN: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BFS_COUNT: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BFS_KEY: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+static BFS_ANSWERED: [AtomicU64; BRUTE_SLOTS] = [const { AtomicU64::new(0) }; BRUTE_SLOTS];
+
+fn brute_key(src: u32, dst: u32, port: u16) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in src.to_be_bytes().iter().chain(dst.to_be_bytes().iter()).chain(port.to_be_bytes().iter()) {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h | 1
+}
+
+/// The admin SERVER answered `client` on `port` (a SYN-ACK from server -> client).
+pub fn brute_answer_at(server: u32, client: u32, port: u16, now: u64) {
+    if !BRUTE_PORTS.contains(&port) || client == 0 {
+        return;
+    }
+    let k = brute_key(client, server, port);
+    let s = (k as usize) % BRUTE_SLOTS;
+    if BF_KEY[s].load(Ordering::Relaxed) == k && now.saturating_sub(BF_WIN[s].load(Ordering::Relaxed)) < BRUTE_WINDOW_SECS {
+        BF_ANSWERED[s].store(1, Ordering::Relaxed);
+    }
+    if BFS_KEY[s].load(Ordering::Relaxed) == k && now.saturating_sub(BFS_WIN[s].load(Ordering::Relaxed)) < BRUTE_SLOW_SECS {
+        BFS_ANSWERED[s].store(1, Ordering::Relaxed);
+    }
+}
+
+/// A connection attempt (SYN-only) from `src` to `dst:port`. True once per burst (then cooldown).
+pub fn brute_attempt_at(src: u32, dst: u32, port: u16, now: u64) -> bool {
+    if src == 0 || !BRUTE_PORTS.contains(&port) || crate::verdict::is_allowlisted(src) {
+        return false;
+    }
+    let k = brute_key(src, dst, port);
+    let s = (k as usize) % BRUTE_SLOTS;
+    // slow tier first (its own window; the fast path below may return early)
+    let slow = if BFS_KEY[s].load(Ordering::Relaxed) != k || now.saturating_sub(BFS_WIN[s].load(Ordering::Relaxed)) >= BRUTE_SLOW_SECS {
+        BFS_KEY[s].store(k, Ordering::Relaxed);
+        BFS_WIN[s].store(now, Ordering::Relaxed);
+        BFS_COUNT[s].store(1, Ordering::Relaxed);
+        BFS_ANSWERED[s].store(0, Ordering::Relaxed);
+        false
+    } else {
+        BFS_COUNT[s].fetch_add(1, Ordering::Relaxed) + 1 >= BRUTE_SLOW_THRESHOLD && BFS_ANSWERED[s].load(Ordering::Relaxed) != 0
+    };
+    if slow {
+        let last = BF_FIRED[s].load(Ordering::Relaxed);
+        if last == 0 || now.saturating_sub(last) >= BRUTE_COOLDOWN_SECS {
+            BF_FIRED[s].store(now.max(1), Ordering::Relaxed);
+            return true;
+        }
+    }
+    if BF_KEY[s].load(Ordering::Relaxed) != k || now.saturating_sub(BF_WIN[s].load(Ordering::Relaxed)) >= BRUTE_WINDOW_SECS {
+        BF_KEY[s].store(k, Ordering::Relaxed);
+        BF_WIN[s].store(now, Ordering::Relaxed);
+        BF_COUNT[s].store(1, Ordering::Relaxed);
+        BF_ANSWERED[s].store(0, Ordering::Relaxed);
+        return false;
+    }
+    let n = BF_COUNT[s].fetch_add(1, Ordering::Relaxed) + 1;
+    if n < BRUTE_THRESHOLD || BF_ANSWERED[s].load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    let last = BF_FIRED[s].load(Ordering::Relaxed);
+    if last != 0 && now.saturating_sub(last) < BRUTE_COOLDOWN_SECS {
+        return false;
+    }
+    BF_FIRED[s].store(now.max(1), Ordering::Relaxed);
+    true
+}
+
+/// Clear the table (tests).
+pub fn brute_reset() {
+    for s in 0..BRUTE_SLOTS {
+        BF_KEY[s].store(0, Ordering::Relaxed);
+        BF_FIRED[s].store(0, Ordering::Relaxed);
+        BFS_KEY[s].store(0, Ordering::Relaxed);
+    }
+}
+
+/// `[P-brute]`: fires on an answered single-service burst, once; silent on a closed service, a few
+/// logins, a different-ports pattern, and the management floor.
+pub fn brute_selftest() -> bool {
+    brute_reset();
+    let (att, srv) = (0xC633_6401u32, 0x0A63_000Au32); // 198.51.100.1 -> 10.99.0.10
+    let t = 1_000u64;
+    let _ = brute_attempt_at(att, srv, 22, t);
+    brute_answer_at(srv, att, 22, t);
+    let mut fired = 0;
+    for i in 1..40u64 {
+        if brute_attempt_at(att, srv, 22, t + i) { fired += 1; }
+        brute_answer_at(srv, att, 22, t + i);
+    }
+    let burst = fired == 1;
+    // closed service: 40 SYNs, never answered
+    let mut closed = false;
+    for i in 0..40u64 { closed |= brute_attempt_at(att, srv, 3389, t + i); }
+    // a few legit logins
+    let mut few = false;
+    for i in 0..5u64 { few |= brute_attempt_at(0x0A63_0014, srv, 22, t + i); brute_answer_at(srv, 0x0A63_0014, 22, t + i); }
+    // one attempt per port across ports (the scan tier's case, not brute force)
+    let mut spread = false;
+    for (i, p) in BRUTE_PORTS.iter().enumerate() { spread |= brute_attempt_at(0xC633_6402, srv, *p, t + i as u64); brute_answer_at(srv, 0xC633_6402, *p, t + i as u64); }
+    // management floor source never fires
+    let (fnet, _, _) = crate::verdict::mgmt_floor();
+    let mut mgmt = false;
+    for i in 0..40u64 { mgmt |= brute_attempt_at(fnet | 5, srv, 22, t + i); brute_answer_at(srv, fnet | 5, 22, t + i); }
+    brute_reset();
+    let pass = burst && !closed && !few && !spread && !mgmt;
+    arch_aarch64::_print(format_args!(
+        " [P-brute] {} — rule 124 brute force (T1110, observe-only): answered 40-attempt burst on :22 fires once={} | closed service (never answered) silent={} | 5 legit logins silent={} | one-per-port spread silent={} | management floor exempt={}\n",
+        if pass { "PASS" } else { "FAIL" }, burst, !closed, !few, !spread, !mgmt
+    ));
+    pass
+}
+
+/// `[P-beacon-busy]` — beaconing from a BUSY host. Before the fix every (dst, port) of one source shared a single
+/// slot, so a host that did anything besides beaconing never accumulated a ring. Here a host beacons to its C2
+/// every 60 s (8 beats) while opening 40 connections to other destinations between beats: it must be detected;
+/// a host with the same churn and no regular destination must not be.
+#[cfg(not(feature = "cm5"))]
+pub fn beacon_busy_selftest() -> bool {
+    beacon_reset_for_test();
+    let host = u32::from_be_bytes([10, 99, 0, 10]);
+    let c2 = u32::from_be_bytes([203, 0, 113, 50]);
+    let mut fired = false;
+    let mut t = 1_000u64;
+    for beat in 0..8u32 {
+        fired |= beacon_observe_at(host, c2, 443, t);
+        for k in 0..40u32 {
+            // browsing: distinct destinations, irregular times (never a beacon themselves)
+            let d = u32::from_be_bytes([100, 64, (beat * 40 + k) as u8, (k * 7) as u8]);
+            let _ = beacon_observe_at(host, d, 443, t + 1 + (k as u64 * 13) % 50);
+        }
+        t += 60;
+    }
+    // control: the same churn, no regular destination -> no beacon
+    beacon_reset_for_test();
+    let quiet = u32::from_be_bytes([10, 99, 0, 11]);
+    let mut false_pos = false;
+    let mut t = 1_000u64;
+    for beat in 0..8u32 {
+        for k in 0..40u32 {
+            let d = u32::from_be_bytes([100, 65, (beat * 40 + k) as u8, (k * 7) as u8]);
+            false_pos |= beacon_observe_at(quiet, d, 443, t + 1 + (k as u64 * 13) % 50);
+        }
+        t += 60;
+    }
+    beacon_reset_for_test();
+    let pass = fired && !false_pos;
+    arch_aarch64::_print(format_args!(
+        " [P-beacon-busy] {} — beaconing from a busy host (C2 every 60 s x8 + 40 other connections between beats) detected={} | same churn, no regular destination, no beacon={}\n",
+        if pass { "PASS" } else { "FAIL" }, fired, !false_pos
+    ));
+    pass
 }

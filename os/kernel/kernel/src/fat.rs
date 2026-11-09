@@ -93,7 +93,7 @@ pub fn parse<D: BlockDev>(dev: &D, part_start: u64) -> Option<Fat32> {
 #[inline]
 fn is_chain_end(entry: u32) -> bool {
     let e = entry & 0x0FFF_FFFF;
-    e >= 0x0FFF_FFF8 || e < 2
+    !(2..0x0FFF_FFF8).contains(&e)
 }
 
 /// Read the FAT entry (next cluster) for `cluster`. `None` on I/O error or a nonsensical
