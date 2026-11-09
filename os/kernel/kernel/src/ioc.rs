@@ -47,6 +47,7 @@ static mut DOMN: usize = 0;
 static mut NOW_UNIX: u32 = 0;
 
 #[derive(Clone, Copy, Debug, Default)]
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub struct Info {
     pub file: u8, // 0 none, 1 loaded, 2 refused
     pub signed: bool,
@@ -284,7 +285,7 @@ fn valid_ja4(v: &[u8]) -> bool {
 /// Is this TLS client fingerprint a live IOC? (rule 125)
 pub fn ja4_listed(ja4: &[u8]) -> bool {
     let t = unsafe { &(&*core::ptr::addr_of!(DOM))[..DOMN] };
-    !t.is_empty() && t.binary_search_by(|e| e.0.cmp(&ja4_key(ja4))).map_or(false, |i| live(t[i].1))
+    !t.is_empty() && t.binary_search_by(|e| e.0.cmp(&ja4_key(ja4))).is_ok_and(|i| live(t[i].1))
 }
 
 fn parse_line(line: &[u8]) -> Line<'_> {
@@ -408,7 +409,7 @@ impl Builder {
 fn seal() {
     unsafe {
         let v = &mut (&mut *core::ptr::addr_of_mut!(V4))[..V4N];
-        v.sort_unstable_by(|a, b| (a.net, a.len).cmp(&(b.net, b.len)));
+        v.sort_unstable_by_key(|a| (a.net, a.len));
         let mut w = 0;
         for r in 0..v.len() {
             if w == 0 || (v[r].net, v[r].len) != (v[w - 1].net, v[w - 1].len) {
@@ -420,7 +421,7 @@ fn seal() {
         }
         V4N = w;
         let v6 = &mut (&mut *core::ptr::addr_of_mut!(V6))[..V6N];
-        v6.sort_unstable_by(|a, b| (a.net, a.len).cmp(&(b.net, b.len)));
+        v6.sort_unstable_by_key(|a| (a.net, a.len));
         let mut w = 0;
         for r in 0..v6.len() {
             if w == 0 || (v6[r].net, v6[r].len) != (v6[w - 1].net, v6[w - 1].len) {

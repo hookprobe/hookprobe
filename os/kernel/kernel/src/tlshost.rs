@@ -412,7 +412,7 @@ pub fn bring_up<D: hal::BlockDev>(dev: Option<&D>) {
         return;
     };
     let mut file = [0u8; CERT_FILE_LEN];
-    let have = dev.map_or(false, |d| load_cert_file(d, &mut file));
+    let have = dev.is_some_and(|d| load_cert_file(d, &mut file));
     let (chain, n) = cert_chain(&file);
     let Some(h) = TlsHost::load(&scalar, &chain[..n]) else {
         kprint!(" [MC-TLS] OFF — EL0 TLS server failed to load\n");

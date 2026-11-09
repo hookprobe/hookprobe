@@ -14,3 +14,5 @@ cargo os/build/heqk-sign
 cargo onboarding/enrollment/responder-sim
 npm   os/mission-control
 npm   os/kernel/tools/mc-e2e
+cargo os/build/kem-diff
+cargo os/build/kem-diff/nostd-check

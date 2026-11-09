@@ -106,7 +106,7 @@ pub fn run(iters: u32) -> u64 {
     arch_aarch64::_print(format_args!(
         " [IDS-BENCH] packet::verdict ns/pkt (all detection tiers, {} iters each): {}={} {}={} {}={} {}={} {}={} | mix avg={} ns -> {} kpps/core ({} Mbps at 1400 B)\n",
         iters, NAMES[0], ns[0], NAMES[1], ns[1], NAMES[2], ns[2], NAMES[3], ns[3], NAMES[4], ns[4],
-        mix, if mix > 0 { 1_000_000 / mix } else { 0 }, if mix > 0 { 1_000_000 / mix * 1400 * 8 / 1000 } else { 0 }
+        mix, 1_000_000u64.checked_div(mix).unwrap_or(0), 1_000_000u64.checked_div(mix).map_or(0, |k| k * 1400 * 8 / 1000)
     ));
     tiers(iters);
     mix

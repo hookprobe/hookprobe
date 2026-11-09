@@ -80,10 +80,9 @@ pub trait BlockDev {
     /// Read `out.len() / 512` consecutive sectors starting at `lba` (a driver may use one multi-block command).
     /// Default: one `read_block` per sector.
     fn read_blocks(&self, lba: u64, out: &mut [u8]) -> Result<(), BlockErr> {
-        let mut sec = [0u8; 512];
-        for (i, c) in out.chunks_exact_mut(512).enumerate() {
-            self.read_block(lba + i as u64, &mut sec)?;
-            c.copy_from_slice(&sec);
+        let (blocks, _) = out.as_chunks_mut::<512>();
+        for (i, c) in blocks.iter_mut().enumerate() {
+            self.read_block(lba + i as u64, c)?;
         }
         Ok(())
     }

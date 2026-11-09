@@ -25,6 +25,7 @@ static mut USED: usize = 0;
 static mut INFO: Info = Info { file: 0, signed: false, generation: 0, skipped: 0, truncated: 0, refused: None };
 
 #[derive(Clone, Copy, Default)]
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub struct Info {
     /// 0 absent, 1 loaded, 2 refused
     pub file: u8,
@@ -35,6 +36,7 @@ pub struct Info {
     pub refused: Option<crate::shield::LoadErr>,
 }
 
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub fn info() -> Info {
     unsafe { INFO }
 }
