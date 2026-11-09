@@ -8,6 +8,11 @@ members = ["kernel", "hal", "arch-aarch64", "abi", "hboot", "boot-abi"]
 [profile.dev]
 panic = "abort"
 
+# The shared SHA-256 / boot verifier optimised even in debug (validate.sh) builds: the OTA self-tests hash
+# real-size (3-5 MB) images many times under QEMU TCG — unoptimised that took ~300 s of a 300 s budget.
+[profile.dev.package.boot-abi]
+opt-level = 3
+
 [profile.release]
 panic = "abort"
 lto = true
