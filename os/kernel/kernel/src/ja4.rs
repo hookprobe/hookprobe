@@ -382,11 +382,7 @@ static mut SEEN: [Seen; RING] = [S0; RING];
 static mut HELLOS: u64 = 0;
 
 fn ms() -> u64 {
-    let (c, f): (u64, u64);
-    unsafe {
-        core::arch::asm!("mrs {}, cntpct_el0", out(reg) c, options(nomem, nostack));
-        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
-    }
+    let (c, f) = (crate::clock::ticks(), crate::clock::freq());
     c.saturating_mul(1000) / f.max(1)
 }
 
