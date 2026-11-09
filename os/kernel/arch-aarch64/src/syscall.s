@@ -148,6 +148,23 @@ driver_stub:
 1:  b       1b
 driver_stub_end:
 
+// Same driver, PCI flavour (arm64-cloud tier, feature `pci`): the granted window is the
+// NIC's 4 KiB PCI CONFIG-SPACE page (VFIO-style), so DeviceID is the high half of dword 0
+// (expect 0x1041 = modern virtio-net). Only the window layout differs; the isolation
+// property is identical — one device page, nothing else.
+.global driver_stub_pci
+.global driver_stub_pci_end
+driver_stub_pci:
+    movz    x10, #0xE200, lsl #16   // x10 = 0xE200_0000 (granted PCI config page)
+    ldr     w0, [x10]               // dword 0 = VendorID | DeviceID << 16
+    lsr     w0, w0, #16             // DeviceID
+    mov     x8, #7                  // SYS_DRIVER_REPORT (a0 = DeviceID)
+    svc     #0
+    mov     x8, #6                  // SYS_EXIT_USER
+    svc     #0
+1:  b       1b
+driver_stub_pci_end:
+
 // -------- P7c step 4b: a CRASHING EL0 driver (fault-restart proof) -----------
 // Faults immediately (writes beyond the 39-bit VA range -> translation fault).
 // The kernel contains it and rebuilds a fresh frame; after a restart budget it

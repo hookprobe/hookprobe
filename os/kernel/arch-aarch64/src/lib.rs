@@ -77,9 +77,12 @@ pub mod semihosting;
 pub mod syscall;
 pub mod thread;
 pub mod timer;
+#[cfg(feature = "pci")]
+pub mod pci;
 pub mod virtio;
 pub mod virtio_blk;
 pub mod virtio_net;
+pub mod virtio_transport;
 
 pub use gic::Gic;
 pub use mmu::Mmu;
