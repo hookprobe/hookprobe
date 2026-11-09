@@ -153,6 +153,9 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     if !crate::mcauth::csrf_ok(c.session, c.csrf) {
         return refuse(c, "csrf");
     }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return refuse(c, "rate limited: at most 20 writes a minute per session");
+    }
     if !crate::actions::accept_seq(tag, seq) {
         return refuse(c, "replay");
     }
