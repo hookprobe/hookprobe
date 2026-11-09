@@ -1,5 +1,8 @@
 # heqk Detection-Parity Matrix — Track C / Milestone M2 (Gate R)
 
+> **Historical scoping record (banner 2026-11-09).** The current state of this subsystem is `os/kernel/docs/design/heqk-detection-parity.md` (reconstructed from the code; the copy `os/kernel/validate.sh` resolves). This file keeps the earlier scoping detail; where they disagree, the os/kernel copy wins.
+
+
 > **Date: 2026-09-08.** This revision **supersedes the 2026-08-20 gap-map** (which was a
 > *scoping* document written before the tri-state seam and the on-metal runs existed; it described
 > heqk's detection plane as "binary today, no `decide()` at all" and scored the matrix ✅7/🟡15/⬜9/🔴2).

@@ -120,7 +120,7 @@ def main():
         f"*As of {as_of_date()}. QEMU gates are re-derived live from a `./validate.sh` run; "
         "metal rows carry their last-recorded boot state on CM5. Generated from "
         "`heqk-validation.html` (built by `tools/gen-validation.py`); this section is "
-        "refreshed automatically by CI.*\n\n"
+        "a dated snapshot — regenerate with this script; CI does not refresh it.*\n\n"
         f"{matrix_markdown(src)}\n\n{END}"
     )
     updated = head + section + tail

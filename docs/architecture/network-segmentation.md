@@ -1,5 +1,11 @@
 # Network Segmentation — beyond MAC filtering (investigation + model)
 
+> 🛑 **Historical — Linux tier (ADR 0047).** This document describes the bootc/Debian/OVS/nftables/systemd
+> Linux tier, which ADR [0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09) replaced
+> with heqk on every platform. It is kept as a dated record; the code it names now lives under
+> `legacy/linux-tier/` (path map: [`docs/PATHS.md`](../PATHS.md)). Current status:
+> [`heqk-parity-gaps.md`](../design/heqk-parity-gaps.md).
+
 > **Thesis:** A MAC address is **not an identity.** Segmenting a network by MAC (OUI
 > classification + `dl_src` OpenFlow flows, as V1 does) works only for stable-OUI IoT and
 > fails for every modern client. HookProbe OS segments by **layered identity**: a
