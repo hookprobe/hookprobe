@@ -560,36 +560,55 @@ def _lpm_key_to_cidr(key: bytes) -> Optional[str]:
         return None
 
 
-def reconcile_wan_blocklist(desired: Set[str], complete: bool,
-                            snapshot_dir: str = os.environ.get('WAN_RECONCILE_SNAPSHOT_DIR', '/tmp'),
-                            min_ratio: float = 0.2) -> int:
-    """Make sw_blocklist (WAN ENFORCEMENT map) exactly equal to `desired`.
+def active_cno_mirror_cidrs() -> Set[str]:
+    """Live CNO detection-path blocks (hydra_blocks source='cno_mirror')."""
+    if not CH_PASSWORD:
+        return set()
+    res = ch_query(f"""
+        SELECT IPv4NumToString(src_ip) AS ip FROM {CH_DB}.hydra_blocks
+        WHERE source = 'cno_mirror' AND timestamp >= now() - INTERVAL 30 DAY
+        GROUP BY src_ip
+        HAVING min(duration_seconds) <= 0
+            OR max(toUnixTimestamp(timestamp) + duration_seconds) >= toUnixTimestamp(now())
+        FORMAT JSONEachRow""")
+    out: Set[str] = set()
+    for line in (res or '').strip().split('\n'):
+        try:
+            ip = json.loads(line).get('ip', '') if line else ''
+        except json.JSONDecodeError:
+            ip = ''
+        if ip:
+            out.add(f"{ip}/32")
+    return out
 
-    Only feed_sync writes sw_blocklist (CNO writes the mirror-path `blocklist`
-    directly and is deliberately NOT reconciled here). Before reconciliation
-    existed, CIDRs that rotated OFF a feed stayed in the WAN map forever
-    (2026-11-09: 203,880 entries vs ~42k desired = ~160k stale WAN drops).
 
-    Guards — skip (return 0) when:
+def reconcile_lpm_map(map_name: str, desired: Set[str], complete: bool,
+                      snapshot_dir: str = os.environ.get('WAN_RECONCILE_SNAPSHOT_DIR', '/tmp'),
+                      min_ratio: float = 0.2) -> int:
+    """Make an LPM_TRIE map exactly equal to `desired` (delete everything else).
+
+    Pre-reconciliation additive pushes left ~155k stale entries (IPs that
+    rotated OFF feeds stayed blocked forever). Guards — skip (return 0) when:
       * `complete` is False: some feed failed with no cached copy this run, so
         `desired` may be missing its entries (would wrongly unblock them);
       * `desired` is implausibly small vs the live map (< min_ratio).
+    The removed set is snapshotted to <snapshot_dir>/<map>.removed.json.
     """
     if not complete:
-        logger.info("WAN reconcile skipped: feed set incomplete this run")
+        logger.info(f"{map_name} reconcile skipped: feed set incomplete this run")
         return 0
     try:
         ops = get_bpf_ops()
-        map_id = ops.find_map_by_name('sw_blocklist')
+        map_id = ops.find_map_by_name(map_name)
         if map_id is None:
             return 0
         live = {c for c in (_lpm_key_to_cidr(k) for k, _ in ops.map_dump(map_id)) if c}
     except Exception as e:
-        logger.warning(f"WAN reconcile: cannot read sw_blocklist: {e}")
+        logger.warning(f"{map_name} reconcile: cannot read map: {e}")
         return 0
     want = {str(ipaddress.ip_network(c, strict=False)) for c in desired}
     if live and len(want) < min_ratio * len(live):
-        logger.warning(f"WAN reconcile refused: desired {len(want)} << live {len(live)}")
+        logger.warning(f"{map_name} reconcile refused: desired {len(want)} << live {len(live)}")
         return 0
     stale = live - want
     if not stale:
@@ -597,20 +616,37 @@ def reconcile_wan_blocklist(desired: Set[str], complete: bool,
     try:  # rollback snapshot (re-add with update_lpm_trie_batch)
         import json as _json
         os.makedirs(snapshot_dir, exist_ok=True)
-        with open(os.path.join(snapshot_dir, 'sw_blocklist.removed.json'), 'w') as fh:
+        with open(os.path.join(snapshot_dir, f'{map_name}.removed.json'), 'w') as fh:
             _json.dump({'ts': int(time.time()), 'removed': sorted(stale)}, fh)
     except OSError as e:
-        logger.debug(f"WAN reconcile snapshot not written: {e}")
+        logger.debug(f"{map_name} reconcile snapshot not written: {e}")
     removed = 0
     for cidr in stale:
         try:
-            if ops.delete_lpm_trie('sw_blocklist', cidr):
+            if ops.delete_lpm_trie(map_name, cidr):
                 removed += 1
         except Exception:
             continue
-    logger.info(f"WAN reconcile: removed {removed}/{len(stale)} stale sw_blocklist entries "
+    logger.info(f"{map_name} reconcile: removed {removed}/{len(stale)} stale entries "
                 f"(live {len(live)} → desired {len(want)})")
     return removed
+
+
+def reconcile_wan_blocklist(desired: Set[str], complete: bool,
+                            snapshot_dir: str = os.environ.get('WAN_RECONCILE_SNAPSHOT_DIR', '/tmp'),
+                            min_ratio: float = 0.2) -> int:
+    """WAN ENFORCEMENT map (sw_blocklist): written only by feed_sync."""
+    return reconcile_lpm_map('sw_blocklist', desired, complete, snapshot_dir, min_ratio)
+
+
+def reconcile_mirror_blocklist(desired: Set[str], complete: bool) -> int:
+    """Mirror/DETECTION map (blocklist): feeds + cognitive + live CNO blocks.
+
+    CNO blocks are only recorded (source='cno_mirror') since 2026-11-09; CNO
+    blocks created before that were never recorded and are removed once here
+    (detection-path only — no traffic impact).
+    """
+    return reconcile_lpm_map('blocklist', set(desired) | active_cno_mirror_cidrs(), complete)
 
 
 def sync_cognitive_blocks() -> Tuple[Set[str], int]:
@@ -811,6 +847,7 @@ def sync_all_feeds() -> dict:
         removed_xdp += remove_xdp_cidrs('blocklist', prev_blocklist - safe_cidrs)
     removed_xdp += purge_expired_cognitive_blocks(keep=safe_cidrs)
     removed_xdp += reconcile_wan_blocklist(safe_cidrs, complete=feeds_complete)
+    removed_xdp += reconcile_mirror_blocklist(safe_cidrs, complete=feeds_complete)
 
     prev_blocklist = safe_cidrs
 

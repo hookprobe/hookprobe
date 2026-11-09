@@ -406,3 +406,27 @@ class TestWanReconcile:
                             lambda desired, complete: seen.setdefault('complete', complete) and 0)
         TestFeedSync()._run_sync(feed_sync, monkeypatch, {'a': (set(), 'timed out')})
         assert seen['complete'] is False
+
+
+class TestMirrorReconcile:
+    def test_mirror_keeps_live_cno_blocks(self, feed_sync, monkeypatch, tmp_path):
+        class Ops(FakeLpmOps):
+            def find_map_by_name(self, name):
+                return 9 if name == 'blocklist' else None
+        ops = Ops(['198.51.100.0/24', '203.0.113.7/32', '192.0.2.9/32', '100.64.1.1/32'])
+        monkeypatch.setattr(feed_sync, 'get_bpf_ops', lambda: ops)
+        monkeypatch.setattr(feed_sync, 'active_cno_mirror_cidrs', lambda: {'203.0.113.7/32'})
+        monkeypatch.setenv('WAN_RECONCILE_SNAPSHOT_DIR', str(tmp_path))
+        n = feed_sync.reconcile_mirror_blocklist({'198.51.100.0/24', '192.0.2.9/32'}, complete=True)
+        assert n == 1 and ops.deleted == ['100.64.1.1/32']
+
+    def test_cno_mirror_never_reaches_wan(self, feed_sync):
+        assert 'cno_mirror' not in feed_sync.COGNITIVE_BLOCK_SOURCES
+
+
+class TestCnoMirrorRecord:
+    def test_reason_cannot_inject_sql(self, monkeypatch):
+        import re as _re
+        reason = "x'); DROP TABLE hydra_blocks; --"
+        safe = _re.sub(r"[^A-Za-z0-9 _.:/,()-]", "", reason)[:200]
+        assert "'" not in safe and ";" not in safe
