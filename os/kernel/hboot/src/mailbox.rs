@@ -232,6 +232,7 @@ pub fn get_customer_otp() -> Option<[u32; 8]> {
 /// it cannot touch the serial/bootloader/device-key rows. Returns true iff the
 /// firmware reports a success response — the caller MUST additionally read back
 /// (`get_customer_otp`) and derive from the ACTUAL contents, never from intent.
+#[cfg(feature = "otp-provision")] // factory-only: a normal image never writes OTP
 pub fn set_customer_otp(words: &[u32; 8]) -> bool {
     unsafe {
         let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
