@@ -716,6 +716,7 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
 }
 
 /// WAN policy engine: prefix lists, ACLs, routes, sub-interface encapsulation (POLICY.TXT).
+pub mod abslot;
 pub mod policy;
 pub mod defer;
 pub mod tlsabi;

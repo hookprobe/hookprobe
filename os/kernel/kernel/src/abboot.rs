@@ -223,6 +223,17 @@ pub fn content_rule_vectors() -> bool {
         && !hal::is_slot_letter_flip(&two, &two_flip)
 }
 
+/// `hal::abslot::inactive_slot_run` names exactly the file `want` (cross-checked against
+/// `fat::locate_contiguous`) and reports `active` as the cold-boot slot.
+#[cfg(all(not(feature = "cm5"), feature = "p15-write"))]
+fn inactive_matches<D: BlockDev>(dev: &D, p1: u64, want: &[u8; 11], active: u8) -> bool {
+    let r = hal::abslot::inactive_slot_run(|l, b| dev.read_block(l, b).is_ok());
+    match (r, crate::fat::locate_contiguous(dev, p1, want)) {
+        (Some(r), Some((lo, n))) => r.active == active && r.lo == lo && r.hi >= lo + n && r.hi - lo < n + 64,
+        _ => false,
+    }
+}
+
 /// `[P15-abcommit]` — TWO-BOOT proof over a factory-layout FAT boot partition (virtio-blk,
 /// p15-write). The disk's own state says which boot this is:
 /// - boot 1 (config=A, tryboot=B): commit to B but write ONLY config.txt — a simulated power loss
@@ -279,6 +290,8 @@ pub fn abcommit_selftest() {
                 r => return kprint!(" [P15-abcommit] FAIL — repair plan: {:?}\n", r),
             };
             let after_repair = (active(&dev, p1), trial(&dev, p1)) == (Ok(Slot::B), Ok(Slot::A));
+            // OTA (production phase 1): with config=B the writable inactive slot is A.
+            let ota_a = inactive_matches(&dev, p1, b"HEQK8-A IMG", b'b');
             // A FULL commit back to A (both writes).
             let full = match plan_commit(&dev, p1, Slot::A) {
                 Ok(plan) => match SealedStore::open(&mut dev) {
@@ -288,6 +301,10 @@ pub fn abcommit_selftest() {
                 Err(_) => false,
             };
             let after_full = (active(&dev, p1), trial(&dev, p1)) == (Ok(Slot::A), Ok(Slot::B));
+            // ...and after the commit back to A it is B.
+            let ota_b = inactive_matches(&dev, p1, b"HEQK8-B IMG", b'a');
+            kprint!(" [P-abslot] {} — OTA inactive-slot derivation (hal::abslot, the eMMC driver's Gate-1 input) on a factory-layout FAT partition: config=B -> writable run = slot A's file={} ; config=A -> slot B's file={} (each equal to the kernel's independent FAT reader; never the slot config.txt names)\n",
+                if ota_a && ota_b { "PASS" } else { "FAIL" }, ota_a, ota_b);
             // Idempotence: committing to the already-active slot writes nothing.
             let idem = plan_commit(&dev, p1, Slot::A).map(|p| p.iter().all(|w| w.is_none())) == Ok(true);
             let rule = content_rule_vectors();
