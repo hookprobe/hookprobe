@@ -71,6 +71,10 @@ const CMD_DATA: u16 = 1 << 5;
 // Transfer-mode bits (low half of CMD_XFER).
 const XM_READ: u16 = 1 << 4;
 const XM_BLKCNT_EN: u16 = 1 << 1;
+/// Auto CMD12 (stop transmission) after the last block of a multi-block transfer.
+const XM_ACMD12: u16 = 1 << 2;
+/// Multi-block transfer.
+const XM_MULTI: u16 = 1 << 5;
 
 /// Response type of an MMC/SD command — carries the correct SDHCI response-select
 /// bits AND whether the controller should check the response CRC / command index.
@@ -303,6 +307,24 @@ impl Host {
                     out[i] = ((word >> (b * 8)) & 0xFF) as u8;
                     i += 1;
                 }
+            }
+        }
+        self.wait_int(INT_XFER_DONE, 1_000_000, BlkErr::DataTimeout)
+    }
+
+    /// Arm a multi-block READ (CMD18) with the controller's auto-CMD12 stop.
+    pub fn set_xfer_read_multi(&self) {
+        self.w16(CMD_XFER, XM_READ | XM_BLKCNT_EN | XM_MULTI | XM_ACMD12);
+    }
+
+    /// PIO read of `out.len() / 512` blocks after CMD18: BUF_RD_RDY is acknowledged (W1C) after each block so
+    /// the next wait sees the next block, then XFER_DONE (raised after the auto-CMD12).
+    pub fn pio_in_blocks(&self, out: &mut [u8]) -> Result<(), BlkErr> {
+        for blk in out.chunks_exact_mut(512) {
+            self.wait_int(INT_BUF_RD_RDY, 1_000_000, BlkErr::DataTimeout)?;
+            self.w32(INT_STATUS, INT_BUF_RD_RDY);
+            for w in blk.chunks_exact_mut(4) {
+                w.copy_from_slice(&self.r32(BUF_DATA).to_le_bytes());
             }
         }
         self.wait_int(INT_XFER_DONE, 1_000_000, BlkErr::DataTimeout)

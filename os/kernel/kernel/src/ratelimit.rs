@@ -21,15 +21,34 @@ use core::sync::atomic::{AtomicU64, Ordering};
 // EVICT another's in-flight window — acceptable vs the count-min complexity at this
 // tier; enlarge SLOTS or move to a sketch if that eviction ever matters.
 const SLOTS: usize = 256; // power of two
+
+/// Slot index for a source key. Every table here used `key % N`: for the BPF SYN limiter the key is the IPv4
+/// source loaded little-endian (low byte = FIRST octet), so every 10.x.x.x client shared ONE slot and each
+/// other client's SYN reset a flooder's count (the per-source limiter never tripped on a busy LAN); the
+/// flow/scan tables (big-endian keys, 16 slots) collided on hosts 16 addresses apart. A multiplicative hash
+/// makes collisions rare and random; the per-slot KEY tag still keeps an aliasing source from sharing counts.
+/// 2026-11-09 (detection benchmark): the multiply-and-take-bits-32..40 hash only carried differences
+/// UPWARD — keys differing only above bit 40 (the LAST octet of a MAC in `mac_hash`'s packing, the one that
+/// differs between a vendor's devices) all shared a slot, so two such stations alternating frames looked
+/// like a stream of new MACs and rule 111 (MAC flood) fired continuously. Full 64-bit avalanche now
+/// (splitmix64 finalizer): every key bit affects the slot.
+#[inline]
+pub fn slot(key: u64, n: usize) -> usize {
+    let mut x = key;
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+    (x as usize) % n
+}
 static WIN_START: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static COUNT: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static KEY: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 
 #[inline]
 fn cntpct() -> u64 {
-    let v: u64;
-    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) };
-    v
+    crate::clock::ticks() // the hardware counter, or the replayed frame's time (detbench)
 }
 #[inline]
 fn cntfrq() -> u64 {
@@ -43,7 +62,7 @@ fn cntfrq() -> u64 {
 /// `cntfrq` ticks have elapsed since it opened, so a sustained flood trips it but
 /// a normal low rate never accumulates across windows.
 pub fn syn_rate_over(key: u64, limit: u64) -> u64 {
-    let i = (key as usize) % SLOTS;
+    let i = slot(key, SLOTS);
     let now = cntpct();
     let win = cntfrq().max(1); // ~1 second in counter ticks
     let start = WIN_START[i].load(Ordering::Relaxed);
@@ -74,6 +93,15 @@ pub fn call_helper(id: u32, r1: u64, r2: u64) -> u64 {
         _ => 0,
     }
 }
+
+/// The JIT's view of `call_helper` (stable C ABI: x0 = id, x1 = R1, x2 = R2 -> x0).
+pub extern "C" fn call_helper_c(id: u64, r1: u64, r2: u64) -> u64 {
+    call_helper(id as u32, r1, r2)
+}
+
+/// Helper ids the JIT may call natively: the SCALAR-argument ones. `payload_match` (3) dereferences a packet
+/// pointer and keeps the interpreter's extra per-call bounds check, so its rules stay interpreted.
+pub const JIT_HELPERS: u64 = (1 << HELPER_SYN_RATE_OVER) | (1 << HELPER_IP_BLOCKED);
 
 /// Helper id: `R0 = syn_rate_over(R1=key, R2=limit)`.
 pub const HELPER_SYN_RATE_OVER: u32 = 1;
@@ -135,7 +163,7 @@ pub fn mac_flood_over(port: u64, mac_key: u64, threshold: u64) -> u64 {
         MAC_DISTINCT[p].store(0, Ordering::Relaxed);
     }
     let gen = MAC_GEN[p].load(Ordering::Relaxed);
-    let i = (mac_key as usize) % MAC_SET;
+    let i = slot(mac_key, MAC_SET); // mixed: a raw low-bits index keyed only on the FIRST octet (every x2/x6/xA/xE MAC collided)
     let seen = MAC_SLOT_GEN[p][i].load(Ordering::Relaxed) == gen
         && MAC_SLOT_KEY[p][i].load(Ordering::Relaxed) == mac_key;
     if !seen {
@@ -190,7 +218,7 @@ pub fn bcast_over(port: u64, threshold: u64) -> u64 {
 
 /// Distinct source slots (direct-mapped by IP low bits, gen-tagged, collision-reset —
 /// a colliding source EVICTS the slot's prior occupant, never counts against it).
-const FLOW_SRCS: usize = 16;
+const FLOW_SRCS: usize = 64; // per-source flow/scan state (was 16: fewer slots than devices on a home LAN)
 /// Per-source distinct-dst-port set (gen-tagged so a new window is an O(1) generation
 /// bump, never an O(N) clear). 256 slots hold the confirm bar (>=100) with headroom.
 const SCAN_PORT_SET: usize = 256;
@@ -320,7 +348,7 @@ pub fn flow_new() {
 /// never counted against another's.
 #[inline]
 fn touch_scan_slot(src: u64) -> usize {
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src, FLOW_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(SCAN_WINDOW_SECS);
     let start = SCAN_WIN[s].load(Ordering::Relaxed);
@@ -381,7 +409,7 @@ pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
     if scanner == 0 {
         return;
     }
-    let s = (scanner as usize) % FLOW_SRCS;
+    let s = slot(scanner, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != scanner {
         return;
     }
@@ -397,13 +425,45 @@ pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
     }
 }
 
+/// Slow-scan tier (detection benchmark 2026-11-09: one port every 20 s never reached the 10-second wall):
+/// DISTINCT ports answered CLOSED (RST) to `scanner` within `SLOW_SCAN_SECS`; true when the count crosses
+/// `SLOW_SCAN_PORTS` (once per window). A 1024-bit port set per scanner (port mod 1024 — collisions only
+/// under-count, never invent a port).
+pub const SLOW_SCAN_PORTS: u64 = 40;
+const SLOW_SCAN_SECS: u64 = 1800;
+const SLOW_N: usize = 32;
+static SLOW_SRC: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
+static SLOW_AT: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
+static SLOW_CNT: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
+static SLOW_BITS: [[AtomicU64; 16]; SLOW_N] = [const { [const { AtomicU64::new(0) }; 16] }; SLOW_N];
+pub fn slow_scan_observe(scanner: u64, port: u16, now: u64) -> bool {
+    if scanner == 0 {
+        return false;
+    }
+    let s = slot(scanner | (3 << 40), SLOW_N);
+    if SLOW_SRC[s].load(Ordering::Relaxed) != scanner || now.saturating_sub(SLOW_AT[s].load(Ordering::Relaxed)) >= SLOW_SCAN_SECS {
+        SLOW_SRC[s].store(scanner, Ordering::Relaxed);
+        SLOW_AT[s].store(now, Ordering::Relaxed);
+        SLOW_CNT[s].store(0, Ordering::Relaxed);
+        for w in &SLOW_BITS[s] {
+            w.store(0, Ordering::Relaxed);
+        }
+    }
+    let b = (port % 1024) as usize;
+    let old = SLOW_BITS[s][b / 64].fetch_or(1 << (b % 64), Ordering::Relaxed);
+    if old & (1 << (b % 64)) != 0 {
+        return false;
+    }
+    SLOW_CNT[s].fetch_add(1, Ordering::Relaxed) + 1 == SLOW_SCAN_PORTS
+}
+
 /// An ACK from `src` to `dst_port`. ADR 0049 D3: it earns establishment credit ONLY after the target's
 /// SYN-ACK was seen for that port, and only once per port — stray ACKs (the padding evasion) earn nothing.
 pub fn flow_ack_observe(src: u64, dst_port: u16) {
     if src == 0 {
         return;
     }
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return;
     }
@@ -419,7 +479,7 @@ pub fn scan_distinct_ports(src: u64) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return 0;
     }
@@ -431,11 +491,49 @@ pub fn flow_established_count(src: u64) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = (src as usize) % FLOW_SRCS;
+    let s = slot(src, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return 0;
     }
     SCAN_EST[s].load(Ordering::Relaxed)
+}
+
+/// One source the scan tier is currently tracking (parity G23: `/api/enforcement`).
+#[derive(Clone, Copy, Debug)]
+pub struct ScanState {
+    pub src: u32,
+    pub distinct: u64,
+    pub established: u64,
+    /// Seconds left in the window (enforcement self-reverts when it ends).
+    pub expires_in: u64,
+    /// 0 watching, 1 rate-limited, 2 quarantined (confirmed scan, ADR 0018).
+    pub level: u8,
+}
+
+/// Every source with a live scan window and at least one answered probe.
+pub fn for_each_scan_source(f: &mut dyn FnMut(&ScanState)) {
+    let now = cntpct();
+    let fr = cntfrq().max(1);
+    for s in 0..FLOW_SRCS {
+        let src = SCAN_SRC[s].load(Ordering::Relaxed);
+        let d = SCAN_DISTINCT[s].load(Ordering::Relaxed);
+        if src == 0 || src > u32::MAX as u64 || d == 0 {
+            continue;
+        }
+        let age = now.wrapping_sub(SCAN_WIN[s].load(Ordering::Relaxed)) / fr;
+        if age >= SCAN_WINDOW_SECS {
+            continue;
+        }
+        let e = SCAN_EST[s].load(Ordering::Relaxed);
+        let level = if d >= SCAN_PORTS_CONFIRM && e.saturating_mul(SCAN_EST_RATIO) < d {
+            2
+        } else if d >= SCAN_PORTS_RATELIMIT && e.saturating_mul(SCAN_EST_RATIO) < d {
+            1
+        } else {
+            0
+        };
+        f(&ScanState { src: src as u32, distinct: d, established: e, expires_in: SCAN_WINDOW_SECS - age, level });
+    }
 }
 
 /// The bounded-RateLimit gate: a SYN-only distinct-port scan crossed the RATELIMIT bar
@@ -447,8 +545,8 @@ pub fn scan_over_ratelimit(src: u64) -> bool {
 
 /// The ADR-0018 CONFIRMATION signal for a durable Quarantine: a SYN-only sweep to
 /// >= CONFIRM distinct ports from one source WITH ZERO establishment. Any establishment
-/// (a single completed handshake) holds this at `false` forever within the window — this
-/// is precisely why a legit busy source (150 established flows) can NEVER be confirmed.
+/// > (a single completed handshake) holds this at `false` forever within the window — this
+/// > is precisely why a legit busy source (150 established flows) can NEVER be confirmed.
 pub fn scan_confirmed(src: u64) -> bool {
     let d = scan_distinct_ports(src);
     d >= SCAN_PORTS_CONFIRM && flow_established_count(src).saturating_mul(SCAN_EST_RATIO) < d
@@ -523,7 +621,7 @@ pub fn conn_rate_over_at(src: u64, cap: u64, now: u64, win: u64) -> bool {
     if src == 0 {
         return false;
     }
-    let i = (src as usize) % CR_SLOTS;
+    let i = slot(src, CR_SLOTS);
     let start = CR_WIN[i].load(Ordering::Relaxed);
     if CR_KEY[i].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
         CR_KEY[i].store(src, Ordering::Relaxed);
@@ -571,7 +669,7 @@ pub fn ra_rate_over_at(key: u64, limit: u64, now: u64, win: u64) -> bool {
     if key == 0 {
         return false;
     }
-    let i = (key as usize) % RA_SLOTS;
+    let i = slot(key, RA_SLOTS);
     let start = RA_WIN[i].load(Ordering::Relaxed);
     if RA_KEY[i].load(Ordering::Relaxed) != key || now.wrapping_sub(start) >= win {
         RA_KEY[i].store(key, Ordering::Relaxed);
@@ -615,10 +713,8 @@ static TOP_FLOWS: AtomicU64 = AtomicU64::new(0);
 static TOP_WIN: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
-fn ct_touch(src: u64) -> usize {
-    let s = (src as usize) % FLOW_SRCS;
-    let now = cntpct();
-    let win = cntfrq().max(1).saturating_mul(CT_WINDOW_SECS);
+fn ct_touch_at(src: u64, now: u64, win: u64) -> usize {
+    let s = slot(src, FLOW_SRCS);
     let start = CT_WIN[s].load(Ordering::Relaxed);
     if CT_SRC[s].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
         CT_SRC[s].store(src, Ordering::Relaxed);
@@ -636,7 +732,7 @@ pub fn flow_record(src: u64) {
     if src == 0 {
         return;
     }
-    // Window the global top slot alongside the per-source census.
+    // Window the global top slot alongside the per-source census (one clock read for both).
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(CT_WINDOW_SECS);
     if now.wrapping_sub(TOP_WIN.load(Ordering::Relaxed)) >= win {
@@ -644,7 +740,7 @@ pub fn flow_record(src: u64) {
         TOP_SRC.store(0, Ordering::Relaxed);
         TOP_FLOWS.store(0, Ordering::Relaxed);
     }
-    let s = ct_touch(src);
+    let s = ct_touch_at(src, now, win);
     let c = CT_COUNT[s].fetch_add(1, Ordering::Relaxed) + 1;
     if c > TOP_FLOWS.load(Ordering::Relaxed) {
         TOP_FLOWS.store(c, Ordering::Relaxed);

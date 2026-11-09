@@ -15,7 +15,7 @@ pub const DROP: u64 = 2;
 pub const INVALID: u64 = 0; // OOB / unknown op / step limit — caller fails safe
 
 // BPF instruction encoding: u8 opcode | u4 dst | u4 src | i16 off | i32 imm.
-const fn insn(op: u8, dst: u8, src: u8, off: i16, imm: i32) -> u64 {
+pub const fn insn(op: u8, dst: u8, src: u8, off: i16, imm: i32) -> u64 {
     (op as u64)
         | ((dst as u64) << 8)
         | ((src as u64) << 12)
@@ -444,7 +444,7 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                             return Err("load below packet start");
                         }
                         let need_i = sat_add(sat_add(hi, off as i64), w);
-                        if need_i < 0 || need_i > 65536 {
+                        if !(0..=65536).contains(&need_i) {
                             return Err("load offset unbounded / exceeds max packet");
                         }
                         if need_i as u64 > min_len {
@@ -540,7 +540,7 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
                                 return Err("payload_match arg1 below packet start");
                             }
                             let need_i = sat_add(hi, crate::l7::max_pattern_len() as i64);
-                            if need_i < 0 || need_i > 65536 {
+                            if !(0..=65536).contains(&need_i) {
                                 return Err("payload_match read offset unbounded");
                             }
                             if need_i as u64 > min_len {

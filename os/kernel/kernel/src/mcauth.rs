@@ -151,6 +151,45 @@ impl Auth {
         Ok(id)
     }
 
+    /// ADR 0053: re-check the owner key for a high-impact action (no new session; shares the login
+    /// throttle so it cannot be used to guess the key faster).
+    pub fn reauth(&mut self, token: &[u8], now_ms: u64) -> bool {
+        let Some(owner) = self.owner else { return false };
+        if now_ms.saturating_sub(self.fail_window_start) >= FAIL_WINDOW_MS {
+            self.fail_window_start = now_ms;
+            self.fails = 0;
+        }
+        if self.fails >= MAX_FAILS_PER_WINDOW {
+            return false;
+        }
+        let ok = ct_eq(&verifier_for(&owner.salt, token), &owner.verifier);
+        if !ok {
+            self.fails += 1;
+        }
+        ok
+    }
+
+    /// Parity G28: end this session (logout), or every session ("log out everywhere"). Returns
+    /// whether a live session was ended.
+    pub fn logout(&mut self, cookie_hex: Option<&str>, all: bool, now_ms: u64) -> bool {
+        let Some(id) = cookie_hex.and_then(|c| unhex::<16>(c.as_bytes())) else { return false };
+        let mine = self.sessions.iter().position(|(s, exp)| *exp > now_ms && ct_eq(s, &id));
+        if mine.is_none() {
+            return false;
+        }
+        for s in self.sessions.iter_mut() {
+            if all || ct_eq(&s.0, &id) {
+                *s = ([0; 16], 0);
+            }
+        }
+        true
+    }
+
+    /// Live sessions (for the UI's "signed in on N devices").
+    pub fn live_sessions(&self, now_ms: u64) -> usize {
+        self.sessions.iter().filter(|(_, exp)| *exp > now_ms).count()
+    }
+
     /// Is `cookie_hex` (the `hq_session` cookie value) a live session?
     pub fn check(&self, cookie_hex: Option<&str>, now_ms: u64) -> bool {
         let Some(id) = cookie_hex.and_then(|c| unhex::<16>(c.as_bytes())) else { return false };
@@ -213,8 +252,64 @@ pub fn mcauth_selftest() -> bool {
     }
     let throttled = auth.login(token, 4001, || Some([4; 16])) == Err(LoginErr::Throttled)
         && auth.login(token, 4000 + FAIL_WINDOW_MS + 1, || Some([5; 16])).is_ok();
-    let pass = owner.is_some() && placeholder_unclaimed && unclaimed_refused && bad && good && session_ok && throttled;
-    kprint!(" [P-mcauth] {} — owner auth (ADR 0037 D3): verifier parsed={} placeholder=unclaimed={} unclaimed refuses login={} bad token refused={} token→session={} session cookie valid/forged/absent/expired={} throttle+recovery={}\n",
-        if pass { "PASS" } else { "FAIL" }, owner.is_some(), placeholder_unclaimed, unclaimed_refused, bad, good, session_ok, throttled);
+    // G28 logout: ends this session only; `all` ends every session; a forged cookie ends nothing.
+    let logout_ok = {
+        let mut a = Auth::new(owner);
+        let s1 = a.login(token, 10_000, || Some([7; 16]));
+        let s2 = a.login(token, 10_001, || Some([8; 16]));
+        match (s1, s2) {
+            (Ok(i1), Ok(i2)) => {
+                let (mut h1, mut h2) = ([0u8; 32], [0u8; 32]);
+                session_hex(&i1, &mut h1);
+                session_hex(&i2, &mut h2);
+                let (c1, c2) = (core::str::from_utf8(&h1).unwrap_or(""), core::str::from_utf8(&h2).unwrap_or(""));
+                let forged = !a.logout(Some("00000000000000000000000000000000"), true, 10_002) && a.live_sessions(10_002) == 2;
+                let one = a.logout(Some(c1), false, 10_003) && !a.check(Some(c1), 10_004) && a.check(Some(c2), 10_004);
+                let again = !a.logout(Some(c1), false, 10_005);
+                let s3 = a.login(token, 10_006, || Some([9; 16])).is_ok();
+                let all = a.logout(Some(c2), true, 10_007) && a.live_sessions(10_008) == 0;
+                forged && one && again && s3 && all
+            }
+            _ => false,
+        }
+    };
+    let pass = owner.is_some() && placeholder_unclaimed && unclaimed_refused && bad && good && session_ok && throttled && logout_ok;
+    kprint!(" [P-mcauth] {} — owner auth (ADR 0037 D3): verifier parsed={} placeholder=unclaimed={} unclaimed refuses login={} bad token refused={} token→session={} session cookie valid/forged/absent/expired={} throttle+recovery={} logout (this session / everywhere / forged ends nothing)={}\n",
+        if pass { "PASS" } else { "FAIL" }, owner.is_some(), placeholder_unclaimed, unclaimed_refused, bad, good, session_ok, throttled, logout_ok);
     pass
+}
+
+/// ADR 0053: a short, non-secret tag naming a session in the audit log (first 4 bytes of its id).
+pub fn session_tag(cookie_hex: Option<&str>) -> [u8; 4] {
+    match cookie_hex.and_then(|c| unhex::<16>(c.as_bytes())) {
+        Some(id) => [id[0], id[1], id[2], id[3]],
+        None => [0; 4],
+    }
+}
+
+/// ADR 0053: the CSRF token for a session — derived from the session id, so it needs no extra state.
+/// Pages read it with a same-origin GET; a cross-site page cannot (no CORS), so it cannot forge writes.
+pub fn csrf_token(cookie_hex: Option<&str>, out: &mut [u8; 32]) -> bool {
+    let Some(id) = cookie_hex.and_then(|c| unhex::<16>(c.as_bytes())) else { return false };
+    let mut m = [0u8; 23];
+    m[..7].copy_from_slice(b"HQCSRF1");
+    m[7..].copy_from_slice(&id);
+    let d = boot_abi::sha256::digest(&m);
+    let mut t = [0u8; 16];
+    t.copy_from_slice(&d[..16]);
+    session_hex(&t, out);
+    true
+}
+
+/// Constant-time comparison of a presented CSRF token with the session's.
+pub fn csrf_ok(cookie_hex: Option<&str>, presented: &str) -> bool {
+    let mut want = [0u8; 32];
+    if !csrf_token(cookie_hex, &mut want) || presented.len() != 32 {
+        return false;
+    }
+    let mut d = 0u8;
+    for (a, b) in want.iter().zip(presented.as_bytes()) {
+        d |= a ^ b;
+    }
+    d == 0
 }

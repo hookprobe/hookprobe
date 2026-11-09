@@ -436,7 +436,7 @@ The architectural lesson is **crypto-agility**, not picking one algorithm: separ
 
 **Shipped today:**
 - **Module signing:** hybrid **ML-DSA-65 + Ed25519**, both legs fail-closed-enforced (`crates/hookprobe-manifest/src/module_sig.rs::verify_module_for_suite`) — a module missing its ML-DSA sidecar under the hybrid suite is refused, never silently downgraded to Ed25519-only. Driven entirely by the manifest's `crypto.module_signing` policy: an Ed25519-only suite genuinely runs Ed25519-only (the agility mechanism is exercised, not just declared).
-- **Image signing:** real cosign **KEYLESS** signing (Fulcio-issued short-lived **ECDSA-P256** certificate, Rekor transparency log — `.github/workflows/build-os.yml`). Not PQC yet: sigstore/cosign's own PQC signing mode is still maturing upstream (see Consequences in ADR 0002).
+- **Image signing:** real cosign **KEYLESS** signing (Fulcio-issued short-lived **ECDSA-P256** certificate, Rekor transparency log — `.github/workflows/build-os.yml`, now parked at `legacy/linux-tier/ci-workflows/build-os.yml` and not run; the live workflows are `build-heqk.yml` and `secrets-scan.yml`). Not PQC yet: sigstore/cosign's own PQC signing mode is still maturing upstream (see Consequences in ADR 0002).
 - **Don't touch what's safe:** AES-256 and SHA-2/3 remain quantum-resistant as-is; migration focus is public-key crypto only.
 
 **Roadmap (named in policy, no implementation yet — tracked, not fabricated):**

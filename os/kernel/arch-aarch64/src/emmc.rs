@@ -41,6 +41,9 @@ const CMD8_SEND_EXT_CSD: u16 = 8; // eMMC: read the 512-byte EXT_CSD (data phase
 const CMD9_SEND_CSD: u16 = 9;
 const CMD16_SET_BLOCKLEN: u16 = 16;
 const CMD17_READ_SINGLE: u16 = 17;
+const CMD18_READ_MULTIPLE: u16 = 18;
+/// Data-phase SDCLK ceiling: eMMC default-speed (backward-compatible) timing, 0–26 MHz, no CMD6 needed.
+const DATA_CLK_HZ: u32 = 25_000_000;
 
 /// Host RCA we assign the eMMC (any non-zero value; the host owns it on eMMC).
 const RCA: u32 = 1;
@@ -73,6 +76,10 @@ pub struct Emmc {
     cache_on: bool,
     /// EXT_CSD wear at probe: (PRE_EOL_INFO, LIFE_TIME_EST_TYP_A, LIFE_TIME_EST_TYP_B).
     wear: (u8, u8, u8),
+    /// Data-phase SDCLK (Hz) chosen at probe.
+    sdclk_hz: u32,
+    /// CMD18 multi-block reads verified at probe against single-block reads (else every read is single).
+    multi_ok: bool,
     /// One-shot narrowing write window for the reserved KEYSTORE window (write build).
     #[cfg(feature = "p15-write")]
     win: Option<(u64, u64)>,
@@ -198,15 +205,39 @@ impl Emmc {
             return Err((10, BlkErr::CmdError));
         }
 
+        // Data-phase clock (2026-11-09: every transfer ran at the 390 kHz identification clock — ~5 ms per
+        // sector, ~30 s of every boot). eMMC default-speed timing allows up to 26 MHz with NO CMD6/SWITCH (HS
+        // timing / bus width stay untouched — this driver still cannot emit CMD6); only this host's own SDCLK
+        // divisor changes (the shared clk-emmc2 source is never set). Verified by re-reading EXT_CSD at the new
+        // clock; any mismatch or error falls back to the identification clock.
+        let mut fast = base_hz.div_ceil(2 * DATA_CLK_HZ);
+        if fast == 0 {
+            fast = 1;
+        }
+        let mut sdclk_hz = base_hz / (2 * divisor.max(1) as u32);
+        if (fast as u16) < divisor {
+            host.set_clock(fast as u16);
+            let mut ext2 = [0u8; 512];
+            host.set_block(512, 1);
+            host.set_xfer_read_single();
+            let ok = host.cmd(CMD8_SEND_EXT_CSD, 0, Resp::R1, true).is_ok() && host.pio_in(&mut ext2, 512).is_ok() && ext2[..] == ext[..];
+            if ok {
+                sdclk_hz = base_hz / (2 * fast);
+            } else {
+                host.set_clock(divisor);
+            }
+        }
         let cache_on = ext[EXT_CSD_CACHE_CTRL] & 1 != 0;
         let wear = (ext[EXT_CSD_PRE_EOL_INFO], ext[EXT_CSD_LIFE_TIME_EST_A], ext[EXT_CSD_LIFE_TIME_EST_B]);
-        Ok(Emmc {
+        let mut e = Emmc {
             host,
             rca: RCA,
             sec_count,
             sector_addr,
             cache_on,
             wear,
+            sdclk_hz,
+            multi_ok: false,
             #[cfg(feature = "p15-write")]
             win: None,
             #[cfg(feature = "p15-write")]
@@ -215,7 +246,9 @@ impl Emmc {
             dv_win: None,
             #[cfg(feature = "p15-write")]
             bootcfg: [None, None],
-        })
+        };
+        e.multi_ok = e.multi_selfcheck();
+        Ok(e)
     }
 
     /// Snapshot of the controller registers before bring-up (dump-before-touch).
@@ -235,6 +268,43 @@ impl Emmc {
     pub fn wear(&self) -> (u8, u8, u8) {
         self.wear
     }
+    /// The SDCLK the data phase runs at (Hz): ≤ 25 MHz default speed, or the 390 kHz init clock if the
+    /// faster clock did not verify.
+    pub fn sdclk_hz(&self) -> u32 {
+        self.sdclk_hz
+    }
+    /// Multi-block reads in use (verified at probe).
+    pub fn multi_read(&self) -> bool {
+        self.multi_ok
+    }
+
+    /// Probe-time check: 8 sectors read with CMD18 must equal the same 8 read one by one (LBA 0..8: the MBR and
+    /// the alignment gap — always present). Any error or difference keeps the single-block path.
+    fn multi_selfcheck(&self) -> bool {
+        let mut a = [0u8; 4096];
+        if self.read_multi(0, &mut a).is_err() {
+            return false;
+        }
+        let mut sec = [0u8; 512];
+        for i in 0..8 {
+            if self.read_block_impl(i as u64, &mut sec).is_err() || sec[..] != a[i * 512..(i + 1) * 512] {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn read_multi(&self, lba: u64, out: &mut [u8]) -> Result<(), BlockErr> {
+        let n = out.len() / 512;
+        if n == 0 || out.len() % 512 != 0 || n > 0xFFFF || lba + n as u64 > self.sec_count {
+            return Err(BlockErr::OutOfRange);
+        }
+        self.host.set_block(512, n as u16);
+        self.host.set_xfer_read_multi();
+        self.host.cmd(CMD18_READ_MULTIPLE, lba as u32, Resp::R1, true).map_err(|_| BlockErr::Io)?;
+        self.host.pio_in_blocks(out).map_err(|_| BlockErr::Io)
+    }
+
     pub fn sector_addressed(&self) -> bool {
         self.sector_addr
     }
@@ -434,6 +504,18 @@ impl BlockDev for Emmc {
     }
     fn read_block(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), BlockErr> {
         self.read_block_impl(lba, buf)
+    }
+    fn read_blocks(&self, lba: u64, out: &mut [u8]) -> Result<(), BlockErr> {
+        if self.multi_ok && out.len() > 512 && self.read_multi(lba, out).is_ok() {
+            return Ok(());
+        }
+        // single-block path (also the fallback if a multi-block read errors)
+        let mut sec = [0u8; 512];
+        for (i, c) in out.chunks_exact_mut(512).enumerate() {
+            self.read_block_impl(lba + i as u64, &mut sec)?;
+            c.copy_from_slice(&sec);
+        }
+        Ok(())
     }
     #[cfg(feature = "p15-write")]
     fn write_block(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {

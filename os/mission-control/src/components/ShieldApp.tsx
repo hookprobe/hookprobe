@@ -21,9 +21,11 @@
 
 import {
   type Component, type Accessor,
-  createSignal, createMemo, For, Show, batch,
+  createSignal, createMemo, For, Show, batch, onMount,
 } from 'solid-js';
 import TopBar from './TopBar';
+import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState, dnsFailures } from '../store/dnsLive';
+import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
 import CommandPalette from './CommandPalette';
 import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
 import {
@@ -154,6 +156,142 @@ const ListBlock: Component<ListPanelProps> = (props) => {
   );
 };
 
+// ── Live view (heqk device, ADR 0052) ──────────────────────────────────────────
+
+const pct = (a: number, b: number) => (b > 0 ? ((a / b) * 100).toFixed(1) : '0.0');
+const time = (ts: number) => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const isBlock = (v: string) => v === 'blocked' || v === 'blocked-cname' || v === 'tcp53-refused';
+const isBypass = (v: string) => ['ddr', 'canary', 'relay-seen', 'relay-blocked', 'doh-seen', 'doh-blocked', 'dot-refused'].includes(v);
+
+const ShieldLive: Component<{ d: DnsLive }> = (props) => {
+  const [msg, setMsg] = createSignal('');
+  onMount(() => { void refreshActions(); });
+  const c = () => props.d.counters;
+  const queries = () => Object.entries(c()).filter(([k]) => k !== 'unparsable').reduce((s, [, v]) => s + v, 0);
+  const blocked = () => (c()['blocked'] ?? 0) + (c()['blocked-cname'] ?? 0) + (c()['tcp53-refused'] ?? 0);
+  const bypassers = () => props.d.clients.filter((x) => x.bypass > 0);
+  const l = () => props.d.lists;
+  return (
+    <div class="shield-grid">
+      <TermPanel ctx="shield" class="shield-hero">
+        <div class="shield-hero-top">
+          <div class="shield-hero-stat">
+            <div class="shield-big hp-text-gradient">{blocked().toLocaleString()}</div>
+            <div class="shield-verdict">
+              blocked of {queries().toLocaleString()} DNS queries since boot ({pct(blocked(), queries())}%)
+              <Show when={(c()['blocked-cname'] ?? 0) > 0}>
+                <span class="shield-verdict-threat"> · {c()['blocked-cname']} hidden trackers caught behind CNAMEs</span>
+              </Show>
+            </div>
+            <div class="shield-statline">
+              {l().blocked_domains.toLocaleString()} blocked + {l().allowed_domains.toLocaleString()} allowed domains
+              {' · '}lists {l().block_file === 'loaded' ? (l().signed ? `signed by your operator key (generation ${l().generation})` : 'unsigned (standalone)') : l().block_file === 'refused' ? `REFUSED (${l().refused}) — not loaded` : 'none loaded'}
+              {' · '}encrypted DNS {props.d.policy.encrypted_dns === 'block' ? 'refused' : 'allowed'} · Private Relay {props.d.policy.private_relay === 'block' ? 'blocked' : 'reported'}
+            </div>
+            <div class="shield-statline">
+              Protection settings (block / allow lists, encrypted-DNS and Private Relay policy) come from the files signed with your
+              operator key — change them by re-signing. For a temporary exception use "Allow 1 h" on a blocked query below; it expires by itself.
+            </div>
+          </div>
+        </div>
+        <Show when={bypassers().length > 0}>
+          <div class="shield-scope-note" role="status">
+            ⚠ {bypassers().length} device{bypassers().length > 1 ? 's' : ''} tried to resolve outside Shield:{' '}
+            {bypassers().map((x) => `${x.ip} (${VERDICT_LABEL[x.last_bypass ?? ''] ?? x.last_bypass})`).join(', ')}.
+            Shield answers these so the device falls back to filtered DNS; a device that insists on encrypted DNS is not filtered.
+          </div>
+        </Show>
+      </TermPanel>
+
+      <div class="shield-two-col">
+        <TermPanel ctx="top-blocked">
+          <Show when={props.d.top_blocked.length > 0} fallback={<div class="shield-empty">Nothing blocked yet.</div>}>
+            <ul class="shield-cats">
+              <For each={props.d.top_blocked.slice(0, 12)}>
+                {(t) => (
+                  <li class="shield-cat-row">
+                    <span class="shield-cat-label">{t.name}</span>
+                    <span class="shield-cat-bar" aria-hidden="true">
+                      <span class="shield-cat-fill" style={{ width: `${(t.count / Math.max(1, props.d.top_blocked[0].count)) * 100}%` }} />
+                    </span>
+                    <span class="shield-cat-count">{t.count.toLocaleString()}</span>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </TermPanel>
+        <TermPanel ctx="devices">
+          <Show when={props.d.clients.length > 0} fallback={<div class="shield-empty">No DNS queries yet.</div>}>
+            <ul class="shield-list">
+              <For each={[...props.d.clients].sort((a, b) => b.queries - a.queries)}>
+                {(x) => (
+                  <li class="shield-list-row">
+                    <span class="shield-domain">{x.ip}</span>
+                    <span>{x.queries.toLocaleString()} queries · {x.blocked.toLocaleString()} blocked{x.bypass > 0 ? ` · ${x.bypass} bypass signals` : ''}</span>
+                    <button class="shield-remove" title="Hold all traffic of this address for 1 hour (expires on its own)"
+                      onClick={async () => setMsg(await promptAndRun('hold_ip', x.ip, 3600))}>Hold 1 h</button>
+                    <button class="shield-remove" title="Pause Shield's blocklists for this device for 1 hour (owner key; bypass controls stay on)"
+                      onClick={async () => setMsg(await promptAndRun('shield_pause', x.ip, 3600))}>Pause 1 h</button>
+                  </li>
+                )}
+              </For>
+            </ul>
+          </Show>
+        </TermPanel>
+      </div>
+
+      <TermPanel ctx="query-log">
+        <Show when={props.d.recent.length > 0} fallback={<div class="shield-empty">The query log is empty.</div>}>
+          <ul class="shield-list" aria-label="Recent DNS queries, newest first">
+            <For each={props.d.recent}>
+              {(r) => (
+                <li class={`shield-list-row${isBlock(r.verdict) ? ' shield-cat-row--threat' : ''}`}>
+                  <span class="shield-domain">{r.name}</span>
+                  <span>{QTYPE[r.qtype] ?? r.qtype} · {r.client} · {time(r.ts)} · {isBlock(r.verdict) || isBypass(r.verdict) ? <strong>{VERDICT_LABEL[r.verdict] ?? r.verdict}</strong> : (VERDICT_LABEL[r.verdict] ?? r.verdict)}</span>
+                  <Show when={r.verdict === 'blocked' || r.verdict === 'blocked-cname'}>
+                    <button class="shield-remove" title="Let this name through for 1 hour (owner key required)"
+                      onClick={async () => setMsg(await promptAndRun('shield_allow', r.name, 3600))}>Allow 1 h</button>
+                  </Show>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+      </TermPanel>
+
+      <Show when={msg()}><div class="shield-scope-note" role="status">{msg()}</div></Show>
+      <TermPanel ctx="actions">
+        <Show when={(actionsView()?.active.length ?? 0) > 0} fallback={<div class="shield-empty">No temporary actions in force. Every action expires on its own; a reboot clears them all.</div>}>
+          <ul class="shield-list">
+            <For each={actionsView()!.active}>
+              {(a) => (
+                <li class="shield-list-row">
+                  <span class="shield-domain">{a.kind.replace('_', ' ')} · {a.target}</span>
+                  <span>{a.expires_in_s ? `${Math.ceil(a.expires_in_s / 60)} min left` : 'acknowledged'}</span>
+                  <button class="shield-remove" onClick={async () => { await revokeAction(a.id); }}>End now</button>
+                </li>
+              )}
+            </For>
+          </ul>
+        </Show>
+        <Show when={(actionsView()?.audit.length ?? 0) > 0}>
+          <ul class="shield-list" aria-label="Audit log, newest first">
+            <For each={actionsView()!.audit.slice(0, 15)}>
+              {(x) => <li class="shield-list-row"><span>{x.kind.replace('_', ' ')} · {x.target}</span><span>{x.ok ? 'accepted' : `refused: ${x.result}`} · "{x.reason}" · session {x.session}</span></li>}
+            </For>
+          </ul>
+        </Show>
+      </TermPanel>
+
+      <div class="shield-scope-note">
+        Lists are set when the device is flashed (BLOCK.TXT / ALLOW.TXT, signed with your operator key). The query log stays on
+        this device, in memory only, and holds the last 256 lookups.
+      </div>
+    </div>
+  );
+};
+
 // ── ShieldApp (root island) ────────────────────────────────────────────────────
 
 const ShieldApp: Component = () => {
@@ -162,6 +300,7 @@ const ShieldApp: Component = () => {
   const [blockList, setBlockList] = createSignal<ListEntry[]>(INITIAL_BLOCK);
   const [pending,   setPending]   = createSignal<ShieldChange | null>(null);
   const [tab,       setTab]       = createSignal<'allow' | 'block'>('block');
+  onMount(() => startDnsLive());
 
   const categories = INITIAL_CATEGORIES;
   const maxCat = Math.max(...categories.map(c => c.blocked), 1);
@@ -214,12 +353,14 @@ const ShieldApp: Component = () => {
             <div>
               <h1 class="net-page-title">Shield</h1>
               <div class="net-page-subtitle">
-                Blocking ads, trackers &amp; malware on every device · powered by dnsXai
+                Blocking ads, trackers &amp; malware on every device{dnsLive() ? ' · answered on this device' : ' · powered by dnsXai'}
               </div>
             </div>
           </div>
         </div>
 
+        <Show when={dnsLive()} fallback={
+        <Show when={dnsState() === 'absent'} fallback={<div class="shield-empty" role="status">{dnsFailures() >= 3 ? 'Still waiting for the device — retrying every 10 s…' : 'Loading Shield data from the device…'}</div>}>
         <div class="shield-grid">
 
           {/* Hero — blocked today + protection level */}
@@ -317,8 +458,13 @@ const ShieldApp: Component = () => {
             <a href="/network/map">My Network →</a>
           </div>
         </div>
+        </Show>
+        }>
+          {(d) => <ShieldLive d={d()} />}
+        </Show>
 
-        {/* Footer hint */}
+        {/* Footer hint (sample layout only — on a device the lists are operator-signed files) */}
+        <Show when={dnsState() === 'absent'}>
         <div class="net-footer-hint" aria-hidden="true">
           Add a domain to block or allow — every change shows a preview before it applies.
           <span class="net-footer-sep"> · </span>
@@ -326,6 +472,7 @@ const ShieldApp: Component = () => {
             ⌘K — "unblock youtube on the kids' iPad"
           </button>
         </div>
+        </Show>
 
       </main>
 

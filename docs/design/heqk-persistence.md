@@ -1,5 +1,8 @@
 # heqk persistence & OTA — Track C / Milestone M3 scoping
 
+> **Historical scoping record (banner 2026-11-09).** The current state of this subsystem is `os/kernel/docs/design/heqk-persistence.md` (reconstructed from the code; the copy `os/kernel/validate.sh` resolves). This file keeps the earlier scoping detail; where they disagree, the os/kernel copy wins.
+
+
 > **Track-C honesty header.** heqk has **no post-boot storage today** (`docs/roadmap/BuildPlan.md`
 > M3: "no post-boot storage today"). What *does* exist is a **P15 keystore beachhead**:
 > a `hal::BlockDev` trait, a metal-gated **read-only** eMMC driver, full DICE-style

@@ -85,10 +85,13 @@ pub static FLOW_RULES: &[Rule] = &[
 
 const MAX_RULES: usize = 16;
 #[derive(Clone, Copy)]
-struct RState {
-    verified: bool,
-    min_len: u64,
-    jit: usize, // compiled fn VA, or 0 => interpreter only
+pub(crate) struct RState {
+    pub(crate) verified: bool,
+    pub(crate) min_len: u64,
+    pub(crate) jit: usize, // compiled fn VA, or 0 => interpreter only
+}
+impl RState {
+    pub(crate) const EMPTY: RState = RState { verified: false, min_len: 0, jit: 0 };
 }
 static mut RSTATE: [RState; MAX_RULES] =
     [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
@@ -153,11 +156,11 @@ fn compile_set(rules: &[Rule], state: *mut RState) -> (usize, usize) {
     let mut verified = 0usize;
     let mut jitted = 0usize;
     let n = rules.len().min(MAX_RULES);
-    for i in 0..n {
-        let st = match bpf::verify_prevail(rules[i].prog) {
+    for (i, rule) in rules.iter().enumerate().take(n) {
+        let st = match bpf::verify_prevail(rule.prog) {
             Ok(min_len) => {
                 verified += 1;
-                let jit = arch_aarch64::bpf_jit::compile(rules[i].prog).unwrap_or(0);
+                let jit = arch_aarch64::bpf_jit::compile_with_helper(rule.prog, crate::ratelimit::call_helper_c as *const () as usize, crate::ratelimit::JIT_HELPERS).unwrap_or(0);
                 if jit != 0 {
                     jitted += 1;
                 }
@@ -206,6 +209,12 @@ pub fn init() -> (usize, usize) {
 /// Only a drop-verdict scores a QSecBit hit; every fire (observe or drop) is
 /// exported to the SOAR ring with its REAL wire verdict, so an observed threat is
 /// still reported to the SIEM without touching the wire.
+/// The shared evaluation step, for the signed dynamic rule pack (parity G6) — same min_len gate,
+/// JIT/interpreter choice, decide() graduation and alerting as the built-in corpus.
+pub(crate) fn run_set_verdict_pub(rules: &[Rule], state: *mut RState, n: usize, pkt: &[u8], src: u32, decide_fn: fn(FindingClass, DecideCtx) -> Verdict) -> Option<Verdict> {
+    run_set_verdict(rules, state, n, pkt, src, decide_fn)
+}
+
 fn run_set_verdict(
     rules: &[Rule],
     state: *mut RState,
@@ -286,21 +295,25 @@ fn run_set_verdict(
 /// `Allowlisted` floor). `None` = clean.
 pub fn verdict_l4(l4: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(RULES, addr_of_mut!(RSTATE).cast::<RState>(), NRULES.load(Ordering::Relaxed), l4, src, verdict::decide)
+        .or_else(|| crate::rulepack::verdict(0, l4, src, verdict::decide))
 }
 
 /// L2 frame-tier verdict (`napse-l2guard` parity: malformed-ARP / ARP-spoof).
 pub fn verdict_l2(frame: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(L2_RULES, addr_of_mut!(RSTATE_L2).cast::<RState>(), NRULES_L2.load(Ordering::Relaxed), frame, src, verdict::decide_l2)
+        .or_else(|| crate::rulepack::verdict(1, frame, src, verdict::decide_l2))
 }
 
 /// TCP-flag scan-tier verdict (NULL/FIN/Xmas/SYN-FIN). classify runs this ONLY on TCP.
 pub fn verdict_tcp(tcp: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(TCP_RULES, addr_of_mut!(RSTATE_TCP).cast::<RState>(), NRULES_TCP.load(Ordering::Relaxed), tcp, src, verdict::decide)
+        .or_else(|| crate::rulepack::verdict(2, tcp, src, verdict::decide))
 }
 
 /// Stateful flow-tier verdict (per-source SYN-flood rate-limit, blocklist).
 pub fn verdict_flow(frame: &[u8], src: u32) -> Option<Verdict> {
     run_set_verdict(FLOW_RULES, addr_of_mut!(RSTATE_FLOW).cast::<RState>(), NRULES_FLOW.load(Ordering::Relaxed), frame, src, verdict::decide)
+        .or_else(|| crate::rulepack::verdict(3, frame, src, verdict::decide))
 }
 
 // ---- On-wire (u16) wrappers — the datapath (`packet::classify`, `netq`) consumes
@@ -331,15 +344,87 @@ pub fn run_flow(frame: &[u8], src: u32) -> u16 {
 /// (PASS for an observed finding) and score a QSecBit hit ONLY on an enforced
 /// (wire-DROP) verdict. Shared by the bytecode tiers and the M2.1 stateful L2 tier.
 fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
+    // Alert de-duplication (detection benchmark 2026-11-09: one port scan raised 974 events, one flow to a
+    // blocklisted address 9,001 — each evicting the 256-row detection ring). The WIRE verdict is untouched
+    // (a drop still drops every packet); only a repeat EVENT for the same (rule, source) within
+    // `ALERT_DEDUP_SECS` is suppressed and counted. Behavioral rules keep their own longer cooldown.
+    if !alert_ok(rule_id, src, crate::behavioral::now_secs()) {
+        return;
+    }
     let wire = v.to_wire();
     crate::events::push_hit(rule_id, severity as u8, wire as u8, v.class_code(), src);
-    if wire == crate::packet::DROP {
-        telemetry::emit_rule_hit(severity);
-    }
+    // Parity G5: every detection scores by SEVERITY, whatever its wire verdict — an observed beacon,
+    // lateral sweep or ARP spoof is a threat even though ADR 0023 forbids dropping it. (Behavioral
+    // repeats are already throttled by the refire cooldown, so one noisy source cannot pin the score.)
+    telemetry::emit_rule_hit(severity);
 }
 
 // ---- M2.1: the structural + stateful L2 tier (F6/F7/F8 + mac-flood + broadcast-storm)
 // ----
+
+/// ARP cache poisoning: an ARP reply / announcement claiming an IPv4 address that was bound to a DIFFERENT
+/// MAC within `ARP_BIND_SECS`, UNSOLICITED (a reply answering a who-has from the last 2 s is proxy ARP — a
+/// router / range extender — not poisoning; real-traffic benchmark 2026-11-09). Observe-only.
+pub const RULE_ARP_POISON: u16 = 127;
+const ARP_BIND_SECS: u64 = 600;
+const ARP_N: usize = 128;
+const ARP_REQ_N: usize = 64;
+static ARP_REQ_IP: [core::sync::atomic::AtomicU64; ARP_REQ_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_REQ_N];
+static ARP_REQ_AT: [core::sync::atomic::AtomicU64; ARP_REQ_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_REQ_N];
+fn now_ms() -> u64 {
+    crate::clock::ticks().saturating_mul(1000) / crate::clock::freq().max(1)
+}
+static ARP_IP: [core::sync::atomic::AtomicU64; ARP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_N];
+static ARP_MAC: [core::sync::atomic::AtomicU64; ARP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_N];
+static ARP_AT: [core::sync::atomic::AtomicU64; ARP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_N];
+
+/// Learn IP -> MAC from ARP replies / gratuitous ARPs; return the claimed IP when a claim conflicts with a
+/// recent binding (a re-bind after `ARP_BIND_SECS` — a DHCP address reused by a new device — is learned
+/// silently). Requests asking for someone else teach nothing.
+pub fn arp_binding_conflict(f: &[u8], now: u64) -> Option<u32> {
+    use core::sync::atomic::Ordering::Relaxed;
+    if f.len() < 42 || f[12] != 0x08 || f[13] != 0x06 || f[14..16] != [0, 1] || f[16..18] != [8, 0] {
+        return None;
+    }
+    let op = u16::from_be_bytes([f[20], f[21]]);
+    let sip = u32::from_be_bytes([f[28], f[29], f[30], f[31]]);
+    let tip = u32::from_be_bytes([f[38], f[39], f[40], f[41]]);
+    // a who-has for `tip`: remember it — a reply that ANSWERS a recent request is solicited (proxy ARP by a
+    // router / range extender answers requests; poisoning tools send unsolicited replies)
+    if op == 1 && sip != tip {
+        let j = crate::ratelimit::slot(tip as u64 | (2 << 40), ARP_REQ_N);
+        ARP_REQ_IP[j].store(tip as u64 | (2 << 40), Relaxed);
+        ARP_REQ_AT[j].store(now_ms(), Relaxed);
+        return None;
+    }
+    if sip == 0 || !(op == 2 || (op == 1 && sip == tip)) {
+        return None;
+    }
+    let solicited = op == 2 && {
+        let j = crate::ratelimit::slot(sip as u64 | (2 << 40), ARP_REQ_N);
+        ARP_REQ_IP[j].load(Relaxed) == sip as u64 | (2 << 40) && now_ms().saturating_sub(ARP_REQ_AT[j].load(Relaxed)) < 2_000
+    };
+    let mac = crate::ratelimit::mac_hash(&f[22..28]);
+    let i = crate::ratelimit::slot(sip as u64 | (1 << 40), ARP_N);
+    let (kip, kmac, kat) = (ARP_IP[i].load(Relaxed), ARP_MAC[i].load(Relaxed), ARP_AT[i].load(Relaxed));
+    let key = sip as u64 | (1 << 40);
+    let conflict = kip == key && kmac != mac && now.saturating_sub(kat) < ARP_BIND_SECS && !solicited;
+    if !conflict {
+        ARP_IP[i].store(key, Relaxed);
+        ARP_MAC[i].store(mac, Relaxed);
+        ARP_AT[i].store(now, Relaxed);
+    }
+    conflict.then_some(sip)
+}
+
+/// Test hook.
+#[cfg_attr(not(feature = "detbench"), allow(dead_code))]
+pub fn arp_binding_reset() {
+    use core::sync::atomic::Ordering::Relaxed;
+    for a in &ARP_IP {
+        a.store(0, Relaxed);
+    }
+}
 
 /// Rule IDs for the M2.1 tier (kept distinct from the bytecode L2 corpus 101/102).
 pub const RULE_STRUCT_ANOMALY: u16 = 110;
@@ -432,6 +517,16 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
         }
     }
 
+    // ARP cache poisoning (detection benchmark 2026-11-09: rule 102 only catches an ARP whose sender MAC
+    // disagrees with the Ethernet source; a poisoner sends consistent MACs). Observe-only (ADR 0023).
+    if let Some(claim) = arp_binding_conflict(frame, crate::behavioral::now_secs()) {
+        let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(claim));
+        fire(RULE_ARP_POISON, SEV_HIGH, v, claim);
+        if observed.is_none() {
+            observed = Some(v);
+        }
+    }
+
     // mac-flood — DISTINCT source MACs per port within the window. On an Access port
     // a genuine fan-out → RateLimit (drop); on an Uplink/AP port it stays Observe
     // (decide_l2 D12) so a busy radio's many legit client MACs are NEVER wire-dropped.
@@ -454,8 +549,8 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
     // broadcast-storm — count only NON-EXEMPT broadcast/multicast dst frames (mDNS/
     // SSDP/LLMNR are exempt before counting, so a chatty-but-legit device is never a
     // storm). A genuine flood on an Access port → RateLimit; Uplink → Observe.
-    if crate::net::dst_is_bcast_or_mcast(frame) && !is_exempt_multicast(&frame[0..6]) {
-        if crate::ratelimit::bcast_over(port, BCAST_STORM_THRESH) == 1 {
+    if crate::net::dst_is_bcast_or_mcast(frame) && !is_exempt_multicast(&frame[0..6])
+        && crate::ratelimit::bcast_over(port, BCAST_STORM_THRESH) == 1 {
             // A3 FIX: a NON-EXEMPT broadcast/multicast FLOOD is resource-exhaustion, not
             // legit many-client traffic (legit mDNS/SSDP/LLMNR are exempted above, row L1).
             // So it is a rate wall crossed → FindingClass::FloodRate → a bounded, self-
@@ -470,7 +565,6 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
                 observed = Some(v);
             }
         }
-    }
 
     observed
 }
@@ -513,6 +607,12 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
     if flags & TCP_RST != 0 || (flags & TCP_SYN != 0 && flags & TCP_ACK != 0) {
         crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & TCP_SYN != 0);
+        // slow-scan tier: a CLOSED-port answer (RST) to `dst`'s probe, counted over 30 minutes. Observe-only:
+        // the fast tier owns enforcement; this only makes a patient sweep visible.
+        if flags & TCP_RST != 0 && crate::ratelimit::slow_scan_observe(dst as u64, meta.src_port, crate::behavioral::now_secs()) {
+            let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(dst));
+            fire(RULE_PORT_SCAN, SEV_MED, v, dst);
+        }
     } else if flags & TCP_ACK != 0 {
         // An ACK on a flow: establishment credit for this (source, port) — only after a SYN-ACK.
         crate::ratelimit::flow_ack_observe(src64, meta.dst_port);
@@ -541,6 +641,87 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     Some(v)
 }
 
+/// ADR 0049 D2 (parity G24a/G18) — the same scan SHAPE for an IPv6 TCP frame, OBSERVE-ONLY. `src` is the
+/// tagged key of the frame's sender (`srckey::dev` on our LAN, `srckey::v6net` from the internet) and
+/// `dst` the key of its receiver — used when the frame is an ANSWER (RST / SYN-ACK), which credits the prober
+/// exactly as `flow_scan_verdict` does for IPv4 (ADR 0049 D3: no answer, no count). Never a wire action:
+/// IPv6 sources stay observe-only until the separation matrix has its IPv6 rows on metal. Returns true when
+/// `src` is over the scan wall.
+pub fn flow_scan_observe6(frame: &[u8], src: u64, dst: u64) -> bool {
+    if src == 0 {
+        return false;
+    }
+    let Some(meta) = crate::net::parse(frame) else { return false };
+    if meta.ethertype != crate::net::ETHERTYPE_IPV6 || meta.ip_proto != crate::net::IPPROTO_TCP || !meta.has_l4_ports() {
+        return false;
+    }
+    let Some(&flags) = frame.get(meta.l4_off + 13) else { return false };
+    if flags & 0x04 != 0 || (flags & 0x02 != 0 && flags & 0x10 != 0) {
+        crate::ratelimit::scan_response_observe(dst, meta.src_port, flags & 0x02 != 0);
+        return false;
+    } else if flags & 0x10 != 0 {
+        crate::ratelimit::flow_ack_observe(src, meta.dst_port);
+    } else if flags & 0x02 != 0 {
+        crate::ratelimit::syn_scan_observe(src, meta.dst_port, false);
+    }
+    if crate::ratelimit::scan_over_ratelimit(src) {
+        crate::srckey::note_v6_scan(src, crate::ratelimit::scan_confirmed(src));
+        return true;
+    }
+    false
+}
+
+/// G36: the IPv6 half of the behavioural tier for a dual-stack LAN device. Its IPv6 connection attempts
+/// (pure SYNs) feed beacon + brute force under the device's IPv4 `lease` (the identity the owner knows),
+/// the peer folded by `srckey::v6_peer`. Observe-only like the IPv4 tier; a device with no lease is skipped.
+pub fn behavioral_observe6(frame: &[u8], lease: u32) {
+    if lease == 0 || frame.len() < 54 {
+        return;
+    }
+    let Some(m) = crate::net::parse(frame) else { return };
+    if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || !m.has_l4_ports() {
+        return;
+    }
+    if frame.get(m.l4_off + 13).is_none_or(|&f| f & 0x12 != 0x02) {
+        return;
+    }
+    let mut d6 = [0u8; 16];
+    d6.copy_from_slice(&frame[38..54]);
+    let peer = crate::srckey::v6_peer(&d6);
+    let _ = beacon_verdict(lease, peer, m.dst_port);
+    let _ = brute_verdict(lease, peer, m.dst_port);
+}
+
+/// G24a: an IPv6 peer on the signed IOC pack — the same observe-only IOC detection (rule 302, identity
+/// reputation: never a drop) the IPv4 flow tier raises, attributed to the LAN device's IPv4 lease.
+pub fn ioc_v6_hit(lease: u32, peer: &[u8; 16]) -> bool {
+    if lease == 0 || !crate::ioc::ip6_listed(peer) {
+        return false;
+    }
+    let v = verdict::decide(FindingClass::IdentityReputation, DecideCtx::for_src(lease));
+    if refire_ok(302, lease, crate::behavioral::now_secs()) {
+        fire(302, SEV_HIGH, v, lease);
+    }
+    true
+}
+
+/// G36: an inbound IPv6 SYN-ACK to a LAN device = the D3 evidence that the service it is hammering exists.
+pub fn brute_answer6(frame: &[u8], lease: u32) {
+    if lease == 0 || frame.len() < 54 {
+        return;
+    }
+    let Some(m) = crate::net::parse(frame) else { return };
+    if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || !m.has_l4_ports() {
+        return;
+    }
+    if frame.get(m.l4_off + 13).is_none_or(|&f| f & 0x12 != 0x12) {
+        return;
+    }
+    let mut s6 = [0u8; 16];
+    s6.copy_from_slice(&frame[22..38]);
+    crate::behavioral::brute_answer_at(crate::srckey::v6_peer(&s6), lease, m.src_port, crate::behavioral::now_secs());
+}
+
 /// ADR 0049 D3 on the AP's NAT path: the IDS sees inbound answers BEFORE un-NAT (addressed to the WAN IP),
 /// so a LAN client's probes could never be matched. The un-NATed frame (addressed to the client) is fed here
 /// so the target's RST / SYN-ACK credits the right prober. Observation only — no verdict.
@@ -553,6 +734,13 @@ pub fn scan_response_hook(frame: &[u8]) {
     if flags & 0x04 != 0 || (flags & 0x02 != 0 && flags & 0x10 != 0) {
         let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
         crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & 0x02 != 0);
+        // Rule 124's evidence too: on the AP the IDS sees the server's SYN-ACK BEFORE un-NAT (addressed to the
+        // WAN IP), so the answer must be credited here, to the real LAN client (metal 2026-11-08: a 30-attempt
+        // SSH burst from a LAN client was missed until this).
+        if flags & 0x12 == 0x12 {
+            let server = crate::net::eth_ipv4_src(frame);
+            crate::behavioral::brute_answer_at(server, dst, meta.src_port, crate::behavioral::now_secs());
+        }
     }
 }
 
@@ -614,6 +802,9 @@ pub const RULE_BEACON: u16 = 116; // parity: napse-capture beacon 1000040 (A10/L
 pub const RULE_LATERAL: u16 = 117; // parity: napse-capture lateral 1000041 (A10)
 pub const RULE_EXFIL: u16 = 118; // parity: bulk outbound exfil 1000025
 pub const RULE_DNS: u16 = 119; // parity: DNS tunneling/DGA 1000002/1000021/1000011
+pub const RULE_TLS_IOC: u16 = 125; // known-malicious TLS client (JA4 in the signed IOC pack)
+pub const RULE_TLS_BYPASS: u16 = 126; // TLS to a name Shield blocks: the device resolved it without Shield
+pub const RULE_BRUTE: u16 = 124; // brute force on one admin service (T1110), observe-only
 pub const RULE_TRUNCATED: u16 = 120; // SG-2: net::parse None -> fail-closed drop (matrix F4)
 
 /// M2.3 L2/L3 RESOURCE-SHED (matrix A7 conntrack-saturation / A8 scheduler-pressure / L9
@@ -630,6 +821,11 @@ pub fn resource_shed_verdict(src: u32) -> Option<Verdict> {
     }
     let s = src as u64;
     crate::ratelimit::flow_record(s); // top-talker census (windowed → self-reverting)
+    // G34: both triggers below also require `s` to be THE top talker — two atomic loads. Almost every packet
+    // is not, so answer that first and skip the flow-count clock read and the run-queue query (same verdict).
+    if !crate::ratelimit::is_top_talker(s) {
+        return None;
+    }
     let saturated = crate::ratelimit::saturation_shed(
         s,
         crate::ratelimit::flow_count(),
@@ -643,20 +839,112 @@ pub fn resource_shed_verdict(src: u32) -> Option<Verdict> {
     }
 }
 
+/// Behavioral alert refire cooldown (parity G4): once a (rule, source) has alerted, further trips within
+/// this window are counted (corroboration still sees them) but raise no new event — a regular beacon or
+/// a sustained transfer would otherwise alert on every packet and evict the 256-row detection ring.
+pub const BEHAVIORAL_COOLDOWN_SECS: u64 = 300;
+const COOL_N: usize = 128;
+static COOL_KEY: [core::sync::atomic::AtomicU64; COOL_N] = [const { core::sync::atomic::AtomicU64::new(0) }; COOL_N];
+static COOL_AT: [core::sync::atomic::AtomicU64; COOL_N] = [const { core::sync::atomic::AtomicU64::new(0) }; COOL_N];
+pub static COOL_SUPPRESSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+
+/// True if (rule, src) may raise an event now (and arms the cooldown). `now` in seconds.
+pub fn refire_ok(rule_id: u16, src: u32, now: u64) -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    let key = ((rule_id as u64) << 32) | src as u64 | (1u64 << 63);
+    let i = (key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 57) as usize % COOL_N;
+    if COOL_KEY[i].load(Relaxed) == key && now.saturating_sub(COOL_AT[i].load(Relaxed)) < BEHAVIORAL_COOLDOWN_SECS {
+        COOL_SUPPRESSED.fetch_add(1, Relaxed);
+        return false;
+    }
+    COOL_KEY[i].store(key, Relaxed);
+    COOL_AT[i].store(now, Relaxed);
+    true
+}
+
+/// Repeat-event window for `fire()` (all rules): one event per (rule, source) per minute.
+pub const ALERT_DEDUP_SECS: u64 = 60;
+const DEDUP_N: usize = 512;
+static DEDUP_KEY: [core::sync::atomic::AtomicU64; DEDUP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; DEDUP_N];
+static DEDUP_AT: [core::sync::atomic::AtomicU64; DEDUP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; DEDUP_N];
+pub static DEDUP_SUPPRESSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DEDUP_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// True if (rule, src) may raise an event now (and arms the window). An aliasing pair just evicts — at worst
+/// one extra event, never a lost one.
+pub fn alert_ok(rule_id: u16, src: u32, now: u64) -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    if !DEDUP_ON.load(Relaxed) {
+        return true;
+    }
+    let key = ((rule_id as u64) << 32) | src as u64 | (1u64 << 62);
+    let i = crate::ratelimit::slot(key, DEDUP_N);
+    if DEDUP_KEY[i].load(Relaxed) == key && now.saturating_sub(DEDUP_AT[i].load(Relaxed)) < ALERT_DEDUP_SECS {
+        DEDUP_SUPPRESSED.fetch_add(1, Relaxed);
+        return false;
+    }
+    DEDUP_KEY[i].store(key, Relaxed);
+    DEDUP_AT[i].store(now, Relaxed);
+    true
+}
+
+/// Self-tests that count individual events switch the de-duplication off (and back on).
+pub fn alert_dedup(on: bool) {
+    DEDUP_ON.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// `[P-alert-dedup]` — one event per (rule, source) per window; the wire verdict is untouched.
+#[cfg_attr(not(feature = "securechannel-selftest"), allow(dead_code))]
+pub fn dedup_selftest() -> bool {
+    refire_reset();
+    let mut evs = [crate::events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0, class: 0, dport: 0, dst: 0 }; 64];
+    let _ = crate::events::drain(&mut evs);
+    let first = alert_ok(113, 0x0a63_0042, 1000);
+    let repeats = (0..50).all(|i| !alert_ok(113, 0x0a63_0042, 1000 + i));
+    let other_src = alert_ok(113, 0x0a63_0043, 1001);
+    let other_rule = alert_ok(124, 0x0a63_0042, 1001);
+    let after = alert_ok(113, 0x0a63_0042, 1000 + ALERT_DEDUP_SECS);
+    let suppressed = DEDUP_SUPPRESSED.load(core::sync::atomic::Ordering::Relaxed) >= 50;
+    refire_reset();
+    let pass = first && repeats && other_src && other_rule && after && suppressed;
+    arch_aarch64::_print(format_args!(
+        " [P-alert-dedup] {} — repeat alerts collapse to one event per (rule, source) per {} s (a port scan raised 974 events, a blocklisted flow 9,001 — detection benchmark 2026-11-09): first alert={} 50 repeats suppressed + counted={} another source still alerts={} another rule still alerts={} next window alerts again={}\n",
+        if pass { "PASS" } else { "FAIL" }, ALERT_DEDUP_SECS, first, repeats && suppressed, other_src, other_rule, after
+    ));
+    pass
+}
+
+/// Test hook: clear the cooldown table.
+pub fn refire_reset() {
+    use core::sync::atomic::Ordering::Relaxed;
+    for i in 0..COOL_N {
+        COOL_KEY[i].store(0, Relaxed);
+        COOL_AT[i].store(0, Relaxed);
+    }
+    for i in 0..DEDUP_N {
+        DEDUP_KEY[i].store(0, Relaxed);
+        DEDUP_AT[i].store(0, Relaxed);
+    }
+}
+
 /// M2.4 shared verdict step: a behavioral detector FIRED → route through `decide()` as
-/// `FindingClass::Behavioral`, which is OBSERVE-ONLY by construction (always `Observe`,
-/// PASS on the wire — zero legit-drop risk). `fire()` still exports the SOAR alert so the
-/// SOC SEES the behavior; the wire is never touched. This is the whole M2.4 contract:
-/// detection parity WITHOUT enforcement.
+/// `FindingClass::Behavioral`, OBSERVE-ONLY by construction; `fire()` exports the alert (subject to
+/// the refire cooldown); the wire is never touched — detection parity WITHOUT enforcement.
 #[inline]
 fn behavioral_verdict(rule_id: u16, src: u32, axis: u32) -> Verdict {
+    behavioral_verdict_at(rule_id, src, axis, crate::behavioral::now_secs())
+}
+
+fn behavioral_verdict_at(rule_id: u16, src: u32, axis: u32, now: u64) -> Verdict {
     let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(src));
     // A11 corroboration (SEVERITY only): record this behavioral axis; a source corroborated
     // across >= K axes is stamped CRITICAL for the SOC. `v` stays `Observe` — behavioral is
     // observe-only by construction, and corroboration NEVER changes the wire verdict.
     crate::corroboration::corr_observe(src as u64, axis);
     let sev = if crate::corroboration::is_corroborated(src as u64) { SEV_CRIT } else { SEV_MED };
-    fire(rule_id, sev, v, src);
+    if refire_ok(rule_id, src, now) {
+        fire(rule_id, sev, v, src);
+    }
     v
 }
 
@@ -669,13 +957,33 @@ pub fn beacon_verdict_at(src: u32, dst: u32, dst_port: u16, now: u64) -> Option<
     if !crate::behavioral::beacon_observe_at(src, dst, dst_port, now) {
         return None;
     }
-    Some(behavioral_verdict(RULE_BEACON, src, crate::corroboration::AXIS_BEACON))
+    Some(behavioral_verdict_at(RULE_BEACON, src, crate::corroboration::AXIS_BEACON, now))
 }
 
 /// Live-clock wrapper for the datapath (M2.4 A10/L8 wiring): same as `beacon_verdict_at`
 /// but sources `now` from the real monotonic clock instead of an injected test value.
 pub fn beacon_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
     beacon_verdict_at(src, dst, dst_port, crate::behavioral::now_secs())
+}
+
+/// Rule 125 — a TLS ClientHello whose JA4 is in the signed IOC pack (observe-only, like every IOC match).
+pub fn tls_ioc_verdict(src: u32) {
+    let _ = behavioral_verdict(RULE_TLS_IOC, src, crate::corroboration::AXIS_BEACON);
+}
+
+/// Rule 126 — TLS to a Shield-blocked name: DNS protection was bypassed (DoH / hard-coded IP / stale
+/// answer). Observe-only; enforcing on SNI would be a separate policy decision.
+pub fn tls_bypass_verdict(src: u32) {
+    let _ = behavioral_verdict(RULE_TLS_BYPASS, src, crate::corroboration::AXIS_BEACON);
+}
+
+/// Rule 124 brute force — a connection ATTEMPT (SYN-only) to an admin service; fires (observe-only) once per
+/// answered burst. `brute_answer` records the server's SYN-ACK (the D3 evidence the service exists).
+pub fn brute_verdict(src: u32, dst: u32, dst_port: u16) -> Option<Verdict> {
+    if !crate::behavioral::brute_attempt_at(src, dst, dst_port, crate::behavioral::now_secs()) {
+        return None;
+    }
+    Some(behavioral_verdict(RULE_BRUTE, src, crate::corroboration::AXIS_LATERAL))
 }
 
 /// M2.4 / LATERAL (A10 detection-half) — one internal source fanning out across many
@@ -707,6 +1015,18 @@ pub fn dns_verdict(frame: &[u8]) -> Option<Verdict> {
     } else {
         None // parsed as DNS but the name is normal
     }
+}
+
+/// Parity G7: a Shield query for an IOC-pack domain — `ioc_match` (rule 302's catalogue entry),
+/// observe-only + refire-cooled per source (identity-based intel never drops, ADR 0023).
+pub fn ioc_domain_verdict(src: u32) -> Verdict {
+    behavioral_verdict(302, src, crate::corroboration::AXIS_DNS)
+}
+
+/// Parity G8: a Shield query whose name scored as DGA / lookalike / tunnel (`dga::score`). Observe-only
+/// (`dns_dga`), refire-cooled per source; the name itself is still answered normally.
+pub fn shield_dga_verdict(src: u32) -> Verdict {
+    behavioral_verdict(RULE_DNS, src, crate::corroboration::AXIS_DNS)
 }
 
 /// mDNS / SSDP / LLMNR and IPv6-multicast destination groups — well-known service
@@ -783,4 +1103,116 @@ pub fn active() -> usize {
     let d = (0..NRULES_FLOW.load(Ordering::Relaxed))
         .filter(|&i| rstate(addr_of_mut!(RSTATE_FLOW).cast::<RState>(), i).verified).count();
     a + b + c + d
+}
+
+/// `[P8-JIT-CALL]` — the JIT's BPF CALL support, differential against the interpreter (QEMU + metal):
+/// (1) `ip-blocklist` (helper 2) over 4096 frames — listed / unlisted sources, non-IPv4; (2) `syn-flood-per-src`
+/// (helper 1, stateful) — the same verdict sequence across the rate limit from a fresh key on each side;
+/// (3) register preservation — R3..R9 set, a CALL, then summed: 42 on both; (4) plain `compile` still declines.
+pub fn jit_call_selftest() -> bool {
+    use crate::bpf::{insn, run, IP_BLOCKLIST, SYN_LIMIT, TCP_SYN_FLOOD_SRC};
+    let comp = |p: &[u64]| arch_aarch64::bpf_jit::compile_with_helper(p, crate::ratelimit::call_helper_c as *const () as usize, crate::ratelimit::JIT_HELPERS);
+    let call = |va: usize, f: &[u8]| -> u64 {
+        let fun: extern "C" fn(*const u8) -> u64 = unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(va) };
+        fun(f.as_ptr())
+    };
+    let mut f = [0u8; 64];
+    let ipv4 = |f: &mut [u8; 64], src: [u8; 4], proto: u8, flags: u8| {
+        f.fill(0);
+        f[12] = 0x08;
+        f[14] = 0x45;
+        f[23] = proto;
+        f[26..30].copy_from_slice(&src);
+        f[47] = flags;
+    };
+    // (1) blocklist
+    let mut bl_ok = false;
+    let mut bl_mis = 0u32;
+    let mut bl_hits = 0u32;
+    if let Some(va) = comp(&IP_BLOCKLIST) {
+        bl_ok = true;
+        for i in 0u32..4096 {
+            let b = (i & 0xff) as u8;
+            let src = match i % 5 {
+                0 => [192, 0, 2, b],
+                1 => [10, 66, 66, b],
+                2 => [203, 0, 113, b],
+                3 => [100, 64, (i >> 8) as u8, b],
+                _ => [b, (i >> 8) as u8, 7, 9],
+            };
+            ipv4(&mut f, src, 6, 0x10);
+            if i % 97 == 0 {
+                f[12] = 0x08;
+                f[13] = 0x06; // ARP: the no-call path
+            }
+            let (j, r) = (call(va, &f), run(&IP_BLOCKLIST, f.as_ptr(), f.len()));
+            bl_hits += (r == crate::bpf::DROP) as u32;
+            if j != r {
+                bl_mis += 1;
+            }
+        }
+    }
+    // (2) per-source SYN flood: interpreter on key A, JIT on key B, same sequence
+    let mut syn_ok = false;
+    let mut syn_mis = 0u32;
+    let mut drops = 0u32;
+    if let Some(va) = comp(&TCP_SYN_FLOOD_SRC) {
+        syn_ok = true;
+        let n = SYN_LIMIT as usize + 20;
+        let mut seq = [0u64; 512];
+        ipv4(&mut f, [100, 127, 1, 1], 6, 0x02);
+        for v in seq.iter_mut().take(n) {
+            *v = run(&TCP_SYN_FLOOD_SRC, f.as_ptr(), f.len());
+        }
+        ipv4(&mut f, [100, 127, 1, 2], 6, 0x02);
+        for v in seq.iter().take(n) {
+            let j = call(va, &f);
+            drops += (j == crate::bpf::DROP) as u32;
+            syn_mis += (j != *v) as u32;
+        }
+    }
+    // (2b) regression: a flooder on a busy LAN. The slot used to be the FIRST octet, so 10.0.0.10's SYNs reset
+    // 10.0.0.66's count and the per-source limiter never tripped. Now it must.
+    let mut busy_drops = 0u32;
+    for k in 0..(SYN_LIMIT as u32 + 40) {
+        ipv4(&mut f, [10, 0, 0, 66], 6, 0x02);
+        busy_drops += (run(&TCP_SYN_FLOOD_SRC, f.as_ptr(), f.len()) == crate::bpf::DROP) as u32;
+        if k % 4 == 0 {
+            ipv4(&mut f, [10, 0, 0, 10], 6, 0x02);
+            let _ = run(&TCP_SYN_FLOOD_SRC, f.as_ptr(), f.len());
+        }
+    }
+    // (3) register preservation across CALL
+    let prog: [u64; 18] = [
+        insn(0xb7, 3, 0, 0, 3),
+        insn(0xb7, 4, 0, 0, 4),
+        insn(0xb7, 5, 0, 0, 5),
+        insn(0xb7, 6, 0, 0, 6),
+        insn(0xb7, 7, 0, 0, 7),
+        insn(0xb7, 8, 0, 0, 8),
+        insn(0xb7, 9, 0, 0, 9),
+        insn(0xb7, 1, 0, 0, 0),
+        insn(0xb7, 2, 0, 0, 0),
+        insn(0x85, 0, 0, 0, crate::ratelimit::HELPER_IP_BLOCKED as i32),
+        insn(0x0f, 0, 3, 0, 0),
+        insn(0x0f, 0, 4, 0, 0),
+        insn(0x0f, 0, 5, 0, 0),
+        insn(0x0f, 0, 6, 0, 0),
+        insn(0x0f, 0, 7, 0, 0),
+        insn(0x0f, 0, 8, 0, 0),
+        insn(0x0f, 0, 9, 0, 0),
+        insn(0x95, 0, 0, 0, 0),
+    ];
+    let interp = run(&prog, f.as_ptr(), f.len());
+    let regs = comp(&prog).map(|va| call(va, &f));
+    let regs_ok = interp == 42 && regs == Some(42);
+    // (4) the call-less entry point still declines CALL; a helper outside the allowlist declines too
+    let declines = arch_aarch64::bpf_jit::compile(&TCP_SYN_FLOOD_SRC).is_none()
+        && arch_aarch64::bpf_jit::compile_with_helper(&IP_BLOCKLIST, crate::ratelimit::call_helper_c as *const () as usize, 1 << crate::ratelimit::HELPER_SYN_RATE_OVER).is_none();
+    let pass = bl_ok && bl_mis == 0 && bl_hits > 0 && syn_ok && syn_mis == 0 && drops > 0 && busy_drops > 0 && regs_ok && declines;
+    arch_aarch64::_print(format_args!(
+        " [P8-JIT-CALL] {} — BPF CALL in the JIT (scalar helpers 1/2, x1..x10 preserved, frame per calling rule): ip-blocklist 4096 frames {} mismatches ({} listed) | syn-flood-per-src {} SYNs {} mismatches ({} over the limit) | busy-LAN flooder trips the limiter ({} drops) | registers across CALL interp={} jit={:?} | call-less compile + off-allowlist helper decline={}\n",
+        if pass { "PASS" } else { "FAIL" }, bl_mis, bl_hits, SYN_LIMIT as u32 + 20, syn_mis, drops, busy_drops, interp, regs, declines
+    ));
+    pass
 }

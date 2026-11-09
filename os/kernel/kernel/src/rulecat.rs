@@ -50,6 +50,10 @@ pub fn lookup(id: u16) -> Option<RuleInfo> {
         121 => r("Rogue IPv6 router advertisement", "rogue_ra", "T1557", SEV_HIGH),
         122 => r("IPv6 RA flood", "ra_flood", "T1498", SEV_MEDIUM),
         123 => r("Unparseable IPv6 (evasion attempt)", "evasion", "", SEV_LOW),
+        124 => r("Brute force on a login service", "brute_force", "T1110", SEV_HIGH),
+        125 => r("Known-malicious TLS client (JA4)", "ioc_match", "T1071.001", SEV_HIGH),
+        126 => r("TLS to a Shield-blocked name (DNS bypass)", "dns_bypass", "T1572", SEV_MEDIUM),
+        127 => r("ARP cache poisoning (IP claimed by a new MAC)", "arp_spoof", "T1557.002", SEV_HIGH),
         201 => r("TCP NULL scan", "port_scan", "T1046", SEV_MEDIUM),
         202 => r("TCP FIN scan", "port_scan", "T1046", SEV_MEDIUM),
         203 => r("TCP Xmas scan", "port_scan", "T1046", SEV_MEDIUM),
@@ -62,11 +66,16 @@ pub fn lookup(id: u16) -> Option<RuleInfo> {
 
 /// `lookup`, or a generic MEDIUM entry for an id this catalogue does not know yet.
 pub fn lookup_or_generic(id: u16) -> RuleInfo {
-    lookup(id).unwrap_or(r("heqk rule (uncatalogued)", "heqk", "", SEV_MEDIUM))
+    lookup(id)
+        .or_else(|| {
+            // parity G6: a signed rule-pack rule (names + severity points from RULES.BIN)
+            crate::rulepack::lookup(id).map(|(name, pts)| r(name, "rule_pack", "", match pts { 7.. => SEV_CRITICAL, 5..=6 => SEV_HIGH, 3..=4 => SEV_MEDIUM, _ => SEV_LOW }))
+        })
+        .unwrap_or(r("heqk rule (uncatalogued)", "heqk", "", SEV_MEDIUM))
 }
 
 /// heqk rule ids whose event `src` is a src-MAC hash, never an IPv4 address (IPv6 RA rules —
 /// see `events::Event::src`).
 pub fn src_is_mac_hash(id: u16) -> bool {
-    matches!(id, 121 | 122 | 123)
+    matches!(id, 121..=123)
 }
