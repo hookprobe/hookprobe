@@ -6725,6 +6725,7 @@ pub extern "C" fn kmain() -> ! {
         // M3 snapshot v2: the persisted evidence ring restores IN ORDER after wrapping.
         let _ = snapshot::snapshot_selftest();
         let _ = anchor::selftest();
+        let _ = arch_aarch64::nat::index_selftest();
         let w = rtwdog::selftest();
         kprint!(" [P-rtwdog] {} — runtime watchdog (production phase 3a): armed only when HBoot advertises hvc #3 (an older HBoot, no EL2 gate or no handoff never arms), worst loop gap tracked for the heartbeat\n",
             if w { "PASS" } else { "FAIL" });
