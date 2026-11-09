@@ -100,7 +100,9 @@ yet say so (doc-only fix, no decision change).
 | `[P-upload]` | QEMU | PASS after the os_image change (test fixed: `os_image` is now a valid type) |
 | batch 26b (`f459d8a4`) | CM5 + Pi | boot PASS, actions PASS, owner rules 10/10 across a power cycle, evidence log PASS, intra-BSS mcast + IPv6 PASS, throughput 106.6 Mbps median; LAN-client 14/18 — the 4 failures are IPv6 (bench v6 router not up after the fortress reboot) |
 | batch 27 (`0616c44a`: watchdog + OTA) | CM5 + Pi | boot PASS, actions PASS, `[WDOG] armed=true worst_loop_gap_ms=330`; Wi-Fi checks failed because the bench Pi's NetworkManager had stopped retrying — **bench issue, AP healthy**; fixed with `tools/diagnostics/pi-ensure-ap.sh` |
-| batch 27b | CM5 + Pi | in progress (results appended below) |
+| batch 27b | CM5 + Pi | owner rules 10/10, evidence log PASS; throughput confounded (Pi on the USB rtw88 adapter; internet speed endpoint 403) — bench fixed |
+| **A1 OS update** | CM5 + relay + serial | **PASS on metal**: corrupted image refused (bad signature); signed SVN-2 image (4.6 MB) uploaded over one kept-alive HTTPS connection, verified on the device, written + re-hashed from the inactive slot; tryboot trial classified itself as TRIAL; committed once AP + WAN were healthy; power cycle → HBoot verified it (ed25519 AND SLH-DSA, svn 2) and the cold boot ran the new build — `metal-evidence/20261110-ota-a1.md` |
+| local WAN-side sink | CM5 + Pi | **defect found**: ~6 Mbps and 64 % GEM `res_err` from a LAN-speed sender (128-descriptor RX ring overruns on line-rate bursts) → AP ring 512, re-measure in batch 28 |
 
 Environment issues found and fixed: the fortress reboot removed the VLAN/v6 bench (re-run
 `docs/design/bench-task26/fortress-vlan-bench.sh setup` + `v6up` + `v6route`); concurrent bench runners
@@ -133,7 +135,7 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 
 | # | Item | Acceptance | Validation |
 |---|---|---|---|
-| A1 | Metal OTA: upload a signed SVN+1 image, trial, commit-on-health; corrupted signature refused; image that never brings up the WAN rolls back | three scenarios pass on CM5 | new `tools/diagnostics/cm5-ota-check.sh` (relay + serial + hq-upload.py) |
+| A1 | Metal OTA: upload a signed SVN+1 image, trial, commit-on-health; corrupted signature refused; image that never brings up the WAN rolls back | **done 2026-11-10** except the rollback scenario (J2) | new `tools/diagnostics/cm5-ota-check.sh` (relay + serial + hq-upload.py) |
 | A2 | Factory pads slot files to 5 MiB; legacy single-image cards refused with a clear reason | `[P-abslot]` + factory self-check | QEMU + factory |
 | A3 | release.yml builds the shipping AP flavour + unsigned-image size gate in CI; phase-ratchet baseline updated | CI green; size gate fails at > 5 MiB | CI |
 | A4 | Persisted TOFU policy/pack key pin + sealed per-type generation floors (2.1 #1, #2) | reflash with a different key refused; older pack refused after erase | QEMU two-boot + metal |
