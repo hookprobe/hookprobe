@@ -14,7 +14,7 @@ Product AP image with persistence (G12), SEC-2 OTP carve-out, signed POLICY/list
 ph.1), sealed evidence log (#54), WPA2 AP + NAT at 100–150 Mbps, IPv6 (PPPoE/DHCP/RA/PD), VLAN/mgmt/ACLs,
 TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 apcore steps 1–3c, runtime watchdog (metal: armed, worst loop gap 330 ms).
 
-> **Audit 2026-11-10:** `docs/design/heqk-audit-2026-11-10.md` (repository-root design docs) — feature truth
+> **Audit 2026-11-10:** `heqk-audit-2026-11-10.md` in the repository-root design docs — feature truth
 > table, ADR compliance, evidence, the autonomous plan (A1–A12) and the human-dependency register.
 
 ### 1. Release blockers — trust chain and supply
