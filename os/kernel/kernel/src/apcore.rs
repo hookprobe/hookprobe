@@ -362,11 +362,25 @@ pub enum Client4 {
     Forwarded(bool),
 }
 
+/// Which LAN port a client frame came in on, and what that port may do beyond routing.
+#[derive(Clone, Copy, Debug)]
+pub struct LanPort {
+    pub pif: If,
+    pub nif: u8,
+    /// Mission Control is served on this port.
+    pub mc: bool,
+    /// Station-to-station relay applies on this port (Wi-Fi: `ap_isolate` makes heqk the relay).
+    pub relay: bool,
+}
+pub const WIFI_PORT: LanPort = LanPort { pif: If::Lan, nif: nat::IF_WIFI, mc: true, relay: true };
+pub const ETH1_PORT: LanPort = LanPort { pif: If::Eth1, nif: nat::IF_ETH1, mc: false, relay: false };
+
 /// Lease binding → parse → IDS → Mission Control (device policy) → station relay → `forward4`, in that order.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn client4<N: ApNic>(
     frame: &[u8],
+    port: LanPort,
     now_s: u64,
     dh: &mut arch_aarch64::dhcpd::ApDhcp,
     cfg: &FwdCfg,
@@ -392,13 +406,13 @@ pub fn client4<N: ApNic>(
     if crate::packet::verdict(frame).1 == crate::packet::DROP {
         return Client4::IdsDrop;
     }
-    if mc_bound(frame, &cfg.our_ip) {
+    if port.mc && mc_bound(frame, &cfg.our_ip) {
         return if crate::devpolicy::check(&smac, crate::devpolicy::Dest::DeviceMgmt) { Client4::ToMc } else { Client4::McDenied };
     }
-    if crate::lanrelay::relay_target(frame, dh) {
+    if port.relay && crate::lanrelay::relay_target(frame, dh) {
         return Client4::Relay;
     }
-    Client4::Forwarded(forward4(frame, If::Lan, nat::IF_WIFI, cfg, pol, nst, c, nbuf, nic, reply))
+    Client4::Forwarded(forward4(frame, port.pif, port.nif, cfg, pol, nst, c, nbuf, nic, reply))
 }
 
 /// `[P-apcore-lan]` — step 3a on the fake NIC.
@@ -421,7 +435,7 @@ pub fn lan_selftest() -> bool {
     crate::shield::load_text(b"", b"");
     crate::devpolicy::load_text(b"");
     let mut f = [0u8; 400];
-    let mut go = |fr: &[u8], dh: &mut ApDhcp, nic: &mut FakeNic, pol: &mut Policy| client4(fr, 100, dh, &cfg, pol, &mut nst, &mut c, &mut nbuf, nic, &mut |_| true);
+    let mut go = |fr: &[u8], dh: &mut ApDhcp, nic: &mut FakeNic, pol: &mut Policy| client4(fr, WIFI_PORT, 100, dh, &cfg, pol, &mut nst, &mut c, &mut nbuf, nic, &mut |_| true);
     // A (leased) to the internet: forwarded through NAT
     let n = frame4(6, [93, 184, 216, 34], 443, &[], &mut f);
     f[26..30].copy_from_slice(&a_ip);
@@ -450,11 +464,14 @@ pub fn lan_selftest() -> bool {
     ab[30..34].copy_from_slice(&b_ip);
     let w0 = nic.wan_n;
     let relay = go(&ab[..n], &mut dh, &mut nic, &mut pol) == Client4::Relay && nic.wan_n == w0;
+    // eth1: the same gates, but no Mission Control and no station relay on the wired port
+    let r_eth = client4(&ab[..n], ETH1_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |_| true);
+    let eth1 = matches!(r_eth, Client4::Forwarded(_)) && client4(&tr[..n], ETH1_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |_| true) == Client4::Trunc;
     crate::shield::reset_stats();
-    let pass = fwd && bind && trunc && to_mc && mc_denied && relay;
+    let pass = fwd && bind && trunc && to_mc && mc_denied && relay && eth1;
     arch_aarch64::_print(format_args!(
-        " [P-apcore-lan] {} — G0 step 3a: the Wi-Fi client IPv4 gate chain (lease binding -> parse -> IDS -> Mission Control + device policy -> station relay -> forward) on the fake NIC: leased client forwarded through NAT={} a frame claiming another IP dropped (anti-hijack)={} truncated frame fail-closed, not a rule drop={} Mission Control on the AP address handed to the MC node={} internet_only device kept off Mission Control={} station -> station relayed, not sent to the internet={}\n",
-        if pass { "PASS" } else { "FAIL" }, fwd, bind, trunc, to_mc, mc_denied, relay
+        " [P-apcore-lan] {} — G0 step 3a: the Wi-Fi client IPv4 gate chain (lease binding -> parse -> IDS -> Mission Control + device policy -> station relay -> forward) on the fake NIC: leased client forwarded through NAT={} a frame claiming another IP dropped (anti-hijack)={} truncated frame fail-closed, not a rule drop={} Mission Control on the AP address handed to the MC node={} internet_only device kept off Mission Control={} station -> station relayed, not sent to the internet={} eth1 port: same gates, no MC / relay, truncation fail-closed={}\n",
+        if pass { "PASS" } else { "FAIL" }, fwd, bind, trunc, to_mc, mc_denied, relay, eth1
     ));
     pass
 }

@@ -3941,7 +3941,7 @@ fn cm5_p10_probe() {
                                         let cfg = apcore::FwdCfg { our_ip, me: ap.bssid, inside_net };
                                         let mut hw = ApHw { up: &up, wh: &whealth };
                                         let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
-                                        let r = apcore::client4(frame, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| wifi_send!(f));
+                                        let r = apcore::client4(frame, apcore::WIFI_PORT, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| wifi_send!(f));
                                         match r {
                                             apcore::Client4::BindDrop => bind_drop += 1,
                                             apcore::Client4::Trunc => trunc_drop += 1, // fail-closed, but NOT a rule drop
@@ -4073,16 +4073,16 @@ fn cm5_p10_probe() {
                                                         lan_tx_fail += 1;
                                                     }
                                                 } else if act == 0 && (up.usable() || unsafe { uplink::MGMT }.is_some()) && n >= 34 && ebuf[12] == 0x08 && ebuf[13] == 0x00 {
-                                                    let mut smac = [0u8; 6];
-                                                    smac.copy_from_slice(&ebuf[6..12]);
-                                                    let mut sip = [0u8; 4];
-                                                    sip.copy_from_slice(&ebuf[26..30]);
-                                                    if { dh.now = cyw43::now_secs(); dh.seen(&smac); !dh.binding_ok(&smac, &sip) } {
-                                                        bind_drop += 1;
-                                                    } else if packet::verdict(&ebuf[..n]).1 == packet::DROP {
-                                                        ids_drop_out += 1;
-                                                    } else {
-                                                        let _ = fwd4!(&ebuf[..n], PIf::Eth1, nat::IF_ETH1, eth1_send);
+                                                    // G0 step 3d: the wired port takes the same gate chain as Wi-Fi (apcore::client4) — now
+                                                    // incl. the truncation fail-close it used to skip; no Mission Control / relay on eth1
+                                                    let cfg = apcore::FwdCfg { our_ip, me: uplink::ETH1_MAC, inside_net };
+                                                    let mut hw = ApHw { up: &up, wh: &whealth };
+                                                    let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
+                                                    match apcore::client4(&ebuf[..n], apcore::ETH1_PORT, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| eth1_send!(f)) {
+                                                        apcore::Client4::BindDrop => bind_drop += 1,
+                                                        apcore::Client4::Trunc => trunc_drop += 1,
+                                                        apcore::Client4::IdsDrop => ids_drop_out += 1,
+                                                        _ => {}
                                                     }
                                                 }
                                             }
