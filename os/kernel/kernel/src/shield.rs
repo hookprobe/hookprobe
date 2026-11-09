@@ -12,7 +12,6 @@
 
 #[cfg(feature = "netsvc")]
 use crate::mcstate::JsonBuf;
-use crate::policysig::POLICY_PUBKEY;
 #[cfg(feature = "netsvc")]
 use core::fmt::Write;
 use hal::BlockDev;
@@ -36,8 +35,104 @@ pub struct Policy {
     pub encrypted_dns_block: bool,
     /// true = iCloud Private Relay hostnames answered NXDOMAIN; false = answered normally and reported (default).
     pub private_relay_block: bool,
+    /// ADR 0057: the network-default protection level (`#! level=`), balanced unless the list says otherwise.
+    pub level: Level,
+    /// ADR 0057: `#! strict_adult=block` — the strict level also blocks the `adult` category.
+    pub strict_adult: bool,
 }
-const POLICY_DEFAULT: Policy = Policy { encrypted_dns_block: true, private_relay_block: false };
+const POLICY_DEFAULT: Policy = Policy { encrypted_dns_block: true, private_relay_block: false, level: Level::Balanced, strict_adult: false };
+
+// ---- ADR 0057 categories + levels --------------------------------------------------------------------
+// Every BLOCK entry is `(fnv(name) & !7) | category`: the 3-bit category rides in the low bits of the sorted
+// hash, so the table stays one u64 per name. Categories come only from the signed list (`#! category=`).
+pub const CAT_MALWARE: u8 = 0;
+pub const CAT_PHISHING: u8 = 1;
+pub const CAT_GENERAL: u8 = 2;
+pub const CAT_ADS: u8 = 3;
+pub const CAT_TRACKERS: u8 = 4;
+pub const CAT_ADULT: u8 = 5;
+pub const CAT_NONE: u8 = 0xff;
+pub fn cat_name(c: u8) -> &'static str {
+    match c {
+        CAT_MALWARE => "malware",
+        CAT_PHISHING => "phishing",
+        CAT_GENERAL => "general",
+        CAT_ADS => "ads",
+        CAT_TRACKERS => "trackers",
+        CAT_ADULT => "adult",
+        _ => "none",
+    }
+}
+fn cat_from(v: &[u8]) -> Option<u8> {
+    Some(match v {
+        b"malware" | b"c2" => CAT_MALWARE,
+        b"phishing" => CAT_PHISHING,
+        b"general" => CAT_GENERAL,
+        b"ads" => CAT_ADS,
+        b"trackers" => CAT_TRACKERS,
+        b"adult" => CAT_ADULT,
+        _ => return None,
+    })
+}
+
+/// A protection level — a fixed, published table of which categories it blocks (ADR 0057 D2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum Level {
+    Relaxed = 0,
+    Balanced = 1,
+    Strict = 2,
+}
+impl Level {
+    pub fn name(self) -> &'static str {
+        ["relaxed", "balanced", "strict"][self as usize]
+    }
+    fn from(v: &[u8]) -> Option<Level> {
+        match v {
+            b"relaxed" => Some(Level::Relaxed),
+            b"balanced" | b"standard" => Some(Level::Balanced),
+            b"strict" => Some(Level::Strict),
+            _ => None,
+        }
+    }
+    /// D2: malware / phishing always; general / ads / trackers from balanced; adult only strict AND opted in.
+    pub fn blocks(self, cat: u8, strict_adult: bool) -> bool {
+        match cat {
+            CAT_MALWARE | CAT_PHISHING => true,
+            CAT_ADULT => self == Level::Strict && strict_adult,
+            _ => self >= Level::Balanced,
+        }
+    }
+}
+/// Malware / phishing: confirmed-malicious classes no level, `off` profile or owner allow relaxes (D4).
+pub fn cat_malicious(c: u8) -> bool {
+    c == CAT_MALWARE || c == CAT_PHISHING
+}
+/// The category of the longest BLOCK match for `name` (CAT_NONE when not listed). Allow rules are ignored.
+pub fn category_of(name: &[u8]) -> u8 {
+    let name = name.strip_suffix(b".").unwrap_or(name);
+    let bt = block_table();
+    let mut start = 0usize;
+    loop {
+        let suf = &name[start..];
+        if !suf.contains(&b'.') {
+            return CAT_NONE;
+        }
+        if let Some(c) = block_cat(bt, fnv(suf)) {
+            return c;
+        }
+        match suf.iter().position(|&c| c == b'.') {
+            Some(p) => start += p + 1,
+            None => return CAT_NONE,
+        }
+    }
+}
+/// The (most severe) category stored for hash `h`, if listed.
+fn block_cat(bt: &[u64], h: u64) -> Option<u8> {
+    let key = h & !7;
+    let i = bt.partition_point(|&e| e < key);
+    (i < bt.len() && bt[i] & !7 == key).then(|| (bt[i] & 7) as u8)
+}
 static mut POLICY: Policy = POLICY_DEFAULT;
 
 /// What the boot loader found (shown in /api/dns and the boot line).
@@ -157,8 +252,8 @@ fn valid_domain(d: &[u8]) -> Option<&[u8]> {
     Some(d)
 }
 
-/// Directive `#! key=value` → policy.
-fn directive(line: &[u8], p: &mut Policy) {
+/// Directive `#! key=value` → policy (and the current section category for the lines that follow).
+fn directive(line: &[u8], p: &mut Policy, cat: &mut u8) {
     let Some(rest) = trim(line).strip_prefix(b"#!") else { return };
     let rest = trim(rest);
     let Some(eq) = rest.iter().position(|&c| c == b'=') else { return };
@@ -166,6 +261,14 @@ fn directive(line: &[u8], p: &mut Policy) {
     match k {
         b"encrypted_dns" => p.encrypted_dns_block = v != b"allow",
         b"private_relay" => p.private_relay_block = v == b"block",
+        // ADR 0057: an unknown category name falls back to `general` (never silently to a weaker class)
+        b"category" => *cat = cat_from(v).unwrap_or(CAT_GENERAL),
+        b"level" => {
+            if let Some(l) = Level::from(v) {
+                p.level = l
+            }
+        }
+        b"strict_adult" => p.strict_adult = v == b"block",
         _ => {}
     }
 }
@@ -179,11 +282,12 @@ struct Builder {
     skipped: u32,
     truncated: u32,
     policy: Policy,
+    cat: u8,
 }
 
 impl Builder {
     fn new(allow_only: bool, policy: Policy) -> Self {
-        Builder { line: [0; 300], ll: 0, overlong: false, allow_only, skipped: 0, truncated: 0, policy }
+        Builder { line: [0; 300], ll: 0, overlong: false, allow_only, skipped: 0, truncated: 0, policy, cat: CAT_GENERAL }
     }
     fn end_line(&mut self) {
         if self.overlong {
@@ -191,7 +295,7 @@ impl Builder {
         } else if self.ll > 0 {
             let l = &self.line[..self.ll];
             if !self.allow_only && l.starts_with(b"#!") {
-                directive(l, &mut self.policy);
+                directive(l, &mut self.policy, &mut self.cat);
             } else {
                 match parse_line(l) {
                     Ok(Some((d, allow))) => {
@@ -206,7 +310,7 @@ impl Builder {
                                     self.truncated += 1;
                                 }
                             } else if BLEN < BLOCK_CAP {
-                                (*core::ptr::addr_of_mut!(BLOCK))[BLEN] = h;
+                                (*core::ptr::addr_of_mut!(BLOCK))[BLEN] = (h & !7) | self.cat as u64;
                                 BLEN += 1;
                             } else {
                                 self.truncated += 1;
@@ -293,7 +397,7 @@ fn signed_message(tag: &[u8; 6], gen: u64, len: u64, digest: &[u8; 32]) -> [u8; 
     m
 }
 
-fn check_sig(magic: &[u8; 8], tag: &[u8; 6], sig: &[u8], key: &[u8; 32], digest_of: &mut dyn FnMut(u64) -> Option<[u8; 32]>) -> Result<(u64, u64), LoadErr> {
+pub(crate) fn check_sig(magic: &[u8; 8], tag: &[u8; 6], sig: &[u8], key: &[u8; 32], digest_of: &mut dyn FnMut(u64) -> Option<[u8; 32]>) -> Result<(u64, u64), LoadErr> {
     if sig.len() < 120 || &sig[..8] != magic {
         return Err(LoadErr::SigMalformed);
     }
@@ -331,12 +435,12 @@ fn stream<D: BlockDev>(dev: &D, lba: u64, len: u64, f: &mut dyn FnMut(&[u8])) ->
 /// Verify (when an operator key is compiled in) and stream one list file into a builder.
 /// Ok(None) = no such file.
 fn load_one<D: BlockDev>(dev: &D, p1: u64, txt: &[u8; 11], sig83: &[u8; 11], magic: &[u8; 8], tag: &[u8; 6], b: &mut Builder) -> Result<Option<(u64, bool)>, LoadErr> {
-    let Some((lba, nsec)) = crate::fat::locate_contiguous(dev, p1, txt) else { return Ok(None) };
+    let Some((lba, nsec)) = crate::artstore::locate(dev, p1, txt) else { return Ok(None) };
     let cap = nsec * 512;
-    let (gen, len, signed) = match POLICY_PUBKEY {
+    let (gen, len, signed) = match crate::policysig::key() {
         Some(key) => {
             let mut sig = [0u8; 512];
-            if crate::fat::locate_contiguous(dev, p1, sig83).and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).is_none() {
+            if crate::artstore::locate(dev, p1, sig83).and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).is_none() {
                 return Err(LoadErr::SigMissing);
             }
             let mut digest_of = |len: u64| -> Option<[u8; 32]> {
@@ -449,14 +553,16 @@ pub enum Verdict {
     Tcp53Refused = 12,
     /// A blocklist hit for a client whose Shield is paused (ADR 0053 action, parity G22): forwarded, logged.
     Paused = 13,
+    /// ADR 0057: a listed name the client's protection level does not block (answered normally, explained).
+    LevelAllowed = 14,
 }
 
 /// Every verdict in discriminant order (counters, labels).
-const ALL: [Verdict; 14] = [Verdict::Allowed, Verdict::Floor, Verdict::AllowRule, Verdict::Blocked, Verdict::BlockedCname, Verdict::Ddr, Verdict::Canary, Verdict::RelaySeen, Verdict::RelayBlocked, Verdict::DohSeen, Verdict::DohBlocked, Verdict::DotRefused, Verdict::Tcp53Refused, Verdict::Paused];
+const ALL: [Verdict; 15] = [Verdict::Allowed, Verdict::Floor, Verdict::AllowRule, Verdict::Blocked, Verdict::BlockedCname, Verdict::Ddr, Verdict::Canary, Verdict::RelaySeen, Verdict::RelayBlocked, Verdict::DohSeen, Verdict::DohBlocked, Verdict::DotRefused, Verdict::Tcp53Refused, Verdict::Paused, Verdict::LevelAllowed];
 
 impl Verdict {
     pub fn name(self) -> &'static str {
-        ["allowed", "floor", "allow-rule", "blocked", "blocked-cname", "ddr", "canary", "relay-seen", "relay-blocked", "doh-seen", "doh-blocked", "dot-refused", "tcp53-refused", "paused"][self as usize]
+        ["allowed", "floor", "allow-rule", "blocked", "blocked-cname", "ddr", "canary", "relay-seen", "relay-blocked", "doh-seen", "doh-blocked", "dot-refused", "tcp53-refused", "paused", "level-allowed"][self as usize]
     }
     /// Answered by the AP instead of forwarded.
     pub fn answered(self) -> bool {
@@ -474,8 +580,21 @@ impl Verdict {
 ///   strict — encrypted DNS / Private Relay that the global POLICY only reports are blocked for it
 pub fn decide_for_dev(name: &[u8], client: u32, mac: &[u8; 6]) -> Verdict {
     use crate::devpolicy::ShieldProfile;
-    let v = match (decide(name), crate::devpolicy::shield_profile(mac)) {
-        (Verdict::Blocked | Verdict::BlockedCname, ShieldProfile::Off) => Verdict::Paused,
+    let p = policy();
+    let prof = crate::devpolicy::shield_profile(mac);
+    // ADR 0057 D3: the device's level (`standard` = the network default from `#! level=`)
+    let lvl = match prof {
+        ShieldProfile::Relaxed | ShieldProfile::Off => Level::Relaxed,
+        ShieldProfile::Balanced => Level::Balanced,
+        ShieldProfile::Strict => Level::Strict,
+        ShieldProfile::Standard => p.level,
+    };
+    let (raw, cat) = classify(name);
+    set_last(cat, lvl);
+    let v = match (at_level(raw, cat, lvl, p.strict_adult), prof) {
+        // off: no ordinary category blocks (malware / phishing still do — D4); Relay / DoH only reported
+        (Verdict::Blocked, ShieldProfile::Off) if !cat_malicious(cat) => Verdict::Paused,
+        (Verdict::LevelAllowed, ShieldProfile::Off) => Verdict::Paused,
         (Verdict::DohBlocked, ShieldProfile::Off) => Verdict::DohSeen,
         (Verdict::RelayBlocked, ShieldProfile::Off) => Verdict::RelaySeen,
         (Verdict::DohSeen, ShieldProfile::Strict) => Verdict::DohBlocked,
@@ -483,13 +602,15 @@ pub fn decide_for_dev(name: &[u8], client: u32, mac: &[u8; 6]) -> Verdict {
         (v, _) => v,
     };
     // ADR 0055 D2: the owner's durable allow / block (below the floor and the encrypted-DNS / relay controls,
-    // which decide() already settled). An owner allow never overrides a confirmed-malicious (IOC) domain.
+    // which classify() already settled). An owner allow never overrides a confirmed-malicious domain: an IOC
+    // listing or a malware / phishing category (ADR 0057 D4).
     let v = match v {
-        Verdict::Blocked | Verdict::BlockedCname if crate::ownerjournal::shield_allowed(name) && !crate::ioc::domain_listed(name) => Verdict::AllowRule,
-        Verdict::Allowed if crate::ownerjournal::shield_blocked(name) => Verdict::Blocked,
+        Verdict::Blocked if crate::ownerjournal::shield_allowed(name) && !cat_malicious(cat) && !crate::ioc::domain_listed(name) => Verdict::AllowRule,
+        Verdict::Allowed | Verdict::LevelAllowed if crate::ownerjournal::shield_blocked(name) => Verdict::Blocked,
         v => v,
     };
-    if v == Verdict::Blocked && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
+    // the session pause (ADR 0053) is an ordinary-category relaxation too: never for malware / phishing
+    if v == Verdict::Blocked && !cat_malicious(cat) && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
 }
 
 /// `[P-shield-profile]` — G22 per-client Shield profiles from the signed DEVICES.TXT.
@@ -511,58 +632,142 @@ pub fn profile_selftest() -> bool {
     pass
 }
 
-pub fn decide_for(name: &[u8], client: u32) -> Verdict {
-    let v = decide(name);
-    if v == Verdict::Blocked && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
+/// `[P-shield-levels]` — ADR 0057: categories from the signed list, fixed level tables, D4 floor.
+pub fn levels_selftest() -> bool {
+    use crate::devpolicy::load_text as dev;
+    macro_rules! lst {
+        () => {
+            "bad.example\n#! category=malware\nc2.example\n#! category=phishing\nphish.example\n#! category=ads\nads.example\n#! category=trackers\ntrk.example\n#! category=adult\nxxx.example\n#! category=nonsense\nodd.example\n"
+        };
+    }
+    let list = lst!().as_bytes();
+
+    load_text(list, b"");
+    let (r, b, s, o, u) = ([0x02, 0, 0, 0, 0, 0x11], [0x02, 0, 0, 0, 0, 0x22], [0x02, 0, 0, 0, 0, 0x33], [0x02, 0, 0, 0, 0, 0x44], [0x02, 0, 0, 0, 0, 0x55]);
+    let parsed = dev(b"02:00:00:00:00:11 full shield=relaxed\n02:00:00:00:00:22 full shield=balanced\n02:00:00:00:00:33 full shield=strict\n02:00:00:00:00:44 full shield=off\n") == 0; // skipped lines
+    use Verdict::*;
+    let cats = category_of(b"x.c2.example") == CAT_MALWARE && category_of(b"phish.example") == CAT_PHISHING && category_of(b"bad.example") == CAT_GENERAL
+        && category_of(b"ads.example") == CAT_ADS && category_of(b"trk.example") == CAT_TRACKERS && category_of(b"xxx.example") == CAT_ADULT
+        && category_of(b"odd.example") == CAT_GENERAL && category_of(b"fine.example") == CAT_NONE;
+    let d = |n: &[u8], m: &[u8; 6]| decide_for_dev(n, 1, m);
+    // relaxed: only malware / phishing
+    let relaxed = d(b"c2.example", &r) == Blocked && d(b"phish.example", &r) == Blocked && d(b"ads.example", &r) == LevelAllowed
+        && d(b"trk.example", &r) == LevelAllowed && d(b"bad.example", &r) == LevelAllowed && d(b"xxx.example", &r) == LevelAllowed && d(b"fine.example", &r) == Allowed;
+    // balanced (explicit + the unlisted default): + general / ads / trackers, adult allowed
+    let balanced = [b, u].iter().all(|m| d(b"c2.example", m) == Blocked && d(b"ads.example", m) == Blocked && d(b"trk.example", m) == Blocked && d(b"bad.example", m) == Blocked && d(b"xxx.example", m) == LevelAllowed);
+    // strict: adult only once the signed list opts in
+    let strict_no_adult = d(b"ads.example", &s) == Blocked && d(b"xxx.example", &s) == LevelAllowed;
+    load_text(concat!(lst!(), "#! strict_adult=block\n").as_bytes(), b"");
+    let strict_adult = d(b"xxx.example", &s) == Blocked && d(b"xxx.example", &b) == LevelAllowed;
+    // off: nothing ordinary blocks, malware / phishing still do (D4)
+    let off = d(b"ads.example", &o) == Paused && d(b"xxx.example", &o) == Paused && d(b"c2.example", &o) == Blocked && d(b"phish.example", &o) == Blocked;
+    // the network default follows `#! level=` (a device on `standard` inherits it; explicit levels do not)
+    load_text(concat!("#! level=relaxed\n", lst!()).as_bytes(), b"");
+    let netdef = policy().level == Level::Relaxed && d(b"ads.example", &u) == LevelAllowed && d(b"ads.example", &b) == Blocked && decide(b"ads.example") == LevelAllowed && d(b"c2.example", &u) == Blocked;
+    // the query log explains: category + level
+    reset_stats();
+    load_text(list, b"");
+    let v = d(b"ads.example", &r);
+    record(1, 0x0A63_000A, 1, b"ads.example", v);
+    let v = d(b"c2.example", &b);
+    record(2, 0x0A63_000A, 1, b"c2.example", v);
+    let mut buf = [0u8; 4096];
+    let mut w = JsonBuf::new(&mut buf);
+    render(&mut w, &|t| t, 8);
+    let j = core::str::from_utf8(w.bytes()).unwrap_or("");
+    let explained = j.contains("\"name\":\"ads.example\",\"verdict\":\"level-allowed\",\"category\":\"ads\",\"level\":\"relaxed\"")
+        && j.contains("\"name\":\"c2.example\",\"verdict\":\"blocked\",\"category\":\"malware\",\"level\":\"balanced\"")
+        && j.contains("\"level\":\"balanced\",\"strict_adult\":false") && j.contains("\"level-allowed\":1");
+    // memory: one u64 per name — the category costs no table space
+    let one_per_name = block_len() == 7;
+    reset_stats();
+    dev(b"");
+    load_text(b"", b"");
+    let pass = parsed && cats && relaxed && balanced && strict_no_adult && strict_adult && off && netdef && explained && one_per_name;
+    arch_aarch64::_print(format_args!(
+        " [P-shield-levels] {} — ADR 0057 transparent protection levels (categories from the signed list, fixed tables): categories parsed (unknown -> general)={} relaxed blocks only malware/phishing={} balanced (default) adds general/ads/trackers={} strict w/o opt-in leaves adult={} strict_adult=block blocks adult on strict only={} off never relaxes malware/phishing={} #! level= sets the network default={} query log carries category+level={} one u64 per name={}\n",
+        if pass { "PASS" } else { "FAIL" }, cats && parsed, relaxed, balanced, strict_no_adult, strict_adult, off, netdef, explained, one_per_name
+    ));
+    pass
 }
 
-/// The decision for a normalised (lowercase, no trailing dot) name.
+pub fn decide_for(name: &[u8], client: u32) -> Verdict {
+    let v = decide(name);
+    if v == Verdict::Blocked && !cat_malicious(unsafe { LAST_CAT }) && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
+}
+
+/// The decision for a normalised (lowercase, no trailing dot) name at the NETWORK level (`#! level=`).
 pub fn decide(name: &[u8]) -> Verdict {
+    let p = policy();
+    let (v, c) = classify(name);
+    set_last(c, p.level);
+    at_level(v, c, p.level, p.strict_adult)
+}
+
+/// ADR 0057: a blocklist hit the level does not block becomes `LevelAllowed` (answered normally, explained).
+fn at_level(v: Verdict, cat: u8, lvl: Level, strict_adult: bool) -> Verdict {
+    if v == Verdict::Blocked && !lvl.blocks(cat, strict_adult) { Verdict::LevelAllowed } else { v }
+}
+
+/// The category + level behind the latest decision (single-threaded datapath), so the query log can say
+/// "blocked: ads, balanced" without re-deciding.
+static mut LAST_CAT: u8 = CAT_NONE;
+static mut LAST_LVL: u8 = Level::Balanced as u8;
+fn set_last(c: u8, l: Level) {
+    unsafe {
+        LAST_CAT = c;
+        LAST_LVL = l as u8;
+    }
+}
+
+/// The level-independent decision + the blocklist category behind a `Blocked` (CAT_NONE otherwise).
+fn classify(name: &[u8]) -> (Verdict, u8) {
     let name = name.strip_suffix(b".").unwrap_or(name);
     if name.is_empty() {
-        return Verdict::Allowed;
+        return (Verdict::Allowed, CAT_NONE);
     }
     if suffix_in(name, FLOOR) {
-        return Verdict::Floor;
+        return (Verdict::Floor, CAT_NONE);
     }
     if name == b"resolver.arpa" || name.ends_with(b".resolver.arpa") {
-        return Verdict::Ddr;
+        return (Verdict::Ddr, CAT_NONE);
     }
     if name == b"use-application-dns.net" {
-        return Verdict::Canary;
+        return (Verdict::Canary, CAT_NONE);
     }
     let p = policy();
     if suffix_in(name, RELAY) {
-        return if p.private_relay_block { Verdict::RelayBlocked } else { Verdict::RelaySeen };
+        return (if p.private_relay_block { Verdict::RelayBlocked } else { Verdict::RelaySeen }, CAT_NONE);
     }
     if suffix_in(name, DOH) {
-        return if p.encrypted_dns_block { Verdict::DohBlocked } else { Verdict::DohSeen };
+        return (if p.encrypted_dns_block { Verdict::DohBlocked } else { Verdict::DohSeen }, CAT_NONE);
     }
     // ADR 0053: a session-made, TTL-bound exception for exactly this name (never for the controls above)
-    if crate::actions::shield_allowed(fnv(name)) {
-        return Verdict::AllowRule;
+    // ADR 0057 D4: never for a malware / phishing listing
+    if crate::actions::shield_allowed(fnv(name)) && !cat_malicious(category_of(name)) {
+        return (Verdict::AllowRule, CAT_NONE);
     }
     // longest match between ALLOW and BLOCK (ties -> allow); a bare TLD never matches
     let (bt, at) = (block_table(), allow_table());
     if bt.is_empty() && at.is_empty() {
-        return Verdict::Allowed;
+        return (Verdict::Allowed, CAT_NONE);
     }
     let mut start = 0usize;
     loop {
         let suf = &name[start..];
         if !suf.contains(&b'.') {
-            return Verdict::Allowed;
+            return (Verdict::Allowed, CAT_NONE);
         }
         let h = fnv(suf);
         if at.binary_search(&h).is_ok() {
-            return Verdict::AllowRule;
+            return (Verdict::AllowRule, CAT_NONE);
         }
-        if bt.binary_search(&h).is_ok() {
-            return Verdict::Blocked;
+        if let Some(c) = block_cat(bt, h) {
+            return (Verdict::Blocked, c);
         }
         match suf.iter().position(|&c| c == b'.') {
             Some(p) => start += p + 1,
-            None => return Verdict::Allowed,
+            None => return (Verdict::Allowed, CAT_NONE),
         }
     }
 }
@@ -891,8 +1096,8 @@ pub fn on_reply_frame(buf: &mut [u8], len: usize, now: u64) -> usize {
 // ---------------------------------------------------------------------------------------------------
 // Visibility (ADR 0052 D7)
 
-const NC: usize = 15;
-const C_UNPARSABLE: usize = 14;
+const NC: usize = 16;
+const C_UNPARSABLE: usize = 15;
 const RING: usize = 256;
 const TOPK: usize = 32;
 const CLIENTS: usize = 64;
@@ -905,9 +1110,12 @@ struct Ent {
     qtype: u16,
     v: u8,
     nl: u8,
+    /// ADR 0057 D5: the category + level behind a blocked / level-allowed answer (CAT_NONE otherwise)
+    cat: u8,
+    lvl: u8,
     name: [u8; NAME_MAX],
 }
-const ENT0: Ent = Ent { t: 0, client: 0, qtype: 0, v: 0, nl: 0, name: [0; NAME_MAX] };
+const ENT0: Ent = Ent { t: 0, client: 0, qtype: 0, v: 0, nl: 0, cat: CAT_NONE, lvl: 0, name: [0; NAME_MAX] };
 
 #[derive(Clone, Copy)]
 struct Top {
@@ -968,7 +1176,11 @@ fn record(t: u64, client: u32, qtype: u16, name: &[u8], v: Verdict) {
     let s = st();
     s.c[v as usize] += 1;
     let nl = name.len().min(NAME_MAX);
-    let mut e = Ent { t, client, qtype, v: v as u8, nl: nl as u8, name: [0; NAME_MAX] };
+    let (cat, lvl) = match v {
+        Verdict::Blocked | Verdict::BlockedCname | Verdict::LevelAllowed | Verdict::Paused | Verdict::Tcp53Refused => unsafe { (LAST_CAT, LAST_LVL) },
+        _ => (CAT_NONE, 0),
+    };
+    let mut e = Ent { t, client, qtype, v: v as u8, nl: nl as u8, cat, lvl, name: [0; NAME_MAX] };
     e.name[..nl].copy_from_slice(&name[..nl]);
     s.ring[(s.rhead + s.rlen) % RING] = e;
     if s.rlen < RING {
@@ -1063,8 +1275,8 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
         }
         None => out.raw("null"),
     }
-    let _ = write!(out, "}},\"policy\":{{\"encrypted_dns\":\"{}\",\"private_relay\":\"{}\"}},\"counters\":{{",
-        if p.encrypted_dns_block { "block" } else { "allow" }, if p.private_relay_block { "block" } else { "report" });
+    let _ = write!(out, "}},\"policy\":{{\"encrypted_dns\":\"{}\",\"private_relay\":\"{}\",\"level\":\"{}\",\"strict_adult\":{}}},\"counters\":{{",
+        if p.encrypted_dns_block { "block" } else { "allow" }, if p.private_relay_block { "block" } else { "report" }, p.level.name(), p.strict_adult);
     for k in 0..NC {
         let name = if k == C_UNPARSABLE { "unparsable" } else { ALL[k].name() };
         let _ = write!(out, "{}\"{}\":{}", if k > 0 { "," } else { "" }, name, s.c[k]);
@@ -1104,7 +1316,11 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
         let _ = write!(out, ",\"qtype\":{},\"name\":", e.qtype);
         out.string(core::str::from_utf8(&e.name[..e.nl as usize]).unwrap_or("?"));
         let vn = ALL[e.v as usize % ALL.len()].name();
-        let _ = write!(out, ",\"verdict\":\"{}\"}}", vn);
+        let _ = write!(out, ",\"verdict\":\"{}\"", vn);
+        if e.cat != CAT_NONE {
+            let _ = write!(out, ",\"category\":\"{}\",\"level\":\"{}\"", cat_name(e.cat), ["relaxed", "balanced", "strict"][e.lvl as usize % 3]);
+        }
+        out.raw("}");
         if out.overflow || out.len + 48 > out.capacity() {
             out.rewind(m);
             break;

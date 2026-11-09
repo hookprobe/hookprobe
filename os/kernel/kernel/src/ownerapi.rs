@@ -11,7 +11,7 @@
 //! journal status, and the recent refusals.
 use crate::actionapi::{form_get, origin_ok, Ctx};
 use crate::devpolicy::{Pol, ShieldProfile};
-use crate::ownerjournal::{self as oj, Kind, Record, OP_REMOVE, OP_SET};
+use crate::ownerjournal::{self as oj, Kind, OP_REMOVE, OP_SET};
 use hal::{BlockDev, BlockErr};
 
 /// The journal's block device: the AP image installs its eMMC handle (armed for the journal region only);
@@ -40,6 +40,20 @@ impl BlockDev for RamStore {
 static mut RAM: RamStore = RamStore { s: [[0u8; 512]; 64] };
 static mut DEV: Option<&'static mut dyn BlockDev> = None;
 static mut J: Option<oj::Journal> = None;
+
+/// ADR 0056 D6: a durable audit record for an artifact activation (or its rollback). Returns the journal
+/// seq, or None when the journal is RAM-only / full / failed (the activation itself is not undone).
+pub fn audit_artifact(ty: &str, value: u8, reason: &[u8], session: [u8; 4], ms: u64) -> Option<u64> {
+    let mut r = oj::rec(Kind::Artifact, OP_SET, ty.as_bytes(), value, reason);
+    r.session = u32::from_le_bytes(session);
+    r.ms = ms;
+    unsafe {
+        match (J.as_mut(), DEV.as_mut()) {
+            (Some(j), Some(d)) => j.append(&mut **d, r).ok(),
+            _ => None,
+        }
+    }
+}
 static mut PERSISTENT: bool = false;
 static mut LAST_REPLAY: oj::Replay = oj::Replay { records: 0, damaged: false, full: false };
 
@@ -164,6 +178,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     // target + value (and the before/after preview)
     let mut tbuf = [0u8; oj::TARGET_MAX];
     let (tlen, value, before, after, shadow): (usize, u8, &'static str, &'static str, &'static str) = match kind {
+        Kind::Artifact => return refuse(c, "kind"),
         Kind::DevicePolicy | Kind::ShieldProfile => {
             let Some(m) = mac(target_s) else { return refuse(c, "target") };
             tbuf[..6].copy_from_slice(&m);
@@ -182,15 +197,15 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
                 let sh = if opc == OP_SET && would != v { "signed DEVICES.TXT line (pinned)" } else { "" };
                 (6, v as u8, pol_name(now), pol_name(would), sh)
             } else {
-                let v = match (opc, value_s) {
+                let v = match (opc, ShieldProfile::from_name(value_s.as_bytes())) {
                     (OP_REMOVE, _) => ShieldProfile::Standard,
-                    (_, "standard") => ShieldProfile::Standard,
-                    (_, "off") => ShieldProfile::Off,
-                    (_, "strict") => ShieldProfile::Strict,
+                    (_, Some(v)) => v,
                     _ => return refuse(c, "value"),
                 };
                 let now = crate::devpolicy::shield_profile(&m);
-                (6, v as u8, now.name(), v.name(), "")
+                let pinned = crate::devpolicy::signed_policy(&m).1;
+                let (would, sh) = if pinned && opc == OP_SET { (now, "signed DEVICES.TXT line (pinned)") } else { (v, "") };
+                (6, v as u8, now.name(), would.name(), sh)
             }
         }
         Kind::ShieldAllow | Kind::ShieldBlock => {
@@ -201,9 +216,9 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
             }
             let n = lower.len();
             let now = crate::shield::decide(&tbuf[..n]).name();
-            let malicious = crate::ioc::domain_listed(&tbuf[..n]);
+            let malicious = crate::ioc::domain_listed(&tbuf[..n]) || crate::shield::cat_malicious(crate::shield::category_of(&tbuf[..n]));
             let (after, sh) = match (kind, opc) {
-                (Kind::ShieldAllow, OP_SET) if malicious => (now, "threat-intel IOC (confirmed malicious)"),
+                (Kind::ShieldAllow, OP_SET) if malicious => (now, "confirmed malicious (threat-intel IOC or malware / phishing list)"),
                 (Kind::ShieldAllow, OP_SET) => ("allow-rule", ""),
                 (Kind::ShieldBlock, OP_SET) => ("blocked", ""),
                 _ => ("baseline", ""),
@@ -269,10 +284,16 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
                 let eff = crate::devpolicy::policy_of(&m) == v;
                 (v.name(), eff, if eff { "" } else { "signed DEVICES.TXT line (pinned)" })
             }
-            Some(Kind::ShieldProfile) => (["standard", "off", "strict"][(r.value as usize).min(2)], true, ""),
+            Some(Kind::ShieldProfile) => {
+                let v = ShieldProfile::from_u8(r.value).unwrap_or(ShieldProfile::Standard);
+                let mut m = [0u8; 6];
+                m.copy_from_slice(&t[..6]);
+                let eff = crate::devpolicy::shield_profile(&m) == v;
+                (v.name(), eff, if eff { "" } else { "signed DEVICES.TXT line (pinned)" })
+            }
             Some(Kind::ShieldAllow) => {
-                let mal = crate::ioc::domain_listed(t);
-                ("allow", !mal, if mal { "threat-intel IOC (confirmed malicious)" } else { "" })
+                let mal = crate::ioc::domain_listed(t) || crate::shield::cat_malicious(crate::shield::category_of(t));
+                ("allow", !mal, if mal { "confirmed malicious (threat-intel IOC or malware / phishing list)" } else { "" })
             }
             _ => ("block", true, ""),
         };

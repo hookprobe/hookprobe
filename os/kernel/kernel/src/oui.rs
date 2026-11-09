@@ -8,7 +8,6 @@
 //!   `AABBCC Vendor Name`      — `#` comments and blank lines ignored; anything else is skipped and counted.
 //! OUI.SIG = the shared operator signature format with its own domain ("HQOUI1"), so no other signed file
 //! (BLOCK / IOC / POLICY …) ever verifies as an OUI pack. Lookups are read-only after boot.
-use crate::policysig::POLICY_PUBKEY;
 use hal::BlockDev;
 
 pub const MAX_FILE: u64 = 4 << 20;
@@ -230,7 +229,7 @@ fn signed_message(gen: u64, len: u64, digest: &[u8; 32]) -> [u8; 54] {
     m
 }
 
-fn check_sig(sig: &[u8], key: &[u8; 32], digest_of: &mut dyn FnMut(u64) -> Option<[u8; 32]>) -> Result<(u64, u64), crate::shield::LoadErr> {
+pub(crate) fn check_sig(sig: &[u8], key: &[u8; 32], digest_of: &mut dyn FnMut(u64) -> Option<[u8; 32]>) -> Result<(u64, u64), crate::shield::LoadErr> {
     use crate::shield::LoadErr;
     if sig.len() < 120 || &sig[..8] != b"HQOSIG1\0" {
         return Err(LoadErr::SigMalformed);
@@ -274,12 +273,12 @@ pub fn load<D: BlockDev>(dev: &D) -> Info {
     let mut sec = [0u8; 512];
     let p1 = if dev.read_block(0, &mut sec).is_ok() { crate::store::parse_mbr(&sec)[0].start } else { 0 };
     if p1 != 0 {
-        if let Some((lba, nsec)) = crate::fat::locate_contiguous(dev, p1, b"OUI     TXT") {
+        if let Some((lba, nsec)) = crate::artstore::locate(dev, p1, b"OUI     TXT") {
             let cap = nsec * 512;
-            let r = match POLICY_PUBKEY {
+            let r = match crate::policysig::key() {
                 Some(key) => {
                     let mut sig = [0u8; 512];
-                    if crate::fat::locate_contiguous(dev, p1, b"OUI     SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).is_none() {
+                    if crate::artstore::locate(dev, p1, b"OUI     SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).is_none() {
                         Err(crate::shield::LoadErr::SigMissing)
                     } else {
                         let mut dig = |len: u64| -> Option<[u8; 32]> {

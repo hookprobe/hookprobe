@@ -14,7 +14,6 @@
 //! V1 lessons: MACs are validated strictly (V1 fed unvalidated MACs into SQL/OVS); a refused file loads
 //! nothing (every device stays `full`) and says so.
 
-use crate::policysig::POLICY_PUBKEY;
 use hal::BlockDev;
 
 pub const CAP: usize = 256;
@@ -58,14 +57,30 @@ impl Pol {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
 pub enum ShieldProfile {
+    /// The network default level (`#! level=` in BLOCK.TXT, balanced unless set) — ADR 0057.
     Standard = 0,
     Off = 1,
     Strict = 2,
+    Relaxed = 3,
+    Balanced = 4,
 }
 
 impl ShieldProfile {
     pub fn name(self) -> &'static str {
-        ["standard", "off", "strict"][self as usize]
+        ["standard", "off", "strict", "relaxed", "balanced"][self as usize]
+    }
+    pub fn from_u8(v: u8) -> Option<ShieldProfile> {
+        [ShieldProfile::Standard, ShieldProfile::Off, ShieldProfile::Strict, ShieldProfile::Relaxed, ShieldProfile::Balanced].get(v as usize).copied()
+    }
+    pub fn from_name(v: &[u8]) -> Option<ShieldProfile> {
+        Some(match v {
+            b"standard" => ShieldProfile::Standard,
+            b"off" => ShieldProfile::Off,
+            b"strict" => ShieldProfile::Strict,
+            b"relaxed" => ShieldProfile::Relaxed,
+            b"balanced" => ShieldProfile::Balanced,
+            _ => return None,
+        })
     }
 }
 
@@ -146,10 +161,8 @@ pub fn shield_profile(mac: &[u8; 6]) -> ShieldProfile {
     let t = unsafe { &(&*core::ptr::addr_of!(T))[..N] };
     let (signed, pinned) = t.binary_search_by(|e| e.mac.cmp(mac)).map_or((ShieldProfile::Standard, false), |i| (t[i].shield, t[i].pin));
     // ADR 0055: an owner profile applies unless the operator pinned this device's line
-    match crate::ownerjournal::shield_profile(mac) {
-        Some(0) if !pinned => ShieldProfile::Standard,
-        Some(1) if !pinned => ShieldProfile::Off,
-        Some(2) if !pinned => ShieldProfile::Strict,
+    match crate::ownerjournal::shield_profile(mac).and_then(ShieldProfile::from_u8) {
+        Some(p) if !pinned => p,
         _ => signed,
     }
 }
@@ -226,12 +239,7 @@ fn parse_line(line: &[u8]) -> Result<Option<Ent>, ()> {
             if have_shield {
                 return Err(());
             }
-            e.shield = match v {
-                b"standard" => ShieldProfile::Standard,
-                b"off" => ShieldProfile::Off,
-                b"strict" => ShieldProfile::Strict,
-                _ => return Err(()),
-            };
+            e.shield = ShieldProfile::from_name(v).ok_or(())?;
             have_shield = true;
         } else {
             if have_label || tok.len() > 31 || !tok.iter().all(|&c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'_' | b'-')) {
@@ -291,7 +299,7 @@ fn signed_message(gen: u64, len: u64, digest: &[u8; 32]) -> [u8; 54] {
     m
 }
 
-fn check_sig(sig: &[u8], key: &[u8; 32], body: &[u8]) -> Result<u64, crate::shield::LoadErr> {
+pub(crate) fn check_sig(sig: &[u8], key: &[u8; 32], body: &[u8]) -> Result<u64, crate::shield::LoadErr> {
     use crate::shield::LoadErr;
     if sig.len() < 120 || &sig[..8] != b"HQDSIG1\0" {
         return Err(LoadErr::SigMalformed);
@@ -317,7 +325,7 @@ pub fn load<D: BlockDev>(dev: &D) -> Info {
     let mut info = Info::default();
     let mut sec = [0u8; 512];
     let p1 = if dev.read_block(0, &mut sec).is_ok() { crate::store::parse_mbr(&sec)[0].start } else { 0 };
-    let Some((lba, nsec)) = (p1 != 0).then(|| crate::fat::locate_contiguous(dev, p1, b"DEVICES TXT")).flatten() else {
+    let Some((lba, nsec)) = crate::artstore::locate(dev, p1, b"DEVICES TXT") else {
         unsafe { INFO = info };
         return info;
     };
@@ -332,10 +340,10 @@ pub fn load<D: BlockDev>(dev: &D) -> Info {
         }
         buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
     }
-    let body_len = match POLICY_PUBKEY {
+    let body_len = match crate::policysig::key() {
         Some(key) => {
             let mut sig = [0u8; 512];
-            let r = match crate::fat::locate_contiguous(dev, p1, b"DEVICES SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()) {
+            let r = match crate::artstore::locate(dev, p1, b"DEVICES SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()) {
                 None => Err(crate::shield::LoadErr::SigMissing),
                 Some(()) => check_sig(&sig, &key, &buf[..n]),
             };

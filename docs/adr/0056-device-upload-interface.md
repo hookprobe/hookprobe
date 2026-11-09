@@ -72,6 +72,28 @@ flow (`otaflip` / `abcommit`), which already rolls back an unhealthy trial boot.
 Every begin / finish / activate / abort / refusal is a record in the ADR 0055 journal's audit trail (actor,
 time, type, size, digest, generation before/after, result, reason).
 
+## Implementation — phase 1 (2026-11-09, data packs)
+
+- `artstore.rs` (D5): Store region = 2 manifest sectors (SHA-256-sealed, alternating, highest valid `seq`
+  wins) + two halves with one slot per type (signature sector + file at its cap). `artstore::locate` replaces
+  `fat::locate_contiguous` in the shield / ioc / oui / devices / rules loaders. A reflash rewrites the whole
+  512 MiB image (the Store region included), so a reflash always resets the store.
+- `upload.rs` + `/api/upload/{begin,chunk,finish,activate,abort}`, `GET /api/upload` (D3). The upload is a
+  container: the pack's 512-byte `.SIG` followed by the file (`cat X.SIG X.TXT`). Chunks are ≤ 2 KiB (the
+  request buffer is 4 KiB) — `POST /api/upload/chunk?id=&off=` (the HTTP parser has no PUT). Chunks carry the
+  session + CSRF + Origin guards and are bound to the upload id and the exact offset; the form steps also
+  carry the per-session `seq`.
+- D4: the container SHA-256, then the module's own verifier on the staged bytes, then generation ≥ the active
+  one. No dry-run parse at finish: the parse counts come from the real loader at activation, which rolls back
+  if it refuses.
+- D6: every step lands in a RAM trail (`GET /api/upload` → `recent`); every activation and every rollback is a
+  durable owner-journal record (kind `artifact`, audit-only, never a rule) → `activations`.
+- The AP image gives the store its own eMMC handle whose Gate-2 window covers only Store ∪ Staging.
+- Not in phase 1: `policy` (it carries WAN / ACL / management — next boot only, needs its own review),
+  `os_image` (phase 2, the existing tryboot path). An image without an operator key refuses every upload.
+- Client: `os/kernel/tools/hq-upload.py` (owner side; never signs, never sees a private key). Self-tests
+  `[P-artstore]`, `[P-upload]`; metal check `tools/diagnostics/cm5-upload-check.sh`.
+
 ## Consequences
 
 - Fresh intel, lists and rules without re-flashing; OTA delivery becomes possible; G22 list refresh closes.

@@ -200,7 +200,7 @@ fn signed_message(gen: u64, len: u64, digest: &[u8; 32]) -> [u8; 54] {
     m
 }
 
-fn check_sig(sig: &[u8], key: &[u8; 32], body: &[u8]) -> Option<(u64, usize)> {
+pub(crate) fn check_sig(sig: &[u8], key: &[u8; 32], body: &[u8]) -> Option<(u64, usize)> {
     if sig.len() < 120 || &sig[..8] != b"HQRSIG1\0" {
         return None;
     }
@@ -225,7 +225,7 @@ pub fn load<D: hal::BlockDev>(dev: &D) -> PackInfo {
     let mut info = PackInfo::default();
     let mut sec = [0u8; 512];
     let p1 = if dev.read_block(0, &mut sec).is_ok() { crate::store::parse_mbr(&sec)[0].start } else { 0 };
-    let Some((lba, nsec)) = (p1 != 0).then(|| crate::fat::locate_contiguous(dev, p1, b"RULES   BIN")).flatten() else {
+    let Some((lba, nsec)) = crate::artstore::locate(dev, p1, b"RULES   BIN") else {
         unsafe { INFO = info };
         return info;
     };
@@ -241,9 +241,9 @@ pub fn load<D: hal::BlockDev>(dev: &D) -> PackInfo {
         buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
     }
     let mut body_len = n;
-    if let Some(key) = crate::policysig::POLICY_PUBKEY {
+    if let Some(key) = crate::policysig::key() {
         let mut sig = [0u8; 512];
-        match crate::fat::locate_contiguous(dev, p1, b"RULES   SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).and_then(|_| check_sig(&sig, &key, &buf[..n])) {
+        match crate::artstore::locate(dev, p1, b"RULES   SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).and_then(|_| check_sig(&sig, &key, &buf[..n])) {
             Some((g, l)) => {
                 info.signed = true;
                 info.generation = g;
