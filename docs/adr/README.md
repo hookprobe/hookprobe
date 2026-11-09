@@ -62,3 +62,5 @@ bootc/Debian Linux tier remain as dated records and apply only to `legacy/linux-
 | [0052](0052-shield-v2-dns-protection-on-heqk.md) | Shield v2: DNS protection on heqk | Accepted / implemented | — |
 | [0053](0053-operator-write-actions-on-device.md) | Operator write actions in on-device Mission Control | Accepted with modifications | — |
 | [0054](0054-ap-provisioning-per-device-credential.md) | Wi-Fi AP provisioning: per-device setup credential | Accepted (increment 1 built) | — |
+| [0055](0055-owner-policy-journal.md) | Owner policy journal: durable owner settings from Mission Control | Proposed contract (direction approved 2026-11-09); amends 0053 D1/S7 | — |
+| [0056](0056-device-upload-interface.md) | Device-side upload interface (signed artifacts over HTTPS) | Proposed contract (direction approved 2026-11-09); flasher countersign pending | — |
