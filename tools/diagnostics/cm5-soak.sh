@@ -12,6 +12,7 @@ mkdir -p "$OUT"; CSV="$OUT/soak.csv"; J=$(mktemp); trap 'rm -f "$J"' EXIT
 echo "t,elapsed_s,health,seen,forwarded,dropped,detections,clients,dns_inspected,mbps,dns_ok,serial_events" > "$CSV"
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
 login() { curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$MC/api/login" -c "$J"; }
+"$(dirname "$0")/pi-ensure-ap.sh" "$PI" || echo "soak: WARNING — the Pi is not on the CM5 AP"
 IF=$(pi "ip -4 route get 10.99.0.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p'" 2>/dev/null)
 echo "soak: ${HOURS} h, sample every ${IV} s, client interface ${IF:-?}, out $OUT"
 # background browsing load on the Pi for the whole soak
