@@ -120,6 +120,9 @@ DNS=$(curl -s -m 10 $C "$B/api/dns")
 echo "$DNS" | jget "'lists' in d and 'counters' in d and isinstance(d['recent'],list) and d['policy']['encrypted_dns'] in ('block','allow')" | grep -q True \
   && ok "Shield v2 /api/dns answers (lists, counters, policy, query log)" || bad "/api/dns: $DNS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/dns")" = 401 ] && ok "/api/dns requires the owner session" || bad "/api/dns reachable without a session"
+OR=$(curl -s -m 10 $C "$B/api/owner-rules")
+echo "$OR" | jget "d['persistent'] is False and isinstance(d['rules'],list) and 'journal' in d" | grep -q True && ok "ADR 0055 /api/owner-rules answers (RAM journal in QEMU: persistent=false)" || bad "/api/owner-rules: $OR"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/owner-rules")" = 401 ] && ok "/api/owner-rules requires the owner session" || bad "/api/owner-rules reachable without a session"
 EN=$(curl -s -m 10 $C "$B/api/engines")
 echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=5 for e in d['engines'])" | grep -q True \
   && ok "/api/engines: the device's real detection tiers, signature hits counted" || bad "/api/engines: $EN"

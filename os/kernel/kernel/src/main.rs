@@ -62,6 +62,10 @@ mod fpdb;
 mod devid;
 mod oui;
 mod lanrelay;
+mod datavol;
+mod ownerjournal;
+#[cfg(feature = "netsvc")]
+mod ownerapi;
 mod discovery;
 #[cfg(feature = "netsvc")]
 mod actionapi;
@@ -1677,11 +1681,13 @@ fn cm5_prod_service() -> ! {
             }
         }
     };
+    // Fresh per-handshake ephemerals from the TRNG — drawn by the control plane ONLY when it builds a new
+    // msg1 (first handshake, a retry after backoff, the 24 h rekey). One draw reused for every handshake
+    // would repeat the ephemeral X25519 / ML-KEM keys and encapsulation randomness.
     #[cfg(all(feature = "netmetal", feature = "securechannel"))]
-    let cp_irand = crate::securechannel::InitiatorRandomness::from_entropy(
-        &mut crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new()),
-    )
-    .ok();
+    let mut cp_fresh = || {
+        crate::securechannel::InitiatorRandomness::from_entropy(&mut crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new())).ok()
+    };
     // M6 B2 evidence export (`prod-export` = prod-full + netmetal): created when the control
     // plane is Established with an MSSP-assigned tenant; until then the device is air-gapped
     // (should_export=false) and evidence only persists locally.
@@ -2039,10 +2045,10 @@ fn cm5_prod_service() -> ! {
             // gem::tx_frame path (the Linux-macb single-owner rule; NOT a 2nd ring walker). The
             // full handshake completes against a live host MSSP-sim; here msg1 hits the wire.
             #[cfg(all(feature = "netmetal", feature = "securechannel"))]
-            if let (Some(c), Some(ir)) = (cp.as_mut(), cp_irand.as_ref()) {
+            if let Some(c) = cp.as_mut() {
                 let link = arch_aarch64::gem::phy_link_up(0);
                 let now_ms = (now.wrapping_sub(t0) / (cntfrq / 1000).max(1)) as i64;
-                c.tick(now_ms, link, ir);
+                c.tick(now_ms, link, &mut cp_fresh);
                 #[cfg(feature = "prod-mc")]
                 {
                     mcserve::state().cloud_linked = c.established();
@@ -3582,6 +3588,37 @@ fn cm5_p10_probe() {
                         // window, restored here, re-persisted every 5 min while dirty).
                         #[cfg(feature = "appersist")]
                         let mut pf = prodfull::ProdFull::init();
+                        // ADR 0055: the owner policy journal in the DataVolume `Journal` region (#54) — its own eMMC
+                        // handle, Gate 2 armed for that region only. No SRK or no DataVolume: a RAM journal, said so.
+                        #[cfg(feature = "appersist")]
+                        {
+                            static mut OJ_DEV: Option<arch_aarch64::emmc::Emmc> = None;
+                            let mut placed = false;
+                            if let (Some(srk), Ok(mut dev)) = (seal_srk(), arch_aarch64::emmc::Emmc::probe()) {
+                                let mut mbr = [0u8; 512];
+                                use hal::BlockDev;
+                                if dev.read_block(0, &mut mbr).is_ok() {
+                                    if let Some(dv) = datavol::DataVol::from_mbr(&mbr) {
+                                        let (blo, bhi) = dv.bounds();
+                                        dev.set_data_volume(blo, bhi);
+                                        let (lo, hi) = dv.region(datavol::Region::Journal);
+                                        let (wlo, whi) = dev.arm_write_window(lo, hi);
+                                        if (wlo, whi) == (lo, hi) {
+                                            let d: &'static mut dyn hal::BlockDev = unsafe { (*core::ptr::addr_of_mut!(OJ_DEV)).insert(dev) };
+                                            let r = ownerapi::install(d, lo, hi, &srk);
+                                            kprint!(" [AP-OWNER] owner policy journal: LBA {}..{} (DataVolume), {} records replayed, {} rules active{}{}\n",
+                                                lo, hi, r.records, ownerjournal::rule_count(),
+                                                if r.damaged { " — a damaged/torn tail was dropped" } else { "" }, if r.full { " — FULL" } else { "" });
+                                            placed = true;
+                                        }
+                                    }
+                                }
+                            }
+                            if !placed {
+                                ownerapi::install_ram(&[0u8; 32]);
+                                kprint!(" [AP-OWNER] owner policy journal: no device key or no DataVolume — RAM only (rules last until reboot)\n");
+                            }
+                        }
                         #[cfg(feature = "mcserve")]
                         let mut mcn: Option<mcserve::McNode> = {
                             if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
@@ -6523,6 +6560,10 @@ pub extern "C" fn kmain() -> ! {
         let _ = ioc::selftest();
         let _ = oui::selftest();
         let _ = lanrelay::selftest();
+        let _ = datavol::selftest();
+        let _ = ownerjournal::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = ownerapi::selftest();
         let _ = rules::jit_call_selftest();
         let _ = behavioral::beacon_busy_selftest();
         let _ = devpolicy::selftest();

@@ -672,6 +672,15 @@ pub struct CipherState {
 }
 
 impl CipherState {
+    /// Volatile-zero the key and exhaust the counter (the state can never encrypt again).
+    pub fn wipe(&mut self) {
+        for b in self.k.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+        self.n = u64::MAX;
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Noise §12.3 nonce for ChaChaPoly: 4 zero bytes followed by the 64-bit
     /// counter in little-endian. (This exact layout is load-bearing — a different
     /// encoding silently breaks interop AND the nonce-uniqueness argument.)
@@ -1240,6 +1249,18 @@ pub struct Session {
     pub send: CipherState,
     pub recv: CipherState,
     pub handshake_hash: [u8; 32],
+}
+
+impl Session {
+    /// Overwrite both transport keys (and the handshake hash) before the session is discarded — the
+    /// rekey path (controlplane: 24 h re-handshake) must not leave an old key in memory.
+    pub fn wipe(&mut self) {
+        self.send.wipe();
+        self.recv.wipe();
+        for b in self.handshake_hash.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
