@@ -482,6 +482,13 @@ pub fn decide_for_dev(name: &[u8], client: u32, mac: &[u8; 6]) -> Verdict {
         (Verdict::RelaySeen, ShieldProfile::Strict) => Verdict::RelayBlocked,
         (v, _) => v,
     };
+    // ADR 0055 D2: the owner's durable allow / block (below the floor and the encrypted-DNS / relay controls,
+    // which decide() already settled). An owner allow never overrides a confirmed-malicious (IOC) domain.
+    let v = match v {
+        Verdict::Blocked | Verdict::BlockedCname if crate::ownerjournal::shield_allowed(name) && !crate::ioc::domain_listed(name) => Verdict::AllowRule,
+        Verdict::Allowed if crate::ownerjournal::shield_blocked(name) => Verdict::Blocked,
+        v => v,
+    };
     if v == Verdict::Blocked && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
 }
 
