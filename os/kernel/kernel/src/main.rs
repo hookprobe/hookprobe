@@ -12693,9 +12693,15 @@ fn flaky_component(attempt: u32) -> bool {
 fn driver_server_demo() -> bool {
     kprint!(" [DRV] driver isolation: an EL0 driver server drives device MMIO via a capability\n");
     let mmu = arch_aarch64::Mmu;
+    // Declare only the stub this build uses (an unused extern static is dead_code under the
+    // clippy ratchet's netsvc/mcserve passes).
+    #[cfg(not(feature = "cloud"))]
     extern "C" {
         static driver_stub: u8;
         static driver_stub_end: u8;
+    }
+    #[cfg(feature = "cloud")]
+    extern "C" {
         static driver_stub_pci: u8;
         static driver_stub_pci_end: u8;
     }
