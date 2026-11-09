@@ -83,7 +83,7 @@ jobs:
         run: python3 tools/gen-validation.py && python3 tools/gen-readme-matrix.py
       - name: Propose the matrix update (PR, never a direct push)
         if: success()
-        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1   # v8.1.1
+        uses: peter-evans/create-pull-request@15733dbdfeedb4f7fdb73d13c6f5ac83b710fab8   # v8.1.2
         with:
           branch: bot/validation-matrix
           title: "docs(heqk): refresh validation matrix from the nightly QEMU run"
