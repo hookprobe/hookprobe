@@ -62,6 +62,7 @@ mod fpdb;
 mod devid;
 mod oui;
 mod lanrelay;
+mod apcore;
 mod artstore;
 mod datavol;
 mod ownerjournal;
@@ -3367,7 +3368,7 @@ fn cm5_p10_probe() {
                         use arch_aarch64::nat;
                         let mut nst = nat::NatStats::default();
                         let inside_net = [10u8, 99, 0];
-                        let (mut nat_tx_fail, mut nat_wifi_tx_fail) = (0u32, 0u32);
+                        let mut nat_wifi_tx_fail = 0u32;
                         let (mut wan_retries, mut last_wan_try) = (0u32, 0u64);
                         let (mut wan_leased_at, mut wan_renewals) = (0u64, 0u32);
                         // IDS/IPS on BOTH NAT legs (packet::verdict = the signed rule plane, same code
@@ -3439,13 +3440,8 @@ fn cm5_p10_probe() {
                         // Parity G16: WAN health probes (hysteresis) drive the failover, not ARP liveness alone.
                         let mut whealth = wanhealth::WanHealth::new();
                         let (mut wh_slot, mut wh_out, mut wh_sent_at): (u32, Option<(u16, bool)>, u64) = (0, None, 0);
-                        let mut pol_drop = [0u32; 4];
-                        let mut pol_block = [0u32; 4];
-                        let mut pol_via_mgmt = 0u32; // flows routed out the management sub-interface
-                        let mut pol_mgmt_nh_miss = 0u32; // routed to mgmt but the next hop is not resolved yet
-                        let mut pol_block_as_drop = 0u32; // `out` blocks after un-NAT act as drops (see the note)
                         let mut last_wan_probe = 0u64;
-                        let (mut rej_win, mut rej_n) = (0u64, 0u32); // `wan in` reject rate limit
+                        let mut rej = apcore::RejWin::default(); // `wan in` reject rate limit (20/s)
                         let mut wan_martian = 0u32; // WAN IPv4 sources that cannot come from the internet (dropped)
                         let mut mbuf = [0u8; 1600];
                         use hal::policy::{Act as PAct, Dir as PDir, If as PIf};
@@ -3453,137 +3449,66 @@ fn cm5_p10_probe() {
                         // route (wan or mgmt sub-interface, by prefix / source / metric / up), then `<egress> out`;
                         // allowed -> SNAT to that sub-interface's address and send; block -> RST / ICMP admin-
                         // prohibited back to the client via `$reply`; drop -> silent. Returns true if it was sent.
+                        // G0 step 1: the forwarding ladder lives in `apcore::forward4` (QEMU-tested, [P-apcore]);
+                        // this adapter is the only place it touches the uplink driver.
+                        struct ApHw<'a> {
+                            up: &'a uplink::UplinkResult,
+                            wh: &'a wanhealth::WanHealth,
+                        }
+                        impl apcore::ApNic for ApHw<'_> {
+                            fn ticks(&self) -> u64 {
+                                cyw43::ticks()
+                            }
+                            fn wan_up(&self) -> bool {
+                                uplink::wan_alive(self.up, 15_000) && self.wh.usable() // G16: probes, not only ARP
+                            }
+                            fn wan(&self) -> apcore::WanView {
+                                apcore::WanView { ip: self.up.dhcp.yiaddr, mac: self.up.mac, gw_mac: self.up.gw_mac, dns: self.up.dhcp.dns }
+                            }
+                            fn wan_nexthop(&mut self, ip: [u8; 4]) -> Option<[u8; 6]> {
+                                uplink::wan_nexthop(self.up, ip)
+                            }
+                            fn wan_tx(&mut self, f: &[u8]) -> bool {
+                                uplink::wan_tx(self.up, f)
+                            }
+                            fn mgmt(&self) -> Option<apcore::MgmtView> {
+                                unsafe { uplink::MGMT }.map(|m| apcore::MgmtView { ip: m.ip, mac: m.mac, gw: m.gw, up: m.gw_mac.is_some() })
+                            }
+                            fn mgmt_nexthop(&mut self, ip: [u8; 4]) -> Option<[u8; 6]> {
+                                uplink::mgmt_nexthop(ip)
+                            }
+                            fn mgmt_tx(&mut self, f: &[u8]) -> bool {
+                                uplink::mgmt_tx(f)
+                            }
+                            fn wan_tx6(&mut self, ip6: &[u8]) -> bool {
+                                uplink::wan_tx6(self.up, ip6)
+                            }
+                            fn now(&self) -> u64 {
+                                let v: u64;
+                                unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) };
+                                v
+                            }
+                            fn freq(&self) -> u64 {
+                                let v: u64;
+                                unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) v, options(nomem, nostack)) };
+                                v
+                            }
+                        }
+                        // What makes inbound IPv6 "ours" (the WAN address, or the delegated LAN prefix) — a copy.
+                        let v6us = || {
+                            let v = unsafe { &*core::ptr::addr_of!(V6) };
+                            let mut p8 = [0u8; 8];
+                            p8.copy_from_slice(&v.prefix[..8]);
+                            apcore::V6Us { wan_na: unsafe { uplink::WAN6 }.na, lan_up: v.up, lan_prefix: p8, gua: v.gua }
+                        };
+                        let mut fc = apcore::FwdCounters::default();
                         macro_rules! fwd4 {
                             ($frame:expr, $pif:expr, $nif:expr, $reply:ident) => {{
-                                let frame: &[u8] = $frame;
+                                let me = if $pif == PIf::Eth1 { uplink::ETH1_MAC } else { ap.bssid };
+                                let cfg = apcore::FwdCfg { our_ip, me, inside_net };
+                                let mut hw = ApHw { up: &up, wh: &whealth };
                                 let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
-                                let mut act = PAct::Allow;
-                                let mut egress = PIf::Wan;
-                                let mut nh_ip: Option<[u8; 4]> = None;
-                                if let Some(p) = hal::policy::facts(frame) {
-                                    act = pol.check($pif, PDir::In, &p).0;
-                                    if act == PAct::Allow {
-                                        let mgmt_up = unsafe { uplink::MGMT }.map_or(false, |m| m.gw_mac.is_some());
-                                        let wan_up = uplink::wan_alive(&up, 15_000) && whealth.usable(); // G16: probes, not only ARP
-                                        if let Some(r) = pol.route(&p.src, &p.dst, &|i| match i { PIf::Wan => wan_up, PIf::Mgmt => mgmt_up, _ => false }) {
-                                            egress = r.via;
-                                            nh_ip = r.gw.filter(|g| !g.v6).map(|g| [g.a[0], g.a[1], g.a[2], g.a[3]]);
-                                        }
-                                        act = pol.check(egress, PDir::Out, &p).0;
-                                    }
-                                }
-                                let pi = ($pif) as usize;
-                                // Shield: an allowed client DNS query for a blocklisted name is answered here
-                                // (0.0.0.0 / NODATA, from the resolver it asked) and never leaves the device.
-                                let mut shield = false; // answered/refused by Shield or a device policy (not an ACL drop)
-                                // Parity G9: the device's declared policy (DEVICES.TXT, by MAC). DNS is infrastructure
-                                // (Shield answers it); everything this macro forwards goes to the internet.
-                                // ADR 0053: a session-made, TTL-bound hold on an IPv4 address (either direction).
-                                if act == PAct::Allow && frame.len() >= 34 {
-                                    let (a, b) = (u32::from_be_bytes([frame[26], frame[27], frame[28], frame[29]]), u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]));
-                                    if actions::ip_held(a) || actions::ip_held(b) {
-                                        act = PAct::Drop;
-                                        shield = true;
-                                    }
-                                }
-                                if act == PAct::Allow && frame.len() >= 34 {
-                                    let mut smac = [0u8; 6];
-                                    smac.copy_from_slice(&frame[6..12]);
-                                    let dns = frame[23] == 17 && {
-                                        let u = 14 + ((frame[14] & 0x0f) as usize) * 4;
-                                        frame.get(u + 2..u + 4) == Some(&[0, 53][..])
-                                    };
-                                    let d = if dns { devpolicy::Dest::Infra } else { devpolicy::Dest::Internet };
-                                    if !devpolicy::check(&smac, d) {
-                                        act = PAct::Drop;
-                                        shield = true; // not counted as an ACL drop: a declared device policy
-                                    }
-                                }
-                                // Exfil (parity G3): outbound bytes per inside source, observe-only + cooldown.
-                                if act == PAct::Allow && frame.len() >= 34 {
-                                    let src = u32::from_be_bytes([frame[26], frame[27], frame[28], frame[29]]);
-                                    let dst = u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]);
-                                    let _ = rules::exfil_verdict(src, dst, u16::from_be_bytes([frame[16], frame[17]]) as u64);
-                                }
-                                // Shield v2 (ADR 0052): every client DNS query (any resolver, UDP and TCP), DoT, DoH names.
-                                if act == PAct::Allow {
-                                    let me = if $pif == PIf::Eth1 { uplink::ETH1_MAC } else { ap.bssid };
-                                    let mut dr = [0u8; 600];
-                                    match shield::on_client_frame(frame, &me, &mut dr, cyw43::ticks()) {
-                                        shield::Act::Pass => {}
-                                        shield::Act::Answer(k) => {
-                                            let _ = $reply!(&dr[..k]);
-                                            act = PAct::Drop;
-                                            shield = true;
-                                        }
-                                        shield::Act::Reject => {
-                                            if let Some(k) = arch_aarch64::reject::reject4(frame, &our_ip, &me, &mut dr) {
-                                                let _ = $reply!(&dr[..k]);
-                                            }
-                                            act = PAct::Drop;
-                                            shield = true;
-                                        }
-                                    }
-                                }
-                                match act {
-                                    PAct::Allow if egress == PIf::Mgmt => {
-                                        let mg = unsafe { uplink::MGMT }.unwrap();
-                                        match uplink::mgmt_nexthop(nh_ip.unwrap_or(mg.gw)) {
-                                            Some(nmac) => {
-                                                if let Some(k) = nat::outbound_redirect(frame, $nif, &inside_net, None, &mg.ip, &mg.mac, &nmac, &mut nbuf, cyw43::ticks(), &mut nst) {
-                                                    pol_via_mgmt += 1;
-                                                    uplink::mgmt_tx(&nbuf[..k])
-                                                } else {
-                                                    false
-                                                }
-                                            }
-                                            None => {
-                                                pol_mgmt_nh_miss += 1;
-                                                false
-                                            }
-                                        }
-                                    }
-                                    PAct::Allow => {
-                                        // `route … via wan gw X`: X's MAC (ARP-resolved); the default gateway otherwise.
-                                        let gw_mac = match nh_ip {
-                                            Some(g) => match uplink::wan_nexthop(&up, g) {
-                                                Some(mac) => mac,
-                                                None => {
-                                                    pol_mgmt_nh_miss += 1; // counted with the mgmt misses: "next hop unresolved"
-                                                    [0u8; 6]
-                                                }
-                                            },
-                                            None => up.gw_mac,
-                                        };
-                                        let resolver = if up.dhcp.dns != [0u8; 4] { up.dhcp.dns } else { [8u8, 8, 8, 8] };
-                                        if gw_mac == [0u8; 6] {
-                                            false // next hop not resolved yet (ARP sent): drop, TCP retries
-                                        } else if let Some(k) = nat::outbound_redirect(frame, $nif, &inside_net, Some((&our_ip, &resolver)), &up.dhcp.yiaddr, &up.mac, &gw_mac, &mut nbuf, cyw43::ticks(), &mut nst) {
-                                            let ok = uplink::wan_tx(&up, &nbuf[..k]);
-                                            if !ok {
-                                                nat_tx_fail += 1;
-                                            }
-                                            ok
-                                        } else {
-                                            false
-                                        }
-                                    }
-                                    PAct::Block => {
-                                        pol_block[pi] += 1;
-                                        let mut rj = [0u8; 128];
-                                        let me = if $pif == PIf::Eth1 { uplink::ETH1_MAC } else { ap.bssid };
-                                        if let Some(k) = arch_aarch64::reject::reject4(frame, &our_ip, &me, &mut rj) {
-                                            let _ = $reply!(&rj[..k]);
-                                        }
-                                        false
-                                    }
-                                    PAct::Drop => {
-                                        if !shield {
-                                            pol_drop[pi] += 1;
-                                        }
-                                        false
-                                    }
-                                }
+                                apcore::forward4($frame, $pif, $nif, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| $reply!(f))
                             }};
                         }
                         macro_rules! eth1_send {
@@ -4041,13 +3966,13 @@ fn cm5_p10_probe() {
                                                         }
                                                     }
                                                     (PAct::Block, i) => {
-                                                        pol_block[i] += 1;
+                                                        fc.pol_block[i] += 1;
                                                         let mut rj = [0u8; 1400];
                                                         if let Some(r) = arch_aarch64::reject::reject6(frame, &v6.gua, &ap.bssid, &mut rj) {
                                                             let _ = wifi_send!(&rj[..r]);
                                                         }
                                                     }
-                                                    (PAct::Drop, i) => pol_drop[i] += 1,
+                                                    (PAct::Drop, i) => fc.pol_drop[i] += 1,
                                                 }
                                             }
                                             _ => {}
@@ -4254,39 +4179,9 @@ fn cm5_p10_probe() {
                                             // goes back to the actual sender.
                                             macro_rules! wan_in_new {
                                                 () => {{
-                                                    // Peer review H3: only traffic ADDRESSED TO US (our MAC + our WAN address) is ours
-                                                    // to police. The GEM is promiscuous: on a shared WAN segment, `wan in` + block used
-                                                    // to forge RSTs / ICMP for OTHER hosts' flows.
-                                                    let to_us = wbuf[0..6] == up.mac && match wbuf[12..14] {
-                                                        [0x08, 0x00] => n >= 34 && wbuf[30..34] == up.dhcp.yiaddr,
-                                                        [0x86, 0xdd] => n >= 54 && (Some({ let mut d = [0u8; 16]; d.copy_from_slice(&wbuf[38..54]); d }) == unsafe { uplink::WAN6 }.na
-                                                            || (unsafe { V6.up } && wbuf[38..46] == unsafe { V6.prefix }[..8])),
-                                                        _ => false,
-                                                    };
-                                                    let a = if !to_us { PAct::Allow } else { hal::policy::facts(&wbuf[..n]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Wan, PDir::In, &p).0 }).unwrap_or(PAct::Allow) };
-                                                    // RFC 4443 §2.4(f) / peer review SEC-L2: at most 20 rejects/s toward the internet
-                                                    // (a spoofed-source flood must not turn heqk into a reflector); beyond it, drop.
-                                                    let tnow = now();
-                                                    if tnow.wrapping_sub(rej_win) > freq {
-                                                        rej_win = tnow;
-                                                        rej_n = 0;
-                                                    }
-                                                    let a = if a == PAct::Block && rej_n >= 20 { PAct::Drop } else { a };
-                                                    if a == PAct::Block {
-                                                        rej_n += 1;
-                                                        pol_block[2] += 1;
-                                                        let mut rj = [0u8; 1400];
-                                                        if wbuf[12] == 0x86 {
-                                                            let src6 = unsafe { uplink::WAN6 }.na.unwrap_or(unsafe { V6.gua });
-                                                            if let Some(k) = arch_aarch64::reject::reject6(&wbuf[..n], &src6, &up.mac, &mut rj) {
-                                                                let _ = uplink::wan_tx6(&up, &rj[14..k]);
-                                                            }
-                                                        } else if let Some(k) = arch_aarch64::reject::reject4(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, &mut rj) {
-                                                            let _ = uplink::wan_tx(&up, &rj[..k]);
-                                                        }
-                                                    } else if a == PAct::Drop {
-                                                        pol_drop[2] += 1;
-                                                    }
+                                                    // G0 step 2: apcore::wan_in_new (to-us only, H3; 20 rejects/s, SEC-L2)
+                                                    let mut hw = ApHw { up: &up, wh: &whealth };
+                                                    apcore::wan_in_new(&wbuf[..n], &v6us(), unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }, &mut rej, &mut fc, &mut hw);
                                                 }};
                                             }
                                             #[cfg(feature = "mcserve")]
@@ -4355,9 +4250,9 @@ fn cm5_p10_probe() {
                                                 if let arch_aarch64::ip6lan::WanAction::Deliver(k) = v6a {
                                                     let lan_out = hal::policy::facts(&v6buf[..k]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(PIf::Lan, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
                                                     if lan_out != PAct::Allow {
-                                                        pol_drop[0] += 1;
+                                                        fc.pol_drop[0] += 1;
                                                         if lan_out == PAct::Block {
-                                                            pol_block_as_drop += 1;
+                                                            fc.block_as_drop += 1;
                                                         }
                                                     } else if packet::verdict(&v6buf[..k]).1 == packet::DROP {
                                                         v6_ids_drop[1] += 1;
@@ -4365,64 +4260,45 @@ fn cm5_p10_probe() {
                                                         let _ = wifi_send!(&v6buf[..k]);
                                                     }
                                                 }
-                                            } else if n >= 34 && wbuf[12] == 0x08 && wbuf[13] == 0x00
-                                                && actions::ip_held(u32::from_be_bytes([wbuf[26], wbuf[27], wbuf[28], wbuf[29]])) {
-                                                // ADR 0053: inbound from a held address (TTL-bound, session-made) — dropped
-                                                ids_drop_in += 1;
-                                            } else if packet::verdict(&wbuf[..n]).1 == packet::DROP {
-                                                ids_drop_in += 1;
                                             } else {
+                                                // G0 step 2: hold → IDS → un-NAT / `wan in` → `lan|eth1 out` → scan credit → Shield
+                                                // CNAME → size, in apcore::wan4 ([P-apcore-wan]); delivery stays here (the Wi-Fi queue).
                                                 let lan_mac = uplink::ETH1_MAC;
-                                                let nat_r = nat::inbound(&wbuf[..n], &up.dhcp.yiaddr, &up.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst);
-                                                if nat_r.is_none() {
-                                                    wan_in_new!(); // no NAT session: new inbound traffic -> `wan in`
-                                                }
-                                                if let Some((m, in_if)) = nat_r.filter(|&(m, in_if)| {
-                                                    // `lan out` / `eth1 out` after un-NAT. A `block` here acts as a drop: a reject would
-                                                    // have to be re-NATed to reach the real sender (counted apart).
-                                                    let oif = if in_if == nat::IF_ETH1 { PIf::Eth1 } else { PIf::Lan };
-                                                    let a = hal::policy::facts(&nbuf[..m]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(oif, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
-                                                    if a != PAct::Allow {
-                                                        pol_drop[oif as usize] += 1;
-                                                        if a == PAct::Block {
-                                                            pol_block_as_drop += 1;
+                                                let mut hw = ApHw { up: &up, wh: &whealth };
+                                                match apcore::wan4(&wbuf[..n], [&ap.bssid, &lan_mac], &v6us(), unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }, &mut rej, &mut nst, &mut fc, &mut nbuf, &mut hw) {
+                                                    apcore::Wan4::Held | apcore::Wan4::IdsDrop => ids_drop_in += 1,
+                                                    apcore::Wan4::Deliver { len: m, eth1 } => {
+                                                        if m > 600 {
+                                                            wan_big_unnat += 1;
+                                                        }
+                                                        if eth1 {
+                                                            if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
+                                                                lan_tx_fail += 1;
+                                                            }
+                                                        } else if {
+                                                            let sent = wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
+                                                            if nat_trace < NAT_TRACE_N {
+                                                                nat_trace += 1;
+                                                                nat_trace_line("IN ", &nbuf[..m], if sent { "wifi=sent" } else if wq_n < WQ_N { "wifi=queued" } else { "wifi=DROP" });
+                                                            }
+                                                            !sent
+                                                        } {
+                                                            // No credit (or the queue is already waiting): keep ORDER, queue it.
+                                                            if wq_n < WQ_N && m <= WQ_SZ {
+                                                                let j = (wq_head + wq_n) % WQ_N;
+                                                                wq[j][..m].copy_from_slice(&nbuf[..m]);
+                                                                wq_len[j] = m;
+                                                                wq_n += 1;
+                                                                wifi_tx_queued += 1;
+                                                            } else {
+                                                                wifi_tx_dropped += 1;
+                                                                nat_wifi_tx_fail += 1;
+                                                            }
+                                                        } else if nst.in_fwd == 1 {
+                                                            kprint!(" [M-NAT1] PASS — first WAN reply un-NATed and delivered to the client ({} B, proto {}) — the SASE payoff: AP client ↔ internet through heqk\n", m, nbuf[23]);
                                                         }
                                                     }
-                                                    a == PAct::Allow
-                                                }) {
-                                                    if m > 600 {
-                                                        wan_big_unnat += 1;
-                                                    }
-                                                    rules::scan_response_hook(&nbuf[..m]); // ADR 0049 D3: credit the real prober
-                                                    let m = shield::on_reply_frame(&mut nbuf, m, cyw43::ticks()); // ADR 0052 D6: CNAME cloaking
-                                                    if in_if == nat::IF_ETH1 {
-                                                        if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
-                                                            lan_tx_fail += 1;
-                                                        }
-                                                    } else if m > nat::WIFI_MAX_FRAME {
-                                                        nst.in_too_big += 1; // the WiFi leg can't carry it (TCP is MSS-clamped; big UDP is lost)
-                                                    } else if {
-                                                        let sent = wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
-                                                        if nat_trace < NAT_TRACE_N {
-                                                            nat_trace += 1;
-                                                            nat_trace_line("IN ", &nbuf[..m], if sent { "wifi=sent" } else if wq_n < WQ_N { "wifi=queued" } else { "wifi=DROP" });
-                                                        }
-                                                        !sent
-                                                    } {
-                                                        // No credit (or the queue is already waiting): keep ORDER, queue it.
-                                                        if wq_n < WQ_N && m <= WQ_SZ {
-                                                            let j = (wq_head + wq_n) % WQ_N;
-                                                            wq[j][..m].copy_from_slice(&nbuf[..m]);
-                                                            wq_len[j] = m;
-                                                            wq_n += 1;
-                                                            wifi_tx_queued += 1;
-                                                        } else {
-                                                            wifi_tx_dropped += 1;
-                                                            nat_wifi_tx_fail += 1;
-                                                        }
-                                                    } else if nst.in_fwd == 1 {
-                                                        kprint!(" [M-NAT1] PASS — first WAN reply un-NATed and delivered to the client ({} B, proto {}) — the SASE payoff: AP client ↔ internet through heqk\n", m, nbuf[23]);
-                                                    }
+                                                    apcore::Wan4::New | apcore::Wan4::OutDenied | apcore::Wan4::TooBig => {}
                                                 }
                                             }
                                         }
@@ -4477,7 +4353,7 @@ fn cm5_p10_probe() {
                                                         if nat_r.is_none() {
                                                             let allow = decide(&mbuf[..k]) == PAct::Allow;
                                                             if !allow {
-                                                                pol_drop[3] += 1;
+                                                                fc.pol_drop[3] += 1;
                                                             }
                                                             // G12-M: Mission Control on the management address (after `mgmt in`).
                                                             #[cfg(feature = "mcserve")]
@@ -4494,7 +4370,7 @@ fn cm5_p10_probe() {
                                                             let oif = if in_if == nat::IF_ETH1 { PIf::Eth1 } else { PIf::Lan };
                                                             let a = hal::policy::facts(&nbuf[..mm]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(oif, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
                                                             if a != PAct::Allow {
-                                                                pol_drop[oif as usize] += 1;
+                                                                fc.pol_drop[oif as usize] += 1;
                                                             } else if packet::verdict(&nbuf[..mm]).1 == packet::DROP {
                                                                 ids_drop_in += 1;
                                                             } else if in_if == nat::IF_ETH1 {
@@ -4594,7 +4470,7 @@ fn cm5_p10_probe() {
                                                 let ld = unsafe { uplink::LINK_DIAG };
                                                 let pol = unsafe { &*core::ptr::addr_of!(POLICY) };
                                                 kprint!("   [P11-AP3 policy] wan alive={} martian-src dropped={} | drop lan/eth1/wan/mgmt={:?} block={:?} block-as-drop={} | via mgmt={} next-hop unresolved (mgmt+wan)={} | link rx inet={} mgmt={} other-vlan drop={} untagged drop={} tagged tx={} mgmtq full={}\n",
-                                                    uplink::wan_alive(&up, 15_000), wan_martian, pol_drop, pol_block, pol_block_as_drop, pol_via_mgmt, pol_mgmt_nh_miss, ld[0], ld[1], ld[2], ld[3], ld[4], ld[5]);
+                                                    uplink::wan_alive(&up, 15_000), wan_martian, fc.pol_drop, fc.pol_block, fc.block_as_drop, fc.pol_via_mgmt, fc.pol_mgmt_nh_miss, ld[0], ld[1], ld[2], ld[3], ld[4], ld[5]);
                                                 for a in &pol.acl[..pol.nacl] {
                                                     kprint!("   [P11-AP3 policy] acl {} hits {:?} default {}\n", core::str::from_utf8(&a.name[..a.nlen]).unwrap_or("?"), &a.hits[..a.n], a.default_hits);
                                                 }
@@ -4772,7 +4648,7 @@ fn cm5_p10_probe() {
                                             assocs, keyed, leaves, wifi_frames, dh.acks_tx, dh.arp_replies,
                                             up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3], wan_arp, wan_gw_refresh,
                                             nst.out_fwd, nst.in_fwd, nst.out_drop, nst.in_drop, nst.in_too_big, nst.mss_clamped, nst.table_alloc, nst.table_evict, nst.dns_redirect,
-                                            nat_tx_fail, nat_wifi_tx_fail, wan_retries, wan_renewals, ids_drop_out, ids_drop_in, bind_drop,
+                                            fc.nat_tx_fail, nat_wifi_tx_fail, wan_retries, wan_renewals, ids_drop_out, ids_drop_in, bind_drop,
                                             lan_frames, lan_served, lan_tx_fail, dh.active(), cyw43::AP_LEASES);
                                         last_beat = t;
                                     }
@@ -6670,6 +6546,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = lanrelay::selftest();
         let _ = datavol::selftest();
         let _ = artstore::selftest();
+        let _ = apcore::selftest();
+        let _ = apcore::wan_selftest();
         let _ = ownerjournal::selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
