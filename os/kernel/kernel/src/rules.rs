@@ -607,6 +607,12 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
     if flags & TCP_RST != 0 || (flags & TCP_SYN != 0 && flags & TCP_ACK != 0) {
         crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & TCP_SYN != 0);
+        // slow-scan tier: a CLOSED-port answer (RST) to `dst`'s probe, counted over 30 minutes. Observe-only:
+        // the fast tier owns enforcement; this only makes a patient sweep visible.
+        if flags & TCP_RST != 0 && crate::ratelimit::slow_scan_observe(dst as u64, meta.src_port, crate::behavioral::now_secs()) {
+            let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(dst));
+            fire(RULE_PORT_SCAN, SEV_MED, v, dst);
+        }
     } else if flags & TCP_ACK != 0 {
         // An ACK on a flow: establishment credit for this (source, port) — only after a SYN-ACK.
         crate::ratelimit::flow_ack_observe(src64, meta.dst_port);

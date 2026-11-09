@@ -425,6 +425,38 @@ pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
     }
 }
 
+/// Slow-scan tier (detection benchmark 2026-11-09: one port every 20 s never reached the 10-second wall):
+/// DISTINCT ports answered CLOSED (RST) to `scanner` within `SLOW_SCAN_SECS`; true when the count crosses
+/// `SLOW_SCAN_PORTS` (once per window). A 1024-bit port set per scanner (port mod 1024 — collisions only
+/// under-count, never invent a port).
+pub const SLOW_SCAN_PORTS: u64 = 40;
+const SLOW_SCAN_SECS: u64 = 1800;
+const SLOW_N: usize = 32;
+static SLOW_SRC: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
+static SLOW_AT: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
+static SLOW_CNT: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
+static SLOW_BITS: [[AtomicU64; 16]; SLOW_N] = [const { [const { AtomicU64::new(0) }; 16] }; SLOW_N];
+pub fn slow_scan_observe(scanner: u64, port: u16, now: u64) -> bool {
+    if scanner == 0 {
+        return false;
+    }
+    let s = slot(scanner | (3 << 40), SLOW_N);
+    if SLOW_SRC[s].load(Ordering::Relaxed) != scanner || now.saturating_sub(SLOW_AT[s].load(Ordering::Relaxed)) >= SLOW_SCAN_SECS {
+        SLOW_SRC[s].store(scanner, Ordering::Relaxed);
+        SLOW_AT[s].store(now, Ordering::Relaxed);
+        SLOW_CNT[s].store(0, Ordering::Relaxed);
+        for w in &SLOW_BITS[s] {
+            w.store(0, Ordering::Relaxed);
+        }
+    }
+    let b = (port % 1024) as usize;
+    let old = SLOW_BITS[s][b / 64].fetch_or(1 << (b % 64), Ordering::Relaxed);
+    if old & (1 << (b % 64)) != 0 {
+        return false;
+    }
+    SLOW_CNT[s].fetch_add(1, Ordering::Relaxed) + 1 == SLOW_SCAN_PORTS
+}
+
 /// An ACK from `src` to `dst_port`. ADR 0049 D3: it earns establishment credit ONLY after the target's
 /// SYN-ACK was seen for that port, and only once per port — stray ACKs (the padding evasion) earn nothing.
 pub fn flow_ack_observe(src: u64, dst_port: u16) {

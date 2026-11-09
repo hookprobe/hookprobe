@@ -134,6 +134,49 @@ def main():
             conv(f, t, ATT_MAC, hmac, ATT, hip, 53000 + h, dp, b"\x00" * 64, b"\x00" * 64)
             t[0] += 0.2
     C["lateral"] = f
+    # ---- evasive variants (gen-attacks.py --evasive) ----
+    if "--evasive" in sys.argv:
+        E = {}
+        # slow scan: one port every 20 s for 30 min (90 ports), closed ports answer RST
+        f, t = [], T0
+        for i, p in enumerate(range(20, 110)):
+            f.append((t, eth(VIC_MAC, ATT_MAC, 0x0800, tcp(ATT, VIC, 41000 + i, p, 0x02, p))))
+            f.append((t + 0.001, eth(ATT_MAC, VIC_MAC, 0x0800, tcp(VIC, ATT, p, 41000 + i, 0x14, 0, p + 1))))
+            t += 20
+        E["slowscan"] = f
+        # jittered beacon: 300 s +-30 % for 2 h to one host
+        f, t = [], [T0]
+        for i in range(24):
+            conv(f, t, ATT_MAC, GW_MAC, ATT, bytes([203, 0, 113, 77]), 52000 + i, 443, b"\x16\x03\x01" + b"b" * 90, b"\x16\x03\x03" + b"r" * 150)
+            t[0] += 300 * rnd.uniform(0.7, 1.3)
+        E["jitterbeacon"] = f
+        # low-and-slow exfil: 8 MB per minute for 15 min (120 MB total) to one host
+        f, t = [], [T0]
+        dst = bytes([192, 0, 2, 201])
+        conv(f, t, ATT_MAC, GW_MAC, ATT, dst, 52500, 443, fin=False)
+        tt = t[0]
+        for i in range(85700):
+            f.append((tt, eth(GW_MAC, ATT_MAC, 0x0800, tcp(ATT, dst, 52500, 443, 0x18, 1001 + i * 1400, 5001, b"e" * 1400))))
+            if i % 2:
+                f.append((tt + 0.0005, eth(ATT_MAC, GW_MAC, 0x0800, tcp(dst, ATT, 443, 52500, 0x10, 5001, 1001 + (i + 1) * 1400))))
+            tt += 0.0105
+        E["slowexfil"] = f
+        # DNS tunnel: 300 long, high-entropy subdomains of ONE domain in 5 min (iodine/dnscat shape)
+        f, t = [], T0
+        for i in range(300):
+            lab = "".join(rnd.choice("abcdefghijklmnopqrstuvwxyz0123456789") for _ in range(50))
+            name = f"{lab}.t.exfil-example.net"
+            q = struct.pack("!HHHHHH", 0x2000 + i, 0x0100, 1, 0, 0, 0) + b"".join(bytes([len(x)]) + x.encode() for x in name.split(".")) + b"\0\0\x10\0\1"
+            f.append((t, eth(GW_MAC, ATT_MAC, 0x0800, udp(ATT, GW, 34000 + i % 1000, 53, q))))
+            t += 1
+        E["dnstunnel"] = f
+        # slow brute force: one SSH attempt every 30 s for 20 min
+        f, t = [], [T0]
+        for i in range(40):
+            conv(f, t, ATT_MAC, VIC_MAC, ATT, VIC, 54000 + i, 22, b"SSH-2.0-OpenSSH_9.6\r\n" + b"x" * 300, b"SSH-2.0-OpenSSH_9.2\r\n" + b"y" * 400)
+            t[0] += 30
+        E["slowbrute"] = f
+        C = E
     for k, fr in C.items():
         write_pcap(os.path.join(out, k + ".pcap"), fr)
         print(f"{k}: {len(fr)} frames")
