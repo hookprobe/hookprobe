@@ -118,6 +118,11 @@ mod fat;
 mod abboot;
 /// Device-pinned policy trust anchor (ADR 0049 D1 TOFU).
 mod anchor;
+/// The applied network configuration for `GET /api/network` (audit A8), filled as the AP comes up.
+#[cfg(feature = "mcserve")]
+static mut NET: mcstate::NetInfo = mcstate::NET0;
+/// POLICY.TXT outcome (for NET): 0 none, 1 signed, 2 unsigned, 3 refused; and its generation.
+static mut POLICY_STATE: (u8, u64) = (0, 0);
 /// OS-image update over the upload channel (ADR 0056 phase 2 / production phase 1).
 #[cfg(all(feature = "p15-write", feature = "netsvc"))]
 #[allow(dead_code)]
@@ -3040,6 +3045,14 @@ fn cm5_p10_probe() {
                             kprint!(" [WIFI] setup AP \"{}\" — per-device passphrase {} (label / QR: {})\n", c.ssid_str(), c.psk_str(), apcred::qr_payload(c, &mut qb));
                         }
                         let ap_ssid: &[u8] = match (&wifi, &setup) { (Some(c), _) => &c.ssid[..c.ssid_len as usize], (None, Some(s)) => &s.ssid, _ => b"heqk-ap" };
+                        #[cfg(feature = "mcserve")]
+                        unsafe {
+                            let n = &mut *core::ptr::addr_of_mut!(NET);
+                            let k = ap_ssid.len().min(32);
+                            n.ssid[..k].copy_from_slice(&ap_ssid[..k]);
+                            n.ssid_len = k as u8;
+                            n.setup_ap = wifi.is_none();
+                        }
                         let ap_psk: &[u8] = match (&wifi, &setup) { (Some(c), _) => &c.psk[..c.psk_len as usize], (None, Some(s)) => &s.psk, _ => build_psk };
                         let psk_src: &str = if wifi.is_some() { "WIFI.TXT" } else if setup.is_some() { "the per-device setup credential" } else { "the build env" };
                         let wifi_chan: u32 = wifi.map_or(0, |c| c.channel as u32);
@@ -3081,6 +3094,12 @@ fn cm5_p10_probe() {
                         if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
                             match load_wan_link(&dev) {
                                 Some(Ok(l)) => {
+                                    #[cfg(feature = "mcserve")]
+                                    unsafe {
+                                        let n = &mut *core::ptr::addr_of_mut!(NET);
+                                        n.wan_vlan = l.vlan;
+                                        n.mgmt_vlan = l.mgmt.map_or(0, |m| m.vlan);
+                                    }
                                     uplink::link_configure(&l);
                                     // Management floor (task #21 N3): explicit `mgmt_floor`, else the management
                                     // sub-interface's subnet (the operator's path), else the compile-time default.
@@ -3118,6 +3137,16 @@ fn cm5_p10_probe() {
                             {
                                 let (d, prev, wrote) = anchor::boot(policysig::POLICY_PUBKEY);
                                 let fp = |k: [u8; 32]| u32::from_be_bytes([k[0], k[1], k[2], k[3]]);
+                                #[cfg(feature = "mcserve")]
+                                unsafe {
+                                    let n = &mut *core::ptr::addr_of_mut!(NET);
+                                    (n.anchor, n.anchor_fp) = match d {
+                                        anchor::Decision::Pin(k) => (1, fp(k)),
+                                        anchor::Decision::Keep(k) => (2, fp(k)),
+                                        anchor::Decision::Conflict { pinned } => (3, fp(pinned)),
+                                        anchor::Decision::Standalone => (4, 0),
+                                    };
+                                }
                                 match d {
                                     anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
                                     anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY floor {})\n", fp(k), prev.map_or(0, |a| a.policy_floor)),
@@ -3357,6 +3386,8 @@ fn cm5_p10_probe() {
                                 ap.bssid_verified);
                             if ap.serve_ready() && ap.gtk_set {
                                 chosen_cs = ap_cs;
+                                #[cfg(feature = "mcserve")]
+                                unsafe { (*core::ptr::addr_of_mut!(NET)).channel = ap_cs & 0xff };
                                 kprint!("   [P11-ACS] chanspec iovar accepted={} (20-MHz legacy fallback used={})\n", ap.chanspec_ok, ap.chan_fallback20);
                                 let rb = cyw43::current_chanspec();
                                 kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
@@ -4657,6 +4688,16 @@ fn cm5_p10_probe() {
                                                 dns_blocked: shield::totals().1,
                                                 blocklist: shield::block_len() as u32,
                                             });
+                                            {
+                                                let n = unsafe { &mut *core::ptr::addr_of_mut!(NET) };
+                                                n.gw = up.dhcp.router;
+                                                n.mgmt_ip = unsafe { (*core::ptr::addr_of!(uplink::MGMT)).as_ref().map_or([0; 4], |m| m.ip) };
+                                                let v6 = unsafe { &*core::ptr::addr_of!(V6) };
+                                                n.v6_up = v6.up;
+                                                n.v6_prefix.copy_from_slice(&v6.prefix[..8]);
+                                                (n.policy, n.policy_gen) = unsafe { POLICY_STATE };
+                                                st.set_net(*n);
+                                            }
                                         }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
                                         actions::tick((now().wrapping_sub(mc_t0_any) / (freq / 1000).max(1)) as u64); // ADR 0053 expiry
@@ -13722,6 +13763,7 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
         let r = if have { policysig::verify(&buf, &sig, &key, policysig::floor()) } else { Err(policysig::SigErr::Missing) };
         match r {
             Ok(gen) => {
+                unsafe { POLICY_STATE = (1, gen) };
                 kprint!(" [POLICY] signature OK — operator key, generation {} (floor {})\n", gen, policysig::floor());
                 // persist a newer generation as the floor (an older signed POLICY.TXT never comes back)
                 #[cfg(all(feature = "cm5", feature = "p15-write"))]
@@ -13730,11 +13772,13 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
                 }
             }
             Err(e) => {
+                unsafe { POLICY_STATE = (3, 0) };
                 kprint!(" [POLICY] signature REFUSED ({:?}) — the policy is not parsed\n", e);
                 return Some(Err(hal::policy::PolicyErr::Unsigned));
             }
         }
     } else {
+        unsafe { POLICY_STATE = (2, 0) };
         kprint!(" [POLICY] no operator key in this image (standalone) — POLICY.TXT accepted unsigned\n");
     }
     Some(hal::policy::parse_policy(&buf, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }))

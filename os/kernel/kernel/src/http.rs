@@ -577,6 +577,31 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 r[0], r[1], r[2], r[3], r[4], r[5]);
             w.raw("}");
         }),
+        // Audit A8: the "Get Online" pillar's read side — what the device applied, and from which source.
+        "/api/network" => json(scratch, |w| {
+            use core::fmt::Write;
+            match (st.net(), st.wan()) {
+                (Some(n), wan) => {
+                    w.raw("{\"available\":true,\"wifi\":{\"ssid\":");
+                    w.string(core::str::from_utf8(&n.ssid[..(n.ssid_len as usize).min(32)]).unwrap_or("?"));
+                    let _ = write!(w, ",\"source\":\"{}\",\"channel\":{},\"security\":\"WPA2-PSK\"}}", if n.setup_ap { "setup (per-device credential)" } else { "signed WIFI.TXT" }, n.channel);
+                    if let Some(f) = wan {
+                        let _ = write!(w, ",\"wan\":{{\"up\":{},\"mode\":\"{}\",\"ip\":\"{}.{}.{}.{}\",\"gateway\":\"{}.{}.{}.{}\",\"vlan\":{},\"clients\":{}}}",
+                            f.up, ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ip[0], f.ip[1], f.ip[2], f.ip[3], n.gw[0], n.gw[1], n.gw[2], n.gw[3], n.wan_vlan, f.clients);
+                    }
+                    let p = n.v6_prefix;
+                    let _ = write!(w, ",\"ipv6\":{{\"up\":{},\"lan_prefix\":\"{:x}:{:x}:{:x}:{:x}::/64\"}}", n.v6_up,
+                        u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]), u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[6], p[7]]));
+                    if n.mgmt_vlan != 0 {
+                        let _ = write!(w, ",\"management\":{{\"vlan\":{},\"ip\":\"{}.{}.{}.{}\"}}", n.mgmt_vlan, n.mgmt_ip[0], n.mgmt_ip[1], n.mgmt_ip[2], n.mgmt_ip[3]);
+                    }
+                    let _ = write!(w, ",\"policy\":{{\"state\":\"{}\",\"generation\":{}}},\"trust_anchor\":{{\"state\":\"{}\",\"key\":\"{:08x}\"}},\"changes\":\"signed configuration files (WIFI.TXT / WAN.TXT / POLICY.TXT)\"}}",
+                        ["none", "signed", "unsigned (standalone image)", "refused"][(n.policy as usize).min(3)], n.policy_gen,
+                        ["unknown", "pinned on this boot", "pinned", "image key differs - pinned key kept", "standalone (no key)"][(n.anchor as usize).min(4)], n.anchor_fp);
+                }
+                (None, _) => w.raw("{\"available\":false}"),
+            }
+        }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
         p if p.starts_with("/api/") => json(scratch, |w| w.raw("{\"error\":\"not implemented on heqk\"}")).with_status(404),
         p => match asset_for(p) {
