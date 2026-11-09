@@ -38,16 +38,23 @@ on:
       - "os/build/**"
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
+      - "tools/ci/stage-firmware.sh"
   pull_request:
     paths:
       - "os/kernel/**"
       - "os/build/**"
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
+      - "tools/ci/stage-firmware.sh"
   workflow_dispatch: {}
 
 permissions:
   contents: read
+
+env:
+  # validate.sh reports a broken build by grepping `^error` in cargo's output; coloured output hides
+  # the prefix, so CI issues said only "GAP: build broken" with no compiler message (2026-11-08).
+  CARGO_TERM_COLOR: never
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -62,13 +69,13 @@ jobs:
     name: "heqk QEMU gate (validate.sh — NOT a metal gate)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install pinned nightly toolchain (os/kernel/rust-toolchain.toml)
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools
-          targets: aarch64-unknown-none-softfloat
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -77,11 +84,16 @@ jobs:
       - name: Install qemu-system-aarch64
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm
+          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk   # mkfs.vfat/mcopy/sfdisk: validate.sh P15 OTA + A/B phases build a real FAT32 image
 
       - name: heqk validate.sh (build + QEMU boot + phase-gate report)
         run: ./validate.sh
         working-directory: os/kernel
+        env:
+          # GitHub runners emulate aarch64 under TCG with no acceleration: several times slower
+          # than the dev box, so the 150 s default boot budget cuts the long main boot short and
+          # late markers go "missing" (phantom FAILs). validate.sh annotates the failing gates.
+          HEQK_QEMU_TIMEOUT: "900"
 
       # validate.sh boots the QEMU flavor only. The shipped flavors: `prod` / `prod-mc` (GEM sensor) and the
       # Wi-Fi AP product `hboot,apmc,wifi-bigtx,appersist` (G12, 2026-11-09). `prod`+`apmode` stays refused:
@@ -95,6 +107,9 @@ jobs:
         working-directory: os/kernel
         run: |
           set -euo pipefail
+          # prod/prod-mc embed the licensed CYW43455 firmware (gitignored): stage the sha256-pinned
+          # blob first, or a fresh runner cannot compile the shipped flavour at all (ADR 0052).
+          ../../tools/ci/stage-firmware.sh
           cargo build -p kernel --features prod --release
           # prod-mc = THE production CM5 profile (ADR 0047: Mission Control served by heqk on the
           # GEM, passive-first). It embeds the UI, so build os/mission-control/dist first (same-origin API).

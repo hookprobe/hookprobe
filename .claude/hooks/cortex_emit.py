@@ -33,7 +33,8 @@ def main():
     elif mode == "gate" and tool == "Bash":
         cmd = ti.get("command", "")
         # only build/test/image commands are "gates" — not every shell call
-        if re.search(r"\b(cargo (test|build|clippy)|mkosi|smoketest|make-pi4|build-arm64|greenboot|npm run build|podman build)\b", cmd):
+        if re.search(r"\b(cargo (test|build|clippy|deny)|mkosi|smoketest|make-pi4|build-arm64|greenboot|npm run build"
+                     r"|podman build|gates\.sh|validate\.sh|mc-e2e(-metal)?\.sh|heal\.py|repro\.sh)\b", cmd):
             emit("gate", cmd[:120], cmd)
     elif mode == "redgate" and tool == "Bash":
         cmd = ti.get("command", "")

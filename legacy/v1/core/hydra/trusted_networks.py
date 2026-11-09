@@ -57,8 +57,107 @@ TRUSTED_NETWORKS: List[IPNetwork] = [
 ]
 
 
+# ---------------------------------------------------------------------------
+# Dynamic operator trust
+# ---------------------------------------------------------------------------
+# The operator's ISP hands out dynamic IPs, so the static /24s above keep
+# drifting (2026-11-08: neural-kernel cognitive_throttle blackholed the
+# operator's home IP 86.120.11.18 on the mesh/VPN port 8144 for ~7h; it had
+# SSH'd in the evening before but had no LIVE SSH session, so the live-SSH
+# guard did not cover it). The host timer `operator-trust-sync` writes the
+# source IPs of recent SUCCESSFUL SSH logins to this file (one IP/CIDR per
+# line, '#' comments allowed); every threat scorer and the XDP allowlist
+# treat them as trusted. Missing/unreadable file == no dynamic entries.
+import os as _os
+import time as _time
+
+DYNAMIC_TRUST_FILE = _os.environ.get(
+    'HOOKPROBE_DYNAMIC_TRUST_FILE', '/var/lib/hookprobe/trust/operator_ips.txt')
+_DYN_RECHECK_S = 30.0
+_dyn_cache = {'mtime': None, 'checked': 0.0, 'nets': ()}
+
+
+def parse_trust_lines(lines: Iterable[str]) -> List[IPNetwork]:
+    """Parse IP/CIDR lines; skip comments, blanks and invalid entries.
+
+    Over-broad entries (< /16 IPv4, < /32 IPv6) are rejected so a corrupt
+    file can never allowlist the internet.
+    """
+    nets: List[IPNetwork] = []
+    for raw in lines:
+        line = raw.split('#', 1)[0].strip()
+        if not line:
+            continue
+        try:
+            net = ipaddress.ip_network(line, strict=False)
+        except ValueError:
+            continue
+        if net.version == 4 and net.prefixlen < 16:
+            continue
+        if net.version == 6 and net.prefixlen < 32:
+            continue
+        nets.append(net)
+    return nets
+
+
+def dynamic_trusted_networks() -> tuple:
+    """Return the dynamic trust entries, re-reading the file on mtime change."""
+    now = _time.monotonic()
+    if now - _dyn_cache['checked'] < _DYN_RECHECK_S and _dyn_cache['mtime'] is not None:
+        return _dyn_cache['nets']
+    _dyn_cache['checked'] = now
+    try:
+        mtime = _os.stat(DYNAMIC_TRUST_FILE).st_mtime
+    except OSError:
+        _dyn_cache.update(mtime=0.0, nets=())
+        return ()
+    if mtime != _dyn_cache['mtime']:
+        try:
+            with open(DYNAMIC_TRUST_FILE) as fh:
+                nets = tuple(parse_trust_lines(fh))
+        except OSError:
+            nets = ()
+        _dyn_cache.update(mtime=mtime, nets=nets)
+    return _dyn_cache['nets']
+
+
+# CDN edge proxies (2026-11-09). Every public request reaches the origin
+# through Cloudflare, so its edge IPs carry heavy, entirely normal traffic —
+# the anomaly scorer was labelling them 'suspicious' (93% of all suspicious
+# verdicts: 2,985/3,198 in 24h across 678 edge IPs). A CDN edge is never the
+# attacker; the real client is attributed at L7 (nginx real-IP + AI-WAF).
+# Treated as trusted for SCORING. The origin-bypass detector
+# (flow_threats.is_cloudflare) and the kernel allowlist (feed_sync
+# TRUSTED_CIDRS) keep their own copies on purpose.
+# Source: https://www.cloudflare.com/ips-v4 + /ips-v6 (keep in sync with
+# containers/proxy cloudflare-ips-sync.sh).
+CDN_EDGE_NETWORKS: List[IPNetwork] = [ipaddress.ip_network(c) for c in (
+    '173.245.48.0/20', '103.21.244.0/22', '103.22.200.0/22', '103.31.4.0/22',
+    '141.101.64.0/18', '108.162.192.0/18', '190.93.240.0/20', '188.114.96.0/20',
+    '197.234.240.0/22', '198.41.128.0/17', '162.158.0.0/15', '104.16.0.0/13',
+    '104.24.0.0/14', '172.64.0.0/13', '131.0.72.0/22',
+    '2400:cb00::/32', '2606:4700::/32', '2803:f800::/32', '2405:b500::/32',
+    '2405:8100::/32', '2a06:98c0::/29', '2c0f:f248::/32',
+)]
+
+
+def is_cdn_edge(ip_str: str) -> bool:
+    """True if ip is a CDN (Cloudflare) edge proxy address."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except (ValueError, TypeError):
+        return False
+    return any(addr in net for net in CDN_EDGE_NETWORKS if addr.version == net.version)
+
+
+def all_trusted_networks() -> List[IPNetwork]:
+    """Static canonical list + dynamic operator entries."""
+    return list(TRUSTED_NETWORKS) + list(dynamic_trusted_networks())
+
+
 def is_trusted(ip_str: str) -> bool:
-    """Return True if the given IPv4/IPv6 string is inside any trusted network.
+    """Return True if the given IPv4/IPv6 string is inside any trusted network
+    (static canonical list or dynamic operator trust file).
 
     Invalid/empty IPs return False (never trusted).
     """
@@ -68,7 +167,11 @@ def is_trusted(ip_str: str) -> bool:
         addr = ipaddress.ip_address(ip_str)
     except (ValueError, TypeError):
         return False
-    return any(addr in net for net in TRUSTED_NETWORKS)
+    if any(addr in net for net in TRUSTED_NETWORKS):
+        return True
+    if is_cdn_edge(ip_str):
+        return True
+    return any(addr in net for net in dynamic_trusted_networks())
 
 
 def filter_trusted(ips: Iterable[str]) -> List[str]:

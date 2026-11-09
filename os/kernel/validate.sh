@@ -20,6 +20,7 @@ mkdir -p "$CARGO_TARGET_DIR"
 exec 9>"$CARGO_TARGET_DIR/.validate.lock"
 if ! flock -n 9; then echo "[lock] another validate.sh run holds $CARGO_TARGET_DIR — waiting for it..."; flock 9; fi
 KERNEL=$CARGO_TARGET_DIR/aarch64-unknown-none-softfloat/debug/kernel
+BUILD_LOG="$CARGO_TARGET_DIR/validate-build.log"
 LOG="$(mktemp)"
 # virtio-net (v2) attached for P5b: the kernel ARPs the gateway and RXes the reply.
 QEMU="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
@@ -161,8 +162,8 @@ echo "==================================================================="
 
 # --- Stage 1: build -------------------------------------------------------
 echo -n "[build] cargo build ... "
-if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost >/tmp/hp_build.log 2>&1; then
-  echo "FAIL"; echo "  --- build errors ---"; grep -E '^error' /tmp/hp_build.log | head;
+if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost >"$BUILD_LOG" 2>&1; then
+  echo "FAIL"; echo "  --- build output (last 100 lines) ---"; tail -n 100 "$BUILD_LOG"
   echo "GAP: build broken — cannot validate. Fix compile errors first."; exit 2
 fi
 echo "ok"
@@ -230,6 +231,8 @@ timeout "$QEMU_TIMEOUT" $QEMU "$KERNEL" >"$LOG" 2>&1
 RC=$?
 if grep -q "\[ALL\]" "$LOG"; then echo "clean exit"
 elif [ "$RC" = 124 ]; then echo "TIMEOUT after ${QEMU_TIMEOUT}s (load: $(cut -d' ' -f1 /proc/loadavg 2>/dev/null)) — missing markers below may be phantom; rerun on an idle host or raise HEQK_QEMU_TIMEOUT"
+  # On GitHub Actions, surface it as an annotation (readable from the public API without the log).
+  [ -n "${GITHUB_ACTIONS:-}" ] && echo "::warning title=validate.sh boot timeout::main QEMU boot hit HEQK_QEMU_TIMEOUT=${QEMU_TIMEOUT}s; missing markers may be phantom"
 else echo "rc=$RC (no ALL marker; possible hang/regression)"; fi
 
 # --- Stage 2b: M3.1 cross-restart persistence (file-backed virtio-blk) -----
@@ -356,7 +359,7 @@ fi
 # --- Stage 3: phase gate report ------------------------------------------
 printf "\n %-4s %-8s %-30s %s\n" "PH" "STATUS" "LIFECYCLE STAGE" "GATE"
 printf " %-4s %-8s %-30s %s\n" "----" "------" "------------------------------" "----------------------------------------"
-FAILS=0; GAPS=0; FIRST_FAIL=""
+FAILS=0; GAPS=0; FIRST_FAIL=""; FAILED_LIST=()
 for row in "${PHASES[@]}"; do
   IFS='|' read -r ph marker kind stage what <<< "$row"
   if grep -qF "$marker" "$LOG"; then
@@ -364,7 +367,7 @@ for row in "${PHASES[@]}"; do
   elif [ "$kind" = "plan" ]; then
     st="PLANNED"; GAPS=$((GAPS+1))
   else
-    st="FAIL"; FAILS=$((FAILS+1))
+    st="FAIL"; FAILS=$((FAILS+1)); FAILED_LIST+=("$ph")
     [ -z "$FIRST_FAIL" ] && FIRST_FAIL="$ph|$marker|$what"
   fi
   printf " %-4s %-8s %-30s %s\n" "$ph" "$st" "$stage" "$what"
@@ -379,6 +382,10 @@ if [ "$FAILS" -gt 0 ]; then
   echo ""
   echo " ┌─ HEAL: first failing gate = $ff_ph ($ff_what)"
   echo " │  missing marker: '$ff_marker'"
+  # GitHub Actions annotation: names every failing gate without needing the (auth-only) log.
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then
+    echo "::error title=validate.sh: ${FAILS} failing gate(s)::first = ${ff_ph}, missing '${ff_marker}'. Failing: $(printf '%s ' "${FAILED_LIST[@]:-}")"
+  fi
   if grep -qE 'EXCEPTION|PANIC' "$LOG"; then
     echo " │  fault detected — dumping the exception/panic:"
     grep -E 'EXCEPTION|PANIC|ESR_EL1|ELR_EL1|FAR_EL1' "$LOG" | sed 's/^/ │    /'

@@ -440,6 +440,18 @@ class BpfMapOps:
 
         return self.map_update(map_id, key, val)
 
+    def delete_lpm_trie(self, map_name: str, cidr: str) -> bool:
+        """Delete an exact CIDR key from an LPM_TRIE map (no-op if absent).
+
+        Exact-key semantics: deleting 1.2.3.4/32 never touches 1.2.0.0/16.
+        """
+        map_id = self.find_map_by_name(map_name)
+        if map_id is None:
+            return False
+        net = ipaddress.ip_network(cidr, strict=False)
+        key = struct.pack('<I', net.prefixlen) + net.network_address.packed
+        return self.map_delete(map_id, key)
+
     def update_lpm_trie_batch(self, map_name: str, cidrs,
                               value: int = 1) -> Tuple[int, int]:
         """Add a batch of CIDRs to an LPM_TRIE BPF map.
