@@ -3711,7 +3711,7 @@ fn cm5_p10_probe() {
                             }
                             let bi = unsafe { &*(boot_abi::BOOTINFO_ADDR as *const boot_abi::BootInfo) };
                             let b = if bi.magic == boot_abi::BOOTINFO_MAGIC { abboot::trial::classify(bi.kernel_hash) } else { otaimg::Boot::Unknown };
-                            kprint!(" [OTA] this boot: {:?}{}\n", b,
+                            kprint!(" [OTA] this boot: {:?} build={}{}\n", b, option_env!("HEQK_BUILD_ID").unwrap_or("-"),
                                 if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves and the WAN is usable (5 min limit, else reboot to the previous slot)" } else { "" });
                             (b, now())
                         };

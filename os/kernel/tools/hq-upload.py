@@ -60,12 +60,18 @@ def main():
     if a.status:
         print(json.dumps(req("/api/upload"), indent=2))
         return 0
-    if not (a.type and a.sig and a.file):
-        sys.exit("--type, --sig and --file are required")
-    sig = open(a.sig, "rb").read()
-    if len(sig) != 512:
-        sys.exit("a pack signature file is exactly 512 bytes")
-    cont = sig + open(a.file, "rb").read()
+    if a.type == "os_image":
+        # An OS image carries its own hybrid signature: the container is the signed heqk8.img itself.
+        if not a.file:
+            sys.exit("--file (the signed heqk8.img) is required")
+        cont = open(a.file, "rb").read()
+    else:
+        if not (a.type and a.sig and a.file):
+            sys.exit("--type, --sig and --file are required")
+        sig = open(a.sig, "rb").read()
+        if len(sig) != 512:
+            sys.exit("a pack signature file is exactly 512 bytes")
+        cont = sig + open(a.file, "rb").read()
 
     def form(path, **kv):
         nonlocal seq
