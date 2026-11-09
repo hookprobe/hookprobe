@@ -178,17 +178,13 @@ FEEDS = [
         'format': 'plaintext',
         'description': 'GreenSnow blocklist (active attackers)',
     },
+    # urlhaus_c2 + sslbl_botnet_c2 removed 2026-11-09: abuse.ch retired both
+    # (URLhaus text_online → HTTP 410 Gone; SSLBL IP blacklist now empty).
     {
-        'name': 'urlhaus_c2',
-        'url': 'https://urlhaus.abuse.ch/downloads/text_online/',
-        'format': 'urlhaus',
-        'description': 'URLhaus malware distribution IPs',
-    },
-    {
-        'name': 'sslbl_botnet_c2',
-        'url': 'https://sslbl.abuse.ch/blacklist/sslipblacklist.txt',
-        'format': 'comment_hash',
-        'description': 'SSL Blacklist - botnet C2 servers',
+        'name': 'ipsum_level3',
+        'url': 'https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt',
+        'format': 'plaintext',
+        'description': 'IPsum — IPs present on >=3 independent public blacklists (daily)',
     },
     {
         'name': 'cins_army',
@@ -552,6 +548,71 @@ def feed_source_ips() -> Set[str]:
     return ips
 
 
+def _lpm_key_to_cidr(key: bytes) -> Optional[str]:
+    """Decode an LPM_TRIE key (u32 LE prefixlen + IPv4 addr) to 'a.b.c.d/n'."""
+    if len(key) < 8:
+        return None
+    import struct as _struct
+    plen = _struct.unpack('<I', key[:4])[0]
+    try:
+        return str(ipaddress.ip_network(f"{ipaddress.IPv4Address(key[4:8])}/{plen}", strict=False))
+    except ValueError:
+        return None
+
+
+def reconcile_wan_blocklist(desired: Set[str], complete: bool,
+                            snapshot_dir: str = os.environ.get('WAN_RECONCILE_SNAPSHOT_DIR', '/tmp'),
+                            min_ratio: float = 0.2) -> int:
+    """Make sw_blocklist (WAN ENFORCEMENT map) exactly equal to `desired`.
+
+    Only feed_sync writes sw_blocklist (CNO writes the mirror-path `blocklist`
+    directly and is deliberately NOT reconciled here). Before reconciliation
+    existed, CIDRs that rotated OFF a feed stayed in the WAN map forever
+    (2026-11-09: 203,880 entries vs ~42k desired = ~160k stale WAN drops).
+
+    Guards — skip (return 0) when:
+      * `complete` is False: some feed failed with no cached copy this run, so
+        `desired` may be missing its entries (would wrongly unblock them);
+      * `desired` is implausibly small vs the live map (< min_ratio).
+    """
+    if not complete:
+        logger.info("WAN reconcile skipped: feed set incomplete this run")
+        return 0
+    try:
+        ops = get_bpf_ops()
+        map_id = ops.find_map_by_name('sw_blocklist')
+        if map_id is None:
+            return 0
+        live = {c for c in (_lpm_key_to_cidr(k) for k, _ in ops.map_dump(map_id)) if c}
+    except Exception as e:
+        logger.warning(f"WAN reconcile: cannot read sw_blocklist: {e}")
+        return 0
+    want = {str(ipaddress.ip_network(c, strict=False)) for c in desired}
+    if live and len(want) < min_ratio * len(live):
+        logger.warning(f"WAN reconcile refused: desired {len(want)} << live {len(live)}")
+        return 0
+    stale = live - want
+    if not stale:
+        return 0
+    try:  # rollback snapshot (re-add with update_lpm_trie_batch)
+        import json as _json
+        os.makedirs(snapshot_dir, exist_ok=True)
+        with open(os.path.join(snapshot_dir, 'sw_blocklist.removed.json'), 'w') as fh:
+            _json.dump({'ts': int(time.time()), 'removed': sorted(stale)}, fh)
+    except OSError as e:
+        logger.debug(f"WAN reconcile snapshot not written: {e}")
+    removed = 0
+    for cidr in stale:
+        try:
+            if ops.delete_lpm_trie('sw_blocklist', cidr):
+                removed += 1
+        except Exception:
+            continue
+    logger.info(f"WAN reconcile: removed {removed}/{len(stale)} stale sw_blocklist entries "
+                f"(live {len(live)} → desired {len(want)})")
+    return removed
+
+
 def sync_cognitive_blocks() -> Tuple[Set[str], int]:
     """Read active autonomous-defense blocks from ClickHouse and convert to CIDRs.
 
@@ -647,6 +708,7 @@ def sync_all_feeds() -> dict:
 
     all_cidrs: Set[str] = set()
     feed_results = []
+    feeds_complete = True   # False if any feed failed with no last-good cache
 
     # Download and parse each feed
     for feed in FEEDS:
@@ -673,7 +735,10 @@ def sync_all_feeds() -> dict:
                 duration_ms, error
             )
             # Keep enforcing the feed's last known-good entries.
-            all_cidrs.update(_last_good_feed.get(feed['name'], set()))
+            if feed['name'] in _last_good_feed:
+                all_cidrs.update(_last_good_feed[feed['name']])
+            else:
+                feeds_complete = False
             feed_results.append({
                 'name': feed['name'],
                 'status': 'error',
@@ -745,6 +810,7 @@ def sync_all_feeds() -> dict:
     if prev_blocklist:
         removed_xdp += remove_xdp_cidrs('blocklist', prev_blocklist - safe_cidrs)
     removed_xdp += purge_expired_cognitive_blocks(keep=safe_cidrs)
+    removed_xdp += reconcile_wan_blocklist(safe_cidrs, complete=feeds_complete)
 
     prev_blocklist = safe_cidrs
 

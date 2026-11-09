@@ -348,3 +348,61 @@ class TestFlowThreats:
         ev = self.ft.events_for({'ip': '203.0.113.9', 'flows': 50, 'ports': [443]},
                                 'origin_direct', '10.0.1.110')
         assert len(ev) == 3 and all(e['dst_port'] == 443 for e in ev)
+
+
+# ============================================================================
+# 7. WAN enforcement map full reconcile (2026-11-09: ~160k stale entries)
+# ============================================================================
+
+class FakeLpmOps:
+    def __init__(self, cidrs):
+        import ipaddress
+        self.keys = {}
+        for c in cidrs:
+            n = ipaddress.ip_network(c)
+            self.keys[struct.pack('<I', n.prefixlen) + n.network_address.packed] = b'\x01'
+        self.deleted = []
+
+    def find_map_by_name(self, name):
+        return 9 if name == 'sw_blocklist' else None
+
+    def map_dump(self, map_id):
+        return list(self.keys.items())
+
+    def delete_lpm_trie(self, name, cidr):
+        self.deleted.append(cidr)
+        return True
+
+
+class TestWanReconcile:
+    LIVE = ['198.51.100.0/24', '203.0.113.7/32', '192.0.2.0/24', '100.64.1.1/32', '100.64.1.2/32']
+
+    def test_removes_only_stale(self, feed_sync, monkeypatch, tmp_path):
+        ops = FakeLpmOps(self.LIVE)
+        monkeypatch.setattr(feed_sync, 'get_bpf_ops', lambda: ops)
+        n = feed_sync.reconcile_wan_blocklist({'198.51.100.0/24', '203.0.113.7/32'},
+                                              complete=True, snapshot_dir=str(tmp_path))
+        assert n == 3
+        assert set(ops.deleted) == {'192.0.2.0/24', '100.64.1.1/32', '100.64.1.2/32'}
+        assert (tmp_path / 'sw_blocklist.removed.json').exists()     # rollback snapshot
+
+    def test_skips_when_feed_set_incomplete(self, feed_sync, monkeypatch, tmp_path):
+        ops = FakeLpmOps(self.LIVE)
+        monkeypatch.setattr(feed_sync, 'get_bpf_ops', lambda: ops)
+        assert feed_sync.reconcile_wan_blocklist({'198.51.100.0/24'}, complete=False,
+                                                 snapshot_dir=str(tmp_path)) == 0
+        assert ops.deleted == []
+
+    def test_refuses_implausibly_small_desired_set(self, feed_sync, monkeypatch, tmp_path):
+        ops = FakeLpmOps(self.LIVE)
+        monkeypatch.setattr(feed_sync, 'get_bpf_ops', lambda: ops)
+        assert feed_sync.reconcile_wan_blocklist(set(), complete=True,
+                                                 snapshot_dir=str(tmp_path)) == 0
+        assert ops.deleted == []
+
+    def test_failed_feed_without_cache_marks_incomplete(self, feed_sync, monkeypatch):
+        seen = {}
+        monkeypatch.setattr(feed_sync, 'reconcile_wan_blocklist',
+                            lambda desired, complete: seen.setdefault('complete', complete) and 0)
+        TestFeedSync()._run_sync(feed_sync, monkeypatch, {'a': (set(), 'timed out')})
+        assert seen['complete'] is False
