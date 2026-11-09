@@ -5,7 +5,9 @@
 # Baseline 2026-11-09 (cd624beb, bench Pi USB Wi-Fi): 73 / 120 / 135 Mbps, median 120.
 set -u -o pipefail
 PI="${1:-claude@10.200.0.4}"; IF="${2:-auto}"; FLOOR="${3:-60}"; RUNS="${4:-5}"
-URL='https://speed.cloudflare.com/__down?bytes=60000000'
+# The bench file server on the WAN VLAN (fortress-vlan-bench.sh setup starts it): deterministic, no internet
+# rate limit (speed.cloudflare.com answered 403 after repeated runs, 2026-11-10). Override with HQ_SINK_URL.
+URL="${HQ_SINK_URL:-http://10.100.0.1:8088/blob}"
 # auto: the Pi interface that routes to the AP (it may re-join on either adapter after a power cycle)
 [ "$IF" = auto ] && for _ in $(seq 1 30); do IF=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "ip -4 route get 10.99.0.1 | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p'" 2>/dev/null); [ -n "$IF" ] && [ "$IF" != auto ] && break; IF=auto; sleep 3; done
 echo "  client interface: $IF"
