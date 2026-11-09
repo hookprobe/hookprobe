@@ -4303,6 +4303,11 @@ fn cm5_p10_probe() {
                                     }
                                     if up.usable() {
                                         uplink::wan6_tick(&up); // DHCPv6 prefix-delegation renewal at T1
+                                        rtwdog::pet(now(), freq); // the re-probe below may hold the loop for <= 12 s
+                                        if uplink::wan6_reprobe(&up) {
+                                            let (k, ok) = unsafe { uplink::WAN6_REPROBES };
+                                            kprint!(" [WAN6] re-probe #{} after a late Router Advertisement: IPv6 {}\n", k, if ok { "UP (the LAN renumbers next)" } else { "still down" });
+                                        }
                                     }
                                     {
                                         // (Re)number the LAN when the WAN has a delegated prefix (also after a WAN re-dial).
