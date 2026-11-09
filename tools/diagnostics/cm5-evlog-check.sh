@@ -14,7 +14,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 mark=$(stat -c %s "$LOG")
 echo "== waiting for the evidence log to seal detections (<= 3 min)"
 for _ in $(seq 1 36); do
-  tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -aq "\[AP-EVLOG\] [0-9]* detections sealed" && break
+  tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-EVLOG\] [0-9]* detections sealed" >/dev/null && break
   sleep 5
 done
 W=$(tr -d '\r\000' < "$LOG" | grep -a "\[AP-EVLOG\] [0-9]* detections sealed" | tail -1)
@@ -24,7 +24,7 @@ echo "== power cycle (relay K1)"
 mark=$(stat -c %s "$LOG")
 python3 "$HERE/cm5-relay.py" --backend nano --dev auto cycle >/dev/null 2>&1 || { echo "EVLOG: FAIL — relay cycle failed"; exit 1; }
 for _ in $(seq 1 60); do
-  tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -aq "\[AP-PERSIST\] [0-9]* detections restored" && break
+  tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-PERSIST\] [0-9]* detections restored" >/dev/null && break
   sleep 3
 done
 NEW=$(tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000')

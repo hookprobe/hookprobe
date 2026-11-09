@@ -35,7 +35,7 @@ grep -q 'rollback refused' <<<"$R"; chk $? "an older generation (1) is refused (
 echo "== power cycle (relay K1)"
 mark=$(stat -c %s "$LOG")
 python3 "$HERE/cm5-relay.py" --backend nano --dev auto cycle >/dev/null 2>&1
-for _ in $(seq 1 60); do tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -aq "\[AP-STORE\] artifact store" && break; sleep 3; done
+for _ in $(seq 1 60); do tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-STORE\] artifact store" >/dev/null && break; sleep 3; done
 L=$(tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-STORE\]" | tail -3); echo "$L" | sed 's/^/  /'
 grep -q "shield_block from the artifact store (generation $G1)" <<<"$L"; chk $? "after the power cycle the list loads from the artifact store"
 for _ in $(seq 1 40); do pi "ip route | grep -q '^default via 10.99.0.1'" && curl -sk -o /dev/null -m 5 "$MC/" && break; sleep 3; done
