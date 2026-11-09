@@ -97,6 +97,12 @@ pub fn pet(now: u64, freq: u64) {
     }
 }
 
+/// The previous reset was a watchdog-type reset (a hang the runtime watchdog recovered from, a kernel
+/// panic / fatal exception — both reboot through the EL2 gate — or a trial boot that never confirmed).
+pub fn prev_reset_was_watchdog() -> bool {
+    PREV_WDOG_RESET.load(Relaxed)
+}
+
 /// (armed, hypercall pets, worst gap between loop calls in ms, previous reset was a watchdog reset)
 pub fn stats(freq: u64) -> (bool, u64, u64, bool) {
     let f = freq.max(1);
