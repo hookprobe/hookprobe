@@ -81,6 +81,65 @@ fn block_desc(base: usize, attr: u64, sh: u64, ap: u64) -> u64 {
 /// The MMU as a HAL implementation.
 pub struct Mmu;
 
+/// First L1 slot of the translated high-MMIO window pool (VA 0x78_0000_0000..0x80_0000_0000).
+#[cfg(feature = "pci")]
+const MMIO_HI_SLOT: usize = 480;
+#[cfg(feature = "pci")]
+const MMIO_HI_SLOTS: usize = 32;
+
+#[cfg(feature = "pci")]
+impl Mmu {
+    /// Map the 1 GiB Device window containing physical `pa` (EL1 RW, never executable) and
+    /// return the kernel VA for `pa`. arm64-cloud MMIO lies outside the boot identity map:
+    /// the PCIe ECAM (QEMU virt / OCI A1: 0x40_1000_0000) and the 64-bit BAR window
+    /// (0x80_0000_0000+, beyond the 39-bit VA). Below 2^39 the window is identity-mapped in
+    /// its own L1 slot; above, it goes to a free high slot and is translated.
+    /// Fail-closed: never remaps a slot that holds a different mapping, and never touches the
+    /// RAM/kernel slot (1) or the EL0 user slots (2, 3). Mappings made here are copied into
+    /// address spaces created afterwards by `new_addr_space` (EL1-only, so EL0 cannot use them).
+    pub fn map_mmio(&self, pa: usize) -> Option<usize> {
+        const GIB: usize = 1 << 30;
+        let gib = pa & !(GIB - 1);
+        let off = pa - gib;
+        if gib == 0 {
+            return Some(pa); // GB0: already identity-mapped Device at boot
+        }
+        let l1 = l1_ptr();
+        let desc = block_desc(gib, ATTR_DEVICE, 0, AP_RW_EL1) | PXN | UXN;
+        let install = |slot: usize| unsafe {
+            write_volatile(l1.add(slot), desc);
+            core::arch::asm!("dsb ishst", "tlbi vmalle1", "dsb ish", "isb");
+        };
+        if gib < (1usize << 39) {
+            let slot = gib >> 30;
+            if slot <= 3 || (MMIO_HI_SLOT..MMIO_HI_SLOT + MMIO_HI_SLOTS).contains(&slot) {
+                return None;
+            }
+            let cur = unsafe { read_volatile(l1.add(slot)) };
+            if cur == desc {
+                return Some(pa);
+            }
+            if cur != 0 {
+                return None;
+            }
+            install(slot);
+            return Some(pa);
+        }
+        for slot in MMIO_HI_SLOT..MMIO_HI_SLOT + MMIO_HI_SLOTS {
+            if unsafe { read_volatile(l1.add(slot)) } == desc {
+                return Some((slot << 30) + off);
+            }
+        }
+        for slot in MMIO_HI_SLOT..MMIO_HI_SLOT + MMIO_HI_SLOTS {
+            if unsafe { read_volatile(l1.add(slot)) } == 0 {
+                install(slot);
+                return Some((slot << 30) + off);
+            }
+        }
+        None
+    }
+}
+
 impl Mmu {
     fn get_or_create_table(&self, table: *mut u64, idx: usize) -> Option<*mut u64> {
         let e = unsafe { read_volatile(table.add(idx)) };
