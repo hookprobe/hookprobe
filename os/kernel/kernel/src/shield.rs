@@ -671,13 +671,18 @@ pub fn levels_selftest() -> bool {
     record(1, 0x0A63_000A, 1, b"ads.example", v);
     let v = d(b"c2.example", &b);
     record(2, 0x0A63_000A, 1, b"c2.example", v);
-    let mut buf = [0u8; 4096];
-    let mut w = JsonBuf::new(&mut buf);
-    render(&mut w, &|t| t, 8);
-    let j = core::str::from_utf8(w.bytes()).unwrap_or("");
-    let explained = j.contains("\"name\":\"ads.example\",\"verdict\":\"level-allowed\",\"category\":\"ads\",\"level\":\"relaxed\"")
-        && j.contains("\"name\":\"c2.example\",\"verdict\":\"blocked\",\"category\":\"malware\",\"level\":\"balanced\"")
-        && j.contains("\"level\":\"balanced\",\"strict_adult\":false") && j.contains("\"level-allowed\":1");
+    #[cfg(feature = "netsvc")]
+    let explained = {
+        let mut buf = [0u8; 4096];
+        let mut w = JsonBuf::new(&mut buf);
+        render(&mut w, &|t| t, 8);
+        let j = core::str::from_utf8(w.bytes()).unwrap_or("");
+            j.contains("\"name\":\"ads.example\",\"verdict\":\"level-allowed\",\"category\":\"ads\",\"level\":\"relaxed\"")
+            && j.contains("\"name\":\"c2.example\",\"verdict\":\"blocked\",\"category\":\"malware\",\"level\":\"balanced\"")
+            && j.contains("\"level\":\"balanced\",\"strict_adult\":false") && j.contains("\"level-allowed\":1")
+    };
+    #[cfg(not(feature = "netsvc"))]
+    let explained = true; // no /api/dns in this build
     // memory: one u64 per name — the category costs no table space
     let one_per_name = block_len() == 7;
     reset_stats();
