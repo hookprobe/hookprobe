@@ -35,6 +35,7 @@ setting changes that; only bare-metal shapes expose EL2. heqk does **not** need 
 | `run-oci-a1.sh <disk.img>` | boot a disk on the OCI A1 QEMU model |
 | `mkdisk.sh <out> <BOOTAA64.EFI>` | GPT + FAT32 ESP disk; `MKDISK_QCOW2=1` also writes the OCI-importable `.qcow2` |
 | `boot-heqk.sh [outdir]` | build heqk `--features cloud` → embed in efiboot → disk → boot. `PROBE_ONLY=1` = probe disk only, `BOOT=0` = build only |
+| `oneshot-probe.sh <user@host>` | live test WITHOUT an image import: on a **throwaway** Oracle Linux/Ubuntu A1, put the probe on the ESP, arm a one-shot GRUB chainload, reboot. The probe prints `[OCI-A1-model]` on the serial console and powers off; starting the instance again returns the normal OS. Refuses the production host (by name and by its running containers) |
 | `../../efiboot/` | the UEFI entry: read-only hardware probe (`[OCI-A1-model] PASS/FAIL`), plus with `HEQK_IMAGE=` a bounds-checked ELF loader → ExitBootServices → MMU off → heqk at EL1 |
 
 ## Port status (QEMU OCI model)
@@ -43,9 +44,9 @@ setting changes that; only bare-metal shapes expose EL2. heqk does **not** need 
 |---|---|
 | 0. QEMU target matching the real A1 | ✅ probe 18/18 |
 | 1. UEFI boot (efiboot loader) | ✅ heqk unmodified boots P0–P3 (EL1, MMU, W^X, caps, EL0) |
-| 2. GICv3 (`kernel --features cloud`) | ✅ timer IRQs live; runs on to P5 (rules, scan, DNS sink, packet engine) |
-| 3. virtio **PCI** transport (ECAM from MCFG; high ECAM needs an MMU window) | ❌ next — `[P5b] wire: FAIL` (heqk only knows virtio-mmio) |
-| 4. ACPI hand-off (efiboot passes RSDP; GIC/UART/ECAM from MADT/SPCR/MCFG, not constants) | ❌ |
+| 2. GICv3 (`kernel --features cloud`) | ✅ timer IRQs live. Review fixes (2026-11-09, verified on the real A1 by the hookprobe-com agent): 24-bit INTID ack (LPIs ≥ 8192), per-SPI trigger (level for PL011/INTx; edge kept for the CM5-parity `enable_spi`), correct GICD_IROUTER Aff3[39:32], GICv4 VLPIS stride, loud (not silent) RWP/redistributor failures |
+| 3. virtio **PCI** transport | ✅ `virtio_transport` (mmio + pci-modern) under both virtio-net drivers; `pci.rs` ECAM; `Mmu::map_mmio` (ECAM 0x40_1000_0000 identity, 64-bit BARs at 0x80_0000_0000+ via translated high L1 slots); enables MEM+bus-master (firmware leaves the NIC off). `[P5b]` PASS over virtio-pci, `[DRV]` grants the NIC's PCI config page to the EL0 driver. **Full default sequence `[ALL] … GREEN` on the OCI model.** |
+| 4. ACPI hand-off (efiboot passes RSDP; GIC/UART/ECAM from MADT/SPCR/MCFG, not constants) | ❌ not blocking on OCI A1 — the real A1's ACPI was checked and every constant matches; needed for other clouds |
 | 5. virtio-scsi (boot/data volume) | ❌ |
 | 6. Cloud identity root (no OTP; vTPM availability on A1 unverified) + PSCI reset/off | ❌ |
 
