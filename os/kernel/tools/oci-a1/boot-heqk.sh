@@ -29,4 +29,18 @@ fi
 "$HERE/mkdisk.sh" "$OUT/disk" "$EFI" >/dev/null
 echo "[oci-a1] disk: $OUT/disk.img$([ "${MKDISK_QCOW2:-0}" = 1 ] && echo " + $OUT/disk.qcow2")"
 [ "${BOOT:-1}" = 1 ] || exit 0
-OCI_SEMIHOST=1 OCI_TIMEOUT=${OCI_TIMEOUT:-120} "$HERE/run-oci-a1.sh" "$OUT/disk.img"
+# A `cloud` kernel exits through PSCI (no semihosting — it is undefined on a real VM) and
+# prints `[heqk-exit] code=N`; the verdict comes from that line, not QEMU's status.
+LOG="$OUT/boot.log"
+OCI_TIMEOUT=${OCI_TIMEOUT:-180} "$HERE/run-oci-a1.sh" "$OUT/disk.img" 2>&1 | tee "$LOG" || true
+if [ "${PROBE_ONLY:-0}" = 1 ]; then
+  grep -q '\[OCI-A1-model\] PASS' "$LOG"
+  exit $?
+fi
+CODE=$(sed -n 's/.*\[heqk-exit\] code=\([0-9]*\).*/\1/p' "$LOG" | tail -1)
+if [ -z "$CODE" ]; then
+  echo "[oci-a1] FAIL: no [heqk-exit] line (hang, timeout, or crash before exit)" >&2
+  exit 1
+fi
+echo "[oci-a1] heqk exit code $CODE"
+exit "$CODE"
