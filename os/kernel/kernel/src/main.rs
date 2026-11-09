@@ -3910,24 +3910,8 @@ fn cm5_p10_probe() {
                                             dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
                                             dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.active(), dh.arp_replies);
-                                    } else if act == 0 && lanrelay::is_discovery_mcast(frame) {
-                                        // G10: mDNS / SSDP / LLMNR from a station -> the other stations (IDS verdict first)
-                                        if packet::verdict(frame).1 != packet::DROP {
-                                            let _ = lanrelay::relay_discovery(frame, &dh, cyw43::now_secs(), &mut |f| wifi_send!(f));
-                                        }
-                                    } else if act == 0 && lanrelay::relay_target6(frame, &dh) {
-                                        // G10: IPv6 station -> station (link-local / ULA / global), IDS verdict first
-                                        if packet::verdict(frame).1 != packet::DROP {
-                                            let _ = wifi_send!(frame);
-                                        }
-                                    } else if act == 0 && frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
-                                        // G10: an ARP request for ANOTHER station — answer for it (proxy-ARP) so the pair can
-                                        // talk THROUGH heqk (the firmware's ap_isolate keeps them from talking directly).
-                                        let mut ab = [0u8; 64];
-                                        let k = lanrelay::proxy_arp(frame, &dh, &mut ab);
-                                        if k > 0 {
-                                            let _ = wifi_send!(&ab[..k]);
-                                        }
+                                    } else if act == 0 && apcore::station_relay(frame, &dh, cyw43::now_secs(), &mut |f: &[u8]| wifi_send!(f)) {
+                                        // G10 station-to-station (discovery relay / IPv6 relay / proxy-ARP): G0 step 3c
                                     } else if act == 0 && frame.len() >= 54 && frame[12] == 0x86 && frame[13] == 0xdd && unsafe { V6.up } {
                                         // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
                                         // verdict and out the PPPoE session (no NAT; the module records the flow so the
@@ -6546,6 +6530,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
+        let _ = apcore::relay_selftest();
+        let _ = apcore::ladder_selftest();
         let _ = ownerjournal::selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
