@@ -1,0 +1,34 @@
+# heqk UEFI entry for the arm64-cloud tier (OCI Ampere A1 first) — ADR 0047 port item 10
+# ("VM/cloud: virtio-pci, UEFI boot"). A PE32+ EFI application, zero dependencies (raw UEFI
+# FFI, bespoke ACPI walk) so the whole pre-kernel path stays auditable.
+#
+# Stage 1 (this crate today): `probe` — a read-only hardware census of the guest (EL, ACPI
+# tables, GIC version + redistributors, SPCR UART, MCFG/ECAM, PCI/virtio inventory, RAM) that
+# checks the platform against the device model measured on the real OCI A1 instance. The SAME
+# .efi runs under tools/oci-a1/run-oci-a1.sh and on a real OCI custom-image instance.
+#
+# DETACHED workspace (own [workspace] table, like el0-wasmhost): it targets
+# aarch64-unknown-uefi, not the kernel's aarch64-unknown-none-softfloat, so it must never
+# enter the kernel's build graph / Cargo.lock.
+[package]
+name = "efiboot"
+version = "0.1.0"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
+
+[workspace]
+
+[[bin]]
+name = "efiboot"
+path = "src/main.rs"
+
+[dependencies]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
