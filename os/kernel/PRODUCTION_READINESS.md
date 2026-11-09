@@ -26,7 +26,7 @@ TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 a
 |---|---|---|---|
 | 2.1 | ADR 0050 D4: HTTP parse, DHCP server, DNS forwarder, PPPoE/DHCP/RA clients, Noise, WPA2 authenticator → EL0 | A | TLS in EL0; the rest EL1 |
 | 2.2 | G0 apcore steps 3b–5 (IPv6 / discovery / eth1 / Wi-Fi queue / mgmt / tick) | A | steps 1–3a done |
-| 2.3 | Coverage-guided host fuzzing of every parser + the upload / journal / store formats | A | fixed-seed in-kernel fuzz only |
+| 2.3 | Coverage-guided host fuzzing of every parser + the upload / journal / store formats | A | **partly built**: libFuzzer over the host-buildable `hal` parsers (`tools/fuzz`, CI job; 15M+ runs, 0 crashes); kernel-crate parsers still fixed-seed `[P-fuzz]` — host-buildable split of those modules is the next step |
 | 2.4 | Owner-journal compaction (refused after ~1,000 records) | A | **built** (stage B, QEMU) — metal next batch |
 | 2.5 | eMMC multi-block reads (boot time, larger stores) | A+B | **built** (CMD18, self-checked at probe) — metal batch 22 |
 | 2.6 | Crypto assurance: libcrux ML-KEM decision; P-256 on-board timing run | D / B | source review done |
@@ -46,7 +46,7 @@ TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 a
 | # | Item | Kind | State |
 |---|---|---|---|
 | 4.1 | Accuracy benchmark: replayed benign + attack corpus → FP / detection rate per rule | A | **built** (`tools/detbench`, QEMU replay with the recorded clock); first run fixed 3 detector defects (MAC-flood slot hash, per-packet alert storms, ARP poisoning undetected → rule 127); all 8 synthetic attack classes detected — benign corpus from real captures in progress |
-| 4.2 | Coverage: IPv6 LAN↔LAN lateral, IPv6-only devices, encrypted-traffic behaviour beyond JA4 | A | open |
+| 4.2 | Coverage: IPv6 LAN↔LAN lateral, IPv6-only devices, encrypted-traffic behaviour beyond JA4 | A | open — evasive IPv4 variants (slow scan / exfil / brute, jittered beacon, DNS tunnel) **built** 2026-11-09 |
 | 4.3 | Detection modules as signed Wasm at catalogue parity (napse-dpi, qsecbit, dnsXai) | A | one module at parity |
 | 4.4 | Threat-intel publishing pipeline (sources → signed packs → generations) for the upload channel | A+D | channel built |
 | 4.5 | Owner alert delivery (beyond syslog/SIEM) | A+D | none |
