@@ -524,7 +524,7 @@ class DNSMLClassifier:
                 logger.error(f"Training failed: {e}")
                 return {
                     'success': False,
-                    'error': str(e)
+                    'error': 'Training failed (see server log)'
                 }
 
     def _save_training_data(self, domains: List[str]):

@@ -1662,7 +1662,7 @@ class Fingerbank:
         self._load_custom_data()
         # Log API key status for debugging
         if self.api_key:
-            logger.info(f"Fingerbank initialized with API key: {self.api_key[:8]}...")
+            logger.info(f"Fingerbank initialized with API key (redacted, {len(self.api_key)} chars)")
         else:
             logger.warning("Fingerbank initialized WITHOUT API key - API lookups disabled")
 
