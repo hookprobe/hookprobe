@@ -979,6 +979,88 @@ pub fn wan6_reprobe(up: &UplinkResult) -> bool {
     true
 }
 
+/// WAN IPv4 lease RENEWAL without leaving the serve loop (production phase 3d, audit 2026-11-10). The old
+/// renewal re-ran the whole bring-up (DORA + gateway ARP + ping probes + the up-to-12-s IPv6 probe), stalling
+/// every Wi-Fi client for seconds at each T1. Now: a REQUEST for the held address is sent from the loop (and
+/// re-sent every 5 s), the ACK / NAK is consumed by `wan_poll`, and only a NAK or an unanswered renewal past
+/// T2 falls back to the full bring-up (the caller's choice).
+static mut RENEW_XID: [u8; 4] = [0; 4];
+static mut RENEW_LAST_MS: u64 = 0;
+/// (requests sent, ACKs, NAKs)
+pub static mut RENEW_STATS: (u32, u32, u32) = (0, 0, 0);
+/// Outcome the AP loop collects: 0 = nothing new, 5 = ACK (lease refreshed), 6 = NAK.
+static mut RENEW_RESULT: u8 = 0;
+
+/// Send (or re-send, at most every 5 s) a DHCPREQUEST for the address we hold. Cheap when not due.
+pub fn wan_renew_tick(up: &UplinkResult) {
+    if up.mode != 0 || !up.dhcp.ack_rx {
+        return; // static / PPPoE, or no lease to renew
+    }
+    let now = ms_now();
+    unsafe {
+        if RENEW_LAST_MS != 0 && now.wrapping_sub(RENEW_LAST_MS) < 5_000 {
+            return;
+        }
+        if RENEW_XID == [0; 4] {
+            RENEW_XID = ((cntpct() as u32) | 1).to_be_bytes();
+        }
+        let mut pkt = [0u8; 400];
+        let n = build_dhcp(&mut pkt, &up.mac, &RENEW_XID, 3, &up.dhcp.yiaddr, &up.dhcp.server);
+        if nic_tx(up.nic, &pkt[..n]) {
+            RENEW_STATS.0 += 1;
+        }
+        RENEW_LAST_MS = now.max(1);
+    }
+}
+
+/// The renewal outcome since the last call (0 none, 5 ACK, 6 NAK); resets the renewal state when final.
+pub fn wan_renew_take() -> u8 {
+    unsafe {
+        let r = core::mem::replace(&mut *core::ptr::addr_of_mut!(RENEW_RESULT), 0);
+        if r != 0 {
+            RENEW_XID = [0; 4];
+            RENEW_LAST_MS = 0;
+        }
+        r
+    }
+}
+
+/// `wan_poll` hook: a reply to our renewal REQUEST (xid + chaddr matched) updates the lease in place.
+fn renew_reply(up: &mut UplinkResult, eth: &[u8]) -> bool {
+    let xid = unsafe { RENEW_XID };
+    if xid == [0; 4] {
+        return false;
+    }
+    let mut d = DhcpResult::new();
+    match parse_dhcp_reply(eth, &xid, &up.mac, &mut d) {
+        5 if d.yiaddr == up.dhcp.yiaddr => {
+            if d.lease > 0 {
+                up.dhcp.lease = d.lease;
+            }
+            if d.router != [0; 4] {
+                up.dhcp.router = d.router;
+            }
+            if d.dns != [0; 4] {
+                up.dhcp.dns = d.dns;
+            }
+            unsafe {
+                RENEW_STATS.1 += 1;
+                RENEW_RESULT = 5;
+            }
+            true
+        }
+        5 | 6 => {
+            // a NAK, or an ACK for a different address: the lease is gone — the caller re-runs the bring-up
+            unsafe {
+                RENEW_STATS.2 += 1;
+                RENEW_RESULT = 6;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
 pub fn wan6_tick(up: &UplinkResult) {
     let eth = up.mode != 2;
     if eth && !unsafe { WAN6_ETH.up } {
@@ -1334,6 +1416,10 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         None => return WanEvent::Idle,
     };
     if n < 14 {
+        return WanEvent::Idle;
+    }
+    // A reply to our in-loop lease renewal (phase 3d) — consumed here, never handed to the NAT.
+    if buf[12] == 0x08 && buf[13] == 0x00 && n >= 42 + 240 && buf[23] == 17 && renew_reply(up, &buf[..n]) {
         return WanEvent::Idle;
     }
     // Field self-heal: IPv6 was not up after the boot probe, but a router now advertises on the WAN (an ISP
