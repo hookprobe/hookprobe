@@ -110,6 +110,22 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | I8 | Per-device MAC | `[WIFI] per-device MAC 02:..` (or x2/x6/xa/xe first octet); the phone sees that BSSID; same value after a power cycle | serial + phone |
 | I9 | Request-level G14 checks from the mgmt laptop: `os/kernel/tools/actions-metal.sh <owner-key-file> https://<mgmt ip>` (H7–H10) | replay 409, foreign Origin 403, missing CSRF 403, TTL 400, mgmt-floor hold refused, wrong owner key refused | curl |
 
+## J. Production phases (OTA, self-heal, trust anchor) — 2026-11-10
+
+Scripts: `tools/diagnostics/cm5-ota-check.sh`, `cm5-soak.sh`, `cm5-throughput-check.sh` (local WAN-side sink),
+`pi-ensure-ap.sh`. Images for J1: two factory builds of ONE commit (identical HBoot) with `SVN=1 HEQK_BUILD_ID=a`
+and `SVN=2 HEQK_BUILD_ID=b` (`$CLAUDE_JOB_DIR/tmp/fac.sh` pattern).
+
+| ID | Test | Expected | Evidence |
+|---|---|---|---|
+| J1 | OS update over Mission Control: corrupted image, then the signed SVN+1 image | corrupted refused at finish ("bad signature"); real image written + re-hashed from the slot; tryboot trial; `[OTA] this boot: Trial`; `[OTA] COMMITTED` once AP + WAN are up; power cycle → `[OTA] this boot: Cold build=<new>` | `cm5-ota-check.sh` |
+| J2 | Trial that never gets a usable WAN (stop the bench dnsmasq during the trial) | `[OTA] trial not healthy within 5 min` → reboot → the previous slot runs (cold) | serial |
+| J3 | Runtime watchdog | `[WDOG] armed=true`, worst loop gap well under 16 s through a soak | serial / soak |
+| J4 | Trust anchor | first boot `[ANCHOR] … PINNED`; next boot `[ANCHOR] pinned operator key`; an image built with another key reports the conflict and still verifies POLICY.TXT with the pinned key | serial |
+| J5 | WAN RX ring 512 (AP image) | `cm5-throughput-check.sh` against the local sink: `res_err` stays low and throughput ≥ the internet baseline (128-ring: ~6 Mbps, 64 % res_err) | script + serial |
+| J6 | IPv6 re-probe | boot with kea stopped, start it: `[WAN6] re-probe #1 after a late Router Advertisement: IPv6 UP` and the LAN renumbers | serial |
+| J7 | 72 h soak | no reboot / fault, counters monotonic, throughput floor held | `cm5-soak.sh` |
+
 ## E. Platform (from earlier sessions, still open)
 
 | ID | Test | Expected |
