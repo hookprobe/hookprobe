@@ -7,6 +7,7 @@
 //!   2. encrypted-DNS / bypass controls (DDR, Firefox canary, iCloud Private Relay, DoH hostnames);
 //!   3. the LONGEST matching rule between ALLOW and BLOCK (ties -> allow);
 //!   4. otherwise allowed.
+//!
 //! Blocked names get NXDOMAIN for every QTYPE (+ Extended DNS Error 15 "Blocked" when the query used
 //! EDNS), no SOA (nothing negatively cached). No ML/keyword rule ever blocks.
 
@@ -201,7 +202,7 @@ fn parse_line(line: &[u8]) -> Result<Option<(&[u8], bool)>, ()> {
     if let Some(r) = body.strip_prefix(b"||") {
         // adblock: ||domain^  (any $options -> skipped: a network-filter option we do not implement)
         let end = r.iter().position(|&c| c == b'^').ok_or(())?;
-        if r.get(end + 1..).map_or(false, |t| !trim(t).is_empty()) {
+        if r.get(end + 1..).is_some_and(|t| !trim(t).is_empty()) {
             return Err(());
         }
         return valid_domain(&r[..end]).map(|d| Some((d, allow))).ok_or(());
@@ -686,6 +687,7 @@ pub fn levels_selftest() -> bool {
     pass
 }
 
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub fn decide_for(name: &[u8], client: u32) -> Verdict {
     let v = decide(name);
     if v == Verdict::Blocked && !cat_malicious(unsafe { LAST_CAT }) && crate::actions::shield_paused(client) { Verdict::Paused } else { v }
@@ -1235,6 +1237,7 @@ pub fn totals() -> (u64, u64, u64) {
 }
 
 /// The last blocked name and its client (heartbeat).
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub fn last_blocked(out: &mut [u8; NAME_MAX]) -> (usize, u32) {
     let e = st().last_blocked;
     out[..e.nl as usize].copy_from_slice(&e.name[..e.nl as usize]);
@@ -1242,10 +1245,12 @@ pub fn last_blocked(out: &mut [u8; NAME_MAX]) -> (usize, u32) {
 }
 
 /// Queries Shield let through that scored as DGA / lookalike / tunnel (detections raised).
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub fn dga_hits() -> u64 {
     st().dga
 }
 
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub fn counter(v: Verdict) -> u64 {
     st().c[v as usize]
 }
@@ -1272,14 +1277,14 @@ pub fn render(out: &mut JsonBuf, epoch: &dyn Fn(u64) -> u64, recent: usize) {
     }
     let _ = write!(out, "}},\"policy\":{{\"encrypted_dns\":\"{}\",\"private_relay\":\"{}\",\"level\":\"{}\",\"strict_adult\":{}}},\"counters\":{{",
         if p.encrypted_dns_block { "block" } else { "allow" }, if p.private_relay_block { "block" } else { "report" }, p.level.name(), p.strict_adult);
-    for k in 0..NC {
+    for (k, n) in s.c.iter().enumerate() {
         let name = if k == C_UNPARSABLE { "unparsable" } else { ALL[k].name() };
-        let _ = write!(out, "{}\"{}\":{}", if k > 0 { "," } else { "" }, name, s.c[k]);
+        let _ = write!(out, "{}\"{}\":{}", if k > 0 { "," } else { "" }, name, n);
     }
     out.raw("},\"top_blocked\":[");
     let mut idx = [0usize; TOPK];
-    for k in 0..s.ntop {
-        idx[k] = k;
+    for (k, x) in idx.iter_mut().enumerate().take(s.ntop) {
+        *x = k;
     }
     idx[..s.ntop].sort_unstable_by(|&a, &b| s.top[b].count.cmp(&s.top[a].count));
     for (n, &k) in idx[..s.ntop].iter().enumerate() {
@@ -1393,9 +1398,9 @@ fn test_cname_reply(qname: &[u8], target: &[u8], out: &mut [u8]) -> usize {
     d[o..o + 4].copy_from_slice(&[0, 1, 0, 1]);
     o += 4;
     // CNAME RR: name = ptr to question
-    let rdl_at;
+    
     d[o..o + 12].copy_from_slice(&[0xC0, 0x0C, 0, 5, 0, 1, 0, 0, 0, 60, 0, 0]);
-    rdl_at = o + 10;
+    let rdl_at = o + 10;
     o += 12;
     let tstart = o;
     for label in target.split(|&c| c == b'.') {

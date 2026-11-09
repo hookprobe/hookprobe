@@ -76,7 +76,7 @@ fn cntfrq() -> u64 {
 /// axes are never counted against another's), mirroring `ratelimit::touch_scan_slot`.
 #[inline]
 fn touch_corr_slot(src: u64) -> usize {
-    let s = crate::ratelimit::slot(src as u64, CORR_SRCS);
+    let s = crate::ratelimit::slot(src, CORR_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(CORR_WINDOW_SECS);
     let start = CORR_WIN[s].load(Ordering::Relaxed);
@@ -106,7 +106,7 @@ pub fn corr_axes(src: u64) -> u32 {
     if src == 0 {
         return 0;
     }
-    let s = crate::ratelimit::slot(src as u64, CORR_SRCS);
+    let s = crate::ratelimit::slot(src, CORR_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(CORR_WINDOW_SECS);
     if CORR_SRC[s].load(Ordering::Relaxed) == src

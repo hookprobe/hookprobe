@@ -14,12 +14,7 @@ use crate::devpolicy::{Pol, ShieldProfile};
 use crate::ownerjournal::{self as oj, Kind, OP_REMOVE, OP_SET};
 use hal::{BlockDev, BlockErr};
 
-/// The journal's block device: the AP image installs its eMMC handle (armed for the journal region only);
-/// QEMU / images without persistence get a RAM store, so the API and its guards are testable everywhere.
-pub trait Store {
-    fn dev(&mut self) -> &mut dyn BlockDev;
-}
-
+/// A RAM block store for QEMU / images without persistence (the API and its guards stay testable).
 struct RamStore {
     s: [[u8; 512]; 64],
 }
@@ -48,7 +43,7 @@ pub fn audit_artifact(ty: &str, value: u8, reason: &[u8], session: [u8; 4], ms: 
     r.session = u32::from_le_bytes(session);
     r.ms = ms;
     unsafe {
-        match (J.as_mut(), DEV.as_mut()) {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
             (Some(j), Some(d)) => j.append(&mut **d, r).ok(),
             _ => None,
         }
@@ -58,6 +53,7 @@ static mut PERSISTENT: bool = false;
 static mut LAST_REPLAY: oj::Replay = oj::Replay { records: 0, damaged: false, full: false };
 
 /// Install the persistent store (AP image boot): `dev` armed for `[lo, hi)`, keyed by the device SRK.
+#[cfg_attr(not(feature = "appersist"), allow(dead_code))]
 pub fn install(dev: &'static mut dyn BlockDev, lo: u64, hi: u64, srk: &[u8; 32]) -> oj::Replay {
     let mut j = oj::Journal::new(lo, hi, srk);
     let r = j.replay(&*dev);
@@ -112,7 +108,7 @@ pub struct Outcome {
 
 fn mac(s: &str) -> Option<[u8; 6]> {
     let mut m = [0u8; 6];
-    let mut it = s.split(|c| c == ':' || c == '-');
+    let mut it = s.split([':', '-']);
     for b in m.iter_mut() {
         *b = u8::from_str_radix(it.next()?, 16).ok()?;
     }
@@ -148,7 +144,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     let seq: u64 = form_get(body, "seq", b7).and_then(|v| v.parse().ok()).unwrap_or(0);
     let dry = form_get(body, "dry_run", b8) == Some("1");
     let tag = crate::mcauth::session_tag(c.session);
-    if unsafe { J.is_none() } {
+    if unsafe { (*core::ptr::addr_of!(J)).is_none() } {
         install_ram(&[0u8; 32]); // an image without persistence: rules last until reboot (`persistent: false`)
     }
     if !origin_ok(c.origin, c.host) {
@@ -240,7 +236,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     r.session = u32::from_le_bytes(tag);
     r.ms = c.now_ms;
     let res = unsafe {
-        match (J.as_mut(), DEV.as_mut()) {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
             (Some(j), Some(d)) => j.append(&mut **d, r),
             _ => return refuse(c, "no journal"),
         }
@@ -303,13 +299,11 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
     });
     w.raw("],\"refused\":[");
     let n = unsafe { RHEAD };
-    let mut k = 0;
-    for i in (n.saturating_sub(16)..n).rev() {
+    for (k, i) in (n.saturating_sub(16)..n).rev().enumerate() {
         let r = unsafe { REFUSED[i % 16] };
         let _ = write!(w, "{}{{\"ms\":{},\"session\":\"{:02x}{:02x}{:02x}{:02x}\",\"why\":", if k > 0 { "," } else { "" }, r.ms, r.session[0], r.session[1], r.session[2], r.session[3]);
         w.string(r.why);
         w.raw("}");
-        k += 1;
     }
     w.raw("]}");
 }
@@ -341,13 +335,13 @@ pub fn selftest() -> bool {
         n
     }
     let n = fill(&mut buf, &["op=set&kind=shield_allow&target=School.Example&reason=wrongly+blocked&permanent=true", k, "&seq=1"]);
-    let set = submit(&good, &buf[..n], &mut auth).map_or(false, |o| o.seq == 1) && oj::shield_allowed(b"school.example");
+    let set = submit(&good, &buf[..n], &mut auth).is_ok_and(|o| o.seq == 1) && oj::shield_allowed(b"school.example");
     let n = fill(&mut buf, &["op=set&kind=shield_block&target=games.example&reason=homework", k, "&seq=2"]);
     let unconfirmed = submit(&good, &buf[..n], &mut auth) == Err("permanent=true required (or use a temporary action)") && !oj::shield_blocked(b"games.example");
     let n = fill(&mut buf, &["op=set&kind=shield_block&target=games.example&reason=homework&permanent=true&owner_key=wrong&seq=3"]);
     let reauth = submit(&good, &buf[..n], &mut auth) == Err("re-authentication failed");
     let n = fill(&mut buf, &["op=set&kind=device_policy&target=02:00:00:00:00:51&value=quarantine&reason=preview&dry_run=1&seq=4"]);
-    let dry = submit(&good, &buf[..n], &mut auth).map_or(false, |o| o.seq == 0 && o.before == "full" && o.after == "quarantine") && oj::device_policy(&[2, 0, 0, 0, 0, 0x51]).is_none();
+    let dry = submit(&good, &buf[..n], &mut auth).is_ok_and(|o| o.seq == 0 && o.before == "full" && o.after == "quarantine") && oj::device_policy(&[2, 0, 0, 0, 0, 0x51]).is_none();
     let n = fill(&mut buf, &["op=set&kind=device_policy&target=ff:ff:ff:ff:ff:ff&value=full&reason=xyz&permanent=true", k, "&seq=5"]);
     let bad_mac = submit(&good, &buf[..n], &mut auth) == Err("target");
     let n = fill(&mut buf, &["op=set&kind=shield_allow&target=a.example&reason=xyz&permanent=true", k, "&seq=5"]);

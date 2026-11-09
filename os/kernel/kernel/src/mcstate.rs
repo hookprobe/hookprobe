@@ -140,7 +140,7 @@ pub fn sntp_parse_strict(r: &[u8], nonce: u64) -> Option<u64> {
     if unix < NTP_FLOOR_UNIX {
         return None;
     }
-    Some(unix * 1000 + (frac * 1000 >> 32))
+    Some(unix * 1000 + ((frac * 1000) >> 32))
 }
 
 /// LAN hosts remembered for the "My Network" count (bounded; the oldest-seen is replaced).
@@ -720,7 +720,7 @@ impl McState {
     pub fn for_each_det_after(&self, after: Option<u64>, f: &mut dyn FnMut(&Det, u64)) {
         for i in (0..self.dlen).rev() {
             let Some(d) = self.newest(i) else { continue };
-            if after.map_or(true, |a| d.seq > a) {
+            if after.is_none_or(|a| d.seq > a) {
                 f(d, if self.clock_synced || d.abs { d.ts_ms } else { 0 });
             }
         }
@@ -792,7 +792,7 @@ impl McState {
         let b = id.as_bytes();
         let mut i = 0usize;
         while i < b.len() {
-            let c = if b[i] == b'%' && b.get(i + 1..i + 3).map_or(false, |h| h.eq_ignore_ascii_case(b"3A")) {
+            let c = if b[i] == b'%' && b.get(i + 1..i + 3).is_some_and(|h| h.eq_ignore_ascii_case(b"3A")) {
                 i += 3;
                 b':'
             } else {
@@ -982,7 +982,7 @@ impl McState {
         for (k, (name, kind, cats)) in Self::TIERS.iter().enumerate() {
             let mut rules = 0u32;
             for id in 0u16..1024 {
-                if rulecat::lookup(id).map_or(false, |r| cats.contains(&r.category)) {
+                if rulecat::lookup(id).is_some_and(|r| cats.contains(&r.category)) {
                     rules += 1;
                 }
             }

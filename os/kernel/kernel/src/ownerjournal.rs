@@ -156,6 +156,9 @@ pub enum JErr {
     TooManyRules,
 }
 
+/// A valid epoch header: (epoch, base seq, its MAC).
+type Hdr = (u32, u64, [u8; 32]);
+
 /// The journal over one region `[lo, hi)` of a block device (two halves, see the module note).
 pub struct Journal {
     lo: u64,
@@ -256,7 +259,7 @@ impl Journal {
     }
 
     /// The valid epoch header of half `h`: (epoch, base seq, its MAC). Some(Err) = magic present but invalid.
-    fn read_hdr<D: BlockDev + ?Sized>(&self, dev: &D, h: u8) -> Option<Result<(u32, u64, [u8; 32]), ()>> {
+    fn read_hdr<D: BlockDev + ?Sized>(&self, dev: &D, h: u8) -> Option<Result<Hdr, ()>> {
         let mut sec = [0u8; 512];
         dev.read_block(self.half_lo(h), &mut sec).ok()?;
         let b = &sec[..REC_LEN];

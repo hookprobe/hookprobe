@@ -348,7 +348,7 @@ pub fn flow_new() {
 /// never counted against another's.
 #[inline]
 fn touch_scan_slot(src: u64) -> usize {
-    let s = slot(src as u64, FLOW_SRCS);
+    let s = slot(src, FLOW_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(SCAN_WINDOW_SECS);
     let start = SCAN_WIN[s].load(Ordering::Relaxed);
@@ -409,7 +409,7 @@ pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
     if scanner == 0 {
         return;
     }
-    let s = slot(scanner as u64, FLOW_SRCS);
+    let s = slot(scanner, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != scanner {
         return;
     }
@@ -463,7 +463,7 @@ pub fn flow_ack_observe(src: u64, dst_port: u16) {
     if src == 0 {
         return;
     }
-    let s = slot(src as u64, FLOW_SRCS);
+    let s = slot(src, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return;
     }
@@ -479,7 +479,7 @@ pub fn scan_distinct_ports(src: u64) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = slot(src as u64, FLOW_SRCS);
+    let s = slot(src, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return 0;
     }
@@ -491,7 +491,7 @@ pub fn flow_established_count(src: u64) -> u64 {
     if src == 0 {
         return 0;
     }
-    let s = slot(src as u64, FLOW_SRCS);
+    let s = slot(src, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != src {
         return 0;
     }
@@ -545,8 +545,8 @@ pub fn scan_over_ratelimit(src: u64) -> bool {
 
 /// The ADR-0018 CONFIRMATION signal for a durable Quarantine: a SYN-only sweep to
 /// >= CONFIRM distinct ports from one source WITH ZERO establishment. Any establishment
-/// (a single completed handshake) holds this at `false` forever within the window — this
-/// is precisely why a legit busy source (150 established flows) can NEVER be confirmed.
+/// > (a single completed handshake) holds this at `false` forever within the window — this
+/// > is precisely why a legit busy source (150 established flows) can NEVER be confirmed.
 pub fn scan_confirmed(src: u64) -> bool {
     let d = scan_distinct_ports(src);
     d >= SCAN_PORTS_CONFIRM && flow_established_count(src).saturating_mul(SCAN_EST_RATIO) < d
@@ -621,7 +621,7 @@ pub fn conn_rate_over_at(src: u64, cap: u64, now: u64, win: u64) -> bool {
     if src == 0 {
         return false;
     }
-    let i = slot(src as u64, CR_SLOTS);
+    let i = slot(src, CR_SLOTS);
     let start = CR_WIN[i].load(Ordering::Relaxed);
     if CR_KEY[i].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
         CR_KEY[i].store(src, Ordering::Relaxed);
@@ -713,9 +713,8 @@ static TOP_FLOWS: AtomicU64 = AtomicU64::new(0);
 static TOP_WIN: AtomicU64 = AtomicU64::new(0);
 
 #[inline]
-#[inline]
 fn ct_touch_at(src: u64, now: u64, win: u64) -> usize {
-    let s = slot(src as u64, FLOW_SRCS);
+    let s = slot(src, FLOW_SRCS);
     let start = CT_WIN[s].load(Ordering::Relaxed);
     if CT_SRC[s].load(Ordering::Relaxed) != src || now.wrapping_sub(start) >= win {
         CT_SRC[s].store(src, Ordering::Relaxed);
