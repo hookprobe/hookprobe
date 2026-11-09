@@ -11,7 +11,8 @@ HERE=$(cd "$(dirname "$0")" && pwd); K=$(cd "$HERE/../../os/kernel" && pwd)
 KERN="$K/target/detbench/aarch64-unknown-none-softfloat/debug/kernel"
 RAW=$(mktemp); trap 'rm -f "$RAW"' EXIT
 timeout 1800 qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
-  -global virtio-mmio.force-legacy=false -drive file="$IMG",format=raw,if=none,id=hd0,readonly=on -device virtio-blk-device,drive=hd0 \
+  -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+  -drive file="$IMG",format=raw,if=none,id=hd0,readonly=on -device virtio-blk-device,drive=hd0 \
   -kernel "$KERN" 2>&1 | tr -d '\r' > "$RAW"; QRC=${PIPESTATUS[0]}
 OUT=$(grep -a "\[DETBENCH\]" "$RAW")
 if ! grep -q "DETBENCH\] DONE" <<<"$OUT"; then
