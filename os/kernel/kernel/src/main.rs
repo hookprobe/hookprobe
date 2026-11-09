@@ -3149,7 +3149,7 @@ fn cm5_p10_probe() {
                                 }
                                 match d {
                                     anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
-                                    anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY floor {})\n", fp(k), prev.map_or(0, |a| a.policy_floor)),
+                                    anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
                                     anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
                                     anchor::Decision::Standalone => kprint!(" [ANCHOR] no operator key pinned or compiled in (standalone device)\n"),
                                 }
