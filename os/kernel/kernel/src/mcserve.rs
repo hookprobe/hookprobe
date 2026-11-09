@@ -677,7 +677,7 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
                     let carry = got - consumed;
                     let served = served + 1;
                     *c = match resp.body {
-                        Body::Static(b) => Conn::Sending { hlen, hoff: 0, body: Src::Static(b), boff: 0, keep, carry, served },
+                        Body::Static(b) | Body::StaticGz(b) => Conn::Sending { hlen, hoff: 0, body: Src::Static(b), boff: 0, keep, carry, served },
                         Body::Scratch(n) => Conn::Sending { hlen, hoff: 0, body: Src::Scratch(n), boff: 0, keep, carry, served },
                         Body::Sse => {
                             let _ = s.send(&head[..hlen]);

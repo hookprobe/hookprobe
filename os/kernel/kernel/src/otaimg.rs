@@ -232,8 +232,63 @@ pub fn selftest() {
         Ok(p) => running_trial(&*d, p.hash) == Some(false), // slot A holds the same image: a cold boot
         Err(_) => false,
     };
-    let pass = good && floor && short && trial_running && badsig && hboot && installed && a_same && trial;
-    kprint!(" [P15-otaimg] {} — OS-image update on a factory A/B disk: a {}-byte signed image staged sector by sector, checked (shared verifier over a streamed digest, SVN floor, A/B layout, HBoot prefix pinned, tryboot names the inactive slot) -> slot B={} ; refused: svn<floor={} wrong length={} flipped payload byte={} different HBoot prefix={} trial in progress={} ; installed into slot B + payload re-hashed from the slot={} ; slot A untouched={} ; boot identity check={}\n",
-        if pass { "PASS" } else { "FAIL" }, len, good, floor, short, badsig, hboot, trial_running, installed, a_same, trial);
+    // Step 5: a boot of the new image is a TRIAL of slot B until the commit, then the cold-boot slot.
+    let committed = match ok {
+        Ok(p) => {
+            // Both slots hold the same image here, so make slot A's stored digest differ (the test
+            // disk is scratch): a boot whose measurement matches only slot B is then its trial.
+            let same = classify(&*d, p.hash) == Boot::Cold;
+            let hl = run.active_lo + (OFF + 40) / 512; // the header's sha256 field (offset 40)
+            let mut x = [0u8; 512];
+            let _ = d.read_block(hl, &mut x);
+            x[((OFF + 40) % 512) as usize] ^= 0xff;
+            let _ = d.write_block(hl, &x);
+            let before = same && classify(&*d, p.hash) == Boot::Trial(b'b');
+            let mut mbr = [0u8; 512];
+            let _ = d.read_block(0, &mut mbr);
+            let p1 = crate::store::parse_mbr(&mbr)[0].start;
+            let wrote = match crate::abboot::plan_commit(&*d, p1, crate::abboot::Slot::B) {
+                Ok(plan) => match crate::store::SealedStore::open(&mut *d) {
+                    Ok(mut st) => crate::abboot::apply(&mut st, &plan) == Ok(2),
+                    Err(_) => false,
+                },
+                Err(_) => false,
+            };
+            before && wrote && classify(&*d, p.hash) == Boot::Cold
+        }
+        Err(_) => false,
+    };
+    let pass = good && floor && short && trial_running && badsig && hboot && installed && a_same && trial && committed;
+    kprint!(" [P15-otaimg] {} — OS-image update on a factory A/B disk: a {}-byte signed image staged sector by sector, checked (shared verifier over a streamed digest, SVN floor, A/B layout, HBoot prefix pinned, tryboot names the inactive slot) -> slot B={} ; refused: svn<floor={} wrong length={} flipped payload byte={} different HBoot prefix={} trial in progress={} ; installed into slot B + payload re-hashed from the slot={} ; slot A untouched={} ; boot identity check={} ; trial of B -> commit (config=B, tryboot=A) -> cold boot of B={}\n",
+        if pass { "PASS" } else { "FAIL" }, len, good, floor, short, badsig, hboot, trial_running, installed, a_same, trial, committed);
 }
 
+
+/// The payload hash stored in the header of the image at sector `base` (the signed-bound digest
+/// HBoot compares against): enough to tell which slot this boot is running without re-hashing.
+pub fn stored_hash<D: BlockDev>(d: &D, base: u64) -> Option<[u8; 32]> {
+    header(d, base).map(|h| h.sha256)
+}
+
+/// Which A/B situation this boot is in (production phase 1, step 5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Boot {
+    /// Running the slot config.txt names.
+    Cold,
+    /// Running the OTHER slot: a tryboot trial of an update (letter of the running slot).
+    Trial(u8),
+    /// No factory A/B layout, or the running image matches neither slot header.
+    Unknown,
+}
+
+/// Classify this boot from HBoot's measurement and the two slot headers.
+pub fn classify<D: BlockDev>(d: &D, running: [u8; 32]) -> Boot {
+    let Some(run) = hal::abslot::inactive_slot_run(|l, b| d.read_block(l, b).is_ok()) else { return Boot::Unknown };
+    if stored_hash(d, run.active_lo) == Some(running) {
+        return Boot::Cold;
+    }
+    if stored_hash(d, run.lo) == Some(running) {
+        return Boot::Trial(if run.active == b'a' { b'b' } else { b'a' });
+    }
+    Boot::Unknown
+}
