@@ -29,6 +29,26 @@ pub enum Pol {
 }
 
 impl Pol {
+    pub fn from_u8(v: u8) -> Option<Pol> {
+        match v {
+            0 => Some(Pol::Full),
+            1 => Some(Pol::InternetOnly),
+            2 => Some(Pol::LanOnly),
+            3 => Some(Pol::Quarantine),
+            _ => None,
+        }
+    }
+    /// How restrictive (ADR 0055 D2: an owner rule may always TIGHTEN): full 0, internet_only / lan_only 1, quarantine 2.
+    pub fn strictness_pub(self) -> u8 {
+        self.strictness()
+    }
+    fn strictness(self) -> u8 {
+        match self {
+            Pol::Full => 0,
+            Pol::InternetOnly | Pol::LanOnly => 1,
+            Pol::Quarantine => 2,
+        }
+    }
     pub fn name(self) -> &'static str {
         ["full", "internet_only", "lan_only", "quarantine"][self as usize]
     }
@@ -80,8 +100,10 @@ struct Ent {
     label: [u8; 31],
     llen: u8,
     shield: ShieldProfile,
+    /// ADR 0055 D2.3: an operator-PINNED line — owner journal rules may tighten it but never loosen it
+    pin: bool,
 }
-const E0: Ent = Ent { mac: [0; 6], pol: Pol::Full, label: [0; 31], llen: 0, shield: ShieldProfile::Standard };
+const E0: Ent = Ent { mac: [0; 6], pol: Pol::Full, label: [0; 31], llen: 0, shield: ShieldProfile::Standard, pin: false };
 static mut T: [Ent; CAP] = [E0; CAP];
 static mut N: usize = 0;
 static mut DENIED: [u64; 4] = [0; 4];
@@ -103,16 +125,33 @@ pub fn len() -> usize {
     unsafe { N }
 }
 
-/// The policy for `mac` (unlisted → Full).
-pub fn policy_of(mac: &[u8; 6]) -> Pol {
+/// The SIGNED policy for `mac` (unlisted → Full) and whether the operator pinned it.
+pub fn signed_policy(mac: &[u8; 6]) -> (Pol, bool) {
     let t = unsafe { &(&*core::ptr::addr_of!(T))[..N] };
-    t.binary_search_by(|e| e.mac.cmp(mac)).map_or(Pol::Full, |i| t[i].pol)
+    t.binary_search_by(|e| e.mac.cmp(mac)).map_or((Pol::Full, false), |i| (t[i].pol, t[i].pin))
+}
+
+/// The EFFECTIVE policy for `mac`: the signed DEVICES.TXT line, then the owner journal (ADR 0055 D2) — an owner
+/// rule may always TIGHTEN; it may loosen (or move sideways) only a line the operator did not pin.
+pub fn policy_of(mac: &[u8; 6]) -> Pol {
+    let (signed, pinned) = signed_policy(mac);
+    match crate::ownerjournal::device_policy(mac).and_then(Pol::from_u8) {
+        Some(o) if o.strictness() > signed.strictness() || !pinned => o,
+        _ => signed,
+    }
 }
 
 /// G22: the device's Shield profile.
 pub fn shield_profile(mac: &[u8; 6]) -> ShieldProfile {
     let t = unsafe { &(&*core::ptr::addr_of!(T))[..N] };
-    t.binary_search_by(|e| e.mac.cmp(mac)).map_or(ShieldProfile::Standard, |i| t[i].shield)
+    let (signed, pinned) = t.binary_search_by(|e| e.mac.cmp(mac)).map_or((ShieldProfile::Standard, false), |i| (t[i].shield, t[i].pin));
+    // ADR 0055: an owner profile applies unless the operator pinned this device's line
+    match crate::ownerjournal::shield_profile(mac) {
+        Some(0) if !pinned => ShieldProfile::Standard,
+        Some(1) if !pinned => ShieldProfile::Off,
+        Some(2) if !pinned => ShieldProfile::Strict,
+        _ => signed,
+    }
 }
 
 /// The label for `mac`, if any.
@@ -179,6 +218,10 @@ fn parse_line(line: &[u8]) -> Result<Option<Ent>, ()> {
     let mut e = Ent { mac, pol, ..E0 };
     let (mut have_label, mut have_shield) = (false, false);
     for tok in t {
+        if tok == b"pin" {
+            e.pin = true;
+            continue;
+        }
         if let Some(v) = tok.strip_prefix(b"shield=") {
             if have_shield {
                 return Err(());
