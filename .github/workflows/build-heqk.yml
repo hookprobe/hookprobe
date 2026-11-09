@@ -141,7 +141,7 @@ jobs:
     name: "heqk parser fuzzing (libFuzzer, hal)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
@@ -152,7 +152,7 @@ jobs:
     name: "heqk Mission Control end-to-end (QEMU + Chromium)"
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools
