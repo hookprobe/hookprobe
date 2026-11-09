@@ -6736,6 +6736,8 @@ pub extern "C" fn kmain() -> ! {
     //     validate.sh with a mkfs.vfat'd disk; skips diskless / non-FAT) ---
     p15_otafat_selftest();
     // B2: the A/B commit survives a cold boot (two-boot, factory-layout disk; SKIPs otherwise).
+    #[cfg(all(feature = "p15-write", feature = "netsvc"))]
+    otaimg::selftest();
     #[cfg(feature = "p15-write")]
     abboot::abcommit_selftest();
 
