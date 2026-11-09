@@ -28,3 +28,9 @@ rand_core = { version = "0.6", default-features = false }
 [[bin]]
 name = "hboot"
 path = "src/main.rs"
+
+[features]
+# FACTORY-ONLY: burn the per-device customer-OTP secret on a blank unit's first boot (IRREVERSIBLE).
+# Off in every normal build (operator 2026-11-09: no OTP writes outside an approved provisioning step);
+# a default image never contains the OTP write and uses the software AK on a blank unit.
+otp-provision = []

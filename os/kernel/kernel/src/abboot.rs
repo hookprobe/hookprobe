@@ -396,3 +396,62 @@ pub fn abcommit_metal_selftest() {
         other => kprint!(" [P15-abcommit-metal] FAIL — unexpected eMMC state (active, trial) = {:?}\n", other),
     }
 }
+
+/// Production phase 1, step 5 — the on-device A/B commit of an OTA trial (CM5, AP image).
+///
+/// Every boot: repair a commit a power cut interrupted (`plan_repair`). On a TRIAL boot (HBoot ran
+/// the slot config.txt does NOT name, via the tryboot one-shot) the AP loop calls `commit` once the
+/// device is healthy (AP serving AND the WAN usable): config.txt then names the running slot and
+/// tryboot.txt the old one. Until then a reset or power loss boots the old slot (the one-shot is
+/// spent), and the AP loop reboots on its own if health is not reached in time. Every write passes
+/// the store guard (`RegionKind::BootConfig`) AND the driver's own Gate 1 (`admit_boot_config`:
+/// p1 data area, one-shot, content-pinned to a single a<->b slot-letter flip).
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+pub mod trial {
+    use super::*;
+    use arch_aarch64::emmc::Emmc;
+
+    fn with_dev<R>(f: impl FnOnce(&mut Emmc, u64) -> Result<R, AbErr>) -> Result<R, AbErr> {
+        let mut dev = Emmc::probe().map_err(|_| AbErr::Refused)?;
+        let mut mbr = [0u8; 512];
+        dev.read_block(0, &mut mbr).map_err(|_| AbErr::Refused)?;
+        let p1 = crate::store::parse_mbr(&mbr)[0].start;
+        f(&mut dev, p1)
+    }
+
+    fn admit_apply(dev: &mut Emmc, writes: &[Option<Write1>]) -> Result<usize, AbErr> {
+        for w in writes.iter().flatten() {
+            if !dev.admit_boot_config(w.lba) {
+                return Err(AbErr::Refused);
+            }
+        }
+        let mut store = SealedStore::open(dev).map_err(|_| AbErr::Refused)?;
+        apply(&mut store, writes)
+    }
+
+    /// Repair an interrupted commit (config.txt flipped, tryboot.txt not yet): Ok(true) if a write
+    /// was needed and made.
+    pub fn repair() -> Result<bool, AbErr> {
+        with_dev(|dev, p1| match plan_repair(&*dev, p1)? {
+            Some(w) => admit_apply(dev, &[Some(w)]).map(|n| n == 1),
+            None => Ok(false),
+        })
+    }
+
+    /// Commit the running trial slot (`letter` = b'a' / b'b'): returns the number of sectors written.
+    pub fn commit(letter: u8) -> Result<usize, AbErr> {
+        let slot = if letter == b'a' { Slot::A } else { Slot::B };
+        with_dev(|dev, p1| {
+            let plan = plan_commit(&*dev, p1, slot)?;
+            admit_apply(dev, &plan)
+        })
+    }
+
+    /// Classify this boot from the eMMC slot headers.
+    pub fn classify(running: [u8; 32]) -> crate::otaimg::Boot {
+        match Emmc::probe() {
+            Ok(dev) => crate::otaimg::classify(&dev, running),
+            Err(_) => crate::otaimg::Boot::Unknown,
+        }
+    }
+}

@@ -22,6 +22,7 @@ use crate::attest_keys;
 use crate::mailbox;
 use crate::puthex;
 use crate::puts;
+#[cfg(feature = "otp-provision")]
 use crate::rng;
 use fips205::slh_dsa_sha2_128f;
 use fips205::traits::SerDes;
@@ -206,6 +207,16 @@ pub fn provision_and_derive() -> DerivedAk {
             puts(" ak     : customer OTP low-entropy (partial burn) -> software AK fallback\n");
             return software_ak();
         }
+        // Blank region and NOT a factory-provisioning build: never write OTP (operator 2026-11-09:
+        // "No OTP writes. No fuse-programming commands. No irreversible key commitment."). The burn is
+        // a separately approved factory step (`--features otp-provision`), never a side effect of a
+        // normal boot.
+        #[cfg(not(feature = "otp-provision"))]
+        Some(_) => {
+            puts(" ak     : customer OTP blank -> NOT provisioning (OTP writes are a factory step: hboot --features otp-provision); software AK\n");
+            return software_ak();
+        }
+        #[cfg(feature = "otp-provision")]
         Some(_) => {
             // Blank region -> burn a fresh on-device TRNG secret, ONCE.
             puts(" ak     : customer OTP blank -> burning per-device secret (IRREVERSIBLE)...\n");

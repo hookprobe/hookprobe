@@ -303,8 +303,10 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
 
     // B-1 (extractability): provision (once) + derive the per-device AK bound to
     // the OTP secret — non-extractable from the image. Burns customer OTP on the
-    // first boot only; idempotent thereafter; falls back to the software AK if
-    // the mailbox/burn does not deliver a secret. MUST run before any AK signing.
+    // first boot ONLY in a factory-provisioning build (`otp-provision`); a normal
+    // image never writes OTP and uses the software AK on a blank unit. Falls back
+    // to the software AK if the mailbox/burn does not deliver a secret. MUST run
+    // before any AK signing.
     let mut ak = ak_derive::provision_and_derive();
 
     // B-1 (identity): this device's unique serial (fail-safe: 0 if unreachable).

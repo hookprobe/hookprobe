@@ -558,7 +558,25 @@ fn gen_ui_assets(manifest_dir: &str, out_dir: &str) {
                 "txt" => "text/plain; charset=utf-8",
                 _ => "application/octet-stream",
             };
-            let _ = writeln!(src, "    Asset {{ path: {:?}, ctype: {:?}, body: include_bytes!({:?}) }},", rel, ctype, f.display().to_string());
+            // Text assets are embedded gzip-compressed (`gzip -9 -n`: deterministic, no name/mtime) when that
+            // is smaller — the UI is ~850 KB raw, the signed image has a 5 MiB hard ceiling.
+            let mut body_path = f.display().to_string();
+            let mut gz = false;
+            if matches!(f.extension().and_then(|e| e.to_str()), Some("html" | "js" | "mjs" | "css" | "svg" | "json" | "webmanifest" | "txt")) {
+                let gzd = std::path::Path::new(out_dir).join("ui_gz");
+                let _ = std::fs::create_dir_all(&gzd);
+                let dst = gzd.join(format!("{:04}.gz", src.len()));
+                let raw = std::fs::read(&f).unwrap();
+                let out = std::process::Command::new("gzip").args(["-9", "-n", "-c"]).arg(&f).output()
+                    .unwrap_or_else(|e| panic!("gzip (needed to embed the UI compressed): {e}"));
+                assert!(out.status.success(), "gzip failed on {}", f.display());
+                if out.stdout.len() < raw.len() {
+                    std::fs::write(&dst, &out.stdout).unwrap();
+                    body_path = dst.display().to_string();
+                    gz = true;
+                }
+            }
+            let _ = writeln!(src, "    Asset {{ path: {:?}, ctype: {:?}, body: include_bytes!({:?}), gz: {} }},", rel, ctype, body_path, gz);
         }
     }
     src.push_str("];\n");
