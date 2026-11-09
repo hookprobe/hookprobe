@@ -10,8 +10,11 @@ for t in policy wan_cfg frame_facts glom; do
   mkdir -p corpus/$t
   if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=4096 > "/tmp/heqk-fuzz-$t.log" 2>&1; then
     echo "  ok   $t: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-$t.log | tail -1)"
-  else
+  elif grep -qE "panicked at|SUMMARY: libFuzzer|deadly signal" "/tmp/heqk-fuzz-$t.log"; then
     echo "  FAIL $t (crash — reproducer in tools/fuzz/heqk-hal/artifacts/$t/)"; grep -E "panicked at|SUMMARY" "/tmp/heqk-fuzz-$t.log" | head -3; rc=1
+  else
+    # Not a crash: the harness did not build or libFuzzer did not start. Say so instead of crying "crash".
+    echo "  FAIL $t (build/setup error, not a crash)"; grep -E "^error|could not|No such file" "/tmp/heqk-fuzz-$t.log" | head -5; rc=1
   fi
 done
 exit $rc
