@@ -3767,6 +3767,13 @@ fn cm5_p10_probe() {
                                 if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves and the WAN is usable (5 min limit, else reboot to the previous slot)" } else { "" });
                             (b, now())
                         };
+                        // Audit §2.1 #9: key the IPv6 source identity hash per boot from the hardware TRNG (an
+                        // unkeyed hash let a chosen /64 collide with another source's rate / scan state).
+                        if let (Some(a), Some(b)) = (arch_aarch64::rng200::next_word_strict(), arch_aarch64::rng200::next_word_strict()) {
+                            srckey::set_key(a, b);
+                        } else {
+                            kprint!(" [SRCKEY] TRNG unavailable — IPv6 source keys use the fixed key this boot\n");
+                        }
                         // Production phase 3a: from here on a loop that stops returning resets the SoC.
                         let wd = rtwdog::start(now());
                         kprint!(" [WDOG] runtime watchdog {} ({} s, petted from the AP loop)\n", if wd { "ARMED" } else { "not available (no HBoot hvc #3)" }, rtwdog::PET_SECS);
