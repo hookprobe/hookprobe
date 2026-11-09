@@ -3701,6 +3701,20 @@ fn cm5_p10_probe() {
                         // response 2 s to leave, then reboot ONCE into the slot tryboot.txt names.
                         #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                         let mut trial_at: Option<u64> = None;
+                        // Production phase 1 step 5: repair an interrupted commit, then classify this boot.
+                        #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
+                        let (mut ota_boot, ota_t0) = {
+                            match abboot::trial::repair() {
+                                Ok(true) => kprint!(" [OTA] repaired an interrupted A/B commit (tryboot.txt re-pointed)\n"),
+                                Ok(false) => {}
+                                Err(e) => kprint!(" [OTA] commit-repair check: {:?}\n", e),
+                            }
+                            let bi = unsafe { &*(boot_abi::BOOTINFO_ADDR as *const boot_abi::BootInfo) };
+                            let b = if bi.magic == boot_abi::BOOTINFO_MAGIC { abboot::trial::classify(bi.kernel_hash) } else { otaimg::Boot::Unknown };
+                            kprint!(" [OTA] this boot: {:?}{}\n", b,
+                                if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves and the WAN is usable (5 min limit, else reboot to the previous slot)" } else { "" });
+                            (b, now())
+                        };
                         // Production phase 3a: from here on a loop that stops returning resets the SoC.
                         let wd = rtwdog::start(now());
                         kprint!(" [WDOG] runtime watchdog {} ({} s, petted from the AP loop)\n", if wd { "ARMED" } else { "not available (no HBoot hvc #3)" }, rtwdog::PET_SECS);
@@ -3711,6 +3725,24 @@ fn cm5_p10_probe() {
                                 if upload::take_trial_reboot() {
                                     trial_at = Some(now().wrapping_add(2 * freq));
                                     kprint!(" [OTA] new image written to the inactive slot and verified from the slot — trial boot in 2 s (tryboot one-shot; an unhealthy trial falls back to this slot)\n");
+                                }
+                                #[cfg(feature = "hboot")]
+                                if let otaimg::Boot::Trial(l) = ota_boot {
+                                    if up.usable() {
+                                        match abboot::trial::commit(l) {
+                                            Ok(n) => {
+                                                kprint!(" [OTA] COMMITTED slot {} ({} boot-config writes) — healthy trial: AP serving, WAN usable; the next cold boot runs it\n", l as char, n);
+                                                ota_boot = otaimg::Boot::Cold;
+                                            }
+                                            Err(e) => {
+                                                kprint!(" [OTA] commit failed: {:?} — rebooting to the previous slot\n", e);
+                                                unsafe { core::arch::asm!("hvc #0") };
+                                            }
+                                        }
+                                    } else if now().wrapping_sub(ota_t0) > 300 * freq {
+                                        kprint!(" [OTA] trial not healthy within 5 min (WAN never usable) — rebooting to the previous slot\n");
+                                        unsafe { core::arch::asm!("hvc #0") };
+                                    }
                                 }
                                 if trial_at.is_some_and(|t| now() > t) {
                                     let set = arch_aarch64::mailbox::set_reboot_flags(arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
