@@ -15,6 +15,10 @@ gicv3 = []
 # arm64-cloud tier: PCIe ECAM + virtio-pci modern transport (OCI A1 exposes virtio only on
 # PCI). Adds Mmu::map_mmio for MMIO windows outside the boot identity map.
 pci = []
+# arm64-cloud tier: SMCCC over HVC — PSCI SYSTEM_OFF/RESET (replaces semihosting exits, an
+# undefined instruction on a real VM) and the hypervisor SMCCC TRNG (the cloud VM's only
+# hardware entropy). Not combinable with cm5 (hboot owns EL2 there).
+smccc = []
 hboot = ["cm5"] # entered by HBoot (heqk-boot) at EL1, console already up
 # P15 eMMC WRITE path — OFF by default (read-only, no brick risk). The only
 # sectors ever writable are 2016..2047; LBA 0 + partitions are never touched.
