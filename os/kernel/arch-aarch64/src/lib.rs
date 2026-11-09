@@ -219,5 +219,19 @@ pub fn user_frame_desc(va: usize) -> u64 {
 pub fn on_panic(info: &core::panic::PanicInfo) -> ! {
     let mut u = Pl011;
     let _ = writeln!(u, "\n[PANIC] {}", info);
-    semihosting::exit(1)
+    // QEMU: fail the run (a panic must never look like a clean exit).
+    #[cfg(not(feature = "cm5"))]
+    semihosting::exit(1);
+    // Silicon (production phase 3, audit 2026-11-10): semihosting is an undefined instruction there, so a
+    // panic used to leave a dead unit until the runtime watchdog fired (or forever before it is armed).
+    // Same path as a fatal exception (exception.rs): mask, let the UART drain, reset through the EL2 gate.
+    #[cfg(feature = "cm5")]
+    {
+        let _ = &semihosting::exit;
+        unsafe { core::arch::asm!("msr daifset, #0xf", options(nomem, nostack)) };
+        for _ in 0..50_000_000u64 {
+            core::hint::spin_loop();
+        }
+        unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+    }
 }
