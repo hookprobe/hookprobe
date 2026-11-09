@@ -127,7 +127,19 @@ payload 2,518,296 B, **619 KB headroom**.
 | Upload client | `hq-upload.py`: one kept-alive HTTPS connection + resume (per-chunk TLS handshakes made the device reset connections on a 4.6 MB image) | bench |
 | Bench | Pi rejoin helper, kea/radvd after a host reboot, local throughput sink, cycle stops on a failed boot | bench runs |
 
-Known minor: a stalled upload stays listed as in flight in `GET /api/upload` until the next `begin` expires it.
+| A8 | `GET /api/network` — Get Online read side (Wi-Fi SSID/source/channel, WAN mode/IP/gateway/VLAN, IPv6 LAN prefix, management VLAN, POLICY state, trust-anchor state) | mc-e2e (session required; honest `available:false` without an AP) |
+| 3b | `/api/health` `last_reset` (watchdog-type = recovered from a hang or crash, from HBoot's PM_RSTS flag); a kernel panic on the CM5 now reboots through the EL2 gate (was semihosting exit = a dead unit) | build |
+| 3d | WAN DHCP renewal inside the loop (REQUEST from T1, ACK/NAK in `wan_poll`, full bring-up only on NAK / past T2). **Metal evidence of the old defect:** worst loop gap 330 ms → 3,279 ms at the first renewal (`renewals=1`) | build; metal next batch |
+| 3g | detection ring drained when a quarter full or every 250 ms (was every 5 s); overruns in the heartbeat | build |
+| G36 | IPv6 lateral movement between LAN devices detected under both devices' IPv4 leases | `[P-lateral6]` |
+| A9 (part) | `hal::abslot` fuzz target: 12.2 M runs, 0 crashes | libFuzzer |
+| J4 | trust anchor on metal: first boot `PINNED`, later power-cycled boots `pinned operator key`, POLICY verified | serial |
+| Soak (image Z) | local WAN-side sink 79–86 Mbps per 5-min sample, health ok, DNS ok, 0 serial faults (3 h run in progress) | `cm5-soak.sh` |
+
+Known minor (fixed): a stalled upload stayed listed as in flight until the next `begin`; `GET /api/upload` now expires it.
+Re-ranked: per-pack generation floors (§2.1 #2) — uploads already refuse an older generation than the active
+pack and need the owner key; a boot-time floor would turn a lost store copy into *no* list instead of an older
+signed one. Kept as low priority, not built.
 
 ## 4. Autonomous completion plan (A — no human needed)
 
