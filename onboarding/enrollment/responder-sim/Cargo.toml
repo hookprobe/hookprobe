@@ -26,8 +26,8 @@ securechannel-selftest = []
 # The SAME crates + versions/features the kernel's `securechannel` feature pins, so the
 # handshake bytes are identical. boot-abi (no_std) supplies the shared HKDF + SHA-256.
 boot-abi         = { path = "../../../os/kernel/boot-abi" }
-ml-kem           = { version = "0.2", default-features = false, features = ["deterministic"] }
-kem              = { version = "=0.3.0-pre.0", default-features = false }
+# must match os/kernel/kernel (it compiles the kernel's securechannel.rs): 0.3.4, constant-time CBD sampling
+ml-kem           = { version = "=0.3.4", default-features = false }
 x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"] }
 chacha20poly1305 = { version = "0.10", default-features = false }
 ed25519-compact  = { version = "2", default-features = false }

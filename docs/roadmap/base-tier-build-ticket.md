@@ -1,5 +1,11 @@
 # Build Ticket — Base tier `hookprobe-bcm2712` ($50 stock Pi 5 / CM5)
 
+> 🛑 **RETIRED — historical Linux tier (ADR 0047).** No further work happens on this ticket. It describes the bootc/Debian/OVS/nftables/systemd
+> Linux tier, which ADR [0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09) replaced
+> with heqk on every platform. It is kept as a dated record; the code it names now lives under
+> `legacy/linux-tier/` (path map: [`docs/PATHS.md`](../PATHS.md)). Current status:
+> [`heqk-parity-gaps.md`](../design/heqk-parity-gaps.md).
+
 **Status:** 🟡 Ready to build (v1, 2026-07-15). Phased. Derived from the base-tier consensus spec v0.1.
 **Scope (in):** BCM2712 (4× Cortex-A76 @ 2.4 GHz), macb/GEM GbE behind RP1, `rpi-6.12.y` edge kernel
 (2712/16K + v8/4K), **zero-BOM** — no add-on PCIe hardware.

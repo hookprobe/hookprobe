@@ -1,5 +1,11 @@
 # HookProbe OS — "One OS, Every Platform & Architecture": State & Gap Report
 
+> 🛑 **Historical — Linux tier (ADR 0047).** This document describes the bootc/Debian/OVS/nftables/systemd
+> Linux tier, which ADR [0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09) replaced
+> with heqk on every platform. It is kept as a dated record; the code it names now lives under
+> `legacy/linux-tier/` (path map: [`docs/PATHS.md`](../PATHS.md)). Current status:
+> [`heqk-parity-gaps.md`](../design/heqk-parity-gaps.md).
+
 **Date:** 2026-06-29 · **Scope:** the OS itself (Track B), not the dashboard. **Question answered:** *where are we, and what do we need, so that installing HookProbe OS on any machine makes it detect what it is and become the OS — across all platforms and architectures?*
 
 Grounded in: the real V1 installer `~/hookprobe/install.sh` (v5.0, 3,067 lines), the V2 `docs/architecture/Readme.md`, and the actual V2 repo (`base/`, `bootstrap/`, `manifest/`, `platforms/`, `supervisor/`, `.github/workflows/`).

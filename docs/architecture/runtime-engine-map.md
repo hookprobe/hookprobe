@@ -1,5 +1,11 @@
 # Runtime-per-engine map (V1 parts → V2 modules)
 
+> 🛑 **Historical — Linux tier (ADR 0047).** This document describes the bootc/Debian/OVS/nftables/systemd
+> Linux tier, which ADR [0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09) replaced
+> with heqk on every platform. It is kept as a dated record; the code it names now lives under
+> `legacy/linux-tier/` (path map: [`docs/PATHS.md`](../PATHS.md)). Current status:
+> [`heqk-parity-gaps.md`](../design/heqk-parity-gaps.md).
+
 > Bridges the V1 inventory ([V1-alignment.md](../research/V1-alignment.md)) to the V2 module model. For **every significant engine** in `~/hookprobe` it decides: which V2 component/workspace it becomes, its **chosen runtime** (`wasm` | `container` | `sysext` | `image-layer`), a `module.yaml` sketch, and a migration call (repackage / rewrite-in-Rust-Wasm / rebuild).
 >
 > Canon it obeys: [Readme.md](Readme.md) "right tool per layer" (wasm = detection/policy/enrichment logic; container = heavy stateful services; sysext/image-layer = host-integral kernel/dataplane), [Architecture.md](Architecture.md) C10–C12 + two-wall budgets, [ADR 0003](../adr/0003-platform-manifest-schema.md) (module model, capability tokens, `grant = presence ∧ known-good ∧ policy`), [ADR 0002](../adr/0002-crypto-agility-pqc.md) (standards crypto replaces V1 bespoke). Sketches follow `modules/*/module.yaml`.

@@ -1,5 +1,11 @@
 # HookProbe OS — Architecture (connections & build plan)
 
+> 🛑 **Historical — Linux tier (ADR 0047).** This document describes the bootc/Debian/OVS/nftables/systemd
+> Linux tier, which ADR [0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09) replaced
+> with heqk on every platform. It is kept as a dated record; the code it names now lives under
+> `legacy/linux-tier/` (path map: [`docs/PATHS.md`](../PATHS.md)). Current status:
+> [`heqk-parity-gaps.md`](../design/heqk-parity-gaps.md).
+
 > This document operationalizes the HLD in [`Readme.md`](Readme.md). The Readme says *what* HookProbe OS is; this says *how the pieces connect* and *in what order we build them*. It specifies the bootstrap-to-runtime spine — **unified installer → device scanner → classification → capability mapper → resource allocator → signed Platform Manifest → local backend → supervisor/reconciler → Mission Control** — as a set of explicit connections (contract · mechanism · failure mode), then a phased plan whose **Phase 1 is the Readme core**.
 >
 > Canonical companions: [`Readme.md`](Readme.md) (HLD), [`MissionControl.md`](MissionControl.md) (UX), [ADR 0001](../adr/0001-mission-control-stack.md) (stack), [ADR 0002](../adr/0002-crypto-agility-pqc.md) (crypto/PQC). When this doc and those disagree, **they win** — flag the contradiction, don't silently resolve it.

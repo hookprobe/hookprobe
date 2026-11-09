@@ -1,0 +1,20 @@
+# Phase 2 gate: libcrux ML-KEM-768 builds no_std for the CM5 kernel target (aarch64 softfloat, portable path).
+[package]
+name = "kem-nostd-check"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1

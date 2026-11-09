@@ -16,9 +16,16 @@
 //! interpreter, which bounds-checks). This is exactly how production BPF JITs
 //! elide the checks the verifier has already discharged.
 //!
-//! Register map: BPF R0..R10 -> ARM64 x0..x10 (all caller-saved -> no prologue
-//! save needed in a leaf function — our ISA subset has no BPF calls). Scratch:
-//! x14, x15. R0 lives in x0, so EXIT is just `ret`. No `alloc`: the compiler
+//! Register map: BPF R0..R10 -> ARM64 x0..x10 (all caller-saved). A program with no
+//! CALL is a leaf: no prologue, EXIT is just `ret`. Scratch: x14, x15.
+//!
+//! **CALL (0x85)** — `compile_with_helper` only. The program then gets a 96-byte frame
+//! (x29/x30 + a save area): each CALL saves x1..x10 (BPF R1..R10), puts the helper id
+//! in x0, `blr`s the kernel's `extern "C"` dispatcher `(id, R1, R2) -> R0` (address
+//! passed in, not hard-coded), and restores x1..x10 — so every register except R0 is
+//! exactly what the interpreter (which never scrubs R1..R5) has after the call. Only
+//! helper ids in the caller's allowlist are compiled; anything else declines (the rule
+//! stays on the interpreter). EXIT pops the frame before `ret`. No `alloc`: the compiler
 //! emits straight into the (single-page) executable frame with fixed-size
 //! side tables.
 
@@ -83,6 +90,35 @@ fn ldrh(rt: u32, rn: u32) -> u32 {
 fn ldr_w(rt: u32, rn: u32) -> u32 {
     0xB9400000 | (rn << 5) | rt // LDR Wt, [Xn]
 }
+/// STP Xt, Xt2, [Xn, #imm]! (pre-index, imm multiple of 8 in -512..504)
+#[inline]
+fn stp_pre(rt: u32, rt2: u32, rn: u32, imm: i32) -> u32 {
+    0xA9800000 | ((((imm / 8) as u32) & 0x7f) << 15) | (rt2 << 10) | (rn << 5) | rt
+}
+/// STP Xt, Xt2, [Xn, #imm] (signed offset)
+#[inline]
+fn stp_off(rt: u32, rt2: u32, rn: u32, imm: i32) -> u32 {
+    0xA9000000 | ((((imm / 8) as u32) & 0x7f) << 15) | (rt2 << 10) | (rn << 5) | rt
+}
+/// LDP Xt, Xt2, [Xn, #imm] (signed offset)
+#[inline]
+fn ldp_off(rt: u32, rt2: u32, rn: u32, imm: i32) -> u32 {
+    0xA9400000 | ((((imm / 8) as u32) & 0x7f) << 15) | (rt2 << 10) | (rn << 5) | rt
+}
+/// LDP Xt, Xt2, [Xn], #imm (post-index)
+#[inline]
+fn ldp_post(rt: u32, rt2: u32, rn: u32, imm: i32) -> u32 {
+    0xA8C00000 | ((((imm / 8) as u32) & 0x7f) << 15) | (rt2 << 10) | (rn << 5) | rt
+}
+/// BLR Xn
+#[inline]
+fn blr(rn: u32) -> u32 {
+    0xD63F0000 | (rn << 5)
+}
+const SP: u32 = 31;
+const FRAME: i32 = 96; // x29/x30 + x1..x10 (16-byte aligned)
+const CALL_REG: u32 = 16; // x16 (IP0): the helper address
+
 #[inline]
 fn ret() -> u32 {
     0xD65F03C0
@@ -189,7 +225,25 @@ fn emit_mov_k_blinded(e: &mut Emit, rd: u32, imm: i32, key: u64) {
 /// op / too-large program / allocation failure. The program MUST have passed
 /// `bpf::verify_prevail` first (forward-only jumps, packet-relative loads).
 pub fn compile(prog: &[u64]) -> Option<usize> {
+    compile_with_helper(prog, 0, 0)
+}
+
+/// As `compile`, plus BPF CALL: `helper` is the address of the kernel's
+/// `extern "C" fn(id: u64, r1: u64, r2: u64) -> u64` dispatcher and `allowed` a bitmask of
+/// helper ids the JIT may call (bit `id`). A CALL to any other id — or any CALL when
+/// `helper == 0` — declines the whole program (it stays on the interpreter).
+pub fn compile_with_helper(prog: &[u64], helper: usize, allowed: u64) -> Option<usize> {
     let n = prog.len();
+    let mut has_call = false;
+    for &ins in prog {
+        if (ins & 0xff) as u8 == 0x85 {
+            let id = ((ins >> 32) & 0xffff_ffff) as u32;
+            if helper == 0 || id >= 64 || allowed & (1u64 << id) == 0 {
+                return None;
+            }
+            has_call = true;
+        }
+    }
     if n == 0 || n > MAX_INSNS {
         return None;
     }
@@ -206,6 +260,11 @@ pub fn compile(prog: &[u64]) -> Option<usize> {
     let mut nfix = 0usize;
     let key = blind_key(); // per-compile constant-blinding key (defeats JIT-spray)
 
+    // A calling program needs a frame (x29/x30 + the x1..x10 save area).
+    if has_call {
+        e.push(stp_pre(29, 30, SP, -FRAME));
+        e.push(0x910003FD); // ADD x29, sp, #0
+    }
     // Prologue: R1 = pkt (arg x0); R0 = 0. Set R1 from x0 before zeroing R0(=x0).
     e.push(mov_reg(1, 0));
     e.push(movz(0, 0, 0));
@@ -271,7 +330,25 @@ pub fn compile(prog: &[u64]) -> Option<usize> {
                 }
                 e.push(bcond(cond));
             }
-            0x95 => e.push(ret()), // EXIT: R0 is x0 -> return
+            0x85 => {
+                // CALL: save R1..R10, x0 = id, blr dispatcher(id, R1, R2), restore R1..R10.
+                for (k, r) in [(16, 1u32), (32, 3), (48, 5), (64, 7), (80, 9)] {
+                    e.push(stp_off(r, r + 1, SP, k));
+                }
+                emit_imm(&mut e, 0, imm);
+                emit_u64(&mut e, CALL_REG, helper as u64);
+                e.push(blr(CALL_REG));
+                for (k, r) in [(16, 1u32), (32, 3), (48, 5), (64, 7), (80, 9)] {
+                    e.push(ldp_off(r, r + 1, SP, k));
+                }
+            }
+            0x95 => {
+                // EXIT: R0 is x0 -> return (popping the frame first if there is one)
+                if has_call {
+                    e.push(ldp_post(29, 30, SP, FRAME));
+                }
+                e.push(ret());
+            }
             _ => return None,      // unsupported opcode
         }
         if e.overflow {
@@ -280,6 +357,9 @@ pub fn compile(prog: &[u64]) -> Option<usize> {
     }
     // Sentinel target for a fixup landing one past the end; also a terminal RET.
     bpf_start[n] = e.pos;
+    if has_call {
+        e.push(ldp_post(29, 30, SP, FRAME));
+    }
     e.push(ret());
     if e.overflow {
         return None;

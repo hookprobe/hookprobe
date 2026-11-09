@@ -392,7 +392,7 @@ impl CapSpace {
     /// The enforcement point on capability invocation: true only if the cap at
     /// `slot` holds ALL of the `need` rights.
     pub fn has_rights(&self, slot: usize, need: u8) -> bool {
-        self.get(slot).map_or(false, |c| c.rights & need == need)
+        self.get(slot).is_some_and(|c| c.rights & need == need)
     }
 
     /// Type-safe **and** rights-checked Frame view: the cap must be a Frame AND

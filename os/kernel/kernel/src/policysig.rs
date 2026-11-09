@@ -12,6 +12,7 @@
 //! boot signature. No key compiled in = a standalone device: an unsigned POLICY.TXT is accepted (ADR 0049
 //! D1: standalone stays first-class), and the boot line says so.
 
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub const SIG_8_3: &[u8; 11] = b"POLICY  SIG";
 pub const SIG_FILE_LEN: usize = 512;
 const MAGIC: &[u8; 8] = b"HQPSIG1\0";
@@ -19,6 +20,7 @@ const MAGIC: &[u8; 8] = b"HQPSIG1\0";
 include!(concat!(env!("OUT_DIR"), "/policy_key.rs")); // POLICY_PUBKEY: Option<[u8; 32]>, POLICY_GEN_FLOOR: u64
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub enum SigErr {
     /// A key is compiled in but there is no POLICY.SIG.
     Missing,
@@ -99,4 +101,15 @@ pub fn selftest() -> bool {
         if POLICY_PUBKEY.is_some() { "operator key compiled in" } else { "none — standalone, unsigned accepted" }
     ));
     pass
+}
+
+/// The operator key the signed-pack loaders verify against: the one compiled into the signed image.
+/// `[P-artstore]` swaps in its own key for the duration of the self-test (boot, before any network
+/// service starts) and restores it; nothing else writes it.
+static mut TEST_KEY: Option<[u8; 32]> = None;
+pub fn key() -> Option<[u8; 32]> {
+    unsafe { TEST_KEY }.or(POLICY_PUBKEY)
+}
+pub fn selftest_key(k: Option<[u8; 32]>) {
+    unsafe { TEST_KEY = k };
 }

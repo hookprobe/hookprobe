@@ -4,12 +4,19 @@
   policy-sign.py keygen KEYFILE              # new Ed25519 operator key (mode 600); prints the public key hex
   policy-sign.py pubkey KEYFILE              # public key hex (-> HEQK_POLICY_PUBKEY for the image factory)
   policy-sign.py sign KEYFILE POLICY.TXT GEN OUT.SIG   # POLICY.TXT = the exact 4096-byte staged file
-  policy-sign.py sign-blocklist KEYFILE BLOCK.TXT GEN OUT.SIG   # Shield DNS blocklist (any length <= 4 MiB)
+  policy-sign.py sign-blocklist KEYFILE BLOCK.TXT GEN OUT.SIG   # Shield blocklist (<= 16 MiB; ADR 0052)
+  policy-sign.py sign-allowlist KEYFILE ALLOW.TXT GEN OUT.SIG   # Shield allowlist (<= 16 MiB)
+  policy-sign.py sign-ioc KEYFILE IOC.TXT GEN OUT.SIG           # threat-intel IOC pack (<= 16 MiB)
+  policy-sign.py sign-devices KEYFILE DEVICES.TXT GEN OUT.SIG   # per-device policy (<= 16 KiB)
+  policy-sign.py sign-wifi KEYFILE WIFI.TXT GEN OUT.SIG         # AP SSID / PSK / channel (<= 1 KiB)
+  policy-sign.py sign-rules KEYFILE RULES.BIN GEN OUT.SIG       # compiled rule pack (tools/rulepack.py, <= 64 KiB)
+  policy-sign.py sign-oui KEYFILE OUI.TXT GEN OUT.SIG           # IEEE OUI vendor registry (<= 4 MiB; os/build/fpgen/gen_oui.py)
 
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
 and refuses a generation below the image's floor.
-BLOCK.SIG (512 B): "HQBSIG1\\0" | gen u64 LE | len u64 LE | sha256(BLOCK.TXT) | Ed25519(key, "HQBLK1"|gen|len|sha256) | 0-pad. Keep KEYFILE off the device (it is the operator's authority).
+BLOCK.SIG / ALLOW.SIG (512 B): "HQBSIG1\\0"/"HQASIG1\\0" | gen u64 LE | len u64 LE | sha256(list) |
+Ed25519(key, "HQBLK1"/"HQALW1" | gen | len | sha256) | 0-pad. Distinct tags: a BLOCK signature never verifies as ALLOW. Keep KEYFILE off the device (it is the operator's authority).
 """
 import hashlib, os, struct, sys
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -44,15 +51,24 @@ def main():
         sig = k.sign(b"HQPOL1" + struct.pack("<Q", gen) + d)
         open(out, "wb").write((b"HQPSIG1\0" + struct.pack("<Q", gen) + d + sig).ljust(512, b"\0"))
         print(f"POLICY.SIG written (generation {gen})")
-    elif a[:1] == ["sign-blocklist"] and len(a) == 5:
+    elif a[:1] in (["sign-blocklist"], ["sign-allowlist"], ["sign-ioc"], ["sign-devices"], ["sign-wifi"], ["sign-rules"], ["sign-oui"]) and len(a) == 5:
         k, body, gen, out = load(a[1]), open(a[2], "rb").read(), int(a[3]), a[4]
-        if len(body) > 4 << 20:
-            sys.exit("BLOCK.TXT larger than 4 MiB")
+        tag, magic, cap = {
+            "sign-blocklist": (b"HQBLK1", b"HQBSIG1\0", 16 << 20),
+            "sign-allowlist": (b"HQALW1", b"HQASIG1\0", 16 << 20),
+            "sign-ioc": (b"HQIOC1", b"HQISIG1\0", 16 << 20),
+            "sign-devices": (b"HQDEV1", b"HQDSIG1\0", 16 << 10),
+            "sign-wifi": (b"HQWIF1", b"HQWSIG1\0", 1 << 10),
+            "sign-rules": (b"HQRUL1", b"HQRSIG1\0", 64 << 10),
+            "sign-oui": (b"HQOUI1", b"HQOSIG1\0", 4 << 20),
+        }[a[0]]
+        if len(body) > cap:
+            sys.exit(f"file larger than {cap} bytes")
         d = hashlib.sha256(body).digest()
         meta = struct.pack("<QQ", gen, len(body))
-        sig = k.sign(b"HQBLK1" + meta + d)
-        open(out, "wb").write((b"HQBSIG1\0" + meta + d + sig).ljust(512, b"\0"))
-        print(f"BLOCK.SIG written (generation {gen}, {len(body)} bytes)")
+        sig = k.sign(tag + meta + d)
+        open(out, "wb").write((magic + meta + d + sig).ljust(512, b"\0"))
+        print(f"{a[0][5:].upper()} signature written (generation {gen}, {len(body)} bytes)")
     else:
         sys.exit(__doc__)
 
