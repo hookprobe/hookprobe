@@ -7,11 +7,13 @@
 //! switches contexts; each thread's local counter surviving across switches is
 //! the proof that context save/restore works.
 
-// Bench Wi-Fi modes never ship (ADR 0023 / ADR 0045). `apmode`'s serve loop never returns
-// and NATs client traffic without packet::verdict, so a prod image would boot into an
-// uninspected AP instead of the IPS service; `stajoin` bakes network credentials in.
+// `prod` (the GEM-only IPS sensor loop) and `apmode` (the Wi-Fi AP product loop) are two ALTERNATIVE
+// never-returning top-level services: combined, the AP loop starts first and `prod`'s loop is silently
+// unreachable. The AP loop runs packet::verdict on every forwarded frame (the old "uninspected AP" reason
+// is history — 2026-11-09); the PRODUCTION AP image is `apmc` + `appersist` (G12). `stajoin` bakes network
+// credentials into the image and never ships (ADR 0045).
 #[cfg(all(feature = "prod", any(feature = "apmode", feature = "stajoin")))]
-compile_error!("`apmode`/`stajoin` are CM5 bench modes and cannot be combined with `prod`");
+compile_error!("`apmode`/`stajoin` cannot be combined with `prod`: `prod` is the GEM sensor loop, the AP product is `apmc` + `appersist`");
 #[allow(dead_code)]
 const fn wpa_psk_ok(p: Option<&str>) -> bool {
     match p {
@@ -152,7 +154,7 @@ mod snapshot;
 // subsystems are only reachable from the QEMU self-test sequence that `prod`
 // replaces, so without this module they are dead-stripped out of the image
 // entirely (measured: +80 bytes for all three). See prodfull.rs.
-#[cfg(all(feature = "cm5", feature = "prod-full"))]
+#[cfg(all(feature = "cm5", any(feature = "prod-full", feature = "appersist")))]
 mod prodfull;
 mod edge;
 mod notify;
@@ -3576,6 +3578,10 @@ fn cm5_p10_probe() {
                         let mc_t0_any = now(); // the Mission Control clock anchor (ADR 0053 action expiry uses it too)
                         #[cfg(feature = "mcserve")]
                         let mc_t0 = mc_t0_any;
+                        // G12: the production persistence (ProdFull — the SRK-sealed snapshot in the reserved eMMC
+                        // window, restored here, re-persisted every 5 min while dirty).
+                        #[cfg(feature = "appersist")]
+                        let mut pf = prodfull::ProdFull::init();
                         #[cfg(feature = "mcserve")]
                         let mut mcn: Option<mcserve::McNode> = {
                             if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
@@ -3586,6 +3592,21 @@ fn cm5_p10_probe() {
                                 crate::tlshost::bring_up(Some(&dev));
                             }
                             mcserve::state().set_clock(0, mc_t0, freq);
+                            #[cfg(feature = "appersist")]
+                            {
+                                // G12: what this device saw before its last power cycle — the sealed snapshot's
+                                // detections come back into Mission Control (with their real time when known).
+                                let mut n = 0usize;
+                                for i in 0..pf.snap.nev {
+                                    if let Some((mut ev, ms)) = pf.snap.timed_event(i) {
+                                        ev.ts = ms;
+                                        let ts = ev.ts;
+                                        mcserve::state().push_restored(&ev, ts);
+                                        n += 1;
+                                    }
+                                }
+                                kprint!(" [AP-PERSIST] {} detections restored from before the last power cycle (boot #{}, sealed snapshot of {} events)\n", n, pf.snap.boots, pf.snap.nev);
+                            }
                             let seed = arch_aarch64::rng200::next_word_strict().unwrap_or(0) ^ mc_t0;
                             match mcserve::McNode::new(ap.bssid, mcserve::NetMode::Static { ip: our_ip, prefix: 24, gw: our_ip }, seed) {
                                 Some(mut n) => {
@@ -4162,6 +4183,8 @@ fn cm5_p10_probe() {
                                                 #[cfg(feature = "mcserve")]
                                                 if let Some(ms) = wntp.on_frame(&wbuf[..n], up.dhcp.yiaddr, cyw43::now_secs()) {
                                                     ioc::set_now_unix((ms / 1000) as u32); // IOC expiry needs a real clock
+                                                    #[cfg(feature = "appersist")]
+                                                    pf.set_clock(ms, now(), freq);
                                                     match mcserve::state().sync_clock(ms, now()) {
                                                         Some(step) => kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
                                                             wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step),
@@ -4383,6 +4406,8 @@ fn cm5_p10_probe() {
                                             for e in &evs[..k] {
                                                 #[cfg(feature = "mcserve")]
                                                 mcserve::state().push_event(e);
+                                                #[cfg(feature = "appersist")]
+                                                pf.on_threat(e);
                                                 if e.verdict != 2 {
                                                     continue;
                                                 }
@@ -4499,6 +4524,14 @@ fn cm5_p10_probe() {
                                             st.forwarded = nst.out_fwd as u64 + nst.in_fwd as u64;
                                             st.dropped = (ids_drop_out + ids_drop_in) as u64;
                                             st.sample_qsecbit(now(), telemetry::score());
+                                            #[cfg(feature = "appersist")]
+                                            {
+                                                let c = prodfull::Counters { seen: st.seen, forwarded: st.forwarded, dropped: st.dropped, tx_fail: wifi_tx_dropped as u64, faults: 0, empty: 0 };
+                                                if pf.on_heartbeat(now().wrapping_sub(mc_t0) / freq, c, telemetry::score()) {
+                                                    kprint!(" [AP-PERSIST] sealed snapshot written: boot #{} seen={} drop={} events={} (A/B gen {})\n",
+                                                        pf.snap.boots, st.seen, st.dropped, pf.snap.nev, pf.last_gen);
+                                                }
+                                            }
                                             st.set_leases(&dh);
                                             // Parity G15: new detections -> the signed POLICY.TXT `export syslog` collector.
                                             if let Some(ex) = unsafe { (*core::ptr::addr_of!(POLICY)).export } {
