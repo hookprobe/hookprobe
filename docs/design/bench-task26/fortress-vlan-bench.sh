@@ -45,10 +45,14 @@ interface $P.100 {
   prefix 2001:db8:100::/64 { AdvOnLink on; AdvAutonomous on; };
 };
 CONF
+  [ -f /run/hqbench/radvd.pid ] && kill "$(cat /run/hqbench/radvd.pid)" 2>/dev/null; for p in $(pgrep -x radvd); do grep -qa hqbench /proc/$p/cmdline && kill $p; done; sleep 1   # idempotent v6up (pgrep -x: never matches a shell)
   radvd -C /run/hqbench/radvd.conf -p /run/hqbench/radvd.pid -m logfile -l /run/hqbench/radvd.log
   # kea-dhcp6 is AppArmor-confined to fixed paths: config under /etc/kea (own subdir, the package config is
   # untouched), pid /run/kea/<config-basename>.kea-dhcp6.pid, lock /run/lock/kea, leases /var/lib/kea.
   mkdir -p /etc/kea/hqbench /run/kea /run/lock/kea /var/lib/kea /var/log/kea
+  # after a host reboot /run is fresh: directories created here are root-owned and kea (User=_kea) dies with
+  # "Unable to open PID file" (2026-11-10) — hand them to _kea like the package's tmpfiles.d does
+  chown _kea:_kea /run/kea /run/lock/kea /var/lib/kea /var/log/kea 2>/dev/null || true
   cat > /etc/kea/hqbench/kea-dhcp6.conf <<CONF
 { "Dhcp6": {
     "interfaces-config": { "interfaces": [ "$P.100" ] },
