@@ -12,6 +12,11 @@ mod exception;
 pub mod bpf_jit;
 #[cfg(feature = "cm5")]
 pub mod gem;
+#[cfg(not(feature = "gicv3"))]
+pub mod gic;
+// arm64-cloud tier (OCI Ampere A1 and any SBSA/QEMU-virt gic-version=3 guest): same API.
+#[cfg(feature = "gicv3")]
+#[path = "gic_v3.rs"]
 pub mod gic;
 #[cfg(feature = "cm5")]
 pub mod iommu;
