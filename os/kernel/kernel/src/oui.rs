@@ -252,17 +252,7 @@ pub(crate) fn check_sig(sig: &[u8], key: &[u8; 32], digest_of: &mut dyn FnMut(u6
 }
 
 fn stream<D: BlockDev>(dev: &D, lba: u64, len: u64, f: &mut dyn FnMut(&[u8])) -> Option<()> {
-    let mut sec = [0u8; 512];
-    let mut left = len;
-    let mut k = 0u64;
-    while left > 0 {
-        dev.read_block(lba + k, &mut sec).ok()?;
-        let take = left.min(512) as usize;
-        f(&sec[..take]);
-        left -= take as u64;
-        k += 1;
-    }
-    Some(())
+    crate::store::stream_blocks(dev, lba, len, f)
 }
 
 /// Boot: OUI.TXT (+ OUI.SIG when an operator key is compiled in). A refused pack is not loaded; the curated

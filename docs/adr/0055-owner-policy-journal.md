@@ -56,7 +56,13 @@ adds one audit-only kind, `artifact` (an upload activation / rollback), that nev
 write clamp to named regions) — never the boot FAT, never the snapshot window. Layout: an append area plus
 two checkpoint slots (A/B, each a full sealed copy of the reconciled state + the last seq/mac). Compaction
 writes the inactive checkpoint, then the commit record; power loss at any point leaves the previous
-checkpoint + a verifiable journal prefix. Caps: 512 active rules, 64 KiB journal before compaction.
+checkpoint + a verifiable journal prefix. Caps: 512 active rules, 64 KiB journal before compaction. *As built (stage B, 2026-11-09)*: the 256 KiB region is two halves of ~511 records; each half begins with
+an epoch header and every record carries its epoch inside the MAC'd body. When the active half fills, the
+live rules + the last 16 artifact audits are rewritten as the checkpoint into the other half (data sectors
+first, the header sector last — the epoch switch is one sector write); replay takes the highest valid epoch
+and treats an older epoch's leftovers as a clean end. Rule `seq` numbers are renumbered at a checkpoint.
+Full = the live state alone does not fit a half. `[P-ownerjournal]` proves churn through many epochs, a power
+cut mid-compaction (the old epoch boots intact), tamper, torn tail and foreign key.
 
 **D5 — Write path.** Owner session + `Origin` = `Host` + CSRF + strictly increasing per-session `seq`
 (ADR 0053 S3). **Every permanent rule requires owner re-authentication** (S5) **and** an explicit

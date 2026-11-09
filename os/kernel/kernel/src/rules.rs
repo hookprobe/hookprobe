@@ -344,6 +344,13 @@ pub fn run_flow(frame: &[u8], src: u32) -> u16 {
 /// (PASS for an observed finding) and score a QSecBit hit ONLY on an enforced
 /// (wire-DROP) verdict. Shared by the bytecode tiers and the M2.1 stateful L2 tier.
 fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
+    // Alert de-duplication (detection benchmark 2026-11-09: one port scan raised 974 events, one flow to a
+    // blocklisted address 9,001 — each evicting the 256-row detection ring). The WIRE verdict is untouched
+    // (a drop still drops every packet); only a repeat EVENT for the same (rule, source) within
+    // `ALERT_DEDUP_SECS` is suppressed and counted. Behavioral rules keep their own longer cooldown.
+    if !alert_ok(rule_id, src, crate::behavioral::now_secs()) {
+        return;
+    }
     let wire = v.to_wire();
     crate::events::push_hit(rule_id, severity as u8, wire as u8, v.class_code(), src);
     // Parity G5: every detection scores by SEVERITY, whatever its wire verdict — an observed beacon,
@@ -354,6 +361,69 @@ fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
 
 // ---- M2.1: the structural + stateful L2 tier (F6/F7/F8 + mac-flood + broadcast-storm)
 // ----
+
+/// ARP cache poisoning: an ARP reply / announcement claiming an IPv4 address that was bound to a DIFFERENT
+/// MAC within `ARP_BIND_SECS`, UNSOLICITED (a reply answering a who-has from the last 2 s is proxy ARP — a
+/// router / range extender — not poisoning; real-traffic benchmark 2026-11-09). Observe-only.
+pub const RULE_ARP_POISON: u16 = 127;
+const ARP_BIND_SECS: u64 = 600;
+const ARP_N: usize = 128;
+const ARP_REQ_N: usize = 64;
+static ARP_REQ_IP: [core::sync::atomic::AtomicU64; ARP_REQ_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_REQ_N];
+static ARP_REQ_AT: [core::sync::atomic::AtomicU64; ARP_REQ_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_REQ_N];
+fn now_ms() -> u64 {
+    crate::clock::ticks().saturating_mul(1000) / crate::clock::freq().max(1)
+}
+static ARP_IP: [core::sync::atomic::AtomicU64; ARP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_N];
+static ARP_MAC: [core::sync::atomic::AtomicU64; ARP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_N];
+static ARP_AT: [core::sync::atomic::AtomicU64; ARP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; ARP_N];
+
+/// Learn IP -> MAC from ARP replies / gratuitous ARPs; return the claimed IP when a claim conflicts with a
+/// recent binding (a re-bind after `ARP_BIND_SECS` — a DHCP address reused by a new device — is learned
+/// silently). Requests asking for someone else teach nothing.
+pub fn arp_binding_conflict(f: &[u8], now: u64) -> Option<u32> {
+    use core::sync::atomic::Ordering::Relaxed;
+    if f.len() < 42 || f[12] != 0x08 || f[13] != 0x06 || f[14..16] != [0, 1] || f[16..18] != [8, 0] {
+        return None;
+    }
+    let op = u16::from_be_bytes([f[20], f[21]]);
+    let sip = u32::from_be_bytes([f[28], f[29], f[30], f[31]]);
+    let tip = u32::from_be_bytes([f[38], f[39], f[40], f[41]]);
+    // a who-has for `tip`: remember it — a reply that ANSWERS a recent request is solicited (proxy ARP by a
+    // router / range extender answers requests; poisoning tools send unsolicited replies)
+    if op == 1 && sip != tip {
+        let j = crate::ratelimit::slot(tip as u64 | (2 << 40), ARP_REQ_N);
+        ARP_REQ_IP[j].store(tip as u64 | (2 << 40), Relaxed);
+        ARP_REQ_AT[j].store(now_ms(), Relaxed);
+        return None;
+    }
+    if sip == 0 || !(op == 2 || (op == 1 && sip == tip)) {
+        return None;
+    }
+    let solicited = op == 2 && {
+        let j = crate::ratelimit::slot(sip as u64 | (2 << 40), ARP_REQ_N);
+        ARP_REQ_IP[j].load(Relaxed) == sip as u64 | (2 << 40) && now_ms().saturating_sub(ARP_REQ_AT[j].load(Relaxed)) < 2_000
+    };
+    let mac = crate::ratelimit::mac_hash(&f[22..28]);
+    let i = crate::ratelimit::slot(sip as u64 | (1 << 40), ARP_N);
+    let (kip, kmac, kat) = (ARP_IP[i].load(Relaxed), ARP_MAC[i].load(Relaxed), ARP_AT[i].load(Relaxed));
+    let key = sip as u64 | (1 << 40);
+    let conflict = kip == key && kmac != mac && now.saturating_sub(kat) < ARP_BIND_SECS && !solicited;
+    if !conflict {
+        ARP_IP[i].store(key, Relaxed);
+        ARP_MAC[i].store(mac, Relaxed);
+        ARP_AT[i].store(now, Relaxed);
+    }
+    conflict.then_some(sip)
+}
+
+/// Test hook.
+pub fn arp_binding_reset() {
+    use core::sync::atomic::Ordering::Relaxed;
+    for i in 0..ARP_N {
+        ARP_IP[i].store(0, Relaxed);
+    }
+}
 
 /// Rule IDs for the M2.1 tier (kept distinct from the bytecode L2 corpus 101/102).
 pub const RULE_STRUCT_ANOMALY: u16 = 110;
@@ -441,6 +511,16 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
         // users exist; Behavioral is Observe by construction).
         let v = verdict::decide_l2(FindingClass::Behavioral, ctx);
         fire(RULE_IPV6_UNPARSEABLE, SEV_LOW, v, mac_attr as u32);
+        if observed.is_none() {
+            observed = Some(v);
+        }
+    }
+
+    // ARP cache poisoning (detection benchmark 2026-11-09: rule 102 only catches an ARP whose sender MAC
+    // disagrees with the Ethernet source; a poisoner sends consistent MACs). Observe-only (ADR 0023).
+    if let Some(claim) = arp_binding_conflict(frame, crate::behavioral::now_secs()) {
+        let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(claim));
+        fire(RULE_ARP_POISON, SEV_HIGH, v, claim);
         if observed.is_none() {
             observed = Some(v);
         }
@@ -776,12 +856,67 @@ pub fn refire_ok(rule_id: u16, src: u32, now: u64) -> bool {
     true
 }
 
+/// Repeat-event window for `fire()` (all rules): one event per (rule, source) per minute.
+pub const ALERT_DEDUP_SECS: u64 = 60;
+const DEDUP_N: usize = 512;
+static DEDUP_KEY: [core::sync::atomic::AtomicU64; DEDUP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; DEDUP_N];
+static DEDUP_AT: [core::sync::atomic::AtomicU64; DEDUP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; DEDUP_N];
+pub static DEDUP_SUPPRESSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+static DEDUP_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
+
+/// True if (rule, src) may raise an event now (and arms the window). An aliasing pair just evicts — at worst
+/// one extra event, never a lost one.
+pub fn alert_ok(rule_id: u16, src: u32, now: u64) -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    if !DEDUP_ON.load(Relaxed) {
+        return true;
+    }
+    let key = ((rule_id as u64) << 32) | src as u64 | (1u64 << 62);
+    let i = crate::ratelimit::slot(key, DEDUP_N);
+    if DEDUP_KEY[i].load(Relaxed) == key && now.saturating_sub(DEDUP_AT[i].load(Relaxed)) < ALERT_DEDUP_SECS {
+        DEDUP_SUPPRESSED.fetch_add(1, Relaxed);
+        return false;
+    }
+    DEDUP_KEY[i].store(key, Relaxed);
+    DEDUP_AT[i].store(now, Relaxed);
+    true
+}
+
+/// Self-tests that count individual events switch the de-duplication off (and back on).
+pub fn alert_dedup(on: bool) {
+    DEDUP_ON.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// `[P-alert-dedup]` — one event per (rule, source) per window; the wire verdict is untouched.
+pub fn dedup_selftest() -> bool {
+    refire_reset();
+    let mut evs = [crate::events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0, class: 0, dport: 0, dst: 0 }; 64];
+    let _ = crate::events::drain(&mut evs);
+    let first = alert_ok(113, 0x0a63_0042, 1000);
+    let repeats = (0..50).all(|i| !alert_ok(113, 0x0a63_0042, 1000 + i));
+    let other_src = alert_ok(113, 0x0a63_0043, 1001);
+    let other_rule = alert_ok(124, 0x0a63_0042, 1001);
+    let after = alert_ok(113, 0x0a63_0042, 1000 + ALERT_DEDUP_SECS);
+    let suppressed = DEDUP_SUPPRESSED.load(core::sync::atomic::Ordering::Relaxed) >= 50;
+    refire_reset();
+    let pass = first && repeats && other_src && other_rule && after && suppressed;
+    arch_aarch64::_print(format_args!(
+        " [P-alert-dedup] {} — repeat alerts collapse to one event per (rule, source) per {} s (a port scan raised 974 events, a blocklisted flow 9,001 — detection benchmark 2026-11-09): first alert={} 50 repeats suppressed + counted={} another source still alerts={} another rule still alerts={} next window alerts again={}\n",
+        if pass { "PASS" } else { "FAIL" }, ALERT_DEDUP_SECS, first, repeats && suppressed, other_src, other_rule, after
+    ));
+    pass
+}
+
 /// Test hook: clear the cooldown table.
 pub fn refire_reset() {
     use core::sync::atomic::Ordering::Relaxed;
     for i in 0..COOL_N {
         COOL_KEY[i].store(0, Relaxed);
         COOL_AT[i].store(0, Relaxed);
+    }
+    for i in 0..DEDUP_N {
+        DEDUP_KEY[i].store(0, Relaxed);
+        DEDUP_AT[i].store(0, Relaxed);
     }
 }
 

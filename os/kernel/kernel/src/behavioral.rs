@@ -33,9 +33,7 @@ use core::sync::atomic::{AtomicU64, Ordering};
 
 #[inline]
 fn cntpct() -> u64 {
-    let v: u64;
-    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) };
-    v
+    crate::clock::ticks() // the hardware counter, or the replayed frame's time (detbench)
 }
 #[inline]
 fn cntfrq() -> u64 {
