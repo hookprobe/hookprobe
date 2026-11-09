@@ -33,7 +33,7 @@ resolves; [ $? -ne 0 ]; chk $? "the Pi's lookup of $DOMAIN is now blocked"
 echo "== power cycle (relay K1)"
 mark=$(stat -c %s "$LOG")
 python3 "$HERE/cm5-relay.py" --backend nano --dev auto cycle >/dev/null 2>&1
-for _ in $(seq 1 60); do tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -aq "\[AP-OWNER\]" && break; sleep 3; done
+for _ in $(seq 1 60); do tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-OWNER\]" >/dev/null && break; sleep 3; done
 L=$(tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-OWNER\]" | tail -1); echo "  $L"
 grep -q "records replayed, [1-9]" <<<"$L"; chk $? "after the power cycle the journal replays the rule"
 "$HERE/pi-ensure-ap.sh" >/dev/null 2>&1 || true   # NetworkManager may give up during the CM5 reboot
