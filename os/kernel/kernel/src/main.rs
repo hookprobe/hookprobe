@@ -3932,54 +3932,19 @@ fn cm5_p10_probe() {
                                         // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
                                         // verdict and out the PPPoE session (no NAT; the module records the flow so the
                                         // reply is admitted by the stateful firewall).
+                                        // G0 step 3b: apcore::client6 (LAN router, lan in / wan out, IPv6 observers, IDS, send)
                                         let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                         let nms = now() * 1000 / freq;
-                                        match v6.on_lan(frame, nms, &mut v6buf) {
-                                            arch_aarch64::ip6lan::LanAction::Reply(k) => {
+                                        let mut hw = ApHw { up: &up, wh: &whealth };
+                                        let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
+                                        let dhr = &dh;
+                                        let r = apcore::client6(frame, v6, nms, up.usable(), &ap.bssid, pol, &mut fc, &mut v6buf, &mut hw,
+                                            &|m| dhr.lease_for(m).map_or(0, u32::from_be_bytes), &mut |f: &[u8]| wifi_send!(f));
+                                        match r {
+                                            apcore::Client6::Reply(k) => {
                                                 let _ = wifi_send!(&v6buf[..k]);
                                             }
-                                            arch_aarch64::ip6lan::LanAction::Forward(k) => {
-                                                // `lan in`, then `wan out` (IPv6 egress is the internet sub-interface: the
-                                                // management VLAN carries no IPv6).
-                                                let pa = hal::policy::facts(frame).map(|p| {
-                                                    let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
-                                                    let a = pol.check(PIf::Lan, PDir::In, &p).0;
-                                                    if a == PAct::Allow { (pol.check(PIf::Wan, PDir::Out, &p).0, 2usize) } else { (a, 0usize) }
-                                                }).unwrap_or((PAct::Allow, 0));
-                                                // ADR 0049 D2 (observe-only): the IPv6 scan shape of a LAN device, keyed on its MAC.
-                                                if frame.len() >= 54 {
-                                                    let mut sm = [0u8; 6];
-                                                    sm.copy_from_slice(&frame[6..12]);
-                                                    let mut d6 = [0u8; 16];
-                                                    d6.copy_from_slice(&frame[38..54]);
-                                                    let _ = rules::flow_scan_observe6(frame, srckey::dev(&sm), srckey::v6net(&d6));
-                                                    // JA4 for IPv6 TLS clients too (was IPv4-only), attributed to the device's IPv4 lease
-                                                    if frame[20] == 6 {
-                                                        let lease = dh.lease_for(&sm).map_or(0, u32::from_be_bytes);
-                                                        crate::ja4::observe6(frame, lease);
-                                                        rules::behavioral_observe6(frame, lease); // G36: beacon + brute force over IPv6
-                                                    }
-                                                    // G24a: a LAN device talking to an IPv6 address on the signed IOC pack
-                                                    let _ = rules::ioc_v6_hit(dh.lease_for(&sm).map_or(0, u32::from_be_bytes), &d6);
-                                                }
-                                                match pa {
-                                                    (PAct::Allow, _) => {
-                                                        if packet::verdict(frame).1 == packet::DROP {
-                                                            v6_ids_drop[0] += 1;
-                                                        } else if up.usable() && uplink::wan_tx6(&up, &v6buf[..k]) {
-                                                            v6.commit(now() * 1000 / freq); // the inbound pinhole opens only now
-                                                        }
-                                                    }
-                                                    (PAct::Block, i) => {
-                                                        fc.pol_block[i] += 1;
-                                                        let mut rj = [0u8; 1400];
-                                                        if let Some(r) = arch_aarch64::reject::reject6(frame, &v6.gua, &ap.bssid, &mut rj) {
-                                                            let _ = wifi_send!(&rj[..r]);
-                                                        }
-                                                    }
-                                                    (PAct::Drop, i) => fc.pol_drop[i] += 1,
-                                                }
-                                            }
+                                            apcore::Client6::IdsDrop => v6_ids_drop[0] += 1,
                                             _ => {}
                                         }
                                     } else if act == 0 && (up.usable() || unsafe { uplink::MGMT }.is_some()) && frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
