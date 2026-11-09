@@ -1,5 +1,8 @@
 # heqk control-plane connectivity — Track C / Milestone M4 scoping
 
+> **Historical scoping record (banner 2026-11-09).** The current state of this subsystem is `os/kernel/docs/design/heqk-control-plane.md` (reconstructed from the code; the copy `os/kernel/validate.sh` resolves). This file keeps the earlier scoping detail; where they disagree, the os/kernel copy wins.
+
+
 > **Honesty header (read first).**
 > - **PQC-TLS is a MAJOR NEW BUILD, not an integration.** ADR 0002 §3 records the plain truth
 >   this doc confirms in the tree: *"no TLS/rustls stack exists in this tree yet"* and `tls_kex`
@@ -344,7 +347,7 @@ metal / M4.3 network promotion (Gate R):**
 > rejected pre-crypto — the only work forced is one keyed HMAC — while a cookie-vouched peer
 > reaches the expensive path). Defense-in-depth: `ResponderStatic::from_seeds` is now
 > `securechannel-selftest`-only (the device is always the initiator; no responder static on
-> metal). **Remaining: 3 (dalek-zeroize, partial), 6 (CBOM `kem-0.3.0-pre`), 7 (ML-DSA-65
+> metal). **Remaining: 3 (dalek-zeroize, partial), 6 (CBOM `kem-0.3.0-pre` — *resolved 2026-11-09: kem 0.3.0 final, ml-kem 0.3.4*), 7 (ML-DSA-65
 > co-signature).**
 
 1. **✅ CLOSED (M4.3) — Entropy (highest consequence).** `entropy.rs` makes a seeded path

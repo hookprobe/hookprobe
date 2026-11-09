@@ -115,7 +115,7 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | ID | Test | Expected |
 |---|---|---|
 | E1 | eth1 (RTL8111H) wired client, zero-Linux image | link up, DHCP lease, browsing (PCIe link + NIC already proven) |
-| E2 | Intra-BSS isolation (G10): phone A pings phone B on the AP | decide: firmware bridges it (bypasses IDS) → set `ap_isolate` |
+| E2 | Intra-BSS isolation (G10): phone A pings phone B on the AP | decide: firmware bridges it (bypasses IDS) → set `ap_isolate` · *updated 2026-11-09: **done + metal** — firmware honours `ap_isolate`; heqk relays station↔station (unicast, mDNS/SSDP/LLMNR, IPv6) after the lease + IDS gates; `tools/diagnostics/cm5-intrabss-check.sh` PASS (`heqk-parity-gaps.md` G10)* |
 | E3 | Wi-Fi TX stall | capture a stall with the kick counters + brcmfmac trace |
 | E4 | P-256 signing timing (dudect) | no secret-dependent timing |
 | E5 | Stateful-in fix `1cea191` | unsolicited inbound refused on the VLAN bench |

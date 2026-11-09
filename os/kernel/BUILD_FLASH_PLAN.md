@@ -10,7 +10,7 @@ BPF/JIT detection plane ahead of Linux eBPF, seL4, QNX, and FreeBSD._
 ## 1. Build the image
 
 ```bash
-cd ~/heqk && . "$HOME/.cargo/env"
+cd ~/hookprobe/os/kernel && . "$HOME/.cargo/env"   # heqk = os/kernel in the hookprobe repo (was ~/heqk)
 # Host-side verifier soundness gate (P16, Agni-style) — must pass before flashing.
 rustc --edition 2021 -O tools/verifier-harness.rs -o /tmp/vh && /tmp/vh   # [P16-verifier] PASS
 

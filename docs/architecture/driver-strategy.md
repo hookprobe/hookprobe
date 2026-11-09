@@ -1,5 +1,11 @@
 # Driver & firmware strategy — for an immutable, signed OS
 
+> 🛑 **Historical — Linux tier (ADR 0047).** This document describes the bootc/Debian/OVS/nftables/systemd
+> Linux tier, which ADR [0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) (2026-10-09) replaced
+> with heqk on every platform. It is kept as a dated record; the code it names now lives under
+> `legacy/linux-tier/` (path map: [`docs/PATHS.md`](../PATHS.md)). Current status:
+> [`heqk-parity-gaps.md`](../design/heqk-parity-gaps.md).
+
 **The constraint (operator, validated):** the OS ships as **one signed, immutable
 bootc image**. It **cannot carry every driver/firmware** — external components vary
 endlessly (USB Wi-Fi dongles, PCIe radios like the N100's `ath12k`, 5G/LTE modems).
