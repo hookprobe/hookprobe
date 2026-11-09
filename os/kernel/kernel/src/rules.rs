@@ -692,6 +692,24 @@ pub fn behavioral_observe6(frame: &[u8], lease: u32) {
     let _ = brute_verdict(lease, peer, m.dst_port);
 }
 
+/// G36 / audit Phase 4: IPv6 LATERAL movement between two LAN devices (the station-to-station relay). A pure
+/// SYN from one device's IPv6 address to another's feeds the same lateral tier as IPv4, keyed on both
+/// devices' IPv4 leases (the identities the owner knows) — so a dual-stack worm sweeping SMB / RDP / SSH over
+/// IPv6 is no longer invisible. Observe-only, like every behavioural finding. Returns true when it fired.
+pub fn lateral_observe6(frame: &[u8], src_lease: u32, dst_lease: u32) -> bool {
+    if src_lease == 0 || dst_lease == 0 || frame.len() < 54 {
+        return false;
+    }
+    let Some(m) = crate::net::parse(frame) else { return false };
+    if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || !m.has_l4_ports() {
+        return false;
+    }
+    if frame.get(m.l4_off + 13).is_none_or(|&f| f & 0x12 != 0x02) {
+        return false;
+    }
+    lateral_verdict(src_lease, dst_lease, m.dst_port).is_some()
+}
+
 /// G24a: an IPv6 peer on the signed IOC pack — the same observe-only IOC detection (rule 302, identity
 /// reputation: never a drop) the IPv4 flow tier raises, attributed to the LAN device's IPv4 lease.
 pub fn ioc_v6_hit(lease: u32, peer: &[u8; 16]) -> bool {
@@ -1214,5 +1232,45 @@ pub fn jit_call_selftest() -> bool {
         " [P8-JIT-CALL] {} — BPF CALL in the JIT (scalar helpers 1/2, x1..x10 preserved, frame per calling rule): ip-blocklist 4096 frames {} mismatches ({} listed) | syn-flood-per-src {} SYNs {} mismatches ({} over the limit) | busy-LAN flooder trips the limiter ({} drops) | registers across CALL interp={} jit={:?} | call-less compile + off-allowlist helper decline={}\n",
         if pass { "PASS" } else { "FAIL" }, bl_mis, bl_hits, SYN_LIMIT as u32 + 20, syn_mis, drops, busy_drops, interp, regs, declines
     ));
+    pass
+}
+
+/// `[P-lateral6]` — IPv6 lateral movement between LAN devices is detected under their IPv4 leases.
+pub fn lateral6_selftest() -> bool {
+    fn syn6(dport: u16, d: u8) -> [u8; 74] {
+        let mut f = [0u8; 74];
+        f[0..6].copy_from_slice(&[0x02, 0, 0, 0, 0, d]);
+        f[6..12].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x50]);
+        f[12..14].copy_from_slice(&[0x86, 0xdd]);
+        f[14] = 0x60;
+        f[18..20].copy_from_slice(&20u16.to_be_bytes()); // payload length
+        f[20] = 6; // TCP
+        f[21] = 64;
+        f[22..24].copy_from_slice(&[0xfe, 0x80]);
+        f[37] = 0x50;
+        f[38..40].copy_from_slice(&[0xfe, 0x80]);
+        f[53] = d;
+        f[54..56].copy_from_slice(&49152u16.to_be_bytes());
+        f[56..58].copy_from_slice(&dport.to_be_bytes());
+        f[66] = 0x50; // data offset 5
+        f[67] = 0x02; // SYN
+        f
+    }
+    let src = u32::from_be_bytes([10, 99, 0, 50]);
+    // an SMB sweep over IPv6 to 8 devices: fires once more than LATERAL_THRESHOLD peers were touched
+    let mut fired = false;
+    for d in 0..8u8 {
+        fired |= lateral_observe6(&syn6(445, 0x60 + d), src, u32::from_be_bytes([10, 99, 0, 60 + d]));
+    }
+    // a device talking SMB to ONE file server over IPv6, many times: never lateral
+    let one = u32::from_be_bytes([10, 99, 0, 51]);
+    let quiet = (0..8).all(|_| !lateral_observe6(&syn6(445, 0x70), one, u32::from_be_bytes([10, 99, 0, 70])));
+    // a web port is not a lateral-movement port; unknown leases are skipped
+    let web = !lateral_observe6(&syn6(443, 0x71), u32::from_be_bytes([10, 99, 0, 52]), u32::from_be_bytes([10, 99, 0, 71]))
+        && !lateral_observe6(&syn6(445, 0x72), 0, u32::from_be_bytes([10, 99, 0, 72]));
+    let pass = fired && quiet && web;
+    arch_aarch64::_print(format_args!(
+        " [P-lateral6] {} — IPv6 lateral movement between LAN devices (station relay, G36): an SMB sweep over IPv6 to 8 devices raises the lateral finding under the sender's IPv4 lease={} ; repeated SMB to one file server stays quiet={} ; a web port / an unknown lease never counts={} (observe-only)\n",
+        if pass { "PASS" } else { "FAIL" }, fired, quiet, web));
     pass
 }
