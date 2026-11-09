@@ -40,7 +40,7 @@ pub fn emit(e: Event) {
     COUNTS[e as usize].fetch_add(1, Ordering::Relaxed);
     // Saturating: an event flood must not wrap the monotonic threat score back
     // through zero (which a detector reads as "all clear").
-    let _ = SCORE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+    let _ = SCORE.try_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
         Some(s.saturating_add(weight(e)))
     });
 }
@@ -75,7 +75,7 @@ static RULE_HITS: AtomicU32 = AtomicU32::new(0);
 /// points to the QSecBit score. Called from the datapath verdict (`packet.rs`).
 pub fn emit_rule_hit(severity: u32) {
     RULE_HITS.fetch_add(1, Ordering::Relaxed);
-    let _ = SCORE.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
+    let _ = SCORE.try_update(Ordering::Relaxed, Ordering::Relaxed, |s| {
         Some(s.saturating_add(severity))
     });
 }

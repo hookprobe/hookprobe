@@ -114,8 +114,8 @@ fn hex32(s: &str) -> Option<[u8; 32]> {
         return None;
     }
     let mut o = [0u8; 32];
-    for i in 0..32 {
-        o[i] = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
+    for (i, b) in o.iter_mut().enumerate() {
+        *b = u8::from_str_radix(s.get(i * 2..i * 2 + 2)?, 16).ok()?;
     }
     Some(o)
 }
@@ -396,15 +396,13 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
     }
     w.raw(",\"recent\":[");
     let n = unsafe { EHEAD };
-    let mut k = 0;
-    for i in (n.saturating_sub(16)..n).rev() {
+    for (k, i) in (n.saturating_sub(16)..n).rev().enumerate() {
         let e = unsafe { EVS[i % 32] };
         let tn = Ty::from_u8(e.ty).map_or("?", |t| t.info().name);
         let _ = write!(w, "{}{{\"ms\":{},\"session\":\"{:02x}{:02x}{:02x}{:02x}\",\"step\":\"{}\",\"type\":\"{}\",\"ok\":{},\"generation\":{},\"why\":",
             if k > 0 { "," } else { "" }, e.ms, e.session[0], e.session[1], e.session[2], e.session[3], e.step, tn, e.ok, e.gen);
         w.string(e.why);
         w.raw("}");
-        k += 1;
     }
     w.raw("],\"activations\":[");
     let mut k = 0;
@@ -504,10 +502,10 @@ pub fn selftest() -> bool {
     seq += 1;
     let early = activate(&c, f!("id={:016x}&owner_key={}&seq={}", id, k, seq), &mut auth).err() == Some("not verified (finish first)");
     seq += 1;
-    let fin = finish(&c, f!("id={:016x}&seq={}", id, seq)).map_or(false, |f| f.gen == 3 && f.active_gen == 0 && f.len == body.len() as u64);
+    let fin = finish(&c, f!("id={:016x}&seq={}", id, seq)).is_ok_and(|f| f.gen == 3 && f.active_gen == 0 && f.len == body.len() as u64);
     let staged_only = crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x71]) == crate::devpolicy::Pol::Full;
     seq += 1;
-    let act = activate(&c, f!("id={:016x}&owner_key={}&seq={}", id, k, seq), &mut auth).map_or(false, |a| a.gen == 3) && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x71]) == crate::devpolicy::Pol::Quarantine;
+    let act = activate(&c, f!("id={:016x}&owner_key={}&seq={}", id, k, seq), &mut auth).is_ok_and(|a| a.gen == 3) && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x71]) == crate::devpolicy::Pol::Quarantine;
     let mut audited = false;
     crate::ownerjournal::for_each_artifact(&mut |r| audited |= r.target() == b"devices" && r.value == 1);
     // anti-rollback: an older generation verifies but is refused at finish

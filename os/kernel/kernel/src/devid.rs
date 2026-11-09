@@ -67,8 +67,10 @@ fn contains(hay: &[u8], needle: &[u8]) -> bool {
 }
 
 /// Hostname conventions (legacy unified-engine hostname rules, trimmed to unambiguous ones).
-fn by_hostname(h: &[u8]) -> Option<(&'static str, &'static str, &'static str, &'static str, u8)> {
-    const R: &[(&[u8], &str, &str, &str, &str, u8)] = &[
+type HostHint = (&'static str, &'static str, &'static str, &'static str, u8);
+fn by_hostname(h: &[u8]) -> Option<HostHint> {
+    type Rule = (&'static [u8], &'static str, &'static str, &'static str, &'static str, u8);
+    const R: &[Rule] = &[
         (b"iphone", "iPhone", "Apple", "phone", "iOS", 85),
         (b"ipad", "iPad", "Apple", "tablet", "iPadOS", 85),
         (b"macbook", "MacBook", "Apple", "laptop", "macOS", 85),

@@ -52,6 +52,12 @@ pub struct ApDhcp {
     pub now: u64,
 }
 
+impl Default for ApDhcp {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ApDhcp {
     pub fn new() -> Self {
         ApDhcp {
@@ -150,7 +156,7 @@ impl ApDhcp {
 
     /// Is (mac, ip) a live lease we handed out? The NAT leg's anti-hijack check.
     pub fn binding_ok(&self, mac: &[u8; 6], ip: &[u8; 4]) -> bool {
-        self.slot(mac).map_or(false, |i| self.leases[i].ip == *ip && self.live(&self.leases[i]))
+        self.slot(mac).is_some_and(|i| self.leases[i].ip == *ip && self.live(&self.leases[i]))
     }
 
     /// Clients holding an unexpired, acknowledged lease.
@@ -347,7 +353,7 @@ pub fn selftest() -> bool {
     f[282..282 + opts.len()].copy_from_slice(opts);
     let id = client_identity(&f[..282 + opts.len()]);
     let ident = id.mt == 3 && &id.host[..id.hlen as usize] == b"Johns-iP" && id.plen == 9 && os_guess(&id.vendor[..id.vlen as usize], &id.prl[..id.plen as usize]) == "Apple iOS/macOS";
-    let guess = os_guess(b"android-dhcp-14", &[]) == "Android" && os_guess(b"MSFT 5.0", &[]) == "Windows" && os_guess(b"", &[9, 9]) == "";
+    let guess = os_guess(b"android-dhcp-14", &[]) == "Android" && os_guess(b"MSFT 5.0", &[]) == "Windows" && os_guess(b"", &[9, 9]).is_empty();
     let trunc = (0..282 + opts.len()).all(|l| client_identity(&f[..l]).hlen <= 32);
     let private = mac_is_private(&[0x02, 0, 0, 0, 0, 1]) && !mac_is_private(&[0x00, 0x1b, 0x63, 0, 0, 1]);
     let pass = stable && bind && active2 && full && reclaim && expired_bind && released && nowrap && ident && guess && trunc && private;

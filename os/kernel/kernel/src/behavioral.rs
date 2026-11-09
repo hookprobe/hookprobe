@@ -122,12 +122,11 @@ pub fn beacon_observe_at(src: u32, dst: u32, dst_port: u16, now: u64) -> bool {
     }
     let key = beacon_key(src, dst, dst_port);
     let set = crate::ratelimit::slot(key, BEACON_KEYS / 2) * 2;
-    let i = if BC_KEY[set].load(Ordering::Relaxed) == key {
-        set
-    } else if BC_KEY[set + 1].load(Ordering::Relaxed) == key {
+    // our own way if present; else the other way if it holds us, or to evict the shorter history
+    let i = if BC_KEY[set].load(Ordering::Relaxed) != key
+        && (BC_KEY[set + 1].load(Ordering::Relaxed) == key || BC_FILL[set + 1].load(Ordering::Relaxed) < BC_FILL[set].load(Ordering::Relaxed))
+    {
         set + 1
-    } else if BC_FILL[set + 1].load(Ordering::Relaxed) < BC_FILL[set].load(Ordering::Relaxed) {
-        set + 1 // evict the shorter history
     } else {
         set
     };
@@ -182,7 +181,7 @@ pub fn beacon_observe_at(src: u32, dst: u32, dst_port: u16, now: u64) -> bool {
         let ts = BC_TS[i][idx].load(Ordering::Relaxed);
         if k > 0 {
             let iv = ts.wrapping_sub(prev);
-            mad_sum += if iv >= mean { iv - mean } else { mean - iv };
+            mad_sum += iv.abs_diff(mean);
         }
         prev = ts;
     }
@@ -246,7 +245,7 @@ fn lat_is_tracked_port(port: u16) -> bool {
 
 #[inline]
 fn lat_touch(src: u64) -> usize {
-    let s = crate::ratelimit::slot(src as u64, LAT_SRCS);
+    let s = crate::ratelimit::slot(src, LAT_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(LAT_WINDOW_SECS);
     let start = LAT_WIN[s].load(Ordering::Relaxed);

@@ -30,6 +30,7 @@ pub fn freq() -> u64 {
 }
 
 /// Replay only: pin the clock to `t` ticks (0 = back to the hardware counter).
+#[cfg_attr(not(feature = "detbench"), allow(dead_code))]
 pub fn replay_set(t: u64) {
     OVERRIDE.store(t, Ordering::Relaxed);
 }
