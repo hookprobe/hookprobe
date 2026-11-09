@@ -4,6 +4,8 @@
 **Related:** ADR 0037 D3 (owner auth), ADR 0049 D1 (operator-signed files), ADR 0051 (HTTPS), ADR 0023
 (enforcement separation), ADR 0052 (Shield). Parity source: V1 Fortress/Guardian web write routes.
 
+> **Amended 2026-11-09 by [ADR 0055](0055-owner-policy-journal.md):** durable *owner* rules go through the audited owner policy journal (explicit `permanent: true` + re-auth); durable *baseline* configuration stays signed. S7 holds in substance — a temporary action never silently becomes permanent.
+
 ## Context
 
 heqk's Mission Control is read-only: every non-GET request returns 405. All configuration is an
