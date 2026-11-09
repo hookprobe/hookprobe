@@ -117,12 +117,15 @@ TL=$(curl -s -m 10 $C "$B/api/incidents/$IID/timeline")
 echo "$TL" | jget "d['found'] and d['count']>=5 and all(e['kind'] in ('detection','flow') for e in d['events'])" | grep -q True \
   && ok "incident timeline served by heqk" || bad "timeline: $TL"
 DNS=$(curl -s -m 10 $C "$B/api/dns")
-echo "$DNS" | jget "'lists' in d and 'counters' in d and isinstance(d['recent'],list) and d['policy']['encrypted_dns'] in ('block','allow')" | grep -q True \
-  && ok "Shield v2 /api/dns answers (lists, counters, policy, query log)" || bad "/api/dns: $DNS"
+echo "$DNS" | jget "'lists' in d and 'counters' in d and isinstance(d['recent'],list) and d['policy']['encrypted_dns'] in ('block','allow') and d['policy']['level'] in ('relaxed','balanced','strict') and 'level-allowed' in d['counters']" | grep -q True \
+  && ok "Shield v2 /api/dns answers (lists, counters, policy incl. the ADR 0057 level, query log)" || bad "/api/dns: $DNS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/dns")" = 401 ] && ok "/api/dns requires the owner session" || bad "/api/dns reachable without a session"
 OR=$(curl -s -m 10 $C "$B/api/owner-rules")
 echo "$OR" | jget "d['persistent'] is False and isinstance(d['rules'],list) and 'journal' in d" | grep -q True && ok "ADR 0055 /api/owner-rules answers (RAM journal in QEMU: persistent=false)" || bad "/api/owner-rules: $OR"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/owner-rules")" = 401 ] && ok "/api/owner-rules requires the owner session" || bad "/api/owner-rules reachable without a session"
+UPS=$(curl -s -m 10 $C "$B/api/upload")
+echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices'] and all(t['source']=='boot' for t in d['types']) and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"
 EN=$(curl -s -m 10 $C "$B/api/engines")
 echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=5 for e in d['engines'])" | grep -q True \
   && ok "/api/engines: the device's real detection tiers, signature hits counted" || bad "/api/engines: $EN"
