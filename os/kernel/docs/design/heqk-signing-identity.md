@@ -107,5 +107,5 @@ compromise of one tier's key must not sign the other tier's artifacts.
 | Sealed VEK + evidence surviving reboot | proven (`[P15-sealfs]`) |
 | Production key custody (HSM / ceremony / KMS) + co-rooting | **OPEN — PH4 governance decision** |
 | Per-device generated + sealed attestation identity (replace tracked `attest_keys.rs`) | open (release-gated) |
-| ML-DSA-65 co-signature on the secure channel (#10), CBOM `kem-0.3.0-pre` (#4) | open, tracked |
+| ML-DSA-65 co-signature on the secure channel (#10), CBOM `kem-0.3.0-pre` (#4) | ML-DSA co-sig: open, tracked. CBOM kem: **resolved 2026-11-09** — `kem` is now 0.3.0 final (`ml-kem =0.3.4`) |
 | SVN floor advance = irreversible OTP fuse burn (SEC-6 / PH3) | **must never be autonomous** |

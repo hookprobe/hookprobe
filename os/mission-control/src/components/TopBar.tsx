@@ -8,8 +8,8 @@
  * changes — capability-gated per manifest. Standalone hides scope switcher.
  */
 
-import { onMount, type Component } from 'solid-js';
-import { qsecbit, protectionStatus, deployMode, currentUser } from '../store/mock';
+import { onMount, Show, type Component } from 'solid-js';
+import { qsecbit, protectionStatus, deployMode, currentUser, substrate } from '../store/mock';
 import { loadHealth } from '../store/health';
 
 interface Props {
@@ -67,6 +67,21 @@ const TopBar: Component<Props> = (props) => {
       <span class="mode-badge" aria-label={`Deployment mode: ${deployMode()}`}>
         {deployMode()}
       </span>
+
+      {/* Sign out (heqk device only — ADR 0037 owner session; parity G28) */}
+      <Show when={substrate() === 'heqk'}>
+        <button
+          class="mode-badge"
+          style={{ cursor: 'pointer' }}
+          title="Sign out of this device"
+          onClick={async () => {
+            try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* go to login anyway */ }
+            location.href = '/login';
+          }}
+        >
+          Sign out
+        </button>
+      </Show>
 
       {/* Notifications */}
       <button class="notif-btn" aria-label="Notifications (0 pending)">

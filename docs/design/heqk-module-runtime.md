@@ -1,5 +1,8 @@
 # heqk Module-Runtime & On-Device-Brain Gap-Map — Track C / Milestone M5
 
+> **Historical scoping record (banner 2026-11-09).** The current state of this subsystem is `os/kernel/docs/design/heqk-module-runtime.md` (reconstructed from the code; the copy `os/kernel/validate.sh` resolves). This file keeps the earlier scoping detail; where they disagree, the os/kernel copy wins.
+
+
 > **Scope.** The M5 milestone turns heqk from a **microkernel-*shaped* monolith** (detection,
 > TCP, drivers, rule engine link *into the one EL1 kernel image*) into a real **userspace-server
 > substrate** — an EL0 ELF loader + a real syscall surface + **capabilities enforced, not asserted**

@@ -26,6 +26,7 @@ import { type Component, For, Show, createSignal, createEffect, onMount } from '
 import LeftRail from './LeftRail';
 import CommandPalette from './CommandPalette';
 import LiveState from './LiveState';
+import { promptAndRun } from '../store/actions';
 import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
 import type { Tone } from '../store/missionMock';
 import { formatTime, formatBytes, mitreName, mitreTactic, type ProcessTreeNode } from '../store/api';
@@ -89,6 +90,7 @@ const ProcessTreeItem: Component<{ node: ProcessTreeNode; depth: number }> = (p)
 );
 
 const InvestigateApp: Component = () => {
+  const [actMsg, setActMsg] = createSignal('');
   const [selectedId, setSelectedId] = createSignal<string | null>(null);
   const [relatedMitre, setRelatedMitre] = createSignal<RelatedMitre[]>([]);
   const [graphInput, setGraphInput] = createSignal('');
@@ -209,7 +211,18 @@ const InvestigateApp: Component = () => {
                         <h2 class="inv-title">{d.title}</h2>
                         <span class="inv-status">{d.status}</span>
                       </div>
-                      <div class="inv-id">{d.device_ip} · {d.id}</div>
+                      <div class="inv-id">{d.device_ip} · {d.id}
+                        {/* ADR 0053: reversible, time-bounded actions (heqk device only; refused elsewhere) */}
+                        <Show when={d.id.startsWith('inc:heqk:')}>
+                          {' · '}
+                          <button class="inv-status" disabled={d.status === 'acknowledged'}
+                            onClick={async () => { setActMsg(await promptAndRun('ack', d.device_ip, 0)); }}>Acknowledge</button>
+                          {' '}
+                          <button class="inv-status" title="Hold all traffic from/to this address for 1 hour (expires on its own)"
+                            onClick={async () => { setActMsg(await promptAndRun('hold_ip', d.device_ip, 3600)); }}>Hold source 1 h</button>
+                        </Show>
+                      </div>
+                      <Show when={actMsg()}><div class="inv-id" role="status">{actMsg()}</div></Show>
                       <p class="inv-summary">{d.explanation.why}</p>
                     </div>
 

@@ -33,9 +33,20 @@
 use boot_abi::kdf;
 use boot_abi::sha256;
 use chacha20poly1305::{AeadInPlace, ChaCha20Poly1305, Key, KeyInit, Nonce, Tag};
-use kem::Decapsulate;
 use ml_kem::array::Array;
-use ml_kem::{EncapsulateDeterministic, EncodedSizeUser, KemCore, MlKem768, B32};
+use ml_kem::{Decapsulate, KeyExport, MlKem768, B32};
+
+/// FIPS 203 ML-KEM.KeyGen_internal(d, z) — ml-kem 0.3 takes the 64-byte seed d || z (same keys as 0.2's
+/// generate_deterministic(d, z)).
+fn mlkem_keygen(d: &[u8; 32], z: &[u8; 32]) -> (MlDk, MlEk) {
+    let mut seed = [0u8; 64];
+    seed[..32].copy_from_slice(d);
+    seed[32..].copy_from_slice(z);
+    let dk = MlDk::from_seed(Array(seed));
+    seed.fill(0);
+    let ek = dk.encapsulation_key().clone();
+    (dk, ek)
+}
 use x25519_dalek::{x25519, PublicKey, StaticSecret};
 
 // --- M4.2b (Noise handshake) additional imports ---
@@ -273,17 +284,13 @@ fn scrub32(b: &mut [u8; 32]) {
 /// the caller asserts that (functional KAT) AND pins `ss_sender` to a fixed value
 /// (regression/determinism lock — see `MLKEM768_KAT_SS`).
 fn mlkem768_roundtrip(d: &[u8; 32], z: &[u8; 32], m: &[u8; 32]) -> ([u8; 32], [u8; 32]) {
-    let d: B32 = Array(*d);
-    let z: B32 = Array(*z);
     let m: B32 = Array(*m);
 
-    let (dk, ek) = MlKem768::generate_deterministic(&d, &z);
+    let (dk, ek) = mlkem_keygen(d, z);
     // Sender: encapsulate a shared secret to `ek`, deterministically from `m`.
-    let (ct, ss_sender) = ek
-        .encapsulate_deterministic(&m)
-        .expect("ml-kem encaps is infallible");
+    let (ct, ss_sender) = ek.encapsulate_deterministic(&m);
     // Receiver: decapsulate with the matching decapsulation key.
-    let ss_receiver = dk.decapsulate(&ct).expect("ml-kem decaps is infallible");
+    let ss_receiver = dk.decapsulate(&ct);
 
     let mut a = [0u8; 32];
     let mut b = [0u8; 32];
@@ -499,6 +506,16 @@ pub fn securechannel_selftest() -> bool {
         if mlkem_kat { "OK" } else { "MISMATCH" }
     );
     all &= mlkem_rt && mlkem_kat;
+    // FIPS 203 §7.2: an honest encapsulation key passes, one with a coefficient = q (3329) is refused.
+    let (_, ek) = mlkem_keygen(&d, &z);
+    let honest = ek.to_bytes();
+    let mut bad = [0u8; 1184];
+    bad.copy_from_slice(honest.as_slice());
+    bad[0] = 0x01;
+    bad[1] = (bad[1] & 0xf0) | 0x0d;
+    let ek_check = ek_from_bytes(honest.as_slice()).is_some() && ek_from_bytes(&bad).is_none();
+    kprint!("   [1b] ML-KEM-768 encapsulation-key check (FIPS 203 §7.2): honest accepted, unreduced refused {}\n", if ek_check { "OK" } else { "FAIL" });
+    all &= ek_check;
 
     // 2. X25519: RFC 7748 §5.2 single-computation vector.
     let x_out = x25519(X25519_RFC7748_SCALAR, X25519_RFC7748_U);
@@ -619,8 +636,8 @@ const PROTOCOL_NAME: &[u8] = b"Noise_HTP2hybrid_25519+MLKEM768_ChaChaPoly_SHA256
 /// binding would live here on metal; fixed + non-empty for the KAT).
 const PROLOGUE: &[u8] = b"HTP2-hybrid-v1";
 
-type MlEk = <MlKem768 as KemCore>::EncapsulationKey;
-type MlDk = <MlKem768 as KemCore>::DecapsulationKey;
+type MlEk = ml_kem::ml_kem_768::EncapsulationKey;
+type MlDk = ml_kem::ml_kem_768::DecapsulationKey;
 
 /// Handshake abort reasons — distinct so a test asserts the EXACT failure.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -655,6 +672,15 @@ pub struct CipherState {
 }
 
 impl CipherState {
+    /// Volatile-zero the key and exhaust the counter (the state can never encrypt again).
+    pub fn wipe(&mut self) {
+        for b in self.k.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+        self.n = u64::MAX;
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Noise §12.3 nonce for ChaChaPoly: 4 zero bytes followed by the 64-bit
     /// counter in little-endian. (This exact layout is load-bearing — a different
     /// encoding silently breaks interop AND the nonce-uniqueness argument.)
@@ -1124,9 +1150,9 @@ impl ResponderStatic {
     pub fn from_seeds(x_seed: &[u8; 32], d: &[u8; 32], z: &[u8; 32]) -> Self {
         let x_sk = StaticSecret::from(*x_seed);
         let x_pk = PublicKey::from(&x_sk).to_bytes();
-        let (k_dk, k_ek) = MlKem768::generate_deterministic(&Array(*d), &Array(*z));
+        let (k_dk, k_ek) = mlkem_keygen(d, z);
         let mut k_ek_bytes = [0u8; MLKEM_EK_LEN];
-        k_ek_bytes.copy_from_slice(k_ek.as_bytes().as_slice());
+        k_ek_bytes.copy_from_slice(k_ek.to_bytes().as_slice());
         ResponderStatic {
             x_sk,
             x_pk,
@@ -1225,13 +1251,41 @@ pub struct Session {
     pub handshake_hash: [u8; 32],
 }
 
+impl Session {
+    /// Overwrite both transport keys (and the handshake hash) before the session is discarded — the
+    /// rekey path (controlplane: 24 h re-handshake) must not leave an old key in memory.
+    pub fn wipe(&mut self) {
+        self.send.wipe();
+        self.recv.wipe();
+        for b in self.handshake_hash.iter_mut() {
+            unsafe { core::ptr::write_volatile(b, 0) };
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ml-kem wire (de)serialization helpers.
 // ---------------------------------------------------------------------------
 
+/// FIPS 203 §7.2 encapsulation-key input check (kept explicit: ml-kem 0.2.3 did not do it; 0.3 validates in
+/// `EncapsulationKey::new` too — belt and braces, and the ACVP-checked rule stays ours): every
+/// 12-bit coefficient of the 1152-byte t-part must be < q. Same rule as tlsprov's `mlkem_ek_ok`; both checked
+/// against NIST's ACVP encapsulationKeyCheck vectors (os/build/kem-diff `acvp`).
+fn ek_modulus_ok(b: &[u8]) -> bool {
+    b.len() == 1184
+        && b[..1152].chunks_exact(3).all(|c| {
+            let a = c[0] as u16 | ((c[1] as u16 & 0x0f) << 8);
+            let d = (c[1] as u16 >> 4) | ((c[2] as u16) << 4);
+            a < 3329 && d < 3329
+        })
+}
+
 fn ek_from_bytes(b: &[u8]) -> Option<MlEk> {
-    let enc = ml_kem::Encoded::<MlEk>::try_from(b).ok()?;
-    Some(<MlEk as EncodedSizeUser>::from_bytes(&enc))
+    if !ek_modulus_ok(b) {
+        return None; // a peer key with an unreduced coefficient: refuse before any encapsulation
+    }
+    let enc = ml_kem::Key::<MlEk>::try_from(b).ok()?;
+    MlEk::new(&enc).ok()
 }
 fn ct_from_bytes(b: &[u8]) -> Option<ml_kem::Ciphertext<MlKem768>> {
     ml_kem::Ciphertext::<MlKem768>::try_from(b).ok()
@@ -1260,9 +1314,9 @@ pub fn initiator_write_msg1(
     // token e (hybrid ephemeral): X25519 pub + ML-KEM ephemeral ek, both cleartext.
     let e_x_sk = StaticSecret::from(rnd.e_x_seed);
     let e_x_pub = PublicKey::from(&e_x_sk).to_bytes();
-    let (e_k_dk, e_k_ek) = MlKem768::generate_deterministic(&Array(rnd.e_k_d), &Array(rnd.e_k_z));
+    let (e_k_dk, e_k_ek) = mlkem_keygen(&rnd.e_k_d, &rnd.e_k_z);
     let mut e_k_ek_bytes = [0u8; MLKEM_EK_LEN];
-    e_k_ek_bytes.copy_from_slice(e_k_ek.as_bytes().as_slice());
+    e_k_ek_bytes.copy_from_slice(e_k_ek.to_bytes().as_slice());
     ss.mix_hash(&e_x_pub);
     ss.mix_hash(&e_k_ek_bytes);
     if !msg.push(&e_x_pub) || !msg.push(&e_k_ek_bytes) {
@@ -1274,7 +1328,7 @@ pub fn initiator_write_msg1(
     let rs_x = PublicKey::from(resp_pub.x_pk);
     let dh_es = e_x_sk.diffie_hellman(&rs_x).to_bytes();
     let rs_ek = ek_from_bytes(&resp_pub.k_ek_bytes)?;
-    let (ct_es, ss_es) = rs_ek.encapsulate_deterministic(&Array(rnd.m_es)).ok()?;
+    let (ct_es, ss_es) = rs_ek.encapsulate_deterministic(&Array(rnd.m_es));
     let mut ss_es_b = [0u8; 32];
     ss_es_b.copy_from_slice(ss_es.as_slice());
     ss.mix_hash(ct_es.as_slice());
@@ -1365,10 +1419,7 @@ pub fn responder_read_msg1(
         .diffie_hellman(&PublicKey::from(e_x_pub))
         .to_bytes();
     let ct_es = ct_from_bytes(ct_es_s).ok_or(NoiseErr::BadKeyMaterial)?;
-    let ss_es = resp
-        .k_dk
-        .decapsulate(&ct_es)
-        .map_err(|_| NoiseErr::BadKeyMaterial)?;
+    let ss_es = resp.k_dk.decapsulate(&ct_es);
     let mut ss_es_b = [0u8; 32];
     ss_es_b.copy_from_slice(ss_es.as_slice());
     ss.mix_hash(ct_es_s);
@@ -1434,7 +1485,7 @@ pub fn responder_write_msg2(
     let dh_ee = re_x_sk
         .diffie_hellman(&PublicKey::from(pend.e_x_pub))
         .to_bytes();
-    let (ct_ee, ss_ee) = pend.e_k_ek.encapsulate_deterministic(&Array(rnd.m_ee)).ok()?;
+    let (ct_ee, ss_ee) = pend.e_k_ek.encapsulate_deterministic(&Array(rnd.m_ee));
     let mut ss_ee_b = [0u8; 32];
     ss_ee_b.copy_from_slice(ss_ee.as_slice());
     pend.ss.mix_hash(ct_ee.as_slice());
@@ -1484,10 +1535,7 @@ pub fn initiator_read_msg2(
         .diffie_hellman(&PublicKey::from(re_x_pub))
         .to_bytes();
     let ct_ee = ct_from_bytes(ct_ee_s).ok_or(NoiseErr::BadKeyMaterial)?;
-    let ss_ee = pend
-        .e_k_dk
-        .decapsulate(&ct_ee)
-        .map_err(|_| NoiseErr::BadKeyMaterial)?;
+    let ss_ee = pend.e_k_dk.decapsulate(&ct_ee);
     let mut ss_ee_b = [0u8; 32];
     ss_ee_b.copy_from_slice(ss_ee.as_slice());
     pend.ss.mix_hash(ct_ee_s);

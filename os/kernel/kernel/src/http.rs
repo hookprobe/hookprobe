@@ -38,10 +38,14 @@ pub struct Req<'a> {
     /// Bytes of the input this request occupies (header block + body) — anything after it is the next
     /// (pipelined) request and must be kept.
     pub consumed: usize,
+    /// The `Origin` header (ADR 0053: writes must come from this device's own pages).
+    pub origin: &'a str,
+    /// The `X-HQ-CSRF` header (ADR 0053 per-session token).
+    pub csrf: &'a str,
 }
 
-/// Largest accepted request body (the login form; nothing else posts).
-pub const MAX_BODY: usize = 512;
+/// Largest accepted request body (the login form and ADR 0053 action forms).
+pub const MAX_BODY: usize = 1024;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ParseErr {
@@ -75,6 +79,8 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
     let mut host = "";
     let mut conn_close = false;
     let mut clen = 0usize;
+    let mut origin = "";
+    let mut csrf = "";
     for h in head.split("\r\n").skip(1) {
         let Some((k, v)) = h.split_once(':') else { continue };
         let v = v.trim();
@@ -95,11 +101,17 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
             }
         } else if k.eq_ignore_ascii_case("content-length") {
             clen = v.parse().map_err(|_| ParseErr::Bad)?;
+        } else if k.eq_ignore_ascii_case("origin") {
+            origin = v;
+        } else if k.eq_ignore_ascii_case("x-hq-csrf") {
+            csrf = v;
         } else if k.eq_ignore_ascii_case("connection") {
             conn_close = v.split(',').any(|t| t.trim().eq_ignore_ascii_case("close"));
         }
     }
-    if clen > MAX_BODY {
+    // ADR 0056: upload chunks carry raw bytes (still inside the 4 KiB request buffer)
+    let cap = if path == "/api/upload/chunk" { crate::upload::CHUNK_MAX } else { MAX_BODY };
+    if clen > cap {
         return Err(ParseErr::Bad);
     }
     let body_start = end + 4;
@@ -108,7 +120,7 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
     }
     let body = &buf[body_start..body_start + clen];
     let keep_alive = version == "HTTP/1.1" && !conn_close;
-    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host, keep_alive, consumed: body_start + clen })
+    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host, keep_alive, consumed: body_start + clen, origin, csrf })
 }
 
 /// `key=<u32>` from a query string.
@@ -117,6 +129,27 @@ pub fn query_u32(query: &str, key: &str) -> Option<u32> {
         let (k, v) = kv.split_once('=')?;
         if k == key { v.parse().ok() } else { None }
     })
+}
+
+/// A query value, percent-decoded into `buf` (bounded; a malformed escape → None).
+pub fn query_str<'b>(query: &str, key: &str, buf: &'b mut [u8; 96]) -> Option<&'b str> {
+    let v = query.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))?;
+    let b = v.as_bytes();
+    let (mut i, mut n) = (0usize, 0usize);
+    while i < b.len() {
+        let c = if b[i] == b'%' {
+            let h = |x: u8| (x as char).to_digit(16);
+            let (hi, lo) = (h(*b.get(i + 1)?)?, h(*b.get(i + 2)?)?);
+            i += 3;
+            (hi * 16 + lo) as u8
+        } else {
+            i += 1;
+            b[i - 1]
+        };
+        *buf.get_mut(n)? = c;
+        n += 1;
+    }
+    core::str::from_utf8(&buf[..n]).ok()
 }
 
 /// Map a URL path to an embedded asset: `/` → `index.html`; `/a/b` or `/a/b/` → `a/b/index.html`
@@ -184,6 +217,108 @@ fn json(scratch: &mut [u8], f: impl FnOnce(&mut JsonBuf)) -> Response {
     }
 }
 
+fn target_json(w: &mut JsonBuf, t: &crate::actions::Target) {
+    use core::fmt::Write;
+    use crate::actions::Target;
+    let ip = |w: &mut JsonBuf, v: u32| { let _ = write!(w, "\"{}.{}.{}.{}\"", v >> 24, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff); };
+    match *t {
+        Target::Incident(v) | Target::Ip(v) => ip(w, v),
+        Target::Mac(m) => { let _ = write!(w, "\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\"", m[0], m[1], m[2], m[3], m[4], m[5]); }
+        Target::Domain(h) => { let _ = write!(w, "\"domain#{:016x}\"", h); }
+    }
+}
+
+/// RFC 5952 text form of an IPv6 address (lower-case hex, the longest run of >= 2 zero groups as `::`).
+fn write_ip6(w: &mut JsonBuf, a: &[u8; 16]) {
+    use core::fmt::Write;
+    let g = |i: usize| ((a[2 * i] as u16) << 8) | a[2 * i + 1] as u16;
+    let (mut bs, mut bl, mut i) = (8usize, 0usize, 0usize);
+    while i < 8 {
+        if g(i) == 0 {
+            let s = i;
+            while i < 8 && g(i) == 0 {
+                i += 1;
+            }
+            if i - s > bl && i - s >= 2 {
+                bs = s;
+                bl = i - s;
+            }
+        } else {
+            i += 1;
+        }
+    }
+    let mut i = 0;
+    while i < 8 {
+        if i == bs {
+            w.raw("::");
+            i += bl;
+            continue;
+        }
+        if i > 0 && i != bs + bl {
+            w.raw(":");
+        }
+        let _ = write!(w, "{:x}", g(i));
+        i += 1;
+    }
+}
+
+/// `GET /api/tls` — TLS clients seen (JA4 + SNI per client), most recent first; IOC / Shield-bypass flags.
+fn render_tls(w: &mut JsonBuf) {
+    use core::fmt::Write;
+    let _ = write!(w, "{{\"hellos\":{},\"clients\":[", crate::ja4::hellos());
+    let mut first = true;
+    crate::ja4::for_each(&mut |e| {
+        if !first {
+            w.raw(",");
+        }
+        first = false;
+        let c = e.client;
+        w.raw("{\"client\":\"");
+        if e.client6 != [0; 16] {
+            write_ip6(w, &e.client6);
+            // the same device's IPv4 lease (detections are attributed to it)
+            let _ = write!(w, "\",\"lease\":\"{}.{}.{}.{}", c >> 24, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff);
+        } else {
+            let _ = write!(w, "{}.{}.{}.{}", c >> 24, (c >> 16) & 0xff, (c >> 8) & 0xff, c & 0xff);
+        }
+        let _ = write!(w, "\",\"ja4\":\"{}\",\"sni\":\"{}\",\"count\":{},\"last_ms\":{},\"ioc\":{},\"shield_bypass\":{}}}",
+            core::str::from_utf8(&e.ja4).unwrap_or(""), core::str::from_utf8(&e.sni[..e.sni_len as usize]).unwrap_or(""),
+            e.count, e.last_ms, e.ioc, e.bypass);
+    });
+    w.raw("]}");
+}
+
+/// `GET /api/actions` — active actions (time left) + the audit log, newest first.
+fn render_actions(w: &mut JsonBuf) {
+    use core::fmt::Write;
+    w.raw("{\"active\":[");
+    let mut k = 0;
+    crate::actions::for_each(&mut |e, now| {
+        let _ = write!(w, "{}{{\"id\":{},\"kind\":\"{}\",\"target\":", if k > 0 { "," } else { "" }, e.id, e.kind.name());
+        target_json(w, &e.target);
+        let left = if e.expires_ms == 0 { 0 } else { e.expires_ms.saturating_sub(now) / 1000 };
+        let _ = write!(w, ",\"expires_in_s\":{}}}", left);
+        k += 1;
+    });
+    w.raw("],\"audit\":[");
+    let mut n = 0;
+    crate::actions::for_each_audit(&mut |a| {
+        if n >= 50 {
+            return;
+        }
+        let _ = write!(w, "{}{{\"session\":\"{:02x}{:02x}{:02x}{:02x}\",\"kind\":\"{}\",\"target\":", if n > 0 { "," } else { "" },
+            a.session[0], a.session[1], a.session[2], a.session[3], a.kind.name());
+        target_json(w, &a.target);
+        let _ = write!(w, ",\"ttl_s\":{},\"ok\":{},\"result\":\"{}\",\"reason\":\"{}\"}}", a.ttl_s, a.ok,
+            if a.ok { "accepted" } else { a.refusal.unwrap_or("refused") }, core::str::from_utf8(&a.reason[..a.rlen as usize]).unwrap_or(""));
+        n += 1;
+    });
+    w.raw("]}");
+}
+
+/// `set_cookie` sentinel: expire the session cookie (logout).
+pub const CLEAR_COOKIE: [u8; 32] = [b'-'; 32];
+
 /// Route one request against the device state, enforcing owner authentication (ADR 0037 D3).
 /// `scratch` receives rendered JSON; `rand16` mints a session id on a successful login.
 pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>, scratch: &mut [u8]) -> Response {
@@ -191,6 +326,14 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     match (req.path, req.get, req.post) {
         ("/login", true, _) => return Response::page(200, LOGIN_HTML),
         ("/api/login", _, true) => return login(req, auth, now_ms, rand16, scratch),
+        // Parity G28: logout ends this session (`?all=1`: every session) and expires the cookie.
+        ("/api/logout", _, true) => {
+            let all = query_u32(req.query, "all") == Some(1);
+            let ended = auth.logout(req.session, all, now_ms);
+            let mut r = json(scratch, |w| w.raw(if ended { "{\"logged_out\":true}" } else { "{\"logged_out\":false}" }));
+            r.set_cookie = Some(CLEAR_COOKIE);
+            return if ended { r } else { r.with_status(401) };
+        }
         ("/api/health", true, _) if !auth.check(req.session, now_ms) => {
             let claimed = auth.claimed();
             return json(scratch, |w| {
@@ -216,6 +359,85 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             Response { status: 302, ctype: "text/plain", body: Body::Scratch(0), location: Some("/login"), set_cookie: None }
         };
     }
+    crate::actions::tick(now_ms);
+    // ADR 0053: the only writes — reversible, TTL-bound actions behind origin + CSRF + replay guards.
+    if req.post && req.path == "/api/owner-rules" {
+        // ADR 0055: durable owner rules (journal). Same guards as the actions + re-auth on every write.
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        return match crate::ownerapi::submit(&c, req.body, auth) {
+            Ok(o) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"seq\":{},\"dry_run\":{},\"before\":\"{}\",\"after\":\"{}\",\"shadowed_by\":", o.seq, o.seq == 0, o.before, o.after);
+                if o.shadowed_by.is_empty() { w.raw("null") } else { w.string(o.shadowed_by) }
+                w.raw("}");
+            }),
+            Err(why) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":false,\"refused\":\"{}\"}}", why);
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
+    if req.post && req.path.starts_with("/api/upload/") {
+        // ADR 0056: signed data-pack upload (same guards + re-auth on begin / activate)
+        use crate::upload as up;
+        enum Ok_ {
+            Begun(u64),
+            Chunk(u64),
+            Fin(up::Finished),
+            Act(up::Activated),
+            Abort,
+        }
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let r = match req.path {
+            "/api/upload/begin" => up::begin(&c, req.body, auth).map(|b| Ok_::Begun(b.id)),
+            "/api/upload/chunk" => up::chunk(&c, req.query, req.body).map(Ok_::Chunk),
+            "/api/upload/finish" => up::finish(&c, req.body).map(Ok_::Fin),
+            "/api/upload/activate" => up::activate(&c, req.body, auth).map(Ok_::Act),
+            "/api/upload/abort" => up::abort(&c, req.body).map(|_| Ok_::Abort),
+            _ => Err("unknown upload step"),
+        };
+        return match r {
+            Ok(o) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = match o {
+                    Ok_::Begun(id) => write!(w, "{{\"ok\":true,\"id\":\"{:016x}\",\"chunk_max\":{}}}", id, up::CHUNK_MAX),
+                    Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
+                    Ok_::Fin(f) => write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{}}}", f.gen, f.active_gen, f.len),
+                    Ok_::Act(a) => match a.journal_seq {
+                        Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":{}}}", a.gen, q),
+                        None => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":null}}", a.gen),
+                    },
+                    Ok_::Abort => write!(w, "{{\"ok\":true,\"aborted\":true}}"),
+                };
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
+    if req.post && (req.path == "/api/actions" || req.path == "/api/actions/revoke") {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let r = if req.path == "/api/actions" {
+            crate::actionapi::submit(&c, req.body, auth).map(|id| id as u64)
+        } else {
+            crate::actionapi::revoke(&c, req.body).map(|_| 0)
+        };
+        return match r {
+            Ok(id) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"id\":{}}}", id);
+            }),
+            Err(why) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":false,\"refused\":\"{}\"}}", why);
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
     if !req.get {
         return json(scratch, |w| w.raw("{\"error\":\"method not allowed\"}")).with_status(405);
     }
@@ -224,7 +446,21 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         "/api/detections" => json(scratch, |w| st.render_detections(limit(200, 500), w)),
         "/api/incidents" => json(scratch, |w| st.render_incidents(limit(50, 500), w)),
         "/api/qsecbit" => json(scratch, |w| st.render_qsecbit(limit(20, 1000), w)),
+        "/api/session" => json(scratch, |w| {
+            use core::fmt::Write;
+            let mut t = [0u8; 32];
+            let _ = crate::mcauth::csrf_token(req.session, &mut t);
+            let tag = crate::mcauth::session_tag(req.session);
+            let _ = write!(w, "{{\"csrf\":\"{}\",\"next_seq\":{},\"live_sessions\":{},\"min_ttl_s\":{},\"max_ttl_s\":{}}}",
+                core::str::from_utf8(&t).unwrap_or(""), crate::actions::last_seq(tag) + 1, auth.live_sessions(now_ms),
+                crate::actions::MIN_TTL_S, crate::actions::MAX_TTL_S);
+        }),
+        "/api/actions" => json(scratch, render_actions),
+        "/api/owner-rules" => json(scratch, crate::ownerapi::render),
+        "/api/upload" => json(scratch, crate::upload::render),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
+        "/api/tls" => json(scratch, render_tls),
+        "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
         "/api/flows" => json(scratch, |w| st.render_flows(st.ticks_at_ms(now_ms), limit(100, 256), w)),
         p if p.starts_with("/api/incidents/") => {
             let rest = &p["/api/incidents/".len()..];
@@ -247,7 +483,67 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }
         // No engine registry on heqk yet: an EMPTY list keeps every engine row honestly badged
         // "mock" in the Detect UI rather than inventing live engines.
-        "/api/engines" => json(scratch, |w| w.raw("{\"engines\":[]}")),
+        "/api/engines" => json(scratch, |w| st.render_engines((crate::shield::block_len(), crate::shield::totals().1), w)),
+        "/api/evidence/stats" => json(scratch, |w| {
+            let mut nf = 0usize;
+            arch_aarch64::nat::for_each_flow(st.ticks_at_ms(now_ms), &mut |_| nf += 1);
+            st.render_evidence_stats(nf, crate::shield::totals().0, w)
+        }),
+        "/api/evidence/graph" => {
+            let mut nb = [0u8; 96];
+            match query_str(req.query, "node", &mut nb) {
+                Some(node) => {
+                    let mut found = true;
+                    let r = json(scratch, |w| found = st.render_graph(node, w));
+                    if found { r } else { json(scratch, |w| w.raw("{\"error\":\"no such node\"}")).with_status(404) }
+                }
+                None => json(scratch, |w| w.raw("{\"error\":\"node= required\"}")).with_status(400),
+            }
+        }
+        "/api/reports" => json(scratch, |w| st.render_reports(limit(200, 32), w)),
+        // Parity G7/G9: the operator-signed intel + device-policy files and what they matched.
+        "/api/intel" => json(scratch, |w| {
+            use core::fmt::Write;
+            let i = crate::ioc::info();
+            let d = crate::devpolicy::info();
+            let dn = crate::devpolicy::denied();
+            let f = |x: u8| ["none", "loaded", "refused"][x as usize % 3];
+            let _ = write!(w, "{{\"ioc\":{{\"file\":\"{}\",\"signed\":{},\"generation\":{},\"ipv4_prefixes\":{},\"domains\":{},\"skipped_lines\":{},\"mode\":\"detect-only\"}},\"devices\":{{\"file\":\"{}\",\"signed\":{},\"generation\":{},\"entries\":{},\"skipped_lines\":{},\"denied\":{{\"internet_only\":{},\"lan_only\":{},\"quarantine\":{}}}}}}}",
+                f(i.file), i.signed, i.generation, crate::ioc::v4_len(), crate::ioc::dom_len(), i.skipped,
+                f(d.file), d.signed, d.generation, crate::devpolicy::len(), d.skipped, dn[1], dn[2], dn[3]);
+        }),
+        // Parity G23: who the device is enforcing against RIGHT NOW (read-only; everything self-reverts).
+        "/api/enforcement" => json(scratch, |w| {
+            use core::fmt::Write;
+            w.raw("{\"policy\":\"observe by default; only a confirmed scan, a malformed frame, an L1/L2 flood or resource exhaustion is acted on, and every action self-reverts (ADR 0023)\",\"sources\":[");
+            let mut k = 0;
+            crate::ratelimit::for_each_scan_source(&mut |x| {
+                let s = x.src;
+                let _ = write!(w, "{}{{\"ip\":\"{}.{}.{}.{}\",\"state\":\"{}\",\"reason\":\"port scan\",\"distinct_ports\":{},\"established\":{},\"expires_in_s\":{}}}",
+                    if k > 0 { "," } else { "" }, s >> 24, (s >> 16) & 0xff, (s >> 8) & 0xff, s & 0xff,
+                    ["watching", "rate_limited", "quarantined"][x.level as usize % 3], x.distinct, x.established, x.expires_in);
+                k += 1;
+            });
+            let _ = write!(w, "],\"count\":{}}}", k);
+        }),
+        p if p.starts_with("/api/reports/") => {
+            // `rep:heqk:IP` (any `%3A` escaping) names the incident `inc:heqk:IP`
+            let id = &p["/api/reports/".len()..];
+            let mut ib = [0u8; 96];
+            let n = id.len().min(ib.len());
+            ib[..n].copy_from_slice(&id.as_bytes()[..n]);
+            if ib[..n].starts_with(b"rep") {
+                ib[..3].copy_from_slice(b"inc");
+            }
+            match core::str::from_utf8(&ib[..n]).ok().and_then(McState::parse_incident_id) {
+                Some(src) => {
+                    let mut found = true;
+                    let r = json(scratch, |w| found = st.render_report(src, st.ticks_at_ms(now_ms), w));
+                    if found { r } else { json(scratch, |w| w.raw("{\"error\":\"no such report\"}")).with_status(404) }
+                }
+                None => json(scratch, |w| w.raw("{\"error\":\"no such report\"}")).with_status(404),
+            }
+        }
         "/api/health" => json(scratch, |w| {
             use core::fmt::Write;
             // An unarmed rule plane (0 active rules) passes everything — report it, never hide it.
@@ -262,6 +558,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = write!(w, ",\"wan\":{{\"up\":{},\"ip\":\"{}.{}.{}.{}\",\"mode\":\"{}\",\"ipv6\":{},\"clients\":{},\"pkts_out\":{},\"pkts_in\":{},\"dns_inspected\":{},\"dns_blocked\":{},\"blocklist\":{}}}",
                     f.up, f.ip[0], f.ip[1], f.ip[2], f.ip[3], ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ipv6, f.clients, f.pkts_out, f.pkts_in, f.dns_inspected, f.dns_blocked, f.blocklist);
             }
+            // G10: the Wi-Fi station-to-station relay (all after the lease + IDS + DEVICES.TXT gates)
+            let r = crate::lanrelay::stats();
+            let _ = write!(w, ",\"lan_relay\":{{\"arp_proxied\":{},\"relayed\":{},\"refused_policy\":{},\"refused_not_leased\":{},\"discovery_copies\":{},\"discovery_rate_limited\":{}}}",
+                r[0], r[1], r[2], r[3], r[4], r[5]);
             w.raw("}");
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
@@ -352,8 +652,13 @@ pub fn write_head_ka(resp: &Response, out: &mut [u8], secure: bool, keep: bool) 
         let _ = write!(w, "Location: {}\r\n", l);
     }
     if let Some(c) = resp.set_cookie {
-        let _ = write!(w, "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{}\r\n",
-            mcauth::COOKIE, core::str::from_utf8(&c).unwrap_or(""), if secure { "; Secure" } else { "" });
+        if c == CLEAR_COOKIE {
+            // logout: expire the cookie in the browser too
+            let _ = write!(w, "Set-Cookie: {}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0{}\r\n", mcauth::COOKIE, if secure { "; Secure" } else { "" });
+        } else {
+            let _ = write!(w, "Set-Cookie: {}={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200{}\r\n",
+                mcauth::COOKIE, core::str::from_utf8(&c).unwrap_or(""), if secure { "; Secure" } else { "" });
+        }
     }
     match resp.body_len() {
         Some(n) => {
@@ -473,7 +778,8 @@ pub fn mc_selftest() -> bool {
     let q = &scratch[..n3];
     let qs_ok = s3 == 200 && has(q, "\"latest\":{\"ts\":1700000008.000,\"score\":0.666,\"band\":\"AMBER\"}") && has(q, "\"count\":2");
     let (s4, n4) = get(b"GET /api/engines HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
-    let eng_ok = s4 == 200 && &scratch[..n4] == b"{\"engines\":[]}";
+    // engines: the device's REAL detection tiers (parity G13), never a mock row
+    let eng_ok = s4 == 200 && { let e = core::str::from_utf8(&scratch[..n4]).unwrap_or(""); e.starts_with("{\"engines\":[{\"name\":") && !e.contains("\"mock\"") };
     let (s5, _) = get(b"GET /api/nope HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let (s6, _) = get(b"POST /api/detections HTTP/1.1\r\n\r\n", &st, &mut auth, &mut scratch, &mut authed);
     let errs_ok = s5 == 404 && s6 == 405
@@ -573,8 +879,74 @@ pub fn mc_selftest() -> bool {
         di.render_timeline(0x0A64_004D, 0, &mut tw2);
         let tj = core::str::from_utf8(tw2.bytes()).unwrap_or("");
         let timeline_ok = tj.contains("\"found\":true") && tj.contains("\"kind\":\"detection\"") && tj.ends_with("],\"count\":2}")
-            && tj.find("10.100.0.135:22").map_or(false, |a| tj.find("10.100.0.135:80").map_or(false, |b| a < b));
-        let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok;
+            && tj.find("10.100.0.135:22").is_some_and(|a| tj.find("10.100.0.135:80").is_some_and(|b| a < b));
+        // AP/LAN images: /api/devices from DHCP leases (MAC, hostname, OS guess, private MAC, active).
+        let mut dl = McState::new();
+        let mut dd = arch_aarch64::dhcpd::ApDhcp::new();
+        dd.now = 100;
+        let _ = dd.alloc_for(&[0x02, 0, 0, 0, 0, 7], &[10, 99, 0, 10]);
+        dd.commit(&[0x02, 0, 0, 0, 0, 7]);
+        let mut id = arch_aarch64::dhcpd::client_identity(&[]);
+        id.host[..6].copy_from_slice(b"Johns-");
+        id.hlen = 6;
+        id.vendor[..15].copy_from_slice(b"android-dhcp-14");
+        id.vlen = 15;
+        dd.note_identity(&[0x02, 0, 0, 0, 0, 7], &id);
+        dl.set_leases(&dd);
+        let mut lb = [0u8; 1024];
+        let mut lw = JsonBuf::new(&mut lb);
+        dl.render_devices(10, &mut lw);
+        let lj = core::str::from_utf8(lw.bytes()).unwrap_or("");
+        let leases_ok = lj.contains("\"mac\":\"02:00:00:00:00:07\"") && lj.contains("\"ip\":\"10.99.0.10\"") && lj.contains("\"hostname\":\"Johns-\"")
+            && lj.contains("\"os\":\"Android\"") && lj.contains("\"private_mac\":true,\"active\":true") && lj.ends_with("],\"count\":1}");
+        // G13: engines, evidence stats/graph, reports — all from the device's own evidence.
+        let mut gb = [0u8; 8192];
+        let g = |f: &dyn Fn(&mut JsonBuf) -> bool, b: &mut [u8; 8192]| -> (bool, usize) {
+            let mut w = JsonBuf::new(&mut b[..]);
+            let ok = f(&mut w);
+            (ok && !w.overflow, w.len)
+        };
+        let (_, n1) = g(&|w| { di.render_engines((7, 3), w); true }, &mut gb);
+        let ej = core::str::from_utf8(&gb[..n1]).unwrap_or("");
+        let engines_ok = ej.contains("\"name\":\"Scan & flood detection\"") && ej.contains("\"Shield DNS (ADR 0052)\",\"kind\":\"dns\",\"source\":\"real\",\"status\":\"active\",\"loaded_rules\":7")
+            && !ej.contains("\"mock\"");
+        let (_, n2) = g(&|w| { di.render_evidence_stats(4, 9, w); true }, &mut gb);
+        let sj = core::str::from_utf8(&gb[..n2]).unwrap_or("");
+        let stats_ok = sj.contains("\"detections\":2,\"incidents\":1,\"flows\":4,\"dns_queries\":9") && sj.contains("\"last_prune\":null");
+        let (f1, _) = g(&|w| di.render_graph("inc:heqk:10.100.0.77", w), &mut gb);
+        let (f2, n3) = g(&|w| di.render_graph("rule:1200113", w), &mut gb);
+        let rule_edge = core::str::from_utf8(&gb[..n3]).unwrap_or("").contains("\"dst\":\"ip:10.100.0.77\"");
+        let (f3, _) = g(&|w| di.render_graph("det:heqk:0", w), &mut gb);
+        let (f4, _) = g(&|w| di.render_graph("ip:10.0.0.99", w), &mut gb);
+        let (f5, _) = g(&|w| di.render_graph("rule:junk", w), &mut gb);
+        let graph_ok = f1 && f2 && rule_edge && f3 && !f4 && !f5;
+        let (_, n4) = g(&|w| { di.render_reports(10, w); true }, &mut gb);
+        let lj_ok = { let lj = core::str::from_utf8(&gb[..n4]).unwrap_or(""); lj.contains("\"id\":\"rep:heqk:10.100.0.77\"") && lj.ends_with("],\"count\":1}") };
+        let (f6, n5) = g(&|w| di.render_report(0x0A64_004D, 0, w), &mut gb);
+        let pj = core::str::from_utf8(&gb[..n5]).unwrap_or("");
+        let reports_ok = lj_ok && f6
+            && pj.contains("\"mitre_techniques\":[") && pj.contains("\"evidence_node_ids\":[\"det:heqk:") && pj.contains("\"process_tree\":[]")
+            && pj.contains("\"timeline\":[{");
+        let mut qb = [0u8; 96];
+        let q_ok = query_str("node=inc%3Aheqk%3A10.0.0.1&x=1", "node", &mut qb) == Some("inc:heqk:10.0.0.1")
+            && query_str("node=%zz", "node", &mut qb).is_none() && query_str("a=1", "node", &mut qb).is_none();
+        // G5: risk decays with a 5-min half-life instead of dropping to GREEN a minute after an attack.
+        let mut qd = McState::new();
+        qd.set_clock(0, 0, 1000); // ticks = ms
+        qd.sample_qsecbit(1_000, 0);
+        qd.sample_qsecbit(2_000, 40);
+        let r1 = qd.latest_risk();
+        qd.sample_qsecbit(2_000 + 300_000, 40);
+        let r2 = qd.latest_risk();
+        qd.sample_qsecbit(2_000 + 3_600_000, 40);
+        let r3 = qd.latest_risk();
+        let mut qn = McState::new();
+        qn.set_clock(0, 0, 1000);
+        qn.sample_qsecbit(1_000, 500); // a lifetime score from before the first sample is not current risk
+        let decay_ok = r1 >= 600 && (450..=550).contains(&r2) && r3 < 50 && qn.latest_risk() == 0;
+        kprint!(" [P-mc-x] hosts={} incident-ids={} detail={} unknown={} timeline={} lease-devices={} engines={} evidence-stats={} graph={} reports={} query-decode={} qsecbit-decay={}\n",
+            hosts_ok, ids_ok, detail_ok, unknown_ok, timeline_ok, leases_ok, engines_ok, stats_ok, graph_ok, reports_ok, q_ok, decay_ok);
+        let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok && leases_ok && engines_ok && stats_ok && graph_ok && reports_ok && q_ok && decay_ok;
         good && wrong_nonce && refused && synced && small && big && pinned && hosts_ok
     };
     // ADR 0051 D4: :80 -> https redirect keeps path+query, drops the port; a hostile Host never reaches
@@ -598,10 +970,10 @@ pub fn mc_selftest() -> bool {
         // keep-alive (HTTP/1.1 default, Connection: close / HTTP/1.0 end it; `consumed` spans head + body so a
         // pipelined next request survives; the header advertises the limits only when kept)
         let two = b"POST /api/login HTTP/1.1\r\nContent-Length: 5\r\n\r\nabcdeGET / HTTP/1.1\r\n\r\n";
-        let ka = parse(two).map_or(false, |r| r.keep_alive && r.consumed == two.len() - 18 && r.body == b"abcde")
-            && parse(b"GET / HTTP/1.1\r\nConnection: Close\r\n\r\n").map_or(false, |r| !r.keep_alive)
-            && parse(b"GET / HTTP/1.0\r\n\r\n").map_or(false, |r| !r.keep_alive)
-            && parse(b"GET / HTTP/1.1\r\nConnection: keep-alive, Upgrade\r\n\r\n").map_or(false, |r| r.keep_alive);
+        let ka = parse(two).is_ok_and(|r| r.keep_alive && r.consumed == two.len() - 18 && r.body == b"abcde")
+            && parse(b"GET / HTTP/1.1\r\nConnection: Close\r\n\r\n").is_ok_and(|r| !r.keep_alive)
+            && parse(b"GET / HTTP/1.0\r\n\r\n").is_ok_and(|r| !r.keep_alive)
+            && parse(b"GET / HTTP/1.1\r\nConnection: keep-alive, Upgrade\r\n\r\n").is_ok_and(|r| r.keep_alive);
         let h1 = handle(&parse(b"GET /api/health HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 0, || Some([0; 16]), &mut scratch);
         let k = write_head_ka(&h1, &mut hh, false, true);
         let kept = has(&hh[..k], "Connection: keep-alive\r\nKeep-Alive: timeout=15, max=100\r\n");
@@ -611,11 +983,11 @@ pub fn mc_selftest() -> bool {
         let mut sw = McState::new();
         sw.wan = Some(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7, dns_blocked: 2, blocklist: 3 });
         let hw = handle(&parse(b"GET /api/health HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &sw, &mut auth, 1, || Some([0; 16]), &mut scratch);
-        let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3}}"));
+        let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3},\"lan_relay\":{\"arp_proxied\":"));
         red && v6 && bad && sec && plain && ka && kept && closed && wan_ok
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;
-    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(honest empty)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS) + keep-alive(1.1 default, close/1.0 end it, pipelined bytes kept, limits advertised)={} (ui assets embedded: {})\n",
+    kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(real tiers, no mock)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS) + keep-alive(1.1 default, close/1.0 end it, pipelined bytes kept, limits advertised)={} (ui assets embedded: {})\n",
         if pass { "PASS" } else { "FAIL" }, auth_ok, det_ok, inc_ok, qs_ok, eng_ok, errs_ok, sse_ok, ovf_ok, time_ok, tls_ok, UI_ASSETS.len());
     pass
 }

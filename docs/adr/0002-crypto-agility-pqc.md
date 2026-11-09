@@ -6,6 +6,14 @@ Implemented/Roadmap table in §3 and the `hookprobe:status` field every CBOM com
 had no code behind them were reclassified as Roadmap, and module signing's hybrid ML-DSA-65 +
 Ed25519 leg — the one domain that WAS built — is now genuinely fail-closed-enforced, not just
 declared.
+
+> **Amendment 2026-11-09 (status of the heqk product, ADR 0047):** ML-KEM is **shipped** on heqk —
+> ML-KEM-768 via RustCrypto `ml-kem =0.3.4` (`kem 0.3.0` final) in `securechannel` (the Noise IK
+> PQ-hybrid control channel) and `tlsprov` (Mission Control HTTPS, TLS `X25519MLKEM768`, served by
+> the EL0 TLS host — ADR 0051). heqk boot/image signing is **Ed25519 + SLH-DSA-SHA2-128s**
+> (`os/build/heqk-sign`, trust root `os/kernel/boot-abi/src/verify.rs`). The cosign/ECDSA-P256 image
+> signing and ML-DSA-65 module signing below are **legacy Linux tier** (`legacy/linux-tier/`). The
+> "ROADMAP — no TLS stack" rows below are historical and superseded for heqk.
 **Date:** 2026-06-27
 **Deciders:** os-architect (author), code-developer, security
 **Relates to:** [ADR 0001 — Mission Control stack](0001-mission-control-stack.md) (transport TLS); `docs/architecture/Readme.md` § Post-quantum readiness; the Platform Manifest `crypto` block.
@@ -35,7 +43,7 @@ crypto:
   boot_signing:                             # TIER-SPLIT (ADR 0043):
     heqk_rpi_native: ["ed25519","slh-dsa-sha2-128s"]  # IMPLEMENTED — hboot hybrid boot signing, STATELESS hash-based (FIPS 205); QEMU-green + single-run metal
     uefi_amd64:      "lms"                    # ROADMAP — stateful hash-based (SP 800-208), no measured-boot signing code on this tier yet
-  tls_kex:        ["ml-kem-768+x25519"]     # ROADMAP — no TLS/rustls stack in this tree yet
+  tls_kex:        ["ml-kem-768+x25519"]     # ROADMAP — no TLS/rustls stack in this tree yet  [2026-11-09: IMPLEMENTED on heqk — tlsprov X25519MLKEM768 + securechannel Noise IK ML-KEM-768 hybrid]
   tls_auth:       ["ml-dsa-65", "ecdsa-p256"] # ROADMAP — same, no TLS stack to carry it
   data_at_rest:   "aes-256-gcm"              # IMPLEMENTED — quantum-resistant, unchanged (LUKS2+Clevis/TPM)
   hash:           ["sha-256", "sha-384", "sha3-256"]  # IMPLEMENTED
@@ -71,7 +79,7 @@ blanket claim about domains with zero implementation.
 | **OS image signing** | cosign **KEYLESS** (Fulcio-issued short-lived **ECDSA-P256** cert, Rekor log) | **✅ Implemented** (classical only — sigstore/cosign PQC signing is still maturing upstream) | FIPS 186-5 | Ephemeral, OIDC-identity-bound — no long-lived key at all |
 | **Firmware / boot chain — heqk / rpi-native tier** | **composite Ed25519 + SLH-DSA-SHA2-128s** (STATELESS hash-based), fail-closed | **✅ Implemented** (QEMU-green + single-run metal — Track-C honesty) — heqk `hboot`, `fips205` + `ed25519-compact` crates | FIPS 205 | **Release pipeline / offline signer** (`~/heqk-sign` dev signer today; production custody OPEN — `docs/design/heqk-signing-identity.md`) |
 | **Firmware / boot chain — UEFI / amd64 tier** | **LMS** (stateful hash-based) | ⏳ **Roadmap** — no measured-boot signing code on this tier; the key-custody design below is decided, the signing/verification itself is not built | SP 800-208 | **Release pipeline / HSM with state management** (design only, once built) |
-| **Transport (fleet, control plane, Mission Control)** | **hybrid ML-KEM-768 + X25519** KEX; **hybrid ML-DSA-65 + ECDSA-P256** auth | ⏳ **Roadmap** — no TLS/rustls stack exists in this tree yet | FIPS 203 + RFC hybrids | Ephemeral on both ends (once a TLS stack lands) |
+| **Transport (fleet, control plane, Mission Control)** | **hybrid ML-KEM-768 + X25519** KEX; **hybrid ML-DSA-65 + ECDSA-P256** auth | ⏳ **Roadmap** — no TLS/rustls stack exists in this tree yet. **[2026-11-09: KEX ✅ Implemented on heqk** — `securechannel` (Noise IK + ML-KEM-768) and `tlsprov` (TLS `X25519MLKEM768`, `ml-kem =0.3.4`); ML-DSA auth leg still roadmap] | FIPS 203 + RFC hybrids | Ephemeral on both ends (once a TLS stack lands) |
 | **Device identity & attestation** | Ed25519 **software-PUF** (deterministic, re-derived from hardware fingerprints every boot, never stored) | **✅ Implemented** (`crates/hookprobe-manifest/src/identity.rs`) — the suite's **ML-DSA-65 leg for this domain is ⏳ Roadmap** (identity.rs has no PQC signing at all) | RFC 8032 | **On device.** TPM-sealed on boards WITH a TPM; a bare software-PUF (no hardware tamper-resistance) on TPM-less boards (e.g. Pi 4/5) — never claimed uniformly TPM-sealed |
 | **Data at rest** (events, pcap, evidence) | **AES-256-GCM** | **✅ Implemented** (LUKS2 + Clevis/TPM sealing, `security/crypt/*.sh` + `base/scripts/*.sh`) | FIPS 197 | On device, key sealed to TPM where present |
 | **Hashing / integrity** (composefs/fsverity, SBOM) | **SHA-256 / SHA-384 / SHA3-256** | **✅ Implemented** (`crates/hookprobe-manifest/src/module_sig.rs::digest_hex`) | FIPS 180/202 | n/a |
@@ -102,7 +110,7 @@ This tracks CNSA 2.0 / EU CRA **without re-platforming** — the entire point of
 ## Migration phasing (maps to ADR 0001 and the mandates)
 
 1. **Now (shipped):** hybrid composite module signing (ML-DSA-65 + Ed25519, fail-closed, both legs enforced); real cosign-keyless image signing (ECDSA-P256); **hybrid boot signing on the heqk/rpi-native tier (Ed25519 + SLH-DSA-SHA2-128s, stateless FIPS 205 — QEMU-green + single-run metal, honest Track-C status)**; CBOM emitted per build with an honest implemented/roadmap tag per algorithm. The CBOM must tag boot signing **per tier**: `implemented` on the heqk/rpi-native tier, `roadmap` (vulnerable in the rollup) on UEFI/amd64 — a single blanket "boot_signing: roadmap" would now *understate* the heqk tier and violate this ADR's own honesty bar.
-2. **Roadmap, no committed date yet:** hybrid TLS (ML-KEM-768 + X25519) on the control plane — there is no TLS/rustls stack in this repo to carry it (ADR 0001's own transport work has not landed either; the earlier claim that this was "already in ADR 0001 via rustls `X25519MLKEM768`" was itself aspirational — there is no rustls dependency anywhere in this tree today); **LMS for UEFI/amd64-tier firmware/boot signing** — no code, though the key-custody design (§5) is ready for it. (The heqk/rpi-native tier already has boot signing shipped via stateless SLH-DSA — item 1 — so LMS is a UEFI-tier concern, not a universal gap.)
+2. **Roadmap, no committed date yet:** *(2026-11-09: the hybrid ML-KEM KEX part of this item has shipped on heqk — see the amendment at the top.)* hybrid TLS (ML-KEM-768 + X25519) on the control plane — there is no TLS/rustls stack in this repo to carry it (ADR 0001's own transport work has not landed either; the earlier claim that this was "already in ADR 0001 via rustls `X25519MLKEM768`" was itself aspirational — there is no rustls dependency anywhere in this tree today); **LMS for UEFI/amd64-tier firmware/boot signing** — no code, though the key-custody design (§5) is ready for it. (The heqk/rpi-native tier already has boot signing shipped via stateless SLH-DSA — item 1 — so LMS is a UEFI-tier concern, not a universal gap.)
 3. **2027 (CNSA 2.0 / firmware mandate):** PQC-exclusive firmware signing is **already met on the heqk/rpi-native tier** (SLH-DSA is a FIPS 205 PQC scheme); on **UEFI/amd64** it needs LMS to actually ship first (item 2, not yet true); begin offering PQC-only TLS suites where peers support them once a TLS stack exists.
 4. **2030+:** retire classical legs from hybrids per the deprecation schedule by publishing a new suite — a policy change, not a rebuild.
 

@@ -13,3 +13,5 @@ interface lan acl in LAN-IN
 route 1.0.0.1/32 via mgmt gw 192.168.200.1
 route 0.0.0.0/0 via wan metric 10
 route 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100
+# SIEM export (parity G15): detections as RFC 5424 syslog to fortress on the management VLAN
+export syslog 192.168.200.1 514 via mgmt

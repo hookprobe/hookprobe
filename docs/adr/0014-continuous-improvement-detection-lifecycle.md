@@ -1,6 +1,6 @@
 # ADR 0014 — Continuous-improvement detection lifecycle: how detection gets smarter over time without violating C9
 
-**Status:** ✅ Accepted (2026-07-04) — policy accepted; deterministic tier turn #1 shipped (`dnsxai` lookalike + dictionary-DGA, `modules/dnsxai/src/lib.rs`, 29 tests). ML `dga-lm` tier + adjudication/label path remain ⬜ (implementation deferred, not blocking the decision). Proposed 2026-07-03.
+**Status:** ✅ Accepted (2026-07-04) — policy accepted; deterministic tier turn #1 shipped (`dnsxai` lookalike + dictionary-DGA, `modules/dnsxai/src/lib.rs`, 29 tests). ML `dga-lm` tier + adjudication/label path remain ⬜ (implementation deferred, not blocking the decision). Proposed 2026-07-03. (The 2026-07-15 D6 amendment below is 🟡 Proposed.)
 **Deciders:** operator, product-steward, os-architect, telemetry-analyst.
 **Relates to:** [ADR 0009](0009-soc-brain-edge-cloud.md) (evidence graph, SQLite-edge/ClickHouse-cloud, C9 — AI never in the enforcement path), [ADR 0011](0011-product-cortex.md) (Product Cortex, the `informed_by` field-feedback edge, Ring-1 roster), [ADR 0013](0013-cortex-evolution-apis.md) (event-driven lifecycle bus, roster raised to 11 incl. `retirement-agent`), [ADR 0005](0005-unified-ebpf-detection.md) (detection logic is compiled/verified CI-side, never mutated on the immutable edge), [ADR 0002](0002-crypto-agility-pqc.md) (signing / trust-nothing-unsigned). Worked example: the `dnsxai` deterministic lookalike + dictionary-DGA gap-close (`modules/dnsxai/src/lib.rs`, 29 tests, live-validated on Pi4, 2026-07-03) and the scoped `dga-lm` char-level ML classifier (prior os-architect feasibility report).
 
@@ -96,7 +96,7 @@ This is the seam that keeps "continuous improvement" from becoming "silent self-
 
 ## Amendment (2026-07-15) — D6 · `dga-lm` is the first CPU-native detector: the A76 SDOT path retires the "needs an NPU" framing
 
-**Status:** 🟡 Proposed (the ML tier D1b moves from "deferred, implicitly needs an off-device pipeline +
+**Amendment status (not the ADR status):** 🟡 Proposed (the ML tier D1b moves from "deferred, implicitly needs an off-device pipeline +
 an NPU" toward a concrete first **CPU-native** increment). No model shipped yet — this is the build
 contract, not the build. **Deciders:** os-architect (author), code-developer, verification-engineer,
 security-auditor, telemetry-analyst. **Relates to:** [ADR 0021](0021-multiarch-native-artifact-digests.md)

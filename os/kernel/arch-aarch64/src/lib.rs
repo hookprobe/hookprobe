@@ -48,8 +48,11 @@ pub mod ip6;
 pub mod ip6lan;
 // Pure AP/WAN DHCP + firmware-event + EAPOL parsers — built on every target so QEMU fuzzes them (ADR 0050 D3).
 pub mod apparse;
+pub mod dhcpd;
 // The management sub-interface's ARP/ping handler — every target, so QEMU fuzzes it (ADR 0050 D3).
 pub mod mgmtproto;
+// G17: IPv6 on an Ethernet (DHCP / static) WAN — framing + ND/echo responder (QEMU-tested).
+pub mod wan6eth;
 // `block` = reject: TCP RST / ICMP(v6) administratively prohibited (task #26) — pure, QEMU-tested.
 pub mod reject;
 // WPA2 PMK KDF (PBKDF2-HMAC-SHA1) for P10-E STA association. CM5-only.
