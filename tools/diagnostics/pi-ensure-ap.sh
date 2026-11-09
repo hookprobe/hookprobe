@@ -11,7 +11,9 @@ for i in $(seq 1 6); do
   if pi "ip route | grep -q '^default via 10.99.0.1'"; then echo "pi-ensure-ap: joined (try $i)"; exit 0; fi
   [ -n "$SP" ] && [ -f "$SP" ] || { echo "pi-ensure-ap: not joined and no sudo password file"; exit 1; }
   for c in $(pi "nmcli -t -f NAME con show | grep -i hookprobe"); do
-    pi "sudo -S -p '' nmcli con up '$c' >/dev/null 2>&1" < "$SP"
+    # pin the built-in radio (brcmfmac, wlan0): the USB rtw88 dongle on wlan1 caps throughput at ~40 Mbps,
+    # so a run that lands there is not comparable (2026-11-10)
+    pi "sudo -S -p '' nmcli con up '$c' ifname wlan0 >/dev/null 2>&1 || sudo -S -p '' nmcli con up '$c' >/dev/null 2>&1" < "$SP"
   done
   sleep 10
 done
