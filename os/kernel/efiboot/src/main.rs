@@ -61,6 +61,60 @@ fn virtio_name(t: u16) -> &'static str {
     }
 }
 
+fn cfg32(cfg: u64, off: u64) -> u32 {
+    unsafe { core::ptr::read_volatile((cfg + off) as *const u32) }
+}
+
+/// BARs as the firmware assigned them + the virtio-pci capability list (cfg_type, bar,
+/// offset, length) — exactly what heqk's virtio-pci transport has to map and use.
+fn virtio_detail(c: &mut ConOut, cfg: u64) {
+    let cmd = cfg32(cfg, 4) & 0xffff;
+    out!(c, "      command {:#06x} (mem {} bus-master {})", cmd, cmd & 2 != 0, cmd & 4 != 0);
+    let mut i = 0;
+    while i < 6 {
+        let lo = cfg32(cfg, 0x10 + i * 4);
+        if lo & 1 != 0 {
+            out!(c, " BAR{}=io", i);
+            i += 1;
+            continue;
+        }
+        let is64 = (lo >> 1) & 3 == 2;
+        let mut addr = (lo & !0xf) as u64;
+        if is64 && i < 5 {
+            addr |= (cfg32(cfg, 0x10 + (i + 1) * 4) as u64) << 32;
+        }
+        if addr != 0 {
+            out!(c, " BAR{}={:#x}{}", i, addr, if is64 { "/64" } else { "" });
+        }
+        i += if is64 { 2 } else { 1 };
+    }
+    out!(c, "\n");
+    if (cfg32(cfg, 4) >> 16) & 0x10 == 0 {
+        return; // no capability list
+    }
+    let mut p = (cfg32(cfg, 0x34) & 0xfc) as u64;
+    let mut guard = 0;
+    while p != 0 && guard < 48 {
+        let h = cfg32(cfg, p);
+        let (id, next) = (h & 0xff, ((h >> 8) & 0xfc) as u64);
+        if id == 0x09 {
+            let ty = (h >> 24) & 0xff;
+            let bar = cfg32(cfg, p + 4) & 0xff;
+            let (off, len) = (cfg32(cfg, p + 8), cfg32(cfg, p + 12));
+            let name = match ty { 1 => "common", 2 => "notify", 3 => "isr", 4 => "device", 5 => "pci-cfg", 8 => "shm", _ => "?" };
+            out!(c, "      virtio cap {:<7} bar {} off {:#x} len {:#x}", name, bar, off, len);
+            if ty == 2 {
+                out!(c, " notify_off_mult {}", cfg32(cfg, p + 16));
+            }
+            out!(c, "\n");
+        } else if id == 0x11 {
+            out!(c, "      MSI-X cap\n");
+        }
+        p = next;
+        guard += 1;
+    }
+}
+
 #[derive(Default)]
 struct PciCensus {
     devices: usize,
@@ -111,6 +165,9 @@ fn pci_scan(c: &mut ConOut, ecam: u64, b0: u8, b1: u8) -> PciCensus {
                     }
                 }
                 out!(c, "\n");
+                if vid == 0x1af4 && hdr & 0x7f == 0 {
+                    virtio_detail(c, cfg);
+                }
                 if func == 0 && hdr & 0x80 == 0 {
                     break; // single-function device
                 }
