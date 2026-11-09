@@ -64,11 +64,12 @@ We appreciate all forms of contribution:
 
 ```bash
 # Fork the repository on GitHub, then:
-git clone https://github.com/YOUR_USERNAME/heqk.git
-cd heqk
+# (heqk lives at os/kernel/ in the hookprobe repo; there is no separate heqk repo)
+git clone https://github.com/YOUR_USERNAME/hookprobe.git
+cd hookprobe/os/kernel
 
 # Add upstream remote
-git remote add upstream https://github.com/hookprobe/heqk.git
+git remote add upstream https://github.com/hookprobe/hookprobe.git
 
 # Verify remotes
 git remote -v

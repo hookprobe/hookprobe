@@ -1,5 +1,8 @@
 # heqk → zero-Linux-on-CM5 — remaining-gap plan (2026-09-08)
 
+> **Historical scoping record (banner 2026-11-09).** The current state of this subsystem is `os/kernel/docs/design/heqk-gap-plan.md` (reconstructed from the code; the copy `os/kernel/validate.sh` resolves). This file keeps the earlier scoping detail; where they disagree, the os/kernel copy wins.
+
+
 **Status:** 🟡 living plan · synthesized from a deep gap-audit (product-steward inventory + os-architect technical deep-dive, 2026-09-08), grounded in `docs/roadmap/BuildPlan.md` Track C, `docs/architecture/MIGRATION-heqk.md`, `docs/design/heqk-unbuild.md`, `docs/design/heqk-detection-parity.md`, and `os/kernel/GAP_REGISTER.md`. Drives the next work sessions. Amber (code/ADR changes operator-reviewed); irreversible items (fuse burns) are Red/operator-only.
 
 ## Headline
