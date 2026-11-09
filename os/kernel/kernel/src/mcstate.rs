@@ -233,7 +233,7 @@ impl McState {
             rlen: 0,
             boot_epoch_ms: 0,
             boot_ticks: 0,
-            cntfrq: 1,
+            cntfrq: 0, // read through frq() (>= 1); zero keeps STATE in .bss (image budget)
             seen: 0,
             dropped: 0,
             forwarded: 0,
@@ -247,6 +247,12 @@ impl McState {
             nleases: 0,
             lease_now: 0,
         }
+    }
+
+    /// Counter frequency, never zero (the static starts all-zero so it lives in .bss).
+    #[inline]
+    fn frq(&self) -> u64 {
+        self.cntfrq.max(1)
     }
 
     /// Anchor `cntpct` ticks to wall time: `boot_epoch_ms` is the epoch at `boot_ticks`.
@@ -293,12 +299,12 @@ impl McState {
 
     /// The `cntpct` value at `ms_since_anchor` (the serve loop's `now_ms`).
     pub fn ticks_at_ms(&self, ms_since_anchor: u64) -> u64 {
-        self.boot_ticks.saturating_add(ms_since_anchor.saturating_mul(self.cntfrq) / 1000)
+        self.boot_ticks.saturating_add(ms_since_anchor.saturating_mul(self.frq()) / 1000)
     }
 
     pub fn epoch_ms(&self, ticks: u64) -> u64 {
         let dt = ticks.saturating_sub(self.boot_ticks);
-        self.boot_epoch_ms + dt / self.cntfrq * 1000 + (dt % self.cntfrq) * 1000 / self.cntfrq
+        { let f = self.frq(); self.boot_epoch_ms + dt / f * 1000 + (dt % f) * 1000 / f }
     }
 
     /// Record one drained SOAR event (the oldest is overwritten at capacity).
@@ -395,7 +401,7 @@ impl McState {
             }
             let [a, b, c, d] = l.ip;
             let mm = l.mac;
-            let ep = |s: u64| self.epoch_ms(s.saturating_mul(self.cntfrq)) / 1000;
+            let ep = |s: u64| self.epoch_ms(s.saturating_mul(self.frq())) / 1000;
             let _ = write!(out, "{{\"id\":\"dev-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\",\"ip\":\"{a}.{b}.{c}.{d}\",\"mac\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"first_seen\":{},\"last_seen\":{},\"hostname\":",
                 mm[0], mm[1], mm[2], mm[3], mm[4], mm[5], mm[0], mm[1], mm[2], mm[3], mm[4], mm[5], ep(l.first), ep(l.last));
             if l.hlen > 0 {
@@ -760,7 +766,7 @@ impl McState {
         let (a, b) = (f.src, f.dst);
         let _ = write!(out, "{{\"id\":\"flow:heqk:{}:{}\",\"ts\":", f.slot, f.first);
         ts(out, self.epoch_ms(f.first));
-        let idle = now_ticks.saturating_sub(f.last) > 30 * self.cntfrq;
+        let idle = now_ticks.saturating_sub(f.last) > 30 * self.frq();
         let _ = write!(out, ",\"src_ip\":\"{}.{}.{}.{}\",\"src_port\":{},\"dst_ip\":\"{}.{}.{}.{}\",\"dst_port\":{},\"proto\":\"{}\",\"conn_state\":\"{}\",\"orig_bytes\":{},\"resp_bytes\":{}}}",
             a[0], a[1], a[2], a[3], if f.proto == 1 { 0 } else { f.sport }, b[0], b[1], b[2], b[3], f.dport,
             match f.proto { 6 => "tcp", 17 => "udp", 1 => "icmp", _ => "ip" },
