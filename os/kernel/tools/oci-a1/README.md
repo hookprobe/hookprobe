@@ -1,7 +1,8 @@
 # heqk on the arm64 cloud — OCI Ampere A1 target
 
 ADR 0047 port item 10 ("VM/cloud: virtio-pci, UEFI boot … arm64 cloud is closest";
-`docs/design/heqk-everywhere-report-2026-10-09.md`). First cloud: Oracle OCI `VM.Standard.A1.Flex`
+the heqk-everywhere report dated 2026-10-09, in the REPO-ROOT design docs folder — not
+`os/kernel`'s local canon, which validate.sh checks). First cloud: Oracle OCI `VM.Standard.A1.Flex`
 (the instance that runs hookprobe.com today).
 
 ## Why there is no `/dev/kvm` on the A1 — and why heqk doesn't need it
