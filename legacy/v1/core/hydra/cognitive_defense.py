@@ -145,10 +145,98 @@ def _ssh_peer_ips() -> set:
     return peers
 
 
-def _is_enforcement_exempt(ip: str, ssh_peers: set) -> Optional[str]:
+def _local_ipv4s() -> set:
+    """IPv4 addresses owned by this host (host-network container view)."""
+    ips: set = set()
+    try:
+        with open('/proc/net/fib_trie') as fh:
+            prev = None
+            for line in fh:
+                line = line.strip()
+                if line.startswith('|--'):
+                    prev = line[3:].strip()
+                elif '/32 host LOCAL' in line and prev:
+                    ips.add(prev)
+    except OSError:
+        pass
+    ips.discard('127.0.0.1')
+    return ips
+
+
+def _outbound_live_peers() -> set:
+    """Remote IPs of ESTABLISHED connections this host INITIATED.
+
+    Heuristic on /proc/net/tcp: local port is ephemeral (>= 32768) and the
+    remote port is a service port (< 1024). These are servers we talk to
+    (feed CDNs, APIs, mirrors) — their response bursts are not attacks.
+    """
+    peers: set = set()
+    for path, ipv6 in (('/proc/net/tcp', False), ('/proc/net/tcp6', True)):
+        try:
+            with open(path) as fh:
+                next(fh, None)
+                for line in fh:
+                    cols = line.split()
+                    if len(cols) < 4 or cols[3] != '01':
+                        continue
+                    try:
+                        lport = int(cols[1].rsplit(':', 1)[1], 16)
+                        raddr, rport_hex = cols[2].rsplit(':', 1)
+                        rport = int(rport_hex, 16)
+                    except (ValueError, IndexError):
+                        continue
+                    if lport >= 32768 and rport < 1024:
+                        ip = _hex_to_ip(raddr, ipv6)
+                        if ip:
+                            peers.add(ip)
+        except (OSError, StopIteration):
+            continue
+    return peers
+
+
+_HOST_PEER_CACHE = {'ts': 0.0, 'peers': frozenset()}
+_HOST_PEER_TTL_S = 300.0
+
+
+def _host_initiated_peers() -> frozenset:
+    """Servers this host connected to in the last 24h (napse_flows, cached).
+
+    Requires correct flow orientation (src = initiator), fixed in
+    packet_inspector 2026-11-09. Best effort: any failure → empty set.
+    """
+    import time as _t
+    now = _t.monotonic()
+    if now - _HOST_PEER_CACHE['ts'] < _HOST_PEER_TTL_S:
+        return _HOST_PEER_CACHE['peers']
+    peers: set = set()
+    local = sorted(ip for ip in _local_ipv4s() if all(c.isdigit() or c == '.' for c in ip))
+    if local:
+        try:
+            from risk_velocity import ch_query
+            ip_list = ', '.join(f"IPv4StringToNum('{ip}')" for ip in local)
+            res = ch_query(
+                f"SELECT DISTINCT IPv4NumToString(dst_ip) FROM {CH_DB}.napse_flows "
+                f"WHERE timestamp >= now() - INTERVAL 24 HOUR "
+                f"AND src_ip IN ({ip_list}) AND dst_port < 1024 "
+                f"FORMAT TabSeparated", fmt='')
+            for line in (res or '').split('\n'):
+                line = line.strip()
+                if line:
+                    peers.add(line)
+        except Exception as e:
+            logger.debug(f"host-initiated peer lookup failed: {e}")
+    _HOST_PEER_CACHE.update(ts=now, peers=frozenset(peers))
+    return _HOST_PEER_CACHE['peers']
+
+
+def _is_enforcement_exempt(ip: str, ssh_peers: set,
+                           host_peers: Optional[set] = None) -> Optional[str]:
     """Return a reason string if `ip` must NOT be blocked/throttled, else None."""
     if ip in ssh_peers:
         return 'live SSH session'
+    if host_peers and ip in host_peers:
+        # Response traffic to a connection WE opened (e.g. threat-feed CDN).
+        return 'host-initiated peer'
     if _is_trusted_net is not None:
         try:
             if _is_trusted_net(ip):
@@ -766,6 +854,10 @@ class ActionEnforcer:
         # Snapshot live SSH peers once per batch (one /proc read, not per-action)
         # so a single cycle can't drop the operator's own session.
         ssh_peers = _ssh_peer_ips()
+        try:
+            host_peers = set(_host_initiated_peers()) | _outbound_live_peers()
+        except Exception:
+            host_peers = set()
 
         for action in actions:
             act = action.get('action', 'monitor')
@@ -777,7 +869,7 @@ class ActionEnforcer:
             # management session. Downgrade to an audit verdict so the decision
             # is still visible on the dashboard, but nothing reaches XDP.
             if act in ('block_ip', 'block_subnet', 'throttle'):
-                exempt = _is_enforcement_exempt(ip, ssh_peers)
+                exempt = _is_enforcement_exempt(ip, ssh_peers, host_peers)
                 if exempt:
                     logger.warning(
                         f"SUPPRESSED {act} for {ip} — {exempt} "

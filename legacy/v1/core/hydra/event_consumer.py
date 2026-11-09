@@ -30,6 +30,66 @@ import logging
 import socket
 import ipaddress
 from datetime import datetime, timezone
+
+try:  # canonical trusted list (flat path in image, namespaced in repo)
+    from trusted_networks import is_trusted as _is_trusted_ip
+except ImportError:
+    try:
+        from core.hydra.trusted_networks import is_trusted as _is_trusted_ip
+    except ImportError:
+        _is_trusted_ip = None
+
+# Flow-based inbound threat detection (slow scans, SSH probing, CF bypass).
+try:
+    import flow_threats as _flow_threats
+except ImportError:
+    try:
+        from core.hydra import flow_threats as _flow_threats
+    except ImportError:
+        _flow_threats = None
+
+_flow_detector = None
+
+
+def _flow_select(query: str):
+    """Short-timeout ClickHouse SELECT for the flow detector (POST body)."""
+    if not CH_PASSWORD:
+        return None
+    try:
+        req = Request(
+            f"http://{CH_HOST}:{CH_PORT}/?database={CH_DB}",
+            data=query.encode('utf-8'),
+            headers={'X-ClickHouse-User': CH_USER, 'X-ClickHouse-Key': CH_PASSWORD},
+        )
+        with urlopen(req, timeout=8) as resp:
+            return resp.read().decode('utf-8')
+    except Exception as e:
+        logger.debug(f"flow-threat query failed: {e}")
+        return None
+
+
+def run_flow_threat_scan():
+    """Emit hydra_events for inbound recon seen in napse_flows (if due)."""
+    global _flow_detector
+    if _flow_threats is None or os.environ.get('FLOW_THREATS_ENABLED', '1') != '1':
+        return
+    if _flow_detector is None:
+        _flow_detector = _flow_threats.FlowThreatDetector(
+            CH_DB, _flow_select, _flow_threats.local_ipv4s, _is_trusted_ip)
+    if not _flow_detector.due():
+        return
+    try:
+        events = _flow_detector.scan()
+    except Exception as e:
+        logger.warning(f"flow-threat scan failed: {e}")
+        return
+    if events:
+        by_reason = defaultdict(set)
+        for evt in events:
+            by_reason[evt['reason']].add(evt['src_ip'])
+        event_buffer.extend(events)
+        logger.info("Flow threats: " + ", ".join(
+            f"{r}={len(ips)} IPs" for r, ips in sorted(by_reason.items())))
 from typing import Dict, List, Optional, Tuple
 from collections import defaultdict
 from urllib.request import Request, urlopen
@@ -338,8 +398,8 @@ def run_ringbuf_consumer():
     data_start = page_size
     events_consumed = 0
 
-    # XDP stats polling state (hybrid mode)
-    prev_stats = [0] * 7
+    # XDP stats polling state (hybrid mode) — seeded, see _seed_prev_stats
+    prev_stats = _seed_prev_stats(ops)
     STAT_LABELS = ['TOTAL', 'PASSED', 'DROPPED', 'ALLOWLISTED', 'BLOCKLISTED', 'RATE_DROPS', 'SCORE_DROPS']
     stats_poll_count = 0
     STATS_POLL_INTERVAL = 10  # seconds between XDP stats polls
@@ -405,12 +465,8 @@ def run_ringbuf_consumer():
             # Hybrid: periodically poll XDP stats and write to xdp_stats table
             if time.monotonic() - last_stats_poll >= STATS_POLL_INTERVAL:
                 try:
-                    poll_xdp_stats(ops, prev_stats, STAT_LABELS, stats_poll_count)
-                    # Update prev_stats
-                    curr = []
-                    for i in range(7):
-                        curr.append(ops.read_percpu_u64('hydra_stats', i))
-                    prev_stats = curr
+                    prev_stats = poll_xdp_stats(ops, prev_stats, STAT_LABELS,
+                                                stats_poll_count)
                     # Ch 22 §6.2 — the stats-poll loop is itself liveness. We
                     # write an xdp_stats row every poll even when the RINGBUF is
                     # quiet (monitor-mode XDP = no drop events to consume), so
@@ -423,6 +479,7 @@ def run_ringbuf_consumer():
                     logger.debug(f"XDP stats poll error: {e}")
                 stats_poll_count += 1
                 last_stats_poll = time.monotonic()
+                run_flow_threat_scan()
 
         except Exception as e:
             logger.debug(f"RINGBUF read error: {e}")
@@ -437,13 +494,73 @@ def run_ringbuf_consumer():
     return True
 
 
-def poll_xdp_stats(ops, prev_stats, stat_labels, poll_count):
-    """Poll XDP stats from BPF map and write to ClickHouse xdp_stats table."""
-    curr_stats = []
-    for i in range(7):
-        curr_stats.append(ops.read_percpu_u64('hydra_stats', i))
+def _read_stats(ops):
+    """Snapshot the 7 hydra_stats PERCPU counters."""
+    return [ops.read_percpu_u64('hydra_stats', i) for i in range(7)]
 
-    deltas = [curr_stats[i] - prev_stats[i] for i in range(7)]
+
+def _seed_prev_stats(ops):
+    """Baseline counters at startup so the first poll reports a real delta.
+
+    Seeding with zeros made every (re)start report the kernel's LIFETIME
+    counters as a 10-second delta (e.g. +137M pkts written to xdp_stats) and,
+    because deltas[4]>0, replayed the whole high_rate_ips map as fresh alerts.
+    """
+    try:
+        return _read_stats(ops)
+    except Exception as e:
+        logger.debug(f"stats seed failed, starting from zero: {e}")
+        return [0] * 7
+
+
+def drain_high_rate_ips(ops):
+    """Consume high_rate_ips: emit one rate_exceeded event per entry, then DELETE it.
+
+    xdp_hydra.c inserts (src_ip -> pps) when a window exceeds 1000 pps but
+    nothing ever removed entries, so the map became a permanent set and the
+    same IPs were re-emitted as new alerts on every unrelated blocklist hit.
+    Deleting after read gives at-most-once semantics per high-rate window.
+    Trusted sources are drained but not reported.
+    """
+    events = []
+    hr_id = ops.find_map_by_name('high_rate_ips')
+    if not hr_id:
+        return events
+    for key_bytes, val_bytes in ops.map_dump(hr_id):
+        if len(key_bytes) < 4:
+            continue
+        try:
+            ops.map_delete(hr_id, key_bytes)
+        except Exception as e:
+            logger.debug(f"high_rate_ips delete failed: {e}")
+        src_ip = str(ipaddress.IPv4Address(key_bytes[:4]))
+        rate = struct.unpack('<Q', val_bytes[:8])[0] if len(val_bytes) >= 8 else 0
+        if rate <= 0 or (_is_trusted_ip is not None and _is_trusted_ip(src_ip)):
+            continue
+        events.append({
+            'timestamp_ns': 0,
+            'src_ip': src_ip,
+            'dst_ip': '0.0.0.0',
+            'src_port': 0,
+            'dst_port': 0,
+            'proto': 0,
+            'event_type': 'alert',
+            'reason': 'rate_exceeded',
+            'tcp_flags': 0,
+            'rate_pps': rate,
+        })
+    return events
+
+
+def poll_xdp_stats(ops, prev_stats, stat_labels, poll_count):
+    """Poll XDP stats from BPF map and write to ClickHouse xdp_stats table.
+
+    Returns the current counter snapshot (caller stores it as prev_stats).
+    """
+    curr_stats = _read_stats(ops)
+    # Counters are monotonic per XDP attach; a reload resets them to 0 — clamp
+    # so a re-attach never produces a negative delta.
+    deltas = [max(0, curr_stats[i] - prev_stats[i]) for i in range(7)]
 
     # Log XDP stats every 60s
     if poll_count % 6 == 0:
@@ -468,31 +585,16 @@ def poll_xdp_stats(ops, prev_stats, stat_labels, poll_count):
         )
         ch_query(query, data)
 
-    # Generate synthetic hydra_events for high_rate_ips (for dashboard feed)
+    # Generate hydra_events for NEW high-rate windows (drained, not replayed)
     if deltas[4] > 0 or deltas[5] > 0 or deltas[6] > 0:
         try:
-            hr_id = ops.find_map_by_name('high_rate_ips')
-            if hr_id:
-                entries = ops.map_dump(hr_id)
-                for key_bytes, val_bytes in entries:
-                    if len(key_bytes) >= 4:
-                        src_ip = str(ipaddress.IPv4Address(key_bytes[:4]))
-                        rate = struct.unpack('<Q', val_bytes[:8])[0] if len(val_bytes) >= 8 else 0
-                        event_buffer.append({
-                            'timestamp_ns': 0,
-                            'src_ip': src_ip,
-                            'dst_ip': '0.0.0.0',
-                            'src_port': 0,
-                            'dst_port': 0,
-                            'proto': 0,
-                            'event_type': 'alert',
-                            'reason': 'rate_exceeded',
-                            'tcp_flags': 0,
-                            'rate_pps': rate,
-                        })
-                        drop_counts[src_ip] += 1
+            for evt in drain_high_rate_ips(ops):
+                event_buffer.append(evt)
+                drop_counts[evt['src_ip']] += 1
         except Exception as e:
             logger.debug(f"high_rate_ips read error: {e}")
+
+    return curr_stats
 
 
 # ============================================================================
@@ -513,8 +615,8 @@ def run_poll_consumer():
         ops = None
         logger.warning("BPF map ops not available, consumer will only log heartbeats")
 
-    # Track previous stats for delta computation
-    prev_stats = [0] * 7
+    # Track previous stats for delta computation (seeded — no restart spike)
+    prev_stats = _seed_prev_stats(ops) if ops else [0] * 7
     STAT_LABELS = ['TOTAL', 'PASSED', 'DROPPED', 'ALLOWLISTED', 'BLOCKLISTED', 'RATE_DROPS', 'SCORE_DROPS']
     poll_count = 0
 
@@ -526,8 +628,8 @@ def run_poll_consumer():
                 for i in range(7):
                     curr_stats.append(ops.read_percpu_u64('hydra_stats', i))
 
-                # Compute deltas
-                deltas = [curr_stats[i] - prev_stats[i] for i in range(7)]
+                # Compute deltas (clamped: XDP re-attach resets counters)
+                deltas = [max(0, curr_stats[i] - prev_stats[i]) for i in range(7)]
 
                 # Log XDP stats periodically
                 if poll_count % 6 == 0:  # Every 60s (poll_count increments every 10s)
@@ -542,29 +644,11 @@ def run_poll_consumer():
                 now = datetime.now(timezone.utc)
                 ts = now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
 
-                # If there are new blocklist hits, read high_rate_ips for details
+                # New high-rate windows only (consume-and-delete)
                 if deltas[4] > 0 or deltas[5] > 0 or deltas[6] > 0:
-                    # Read high_rate_ips for source IPs
-                    hr_id = ops.find_map_by_name('high_rate_ips')
-                    if hr_id:
-                        entries = ops.map_dump(hr_id)
-                        for key_bytes, val_bytes in entries:
-                            if len(key_bytes) >= 4:
-                                src_ip = str(ipaddress.IPv4Address(key_bytes[:4]))
-                                rate = struct.unpack('<Q', val_bytes[:8])[0] if len(val_bytes) >= 8 else 0
-                                event_buffer.append({
-                                    'timestamp_ns': 0,
-                                    'src_ip': src_ip,
-                                    'dst_ip': '0.0.0.0',
-                                    'src_port': 0,
-                                    'dst_port': 0,
-                                    'proto': 0,
-                                    'event_type': 'alert',
-                                    'reason': 'rate_exceeded',
-                                    'tcp_flags': 0,
-                                    'rate_pps': rate,
-                                })
-                                drop_counts[src_ip] += 1
+                    for evt in drain_high_rate_ips(ops):
+                        event_buffer.append(evt)
+                        drop_counts[evt['src_ip']] += 1
 
                 prev_stats = curr_stats
 
@@ -575,6 +659,7 @@ def run_poll_consumer():
         if time.monotonic() - last_flush >= FLUSH_INTERVAL:
             flush_events()
 
+        run_flow_threat_scan()
         poll_count += 1
         time.sleep(10)
 

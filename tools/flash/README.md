@@ -1,5 +1,10 @@
 # tools/flash — writing an image to a CM5
 
+**Users:** no scripts needed. Flash with Raspberry Pi's own tools (rpiboot, then Raspberry Pi Imager →
+*Use custom*), as described in [Getting started](../../docs/getting-started/).
+
+**Developers** can use the guarded scripts below instead.
+
 The flash scripts live with the CM5 boot files in
 [`os/kernel/cm5-boot/`](../../os/kernel/cm5-boot/) because they locate those files and the
 bundled `usbboot` (`os/kernel/tools/usbboot/`) by relative path.

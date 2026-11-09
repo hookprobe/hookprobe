@@ -4861,7 +4861,10 @@ ExecStart=/bin/bash -c 'cd /opt/hookprobe/fortress/containers && \\
   ${podman_compose_bin} -f podman-compose.yml up -d --no-build \$CORE'
 
 # Connect containers to OVS and install OpenFlow rules after containers are up
-ExecStartPost=${INSTALL_DIR}/bin/fts-ovs-connect.sh
+# "-" prefix: a post-start helper failure must NOT fail the unit — systemd would
+# tear down (SIGKILL) the container stack it just started, taking the LAN's
+# DHCP/DNS/web down with it.
+ExecStartPost=-${INSTALL_DIR}/bin/fts-ovs-connect.sh
 
 # Stop containers gracefully
 ExecStop=${podman_compose_bin} -f podman-compose.yml down

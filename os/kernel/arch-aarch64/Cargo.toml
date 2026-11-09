@@ -2,12 +2,19 @@
 name = "arch-aarch64"
 version = "0.1.0"
 edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 [dependencies]
 hal = { path = "../hal" }
 
 [features]
 cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt
+# arm64-cloud tier (OCI Ampere A1 / QEMU virt gic-version=3): GICv3 sysreg CPU interface +
+# redistributors instead of the GICv2 MMIO GICC. Not combinable with cm5 (GIC-400 = v2).
+gicv3 = []
+# arm64-cloud tier: PCIe ECAM + virtio-pci modern transport (OCI A1 exposes virtio only on
+# PCI). Adds Mmu::map_mmio for MMIO windows outside the boot identity map.
+pci = []
 hboot = ["cm5"] # entered by HBoot (heqk-boot) at EL1, console already up
 # P15 eMMC WRITE path — OFF by default (read-only, no brick risk). The only
 # sectors ever writable are 2016..2047; LBA 0 + partitions are never touched.

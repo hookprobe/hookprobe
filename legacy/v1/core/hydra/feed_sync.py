@@ -152,12 +152,8 @@ FEEDS = [
         'format': 'spamhaus',
         'description': 'Spamhaus DROP - hijacked netblocks',
     },
-    {
-        'name': 'spamhaus_edrop',
-        'url': 'https://www.spamhaus.org/drop/edrop.txt',
-        'format': 'spamhaus',
-        'description': 'Spamhaus EDROP - extended hijacked netblocks',
-    },
+    # spamhaus_edrop removed 2026-11-09: Spamhaus merged EDROP into DROP
+    # (2024); edrop.txt now parses to 0 entries and was masking as 'success'.
     {
         'name': 'firehol_level1',
         'url': 'https://raw.githubusercontent.com/firehol/blocklist-ipsets/master/firehol_level1.netset',
@@ -182,17 +178,13 @@ FEEDS = [
         'format': 'plaintext',
         'description': 'GreenSnow blocklist (active attackers)',
     },
+    # urlhaus_c2 + sslbl_botnet_c2 removed 2026-11-09: abuse.ch retired both
+    # (URLhaus text_online → HTTP 410 Gone; SSLBL IP blacklist now empty).
     {
-        'name': 'urlhaus_c2',
-        'url': 'https://urlhaus.abuse.ch/downloads/text_online/',
-        'format': 'urlhaus',
-        'description': 'URLhaus malware distribution IPs',
-    },
-    {
-        'name': 'sslbl_botnet_c2',
-        'url': 'https://sslbl.abuse.ch/blacklist/sslipblacklist.txt',
-        'format': 'comment_hash',
-        'description': 'SSL Blacklist - botnet C2 servers',
+        'name': 'ipsum_level3',
+        'url': 'https://raw.githubusercontent.com/stamparm/ipsum/master/levels/3.txt',
+        'format': 'plaintext',
+        'description': 'IPsum — IPs present on >=3 independent public blacklists (daily)',
     },
     {
         'name': 'cins_army',
@@ -214,6 +206,12 @@ FEEDS = [
 
 running = True
 prev_blocklist: Set[str] = set()  # Previous blocklist for diff tracking
+# Last successful CIDR set per feed. A transient download failure reuses it,
+# so reconciliation never unblocks a feed's entries just because a fetch failed.
+_last_good_feed: Dict[str, Set[str]] = {}
+# Consecutive failure count per feed (feed_stale alerting).
+_feed_fail_streak: Dict[str, int] = {}
+FEED_STALE_STREAK = int(os.environ.get('FEED_STALE_STREAK', '6'))
 
 def signal_handler(sig, frame):
     global running
@@ -384,9 +382,42 @@ def update_xdp_map_batch(map_name: str, cidrs: Set[str], value: int = 1) -> int:
         return 0
 
 
+def _dynamic_trusted_cidrs() -> Set[str]:
+    """Operator IPs from the dynamic trust file (recent successful SSH logins)."""
+    try:
+        try:
+            from trusted_networks import dynamic_trusted_networks
+        except ImportError:
+            from core.hydra.trusted_networks import dynamic_trusted_networks
+        return {str(n) for n in dynamic_trusted_networks()}
+    except Exception as e:
+        logger.debug(f"dynamic trust unavailable: {e}")
+        return set()
+
+
+def current_trusted_cidrs() -> Set[str]:
+    """Static TRUSTED_CIDRS + dynamic operator entries, evaluated per call."""
+    return set(TRUSTED_CIDRS) | _dynamic_trusted_cidrs()
+
+
+def never_block_nets() -> Set:
+    """Networks that must never enter the blocklist: trusted + feed sources.
+
+    Feed-source IPs are deliberately NOT added to the allowlist (that would
+    exempt them from all detection) — only from blocking.
+    """
+    nets = set()
+    for cidr in current_trusted_cidrs() | {f"{ip}/32" for ip in feed_source_ips()}:
+        try:
+            nets.add(ipaddress.ip_network(cidr, strict=False))
+        except ValueError:
+            pass
+    return nets
+
+
 def update_allowlist() -> int:
-    """Push trusted CIDRs to the XDP allowlist map."""
-    return update_xdp_map_batch('allowlist', set(TRUSTED_CIDRS), value=1)
+    """Push trusted CIDRs (static + dynamic operator IPs) to the XDP allowlist."""
+    return update_xdp_map_batch('allowlist', current_trusted_cidrs(), value=1)
 
 
 # ============================================================================
@@ -428,6 +459,194 @@ def log_feed_sync(feed_name: str, feed_url: str, entries_count: int,
 # so the anomaly_detector ('ml') and AEGIS ('aegis') block paths wrote rows
 # that nothing ever enforced — a silent dead-end in the autonomous loop.
 COGNITIVE_BLOCK_SOURCES = ('neural_kernel', 'ml', 'aegis', 'cno_organism')
+
+
+def remove_xdp_cidrs(map_name: str, cidrs: Set[str]) -> int:
+    """Delete exact CIDR keys from an LPM map and its WAN twin. Returns count."""
+    if not cidrs:
+        return 0
+    removed = 0
+    try:
+        ops = get_bpf_ops()
+    except Exception as e:
+        logger.warning(f"Cannot remove from BPF map '{map_name}': {e}")
+        return 0
+    twin = _WAN_MAP_TWIN.get(map_name)
+    for cidr in cidrs:
+        try:
+            if ops.delete_lpm_trie(map_name, cidr):
+                removed += 1
+            if twin:
+                ops.delete_lpm_trie(twin, cidr)
+        except Exception as e:
+            logger.debug(f"delete {cidr} from {map_name}: {e}")
+    if removed:
+        logger.info(f"Removed {removed} stale CIDRs from XDP '{map_name}' (+ WAN twin)")
+    return removed
+
+
+def expired_cognitive_ips(days: int = 30) -> Set[str]:
+    """IPs whose newest autonomous block has outlived its TTL.
+
+    Looks back `days` (not the 24h active window) so blocks that expired long
+    ago — and were never removed from XDP — are found and purged. Permanent
+    blocks (duration <= 0) are never returned.
+    """
+    if not CH_PASSWORD:
+        return set()
+    sources_sql = ', '.join(f"'{s}'" for s in COGNITIVE_BLOCK_SOURCES)
+    query = f"""
+        SELECT IPv4NumToString(src_ip) AS ip
+        FROM {CH_DB}.hydra_blocks
+        WHERE source IN ({sources_sql})
+          AND timestamp >= now() - INTERVAL {int(days)} DAY
+        GROUP BY src_ip
+        HAVING min(duration_seconds) > 0
+           AND max(toUnixTimestamp(timestamp) + duration_seconds) < toUnixTimestamp(now())
+        FORMAT JSONEachRow
+    """
+    out: Set[str] = set()
+    result = ch_query(query)
+    for line in (result or '').strip().split('\n'):
+        if not line:
+            continue
+        try:
+            ip = json.loads(line).get('ip', '')
+            if ip:
+                out.add(ip)
+        except (json.JSONDecodeError, AttributeError):
+            continue
+    return out
+
+
+def purge_expired_cognitive_blocks(keep: Set[str]) -> int:
+    """Remove expired autonomous /32 blocks from XDP unless still desired."""
+    stale = {f"{ip}/32" for ip in expired_cognitive_ips()} - set(keep)
+    return remove_xdp_cidrs('blocklist', stale)
+
+
+def feed_source_ips() -> Set[str]:
+    """Resolve the threat-feed hostnames we download from.
+
+    These are upstream infrastructure (Fastly/GitHub/etc. CDNs). Blocking them
+    blinds HYDRA: in Oct 2026 neural_kernel cognitive_throttle hit the CDN
+    response bursts of our own feed downloads, the blocks never left
+    sw_blocklist, and abuse.ch + firehol feeds failed for 3 weeks.
+    """
+    import socket
+    from urllib.parse import urlparse
+    ips: Set[str] = set()
+    for feed in FEEDS:
+        host = urlparse(feed['url']).hostname
+        if not host:
+            continue
+        try:
+            for info in socket.getaddrinfo(host, 443, socket.AF_INET, socket.SOCK_STREAM):
+                ips.add(info[4][0])
+        except OSError:
+            continue
+    return ips
+
+
+def _lpm_key_to_cidr(key: bytes) -> Optional[str]:
+    """Decode an LPM_TRIE key (u32 LE prefixlen + IPv4 addr) to 'a.b.c.d/n'."""
+    if len(key) < 8:
+        return None
+    import struct as _struct
+    plen = _struct.unpack('<I', key[:4])[0]
+    try:
+        return str(ipaddress.ip_network(f"{ipaddress.IPv4Address(key[4:8])}/{plen}", strict=False))
+    except ValueError:
+        return None
+
+
+def active_cno_mirror_cidrs() -> Set[str]:
+    """Live CNO detection-path blocks (hydra_blocks source='cno_mirror')."""
+    if not CH_PASSWORD:
+        return set()
+    res = ch_query(f"""
+        SELECT IPv4NumToString(src_ip) AS ip FROM {CH_DB}.hydra_blocks
+        WHERE source = 'cno_mirror' AND timestamp >= now() - INTERVAL 30 DAY
+        GROUP BY src_ip
+        HAVING min(duration_seconds) <= 0
+            OR max(toUnixTimestamp(timestamp) + duration_seconds) >= toUnixTimestamp(now())
+        FORMAT JSONEachRow""")
+    out: Set[str] = set()
+    for line in (res or '').strip().split('\n'):
+        try:
+            ip = json.loads(line).get('ip', '') if line else ''
+        except json.JSONDecodeError:
+            ip = ''
+        if ip:
+            out.add(f"{ip}/32")
+    return out
+
+
+def reconcile_lpm_map(map_name: str, desired: Set[str], complete: bool,
+                      snapshot_dir: str = os.environ.get('WAN_RECONCILE_SNAPSHOT_DIR', '/tmp'),
+                      min_ratio: float = 0.2) -> int:
+    """Make an LPM_TRIE map exactly equal to `desired` (delete everything else).
+
+    Pre-reconciliation additive pushes left ~155k stale entries (IPs that
+    rotated OFF feeds stayed blocked forever). Guards — skip (return 0) when:
+      * `complete` is False: some feed failed with no cached copy this run, so
+        `desired` may be missing its entries (would wrongly unblock them);
+      * `desired` is implausibly small vs the live map (< min_ratio).
+    The removed set is snapshotted to <snapshot_dir>/<map>.removed.json.
+    """
+    if not complete:
+        logger.info(f"{map_name} reconcile skipped: feed set incomplete this run")
+        return 0
+    try:
+        ops = get_bpf_ops()
+        map_id = ops.find_map_by_name(map_name)
+        if map_id is None:
+            return 0
+        live = {c for c in (_lpm_key_to_cidr(k) for k, _ in ops.map_dump(map_id)) if c}
+    except Exception as e:
+        logger.warning(f"{map_name} reconcile: cannot read map: {e}")
+        return 0
+    want = {str(ipaddress.ip_network(c, strict=False)) for c in desired}
+    if live and len(want) < min_ratio * len(live):
+        logger.warning(f"{map_name} reconcile refused: desired {len(want)} << live {len(live)}")
+        return 0
+    stale = live - want
+    if not stale:
+        return 0
+    try:  # rollback snapshot (re-add with update_lpm_trie_batch)
+        import json as _json
+        os.makedirs(snapshot_dir, exist_ok=True)
+        with open(os.path.join(snapshot_dir, f'{map_name}.removed.json'), 'w') as fh:
+            _json.dump({'ts': int(time.time()), 'removed': sorted(stale)}, fh)
+    except OSError as e:
+        logger.debug(f"{map_name} reconcile snapshot not written: {e}")
+    removed = 0
+    for cidr in stale:
+        try:
+            if ops.delete_lpm_trie(map_name, cidr):
+                removed += 1
+        except Exception:
+            continue
+    logger.info(f"{map_name} reconcile: removed {removed}/{len(stale)} stale entries "
+                f"(live {len(live)} → desired {len(want)})")
+    return removed
+
+
+def reconcile_wan_blocklist(desired: Set[str], complete: bool,
+                            snapshot_dir: str = os.environ.get('WAN_RECONCILE_SNAPSHOT_DIR', '/tmp'),
+                            min_ratio: float = 0.2) -> int:
+    """WAN ENFORCEMENT map (sw_blocklist): written only by feed_sync."""
+    return reconcile_lpm_map('sw_blocklist', desired, complete, snapshot_dir, min_ratio)
+
+
+def reconcile_mirror_blocklist(desired: Set[str], complete: bool) -> int:
+    """Mirror/DETECTION map (blocklist): feeds + cognitive + live CNO blocks.
+
+    CNO blocks are only recorded (source='cno_mirror') since 2026-11-09; CNO
+    blocks created before that were never recorded and are removed once here
+    (detection-path only — no traffic impact).
+    """
+    return reconcile_lpm_map('blocklist', set(desired) | active_cno_mirror_cidrs(), complete)
 
 
 def sync_cognitive_blocks() -> Tuple[Set[str], int]:
@@ -525,6 +744,7 @@ def sync_all_feeds() -> dict:
 
     all_cidrs: Set[str] = set()
     feed_results = []
+    feeds_complete = True   # False if any feed failed with no last-good cache
 
     # Download and parse each feed
     for feed in FEEDS:
@@ -532,12 +752,29 @@ def sync_all_feeds() -> dict:
         cidrs, error = download_feed(feed)
         duration_ms = int((time.monotonic() - start_time) * 1000)
 
+        if not error and not cidrs:
+            # A feed that parses to ZERO entries is broken (e.g. Spamhaus
+            # EDROP was folded into DROP in 2024 and now serves nothing) —
+            # recording it as 'success' hid the outage for months.
+            error = 'empty feed (0 entries parsed)'
+
         if error:
-            logger.warning(f"Feed '{feed['name']}' failed: {error}")
+            _feed_fail_streak[feed['name']] = _feed_fail_streak.get(feed['name'], 0) + 1
+            streak = _feed_fail_streak[feed['name']]
+            logger.warning(f"Feed '{feed['name']}' failed ({streak}x in a row): {error}")
+            if streak == FEED_STALE_STREAK:
+                logger.error(f"FEED STALE: '{feed['name']}' has failed {streak} consecutive "
+                             f"syncs — threat-intel coverage degraded ({feed['url']})")
             log_feed_sync(
                 feed['name'], feed['url'], 0, 0, 0,
-                'error', duration_ms, error
+                'empty' if error.startswith('empty feed') else 'error',
+                duration_ms, error
             )
+            # Keep enforcing the feed's last known-good entries.
+            if feed['name'] in _last_good_feed:
+                all_cidrs.update(_last_good_feed[feed['name']])
+            else:
+                feeds_complete = False
             feed_results.append({
                 'name': feed['name'],
                 'status': 'error',
@@ -560,14 +797,11 @@ def sync_all_feeds() -> dict:
                 'entries': len(cidrs),
             })
             all_cidrs.update(cidrs)
+            _last_good_feed[feed['name']] = set(cidrs)
+            _feed_fail_streak[feed['name']] = 0
 
     # Remove trusted CIDRs from blocklist (safety check)
-    trusted_nets = set()
-    for cidr in TRUSTED_CIDRS:
-        try:
-            trusted_nets.add(ipaddress.ip_network(cidr, strict=False))
-        except ValueError:
-            pass
+    trusted_nets = never_block_nets()
 
     safe_cidrs = set()
     for cidr in all_cidrs:
@@ -605,6 +839,16 @@ def sync_all_feeds() -> dict:
     blocklist_count = update_xdp_map_batch('blocklist', safe_cidrs, value=1)
     allowlist_count = update_allowlist()
 
+    # Reconcile: LPM pushes are additive, so CIDRs that left the desired set
+    # (feed churn, expired cognitive TTLs) used to stay in BOTH XDP maps until
+    # reboot — every 600s cognitive throttle became a permanent WAN drop.
+    removed_xdp = 0
+    if prev_blocklist:
+        removed_xdp += remove_xdp_cidrs('blocklist', prev_blocklist - safe_cidrs)
+    removed_xdp += purge_expired_cognitive_blocks(keep=safe_cidrs)
+    removed_xdp += reconcile_wan_blocklist(safe_cidrs, complete=feeds_complete)
+    removed_xdp += reconcile_mirror_blocklist(safe_cidrs, complete=feeds_complete)
+
     prev_blocklist = safe_cidrs
 
     summary = {
@@ -614,6 +858,7 @@ def sync_all_feeds() -> dict:
         'cognitive_blocks': cognitive_safe,
         'cognitive_found': len(cognitive_cidrs),
         'cognitive_expired': cognitive_expired,
+        'xdp_removed': removed_xdp,
         'feeds': feed_results,
     }
 
@@ -669,7 +914,7 @@ def _start_peer_transport_consumer():
 def _build_trusted_nets() -> Set:
     """Build the set of trusted ip_network objects from TRUSTED_CIDRS."""
     nets = set()
-    for cidr in TRUSTED_CIDRS:
+    for cidr in current_trusted_cidrs():
         try:
             nets.add(ipaddress.ip_network(cidr, strict=False))
         except ValueError:
@@ -690,9 +935,16 @@ def cognitive_sync_once() -> int:
     the map are untouched). Returns count pushed to XDP.
     """
     cognitive_cidrs, _expired = sync_cognitive_blocks()
+    # Purge expired autonomous blocks on the fast loop too (not only hourly),
+    # but only once a full sync has established the feed set to preserve.
+    if prev_blocklist:
+        try:
+            purge_expired_cognitive_blocks(keep=prev_blocklist | cognitive_cidrs)
+        except Exception as e:
+            logger.debug(f"cognitive purge skipped: {e}")
     if not cognitive_cidrs:
         return 0
-    trusted_nets = _build_trusted_nets()
+    trusted_nets = never_block_nets()
     safe = set()
     for cidr in cognitive_cidrs:
         try:
