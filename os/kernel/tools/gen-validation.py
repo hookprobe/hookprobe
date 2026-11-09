@@ -22,20 +22,36 @@ OUT = os.path.join(ROOT, "heqk-validation.html")
 # (used only to run + parse; the row<->gate mapping is the `gate=` field below.)
 
 def run_validator():
-    """Run ./validate.sh, return {phase_key: 'PASS'|'FAIL'|'PLANNED'} or None."""
-    try:
-        p = subprocess.run(["bash", "validate.sh"], cwd=ROOT,
-                           capture_output=True, text=True, timeout=180)
-    except Exception as e:
-        print(f"  ! validate.sh did not run ({e}); keeping last gate states", file=sys.stderr)
-        return None
+    """Return {phase_key: 'PASS'|'FAIL'|'PLANNED'} from a validate.sh run, or None.
+
+    HEQK_VALIDATE_LOG=<file>: parse an EXISTING validate.sh output (CI: the g2 gate's
+    out/ci/logs/g2.log, which tees the full phase table) instead of booting QEMU a second
+    time. Otherwise run ./validate.sh, bounded by HEQK_VALIDATE_TIMEOUT seconds (default
+    1200 — a full run takes ~5 min; the old fixed 180 s always expired in CI, #895)."""
+    log = os.environ.get("HEQK_VALIDATE_LOG")
+    if log:
+        try:
+            with open(log, encoding="utf-8", errors="replace") as f:
+                stdout = f.read()
+            print(f"  validate.sh: using existing run log {log}")
+        except OSError as e:
+            print(f"  ! HEQK_VALIDATE_LOG unreadable ({e}); keeping last gate states", file=sys.stderr)
+            return None
+    else:
+        try:
+            p = subprocess.run(["bash", "validate.sh"], cwd=ROOT, capture_output=True, text=True,
+                               timeout=int(os.environ.get("HEQK_VALIDATE_TIMEOUT", "1200")))
+        except Exception as e:
+            print(f"  ! validate.sh did not run ({e}); keeping last gate states", file=sys.stderr)
+            return None
+        stdout = p.stdout
     gates = {}
     # Table rows look like:  " P8p  PASS     Validation   ..."
-    for line in p.stdout.splitlines():
+    for line in stdout.splitlines():
         m = re.match(r"\s*(P\w+|DRV)\s+(PASS|FAIL|PLANNED)\b", line)
         if m:
             gates[m.group(1)] = m.group(2)
-    ok = "VERDICT: all implemented phases GREEN" in p.stdout
+    ok = "VERDICT: all implemented phases GREEN" in stdout
     print(f"  validate.sh: {len(gates)} gates parsed; "
           f"{'ALL GREEN' if ok else 'REGRESSIONS PRESENT'}")
     return gates
