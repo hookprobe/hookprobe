@@ -79,6 +79,8 @@ pub mod thread;
 pub mod timer;
 #[cfg(feature = "pci")]
 pub mod pci;
+#[cfg(feature = "smccc")]
+pub mod smccc;
 pub mod virtio;
 pub mod virtio_blk;
 pub mod virtio_net;
