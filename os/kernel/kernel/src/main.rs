@@ -157,6 +157,8 @@ mod export;
 mod exportwire;
 #[cfg(feature = "securechannel")]
 mod snapshot;
+#[cfg(feature = "securechannel")]
+mod evlog;
 // prod-full — the missing METAL caller for M3/M4/M6. On the cm5 profile those
 // subsystems are only reachable from the QEMU self-test sequence that `prod`
 // replaces, so without this module they are dead-stripped out of the image
@@ -3684,16 +3686,51 @@ fn cm5_p10_probe() {
                             {
                                 // G12: what this device saw before its last power cycle — the sealed snapshot's
                                 // detections come back into Mission Control (with their real time when known).
+                                // #54: the sealed evidence log in the DataVolume keeps far more than the 64-event
+                                // snapshot — when it holds history, Mission Control is restored from it instead.
                                 let mut n = 0usize;
-                                for i in 0..pf.snap.nev {
-                                    if let Some((mut ev, ms)) = pf.snap.timed_event(i) {
-                                        ev.ts = ms;
-                                        let ts = ev.ts;
-                                        mcserve::state().push_restored(&ev, ts);
-                                        n += 1;
+                                let mut from_log = 0u64;
+                                if let Some((srk, pol)) = pf.seal_params() {
+                                    match evlog::install(&srk, pol) {
+                                        Some((recs, _)) => {
+                                            let mut total = 0u64;
+                                            evlog::with(&mut |l, st| {
+                                                total = l.for_each(st, &mut |_| {});
+                                                let skip = total.saturating_sub(mcstate::DET_CAP as u64);
+                                                let mut i = 0u64;
+                                                l.for_each(st, &mut |img| {
+                                                    if i >= skip {
+                                                        if let Some(mut ev) = export::image_to_ev(img) {
+                                                            let ms = u64::from_le_bytes(img[0..8].try_into().unwrap());
+                                                            if img[15] & snapshot::IMG_EPOCH != 0 && ms != 0 {
+                                                                ev.verdict &= !snapshot::IMG_EPOCH;
+                                                                ev.ts = ms;
+                                                                mcserve::state().push_restored(&ev, ms);
+                                                                n += 1;
+                                                            }
+                                                        }
+                                                    }
+                                                    i += 1;
+                                                });
+                                            });
+                                            from_log = total;
+                                            kprint!(" [AP-EVLOG] sealed evidence log (DataVolume): {} records, {} detections kept across power cycles\n", recs, total);
+                                        }
+                                        None => kprint!(" [AP-EVLOG] no DataVolume evidence region — the 64-event snapshot only\n"),
                                     }
                                 }
-                                kprint!(" [AP-PERSIST] {} detections restored from before the last power cycle (boot #{}, sealed snapshot of {} events)\n", n, pf.snap.boots, pf.snap.nev);
+                                if from_log == 0 {
+                                    for i in 0..pf.snap.nev {
+                                        if let Some((mut ev, ms)) = pf.snap.timed_event(i) {
+                                            ev.ts = ms;
+                                            let ts = ev.ts;
+                                            mcserve::state().push_restored(&ev, ts);
+                                            n += 1;
+                                        }
+                                    }
+                                }
+                                kprint!(" [AP-PERSIST] {} detections restored from before the last power cycle (boot #{}, {})\n", n, pf.snap.boots,
+                                    if from_log > 0 { "sealed evidence log" } else { "sealed snapshot" });
                             }
                             let seed = arch_aarch64::rng200::next_word_strict().unwrap_or(0) ^ mc_t0;
                             match mcserve::McNode::new(ap.bssid, mcserve::NetMode::Static { ip: our_ip, prefix: 24, gw: our_ip }, seed) {
@@ -4272,7 +4309,11 @@ fn cm5_p10_probe() {
                                                 if let Some(ms) = wntp.on_frame(&wbuf[..n], up.dhcp.yiaddr, cyw43::now_secs()) {
                                                     ioc::set_now_unix((ms / 1000) as u32); // IOC expiry needs a real clock
                                                     #[cfg(feature = "appersist")]
-                                                    pf.set_clock(ms, now(), freq);
+                                                    {
+                                                        pf.set_clock(ms, now(), freq);
+                                                        let (t0, f) = (now(), freq);
+                                                        evlog::with(&mut |l, _| l.anchor(&|t| prodfull::tick_to_ms(t, ms, t0, f)));
+                                                    }
                                                     match mcserve::state().sync_clock(ms, now()) {
                                                         Some(step) => kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
                                                             wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step),
@@ -4495,7 +4536,13 @@ fn cm5_p10_probe() {
                                                 #[cfg(feature = "mcserve")]
                                                 mcserve::state().push_event(e);
                                                 #[cfg(feature = "appersist")]
-                                                pf.on_threat(e);
+                                                {
+                                                    pf.on_threat(e);
+                                                    let img = pf.image_of(e);
+                                                    evlog::with(&mut |l, _| {
+                                                        let _ = l.push(img);
+                                                    });
+                                                }
                                                 if e.verdict != 2 {
                                                     continue;
                                                 }
@@ -4615,10 +4662,19 @@ fn cm5_p10_probe() {
                                             #[cfg(feature = "appersist")]
                                             {
                                                 let c = prodfull::Counters { seen: st.seen, forwarded: st.forwarded, dropped: st.dropped, tx_fail: wifi_tx_dropped as u64, faults: 0, empty: 0 };
-                                                if pf.on_heartbeat(now().wrapping_sub(mc_t0) / freq, c, telemetry::score()) {
+                                                let up_s = now().wrapping_sub(mc_t0) / freq;
+                                                if pf.on_heartbeat(up_s, c, telemetry::score()) {
                                                     kprint!(" [AP-PERSIST] sealed snapshot written: boot #{} seen={} drop={} events={} (A/B gen {})\n",
                                                         pf.snap.boots, st.seen, st.dropped, pf.snap.nev, pf.last_gen);
                                                 }
+                                                let clk = pf.clock().is_some();
+                                                evlog::with(&mut |l, s| {
+                                                    let before = l.written;
+                                                    if l.maybe_flush(s, up_s, clk, false) {
+                                                        kprint!(" [AP-EVLOG] {} detections sealed to the evidence log ({} total this boot, ring {} records)\n",
+                                                            l.written - before, l.written, l.log.count());
+                                                    }
+                                                });
                                             }
                                             st.set_leases(&dh);
                                             // Parity G15: new detections -> the signed POLICY.TXT `export syslog` collector.
@@ -6619,6 +6675,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = ownerapi::selftest();
         #[cfg(feature = "netsvc")]
         let _ = upload::selftest();
+        #[cfg(all(feature = "securechannel", feature = "p15-write"))]
+        let _ = evlog::selftest();
         let _ = rules::jit_call_selftest();
         let _ = behavioral::beacon_busy_selftest();
         let _ = devpolicy::selftest();
@@ -14571,11 +14629,44 @@ fn fuzz_selftest() {
         let _ = ioc::load_text(b"");
         let _ = devpolicy::load_text(b"");
     }
+    // 8. 2026-11-09: categorised Shield lists (#! category= / level= / strict_adult=), the artifact-store
+    // manifest decoder (sectors read back from the eMMC), the owner-journal / upload form fields.
+    let mut n_0909 = 0u32;
+    {
+        let seed: &[u8] = b"#! level=relaxed\n#! category=ads\nads.example\n#! category=malware\nc2.example\n#! strict_adult=block\n#! category=adult\nx.example\n";
+        let mut b = [0u8; 160];
+        for _ in 0..N / 2 {
+            let n = seed.len();
+            b[..n].copy_from_slice(seed);
+            for _ in 0..1 + next() % 6 {
+                let at = (next() as usize) % n;
+                b[at] = match next() % 5 { 0 => b'\n', 1 => b'=', 2 => b'#', 3 => b'!', _ => next() as u8 };
+            }
+            let _ = shield::load_text(&b[..n - (next() as usize % 9).min(n)], b"");
+            let _ = shield::decide(b"x.c2.example");
+            let _ = shield::category_of(b"ads.example");
+            n_0909 += 1;
+        }
+        let _ = shield::load_text(b"", b"");
+        let mut sec = [0u8; 512];
+        for i in 0..N / 2 {
+            for w in sec.chunks_exact_mut(8) {
+                w.copy_from_slice(&next().to_le_bytes());
+            }
+            if i % 2 == 0 {
+                sec[..8].copy_from_slice(b"HQSTMAN1"); // reach the field parser, not just the magic check
+            }
+            let _ = artstore::fuzz_decode(&sec);
+            let mut f = [0u8; 192];
+            let _ = actionapi::form_get(&sec[..(next() as usize % 400).min(512)], "type", &mut f);
+            n_0909 += 1;
+        }
+    }
     rules::refire_reset();
     behavioral::brute_reset();
     behavioral::beacon_reset_for_test();
-    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler, Shield v2 client queries + DNS replies (CNAME walk); {} mutated HTTP requests; {} mutated POLICY/WAN files; {} through the 2026-11-08 additions (LAN relay v4/v6/multicast, IPv6 JA4/brute/beacon/IOC, mDNS/SSDP discovery, JA4; OUI/IOC-v6/shield= config) — 0 panics (fixed seed, ADR 0050 D3)\n",
-        n_frames, n_http, n_cfg, n_new);
+    kprint!(" [P-fuzz] PASS — {} hostile frames through facts/net::parse, PPPoE rx+decap, RA/DHCPv6/IPv6 LAN+WAN, NAT in/out + reject, AP DHCP server + WAN DHCP client + fw events + EAPOL match, mgmt ARP/ping handler, Shield v2 client queries + DNS replies (CNAME walk); {} mutated HTTP requests; {} mutated POLICY/WAN files; {} through the 2026-11-08 additions (LAN relay v4/v6/multicast, IPv6 JA4/brute/beacon/IOC, mDNS/SSDP discovery, JA4; OUI/IOC-v6/shield= config); {} through the 2026-11-09 additions (categorised Shield lists, artifact-store manifest, form fields) — 0 panics (fixed seed, ADR 0050 D3)\n",
+        n_frames, n_http, n_cfg, n_new, n_0909);
 }
 
 fn pppoe_selftest() {
