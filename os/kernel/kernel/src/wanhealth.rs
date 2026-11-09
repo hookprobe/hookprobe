@@ -47,7 +47,7 @@ impl WanHealth {
 
     /// Probe slot `i`: even slots probe the gateway, odd slots an internet anchor.
     pub fn target(i: u32, gw: [u8; 4]) -> ([u8; 4], bool) {
-        if i % 2 == 0 { (gw, false) } else { (ANCHORS[(i as usize / 2) % ANCHORS.len()], true) }
+        if i.is_multiple_of(2) { (gw, false) } else { (ANCHORS[(i as usize / 2) % ANCHORS.len()], true) }
     }
 
     /// Report one probe. `internet` = it was an anchor probe. Returns Some(new state) on a transition.

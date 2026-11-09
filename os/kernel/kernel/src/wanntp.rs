@@ -29,6 +29,7 @@ impl WanNtp {
 
     /// Due a request at `now_s`? Builds the Ethernet/IPv4/UDP frame into `out` (returns its length).
     /// `nonce` must be unpredictable (TRNG); 0 = no entropy → no request.
+    #[allow(clippy::too_many_arguments)]
     pub fn request(&mut self, now_s: u64, nonce: u64, gw: [u8; 4], wan_ip: [u8; 4], wan_mac: &[u8; 6], gw_mac: &[u8; 6], out: &mut [u8]) -> Option<usize> {
         if now_s < self.next_s || nonce == 0 || wan_ip == [0; 4] || out.len() < 90 {
             return None;
@@ -102,6 +103,7 @@ fn csum(b: &[u8], init: u32) -> u16 {
     !(s as u16)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn udp4(out: &mut [u8], smac: &[u8; 6], dmac: &[u8; 6], sip: [u8; 4], dip: [u8; 4], sp: u16, dp: u16, payload: &[u8]) -> usize {
     let ul = 8 + payload.len();
     let total = 14 + 20 + ul;

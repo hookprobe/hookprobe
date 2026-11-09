@@ -8,6 +8,7 @@
 //!   2. every program then passes `bpf::verify_prevail` (memory safety, min_len) and is JIT-compiled
 //!      exactly like the built-in corpus; a rule that fails is skipped and counted, never armed;
 //!   3. ids live in a dedicated band (1000..=1999) so they never collide with the catalogue.
+//!
 //! Pack layout: "HQRULES1" | n u16 LE | reserved u16 | n × { id u16 | tier u8 | class u8 | severity u8 |
 //! name_len u8 | n_insn u16 | name | n_insn × u64 LE }.
 //! Tiers: 0 L4 header (R1 = TCP/UDP header), 1 L2 frame, 2 TCP header (TCP only), 3 flow (frame, helpers).
@@ -161,7 +162,7 @@ fn load_body_jit(body: &[u8], jit: bool, arm: bool) -> Result<PackInfo, &'static
                 // only with a safe margin left (64 KiB), else arm the rule on the interpreter (same
                 // verdicts, slower) — a big pack must never take the kernel down at boot.
                 let room = crate::heap::remaining() > JIT_HEAP_MARGIN + ni * 64;
-                let j = if jit && room { arch_aarch64::bpf_jit::compile_with_helper(prog, crate::ratelimit::call_helper_c as usize, crate::ratelimit::JIT_HELPERS).unwrap_or(0) } else { 0 };
+                let j = if jit && room { arch_aarch64::bpf_jit::compile_with_helper(prog, crate::ratelimit::call_helper_c as *const () as usize, crate::ratelimit::JIT_HELPERS).unwrap_or(0) } else { 0 };
                 if jit && !room {
                     info.interp_only += 1;
                 }
@@ -285,7 +286,7 @@ pub fn selftest() -> bool {
     pk[..8].copy_from_slice(b"HQRULES1");
     let mut p = 12;
     let mut n = 0u16;
-    let mut add = |pk: &mut [u8; 2048], p: &mut usize, id: u16, tier: u8, class: u8, sev: u8, name: &[u8], prog: &[u64]| {
+    let add = |pk: &mut [u8; 2048], p: &mut usize, id: u16, tier: u8, class: u8, sev: u8, name: &[u8], prog: &[u64]| {
         pk[*p..*p + 2].copy_from_slice(&id.to_le_bytes());
         pk[*p + 2] = tier;
         pk[*p + 3] = class;
@@ -313,10 +314,10 @@ pub fn selftest() -> bool {
     add(&mut pk, &mut p, 1001, 0, 0, 5, b"duplicate", &irc); n += 1;
     pk[8..10].copy_from_slice(&n.to_le_bytes());
     let r = load_body(&pk[..p]);
-    let parsed = r.map_or(false, |i| i.loaded == 3 && i.refused_verify == 1 && i.refused_meta == 2);
+    let parsed = r.is_ok_and(|i| i.loaded == 3 && i.refused_verify == 1 && i.refused_meta == 2);
     let l4 = |port: u16| { let mut h = [0u8; 8]; h[2..4].copy_from_slice(&port.to_be_bytes()); h };
     let fires = verdict(0, &l4(6667), 0x0A00_0001, crate::verdict::decide).is_some()
-        && verdict(0, &l4(3389), 0x0A00_0001, crate::verdict::decide).map_or(false, |v| v.to_wire() == crate::packet::PASS) // behavioral = observe
+        && verdict(0, &l4(3389), 0x0A00_0001, crate::verdict::decide).is_some_and(|v| v.to_wire() == crate::packet::PASS) // behavioral = observe
         && verdict(0, &l4(443), 0x0A00_0001, crate::verdict::decide).is_none()
         && verdict(0, &l4(3333), 1, crate::verdict::decide).is_some() && verdict(0, &l4(3334), 1, crate::verdict::decide).is_some()
         && verdict(0, &l4(3332), 1, crate::verdict::decide).is_none() && verdict(0, &l4(3335), 1, crate::verdict::decide).is_none();

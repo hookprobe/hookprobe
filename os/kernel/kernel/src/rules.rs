@@ -156,11 +156,11 @@ fn compile_set(rules: &[Rule], state: *mut RState) -> (usize, usize) {
     let mut verified = 0usize;
     let mut jitted = 0usize;
     let n = rules.len().min(MAX_RULES);
-    for i in 0..n {
-        let st = match bpf::verify_prevail(rules[i].prog) {
+    for (i, rule) in rules.iter().enumerate().take(n) {
+        let st = match bpf::verify_prevail(rule.prog) {
             Ok(min_len) => {
                 verified += 1;
-                let jit = arch_aarch64::bpf_jit::compile_with_helper(rules[i].prog, crate::ratelimit::call_helper_c as usize, crate::ratelimit::JIT_HELPERS).unwrap_or(0);
+                let jit = arch_aarch64::bpf_jit::compile_with_helper(rule.prog, crate::ratelimit::call_helper_c as *const () as usize, crate::ratelimit::JIT_HELPERS).unwrap_or(0);
                 if jit != 0 {
                     jitted += 1;
                 }
@@ -418,10 +418,11 @@ pub fn arp_binding_conflict(f: &[u8], now: u64) -> Option<u32> {
 }
 
 /// Test hook.
+#[cfg_attr(not(feature = "detbench"), allow(dead_code))]
 pub fn arp_binding_reset() {
     use core::sync::atomic::Ordering::Relaxed;
-    for i in 0..ARP_N {
-        ARP_IP[i].store(0, Relaxed);
+    for a in &ARP_IP {
+        a.store(0, Relaxed);
     }
 }
 
@@ -548,8 +549,8 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
     // broadcast-storm — count only NON-EXEMPT broadcast/multicast dst frames (mDNS/
     // SSDP/LLMNR are exempt before counting, so a chatty-but-legit device is never a
     // storm). A genuine flood on an Access port → RateLimit; Uplink → Observe.
-    if crate::net::dst_is_bcast_or_mcast(frame) && !is_exempt_multicast(&frame[0..6]) {
-        if crate::ratelimit::bcast_over(port, BCAST_STORM_THRESH) == 1 {
+    if crate::net::dst_is_bcast_or_mcast(frame) && !is_exempt_multicast(&frame[0..6])
+        && crate::ratelimit::bcast_over(port, BCAST_STORM_THRESH) == 1 {
             // A3 FIX: a NON-EXEMPT broadcast/multicast FLOOD is resource-exhaustion, not
             // legit many-client traffic (legit mDNS/SSDP/LLMNR are exempted above, row L1).
             // So it is a rate wall crossed → FindingClass::FloodRate → a bounded, self-
@@ -564,7 +565,6 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
                 observed = Some(v);
             }
         }
-    }
 
     observed
 }
@@ -682,7 +682,7 @@ pub fn behavioral_observe6(frame: &[u8], lease: u32) {
     if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || !m.has_l4_ports() {
         return;
     }
-    if frame.get(m.l4_off + 13).map_or(true, |&f| f & 0x12 != 0x02) {
+    if frame.get(m.l4_off + 13).is_none_or(|&f| f & 0x12 != 0x02) {
         return;
     }
     let mut d6 = [0u8; 16];
@@ -714,7 +714,7 @@ pub fn brute_answer6(frame: &[u8], lease: u32) {
     if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || !m.has_l4_ports() {
         return;
     }
-    if frame.get(m.l4_off + 13).map_or(true, |&f| f & 0x12 != 0x12) {
+    if frame.get(m.l4_off + 13).is_none_or(|&f| f & 0x12 != 0x12) {
         return;
     }
     let mut s6 = [0u8; 16];
@@ -894,6 +894,7 @@ pub fn alert_dedup(on: bool) {
 }
 
 /// `[P-alert-dedup]` — one event per (rule, source) per window; the wire verdict is untouched.
+#[cfg_attr(not(feature = "securechannel-selftest"), allow(dead_code))]
 pub fn dedup_selftest() -> bool {
     refire_reset();
     let mut evs = [crate::events::Event { ts: 0, src: 0, rule_id: 0, severity: 0, verdict: 0, class: 0, dport: 0, dst: 0 }; 64];
@@ -1110,7 +1111,7 @@ pub fn active() -> usize {
 /// (3) register preservation — R3..R9 set, a CALL, then summed: 42 on both; (4) plain `compile` still declines.
 pub fn jit_call_selftest() -> bool {
     use crate::bpf::{insn, run, IP_BLOCKLIST, SYN_LIMIT, TCP_SYN_FLOOD_SRC};
-    let comp = |p: &[u64]| arch_aarch64::bpf_jit::compile_with_helper(p, crate::ratelimit::call_helper_c as usize, crate::ratelimit::JIT_HELPERS);
+    let comp = |p: &[u64]| arch_aarch64::bpf_jit::compile_with_helper(p, crate::ratelimit::call_helper_c as *const () as usize, crate::ratelimit::JIT_HELPERS);
     let call = |va: usize, f: &[u8]| -> u64 {
         let fun: extern "C" fn(*const u8) -> u64 = unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(va) };
         fun(f.as_ptr())
@@ -1207,7 +1208,7 @@ pub fn jit_call_selftest() -> bool {
     let regs_ok = interp == 42 && regs == Some(42);
     // (4) the call-less entry point still declines CALL; a helper outside the allowlist declines too
     let declines = arch_aarch64::bpf_jit::compile(&TCP_SYN_FLOOD_SRC).is_none()
-        && arch_aarch64::bpf_jit::compile_with_helper(&IP_BLOCKLIST, crate::ratelimit::call_helper_c as usize, 1 << crate::ratelimit::HELPER_SYN_RATE_OVER).is_none();
+        && arch_aarch64::bpf_jit::compile_with_helper(&IP_BLOCKLIST, crate::ratelimit::call_helper_c as *const () as usize, 1 << crate::ratelimit::HELPER_SYN_RATE_OVER).is_none();
     let pass = bl_ok && bl_mis == 0 && bl_hits > 0 && syn_ok && syn_mis == 0 && drops > 0 && busy_drops > 0 && regs_ok && declines;
     arch_aarch64::_print(format_args!(
         " [P8-JIT-CALL] {} — BPF CALL in the JIT (scalar helpers 1/2, x1..x10 preserved, frame per calling rule): ip-blocklist 4096 frames {} mismatches ({} listed) | syn-flood-per-src {} SYNs {} mismatches ({} over the limit) | busy-LAN flooder trips the limiter ({} drops) | registers across CALL interp={} jit={:?} | call-less compile + off-allowlist helper decline={}\n",

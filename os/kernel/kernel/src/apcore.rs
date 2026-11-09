@@ -95,7 +95,7 @@ pub fn forward4<N: ApNic>(
     if let Some(p) = hal::policy::facts(frame) {
         act = pol.check(pif, Dir::In, &p).0;
         if act == Act::Allow {
-            let mgmt_up = nic.mgmt().map_or(false, |m| m.up);
+            let mgmt_up = nic.mgmt().is_some_and(|m| m.up);
             let wan_up = nic.wan_up();
             if let Some(r) = pol.route(&p.src, &p.dst, &|i| match i {
                 If::Wan => wan_up,
@@ -463,6 +463,7 @@ pub fn lan_selftest() -> bool {
 
 /// The fate of one IPv6 frame from a Wi-Fi client (the AP's IPv6 LAN router is up).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[cfg_attr(not(feature = "apmode"), allow(dead_code))]
 pub enum Client6 {
     /// RS / NS answered by the router: send `v6buf[..len]` back to the client.
     Reply(usize),
@@ -483,6 +484,7 @@ pub enum Client6 {
 /// detectors keyed on the device (scan shape, JA4, beacon / brute force, IOC — `lease_of` maps the client MAC
 /// to its IPv4 lease for attribution), the IDS, and the send. The pinhole opens only after a successful send.
 #[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(feature = "apmode"), allow(dead_code))]
 pub fn client6<N: ApNic>(
     frame: &[u8],
     v6: &mut arch_aarch64::ip6lan::V6Lan,

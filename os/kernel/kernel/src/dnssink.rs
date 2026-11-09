@@ -23,7 +23,7 @@ pub const SINKHOLE_IP: [u8; 4] = [10, 200, 0, 254];
 /// Extract the query's qname into `out` as lowercase dotted bytes (e.g. b"ads.tracker"), returning
 /// its length. Bounds-safe + fail-closed: rejects truncation, an over-long name (>255), a label
 /// >63, or a compression pointer (0xC0 — illegal in a query). Starts at the question section
-/// (offset 12, after the 12-byte DNS header).
+/// > (offset 12, after the 12-byte DNS header).
 pub fn parse_qname(query: &[u8], out: &mut [u8; 256]) -> Option<usize> {
     if query.len() < 12 + 1 {
         return None;

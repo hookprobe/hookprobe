@@ -153,8 +153,8 @@ pub fn load<D: hal::BlockDev>(dev: &D) -> Option<Result<WifiCfg, CfgErr>> {
 pub fn selftest() -> bool {
     use ed25519_compact::{KeyPair, Seed};
     let good = parse(b"# home\nssid=Home Network\npsk=correct horse battery\nchannel=40\n");
-    let good_ok = good.map_or(false, |c| &c.ssid[..c.ssid_len as usize] == b"Home Network" && &c.psk[..c.psk_len as usize] == b"correct horse battery" && c.channel == 40);
-    let auto = parse(b"ssid=x\npsk=12345678\r\n").map_or(false, |c| c.channel == 0) && parse(b"ssid=x\npsk=12345678\nchannel=auto\n").is_ok();
+    let good_ok = good.is_ok_and(|c| &c.ssid[..c.ssid_len as usize] == b"Home Network" && &c.psk[..c.psk_len as usize] == b"correct horse battery" && c.channel == 40);
+    let auto = parse(b"ssid=x\npsk=12345678\r\n").is_ok_and(|c| c.channel == 0) && parse(b"ssid=x\npsk=12345678\nchannel=auto\n").is_ok();
     let hex = parse(b"ssid=x\npsk=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n").is_ok();
     let refused = parse(b"ssid=x\npsk=short\n") == Err(CfgErr::BadPsk)
         && parse(b"ssid=x\npsk=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg\n") == Err(CfgErr::BadPsk)

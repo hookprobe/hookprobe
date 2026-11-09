@@ -6200,7 +6200,7 @@ pub extern "C" fn kmain() -> ! {
     extern "C" {
         static __text_start: u8;
     }
-    let text_va = unsafe { core::ptr::addr_of!(__text_start) as usize };
+    let text_va = core::ptr::addr_of!(__text_start) as usize;
     let data_va = core::ptr::addr_of!(text_va) as usize; // a stack address (RW data)
     let td = mmu.page_desc(text_va);
     let dd = mmu.page_desc(data_va);
@@ -6360,11 +6360,11 @@ pub extern "C" fn kmain() -> ! {
         let mut nm = [0u8; 256];
         // (1) blocked exact name → parse + rpz + sinkhole answer == SINKHOLE_IP.
         let n = mk_query(&[b"ads", b"tracker"], &mut q);
-        let name_ok = dnssink::parse_qname(&q[..n], &mut nm).map_or(false, |l| &nm[..l] == b"ads.tracker");
+        let name_ok = dnssink::parse_qname(&q[..n], &mut nm).is_some_and(|l| &nm[..l] == b"ads.tracker");
         let blocked = dnssink::rpz_blocked(b"ads.tracker");
         let mut resp = [0u8; 160];
         let sink_ok = dnssink::build_sinkhole_response(&q[..n], dnssink::SINKHOLE_IP, &mut resp)
-            .map_or(false, |rl| rl >= 4 && resp[rl - 4..rl] == dnssink::SINKHOLE_IP && resp[6..8] == 1u16.to_be_bytes());
+            .is_some_and(|rl| rl >= 4 && resp[rl - 4..rl] == dnssink::SINKHOLE_IP && resp[6..8] == 1u16.to_be_bytes());
         // (2) subdomain of a blocked name → also blocked (suffix on a label boundary).
         let sub_blocked = dnssink::rpz_blocked(b"x.ads.tracker");
         // (3) benign name → NOT blocked (the packet flows untouched — never a drop).
@@ -7892,7 +7892,7 @@ fn p8_l2struct() -> bool {
     let mut mf_access_drop = false;
     for i in 0..40u8 {
         fr[6..12].copy_from_slice(&[0x02, 0x00, 0x00, 0x00, 0x00, i]); // distinct unicast src
-        if rules::l2_stateful_verdict(&fr, 0, 5, PortRole::Access).map_or(false, Verdict::is_drop) {
+        if rules::l2_stateful_verdict(&fr, 0, 5, PortRole::Access).is_some_and(Verdict::is_drop) {
             mf_access_drop = true;
         }
     }
@@ -7925,7 +7925,7 @@ fn p8_l2struct() -> bool {
     bc[12..14].copy_from_slice(&[0x08, 0x00]);
     let mut bc_drop = false;
     for _ in 0..60 {
-        if rules::l2_stateful_verdict(&bc, 0, 7, PortRole::Access).map_or(false, Verdict::is_drop) {
+        if rules::l2_stateful_verdict(&bc, 0, 7, PortRole::Access).is_some_and(Verdict::is_drop) {
             bc_drop = true;
         }
     }
@@ -7938,7 +7938,7 @@ fn p8_l2struct() -> bool {
     // resource-exhaustion on any port (legit mcast is exempted above), so it is FloodRate.
     let mut bc_up_drop = false;
     for _ in 0..60 {
-        if rules::l2_stateful_verdict(&bc, 0, 9, PortRole::Uplink).map_or(false, Verdict::is_drop) {
+        if rules::l2_stateful_verdict(&bc, 0, 9, PortRole::Uplink).is_some_and(Verdict::is_drop) {
             bc_up_drop = true;
         }
     }
@@ -7975,7 +7975,7 @@ fn p8_l2struct() -> bool {
     ra[21] = 255; // hop limit
     ra[54] = 134; // Router Advertisement
     let ra_detected = crate::net::is_icmpv6_ra(&ra);
-    let ra_access_drop = rules::l2_stateful_verdict(&ra, 0, 2, PortRole::Access).map_or(false, Verdict::is_drop);
+    let ra_access_drop = rules::l2_stateful_verdict(&ra, 0, 2, PortRole::Access).is_some_and(Verdict::is_drop);
     let ra_uplink_obs = rules::l2_stateful_verdict(&ra, 0, 3, PortRole::Uplink) == Some(Verdict::Observe);
     let c_ra = ra_detected && ra_access_drop && ra_uplink_obs;
     ok &= c_ra;
@@ -8436,8 +8436,8 @@ fn p8_shed() -> bool {
     set_synthetic_pressure(90);
     // The TRIGGERS are identity-blind and DO fire for mgmt (it IS the top-talker under
     // pressure/saturation) — proving the floor is a verdict-layer override, not a trigger hack.
-    let mgmt_trig_sat = saturation_shed(mgmt as u64, 90_000, 100_000);
-    let mgmt_trig_psi = pressure_shed(mgmt as u64);
+    let mgmt_trig_sat = saturation_shed(mgmt, 90_000, 100_000);
+    let mgmt_trig_psi = pressure_shed(mgmt);
     let mgmt_sat_v = rules::shed_verdict(rules::RULE_RESOURCE_SHED, mgmt as u32, mgmt_trig_sat);
     let mgmt_psi_v = rules::shed_verdict(rules::RULE_RESOURCE_SHED, mgmt as u32, mgmt_trig_psi);
     clear_synthetic_pressure();
@@ -8516,7 +8516,7 @@ fn p8_raflood() -> bool {
     // (e) A9-5 — that event is rule 121 attributed by the source-MAC hash (non-zero, != IPv4 0).
     let ev = events::peek_last();
     let want_src = ratelimit::mac_hash(&router) as u32;
-    let c_e = ev.map_or(false, |e| e.rule_id == rules::RULE_ROGUE_RA && e.src == want_src && e.src != 0);
+    let c_e = ev.is_some_and(|e| e.rule_id == rules::RULE_ROGUE_RA && e.src == want_src && e.src != 0);
     ok &= c_e;
     kprint!("   L4 single legit RA (Uplink) -> {:?} [{}]; rule-121 event src={:#010x} (mac-hash, want {:#010x}) [{}]\n",
         v_one, if c_a { "ok" } else { "BUG" }, ev.map_or(0, |e| e.src), want_src, if c_e { "ok" } else { "BUG" });
@@ -8529,7 +8529,7 @@ fn p8_raflood() -> bool {
     let mut late_shape = true;
     for k in 0..n {
         let v = rules::l2_stateful_verdict(&ra_frame(&flooder), 0, port, PortRole::Uplink);
-        let drop = v.map_or(false, Verdict::is_drop);
+        let drop = v.is_some_and(Verdict::is_drop);
         if (k as u64) < RA_FLOOD_THRESH {
             if drop { early_drops += 1; }
         } else {
@@ -8542,7 +8542,7 @@ fn p8_raflood() -> bool {
     kprint!("   flood {} RAs from one MAC: drops before wall={} (want 0), after wall={} (want {}), shape=RateLimit{{over_limit}}={} [{}]\n",
         n, early_drops, late_drops, RA_FLOOD_THRESH, late_shape, if c_b { "ok" } else { "BUG" });
     let ev = events::peek_last();
-    let c_e2 = ev.map_or(false, |e| e.rule_id == rules::RULE_RA_FLOOD && e.verdict == 2 && e.src == ratelimit::mac_hash(&flooder) as u32);
+    let c_e2 = ev.is_some_and(|e| e.rule_id == rules::RULE_RA_FLOOD && e.verdict == 2 && e.src == ratelimit::mac_hash(&flooder) as u32);
     ok &= c_e2;
 
     // (c) isolation — mid-flood, the legit router on the SAME port still PASSes (its own budget).
@@ -8591,7 +8591,7 @@ fn p8_raflood() -> bool {
     let unparseable = net::ipv6_unparseable(hidden_ra);
     let v_ev = rules::l2_stateful_verdict(hidden_ra, 0, 4, PortRole::Uplink);
     let ev = events::peek_last();
-    let surfaced = ev.map_or(false, |e| e.rule_id == rules::RULE_IPV6_UNPARSEABLE && e.verdict != 2);
+    let surfaced = ev.is_some_and(|e| e.rule_id == rules::RULE_IPV6_UNPARSEABLE && e.verdict != 2);
     let clean_ok = !net::ipv6_unparseable(&ra_frame(&router)); // a well-formed RA is NOT flagged
     let c_f = !seen_as_ra && unparseable && v_ev == Some(Verdict::Observe) && surfaced && clean_ok;
     ok &= c_f;
@@ -8658,7 +8658,7 @@ fn p8_l7oracle() -> bool {
     let short = [0u8; 2];
     let vs = bpf::run(&bpf::L7_NOTOUCH_ORACLE, short.as_ptr(), short.len());
     // A full "MQTT" payload (4 bytes) is in-bounds and still matches -> DROP.
-    let full = [b'M', b'Q', b'T', b'T'];
+    let full = *b"MQTT";
     let vf = bpf::run(&bpf::L7_NOTOUCH_ORACLE, full.as_ptr(), full.len());
     let ok = scalar_refused && admissible && vs == bpf::INVALID && vf == bpf::DROP;
     kprint!("   scalar-ptr rule refused by verifier: {}; no-touch rule admissible: {}; short pkt -> {}; full MQTT -> {}\n",
@@ -9169,6 +9169,7 @@ fn p15_guard_selftest() {
 #[cfg(not(feature = "cm5"))]
 fn p15_otafat_selftest() {
     use hal::BlockDev;
+    #[cfg_attr(not(feature = "p15-write"), allow(unused_mut))]
     let mut dev = match arch_aarch64::virtio_blk::VirtioBlk::open() {
         Some(d) => d,
         None => {
@@ -10801,7 +10802,7 @@ fn p2_caps_test() -> bool {
     cs.revoke(0);
     telemetry::emit(telemetry::Event::CapRevoke);
     let live2 = cs.count();
-    let root_reclaimed = cs.get(0).map_or(false, |c| c.watermark == 0);
+    let root_reclaimed = cs.get(0).is_some_and(|c| c.watermark == 0);
     kprint!("   revoke(root): live caps {} -> {} (all derived gone, memory reclaimed)\n", live1, live2);
 
     // Rights enforcement (B-9): mint diminished copies + check on invocation.
@@ -10810,8 +10811,8 @@ fn p2_caps_test() -> bool {
     let ro = cs.mint(f, caps::R).unwrap(); // request R from R|W|G -> R only
     let rg = cs.mint(f, caps::R | caps::G).unwrap(); // R|G (no W)
     let child = cs.mint(rg, caps::R | caps::W).unwrap(); // request W from R|G -> W DROPPED
-    let diminished = cs.get(ro).map_or(false, |c| c.rights == caps::R);
-    let no_amplify = cs.get(child).map_or(false, |c| c.rights & caps::W == 0);
+    let diminished = cs.get(ro).is_some_and(|c| c.rights == caps::R);
+    let no_amplify = cs.get(child).is_some_and(|c| c.rights & caps::W == 0);
     let write_denied = cs.as_frame_rights(ro, caps::W).is_err(); // RO frame refuses write
     let read_ok = cs.as_frame_rights(ro, caps::R).is_ok(); // ...but allows read
     let full_write_ok = cs.as_frame_rights(f, caps::W).is_ok(); // full frame writes
@@ -13592,9 +13593,6 @@ fn mc_mgmt_tx(f: &[u8], dst: [u8; 4]) -> bool {
     arch_aarch64::uplink::mgmt_tx(&b[..n])
 }
 
-fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
-    apcore::mc_bound(f, our_ip)
-}
 
 /// POLICY.TXT (up to 4 KiB, contiguous on the FAT boot partition) -> POLICY. None = no file.
 fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::PolicyErr>> {
@@ -13838,7 +13836,7 @@ route 2001:db8:1::/48 via mgmt
         let mut p = Policy::new();
         let good = parse_policy(b"HQPOL1\nexport syslog 192.168.200.10 514 via mgmt json\n", &mut p).is_ok()
             && p.export == Some(Export { ip: [192, 168, 200, 10], port: 514, via: If::Mgmt, json: true });
-        let plain = parse_policy(b"HQPOL1\nexport syslog 10.0.0.5 6514 via wan\n", &mut p).is_ok() && p.export.map_or(false, |e| !e.json && e.via == If::Wan);
+        let plain = parse_policy(b"HQPOL1\nexport syslog 10.0.0.5 6514 via wan\n", &mut p).is_ok() && p.export.is_some_and(|e| !e.json && e.via == If::Wan);
         let bad = [
             &b"HQPOL1\nexport syslog 10.0.0.5 0 via wan\n"[..],
             b"HQPOL1\nexport syslog 10.0.0.5 514 via lan\n",
@@ -13925,7 +13923,8 @@ fn ip6_selftest() {
     p[0] = DHCP6_ADVERTISE;
     p[1..4].copy_from_slice(&xid.to_be_bytes()[1..4]);
     k += 4;
-    for (code, data) in [(2u16, &[0xaa, 0xbb, 0xcc, 0xdd][..])] {
+    {
+        let (code, data) = (2u16, &[0xaa, 0xbb, 0xcc, 0xdd][..]);
         p[k..k + 2].copy_from_slice(&code.to_be_bytes());
         p[k + 2..k + 4].copy_from_slice(&(data.len() as u16).to_be_bytes());
         p[k + 4..k + 4 + data.len()].copy_from_slice(data);
@@ -14386,10 +14385,7 @@ fn fuzz_selftest() {
                     continue;
                 }
             };
-            match shield::on_client_frame(&buf[..n], &[2, 0, 0, 0, 0, 1], &mut o, i as u64) {
-                shield::Act::Answer(k) => assert!(k <= o.len() && k >= 54),
-                _ => {}
-            }
+            if let shield::Act::Answer(k) = shield::on_client_frame(&buf[..n], &[2, 0, 0, 0, 0, 1], &mut o, i as u64) { assert!(k <= o.len() && k >= 54) }
             n_frames += 1;
         }
         let _ = shield::load_text(b"", b"");
@@ -14535,7 +14531,7 @@ fn fuzz_selftest() {
         let _ = shield::load_text(b"", b"");
         let mut sec = [0u8; 512];
         for i in 0..N / 2 {
-            for w in sec.chunks_exact_mut(8) {
+            for w in sec.as_chunks_mut::<8>().0 {
                 w.copy_from_slice(&next().to_le_bytes());
             }
             if i % 2 == 0 {
@@ -14616,7 +14612,7 @@ fn pppoe_selftest() {
         b[18..20].copy_from_slice(&((end - 20) as u16).to_be_bytes());
         (b, end.max(60))
     }
-    fn tag<'a>(f: &'a [u8], t: u16) -> Option<&'a [u8]> {
+    fn tag(f: &[u8], t: u16) -> Option<&[u8]> {
         let end = 20 + be16(f, 18) as usize;
         let mut o = 20;
         while o + 4 <= end {
