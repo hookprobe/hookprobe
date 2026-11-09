@@ -675,6 +675,16 @@ pub fn station_relay(frame: &[u8], dh: &arch_aarch64::dhcpd::ApDhcp, now_s: u64,
         true
     } else if lanrelay::relay_target6(frame, dh) {
         if ids_ok() {
+            // Phase 4 (G36): station-to-station IPv6 connection attempts feed the lateral tier under both
+            // devices' IPv4 leases (observe-only).
+            if frame.len() >= 54 && frame[20] == 6 {
+                let mut sm = [0u8; 6];
+                let mut dm = [0u8; 6];
+                sm.copy_from_slice(&frame[6..12]);
+                dm.copy_from_slice(&frame[0..6]);
+                let l = |m: &[u8; 6]| dh.lease_for(m).map_or(0, u32::from_be_bytes);
+                let _ = crate::rules::lateral_observe6(frame, l(&sm), l(&dm));
+            }
             let _ = send(frame);
         }
         true
