@@ -12696,9 +12696,29 @@ fn driver_server_demo() -> bool {
     extern "C" {
         static driver_stub: u8;
         static driver_stub_end: u8;
+        static driver_stub_pci: u8;
+        static driver_stub_pci_end: u8;
     }
-    let src = core::ptr::addr_of!(driver_stub) as usize;
-    let len = core::ptr::addr_of!(driver_stub_end) as usize - src;
+    // arm64-cloud (virtio on PCI only): grant the NIC's PCI config page instead of the
+    // virtio-mmio page; the driver reads DeviceID there (modern virtio-net = 0x1041).
+    #[cfg(feature = "cloud")]
+    let (src, end, window_pa, expect) = {
+        let Some(t) = arch_aarch64::virtio_transport::Transport::find(1) else {
+            kprint!("   FAIL: no virtio-net on PCI\n");
+            return false;
+        };
+        let (_, _, bus, dev, func) = t.describe();
+        let pa = arch_aarch64::pci::config_page_pa(arch_aarch64::pci::Bdf { bus, dev, func });
+        (core::ptr::addr_of!(driver_stub_pci) as usize, core::ptr::addr_of!(driver_stub_pci_end) as usize, pa, 0x1041u64)
+    };
+    #[cfg(not(feature = "cloud"))]
+    let (src, end, window_pa, expect) = (
+        core::ptr::addr_of!(driver_stub) as usize,
+        core::ptr::addr_of!(driver_stub_end) as usize,
+        0x0a00_3000usize, // page holding virtio-mmio slot 31 (net)
+        1u64,
+    );
+    let len = end - src;
     let code = mmu.alloc_frame();
     let stack = mmu.alloc_frame();
     if code == 0 || stack == 0 {
@@ -12711,10 +12731,9 @@ fn driver_server_demo() -> bool {
     const DCODE_VA: usize = 0xD200_0000;
     const DSTACK_VA: usize = 0xD200_1000;
     const DEV_VA: usize = 0xE200_0000;
-    const NET_MMIO_PAGE: usize = 0x0a00_3000; // page holding virtio-mmio slot 31 (net)
     mmu.map_user_code_page(DCODE_VA, code);
     mmu.map_user_data_page(DSTACK_VA, stack);
-    mmu.map_user_device_page(DEV_VA, NET_MMIO_PAGE); // the ONLY hardware it can touch
+    mmu.map_user_device_page(DEV_VA, window_pa); // the ONLY hardware it can touch
     kprint!(
         "   EL0 driver: code@{:#x} stack@{:#x} device-window {:#x} -> NIC MMIO (nothing else granted)\n",
         DCODE_VA, DSTACK_VA, DEV_VA
@@ -12723,8 +12742,8 @@ fn driver_server_demo() -> bool {
     DRIVER_REPORT.store(0, Ordering::Relaxed);
     unsafe { arch_aarch64::syscall::enter_user(DCODE_VA, DSTACK_VA + 0x1000) };
     let id = DRIVER_REPORT.load(Ordering::Relaxed);
-    kprint!("   back in EL1; the isolated driver read NIC DeviceID = {} (expect 1 = virtio-net)\n", id);
-    let ok = id == 1;
+    kprint!("   back in EL1; the isolated driver read NIC DeviceID = {:#x} (expect {:#x} = virtio-net)\n", id, expect);
+    let ok = id as u64 == expect;
     kprint!(
         "   [DRV] {} — a driver ran at EL0 with ONLY a device capability; kernel untouched\n",
         if ok { "PASS" } else { "FAIL" }
