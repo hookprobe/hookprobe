@@ -4152,14 +4152,30 @@ fn cm5_p10_probe() {
                                         let t = now();
                                         if wan_leased_at == 0 {
                                             wan_leased_at = t;
-                                        } else if up.dhcp.lease > 0 && t.wrapping_sub(wan_leased_at) > (up.dhcp.lease as u64 / 2) * freq {
-                                            let mut again = uplink::UplinkResult::new(Nic::End0);
-                                            uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
-                                            if again.usable() {
-                                                up = again;
-                                                wan_renewals += 1;
+                                        } else if up.dhcp.lease > 0 {
+                                            // Phase 3d: renew IN the loop from T1 (lease/2) — a REQUEST every 5 s, the ACK is
+                                            // consumed by wan_poll. Only a NAK, or no answer by T2 (7/8 of the lease), falls
+                                            // back to the full (blocking) bring-up.
+                                            let age = t.wrapping_sub(wan_leased_at);
+                                            let lease = up.dhcp.lease as u64 * freq;
+                                            match uplink::wan_renew_take() {
+                                                5 => {
+                                                    wan_leased_at = t;
+                                                    wan_renewals += 1;
+                                                }
+                                                r if r == 6 || age > lease / 8 * 7 => {
+                                                    rtwdog::pet(now(), freq);
+                                                    let mut again = uplink::UplinkResult::new(Nic::End0);
+                                                    uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
+                                                    if again.usable() {
+                                                        up = again;
+                                                        wan_renewals += 1;
+                                                    }
+                                                    wan_leased_at = t; // either way, don't retry in a tight loop
+                                                }
+                                                _ if age > lease / 2 => uplink::wan_renew_tick(&up),
+                                                _ => {}
                                             }
-                                            wan_leased_at = t; // either way, don't retry in a tight loop
                                         }
                                     }
                                     // eth1 LAN port: serve DHCP/ARP from the same lease table and forward through
@@ -4720,6 +4736,8 @@ fn cm5_p10_probe() {
                                         {
                                             let (wa, wp, wg, wr) = rtwdog::stats(freq);
                                             kprint!("   [WDOG] armed={} pets={} worst_loop_gap_ms={} prev_reset_was_watchdog={}\n", wa, wp, wg, wr);
+                                            let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
+                                            kprint!("   [WAN renew] in-loop DHCP renewal: requests={} acks={} naks={} (full re-bring-ups counted in renewals=)\n", rq, ra, rn);
                                         }
                                         {
                                             let (q, b, by) = shield::totals();
