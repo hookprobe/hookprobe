@@ -1,0 +1,26 @@
+# ML-KEM: the matrix A is sampled by rejection from rho, which is PUBLIC (it is part of the encapsulation key)
+# but derived from the secret seed d, so memcheck sees it as tainted. Only these two functions are excused.
+{
+   rho-matrix-cond
+   Memcheck:Cond
+   ...
+   fun:*matrix_sample_ntt*
+}
+{
+   rho-matrix-value8
+   Memcheck:Value8
+   ...
+   fun:*matrix_sample_ntt*
+}
+{
+   rho-rej-cond
+   Memcheck:Cond
+   ...
+   fun:*rej_uniform*
+}
+{
+   rho-rej-value8
+   Memcheck:Value8
+   ...
+   fun:*rej_uniform*
+}

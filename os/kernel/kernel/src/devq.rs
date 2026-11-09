@@ -353,12 +353,12 @@ impl NetClass {
         // the cookie (defense in depth: address and identity must agree).
         let off = d.io_or_off;
         let bufsz = NET_BUFSZ as u64;
-        if off % bufsz != 0 || off >= self.data_len || off != (cookie as u64) * bufsz {
+        if !off.is_multiple_of(bufsz) || off >= self.data_len || off != (cookie as u64) * bufsz {
             return Err(Violation::Offset);
         }
         // V4 — length sane (0xFFFF and 0 both rejected here).
         let len = d.len as usize;
-        if len < NET_MIN || len > NET_BUFSZ {
+        if !(NET_MIN..=NET_BUFSZ).contains(&len) {
             return Err(Violation::Len);
         }
         // V4 — no unknown flag bits.

@@ -158,12 +158,39 @@ fn get_u32(buf: &[u8], off: usize) -> u32 {
 }
 
 /// Per-seal CTR nonce (AUD-STO-1). MUST be unique per (key, seal) or the keystream
-/// repeats. Within a boot this is guaranteed: a strictly-monotonic counter is the
-/// high entropy and the cycle counter the low, expanded through SHA-256. Cross-boot
-/// uniqueness needs a hardware-TRNG seed or a persistent monotonic sequence — both
-/// part of the deferred HBoot SealHandoff (SEALED_STORAGE.md). Until then per-boot
-/// uniqueness holds, which closes the exploitable case: two assets sealed under one
-/// policy in the same session no longer share a keystream.
+/// repeats. Within a boot: a strictly-monotonic counter + the cycle counter, through SHA-256.
+/// ACROSS boots (2026-11-09, BOI review A6.6): the counter restarts at 0 and the cycle counter
+/// restarts too, so a snapshot sealed at the same point after two boots could reuse a nonce under
+/// the same SRK-derived key — CTR keystream reuse. Every nonce now also absorbs a per-boot 32-byte
+/// salt drawn once from the hardware TRNG (BCM2712 RNG200, strict/health-checked). If the TRNG is
+/// unavailable the draw is retried on the next seal (the nonce is still unique within the boot).
+/// QEMU has no TRNG: there the old within-boot guarantee is what holds.
+fn boot_salt() -> Option<[u8; 32]> {
+    use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    static SET: AtomicBool = AtomicBool::new(false);
+    static W: [AtomicU64; 4] = [const { AtomicU64::new(0) }; 4];
+    if !SET.load(Ordering::Acquire) {
+        #[cfg(feature = "cm5")]
+        {
+            let mut w = [0u64; 4];
+            for x in w.iter_mut() {
+                *x = arch_aarch64::rng200::next_word_strict()?;
+            }
+            for (a, v) in W.iter().zip(w) {
+                a.store(v, Ordering::Relaxed);
+            }
+            SET.store(true, Ordering::Release);
+        }
+        #[cfg(not(feature = "cm5"))]
+        return None;
+    }
+    let mut s = [0u8; 32];
+    for (i, a) in W.iter().enumerate() {
+        s[i * 8..i * 8 + 8].copy_from_slice(&a.load(Ordering::Relaxed).to_le_bytes());
+    }
+    Some(s)
+}
+
 fn gen_nonce() -> [u8; NONCE_LEN] {
     use core::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
@@ -174,6 +201,9 @@ fn gen_nonce() -> [u8; NONCE_LEN] {
     }
     let mut h = Hasher::new();
     h.update(b"HQKSEAL1-nonce");
+    if let Some(salt) = boot_salt() {
+        h.update(&salt);
+    }
     h.update(&seq.to_le_bytes());
     h.update(&t.to_le_bytes());
     let d = h.finish();

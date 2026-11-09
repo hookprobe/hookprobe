@@ -1,0 +1,42 @@
+[package]
+name = "heqk-hal-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+hal = { path = "../../../os/kernel/hal" }
+
+[workspace]
+
+[[bin]]
+name = "policy"
+path = "fuzz_targets/policy.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wan_cfg"
+path = "fuzz_targets/wan_cfg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_facts"
+path = "fuzz_targets/frame_facts.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "glom"
+path = "fuzz_targets/glom.rs"
+test = false
+doc = false
+bench = false

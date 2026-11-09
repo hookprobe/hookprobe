@@ -16,7 +16,7 @@ Report privately via one of:
 - **Email** — `security@hookprobe.com` *(operator: confirm/replace this address before publishing).*
   Encrypt sensitive reports with our published PGP key when available.
 
-Please include: affected component (OS image, a specific module, `builder/`, a Wasm module),
+Please include: affected component (the heqk image, a kernel subsystem, `os/build/`, a Wasm module, or legacy `builder/`),
 version / image digest, a description, reproduction steps or a PoC, and impact. Treat all
 correspondence as **TLP:RED** until we jointly agree otherwise.
 
@@ -36,9 +36,10 @@ components we consume are reported upstream on the maintainers' terms.
 
 ## Scope
 
-**In scope:** the HookProbe OS image (`base/`), the modules (`modules/*`), the supervisor and
-reconciler (`supervisor/`, `crates/`), the build & signing pipeline (`builder/`), and the
-Platform Manifest / trust model. Privilege boundaries (eBPF/XDP loaders, the Wasm sandbox), the
+**In scope:** the heqk kernel and image (`os/kernel/`), Mission Control as served by heqk
+(`os/mission-control/`), the build & signing pipeline (`os/build/`), and the trust model. The
+legacy Linux tier (`legacy/linux-tier/`: `base/`, `modules/*`, `crates/`, `builder/`) still
+receives security fixes (ADR 0047). Privilege boundaries (eBPF/XDP loaders, the Wasm sandbox), the
 signing/trust store, the anti-spoof enforcement path, and data-at-rest are especially in scope.
 
 **Out of scope:** issues that require an already-compromised host with root; theoretical findings
@@ -49,17 +50,21 @@ warranted, a mitigation ahead of the upstream fix).
 ## Supported versions
 
 The current release channel and the most recent prior release receive security fixes. Standalone
-devices update transactionally with rollback (bootc `upgrade`/`rollback` on UEFI platforms; A/B
-image-sync on Raspberry-Pi-native platforms — see ADR 0019).
+devices update transactionally with rollback: heqk uses A/B `tryboot` slots verified by `hboot`
+(legacy Linux tier: bootc `upgrade`/`rollback` on UEFI, A/B image-sync on Pi — ADR 0019).
 
 ## Our security posture (what we already do)
 
-- **Trust nothing unsigned.** OS images, Wasm modules, and manifests are cosign-signed; module
-  signing is **hybrid ML-DSA-65 + Ed25519**, fail-closed with no downgrade (ADR 0016/0017).
-- **SBOM + CBOM per image**, SLSA provenance; crypto-agile / PQC-ready posture (ADR 0002) — the
-  CBOM reports implemented-vs-roadmap honestly.
-- **A gate ladder** (`builder/gate-ladder.sh`) enforces tests, clippy, unit-lint, artifact-digest
-  signing, provenance, and a behavioral-separation matrix on every build.
+- **Trust nothing unsigned.** heqk boot images are signed **hybrid Ed25519 + SLH-DSA-SHA2-128s**
+  (`os/build/heqk-sign`) and verified fail-closed by `hboot` against the trust root in
+  `os/kernel/boot-abi/src/verify.rs`. The control channel is Noise IK with an ML-KEM-768 hybrid,
+  and Mission Control HTTPS offers TLS `X25519MLKEM768`. (Legacy Linux tier: cosign image signing,
+  hybrid ML-DSA-65 + Ed25519 module signing, ADR 0016/0017.)
+- **CBOM per image**; crypto-agile / PQC posture (ADR 0002) — the CBOM reports
+  implemented-vs-roadmap honestly.
+- **Gates:** `os/kernel/validate.sh` (QEMU phase gates) and `os/kernel/tools/mc-e2e.sh`
+  (Mission Control API + browser) on every change, then CM5 metal. (Legacy Linux tier:
+  `builder/gate-ladder.sh`.)
 - **Behavioral, on-device enforcement** that catches exploitation regardless of patch status —
   the layer that defends the window between a vulnerability's disclosure and its fix reaching the
   device.

@@ -92,6 +92,9 @@ pub struct V6Lan {
     pub gua: [u8; 16],
     pub dns: [u8; 16],
     pub has_dns: bool,
+    /// MTU advertised to clients: 1492 under PPPoE (the default), the router's RA MTU or 1500 on an
+    /// Ethernet WAN (G17.2) — set by the caller before `configure`.
+    pub mtu: u32,
     /// Prefix lifetimes advertised to clients (bounded by the delegation).
     valid: u32,
     preferred: u32,
@@ -148,6 +151,7 @@ impl V6Lan {
             gua: [0; 16],
             dns: [0; 16],
             has_dns: false,
+            mtu: LAN_MTU,
             valid: 0,
             preferred: 0,
             neigh: [Neigh { ip: [0; 16], mac: [0; 6], seen: 0 }; NEIGH_N],
@@ -240,6 +244,11 @@ impl V6Lan {
 
     /// A station left (deauth / disassoc): release its address bindings (re-review M1 — a client that
     /// re-joins with a new private MAC must not be refused its own address for 30 min).
+    /// The MAC of the LAN station that holds `ip` (SAVI binding table), if known — ADR 0049 D2 device key.
+    pub fn mac_of(&self, ip: &[u8; 16]) -> Option<[u8; 6]> {
+        self.neigh.iter().find(|n| n.ip == *ip && n.mac != [0; 6]).map(|n| n.mac)
+    }
+
     pub fn forget_mac(&mut self, mac: &[u8; 6]) {
         for n in self.neigh.iter_mut() {
             if n.mac == *mac {
@@ -356,7 +365,7 @@ impl V6Lan {
         // MTU
         r[k] = 5;
         r[k + 1] = 1;
-        r[k + 4..k + 8].copy_from_slice(&LAN_MTU.to_be_bytes());
+        r[k + 4..k + 8].copy_from_slice(&self.mtu.to_be_bytes());
         k += 8;
         if has_dns {
             r[k] = 25; // RDNSS

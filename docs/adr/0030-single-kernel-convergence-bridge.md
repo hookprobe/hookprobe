@@ -3,6 +3,7 @@
 > ⛔ **Superseded on the rpi-native tier by [ADR 0043](0043-heqk-microkernel-substrate.md) (2026-07-24).** The "converge to one Linux kernel" goal is replaced by "there is no Linux kernel." Its D4 boot-seam prediction — `config.txt kernel=` can point at any image — is fulfilled by `heqk8.img`.
 
 **Status:** 🟡 Proposed (2026-07-08) — refines and *keeps* ADR 0029; adds three build-time gates, a faster-CM5 bring-up path, a CM5 performance tuning set, and makes the Pi fat-boot an explicit, low-risk **bridge** to a single mainline arm64 kernel. Does not reopen ADR 0029's ship decision.
+**Status update 2026-11-09:** ⛔ **Superseded (by ADR 0043/0047).** This Linux-kernel boot-substrate design was never ratified; the CM5/Pi tier moved to the heqk microkernel (ADR 0043/0044) and ADR 0047 made heqk the substrate everywhere. Kept as a historical record; the files it names now live under `legacy/linux-tier/` (see `docs/PATHS.md`).
 **Deciders:** os-architect (author), release-engineer, verification-engineer, security-auditor.
 **Relates to:** [ADR 0029](0029-unified-pi-fatboot-dual-kernel.md) (the fat-boot this refines), [ADR 0019](0019-bootc-debian-substrate.md) (boot-model split), [ADR 0017](0017-authenticated-aot-cache.md)/[ADR 0021](0021-multiarch-native-artifact-digests.md) (A76 AOT seam), `platforms/rpi5.yaml`, `docs/architecture/driver-strategy.md`.
 

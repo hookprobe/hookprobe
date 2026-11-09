@@ -77,6 +77,15 @@ pub trait BlockDev {
     fn block_count(&self) -> u64;
     /// Read one 512-byte sector at `lba` into `buf`.
     fn read_block(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), BlockErr>;
+    /// Read `out.len() / 512` consecutive sectors starting at `lba` (a driver may use one multi-block command).
+    /// Default: one `read_block` per sector.
+    fn read_blocks(&self, lba: u64, out: &mut [u8]) -> Result<(), BlockErr> {
+        let (blocks, _) = out.as_chunks_mut::<512>();
+        for (i, c) in blocks.iter_mut().enumerate() {
+            self.read_block(lba + i as u64, c)?;
+        }
+        Ok(())
+    }
     /// Write one 512-byte sector at `lba`. Default: refuse (read-only). An arch
     /// driver only overrides this behind its own `p15-write` feature.
     fn write_block(&mut self, _lba: u64, _buf: &[u8; 512]) -> Result<(), BlockErr> {

@@ -1,0 +1,18 @@
+# Constant-time (ctgrind-style) check of both ML-KEM-768 implementations under valgrind memcheck.
+# Host only:  cargo build --release && valgrind --error-exitcode=9 target/release/kem-ctgrind rc|lc
+[package]
+name = "kem-ctgrind"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+ml-kem = { version = "=0.2.3", default-features = false, features = ["deterministic"] }
+kem = "=0.3.0-pre.0"
+libcrux-ml-kem = { version = "=0.0.11", default-features = false, features = ["mlkem768"] }
+crabgrind = "=0.3.1"
+
+[profile.release]
+debug = true

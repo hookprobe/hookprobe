@@ -57,6 +57,7 @@ pub enum GuardErr {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub enum StoreErr {
     /// Blob does not fit in the reserved window.
     TooBig,
@@ -79,6 +80,7 @@ pub struct Partition {
 /// writable byte on the device belongs to exactly one of these; nothing else is
 /// writable (allowlist, never denylist).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub enum RegionKind {
     /// The 16 KiB sealing-key window in the MBR alignment gap (LBA 2016..2047) —
     /// key material only (the existing P15 keystore).
@@ -280,8 +282,10 @@ pub fn guard_from_mbr(sector: &[u8; 512], capacity: u64) -> Result<LbaGuard, Gua
 /// Slot = 1 commit header + up to AB_SLOT_SECTORS blob sectors.
 pub const AB_SLOTS: [u64; 2] = [2025, 2030];
 pub const AB_SLOT_SECTORS: u64 = 4;
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 const AB_MAGIC: &[u8; 8] = b"HQKSLOT1";
 /// Public digest domain (crash-consistency check, not authentication — the blob is itself sealed).
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 const AB_DOMAIN: &[u8] = b"HQKSLOT1-digest";
 const _: () = assert!(AB_SLOTS[0] + 1 + AB_SLOT_SECTORS <= AB_SLOTS[1] && AB_SLOTS[1] + 1 + AB_SLOT_SECTORS <= 2040);
 
@@ -300,6 +304,7 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
         Ok(SealedStore { dev, guard })
     }
 
+    #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
     pub fn guard(&self) -> &LbaGuard {
         &self.guard
     }
@@ -350,6 +355,7 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
     /// slot go through the store, not the raw device.
     /// Read one slot (header + blob) of the A/B snapshot store. Returns (gen, blob length) when the
     /// header is intact AND the blob read back matches the digest the header committed to.
+    #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
     fn slot_read(&self, hdr_lba: u64, out: &mut [u8]) -> Option<(u64, usize)> {
         let mut h = [0u8; 512];
         self.dev.read_block(hdr_lba, &mut h).ok()?;
@@ -383,12 +389,13 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
     /// Load the newest COMMITTED snapshot from the A/B slots (task #27 F2). Falls back to the legacy
     /// single blob at the window base (`load`) when no slot was ever committed — the one-time migration
     /// of a device persisted by an older image. Returns the blob length.
+    #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
     pub fn load_ab(&self, out: &mut [u8]) -> Option<usize> {
         let mut best: Option<(u64, usize, usize)> = None; // (gen, len, slot)
         let mut tmp = [0u8; AB_SLOT_SECTORS as usize * 512];
         for (k, &h) in AB_SLOTS.iter().enumerate() {
             if let Some((g, n)) = self.slot_read(h, &mut tmp) {
-                if best.map_or(true, |b| g > b.0) {
+                if best.is_none_or(|b| g > b.0) {
                     best = Some((g, n, k));
                 }
             }
@@ -546,4 +553,22 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
         }
         Ok(())
     }
+}
+
+/// Stream `len` bytes starting at sector `lba` to `f`, 16 sectors per device read (one multi-block command on
+/// the eMMC — the signed-pack loaders read megabytes at boot).
+pub fn stream_blocks<D: BlockDev + ?Sized>(dev: &D, lba: u64, len: u64, f: &mut dyn FnMut(&[u8])) -> Option<()> {
+    const CH: usize = 16;
+    let mut buf = [0u8; CH * 512];
+    let mut left = len;
+    let mut k = 0u64;
+    while left > 0 {
+        let nsec = (left.div_ceil(512) as usize).min(CH);
+        dev.read_blocks(lba + k, &mut buf[..nsec * 512]).ok()?;
+        let take = (left as usize).min(nsec * 512);
+        f(&buf[..take]);
+        left -= take as u64;
+        k += nsec as u64;
+    }
+    Some(())
 }

@@ -29,6 +29,15 @@ const DGRAM_CAP: usize = 14 + 20 + 8 + 4 + 1024;
 /// Retransmit interval + attempt cap (bounded — the air-gap invariant as code).
 const RETX_MS: i64 = 500;
 const MAX_ATTEMPTS: u8 = 4;
+/// A transport session lives at most this long, then the device re-handshakes with FRESH ephemerals
+/// (X25519 + ML-KEM from the TRNG) — post-compromise healing + forward secrecy for long uptimes (BOI
+/// review Q1 M2: a key used to live until reboot). Counter-based too: well before the 2^64 nonce wall.
+pub const SESSION_MAX_MS: i64 = 24 * 3600 * 1000;
+pub const SESSION_MAX_RECORDS: u64 = 1 << 32;
+/// A failed handshake (no responder in budget) is retried with capped exponential backoff — it used to
+/// stay Failed until reboot, so an MSSP outage at boot left the device air-gapped for its whole uptime.
+const RETRY_BASE_MS: i64 = 30_000;
+const RETRY_MAX_MS: i64 = 3_600_000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CpState {
@@ -65,6 +74,11 @@ pub struct ControlPlane {
     /// it rather than broadcast across the LAN.
     peer_mac: [u8; 6],
     peer_ip: [u8; 4],
+    established_at_ms: i64,
+    next_try_ms: i64,
+    fails: u32,
+    /// completed sessions retired by the lifetime / record-count rekey
+    pub rekeys: u32,
 }
 
 impl ControlPlane {
@@ -90,6 +104,10 @@ impl ControlPlane {
             tenant: None,
             peer_mac: [0xff; 6],
             peer_ip: [255, 255, 255, 255],
+            established_at_ms: 0,
+            next_try_ms: 0,
+            fails: 0,
+            rekeys: 0,
         }
     }
 
@@ -164,19 +182,53 @@ impl ControlPlane {
         true
     }
 
-    /// Heartbeat driver: start the handshake when link is up; bounded retransmit of msg1.
-    pub fn tick(&mut self, now_ms: i64, link_up: bool, rnd: &InitiatorRandomness) {
+    /// Every failure path: Failed + capped exponential backoff (30 s, 60 s, ... 1 h) before the next attempt.
+    fn fail(&mut self, now_ms: i64) {
+        self.pending = None;
+        self.state = CpState::Failed;
+        self.fails = self.fails.saturating_add(1);
+        let back = RETRY_BASE_MS.saturating_mul(1i64 << (self.fails.min(8) - 1)).min(RETRY_MAX_MS);
+        self.next_try_ms = now_ms + back;
+    }
+
+    /// Heartbeat driver: start a handshake when the link is up (fresh ephemerals from `fresh` — called ONLY
+    /// when a new msg1 is built, never for a retransmit); bounded retransmit of msg1; retry a failed
+    /// handshake with backoff; retire an Established session after SESSION_MAX_MS / SESSION_MAX_RECORDS.
+    pub fn tick(&mut self, now_ms: i64, link_up: bool, fresh: &mut dyn FnMut() -> Option<InitiatorRandomness>) {
         match self.state {
             CpState::Idle => {
-                if link_up && self.start(rnd) {
-                    self.attempts = 1;
-                    self.last_tx_ms = now_ms;
+                if link_up && now_ms >= self.next_try_ms {
+                    match fresh() {
+                        Some(rnd) if self.start(&rnd) => {
+                            self.attempts = 1;
+                            self.last_tx_ms = now_ms;
+                        }
+                        _ => self.next_try_ms = now_ms + RETRY_BASE_MS, // no entropy / build failed: try later
+                    }
+                }
+            }
+            CpState::Failed => {
+                if now_ms >= self.next_try_ms {
+                    self.pending = None;
+                    self.state = CpState::Idle;
+                }
+            }
+            CpState::Established => {
+                let used = self.session.as_ref().map_or(0, |s| s.send.counter().max(s.recv.counter()));
+                if now_ms - self.established_at_ms >= SESSION_MAX_MS || used >= SESSION_MAX_RECORDS {
+                    if let Some(mut s) = self.session.take() {
+                        s.wipe();
+                    }
+                    self.rekeys += 1;
+                    self.state = CpState::Idle;
+                    self.next_try_ms = now_ms;
                 }
             }
             CpState::SentMsg1 => {
                 if now_ms - self.last_tx_ms >= RETX_MS {
                     if self.attempts >= MAX_ATTEMPTS {
-                        self.state = CpState::Failed; // no responder in-budget (air-gap: sensor unaffected)
+                        // no responder in budget (air-gap: the sensor is unaffected) — back off, then retry
+                        self.fail(now_ms);
                     } else {
                         // Retransmit the SAME datagrams (never rebuild msg1 — that orphans pending).
                         self.egress_cursor = 0;
@@ -200,7 +252,7 @@ impl ControlPlane {
     }
 
     /// Feed one teed frame. On a complete msg2 → `initiator_read_msg2` → Established (live Session).
-    pub fn ingress(&mut self, frame: &[u8], _now_ms: i64) {
+    pub fn ingress(&mut self, frame: &[u8], now_ms: i64) {
         if self.state != CpState::SentMsg1 {
             return;
         }
@@ -214,7 +266,7 @@ impl ControlPlane {
                 let ipend = match self.pending.take() {
                     Some(p) => p,
                     None => {
-                        self.state = CpState::Failed;
+                        self.fail(now_ms);
                         return;
                     }
                 };
@@ -230,10 +282,14 @@ impl ControlPlane {
                             self.peer_mac.copy_from_slice(&frame[6..12]);
                             self.peer_ip.copy_from_slice(&frame[26..30]);
                         }
-                        self.session = Some(session);
+                        if let Some(mut old) = self.session.replace(session) {
+                            old.wipe();
+                        }
                         self.state = CpState::Established;
+                        self.established_at_ms = now_ms;
+                        self.fails = 0;
                     }
-                    Err(_) => self.state = CpState::Failed,
+                    Err(_) => self.fail(now_ms), // a rejected msg2: back off too (never a tight re-handshake loop)
                 }
             }
             Ok(None) => {} // more datagrams expected
@@ -283,8 +339,9 @@ pub fn cp_selftest() {
     let resp_mac = [0x02u8, 0, 0, 0, 0, 0x03];
     let mut cp = ControlPlane::new(resp_pub, tv.dev, cp_mac, [10, 200, 0, 2]);
 
-    // (1) start → msg1 chunked into egress datagrams.
-    cp.tick(0, true, &tv.irand);
+    // (1) start → msg1 chunked into egress datagrams. (`fresh` hands out the test randomness once.)
+    let mut first = Some(tv.irand);
+    cp.tick(0, true, &mut || first.take());
     let started = cp.state() == CpState::SentMsg1;
 
     // (2) drain cp's msg1 datagrams → the responder reassembles the ~2480 B msg1.
@@ -334,7 +391,66 @@ pub fn cp_selftest() {
         (false, false)
     };
 
-    let pass = started && msg1_complete && msg2_ok.0 && msg2_ok.1;
-    kprint!(" [P19-controlplane] {} — smoltcp-FREE hand-framed Noise handshake over the single-drain transport: msg1-chunked({} dgrams)+started={} responder-reassembled-msg1={} Established={} crossed-keys-match+tenant/peer-learned={}\n",
-        yn(pass), msg1_dgrams, yn(started), yn(msg1_complete), yn(msg2_ok.0), yn(msg2_ok.1));
+    // (7) REKEY: the session is retired at SESSION_MAX_MS (key wiped) and a SECOND handshake runs with FRESH
+    //     ephemerals, giving different transport keys. (8) BACKOFF: an unanswered handshake fails, waits,
+    //     and is retried — it used to stay Failed until reboot.
+    let k1 = cp.session_mut().map(|s| s.send.key_for_test());
+    let t_day = SESSION_MAX_MS + 1;
+    cp.tick(t_day, true, &mut || None); // retire: Established -> Idle (no new msg1 in this tick)
+    let retired = cp.state() == CpState::Idle && cp.session_mut().is_none() && cp.rekeys == 1;
+    let irand2 = crate::securechannel::InitiatorRandomness::from_test_seeds(
+        boot_abi::sha256::digest(b"HEQK-rekey-eph-x25519"),
+        boot_abi::sha256::digest(b"HEQK-rekey-eph-mlkem-d"),
+        boot_abi::sha256::digest(b"HEQK-rekey-eph-mlkem-z"),
+        boot_abi::sha256::digest(b"HEQK-rekey-encaps-es-m"),
+    );
+    let mut second = Some(irand2);
+    cp.tick(t_day, true, &mut || second.take());
+    let mut r2 = HsReasm::new();
+    let mut m1 = false;
+    while let Some((dg, n)) = cp.poll_egress() {
+        if let Some(framed) = udp_payload_for_port(&dg[..n], HS_PORT) {
+            if let Ok(Some(_)) = r2.feed(framed) {
+                m1 = true;
+            }
+        }
+    }
+    let mut rekeyed = false;
+    if m1 {
+        if let Ok(rpend) = responder_read_msg1(&tv.resp, &dev_pk, r2.message()) {
+            if let Some((msg2, rs)) = responder_write_msg2(rpend, &tv.rrand, &0x5445_4E41u64.to_le_bytes()) {
+                hs_chunk(msg2.as_slice(), |framed| {
+                    let mut dg = [0u8; DGRAM_CAP];
+                    let n = build_hs_datagram(resp_mac, [10, 200, 0, 1], cp_mac, [10, 200, 0, 2], HS_PORT, framed, &mut dg);
+                    cp.ingress(&dg[..n], t_day + 10);
+                    true
+                });
+                rekeyed = cp.established()
+                    && cp.session_mut().map_or(false, |s| Some(s.send.key_for_test()) != k1 && s.send.key_for_test() == rs.recv.key_for_test());
+            }
+        }
+    }
+    // backoff: a third handshake nobody answers -> Failed after MAX_ATTEMPTS, no retry before 30 s, retry after
+    let t3 = t_day + 2 * SESSION_MAX_MS;
+    cp.tick(t3, true, &mut || None); // retire session 2
+    let mut third = Some(crate::securechannel::InitiatorRandomness::from_test_seeds(
+        boot_abi::sha256::digest(b"HEQK-b-x"), boot_abi::sha256::digest(b"HEQK-b-d"),
+        boot_abi::sha256::digest(b"HEQK-b-z"), boot_abi::sha256::digest(b"HEQK-b-m"),
+    ));
+    cp.tick(t3, true, &mut || third.take());
+    let mut t = t3;
+    for _ in 0..MAX_ATTEMPTS + 1 {
+        t += RETX_MS;
+        cp.tick(t, true, &mut || None);
+    }
+    let failed = cp.state() == CpState::Failed;
+    cp.tick(t + 1_000, true, &mut || None);
+    let held = cp.state() == CpState::Failed; // still backing off
+    cp.tick(t + RETRY_BASE_MS + 1, true, &mut || None);
+    let retried = cp.state() == CpState::Idle; // ready to try again (a fresh draw on the next tick)
+    let lifecycle = retired && rekeyed && failed && held && retried;
+
+    let pass = started && msg1_complete && msg2_ok.0 && msg2_ok.1 && lifecycle;
+    kprint!(" [P19-controlplane] {} — smoltcp-FREE hand-framed Noise handshake over the single-drain transport: msg1-chunked({} dgrams)+started={} responder-reassembled-msg1={} Established={} crossed-keys-match+tenant/peer-learned={} | session lifecycle: retired at 24 h with key wiped={} re-handshake with FRESH ephemerals -> new keys={} unanswered handshake fails={} backs off={} retries={}\n",
+        yn(pass), msg1_dgrams, yn(started), yn(msg1_complete), yn(msg2_ok.0), yn(msg2_ok.1), yn(retired), yn(rekeyed), yn(failed), yn(held), yn(retried));
 }

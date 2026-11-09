@@ -21,6 +21,8 @@ updates:
       - "/os/kernel/efiboot"
       - "/os/build/heqk-sign"
       - "/onboarding/enrollment/responder-sim"
+      - "/os/build/kem-diff"
+      - "/os/build/kem-diff/nostd-check"
     schedule: { interval: "weekly", day: "monday" }
     labels: ["dependencies", "rust"]
     commit-message: { prefix: "chore(deps)", include: "scope" }

@@ -1,0 +1,16 @@
+# ctgrind-style constant-time check of P-256 ECDSA signing (p256 0.13.2 — the device TLS key in tlsprov).
+# Host only: cargo build --release && valgrind --error-exitcode=9 target/release/p256-ctgrind
+[package]
+name = "p256-ctgrind"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+p256 = { version = "=0.13.2", default-features = false, features = ["ecdsa", "alloc"] }
+crabgrind = "=0.3.1"
+
+[profile.release]
+debug = true

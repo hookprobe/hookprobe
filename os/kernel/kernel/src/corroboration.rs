@@ -44,9 +44,9 @@ pub const AXIS_DNS: u32 = 1 << 5;
 /// that is acceptable BECAUSE the only consequence is a higher-severity SOC alert.
 pub const CORR_CRITICAL_AXES: u32 = 3;
 
-/// Per-source slots (direct-mapped, window-reset, collision-evict). 16 mirrors
-/// `ratelimit::FLOW_SRCS`.
-const CORR_SRCS: usize = 16;
+/// Per-source slots (hashed, window-reset, collision-evict). 64 mirrors `ratelimit::FLOW_SRCS` (was 16: fewer
+/// slots than devices on a home LAN).
+const CORR_SRCS: usize = 64;
 
 /// The corroboration window — deliberately long enough to span the SLOW axes (a beacon
 /// needs 6 intervals x >=8 s; the lateral window is 300 s), so genuinely related signals
@@ -76,7 +76,7 @@ fn cntfrq() -> u64 {
 /// axes are never counted against another's), mirroring `ratelimit::touch_scan_slot`.
 #[inline]
 fn touch_corr_slot(src: u64) -> usize {
-    let s = (src as usize) % CORR_SRCS;
+    let s = crate::ratelimit::slot(src, CORR_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(CORR_WINDOW_SECS);
     let start = CORR_WIN[s].load(Ordering::Relaxed);
@@ -106,7 +106,7 @@ pub fn corr_axes(src: u64) -> u32 {
     if src == 0 {
         return 0;
     }
-    let s = (src as usize) % CORR_SRCS;
+    let s = crate::ratelimit::slot(src, CORR_SRCS);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(CORR_WINDOW_SECS);
     if CORR_SRC[s].load(Ordering::Relaxed) == src
