@@ -415,7 +415,25 @@ class SynapticController:
             ttl_seconds=ttl_seconds,
             reason=reason,
         ))
+        self._record_mirror_block(ip, ttl_seconds, reason)
         return True
+
+    def _record_mirror_block(self, ip: str, ttl_seconds: int, reason: str) -> None:
+        """Persist the block to hydra_blocks (source='cno_mirror').
+
+        The TTL dict above is in-memory: an organism restart lost it, so those
+        entries were never evicted and piled up in the mirror-path blocklist.
+        Recording them lets feed_sync reconcile/expire the mirror map across
+        restarts. 'cno_mirror' is deliberately NOT a WAN (sw_blocklist) source:
+        CNO blocks stay detection-path only, exactly as before. Best effort,
+        off the hot path.
+        """
+        safe_reason = re.sub(r"[^A-Za-z0-9 _.:/,()-]", "", str(reason))[:200]
+        sql = (f"INSERT INTO {CH_DB}.hydra_blocks "
+               f"(timestamp, src_ip, duration_seconds, reason, source, auto_expired, event_count) "
+               f"VALUES (now64(3), IPv4StringToNum('{ip}'), {int(ttl_seconds)}, "
+               f"'{safe_reason}', 'cno_mirror', 0, 0)")
+        threading.Thread(target=_ch_post, args=(sql,), daemon=True).start()
 
     def _evict_expired_blocklist(self) -> int:
         """Remove expired IPs from the XDP blocklist.

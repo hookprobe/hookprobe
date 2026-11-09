@@ -70,10 +70,12 @@ DOH_RESOLVER_IPS = {
 # and other threat-scoring services. See hydra/trusted_networks.py.
 try:
     from hydra.trusted_networks import TRUSTED_NETWORKS  # type: ignore[import]
+    from hydra.trusted_networks import dynamic_trusted_networks  # type: ignore[import]
 except ImportError:
     # Container may not have sibling hydra package on sys.path; try core.*
     try:
         from core.hydra.trusted_networks import TRUSTED_NETWORKS  # type: ignore[import]
+        from core.hydra.trusted_networks import dynamic_trusted_networks  # type: ignore[import]
     except ImportError:
         # Last-resort inline fallback — keep in sync with trusted_networks.py.
         # Used only if the shared module isn't on PYTHONPATH (dev/test).
@@ -147,11 +149,20 @@ def _refresh_sentinel_cache():
 _build_trusted_ips()
 _refresh_sentinel_cache()
 
+if 'dynamic_trusted_networks' not in globals():
+    def dynamic_trusted_networks():  # noqa: E301 — dev/test fallback
+        return ()
+
+
 def is_trusted_source(ip_str: str) -> bool:
     """Check if an IP belongs to a trusted network, known infrastructure, or SENTINEL benign cache."""
     try:
         addr = ipaddress.ip_address(ip_str)
         if addr in TRUSTED_IPS:
+            return True
+        # Operator dynamic trust (recent successful SSH logins) — see
+        # hydra/trusted_networks.py DYNAMIC_TRUST_FILE.
+        if any(addr in net for net in dynamic_trusted_networks()):
             return True
         if addr in SENTINEL_BENIGN_IPS:
             return True
@@ -315,6 +326,43 @@ def classify_port(port: int) -> str:
         return 'htp'
     else:
         return 'other'
+
+
+# Ports on which THIS host (or typical peers) act as the server side. Used to
+# orient flows whose first observed packet is not a TCP SYN (mid-flow pickup,
+# UDP, inspector restart).
+SERVICE_PORTS = frozenset({
+    22, 53, 80, 123, 443, 500, 3478, 4500, 5432, 6379, 8000, 8080, 8123,
+    8144, 8443, 8766, 9443,
+})
+
+
+def flow_key(src, dst, sp, dp, proto):
+    """Direction-independent key so both halves of a conversation match."""
+    if (src, sp) <= (dst, dp):
+        return (src, dst, sp, dp, proto)
+    return (dst, src, dp, sp, proto)
+
+
+def _is_service_port(port: int) -> bool:
+    return 0 < port < 1024 or port in SERVICE_PORTS
+
+
+def sender_is_originator(pkt: dict) -> bool:
+    """True if the sender of this (first-seen) packet initiated the flow."""
+    if pkt['proto'] == PROTO_TCP:
+        flags = pkt.get('tcp_flags', 0)
+        if flags & 0x02:                 # SYN present
+            return not (flags & 0x10)    # SYN → initiator; SYN-ACK → responder
+    sp, dp = pkt['src_port'], pkt['dst_port']
+    s_svc, d_svc = _is_service_port(sp), _is_service_port(dp)
+    if d_svc and not s_svc:
+        return True
+    if s_svc and not d_svc:
+        return False
+    if s_svc and d_svc and sp != dp:
+        return dp < sp                   # lower well-known port is the server
+    return True                          # no signal: first sender initiated
 
 
 class FlowEntry:
@@ -580,22 +628,22 @@ class PacketInspector:
         dp = pkt['dst_port']
         proto = pkt['proto']
 
-        # Canonical flow key (lower IP first for bidirectional matching)
-        if (src, sp) <= (dst, dp):
-            key = (src, dst, sp, dp, proto)
-            is_orig = True
-        else:
-            key = (dst, src, dp, sp, proto)
-            is_orig = False
-
+        key = flow_key(src, dst, sp, dp, proto)
         now = time.time()
 
         if key not in self.flows:
-            if is_orig:
+            # Orient the flow by who INITIATED it. The old code oriented by a
+            # lexicographic string compare of (ip, port), so "10.0.1.110"
+            # (this host) was recorded as src of nearly every inbound flow
+            # and every external scanner/brute-forcer landed in dst_ip —
+            # invisible to every `GROUP BY src_ip` consumer downstream.
+            if sender_is_originator(pkt):
                 self.flows[key] = FlowEntry(src, dst, sp, dp, proto)
             else:
                 self.flows[key] = FlowEntry(dst, src, dp, sp, proto)
 
+        flow = self.flows[key]
+        is_orig = (src == flow.src_ip and sp == flow.src_port)
         flow = self.flows[key]
         flow.last_seen = now
 
@@ -1057,10 +1105,7 @@ class PacketInspector:
                         # Update flow intent (highest severity wins)
                         src, dst = pkt['src_ip'], pkt['dst_ip']
                         sp, dp = pkt['src_port'], pkt['dst_port']
-                        if (src, sp) <= (dst, dp):
-                            fkey = (src, dst, sp, dp, pkt['proto'])
-                        else:
-                            fkey = (dst, src, dp, sp, pkt['proto'])
+                        fkey = flow_key(src, dst, sp, dp, pkt['proto'])
                         if fkey in self.flows:
                             flow = self.flows[fkey]
                             # Lower severity number = more critical
