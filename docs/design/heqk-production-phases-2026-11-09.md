@@ -54,3 +54,9 @@ QR, self-test log), factory reset, an RTC (wall clock without a network), and th
 
 ## Status log
 - 2026-11-09: plan written; G0 steps 3b (`client6`), 3c (`station_relay`) and eth1 → `client4` built.
+- 2026-11-10: Phase 1 steps 1a–1e built and QEMU-gated (`[P-otaverify]` shared verifier at HBoot's bound +
+  streaming `verify_digest`; `[P-abslot]` driver-derived inactive-slot admission; `[P15-otaimg]` os_image
+  upload → slot B, refusals, trial classification and commit-on-health with 5-min fallback); metal pending.
+  Phase 3a runtime watchdog (`[P-rtwdog]`, HBoot `hvc #3`) metal-armed (worst loop gap 330 ms). UI embedded
+  gzip (payload 3.16 MB → 2.52 MB). HBoot OTP burn gated behind `otp-provision`. Audit:
+  `heqk-audit-2026-11-10.md`.
