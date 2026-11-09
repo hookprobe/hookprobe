@@ -494,8 +494,8 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
     /// allowlist is the sole gate; the eMMC driver (metal) admits only the reserved KEYSTORE
     /// window [2016,2048) and the registered DataVolume, each with its own narrowing-only
     /// window per driver instance (`Emmc::arm_write_window`) — an InactiveSlot/OTA write on
-    /// real eMMC is still refused (`BlockErr::WriteRefused`, Phase 1b of
-    /// docs/design/heqk-production-phases-2026-11-09.md), surfaced as the DISTINCT
+    /// real eMMC is still refused (`BlockErr::WriteRefused`, Phase 1b of the
+    /// production phases plan in the repository-root design docs), surfaced as the DISTINCT
     /// `StoreErr::WindowEscape`, never a generic `Io` fault. Read-back verified on success.
     #[cfg(feature = "p15-write")]
     pub fn store_sector(&mut self, lba: u64, buf: &[u8; 512]) -> Result<RegionKind, StoreErr> {
