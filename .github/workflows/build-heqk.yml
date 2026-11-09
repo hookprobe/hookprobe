@@ -160,7 +160,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: os/kernel
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
       - name: Install qemu + FAT tools
