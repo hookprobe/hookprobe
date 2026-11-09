@@ -3746,6 +3746,7 @@ fn cm5_p10_probe() {
                         #[cfg(feature = "mcserve")]
                         let (mut siem_cursor, mut siem_sent, mut siem_lost, mut siem_unrouted): (Option<u64>, u32, u32, u32) = (None, 0, 0, 0);
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
+                        let mut last_ev_drain = now();
                         // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
                         let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
                         // OS-image update (production phase 1): after an activation, give the HTTP
@@ -4491,7 +4492,10 @@ fn cm5_p10_probe() {
                                         stall_since = t;
                                         stall_reported = false;
                                     }
-                                    if t.wrapping_sub(last_beat) > 5 * freq {
+                                    // Phase 3g: drain the detection ring when a quarter full or every 250 ms (was: only in the
+                                    // 5-s heartbeat — a burst from many sources overran the 64-slot ring and lost evidence).
+                                    if events::pending() >= events::CAPACITY / 4 || t.wrapping_sub(last_ev_drain) > freq / 4 {
+                                        last_ev_drain = t;
                                         // Which rules dropped: drain the SOAR ring (nobody else does in apmode).
                                         loop {
                                             let k = events::drain(&mut evs);
@@ -4524,6 +4528,8 @@ fn cm5_p10_probe() {
                                                 let _ = placed;
                                             }
                                         }
+                                    }
+                                    if t.wrapping_sub(last_beat) > 5 * freq {
                                         {
                                             beat_n += 1;
                                             if beat_n == 2 || beat_n % 12 == 6 {
@@ -4738,6 +4744,7 @@ fn cm5_p10_probe() {
                                             kprint!("   [WDOG] armed={} pets={} worst_loop_gap_ms={} prev_reset_was_watchdog={}\n", wa, wp, wg, wr);
                                             let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
                                             kprint!("   [WAN renew] in-loop DHCP renewal: requests={} acks={} naks={} (full re-bring-ups counted in renewals=)\n", rq, ra, rn);
+                                            kprint!("   [EVENTS] detection ring overruns={} (evidence lost before the drain; should stay 0)\n", events::overruns());
                                         }
                                         {
                                             let (q, b, by) = shield::totals();
