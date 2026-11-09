@@ -13,7 +13,11 @@
 
 use hal::{inet_csum, pseudo_sum};
 
-const N: usize = 256;
+/// Concurrent IPv4 mappings (audit 2026-11-10 A7: a household's phones, TVs and IoT easily hold more than
+/// the old 256 flows; the forward lookup is hashed, so the size no longer costs per-packet time).
+const N: usize = 4096;
+/// Forward index: open addressing over `HN` buckets (load <= 50 %), value = entry index + 1 (0 = empty).
+const HN: usize = 2 * N;
 /// First outside port / ICMP id; entry `i` owns `EXT_BASE + i`.
 pub const EXT_BASE: u16 = 40000;
 /// Largest ethernet frame the WiFi data path can SEND to a station: one byte-mode CMD53
@@ -70,6 +74,80 @@ struct Entry {
 }
 const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: 0, dport: 0, bytes_out: 0, bytes_in: 0 };
 static mut TABLE: [Entry; N] = [EMPTY; N];
+static mut HIDX: [u16; HN] = [0; HN];
+
+#[inline]
+fn hkey(proto: u8, in_ip: &[u8; 4], in_port: u16) -> usize {
+    let mut x = (proto as u64) << 48 | (in_port as u64) << 32 | u32::from_be_bytes(*in_ip) as u64;
+    // splitmix64 finalizer: every key bit reaches the bucket (see ratelimit::slot)
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    (x as usize) & (HN - 1)
+}
+
+/// The entry index for a key, through the hash index (O(1) expected).
+fn index_find(t: &[Entry; N], proto: u8, in_ip: &[u8; 4], in_port: u16) -> Option<usize> {
+    let h = unsafe { &*core::ptr::addr_of!(HIDX) };
+    let mut b = hkey(proto, in_ip, in_port);
+    for _ in 0..HN {
+        let v = h[b];
+        if v == 0 {
+            return None;
+        }
+        let i = v as usize - 1;
+        let e = &t[i];
+        if e.used && e.proto == proto && e.in_ip == *in_ip && e.in_port == in_port {
+            return Some(i);
+        }
+        b = (b + 1) & (HN - 1);
+    }
+    None
+}
+
+fn index_insert(proto: u8, in_ip: &[u8; 4], in_port: u16, i: usize) {
+    let h = unsafe { &mut *core::ptr::addr_of_mut!(HIDX) };
+    let mut b = hkey(proto, in_ip, in_port);
+    while h[b] != 0 {
+        b = (b + 1) & (HN - 1);
+    }
+    h[b] = (i + 1) as u16;
+}
+
+/// Remove entry `i` (whose key is in `t[i]`) from the index — backward-shift deletion, no tombstones.
+fn index_remove(t: &[Entry; N], i: usize) {
+    let h = unsafe { &mut *core::ptr::addr_of_mut!(HIDX) };
+    let e = &t[i];
+    let mut b = hkey(e.proto, &e.in_ip, e.in_port);
+    let mut n = 0;
+    while h[b] != (i + 1) as u16 {
+        if h[b] == 0 || n == HN {
+            return; // not indexed
+        }
+        b = (b + 1) & (HN - 1);
+        n += 1;
+    }
+    let mut hole = b;
+    let mut j = (hole + 1) & (HN - 1);
+    loop {
+        let v = h[j];
+        if v == 0 {
+            break;
+        }
+        let k = &t[v as usize - 1];
+        let home = hkey(k.proto, &k.in_ip, k.in_port);
+        // move j back into the hole unless its home lies cyclically in (hole, j]
+        let in_range = if hole <= j { home > hole && home <= j } else { home > hole || home <= j };
+        if !in_range {
+            h[hole] = v;
+            hole = j;
+        }
+        j = (j + 1) & (HN - 1);
+    }
+    h[hole] = 0;
+}
 
 #[derive(Default)]
 pub struct NatStats {
@@ -108,25 +186,28 @@ fn timeout(proto: u8) -> u64 {
 /// Find or allocate the entry for (proto, in_ip, in_port). Returns the index.
 fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_port: u16, now: u64, st: &mut NatStats) -> usize {
     let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
+    if let Some(i) = index_find(t, proto, in_ip, in_port) {
+        t[i].last = now;
+        t[i].in_mac = *in_mac;
+        t[i].in_if = in_if;
+        return i;
+    }
+    // A NEW flow (once per mapping, not per packet): a free or expired slot, else the least recently used.
     let mut free: Option<usize> = None;
     let mut oldest = (0usize, u64::MAX);
     for i in 0..N {
         let e = &t[i];
         if e.used {
-            if e.proto == proto && e.in_ip == *in_ip && e.in_port == in_port {
-                t[i].last = now;
-                t[i].in_mac = *in_mac;
-                t[i].in_if = in_if;
-                return i;
-            }
-            if now.wrapping_sub(e.last) > timeout(e.proto) && free.is_none() {
+            if now.wrapping_sub(e.last) > timeout(e.proto) {
                 free = Some(i); // expired — reusable
+                break;
             }
             if e.last < oldest.1 {
                 oldest = (i, e.last);
             }
-        } else if free.is_none() {
+        } else {
             free = Some(i);
+            break;
         }
     }
     let i = match free {
@@ -136,7 +217,11 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
             oldest.0
         }
     };
+    if t[i].used {
+        index_remove(t, i);
+    }
     t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: now, dport: 0, bytes_out: 0, bytes_in: 0 };
+    index_insert(proto, in_ip, in_port, i);
     st.table_alloc += 1;
     i
 }
@@ -532,4 +617,53 @@ pub fn for_each_flow(now: u64, f: &mut dyn FnMut(&FlowView)) {
         f(&FlowView { slot: i as u16, proto: e.proto, src: e.in_ip, sport: e.in_port, dst, dport: e.dport,
             first: e.first, last: e.last, bytes_out: e.bytes_out, bytes_in: e.bytes_in });
     }
+}
+
+/// `[P-nat-index]`: the hashed forward index stays exact through a full table, evictions and slot reuse:
+/// every live mapping resolves to its own entry, and a reused slot never answers for its old key.
+pub fn index_selftest() -> bool {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
+    // runs at boot before any NAT traffic (the table is empty before and after; no 400 KB stack copy)
+    for e in t.iter_mut() {
+        *e = EMPTY;
+    }
+    unsafe { (*core::ptr::addr_of_mut!(HIDX)).fill(0) };
+    let mut st = NatStats::default();
+    let key = |k: usize| ([10u8, 99, (k >> 8) as u8, k as u8], 1024 + (k % 7000) as u16);
+    // 1. fill the table: N distinct flows, each gets its own slot, each lookup returns it
+    let mut fill = true;
+    for k in 0..N {
+        let (ip, port) = key(k);
+        let i = lookup_or_alloc(6, 0, &[0; 6], &ip, port, 1000 + k as u64, &mut st);
+        fill &= i == k;
+    }
+    let mut hits = true;
+    for k in 0..N {
+        let (ip, port) = key(k);
+        hits &= lookup_or_alloc(6, 0, &[0; 6], &ip, port, 1000 + k as u64, &mut st) == k;
+    }
+    // 2. 512 new flows on a full table evict the least recently used; the evicted keys are gone,
+    //    every other live key still resolves to its own slot
+    for k in N..N + 512 {
+        let (ip, port) = key(k);
+        let _ = lookup_or_alloc(6, 0, &[0; 6], &ip, port, 100_000 + k as u64, &mut st);
+    }
+    let mut consistent = st.table_evict == 512;
+    for i in 0..N {
+        let e = t[i];
+        consistent &= e.used && index_find(t, e.proto, &e.in_ip, e.in_port) == Some(i);
+    }
+    let gone = (0..512).all(|k| {
+        let (ip, port) = key(k);
+        index_find(t, 6, &ip, port).is_none()
+    });
+    for e in t.iter_mut() {
+        *e = EMPTY;
+    }
+    unsafe { (*core::ptr::addr_of_mut!(HIDX)).fill(0) };
+    let pass = fill && hits && consistent && gone;
+    crate::_print(format_args!(
+        " [P-nat-index] {} — NAT table {} mappings with a hashed forward index (was 256 with a linear scan per packet): full table each flow in its own slot={} every lookup O(1) to its entry={} 512 evictions keep the index exact={} evicted keys no longer resolve={}\n",
+        if pass { "PASS" } else { "FAIL" }, N, fill, hits, consistent, gone));
+    pass
 }
