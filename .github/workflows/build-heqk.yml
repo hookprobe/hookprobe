@@ -83,11 +83,10 @@ jobs:
         run: ./validate.sh
         working-directory: os/kernel
 
-      # validate.sh boots the QEMU flavor only; the SHIPPED image is `--features prod`
-      # (os/build/make-cm5-heqk-image.sh). This gate keeps the shipped flavor building and
-      # proves a bench Wi-Fi mode can never ride into it: `apmode`'s serve loop replaced
-      # cm5_prod_service (the IPS never started) and baked a PSK into source (2026-10-08).
-      - name: heqk shipped-flavor gate (prod builds; bench modes refused; no Wi-Fi creds in source)
+      # validate.sh boots the QEMU flavor only. The shipped flavors: `prod` / `prod-mc` (GEM sensor) and the
+      # Wi-Fi AP product `hboot,apmc,wifi-bigtx,appersist` (G12, 2026-11-09). `prod`+`apmode` stays refused:
+      # they are two alternative never-returning loops (the AP one would make `prod`'s unreachable).
+      - name: heqk shipped-flavor gate (prod, prod-mc, AP product build; prod+apmode refused; no Wi-Fi creds in source)
         working-directory: os/kernel
         run: |
           set -euo pipefail
@@ -100,6 +99,14 @@ jobs:
             echo "FATAL: prod+apmode built — the AP bench loop would replace the IPS service"; exit 1
           fi
           grep -q "cannot be combined with \`prod\`" /tmp/apmode.log
+          # The AP product image embeds the CYW43455 firmware (licensed blobs, gitignored, staged on the
+          # build host by cm5-boot/stage-wifi-firmware.sh). CI only proves the flavor COMPILES, so it stages
+          # labelled placeholders — never a flashable image (the factory refuses to sign without real blobs).
+          mkdir -p firmware/brcm
+          for f in cyw43455-sdio.bin cyw43455-sdio.clm_blob cyw43455-sdio-cm5.nvram.txt; do
+            [ -e "firmware/brcm/$f" ] || echo "CI-PLACEHOLDER-NOT-FIRMWARE" > "firmware/brcm/$f"
+          done
+          cargo build -p kernel --features hboot,apmc,wifi-bigtx,appersist --release
           if grep -rnE 'const [A-Z_]*(PSK|PASS)[A-Z_]*: &\[u8\] = b"' kernel/src arch-aarch64/src; then
             echo "FATAL: Wi-Fi credential literal in kernel source — use build-time env (ADR 0045)"; exit 1
           fi

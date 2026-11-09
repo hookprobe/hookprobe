@@ -101,7 +101,10 @@ impl ProdFull {
     /// posture. NEVER fails hard: on any error the sensor still runs, just without
     /// persistence (reported honestly on the console).
     pub fn init() -> ProdFull {
-        let srk = crate::seal_srk().unwrap_or([0x5au8; 32]);
+        // Fail CLOSED without the device key: sealing "persistent" data under a public constant would make it
+        // readable and forgeable by anyone (audit 2026-11-09). No SRK -> run without persistence.
+        let have_srk = crate::seal_srk().is_some();
+        let srk = crate::seal_srk().unwrap_or([0u8; 32]);
         crate::export::set_mac_pseudonym_key(&srk); // exported RA-rule sources become device-keyed pseudonyms
         let handoff = crate::read_seal_handoff();
         let (device_id, svn_floor, pcr) = match handoff {
@@ -128,74 +131,79 @@ impl ProdFull {
             persist_ready: false,
         };
 
-        match Emmc::probe() {
-            Ok(mut dev) => {
-                // Arm the narrowing-only Gate-2 window across the reserved region.
-                // It can only ever shrink from here, so a later store-layer bug
-                // cannot widen it.
-                let (wlo, whi) = dev.arm_write_window(
-                    arch_aarch64::emmc::RESERVED_LBA_LO,
-                    arch_aarch64::emmc::RESERVED_LBA_HI,
-                );
-                kprint!(
-                    "   [PROD-FULL] eMMC up: {} sectors; write window armed LBA {}..{} ({} sectors — the ONLY writable region); volatile cache {}\n",
-                    dev.sec_count(), wlo, whi, whi - wlo,
-                    if dev.cache_on() { "ON — A/B snapshot write ORDER NOT GUARANTEED (no CMD6 flush in this driver)" } else { "off (A/B commit order holds)" }
-                );
-                {
-                    // eMMC wear, from the device itself (review 2026-11-05: no endurance figure in-tree).
-                    let (eol, a, b) = dev.wear();
-                    let life = |v: u8| -> (u32, u32) { if v == 0 || v > 0x0b { (0, 0) } else { (((v - 1) as u32) * 10, (v as u32) * 10) } };
-                    let (al, ah) = life(a);
-                    let (bl, bh) = life(b);
-                    kprint!(
-                        "   [PROD-FULL] eMMC wear: PRE_EOL_INFO={} ({}) | life used TYP_A {}-{}% TYP_B {}-{}% (raw {:#04x}/{:#04x}; 0 = not reported)\n",
-                        eol, match eol { 1 => "normal", 2 => "WARNING: >= 80% reserved blocks consumed", 3 => "URGENT", _ => "not reported" },
-                        al, ah, bl, bh, a, b
+        if !have_srk {
+            kprint!("   [PROD-FULL] M3: no device key (SRK) in the boot handoff — running WITHOUT persistence (never sealed under a constant key)\n");
+        }
+        if have_srk {
+            match Emmc::probe() {
+                Ok(mut dev) => {
+                    // Arm the narrowing-only Gate-2 window across the reserved region.
+                    // It can only ever shrink from here, so a later store-layer bug
+                    // cannot widen it.
+                    let (wlo, whi) = dev.arm_write_window(
+                        arch_aarch64::emmc::RESERVED_LBA_LO,
+                        arch_aarch64::emmc::RESERVED_LBA_HI,
                     );
-                }
-                // Restore the previous boot's snapshot, if any.
-                match SealedStore::open(&mut dev) {
-                    Ok(ss) => {
-                        let mut blob = [0u8; seal::SEAL_MAX_BLOB];
-                        if let Some(n) = ss.load_ab(&mut blob) {
-                            let mut pt = [0u8; seal::SEAL_MAX_PT];
-                            match seal::unseal(&pf.srk, &pf.policy, &blob[..n], &mut pt) {
-                                Ok(len) => match Snapshot::parse(&pt[..len]) {
-                                    Some(prev) => {
-                                        kprint!(
-                                            "   [PROD-FULL] M3 RESTORED across reboot: boots={} prior seen={} drop={} qsecbit={} events={}\n",
-                                            prev.boots, prev.counters.seen, prev.counters.dropped,
-                                            prev.qsecbit, prev.nev
-                                        );
-                                        pf.snap = prev;
-                                        pf.snap.forget_prior_ticks();
-                                    }
-                                    None => kprint!(
-                                        "   [PROD-FULL] M3: sealed blob unsealed but is not a v1/v2 snapshot — starting fresh (fail-closed)\n"
-                                    ),
-                                },
-                                Err(e) => kprint!(
-                                    "   [PROD-FULL] M3: sealed blob REFUSED ({:?}) — wrong device/measurement; starting fresh\n",
-                                    e
-                                ),
-                            }
-                        } else {
-                            kprint!("   [PROD-FULL] M3: no prior snapshot (fresh disk)\n");
-                        }
-                        pf.persist_ready = true;
+                    kprint!(
+                        "   [PROD-FULL] eMMC up: {} sectors; write window armed LBA {}..{} ({} sectors — the ONLY writable region); volatile cache {}\n",
+                        dev.sec_count(), wlo, whi, whi - wlo,
+                        if dev.cache_on() { "ON — A/B snapshot write ORDER NOT GUARANTEED (no CMD6 flush in this driver)" } else { "off (A/B commit order holds)" }
+                    );
+                    {
+                        // eMMC wear, from the device itself (review 2026-11-05: no endurance figure in-tree).
+                        let (eol, a, b) = dev.wear();
+                        let life = |v: u8| -> (u32, u32) { if v == 0 || v > 0x0b { (0, 0) } else { (((v - 1) as u32) * 10, (v as u32) * 10) } };
+                        let (al, ah) = life(a);
+                        let (bl, bh) = life(b);
+                        kprint!(
+                            "   [PROD-FULL] eMMC wear: PRE_EOL_INFO={} ({}) | life used TYP_A {}-{}% TYP_B {}-{}% (raw {:#04x}/{:#04x}; 0 = not reported)\n",
+                            eol, match eol { 1 => "normal", 2 => "WARNING: >= 80% reserved blocks consumed", 3 => "URGENT", _ => "not reported" },
+                            al, ah, bl, bh, a, b
+                        );
                     }
-                    Err(e) => kprint!(
-                        "   [PROD-FULL] M3: write-guard refuses this disk ({:?}) — running WITHOUT persistence\n",
-                        e
-                    ),
+                    // Restore the previous boot's snapshot, if any.
+                    match SealedStore::open(&mut dev) {
+                        Ok(ss) => {
+                            let mut blob = [0u8; seal::SEAL_MAX_BLOB];
+                            if let Some(n) = ss.load_ab(&mut blob) {
+                                let mut pt = [0u8; seal::SEAL_MAX_PT];
+                                match seal::unseal(&pf.srk, &pf.policy, &blob[..n], &mut pt) {
+                                    Ok(len) => match Snapshot::parse(&pt[..len]) {
+                                        Some(prev) => {
+                                            kprint!(
+                                                "   [PROD-FULL] M3 RESTORED across reboot: boots={} prior seen={} drop={} qsecbit={} events={}\n",
+                                                prev.boots, prev.counters.seen, prev.counters.dropped,
+                                                prev.qsecbit, prev.nev
+                                            );
+                                            pf.snap = prev;
+                                            pf.snap.forget_prior_ticks();
+                                        }
+                                        None => kprint!(
+                                            "   [PROD-FULL] M3: sealed blob unsealed but is not a v1/v2 snapshot — starting fresh (fail-closed)\n"
+                                        ),
+                                    },
+                                    Err(e) => kprint!(
+                                        "   [PROD-FULL] M3: sealed blob REFUSED ({:?}) — wrong device/measurement; starting fresh\n",
+                                        e
+                                    ),
+                                }
+                            } else {
+                                kprint!("   [PROD-FULL] M3: no prior snapshot (fresh disk)\n");
+                            }
+                            pf.persist_ready = true;
+                        }
+                        Err(e) => kprint!(
+                            "   [PROD-FULL] M3: write-guard refuses this disk ({:?}) — running WITHOUT persistence\n",
+                            e
+                        ),
+                    }
+                    pf.emmc = Some(dev);
                 }
-                pf.emmc = Some(dev);
+                Err((step, e)) => kprint!(
+                    "   [PROD-FULL] M3: eMMC silent at step {} ({:?}) — running WITHOUT persistence (sensor unaffected)\n",
+                    step, e
+                ),
             }
-            Err((step, e)) => kprint!(
-                "   [PROD-FULL] M3: eMMC silent at step {} ({:?}) — running WITHOUT persistence (sensor unaffected)\n",
-                step, e
-            ),
         }
 
         pf.snap.boots = pf.snap.boots.saturating_add(1);

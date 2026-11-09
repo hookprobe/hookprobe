@@ -81,8 +81,13 @@ FW="$HEQK/firmware/brcm"
 if [ ! -s "$FW/cyw43455-sdio.bin" ] || [ ! -s "$FW/cyw43455-sdio.clm_blob" ] || [ ! -s "$FW/cyw43455-sdio-cm5.nvram.txt" ]; then
   "$HEQK/cm5-boot/stage-wifi-firmware.sh"
 fi
+# never ship a CI compile-check placeholder (or any truncated blob) as Wi-Fi firmware
+if grep -q "CI-PLACEHOLDER-NOT-FIRMWARE" "$FW/cyw43455-sdio.bin" "$FW/cyw43455-sdio.clm_blob" 2>/dev/null \
+   || [ "$(stat -c %s "$FW/cyw43455-sdio.bin")" -lt 200000 ]; then
+  echo "FATAL: $FW holds placeholder / truncated Wi-Fi firmware — run cm5-boot/stage-wifi-firmware.sh with the real blobs"; exit 1
+fi
 case ",$FEATURES," in
-  *,mcserve,*|*,prod-mc,*)
+  *,mcserve,*|*,prod-mc,*|*,apmc,*)
     if [ ! -f "$ROOT/os/mission-control/dist/index.html" ]; then
       export PATH="$HOME/.local/node/bin:$PATH"
       command -v npm >/dev/null || { echo "FATAL: profile serves Mission Control but npm is missing"; exit 1; }
