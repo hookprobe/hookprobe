@@ -491,13 +491,12 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
     ///
     /// Gate 2 — the device driver's OWN independent refusal — differs by backend and
     /// is reported HONESTLY: virtio-blk (QEMU) refuses only LBA 0, so above LBA 0 the
-    /// allowlist is the sole gate; the current eMMC scaffold (metal) hard-clamps to the
-    /// reserved KEYSTORE window [2016,2048) — so a DataVolume/InactiveSlot/OTA write on
-    /// real eMMC returns `BlockErr::WriteRefused`, which we surface as the DISTINCT
-    /// `StoreErr::WindowEscape` (a region the driver won't take), NOT a generic `Io`
-    /// fault, so a metal "region unsupported" failure is never disguised. The real
-    /// multi-region eMMC driver (arming the full registered layout as gate 2) is Gate-R
-    /// metal work — see docs/design/heqk-persistence.md. Read-back verified on success.
+    /// allowlist is the sole gate; the eMMC driver (metal) admits only the reserved KEYSTORE
+    /// window [2016,2048) and the registered DataVolume, each with its own narrowing-only
+    /// window per driver instance (`Emmc::arm_write_window`) — an InactiveSlot/OTA write on
+    /// real eMMC is still refused (`BlockErr::WriteRefused`, Phase 1b of
+    /// docs/design/heqk-production-phases-2026-11-09.md), surfaced as the DISTINCT
+    /// `StoreErr::WindowEscape`, never a generic `Io` fault. Read-back verified on success.
     #[cfg(feature = "p15-write")]
     pub fn store_sector(&mut self, lba: u64, buf: &[u8; 512]) -> Result<RegionKind, StoreErr> {
         let kind = match self.guard.region_of(lba) {

@@ -4,7 +4,9 @@
 > the July history). Scope: hardware + kernel + detection for a commercial product; the UI is owned by the
 > UI/UX designer. Legend: **D** = needs an operator decision, **B** = needs the CM5 bench, **A** = buildable
 > autonomously (QEMU first, then bench). Detailed software gaps: the parity-gap register (`heqk-parity-gaps.md`, repository-root design docs); board
-> plan: `heqk-metal-test-plan.md` (same place).
+> plan: `heqk-metal-test-plan.md` (same place). **Execution order:** `heqk-production-phases-2026-11-09.md`
+> (Phase 1 OTA trust chain → 2 key custody → 3 field self-heal → 4 detection on the shipped path → 5 parser
+> isolation → 6 Wi-Fi features → 7 legal / factory).
 
 ### Done since July (metal-proven)
 Product AP image with persistence (G12), SEC-2 OTP carve-out, signed POLICY/lists/IOC/rules/OUI/devices
@@ -17,7 +19,7 @@ TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 a
 |---|---|---|---|
 | 1.1 | Production signing key custody (HSM / ceremony), reproducible signed release build (PH4) | D | dev key only |
 | 1.2 | Secure-boot fuses (SEC-3) — irreversible, a provisioning-line step | D | out of scope (operator 2026-11-09) |
-| 1.3 | Persistent anti-rollback (SEC-6 SVN + POLICY generation floor, RPMB or fuse) | D+B | compile-time floor only |
+| 1.3 | Persistent anti-rollback (SEC-6 SVN + POLICY generation floor, RPMB or sealed counter — no fuse writes) | D+B | HBoot reads the OTP SVN floor live and refuses a lower image; the advancing step and a persisted POLICY floor are missing |
 | 1.4 | Per-unit factory provisioning (owner token, setup credential, MCTLS, label/QR, self-test log) | A+B | bench scripts only |
 | 1.5 | OS image update over the network (ADR 0056 phase 2 → existing tryboot/abcommit) | A+B (design review: inactive-slot write admission) | not built |
 
@@ -25,8 +27,8 @@ TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 a
 | # | Item | Kind | State |
 |---|---|---|---|
 | 2.1 | ADR 0050 D4: HTTP parse, DHCP server, DNS forwarder, PPPoE/DHCP/RA clients, Noise, WPA2 authenticator → EL0 | A | TLS in EL0; the rest EL1 |
-| 2.2 | G0 apcore steps 3b–5 (IPv6 / discovery / eth1 / Wi-Fi queue / mgmt / tick) | A | steps 1–3a done |
-| 2.3 | Coverage-guided host fuzzing of every parser + the upload / journal / store formats | A | **partly built**: libFuzzer over the host-buildable `hal` parsers (`tools/fuzz`, CI job; 15M+ runs, 0 crashes); kernel-crate parsers still fixed-seed `[P-fuzz]` — host-buildable split of those modules is the next step |
+| 2.2 | G0 apcore steps 4–5 (Wi-Fi queue / mgmt / tick) | A | steps 1–3c done (client4 incl. eth1, client6, station_relay) |
+| 2.3 | Coverage-guided host fuzzing of every parser + the upload / journal / store formats | A | **partly built**: libFuzzer over the host-buildable `hal` parsers (`tools/fuzz/heqk-hal/fuzz_targets`, CI job; 15M+ runs, 0 crashes); kernel-crate parsers still fixed-seed `[P-fuzz]` — host-buildable split of those modules is the next step |
 | 2.4 | Owner-journal compaction (refused after ~1,000 records) | A | **built** (stage B, QEMU) — metal next batch |
 | 2.5 | eMMC multi-block reads (boot time, larger stores) | A+B | **built** (CMD18, self-checked at probe) — metal batch 22 |
 | 2.6 | Crypto assurance: libcrux ML-KEM decision; P-256 on-board timing run | D / B | source review done |
