@@ -179,7 +179,9 @@ fn guards(c: &Ctx, body: &[u8]) -> Result<(), &'static str> {
     Ok(())
 }
 
-fn expire(now_ms: u64) {
+/// Drop an upload idle for more than 10 min (also run by `GET /api/upload`, so a stalled upload never
+/// lingers in the status after its window).
+pub fn expire(now_ms: u64) {
     if let Some(u) = up() {
         if now_ms.saturating_sub(u.last_ms) > IDLE_MS {
             *up() = None;
