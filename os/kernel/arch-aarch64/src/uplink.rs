@@ -952,6 +952,33 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
 /// send a Renew for the delegated prefix to the server that granted it, repeated at most every 10 s until
 /// a Reply refreshes it (pppoe_poll). T1 = 0 (server's choice) -> renew at half the valid lifetime;
 /// T1 = infinite (Digi) -> never. Call from the serve loop; cheap when nothing is due.
+static mut WAN6_RA_SEEN: bool = false;
+static mut WAN6_REPROBE_MS: u64 = 0;
+/// Re-probes run after boot (for the heartbeat): (runs, the last one brought IPv6 up).
+pub static mut WAN6_REPROBES: (u32, bool) = (0, false);
+
+/// Field self-heal (production phase 3): an Ethernet WAN whose IPv6 did not come up at boot gets the same
+/// bounded probe again — but only after a Router Advertisement was SEEN on the WAN (never on a timer: the
+/// probe owns WAN RX for 5–12 s, an IPv4-only ISP would see a periodic stall) and at most every 10 min.
+/// Returns true when a probe ran. The AP loop renumbers the LAN on its own once `WAN6.pd` appears.
+pub fn wan6_reprobe(up: &UplinkResult) -> bool {
+    if up.mode == 2 || !up.usable() || unsafe { WAN6_ETH.up } || !unsafe { WAN6_RA_SEEN } {
+        return false;
+    }
+    let now = ms_now();
+    let last = unsafe { WAN6_REPROBE_MS };
+    if last != 0 && now.wrapping_sub(last) < 600_000 {
+        return false;
+    }
+    unsafe {
+        WAN6_REPROBE_MS = now.max(1);
+        WAN6_RA_SEEN = false;
+    }
+    eth_v6_probe(up.nic, up);
+    unsafe { WAN6_REPROBES = (WAN6_REPROBES.0 + 1, WAN6_ETH.up) };
+    true
+}
+
 pub fn wan6_tick(up: &UplinkResult) {
     let eth = up.mode != 2;
     if eth && !unsafe { WAN6_ETH.up } {
@@ -1308,6 +1335,14 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
     };
     if n < 14 {
         return WanEvent::Idle;
+    }
+    // Field self-heal: IPv6 was not up after the boot probe, but a router now advertises on the WAN (an ISP
+    // whose RA / DHCPv6 came up late) — note it; the AP loop re-runs the probe (`wan6_reprobe`). Passive on
+    // purpose: an ISP without IPv6 never sends an RA, so it never pays for a probe.
+    if buf[12] == 0x86 && buf[13] == 0xdd && n >= 14 + 40 && up.mode != 2 && !unsafe { WAN6_ETH.up }
+        && buf[20] == 58 && n > 54 && buf[54] == 134 && crate::ip6::parse_ra(&buf[14..n]).is_some()
+    {
+        unsafe { WAN6_RA_SEEN = true };
     }
     // G17: IPv6 for us on an Ethernet WAN — ND/echo for our link-local, RA (router move), renew replies.
     if buf[12] == 0x86 && buf[13] == 0xdd && n >= 14 + 40 && unsafe { WAN6_ETH.up } {
