@@ -109,8 +109,8 @@ stajoin = ["cm5"]
 # addresses + linker load address, and boots a minimal serial "hello" first.
 cm5 = ["arch-aarch64/cm5"]
 # arm64-cloud tier (OCI Ampere A1), booted by efiboot (UEFI) — see tools/oci-a1/README.md.
-# Step 1: GICv3. ACPI-driven discovery, virtio-pci and virtio-scsi follow.
-cloud = ["arch-aarch64/gicv3"]
+# GICv3 + virtio-pci (modern). ACPI-driven discovery and virtio-scsi follow.
+cloud = ["arch-aarch64/gicv3", "arch-aarch64/pci"]
 # Launched by HBoot (heqk-boot): link at 0x1000000, enter at EL1 with console
 # already up, consume the typed BootInfo handoff.
 hboot = ["cm5", "arch-aarch64/hboot"]
