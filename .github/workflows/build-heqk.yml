@@ -111,6 +111,39 @@ jobs:
             echo "FATAL: Wi-Fi credential literal in kernel source — use build-time env (ADR 0045)"; exit 1
           fi
 
+  # ---------------------------------------------------------------------------
+  # End-to-end (ADR 0047): real attack traffic -> heqk IPS -> evidence -> heqk's own HTTP(S) API -> the
+  # Mission Control UI in a real browser, all under QEMU. A skipped browser leg FAILS this job (the script
+  # itself never silently passes; CI additionally refuses the API-only result).
+  heqk-mc-e2e:
+    name: "heqk Mission Control end-to-end (QEMU + Chromium)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src, llvm-tools
+          targets: aarch64-unknown-none-softfloat
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: os/kernel
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Install qemu + FAT tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends qemu-system-arm dosfstools mtools
+      - name: Install the e2e browser (Playwright Chromium)
+        working-directory: os/kernel/tools/mc-e2e
+        run: npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
+      - name: mc-e2e.sh (API + TLS + browser legs)
+        working-directory: os/kernel
+        run: |
+          set -o pipefail
+          tools/mc-e2e.sh 2>&1 | tee /tmp/mc-e2e.out
+          if grep -q "BROWSER LEG SKIPPED" /tmp/mc-e2e.out; then echo "FATAL: the browser leg did not run"; exit 1; fi
+
 # -----------------------------------------------------------------------------
 # NOT wired here, deliberately (M1 scope discipline — don't over-scope the
 # beachhead):
