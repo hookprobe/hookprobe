@@ -76,6 +76,10 @@ jobs:
       - name: Regenerate the validation matrix from the live run
         if: success()
         working-directory: os/kernel
+        # Reuse the g2 gate's validate.sh output (gates.sh tees it) instead of booting QEMU
+        # a second time under a timeout (#895).
+        env:
+          HEQK_VALIDATE_LOG: ${{ github.workspace }}/out/ci/logs/g2.log
         run: python3 tools/gen-validation.py && python3 tools/gen-readme-matrix.py
       - name: Propose the matrix update (PR, never a direct push)
         if: success()
