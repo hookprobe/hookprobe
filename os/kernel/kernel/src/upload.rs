@@ -560,7 +560,13 @@ pub fn selftest() -> bool {
     }
     // refusals before anything is staged
     seq += 1;
-    let bad_type = begin(&c, f!("type=os_image&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err() == Some("type");
+    // `policy` is not an upload type (next-boot only, ADR 0056 phase 1); an `os_image` must be a whole boot
+    // image. Every form step consumes its seq, even when refused (replay guard).
+    let bad_type = begin(&c, f!("type=policy&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err() == Some("type");
+    seq += 1;
+    let small_os = begin(&c, f!("type=os_image&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err()
+        == Some(if cfg!(feature = "p15-write") { "size" } else { "this image cannot update its OS over the network (read-only build)" });
+    let bad_type = bad_type && small_os;
     seq += 1;
     let too_big = begin(&c, f!("type=devices&size=99999999&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err() == Some("size");
     seq += 1;
