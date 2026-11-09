@@ -1,5 +1,65 @@
 # HEQK Production-Readiness Report
 
+> **Current status: 2026-11-09 — the ordered checklist below supersedes §4 and §7–§8** (kept underneath as
+> the July history). Scope: hardware + kernel + detection for a commercial product; the UI is owned by the
+> UI/UX designer. Legend: **D** = needs an operator decision, **B** = needs the CM5 bench, **A** = buildable
+> autonomously (QEMU first, then bench). Detailed software gaps: the parity-gap register (`heqk-parity-gaps.md`, repository-root design docs); board
+> plan: `heqk-metal-test-plan.md` (same place).
+
+### Done since July (metal-proven)
+Product AP image with persistence (G12), SEC-2 OTP carve-out, signed POLICY/lists/IOC/rules/OUI/devices
+(ADR 0049/0052), Shield v2 + levels (ADR 0057), owner journal (ADR 0055), signed data-pack upload (ADR 0056
+ph.1), sealed evidence log (#54), WPA2 AP + NAT at 100–150 Mbps, IPv6 (PPPoE/DHCP/RA/PD), VLAN/mgmt/ACLs,
+TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 apcore steps 1–3a.
+
+### 1. Release blockers — trust chain and supply
+| # | Item | Kind | State |
+|---|---|---|---|
+| 1.1 | Production signing key custody (HSM / ceremony), reproducible signed release build (PH4) | D | dev key only |
+| 1.2 | Secure-boot fuses (SEC-3) — irreversible, a provisioning-line step | D | out of scope (operator 2026-11-09) |
+| 1.3 | Persistent anti-rollback (SEC-6 SVN + POLICY generation floor, RPMB or fuse) | D+B | compile-time floor only |
+| 1.4 | Per-unit factory provisioning (owner token, setup credential, MCTLS, label/QR, self-test log) | A+B | bench scripts only |
+| 1.5 | OS image update over the network (ADR 0056 phase 2 → existing tryboot/abcommit) | A+B (design review: inactive-slot write admission) | not built |
+
+### 2. Kernel hardening
+| # | Item | Kind | State |
+|---|---|---|---|
+| 2.1 | ADR 0050 D4: HTTP parse, DHCP server, DNS forwarder, PPPoE/DHCP/RA clients, Noise, WPA2 authenticator → EL0 | A | TLS in EL0; the rest EL1 |
+| 2.2 | G0 apcore steps 3b–5 (IPv6 / discovery / eth1 / Wi-Fi queue / mgmt / tick) | A | steps 1–3a done |
+| 2.3 | Coverage-guided host fuzzing of every parser + the upload / journal / store formats | A | fixed-seed in-kernel fuzz only |
+| 2.4 | Owner-journal compaction (refused after ~1,000 records) | A | **built** (stage B, QEMU) — metal next batch |
+| 2.5 | eMMC multi-block reads (boot time, larger stores) | A+B | **built** (CMD18, self-checked at probe) — metal batch 22 |
+| 2.6 | Crypto assurance: libcrux ML-KEM decision; P-256 on-board timing run | D / B | source review done |
+
+### 3. Hardware and field reliability
+| # | Item | Kind | State |
+|---|---|---|---|
+| 3.1 | ≥ 72 h soak under real traffic (memory, counters, Wi-Fi stalls, NAT pressure, thermal, eMMC writes) | B | not run |
+| 3.2 | Wi-Fi TX-stall root cause | B | mitigated (kick) |
+| 3.3 | Scale: many mixed clients, roaming, sleep-heavy phones (design: 128 leases) | B | 2 bench clients |
+| 3.4 | Randomized power-loss torture of journal / store / evidence log | B | single cuts PASS |
+| 3.5 | Thermal in the enclosure at sustained throughput | B | open |
+| 3.6 | WPA3-SAE + PMF, guest SSID; 5 GHz DFS (stock CLM forbids) | A+B | WPA2 only |
+| 3.7 | Wall clock without network (RTC) | B | NTP only |
+
+### 4. Detection
+| # | Item | Kind | State |
+|---|---|---|---|
+| 4.1 | Accuracy benchmark: replayed benign + attack corpus → FP / detection rate per rule | A | **built** (`tools/detbench`, QEMU replay with the recorded clock); first run fixed 3 detector defects (MAC-flood slot hash, per-packet alert storms, ARP poisoning undetected → rule 127); all 8 synthetic attack classes detected — benign corpus from real captures in progress |
+| 4.2 | Coverage: IPv6 LAN↔LAN lateral, IPv6-only devices, encrypted-traffic behaviour beyond JA4 | A | open |
+| 4.3 | Detection modules as signed Wasm at catalogue parity (napse-dpi, qsecbit, dnsXai) | A | one module at parity |
+| 4.4 | Threat-intel publishing pipeline (sources → signed packs → generations) for the upload channel | A+D | channel built |
+| 4.5 | Owner alert delivery (beyond syslog/SIEM) | A+D | none |
+
+### 5. Compliance (process)
+CE/RED + FCC for the finished product (the CM5 module is pre-certified; antenna / enclosure are not), EU RED
+cybersecurity EN 18031 (applies since 2025-08), EU Cyber Resilience Act (reporting 2026-09, full 2027-12:
+SBOM, CVD — SECURITY.md exists — support period), CYW43455 firmware redistribution terms, AGPL + commercial.
+
+---
+
+## History — snapshot 2026-07-25
+
 _Hardened Edge Quantum-safe Kernel — bare-metal aarch64 capability microkernel for Raspberry Pi CM5 (BCM2712)._
 
 **Snapshot date:** 2026-07-25

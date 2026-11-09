@@ -31,6 +31,9 @@ impl BlockDev for DevRef {
     fn write_block(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {
         unsafe { (*self.0).write_block(lba, buf) }
     }
+    fn read_blocks(&self, lba: u64, out: &mut [u8]) -> Result<(), BlockErr> {
+        unsafe { (*self.0).read_blocks(lba, out) }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

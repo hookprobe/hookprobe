@@ -27,9 +27,20 @@ const SLOTS: usize = 256; // power of two
 /// other client's SYN reset a flooder's count (the per-source limiter never tripped on a busy LAN); the
 /// flow/scan tables (big-endian keys, 16 slots) collided on hosts 16 addresses apart. A multiplicative hash
 /// makes collisions rare and random; the per-slot KEY tag still keeps an aliasing source from sharing counts.
+/// 2026-11-09 (detection benchmark): the multiply-and-take-bits-32..40 hash only carried differences
+/// UPWARD — keys differing only above bit 40 (the LAST octet of a MAC in `mac_hash`'s packing, the one that
+/// differs between a vendor's devices) all shared a slot, so two such stations alternating frames looked
+/// like a stream of new MACs and rule 111 (MAC flood) fired continuously. Full 64-bit avalanche now
+/// (splitmix64 finalizer): every key bit affects the slot.
 #[inline]
 pub fn slot(key: u64, n: usize) -> usize {
-    ((key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 32) as usize) % n
+    let mut x = key;
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94D0_49BB_1331_11EB);
+    x ^= x >> 31;
+    (x as usize) % n
 }
 static WIN_START: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 static COUNT: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
@@ -37,9 +48,7 @@ static KEY: [AtomicU64; SLOTS] = [const { AtomicU64::new(0) }; SLOTS];
 
 #[inline]
 fn cntpct() -> u64 {
-    let v: u64;
-    unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) };
-    v
+    crate::clock::ticks() // the hardware counter, or the replayed frame's time (detbench)
 }
 #[inline]
 fn cntfrq() -> u64 {
@@ -154,7 +163,7 @@ pub fn mac_flood_over(port: u64, mac_key: u64, threshold: u64) -> u64 {
         MAC_DISTINCT[p].store(0, Ordering::Relaxed);
     }
     let gen = MAC_GEN[p].load(Ordering::Relaxed);
-    let i = (mac_key as usize) % MAC_SET;
+    let i = slot(mac_key, MAC_SET); // mixed: a raw low-bits index keyed only on the FIRST octet (every x2/x6/xA/xE MAC collided)
     let seen = MAC_SLOT_GEN[p][i].load(Ordering::Relaxed) == gen
         && MAC_SLOT_KEY[p][i].load(Ordering::Relaxed) == mac_key;
     if !seen {
@@ -628,7 +637,7 @@ pub fn ra_rate_over_at(key: u64, limit: u64, now: u64, win: u64) -> bool {
     if key == 0 {
         return false;
     }
-    let i = (key as usize) % RA_SLOTS;
+    let i = slot(key, RA_SLOTS);
     let start = RA_WIN[i].load(Ordering::Relaxed);
     if RA_KEY[i].load(Ordering::Relaxed) != key || now.wrapping_sub(start) >= win {
         RA_KEY[i].store(key, Ordering::Relaxed);

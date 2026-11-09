@@ -172,6 +172,8 @@ prod-mc = ["prod-full", "mcserve"]
 # and the M6 export gate (ProdFull, the same code prod-full runs). The AP loop runs packet::verdict on every
 # forwarded frame (lanrelay, fwd4, IPv6), so the old "apmode is uninspected" reason for keeping it out of
 # production no longer holds; `prod` itself stays the GEM-only sensor profile.
+# Readiness 4.1: QEMU detection-accuracy benchmark (replays a labelled corpus disk; tools/detbench).
+detbench = ["netsvc"]
 appersist = ["apmc", "p15-write", "securechannel"]
 # BENCH-ONLY: the two-boot A/B commit proof on the CM5 eMMC ([P15-abcommit-metal]). Rewrites
 # config.txt/tryboot.txt every boot — never shipped; reflash the production image afterwards.
