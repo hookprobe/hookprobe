@@ -2284,7 +2284,7 @@ def main():
                 last_train = time.monotonic()
                 if train_result.get('status') == 'trained':
                     logger.info(f"Retrained: v{engine.version}, "
-                                 f"{train_result['samples']} samples")
+                                 f"{train_result.get('samples', train_result.get('positives', 0) + train_result.get('negatives', 0))} samples")
 
         except Exception as e:
             logger.error(f"Scoring cycle error: {e}", exc_info=True)

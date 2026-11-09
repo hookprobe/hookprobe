@@ -10,7 +10,12 @@ LABEL version="1.0.0"
 WORKDIR /app
 
 # No external deps needed - uses only stdlib (urllib, socket, struct)
-COPY packet_inspector.py /app/
+# Build context is core/ so the CANONICAL trusted-network module ships with
+# the inspector. Previously only packet_inspector.py was copied, the import
+# failed, and the inspector silently ran its stale inline fallback list.
+COPY napse/inspector/packet_inspector.py /app/
+RUN mkdir -p /app/hydra && touch /app/hydra/__init__.py
+COPY hydra/trusted_networks.py /app/hydra/trusted_networks.py
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=3 --start-period=15s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)" || exit 1
