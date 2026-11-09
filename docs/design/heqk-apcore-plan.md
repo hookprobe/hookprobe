@@ -12,7 +12,7 @@ metal boot log and counters byte-identical, every shipped flavor builds (`apmode
 |---|---|---|---|
 | 1 | `fwd4!` → `apcore::forward4` (in-ACL → route → out-ACL → hold → device policy → exfil → Shield → SNAT / reject / drop) | `[P-apcore]` | done |
 | 2 | WAN drain → `on_wan_frame` (martian floor, `to_us`, reject rate limit 20/s, un-NAT, `lan out` block-as-drop, IPv6 new-flow `wan in`, Wi-Fi send / queue / drop, WIFI_MAX_FRAME) | `[P-apcore-wan]` | done (IPv4 leg; probe / NTP / IPv6 branches and the Wi-Fi queue still in the loop) |
-| 3 | rest of the Wi-Fi data arm + eth1 + the Wi-Fi queue as `WifiQ` (bind check, `net::parse`, IDS, MC-bound, relay, proxy-ARP, IPv6); first move `ap_handle_data_into` into the pure `dhcpd` | DORA, proxy-ARP, RS→RA, v6 forward | |
+| 3 | rest of the Wi-Fi data arm + eth1 + the Wi-Fi queue as `WifiQ` (bind check, `net::parse`, IDS, MC-bound, relay, proxy-ARP, IPv6); first move `ap_handle_data_into` into the pure `dhcpd` | `[P-apcore-lan]` (3a) | 3a done: IPv4 gate chain → `apcore::client4`; 3b next: the discovery / IPv6 / proxy-ARP branches, eth1, `WifiQ` |
 | 4 | `on_mgmt_frame` + MC flush routing | | |
 | 5 | `tick()`: stall detector, IPv6 renumber / RA, wanhealth scheduling, SIEM cursor, rule-drop table; `POLICY` / `V6` passed by reference | | |
 

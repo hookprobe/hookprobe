@@ -3587,7 +3587,8 @@ fn cm5_p10_probe() {
                                             let d: &'static mut dyn hal::BlockDev = unsafe { (*core::ptr::addr_of_mut!(ART_DEV)).insert(dev) };
                                             upload::install(d);
                                             armed = true;
-                                            kprint!(" [AP-STORE] artifact store + upload staging: LBA {}..{} (DataVolume){}\n", lo, hi,
+                                            kprint!(" [AP-STORE] artifact store + upload staging: LBA {}..{} (DataVolume), eMMC data clock {} kHz{}\n", lo, hi,
+                                                unsafe { (*core::ptr::addr_of!(ART_DEV)).as_ref().map_or(0, |e| e.sdclk_hz() / 1000) },
                                                 if policysig::key().is_some() { "" } else { " — no operator key in this image: uploads refused" });
                                         }
                                     }
@@ -3982,30 +3983,32 @@ fn cm5_p10_probe() {
                                         // (1) (MAC,IP) must be a lease we handed out — anti-hijack;
                                         // (2) the signed rule plane (IDS/IPS) — a threat verdict DROPs here;
                                         // (3) M-NAT1 outbound: SNAT to the lease, out end0.
-                                        let mut smac = [0u8; 6];
-                                        smac.copy_from_slice(&frame[6..12]);
-                                        let mut sip = [0u8; 4];
-                                        sip.copy_from_slice(&frame[26..30]);
-                                        if { dh.now = cyw43::now_secs(); dh.seen(&smac); !dh.binding_ok(&smac, &sip) } {
-                                            bind_drop += 1;
-                                        } else if net::parse(frame).is_none() {
-                                            trunc_drop += 1; // truncated/oversize: fail-closed, but NOT a rule drop
-                                        } else if packet::verdict(frame).1 == packet::DROP {
-                                            ids_drop_out += 1;
-                                        } else if mc_bound(frame, &our_ip) && !devpolicy::check(&smac, devpolicy::Dest::DeviceMgmt) {
-                                            // Parity G9: internet_only / quarantine devices may not reach Mission Control.
-                                        } else if mc_bound(frame, &our_ip) {
-                                            // Mission Control on the AP address (after the lease binding + IDS gates);
-                                            // not on the client AP when management is configured (G12-M).
-                                            #[cfg(feature = "mcserve")]
-                                            if let Some(n) = mcn.as_mut().filter(|_| mc_wifi) {
-                                                n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
+                                        // G0 step 3a: the gate chain lives in apcore::client4 ([P-apcore-lan]); the loop only
+                                        // routes its outcome (MC node ingress, station relay, counters).
+                                        let cfg = apcore::FwdCfg { our_ip, me: ap.bssid, inside_net };
+                                        let mut hw = ApHw { up: &up, wh: &whealth };
+                                        let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
+                                        let r = apcore::client4(frame, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| wifi_send!(f));
+                                        match r {
+                                            apcore::Client4::BindDrop => bind_drop += 1,
+                                            apcore::Client4::Trunc => trunc_drop += 1, // fail-closed, but NOT a rule drop
+                                            apcore::Client4::IdsDrop => ids_drop_out += 1,
+                                            apcore::Client4::McDenied => {} // Parity G9: internet_only / quarantine devices
+                                            apcore::Client4::ToMc => {
+                                                // Mission Control on the AP address; not on the client AP when management is
+                                                // configured (G12-M).
+                                                #[cfg(feature = "mcserve")]
+                                                if let Some(n) = mcn.as_mut().filter(|_| mc_wifi) {
+                                                    n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
+                                                }
                                             }
-                                        } else if lanrelay::relay_target(frame, &dh) {
-                                            // G10: station -> station, after the lease + IDS (incl. segmentation reach) gates
-                                            let _ = wifi_send!(frame);
-                                        } else if fwd4!(frame, PIf::Lan, nat::IF_WIFI, wifi_send) && nst.out_fwd == 1 {
-                                            kprint!(" [M-NAT1] first client frame forwarded out end0 (proto {})\n", nbuf[23]);
+                                            apcore::Client4::Relay => {
+                                                let _ = wifi_send!(frame); // G10: station -> station, after the lease + IDS gates
+                                            }
+                                            apcore::Client4::Forwarded(true) if nst.out_fwd == 1 => {
+                                                kprint!(" [M-NAT1] first client frame forwarded out end0 (proto {})\n", nbuf[23]);
+                                            }
+                                            apcore::Client4::Forwarded(_) => {}
                                         }
                                     }
                                 }
@@ -6548,6 +6551,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = artstore::selftest();
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
+        let _ = apcore::lan_selftest();
         let _ = ownerjournal::selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
@@ -13580,13 +13584,7 @@ fn mc_mgmt_tx(f: &[u8], dst: [u8; 4]) -> bool {
 }
 
 fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
-    if !cfg!(feature = "mcserve") || f.len() < 38 || f[12] != 0x08 || f[13] != 0x00 || f[23] != 6 || &f[30..34] != our_ip {
-        return false;
-    }
-    let ihl = ((f[14] & 0x0f) as usize) * 4;
-    let Some(p) = f.get(14 + ihl + 2..14 + ihl + 4) else { return false };
-    let dport = u16::from_be_bytes([p[0], p[1]]);
-    dport == 80 || dport == 443
+    apcore::mc_bound(f, our_ip)
 }
 
 /// POLICY.TXT (up to 4 KiB, contiguous on the FAT boot partition) -> POLICY. None = no file.
