@@ -250,6 +250,25 @@ impl ProdFull {
         self.emmc.as_ref().and_then(|d| crate::mcauth::load_owner(d))
     }
 
+    /// #54: the seal parameters for the evidence log (None without a device key — fail closed).
+    pub fn seal_params(&self) -> Option<([u8; 32], Policy)> {
+        crate::seal_srk().map(|srk| (srk, self.policy))
+    }
+    /// The persisted image of `ev` exactly as `on_threat` stores it (wall-clock ms once the clock is known).
+    pub fn image_of(&self, ev: &events::Event) -> [u8; crate::export::EV_IMAGE_LEN] {
+        match self.clock {
+            Some((ms, ticks, frq)) => {
+                let mut e = *ev;
+                e.ts = tick_to_ms(ev.ts, ms, ticks, frq);
+                e.verdict |= crate::snapshot::IMG_EPOCH;
+                crate::export::ev_to_image(&e)
+            }
+            None => crate::export::ev_to_image(ev),
+        }
+    }
+    pub fn clock(&self) -> Option<(u64, u64, u64)> {
+        self.clock
+    }
     /// Record a threat verdict as a persisted event. Cheap: RAM only, marks dirty.
     pub fn on_threat(&mut self, ev: &events::Event) {
         match self.clock {
