@@ -18,6 +18,7 @@ updates:
       - "/os/kernel/el0-tlshost"
       - "/os/kernel/el0-wasmhost"
       - "/os/kernel/wasip1-fixture"
+      - "/os/kernel/efiboot"
       - "/os/build/heqk-sign"
       - "/onboarding/enrollment/responder-sim"
     schedule: { interval: "weekly", day: "monday" }
