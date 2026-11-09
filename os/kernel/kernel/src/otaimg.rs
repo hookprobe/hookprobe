@@ -175,3 +175,65 @@ pub fn running_trial<D: BlockDev>(d: &D, running: [u8; 32]) -> Option<bool> {
     }
     (payload_hash(d, run.lo)? == running).then_some(true)
 }
+
+/// `[P15-otaimg]` — the OS-image update path end to end on a factory-layout disk (virtio-blk,
+/// p15-write; validate.sh builds the disk: slot A = a real-size signed image, slot B = junk of the
+/// same size, config=A / tryboot=B). Stages the image into a scratch range past p1 exactly as the
+/// upload chunks would, then: `check` accepts it and names slot B; it refuses SVN below the floor,
+/// a flipped payload byte, a different HBoot prefix, a wrong length and a "running" trial;
+/// `install` writes slot B only (slot A byte-identical), and the payload read back FROM slot B
+/// hashes to the verified digest; `running_trial` then recognises a boot of slot B as the trial.
+#[cfg(not(feature = "cm5"))]
+pub fn selftest() {
+    macro_rules! kprint { ($($t:tt)*) => { arch_aarch64::_print(format_args!($($t)*)) }; }
+    let Some(mut dev) = arch_aarch64::virtio_blk::VirtioBlk::open() else { return };
+    let Some(run) = hal::abslot::inactive_slot_run(|l, b| dev.read_block(l, b).is_ok()) else { return };
+    if (run.size as u64) < IMG_MIN || run.active != b'a' {
+        return; // not the OTA test disk (the abcommit disk has 64 KiB slots)
+    }
+    let d = &mut dev;
+    // The image = slot A's own bytes (prefix + header + payload); its length from the header.
+    let Some(h) = header(&*d, run.active_lo) else { return kprint!(" [P15-otaimg] FAIL — slot A header unreadable\n") };
+    let len = OFF + HDR_LEN + h.size;
+    let n = len.div_ceil(512);
+    let slo = d.block_count().saturating_sub(n + 8);
+    let mut s = [0u8; 512];
+    let copy = |d: &mut arch_aarch64::virtio_blk::VirtioBlk, s: &mut [u8; 512]| -> bool {
+        (0..n).all(|i| d.read_block(run.active_lo + i, s).is_ok() && d.write_block(slo + i, s).is_ok())
+    };
+    if !copy(d, &mut s) {
+        return kprint!(" [P15-otaimg] FAIL — staging write\n");
+    }
+    let a_before = hash(&*d, run.active_lo, 0, len);
+    let ok = check(&*d, slo, len, 1, None);
+    let good = matches!(ok, Ok(p) if p.lo == run.lo && p.hi == run.hi && p.active == b'a' && p.svn == 2 && p.len == len);
+    let floor = check(&*d, slo, len, 3, None) == Err("rollback refused: security version below the running image / floor");
+    let short = check(&*d, slo, len - 1, 1, None) == Err("image length does not match its header");
+    let trial_running = check(&*d, slo, len, 1, Some([7; 32])) == Err("a trial boot is running — commit or reboot before the next update");
+    // Flip one payload byte, then one HBoot-prefix byte (restored after each).
+    let flip = |d: &mut arch_aarch64::virtio_blk::VirtioBlk, lba: u64, s: &mut [u8; 512]| {
+        let _ = d.read_block(lba, s);
+        s[100] ^= 0x40;
+        let _ = d.write_block(lba, s);
+    };
+    let pay = slo + (OFF + HDR_LEN) / 512 + 64;
+    flip(d, pay, &mut s);
+    let badsig = check(&*d, slo, len, 1, None) == Err("bad signature (not the release keys)");
+    flip(d, pay, &mut s);
+    flip(d, slo + 3, &mut s);
+    let hboot = check(&*d, slo, len, 1, None) == Err("boot loader differs from the installed one (boot-loader updates are USB-only)");
+    flip(d, slo + 3, &mut s);
+    let installed = match ok {
+        Ok(p) => install(d, slo, &p).is_ok() && payload_hash(&*d, run.lo) == Some(p.hash),
+        Err(_) => false,
+    };
+    let a_same = hash(&*d, run.active_lo, 0, len) == a_before && a_before.is_some();
+    let trial = match ok {
+        Ok(p) => running_trial(&*d, p.hash) == Some(false), // slot A holds the same image: a cold boot
+        Err(_) => false,
+    };
+    let pass = good && floor && short && trial_running && badsig && hboot && installed && a_same && trial;
+    kprint!(" [P15-otaimg] {} — OS-image update on a factory A/B disk: a {}-byte signed image staged sector by sector, checked (shared verifier over a streamed digest, SVN floor, A/B layout, HBoot prefix pinned, tryboot names the inactive slot) -> slot B={} ; refused: svn<floor={} wrong length={} flipped payload byte={} different HBoot prefix={} trial in progress={} ; installed into slot B + payload re-hashed from the slot={} ; slot A untouched={} ; boot identity check={}\n",
+        if pass { "PASS" } else { "FAIL" }, len, good, floor, short, badsig, hboot, trial_running, installed, a_same, trial);
+}
+

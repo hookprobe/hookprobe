@@ -156,6 +156,7 @@ PHASES=(
   "P15otafat|[P15-otafat] PASS|impl|Validation|B2 OTA DELIVERY — locate the inactive A/B slot inside the SHARED FAT32 boot partition + stage a candidate into its REAL sectors (genuine mkfs.vfat image over virtio-blk): the read-only fat.rs locator parses the MBR → the FAT32 BPB → walks the root directory to HEQK8-B.IMG → follows its cluster chain to a CONTIGUOUS LBA run (fail-closed if fragmented/absent), registers that run as RegionKind::InactiveSlot, and writes a candidate marker through the brick-safety LBA guard (LBA 0 + the active slot + FAT/dir metadata all WriteRefused), read back byte-identical — FAT metadata never mutated (same-size in-place overwrite). QEMU-proven on a real FAT32 fs; the metal eMMC InactiveSlot write arming (emmc.rs clamp) is a separate Gate-R item"
   "P15abcommit|[P15-abcommit] PASS|impl|Validation|B2 A/B COMMIT SURVIVES A COLD BOOT (two boots, one factory-layout disk): the firmware cold-boots config.txt and trial-boots tryboot.txt, so the commit rewrites their kernel= lines in place (equal-length slot names, line inside one sector — no FAT writer) through the guard as BootConfig. Boot 1 commits config.txt -> B and loses power before tryboot.txt; boot 2 reads B back (the commit persisted), detects trial == active and re-points tryboot.txt at A, then a full commit back to A leaves config=A/tryboot=B, and re-committing the active slot writes nothing. Metal: the eMMC Gate-1 clamp must admit the BootConfig sector (Gate R)"
   "Pabslot|[P-abslot] PASS|impl|Validation|Production phase 1 step 3 (OTA brick safety): which boot-partition sectors may an OS-image update write? hal::abslot derives it from the card alone — MBR -> p1 FAT32 BPB -> root directory -> the ONE uncommented kernel=heqk8-[ab].img line in config.txt -> the OTHER slot file, which must be a single contiguous cluster run inside the FAT data area, not overlapping the active slot or the root directory; the eMMC driver uses it as its own Gate 1 (Emmc::admit_inactive_slot — the caller cannot name a range; admitting a boot-config flip revokes it; never the keystore or DataVolume). Proven on the two-boot factory-layout disk on BOTH sides of a commit (config=B -> A's file, config=A -> B's file, each equal to the kernel's independent FAT reader); host tests: legacy single-image line, commented / duplicate lines, fragmented or over-long chains, overlapping slots, missing / duplicate entries, non-FAT32, garbage sweep"
+  "P15otaimg|[P15-otaimg] PASS|impl|Validation|Production phase 1 step 4 / ADR 0056 phase 2: OS-image update over the signed-upload channel — the container is the signed boot image itself, staged sector by sector (never whole in RAM); finish runs the SHARED boot verifier over a streamed digest with floor = max(BootInfo floor, running SVN), requires the factory A/B layout (hal::abslot), the image to fit the inactive slot file, the HBoot prefix byte-identical to the installed one (HBoot bytes are not covered by the payload signature, so boot-loader changes stay USB-only), tryboot.txt naming the inactive slot, and the device running its cold-boot slot (never overwrite a running trial's fallback); activate copies Staging into the slot run the storage driver admits on its own and re-hashes the payload FROM THE SLOT, then the AP loop trial-boots it (tryboot one-shot). QEMU single boot on a factory disk with a real-size signed image: accepted -> slot B; refused svn<floor, wrong length, a flipped payload byte, a different HBoot prefix, a running trial; slot A byte-identical after the install"
   "AB|[HBoot-AB] PASS|impl|Validation|A/B trial boot: kernel confirms health (hvc #1 disarms HBoot's EL2 watchdog) or firmware falls back to the known-good slot"
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
@@ -359,6 +360,43 @@ PY
     echo "FAIL/see report"; grep -hF "[P15-abcommit]" "$AB1" "$AB2" | sed 's/^/    /'
   fi
   rm -rf "$ABDISK" "$ABPART" "$ABW" "$AB1" "$AB2"
+else
+  echo "skip (no mkfs.vfat/mcopy, or no p15-write kernel)"
+fi
+
+# --- P15-otaimg: OS-image update over the upload path (production phase 1) ----
+# A factory-layout disk whose slot A holds a REAL-SIZE signed image (HBoot-prefix pattern + the dev-
+# signed 3,000,000-byte-zero-body header fixture + the body) and slot B junk of the same size;
+# config=A, tryboot=B. One boot: stage, check (+ refusals), install into B, re-hash from the slot.
+echo -n "[P15-otaimg] OS-image update: stage -> verify -> inactive slot ... "
+if command -v mkfs.vfat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1 && [ -f "$KERNEL" ]; then
+  OD="$(mktemp)"; OP="$(mktemp)"; OW="$(mktemp -d)"; OL="$(mktemp)"
+  python3 -I - "$OW" kernel/src/testdata/ota_big_hdr.bin <<'PY'
+import sys, random
+out, hdr = sys.argv[1], open(sys.argv[2], 'rb').read()
+r = random.Random(7)
+pre = bytes(r.getrandbits(8) for _ in range(0x200000))
+open(f"{out}/a", "wb").write(pre + hdr + bytes(3000000))
+open(f"{out}/b", "wb").write(bytes(r.getrandbits(8) for _ in range(0x200000 + len(hdr) + 3000000)))
+for name, slot in (("config.txt", "a"), ("tryboot.txt", "b")):
+    open(f"{out}/{name}", "w").write(f"# heqk A/B boot config (validate.sh OTA disk)\narm_64bit=1\nkernel=heqk8-{slot}.img\n")
+PY
+  dd if=/dev/zero of="$OP" bs=512 count=131072 status=none
+  mkfs.vfat -F 32 -s 8 "$OP" >/dev/null 2>&1
+  for f in config.txt tryboot.txt; do mcopy -i "$OP" "$OW/$f" ::"$f" >/dev/null 2>&1; done
+  mcopy -i "$OP" "$OW/a" ::heqk8-a.img >/dev/null 2>&1
+  mcopy -i "$OP" "$OW/b" ::heqk8-b.img >/dev/null 2>&1
+  # p1 at LBA 32768: earlier p15 self-tests in the same boot write scratch sectors at fixed LBAs
+  # (around 8192, the real factory p1 start) — keep the OTA slots clear of them.
+  dd if=/dev/zero of="$OD" bs=1M count=96 status=none
+  printf 'start=32768, size=131072, type=c\n' | sfdisk --quiet --label dos "$OD" 2>/dev/null
+  dd if="$OP" of="$OD" bs=512 seek=32768 conv=notrunc status=none
+  timeout "$QEMU_TIMEOUT" qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
+    -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+    -drive file="$OD",format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel "$KERNEL" >"$OL" 2>&1
+  cat "$OL" >> "$LOG"
+  if grep -qF "[P15-otaimg] PASS" "$OL"; then echo "PASS"; else echo "FAIL/see report"; grep -aF "[P15-otaimg]" "$OL" | sed 's/^/    /'; fi
+  rm -rf "$OD" "$OP" "$OW" "$OL"
 else
   echo "skip (no mkfs.vfat/mcopy, or no p15-write kernel)"
 fi
