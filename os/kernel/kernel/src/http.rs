@@ -359,6 +359,23 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     }
     crate::actions::tick(now_ms);
     // ADR 0053: the only writes — reversible, TTL-bound actions behind origin + CSRF + replay guards.
+    if req.post && req.path == "/api/owner-rules" {
+        // ADR 0055: durable owner rules (journal). Same guards as the actions + re-auth on every write.
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        return match crate::ownerapi::submit(&c, req.body, auth) {
+            Ok(o) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"seq\":{},\"dry_run\":{},\"before\":\"{}\",\"after\":\"{}\",\"shadowed_by\":", o.seq, o.seq == 0, o.before, o.after);
+                if o.shadowed_by.is_empty() { w.raw("null") } else { w.string(o.shadowed_by) }
+                w.raw("}");
+            }),
+            Err(why) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":false,\"refused\":\"{}\"}}", why);
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
     if req.post && (req.path == "/api/actions" || req.path == "/api/actions/revoke") {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         let r = if req.path == "/api/actions" {
@@ -396,6 +413,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 crate::actions::MIN_TTL_S, crate::actions::MAX_TTL_S);
         }),
         "/api/actions" => json(scratch, |w| render_actions(w)),
+        "/api/owner-rules" => json(scratch, |w| crate::ownerapi::render(w)),
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
         "/api/tls" => json(scratch, |w| render_tls(w)),
         "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
