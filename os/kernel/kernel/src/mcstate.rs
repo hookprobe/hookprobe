@@ -198,7 +198,10 @@ pub struct McState {
     /// True once a validated SNTP reply has set the wall clock (the UI shows "unsynced" otherwise).
     pub clock_synced: bool,
     /// The device's own WAN (the AP image): None on a passive sensor.
-    pub wan: Option<WanFacts>,
+    /// The AP's WAN facts (`set_wan` / `wan`). Stored as a value + flag, not `Option<WanFacts>`:
+    /// the Option's `None` niche (up = 2) made the whole 33 KB state non-zero -> .data (image budget).
+    wan_v: WanFacts,
+    wan_ok: bool,
     /// How many of the newest detections the device seals across a reboot (0 = none persisted).
     pub sealed_cap: u16,
     /// Passive inventory: (IPv4 host order, last seen epoch ms). 0 = empty slot.
@@ -240,7 +243,8 @@ impl McState {
             change: 0,
             cloud_linked: false,
             clock_synced: false,
-            wan: None,
+            wan_v: WanFacts { up: false, ip: [0; 4], mode: 0, ipv6: false, clients: 0, pkts_out: 0, pkts_in: 0, dns_inspected: 0, dns_blocked: 0, blocklist: 0 },
+            wan_ok: false,
             sealed_cap: 0,
             hosts: [(0, 0, 0); HOST_CAP],
             leases: [arch_aarch64::dhcpd::LEASE0; arch_aarch64::dhcpd::LEASES],
@@ -253,6 +257,17 @@ impl McState {
     #[inline]
     fn frq(&self) -> u64 {
         self.cntfrq.max(1)
+    }
+
+    /// Record the AP's WAN facts (shown by /api/health).
+    pub fn set_wan(&mut self, f: WanFacts) {
+        self.wan_v = f;
+        self.wan_ok = true;
+    }
+
+    /// The AP's WAN facts, once the AP loop has reported them.
+    pub fn wan(&self) -> Option<WanFacts> {
+        if self.wan_ok { Some(self.wan_v) } else { None }
     }
 
     /// Anchor `cntpct` ticks to wall time: `boot_epoch_ms` is the epoch at `boot_ticks`.
