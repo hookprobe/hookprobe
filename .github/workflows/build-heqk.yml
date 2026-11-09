@@ -86,6 +86,11 @@ jobs:
       # validate.sh boots the QEMU flavor only. The shipped flavors: `prod` / `prod-mc` (GEM sensor) and the
       # Wi-Fi AP product `hboot,apmc,wifi-bigtx,appersist` (G12, 2026-11-09). `prod`+`apmode` stays refused:
       # they are two alternative never-returning loops (the AP one would make `prod`'s unreachable).
+      # Readiness 4.1: the detection regression gate — the synthetic attack corpus replayed through the real
+      # detection pipeline (QEMU) must be fully detected without alert storms (tools/detbench).
+      - name: detection benchmark gate (tools/detbench/ci.sh)
+        run: bash tools/detbench/ci.sh
+
       - name: heqk shipped-flavor gate (prod, prod-mc, AP product build; prod+apmode refused; no Wi-Fi creds in source)
         working-directory: os/kernel
         run: |

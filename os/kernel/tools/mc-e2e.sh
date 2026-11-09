@@ -101,7 +101,10 @@ DR=$(echo "$H" | jget "d['dropped']")
 [ "$DR" -ge 5 ] 2>/dev/null && ok "heqk dropped the attack frames on the wire (dropped=$DR)" || bad "attack frames not dropped (dropped=$DR)"
 DETS=$(curl -s -m 10 $C "$B/api/detections?limit=50")
 N=$(echo "$DETS" | jget "d['count']")
-[ "$N" -ge $((D0 + 5)) ] 2>/dev/null && ok "detections recorded ($D0 → $N)" || bad "expected ≥5 new detections, got $D0 → $N"
+# five attack connections from one source on two rules: every frame dropped, ONE event per (rule, source) per
+# minute (alert de-duplication, detection benchmark 2026-11-09) -> exactly two new detections
+[ "$N" -ge $((D0 + 2)) ] 2>/dev/null && ok "detections recorded ($D0 → $N)" || bad "expected ≥2 new detections, got $D0 → $N"
+[ "$N" -le $((D0 + 2)) ] 2>/dev/null && [ "$DR" -ge 5 ] 2>/dev/null && ok "repeats collapse to one event per rule and source while every frame is dropped (dropped=$DR, events +$((N - D0)))" || bad "alert de-duplication: dropped=$DR, events $D0 → $N"
 echo "$DETS" | jget "any(x['rule_id']==1200001 and 'C2 port 4444' in x['rule_msg'] and x['severity']==2 for x in d['detections'])" | grep -q True \
   && ok "C2-4444 detection: rule 1200001, HIGH, with verdict class" || bad "no C2-4444 detection in $DETS"
 echo "$DETS" | jget "any(x['rule_id']==1200002 for x in d['detections'])" | grep -q True && ok "telnet-23 detection present" || bad "no telnet-23 detection"
@@ -111,10 +114,10 @@ echo "$INC" | jget "d['count']>=1 and d['incidents'][0]['device_ip']=='10.0.2.2'
   && ok "correlated into a High incident for 10.0.2.2" || bad "incident correlation: $INC"
 IID=$(echo "$INC" | jget "d['incidents'][0]['id']")
 ID=$(curl -s -m 10 $C "$B/api/incidents/$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$IID")")
-echo "$ID" | jget "d['explanation']['model'] is None and d['explanation']['evidence']>=5 and d['attack_path']['node_count']>=2" | grep -q True \
+echo "$ID" | jget "d['explanation']['model'] is None and d['explanation']['evidence']>=2 and d['attack_path']['node_count']>=2" | grep -q True \
   && ok "incident drill-down: deterministic explanation (no AI model claimed) + attack path" || bad "incident detail: $ID"
 TL=$(curl -s -m 10 $C "$B/api/incidents/$IID/timeline")
-echo "$TL" | jget "d['found'] and d['count']>=5 and all(e['kind'] in ('detection','flow') for e in d['events'])" | grep -q True \
+echo "$TL" | jget "d['found'] and d['count']>=2 and all(e['kind'] in ('detection','flow') for e in d['events'])" | grep -q True \
   && ok "incident timeline served by heqk" || bad "timeline: $TL"
 DNS=$(curl -s -m 10 $C "$B/api/dns")
 echo "$DNS" | jget "'lists' in d and 'counters' in d and isinstance(d['recent'],list) and d['policy']['encrypted_dns'] in ('block','allow') and d['policy']['level'] in ('relaxed','balanced','strict') and 'level-allowed' in d['counters']" | grep -q True \
@@ -127,10 +130,10 @@ UPS=$(curl -s -m 10 $C "$B/api/upload")
 echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices'] and all(t['source']=='boot' for t in d['types']) and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"
 EN=$(curl -s -m 10 $C "$B/api/engines")
-echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=5 for e in d['engines'])" | grep -q True \
+echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=2 for e in d['engines'])" | grep -q True \
   && ok "/api/engines: the device's real detection tiers, signature hits counted" || bad "/api/engines: $EN"
 ES=$(curl -s -m 10 $C "$B/api/evidence/stats")
-echo "$ES" | jget "d['nodes']['detections']>=5 and d['nodes']['incidents']>=1 and d['last_prune'] is None" | grep -q True \
+echo "$ES" | jget "d['nodes']['detections']>=2 and d['nodes']['incidents']>=1 and d['last_prune'] is None" | grep -q True \
   && ok "/api/evidence/stats from live evidence (no prune fabricated)" || bad "/api/evidence/stats: $ES"
 EG=$(curl -s -m 10 $C "$B/api/evidence/graph?node=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$IID")")
 echo "$EG" | jget "d['node_count']>=2 and any(n['type']=='Threat' for n in d['nodes'])" | grep -q True \
@@ -144,7 +147,7 @@ echo "$EF" | jget "'policy' in d and isinstance(d['sources'],list) and d['count'
 RL=$(curl -s -m 10 $C "$B/api/reports")
 RID=$(echo "$RL" | jget "d['reports'][0]['id']")
 RD=$(curl -s -m 10 $C "$B/api/reports/$RID")
-echo "$RD" | jget "d['report']['device_ip']=='10.0.2.2' and len(d['report']['evidence_node_ids'])>=5 and len(d['report']['response_taken'])>=1" | grep -q True \
+echo "$RD" | jget "d['report']['device_ip']=='10.0.2.2' and len(d['report']['evidence_node_ids'])>=2 and len(d['report']['response_taken'])>=1" | grep -q True \
   && ok "/api/reports/:id: a deterministic incident report with evidence ids and the actions taken" || bad "report: $RD"
 # ADR 0053 operator actions over real HTTP: session bootstrap, guards, audit, revoke.
 SS=$(curl -s -m 10 $C "$B/api/session"); CS=$(echo "$SS" | jget "d['csrf']"); SQ=$(echo "$SS" | jget "d['next_seq']")

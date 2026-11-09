@@ -465,17 +465,7 @@ pub fn load_text(t: &[u8]) -> (u32, u32) {
 }
 
 fn stream<D: BlockDev>(dev: &D, lba: u64, len: u64, f: &mut dyn FnMut(&[u8])) -> Option<()> {
-    let mut sec = [0u8; 512];
-    let mut left = len;
-    let mut k = 0u64;
-    while left > 0 {
-        dev.read_block(lba + k, &mut sec).ok()?;
-        let take = left.min(512) as usize;
-        f(&sec[..take]);
-        left -= take as u64;
-        k += 1;
-    }
-    Some(())
+    crate::store::stream_blocks(dev, lba, len, f)
 }
 
 fn signed_message(gen: u64, len: u64, digest: &[u8; 32]) -> [u8; 54] {

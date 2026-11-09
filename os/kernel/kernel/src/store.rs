@@ -547,3 +547,21 @@ impl<'d, D: BlockDev> SealedStore<'d, D> {
         Ok(())
     }
 }
+
+/// Stream `len` bytes starting at sector `lba` to `f`, 16 sectors per device read (one multi-block command on
+/// the eMMC — the signed-pack loaders read megabytes at boot).
+pub fn stream_blocks<D: BlockDev + ?Sized>(dev: &D, lba: u64, len: u64, f: &mut dyn FnMut(&[u8])) -> Option<()> {
+    const CH: usize = 16;
+    let mut buf = [0u8; CH * 512];
+    let mut left = len;
+    let mut k = 0u64;
+    while left > 0 {
+        let nsec = (left.div_ceil(512) as usize).min(CH);
+        dev.read_blocks(lba + k, &mut buf[..nsec * 512]).ok()?;
+        let take = (left as usize).min(nsec * 512);
+        f(&buf[..take]);
+        left -= take as u64;
+        k += nsec as u64;
+    }
+    Some(())
+}
