@@ -60,7 +60,10 @@ yet say so (doc-only fix, no decision change).
 | 0057 Shield levels | V (metal) |
 
 ### 2.1 Security deviations (ranked)
-1. **ADR 0049 D1 — the policy/pack trust anchor is compiled into the image, not TOFU-pinned per device.** One
+1. **ADR 0049 D1 — the policy/pack trust anchor is compiled into the image, not TOFU-pinned per device.**
+   **Fixed (part 1) 2026-11-10:** `anchor.rs` pins the first operator key in the DataVolume Header region; a
+   different or missing image key can no longer replace it; the POLICY generation floor is persisted
+   (`[P-anchor]`). Open: per-pack generation floors, signed key rotation (operator decision). One
    operator key (`HEQK_POLICY_PUBKEY`) and a compile-time generation floor authorise POLICY and every signed
    pack; an image built without a key accepts unsigned files. Whoever builds an image (including an OTA) can
    replace the customer's anchor. **Fix (A):** persist a TOFU pin + per-type generation floors (reuse the
@@ -107,6 +110,22 @@ FAILs under load (now 300 s); QEMU self-tests write scratch LBAs near 8192 (test
 Image budget: the AP payload had reached 3,157,256 B against the 3,137,736 B ceiling. Fixed by moving three
 statics to `.bss` (non-zero initialisers) and embedding the UI gzip-compressed (`Content-Encoding: gzip`):
 payload 2,518,296 B, **619 KB headroom**.
+
+### 3.1 Fixed after the first audit pass (2026-11-10, same night)
+| Item | Change | Evidence |
+|---|---|---|
+| A2 | factory pads both slot files to 5 MiB | factory script |
+| A3 | CI + release build the shipping AP flavour; `tools/ci/ap-size-gate.sh` | local gate: payload 2,539,144 / 3,137,736 B |
+| A4 (part 1) | device-pinned policy key + persisted POLICY floor | `[P-anchor]`, all signed-pack gates unchanged |
+| A5 | per-source login throttle; login refuses a cross-origin browser POST | `[P-mcauth]`, mc-e2e PASS incl. the browser leg |
+| A6 | release + factory refuse a bench `HEQK_AP_PSK` | scripts |
+| A7 (NAT) | 4,096 mappings, hashed forward index (was 256 + per-packet scan) | `[P-nat-index]`, apcore gates |
+| WAN RX | AP image GEM RX ring 512 (was 128): bench showed 64 % `res_err` and ~6 Mbps from a LAN-speed sender | build; **metal measurement pending** |
+| IPv6 self-heal | Ethernet-WAN IPv6 re-probe after a late Router Advertisement (RA-gated, ≤ every 10 min) | build; metal pending |
+| Upload client | `hq-upload.py`: one kept-alive HTTPS connection + resume (per-chunk TLS handshakes made the device reset connections on a 4.6 MB image) | bench |
+| Bench | Pi rejoin helper, kea/radvd after a host reboot, local throughput sink, cycle stops on a failed boot | bench runs |
+
+Known minor: a stalled upload stays listed as in flight in `GET /api/upload` until the next `begin` expires it.
 
 ## 4. Autonomous completion plan (A — no human needed)
 
