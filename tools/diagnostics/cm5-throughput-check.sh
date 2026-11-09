@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 # cm5-throughput-check — download throughput for a Wi-Fi client through the heqk AP (NAT + IDS + Shield on the
 # path), from the bench Pi's AP-side interface. Reports each run and the median; FAIL below the floor.
-#   tools/diagnostics/cm5-throughput-check.sh [pi] [iface] [floor-mbps] [runs]
+#   tools/diagnostics/cm5-throughput-check.sh [pi] [iface|auto] [floor-mbps] [runs]
 # Baseline 2026-11-09 (cd624beb, bench Pi USB Wi-Fi): 73 / 120 / 135 Mbps, median 120.
 set -u -o pipefail
-PI="${1:-claude@10.200.0.4}"; IF="${2:-wlan1}"; FLOOR="${3:-60}"; RUNS="${4:-5}"
+PI="${1:-claude@10.200.0.4}"; IF="${2:-auto}"; FLOOR="${3:-60}"; RUNS="${4:-5}"
 URL='https://speed.cloudflare.com/__down?bytes=60000000'
+# auto: the Pi interface that routes to the AP (it may re-join on either adapter after a power cycle)
+[ "$IF" = auto ] && for _ in $(seq 1 30); do IF=$(ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "ip -4 route get 10.99.0.1 | sed -n 's/.* dev \\([^ ]*\\).*/\\1/p'" 2>/dev/null); [ -n "$IF" ] && [ "$IF" != auto ] && break; IF=auto; sleep 3; done
+echo "  client interface: $IF"
 # the client must be on the AP with a default route through it first (after other suites it may be re-associating)
 for _ in $(seq 1 30); do ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "ip -4 addr show $IF | grep -q 'inet ' && curl --interface $IF -s -o /dev/null -m 5 https://example.com" && break; sleep 3; done
 v=()
