@@ -120,6 +120,19 @@ jobs:
   # End-to-end (ADR 0047): real attack traffic -> heqk IPS -> evidence -> heqk's own HTTP(S) API -> the
   # Mission Control UI in a real browser, all under QEMU. A skipped browser leg FAILS this job (the script
   # itself never silently passes; CI additionally refuses the API-only result).
+  # Readiness 2.3: coverage-guided libFuzzer over the host-buildable parsers (hal: POLICY.TXT, WAN.TXT,
+  # frame facts / VLAN tags, SDIO glom). 60 s per target per run; any crash fails the job.
+  heqk-fuzz:
+    name: "heqk parser fuzzing (libFuzzer, hal)"
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: tools/fuzz/run.sh
+        run: bash tools/fuzz/run.sh 60
+
   heqk-mc-e2e:
     name: "heqk Mission Control end-to-end (QEMU + Chromium)"
     runs-on: ubuntu-24.04

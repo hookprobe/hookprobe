@@ -459,6 +459,95 @@ pub fn lan_selftest() -> bool {
     pass
 }
 
+// ---- step 3b: the Wi-Fi client IPv6 branch --------------------------------------------------------------
+
+/// The fate of one IPv6 frame from a Wi-Fi client (the AP's IPv6 LAN router is up).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Client6 {
+    /// RS / NS answered by the router: send `v6buf[..len]` back to the client.
+    Reply(usize),
+    /// Routed out the WAN (true = sent; the flow's inbound pinhole opened).
+    Forwarded(bool),
+    /// `lan in` / `wan out` block: a reject went back to the client.
+    Blocked,
+    /// `lan in` / `wan out` drop.
+    Dropped,
+    /// The IDS dropped it.
+    IdsDrop,
+    /// Nothing to do (not routable / for us / malformed).
+    Ignored,
+}
+
+/// The client IPv6 branch: the LAN router (RS/NS/forwarding decision), then `lan in` and `wan out` (IPv6
+/// egress is the internet sub-interface — the management VLAN carries no IPv6), the observe-only IPv6
+/// detectors keyed on the device (scan shape, JA4, beacon / brute force, IOC — `lease_of` maps the client MAC
+/// to its IPv4 lease for attribution), the IDS, and the send. The pinhole opens only after a successful send.
+#[allow(clippy::too_many_arguments)]
+pub fn client6<N: ApNic>(
+    frame: &[u8],
+    v6: &mut arch_aarch64::ip6lan::V6Lan,
+    now_ms: u64,
+    wan_usable: bool,
+    me: &[u8; 6],
+    pol: &mut Policy,
+    c: &mut FwdCounters,
+    v6buf: &mut [u8],
+    nic: &mut N,
+    lease_of: &dyn Fn(&[u8; 6]) -> u32,
+    reply: &mut dyn FnMut(&[u8]) -> bool,
+) -> Client6 {
+    use arch_aarch64::ip6lan::LanAction;
+    match v6.on_lan(frame, now_ms, v6buf) {
+        LanAction::Reply(k) => Client6::Reply(k),
+        LanAction::Forward(k) => {
+            let pa = hal::policy::facts(frame)
+                .map(|p| {
+                    let a = pol.check(If::Lan, Dir::In, &p).0;
+                    if a == Act::Allow { (pol.check(If::Wan, Dir::Out, &p).0, If::Wan as usize) } else { (a, If::Lan as usize) }
+                })
+                .unwrap_or((Act::Allow, 0));
+            if frame.len() >= 54 {
+                let mut sm = [0u8; 6];
+                sm.copy_from_slice(&frame[6..12]);
+                let mut d6 = [0u8; 16];
+                d6.copy_from_slice(&frame[38..54]);
+                let _ = crate::rules::flow_scan_observe6(frame, crate::srckey::dev(&sm), crate::srckey::v6net(&d6));
+                let lease = lease_of(&sm);
+                if frame[20] == 6 {
+                    crate::ja4::observe6(frame, lease);
+                    crate::rules::behavioral_observe6(frame, lease);
+                }
+                let _ = crate::rules::ioc_v6_hit(lease, &d6);
+            }
+            match pa {
+                (Act::Allow, _) => {
+                    if crate::packet::verdict(frame).1 == crate::packet::DROP {
+                        Client6::IdsDrop
+                    } else if wan_usable && nic.wan_tx6(&v6buf[..k]) {
+                        v6.commit(now_ms);
+                        Client6::Forwarded(true)
+                    } else {
+                        Client6::Forwarded(false)
+                    }
+                }
+                (Act::Block, i) => {
+                    c.pol_block[i] += 1;
+                    let mut rj = [0u8; 1400];
+                    if let Some(r) = arch_aarch64::reject::reject6(frame, &v6.gua, me, &mut rj) {
+                        let _ = reply(&rj[..r]);
+                    }
+                    Client6::Blocked
+                }
+                (Act::Drop, i) => {
+                    c.pol_drop[i] += 1;
+                    Client6::Dropped
+                }
+            }
+        }
+        _ => Client6::Ignored,
+    }
+}
+
 // ---- [P-apcore] ---------------------------------------------------------------------------------------------
 
 /// A recording fake: every channel keeps a count and the last frame.
