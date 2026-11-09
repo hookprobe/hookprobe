@@ -116,6 +116,8 @@ mod ota;
 mod fat;
 #[allow(dead_code)] // A/B commit (B2): the on-device OTA commit + its QEMU two-boot proof
 mod abboot;
+/// Device-pinned policy trust anchor (ADR 0049 D1 TOFU).
+mod anchor;
 /// OS-image update over the upload channel (ADR 0056 phase 2 / production phase 1).
 #[cfg(all(feature = "p15-write", feature = "netsvc"))]
 #[allow(dead_code)]
@@ -3109,6 +3111,19 @@ fn cm5_p10_probe() {
                                 }
                                 Some(Err(e)) => kprint!(" [LINK] WAN.TXT link keys invalid ({:?}) — internet untagged, no management sub-interface\n", e),
                                 None => {}
+                            }
+                            // ADR 0049 D1: the device-pinned trust anchor decides which operator key verifies
+                            // POLICY.TXT and every signed pack — before anything signed is read.
+                            #[cfg(feature = "p15-write")]
+                            {
+                                let (d, prev, wrote) = anchor::boot(policysig::POLICY_PUBKEY);
+                                let fp = |k: [u8; 32]| u32::from_be_bytes([k[0], k[1], k[2], k[3]]);
+                                match d {
+                                    anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
+                                    anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY floor {})\n", fp(k), prev.map_or(0, |a| a.policy_floor)),
+                                    anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
+                                    anchor::Decision::Standalone => kprint!(" [ANCHOR] no operator key pinned or compiled in (standalone device)\n"),
+                                }
                             }
                             match load_policy(&dev) {
                                 Some(Ok(())) => {
@@ -6709,6 +6724,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = rules::dedup_selftest();
         // M3 snapshot v2: the persisted evidence ring restores IN ORDER after wrapping.
         let _ = snapshot::snapshot_selftest();
+        let _ = anchor::selftest();
         let w = rtwdog::selftest();
         kprint!(" [P-rtwdog] {} — runtime watchdog (production phase 3a): armed only when HBoot advertises hvc #3 (an older HBoot, no EL2 gate or no handoff never arms), worst loop gap tracked for the heartbeat\n",
             if w { "PASS" } else { "FAIL" });
@@ -13665,14 +13681,21 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
     }
     // ADR 0049 D1: with an operator key in this image, the signature is checked BEFORE the parser sees a
     // byte; any failure is reported as a rejected policy (=> the management lockdown below), never applied.
-    if let Some(key) = policysig::POLICY_PUBKEY {
+    if let Some(key) = policysig::key() {
         let mut sig = [0u8; policysig::SIG_FILE_LEN];
         let have = fat::locate_contiguous(dev, p1, policysig::SIG_8_3)
             .and_then(|(l, _)| dev.read_block(l, &mut sig).ok())
             .is_some();
-        let r = if have { policysig::verify(&buf, &sig, &key, policysig::POLICY_GEN_FLOOR) } else { Err(policysig::SigErr::Missing) };
+        let r = if have { policysig::verify(&buf, &sig, &key, policysig::floor()) } else { Err(policysig::SigErr::Missing) };
         match r {
-            Ok(gen) => kprint!(" [POLICY] signature OK — operator key, generation {} (floor {})\n", gen, policysig::POLICY_GEN_FLOOR),
+            Ok(gen) => {
+                kprint!(" [POLICY] signature OK — operator key, generation {} (floor {})\n", gen, policysig::floor());
+                // persist a newer generation as the floor (an older signed POLICY.TXT never comes back)
+                #[cfg(all(feature = "cm5", feature = "p15-write"))]
+                if gen > policysig::floor() && !crate::anchor::raise_policy_floor(gen) {
+                    kprint!(" [ANCHOR] could not persist the POLICY generation floor {} (kept in RAM for this boot)\n", gen);
+                }
+            }
             Err(e) => {
                 kprint!(" [POLICY] signature REFUSED ({:?}) — the policy is not parsed\n", e);
                 return Some(Err(hal::policy::PolicyErr::Unsigned));

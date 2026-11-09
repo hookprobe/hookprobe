@@ -108,7 +108,16 @@ pub fn selftest() -> bool {
 /// service starts) and restores it; nothing else writes it.
 static mut TEST_KEY: Option<[u8; 32]> = None;
 pub fn key() -> Option<[u8; 32]> {
-    unsafe { TEST_KEY }.or(POLICY_PUBKEY)
+    // The device-pinned anchor (crate::anchor) wins over the image's compiled key once the boot installed it.
+    unsafe { TEST_KEY }.or(match crate::anchor::effective() {
+        Some(k) => k,
+        None => POLICY_PUBKEY,
+    })
+}
+
+/// The POLICY generation floor: the image's compiled floor or the device's persisted one, whichever is higher.
+pub fn floor() -> u64 {
+    POLICY_GEN_FLOOR.max(crate::anchor::policy_floor())
 }
 pub fn selftest_key(k: Option<[u8; 32]>) {
     unsafe { TEST_KEY = k };
