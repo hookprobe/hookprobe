@@ -41,6 +41,13 @@
 // StubTrng) is a SELFTEST-ONLY facility. If it is ever enabled on the metal
 // profile, refuse to build — a green build is never worth a fleet-wide reused
 // ephemeral. This is the load-bearing guarantee that no seeded source reaches metal.
+// The cloud tier is a production profile with a REAL TRNG leaf too — same barrier.
+#[cfg(all(feature = "securechannel-selftest", feature = "cloud"))]
+compile_error!(
+    "securechannel-selftest (seeded/deterministic entropy) must NEVER be enabled on the \
+     cloud profile: the cloud HwTrng leaf is the real SMCCC TRNG, and a seeded path next to \
+     it is the reused-ephemeral defect. Build the cloud image WITHOUT securechannel-selftest."
+);
 #[cfg(all(feature = "securechannel-selftest", feature = "cm5"))]
 compile_error!(
     "securechannel-selftest (seeded/deterministic entropy) must NEVER be enabled on the \
@@ -128,7 +135,14 @@ impl RawTrng for HwTrng {
         {
             arch_aarch64::rng200::next_word_strict()
         }
-        #[cfg(not(feature = "cm5"))]
+        // Cloud (OCI A1): the hypervisor's SMCCC TRNG (Arm DEN0098) — the VM's only hardware
+        // entropy (no RNDR / RNG200 / virtio-rng). Same strict contract: `None` when absent
+        // or failing, never a substitute.
+        #[cfg(all(feature = "cloud", not(feature = "cm5")))]
+        {
+            arch_aarch64::smccc::trng_word()
+        }
+        #[cfg(not(any(feature = "cm5", feature = "cloud")))]
         {
             None
         }
