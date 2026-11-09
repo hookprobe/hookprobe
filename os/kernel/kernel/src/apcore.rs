@@ -459,6 +459,98 @@ pub fn lan_selftest() -> bool {
     pass
 }
 
+// ---- step 3c: the Wi-Fi data ladder (which path a client frame takes) -------------------------------------
+
+/// Which handler a Wi-Fi client frame goes to, after the AP's own DHCP / ARP-for-us answer (`act`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiPath {
+    /// The AP answered it (DHCP / ARP for us) — nothing more.
+    Answered,
+    /// mDNS / SSDP / LLMNR from a station -> the other stations (G10, IDS first).
+    Discovery,
+    /// IPv6 station -> station (G10, IDS first).
+    StationRelay6,
+    /// ARP from a station (proxy-ARP for another station, G10).
+    ProxyArp,
+    /// IPv6 through the AP's IPv6 router (only when it is up).
+    Ipv6,
+    /// IPv4 through the client gate chain (`client4`), when an uplink (WAN or management) is usable.
+    Ipv4,
+    /// Nothing to do with it.
+    Ignore,
+}
+
+/// The ladder's ORDER is a decision (it was an `else if` chain in the loop): discovery before the IPv6 station
+/// relay, the station relay before proxy-ARP, IPv6 only with the router up, IPv4 only with a usable uplink.
+pub fn wifi_path(frame: &[u8], act: u8, dh: &arch_aarch64::dhcpd::ApDhcp, v6_up: bool, uplink: bool) -> WifiPath {
+    if act != 0 {
+        return WifiPath::Answered;
+    }
+    let et = if frame.len() >= 14 { [frame[12], frame[13]] } else { return WifiPath::Ignore };
+    if crate::lanrelay::is_discovery_mcast(frame) {
+        WifiPath::Discovery
+    } else if crate::lanrelay::relay_target6(frame, dh) {
+        WifiPath::StationRelay6
+    } else if frame.len() >= 42 && et == [0x08, 0x06] {
+        WifiPath::ProxyArp
+    } else if frame.len() >= 54 && et == [0x86, 0xdd] && v6_up {
+        WifiPath::Ipv6
+    } else if uplink && frame.len() >= 34 && et == [0x08, 0x00] {
+        WifiPath::Ipv4
+    } else {
+        WifiPath::Ignore
+    }
+}
+
+/// `[P-apcore-ladder]` — step 3c.
+pub fn ladder_selftest() -> bool {
+    use arch_aarch64::dhcpd::ApDhcp;
+    let mut dh = ApDhcp::new();
+    dh.now = 100;
+    let a = [0x02, 0, 0, 0, 0, 0x0a];
+    let _ = dh.alloc_for(&a, &[10, 99, 0, 10]);
+    dh.commit(&a);
+    let mut f = [0u8; 120];
+    let mut eth = |dst: [u8; 6], et: [u8; 2], f: &mut [u8; 120]| {
+        f.fill(0);
+        f[0..6].copy_from_slice(&dst);
+        f[6..12].copy_from_slice(&a);
+        f[12..14].copy_from_slice(&et);
+    };
+    eth([0xff; 6], [0x08, 0x06], &mut f);
+    let arp = wifi_path(&f[..60], 0, &dh, true, true) == WifiPath::ProxyArp;
+    let answered = wifi_path(&f[..60], b'A', &dh, true, true) == WifiPath::Answered;
+    // mDNS to 224.0.0.251:5353 (IPv4 multicast MAC)
+    eth([0x01, 0x00, 0x5e, 0, 0, 0xfb], [0x08, 0x00], &mut f);
+    f[14] = 0x45;
+    f[23] = 17;
+    f[26..30].copy_from_slice(&[10, 99, 0, 10]);
+    f[30..34].copy_from_slice(&[224, 0, 0, 251]);
+    f[34..36].copy_from_slice(&5353u16.to_be_bytes());
+    f[36..38].copy_from_slice(&5353u16.to_be_bytes());
+    let mdns = wifi_path(&f[..80], 0, &dh, true, true) == WifiPath::Discovery;
+    // unicast IPv4 to the internet: client4 when an uplink is usable, ignored otherwise
+    eth([0x02, 0, 0, 0, 0, 0x01], [0x08, 0x00], &mut f);
+    f[14] = 0x45;
+    f[23] = 6;
+    f[26..30].copy_from_slice(&[10, 99, 0, 10]);
+    f[30..34].copy_from_slice(&[93, 184, 216, 34]);
+    let v4 = wifi_path(&f[..60], 0, &dh, true, true) == WifiPath::Ipv4 && wifi_path(&f[..60], 0, &dh, true, false) == WifiPath::Ignore;
+    // IPv6 to the internet: the router path only while it is up
+    eth([0x02, 0, 0, 0, 0, 0x01], [0x86, 0xdd], &mut f);
+    f[14] = 0x60;
+    f[20] = 6;
+    f[38] = 0x20;
+    let v6 = wifi_path(&f[..80], 0, &dh, true, true) == WifiPath::Ipv6 && wifi_path(&f[..80], 0, &dh, false, true) == WifiPath::Ignore;
+    let short = wifi_path(&f[..10], 0, &dh, true, true) == WifiPath::Ignore;
+    let pass = arp && answered && mdns && v4 && v6 && short;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-ladder] {} — G0 step 3c: the Wi-Fi data ladder order (answered -> discovery -> IPv6 station relay -> proxy-ARP -> IPv6 router -> IPv4 gate chain): ARP -> proxy-ARP={} AP-answered stops={} mDNS -> discovery relay={} IPv4 only with a usable uplink={} IPv6 only with the router up={} runt ignored={}\n",
+        if pass { "PASS" } else { "FAIL" }, arp, answered, mdns, v4, v6, short
+    ));
+    pass
+}
+
 // ---- step 3b: the Wi-Fi client IPv6 branch --------------------------------------------------------------
 
 /// The fate of one IPv6 frame from a Wi-Fi client (the AP's IPv6 LAN router is up).
@@ -548,6 +640,95 @@ pub fn client6<N: ApNic>(
         }
         _ => Client6::Ignored,
     }
+}
+
+// ---- step 3c: station-to-station (G10) ------------------------------------------------------------------
+
+/// The station-to-station branches a client frame can take before routing (G10): discovery multicast
+/// (mDNS / SSDP / LLMNR) copied to the other stations, IPv6 station -> station, and ARP for another station
+/// (proxy-ARP — the firmware's `ap_isolate` keeps stations from talking directly). Every copy passes the IDS
+/// first. Returns true when the frame belonged to one of these branches (whatever was sent).
+pub fn station_relay(frame: &[u8], dh: &arch_aarch64::dhcpd::ApDhcp, now_s: u64, send: &mut dyn FnMut(&[u8]) -> bool) -> bool {
+    use crate::lanrelay;
+    let ids_ok = || crate::packet::verdict(frame).1 != crate::packet::DROP;
+    if lanrelay::is_discovery_mcast(frame) {
+        if ids_ok() {
+            let _ = lanrelay::relay_discovery(frame, dh, now_s, send);
+        }
+        true
+    } else if lanrelay::relay_target6(frame, dh) {
+        if ids_ok() {
+            let _ = send(frame);
+        }
+        true
+    } else if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
+        let mut ab = [0u8; 64];
+        let k = lanrelay::proxy_arp(frame, dh, &mut ab);
+        if k > 0 {
+            let _ = send(&ab[..k]);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// `[P-apcore-relay]` — step 3c.
+pub fn relay_selftest() -> bool {
+    use arch_aarch64::dhcpd::ApDhcp;
+    let mut dh = ApDhcp::new();
+    let (a_mac, a_ip, b_mac, b_ip) = ([0x02u8, 0, 0, 0, 0, 0x0a], [10u8, 99, 0, 10], [0x02u8, 0, 0, 0, 0, 0x0b], [10u8, 99, 0, 11]);
+    dh.now = 100;
+    let ok_a = dh.alloc_for(&a_mac, &[10, 99, 0, 10]).is_some();
+    dh.commit(&a_mac);
+    let ok_b = dh.alloc_for(&b_mac, &[10, 99, 0, 10]).is_some();
+    dh.commit(&b_mac);
+    let (a_ip, b_ip) = (dh.lease_for(&a_mac).unwrap_or(a_ip), dh.lease_for(&b_mac).unwrap_or(b_ip));
+    crate::devpolicy::load_text(b"");
+    let sent = core::cell::Cell::new(0u32);
+    let last = core::cell::RefCell::new([0u8; 64]);
+    let mut send = |f: &[u8]| {
+        sent.set(sent.get() + 1);
+        let n = f.len().min(64);
+        last.borrow_mut()[..n].copy_from_slice(&f[..n]);
+        true
+    };
+    // ARP who-has B from A -> a proxy answer "B is at B's MAC" back to A
+    let mut arp = [0u8; 42];
+    arp[0..6].copy_from_slice(&[0xff; 6]);
+    arp[6..12].copy_from_slice(&a_mac);
+    arp[12..14].copy_from_slice(&[0x08, 0x06]);
+    arp[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, 1]);
+    arp[22..28].copy_from_slice(&a_mac);
+    arp[28..32].copy_from_slice(&a_ip);
+    arp[38..42].copy_from_slice(&b_ip);
+    let proxied = station_relay(&arp, &dh, 100, &mut send) && sent.get() == 1 && last.borrow()[22..28] == b_mac && last.borrow()[0..6] == a_mac;
+    // an IPv4 unicast frame is none of these branches (the routing path decides)
+    let mut v4 = [0u8; 60];
+    v4[12] = 0x08;
+    v4[14] = 0x45;
+    let not_ours = !station_relay(&v4, &dh, 100, &mut send) && sent.get() == 1;
+    // mDNS from A (224.0.0.251:5353) -> a copy toward B
+    let mut md = [0u8; 80];
+    md[0..6].copy_from_slice(&[0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]);
+    md[6..12].copy_from_slice(&a_mac);
+    md[12..14].copy_from_slice(&[0x08, 0x00]);
+    md[14] = 0x45;
+    md[16..18].copy_from_slice(&66u16.to_be_bytes());
+    md[22] = 255;
+    md[23] = 17;
+    md[26..30].copy_from_slice(&a_ip);
+    md[30..34].copy_from_slice(&[224, 0, 0, 251]);
+    md[34..36].copy_from_slice(&5353u16.to_be_bytes());
+    md[36..38].copy_from_slice(&5353u16.to_be_bytes());
+    md[38..40].copy_from_slice(&46u16.to_be_bytes());
+    let mdns = station_relay(&md, &dh, 100, &mut send) && sent.get() >= 2;
+    let pass = ok_a && ok_b && proxied && not_ours && mdns;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-relay] {} — G0 step 3c: station-to-station branches (G10) in apcore::station_relay: ARP for another station answered by proxy-ARP={} plain IPv4 left to the routing path={} mDNS copied to the other stations={}\n",
+        if pass { "PASS" } else { "FAIL" }, proxied, not_ours, mdns
+    ));
+    pass
 }
 
 // ---- [P-apcore] ---------------------------------------------------------------------------------------------
