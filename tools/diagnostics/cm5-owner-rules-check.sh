@@ -10,6 +10,7 @@
 set -u -o pipefail
 KEY="${1:?owner key file}"; LOG="${2:?serial log}"; MC="${3:-https://192.168.200.146}"; PI="${4:-claude@10.200.0.4}"; DOMAIN="${5:-iana.org}"
 HERE=$(cd "$(dirname "$0")" && pwd)
+"$HERE/pi-ensure-ap.sh" >/dev/null 2>&1 || true   # the checks need the Pi on the CM5 AP
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
@@ -35,6 +36,7 @@ python3 "$HERE/cm5-relay.py" --backend nano --dev auto cycle >/dev/null 2>&1
 for _ in $(seq 1 60); do tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -aq "\[AP-OWNER\]" && break; sleep 3; done
 L=$(tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-OWNER\]" | tail -1); echo "  $L"
 grep -q "records replayed, [1-9]" <<<"$L"; chk $? "after the power cycle the journal replays the rule"
+"$HERE/pi-ensure-ap.sh" >/dev/null 2>&1 || true   # NetworkManager may give up during the CM5 reboot
 for _ in $(seq 1 40); do pi "ip route | grep -q '^default via 10.99.0.1'" && curl -sk -o /dev/null -m 5 "$MC/" && break; sleep 3; done
 sleep 5
 login; sess
