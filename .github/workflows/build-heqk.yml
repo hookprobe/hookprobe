@@ -39,6 +39,8 @@ on:
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
       - "tools/ci/stage-firmware.sh"
+      - "tools/detbench/**"   # run by the QEMU gate job
+      - "tools/fuzz/**"       # run by the heqk-fuzz job
   pull_request:
     paths:
       - "os/kernel/**"
@@ -46,6 +48,8 @@ on:
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
       - "tools/ci/stage-firmware.sh"
+      - "tools/detbench/**"   # run by the QEMU gate job
+      - "tools/fuzz/**"       # run by the heqk-fuzz job
   workflow_dispatch: {}
 
 permissions:
