@@ -123,13 +123,23 @@ Additional Information:
 **Mission Control**
 - Owner authentication: a salted verifier from the flasher, **no default password**; an unclaimed device
   refuses every protected route; HttpOnly SameSite session cookies; no CORS. **[metal]**
-- Served over **plain HTTP today** — HTTPS is ADR 0051 (EL0 TLS server, local name-constrained CA). **[not built]**
+- HTTPS (ADR 0051): TLS 1.3 with X25519MLKEM768 in an isolated EL0 server, local name-constrained CA, :80
+  redirects. **[metal]** The certificate is provisioned offline by the operator; until it is, the image serves
+  the login over plain HTTP. **[gap]**
+- `POLICY.TXT` and every signed pack verified against the operator key (ADR 0049 D1, ADR 0056). **[metal]**
+  The key is compiled into the image, not yet TOFU-pinned per device, and pack generation floors are not
+  persisted. **[gap — audit 2026-11-10 §2.1]**
+- IPv6 sources have an identity in the rate/scan tiers (ADR 0049 D2, `[P-v6src]`). **[qemu]** (unkeyed hash —
+  observe-only until a keyed hash lands)
+- OS update over the network: shared boot verifier on a streamed digest, SVN never below the running image,
+  inactive slot derived by the storage driver itself, tryboot trial, commit only when the AP serves and the
+  WAN is usable, automatic fallback otherwise. **[qemu]** (metal run pending)
+- HBoot never writes OTP unless built for factory provisioning (`otp-provision`). **[code]**
 
 **Not yet built (known gaps — do not assume these protections)**
-- `POLICY.TXT` is not yet signature-checked (ADR 0049 D1). **[not built]**
-- Control protocols (HTTP, DHCP, DNS, PPPoE, Noise) still parse in EL1; moving them to isolated EL0 servers is
-  ADR 0050. **[not built]**
-- IPv6 sources have no identity in the rate/scan tiers (ADR 0049 D2). **[not built]**
+- Control protocols (HTTP, DHCP, DNS, PPPoE, Noise, WPA2) still parse in EL1; moving them to isolated EL0
+  servers is ADR 0050 D4. **[not built]**
+- Login throttling is device-global (a LAN host can delay the owner's sign-in). **[gap]**
 
 ---
 

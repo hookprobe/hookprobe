@@ -12,7 +12,10 @@
 Product AP image with persistence (G12), SEC-2 OTP carve-out, signed POLICY/lists/IOC/rules/OUI/devices
 (ADR 0049/0052), Shield v2 + levels (ADR 0057), owner journal (ADR 0055), signed data-pack upload (ADR 0056
 ph.1), sealed evidence log (#54), WPA2 AP + NAT at 100–150 Mbps, IPv6 (PPPoE/DHCP/RA/PD), VLAN/mgmt/ACLs,
-TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 apcore steps 1–3a.
+TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 apcore steps 1–3c, runtime watchdog (metal: armed, worst loop gap 330 ms).
+
+> **Audit 2026-11-10:** `docs/design/heqk-audit-2026-11-10.md` (repository-root design docs) — feature truth
+> table, ADR compliance, evidence, the autonomous plan (A1–A12) and the human-dependency register.
 
 ### 1. Release blockers — trust chain and supply
 | # | Item | Kind | State |
@@ -21,7 +24,7 @@ TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 a
 | 1.2 | Secure-boot fuses (SEC-3) — irreversible, a provisioning-line step | D | out of scope (operator 2026-11-09) |
 | 1.3 | Persistent anti-rollback (SEC-6 SVN + POLICY generation floor, RPMB or sealed counter — no fuse writes) | D+B | HBoot reads the OTP SVN floor live and refuses a lower image; the advancing step and a persisted POLICY floor are missing |
 | 1.4 | Per-unit factory provisioning (owner token, setup credential, MCTLS, label/QR, self-test log) | A+B | bench scripts only |
-| 1.5 | OS image update over the network (ADR 0056 phase 2 → existing tryboot/abcommit) | A+B (design review: inactive-slot write admission) | not built |
+| 1.5 | OS image update over the network (ADR 0056 phase 2 → existing tryboot/abcommit) | A+B | **built, QEMU** (`[P-otaverify]`, `[P-abslot]`, `[P15-otaimg]` incl. trial → commit-on-health); metal run pending (audit A1); factory slot padding (A2) |
 
 ### 2. Kernel hardening
 | # | Item | Kind | State |
