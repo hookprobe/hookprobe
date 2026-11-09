@@ -19,6 +19,10 @@ pci = []
 # undefined instruction on a real VM) and the hypervisor SMCCC TRNG (the cloud VM's only
 # hardware entropy). Not combinable with cm5 (hboot owns EL2 there).
 smccc = []
+# AP image (audit 2026-11-10): a 512-deep GEM RX ring (Linux macb's default) — 128 descriptors fill in
+# ~1.5 ms of a gigabit burst and 64 % of WAN frames hit res_err on the bench. The EL0 GEM stages (whose
+# scan stubs hardcode 128, syscall.s) never run in the AP image: its loop lives inside cm5_p10_probe.
+gem-deep-rx = ["cm5"]
 hboot = ["cm5"] # entered by HBoot (heqk-boot) at EL1, console already up
 # P15 eMMC WRITE path — OFF by default (read-only, no brick risk). The only
 # sectors ever writable are 2016..2047; LBA 0 + partitions are never touched.
