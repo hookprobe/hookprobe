@@ -470,7 +470,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }),
         "/api/actions" => json(scratch, render_actions),
         "/api/owner-rules" => json(scratch, crate::ownerapi::render),
-        "/api/upload" => json(scratch, crate::upload::render),
+        "/api/upload" => {
+            crate::upload::expire(now_ms);
+            json(scratch, crate::upload::render)
+        }
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
         "/api/tls" => json(scratch, render_tls),
         "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
