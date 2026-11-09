@@ -554,7 +554,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 if st.cloud_linked { "cloud-linked" } else { "standalone" },
                 if st.clock_synced { "ntp" } else { "unsynced" }, rules, st.seen, st.forwarded, st.dropped, st.detections(),
                 st.hosts_active(now_epoch), st.retention().1, st.retention().2 / 1000, st.sealed_cap);
-            if let Some(f) = st.wan {
+            if let Some(f) = st.wan() {
                 let _ = write!(w, ",\"wan\":{{\"up\":{},\"ip\":\"{}.{}.{}.{}\",\"mode\":\"{}\",\"ipv6\":{},\"clients\":{},\"pkts_out\":{},\"pkts_in\":{},\"dns_inspected\":{},\"dns_blocked\":{},\"blocklist\":{}}}",
                     f.up, f.ip[0], f.ip[1], f.ip[2], f.ip[3], ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ipv6, f.clients, f.pkts_out, f.pkts_in, f.dns_inspected, f.dns_blocked, f.blocklist);
             }
@@ -981,7 +981,7 @@ pub fn mc_selftest() -> bool {
         let closed = has(&hh[..c], "Connection: close\r\n") && !has(&hh[..c], "Keep-Alive");
         // AP image: the WAN facts reach /api/health for the Get Online / Shield tiles.
         let mut sw = McState::new();
-        sw.wan = Some(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7, dns_blocked: 2, blocklist: 3 });
+        sw.set_wan(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7, dns_blocked: 2, blocklist: 3 });
         let hw = handle(&parse(b"GET /api/health HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &sw, &mut auth, 1, || Some([0; 16]), &mut scratch);
         let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3},\"lan_relay\":{\"arp_proxied\":"));
         red && v6 && bad && sec && plain && ka && kept && closed && wan_ok

@@ -150,6 +150,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // It is RE-ARMED before the EL1 handoff below, so a healthy kernel still gets a full
     // window in which to hvc#1-confirm. `arm()` is a plain register write and is safely
     // idempotent.
+    // Read the reset status BEFORE arming (arm() does not touch RSTS, but keep the order obvious).
+    let (rsts, wdog_reset) = watchdog::last_reset();
+    puts(" reset  : PM_RSTS ");
+    puthex(rsts as u64);
+    puts(if wdog_reset { " — previous reset was a WATCHDOG reset\n" } else { "\n" });
     const TRIAL_WDOG_SECS: u32 = 15;
     let wdog_secs_early = watchdog::arm(TRIAL_WDOG_SECS);
     puts(" a/b    : safety watchdog armed BEFORE verify ");
@@ -388,7 +393,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 measure_count: m.count(),
                 quote_pa: ATTEST_QUOTE_ADDR as u64,
                 eph_pa: ATTEST_EPH_ADDR as u64,
-                boot_flags: BOOT_FLAG_TRIAL_WDOG,
+                boot_flags: BOOT_FLAG_TRIAL_WDOG | BOOT_FLAG_RT_WDOG | if wdog_reset { BOOT_FLAG_WDOG_RESET } else { 0 },
                 watchdog_secs: wdog_secs as u64,
             },
         );

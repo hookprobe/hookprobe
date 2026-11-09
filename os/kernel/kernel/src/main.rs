@@ -173,6 +173,7 @@ mod edge;
 mod notify;
 mod packet;
 mod ratelimit;
+mod rtwdog;
 mod segment;
 mod rules;
 mod scheduler;
@@ -734,6 +735,7 @@ fn boot_confirm() {
     if armed {
         // hvc #1 -> the EL2 gate disarms the PM watchdog and erets back to EL1.
         unsafe { core::arch::asm!("hvc #1") };
+        rtwdog::note_confirmed();
         kprint!(" [HBoot-AB] PASS — trial boot confirmed; EL2 watchdog disarmed, slot committed [BOOT-TIMING] t=+{} ms (watchdog budget {} s)\n",
             boot_ms(), bi.watchdog_secs);
     } else {
@@ -3691,7 +3693,11 @@ fn cm5_p10_probe() {
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
                         // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
                         let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
+                        // Production phase 3a: from here on a loop that stops returning resets the SoC.
+                        let wd = rtwdog::start(now());
+                        kprint!(" [WDOG] runtime watchdog {} ({} s, petted from the AP loop)\n", if wd { "ARMED" } else { "not available (no HBoot hvc #3)" }, rtwdog::PET_SECS);
                         loop {
+                            rtwdog::pet(now(), freq);
                             // Liveness net: an unconditional (cheap) WiFi read every ~250 ms in case an
                             // indication was lost — the peek alone stalled the pump after the first lease.
                             // Flush queued WiFi deliveries while credit lasts (a read just refreshed it).
@@ -3852,6 +3858,7 @@ fn cm5_p10_probe() {
                                     // old read loops — the "sometimes takes forever" texture).
                                     let mut tries = 0u32;
                                     loop {
+                                        rtwdog::pet(now(), freq);
                                         tries += 1;
                                         let mut auth = cyw43::ApAuth::new();
                                         cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
@@ -4558,7 +4565,7 @@ fn cm5_p10_probe() {
                                                     }
                                                 }
                                             }
-                                            st.wan = Some(mcstate::WanFacts {
+                                            st.set_wan(mcstate::WanFacts {
                                                 up: up.usable(),
                                                 ip: up.dhcp.yiaddr,
                                                 mode: match wan_mode { hal::WanMode::Dhcp => 0, hal::WanMode::Static { .. } => 1, _ => 2 },
@@ -4588,6 +4595,10 @@ fn cm5_p10_probe() {
                                                 wh_sent_at = now();
                                             }
                                             wh_slot = wh_slot.wrapping_add(1);
+                                        }
+                                        {
+                                            let (wa, wp, wg, wr) = rtwdog::stats(freq);
+                                            kprint!("   [WDOG] armed={} pets={} worst_loop_gap_ms={} prev_reset_was_watchdog={}\n", wa, wp, wg, wr);
                                         }
                                         {
                                             let (q, b, by) = shield::totals();
@@ -6665,6 +6676,9 @@ pub extern "C" fn kmain() -> ! {
         let _ = rules::dedup_selftest();
         // M3 snapshot v2: the persisted evidence ring restores IN ORDER after wrapping.
         let _ = snapshot::snapshot_selftest();
+        let w = rtwdog::selftest();
+        kprint!(" [P-rtwdog] {} — runtime watchdog (production phase 3a): armed only when HBoot advertises hvc #3 (an older HBoot, no EL2 gate or no handoff never arms), worst loop gap tracked for the heartbeat\n",
+            if w { "PASS" } else { "FAIL" });
     }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
