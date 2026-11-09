@@ -97,7 +97,7 @@ securechannel-selftest = ["securechannel"]
 #             needs HEQK_AP_PSK (8..63 chars) in the build environment.
 #   stajoin — P10-E WPA2 STA join proof; needs HEQK_JOIN_SSID + HEQK_JOIN_PSK at build time.
 # Credentials are build-time env only — never source literals (ADR 0045).
-apmode = ["cm5"]
+apmode = ["cm5", "arch-aarch64/gem-deep-rx"]
 # Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
 apmc = ["apmode", "mcserve"]
 # Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).

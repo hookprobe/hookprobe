@@ -654,10 +654,15 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_p13_probe();
 
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
-    cm5_gem_el0_probe(); // stage 1: register probe
-    cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
-    cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
-    cm5_gem_el0_ids(); // stage 4a: EL0 driver delivers a frame -> kernel IDS verdict
+    // (not in the AP image: its 512-deep RX ring exceeds the EL0 stubs' 128-descriptor grant — and its
+    // serve loop inside cm5_p10_probe never returns here anyway)
+    #[cfg(not(feature = "apmode"))]
+    {
+        cm5_gem_el0_probe(); // stage 1: register probe
+        cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
+        cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
+        cm5_gem_el0_ids(); // stage 4a: EL0 driver delivers a frame -> kernel IDS verdict
+    }
     // --- P8 (RX-IRQ): enable interrupt-driven RX (LAST — bounded, self-contained) ---
     cm5_gem_rx_irq_probe();
 
