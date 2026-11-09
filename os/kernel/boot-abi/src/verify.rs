@@ -82,7 +82,7 @@ pub fn verify_slhdsa(signed: &[u8; 32], sig: &[u8; SLHDSA_SIG_LEN]) -> bool {
 pub enum VerifyErr {
     /// Header magic is not `PAYLOAD_MAGIC` — not a HEQK payload.
     BadMagic,
-    /// Insane payload size (0 or past the ~2 MiB the EEPROM loads).
+    /// Insane payload size (0, or past what the boot chain loads: [`MAX_PAYLOAD_BODY`]).
     BadSize,
     /// Load geometry not pinned to the fixed values every legitimate image uses.
     BadGeometry,
@@ -118,24 +118,46 @@ pub struct Verified {
 /// present). `floor` is the caller's effective anti-rollback floor
 /// (`rollback::effective_floor()` on metal; the compile floor in QEMU).
 pub fn verify_payload(hdr: &PayloadHeader, body: &[u8], floor: u64) -> Result<Verified, VerifyErr> {
-    if hdr.magic != PAYLOAD_MAGIC {
-        return Err(VerifyErr::BadMagic);
-    }
-    if hdr.size == 0 || hdr.size > 0x20_0000 {
-        return Err(VerifyErr::BadSize);
-    }
-    // Geometry is constant in this design; a deviation means a redirected copy /
-    // jump-to-unsigned-bytes attempt. Pin both, exactly as HBoot does.
-    if hdr.load_pa != KERNEL_LOAD_PA as u64 || hdr.entry_offset != 0 || hdr.entry_offset >= hdr.size
-    {
-        return Err(VerifyErr::BadGeometry);
-    }
+    check_header(hdr)?;
     let size = hdr.size as usize;
     if body.len() < size {
         return Err(VerifyErr::Truncated);
     }
-    let computed = sha256::digest(&body[..size]);
-    let signed = digest_signed(hdr.svn, &computed);
+    verify_digest(hdr, &sha256::digest(&body[..size]), floor)
+}
+
+/// The largest payload body the boot chain can load: the EEPROM loads the whole combined image
+/// flat at `HBOOT_IMAGE_BASE`, the body starts after hboot (`HBOOT_PAYLOAD_OFFSET`) and the
+/// header, and it must end below hboot's EL2 stack reserve (`HBOOT_IMAGE_END_MAX`). HBoot
+/// applies exactly this bound; the old fixed 2 MiB cap here refused every current (~3 MB) image.
+pub const MAX_PAYLOAD_BODY: u64 = (crate::HBOOT_IMAGE_END_MAX
+    - crate::HBOOT_IMAGE_BASE
+    - crate::HBOOT_PAYLOAD_OFFSET
+    - core::mem::size_of::<PayloadHeader>()) as u64;
+
+/// Header gates shared by every caller (HBoot's pre-verify gates): magic, size within what the
+/// boot chain can load, and the pinned load geometry.
+pub fn check_header(hdr: &PayloadHeader) -> Result<(), VerifyErr> {
+    if hdr.magic != PAYLOAD_MAGIC {
+        return Err(VerifyErr::BadMagic);
+    }
+    if hdr.size == 0 || hdr.size > MAX_PAYLOAD_BODY {
+        return Err(VerifyErr::BadSize);
+    }
+    // Geometry is constant in this design; a deviation means a redirected copy /
+    // jump-to-unsigned-bytes attempt. Pin both, exactly as HBoot does.
+    if hdr.load_pa != KERNEL_LOAD_PA as u64 || hdr.entry_offset != 0 || hdr.entry_offset >= hdr.size {
+        return Err(VerifyErr::BadGeometry);
+    }
+    Ok(())
+}
+
+/// Steps 3-4 of [`verify_payload`] for a caller that hashed the body itself (the streaming OTA
+/// path hashes a ~3 MB body sector by sector from the eMMC staging region). `computed` MUST be
+/// the caller's own SHA-256 over exactly `hdr.size` body bytes — never `hdr.sha256`.
+pub fn verify_digest(hdr: &PayloadHeader, computed: &[u8; 32], floor: u64) -> Result<Verified, VerifyErr> {
+    check_header(hdr)?;
+    let signed = digest_signed(hdr.svn, computed);
     if !verify_ed25519(&signed, &hdr.ed25519_sig) {
         return Err(VerifyErr::BadEd25519);
     }
@@ -145,8 +167,5 @@ pub fn verify_payload(hdr: &PayloadHeader, body: &[u8], floor: u64) -> Result<Ve
     if hdr.svn < floor {
         return Err(VerifyErr::BelowFloor);
     }
-    Ok(Verified {
-        svn: hdr.svn,
-        hash: computed,
-    })
+    Ok(Verified { svn: hdr.svn, hash: *computed })
 }
