@@ -241,16 +241,7 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
             return None;
         }
         let mut h = boot_abi::sha256::Hasher::new();
-        let mut sec = [0u8; 512];
-        let mut left = len;
-        let mut k = 0;
-        while left > 0 {
-            dev.read_block(data_lba + k, &mut sec).ok()?;
-            let take = left.min(512) as usize;
-            h.update(&sec[..take]);
-            left -= take as u64;
-            k += 1;
-        }
+        crate::store::stream_blocks(dev, data_lba, len, &mut |c| h.update(c))?;
         Some(h.finish())
     };
     match t {

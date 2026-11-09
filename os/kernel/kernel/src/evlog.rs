@@ -18,10 +18,9 @@ use crate::snapshot::IMG_EPOCH;
 use crate::store::SealedStore;
 use hal::BlockDev;
 
-/// 1 superblock + 512 record slots (256 KiB): ~11k detections at 22 per record. Bounded by the boot scan: every
-/// slot is read at mount, and the eMMC driver reads one sector per command (~5 ms on the CM5) — 4096 slots
-/// cost 22 s of boot (metal 2026-11-09). A multi-block read path would allow a larger ring.
-pub const EVLOG_SECT: u64 = 513;
+/// 1 superblock + 4096 record slots (2 MiB): ~90k detections at 22 per record. Bounded by the boot scan (every
+/// slot is read at mount): ~1.5 s at the 25 MHz data clock (it was 22 s at the old 390 kHz clock, 2026-11-09).
+pub const EVLOG_SECT: u64 = 4097;
 pub const PER_REC: usize = MAX_SEALED_PAYLOAD / EV_IMAGE_LEN; // 22
 const FLUSH_S: u64 = 60;
 

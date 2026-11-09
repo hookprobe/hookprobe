@@ -63,6 +63,9 @@ mod devid;
 mod oui;
 mod lanrelay;
 mod apcore;
+mod clock;
+#[cfg(feature = "detbench")]
+mod detbench;
 mod artstore;
 mod datavol;
 mod ownerjournal;
@@ -3587,8 +3590,9 @@ fn cm5_p10_probe() {
                                             let d: &'static mut dyn hal::BlockDev = unsafe { (*core::ptr::addr_of_mut!(ART_DEV)).insert(dev) };
                                             upload::install(d);
                                             armed = true;
-                                            kprint!(" [AP-STORE] artifact store + upload staging: LBA {}..{} (DataVolume), eMMC data clock {} kHz{}\n", lo, hi,
+                                            kprint!(" [AP-STORE] artifact store + upload staging: LBA {}..{} (DataVolume), eMMC data clock {} kHz, multi-block reads {}{}\n", lo, hi,
                                                 unsafe { (*core::ptr::addr_of!(ART_DEV)).as_ref().map_or(0, |e| e.sdclk_hz() / 1000) },
+                                                if unsafe { (*core::ptr::addr_of!(ART_DEV)).as_ref().map_or(false, |e| e.multi_read()) } { "on" } else { "off (single-block)" },
                                                 if policysig::key().is_some() { "" } else { " — no operator key in this image: uploads refused" });
                                         }
                                     }
@@ -6339,6 +6343,13 @@ pub extern "C" fn kmain() -> ! {
     // datapath will run (rule parity + native codegen). ---
     let (rv, rj) = rules::init();
     kprint!(" [P8] rule plane: {} rules verified, {} JIT-compiled (interp fallback) — parity corpus armed\n", rv, rj);
+    // Readiness 4.1: with a labelled corpus disk attached, replay it through the detection pipeline and exit.
+    #[cfg(feature = "detbench")]
+    if detbench::run() {
+        arch_aarch64::semihosting::exit(0);
+    }
+    // the self-tests below count individual events: alert de-duplication is off until they finish
+    rules::alert_dedup(false);
 
     // --- P8-scan: the stateless TCP-flag scan tier fires symmetrically. Settles the M2 A6
     // follow-up ("FIN-scan 202 doesn't fire while NULL/XMAS do") deterministically: the three
@@ -6681,6 +6692,8 @@ pub extern "C" fn kmain() -> ! {
     #[cfg(feature = "securechannel-selftest")]
     {
         export::m6_export_selftest();
+        rules::alert_dedup(true);
+        let _ = rules::dedup_selftest();
         // M3 snapshot v2: the persisted evidence ring restores IN ORDER after wrapping.
         let _ = snapshot::snapshot_selftest();
     }
