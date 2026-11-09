@@ -40,6 +40,9 @@ pub struct Req<'a> {
     pub consumed: usize,
     /// The `Origin` header (ADR 0053: writes must come from this device's own pages).
     pub origin: &'a str,
+    /// The client's IPv4 address (set by the server loop from the socket; 0.0.0.0 if unknown) — the login
+    /// throttle is per source, so one LAN host cannot lock the owner out.
+    pub peer: [u8; 4],
     /// The `X-HQ-CSRF` header (ADR 0053 per-session token).
     pub csrf: &'a str,
 }
@@ -120,7 +123,7 @@ pub fn parse(buf: &[u8]) -> Result<Req<'_>, ParseErr> {
     }
     let body = &buf[body_start..body_start + clen];
     let keep_alive = version == "HTTP/1.1" && !conn_close;
-    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host, keep_alive, consumed: body_start + clen, origin, csrf })
+    Ok(Req { get: method == "GET", post: method == "POST", path, query, session, body, host, keep_alive, consumed: body_start + clen, origin, csrf, peer: [0; 4] })
 }
 
 /// `key=<u32>` from a query string.
@@ -325,6 +328,11 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     // Public: the login page, the login action, and a minimal health probe.
     match (req.path, req.get, req.post) {
         ("/login", true, _) => return Response::page(200, LOGIN_HTML),
+        // Login-CSRF (audit 2026-11-10): a browser that sends an Origin must be on this device's own page;
+        // CLI clients send none (the owner token itself is the credential).
+        ("/api/login", _, true) if !req.origin.is_empty() && !crate::actionapi::origin_ok(req.origin, req.host) => {
+            return json(scratch, |w| w.raw("{\"ok\":false,\"refused\":\"origin\"}")).with_status(403);
+        }
         ("/api/login", _, true) => return login(req, auth, now_ms, rand16, scratch),
         // Parity G28: logout ends this session (`?all=1`: every session) and expires the cookie.
         ("/api/logout", _, true) => {
@@ -577,7 +585,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
 fn login(req: &Req, auth: &mut Auth, now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>, scratch: &mut [u8]) -> Response {
     let body = core::str::from_utf8(req.body).unwrap_or("");
     let token = body.split('&').find_map(|kv| kv.strip_prefix("token=")).unwrap_or("").trim();
-    match auth.login(token.as_bytes(), now_ms, rand16) {
+    match auth.login_from(req.peer, token.as_bytes(), now_ms, rand16) {
         Ok(id) => {
             let mut hex = [0u8; 32];
             mcauth::session_hex(&id, &mut hex);
