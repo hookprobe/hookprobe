@@ -5763,6 +5763,24 @@ pub extern "C" fn kmain() -> ! {
     // validates the P0 boot chain end to end.
     kprint!(" [P0] PASS boot+EL1+vectors\n");
 
+    // Cloud tier: report the firmware interface heqk depends on (no secrets printed — only
+    // presence + a two-sample sanity check, never entropy values).
+    #[cfg(feature = "cloud")]
+    {
+        let (pmaj, pmin) = arch_aarch64::smccc::psci_version();
+        let s11 = arch_aarch64::smccc::smccc_1_1();
+        match arch_aarch64::smccc::trng_version() {
+            Some((tmaj, tmin)) => {
+                let (a, b) = (arch_aarch64::smccc::trng_word(), arch_aarch64::smccc::trng_word());
+                let ok = matches!((a, b), (Some(x), Some(y)) if x != y);
+                kprint!(" [cloud] PSCI {}.{} | SMCCC>=1.1 {} | TRNG v{}.{} two-sample {}\n",
+                    pmaj, pmin, s11, tmaj, tmin, if ok { "OK" } else { "FAIL (fail-closed)" });
+            }
+            None => kprint!(" [cloud] PSCI {}.{} | SMCCC>=1.1 {} | TRNG ABSENT -> HwTrng fails closed (no keys)\n",
+                pmaj, pmin, s11),
+        }
+    }
+
     // Prove the heap works.
     let mut v: Vec<u32> = Vec::new();
     for i in 0..8 {
