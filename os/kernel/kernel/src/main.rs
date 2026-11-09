@@ -6715,6 +6715,8 @@ pub extern "C" fn kmain() -> ! {
     //     (SHARED hboot verifier) -> flip -> confirm/rollback; state persisted;
     //     brick-safety + verify-before-flip + downgrade-refused asserted ---
     p15_ota_selftest();
+    #[cfg(feature = "p15-write")]
+    let _ = ota::big_verify_selftest();
 
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
     boot_confirm();
