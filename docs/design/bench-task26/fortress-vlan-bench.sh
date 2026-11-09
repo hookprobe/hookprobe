@@ -30,6 +30,9 @@ setup)
   nft add table ip hqbench
   nft add chain ip hqbench post '{ type nat hook postrouting priority srcnat; policy accept; }'
   nft add rule ip hqbench post ip saddr '{ 10.100.0.0/24, 192.168.200.0/24 }' oifname != '{ "enp4s0.100", "enp4s0.200" }' masquerade
+  # bench file server on the WAN side (throughput / soak checks): 64 MB of zeros at http://10.100.0.1:8088/blob
+  mkdir -p /run/hqbench/sink && head -c 64000000 /dev/zero > /run/hqbench/sink/blob
+  (cd /run/hqbench/sink && setsid nohup python3 -m http.server 8088 --bind 10.100.0.1 >/run/hqbench/sink.log 2>&1 & echo $! > /run/hqbench/sink.pid)
   echo "bench up: $P.100 10.100.0.1/24 (DHCP .50-.150), $P.200 192.168.200.1/24"
   ;;
 v6up)
@@ -93,6 +96,7 @@ v6down)
 teardown)
   "$0" v6down 2>/dev/null || true
   [ -f /run/hqbench/dnsmasq.pid ] && kill "$(cat /run/hqbench/dnsmasq.pid)" 2>/dev/null || true
+  [ -f /run/hqbench/sink.pid ] && kill "$(cat /run/hqbench/sink.pid)" 2>/dev/null || true
   nft delete table ip hqbench 2>/dev/null || true
   ip link del $P.100 2>/dev/null || true
   ip link del $P.200 2>/dev/null || true

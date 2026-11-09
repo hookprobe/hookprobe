@@ -31,7 +31,7 @@ try:
     d=json.loads(sys.argv[1]); w=d.get("wan",{})
     print("ok", d["seen"], d["forwarded"], d["dropped"], d["detections"], w.get("clients",0), w.get("dns_inspected",0))
 except Exception: print("down 0 0 0 0 0 0")' "$H")
-  b=$(pi "curl --interface $IF -s -o /dev/null -m 20 -w '%{speed_download}' 'https://speed.cloudflare.com/__down?bytes=15000000'" 2>/dev/null || echo 0)
+  b=$(pi "curl --interface $IF -s -o /dev/null -m 20 -w '%{speed_download}' '${HQ_SINK_URL:-http://10.100.0.1:8088/blob}'" 2>/dev/null || echo 0)
   mbps=$(awk -v b="$b" 'BEGIN{printf "%.1f", b*8/1e6}')
   dns=$(pi "dig +short +time=3 +tries=1 @10.99.0.1 example.com A" 2>/dev/null | grep -cE '^[0-9.]+$')
   ev=$(tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -acE "secure boot: PASS|PANIC|panic|EXCEPTION|SError|Synchronous|data abort|watchdog reset")
