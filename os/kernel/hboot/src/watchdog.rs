@@ -41,6 +41,23 @@ pub fn arm(secs: u32) -> u32 {
     (ticks / WDOG_TICKS_PER_SEC).max(1)
 }
 
+/// PM_RSTS: reset status. HADWRF (bit 5) = the last reset was a watchdog full reset.
+const PM_RSTS: usize = PM_BASE + 0x20;
+const RSTS_HADWRF: u32 = 1 << 5;
+
+/// Raw PM_RSTS at entry and whether the previous reset was a watchdog reset.
+pub fn last_reset() -> (u32, bool) {
+    let v = unsafe { read_volatile(PM_RSTS as *const u32) };
+    (v, v & RSTS_HADWRF != 0)
+}
+
+/// `hvc #3` from EL1 (boot.s `hvc_wdog`): re-arm for `secs` (4..=16 s). The kernel pets this from
+/// its main loop after the trial boot is confirmed, so a hung loop resets into the committed slot.
+#[no_mangle]
+pub extern "C" fn hboot_hvc_wdog(secs: u64) -> u64 {
+    arm(secs.clamp(4, 16) as u32) as u64
+}
+
 /// Disarm a running watchdog by clearing the RSTC write-config field (the
 /// down-counter stops counting toward a reset). Idempotent and harmless if the
 /// watchdog was never armed. Mirrors the Linux bcm2835_wdt stop sequence.

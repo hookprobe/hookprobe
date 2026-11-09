@@ -294,6 +294,8 @@ hvc_dispatch:
     b.eq    hvc_confirm             // hvc #1 -> A/B boot confirm (below)
     cmp     x12, #2
     b.eq    hvc_mbox                // hvc #2 -> SEC-2 mailbox proxy (below)
+    cmp     x12, #3
+    b.eq    hvc_wdog                // hvc #3 -> runtime watchdog pet (below)
     b       reset_platform          // hvc #0 (or other) -> reboot
 hvc_confirm:
     // hvc #1 — disarm the PM watchdog: RSTC &= ~WRCFG, keep password.
@@ -326,6 +328,15 @@ hvc_confirm:
 // clobbered, so nothing EL1 relies on is lost. The EL2 stack (gate pushed 48 B) backs the call.
 hvc_mbox:
     bl      hboot_hvc_mbox          // x0 = pa, x1 = nwords  ->  x0 = result (0 = ok)
+    ldr     x13,      [sp, #32]
+    ldp     x11, x12, [sp, #16]
+    ldp     x9,  x10, [sp], #48
+    eret
+
+// hvc #3: runtime watchdog pet. x0 = seconds (the Rust helper clamps to 4..=16). Same
+// save/restore discipline as hvc #2 (the EL1 caller declares the AAPCS clobbers).
+hvc_wdog:
+    bl      hboot_hvc_wdog          // x0 = secs  ->  x0 = seconds armed
     ldr     x13,      [sp, #32]
     ldp     x11, x12, [sp, #16]
     ldp     x9,  x10, [sp], #48
