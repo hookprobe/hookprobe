@@ -41,6 +41,8 @@ const CMD8_SEND_EXT_CSD: u16 = 8; // eMMC: read the 512-byte EXT_CSD (data phase
 const CMD9_SEND_CSD: u16 = 9;
 const CMD16_SET_BLOCKLEN: u16 = 16;
 const CMD17_READ_SINGLE: u16 = 17;
+/// Data-phase SDCLK ceiling: eMMC default-speed (backward-compatible) timing, 0–26 MHz, no CMD6 needed.
+const DATA_CLK_HZ: u32 = 25_000_000;
 
 /// Host RCA we assign the eMMC (any non-zero value; the host owns it on eMMC).
 const RCA: u32 = 1;
@@ -73,6 +75,8 @@ pub struct Emmc {
     cache_on: bool,
     /// EXT_CSD wear at probe: (PRE_EOL_INFO, LIFE_TIME_EST_TYP_A, LIFE_TIME_EST_TYP_B).
     wear: (u8, u8, u8),
+    /// Data-phase SDCLK (Hz) chosen at probe.
+    sdclk_hz: u32,
     /// One-shot narrowing write window for the reserved KEYSTORE window (write build).
     #[cfg(feature = "p15-write")]
     win: Option<(u64, u64)>,
@@ -198,6 +202,28 @@ impl Emmc {
             return Err((10, BlkErr::CmdError));
         }
 
+        // Data-phase clock (2026-11-09: every transfer ran at the 390 kHz identification clock — ~5 ms per
+        // sector, ~30 s of every boot). eMMC default-speed timing allows up to 26 MHz with NO CMD6/SWITCH (HS
+        // timing / bus width stay untouched — this driver still cannot emit CMD6); only this host's own SDCLK
+        // divisor changes (the shared clk-emmc2 source is never set). Verified by re-reading EXT_CSD at the new
+        // clock; any mismatch or error falls back to the identification clock.
+        let mut fast = base_hz.div_ceil(2 * DATA_CLK_HZ);
+        if fast == 0 {
+            fast = 1;
+        }
+        let mut sdclk_hz = base_hz / (2 * divisor.max(1) as u32);
+        if (fast as u16) < divisor {
+            host.set_clock(fast as u16);
+            let mut ext2 = [0u8; 512];
+            host.set_block(512, 1);
+            host.set_xfer_read_single();
+            let ok = host.cmd(CMD8_SEND_EXT_CSD, 0, Resp::R1, true).is_ok() && host.pio_in(&mut ext2, 512).is_ok() && ext2[..] == ext[..];
+            if ok {
+                sdclk_hz = base_hz / (2 * fast);
+            } else {
+                host.set_clock(divisor);
+            }
+        }
         let cache_on = ext[EXT_CSD_CACHE_CTRL] & 1 != 0;
         let wear = (ext[EXT_CSD_PRE_EOL_INFO], ext[EXT_CSD_LIFE_TIME_EST_A], ext[EXT_CSD_LIFE_TIME_EST_B]);
         Ok(Emmc {
@@ -207,6 +233,7 @@ impl Emmc {
             sector_addr,
             cache_on,
             wear,
+            sdclk_hz,
             #[cfg(feature = "p15-write")]
             win: None,
             #[cfg(feature = "p15-write")]
@@ -234,6 +261,11 @@ impl Emmc {
     /// The device's own wear estimate: (PRE_EOL_INFO, LIFE_TIME_EST_TYP_A, _TYP_B) — see the consts.
     pub fn wear(&self) -> (u8, u8, u8) {
         self.wear
+    }
+    /// The SDCLK the data phase runs at (Hz): ≤ 25 MHz default speed, or the 390 kHz init clock if the
+    /// faster clock did not verify.
+    pub fn sdclk_hz(&self) -> u32 {
+        self.sdclk_hz
     }
     pub fn sector_addressed(&self) -> bool {
         self.sector_addr
