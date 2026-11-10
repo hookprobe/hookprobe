@@ -79,7 +79,18 @@ pub fn load_owner<D: hal::BlockDev>(dev: &D) -> Option<Owner> {
     }
     let (lba, _n) = crate::fat::locate_contiguous(dev, p1, OWNER_8_3)?;
     dev.read_block(lba, &mut sec).ok()?;
+    set_owner_file_hash(boot_abi::sha256::digest(&sec[..OWNER_FILE_LEN]));
     parse_owner(&sec[..OWNER_FILE_LEN])
+}
+
+/// sha256 of the OWNER.TXT this boot read (G28: a journal owner-key rotation applies only while OWNER.TXT is
+/// still the file it replaced — re-flashing a new OWNER.TXT is the physical-access recovery and must win).
+static mut OWNER_FILE_HASH: [u8; 32] = [0; 32];
+pub fn set_owner_file_hash(h: [u8; 32]) {
+    unsafe { *core::ptr::addr_of_mut!(OWNER_FILE_HASH) = h };
+}
+pub fn owner_file_hash() -> [u8; 32] {
+    unsafe { *core::ptr::addr_of!(OWNER_FILE_HASH) }
 }
 
 /// `sha256(salt ‖ token)`.

@@ -375,6 +375,23 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     crate::actions::tick(now_ms);
     // ADR 0053: the only writes — reversible, TTL-bound actions behind origin + CSRF + replay guards.
     // ADR 0055 D7: `/api/owner-rules/revoke-all` is the same guarded handler with `op=revoke_all`.
+    // G28: owner-key rotation — same guards + re-auth with the current key; every session ends on success.
+    if req.post && req.path == "/api/owner-key" {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let salt = rand16();
+        return match crate::ownerapi::rotate_owner_key(&c, req.body, auth, salt) {
+            Ok(seq) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"seq\":{},\"note\":\"owner key rotated; every session ended - sign in with the new key\"}}", seq);
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(403),
+        };
+    }
     if req.post && (req.path == "/api/owner-rules" || req.path == "/api/owner-rules/revoke-all") {
         // ADR 0055: durable owner rules (journal). Same guards as the actions + re-auth on every write.
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
