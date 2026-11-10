@@ -17,6 +17,9 @@ import { loadHealth, healthChecked } from '../store/health';
 const LIVE: Record<string, 'live' | string> = {
   '/': 'live',
   '/mission': 'live',
+  '/protect/firewall': 'live',
+  '/automate/playbooks': 'live',
+  '/intelligence/cves': 'live',
   '/detect/feed': 'live',
   '/investigate/queue': 'live',
   '/investigate/incident': 'live',
@@ -29,7 +32,7 @@ const LIVE: Record<string, 'live' | string> = {
   '/network/wan': 'live',
 };
 
-const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe';
+const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence';
 
 function norm(p: string): string {
   const t = p.replace(/\/index\.html$/, '/').replace(/\.html$/, '').replace(/\/+$/, '');

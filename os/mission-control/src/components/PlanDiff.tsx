@@ -16,7 +16,8 @@ import { type Component, For, Show, createSignal, onCleanup } from 'solid-js';
 
 export interface DiffLine { kind: 'added' | 'removed' | 'unchanged' | 'changed'; text: string }
 
-export type ApplyUpdate = { state: 'applying' } | { state: 'verified'; detail?: string } | { state: 'failed'; detail: string };
+/** `volatile` = applied and read back, but the device cannot keep it across a restart: never shown as verified. */
+export type ApplyUpdate = { state: 'applying' } | { state: 'verified'; detail?: string } | { state: 'volatile'; detail: string } | { state: 'failed'; detail: string };
 
 interface Props {
   lines: DiffLine[];
@@ -29,7 +30,7 @@ interface Props {
   approveLabel?: string;
 }
 
-type Phase = 'idle' | 'staging' | 'staged' | 'applying' | 'verified' | 'failed' | 'rejected';
+type Phase = 'idle' | 'staging' | 'staged' | 'applying' | 'verified' | 'volatile' | 'failed' | 'rejected';
 
 const MARK: Record<DiffLine['kind'], string> = { added: '+', removed: '−', changed: '~', unchanged: ' ' };
 
@@ -54,7 +55,7 @@ const PlanDiff: Component<Props> = (props) => {
       if (props.watch) {
         stop = props.watch(id, (u) => {
           setPhase(u.state);
-          if (u.state === 'failed') setNote(u.detail);
+          if (u.state === 'failed' || u.state === 'volatile') setNote(u.detail);
           else if (u.state === 'verified' && u.detail) setNote(u.detail);
         });
       }
@@ -72,7 +73,7 @@ const PlanDiff: Component<Props> = (props) => {
   };
 
   const busy = () => phase() === 'staging' || phase() === 'staged' || phase() === 'applying';
-  const done = () => phase() === 'verified' || phase() === 'rejected';
+  const done = () => phase() === 'verified' || phase() === 'volatile' || phase() === 'rejected';
 
   return (
     <section class={`plan-diff plan-diff--${phase()}`} aria-label={props.title ?? 'Proposed plan'}>
@@ -93,7 +94,7 @@ const PlanDiff: Component<Props> = (props) => {
         <ol class="plan-steps" aria-label="Plan progress">
           <li class={stepClass(phase(), 'staged', wasStaged())}>Staged</li>
           <li class={stepClass(phase(), 'applying', wasStaged())}>Applying</li>
-          <li class={stepClass(phase(), 'verified', wasStaged())}>Applied and verified</li>
+          <li class={stepClass(phase(), 'verified', wasStaged())}>{phase() === 'volatile' ? 'Not kept across restart' : 'Applied and verified'}</li>
         </ol>
       </Show>
 
@@ -104,6 +105,7 @@ const PlanDiff: Component<Props> = (props) => {
           : 'Staged. Nothing is live yet; this updates when the reconciler applies it.')}
         {phase() === 'applying' && 'Applying. The reconciler is making the change.'}
         {phase() === 'verified' && '✓ Applied and verified.'}
+        {phase() === 'volatile' && 'Applied, but not kept across a restart.'}
         {phase() === 'failed' && 'Failed. Nothing new was applied.'}
         {note() && ` ${note()}`}
       </p>
@@ -126,6 +128,7 @@ const PlanDiff: Component<Props> = (props) => {
 
 const ORDER: Phase[] = ['staged', 'applying', 'verified'];
 function stepClass(p: Phase, step: Phase, staged: boolean): string {
+  if (p === 'volatile') return step === 'verified' ? 'plan-step plan-step--warn' : 'plan-step plan-step--done';
   if (p === 'failed') {
     // Staging failed → "Staged" failed; staged but the reconciler failed → "Applying" failed.
     const failedAt = staged ? 'applying' : 'staged';
