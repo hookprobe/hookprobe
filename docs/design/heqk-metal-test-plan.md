@@ -124,6 +124,8 @@ and `SVN=2 HEQK_BUILD_ID=b` (`$CLAUDE_JOB_DIR/tmp/fac.sh` pattern).
 | J4 | Trust anchor | first boot `[ANCHOR] … PINNED`; next boot `[ANCHOR] pinned operator key`; an image built with another key reports the conflict and still verifies POLICY.TXT with the pinned key | serial |
 | J5 | WAN RX ring 512 (AP image) | `cm5-throughput-check.sh` against the local sink: `res_err` stays low and throughput ≥ the internet baseline (128-ring: ~6 Mbps, 64 % res_err) | script + serial |
 | J6 | IPv6 re-probe | boot with kea stopped, start it: `[WAN6] re-probe #1 after a late Router Advertisement: IPv6 UP` and the LAN renumbers | serial |
+| J8 | WAN outage (boot with WAN DHCP blocked) | AP up; LAN ping <= 2 % loss, worst RTT < 1 s; Mission Control answers over Wi-Fi; `[WAN] … in-loop DHCP`; unblock → `[M-NAT0] WAN came up (in-loop DHCP` without a reboot | `cm5-wan-outage-check.sh` |
+| J9 | Lease renewal in the loop | `[WAN renew] … acks=` grows every lease/2, `[WDOG] worst_loop_gap_ms` stays far below the 3,279 ms of the old blocking renewal | serial |
 | J7 | 72 h soak | no reboot / fault, counters monotonic, throughput floor held | `cm5-soak.sh` |
 
 ## E. Platform (from earlier sessions, still open)
