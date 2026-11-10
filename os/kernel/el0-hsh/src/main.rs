@@ -96,6 +96,8 @@ pub fn parse(line: &[u8]) -> Parsed<'_> {
 enum Act {
     Text(&'static str),
     Req(u16),
+    ReqArg(u16, u64),
+    ReqSig(u16, [u8; 64]),
     Help,
     Unsupported,
 }
@@ -112,6 +114,9 @@ const CMDS: &[(&[&str], u8, &str)] = &[
     (&["config", "status"], 4, "config status         configuration lifecycle (cfgd) + generation floors"),
     (&["owner", "status"], 5, "owner status          which keys verify what (fingerprints only)"),
     (&["security", "posture"], 6, "security posture      where the network parsers run (ADR 0050) + EL0 health"),
+    (&["config", "confirm"], 20, "config confirm        commit the configuration on trial (role operate)"),
+    (&["config", "rollback"], 21, "config rollback       the previous configuration at the next boot (role operate)"),
+    (&["owner", "challenge"], 30, "owner challenge       what to sign (off-device, with the enrolled owner key) to elevate"),
 ];
 /// Spec commands that exist in the command set but not yet in this build (4b / 4c / backends pending).
 const LATER: &[&[&str]] = &[
@@ -120,7 +125,36 @@ const LATER: &[&[&str]] = &[
     &["config"], &["owner"], &["recovery"],
 ];
 
+/// An upload id as Mission Control shows it (16 hex digits) or decimal.
+fn parse_id(t: &[u8]) -> Option<u64> {
+    let s = core::str::from_utf8(t).ok()?;
+    if s.len() == 16 { u64::from_str_radix(s, 16).ok() } else { s.parse().ok() }
+}
+
+fn hex64(a: &[u8], b: &[u8]) -> Option<[u8; 64]> {
+    if a.len() != 64 || b.len() != 64 {
+        return None;
+    }
+    let mut o = [0u8; 64];
+    for (i, pair) in a.chunks(2).chain(b.chunks(2)).enumerate() {
+        o[i] = u8::from_str_radix(core::str::from_utf8(pair).ok()?, 16).ok()?;
+    }
+    Some(o)
+}
+
 fn lookup(t: &[&[u8]]) -> Act {
+    if t.len() == 4 && t[0] == b"owner" && t[1] == b"elevate" {
+        return match hex64(t[2], t[3]) {
+            Some(s) => Act::ReqSig(hal::mgmtabi::OWNER_ELEVATE, s),
+            None => Act::Text("ERROR: Invalid argument. (owner elevate <signature hex 1-64> <signature hex 65-128>)"),
+        };
+    }
+    if t.len() == 3 && t[0] == b"config" && t[1] == b"stage" {
+        return match parse_id(t[2]) {
+            Some(id) => Act::ReqArg(hal::mgmtabi::CFG_STAGE, id),
+            None => Act::Text("ERROR: Invalid argument. (config stage <upload-id>)"),
+        };
+    }
     for (words, what, _) in CMDS {
         if words.len() == t.len() && words.iter().zip(t).all(|(w, x)| w.as_bytes() == *x) {
             return match *what {
@@ -131,6 +165,9 @@ fn lookup(t: &[&[u8]]) -> Act {
                 4 => Act::Req(m::GET_CONFIG),
                 5 => Act::Req(m::GET_ANCHOR),
                 6 => Act::Req(m::GET_PARSERS),
+                20 => Act::Req(m::CFG_CONFIRM),
+                21 => Act::Req(m::CFG_ROLLBACK),
+                30 => Act::Req(m::OWNER_CHALLENGE),
                 _ => Act::Unsupported,
             };
         }
@@ -232,9 +269,57 @@ fn format(o: &mut Out, msg: u16, cmd0: u8, rec: &[u8]) -> bool {
             let _ = writeln!(o, "HTTP request parser:  {}  requests {} faults {}", if p.http_el0 { "EL0 (el0-tlshost)" } else { "EL1" }, p.http_requests, p.http_faults);
             let _ = writeln!(o, "LAN/WAN parsers:      {}  calls {} faults {} restarts {} in-kernel {}", if p.lan_el0 { "EL0 (el0-lansvc)" } else { "EL1" }, p.lan_calls, p.lan_faults, p.lan_restarts, p.lan_in_kernel);
         }
+        m::OWNER_CHALLENGE => {
+            let Ok(r) = rec.try_into() else { return false };
+            let c = m::Challenge::decode(r);
+            if !c.owner_enrolled {
+                let _ = writeln!(o, "No owner key is enrolled on this device: enroll it in Mission Control first.");
+                return true;
+            }
+            let _ = write!(o, "Sign with the enrolled owner key (off-device), within {} s:\n  \"HQCHAL1\" || device_id || nonce\n  device_id ", c.ttl_s);
+            for b in c.device_id {
+                let _ = write!(o, "{:02x}", b);
+            }
+            let _ = write!(o, "\n  nonce     ");
+            for b in c.nonce {
+                let _ = write!(o, "{:02x}", b);
+            }
+            let _ = writeln!(o, "\nthen: owner elevate <signature hex 1-64> <signature hex 65-128>   (single use)");
+        }
+        m::OWNER_ELEVATE => {
+            let Ok(r) = rec.try_into() else { return false };
+            let a = m::Act::decode(r);
+            let _ = if a.ok { writeln!(o, "Owner role granted for {} minutes (this session).", m::ELEVATE_TTL_S / 60) } else { writeln!(o, "ERROR: Permission denied. ({})", a.reason_str()) };
+        }
+        m::CFG_CONFIRM | m::CFG_ROLLBACK | m::CFG_STAGE => {
+            let Ok(r) = rec.try_into() else { return false };
+            let a = m::Act::decode(r);
+            if a.ok {
+                let _ = match msg {
+                    m::CFG_CONFIRM => writeln!(o, "Configuration committed: generation {} (the bundle floor rose).", a.generation),
+                    m::CFG_ROLLBACK => writeln!(o, "Rollback done: generation {} at the next boot.", a.generation),
+                    _ => writeln!(o, "Configuration staged: generation {} — it runs as a TRIAL at the next boot.", a.generation),
+                };
+            } else {
+                let _ = writeln!(o, "ERROR: Configuration rejected. ({})", a.reason_str());
+            }
+        }
         _ => return false,
     }
     true
+}
+
+/// The request record: [msg u16][first byte of the command, for the formatter][rsv][arg u64].
+fn request(msg: u16, cmd0: u8, arg: u64, payload: &[u8]) -> ! {
+    let out = io(OUT_OFF, REQ_LEN);
+    out.fill(0);
+    out[..2].copy_from_slice(&msg.to_le_bytes());
+    out[2] = cmd0;
+    let n = payload.len().min(64);
+    out[3] = n as u8;
+    out[4..12].copy_from_slice(&arg.to_le_bytes());
+    out[12..12 + n].copy_from_slice(&payload[..n]);
+    exit(ST_REQUEST, REQ_LEN)
 }
 
 #[no_mangle]
@@ -267,7 +352,9 @@ pub extern "C" fn _start() -> ! {
                     for (_, what, h) in CMDS {
                         let need = match *what {
                             0 => 0,
-                            1 => m::role_for(m::GET_INFO),
+                            20 => m::role_for(m::CFG_CONFIRM),
+                            21 => m::role_for(m::CFG_ROLLBACK),
+                            30 => m::role_for(m::OWNER_CHALLENGE),
                             _ => m::ROLE_VIEW,
                         };
                         if role >= need {
@@ -276,14 +363,9 @@ pub extern "C" fn _start() -> ! {
                     }
                     exit(ST_TEXT, o.n)
                 }
-                Act::Req(msg) => {
-                    // the request record: [msg u16][first byte of the command, for the formatter][rsv]
-                    let out = io(OUT_OFF, 4);
-                    out[..2].copy_from_slice(&msg.to_le_bytes());
-                    out[2] = t[0][0];
-                    out[3] = 0;
-                    exit(ST_REQUEST, 4)
-                }
+                Act::Req(msg) => request(msg, t[0][0], 0, &[]),
+                Act::ReqArg(msg, arg) => request(msg, t[0][0], arg, &[]),
+                Act::ReqSig(msg, sig) => request(msg, t[0][0], 0, &sig),
             },
         },
         CMD_REPLY if n >= 4 => {
