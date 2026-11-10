@@ -375,6 +375,22 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     crate::actions::tick(now_ms);
     // ADR 0053: the only writes — reversible, TTL-bound actions behind origin + CSRF + replay guards.
     // ADR 0055 D7: `/api/owner-rules/revoke-all` is the same guarded handler with `op=revoke_all`.
+    // Owner alert webhook (operator 2026-11-10): set / remove behind the owner-write guards + re-auth.
+    if req.post && req.path == "/api/alert-hook" {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        return match crate::ownerapi::alert_hook(&c, req.body, auth) {
+            Ok(seq) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"seq\":{}}}", seq);
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(403),
+        };
+    }
     // G28: owner-key rotation — same guards + re-auth with the current key; every session ends on success.
     if req.post && req.path == "/api/owner-key" {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
@@ -488,6 +504,20 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }),
         "/api/actions" => json(scratch, render_actions),
         "/api/owner-rules" => json(scratch, crate::ownerapi::render),
+        "/api/alert-hook" => json(scratch, |w| {
+            use core::fmt::Write;
+            let st = crate::alerthook::stats();
+            match crate::alerthook::get() {
+                Some(h) => {
+                    let _ = write!(w, "{{\"configured\":true,\"target\":\"{}.{}.{}.{}:{}\",\"format\":\"{}\",\"path\":", h.ip[0], h.ip[1], h.ip[2], h.ip[3], h.port, h.fmt_name());
+                    w.string(h.path());
+                    let _ = write!(w, ",\"min_severity\":{},", h.min_sev);
+                }
+                None => w.raw("{\"configured\":false,"),
+            }
+            let _ = write!(w, "\"sent\":{},\"failed\":{},\"held_back\":{},\"queued\":{},\"last_status\":{},\"max_per_hour\":{}}}",
+                st.sent, st.failed, st.held_back, st.queued, st.last_status, crate::alerthook::MAX_PER_HOUR);
+        }),
         "/api/upload" => {
             crate::upload::expire(now_ms);
             json(scratch, crate::upload::render)
