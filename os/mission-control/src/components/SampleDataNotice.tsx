@@ -16,8 +16,10 @@ import { loadHealth, healthChecked } from '../store/health';
 /** What the heqk API backs today (os/kernel/kernel/src/http.rs routes). */
 const LIVE: Record<string, 'live' | string> = {
   '/': 'live',
+  '/mission': 'live',
   '/detect/feed': 'live',
   '/investigate/queue': 'live',
+  '/investigate/incident': 'live',
   '/observe/events': 'live',
   '/observe/live': 'live',
   '/network/devices': 'live',
@@ -27,7 +29,7 @@ const LIVE: Record<string, 'live' | string> = {
   '/network/wan': 'live',
 };
 
-const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Detect, Investigate, Observe';
+const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe';
 
 function norm(p: string): string {
   const t = p.replace(/\/index\.html$/, '/').replace(/\.html$/, '').replace(/\/+$/, '');
