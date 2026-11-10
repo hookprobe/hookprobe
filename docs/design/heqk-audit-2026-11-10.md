@@ -53,7 +53,7 @@ yet say so (doc-only fix, no decision change).
 | 0051 MC HTTPS | V (offline provisioning) |
 | 0052 Shield v2 | V (metal) — header still "Proposed" |
 | 0052 CI/CD (duplicate number) | I — gates run, never ratified; proposed renumber → 0058 |
-| 0053 operator actions | V — per-session write rate limit added 2026-11-10 (`[P-write-rate]`); replay memory still lost on session eviction |
+| 0053 operator actions | V — per-session write rate limit (`[P-write-rate]`) and eviction-proof replay guard (`[P-seq-floor]`) added 2026-11-10 |
 | 0054 per-device AP credential | V |
 | 0055 owner journal | V (metal) — revoke-all added 2026-11-10 (`OP_CLEAR`); the signed `pin` token is still missing |
 | 0056 upload | phase 1 V (metal); phase 2 `os_image` + trial commit + rollback **V on metal** (J1 9/9, J2 7/7) |
@@ -81,7 +81,7 @@ yet say so (doc-only fix, no decision change).
    reboots to the old slot after 5 min otherwise, and repairs an interrupted commit every boot
    (`[P15-otaimg]`). **Metal PASS 2026-11-10:** J1 (commit) 9/9 twice, J2 (rollback) 7/7.
 5. ADR 0055: ~~no revoke-all~~ (fixed 2026-11-10); journal tail truncation indistinguishable from a torn write (needs a sealed
-   high-water mark). ADR 0053: ~~no per-session rate limit~~ (fixed); replay memory lost when the session table evicts.
+   high-water mark). ADR 0053: ~~no per-session rate limit~~ (fixed); ~~replay memory lost when the session table evicts~~ (fixed 2026-11-10: evicted high-water mark = floor, `[P-seq-floor]`); replay memory lost when the session table evicts.
 6. ~~ADR 0051 D3: the TLS private scalar stays in an EL1 static after INIT~~ — fixed 2026-11-10 (re-derived per INIT, zeroised).
 7. ~~ADR 0054 / 0045: nothing refuses a bench `HEQK_AP_PSK` image~~ — fixed 2026-11-10 (factory + release refuse it).
 8. ADR 0046 D4: software attestation-key private keys are tracked in git (`hboot/src/attest_keys.rs`); release
