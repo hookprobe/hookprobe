@@ -23,13 +23,12 @@
  */
 
 import { type Component, For, Show, createSignal, createEffect, onMount } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
 import LiveState from './LiveState';
 import { promptAndRun } from '../store/actions';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
 import { formatTime, formatBytes, mitreName, mitreTactic, type ProcessTreeNode } from '../store/api';
+import AppShell from './AppShell';
 import {
   startInvestigateLive, incidents, queueStatus, queueError,
   detail, detailStatus, detailError, fetchIncidentDetail, mitreForRelatedEvents,
@@ -140,8 +139,7 @@ const InvestigateApp: Component = () => {
   }
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/investigate" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+    <AppShell path="/investigate/queue">
 
       <main class="dash-main">
         <header class="mc-header">
@@ -524,13 +522,7 @@ const InvestigateApp: Component = () => {
         </div>
       </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+    </AppShell>
   );
 };
 

@@ -13,8 +13,10 @@
  * fabricated response.
  */
 
+/** Same-origin by default: on heqk the device itself serves the planner routes (ADR 0047 D2).
+ *  Set PUBLIC_PLANNER_API_BASE (e.g. http://127.0.0.1:8421) for the legacy Linux-tier service. */
 export const PLANNER_API_BASE =
-  (import.meta.env.PUBLIC_PLANNER_API_BASE as string | undefined) ?? 'http://127.0.0.1:8421';
+  (import.meta.env.PUBLIC_PLANNER_API_BASE as string | undefined) ?? '';
 
 export interface PlannerStatus {
   configured: boolean;
@@ -123,4 +125,40 @@ export interface PlannerApproveResult {
  *  requires the existing, unchanged `hookprobe-supervisor --reconcile-network --network-write` step. */
 export async function approveChange(artifacts: PlannerArtifactPreview[]): Promise<PlannerApproveResult> {
   return postJson<PlannerApproveResult>('/api/planner/approve', { artifacts });
+}
+
+/** `GET /api/planner/proposals/:id` — where the reconciler is with a staged proposal. */
+export interface ProposalStatus {
+  state: 'staged' | 'applying' | 'verified' | 'failed';
+  detail?: string;
+  updated_ms?: number;
+}
+
+/**
+ * Follow a staged proposal until it is verified or failed (PlanDiff's `watch`). Polls every 2 s.
+ * A device that does not serve the status route yet (404) ends the watch silently: the plan then
+ * honestly stays at "Staged", never a guessed "applied".
+ */
+export function watchProposal(
+  id: string,
+  update: (u: { state: 'applying' } | { state: 'verified'; detail?: string } | { state: 'failed'; detail: string }) => void,
+): () => void {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const tick = async () => {
+    if (stopped) return;
+    try {
+      const res = await fetch(`${PLANNER_API_BASE}/api/planner/proposals/${encodeURIComponent(id)}`, { headers: { accept: 'application/json' } });
+      if (res.status === 404) return; // not served yet: stay at Staged
+      if (res.ok) {
+        const st = (await res.json()) as ProposalStatus;
+        if (st.state === 'applying') update({ state: 'applying' });
+        else if (st.state === 'verified') { update({ state: 'verified', detail: st.detail }); return; }
+        else if (st.state === 'failed') { update({ state: 'failed', detail: st.detail ?? 'The reconciler reported a failure.' }); return; }
+      }
+    } catch { /* transient: try again */ }
+    if (!stopped) timer = setTimeout(() => void tick(), 2000);
+  };
+  void tick();
+  return () => { stopped = true; if (timer) clearTimeout(timer); };
 }
