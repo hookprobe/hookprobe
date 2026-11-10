@@ -21,6 +21,7 @@ import LeftRail, { PILLARS, pillarActive } from './LeftRail';
 import AppRail, { workspaceActive } from './AppRail';
 import CommandPalette from './CommandPalette';
 import SampleDataNotice from './SampleDataNotice';
+import { remember, screenTitle } from '../store/recents';
 import Icon from './Icon';
 
 interface Props {
@@ -48,6 +49,9 @@ const AppShell: Component<Props> = (props) => {
   onMount(() => {
     setPath(normPath(location.pathname));
     loadProView();
+    // Workspace: remember the screens you open (this browser only; incidents record themselves).
+    const t = screenTitle(path());
+    if (t && path() !== '/workspace') remember({ key: `screen:${path()}`, type: 'Screen', title: t, href: path(), scope: 'This device' });
     void loadHealth();
     void startLiveUpdates(); // idempotent: the pill/score track the live device on every route
 
