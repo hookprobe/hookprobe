@@ -12,10 +12,9 @@
  */
 
 import { type Component, For } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
+import AppShell from './AppShell';
 import {
   type ManagedCustomer, type TenantNode, type SlaEntry,
   KPIS, MANAGED, TENANT_TREE, SLA_ENTRIES, SLA_SUMMARY,
@@ -61,8 +60,7 @@ const TreeNode: Component<{ node: TenantNode; depth: number }> = (p) => (
 );
 
 const CustomersApp: Component = () => (
-  <div class="dash-layout">
-    <LeftRail active="/customers" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+  <AppShell path="/customers/managed">
 
     <main class="dash-main">
       <header class="mc-header">
@@ -183,13 +181,7 @@ const CustomersApp: Component = () => (
       </div>
     </main>
 
-    <CommandPalette
-      open={copilotOpen()}
-      query={copilotQuery()}
-      onQuery={setCopilotQuery}
-      onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-    />
-  </div>
+  </AppShell>
 );
 
 export default CustomersApp;
