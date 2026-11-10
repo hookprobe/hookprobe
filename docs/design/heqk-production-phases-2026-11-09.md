@@ -73,7 +73,12 @@ different firmware build from the vendor — a supplier dependency (human regist
 
 ## Phase 7 — legal and factory
 CYW43455 firmware redistribution terms, a per-unit provisioning tool (owner token, setup credential, label /
-QR, self-test log), factory reset, an RTC (wall clock without a network), and the certification file
+QR, self-test log), factory reset (**built 2026-11-10**: `POST /api/factory-reset`, owner guards + re-auth +
+`confirm=ERASE`, seals a `FactoryReset` journal record; the next boot (`factoryreset::run`, before anything is
+served) zeroes the evidence ring and the artifact manifest, seals an empty snapshot into both A/B slots, and
+LAST zeroes the journal, then reboots as shipped; a failed step keeps the request and boots normally; boot slots,
+signed config, SRK and anti-rollback floors are never touched; `[P-ownerjournal]`; metal
+`tools/diagnostics/cm5-factory-reset-check.sh` — **metal PASS 9/9, batch 45**), an RTC (wall clock without a network), and the certification file
 (CE/RED + EN 18031, FCC, CRA SBOM / CVD / support period).
 
 ## Status log
@@ -88,3 +93,5 @@ QR, self-test log), factory reset, an RTC (wall clock without a network), and th
   3c wedge self-heal reset, 3d in-loop renewal (metal: requests=1 acks=1, worst loop gap 347 ms), 3e NAT 4,096
   hashed, 3g 250-ms drain — all built; Phase 7 RTC built early (board RTC, provisional until NTP). Rule 112
   per source device. Replay guard survives session eviction. Batch 30 queued (J10–J13 + J8 rerun + 24 h soak).
+
+- 2026-11-10 (later): Phase 6 WPA3-SAE built (crate `sae`, feature `wpa3`, `WIFI.TXT security=`) and metal-proven (batches 38–47: SAE-H2E + PMF join on two client chipsets, LAN suite 18/18 over SAE; WPA2 default unchanged, 18/18). Phase 7 factory reset metal PASS 9/9. Transition mode excludes WPA2-only stations on this firmware (status 38): opt-in only.

@@ -185,6 +185,8 @@ mod evlog;
 // entirely (measured: +80 bytes for all three). See prodfull.rs.
 #[cfg(all(feature = "cm5", any(feature = "prod-full", feature = "appersist")))]
 mod prodfull;
+#[cfg(all(feature = "cm5", feature = "appersist"))]
+mod factoryreset;
 mod edge;
 mod notify;
 mod packet;
@@ -3399,7 +3401,31 @@ fn cm5_p10_probe() {
                                 (6, cyw43::ap_chanspec(6))
                             };
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
-                            cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
+                            #[cfg(feature = "wpa3probe")]
+                            cyw43::probe_set_psk(ap_psk);
+                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA2 — the proven default. Transition mode
+                            // is opt-in: on this firmware a WPA2-only (no-PMF) station is refused at association (status 38,
+                            // metal batches 45/46), so it must never be switched on silently. `HEQK_AP_SECURITY` (wpa3 |
+                            // wpa3-transition) changes the default for bench builds. SAE needs the passphrase itself.
+                            #[cfg(feature = "wpa3")]
+                            {
+                                let build_default = match option_env!("HEQK_AP_SECURITY") {
+                                    Some("wpa3") => cyw43::SEC_WPA3,
+                                    Some("wpa3-transition") => cyw43::SEC_WPA3_TRANSITION,
+                                    _ => cyw43::SEC_WPA2,
+                                };
+                                let want = match wifi.map(|c| c.security) {
+                                    Some(wificfg::SEC_WPA2) => cyw43::SEC_WPA2,
+                                    Some(wificfg::SEC_WPA3) => cyw43::SEC_WPA3,
+                                    Some(wificfg::SEC_WPA3_TRANSITION) => cyw43::SEC_WPA3_TRANSITION,
+                                    _ => build_default,
+                                };
+                                let got = cyw43::ap_set_security(want, ap_ssid, ap_psk);
+                                if got != want {
+                                    kprint!(" [WPA3] WPA3 needs the passphrase (SAE cannot use a raw 64-hex PMK) — this AP stays WPA2-PSK\n");
+                                }
+                            }
+                            cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon (or the WPA3 mode)
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
                             // group PN on every join.
@@ -3686,6 +3712,10 @@ fn cm5_p10_probe() {
                                 kprint!(" [AP-OWNER] owner policy journal: no device key or no DataVolume — RAM only (rules last until reboot)\n");
                             }
                         }
+                        // Phase 7: a replayed factory-reset request wipes the owner data HERE — before the artifact
+                        // store, the evidence log or Mission Control are brought up — and reboots (never returns then).
+                        #[cfg(feature = "appersist")]
+                        factoryreset::run(&mut pf);
                         // ADR 0056: the artifact store + upload staging — a THIRD eMMC handle whose Gate 2 covers
                         // ONLY Store ∪ Staging (contiguous in the registry), so an upload bug can never write the
                         // journal, the keystore or the boot partition. Without an operator key uploads are refused.
@@ -3813,6 +3843,7 @@ fn cm5_p10_probe() {
                         // response 2 s to leave, then reboot ONCE into the slot tryboot.txt names.
                         #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                         let mut trial_at: Option<u64> = None;
+                        let mut reset_at: Option<u64> = None;
                         // Production phase 1 step 5: repair an interrupted commit, then classify this boot.
                         #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
                         let (mut ota_boot, ota_t0) = {
@@ -3874,6 +3905,10 @@ fn cm5_p10_probe() {
                             }
                             #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                             {
+                                if ownerapi::take_reset_reboot() {
+                                    kprint!(" [FACTORY-RESET] request sealed in the journal — rebooting in 2 s to erase the owner data\n");
+                                    reset_at = Some(now().wrapping_add(2 * freq));
+                                }
                                 if upload::take_trial_reboot() {
                                     trial_at = Some(now().wrapping_add(2 * freq));
                                     kprint!(" [OTA] new image written to the inactive slot and verified from the slot — trial boot in 2 s (tryboot one-shot; an unhealthy trial falls back to this slot)\n");
@@ -3895,6 +3930,10 @@ fn cm5_p10_probe() {
                                         kprint!(" [OTA] trial not healthy within 5 min (WAN never usable) — rebooting to the previous slot\n");
                                         unsafe { core::arch::asm!("hvc #0") };
                                     }
+                                }
+                                if reset_at.is_some_and(|t| now() > t) {
+                                    let _ = arch_aarch64::mailbox::notify_reboot();
+                                    unsafe { core::arch::asm!("hvc #0", options(noreturn)) };
                                 }
                                 if trial_at.is_some_and(|t| now() > t) {
                                     let set = arch_aarch64::mailbox::set_reboot_flags(arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
@@ -4088,10 +4127,16 @@ fn cm5_p10_probe() {
                                         rtwdog::pet(now(), freq);
                                         tries += 1;
                                         let mut auth = cyw43::ApAuth::new();
-                                        cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
-                                        kprint!("   [P11-AP3 auth] m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
-                                            auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
+                                        // WPA3: a station that just completed SAE keys with the SAE PMK (AKM 8)
+                                        #[cfg(feature = "wpa3")]
+                                        let (apmk, akm8) = match cyw43::ap_sae_pmk(&sta, now() / (freq / 1000).max(1)) { Some(p) => (p, true), None => (pmk, false) };
+                                        #[cfg(not(feature = "wpa3"))]
+                                        let (apmk, akm8) = (pmk, false);
+                                        cyw43::ap_authenticate(&ap.bssid, &sta, &apmk, akm8, &gtk, 1, &mut auth);
+                                        kprint!("   [P11-AP3 auth] akm={} m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
+                                            if akm8 { "SAE" } else { "PSK" }, auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
                                             auth.ptk_set, auth.authorized, auth.m2_mic_fail, auth.reassoc, auth.deauth, auth.replay);
+                                        let _ = akm8;
                                         if auth.ptk_set && auth.authorized {
                                             keyed += 1;
                                             kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n");
@@ -4105,7 +4150,16 @@ fn cm5_p10_probe() {
                                         break;
                                     }
                                 }
+                                cyw43::ApEvent::Sae(_ev) => {
+                                    // WPA3: a station's SAE commit / confirm (firmware event 188) — answered on the host
+                                    #[cfg(feature = "wpa3")]
+                                    {
+                                        let _ = cyw43::ap_sae_rx(&rx, _ev, &ap.bssid, now() / (freq / 1000).max(1));
+                                    }
+                                }
                                 cyw43::ApEvent::Leave(sta) => {
+                                    #[cfg(feature = "wpa3")]
+                                    cyw43::ap_sae_forget(&sta);
                                     unsafe { (*core::ptr::addr_of_mut!(V6)).forget_mac(&sta) }; // release its IPv6 bindings (SAVI)
                                     leaves += 1;
                                     kprint!("   [P11-AP3] station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left (deauth/disassoc)\n",
@@ -7060,6 +7114,14 @@ pub extern "C" fn kmain() -> ! {
         let _ = policysig::wansig_selftest();
         let _ = alerthook::selftest();
 
+        #[cfg(feature = "wpa3")]
+        {
+            let (j10, e2e, ptk, h2e) = sae::selftest();
+            let cmac = arch_aarch64::aes::cmac_selftest();
+            let pass = j10 && e2e && ptk && cmac && h2e;
+            kprint!(" [P-sae] {} — WPA3-SAE on the AP (Phase 6, host SAE because the firmware forwards SAE frames — batch 37): P-256 hunting-and-pecking commit + KCK/PMK/PMKID = IEEE 802.11-2020 Annex J.10={} | AP responder end to end (commit, confirm, PMK agreed; wrong password: confirm dropped, never answered, no PMK)={} | AKM 8 PTK (KDF-SHA256) = hostapd 2.11 sha256_prf={} | AES-128-CMAC EAPOL MIC = RFC 4493 examples 1-4={} | H2E (hash-to-element, SSWU) PWE = the Annex J.10 H2E vector={}\n",
+                if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e);
+        }
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
             use arch_aarch64::crashrec::{take, write};

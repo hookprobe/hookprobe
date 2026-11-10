@@ -7,6 +7,10 @@
 //!   psk=correct horse battery  WPA2: 8..63 printable ASCII, or exactly 64 hex digits (a raw PMK)
 //!   channel=40                 2.4 GHz 1..13, 5 GHz 36/40/44/48 (UNII-1 — DFS channels fail on this
 //!                              firmware's stock CLM, see the Wi-Fi capability notes); default: auto
+//!   security=wpa3-transition   wpa2 | wpa3 (SAE only, PMF required) | wpa3-transition (WPA2-PSK + SAE, PMF
+//!                              capable); default: WPA2. Transition mode refuses WPA2-only (no-PMF) stations at
+//!                              association on this firmware (metal 2026-11-10) — choose it only for WPA3/PMF-capable fleets.
+//!                              SAE needs the passphrase: with a 64-hex PMK only `wpa2` is accepted.
 //! Anything invalid → the file is refused whole and the build-time defaults stay (never half-applied).
 //! Honest limitation: the PSK sits on the boot partition in the clear, like any WPA2 appliance config;
 //! physical possession of the card is the same exposure as the build-time PSK in the image.
@@ -19,7 +23,14 @@ pub struct WifiCfg {
     pub psk_len: u8,
     /// 0 = automatic.
     pub channel: u8,
+    /// `SEC_*` below; `SEC_DEFAULT` = the build's default.
+    pub security: u8,
 }
+
+pub const SEC_WPA2: u8 = 0;
+pub const SEC_WPA3: u8 = 1;
+pub const SEC_WPA3_TRANSITION: u8 = 2;
+pub const SEC_DEFAULT: u8 = 0xff;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CfgErr {
@@ -27,13 +38,14 @@ pub enum CfgErr {
     BadSsid,
     BadPsk,
     BadChannel,
+    BadSecurity,
     UnknownKey,
     Duplicate,
 }
 
 pub fn parse(text: &[u8]) -> Result<WifiCfg, CfgErr> {
-    let mut c = WifiCfg { ssid: [0; 32], ssid_len: 0, psk: [0; 64], psk_len: 0, channel: 0 };
-    let (mut have_ssid, mut have_psk, mut have_ch) = (false, false, false);
+    let mut c = WifiCfg { ssid: [0; 32], ssid_len: 0, psk: [0; 64], psk_len: 0, channel: 0, security: SEC_DEFAULT };
+    let (mut have_ssid, mut have_psk, mut have_ch, mut have_sec) = (false, false, false, false);
     for raw in text.split(|&b| b == b'\n') {
         let line = raw.strip_suffix(b"\r").unwrap_or(raw);
         let line = line.split(|&b| b == 0).next().unwrap_or(&[]);
@@ -82,8 +94,24 @@ pub fn parse(text: &[u8]) -> Result<WifiCfg, CfgErr> {
                 c.channel = ch;
                 have_ch = true;
             }
+            b"security" => {
+                if have_sec {
+                    return Err(CfgErr::Duplicate);
+                }
+                c.security = match v {
+                    b"wpa2" => SEC_WPA2,
+                    b"wpa3" => SEC_WPA3,
+                    b"wpa3-transition" => SEC_WPA3_TRANSITION,
+                    _ => return Err(CfgErr::BadSecurity),
+                };
+                have_sec = true;
+            }
             _ => return Err(CfgErr::UnknownKey),
         }
+    }
+    // SAE derives its password element from the passphrase itself: a raw 64-hex PMK cannot do WPA3
+    if (c.security == SEC_WPA3 || c.security == SEC_WPA3_TRANSITION) && c.psk_len == 64 {
+        return Err(CfgErr::BadSecurity);
     }
     if !have_ssid {
         return Err(CfgErr::Missing("ssid"));
@@ -185,10 +213,18 @@ pub fn selftest() -> bool {
     let mut x = sig;
     x[..8].copy_from_slice(b"HQBSIG1\0");
     let sig_x = check_sig(&x, &pk, body).is_none();
-    let pass = good_ok && auto && hex && refused && sig_ok && sig_t && sig_x;
+    // security: default = the build's; wpa2 / wpa3 / wpa3-transition; unknown refused; a 64-hex PMK cannot do SAE
+    let sec = parse(b"ssid=x\npsk=12345678\n").is_ok_and(|c| c.security == SEC_DEFAULT)
+        && parse(b"ssid=x\npsk=12345678\nsecurity=wpa2\n").is_ok_and(|c| c.security == SEC_WPA2)
+        && parse(b"ssid=x\npsk=12345678\nsecurity=wpa3\n").is_ok_and(|c| c.security == SEC_WPA3)
+        && parse(b"ssid=x\npsk=12345678\nsecurity=wpa3-transition\n").is_ok_and(|c| c.security == SEC_WPA3_TRANSITION)
+        && parse(b"ssid=x\npsk=12345678\nsecurity=wep\n") == Err(CfgErr::BadSecurity)
+        && parse(b"ssid=x\npsk=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsecurity=wpa3\n") == Err(CfgErr::BadSecurity)
+        && parse(b"ssid=x\npsk=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\nsecurity=wpa2\n").is_ok();
+    let pass = good_ok && auto && hex && refused && sig_ok && sig_t && sig_x && sec;
     arch_aarch64::_print(format_args!(
-        " [P-wificfg] {} — WIFI.TXT (parity G20: SSID/PSK/channel without a rebuild): valid file={} auto channel={} raw 64-hex PMK={} | refused whole: short/long/non-hex PSK, empty/33-byte/control-char SSID, DFS ch 52 + ch 14, duplicates, unknown keys, missing keys ={} | WIFI.SIG ok={} tampered refused={} other-file signature refused={}\n",
-        if pass { "PASS" } else { "FAIL" }, good_ok, auto, hex, refused, sig_ok, sig_t, sig_x
+        " [P-wificfg] {} — WIFI.TXT (parity G20: SSID/PSK/channel without a rebuild): valid file={} auto channel={} raw 64-hex PMK={} | refused whole: short/long/non-hex PSK, empty/33-byte/control-char SSID, DFS ch 52 + ch 14, duplicates, unknown keys, missing keys ={} | WIFI.SIG ok={} tampered refused={} other-file signature refused={} | security= wpa2/wpa3/wpa3-transition, unknown refused, a 64-hex PMK refused for SAE ={}\n",
+        if pass { "PASS" } else { "FAIL" }, good_ok, auto, hex, refused, sig_ok, sig_t, sig_x, sec
     ));
     pass
 }
