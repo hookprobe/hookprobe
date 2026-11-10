@@ -166,6 +166,7 @@ const SetupApp: Component = () => {
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>wifi: "{ssid()}" · WPA3 + WPA2</div>
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>signed with your key {ownerKey()?.pubHex.slice(0, 8)}…</div>
           </div>
+          <p class="pcard-note" style={{ margin: 0 }}>Your Wi-Fi password{mode() === 'pppoe' ? ' and PPPoE password are' : ' is'} stored in the signed file in clear: anyone holding the device's boot card can read {mode() === 'pppoe' ? 'them' : 'it'}. Not protected at rest yet.</p>
           <p class="setup-p" style={{ 'font-size': '14px' }}>The new settings apply when the device restarts. Afterwards, join "{ssid()}" with your new password.</p>
           <div class="setup-grow" />
           <button class="hp-btn hp-btn--primary setup-cta" onClick={() => void launch()}>Launch</button>
