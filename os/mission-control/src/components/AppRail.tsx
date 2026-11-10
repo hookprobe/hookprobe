@@ -15,7 +15,7 @@ interface Item { label: string; href: string; icon: string; match: string[]; lin
 export const WORKSPACES: Item[] = [
   { label: 'Mission Control',   href: '/mission',            icon: 'mission', match: ['/mission'] },
   { label: 'Workspace',         href: '/workspace',          icon: 'workspace', match: ['/workspace'] },
-  { label: 'Observe',           href: '/observe/events',     icon: 'observe', match: ['/observe'] },
+  { label: 'Observe',           href: '/observe/live',       icon: 'observe', match: ['/observe'] },
   { label: 'Detect',            href: '/detect/feed',        icon: 'detect', match: ['/detect'] },
   { label: 'Investigate',       href: '/investigate/queue',  icon: 'investigate', match: ['/investigate'] },
   { label: 'Protect',           href: '/protect/firewall',   icon: 'shield', match: ['/protect'] },
