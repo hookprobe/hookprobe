@@ -8,7 +8,8 @@
 //!   channel=40                 2.4 GHz 1..13, 5 GHz 36/40/44/48 (UNII-1 — DFS channels fail on this
 //!                              firmware's stock CLM, see the Wi-Fi capability notes); default: auto
 //!   security=wpa3-transition   wpa2 | wpa3 (SAE only, PMF required) | wpa3-transition (WPA2-PSK + SAE, PMF
-//!                              capable); default: the build's (WPA2, or WPA3 transition with the `wpa3` feature).
+//!                              capable); default: WPA2. Transition mode refuses WPA2-only (no-PMF) stations at
+//!                              association on this firmware (metal 2026-11-10) — choose it only for WPA3/PMF-capable fleets.
 //!                              SAE needs the passphrase: with a 64-hex PMK only `wpa2` is accepted.
 //! Anything invalid → the file is refused whole and the build-time defaults stay (never half-applied).
 //! Honest limitation: the PSK sits on the boot partition in the clear, like any WPA2 appliance config;
