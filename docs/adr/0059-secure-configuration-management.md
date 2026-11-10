@@ -195,5 +195,8 @@ autonomous.
 2. WebAuthn verifier (ADR 0058 open item 1). It would let K_own live on a passkey or hardware security key.
 3. ML-DSA as a second configuration-signature algorithm (the envelope reserves `alg = 2`). Crypto agility per
    ADR 0002.
-4. Whether the zero-tail rule is enforced for every length-prefixed content pack, or only for configuration.
-   The heqk session is reviewing what each producer writes.
+4. ~~Zero-tail rule for length-prefixed packs.~~ **Not adopted (heqk session, 2026-11-10).** Verifying and
+   parsing one buffer already means nothing reads past the signed length. Store slots are not guaranteed to be
+   zero-filled after a shorter upload, so the rule could refuse legitimate files. HQCFG1 makes the question moot:
+   its envelope carries `total_len`, and nothing outside the signed length is ever parsed. D2 rule 2 therefore
+   reads "the parser sees exactly the signed bytes; duplicate keys are rejected".
