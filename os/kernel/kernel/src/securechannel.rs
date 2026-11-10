@@ -1091,7 +1091,7 @@ impl SymmetricState {
 /// static. The type + the responder read/write functions still compile (they are the
 /// loopback test's control-plane peer, and the shape a future off-device control
 /// plane would use), but the seeded-static path is out of the device binary.
-#[cfg_attr(not(feature = "securechannel-selftest"), allow(dead_code))]
+#[cfg_attr(not(any(feature = "securechannel-selftest", feature = "securechannel-host-responder")), allow(dead_code))]
 pub struct ResponderStatic {
     x_sk: StaticSecret,
     x_pk: [u8; 32],
@@ -1146,7 +1146,9 @@ impl ResponderStatic {
     /// constructs a responder static, so this seeded path is compiled OUT of the
     /// device binary (a `compile_error!` already refuses `securechannel-selftest`
     /// together with `cm5`, so it can never reach metal).
-    #[cfg(feature = "securechannel-selftest")]
+    /// Also built by `securechannel-host-responder` (G19 super-PoP / responder-sim on a HOST: the operator's
+    /// responder derives its long-term static from its own key file); refused with `cm5` / `cloud` like selftest.
+    #[cfg(any(feature = "securechannel-selftest", feature = "securechannel-host-responder"))]
     pub fn from_seeds(x_seed: &[u8; 32], d: &[u8; 32], z: &[u8; 32]) -> Self {
         let x_sk = StaticSecret::from(*x_seed);
         let x_pk = PublicKey::from(&x_sk).to_bytes();
@@ -1388,6 +1390,17 @@ pub fn responder_read_msg1(
     enrolled_device: &EdPub,
     msg: &[u8],
 ) -> Result<ResponderPending, NoiseErr> {
+    responder_read_msg1_with(resp, |pk: &[u8; 32]| kdf::ct_eq(&pk[..], &enrolled_device[..]), msg)
+}
+
+/// As `responder_read_msg1`, with the enrollment decision supplied by the caller (G19 super-PoP: an allowlist of
+/// device identities, looked up once from the decrypted identity — no trial decapsulation per allowlisted key).
+/// `is_enrolled` must compare in constant time where that matters. Same fail-closed behaviour.
+pub fn responder_read_msg1_with(
+    resp: &ResponderStatic,
+    is_enrolled: impl Fn(&[u8; 32]) -> bool,
+    msg: &[u8],
+) -> Result<ResponderPending, NoiseErr> {
     let mut ss = SymmetricState::new(PROTOCOL_NAME);
     ss.mix_hash(PROLOGUE);
     ss.mix_hash(&resp.x_pk);
@@ -1431,8 +1444,9 @@ pub fn responder_read_msg1(
     let c_id = take(&mut off, ED_PUB_LEN + AEAD_TAG_LEN)?;
     let id_pub_rec = ss.decrypt_and_hash(c_id)?;
     let id_pub_bytes = id_pub_rec.as_slice();
-    // Enrollment gate: the identity MUST be the enrolled device (constant-time).
-    if !kdf::ct_eq(id_pub_bytes, &enrolled_device[..]) {
+    // Enrollment gate: the identity MUST be an enrolled device (the caller's predicate).
+    let id32: &[u8; 32] = id_pub_bytes.try_into().map_err(|_| NoiseErr::BadKeyMaterial)?;
+    if !is_enrolled(id32) {
         return Err(NoiseErr::UnenrolledIdentity);
     }
     let device_pub = EdPub::from_slice(id_pub_bytes).map_err(|_| NoiseErr::BadKeyMaterial)?;
