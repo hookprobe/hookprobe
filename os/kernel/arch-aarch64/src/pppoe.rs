@@ -874,29 +874,19 @@ impl Pppoe {
             return;
         }
         match code {
+            // ADR 0050 D4 step 3b-iii: the IPCP option walks run in EL0 (el0-lansvc) when it is loaded; the engine acts
+            // on the classified record (rejected options copied out of it)
             CONF_REQ => {
-                // The peer's own address (option 3); reject anything else (e.g. VJ compression).
-                let mut rej = [0u8; 64];
-                let mut nrej = 0;
-                let mut peer = self.peer_ip;
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        return;
-                    }
-                    if t == 3 && l == 6 {
-                        peer.copy_from_slice(&data[o + 2..o + 6]);
-                    } else if nrej + l <= rej.len() {
-                        rej[nrej..nrej + l].copy_from_slice(&data[o..o + l]);
-                        nrej += l;
-                    }
-                    o += l;
+                let f = crate::wanparse::ipcp(CONF_REQ, data);
+                if f.malformed {
+                    return;
                 }
-                if nrej > 0 {
-                    self.send_ctl(tx, PPP_IPCP, CONF_REJ, id, &rej[..nrej]);
+                if f.nrej > 0 {
+                    self.send_ctl(tx, PPP_IPCP, CONF_REJ, id, &f.rej[..f.nrej as usize]);
                 } else {
-                    self.peer_ip = peer;
+                    if let Some(p) = f.peer {
+                        self.peer_ip = p;
+                    }
                     self.send_ctl(tx, PPP_IPCP, CONF_ACK, id, data);
                     self.ipcp_ack_tx = true;
                     self.ipcp_maybe_open();
@@ -907,38 +897,25 @@ impl Pppoe {
                 self.ipcp_maybe_open();
             }
             CONF_NAK if id == self.ipcp_id => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    if l == 6 {
-                        let v = [data[o + 2], data[o + 3], data[o + 4], data[o + 5]];
-                        match t {
-                            3 => self.my_ip = v,
-                            129 => self.dns1 = v,
-                            131 => self.dns2 = v,
-                            _ => {}
-                        }
-                    }
-                    o += l;
+                let f = crate::wanparse::ipcp(CONF_NAK, data);
+                if let Some(v) = f.my_ip {
+                    self.my_ip = v;
+                }
+                if let Some(v) = f.dns1 {
+                    self.dns1 = v;
+                }
+                if let Some(v) = f.dns2 {
+                    self.dns2 = v;
                 }
                 self.send_ipcp_req(now_ms, tx);
             }
             CONF_REJ if id == self.ipcp_id => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    match t {
-                        129 => self.want_dns1 = false,
-                        131 => self.want_dns2 = false,
-                        _ => {}
-                    }
-                    o += l;
+                let f = crate::wanparse::ipcp(CONF_REJ, data);
+                if f.rej_dns1 {
+                    self.want_dns1 = false;
+                }
+                if f.rej_dns2 {
+                    self.want_dns2 = false;
                 }
                 self.send_ipcp_req(now_ms, tx);
             }

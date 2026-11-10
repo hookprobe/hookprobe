@@ -188,3 +188,101 @@ pub fn decode_lcp(o: &[u8; LCP_LEN]) -> LcpReq {
     r.nnak = o[148].min(16);
     r
 }
+
+// ---- D4 step 3b-iii: IPCP option parsing (Configure-Request / -Nak / -Reject from the AC) ----------------------
+
+/// What one IPCP control message says. Request: the peer address (option 3) + the options we reject (copied out).
+/// Nak: the values the AC proposes (our address, DNS 1/2). Reject: which DNS options the AC refuses.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct IpcpFacts {
+    pub malformed: bool,
+    pub peer: Option<[u8; 4]>,
+    pub rej: [u8; 64],
+    pub nrej: u8,
+    pub my_ip: Option<[u8; 4]>,
+    pub dns1: Option<[u8; 4]>,
+    pub dns2: Option<[u8; 4]>,
+    pub rej_dns1: bool,
+    pub rej_dns2: bool,
+}
+pub const IPCP0: IpcpFacts = IpcpFacts { malformed: false, peer: None, rej: [0; 64], nrej: 0, my_ip: None, dns1: None, dns2: None, rej_dns1: false, rej_dns2: false };
+pub const CONF_REQ: u8 = 1;
+pub const CONF_NAK: u8 = 3;
+pub const CONF_REJ: u8 = 4;
+
+pub fn ipcp_facts(code: u8, data: &[u8]) -> IpcpFacts {
+    let mut f = IPCP0;
+    let mut nrej = 0usize;
+    let mut o = 0;
+    while o + 2 <= data.len() {
+        let (t, l) = (data[o], data[o + 1] as usize);
+        if l < 2 || o + l > data.len() {
+            // a Request with a malformed list is dropped whole; Nak / Reject keep what parsed before it (as before)
+            f.malformed = code == CONF_REQ;
+            break;
+        }
+        let v4 = if l == 6 { Some([data[o + 2], data[o + 3], data[o + 4], data[o + 5]]) } else { None };
+        match code {
+            CONF_REQ => {
+                if t == 3 && l == 6 {
+                    f.peer = v4;
+                } else if nrej + l <= f.rej.len() {
+                    f.rej[nrej..nrej + l].copy_from_slice(&data[o..o + l]);
+                    nrej += l;
+                }
+            }
+            CONF_NAK => match (t, v4) {
+                (3, Some(v)) => f.my_ip = Some(v),
+                (129, Some(v)) => f.dns1 = Some(v),
+                (131, Some(v)) => f.dns2 = Some(v),
+                _ => {}
+            },
+            CONF_REJ => match t {
+                129 => f.rej_dns1 = true,
+                131 => f.rej_dns2 = true,
+                _ => {}
+            },
+            _ => {}
+        }
+        o += l;
+    }
+    f.nrej = nrej as u8;
+    f
+}
+
+pub const IPCP_LEN: usize = 1 + 5 + 64 + 1 + 5 + 5 + 5 + 2;
+fn put4(o: &mut [u8], at: usize, v: Option<[u8; 4]>) {
+    if let Some(v) = v {
+        o[at] = 1;
+        o[at + 1..at + 5].copy_from_slice(&v);
+    }
+}
+fn get4(o: &[u8], at: usize) -> Option<[u8; 4]> {
+    (o[at] != 0).then(|| [o[at + 1], o[at + 2], o[at + 3], o[at + 4]])
+}
+pub fn encode_ipcp(f: &IpcpFacts) -> [u8; IPCP_LEN] {
+    let mut o = [0u8; IPCP_LEN];
+    o[0] = f.malformed as u8;
+    put4(&mut o, 1, f.peer);
+    o[6..70].copy_from_slice(&f.rej);
+    o[70] = f.nrej;
+    put4(&mut o, 71, f.my_ip);
+    put4(&mut o, 76, f.dns1);
+    put4(&mut o, 81, f.dns2);
+    o[86] = f.rej_dns1 as u8;
+    o[87] = f.rej_dns2 as u8;
+    o
+}
+pub fn decode_ipcp(o: &[u8; IPCP_LEN]) -> IpcpFacts {
+    let mut f = IPCP0;
+    f.malformed = o[0] != 0;
+    f.peer = get4(o, 1);
+    f.rej.copy_from_slice(&o[6..70]);
+    f.nrej = o[70].min(64);
+    f.my_ip = get4(o, 71);
+    f.dns1 = get4(o, 76);
+    f.dns2 = get4(o, 81);
+    f.rej_dns1 = o[86] != 0;
+    f.rej_dns2 = o[87] != 0;
+    f
+}

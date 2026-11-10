@@ -52,6 +52,17 @@ pub fn lcp_req(data: &[u8]) -> hal::pppwire::LcpReq {
     }
 }
 
+pub type IpcpFn = fn(u8, &[u8]) -> Option<hal::pppwire::IpcpFacts>;
+pub static mut EL0_IPCP: Option<IpcpFn> = None;
+
+/// D4 step 3b-iii: an IPCP Configure-Request / -Nak / -Reject (a server fault reads as malformed / nothing proposed).
+pub fn ipcp(code: u8, data: &[u8]) -> hal::pppwire::IpcpFacts {
+    match unsafe { EL0_IPCP } {
+        Some(h) => h(code, data).unwrap_or(hal::pppwire::IpcpFacts { malformed: true, ..hal::pppwire::IPCP0 }),
+        None => hal::pppwire::ipcp_facts(code, data),
+    }
+}
+
 pub fn dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
     match unsafe { EL0_DHCP6 } {
         Some(h) => h(ip, xid).flatten(),
