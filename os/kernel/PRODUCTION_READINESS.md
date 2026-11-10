@@ -46,7 +46,7 @@ TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 a
 | 3.4 | Randomized power-loss torture of journal / store / evidence log | B | single cuts PASS |
 | 3.5 | Thermal in the enclosure at sustained throughput | B | open |
 | 3.6 | WPA3-SAE + PMF, guest SSID; 5 GHz DFS (stock CLM forbids) | A+B | WPA2 only |
-| 3.7 | Wall clock without network (RTC) | B | NTP only |
+| 3.7 | Wall clock without network (RTC) | B | **built** (ffda850a): board RTC read at AP start (provisional — NTP still corrects it), written back after each NTP sync; HBoot proxy allows RTC register 0 only (never the backup-cell charger). Metal: batch 30 (warm reset keeps it; a power cut keeps it only with a backup cell) |
 
 ### 4. Detection
 | # | Item | Kind | State |
