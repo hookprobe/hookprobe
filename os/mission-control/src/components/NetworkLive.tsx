@@ -21,6 +21,7 @@ import AppShell, { normPath } from './AppShell';
 import PageHeader from './PageHeader';
 import Drawer from './Drawer';
 import OwnerChangePlan from './OwnerChangePlan';
+import { ownerRules, refreshOwnerRules, checkLabel } from '../store/ownerRules';
 
 const ZONES: { key: string; label: string; blurb: string }[] = [
   { key: 'full', label: 'Full access', blurb: 'Internet and the local network.' },
@@ -29,7 +30,6 @@ const ZONES: { key: string; label: string; blurb: string }[] = [
   { key: 'quarantine', label: 'Quarantine', blurb: 'DHCP and DNS only.' },
 ];
 
-const SIGNED = 'Device names come from your signed DEVICES.TXT. Re-sign it to rename a device.';
 
 const now = Math.floor(Date.now() / 1000);
 const S = (id: string, label: string, ip: string, policy: string, category: string, active = true): DeviceRow =>
@@ -61,7 +61,12 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
   const [msg, setMsg] = createSignal('');
   const [sel, setSel] = createSignal<string | null>(null);
   const [moveTo, setMoveTo] = createSignal<string | null>(null);
-  onMount(() => { setPath(normPath(location.pathname)); void refetchDevices(); });
+  const [renaming, setRenaming] = createSignal(false);
+  const [newName, setNewName] = createSignal('');
+  const [nameReq, setNameReq] = createSignal<{ op: 'set' | 'remove'; value: string } | null>(null);
+  onMount(() => { setPath(normPath(location.pathname)); void refetchDevices(); void refreshOwnerRules(); });
+  const ownerLabel = (mac?: string | null) => (mac ? ownerRules()?.rules.find((r) => r.kind === 'device_label' && r.target.toLowerCase() === mac.toLowerCase()) : undefined);
+  const closeRename = () => { setRenaming(false); setNewName(''); setNameReq(null); };
 
   const sample = () => healthChecked() && !substrate();
   const rows = (): DeviceRow[] => (sample() ? SAMPLE : devices());
@@ -135,11 +140,11 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
           </Show>
         </Show>
         <p class="l0-card-sub">
-          Device policy is set in DEVICES.TXT signed with your operator key — change it by re-signing. "Isolate 1 h" is temporary and expires by itself.
+          Names and zones you set here are permanent owner rules (owner key); your signed DEVICES.TXT stays the baseline. "Isolate 1 h" is temporary and expires by itself.
         </p>
       </main>
 
-      <Drawer open={!!selected()} title={selected() ? nameOf(selected()!) : ''} onClose={() => { setSel(null); setMoveTo(null); }}
+      <Drawer open={!!selected()} title={selected() ? nameOf(selected()!) : ''} onClose={() => { setSel(null); setMoveTo(null); closeRename(); }}
         crumb={selected() ? `${kindOf(selected()!)} · ${selected()!.active === false ? 'lease expired' : 'online'}` : ''}
         footer={
           <Show when={selected()}>
@@ -149,10 +154,9 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
               <button class="hp-btn hp-btn--primary" title="Quarantine for 1 hour (owner key; DHCP and DNS keep working; expires on its own)"
                 onClick={async () => setMsg(await promptAndRun('isolate', selected()!.mac!, 3600))}>Isolate 1 h</button>
             </Show>
-            <span class="gate gate--off" title={SIGNED}>
-              <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Rename</button></span>
-              <span class="gate-reason" role="note">{SIGNED}</span>
-            </span>
+            <button class="hp-btn" aria-expanded={renaming()} disabled={!sample() && !selected()!.mac}
+              title={selected()!.mac || sample() ? 'Give this device a name (a permanent owner rule; owner key)' : 'No hardware address is on record, so a name cannot be attached'}
+              onClick={() => { if (renaming()) closeRename(); else { setRenaming(true); setNewName(nameOf(selected()!)); } }}>Rename</button>
           </Show>
         }>
         <Show when={selected()}>{(d) => {
@@ -167,6 +171,29 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
                 <p class="l0-card-sub">First seen<b>{formatTime(d().first_seen)}</b></p>
                 <p class="l0-card-sub">Last seen<b>{formatTime(d().last_seen)}</b></p>
               </div>
+              <Show when={renaming()}>
+                <div aria-label="Rename">
+                  <p class="l0-label">Name</p>
+                  <input class="dev-name-input" value={newName()} maxLength={31} autocomplete="off" aria-label="New name"
+                    onInput={(e) => { setNewName(e.currentTarget.value); setNameReq(null); }} />
+                  <Show when={checkLabel(newName())}><p class="plan-diff-warn" style={{ margin: 0 }}>{checkLabel(newName())}</p></Show>
+                  <div class="l0-card-foot">
+                    <button class="hp-btn hp-btn--primary" disabled={!newName() || !!checkLabel(newName()) || newName() === nameOf(d())}
+                      onClick={() => setNameReq({ op: 'set', value: newName() })}>Preview</button>
+                    <Show when={ownerLabel(d().mac)}>
+                      <button class="hp-btn" onClick={() => setNameReq({ op: 'remove', value: '' })}>Use the signed name</button>
+                    </Show>
+                  </div>
+                  <Show when={sample()}><p class="gate-reason">Preview: on a device the name becomes a permanent owner rule (owner key).</p></Show>
+                  <Show when={!sample() && nameReq() && d().mac}>
+                    <Show keyed when={`${d().mac}|${nameReq()!.op}|${nameReq()!.value}`}>
+                      <OwnerChangePlan title={`Rename ${nameOf(d())}`}
+                        change={nameReq()!.op === 'set' ? { op: 'set', kind: 'device_label', target: d().mac!, value: nameReq()!.value } : { op: 'remove', kind: 'device_label', target: d().mac! }}
+                        onVerified={() => void refetchDevices()} onDone={closeRename} />
+                    </Show>
+                  </Show>
+                </div>
+              </Show>
               <div>
                 <p class="l0-label">Move to zone</p>
                 <div class="l0-chips" role="group" aria-label="Move to zone">

@@ -39,8 +39,9 @@ and give an operator one place to understand and control what happens next.
 
 Where that journey stands in the code: the per-device setup Wi-Fi, the calm Home screen, zones as
 permanent owner rules, incident stories, and the Advanced editors that build and sign WAN / Wi-Fi /
-firewall files in the browser are built. The conversational first-run setup, uploading those signed
-files to a running device, and passkey signing are in progress — see the
+firewall files in the browser are built, and so is the three-question first-run setup that signs
+your internet and Wi-Fi settings. Uploading those signed files to a running device (until then they
+go on the boot card) and passkey signing are in progress — see the
 [configuration journey](docs/design/mission-control-ui-requirements.md#configuration-journey-from-flash-to-daily-use)
 and [ADR 0058](docs/adr/0058-owner-signed-runtime-config.md).
 
