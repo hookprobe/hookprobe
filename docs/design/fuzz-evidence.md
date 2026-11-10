@@ -1,0 +1,29 @@
+# Fuzz evidence — SEC-02 (2026-11-10)
+
+`tools/fuzz/run.sh 300`: coverage-guided libFuzzer (cargo-fuzz 0.13.2, nightly 2026-07-17), 300 s per target. All targets compile the SAME source files the device runs:
+
+- `hal`: POLICY.TXT, WAN.TXT, frame facts / VLAN, SDIO glom, A/B slot derivation.
+- `boot-abi`: the signed-image / OTA verifier header (`payload_header`).
+- Kernel crate via `tools/fuzz/heqk-kernel` (`#[path]` to `os/kernel/kernel/src/*.rs`):
+  - `http_req`: Mission Control request parser, query string and form bodies — every POST including uploads.
+  - `dns_wire`: names with compression pointers, client queries.
+  - `tls_hello`: ClientHello → JA4 / SNI.
+  - `frame_meta`: the IDS frame classifier.
+
+These parsers were moved verbatim into pure modules (`httpreq.rs`, `dnswire.rs`, `tlshello.rs`) that the original modules re-export. If a parser grows a kernel dependency, the harness build fails.
+
+Fixed-layout, MAC/digest-verified-before-decode stores (owner-journal record, artifact manifest) stay with the in-kernel fixed-seed `[P-fuzz]`. Their decoders read constant offsets and clamp lengths.
+
+```
+  ok   policy: Done 4123749 runs
+  ok   wan_cfg: Done 8916570 runs
+  ok   frame_facts: Done 31191489 runs
+  ok   glom: Done 27379792 runs
+  ok   abslot: Done 29862048 runs
+  ok   payload_header: Done 1625553 runs
+  ok   http_req: Done 6240099 runs
+  ok   dns_wire: Done 20582424 runs
+  ok   tls_hello: Done 10121668 runs
+  ok   frame_meta: Done 32999807 runs
+FUZZ: PASS (300s per target)
+```

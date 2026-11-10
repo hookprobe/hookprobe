@@ -95,7 +95,39 @@ pub fn v6net(addr: &[u8; 16]) -> u64 {
 /// IPv4-keyed behavioural tables (beacon / brute force) can hold a dual-stack device's IPv6 connections
 /// without ever colliding with a real IPv4 address.
 pub fn v6_peer(addr: &[u8; 16]) -> u32 {
-    0xF000_0000 | ((fnv(addr) as u32) & 0x0FFF_FFFF).max(1)
+    0xF000_0000 | ((fnv(addr) as u32) & 0x07FF_FFFF).max(1) // 240.0.0.0/5 (248/5 = IPv6-only devices)
+}
+
+/// G36: an IPv6-ONLY LAN device (no IPv4 lease) as a behavioural identity: its MAC folded into 248.0.0.0/5 —
+/// disjoint from `v6_peer`'s 240/5, reserved space, never a real address. Without it every IPv6 behavioural feed
+/// skipped such a device (`lease == 0`). The MAC is remembered so Mission Control names the device, not a number.
+pub fn v6_only(mac: &[u8; 6]) -> u32 {
+    let k = 0xF800_0000 | ((fnv(mac) as u32) & 0x07FF_FFFF).max(1);
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(V6ONLY) };
+    if !t.iter().any(|e| e.0 == k) {
+        let i = unsafe { V6ONLY_NEXT } % V6ONLY_N;
+        t[i] = (k, *mac);
+        unsafe { V6ONLY_NEXT = V6ONLY_NEXT.wrapping_add(1) };
+    }
+    k
+}
+const V6ONLY_N: usize = 64;
+static mut V6ONLY: [(u32, [u8; 6]); V6ONLY_N] = [(0, [0; 6]); V6ONLY_N];
+static mut V6ONLY_NEXT: usize = 0;
+
+/// The MAC behind a `v6_only` key (for display), if it is one and still remembered.
+pub fn v6_only_mac(k: u32) -> Option<[u8; 6]> {
+    if k & 0xF800_0000 != 0xF800_0000 {
+        return None;
+    }
+    let t = unsafe { &*core::ptr::addr_of!(V6ONLY) };
+    t.iter().find(|e| e.0 == k).map(|e| e.1)
+}
+
+/// The behavioural identity of a LAN device for its IPv6 traffic: its IPv4 lease when it has one (the identity the
+/// owner knows), else its IPv6-only key.
+pub fn v6_attrib(lease: u32, mac: &[u8; 6]) -> u32 {
+    if lease != 0 { lease } else { v6_only(mac) }
 }
 
 /// Is this an IPv6 key (observe-only)?
@@ -215,6 +247,52 @@ pub fn selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-v6src] {} — ADR 0049 D2 IPv6 source identity (observe-only): keys never alias + /64 stable under IID rotation={} | answered v6 sweep (IID rotating each probe) over the wall + confirmed={} | one-sided v6 SYNs never counted={} | legit busy v6 device (150 answered+ACKed flows, rotating temporaries) never fires={} | v6 keys outside the IPv4 management floor={}\n",
         if pass { "PASS" } else { "FAIL" }, keys, sweep, silent, legit, floor
+    ));
+    pass
+}
+
+/// [P-v6only] G36: an IPv6-only device gets a stable behavioural identity in 248/5, disjoint from IPv6 peers (240/5),
+/// that maps back to its MAC; a dual-stack device keeps its IPv4 lease; and its IPv6 SYNs now reach the beacon /
+/// brute-force tables (they were skipped at `lease == 0`).
+pub fn v6only_selftest() -> bool {
+    let mac = [0x02, 0x6c, 0x00, 0x00, 0x00, 0x01];
+    let k = v6_only(&mac);
+    let stable = k == v6_only(&mac) && k >> 27 == 0x1F && v6_only_mac(k) == Some(mac);
+    let mut any_peer_in_dev_range = false;
+    for i in 0..256u32 {
+        let mut a = [0u8; 16];
+        a[0] = 0x20;
+        a[1] = 0x01;
+        a[12..16].copy_from_slice(&i.wrapping_mul(2_654_435_761).to_be_bytes());
+        any_peer_in_dev_range |= v6_peer(&a) >> 27 == 0x1F;
+    }
+    let disjoint = !any_peer_in_dev_range && v6_only_mac(v6_peer(&[0x20, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7])).is_none();
+    let dual = v6_attrib(0x0a63_000b, &mac) == 0x0a63_000b && v6_attrib(0, &mac) == k;
+    // the feed: an IPv6 SYN from the IPv6-only device lands in the brute-force table under its key
+    let mut f = [0u8; 74];
+    f[12] = 0x86;
+    f[13] = 0xdd;
+    f[14] = 0x60;
+    f[18..20].copy_from_slice(&20u16.to_be_bytes());
+    f[20] = 6;
+    f[21] = 64;
+    f[22] = 0xfe;
+    f[23] = 0x80;
+    f[38] = 0x20;
+    f[39] = 0x01;
+    f[53] = 9;
+    f[54..56].copy_from_slice(&40000u16.to_be_bytes());
+    f[56..58].copy_from_slice(&22u16.to_be_bytes());
+    f[66] = 0x50;
+    f[67] = 0x02; // SYN
+    crate::rules::behavioral_observe6(&f, v6_attrib(0, &mac));
+    let mut d6 = [0u8; 16];
+    d6.copy_from_slice(&f[38..54]);
+    let fed = crate::behavioral::brute_tracked(k, v6_peer(&d6), 22);
+    let pass = stable && disjoint && dual && fed;
+    arch_aarch64::_print(format_args!(
+        " [P-v6only] {} — G36 IPv6-only devices: a stable behavioural key in 248/5 mapped back to the MAC={} | disjoint from IPv6 peer keys (240/5)={} | a dual-stack device keeps its IPv4 lease={} | its IPv6 SYNs reach the brute-force table (no longer skipped at lease 0)={}\n",
+        if pass { "PASS" } else { "FAIL" }, stable, disjoint, dual, fed
     ));
     pass
 }

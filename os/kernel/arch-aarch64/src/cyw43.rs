@@ -738,6 +738,98 @@ pub fn country_payload(iso: &[u8; 2], rev: i32, out: &mut [u8; 12]) {
 }
 
 /// Build a `"<name>\0<data>"` iovar buffer (brcmfmac iovar wire form). Returns len.
+/// The firmware interface the next control commands / data frames address (0 = the primary BSS).
+static mut CUR_IF: u8 = 0;
+/// Run `f` addressed to firmware interface `ifidx` (the guest BSS), then back to the primary.
+pub fn with_if<R>(ifidx: u8, f: impl FnOnce() -> R) -> R {
+    let prev = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(CUR_IF), ifidx) };
+    let r = f();
+    unsafe { CUR_IF = prev };
+    r
+}
+/// The interface index of the last data frame / event `ap_poll` returned (0 = primary BSS).
+static mut RX_IF: u8 = 0;
+pub fn last_rx_if() -> u8 {
+    unsafe { RX_IF }
+}
+
+/// BENCH: try to create BSS index 1 (brcmfmac's request_ap_if: "bsscfg:ssid" {idx, len, ssid}), then bring it up
+/// with the `bss` iovar, logging each firmware status and any WLC_E_IF (54) event — evidence for the guest SSID.
+#[cfg(feature = "guestprobe")]
+fn guest_probe() {
+    let mut ss = [0u8; 36];
+    let name = b"HookProbe-Guest-Probe";
+    ss[..4].copy_from_slice(&(name.len() as u32).to_le_bytes());
+    ss[4..4 + name.len()].copy_from_slice(name);
+    let (c_ok, c_st) = bsscfg_set(b"ssid", 1, &ss);
+    // the WLC_E_IF event (brcmf_if_event: ifidx, action, flags, bsscfgidx, role) if the firmware made an interface
+    let mut rx = [0u8; 2048];
+    let mut ifev: Option<(u8, u8, u8, u8)> = None;
+    for _ in 0..40 {
+        let Some((ch, _h, doff)) = read_sdpcm_frame(&mut rx) else { continue };
+        if ch != 1 {
+            continue;
+        }
+        if let Some((et, _st, _)) = parse_ap_event(&rx, doff) {
+            if et == 54 {
+                let ev = doff + 4 + (rx[doff + 3] as usize) * 4;
+                ifev = Some((rx[ev + 72], rx[ev + 73], rx[ev + 75], rx[ev + 76]));
+                break;
+            }
+        }
+    }
+    let (w_ok, w_st) = bsscfg_set(b"wsec", 1, &(AES_ENABLED | 0x40).to_le_bytes());
+    let (a_ok, a_st) = bsscfg_set(b"wpa_auth", 1, &WPA2_AUTH_PSK.to_le_bytes());
+    let mut be = [0u8; 8];
+    be[..4].copy_from_slice(&1u32.to_le_bytes());
+    be[4..].copy_from_slice(&1u32.to_le_bytes());
+    let mut ib = [0u8; 32];
+    let n = iovar_buf(b"bss", &be, &mut ib);
+    let (b_ok, b_st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib[..n], &mut []);
+    // newer brcmfmac order on the NEW interface: op MANUAL_AP_BSSCFG_CREATE (3), then enable (1)
+    let gif = ifev.map_or(1, |e| e.0);
+    let (op3, en) = with_if(gif, || {
+        let mut b2 = [0u8; 8];
+        b2[..4].copy_from_slice(&1u32.to_le_bytes());
+        b2[4..].copy_from_slice(&3u32.to_le_bytes());
+        let mut ib2 = [0u8; 32];
+        let n2 = iovar_buf(b"bss", &b2, &mut ib2);
+        let r3 = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib2[..n2], &mut []);
+        b2[4..].copy_from_slice(&1u32.to_le_bytes());
+        let n2 = iovar_buf(b"bss", &b2, &mut ib2);
+        let r1 = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib2[..n2], &mut []);
+        (r3, r1)
+    });
+    crate::_print(format_args!(" [GUEST-PROBE] on interface {}: bss op 3 (manual AP bsscfg create) ok={} bcme {} | bss enable ok={} bcme {}\n",
+        gif, op3.0, op3.1 as i32, en.0, en.1 as i32));
+    crate::_print(format_args!(" [GUEST-PROBE] create bsscfg 1: ok={} bcme {} | WLC_E_IF (ifidx, action, bsscfgidx, role) = {:?} | bsscfg:wsec ok={} bcme {} | bsscfg:wpa_auth ok={} bcme {} | bss up ok={} bcme {}\n",
+        c_ok, c_st, ifev, w_ok, w_st, a_ok, a_st, b_ok, b_st as i32));
+    // tear it down again (bench probe only — the guest BSS stays off)
+    be[4..].copy_from_slice(&0u32.to_le_bytes());
+    let n = iovar_buf(b"bss", &be, &mut ib);
+    let _ = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib[..n], &mut []);
+}
+
+/// brcmf_fil_bsscfg_data_set for a non-primary BSS: "bsscfg:<name>\0" ‖ le32 bsscfgidx ‖ data.
+fn bsscfg_buf(name: &[u8], idx: u32, data: &[u8], out: &mut [u8]) -> usize {
+    let mut tmp = [0u8; 160];
+    let n = data.len().min(tmp.len() - 4);
+    tmp[..4].copy_from_slice(&idx.to_le_bytes());
+    tmp[4..4 + n].copy_from_slice(&data[..n]);
+    let mut nm = [0u8; 40];
+    let p = b"bsscfg:";
+    nm[..p.len()].copy_from_slice(p);
+    let l = name.len().min(nm.len() - p.len());
+    nm[p.len()..p.len() + l].copy_from_slice(&name[..l]);
+    iovar_buf(&nm[..p.len() + l], &tmp[..4 + n], out)
+}
+fn bsscfg_set(name: &[u8], idx: u32, data: &[u8]) -> (bool, i32) {
+    let mut b = [0u8; 224];
+    let n = bsscfg_buf(name, idx, data, &mut b);
+    let (ok, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &b[..n], &mut []);
+    (ok, st as i32)
+}
+
 pub fn iovar_buf(name: &[u8], data: &[u8], out: &mut [u8]) -> usize {
     let mut n = 0;
     for &b in name {
@@ -2934,6 +3026,12 @@ pub fn probe_set_psk(p: &[u8]) {
 #[cfg(feature = "wpa3probe")]
 static mut PROBE_EVENTS: u32 = 0;
 
+/// WIFI.TXT `max_clients`: the associated-station cap applied at the next `ap_start` (0 = the firmware's default).
+static mut AP_MAXASSOC: u32 = 0;
+pub fn ap_set_max_clients(n: u32) {
+    unsafe { AP_MAXASSOC = n };
+}
+
 pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut ApResult) {
     let _ = wake_chip();
     drain_firmware_mailbox();
@@ -2981,6 +3079,15 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
 
     // Configure while DOWN.
     out.down_ok = wlc_set_int(WLC_DOWN, 0);
+    #[cfg(feature = "guestprobe")]
+    {
+        let mut mb = [0u8; 4];
+        let get = bcdc_iovar_get(b"mbss", &mut mb);
+        let mut ib = [0u8; 32];
+        let n = iovar_buf(b"mbss", &1u32.to_le_bytes(), &mut ib);
+        let (ok, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib[..n], &mut []);
+        crate::_print(format_args!(" [GUEST-PROBE] mbss get={} value={} | set 1: ok={} bcme {}\n", get, u32::from_le_bytes(mb), ok, st as i32));
+    }
 
     // Assert the MAC while down so the fw's BSSID == the MAC we source every AP frame from
     // (the PTK is derived over the AA; a mismatch makes every M2 MIC fail). Recorded.
@@ -3114,6 +3221,16 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     // Parity G10 (V1 hostapd ap_isolate=1): stations talk to each other only THROUGH heqk (IDS + device
     // policy), never via an in-firmware bridge. Recorded so the boot log says whether the fw took it.
     out.isolate_ok = iovar_set_u32(b"ap_isolate", 1);
+    #[cfg(feature = "guestprobe")]
+    guest_probe();
+    // client cap (WIFI.TXT max_clients): set, then read back what the firmware actually runs
+    let want = unsafe { AP_MAXASSOC };
+    if want > 0 {
+        let set = iovar_set_u32(b"maxassoc", want);
+        let mut mb = [0u8; 4];
+        let rb = if bcdc_iovar_get(b"maxassoc", &mut mb) { u32::from_le_bytes(mb) } else { 0 };
+        crate::_print(format_args!(" [WIFI] client cap: maxassoc {} set={} read back {}\n", want, set, rb));
+    }
     delay(50_000);
     #[cfg(feature = "wpa3")]
     if !open && w3().mode != SEC_WPA2 {
@@ -3438,6 +3555,17 @@ pub fn ap_sae_pmk(sta: &[u8; 6], now_ms: u64) -> Option<[u8; 32]> {
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_forget(sta: &[u8; 6]) {
     unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget(sta) }
+    wpa3_clear_pmksa();
+}
+
+/// Drop the PMKSA installed for the SAE completion (`pmkid_info` with an empty list). Hypothesis under test (metal
+/// batches 45/46): a station that did SAE and then returns with plain WPA2-PSK is refused at association (status 38)
+/// while the firmware still holds a PMKSA for its MAC. Cleared once the SAE 4-way is done and when a station leaves.
+#[cfg(feature = "wpa3")]
+fn wpa3_clear_pmksa() {
+    let mut pb = [0u8; 32];
+    let m = iovar_buf(b"pmkid_info", &0u32.to_le_bytes(), &mut pb);
+    let _ = bcdc_iovar_set(&pb[..m]);
 }
 
 #[cfg(feature = "wpa3")]
@@ -4115,6 +4243,10 @@ pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bo
         out.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
     }
     dbg_putc(b'A');
+    #[cfg(feature = "wpa3")]
+    if akm8 {
+        wpa3_clear_pmksa(); // keyed: the association no longer needs the PMKSA
+    }
 }
 
 /// One WiFi poll for the AP serve loop: what arrived, if anything. Costs ~100 µs when
@@ -4250,6 +4382,10 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
                 }
             }
         }
+        {
+            let ev = doff + 4 + (*rx.get(doff + 3).unwrap_or(&0) as usize) * 4;
+            unsafe { RX_IF = *rx.get(ev + 70).unwrap_or(&0) & 0x0f };
+        }
         if let Some((et, st, sta)) = parse_ap_event(rx, doff) {
             #[cfg(feature = "wpa3")]
             {
@@ -4280,6 +4416,7 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
     if eth + 14 > total {
         return ApEvent::Other;
     }
+    unsafe { RX_IF = *rx.get(doff + 2).unwrap_or(&0) & 0x0f };
     ApEvent::Data(eth, total - eth)
 }
 
@@ -5262,7 +5399,7 @@ fn sdpcm_data_tx_inner(eth: &[u8]) -> bool {
     let bdc = SDPCM_HDRLEN; // 12
     frame[bdc] = 0x20; // BDC flags: proto ver 2 << 4
     frame[bdc + 1] = 0; // priority
-    frame[bdc + 2] = 0; // flags2
+    frame[bdc + 2] = unsafe { CUR_IF } & 0x0f; // flags2 = destination interface (0 = primary BSS)
     frame[bdc + 3] = 0; // data_offset (4-byte units past the BDC header)
     let body = bdc + 4;
     let n = eth.len().min(frame.len() - body);
@@ -5990,7 +6127,9 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     let bcdc = SDPCM_HDRLEN;
     frame[bcdc..bcdc + 4].copy_from_slice(&cmd.to_le_bytes());
     frame[bcdc + 4..bcdc + 8].copy_from_slice(&(bcdc_len as u32).to_le_bytes());
-    let flg = flags | (reqid << 16); // SET bit + reqid in [31:16]
+    // BCDC_DCMD_IF (bits 12..15): which firmware interface the command is for (0 = the primary BSS; the guest BSS
+    // while `with_if` selects it). Always 0 outside a guest operation, so the primary path is byte-identical.
+    let flg = flags | (reqid << 16) | ((unsafe { CUR_IF } as u32 & 0xf) << 12); // SET bit + reqid in [31:16]
     frame[bcdc + 8..bcdc + 12].copy_from_slice(&flg.to_le_bytes());
     // status [bcdc+12..+16] left 0.
     let body = bcdc + BCDC_HDRLEN;

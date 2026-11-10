@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # tools/fuzz/run.sh [seconds-per-target] — coverage-guided libFuzzer runs over the host-buildable heqk
 # parsers (the `hal` crate: POLICY.TXT, WAN.TXT, frame facts / VLAN tags, SDIO glom, the A/B OTA slot derivation) and `boot-abi` (the signed-image verifier). The kernel-crate parsers
-# (Shield, owner journal, artifact store, HTTP, ...) are covered by the in-kernel fixed-seed [P-fuzz].
+# network-facing parsers run from the SAME source files via tools/fuzz/heqk-kernel (HTTP request + form bodies, DNS
+# wire, TLS ClientHello / JA4, frame classifier); fixed-layout MAC-verified stores stay with the in-kernel [P-fuzz].
 # Needs: nightly + `cargo install cargo-fuzz`. Exit 1 on any crash (the reproducer stays in artifacts/).
 set -u
 T="${1:-60}"; cd "$(dirname "$0")/heqk-hal" || exit 2
@@ -26,4 +27,15 @@ if cargo +nightly fuzz run --fuzz-dir . payload_header corpus/payload_header -- 
 else
   echo "  FAIL payload_header (crash — reproducer in tools/fuzz/heqk-boot-abi/artifacts/payload_header/)"; rc=1
 fi
+# the kernel crate's network-facing parsers (same source files, #[path]) — SEC-02
+cd ../heqk-kernel || exit 2
+for t in http_req dns_wire tls_hello frame_meta; do
+  mkdir -p corpus/$t
+  if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=4096 > "/tmp/heqk-fuzz-$t.log" 2>&1; then
+    echo "  ok   $t: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-$t.log | tail -1)"
+  else
+    echo "  FAIL $t (crash or build error — see /tmp/heqk-fuzz-$t.log, reproducer in tools/fuzz/heqk-kernel/artifacts/$t/)"; rc=1
+  fi
+done
+[ $rc = 0 ] && echo "FUZZ: PASS (${T}s per target)" || echo "FUZZ: FAIL"
 exit $rc

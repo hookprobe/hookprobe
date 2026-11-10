@@ -27,7 +27,7 @@ const MAX_SESSIONS: usize = 8;
 const SESSION_TTL_MS: u64 = 12 * 3600 * 1000;
 const FAIL_WINDOW_MS: u64 = 60_000;
 const MAX_FAILS_PER_WINDOW: u32 = 5;
-pub const COOKIE: &str = "hq_session";
+pub const COOKIE: &str = crate::httpreq::SESSION_COOKIE;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Owner {

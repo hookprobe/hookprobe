@@ -495,6 +495,14 @@ impl McState {
                 opt(out, "ssdp_server", core::str::from_utf8(&d.server[..d.sl as usize]).unwrap_or(""));
                 let _ = write!(out, ",\"services\":{}", d.services);
             }
+            // G32: distinct TLS client fingerprints seen from this MAC + the private-MAC rotation hint (never a merge)
+            let _ = write!(out, ",\"ja4_fingerprints\":{},\"likely_same_as\":", crate::ja4id::count(&l.mac));
+            match crate::ja4id::likely_same_as(&l.mac) {
+                Some((m, c, j)) => {
+                    let _ = write!(out, "{{\"mac\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"basis\":\"ja4\",\"common\":{},\"jaccard\":{}}}", m[0], m[1], m[2], m[3], m[4], m[5], c, j);
+                }
+                None => out.raw("null"),
+            }
             let pol = crate::devpolicy::policy_of(&l.mac);
             let mut lb = [0u8; 31];
             let ll = crate::devpolicy::label_of(&l.mac, &mut lb);
@@ -696,6 +704,10 @@ impl McState {
         out.string(info.mitre);
         out.raw(",\"src_ip\":");
         out.string(src);
+        // G36: an IPv6-only device's detections carry its MAC (its 248/5 key is not an address to show)
+        if let Some(m) = crate::srckey::v6_only_mac(d.src) {
+            let _ = write!(out, ",\"src_device\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"src_ipv6_only\":true", m[0], m[1], m[2], m[3], m[4], m[5]);
+        }
         let mut tmp2 = [0u8; 16];
         let dst = if d.dst == 0 { "" } else { ipv4(d.dst, &mut tmp2) };
         out.raw(",\"dst_ip\":");

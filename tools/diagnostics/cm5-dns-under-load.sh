@@ -14,16 +14,19 @@ SINK="${HQ_SINK_URL:-http://10.100.0.1:8088/blob}"
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
 "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1
 IF=$(pi "ip -4 route get 10.99.0.1 | sed -n 's/.* dev \([^ ]*\).*/\1/p'")
-probe() {   # <server> -> 40 lines of "ms" or "LOST"
+probe() {   # -> 40 lines "<heqk ms|LOST> <baseline ms|LOST>": both resolvers each second, alternating which goes first,
+            # so the two series see the same load at the same moments (the old back-to-back series did not)
   pi "for i in \$(seq 1 40); do n=\$( [ \$((i % 4)) = 0 ] && echo example.com || echo hq\$i-\$RANDOM.example.org ); \
-      t=\$(dig +time=10 +tries=1 @$1 \$n A 2>/dev/null | sed -n 's/^;; Query time: \([0-9]*\) msec.*/\1/p'); \
-      echo \${t:-LOST}; sleep 1; done"
+      q() { t=\$(dig +time=10 +tries=1 @\$1 \$2 A 2>/dev/null | sed -n 's/^;; Query time: \\([0-9]*\\) msec.*/\\1/p'); echo \${t:-LOST}; }; \
+      if [ \$((i % 2)) = 0 ]; then a=\$(q 10.99.0.1 \$n); b=\$(q 1.1.1.1 b\$n); else b=\$(q 1.1.1.1 b\$n); a=\$(q 10.99.0.1 \$n); fi; \
+      echo \$a \$b; sleep 1; done"
 }
 stats() { awk '$1=="LOST"{l++; next} {a[n++]=$1} END{asort(a); p=a[int(n*0.9+0.5)]; if (n==0) p=99999; printf "%d %d %d\n", l+0, p+0, a[n]}' ; }
-pi "nohup bash -c 'end=\$((SECONDS+150)); while [ \$SECONDS -lt \$end ]; do curl --interface $IF -s -o /dev/null -m 30 $SINK; done' >/dev/null 2>&1 &"
+pi "nohup bash -c 'end=\$((SECONDS+300)); while [ \$SECONDS -lt \$end ]; do curl --interface $IF -s -o /dev/null -m 30 $SINK; done' >/dev/null 2>&1 &"
 sleep 5
-read -r lost p90 max < <(probe 10.99.0.1 | stats)
-read -r blost bp90 bmax < <(probe 1.1.1.1 | stats)
+P=$(probe)
+read -r lost p90 max < <(awk '{print $1}' <<<"$P" | stats)
+read -r blost bp90 bmax < <(awk '{print $2}' <<<"$P" | stats)
 pi "pkill -f 'curl --interface $IF -s -o /dev/null -m 30'" >/dev/null 2>&1 || true
 echo "  heqk DNS (10.99.0.1) under load: lost $lost/40, p90 ${p90} ms, max ${max} ms"
 echo "  path baseline (1.1.1.1 via the AP): lost $blost/40, p90 ${bp90} ms, max ${bmax} ms"
