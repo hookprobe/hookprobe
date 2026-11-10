@@ -61,6 +61,7 @@ jobs:
             os/kernel -> target/ci-clippy
             os/kernel/tlsprov -> target/ci
             onboarding/enrollment/responder-sim -> target/ci
+            onboarding/enrollment/superpop -> target/ci
             os/build/heqk-sign -> target/ci
       - run: tools/ci/gates.sh g1
         env:
