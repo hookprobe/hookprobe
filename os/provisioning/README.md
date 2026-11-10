@@ -6,6 +6,7 @@
 | Flash a CM5 over USB (rpiboot) | [`../../tools/flash/`](../../tools/flash/) → `../kernel/cm5-boot/flash-image.sh` |
 | A/B slots + tryboot update / rollback | [`ota.rs`](../kernel/kernel/src/ota.rs), [`abboot.rs`](../kernel/kernel/src/abboot.rs), [`../kernel/cm5-boot/ab-update.sh`](../kernel/cm5-boot/ab-update.sh) |
 | Mission Control TLS chain for a device | [`../kernel/tools/mctls-provision.py`](../kernel/tools/mctls-provision.py) |
+| Per-unit factory provisioning station (identity, setup credential, owner key, TLS cert, label, self-test, record) | [`../../tools/provisioning/`](../../tools/provisioning/README.md) |
 | Signed operator policy | [`../kernel/tools/policy-sign.py`](../kernel/tools/policy-sign.py) |
 
 Decision: ADR 0037 (zero-touch onboarding / flasher).
