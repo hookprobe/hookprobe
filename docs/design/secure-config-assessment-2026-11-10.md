@@ -296,7 +296,7 @@ See [ADR 0059](../adr/0059-secure-configuration-management.md).
 
 **MVP order (operator, 2026-11-10):** Phase 0 → Phase 1 (HQCFG1) → Phase 2 (cfgd) → Phase 5 (management ABI + `hsh` at EL0).
 
-**Post-MVP:** Phase 3 (secrets), Phase 4 (delegation), Phase 6 (hardware).
+**Not in the confirmed order:** Phase 3 (secrets), Phase 4 (delegation), Phase 6 (hardware). RPMB (6c) is already under a direct operator instruction to the heqk session and is not deferred. The operator decides how these and SEC-01 (ADR 0050 D4) interleave with steps 2–4.
 
 **Ownership:**
 - **Kernel phases:** the heqk session.
