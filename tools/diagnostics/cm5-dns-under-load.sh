@@ -4,8 +4,8 @@
 #   1. the bench Pi starts a continuous download from the local WAN-side sink (HQ_SINK_URL) on its AP interface;
 #   2. 40 queries to the AP's DNS (10.99.0.1), one a second, each up to 10 s, unique names (no cache hits) mixed
 #      with a cached one; the answer time of each is recorded;
-#   3. acceptance (operator decision 2026-11-10): no worse than the path baseline — the same queries to a public
-#      resolver through the same AP, same load, same run (lost <= baseline lost) — AND p90 < 500 ms. Also printed: the same 40 queries to 1.1.1.1 through the same AP
+#   3. one run's PASS/FAIL below is informational; the NET-01 acceptance (operator rule 2026-11-10) is over >= 3 runs,
+#      pooled: tools/diagnostics/dns-net01-verdict.py <run logs> (p90 < 500 every run, Fisher p > 0.05, loss <= 8 %). Also printed: the same 40 queries to 1.1.1.1 through the same AP
 #      (the path baseline) and the device's prio counters from the serial heartbeat.
 #   tools/diagnostics/cm5-dns-under-load.sh <serial-log> [pi]
 set -u -o pipefail
