@@ -8,7 +8,7 @@ Types: shield_block, shield_allow, ioc, rules, oui, devices. The pack must alrea
 operator key (policy-sign.py sign-*); this tool never signs anything and never sees a private key. The
 device verifies the signature with its own loader before it activates anything.
 
-Mission Control uses a certificate from the owner's local CA (ADR 0051): pass --ca OWNER-CA.crt to verify it,
+Mission Control uses a certificate from the HookProbe factory CA (ADR 0051): pass --ca FACTORY-CA.crt to verify it,
 or --insecure on a bench.
 """
 import argparse, hashlib, http.cookiejar, json, ssl, sys, urllib.parse, urllib.request

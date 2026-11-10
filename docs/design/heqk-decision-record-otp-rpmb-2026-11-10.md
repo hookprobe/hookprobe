@@ -7,7 +7,7 @@ during the autonomous work, and none will be made without the owner's explicit, 
 |---|---|---|
 | D-OTP — customer OTP provisioning | **Production blocker** | Production readiness = **BLOCKED**. Normal images never write OTP (`otp-provision` is a separate HBoot build). |
 | D-RPMB — eMMC RPMB key programming | **Owner decision required** | No RPMB access exists in the code (the eMMC driver has no partition-switch path). Evidence (RPMB size) collected read-only. |
-| WPA3 on the AP | **Evidence in (batch 30): no alternative firmware needed** | `[WIFI-CAP] sae=false sae_ext=true mfp=true fwsup=false` — the host runs SAE (external SAE) and PMF is supported. WPA3-SAE + PMF is now a build item (Phase 6). |
+| WPA3 on the AP | **Evidence in (batch 30) — AP-side SAE still unproven** | `[WIFI-CAP] sae=false sae_ext=true mfp=true fwsup=false`: PMF is supported; external SAE (`sae_ext`) is what Linux brcmfmac uses in STATION mode, AP-mode SAE in brcmfmac uses firmware offload (`sae`, absent). Whether this firmware passes AP-side SAE auth frames to the host must be proven on metal before WPA3-AP is built; if not, alternative firmware is needed. |
 
 ---
 
@@ -146,6 +146,9 @@ Verbatim from the CM5 serial console (`docs/design/metal-evidence/20261110-batch
 - `mfp` — 802.11w protected management frames (needed for WPA3, optional for WPA2).
 - `fwsup` / `idsup` absent — no in-firmware supplicant/authenticator (known; heqk does it on the host).
 
-**Conclusion: no alternative vendor firmware is required.** WPA3-SAE (with PMF, WPA2/WPA3 transition mode) is
-a host-side build item in Phase 6: SAE over P-256 (hash-to-element), the auth-frame exchange through the
-firmware's external-auth path, PMF/IGTK in the authenticator, then metal tests with WPA3 phones.
+**Conclusion (corrected 2026-11-10): not yet decided.** PMF is supported. For SAE, the Linux brcmfmac driver
+uses `sae_ext` for *station*-mode external SAE; its AP-mode SAE path relies on firmware SAE offload (`sae`),
+which this firmware lacks. Next step (a short metal experiment, no firmware change): put the AP in WPA3-SAE
+mode with external auth and check whether a phone's SAE commit reaches the host as an auth-frame event. If it
+does, WPA3-SAE is a host-side build (SAE over P-256, PMF/IGTK); if not, WPA3 on the AP needs a different
+firmware build from the vendor (supplier dependency).

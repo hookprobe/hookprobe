@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""mctls-provision — certify a heqk device's TLS key with the owner's local CA (ADR 0051 D2/D3).
+"""mctls-provision — certify a heqk device's TLS key with the HookProbe factory CA (ADR 0051 D2/D3; operator
+decision 2026-11-10: one factory CA signs every unit, name-constrained to heqk.local + private addresses).
 
 The device derives its P-256 key from its SRK and prints only the PUBLIC point:
     [MC-TLS] device TLS key (P-256, SRK-derived) pub=04…
-This tool turns that point into a certificate signed by the owner CA and writes the fixed 4 KiB
+This tool turns that point into a certificate signed by the factory CA and writes the fixed 4 KiB
 MCTLS.CRT the device reads from its boot partition. The CA private key never goes to the device.
 
-  mctls-provision.py --ca-dir DIR --pub 04… --name heqk.local [--ip 10.200.0.6 …] --out MCTLS.CRT
+  mctls-provision.py --ca-dir DIR --pub 04… [--name heqk.local] [--ip 10.99.0.1 …] --out MCTLS.CRT
+  (no --name/--ip: SAN = heqk.local + 10.99.0.1, the factory default)
 
 The CA is created on first use in DIR (ca.key mode 600, ca.pem) with X.509 NAME CONSTRAINTS: it can only
 certify the names/addresses given at creation (--permit-dns / --permit-ip), so a leaked CA key cannot mint
@@ -41,7 +43,7 @@ def ensure_ca(d, dns, ips):
     finally:
         os.umask(old)
     run("openssl", "req", "-x509", "-new", "-key", key, "-sha256", "-days", "3650", "-subj",
-        "/CN=HookProbe owner CA (heqk)", "-config", ext, "-extensions", "v3", "-out", pem)
+        "/CN=HookProbe factory CA (heqk)", "-config", ext, "-extensions", "v3", "-out", pem)
     return key, pem
 
 
@@ -56,6 +58,8 @@ def main():
     ap.add_argument("--days", type=int, default=397)
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
+    if not a.name and not a.ip:
+        a.name, a.ip = ["heqk.local"], ["10.99.0.1"]  # factory default: the AP's own name + address (operator 2026-11-10)
     pt = bytes.fromhex(a.pub.strip())
     if len(pt) != 65 or pt[0] != 4:
         sys.exit("--pub must be the 65-byte uncompressed P-256 point (starts with 04)")
