@@ -33,7 +33,7 @@ WAN="$T/wan.txt"; POL="$T/pol.txt"
 G0=$(cfg "$MC" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max(d["generation"], d["floor"]))'); G1=$((G0 + 1)); G2=$((G0 + 2))
 # --- A: a good bundle (bench WAN + policy). It touches the management VLAN -> the owner must confirm ---
 $HQ bundle "$CK" $G1 "$T/g.bin" "$T/g.sig" --wan "$WAN" --policy "$POL" >/dev/null
-$UP --type config --sig "$T/g.sig" --file "$T/g.bin" > "$T/r" 2>&1; grep -q '"staged": true' "$T/r"; chk $? "A1 HQCFG1 bundle gen $G1 staged ($(grep activate "$T/r" | cut -c1-100))"
+$UP --type config --sig "$T/g.sig" --file "$T/g.bin" > "$T/r" 2>&1; grep -q '"staged": true' "$T/r"; chk $? "A1 HQCFG1 bundle gen $G1 staged ($(grep -E 'activate|refused|Traceback|Error' "$T/r" | tail -2 | tr '\n' ' ' | cut -c1-200))"
 mark=$(stat -c %s "$LOG"); $UP --reboot "cfgd trial A" > /dev/null 2>&1; sleep 15; up "$MC"; chk $? "A2 device back after reboot"
 since | grep -a "\[CFGD\] HQCFG1 bundle generation $G1 on TRIAL" >/dev/null; chk $? "A3 boot: bundle gen $G1 runs as a TRIAL"
 C=$(cfg "$MC"); python3 -c 'import json,sys; d=json.loads(sys.argv[1]); sys.exit(0 if d["state"]=="trial" and d["needs_confirm"] and d["generation"]==int(sys.argv[2]) else 1)' "$C" $G1
@@ -58,7 +58,7 @@ since | grep -a "\[CFGD\] HQCFG1 configuration bundle generation $G1 in force (c
 # --- B: a bundle whose WAN never comes up (vlan 999, no mgmt VLAN) -> automatic revert after the window ---
 printf 'HQWAN1\nmode=dhcp\nvlan=999\n' > "$T/bad.txt"
 $HQ bundle "$CK" $G2 "$T/b.bin" "$T/b.sig" --wan "$T/bad.txt" --policy "$POL" >/dev/null
-$UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; grep -q '"staged": true' "$T/r"; chk $? "B1 a bundle that breaks the WAN staged (gen $G2)"
+$UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; grep -q '"staged": true' "$T/r"; chk $? "B1 a bundle that breaks the WAN staged (gen $G2) ($(grep -E 'activate|refused|Traceback|Error' "$T/r" | tail -2 | tr '\n' ' ' | cut -c1-200))"
 scp -q -o BatchMode=yes "$KEY" "$PI:/tmp/hqcf.key"
 mark=$(stat -c %s "$LOG"); $UP --reboot "cfgd trial B" > /dev/null 2>&1; sleep 60
 [ -n "${PI_SUDO_FILE:-}" ] && "$HERE/pi-ensure-ap.sh" >/dev/null 2>&1   # the reboot drops the Pi's association

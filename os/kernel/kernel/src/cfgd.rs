@@ -459,7 +459,20 @@ pub fn tick_device(now_s: u64, healthy: bool) -> Tick {
     let _ = (now_s, healthy);
     Tick::Idle
 }
+/// Self-tests exercise the ABI paths that would confirm / roll back: while set, those refuse WITHOUT touching the
+/// device's real configuration state (metal batch 60: a boot self-test committed a live trial).
+static mut SELFTEST: bool = false;
+pub fn set_selftest(on: bool) {
+    unsafe { SELFTEST = on };
+}
+fn in_selftest() -> bool {
+    unsafe { SELFTEST }
+}
+
 pub fn confirm_device() -> Result<u64, &'static str> {
+    if in_selftest() {
+        return Err("self-test: no state change");
+    }
     #[cfg(all(feature = "cm5", feature = "p15-write"))]
     if let Some(d) = device() {
         return commit(d);
@@ -467,6 +480,9 @@ pub fn confirm_device() -> Result<u64, &'static str> {
     Err("no configuration store on this device")
 }
 pub fn revert_device() -> Result<u64, &'static str> {
+    if in_selftest() {
+        return Err("self-test: no state change");
+    }
     #[cfg(all(feature = "cm5", feature = "p15-write"))]
     if let Some(d) = device() {
         return revert_now(d, crate::policysig::config_key());
