@@ -16,10 +16,9 @@
  */
 
 import { type Component, For, Show, createSignal, createMemo } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
+import AppShell from './AppShell';
 import {
   type ProtPlan,
   GRANTS, KPIS, INTERFACES, FIREWALL_RULES, ISOLATIONS,
@@ -76,8 +75,7 @@ const ProtectApp: Component = () => {
   }
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/protect" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+    <AppShell path="/protect/firewall">
 
       <main class="dash-main">
         <header class="mc-header">
@@ -342,13 +340,7 @@ const ProtectApp: Component = () => {
         </div>
       </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+    </AppShell>
   );
 };
 

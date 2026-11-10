@@ -374,6 +374,7 @@ Administration
 /observe/{endpoints, network, dns, http, packets, netflow, syslog, events, sensors, assets, live}
 /detect/{feed, ai, behavioral, signature, sigma, yara, ioc, hunting, mitre, rules, builder, testing}
 /investigate/{queue, ai, timeline, process-tree, graph, evidence, replay, root-cause, similar, recommendations, summary}
+/investigate/:id    (one incident story — matches /api/incidents/:id)
 /protect/{firewall, endpoint, network, quarantine, isolation, vpn, zero-trust, policies, patch, compliance, risk}
 /network/{wan, wifi, failover, map, zones, devices, trust, ecosystem, dns, flows}
 /automate/{playbooks, agents, workflows, scheduled, integrations, webhooks, api, notifications, approvals, analytics}

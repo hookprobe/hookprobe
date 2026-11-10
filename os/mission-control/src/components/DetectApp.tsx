@@ -17,13 +17,12 @@
  */
 
 import { type Component, For, Show, onMount } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
 import LiveState from './LiveState';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
 import { ENGINES, COVERAGE } from '../store/detectMock';
 import { severityLabel, formatTime, type DetectionRow } from '../store/api';
+import AppShell from './AppShell';
 import {
   startDetectLive, detections, detectStatus, detectError, computeKpis, computeTopTechniques,
   engines as liveEngines,
@@ -89,8 +88,7 @@ const DetectApp: Component = () => {
   const topTechniques = () => computeTopTechniques(detections());
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/detect" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+    <AppShell path="/detect/feed">
 
       <main class="dash-main">
         <header class="mc-header">
@@ -228,13 +226,7 @@ const DetectApp: Component = () => {
         </div>
       </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+    </AppShell>
   );
 };
 
