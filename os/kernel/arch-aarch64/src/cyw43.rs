@@ -4470,11 +4470,11 @@ pub fn ap_handle_data_into(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], pool
     if et != 0x0800 {
         return (0, 0);
     }
-    let mut cmac = [0u8; 6];
-    let mut xid = [0u8; 4];
-    let mut req_ip = [0u8; 4];
     out.now = now_secs();
-    match parse_client_dhcp(eth, &mut cmac, &mut xid, &mut req_ip) {
+    // ADR 0050 D4 step 2b: parsed once, in the EL0 LAN-services server when it is loaded
+    let req = crate::dhcpd::parse_request(eth);
+    let (cmac, xid, req_ip) = (req.cmac, req.xid, req.req_ip);
+    match req.mt {
         7 => {
             out.release(&cmac); // DHCPRELEASE: the address is free at once
             (0, 0)
@@ -4503,7 +4503,7 @@ pub fn ap_handle_data_into(eth: &[u8], our_mac: &[u8; 6], our_ip: &[u8; 4], pool
             out.client_mac = cmac;
             out.leased_ip = ip;
             out.commit(&cmac);
-            out.note_identity(&cmac, &crate::dhcpd::client_identity(eth));
+            out.note_identity(&cmac, &req.id);
             let n = build_dhcp_server(reply, our_mac, &cmac, our_ip, &ip, dns, &xid, 5); // ACK
             (b'K', n)
         }
@@ -4892,7 +4892,7 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
         let eth = doff + 4 + bdc_doff * 4;
         if eth + 14 > rx.len() { continue; }
         out.frames_seen += 1;
-        if parse_dhcp_reply(&rx[eth..], &xid, &mac, out) == 2 {
+        if crate::wanparse::dhcp_reply(&rx[eth..], &xid, &mac, out) == 2 {
             out.offer_rx = true;
             dbg_putc(b'o'); // OFFER received
             break;
@@ -4916,7 +4916,7 @@ pub fn wifi_dhcp(out: &mut DhcpResult) {
         let eth = doff + 4 + bdc_doff * 4;
         if eth + 14 > rx.len() { continue; }
         out.frames_seen += 1;
-        if parse_dhcp_reply(&rx[eth..], &xid, &mac, out) == 5 {
+        if crate::wanparse::dhcp_reply(&rx[eth..], &xid, &mac, out) == 5 {
             out.ack_rx = true;
             dbg_putc(b'a'); // ACK received
             break;
