@@ -1,0 +1,16 @@
+---
+/**
+ * /network/wan/advanced — Advanced internet settings (ADR 0058): AdvancedConfigApp builds, signs (in the browser) and uploads the file.
+ * Spec: docs/design/mission-control-ui-requirements.md §Configuration journey.
+ */
+
+import Shell from '../../../layouts/Shell.astro';
+import AdvancedConfigApp from '../../../components/AdvancedConfigApp';
+---
+
+<Shell
+  title="Advanced internet settings — HookProbe OS"
+  description="Internet connection type, PPPoE, ISP and management VLAN — built as a signed WAN.TXT."
+>
+  <AdvancedConfigApp path="/network/wan/advanced" client:load />
+</Shell>
