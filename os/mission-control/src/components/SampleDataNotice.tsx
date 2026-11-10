@@ -19,12 +19,15 @@ const LIVE: Record<string, 'live' | string> = {
   '/detect/feed': 'live',
   '/investigate/queue': 'live',
   '/observe/events': 'live',
+  '/observe/live': 'live',
+  '/network/devices': 'live',
   '/network/dns': 'live',
   '/network/map': 'live',
   '/network/zones': 'live',
+  '/network/wan': 'live',
 };
 
-const LIVE_NAMES = 'Home, Detect, Investigate, Observe, Shield, My Network';
+const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Detect, Investigate, Observe';
 
 function norm(p: string): string {
   const t = p.replace(/\/index\.html$/, '/').replace(/\.html$/, '').replace(/\/+$/, '');
