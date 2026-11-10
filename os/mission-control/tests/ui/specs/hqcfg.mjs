@@ -1,7 +1,9 @@
 // HQCFG1 bundle parity (ADR 0059 Step 2): the browser builder + signer must produce exactly the bytes in
 // os/kernel/tools/vectors/hqcfg-vectors.json — the same vectors os/kernel/tools/hqcfg.py writes and the
 // kernel's [P-cfgbundle] asserts. Uses the public RFC 8032 TEST 1 key (never a real key).
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -35,14 +37,35 @@ export default async function (t) {
   await go('/network/wifi');
   await page.fill('input[placeholder="HookProbe-Home"]', 'Popescu-Home');
   await page.fill('input[type=password]', 'correct horse battery');
-  await page.fill('aside input[inputmode=numeric]', '8');
+  // Single-section path: legacy files only, stated as not health-checked; the at-rest caveat shown.
+  ok(await vis(page.locator('[aria-label="Apply all together"] >> text=A single-section change (above) is not health-checked')), 'editor: bundle vs single-section difference is stated');
   await page.click('button:has-text("Review and sign")'); await page.waitForTimeout(300);
   await page.click('text=Looks right · sign it'); await page.click('text=Sign in this browser'); await page.waitForTimeout(800);
   ok(await vis(page.locator('text=not protected at rest yet')), 'the Wi-Fi password is stated as not protected at rest');
+  ok(!(await page.locator('button:has-text("Download as a signed bundle")').count()), 'no single-section bundle (a bundle replaces all three sections)');
+  await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+
+  // Combined: switch tabs client-side (drafts survive), then review all three.
+  await page.click('.tab:has-text("Internet")'); await page.waitForTimeout(200);
+  await page.click('[aria-label="Connection type"] >> text=PPPoE');
+  await page.fill('input[placeholder="from your ISP letter"]', 'user@isp');
+  await page.click('.tab:has-text("Wi-Fi")'); await page.waitForTimeout(200);
+  ok(await page.inputValue('input[placeholder="HookProbe-Home"]') === 'Popescu-Home', 'tabs switch in the page: the Wi-Fi draft survives');
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  const drawer = page.locator('.drawer', { hasText: 'Apply all three together' });
+  ok(await vis(drawer.locator('text=type the PPPoE password again')), 'bundle: the PPPoE password must be typed again (never read back)');
+  await drawer.locator('label:has-text("PPPoE password (again)") input').fill('s3cret');
+  ok(await drawer.locator('button:has-text("Sign the bundle")').isEnabled(), 'bundle: all three sections valid → can sign');
   const files = [];
   page.on('download', async (d) => files.push([d.suggestedFilename(), readFileSync(await d.path())]));
-  await page.click('button:has-text("Download as a signed bundle")'); await page.waitForTimeout(1500);
+  await drawer.locator('button:has-text("Sign the bundle")').click(); await page.waitForTimeout(800);
+  await drawer.locator('button:has-text("Download HQCFG1.BIN")').click(); await drawer.locator('button:has-text("Download HQCFG1.SIG")').click(); await page.waitForTimeout(1200);
   const bin = files.find(([n]) => n === 'HQCFG1.BIN')?.[1], sig = files.find(([n]) => n === 'HQCFG1.SIG')?.[1];
-  ok(bin && bin.toString('hex') === V.cases['valid-wifi-only'].bundle, 'browser HQCFG1.BIN byte-identical to the shared vector');
-  ok(sig && sig.toString('hex') === V.cases['valid-wifi-only'].sig, 'browser HQCFG1.SIG byte-identical to the shared vector (hqcfg.py, kernel)');
+  let out = '';
+  try {
+    const dir = mkdtempSync(join(tmpdir(), 'hqcfg-')); writeFileSync(join(dir, 'b'), bin); writeFileSync(join(dir, 's'), sig);
+    out = execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's')]).toString();
+  } catch (e) { out = String(e.stdout ?? e.message); }
+  ok(/--- wan/.test(out) && /pppoe_user=user@isp/.test(out) && /--- wifi/.test(out) && /ssid=Popescu-Home/.test(out) && /--- policy/.test(out),
+    'browser bundle (wan + wifi + policy) verifies with hqcfg.py exactly as the device will');
 }
