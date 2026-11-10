@@ -28,8 +28,8 @@ the operator decides.
 | # | Item |
 |---|---|
 | 3a | Runtime watchdog (BCM2712 PM watchdog) petted from the main loop; a hung loop reboots into the same slot |
-| 3b | Crash record: the exception vector writes a sealed crash record to the evidence log; shown after reboot |
-| 3c | Wi-Fi firmware reload when the TX path stays frozen after the control-frame kick |
+| 3b | Crash record: panic / fault reason kept across the EL2-gate reset (reserved DRAM page), shown after reboot — **built** (`[P-crashrec]`, `/api/health last_crash`; metal J10 in batch 30) |
+| 3c | Wi-Fi firmware reload when the TX path stays frozen after the control-frame kick — **built as a unit reset** (a stream wedged 120 s resets through the EL2 gate with a recorded reason and a reboot-loop backoff); an in-place firmware reload stays open |
 | 3d | Non-blocking DHCP renew at T1/T2 (no stall of the forwarding loop) |
 | 3e | NAT table ≥ 4,096 entries with LRU eviction and a counter |
 | 3f | Heap reclaim for rule / list reloads (no growth per upload) |
@@ -43,6 +43,23 @@ and a household benign corpus (hours, phones / TVs / IoT / backups) for the fals
 ## Phase 5 — parser isolation (ADR 0050 D4)
 Move the network parsers out of EL1 in this order: HTTP → DHCP / DNS server → WAN clients (PPPoE / DHCP / RA)
 → Noise → WPA2 authenticator. Each keeps a host fuzz target (`tools/fuzz`).
+
+**Staging note (2026-11-10, after measuring the code).** The small option parsers (`apparse`: client DHCP, WAN
+DHCP reply, firmware events, EAPOL match — ~30 bounds-checked lines each, fuzzed) are not where the EL1 risk
+is; moving only them would add an excursion per packet for little gain. The exposure is in the big stateful
+components: `cyw43.rs` (5.5k lines, firmware-facing), `securechannel.rs` (1.8k), `shield.rs` DNS path (1.6k),
+`pppoe.rs` (1.1k), smoltcp + `http.rs` / `mcserve.rs`. Order of work:
+1. Generalise the metal-proven `tlshost` loader (ELF → EL0 image, IO / heap / stack pages, bounded
+   excursion, reset on fault or timeout) into one `el0srv` used by every server; TLS moves onto it unchanged
+   (`mc-e2e` must stay green).
+2. Shield DNS parse + decision in an EL0 server (every client reaches it; name decompression and the list
+   lookups are the largest client-reachable parser). The kernel keeps the UDP plumbing and the verdict gate.
+3. Mission Control HTTP + smoltcp with it (the TLS server already holds the plaintext; the request parser and
+   the handlers' form decoding follow).
+4. PPPoE / WAN DHCP / DHCPv6 / RA client state machines.
+5. Noise control channel; the WPA2 authenticator moves with the Wi-Fi driver (ADR 0044 D4 #7).
+Acceptance per step: AP throughput ≥ the 2026-11-07 baseline, the separation matrix, `mc-e2e`, a host fuzz
+target for the moved parser, and an EL0 fault injected in QEMU leaves forwarding + IPS running (ADR 0050 D5).
 
 ## Phase 6 — Wi-Fi product features
 WPA3-SAE with PMF (transition mode), a guest SSID on its own segment, a per-radio client cap.
@@ -60,3 +77,7 @@ QR, self-test log), factory reset, an RTC (wall clock without a network), and th
   Phase 3a runtime watchdog (`[P-rtwdog]`, HBoot `hvc #3`) metal-armed (worst loop gap 330 ms). UI embedded
   gzip (payload 3.16 MB → 2.52 MB). HBoot OTP burn gated behind `otp-provision`. Audit:
   `heqk-audit-2026-11-10.md`.
+- 2026-11-10 (later): Phase 1 **metal**: J1 OS update 9/9 (twice), J2 rollback 7/7. Phase 3b crash record,
+  3c wedge self-heal reset, 3d in-loop renewal (metal: requests=1 acks=1, worst loop gap 347 ms), 3e NAT 4,096
+  hashed, 3g 250-ms drain — all built; Phase 7 RTC built early (board RTC, provisional until NTP). Rule 112
+  per source device. Replay guard survives session eviction. Batch 30 queued (J10–J13 + J8 rerun + 24 h soak).
