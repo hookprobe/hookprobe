@@ -295,6 +295,22 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(403),
         };
     }
+    // ADR 0058 D3: enroll / rotate the owner's configuration key (guards + re-auth; the device verifies the proofs)
+    if req.post && (req.path == "/api/anchor/enroll" || req.path == "/api/anchor/rotate") {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        return match crate::ownerapi::anchor_set(&c, req.body, auth, req.path == "/api/anchor/rotate") {
+            Ok(g) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"owner_generation\":{},\"note\":\"WAN / Wi-Fi / POLICY files must now be signed by this key\"}}", g);
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
     if req.post && req.path == "/api/factory-reset" {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         return match crate::ownerapi::factory_reset(&c, req.body, auth) {
@@ -361,6 +377,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             "/api/upload/finish" => up::finish(&c, req.body).map(Ok_::Fin),
             "/api/upload/activate" => up::activate(&c, req.body, auth).map(Ok_::Act),
             "/api/upload/abort" => up::abort(&c, req.body).map(|_| Ok_::Abort),
+            "/api/upload/rollback" => up::rollback(&c, req.body, auth).map(Ok_::Act),
             _ => Err("unknown upload step"),
         };
         return match r {
@@ -371,8 +388,8 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
                     Ok_::Fin(f) => write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{}}}", f.gen, f.active_gen, f.len),
                     Ok_::Act(a) => match a.journal_seq {
-                        Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":{}}}", a.gen, q),
-                        None => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":null}}", a.gen),
+                        Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{}}}", a.staged, a.gen, q),
+                        None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null}}", a.staged, a.gen),
                     },
                     Ok_::Abort => write!(w, "{{\"ok\":true,\"aborted\":true}}"),
                 };
@@ -578,6 +595,28 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             w.raw("}");
         }),
         // Audit A8: the "Get Online" pillar's read side — what the device applied, and from which source.
+        // ADR 0058 D3: which key verifies what — the vendor key (content packs) and the owner's configuration key
+        "/api/anchor" => json(scratch, |w| {
+            use core::fmt::Write;
+            let hex = |w: &mut crate::mcstate::JsonBuf, k: Option<[u8; 32]>| match k {
+                Some(k) => {
+                    w.raw("\"");
+                    for b in k {
+                        let _ = write!(w, "{:02x}", b);
+                    }
+                    w.raw("\"");
+                }
+                None => w.raw("null"),
+            };
+            w.raw("{\"vendor_key\":");
+            hex(w, crate::policysig::key());
+            w.raw(",\"owner_key\":");
+            hex(w, crate::anchor::owner());
+            let _ = write!(w, ",\"owner_enrolled\":{},\"owner_generation\":{},\"config_files_verified_by\":\"{}\",\"can\":\"{}\",\"enroll_message\":\"HQENR1 || public_key (proof = Ed25519 by the new key)\",\"rotate_message\":\"HQROT1 || new public_key || generation u64 LE (signed by the enrolled key)\"}}",
+                crate::anchor::owner().is_some(), crate::anchor::owner_gen(),
+                if crate::anchor::owner().is_some() { "owner" } else if crate::policysig::key().is_some() { "vendor" } else { "none (standalone)" },
+                if crate::anchor::owner().is_some() { "rotate" } else { "enroll" });
+        }),
         "/api/network" => json(scratch, |w| {
             use core::fmt::Write;
             match (st.net(), st.wan()) {
@@ -611,7 +650,21 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     }
                     w.raw("},\"changes\":\"signed configuration files (WIFI.TXT / WAN.TXT / POLICY.TXT)\"}");
                 }
-                (None, _) => w.raw("{\"available\":false}"),
+                (None, _) => {
+                    // no AP view, but the effective operator key is still a device fact the owner compares against
+                    w.raw("{\"available\":false,\"trust_anchor\":{\"public_key\":");
+                    match crate::policysig::key() {
+                        Some(k) => {
+                            w.raw("\"");
+                            for b in k {
+                                let _ = write!(w, "{:02x}", b);
+                            }
+                            w.raw("\"");
+                        }
+                        None => w.raw("null"),
+                    }
+                    w.raw("}}");
+                }
             }
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },

@@ -226,7 +226,7 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
     let size: u64 = form_get(body, "size", b1).and_then(|v| v.parse().ok()).ok_or("size")?;
     let sha = form_get(body, "sha256", b2).and_then(hex32).ok_or("sha256")?;
     let key = form_get(body, "owner_key", b3).unwrap_or("");
-    if crate::policysig::key().is_none() {
+    if artstore::key_for(ty).is_none() {
         return Err("no operator key in this image: unsigned packs are never accepted over the network");
     }
     #[cfg(feature = "p15-write")]
@@ -347,7 +347,7 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     }
     let mut sig = [0u8; 512];
     d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
-    let key = crate::policysig::key().ok_or("no operator key")?;
+    let key = artstore::key_for(u.ty).ok_or("no operator key")?;
     let (gen, len) = artstore::verify(&*d, u.ty, &sig, slo + 1, &key).map_err(|e| match e {
         crate::shield::LoadErr::DigestMismatch => "signature digest does not match the file",
         crate::shield::LoadErr::BadSignature => "bad signature (not the operator key, or a different pack type)",
@@ -372,6 +372,8 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
 pub struct Activated {
     pub gen: u64,
     pub journal_seq: Option<u64>,
+    /// ADR 0058: a staged type (wan / wifi / policy) applies at the next boot, not now.
+    pub staged: bool,
 }
 
 /// `activate`: id, owner_key, seq. Store A/B write + readback + manifest commit + live reload.
@@ -413,7 +415,7 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
         return match crate::otaimg::install(d, slo, &plan) {
             Ok(()) => {
                 unsafe { TRIAL_REBOOT = true };
-                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, c.now_ms) })
+                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, c.now_ms), staged: true })
             }
             Err(e) => {
                 let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, c.now_ms);
@@ -425,7 +427,9 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
     let (ty, gen, len) = (u.ty, u.gen, u.len);
     let old = artstore::active_gen(&*d, p1(d), ty);
-    let digest: [u8; 32] = sig[24..56].try_into().unwrap();
+    // the content digest inside the signature sector: POLICY.SIG has no length field (digest at 16..48, over the
+    // whole 4 KiB file); every other format carries len at 16..24 and the digest at 24..56
+    let digest: [u8; 32] = if ty == Ty::Policy { sig[16..48].try_into().unwrap() } else { sig[24..56].try_into().unwrap() };
     let res = artstore::activate(d, ty, &sig, slo + 1, gen, len, &digest);
     *up() = None;
     let mut reason = [0u8; 64];
@@ -437,13 +441,56 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     };
     let tag = crate::mcauth::session_tag(c.session);
     match res {
-        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms) }),
+        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged() }),
         Err(artstore::ActErr::LoaderRefused) => {
             let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, c.now_ms);
             Err("the loader refused the new pack — rolled back to the previous one")
         }
         Err(artstore::ActErr::NoStore) => Err("no artifact store"),
         Err(_) => Err("store write / readback failed — the previous pack stays active"),
+    }
+}
+
+/// ADR 0058 `POST /api/upload/rollback`: type, owner_key, seq. Re-activates the OTHER half of that type (the
+/// previous generation) after verifying it again with the type's own verifier; staged types apply at the next
+/// boot. Owner re-authentication; POLICY never goes below its persisted generation floor.
+pub fn rollback(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Activated, &'static str> {
+    let r = rollback_inner(c, body, auth);
+    let ty = r.as_ref().map_or(0xff, |a| a.1);
+    audit(c, "rollback", ty, r.is_ok(), r.as_ref().err().copied().unwrap_or(""), r.as_ref().map_or(0, |a| a.0.gen));
+    r.map(|a| a.0)
+}
+fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<(Activated, u8), &'static str> {
+    guards(c, body)?;
+    let mut b = [[0u8; 192]; 2];
+    let [ref mut b0, ref mut b1] = b;
+    let ty = form_get(body, "type", b0).and_then(Ty::from_name).ok_or("type")?;
+    let key = form_get(body, "owner_key", b1).unwrap_or("");
+    if up().is_some() {
+        return Err("an upload is in flight (finish or abort it first)");
+    }
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return Err("re-authentication failed");
+    }
+    let d = dev().ok_or("no artifact store")?;
+    let opk = artstore::key_for(ty).ok_or("no operator key")?;
+    let old = artstore::active_gen(&*d, p1(d), ty);
+    let res = artstore::rollback(d, ty, &opk);
+    let tag = crate::mcauth::session_tag(c.session);
+    let mut reason = [0u8; 64];
+    let mut rl = 0;
+    if let Ok(gen) = res {
+        use core::fmt::Write;
+        let mut w = crate::mcstate::JsonBuf::new(&mut reason);
+        let _ = write!(w, "rollback gen {}->{}", old, gen);
+        rl = w.len;
+    }
+    match res {
+        Ok(gen) => Ok((Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged() }, ty as u8)),
+        Err(artstore::ActErr::NothingToRollBack) => Err("nothing to roll back to (no verified previous generation)"),
+        Err(artstore::ActErr::LoaderRefused) => Err("the loader refused the previous pack — the current one stays active"),
+        Err(artstore::ActErr::NoStore) => Err("no artifact store"),
+        Err(_) => Err("store write / readback failed — the current pack stays active"),
     }
 }
 
@@ -474,7 +521,8 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
             }
             None => (0, "boot"),
         };
-        let _ = write!(w, "{}{{\"type\":\"{}\",\"cap\":{},\"generation\":{},\"source\":\"{}\"}}", if i > 0 { "," } else { "" }, t.info().name, t.info().cap, g, src);
+        let _ = write!(w, "{}{{\"type\":\"{}\",\"cap\":{},\"generation\":{},\"source\":\"{}\",\"applies\":\"{}\"}}", if i > 0 { "," } else { "" }, t.info().name, t.info().cap, g, src,
+            if t.staged() { "next_boot" } else { "now" });
     }
     w.raw("],\"in_flight\":");
     match up() {
@@ -564,7 +612,7 @@ pub fn selftest() -> bool {
     seq += 1;
     // `policy` is not an upload type (next-boot only, ADR 0056 phase 1); an `os_image` must be a whole boot
     // image. Every form step consumes its seq, even when refused (replay guard).
-    let bad_type = begin(&c, f!("type=policy&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err() == Some("type");
+    let bad_type = begin(&c, f!("type=kernel&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err() == Some("type");
     seq += 1;
     let small_os = begin(&c, f!("type=os_image&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err()
         == Some(if cfg!(feature = "p15-write") { "size" } else { "this image cannot update its OS over the network (read-only build)" });
