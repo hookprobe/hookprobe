@@ -49,7 +49,9 @@ const SampleDataNotice: Component = () => {
   const status = createMemo(() => {
     if (typeof location === 'undefined') return null;
     if (substrate() === 'heqk') {
-      const s = LIVE[norm(location.pathname)];
+      const n = norm(location.pathname);
+      // /investigate/<id> is one incident story (heqk serves the incident page for it): live like the queue.
+      const s = LIVE[n] ?? (n.startsWith('/investigate/') ? 'live' : undefined);
       if (s === 'live') return null;
       return `${s ?? "This view isn't served by this device yet, so everything here is sample data."} Live on this device: ${LIVE_NAMES}.`;
     }
