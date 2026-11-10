@@ -48,6 +48,9 @@ pub enum Kind {
     /// `factory_reset_requested`; the next boot wipes the owner data (evidence ring, artifact manifest, sealed
     /// snapshot) and LAST this journal — so a power cut mid-wipe leaves the request in place and the wipe re-runs.
     FactoryReset = 8,
+    /// G47 (ADR 0058): the owner's name for a device: target = MAC (6) ‖ label (1..=31 bytes, `label_ok`). The latest
+    /// set for a MAC wins; remove (target = MAC) returns to the signed DEVICES.TXT label. Cosmetic: never a rule.
+    DeviceLabel = 9,
 }
 
 impl Kind {
@@ -61,6 +64,7 @@ impl Kind {
             6 => Some(Kind::OwnerKey),
             7 => Some(Kind::AlertHook),
             8 => Some(Kind::FactoryReset),
+            9 => Some(Kind::DeviceLabel),
             _ => None,
         }
     }
@@ -74,6 +78,7 @@ impl Kind {
             Kind::OwnerKey => "owner_key",
             Kind::AlertHook => "alert_hook",
             Kind::FactoryReset => "factory_reset",
+            Kind::DeviceLabel => "device_label",
         }
     }
 }
@@ -211,6 +216,46 @@ pub fn owner_rotation() -> Option<[u8; TARGET_MAX]> {
 /// The alert-hook record in force (kept so compaction can carry it).
 static mut HOOK_REC: Option<Record> = None;
 
+/// G47: owner device labels (MAC → label), replayed from the journal and carried through compaction.
+pub const LABEL_MAX: usize = 31;
+pub const LABELS_N: usize = 64;
+#[derive(Clone, Copy)]
+pub struct Label {
+    pub mac: [u8; 6],
+    pub label: [u8; LABEL_MAX],
+    pub len: u8,
+    pub seq: u64,
+}
+const LB0: Label = Label { mac: [0; 6], label: [0; LABEL_MAX], len: 0, seq: 0 };
+static mut LABELS: [Label; LABELS_N] = [LB0; LABELS_N];
+static mut NLABELS: usize = 0;
+
+/// The owner label grammar (G47): 1..=31 printable ASCII — letters, digits, space and . _ - ' ( ) , — no leading /
+/// trailing space. A superset of DEVICES.TXT's [A-Za-z0-9._-] and always JSON / log safe.
+pub fn label_ok(l: &[u8]) -> bool {
+    !l.is_empty() && l.len() <= LABEL_MAX && l[0] != b' ' && l[l.len() - 1] != b' '
+        && l.iter().all(|&c| c.is_ascii_alphanumeric() || matches!(c, b' ' | b'.' | b'_' | b'-' | b'\'' | b'(' | b')' | b','))
+}
+
+/// The owner's label for `mac`, if any.
+pub fn owner_label(mac: &[u8; 6], out: &mut [u8; LABEL_MAX]) -> usize {
+    let t = unsafe { &(&*core::ptr::addr_of!(LABELS))[..NLABELS] };
+    match t.iter().find(|l| l.mac == *mac) {
+        Some(l) => {
+            *out = l.label;
+            l.len as usize
+        }
+        None => 0,
+    }
+}
+
+pub fn for_each_label(f: &mut dyn FnMut(&Label)) {
+    let t = unsafe { &(&*core::ptr::addr_of!(LABELS))[..NLABELS] };
+    for l in t {
+        f(l);
+    }
+}
+
 /// A replayed `FactoryReset` record: the boot path wipes the owner data before serving anything.
 static mut RESET_REQ: bool = false;
 pub fn factory_reset_requested() -> bool {
@@ -218,6 +263,42 @@ pub fn factory_reset_requested() -> bool {
 }
 
 fn apply(r: &Record) -> Result<(), JErr> {
+    if r.kind == Kind::DeviceLabel as u8 {
+        let tl = r.tlen as usize;
+        if tl < 6 {
+            return Ok(());
+        }
+        let mut mac = [0u8; 6];
+        mac.copy_from_slice(&r.target[..6]);
+        let t = unsafe { &mut *core::ptr::addr_of_mut!(LABELS) };
+        let n = unsafe { NLABELS };
+        let pos = t[..n].iter().position(|l| l.mac == mac);
+        match (r.op, pos) {
+            (OP_SET, _) if !label_ok(&r.target[6..tl]) => {}
+            (OP_SET, Some(i)) => {
+                t[i].label = [0; LABEL_MAX];
+                t[i].label[..tl - 6].copy_from_slice(&r.target[6..tl]);
+                t[i].len = (tl - 6) as u8;
+                t[i].seq = r.seq;
+            }
+            (OP_SET, None) => {
+                if n >= LABELS_N {
+                    return Err(JErr::TooManyRules);
+                }
+                let mut l = Label { mac, seq: r.seq, ..LB0 };
+                l.label[..tl - 6].copy_from_slice(&r.target[6..tl]);
+                l.len = (tl - 6) as u8;
+                t[n] = l;
+                unsafe { NLABELS = n + 1 };
+            }
+            (OP_REMOVE, Some(i)) => {
+                t[i] = t[n - 1];
+                unsafe { NLABELS = n - 1 };
+            }
+            _ => {}
+        }
+        return Ok(());
+    }
     if r.kind == Kind::FactoryReset as u8 {
         if r.op == OP_SET {
             unsafe { RESET_REQ = true };
@@ -346,6 +427,7 @@ impl Journal {
             *core::ptr::addr_of_mut!(HOOK_REC) = None;
             crate::alerthook::set(None);
             RESET_REQ = false;
+            NLABELS = 0;
         }
         self.last_mac = [0; 32];
         self.next_seq = 1;
@@ -422,12 +504,13 @@ impl Journal {
         let (nr, na) = unsafe { (NRULES, ART_LEN) };
         let rot = owner_rotation();
         let hook = unsafe { *core::ptr::addr_of!(HOOK_REC) };
-        if 1 + nr as u64 + na as u64 + rot.is_some() as u64 + hook.is_some() as u64 + 1 > self.half_cap() || nr + na > 600 {
+        let nl = unsafe { NLABELS };
+        if 1 + nr as u64 + na as u64 + rot.is_some() as u64 + hook.is_some() as u64 + nl as u64 + 1 > self.half_cap() || nr + na > 600 {
             return Err(JErr::Full);
         }
         let e2 = self.epoch + 1;
         let other = 1 - self.half;
-        static mut CKPT: [[u8; REC_LEN]; 3 + MAX_RULES + ART_N] = [[0u8; REC_LEN]; 3 + MAX_RULES + ART_N];
+        static mut CKPT: [[u8; REC_LEN]; 3 + MAX_RULES + ART_N + LABELS_N] = [[0u8; REC_LEN]; 3 + MAX_RULES + ART_N + LABELS_N];
         let recs = unsafe { &mut *core::ptr::addr_of_mut!(CKPT) };
         let (h, mut prev) = self.seal(&[0u8; 32], &Self::hdr(e2, self.next_seq), e2);
         recs[0] = h;
@@ -468,6 +551,20 @@ impl Journal {
             let (b, m) = self.seal(&prev, &r, e2);
             recs[n] = b;
             prev = m;
+            seq += 1;
+            n += 1;
+        }
+        // G47: owner device labels survive compaction
+        let labels = unsafe { &(&*core::ptr::addr_of!(LABELS))[..nl] };
+        for l in labels {
+            let mut t = [0u8; 6 + LABEL_MAX];
+            t[..6].copy_from_slice(&l.mac);
+            t[6..6 + l.len as usize].copy_from_slice(&l.label[..l.len as usize]);
+            let mut r = rec(Kind::DeviceLabel, OP_SET, &t[..6 + l.len as usize], 0, b"checkpoint");
+            r.seq = seq;
+            let (b, m) = self.seal(&prev, &r, e2);
+            recs[n] = b;
+            prev = m;
             #[allow(unused_assignments)]
             {
                 seq += 1;
@@ -484,6 +581,7 @@ impl Journal {
             *core::ptr::addr_of_mut!(HOOK_REC) = None;
             crate::alerthook::set(None);
             RESET_REQ = false;
+            NLABELS = 0;
         }
         for b in &recs[1..n] {
             let _ = apply(&Record::decode(b));
@@ -618,6 +716,7 @@ pub fn clear() {
         *core::ptr::addr_of_mut!(HOOK_REC) = None;
         crate::alerthook::set(None);
         RESET_REQ = false;
+        NLABELS = 0;
     }
 }
 
@@ -808,10 +907,36 @@ pub fn selftest() -> bool {
         clear();
         asked && replays && wiped && empty && fresh
     };
-    let pass = factory && revoke_all && appended && replayed && rm && after_rm && keyed && tamper_ok && torn_ok && pinned_holds && unpinned_loosened && tightened && compacted && power_cut && full_ok;
+    // G47 device labels: set, rename (latest wins), replay, remove; bad grammar never applies
+    let labels = {
+        let mut d = MemDisk::new();
+        let mut j = Journal::new(0, 8, &srk);
+        let m = [2u8, 0, 0, 0, 0, 0x47];
+        let mut t = [0u8; 6 + LABEL_MAX];
+        t[..6].copy_from_slice(&m);
+        t[6..17].copy_from_slice(b"Mia's iPad ");
+        let bad = rec(Kind::DeviceLabel, OP_SET, &t[..17], 0, b"bad: trailing space");
+        let _ = j.append(&mut d, bad);
+        let mut ob = [0u8; LABEL_MAX];
+        let refused = owner_label(&m, &mut ob) == 0;
+        t[6..16].copy_from_slice(b"Mia's iPad");
+        let _ = j.append(&mut d, rec(Kind::DeviceLabel, OP_SET, &t[..16], 0, b"rename"));
+        t[6..18].copy_from_slice(b"Kitchen (TV)");
+        let _ = j.append(&mut d, rec(Kind::DeviceLabel, OP_SET, &t[..18], 0, b"rename again"));
+        let latest = owner_label(&m, &mut ob) == 12 && &ob[..12] == b"Kitchen (TV)" && rule_count() == 0;
+        clear();
+        let mut j2 = Journal::new(0, 8, &srk);
+        let _ = j2.replay(&d);
+        let replayed = owner_label(&m, &mut ob) == 12 && &ob[..12] == b"Kitchen (TV)";
+        let _ = j2.append(&mut d, rec(Kind::DeviceLabel, OP_REMOVE, &m, 0, b"back to signed"));
+        let removed = owner_label(&m, &mut ob) == 0;
+        clear();
+        refused && latest && replayed && removed && label_ok(b"a") && !label_ok(b"x\"y") && !label_ok(&[b'a'; 32])
+    };
+    let pass = labels && factory && revoke_all && appended && replayed && rm && after_rm && keyed && tamper_ok && torn_ok && pinned_holds && unpinned_loosened && tightened && compacted && power_cut && full_ok;
     arch_aarch64::_print(format_args!(
-        " [P-ownerjournal] {} — ADR 0055 owner policy journal (stage A + B compaction): append + apply={} replay reproduces the rules (deterministic reconcile)={} removal is a record={} another device key reads nothing={} tampering stops replay at the bad record={} torn tail -> verified prefix={} | precedence: a pinned signed line holds={} an unpinned one is loosened={} an owner rule tightens={} | compaction: 40 changes through a 7-record half, {} epochs, live rules kept, replay identical={} power cut mid-compaction -> the old epoch boots intact={} full only when the live state no longer fits ({} rules)={} | revoke-all record survives a replay (no owner rule after reboot, new rules accepted again)={} | factory reset: request replays, wipe zeroes the region, the wiped journal is empty and starts a fresh epoch={}\n",
-        if pass { "PASS" } else { "FAIL" }, appended, replayed, rm && after_rm, keyed, tamper_ok, torn_ok, pinned_holds, unpinned_loosened, tightened, epochs, compacted, power_cut, ok_n, full_ok, revoke_all, factory
+        " [P-ownerjournal] {} — ADR 0055 owner policy journal (stage A + B compaction): append + apply={} replay reproduces the rules (deterministic reconcile)={} removal is a record={} another device key reads nothing={} tampering stops replay at the bad record={} torn tail -> verified prefix={} | precedence: a pinned signed line holds={} an unpinned one is loosened={} an owner rule tightens={} | compaction: 40 changes through a 7-record half, {} epochs, live rules kept, replay identical={} power cut mid-compaction -> the old epoch boots intact={} full only when the live state no longer fits ({} rules)={} | revoke-all record survives a replay (no owner rule after reboot, new rules accepted again)={} | factory reset: request replays, wipe zeroes the region, the wiped journal is empty and starts a fresh epoch={} | G47 device labels: grammar enforced, latest rename wins, replayed, removable, never a rule={}\n",
+        if pass { "PASS" } else { "FAIL" }, appended, replayed, rm && after_rm, keyed, tamper_ok, torn_ok, pinned_holds, unpinned_loosened, tightened, epochs, compacted, power_cut, ok_n, full_ok, revoke_all, factory, labels
     ));
     pass
 }
