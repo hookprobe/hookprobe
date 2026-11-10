@@ -167,8 +167,11 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
    (irreversible). SEC-3 fuses stay out of scope. **Consequence until decided:** a unit with blank customer
    OTP attests with the SOFTWARE attestation key, whose private half is tracked in `hboot/src/attest_keys.rs`
    (§2.1 #8) — its quotes prove nothing. Verifiers (MSSP / enrolment) must reject `otp_provisioned=0` quotes
-   in production; sealing on such a unit still uses the OTP-derived SRK read path (none to read → the unit
-   reports it). The bench CM5 is unaffected (provisioned in an earlier campaign).
+   in production. With blank OTP there is also **no SRK** (HBoot hands none over) and every SRK consumer fails
+   closed: no HTTPS key (`[MC-TLS] OFF`), owner journal RAM-only, no sealed evidence log, no per-device
+   setup-AP credential. Secure, but not a sellable unit — **the OTP provisioning decision blocks production.**
+   (Minor: the metal self-test `cm5_p15_block_seal` falls back to a constant key; it never runs in the AP image.)
+   The bench CM5 is unaffected (provisioned in an earlier campaign).
 3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber), 0055 `pin` semantics, 0056 D1 boundary with the
    flasher owner, 0045/0046, retire 0035–0042.
 4. Persistent anti-rollback medium (RPMB vs sealed counter) — technical options can be prototyped (A), the
