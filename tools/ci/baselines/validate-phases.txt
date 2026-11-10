@@ -120,6 +120,7 @@ Ptxprio
 Pwansig
 Pownerrotate
 Psniblock
+Palerthook
 Pcrashrec
 Prulepack
 Pshield
