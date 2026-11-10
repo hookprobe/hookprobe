@@ -836,8 +836,11 @@ impl Pppoe {
             ECHO_REQ => {
                 let mut d = [0u8; 64];
                 d[..4].copy_from_slice(&self.magic.to_be_bytes());
-                let k = data.len().saturating_sub(4).min(60);
-                d[4..4 + k].copy_from_slice(&data[4..4 + k]);
+                // the peer's magic (4 B) then optional data; a short Echo-Request (< 4 B, which `ctl` allows) must
+                // not index past its end — a spoofed WAN frame used to panic the kernel here (SEC-01 audit 2026-11-10)
+                let echo = data.get(4..).unwrap_or(&[]);
+                let k = echo.len().min(60);
+                d[4..4 + k].copy_from_slice(&echo[..k]);
                 self.send_ctl(tx, PPP_LCP, ECHO_REP, id, &d[..4 + k]);
                 self.stats.echo_replies += 1;
             }

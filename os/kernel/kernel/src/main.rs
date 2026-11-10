@@ -3095,8 +3095,44 @@ fn cm5_p10_probe() {
                         // (link + station MAC only — heqk will be its DHCP SERVER, never a client).
                         use arch_aarch64::uplink::{self, Nic};
                         let mut up = uplink::UplinkResult::new(Nic::End0);
+                        // ADR 0049 D1: the device-pinned trust anchor decides which operator key verifies
+                        // WAN.TXT, POLICY.TXT and every signed pack — pinned before ANY of them is read (ADR 0058 rule 6).
+                        #[cfg(feature = "p15-write")]
+                        {
+                            let (d, prev, wrote) = anchor::boot(policysig::POLICY_PUBKEY);
+                            let fp = |k: [u8; 32]| u32::from_be_bytes([k[0], k[1], k[2], k[3]]);
+                            #[cfg(feature = "mcserve")]
+                            unsafe {
+                                let n = &mut *core::ptr::addr_of_mut!(NET);
+                                (n.anchor, n.anchor_fp) = match d {
+                                    anchor::Decision::Pin(k) => (1, fp(k)),
+                                    anchor::Decision::Keep(k) => (2, fp(k)),
+                                    anchor::Decision::Conflict { pinned } => (3, fp(pinned)),
+                                    anchor::Decision::Standalone => (4, 0),
+                                };
+                            }
+                            match d {
+                                anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
+                                anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
+                                anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
+                                anchor::Decision::Standalone => kprint!(" [ANCHOR] no operator key pinned or compiled in (standalone device)\n"),
+                            }
+                        }
+                        // ADR 0058 rule 6 (operator 2026-11-10): verify BEFORE parsing or applying. With an operator key, a
+                        // WAN.TXT that does not verify is ignored WHOLE — DHCP, untagged, no management sub-interface, the
+                        // default floor; the LAN / Wi-Fi management network is unaffected. No key (standalone) = as before.
+                        let (wan_sig, wan_txt) = match arch_aarch64::emmc::Emmc::probe() {
+                            Ok(d) => (wan_signed(&d), wan_present(&d)),
+                            Err(_) => (None, false),
+                        };
+                        // a WAN.TXT without its WAN.SIG is unsigned too; no WAN.TXT at all = the DHCP default
+                        let wan_refused = matches!(wan_sig, Some(Err(e)) if e != policysig::SigErr::Missing || wan_txt);
+                        if let Some(Err(e)) = wan_sig.filter(|_| wan_refused) {
+                            kprint!(" [WAN] WAN.TXT NOT signed by the operator key ({:?}) — IGNORED (verify before apply): DHCP, untagged, no management sub-interface\n", e);
+                        }
                         // The operator's WAN mode (WAN.TXT on the eMMC boot partition); DHCP when absent.
                         let wan_mode: hal::WanMode = match arch_aarch64::emmc::Emmc::probe() {
+                            _ if wan_refused => hal::WanMode::Dhcp,
                             Ok(dev) => match load_wan_cfg(&dev) {
                                 Some(Ok(mo)) => mo,
                                 Some(Err(e)) => {
@@ -3116,7 +3152,7 @@ fn cm5_p10_probe() {
                         // Link (VLAN / QinQ / management sub-interface) + POLICY.TXT — before any WAN mode comes up,
                         // so DHCP / PPPoE already ride the tagged internet sub-interface.
                         if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
-                            match load_wan_link(&dev) {
+                            match load_wan_link(&dev).filter(|_| !wan_refused) {
                                 Some(Ok(l)) => {
                                     #[cfg(feature = "mcserve")]
                                     unsafe {
@@ -3130,11 +3166,9 @@ fn cm5_p10_probe() {
                                     let floor = l.floor.or_else(|| l.mgmt.and_then(|mg| mg.stat.map(|(ip, pl, _)| (ip, pl))));
                                     // Audit finding 11: with an operator key, the floor (who is never enforced against) is
                                     // honoured only from a SIGNED WAN.TXT. Connectivity settings apply either way.
-                                    let signed = wan_signed(&dev);
-                                    match signed {
-                                        Some(Ok(g)) => kprint!(" [WAN] WAN.TXT signature OK — operator key, generation {}\n", g),
-                                        Some(Err(e)) => kprint!(" [WAN] WAN.TXT NOT signed by the operator key ({:?}) — connectivity settings applied, mgmt_floor / management-subnet floor IGNORED\n", e),
-                                        None => {}
+                                    let signed = wan_sig;
+                                    if let Some(Ok(g)) = signed {
+                                        kprint!(" [WAN] WAN.TXT signature OK — operator key, generation {}\n", g);
                                     }
                                     if let Some((ip, pl)) = floor.filter(|_| !matches!(signed, Some(Err(_)))) {
                                         let _ = crate::verdict::set_mgmt_floor(u32::from_be_bytes(ip), pl as u32);
@@ -3162,29 +3196,6 @@ fn cm5_p10_probe() {
                                 }
                                 Some(Err(e)) => kprint!(" [LINK] WAN.TXT link keys invalid ({:?}) — internet untagged, no management sub-interface\n", e),
                                 None => {}
-                            }
-                            // ADR 0049 D1: the device-pinned trust anchor decides which operator key verifies
-                            // POLICY.TXT and every signed pack — before anything signed is read.
-                            #[cfg(feature = "p15-write")]
-                            {
-                                let (d, prev, wrote) = anchor::boot(policysig::POLICY_PUBKEY);
-                                let fp = |k: [u8; 32]| u32::from_be_bytes([k[0], k[1], k[2], k[3]]);
-                                #[cfg(feature = "mcserve")]
-                                unsafe {
-                                    let n = &mut *core::ptr::addr_of_mut!(NET);
-                                    (n.anchor, n.anchor_fp) = match d {
-                                        anchor::Decision::Pin(k) => (1, fp(k)),
-                                        anchor::Decision::Keep(k) => (2, fp(k)),
-                                        anchor::Decision::Conflict { pinned } => (3, fp(pinned)),
-                                        anchor::Decision::Standalone => (4, 0),
-                                    };
-                                }
-                                match d {
-                                    anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
-                                    anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
-                                    anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
-                                    anchor::Decision::Standalone => kprint!(" [ANCHOR] no operator key pinned or compiled in (standalone device)\n"),
-                                }
                             }
                             match load_policy(&dev) {
                                 Some(Ok(())) => {
@@ -3415,16 +3426,17 @@ fn cm5_p10_probe() {
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
                             #[cfg(feature = "wpa3probe")]
                             cyw43::probe_set_psk(ap_psk);
-                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA2 — the long-proven default. Transition mode
-                            // (SAE + PMF for WPA3 stations, PSK for WPA2-only ones — both metal-proven, batches 44-50) is the
-                            // recommended next default, an operator product decision. `HEQK_AP_SECURITY` (wpa3 |
-                            // wpa3-transition) changes the default for bench builds. SAE needs the passphrase itself.
+                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA3 TRANSITION mode — the operator's default
+                            // (2026-11-10): SAE + PMF for WPA3 stations, PSK for WPA2-only ones on one BSS (metal-proven,
+                            // batches 44-50). WPA3-only and WPA2-only are explicit options. `HEQK_AP_SECURITY` (wpa2 | wpa3 |
+                            // wpa3-transition) changes the default for bench builds. SAE needs the passphrase itself: with a
+                            // raw 64-hex PMK the AP stays WPA2-PSK (logged below).
                             #[cfg(feature = "wpa3")]
                             {
                                 let build_default = match option_env!("HEQK_AP_SECURITY") {
                                     Some("wpa3") => cyw43::SEC_WPA3,
-                                    Some("wpa3-transition") => cyw43::SEC_WPA3_TRANSITION,
-                                    _ => cyw43::SEC_WPA2,
+                                    Some("wpa2") => cyw43::SEC_WPA2,
+                                    _ => cyw43::SEC_WPA3_TRANSITION,
                                 };
                                 let want = match wifi.map(|c| c.security) {
                                     Some(wificfg::SEC_WPA2) => cyw43::SEC_WPA2,
@@ -3776,6 +3788,7 @@ fn cm5_p10_probe() {
                                 kprint!(" [AP-MC] owner: {}\n", if owner.is_some() { "CLAIMED — sign-in required" } else { "UNCLAIMED — protected routes refuse" });
                                 #[cfg(feature = "mctls")]
                                 crate::tlshost::bring_up(Some(&dev));
+                                crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
                                 let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal
                             }
                             mcserve::state().set_clock(0, mc_t0, freq);
@@ -14107,7 +14120,7 @@ fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::
     if p1 == 0 {
         return None;
     }
-    let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
+    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
     dev.read_block(lba, &mut sec).ok()?;
     Some(hal::parse_wan_link(&sec))
 }
@@ -14138,7 +14151,7 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
     if p1 == 0 {
         return None;
     }
-    let (lba, n) = fat::locate_contiguous(dev, p1, POLICY_8_3)?;
+    let (lba, n) = crate::artstore::locate(dev, p1, POLICY_8_3)?;
     let mut buf = [0u8; hal::policy::POLICY_FILE_LEN];
     for k in 0..(n as usize).min(hal::policy::POLICY_FILE_LEN / 512) {
         dev.read_block(lba + k as u64, &mut sec).ok()?;
@@ -14146,12 +14159,21 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
     }
     // ADR 0049 D1: with an operator key in this image, the signature is checked BEFORE the parser sees a
     // byte; any failure is reported as a rejected policy (=> the management lockdown below), never applied.
-    if let Some(key) = policysig::key() {
+    if policysig::config_key().is_some() {
         let mut sig = [0u8; policysig::SIG_FILE_LEN];
-        let have = fat::locate_contiguous(dev, p1, policysig::SIG_8_3)
+        let have = crate::artstore::locate(dev, p1, policysig::SIG_8_3)
             .and_then(|(l, _)| dev.read_block(l, &mut sig).ok())
             .is_some();
-        let r = if have { policysig::verify(&buf, &sig, &key, policysig::floor()) } else { Err(policysig::SigErr::Missing) };
+        let keys = policysig::config_keys(crate::artstore::from_store(dev, p1, crate::artstore::Ty::Policy));
+        let mut r = Err(policysig::SigErr::Missing);
+        if have {
+            for k in keys.iter().flatten() {
+                r = policysig::verify(&buf, &sig, k, policysig::floor());
+                if r.is_ok() {
+                    break;
+                }
+            }
+        }
         match r {
             Ok(gen) => {
                 unsafe { POLICY_STATE = (1, gen) };
@@ -14163,6 +14185,13 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
                 }
             }
             Err(e) => {
+                // ADR 0058: a staged store copy the verifier refuses (tampered / below the floor) is disabled for
+                // this boot and the boot-partition POLICY.TXT is loaded instead
+                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Policy) {
+                    crate::artstore::disable(crate::artstore::Ty::Policy);
+                    kprint!(" [POLICY] the staged (uploaded) POLICY was REFUSED ({:?}) — falling back to the boot partition copy\n", e);
+                    return load_policy(dev);
+                }
                 unsafe { POLICY_STATE = (3, 0) };
                 kprint!(" [POLICY] signature REFUSED ({:?}) — the policy is not parsed\n", e);
                 return Some(Err(hal::policy::PolicyErr::Unsigned));
@@ -14179,22 +14208,57 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
 /// Some(Ok(gen)) = signed by the operator key; Some(Err) = missing / bad.
 #[allow(dead_code)]
 fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr>> {
-    let key = policysig::key()?;
+    policysig::config_key()?;
+    let mut p1w = 0;
     let mut sec = [0u8; 512];
     let mut sig = [0u8; 512];
     let r = (|| {
         dev.read_block(0, &mut sec).ok()?;
         let p1 = store::parse_mbr(&sec)[0].start;
-        let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
-        let (slba, _sn) = fat::locate_contiguous(dev, p1, policysig::WAN_SIG_8_3)?;
+        p1w = p1;
+        let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
+        let (slba, _sn) = crate::artstore::locate(dev, p1, policysig::WAN_SIG_8_3)?;
         dev.read_block(lba, &mut sec).ok()?;
         dev.read_block(slba, &mut sig).ok()?;
         Some(())
     })();
-    Some(match r {
+    let v = match r {
         None => Err(policysig::SigErr::Missing),
-        Some(()) => policysig::verify_wan(&sec, &sig, &key),
-    })
+        Some(()) => {
+            let mut v = Err(policysig::SigErr::Missing);
+            for k in policysig::config_keys(crate::artstore::from_store(dev, p1w, crate::artstore::Ty::Wan)).iter().flatten() {
+                v = policysig::verify_wan(&sec, &sig, k);
+                if v.is_ok() {
+                    break;
+                }
+            }
+            v
+        }
+    };
+    // ADR 0058: a refused staged WAN copy falls back to the boot partition's WAN.TXT for this boot
+    if v.is_err() {
+        let p1 = (|| {
+            dev.read_block(0, &mut sec).ok()?;
+            Some(store::parse_mbr(&sec)[0].start)
+        })()
+        .unwrap_or(0);
+        if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wan) {
+            crate::artstore::disable(crate::artstore::Ty::Wan);
+            kprint!(" [WAN] the staged (uploaded) WAN.TXT was REFUSED — falling back to the boot partition copy\n");
+            return wan_signed(dev);
+        }
+    }
+    Some(v)
+}
+
+/// Is there a WAN.TXT (staged store copy or boot partition) at all?
+fn wan_present<D: hal::BlockDev>(dev: &D) -> bool {
+    let mut sec = [0u8; 512];
+    if dev.read_block(0, &mut sec).is_err() {
+        return false;
+    }
+    let p1 = store::parse_mbr(&sec)[0].start;
+    p1 != 0 && crate::artstore::locate(dev, p1, WAN_8_3).is_some()
 }
 
 /// Read + parse WAN.TXT from a block device's first partition. None = no file (=> DHCP).
@@ -14206,7 +14270,7 @@ fn load_wan_cfg<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanMode, hal::W
     if p1 == 0 {
         return None;
     }
-    let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
+    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
     dev.read_block(lba, &mut sec).ok()?;
     Some(hal::parse_wan_cfg(&sec))
 }
@@ -15381,6 +15445,16 @@ fn pppoe_selftest() {
     let echo_ok = tx.n == 1 && be16(tx.frame(0), 20) == 0xc021 && tx.frame(0)[22] == 10 && tx.frame(0)[23] == 0x55
         && tx.frame(0)[26..30] == 0xa1b2_c3d4u32.to_be_bytes() && &tx.frame(0)[30..32] == b"hb";
     tx.clear();
+    // SEC-01 audit 2026-11-10: a spoofed Echo-Request shorter than its magic (0..3 data bytes) used to index past the
+    // end and PANIC the kernel; now it is answered with our magic only, the session stays up.
+    let mut short_ok = true;
+    for k in 0..4usize {
+        let (b, l) = sess(0xc021, 9, 0x60 + k as u8, &[0xee; 3][..k]);
+        c.rx(&b[..l], 1000, &mut tx);
+        short_ok &= tx.n == 1 && tx.frame(0)[22] == 10 && c.phase == Phase::Open;
+        tx.clear();
+    }
+    let echo_ok = echo_ok && short_ok;
     // IPV6CP (RFC 5072) is now RUN, not rejected: the AC's Conf-Req (IID ::1) is Acked, the session stays up.
     let (b, l) = sess(0x8057, 1, 1, &[1, 10, 0, 0, 0, 0, 0, 0, 0, 1]);
     c.rx(&b[..l], 1001, &mut tx);
