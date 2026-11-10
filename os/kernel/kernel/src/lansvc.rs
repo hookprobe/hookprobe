@@ -280,6 +280,93 @@ pub fn dns_walk(dns: &[u8], w: &mut Walk) -> Option<()> {
     crate::dnswire::walk_answers(dns, w)
 }
 
+/// D4 step 2b: the DHCP server's parse of one client frame, in the EL0 server. `None` = the server faulted (reset,
+/// counted): the DHCP server treats the frame as unparseable — no reply, the client retries. Without the EL0 server
+/// (load failed / `mctls` off) the same `hal::dhcpwire` parses in-kernel.
+#[cfg(feature = "mctls")]
+fn dhcp_el0(eth: &[u8]) -> Option<hal::dhcpwire::ClientReq> {
+    if let Some(s) = el0::server() {
+        use hal::lansvcabi::*;
+        if eth.len() > IN_MAX {
+            return None;
+        }
+        let (st, n) = s.call(CMD_DHCP_PARSE, eth);
+        if st != ST_OK || n != hal::dhcpwire::REC_LEN {
+            return None;
+        }
+        let mut o = [0u8; hal::dhcpwire::REC_LEN];
+        s.read(OUT_OFF, &mut o);
+        return Some(hal::dhcpwire::decode(&o));
+    }
+    unsafe { IN_KERNEL += 1 };
+    Some(hal::dhcpwire::parse_client(eth))
+}
+
+/// D4 step 3: one WAN-side call. `None` = the server faulted (reset, counted). `Some((status, record))` otherwise.
+#[cfg(feature = "mctls")]
+fn wan_call<const N: usize>(cmd: u32, pre: &[u8], pkt: &[u8]) -> Option<(u32, [u8; N])> {
+    use hal::lansvcabi::*;
+    let s = el0::server()?;
+    if pre.len() + pkt.len() > IN_MAX {
+        return Some((ST_NONE, [0; N]));
+    }
+    let mut buf = [0u8; IN_MAX];
+    buf[..pre.len()].copy_from_slice(pre);
+    buf[pre.len()..pre.len() + pkt.len()].copy_from_slice(pkt);
+    let (st, n) = s.call(cmd, &buf[..pre.len() + pkt.len()]);
+    if st == ST_PANIC {
+        return None;
+    }
+    let mut o = [0u8; N];
+    if st == ST_OK && n == N {
+        s.read(OUT_OFF, &mut o);
+        return Some((ST_OK, o));
+    }
+    Some((ST_NONE, o))
+}
+#[cfg(feature = "mctls")]
+fn wan_dhcp_reply(eth: &[u8], xid: &[u8; 4], mac: &[u8; 6]) -> Option<hal::dhcpwire::ReplyFacts> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::dhcpwire::dhcp_reply_facts(eth, xid, mac));
+    }
+    let mut pre = [0u8; 10];
+    pre[..4].copy_from_slice(xid);
+    pre[4..].copy_from_slice(mac);
+    let (st, o) = wan_call::<{ hal::dhcpwire::FACTS_LEN }>(hal::lansvcabi::CMD_WAN_DHCP_REPLY, &pre, eth)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::dhcpwire::decode_facts(&o) } else { Default::default() })
+}
+#[cfg(feature = "mctls")]
+fn wan_ra(ip: &[u8]) -> Option<Option<hal::ip6::Ra>> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::ip6::parse_ra(ip));
+    }
+    let (st, o) = wan_call::<{ hal::ip6::RA_LEN }>(hal::lansvcabi::CMD_WAN_RA, &[], ip)?;
+    Some((st == hal::lansvcabi::ST_OK).then(|| hal::ip6::decode_ra(&o)))
+}
+#[cfg(feature = "mctls")]
+fn wan_dhcp6(ip: &[u8], xid: u32) -> Option<Option<hal::ip6::Dhcp6>> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::ip6::parse_dhcp6(ip, xid));
+    }
+    let (st, o) = wan_call::<{ hal::ip6::DHCP6_LEN }>(hal::lansvcabi::CMD_WAN_DHCP6, &xid.to_le_bytes(), ip)?;
+    Some((st == hal::lansvcabi::ST_OK).then(|| hal::ip6::decode_dhcp6(&o)))
+}
+
+/// Route the DHCP server's parse (step 2b) and the WAN control parsers (step 3) through `el0-lansvc` (called once
+/// at boot, before any client is served or the uplink comes up).
+pub fn install_dhcp() {
+    #[cfg(feature = "mctls")]
+    unsafe {
+        arch_aarch64::dhcpd::EL0_PARSE = Some(dhcp_el0);
+        arch_aarch64::wanparse::EL0_DHCP_REPLY = Some(wan_dhcp_reply);
+        arch_aarch64::wanparse::EL0_RA = Some(wan_ra);
+        arch_aarch64::wanparse::EL0_DHCP6 = Some(wan_dhcp6);
+    };
+}
+
 /// [P-lansvc] ADR 0050 D4 step 2: Shield's DNS parsing in the EL0 server gives the SAME facts as the in-kernel
 /// parser (a query; an answer with a CNAME chain), and a server fault is contained: the server resets, the message
 /// reads as unparseable, and the next message parses again.
@@ -343,10 +430,80 @@ pub fn selftest() -> bool {
     };
     let (_, _, f1, r1, _) = stats();
     let recovered = faulted && f1 == f0 + 1 && r1 == r0 + 1 && dns_query(&q[..n]).is_some();
-    let pass = where_ == "el0" && same_q && same_w && bad && recovered;
+    // D4 step 2b: a DHCP REQUEST (option 50, hostname, vendor, PRL) parses to the same facts in EL0 as in-kernel
+    let mut f = [0u8; 400];
+    f[12] = 0x08;
+    f[14] = 0x45;
+    f[23] = 17;
+    f[34..38].copy_from_slice(&[0, 68, 0, 67]);
+    let b = 42;
+    f[b] = 1;
+    f[b + 4..b + 8].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+    f[b + 28..b + 34].copy_from_slice(&[2, 0, 0, 0, 0, 0x2b]);
+    f[b + 236..b + 240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]);
+    let opts: &[u8] = &[53, 1, 3, 50, 4, 10, 99, 0, 42, 12, 6, b'p', b'h', b'o', b'n', b'e', b'1', 60, 4, b'a', b'n', b'd', b'r', 55, 3, 1, 3, 6, 255];
+    f[b + 240..b + 240 + opts.len()].copy_from_slice(opts);
+    let fl = b + 240 + opts.len();
+    let kd = hal::dhcpwire::parse_client(&f[..fl]);
+    install_dhcp();
+    let ed = arch_aarch64::dhcpd::parse_request(&f[..fl]);
+    let same_d = kd.mt == 3 && ed.mt == 3 && ed.cmac == kd.cmac && ed.xid == kd.xid && ed.req_ip == [10, 99, 0, 42] && ed.req_ip == kd.req_ip
+        && ed.id.host[..ed.id.hlen as usize] == *b"phone1" && ed.id.vendor[..ed.id.vlen as usize] == *b"andr" && ed.id.prl[..ed.id.plen as usize] == [1, 3, 6];
+    let bad_d = arch_aarch64::dhcpd::parse_request(&f[..100]).mt == 0;
+    // D4 step 3 (WAN control): a DHCP OFFER, a Router Advertisement and junk give the same facts through EL0
+    use arch_aarch64::wanparse;
+    let (xid, me) = ([1u8, 2, 3, 4], [2u8, 0, 0, 0, 0, 0x77]);
+    let mut o = [0u8; 400];
+    o[..6].copy_from_slice(&me);
+    o[12] = 0x08;
+    o[14] = 0x45;
+    o[23] = 17;
+    o[34..38].copy_from_slice(&[0, 67, 0, 68]);
+    o[b] = 2;
+    o[b + 4..b + 8].copy_from_slice(&xid);
+    o[b + 16..b + 20].copy_from_slice(&[100, 64, 0, 9]);
+    o[b + 28..b + 34].copy_from_slice(&me);
+    o[b + 236..b + 240].copy_from_slice(&[0x63, 0x82, 0x53, 0x63]);
+    let oo: &[u8] = &[53, 1, 2, 54, 4, 100, 64, 0, 1, 3, 4, 100, 64, 0, 1, 1, 4, 255, 255, 255, 0, 6, 4, 1, 1, 1, 1, 51, 4, 0, 0, 14, 16, 255];
+    o[b + 240..b + 240 + oo.len()].copy_from_slice(oo);
+    let ol = b + 240 + oo.len();
+    let mut k1 = arch_aarch64::apparse::DhcpResult::new();
+    let mut e1 = arch_aarch64::apparse::DhcpResult::new();
+    let mk = hal::dhcpwire::parse_dhcp_reply(&o[..ol], &xid, &me, &mut k1);
+    let me1 = wanparse::dhcp_reply(&o[..ol], &xid, &me, &mut e1);
+    let same_offer = mk == 2 && me1 == 2 && e1.yiaddr == k1.yiaddr && e1.server == k1.server && e1.router == k1.router
+        && e1.mask == k1.mask && e1.dns == k1.dns && e1.lease == 3600 && e1.udp68_seen == 1;
+    let other_xid = wanparse::dhcp_reply(&o[..ol], &[9, 9, 9, 9], &me, &mut e1) == 0;
+    let rtr = [0xfe, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    let all: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1];
+    let mut ra = [0u8; 40 + 16 + 32];
+    let il = 16 + 32;
+    ra[0] = 0x60;
+    ra[4..6].copy_from_slice(&(il as u16).to_be_bytes());
+    ra[6] = 58;
+    ra[7] = 255;
+    ra[8..24].copy_from_slice(&rtr);
+    ra[24..40].copy_from_slice(&all);
+    ra[40] = 134;
+    ra[46..48].copy_from_slice(&1800u16.to_be_bytes());
+    ra[56] = 3;
+    ra[57] = 4;
+    ra[58] = 64;
+    ra[59] = 0xc0;
+    ra[60..64].copy_from_slice(&86400u32.to_be_bytes());
+    ra[72..80].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 1, 0, 2]);
+    let c = hal::ip6::l4_csum(&rtr, &all, 58, &ra[40..40 + il]);
+    ra[42..44].copy_from_slice(&c.to_be_bytes());
+    let same_ra = matches!((hal::ip6::parse_ra(&ra), wanparse::ra(&ra)), (Some(a), Some(b)) if a == b && b.has_prefix && b.plen == 64 && b.lifetime == 1800);
+    let mut rbad = ra;
+    rbad[42] ^= 1;
+    let junk = wanparse::ra(&rbad).is_none() && wanparse::dhcp6(&ra, 7).is_none() && wanparse::dhcp6(&[0x60; 3], 7).is_none();
+    let wan_ok = same_offer && other_xid && same_ra && junk;
+    let (_, c_after, _, _, _) = stats();
+    let pass = where_ == "el0" && same_q && same_w && bad && recovered && same_d && bad_d && wan_ok && c_after > 0;
     arch_aarch64::_print(format_args!(
-        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={}\n",
-        if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered
+        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={}\n",
+        if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk
     ));
     pass
 }

@@ -60,7 +60,9 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
   at 3k/target and a one-off 30k/target. The AP DHCP server, WAN DHCP client, firmware-event
   decoder and EAPOL matcher moved to the target-independent `arch-aarch64::apparse` and are fuzzed too
   (0 panics, 3k + one-off 30k). Still hand-review-only: `uplink.rs` `mgmt_frame` / `mgmt_dhcp_step` (bound to
-  MMIO-backed statics; reviewed 2026-11-07, no defect).
+  MMIO-backed statics; reviewed 2026-11-07, no defect). 2026-11-10 (SEC-01 inventory): a fourth remote panic of the
+  same kind was found and fixed — a PPPoE LCP Echo-Request with < 4 data bytes indexed past its end in `on_lcp`
+  (reachable by anyone who can spoof the session id + AC MAC on the WAN segment); regression in the PPPoE self-test.
 
 ### D4 — Migration order **[vision]**
 
@@ -77,7 +79,18 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
    The kernel keeps every decision. A fault resets the server, and the message passes un-inspected as an
    unparseable one always did. Metal-proven: `docs/design/metal-evidence/20261110-batch54-57.md`.
    Still in EL1: the AP DHCP server's parser (arch crate), which is step 2b.
+   *Status 2026-11-10 (step 2b, QEMU):* the DHCP server's client-frame parse moved to the pure `hal::dhcpwire`
+   (one source for kernel and server) and runs in `el0-lansvc` (`CMD_DHCP_PARSE`); the kernel re-cleans and clamps
+   the returned record; a fault = an unparseable frame (no reply, the client retries). `[P-lansvc]` parity +
+   libFuzzer `dhcp_wire`. Metal pending.
 3. WAN control (PPPoE/LCP/PAP, DHCPv4/v6, RA) — reachable by the ISP side.
+   *Status 2026-11-10 (step 3a, QEMU):* DHCPv4 replies, Router Advertisements and DHCPv6 are parsed in
+   `el0-lansvc` (`CMD_WAN_DHCP_REPLY` / `CMD_WAN_RA` / `CMD_WAN_DHCP6`) through `arch_aarch64::wanparse`; the
+   sources moved to `hal` (`hal::ip6`, `hal::dhcpwire`). `parse_dhcp_reply` was split into pure `dhcp_reply_facts`
+   (EL0) and `apply_reply` (the merge + server pin, kernel). Records are fixed-layout and re-clamped by the kernel.
+   **Placement note:** the WAN parsers share the LAN server's address space for now (one EL0 server, no state kept
+   between commands); a separate WAN server is the stricter split, deferred. Still in EL1: PPPoE discovery and
+   PPP LCP/PAP/CHAP/IPCP/IPv6CP (parse fused with reply building — step 3b), WAN/mgmt ARP + ICMP, SNTP.
 4. Control channel (Noise) — already authenticated after msg1; lowest exposure.
 5. WPA2 authenticator — tied to the CYW43455 driver; moves with the driver (ADR 0044 D4 #7).
 
