@@ -29,9 +29,26 @@ pub enum Ty {
     Rules = 3,
     Oui = 4,
     Devices = 5,
+    /// ADR 0058: owner/operator-signed runtime configuration — STAGED (applies at the next boot, verified again
+    /// by its boot loader); appended after the packs so existing slot offsets never move.
+    Wan = 6,
+    Wifi = 7,
+    Policy = 8,
 }
-pub const NTY: usize = 6;
-pub const ALL: [Ty; NTY] = [Ty::Block, Ty::Allow, Ty::Ioc, Ty::Rules, Ty::Oui, Ty::Devices];
+pub const NTY: usize = 9;
+pub const ALL: [Ty; NTY] = [Ty::Block, Ty::Allow, Ty::Ioc, Ty::Rules, Ty::Oui, Ty::Devices, Ty::Wan, Ty::Wifi, Ty::Policy];
+/// Types at or past this index live in the SECOND manifest pair (store sectors 2/3, "HQSTMAN2"): the first
+/// manifest sector holds 6 entries; each group commits atomically on its own sector.
+pub const G1_FIRST: usize = 6;
+fn group(t: Ty) -> usize {
+    if (t as usize) < G1_FIRST { 0 } else { 1 }
+}
+impl Ty {
+    /// Staged types apply at the next boot (their loaders run once, at boot) — never hot-reloaded.
+    pub fn staged(self) -> bool {
+        matches!(self, Ty::Wan | Ty::Wifi | Ty::Policy)
+    }
+}
 
 pub struct TyInfo {
     pub name: &'static str,
@@ -49,6 +66,9 @@ const TYPES: [TyInfo; NTY] = [
     TyInfo { name: "rules", txt: b"RULES   BIN", sig: b"RULES   SIG", magic: b"HQRSIG1\0", cap: 64 << 10 },
     TyInfo { name: "oui", txt: b"OUI     TXT", sig: b"OUI     SIG", magic: b"HQOSIG1\0", cap: 4 << 20 },
     TyInfo { name: "devices", txt: b"DEVICES TXT", sig: b"DEVICES SIG", magic: b"HQDSIG1\0", cap: 16 << 10 },
+    TyInfo { name: "wan", txt: b"WAN     TXT", sig: b"WAN     SIG", magic: b"HQNSIG1\0", cap: 512 },
+    TyInfo { name: "wifi", txt: b"WIFI    TXT", sig: b"WIFI    SIG", magic: b"HQWSIG1\0", cap: 1024 },
+    TyInfo { name: "policy", txt: b"POLICY  TXT", sig: b"POLICY  SIG", magic: b"HQPSIG1\0", cap: hal::policy::POLICY_FILE_LEN as u64 },
 ];
 
 impl Ty {
@@ -91,19 +111,27 @@ const E0: Entry = Entry { half: 0, gen: 0, len: 0, digest: [0; 32] };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Manifest {
+    /// Commit sequence of group 0 (the packs, sectors 0/1).
     pub seq: u64,
+    /// Commit sequence of group 1 (the staged configuration types, sectors 2/3).
+    pub seq2: u64,
     pub e: [Entry; NTY],
 }
-pub const MAN0: Manifest = Manifest { seq: 0, e: [E0; NTY] };
+pub const MAN0: Manifest = Manifest { seq: 0, seq2: 0, e: [E0; NTY] };
 const MAGIC: &[u8; 8] = b"HQSTMAN1";
+const MAGIC2: &[u8; 8] = b"HQSTMAN2";
 
 impl Manifest {
-    fn encode(&self) -> [u8; 512] {
+    fn range(g: usize) -> core::ops::Range<usize> {
+        if g == 0 { 0..G1_FIRST } else { G1_FIRST..NTY }
+    }
+    fn encode_g(&self, g: usize) -> [u8; 512] {
         let mut s = [0u8; 512];
-        s[..8].copy_from_slice(MAGIC);
-        s[8..16].copy_from_slice(&self.seq.to_le_bytes());
-        for (i, e) in self.e.iter().enumerate() {
-            let o = 16 + i * 56;
+        s[..8].copy_from_slice(if g == 0 { MAGIC } else { MAGIC2 });
+        s[8..16].copy_from_slice(&(if g == 0 { self.seq } else { self.seq2 }).to_le_bytes());
+        for (k, i) in Self::range(g).enumerate() {
+            let e = &self.e[i];
+            let o = 16 + k * 56;
             s[o] = e.half;
             s[o + 8..o + 16].copy_from_slice(&e.gen.to_le_bytes());
             s[o + 16..o + 24].copy_from_slice(&e.len.to_le_bytes());
@@ -113,22 +141,32 @@ impl Manifest {
         s[480..].copy_from_slice(&d);
         s
     }
-    fn decode(s: &[u8; 512]) -> Option<Manifest> {
-        if &s[..8] != MAGIC || boot_abi::sha256::digest(&s[..480])[..] != s[480..] {
+    /// Decode group `g` of a sector into `m` (its entries + seq). None = not a valid manifest of that group.
+    fn decode_g(s: &[u8; 512], g: usize, m: &mut Manifest) -> Option<()> {
+        if &s[..8] != (if g == 0 { MAGIC } else { MAGIC2 }) || boot_abi::sha256::digest(&s[..480])[..] != s[480..] {
             return None;
         }
-        let mut m = MAN0;
-        m.seq = u64::from_le_bytes(s[8..16].try_into().ok()?);
-        for (i, e) in m.e.iter_mut().enumerate() {
-            let o = 16 + i * 56;
-            e.half = s[o];
-            if e.half > 2 {
+        let seq = u64::from_le_bytes(s[8..16].try_into().ok()?);
+        let mut e = [E0; NTY];
+        for (k, i) in Self::range(g).enumerate() {
+            let o = 16 + k * 56;
+            e[i].half = s[o];
+            if e[i].half > 2 {
                 return None;
             }
-            e.gen = u64::from_le_bytes(s[o + 8..o + 16].try_into().ok()?);
-            e.len = u64::from_le_bytes(s[o + 16..o + 24].try_into().ok()?);
-            e.digest.copy_from_slice(&s[o + 24..o + 56]);
+            e[i].gen = u64::from_le_bytes(s[o + 8..o + 16].try_into().ok()?);
+            e[i].len = u64::from_le_bytes(s[o + 16..o + 24].try_into().ok()?);
+            e[i].digest.copy_from_slice(&s[o + 24..o + 56]);
         }
+        for i in Self::range(g) {
+            m.e[i] = e[i];
+        }
+        if g == 0 { m.seq = seq } else { m.seq2 = seq }
+        Some(())
+    }
+    fn decode(s: &[u8; 512]) -> Option<Manifest> {
+        let mut m = MAN0;
+        Self::decode_g(s, 0, &mut m)?;
         Some(m)
     }
 }
@@ -148,18 +186,28 @@ pub fn store_region<D: BlockDev + ?Sized>(dev: &D) -> Option<(u64, u64)> {
 
 /// The committed manifest (MAN0 when the store was never written).
 pub fn read_manifest<D: BlockDev + ?Sized>(dev: &D, store: (u64, u64)) -> Manifest {
-    let mut best = MAN0;
+    let mut out = MAN0;
     let mut s = [0u8; 512];
-    for k in 0..2 {
-        if dev.read_block(store.0 + k, &mut s).is_ok() {
-            if let Some(m) = Manifest::decode(&s) {
-                if m.seq >= best.seq {
-                    best = m;
+    for g in 0..2usize {
+        // each group: the higher valid seq of its two alternating copies
+        let mut best: Option<Manifest> = None;
+        for k in 0..2u64 {
+            let mut m = MAN0;
+            if dev.read_block(store.0 + 2 * g as u64 + k, &mut s).is_ok() && Manifest::decode_g(&s, g, &mut m).is_some() {
+                let seq = if g == 0 { m.seq } else { m.seq2 };
+                if best.as_ref().map_or(true, |b| seq >= if g == 0 { b.seq } else { b.seq2 }) {
+                    best = Some(m);
                 }
             }
         }
+        if let Some(b) = best {
+            for i in Manifest::range(g) {
+                out.e[i] = b.e[i];
+            }
+            if g == 0 { out.seq = b.seq } else { out.seq2 = b.seq2 }
+        }
     }
-    best
+    out
 }
 
 /// Absolute LBA of a type's slot in `half` (1 = A, 2 = B): (signature sector, first data sector).
@@ -249,6 +297,20 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
         Ty::Allow => crate::shield::check_sig(b"HQASIG1\0", b"HQALW1", sig, key, &mut digest_of),
         Ty::Ioc => crate::ioc::check_sig(sig, key, &mut digest_of),
         Ty::Oui => crate::oui::check_sig(sig, key, &mut digest_of),
+        Ty::Wan | Ty::Wifi | Ty::Policy => {
+            let mut buf = [0u8; hal::policy::POLICY_FILE_LEN];
+            let n = (cap as usize).min(buf.len());
+            let mut sec = [0u8; 512];
+            for k in 0..n / 512 {
+                dev.read_block(data_lba + k as u64, &mut sec).map_err(|_| LoadErr::Io)?;
+                buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
+            }
+            match t {
+                Ty::Wan => crate::policysig::verify_wan(&buf[..n], sig, key).map(|g| (g, u64::from_le_bytes(sig[16..24].try_into().unwrap()))).map_err(|_| LoadErr::BadSignature),
+                Ty::Wifi => crate::wificfg::check_sig(sig, key, &buf[..n]).map(|(g, l)| (g, l as u64)).ok_or(LoadErr::BadSignature),
+                _ => crate::policysig::verify(&buf[..n], sig, key, crate::policysig::floor()).map(|g| (g, n as u64)).map_err(|_| LoadErr::BadSignature),
+            }
+        }
         Ty::Devices | Ty::Rules => {
             let buf = unsafe { &mut *core::ptr::addr_of_mut!(VBUF) };
             let n = (cap as usize).min(buf.len());
@@ -278,6 +340,8 @@ pub fn reload<D: BlockDev>(dev: &D, t: Ty) -> Result<(), ()> {
         Ty::Rules => crate::rulepack::load(dev).file != 2,
         Ty::Oui => crate::oui::load(dev).file != 2,
         Ty::Devices => crate::devpolicy::load(dev).file != 2,
+        // ADR 0058: staged — its boot loader verifies it again at the next boot (a refusal there falls back)
+        Ty::Wan | Ty::Wifi | Ty::Policy => true,
     };
     if ok { Ok(()) } else { Err(()) }
 }
@@ -302,6 +366,8 @@ pub enum ActErr {
     Readback,
     /// The module's loader refused the new copy after commit — rolled back to the previous one.
     LoaderRefused,
+    /// Rollback: no other half, or it does not verify.
+    NothingToRollBack,
 }
 
 /// Copy a verified pack (`sig` + `len` bytes at `src_lba` — the staging area) into the inactive half of
@@ -335,30 +401,65 @@ pub fn activate<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src_lba: u64, 
     if h.finish() != *digest || back != *sig {
         return Err(ActErr::Readback);
     }
+    let g = group(t);
     let mut m = old;
-    m.seq = old.seq + 1;
+    if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
     m.e[t as usize] = Entry { half, gen, len, digest: *digest };
-    commit(dev, store, &m)?;
+    commit(dev, store, &m, g)?;
     unsafe { DISABLED &= !(1 << t as u8) };
     if reload(dev, t).is_err() {
         let mut back = old;
-        back.seq = m.seq + 1;
-        let _ = commit(dev, store, &back);
+        if g == 0 { back.seq = m.seq + 1 } else { back.seq2 = m.seq2 + 1 }
+        let _ = commit(dev, store, &back, g);
         let _ = reload(dev, t);
         return Err(ActErr::LoaderRefused);
     }
     Ok(m)
 }
 
-fn commit<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), m: &Manifest) -> Result<(), ActErr> {
-    let s = m.encode();
-    dev.write_block(store.0 + (m.seq & 1), &s).map_err(|_| ActErr::Io)?;
+fn commit<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), m: &Manifest, g: usize) -> Result<(), ActErr> {
+    let s = m.encode_g(g);
+    let lba = store.0 + 2 * g as u64 + ((if g == 0 { m.seq } else { m.seq2 }) & 1);
+    dev.write_block(lba, &s).map_err(|_| ActErr::Io)?;
     let mut back = [0u8; 512];
-    dev.read_block(store.0 + (m.seq & 1), &mut back).map_err(|_| ActErr::Io)?;
+    dev.read_block(lba, &mut back).map_err(|_| ActErr::Io)?;
     if back != s {
         return Err(ActErr::Readback);
     }
     Ok(())
+}
+
+/// ADR 0058: re-activate the OTHER half of a type (the previous generation), after verifying it again with the
+/// type's own verifier. Staged types apply at the next boot; packs reload now (rolled back on refusal). POLICY can
+/// never go below its persisted generation floor (its verifier refuses — `policysig::floor`).
+pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, ActErr> {
+    let store = store_region(dev).ok_or(ActErr::NoStore)?;
+    let old = read_manifest(dev, store);
+    let cur = old.e[t as usize].half;
+    if cur == 0 {
+        return Err(ActErr::NothingToRollBack);
+    }
+    let other = if cur == 1 { 2 } else { 1 };
+    let (sl, dl) = slot(store, t, other);
+    let mut sig = [0u8; 512];
+    dev.read_block(sl, &mut sig).map_err(|_| ActErr::Io)?;
+    let (gen, len) = verify(&*dev, t, &sig, dl, key).map_err(|_| ActErr::NothingToRollBack)?;
+    let mut h = boot_abi::sha256::Hasher::new();
+    crate::store::stream_blocks(&*dev, dl, len, &mut |c| h.update(c)).ok_or(ActErr::Io)?;
+    let g = group(t);
+    let mut m = old;
+    if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
+    m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish() };
+    commit(dev, store, &m, g)?;
+    unsafe { DISABLED &= !(1 << t as u8) };
+    if reload(dev, t).is_err() {
+        let mut back = old;
+        if g == 0 { back.seq = m.seq + 1 } else { back.seq2 = m.seq2 + 1 }
+        let _ = commit(dev, store, &back, g);
+        let _ = reload(dev, t);
+        return Err(ActErr::LoaderRefused);
+    }
+    Ok(gen)
 }
 
 // ---- [P-artstore] ------------------------------------------------------------------------------------------
@@ -496,6 +597,38 @@ pub fn selftest() -> bool {
     let m3 = read_manifest(d, store);
     let rollback = r == Err(ActErr::LoaderRefused) && m3.e[Ty::Devices as usize].half == 1 && m3.e[Ty::Devices as usize].gen == 7
         && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x61]) == crate::devpolicy::Pol::Quarantine;
+    // ADR 0058 owner rollback: the other half now holds the pack the loader refused, so a rollback to it is
+    // refused (manifest unchanged); after a fresh valid gen 8, rollback re-verifies half A (gen 7) and
+    // re-activates it; a type with nothing committed has nothing to roll back to
+    let rb_bad = self::rollback(d, Ty::Devices, &key) == Err(ActErr::NothingToRollBack) && read_manifest(d, store).e[Ty::Devices as usize].half == 1;
+    let a8 = activate(d, Ty::Devices, &sig2, stage, 8, body2.len() as u64, &boot_abi::sha256::digest(body2)).is_ok()
+        && read_manifest(d, store).e[Ty::Devices as usize].half == 2;
+    let rb1 = self::rollback(d, Ty::Devices, &key);
+    let rb_ok = rb1 == Ok(7) && read_manifest(d, store).e[Ty::Devices as usize].half == 1
+        && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x61]) == crate::devpolicy::Pol::Quarantine;
+    let rb_none = self::rollback(d, Ty::Wan, &key) == Err(ActErr::NothingToRollBack);
+    let owner_rb = rb_bad && a8 && rb_ok && rb_none;
+    if !owner_rb {
+        arch_aarch64::_print(format_args!(" [P-artstore] debug rollback: bad-half-refused={} fresh-gen8={} rb={:?} none={}\n", rb_bad, a8, rb1, rb_none));
+    }
+    // ADR 0058 staged config type: a signed WAN.TXT activates into manifest group 1 (group 0 untouched),
+    // locate() prefers the store copy, a wrong-key copy is refused before any write
+    let seq0 = read_manifest(d, store).seq;
+    let wbody = b"mode=dhcp\n";
+    let wsig = test_sig(b"HQNSIG1\0", b"HQWAN1", 3, wbody, &kp);
+    let mut ws = [0u8; 512];
+    ws[..wbody.len()].copy_from_slice(wbody);
+    let _ = d.write_block(stage, &ws);
+    let wver = verify(d, Ty::Wan, &wsig, stage, &key) == Ok((3, wbody.len() as u64)) && verify(d, Ty::Wan, &wsig, stage, &other).is_err();
+    let wa = activate(d, Ty::Wan, &wsig, stage, 3, wbody.len() as u64, &boot_abi::sha256::digest(wbody));
+    let wm = read_manifest(d, store);
+    let staged_ok = wver && wa.is_ok() && Ty::Wan.staged() && !Ty::Devices.staged() && wm.seq == seq0 && wm.seq2 == 1
+        && wm.e[Ty::Wan as usize].half == 1 && wm.e[Ty::Wan as usize].gen == 3 && active_gen(d, 0, Ty::Wan) == 3
+        && locate(d, 0, b"WAN     TXT") == Some((slot(store, Ty::Wan, 1).1, Ty::Wan.data_sect()));
+    if !staged_ok {
+        arch_aarch64::_print(format_args!(" [P-artstore] debug wan: ver={} act={:?} seq {}->{} seq2={} half={} gen={} active={} locate={:?}\n",
+            wver, wa.is_ok(), seq0, wm.seq, wm.seq2, wm.e[Ty::Wan as usize].half, wm.e[Ty::Wan as usize].gen, active_gen(d, 0, Ty::Wan), locate(d, 0, b"WAN     TXT")));
+    }
     // tampered at rest: boot fallback disables the store copy for this boot
     let (_, dl) = slot(store, Ty::Devices, 1);
     let _ = d.read_block(dl, &mut s);
@@ -506,10 +639,10 @@ pub fn selftest() -> bool {
     unsafe { DISABLED = 0 };
     crate::policysig::selftest_key(None);
     crate::devpolicy::load_text(b"");
-    let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && fell_back;
+    let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && owner_rb && staged_ok && fell_back;
     arch_aarch64::_print(format_args!(
-        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} tampered-at-rest falls back to FAT={}\n",
-        if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, fell_back
+        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest falls back to FAT={}\n",
+        if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, owner_rb, staged_ok, fell_back
     ));
     pass
 }

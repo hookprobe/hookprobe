@@ -151,10 +151,15 @@ grep -q '"refused":"value' <<<"$BLR" && ok "G47: a label outside the grammar is 
 RB=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=apply+now&permanent=true&seq=$((SQN+2))&owner_key=wrong-key-000000000" "$B/api/reboot")
 grep -q 're-authentication failed' <<<"$RB" && ok "G49: /api/reboot refuses without owner re-authentication" || bad "reboot guard: $RB"
 # ADR 0058: the full trust-anchor key is exposed (null on an image without an operator key)
-curl -s -m 10 $C "$B/api/network" | jget "d.get('available') is False or 'public_key' in d['trust_anchor']" | grep -q True && ok "ADR 0058: /api/network trust_anchor carries public_key" || bad "trust_anchor public_key missing"
+curl -s -m 10 $C "$B/api/network" | jget "(lambda k: k is None or (len(k)==64 and all(c in '0123456789abcdef' for c in k)))(d['trust_anchor']['public_key'])" | grep -q True && ok "ADR 0058: /api/network trust_anchor carries public_key" || bad "trust_anchor public_key missing"
 UPS=$(curl -s -m 10 $C "$B/api/upload")
-echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices'] and all(t['source']=='boot' for t in d['types']) and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
+echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices','wan','wifi','policy'] and all(t['source']=='boot' for t in d['types']) and [t['applies'] for t in d['types']]==['now']*6+['next_boot']*3 and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"
+# ADR 0058 rollback: owner re-authentication first; with no artifact store in QEMU nothing can be rolled back
+RBK=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+3))&owner_key=wrong-key-000000000" "$B/api/upload/rollback")
+grep -q 're-authentication failed' <<<"$RBK" && ok "ADR 0058: /api/upload/rollback refuses without owner re-authentication" || bad "rollback guard: $RBK"
+RBN=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+4))" --data-urlencode "owner_key=$TOKEN" "$B/api/upload/rollback")
+grep -q '"refused":"no artifact store"' <<<"$RBN" && ok "ADR 0058: rollback with no artifact store is refused honestly" || bad "rollback without store: $RBN"
 EN=$(curl -s -m 10 $C "$B/api/engines")
 echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=2 for e in d['engines'])" | grep -q True \
   && ok "/api/engines: the device's real detection tiers, signature hits counted" || bad "/api/engines: $EN"

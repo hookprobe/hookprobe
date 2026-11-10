@@ -174,19 +174,27 @@ pub fn load<D: hal::BlockDev>(dev: &D) -> Option<Result<WifiCfg, CfgErr>> {
     if p1 == 0 {
         return None;
     }
-    let (lba, n) = crate::fat::locate_contiguous(dev, p1, b"WIFI    TXT")?;
+    let (lba, n) = crate::artstore::locate(dev, p1, b"WIFI    TXT")?;
     let mut buf = [0u8; 1024];
     for k in 0..(n as usize).min(2) {
         dev.read_block(lba + k as u64, &mut sec).ok()?;
         buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
     }
     let mut body: &[u8] = &buf;
-    if let Some(key) = crate::policysig::POLICY_PUBKEY {
+    // the device's EFFECTIVE operator key (the pinned anchor, like POLICY / WAN / the packs), not only the image's
+    if let Some(key) = crate::policysig::key() {
         let mut sig = [0u8; 512];
-        let ok = crate::fat::locate_contiguous(dev, p1, b"WIFI    SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).and_then(|_| check_sig(&sig, &key, &buf));
+        let ok = crate::artstore::locate(dev, p1, b"WIFI    SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).and_then(|_| check_sig(&sig, &key, &buf));
         match ok {
             Some((_, len)) => body = &buf[..len],
-            None => return Some(Err(CfgErr::Missing("valid WIFI.SIG"))),
+            None => {
+                // ADR 0058: a refused staged copy falls back to the boot partition's WIFI.TXT for this boot
+                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wifi) {
+                    crate::artstore::disable(crate::artstore::Ty::Wifi);
+                    return load(dev);
+                }
+                return Some(Err(CfgErr::Missing("valid WIFI.SIG")));
+            }
         }
     }
     Some(parse(body))
