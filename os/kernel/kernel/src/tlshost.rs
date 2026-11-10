@@ -175,9 +175,11 @@ impl TlsHost {
             }
             h.io[p] = f;
         }
-        // INIT blob: [scalar 32][u16 n]{[u16 len][der]}*
+        // INIT blob: [scalar 32][u16 n]{[u16 len][der]}* — stored WITHOUT the scalar (ADR 0051 D3, audit
+        // §2.1 #6): `init` re-derives it from the SRK for each INIT (first start and every restart) and
+        // zeroises its copies, so the key lives only in the EL0 server's memory.
+        let _ = scalar;
         let mut b = [0u8; 4096];
-        b[..32].copy_from_slice(scalar);
         let mut p = 34;
         let mut n = 0u16;
         for c in chain.iter().take(4) {
@@ -199,8 +201,18 @@ impl TlsHost {
     }
 
     fn init(&mut self) {
-        let blob = self.init_blob;
+        let mut blob = self.init_blob;
+        let Some(mut k) = device_tls_scalar(0) else {
+            self.ready = false;
+            return;
+        };
+        blob[..32].copy_from_slice(&k);
         let r = self.call(CMD_INIT, 0, &blob[..self.init_len], 0);
+        // zeroise every EL1 copy of the scalar: the local blob, the derived key, the INIT input in the IO page
+        for x in blob[..32].iter_mut().chain(k.iter_mut()) {
+            unsafe { core::ptr::write_volatile(x, 0) };
+        }
+        self.write(IN_OFF, &[0u8; 32]);
         if r.status == ST_OK && r.tls_len == 65 {
             let mut k = [0u8; 65];
             self.read(OUT_TLS_OFF, &mut k);
@@ -414,7 +426,12 @@ pub fn bring_up<D: hal::BlockDev>(dev: Option<&D>) {
     let mut file = [0u8; CERT_FILE_LEN];
     let have = dev.is_some_and(|d| load_cert_file(d, &mut file));
     let (chain, n) = cert_chain(&file);
-    let Some(h) = TlsHost::load(&scalar, &chain[..n]) else {
+    let mut scalar = scalar;
+    let loaded = TlsHost::load(&scalar, &chain[..n]);
+    for x in scalar.iter_mut() {
+        unsafe { core::ptr::write_volatile(x, 0) };
+    }
+    let Some(h) = loaded else {
         kprint!(" [MC-TLS] OFF — EL0 TLS server failed to load\n");
         return;
     };

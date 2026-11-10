@@ -133,4 +133,5 @@ Pwasmel0
 Pwasmiel0
 Pwasmparity
 Pwificfg
+Pwriterate
 Pwx
