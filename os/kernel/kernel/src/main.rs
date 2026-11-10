@@ -3709,7 +3709,8 @@ fn cm5_p10_probe() {
                         #[cfg(feature = "mcserve")]
                         let mut mcn: Option<mcserve::McNode> = {
                             if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
-                                let owner = crate::mcauth::load_owner(&dev);
+                                let (owner, src) = ownerapi::effective_owner(crate::mcauth::load_owner(&dev));
+                                kprint!(" [OWNER] Mission Control owner key: {}\n", if owner.is_some() { src } else { "UNCLAIMED (no OWNER.TXT)" });
                                 mcserve::set_owner(owner);
                                 kprint!(" [AP-MC] owner: {}\n", if owner.is_some() { "CLAIMED — sign-in required" } else { "UNCLAIMED — protected routes refuse" });
                                 #[cfg(feature = "mctls")]
@@ -6884,6 +6885,8 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
         #[cfg(feature = "netsvc")]
+        let _ = ownerapi::rotate_selftest();
+        #[cfg(feature = "netsvc")]
         let _ = upload::selftest();
         #[cfg(all(feature = "securechannel", feature = "p15-write"))]
         let _ = evlog::selftest();
@@ -7023,6 +7026,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = actions::seq_floor_selftest();
         let _ = bpf::verify_heap_selftest();
         let _ = policysig::wansig_selftest();
+
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
             use arch_aarch64::crashrec::{take, write};

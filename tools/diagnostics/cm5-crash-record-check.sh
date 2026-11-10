@@ -14,8 +14,8 @@ chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else 
 since() { tail -c +$(($1 + 1)) "$LOG" | tr -d '\r\000'; }
 wait_for() { local t=0; while [ $t -lt "$3" ]; do since "$1" | grep -aE "$2" >/dev/null && return 0; sleep 3; t=$((t + 3)); done; return 1; }
 mark=${J10_MARK:-$(stat -c %s "$LOG")}   # J10_MARK: a serial-log offset taken BEFORE the boot (the panic can come early)
-wait_for "$mark" "\[PANIC\].*crashtest" 420; chk $? "the crashtest image panicked in the AP loop"
-m2=$(since "$mark" | grep -abo "\[PANIC\].*crashtest" | head -1 | cut -d: -f1); m2=$((mark + ${m2:-0}))
+wait_for "$mark" "crashtest: deliberate panic" 420; chk $? "the crashtest image panicked in the AP loop"
+m2=$(since "$mark" | grep -abo "crashtest: deliberate panic" | head -1 | cut -d: -f1); m2=$((mark + ${m2:-0}))
 wait_for "$m2" "\[CRASH\] the previous boot ended in a panic: .*crashtest" 300; chk $? "the next boot reports the crash record (DRAM kept the page across the reset)"
 since "$m2" | grep -a "\[CRASH\]" | tail -1 | cut -c1-240
 wait_for "$m2" "\[P11-AP3\] persistent WPA2 AP serve loop up" 240; chk $? "the AP is back after the crash"
