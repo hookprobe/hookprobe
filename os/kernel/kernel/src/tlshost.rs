@@ -435,16 +435,19 @@ pub fn bring_up<D: hal::BlockDev>(dev: Option<&D>) {
         kprint!(" [MC-TLS] OFF — EL0 TLS server failed to load\n");
         return;
     };
-    kprint!(" [MC-TLS] device TLS key (P-256, SRK-derived) pub=");
-    for b in h.pubkey.iter() {
-        kprint!("{:02x}", b);
+    // one kprint (the factory station parses this line; several calls could be split by an interleaved print)
+    let mut hex = [0u8; 130];
+    for (i, b) in h.pubkey.iter().enumerate() {
+        const H: &[u8; 16] = b"0123456789abcdef";
+        hex[2 * i] = H[(b >> 4) as usize];
+        hex[2 * i + 1] = H[(b & 15) as usize];
     }
-    kprint!("\n");
+    kprint!(" [MC-TLS] device TLS key (P-256, SRK-derived) pub={}\n", core::str::from_utf8(&hex).unwrap_or("?"));
     if h.ready {
         kprint!(" [MC-TLS] HTTPS ready on :443 — certificate chain of {} from MCTLS.CRT, TLS1.3 CHACHA20_POLY1305 / X25519 / ECDSA-P256, EL0 server (ADR 0051)\n", n);
     } else if have {
         kprint!(" [MC-TLS] HTTPS OFF — MCTLS.CRT present but rejected by the server (wrong key / malformed)\n");
     } else {
-        kprint!(" [MC-TLS] HTTPS OFF — no certificate provisioned (MCTLS.CRT empty); certify the key above with the owner CA\n");
+        kprint!(" [MC-TLS] HTTPS OFF — no certificate provisioned (MCTLS.CRT empty); certify the key above with the factory CA (mctls-provision.py)\n");
     }
 }

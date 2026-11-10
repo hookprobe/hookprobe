@@ -2863,6 +2863,8 @@ fn cm5_p10_probe() {
         unsafe { arch_aarch64::cyw43::DEVICE_MAC = Some(m) };
         kprint!(" [WIFI] per-device MAC {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} (locally administered, derived from the device secret)\n", m[0], m[1], m[2], m[3], m[4], m[5]);
     }
+    #[cfg(feature = "hboot")]
+    print_id_line();
     kprint!(" [P10] CYW43455 WiFi (SDIO) — power on radio (WL_ON gpio28 + clk_emmc2), then Stage A\n");
     let clk = cyw43::radio_power_on();
     kprint!(" [P10] WL_ON asserted; clk_emmc2 = {} Hz {}\n", clk, if clk > 0 { "(clock live)" } else { "(clock OFF — mailbox failed?)" });
@@ -3475,6 +3477,8 @@ fn cm5_p10_probe() {
                         struct WqBuf([[u8; WQ_SZ]; WQ_N]);
                         static mut WQBUF: WqBuf = WqBuf([[0; WQ_SZ]; WQ_N]);
                         let wq = unsafe { &mut (*core::ptr::addr_of_mut!(WQBUF)).0 };
+                        #[cfg(feature = "mcserve")]
+                        let mut cred_reprint_at = 0u64; // first reminder ~5 min after power-on
                         let mut wq_len = [0usize; WQ_N];
                         let (mut wq_head, mut wq_n) = (0usize, 0usize);
                         // AP TX priority (soak 2026-11-10: DNS answers lost / 2-s tails behind a saturating download):
@@ -3705,7 +3709,8 @@ fn cm5_p10_probe() {
                         #[cfg(feature = "mcserve")]
                         let mut mcn: Option<mcserve::McNode> = {
                             if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
-                                let owner = crate::mcauth::load_owner(&dev);
+                                let (owner, src) = ownerapi::effective_owner(crate::mcauth::load_owner(&dev));
+                                kprint!(" [OWNER] Mission Control owner key: {}\n", if owner.is_some() { src } else { "UNCLAIMED (no OWNER.TXT)" });
                                 mcserve::set_owner(owner);
                                 kprint!(" [AP-MC] owner: {}\n", if owner.is_some() { "CLAIMED — sign-in required" } else { "UNCLAIMED — protected routes refuse" });
                                 #[cfg(feature = "mctls")]
@@ -4767,6 +4772,16 @@ fn cm5_p10_probe() {
                                                 dg[8], dg[9], dg[10], dg[11] & 0xffff, dg[11] >> 16, dg[12], dg[13], dg[14], dg[15], dg[3],
                                                 dg[3] & 0xff, (dg[3] >> 8) & 0xff);
                                         }
+                                        // Factory station: while the unit is UNCLAIMED, repeat the setup credential line every 5 min
+                                        // (a capture that missed power-on no longer needs a reboot); never once an owner exists.
+                                        #[cfg(feature = "mcserve")]
+                                        if let Some(c) = &setup {
+                                            if !mcserve::claimed() && now().wrapping_sub(cred_reprint_at) > 300 * freq {
+                                                cred_reprint_at = now();
+                                                let mut qb = [0u8; 64];
+                                                kprint!(" [WIFI] setup AP \"{}\" — per-device passphrase {} (label / QR: {}) [unclaimed reminder]\n", c.ssid_str(), c.psk_str(), apcred::qr_payload(c, &mut qb));
+                                            }
+                                        }
                                         kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | prio direct={} queued={} dropped={} pending={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
                                             wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop, prio_direct, prio_queued, prio_dropped, pq_n,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
@@ -5532,6 +5547,34 @@ fn device_identity_keypair() -> Option<ed25519_compact::KeyPair> {
     let srk = seal_srk()?;
     let seed = boot_abi::kdf::hkdf_expand32(&srk, b"HEQK-DEVICE-IDENTITY-ed25519-v1");
     Some(ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed)))
+}
+
+/// Factory station / G19 allowlist (2026-11-10): ONE line per boot naming this unit — image build id, git
+/// revision and SVN, the SRK-derived Wi-Fi MAC, and the device identity public key (Ed25519, the key the MSSP /
+/// super-PoP enrolls) with its fingerprint. All public. Without an SRK (blank OTP) it says so.
+#[cfg(feature = "hboot")]
+fn print_id_line() {
+    let bi = unsafe { &*(boot_abi::BOOTINFO_ADDR as *const boot_abi::BootInfo) };
+    let svn = if bi.magic == boot_abi::BOOTINFO_MAGIC { bi.svn } else { 0 };
+    let (build, git) = (option_env!("HEQK_BUILD_ID").unwrap_or("-"), option_env!("HEQK_GIT").unwrap_or("-"));
+    match seal_srk() {
+        Some(srk) => {
+            let m = apcred::wifi_mac(&srk).unwrap_or([0; 6]);
+            let seed = boot_abi::kdf::hkdf_expand32(&srk, b"HEQK-DEVICE-IDENTITY-ed25519-v1");
+            let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new(seed));
+            let fp = boot_abi::sha256::digest(&kp.pk[..]);
+            let mut hex = [0u8; 64];
+            for (i, b) in kp.pk.iter().enumerate() {
+                const H: &[u8; 16] = b"0123456789abcdef";
+                hex[2 * i] = H[(b >> 4) as usize];
+                hex[2 * i + 1] = H[(b & 15) as usize];
+            }
+            kprint!(" [ID] image={} git={} svn={} mac={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} fp={:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x} pk={}\n",
+                build, git, svn, m[0], m[1], m[2], m[3], m[4], m[5], fp[0], fp[1], fp[2], fp[3], fp[4], fp[5], fp[6], fp[7],
+                core::str::from_utf8(&hex).unwrap_or("?"));
+        }
+        None => kprint!(" [ID] image={} git={} svn={} — no device secret (blank customer OTP): no unit identity\n", build, git, svn),
+    }
 }
 
 /// PH2a (AUDIT R1): consume the SRK from the fixed handoff page EXACTLY ONCE — copy it into
@@ -6842,6 +6885,8 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
         #[cfg(feature = "netsvc")]
+        let _ = ownerapi::rotate_selftest();
+        #[cfg(feature = "netsvc")]
         let _ = upload::selftest();
         #[cfg(all(feature = "securechannel", feature = "p15-write"))]
         let _ = evlog::selftest();
@@ -6981,6 +7026,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = actions::seq_floor_selftest();
         let _ = bpf::verify_heap_selftest();
         let _ = policysig::wansig_selftest();
+
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
             use arch_aarch64::crashrec::{take, write};
