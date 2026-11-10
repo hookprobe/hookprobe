@@ -7,7 +7,7 @@ during the autonomous work, and none will be made without the owner's explicit, 
 |---|---|---|
 | D-OTP — customer OTP provisioning | **Production blocker** | Production readiness = **BLOCKED**. Normal images never write OTP (`otp-provision` is a separate HBoot build). |
 | D-RPMB — eMMC RPMB key programming | **Owner decision required** | No RPMB access exists in the code (the eMMC driver has no partition-switch path). Evidence (RPMB size) collected read-only. |
-| WPA3 on the AP | **Evidence pending** (not a decision yet) | Firmware feature string captured on the next boot (`[WIFI-CAP]`); no assumption of vendor support. |
+| WPA3 on the AP | **Evidence in (batch 30): no alternative firmware needed** | `[WIFI-CAP] sae=false sae_ext=true mfp=true fwsup=false` — the host runs SAE (external SAE) and PMF is supported. WPA3-SAE + PMF is now a build item (Phase 6). |
 
 ---
 
@@ -117,7 +117,8 @@ Both must be implemented and demonstrated; until then RPMB adds nothing.
 ### Dependencies
 - **D-OTP first** (recommended key = `HKDF(SRK, "HQ-rpmb-key-v1")`: no key storage, unit-unique, no
   extra secret in any image). Without OTP there is no SRK, hence no RPMB key.
-- Evidence: this eMMC's RPMB size — `[EMMC-RPMB] RPMB_SIZE_MULT=…` on the next boot (read-only).
+- Evidence (batch 30, read-only probe): `[EMMC-RPMB] RPMB_SIZE_MULT=32 (RPMB partition 4096 KiB) REL_WR_SEC_C=1 EXT_CSD_REV=8` —
+  an eMMC 5.1 part with a 4 MiB RPMB partition: ample for the high-water record. Nothing was accessed.
 
 ### Recommended implementation (for approval)
 1. eMMC driver: a reviewed RPMB module — switch to the RPMB partition, authenticated read / write-counter
@@ -136,9 +137,15 @@ and the human register.
 
 ---
 
-## WPA3 on the AP — evidence pending
-No assumption of vendor support. Facts so far: the firmware answers the `mfp` iovar (PMF possible host-side);
-it has no in-firmware supplicant (`fwsup` / `idsup` absent, 2026-09-10). The next boot prints the full
-feature string (`[WIFI-CAP] sae=… sae_ext=… mfp=… fwsup=…`), preserved in
-`batch30/evidence-wifi-cap-rpmb-rtc.txt` and summarised in the audit. If neither `sae` + `fwsup` nor
-`sae_ext` is present, WPA3-SAE on the AP requires different firmware from the vendor (a supplier dependency).
+## WPA3 on the AP — evidence in (batch 30, 2026-11-10)
+Verbatim from the CM5 serial console (`docs/design/metal-evidence/20261110-batch30.md`):
+`[WIFI-CAP] sae=false sae_ext=true mfp=true fwsup=false idsup=false | ap sta wme … mfp sae_ext fbt …`
+
+- `sae_ext` — the firmware supports **external SAE**: the host performs the SAE (dragonfly) commit/confirm
+  exchange and hands the PMK to the firmware, exactly as heqk already runs the WPA2 4-way handshake on the host.
+- `mfp` — 802.11w protected management frames (needed for WPA3, optional for WPA2).
+- `fwsup` / `idsup` absent — no in-firmware supplicant/authenticator (known; heqk does it on the host).
+
+**Conclusion: no alternative vendor firmware is required.** WPA3-SAE (with PMF, WPA2/WPA3 transition mode) is
+a host-side build item in Phase 6: SAE over P-256 (hash-to-element), the auth-frame exchange through the
+firmware's external-auth path, PMF/IGTK in the authenticator, then metal tests with WPA3 phones.
