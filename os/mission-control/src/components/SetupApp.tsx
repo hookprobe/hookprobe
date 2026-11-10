@@ -77,8 +77,8 @@ const SetupApp: Component = () => {
         if (sample()) { res.push({ name, txt, sig, sigName, result: 'signed (preview: no device)', staged: false }); continue; }
         setBusy(`Sending ${name} to the device…`);
         try {
-          await uploadPack(type, new File([new Uint8Array(sig), new Uint8Array(txt)], `${type}.pack`), () => window.prompt('Enter the owner key from your card:', ''), () => undefined);
-          res.push({ name, txt, sig, sigName, result: 'staged for the next restart', staged: true });
+          const r = await uploadPack(type, new File([new Uint8Array(sig), new Uint8Array(txt)], `${type}.pack`), () => window.prompt('Enter the owner key from your card:', ''), () => undefined);
+          res.push({ name, txt, sig, sigName, result: r.staged ? 'staged for the next restart' : 'applied', staged: true });
         } catch (e) {
           const m = e instanceof Error ? e.message : String(e);
           res.push({ name, txt, sig, sigName, result: /: type$/.test(m) ? 'the device can’t take it over the network yet' : m, staged: false });
