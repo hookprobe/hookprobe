@@ -39,6 +39,8 @@ on:
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
       - "tools/ci/stage-firmware.sh"
+      - "tools/detbench/**"   # run by the QEMU gate job
+      - "tools/fuzz/**"       # run by the heqk-fuzz job
   pull_request:
     paths:
       - "os/kernel/**"
@@ -46,6 +48,8 @@ on:
       - "os/mission-control/**"
       - ".github/workflows/build-heqk.yml"
       - "tools/ci/stage-firmware.sh"
+      - "tools/detbench/**"   # run by the QEMU gate job
+      - "tools/fuzz/**"       # run by the heqk-fuzz job
   workflow_dispatch: {}
 
 permissions:
@@ -163,7 +167,7 @@ jobs:
           workspaces: os/kernel
       - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: "24"   # astro >= 7.4.7 requires node >= 22.23.4; match ci.yml / nightly.yml
       - name: Install qemu + FAT tools
         run: |
           sudo apt-get update

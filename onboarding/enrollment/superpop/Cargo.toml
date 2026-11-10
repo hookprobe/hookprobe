@@ -1,0 +1,42 @@
+# heqk super-PoP — the operator-run G19 SASE tunnel endpoint (HOST / std, Linux).
+#
+# Devices that are configured with a PoP complete the SAME PQ-hybrid Noise IK handshake they use
+# for enrollment (unicast to <pop>:7654), then carry their tunnelled LAN traffic as Noise datagram
+# records on UDP 7655. The PoP decapsulates into a Linux TUN device and the host NATs it out.
+#
+# Like responder-sim, it links the kernel's EXACT `securechannel.rs` via `#[path]` (byte-for-byte
+# wire compatibility, no second implementation). Never shipped on-device; the device never depends
+# on it (standalone-by-default: no PoP configured => no tunnel).
+[package]
+name = "superpop"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
+
+# Standalone workspace — never absorbed by the parent aarch64-none heqk workspace.
+[workspace]
+
+[features]
+# securechannel.rs is gated on `securechannel`; ResponderStatic::from_seeds is (for now) gated on
+# `securechannel-selftest` — see README "Follow-ups" (a host responder constructor without the
+# selftest accessors is requested from the kernel side).
+default = ["securechannel", "securechannel-selftest"]
+securechannel = []
+securechannel-selftest = []
+
+[dependencies]
+# The SAME crates + versions/features the kernel's `securechannel` feature pins (see responder-sim).
+boot-abi         = { path = "../../../os/kernel/boot-abi" }
+ml-kem           = { version = "=0.3.4", default-features = false }
+x25519-dalek     = { version = "2", default-features = false, features = ["static_secrets"] }
+chacha20poly1305 = { version = "0.10", default-features = false }
+ed25519-compact  = { version = "2", default-features = false }
+getrandom        = "0.2"
+libc             = "0.2"
+# Host stub so securechannel.rs's `arch_aarch64::_print` resolves on the host (shared with responder-sim).
+arch_aarch64     = { path = "../responder-sim/arch-stub", package = "arch-stub" }
+
+[[bin]]
+name = "superpop"
+path = "src/main.rs"
