@@ -403,8 +403,12 @@ fn classify_tiers_n(frame: &[u8], nframe: &[u8], meta: Option<crate::net::Packet
             if m.ip_proto == crate::net::IPPROTO_TCP {
                 if let Some(&off) = frame.get(m.l4_off + 12) {
                     let pay = m.l4_off + ((off >> 4) as usize) * 4;
-                    if pay < frame.len() {
-                        crate::ja4::observe(&frame[pay..], src);
+                    if pay < frame.len() && frame.len() >= 12 {
+                        let mut mac = [0u8; 6];
+                        mac.copy_from_slice(&frame[6..12]);
+                        if crate::ja4::observe_dev(&frame[pay..], src, &mac) {
+                            return (0, DROP); // rule 126 enforcement: DNS bypass to a Shield-blocked name
+                        }
                     }
                 }
             }
