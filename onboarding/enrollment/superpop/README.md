@@ -53,6 +53,8 @@ sudo ./target/release/superpop run --key-file /etc/superpop/pop.key --devices /e
 sudo ./superpop-net.sh hqpop0 <wan-if>                 # address, forwarding, nft forward policy + NAT + MSS clamp
 ```
 
+`--pool CIDR` changes the inner pool (default `100.64.0.0/10`). Use it when the host itself sits in CGNAT space; for a bench, `198.18.0.0/15` (RFC 2544) collides with nothing.
+
 `run` needs `CAP_NET_ADMIN` only to create the TUN. A systemd unit can grant it with `AmbientCapabilities=CAP_NET_ADMIN` and a dedicated user.
 
 ## Tests
@@ -70,6 +72,8 @@ sudo ./superpop-net.sh hqpop0 <wan-if>                 # address, forwarding, nf
 
 ## Follow-ups
 
-1. **Kernel API: set-based msg1 authentication.** `responder_read_msg1` checks one enrolled key, so the PoP tries the allowlist in turn: one ML-KEM decapsulation per device, bounded by the rate limit. A variant taking a lookup over the decrypted identity removes the O(n). Requested from the kernel side.
-2. **Kernel API: a host responder constructor** without the `securechannel-selftest` accessors. `ResponderStatic::from_seeds` is selftest-gated today, so this crate enables that feature, the same as `responder-sim`.
-3. IPv6 inner traffic (DATA with version 6) is reserved in v1.
+1. IPv6 inner traffic (DATA with version 6) is reserved in v1.
+
+Resolved: msg1 is authenticated with `responder_read_msg1_with` (one decapsulation, then an allowlist
+predicate on the decrypted identity), and the responder key builds with `securechannel-host-responder`
+instead of the selftest feature.
