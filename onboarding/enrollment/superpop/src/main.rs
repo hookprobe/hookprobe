@@ -3,7 +3,7 @@
 //!   superpop keygen --key-file F           create the PoP static key (0600); print its public blob
 //!   superpop pub    --key-file F           print the public blob (x25519 pk ‖ ML-KEM ek, hex) to bake
 //!                                          into device images as the pinned PoP key
-//!   superpop run    --key-file F --devices FILE [--tenant HEX] [--dns IP] [--mtu N]
+//!   superpop run    --key-file F --devices FILE [--tenant HEX] [--dns IP] [--mtu N] [--pool CIDR]
 //!                   [--tun NAME] [--bind IP]
 //!   superpop selftest                      in-process device↔PoP end-to-end (no network, no TUN)
 //!   superpop devsim …                      a device simulator over real UDP (test tooling; see devsim.rs)
@@ -129,6 +129,15 @@ fn run(args: &[String]) -> Result<(), String> {
     }
     if let Some(d) = arg(args, "--dns") {
         cfg.dns = parse_ip4(&d).ok_or("bad --dns")?;
+    }
+    if let Some(pl) = arg(args, "--pool") {
+        // e.g. 198.18.0.0/15 for a bench host whose own WAN sits in 100.64.0.0/10 (CGNAT)
+        let (net, len) = pl.split_once('/').ok_or("bad --pool (want a.b.c.d/len)")?;
+        let len: u8 = len.parse().map_err(|_| "bad --pool length")?;
+        if !(8..=30).contains(&len) {
+            return Err("--pool length must be 8..=30".into());
+        }
+        cfg.pool = (parse_ip4(net).ok_or("bad --pool address")?, len);
     }
     if let Some(m) = arg(args, "--mtu") {
         cfg.mtu = m.parse().map_err(|_| "bad --mtu")?;
