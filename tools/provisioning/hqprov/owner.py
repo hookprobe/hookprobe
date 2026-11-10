@@ -13,10 +13,14 @@ import os
 import re
 import secrets
 import stat
+import string
 
 OWNER_FILE_LEN = 128
 MCTLS_FILE_LEN = 4096
-_TOKEN_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"        # make-cm5-heqk-disk.sh:159 (no 0/O/1/I)
+# The owner-token character set (make-cm5-heqk-disk.sh:159): A-Z and 0-9 without the look-alikes 0/O/1/I,
+# 32 symbols = 5 bits each. Built from the stdlib sets so the exclusions are explicit.
+_TOKEN_ALPHABET = "".join(c for c in string.ascii_uppercase + string.digits if c not in "0O1I")
+assert len(_TOKEN_ALPHABET) == 32
 TOKEN_RE = re.compile(r"^[A-HJ-NP-Z2-9]{4}(?:-[A-HJ-NP-Z2-9]{4}){5}$")
 
 
