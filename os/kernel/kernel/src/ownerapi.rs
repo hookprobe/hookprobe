@@ -509,7 +509,9 @@ pub fn effective_owner(file_owner: Option<crate::mcauth::Owner>) -> (Option<crat
 pub fn rotate_selftest() -> bool {
     use crate::mcauth::{session_hex, verifier_for, Auth, Owner};
     let (old, new) = (b"old-owner-key-for-rotation-test" as &[u8], "new-owner-key-for-rotation-0001");
-    let salt = [9u8; 16];
+    let mut salt = [0u8; 16];
+    let salt_src = boot_abi::sha256::sum256(old);
+    salt.copy_from_slice(&salt_src[..16]);
     let file_owner = Owner { salt, verifier: verifier_for(&salt, old) };
     crate::mcauth::set_owner_file_hash([0x11; 32]);
     let mut auth = Auth::new(Some(file_owner));
@@ -555,7 +557,7 @@ pub fn rotate_selftest() -> bool {
     // revoke-all keeps the rotation; boot precedence: same OWNER.TXT -> rotated, a re-flashed one -> the file
     let kept = oj::owner_rotation().is_some();
     let (eff, _) = effective_owner(Some(file_owner));
-    let boot_rotated = eff.is_some_and(|o| o.verifier == verifier_for(&[5; 16], new.as_bytes()));
+    let boot_rotated = eff.is_some_and(|o| o.verifier == verifier_for(&sess, new.as_bytes()));
     crate::mcauth::set_owner_file_hash([0x22; 32]);
     let (eff2, _) = effective_owner(Some(file_owner));
     let reflash_wins = eff2 == Some(file_owner);
