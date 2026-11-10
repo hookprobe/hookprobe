@@ -154,6 +154,9 @@ mod wanntp;
 mod mcauth;
 #[cfg(feature = "netsvc")]
 mod http;
+// GET /api/capabilities: the device manifest Mission Control gates on (granted / denied-with-reason).
+#[cfg(feature = "netsvc")]
+mod capabilities;
 #[cfg(feature = "mcserve")]
 mod mcserve;
 // ADR 0051 — the EL0 TLS server loader + bounded-excursion driver.
@@ -3438,6 +3441,12 @@ fn cm5_p10_probe() {
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
                             // group PN on every join.
                             ap.gtk_set = cyw43::ap_install_gtk(&gtk, 1);
+                            #[cfg(feature = "netsvc")]
+                            {
+                                capabilities::set_wifi_ap(ap.up_ok && ap.ssid_ok);
+                                #[cfg(feature = "wpa3")]
+                                capabilities::set_wpa3(cyw43::ap_security() != cyw43::SEC_WPA2);
+                            }
                             kprint!("   [P11-AP2] cap_has_ap={} apsta={} set_ap={} infra={} chan={} wsec={} wpa_auth={} up={} ssid={} | get_ap={} bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mac_set={} ev={} gtk={} bssid_rb={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} verified={}\n",
                                 ap.cap_has_ap, ap.apsta_ok, ap.set_ap_ok, ap.infra_ok, ap.chan_ok, ap.wsec_ok,
                                 ap.wpa_auth_ok, ap.up_ok, ap.ssid_ok, ap.get_ap,
@@ -7131,6 +7140,8 @@ pub extern "C" fn kmain() -> ! {
                 if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e);
         }
         let _ = ja4id::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = capabilities::selftest();
         let _ = srckey::v6only_selftest();
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
