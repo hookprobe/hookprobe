@@ -1,20 +1,18 @@
 ---
 /**
- * /network/wan — Get Online (Layer 0 pillar): the non-captive lens of the setup portal
- * (MissionControl.md §6b "day-0 setup and day-300 ISP swaps are the same tool"). Same island as
- * /setup for now; the wireframe's link cards + failover order land with the Layer 0 screens.
+ * /network/wan — Get Online (Layer 0 pillar): internet line(s), Wi-Fi, guest network, and an
+ * Advanced view of only what the device reports. The day-0 wizard stays at /setup.
  *
  * Spec: docs/architecture/MissionControl.md §6b · docs/design/mission-control-ui-requirements.md
  */
 
 import Shell from '../../layouts/Shell.astro';
-import SystemSetupApp from '../../components/SystemSetupApp';
-import '../../styles/setup.css';
+import GetOnlineApp from '../../components/GetOnlineApp';
 ---
 
 <Shell
   title="Get Online — HookProbe OS"
-  description="Your internet connection and Wi-Fi: link status, failover and the setup steps, applied as a verified plan."
+  description="Your internet connection and Wi-Fi: what the device applied, and what this hardware can do."
 >
-  <SystemSetupApp client:load />
+  <GetOnlineApp client:load />
 </Shell>
