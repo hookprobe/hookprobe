@@ -294,6 +294,15 @@ See [ADR 0059](../adr/0059-secure-configuration-management.md).
 
 ## E. Implementation roadmap
 
+**MVP order (operator, 2026-11-10):** Phase 0 → Phase 1 (HQCFG1) → Phase 2 (cfgd) → Phase 5 (management ABI + `hsh` at EL0).
+
+**Post-MVP:** Phase 3 (secrets), Phase 4 (delegation), Phase 6 (hardware).
+
+**Ownership:**
+- **Kernel phases:** the heqk session.
+- **Bundle producer (`configBuild.ts`/`signing.ts`) and `os/kernel/tools/hqcfg.py` byte parity:** the Mission Control UI session.
+- **Spec and review:** ADR 0059.
+
 Security defects come first. Every phase is independently shippable and gated by `validate.sh` (QEMU), `mc-e2e.sh` and, where noted, metal.
 
 ### Phase 0: close the defects (in progress or small)

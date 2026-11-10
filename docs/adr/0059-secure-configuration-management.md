@@ -183,8 +183,19 @@ corrupt kernel state. Consequences:
 
 ## Rollout
 
-Phases 0 through 6 are in assessment §E. Security defects come first: Phase 0 (C1 through C4, H1, H2, M1) lands
-before any new feature.
+**MVP build order, confirmed by the operator on 2026-11-10:**
+1. Close the Phase 0 security defects (C1–C4, H1, H2, M1).
+2. Build HQCFG1 verification (assessment Phase 1).
+3. Build cfgd: stage, trial, commit and automatic revert (assessment Phase 2).
+4. Build the management ABI and the native `hsh` at EL0 (assessment Phase 5).
+
+Each step starts only after the previous one passes its gates.
+
+**After the MVP:** secrets at rest (Phase 3), delegation, revocation and the `mgmt_floor` move (Phase 4), and
+hardware anchoring (Phase 6). Until secrets at rest land, the MVP bundle carries the PPPoE password and PSK the
+way ADR 0058 does today, inside the signed region, and the UI keeps saying they are not protected at rest.
+
+Phase details are in assessment §E.
 
 Phase 6, the hardware anchoring work (SEC-3, RPMB, OTP), is made of manufacturing operations: Red-gated and never
 autonomous.
