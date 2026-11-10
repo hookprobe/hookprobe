@@ -29,6 +29,7 @@ import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
 import { configView, refreshConfig } from '../store/configState';
+import { anchorView, refreshAnchor } from '../store/anchor';
 
 type Sec = 'internet' | 'wifi' | 'firewall';
 const SECS: [Sec, string, string][] = [['internet', 'Internet', '/network/wan/advanced'], ['wifi', 'Wi-Fi', '/network/wifi'], ['firewall', 'Firewall and routes', '/protect/policies']];
@@ -63,7 +64,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   onMount(() => {
     setSec(secFor(normPath(location.pathname)));
     window.addEventListener('popstate', () => setSec(secFor(normPath(location.pathname))));
-    void refreshConfig();
+    void refreshConfig(); void refreshAnchor();
     startNetworkLive(); void refreshUploads(); void loadOwnerKey();
   });
 
@@ -138,6 +139,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const [bMsg, setBMsg] = createSignal('');
   const [bStep, setBStep] = createSignal<'review' | 'done' | 'files'>('review');
   const [bFiles, setBFiles] = createSignal<{ bin: Uint8Array; sig: Uint8Array } | null>(null);
+  /** Bind the bundle to this device when it reports its id (it then refuses the bundle on any other device). */
+  const deviceIdBytes = () => { const h = anchorView()?.device_id; return h && /^[0-9a-f]{32}$/i.test(h) ? Uint8Array.from(h.match(/../g)!, (x) => parseInt(x, 16)) : new Uint8Array(16); };
   const takesBundles = () => !!uploadView()?.types.some((t) => t.type === 'config');
   const bundleGen = () => Math.max(configView()?.generation ?? 0, configView()?.floor ?? 0, uploadView()?.types.find((t) => t.type === 'config')?.generation ?? 0) + 1;
   const bundleProblems = createMemo(() => {
@@ -153,7 +156,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const applyBundle = async () => {
     setBMsg('');
     try {
-      const b = buildBundle(bundleSections(), bundleGen(), await ownerKeyId());
+      const b = buildBundle(bundleSections(), bundleGen(), await ownerKeyId(), deviceIdBytes());
       const sig = await signBundle(b);
       setBFiles({ bin: b, sig });
       if (sample() || !takesBundles()) { setBStep('files'); return; }
@@ -398,6 +401,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <Show when={bundleProblems().length > 0}>
             <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Bundle problems"><For each={bundleProblems()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For></ul>
           </Show>
+          <p class="pcard-note" aria-label="Device binding">{anchorView()?.device_id ? `Bound to this device (id ${anchorView()!.device_id!.slice(0, 8)}…): any other device refuses it.` : 'Not bound to a device: this device does not report its id, so the bundle would be accepted by any device that trusts your key.'}</p>
           <p class="pcard-note">The passwords travel inside the signed bundle in clear: not protected at rest yet.</p>
           <Show when={ownerKey()} fallback={<SigningKeyPanel compact />}>
             <button class="hp-btn hp-btn--primary" disabled={bundleProblems().length > 0} onClick={() => void applyBundle()}>{takesBundles() ? 'Sign and upload the bundle' : 'Sign the bundle'}</button>

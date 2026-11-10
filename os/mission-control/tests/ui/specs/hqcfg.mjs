@@ -25,6 +25,9 @@ export default async function (t) {
   const fo = 'route 0.0.0.0/0 via wan metric 10\nroute 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100\n';
   ok(Buffer.from(buildBundle({ policy: fo }, 10, kid)).toString('hex') === V.cases['two-default-routes-wan-mgmt'].bundle,
     'builder: metric-ordered failover (default route via wan and via mgmt) accepted, byte-identical to the vector');
+  const dev = Buffer.from(V.cases['bound-to-this-device'].device_id, 'hex');
+  ok(Buffer.from(buildBundle({ wan: s.wan, wifi: s.wifi, policy: s.policy }, 12, kid, dev)).toString('hex') === V.cases['bound-to-this-device'].bundle,
+    'builder: device-bound bundle (flags bit0 + device_id) byte-identical to the vector');
   let refused = '';
   try { canonicalSection('wifi', 'ssid=a\nssid=b\n'); } catch (e) { refused = e.message; }
   ok(/repeated/.test(refused), 'builder: a repeated key is refused before signing');
@@ -37,6 +40,8 @@ export default async function (t) {
   await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(800);
   ok((await page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1).textContent()).trim() === V.public_key, 'imported the RFC 8032 test key');
 
+  // The device reports its id: bundles made here are bound to it.
+  await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: null, owner_enrolled: false, owner_generation: 0, config_files_verified_by: 'none (standalone)', can: 'enroll', device_id: V.cases['bound-to-this-device'].device_id }) }));
   await go('/network/wifi');
   await page.fill('input[placeholder="HookProbe-Home"]', 'Popescu-Home');
   await page.fill('input[type=password]', 'correct horse battery');
@@ -59,6 +64,7 @@ export default async function (t) {
   ok(await vis(drawer.locator('text=type the PPPoE password again')), 'bundle: the PPPoE password must be typed again (never read back)');
   await drawer.locator('label:has-text("PPPoE password (again)") input').fill('s3cret');
   ok(await drawer.locator('button:has-text("Sign the bundle")').isEnabled(), 'bundle: all three sections valid → can sign');
+  ok(await vis(drawer.locator('[aria-label="Device binding"] >> text=Bound to this device (id 01234567')), 'bundle: bound to the device id the device reports');
   const files = [];
   page.on('download', async (d) => files.push([d.suggestedFilename(), readFileSync(await d.path())]));
   await drawer.locator('button:has-text("Sign the bundle")').click(); await page.waitForTimeout(800);
@@ -67,8 +73,11 @@ export default async function (t) {
   let out = '';
   try {
     const dir = mkdtempSync(join(tmpdir(), 'hqcfg-')); writeFileSync(join(dir, 'b'), bin); writeFileSync(join(dir, 's'), sig);
-    out = execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's')]).toString();
+    out = execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's'), '0', V.cases['bound-to-this-device'].device_id]).toString();
+    let other = '';
+    try { execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's')], { stdio: 'pipe' }); } catch (e) { other = String(e.stderr); }
+    ok(/bound to another device/.test(other), 'browser bundle is refused on any other device');
   } catch (e) { out = String(e.stdout ?? e.message); }
   ok(/--- wan/.test(out) && /pppoe_user=user@isp/.test(out) && /--- wifi/.test(out) && /ssid=Popescu-Home/.test(out) && /--- policy/.test(out),
-    'browser bundle (wan + wifi + policy) verifies with hqcfg.py exactly as the device will');
+    'browser bundle (wan + wifi + policy, device-bound) verifies with hqcfg.py exactly as the device will');
 }
