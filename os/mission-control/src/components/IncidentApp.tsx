@@ -23,7 +23,8 @@ import {
   reportDetail, reportDetailStatus, syncReportForIncident,
   type RelatedMitre,
 } from '../store/investigateLive';
-import { incidentIdFromLocation } from '../store/routes';
+import { incidentIdFromLocation, incidentHref } from '../store/routes';
+import { remember } from '../store/recents';
 import AppShell from './AppShell';
 import PlanDiff from './PlanDiff';
 
@@ -79,10 +80,16 @@ const IncidentApp: Component = () => {
   });
   createEffect(() => {
     const d = detail();
-    if (d && d.id === id()) void mitreForRelatedEvents(d.explanation.related_events).then(setMitre);
+    if (d && d.id === id()) {
+      void mitreForRelatedEvents(d.explanation.related_events).then(setMitre);
+      remember({ key: `incident:${d.id}`, type: 'Incident', title: d.title, href: incidentHref(d.id), scope: d.device_ip });
+    }
   });
 
   const sample = () => healthChecked() && !substrate();
+  createEffect(() => {
+    if (sample()) remember({ key: `incident:${SAMPLE.id}`, type: 'Incident', title: SAMPLE.title, href: incidentHref(SAMPLE.id), scope: SAMPLE.device_ip });
+  });
   const d = () => (detail() && detail()!.id === id() ? detail() : null);
 
   const title = () => (sample() ? SAMPLE.title : d()?.title ?? (id() ?? 'Incident'));
