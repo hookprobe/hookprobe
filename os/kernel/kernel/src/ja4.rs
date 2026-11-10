@@ -349,8 +349,30 @@ pub fn selftest() -> bool {
             *e = S0;
         }
     }
+    // Rule 126 enforcement (operator 2026-11-10): block a DNS bypass ONLY to a name the device's Shield blocks.
+    crate::shield::load_text(b"example.com\n", b"");
+    let _ = crate::devpolicy::load_text(b"02:00:00:00:00:a1 full shield=off\n");
+    let (std_mac, off_mac) = ([0x02u8, 0, 0, 0, 0, 0xc3], [0x02u8, 0, 0, 0, 0, 0xa1]);
+    let blocks0 = sni_blocks();
+    let enforced = observe_at(&rec[..n], 0x0a63_0050, [0; 16], Some(std_mac));
+    let logged = sni_blocks() == blocks0 + 1;
+    let off_passes = !observe_at(&rec[..n], 0x0a63_0051, [0; 16], Some(off_mac)); // Shield off for that device
+    let wan_passes = !observe_at(&rec[..n], 0x0808_0808, [0; 16], Some(std_mac)); // not a LAN source
+    crate::shield::load_text(b"", b"");
+    let allowed_passes = !observe_at(&rec[..n], 0x0a63_0052, [0; 16], Some(std_mac)); // bypass to an allowed name
+    let _ = crate::devpolicy::load_text(b"");
+    for e in unsafe { (*core::ptr::addr_of_mut!(SEEN)).iter_mut() } {
+        if (0x0a63_0050..=0x0a63_0052).contains(&e.client) || e.client == 0x0808_0808 {
+            *e = S0;
+        }
+    }
+    unsafe { SNI_BLOCKS = blocks0 };
+    let sni = enforced && logged && off_passes && wan_passes && allowed_passes;
+    arch_aarch64::_print(format_args!(
+        " [P-sni-block] {} — rule 126 enforcement (operator 2026-11-10): DNS bypass to a Shield-blocked name refused + logged={} a device whose Shield is off passes={} a non-LAN source passes={} a bypass to an allowed name passes={}\n",
+        if sni { "PASS" } else { "FAIL" }, enforced && logged, off_passes, wan_passes, allowed_passes));
     unsafe { HELLOS = before };
-    let pass = kat && gr && safe && v6;
+    let pass = kat && gr && safe && v6 && sni;
     arch_aarch64::_print(format_args!(
         " [P-ja4] {} — passive TLS ClientHello fingerprint (FoxIO JA4, linux-tier/reference vector) t13d0204h2_62ed6f6ca7ad_3953dc75acc4 + SNI={} | GREASE ignored={} | every truncation + non-handshake + garbage safe={} | IPv6 client fingerprinted={}\n",
         if pass { "PASS" } else { "FAIL" }, kat, gr, safe, v6
@@ -390,32 +412,55 @@ fn ms() -> u64 {
 /// Rule 125 (a known-bad JA4 from the signed IOC pack) and rule 126 (SNI is a name Shield blocks — the
 /// device reached it without Shield: DoH, a hard-coded IP or a stale answer) fire observe-only.
 /// Cost on every other segment: two byte compares.
-pub fn observe(payload: &[u8], src: u32) {
-    observe_at(payload, src, [0; 16]);
+/// Returns true when the ClientHello must be DROPPED (rule 126 enforcement, operator 2026-11-10): the device
+/// bypassed DNS to a name its Shield decision BLOCKS (a block category / owner block, per device — never a device
+/// whose Shield is off for that category, never an owner allow, never a non-LAN source). The bypass itself is
+/// always only observed (rule 126 alert); a bypass to an allowed name always passes (ADR 0023).
+pub fn observe(payload: &[u8], src: u32) -> bool {
+    observe_at(payload, src, [0; 16], None)
+}
+
+/// As `observe`, with the client's MAC (its DEVICES.TXT Shield profile decides).
+pub fn observe_dev(payload: &[u8], src: u32, mac: &[u8; 6]) -> bool {
+    observe_at(payload, src, [0; 16], Some(*mac))
 }
 
 /// An IPv6 TCP frame from a LAN client (Ethernet/IPv6, no extension headers on the TLS path). `attrib` is the
 /// device's IPv4 lease (by MAC) so detections land on the device the owner knows; 0 when it has none.
-pub fn observe6(frame: &[u8], attrib: u32) {
-    let Some(m) = crate::net::parse(frame) else { return };
+pub fn observe6(frame: &[u8], attrib: u32) -> bool {
+    let Some(m) = crate::net::parse(frame) else { return false };
     if m.ethertype != crate::net::ETHERTYPE_IPV6 || m.ip_proto != crate::net::IPPROTO_TCP || frame.len() < 38 {
-        return;
+        return false;
     }
-    let Some(&off) = frame.get(m.l4_off + 12) else { return };
+    let Some(&off) = frame.get(m.l4_off + 12) else { return false };
     let pay = m.l4_off + ((off >> 4) as usize) * 4;
     if pay >= frame.len() {
-        return;
+        return false;
     }
     let mut s6 = [0u8; 16];
     s6.copy_from_slice(&frame[22..38]);
-    observe_at(&frame[pay..], attrib, s6);
+    let mut mac = [0u8; 6];
+    mac.copy_from_slice(&frame[6..12]);
+    observe_at(&frame[pay..], attrib, s6, Some(mac))
 }
 
-fn observe_at(payload: &[u8], src: u32, src6: [u8; 16]) {
+/// LAN-side source (RFC 1918 / CGNAT): rule 126 enforcement only ever judges the protected network's own devices.
+fn lan_src(ip: u32) -> bool {
+    let b = ip.to_be_bytes();
+    b[0] == 10 || (b[0] == 172 && (16..32).contains(&b[1])) || (b[0] == 192 && b[1] == 168) || (b[0] == 100 && (64..128).contains(&b[1]))
+}
+
+static mut SNI_BLOCKS: u64 = 0;
+/// TLS connections refused by rule 126 enforcement since boot.
+pub fn sni_blocks() -> u64 {
+    unsafe { SNI_BLOCKS }
+}
+
+fn observe_at(payload: &[u8], src: u32, src6: [u8; 16], mac: Option<[u8; 6]>) -> bool {
     if payload.len() < 43 || payload[0] != 22 || payload[5] != 1 {
-        return;
+        return false;
     }
-    let Some(h) = client_hello(payload) else { return };
+    let Some(h) = client_hello(payload) else { return false };
     unsafe { HELLOS += 1 };
     let ioc = crate::ioc::ja4_listed(&h.ja4);
     let bypass = h.sni_len > 0 && crate::shield::decide(&h.sni[..h.sni_len as usize]) == crate::shield::Verdict::Blocked;
@@ -436,6 +481,23 @@ fn observe_at(payload: &[u8], src: u32, src6: [u8; 16]) {
     if bypass {
         crate::rules::tls_bypass_verdict(src);
     }
+    // Enforcement: only a name the DEVICE's Shield decision blocks (category / owner block), only a LAN source.
+    let block = h.sni_len > 0 && src != 0 && lan_src(src) && {
+        let sni = &h.sni[..h.sni_len as usize];
+        let v = match mac {
+            Some(m) => crate::shield::decide_for_dev(sni, src, &m),
+            None => crate::shield::decide_for(sni, src),
+        };
+        v == crate::shield::Verdict::Blocked
+    };
+    if block {
+        unsafe { SNI_BLOCKS += 1 };
+        if e.count == 1 {
+            // once per (device, fingerprint, name): the retransmitted ClientHellos are refused silently
+            crate::shield::record_tls_block(src, &h.sni[..h.sni_len as usize]);
+        }
+    }
+    block
 }
 
 pub fn hellos() -> u64 {
