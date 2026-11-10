@@ -50,6 +50,10 @@ pub const CMD_WAN_PPPOE_DISC: u32 = 7;
 pub const CMD_WAN_LCP_REQ: u32 = 8;
 /// D4 step 3b-iii: IN = `code u8` + IPCP option bytes. OUT = `pppwire::IPCP_LEN`.
 pub const CMD_WAN_IPCP: u32 = 9;
+/// D4 step 3b-iv: IN = a CHAP Challenge's bytes after code/id/length. OUT = `pppwire::CHAP_LEN`.
+pub const CMD_WAN_CHAP: u32 = 10;
+/// IN = an IPv6CP Configure-Request's option bytes. OUT = `pppwire::IP6CP_LEN`.
+pub const CMD_WAN_IP6CP: u32 = 11;
 /// Self-test only (kernel-issued at boot): the server faults on purpose, proving the D5 reset path.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 
