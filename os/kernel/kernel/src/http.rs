@@ -591,7 +591,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 (Some(n), wan) => {
                     w.raw("{\"available\":true,\"wifi\":{\"ssid\":");
                     w.string(core::str::from_utf8(&n.ssid[..(n.ssid_len as usize).min(32)]).unwrap_or("?"));
-                    let _ = write!(w, ",\"source\":\"{}\",\"channel\":{},\"security\":\"WPA2-PSK\"}}", if n.setup_ap { "setup (per-device credential)" } else { "signed WIFI.TXT" }, n.channel);
+                    let _ = write!(w, ",\"source\":\"{}\",\"channel\":{},\"width_mhz\":{},\"security\":\"WPA2-PSK\"}}", if n.setup_ap { "setup (per-device credential)" } else { "signed WIFI.TXT" }, n.channel, n.width_mhz);
                     if let Some(f) = wan {
                         let _ = write!(w, ",\"wan\":{{\"up\":{},\"mode\":\"{}\",\"ip\":\"{}.{}.{}.{}\",\"gateway\":\"{}.{}.{}.{}\",\"vlan\":{},\"clients\":{}}}",
                             f.up, ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ip[0], f.ip[1], f.ip[2], f.ip[3], n.gw[0], n.gw[1], n.gw[2], n.gw[3], n.wan_vlan, f.clients);
