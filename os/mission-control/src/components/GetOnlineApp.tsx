@@ -15,7 +15,7 @@ import AppShell from './AppShell';
 import PageHeader from './PageHeader';
 import Gate from './Gate';
 
-const SIGNED = 'Set by the signed WIFI.TXT / WAN.TXT on this device. Change it by re-signing the file.';
+const SIGNED = 'Set by the signed WIFI.TXT / WAN.TXT on this device. Changes are signed with your key in the browser and apply on the next reboot.';
 
 /** Shown only when no device answers (preview build), under the Sample-data banner. */
 const SAMPLE: NetworkView = {
@@ -100,11 +100,9 @@ const GetOnlineApp: Component = () => {
                 <p class="l0-card-sub">From {n()!.wifi!.source}</p>
               </Show>
               <div class="l0-card-foot">
-                <span class="gate gate--off" title={SIGNED}>
-                  <span class="gate-body" aria-hidden="true"><button class="hp-btn" tabindex="-1">Change password</button></span>
-                  <span class="gate-reason" role="note">{device() ? SIGNED : 'Preview: on a device this changes through a signed plan.'}</span>
-                </span>
+                <a class="hp-btn" href="/network/wifi">Change name or password</a>
               </div>
+              <p class="pcard-note">{SIGNED}</p>
             </article>
             <article class="l0-card">
               <span class="go-link-name">Guest Wi-Fi</span>
@@ -116,6 +114,12 @@ const GetOnlineApp: Component = () => {
 
         <Show when={adv()}>
           <section aria-label="Advanced" style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
+            <p class="l0-label">Change advanced settings · signed with your key, applied on the next reboot</p>
+            <div class="l0-grid-3">
+              <a class="l0-card" href="/network/wan/advanced" style={{ 'text-decoration': 'none', color: 'inherit' }}><b>Internet →</b><span class="l0-card-sub">DHCP · Static · PPPoE · ISP VLAN · management VLAN</span></a>
+              <a class="l0-card" href="/network/wifi" style={{ 'text-decoration': 'none', color: 'inherit' }}><b>Wi-Fi →</b><span class="l0-card-sub">Name · password · WPA2/WPA3 · channel</span></a>
+              <a class="l0-card" href="/protect/policies" style={{ 'text-decoration': 'none', color: 'inherit' }}><b>Firewall and routes →</b><span class="l0-card-sub">Access lists · prefix lists · failover routes</span></a>
+            </div>
             <p class="l0-label">Advanced · only what this device reports</p>
             <div class="go-adv">
               <Show when={wan()}><div><b>Connection type</b>{MODE[wan()!.mode] ?? wan()!.mode}</div></Show>

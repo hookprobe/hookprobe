@@ -21,9 +21,11 @@ import { ownerRules, refreshOwnerRules } from '../store/ownerRules';
 import { uploadView, refreshUploads, uploadPack, PACK_LABEL, type UploadStep } from '../store/packUpload';
 import { fetchPlannerStatus, type PlannerStatus } from '../store/plannerApi';
 import AppShell from './AppShell';
+import SigningKeyPanel from './SigningKeyPanel';
+import { startNetworkLive } from '../store/networkLive';
 
-type Sec = 'edge' | 'packs' | 'identity' | 'ai' | 'audit' | 'feedback' | 'reset';
-const SECTIONS: [Sec, string][] = [['edge', 'Edge node'], ['packs', 'Signed packs'], ['identity', 'Identity and access'], ['ai', 'AI models'], ['audit', 'Audit log'], ['feedback', 'Feedback and diagnostics'], ['reset', 'Factory reset']];
+type Sec = 'edge' | 'packs' | 'signing' | 'identity' | 'ai' | 'audit' | 'feedback' | 'reset';
+const SECTIONS: [Sec, string][] = [['edge', 'Edge node'], ['packs', 'Signed packs'], ['signing', 'Signing key'], ['identity', 'Identity and access'], ['ai', 'AI models'], ['audit', 'Audit log'], ['feedback', 'Feedback and diagnostics'], ['reset', 'Factory reset']];
 const STEPS: [UploadStep, string][] = [['begin', 'Begin'], ['upload', 'Upload'], ['verify', 'Device verifies'], ['activate', 'Activate'], ['done', 'Active']];
 const field = { font: 'inherit', 'min-height': '40px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' } as const;
 
@@ -39,7 +41,7 @@ const AdministrationApp: Component = () => {
   const [erase, setErase] = createSignal('');
 
   onMount(() => {
-    void refreshActions(); void refreshOwnerRules(); void refreshUploads();
+    void refreshActions(); void refreshOwnerRules(); void refreshUploads(); startNetworkLive();
     void fetchPlannerStatus().then(setPlanner).catch(() => setPlanner('unreachable'));
   });
 
@@ -166,6 +168,15 @@ const AdministrationApp: Component = () => {
                   <button class="hp-btn hp-btn--primary" disabled={sample() || !file() || (step() !== null && step() !== 'done')} onClick={() => void upload()}>Upload and verify</button>
                 </div>
                 <Show when={sample()}><p class="gate-reason">Preview: on a device this uploads, verifies and activates the pack (owner key twice).</p></Show>
+              </div>
+            </Show>
+
+            <Show when={sec() === 'signing'}>
+              <SigningKeyPanel />
+              <div class="pcard">
+                <p class="l0-label">What it signs</p>
+                <p class="l0-card-sub">Internet (WAN.TXT), Wi-Fi (WIFI.TXT) and firewall and routes (POLICY.TXT). Build a change in Get Online → Advanced, review it, sign it here in the browser; the device verifies your signature before anything changes.</p>
+                <div class="l0-card-foot"><a class="hp-btn" href="/network/wan/advanced">Open Advanced settings</a></div>
               </div>
             </Show>
 

@@ -35,6 +35,9 @@ const LIVE: Record<string, 'live' | string> = {
   '/network/map': 'live',
   '/network/zones': 'live',
   '/network/wan': 'live',
+  '/network/wan/advanced': 'live',
+  '/network/wifi': 'live',
+  '/protect/policies': 'live',
 };
 
 const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence, Administration, Workspace, Customers, Business, Knowledge';
