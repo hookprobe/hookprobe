@@ -94,4 +94,4 @@ signed config, SRK and anti-rollback floors are never touched; `[P-ownerjournal]
   hashed, 3g 250-ms drain — all built; Phase 7 RTC built early (board RTC, provisional until NTP). Rule 112
   per source device. Replay guard survives session eviction. Batch 30 queued (J10–J13 + J8 rerun + 24 h soak).
 
-- 2026-11-10 (later): Phase 6 WPA3-SAE built (crate `sae`, feature `wpa3`, `WIFI.TXT security=`) and metal-proven (batches 38–47: SAE-H2E + PMF join on two client chipsets, LAN suite 18/18 over SAE; WPA2 default unchanged, 18/18). Phase 7 factory reset metal PASS 9/9. Transition mode excludes WPA2-only stations on this firmware (status 38): opt-in only.
+- 2026-11-10 (later): Phase 6 WPA3-SAE built (crate `sae`, feature `wpa3`, `WIFI.TXT security=`) and metal-proven (batches 38–47: SAE-H2E + PMF join on two client chipsets, LAN suite 18/18 over SAE; WPA2 default unchanged, 18/18). Phase 7 factory reset metal PASS 9/9. Transition mode serves SAE and true WPA2-only stations (batch 50; an earlier status-38 reading was a test artifact); default remains WPA2 pending the operator.

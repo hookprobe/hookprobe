@@ -3403,9 +3403,9 @@ fn cm5_p10_probe() {
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
                             #[cfg(feature = "wpa3probe")]
                             cyw43::probe_set_psk(ap_psk);
-                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA2 — the proven default. Transition mode
-                            // is opt-in: on this firmware a WPA2-only (no-PMF) station is refused at association (status 38,
-                            // metal batches 45/46), so it must never be switched on silently. `HEQK_AP_SECURITY` (wpa3 |
+                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA2 — the long-proven default. Transition mode
+                            // (SAE + PMF for WPA3 stations, PSK for WPA2-only ones — both metal-proven, batches 44-50) is the
+                            // recommended next default, an operator product decision. `HEQK_AP_SECURITY` (wpa3 |
                             // wpa3-transition) changes the default for bench builds. SAE needs the passphrase itself.
                             #[cfg(feature = "wpa3")]
                             {
