@@ -18,11 +18,12 @@ publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 [workspace]
 
 [features]
-# securechannel.rs is gated on `securechannel`; ResponderStatic::from_seeds is (for now) gated on
-# `securechannel-selftest` — see README "Follow-ups" (a host responder constructor without the
-# selftest accessors is requested from the kernel side).
-default = ["securechannel", "securechannel-selftest"]
+# securechannel.rs is gated on `securechannel`; `securechannel-host-responder` exposes
+# ResponderStatic::from_seeds for a HOST responder without the selftest harness (it is a
+# compile_error! together with the device targets cm5/cloud).
+default = ["securechannel", "securechannel-host-responder"]
 securechannel = []
+securechannel-host-responder = ["securechannel"]
 securechannel-selftest = []
 
 [dependencies]
