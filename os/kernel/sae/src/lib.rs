@@ -533,6 +533,13 @@ impl SaeAp {
         if p.st == St::Accepted { p.sae.as_ref().map(|s| s.pmk) } else { None }
     }
 
+    /// The PMKID of a peer that completed SAE (for the firmware's `auth_status`).
+    pub fn pmkid_for(&mut self, mac: &[u8; 6], now: u64) -> Option<[u8; 16]> {
+        let i = self.slot(mac, now, false)?;
+        let p = &self.peers[i];
+        if p.st == St::Accepted { p.sae.as_ref().map(|s| s.pmkid) } else { None }
+    }
+
     /// Forget a peer (it left / its 4-way finished).
     pub fn forget(&mut self, mac: &[u8; 6]) {
         for p in self.peers.iter_mut() {
