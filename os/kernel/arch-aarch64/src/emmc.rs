@@ -234,6 +234,14 @@ impl Emmc {
         }
         let cache_on = ext[EXT_CSD_CACHE_CTRL] & 1 != 0;
         let wear = (ext[EXT_CSD_PRE_EOL_INFO], ext[EXT_CSD_LIFE_TIME_EST_A], ext[EXT_CSD_LIFE_TIME_EST_B]);
+        // Decision-record evidence (RPMB, 2026-11-10): READ-ONLY fields of the EXT_CSD already read above — the
+        // RPMB partition size (RPMB_SIZE_MULT x 128 KiB; 0 = none), the reliable-write sector count and the
+        // EXT_CSD revision. Nothing here switches partitions or programs anything. Printed once per boot.
+        static RPMB_SEEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        if !RPMB_SEEN.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            crate::_print(format_args!(" [EMMC-RPMB] RPMB_SIZE_MULT={} (RPMB partition {} KiB) REL_WR_SEC_C={} EXT_CSD_REV={} — read-only probe, no RPMB access\n",
+                ext[168], ext[168] as u32 * 128, ext[222], ext[192]));
+        }
         let mut e = Emmc {
             host,
             rca: RCA,
