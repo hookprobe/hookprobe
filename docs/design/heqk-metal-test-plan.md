@@ -129,6 +129,7 @@ and `SVN=2 HEQK_BUILD_ID=b` (`$CLAUDE_JOB_DIR/tmp/fac.sh` pattern).
 | J7 | 72 h soak | no reboot / fault, counters monotonic, throughput floor held | `cm5-soak.sh` (8 h run started 2026-11-10 02:57, image W) |
 | J10 | Crash record (bench image with `--features crashtest`) | boot 1 panics 120 s into the AP loop and resets through the EL2 gate; boot 2 prints `[CRASH] the previous boot ended in a panic: … crashtest …` and `/api/health` `last_crash.kind = panic`; boot 2 does not panic again. If DRAM does not keep the page across the reset, boot 2 prints no `[CRASH]` (record the result either way) | serial + `/api/health` |
 | J12 | Power-loss torture (readiness 3.4) | 10 random power cuts while owner rules are being written: journal replays every time (torn tails dropped, counted), every acknowledged rule survives, evidence log mounts, Mission Control answers | `cm5-powerloss-torture.sh` |
+| J13 | Board RTC (readiness 3.7) | after NTP: `[RTC] board RTC set from NTP`; after a warm reset (J10's crash): `[RTC] wall clock … from the board RTC` before any NTP line; after a power cut without a backup cell: `[RTC] board RTC reads … (unset …)` | serial (batch 30 summary) |
 | J11 | Broadcast storm per source (7696fbac) | normal household traffic never raises rule 112; a single client flooding broadcasts (`arping -b` / `nping --dest-mac ff:ff:ff:ff:ff:ff` > 5 per s) is attributed by IP and rate-limited alone, other clients' ARP/DHCP unaffected | serial + Mission Control |
 
 ## E. Platform (from earlier sessions, still open)
