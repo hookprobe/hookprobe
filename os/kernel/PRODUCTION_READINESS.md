@@ -1,5 +1,8 @@
 # HEQK Production-Readiness Report
 
+> **PRODUCTION READINESS: BLOCKED by customer OTP provisioning** (owner decision pending — decision record
+> `heqk-decision-record-otp-rpmb-2026-11-10.md`, repository-root design docs).
+>
 > **Current status: 2026-11-10 (metal batch 29) — the ordered checklist below supersedes §4 and §7–§8** (kept underneath as
 > the July history). Scope: hardware + kernel + detection for a commercial product; the UI is owned by the
 > UI/UX designer. Legend: **D** = needs an operator decision, **B** = needs the CM5 bench, **A** = buildable
