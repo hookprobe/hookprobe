@@ -151,7 +151,8 @@ fn load_body_jit(body: &[u8], jit: bool, arm: bool) -> Result<PackInfo, &'static
             info.loaded += 1; // parse-only (selftest truncation sweep): the verifier also allocates
             continue;
         }
-        // the verifier allocates (~4 KiB per rule) from the never-freeing heap: keep the margin
+        // the verifier no longer allocates (static table, phase 3f) — the margin guards the interpreter fallback
+        // and anything else on the never-freeing heap
         if crate::heap::remaining() < JIT_HEAP_MARGIN + 8 * 1024 {
             info.refused_heap += 1;
             continue;
