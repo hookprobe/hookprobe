@@ -6,6 +6,7 @@ fn main() {
     // Optional free-form build id (shown in the [OTA] boot line) — lets a bench build a distinguishable
     // payload from the same commit (OTA trial/commit metal check).
     println!("cargo:rerun-if-env-changed=HEQK_BUILD_ID");
+    println!("cargo:rerun-if-env-changed=HEQK_GIT");
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let script = if std::env::var("CARGO_FEATURE_HBOOT").is_ok() {
         "linker-hboot.ld"

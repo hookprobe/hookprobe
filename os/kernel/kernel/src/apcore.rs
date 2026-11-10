@@ -693,7 +693,9 @@ pub fn client6<N: ApNic>(
                 let _ = crate::rules::flow_scan_observe6(frame, crate::srckey::dev(&sm), crate::srckey::v6net(&d6));
                 let lease = lease_of(&sm);
                 if frame[20] == 6 {
-                    crate::ja4::observe6(frame, lease);
+                    if crate::ja4::observe6(frame, lease) {
+                        return Client6::IdsDrop; // rule 126 enforcement (Shield-blocked name over a DNS bypass)
+                    }
                     crate::rules::behavioral_observe6(frame, lease);
                 }
                 let _ = crate::rules::ioc_v6_hit(lease, &d6);
