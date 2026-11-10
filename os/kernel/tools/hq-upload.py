@@ -3,8 +3,12 @@
 
   hq-upload.py --mc https://10.99.0.1 --owner-key-file KEY --type shield_block --sig BLOCK.SIG --file BLOCK.TXT [--no-activate]
   hq-upload.py --mc https://10.99.0.1 --owner-key-file KEY --status
+  hq-upload.py --mc ... --owner-key-file KEY --rollback wan          # ADR 0058: re-activate the previous generation
+  hq-upload.py --mc ... --owner-key-file KEY --reboot "apply WAN"    # G49: restart so staged settings apply
+  hq-upload.py --mc ... --owner-key-file KEY --enroll PROOF.TXT      # ADR 0058 D3 (policy-sign.py enroll-proof output)
+  hq-upload.py --mc ... --owner-key-file KEY --rotate ROTATE.TXT     # ADR 0058 D3 (policy-sign.py rotate output)
 
-Types: shield_block, shield_allow, ioc, rules, oui, devices. The pack must already be signed with the
+Types: shield_block, shield_allow, ioc, rules, oui, devices (apply now); wan, wifi, policy (staged: next boot). The pack must already be signed with the
 operator key (policy-sign.py sign-*); this tool never signs anything and never sees a private key. The
 device verifies the signature with its own loader before it activates anything.
 
@@ -23,6 +27,10 @@ def main():
     ap.add_argument("--file")
     ap.add_argument("--no-activate", action="store_true")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--rollback")
+    ap.add_argument("--reboot")
+    ap.add_argument("--enroll")
+    ap.add_argument("--rotate")
     ap.add_argument("--ca")
     ap.add_argument("--insecure", action="store_true")
     a = ap.parse_args()
@@ -87,6 +95,23 @@ def main():
     if a.status:
         print(json.dumps(req("/api/upload"), indent=2))
         return 0
+
+    def form1(path, **kv):
+        nonlocal seq
+        kv["seq"] = seq
+        seq += 1
+        return req(path, urllib.parse.urlencode(kv).encode(), {**hdr, "Content-Type": "application/x-www-form-urlencoded"})
+
+    if a.rollback or a.reboot or a.enroll or a.rotate:
+        if a.rollback:
+            r = form1("/api/upload/rollback", type=a.rollback, owner_key=key)
+        elif a.reboot:
+            r = form1("/api/reboot", reason=a.reboot, permanent="true", owner_key=key)
+        else:
+            kv = dict(l.split("=", 1) for l in open(a.enroll or a.rotate).read().split() if "=" in l)
+            r = form1("/api/anchor/rotate" if a.rotate else "/api/anchor/enroll", owner_key=key, **kv)
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
     if a.type == "os_image":
         # An OS image carries its own hybrid signature: the container is the signed heqk8.img itself.
         if not a.file:

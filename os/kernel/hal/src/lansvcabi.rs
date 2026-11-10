@@ -22,7 +22,7 @@ pub const H_OUT_LEN: usize = 16; // u32 (out)
 pub const MAGIC: u32 = u32::from_le_bytes(*b"HQLS");
 
 pub const IN_OFF: usize = 0x40;
-pub const IN_MAX: usize = 0x5C0; // 1472 B: one DNS message in a 1500-B frame
+pub const IN_MAX: usize = 0x7C0; // 1984 B: one DNS message in a 1500-B frame, or one whole client Ethernet frame
 pub const OUT_OFF: usize = 0x800;
 pub const OUT_MAX: usize = IO_SIZE - OUT_OFF;
 
@@ -35,6 +35,15 @@ pub const CMD_DNS_WALK: u32 = 2;
 pub const WALK_HDR: usize = 8 + 256;
 pub const WALK_STRIDE: usize = 2 + 256;
 pub const WALK_MAX_CNAMES: usize = 32;
+/// D4 step 2b: IN = a client Ethernet frame to the DHCP server (<= 1514 B). OUT = `hal::dhcpwire::REC_LEN` bytes
+/// (`dhcpwire::encode`): message type, chaddr, xid, requested IP, and the identity options (hostname, vendor, PRL).
+pub const CMD_DHCP_PARSE: u32 = 3;
+/// D4 step 3 (WAN control). IN = `xid[4] mac[6]` + a WAN Ethernet frame. OUT = `dhcpwire::FACTS_LEN`.
+pub const CMD_WAN_DHCP_REPLY: u32 = 4;
+/// IN = a bare IPv6 packet. OUT = `ip6::RA_LEN` (ST_NONE = not a valid RA).
+pub const CMD_WAN_RA: u32 = 5;
+/// IN = `xid[4] LE` + a bare IPv6 packet. OUT = `ip6::DHCP6_LEN` (ST_NONE = not ours / invalid).
+pub const CMD_WAN_DHCP6: u32 = 6;
 /// Self-test only (kernel-issued at boot): the server faults on purpose, proving the D5 reset path.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 

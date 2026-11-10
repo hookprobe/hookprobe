@@ -226,7 +226,7 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
     let size: u64 = form_get(body, "size", b1).and_then(|v| v.parse().ok()).ok_or("size")?;
     let sha = form_get(body, "sha256", b2).and_then(hex32).ok_or("sha256")?;
     let key = form_get(body, "owner_key", b3).unwrap_or("");
-    if crate::policysig::key().is_none() {
+    if artstore::key_for(ty).is_none() {
         return Err("no operator key in this image: unsigned packs are never accepted over the network");
     }
     #[cfg(feature = "p15-write")]
@@ -347,7 +347,7 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     }
     let mut sig = [0u8; 512];
     d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
-    let key = crate::policysig::key().ok_or("no operator key")?;
+    let key = artstore::key_for(u.ty).ok_or("no operator key")?;
     let (gen, len) = artstore::verify(&*d, u.ty, &sig, slo + 1, &key).map_err(|e| match e {
         crate::shield::LoadErr::DigestMismatch => "signature digest does not match the file",
         crate::shield::LoadErr::BadSignature => "bad signature (not the operator key, or a different pack type)",
@@ -472,8 +472,8 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
         return Err("re-authentication failed");
     }
-    let opk = crate::policysig::key().ok_or("no operator key")?;
     let d = dev().ok_or("no artifact store")?;
+    let opk = artstore::key_for(ty).ok_or("no operator key")?;
     let old = artstore::active_gen(&*d, p1(d), ty);
     let res = artstore::rollback(d, ty, &opk);
     let tag = crate::mcauth::session_tag(c.session);
@@ -612,7 +612,7 @@ pub fn selftest() -> bool {
     seq += 1;
     // `policy` is not an upload type (next-boot only, ADR 0056 phase 1); an `os_image` must be a whole boot
     // image. Every form step consumes its seq, even when refused (replay guard).
-    let bad_type = begin(&c, f!("type=policy&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err() == Some("type");
+    let bad_type = begin(&c, f!("type=kernel&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err() == Some("type");
     seq += 1;
     let small_os = begin(&c, f!("type=os_image&size=600&sha256={}&owner_key={}&seq={}", shex, k, seq), &mut auth).err()
         == Some(if cfg!(feature = "p15-write") { "size" } else { "this image cannot update its OS over the network (read-only build)" });

@@ -18,7 +18,7 @@
 //! `wan_poll` answers the gateway's ARP probes so the neighbour entry never goes
 //! FAILED and blackholes the return traffic.
 
-use crate::cyw43::{build_arp, build_dhcp, build_icmp_echo, parse_dhcp_reply, parse_ping_reply, DhcpResult};
+use crate::cyw43::{build_arp, build_dhcp, build_icmp_echo, parse_ping_reply, DhcpResult};
 use crate::{gem, rtl8111};
 
 /// Which raw-frame NIC carries the uplink.
@@ -198,7 +198,7 @@ fn mgmt_dhcp_step(m: &mut Mgmt, rx: Option<&[u8]>, now: u64) -> bool {
         // again here for every message type.
         let mut r = DhcpResult::new();
         r.server = d.server;
-        let mt = parse_dhcp_reply(f, &d.xid, &m.mac, &mut r);
+        let mt = crate::wanparse::dhcp_reply(f, &d.xid, &m.mac, &mut r);
         if mt != 0 {
             consumed = true;
             let from_pinned = d.server == [0; 4] || r.server == d.server;
@@ -613,7 +613,7 @@ fn eth_v6_probe(nic: Nic, out: &UplinkResult) {
             }
             continue;
         }
-        if let Some(ra) = ip6::parse_ra(ip) {
+        if let Some(ra) = crate::wanparse::ra(ip) {
             if w.ra.is_none() {
                 w.ra = Some(ra);
                 e.router_mac = smac;
@@ -624,7 +624,7 @@ fn eth_v6_probe(nic: Nic, out: &UplinkResult) {
             }
             continue;
         }
-        if let Some(d) = ip6::parse_dhcp6(ip, xid) {
+        if let Some(d) = crate::wanparse::dhcp6(ip, xid) {
             w.dhcp_rx += 1;
             if d.status != 0 {
                 w.status = d.status;
@@ -902,14 +902,14 @@ fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
             continue;
         };
         w.v6_frames_rx += 1;
-        if let Some(ra) = ip6::parse_ra(ip) {
+        if let Some(ra) = crate::wanparse::ra(ip) {
             if w.ra.is_none() {
                 w.ra = Some(ra);
                 next_dhcp = 0; // DHCPv6 right away
             }
             continue;
         }
-        if let Some(d) = ip6::parse_dhcp6(ip, xid) {
+        if let Some(d) = crate::wanparse::dhcp6(ip, xid) {
             w.dhcp_rx += 1;
             if d.status != 0 {
                 w.status = d.status;
@@ -1047,7 +1047,7 @@ fn dora_reply(up: &mut UplinkResult, eth: &[u8]) {
         return;
     }
     let mut d = DhcpResult::new();
-    let mt = parse_dhcp_reply(eth, &xid, &up.mac, &mut d);
+    let mt = crate::wanparse::dhcp_reply(eth, &xid, &up.mac, &mut d);
     let now = ms_now();
     match (st, mt) {
         (1, 2) => {
@@ -1140,7 +1140,7 @@ fn renew_reply(up: &mut UplinkResult, eth: &[u8]) -> bool {
         return false;
     }
     let mut d = DhcpResult::new();
-    match parse_dhcp_reply(eth, &xid, &up.mac, &mut d) {
+    match crate::wanparse::dhcp_reply(eth, &xid, &up.mac, &mut d) {
         5 if d.yiaddr == up.dhcp.yiaddr => {
             if d.lease > 0 {
                 up.dhcp.lease = d.lease;
@@ -1312,7 +1312,7 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
             // A Reply to our Renew: refresh the delegation (and the T1 clock).
             let w = &mut *core::ptr::addr_of_mut!(WAN6);
             if w.pd.is_some() && w.renew_tx > 0 {
-                if let Some(d) = crate::ip6::parse_dhcp6(ip6, w.xid) {
+                if let Some(d) = crate::wanparse::dhcp6(ip6, w.xid) {
                     if d.msg == crate::ip6::DHCP6_REPLY && d.has_pd && d.status == 0 {
                         w.pd = Some((d.prefix, d.plen, d.valid));
                         w.t1 = d.t1;
@@ -1322,7 +1322,7 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
                     }
                 }
             }
-            if let Some(ra) = crate::ip6::parse_ra(ip6) {
+            if let Some(ra) = crate::wanparse::ra(ip6) {
                 WAN6_LIVE[1] += 1;
                 if WAN6_FIRST_RA.is_none() {
                     WAN6_FIRST_RA = Some(ra);
@@ -1402,7 +1402,7 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
         return; // the TX primitive never completed
     }
     let disc = pkt;
-    out.dhcp.offer_rx = rx_wait(out, &disc[..n], WAIT_MS, |eth, o| parse_dhcp_reply(eth, &xid, &mac, &mut o.dhcp) == 2);
+    out.dhcp.offer_rx = rx_wait(out, &disc[..n], WAIT_MS, |eth, o| crate::wanparse::dhcp_reply(eth, &xid, &mac, &mut o.dhcp) == 2);
     if !out.dhcp.offer_rx {
         return;
     }
@@ -1414,7 +1414,7 @@ pub fn bringup(nic: Nic, inet_ip: &[u8; 4], out: &mut UplinkResult) {
     out.dhcp.request_tx = nic_tx(nic, &pkt[..n]);
     let req = pkt;
     out.dhcp.ack_rx = rx_wait(out, &req[..n], WAIT_MS, |eth, o| {
-        let mt = parse_dhcp_reply(eth, &xid, &mac, &mut o.dhcp);
+        let mt = crate::wanparse::dhcp_reply(eth, &xid, &mac, &mut o.dhcp);
         mt == 5 || mt == 6
     }) && !out.dhcp.nak_rx;
     if !out.dhcp.ack_rx {
@@ -1541,7 +1541,7 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
     // whose RA / DHCPv6 came up late) — note it; the AP loop re-runs the probe (`wan6_reprobe`). Passive on
     // purpose: an ISP without IPv6 never sends an RA, so it never pays for a probe.
     if buf[12] == 0x86 && buf[13] == 0xdd && n >= 14 + 40 && up.mode != 2 && !unsafe { WAN6_ETH.up }
-        && buf[20] == 58 && n > 54 && buf[54] == 134 && crate::ip6::parse_ra(&buf[14..n]).is_some()
+        && buf[20] == 58 && n > 54 && buf[54] == 134 && crate::wanparse::ra(&buf[14..n]).is_some()
     {
         unsafe { WAN6_RA_SEEN = true };
     }
@@ -1561,7 +1561,7 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
                 return WanEvent::Idle;
             }
         }
-        if let Some(ra) = crate::ip6::parse_ra(&buf[14..n]) {
+        if let Some(ra) = crate::wanparse::ra(&buf[14..n]) {
             if ra.router == e.router_ll && smac != e.router_mac {
                 e.router_mac = smac; // the router's MAC changed (failover)
             }
@@ -1570,7 +1570,7 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         }
         let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
         if w.pd.is_some() && w.renew_tx > 0 {
-            if let Some(d) = crate::ip6::parse_dhcp6(&buf[14..n], w.xid) {
+            if let Some(d) = crate::wanparse::dhcp6(&buf[14..n], w.xid) {
                 if d.msg == crate::ip6::DHCP6_REPLY && d.has_pd && d.status == 0 {
                     w.pd = Some((d.prefix, d.plen, d.valid));
                     w.t1 = d.t1;
