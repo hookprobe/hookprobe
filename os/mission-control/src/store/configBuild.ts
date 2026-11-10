@@ -66,6 +66,19 @@ export function checkWan(f: WanForm): string[] {
   return e;
 }
 
+/** Last line of defence before anything is signed: LF-only lines, no control characters, each key once
+ *  (the device refuses a repeated key). Throws instead of producing a file the device would refuse. */
+export function assertCanonical(text: string): string {
+  const seen = new Set<string>();
+  for (const line of text.split('\n').slice(0, -1)) {
+    if (/[\x00-\x1f\x7f]/.test(line)) throw new Error('A value contains a control character (for example a line break).');
+    const k = line.includes('=') ? line.slice(0, line.indexOf('=')) : line;
+    if (seen.has(k)) throw new Error(`"${k}" would appear twice.`);
+    seen.add(k);
+  }
+  return text;
+}
+
 export function buildWan(f: WanForm): string {
   const l = ['HQWAN1', `mode=${f.mode}`];
   if (f.mode === 'static') { l.push(`ip=${f.ip.trim()}`, `gw=${f.gw.trim()}`); if (f.dns.trim()) l.push(`dns=${f.dns.trim()}`); }
@@ -75,7 +88,7 @@ export function buildWan(f: WanForm): string {
     l.push(`mgmt_vlan=${f.mgmtVlan.trim()}`);
     if (f.mgmtIp.trim()) { l.push('mgmt=static', `mgmt_ip=${f.mgmtIp.trim()}`); if (f.mgmtGw.trim()) l.push(`mgmt_gw=${f.mgmtGw.trim()}`); } else l.push('mgmt=dhcp');
   }
-  return l.join('\n') + '\n';
+  return assertCanonical(l.join('\n') + '\n');
 }
 
 export function checkWifi(f: WifiForm): string[] {
@@ -96,7 +109,7 @@ export function buildWifi(f: WifiForm): string {
   if (f.channel !== 'auto') l.push(`channel=${f.channel}`);
   if (f.security !== 'wpa2') l.push(`security=${f.security}`);
   if (f.maxClients.trim()) l.push(`max_clients=${f.maxClients.trim()}`);
-  return l.join('\n') + '\n';
+  return assertCanonical(l.join('\n') + '\n');
 }
 
 const NAME = /^[A-Za-z0-9_-]{1,16}$/;
@@ -130,6 +143,22 @@ export function checkPolicy(f: PolicyForm): string[] {
     if (r.gw.trim() && !/^[0-9a-fA-F:.]+$/.test(r.gw.trim())) e.push(`Route ${r.dst}: gateway is an address.`);
     if (r.metric.trim() && !/^\d+$/.test(r.metric.trim())) e.push(`Route ${r.dst}: metric is a number.`);
   }
+  for (const p of f.prefixes) {
+    for (const [k, v] of [['ge', p.ge], ['le', p.le]] as const) if (v.trim() && !/^\d{1,3}$/.test(v.trim())) e.push(`Prefix list ${p.name}: ${k} must be a prefix length.`);
+  }
+  for (const r of f.routes) if (r.from.trim() && !/^[0-9a-fA-F:.]+\/\d{1,3}$/.test(r.from.trim())) e.push(`Route ${r.dst}: "from" is a prefix.`);
+  // The device refuses a repeated statement (heqk config parser, duplicate keys refused): one line per
+  // (list, seq), one default per access list, one binding per (interface, kind, direction), one route per
+  // (destination, from).
+  const dup = (what: string, keys: string[]) => {
+    const seen = new Set<string>();
+    for (const k of keys) { if (seen.has(k)) e.push(`${what} ${k.replace(/\|/g, ' ')} appears twice.`); seen.add(k); }
+  };
+  dup('Prefix list', f.prefixes.map((p) => `${p.name}|seq|${p.seq}`));
+  dup('Access list', f.acls.map((a) => `${a.name}|seq|${a.seq}`));
+  dup('Default for access list', f.defaults.map((d) => d.name));
+  dup('Interface binding', f.binds.map((b) => `${b.iface}|${b.kind}|${b.dir}`));
+  dup('Route', f.routes.map((r) => `${r.dst.trim()}|from|${r.from.trim() || 'any'}`));
   if (new TextEncoder().encode(buildPolicyText(f)).length > 4096) e.push('The policy is larger than the 4096 bytes the device reads.');
   return e;
 }

@@ -65,10 +65,13 @@ const SetupApp: Component = () => {
   const launch = async () => {
     go('launch');
     const res: Out[] = [];
-    const files: [string, string, string, typeof PACKS.wan, string][] = [
-      ['WAN.TXT', 'WAN.SIG', 'wan', PACKS.wan, buildWan(wanForm())],
-      ['WIFI.TXT', 'WIFI.SIG', 'wifi', PACKS.wifi, buildWifi(wifiForm())],
-    ];
+    let files: [string, string, string, typeof PACKS.wan, string][];
+    try {
+      files = [
+        ['WAN.TXT', 'WAN.SIG', 'wan', PACKS.wan, buildWan(wanForm())],
+        ['WIFI.TXT', 'WIFI.SIG', 'wifi', PACKS.wifi, buildWifi(wifiForm())],
+      ];
+    } catch (e) { setBusy(e instanceof Error ? e.message : String(e)); go('review'); return; }
     for (const [name, sigName, type, kind, text] of files) {
       setBusy(`Signing ${name}…`);
       const txt = new TextEncoder().encode(text);
@@ -157,6 +160,7 @@ const SetupApp: Component = () => {
         <Show when={step() === 'review'}>
           <p class="l0-label">Review</p>
           <div class="setup-bubble">Here's what I'll set up. Nothing changes until you tap Launch.</div>
+          <Show when={busy()}><p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>{busy()}</p></Show>
           <div class="plan-diff-lines">
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>internet: {mode() === 'pppoe' ? `PPPoE as ${user()}` : 'automatic (DHCP)'}</div>
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>wifi: "{ssid()}" · WPA3 + WPA2</div>
