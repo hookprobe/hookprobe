@@ -191,8 +191,11 @@ corrupt kernel state. Consequences:
 
 Each step starts only after the previous one passes its gates.
 
-**After the MVP:** secrets at rest (Phase 3), delegation, revocation and the `mgmt_floor` move (Phase 4), and
-hardware anchoring (Phase 6). Until secrets at rest land, the MVP bundle carries the PPPoE password and PSK the
+**Not ordered by the operator:** secrets at rest (Phase 3), delegation, revocation and the `mgmt_floor` move
+(Phase 4), and hardware anchoring (Phase 6). Their place in the schedule is not part of the confirmed order.
+**RPMB is already under a direct operator instruction to the heqk session:** build it, with the key write as a
+separate manufacturing operation. That instruction stands, and this ADR does not defer it. Where these phases and
+SEC-01 (ADR 0050 D4) sit relative to steps 2–4 is the operator's call. Until secrets at rest land, the MVP bundle carries the PPPoE password and PSK the
 way ADR 0058 does today, inside the signed region, and the UI keeps saying they are not protected at rest.
 
 Phase details are in assessment §E.
