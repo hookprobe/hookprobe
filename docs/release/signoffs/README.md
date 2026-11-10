@@ -11,5 +11,5 @@ Decision: <what was decided, e.g. "OTP provisioned on the factory station for ba
 Evidence: <link to the provisioning log / ceremony record / certificate>
 ```
 
-Pending sign-offs: key-custody, otp-provisioning, sec3-secure-boot, rpmb, wpa3, certification, firmware-licence.
+Pending sign-offs: key-custody, otp-provisioning, sec3-secure-boot, rpmb, certification, firmware-licence.
 Decision records: `docs/design/heqk-decision-record-otp-rpmb-2026-11-10.md`.
