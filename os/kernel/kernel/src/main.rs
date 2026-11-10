@@ -185,6 +185,8 @@ mod evlog;
 // entirely (measured: +80 bytes for all three). See prodfull.rs.
 #[cfg(all(feature = "cm5", any(feature = "prod-full", feature = "appersist")))]
 mod prodfull;
+#[cfg(all(feature = "cm5", feature = "appersist"))]
+mod factoryreset;
 mod edge;
 mod notify;
 mod packet;
@@ -3688,6 +3690,10 @@ fn cm5_p10_probe() {
                                 kprint!(" [AP-OWNER] owner policy journal: no device key or no DataVolume — RAM only (rules last until reboot)\n");
                             }
                         }
+                        // Phase 7: a replayed factory-reset request wipes the owner data HERE — before the artifact
+                        // store, the evidence log or Mission Control are brought up — and reboots (never returns then).
+                        #[cfg(feature = "appersist")]
+                        factoryreset::run(&mut pf);
                         // ADR 0056: the artifact store + upload staging — a THIRD eMMC handle whose Gate 2 covers
                         // ONLY Store ∪ Staging (contiguous in the registry), so an upload bug can never write the
                         // journal, the keystore or the boot partition. Without an operator key uploads are refused.
@@ -3815,6 +3821,7 @@ fn cm5_p10_probe() {
                         // response 2 s to leave, then reboot ONCE into the slot tryboot.txt names.
                         #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                         let mut trial_at: Option<u64> = None;
+                        let mut reset_at: Option<u64> = None;
                         // Production phase 1 step 5: repair an interrupted commit, then classify this boot.
                         #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
                         let (mut ota_boot, ota_t0) = {
@@ -3876,6 +3883,10 @@ fn cm5_p10_probe() {
                             }
                             #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                             {
+                                if ownerapi::take_reset_reboot() {
+                                    kprint!(" [FACTORY-RESET] request sealed in the journal — rebooting in 2 s to erase the owner data\n");
+                                    reset_at = Some(now().wrapping_add(2 * freq));
+                                }
                                 if upload::take_trial_reboot() {
                                     trial_at = Some(now().wrapping_add(2 * freq));
                                     kprint!(" [OTA] new image written to the inactive slot and verified from the slot — trial boot in 2 s (tryboot one-shot; an unhealthy trial falls back to this slot)\n");
@@ -3897,6 +3908,10 @@ fn cm5_p10_probe() {
                                         kprint!(" [OTA] trial not healthy within 5 min (WAN never usable) — rebooting to the previous slot\n");
                                         unsafe { core::arch::asm!("hvc #0") };
                                     }
+                                }
+                                if reset_at.is_some_and(|t| now() > t) {
+                                    let _ = arch_aarch64::mailbox::notify_reboot();
+                                    unsafe { core::arch::asm!("hvc #0", options(noreturn)) };
                                 }
                                 if trial_at.is_some_and(|t| now() > t) {
                                     let set = arch_aarch64::mailbox::set_reboot_flags(arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
