@@ -4073,7 +4073,7 @@ fn cm5_p10_probe() {
                                             apcore::Client4::BindDrop => bind_drop += 1,
                                             apcore::Client4::Trunc => trunc_drop += 1, // fail-closed, but NOT a rule drop
                                             apcore::Client4::IdsDrop => ids_drop_out += 1,
-                                            apcore::Client4::McDenied => {} // Parity G9: internet_only / quarantine devices
+                                            apcore::Client4::McDenied | apcore::Client4::Echo => {} // Parity G9: internet_only / quarantine devices; echo answered
                                             apcore::Client4::ToMc => {
                                                 // Mission Control on the AP address; not on the client AP when management is
                                                 // configured (G12-M).
