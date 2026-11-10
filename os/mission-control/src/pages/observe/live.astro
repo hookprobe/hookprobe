@@ -1,0 +1,18 @@
+---
+/**
+ * /observe/live — Observe (§3, Senzorium), the Pro view: everything entering the platform, as a
+ * live table. The plain-words story of the same data is /observe/events (Timeline & Export).
+ * Spec: docs/architecture/MissionControl.md §3.
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import ObserveApp from '../../components/ObserveApp';
+import '../../styles/obs.css';
+---
+
+<Shell
+  title="Observe — HookProbe OS"
+  description="Telemetry Fabric: all sources entering HookProbe OS, normalized event stream, retention tiers and asset inventory — Senzorium."
+>
+  <ObserveApp client:load />
+</Shell>
