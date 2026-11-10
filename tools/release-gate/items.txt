@@ -14,7 +14,7 @@ TC-03 | trust chain | SEC-3 secure-boot fuses: provisioned, or explicitly out of
 TC-04 | trust chain | Owner-journal / pack rollback anchored in RPMB and checked at replay (or risk accepted) | signoff:rpmb
 TC-05 | trust chain | Device-pinned operator key + persisted POLICY floor | phase:Panchor
 TC-06 | trust chain | OS-image verifier (shared with HBoot) at the real image size | phase:Potaverify
-TC-07 | trust chain | WAN.TXT (incl. mgmt_floor) signed or owner-authenticated — today unsigned | blocked:WAN.TXT is unsigned (audit 2026-11-10)
+TC-07 | trust chain | WAN.TXT (incl. mgmt_floor) signed by the operator key; unsigned = floor ignored | phase:Pwansig,metal:docs/design/metal-evidence/20261110-batch31.md:WAN.TXT signature OK
 OTA-01 | update | OS update over Mission Control: verify, inactive slot, trial, commit-on-health | phase:P15otaimg,phase:Pabslot,metal:docs/design/metal-evidence/20261110-ota-a1.md:PASS
 OTA-02 | update | An unhealthy trial rolls back to the previous build | metal:docs/design/metal-evidence/20261110-batch29.md:OTA-ROLLBACK: PASS
 REL-01 | reliability | Runtime watchdog armed after the trial confirm | phase:Prtwdog,metal:docs/design/metal-evidence/20261110-batch29.md:WDOG\] armed=true
