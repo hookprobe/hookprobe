@@ -40,6 +40,13 @@ export default async function (t) {
   await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(800);
   ok((await page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1).textContent()).trim() === V.public_key, 'imported the RFC 8032 test key');
 
+  // An all-zero id (a device without an identity, e.g. QEMU) must NOT be presented as a binding.
+  await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: null, owner_enrolled: false, owner_generation: 0, config_files_verified_by: 'none (standalone)', can: 'enroll', device_id: '0'.repeat(32) }) }));
+  await go('/network/wifi');
+  await page.fill('input[placeholder="HookProbe-Home"]', 'Zero-Id'); await page.fill('input[type=password]', 'correct horse battery');
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  ok(await vis(page.locator('[aria-label="Device binding"] >> text=Not bound to a device')), 'an all-zero device id is shown as not bound (it means any device)');
+  await page.unroute('**/api/anchor');
   // The device reports its id: bundles made here are bound to it.
   await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: null, owner_enrolled: false, owner_generation: 0, config_files_verified_by: 'none (standalone)', can: 'enroll', device_id: V.cases['bound-to-this-device'].device_id }) }));
   await go('/network/wifi');

@@ -140,7 +140,10 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const [bStep, setBStep] = createSignal<'review' | 'done' | 'files'>('review');
   const [bFiles, setBFiles] = createSignal<{ bin: Uint8Array; sig: Uint8Array } | null>(null);
   /** Bind the bundle to this device when it reports its id (it then refuses the bundle on any other device). */
-  const deviceIdBytes = () => { const h = anchorView()?.device_id; return h && /^[0-9a-f]{32}$/i.test(h) ? Uint8Array.from(h.match(/../g)!, (x) => parseInt(x, 16)) : new Uint8Array(16); };
+  // An all-zero id means 'any device' in HQCFG1 (and is what a device without an identity reports), so it is
+  // treated as no id: the bundle stays unbound and the drawer says so.
+  const deviceIdHex = () => { const h = anchorView()?.device_id; return h && /^[0-9a-f]{32}$/i.test(h) && /[1-9a-f]/i.test(h) ? h : ''; };
+  const deviceIdBytes = () => (deviceIdHex() ? Uint8Array.from(deviceIdHex().match(/../g)!, (x) => parseInt(x, 16)) : new Uint8Array(16));
   const takesBundles = () => !!uploadView()?.types.some((t) => t.type === 'config');
   const bundleGen = () => Math.max(configView()?.generation ?? 0, configView()?.floor ?? 0, uploadView()?.types.find((t) => t.type === 'config')?.generation ?? 0) + 1;
   const bundleProblems = createMemo(() => {
@@ -401,7 +404,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <Show when={bundleProblems().length > 0}>
             <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Bundle problems"><For each={bundleProblems()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For></ul>
           </Show>
-          <p class="pcard-note" aria-label="Device binding">{anchorView()?.device_id ? `Bound to this device (id ${anchorView()!.device_id!.slice(0, 8)}…): any other device refuses it.` : 'Not bound to a device: this device does not report its id, so the bundle would be accepted by any device that trusts your key.'}</p>
+          <p class="pcard-note" aria-label="Device binding">{deviceIdHex() ? `Bound to this device (id ${deviceIdHex().slice(0, 8)}…): any other device refuses it.` : 'Not bound to a device: this device does not report an identity, so the bundle would be accepted by any device that trusts your key.'}</p>
           <p class="pcard-note">The passwords travel inside the signed bundle in clear: not protected at rest yet.</p>
           <Show when={ownerKey()} fallback={<SigningKeyPanel compact />}>
             <button class="hp-btn hp-btn--primary" disabled={bundleProblems().length > 0} onClick={() => void applyBundle()}>{takesBundles() ? 'Sign and upload the bundle' : 'Sign the bundle'}</button>
