@@ -82,6 +82,7 @@ Pbeaconbusy
 Pbrute
 Pdatavol
 Pdefer
+Pdevbase
 Pdevid
 Pdevpolicy
 Pdga
