@@ -70,3 +70,55 @@ pub fn parse_query(dns: &[u8]) -> Option<Q> {
     let edns = u16::from_be_bytes([dns[10], dns[11]]) >= 1 && dns.get(qend) == Some(&0) && dns.get(qend + 1..qend + 3) == Some(&[0, 41]);
     Some(Q { name, nl, qtype, qend, edns })
 }
+
+/// Most CNAME targets a response walk reports (Shield already stopped at 32 answers).
+pub const MAX_CNAMES: usize = 32;
+
+/// The facts Shield's response check needs from one DNS answer (ADR 0050 D4 step 2): the question name, where the
+/// question ends, and the CNAME targets among the first 32 answers (all of them, like the inline walk did). Moved out of
+/// `shield.rs` unchanged in behaviour: a malformed answer section yields `None` (Shield then passes the reply
+/// untouched, as before).
+pub struct Walk {
+    pub qname: [u8; 256],
+    pub qnl: usize,
+    pub qend: usize,
+    pub cnames: [[u8; 256]; MAX_CNAMES],
+    pub cnl: [usize; MAX_CNAMES],
+    pub ncname: usize,
+}
+
+pub fn walk_answers(dns: &[u8], out: &mut Walk) -> Option<()> {
+    if dns.len() < 12 {
+        return None;
+    }
+    let an = u16::from_be_bytes([dns[6], dns[7]]) as usize;
+    let (qnl, o) = read_name(dns, 12, &mut out.qname, true)?;
+    out.qnl = qnl;
+    out.qend = o + 4;
+    if out.qend > dns.len() {
+        return None;
+    }
+    out.ncname = 0;
+    let mut p = out.qend;
+    for _ in 0..an.min(32) {
+        let mut nm = [0u8; 256];
+        let (_, e) = read_name(dns, p, &mut nm, true)?;
+        let h = dns.get(e..e + 10)?;
+        let (ty, rdl) = (u16::from_be_bytes([h[0], h[1]]), u16::from_be_bytes([h[8], h[9]]) as usize);
+        let rd = e + 10;
+        if rd + rdl > dns.len() {
+            return None;
+        }
+        if ty == 5 && out.ncname < MAX_CNAMES {
+            let k = out.ncname;
+            if let Some((tl, _)) = read_name(dns, rd, &mut out.cnames[k], true) {
+                out.cnl[k] = tl;
+                out.ncname += 1;
+            }
+        }
+        p = rd + rdl;
+    }
+    Some(())
+}
+
+pub const WALK0: Walk = Walk { qname: [0; 256], qnl: 0, qend: 0, cnames: [[0; 256]; MAX_CNAMES], cnl: [0; MAX_CNAMES], ncname: 0 };

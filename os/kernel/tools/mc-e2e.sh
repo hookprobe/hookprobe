@@ -28,6 +28,7 @@ RUN=$(mktemp -d /tmp/mc-e2e-run.XXXX)
 echo "  (host ports ${HTTP}/${HTTPS_PORT}/${P4444}/${P23}, run dir ${RUN})"
 B="http://$HOST:$HTTP"
 LOG=$(mktemp /tmp/mc-e2e-qemu.XXXX.log)
+echo "  (QEMU console: $LOG)"
 FAILS=0
 ok()   { echo "  PASS  $*"; }
 bad()  { echo "  FAIL  $*"; FAILS=$((FAILS+1)); }
@@ -96,8 +97,11 @@ echo "$(curl -s -m 10 $C "$B/api/planner/status")" | jget "d['configured'] is Fa
 # ADR 0050 D4 step 1: every request is parsed in the EL0 server; a malformed one is refused there (400), no fault
 BADR=$(python3 -I -c "import socket,sys,urllib.parse as u; p=u.urlparse(sys.argv[1]); s=socket.create_connection((p.hostname,p.port),5); s.sendall(b'GARBAGE \\x01 / HTTP/9\\r\\n\\r\\n'); print(s.recv(64)[:12].decode(errors='replace'))" "$B" 2>&1)
 grep -q " 400" <<<"$BADR" && ok "a malformed request line is refused by the EL0 parser (400)" || bad "malformed request: $BADR"
+# ADR 0050 D4 step 2: Shield's DNS parsing runs in the EL0 LAN-services server (boot self-test + health)
+grep -qa "\[P-lansvc\] PASS" "$LOG" && ok "Shield DNS parsing in the EL0 LAN-services server: same facts as in-kernel, fault contained ([P-lansvc])" || bad "lansvc: $(grep -a 'P-lansvc\|LANSVC' "$LOG" | head -3)"
 HP=$(curl -s -m 10 $C "$B/api/health")
 echo "$HP" | jget "d['http_parser']['where']=='el0' and d['http_parser']['requests']>5 and d['http_parser']['parser_faults']==0 and d['http_parser']['server_faults']==0" | grep -q True && ok "Mission Control requests are parsed in the EL0 server (ADR 0050 D4 step 1), no faults: $(echo "$HP" | jget "d['http_parser']")" || bad "http parser placement: $(echo "$HP" | jget "d.get('http_parser')")"
+echo "$HP" | jget "d['dns_parser']['where']=='el0' and d['dns_parser']['el0_messages']>0" | grep -q True && ok "/api/health dns_parser: el0 $(echo "$HP" | jget "d['dns_parser']")" || bad "dns_parser: $(echo "$HP" | jget "d.get('dns_parser')")"
 D0=$(curl -s -m 10 $C "$B/api/detections" | jget "d['count']")
 # A baseline that could not be read must FAIL the run, never default to 0 (a vacuous pass).
 [[ "$D0" =~ ^[0-9]+$ ]] || { bad "could not read the baseline detection count ($D0)"; D0=999999; }
