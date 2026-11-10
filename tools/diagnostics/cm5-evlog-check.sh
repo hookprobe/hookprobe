@@ -5,7 +5,9 @@
 #      after the clock is known) — run after something produced detections (the LAN-client suite does);
 #   2. cut power with the relay rig (K1);
 #   3. on the next boot require "[AP-EVLOG] sealed evidence log ... M detections" with M >= what was sealed, and
-#      "[AP-PERSIST] N detections restored ... (sealed evidence log)", and Mission Control listing the bench Pi.
+#      "[AP-PERSIST] N detections restored ... (sealed evidence log)", and Mission Control listing again the
+#      detections it listed before the cut (same rule + timestamp — whatever their source: batch 29 showed the
+#      sealed one can be a WAN-side detection when other tests rebooted the unit after the LAN-client suite).
 #   tools/diagnostics/cm5-evlog-check.sh <owner-key-file> <serial-log> [mc-url] [pi-ip]
 set -u -o pipefail
 KEY="${1:?owner key file}"; LOG="${2:?serial capture log}"; MC="${3:-https://192.168.200.146}"; PIIP="${4:-10.99.0.10}"
@@ -20,6 +22,14 @@ done
 W=$(tr -d '\r\000' < "$LOG" | grep -a "\[AP-EVLOG\] [0-9]* detections sealed" | tail -1)
 [ -n "$W" ] || { echo "EVLOG: FAIL — the image never sealed a detection to the evidence log"; exit 1; }
 echo "  $W"
+J=$(mktemp); trap 'rm -f "$J"' EXIT
+mc_dets() {   # "rule_id ts" per detection Mission Control lists
+  curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$MC/api/login" -c "$J"
+  curl -sk -m 10 -b "$J" "$MC/api/detections?limit=300" | python3 -c 'import json,sys
+for d in json.load(sys.stdin).get("detections", []): print(d.get("rule_id"), d.get("ts"), d.get("src_ip") or "-")' 2>/dev/null
+}
+BEFORE=$(mc_dets)
+echo "  Mission Control lists $(grep -c . <<<"$BEFORE") detections before the cut"
 echo "== power cycle (relay K1)"
 mark=$(stat -c %s "$LOG")
 python3 "$HERE/cm5-relay.py" --backend nano --dev auto cycle >/dev/null 2>&1 || { echo "EVLOG: FAIL — relay cycle failed"; exit 1; }
@@ -35,11 +45,12 @@ echo "  ${R:-<no AP-PERSIST restore line>}"
 m=$(sed -n 's/.*records, \([0-9]*\) detections kept.*/\1/p' <<<"$E")
 [ "${m:-0}" -gt 0 ] && grep -q "sealed evidence log)" <<<"$R" || { echo "EVLOG: FAIL — no detections came back from the evidence log"; exit 1; }
 for _ in $(seq 1 30); do curl -sk -o /dev/null -m 5 "$MC/" && break; sleep 3; done
-J=$(mktemp); trap 'rm -f "$J"' EXIT
-curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$MC/api/login" -c "$J"
-D=$(curl -sk -m 10 -b "$J" "$MC/api/detections?limit=300")
-if grep -q "\"src_ip\":\"$PIIP\"" <<<"$D"; then
-  echo "EVLOG: PASS — $m detections kept in the sealed evidence log across a power cycle; Mission Control lists the bench Pi's"
+AFTER=$(mc_dets)
+kept=$(grep -cxF -f <(awk '{print $1, $2}' <<<"$BEFORE" | grep .) <(awk '{print $1, $2}' <<<"$AFTER") || true)
+pi=$(awk -v p="$PIIP" '$3 == p' <<<"$AFTER" | grep -c . || true)
+echo "  after the cycle: $kept of the pre-cut detections listed again; $pi from the bench Pi ($PIIP)"
+if [ "${kept:-0}" -gt 0 ]; then
+  echo "EVLOG: PASS — $m detections kept in the sealed evidence log across a power cycle; Mission Control lists $kept of the pre-cut detections again"
   exit 0
 fi
-echo "EVLOG: FAIL — restored on serial but Mission Control shows none from $PIIP"; exit 1
+echo "EVLOG: FAIL — restored on serial but Mission Control does not list the pre-cut detections"; exit 1

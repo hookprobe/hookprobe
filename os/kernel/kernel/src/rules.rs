@@ -548,9 +548,16 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
 
     // broadcast-storm — count only NON-EXEMPT broadcast/multicast dst frames (mDNS/
     // SSDP/LLMNR are exempt before counting, so a chatty-but-legit device is never a
-    // storm). A genuine flood on an Access port → RateLimit; Uplink → Observe.
+    // storm), PER SOURCE MAC (V1 l2guard parity — many devices' normal broadcasts never add up to one). A genuine flood on an Access port → RateLimit; Uplink → Observe.
     if crate::net::dst_is_bcast_or_mcast(frame) && !is_exempt_multicast(&frame[0..6])
-        && crate::ratelimit::bcast_over(port, BCAST_STORM_THRESH) == 1 {
+        && frame.len() >= 12
+        && crate::ratelimit::bcast_over_src(port, crate::ratelimit::mac_hash(&frame[6..12]), BCAST_STORM_THRESH) == 1 {
+            // attribute the flooder: an ARP storm has no IPv4 header — take the ARP sender address
+            let src = if src == 0 && frame.len() >= 32 && frame[12] == 0x08 && frame[13] == 0x06 {
+                u32::from_be_bytes([frame[28], frame[29], frame[30], frame[31]])
+            } else {
+                src
+            };
             // A3 FIX: a NON-EXEMPT broadcast/multicast FLOOD is resource-exhaustion, not
             // legit many-client traffic (legit mDNS/SSDP/LLMNR are exempted above, row L1).
             // So it is a rate wall crossed → FindingClass::FloodRate → a bounded, self-
