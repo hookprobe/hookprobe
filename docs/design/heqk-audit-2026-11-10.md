@@ -136,6 +136,17 @@ payload 2,518,296 B, **619 KB headroom**.
 | J4 | trust anchor on metal: first boot `PINNED`, later power-cycled boots `pinned operator key`, POLICY verified | serial |
 | Soak (image Z) | local WAN-side sink 79–86 Mbps per 5-min sample, health ok, DNS ok, 0 serial faults (3 h run in progress) | `cm5-soak.sh` |
 
+| §2.1 #5 | per-session write rate limit (20/min) on actions + owner-rule changes; **revoke-all** (ADR 0055 D7/D8: `op=revoke_all`, alias `/api/owner-rules/revoke-all`, owner re-auth, one sealed `OP_CLEAR` record that survives replay) | `[P-write-rate]`, `[P-ownerapi]`, `[P-ownerjournal]` |
+| §2.1 #6 | TLS private scalar no longer kept in EL1: re-derived from the SRK for each INIT (start + every EL0 restart), all EL1 copies zeroised | mc-e2e HTTPS leg (handshake, flood + restarts, chain) |
+| §2.1 #9 | IPv6 source identity keyed per boot (SipHash-2-4, hardware TRNG key) | `[P-v6src]` incl. the SipHash KAT |
+| WAN outage | DHCP acquisition in the serve loop (no 5-s-in-10 LAN stall during an ISP outage / late cable); NAKed / expired lease re-acquired in the loop | build; metal J8 next batch |
+| Bench | `cm5-ota-rollback-check.sh` (J2), `cm5-wan-outage-check.sh` (J8) | scripts |
+
+Deferred with reason: A10 (detbench through `apcore`) — the corpus is captured on the bench subnet, not from
+leased AP clients, so the lease-bound `client4` gate would need a host→lease mapping layer first; the current
+replay already exercises the rule plane, Shield DNS and the exfil accounting. §2.1 #8 (software AK in release)
+only matters for blank-OTP units, which fail closed today — decided together with factory OTP provisioning (B2).
+
 Known minor (fixed): a stalled upload stayed listed as in flight until the next `begin`; `GET /api/upload` now expires it.
 Re-ranked: per-pack generation floors (§2.1 #2) — uploads already refuse an older generation than the active
 pack and need the owner key; a boot-time floor would turn a lost store copy into *no* list instead of an older
