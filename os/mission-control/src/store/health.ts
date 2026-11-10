@@ -28,6 +28,12 @@ interface Health {
   detections_cap?: number;
   oldest_detection?: number;
   sealed_cap?: number;
+  seen?: number;
+  forwarded?: number;
+  dropped?: number;
+  rules_active?: number;
+  last_reset?: string;
+  clock?: string;
   wan?: { up: boolean; ip: string; mode: string; ipv6: boolean; clients: number; pkts_out: number; pkts_in: number; dns_inspected: number; dns_blocked?: number; blocklist?: number };
 }
 
@@ -46,6 +52,8 @@ async function readHealth(): Promise<void> {
         detectionsCap: h.detections_cap,
         oldestDetection: h.oldest_detection ?? 0,
         sealedCap: h.sealed_cap ?? 0,
+        seen: h.seen, forwarded: h.forwarded, dropped: h.dropped, rulesActive: h.rules_active,
+        lastReset: h.last_reset, clock: h.clock,
         wan: h.wan ? { up: h.wan.up, ip: h.wan.ip, mode: h.wan.mode, ipv6: h.wan.ipv6, clients: h.wan.clients,
                        pktsOut: h.wan.pkts_out, pktsIn: h.wan.pkts_in, dnsInspected: h.wan.dns_inspected,
                        dnsBlocked: h.wan.dns_blocked ?? 0, blocklist: h.wan.blocklist ?? 0 } : null,

@@ -70,8 +70,8 @@
 .l0-link-row { display: block; padding: 10px 12px; border: 1px solid var(--hp-border); border-radius: var(--hp-radius); color: var(--hp-text-primary); text-decoration: none; font-size: 14px; }
 .l0-link-row:hover { border-color: var(--hp-text-muted); }
 .l0-meter { display: flex; align-items: center; gap: 10px; }
-.l0-meter-track { flex: 1; height: 8px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
-.l0-meter-fill { height: 100%; background: var(--hp-cyan); }
+.l0-meter-track { display: block; flex: 1; height: 8px; border-radius: 999px; background: rgba(255,255,255,.08); overflow: hidden; }
+.l0-meter-fill { display: block; height: 100%; background: var(--hp-cyan); }
 
 /* My Network: zone columns */
 .zones { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; }

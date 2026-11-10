@@ -77,7 +77,9 @@ export const [deployMode,      setDeployMode]       = createSignal<DeployMode>('
 export const [substrate,       setSubstrate]        = createSignal<string>('');
 /** Device-reported facts for the home tiles (heqk `/api/health`); null until the device answers. */
 export interface WanFacts { up: boolean; ip: string; mode: string; ipv6: boolean; clients: number; pktsOut: number; pktsIn: number; dnsInspected: number; dnsBlocked: number; blocklist: number }
-export interface DeviceStats { hostsActive: number; detections: number; detectionsCap: number; oldestDetection: number; sealedCap: number; wan: WanFacts | null }
+export interface DeviceStats { hostsActive: number; detections: number; detectionsCap: number; oldestDetection: number; sealedCap: number; wan: WanFacts | null;
+  /** packets the IPS saw / forwarded / dropped since boot, rules armed, how the last run ended */
+  seen?: number; forwarded?: number; dropped?: number; rulesActive?: number; lastReset?: string; clock?: string }
 export const [deviceStats,     setDeviceStats]      = createSignal<DeviceStats | null>(null);
 export const [currentUser]                          = createSignal<string>('Admin');
 export const [lastChecked,     setLastChecked]      = createSignal<string>('just now');

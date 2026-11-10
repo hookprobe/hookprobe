@@ -29,6 +29,7 @@ import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
 import { formatTime, formatBytes, mitreName, mitreTactic, type ProcessTreeNode } from '../store/api';
 import AppShell from './AppShell';
+import { incidentHref } from '../store/routes';
 import {
   startInvestigateLive, incidents, queueStatus, queueError,
   detail, detailStatus, detailError, fetchIncidentDetail, mitreForRelatedEvents,
@@ -208,6 +209,7 @@ const InvestigateApp: Component = () => {
                         <span class={`inv-pri pri--${d.priority.toLowerCase()}`}>{d.priority}</span>
                         <h2 class="inv-title">{d.title}</h2>
                         <span class="inv-status">{d.status}</span>
+                        <a class="inv-status" href={incidentHref(d.id)} style={{ 'text-decoration': 'none' }}>Open the full story →</a>
                       </div>
                       <div class="inv-id">{d.device_ip} · {d.id}
                         {/* ADR 0053: reversible, time-bounded actions (heqk device only; refused elsewhere) */}
@@ -249,7 +251,7 @@ const InvestigateApp: Component = () => {
                       <Panel ctx="aegis" title="WHY AEGIS DECIDED THIS">
                         <div class="inv-why-top">
                           <div class="inv-why-stat">
-                            <div class="inv-why-big hp-text-gradient">{Math.round(d.explanation.confidence)}%</div>
+                            <div class="inv-why-big hp-text-gradient">{Math.round(d.explanation.confidence <= 1 ? d.explanation.confidence * 100 : d.explanation.confidence)}%</div>
                             <div class="inv-why-k">Confidence</div>
                           </div>
                           <div class="inv-why-stat">
