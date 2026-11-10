@@ -20,7 +20,7 @@ export default async function (t) {
   ok(await vis(page.getByText(/grouped by the policy in your signed DEVICES\.TXT/)), 'network: subtitle (read by mc-e2e)');
   await page.click('.dev-btn >> text=Kitchen camera'); await page.waitForTimeout(300);
   ok(await vis(page.locator('.drawer-title', { hasText: 'Kitchen camera' })), 'network: device drawer');
-  ok(await vis(page.locator('.drawer >> text=Re-sign it to change them')), 'network: move / rename greyed with the reason');
+  ok(await vis(page.locator('.drawer >> text=Re-sign it to rename a device')), 'network: rename greyed with the reason');
   await go('/network/devices');
   ok(await page.locator('.l0-table tbody tr').count() >= 5, 'network: List view table');
   ok(await vis(page.locator('.l0-seg-item.is-active', { hasText: 'List' })), 'network: List segment active');
