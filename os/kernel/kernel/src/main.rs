@@ -69,6 +69,7 @@ mod detbench;
 mod artstore;
 mod datavol;
 mod ownerjournal;
+mod alerthook;
 #[cfg(feature = "netsvc")]
 mod ownerapi;
 #[cfg(feature = "netsvc")]
@@ -7026,6 +7027,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = actions::seq_floor_selftest();
         let _ = bpf::verify_heap_selftest();
         let _ = policysig::wansig_selftest();
+        let _ = alerthook::selftest();
 
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not

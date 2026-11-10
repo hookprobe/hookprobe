@@ -91,6 +91,9 @@ securechannel = ["dep:ml-kem", "dep:x25519-dalek", "dep:chacha20poly1305"]
 # refuses to build if this is enabled together with the `cm5` (metal) profile.
 # validate.sh's QEMU builds enable it; the prod/cm5 image MUST NOT.
 securechannel-selftest = ["securechannel"]
+# G19 super-PoP / responder-sim on a HOST only: exposes ResponderStatic::from_seeds without the selftest harness.
+# compile_error! with cm5 or cloud (entropy.rs).
+securechannel-host-responder = ["securechannel"]
 # Bench Wi-Fi modes (CM5 metal bench only — refused together with `prod`, see main.rs):
 #   apmode  — heqk as WPA2 AP + SNAT to the end0 uplink. Its serve loop never returns and
 #             NATs client traffic WITHOUT packet::verdict, so it REPLACES the IPS service;
