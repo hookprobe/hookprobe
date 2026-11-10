@@ -210,7 +210,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     // target + value (and the before/after preview)
     let mut tbuf = [0u8; oj::TARGET_MAX];
     let (tlen, value, before, after, shadow): (usize, u8, &'static str, &'static str, &'static str) = match kind {
-        Kind::Artifact | Kind::OwnerKey => return refuse(c, "kind"),
+        Kind::Artifact | Kind::OwnerKey | Kind::AlertHook => return refuse(c, "kind"),
         Kind::DevicePolicy | Kind::ShieldProfile => {
             let Some(m) = mac(target_s) else { return refuse(c, "target") };
             tbuf[..6].copy_from_slice(&m);
@@ -407,6 +407,88 @@ pub fn rotate_owner_key(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, sa
     }
 }
 
+/// Owner alert webhook (operator 2026-11-10): `POST /api/alert-hook` — `op=set` with ip, port, format
+/// (ntfy|gotify|json), path (the topic / endpoint), secret (the signing secret, >= 16 chars; only its hash is kept),
+/// min_severity (critical|high|medium|low), or `op=remove`. Same guards + re-auth as every owner write.
+pub fn alert_hook(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<u64, &'static str> {
+    use crate::alerthook::{Hook, FMT_GOTIFY, FMT_JSON, FMT_NTFY, PATH_MAX};
+    let mut b = [[0u8; 192]; 11];
+    let [ref mut b0, ref mut b1, ref mut b2, ref mut b3, ref mut b4, ref mut b5, ref mut b6, ref mut b7, ref mut b8, ref mut b9, ref mut b10] = b;
+    let op = form_get(body, "op", b0).unwrap_or("");
+    let key = form_get(body, "owner_key", b1).unwrap_or("");
+    let reason = form_get(body, "reason", b2).unwrap_or("");
+    let permanent = form_get(body, "permanent", b3) == Some("true");
+    let seq: u64 = form_get(body, "seq", b4).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let ip_s = form_get(body, "ip", b5).unwrap_or("");
+    let port: u16 = form_get(body, "port", b6).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let fmt_s = form_get(body, "format", b7).unwrap_or("ntfy");
+    let path = form_get(body, "path", b8).unwrap_or("");
+    let secret = form_get(body, "secret", b9).unwrap_or("");
+    let sev_s = form_get(body, "min_severity", b10).unwrap_or("high");
+    let tag = crate::mcauth::session_tag(c.session);
+    if !origin_ok(c.origin, c.host) {
+        return Err("origin");
+    }
+    if !crate::mcauth::csrf_ok(c.session, c.csrf) {
+        return Err("csrf");
+    }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return Err("rate limited: at most 20 writes a minute per session");
+    }
+    if !crate::actions::accept_seq(tag, seq) {
+        return Err("replay");
+    }
+    if reason.trim().len() < 3 {
+        return Err("reason required");
+    }
+    if !permanent {
+        return Err("permanent=true required");
+    }
+    let r = match op {
+        "remove" => oj::rec(Kind::AlertHook, oj::OP_REMOVE, b"-", 0, b"/"),
+        "set" => {
+            let mut ip = [0u8; 4];
+            let mut parts = ip_s.split('.');
+            for o in ip.iter_mut() {
+                *o = parts.next().and_then(|p| p.parse().ok()).ok_or("ip: a.b.c.d")?;
+            }
+            if parts.next().is_some() {
+                return Err("ip: a.b.c.d");
+            }
+            let fmt = match fmt_s { "ntfy" => FMT_NTFY, "gotify" => FMT_GOTIFY, "json" => FMT_JSON, _ => return Err("format: ntfy|gotify|json") };
+            let min_sev = match sev_s { "critical" => 1, "high" => 2, "medium" => 3, "low" => 4, _ => return Err("min_severity: critical|high|medium|low") };
+            if secret.trim().len() < 16 {
+                return Err("secret: at least 16 characters (the receiver verifies X-HQ-Signature with it)");
+            }
+            if path.len() > PATH_MAX {
+                return Err("path too long");
+            }
+            let h = Hook { ip, port, fmt, min_sev, key: boot_abi::sha256::digest(secret.trim().as_bytes()), path: [0; PATH_MAX], plen: 0 };
+            let enc = h.encode();
+            Hook::decode(&enc, path.as_bytes()).ok_or("target: ip + port (not 0) and a path starting with /")?;
+            oj::rec(Kind::AlertHook, oj::OP_SET, &enc, 0, path.as_bytes())
+        }
+        _ => return Err("op: set|remove"),
+    };
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return Err("re-authentication failed");
+    }
+    let mut r = r;
+    r.session = u32::from_le_bytes(tag);
+    r.ms = c.now_ms;
+    let res = unsafe {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+            (Some(j), Some(d)) => j.append(&mut **d, r),
+            _ => return Err("no journal"),
+        }
+    };
+    match res {
+        Ok(seq) => Ok(seq),
+        Err(oj::JErr::Full) => Err("journal full"),
+        Err(_) => Err("storage error"),
+    }
+}
+
 /// G28 at boot: the owner that Mission Control uses — a journal rotation when it names THIS OWNER.TXT, else the
 /// file's owner (an OWNER.TXT re-flashed since the rotation is the physical-access recovery and wins).
 pub fn effective_owner(file_owner: Option<crate::mcauth::Owner>) -> (Option<crate::mcauth::Owner>, &'static str) {
@@ -479,11 +561,46 @@ pub fn rotate_selftest() -> bool {
     crate::mcauth::set_owner_file_hash([0x22; 32]);
     let (eff2, _) = effective_owner(Some(file_owner));
     let reflash_wins = eff2 == Some(file_owner);
+    // alert hook set with the NEW key, then churn the journal until it compacts: both settings must survive
+    // compaction and a replay (each carried record keeps its own sequence number)
+    let sess2 = auth.login(new.as_bytes(), 8_000, || Some([0x34; 16])).ok();
+    let hook_ok = sess2.is_some_and(|id| {
+        let mut hx = [0u8; 32];
+        session_hex(&id, &mut hx);
+        let s2 = core::str::from_utf8(&hx).unwrap_or("");
+        let mut t2 = [0u8; 32];
+        let _ = crate::mcauth::csrf_token(Some(s2), &mut t2);
+        let c2 = Ctx { session: Some(s2), origin: "https://10.99.0.1", host: "10.99.0.1", csrf: core::str::from_utf8(&t2).unwrap_or(""), now_ms: 8_000 };
+        let q = crate::actions::last_seq(crate::mcauth::session_tag(Some(s2))) + 1;
+        let n = form(&mut buf, "op=set&ip=10.99.0.20&port=8080&format=ntfy&path=/heqk&secret=sixteen-chars-secret&min_severity=high&reason=alerts&permanent=true&owner_key=new-owner-key-for-rotation-0001", q);
+        alert_hook(&c2, &buf[..n], &mut auth).is_ok()
+    });
+    let hook_set = crate::alerthook::get().is_some_and(|h| h.port == 8080 && h.path() == "/heqk");
+    let mut churn = true;
+    for k in 0..90u32 {
+        let mut r = oj::rec(Kind::ShieldBlock, if k % 2 == 0 { oj::OP_SET } else { oj::OP_REMOVE }, b"churn.example", 1, b"churn");
+        r.ms = 9_000 + k as u64;
+        churn &= unsafe {
+            match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+                (Some(j), Some(d)) => j.append(&mut **d, r).is_ok(),
+                _ => false,
+            }
+        };
+    }
+    let compacted = unsafe { (*core::ptr::addr_of!(J)).as_ref().is_some_and(|j| j.epoch() > 1) };
+    let replay_clean = unsafe {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+            (Some(j), Some(d)) => !j.replay(&**d).damaged,
+            _ => false,
+        }
+    };
+    let carried = oj::owner_rotation().is_some() && crate::alerthook::get().is_some_and(|h| h.port == 8080);
+    let survive = hook_ok && hook_set && churn && compacted && replay_clean && carried;
     oj::clear();
-    let pass = bad_reauth && weak && rotated && sessions_ended && old_refused && new_ok && kept && boot_rotated && reflash_wins;
+    let pass = bad_reauth && weak && rotated && sessions_ended && old_refused && new_ok && kept && boot_rotated && reflash_wins && survive;
     arch_aarch64::_print(format_args!(
-        " [P-owner-rotate] {} — G28 owner-key rotation: wrong current key refused={} weak new key refused={} rotated={} every session ended={} old key refused={} new key signs in={} kept in the journal={} next boot uses it={} a re-flashed OWNER.TXT wins={}\n",
-        if pass { "PASS" } else { "FAIL" }, bad_reauth, weak, rotated, sessions_ended, old_refused, new_ok, kept, boot_rotated, reflash_wins));
+        " [P-owner-rotate] {} — G28 owner-key rotation: wrong current key refused={} weak new key refused={} rotated={} every session ended={} old key refused={} new key signs in={} kept in the journal={} next boot uses it={} a re-flashed OWNER.TXT wins={} | alert hook set + both settings survive compaction and replay={}\n",
+        if pass { "PASS" } else { "FAIL" }, bad_reauth, weak, rotated, sessions_ended, old_refused, new_ok, kept, boot_rotated, reflash_wins, survive));
     pass
 }
 
