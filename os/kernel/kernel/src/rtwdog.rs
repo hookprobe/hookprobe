@@ -110,6 +110,14 @@ static CRASH_SET: AtomicBool = AtomicBool::new(false);
 /// Phase 3 crash record: take what the previous boot's panic / fatal-fault path left (once, early at boot)
 /// and print it. Returns whether there was one.
 pub fn take_crash_at_boot() -> bool {
+    #[cfg(feature = "cm5")]
+    {
+        let m = arch_aarch64::crashrec::take_canaries();
+        let p = arch_aarch64::crashrec::PROBES;
+        arch_aarch64::_print(format_args!(
+            " [CRASH-PROBE] DRAM canaries from the last crash still present: {:#x}={} {:#x}={} {:#x}={} (all false after a power-on = normal)\n",
+            p[0], m & 1 != 0, p[1], m & 2 != 0, p[2], m & 4 != 0));
+    }
     match arch_aarch64::crashrec::take() {
         Some(c) => {
             arch_aarch64::_print(format_args!(

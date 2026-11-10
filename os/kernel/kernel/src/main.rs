@@ -3109,7 +3109,15 @@ fn cm5_p10_probe() {
                                     // Management floor (task #21 N3): explicit `mgmt_floor`, else the management
                                     // sub-interface's subnet (the operator's path), else the compile-time default.
                                     let floor = l.floor.or_else(|| l.mgmt.and_then(|mg| mg.stat.map(|(ip, pl, _)| (ip, pl))));
-                                    if let Some((ip, pl)) = floor {
+                                    // Audit finding 11: with an operator key, the floor (who is never enforced against) is
+                                    // honoured only from a SIGNED WAN.TXT. Connectivity settings apply either way.
+                                    let signed = wan_signed(&dev);
+                                    match signed {
+                                        Some(Ok(g)) => kprint!(" [WAN] WAN.TXT signature OK — operator key, generation {}\n", g),
+                                        Some(Err(e)) => kprint!(" [WAN] WAN.TXT NOT signed by the operator key ({:?}) — connectivity settings applied, mgmt_floor / management-subnet floor IGNORED\n", e),
+                                        None => {}
+                                    }
+                                    if let Some((ip, pl)) = floor.filter(|_| !matches!(signed, Some(Err(_)))) {
                                         let _ = crate::verdict::set_mgmt_floor(u32::from_be_bytes(ip), pl as u32);
                                     }
                                     if l.floor_bad {
@@ -6972,6 +6980,7 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(feature = "netsvc")]
         let _ = actions::seq_floor_selftest();
         let _ = bpf::verify_heap_selftest();
+        let _ = policysig::wansig_selftest();
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
             use arch_aarch64::crashrec::{take, write};
@@ -13996,6 +14005,28 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
         kprint!(" [POLICY] no operator key in this image (standalone) — POLICY.TXT accepted unsigned\n");
     }
     Some(hal::policy::parse_policy(&buf, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }))
+}
+
+/// WAN.SIG check (audit finding 11). None = no operator key (standalone: unsigned WAN.TXT is fine);
+/// Some(Ok(gen)) = signed by the operator key; Some(Err) = missing / bad.
+#[allow(dead_code)]
+fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr>> {
+    let key = policysig::key()?;
+    let mut sec = [0u8; 512];
+    let mut sig = [0u8; 512];
+    let r = (|| {
+        dev.read_block(0, &mut sec).ok()?;
+        let p1 = store::parse_mbr(&sec)[0].start;
+        let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
+        let (slba, _sn) = fat::locate_contiguous(dev, p1, policysig::WAN_SIG_8_3)?;
+        dev.read_block(lba, &mut sec).ok()?;
+        dev.read_block(slba, &mut sig).ok()?;
+        Some(())
+    })();
+    Some(match r {
+        None => Err(policysig::SigErr::Missing),
+        Some(()) => policysig::verify_wan(&sec, &sig, &key),
+    })
 }
 
 /// Read + parse WAN.TXT from a block device's first partition. None = no file (=> DHCP).

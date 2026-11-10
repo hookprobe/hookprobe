@@ -211,6 +211,11 @@ if len(body) > 512:
 open(dst, "wb").write(body + b"\n" * (512 - len(body)))
 PY
 [ "$(stat -c %s "$STAGE/WAN.TXT")" = 512 ] || { echo "FATAL: WAN.TXT must be exactly 512 bytes"; exit 1; }
+# WAN.SIG (audit 2026-11-10 finding 11): WAN.TXT carries mgmt_floor — with an operator key the device honours the
+# floor only from a signed WAN.TXT (connectivity settings apply either way).
+if [ -n "$POLICY_KEY" ]; then
+  python3 -I "$HEQK/tools/policy-sign.py" sign-wan "$POLICY_KEY" "$STAGE/WAN.TXT" "$POLICY_GEN" "$STAGE/WAN.SIG" >/dev/null || { echo "FATAL: signing WAN.TXT failed"; exit 1; }
+fi
 # POLICY.TXT — the WAN policy (task #26: interface-attached ACLs + prefix lists, routes; hal::policy),
 # a fixed 4 KiB (8 sectors) so it can be rewritten in place. Default = an EMPTY policy (no rules: the
 # forwarding behaviour is unchanged). --policy-file supplies the operator's (bench) rules.
@@ -276,7 +281,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/OUI.TXT "$STAGE"/OUI.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/WAN.SIG "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/OUI.TXT "$STAGE"/OUI.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
