@@ -34,9 +34,12 @@ pub enum Ty {
     Wan = 6,
     Wifi = 7,
     Policy = 8,
+    /// ADR 0059 step 2: the HQCFG1 configuration bundle (wan + wifi + policy in ONE signed unit) — staged; cfgd
+    /// runs it as a health-checked trial (step 3).
+    Config = 9,
 }
-pub const NTY: usize = 9;
-pub const ALL: [Ty; NTY] = [Ty::Block, Ty::Allow, Ty::Ioc, Ty::Rules, Ty::Oui, Ty::Devices, Ty::Wan, Ty::Wifi, Ty::Policy];
+pub const NTY: usize = 10;
+pub const ALL: [Ty; NTY] = [Ty::Block, Ty::Allow, Ty::Ioc, Ty::Rules, Ty::Oui, Ty::Devices, Ty::Wan, Ty::Wifi, Ty::Policy, Ty::Config];
 /// Types at or past this index live in the SECOND manifest pair (store sectors 2/3, "HQSTMAN2"): the first
 /// manifest sector holds 6 entries; each group commits atomically on its own sector.
 pub const G1_FIRST: usize = 6;
@@ -46,7 +49,7 @@ fn group(t: Ty) -> usize {
 impl Ty {
     /// Staged types apply at the next boot (their loaders run once, at boot) — never hot-reloaded.
     pub fn staged(self) -> bool {
-        matches!(self, Ty::Wan | Ty::Wifi | Ty::Policy)
+        matches!(self, Ty::Wan | Ty::Wifi | Ty::Policy | Ty::Config)
     }
 }
 
@@ -69,6 +72,7 @@ const TYPES: [TyInfo; NTY] = [
     TyInfo { name: "wan", txt: b"WAN     TXT", sig: b"WAN     SIG", magic: b"HQNSIG1\0", cap: 512 },
     TyInfo { name: "wifi", txt: b"WIFI    TXT", sig: b"WIFI    SIG", magic: b"HQWSIG1\0", cap: 1024 },
     TyInfo { name: "policy", txt: b"POLICY  TXT", sig: b"POLICY  SIG", magic: b"HQPSIG1\0", cap: hal::policy::POLICY_FILE_LEN as u64 },
+    TyInfo { name: "config", txt: b"CONFIG  BIN", sig: b"CONFIG  SIG", magic: b"HQCSIG1\0", cap: crate::cfgbundle::MAX_BUNDLE as u64 },
 ];
 
 impl Ty {
@@ -106,8 +110,14 @@ pub struct Entry {
     pub gen: u64,
     pub len: u64,
     pub digest: [u8; 32],
+    /// ADR 0059 step 3 (cfgd): STATE_ACTIVE (committed / last-known-good) or STATE_PENDING (on trial).
+    pub state: u8,
+    /// Boots started while PENDING (a second boot while PENDING reverts).
+    pub trials: u8,
 }
-const E0: Entry = Entry { half: 0, gen: 0, len: 0, digest: [0; 32] };
+pub const STATE_ACTIVE: u8 = 0;
+pub const STATE_PENDING: u8 = 1;
+const E0: Entry = Entry { half: 0, gen: 0, len: 0, digest: [0; 32], state: STATE_ACTIVE, trials: 0 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Manifest {
@@ -133,6 +143,8 @@ impl Manifest {
             let e = &self.e[i];
             let o = 16 + k * 56;
             s[o] = e.half;
+            s[o + 1] = e.state;
+            s[o + 2] = e.trials;
             s[o + 8..o + 16].copy_from_slice(&e.gen.to_le_bytes());
             s[o + 16..o + 24].copy_from_slice(&e.len.to_le_bytes());
             s[o + 24..o + 56].copy_from_slice(&e.digest);
@@ -151,7 +163,9 @@ impl Manifest {
         for (k, i) in Self::range(g).enumerate() {
             let o = 16 + k * 56;
             e[i].half = s[o];
-            if e[i].half > 2 {
+            e[i].state = s[o + 1];
+            e[i].trials = s[o + 2];
+            if e[i].half > 2 || e[i].state > STATE_PENDING {
                 return None;
             }
             e[i].gen = u64::from_le_bytes(s[o + 8..o + 16].try_into().ok()?);
@@ -217,7 +231,7 @@ pub fn slot(store: (u64, u64), t: Ty, half: u8) -> (u64, u64) {
 }
 
 /// Types whose store copy failed its loader this boot (RAM only): `locate` falls back to FAT.
-static mut DISABLED: u8 = 0;
+static mut DISABLED: u16 = 0;
 pub fn disable(t: Ty) {
     unsafe { DISABLED |= 1 << t as u8 };
 }
@@ -328,6 +342,24 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
                 _ => crate::policysig::verify(&buf[..n], sig, key, crate::policysig::floor()).map(|g| (g, n as u64)).map_err(|_| LoadErr::BadSignature),
             }
         }
+        Ty::Config => {
+            // ADR 0059 step 2: the bundle is exactly total_len bytes (from the HQCSIG1); cfgbundle verifies it whole
+            let len = u32::from_le_bytes([sig[9], sig[10], sig[11], sig[12]]) as usize;
+            if len > cap as usize || len < crate::cfgbundle::HDR {
+                return Err(LoadErr::BadSignature);
+            }
+            let buf = unsafe { &mut *core::ptr::addr_of_mut!(VBUF) };
+            let mut sec = [0u8; 512];
+            for k in 0..len.div_ceil(512) {
+                dev.read_block(data_lba + k as u64, &mut sec).map_err(|_| LoadErr::Io)?;
+                buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
+            }
+            let v = crate::cfgbundle::verify(&buf[..len], sig, key, &[0u8; 16], 0).map_err(|_| LoadErr::BadSignature)?;
+            // ADR 0059 D7: remember whether this bundle keeps a management path (upload finish refuses it if not)
+            let ok = crate::cfgd::keeps_mgmt_path(v.section(crate::cfgbundle::KIND_POLICY));
+            unsafe { CONFIG_MGMT_OK = ok };
+            Ok((v.generation, len as u64))
+        }
         Ty::Devices | Ty::Rules => {
             let buf = unsafe { &mut *core::ptr::addr_of_mut!(VBUF) };
             let n = (cap as usize).min(buf.len());
@@ -358,7 +390,7 @@ pub fn reload<D: BlockDev>(dev: &D, t: Ty) -> Result<(), ()> {
         Ty::Oui => crate::oui::load(dev).file != 2,
         Ty::Devices => crate::devpolicy::load(dev).file != 2,
         // ADR 0058: staged — its boot loader verifies it again at the next boot (a refusal there falls back)
-        Ty::Wan | Ty::Wifi | Ty::Policy => true,
+        Ty::Wan | Ty::Wifi | Ty::Policy | Ty::Config => true,
     };
     if ok { Ok(()) } else { Err(()) }
 }
@@ -439,7 +471,9 @@ pub fn activate<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src_lba: u64, 
     let g = group(t);
     let mut m = old;
     if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
-    m.e[t as usize] = Entry { half, gen, len, digest: *digest };
+    // a new configuration bundle starts as a cfgd TRIAL (PENDING); everything else is committed at once
+    let state = if t == Ty::Config { STATE_PENDING } else { STATE_ACTIVE };
+    m.e[t as usize] = Entry { half, gen, len, digest: *digest, state, trials: 0 };
     commit(dev, store, &m, g)?;
     unsafe { DISABLED &= !(1 << t as u8) };
     if reload(dev, t).is_err() {
@@ -464,6 +498,39 @@ fn commit<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), m: &Manifest, g:
     Ok(())
 }
 
+static mut CONFIG_MGMT_OK: bool = true;
+/// The management-path invariant of the last `config` bundle `verify` saw (ADR 0059 D7).
+pub fn config_mgmt_ok() -> bool {
+    unsafe { CONFIG_MGMT_OK }
+}
+
+/// ADR 0059 step 3 (cfgd): rewrite one entry's trial state / half and commit its manifest group.
+pub fn set_entry<D: BlockDev + ?Sized>(dev: &mut D, t: Ty, f: impl FnOnce(&mut Entry)) -> Result<Entry, ActErr> {
+    let store = store_region(dev).ok_or(ActErr::NoStore)?;
+    let mut m = read_manifest(dev, store);
+    f(&mut m.e[t as usize]);
+    let g = group(t);
+    if g == 0 { m.seq += 1 } else { m.seq2 += 1 }
+    commit(dev, store, &m, g)?;
+    Ok(m.e[t as usize])
+}
+
+/// The type's current entry (E0 = nothing committed).
+pub fn entry<D: BlockDev + ?Sized>(dev: &D, t: Ty) -> Option<Entry> {
+    let store = store_region(dev)?;
+    Some(read_manifest(dev, store).e[t as usize])
+}
+
+/// Read a half's signature sector + verify it with the type's verifier: (gen, len, data_lba).
+pub fn verify_half<D: BlockDev + ?Sized>(dev: &D, t: Ty, half: u8, key: &[u8; 32]) -> Option<(u64, u64, u64)> {
+    let store = store_region(dev)?;
+    let (sl, dl) = slot(store, t, half);
+    let mut sig = [0u8; 512];
+    dev.read_block(sl, &mut sig).ok()?;
+    let (g, l) = verify(dev, t, &sig, dl, key).ok()?;
+    Some((g, l, dl))
+}
+
 /// ADR 0058: re-activate the OTHER half of a type (the previous generation), after verifying it again with the
 /// type's own verifier. Staged types apply at the next boot; packs reload now (rolled back on refusal). POLICY can
 /// never go below its persisted generation floor (its verifier refuses — `policysig::floor`).
@@ -484,7 +551,7 @@ pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, 
     let g = group(t);
     let mut m = old;
     if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
-    m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish() };
+    m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish(), state: STATE_ACTIVE, trials: 0 };
     commit(dev, store, &m, g)?;
     unsafe { DISABLED &= !(1 << t as u8) };
     if reload(dev, t).is_err() {
