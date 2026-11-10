@@ -9,8 +9,8 @@ export default async function (t) {
   ok(!(await vis(page.locator('.hp-banner--danger, .hp-banner--trial'))), 'no banners when the device does not serve /api/config or /api/anchor');
 
   await page.route('**/api/anchor', json({ vendor_key: null, owner_key: null, owner_enrolled: false, owner_generation: 0, config_files_verified_by: 'none (standalone)', can: 'enroll',
-    config_protected: false, state: 'CONFIG UNPROTECTED', floors: { wan: { current: 3, floor: 3 }, wifi: { current: 1, floor: 1 } } }));
-  await page.route('**/api/config', json({ state: 'trial', generation: 4, floor: 3, on_trial: 5, window_s: 300, elapsed_s: 60, auto_rollback: true, health: 'waiting for the internet' }));
+    config_protected: false, state: 'CONFIG UNPROTECTED', floors: { wan: { current: 3, floor: 3 }, wifi: { current: 1, floor: 1 }, policy: 2 } }));
+  await page.route('**/api/config', json({ state: 'trial', generation: 5, floor: 3, on_trial: true, window_s: 300, elapsed_s: 60, auto_rollback: true, health: 'waiting for the internet' }));
   await go('/network/wan', 1500);
   ok(await vis(page.locator('.hp-banner--danger >> text=Configuration unprotected')), 'red banner when the device reports CONFIG UNPROTECTED');
   ok(await page.locator('.hp-banner--danger a[href="/admin/identity"]').count() === 1, 'unprotected banner links to the fix');
@@ -25,13 +25,13 @@ export default async function (t) {
 
   // Without auto_rollback the banner must not promise one.
   await page.unroute('**/api/config');
-  await page.route('**/api/config', json({ state: 'trial', generation: 4, floor: 3, on_trial: 5, window_s: 300, elapsed_s: 0, auto_rollback: false, health: '' }));
+  await page.route('**/api/config', json({ state: 'trial', generation: 5, floor: 3, on_trial: true, window_s: 300, elapsed_s: 0, auto_rollback: false, health: '' }));
   await go('/network/wan', 1500);
   ok(await vis(trial.locator('text=It stays until you keep it or roll it back')) && !(await vis(trial.locator('text=by itself'))), 'no rollback promise when the device does not report one');
 
   // Management-plane change: Keep is required, not automatic.
   await page.unroute('**/api/config');
-  await page.route('**/api/config', json({ state: 'trial', generation: 4, floor: 3, on_trial: 5, window_s: 300, elapsed_s: 10, auto_rollback: true, needs_confirm: true, health: 'internet up' }));
+  await page.route('**/api/config', json({ state: 'trial', generation: 5, floor: 3, on_trial: true, window_s: 300, elapsed_s: 10, auto_rollback: true, needs_confirm: true, health: 'internet up' }));
   await go('/network/wan', 1500);
   ok(await vis(trial.locator('text=Keep it is required')) && !(await vis(trial.locator('text=by itself in'))), 'management-plane trial: Keep is required (not auto-committed)');
 
@@ -42,4 +42,5 @@ export default async function (t) {
   await page.locator('label:has-text("Repeat it") input').fill('floors passphrase');
   await Promise.all([page.waitForEvent('download'), page.click('text=Create key and download backup')]); await page.waitForTimeout(800);
   ok(await vis(page.locator('.prow', { hasText: 'Internet settings' }).locator('text=generation 3')), 'key panel shows per-file generation floors');
+  ok(await vis(page.locator('.prow', { hasText: 'Firewall settings' }).locator('text=older than 3 refused')), 'policy floor as a bare number (device shape) shown');
 }

@@ -125,10 +125,13 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
             <div aria-label="Owner key on the device" style={{ display: 'grid', gap: '8px' }}>
               <span class="prow"><span>Device verifies settings with</span><span>{anchorView()!.config_files_verified_by}</span></span>
               <Show when={anchorView()!.floors}>
-                <For each={(['wan', 'wifi', 'policy'] as const).filter((k) => anchorView()!.floors![k])}>{(k) => (
-                  <span class="prow"><span>{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'} settings</span>
-                    <span>generation {anchorView()!.floors![k]!.current} · older than {anchorView()!.floors![k]!.floor + 1} refused</span></span>
-                )}</For>
+                <For each={(['wan', 'wifi', 'policy'] as const).filter((k) => anchorView()!.floors![k] !== undefined)}>{(k) => {
+                  const f = () => { const v = anchorView()!.floors![k]!; return typeof v === 'number' ? { current: null, floor: v } : v; };
+                  return (
+                    <span class="prow"><span>{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'} settings</span>
+                      <span>{f().current !== null ? `generation ${f().current} · ` : ''}older than {f().floor + 1} refused</span></span>
+                  );
+                }}</For>
               </Show>
               <Show when={anchorView()!.can === 'enroll' && anchorView()!.vendor_key !== ownerKey()!.pubHex}>
                 <p class="l0-card-sub">Make this the device's owner key: from then on only files signed with it change the internet, Wi-Fi or firewall settings. One-shot; the factory files on the boot card keep working.</p>
