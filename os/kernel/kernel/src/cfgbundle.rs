@@ -311,7 +311,7 @@ pub fn selftest() -> bool {
         if ok_sig {
             sig.copy_from_slice(c.sig);
         }
-        let got = ok_sig && verify(c.bundle, &sig, &PK, &[0u8; 16], c.floor).is_ok();
+        let got = ok_sig && verify(c.bundle, &sig, &PK, &c.device, c.floor).is_ok();
         if got == c.accept {
             agree += 1;
         } else if bad.is_none() {

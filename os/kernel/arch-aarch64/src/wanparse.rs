@@ -29,6 +29,17 @@ pub fn ra(ip: &[u8]) -> Option<Ra> {
     }
 }
 
+pub type PppoeDiscFn = fn(&[u8], usize) -> Option<hal::pppwire::DiscTags>;
+pub static mut EL0_PPPOE_DISC: Option<PppoeDiscFn> = None;
+
+/// D4 step 3b: a PADO / PADS tag walk (a server fault reads as "no tags": host-uniq never matches, frame ignored).
+pub fn pppoe_disc(f: &[u8], plen: usize) -> hal::pppwire::DiscTags {
+    match unsafe { EL0_PPPOE_DISC } {
+        Some(h) => h(f, plen).unwrap_or(hal::pppwire::DISC0),
+        None => hal::pppwire::disc_tags(f, plen),
+    }
+}
+
 pub fn dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
     match unsafe { EL0_DHCP6 } {
         Some(h) => h(ip, xid).flatten(),

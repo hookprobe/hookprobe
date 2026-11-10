@@ -1,0 +1,108 @@
+//! PPPoE discovery parsing (ADR 0050 D4 step 3b): the tag walk of a PADO / PADS — bytes any host on the WAN segment
+//! can send. Pure, allocation-free: compiled into the kernel (fallback) and into `el0-lansvc`, which runs it in EL0.
+//! The PPPoE engine (`arch_aarch64::pppoe`) keeps every decision (host-uniq match, AC MAC, SID, phase).
+
+const TAG_END: u16 = 0x0000;
+const TAG_AC_NAME: u16 = 0x0102;
+const TAG_HOST_UNIQ: u16 = 0x0103;
+const TAG_AC_COOKIE: u16 = 0x0104;
+const TAG_RELAY_SID: u16 = 0x0110;
+const TAG_SERVICE_NAME_ERR: u16 = 0x0201;
+const TAG_AC_SYSTEM_ERR: u16 = 0x0202;
+const TAG_GENERIC_ERR: u16 = 0x0203;
+
+/// What a discovery frame's tags say (the LAST occurrence of each tag wins, as before; values clamped).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DiscTags {
+    /// The Host-Uniq value; `hu_len` 0xff = longer than 32 bytes (never ours: we send 4).
+    pub host_uniq: [u8; 32],
+    pub hu_len: u8,
+    pub cookie: [u8; 64],
+    pub cookie_len: u8,
+    pub relay: [u8; 64],
+    pub relay_len: u8,
+    pub ac_name: [u8; 32],
+    pub ac_name_len: u8,
+    /// A Service-Name-Error / AC-System-Error / Generic-Error tag was present.
+    pub err: bool,
+}
+pub const DISC0: DiscTags = DiscTags { host_uniq: [0; 32], hu_len: 0, cookie: [0; 64], cookie_len: 0, relay: [0; 64], relay_len: 0, ac_name: [0; 32], ac_name_len: 0, err: false };
+
+fn be16(b: &[u8], o: usize) -> u16 {
+    u16::from_be_bytes([b[o], b[o + 1]])
+}
+
+/// Walk the discovery tags of Ethernet frame `f` (payload from byte 20, `plen` bytes).
+pub fn disc_tags(f: &[u8], plen: usize) -> DiscTags {
+    let mut d = DISC0;
+    let end = (20 + plen).min(f.len());
+    let mut o = 20;
+    while o + 4 <= end {
+        let (t, l) = (be16(f, o), be16(f, o + 2) as usize);
+        let v0 = o + 4;
+        if v0 + l > end {
+            break;
+        }
+        let v = &f[v0..v0 + l];
+        match t {
+            TAG_END => break,
+            TAG_HOST_UNIQ => {
+                if l <= 32 {
+                    d.host_uniq = [0; 32];
+                    d.host_uniq[..l].copy_from_slice(v);
+                    d.hu_len = l as u8;
+                } else {
+                    d.hu_len = 0xff;
+                }
+            }
+            TAG_AC_COOKIE => {
+                let n = l.min(64);
+                d.cookie[..n].copy_from_slice(&v[..n]);
+                d.cookie_len = n as u8;
+            }
+            TAG_RELAY_SID => {
+                let n = l.min(64);
+                d.relay[..n].copy_from_slice(&v[..n]);
+                d.relay_len = n as u8;
+            }
+            TAG_AC_NAME => {
+                let n = l.min(32);
+                d.ac_name[..n].copy_from_slice(&v[..n]);
+                d.ac_name_len = n as u8;
+            }
+            TAG_SERVICE_NAME_ERR | TAG_AC_SYSTEM_ERR | TAG_GENERIC_ERR => d.err = true,
+            _ => {}
+        }
+        o = v0 + l;
+    }
+    d
+}
+
+/// Fixed record for the EL0 ABI; `decode` clamps every length (a compromised server cannot overrun the kernel).
+pub const DISC_LEN: usize = 32 + 1 + 64 + 1 + 64 + 1 + 32 + 1 + 1;
+pub fn encode_disc(d: &DiscTags) -> [u8; DISC_LEN] {
+    let mut o = [0u8; DISC_LEN];
+    o[..32].copy_from_slice(&d.host_uniq);
+    o[32] = d.hu_len;
+    o[33..97].copy_from_slice(&d.cookie);
+    o[97] = d.cookie_len;
+    o[98..162].copy_from_slice(&d.relay);
+    o[162] = d.relay_len;
+    o[163..195].copy_from_slice(&d.ac_name);
+    o[195] = d.ac_name_len;
+    o[196] = d.err as u8;
+    o
+}
+pub fn decode_disc(o: &[u8; DISC_LEN]) -> DiscTags {
+    let mut d = DISC0;
+    d.host_uniq.copy_from_slice(&o[..32]);
+    d.hu_len = if o[32] == 0xff { 0xff } else { o[32].min(32) };
+    d.cookie.copy_from_slice(&o[33..97]);
+    d.cookie_len = o[97].min(64);
+    d.relay.copy_from_slice(&o[98..162]);
+    d.relay_len = o[162].min(64);
+    d.ac_name.copy_from_slice(&o[163..195]);
+    d.ac_name_len = o[195].min(32);
+    d.err = o[196] != 0;
+    d
+}

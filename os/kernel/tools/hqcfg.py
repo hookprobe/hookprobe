@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """hqcfg — the HQCFG1 configuration bundle + HQCSIG1 signature (ADR 0059 Step 2; assessment §B.4).
 
-  hqcfg.py bundle KEYFILE GEN OUT.BIN OUT.SIG [--wan WAN.TXT] [--wifi WIFI.TXT] [--policy POLICY.TXT]
+  hqcfg.py bundle KEYFILE GEN OUT.BIN OUT.SIG [--wan WAN.TXT] [--wifi WIFI.TXT] [--policy POLICY.TXT] [--device-id HEX32]
         Build one bundle from the legacy per-file forms (their "HQWAN1"/"HQPOL1" header lines and the
         POLICY 4096-byte newline padding are dropped; the sections hold canonical text only), then sign it.
-  hqcfg.py verify PUBHEX BUNDLE.BIN BUNDLE.SIG [FLOOR]   # verify like the device (generation > FLOOR)
+  hqcfg.py verify PUBHEX BUNDLE.BIN BUNDLE.SIG [FLOOR [DEVICE_ID_HEX32]]   # verify like the device
   hqcfg.py vectors OUTDIR                          # deterministic test vectors (fixed RFC 8032 test key)
 
 Byte layout (all integers little-endian). Points marked [A] are this tool's reading of §B.4 where it is
@@ -248,6 +248,10 @@ def vectors(outdir):
     same = build([("policy", b"route 0.0.0.0/0 via wan metric 10\nroute 10.9.0.0/16 via wan metric 99\n")], 11, pk)
     same = same.replace(b"route 10.9.0.0/16 via wan metric 99\n", b"route 0.0.0.0/0 via wan metric 9999\n")  # same length
     cases["duplicate-route-same-via"] = forged(same, "policy: repeated (b'route', b'0.0.0.0/0', b'any', b'wan')")
+    devid = bytes.fromhex("0123456789abcdef0123456789abcdef")
+    bnd = build([("wan", wan), ("wifi", wifi), ("policy", pol)], 12, pk, device_id=devid)
+    cases["bound-to-this-device"] = {"bundle": bnd.hex(), "sig": sign(key, bnd).hex(), "expect": "ok", "floor": 0, "device_id": devid.hex()}
+    cases["bound-checked-on-other-device"] = {"bundle": bnd.hex(), "sig": sign(key, bnd).hex(), "expect": "bundle: bound to another device", "floor": 0, "device_id": "fe" * 16}
     # section byte ranges of the valid full bundle (offset from the start of the bundle)
     off, ranges = 48 + 4 * 3, []
     for k, b in sorted([("wan", wan), ("wifi", wifi), ("policy", pol)], key=lambda x: KINDS[x[0]]):
@@ -258,7 +262,8 @@ def vectors(outdir):
     for c in cases.values():
         c["accept"] = c["expect"] == "ok"   # the contract; "expect" strings are hqcfg.py's wording only
     doc = {"about": "HQCFG1/HQCSIG1 vectors (ADR 0059 §B.4) from os/kernel/tools/hqcfg.py; RFC 8032 TEST 1 key. "
-                    "accept = the verifier must accept; floor = the stored generation floor (accept only generation > floor).",
+                    "accept = the verifier must accept; floor = the stored generation floor (accept only generation > floor); "
+                    "device_id = this device's id for the case (absent = all-zero).",
            "public_key": pk.hex(), "generation_full": 7, "sections_full": {"wan": wan.decode(), "wifi": wifi.decode(), "policy": pol.decode()},
            "cases": cases}
     with open(os.path.join(outdir, "hqcfg-vectors.json"), "w") as f:
@@ -266,7 +271,7 @@ def vectors(outdir):
     # self-check
     for name, c in cases.items():
         try:
-            verify(pk, bytes.fromhex(c["bundle"]), bytes.fromhex(c["sig"]), floor=c.get("floor", 0))
+            verify(pk, bytes.fromhex(c["bundle"]), bytes.fromhex(c["sig"]), floor=c.get("floor", 0), device_id=bytes.fromhex(c.get("device_id", "00" * 16)))
             got = "ok"
         except ValueError as e:
             got = str(e)
@@ -279,18 +284,22 @@ def main():
     a = sys.argv[1:]
     if len(a) >= 5 and a[0] == "bundle":
         key, gen, out_b, out_s = load(a[1]), int(a[2]), a[3], a[4]
-        secs, rest = [], a[5:]
+        secs, rest, dev = [], a[5:], b"\0" * 16
         while rest:
             flag, path = rest[0], rest[1]
+            if flag == "--device-id":
+                dev = bytes.fromhex(path); assert len(dev) == 16, "device id is 32 hex digits"
+                rest = rest[2:]; continue
             kind = {"--wan": "wan", "--wifi": "wifi", "--policy": "policy"}[flag]
             secs.append((kind, from_legacy(kind, open(path, "rb").read())))
             rest = rest[2:]
-        b = build(secs, gen, raw_pk(key))
+        b = build(secs, gen, raw_pk(key), device_id=dev)
         open(out_b, "wb").write(b)
         open(out_s, "wb").write(sign(key, b))
         print(f"HQCFG1 generation {gen}: {len(b)} bytes, sections {[k for k, _ in sorted(secs, key=lambda s: KINDS[s[0]])]}")
-    elif len(a) in (4, 5) and a[0] == "verify":
-        hdr, secs = verify(bytes.fromhex(a[1]), open(a[2], "rb").read(), open(a[3], "rb").read(), floor=int(a[4]) if len(a) == 5 else 0)
+    elif len(a) in (4, 5, 6) and a[0] == "verify":
+        hdr, secs = verify(bytes.fromhex(a[1]), open(a[2], "rb").read(), open(a[3], "rb").read(),
+                           floor=int(a[4]) if len(a) >= 5 else 0, device_id=bytes.fromhex(a[5]) if len(a) == 6 else b"\0" * 16)
         print(json.dumps(hdr))
         for k, b in secs:
             print(f"--- {k} ({len(b)} B)\n{b.decode()}", end="")

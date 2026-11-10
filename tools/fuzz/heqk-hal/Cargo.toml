@@ -53,3 +53,9 @@ name = "dhcp_wire"
 path = "fuzz_targets/dhcp_wire.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "pppoe_disc"
+path = "fuzz_targets/pppoe_disc.rs"
+test = false
+doc = false
