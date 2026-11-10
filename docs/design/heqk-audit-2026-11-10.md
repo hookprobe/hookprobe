@@ -196,7 +196,9 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber), 0055 `pin` semantics, 0056 D1 boundary with the
    flasher owner, 0045/0046, retire 0035–0042.
 4. Persistent anti-rollback medium (RPMB vs sealed counter) — technical options can be prototyped (A), the
-   choice is the operator's.
+   choice is the operator's. Update 2026-11-10: a counter on the same eMMC cannot detect owner-journal or pack
+   rollback by someone holding the card (both roll back together); only RPMB (or an OTP/fuse counter) can, and
+   RPMB needs its authentication key programmed once — irreversible, so it is this decision too.
 5. Certification (CE/RED, EN 18031, FCC), CYW43455 firmware redistribution terms, licence.
 6. UI work — owned by the UI/UX designer (wire owner-rules, upload/OTA, enforcement, network API, export).
 
