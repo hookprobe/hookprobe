@@ -346,6 +346,8 @@ pub fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
 /// The fate of one IPv4 frame from a Wi-Fi client that the AP itself did not answer (not DHCP / ARP for us).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Client4 {
+    /// An ICMP echo request to the AP itself — answered on the client's port.
+    Echo,
     /// (MAC, IP) is not a lease we handed out — anti-hijack.
     BindDrop,
     /// `net::parse` refused it (truncated / oversize) — fail-closed, not a rule drop.
@@ -408,6 +410,34 @@ pub fn client4<N: ApNic>(
     }
     if port.mc && mc_bound(frame, &cfg.our_ip) {
         return if crate::devpolicy::check(&smac, crate::devpolicy::Dest::DeviceMgmt) { Client4::ToMc } else { Client4::McDenied };
+    }
+    // ICMP echo to the AP itself (customers and support ping the router): answered here, after the lease
+    // binding and the IDS — one reply per request, same size, back to the asking client only.
+    if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x00 && frame[23] == 1 && frame[30..34] == cfg.our_ip {
+        let ihl = ((frame[14] & 0x0f) as usize) * 4;
+        let l4 = 14 + ihl;
+        let tot = u16::from_be_bytes([frame[16], frame[17]]) as usize;
+        let n = 14 + tot;
+        if frame.get(l4) == Some(&8) && tot >= ihl + 8 && n <= frame.len() && n <= 1514 {
+            let mut r = [0u8; 1514];
+            r[..n].copy_from_slice(&frame[..n]);
+            r[0..6].copy_from_slice(&smac);
+            r[6..12].copy_from_slice(&cfg.me);
+            r[22] = 64; // TTL
+            r[26..30].copy_from_slice(&cfg.our_ip);
+            r[30..34].copy_from_slice(&sip);
+            r[24] = 0;
+            r[25] = 0;
+            let c = hal::inet_csum(&r[14..l4], 0);
+            r[24..26].copy_from_slice(&c.to_be_bytes());
+            r[l4] = 0; // echo reply
+            r[l4 + 2] = 0;
+            r[l4 + 3] = 0;
+            let c = hal::inet_csum(&r[l4..n], 0);
+            r[l4 + 2..l4 + 4].copy_from_slice(&c.to_be_bytes());
+            let _ = reply(&r[..n]);
+            return Client4::Echo;
+        }
     }
     if port.relay && crate::lanrelay::relay_target(frame, dh) {
         return Client4::Relay;
@@ -484,11 +514,32 @@ pub fn lan_selftest() -> bool {
     // eth1: the same gates, but no Mission Control and no station relay on the wired port
     let r_eth = client4(&ab[..n], ETH1_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |_| true);
     let eth1 = matches!(r_eth, Client4::Forwarded(_)) && client4(&tr[..n], ETH1_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |_| true) == Client4::Trunc;
+    // ping the AP: an echo reply comes back to the client (checksums valid), nothing goes to the WAN
+    let mut pg = [0u8; 400];
+    let pn = frame4(1, cfg.our_ip, 0, &[0xab; 16], &mut pg);
+    pg[26..30].copy_from_slice(&a_ip);
+    pg[34] = 8; // echo request
+    pg[35] = 0;
+    pg[36..38].copy_from_slice(&0u16.to_be_bytes());
+    let ck = hal::inet_csum(&pg[34..pn], 0);
+    pg[36..38].copy_from_slice(&ck.to_be_bytes());
+    let got = core::cell::RefCell::new(([0u8; 128], 0usize));
+    let w1 = nic.wan_n;
+    let er = client4(&pg[..pn], WIFI_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |fr| {
+        let mut g = got.borrow_mut();
+        let k = fr.len().min(128);
+        g.0[..k].copy_from_slice(&fr[..k]);
+        g.1 = fr.len();
+        true
+    });
+    let (rb, rl) = *got.borrow();
+    let echo = er == Client4::Echo && nic.wan_n == w1 && rl == pn && rb[34] == 0 && rb[26..30] == cfg.our_ip && rb[30..34] == a_ip
+        && rb[0..6] == a_mac && hal::inet_csum(&rb[14..34], 0) == 0 && hal::inet_csum(&rb[34..rl.min(128)], 0) == 0;
     crate::shield::reset_stats();
-    let pass = fwd && bind && trunc && to_mc && mc_denied && relay && eth1;
+    let pass = fwd && bind && trunc && to_mc && mc_denied && relay && eth1 && echo;
     arch_aarch64::_print(format_args!(
-        " [P-apcore-lan] {} — G0 step 3a: the Wi-Fi client IPv4 gate chain (lease binding -> parse -> IDS -> Mission Control + device policy -> station relay -> forward) on the fake NIC: leased client forwarded through NAT={} a frame claiming another IP dropped (anti-hijack)={} truncated frame fail-closed, not a rule drop={} Mission Control on the AP address handed to the MC node={} internet_only device kept off Mission Control={} station -> station relayed, not sent to the internet={} eth1 port: same gates, no MC / relay, truncation fail-closed={}\n",
-        if pass { "PASS" } else { "FAIL" }, fwd, bind, trunc, to_mc, mc_denied, relay, eth1
+        " [P-apcore-lan] {} — G0 step 3a: the Wi-Fi client IPv4 gate chain (lease binding -> parse -> IDS -> Mission Control + device policy -> station relay -> forward) on the fake NIC: leased client forwarded through NAT={} a frame claiming another IP dropped (anti-hijack)={} truncated frame fail-closed, not a rule drop={} Mission Control on the AP address handed to the MC node={} internet_only device kept off Mission Control={} station -> station relayed, not sent to the internet={} eth1 port: same gates, no MC / relay, truncation fail-closed={} ping to the AP answered (valid checksums, nothing to the WAN)={}\n",
+        if pass { "PASS" } else { "FAIL" }, fwd, bind, trunc, to_mc, mc_denied, relay, eth1, echo
     ));
     pass
 }
