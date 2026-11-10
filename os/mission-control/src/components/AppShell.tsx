@@ -21,6 +21,7 @@ import LeftRail, { PILLARS, pillarActive } from './LeftRail';
 import AppRail, { workspaceActive } from './AppRail';
 import CommandPalette from './CommandPalette';
 import SampleDataNotice from './SampleDataNotice';
+import ConfigBanners from './ConfigBanners';
 import { remember, screenTitle } from '../store/recents';
 import Icon from './Icon';
 
@@ -95,6 +96,7 @@ const AppShell: Component<Props> = (props) => {
 
         <div class="shell-content" id="shell-content">
           <SampleDataNotice />
+          <ConfigBanners />
           {props.children}
         </div>
       </div>
