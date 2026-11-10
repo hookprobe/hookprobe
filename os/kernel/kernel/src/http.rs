@@ -261,6 +261,11 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     }
     // Phase 7: factory reset — owner-write guards + re-auth + confirm=ERASE; seals a request, the device reboots
     // and erases the owner data before serving anything (ownerapi::factory_reset, factoryreset::run).
+    // Planner (UI contract 2026-11-10): heqk has no on-device planner and none is configured — say so with the
+    // contract's error shape instead of faking a proposal (the UI shows its failed+retry state honestly).
+    if req.post && (req.path == "/api/planner/propose" || req.path == "/api/planner/approve") {
+        return json(scratch, |w| w.raw("{\"error\":\"not_configured\",\"message\":\"No AI planner is configured on this device\"}")).with_status(503);
+    }
     if req.post && req.path == "/api/factory-reset" {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         return match crate::ownerapi::factory_reset(&c, req.body, auth) {
@@ -408,6 +413,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             json(scratch, crate::upload::render)
         }
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
+        "/api/capabilities" => json(scratch, crate::capabilities::render),
+        "/api/planner/status" => json(scratch, |w| w.raw("{\"configured\":false,\"endpoint\":null,\"model\":null,\"message\":\"No AI planner is configured on this device\"}")),
+        p if p.starts_with("/api/planner/proposals/") => json(scratch, |w| w.raw("{\"error\":\"not_found\",\"message\":\"no such proposal (no planner is configured on this device)\"}")).with_status(404),
         "/api/tls" => json(scratch, render_tls),
         "/api/dns" => json(scratch, |w| crate::shield::render(w, &|t| st.epoch_ms(t), limit(50, 256))),
         "/api/flows" => json(scratch, |w| st.render_flows(st.ticks_at_ms(now_ms), limit(100, 256), w)),
@@ -522,6 +530,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 }
                 None => w.raw(",\"last_crash\":null"),
             }
+            // the capability manifest's granted ids, echoed for the UI (last: existing field order unchanged)
+            w.raw(",\"capabilities\":");
+            crate::capabilities::render_granted(w);
             w.raw("}");
         }),
         // Audit A8: the "Get Online" pillar's read side — what the device applied, and from which source.
