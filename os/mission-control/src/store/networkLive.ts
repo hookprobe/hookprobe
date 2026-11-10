@@ -13,7 +13,7 @@ export interface NetworkView {
   ipv6?: { up: boolean; lan_prefix: string };
   management?: { vlan: number; ip: string };
   policy?: { state: string; generation: number };
-  trust_anchor?: { state: string; key: string };
+  trust_anchor?: { state: string; key: string; public_key?: string | null };
   changes?: string;
 }
 
