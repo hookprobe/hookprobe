@@ -22,6 +22,9 @@ const LIVE: Record<string, 'live' | string> = {
   '/intelligence/cves': 'live',
   '/admin/identity': 'live',
   '/workspace': 'live',
+  '/customers/managed': 'live',
+  '/business/dashboard': 'live',
+  '/knowledge/blog': 'live',
   '/detect/feed': 'live',
   '/investigate/queue': 'live',
   '/investigate/incident': 'live',
@@ -34,7 +37,7 @@ const LIVE: Record<string, 'live' | string> = {
   '/network/wan': 'live',
 };
 
-const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence, Administration, Workspace';
+const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence, Administration, Workspace, Customers, Business, Knowledge';
 
 function norm(p: string): string {
   const t = p.replace(/\/index\.html$/, '/').replace(/\.html$/, '').replace(/\/+$/, '');
@@ -46,7 +49,9 @@ const SampleDataNotice: Component = () => {
   const status = createMemo(() => {
     if (typeof location === 'undefined') return null;
     if (substrate() === 'heqk') {
-      const s = LIVE[norm(location.pathname)];
+      const n = norm(location.pathname);
+      // /investigate/<id> is one incident story (heqk serves the incident page for it): live like the queue.
+      const s = LIVE[n] ?? (n.startsWith('/investigate/') ? 'live' : undefined);
       if (s === 'live') return null;
       return `${s ?? "This view isn't served by this device yet, so everything here is sample data."} Live on this device: ${LIVE_NAMES}.`;
     }
