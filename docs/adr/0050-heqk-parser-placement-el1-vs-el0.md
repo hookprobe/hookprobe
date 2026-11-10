@@ -91,6 +91,12 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
    **Placement note:** the WAN parsers share the LAN server's address space for now (one EL0 server, no state kept
    between commands); a separate WAN server is the stricter split, deferred. Still in EL1: PPPoE discovery and
    PPP LCP/PAP/CHAP/IPCP/IPv6CP (parse fused with reply building — step 3b), WAN/mgmt ARP + ICMP, SNTP.
+   *Status 2026-11-11 (step 3b, QEMU):* parse split from reply building, the walks in `el0-lansvc`
+   (`hal::pppwire`): PPPoE discovery tags (`CMD_WAN_PPPOE_DISC`, libFuzzer `pppoe_disc` 3.3M runs), LCP
+   Configure-Request classification (`CMD_WAN_LCP_REQ`; rejected options are copied out of the EL0 record, never
+   re-read from the frame), IPCP Request / Nak / Reject (`CMD_WAN_IPCP`). `[P-pppoe]` (scripted AC, end to end) and
+   `[P-lansvc]` parity pass. Still in EL1: LCP Nak/Reject from the AC, PAP/CHAP (the CHAP challenge), IPv6CP,
+   WAN/mgmt ARP + ICMP, SNTP.
 4. Control channel (Noise) — already authenticated after msg1; lowest exposure.
 5. WPA2 authenticator — tied to the CYW43455 driver; moves with the driver (ADR 0044 D4 #7).
 
