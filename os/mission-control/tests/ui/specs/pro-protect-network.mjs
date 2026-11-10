@@ -26,5 +26,13 @@ export default async function (t) {
   await page.click('.dev-btn >> text=Kitchen camera'); await page.waitForTimeout(300);
   ok(await page.locator('.drawer .l0-chips[aria-label="Move to zone"] .l0-chip').count() === 3, 'network: Move to zone offers the other zones');
   ok(await vis(page.locator('.drawer >> text=Preview: on a device this becomes a permanent owner rule')), 'network: preview explains the owner rule');
-  ok(await vis(page.locator('.drawer .gate--off', { hasText: 'Rename' })), 'network: Rename greyed with its reason');
+  await page.click('.drawer button:has-text("Rename")'); await page.waitForTimeout(150);
+  ok(await page.locator('.drawer input[aria-label="New name"]').inputValue() === 'Kitchen camera', 'network: Rename opens with the current name');
+  await page.fill('.drawer input[aria-label="New name"]', 'Café cam');
+  ok(await vis(page.locator('.drawer >> text=no accents or quotes')), 'network: name grammar enforced like the device (ASCII only)');
+  await page.fill('.drawer input[aria-label="New name"]', 'Kitchen cam (2)');
+  ok(await page.locator('.drawer button:has-text("Preview")').isEnabled(), 'network: valid name can be previewed');
+  ok(await vis(page.locator('.drawer >> text=Preview: on a device the name becomes a permanent owner rule')), 'network: rename explains the owner rule');
+  await go('/admin/identity');
+  ok(await vis(page.locator('[aria-label="Restart"] >> text=Preview: on a device this restarts it')), 'admin: Restart offered, greyed in preview with its reason');
 }

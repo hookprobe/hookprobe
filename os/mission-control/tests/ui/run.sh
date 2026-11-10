@@ -23,7 +23,8 @@ if [ ! -d "$PW_DIR/playwright" ]; then
   echo "  [ui] Playwright not installed at $PW_DIR — run: (cd os/kernel/tools/mc-e2e && npm ci && npx playwright install chromium)"
   exit 2
 fi
-if [ ! -f "$UI/dist/index.html" ]; then
+# Rebuild when there is no build, or any source is newer than it (a stale dist tests old code).
+if [ ! -f "$UI/dist/index.html" ] || [ -n "$(find "$UI/src" "$UI/public" "$UI/astro.config.mjs" -newer "$UI/dist/index.html" -print -quit 2>/dev/null)" ]; then
   echo "  [ui] building os/mission-control/dist"
   (cd "$UI" && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && PUBLIC_API_BASE='' npm run build >/dev/null) || { echo "  [ui] build failed"; exit 2; }
 fi

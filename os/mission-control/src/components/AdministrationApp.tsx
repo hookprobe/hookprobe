@@ -22,6 +22,7 @@ import { uploadView, refreshUploads, uploadPack, PACK_LABEL, type UploadStep } f
 import { fetchPlannerStatus, type PlannerStatus } from '../store/plannerApi';
 import AppShell from './AppShell';
 import SigningKeyPanel from './SigningKeyPanel';
+import RestartButton from './RestartButton';
 import { startNetworkLive } from '../store/networkLive';
 
 type Sec = 'edge' | 'packs' | 'signing' | 'identity' | 'ai' | 'audit' | 'feedback' | 'reset';
@@ -238,6 +239,14 @@ const AdministrationApp: Component = () => {
                 <p class="l0-label">Feedback and diagnostics</p>
                 <p class="l0-card-sub">The product-health beacon is off by default and never carries security data. Its page shows exactly what would leave the device and exports a diagnostics file that works air-gapped.</p>
                 <div class="l0-card-foot"><a class="hp-btn" href="/admin/feedback">Open feedback and diagnostics</a></div>
+              </div>
+            </Show>
+
+            <Show when={sec() === 'edge'}>
+              <div class="pcard" aria-label="Restart">
+                <p class="l0-label">Restart</p>
+                <p class="l0-card-sub">Restarts the device (about a minute without network). Signed settings you have staged apply on the way up. Needs a reason and your owner key.</p>
+                <RestartButton sample={sample()} />
               </div>
             </Show>
 
