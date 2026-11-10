@@ -26,7 +26,12 @@ o.open(mc + "/api/login", urllib.parse.urlencode({"token": key}).encode(), timeo
 print(o.open(mc + "/api/config", timeout=10).read().decode())
 PY
 }
-WAN="$ROOT/docs/design/bench-task26/wan-vlan-mgmtdhcp.txt"; POL="$ROOT/docs/design/bench-task26/policy-bench.txt"
+# canonical section text has no comments / blank lines / trailing spaces (HQCFG1): sanitize the bench files
+canon() { sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$1" > "$2"; }
+canon "$ROOT/docs/design/bench-task26/wan-vlan-mgmtdhcp.txt" "$T/wan.txt"; canon "$ROOT/docs/design/bench-task26/policy-bench.txt" "$T/pol.full"
+# images before the route-key fix refuse a second default route via another interface: keep the first only
+awk '!(/^route 0\.0\.0\.0\/0 / && seen++)' "$T/pol.full" > "$T/pol.txt"
+WAN="$T/wan.txt"; POL="$T/pol.txt"
 G0=$(cfg "$MC" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max(d["generation"], d["floor"]))'); G1=$((G0 + 1)); G2=$((G0 + 2))
 # --- A: a good bundle (bench WAN + policy). It touches the management VLAN -> the owner must confirm ---
 $HQ bundle "$CK" $G1 "$T/g.bin" "$T/g.sig" --wan "$WAN" --policy "$POL" >/dev/null

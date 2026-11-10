@@ -354,7 +354,7 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
                 dev.read_block(data_lba + k as u64, &mut sec).map_err(|_| LoadErr::Io)?;
                 buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
             }
-            let v = crate::cfgbundle::verify(&buf[..len], sig, key, &[0u8; 16], 0).map_err(|_| LoadErr::BadSignature)?;
+            let v = crate::cfgbundle::verify(&buf[..len], sig, key, &crate::config_device_id(), 0).map_err(|_| LoadErr::BadSignature)?;
             // ADR 0059 D7: remember whether this bundle keeps a management path (upload finish refuses it if not)
             let ok = crate::cfgd::keeps_mgmt_path(v.section(crate::cfgbundle::KIND_POLICY));
             unsafe { CONFIG_MGMT_OK = ok };

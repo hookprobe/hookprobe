@@ -616,18 +616,33 @@ pub fn config_action(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, confi
     if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
         return refuse(c, "re-authentication failed").map(|_| 0);
     }
-    let r = if confirm { crate::cfgd::confirm_device() } else { crate::cfgd::revert_device() };
-    let mut why = [0u8; 64];
-    let wl = {
-        use core::fmt::Write;
-        let mut w = crate::mcstate::JsonBuf::new(&mut why);
-        let _ = write!(w, "{} gen {:?}", if confirm { "confirm" } else { "rollback" }, r);
-        w.len
+    // ADR 0059 step 4b: through the management ABI — the same authorisation decision and journal record as `hsh`
+    let msg = if confirm { hal::mgmtabi::CFG_CONFIRM } else { hal::mgmtabi::CFG_ROLLBACK };
+    let mut rec = [0u8; hal::mgmtabi::ACT_LEN];
+    #[cfg(feature = "mcserve")]
+    let (res, n) = crate::mgmtabi::dispatch(msg, hal::mgmtabi::ROLE_OWNER, tag, c.now_ms, 0, &[], &mut rec);
+    // builds without Mission Control's server have no ABI dispatcher: cfgd directly (no client can reach this then)
+    #[cfg(not(feature = "mcserve"))]
+    let (res, n) = {
+        let r = if confirm { crate::cfgd::confirm_device() } else { crate::cfgd::revert_device() };
+        let a = match r {
+            Ok(g) => hal::mgmtabi::Act::new(true, g, "done"),
+            Err(e) => hal::mgmtabi::Act::new(false, 0, e),
+        };
+        rec.copy_from_slice(&a.encode());
+        let _ = (msg, tag);
+        (hal::mgmtabi::R_OK, hal::mgmtabi::ACT_LEN)
     };
-    let _ = audit_artifact("config", if r.is_ok() { 1 } else { 2 }, &why[..wl], tag, c.now_ms);
-    match r {
-        Ok(g) => Ok(g),
-        Err(e) => refuse(c, e).map(|_| 0),
+    if res != hal::mgmtabi::R_OK || n != hal::mgmtabi::ACT_LEN {
+        return refuse(c, "management service unavailable").map(|_| 0);
+    }
+    let a = hal::mgmtabi::Act::decode(&rec);
+    if a.ok {
+        Ok(a.generation)
+    } else {
+        // the reason is the cfgd / upload refusal; keep the static strings Mission Control already shows
+        let why = a.reason_str();
+        refuse(c, if why.starts_with("no configuration store") { "no configuration store on this device" } else if why.starts_with("no configuration on trial") { "no configuration on trial" } else if why.starts_with("no configuration bundle") { "no configuration bundle in force" } else { "refused by cfgd" }).map(|_| 0)
     }
 }
 

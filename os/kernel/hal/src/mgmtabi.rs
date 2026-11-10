@@ -15,6 +15,19 @@ pub const GET_QSECBIT: u16 = 3;
 pub const GET_CONFIG: u16 = 4;
 pub const GET_ANCHOR: u16 = 5;
 pub const GET_PARSERS: u16 = 6;
+// step 4b: configuration operations — served by cfgd / the upload path; the kernel journals each (allowed or refused)
+pub const CFG_CONFIRM: u16 = 20;
+pub const CFG_ROLLBACK: u16 = 21;
+/// arg = the caller's VERIFIED upload id (type `config`): activate it -> PENDING -> trial at the next boot
+pub const CFG_STAGE: u16 = 22;
+// step 4c: owner elevation (hsh spec §6.3). CHALLENGE: a single-use nonce (120 s) bound to this device;
+// ELEVATE: payload = Ed25519 by the ENROLLED owner key over "HQCHAL1" || device_id || nonce -> this session holds the
+// owner role for ELEVATE_TTL_S. Enrollment / rotation stay in Mission Control (two or three signatures, and there is
+// no owner key to elevate with before enrollment).
+pub const OWNER_CHALLENGE: u16 = 30;
+pub const OWNER_ELEVATE: u16 = 31;
+pub const ELEVATE_TTL_S: u64 = 900;
+pub const CHALLENGE_TTL_S: u64 = 120;
 
 // ---- result codes ----
 pub const R_OK: u8 = 0;
@@ -33,6 +46,9 @@ pub const ROLE_OWNER: u8 = 4;
 pub fn role_for(msg: u16) -> u8 {
     match msg {
         GET_INFO | GET_WAN | GET_QSECBIT | GET_CONFIG | GET_ANCHOR | GET_PARSERS => ROLE_VIEW,
+        CFG_CONFIRM | CFG_ROLLBACK => ROLE_OPERATE,
+        CFG_STAGE => ROLE_CONFIG,
+        OWNER_CHALLENGE | OWNER_ELEVATE => ROLE_VIEW,
         _ => u8::MAX,
     }
 }
@@ -46,6 +62,8 @@ pub fn reply_len(msg: u16) -> Option<usize> {
         GET_CONFIG => CFG_LEN,
         GET_ANCHOR => ANCHOR_LEN,
         GET_PARSERS => PARSERS_LEN,
+        CFG_CONFIRM | CFG_ROLLBACK | CFG_STAGE | OWNER_ELEVATE => ACT_LEN,
+        OWNER_CHALLENGE => CHAL_LEN,
         _ => return None,
     })
 }
@@ -292,4 +310,73 @@ impl Parsers {
         let v = |i: usize| u64_at(b, 2 + 8 * i);
         Parsers { http_el0: b[0] != 0, lan_el0: b[1] != 0, http_requests: v(0), http_faults: v(1), lan_calls: v(2), lan_faults: v(3), lan_restarts: v(4), lan_in_kernel: v(5) }
     }
+}
+
+/// A configuration operation's outcome (CFG_*): accepted or refused, the generation now in force / staged, and the
+/// reason (ASCII, NUL-padded) — never printed as success before this record says so.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Act {
+    pub ok: bool,
+    pub generation: u64,
+    pub reason: [u8; 56],
+}
+pub const ACT_LEN: usize = 1 + 8 + 56;
+impl Act {
+    pub fn new(ok: bool, generation: u64, why: &str) -> Self {
+        let mut reason = [0u8; 56];
+        let b = why.as_bytes();
+        let n = b.len().min(56);
+        reason[..n].copy_from_slice(&b[..n]);
+        Act { ok, generation, reason }
+    }
+    pub fn encode(&self) -> [u8; ACT_LEN] {
+        let mut o = [0u8; ACT_LEN];
+        o[0] = self.ok as u8;
+        o[1..9].copy_from_slice(&self.generation.to_le_bytes());
+        o[9..].copy_from_slice(&self.reason);
+        o
+    }
+    pub fn decode(b: &[u8; ACT_LEN]) -> Self {
+        let mut reason = [0u8; 56];
+        for (d, &c) in reason.iter_mut().zip(b[9..].iter()) {
+            *d = if (0x20..0x7f).contains(&c) { c } else { 0 };
+        }
+        Act { ok: b[0] != 0, generation: u64_at(b, 1), reason }
+    }
+    pub fn reason_str(&self) -> &str {
+        let n = self.reason.iter().position(|&c| c == 0).unwrap_or(56);
+        core::str::from_utf8(&self.reason[..n]).unwrap_or("")
+    }
+}
+
+/// OWNER_CHALLENGE reply: what the owner signs, off-device: "HQCHAL1" || device_id || nonce.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Challenge {
+    pub device_id: [u8; 16],
+    pub nonce: [u8; 16],
+    pub ttl_s: u32,
+    /// false = no owner key is enrolled: nothing can be elevated (enroll in Mission Control first).
+    pub owner_enrolled: bool,
+}
+pub const CHAL_LEN: usize = 16 + 16 + 4 + 1;
+impl Challenge {
+    pub fn encode(&self) -> [u8; CHAL_LEN] {
+        let mut o = [0u8; CHAL_LEN];
+        o[..16].copy_from_slice(&self.device_id);
+        o[16..32].copy_from_slice(&self.nonce);
+        o[32..36].copy_from_slice(&self.ttl_s.to_le_bytes());
+        o[36] = self.owner_enrolled as u8;
+        o
+    }
+    pub fn decode(b: &[u8; CHAL_LEN]) -> Self {
+        Challenge { device_id: b[..16].try_into().unwrap(), nonce: b[16..32].try_into().unwrap(), ttl_s: u32_at(b, 32), owner_enrolled: b[36] != 0 }
+    }
+}
+/// The message the owner signs to elevate.
+pub fn challenge_msg(device_id: &[u8; 16], nonce: &[u8; 16]) -> [u8; 39] {
+    let mut m = [0u8; 39];
+    m[..7].copy_from_slice(b"HQCHAL1");
+    m[7..23].copy_from_slice(device_id);
+    m[23..].copy_from_slice(nonce);
+    m
 }

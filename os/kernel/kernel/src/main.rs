@@ -5695,6 +5695,18 @@ fn device_mac() -> [u8; 6] {
     [(k[0] & 0xFE) | 0x02, k[1], k[2], k[3], k[4], k[5]]
 }
 
+/// ADR 0059: this device's 16-byte id for configuration binding (HQCFG1 `device_id`) and owner elevation (HQCHAL1):
+/// sha256(device identity public key)[..16] — public, stable across OTA, distinct per device. All zero without an SRK
+/// (no identity: device-bound bundles cannot match; challenges still carry a per-boot nonce).
+pub fn config_device_id() -> [u8; 16] {
+    #[cfg(all(feature = "hboot", feature = "securechannel"))]
+    if let Some(kp) = device_identity_keypair() {
+        let d = boot_abi::sha256::digest(&kp.pk[..]);
+        return d[..16].try_into().unwrap();
+    }
+    [0; 16]
+}
+
 #[cfg(all(feature = "hboot", feature = "securechannel"))]
 fn device_identity_keypair() -> Option<ed25519_compact::KeyPair> {
     let srk = seal_srk()?;

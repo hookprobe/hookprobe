@@ -233,10 +233,16 @@ fn line_key(kind: u8, ln: &[u8]) -> Result<Key<'_>, CfgErr> {
     }
     let mut w = [&b""[..]; 4];
     let mut n = 0usize;
+    let mut via: &[u8] = b"";
+    let mut prev: &[u8] = b"";
     for (i, x) in ln.split(|&b| b == b' ').enumerate() {
         if i < 4 {
             w[i] = x;
         }
+        if prev == b"via" {
+            via = x;
+        }
+        prev = x;
         n = i + 1;
     }
     Ok(if (w[0] == b"acl" || w[0] == b"prefix-list") && n > 3 && w[2] == b"seq" {
@@ -246,7 +252,10 @@ fn line_key(kind: u8, ln: &[u8]) -> Result<Key<'_>, CfgErr> {
     } else if w[0] == b"interface" && n >= 4 {
         Key::Parts([w[0], w[1], w[2], w[3]], 4)
     } else if w[0] == b"route" && n > 1 {
-        Key::Parts([b"route", w[1], if n > 3 && w[2] == b"from" { w[3] } else { b"any" }, b""], 3)
+        // (dst, from, via): two routes to the same destination through DIFFERENT next hops are legitimate failover
+        // (metric-ordered, e.g. 0.0.0.0/0 via wan metric 10 + via mgmt metric 100) — only a repeat through the same
+        // interface is a duplicate (metal batch 59 finding)
+        Key::Parts([b"route", w[1], if n > 3 && w[2] == b"from" { w[3] } else { b"any" }, via], 4)
     } else {
         Key::Words(ln)
     })
@@ -326,10 +335,12 @@ pub fn selftest() -> bool {
     let pol = policy_file(b"acl A seq 10 allow any any any\n", &mut pf) && pf[..7] == *b"HQPOL1\n" && pf[4095] == b'\n';
     let dup = canonical(KIND_WAN, b"mode=dhcp\nmode=static\n") == Err(CfgErr::Duplicate(KIND_WAN))
         && canonical(KIND_POLICY, b"acl A default drop\nacl A default allow\n") == Err(CfgErr::Duplicate(KIND_POLICY))
-        && canonical(KIND_WAN, b"mode=dhcp\r\n") == Err(CfgErr::NonCanonical(KIND_WAN));
+        && canonical(KIND_WAN, b"mode=dhcp\r\n") == Err(CfgErr::NonCanonical(KIND_WAN))
+        && canonical(KIND_POLICY, b"route 0.0.0.0/0 via wan metric 10\nroute 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100\n").is_ok()
+        && canonical(KIND_POLICY, b"route 0.0.0.0/0 via wan metric 10\nroute 0.0.0.0/0 via wan metric 20\n") == Err(CfgErr::Duplicate(KIND_POLICY));
     let pass = agree == CASES.len() && ranges && pol && dup;
     arch_aarch64::_print(format_args!(
-        " [P-cfgbundle] {} — ADR 0059 HQCFG1 bundle + HQCSIG1 (pure, no heap): the shared vectors (hqcfg.py / browser) agree {}/{}{}{} | full bundle sections at the agreed ranges={} | policy section -> 4096-B POLICY.TXT={} | duplicate keys / statements and CR refused={}\n",
+        " [P-cfgbundle] {} — ADR 0059 HQCFG1 bundle + HQCSIG1 (pure, no heap): the shared vectors (hqcfg.py / browser) agree {}/{}{}{} | full bundle sections at the agreed ranges={} | policy section -> 4096-B POLICY.TXT={} | duplicate keys / statements and CR refused, failover routes via different interfaces allowed={}\n",
         if pass { "PASS" } else { "FAIL" }, agree, CASES.len(), if bad.is_some() { " first mismatch: " } else { "" }, bad.unwrap_or(""), ranges, pol, dup
     ));
     pass

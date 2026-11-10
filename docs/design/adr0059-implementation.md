@@ -41,9 +41,21 @@ Status: built, QEMU (`[P-cfgbundle]` 24/24).
 
 Status: built, QEMU (`[P-cfgd]`). Metal: pending (trial, commit and revert on the bench).
 
-## Not done here
+## Step 4: management ABI + `hsh` (docs/design/hsh-native-management-shell.md)
 
-- **Step 4:** the management ABI and `hsh` (4a in progress).
+- **4a — built, QEMU, metal (batch 59: `[P-hsh]` + `[P-mgmtabi]` PASS on CM5).**
+  - `hal::mgmtabi` is a versioned set of read messages with fixed records, roles and result codes.
+  - `kernel/src/mgmtabi.rs` serves them from the same producers as `GET /api/*`, with a role check.
+  - `el0-hsh` is an EL0 excursion shell: a bounded parser per spec §9, a static registry, and a two-phase flow (line → request → reply → text). It has no heap and no state.
+  - The read commands are `info`, `version`, `uptime`, `wan status` / `interface show wan`, `qsecbit status`, `config status`, `owner status` and `security posture`.
+  - Transport: only the development `POST /api/hsh` (`hsh-dev`, off by default, refused in release builds), guarded by the owner session plus Origin and CSRF, with each request journaled. The production transport is the operator's open decision (R6), and there is no UART RX code.
+- **4b — built, QEMU validation running.**
+  - `CFG_CONFIRM` / `CFG_ROLLBACK` (role operate) and `CFG_STAGE <upload-id>` (role config, the caller's verified `config` upload).
+  - The dispatcher journals each operation, allowed or refused. Mission Control's `/api/config/confirm|rollback` now calls the same dispatch after its guards and re-authentication, so both clients get one authorisation decision and write one journal record.
+  - The shell's `view` role is denied these operations until elevation (4c).
+- **4c** (owner commands, `HQCHAL1` elevation): next.
+
+## Not done here
 - **Production transport (R6):** awaiting the operator's decision.
 - **RPMB:** deferred until after the MVP.
 - **Owner-signed reset (`HQRST1`):** ADR 0059 Phase 2.
