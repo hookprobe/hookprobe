@@ -38,6 +38,9 @@ pub enum Kind {
     /// ADR 0056 D6: an artifact activation (audit only — never a rule). target = pack type name,
     /// value = 1 activated / 2 rolled back, reason = "gen A->B sha256:<16 hex>".
     Artifact = 5,
+    /// G28: the owner rotated the Mission Control owner key (target = salt 16 ‖ verifier 32 ‖ sha256(OWNER.TXT)[..16]
+    /// at rotation time). Never a rule; `revoke_all` does not touch it; the latest one wins.
+    OwnerKey = 6,
 }
 
 impl Kind {
@@ -48,6 +51,7 @@ impl Kind {
             3 => Some(Kind::ShieldBlock),
             4 => Some(Kind::ShieldProfile),
             5 => Some(Kind::Artifact),
+            6 => Some(Kind::OwnerKey),
             _ => None,
         }
     }
@@ -58,6 +62,7 @@ impl Kind {
             Kind::ShieldBlock => "shield_block",
             Kind::ShieldProfile => "shield_profile",
             Kind::Artifact => "artifact",
+            Kind::OwnerKey => "owner_key",
         }
     }
 }
@@ -184,7 +189,21 @@ pub fn for_each_artifact(f: &mut dyn FnMut(&Record)) {
     }
 }
 
+/// G28: the latest owner-key rotation replayed from the journal (target bytes), if any.
+static mut OWNER_ROT: Option<[u8; TARGET_MAX]> = None;
+
+/// The owner-key rotation in force (salt ‖ verifier ‖ OWNER.TXT hash prefix), if the owner ever rotated.
+pub fn owner_rotation() -> Option<[u8; TARGET_MAX]> {
+    unsafe { *core::ptr::addr_of!(OWNER_ROT) }
+}
+
 fn apply(r: &Record) -> Result<(), JErr> {
+    if r.kind == Kind::OwnerKey as u8 {
+        if r.op == OP_SET && r.tlen as usize == TARGET_MAX {
+            unsafe { *core::ptr::addr_of_mut!(OWNER_ROT) = Some(r.target) };
+        }
+        return Ok(());
+    }
     if r.op == OP_CLEAR {
         unsafe { NRULES = 0 };
         return Ok(());
@@ -290,6 +309,7 @@ impl Journal {
         unsafe {
             NRULES = 0;
             ART_LEN = 0;
+            *core::ptr::addr_of_mut!(OWNER_ROT) = None;
         }
         self.last_mac = [0; 32];
         self.next_seq = 1;
@@ -364,12 +384,13 @@ impl Journal {
     /// Start a new epoch in the other half holding the current live state (rules + artifact audits).
     fn compact<D: BlockDev + ?Sized>(&mut self, dev: &mut D) -> Result<(), JErr> {
         let (nr, na) = unsafe { (NRULES, ART_LEN) };
-        if 1 + nr as u64 + na as u64 + 1 > self.half_cap() || nr + na > 600 {
+        let rot = owner_rotation();
+        if 1 + nr as u64 + na as u64 + rot.is_some() as u64 + 1 > self.half_cap() || nr + na > 600 {
             return Err(JErr::Full);
         }
         let e2 = self.epoch + 1;
         let other = 1 - self.half;
-        static mut CKPT: [[u8; REC_LEN]; 1 + MAX_RULES + ART_N] = [[0u8; REC_LEN]; 1 + MAX_RULES + ART_N];
+        static mut CKPT: [[u8; REC_LEN]; 2 + MAX_RULES + ART_N] = [[0u8; REC_LEN]; 2 + MAX_RULES + ART_N];
         let recs = unsafe { &mut *core::ptr::addr_of_mut!(CKPT) };
         let (h, mut prev) = self.seal(&[0u8; 32], &Self::hdr(e2, self.next_seq), e2);
         recs[0] = h;
@@ -395,12 +416,22 @@ impl Journal {
             seq += 1;
             n += 1;
         }
+        if let Some(t) = rot {
+            // the owner-key rotation must survive compaction (else the next boot falls back to OWNER.TXT)
+            let mut r = rec(Kind::OwnerKey, OP_SET, &t, 0, b"checkpoint");
+            r.seq = seq;
+            let (b, m) = self.seal(&prev, &r, e2);
+            recs[n] = b;
+            prev = m;
+            n += 1;
+        }
         self.write_half(dev, other, &recs[..n])?;
         // the new epoch is live: rebuild the RAM state from exactly what was written (rule seq numbers change)
         let base = self.next_seq;
         unsafe {
             NRULES = 0;
             ART_LEN = 0;
+            *core::ptr::addr_of_mut!(OWNER_ROT) = None;
         }
         for b in &recs[1..n] {
             let _ = apply(&Record::decode(b));
@@ -506,6 +537,7 @@ pub fn clear() {
     unsafe {
         NRULES = 0;
         ART_LEN = 0;
+        *core::ptr::addr_of_mut!(OWNER_ROT) = None;
     }
 }
 
