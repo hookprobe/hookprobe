@@ -95,3 +95,19 @@ cost: ~0.8 µs/pkt for every tier on the CM5 A76 (`metal-evidence/20261108-ids-b
 | G40 | Per-source SYN limiter never tripped on a busy LAN: slot = first octet of the LE-loaded source (all 10.x shared a slot, each other client's SYN reset the count); flow/scan/corroboration tables 16 slots | S | **fixed + metal** (`ae5c9ad9`) hashed `ratelimit::slot`, 64-slot per-source tables; busy-LAN flooder regression |
 | G41 | Flow tier interpreted (JIT refused BPF CALL) | M | **done + metal** (`ae5c9ad9`) CALL in the JIT for scalar helpers: flow 140 -> 58 ns, mix 419 ns/pkt (802 at the start of G34) |
 | G42 | Shipping ML-KEM 0.2.3 had a secret-indexed table lookup (SamplePolyCBD) | S | **done + metal** (`efa098f3`) ml-kem 0.3.4 (upstream fix #386), ctgrind 0 errors, Chromium X25519MLKEM768 on the CM5 |
+
+## Mission Control ↔ configuration (2026-11-10)
+
+From integrating the team wireframes and the requirements doc (§Configuration journey, verified in code).
+Device-side items are for the heqk session; the Mission Control side is built (feat/mc-advanced-config).
+
+| ID | Gap | Size | Status |
+|---|---|---|---|
+| G43 | Wi-Fi name / password / security change needs a re-flash: WIFI.TXT is read from the boot partition at boot only and ADR 0056 refuses Wi-Fi uploads | M | **open** — contract ADR 0058 D1 (`wifi` upload type, next boot); Mission Control builds + signs WIFI.TXT in the browser and offers the signed files for the boot card meanwhile |
+| G44 | Internet mode / PPPoE / ISP VLAN / management VLAN change needs a re-flash (WAN.TXT, same reason) | M | **open** — ADR 0058 D1 (`wan`); UI side built as for G43 |
+| G45 | POLICY.TXT (ACLs, prefix lists, routes, SASE tunnel) cannot be uploaded: ADR 0056 D2 lists `policy` but phase 1 excludes it, and nothing generates it from intent | M | **open** — ADR 0058 D1 (`policy`, phase 1); UI builds the 4096-B file + signature |
+| G46 | The trust anchor pins the image's compiled key; the owner cannot enroll their own key or rotate | M | **open** — ADR 0058 D3 |
+| G47 | Rename a device from Mission Control: no `device_label` owner-journal kind (the requirements doc assumed one) | S | **open** — Rename greyed with the reason until it exists |
+| G48 | First-run setup wizard (ADR 0010) is a UI mock; `/api/provision/launch` answers "not implemented on heqk" | M | **open** |
+| G49 | No reboot endpoint: next-boot settings need a power cycle | S | **open** — ADR 0058 open item 3 |
+
