@@ -37,7 +37,9 @@ interface Health {
   wan?: { up: boolean; ip: string; mode: string; ipv6: boolean; clients: number; pkts_out: number; pkts_in: number; dns_inspected: number; dns_blocked?: number; blocklist?: number };
 }
 
-async function readHealth(): Promise<void> {
+/** 'ok' = the device answered · 'absent' = nothing serves the API here (HTTP 404: a preview build)
+ *  · 'error' = a transient failure (slow TLS, network blip) — never taken as "no device". */
+async function readHealth(): Promise<'ok' | 'absent' | 'error'> {
   try {
     const h = await fetchJson<Health>('/api/health');
     everOk = true;
@@ -59,9 +61,21 @@ async function readHealth(): Promise<void> {
                        dnsBlocked: h.wan.dns_blocked ?? 0, blocklist: h.wan.blocklist ?? 0 } : null,
       });
     }
-  } catch {
+    return 'ok';
+  } catch (e) {
     /* offline / unauthenticated: keep the defaults (and the last values) */
     if (everOk) setDegraded(true);
+    return e instanceof Error && / HTTP 404$/.test(e.message) ? 'absent' : 'error';
+  }
+}
+
+/** First read: settle only on an answer, a 404, or three failures in a row (1.5 s apart), so one
+ *  transient error on a real device never flips every screen to "sample data". */
+async function firstRead(): Promise<void> {
+  for (let i = 0; i < 3; i++) {
+    const r = await readHealth();
+    if (r !== 'error') return;
+    if (i < 2) await new Promise((res) => setTimeout(res, 1500));
   }
 }
 
@@ -79,7 +93,7 @@ async function readCapabilities(): Promise<void> {
 /** First read once per page; then a 30-s refresh so the counts stay current. */
 export function loadHealth(): Promise<void> {
   if (!once) {
-    once = readHealth().finally(() => setHealthChecked(true));
+    once = firstRead().finally(() => setHealthChecked(true));
     void readCapabilities();
     setInterval(() => void readHealth(), 30_000);
   }
