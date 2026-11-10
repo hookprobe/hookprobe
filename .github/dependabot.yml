@@ -17,6 +17,7 @@ updates:
       - "/os/kernel/tlsprov"
       - "/os/kernel/el0-tlshost"
       - "/os/kernel/el0-wasmhost"
+      - "/os/kernel/el0-lansvc"
       - "/os/kernel/wasip1-fixture"
       - "/os/kernel/efiboot"
       - "/os/build/heqk-sign"
