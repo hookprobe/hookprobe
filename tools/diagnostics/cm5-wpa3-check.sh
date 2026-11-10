@@ -41,5 +41,15 @@ T=$(tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000')
 grep -a "\[WPA3\]\|akm=SAE\|akm=PSK" <<<"$T" | head -30 | cut -c1-220 | sed 's/^/  ap: /'
 grep -aq "\[WPA3\] SAE .* -> Accepted" <<<"$T"; chk $? "the AP accepted the SAE exchange (commit + confirm answered on the host)"
 grep -aq "akm=SAE .*m4_mic=true .*authorized=true" <<<"$T"; chk $? "the 4-way ran with the SAE PMK (AKM 8) and the station is authorized"
+# transition mode: a WPA2-only client (key-mgmt wpa-psk, no PMF) must still join on the same BSS
+if grep -q "transition" <<<"$B"; then
+  psudo "nmcli con down hq-wpa3" >/dev/null 2>&1; psudo "nmcli con delete hq-wpa3" >/dev/null 2>&1
+  mark=$(stat -c %s "$LOG")
+  psudo "nmcli con add type wifi ifname wlan1 con-name hq-wpa3 ssid '$SSID' wifi-sec.key-mgmt wpa-psk wifi-sec.proto rsn wifi-sec.psk '$PSK' wifi-sec.pmf disable ipv4.method auto ipv4.never-default yes ipv6.method ignore connection.autoconnect no" >/dev/null 2>&1
+  R=$(psudo "timeout 70 nmcli -w 60 con up hq-wpa3" 2>&1 | tail -1)
+  IP=$(pi "ip -4 -o addr show wlan1 | awk '{print \$4}'"); echo "  WPA2-only client: $R | $IP"
+  grep -q "^10\.99\.0\." <<<"$IP" && pi "ping -c 3 -W 2 -I wlan1 10.99.0.1" >/dev/null 2>&1; chk $? "transition mode: a WPA2-PSK-only client (no PMF) still joins, leases and reaches the gateway"
+  sleep 2; tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "akm=" | tail -1 | cut -c1-200 | sed 's/^/  ap: /'
+fi
 echo "WPA3: $([ $ok = $n ] && echo PASS || echo FAIL) ($ok/$n)"
 [ $ok = $n ]
