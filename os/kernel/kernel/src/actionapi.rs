@@ -3,34 +3,7 @@
 
 use crate::actions::{self, Kind, Target};
 
-/// One form field, percent/plus-decoded into `buf`.
-pub fn form_get<'b>(body: &[u8], key: &str, buf: &'b mut [u8; 192]) -> Option<&'b str> {
-    let s = core::str::from_utf8(body).ok()?;
-    let v = s.split('&').find_map(|kv| kv.split_once('=').filter(|(k, _)| *k == key).map(|(_, v)| v))?;
-    let b = v.as_bytes();
-    let (mut i, mut n) = (0usize, 0usize);
-    while i < b.len() {
-        let c = match b[i] {
-            b'%' => {
-                let h = |x: u8| (x as char).to_digit(16);
-                let v = h(*b.get(i + 1)?)? * 16 + h(*b.get(i + 2)?)?;
-                i += 3;
-                v as u8
-            }
-            b'+' => {
-                i += 1;
-                b' '
-            }
-            c => {
-                i += 1;
-                c
-            }
-        };
-        *buf.get_mut(n)? = c;
-        n += 1;
-    }
-    core::str::from_utf8(&buf[..n]).ok()
-}
+pub use crate::httpreq::form_get;
 
 fn ipv4(s: &str) -> Option<u32> {
     let s = s.strip_prefix("inc:heqk:").unwrap_or(s);
