@@ -202,6 +202,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
         "shield_allow" => Kind::ShieldAllow,
         "shield_block" => Kind::ShieldBlock,
         "shield_profile" => Kind::ShieldProfile,
+        "device_label" => Kind::DeviceLabel,
         _ => return refuse(c, "kind"),
     };
     if reason.trim().len() < 3 {
@@ -211,6 +212,24 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     let mut tbuf = [0u8; oj::TARGET_MAX];
     let (tlen, value, before, after, shadow): (usize, u8, &'static str, &'static str, &'static str) = match kind {
         Kind::Artifact | Kind::OwnerKey | Kind::AlertHook | Kind::FactoryReset => return refuse(c, "kind"),
+        Kind::DeviceLabel => {
+            // G47: target = the device's MAC, value = the new label (owner_label grammar); remove = back to DEVICES.TXT
+            let Some(m) = mac(target_s) else { return refuse(c, "target") };
+            tbuf[..6].copy_from_slice(&m);
+            let mut cur = [0u8; oj::LABEL_MAX];
+            let had = oj::owner_label(&m, &mut cur) > 0 || crate::devpolicy::signed_label(&m);
+            let before = if had { "labelled" } else { "unlabelled" };
+            if opc == OP_REMOVE {
+                (6, 0, before, if crate::devpolicy::signed_label(&m) { "signed DEVICES.TXT label" } else { "unlabelled" }, "")
+            } else {
+                let v = value_s.trim().as_bytes();
+                if !oj::label_ok(v) {
+                    return refuse(c, "value: 1-31 characters: letters, digits, space . _ - ' ( ) ,");
+                }
+                tbuf[6..6 + v.len()].copy_from_slice(v);
+                (6 + v.len(), 0, before, "labelled", "")
+            }
+        }
         Kind::DevicePolicy | Kind::ShieldProfile => {
             let Some(m) = mac(target_s) else { return refuse(c, "target") };
             tbuf[..6].copy_from_slice(&m);
@@ -332,6 +351,17 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
         let _ = write!(w, ",\"value\":\"{}\",\"effective\":{},\"shadowed_by\":", value, effective);
         if shadow.is_empty() { w.raw("null") } else { w.string(shadow) }
         w.raw("}");
+    });
+    // G47: owner device labels (cosmetic, always effective)
+    oj::for_each_label(&mut |l: &oj::Label| {
+        if !first {
+            w.raw(",");
+        }
+        first = false;
+        let m = l.mac;
+        let _ = write!(w, "{{\"seq\":{},\"kind\":\"device_label\",\"target\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"value\":", l.seq, m[0], m[1], m[2], m[3], m[4], m[5]);
+        w.string(core::str::from_utf8(&l.label[..l.len as usize]).unwrap_or(""));
+        w.raw(",\"effective\":true,\"shadowed_by\":null}");
     });
     w.raw("],\"refused\":[");
     let n = unsafe { RHEAD };
@@ -474,6 +504,47 @@ pub fn factory_reset(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Re
         Err(oj::JErr::Full) => Err("journal full"),
         Err(_) => Err("storage error"),
     }
+}
+
+/// Set by an accepted owner reboot (G49, ADR 0058 "Apply now"): the AP loop reboots once the response has gone out.
+static mut OWNER_REBOOT: bool = false;
+pub fn take_owner_reboot() -> bool {
+    unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(OWNER_REBOOT), false) }
+}
+
+/// G49: `POST /api/reboot` — reason + `permanent=true` + re-authentication, behind the owner-write guards (origin,
+/// CSRF, rate, replay). A plain restart: nothing is erased; staged configuration (A/B store) applies on the way up.
+pub fn reboot(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<(), &'static str> {
+    let (mut b0, mut b1, mut b2, mut b3) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
+    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+    let reason = form_get(body, "reason", &mut b1).unwrap_or("");
+    let permanent = form_get(body, "permanent", &mut b2) == Some("true");
+    let seq: u64 = form_get(body, "seq", &mut b3).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let tag = crate::mcauth::session_tag(c.session);
+    if !origin_ok(c.origin, c.host) {
+        return refuse(c, "origin").map(|_| ());
+    }
+    if !crate::mcauth::csrf_ok(c.session, c.csrf) {
+        return refuse(c, "csrf").map(|_| ());
+    }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return refuse(c, "rate limited: at most 20 writes a minute per session").map(|_| ());
+    }
+    if !crate::actions::accept_seq(tag, seq) {
+        return refuse(c, "replay").map(|_| ());
+    }
+    if reason.trim().len() < 3 {
+        return refuse(c, "reason required").map(|_| ());
+    }
+    if !permanent {
+        return refuse(c, "permanent=true required").map(|_| ());
+    }
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return refuse(c, "re-authentication failed").map(|_| ());
+    }
+    arch_aarch64::_print(format_args!(" [OWNER] reboot requested by the owner ({}) — restarting in 2 s\n", reason.trim()));
+    unsafe { OWNER_REBOOT = true };
+    Ok(())
 }
 
 /// Boot-time half of the factory reset: zero the journal region (called last, after the other stores).
