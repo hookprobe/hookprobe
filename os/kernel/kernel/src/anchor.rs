@@ -397,9 +397,10 @@ pub fn set_owner(k: &[u8; 32], proof: &[u8; 64], rotate: Option<(u64, [u8; 64])>
     Ok(next.owner_gen)
 }
 
-/// Factory reset: forget the owner key (the next owner enrolls their own); the vendor key and the POLICY floor
-/// (anti-rollback) stay. Idempotent — nothing enrolled = nothing written.
+/// Forget the owner key; the vendor key and the POLICY floor (anti-rollback) stay. Idempotent. NOT called by the
+/// token-authorised factory reset (ADR 0059 Phase 0.6); kept for the owner-signed reset (HQRST1, Phase 2).
 #[cfg(all(feature = "cm5", feature = "p15-write"))]
+#[allow(dead_code)]
 pub fn clear_owner() -> Result<bool, &'static str> {
     let Some((mut dev, lo)) = header_dev() else { return Err("no DataVolume") };
     let prev = load(&dev, lo);
