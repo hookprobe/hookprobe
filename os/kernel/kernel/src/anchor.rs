@@ -61,9 +61,32 @@ pub struct CfgGens {
     pub wan_floor: u64,
     pub wifi_cur: u64,
     pub wifi_floor: u64,
+    /// ADR 0059 step 3: the generation of the last COMMITTED HQCFG1 bundle (cfgd); a new bundle must be above it.
+    pub cfg_floor: u64,
 }
 impl CfgGens {
-    pub const ZERO: CfgGens = CfgGens { wan_cur: 0, wan_floor: 0, wifi_cur: 0, wifi_floor: 0 };
+    pub const ZERO: CfgGens = CfgGens { wan_cur: 0, wan_floor: 0, wifi_cur: 0, wifi_floor: 0, cfg_floor: 0 };
+}
+
+/// Self-tests only: put the RAM generation state back.
+pub fn test_set_cfg(c: CfgGens) {
+    unsafe { CFG = c };
+}
+
+/// cfgd committed a bundle: persist its generation as the bundle floor (never lowers it).
+pub fn commit_cfg_floor(g: u64) {
+    let mut n = cfg_gens();
+    if g <= n.cfg_floor {
+        return;
+    }
+    n.cfg_floor = g;
+    unsafe { CFG = n };
+    #[cfg(all(feature = "cm5", feature = "p15-write"))]
+    if let Some((mut dev, lo)) = header_dev() {
+        if let Some(p) = load(&dev, lo) {
+            let _ = store(&mut dev, lo, Some(p), Anchor { cfg: n, ..p });
+        }
+    }
 }
 
 /// The pure acceptance rule: `Err` = below the floor (a replay); `Ok((cur, floor))` = the new pair.
@@ -131,8 +154,9 @@ fn encode(a: &Anchor) -> [u8; 512] {
     s[112..120].copy_from_slice(&a.cfg.wan_floor.to_le_bytes());
     s[120..128].copy_from_slice(&a.cfg.wifi_cur.to_le_bytes());
     s[128..136].copy_from_slice(&a.cfg.wifi_floor.to_le_bytes());
-    let h = boot_abi::sha256::digest(&s[..136]);
-    s[136..168].copy_from_slice(&h);
+    s[136..144].copy_from_slice(&a.cfg.cfg_floor.to_le_bytes());
+    let h = boot_abi::sha256::digest(&s[..144]);
+    s[144..176].copy_from_slice(&h);
     s
 }
 
@@ -141,7 +165,7 @@ fn decode(s: &[u8; 512]) -> Option<Anchor> {
     let v3 = &s[..8] == MAGIC3;
     let v2 = v3 || &s[..8] == MAGIC2;
     let ok = if v3 {
-        boot_abi::sha256::digest(&s[..136])[..] == s[136..168]
+        boot_abi::sha256::digest(&s[..144])[..] == s[144..176]
     } else if v2 {
         boot_abi::sha256::digest(&s[..104])[..] == s[104..136]
     } else {
@@ -152,7 +176,7 @@ fn decode(s: &[u8; 512]) -> Option<Anchor> {
     }
     let key = (u(16) & HAS_KEY != 0).then(|| s[24..56].try_into().unwrap());
     let owner = (v2 && u(16) & HAS_OWNER != 0).then(|| s[64..96].try_into().unwrap());
-    let cfg = if v3 { CfgGens { wan_cur: u(104), wan_floor: u(112), wifi_cur: u(120), wifi_floor: u(128) } } else { CfgGens::ZERO };
+    let cfg = if v3 { CfgGens { wan_cur: u(104), wan_floor: u(112), wifi_cur: u(120), wifi_floor: u(128), cfg_floor: u(136) } } else { CfgGens::ZERO };
     Some(Anchor { key, policy_floor: u(56), seq: u(8), owner, owner_gen: if v2 { u(96) } else { 0 }, cfg })
 }
 
@@ -274,12 +298,18 @@ pub enum CfgTy {
 /// ADR 0059 Phase 0.3: check a verified WAN / WIFI generation against its floor and, when accepted, persist the
 /// new (cur, floor). Err = a replay below the floor (the caller refuses the file). A persist failure keeps the
 /// RAM state (the floor still applies this boot) and is reported by the caller's log.
-pub fn accept_cfg(t: CfgTy, g: u64) -> Result<(), u64> {
+pub fn accept_cfg(t: CfgTy, g: u64, from_store: bool) -> Result<(), u64> {
     let c = cfg_gens();
     let (cur, floor) = match t {
         CfgTy::Wan => (c.wan_cur, c.wan_floor),
         CfgTy::Wifi => (c.wifi_cur, c.wifi_floor),
     };
+    // peer review 2026-11-10: the one-step rollback window applies only to the STORE (an owner-authenticated
+    // rollback); a file on the card must be at least the generation already in force (a card writer cannot replay
+    // even the immediately previous signed file). The stored floor itself is unchanged by this check.
+    if !from_store && cur != 0 && g < cur {
+        return Err(cur);
+    }
     let (ncur, nfloor) = accept_gen(cur, floor, g).map_err(|_| floor)?;
     if (ncur, nfloor) == (cur, floor) {
         return Ok(());
@@ -421,7 +451,7 @@ pub fn selftest() -> bool {
     // trip, and a v2 record decodes with no floors
     let rule = accept_gen(0, 0, 5) == Ok((5, 5)) && accept_gen(5, 5, 6) == Ok((6, 5)) && accept_gen(6, 5, 5) == Ok((5, 5))
         && accept_gen(6, 5, 4) == Err(()) && accept_gen(6, 5, 9) == Ok((9, 6)) && accept_gen(9, 6, 9) == Ok((9, 6));
-    let g3 = CfgGens { wan_cur: 9, wan_floor: 6, wifi_cur: 3, wifi_floor: 3 };
+    let g3 = CfgGens { wan_cur: 9, wan_floor: 6, wifi_cur: 3, wifi_floor: 3, cfg_floor: 4 };
     let mut m3 = Mem([[0; 512]; 2]);
     let w5 = store(&mut m3, 0, None, Anchor { cfg: g3, ..cur });
     let v3 = w5 && load(&m3, 0).is_some_and(|a| a.cfg == g3 && a.owner == Some(p1) && a.policy_floor == cur.policy_floor);
@@ -432,7 +462,13 @@ pub fn selftest() -> bool {
     let h2 = boot_abi::sha256::digest(&v2r[..104]);
     v2r[104..136].copy_from_slice(&h2);
     let v2compat = decode(&v2r).is_some_and(|a| a.key == Some(k) && a.cfg == CfgGens::ZERO);
-    let floors = rule && v3 && v2compat;
+    // the store path keeps the one-step rollback window; a file on the card must be >= the generation in force
+    let saved = cfg_gens();
+    unsafe { CFG = CfgGens { wan_cur: 6, wan_floor: 5, ..CfgGens::ZERO } };
+    let card = accept_cfg(CfgTy::Wan, 5, false) == Err(6);
+    let store_rb = accept_cfg(CfgTy::Wan, 5, true).is_ok() && cfg_gens().wan_floor == 5;
+    unsafe { CFG = saved };
+    let floors = rule && v3 && v2compat && card && store_rb;
     let owner_ok = compat && enroll && rotate && persist && scope && floors;
     let pass = table && empty && round && torn && owner_ok;
     arch_aarch64::_print(format_args!(

@@ -358,6 +358,9 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     if len + 512 > u.size {
         return Err("file shorter than its signature says");
     }
+    if u.ty == Ty::Config && !artstore::config_mgmt_ok() {
+        return Err("refused: this configuration would leave no management path (HTTPS to the device on LAN / Wi-Fi, eth1 or the management VLAN)");
+    }
     let active = artstore::active_gen(&*d, p1(d), u.ty);
     if gen < active {
         return Err("rollback refused: generation older than the active pack");
@@ -429,7 +432,11 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     let old = artstore::active_gen(&*d, p1(d), ty);
     // the content digest inside the signature sector: POLICY.SIG has no length field (digest at 16..48, over the
     // whole 4 KiB file); every other format carries len at 16..24 and the digest at 24..56
-    let digest: [u8; 32] = if ty == Ty::Policy { sig[16..48].try_into().unwrap() } else { sig[24..56].try_into().unwrap() };
+    let digest: [u8; 32] = match ty {
+        Ty::Policy => sig[16..48].try_into().unwrap(),
+        Ty::Config => sig[13..45].try_into().unwrap(), // HQCSIG1: sha256(bundle) at 13..45
+        _ => sig[24..56].try_into().unwrap(),
+    };
     let res = artstore::activate(d, ty, &sig, slo + 1, gen, len, &digest);
     *up() = None;
     let mut reason = [0u8; 64];

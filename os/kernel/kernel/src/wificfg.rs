@@ -168,6 +168,10 @@ pub fn check_sig(sig: &[u8], key: &[u8; 32], body: &[u8]) -> Option<(u64, usize)
 
 /// Boot: WIFI.TXT (≤ 1 KiB) [+ WIFI.SIG when an operator key is compiled in]. None = no file (defaults).
 pub fn load<D: hal::BlockDev>(dev: &D) -> Option<Result<WifiCfg, CfgErr>> {
+    // ADR 0059 step 3: the wifi section of the HQCFG1 bundle in force (verified by cfgd)
+    if let Some(w) = crate::cfgd::section(crate::cfgbundle::KIND_WIFI) {
+        return Some(parse(w));
+    }
     let mut sec = [0u8; 512];
     dev.read_block(0, &mut sec).ok()?;
     let p1 = crate::store::parse_mbr(&sec)[0].start;
@@ -191,7 +195,7 @@ pub fn load<D: hal::BlockDev>(dev: &D) -> Option<Result<WifiCfg, CfgErr>> {
             // ADR 0059 Phase 0.3: a generation below the WIFI floor is a replay — refused like a bad signature
             .filter(|&(g, _)| {
                 #[cfg(feature = "p15-write")]
-                if let Err(floor) = crate::anchor::accept_cfg(crate::anchor::CfgTy::Wifi, g) {
+                if let Err(floor) = crate::anchor::accept_cfg(crate::anchor::CfgTy::Wifi, g, crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wifi)) {
                     arch_aarch64::_print(format_args!(" [WIFI] WIFI.TXT generation {} is below the floor {} — a replayed older file, REFUSED\n", g, floor));
                     return false;
                 }
