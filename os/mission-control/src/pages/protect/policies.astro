@@ -1,0 +1,16 @@
+---
+/**
+ * /protect/policies — Firewall and routes (ADR 0058): AdvancedConfigApp builds, signs (in the browser) and uploads the file.
+ * Spec: docs/design/mission-control-ui-requirements.md §Configuration journey.
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import AdvancedConfigApp from '../../components/AdvancedConfigApp';
+---
+
+<Shell
+  title="Firewall and routes — HookProbe OS"
+  description="Access lists, prefix lists and failover routes — built as a signed POLICY.TXT."
+>
+  <AdvancedConfigApp path="/protect/policies" client:load />
+</Shell>
