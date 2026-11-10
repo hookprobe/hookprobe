@@ -714,7 +714,8 @@ pub fn client6<N: ApNic>(
                 let mut d6 = [0u8; 16];
                 d6.copy_from_slice(&frame[38..54]);
                 let _ = crate::rules::flow_scan_observe6(frame, crate::srckey::dev(&sm), crate::srckey::v6net(&d6));
-                let lease = lease_of(&sm);
+                // G36: an IPv6-only device (no lease) keys on its 248/5 identity instead of being skipped
+                let lease = crate::srckey::v6_attrib(lease_of(&sm), &sm);
                 if frame[20] == 6 {
                     if crate::ja4::observe6(frame, lease) {
                         return Client6::IdsDrop; // rule 126 enforcement (Shield-blocked name over a DNS bypass)
@@ -775,7 +776,7 @@ pub fn station_relay(frame: &[u8], dh: &arch_aarch64::dhcpd::ApDhcp, now_s: u64,
                 let mut dm = [0u8; 6];
                 sm.copy_from_slice(&frame[6..12]);
                 dm.copy_from_slice(&frame[0..6]);
-                let l = |m: &[u8; 6]| dh.lease_for(m).map_or(0, u32::from_be_bytes);
+                let l = |m: &[u8; 6]| crate::srckey::v6_attrib(dh.lease_for(m).map_or(0, u32::from_be_bytes), m);
                 let _ = crate::rules::lateral_observe6(frame, l(&sm), l(&dm));
             }
             let _ = send(frame);

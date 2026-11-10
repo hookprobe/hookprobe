@@ -87,6 +87,12 @@ H=$(curl -s -m 10 $C "$B/api/health")
 [ "$(echo "$H" | jget "d['substrate']")" = heqk ] && ok "API answered by heqk ($H)" || bad "health: $H"
 [ "$(echo "$H" | jget "d['rules_active']")" -gt 0 ] 2>/dev/null && ok "rule plane armed" || bad "rule plane NOT armed (IPS would pass everything)"
 echo "$H" | jget "all(k in d['lan_relay'] for k in ('arp_proxied','relayed','refused_policy','refused_not_leased','discovery_copies','discovery_rate_limited'))" | grep -q True && ok "/api/health reports the Wi-Fi station relay counters" || bad "health: no lan_relay counters"
+# UI contract (2026-11-10): the capability manifest + the planner's honest not-configured answers
+CAP=$(curl -s -m 10 $C "$B/api/capabilities")
+echo "$CAP" | jget "d['source']=='manifest' and d['schema']==2 and 'ids' in d['granted'] and all(isinstance(v,str) and v for v in d['denied'].values()) and not set(d['granted']) & set(d['denied'])" | grep -q True && ok "/api/capabilities: manifest schema 2, granted ids, every denial carries a reason, no id in both" || bad "capabilities: $CAP"
+echo "$H" | jget "d['capabilities']==$(echo "$CAP" | jget "d['granted']" | tr "'" '"')" | grep -q True && ok "/api/health echoes the granted capabilities" || bad "health capabilities echo"
+echo "$(curl -s -m 10 $C "$B/api/planner/status")" | jget "d['configured'] is False and d['endpoint'] is None" | grep -q True && ok "/api/planner/status: honestly not configured" || bad "planner status"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 $C -X POST -H "Origin: $B" --data 'intent=x' "$B/api/planner/propose")" = 503 ] && ok "POST /api/planner/propose: 503 not_configured (no mock proposal)" || bad "planner propose"
 D0=$(curl -s -m 10 $C "$B/api/detections" | jget "d['count']")
 # A baseline that could not be read must FAIL the run, never default to 0 (a vacuous pass).
 [[ "$D0" =~ ^[0-9]+$ ]] || { bad "could not read the baseline detection count ($D0)"; D0=999999; }

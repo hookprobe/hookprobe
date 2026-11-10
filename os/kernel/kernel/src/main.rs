@@ -58,6 +58,11 @@ mod mcmgmt;
 mod srckey;
 mod idsbench;
 mod ja4;
+// SEC-02: the pure TLS ClientHello / JA4 parser and the DNS wire parser (also in the host libFuzzer harness).
+mod tlshello;
+// G32: JA4 fingerprints per MAC as a private-MAC rotation hint.
+mod ja4id;
+mod dnswire;
 mod fpdb;
 mod devid;
 mod oui;
@@ -77,6 +82,8 @@ mod upload;
 mod discovery;
 #[cfg(feature = "netsvc")]
 mod actionapi;
+// SEC-02: the pure HTTP request + form parser (also built into the host libFuzzer harness).
+mod httpreq;
 // Parity G16: WAN health with hysteresis.
 mod wanhealth;
 // Parity G15: local SIEM export formats (RFC 5424 / OCSF JSON).
@@ -147,6 +154,9 @@ mod wanntp;
 mod mcauth;
 #[cfg(feature = "netsvc")]
 mod http;
+// GET /api/capabilities: the device manifest Mission Control gates on (granted / denied-with-reason).
+#[cfg(feature = "netsvc")]
+mod capabilities;
 #[cfg(feature = "mcserve")]
 mod mcserve;
 // ADR 0051 — the EL0 TLS server loader + bounded-excursion driver.
@@ -3403,9 +3413,9 @@ fn cm5_p10_probe() {
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
                             #[cfg(feature = "wpa3probe")]
                             cyw43::probe_set_psk(ap_psk);
-                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA2 — the proven default. Transition mode
-                            // is opt-in: on this firmware a WPA2-only (no-PMF) station is refused at association (status 38,
-                            // metal batches 45/46), so it must never be switched on silently. `HEQK_AP_SECURITY` (wpa3 |
+                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA2 — the long-proven default. Transition mode
+                            // (SAE + PMF for WPA3 stations, PSK for WPA2-only ones — both metal-proven, batches 44-50) is the
+                            // recommended next default, an operator product decision. `HEQK_AP_SECURITY` (wpa3 |
                             // wpa3-transition) changes the default for bench builds. SAE needs the passphrase itself.
                             #[cfg(feature = "wpa3")]
                             {
@@ -3425,11 +3435,18 @@ fn cm5_p10_probe() {
                                     kprint!(" [WPA3] WPA3 needs the passphrase (SAE cannot use a raw 64-hex PMK) — this AP stays WPA2-PSK\n");
                                 }
                             }
+                            cyw43::ap_set_max_clients(wifi.map_or(0, |c| c.max_clients as u32));
                             cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon (or the WPA3 mode)
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
                             // group PN on every join.
                             ap.gtk_set = cyw43::ap_install_gtk(&gtk, 1);
+                            #[cfg(feature = "netsvc")]
+                            {
+                                capabilities::set_wifi_ap(ap.up_ok && ap.ssid_ok);
+                                #[cfg(feature = "wpa3")]
+                                capabilities::set_wpa3(cyw43::ap_security() != cyw43::SEC_WPA2);
+                            }
                             kprint!("   [P11-AP2] cap_has_ap={} apsta={} set_ap={} infra={} chan={} wsec={} wpa_auth={} up={} ssid={} | get_ap={} bssid {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} mac_set={} ev={} gtk={} bssid_rb={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} verified={}\n",
                                 ap.cap_has_ap, ap.apsta_ok, ap.set_ap_ok, ap.infra_ok, ap.chan_ok, ap.wsec_ok,
                                 ap.wpa_auth_ok, ap.up_ok, ap.ssid_ok, ap.get_ap,
@@ -4540,11 +4557,11 @@ fn cm5_p10_probe() {
                                                     let dk = dmac.map(|m| srckey::dev(&m)).unwrap_or(0);
                                                     let _ = rules::flow_scan_observe6(&wbuf[..n], srckey::v6net(&s6), dk);
                                                     if wbuf[20] == 6 {
-                                                        let lease = dmac.and_then(|m| dh.lease_for(&m)).map_or(0, u32::from_be_bytes);
+                                                        let lease = dmac.map_or(0, |m| srckey::v6_attrib(dh.lease_for(&m).map_or(0, u32::from_be_bytes), &m));
                                                         rules::brute_answer6(&wbuf[..n], lease); // G36: the answer that makes v6 brute force count
                                                     }
                                                     // G24a: an IOC-listed IPv6 source reaching a LAN device (attributed to that device)
-                                                    let _ = rules::ioc_v6_hit(dmac.and_then(|m| dh.lease_for(&m)).map_or(0, u32::from_be_bytes), &s6);
+                                                    let _ = rules::ioc_v6_hit(dmac.map_or(0, |m| srckey::v6_attrib(dh.lease_for(&m).map_or(0, u32::from_be_bytes), &m)), &s6);
                                                 }
                                                 let v6a = v6.on_wan(&wbuf[14..n], nms, &mut v6buf);
                                                 // `wan in` judges only genuinely NEW inbound traffic (no flow). A neighbor-table
@@ -7122,6 +7139,10 @@ pub extern "C" fn kmain() -> ! {
             kprint!(" [P-sae] {} — WPA3-SAE on the AP (Phase 6, host SAE because the firmware forwards SAE frames — batch 37): P-256 hunting-and-pecking commit + KCK/PMK/PMKID = IEEE 802.11-2020 Annex J.10={} | AP responder end to end (commit, confirm, PMK agreed; wrong password: confirm dropped, never answered, no PMK)={} | AKM 8 PTK (KDF-SHA256) = hostapd 2.11 sha256_prf={} | AES-128-CMAC EAPOL MIC = RFC 4493 examples 1-4={} | H2E (hash-to-element, SSWU) PWE = the Annex J.10 H2E vector={}\n",
                 if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e);
         }
+        let _ = ja4id::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = capabilities::selftest();
+        let _ = srckey::v6only_selftest();
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
             use arch_aarch64::crashrec::{take, write};
