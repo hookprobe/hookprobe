@@ -235,14 +235,31 @@ fn sig_gen<D: BlockDev + ?Sized>(dev: &D, lba: u64, magic: &[u8; 8]) -> Option<u
 /// The store's committed slot for a type, if it is at least as new as the boot-FAT copy:
 /// `Some((sig_lba, data_lba, data_sect))`. Touches only the small FAT `.SIG` file (never walks the
 /// pack's own cluster chain — a 4 MiB OUI.TXT walk costs seconds on the eMMC).
+/// ADR 0059 Phase 0.4 (H2): types whose ACTIVE store half was refused this boot and that now read the OTHER half
+/// (the previous generation) before falling back to the boot-partition baseline. RAM only.
+static mut OTHER: u16 = 0;
+fn use_other(t: Ty) -> bool {
+    unsafe { OTHER & (1 << t as u8) != 0 }
+}
+
 fn store_copy<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> Option<(u64, u64, u64)> {
     if disabled(t) {
         return None;
     }
     let store = store_region(dev)?;
-    let e = read_manifest(dev, store).e[t as usize];
+    let mut e = read_manifest(dev, store).e[t as usize];
     if e.half == 0 {
         return None;
+    }
+    if use_other(t) {
+        // the previous generation: whatever its signature sector says (the loader verifies it, the floor applies)
+        e.half = if e.half == 1 { 2 } else { 1 };
+        let mut sec = [0u8; 512];
+        dev.read_block(slot(store, t, e.half).0, &mut sec).ok()?;
+        if &sec[..8] != t.info().magic {
+            return None;
+        }
+        e.gen = u64::from_le_bytes(sec[8..16].try_into().unwrap());
     }
     let i = t.info();
     let fat_gen = if p1 != 0 { crate::fat::locate_contiguous(dev, p1, i.sig).and_then(|(l, _)| sig_gen(dev, l, i.magic)) } else { None };
@@ -349,12 +366,30 @@ pub fn reload<D: BlockDev>(dev: &D, t: Ty) -> Result<(), ()> {
 /// Boot: a store copy its loader refused (tampered / torn at rest) is disabled for this boot and the module
 /// reloaded from the boot-FAT copy. Returns true when it fell back.
 pub fn boot_fallback<D: BlockDev>(dev: &D, p1: u64, t: Ty, refused: bool) -> bool {
-    if refused && from_store(dev, p1, t) {
-        disable(t);
-        let _ = reload(dev, t);
+    if refused && fallback_step(dev, p1, t) {
+        if reload(dev, t).is_err() && fallback_step(dev, p1, t) {
+            let _ = reload(dev, t);
+        }
         return true;
     }
     false
+}
+
+/// One step down the boot order after the copy just read was refused (ADR 0059 Phase 0.4): the active store half
+/// -> the OTHER store half (the previous generation, if it carries a signature) -> the boot-partition baseline.
+/// Returns true when there is something new to try (the caller re-runs its loader), false when nothing is left.
+pub fn fallback_step<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> bool {
+    if !from_store(dev, p1, t) {
+        return false; // already on the boot partition (or nothing at all)
+    }
+    if !use_other(t) {
+        unsafe { OTHER |= 1 << t as u8 };
+        if from_store(dev, p1, t) {
+            return true; // the other half exists: try it
+        }
+    }
+    disable(t);
+    true
 }
 
 // ---- activation (write build) ---------------------------------------------------------------------------
@@ -640,14 +675,29 @@ pub fn selftest() -> bool {
     let _ = d.read_block(dl, &mut s);
     s[0] ^= 1;
     let _ = d.write_block(dl, &s);
+    // ADR 0059 Phase 0.4: the active half (gen 7) tampered -> the OTHER half (gen 8, valid) loads, not the FAT copy;
+    // the other half tampered too -> only then the boot partition
     let refused = crate::devpolicy::load(d).file == 2;
-    let fell_back = boot_fallback(d, 0, Ty::Devices, refused) && locate(d, 0, b"DEVICES TXT").is_none();
-    unsafe { DISABLED = 0 };
+    let other_ok = boot_fallback(d, 0, Ty::Devices, refused) && locate(d, 0, b"DEVICES TXT") == Some((slot(store, Ty::Devices, 2).1, Ty::Devices.data_sect()))
+        && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x62]) == crate::devpolicy::Pol::LanOnly;
+    let (_, dl2) = slot(store, Ty::Devices, 2);
+    let _ = d.read_block(dl2, &mut s);
+    s[0] ^= 1;
+    let _ = d.write_block(dl2, &s);
+    let refused2 = crate::devpolicy::load(d).file == 2;
+    let fell_back = other_ok && refused2 && boot_fallback(d, 0, Ty::Devices, refused2) && locate(d, 0, b"DEVICES TXT").is_none();
+    if !fell_back {
+        arch_aarch64::_print(format_args!(" [P-artstore] debug fallback: other-half={} refused2={}\n", other_ok, refused2));
+    }
+    unsafe {
+        DISABLED = 0;
+        OTHER = 0;
+    }
     crate::policysig::selftest_key(None);
     crate::devpolicy::load_text(b"");
     let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && owner_rb && staged_ok && fell_back;
     arch_aarch64::_print(format_args!(
-        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest falls back to FAT={}\n",
+        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest active half -> the previous half, then FAT (ADR 0059 0.4)={}\n",
         if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, owner_rb, staged_ok, fell_back
     ));
     pass

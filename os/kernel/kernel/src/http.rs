@@ -612,6 +612,11 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             hex(w, crate::policysig::key());
             w.raw(",\"owner_key\":");
             hex(w, crate::anchor::owner());
+            // ADR 0059 0.5: no key at all = anyone with the card reconfigures the device; Mission Control shows a banner
+            let protected = crate::policysig::config_key().is_some();
+            let g = crate::anchor::cfg_gens();
+            let _ = write!(w, ",\"config_protected\":{},\"state\":\"{}\",\"floors\":{{\"wan\":{{\"current\":{},\"floor\":{}}},\"wifi\":{{\"current\":{},\"floor\":{}}},\"policy\":{}}}",
+                protected, if protected { "protected" } else { "CONFIG UNPROTECTED" }, g.wan_cur, g.wan_floor, g.wifi_cur, g.wifi_floor, crate::policysig::floor());
             let _ = write!(w, ",\"owner_enrolled\":{},\"owner_generation\":{},\"config_files_verified_by\":\"{}\",\"can\":\"{}\",\"enroll_message\":\"HQENR1 || public_key (proof = Ed25519 by the new key)\",\"rotate_message\":\"HQROT1 || new public_key || generation u64 LE (signed by the enrolled key)\"}}",
                 crate::anchor::owner().is_some(), crate::anchor::owner_gen(),
                 if crate::anchor::owner().is_some() { "owner" } else if crate::policysig::key().is_some() { "vendor" } else { "none (standalone)" },
