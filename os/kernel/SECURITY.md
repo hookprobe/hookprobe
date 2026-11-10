@@ -503,8 +503,13 @@ HookProbe security is built on:
 
 - [ ] Flash with an owner key (the factory default is UNCLAIMED — every protected route refuses until claimed).
 - [ ] Use a release-signed image (never a `HOOKPROBE_DEBUG_ACCESS` bench image in production).
-- [ ] Keep Mission Control on a trusted network until HTTPS lands (ADR 0051): it is plain HTTP today.
-- [ ] Treat physical access to the card as access to `POLICY.TXT` / `WAN.TXT` until policy signing lands (ADR 0049 D1).
+- [ ] Install the per-device Mission Control certificate (ADR 0051, offline provisioning): without it the login
+      is served over plain HTTP — keep such a unit on a trusted network.
+- [ ] Ship `POLICY.TXT` and every data pack signed with the operator key (ADR 0049 D1 / ADR 0056) — the first
+      boot pins that key; an unsigned or differently-signed file is refused. `WAN.TXT` is still unsigned:
+      physical access to the card = access to the WAN settings.
+- [ ] Provision customer OTP at the factory (decision record 2026-11-10) — a blank-OTP unit fails closed (no
+      HTTPS key, no persistence, no setup credential).
 - [ ] Watch the heartbeat counters (`faults`, `rx_lost`, stalls, policy drops) and `/api/health`.
 
 ---
