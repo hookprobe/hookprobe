@@ -422,3 +422,22 @@ Security defects come first. Every phase is independently shippable and gated by
 **Residual risk accepted for now:** `anchor::accept_gen` keeps a one-generation rollback window. A card writer
 can therefore replay the immediately previous signed WAN/WIFI file from the FAT partition. This is subsumed by
 H6 (SEC-3 is open). The proposed hardening is to allow the window only on the owner-authenticated store path.
+
+### 2026-11-10: review round 2 (`wt-p2`)
+
+**Fixed by the heqk session:**
+1. **Bundles that touch the management plane are never auto-committed.** `cfgd::touches_mgmt` matches wan keys
+   `mgmt*`/`vlan*`/`pcp` or a policy `interface mgmt` line. Such a bundle needs `/api/config/confirm`, and
+   `/api/config` reports `needs_confirm`. Staging cannot be detected by ingress interface, because the request
+   context has none, so the rule is content-based.
+2. **D7 is enforced at stage.** See `keeps_mgmt_path` below.
+3. **A committed bundle that fails verification tries the other half first.**
+4. **The FAT replay window is closed.** `accept_cfg(.., from_store)` keeps a one-step rollback window only on the
+   store path. A FAT file must be at or above the generation in force. The residual risk noted above is closed.
+
+**Bundle semantics (agreed with the UI session):** a bundle is complete for the sections it carries. A missing
+section means the per-file source applies, not "unchanged".
+
+**Open:** `keeps_mgmt_path` probes fixed sample addresses rather than the running LAN/eth1/mgmt subnets and the
+device's own addresses. A policy that blocks only the real LAN subnet therefore passes. The fix (probe the real
+interface/subnet/address triples) has been sent to the heqk session.
