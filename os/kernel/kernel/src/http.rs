@@ -574,13 +574,13 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = write!(w, ",\"wan\":{{\"up\":{},\"ip\":\"{}.{}.{}.{}\",\"mode\":\"{}\",\"ipv6\":{},\"clients\":{},\"pkts_out\":{},\"pkts_in\":{},\"dns_inspected\":{},\"dns_blocked\":{},\"blocklist\":{}}}",
                     f.up, f.ip[0], f.ip[1], f.ip[2], f.ip[3], ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ipv6, f.clients, f.pkts_out, f.pkts_in, f.dns_inspected, f.dns_blocked, f.blocklist);
             }
-            // Phase 3b: how the previous run ended — a watchdog-type reset means the unit recovered from a hang or
-            // a crash (power-on = a normal power cycle / first boot).
-            let _ = write!(w, ",\"last_reset\":\"{}\"", if crate::rtwdog::prev_reset_was_watchdog() { "watchdog (recovered from a hang or crash)" } else { "power-on" });
             // G10: the Wi-Fi station-to-station relay (all after the lease + IDS + DEVICES.TXT gates)
             let r = crate::lanrelay::stats();
             let _ = write!(w, ",\"lan_relay\":{{\"arp_proxied\":{},\"relayed\":{},\"refused_policy\":{},\"refused_not_leased\":{},\"discovery_copies\":{},\"discovery_rate_limited\":{}}}",
                 r[0], r[1], r[2], r[3], r[4], r[5]);
+            // Phase 3b: how the previous run ended — a watchdog-type reset means the unit recovered from a hang or
+            // a crash (power-on = a normal power cycle / first boot). Last, so existing field order is unchanged.
+            let _ = write!(w, ",\"last_reset\":\"{}\"", if crate::rtwdog::prev_reset_was_watchdog() { "watchdog (recovered from a hang or crash)" } else { "power-on" });
             w.raw("}");
         }),
         // Audit A8: the "Get Online" pillar's read side — what the device applied, and from which source.
