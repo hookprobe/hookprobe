@@ -20,6 +20,9 @@ export default async function (t) {
   const s = V.sections_full;
   ok(Buffer.from(buildBundle({ policy: s.policy, wifi: s.wifi, wan: s.wan }, 7, kid)).toString('hex') === V.cases['valid-wan-wifi-policy'].bundle,
     'builder: wan+wifi+policy bundle byte-identical to hqcfg.py (sections ordered by kind)');
+  const fo = 'route 0.0.0.0/0 via wan metric 10\nroute 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100\n';
+  ok(Buffer.from(buildBundle({ policy: fo }, 10, kid)).toString('hex') === V.cases['two-default-routes-wan-mgmt'].bundle,
+    'builder: metric-ordered failover (default route via wan and via mgmt) accepted, byte-identical to the vector');
   let refused = '';
   try { canonicalSection('wifi', 'ssid=a\nssid=b\n'); } catch (e) { refused = e.message; }
   ok(/repeated/.test(refused), 'builder: a repeated key is refused before signing');
