@@ -512,6 +512,80 @@ pub fn take_owner_reboot() -> bool {
     unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(OWNER_REBOOT), false) }
 }
 
+fn hexn<const N: usize>(s: &str) -> Option<[u8; N]> {
+    let s = s.trim().as_bytes();
+    if s.len() != 2 * N {
+        return None;
+    }
+    let mut o = [0u8; N];
+    for (i, b) in o.iter_mut().enumerate() {
+        *b = u8::from_str_radix(core::str::from_utf8(&s[2 * i..2 * i + 2]).ok()?, 16).ok()?;
+    }
+    Some(o)
+}
+
+/// ADR 0058 D3 `POST /api/anchor/enroll` (public_key, proof) and `POST /api/anchor/rotate` (public_key, proof,
+/// generation, signature): owner-write guards + re-authentication. Enroll is one-shot (initial provisioning, operator
+/// 2026-11-10 rule 3); afterwards only a rotation signed by the enrolled key. The device verifies every signature;
+/// the session only decides whether to try. Returns the owner-key generation now in force.
+pub fn anchor_set(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, rotate: bool) -> Result<u64, &'static str> {
+    let (mut b0, mut b1, mut b2, mut b3, mut b4, mut b5) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
+    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+    let pk = form_get(body, "public_key", &mut b1).and_then(hexn::<32>);
+    let proof = form_get(body, "proof", &mut b2).and_then(hexn::<64>);
+    let seq: u64 = form_get(body, "seq", &mut b3).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let gen: Option<u64> = form_get(body, "generation", &mut b4).and_then(|v| v.parse().ok());
+    let sig = form_get(body, "signature", &mut b5).and_then(hexn::<64>);
+    let tag = crate::mcauth::session_tag(c.session);
+    if !origin_ok(c.origin, c.host) {
+        return refuse(c, "origin").map(|_| 0);
+    }
+    if !crate::mcauth::csrf_ok(c.session, c.csrf) {
+        return refuse(c, "csrf").map(|_| 0);
+    }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return refuse(c, "rate limited: at most 20 writes a minute per session").map(|_| 0);
+    }
+    if !crate::actions::accept_seq(tag, seq) {
+        return refuse(c, "replay").map(|_| 0);
+    }
+    let (Some(pk), Some(proof)) = (pk, proof) else { return refuse(c, "public_key (64 hex) and proof (128 hex) required").map(|_| 0) };
+    let rot = if rotate {
+        match (gen, sig) {
+            (Some(g), Some(s)) => Some((g, s)),
+            _ => return refuse(c, "generation and signature (128 hex) required").map(|_| 0),
+        }
+    } else {
+        None
+    };
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return refuse(c, "re-authentication failed").map(|_| 0);
+    }
+    #[cfg(all(feature = "cm5", feature = "p15-write"))]
+    {
+        let r = crate::anchor::set_owner(&pk, &proof, rot);
+        let fp = u32::from_be_bytes([pk[0], pk[1], pk[2], pk[3]]);
+        let mut reason = [0u8; 64];
+        let rl = {
+            use core::fmt::Write;
+            let mut w = crate::mcstate::JsonBuf::new(&mut reason);
+            let _ = write!(w, "{} owner key {:08x}", if rotate { "rotate" } else { "enroll" }, fp);
+            w.len
+        };
+        let _ = audit_artifact("anchor", if r.is_ok() { 1 } else { 2 }, &reason[..rl], tag, c.now_ms);
+        arch_aarch64::_print(format_args!(" [ANCHOR] owner key {} {:08x}…: {:?}\n", if rotate { "rotation" } else { "enrollment" }, fp, r));
+        return match r {
+            Ok(g) => Ok(g),
+            Err(e) => refuse(c, e).map(|_| 0),
+        };
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (pk, proof, rot);
+        refuse(c, "no DataVolume: nothing can be pinned on this device").map(|_| 0)
+    }
+}
+
 /// G49: `POST /api/reboot` — reason + `permanent=true` + re-authentication, behind the owner-write guards (origin,
 /// CSRF, rate, replay). A plain restart: nothing is erased; staged configuration (A/B store) applies on the way up.
 pub fn reboot(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<(), &'static str> {
