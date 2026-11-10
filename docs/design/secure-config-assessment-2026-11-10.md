@@ -441,3 +441,24 @@ section means the per-file source applies, not "unchanged".
 **Open:** `keeps_mgmt_path` probes fixed sample addresses rather than the running LAN/eth1/mgmt subnets and the
 device's own addresses. A policy that blocks only the real LAN subnet therefore passes. The fix (probe the real
 interface/subnet/address triples) has been sent to the heqk session.
+
+### 2026-11-10: `da5c5a59` pushed (`feat/heqk-prod-phases`)
+
+**What it contains:**
+- Phase 0.3 / 0.4 / 0.5;
+- step 2, `cfgbundle.rs` (24/24 shared vectors with the UI);
+- step 3, `cfgd.rs`, with every review point applied: management-plane bundles need confirmation (`route … via
+  mgmt` counts too); D7 is checked against the real paths; a refused committed bundle tries the other half
+  first; the FAT path has no rollback window.
+
+**Test status:**
+- validate is GREEN.
+- `keeps_mgmt_path` was verified in `da5c5a59`. It probes the registered interface paths (`cfgd::set_path`,
+  `uplink::MGMT`) and falls back to `10.99.0.1/24` only before any path is registered. **The open item from
+  round 2 is closed.**
+- Metal for C2 and 0.6 is running in bench batch 58.
+- The per-item status (built / QEMU / metal) lives in `docs/design/adr0059-implementation.md` on that branch.
+
+**Next:**
+- Step 4a (`mgmtabi` + `el0-hsh`), with `console-in` off by default until the operator decides the production
+  transport (hsh spec R6).
