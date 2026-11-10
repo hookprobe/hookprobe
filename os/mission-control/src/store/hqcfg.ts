@@ -30,7 +30,11 @@ export function canonicalSection(kind: SectionKind, body: string): void {
       if ((w[0] === 'acl' || w[0] === 'prefix-list') && w.length > 3 && w[2] === 'seq') key = [w[0], w[1], 'seq', w[3]].join(' ');
       else if (w[0] === 'acl' && w.length > 2 && w[2] === 'default') key = `acl ${w[1]} default`;
       else if (w[0] === 'interface' && w.length >= 4) key = w.slice(0, 4).join(' ');
-      else if (w[0] === 'route' && w.length > 1) key = `route ${w[1]} ${w.length > 3 && w[2] === 'from' ? w[3] : 'any'}`;
+      else if (w[0] === 'route' && w.length > 1) {
+        // (dst, from|any, via): failover through different interfaces is fine; same interface twice is not.
+        const v = w.indexOf('via');
+        key = `route ${w[1]} ${w.length > 3 && w[2] === 'from' ? w[3] : 'any'} ${v >= 0 && v < w.length - 1 ? w[v + 1] : ''}`;
+      }
       else key = ln;
     } else {
       if (!ln.includes('=')) throw new Error(`${kind}: not key=value`);
