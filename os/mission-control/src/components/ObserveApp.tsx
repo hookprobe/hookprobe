@@ -54,7 +54,7 @@ const ObserveApp: Component = () => {
   });
 
   return (
-    <AppShell path="/observe/events">
+    <AppShell path="/observe/live">
 
       <main class="dash-main">
         <header class="mc-header">

@@ -382,6 +382,8 @@ These record what was agreed while integrating the wireframes. They refine the s
 
 **Approve has three honest states (FR-08).** After Approve the plan is **Staged** (nothing is live). It moves to **Applying** while the reconciler runs, and to **Applied and verified** only once AEGIS reports success. A failure says so, names the step that failed, and offers Retry. The UI never claims a state the device did not report. One shared `PlanDiff` component implements this everywhere.
 
+**Layer 0 screens (PR 2).** `/observe/events` is Timeline & Export (the plain-words story, with real CSV / JSON / print export); the raw Pro Observe table moved to `/observe/live`. On heqk, durable configuration (device zones and names in DEVICES.TXT, Wi-Fi and WAN in WIFI.TXT / WAN.TXT, Shield lists) changes only by re-signing the file (ADR 0053 S7), so those controls render greyed with that reason; the time-bounded actions (Isolate 1 h, Hold 1 h, Pause 1 h, Allow 1 h) stay live. Get Online shows no speed test: the device cannot measure one, so no number is shown. While the device clock is unset, events are grouped as "since this device started" with times since boot.
+
 **Shell components (os/mission-control/src/components).** `AppShell` (top bar, rail, banners, Copilot, phone tabs) wraps every route. `LeftRail` is the Layer 0 rail (five pillars), `AppRail` the Pro rail. `Drawer` is the one 400 px side panel. `Gate` does capability gating: granted renders, denied greys out with a reason, denied plus `hide` or unknown hides. `PlanDiff` is the plan viewer.
 
 **Backend contract the UI codes against** (heqk serves these same-origin; until then the UI falls back honestly):
