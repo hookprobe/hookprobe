@@ -27,6 +27,7 @@ import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState, dn
 import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
 import { setCopilotOpen } from '../store/mock';
 import AppShell from './AppShell';
+import PageHeader from './PageHeader';
 import {
   type BlockCategory, type ProtectionLevel, type ListEntry, type ShieldChange,
   CATEGORY_LABELS, SOURCE_LABELS, LEVEL_INFO,
@@ -172,6 +173,11 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
   const l = () => props.d.lists;
   return (
     <div class="shield-grid">
+      <div class="l0-grid-3" aria-label="Shield at a glance">
+        <div class="l0-card"><p class="l0-label">Blocked since start-up</p><p class="l0-card-kpi">{blocked().toLocaleString()}</p></div>
+        <div class="l0-card"><p class="l0-label">Hidden trackers caught</p><p class="l0-card-kpi">{(c()['blocked-cname'] ?? 0).toLocaleString()}</p></div>
+        <div class="l0-card"><p class="l0-label">Share of lookups blocked</p><p class="l0-card-kpi">{pct(blocked(), queries())}%</p></div>
+      </div>
       <TermPanel ctx="shield" class="shield-hero">
         <div class="shield-hero-top">
           <div class="shield-hero-stat">
@@ -337,26 +343,14 @@ const ShieldApp: Component = () => {
     <>
       <AppShell path="/network/dns">
 
-      <main class="main-content net-page" style={{ 'max-width': '1100px' }}>
+      <main class="l0-main" aria-label="Shield">
 
-        {/* Page header */}
-        <div class="net-page-header">
-          <a href="/" class="net-back-link" aria-label="Back to Mission Control">
-            <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none"
-              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 12H5M12 19l-7-7 7-7" />
-            </svg>
-            Mission Control
-          </a>
-          <div class="net-page-title-row">
-            <div>
-              <h1 class="net-page-title">Shield</h1>
-              <div class="net-page-subtitle">
-                Blocking ads, trackers &amp; malware on every device{dnsLive() ? ' · answered on this device' : ' · powered by dnsXai'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <PageHeader
+          title="Shield"
+          status={dnsLive()
+            ? 'On for every device. Blocking ads, trackers and dangerous sites, answered on this device.'
+            : 'Blocking ads, trackers and malware on every device.'}
+        />
 
         <Show when={dnsLive()} fallback={
         <Show when={dnsState() === 'absent'} fallback={<div class="shield-empty" role="status">{dnsFailures() >= 3 ? 'Still waiting for the device — retrying every 10 s…' : 'Loading Shield data from the device…'}</div>}>

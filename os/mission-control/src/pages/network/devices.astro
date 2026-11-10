@@ -1,0 +1,21 @@
+---
+/**
+ * /network/devices — My Network, List view: every device in one table.
+ *
+ * Same island as /network/map (NetworkMapApp; NetworkLive on the device). The Zones / Map / List
+ * switch moves between /network/zones, /network/map and /network/devices (MissionControl.md route
+ * map); the zones-first layout from the wireframes lands with the Layer 0 screens.
+ *
+ * Spec: docs/architecture/MissionControl.md §6b · docs/design/mission-control-ui-requirements.md
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import NetworkMapApp from '../../components/NetworkMapApp';
+---
+
+<Shell
+  title="My Network — HookProbe OS"
+  description="Every device on your network in one list, with its zone, address and status."
+>
+  <NetworkMapApp client:load />
+</Shell>
