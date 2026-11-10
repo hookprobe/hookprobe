@@ -412,10 +412,10 @@ pub fn rotate_owner_key(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, sa
 pub fn effective_owner(file_owner: Option<crate::mcauth::Owner>) -> (Option<crate::mcauth::Owner>, &'static str) {
     match oj::owner_rotation() {
         Some(t) if t[48..64] == crate::mcauth::owner_file_hash()[..16] => {
-            let mut salt = [0u8; 16];
-            let mut verifier = [0u8; 32];
-            salt.copy_from_slice(&t[..16]);
-            verifier.copy_from_slice(&t[16..48]);
+            // Journal record layout: salt[0..16] ‖ verifier[16..48] ‖ OWNER.TXT hash prefix[48..64].
+            let (Ok(salt), Ok(verifier)) = (<[u8; 16]>::try_from(&t[..16]), <[u8; 32]>::try_from(&t[16..48])) else {
+                return (file_owner, "OWNER.TXT");
+            };
             (Some(crate::mcauth::Owner { salt, verifier }), "rotated by the owner (journal) — OWNER.TXT superseded")
         }
         Some(_) => (file_owner, "OWNER.TXT changed since the owner's rotation (re-flash recovery) — the rotation is ignored"),
@@ -427,9 +427,9 @@ pub fn effective_owner(file_owner: Option<crate::mcauth::Owner>) -> (Option<crat
 pub fn rotate_selftest() -> bool {
     use crate::mcauth::{session_hex, verifier_for, Auth, Owner};
     let (old, new) = (b"old-owner-key-for-rotation-test" as &[u8], "new-owner-key-for-rotation-0001");
-    let mut salt = [0u8; 16];
-    let salt_src = boot_abi::sha256::sum256(old);
-    salt.copy_from_slice(&salt_src[..16]);
+    let Ok(salt) = <[u8; 16]>::try_from(&boot_abi::sha256::digest(old)[..16]) else { return false };
+    // The new owner's salt: in production rand16() (TRNG, fail-closed); here a derived test value.
+    let Ok(test_salt) = <[u8; 16]>::try_from(&boot_abi::sha256::digest(b"P-owner-rotate test salt")[..16]) else { return false };
     let file_owner = Owner { salt, verifier: verifier_for(&salt, old) };
     crate::mcauth::set_owner_file_hash([0x11; 32]);
     let mut auth = Auth::new(Some(file_owner));
@@ -464,18 +464,18 @@ pub fn rotate_selftest() -> bool {
         n + 20 - k
     }
     let n = form(&mut buf, "owner_key=wrong-key-xxxxxxxxxxxxx&new_owner_key=new-owner-key-for-rotation-0001&reason=rotate&permanent=true", base);
-    let bad_reauth = rotate_owner_key(&c, &buf[..n], &mut auth, Some([5; 16])) == Err("re-authentication failed");
+    let bad_reauth = rotate_owner_key(&c, &buf[..n], &mut auth, Some(test_salt)) == Err("re-authentication failed");
     let n = form(&mut buf, "owner_key=old-owner-key-for-rotation-test&new_owner_key=short&reason=rotate&permanent=true", base + 1);
-    let weak = rotate_owner_key(&c, &buf[..n], &mut auth, Some([5; 16])).is_err();
+    let weak = rotate_owner_key(&c, &buf[..n], &mut auth, Some(test_salt)).is_err();
     let n = form(&mut buf, "owner_key=old-owner-key-for-rotation-test&new_owner_key=new-owner-key-for-rotation-0001&reason=rotate&permanent=true", base + 2);
-    let rotated = rotate_owner_key(&c, &buf[..n], &mut auth, Some([5; 16])).is_ok();
+    let rotated = rotate_owner_key(&c, &buf[..n], &mut auth, Some(test_salt)).is_ok();
     let sessions_ended = !auth.check(Some(sess), 7_100);
     let old_refused = auth.login(old, 7_200, || Some([0x32; 16])).is_err();
     let new_ok = auth.login(new.as_bytes(), 7_300, || Some([0x33; 16])).is_ok();
     // revoke-all keeps the rotation; boot precedence: same OWNER.TXT -> rotated, a re-flashed one -> the file
     let kept = oj::owner_rotation().is_some();
     let (eff, _) = effective_owner(Some(file_owner));
-    let boot_rotated = eff.is_some_and(|o| o.verifier == verifier_for(&sess, new.as_bytes()));
+    let boot_rotated = eff.is_some_and(|o| o.verifier == verifier_for(&test_salt, new.as_bytes()));
     crate::mcauth::set_owner_file_hash([0x22; 32]);
     let (eff2, _) = effective_owner(Some(file_owner));
     let reflash_wins = eff2 == Some(file_owner);
