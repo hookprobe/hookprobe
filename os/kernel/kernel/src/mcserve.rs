@@ -184,6 +184,11 @@ pub fn state() -> &'static mut McState {
 /// Install the owner verifier read from the boot partition (`None` = unclaimed: every protected
 /// route refuses — no open claim window).
 #[allow(static_mut_refs)]
+/// The device has an owner (OWNER.TXT verifier) — the factory station's "unclaimed" state is `false`.
+pub fn claimed() -> bool {
+    unsafe { (*core::ptr::addr_of!(AUTH)).claimed() }
+}
+
 pub fn set_owner(owner: Option<Owner>) {
     unsafe { AUTH = Auth::new(owner) };
 }

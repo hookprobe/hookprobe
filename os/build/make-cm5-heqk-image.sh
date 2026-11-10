@@ -98,6 +98,7 @@ if [ -f tools/verifier-harness.rs ]; then
 fi
 
 cargo build -p hboot --release
+export HEQK_GIT="${HEQK_GIT:-$(git -C "$(dirname "$0")" rev-parse --short=10 HEAD 2>/dev/null || echo unknown)}"  # [ID] line
 cargo build -p kernel --features "$FEATURES" --release
 
 KBIN="$(mktemp -d)/kernel.bin"
