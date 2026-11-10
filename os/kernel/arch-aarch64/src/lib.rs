@@ -9,6 +9,7 @@ use core::fmt::{self, Write};
 
 mod uart;
 mod exception;
+pub mod crashrec;
 pub mod bpf_jit;
 #[cfg(feature = "cm5")]
 pub mod gem;
@@ -219,6 +220,7 @@ pub fn user_frame_desc(va: usize) -> u64 {
 pub fn on_panic(info: &core::panic::PanicInfo) -> ! {
     let mut u = Pl011;
     let _ = writeln!(u, "\n[PANIC] {}", info);
+    crashrec::write(1, 0, 0, 0, format_args!("{}", info));
     // QEMU: fail the run (a panic must never look like a clean exit).
     #[cfg(not(feature = "cm5"))]
     semihosting::exit(1);

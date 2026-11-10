@@ -98,6 +98,9 @@ securechannel-selftest = ["securechannel"]
 #   stajoin — P10-E WPA2 STA join proof; needs HEQK_JOIN_SSID + HEQK_JOIN_PSK at build time.
 # Credentials are build-time env only — never source literals (ADR 0045).
 apmode = ["cm5", "arch-aarch64/gem-deep-rx"]
+# BENCH ONLY (metal test J10): one deliberate kernel panic 120 s into the AP loop, to prove the crash record
+# survives the EL2-gate reset and is reported by the next boot. Never in a product image.
+crashtest = []
 # Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
 apmc = ["apmode", "mcserve"]
 # Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
