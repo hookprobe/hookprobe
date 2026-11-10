@@ -121,3 +121,7 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
   .inc-layout { grid-template-columns: 1fr; }
   body, .pcard { background: #fff !important; color: #000 !important; }
 }
+
+/* Feedback and diagnostics */
+.pro-grid { display: grid; gap: 16px; align-items: start; }
+.pro-pre { font: 12px/1.5 var(--hp-font-mono); background: var(--hp-surface); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); padding: 10px 12px; color: var(--hp-text-secondary); overflow-x: auto; }
