@@ -23,11 +23,10 @@ import {
   type Component, type Accessor,
   createSignal, createMemo, For, Show, batch, onMount,
 } from 'solid-js';
-import TopBar from './TopBar';
 import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState, dnsFailures } from '../store/dnsLive';
 import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
+import AppShell from './AppShell';
 import {
   type BlockCategory, type ProtectionLevel, type ListEntry, type ShieldChange,
   CATEGORY_LABELS, SOURCE_LABELS, LEVEL_INFO,
@@ -336,7 +335,7 @@ const ShieldApp: Component = () => {
 
   return (
     <>
-      <TopBar onOpenCopilot={() => setCopilotOpen(true)} />
+      <AppShell path="/network/dns">
 
       <main class="main-content net-page" style={{ 'max-width': '1100px' }}>
 
@@ -481,13 +480,7 @@ const ShieldApp: Component = () => {
         {(ch) => <PlanStrip change={ch()} onApply={apply} onCancel={cancel} />}
       </Show>
 
-      {/* AI Copilot overlay */}
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
+      </AppShell>
     </>
   );
 };
