@@ -37,10 +37,10 @@ const ConfigBanners: Component = () => {
           {' '}Configuration generation {configView()!.generation} is on trial.{' '}
           <Show when={configView()!.needs_confirm} fallback={
             <Show when={configView()!.auto_rollback} fallback={<>It stays until you keep it or roll it back.</>}>
-              If the internet does not work, the device goes back to the previous settings by itself in <b>{mmss(secondsLeft(now()))}</b>.
+              If the internet does not work, the device goes back to the previous settings{configView()!.floor ? ` (generation ${configView()!.floor})` : ''} by itself in <b>{mmss(secondsLeft(now()))}</b>.
             </Show>
           }>
-            It changes how you reach this device, so <b class="trial-required">Keep it is required</b>: unless you keep it within <b>{mmss(secondsLeft(now()))}</b>, the device goes back to the previous settings.
+            It changes how you reach this device, so <b class="trial-required">Keep it is required</b>: unless you keep it within <b>{mmss(secondsLeft(now()))}</b>, the device goes back to the previous settings{configView()!.floor ? ` (generation ${configView()!.floor})` : ''}.
           </Show>
           <Show when={configView()!.health}>{' '}<span class="l0-muted">({configView()!.health})</span></Show>
           <span class="hp-banner-actions">
