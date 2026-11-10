@@ -111,6 +111,28 @@ impl ControlPlane {
         }
     }
 
+    /// G19: send the handshake UNICAST to `ip` through the next hop `mac` (the WAN gateway) instead of a LAN
+    /// broadcast. Takes effect at the next msg1.
+    pub fn set_unicast(&mut self, mac: [u8; 6], ip: [u8; 4]) {
+        self.peer_mac = mac;
+        self.peer_ip = ip;
+    }
+
+    /// G19: hand the established transport session to the tunnel (the control plane keeps no copy).
+    pub fn take_session(&mut self) -> Option<Session> {
+        self.session.take()
+    }
+
+    /// G19: start over — a fresh handshake (fresh ephemerals) at the next tick (re-handshake on silence / 24 h).
+    pub fn restart(&mut self, now_ms: i64) {
+        if let Some(mut s) = self.session.take() {
+            s.wipe();
+        }
+        self.pending = None;
+        self.state = CpState::Idle;
+        self.next_try_ms = now_ms;
+    }
+
     /// The MSSP-assigned tenant (from the authenticated msg2 payload), once Established.
     pub fn tenant(&self) -> Option<u64> {
         self.tenant
@@ -161,13 +183,15 @@ impl ControlPlane {
             None => return false,
         };
         let (mac, ip) = (self.our_mac, self.our_ip);
+        // broadcast on the local segment (MSSP enrollment), or unicast via a next hop (G19 super-PoP: set_unicast)
+        let (dst_mac, dst_ip) = (self.peer_mac, self.peer_ip);
         self.egress_n = 0;
         let ok = hs_chunk(msg1.as_slice(), |framed| {
             let i = self.egress_n as usize;
             if i >= HS_MAX_CHUNKS {
                 return false;
             }
-            let n = build_hs_datagram(mac, ip, [0xff; 6], [255, 255, 255, 255], HS_PORT, framed, &mut self.egress[i]);
+            let n = build_hs_datagram(mac, ip, dst_mac, dst_ip, HS_PORT, framed, &mut self.egress[i]);
             self.egress_len[i] = n as u16;
             self.egress_n += 1;
             true
