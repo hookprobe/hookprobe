@@ -1,187 +1,91 @@
 /**
- * CustomersApp — Customers (§9): recursive multi-tenant portal.
+ * CustomersApp — Customers (`/customers/managed`): the recursive multi-tenant portal (wireframe
+ * "Customers"; requirements doc §9). Cloud-linked only: tenants come from the control plane.
  *
- * Spec: docs/architecture/MissionControl.md §9. AWS-Organizations-style tenancy:
- * HookProbe → MSSP → Customer → Customer … unlimited depth, hard per-tenant
- * isolation, scoped RBAC, separate keys. Cloud-linked / self-hosted only.
- *
- * Panels (terminal-framed, cyber-industrial):
- *   KPI row · Managed Customers table · Tenant Inheritance Tree · SLA/Compliance
- *
- * Capability-gated on `cloud-linked` mode in a real build (Platform Manifest).
+ * Standalone device: says so and shows how linking works (the rail hides Customers there).
+ * Linked device with no tenant data yet: says so. Preview (no device): the wireframe's tenant tree.
  */
-
-import { type Component, For } from 'solid-js';
-import { setCopilotOpen } from '../store/mock';
-import type { Tone } from '../store/missionMock';
+import { type Component, For, Show, createSignal } from 'solid-js';
+import { substrate, deployMode } from '../store/mock';
+import { healthChecked } from '../store/health';
 import AppShell from './AppShell';
-import {
-  type ManagedCustomer, type TenantNode, type SlaEntry,
-  KPIS, MANAGED, TENANT_TREE, SLA_ENTRIES, SLA_SUMMARY,
-} from '../store/cstMock';
 
-function toneVar(t: Tone): string {
-  return { green: 'var(--hp-green)', amber: 'var(--hp-amber)', red: 'var(--hp-red)',
-    blue: 'var(--hp-cyan)', cyan: 'var(--hp-cyan)', purple: 'var(--hp-purple)', orange: 'var(--hp-orange)', grey: 'var(--hp-grey)' }[t];
-}
+interface Tenant { label: string; depth: number; score: number; sla: string; sites: string; inc: number; nis2: number; gdpr: number; users: string }
+const TREE: Tenant[] = [
+  { label: 'HookProbe MSSP', depth: 0, score: 91, sla: '99.9%', sites: '12 · 1,120', inc: 3, nis2: 88, gdpr: 93, users: '9 users · 3 admins · SSO on' },
+  { label: 'Clinic Nord', depth: 1, score: 94, sla: '100%', sites: '3 · 64', inc: 0, nis2: 82, gdpr: 90, users: '4 users · 1 admin · SSO on' },
+  { label: 'Bakery Sud', depth: 1, score: 71, sla: '99.5%', sites: '1 · 18', inc: 2, nis2: 64, gdpr: 78, users: '2 users · 1 admin' },
+  { label: 'IT Partner Vest', depth: 1, score: 89, sla: '99.9%', sites: '6 · 210', inc: 1, nis2: 85, gdpr: 91, users: '6 users · 2 admins · SSO on' },
+  { label: 'Dental Est', depth: 2, score: 86, sla: '100%', sites: '1 · 22', inc: 0, nis2: 79, gdpr: 88, users: '2 users · 1 admin' },
+];
 
-// Terminal-framed panel — identical signature to DetectApp.Panel.
-const Panel: Component<{ ctx: string; title: string; span?: string; children: any }> = (p) => (
-  <section class="hp-terminal mc-panel" style={p.span ? { 'grid-column': p.span } : undefined}>
-    <div class="hp-terminal-bar">
-      <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
-      <span class="mc-panel-title">{p.title}</span>
-      <span class="hp-terminal-title">hookprobe@edge ~ {p.ctx}</span>
-    </div>
-    <div class="hp-terminal-body mc-panel-body">{p.children}</div>
-  </section>
-);
+const CustomersApp: Component = () => {
+  const [sel, setSel] = createSignal(1);
+  const sample = () => healthChecked() && !substrate();
+  const linked = () => deployMode() !== 'standalone';
+  const t = () => TREE[sel()];
 
-// Recursive tenant tree node — unlimited depth via SolidJS For.
-const TreeNode: Component<{ node: TenantNode; depth: number }> = (p) => (
-  <li class="cst-tree-node">
-    <div class="cst-tree-row">
-      <span class="cst-tree-icon" aria-hidden="true">
-        {p.node.role === 'mssp' ? '◫' : '·'}
-      </span>
-      <span class="cst-tree-name">{p.node.name}</span>
-      {p.depth === 0 && <span class="cst-tree-root-badge">ROOT</span>}
-      {p.node.role === 'mssp' && p.depth > 0 && <span class="cst-tree-mssp-badge">MSSP</span>}
-      <span class="cst-tree-score" style={{ color: toneVar(p.node.tone) }}>{p.node.score}</span>
-    </div>
-    {p.node.children && p.node.children.length > 0 && (
-      <ul class="cst-tree-children">
-        <For each={p.node.children}>
-          {(child) => <TreeNode node={child} depth={p.depth + 1} />}
-        </For>
-      </ul>
-    )}
-  </li>
-);
-
-const CustomersApp: Component = () => (
-  <AppShell path="/customers/managed">
-
-    <main class="dash-main">
-      <header class="mc-header">
-        <div>
-          <h1 class="mc-h1">CUSTOMERS</h1>
-          <div class="mc-sub">Recursive multi-tenant portal · AWS-Organizations-style tenancy · cloud-linked only</div>
-        </div>
-        <div class="mc-header-actions">
-          <button class="mc-chip" onClick={() => setCopilotOpen(true)}>⌘ "Why is Vodafone risk increasing?"</button>
-          <span class="mc-mode-badge">● cloud-linked</span>
-        </div>
-      </header>
-
-      <div class="mc-grid">
-
-        {/* KPI row */}
-        <div class="mc-cell--kpis cst-kpis">
-          <For each={KPIS}>
-            {(k) => (
-              <div class="mc-kpi" style={{ '--tone': toneVar(k.tone) }}>
-                <div class="mc-kpi-label">{k.label}</div>
-                <div class="mc-kpi-value">{k.value}</div>
-              </div>
-            )}
-          </For>
-        </div>
-
-        {/* Managed customers table */}
-        <Panel ctx="managed" title="MANAGED CUSTOMERS" span="span 8">
-          <div class="cst-managed-head" aria-hidden="true">
-            <span>Customer</span>
-            <span>QSecBit</span>
-            <span>Endpoints</span>
-            <span>Drift</span>
-            <span>Compliance</span>
-            <span>SLA</span>
-            <span>Status</span>
-            <span />
+  return (
+    <AppShell path="/customers/managed">
+      <main class="pro-main" aria-label="Customers">
+        <div class="pro-head">
+          <div>
+            <h1 class="pro-title">Customers</h1>
+            <p class="pro-sub">Cloud-linked only. Tenants nest: any customer can manage its own customers</p>
           </div>
-          <ul class="cst-managed-list" role="list">
-            <For each={MANAGED}>
-              {(c: ManagedCustomer) => (
-                <li class="cst-managed-row">
-                  <div class="cst-cust-name-cell">
-                    <span class="cst-cust-name">{c.name}</span>
-                    <span class="cst-cust-meta">
-                      {c.tier} · {c.region}
-                      {c.subTenants > 0 ? ` · ${c.subTenants} sub-tenants` : ''}
-                    </span>
-                  </div>
-                  <span class="cst-score" style={{ color: toneVar(c.tone) }}>{c.score}</span>
-                  <span class="cst-col-mono">{c.endpoints}</span>
-                  <span class={`cst-drift${c.drift === 0 ? ' cst-drift--ok' : c.drift <= 5 ? ' cst-drift--warn' : ' cst-drift--crit'}`}>
-                    {c.drift === 0 ? '—' : `+${c.drift}`}
-                  </span>
-                  <span class="cst-col-mono">{c.compliance}</span>
-                  <span class="cst-col-mono">{c.sla}</span>
-                  <span class={`cst-status-badge cst-st--${c.status.toLowerCase()}`}>{c.status}</span>
-                  <a class="det-link" href="/customers/dashboard" aria-label={`Open ${c.name} dashboard`}>↗</a>
-                </li>
-              )}
-            </For>
-          </ul>
-        </Panel>
+        </div>
 
-        {/* Tenant inheritance tree */}
-        <Panel ctx="tenant-tree" title="TENANT INHERITANCE TREE" span="span 4">
-          <ul class="cst-tree" role="tree" aria-label="Tenant hierarchy">
-            <TreeNode node={TENANT_TREE} depth={0} />
-          </ul>
-        </Panel>
-
-        {/* SLA / Compliance summary */}
-        <Panel ctx="sla" title="SLA · COMPLIANCE SUMMARY" span="span 12">
-          <div class="cst-sla-wrap">
-            <div class="cst-sla-summary" aria-label="SLA summary statistics">
-              <div class="cst-sla-summary-stat">
-                <span class="cst-sla-summary-val" style={{ color: 'var(--hp-green)' }}>{SLA_SUMMARY.overall}</span>
-                <span class="cst-sla-summary-label">Overall SLA</span>
-              </div>
-              <div class="cst-sla-summary-stat">
-                <span class="cst-sla-summary-val" style={{ color: 'var(--hp-text-primary)' }}>{SLA_SUMMARY.met}/{SLA_SUMMARY.total}</span>
-                <span class="cst-sla-summary-label">Met</span>
-              </div>
-              <div class="cst-sla-summary-stat">
-                <span class="cst-sla-summary-val" style={{ color: 'var(--hp-red)' }}>{SLA_SUMMARY.breached}</span>
-                <span class="cst-sla-summary-label">Breached</span>
-              </div>
-              <div class="cst-sla-summary-stat">
-                <span class="cst-sla-summary-val" style={{ color: 'var(--hp-amber)' }}>{SLA_SUMMARY.atRisk}</span>
-                <span class="cst-sla-summary-label">At Risk</span>
-              </div>
-            </div>
-
-            <ul class="cst-sla-list" role="list">
-              <For each={SLA_ENTRIES}>
-                {(e: SlaEntry) => {
-                  const tone = e.met ? 'var(--hp-green)' : e.pct >= 60 ? 'var(--hp-amber)' : 'var(--hp-red)';
-                  return (
-                    <li class="cst-sla-row">
-                      <span class="cst-sla-name">{e.name}</span>
-                      <span class="cst-sla-target">target {e.target}</span>
-                      <span class="cst-sla-bar" role="progressbar" aria-valuenow={e.pct} aria-valuemin={0} aria-valuemax={100}>
-                        <span class="cst-sla-fill" style={{ width: `${e.pct}%`, background: tone }} />
-                      </span>
-                      <span class="cst-sla-actual" style={{ color: tone }}>{e.actual}</span>
-                      <span class={`cst-sla-badge ${e.met ? 'cst-sla-badge--met' : 'cst-sla-badge--miss'}`} aria-label={e.met ? 'SLA met' : 'SLA missed'}>
-                        {e.met ? '✓' : '✗'}
-                      </span>
-                    </li>
-                  );
-                }}
-              </For>
-            </ul>
+        <Show when={sample()} fallback={
+          <div class="pcard" style={{ 'max-width': '760px' }}>
+            <Show when={linked()} fallback={
+              <>
+                <p style={{ margin: 0 }}>This device is standalone, so it has no customers.</p>
+                <p class="l0-card-sub">Customers appear when the device is linked to a control plane — your MSSP's or your own self-hosted one. Linking is additive: everything on this device keeps working without it, and each tenant's data stays isolated.</p>
+                <div class="l0-card-foot"><a class="hp-btn" href="/admin/identity">Open Administration</a><a class="hp-btn" href="/mission">Back to Mission Control</a></div>
+              </>
+            }>
+              <p style={{ margin: 0 }}>Linked, but the control plane has not sent tenant data yet.</p>
+              <p class="l0-card-sub">Tenants and their scores appear here as the control plane reports them. Above your own level you only ever see aggregates.</p>
+            </Show>
           </div>
-        </Panel>
-
-      </div>
-    </main>
-
-  </AppShell>
-);
+        }>
+          <div class="obs-grid obs-grid--wide">
+            <nav class="pcard obs-sources" aria-label="Tenant tree">
+              <p class="l0-label" style={{ padding: '0 8px 6px' }}>Tenant tree</p>
+              <For each={TREE}>{(x, i) => (
+                <button class={`shell-rail-item${sel() === i() ? ' is-active' : ''}`} aria-pressed={sel() === i()} onClick={() => setSel(i())}
+                  style={{ 'padding-left': `${12 + x.depth * 16}px`, 'justify-content': 'space-between' }}>
+                  <span>{x.depth ? '↳ ' : ''}{x.label}</span><span class="l0-num" style={{ 'font-weight': 400, 'font-size': '12px' }}>{x.score}</span>
+                </button>
+              )}</For>
+            </nav>
+            <section style={{ display: 'flex', 'flex-direction': 'column', gap: '16px', 'min-width': 0 }}>
+              <div class="pro-head">
+                <h2 style={{ margin: 0, 'font-size': '20px' }}>{t().label}</h2>
+                <div class="l0-head-actions"><a class="hp-btn" href="/mission">Open as this customer</a><button class="hp-btn hp-btn--primary">Generate report</button></div>
+              </div>
+              <div class="bento">
+                <div class="pcard span-4"><p class="l0-label">Security score</p><p class="pcard-kpi">{t().score}</p></div>
+                <div class="pcard span-4"><p class="l0-label">SLA this month</p><p class="pcard-kpi">{t().sla}</p></div>
+                <div class="pcard span-4"><p class="l0-label">Sites · devices</p><p class="pcard-kpi">{t().sites}</p></div>
+                <div class="pcard span-6">
+                  <p class="l0-label">Compliance</p>
+                  <For each={[['NIS2', t().nis2], ['GDPR', t().gdpr]] as [string, number][]}>{([k, v]) => (
+                    <span class="pbar"><span class="pbar-name">{k}</span><span class="pbar-track"><span class="pbar-fill" style={{ width: `${v}%`, background: 'var(--hp-cyan)' }} /></span><span class="pbar-val">{v}%</span></span>
+                  )}</For>
+                </div>
+                <div class="pcard span-6">
+                  <p class="l0-label">Users and access · {t().inc} open incident{t().inc === 1 ? '' : 's'}</p>
+                  <span class="l0-card-sub">{t().users}</span>
+                  <span class="pcard-note">Data is isolated per tenant; you see aggregates only above this level.</span>
+                </div>
+              </div>
+            </section>
+          </div>
+        </Show>
+      </main>
+    </AppShell>
+  );
+};
 
 export default CustomersApp;
