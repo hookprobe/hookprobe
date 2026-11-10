@@ -135,8 +135,12 @@ static MAC_SLOT_GEN: [[AtomicU64; MAC_SET]; FANOUT_PORTS] =
 static MAC_SLOT_KEY: [[AtomicU64; MAC_SET]; FANOUT_PORTS] =
     [const { [const { AtomicU64::new(0) }; MAC_SET] }; FANOUT_PORTS];
 
-static BCAST_WIN: [AtomicU64; FANOUT_PORTS] = [const { AtomicU64::new(0) }; FANOUT_PORTS];
-static BCAST_COUNT: [AtomicU64; FANOUT_PORTS] = [const { AtomicU64::new(0) }; FANOUT_PORTS];
+/// Per-SOURCE broadcast-storm state (V1 l2guard parity: a storm is ONE source flooding). Direct-mapped,
+/// keyed on the source MAC; a colliding source takes the slot over (worst case a flooder's count restarts).
+const BCAST_SRC: usize = 64;
+static BSRC_KEY: [[AtomicU64; BCAST_SRC]; FANOUT_PORTS] = [const { [const { AtomicU64::new(0) }; BCAST_SRC] }; FANOUT_PORTS];
+static BSRC_WIN: [[AtomicU64; BCAST_SRC]; FANOUT_PORTS] = [const { [const { AtomicU64::new(0) }; BCAST_SRC] }; FANOUT_PORTS];
+static BSRC_COUNT: [[AtomicU64; BCAST_SRC]; FANOUT_PORTS] = [const { [const { AtomicU64::new(0) }; BCAST_SRC] }; FANOUT_PORTS];
 
 /// Fold a 6-byte MAC into a non-zero u64 key (bit 48 set distinguishes any real MAC
 /// from the `0` empty-slot sentinel).
@@ -178,26 +182,29 @@ pub fn mac_flood_over(port: u64, mac_key: u64, threshold: u64) -> u64 {
     }
 }
 
-/// broadcast-storm: count broadcast/multicast frames on `port` within the window;
-/// return 1 once the count EXCEEDS `threshold`. The caller pre-filters exempt groups
-/// (mDNS/SSDP/LLMNR) so they never even reach this counter.
-pub fn bcast_over(port: u64, threshold: u64) -> u64 {
+/// broadcast-storm, per SOURCE: count the broadcast/multicast frames ONE source MAC (`mac_key`, from
+/// [`mac_hash`]) sends on `port` within the window; 1 once that source's count EXCEEDS `threshold`.
+/// The old per-port aggregate counter made every device's broadcasts share one budget: a household's
+/// ordinary ARP / DHCP / NetBIOS chatter crossed it and the rate limit then dropped EVERYONE's broadcasts
+/// (metal 2026-11-10: an unattributed "Broadcast storm (DROP)" on the bench). Legit traffic must pass
+/// (ADR 0023); only the flooding source is shed.
+pub fn bcast_over_src(port: u64, mac_key: u64, threshold: u64) -> u64 {
     let p = (port as usize) % FANOUT_PORTS;
+    let i = slot(mac_key, BCAST_SRC);
     let now = cntpct();
     let win = cntfrq().max(1).saturating_mul(FANOUT_WINDOW_SECS);
-    let start = BCAST_WIN[p].load(Ordering::Relaxed);
-    if now.wrapping_sub(start) >= win {
-        BCAST_WIN[p].store(now, Ordering::Relaxed);
-        BCAST_COUNT[p].store(1, Ordering::Relaxed);
+    if BSRC_KEY[p][i].load(Ordering::Relaxed) != mac_key
+        || now.wrapping_sub(BSRC_WIN[p][i].load(Ordering::Relaxed)) >= win
+    {
+        BSRC_KEY[p][i].store(mac_key, Ordering::Relaxed);
+        BSRC_WIN[p][i].store(now, Ordering::Relaxed);
+        BSRC_COUNT[p][i].store(1, Ordering::Relaxed);
         return 0;
     }
-    let c = BCAST_COUNT[p].fetch_add(1, Ordering::Relaxed) + 1;
-    if c > threshold {
-        1
-    } else {
-        0
-    }
+    let c = BSRC_COUNT[p][i].fetch_add(1, Ordering::Relaxed) + 1;
+    (c > threshold) as u64
 }
+
 
 // =====================================================================================
 // M2.2 — FLOW STATE (the conntrack-equivalent). Per-SOURCE state, gen-tagged + windowed
