@@ -316,8 +316,31 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     // R6). Role = view (read-only commands).
     #[cfg(feature = "hsh-dev")]
     if req.post && req.path == "/api/hsh" {
+        // same guards as every other /api write: the owner session (above), Origin, CSRF
+        if !crate::actionapi::origin_ok(req.origin, req.host) || !crate::mcauth::csrf_ok(req.session, req.csrf) {
+            return json(scratch, |w| w.raw("{\"ok\":false,\"refused\":\"origin or csrf\"}")).with_status(403);
+        }
         let line = req.body.split(|&b| b == b'\n').next().unwrap_or(b"");
         let line = line.strip_suffix(b"\r").unwrap_or(line);
+        // every shell request is journaled as an hsh op (the baseline for the 4b "MC and hsh produce the same
+        // journal record" test): the command word(s), never arguments that could carry secrets
+        {
+            let mut why = [0u8; 64];
+            let mut k = 0;
+            for (i, w) in line.split(|&b| b == b' ').filter(|w| !w.is_empty()).take(2).enumerate() {
+                if i > 0 && k < why.len() {
+                    why[k] = b' ';
+                    k += 1;
+                }
+                for &c in w.iter().take(24) {
+                    if k < why.len() && (0x21..0x7f).contains(&c) {
+                        why[k] = c;
+                        k += 1;
+                    }
+                }
+            }
+            let _ = crate::ownerapi::audit_artifact("hsh", 1, &why[..k], crate::mcauth::session_tag(req.session), now_ms);
+        }
         let mut text = [0u8; 2048];
         let n = crate::hsh::run_line(line, hal::mgmtabi::ROLE_VIEW, now_ms, &mut text);
         let k = n.min(scratch.len());
