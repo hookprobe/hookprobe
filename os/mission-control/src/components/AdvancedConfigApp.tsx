@@ -18,7 +18,7 @@ import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { networkView, startNetworkLive } from '../store/networkLive';
 import { uploadView, refreshUploads, uploadPack } from '../store/packUpload';
-import { ownerKey, loadOwnerKey, signPack, signPolicy, PACKS, download } from '../store/signing';
+import { ownerKey, loadOwnerKey, signPack, signPolicy, signBundle, ownerKeyId, PACKS, download } from '../store/signing';
 import {
   buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, checkPolicy, stagePolicy, lineDiff,
   type WanForm, type WifiForm, type PolicyForm, type AclRow,
@@ -27,6 +27,7 @@ import AppShell, { normPath } from './AppShell';
 import Drawer from './Drawer';
 import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
+import { buildBundle, fromLegacy } from '../store/hqcfg';
 
 type Sec = 'internet' | 'wifi' | 'firewall';
 const SECS: [Sec, string, string][] = [['internet', 'Internet', '/network/wan/advanced'], ['wifi', 'Wi-Fi', '/network/wifi'], ['firewall', 'Firewall and routes', '/protect/policies']];
@@ -125,6 +126,17 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
       if (/: type$/.test(m)) { setMsg(`The device answered that it doesn't accept ${FILE[sec()].name} over the network yet.`); setStep('card'); }
       else setMsg(m);
     }
+  };
+
+  /** The current section as an HQCFG1 bundle + HQCSIG1 (same generation), signed with the browser key. */
+  const bundle = async () => {
+    setMsg('');
+    try {
+      const kind = sec() === 'internet' ? 'wan' : sec() === 'wifi' ? 'wifi' : 'policy';
+      const b = buildBundle({ [kind]: fromLegacy(kind, text()) }, genNum(), await ownerKeyId());
+      download('HQCFG1.BIN', b);
+      download('HQCFG1.SIG', await signBundle(b));
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   const startApply = () => { setStep('review'); setSigned(null); setMsg(''); setOpen(true); };
@@ -333,6 +345,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             <button class="hp-btn hp-btn--primary" onClick={() => download(FILE[sec()].name, signed()!.txt, 'text/plain')}>Download {FILE[sec()].name}</button>
             <button class="hp-btn" onClick={() => download(FILE[sec()].sig, signed()!.sig)}>Download {FILE[sec()].sig}</button>
           </div>
+          <p class="pcard-note">Or the same settings as one signed configuration bundle (HQCFG1, ADR 0059), for devices that take bundles:</p>
+          <div class="l0-card-foot"><button class="hp-btn" onClick={() => void bundle()}>Download as a signed bundle</button></div>
+          <Show when={sec() !== 'firewall'}>
+            <p class="pcard-note">{sec() === 'wifi' ? 'The Wi-Fi password' : 'A PPPoE password'} is inside the signed file in clear: anyone holding the boot card can read it. It is not protected at rest yet.</p>
+          </Show>
         </Show>
         <Show when={msg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{msg()}</p></Show>
       </Drawer>
