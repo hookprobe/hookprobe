@@ -319,6 +319,17 @@ impl ProdFull {
         ok
     }
 
+    /// Factory reset: seal an EMPTY snapshot into BOTH A/B slots (two generations), so neither slot still holds the
+    /// previous detections. Uses the normal persist path — the keystore floors in the window are never touched.
+    pub fn erase_snapshot(&mut self) -> bool {
+        self.snap = Snapshot::new();
+        self.dirty = false;
+        if !self.persist_ready {
+            return true; // nothing was ever persisted on this device (no SRK / no window): nothing to erase
+        }
+        self.persist() && self.persist()
+    }
+
     /// Seal the snapshot and write it into the reserved window. Failure is reported
     /// and swallowed — the sensor loop must never halt on a storage error.
     fn persist(&mut self) -> bool {

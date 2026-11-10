@@ -2921,6 +2921,19 @@ pub fn chanspec_primary(cs: u16) -> (u8, u16) {
 /// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
 /// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
 /// A valid unicast MAC must already be set (a prior scan/`wifi_scan` establishes cur_etheraddr).
+#[cfg(feature = "wpa3probe")]
+static mut PROBE_PSK: ([u8; 64], u8) = ([0; 64], 0);
+/// WPA3 probe: the passphrase handed to the firmware's in-firmware SAE (`sae_password`).
+#[cfg(feature = "wpa3probe")]
+pub fn probe_set_psk(p: &[u8]) {
+    let n = p.len().min(64);
+    let st = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_PSK) };
+    st.0[..n].copy_from_slice(&p[..n]);
+    st.1 = n as u8;
+}
+#[cfg(feature = "wpa3probe")]
+static mut PROBE_EVENTS: u32 = 0;
+
 pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut ApResult) {
     let _ = wake_chip();
     drain_firmware_mailbox();
@@ -3030,13 +3043,67 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     // Per-BSS security. For bsscfg index 0 brcmfmac's brcmf_fil_bsscfg_* issue plain iovars.
     // wsec = AES | SES_OW_ENABLED (0x40), as brcmf_configure_wpaie sets it for an AP.
     const SES_OW_ENABLED: u32 = 0x0040;
+    #[cfg(not(feature = "wpa3probe"))]
     let (wsec, wpa_auth) = if open { (0, 0) } else { (AES_ENABLED | SES_OW_ENABLED, WPA2_AUTH_PSK) };
+    // WPA3 probe: SAE-only AKM (WPA3_AUTH_SAE_PSK, brcmfmac's value) — the beacon then advertises AKM 8 + MFPR.
+    #[cfg(feature = "wpa3probe")]
+    let (wsec, wpa_auth) = (AES_ENABLED | SES_OW_ENABLED, 0x0004_0000u32);
+    #[cfg(feature = "wpa3")]
+    let wpa_auth = if open { wpa_auth } else { wpa3_fw_params().0 };
+    #[cfg(feature = "wpa3")]
+    {
+        w3().chan = channel;
+    }
     let _ = iovar_set_u32(b"wme_bss_disable", 0); // WMM ON (QoS — required for HT/VHT aggregation)
     let _ = iovar_set_u32(b"auth", 0); // Open System 802.11 auth; PSK is the host 4-way
     out.wsec_ok = iovar_set_u32(b"wsec", wsec);
+    #[cfg(all(not(feature = "wpa3probe"), not(feature = "wpa3")))]
     let _ = iovar_set_u32(b"mfp", 0);
+    #[cfg(feature = "wpa3")]
+    let mfp3_ok = iovar_set_u32(b"mfp", if open { 0 } else { wpa3_fw_params().1 });
+    #[cfg(feature = "wpa3probe")]
+    let mfp_ok = iovar_set_u32(b"mfp", 2); // MFP required (WPA3)
     out.wpa_auth_ok = iovar_set_u32(b"wpa_auth", wpa_auth);
+    #[cfg(feature = "wpa3probe")]
+    {
+        // in-firmware SAE (brcmf_wsec_sae_pwd_le: key_len u16 + key[128])
+        let psk = unsafe { &*core::ptr::addr_of!(PROBE_PSK) };
+        let mut pw = [0u8; 130];
+        let pl = (psk.1 as usize).min(128);
+        pw[..2].copy_from_slice(&(pl as u16).to_le_bytes());
+        pw[2..2 + pl].copy_from_slice(&psk.0[..pl]);
+        let mut ib = [0u8; 160];
+        let n = iovar_buf(b"sae_password", &pw, &mut ib);
+        let sae_pw_ok = bcdc_iovar_set(&ib[..n]);
+        // every event, incl. > 127 (event_msgs_ext: ver 1, command SET_MASK 1, len, maxgetsize, mask)
+        let mut em = [0u8; 4 + 32];
+        em[0] = 1;
+        em[1] = 1;
+        em[2] = 32;
+        for b in em[4..].iter_mut() {
+            *b = 0xff;
+        }
+        let n = iovar_buf(b"event_msgs_ext", &em, &mut ib);
+        let ext_ok = bcdc_iovar_set(&ib[..n]);
+        let mut all = [0xffu8; 16];
+        all[0] &= !(1 << 0); // keep WLC_E_SET_SSID noise out (still logged via ext if any)
+        let n = iovar_buf(b"event_msgs", &all, &mut ib);
+        let msgs_ok = bcdc_iovar_set(&ib[..n]);
+        let mut rb = [0u8; 4];
+        let wa_rb = bcdc_iovar_get(b"wpa_auth", &mut rb).then(|| u32::from_le_bytes(rb));
+        crate::_print(format_args!(" [WPA3-PROBE] wpa_auth=SAE(0x40000) set={} readback={:?} | mfp=2 set={} | sae_password (in-firmware SAE) set={} | event_msgs_ext all={} event_msgs all={}\n",
+            out.wpa_auth_ok, wa_rb, mfp_ok, sae_pw_ok, ext_ok, msgs_ok));
+    }
 
+    #[cfg(feature = "wpa3")]
+    if !open && w3().mode != SEC_WPA2 {
+        let ev3 = wpa3_events();
+        wpa3_igtk_install();
+        let s3 = w3();
+        crate::_print(format_args!(" [WPA3] AP security {} — wpa_auth {:#x} set={} mfp {} set={} | events 188/189/190 armed={} | IGTK installed={} (algo {})\n",
+            if s3.mode == SEC_WPA3 { "WPA3-SAE (PMF required)" } else { "WPA3 transition (WPA2-PSK + SAE, PMF capable)" },
+            wpa3_fw_params().0, out.wpa_auth_ok, wpa3_fw_params().1, mfp3_ok, ev3, s3.igtk_set, s3.igtk_algo));
+    }
     let mut sb = [0u8; 36];
     let slen = ssid.len().min(32);
     sb[0..4].copy_from_slice(&(slen as u32).to_le_bytes());
@@ -3048,6 +3115,16 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     // policy), never via an in-firmware bridge. Recorded so the boot log says whether the fw took it.
     out.isolate_ok = iovar_set_u32(b"ap_isolate", 1);
     delay(50_000);
+    #[cfg(feature = "wpa3")]
+    if !open && w3().mode != SEC_WPA2 {
+        let mut mb = [0u8; 4];
+        w3().mfp_rb = if bcdc_iovar_get(b"mfp", &mut mb) { u32::from_le_bytes(mb) } else { 0xff };
+        crate::_print(format_args!(" [WPA3] mfp read back after bring-up: {}\n", w3().mfp_rb));
+        w3().bcn_ie_len = 0;
+        if !wpa3_read_beacon_ies() {
+            crate::_print(format_args!(" [WPA3] beacon IEs not readable at bring-up — M3 retries at the first join, else the 5 GHz shape\n"));
+        }
+    }
 
     // Read back AP state + our BSSID for the verdict.
     let mut apb = [0u8; 4];
@@ -3060,6 +3137,401 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     let (bok, _bs) = bcdc_dcmd(WLC_GET_BSSID, 0, &[], &mut bb);
     out.bssid_readback = bb;
     out.bssid_verified = bok && bb == out.bssid;
+}
+
+// ================================================================================================================
+// WPA3-SAE on the AP (Phase 6, feature `wpa3`). Batch 37 proved this firmware takes `wpa_auth=SAE` + `mfp` but
+// refuses in-firmware SAE and forwards each station's SAE Authentication frame to the host as event 188
+// (EXT_AUTH_FRAME_RX). So heqk answers SAE itself (crate `sae`: P-256 hunting-and-pecking, Annex J.10 vectors),
+// sends its Authentication frames back through the `mgmt_frame` iovar (brcmfmac's external-auth TX path), and runs
+// the 4-way with the SAE PMK (AKM 8: KDF-SHA256 PTK, AES-128-CMAC MIC, key-descriptor version 0) plus the IGTK KDE
+// for PMF. Security modes: 0 = WPA2-PSK (unchanged path), 1 = WPA3-SAE only (MFP required), 2 = WPA3 transition
+// (PSK + SAE, MFP capable).
+// ================================================================================================================
+
+#[cfg(feature = "wpa3")]
+pub const SEC_WPA2: u8 = 0;
+#[cfg(feature = "wpa3")]
+pub const SEC_WPA3: u8 = 1;
+#[cfg(feature = "wpa3")]
+pub const SEC_WPA3_TRANSITION: u8 = 2;
+#[cfg(feature = "wpa3")]
+const WPA3_AUTH_SAE_PSK: u32 = 0x0004_0000;
+#[cfg(feature = "wpa3")]
+const WLC_E_EXT_AUTH_FRAME_RX: u32 = 188;
+#[cfg(feature = "wpa3")]
+const WLC_E_MGMT_FRAME_TXSTATUS: u32 = 189;
+#[cfg(feature = "wpa3")]
+const WLC_E_MGMT_FRAME_OFF_CHAN_COMPLETE: u32 = 190;
+#[cfg(feature = "wpa3")]
+const CRYPTO_ALGO_BIP: u32 = 12;
+
+#[cfg(feature = "wpa3")]
+struct Wpa3 {
+    mode: u8,
+    pw: [u8; 64],
+    pw_len: u8,
+    igtk: [u8; 16],
+    igtk_set: bool,
+    igtk_algo: u32,
+    pkt_id: u32,
+    tx_ok: u32,
+    tx_fail: u32,
+    txs_ack: u32,
+    txs_noack: u32,
+    accepted: u32,
+    dropped: u32,
+    logged: u32,
+    chan: u32,
+    ssid: [u8; 32],
+    ssid_len: u8,
+    auth_status_ok: u32,
+    auth_status_fail: u32,
+    /// The firmware's own beacon RSNE ‖ RSNXE (read back with WLC_GET_BSS_INFO) — M3 repeats exactly these.
+    bcn_ie: [u8; 64],
+    bcn_ie_len: u8,
+    /// `mfp` as the firmware reports it after bring-up (0 off, 1 capable, 2 required) — the beacon's MFPC/MFPR.
+    mfp_rb: u32,
+}
+#[cfg(feature = "wpa3")]
+static mut WPA3: Wpa3 = Wpa3 { mode: 0, pw: [0; 64], pw_len: 0, igtk: [0; 16], igtk_set: false, igtk_algo: 0, pkt_id: 0x4851_0000, tx_ok: 0, tx_fail: 0, txs_ack: 0, txs_noack: 0, accepted: 0, dropped: 0, logged: 0, chan: 0, ssid: [0; 32], ssid_len: 0, auth_status_ok: 0, auth_status_fail: 0, bcn_ie: [0; 64], bcn_ie_len: 0, mfp_rb: 0xff };
+#[cfg(feature = "wpa3")]
+static mut SAE_TAB: sae::SaeAp = sae::SaeAp::new();
+/// H2E password element base (PT) for (SSID, passphrase), computed once at `ap_set_security`.
+#[cfg(feature = "wpa3")]
+static mut SAE_PT: Option<sae::PT> = None;
+
+#[cfg(feature = "wpa3")]
+fn w3() -> &'static mut Wpa3 {
+    unsafe { &mut *core::ptr::addr_of_mut!(WPA3) }
+}
+
+/// Choose the AP security before `ap_start`. SAE needs the passphrase itself (not a 64-hex PMK): without one the
+/// AP stays WPA2 (returns the mode actually used).
+#[cfg(feature = "wpa3")]
+pub fn ap_set_security(mode: u8, ssid: &[u8], passphrase: &[u8]) -> u8 {
+    let s = w3();
+    let pass_ok = (8..=63).contains(&passphrase.len());
+    s.mode = if mode <= SEC_WPA3_TRANSITION && pass_ok { mode } else { SEC_WPA2 };
+    let n = passphrase.len().min(64);
+    s.pw[..n].copy_from_slice(&passphrase[..n]);
+    s.pw_len = n as u8;
+    let sl = ssid.len().min(32);
+    s.ssid[..sl].copy_from_slice(&ssid[..sl]);
+    s.ssid_len = sl as u8;
+    unsafe { *core::ptr::addr_of_mut!(SAE_PT) = if s.mode != SEC_WPA2 { sae::derive_pt(ssid, passphrase, None) } else { None } };
+    s.mode
+}
+
+#[cfg(feature = "wpa3")]
+pub fn ap_security() -> u8 {
+    w3().mode
+}
+
+/// (accepted SAE exchanges, dropped SAE frames, mgmt_frame TX ok/fail, TX-status ack/noack, IGTK installed, auth_status ok/fail)
+#[cfg(feature = "wpa3")]
+pub fn wpa3_diag() -> (u32, u32, u32, u32, u32, u32, bool, u32, u32) {
+    let s = w3();
+    (s.accepted, s.dropped, s.tx_ok, s.tx_fail, s.txs_ack, s.txs_noack, s.igtk_set, s.auth_status_ok, s.auth_status_fail)
+}
+
+/// The (wsec-independent) firmware security for the chosen mode: (wpa_auth, mfp).
+#[cfg(feature = "wpa3")]
+fn wpa3_fw_params() -> (u32, u32) {
+    match w3().mode {
+        SEC_WPA3 => (WPA3_AUTH_SAE_PSK, 2),
+        SEC_WPA3_TRANSITION => (WPA3_AUTH_SAE_PSK | WPA2_AUTH_PSK, 1),
+        _ => (WPA2_AUTH_PSK, 0),
+    }
+}
+
+/// Arm events 188 (SAE frame to the host), 189/190 (mgmt_frame TX status) with `event_msgs_ext` SET_BIT
+/// (ver 1, command 1 = OR these bits in, len 32) — the classic 128-bit `event_msgs` cannot reach them.
+#[cfg(feature = "wpa3")]
+fn wpa3_events() -> bool {
+    let mut em = [0u8; 4 + 32];
+    em[0] = 1;
+    em[1] = 1;
+    em[2] = 32;
+    for e in [WLC_E_EXT_AUTH_FRAME_RX, WLC_E_MGMT_FRAME_TXSTATUS, WLC_E_MGMT_FRAME_OFF_CHAN_COMPLETE] {
+        em[4 + (e / 8) as usize] |= 1 << (e % 8);
+    }
+    let mut ib = [0u8; 64];
+    let n = iovar_buf(b"event_msgs_ext", &em, &mut ib);
+    bcdc_iovar_set(&ib[..n])
+}
+
+/// The IGTK (BIP-CMAC-128, key id 4) for PMF: random per AP start, installed in the firmware; the 4-way hands it
+/// to every PMF station in the IGTK KDE. brcmfmac-style index-4 key; algo BIP first, AES_CCM as the fallback.
+#[cfg(feature = "wpa3")]
+fn wpa3_igtk_install() {
+    let s = w3();
+    for k in 0..2 {
+        match crate::rng200::next_word_strict() {
+            Some(w) => s.igtk[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+            None => return,
+        }
+    }
+    for algo in [CRYPTO_ALGO_BIP, CRYPTO_ALGO_AES_CCM] {
+        let mut k = [0u8; 164];
+        k[0..4].copy_from_slice(&4u32.to_le_bytes());
+        k[4..8].copy_from_slice(&16u32.to_le_bytes());
+        k[8..24].copy_from_slice(&s.igtk);
+        k[112..116].copy_from_slice(&algo.to_le_bytes());
+        if bcdc_dcmd(WLC_SET_KEY, BCDC_SET, &k, &mut []).0 {
+            s.igtk_set = true;
+            s.igtk_algo = algo;
+            return;
+        }
+    }
+}
+
+/// Send one 802.11 Authentication frame body to `da` through the firmware (`mgmt_frame`, brcmf_mf_params_le:
+/// version, dwell_time, len, frame_control, channel, da, bssid, [pad], packet_id, body).
+#[cfg(feature = "wpa3")]
+fn mgmt_auth_tx(ap: &[u8; 6], da: &[u8; 6], body: &[u8]) -> bool {
+    let s = w3();
+    let mut p = [0u8; 32 + 128];
+    let n = body.len().min(128);
+    p[4..8].copy_from_slice(&0u32.to_le_bytes()); // dwell: on-channel (AP)
+    p[8..10].copy_from_slice(&(n as u16).to_le_bytes());
+    p[10..12].copy_from_slice(&0x00b0u16.to_le_bytes()); // Authentication
+    p[12..14].copy_from_slice(&(s.chan as u16).to_le_bytes());
+    p[14..20].copy_from_slice(da);
+    p[20..26].copy_from_slice(ap);
+    s.pkt_id = s.pkt_id.wrapping_add(1);
+    p[28..32].copy_from_slice(&s.pkt_id.to_le_bytes());
+    p[32..32 + n].copy_from_slice(&body[..n]);
+    let mut ib = [0u8; 200];
+    let m = iovar_buf(b"mgmt_frame", &p[..32 + n], &mut ib);
+    let ok = bcdc_iovar_set(&ib[..m]);
+    if ok { s.tx_ok += 1 } else { s.tx_fail += 1 }
+    ok
+}
+
+/// Tell the firmware the host finished (or failed) SAE for `sta` — brcmfmac's external-auth completion
+/// (`auth_status`, brcmf_auth_req_status_le: flags = 802.11 status, peer, ssid_len, ssid[32], pmkid[16]). Without
+/// it the firmware still treats the station as unauthenticated (metal batch 39: reason 6 / assoc status 16).
+#[cfg(feature = "wpa3")]
+fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> bool {
+    let s = w3();
+    // PMKSA first (brcmfmac's ext-auth order): pmkid_info {npmk 1, {peer, pmkid}}
+    let mut pl = [0u8; 4 + 22];
+    pl[0..4].copy_from_slice(&1u32.to_le_bytes());
+    pl[4..10].copy_from_slice(sta);
+    pl[10..26].copy_from_slice(pmkid);
+    let mut pb = [0u8; 64];
+    let m = iovar_buf(b"pmkid_info", &pl, &mut pb);
+    let st_pk = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &pb[..m], &mut []).1;
+    // variants until the firmware takes one: flags = 802.11 status (upstream brcmfmac) or WL_EXTAUTH_SUCCESS 4
+    // (bcmdhd); with and without the SSID
+    let success = status == 0;
+    let mut codes = [0i32; 4];
+    let mut took = None;
+    for (k, (flags, with_ssid)) in [(status, true), (if success { 4 } else { 3 }, true), (status, false), (if success { 4 } else { 3 }, false)].iter().enumerate() {
+        let mut a = [0u8; 60];
+        a[0..2].copy_from_slice(&flags.to_le_bytes());
+        a[2..8].copy_from_slice(sta);
+        if *with_ssid {
+            a[8..12].copy_from_slice(&(s.ssid_len as u32).to_le_bytes());
+            a[12..12 + s.ssid_len as usize].copy_from_slice(&s.ssid[..s.ssid_len as usize]);
+        }
+        a[44..60].copy_from_slice(pmkid);
+        let mut ib = [0u8; 96];
+        let n = iovar_buf(b"auth_status", &a, &mut ib);
+        let (ok, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib[..n], &mut []);
+        codes[k] = st as i32;
+        if ok {
+            took = Some(k);
+            break;
+        }
+    }
+    if s.logged < 64 {
+        s.logged += 1;
+        crate::_print(format_args!(" [WPA3] auth_status: pmkid_info bcme {} | variants (802.11 status+ssid, EXTAUTH+ssid, status, EXTAUTH) bcme {:?} -> accepted variant {:?}\n",
+            st_pk as i32, codes, took));
+    }
+    if took.is_some() { s.auth_status_ok += 1 } else { s.auth_status_fail += 1 }
+    took.is_some()
+}
+
+/// Event 188: one SAE Authentication frame from a station. `ev` = the event message start (as `parse_ap_event`).
+/// Runs the responder and transmits its answer. Returns the responder's verdict for the log.
+#[cfg(feature = "wpa3")]
+pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event {
+    let s = w3();
+    if s.mode == SEC_WPA2 || ev + 72 > rx.len() {
+        return sae::Event::Dropped("not in SAE mode");
+    }
+    let dl = u32::from_be_bytes([rx[ev + 44], rx[ev + 45], rx[ev + 46], rx[ev + 47]]) as usize;
+    let d = ev + 72;
+    let end = (d + dl).min(rx.len());
+    // 16-byte rx metadata (version, chanspec, rssi, mactime, rate) then the 802.11 frame
+    let f = if end >= d + 16 + 24 && rx[d + 16] & 0xfc == 0xb0 { d + 16 } else if end >= d + 24 && rx[d] & 0xfc == 0xb0 { d } else { return sae::Event::Dropped("no auth frame") };
+    let mut sta = [0u8; 6];
+    sta.copy_from_slice(&rx[f + 10..f + 16]);
+    if rx[f + 4..f + 10] != ap[..] || sta[0] & 1 != 0 {
+        return sae::Event::Dropped("not addressed to this AP");
+    }
+    let body = &rx[f + 24..end];
+    let mut out = [None, None];
+    let mut rnd = || {
+        let mut r = [0u8; 32];
+        for k in 0..4 {
+            r[k * 8..k * 8 + 8].copy_from_slice(&crate::rng200::next_word_strict()?.to_le_bytes());
+        }
+        Some(r)
+    };
+    let pw_len = s.pw_len as usize;
+    let pw = s.pw;
+    let e = unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).on_frame(now_ms, ap, &sta, (*core::ptr::addr_of!(SAE_PT)).as_ref(), &pw[..pw_len], body, &mut rnd, &mut out) };
+    let mut sent = 0;
+    for o in out.iter().flatten() {
+        if mgmt_auth_tx(ap, &sta, &o.body[..o.len]) {
+            sent += 1;
+        }
+    }
+    let mut ast = None;
+    if e == sae::Event::Accepted {
+        let pk = unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).pmkid_for(&sta, now_ms) }.unwrap_or([0; 16]);
+        ast = Some(wpa3_auth_status(&sta, 0, &pk));
+    }
+    let s = w3();
+    match e {
+        sae::Event::Accepted => s.accepted += 1,
+        sae::Event::Dropped(_) => s.dropped += 1,
+        _ => {}
+    }
+    if s.logged < 64 {
+        s.logged += 1;
+        let seq = if body.len() >= 4 { u16::from_le_bytes([body[2], body[3]]) } else { 0 };
+        let st = if body.len() >= 6 { u16::from_le_bytes([body[4], body[5]]) } else { 0 };
+        let grp = if seq == 1 && body.len() >= 8 { u16::from_le_bytes([body[6], body[7]]) } else { 0 };
+        crate::_print(format_args!(" [WPA3] SAE {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} seq {} status {} group {} ({} B) -> {:?}, {} frame(s) sent (mgmt_frame ok {} fail {}){}\n",
+            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], seq, st, grp, body.len(), e, sent, s.tx_ok, s.tx_fail,
+            match ast { Some(true) => " | auth_status -> firmware OK", Some(false) => " | auth_status REFUSED by the firmware", None => "" }));
+    }
+    e
+}
+
+/// Events 189/190: the firmware's verdict on a `mgmt_frame` (packet id echo + status) — the on-metal check that the
+/// parameter layout is the one the firmware reads.
+#[cfg(feature = "wpa3")]
+fn wpa3_txstatus(rx: &[u8], ev: usize, et: u32, st: u32) {
+    let s = w3();
+    let d = ev + 72;
+    let id = if d + 4 <= rx.len() { u32::from_le_bytes([rx[d], rx[d + 1], rx[d + 2], rx[d + 3]]) } else { 0 };
+    if st == 0 { s.txs_ack += 1 } else { s.txs_noack += 1 }
+    if s.logged < 64 {
+        s.logged += 1;
+        crate::_print(format_args!(" [WPA3] mgmt_frame tx-status event {} status {} packet_id {:#x} (last sent {:#x}{})\n",
+            et, st, id, s.pkt_id, if id == s.pkt_id { ", layout OK" } else { "" }));
+    }
+}
+
+/// The PMK of a station that just completed SAE (AKM 8), if any.
+#[cfg(feature = "wpa3")]
+pub fn ap_sae_pmk(sta: &[u8; 6], now_ms: u64) -> Option<[u8; 32]> {
+    unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).pmk_for(sta, now_ms) }
+}
+
+#[cfg(feature = "wpa3")]
+pub fn ap_sae_forget(sta: &[u8; 6]) {
+    unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget(sta) }
+}
+
+#[cfg(feature = "wpa3")]
+const WLC_GET_BSS_INFO: u32 = 136;
+
+/// Read our own BSS's beacon IEs back from the firmware (WLC_GET_BSS_INFO: u32 buffer length, then
+/// brcmf_bss_info_le with ie_offset @116 / ie_length @120) and keep the RSNE (0x30) followed by the RSNXE (0xf4).
+/// Metal: the firmware's RSNE capability bits differ by boot / band (0x8c on 5 GHz, 0x0c on a 2.4 GHz boot), so
+/// M3 must copy what is on the air rather than a constant.
+#[cfg(feature = "wpa3")]
+fn wpa3_read_beacon_ies() -> bool {
+    let mut req = [0u8; 4];
+    req.copy_from_slice(&1024u32.to_le_bytes());
+    let mut rep = [0u8; 1024];
+    if !bcdc_dcmd(WLC_GET_BSS_INFO, 0, &req, &mut rep).0 {
+        return false;
+    }
+    let bi = &rep[4..];
+    let ie_off = u16::from_le_bytes([bi[116], bi[117]]) as usize;
+    let ie_len = u32::from_le_bytes([bi[120], bi[121], bi[122], bi[123]]) as usize;
+    if ie_off < 124 || ie_off + ie_len > bi.len() {
+        return false;
+    }
+    let ies = &bi[ie_off..ie_off + ie_len];
+    let (mut rsne, mut rsnxe): (&[u8], &[u8]) = (&[], &[]);
+    let mut i = 0;
+    while i + 2 <= ies.len() {
+        let l = ies[i + 1] as usize;
+        if i + 2 + l > ies.len() {
+            break;
+        }
+        match ies[i] {
+            0x30 => rsne = &ies[i..i + 2 + l],
+            0xf4 => rsnxe = &ies[i..i + 2 + l],
+            _ => {}
+        }
+        i += 2 + l;
+    }
+    // only an RSNE that offers SAE (00-0f-ac:8) is ours in a WPA3 mode
+    if rsne.is_empty() || !rsne.windows(4).any(|w| w == [0x00, 0x0f, 0xac, 0x08]) || rsne.len() + rsnxe.len() > 64 {
+        return false;
+    }
+    let s = w3();
+    s.bcn_ie[..rsne.len()].copy_from_slice(rsne);
+    s.bcn_ie[rsne.len()..rsne.len() + rsnxe.len()].copy_from_slice(rsnxe);
+    s.bcn_ie_len = (rsne.len() + rsnxe.len()) as u8;
+    crate::_print(format_args!(" [WPA3] beacon RSNE/RSNXE read back from the firmware ({} B):", s.bcn_ie_len));
+    for b in &s.bcn_ie[..s.bcn_ie_len as usize] {
+        crate::_print(format_args!(" {:02x}", b));
+    }
+    crate::_print(format_args!("\n"));
+    true
+}
+
+/// The RSNE heqk puts in M3 must equal the firmware-built beacon RSNE byte for byte (wpa_supplicant compares
+/// them raw). Pinned from the metal capture (batch 42, wpa_supplicant debug): transition = `30 18 0100 000fac04
+/// 0100 000fac04 0200 000fac02 000fac08 8c00` — group/pairwise CCMP, AKMs PSK then SAE, caps 16-PTKSA-RC +
+/// MFP-capable, no group-management suite (BIP-CMAC-128 is the default), followed in the beacon by the RSNXE
+/// `f4 01 20` (H2E), which M3 repeats. SAE-only = AKM 8 alone with MFP required.
+#[cfg(feature = "wpa3")]
+fn wpa3_rsne(out: &mut [u8; 32]) -> usize {
+    let mode = w3().mode;
+    let mut n = 0;
+    let mut put = |b: &[u8], n: &mut usize| {
+        out[*n..*n + b.len()].copy_from_slice(b);
+        *n += b.len();
+    };
+    put(&[0x30, 0, 0x01, 0x00, 0x00, 0x0f, 0xac, 0x04, 0x01, 0x00, 0x00, 0x0f, 0xac, 0x04], &mut n);
+    // caps = 16 PTKSA replay counters (0x0c) | MFPC (0x80) | MFPR (0x40) as the firmware actually runs `mfp`
+    // (metal: a 2.4 GHz boot beaconed 0x0c — no MFP bits); unknown read-back -> the configured mode
+    let mfp = match w3().mfp_rb { 0xff => if mode == SEC_WPA3_TRANSITION { 1 } else { 2 }, v => v };
+    let caps: u8 = 0x0c | if mfp >= 1 { 0x80 } else { 0 } | if mfp >= 2 { 0x40 } else { 0 };
+    if mode == SEC_WPA3_TRANSITION {
+        put(&[0x02, 0x00, 0x00, 0x0f, 0xac, 0x02, 0x00, 0x0f, 0xac, 0x08, caps, 0x00], &mut n);
+    } else {
+        put(&[0x01, 0x00, 0x00, 0x0f, 0xac, 0x08, caps, 0x00], &mut n);
+    }
+    out[1] = (n - 2) as u8;
+    n
+}
+
+/// IGTK KDE (00-0F-AC:9): KeyID 4 ‖ IPN 0 ‖ IGTK.
+#[cfg(feature = "wpa3")]
+fn igtk_kde(out: &mut [u8]) -> usize {
+    let s = w3();
+    out[0] = 0xdd;
+    out[1] = 4 + 2 + 6 + 16;
+    out[2..6].copy_from_slice(&[0x00, 0x0f, 0xac, 0x09]);
+    out[6..8].copy_from_slice(&4u16.to_le_bytes());
+    for b in &mut out[8..14] {
+        *b = 0;
+    }
+    out[14..30].copy_from_slice(&s.igtk);
+    30
 }
 
 /// Install the GROUP key ONCE for the BSS (after `ap_start`): index `keyid`, ea = zero,
@@ -3300,8 +3772,8 @@ fn wait_eapol(sta: &[u8; 6], secure: bool, replay: u64, dry_limit: u32, buf: &mu
 }
 
 
-/// Build M1 (AP->STA): ver2 | pairwise | ACK = 0x008a; ANonce; the given replay; no MIC/key-data.
-fn build_m1(m1: &mut [u8; 14 + 4 + 95], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64) {
+/// Build M1 (AP->STA): pairwise | ACK with the AKM's descriptor version (0x008a v2 / 0x0088 v0); ANonce; replay.
+fn build_m1(m1: &mut [u8; 14 + 4 + 95], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, ki: u16) {
     let body = 18usize;
     for b in m1.iter_mut() { *b = 0; }
     m1[0..6].copy_from_slice(sta);
@@ -3312,7 +3784,7 @@ fn build_m1(m1: &mut [u8; 14 + 4 + 95], sta: &[u8; 6], ap_mac: &[u8; 6], anonce:
     m1[15] = 0x03; // EAPOL-Key
     m1[16..18].copy_from_slice(&95u16.to_be_bytes());
     m1[body] = 0x02; // RSN key descriptor
-    m1[body + 1..body + 3].copy_from_slice(&0x008au16.to_be_bytes());
+    m1[body + 1..body + 3].copy_from_slice(&ki.to_be_bytes());
     m1[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes()); // CCMP pairwise key length
     m1[body + 5..body + 13].copy_from_slice(&replay.to_be_bytes());
     m1[body + 13..body + 45].copy_from_slice(anonce);
@@ -3320,9 +3792,9 @@ fn build_m1(m1: &mut [u8; 14 + 4 + 95], sta: &[u8; 6], ap_mac: &[u8; 6], anonce:
 
 /// Build M3 (AP->STA) with the given replay and re-MIC it (the MIC covers the counter, so a
 /// retransmit with a bumped counter must be re-signed). `wrapped` = the AES-wrapped key data.
-fn build_m3(m3: &mut [u8; 14 + 4 + 95 + 88], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, kck: &[u8; 16], wrapped: &[u8]) -> usize {
+fn build_m3(m3: &mut [u8; 14 + 4 + 95 + 144], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, kck: &[u8; 16], wrapped: &[u8], ki: u16, akm8: bool) -> usize {
     let body = 18usize;
-    let kdw = wrapped.len().min(88);
+    let kdw = wrapped.len().min(144);
     for b in m3.iter_mut() { *b = 0; }
     m3[0..6].copy_from_slice(sta);
     m3[6..12].copy_from_slice(ap_mac);
@@ -3332,15 +3804,15 @@ fn build_m3(m3: &mut [u8; 14 + 4 + 95 + 88], sta: &[u8; 6], ap_mac: &[u8; 6], an
     m3[15] = 0x03;
     m3[16..18].copy_from_slice(&((95 + kdw) as u16).to_be_bytes());
     m3[body] = 0x02;
-    // ver2|pairwise|install|ack|mic|secure|encrypted = 0x13ca.
-    m3[body + 1..body + 3].copy_from_slice(&0x13cau16.to_be_bytes());
+    // pairwise|install|ack|mic|secure|encrypted + descriptor version (0x13ca v2 / 0x13c8 v0).
+    m3[body + 1..body + 3].copy_from_slice(&ki.to_be_bytes());
     m3[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes());
     m3[body + 5..body + 13].copy_from_slice(&replay.to_be_bytes());
     m3[body + 13..body + 45].copy_from_slice(anonce);
     m3[body + 93..body + 95].copy_from_slice(&(kdw as u16).to_be_bytes());
     m3[body + 95..body + 95 + kdw].copy_from_slice(&wrapped[..kdw]);
     let end = body + 95 + kdw;
-    let mic = crate::wpa::wpa_mic_sha1(kck, &m3[14..end]); // MIC field still zero
+    let mic = eapol_mic(kck, &m3[14..end], akm8); // MIC field still zero
     m3[body + 77..body + 93].copy_from_slice(&mic);
     end
 }
@@ -3377,20 +3849,75 @@ pub fn ap_wait_assoc(budget: u32) -> Option<[u8; 6]> {
 /// Verify an EAPOL-Key MIC (KDV2 HMAC-SHA1-128): recompute over the 802.1X frame `eapol`
 /// (= from the version byte to the end) with the 16-B MIC field at `mic_off` zeroed, and
 /// compare to the received MIC. `eapol` is a private copy so zeroing is safe.
-fn eapol_mic_ok(kck: &[u8; 16], eapol: &mut [u8], mic_off: usize) -> bool {
+fn eapol_mic_ok(kck: &[u8; 16], eapol: &mut [u8], mic_off: usize, akm8: bool) -> bool {
     let mut recv = [0u8; 16];
     recv.copy_from_slice(&eapol[mic_off..mic_off + 16]);
     for b in &mut eapol[mic_off..mic_off + 16] {
         *b = 0;
     }
-    crate::wpa::wpa_mic_sha1(kck, eapol) == recv
+    eapol_mic(kck, eapol, akm8) == recv
+}
+
+/// The EAPOL-Key MIC: HMAC-SHA1-128 (key-descriptor version 2, AKM 2) or AES-128-CMAC (AKM 8 / SAE).
+fn eapol_mic(kck: &[u8; 16], eapol: &[u8], akm8: bool) -> [u8; 16] {
+    if akm8 { crate::aes::aes_cmac(kck, eapol) } else { crate::wpa::wpa_mic_sha1(kck, eapol) }
+}
+
+/// PTK per AKM: PRF-SHA1 (AKM 2) or KDF-SHA256 (AKM 8).
+fn derive_ptk(akm8: bool, pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> [u8; 48] {
+    #[cfg(feature = "wpa3")]
+    if akm8 {
+        return sae::ptk_sha256(pmk, aa, spa, anonce, snonce);
+    }
+    let _ = akm8;
+    crate::wpa::wpa_ptk(pmk, aa, spa, anonce, snonce)
+}
+
+/// Did the station's M2 RSNE (key data) advertise MFP-capable? (PMF negotiated when our side is capable too.)
+fn m2_mfpc(m2: &[u8], body_off: usize) -> bool {
+    let kl_at = body_off + 93;
+    if kl_at + 2 > m2.len() {
+        return false;
+    }
+    let kl = u16::from_be_bytes([m2[kl_at], m2[kl_at + 1]]) as usize;
+    let kd = &m2[(kl_at + 2).min(m2.len())..(kl_at + 2 + kl).min(m2.len())];
+    let mut i = 0;
+    while i + 2 <= kd.len() {
+        let (id, l) = (kd[i], kd[i + 1] as usize);
+        if id == 0x30 && i + 2 + l <= kd.len() {
+            let e = &kd[i + 2..i + 2 + l];
+            // version 2 | group 4 | pairwise count 2 + 4n | akm count 2 + 4m | caps 2
+            if e.len() < 8 {
+                return false;
+            }
+            let pc = u16::from_le_bytes([e[6], e[7]]) as usize;
+            let a = 8 + 4 * pc;
+            if a + 2 > e.len() {
+                return false;
+            }
+            let ac = u16::from_le_bytes([e[a], e[a + 1]]) as usize;
+            let c = a + 2 + 4 * ac;
+            return c + 2 <= e.len() && e[c] & 0x80 != 0;
+        }
+        i += 2 + l;
+    }
+    false
 }
 
 /// M-AP2: run the WPA2 4-way handshake as the AUTHENTICATOR for one associated `sta`.
 /// `ap_mac` = our BSSID; `pmk` = PBKDF2(passphrase, ssid); `gtk`/`gtk_keyid` = the group key.
 /// On success installs the per-station PTK (ea=sta) + the GTK (broadcast) via WLC_SET_KEY.
 pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk: &[u8; 16], gtk_keyid: u8, out: &mut ApAuth) {
+    ap_authenticate(ap_mac, sta, pmk, false, gtk, gtk_keyid, out)
+}
+
+/// The 4-way as authenticator for AKM 2 (`akm8` false: PSK, key-descriptor v2) or AKM 8 (`akm8` true: the SAE PMK,
+/// KDF-SHA256 + AES-CMAC, key-descriptor v0). With PMF negotiated (WPA3 modes, station MFP-capable) M3 also carries
+/// the IGTK KDE and the beacon's exact RSNE.
+pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool, gtk: &[u8; 16], gtk_keyid: u8, out: &mut ApAuth) {
     out.sta = *sta;
+    let ki1: u16 = if akm8 { 0x0088 } else { 0x008a };
+    let ki3: u16 = if akm8 { 0x13c8 } else { 0x13ca };
     let body = 18usize;
     // ANonce from the HW TRNG (fail-closed).
     let mut anonce = [0u8; 32];
@@ -3415,7 +3942,7 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
     // that the supplicant rejected as a replay anyway.
     let mut m1 = [0u8; 14 + 4 + 95];
     let mut replay: u64 = 1;
-    build_m1(&mut m1, sta, ap_mac, &anonce, replay);
+    build_m1(&mut m1, sta, ap_mac, &anonce, replay, ki1);
     out.m1_tx = sdpcm_data_tx(&m1);
     out.m1_sends = 1;
     dbg_putc(b'1');
@@ -3443,10 +3970,10 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
                 out.m2_rx = true;
                 dbg_putc(b'2');
                 snonce.copy_from_slice(&m2buf[(body - 14) + 13..(body - 14) + 45]);
-                ptk = crate::wpa::wpa_ptk(pmk, ap_mac, sta, &anonce, &snonce);
+                ptk = derive_ptk(akm8, pmk, ap_mac, sta, &anonce, &snonce);
                 kck.copy_from_slice(&ptk[0..16]);
                 kek.copy_from_slice(&ptk[16..32]);
-                if mic_off + 16 <= m2len && eapol_mic_ok(&kck, &mut m2buf[..m2len], mic_off) {
+                if mic_off + 16 <= m2len && eapol_mic_ok(&kck, &mut m2buf[..m2len], mic_off, akm8) {
                     out.m2_mic_ok = true;
                     break;
                 }
@@ -3457,7 +3984,7 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
                     return; // the station never answered: let the outer loop re-wait
                 }
                 replay += 1;
-                build_m1(&mut m1, sta, ap_mac, &anonce, replay);
+                build_m1(&mut m1, sta, ap_mac, &anonce, replay, ki1);
                 let _ = sdpcm_data_tx(&m1);
                 out.m1_sends += 1;
             }
@@ -3471,27 +3998,58 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
             }
         }
     }
+    // PMF: our side is capable in the WPA3 modes; negotiated when the station's M2 RSNE says MFP-capable.
+    #[cfg(feature = "wpa3")]
+    let pmf = w3().mode != SEC_WPA2 && m2_mfpc(&m2buf[..m2len], body - 14);
+    #[cfg(not(feature = "wpa3"))]
+    let pmf = false;
     let _ = m2len;
 
-    // --- M3 (AP->STA): key-data = RSNE ++ GTK-KDE, padded to /8, AES-key-wrapped under KEK.
-    let mut kd = [0u8; 72];
-    kd[..RSN_IE_PSK_CCMP.len()].copy_from_slice(&RSN_IE_PSK_CCMP);
-    let kln = crate::wpa::wpa_gtk_kde(gtk_keyid, gtk, &mut kd[RSN_IE_PSK_CCMP.len()..]);
-    let mut plen = RSN_IE_PSK_CCMP.len() + kln; // 22 + 24 = 46
+    // --- M3 (AP->STA): key-data = RSNE ++ GTK-KDE [++ IGTK-KDE], padded to /8, AES-key-wrapped under KEK.
+    let mut kd = [0u8; 136];
+    let mut rl = RSN_IE_PSK_CCMP.len();
+    kd[..rl].copy_from_slice(&RSN_IE_PSK_CCMP);
+    #[cfg(feature = "wpa3")]
+    if w3().mode != SEC_WPA2 {
+        let mut r = [0u8; 32];
+        if w3().bcn_ie_len == 0 {
+            let _ = wpa3_read_beacon_ies(); // not read at bring-up: try again now
+        }
+        let s3 = w3();
+        if s3.bcn_ie_len > 0 {
+            // exactly what the firmware beacons (RSNE ‖ RSNXE)
+            rl = s3.bcn_ie_len as usize;
+            kd[..rl].copy_from_slice(&s3.bcn_ie[..rl]);
+        } else {
+            // fallback: the metal-observed 5 GHz shape. The firmware's beacon also carries an RSNXE (`f4 01 20`:
+            // SAE hash-to-element) — batch 43: wpa_supplicant deauths with reason 17 unless M3 repeats it
+            rl = wpa3_rsne(&mut r);
+            kd[..rl].copy_from_slice(&r[..rl]);
+            kd[rl..rl + 3].copy_from_slice(&[0xf4, 0x01, 0x20]);
+            rl += 3;
+        }
+    }
+    let kln = crate::wpa::wpa_gtk_kde(gtk_keyid, gtk, &mut kd[rl..]);
+    let mut plen = rl + kln; // WPA2: 22 + 24 = 46
+    #[cfg(feature = "wpa3")]
+    if pmf {
+        plen += igtk_kde(&mut kd[plen..]);
+    }
+    let _ = pmf;
     let unpadded = plen;
     while plen % 8 != 0 {
         kd[plen] = if plen == unpadded { 0xdd } else { 0x00 }; // 0xdd + 0x00 pad KDE
         plen += 1;
     }
-    let mut wrapped = [0u8; 88];
+    let mut wrapped = [0u8; 144];
     let kdw = match crate::aes::aes_wrap(&kek, &kd[..plen], &mut wrapped) {
         Some(n) => n,
         None => return,
     };
     // --- M3 (AP->STA), replay+1, re-MIC'd per send (the MIC covers the counter).
-    let mut m3 = [0u8; 14 + 4 + 95 + 88];
+    let mut m3 = [0u8; 14 + 4 + 95 + 144];
     replay += 1;
-    let m3end = build_m3(&mut m3, sta, ap_mac, &anonce, replay, &kck, &wrapped[..kdw]);
+    let m3end = build_m3(&mut m3, sta, ap_mac, &anonce, replay, &kck, &wrapped[..kdw], ki3, akm8);
     out.m3_tx = sdpcm_data_tx(&m3[..m3end]);
     out.m3_sends = 1;
     out.replay = replay;
@@ -3509,7 +4067,7 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
             KeyWait::Got(n) => {
                 out.m4_rx = true;
                 dbg_putc(b'4');
-                if mic_off + 16 <= n && eapol_mic_ok(&kck, &mut m4buf[..n], mic_off) {
+                if mic_off + 16 <= n && eapol_mic_ok(&kck, &mut m4buf[..n], mic_off, akm8) {
                     out.m4_mic_ok = true;
                     break;
                 }
@@ -3520,7 +4078,7 @@ pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk
                     return;
                 }
                 replay += 1;
-                let _ = build_m3(&mut m3, sta, ap_mac, &anonce, replay, &kck, &wrapped[..kdw]);
+                let _ = build_m3(&mut m3, sta, ap_mac, &anonce, replay, &kck, &wrapped[..kdw], ki3, akm8);
                 let _ = sdpcm_data_tx(&m3[..m3end]);
                 out.m3_sends += 1;
                 out.replay = replay;
@@ -3571,6 +4129,9 @@ pub enum ApEvent {
     Data(usize, usize),
     /// Some other frame (an event we don't act on) — counted, ignored.
     Other,
+    /// WPA3: a station's SAE Authentication frame (event 188); the value is the event-message offset in `rx`
+    /// for `ap_sae_rx`.
+    Sae(usize),
 }
 
 /// Keep the 43455's backplane HT clock alive while the serve loop idles (the chip drops HT
@@ -3666,7 +4227,41 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
     }
     };
     if ch == 1 {
+        #[cfg(feature = "wpa3probe")]
+        {
+            // every event: type, status, reason, auth_type, datalen, addr + the first 40 data bytes (an SAE commit
+            // handed to the host shows up here as an auth frame / EXT_AUTH event)
+            let ev = doff + 4 + (*rx.get(doff + 3).unwrap_or(&0) as usize) * 4;
+            let n = unsafe { PROBE_EVENTS };
+            if n < 400 && ev + 72 <= rx.len() {
+                unsafe { PROBE_EVENTS += 1 };
+                let rd = |o: usize| u32::from_be_bytes([rx[ev + o], rx[ev + o + 1], rx[ev + o + 2], rx[ev + o + 3]]);
+                let (et, st, rs, at, dl) = (rd(28), rd(32), rd(36), rd(40), rd(44));
+                if et != WLC_E_ESCAN_RESULT {
+                    crate::_print(format_args!(" [WPA3-PROBE] ev#{} type={} status={} reason={} auth_type={} datalen={} addr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} data=",
+                        n, et, st, rs, at, dl, rx[ev + 48], rx[ev + 49], rx[ev + 50], rx[ev + 51], rx[ev + 52], rx[ev + 53]));
+                    let d0 = ev + 72;
+                    for i in 0..(dl as usize).min(40) {
+                        if let Some(b) = rx.get(d0 + i) {
+                            crate::_print(format_args!("{:02x}", b));
+                        }
+                    }
+                    crate::_print(format_args!("\n"));
+                }
+            }
+        }
         if let Some((et, st, sta)) = parse_ap_event(rx, doff) {
+            #[cfg(feature = "wpa3")]
+            {
+                let ev = doff + 4 + (*rx.get(doff + 3).unwrap_or(&0) as usize) * 4;
+                if et == WLC_E_EXT_AUTH_FRAME_RX {
+                    return ApEvent::Sae(ev);
+                }
+                if et == WLC_E_MGMT_FRAME_TXSTATUS || et == WLC_E_MGMT_FRAME_OFF_CHAN_COMPLETE {
+                    wpa3_txstatus(rx, ev, et, st);
+                    return ApEvent::Other;
+                }
+            }
             if (et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND) && st == 0 {
                 dbg_putc(b'C');
                 return ApEvent::Assoc(sta);
