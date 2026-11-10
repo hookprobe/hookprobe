@@ -4542,6 +4542,17 @@ fn cm5_p10_probe() {
                                             kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged; a station re-join or a power-cycle recovers it\n", wq_n, wifi_frames);
                                             stall_reported = true;
                                         }
+                                        // Phase 3c self-heal: still wedged after WIFI_WEDGE_RESET_S -> nothing in the loop recovers it
+                                        // (the runtime watchdog only sees a hung LOOP, and this loop keeps running) -> reset
+                                        // through the EL2 gate, reason recorded for the next boot. Backoff: not again when the
+                                        // previous boot was itself such a reset that came early (a firmware that wedges at once
+                                        // must not turn into a reboot loop — it stays up, reported, for a power cycle).
+                                        #[cfg(feature = "cm5")]
+                                        if t.wrapping_sub(stall_since) > WIFI_WEDGE_RESET_S * freq && rtwdog::self_heal_allowed() {
+                                            let up = t / freq.max(1);
+                                            kprint!(" [SELF-HEAL] Wi-Fi stream wedged for {} s with {} deliveries waiting — resetting the unit (uptime {} s)\n", WIFI_WEDGE_RESET_S, wq_n, up);
+                                            arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi stream wedged for {} s ({} deliveries waiting for TX credit, no frame from the firmware)", WIFI_WEDGE_RESET_S, wq_n));
+                                        }
                                     } else if wifi_frames != stall_frames {
                                         stall_frames = wifi_frames;
                                         stall_since = t;
@@ -6883,7 +6894,21 @@ pub extern "C" fn kmain() -> ! {
         let _ = devbase::selftest();
         #[cfg(feature = "netsvc")]
         let _ = actions::rate_selftest();
-        let cr = arch_aarch64::crashrec::selftest();
+        let cr = arch_aarch64::crashrec::selftest() && {
+            // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
+            use arch_aarch64::crashrec::{take, write};
+            write(3, 0, 0, 300, format_args!("wedged"));
+            let early = take();
+            write(3, 0, 0, 7200, format_args!("wedged"));
+            let late = take();
+            write(1, 0, 0, 10, format_args!("p"));
+            let panic = take();
+            early.is_some_and(|c| c.kind_name() == "self-heal reset")
+                && !rtwdog::self_heal_allowed_after(early.as_ref())
+                && rtwdog::self_heal_allowed_after(late.as_ref())
+                && rtwdog::self_heal_allowed_after(panic.as_ref())
+                && rtwdog::self_heal_allowed_after(None)
+        };
         kprint!(" [P-crashrec] {} — crash record (phase 3): the panic / fatal-fault path writes the reason into a reserved, cache-cleaned page; the next boot takes it once (a second take is empty), a flipped byte or a bare magic never reads as a crash, the message is made JSON-safe\n",
             if cr { "PASS" } else { "FAIL" });
         let w = rtwdog::selftest();
@@ -13532,6 +13557,10 @@ extern "C" fn producer() -> ! {
     kprint!(" [P4] producer: send returned (message delivered)\n");
     thread_exit()
 }
+
+/// Phase 3c: a Wi-Fi stream wedged this long (deliveries waiting, nothing read from the firmware) resets the unit.
+#[allow(dead_code)]
+const WIFI_WEDGE_RESET_S: u64 = 120;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {

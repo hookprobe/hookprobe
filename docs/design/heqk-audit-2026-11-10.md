@@ -49,14 +49,14 @@ yet say so (doc-only fix, no decision change).
 | 0044 zero-Linux CM5 | P — caps model proven; production EL0 excursions are not yet on per-TCB CSpaces |
 | 0047 heqk everywhere / MC on device | V on CM5 + QEMU |
 | 0049 WAN policy auth / IPv6 identity / scan evidence | D2, D3 V; **D1 deviates** (see 2.1) |
-| 0050 parser placement | P — TLS in EL0 (metal); HTTP / DHCP / DNS / WAN / Noise / WPA2 parsers still EL1 |
+| 0050 parser placement | P — TLS in EL0 (metal), TLS scalar no longer in EL1; HTTP / DHCP / DNS / WAN / Noise / WPA2 parsers still EL1 |
 | 0051 MC HTTPS | V (offline provisioning) |
 | 0052 Shield v2 | V (metal) — header still "Proposed" |
 | 0052 CI/CD (duplicate number) | I — gates run, never ratified; proposed renumber → 0058 |
-| 0053 operator actions | V — per-session rate limit missing |
+| 0053 operator actions | V — per-session write rate limit added 2026-11-10 (`[P-write-rate]`); replay memory still lost on session eviction |
 | 0054 per-device AP credential | V |
-| 0055 owner journal | V (metal) — revoke-all and the signed `pin` token missing |
-| 0056 upload | phase 1 V (metal); phase 2 `os_image` + trial commit V in QEMU, metal pending |
+| 0055 owner journal | V (metal) — revoke-all added 2026-11-10 (`OP_CLEAR`); the signed `pin` token is still missing |
+| 0056 upload | phase 1 V (metal); phase 2 `os_image` + trial commit + rollback **V on metal** (J1 9/9, J2 7/7) |
 | 0057 Shield levels | V (metal) |
 
 ### 2.1 Security deviations (ranked)
@@ -79,15 +79,15 @@ yet say so (doc-only fix, no decision change).
 4. **OTA commit-on-health was claimed but not wired** (SECURITY.md). **Fixed in QEMU 2026-11-10:** the AP loop
    classifies the boot from HBoot's measurement, commits a trial only when the AP serves and the WAN is usable,
    reboots to the old slot after 5 min otherwise, and repairs an interrupted commit every boot
-   (`[P15-otaimg]`). Metal run pending.
-5. ADR 0055: no revoke-all; journal tail truncation indistinguishable from a torn write (needs a sealed
-   high-water mark). ADR 0053: no per-session rate limit; replay memory lost when the session table evicts.
-6. ADR 0051 D3: the TLS private scalar stays in an EL1 static after INIT (ADR text says EL0-only).
-7. ADR 0054 / 0045: nothing in the factory or release path refuses an image built with the bench `HEQK_AP_PSK`.
+   (`[P15-otaimg]`). **Metal PASS 2026-11-10:** J1 (commit) 9/9 twice, J2 (rollback) 7/7.
+5. ADR 0055: ~~no revoke-all~~ (fixed 2026-11-10); journal tail truncation indistinguishable from a torn write (needs a sealed
+   high-water mark). ADR 0053: ~~no per-session rate limit~~ (fixed); replay memory lost when the session table evicts.
+6. ~~ADR 0051 D3: the TLS private scalar stays in an EL1 static after INIT~~ — fixed 2026-11-10 (re-derived per INIT, zeroised).
+7. ~~ADR 0054 / 0045: nothing refuses a bench `HEQK_AP_PSK` image~~ — fixed 2026-11-10 (factory + release refuse it).
 8. ADR 0046 D4: software attestation-key private keys are tracked in git (`hboot/src/attest_keys.rs`); release
    builds must exclude them and verifiers must reject `otp_provisioned=0` quotes in production.
-9. ADR 0049 D2: the IPv6 source key uses an unkeyed hash (observe-only today; keyed hash before enforcement).
-10. ADR 0050 D3: owner-journal replay, `otaimg::check` and the upload form handlers have no fuzz target.
+9. ~~ADR 0049 D2: unkeyed IPv6 source hash~~ — fixed 2026-11-10 (SipHash-2-4, per-boot TRNG key).
+10. ADR 0050 D3: owner-journal replay and the upload form handlers have no host fuzz target (kernel crate; covered only by the in-kernel fixed-seed `[P-fuzz]`); the OS-image verifier now has one (`boot_abi::verify`, 1.6 M runs).
 
 ## 3. E2E / validation evidence (this audit)
 
@@ -148,6 +148,7 @@ payload 2,518,296 B, **619 KB headroom**.
 | Phase 4 | per-device behaviour baseline (IoT / camera / TV / printer learn their services for 24 h; a new service → rule 128, observe-only, hourly cap; phones never baselined) | `[P-devbase]` |
 
 | Phase 3 crash record | a panic / unexpected kernel fault writes its reason (message + location, or ESR/ELR/FAR) into a checksummed, cache-cleaned record in a reserved DRAM page before the EL2-gate reset; the next boot prints `[CRASH]` and serves `/api/health` `last_crash` | `[P-crashrec]`; metal J10 pending (DRAM survival across the reset unproven) |
+| Phase 3c self-heal | a Wi-Fi stream wedged 120 s (deliveries waiting, nothing from the firmware — the loop keeps running so the runtime watchdog cannot see it) resets the unit with a recorded reason; backoff: no second such reset when the previous one came < 15 min into its boot | `[P-crashrec]` backoff cases; metal: the reset path is J10's |
 | Rule 112 | broadcast storm per source device + ARP attribution | `[P8-l2struct]` household case |
 | A9 (part) | `boot_abi::verify` fuzz target (OS-update / boot verifier): 1.6 M runs, 0 crashes; `run.sh` abslot length fix | libFuzzer |
 
