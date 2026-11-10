@@ -4,6 +4,7 @@
 #   phase:<ID>                 validate.sh phase row "<ID> PASS" in the validate log given with --validate-log
 #   e2e                        "MC-E2E: PASS" in the mc-e2e log given with --e2e-log
 #   metal:<repo-path>:<regex>  an in-repo metal evidence file exists and matches the regex
+#   fuzz:<repo-path>:<regex>   an in-repo libFuzzer run record (tools/fuzz/run.sh output) matches the regex
 #   signoff:<name>             docs/release/signoffs/<name>.md with non-empty "Approved-by:" and "Decision:" lines
 #   blocked:<reason>           not built / not decided — fails until the line is replaced by real evidence
 # A release is READY only when every item passes. Never edit a line to pass without the evidence existing.
@@ -30,7 +31,7 @@ NET-01 | network | DNS under a saturating download: lost <= the path baseline (p
 NET-02 | network | LAN client end to end (DHCP, DNS, NAT, IPv6, holds) | metal:docs/design/metal-evidence/20261110-batch29.md:LAN-CLIENT: PASS
 NET-03 | network | WPA3-SAE + PMF on the AP (host SAE; opt-in, WPA2 default; transition mode serves SAE and WPA2-only stations) | phase:Psae,metal:docs/design/metal-evidence/20261110-batch38-47.md:WPA3: PASS \(6/6\)
 SEC-01 | isolation | ADR 0050 D4: network-facing parsers in isolated EL0 servers (HTTP, DNS/DHCP, WAN clients, Noise) | blocked:G24b not built
-SEC-02 | isolation | Coverage-guided fuzzing of the kernel-crate parsers (journal, upload, store, HTTP, DNS) | blocked:only hal + boot_abi targets today
+SEC-02 | isolation | Coverage-guided fuzzing of the network-facing parsers: kernel crate (HTTP request + form bodies, DNS wire, TLS ClientHello/JA4, frame classifier) + hal (POLICY/WAN/frame/glom/A-B slot) + boot-abi verifier; fixed-layout MAC/digest-verified stores (journal record, artifact manifest) by the in-kernel [P-fuzz] | phase:Pfuzz,fuzz:docs/design/fuzz-evidence.md:FUZZ: PASS
 SEC-03 | management | Mission Control end to end (HTTPS PQ hybrid, browser, actions) | e2e
 SEC-04 | management | Replay guard + write rate limit + login throttle | phase:Pseqfloor,phase:Pwriterate
 DET-01 | detection | Benign-corpus false-positive rate per rule (household captures) | blocked:benign corpus not collected

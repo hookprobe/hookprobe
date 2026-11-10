@@ -36,7 +36,7 @@ def check(ev, vlog, elog):
             return False, "UNVERIFIED", "no --e2e-log given"
         ok = "MC-E2E: PASS" in elog
         return ok, "PASS" if ok else "MISSING", "mc-e2e"
-    if kind == "metal":
+    if kind in ("metal", "fuzz"):  # an in-repo evidence file (metal run log / libFuzzer run log) + a regex
         path, _, rx = arg.partition(":")
         text = read(os.path.join(ROOT, path))
         if text is None:
