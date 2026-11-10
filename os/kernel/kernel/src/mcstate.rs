@@ -176,6 +176,7 @@ pub struct NetInfo {
     /// The per-device setup AP (no signed WIFI.TXT yet).
     pub setup_ap: bool,
     pub channel: u16,
+    pub width_mhz: u16,
     /// WAN 802.1Q VLAN (0 = untagged) and the management sub-interface (0 = none).
     pub wan_vlan: u16,
     pub mgmt_vlan: u16,
@@ -191,7 +192,7 @@ pub struct NetInfo {
     pub anchor_fp: u32,
 }
 
-pub const NET0: NetInfo = NetInfo { ssid: [0; 32], ssid_len: 0, setup_ap: false, channel: 0, wan_vlan: 0, mgmt_vlan: 0, mgmt_ip: [0; 4], gw: [0; 4], v6_prefix: [0; 8], v6_up: false, policy: 0, policy_gen: 0, anchor: 0, anchor_fp: 0 };
+pub const NET0: NetInfo = NetInfo { ssid: [0; 32], ssid_len: 0, setup_ap: false, channel: 0, width_mhz: 0, wan_vlan: 0, mgmt_vlan: 0, mgmt_ip: [0; 4], gw: [0; 4], v6_prefix: [0; 8], v6_up: false, policy: 0, policy_gen: 0, anchor: 0, anchor_fp: 0 };
 
 /// The device's Mission Control state. One instance, owned by the serve loop.
 pub struct McState {
