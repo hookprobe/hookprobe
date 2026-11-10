@@ -28,6 +28,11 @@ pub use crate::httpreq::{parse, query_str, query_u32, ParseErr, Req, MAX_BODY};
 
 /// Map a URL path to an embedded asset: `/` → `index.html`; `/a/b` or `/a/b/` → `a/b/index.html`
 /// (Astro's directory format); otherwise the exact file. Paths containing `..` never resolve.
+/// The embedded incident story page, if this UI build ships one (the /investigate/:id route serves it).
+fn find_incident_page() -> Option<&'static Asset> {
+    UI_ASSETS.iter().find(|a| a.path == "investigate/incident/index.html")
+}
+
 pub fn asset_for(path: &str) -> Option<&'static Asset> {
     if path.contains("..") {
         return None;
@@ -48,7 +53,18 @@ pub fn asset_for(path: &str) -> Option<&'static Asset> {
     }
     idx[..dir.len()].copy_from_slice(dir.as_bytes());
     idx[dir.len()..dir.len() + tail.len()].copy_from_slice(tail);
-    find(core::str::from_utf8(&idx[..dir.len() + tail.len()]).ok()?)
+    if let Some(a) = find(core::str::from_utf8(&idx[..dir.len() + tail.len()]).ok()?) {
+        return Some(a);
+    }
+    // Mission Control route map (/investigate/:id): one path segment under /investigate/ that is not one of its own
+    // pages ("queue", "incident") and matched no asset above is the incident story page; the page reads the
+    // (still percent-encoded) id from the path itself.
+    if let Some(seg) = dir.strip_prefix("investigate/") {
+        if !seg.is_empty() && !seg.contains('/') && seg != "queue" && seg != "incident" {
+            return find("investigate/incident/index.html");
+        }
+    }
+    None
 }
 
 /// What to send back.
@@ -539,6 +555,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = write!(w, ",\"http_parser\":{{\"where\":\"{}\",\"requests\":{},\"parser_faults\":{},\"server_faults\":{},\"server_restarts\":{}}}",
                     if el0 { "el0" } else { "el1 (EL0 server not loaded)" }, n, f, t, r);
             }
+            {
+                let (wh, c, f, r, k) = crate::lansvc::stats();
+                let _ = write!(w, ",\"dns_parser\":{{\"where\":\"{}\",\"el0_messages\":{},\"el0_faults\":{},\"el0_restarts\":{},\"in_kernel_messages\":{}}}", wh, c, f, r, k);
+            }
             // the capability manifest's granted ids, echoed for the UI (last: existing field order unchanged)
             w.raw(",\"capabilities\":");
             crate::capabilities::render_granted(w);
@@ -793,7 +813,10 @@ pub fn mc_selftest() -> bool {
     let errs_ok = s5 == 404 && s6 == 405
         && req(b"GET /api/x HTTP/1.1\r\n") == Err(ParseErr::Incomplete)
         && req(b"garbage\r\n\r\n") == Err(ParseErr::Bad)
-        && asset_for("/../../etc/passwd").is_none();
+        && asset_for("/../../etc/passwd").is_none()
+        && asset_for("/investigate/../../etc/passwd").is_none()
+        && asset_for("/investigate/a/b").map(|a| a.path) != Some("investigate/incident/index.html")
+        && (find_incident_page().is_none() || asset_for("/investigate/inc%3Aheqk%3A0a63000a").map(|a| a.path) == Some("investigate/incident/index.html"));
     let sse_ok = matches!(handle(&parse(b"GET /api/stream HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &st, &mut auth, 1, || Some([0; 16]), &mut scratch).body, Body::Sse)
         && !matches!(handle(&parse(b"GET /api/stream HTTP/1.1\r\n\r\n").unwrap(), &st, &mut auth, 1, || Some([0; 16]), &mut scratch).body, Body::Sse) && {
         let n = sse_update(&st, &mut scratch);

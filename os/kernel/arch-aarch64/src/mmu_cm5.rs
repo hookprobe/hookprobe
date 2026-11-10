@@ -66,6 +66,11 @@ pub const USER_GB: u64 = 5;
 pub const USER_VA_BASE: usize = (USER_GB * GB) as usize; // 0x1_4000_0000
 static mut L2_USER: Table = Table([0; 512]);
 static mut L3_USER: Table = Table([0; 512]);
+/// The window's SECOND 2 MiB block (ADR 0050 D4 step 2: a third EL0 server — `el0-lansvc` — next to the Wasm and TLS
+/// hosts, which fill the first block). Global (single-AS) grants only; per-ASID spaces keep the 2 MiB window.
+static mut L3_USER2: Table = Table([0; 512]);
+/// Size of the global EL0 grant window (two L3-mapped 2 MiB blocks).
+pub const USER_WINDOW: usize = 2 * M2 as usize;
 
 // P8 — JIT code window at GB6 (0x1_8000_0000), an unused-on-CM5 GB. Its first
 // 2 MiB block is L3-mapped so the BPF JIT can install EL1 RO+X code pages on
@@ -114,7 +119,7 @@ pub fn map_user_code(va: usize, pa: usize) {
 /// Map an EL0 RW data/stack page. Returns whether the grant was installed (false
 /// if `va` fell outside the GB5 user window — fail-closed, same as write_user_l3).
 pub fn map_user_data(va: usize, pa: usize) -> bool {
-    if !user_va_ok(va) {
+    if !user_va_ok_global(va) {
         return false;
     }
     write_user_l3(va, user_page(pa as u64, AP_RW_EL0, ATTR_NORMAL, PXN | UXN));
@@ -123,7 +128,7 @@ pub fn map_user_data(va: usize, pa: usize) -> bool {
 /// CORE-1 — map an EL0 READ-ONLY data page (AP read-only): the attribute a Frame
 /// cap lacking the `W` right maps to. Returns false if `va` is out of the window.
 pub fn map_user_data_ro(va: usize, pa: usize) -> bool {
-    if !user_va_ok(va) {
+    if !user_va_ok_global(va) {
         return false;
     }
     write_user_l3(va, user_page(pa as u64, AP_RO_EL0, ATTR_NORMAL, PXN | UXN));
@@ -133,7 +138,7 @@ pub fn map_user_data_ro(va: usize, pa: usize) -> bool {
 /// tlbi), the primitive `caps::revoke` uses to sever a Frame cap's authority.
 /// write_user_l3(0) fail-closes on an out-of-window `va`. Returns true if in-window.
 pub fn unmap_user(va: usize) -> bool {
-    if !user_va_ok(va) {
+    if !user_va_ok_global(va) {
         return false;
     }
     write_user_l3(va, 0); // invalid descriptor — EL0 access now faults
@@ -164,12 +169,17 @@ pub fn map_user_nc(va: usize, pa: usize) {
 fn user_va_ok(va: usize) -> bool {
     va >= USER_VA_BASE && va < USER_VA_BASE + M2 as usize && (va & 0xFFF) == 0
 }
+/// The global (single-AS) window: both 2 MiB blocks.
+#[inline]
+fn user_va_ok_global(va: usize) -> bool {
+    va >= USER_VA_BASE && va < USER_VA_BASE + USER_WINDOW && (va & 0xFFF) == 0
+}
 fn write_user_l3(va: usize, desc: u64) {
-    if !user_va_ok(va) {
+    if !user_va_ok_global(va) {
         // Fail closed: refuse to install a grant at an aliased slot.
         return;
     }
-    let l3 = addr_of_mut!(L3_USER) as *mut u64;
+    let l3 = if va - USER_VA_BASE < M2 as usize { addr_of_mut!(L3_USER) as *mut u64 } else { addr_of_mut!(L3_USER2) as *mut u64 };
     unsafe {
         core::ptr::write_volatile(l3.add(user_l3_idx(va)), desc);
         core::arch::asm!("dsb ish");
@@ -316,6 +326,7 @@ pub fn enable_identity() {
         let l2u = addr_of_mut!(L2_USER) as *mut u64;
         let l3u = addr_of_mut!(L3_USER) as *mut u64;
         core::ptr::write_volatile(l2u.add(0), (l3u as u64) | TABLE);
+        core::ptr::write_volatile(l2u.add(1), (addr_of_mut!(L3_USER2) as u64) | TABLE);
         core::ptr::write_volatile(l1.add(USER_GB as usize), (l2u as u64) | TABLE);
         // GB6 = the JIT code window: L1[6] -> L2_JIT -> L3_JIT (empty now; the JIT
         // fills L3_JIT slots at run time). Overwrites the unused GB6 device block.
