@@ -47,3 +47,9 @@ path = "fuzz_targets/abslot.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "dhcp_wire"
+path = "fuzz_targets/dhcp_wire.rs"
+test = false
+doc = false
