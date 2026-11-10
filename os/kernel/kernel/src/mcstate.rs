@@ -167,6 +167,33 @@ pub struct WanFacts {
     pub blocklist: u32,
 }
 
+/// The network configuration the AP applied (`GET /api/network`, the "Get Online" pillar) — read-only;
+/// changes go through the signed WIFI.TXT / WAN.TXT / POLICY.TXT (or a future owner-journal kind).
+#[derive(Clone, Copy, Debug)]
+pub struct NetInfo {
+    pub ssid: [u8; 32],
+    pub ssid_len: u8,
+    /// The per-device setup AP (no signed WIFI.TXT yet).
+    pub setup_ap: bool,
+    pub channel: u16,
+    pub width_mhz: u16,
+    /// WAN 802.1Q VLAN (0 = untagged) and the management sub-interface (0 = none).
+    pub wan_vlan: u16,
+    pub mgmt_vlan: u16,
+    pub mgmt_ip: [u8; 4],
+    pub gw: [u8; 4],
+    pub v6_prefix: [u8; 8],
+    pub v6_up: bool,
+    /// POLICY.TXT: 0 none, 1 signed (verified), 2 unsigned (standalone image), 3 refused.
+    pub policy: u8,
+    pub policy_gen: u64,
+    /// Trust anchor (ADR 0049 D1): 0 unknown, 1 pinned now, 2 pinned earlier, 3 image key conflict (pin kept), 4 standalone.
+    pub anchor: u8,
+    pub anchor_fp: u32,
+}
+
+pub const NET0: NetInfo = NetInfo { ssid: [0; 32], ssid_len: 0, setup_ap: false, channel: 0, width_mhz: 0, wan_vlan: 0, mgmt_vlan: 0, mgmt_ip: [0; 4], gw: [0; 4], v6_prefix: [0; 8], v6_up: false, policy: 0, policy_gen: 0, anchor: 0, anchor_fp: 0 };
+
 /// The device's Mission Control state. One instance, owned by the serve loop.
 pub struct McState {
     dets: [Det; DET_CAP],
@@ -198,7 +225,12 @@ pub struct McState {
     /// True once a validated SNTP reply has set the wall clock (the UI shows "unsynced" otherwise).
     pub clock_synced: bool,
     /// The device's own WAN (the AP image): None on a passive sensor.
-    pub wan: Option<WanFacts>,
+    /// The AP's WAN facts (`set_wan` / `wan`). Stored as a value + flag, not `Option<WanFacts>`:
+    /// the Option's `None` niche (up = 2) made the whole 33 KB state non-zero -> .data (image budget).
+    wan_v: WanFacts,
+    wan_ok: bool,
+    net_v: NetInfo,
+    net_ok: bool,
     /// How many of the newest detections the device seals across a reboot (0 = none persisted).
     pub sealed_cap: u16,
     /// Passive inventory: (IPv4 host order, last seen epoch ms). 0 = empty slot.
@@ -233,20 +265,50 @@ impl McState {
             rlen: 0,
             boot_epoch_ms: 0,
             boot_ticks: 0,
-            cntfrq: 1,
+            cntfrq: 0, // read through frq() (>= 1); zero keeps STATE in .bss (image budget)
             seen: 0,
             dropped: 0,
             forwarded: 0,
             change: 0,
             cloud_linked: false,
             clock_synced: false,
-            wan: None,
+            wan_v: WanFacts { up: false, ip: [0; 4], mode: 0, ipv6: false, clients: 0, pkts_out: 0, pkts_in: 0, dns_inspected: 0, dns_blocked: 0, blocklist: 0 },
+            wan_ok: false,
+            net_v: NET0,
+            net_ok: false,
             sealed_cap: 0,
             hosts: [(0, 0, 0); HOST_CAP],
             leases: [arch_aarch64::dhcpd::LEASE0; arch_aarch64::dhcpd::LEASES],
             nleases: 0,
             lease_now: 0,
         }
+    }
+
+    /// Counter frequency, never zero (the static starts all-zero so it lives in .bss).
+    #[inline]
+    fn frq(&self) -> u64 {
+        self.cntfrq.max(1)
+    }
+
+    /// Record the AP's WAN facts (shown by /api/health).
+    pub fn set_wan(&mut self, f: WanFacts) {
+        self.wan_v = f;
+        self.wan_ok = true;
+    }
+
+    /// Record the applied network configuration (`GET /api/network`).
+    pub fn set_net(&mut self, n: NetInfo) {
+        self.net_v = n;
+        self.net_ok = true;
+    }
+
+    pub fn net(&self) -> Option<NetInfo> {
+        if self.net_ok { Some(self.net_v) } else { None }
+    }
+
+    /// The AP's WAN facts, once the AP loop has reported them.
+    pub fn wan(&self) -> Option<WanFacts> {
+        if self.wan_ok { Some(self.wan_v) } else { None }
     }
 
     /// Anchor `cntpct` ticks to wall time: `boot_epoch_ms` is the epoch at `boot_ticks`.
@@ -285,6 +347,15 @@ impl McState {
         Some(step)
     }
 
+    /// Readiness 3.7: set the wall clock from the board RTC before NTP answers. Timestamps become real time at once,
+    /// but the clock stays NOT synced — the first NTP reply may still step it by any amount (an RTC that drifted or
+    /// was set wrong is corrected, never locked in by the re-sync bound).
+    pub fn set_clock_provisional(&mut self, epoch_ms: u64, now_ticks: u64) -> i64 {
+        let step = self.sync_clock(epoch_ms, now_ticks).unwrap_or(0);
+        self.clock_synced = false;
+        step
+    }
+
     /// Wall time for a duration measured from the clock anchor (`boot_ticks`) — the serve loop's
     /// `now_ms` convention.
     pub fn epoch_at_ms(&self, ms_since_anchor: u64) -> u64 {
@@ -293,12 +364,12 @@ impl McState {
 
     /// The `cntpct` value at `ms_since_anchor` (the serve loop's `now_ms`).
     pub fn ticks_at_ms(&self, ms_since_anchor: u64) -> u64 {
-        self.boot_ticks.saturating_add(ms_since_anchor.saturating_mul(self.cntfrq) / 1000)
+        self.boot_ticks.saturating_add(ms_since_anchor.saturating_mul(self.frq()) / 1000)
     }
 
     pub fn epoch_ms(&self, ticks: u64) -> u64 {
         let dt = ticks.saturating_sub(self.boot_ticks);
-        self.boot_epoch_ms + dt / self.cntfrq * 1000 + (dt % self.cntfrq) * 1000 / self.cntfrq
+        { let f = self.frq(); self.boot_epoch_ms + dt / f * 1000 + (dt % f) * 1000 / f }
     }
 
     /// Record one drained SOAR event (the oldest is overwritten at capacity).
@@ -395,7 +466,7 @@ impl McState {
             }
             let [a, b, c, d] = l.ip;
             let mm = l.mac;
-            let ep = |s: u64| self.epoch_ms(s.saturating_mul(self.cntfrq)) / 1000;
+            let ep = |s: u64| self.epoch_ms(s.saturating_mul(self.frq())) / 1000;
             let _ = write!(out, "{{\"id\":\"dev-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}\",\"ip\":\"{a}.{b}.{c}.{d}\",\"mac\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"first_seen\":{},\"last_seen\":{},\"hostname\":",
                 mm[0], mm[1], mm[2], mm[3], mm[4], mm[5], mm[0], mm[1], mm[2], mm[3], mm[4], mm[5], ep(l.first), ep(l.last));
             if l.hlen > 0 {
@@ -760,7 +831,7 @@ impl McState {
         let (a, b) = (f.src, f.dst);
         let _ = write!(out, "{{\"id\":\"flow:heqk:{}:{}\",\"ts\":", f.slot, f.first);
         ts(out, self.epoch_ms(f.first));
-        let idle = now_ticks.saturating_sub(f.last) > 30 * self.cntfrq;
+        let idle = now_ticks.saturating_sub(f.last) > 30 * self.frq();
         let _ = write!(out, ",\"src_ip\":\"{}.{}.{}.{}\",\"src_port\":{},\"dst_ip\":\"{}.{}.{}.{}\",\"dst_port\":{},\"proto\":\"{}\",\"conn_state\":\"{}\",\"orig_bytes\":{},\"resp_bytes\":{}}}",
             a[0], a[1], a[2], a[3], if f.proto == 1 { 0 } else { f.sport }, b[0], b[1], b[2], b[3], f.dport,
             match f.proto { 6 => "tcp", 17 => "udp", 1 => "icmp", _ => "ip" },

@@ -1,32 +1,41 @@
 # HEQK Production-Readiness Report
 
-> **Current status: 2026-11-09 — the ordered checklist below supersedes §4 and §7–§8** (kept underneath as
+> **PRODUCTION READINESS: BLOCKED by customer OTP provisioning** (owner decision pending — decision record
+> `heqk-decision-record-otp-rpmb-2026-11-10.md`, repository-root design docs).
+>
+> **Current status: 2026-11-10 (metal batch 29) — the ordered checklist below supersedes §4 and §7–§8** (kept underneath as
 > the July history). Scope: hardware + kernel + detection for a commercial product; the UI is owned by the
 > UI/UX designer. Legend: **D** = needs an operator decision, **B** = needs the CM5 bench, **A** = buildable
 > autonomously (QEMU first, then bench). Detailed software gaps: the parity-gap register (`heqk-parity-gaps.md`, repository-root design docs); board
-> plan: `heqk-metal-test-plan.md` (same place).
+> plan: `heqk-metal-test-plan.md` (same place). **Execution order:** `heqk-production-phases-2026-11-09.md`
+> (Phase 1 OTA trust chain → 2 key custody → 3 field self-heal → 4 detection on the shipped path → 5 parser
+> isolation → 6 Wi-Fi features → 7 legal / factory).
 
 ### Done since July (metal-proven)
 Product AP image with persistence (G12), SEC-2 OTP carve-out, signed POLICY/lists/IOC/rules/OUI/devices
 (ADR 0049/0052), Shield v2 + levels (ADR 0057), owner journal (ADR 0055), signed data-pack upload (ADR 0056
 ph.1), sealed evidence log (#54), WPA2 AP + NAT at 100–150 Mbps, IPv6 (PPPoE/DHCP/RA/PD), VLAN/mgmt/ACLs,
-TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 apcore steps 1–3a.
+TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 apcore steps 1–3c, runtime watchdog (metal: armed, worst loop gap 330–347 ms), **OS update over Mission Control
+(J1 commit 9/9 twice, J2 rollback 7/7)**, trust-anchor pin, in-loop WAN DHCP renewal + outage recovery, `/api/network`.
+
+> **Audit 2026-11-10:** `heqk-audit-2026-11-10.md` in the repository-root design docs — feature truth
+> table, ADR compliance, evidence, the autonomous plan (A1–A12) and the human-dependency register.
 
 ### 1. Release blockers — trust chain and supply
 | # | Item | Kind | State |
 |---|---|---|---|
 | 1.1 | Production signing key custody (HSM / ceremony), reproducible signed release build (PH4) | D | dev key only |
 | 1.2 | Secure-boot fuses (SEC-3) — irreversible, a provisioning-line step | D | out of scope (operator 2026-11-09) |
-| 1.3 | Persistent anti-rollback (SEC-6 SVN + POLICY generation floor, RPMB or fuse) | D+B | compile-time floor only |
+| 1.3 | Persistent anti-rollback (SEC-6 SVN + POLICY generation floor, RPMB or sealed counter — no fuse writes) | D+B | HBoot refuses a lower image (OTP SVN floor); OS-image uploads refuse SVN below the running image; POLICY floor persisted (sealed, `[P-anchor]`). Open: advancing the OTP floor (fuse = operator), RPMB monotonic counter for journal/pack rollback (one-time key = operator) |
 | 1.4 | Per-unit factory provisioning (owner token, setup credential, MCTLS, label/QR, self-test log) | A+B | bench scripts only |
-| 1.5 | OS image update over the network (ADR 0056 phase 2 → existing tryboot/abcommit) | A+B (design review: inactive-slot write admission) | not built |
+| 1.5 | OS image update over the network (ADR 0056 phase 2 → existing tryboot/abcommit) | A+B | **done, metal** — J1 (corrupt refused, signed SVN+1 uploaded, trial, commit-on-health, cold boot verified) and J2 (unhealthy trial rolls back); factory slot padding done |
 
 ### 2. Kernel hardening
 | # | Item | Kind | State |
 |---|---|---|---|
 | 2.1 | ADR 0050 D4: HTTP parse, DHCP server, DNS forwarder, PPPoE/DHCP/RA clients, Noise, WPA2 authenticator → EL0 | A | TLS in EL0; the rest EL1 |
-| 2.2 | G0 apcore steps 3b–5 (IPv6 / discovery / eth1 / Wi-Fi queue / mgmt / tick) | A | steps 1–3a done |
-| 2.3 | Coverage-guided host fuzzing of every parser + the upload / journal / store formats | A | **partly built**: libFuzzer over the host-buildable `hal` parsers (`tools/fuzz`, CI job; 15M+ runs, 0 crashes); kernel-crate parsers still fixed-seed `[P-fuzz]` — host-buildable split of those modules is the next step |
+| 2.2 | G0 apcore steps 4–5 (Wi-Fi queue / mgmt / tick) | A | steps 1–3c done (client4 incl. eth1, client6, station_relay) |
+| 2.3 | Coverage-guided host fuzzing of every parser + the upload / journal / store formats | A | **partly built**: libFuzzer over the host-buildable `hal` parsers (`tools/fuzz/heqk-hal/fuzz_targets`, CI job; 15M+ runs, 0 crashes) + A/B slot derivation (12.2 M) + the OS-image verifier `boot_abi::verify` (1.6 M); kernel-crate parsers still fixed-seed `[P-fuzz]` — host-buildable split of those modules is the next step |
 | 2.4 | Owner-journal compaction (refused after ~1,000 records) | A | **built** (stage B, QEMU) — metal next batch |
 | 2.5 | eMMC multi-block reads (boot time, larger stores) | A+B | **built** (CMD18, self-checked at probe) — metal batch 22 |
 | 2.6 | Crypto assurance: libcrux ML-KEM decision; P-256 on-board timing run | D / B | source review done |
@@ -34,19 +43,19 @@ TLS 1.3 with X25519MLKEM768 on Mission Control, eMMC at 25 MHz (boot 60 s), G0 a
 ### 3. Hardware and field reliability
 | # | Item | Kind | State |
 |---|---|---|---|
-| 3.1 | ≥ 72 h soak under real traffic (memory, counters, Wi-Fi stalls, NAT pressure, thermal, eMMC writes) | B | not run |
-| 3.2 | Wi-Fi TX-stall root cause | B | mitigated (kick) |
+| 3.1 | ≥ 72 h soak under real traffic (memory, counters, Wi-Fi stalls, NAT pressure, thermal, eMMC writes) | B | 55 min + 8 h runs (2026-11-10: health ok, 0 serial faults, 45–92 Mbps on the local sink); 24 h queued (batch 30); 72 h open |
+| 3.2 | Wi-Fi TX-stall root cause | B | mitigated (kick); a stream still wedged after 120 s now resets the unit with a recorded reason (self-heal, backoff) — QEMU; metal J10 for the reset path |
 | 3.3 | Scale: many mixed clients, roaming, sleep-heavy phones (design: 128 leases) | B | 2 bench clients |
 | 3.4 | Randomized power-loss torture of journal / store / evidence log | B | single cuts PASS |
 | 3.5 | Thermal in the enclosure at sustained throughput | B | open |
 | 3.6 | WPA3-SAE + PMF, guest SSID; 5 GHz DFS (stock CLM forbids) | A+B | WPA2 only |
-| 3.7 | Wall clock without network (RTC) | B | NTP only |
+| 3.7 | Wall clock without network (RTC) | B | **built** (ffda850a): board RTC read at AP start (provisional — NTP still corrects it), written back after each NTP sync; HBoot proxy allows RTC register 0 only (never the backup-cell charger). Metal: batch 30 (warm reset keeps it; a power cut keeps it only with a backup cell) |
 
 ### 4. Detection
 | # | Item | Kind | State |
 |---|---|---|---|
 | 4.1 | Accuracy benchmark: replayed benign + attack corpus → FP / detection rate per rule | A | **built** (`tools/detbench`, QEMU replay with the recorded clock); first run fixed 3 detector defects (MAC-flood slot hash, per-packet alert storms, ARP poisoning undetected → rule 127); all 8 synthetic attack classes detected — benign corpus from real captures in progress |
-| 4.2 | Coverage: IPv6 LAN↔LAN lateral, IPv6-only devices, encrypted-traffic behaviour beyond JA4 | A | open — evasive IPv4 variants (slow scan / exfil / brute, jittered beacon, DNS tunnel) **built** 2026-11-09 |
+| 4.2 | Coverage: IPv6 LAN↔LAN lateral, IPv6-only devices, encrypted-traffic behaviour beyond JA4 | A | IPv6 lateral **built** (`[P-lateral6]`); per-device behaviour baseline for IoT (rule 128, `[P-devbase]`); rule 112 storm now per source device — evasive IPv4 variants (slow scan / exfil / brute, jittered beacon, DNS tunnel) **built** 2026-11-09 |
 | 4.3 | Detection modules as signed Wasm at catalogue parity (napse-dpi, qsecbit, dnsXai) | A | one module at parity |
 | 4.4 | Threat-intel publishing pipeline (sources → signed packs → generations) for the upload channel | A+D | channel built |
 | 4.5 | Owner alert delivery (beyond syslog/SIEM) | A+D | none |

@@ -103,12 +103,73 @@ pub fn selftest() -> bool {
     pass
 }
 
+/// WAN.SIG (audit 2026-11-10 finding 11): the operator's signature over WAN.TXT, same 512-B layout as the other
+/// signed packs — "HQNSIG1\0" | gen u64 LE | len u64 LE | sha256(WAN.TXT[..len]) | Ed25519(key, "HQWAN1" | gen | len |
+/// sha256) | 0-pad. Distinct tag: no other pack's signature verifies as WAN.
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
+pub const WAN_SIG_8_3: &[u8; 11] = b"WAN     SIG";
+
+/// Verify a WAN.SIG over the stored WAN.TXT bytes. Returns the generation.
+pub fn verify_wan(body: &[u8], sig: &[u8], key: &[u8; 32]) -> Result<u64, SigErr> {
+    if sig.len() < 120 || &sig[..8] != b"HQNSIG1\0" {
+        return Err(SigErr::Malformed);
+    }
+    let gen = u64::from_le_bytes(sig[8..16].try_into().unwrap());
+    let len = u64::from_le_bytes(sig[16..24].try_into().unwrap()) as usize;
+    if len > body.len() {
+        return Err(SigErr::Malformed);
+    }
+    let d = boot_abi::sha256::digest(&body[..len]);
+    if d[..] != sig[24..56] {
+        return Err(SigErr::DigestMismatch);
+    }
+    let mut m = [0u8; 54];
+    m[..6].copy_from_slice(b"HQWAN1");
+    m[6..14].copy_from_slice(&gen.to_le_bytes());
+    m[14..22].copy_from_slice(&(len as u64).to_le_bytes());
+    m[22..].copy_from_slice(&d);
+    let pk = ed25519_compact::PublicKey::from_slice(key).map_err(|_| SigErr::Malformed)?;
+    let s = ed25519_compact::Signature::from_slice(&sig[56..120]).map_err(|_| SigErr::Malformed)?;
+    pk.verify(&m[..], &s).map_err(|_| SigErr::BadSignature)?;
+    Ok(gen)
+}
+
+/// `[P-wansig]`: a signed WAN.TXT verifies; a changed byte, another pack's signature, another key are refused.
+pub fn wansig_selftest() -> bool {
+    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x57; 32]));
+    let other = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x58; 32]));
+    let mut body = [0u8; 512];
+    let txt = b"mode=dhcp\nmgmt_floor=10.200.0.0/24\n";
+    body[..txt.len()].copy_from_slice(txt);
+    let mk = |magic: &[u8; 8], tag: &[u8; 6], kp: &ed25519_compact::KeyPair| crate::artstore::test_sig(magic, tag, 3, &body[..txt.len()], kp);
+    let good = verify_wan(&body, &mk(b"HQNSIG1\0", b"HQWAN1", &kp), &kp.pk) == Ok(3);
+    let mut tampered = body;
+    tampered[txt.len() - 3] = b'5'; // mgmt_floor widened after signing
+    let tamper = verify_wan(&tampered, &mk(b"HQNSIG1\0", b"HQWAN1", &kp), &kp.pk) == Err(SigErr::DigestMismatch);
+    let cross = verify_wan(&body, &mk(b"HQNSIG1\0", b"HQWIF1", &kp), &kp.pk) == Err(SigErr::BadSignature);
+    let wrongkey = verify_wan(&body, &mk(b"HQNSIG1\0", b"HQWAN1", &other), &kp.pk) == Err(SigErr::BadSignature);
+    let pass = good && tamper && cross && wrongkey;
+    arch_aarch64::_print(format_args!(
+        " [P-wansig] {} — WAN.TXT signature (audit finding 11): signed file verifies={} a widened mgmt_floor after signing refused={} a WIFI-tagged signature refused={} another key refused={}\n",
+        if pass { "PASS" } else { "FAIL" }, good, tamper, cross, wrongkey));
+    pass
+}
+
 /// The operator key the signed-pack loaders verify against: the one compiled into the signed image.
 /// `[P-artstore]` swaps in its own key for the duration of the self-test (boot, before any network
 /// service starts) and restores it; nothing else writes it.
 static mut TEST_KEY: Option<[u8; 32]> = None;
 pub fn key() -> Option<[u8; 32]> {
-    unsafe { TEST_KEY }.or(POLICY_PUBKEY)
+    // The device-pinned anchor (crate::anchor) wins over the image's compiled key once the boot installed it.
+    unsafe { TEST_KEY }.or(match crate::anchor::effective() {
+        Some(k) => k,
+        None => POLICY_PUBKEY,
+    })
+}
+
+/// The POLICY generation floor: the image's compiled floor or the device's persisted one, whichever is higher.
+pub fn floor() -> u64 {
+    POLICY_GEN_FLOOR.max(crate::anchor::policy_floor())
 }
 pub fn selftest_key(k: Option<[u8; 32]>) {
     unsafe { TEST_KEY = k };

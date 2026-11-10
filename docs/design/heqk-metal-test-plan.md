@@ -110,6 +110,28 @@ Legend — **Evidence** = what to capture into `~/heqk-metal-logs/<date>-<id>.tx
 | I8 | Per-device MAC | `[WIFI] per-device MAC 02:..` (or x2/x6/xa/xe first octet); the phone sees that BSSID; same value after a power cycle | serial + phone |
 | I9 | Request-level G14 checks from the mgmt laptop: `os/kernel/tools/actions-metal.sh <owner-key-file> https://<mgmt ip>` (H7–H10) | replay 409, foreign Origin 403, missing CSRF 403, TTL 400, mgmt-floor hold refused, wrong owner key refused | curl |
 
+## J. Production phases (OTA, self-heal, trust anchor) — 2026-11-10
+
+Scripts: `tools/diagnostics/cm5-ota-check.sh`, `cm5-soak.sh`, `cm5-throughput-check.sh` (local WAN-side sink),
+`pi-ensure-ap.sh`. Images for J1: two factory builds of ONE commit (identical HBoot) with `SVN=1 HEQK_BUILD_ID=a`
+and `SVN=2 HEQK_BUILD_ID=b` (`$CLAUDE_JOB_DIR/tmp/fac.sh` pattern).
+
+| ID | Test | Expected | Evidence |
+|---|---|---|---|
+| J1 | OS update over Mission Control: corrupted image, then the signed SVN+1 image | corrupted refused at finish ("bad signature"); real image written + re-hashed from the slot; tryboot trial; `[OTA] this boot: Trial`; `[OTA] COMMITTED` once AP + WAN are up; power cycle → `[OTA] this boot: Cold build=<new>` | `cm5-ota-check.sh` |
+| J2 | Trial that never gets a usable WAN (WAN DHCP blocked during the trial) | `[OTA] trial not healthy within 5 min` → reboot → the previous slot runs (cold) | `cm5-ota-rollback-check.sh` — **PASS 7/7 on metal 2026-11-10 (batch 29)** |
+| J3 | Runtime watchdog | `[WDOG] armed=true`, worst loop gap well under 16 s through a soak | serial / soak |
+| J4 | Trust anchor | first boot `[ANCHOR] … PINNED`; next boot `[ANCHOR] pinned operator key`; an image built with another key reports the conflict and still verifies POLICY.TXT with the pinned key | serial |
+| J5 | WAN RX ring 512 (AP image) | `cm5-throughput-check.sh` against the local sink: `res_err` stays low and throughput ≥ the internet baseline (128-ring: ~6 Mbps, 64 % res_err) | script + serial |
+| J6 | IPv6 re-probe | boot with kea stopped, start it: `[WAN6] re-probe #1 after a late Router Advertisement: IPv6 UP` and the LAN renumbers | serial |
+| J8 | WAN outage (boot with WAN DHCP blocked) | AP up; 60 HTTP probes to the AP from a Wi-Fi client: <= 1 failed, worst < 1 s; Mission Control answers over Wi-Fi; `[WAN] … in-loop DHCP`; unblock → `[M-NAT0] WAN came up (in-loop DHCP` without a reboot | `cm5-wan-outage-check.sh` — batch 29: recovery checks PASS; the responsiveness checks used ICMP, which that image did not answer (echo added in 73a61f18) — rerun |
+| J9 | Lease renewal in the loop | `[WAN renew] … acks=` grows every lease/2, `[WDOG] worst_loop_gap_ms` stays far below the 3,279 ms of the old blocking renewal | serial |
+| J7 | 72 h soak | no reboot / fault, counters monotonic, throughput floor held | `cm5-soak.sh` (8 h run started 2026-11-10 02:57, image W) |
+| J10 | Crash record (bench image with `--features crashtest`) | boot 1 panics 120 s into the AP loop and resets through the EL2 gate; boot 2 prints `[CRASH] the previous boot ended in a panic: … crashtest …` and `/api/health` `last_crash.kind = panic`; boot 2 does not panic again. If DRAM does not keep the page across the reset, boot 2 prints no `[CRASH]` (record the result either way) | serial + `/api/health` |
+| J12 | Power-loss torture (readiness 3.4) | 10 random power cuts while owner rules are being written: journal replays every time (torn tails dropped, counted), every acknowledged rule survives, evidence log mounts, Mission Control answers | `cm5-powerloss-torture.sh` |
+| J13 | Board RTC (readiness 3.7) | after NTP: `[RTC] board RTC set from NTP`; after a warm reset (J10's crash): `[RTC] wall clock … from the board RTC` before any NTP line; after a power cut without a backup cell: `[RTC] board RTC reads … (unset …)` | serial (batch 30 summary) |
+| J11 | Broadcast storm per source (7696fbac) | normal household traffic never raises rule 112; a single client flooding broadcasts (`arping -b` / `nping --dest-mac ff:ff:ff:ff:ff:ff` > 5 per s) is attributed by IP and rate-limited alone, other clients' ARP/DHCP unaffected | serial + Mission Control |
+
 ## E. Platform (from earlier sessions, still open)
 
 | ID | Test | Expected |

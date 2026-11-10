@@ -150,6 +150,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     // It is RE-ARMED before the EL1 handoff below, so a healthy kernel still gets a full
     // window in which to hvc#1-confirm. `arm()` is a plain register write and is safely
     // idempotent.
+    // Read the reset status BEFORE arming (arm() does not touch RSTS, but keep the order obvious).
+    let (rsts, wdog_reset) = watchdog::last_reset();
+    puts(" reset  : PM_RSTS ");
+    puthex(rsts as u64);
+    puts(if wdog_reset { " — previous reset was a WATCHDOG reset\n" } else { "\n" });
     const TRIAL_WDOG_SECS: u32 = 15;
     let wdog_secs_early = watchdog::arm(TRIAL_WDOG_SECS);
     puts(" a/b    : safety watchdog armed BEFORE verify ");
@@ -298,8 +303,10 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
 
     // B-1 (extractability): provision (once) + derive the per-device AK bound to
     // the OTP secret — non-extractable from the image. Burns customer OTP on the
-    // first boot only; idempotent thereafter; falls back to the software AK if
-    // the mailbox/burn does not deliver a secret. MUST run before any AK signing.
+    // first boot ONLY in a factory-provisioning build (`otp-provision`); a normal
+    // image never writes OTP and uses the software AK on a blank unit. Falls back
+    // to the software AK if the mailbox/burn does not deliver a secret. MUST run
+    // before any AK signing.
     let mut ak = ak_derive::provision_and_derive();
 
     // B-1 (identity): this device's unique serial (fail-safe: 0 if unreachable).
@@ -388,7 +395,7 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
                 measure_count: m.count(),
                 quote_pa: ATTEST_QUOTE_ADDR as u64,
                 eph_pa: ATTEST_EPH_ADDR as u64,
-                boot_flags: BOOT_FLAG_TRIAL_WDOG,
+                boot_flags: BOOT_FLAG_TRIAL_WDOG | BOOT_FLAG_RT_WDOG | if wdog_reset { BOOT_FLAG_WDOG_RESET } else { 0 },
                 watchdog_secs: wdog_secs as u64,
             },
         );
