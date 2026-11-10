@@ -60,6 +60,7 @@ fn main() {
         build_wasip1_fixture(&dir, &std::env::var("OUT_DIR").unwrap());
     }
     gen_policy_key(&std::env::var("OUT_DIR").unwrap());
+    gen_pop_key(&std::env::var("OUT_DIR").unwrap());
     if std::env::var("CARGO_FEATURE_MCTLS").is_ok() {
         build_el0_tlshost(&dir, &std::env::var("OUT_DIR").unwrap());
     }
@@ -591,6 +592,25 @@ fn gen_ui_assets(manifest_dir: &str, out_dir: &str) {
 // HEQK_POLICY_PUBKEY = 64 hex chars (Ed25519 public key); HEQK_POLICY_GEN_FLOOR = minimum generation.
 // Unset = a standalone image (unsigned POLICY.TXT accepted). A malformed key FAILS the build (never a
 // silently unsigned image when the operator asked for signing).
+// G19: HEQK_POP_PUB = path to the super-PoP's 1216-byte public blob (`superpop keygen`, the same format as
+// testdata/provisioned_mssp_pub.bin). Unset = no PoP pinned = no tunnel (standalone by default). A wrong size
+// FAILS the build.
+fn gen_pop_key(out_dir: &str) {
+    println!("cargo:rerun-if-env-changed=HEQK_POP_PUB");
+    let dst = std::path::Path::new(out_dir).join("pop_pub.bin");
+    let src = match std::env::var("HEQK_POP_PUB") {
+        Ok(p) if !p.trim().is_empty() => {
+            println!("cargo:rerun-if-changed={}", p.trim());
+            let b = std::fs::read(p.trim()).expect("HEQK_POP_PUB: unreadable");
+            assert!(b.len() == 1216, "HEQK_POP_PUB must be the 1216-byte PoP public blob");
+            std::fs::write(&dst, &b).expect("write pop_pub.bin");
+            "pub static POP_PUB: Option<&[u8; 1216]> = Some(include_bytes!(concat!(env!(\"OUT_DIR\"), \"/pop_pub.bin\")));\n".to_string()
+        }
+        _ => "pub static POP_PUB: Option<&[u8; 1216]> = None;\n".to_string(),
+    };
+    std::fs::write(std::path::Path::new(out_dir).join("pop_key.rs"), src).expect("write pop_key.rs");
+}
+
 fn gen_policy_key(out_dir: &str) {
     println!("cargo:rerun-if-env-changed=HEQK_POLICY_PUBKEY");
     println!("cargo:rerun-if-env-changed=HEQK_POLICY_GEN_FLOOR");

@@ -54,9 +54,10 @@ pub fn parse_assign(body: &[u8]) -> Option<Assign> {
         return None;
     }
     let a = Assign { inner: [body[0], body[1], body[2], body[3]], plen: body[4], dns: [body[5], body[6], body[7], body[8]], mtu: u16::from_le_bytes([body[9], body[10]]) };
-    // inner address from the CGNAT pool (100.64.0.0/10), a sane prefix and MTU
-    let cgnat = a.inner[0] == 100 && (64..128).contains(&a.inner[1]);
-    (cgnat && (1..=32).contains(&a.plen) && (576..=1500).contains(&a.mtu)).then_some(a)
+    // any UNICAST inner address the PoP's pool uses (the bench PoP: 198.18.0.0/15 — 100.64/10 would shadow an ISP's
+    // CGNAT space), never 0/8, loopback, multicast / reserved or broadcast; a sane prefix and MTU
+    let unicast = a.inner[0] != 0 && a.inner[0] != 127 && a.inner[0] < 224;
+    (unicast && (1..=32).contains(&a.plen) && (576..=1500).contains(&a.mtu)).then_some(a)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,6 +211,251 @@ pub fn clamp_mss(pkt: &mut [u8], mss: u16) -> bool {
     false
 }
 
+// ---- runtime (stage 2): one tunnel per device, driven from the AP loop ----------------------------------------
+
+include!(concat!(env!("OUT_DIR"), "/pop_key.rs"));
+
+use crate::controlplane::ControlPlane;
+
+struct Rt {
+    cfg: Option<hal::policy::Tunnel>,
+    cp_set: bool,
+    tun_set: bool,
+    wan_ip: [u8; 4],
+    wan_mac: [u8; 6],
+    gw_mac: [u8; 6],
+    handshakes: u32,
+}
+static mut RT: Rt = Rt { cfg: None, cp_set: false, tun_set: false, wan_ip: [0; 4], wan_mac: [0; 6], gw_mac: [0; 6], handshakes: 0 };
+// Large state lives in zero-initialised statics (.bss, no image bytes); the *_set flags say when it is valid.
+static mut CP: core::mem::MaybeUninit<ControlPlane> = core::mem::MaybeUninit::zeroed();
+static mut TUN: core::mem::MaybeUninit<Tunnel> = core::mem::MaybeUninit::zeroed();
+
+fn rt() -> &'static mut Rt {
+    unsafe { &mut *core::ptr::addr_of_mut!(RT) }
+}
+fn cp() -> Option<&'static mut ControlPlane> {
+    rt().cp_set.then(|| unsafe { (*core::ptr::addr_of_mut!(CP)).assume_init_mut() })
+}
+fn tun() -> Option<&'static mut Tunnel> {
+    rt().tun_set.then(|| unsafe { (*core::ptr::addr_of_mut!(TUN)).assume_init_mut() })
+}
+fn drop_tun() {
+    if let Some(t) = tun() {
+        t.wipe();
+    }
+    rt().tun_set = false;
+}
+
+/// Boot: the signed POLICY.TXT `tunnel` line (or none). Returns whether the tunnel will run on this image.
+pub fn configure(cfg: Option<hal::policy::Tunnel>) -> bool {
+    rt().cfg = cfg;
+    enabled()
+}
+/// A `tunnel` line AND a pinned PoP key: otherwise no tunnel (standalone by default).
+pub fn enabled() -> bool {
+    rt().cfg.is_some() && POP_PUB.is_some()
+}
+
+/// The tunnel is up (handshake done, ASSIGN received) and the signed policy sends `dst` through it.
+pub fn carries(dst: [u8; 4]) -> bool {
+    match (rt().cfg, tun()) {
+        (Some(c), Some(t)) => t.assign.is_some() && c.carries(dst) && dst != c.pop,
+        _ => false,
+    }
+}
+
+/// Every loop iteration (cheap when idle): (re)create the control plane for the current WAN address, drive the
+/// handshake, adopt the session, keepalive / re-handshake. `tx` sends a WAN frame.
+pub fn tick(now_ms: i64, wan_up: bool, wan_ip: [u8; 4], wan_mac: [u8; 6], gw_mac: [u8; 6], dev_kp: &dyn Fn() -> Option<ed25519_compact::KeyPair>, fresh: &mut dyn FnMut() -> Option<crate::securechannel::InitiatorRandomness>, tx: &mut dyn FnMut(&[u8]) -> bool) {
+    let Some(cfg) = rt().cfg else { return };
+    let Some(blob) = POP_PUB else { return };
+    if !wan_up || wan_ip == [0; 4] || gw_mac == [0; 6] {
+        return;
+    }
+    let r = rt();
+    if !r.cp_set || r.wan_ip != wan_ip || r.gw_mac != gw_mac {
+        // a new WAN address / gateway: start from scratch (the PoP rebinds the data endpoint anyway)
+        drop_tun();
+        let mut xpk = [0u8; 32];
+        xpk.copy_from_slice(&blob[..32]);
+        let (Some(rp), Some(kp)) = (crate::securechannel::ResponderPub::from_provisioned(xpk, &blob[32..]), dev_kp()) else { return };
+        let mut c = ControlPlane::new(rp, kp, wan_mac, wan_ip);
+        c.set_unicast(gw_mac, cfg.pop);
+        unsafe { (*core::ptr::addr_of_mut!(CP)).write(c) };
+        r.cp_set = true;
+        r.wan_ip = wan_ip;
+        r.wan_mac = wan_mac;
+        r.gw_mac = gw_mac;
+    }
+    let Some(c) = cp() else { return };
+    if !rt().tun_set {
+        c.tick(now_ms, true, fresh);
+        while let Some((dg, n)) = c.poll_egress() {
+            let _ = tx(&dg[..n]);
+        }
+        if c.established() {
+            if let Some(sess) = c.take_session() {
+                unsafe { (*core::ptr::addr_of_mut!(TUN)).write(Tunnel::new(sess, now_ms)) };
+                rt().tun_set = true;
+                rt().handshakes += 1;
+                arch_aarch64::_print(format_args!(" [G19] tunnel to the super-PoP {}.{}.{}.{} up (handshake #{}) — asking for an inner address\n",
+                    cfg.pop[0], cfg.pop[1], cfg.pop[2], cfg.pop[3], rt().handshakes));
+                send_ctl(T_ADDR_REQ, now_ms, tx);
+            }
+        }
+        return;
+    }
+    let act = tun().map_or(Act::None, |t| t.tick(now_ms));
+    match act {
+        Act::SendKeepalive => send_ctl(T_KEEPALIVE, now_ms, tx),
+        Act::Rehandshake => {
+            arch_aarch64::_print(format_args!(" [G19] nothing heard from the PoP for 45 s (or 24 h elapsed) — re-handshake\n"));
+            drop_tun();
+            c.restart(now_ms);
+        }
+        Act::None => {
+            if tun().is_some_and(|t| t.assign.is_none() && t.last_tx_ms + 2_000 < now_ms) {
+                send_ctl(T_ADDR_REQ, now_ms, tx); // ASSIGN lost: ask again
+            }
+        }
+    }
+}
+
+fn send_ctl(ty: u8, now_ms: i64, tx: &mut dyn FnMut(&[u8]) -> bool) {
+    let (Some(cfg), Some(t)) = (rt().cfg, tun()) else { return };
+    let mut pl = [0u8; 64];
+    let Some(k) = t.seal(ty, &[], &mut pl, now_ms) else { return };
+    let r = rt();
+    let mut f = [0u8; 160];
+    let n = crate::netsvc::build_hs_datagram(r.wan_mac, r.wan_ip, r.gw_mac, cfg.pop, DATA_PORT, &pl[..k], &mut f);
+    if n > 0 {
+        let _ = tx(&f[..n]);
+    }
+}
+
+/// Outbound: a LAN client frame (Ethernet/IPv4) the policy tunnels. NAT it to the inner /32 (the shared NAT engine),
+/// clamp MSS to the tunnel MTU, seal it as DATA and send it to the PoP. False = not sent (the caller counts it).
+pub fn send(frame: &[u8], nif: u8, inside_net: &[u8; 3], nst: &mut arch_aarch64::nat::NatStats, ticks: u64, now_ms: i64, tx: &mut dyn FnMut(&[u8]) -> bool) -> bool {
+    let (Some(cfg), Some(t)) = (rt().cfg, tun()) else { return false };
+    let Some(a) = t.assign else { return false };
+    let r = rt();
+    let mut nb = [0u8; 1600];
+    let Some(k) = arch_aarch64::nat::outbound_redirect(frame, nif, inside_net, None, &a.inner, &r.wan_mac, &r.gw_mac, &mut nb, ticks, nst) else { return false };
+    if k <= 14 || k - 14 + 1 + OVERHEAD + 42 > 1600 {
+        return false;
+    }
+    let _ = clamp_mss(&mut nb[14..k], a.mtu.saturating_sub(40));
+    let mut pl = [0u8; 1600];
+    let Some(m) = t.seal(T_DATA, &nb[14..k], &mut pl, now_ms) else { return false };
+    let mut f = [0u8; 1700];
+    let n = crate::netsvc::build_hs_datagram(r.wan_mac, r.wan_ip, r.gw_mac, cfg.pop, DATA_PORT, &pl[..m], &mut f);
+    n > 0 && tx(&f[..n])
+}
+
+/// A WAN frame for the tunnel (handshake on 7654 or data on 7655 from the PoP)?
+pub fn wan_wants(f: &[u8]) -> bool {
+    let Some(cfg) = rt().cfg else { return false };
+    if !rt().cp_set || f.len() < 42 || f[12] != 0x08 || f[13] != 0x00 || f[23] != 17 || f[26..30] != cfg.pop {
+        return false;
+    }
+    crate::netsvc::udp_payload_for_port(f, HS_PORT).is_some() || crate::netsvc::udp_payload_for_port(f, DATA_PORT).is_some()
+}
+
+/// Consume a `wan_wants` frame in `buf[..n]`. A DATA packet for us comes back REWRITTEN IN PLACE as an ordinary
+/// WAN frame (dst = the real WAN address, checksums fixed): the caller runs it through the usual WAN path (hold,
+/// IDS, un-NAT, `lan out`, Shield, delivery). Returns its length; None = consumed (handshake, control, refused).
+pub fn wan_ingress(buf: &mut [u8], n: usize, now_ms: i64) -> Option<usize> {
+    if let Some(c) = cp() {
+        if crate::netsvc::udp_payload_for_port(&buf[..n], HS_PORT).is_some() {
+            c.ingress(&buf[..n], now_ms);
+            return None;
+        }
+    }
+    let t = tun()?;
+    let pl = crate::netsvc::udp_payload_for_port(&buf[..n], DATA_PORT)?;
+    let mut tmp = [0u8; 1700];
+    let pl_len = pl.len().min(tmp.len());
+    tmp[..pl_len].copy_from_slice(&pl[..pl_len]);
+    let mut pkt = [0u8; 1600];
+    let (ty, len) = t.open(&tmp[..pl_len], &mut pkt, now_ms)?;
+    match ty {
+        T_DATA => {
+            let a = t.assign?;
+            if len < 20 || pkt[0] >> 4 != 4 || pkt[16..20] != a.inner || 14 + len > buf.len() {
+                return None;
+            }
+            let r = rt();
+            readdress_dst(&mut pkt[..len], r.wan_ip);
+            buf[..6].copy_from_slice(&r.wan_mac);
+            buf[6..12].copy_from_slice(&r.gw_mac);
+            buf[12] = 0x08;
+            buf[13] = 0x00;
+            buf[14..14 + len].copy_from_slice(&pkt[..len]);
+            Some(14 + len)
+        }
+        T_ASSIGN => {
+            if let Some(a) = t.assign {
+                arch_aarch64::_print(format_args!(" [G19] inner address {}.{}.{}.{}/{} mtu {} — tunnelled traffic now flows\n", a.inner[0], a.inner[1], a.inner[2], a.inner[3], a.plen, a.mtu));
+            }
+            None
+        }
+        T_CLOSE => {
+            arch_aarch64::_print(format_args!(" [G19] the PoP closed the tunnel — re-handshake\n"));
+            drop_tun();
+            if let Some(c) = cp() {
+                c.restart(now_ms + 5_000);
+            }
+            None
+        }
+        _ => None, // KEEPALIVE echo / ADDR_REQ: liveness only
+    }
+}
+
+/// Rewrite an IPv4 packet's destination address, fixing the header checksum and the TCP / UDP checksum (RFC 1624).
+pub fn readdress_dst(pkt: &mut [u8], new: [u8; 4]) {
+    if pkt.len() < 20 {
+        return;
+    }
+    let old = [pkt[16], pkt[17], pkt[18], pkt[19]];
+    pkt[16..20].copy_from_slice(&new);
+    pkt[10] = 0;
+    pkt[11] = 0;
+    let ihl = ((pkt[0] & 0x0f) as usize) * 4;
+    let mut s: u32 = 0;
+    for k in (0..ihl.min(pkt.len())).step_by(2) {
+        s += u16::from_be_bytes([pkt[k], pkt[k + 1]]) as u32;
+    }
+    while s > 0xffff {
+        s = (s & 0xffff) + (s >> 16);
+    }
+    pkt[10..12].copy_from_slice(&(!(s as u16)).to_be_bytes());
+    let off = match pkt[9] {
+        6 => 16,
+        17 => 6,
+        _ => return, // ICMP has no pseudo-header
+    };
+    let c = ihl + off;
+    if pkt.len() < c + 2 || (pkt[9] == 17 && pkt[c] == 0 && pkt[c + 1] == 0) {
+        return; // UDP without a checksum stays without one
+    }
+    let mut x = (!u16::from_be_bytes([pkt[c], pkt[c + 1]])) as u32;
+    for i in [0usize, 2] {
+        x += (!u16::from_be_bytes([old[i], old[i + 1]])) as u32 & 0xffff;
+        x += u16::from_be_bytes([new[i], new[i + 1]]) as u32;
+    }
+    while x > 0xffff {
+        x = (x & 0xffff) + (x >> 16);
+    }
+    pkt[c..c + 2].copy_from_slice(&(!(x as u16)).to_be_bytes());
+}
+
+/// Heartbeat / health: (configured, PoP key pinned, up, inner address, data tx, data rx, refused, handshakes).
+pub fn status() -> (bool, bool, bool, Option<Assign>, Stats, u32) {
+    let up = tun().is_some();
+    (rt().cfg.is_some(), POP_PUB.is_some(), up, tun().and_then(|t| t.assign), tun().map(|t| t.stats).unwrap_or_default(), rt().handshakes)
+}
+
 /// `[P-g19]` — a real Noise handshake (shared test vectors) gives both ends a session; the device-side tunnel
 /// framing interoperates with a PoP built from the responder's session: ADDR_REQ / ASSIGN, DATA both ways,
 /// replay + forgery + foreign-sid refused, keepalive / re-handshake timers, the ASSIGN sanity bounds, MSS clamp.
@@ -250,8 +496,10 @@ pub fn selftest() -> bool {
     // timers
     let t_ka = dev.tick(40 + KEEPALIVE_IDLE_MS) == Act::SendKeepalive;
     let t_quiet = dev.tick(40 + SILENCE_REHANDSHAKE_MS) == Act::Rehandshake;
-    // ASSIGN sanity: not CGNAT / bad MTU / wrong length refused
-    let bounds = parse_assign(&[10, 0, 0, 2, 32, 1, 1, 1, 1, 0x64, 0x05]).is_none()
+    // ASSIGN sanity: a non-unicast inner / bad MTU / wrong length refused; the bench pool (198.18/15) accepted
+    let bounds = parse_assign(&[224, 0, 0, 2, 32, 1, 1, 1, 1, 0x64, 0x05]).is_none()
+        && parse_assign(&[127, 0, 0, 2, 32, 1, 1, 1, 1, 0x64, 0x05]).is_none()
+        && parse_assign(&[198, 18, 0, 2, 32, 1, 1, 1, 1, 0x64, 0x05]).is_some()
         && parse_assign(&[100, 64, 0, 2, 32, 1, 1, 1, 1, 0x10, 0x00]).is_none()
         && parse_assign(&asg[..10]).is_none();
     // MSS clamp on a SYN with MSS 1460 -> 1340, checksum stays valid (recomputed from scratch)
@@ -284,9 +532,63 @@ pub fn selftest() -> bool {
     let c0 = tcp_sum(&syn);
     syn[36..38].copy_from_slice(&c0.to_be_bytes());
     let clamped = clamp_mss(&mut syn, 1340) && u16::from_be_bytes([syn[42], syn[43]]) == 1340 && u16::from_be_bytes([syn[36], syn[37]]) == tcp_sum(&syn);
-    let pass = sid_ok && req && assigned && up && replay && forgery && foreign && down && t_ka && t_quiet && bounds && clamped;
+    // DATA inbound is re-addressed inner -> WAN address: IP + UDP + TCP checksums stay valid (full recompute)
+    let l4sum = |p: &[u8], proto: u8, csum_at: usize| -> u16 {
+        let ln = p.len() - 20;
+        let mut s: u32 = 0;
+        for k in (12..20).step_by(2) {
+            s += u16::from_be_bytes([p[k], p[k + 1]]) as u32;
+        }
+        s += proto as u32 + ln as u32;
+        let mut k = 20;
+        while k < p.len() {
+            if k != csum_at {
+                s += u16::from_be_bytes([p[k], *p.get(k + 1).unwrap_or(&0)]) as u32;
+            }
+            k += 2;
+        }
+        while s > 0xffff {
+            s = (s & 0xffff) + (s >> 16);
+        }
+        !(s as u16)
+    };
+    let ipsum = |p: &[u8]| -> u16 {
+        let mut s: u32 = 0;
+        for k in (0..20).step_by(2) {
+            if k != 10 {
+                s += u16::from_be_bytes([p[k], p[k + 1]]) as u32;
+            }
+        }
+        while s > 0xffff {
+            s = (s & 0xffff) + (s >> 16);
+        }
+        !(s as u16)
+    };
+    let mut ok_re = true;
+    for (proto, at) in [(17u8, 26usize), (6u8, 36usize)] {
+        let mut p = [0u8; 48];
+        p[0] = 0x45;
+        p[2..4].copy_from_slice(&48u16.to_be_bytes());
+        p[9] = proto;
+        p[12..16].copy_from_slice(&[93, 184, 216, 34]);
+        p[16..20].copy_from_slice(&[100, 64, 0, 2]);
+        for (i, b) in p[20..].iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(37) ^ 0x5a;
+        }
+        if proto == 6 {
+            p[32] = 0x50;
+        }
+        let hs = ipsum(&p);
+        p[10..12].copy_from_slice(&hs.to_be_bytes());
+        let c = l4sum(&p, proto, at);
+        p[at..at + 2].copy_from_slice(&c.to_be_bytes());
+        readdress_dst(&mut p, [10, 100, 0, 135]);
+        ok_re &= p[16..20] == [10, 100, 0, 135] && u16::from_be_bytes([p[10], p[11]]) == ipsum(&p)
+            && u16::from_be_bytes([p[at], p[at + 1]]) == l4sum(&p, proto, at);
+    }
+    let pass = sid_ok && req && assigned && up && replay && forgery && foreign && down && t_ka && t_quiet && bounds && clamped && ok_re;
     arch_aarch64::_print(format_args!(
-        " [P-g19] {} — G19 SASE tunnel, device side (PoP wire v1): sid agrees={} ADDR_REQ={} ASSIGN 100.64.0.2/32 mtu 1380={} DATA up={} down={} | replay refused={} forgery refused={} foreign sid refused={} | keepalive after 15 s={} re-handshake after 45 s silence={} ASSIGN bounds={} MSS clamp + checksum={}\n",
-        if pass { "PASS" } else { "FAIL" }, sid_ok, req, assigned, up, down, replay, forgery, foreign, t_ka, t_quiet, bounds, clamped));
+        " [P-g19] {} — G19 SASE tunnel, device side (PoP wire v1): sid agrees={} ADDR_REQ={} ASSIGN 100.64.0.2/32 mtu 1380={} DATA up={} down={} | replay refused={} forgery refused={} foreign sid refused={} | keepalive after 15 s={} re-handshake after 45 s silence={} ASSIGN bounds={} MSS clamp + checksum={} DATA re-addressed with valid IP/UDP/TCP checksums={}\n",
+        if pass { "PASS" } else { "FAIL" }, sid_ok, req, assigned, up, down, replay, forgery, foreign, t_ka, t_quiet, bounds, clamped, ok_re));
     pass
 }
