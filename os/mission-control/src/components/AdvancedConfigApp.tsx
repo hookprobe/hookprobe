@@ -74,13 +74,21 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     if (n.wifi) setWifi({ ...wifi(), ssid: n.wifi.ssid, channel: n.wifi.channel ? String(n.wifi.channel) : 'auto', security: /wpa3/i.test(n.wifi.security) ? 'wpa3-transition' : 'wpa2' });
   };
 
-  const text = createMemo(() => (sec() === 'internet' ? buildWan(wan()) : sec() === 'wifi' ? buildWifi(wifi()) : buildPolicyText(pol())));
-  const errors = createMemo(() => (sec() === 'internet' ? checkWan(wan()) : sec() === 'wifi' ? checkWifi(wifi()) : checkPolicy(pol())));
+  // The builders refuse (throw) rather than emit a file the device would reject; show that as a problem.
+  const built = createMemo(() => {
+    try { return { t: sec() === 'internet' ? buildWan(wan()) : sec() === 'wifi' ? buildWifi(wifi()) : buildPolicyText(pol()), err: '' }; }
+    catch (e) { return { t: '', err: e instanceof Error ? e.message : String(e) }; }
+  });
+  const text = () => built().t;
+  const errors = createMemo(() => {
+    const e = sec() === 'internet' ? checkWan(wan()) : sec() === 'wifi' ? checkWifi(wifi()) : checkPolicy(pol());
+    return built().err && !e.length ? [...e, built().err] : e;
+  });
   /** What the device reports today, as the same file (for the review diff). */
   const current = createMemo(() => {
     const n = networkView();
     if (!n?.available) return '';
-    if (sec() === 'internet' && n.wan) return buildWan({ ...wan(), mode: n.wan.mode as WanForm['mode'], vlanOn: n.wan.vlan > 0, vlan: String(n.wan.vlan), mgmtOn: !!n.management, mgmtVlan: n.management ? String(n.management.vlan) : '', pppoeUser: n.wan.mode === 'pppoe' ? '(current)' : '', pppoePass: n.wan.mode === 'pppoe' ? '(current)' : '' });
+    if (sec() === 'internet' && n.wan) try { return buildWan({ ...wan(), mode: n.wan.mode as WanForm['mode'], vlanOn: n.wan.vlan > 0, vlan: String(n.wan.vlan), mgmtOn: !!n.management, mgmtVlan: n.management ? String(n.management.vlan) : '', pppoeUser: n.wan.mode === 'pppoe' ? '(current)' : '', pppoePass: n.wan.mode === 'pppoe' ? '(current)' : '' }); } catch { return ''; }
     if (sec() === 'wifi' && n.wifi) return `ssid=${n.wifi.ssid}\npsk=(current)\n${n.wifi.channel ? `channel=${n.wifi.channel}\n` : ''}`;
     return '';
   });
