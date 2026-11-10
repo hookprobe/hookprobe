@@ -68,6 +68,25 @@ impl CfgGens {
     pub const ZERO: CfgGens = CfgGens { wan_cur: 0, wan_floor: 0, wifi_cur: 0, wifi_floor: 0, cfg_floor: 0 };
 }
 
+/// Factory reset: the WAN / WIFI / bundle generation floors go back to zero — the store copies they protected were
+/// just erased, and the unit must come back "as shipped" with its boot-partition baseline (metal batch 60: a kept WAN
+/// floor of 14 refused the shipped gen-2 WAN.TXT -> DHCP, no management VLAN). The owner key and the POLICY floor
+/// (ADR 0049 D1) stay. Replaying an OLDER card file still needs physical card access (= a reflash anyway).
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+pub fn reset_cfg_floors() -> Result<(), &'static str> {
+    let Some((mut dev, lo)) = header_dev() else { return Err("no DataVolume") };
+    let prev = load(&dev, lo);
+    let Some(p) = prev else { return Ok(()) };
+    if p.cfg == CfgGens::ZERO {
+        return Ok(());
+    }
+    if !store(&mut dev, lo, prev, Anchor { cfg: CfgGens::ZERO, ..p }) {
+        return Err("anchor write / readback failed");
+    }
+    unsafe { CFG = CfgGens::ZERO };
+    Ok(())
+}
+
 /// Self-tests only: put the RAM generation state back.
 pub fn test_set_cfg(c: CfgGens) {
     unsafe { CFG = c };

@@ -229,6 +229,11 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
     if artstore::key_for(ty).is_none() {
         return Err("no operator key in this image: unsigned packs are never accepted over the network");
     }
+    // ADR 0059: while an HQCFG1 bundle is in force its sections win over the per-file WAN / Wi-Fi / POLICY — a
+    // per-file upload would be silently ignored (metal batch 60). Refuse it, and say what to do instead.
+    if matches!(ty, Ty::Wan | Ty::Wifi | Ty::Policy) && dev().and_then(|d| artstore::entry(&*d, Ty::Config)).is_some_and(|e| e.half != 0) {
+        return Err("a configuration bundle is in force: change this with a new bundle (type config), or roll the bundle back first");
+    }
     #[cfg(feature = "p15-write")]
     if os && !(crate::otaimg::IMG_MIN..=crate::otaimg::IMG_MAX).contains(&size) {
         return Err("size");
