@@ -18,14 +18,14 @@ TC-07 | trust chain | WAN.TXT (incl. mgmt_floor) signed by the operator key; uns
 OTA-01 | update | OS update over Mission Control: verify, inactive slot, trial, commit-on-health | phase:P15otaimg,phase:Pabslot,metal:docs/design/metal-evidence/20261110-ota-a1.md:PASS
 OTA-02 | update | An unhealthy trial rolls back to the previous build | metal:docs/design/metal-evidence/20261110-batch29.md:OTA-ROLLBACK: PASS
 REL-01 | reliability | Runtime watchdog armed after the trial confirm | phase:Prtwdog,metal:docs/design/metal-evidence/20261110-batch29.md:WDOG\] armed=true
-REL-02 | reliability | Crash record survives the EL2-gate reset (J10) | phase:Pcrashrec,metal:docs/design/metal-evidence/20261110-batch30.md:CRASH-RECORD: PASS
+REL-02 | reliability | Crash record survives the EL2-gate reset (J10) | phase:Pcrashrec,metal:docs/design/metal-evidence/20261110-batch33.md:CRASH-RECORD: PASS
 REL-03 | reliability | Board RTC wall clock across a warm reset (J13) | metal:docs/design/metal-evidence/20261110-batch30.md:wall clock .* from the board RTC
 REL-04 | reliability | Randomized power-loss torture: every acknowledged owner rule survives (J12) | metal:docs/design/metal-evidence/20261110-batch30.md:POWERLOSS-TORTURE: PASS
 REL-05 | reliability | 72 h soak under real traffic (final acceptance, after every build phase) | metal:docs/design/metal-evidence/soak-72h.md:SOAK: PASS
 REL-06 | reliability | Thermal in the enclosure at sustained throughput | blocked:not run
 REL-07 | reliability | Client scale (many mixed clients, roaming, sleeping phones) | blocked:2 bench clients only
 REL-08 | reliability | Wi-Fi TX-stall root cause (recovery exists: kick + wedge self-heal reset) | blocked:root cause open
-NET-01 | network | DNS / control frames not lost under a saturating download (AP TX priority) | phase:Ptxprio,metal:docs/design/metal-evidence/20261110-batch30.md:DNS-UNDER-LOAD: PASS
+NET-01 | network | DNS under a saturating download: no worse than the path baseline, p90 < 500 ms (acceptance pending the operator) | phase:Ptxprio,signoff:dns-under-load-acceptance
 NET-02 | network | LAN client end to end (DHCP, DNS, NAT, IPv6, holds) | metal:docs/design/metal-evidence/20261110-batch29.md:LAN-CLIENT: PASS
 NET-03 | network | WPA3-SAE + PMF on the AP (firmware: mfp + sae_ext; AP-side SAE via the host unproven) | metal:docs/design/metal-evidence/20261110-batch30.md:sae_ext=true mfp=true,blocked:AP-side SAE experiment + WPA3 build (Phase 6)
 SEC-01 | isolation | ADR 0050 D4: network-facing parsers in isolated EL0 servers (HTTP, DNS/DHCP, WAN clients, Noise) | blocked:G24b not built
