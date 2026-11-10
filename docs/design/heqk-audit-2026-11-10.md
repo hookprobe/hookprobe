@@ -8,6 +8,10 @@ UI/UX designer; UI findings below only name the missing API wiring. Legend: **V*
 run named), **I** = implemented, not validated, **P** = partial, **M** = mock/demo, **D** = designed only,
 **B** = blocked on a human decision.
 
+> **PRODUCTION READINESS: BLOCKED by customer OTP provisioning** (owner decision, not executed). Decision record
+> for OTP (production blocker) and RPMB (owner decision required) + WPA3 (evidence pending):
+> `heqk-decision-record-otp-rpmb-2026-11-10.md`. No OTP or RPMB write was made during the autonomous work.
+
 ## 1. Mission Control — feature truth table
 
 Routing: `os/kernel/kernel/src/http.rs` (public `/login`, `/api/login`, `/api/logout`, minimal `/api/health`;
@@ -186,7 +190,7 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 ## 5. Human-dependency register (B — only these need the operator)
 
 1. Production signing-key custody (HSM / ceremony) and the policy/pack key-custody model behind A4.
-2. Factory OTP provisioning: whether and when to run `hboot --features otp-provision` on production units
+2. **[PRODUCTION BLOCKER — see the decision record]** Factory OTP provisioning: whether and when to run `hboot --features otp-provision` on production units
    (irreversible). SEC-3 fuses stay out of scope. **Consequence until decided:** a unit with blank customer
    OTP attests with the SOFTWARE attestation key, whose private half is tracked in `hboot/src/attest_keys.rs`
    (§2.1 #8) — its quotes prove nothing. Verifiers (MSSP / enrolment) must reject `otp_provisioned=0` quotes
@@ -197,12 +201,13 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
    The bench CM5 is unaffected (provisioned in an earlier campaign).
 3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber), 0055 `pin` semantics, 0056 D1 boundary with the
    flasher owner, 0045/0046, retire 0035–0042.
-4. Persistent anti-rollback medium (RPMB vs sealed counter) — technical options can be prototyped (A), the
+4. **[Owner decision required — see the decision record]** Persistent anti-rollback medium (RPMB vs sealed counter) — technical options can be prototyped (A), the
    choice is the operator's. Update 2026-11-10: a counter on the same eMMC cannot detect owner-journal or pack
    rollback by someone holding the card (both roll back together); only RPMB (or an OTP/fuse counter) can, and
    RPMB needs its authentication key programmed once — irreversible, so it is this decision too.
-5. Certification (CE/RED, EN 18031, FCC), CYW43455 firmware redistribution terms, licence.
-6. UI work — owned by the UI/UX designer (wire owner-rules, upload/OTA, enforcement, network API, export).
+5. **[Evidence pending]** WPA3-SAE on the AP: firmware feature string (`[WIFI-CAP]`) captured on the next boot decides whether vendor firmware is needed.
+6. Certification (CE/RED, EN 18031, FCC), CYW43455 firmware redistribution terms, licence.
+7. UI work — owned by the UI/UX designer (wire owner-rules, upload/OTA, enforcement, network API, export).
 
 ## 6. Recommended execution sequence
 
