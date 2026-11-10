@@ -18,7 +18,7 @@ import { anchorView, anchorState, refreshAnchor, enroll, rotate } from '../store
 import { networkView } from '../store/networkLive';
 
 const input = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)', width: '100%', 'box-sizing': 'border-box' } as const;
-const LOSS = 'If you lose both this browser’s key and the backup, getting control back needs physical access to the device (re-flash its boot card, or factory reset).';
+const LOSS = 'If you lose both this browser’s key and the backup, getting control back needs physical access to the device: re-flashing its boot card. A factory reset does not remove an enrolled owner key.';
 
 const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
   const [msg, setMsg] = createSignal('');
@@ -66,7 +66,7 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
   }, 'Key created. Its backup (encrypted with your passphrase) downloaded: keep it offline. ' + LOSS);
 
   const doEnroll = () => run(async () => {
-    if (!window.confirm('Make this key the device’s owner key?\n\nThis is one-shot. Afterwards the device refuses internet, Wi-Fi and firewall uploads that are unsigned or signed only with the image’s key. The factory files on its boot card keep working. Changing the owner key later needs this key (rotate) or a factory reset.')) throw new Error('Cancelled.');
+    if (!window.confirm('Make this key the device’s owner key?\n\nThis is one-shot. Afterwards the device refuses internet, Wi-Fi and firewall uploads that are unsigned or signed only with the image’s key. The factory files on its boot card keep working. Changing the owner key later needs this key (rotate) or re-flashing the device; a factory reset keeps it.')) throw new Error('Cancelled.');
     const k = askOwnerKey(); if (!k) throw new Error('Cancelled: the owner key is required.');
     const p = await enrollProof();
     const r = await enroll({ public_key: p.publicKey, proof: p.proof, owner_key: k });

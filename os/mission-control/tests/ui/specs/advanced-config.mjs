@@ -109,6 +109,12 @@ export default async function (t) {
   await go('/protect/policies');
   await page.click('text=+ From template: block device-to-device traffic'); await page.waitForTimeout(200);
   ok(/interface lan acl in LAN_IN/.test(await page.locator('aside pre').textContent()), 'firewall: template adds the LAN rule and binding');
+  const seqs = page.locator('input[aria-label="Sequence"]');
+  const last = await seqs.last().inputValue();
+  await seqs.last().fill(await seqs.nth((await seqs.count()) - 2).inputValue()); await page.waitForTimeout(150);
+  ok(await vis(page.locator('[aria-label="Problems"] >> text=appears twice')) && await page.locator('button:has-text("Review and sign")').isDisabled(),
+    'firewall: a repeated statement (same list + seq) is refused before signing — the device refuses duplicate keys');
+  await seqs.last().fill(last); await page.waitForTimeout(150);
   await page.click('button:has-text("Review and sign")'); await page.waitForTimeout(300);
   await page.click('text=Looks right · sign it'); await page.click('text=Sign in this browser'); await page.waitForTimeout(800);
   const ptxt = await dl('Download POLICY.TXT');
