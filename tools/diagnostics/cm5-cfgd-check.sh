@@ -63,6 +63,7 @@ $HQ bundle "$CK" $G2 "$T/b.bin" "$T/b.sig" --wan "$T/bad.txt" --policy "$POL" >/
 $UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; grep -q '"staged": true' "$T/r"; chk $? "B1 a bundle that breaks the WAN staged (gen $G2)"
 scp -q -o BatchMode=yes "$KEY" "$PI:/tmp/hqcf.key"
 mark=$(stat -c %s "$LOG"); $UP --reboot "cfgd trial B" > /dev/null 2>&1; sleep 60
+[ -n "${PI_SUDO_FILE:-}" ] && "$HERE/pi-ensure-ap.sh" >/dev/null 2>&1   # the reboot drops the Pi's association
 for _ in $(seq 1 40); do pi "curl -sk -o /dev/null -m 5 $AP_MC/" && break; sleep 5; done
 pi "curl -sk -o /dev/null -w '%{http_code}' -m 8 $AP_MC/api/health" | grep -q 200; chk $? "B2 rule 7: Mission Control answers on the Wi-Fi AP while the trial has no uplink"
 for _ in $(seq 1 90); do since | grep -a "trial NOT healthy within" >/dev/null && break; sleep 5; done
