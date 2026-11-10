@@ -412,6 +412,23 @@ pub fn client4<N: ApNic>(
     if port.relay && crate::lanrelay::relay_target(frame, dh) {
         return Client4::Relay;
     }
+    // Phase 4: the per-device behaviour baseline — outbound TCP SYNs / UDP to the internet (observe-only)
+    if frame.len() >= 38 && frame[12] == 0x08 && frame[13] == 0x00 && matches!(frame[23], 6 | 17) {
+        let ihl = ((frame[14] & 0x0f) as usize) * 4;
+        let l4 = 14 + ihl;
+        let dst = u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]);
+        let syn_or_udp = frame[23] == 17 || frame.get(l4 + 13).is_some_and(|&f| f & 0x12 == 0x02);
+        if syn_or_udp && frame.len() >= l4 + 4 && !crate::behavioral::is_internal(dst) {
+            let dport = u16::from_be_bytes([frame[l4 + 2], frame[l4 + 3]]);
+            let single = || {
+                dh.leases.iter().find(|l| l.used && l.mac == smac).is_some_and(|l| {
+                    let id = crate::devid::classify(&smac, &l.host[..l.hlen as usize], &l.vendor[..l.vlen as usize], &l.prl[..l.plen as usize]);
+                    crate::devbase::is_single_purpose(id.category)
+                })
+            };
+            let _ = crate::devbase::observe(u32::from_be_bytes(sip), single, frame[23], dport, now_s);
+        }
+    }
     Client4::Forwarded(forward4(frame, port.pif, port.nif, cfg, pol, nst, c, nbuf, nic, reply))
 }
 

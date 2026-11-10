@@ -710,6 +710,13 @@ pub fn lateral_observe6(frame: &[u8], src_lease: u32, dst_lease: u32) -> bool {
     lateral_verdict(src_lease, dst_lease, m.dst_port).is_some()
 }
 
+/// Phase 4 (device baseline): a single-purpose device used a service it never used before (rule 128).
+/// Behavioral → observe-only (never a drop).
+pub fn baseline_change(src: u32) {
+    let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(src));
+    fire(crate::devbase::RULE_BASELINE, SEV_MED, v, src);
+}
+
 /// G24a: an IPv6 peer on the signed IOC pack — the same observe-only IOC detection (rule 302, identity
 /// reputation: never a drop) the IPv4 flow tier raises, attributed to the LAN device's IPv4 lease.
 pub fn ioc_v6_hit(lease: u32, peer: &[u8; 16]) -> bool {

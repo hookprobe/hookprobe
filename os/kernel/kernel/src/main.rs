@@ -116,6 +116,8 @@ mod ota;
 mod fat;
 #[allow(dead_code)] // A/B commit (B2): the on-device OTA commit + its QEMU two-boot proof
 mod abboot;
+/// Per-device behaviour baseline (production phase 4).
+mod devbase;
 /// Device-pinned policy trust anchor (ADR 0049 D1 TOFU).
 mod anchor;
 /// The applied network configuration for `GET /api/network` (audit A8), filled as the AP comes up.
@@ -6865,6 +6867,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = anchor::selftest();
         let _ = arch_aarch64::nat::index_selftest();
         let _ = rules::lateral6_selftest();
+        let _ = devbase::selftest();
         #[cfg(feature = "netsvc")]
         let _ = actions::rate_selftest();
         let w = rtwdog::selftest();
