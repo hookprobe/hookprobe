@@ -27,7 +27,7 @@ REL-07 | reliability | Client scale (many mixed clients, roaming, sleeping phone
 REL-08 | reliability | Wi-Fi TX-stall root cause (recovery exists: kick + wedge self-heal reset) | blocked:root cause open
 NET-01 | network | DNS / control frames not lost under a saturating download (AP TX priority) | phase:Ptxprio,metal:docs/design/metal-evidence/20261110-batch30.md:DNS-UNDER-LOAD: PASS
 NET-02 | network | LAN client end to end (DHCP, DNS, NAT, IPv6, holds) | metal:docs/design/metal-evidence/20261110-batch29.md:LAN-CLIENT: PASS
-NET-03 | network | WPA3-SAE + PMF on the AP (firmware supports external SAE + mfp: batch 30) | metal:docs/design/metal-evidence/20261110-batch30.md:sae_ext=true mfp=true,blocked:WPA3-SAE not built (Phase 6)
+NET-03 | network | WPA3-SAE + PMF on the AP (firmware: mfp + sae_ext; AP-side SAE via the host unproven) | metal:docs/design/metal-evidence/20261110-batch30.md:sae_ext=true mfp=true,blocked:AP-side SAE experiment + WPA3 build (Phase 6)
 SEC-01 | isolation | ADR 0050 D4: network-facing parsers in isolated EL0 servers (HTTP, DNS/DHCP, WAN clients, Noise) | blocked:G24b not built
 SEC-02 | isolation | Coverage-guided fuzzing of the kernel-crate parsers (journal, upload, store, HTTP, DNS) | blocked:only hal + boot_abi targets today
 SEC-03 | management | Mission Control end to end (HTTPS PQ hybrid, browser, actions) | e2e
