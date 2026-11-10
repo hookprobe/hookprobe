@@ -122,3 +122,26 @@
 .go-adv { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 12px; }
 .go-adv > div { padding: 14px; border: 1px solid var(--hp-border); border-radius: var(--hp-radius); font-size: 14px; color: var(--hp-text-secondary); }
 .go-adv b { display: block; color: var(--hp-text-primary); font-weight: 600; margin-bottom: 2px; }
+
+/* First-run setup (/setup): mobile-first, centred, at most 560 px (requirements doc §Zero-touch setup) */
+.setup-wrap { min-height: 100dvh; max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; padding: 0 20px env(safe-area-inset-bottom); box-sizing: border-box; }
+.setup-head { height: 56px; display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--hp-border); }
+.setup-dots { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; }
+.setup-dots li { width: 8px; height: 8px; border-radius: 50%; border: 1.5px solid var(--hp-text-muted); box-sizing: border-box; }
+.setup-dots li.is-on { background: var(--hp-cyan); border-color: var(--hp-cyan); }
+.setup-main { flex: 1; display: flex; flex-direction: column; gap: 14px; padding: 24px 0; }
+.setup-main label { display: flex; flex-direction: column; gap: 6px; }
+.setup-grow { flex: 1 1 auto; min-height: 12px; }
+.setup-h1 { margin: 0; font-size: 28px; font-weight: 700; letter-spacing: -.02em; color: var(--hp-text-primary); }
+.setup-p { margin: 0; font-size: 16px; line-height: 1.5; color: var(--hp-text-secondary); }
+.setup-bubble { background: var(--hp-surface-elevated); border-radius: 14px 14px 14px 4px; padding: 14px 16px; font-size: 16px; line-height: 1.5; color: var(--hp-text-primary); }
+.setup-cta { width: 100%; justify-content: center; min-height: 52px; font-size: 16px; }
+.setup-link { align-self: center; min-height: 44px; display: inline-flex; align-items: center; color: var(--hp-cyan); font-size: 14px; }
+.setup-orb { width: 72px; height: 72px; border-radius: 50%; border: 2px solid var(--hp-cyan); box-shadow: 0 0 0 6px rgba(0,180,255,.12); display: flex; align-items: center; justify-content: center; font-size: 30px; color: var(--hp-green); }
+.setup-orb--busy { border-style: dashed; animation: setup-spin 2s linear infinite; }
+.setup-orb--done { border-color: var(--hp-green); box-shadow: 0 0 0 6px rgba(0,255,157,.12); }
+@keyframes setup-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .setup-orb--busy { animation: none; } }
+.setup-meter { display: flex; gap: 6px; }
+.setup-meter span { flex: 1; height: 6px; border-radius: 999px; background: rgba(255,255,255,.1); }
+.setup-meter span.is-on { background: var(--hp-green); }
