@@ -93,6 +93,11 @@ echo "$CAP" | jget "d['source']=='manifest' and d['schema']==2 and 'ids' in d['g
 echo "$H" | jget "d['capabilities']==$(echo "$CAP" | jget "d['granted']" | tr "'" '"')" | grep -q True && ok "/api/health echoes the granted capabilities" || bad "health capabilities echo"
 echo "$(curl -s -m 10 $C "$B/api/planner/status")" | jget "d['configured'] is False and d['endpoint'] is None" | grep -q True && ok "/api/planner/status: honestly not configured" || bad "planner status"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 $C -X POST -H "Origin: $B" --data 'intent=x' "$B/api/planner/propose")" = 503 ] && ok "POST /api/planner/propose: 503 not_configured (no mock proposal)" || bad "planner propose"
+# ADR 0050 D4 step 1: every request is parsed in the EL0 server; a malformed one is refused there (400), no fault
+BADR=$(python3 -I -c "import socket,sys,urllib.parse as u; p=u.urlparse(sys.argv[1]); s=socket.create_connection((p.hostname,p.port),5); s.sendall(b'GARBAGE \\x01 / HTTP/9\\r\\n\\r\\n'); print(s.recv(64)[:12].decode(errors='replace'))" "$B" 2>&1)
+grep -q " 400" <<<"$BADR" && ok "a malformed request line is refused by the EL0 parser (400)" || bad "malformed request: $BADR"
+HP=$(curl -s -m 10 $C "$B/api/health")
+echo "$HP" | jget "d['http_parser']['where']=='el0' and d['http_parser']['requests']>5 and d['http_parser']['parser_faults']==0 and d['http_parser']['server_faults']==0" | grep -q True && ok "Mission Control requests are parsed in the EL0 server (ADR 0050 D4 step 1), no faults: $(echo "$HP" | jget "d['http_parser']")" || bad "http parser placement: $(echo "$HP" | jget "d.get('http_parser')")"
 D0=$(curl -s -m 10 $C "$B/api/detections" | jget "d['count']")
 # A baseline that could not be read must FAIL the run, never default to 0 (a vacuous pass).
 [[ "$D0" =~ ^[0-9]+$ ]] || { bad "could not read the baseline detection count ($D0)"; D0=999999; }

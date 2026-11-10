@@ -264,6 +264,8 @@ fn build_el0_tlshost(kernel_manifest_dir: &str, out_dir: &str) {
     let dir = std::path::Path::new(kernel_manifest_dir);
     println!("cargo:rerun-if-changed={}", dir.join("../tlsprov/src/lib.rs").display());
     println!("cargo:rerun-if-changed={}", dir.join("../hal/src/tlsabi.rs").display());
+    // ADR 0050 D4 step 1: the EL0 server compiles the kernel's own request parser (#[path])
+    println!("cargo:rerun-if-changed={}", dir.join("src/httpreq.rs").display());
 }
 
 fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &str, feature: Option<&str>, dest_name: &str) {
