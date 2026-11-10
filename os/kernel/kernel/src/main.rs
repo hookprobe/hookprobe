@@ -3786,6 +3786,25 @@ fn cm5_p10_probe() {
                         // Production phase 3a: from here on a loop that stops returning resets the SoC.
                         let wd = rtwdog::start(now());
                         kprint!(" [WDOG] runtime watchdog {} ({} s, petted from the AP loop)\n", if wd { "ARMED" } else { "not available (no HBoot hvc #3)" }, rtwdog::PET_SECS);
+                        // Readiness 3.7: wall clock from the board RTC (PMIC, kept across warm resets — and power cuts with
+                        // a backup cell) until NTP answers; provisional, so NTP can still correct it by any step.
+                        #[cfg(feature = "mcserve")]
+                        match arch_aarch64::mailbox::rtc_time() {
+                            Some(secs) if rtc_plausible(secs) => {
+                                let ms = secs as u64 * 1000;
+                                ioc::set_now_unix(secs);
+                                #[cfg(feature = "appersist")]
+                                {
+                                    pf.set_clock(ms, now(), freq);
+                                    let (t0, f) = (now(), freq);
+                                    evlog::with(&mut |l, _| l.anchor(&|t| prodfull::tick_to_ms(t, ms, t0, f)));
+                                }
+                                let step = mcserve::state().set_clock_provisional(ms, now());
+                                kprint!(" [RTC] wall clock {} from the board RTC (step {} ms) — provisional until NTP\n", secs, step);
+                            }
+                            Some(secs) => kprint!(" [RTC] board RTC reads {} (unset — no backup cell or never synced): waiting for NTP\n", secs),
+                            None => kprint!(" [RTC] board RTC not readable (firmware / EL2 gate): waiting for NTP\n"),
+                        }
                         #[cfg(feature = "crashtest")]
                         let crash_at = now() + 120 * freq;
                         loop {
@@ -4351,8 +4370,13 @@ fn cm5_p10_probe() {
                                                         evlog::with(&mut |l, _| l.anchor(&|t| prodfull::tick_to_ms(t, ms, t0, f)));
                                                     }
                                                     match mcserve::state().sync_clock(ms, now()) {
-                                                        Some(step) => kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
-                                                            wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step),
+                                                        Some(step) => {
+                                                            kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
+                                                                wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step);
+                                                            // keep the board RTC right for the next boot (register 0 only — HBoot enforces it)
+                                                            let rtc_ok = arch_aarch64::mailbox::set_rtc_time((ms / 1000) as u32);
+                                                            kprint!(" [RTC] board RTC {} from NTP\n", if rtc_ok { "set" } else { "NOT set (refused)" });
+                                                        }
                                                         None => kprint!(" [AP-NTP] reply refused: step larger than the re-sync bound\n"),
                                                     }
                                                 }
@@ -13556,6 +13580,12 @@ extern "C" fn producer() -> ! {
     let _ = ipc::send(0xBEEF); // CORE-11: false = endpoint busy
     kprint!(" [P4] producer: send returned (message delivered)\n");
     thread_exit()
+}
+
+/// Readiness 3.7: an RTC value is wall-clock time only between 2026-01-01 and 2100 (an unset RTC counts from 0).
+#[allow(dead_code)]
+fn rtc_plausible(secs: u32) -> bool {
+    (1_767_225_600..4_102_444_800).contains(&secs)
 }
 
 /// Phase 3c: a Wi-Fi stream wedged this long (deliveries waiting, nothing read from the firmware) resets the unit.
