@@ -7,9 +7,9 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 
 ## Cross-cutting findings
 
-1. **The shipping AP image (`apmc`) cannot include `prod-full`** (snapshot persistence, enrollment, M6
-   export, OTA orchestrator): `compile_error!` at `kernel/src/main.rs:13`, justified by a stale comment
-   ("AP NATs without packet::verdict" — it calls it at six places).
+1. ~~The shipping AP image cannot include persistence~~ — resolved: the AP product is `apmc+appersist`
+   (`kernel/src/main.rs:13-16`); persistence, the artifact store, the owner journal, the evidence log and the
+   OS-image update all run in it.
 2. **The AP loop (~1,400 lines inside `main.rs`, `cm5`-only) has no QEMU coverage.** Only logic already
    extracted into pure modules (apparse, ip6lan, shield, hal::policy, nat) is regression-tested.
 3. No cargo unit tests: proof = QEMU phase markers + host harnesses.
@@ -25,7 +25,7 @@ branch = main + Shield v2). Every heqk claim was checked in code; phase tags are
 | G11 | AP image has no wall clock (`set_clock(0)` + `disable_sntp`) → every AP timestamp is boot-relative | S | **closed** `fb417999` [P-wanntp] |
 | G13 | Investigate calls `/api/reports`, `/api/evidence/graph`, `/api/evidence/stats` → 404 on heqk; `/api/engines` always `[]`; no `/api/manifest`, `/api/verdicts/dns`; SampleDataNotice marks Investigate fully live | S each | **done** (`fb417999`; all four routes served and covered by mc-e2e — register row was stale) |
 | G5 | QSECBIT only scores wire-DROPPED detections → observe-only threats (beacon, lateral, IOC, ARP spoof) leave it GREEN | M | **closed** `fb417999` (severity scoring + 5-min decay) |
-| G0 | Extract the AP loop into a pure `apcore` (NIC trait) + QEMU harness | L | **steps 1–3a done** (2026-11-09): client IPv4 forwarding → `apcore::forward4`, the inbound WAN leg → `apcore::wan4`, the Wi-Fi client gate chain → `apcore::client4` (`[P-apcore]`, `[P-apcore-wan]`, `[P-apcore-lan]`). Next: the rest of the Wi-Fi data arm + eth1, mgmt, `tick()` (plan in the 2026-11-09 session notes) |
+| G0 | Extract the AP loop into a pure `apcore` (NIC trait) + QEMU harness | L | **steps 1–3c done** (2026-11-09/10; 3b `client6`, 3c `station_relay` + eth1): client IPv4 forwarding → `apcore::forward4`, the inbound WAN leg → `apcore::wan4`, the Wi-Fi client gate chain → `apcore::client4` (`[P-apcore]`, `[P-apcore-wan]`, `[P-apcore-lan]`). Next: the rest of the Wi-Fi data arm + eth1, mgmt, `tick()` (plan in the 2026-11-09 session notes) |
 | G7 | Threat intel = 4 hard-coded CIDRs; need a signed IOC pack (CIDR v4/v6, domains), LPM, per-entry expiry | M | **closed** `4b23f618` [P-ioc] |
 | G8 | No DGA/lookalike scoring on Shield queries (detect-only; score the registrable label — V1's `parts[0]` bug) | S/M | **closed** `fb417999` [P-dga] |
 | G9 | Local NAC: signed DEVICES.TXT (MAC → full/internet_only/lan_only/quarantine) arming `segment` without enrollment | M | **closed** `4b23f618` [P-devpolicy] |

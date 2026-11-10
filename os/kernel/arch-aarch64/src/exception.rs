@@ -20,6 +20,7 @@ pub extern "C" fn rust_exception(idx: u64, esr: u64, elr: u64, far: u64) -> ! {
     let _ = writeln!(u, "\n[EXCEPTION] {} (idx={}) — UNEXPECTED KERNEL FAULT", name, idx);
     let _ = writeln!(u, "  ESR_EL1={:#018x}  EC={:#04x}", esr, ec);
     let _ = writeln!(u, "  ELR_EL1={:#018x}  FAR_EL1={:#018x}", elr, far);
+    crate::crashrec::write(2, esr, elr, far, format_args!("{} (idx={}) EC={:#04x}", name, idx, ec));
     // QEMU: exit with FAILURE so a crash never masquerades as a clean run.
     #[cfg(not(feature = "cm5"))]
     semihosting::exit(1);

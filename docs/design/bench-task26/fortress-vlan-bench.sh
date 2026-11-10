@@ -30,6 +30,9 @@ setup)
   nft add table ip hqbench
   nft add chain ip hqbench post '{ type nat hook postrouting priority srcnat; policy accept; }'
   nft add rule ip hqbench post ip saddr '{ 10.100.0.0/24, 192.168.200.0/24 }' oifname != '{ "enp4s0.100", "enp4s0.200" }' masquerade
+  # bench file server on the WAN side (throughput / soak checks): 64 MB of zeros at http://10.100.0.1:8088/blob
+  mkdir -p /run/hqbench/sink && head -c 64000000 /dev/zero > /run/hqbench/sink/blob
+  (cd /run/hqbench/sink && setsid nohup python3 -m http.server 8088 --bind 10.100.0.1 >/run/hqbench/sink.log 2>&1 & echo $! > /run/hqbench/sink.pid)
   echo "bench up: $P.100 10.100.0.1/24 (DHCP .50-.150), $P.200 192.168.200.1/24"
   ;;
 v6up)
@@ -45,10 +48,14 @@ interface $P.100 {
   prefix 2001:db8:100::/64 { AdvOnLink on; AdvAutonomous on; };
 };
 CONF
+  [ -f /run/hqbench/radvd.pid ] && kill "$(cat /run/hqbench/radvd.pid)" 2>/dev/null; for p in $(pgrep -x radvd); do grep -qa hqbench /proc/$p/cmdline && kill $p; done; sleep 1   # idempotent v6up (pgrep -x: never matches a shell)
   radvd -C /run/hqbench/radvd.conf -p /run/hqbench/radvd.pid -m logfile -l /run/hqbench/radvd.log
   # kea-dhcp6 is AppArmor-confined to fixed paths: config under /etc/kea (own subdir, the package config is
   # untouched), pid /run/kea/<config-basename>.kea-dhcp6.pid, lock /run/lock/kea, leases /var/lib/kea.
   mkdir -p /etc/kea/hqbench /run/kea /run/lock/kea /var/lib/kea /var/log/kea
+  # after a host reboot /run is fresh: directories created here are root-owned and kea (User=_kea) dies with
+  # "Unable to open PID file" (2026-11-10) — hand them to _kea like the package's tmpfiles.d does
+  chown _kea:_kea /run/kea /run/lock/kea /var/lib/kea /var/log/kea 2>/dev/null || true
   cat > /etc/kea/hqbench/kea-dhcp6.conf <<CONF
 { "Dhcp6": {
     "interfaces-config": { "interfaces": [ "$P.100" ] },
@@ -89,6 +96,7 @@ v6down)
 teardown)
   "$0" v6down 2>/dev/null || true
   [ -f /run/hqbench/dnsmasq.pid ] && kill "$(cat /run/hqbench/dnsmasq.pid)" 2>/dev/null || true
+  [ -f /run/hqbench/sink.pid ] && kill "$(cat /run/hqbench/sink.pid)" 2>/dev/null || true
   nft delete table ip hqbench 2>/dev/null || true
   ip link del $P.100 2>/dev/null || true
   ip link del $P.200 2>/dev/null || true

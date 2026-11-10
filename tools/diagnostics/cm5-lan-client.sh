@@ -19,6 +19,7 @@ ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 # the Pi's Wi-Fi interface on the CM5 AP is whichever holds the default route via 10.99.0.1 (it has two
 # adapters and NetworkManager may pick either) — wait for it after a CM5 reboot instead of sleeping blindly
+"$(dirname "$0")/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1 || true
 IF=""; PIIP=""
 for _ in $(seq 1 45); do
   IF=$(pi "ip route | awk '/^default via 10.99.0.1/ {print \$5; exit}'" 2>/dev/null)
