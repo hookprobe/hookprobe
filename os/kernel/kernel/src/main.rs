@@ -168,6 +168,8 @@ mod enroll;
 // M4.5 — control-plane INITIATOR: smoltcp-free hand-framed Noise handshake over the single drain.
 #[cfg(feature = "securechannel")]
 mod controlplane;
+#[cfg(feature = "securechannel")]
+mod g19;
 // M6 (ADR 0044 D3 B2) — on-device evidence/telemetry export over the enrolled channel.
 #[cfg(feature = "securechannel")]
 mod export;
@@ -3174,6 +3176,15 @@ fn cm5_p10_probe() {
                                 Some(Ok(())) => {
                                     let pol = unsafe { &*core::ptr::addr_of!(POLICY) };
                                     kprint!(" [POLICY] loaded: {} prefix-lists, {} ACLs, {} interface bindings, {} routes\n", pol.npl, pol.nacl, pol.nbind, pol.nroutes);
+                                    // G19: the SASE tunnel runs only with a signed `tunnel` line AND a pinned PoP key.
+                                    #[cfg(feature = "securechannel")]
+                                    {
+                                        let on = g19::configure(pol.tunnel);
+                                        if let Some(t) = pol.tunnel {
+                                            kprint!(" [G19] POLICY tunnel to {}.{}.{}.{} ({}) — {}\n", t.pop[0], t.pop[1], t.pop[2], t.pop[3],
+                                                if t.full { "full" } else { "split" }, if on { "starts when the WAN is up" } else { "NO PoP key pinned in this image: tunnel off" });
+                                        }
+                                    }
                                     for a in &pol.acl[..pol.nacl] {
                                         kprint!(" [POLICY]   acl {} — {} entries, default {:?}{}\n", core::str::from_utf8(&a.name[..a.nlen]).unwrap_or("?"), a.n,
                                             a.default.unwrap_or(hal::policy::Act::Drop), if a.default.is_none() { " (implicit deny)" } else { "" });
@@ -3849,6 +3860,14 @@ fn cm5_p10_probe() {
                         let crash_at = now() + 120 * freq;
                         loop {
                             rtwdog::pet(now(), freq);
+                            // G19: drive the super-PoP tunnel (handshake / keepalive / re-handshake); idle without a policy.
+                            #[cfg(all(feature = "securechannel", feature = "hboot"))]
+                            if g19::enabled() {
+                                let ms = (now() / (freq / 1000).max(1)) as i64;
+                                g19::tick(ms, up.usable(), up.dhcp.yiaddr, up.mac, up.gw_mac, &device_identity_keypair,
+                                    &mut || crate::securechannel::InitiatorRandomness::from_entropy(&mut crate::entropy::MetalEntropy::new(crate::entropy::HwTrng::new())).ok(),
+                                    &mut |f: &[u8]| uplink::wan_tx(&up, f));
+                            }
                             #[cfg(feature = "crashtest")]
                             if now() > crash_at && rtwdog::last_crash().is_none() { // once: the boot that reports it runs on
                                 panic!("crashtest: deliberate panic 120 s into the AP loop (bench build)");
@@ -4166,7 +4185,7 @@ fn cm5_p10_probe() {
                                                 // Mission Control on the AP address; not on the client AP when management is
                                                 // configured (G12-M).
                                                 #[cfg(feature = "mcserve")]
-                                                if let Some(n) = mcn.as_mut().filter(|_| mc_wifi) {
+                                                if let Some(n) = mcn.as_mut().filter(|_| mc_wifi || apcore::alert_flow(frame, &our_ip)) {
                                                     n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
                                                 }
                                             }
@@ -4368,6 +4387,17 @@ fn cm5_p10_probe() {
                                         uplink::WanEvent::ArpReplied => wan_arp += 1,
                                         uplink::WanEvent::GwRefreshed => wan_gw_refresh += 1,
                                         uplink::WanEvent::Frame(n) => {
+                                            // G19: the PoP's handshake / tunnel datagrams; a DATA packet comes back rewritten
+                                            // as an ordinary WAN frame and continues through the usual path below.
+                                            #[cfg(all(feature = "securechannel", feature = "hboot"))]
+                                            let n = if g19::wan_wants(&wbuf[..n]) {
+                                                match g19::wan_ingress(&mut wbuf, n, (now() / (freq / 1000).max(1)) as i64) {
+                                                    Some(m) => m,
+                                                    None => continue,
+                                                }
+                                            } else {
+                                                n
+                                            };
                                             if n > 600 {
                                                 wan_big_seen += 1;
                                             }
@@ -6989,6 +7019,7 @@ pub extern "C" fn kmain() -> ! {
         // in-kernel responder over the exact smoltcp-free hand-framed UDP transport it runs on
         // metal (the metal half is the host MSSP-sim, deferred).
         controlplane::cp_selftest();
+        let _ = g19::selftest();
     }
 
     // --- M4.4 (P19-edge): the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's
