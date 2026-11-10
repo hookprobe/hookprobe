@@ -385,6 +385,25 @@ fn wan_ipcp(code: u8, data: &[u8]) -> Option<hal::pppwire::IpcpFacts> {
     Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_ipcp(&o) } else { hal::pppwire::IpcpFacts { malformed: true, ..hal::pppwire::IPCP0 } })
 }
 
+#[cfg(feature = "mctls")]
+fn wan_chap(data: &[u8]) -> Option<hal::pppwire::ChapChallenge> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::chap_challenge(data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::CHAP_LEN }>(hal::lansvcabi::CMD_WAN_CHAP, &[], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_chap(&o) } else { hal::pppwire::CHAP0 })
+}
+#[cfg(feature = "mctls")]
+fn wan_ip6cp(data: &[u8]) -> Option<hal::pppwire::Ip6cpReq> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::ip6cp_req(data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::IP6CP_LEN }>(hal::lansvcabi::CMD_WAN_IP6CP, &[], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_ip6cp(&o) } else { hal::pppwire::Ip6cpReq { malformed: true, ..hal::pppwire::IP6CP0 } })
+}
+
 /// Route the DHCP server's parse (step 2b) and the WAN control parsers (step 3) through `el0-lansvc` (called once
 /// at boot, before any client is served or the uplink comes up).
 pub fn install_dhcp() {
@@ -397,6 +416,8 @@ pub fn install_dhcp() {
         arch_aarch64::wanparse::EL0_PPPOE_DISC = Some(wan_pppoe_disc);
         arch_aarch64::wanparse::EL0_LCP = Some(wan_lcp);
         arch_aarch64::wanparse::EL0_IPCP = Some(wan_ipcp);
+        arch_aarch64::wanparse::EL0_CHAP = Some(wan_chap);
+        arch_aarch64::wanparse::EL0_IP6CP = Some(wan_ip6cp);
     };
 }
 
@@ -554,12 +575,17 @@ pub fn selftest() -> bool {
     let ipcp = hal::pppwire::ipcp_facts(3, nak_in) == wanparse::ipcp(3, nak_in) && wanparse::ipcp(3, nak_in).dns2 == Some([9, 9, 9, 9])
         && hal::pppwire::ipcp_facts(1, req_in) == wanparse::ipcp(1, req_in) && wanparse::ipcp(1, req_in).nrej == 6
         && wanparse::ipcp(1, req_in).peer == Some([10, 67, 0, 1]);
-    let pppoe = pppoe && lcp && ipcp;
+    // 3b-iv: a CHAP Challenge (16-byte value + name) and an IPv6CP Request (IID + an unknown option) identically
+    let ch_in: &[u8] = &[16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, b'A', b'C'];
+    let i6_in: &[u8] = &[1, 10, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 0, 0];
+    let ppp4 = hal::pppwire::chap_challenge(ch_in) == wanparse::chap(ch_in) && wanparse::chap(ch_in).vs == 16 && !wanparse::chap(&[70, 1]).ok
+        && hal::pppwire::ip6cp_req(i6_in) == wanparse::ip6cp(i6_in) && wanparse::ip6cp(i6_in).nrej == 4 && wanparse::ip6cp(i6_in).peer_iid[7] == 1;
+    let pppoe = pppoe && lcp && ipcp && ppp4;
     let wan_ok = same_offer && other_xid && same_ra && junk && pppoe;
     let (_, c_after, _, _, _) = stats();
     let pass = where_ == "el0" && same_q && same_w && bad && recovered && same_d && bad_d && wan_ok && c_after > 0;
     arch_aarch64::_print(format_args!(
-        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak classification identical={}\n",
+        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak + CHAP Challenge + IPv6CP Request classification identical={}\n",
         if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe
     ));
     pass

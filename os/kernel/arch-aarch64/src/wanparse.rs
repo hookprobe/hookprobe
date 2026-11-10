@@ -63,6 +63,26 @@ pub fn ipcp(code: u8, data: &[u8]) -> hal::pppwire::IpcpFacts {
     }
 }
 
+pub type ChapFn = fn(&[u8]) -> Option<hal::pppwire::ChapChallenge>;
+pub static mut EL0_CHAP: Option<ChapFn> = None;
+pub type Ip6cpFn = fn(&[u8]) -> Option<hal::pppwire::Ip6cpReq>;
+pub static mut EL0_IP6CP: Option<Ip6cpFn> = None;
+
+/// D4 step 3b-iv: a CHAP Challenge's value (a server fault reads as "no challenge": ignored, the AC retransmits).
+pub fn chap(data: &[u8]) -> hal::pppwire::ChapChallenge {
+    match unsafe { EL0_CHAP } {
+        Some(h) => h(data).unwrap_or(hal::pppwire::CHAP0),
+        None => hal::pppwire::chap_challenge(data),
+    }
+}
+/// D4 step 3b-iv: an IPv6CP Configure-Request (a server fault reads as malformed: dropped).
+pub fn ip6cp(data: &[u8]) -> hal::pppwire::Ip6cpReq {
+    match unsafe { EL0_IP6CP } {
+        Some(h) => h(data).unwrap_or(hal::pppwire::Ip6cpReq { malformed: true, ..hal::pppwire::IP6CP0 }),
+        None => hal::pppwire::ip6cp_req(data),
+    }
+}
+
 pub fn dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
     match unsafe { EL0_DHCP6 } {
         Some(h) => h(ip, xid).flatten(),

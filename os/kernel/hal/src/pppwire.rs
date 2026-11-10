@@ -286,3 +286,92 @@ pub fn decode_ipcp(o: &[u8; IPCP_LEN]) -> IpcpFacts {
     f.rej_dns2 = o[87] != 0;
     f
 }
+
+// ---- D4 step 3b-iv: CHAP Challenge + IPv6CP Configure-Request --------------------------------------------------
+
+/// A CHAP Challenge's value (the secret and the MD5 response stay in the kernel; only the parse runs in EL0).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChapChallenge {
+    pub ok: bool,
+    pub value: [u8; 64],
+    pub vs: u8,
+}
+pub const CHAP0: ChapChallenge = ChapChallenge { ok: false, value: [0; 64], vs: 0 };
+/// `data` = the Challenge's bytes after code/id/length: value-size, value, name.
+pub fn chap_challenge(data: &[u8]) -> ChapChallenge {
+    let mut c = CHAP0;
+    if data.is_empty() {
+        return c;
+    }
+    let vs = data[0] as usize;
+    if 1 + vs > data.len() || vs > 64 {
+        return c;
+    }
+    c.value[..vs].copy_from_slice(&data[1..1 + vs]);
+    c.vs = vs as u8;
+    c.ok = true;
+    c
+}
+pub const CHAP_LEN: usize = 1 + 64 + 1;
+pub fn encode_chap(c: &ChapChallenge) -> [u8; CHAP_LEN] {
+    let mut o = [0u8; CHAP_LEN];
+    o[0] = c.ok as u8;
+    o[1..65].copy_from_slice(&c.value);
+    o[65] = c.vs;
+    o
+}
+pub fn decode_chap(o: &[u8; CHAP_LEN]) -> ChapChallenge {
+    let mut c = CHAP0;
+    c.ok = o[0] != 0;
+    c.value.copy_from_slice(&o[1..65]);
+    c.vs = o[65].min(64);
+    c
+}
+
+/// IPv6CP Configure-Request: the peer's Interface-Identifier (option 1) + the options we reject (copied out).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Ip6cpReq {
+    pub malformed: bool,
+    pub peer_iid: [u8; 8],
+    pub rej: [u8; 64],
+    pub nrej: u8,
+}
+pub const IP6CP0: Ip6cpReq = Ip6cpReq { malformed: false, peer_iid: [0; 8], rej: [0; 64], nrej: 0 };
+pub fn ip6cp_req(data: &[u8]) -> Ip6cpReq {
+    let mut r = IP6CP0;
+    let mut nrej = 0usize;
+    let mut o = 0;
+    while o + 2 <= data.len() {
+        let (t, l) = (data[o], data[o + 1] as usize);
+        if l < 2 || o + l > data.len() {
+            r.malformed = true;
+            return r;
+        }
+        if t == 1 && l == 10 {
+            r.peer_iid.copy_from_slice(&data[o + 2..o + 10]);
+        } else if nrej + l <= r.rej.len() {
+            r.rej[nrej..nrej + l].copy_from_slice(&data[o..o + l]);
+            nrej += l;
+        }
+        o += l;
+    }
+    r.nrej = nrej as u8;
+    r
+}
+pub const IP6CP_LEN: usize = 1 + 8 + 64 + 1;
+pub fn encode_ip6cp(r: &Ip6cpReq) -> [u8; IP6CP_LEN] {
+    let mut o = [0u8; IP6CP_LEN];
+    o[0] = r.malformed as u8;
+    o[1..9].copy_from_slice(&r.peer_iid);
+    o[9..73].copy_from_slice(&r.rej);
+    o[73] = r.nrej;
+    o
+}
+pub fn decode_ip6cp(o: &[u8; IP6CP_LEN]) -> Ip6cpReq {
+    let mut r = IP6CP0;
+    r.malformed = o[0] != 0;
+    r.peer_iid.copy_from_slice(&o[1..9]);
+    r.rej.copy_from_slice(&o[9..73]);
+    r.nrej = o[73].min(64);
+    r
+}
