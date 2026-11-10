@@ -92,6 +92,10 @@ yet say so (doc-only fix, no decision change).
    builds must exclude them and verifiers must reject `otp_provisioned=0` quotes in production.
 9. ~~ADR 0049 D2: unkeyed IPv6 source hash~~ — fixed 2026-11-10 (SipHash-2-4, per-boot TRNG key).
 10. ADR 0050 D3: owner-journal replay and the upload form handlers have no host fuzz target (kernel crate; covered only by the in-kernel fixed-seed `[P-fuzz]`); the OS-image verifier now has one (`boot_abi::verify`, 1.6 M runs).
+11. **New (2026-11-10, doc review): `WAN.TXT` is unsigned**, and it carries `mgmt_floor=` — the management
+    floor that decides which sources are always allowed (ADR 0023). Physical access to the card can widen it.
+    Fix (A): sign WAN.TXT like POLICY.TXT (same operator key, same pinned anchor), or move the floor into the
+    signed POLICY family. Release gate item TC-07.
 
 ## 3. E2E / validation evidence (this audit)
 
