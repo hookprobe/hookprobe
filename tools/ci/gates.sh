@@ -17,7 +17,8 @@
 #   g0  hygiene + CI wiring meta-gate + CI-tooling self-tests
 #   g1  static + unit: clippy ratchet, host unit tests, validate.sh phase ratchet
 #   g2  QEMU boot gate (os/kernel/validate.sh, all implemented phases)
-#   g3  Mission Control end-to-end in QEMU (os/kernel/tools/mc-e2e.sh)
+#   g3  Mission Control: UI typecheck + UI behaviour suite (os/mission-control/tests/ui) +
+#       end-to-end in QEMU (os/kernel/tools/mc-e2e.sh)
 #   g4  supply chain: cargo-deny (RustSec) on every lockfile, npm audit, SBOM
 #   g4r reproducibility: build the shipped `prod` kernel twice, hashes must match
 #   g6  metal (self-hosted CM5 runner only): mc-e2e-metal.sh
@@ -45,7 +46,7 @@ declare -A DESC=(
   [g0]="hygiene + CI wiring meta-gate + CI-tooling self-tests"
   [g1]="static + unit (clippy ratchet, host unit tests, phase ratchet)"
   [g2]="QEMU boot gate (validate.sh)"
-  [g3]="Mission Control end-to-end in QEMU (mc-e2e.sh)"
+  [g3]="Mission Control: typecheck + UI suite + end-to-end in QEMU (mc-e2e.sh)"
   [g4]="supply chain (cargo-deny/RustSec, npm audit, SBOM)"
   [g4r]="reproducible build of the shipped prod kernel"
   [g6]="metal gate on the self-hosted CM5 bench"
@@ -109,6 +110,11 @@ ensure_ui() {
   (cd os/mission-control && npm ci --no-audit --no-fund && PUBLIC_API_BASE='' npm run build)
 }
 
+ui_typecheck() {
+  need npm || return 0
+  (cd os/mission-control && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && npx astro check)
+}
+
 run_mce2e() {
   local rc
   (cd os/kernel && ./tools/mc-e2e.sh) > "$CI_OUT/mc-e2e.out" 2>&1; rc=$?
@@ -127,6 +133,16 @@ gate_g3() {
   need mcopy || return 0
   step "build Mission Control UI"      ensure_ui
   ensure_browser || echo "  [skip] Playwright Chromium unavailable — browser/HTTPS leg will be skipped"
+  # The UI's own proofs, before the device e2e: types, then behaviour in preview mode (shell,
+  # capability gating, drawers, PlanDiff states, filters, exports, phone layouts).
+  step "Mission Control typecheck (astro check)" ui_typecheck
+  if [ -d os/kernel/tools/mc-e2e/node_modules/playwright ]; then
+    step "Mission Control UI suite (preview, Playwright)" os/mission-control/tests/ui/run.sh
+  elif [ "$STRICT" = 1 ]; then
+    echo "  [FAIL] Mission Control UI suite: Playwright unavailable (CI_STRICT)"; fail_inc
+  else
+    echo "  [skip] Mission Control UI suite: Playwright unavailable"
+  fi
   step "mc-e2e (heqk serves Mission Control, QEMU)" run_mce2e
   # A skipped browser leg must never pass as green in CI: it is the only proof of the device TLS
   # stack (ECDSA P-256 cert key + X25519MLKEM768) against a real browser.
