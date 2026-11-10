@@ -20,8 +20,10 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
     const a = anchor();
     if (!ownerKey() || !a) return null;
     if (a.state.startsWith('standalone')) return { ok: false, text: 'This device has no operator key (standalone): it accepts unsigned files and does not check this key.' };
-    return a.key.toLowerCase() === fp()
-      ? { ok: true, text: `The device trusts this key (pinned operator key ${a.key}…).` }
+    // Compare the whole 32-byte key when the device reports it; older images give only the 4-byte fingerprint.
+    const same = a.public_key ? a.public_key.toLowerCase() === ownerKey()!.pubHex : a.key.toLowerCase() === fp();
+    return same
+      ? { ok: true, text: `The device trusts this key (${a.public_key ? 'full public key matches' : `pinned operator key ${a.key}…`}).` }
       : { ok: false, text: `The device trusts a different key (${a.key}…). Files signed here will be refused until this key is enrolled (ADR 0058) or you import the device's operator key.` };
   };
 

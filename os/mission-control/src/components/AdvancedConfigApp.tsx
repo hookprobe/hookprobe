@@ -26,6 +26,7 @@ import {
 import AppShell, { normPath } from './AppShell';
 import Drawer from './Drawer';
 import SigningKeyPanel from './SigningKeyPanel';
+import RestartButton from './RestartButton';
 
 type Sec = 'internet' | 'wifi' | 'firewall';
 const SECS: [Sec, string, string][] = [['internet', 'Internet', '/network/wan/advanced'], ['wifi', 'Wi-Fi', '/network/wifi'], ['firewall', 'Firewall and routes', '/protect/policies']];
@@ -308,6 +309,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
 
         <Show when={step() === 'done'}>
           <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged for the next reboot</p>
+          <p class="l0-card-sub">It takes effect when the device restarts. Restart now, or let it apply at the next restart.</p>
+          <RestartButton primary />
         </Show>
 
         <Show when={step() === 'card' && signed()}>
