@@ -65,6 +65,12 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
 ### D4 — Migration order **[vision]**
 
 1. HTTP/TLS server (largest code, internet-adjacent once a port is forwarded; smoltcp moves with it).
+   *Status 2026-11-10:* TLS terminates in EL0 (D2, `el0-tlshost`); the HTTP request parser now runs in that
+   same EL0 server too (`CMD_HTTP_PARSE`): the kernel passes the raw bytes and rebuilds the request from a
+   fixed record of offsets into its own copy (bounds + UTF-8 checks only). A fault or timeout fails that
+   request closed (400) and resets the server (D5); `/api/health.http_parser` reports placement, requests,
+   faults and restarts; mc-e2e asserts all of it. Still in EL1 for this step: smoltcp TCP and the route
+   handlers (they consume typed fields only).
 2. LAN services (DHCP server + DNS forwarder) — reachable by every Wi-Fi client.
 3. WAN control (PPPoE/LCP/PAP, DHCPv4/v6, RA) — reachable by the ISP side.
 4. Control channel (Noise) — already authenticated after msg1; lowest exposure.
