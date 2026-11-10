@@ -18,7 +18,8 @@ export async function refreshActions(): Promise<void> {
 
 interface Session { csrf: string; next_seq: number; max_ttl_s: number }
 
-async function post(path: string, fields: Record<string, string>): Promise<{ ok: boolean; refused?: string }> {
+/** One guarded owner write (same Origin, per-session CSRF, strictly increasing seq — ADR 0053). */
+export async function post<T = { ok: boolean; refused?: string }>(path: string, fields: Record<string, string>): Promise<T> {
   const s = await fetchJson<Session>('/api/session');
   const body = new URLSearchParams({ ...fields, seq: String(s.next_seq) });
   const r = await fetch(path, { method: 'POST', credentials: 'same-origin', headers: { 'X-HQ-CSRF': s.csrf }, body });
