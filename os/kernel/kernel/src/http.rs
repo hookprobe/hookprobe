@@ -311,6 +311,23 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
+    // ADR 0059 step 3: commit the configuration trial now / roll the bundle back for the next boot
+    if req.post && (req.path == "/api/config/confirm" || req.path == "/api/config/rollback") {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let confirm = req.path == "/api/config/confirm";
+        return match crate::ownerapi::config_action(&c, req.body, auth, confirm) {
+            Ok(g) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"{}\":true,\"generation\":{}}}", if confirm { "committed" } else { "rolled_back" }, g);
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
     if req.post && req.path == "/api/factory-reset" {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         return match crate::ownerapi::factory_reset(&c, req.body, auth) {
@@ -595,6 +612,20 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             w.raw("}");
         }),
         // Audit A8: the "Get Online" pillar's read side — what the device applied, and from which source.
+        // ADR 0059 step 3: the configuration bundle lifecycle (cfgd)
+        "/api/config" => json(scratch, |w| {
+            use core::fmt::Write;
+            let st = match crate::cfgd::state() {
+                crate::cfgd::Boot::None => "none",
+                crate::cfgd::Boot::Committed(_) => "committed",
+                crate::cfgd::Boot::Trial(_) => if crate::cfgd::on_trial() { "trial" } else { "committed" },
+                crate::cfgd::Boot::Reverted { .. } => "reverted",
+                crate::cfgd::Boot::Refused => "refused",
+            };
+            let el = crate::cfgd::elapsed_s();
+            let _ = write!(w, "{{\"state\":\"{}\",\"generation\":{},\"floor\":{},\"on_trial\":{},\"needs_confirm\":{},\"window_s\":{},\"elapsed_s\":{},\"auto_rollback\":true,\"health\":\"WAN usable (Mission Control stays on the LAN / Wi-Fi regardless)\"}}",
+                st, crate::cfgd::generation(), crate::anchor::cfg_gens().cfg_floor, crate::cfgd::on_trial(), crate::cfgd::on_trial() && crate::cfgd::touches_mgmt(), crate::cfgd::WINDOW_S, if crate::cfgd::on_trial() { el } else { 0 });
+        }),
         // ADR 0058 D3: which key verifies what — the vendor key (content packs) and the owner's configuration key
         "/api/anchor" => json(scratch, |w| {
             use core::fmt::Write;

@@ -586,6 +586,51 @@ pub fn anchor_set(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, rotate: 
     }
 }
 
+/// ADR 0059 step 3: `POST /api/config/confirm` (commit the trial now) and `/api/config/rollback` (the previous
+/// bundle for the next boot): reason + permanent=true + re-authentication, behind the owner-write guards.
+pub fn config_action(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, confirm: bool) -> Result<u64, &'static str> {
+    let (mut b0, mut b1, mut b2, mut b3) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
+    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+    let reason = form_get(body, "reason", &mut b1).unwrap_or("");
+    let permanent = form_get(body, "permanent", &mut b2) == Some("true");
+    let seq: u64 = form_get(body, "seq", &mut b3).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let tag = crate::mcauth::session_tag(c.session);
+    if !origin_ok(c.origin, c.host) {
+        return refuse(c, "origin").map(|_| 0);
+    }
+    if !crate::mcauth::csrf_ok(c.session, c.csrf) {
+        return refuse(c, "csrf").map(|_| 0);
+    }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return refuse(c, "rate limited: at most 20 writes a minute per session").map(|_| 0);
+    }
+    if !crate::actions::accept_seq(tag, seq) {
+        return refuse(c, "replay").map(|_| 0);
+    }
+    if reason.trim().len() < 3 {
+        return refuse(c, "reason required").map(|_| 0);
+    }
+    if !permanent {
+        return refuse(c, "permanent=true required").map(|_| 0);
+    }
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return refuse(c, "re-authentication failed").map(|_| 0);
+    }
+    let r = if confirm { crate::cfgd::confirm_device() } else { crate::cfgd::revert_device() };
+    let mut why = [0u8; 64];
+    let wl = {
+        use core::fmt::Write;
+        let mut w = crate::mcstate::JsonBuf::new(&mut why);
+        let _ = write!(w, "{} gen {:?}", if confirm { "confirm" } else { "rollback" }, r);
+        w.len
+    };
+    let _ = audit_artifact("config", if r.is_ok() { 1 } else { 2 }, &why[..wl], tag, c.now_ms);
+    match r {
+        Ok(g) => Ok(g),
+        Err(e) => refuse(c, e).map(|_| 0),
+    }
+}
+
 /// G49: `POST /api/reboot` — reason + `permanent=true` + re-authentication, behind the owner-write guards (origin,
 /// CSRF, rate, replay). A plain restart: nothing is erased; staged configuration (A/B store) applies on the way up.
 pub fn reboot(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<(), &'static str> {
