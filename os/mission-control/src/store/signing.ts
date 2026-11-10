@@ -221,3 +221,19 @@ export async function prepareRotation(generation: number, passphrase: string): P
   const backup = await wrapPkcs8(der, passphrase);
   return { publicKey: pub, proof, signature, backup, commit: async () => { await storePkcs8(der, 'generated'); der.fill(0); await loadOwnerKey(); } };
 }
+
+/** HQCSIG1 over an HQCFG1 bundle (ADR 0059 §B.4): 512 B, "HQCSIG1\0" | alg 1 | total_len u32 LE |
+ *  sha256(bundle) | Ed25519("HQCFG1-SIG" || sha256) | zero pad. Byte-identical to os/kernel/tools/hqcfg.py. */
+export async function signBundle(bundle: Uint8Array): Promise<Uint8Array> {
+  const d = await sha(bundle);
+  const len = new Uint8Array(4); new DataView(len.buffer).setUint32(0, bundle.length, true);
+  const sig = await sign(cat(enc('HQCFG1-SIG'), d));
+  return pad512(cat(enc('HQCSIG1\0'), new Uint8Array([1]), len, d, sig));
+}
+
+/** sha256(this browser's public key)[0..8]: the bundle's signer_key_id. */
+export async function ownerKeyId(): Promise<Uint8Array> {
+  const s = await idbGet();
+  if (!s) throw new Error('No signing key in this browser.');
+  return (await sha(new Uint8Array(await crypto.subtle.exportKey('raw', s.publicKey)))).slice(0, 8);
+}
