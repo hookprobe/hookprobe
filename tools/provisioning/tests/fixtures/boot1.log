@@ -1,0 +1,16 @@
+[0m heqk hboot
+ | hybrid secure boot: ed25519 + SLH-DSA    |
+ secure boot: PASS (ed25519 AND SLH-DSA, svn OK)
+ [HBoot-AB] PASS — no EL2 trial gate (direct boot); A/B confirm not required
+ [WIFI] per-device MAC 02:4b:7e:19:c3:a5 (locally administered, derived from the device secret)
+ [P10] CYW43455 WiFi (SDIO) — power on radio (WL_ON gpio28 + clk_emmc2), then Stage A
+ [P10-A] PASS — SDIO link up; chip ID 0x4345 (BCM4345/6 / CYW43455)
+ [P10-B] PASS — firmware (419000 B) + NVRAM uploaded; F2 up (stage-B step 9)
+ [WIFI] setup AP "HookProbe-Setup-7K3Q" — per-device passphrase 8x3m-q7vc-4h2d-9tzp (label / QR: WIFI:T:WPA;S:HookProbe-Setup-7K3Q;P:8x3m-q7vc-4h2d-9tzp;;)
+ [P11-AP2] PASS(ap-config-wpa2) — WPA2 BSS up (try 1); join "HookProbe-Setup-7K3Q" (PSK from the per-device setup credential); client isolation (ap_isolate) ON
+   [P11-AP2] try 1: channel 36 chanspec 0xd024
+   [P11-AP2] cap_has_ap=1 apsta=0 set_ap=0 infra=1 chan=36 wsec=4 wpa_auth=128 up=0 ssid=0 | get_ap=1 bssid 02:4b:7e:19:c3:a5 mac_set=1 ev=1 gtk=1 bssid_rb=02:4b:7e:19:c3:a5 verified=1
+ [AP-MC] owner: UNCLAIMED — protected routes refuse
+ [MC-TLS] device TLS key (P-256, SRK-derived) pub=042c7cd1e9f26d2b9a53334cc9961e07d453b7d8d23aa6f9a2dc294b13af115619d55c46df34e9aa84ac67dc3eb69af10e70976edac090d3f2692683e0bd8ff24f
+ [MC-TLS] HTTPS OFF — no certificate provisioned (MCTLS.CRT empty); certify the key above with the owner CA
+ [AP-MC] Mission Control on http://10.99.0.1/ for Wi-Fi clients (served by heqk)
