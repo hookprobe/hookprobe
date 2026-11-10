@@ -63,6 +63,11 @@ fn main() {
     gen_pop_key(&std::env::var("OUT_DIR").unwrap());
     if std::env::var("CARGO_FEATURE_MCTLS").is_ok() {
         build_el0_tlshost(&dir, &std::env::var("OUT_DIR").unwrap());
+        // ADR 0050 D4 step 2: the EL0 LAN-services (DNS) server, same substrate
+        let feat = std::env::var("CARGO_FEATURE_CM5").is_ok().then_some("cm5");
+        build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-lansvc", "el0lansvc-target", feat, "el0_lansvc.elf");
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("src/dnswire.rs").display());
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/lansvcabi.rs").display());
     }
     println!("cargo:rerun-if-changed=build.rs");
 }
