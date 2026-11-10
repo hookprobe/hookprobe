@@ -462,3 +462,24 @@ interface/subnet/address triples) has been sent to the heqk session.
 **Next:**
 - Step 4a (`mgmtabi` + `el0-hsh`), with `console-in` off by default until the operator decides the production
   transport (hsh spec R6).
+
+### 2026-11-10: step 4a (heqk session, built, before push)
+
+`mgmtabi` + `el0-hsh` are built.
+
+**Transport:**
+- The only transport is `POST /api/hsh`, behind the `hsh-dev` feature.
+- `hsh-dev` is off by default, and `make-cm5-heqk-image.sh` refuses it in a release build.
+- No UART RX code exists, and `console-in` is not built (hsh spec R6 is still the operator's decision).
+
+**Read commands:** `info`, `version`, `uptime`, `wan status` / `interface show wan`, `qsecbit status`,
+`config status`, `owner status`, `security posture`. They are served by the same producers as `GET /api/*`
+(McState, cfgd, anchor, and the EL0 server counters). Every other command in the spec answers "Operation not
+supported (4b/4c)".
+
+**Tests:** `[P-hsh]` / `[P-mgmtabi]` run in QEMU and in the CM5 AP-boot self-test, plus mc-e2e.
+
+**Asked of the heqk session before push:**
+- `/api/hsh` sits behind the same owner session plus CSRF/Origin checks as the other writes;
+- that session maps to the `view` role;
+- every hsh request is journaled.
