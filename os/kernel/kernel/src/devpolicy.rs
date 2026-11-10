@@ -163,6 +163,11 @@ pub fn shield_profile(mac: &[u8; 6]) -> ShieldProfile {
 
 /// The label for `mac`, if any.
 pub fn label_of(mac: &[u8; 6], out: &mut [u8; 31]) -> usize {
+    // G47: the owner's name (Mission Control rename) wins over the signed DEVICES.TXT label — it is cosmetic
+    let n = crate::ownerjournal::owner_label(mac, out);
+    if n > 0 {
+        return n;
+    }
     let t = unsafe { &(&*core::ptr::addr_of!(T))[..N] };
     match t.binary_search_by(|e| e.mac.cmp(mac)) {
         Ok(i) => {
@@ -171,6 +176,12 @@ pub fn label_of(mac: &[u8; 6], out: &mut [u8; 31]) -> usize {
         }
         Err(_) => 0,
     }
+}
+
+/// Does the signed DEVICES.TXT give `mac` a label?
+pub fn signed_label(mac: &[u8; 6]) -> bool {
+    let t = unsafe { &(&*core::ptr::addr_of!(T))[..N] };
+    t.binary_search_by(|e| e.mac.cmp(mac)).is_ok_and(|i| t[i].llen > 0)
 }
 
 /// Check + count: does `mac`'s policy allow `d`?

@@ -282,6 +282,19 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     if req.post && (req.path == "/api/planner/propose" || req.path == "/api/planner/approve") {
         return json(scratch, |w| w.raw("{\"error\":\"not_configured\",\"message\":\"No AI planner is configured on this device\"}")).with_status(503);
     }
+    // G49 (ADR 0058 "Apply now"): owner reboot — guards + re-auth; the response goes out, then the device restarts
+    if req.post && req.path == "/api/reboot" {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        return match crate::ownerapi::reboot(&c, req.body, auth) {
+            Ok(()) => json(scratch, |w| w.raw("{\"ok\":true,\"note\":\"restarting in 2 s; staged configuration applies on the way up\"}")),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(403),
+        };
+    }
     if req.post && req.path == "/api/factory-reset" {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         return match crate::ownerapi::factory_reset(&c, req.body, auth) {
@@ -582,9 +595,21 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     if n.mgmt_vlan != 0 {
                         let _ = write!(w, ",\"management\":{{\"vlan\":{},\"ip\":\"{}.{}.{}.{}\"}}", n.mgmt_vlan, n.mgmt_ip[0], n.mgmt_ip[1], n.mgmt_ip[2], n.mgmt_ip[3]);
                     }
-                    let _ = write!(w, ",\"policy\":{{\"state\":\"{}\",\"generation\":{}}},\"trust_anchor\":{{\"state\":\"{}\",\"key\":\"{:08x}\"}},\"changes\":\"signed configuration files (WIFI.TXT / WAN.TXT / POLICY.TXT)\"}}",
+                    let _ = write!(w, ",\"policy\":{{\"state\":\"{}\",\"generation\":{}}},\"trust_anchor\":{{\"state\":\"{}\",\"key\":\"{:08x}\",\"public_key\":",
                         ["none", "signed", "unsigned (standalone image)", "refused"][(n.policy as usize).min(3)], n.policy_gen,
                         ["unknown", "pinned on this boot", "pinned", "image key differs - pinned key kept", "standalone (no key)"][(n.anchor as usize).min(4)], n.anchor_fp);
+                    // the full effective operator key (32-byte Ed25519, hex) — what a browser key must equal to be trusted
+                    match crate::policysig::key() {
+                        Some(k) => {
+                            w.raw("\"");
+                            for b in k {
+                                let _ = write!(w, "{:02x}", b);
+                            }
+                            w.raw("\"");
+                        }
+                        None => w.raw("null"),
+                    }
+                    w.raw("},\"changes\":\"signed configuration files (WIFI.TXT / WAN.TXT / POLICY.TXT)\"}");
                 }
                 (None, _) => w.raw("{\"available\":false}"),
             }
