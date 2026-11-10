@@ -41,6 +41,9 @@ pub enum Kind {
     /// G28: the owner rotated the Mission Control owner key (target = salt 16 ‖ verifier 32 ‖ sha256(OWNER.TXT)[..16]
     /// at rotation time). Never a rule; `revoke_all` does not touch it; the latest one wins.
     OwnerKey = 6,
+    /// Owner alert webhook (operator 2026-11-10): target = alerthook::Hook::encode (ip|port|fmt|min_sev|key),
+    /// reason = the request path / topic. OP_SET installs, OP_REMOVE turns it off. Never a rule.
+    AlertHook = 7,
 }
 
 impl Kind {
@@ -52,6 +55,7 @@ impl Kind {
             4 => Some(Kind::ShieldProfile),
             5 => Some(Kind::Artifact),
             6 => Some(Kind::OwnerKey),
+            7 => Some(Kind::AlertHook),
             _ => None,
         }
     }
@@ -63,6 +67,7 @@ impl Kind {
             Kind::ShieldProfile => "shield_profile",
             Kind::Artifact => "artifact",
             Kind::OwnerKey => "owner_key",
+            Kind::AlertHook => "alert_hook",
         }
     }
 }
@@ -197,7 +202,17 @@ pub fn owner_rotation() -> Option<[u8; TARGET_MAX]> {
     unsafe { *core::ptr::addr_of!(OWNER_ROT) }
 }
 
+/// The alert-hook record in force (kept so compaction can carry it).
+static mut HOOK_REC: Option<Record> = None;
+
 fn apply(r: &Record) -> Result<(), JErr> {
+    if r.kind == Kind::AlertHook as u8 {
+        let rl = (r.rlen as usize).min(REASON_MAX);
+        let h = if r.op == OP_SET { crate::alerthook::Hook::decode(&r.target[..r.tlen as usize], &r.reason[..rl]) } else { None };
+        crate::alerthook::set(h);
+        unsafe { *core::ptr::addr_of_mut!(HOOK_REC) = h.map(|_| *r) };
+        return Ok(());
+    }
     if r.kind == Kind::OwnerKey as u8 {
         if r.op == OP_SET && r.tlen as usize == TARGET_MAX {
             unsafe { *core::ptr::addr_of_mut!(OWNER_ROT) = Some(r.target) };
@@ -310,6 +325,10 @@ impl Journal {
             NRULES = 0;
             ART_LEN = 0;
             *core::ptr::addr_of_mut!(OWNER_ROT) = None;
+        *core::ptr::addr_of_mut!(HOOK_REC) = None;
+        crate::alerthook::set(None);
+            *core::ptr::addr_of_mut!(HOOK_REC) = None;
+            crate::alerthook::set(None);
         }
         self.last_mac = [0; 32];
         self.next_seq = 1;
@@ -385,12 +404,13 @@ impl Journal {
     fn compact<D: BlockDev + ?Sized>(&mut self, dev: &mut D) -> Result<(), JErr> {
         let (nr, na) = unsafe { (NRULES, ART_LEN) };
         let rot = owner_rotation();
-        if 1 + nr as u64 + na as u64 + rot.is_some() as u64 + 1 > self.half_cap() || nr + na > 600 {
+        let hook = unsafe { *core::ptr::addr_of!(HOOK_REC) };
+        if 1 + nr as u64 + na as u64 + rot.is_some() as u64 + hook.is_some() as u64 + 1 > self.half_cap() || nr + na > 600 {
             return Err(JErr::Full);
         }
         let e2 = self.epoch + 1;
         let other = 1 - self.half;
-        static mut CKPT: [[u8; REC_LEN]; 2 + MAX_RULES + ART_N] = [[0u8; REC_LEN]; 2 + MAX_RULES + ART_N];
+        static mut CKPT: [[u8; REC_LEN]; 3 + MAX_RULES + ART_N] = [[0u8; REC_LEN]; 3 + MAX_RULES + ART_N];
         let recs = unsafe { &mut *core::ptr::addr_of_mut!(CKPT) };
         let (h, mut prev) = self.seal(&[0u8; 32], &Self::hdr(e2, self.next_seq), e2);
         recs[0] = h;
@@ -423,6 +443,18 @@ impl Journal {
             let (b, m) = self.seal(&prev, &r, e2);
             recs[n] = b;
             prev = m;
+            seq += 1;
+            n += 1;
+        }
+        if let Some(mut r) = hook {
+            r.seq = seq;
+            let (b, m) = self.seal(&prev, &r, e2);
+            recs[n] = b;
+            prev = m;
+            #[allow(unused_assignments)]
+            {
+                seq += 1;
+            }
             n += 1;
         }
         self.write_half(dev, other, &recs[..n])?;
@@ -432,6 +464,10 @@ impl Journal {
             NRULES = 0;
             ART_LEN = 0;
             *core::ptr::addr_of_mut!(OWNER_ROT) = None;
+        *core::ptr::addr_of_mut!(HOOK_REC) = None;
+        crate::alerthook::set(None);
+            *core::ptr::addr_of_mut!(HOOK_REC) = None;
+            crate::alerthook::set(None);
         }
         for b in &recs[1..n] {
             let _ = apply(&Record::decode(b));
@@ -538,6 +574,8 @@ pub fn clear() {
         NRULES = 0;
         ART_LEN = 0;
         *core::ptr::addr_of_mut!(OWNER_ROT) = None;
+        *core::ptr::addr_of_mut!(HOOK_REC) = None;
+        crate::alerthook::set(None);
     }
 }
 
