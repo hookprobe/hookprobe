@@ -399,6 +399,28 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
         return Err("re-authentication failed");
     }
+    activate_by_id(crate::mcauth::session_tag(c.session), c.now_ms, id.unwrap_or(0))
+}
+
+/// The type of the caller's VERIFIED upload `id` (None = unknown / not the caller's / not verified).
+pub fn verified_type(tag: [u8; 4], id: u64) -> Option<Ty> {
+    match up() {
+        Some(u) if u.id == id && u.session == tag && u.phase == Phase::Verified && !u.os => Some(u.ty),
+        _ => None,
+    }
+}
+
+/// Activate the caller's VERIFIED upload `id` (ADR 0059 step 4b: one path for Mission Control after its guards +
+/// re-authentication, and for the management ABI's CFG_STAGE after the kernel's role check). The upload must belong
+/// to the caller's session (`tag`).
+pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &'static str> {
+    let u = match up() {
+        Some(u) if u.id == id && u.session == tag => u,
+        _ => return Err("unknown upload id"),
+    };
+    if u.phase != Phase::Verified {
+        return Err("not verified (finish first)");
+    }
     let d = dev().ok_or("no artifact store")?;
     let (slo, _) = staging(d).ok_or("no staging region")?;
     #[cfg(feature = "p15-write")]
@@ -414,14 +436,14 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
                 if plan.active == b'a' { 'b' } else { 'a' }, plan.hash[0], plan.hash[1], plan.hash[2], plan.hash[3], plan.hash[4], plan.hash[5], plan.hash[6], plan.hash[7]);
             w.len
         };
-        let tag = crate::mcauth::session_tag(c.session);
+        let tag = tag;
         return match crate::otaimg::install(d, slo, &plan) {
             Ok(()) => {
                 unsafe { TRIAL_REBOOT = true };
-                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, c.now_ms), staged: true })
+                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true })
             }
             Err(e) => {
-                let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, c.now_ms);
+                let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, now_ms);
                 Err(e)
             }
         };
@@ -446,11 +468,11 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
         let _ = write!(w, "gen {}->{} sha256:{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", old, gen, digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]);
         w.len
     };
-    let tag = crate::mcauth::session_tag(c.session);
+    let tag = tag;
     match res {
-        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged() }),
+        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms), staged: ty.staged() }),
         Err(artstore::ActErr::LoaderRefused) => {
-            let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, c.now_ms);
+            let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, now_ms);
             Err("the loader refused the new pack — rolled back to the previous one")
         }
         Err(artstore::ActErr::NoStore) => Err("no artifact store"),

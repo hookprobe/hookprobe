@@ -342,7 +342,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             let _ = crate::ownerapi::audit_artifact("hsh", 1, &why[..k], crate::mcauth::session_tag(req.session), now_ms);
         }
         let mut text = [0u8; 2048];
-        let n = crate::hsh::run_line(line, hal::mgmtabi::ROLE_VIEW, now_ms, &mut text);
+        let n = crate::hsh::run_line(line, hal::mgmtabi::ROLE_VIEW, crate::mcauth::session_tag(req.session), now_ms, &mut text);
         let k = n.min(scratch.len());
         scratch[..k].copy_from_slice(&text[..k]);
         return Response { status: 200, ctype: "text/plain; charset=utf-8", body: Body::Scratch(k), location: None, set_cookie: None };
@@ -677,6 +677,13 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             };
             w.raw("{\"vendor_key\":");
             hex(w, crate::policysig::key());
+            // ADR 0059: this device's id for device-bound HQCFG1 bundles and HQCHAL1 elevation (public)
+            let dev = crate::config_device_id();
+            w.raw(",\"device_id\":\"");
+            for b in dev {
+                let _ = write!(w, "{:02x}", b);
+            }
+            w.raw("\"");
             w.raw(",\"owner_key\":");
             hex(w, crate::anchor::owner());
             // ADR 0059 0.5: no key at all = anyone with the card reconfigures the device; Mission Control shows a banner

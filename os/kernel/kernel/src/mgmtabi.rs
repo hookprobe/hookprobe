@@ -5,14 +5,63 @@
 
 use hal::mgmtabi as m;
 
-/// Serve `msg` for a caller holding `role` into `out`. Returns (result code, record length).
-pub fn dispatch(msg: u16, role: u8, now_ms: u64, out: &mut [u8]) -> (u8, usize) {
+/// Serve `msg` for a caller holding `role` (session `tag`, argument `arg`) into `out`. Returns (result code, record
+/// length). Configuration operations are journaled HERE — allowed or refused — so Mission Control and `hsh` leave the
+/// same record for the same operation.
+pub fn dispatch(msg: u16, role: u8, tag: [u8; 4], now_ms: u64, arg: u64, payload: &[u8], out: &mut [u8]) -> (u8, usize) {
+    let role = role.max(elevated(tag, now_ms));
     let need = m::role_for(msg);
     if need == u8::MAX {
         return (m::R_UNKNOWN, 0);
     }
     if role < need {
+        if matches!(msg, m::CFG_CONFIRM | m::CFG_ROLLBACK | m::CFG_STAGE) {
+            journal(msg, false, 0, "denied: role", tag, now_ms);
+        }
         return (m::R_DENIED, 0);
+    }
+    if msg == m::OWNER_CHALLENGE {
+        let c = challenge(tag, now_ms);
+        let e = c.encode();
+        out[..e.len()].copy_from_slice(&e);
+        return (m::R_OK, e.len());
+    }
+    if msg == m::OWNER_ELEVATE {
+        let r = elevate(tag, now_ms, payload);
+        let a = match r {
+            Ok(()) => m::Act::new(true, crate::anchor::owner_gen(), "owner role granted for 15 minutes"),
+            Err(e) => m::Act::new(false, 0, e),
+        };
+        let mut b = [0u8; 64];
+        let n = {
+            use core::fmt::Write;
+            let mut w = crate::mcstate::JsonBuf::new(&mut b);
+            let _ = write!(w, "elevate {}", a.reason_str());
+            w.len
+        };
+        let _ = crate::ownerapi::audit_artifact("hsh", if a.ok { 1 } else { 2 }, &b[..n], tag, now_ms);
+        let e = a.encode();
+        out[..e.len()].copy_from_slice(&e);
+        return (m::R_OK, e.len());
+    }
+    if matches!(msg, m::CFG_CONFIRM | m::CFG_ROLLBACK | m::CFG_STAGE) {
+        let r: Result<u64, &str> = match msg {
+            m::CFG_CONFIRM => crate::cfgd::confirm_device(),
+            m::CFG_ROLLBACK => crate::cfgd::revert_device(),
+            _ => match crate::upload::verified_type(tag, arg) {
+                Some(crate::artstore::Ty::Config) => crate::upload::activate_by_id(tag, now_ms, arg).map(|a| a.gen),
+                Some(_) => Err("not a configuration bundle (upload type config)"),
+                None => Err("unknown or unverified upload id"),
+            },
+        };
+        let a = match r {
+            Ok(g) => m::Act::new(true, g, if msg == m::CFG_STAGE { "staged: trial at the next boot" } else { "done" }),
+            Err(e) => m::Act::new(false, 0, e),
+        };
+        journal(msg, a.ok, a.generation, a.reason_str(), tag, now_ms);
+        let e = a.encode();
+        out[..e.len()].copy_from_slice(&e);
+        return (m::R_OK, e.len());
     }
     match msg {
         m::GET_INFO => {
@@ -123,5 +172,96 @@ pub fn dispatch(msg: u16, role: u8, now_ms: u64, out: &mut [u8]) -> (u8, usize) 
             return (m::R_OK, e.len());
         }
         _ => (m::R_UNKNOWN, 0),
+    }
+}
+
+/// One owner-journal record per configuration operation (the same for every client).
+fn journal(msg: u16, ok: bool, gen: u64, why: &str, tag: [u8; 4], now_ms: u64) {
+    let op = match msg {
+        m::CFG_CONFIRM => "confirm",
+        m::CFG_ROLLBACK => "rollback",
+        _ => "stage",
+    };
+    let mut b = [0u8; 64];
+    let n = {
+        use core::fmt::Write;
+        let mut w = crate::mcstate::JsonBuf::new(&mut b);
+        let _ = write!(w, "{} gen {} {}", op, gen, why);
+        w.len
+    };
+    let _ = crate::ownerapi::audit_artifact("config", if ok { 1 } else { 2 }, &b[..n], tag, now_ms);
+}
+
+// ---- step 4c: owner elevation (HQCHAL1) -----------------------------------------------------------------------
+
+#[derive(Clone, Copy)]
+struct Pending {
+    tag: [u8; 4],
+    nonce: [u8; 16],
+    until_ms: u64,
+}
+const SLOTS: usize = 4;
+static mut CHALLENGES: [Option<Pending>; SLOTS] = [None; SLOTS];
+static mut ELEVATED: [Option<([u8; 4], u64)>; SLOTS] = [None; SLOTS];
+static mut NONCE_CTR: u64 = 0;
+
+/// The role a session holds through elevation (0 = none / expired).
+pub fn elevated(tag: [u8; 4], now_ms: u64) -> u8 {
+    let e = unsafe { &*core::ptr::addr_of!(ELEVATED) };
+    if e.iter().flatten().any(|&(t, until)| t == tag && now_ms < until) { m::ROLE_OWNER } else { 0 }
+}
+
+/// A fresh single-use nonce for this session (one outstanding per session; the oldest slot is reused).
+fn challenge(tag: [u8; 4], now_ms: u64) -> m::Challenge {
+    let dev = crate::config_device_id();
+    let ctr = unsafe {
+        NONCE_CTR += 1;
+        NONCE_CTR
+    };
+    let mut h = boot_abi::sha256::Hasher::new();
+    h.update(b"HQCHAL1-nonce");
+    h.update(&dev);
+    h.update(&tag);
+    h.update(&now_ms.to_le_bytes());
+    h.update(&ctr.to_le_bytes());
+    let d = h.finish();
+    let nonce: [u8; 16] = d[..16].try_into().unwrap();
+    let c = unsafe { &mut *core::ptr::addr_of_mut!(CHALLENGES) };
+    let slot = c.iter().position(|p| p.is_none_or(|p| p.tag == tag || now_ms >= p.until_ms)).unwrap_or((ctr as usize) % SLOTS);
+    c[slot] = Some(Pending { tag, nonce, until_ms: now_ms + m::CHALLENGE_TTL_S * 1000 });
+    m::Challenge { device_id: dev, nonce, ttl_s: m::CHALLENGE_TTL_S as u32, owner_enrolled: crate::anchor::owner().is_some() }
+}
+
+/// Verify the owner's signature over this session's outstanding challenge; single-use (consumed either way).
+fn elevate(tag: [u8; 4], now_ms: u64, sig: &[u8]) -> Result<(), &'static str> {
+    let owner = crate::anchor::owner().ok_or("no owner key enrolled (enroll in Mission Control first)")?;
+    let c = unsafe { &mut *core::ptr::addr_of_mut!(CHALLENGES) };
+    let i = c.iter().position(|p| p.is_some_and(|p| p.tag == tag)).ok_or("no challenge outstanding (run owner challenge)")?;
+    let p = c[i].take().unwrap();
+    if now_ms >= p.until_ms {
+        return Err("challenge expired");
+    }
+    if sig.len() != 64 {
+        return Err("signature must be 64 bytes");
+    }
+    let msg = m::challenge_msg(&crate::config_device_id(), &p.nonce);
+    let ok = match (ed25519_compact::PublicKey::from_slice(&owner), ed25519_compact::Signature::from_slice(sig)) {
+        (Ok(k), Ok(s)) => k.verify(&msg[..], &s).is_ok(),
+        _ => false,
+    };
+    if !ok {
+        return Err("signature does not verify with the enrolled owner key");
+    }
+    let e = unsafe { &mut *core::ptr::addr_of_mut!(ELEVATED) };
+    let slot = e.iter().position(|x| x.is_none_or(|(t, u)| t == tag || now_ms >= u)).unwrap_or(0);
+    e[slot] = Some((tag, now_ms + m::ELEVATE_TTL_S * 1000));
+    Ok(())
+}
+
+/// Self-tests: drop every challenge / elevation.
+pub fn test_reset() {
+    unsafe {
+        CHALLENGES = [None; SLOTS];
+        ELEVATED = [None; SLOTS];
     }
 }

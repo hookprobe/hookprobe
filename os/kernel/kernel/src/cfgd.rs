@@ -168,7 +168,7 @@ fn load_half<D: BlockDev + ?Sized>(dev: &D, half: u8, key: &[u8; 32], min_gen: u
         let n = (len - k * 512).min(512);
         buf[k * 512..k * 512 + n].copy_from_slice(&sec[..n]);
     }
-    let v = cfgbundle::verify(&buf[..len], &sig, key, &[0u8; 16], min_gen.saturating_sub(1)).ok()?;
+    let v = cfgbundle::verify(&buf[..len], &sig, key, &crate::config_device_id(), min_gen.saturating_sub(1)).ok()?;
     let mut secs = [(0u8, 0usize, 0usize); 3];
     let mut n = 0;
     for (k, b) in v.sections() {
