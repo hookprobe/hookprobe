@@ -177,6 +177,17 @@ pub fn forward4<N: ApNic>(
                 }
             }
         }
+        // G19: a flow the signed `tunnel` policy carries rides the Noise tunnel to the super-PoP (NAT to the inner
+        // /32, sealed DATA over UDP 7655) — after every check above (holds, device policy, Shield, IDS).
+        #[cfg(feature = "securechannel")]
+        Act::Allow if frame.len() >= 34 && crate::g19::carries([frame[30], frame[31], frame[32], frame[33]]) => {
+            let now_ms = (nic.now().saturating_mul(1000) / nic.freq().max(1)) as i64;
+            let ok = crate::g19::send(frame, nif, &cfg.inside_net, nst, nic.ticks(), now_ms, &mut |f| nic.wan_tx(f));
+            if !ok {
+                c.nat_tx_fail += 1;
+            }
+            ok
+        }
         Act::Allow => {
             let w = nic.wan();
             // `route … via wan gw X`: X's MAC (ARP-resolved); the default gateway otherwise.
