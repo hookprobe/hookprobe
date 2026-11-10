@@ -20,6 +20,7 @@ import { healthChecked } from '../store/health';
 import AppShell, { normPath } from './AppShell';
 import PageHeader from './PageHeader';
 import Drawer from './Drawer';
+import OwnerChangePlan from './OwnerChangePlan';
 
 const ZONES: { key: string; label: string; blurb: string }[] = [
   { key: 'full', label: 'Full access', blurb: 'Internet and the local network.' },
@@ -28,7 +29,7 @@ const ZONES: { key: string; label: string; blurb: string }[] = [
   { key: 'quarantine', label: 'Quarantine', blurb: 'DHCP and DNS only.' },
 ];
 
-const SIGNED = 'Zones and names come from your signed DEVICES.TXT. Re-sign it to change them.';
+const SIGNED = 'Device names come from your signed DEVICES.TXT. Re-sign it to rename a device.';
 
 const now = Math.floor(Date.now() / 1000);
 const S = (id: string, label: string, ip: string, policy: string, category: string, active = true): DeviceRow =>
@@ -59,6 +60,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
   const [path, setPath] = createSignal(props.path ?? '/network/zones');
   const [msg, setMsg] = createSignal('');
   const [sel, setSel] = createSignal<string | null>(null);
+  const [moveTo, setMoveTo] = createSignal<string | null>(null);
   onMount(() => { setPath(normPath(location.pathname)); void refetchDevices(); });
 
   const sample = () => healthChecked() && !substrate();
@@ -137,7 +139,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
         </p>
       </main>
 
-      <Drawer open={!!selected()} title={selected() ? nameOf(selected()!) : ''} onClose={() => setSel(null)}
+      <Drawer open={!!selected()} title={selected() ? nameOf(selected()!) : ''} onClose={() => { setSel(null); setMoveTo(null); }}
         crumb={selected() ? `${kindOf(selected()!)} · ${selected()!.active === false ? 'lease expired' : 'online'}` : ''}
         footer={
           <Show when={selected()}>
@@ -148,7 +150,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
                 onClick={async () => setMsg(await promptAndRun('isolate', selected()!.mac!, 3600))}>Isolate 1 h</button>
             </Show>
             <span class="gate gate--off" title={SIGNED}>
-              <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Move to zone</button> <button class="hp-btn">Rename</button></span>
+              <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Rename</button></span>
               <span class="gate-reason" role="note">{SIGNED}</span>
             </span>
           </Show>
@@ -164,6 +166,24 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
                 <p class="l0-card-sub">Hardware address<b>{d().mac ?? '—'}{d().private_mac ? ' (private)' : ''}</b></p>
                 <p class="l0-card-sub">First seen<b>{formatTime(d().first_seen)}</b></p>
                 <p class="l0-card-sub">Last seen<b>{formatTime(d().last_seen)}</b></p>
+              </div>
+              <div>
+                <p class="l0-label">Move to zone</p>
+                <div class="l0-chips" role="group" aria-label="Move to zone">
+                  <For each={ZONES.filter((z) => z.key !== zoneOf(d()))}>{(z) => (
+                    <button class={`l0-chip${moveTo() === z.key ? ' is-on' : ''}`} aria-pressed={moveTo() === z.key}
+                      disabled={sample() || !d().mac} onClick={() => setMoveTo(z.key)}>{z.label}</button>
+                  )}</For>
+                </div>
+                <Show when={sample()}><p class="gate-reason">Preview: on a device this becomes a permanent owner rule (owner key).</p></Show>
+                <Show when={!sample() && !d().mac}><p class="gate-reason">No hardware address is on record for this device, so a zone rule cannot be attached to it.</p></Show>
+                <Show when={!sample() && moveTo() && d().mac}>
+                  <Show keyed when={`${d().mac}|${moveTo()}`}>
+                    <OwnerChangePlan title={`Move ${nameOf(d())}`}
+                      change={{ op: 'set', kind: 'device_policy', target: d().mac!, value: moveTo()! }}
+                      onDone={() => setMoveTo(null)} />
+                  </Show>
+                </Show>
               </div>
               <Show when={d().os}><p class="l0-card-sub">System: {d().os}</p></Show>
               <Show when={d().ssdp_server}><p class="l0-card-sub">Announces: {d().ssdp_server}</p></Show>

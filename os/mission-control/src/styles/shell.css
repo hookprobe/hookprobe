@@ -169,3 +169,6 @@
 .gate-reason::before { content: '⊘ '; }
 
 .shell-rail-icon, .shell-tab-icon { display: inline-flex; align-items: center; justify-content: center; }
+.plan-step--warn { border-color: rgba(255,170,0,.5); color: var(--hp-amber); }
+.plan-step--warn::before { content: "! "; }
+.plan-diff--volatile .plan-diff-status { color: var(--hp-amber); font-weight: 600; }
