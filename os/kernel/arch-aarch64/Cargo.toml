@@ -6,12 +6,15 @@ publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 [dependencies]
 hal = { path = "../hal" }
+sae = { path = "../sae", optional = true }
 
 [features]
 # BENCH ONLY (WPA3 AP feasibility probe, 2026-11-10): the AP asks the firmware for WPA3-SAE + PMF required, tries
 # in-firmware SAE (sae_password), enables every firmware event (incl. event_msgs_ext) and logs each one with its
 # payload head, so a WPA3 client's join shows whether SAE is done by the firmware, handed to the host, or refused.
 wpa3probe = []
+# Phase 6 WPA3-SAE on the AP: host SAE responder (crate `sae`), mgmt_frame auth TX, AKM 8 4-way + PMF/IGTK.
+wpa3 = ["dep:sae"]
 cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt
 # arm64-cloud tier (OCI Ampere A1 / QEMU virt gic-version=3): GICv3 sysreg CPU interface +
 # redistributors instead of the GICv2 MMIO GICC. Not combinable with cm5 (GIC-400 = v2).

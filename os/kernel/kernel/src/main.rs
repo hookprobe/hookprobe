@@ -3403,7 +3403,21 @@ fn cm5_p10_probe() {
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
                             #[cfg(feature = "wpa3probe")]
                             cyw43::probe_set_psk(ap_psk);
-                            cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
+                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise this build's default (WPA3 transition:
+                            // WPA2 clients keep joining, WPA3 clients get SAE + PMF). SAE needs the passphrase itself.
+                            #[cfg(feature = "wpa3")]
+                            {
+                                let want = match wifi.map(|c| c.security) {
+                                    Some(wificfg::SEC_WPA2) => cyw43::SEC_WPA2,
+                                    Some(wificfg::SEC_WPA3) => cyw43::SEC_WPA3,
+                                    _ => cyw43::SEC_WPA3_TRANSITION,
+                                };
+                                let got = cyw43::ap_set_security(want, ap_ssid, ap_psk);
+                                if got != want {
+                                    kprint!(" [WPA3] WPA3 needs the passphrase (SAE cannot use a raw 64-hex PMK) — this AP stays WPA2-PSK\n");
+                                }
+                            }
+                            cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon (or the WPA3 mode)
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
                             // group PN on every join.
@@ -4105,10 +4119,16 @@ fn cm5_p10_probe() {
                                         rtwdog::pet(now(), freq);
                                         tries += 1;
                                         let mut auth = cyw43::ApAuth::new();
-                                        cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
-                                        kprint!("   [P11-AP3 auth] m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
-                                            auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
+                                        // WPA3: a station that just completed SAE keys with the SAE PMK (AKM 8)
+                                        #[cfg(feature = "wpa3")]
+                                        let (apmk, akm8) = match cyw43::ap_sae_pmk(&sta, now() / (freq / 1000).max(1)) { Some(p) => (p, true), None => (pmk, false) };
+                                        #[cfg(not(feature = "wpa3"))]
+                                        let (apmk, akm8) = (pmk, false);
+                                        cyw43::ap_authenticate(&ap.bssid, &sta, &apmk, akm8, &gtk, 1, &mut auth);
+                                        kprint!("   [P11-AP3 auth] akm={} m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
+                                            if akm8 { "SAE" } else { "PSK" }, auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
                                             auth.ptk_set, auth.authorized, auth.m2_mic_fail, auth.reassoc, auth.deauth, auth.replay);
+                                        let _ = akm8;
                                         if auth.ptk_set && auth.authorized {
                                             keyed += 1;
                                             kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n");
@@ -4122,7 +4142,16 @@ fn cm5_p10_probe() {
                                         break;
                                     }
                                 }
+                                cyw43::ApEvent::Sae(_ev) => {
+                                    // WPA3: a station's SAE commit / confirm (firmware event 188) — answered on the host
+                                    #[cfg(feature = "wpa3")]
+                                    {
+                                        let _ = cyw43::ap_sae_rx(&rx, _ev, &ap.bssid, now() / (freq / 1000).max(1));
+                                    }
+                                }
                                 cyw43::ApEvent::Leave(sta) => {
+                                    #[cfg(feature = "wpa3")]
+                                    cyw43::ap_sae_forget(&sta);
                                     unsafe { (*core::ptr::addr_of_mut!(V6)).forget_mac(&sta) }; // release its IPv6 bindings (SAVI)
                                     leaves += 1;
                                     kprint!("   [P11-AP3] station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left (deauth/disassoc)\n",
@@ -7077,6 +7106,14 @@ pub extern "C" fn kmain() -> ! {
         let _ = policysig::wansig_selftest();
         let _ = alerthook::selftest();
 
+        #[cfg(feature = "wpa3")]
+        {
+            let (j10, e2e, ptk, h2e) = sae::selftest();
+            let cmac = arch_aarch64::aes::cmac_selftest();
+            let pass = j10 && e2e && ptk && cmac && h2e;
+            kprint!(" [P-sae] {} — WPA3-SAE on the AP (Phase 6, host SAE because the firmware forwards SAE frames — batch 37): P-256 hunting-and-pecking commit + KCK/PMK/PMKID = IEEE 802.11-2020 Annex J.10={} | AP responder end to end (commit, confirm, PMK agreed; wrong password: confirm dropped, never answered, no PMK)={} | AKM 8 PTK (KDF-SHA256) = hostapd 2.11 sha256_prf={} | AES-128-CMAC EAPOL MIC = RFC 4493 examples 1-4={} | H2E (hash-to-element, SSWU) PWE = the Annex J.10 H2E vector={}\n",
+                if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e);
+        }
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
             use arch_aarch64::crashrec::{take, write};
