@@ -20,6 +20,7 @@ import { ownerKey, loadOwnerKey, signPack, PACKS, download } from '../store/sign
 import { buildWan, buildWifi, checkWifi, checkWan, type WanForm } from '../store/configBuild';
 import SampleDataNotice from './SampleDataNotice';
 import SigningKeyPanel from './SigningKeyPanel';
+import RestartButton from './RestartButton';
 
 type Step = 'hi' | 'internet' | 'wifi' | 'key' | 'review' | 'launch' | 'done';
 const ORDER: Step[] = ['hi', 'internet', 'wifi', 'key', 'review', 'launch', 'done'];
@@ -194,6 +195,7 @@ const SetupApp: Component = () => {
             <div class="setup-orb setup-orb--done" role="img" aria-label="Done">✓</div>
             <h1 class="setup-h1">Ready. Restart to go online.</h1>
             <p class="setup-p">Your internet and Wi-Fi settings are staged. After the restart, join "{ssid()}". You can change any of this later in Get Online.</p>
+            <RestartButton primary label="Restart and go online" />
           </Show>
           <div class="setup-grow" />
           <a class="hp-btn hp-btn--primary setup-cta" href="/">Open HookProbe</a>
