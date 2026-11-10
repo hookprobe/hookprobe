@@ -431,7 +431,7 @@ Checked in code while integrating revision 12; these refine the section above.
 
 | Statement in the section | What the code says | Where |
 |---|---|---|
-| Owner rules include `device_label` | Not yet: the journal kinds are `device_policy`, `shield_allow`, `shield_block`, `shield_profile`. Rename therefore stays greyed in My Network. | `os/kernel/kernel/src/ownerapi.rs` |
+| Owner rules include `device_label` | Being added (G47, PR #950): `device_label` by MAC, 1–31 printable ASCII (letters, digits, space `. _ - ' ( ) ,`). Rename in My Network uses it (PR #963); on an image without it the device's refusal is shown. | `os/kernel/kernel/src/ownerapi.rs` |
 | `device_policy` includes `blocked` | Not yet: `full`, `internet_only`, `lan_only`, `quarantine`. | `os/kernel/kernel/src/devpolicy.rs` |
 | POLICY.TXT can be uploaded and applies on the next boot | Not yet: ADR 0056 D2 lists `policy`, but phase 1 excludes it; the upload store accepts `shield_block`, `shield_allow`, `ioc`, `rules`, `oui`, `devices` only. | `os/kernel/kernel/src/artstore.rs`, ADR 0056 |
 | The generation floor is compile-time only | Partly outdated: the device-pinned trust anchor persists the POLICY floor in the DataVolume and raises it on every accepted policy (`anchor::raise_policy_floor`); RPMB hardening is what is deferred. | `os/kernel/kernel/src/anchor.rs` |
