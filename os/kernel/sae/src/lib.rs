@@ -6,12 +6,15 @@
 //! IEEE 802.11-2020 Annex J.10 vectors (the same ones hostapd's module tests use).
 #![no_std]
 
-use p256::elliptic_curve::bigint::Encoding;
 use p256::elliptic_curve::ops::Reduce;
 use p256::elliptic_curve::point::{AffineCoordinates, DecompressPoint};
-use p256::elliptic_curve::sec1::{FromEncodedPoint, ToEncodedPoint};
+use p256::elliptic_curve::sec1::{FromSec1Point, Sec1Point, ToSec1Point};
 use p256::elliptic_curve::{Field, PrimeField};
-use p256::{AffinePoint, EncodedPoint, FieldBytes, FieldElement, ProjectivePoint, Scalar, U256};
+use p256::{AffinePoint, FieldBytes, NistP256, ProjectivePoint, Scalar, U256};
+
+/// The P-256 base-field element (p256 0.14 no longer re-exports it; the curve names it via FieldArithmetic).
+type FieldElement = <NistP256 as p256::elliptic_curve::hazmat::FieldArithmetic>::FieldElement;
+type EncodedPoint = Sec1Point<NistP256>;
 use sha2::{Digest, Sha256};
 use subtle::{Choice, ConditionallySelectable, ConstantTimeEq, ConstantTimeLess};
 
@@ -166,7 +169,7 @@ const R256_BE: [u8; 32] = [
 
 fn fe(b: &[u8; 32]) -> FieldElement {
     // b < p by construction at every call site
-    Option::from(FieldElement::from_bytes(&FieldBytes::from(*b))).unwrap_or(FieldElement::ZERO)
+    Option::from(FieldElement::from_repr(FieldBytes::from(*b))).unwrap_or(FieldElement::ZERO)
 }
 
 /// A 48-byte big-endian value reduced mod p: hi(16)·2^256 + lo(32).
@@ -187,12 +190,12 @@ fn reduce48(v: &[u8; 48]) -> FieldElement {
 
 /// Simplified SWU for P-256 (z = -10), constant shape as hostapd's sswu().
 fn sswu(u: &FieldElement) -> Option<ProjectivePoint> {
-    let a = -FieldElement::from_u64(3);
+    let a = -FieldElement::from(3u64);
     let b = fe(&[
         0x5a, 0xc6, 0x35, 0xd8, 0xaa, 0x3a, 0x93, 0xe7, 0xb3, 0xeb, 0xbd, 0x55, 0x76, 0x98, 0x86, 0xbc, 0x65, 0x1d, 0x06, 0xb0,
         0xcc, 0x53, 0xb0, 0xf6, 0x3b, 0xce, 0x3c, 0x3e, 0x27, 0xd2, 0x60, 0x4b,
     ]);
-    let z = -FieldElement::from_u64(10);
+    let z = -FieldElement::from(10u64);
     let u2 = u.square();
     let t1 = z * u2;
     let m = t1.square() + t1;
@@ -210,8 +213,8 @@ fn sswu(u: &FieldElement) -> Option<ProjectivePoint> {
     let y = Option::<FieldElement>::from(v.sqrt())?;
     let flip = !(u.is_odd().ct_eq(&y.is_odd()));
     let y = FieldElement::conditional_select(&y, &(-y), flip);
-    let e = EncodedPoint::from_affine_coordinates(&x.to_bytes(), &y.to_bytes(), false);
-    let p: Option<AffinePoint> = AffinePoint::from_encoded_point(&e).into();
+    let e = EncodedPoint::from_affine_coordinates(&x.to_repr(), &y.to_repr(), false);
+    let p: Option<AffinePoint> = AffinePoint::from_sec1_point(&e).into();
     p.map(ProjectivePoint::from)
 }
 
@@ -243,12 +246,19 @@ pub fn pwe_from_pt(pt: &ProjectivePoint, a: &[u8; 6], b: &[u8; 6]) -> Option<Pro
     Some(pt * &val)
 }
 
+/// A 32-byte big-endian value as FieldBytes (p256 0.14 / hybrid-array: no `from_slice`).
+fn fb32(b: &[u8]) -> FieldBytes {
+    let mut a = [0u8; 32];
+    a.copy_from_slice(&b[..32]);
+    FieldBytes::from(a)
+}
+
 pub fn scalar_from_be(b: &[u8; 32]) -> Option<Scalar> {
     Option::from(Scalar::from_repr(FieldBytes::from(*b)))
 }
 
 pub fn encode_element(p: &ProjectivePoint) -> Option<[u8; 64]> {
-    let e = p.to_affine().to_encoded_point(false);
+    let e = p.to_affine().to_sec1_point(false);
     let (x, y) = (e.x()?, e.y()?);
     let mut o = [0u8; 64];
     o[..32].copy_from_slice(x);
@@ -257,8 +267,11 @@ pub fn encode_element(p: &ProjectivePoint) -> Option<[u8; 64]> {
 }
 
 pub fn decode_element(b: &[u8; 64]) -> Option<ProjectivePoint> {
-    let e = EncodedPoint::from_affine_coordinates(FieldBytes::from_slice(&b[..32]), FieldBytes::from_slice(&b[32..]), false);
-    let a: Option<AffinePoint> = AffinePoint::from_encoded_point(&e).into();
+    let (mut x, mut y) = ([0u8; 32], [0u8; 32]);
+    x.copy_from_slice(&b[..32]);
+    y.copy_from_slice(&b[32..]);
+    let e = EncodedPoint::from_affine_coordinates(&FieldBytes::from(x), &FieldBytes::from(y), false);
+    let a: Option<AffinePoint> = AffinePoint::from_sec1_point(&e).into();
     a.map(ProjectivePoint::from)
 }
 
@@ -368,8 +381,8 @@ impl Sae {
     }
 
     fn with_pwe(pwe: ProjectivePoint, rand_b: &[u8; 32], mask_b: &[u8; 32]) -> Result<Sae, SaeErr> {
-        let rand = <Scalar as Reduce<U256>>::reduce_bytes(FieldBytes::from_slice(rand_b));
-        let mask = <Scalar as Reduce<U256>>::reduce_bytes(FieldBytes::from_slice(mask_b));
+        let rand = <Scalar as Reduce<FieldBytes>>::reduce(&fb32(rand_b));
+        let mask = <Scalar as Reduce<FieldBytes>>::reduce(&fb32(mask_b));
         let one = Scalar::ONE;
         let commit = rand + mask;
         if bool::from(rand.is_zero() | mask.is_zero() | commit.is_zero()) || rand == one || mask == one || commit == one {

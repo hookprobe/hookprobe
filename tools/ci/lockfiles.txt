@@ -8,6 +8,7 @@ cargo os/kernel
 cargo os/kernel/tlsprov
 cargo os/kernel/el0-tlshost
 cargo os/kernel/el0-wasmhost
+cargo os/kernel/el0-lansvc
 cargo os/kernel/wasip1-fixture
 cargo os/kernel/efiboot
 cargo os/build/heqk-sign
