@@ -8,11 +8,10 @@
  */
 
 import { type Component, For } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
 import { KPIS, CVES, IOCS, THREAT_ACTORS, FEEDS } from '../store/itlMock';
+import AppShell from './AppShell';
 
 function toneVar(t: Tone): string {
   return { green: 'var(--hp-green)', amber: 'var(--hp-amber)', red: 'var(--hp-red)',
@@ -33,8 +32,7 @@ const Panel: Component<{ ctx: string; title: string; span?: string; children: an
 );
 
 const IntelligenceApp: Component = () => (
-  <div class="dash-layout">
-    <LeftRail active="/intelligence" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+  <AppShell path="/intelligence/cves">
 
     <main class="dash-main">
       <header class="mc-header">
@@ -162,13 +160,7 @@ const IntelligenceApp: Component = () => (
       </div>
     </main>
 
-    <CommandPalette
-      open={copilotOpen()}
-      query={copilotQuery()}
-      onQuery={setCopilotQuery}
-      onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-    />
-  </div>
+  </AppShell>
 );
 
 export default IntelligenceApp;

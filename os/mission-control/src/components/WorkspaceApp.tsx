@@ -7,7 +7,7 @@
  */
 
 import { type Component, For, Show, createSignal } from 'solid-js';
-import AppRail from './AppRail';
+import AppShell from './AppShell';
 import {
   RESUME, ACTIVITY, PINNED, TASKS, TASK_TABS, DASHBOARDS, SEARCHES, STATUS, type Tone,
 } from '../store/workspaceMock';
@@ -33,8 +33,7 @@ const WorkspaceApp: Component = () => {
   const acts = () => (actTab() === 'All' ? ACTIVITY : ACTIVITY.filter(a => a.tab === actTab()));
 
   return (
-    <div class="dash-layout">
-      <AppRail active="Workspace" />
+    <AppShell path="/workspace">
 
       <main class="dash-main wsp">
         {/* header */}
@@ -161,7 +160,7 @@ const WorkspaceApp: Component = () => {
           )}</For>
         </footer>
       </main>
-    </div>
+    </AppShell>
   );
 };
 

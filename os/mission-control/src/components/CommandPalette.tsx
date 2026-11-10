@@ -32,9 +32,10 @@
 
 import { type Component, Show, For, createSignal, createEffect } from 'solid-js';
 import {
-  fetchPlannerStatus, proposeIntent, approveChange, PlannerApiError,
-  type PlannerStatus, type PlannerResponse, type PlannerArtifactPreview,
+  fetchPlannerStatus, proposeIntent, approveChange, watchProposal, PlannerApiError,
+  type PlannerStatus, type PlannerResponse,
 } from '../store/plannerApi';
+import PlanDiff from './PlanDiff';
 
 type Phase = 'checking' | 'not-configured' | 'unreachable' | 'idle' | 'loading' | 'answered' | 'error';
 
@@ -51,8 +52,6 @@ const CommandPalette: Component<Props> = (props) => {
   const [submittedQuery, setSubmittedQuery] = createSignal('');
   const [response, setResponse] = createSignal<PlannerResponse | null>(null);
   const [errorMessage, setErrorMessage] = createSignal('');
-  const [approveState, setApproveState] = createSignal<'idle' | 'staging' | 'staged' | 'error'>('idle');
-  const [approveNote, setApproveNote] = createSignal('');
 
   // Check planner status once each time the palette opens — never assume yesterday's config still
   // holds (an operator may have just connected a model at Administration → AI Models).
@@ -60,7 +59,6 @@ const CommandPalette: Component<Props> = (props) => {
     if (!props.open) return;
     setPhase('checking');
     setResponse(null);
-    setApproveState('idle');
     void fetchPlannerStatus()
       .then((s) => {
         setStatus(s);
@@ -94,24 +92,6 @@ const CommandPalette: Component<Props> = (props) => {
       e.preventDefault();
       void submit();
     }
-  };
-
-  const approve = async (artifacts: PlannerArtifactPreview[]) => {
-    setApproveState('staging');
-    try {
-      const result = await approveChange(artifacts);
-      setApproveNote(`Staged ${result.artifact_count} file(s) for review at ${result.staged_dir}. ${result.note}`);
-      setApproveState('staged');
-    } catch (e) {
-      setApproveNote(e instanceof PlannerApiError ? e.message : e instanceof Error ? e.message : String(e));
-      setApproveState('error');
-    }
-  };
-
-  const reject = () => {
-    setResponse((r) => (r ? { ...r, change: null } : r));
-    setApproveNote('Proposal discarded — nothing was staged or applied.');
-    setApproveState('idle');
   };
 
   const onBackdropPointerDown = (e: PointerEvent) => {
@@ -237,46 +217,21 @@ const CommandPalette: Component<Props> = (props) => {
                       {(w) => <div class="cmd-warning">⚠ {w}</div>}
                     </For>
 
-                    {/* The plan-as-diff — deterministically computed by aegis::reconcile_network,
-                        never model-authored. Approve stages it for review; Reject discards it.
-                        Neither button ever applies anything to a live path (see plannerApi.ts doc). */}
+                    {/* The plan-as-diff — deterministically computed by aegis::reconcile_network, never
+                        model-authored. PlanDiff shows Staged → Applying → Applied and verified,
+                        each only once the device reports it (FR-08). */}
                     <Show when={resp().change}>
                       {(change) => (
-                        <div class="cmd-diff-panel">
-                          <div class="cmd-diff-title">Proposed change (plan-as-diff)</div>
-                          <div class="cmd-diff-lines">
-                            <For each={change().diff}>
-                              {(line) => (
-                                <div class={`cmd-diff-line cmd-diff-line--${line.kind}`}>
-                                  <span class="cmd-diff-marker" aria-hidden="true">
-                                    {line.kind === 'added' ? '+' : line.kind === 'removed' ? '−' : ' '}
-                                  </span>
-                                  {line.text}
-                                </div>
-                              )}
-                            </For>
-                          </div>
-                          <For each={change().warnings}>
-                            {(w) => <div class="cmd-warning">⚠ {w}</div>}
-                          </For>
-                          <div class="cmd-diff-actions">
-                            <button
-                              class="cmd-diff-btn cmd-diff-btn--approve"
-                              disabled={approveState() === 'staging'}
-                              onClick={() => void approve(change().artifacts)}
-                            >
-                              {approveState() === 'staging' ? 'Staging…' : 'Approve → stage for review'}
-                            </button>
-                            <button class="cmd-diff-btn cmd-diff-btn--reject" onClick={reject}>
-                              Reject
-                            </button>
-                          </div>
-                          <Show when={approveState() === 'staged' || approveState() === 'error'}>
-                            <div class={approveState() === 'error' ? 'cmd-warning' : 'cmd-answer cmd-answer--muted'}>
-                              {approveNote()}
-                            </div>
-                          </Show>
-                        </div>
+                        <PlanDiff
+                          title="Proposed change (plan as a diff)"
+                          lines={change().diff}
+                          warnings={change().warnings}
+                          onApprove={async () => {
+                            const r = await approveChange(change().artifacts);
+                            return { id: r.proposal_id, note: `${r.artifact_count} file(s) staged at ${r.staged_dir}. ${r.note}` };
+                          }}
+                          watch={watchProposal}
+                        />
                       )}
                     </Show>
                   </>

@@ -11,11 +11,10 @@
  */
 
 import { type Component, For, Show } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
 import type { StageState } from '../store/atmMock';
+import AppShell from './AppShell';
 import {
   KPIS, PLAYBOOKS, APPROVAL_QUEUE, AGENTS, ANALYTICS,
 } from '../store/atmMock';
@@ -45,8 +44,7 @@ const Panel: Component<{ ctx: string; title: string; span?: string; children: an
 );
 
 const AutomateApp: Component = () => (
-  <div class="dash-layout">
-    <LeftRail active="/automate" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+  <AppShell path="/automate/playbooks">
 
     <main class="dash-main">
       <header class="mc-header">
@@ -191,13 +189,7 @@ const AutomateApp: Component = () => (
       </div>
     </main>
 
-    <CommandPalette
-      open={copilotOpen()}
-      query={copilotQuery()}
-      onQuery={setCopilotQuery}
-      onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-    />
-  </div>
+  </AppShell>
 );
 
 export default AutomateApp;

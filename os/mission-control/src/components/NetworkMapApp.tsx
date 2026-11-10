@@ -44,12 +44,11 @@ import {
   type Component, type Accessor,
   createSignal, createMemo, For, Show, batch, onMount, onCleanup,
 } from 'solid-js';
-import TopBar from './TopBar';
 import NetworkLive from './NetworkLive';
 import { refetch, devicesStatus } from '../store/obsLive';
 import { refetchTls } from '../store/tlsLive';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
+import AppShell from './AppShell';
 import {
   type Device, type Zone, type NetworkPolicy, type TrustLevel, type PendingChange,
   POLICY_LABELS, DEVICE_ICONS, INITIAL_ZONES, INITIAL_DEVICES, buildPendingChange,
@@ -746,7 +745,7 @@ const NetworkMapSample: Component = () => {
 
   return (
     <>
-      <TopBar onOpenCopilot={() => setCopilotOpen(true)} />
+      <AppShell path="/network/map">
 
       <main class="main-content net-page" style={{ 'max-width': '1200px' }}>
 
@@ -883,13 +882,7 @@ const NetworkMapSample: Component = () => {
         )}
       </Show>
 
-      {/* AI Copilot overlay */}
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
+      </AppShell>
     </>
   );
 };

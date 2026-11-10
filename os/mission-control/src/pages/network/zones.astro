@@ -1,0 +1,21 @@
+---
+/**
+ * /network/zones — My Network (Layer 0 pillar landing): devices grouped into zones.
+ *
+ * Same island as /network/map (NetworkMapApp; NetworkLive on the device). The Zones / Map / List
+ * switch moves between /network/zones, /network/map and /network/devices (MissionControl.md route
+ * map); the zones-first layout from the wireframes lands with the Layer 0 screens.
+ *
+ * Spec: docs/architecture/MissionControl.md §6b · docs/design/mission-control-ui-requirements.md
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import NetworkMapApp from '../../components/NetworkMapApp';
+---
+
+<Shell
+  title="My Network — HookProbe OS"
+  description="Your devices, grouped into zones — move a device, trust it, or block it."
+>
+  <NetworkMapApp client:load />
+</Shell>

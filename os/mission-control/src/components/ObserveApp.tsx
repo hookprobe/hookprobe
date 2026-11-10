@@ -15,14 +15,13 @@
  */
 
 import { type Component, For, Show, onMount, onCleanup } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
 import LiveState from './LiveState';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
 import { KPIS, SOURCES, RETENTION_TIERS } from '../store/obsMock';
 import { formatTime } from '../store/api';
 import { refetch, flows, flowsStatus, flowsError, devices, devicesStatus, devicesError } from '../store/obsLive';
+import AppShell from './AppShell';
 
 function toneVar(t: Tone): string {
   return {
@@ -55,8 +54,7 @@ const ObserveApp: Component = () => {
   });
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/observe" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+    <AppShell path="/observe/events">
 
       <main class="dash-main">
         <header class="mc-header">
@@ -183,13 +181,7 @@ const ObserveApp: Component = () => {
         </div>
       </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+    </AppShell>
   );
 };
 

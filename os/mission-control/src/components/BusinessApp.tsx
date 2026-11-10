@@ -14,10 +14,9 @@
  */
 
 import { type Component, For } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
+import AppShell from './AppShell';
 import {
   type Tier,
   KPIS, REVENUE_COSTS, LICENSES, MODULES, AI_COSTS,
@@ -136,8 +135,7 @@ const MarginSparkline: Component = () => (
 // ── Main component ────────────────────────────────────────────────────────────
 
 const BusinessApp: Component = () => (
-  <div class="dash-layout">
-    <LeftRail active="/business" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+  <AppShell path="/business/dashboard">
 
     <main class="dash-main">
       <header class="mc-header">
@@ -278,13 +276,7 @@ const BusinessApp: Component = () => (
       </div>
     </main>
 
-    <CommandPalette
-      open={copilotOpen()}
-      query={copilotQuery()}
-      onQuery={setCopilotQuery}
-      onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-    />
-  </div>
+  </AppShell>
 );
 
 export default BusinessApp;
