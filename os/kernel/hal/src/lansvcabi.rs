@@ -44,6 +44,8 @@ pub const CMD_WAN_DHCP_REPLY: u32 = 4;
 pub const CMD_WAN_RA: u32 = 5;
 /// IN = `xid[4] LE` + a bare IPv6 packet. OUT = `ip6::DHCP6_LEN` (ST_NONE = not ours / invalid).
 pub const CMD_WAN_DHCP6: u32 = 6;
+/// D4 step 3b: IN = `plen u16 LE` + a PPPoE discovery frame (PADO / PADS). OUT = `pppwire::DISC_LEN`.
+pub const CMD_WAN_PPPOE_DISC: u32 = 7;
 /// Self-test only (kernel-issued at boot): the server faults on purpose, proving the D5 reset path.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 
