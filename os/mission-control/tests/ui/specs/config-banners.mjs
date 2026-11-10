@@ -20,7 +20,7 @@ export default async function (t) {
   await page.waitForTimeout(2200);
   const t2 = await trial.locator('b').innerText();
   ok(/^[34]:\d\d$/.test(t1) && t2 < t1, `countdown runs from the device's window (${t1} → ${t2})`);
-  ok(await vis(trial.locator('text=goes back to the previous settings by itself')), 'automatic rollback promised because the device reports auto_rollback');
+  ok(await vis(trial.locator('text=goes back to the previous settings (generation 3) by itself')), 'automatic rollback promised (auto_rollback), naming the last committed generation (floor)');
   ok(await vis(trial.locator('button:has-text("Keep it")')) && await vis(trial.locator('button:has-text("Roll back now")')), 'Keep it and Roll back now offered');
 
   // Without auto_rollback the banner must not promise one.
