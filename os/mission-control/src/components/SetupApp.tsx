@@ -65,10 +65,13 @@ const SetupApp: Component = () => {
   const launch = async () => {
     go('launch');
     const res: Out[] = [];
-    const files: [string, string, string, typeof PACKS.wan, string][] = [
-      ['WAN.TXT', 'WAN.SIG', 'wan', PACKS.wan, buildWan(wanForm())],
-      ['WIFI.TXT', 'WIFI.SIG', 'wifi', PACKS.wifi, buildWifi(wifiForm())],
-    ];
+    let files: [string, string, string, typeof PACKS.wan, string][];
+    try {
+      files = [
+        ['WAN.TXT', 'WAN.SIG', 'wan', PACKS.wan, buildWan(wanForm())],
+        ['WIFI.TXT', 'WIFI.SIG', 'wifi', PACKS.wifi, buildWifi(wifiForm())],
+      ];
+    } catch (e) { setBusy(e instanceof Error ? e.message : String(e)); go('review'); return; }
     for (const [name, sigName, type, kind, text] of files) {
       setBusy(`Signing ${name}…`);
       const txt = new TextEncoder().encode(text);
@@ -77,8 +80,8 @@ const SetupApp: Component = () => {
         if (sample()) { res.push({ name, txt, sig, sigName, result: 'signed (preview: no device)', staged: false }); continue; }
         setBusy(`Sending ${name} to the device…`);
         try {
-          await uploadPack(type, new File([new Uint8Array(sig), new Uint8Array(txt)], `${type}.pack`), () => window.prompt('Enter the owner key from your card:', ''), () => undefined);
-          res.push({ name, txt, sig, sigName, result: 'staged for the next restart', staged: true });
+          const r = await uploadPack(type, new File([new Uint8Array(sig), new Uint8Array(txt)], `${type}.pack`), () => window.prompt('Enter the owner key from your card:', ''), () => undefined);
+          res.push({ name, txt, sig, sigName, result: r.staged ? 'staged for the next restart' : 'applied', staged: true });
         } catch (e) {
           const m = e instanceof Error ? e.message : String(e);
           res.push({ name, txt, sig, sigName, result: /: type$/.test(m) ? 'the device can’t take it over the network yet' : m, staged: false });
@@ -157,11 +160,13 @@ const SetupApp: Component = () => {
         <Show when={step() === 'review'}>
           <p class="l0-label">Review</p>
           <div class="setup-bubble">Here's what I'll set up. Nothing changes until you tap Launch.</div>
+          <Show when={busy()}><p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>{busy()}</p></Show>
           <div class="plan-diff-lines">
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>internet: {mode() === 'pppoe' ? `PPPoE as ${user()}` : 'automatic (DHCP)'}</div>
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>wifi: "{ssid()}" · WPA3 + WPA2</div>
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>signed with your key {ownerKey()?.pubHex.slice(0, 8)}…</div>
           </div>
+          <p class="pcard-note" style={{ margin: 0 }}>Your Wi-Fi password{mode() === 'pppoe' ? ' and PPPoE password are' : ' is'} stored in the signed file in clear: anyone holding the device's boot card can read {mode() === 'pppoe' ? 'them' : 'it'}. Not protected at rest yet.</p>
           <p class="setup-p" style={{ 'font-size': '14px' }}>The new settings apply when the device restarts. Afterwards, join "{ssid()}" with your new password.</p>
           <div class="setup-grow" />
           <button class="hp-btn hp-btn--primary setup-cta" onClick={() => void launch()}>Launch</button>

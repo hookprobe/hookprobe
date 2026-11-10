@@ -13,7 +13,7 @@ import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 import { post } from './actions';
 
-export interface PackSlot { type: string; cap: number; generation: number; source: 'store' | 'boot' }
+export interface PackSlot { type: string; cap: number; generation: number; source: 'store' | 'boot'; applies?: 'now' | 'next_boot' }
 export interface UploadEvent { ms: number; session: string; step: string; type: string; ok: boolean; generation: number; why: string }
 export interface UploadView { store: boolean; chunk_max: number; types: PackSlot[]; in_flight: null | { id: string; type: string; size: number; received: number; verified: boolean }; recent: UploadEvent[] }
 
@@ -25,7 +25,10 @@ export async function refreshUploads(): Promise<void> {
 export const PACK_LABEL: Record<string, string> = {
   shield_block: 'Shield block list (BLOCK.TXT)', shield_allow: 'Shield allow list (ALLOW.TXT)', ioc: 'Threat-intel pack (IOC.TXT)',
   rules: 'Signed rule pack (RULES.BIN)', oui: 'Vendor list (OUI.TXT)', devices: 'Device policy (DEVICES.TXT)',
+  wan: 'Internet settings (WAN.TXT)', wifi: 'Wi-Fi settings (WIFI.TXT)', policy: 'Firewall policy (POLICY.TXT)',
 };
+/** Types whose rollback changes how the device connects. */
+export const CONNECTIVITY = new Set(['wan', 'wifi', 'policy']);
 
 // ── SHA-256: Web Crypto when the page is a secure context, else a small pure implementation
 // (a device is reachable over plain HTTP before its TLS certificate is provisioned).
@@ -70,14 +73,15 @@ export async function sha256Hex(data: Uint8Array): Promise<string> {
 }
 
 export type UploadStep = 'begin' | 'upload' | 'verify' | 'activate' | 'done';
-interface Resp { ok: boolean; refused?: string; id?: string; chunk_max?: number; received?: number; generation?: number; active_generation?: number }
+interface Resp { ok: boolean; refused?: string; id?: string; chunk_max?: number; received?: number; generation?: number; active_generation?: number; staged?: boolean; activated?: boolean; journal_seq?: number }
+export interface UploadResult { text: string; staged: boolean; generation: number }
 
 async function session(): Promise<{ csrf: string }> {
   return fetchJson<{ csrf: string }>('/api/session');
 }
 
 /** Run the whole flow; `progress` reports the step and the bytes sent. Throws with the device's refusal. */
-export async function uploadPack(type: string, file: File, askKey: () => string | null, progress: (s: UploadStep, sent: number) => void): Promise<string> {
+export async function uploadPack(type: string, file: File, askKey: () => string | null, progress: (s: UploadStep, sent: number) => void): Promise<UploadResult> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha = await sha256Hex(bytes);
   const key = askKey();
@@ -103,5 +107,18 @@ export async function uploadPack(type: string, file: File, askKey: () => string 
   if (!a.ok) throw new Error(`Activation refused (the previous pack stays active): ${a.refused}`);
   progress('done', bytes.length);
   await refreshUploads();
-  return `Activated generation ${a.generation}.`;
+  // `staged` comes from the device: next-boot types (wan / wifi / policy / os_image) only take effect at the next restart.
+  const staged = a.staged ?? uploadView()?.types.find((t) => t.type === type)?.applies === 'next_boot';
+  return { staged, generation: a.generation ?? 0, text: staged ? `Generation ${a.generation} verified and staged: it takes effect at the next restart.` : `Generation ${a.generation} verified and applied now.` };
+}
+
+/** Roll a pack back to the other A/B half (re-verified by the device). Throws with the device's refusal. */
+export async function rollbackPack(type: string, askKey: () => string | null): Promise<UploadResult> {
+  const key = askKey();
+  if (!key) throw new Error('Cancelled: the owner key is required.');
+  const a = await post<Resp>('/api/upload/rollback', { type, owner_key: key });
+  await refreshUploads();
+  if (!a.ok) throw new Error(`Rollback refused: ${a.refused}`);
+  const staged = !!a.staged;
+  return { staged, generation: a.generation ?? 0, text: staged ? `Rolled back to generation ${a.generation}: it takes effect at the next restart.` : `Rolled back to generation ${a.generation}, applied now.` };
 }

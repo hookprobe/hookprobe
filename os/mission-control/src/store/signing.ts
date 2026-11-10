@@ -9,10 +9,16 @@
  *              tagged packs  magic8 · gen u64 LE · len u64 LE · sha256 · sig · 0-pad to 512   (WAN, WIFI, …)
  *              POLICY        "HQPSIG1\0" · gen · sha256(4096 B) · sig · 0-pad to 512
  *
+ *   storage  NON-extractable: the private key cannot be read back out of this browser, not even by
+ *            Mission Control. The only copy that leaves is the passphrase-wrapped backup (keyBackup.ts),
+ *            offered once — when the key is made (or rotated). Keys stored before this rule
+ *            (extractable) can still be backed up, wrapped the same way.
+ *
  * Passkeys / security keys are NOT used: WebAuthn signs its own wrapped structure, which the device's
  * verifier does not accept (ADR 0058 D4, open item 1).
  */
 import { createSignal } from 'solid-js';
+import { wrapPkcs8, unwrapPkcs8, isEncryptedPem } from './keyBackup';
 
 const DB = 'hp-signing';
 const STORE = 'keys';
@@ -20,7 +26,8 @@ const ID = 'owner';
 
 interface Stored { privateKey: CryptoKey; publicKey: CryptoKey; created: number; source: 'generated' | 'imported' }
 
-export const [ownerKey, setOwnerKey] = createSignal<{ pubHex: string; created: number; source: 'generated' | 'imported' } | null>(null);
+export const [ownerKey, setOwnerKey] = createSignal<{ pubHex: string; created: number; source: 'generated' | 'imported'; exportable: boolean } | null>(null);
+export const MIN_PASSPHRASE = 10;
 export const [signingSupported, setSigningSupported] = createSignal<boolean | null>(null);
 
 function idb(): Promise<IDBDatabase> {
@@ -72,17 +79,36 @@ export async function checkSigning(): Promise<boolean> {
 export async function loadOwnerKey(): Promise<void> {
   try {
     const s = await idbGet();
-    setOwnerKey(s ? { pubHex: await pubHexOf(s.publicKey), created: s.created, source: s.source } : null);
+    setOwnerKey(s ? { pubHex: await pubHexOf(s.publicKey), created: s.created, source: s.source, exportable: s.privateKey.extractable } : null);
   } catch {
     setOwnerKey(null);
   }
 }
 
-export async function generateOwnerKey(): Promise<string> {
+/** Store a PKCS#8 key NON-extractable; derive its public half first (through a short-lived JWK). */
+async function storePkcs8(der: Uint8Array, source: Stored['source']): Promise<void> {
+  const tmp = await crypto.subtle.importKey('pkcs8', new Uint8Array(der), { name: 'Ed25519' }, true, ['sign']);
+  const jwk = await crypto.subtle.exportKey('jwk', tmp);
+  if (!jwk.x) throw new Error('The key has no public part.');
+  const pub = await crypto.subtle.importKey('jwk', { kty: 'OKP', crv: 'Ed25519', x: jwk.x }, { name: 'Ed25519' }, true, ['verify']);
+  const priv = await crypto.subtle.importKey('pkcs8', new Uint8Array(der), { name: 'Ed25519' }, false, ['sign']);
+  await idbPut({ privateKey: priv, publicKey: pub, created: Date.now(), source });
+}
+
+function checkPass(p: string): void {
+  if (p.length < MIN_PASSPHRASE) throw new Error(`The backup passphrase needs at least ${MIN_PASSPHRASE} characters.`);
+}
+
+/** Make a new key: returns the passphrase-wrapped backup (the only copy that ever leaves this browser). */
+export async function generateOwnerKey(passphrase: string): Promise<{ pubHex: string; backup: string }> {
+  checkPass(passphrase);
   const kp = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as CryptoKeyPair;
-  await idbPut({ privateKey: kp.privateKey, publicKey: kp.publicKey, created: Date.now(), source: 'generated' });
+  const der = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+  const backup = await wrapPkcs8(der, passphrase);
+  await storePkcs8(der, 'generated');
+  der.fill(0);
   await loadOwnerKey();
-  return ownerKey()!.pubHex;
+  return { pubHex: ownerKey()!.pubHex, backup };
 }
 
 function pemBody(pem: string): Uint8Array {
@@ -91,26 +117,26 @@ function pemBody(pem: string): Uint8Array {
   return Uint8Array.from(bin, (c) => c.charCodeAt(0));
 }
 
-/** Import a PKCS#8 PEM Ed25519 key (e.g. from `policy-sign.py keygen`). */
-export async function importOwnerKeyPem(pem: string): Promise<string> {
-  if (!/BEGIN PRIVATE KEY/.test(pem)) throw new Error('Not a PKCS#8 private key (expected "-----BEGIN PRIVATE KEY-----").');
-  const priv = await crypto.subtle.importKey('pkcs8', new Uint8Array(pemBody(pem)), { name: 'Ed25519' }, true, ['sign']);
-  // Derive the public half through JWK (x = public key).
-  const jwk = await crypto.subtle.exportKey('jwk', priv);
-  if (!jwk.x) throw new Error('The key has no public part.');
-  const pub = await crypto.subtle.importKey('jwk', { kty: 'OKP', crv: 'Ed25519', x: jwk.x }, { name: 'Ed25519' }, true, ['verify']);
-  await idbPut({ privateKey: priv, publicKey: pub, created: Date.now(), source: 'imported' });
+/** Import a backup: encrypted PKCS#8 (needs the passphrase) or a plain PKCS#8 PEM (`policy-sign.py keygen`). */
+export async function importOwnerKeyPem(pem: string, passphrase = ''): Promise<string> {
+  let der: Uint8Array;
+  if (isEncryptedPem(pem)) der = await unwrapPkcs8(pem, passphrase);
+  else if (/BEGIN PRIVATE KEY/.test(pem)) der = pemBody(pem);
+  else throw new Error('Not a private key backup (expected "BEGIN ENCRYPTED PRIVATE KEY" or "BEGIN PRIVATE KEY").');
+  await storePkcs8(der, 'imported');
+  der.fill(0);
   await loadOwnerKey();
   return ownerKey()!.pubHex;
 }
 
-/** PKCS#8 PEM backup of the stored key (same format policy-sign.py reads). */
-export async function exportOwnerKeyPem(): Promise<string> {
+/** Passphrase-wrapped backup of a key stored before keys became non-extractable. A non-extractable key
+ *  cannot be exported by anyone — its backup is the one saved when it was made. */
+export async function exportOwnerKeyBackup(passphrase: string): Promise<string> {
+  checkPass(passphrase);
   const s = await idbGet();
   if (!s) throw new Error('No signing key in this browser.');
-  const der = new Uint8Array(await crypto.subtle.exportKey('pkcs8', s.privateKey));
-  const b64 = btoa(String.fromCharCode(...der)).replace(/(.{64})/g, '$1\n');
-  return `-----BEGIN PRIVATE KEY-----\n${b64}${b64.endsWith('\n') ? '' : '\n'}-----END PRIVATE KEY-----\n`;
+  if (!s.privateKey.extractable) throw new Error('This key cannot leave the browser. Use the backup you saved when you made it.');
+  return wrapPkcs8(new Uint8Array(await crypto.subtle.exportKey('pkcs8', s.privateKey)), passphrase);
 }
 
 export async function deleteOwnerKey(): Promise<void> {
@@ -169,4 +195,45 @@ export function download(name: string, data: Uint8Array | string, mime = 'applic
   a.href = url; a.download = name;
   document.body.append(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+const unhex = (h: string) => Uint8Array.from(h.match(/../g) ?? [], (x) => parseInt(x, 16));
+
+/** Enrollment proof (ADR 0058 D3): this browser's key signs "HQENR1" || its own public key (32 raw bytes). */
+export async function enrollProof(): Promise<{ publicKey: string; proof: string }> {
+  const s = await idbGet();
+  if (!s) throw new Error('No signing key in this browser.');
+  const pub = await pubHexOf(s.publicKey);
+  return { publicKey: pub, proof: hex(await sign(cat(enc('HQENR1'), unhex(pub)))) };
+}
+
+/** Rotation (ADR 0058 D3): a NEW key is made here; the CURRENT key signs "HQROT1" || new(32) || gen u64 LE
+ *  and the new key proves possession (HQENR1). The new key replaces the stored one only on `commit()`,
+ *  after the device accepted it — until then the current key stays. */
+export async function prepareRotation(generation: number, passphrase: string): Promise<{ publicKey: string; proof: string; signature: string; backup: string; commit: () => Promise<void> }> {
+  checkPass(passphrase);
+  if (!(await idbGet())) throw new Error('No signing key in this browser: import the current owner key first.');
+  const kp = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as CryptoKeyPair;
+  const pub = await pubHexOf(kp.publicKey);
+  const proof = hex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, kp.privateKey, new Uint8Array(cat(enc('HQENR1'), unhex(pub))))));
+  const signature = hex(await sign(cat(enc('HQROT1'), unhex(pub), u64le(generation))));
+  const der = new Uint8Array(await crypto.subtle.exportKey('pkcs8', kp.privateKey));
+  const backup = await wrapPkcs8(der, passphrase);
+  return { publicKey: pub, proof, signature, backup, commit: async () => { await storePkcs8(der, 'generated'); der.fill(0); await loadOwnerKey(); } };
+}
+
+/** HQCSIG1 over an HQCFG1 bundle (ADR 0059 §B.4): 512 B, "HQCSIG1\0" | alg 1 | total_len u32 LE |
+ *  sha256(bundle) | Ed25519("HQCFG1-SIG" || sha256) | zero pad. Byte-identical to os/kernel/tools/hqcfg.py. */
+export async function signBundle(bundle: Uint8Array): Promise<Uint8Array> {
+  const d = await sha(bundle);
+  const len = new Uint8Array(4); new DataView(len.buffer).setUint32(0, bundle.length, true);
+  const sig = await sign(cat(enc('HQCFG1-SIG'), d));
+  return pad512(cat(enc('HQCSIG1\0'), new Uint8Array([1]), len, d, sig));
+}
+
+/** sha256(this browser's public key)[0..8]: the bundle's signer_key_id. */
+export async function ownerKeyId(): Promise<Uint8Array> {
+  const s = await idbGet();
+  if (!s) throw new Error('No signing key in this browser.');
+  return (await sha(new Uint8Array(await crypto.subtle.exportKey('raw', s.publicKey)))).slice(0, 8);
 }

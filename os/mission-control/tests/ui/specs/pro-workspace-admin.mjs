@@ -22,7 +22,7 @@ export default async function (t) {
   ok(await vis(page.getByText(/Platform manifest/)), 'admin: manifest card');
   ok(await page.locator('.inc-status', { hasText: '✓' }).count() >= 5, 'admin: granted capabilities listed');
   await page.click('[aria-label="Settings"] >> text=Signed packs'); await page.waitForTimeout(150);
-  ok(await page.locator('[aria-label="Pack type"] .l0-chip').count() === 6, 'admin: six pack types');
+  ok(await page.locator('[aria-label="Pack type"] .l0-chip').count() === 9, 'admin: nine pack types (incl. internet, Wi-Fi, firewall)');
   ok(await page.locator('button:has-text("Upload and verify")').isDisabled(), 'admin: upload disabled in preview');
   await page.click('[aria-label="Settings"] >> text=Identity and access'); await page.waitForTimeout(150);
   ok(await page.locator('button:has-text("Rotate owner key")').isDisabled(), 'admin: rotation needs a 16+ character key');
