@@ -95,6 +95,11 @@ pub struct Emmc {
     /// ADMITTED one-shot by `admit_boot_config` — see the Gate-1 content rule in `write_block_impl`.
     #[cfg(feature = "p15-write")]
     bootcfg: [Option<u64>; 2],
+    /// OTA (production phase 1): the INACTIVE A/B slot file's cluster run, admitted by
+    /// `admit_inactive_slot` from the card itself (`hal::abslot`). The only boot-partition range
+    /// that ever takes a bulk write; revoked when a BootConfig sector is admitted.
+    #[cfg(feature = "p15-write")]
+    slot: Option<(u64, u64)>,
 }
 
 impl Emmc {
@@ -229,6 +234,14 @@ impl Emmc {
         }
         let cache_on = ext[EXT_CSD_CACHE_CTRL] & 1 != 0;
         let wear = (ext[EXT_CSD_PRE_EOL_INFO], ext[EXT_CSD_LIFE_TIME_EST_A], ext[EXT_CSD_LIFE_TIME_EST_B]);
+        // Decision-record evidence (RPMB, 2026-11-10): READ-ONLY fields of the EXT_CSD already read above — the
+        // RPMB partition size (RPMB_SIZE_MULT x 128 KiB; 0 = none), the reliable-write sector count and the
+        // EXT_CSD revision. Nothing here switches partitions or programs anything. Printed once per boot.
+        static RPMB_SEEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+        if !RPMB_SEEN.swap(true, core::sync::atomic::Ordering::Relaxed) {
+            crate::_print(format_args!(" [EMMC-RPMB] RPMB_SIZE_MULT={} (RPMB partition {} KiB) REL_WR_SEC_C={} EXT_CSD_REV={} — read-only probe, no RPMB access\n",
+                ext[168], ext[168] as u32 * 128, ext[222], ext[192]));
+        }
         let mut e = Emmc {
             host,
             rca: RCA,
@@ -246,6 +259,8 @@ impl Emmc {
             dv_win: None,
             #[cfg(feature = "p15-write")]
             bootcfg: [None, None],
+            #[cfg(feature = "p15-write")]
+            slot: None,
         };
         e.multi_ok = e.multi_selfcheck();
         Ok(e)
@@ -349,6 +364,9 @@ impl Emmc {
     /// nothing; the write itself must also pass the content rule (`is_slot_letter_flip`).
     #[cfg(feature = "p15-write")]
     pub fn admit_boot_config(&mut self, lba: u64) -> bool {
+        // A slot flip and a slot write never overlap: admitting config.txt / tryboot.txt for a
+        // flip revokes any inactive-slot admission (the inactive slot is about to change).
+        self.slot = None;
         let Some((dlo, dhi, rlo, rhi)) = self.p1_fat_data_area() else { return false };
         if lba < dlo || lba >= dhi || (lba >= rlo && lba < rhi) {
             return false;
@@ -370,6 +388,29 @@ impl Emmc {
             }
             None => false,
         }
+    }
+
+    /// OTA — ADMIT the inactive A/B slot file for writing. The driver derives the run itself from
+    /// the card (MBR -> p1 BPB -> root directory -> `config.txt`'s slot line -> the OTHER slot
+    /// file's FAT chain, which must be one contiguous run) — the caller cannot name a range. It
+    /// must also lie outside the reserved keystore window and the DataVolume. Returns the run
+    /// (lo, hi, file size) or None (not the factory A/B layout -> no OS-image update).
+    #[cfg(feature = "p15-write")]
+    pub fn admit_inactive_slot(&mut self) -> Option<(u64, u64, u32)> {
+        self.slot = None;
+        let r = hal::abslot::inactive_slot_run(|lba, b| self.read_block_impl(lba, b).is_ok())?;
+        let hits = |a: u64, b: u64| r.lo < b && a < r.hi;
+        if r.lo < RESERVED_LBA_HI || hits(RESERVED_LBA_LO, RESERVED_LBA_HI) || self.dv.map_or(false, |(a, b)| hits(a, b)) {
+            return None;
+        }
+        self.slot = Some((r.lo, r.hi));
+        Some((r.lo, r.hi, r.size))
+    }
+
+    /// Drop the inactive-slot admission (after the image is written, or on any failure).
+    #[cfg(feature = "p15-write")]
+    pub fn revoke_inactive_slot(&mut self) {
+        self.slot = None;
     }
 
     /// p1's FAT32 geometry as THIS driver reads it: (data_lo, p1_end, rootdir_lo, rootdir_hi).
@@ -459,6 +500,13 @@ impl Emmc {
             }
             return self.cmd24(lba, buf);
         }
+        // Gate 1 (OTA): the admitted inactive A/B slot run — derived by the driver from the card,
+        // never the slot config.txt names, never the FAT / directory / BPB / MBR.
+        if let Some((lo, hi)) = self.slot {
+            if lba >= lo && lba < hi {
+                return self.cmd24(lba, buf);
+            }
+        }
         // Gate 1 (independent of the store layer): the hard allowlist — the reserved
         // keystore window OR the registered DataVolume region. LBA 0 (MBR) and the boot
         // slot are NEVER in either, so they can never be written.
@@ -516,6 +564,14 @@ impl BlockDev for Emmc {
             c.copy_from_slice(&sec);
         }
         Ok(())
+    }
+    #[cfg(feature = "p15-write")]
+    fn admit_inactive_slot(&mut self) -> Option<(u64, u64, u32)> {
+        Emmc::admit_inactive_slot(self)
+    }
+    #[cfg(feature = "p15-write")]
+    fn revoke_inactive_slot(&mut self) {
+        Emmc::revoke_inactive_slot(self)
     }
     #[cfg(feature = "p15-write")]
     fn write_block(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {

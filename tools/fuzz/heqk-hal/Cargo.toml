@@ -40,3 +40,10 @@ path = "fuzz_targets/glom.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "abslot"
+path = "fuzz_targets/abslot.rs"
+test = false
+doc = false
+bench = false

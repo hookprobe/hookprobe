@@ -16,7 +16,7 @@ echo "== waiting for the running image to write its sealed snapshot (<= 7 min)"
 ok=0
 for _ in $(seq 1 84); do
   # a write after the mark, or the most recent one if it already happened this boot
-  if tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -aq "\[AP-PERSIST\] sealed snapshot written"; then ok=1; break; fi
+  if tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-PERSIST\] sealed snapshot written" >/dev/null; then ok=1; break; fi
   sleep 5
 done
 last_write=$(clean | grep -a "\[AP-PERSIST\] sealed snapshot written" | tail -1)
@@ -27,7 +27,7 @@ echo "== power cycle (relay K1)"
 mark=$(stat -c %s "$LOG")
 python3 "$HERE/cm5-relay.py" --backend nano --dev auto cycle >/dev/null 2>&1 || { echo "PERSIST: FAIL — relay cycle failed"; exit 1; }
 for _ in $(seq 1 60); do
-  tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -aq "\[AP-PERSIST\] [0-9]* detections restored" && break
+  tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000' | grep -a "\[AP-PERSIST\] [0-9]* detections restored" >/dev/null && break
   sleep 3
 done
 NEW=$(tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000')

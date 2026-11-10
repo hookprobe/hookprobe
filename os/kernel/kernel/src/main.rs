@@ -116,6 +116,19 @@ mod ota;
 mod fat;
 #[allow(dead_code)] // A/B commit (B2): the on-device OTA commit + its QEMU two-boot proof
 mod abboot;
+/// Per-device behaviour baseline (production phase 4).
+mod devbase;
+/// Device-pinned policy trust anchor (ADR 0049 D1 TOFU).
+mod anchor;
+/// The applied network configuration for `GET /api/network` (audit A8), filled as the AP comes up.
+#[cfg(feature = "mcserve")]
+static mut NET: mcstate::NetInfo = mcstate::NET0;
+/// POLICY.TXT outcome (for NET): 0 none, 1 signed, 2 unsigned, 3 refused; and its generation.
+static mut POLICY_STATE: (u8, u64) = (0, 0);
+/// OS-image update over the upload channel (ADR 0056 phase 2 / production phase 1).
+#[cfg(all(feature = "p15-write", feature = "netsvc"))]
+#[allow(dead_code)]
+mod otaimg;
 mod net;
 mod netq;
 #[cfg(feature = "netsvc")]
@@ -173,6 +186,7 @@ mod edge;
 mod notify;
 mod packet;
 mod ratelimit;
+mod rtwdog;
 mod segment;
 mod rules;
 mod scheduler;
@@ -550,6 +564,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // survived MMU-on — the peripheral mapping is correct.
     kprint!(" mmu : enabled={} (39-bit VA, 1GiB blocks; RAM=Normal, periph=Device)\n",
         arch_aarch64::mmu_cm5::enabled());
+    // Phase 3 crash record: report (and clear) why the previous boot ended, if it panicked or faulted.
+    #[cfg(feature = "cm5")]
+    let _ = rtwdog::take_crash_at_boot();
     // VA!=PA proof: read the same physical word through the aliased high VA.
     let via_alias = unsafe { read_volatile((phys_probe as usize + sample_pa) as *const u64) };
     kprint!(" mmu : VA {:#x} -> PA {:#x} readback {} (VA!=PA: {})\n",
@@ -649,10 +666,15 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     cm5_p13_probe();
 
     // --- P7c step 3b: the REAL GEM, read from an ISOLATED EL0 driver --------
-    cm5_gem_el0_probe(); // stage 1: register probe
-    cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
-    cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
-    cm5_gem_el0_ids(); // stage 4a: EL0 driver delivers a frame -> kernel IDS verdict
+    // (not in the AP image: its 512-deep RX ring exceeds the EL0 stubs' 128-descriptor grant — and its
+    // serve loop inside cm5_p10_probe never returns here anyway)
+    #[cfg(not(feature = "apmode"))]
+    {
+        cm5_gem_el0_probe(); // stage 1: register probe
+        cm5_gem_el0_rx_probe(); // stage 2: RX descriptor-ring poll (the packet hot path)
+        cm5_gem_el0_tx_probe(); // stage 3: launch a TX from EL0 (arm + kick + poll)
+        cm5_gem_el0_ids(); // stage 4a: EL0 driver delivers a frame -> kernel IDS verdict
+    }
     // --- P8 (RX-IRQ): enable interrupt-driven RX (LAST — bounded, self-contained) ---
     cm5_gem_rx_irq_probe();
 
@@ -734,6 +756,7 @@ fn boot_confirm() {
     if armed {
         // hvc #1 -> the EL2 gate disarms the PM watchdog and erets back to EL1.
         unsafe { core::arch::asm!("hvc #1") };
+        rtwdog::note_confirmed();
         kprint!(" [HBoot-AB] PASS — trial boot confirmed; EL2 watchdog disarmed, slot committed [BOOT-TIMING] t=+{} ms (watchdog budget {} s)\n",
             boot_ms(), bi.watchdog_secs);
     } else {
@@ -3027,6 +3050,14 @@ fn cm5_p10_probe() {
                             kprint!(" [WIFI] setup AP \"{}\" — per-device passphrase {} (label / QR: {})\n", c.ssid_str(), c.psk_str(), apcred::qr_payload(c, &mut qb));
                         }
                         let ap_ssid: &[u8] = match (&wifi, &setup) { (Some(c), _) => &c.ssid[..c.ssid_len as usize], (None, Some(s)) => &s.ssid, _ => b"heqk-ap" };
+                        #[cfg(feature = "mcserve")]
+                        unsafe {
+                            let n = &mut *core::ptr::addr_of_mut!(NET);
+                            let k = ap_ssid.len().min(32);
+                            n.ssid[..k].copy_from_slice(&ap_ssid[..k]);
+                            n.ssid_len = k as u8;
+                            n.setup_ap = wifi.is_none();
+                        }
                         let ap_psk: &[u8] = match (&wifi, &setup) { (Some(c), _) => &c.psk[..c.psk_len as usize], (None, Some(s)) => &s.psk, _ => build_psk };
                         let psk_src: &str = if wifi.is_some() { "WIFI.TXT" } else if setup.is_some() { "the per-device setup credential" } else { "the build env" };
                         let wifi_chan: u32 = wifi.map_or(0, |c| c.channel as u32);
@@ -3068,11 +3099,25 @@ fn cm5_p10_probe() {
                         if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
                             match load_wan_link(&dev) {
                                 Some(Ok(l)) => {
+                                    #[cfg(feature = "mcserve")]
+                                    unsafe {
+                                        let n = &mut *core::ptr::addr_of_mut!(NET);
+                                        n.wan_vlan = l.vlan;
+                                        n.mgmt_vlan = l.mgmt.map_or(0, |m| m.vlan);
+                                    }
                                     uplink::link_configure(&l);
                                     // Management floor (task #21 N3): explicit `mgmt_floor`, else the management
                                     // sub-interface's subnet (the operator's path), else the compile-time default.
                                     let floor = l.floor.or_else(|| l.mgmt.and_then(|mg| mg.stat.map(|(ip, pl, _)| (ip, pl))));
-                                    if let Some((ip, pl)) = floor {
+                                    // Audit finding 11: with an operator key, the floor (who is never enforced against) is
+                                    // honoured only from a SIGNED WAN.TXT. Connectivity settings apply either way.
+                                    let signed = wan_signed(&dev);
+                                    match signed {
+                                        Some(Ok(g)) => kprint!(" [WAN] WAN.TXT signature OK — operator key, generation {}\n", g),
+                                        Some(Err(e)) => kprint!(" [WAN] WAN.TXT NOT signed by the operator key ({:?}) — connectivity settings applied, mgmt_floor / management-subnet floor IGNORED\n", e),
+                                        None => {}
+                                    }
+                                    if let Some((ip, pl)) = floor.filter(|_| !matches!(signed, Some(Err(_)))) {
                                         let _ = crate::verdict::set_mgmt_floor(u32::from_be_bytes(ip), pl as u32);
                                     }
                                     if l.floor_bad {
@@ -3098,6 +3143,29 @@ fn cm5_p10_probe() {
                                 }
                                 Some(Err(e)) => kprint!(" [LINK] WAN.TXT link keys invalid ({:?}) — internet untagged, no management sub-interface\n", e),
                                 None => {}
+                            }
+                            // ADR 0049 D1: the device-pinned trust anchor decides which operator key verifies
+                            // POLICY.TXT and every signed pack — before anything signed is read.
+                            #[cfg(feature = "p15-write")]
+                            {
+                                let (d, prev, wrote) = anchor::boot(policysig::POLICY_PUBKEY);
+                                let fp = |k: [u8; 32]| u32::from_be_bytes([k[0], k[1], k[2], k[3]]);
+                                #[cfg(feature = "mcserve")]
+                                unsafe {
+                                    let n = &mut *core::ptr::addr_of_mut!(NET);
+                                    (n.anchor, n.anchor_fp) = match d {
+                                        anchor::Decision::Pin(k) => (1, fp(k)),
+                                        anchor::Decision::Keep(k) => (2, fp(k)),
+                                        anchor::Decision::Conflict { pinned } => (3, fp(pinned)),
+                                        anchor::Decision::Standalone => (4, 0),
+                                    };
+                                }
+                                match d {
+                                    anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
+                                    anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
+                                    anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
+                                    anchor::Decision::Standalone => kprint!(" [ANCHOR] no operator key pinned or compiled in (standalone device)\n"),
+                                }
                             }
                             match load_policy(&dev) {
                                 Some(Ok(())) => {
@@ -3331,6 +3399,12 @@ fn cm5_p10_probe() {
                                 ap.bssid_verified);
                             if ap.serve_ready() && ap.gtk_set {
                                 chosen_cs = ap_cs;
+                                #[cfg(feature = "mcserve")]
+                                unsafe {
+                                    let (p, w) = cyw43::chanspec_primary(ap_cs);
+                                    (*core::ptr::addr_of_mut!(NET)).channel = p as u16;
+                                    (*core::ptr::addr_of_mut!(NET)).width_mhz = w;
+                                }
                                 kprint!("   [P11-ACS] chanspec iovar accepted={} (20-MHz legacy fallback used={})\n", ap.chanspec_ok, ap.chan_fallback20);
                                 let rb = cyw43::current_chanspec();
                                 kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
@@ -3403,6 +3477,17 @@ fn cm5_p10_probe() {
                         let wq = unsafe { &mut (*core::ptr::addr_of_mut!(WQBUF)).0 };
                         let mut wq_len = [0usize; WQ_N];
                         let (mut wq_head, mut wq_n) = (0usize, 0usize);
+                        // AP TX priority (soak 2026-11-10: DNS answers lost / 2-s tails behind a saturating download):
+                        // control frames (`apcore::tx_priority`: ARP, DHCP, DNS answers, ICMP, payload-less TCP) skip
+                        // the bulk backlog — sent at once when credit allows, else from this queue, drained first.
+                        const PQ_N: usize = 32;
+                        const PQ_SZ: usize = 600;
+                        struct PqBuf([[u8; PQ_SZ]; PQ_N]);
+                        static mut PQBUF: PqBuf = PqBuf([[0; PQ_SZ]; PQ_N]);
+                        let pq = unsafe { &mut (*core::ptr::addr_of_mut!(PQBUF)).0 };
+                        let mut pq_len = [0usize; PQ_N];
+                        let (mut pq_head, mut pq_n, mut pq_fail) = (0usize, 0usize, 0u32);
+                        let (mut prio_direct, mut prio_queued, mut prio_dropped) = (0u32, 0u32, 0u32);
                         let mut trunc_drop = 0u32; // frames `net::parse` refuses (truncated/oversize) — not a rule
                         let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
@@ -3424,7 +3509,22 @@ fn cm5_p10_probe() {
                         macro_rules! wifi_send {
                             ($f:expr) => {{
                                 let f: &[u8] = $f;
-                                if wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
+                                if f.len() <= PQ_SZ && apcore::tx_priority(f) {
+                                    if pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
+                                        prio_direct += 1;
+                                        true
+                                    } else if pq_n < PQ_N {
+                                        let j = (pq_head + pq_n) % PQ_N;
+                                        pq[j][..f.len()].copy_from_slice(f);
+                                        pq_len[j] = f.len();
+                                        pq_n += 1;
+                                        prio_queued += 1;
+                                        true
+                                    } else {
+                                        prio_dropped += 1;
+                                        false
+                                    }
+                                } else if wq_n == 0 && pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
                                     true
                                 } else if wq_n < WQ_N && f.len() <= WQ_SZ {
                                     let j = (wq_head + wq_n) % WQ_N;
@@ -3689,9 +3789,97 @@ fn cm5_p10_probe() {
                         #[cfg(feature = "mcserve")]
                         let (mut siem_cursor, mut siem_sent, mut siem_lost, mut siem_unrouted): (Option<u64>, u32, u32, u32) = (None, 0, 0, 0);
                         let (mut last_beat, mut last_ht, mut last_force) = (now(), now(), now());
+                        let mut last_ev_drain = now();
                         // "stays on the chosen channel": read the operating chanspec back every 12th beat (~60 s)
                         let (mut beat_n, mut ch_checks, mut ch_mismatch, mut ch_last) = (0u32, 0u32, 0u32, 0u16);
+                        // OS-image update (production phase 1): after an activation, give the HTTP
+                        // response 2 s to leave, then reboot ONCE into the slot tryboot.txt names.
+                        #[cfg(all(feature = "p15-write", feature = "mcserve"))]
+                        let mut trial_at: Option<u64> = None;
+                        // Production phase 1 step 5: repair an interrupted commit, then classify this boot.
+                        #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
+                        let (mut ota_boot, ota_t0) = {
+                            match abboot::trial::repair() {
+                                Ok(true) => kprint!(" [OTA] repaired an interrupted A/B commit (tryboot.txt re-pointed)\n"),
+                                Ok(false) => {}
+                                Err(e) => kprint!(" [OTA] commit-repair check: {:?}\n", e),
+                            }
+                            let bi = unsafe { &*(boot_abi::BOOTINFO_ADDR as *const boot_abi::BootInfo) };
+                            let b = if bi.magic == boot_abi::BOOTINFO_MAGIC { abboot::trial::classify(bi.kernel_hash) } else { otaimg::Boot::Unknown };
+                            kprint!(" [OTA] this boot: {:?} build={}{}\n", b, option_env!("HEQK_BUILD_ID").unwrap_or("-"),
+                                if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves and the WAN is usable (5 min limit, else reboot to the previous slot)" } else { "" });
+                            (b, now())
+                        };
+                        // Audit §2.1 #9: key the IPv6 source identity hash per boot from the hardware TRNG (an
+                        // unkeyed hash let a chosen /64 collide with another source's rate / scan state).
+                        if let (Some(a), Some(b)) = (arch_aarch64::rng200::next_word_strict(), arch_aarch64::rng200::next_word_strict()) {
+                            srckey::set_key(a, b);
+                        } else {
+                            kprint!(" [SRCKEY] TRNG unavailable — IPv6 source keys use the fixed key this boot\n");
+                        }
+                        // Production phase 3a: from here on a loop that stops returning resets the SoC.
+                        let wd = rtwdog::start(now());
+                        kprint!(" [WDOG] runtime watchdog {} ({} s, petted from the AP loop)\n", if wd { "ARMED" } else { "not available (no HBoot hvc #3)" }, rtwdog::PET_SECS);
+                        // Readiness 3.7: wall clock from the board RTC (PMIC, kept across warm resets — and power cuts with
+                        // a backup cell) until NTP answers; provisional, so NTP can still correct it by any step.
+                        #[cfg(feature = "mcserve")]
+                        match arch_aarch64::mailbox::rtc_time() {
+                            Some(secs) if rtc_plausible(secs) => {
+                                let ms = secs as u64 * 1000;
+                                ioc::set_now_unix(secs);
+                                #[cfg(feature = "appersist")]
+                                {
+                                    pf.set_clock(ms, now(), freq);
+                                    let (t0, f) = (now(), freq);
+                                    evlog::with(&mut |l, _| l.anchor(&|t| prodfull::tick_to_ms(t, ms, t0, f)));
+                                }
+                                let step = mcserve::state().set_clock_provisional(ms, now());
+                                kprint!(" [RTC] wall clock {} from the board RTC (step {} ms) — provisional until NTP\n", secs, step);
+                            }
+                            Some(secs) => kprint!(" [RTC] board RTC reads {} (unset — no backup cell or never synced): waiting for NTP\n", secs),
+                            None => kprint!(" [RTC] board RTC not readable (firmware / EL2 gate): waiting for NTP\n"),
+                        }
+                        #[cfg(feature = "crashtest")]
+                        let crash_at = now() + 120 * freq;
                         loop {
+                            rtwdog::pet(now(), freq);
+                            #[cfg(feature = "crashtest")]
+                            if now() > crash_at && rtwdog::last_crash().is_none() { // once: the boot that reports it runs on
+                                panic!("crashtest: deliberate panic 120 s into the AP loop (bench build)");
+                            }
+                            #[cfg(all(feature = "p15-write", feature = "mcserve"))]
+                            {
+                                if upload::take_trial_reboot() {
+                                    trial_at = Some(now().wrapping_add(2 * freq));
+                                    kprint!(" [OTA] new image written to the inactive slot and verified from the slot — trial boot in 2 s (tryboot one-shot; an unhealthy trial falls back to this slot)\n");
+                                }
+                                #[cfg(feature = "hboot")]
+                                if let otaimg::Boot::Trial(l) = ota_boot {
+                                    if up.usable() {
+                                        match abboot::trial::commit(l) {
+                                            Ok(n) => {
+                                                kprint!(" [OTA] COMMITTED slot {} ({} boot-config writes) — healthy trial: AP serving, WAN usable; the next cold boot runs it\n", l as char, n);
+                                                ota_boot = otaimg::Boot::Cold;
+                                            }
+                                            Err(e) => {
+                                                kprint!(" [OTA] commit failed: {:?} — rebooting to the previous slot\n", e);
+                                                unsafe { core::arch::asm!("hvc #0") };
+                                            }
+                                        }
+                                    } else if now().wrapping_sub(ota_t0) > 300 * freq {
+                                        kprint!(" [OTA] trial not healthy within 5 min (WAN never usable) — rebooting to the previous slot\n");
+                                        unsafe { core::arch::asm!("hvc #0") };
+                                    }
+                                }
+                                if trial_at.is_some_and(|t| now() > t) {
+                                    let set = arch_aarch64::mailbox::set_reboot_flags(arch_aarch64::mailbox::REBOOT_FLAG_TRYBOOT);
+                                    let notified = arch_aarch64::mailbox::notify_reboot();
+                                    kprint!(" [OTA] tryboot flag set={:?} notify={} — rebooting into the trial slot\n", set, notified);
+                                    #[cfg(feature = "hboot")]
+                                    unsafe { core::arch::asm!("hvc #0") };
+                                    trial_at = None;
+                                }
+                            }
                             // Liveness net: an unconditional (cheap) WiFi read every ~250 ms in case an
                             // indication was lost — the peek alone stalled the pump after the first lease.
                             // Flush queued WiFi deliveries while credit lasts (a read just refreshed it).
@@ -3700,7 +3888,27 @@ fn cm5_p10_probe() {
                             // host always drains the firmware's RX side before pushing more TX into it.
                             let tx_budget = if rx_busy { 1 } else { 20 };
                             let mut tx_round = 0;
-                            while wq_n > 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
+                            // priority frames first (control traffic never waits behind the bulk ring)
+                            while pq_n > 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
+                                tx_round += 1;
+                                let i = pq_head;
+                                if cyw43::ap_tx(&pq[i][..pq_len[i]]) {
+                                    pq_head = (i + 1) % PQ_N;
+                                    pq_n -= 1;
+                                    pq_fail = 0;
+                                } else {
+                                    pq_fail += 1;
+                                    if pq_fail >= 3 {
+                                        pq_head = (i + 1) % PQ_N;
+                                        pq_n -= 1;
+                                        prio_dropped += 1;
+                                        pq_fail = 0;
+                                        continue;
+                                    }
+                                    break;
+                                }
+                            }
+                            while wq_n > 0 && pq_n == 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
                                 tx_round += 1;
                                 let i = wq_head;
                                 if cyw43::ap_tx(&wq[i][..wq_len[i]]) {
@@ -3731,7 +3939,7 @@ fn cm5_p10_probe() {
                             {
                                 let (seq, max, _) = cyw43::ap_diag();
                                 let t = now();
-                                if max.wrapping_sub(seq) <= 2 && wq_n > 0 {
+                                if max.wrapping_sub(seq) <= 2 && wq_n + pq_n > 0 {
                                     if credit0_since == 0 {
                                         credit0_since = t;
                                         unstick_stage = 0;
@@ -3833,7 +4041,7 @@ fn cm5_p10_probe() {
                                 }
                             }
                             // A pending queue forces a read: the credit update arrives as a frame.
-                            let force = wq_n > 0 || now().wrapping_sub(last_force) > freq / 4;
+                            let force = wq_n + pq_n > 0 || now().wrapping_sub(last_force) > freq / 4;
                             if force {
                                 last_force = now();
                             }
@@ -3852,6 +4060,7 @@ fn cm5_p10_probe() {
                                     // old read loops — the "sometimes takes forever" texture).
                                     let mut tries = 0u32;
                                     loop {
+                                        rtwdog::pet(now(), freq);
                                         tries += 1;
                                         let mut auth = cyw43::ApAuth::new();
                                         cyw43::ap_wpa2_authenticate(&ap.bssid, &sta, &pmk, &gtk, 1, &mut auth);
@@ -3910,24 +4119,8 @@ fn cm5_p10_probe() {
                                             dh.client_mac[0], dh.client_mac[1], dh.client_mac[2], dh.client_mac[3], dh.client_mac[4], dh.client_mac[5],
                                             dh.leased_ip[0], dh.leased_ip[1], dh.leased_ip[2], dh.leased_ip[3],
                                             dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.active(), dh.arp_replies);
-                                    } else if act == 0 && lanrelay::is_discovery_mcast(frame) {
-                                        // G10: mDNS / SSDP / LLMNR from a station -> the other stations (IDS verdict first)
-                                        if packet::verdict(frame).1 != packet::DROP {
-                                            let _ = lanrelay::relay_discovery(frame, &dh, cyw43::now_secs(), &mut |f| wifi_send!(f));
-                                        }
-                                    } else if act == 0 && lanrelay::relay_target6(frame, &dh) {
-                                        // G10: IPv6 station -> station (link-local / ULA / global), IDS verdict first
-                                        if packet::verdict(frame).1 != packet::DROP {
-                                            let _ = wifi_send!(frame);
-                                        }
-                                    } else if act == 0 && frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
-                                        // G10: an ARP request for ANOTHER station — answer for it (proxy-ARP) so the pair can
-                                        // talk THROUGH heqk (the firmware's ap_isolate keeps them from talking directly).
-                                        let mut ab = [0u8; 64];
-                                        let k = lanrelay::proxy_arp(frame, &dh, &mut ab);
-                                        if k > 0 {
-                                            let _ = wifi_send!(&ab[..k]);
-                                        }
+                                    } else if act == 0 && apcore::station_relay(frame, &dh, cyw43::now_secs(), &mut |f: &[u8]| wifi_send!(f)) {
+                                        // G10 station-to-station (discovery relay / IPv6 relay / proxy-ARP): G0 step 3c
                                     } else if act == 0 && frame.len() >= 54 && frame[12] == 0x86 && frame[13] == 0xdd && unsafe { V6.up } {
                                         // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
                                         // verdict and out the PPPoE session (no NAT; the module records the flow so the
@@ -3957,12 +4150,12 @@ fn cm5_p10_probe() {
                                         let cfg = apcore::FwdCfg { our_ip, me: ap.bssid, inside_net };
                                         let mut hw = ApHw { up: &up, wh: &whealth };
                                         let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
-                                        let r = apcore::client4(frame, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| wifi_send!(f));
+                                        let r = apcore::client4(frame, apcore::WIFI_PORT, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| wifi_send!(f));
                                         match r {
                                             apcore::Client4::BindDrop => bind_drop += 1,
                                             apcore::Client4::Trunc => trunc_drop += 1, // fail-closed, but NOT a rule drop
                                             apcore::Client4::IdsDrop => ids_drop_out += 1,
-                                            apcore::Client4::McDenied => {} // Parity G9: internet_only / quarantine devices
+                                            apcore::Client4::McDenied | apcore::Client4::Echo => {} // Parity G9: internet_only / quarantine devices; echo answered
                                             apcore::Client4::ToMc => {
                                                 // Mission Control on the AP address; not on the client AP when management is
                                                 // configured (G12-M).
@@ -4021,7 +4214,33 @@ fn cm5_p10_probe() {
                                     // Plug-and-play WAN: the boot-time bringup is not the only chance. If the
                                     // uplink isn't usable and end0 now has a link, retry the lease every 10 s —
                                     // a cable plugged after boot (metal 2026-10-09) must not need a power-cycle.
-                                    if !up.usable() {
+                                    if !up.usable() && matches!(wan_mode, hal::WanMode::Dhcp) && up.mac != [0; 6] {
+                                        // Phase 3: DHCP acquired IN the loop (DISCOVER / REQUEST / gateway ARP sent here,
+                                        // replies consumed by wan_poll) — an ISP outage no longer stalls the LAN 5 s in 10.
+                                        let t = now();
+                                        if arch_aarch64::gem::phy_link_up(0) {
+                                            if t.wrapping_sub(last_wan_try) > 10 * freq {
+                                                last_wan_try = t;
+                                                wan_retries += 1;
+                                                if let Some((gig, changed)) = arch_aarch64::gem::sync_speed() {
+                                                    if changed {
+                                                        kprint!(" [WAN] link up after boot: MAC re-synced to {} (retry {})\n", if gig { "1 Gb/s" } else { "100 Mb/s" }, wan_retries);
+                                                    }
+                                                }
+                                                let (d, o, a, nk) = unsafe { uplink::DORA_STATS };
+                                                if wan_retries <= 3 || wan_retries % 30 == 0 {
+                                                    kprint!(" [WAN] no lease yet — in-loop DHCP: discovers={} offers={} acks={} naks={}\n", d, o, a, nk);
+                                                }
+                                            }
+                                            if uplink::wan_dora_tick(&mut up) {
+                                                kprint!(" [M-NAT0] WAN came up (in-loop DHCP, no LAN stall): leased {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{}\n",
+                                                    up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3],
+                                                    up.dhcp.router[0], up.dhcp.router[1], up.dhcp.router[2], up.dhcp.router[3],
+                                                    up.dhcp.dns[0], up.dhcp.dns[1], up.dhcp.dns[2], up.dhcp.dns[3]);
+                                                wan_leased_at = now();
+                                            }
+                                        }
+                                    } else if !up.usable() {
                                         let t = now();
                                         if t.wrapping_sub(last_wan_try) > 10 * freq && arch_aarch64::gem::phy_link_up(0) {
                                             last_wan_try = t;
@@ -4055,14 +4274,37 @@ fn cm5_p10_probe() {
                                         let t = now();
                                         if wan_leased_at == 0 {
                                             wan_leased_at = t;
-                                        } else if up.dhcp.lease > 0 && t.wrapping_sub(wan_leased_at) > (up.dhcp.lease as u64 / 2) * freq {
-                                            let mut again = uplink::UplinkResult::new(Nic::End0);
-                                            uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
-                                            if again.usable() {
-                                                up = again;
-                                                wan_renewals += 1;
+                                        } else if up.dhcp.lease > 0 {
+                                            // Phase 3d: renew IN the loop from T1 (lease/2) — a REQUEST every 5 s, the ACK is
+                                            // consumed by wan_poll. Only a NAK, or no answer by T2 (7/8 of the lease), falls
+                                            // back to the full (blocking) bring-up.
+                                            let age = t.wrapping_sub(wan_leased_at);
+                                            let lease = up.dhcp.lease as u64 * freq;
+                                            match uplink::wan_renew_take() {
+                                                5 => {
+                                                    wan_leased_at = t;
+                                                    wan_renewals += 1;
+                                                }
+                                                r if (r == 6 || age > lease / 8 * 7) && matches!(wan_mode, hal::WanMode::Dhcp) && up.mac != [0; 6] => {
+                                                    // the lease is gone: re-acquire IN the loop (no blocking bring-up)
+                                                    kprint!(" [WAN] lease {} — re-acquiring in the loop\n", if r == 6 { "NAKed" } else { "past T2 without a renewal" });
+                                                    up.dhcp.ack_rx = false;
+                                                    up.arp_reply = false;
+                                                    wan_leased_at = t;
+                                                }
+                                                r if r == 6 || age > lease / 8 * 7 => {
+                                                    rtwdog::pet(now(), freq);
+                                                    let mut again = uplink::UplinkResult::new(Nic::End0);
+                                                    uplink::bringup_with(Nic::End0, &[8, 8, 8, 8], &wan_mode, &mut again);
+                                                    if again.usable() {
+                                                        up = again;
+                                                        wan_renewals += 1;
+                                                    }
+                                                    wan_leased_at = t; // either way, don't retry in a tight loop
+                                                }
+                                                _ if age > lease / 2 => uplink::wan_renew_tick(&up),
+                                                _ => {}
                                             }
-                                            wan_leased_at = t; // either way, don't retry in a tight loop
                                         }
                                     }
                                     // eth1 LAN port: serve DHCP/ARP from the same lease table and forward through
@@ -4089,16 +4331,16 @@ fn cm5_p10_probe() {
                                                         lan_tx_fail += 1;
                                                     }
                                                 } else if act == 0 && (up.usable() || unsafe { uplink::MGMT }.is_some()) && n >= 34 && ebuf[12] == 0x08 && ebuf[13] == 0x00 {
-                                                    let mut smac = [0u8; 6];
-                                                    smac.copy_from_slice(&ebuf[6..12]);
-                                                    let mut sip = [0u8; 4];
-                                                    sip.copy_from_slice(&ebuf[26..30]);
-                                                    if { dh.now = cyw43::now_secs(); dh.seen(&smac); !dh.binding_ok(&smac, &sip) } {
-                                                        bind_drop += 1;
-                                                    } else if packet::verdict(&ebuf[..n]).1 == packet::DROP {
-                                                        ids_drop_out += 1;
-                                                    } else {
-                                                        let _ = fwd4!(&ebuf[..n], PIf::Eth1, nat::IF_ETH1, eth1_send);
+                                                    // G0 step 3d: the wired port takes the same gate chain as Wi-Fi (apcore::client4) — now
+                                                    // incl. the truncation fail-close it used to skip; no Mission Control / relay on eth1
+                                                    let cfg = apcore::FwdCfg { our_ip, me: uplink::ETH1_MAC, inside_net };
+                                                    let mut hw = ApHw { up: &up, wh: &whealth };
+                                                    let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
+                                                    match apcore::client4(&ebuf[..n], apcore::ETH1_PORT, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| eth1_send!(f)) {
+                                                        apcore::Client4::BindDrop => bind_drop += 1,
+                                                        apcore::Client4::Trunc => trunc_drop += 1,
+                                                        apcore::Client4::IdsDrop => ids_drop_out += 1,
+                                                        _ => {}
                                                     }
                                                 }
                                             }
@@ -4182,8 +4424,13 @@ fn cm5_p10_probe() {
                                                         evlog::with(&mut |l, _| l.anchor(&|t| prodfull::tick_to_ms(t, ms, t0, f)));
                                                     }
                                                     match mcserve::state().sync_clock(ms, now()) {
-                                                        Some(step) => kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
-                                                            wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step),
+                                                        Some(step) => {
+                                                            kprint!(" [AP-NTP] wall clock set from {}.{}.{}.{} (step {} ms) — timestamps are now real time\n",
+                                                                wntp.server[0], wntp.server[1], wntp.server[2], wntp.server[3], step);
+                                                            // keep the board RTC right for the next boot (register 0 only — HBoot enforces it)
+                                                            let rtc_ok = arch_aarch64::mailbox::set_rtc_time((ms / 1000) as u32);
+                                                            kprint!(" [RTC] board RTC {} from NTP\n", if rtc_ok { "set" } else { "NOT set (refused)" });
+                                                        }
                                                         None => kprint!(" [AP-NTP] reply refused: step larger than the re-sync bound\n"),
                                                     }
                                                 }
@@ -4247,8 +4494,12 @@ fn cm5_p10_probe() {
                                                             if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
                                                                 lan_tx_fail += 1;
                                                             }
+                                                        } else if m <= PQ_SZ && apcore::tx_priority(&nbuf[..m]) {
+                                                            if !wifi_send!(&nbuf[..m]) {
+                                                                nat_wifi_tx_fail += 1;
+                                                            }
                                                         } else if {
-                                                            let sent = wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
+                                                            let sent = wq_n == 0 && pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
                                                             if nat_trace < NAT_TRACE_N {
                                                                 nat_trace += 1;
                                                                 nat_trace_line("IN ", &nbuf[..m], if sent { "wifi=sent" } else if wq_n < WQ_N { "wifi=queued" } else { "wifi=DROP" });
@@ -4289,6 +4540,11 @@ fn cm5_p10_probe() {
                                     }
                                     if up.usable() {
                                         uplink::wan6_tick(&up); // DHCPv6 prefix-delegation renewal at T1
+                                        rtwdog::pet(now(), freq); // the re-probe below may hold the loop for <= 12 s
+                                        if uplink::wan6_reprobe(&up) {
+                                            let (k, ok) = unsafe { uplink::WAN6_REPROBES };
+                                            kprint!(" [WAN6] re-probe #{} after a late Router Advertisement: IPv6 {}\n", k, if ok { "UP (the LAN renumbers next)" } else { "still down" });
+                                        }
                                     }
                                     {
                                         // (Re)number the LAN when the WAN has a delegated prefix (also after a WAN re-dial).
@@ -4363,17 +4619,31 @@ fn cm5_p10_probe() {
                                     // Stall detector: deliveries waiting for credit AND no WiFi frame read in
                                     // 10 s while a station is associated = the SDPCM stream is wedged (metal
                                     // 2026-10-09: frozen counters, 29 frames pending). Say so, loudly, once.
-                                    if wq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
+                                    if wq_n + pq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
                                         if !stall_reported {
                                             kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged; a station re-join or a power-cycle recovers it\n", wq_n, wifi_frames);
                                             stall_reported = true;
+                                        }
+                                        // Phase 3c self-heal: still wedged after WIFI_WEDGE_RESET_S -> nothing in the loop recovers it
+                                        // (the runtime watchdog only sees a hung LOOP, and this loop keeps running) -> reset
+                                        // through the EL2 gate, reason recorded for the next boot. Backoff: not again when the
+                                        // previous boot was itself such a reset that came early (a firmware that wedges at once
+                                        // must not turn into a reboot loop — it stays up, reported, for a power cycle).
+                                        #[cfg(feature = "cm5")]
+                                        if t.wrapping_sub(stall_since) > WIFI_WEDGE_RESET_S * freq && rtwdog::self_heal_allowed() {
+                                            let up = t / freq.max(1);
+                                            kprint!(" [SELF-HEAL] Wi-Fi stream wedged for {} s with {} deliveries waiting — resetting the unit (uptime {} s)\n", WIFI_WEDGE_RESET_S, wq_n, up);
+                                            arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi stream wedged for {} s ({} deliveries waiting for TX credit, no frame from the firmware)", WIFI_WEDGE_RESET_S, wq_n));
                                         }
                                     } else if wifi_frames != stall_frames {
                                         stall_frames = wifi_frames;
                                         stall_since = t;
                                         stall_reported = false;
                                     }
-                                    if t.wrapping_sub(last_beat) > 5 * freq {
+                                    // Phase 3g: drain the detection ring when a quarter full or every 250 ms (was: only in the
+                                    // 5-s heartbeat — a burst from many sources overran the 64-slot ring and lost evidence).
+                                    if events::pending() >= events::CAPACITY / 4 || t.wrapping_sub(last_ev_drain) > freq / 4 {
+                                        last_ev_drain = t;
                                         // Which rules dropped: drain the SOAR ring (nobody else does in apmode).
                                         loop {
                                             let k = events::drain(&mut evs);
@@ -4406,6 +4676,8 @@ fn cm5_p10_probe() {
                                                 let _ = placed;
                                             }
                                         }
+                                    }
+                                    if t.wrapping_sub(last_beat) > 5 * freq {
                                         {
                                             beat_n += 1;
                                             if beat_n == 2 || beat_n % 12 == 6 {
@@ -4495,8 +4767,8 @@ fn cm5_p10_probe() {
                                                 dg[8], dg[9], dg[10], dg[11] & 0xffff, dg[11] >> 16, dg[12], dg[13], dg[14], dg[15], dg[3],
                                                 dg[3] & 0xff, (dg[3] >> 8) & 0xff);
                                         }
-                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
-                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop,
+                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | prio direct={} queued={} dropped={} pending={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
+                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop, prio_direct, prio_queued, prio_dropped, pq_n,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
                                             rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
                                         ratelimit::set_local_ip(1, u32::from_be_bytes(up.dhcp.yiaddr));
@@ -4574,7 +4846,7 @@ fn cm5_p10_probe() {
                                                     }
                                                 }
                                             }
-                                            st.wan = Some(mcstate::WanFacts {
+                                            st.set_wan(mcstate::WanFacts {
                                                 up: up.usable(),
                                                 ip: up.dhcp.yiaddr,
                                                 mode: match wan_mode { hal::WanMode::Dhcp => 0, hal::WanMode::Static { .. } => 1, _ => 2 },
@@ -4586,6 +4858,16 @@ fn cm5_p10_probe() {
                                                 dns_blocked: shield::totals().1,
                                                 blocklist: shield::block_len() as u32,
                                             });
+                                            {
+                                                let n = unsafe { &mut *core::ptr::addr_of_mut!(NET) };
+                                                n.gw = up.dhcp.router;
+                                                n.mgmt_ip = unsafe { (*core::ptr::addr_of!(uplink::MGMT)).as_ref().map_or([0; 4], |m| m.ip) };
+                                                let v6 = unsafe { &*core::ptr::addr_of!(V6) };
+                                                n.v6_up = v6.up;
+                                                n.v6_prefix.copy_from_slice(&v6.prefix[..8]);
+                                                (n.policy, n.policy_gen) = unsafe { POLICY_STATE };
+                                                st.set_net(*n);
+                                            }
                                         }
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
                                         actions::tick((now().wrapping_sub(mc_t0_any) / (freq / 1000).max(1)) as u64); // ADR 0053 expiry
@@ -4604,6 +4886,13 @@ fn cm5_p10_probe() {
                                                 wh_sent_at = now();
                                             }
                                             wh_slot = wh_slot.wrapping_add(1);
+                                        }
+                                        {
+                                            let (wa, wp, wg, wr) = rtwdog::stats(freq);
+                                            kprint!("   [WDOG] armed={} pets={} worst_loop_gap_ms={} prev_reset_was_watchdog={}\n", wa, wp, wg, wr);
+                                            let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
+                                            kprint!("   [WAN renew] in-loop DHCP renewal: requests={} acks={} naks={} (full re-bring-ups counted in renewals=)\n", rq, ra, rn);
+                                            kprint!("   [EVENTS] detection ring overruns={} (evidence lost before the drain; should stay 0)\n", events::overruns());
                                         }
                                         {
                                             let (q, b, by) = shield::totals();
@@ -6546,6 +6835,9 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
+        let _ = apcore::relay_selftest();
+        let _ = apcore::txprio_selftest();
+        let _ = apcore::ladder_selftest();
         let _ = ownerjournal::selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
@@ -6679,6 +6971,36 @@ pub extern "C" fn kmain() -> ! {
         let _ = rules::dedup_selftest();
         // M3 snapshot v2: the persisted evidence ring restores IN ORDER after wrapping.
         let _ = snapshot::snapshot_selftest();
+        let _ = anchor::selftest();
+        let _ = arch_aarch64::nat::index_selftest();
+        let _ = rules::lateral6_selftest();
+        let _ = devbase::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = actions::rate_selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = actions::seq_floor_selftest();
+        let _ = bpf::verify_heap_selftest();
+        let _ = policysig::wansig_selftest();
+        let cr = arch_aarch64::crashrec::selftest() && {
+            // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
+            use arch_aarch64::crashrec::{take, write};
+            write(3, 0, 0, 300, format_args!("wedged"));
+            let early = take();
+            write(3, 0, 0, 7200, format_args!("wedged"));
+            let late = take();
+            write(1, 0, 0, 10, format_args!("p"));
+            let panic = take();
+            early.is_some_and(|c| c.kind_name() == "self-heal reset")
+                && !rtwdog::self_heal_allowed_after(early.as_ref())
+                && rtwdog::self_heal_allowed_after(late.as_ref())
+                && rtwdog::self_heal_allowed_after(panic.as_ref())
+                && rtwdog::self_heal_allowed_after(None)
+        };
+        kprint!(" [P-crashrec] {} — crash record (phase 3): the panic / fatal-fault path writes the reason into a reserved, cache-cleaned page; the next boot takes it once (a second take is empty), a flipped byte or a bare magic never reads as a crash, the message is made JSON-safe\n",
+            if cr { "PASS" } else { "FAIL" });
+        let w = rtwdog::selftest();
+        kprint!(" [P-rtwdog] {} — runtime watchdog (production phase 3a): armed only when HBoot advertises hvc #3 (an older HBoot, no EL2 gate or no handoff never arms), worst loop gap tracked for the heartbeat\n",
+            if w { "PASS" } else { "FAIL" });
     }
 
     // --- P11: device-class transport (the sDDF borrow) — the hardened SPSC
@@ -6713,6 +7035,8 @@ pub extern "C" fn kmain() -> ! {
     //     validate.sh with a mkfs.vfat'd disk; skips diskless / non-FAT) ---
     p15_otafat_selftest();
     // B2: the A/B commit survives a cold boot (two-boot, factory-layout disk; SKIPs otherwise).
+    #[cfg(all(feature = "p15-write", feature = "netsvc"))]
+    otaimg::selftest();
     #[cfg(feature = "p15-write")]
     abboot::abcommit_selftest();
 
@@ -6729,6 +7053,8 @@ pub extern "C" fn kmain() -> ! {
     //     (SHARED hboot verifier) -> flip -> confirm/rollback; state persisted;
     //     brick-safety + verify-before-flip + downgrade-refused asserted ---
     p15_ota_selftest();
+    #[cfg(feature = "p15-write")]
+    let _ = ota::big_verify_selftest();
 
     // --- A/B: detection plane is up -> confirm this boot (disarm trial watchdog) ---
     boot_confirm();
@@ -7963,6 +8289,20 @@ fn p8_l2struct() -> bool {
     ok &= bc_up_drop;
     kprint!("   broadcast-storm non-exempt on UPLINK -> RateLimit DROP fired: {} (A3 fix: bcast flood shed on ANY port) [{}]\n",
         bc_up_drop, if bc_up_drop { "ok" } else { "BUG" });
+
+    // --- a household, not a storm: 40 devices x 5 ordinary broadcasts (200 in the window, 4x the per-source
+    // threshold in aggregate) must NEVER fire or drop — the storm counter is per source (metal 2026-11-10).
+    let mut hh_bad = false;
+    for d in 0..40u8 {
+        let mut f = bc;
+        f[6..12].copy_from_slice(&[0x02, 0x66, 0x00, 0x00, 0x01, d]);
+        for _ in 0..5 {
+            hh_bad |= rules::l2_stateful_verdict(&f, 0, 3, PortRole::Uplink).is_some();
+        }
+    }
+    ok &= !hh_bad;
+    kprint!("   broadcast-storm: 40 devices x 5 broadcasts (aggregate 200) -> fired/dropped: {} (per-source counter) [{}]\n",
+        hh_bad, if hh_bad { "BUG" } else { "ok" });
 
     // --- broadcast-storm EXEMPT: an mDNS burst (01:00:5e:00:00:fb) must NEVER fire or drop.
     let mut md = [0u8; 64];
@@ -13305,6 +13645,16 @@ extern "C" fn producer() -> ! {
     thread_exit()
 }
 
+/// Readiness 3.7: an RTC value is wall-clock time only between 2026-01-01 and 2100 (an unset RTC counts from 0).
+#[allow(dead_code)]
+fn rtc_plausible(secs: u32) -> bool {
+    (1_767_225_600..4_102_444_800).contains(&secs)
+}
+
+/// Phase 3c: a Wi-Fi stream wedged this long (deliveries waiting, nothing read from the firmware) resets the unit.
+#[allow(dead_code)]
+const WIFI_WEDGE_RESET_S: u64 = 120;
+
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     arch_aarch64::on_panic(info)
@@ -13628,23 +13978,55 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
     }
     // ADR 0049 D1: with an operator key in this image, the signature is checked BEFORE the parser sees a
     // byte; any failure is reported as a rejected policy (=> the management lockdown below), never applied.
-    if let Some(key) = policysig::POLICY_PUBKEY {
+    if let Some(key) = policysig::key() {
         let mut sig = [0u8; policysig::SIG_FILE_LEN];
         let have = fat::locate_contiguous(dev, p1, policysig::SIG_8_3)
             .and_then(|(l, _)| dev.read_block(l, &mut sig).ok())
             .is_some();
-        let r = if have { policysig::verify(&buf, &sig, &key, policysig::POLICY_GEN_FLOOR) } else { Err(policysig::SigErr::Missing) };
+        let r = if have { policysig::verify(&buf, &sig, &key, policysig::floor()) } else { Err(policysig::SigErr::Missing) };
         match r {
-            Ok(gen) => kprint!(" [POLICY] signature OK — operator key, generation {} (floor {})\n", gen, policysig::POLICY_GEN_FLOOR),
+            Ok(gen) => {
+                unsafe { POLICY_STATE = (1, gen) };
+                kprint!(" [POLICY] signature OK — operator key, generation {} (floor {})\n", gen, policysig::floor());
+                // persist a newer generation as the floor (an older signed POLICY.TXT never comes back)
+                #[cfg(all(feature = "cm5", feature = "p15-write"))]
+                if gen > policysig::floor() && !crate::anchor::raise_policy_floor(gen) {
+                    kprint!(" [ANCHOR] could not persist the POLICY generation floor {} (kept in RAM for this boot)\n", gen);
+                }
+            }
             Err(e) => {
+                unsafe { POLICY_STATE = (3, 0) };
                 kprint!(" [POLICY] signature REFUSED ({:?}) — the policy is not parsed\n", e);
                 return Some(Err(hal::policy::PolicyErr::Unsigned));
             }
         }
     } else {
+        unsafe { POLICY_STATE = (2, 0) };
         kprint!(" [POLICY] no operator key in this image (standalone) — POLICY.TXT accepted unsigned\n");
     }
     Some(hal::policy::parse_policy(&buf, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }))
+}
+
+/// WAN.SIG check (audit finding 11). None = no operator key (standalone: unsigned WAN.TXT is fine);
+/// Some(Ok(gen)) = signed by the operator key; Some(Err) = missing / bad.
+#[allow(dead_code)]
+fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr>> {
+    let key = policysig::key()?;
+    let mut sec = [0u8; 512];
+    let mut sig = [0u8; 512];
+    let r = (|| {
+        dev.read_block(0, &mut sec).ok()?;
+        let p1 = store::parse_mbr(&sec)[0].start;
+        let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
+        let (slba, _sn) = fat::locate_contiguous(dev, p1, policysig::WAN_SIG_8_3)?;
+        dev.read_block(lba, &mut sec).ok()?;
+        dev.read_block(slba, &mut sig).ok()?;
+        Some(())
+    })();
+    Some(match r {
+        None => Err(policysig::SigErr::Missing),
+        Some(()) => policysig::verify_wan(&sec, &sig, &key),
+    })
 }
 
 /// Read + parse WAN.TXT from a block device's first partition. None = no file (=> DHCP).

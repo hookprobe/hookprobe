@@ -2906,6 +2906,18 @@ pub fn ap_chanspec(channel: u32) -> u16 {
     (channel as u16 & 0xff) | 0x1000 | 0xc000
 }
 
+/// The PRIMARY (control) channel and the width (MHz) of a d11ac chanspec (inverse of `ap_chanspec`): for
+/// 40 / 80 MHz the chanspec carries the CENTRE channel and the control sideband.
+pub fn chanspec_primary(cs: u16) -> (u8, u16) {
+    let centre = (cs & 0xff) as u8;
+    let sb = ((cs >> 8) & 0x7) as u8;
+    match cs & 0x3800 {
+        0x2000 => (centre.wrapping_sub(6).wrapping_add(4 * (sb & 3)), 80),
+        0x1800 => (centre.wrapping_sub(2).wrapping_add(4 * (sb & 1)), 40),
+        _ => (centre, 20),
+    }
+}
+
 /// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
 /// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
 /// A valid unicast MAC must already be set (a prior scan/`wifi_scan` establishes cur_etheraddr).
@@ -2918,6 +2930,11 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     let mut cap = [0u8; 512];
     let cl = fw_cap(&mut cap);
     out.cap_has_ap = has_token(&cap[..cl], b"ap");
+    // Phase 6 planning evidence (WPA3-SAE / PMF): the firmware's full feature string, once per AP bring-up.
+    crate::_print(format_args!(" [WIFI-CAP] sae={} sae_ext={} mfp={} fwsup={} idsup={} | {}\n",
+        has_token(&cap[..cl], b"sae"), has_token(&cap[..cl], b"sae_ext"), has_token(&cap[..cl], b"mfp"),
+        has_token(&cap[..cl], b"fwsup"), has_token(&cap[..cl], b"idsup"),
+        core::str::from_utf8(&cap[..cl.min(480)]).unwrap_or("?")));
 
     // The AP MAC = the src of every AP-served frame (M1, ARP reply, DHCP OFFER/ACK).
     // Take it from the scan phase's ESTABLISHED MAC (`MAC_DIAG.1`: the OTP MAC, or the

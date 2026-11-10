@@ -91,6 +91,13 @@ pub trait BlockDev {
     fn write_block(&mut self, _lba: u64, _buf: &[u8; 512]) -> Result<(), BlockErr> {
         Err(BlockErr::WriteRefused)
     }
+    /// OTA: admit the INACTIVE A/B slot file for writing, derived by the driver from the medium
+    /// itself (`abslot::inactive_slot_run`) — (lo, hi, file size). Default: no OS-image updates.
+    fn admit_inactive_slot(&mut self) -> Option<(u64, u64, u32)> {
+        None
+    }
+    /// Drop an inactive-slot admission.
+    fn revoke_inactive_slot(&mut self) {}
 }
 
 // Still to come alongside their phase (the boundary exists from commit one):
@@ -716,6 +723,7 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
 }
 
 /// WAN policy engine: prefix lists, ACLs, routes, sub-interface encapsulation (POLICY.TXT).
+pub mod abslot;
 pub mod policy;
 pub mod defer;
 pub mod tlsabi;

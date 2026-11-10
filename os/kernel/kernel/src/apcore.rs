@@ -346,6 +346,8 @@ pub fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
 /// The fate of one IPv4 frame from a Wi-Fi client that the AP itself did not answer (not DHCP / ARP for us).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Client4 {
+    /// An ICMP echo request to the AP itself — answered on the client's port.
+    Echo,
     /// (MAC, IP) is not a lease we handed out — anti-hijack.
     BindDrop,
     /// `net::parse` refused it (truncated / oversize) — fail-closed, not a rule drop.
@@ -362,11 +364,25 @@ pub enum Client4 {
     Forwarded(bool),
 }
 
+/// Which LAN port a client frame came in on, and what that port may do beyond routing.
+#[derive(Clone, Copy, Debug)]
+pub struct LanPort {
+    pub pif: If,
+    pub nif: u8,
+    /// Mission Control is served on this port.
+    pub mc: bool,
+    /// Station-to-station relay applies on this port (Wi-Fi: `ap_isolate` makes heqk the relay).
+    pub relay: bool,
+}
+pub const WIFI_PORT: LanPort = LanPort { pif: If::Lan, nif: nat::IF_WIFI, mc: true, relay: true };
+pub const ETH1_PORT: LanPort = LanPort { pif: If::Eth1, nif: nat::IF_ETH1, mc: false, relay: false };
+
 /// Lease binding → parse → IDS → Mission Control (device policy) → station relay → `forward4`, in that order.
 #[allow(clippy::too_many_arguments)]
 #[inline]
 pub fn client4<N: ApNic>(
     frame: &[u8],
+    port: LanPort,
     now_s: u64,
     dh: &mut arch_aarch64::dhcpd::ApDhcp,
     cfg: &FwdCfg,
@@ -392,13 +408,58 @@ pub fn client4<N: ApNic>(
     if crate::packet::verdict(frame).1 == crate::packet::DROP {
         return Client4::IdsDrop;
     }
-    if mc_bound(frame, &cfg.our_ip) {
+    if port.mc && mc_bound(frame, &cfg.our_ip) {
         return if crate::devpolicy::check(&smac, crate::devpolicy::Dest::DeviceMgmt) { Client4::ToMc } else { Client4::McDenied };
     }
-    if crate::lanrelay::relay_target(frame, dh) {
+    // ICMP echo to the AP itself (customers and support ping the router): answered here, after the lease
+    // binding and the IDS — one reply per request, same size, back to the asking client only.
+    if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x00 && frame[23] == 1 && frame[30..34] == cfg.our_ip {
+        let ihl = ((frame[14] & 0x0f) as usize) * 4;
+        let l4 = 14 + ihl;
+        let tot = u16::from_be_bytes([frame[16], frame[17]]) as usize;
+        let n = 14 + tot;
+        if frame.get(l4) == Some(&8) && tot >= ihl + 8 && n <= frame.len() && n <= 1514 {
+            let mut r = [0u8; 1514];
+            r[..n].copy_from_slice(&frame[..n]);
+            r[0..6].copy_from_slice(&smac);
+            r[6..12].copy_from_slice(&cfg.me);
+            r[22] = 64; // TTL
+            r[26..30].copy_from_slice(&cfg.our_ip);
+            r[30..34].copy_from_slice(&sip);
+            r[24] = 0;
+            r[25] = 0;
+            let c = hal::inet_csum(&r[14..l4], 0);
+            r[24..26].copy_from_slice(&c.to_be_bytes());
+            r[l4] = 0; // echo reply
+            r[l4 + 2] = 0;
+            r[l4 + 3] = 0;
+            let c = hal::inet_csum(&r[l4..n], 0);
+            r[l4 + 2..l4 + 4].copy_from_slice(&c.to_be_bytes());
+            let _ = reply(&r[..n]);
+            return Client4::Echo;
+        }
+    }
+    if port.relay && crate::lanrelay::relay_target(frame, dh) {
         return Client4::Relay;
     }
-    Client4::Forwarded(forward4(frame, If::Lan, nat::IF_WIFI, cfg, pol, nst, c, nbuf, nic, reply))
+    // Phase 4: the per-device behaviour baseline — outbound TCP SYNs / UDP to the internet (observe-only)
+    if frame.len() >= 38 && frame[12] == 0x08 && frame[13] == 0x00 && matches!(frame[23], 6 | 17) {
+        let ihl = ((frame[14] & 0x0f) as usize) * 4;
+        let l4 = 14 + ihl;
+        let dst = u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]);
+        let syn_or_udp = frame[23] == 17 || frame.get(l4 + 13).is_some_and(|&f| f & 0x12 == 0x02);
+        if syn_or_udp && frame.len() >= l4 + 4 && !crate::behavioral::is_internal(dst) {
+            let dport = u16::from_be_bytes([frame[l4 + 2], frame[l4 + 3]]);
+            let single = || {
+                dh.leases.iter().find(|l| l.used && l.mac == smac).is_some_and(|l| {
+                    let id = crate::devid::classify(&smac, &l.host[..l.hlen as usize], &l.vendor[..l.vlen as usize], &l.prl[..l.plen as usize]);
+                    crate::devbase::is_single_purpose(id.category)
+                })
+            };
+            let _ = crate::devbase::observe(u32::from_be_bytes(sip), single, frame[23], dport, now_s);
+        }
+    }
+    Client4::Forwarded(forward4(frame, port.pif, port.nif, cfg, pol, nst, c, nbuf, nic, reply))
 }
 
 /// `[P-apcore-lan]` — step 3a on the fake NIC.
@@ -421,7 +482,7 @@ pub fn lan_selftest() -> bool {
     crate::shield::load_text(b"", b"");
     crate::devpolicy::load_text(b"");
     let mut f = [0u8; 400];
-    let mut go = |fr: &[u8], dh: &mut ApDhcp, nic: &mut FakeNic, pol: &mut Policy| client4(fr, 100, dh, &cfg, pol, &mut nst, &mut c, &mut nbuf, nic, &mut |_| true);
+    let mut go = |fr: &[u8], dh: &mut ApDhcp, nic: &mut FakeNic, pol: &mut Policy| client4(fr, WIFI_PORT, 100, dh, &cfg, pol, &mut nst, &mut c, &mut nbuf, nic, &mut |_| true);
     // A (leased) to the internet: forwarded through NAT
     let n = frame4(6, [93, 184, 216, 34], 443, &[], &mut f);
     f[26..30].copy_from_slice(&a_ip);
@@ -450,11 +511,127 @@ pub fn lan_selftest() -> bool {
     ab[30..34].copy_from_slice(&b_ip);
     let w0 = nic.wan_n;
     let relay = go(&ab[..n], &mut dh, &mut nic, &mut pol) == Client4::Relay && nic.wan_n == w0;
+    // eth1: the same gates, but no Mission Control and no station relay on the wired port
+    let r_eth = client4(&ab[..n], ETH1_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |_| true);
+    let eth1 = matches!(r_eth, Client4::Forwarded(_)) && client4(&tr[..n], ETH1_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |_| true) == Client4::Trunc;
+    // ping the AP: an echo reply comes back to the client (checksums valid), nothing goes to the WAN
+    let mut pg = [0u8; 400];
+    let pn = frame4(1, cfg.our_ip, 0, &[0xab; 16], &mut pg);
+    pg[26..30].copy_from_slice(&a_ip);
+    pg[34] = 8; // echo request
+    pg[35] = 0;
+    pg[36..38].copy_from_slice(&0u16.to_be_bytes());
+    let ck = hal::inet_csum(&pg[34..pn], 0);
+    pg[36..38].copy_from_slice(&ck.to_be_bytes());
+    let got = core::cell::RefCell::new(([0u8; 128], 0usize));
+    let w1 = nic.wan_n;
+    let er = client4(&pg[..pn], WIFI_PORT, 100, &mut dh, &cfg, &mut pol, &mut nst, &mut c, &mut nbuf, &mut nic, &mut |fr| {
+        let mut g = got.borrow_mut();
+        let k = fr.len().min(128);
+        g.0[..k].copy_from_slice(&fr[..k]);
+        g.1 = fr.len();
+        true
+    });
+    let (rb, rl) = *got.borrow();
+    let echo = er == Client4::Echo && nic.wan_n == w1 && rl == pn && rb[34] == 0 && rb[26..30] == cfg.our_ip && rb[30..34] == a_ip
+        && rb[0..6] == a_mac && hal::inet_csum(&rb[14..34], 0) == 0 && hal::inet_csum(&rb[34..rl.min(128)], 0) == 0;
     crate::shield::reset_stats();
-    let pass = fwd && bind && trunc && to_mc && mc_denied && relay;
+    let pass = fwd && bind && trunc && to_mc && mc_denied && relay && eth1 && echo;
     arch_aarch64::_print(format_args!(
-        " [P-apcore-lan] {} — G0 step 3a: the Wi-Fi client IPv4 gate chain (lease binding -> parse -> IDS -> Mission Control + device policy -> station relay -> forward) on the fake NIC: leased client forwarded through NAT={} a frame claiming another IP dropped (anti-hijack)={} truncated frame fail-closed, not a rule drop={} Mission Control on the AP address handed to the MC node={} internet_only device kept off Mission Control={} station -> station relayed, not sent to the internet={}\n",
-        if pass { "PASS" } else { "FAIL" }, fwd, bind, trunc, to_mc, mc_denied, relay
+        " [P-apcore-lan] {} — G0 step 3a: the Wi-Fi client IPv4 gate chain (lease binding -> parse -> IDS -> Mission Control + device policy -> station relay -> forward) on the fake NIC: leased client forwarded through NAT={} a frame claiming another IP dropped (anti-hijack)={} truncated frame fail-closed, not a rule drop={} Mission Control on the AP address handed to the MC node={} internet_only device kept off Mission Control={} station -> station relayed, not sent to the internet={} eth1 port: same gates, no MC / relay, truncation fail-closed={} ping to the AP answered (valid checksums, nothing to the WAN)={}\n",
+        if pass { "PASS" } else { "FAIL" }, fwd, bind, trunc, to_mc, mc_denied, relay, eth1, echo
+    ));
+    pass
+}
+
+// ---- step 3c: the Wi-Fi data ladder (which path a client frame takes) -------------------------------------
+
+/// Which handler a Wi-Fi client frame goes to, after the AP's own DHCP / ARP-for-us answer (`act`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WifiPath {
+    /// The AP answered it (DHCP / ARP for us) — nothing more.
+    Answered,
+    /// mDNS / SSDP / LLMNR from a station -> the other stations (G10, IDS first).
+    Discovery,
+    /// IPv6 station -> station (G10, IDS first).
+    StationRelay6,
+    /// ARP from a station (proxy-ARP for another station, G10).
+    ProxyArp,
+    /// IPv6 through the AP's IPv6 router (only when it is up).
+    Ipv6,
+    /// IPv4 through the client gate chain (`client4`), when an uplink (WAN or management) is usable.
+    Ipv4,
+    /// Nothing to do with it.
+    Ignore,
+}
+
+/// The ladder's ORDER is a decision (it was an `else if` chain in the loop): discovery before the IPv6 station
+/// relay, the station relay before proxy-ARP, IPv6 only with the router up, IPv4 only with a usable uplink.
+pub fn wifi_path(frame: &[u8], act: u8, dh: &arch_aarch64::dhcpd::ApDhcp, v6_up: bool, uplink: bool) -> WifiPath {
+    if act != 0 {
+        return WifiPath::Answered;
+    }
+    let et = if frame.len() >= 14 { [frame[12], frame[13]] } else { return WifiPath::Ignore };
+    if crate::lanrelay::is_discovery_mcast(frame) {
+        WifiPath::Discovery
+    } else if crate::lanrelay::relay_target6(frame, dh) {
+        WifiPath::StationRelay6
+    } else if frame.len() >= 42 && et == [0x08, 0x06] {
+        WifiPath::ProxyArp
+    } else if frame.len() >= 54 && et == [0x86, 0xdd] && v6_up {
+        WifiPath::Ipv6
+    } else if uplink && frame.len() >= 34 && et == [0x08, 0x00] {
+        WifiPath::Ipv4
+    } else {
+        WifiPath::Ignore
+    }
+}
+
+/// `[P-apcore-ladder]` — step 3c.
+pub fn ladder_selftest() -> bool {
+    use arch_aarch64::dhcpd::ApDhcp;
+    let mut dh = ApDhcp::new();
+    dh.now = 100;
+    let a = [0x02, 0, 0, 0, 0, 0x0a];
+    let _ = dh.alloc_for(&a, &[10, 99, 0, 10]);
+    dh.commit(&a);
+    let mut f = [0u8; 120];
+    let mut eth = |dst: [u8; 6], et: [u8; 2], f: &mut [u8; 120]| {
+        f.fill(0);
+        f[0..6].copy_from_slice(&dst);
+        f[6..12].copy_from_slice(&a);
+        f[12..14].copy_from_slice(&et);
+    };
+    eth([0xff; 6], [0x08, 0x06], &mut f);
+    let arp = wifi_path(&f[..60], 0, &dh, true, true) == WifiPath::ProxyArp;
+    let answered = wifi_path(&f[..60], b'A', &dh, true, true) == WifiPath::Answered;
+    // mDNS to 224.0.0.251:5353 (IPv4 multicast MAC)
+    eth([0x01, 0x00, 0x5e, 0, 0, 0xfb], [0x08, 0x00], &mut f);
+    f[14] = 0x45;
+    f[23] = 17;
+    f[26..30].copy_from_slice(&[10, 99, 0, 10]);
+    f[30..34].copy_from_slice(&[224, 0, 0, 251]);
+    f[34..36].copy_from_slice(&5353u16.to_be_bytes());
+    f[36..38].copy_from_slice(&5353u16.to_be_bytes());
+    let mdns = wifi_path(&f[..80], 0, &dh, true, true) == WifiPath::Discovery;
+    // unicast IPv4 to the internet: client4 when an uplink is usable, ignored otherwise
+    eth([0x02, 0, 0, 0, 0, 0x01], [0x08, 0x00], &mut f);
+    f[14] = 0x45;
+    f[23] = 6;
+    f[26..30].copy_from_slice(&[10, 99, 0, 10]);
+    f[30..34].copy_from_slice(&[93, 184, 216, 34]);
+    let v4 = wifi_path(&f[..60], 0, &dh, true, true) == WifiPath::Ipv4 && wifi_path(&f[..60], 0, &dh, true, false) == WifiPath::Ignore;
+    // IPv6 to the internet: the router path only while it is up
+    eth([0x02, 0, 0, 0, 0, 0x01], [0x86, 0xdd], &mut f);
+    f[14] = 0x60;
+    f[20] = 6;
+    f[38] = 0x20;
+    let v6 = wifi_path(&f[..80], 0, &dh, true, true) == WifiPath::Ipv6 && wifi_path(&f[..80], 0, &dh, false, true) == WifiPath::Ignore;
+    let short = wifi_path(&f[..10], 0, &dh, true, true) == WifiPath::Ignore;
+    let pass = arp && answered && mdns && v4 && v6 && short;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-ladder] {} — G0 step 3c: the Wi-Fi data ladder order (answered -> discovery -> IPv6 station relay -> proxy-ARP -> IPv6 router -> IPv4 gate chain): ARP -> proxy-ARP={} AP-answered stops={} mDNS -> discovery relay={} IPv4 only with a usable uplink={} IPv6 only with the router up={} runt ignored={}\n",
+        if pass { "PASS" } else { "FAIL" }, arp, answered, mdns, v4, v6, short
     ));
     pass
 }
@@ -548,6 +725,194 @@ pub fn client6<N: ApNic>(
         }
         _ => Client6::Ignored,
     }
+}
+
+// ---- step 3c: station-to-station (G10) ------------------------------------------------------------------
+
+/// The station-to-station branches a client frame can take before routing (G10): discovery multicast
+/// (mDNS / SSDP / LLMNR) copied to the other stations, IPv6 station -> station, and ARP for another station
+/// (proxy-ARP — the firmware's `ap_isolate` keeps stations from talking directly). Every copy passes the IDS
+/// first. Returns true when the frame belonged to one of these branches (whatever was sent).
+pub fn station_relay(frame: &[u8], dh: &arch_aarch64::dhcpd::ApDhcp, now_s: u64, send: &mut dyn FnMut(&[u8]) -> bool) -> bool {
+    use crate::lanrelay;
+    let ids_ok = || crate::packet::verdict(frame).1 != crate::packet::DROP;
+    if lanrelay::is_discovery_mcast(frame) {
+        if ids_ok() {
+            let _ = lanrelay::relay_discovery(frame, dh, now_s, send);
+        }
+        true
+    } else if lanrelay::relay_target6(frame, dh) {
+        if ids_ok() {
+            // Phase 4 (G36): station-to-station IPv6 connection attempts feed the lateral tier under both
+            // devices' IPv4 leases (observe-only).
+            if frame.len() >= 54 && frame[20] == 6 {
+                let mut sm = [0u8; 6];
+                let mut dm = [0u8; 6];
+                sm.copy_from_slice(&frame[6..12]);
+                dm.copy_from_slice(&frame[0..6]);
+                let l = |m: &[u8; 6]| dh.lease_for(m).map_or(0, u32::from_be_bytes);
+                let _ = crate::rules::lateral_observe6(frame, l(&sm), l(&dm));
+            }
+            let _ = send(frame);
+        }
+        true
+    } else if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
+        let mut ab = [0u8; 64];
+        let k = lanrelay::proxy_arp(frame, dh, &mut ab);
+        if k > 0 {
+            let _ = send(&ab[..k]);
+        }
+        true
+    } else {
+        false
+    }
+}
+
+// ---- AP TX priority (soak 2026-11-10: DNS lost / 2-s tails under a saturating download) -----------------------
+
+/// A frame to a Wi-Fi station that must not wait behind a bulk backlog: ARP, DHCP, DNS answers (UDP from port 53),
+/// ICMP / ICMPv6 (incl. neighbour discovery), and TCP segments with NO payload (pure ACK / SYN / FIN / RST — they
+/// pace the sender; delaying them throttles every flow). Narrow on purpose: generic small UDP (QUIC, games) stays
+/// in order with its flow — reordering it would look like loss to its congestion control.
+pub fn tx_priority(f: &[u8]) -> bool {
+    if f.len() < 14 {
+        return false;
+    }
+    match u16::from_be_bytes([f[12], f[13]]) {
+        0x0806 => true, // ARP
+        0x0800 if f.len() >= 34 => {
+            let ihl = ((f[14] & 0x0f) as usize) * 4;
+            let l4 = 14 + ihl;
+            let total = u16::from_be_bytes([f[16], f[17]]) as usize;
+            match f[23] {
+                1 => true, // ICMP
+                17 if f.len() >= l4 + 4 => {
+                    let (sp, dp) = (u16::from_be_bytes([f[l4], f[l4 + 1]]), u16::from_be_bytes([f[l4 + 2], f[l4 + 3]]));
+                    sp == 53 || sp == 67 || dp == 68
+                }
+                6 if f.len() >= l4 + 13 && ihl >= 20 => {
+                    let thl = ((f[l4 + 12] >> 4) as usize) * 4;
+                    total > 0 && total <= ihl + thl // no payload
+                }
+                _ => false,
+            }
+        }
+        0x86dd if f.len() >= 54 => {
+            let plen = u16::from_be_bytes([f[18], f[19]]) as usize;
+            match f[20] {
+                58 => true, // ICMPv6 (ND, RA, echo)
+                17 if f.len() >= 58 => {
+                    let (sp, dp) = (u16::from_be_bytes([f[54], f[55]]), u16::from_be_bytes([f[56], f[57]]));
+                    sp == 53 || sp == 547 || dp == 546
+                }
+                6 if f.len() >= 67 => {
+                    let thl = ((f[66] >> 4) as usize) * 4;
+                    plen > 0 && plen <= thl
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `[P-txprio]`: the priority class — exactly the control frames, never bulk or generic small UDP.
+pub fn txprio_selftest() -> bool {
+    let mut f = [0u8; 1514];
+    let v4 = |f: &mut [u8; 1514], proto: u8, total: u16| {
+        *f = [0; 1514];
+        f[12] = 0x08; f[13] = 0x00; f[14] = 0x45;
+        f[16..18].copy_from_slice(&total.to_be_bytes());
+        f[23] = proto;
+    };
+    // DNS answer (UDP src 53)
+    v4(&mut f, 17, 80); f[34..36].copy_from_slice(&53u16.to_be_bytes()); f[36..38].copy_from_slice(&40000u16.to_be_bytes());
+    let dns = tx_priority(&f[..94]);
+    // QUIC-sized UDP from 443: not priority
+    f[34..36].copy_from_slice(&443u16.to_be_bytes());
+    let quic = !tx_priority(&f[..94]);
+    // pure TCP ACK (20 + 20 header, no payload) vs a 1460-byte segment
+    v4(&mut f, 6, 40); f[46] = 0x50;
+    let ack = tx_priority(&f[..54]);
+    v4(&mut f, 6, 1500); f[46] = 0x50;
+    let bulk = !tx_priority(&f[..1514]);
+    // ARP, ICMP, DHCP offer (dst 68)
+    f = [0; 1514]; f[12] = 0x08; f[13] = 0x06;
+    let arp = tx_priority(&f[..42]);
+    v4(&mut f, 1, 84);
+    let icmp = tx_priority(&f[..98]);
+    v4(&mut f, 17, 300); f[34..36].copy_from_slice(&67u16.to_be_bytes()); f[36..38].copy_from_slice(&68u16.to_be_bytes());
+    let dhcp = tx_priority(&f[..314]);
+    // IPv6: ICMPv6 yes, a big TCP segment no, a pure ACK yes
+    f = [0; 1514]; f[12] = 0x86; f[13] = 0xdd; f[20] = 58; f[18..20].copy_from_slice(&32u16.to_be_bytes());
+    let nd = tx_priority(&f[..86]);
+    f[20] = 6; f[18..20].copy_from_slice(&1440u16.to_be_bytes()); f[66] = 0x50;
+    let v6bulk = !tx_priority(&f[..1494]);
+    f[18..20].copy_from_slice(&20u16.to_be_bytes());
+    let v6ack = tx_priority(&f[..74]);
+    let pass = dns && quic && ack && bulk && arp && icmp && dhcp && nd && v6bulk && v6ack;
+    arch_aarch64::_print(format_args!(
+        " [P-txprio] {} — AP TX priority class: DNS answer={} generic small UDP stays bulk={} pure TCP ACK={} full segment stays bulk={} ARP={} ICMP={} DHCP={} ICMPv6={} v6 segment bulk={} v6 ACK={}\n",
+        if pass { "PASS" } else { "FAIL" }, dns, quic, ack, bulk, arp, icmp, dhcp, nd, v6bulk, v6ack));
+    pass
+}
+
+/// `[P-apcore-relay]` — step 3c.
+pub fn relay_selftest() -> bool {
+    use arch_aarch64::dhcpd::ApDhcp;
+    let mut dh = ApDhcp::new();
+    let (a_mac, a_ip, b_mac, b_ip) = ([0x02u8, 0, 0, 0, 0, 0x0a], [10u8, 99, 0, 10], [0x02u8, 0, 0, 0, 0, 0x0b], [10u8, 99, 0, 11]);
+    dh.now = 100;
+    let ok_a = dh.alloc_for(&a_mac, &[10, 99, 0, 10]).is_some();
+    dh.commit(&a_mac);
+    let ok_b = dh.alloc_for(&b_mac, &[10, 99, 0, 10]).is_some();
+    dh.commit(&b_mac);
+    let (a_ip, b_ip) = (dh.lease_for(&a_mac).unwrap_or(a_ip), dh.lease_for(&b_mac).unwrap_or(b_ip));
+    crate::devpolicy::load_text(b"");
+    let sent = core::cell::Cell::new(0u32);
+    let last = core::cell::RefCell::new([0u8; 64]);
+    let mut send = |f: &[u8]| {
+        sent.set(sent.get() + 1);
+        let n = f.len().min(64);
+        last.borrow_mut()[..n].copy_from_slice(&f[..n]);
+        true
+    };
+    // ARP who-has B from A -> a proxy answer "B is at B's MAC" back to A
+    let mut arp = [0u8; 42];
+    arp[0..6].copy_from_slice(&[0xff; 6]);
+    arp[6..12].copy_from_slice(&a_mac);
+    arp[12..14].copy_from_slice(&[0x08, 0x06]);
+    arp[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, 1]);
+    arp[22..28].copy_from_slice(&a_mac);
+    arp[28..32].copy_from_slice(&a_ip);
+    arp[38..42].copy_from_slice(&b_ip);
+    let proxied = station_relay(&arp, &dh, 100, &mut send) && sent.get() == 1 && last.borrow()[22..28] == b_mac && last.borrow()[0..6] == a_mac;
+    // an IPv4 unicast frame is none of these branches (the routing path decides)
+    let mut v4 = [0u8; 60];
+    v4[12] = 0x08;
+    v4[14] = 0x45;
+    let not_ours = !station_relay(&v4, &dh, 100, &mut send) && sent.get() == 1;
+    // mDNS from A (224.0.0.251:5353) -> a copy toward B
+    let mut md = [0u8; 80];
+    md[0..6].copy_from_slice(&[0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb]);
+    md[6..12].copy_from_slice(&a_mac);
+    md[12..14].copy_from_slice(&[0x08, 0x00]);
+    md[14] = 0x45;
+    md[16..18].copy_from_slice(&66u16.to_be_bytes());
+    md[22] = 255;
+    md[23] = 17;
+    md[26..30].copy_from_slice(&a_ip);
+    md[30..34].copy_from_slice(&[224, 0, 0, 251]);
+    md[34..36].copy_from_slice(&5353u16.to_be_bytes());
+    md[36..38].copy_from_slice(&5353u16.to_be_bytes());
+    md[38..40].copy_from_slice(&46u16.to_be_bytes());
+    let mdns = station_relay(&md, &dh, 100, &mut send) && sent.get() >= 2;
+    let pass = ok_a && ok_b && proxied && not_ours && mdns;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-relay] {} — G0 step 3c: station-to-station branches (G10) in apcore::station_relay: ARP for another station answered by proxy-ARP={} plain IPv4 left to the routing path={} mDNS copied to the other stations={}\n",
+        if pass { "PASS" } else { "FAIL" }, proxied, not_ours, mdns
+    ));
+    pass
 }
 
 // ---- [P-apcore] ---------------------------------------------------------------------------------------------

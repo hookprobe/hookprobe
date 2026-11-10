@@ -317,3 +317,64 @@ pub fn other_slot(slot: u8) -> u8 {
         SLOT_A
     }
 }
+
+/// Signed header for a 3,000,000-byte all-zero body, SVN 2 (dev trust root, `heqk-sign sign`).
+/// A real image is ~3 MB: the body is regenerated here, so no large fixture lives in the repo.
+#[cfg(not(feature = "cm5"))]
+#[repr(align(8))]
+struct BigHdr([u8; size_of::<PayloadHeader>()]);
+#[cfg(not(feature = "cm5"))]
+static OTA_BIG_HDR: BigHdr = BigHdr(*include_bytes!("testdata/ota_big_hdr.bin"));
+#[cfg(not(feature = "cm5"))]
+static mut OTA_BIG_SCRATCH: BigHdr = BigHdr([0; size_of::<PayloadHeader>()]);
+
+/// Stream-hash `len` zero bytes in 64 KiB pieces (what the OTA path does over eMMC sectors).
+#[cfg(not(feature = "cm5"))]
+fn zeros_digest(len: usize) -> [u8; 32] {
+    let z = [0u8; 4096];
+    let mut h = boot_abi::sha256::Hasher::new();
+    let mut left = len;
+    while left > 0 {
+        let n = left.min(z.len());
+        h.update(&z[..n]);
+        left -= n;
+    }
+    h.finish()
+}
+
+/// `[P-otaverify]` (production phase 1, step 1): the shared verifier accepts a real-size (3 MB)
+/// image hashed incrementally (`verify_digest`) — the old fixed 2 MiB bound refused every current
+/// image — and still refuses: a body one byte short (digest mismatch -> signature), a size past
+/// what the boot chain loads, SVN below the floor, and a tampered SVN.
+#[cfg(not(feature = "cm5"))]
+pub fn big_verify_selftest() -> bool {
+    // SAFETY: OTA_BIG_HDR is 8-aligned and exactly size_of::<PayloadHeader>() bytes.
+    let hdr: &PayloadHeader = unsafe { &*(OTA_BIG_HDR.0.as_ptr() as *const PayloadHeader) };
+    let size = hdr.size as usize;
+    let good = zeros_digest(size);
+    let ok_big = matches!(verify::verify_digest(hdr, &good, 1), Ok(v) if v.svn == 2 && v.hash == good);
+    let short = matches!(verify::verify_digest(hdr, &zeros_digest(size - 1), 1), Err(VerifyErr::BadEd25519));
+    let floor = matches!(verify::verify_digest(hdr, &good, 3), Err(VerifyErr::BelowFloor));
+    // One static scratch copy (no 8 KB stack copies), re-filled from the fixture per case.
+    let scratch = || -> &'static mut PayloadHeader {
+        // SAFETY: single-threaded selftest; OTA_BIG_SCRATCH is 8-aligned and header-sized.
+        unsafe {
+            let d = &mut *core::ptr::addr_of_mut!(OTA_BIG_SCRATCH);
+            d.0.copy_from_slice(&OTA_BIG_HDR.0);
+            &mut *(d.0.as_mut_ptr() as *mut PayloadHeader)
+        }
+    };
+    let h = scratch();
+    h.size = verify::MAX_PAYLOAD_BODY + 1;
+    let too_big = matches!(verify::check_header(h), Err(VerifyErr::BadSize));
+    let h = scratch();
+    h.size = verify::MAX_PAYLOAD_BODY;
+    let at_cap = verify::check_header(h).is_ok();
+    let h = scratch();
+    h.svn = 9;
+    let svn_tamper = matches!(verify::verify_digest(h, &good, 1), Err(VerifyErr::BadEd25519));
+    let pass = ok_big && short && floor && too_big && at_cap && svn_tamper;
+    arch_aarch64::_print(format_args!(" [P-otaverify] {} — shared verifier on a real-size image: 3,000,000-byte body hashed incrementally + both signatures + SVN floor = {} ; refused: one byte short={} svn<floor={} past the {}-byte boot-chain bound={} (at the bound accepted={}) tampered svn={}\n",
+        if pass { "PASS" } else { "FAIL" }, ok_big, short, floor, verify::MAX_PAYLOAD_BODY, too_big, at_cap, svn_tamper));
+    pass
+}

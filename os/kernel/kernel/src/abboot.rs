@@ -223,6 +223,17 @@ pub fn content_rule_vectors() -> bool {
         && !hal::is_slot_letter_flip(&two, &two_flip)
 }
 
+/// `hal::abslot::inactive_slot_run` names exactly the file `want` (cross-checked against
+/// `fat::locate_contiguous`) and reports `active` as the cold-boot slot.
+#[cfg(all(not(feature = "cm5"), feature = "p15-write"))]
+fn inactive_matches<D: BlockDev>(dev: &D, p1: u64, want: &[u8; 11], active: u8) -> bool {
+    let r = hal::abslot::inactive_slot_run(|l, b| dev.read_block(l, b).is_ok());
+    match (r, crate::fat::locate_contiguous(dev, p1, want)) {
+        (Some(r), Some((lo, n))) => r.active == active && r.lo == lo && r.hi >= lo + n && r.hi - lo < n + 64,
+        _ => false,
+    }
+}
+
 /// `[P15-abcommit]` — TWO-BOOT proof over a factory-layout FAT boot partition (virtio-blk,
 /// p15-write). The disk's own state says which boot this is:
 /// - boot 1 (config=A, tryboot=B): commit to B but write ONLY config.txt — a simulated power loss
@@ -279,6 +290,8 @@ pub fn abcommit_selftest() {
                 r => return kprint!(" [P15-abcommit] FAIL — repair plan: {:?}\n", r),
             };
             let after_repair = (active(&dev, p1), trial(&dev, p1)) == (Ok(Slot::B), Ok(Slot::A));
+            // OTA (production phase 1): with config=B the writable inactive slot is A.
+            let ota_a = inactive_matches(&dev, p1, b"HEQK8-A IMG", b'b');
             // A FULL commit back to A (both writes).
             let full = match plan_commit(&dev, p1, Slot::A) {
                 Ok(plan) => match SealedStore::open(&mut dev) {
@@ -288,6 +301,10 @@ pub fn abcommit_selftest() {
                 Err(_) => false,
             };
             let after_full = (active(&dev, p1), trial(&dev, p1)) == (Ok(Slot::A), Ok(Slot::B));
+            // ...and after the commit back to A it is B.
+            let ota_b = inactive_matches(&dev, p1, b"HEQK8-B IMG", b'a');
+            kprint!(" [P-abslot] {} — OTA inactive-slot derivation (hal::abslot, the eMMC driver's Gate-1 input) on a factory-layout FAT partition: config=B -> writable run = slot A's file={} ; config=A -> slot B's file={} (each equal to the kernel's independent FAT reader; never the slot config.txt names)\n",
+                if ota_a && ota_b { "PASS" } else { "FAIL" }, ota_a, ota_b);
             // Idempotence: committing to the already-active slot writes nothing.
             let idem = plan_commit(&dev, p1, Slot::A).map(|p| p.iter().all(|w| w.is_none())) == Ok(true);
             let rule = content_rule_vectors();
@@ -377,5 +394,64 @@ pub fn abcommit_metal_selftest() {
                 if pass { "PASS" } else { "FAIL" }, repaired && after_repair, full, after_full, idem, rule);
         }
         other => kprint!(" [P15-abcommit-metal] FAIL — unexpected eMMC state (active, trial) = {:?}\n", other),
+    }
+}
+
+/// Production phase 1, step 5 — the on-device A/B commit of an OTA trial (CM5, AP image).
+///
+/// Every boot: repair a commit a power cut interrupted (`plan_repair`). On a TRIAL boot (HBoot ran
+/// the slot config.txt does NOT name, via the tryboot one-shot) the AP loop calls `commit` once the
+/// device is healthy (AP serving AND the WAN usable): config.txt then names the running slot and
+/// tryboot.txt the old one. Until then a reset or power loss boots the old slot (the one-shot is
+/// spent), and the AP loop reboots on its own if health is not reached in time. Every write passes
+/// the store guard (`RegionKind::BootConfig`) AND the driver's own Gate 1 (`admit_boot_config`:
+/// p1 data area, one-shot, content-pinned to a single a<->b slot-letter flip).
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+pub mod trial {
+    use super::*;
+    use arch_aarch64::emmc::Emmc;
+
+    fn with_dev<R>(f: impl FnOnce(&mut Emmc, u64) -> Result<R, AbErr>) -> Result<R, AbErr> {
+        let mut dev = Emmc::probe().map_err(|_| AbErr::Refused)?;
+        let mut mbr = [0u8; 512];
+        dev.read_block(0, &mut mbr).map_err(|_| AbErr::Refused)?;
+        let p1 = crate::store::parse_mbr(&mbr)[0].start;
+        f(&mut dev, p1)
+    }
+
+    fn admit_apply(dev: &mut Emmc, writes: &[Option<Write1>]) -> Result<usize, AbErr> {
+        for w in writes.iter().flatten() {
+            if !dev.admit_boot_config(w.lba) {
+                return Err(AbErr::Refused);
+            }
+        }
+        let mut store = SealedStore::open(dev).map_err(|_| AbErr::Refused)?;
+        apply(&mut store, writes)
+    }
+
+    /// Repair an interrupted commit (config.txt flipped, tryboot.txt not yet): Ok(true) if a write
+    /// was needed and made.
+    pub fn repair() -> Result<bool, AbErr> {
+        with_dev(|dev, p1| match plan_repair(&*dev, p1)? {
+            Some(w) => admit_apply(dev, &[Some(w)]).map(|n| n == 1),
+            None => Ok(false),
+        })
+    }
+
+    /// Commit the running trial slot (`letter` = b'a' / b'b'): returns the number of sectors written.
+    pub fn commit(letter: u8) -> Result<usize, AbErr> {
+        let slot = if letter == b'a' { Slot::A } else { Slot::B };
+        with_dev(|dev, p1| {
+            let plan = plan_commit(&*dev, p1, slot)?;
+            admit_apply(dev, &plan)
+        })
+    }
+
+    /// Classify this boot from the eMMC slot headers.
+    pub fn classify(running: [u8; 32]) -> crate::otaimg::Boot {
+        match Emmc::probe() {
+            Ok(dev) => crate::otaimg::classify(&dev, running),
+            Err(_) => crate::otaimg::Boot::Unknown,
+        }
     }
 }
