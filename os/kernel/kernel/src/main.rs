@@ -3389,7 +3389,11 @@ fn cm5_p10_probe() {
                             if ap.serve_ready() && ap.gtk_set {
                                 chosen_cs = ap_cs;
                                 #[cfg(feature = "mcserve")]
-                                unsafe { (*core::ptr::addr_of_mut!(NET)).channel = ap_cs & 0xff };
+                                unsafe {
+                                    let (p, w) = cyw43::chanspec_primary(ap_cs);
+                                    (*core::ptr::addr_of_mut!(NET)).channel = p as u16;
+                                    (*core::ptr::addr_of_mut!(NET)).width_mhz = w;
+                                }
                                 kprint!("   [P11-ACS] chanspec iovar accepted={} (20-MHz legacy fallback used={})\n", ap.chanspec_ok, ap.chan_fallback20);
                                 let rb = cyw43::current_chanspec();
                                 kprint!("   [P11-ACS] operating chanspec readback {:#06x} vs requested {:#06x} => {}\n",
