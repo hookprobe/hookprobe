@@ -73,7 +73,12 @@ different firmware build from the vendor — a supplier dependency (human regist
 
 ## Phase 7 — legal and factory
 CYW43455 firmware redistribution terms, a per-unit provisioning tool (owner token, setup credential, label /
-QR, self-test log), factory reset, an RTC (wall clock without a network), and the certification file
+QR, self-test log), factory reset (**built 2026-11-10**: `POST /api/factory-reset`, owner guards + re-auth +
+`confirm=ERASE`, seals a `FactoryReset` journal record; the next boot (`factoryreset::run`, before anything is
+served) zeroes the evidence ring and the artifact manifest, seals an empty snapshot into both A/B slots, and
+LAST zeroes the journal, then reboots as shipped; a failed step keeps the request and boots normally; boot slots,
+signed config, SRK and anti-rollback floors are never touched; `[P-ownerjournal]`; metal
+`tools/diagnostics/cm5-factory-reset-check.sh`), an RTC (wall clock without a network), and the certification file
 (CE/RED + EN 18031, FCC, CRA SBOM / CVD / support period).
 
 ## Status log

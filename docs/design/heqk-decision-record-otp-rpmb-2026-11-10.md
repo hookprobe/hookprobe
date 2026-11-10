@@ -7,7 +7,7 @@ during the autonomous work, and none will be made without the owner's explicit, 
 |---|---|---|
 | D-OTP — customer OTP provisioning | **Production blocker** | Production readiness = **BLOCKED**. Normal images never write OTP (`otp-provision` is a separate HBoot build). |
 | D-RPMB — eMMC RPMB key programming | **Owner decision required** | No RPMB access exists in the code (the eMMC driver has no partition-switch path). Evidence (RPMB size) collected read-only. |
-| WPA3 on the AP | **Evidence in (batch 30) — AP-side SAE still unproven** | `[WIFI-CAP] sae=false sae_ext=true mfp=true fwsup=false`: PMF is supported; external SAE (`sae_ext`) is what Linux brcmfmac uses in STATION mode, AP-mode SAE in brcmfmac uses firmware offload (`sae`, absent). Whether this firmware passes AP-side SAE auth frames to the host must be proven on metal before WPA3-AP is built; if not, alternative firmware is needed. |
+| WPA3 on the AP | **Decided (batch 37): host build, not a supplier dependency. Production readiness for WPA3 waits on that build being metal-proven.** | The firmware accepts `wpa_auth=SAE` and `mfp=2` but refuses in-firmware SAE (`sae_password`). It forwards each station's SAE Authentication frame to the host as event 188 `EXT_AUTH_FRAME_RX` (`docs/design/metal-evidence/20261110-batch37.md`). The host-side SAE responder, PMF/IGTK and the transmit path are the build; WPA2 stays the shipped default until then. |
 
 ---
 
@@ -136,6 +136,19 @@ above; (c) which unit may be programmed first. Until then: the rollback gap is d
 and the human register.
 
 ---
+
+## WPA3 on the AP — DECIDED by experiment (batch 37, 2026-11-10)
+
+`docs/design/metal-evidence/20261110-batch37.md`: with the AP set to `wpa_auth=SAE` and `mfp=2`, the beacon
+advertises WPA3. The bench Pi's SAE Authentication frames reach the host as firmware event 188
+(`EXT_AUTH_FRAME_RX`), three retries per attempt; the firmware refuses `sae_password`, so it does not run SAE
+itself. **WPA3-SAE on the AP is therefore a host build:**
+1. an SAE responder (P-256, hunting-and-pecking first, then H2E);
+2. the authentication-frame transmit path;
+3. the SAE PMK feeding the existing host 4-way handshake;
+4. PMF with IGTK.
+
+No firmware change and no vendor dependency is needed. The batch-30 reading below ("not yet decided") is superseded.
 
 ## WPA3 on the AP — evidence in (batch 30, 2026-11-10)
 Verbatim from the CM5 serial console (`docs/design/metal-evidence/20261110-batch30.md`):

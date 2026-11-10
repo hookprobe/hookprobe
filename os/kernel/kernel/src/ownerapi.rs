@@ -210,7 +210,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     // target + value (and the before/after preview)
     let mut tbuf = [0u8; oj::TARGET_MAX];
     let (tlen, value, before, after, shadow): (usize, u8, &'static str, &'static str, &'static str) = match kind {
-        Kind::Artifact | Kind::OwnerKey | Kind::AlertHook => return refuse(c, "kind"),
+        Kind::Artifact | Kind::OwnerKey | Kind::AlertHook | Kind::FactoryReset => return refuse(c, "kind"),
         Kind::DevicePolicy | Kind::ShieldProfile => {
             let Some(m) = mac(target_s) else { return refuse(c, "target") };
             tbuf[..6].copy_from_slice(&m);
@@ -404,6 +404,85 @@ pub fn rotate_owner_key(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, sa
         }
         Err(oj::JErr::Full) => Err("journal full"),
         Err(_) => Err("storage error"),
+    }
+}
+
+/// Set by an accepted factory reset: the AP loop reboots once the HTTP response has gone out.
+static mut RESET_REBOOT: bool = false;
+pub fn take_reset_reboot() -> bool {
+    unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(RESET_REBOOT), false) }
+}
+
+/// Factory reset (Phase 7): `POST /api/factory-reset` with `confirm=ERASE`, a reason, `permanent=true` and
+/// re-authentication with the owner key, behind the owner-write guards (origin, CSRF, rate, replay). It only
+/// appends a `FactoryReset` record to the sealed journal and asks for a reboot: the wipe itself runs at the
+/// next boot (`factoryreset::run`), before anything is served, so it is the same code path after a power cut.
+/// Erased: owner rules / Shield profiles / alert hook / owner-key rotation (the journal), the sealed evidence
+/// log, the sealed snapshot (both A/B slots), the artifact manifest (packs fall back to the signed image).
+/// Kept: the boot slots, the signed POLICY.TXT / WAN.TXT, the label credential (OWNER.TXT), the device key and
+/// every anti-rollback floor — a reset device is the shipped device, never a downgraded one.
+pub fn factory_reset(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<u64, &'static str> {
+    let (mut b0, mut b1, mut b2, mut b3, mut b4) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
+    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+    let confirm = form_get(body, "confirm", &mut b1).unwrap_or("");
+    let reason = form_get(body, "reason", &mut b2).unwrap_or("");
+    let permanent = form_get(body, "permanent", &mut b3) == Some("true");
+    let seq: u64 = form_get(body, "seq", &mut b4).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let tag = crate::mcauth::session_tag(c.session);
+    if !origin_ok(c.origin, c.host) {
+        return Err("origin");
+    }
+    if !crate::mcauth::csrf_ok(c.session, c.csrf) {
+        return Err("csrf");
+    }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return Err("rate limited: at most 20 writes a minute per session");
+    }
+    if !crate::actions::accept_seq(tag, seq) {
+        return Err("replay");
+    }
+    if confirm != "ERASE" {
+        return Err("confirm=ERASE required");
+    }
+    if reason.trim().len() < 3 {
+        return Err("reason required");
+    }
+    if !permanent {
+        return Err("permanent=true required");
+    }
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return Err("re-authentication failed");
+    }
+    if unsafe { !PERSISTENT } {
+        return Err("no persistent journal: nothing durable to erase (a reboot already forgets every owner change)");
+    }
+    let mut r = oj::rec(Kind::FactoryReset, oj::OP_SET, b"erase", 0, reason.as_bytes());
+    r.session = u32::from_le_bytes(tag);
+    r.ms = c.now_ms;
+    let res = unsafe {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+            (Some(j), Some(d)) => j.append(&mut **d, r),
+            _ => return Err("no journal"),
+        }
+    };
+    match res {
+        Ok(seq) => {
+            *auth = crate::mcauth::Auth::new(None); // every session ends now; the device reboots into the wipe
+            unsafe { RESET_REBOOT = true };
+            Ok(seq)
+        }
+        Err(oj::JErr::Full) => Err("journal full"),
+        Err(_) => Err("storage error"),
+    }
+}
+
+/// Boot-time half of the factory reset: zero the journal region (called last, after the other stores).
+pub fn wipe_journal() -> Result<u64, &'static str> {
+    unsafe {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+            (Some(j), Some(d)) if PERSISTENT => j.wipe(&mut **d).map_err(|_| "journal write failed"),
+            _ => Err("no persistent journal"),
+        }
     }
 }
 
