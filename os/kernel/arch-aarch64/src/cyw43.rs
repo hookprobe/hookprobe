@@ -2930,6 +2930,11 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     let mut cap = [0u8; 512];
     let cl = fw_cap(&mut cap);
     out.cap_has_ap = has_token(&cap[..cl], b"ap");
+    // Phase 6 planning evidence (WPA3-SAE / PMF): the firmware's full feature string, once per AP bring-up.
+    crate::_print(format_args!(" [WIFI-CAP] sae={} sae_ext={} mfp={} fwsup={} idsup={} | {}\n",
+        has_token(&cap[..cl], b"sae"), has_token(&cap[..cl], b"sae_ext"), has_token(&cap[..cl], b"mfp"),
+        has_token(&cap[..cl], b"fwsup"), has_token(&cap[..cl], b"idsup"),
+        core::str::from_utf8(&cap[..cl.min(480)]).unwrap_or("?")));
 
     // The AP MAC = the src of every AP-served frame (M1, ARP reply, DHCP OFFER/ACK).
     // Take it from the scan phase's ESTABLISHED MAC (`MAC_DIAG.1`: the OTP MAC, or the
