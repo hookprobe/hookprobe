@@ -123,3 +123,11 @@ in the EL0 server's heap (never on disk, never in the kernel). Properties of the
 ADR 0002 (crypto agility / PQC), ADR 0037 D3 (owner auth), ADR 0050 (D2, D5), `docs/design/tls-el0-spike/`,
 NCC Group RustCrypto AES-GCM/ChaCha20-Poly1305 review (2020), Quarkslab dalek review (2019), zkSecurity p256
 review (2025).
+
+## Update 2026-11-10 (operator decision, recorded — the decisions above are unchanged)
+One **HookProbe factory CA** signs every unit's Mission Control certificate (not a per-customer CA). It keeps
+the name constraints of `tools/mctls-provision.py` (heqk.local + private address space only), so a leaked
+factory CA key cannot mint certificates for any other name. The provisioning station passes it as `--ca-dir`;
+the default SAN is `heqk.local` + `10.99.0.1`. The device side is CA-agnostic (it serves the chain in
+`MCTLS.CRT`); only tool defaults and wording changed.
+
