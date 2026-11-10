@@ -530,6 +530,15 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 }
                 None => w.raw(",\"last_crash\":null"),
             }
+            // ADR 0050 D4 step 1 / D5: where Mission Control requests are parsed, and the EL0 server's health
+            #[cfg(feature = "mctls")]
+            {
+                let (n, f) = crate::tlshost::http_el0_stats();
+                let el0 = crate::tlshost::host().is_some();
+                let (r, t) = crate::tlshost::host().map_or((0, 0), |h| (h.restarts, h.timeouts + h.faults));
+                let _ = write!(w, ",\"http_parser\":{{\"where\":\"{}\",\"requests\":{},\"parser_faults\":{},\"server_faults\":{},\"server_restarts\":{}}}",
+                    if el0 { "el0" } else { "el1 (EL0 server not loaded)" }, n, f, t, r);
+            }
             // the capability manifest's granted ids, echoed for the UI (last: existing field order unchanged)
             w.raw(",\"capabilities\":");
             crate::capabilities::render_granted(w);

@@ -763,7 +763,10 @@ fn serve_conn<P: Pipe>(i: usize, s: &mut P, c: &mut Conn, st: &McState, now_ms: 
             let n = if s.may_recv() { s.recv(&mut req[got..]) } else { 0 };
             let got = got + n;
             *c = Conn::Reading { got, since, served };
-            match http::parse(&req[..got]) {
+            // ADR 0050 D4 step 1: the request is parsed in the EL0 server; the in-kernel parser only when that
+            // server could not be loaded on this device (reported at boot).
+            let parsed = crate::tlshost::http_parse(&req[..got]).unwrap_or_else(|| http::parse(&req[..got]));
+            match parsed {
                 Err(http::ParseErr::Incomplete) => {}
                 Err(http::ParseErr::Bad) => {
                     let _ = s.send(http::BAD_REQUEST);

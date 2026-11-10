@@ -418,6 +418,71 @@ pub fn cert_chain(file: &[u8; CERT_FILE_LEN]) -> ([&[u8]; 4], usize) {
 /// Bring the HTTPS service up (ADR 0051): derive the device key, read `MCTLS.CRT` from `dev` (the boot
 /// disk / eMMC p1), load + INIT the EL0 server, and print the public key provisioning certifies. Without a
 /// certificate the server still publishes the key and HTTPS stays off (Mission Control keeps plain HTTP).
+/// ADR 0050 D4 step 1: parse a Mission Control request in the EL0 server. `None` = no EL0 server on this device
+/// (it failed to load — reported at boot; the caller falls back to the in-kernel parser). An EL0 fault or timeout
+/// fails THIS request closed (`Bad` → 400) and resets the server (every TLS session drops — D5). The kernel only
+/// bounds-checks the record against its own copy of the bytes and checks UTF-8: no HTTP parsing in EL1. A lying
+/// record can only describe a request the client could have sent itself (the handlers' threat model already).
+pub fn http_parse(buf: &[u8]) -> Option<Result<crate::httpreq::Req<'_>, crate::httpreq::ParseErr>> {
+    use crate::httpreq::{ParseErr, Req};
+    let h = host()?;
+    if buf.len() > IN_MAX {
+        return Some(Err(ParseErr::Bad));
+    }
+    let r = h.call(CMD_HTTP_PARSE, 0, buf, 0);
+    unsafe { HTTP_EL0 += 1 };
+    match r.status {
+        ST_OK if r.plain_len == HTTP_REC_LEN => {}
+        ST_HTTP_INCOMPLETE => return Some(Err(ParseErr::Incomplete)),
+        _ => {
+            if r.status == ST_PANIC {
+                unsafe { HTTP_EL0_FAULTS += 1 };
+            }
+            return Some(Err(ParseErr::Bad));
+        }
+    }
+    let mut rec = [0u8; HTTP_REC_LEN];
+    h.read(OUT_PLAIN_OFF, &mut rec);
+    let w = |i: usize| u32::from_le_bytes([rec[i * 4], rec[i * 4 + 1], rec[i * 4 + 2], rec[i * 4 + 3]]) as usize;
+    let field = |i: usize| -> Option<&[u8]> {
+        let (o, l) = (w(2 + 2 * i), w(3 + 2 * i));
+        if l == 0 {
+            return Some(&buf[0..0]);
+        }
+        buf.get(o..o.checked_add(l)?)
+    };
+    let s = |i: usize| -> Option<&str> { core::str::from_utf8(field(i)?).ok() };
+    let flags = w(0) as u32;
+    let consumed = w(1);
+    let built = (|| {
+        if consumed == 0 || consumed > buf.len() {
+            return None;
+        }
+        Some(Req {
+            get: flags & HF_GET != 0,
+            post: flags & HF_POST != 0,
+            path: s(0)?,
+            query: s(1)?,
+            session: if flags & HF_SESSION != 0 { Some(s(2)?) } else { None },
+            body: field(3)?,
+            host: s(4)?,
+            keep_alive: flags & HF_KEEP_ALIVE != 0,
+            consumed,
+            origin: s(5)?,
+            peer: [0; 4],
+            csrf: s(6)?,
+        })
+    })();
+    Some(built.ok_or(ParseErr::Bad))
+}
+
+static mut HTTP_EL0: u64 = 0;
+static mut HTTP_EL0_FAULTS: u64 = 0;
+/// (requests parsed in the EL0 server, of which the server faulted / timed out)
+pub fn http_el0_stats() -> (u64, u64) {
+    unsafe { (HTTP_EL0, HTTP_EL0_FAULTS) }
+}
+
 pub fn bring_up<D: hal::BlockDev>(dev: Option<&D>) {
     let Some(scalar) = device_tls_scalar(0) else {
         kprint!(" [MC-TLS] OFF — no device root key (SRK): refusing a guessable TLS key\n");

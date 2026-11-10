@@ -30,7 +30,7 @@ REL-09 | reliability | Factory reset erases the owner data (journal, evidence lo
 NET-01 | network | DNS under a saturating download: lost <= the path baseline (public resolver via the same AP, same load, same run) AND p90 < 500 ms (operator-accepted 2026-11-10) | phase:Ptxprio,metal:docs/design/metal-evidence/dns-under-load.md:DNS-UNDER-LOAD: PASS
 NET-02 | network | LAN client end to end (DHCP, DNS, NAT, IPv6, holds) | metal:docs/design/metal-evidence/20261110-batch29.md:LAN-CLIENT: PASS
 NET-03 | network | WPA3-SAE + PMF on the AP (host SAE; opt-in, WPA2 default; transition mode serves SAE and WPA2-only stations) | phase:Psae,metal:docs/design/metal-evidence/20261110-batch38-47.md:WPA3: PASS \(6/6\)
-SEC-01 | isolation | ADR 0050 D4: network-facing parsers in isolated EL0 servers (HTTP, DNS/DHCP, WAN clients, Noise) | blocked:G24b not built
+SEC-01 | isolation | ADR 0050 D4: network-facing parsers in isolated EL0 servers — step 1 done (TLS + HTTP request parsing in el0-tlshost, mc-e2e); open: smoltcp/handlers, DHCP server + DNS forwarder, WAN control, Noise, WPA2/3 authenticator | blocked:D4 steps 2-5 not built
 SEC-02 | isolation | Coverage-guided fuzzing of the network-facing parsers: kernel crate (HTTP request + form bodies, DNS wire, TLS ClientHello/JA4, frame classifier) + hal (POLICY/WAN/frame/glom/A-B slot) + boot-abi verifier; fixed-layout MAC/digest-verified stores (journal record, artifact manifest) by the in-kernel [P-fuzz] | phase:Pfuzz,fuzz:docs/design/fuzz-evidence.md:FUZZ: PASS
 SEC-03 | management | Mission Control end to end (HTTPS PQ hybrid, browser, actions) | e2e
 SEC-04 | management | Replay guard + write rate limit + login throttle | phase:Pseqfloor,phase:Pwriterate
