@@ -198,6 +198,10 @@ BROWSER=skipped
 if [ -d tools/mc-e2e/node_modules/playwright ] && command -v node >/dev/null; then
   BROWSER=ran
   (cd tools/mc-e2e && MC_E2E_SHOTS="$RUN" node ui-check.mjs "$B" "$TOKEN") && ok "browser: UI rendered live heqk data (screenshots in $RUN)" || bad "browser assertions failed"
+  # Mission Control's own live specs (os/mission-control/tests/ui/specs/live, read-only): every route
+  # without the sample banner, device-reported values on setup / feedback / administration.
+  (cd tools/mc-e2e && UI_LIVE_TOKEN="$TOKEN" node ../../../mission-control/tests/ui/run.mjs "$PWD/node_modules" "$B") \
+    && ok "browser: Mission Control live specs pass against heqk" || bad "Mission Control live specs failed"
 else
   echo "  SKIP  browser leg — Playwright not installed (cd tools/mc-e2e && npm i && npx playwright install chromium)"
 fi

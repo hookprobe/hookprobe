@@ -108,6 +108,6 @@ Device-side items are for the heqk session; the Mission Control side is built (f
 | G45 | POLICY.TXT (ACLs, prefix lists, routes, SASE tunnel) cannot be uploaded: ADR 0056 D2 lists `policy` but phase 1 excludes it, and nothing generates it from intent | M | **open** — ADR 0058 D1 (`policy`, phase 1); UI builds the 4096-B file + signature |
 | G46 | The trust anchor pins the image's compiled key; the owner cannot enroll their own key or rotate | M | **open** — ADR 0058 D3 |
 | G47 | Rename a device from Mission Control: no `device_label` owner-journal kind (the requirements doc assumed one) | S | **open** — Rename greyed with the reason until it exists |
-| G48 | First-run setup wizard (ADR 0010) is a UI mock; `/api/provision/launch` answers "not implemented on heqk" | M | **open** |
+| G48 | First-run setup wizard (ADR 0010) is a UI mock; `/api/provision/launch` answers "not implemented on heqk" | M | **UI built** (2026-11-10, PR #962) — `/setup` asks internet → Wi-Fi → signing key, signs WAN.TXT + WIFI.TXT in the browser and uploads them; until G43/G44 land it says so and hands over the files for the boot card. `/api/provision/launch` is not needed (ADR 0058 upload path instead) |
 | G49 | No reboot endpoint: next-boot settings need a power cycle | S | **open** — ADR 0058 open item 3 |
 
