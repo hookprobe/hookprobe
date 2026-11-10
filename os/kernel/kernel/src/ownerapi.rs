@@ -210,7 +210,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     // target + value (and the before/after preview)
     let mut tbuf = [0u8; oj::TARGET_MAX];
     let (tlen, value, before, after, shadow): (usize, u8, &'static str, &'static str, &'static str) = match kind {
-        Kind::Artifact => return refuse(c, "kind"),
+        Kind::Artifact | Kind::OwnerKey => return refuse(c, "kind"),
         Kind::DevicePolicy | Kind::ShieldProfile => {
             let Some(m) = mac(target_s) else { return refuse(c, "target") };
             tbuf[..6].copy_from_slice(&m);
@@ -342,6 +342,147 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
         w.raw("}");
     }
     w.raw("]}");
+}
+
+/// G28 owner-key rotation (`POST /api/owner-key`): the owner replaces the Mission Control owner key. Same guards as
+/// every owner write (origin, CSRF, rate, replay) + re-authentication with the CURRENT key + `permanent=true`. The
+/// device stores only a fresh salt and verifier (never the key) as a sealed journal record, swaps the live verifier
+/// and ends EVERY session. The record names the OWNER.TXT it replaced, so re-flashing OWNER.TXT still recovers.
+pub fn rotate_owner_key(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, salt: Option<[u8; 16]>) -> Result<u64, &'static str> {
+    let (mut b0, mut b1, mut b2, mut b3, mut b4) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
+    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+    let new_key = form_get(body, "new_owner_key", &mut b1).unwrap_or("");
+    let reason = form_get(body, "reason", &mut b2).unwrap_or("");
+    let permanent = form_get(body, "permanent", &mut b3) == Some("true");
+    let seq: u64 = form_get(body, "seq", &mut b4).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let tag = crate::mcauth::session_tag(c.session);
+    if !origin_ok(c.origin, c.host) {
+        return Err("origin");
+    }
+    if !crate::mcauth::csrf_ok(c.session, c.csrf) {
+        return Err("csrf");
+    }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return Err("rate limited: at most 20 writes a minute per session");
+    }
+    if !crate::actions::accept_seq(tag, seq) {
+        return Err("replay");
+    }
+    if reason.trim().len() < 3 {
+        return Err("reason required");
+    }
+    if !permanent {
+        return Err("permanent=true required");
+    }
+    let nk = new_key.trim().as_bytes();
+    if nk.len() < 16 || nk.len() > 128 || nk == key.trim().as_bytes() {
+        return Err("new_owner_key: 16-128 characters, different from the current key");
+    }
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return Err("re-authentication failed");
+    }
+    let Some(salt) = salt else { return Err("no entropy for a new salt") };
+    let verifier = crate::mcauth::verifier_for(&salt, nk);
+    let mut t = [0u8; oj::TARGET_MAX];
+    t[..16].copy_from_slice(&salt);
+    t[16..48].copy_from_slice(&verifier);
+    t[48..64].copy_from_slice(&crate::mcauth::owner_file_hash()[..16]);
+    let mut r = oj::rec(Kind::OwnerKey, oj::OP_SET, &t, 0, reason.as_bytes());
+    r.session = u32::from_le_bytes(tag);
+    r.ms = c.now_ms;
+    let res = unsafe {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+            (Some(j), Some(d)) => j.append(&mut **d, r),
+            _ => return Err("no journal: the rotation would not survive a reboot"),
+        }
+    };
+    match res {
+        Ok(seq) => {
+            // every session ends (the browser that rotated signs in again with the new key)
+            *auth = crate::mcauth::Auth::new(Some(crate::mcauth::Owner { salt, verifier }));
+            Ok(seq)
+        }
+        Err(oj::JErr::Full) => Err("journal full"),
+        Err(_) => Err("storage error"),
+    }
+}
+
+/// G28 at boot: the owner that Mission Control uses — a journal rotation when it names THIS OWNER.TXT, else the
+/// file's owner (an OWNER.TXT re-flashed since the rotation is the physical-access recovery and wins).
+pub fn effective_owner(file_owner: Option<crate::mcauth::Owner>) -> (Option<crate::mcauth::Owner>, &'static str) {
+    match oj::owner_rotation() {
+        Some(t) if t[48..64] == crate::mcauth::owner_file_hash()[..16] => {
+            let mut salt = [0u8; 16];
+            let mut verifier = [0u8; 32];
+            salt.copy_from_slice(&t[..16]);
+            verifier.copy_from_slice(&t[16..48]);
+            (Some(crate::mcauth::Owner { salt, verifier }), "rotated by the owner (journal) — OWNER.TXT superseded")
+        }
+        Some(_) => (file_owner, "OWNER.TXT changed since the owner's rotation (re-flash recovery) — the rotation is ignored"),
+        None => (file_owner, "OWNER.TXT"),
+    }
+}
+
+/// `[P-owner-rotate]` (G28)
+pub fn rotate_selftest() -> bool {
+    use crate::mcauth::{session_hex, verifier_for, Auth, Owner};
+    let (old, new) = (b"old-owner-key-for-rotation-test" as &[u8], "new-owner-key-for-rotation-0001");
+    let salt = [9u8; 16];
+    let file_owner = Owner { salt, verifier: verifier_for(&salt, old) };
+    crate::mcauth::set_owner_file_hash([0x11; 32]);
+    let mut auth = Auth::new(Some(file_owner));
+    let id = match auth.login(old, 7_000, || Some([0x31; 16])) { Ok(i) => i, Err(_) => return false };
+    let mut hex = [0u8; 32];
+    session_hex(&id, &mut hex);
+    let sess = core::str::from_utf8(&hex).unwrap_or("");
+    let mut tok = [0u8; 32];
+    let _ = crate::mcauth::csrf_token(Some(sess), &mut tok);
+    let csrf = core::str::from_utf8(&tok).unwrap_or("");
+    let c = Ctx { session: Some(sess), origin: "https://10.99.0.1", host: "10.99.0.1", csrf, now_ms: 7_000 };
+    install_ram(&[0x42u8; 32]);
+    oj::clear();
+    let base = crate::actions::last_seq(crate::mcauth::session_tag(Some(sess))) + 1;
+    let mut buf = [0u8; 300];
+    fn form(buf: &mut [u8; 300], s: &str, q: u64) -> usize {
+        let mut n = s.len();
+        buf[..n].copy_from_slice(s.as_bytes());
+        buf[n..n + 5].copy_from_slice(b"&seq=");
+        n += 5;
+        let mut d = [0u8; 20];
+        let (mut k, mut v) = (20, q);
+        loop {
+            k -= 1;
+            d[k] = b'0' + (v % 10) as u8;
+            v /= 10;
+            if v == 0 {
+                break;
+            }
+        }
+        buf[n..n + 20 - k].copy_from_slice(&d[k..]);
+        n + 20 - k
+    }
+    let n = form(&mut buf, "owner_key=wrong-key-xxxxxxxxxxxxx&new_owner_key=new-owner-key-for-rotation-0001&reason=rotate&permanent=true", base);
+    let bad_reauth = rotate_owner_key(&c, &buf[..n], &mut auth, Some([5; 16])) == Err("re-authentication failed");
+    let n = form(&mut buf, "owner_key=old-owner-key-for-rotation-test&new_owner_key=short&reason=rotate&permanent=true", base + 1);
+    let weak = rotate_owner_key(&c, &buf[..n], &mut auth, Some([5; 16])).is_err();
+    let n = form(&mut buf, "owner_key=old-owner-key-for-rotation-test&new_owner_key=new-owner-key-for-rotation-0001&reason=rotate&permanent=true", base + 2);
+    let rotated = rotate_owner_key(&c, &buf[..n], &mut auth, Some([5; 16])).is_ok();
+    let sessions_ended = !auth.check(Some(sess), 7_100);
+    let old_refused = auth.login(old, 7_200, || Some([0x32; 16])).is_err();
+    let new_ok = auth.login(new.as_bytes(), 7_300, || Some([0x33; 16])).is_ok();
+    // revoke-all keeps the rotation; boot precedence: same OWNER.TXT -> rotated, a re-flashed one -> the file
+    let kept = oj::owner_rotation().is_some();
+    let (eff, _) = effective_owner(Some(file_owner));
+    let boot_rotated = eff.is_some_and(|o| o.verifier == verifier_for(&[5; 16], new.as_bytes()));
+    crate::mcauth::set_owner_file_hash([0x22; 32]);
+    let (eff2, _) = effective_owner(Some(file_owner));
+    let reflash_wins = eff2 == Some(file_owner);
+    oj::clear();
+    let pass = bad_reauth && weak && rotated && sessions_ended && old_refused && new_ok && kept && boot_rotated && reflash_wins;
+    arch_aarch64::_print(format_args!(
+        " [P-owner-rotate] {} — G28 owner-key rotation: wrong current key refused={} weak new key refused={} rotated={} every session ended={} old key refused={} new key signs in={} kept in the journal={} next boot uses it={} a re-flashed OWNER.TXT wins={}\n",
+        if pass { "PASS" } else { "FAIL" }, bad_reauth, weak, rotated, sessions_ended, old_refused, new_ok, kept, boot_rotated, reflash_wins));
+    pass
 }
 
 /// `[P-ownerapi]`
