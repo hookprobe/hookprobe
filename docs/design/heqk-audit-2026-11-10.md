@@ -104,6 +104,10 @@ yet say so (doc-only fix, no decision change).
 | **A1 OS update** | CM5 + relay + serial | **PASS on metal**: corrupted image refused (bad signature); signed SVN-2 image (4.6 MB) uploaded over one kept-alive HTTPS connection, verified on the device, written + re-hashed from the inactive slot; tryboot trial classified itself as TRIAL; committed once AP + WAN were healthy; power cycle → HBoot verified it (ed25519 AND SLH-DSA, svn 2) and the cold boot ran the new build — `metal-evidence/20261110-ota-a1.md` |
 | local WAN-side sink | CM5 + Pi | **defect found**: ~6 Mbps and 64 % GEM `res_err` from a LAN-speed sender (128-descriptor RX ring overruns on line-rate bursts) → AP ring 512, re-measure in batch 28 |
 
+| **batch 29** (image W, `merged` + 3d/3g/lateral6/A8; SVN 4–6) | CM5 + Pi + relay + serial | **J2 OS-update rollback PASS 7/7** (trial with WAN DHCP blocked never commits, reboots at its 5-min deadline, the next cold boot runs the previous build); **J1 PASS 9/9** again; **J9** in-loop renewal `requests=1 acks=1`, worst loop gap 347 ms (old blocking renewal: 3,279 ms); LAN-client 18/18; intra-BSS mcast + IPv6 PASS; owner rules 10/10; actions PASS; `/api/network` live (SSID, setup credential source, WAN DHCP on VLAN 100, IPv6 prefix); `last_reset: power-on`; detection ring overruns 0. J8: the in-loop DHCP recovery checks PASS; its responsiveness checks used ICMP, which that image did not answer — the AP now answers echo (73a61f18) and J8 probes HTTP. Throughput 37.5 Mbps median = the bench Pi on its USB rtw88 adapter again (the soak, on the built-in radio, measures 45–73 Mbps). Evidence-log check: the sealed detection survived the power cycle; the check wrongly expected it to come from the bench Pi (fixed: compares the lists before and after the cut) |
+| broadcast-storm defect (found in batch 29) | code review of the restored detection | the storm counter was **per port, and every frame uses port 0**: all LAN + WAN broadcasts shared one 50-per-10-s budget and the rate limit then dropped *everyone's* broadcasts — an ADR 0023 violation (legit traffic must pass). Fixed per source device (V1 parity), attributed by ARP sender; household self-test |
+| 8 h soak (image W) | CM5 + Pi (wlan0) | in progress — first samples health ok, 0 serial faults, 45–73 Mbps |
+
 Environment issues found and fixed: the fortress reboot removed the VLAN/v6 bench (re-run
 `docs/design/bench-task26/fortress-vlan-bench.sh setup` + `v6up` + `v6route`); concurrent bench runners
 corrupt results (cycle now stops when the boot check fails); validate's 150 s QEMU timeout produced phantom
@@ -143,6 +147,10 @@ payload 2,518,296 B, **619 KB headroom**.
 | Bench | `cm5-ota-rollback-check.sh` (J2), `cm5-wan-outage-check.sh` (J8) | scripts |
 | Phase 4 | per-device behaviour baseline (IoT / camera / TV / printer learn their services for 24 h; a new service → rule 128, observe-only, hourly cap; phones never baselined) | `[P-devbase]` |
 
+| Phase 3 crash record | a panic / unexpected kernel fault writes its reason (message + location, or ESR/ELR/FAR) into a checksummed, cache-cleaned record in a reserved DRAM page before the EL2-gate reset; the next boot prints `[CRASH]` and serves `/api/health` `last_crash` | `[P-crashrec]`; metal J10 pending (DRAM survival across the reset unproven) |
+| Rule 112 | broadcast storm per source device + ARP attribution | `[P8-l2struct]` household case |
+| A9 (part) | `boot_abi::verify` fuzz target (OS-update / boot verifier): 1.6 M runs, 0 crashes; `run.sh` abslot length fix | libFuzzer |
+
 Deferred with reason: A10 (detbench through `apcore`) — the corpus is captured on the bench subnet, not from
 leased AP clients, so the lease-bound `client4` gate would need a host→lease mapping layer first; the current
 replay already exercises the rule plane, Shield DNS and the exfil accounting. §2.1 #8 (software AK in release)
@@ -159,7 +167,7 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 
 | # | Item | Acceptance | Validation |
 |---|---|---|---|
-| A1 | Metal OTA: upload a signed SVN+1 image, trial, commit-on-health; corrupted signature refused; image that never brings up the WAN rolls back | **done 2026-11-10** except the rollback scenario (J2) | new `tools/diagnostics/cm5-ota-check.sh` (relay + serial + hq-upload.py) |
+| A1 | Metal OTA: upload a signed SVN+1 image, trial, commit-on-health; corrupted signature refused; image that never brings up the WAN rolls back | **done 2026-11-10** incl. the rollback scenario (J2, batch 29) | new `tools/diagnostics/cm5-ota-check.sh` (relay + serial + hq-upload.py) |
 | A2 | Factory pads slot files to 5 MiB; legacy single-image cards refused with a clear reason | `[P-abslot]` + factory self-check | QEMU + factory |
 | A3 | release.yml builds the shipping AP flavour + unsigned-image size gate in CI; phase-ratchet baseline updated | CI green; size gate fails at > 5 MiB | CI |
 | A4 | Persisted TOFU policy/pack key pin + sealed per-type generation floors (2.1 #1, #2) | reflash with a different key refused; older pack refused after erase | QEMU two-boot + metal |
