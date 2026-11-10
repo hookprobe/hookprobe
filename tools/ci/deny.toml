@@ -23,6 +23,12 @@ ignore = [
     # proc-macro only — no code from it reaches the EL0 Wasm host at runtime.
     # Re-review: when wasmi drops it, or if any RUSTSEC *vulnerability* lands on it.
     { id = "RUSTSEC-2024-0436", reason = "unmaintained compile-time proc-macro via wasmi; no runtime exposure" },
+    # proc-macro-error2: unmaintained (no vulnerability, no safe upgrade upstream). Pulled only by the
+    # host-side ML-KEM evaluation tools os/build/kem-diff{,/nostd-check} via libcrux-ml-kem ->
+    # libcrux-intrinsics -> hax-lib -> hax-lib-macros, as a compile-time proc-macro. Not in any device
+    # build (the kernel ships RustCrypto ml-kem). Re-review: when libcrux/hax-lib drop it, if libcrux is
+    # ever adopted for the device, or if any RUSTSEC *vulnerability* lands on it.
+    { id = "RUSTSEC-2026-0173", reason = "unmaintained compile-time proc-macro via libcrux/hax-lib in host-only kem-diff; no runtime or device exposure" },
 ]
 
 [licenses]

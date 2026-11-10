@@ -12,6 +12,7 @@ cargo os/kernel/wasip1-fixture
 cargo os/kernel/efiboot
 cargo os/build/heqk-sign
 cargo onboarding/enrollment/responder-sim
+cargo onboarding/enrollment/superpop
 npm   os/mission-control
 npm   os/kernel/tools/mc-e2e
 cargo os/build/kem-diff

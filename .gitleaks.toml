@@ -53,3 +53,11 @@ paths = [
   '''^legacy/linux-tier/builder/release\.key$''',
   '''^legacy/linux-tier/builder/release\.key\.mldsa$''',
 ]
+# (c) Cargo.lock dependency lists naming the `libcrux-secrets` crate: generic-api-key reads
+# "secrets" as a keyword and the NEXT package name ("libcrux-sha3") as its value. Matched on the
+# whole finding (keyword line + a libcrux-* crate name), so a real key in a lockfile still fires.
+# Source: os/build/kem-diff{,/nostd-check}/Cargo.lock (host-only ML-KEM evaluation, ADR 0052 G4).
+regexTarget = "match"
+regexes = [
+  '''libcrux-secrets",\s+"libcrux-[a-z0-9-]+"''',
+]
