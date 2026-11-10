@@ -1,17 +1,17 @@
 ---
 /**
- * /observe/events — Observe (§3, Senzorium): everything entering the platform.
- * Static Astro shell + Solid client:load island. Spec: docs/architecture/MissionControl.md §3.
+ * /observe/events — Timeline & Export (Layer 0 pillar "It's my data"): what happened, in plain
+ * words, with CSV / JSON / printable export. The raw telemetry table is /observe/live (Pro).
+ * Spec: docs/architecture/MissionControl.md §3 · docs/design/mission-control-ui-requirements.md
  */
 
 import Shell from '../../layouts/Shell.astro';
-import ObserveApp from '../../components/ObserveApp';
-import '../../styles/obs.css';
+import TimelineApp from '../../components/TimelineApp';
 ---
 
 <Shell
-  title="Observe — HookProbe OS"
-  description="Telemetry Fabric: all sources entering HookProbe OS, normalized event stream, retention tiers and asset inventory — Senzorium."
+  title="Timeline — HookProbe OS"
+  description="Everything that happened on your network, in plain words — and an export of it, because it's your data."
 >
-  <ObserveApp client:load />
+  <TimelineApp client:load />
 </Shell>
