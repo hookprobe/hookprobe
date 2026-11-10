@@ -2921,6 +2921,19 @@ pub fn chanspec_primary(cs: u16) -> (u8, u16) {
 /// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
 /// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
 /// A valid unicast MAC must already be set (a prior scan/`wifi_scan` establishes cur_etheraddr).
+#[cfg(feature = "wpa3probe")]
+static mut PROBE_PSK: ([u8; 64], u8) = ([0; 64], 0);
+/// WPA3 probe: the passphrase handed to the firmware's in-firmware SAE (`sae_password`).
+#[cfg(feature = "wpa3probe")]
+pub fn probe_set_psk(p: &[u8]) {
+    let n = p.len().min(64);
+    let st = unsafe { &mut *core::ptr::addr_of_mut!(PROBE_PSK) };
+    st.0[..n].copy_from_slice(&p[..n]);
+    st.1 = n as u8;
+}
+#[cfg(feature = "wpa3probe")]
+static mut PROBE_EVENTS: u32 = 0;
+
 pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut ApResult) {
     let _ = wake_chip();
     drain_firmware_mailbox();
@@ -3030,12 +3043,49 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     // Per-BSS security. For bsscfg index 0 brcmfmac's brcmf_fil_bsscfg_* issue plain iovars.
     // wsec = AES | SES_OW_ENABLED (0x40), as brcmf_configure_wpaie sets it for an AP.
     const SES_OW_ENABLED: u32 = 0x0040;
+    #[cfg(not(feature = "wpa3probe"))]
     let (wsec, wpa_auth) = if open { (0, 0) } else { (AES_ENABLED | SES_OW_ENABLED, WPA2_AUTH_PSK) };
+    // WPA3 probe: SAE-only AKM (WPA3_AUTH_SAE_PSK, brcmfmac's value) — the beacon then advertises AKM 8 + MFPR.
+    #[cfg(feature = "wpa3probe")]
+    let (wsec, wpa_auth) = (AES_ENABLED | SES_OW_ENABLED, 0x0004_0000u32);
     let _ = iovar_set_u32(b"wme_bss_disable", 0); // WMM ON (QoS — required for HT/VHT aggregation)
     let _ = iovar_set_u32(b"auth", 0); // Open System 802.11 auth; PSK is the host 4-way
     out.wsec_ok = iovar_set_u32(b"wsec", wsec);
+    #[cfg(not(feature = "wpa3probe"))]
     let _ = iovar_set_u32(b"mfp", 0);
+    #[cfg(feature = "wpa3probe")]
+    let mfp_ok = iovar_set_u32(b"mfp", 2); // MFP required (WPA3)
     out.wpa_auth_ok = iovar_set_u32(b"wpa_auth", wpa_auth);
+    #[cfg(feature = "wpa3probe")]
+    {
+        // in-firmware SAE (brcmf_wsec_sae_pwd_le: key_len u16 + key[128])
+        let psk = unsafe { &*core::ptr::addr_of!(PROBE_PSK) };
+        let mut pw = [0u8; 130];
+        let pl = (psk.1 as usize).min(128);
+        pw[..2].copy_from_slice(&(pl as u16).to_le_bytes());
+        pw[2..2 + pl].copy_from_slice(&psk.0[..pl]);
+        let mut ib = [0u8; 160];
+        let n = iovar_buf(b"sae_password", &pw, &mut ib);
+        let sae_pw_ok = bcdc_iovar_set(&ib[..n]);
+        // every event, incl. > 127 (event_msgs_ext: ver 1, command SET_MASK 1, len, maxgetsize, mask)
+        let mut em = [0u8; 4 + 32];
+        em[0] = 1;
+        em[1] = 1;
+        em[2] = 32;
+        for b in em[4..].iter_mut() {
+            *b = 0xff;
+        }
+        let n = iovar_buf(b"event_msgs_ext", &em, &mut ib);
+        let ext_ok = bcdc_iovar_set(&ib[..n]);
+        let mut all = [0xffu8; 16];
+        all[0] &= !(1 << 0); // keep WLC_E_SET_SSID noise out (still logged via ext if any)
+        let n = iovar_buf(b"event_msgs", &all, &mut ib);
+        let msgs_ok = bcdc_iovar_set(&ib[..n]);
+        let mut rb = [0u8; 4];
+        let wa_rb = bcdc_iovar_get(b"wpa_auth", &mut rb).then(|| u32::from_le_bytes(rb));
+        crate::_print(format_args!(" [WPA3-PROBE] wpa_auth=SAE(0x40000) set={} readback={:?} | mfp=2 set={} | sae_password (in-firmware SAE) set={} | event_msgs_ext all={} event_msgs all={}\n",
+            out.wpa_auth_ok, wa_rb, mfp_ok, sae_pw_ok, ext_ok, msgs_ok));
+    }
 
     let mut sb = [0u8; 36];
     let slen = ssid.len().min(32);
@@ -3666,6 +3716,29 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
     }
     };
     if ch == 1 {
+        #[cfg(feature = "wpa3probe")]
+        {
+            // every event: type, status, reason, auth_type, datalen, addr + the first 40 data bytes (an SAE commit
+            // handed to the host shows up here as an auth frame / EXT_AUTH event)
+            let ev = doff + 4 + (*rx.get(doff + 3).unwrap_or(&0) as usize) * 4;
+            let n = unsafe { PROBE_EVENTS };
+            if n < 400 && ev + 72 <= rx.len() {
+                unsafe { PROBE_EVENTS += 1 };
+                let rd = |o: usize| u32::from_be_bytes([rx[ev + o], rx[ev + o + 1], rx[ev + o + 2], rx[ev + o + 3]]);
+                let (et, st, rs, at, dl) = (rd(28), rd(32), rd(36), rd(40), rd(44));
+                if et != WLC_E_ESCAN_RESULT {
+                    crate::_print(format_args!(" [WPA3-PROBE] ev#{} type={} status={} reason={} auth_type={} datalen={} addr={:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} data=",
+                        n, et, st, rs, at, dl, rx[ev + 48], rx[ev + 49], rx[ev + 50], rx[ev + 51], rx[ev + 52], rx[ev + 53]));
+                    let d0 = ev + 72;
+                    for i in 0..(dl as usize).min(40) {
+                        if let Some(b) = rx.get(d0 + i) {
+                            crate::_print(format_args!("{:02x}", b));
+                        }
+                    }
+                    crate::_print(format_args!("\n"));
+                }
+            }
+        }
         if let Some((et, st, sta)) = parse_ap_event(rx, doff) {
             if (et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND) && st == 0 {
                 dbg_putc(b'C');

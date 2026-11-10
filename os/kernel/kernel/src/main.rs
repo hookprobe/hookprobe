@@ -3399,6 +3399,8 @@ fn cm5_p10_probe() {
                                 (6, cyw43::ap_chanspec(6))
                             };
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
+                            #[cfg(feature = "wpa3probe")]
+                            cyw43::probe_set_psk(ap_psk);
                             cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
