@@ -444,24 +444,12 @@ impl Pppoe {
             CONF_REQ => {
                 self.stats.ip6cp_req_rx += 1;
                 // Accept the peer's Interface-Identifier unless it is zero or equals ours (RFC 5072
-                // §4.1: Nak with a different one); reject every other option.
-                let mut rej = [0u8; 64];
-                let mut nrej = 0;
-                let mut peer = [0u8; 8];
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        return;
-                    }
-                    if t == 1 && l == 10 {
-                        peer.copy_from_slice(&data[o + 2..o + 10]);
-                    } else if nrej + l <= rej.len() {
-                        rej[nrej..nrej + l].copy_from_slice(&data[o..o + l]);
-                        nrej += l;
-                    }
-                    o += l;
+                // §4.1: Nak with a different one); reject every other option. D4 step 3b-iv: the walk runs in EL0.
+                let r = crate::wanparse::ip6cp(data);
+                if r.malformed {
+                    return;
                 }
+                let (rej, nrej, peer) = (r.rej, r.nrej as usize, r.peer_iid);
                 if nrej > 0 {
                     self.send_ctl(tx, PPP_IPV6CP, CONF_REJ, id, &rej[..nrej]);
                 } else if peer == [0; 8] || peer == self.my_iid {
@@ -835,18 +823,17 @@ impl Pppoe {
         }
         match code {
             1 => {
-                // Challenge: value-size, value, name. Response = MD5(id || secret || challenge).
-                if data.is_empty() {
+                // Challenge: value-size, value, name. Response = MD5(id || secret || challenge). D4 step 3b-iv: the
+                // parse runs in EL0; the secret and the MD5 never leave the kernel
+                let c = crate::wanparse::chap(data);
+                if !c.ok {
                     return;
                 }
-                let vs = data[0] as usize;
-                if 1 + vs > data.len() || vs > 64 {
-                    return;
-                }
+                let vs = c.vs as usize;
                 let mut m = [0u8; 1 + 64 + 64];
                 m[0] = id;
                 m[1..1 + self.plen].copy_from_slice(&self.pass[..self.plen]);
-                m[1 + self.plen..1 + self.plen + vs].copy_from_slice(&data[1..1 + vs]);
+                m[1 + self.plen..1 + self.plen + vs].copy_from_slice(&c.value[..vs]);
                 let h = hal::md5(&m[..1 + self.plen + vs]);
                 let mut d = [0u8; 1 + 16 + 64];
                 d[0] = 16;
