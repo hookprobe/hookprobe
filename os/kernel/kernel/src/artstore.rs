@@ -464,6 +464,12 @@ pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, 
 
 // ---- [P-artstore] ------------------------------------------------------------------------------------------
 
+/// The key that verifies type `t`: the owner's configuration key for WAN / Wi-Fi / POLICY (ADR 0058 D3), the
+/// vendor key for content packs.
+pub fn key_for(t: Ty) -> Option<[u8; 32]> {
+    if t.staged() { crate::policysig::config_key() } else { crate::policysig::key() }
+}
+
 /// A sparse RAM disk for the self-tests: reads of never-written sectors are zero.
 pub struct SparseDisk {
     pub lba: [u64; 192],

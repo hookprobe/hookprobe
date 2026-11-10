@@ -171,6 +171,20 @@ pub fn key() -> Option<[u8; 32]> {
 pub fn floor() -> u64 {
     POLICY_GEN_FLOOR.max(crate::anchor::policy_floor())
 }
+/// ADR 0058 D3: the key that verifies the owner's CONFIGURATION files (WAN.TXT, WIFI.TXT, POLICY.TXT): the enrolled
+/// owner key once there is one, else the vendor/pinned key above (`key()`). Vendor content packs keep `key()`.
+pub fn config_key() -> Option<[u8; 32]> {
+    unsafe { TEST_KEY }.or(crate::anchor::owner()).or_else(key)
+}
+/// The keys a configuration file may verify with, by where it was read from: a copy from the artifact store (an
+/// upload) only with the owner configuration key; the factory baseline on the boot partition also with the vendor
+/// key until the owner replaces it — enrolling never locks the device out of its shipped WAN / Wi-Fi / POLICY
+/// (operator rule 7). Nothing remote writes the boot partition (OTA writes only the kernel slots).
+pub fn config_keys(from_store: bool) -> [Option<[u8; 32]>; 2] {
+    let first = config_key();
+    let vendor = if from_store || unsafe { TEST_KEY }.is_some() || crate::anchor::owner().is_none() { None } else { key() };
+    [first, vendor.filter(|v| Some(*v) != first)]
+}
 pub fn selftest_key(k: Option<[u8; 32]>) {
     unsafe { TEST_KEY = k };
 }

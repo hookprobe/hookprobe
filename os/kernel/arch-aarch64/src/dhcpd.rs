@@ -184,75 +184,18 @@ impl ApDhcp {
     }
 }
 
-/// What a DHCP client says about itself.
-#[derive(Clone, Copy)]
-pub struct ClientId {
-    pub host: [u8; 32],
-    pub hlen: u8,
-    pub vendor: [u8; 32],
-    pub vlen: u8,
-    pub prl: [u8; 24],
-    pub plen: u8,
-    /// DHCP message type (1 DISCOVER, 3 REQUEST, 7 RELEASE, 8 INFORM), 0 = not a client DHCP.
-    pub mt: u8,
-}
+pub use hal::dhcpwire::{client_identity, ClientId};
 
-/// Printable, bounded copy (hostnames/vendor strings are attacker-chosen: only [A-Za-z0-9 ._-]).
-fn clean(src: &[u8], dst: &mut [u8]) -> u8 {
-    let mut n = 0;
-    for &c in src {
-        if n >= dst.len() {
-            break;
-        }
-        if c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b' ') {
-            dst[n] = c;
-            n += 1;
-        }
-    }
-    n as u8
-}
+/// ADR 0050 D4 step 2b: the kernel installs the EL0 LAN-services parser here once `el0-lansvc` is loaded; the DHCP
+/// server then parses every client frame through it (`None` = the server faulted / refused: treated exactly like
+/// an unparseable frame — no reply, the client retries). Unset = parse in-kernel with the same `hal::dhcpwire`.
+pub static mut EL0_PARSE: Option<fn(&[u8]) -> Option<hal::dhcpwire::ClientReq>> = None;
 
-/// Parse a client DHCP frame's identity options (12 hostname, 55 parameter list, 60 vendor class) and
-/// message type. Bounds-safe; anything malformed yields `mt = 0`.
-pub fn client_identity(eth: &[u8]) -> ClientId {
-    let mut id = ClientId { host: [0; 32], hlen: 0, vendor: [0; 32], vlen: 0, prl: [0; 24], plen: 0, mt: 0 };
-    if eth.len() < 42 + 240 || eth[12] != 0x08 || eth[13] != 0x00 || eth[23] != 17 {
-        return id;
+pub fn parse_request(eth: &[u8]) -> hal::dhcpwire::ClientReq {
+    match unsafe { EL0_PARSE } {
+        Some(f) => f(eth).unwrap_or(hal::dhcpwire::REQ0),
+        None => hal::dhcpwire::parse_client(eth),
     }
-    let l4 = 14 + ((eth[14] & 0x0f) as usize) * 4;
-    if l4 + 8 + 240 > eth.len() || u16::from_be_bytes([eth[l4], eth[l4 + 1]]) != 68 || u16::from_be_bytes([eth[l4 + 2], eth[l4 + 3]]) != 67 {
-        return id;
-    }
-    let b = l4 + 8;
-    if eth[b] != 1 || eth[b + 236..b + 240] != [0x63, 0x82, 0x53, 0x63] {
-        return id;
-    }
-    let mut p = b + 240;
-    while p + 2 <= eth.len() {
-        let code = eth[p];
-        if code == 0xff {
-            break;
-        }
-        if code == 0 {
-            p += 1;
-            continue;
-        }
-        let len = eth[p + 1] as usize;
-        let Some(v) = eth.get(p + 2..p + 2 + len) else { break };
-        match code {
-            53 if len >= 1 => id.mt = v[0],
-            12 => id.hlen = clean(v, &mut id.host),
-            60 => id.vlen = clean(v, &mut id.vendor),
-            55 => {
-                let n = len.min(id.prl.len());
-                id.prl[..n].copy_from_slice(&v[..n]);
-                id.plen = n as u8;
-            }
-            _ => {}
-        }
-        p += 2 + len;
-    }
-    id
 }
 
 /// An honest OS-family guess from the vendor class + parameter-request list ("" = unknown). Rules from the

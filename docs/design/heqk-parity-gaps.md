@@ -103,11 +103,11 @@ Device-side items are for the heqk session; the Mission Control side is built (f
 
 | ID | Gap | Size | Status |
 |---|---|---|---|
-| G43 | Wi-Fi name / password / security change needs a re-flash: WIFI.TXT is read from the boot partition at boot only and ADR 0056 refuses Wi-Fi uploads | M | **open** — contract ADR 0058 D1 (`wifi` upload type, next boot); Mission Control builds + signs WIFI.TXT in the browser and offers the signed files for the boot card meanwhile |
-| G44 | Internet mode / PPPoE / ISP VLAN / management VLAN change needs a re-flash (WAN.TXT, same reason) | M | **open** — ADR 0058 D1 (`wan`); UI side built as for G43 |
-| G45 | POLICY.TXT (ACLs, prefix lists, routes, SASE tunnel) cannot be uploaded: ADR 0056 D2 lists `policy` but phase 1 excludes it, and nothing generates it from intent | M | **open** — ADR 0058 D1 (`policy`, phase 1); UI builds the 4096-B file + signature |
-| G46 | The trust anchor pins the image's compiled key; the owner cannot enroll their own key or rotate | M | **open** — ADR 0058 D3 |
-| G47 | Rename a device from Mission Control: no `device_label` owner-journal kind (the requirements doc assumed one) | S | **open** — Rename greyed with the reason until it exists |
+| G43 | Wi-Fi name / password / security change needs a re-flash: WIFI.TXT is read from the boot partition at boot only and ADR 0056 refuses Wi-Fi uploads | M | **built (QEMU)** — `wifi` upload type, staged (applies at next boot), A/B + manifest group 1, `POST /api/upload/rollback`, verified by the owner configuration key ([P-artstore], mc-e2e); metal pending — see `docs/design/adr0058-implementation.md` |
+| G44 | Internet mode / PPPoE / ISP VLAN / management VLAN change needs a re-flash (WAN.TXT, same reason) | M | **built (QEMU)** — `wan` upload type as G43; WAN.TXT is now verified BEFORE anything applies (an operator key + an unverified WAN.TXT = DHCP / untagged / no mgmt sub-interface); metal pending |
+| G45 | POLICY.TXT (ACLs, prefix lists, routes, SASE tunnel) cannot be uploaded: ADR 0056 D2 lists `policy` but phase 1 excludes it, and nothing generates it from intent | M | **built (QEMU)** — `policy` upload type as G43; rollback bounded by the persisted POLICY floor; metal pending |
+| G46 | The trust anchor pins the image's compiled key; the owner cannot enroll their own key or rotate | M | **built (QEMU), SECURITY REVIEW REQUIRED before shipping** — `POST /api/anchor/enroll` (one-shot, proof of possession) + `/api/anchor/rotate` (signed by the enrolled key, generation up), `GET /api/anchor`; the owner key verifies WAN / Wi-Fi / POLICY only, vendor packs keep the vendor key; factory reset clears it ([P-anchor]); metal pending |
+| G47 | Rename a device from Mission Control: no `device_label` owner-journal kind (the requirements doc assumed one) | S | **done** (`4f930c10`) — `device_label` owner-journal kind; UI in #963 |
 | G48 | First-run setup wizard (ADR 0010) is a UI mock; `/api/provision/launch` answers "not implemented on heqk" | M | **open** |
-| G49 | No reboot endpoint: next-boot settings need a power cycle | S | **open** — ADR 0058 open item 3 |
+| G49 | No reboot endpoint: next-boot settings need a power cycle | S | **done** (`4f930c10`) — `POST /api/reboot` (owner re-auth); UI in #963 |
 

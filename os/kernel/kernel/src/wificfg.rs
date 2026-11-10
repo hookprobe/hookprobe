@@ -8,7 +8,7 @@
 //!   channel=40                 2.4 GHz 1..13, 5 GHz 36/40/44/48 (UNII-1 — DFS channels fail on this
 //!                              firmware's stock CLM, see the Wi-Fi capability notes); default: auto
 //!   security=wpa3-transition   wpa2 | wpa3 (SAE only, PMF required) | wpa3-transition (WPA2-PSK + SAE, PMF
-//!                              capable); default: WPA2. Transition serves WPA3 (SAE + PMF) and WPA2-only (PSK) stations
+//!                              capable); default: wpa3-transition (operator 2026-11-10). Transition serves WPA3 (SAE + PMF) and WPA2-only (PSK) stations
 //!                              on the same BSS (metal 2026-11-10).
 //!                              SAE needs the passphrase: with a 64-hex PMK only `wpa2` is accepted.
 //!   max_clients=16              1..64 associated stations at once (the firmware's `maxassoc`); default: firmware's
@@ -182,9 +182,12 @@ pub fn load<D: hal::BlockDev>(dev: &D) -> Option<Result<WifiCfg, CfgErr>> {
     }
     let mut body: &[u8] = &buf;
     // the device's EFFECTIVE operator key (the pinned anchor, like POLICY / WAN / the packs), not only the image's
-    if let Some(key) = crate::policysig::key() {
+    if crate::policysig::config_key().is_some() {
         let mut sig = [0u8; 512];
-        let ok = crate::artstore::locate(dev, p1, b"WIFI    SIG").and_then(|(l, _)| dev.read_block(l, &mut sig).ok()).and_then(|_| check_sig(&sig, &key, &buf));
+        let keys = crate::policysig::config_keys(crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wifi));
+        let ok = crate::artstore::locate(dev, p1, b"WIFI    SIG")
+            .and_then(|(l, _)| dev.read_block(l, &mut sig).ok())
+            .and_then(|_| keys.iter().flatten().find_map(|k| check_sig(&sig, k, &buf)));
         match ok {
             Some((_, len)) => body = &buf[..len],
             None => {

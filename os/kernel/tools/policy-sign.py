@@ -12,6 +12,8 @@
   policy-sign.py sign-rules KEYFILE RULES.BIN GEN OUT.SIG       # compiled rule pack (tools/rulepack.py, <= 64 KiB)
   policy-sign.py sign-oui KEYFILE OUI.TXT GEN OUT.SIG           # IEEE OUI vendor registry (<= 4 MiB; os/build/fpgen/gen_oui.py)
   policy-sign.py sign-wan KEYFILE WAN.TXT GEN OUT.SIG           # WAN mode / VLANs / mgmt_floor (<= 512 B; audit finding 11)
+  policy-sign.py enroll-proof OWNERKEY                          # ADR 0058 D3: public_key + proof for POST /api/anchor/enroll
+  policy-sign.py rotate OLDKEY NEWKEY GEN                       # ADR 0058 D3: public_key + proof + signature for /api/anchor/rotate
 
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
@@ -71,6 +73,14 @@ def main():
         sig = k.sign(tag + meta + d)
         open(out, "wb").write((magic + meta + d + sig).ljust(512, b"\0"))
         print(f"{a[0][5:].upper()} signature written (generation {gen}, {len(body)} bytes)")
+    elif a[:1] == ["enroll-proof"] and len(a) == 2:
+        k = load(a[1])
+        pk = bytes.fromhex(pubhex(k))
+        print(f"public_key={pk.hex()}\nproof={k.sign(b'HQENR1' + pk).hex()}")
+    elif a[:1] == ["rotate"] and len(a) == 4:
+        old, new, gen = load(a[1]), load(a[2]), int(a[3])
+        pk = bytes.fromhex(pubhex(new))
+        print(f"public_key={pk.hex()}\nproof={new.sign(b'HQENR1' + pk).hex()}\ngeneration={gen}\nsignature={old.sign(b'HQROT1' + pk + struct.pack('<Q', gen)).hex()}")
     else:
         sys.exit(__doc__)
 
