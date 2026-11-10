@@ -1,302 +1,114 @@
 /**
- * FeedbackApp — Administration → Feedback & Diagnostics (§12, ADR 0012 D5).
+ * FeedbackApp — Administration → Feedback and diagnostics (`/admin/feedback`; ADR 0012 D5;
+ * docs/research/feedback-ux.md; requirements doc §12).
  *
- * The consent screen for the opt-in, off-by-default product-health beacon.
- * Spec: docs/research/feedback-ux.md (canonical UX — copy, wireframes, state matrix,
- * anti-nag rules). Follow it faithfully; this file implements it against
- * Layer-0 mock state (no backend).
+ * The spec's one design move stays: show the exact bytes that would leave, built by the same function
+ * the Export uses. What changed is honesty: every value comes from this device (`/api/health`,
+ * `/api/capabilities`, `/api/upload`), a field the device does not report says so instead of showing
+ * an invented number, and the beacon toggle is off and greyed with its reason — heqk has no beacon
+ * sender, so nothing can be sent. The diagnostics file works in every state, air-gapped.
  *
- * The one design move (spec §0): render the *actual* beacon.json next to the
- * toggle, live, generated from this device's mock values — never a marketing
- * description. `buildBeacon()` is the single code path both the live preview
- * and "Export diagnostics file" use, so what you see is what would leave.
- *
- * Panels (terminal-framed):
- *   PRODUCT-HEALTH BEACON — the toggle (one control, OFF by default, symmetric
- *     revoke), delivery status, hard deny-list, Export (works in every state).
- *   LIVE PAYLOAD / LAST BEACON — the 12-field beacon.json, live.
- *   TENANT EVIDENCE OFFLOAD (ADR 0009) — cloud-linked only, read-only,
- *     separate consent already given at enrollment — never conflated with
- *     the local toggle.
- *
- * State model (spec §4): disabled (default) / enabled-healthy / enabled-
- * degraded. The toggle alone drives disabled↔enabled; a small demo-only
- * affordance (clearly marked "(demo)") flips healthy↔degraded so both
- * enabled sub-states are reachable without a real egress failure to show —
- * per the task's allowance for a mock state-switcher. No other page in this
- * repo needs this because their state comes from a single mock signal; a
- * failed send is a second, independent axis the toggle alone can't express.
- *
- * Anti-nag (spec §6): nothing here reaches Mission Control or the orb. The
- * "Edge Nodes" per-device beacon status chip from the spec is out of scope
- * for this task — pending, not hacked in.
- *
- * Capability gating: page itself requires manifest `feedback_beacon`; when
- * absent the page is hidden from the Administration nav entirely (spec §4)
- * — not rendered greyed. This mock keeps GRANTS.feedback_beacon = true so
- * the states are demonstrable; the gate is still shown explicitly below for
- * completeness (see `GRANTS` guard just under LeftRail).
+ * Never included (enforced by construction — the builders below only read these fields): addresses,
+ * hostnames, MACs, flows, detections, incidents, IOCs, rules, owner keys, configs.
  */
-
-import { type Component, For, Show, createSignal, createMemo } from 'solid-js';
-import type { DeployMode } from './LeftRail';
-import { setCopilotOpen, setCopilotQuery } from '../store/mock';
+import { type Component, For, Show, createMemo, onMount } from 'solid-js';
+import { substrate, deviceStats, deployMode } from '../store/mock';
+import { healthChecked, loadHealth } from '../store/health';
+import { capList } from '../store/capabilities';
+import { uploadView, refreshUploads, PACK_LABEL } from '../store/packUpload';
+import { download } from '../store/signing';
 import AppShell from './AppShell';
-import {
-  type BeaconPayload,
-  GRANTS, DEVICE_BEACON_BASE, CONSENT_TAG_ON, CONSENT_TAG_OFF,
-  ENABLED_SINCE, LAST_SENT_AT, NEXT_SEND_ETA, BEACON_TS_LIVE,
-  DENY_LIST, TENANT_OFFLOAD,
-} from '../store/fbkMock';
 
-// Mode is mocked the same way the sibling Administration page mocks it
-// (AdministrationApp.tsx hardcodes 'cloud-linked') — no live mode source
-// exists in Layer 0. Flip to 'standalone' to see the tenant-offload card
-// disappear, per spec §3.3 / §4.
-const MODE: DeployMode = 'cloud-linked';
-
-type BeaconState = 'disabled' | 'enabled-healthy' | 'enabled-degraded';
-
-/** Single code path for both the live preview and the exported file. */
-function buildBeacon(consentOn: boolean): BeaconPayload {
-  return {
-    ...DEVICE_BEACON_BASE,
-    consent: consentOn ? CONSENT_TAG_ON : CONSENT_TAG_OFF,
-    ts: BEACON_TS_LIVE,
-  };
-}
-
-const Panel: Component<{ ctx: string; title: string; span?: string; children: any }> = (p) => (
-  <section class="hp-terminal mc-panel" style={p.span ? { 'grid-column': p.span } : undefined}>
-    <div class="hp-terminal-bar">
-      <span class="hp-dot red" aria-hidden="true" />
-      <span class="hp-dot yellow" aria-hidden="true" />
-      <span class="hp-dot green" aria-hidden="true" />
-      <span class="mc-panel-title">{p.title}</span>
-      <span class="hp-terminal-title">hookprobe@edge ~ {p.ctx}</span>
-    </div>
-    <div class="hp-terminal-body mc-panel-body">{p.children}</div>
-  </section>
-);
+const NOT = 'not reported by this device';
 
 const FeedbackApp: Component = () => {
-  const [consentOn, setConsentOn]     = createSignal(false);   // OFF by default
-  const [degradedDemo, setDegraded]   = createSignal(false);   // demo-only 2nd axis
-  const [lastExportAt, setLastExport] = createSignal<string | null>(null);
+  onMount(() => { void loadHealth(); void refreshUploads(); });
+  const sample = () => healthChecked() && !substrate();
 
-  const state = createMemo<BeaconState>(() => {
-    if (!consentOn()) return 'disabled';
-    return degradedDemo() ? 'enabled-degraded' : 'enabled-healthy';
+  /** The 12-field beacon of feedback-ux.md §1, filled only with what this device actually reports. */
+  const beacon = createMemo(() => ({
+    schema: 'hookprobe.beacon/1',
+    beacon_id: NOT,
+    image_version: NOT,
+    device_class: substrate() || NOT,
+    profile: deployMode(),
+    arch: substrate() ? 'aarch64' : NOT,
+    uptime_hours: NOT,
+    boot: NOT,
+    health: NOT,
+    qsecbit_avg: NOT,
+    consent: 'not given (beacon off)',
+    ts: new Date().toISOString().slice(0, 19) + 'Z',
+  }));
+
+  /** The diagnostics file: product health only. */
+  const diagnostics = createMemo(() => {
+    const s = deviceStats();
+    const c = capList();
+    const u = uploadView();
+    return {
+      schema: 'hookprobe.diagnostics/1',
+      generated: new Date().toISOString(),
+      source: sample() ? 'preview build (no device)' : 'device',
+      substrate: substrate() || null,
+      mode: deployMode(),
+      capabilities: { source: c.source, granted: c.granted, denied: Object.fromEntries(c.denied) },
+      packet_path: s ? { seen: s.seen ?? null, forwarded: s.forwarded ?? null, dropped: s.dropped ?? null, rules_active: s.rulesActive ?? null } : null,
+      storage: s ? { detections_cap: s.detectionsCap ?? null, sealed_cap: s.sealedCap } : null,
+      internet: s?.wan ? { up: s.wan.up, mode: s.wan.mode, ipv6: s.wan.ipv6 } : null,
+      packs: u ? { store: u.store, slots: u.types.map((t) => ({ type: t.type, generation: t.generation, source: t.source })),
+        recent: u.recent.map((e) => ({ step: e.step, type: e.type, ok: e.ok, why: e.why })) } : null,
+      clock: s?.clock ?? null,
+      last_reset: s?.lastReset ?? null,
+      ui: { path: typeof location !== 'undefined' ? location.pathname : '', agent: typeof navigator !== 'undefined' ? navigator.userAgent : '' },
+    };
   });
-
-  const beacon = createMemo(() => buildBeacon(consentOn()));
-  const payloadText = createMemo(() => JSON.stringify(beacon(), null, 2));
-
-  const toggleHelp = createMemo(() =>
-    consentOn()
-      ? `On since ${ENABLED_SINCE}. Sends once/day and on boot-health change. Turn off any time — takes effect immediately.`
-      : 'Off. This device sends nothing. Turn on to share release health; see exactly what leaves on the right.'
-  );
-
-  const payloadTitle = createMemo(() =>
-    state() === 'disabled' ? 'SEE EXACTLY WHAT LEAVES' : 'LAST BEACON (SENT)'
-  );
-
-  const allowlistCaption = createMemo(() =>
-    state() === 'disabled'
-      ? 'This is the entire payload. See exactly what leaves this device:'
-      : 'This is exactly what was sent:'
-  );
-
-  function toggleConsent() {
-    setConsentOn((v) => {
-      const next = !v;
-      if (!next) setDegraded(false); // revoke clears the demo-degraded axis too
-      return next;
-    });
-  }
-
-  /** Works in every state (even disabled/degraded) — no connectivity required. */
-  function exportDiagnostics() {
-    const payload = beacon();
-    const filename = `beacon-${payload.image_version}-${payload.ts.replace(/[:]/g, '')}.json`;
-    const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    URL.revokeObjectURL(url);
-    setLastExport(new Date().toLocaleString());
-  }
+  const json = (o: unknown) => JSON.stringify(o, null, 2);
 
   return (
-    <AppShell path="/admin/feedback">
+    <AppShell path="/admin/identity">
+      <div class="pro-head">
+        <div>
+          <h1 class="pro-title">Feedback and diagnostics</h1>
+          <p class="pro-sub">Beacon off · nothing leaves this device unless you export it.</p>
+        </div>
+      </div>
 
-      <main class="dash-main">
-        <header class="mc-header">
-          <div>
-            <div class="fbk-breadcrumb">
-              <a href="/admin/identity">Administration</a>
-              <span aria-hidden="true"> › </span>
-              Feedback &amp; Diagnostics
-            </div>
-            <h1 class="mc-h1">FEEDBACK &amp; DIAGNOSTICS</h1>
-            <div class="mc-sub">
-              Help improve HookProbe OS by sharing how this release behaves — nothing about your network.
-            </div>
+      <div class="pro-grid" style={{ 'grid-template-columns': 'repeat(auto-fit, minmax(320px, 1fr))' }}>
+        <div class="pcard" aria-label="Product-health beacon">
+          <p class="l0-label">Product-health beacon</p>
+          <label class="prow" style={{ opacity: 0.55 }}>
+            <span>Send product health to HookProbe</span>
+            <input type="checkbox" checked={false} disabled aria-describedby="beacon-why" />
+          </label>
+          <p class="gate-reason" id="beacon-why">Off. This device has no beacon sender, so nothing can be sent. When it ships it stays off until you turn it on here, and turns off in one click.</p>
+          <p class="l0-label" style={{ 'margin-top': '8px' }}>Never sent</p>
+          <p class="l0-card-sub">IP addresses · hostnames · MACs · flows or captures · detections and alerts · IOCs · rules · user or customer data · file paths · configs · location. The fields on the right are the whole schema; there is no free-text field.</p>
+        </div>
+
+        <div class="pcard" aria-label="Beacon preview">
+          <p class="l0-label">What it would send, from this device now</p>
+          <pre class="pro-pre" style={{ margin: 0, 'white-space': 'pre-wrap', 'font-size': '12px' }}>{json(beacon())}</pre>
+          <p class="pcard-note">"{NOT}" means the device does not measure it yet; nothing is made up.</p>
+        </div>
+
+        <div class="pcard" aria-label="Diagnostics file">
+          <p class="l0-label">Diagnostics file</p>
+          <p class="l0-card-sub">For a support request or your own records. Product health only: capabilities, packet-path counters, storage limits, pack generations, clock. Works with no internet.</p>
+          <Show when={sample()}><p class="plan-diff-warn" style={{ margin: 0 }}>Preview build: no device is connected, so most values are empty.</p></Show>
+          <div class="l0-card-foot">
+            <button class="hp-btn hp-btn--primary" onClick={() => download(`hookprobe-diagnostics-${new Date().toISOString().slice(0, 10)}.json`, json(diagnostics()) + '\n', 'application/json')}>Export diagnostics file</button>
+            <a class="hp-btn" href="https://github.com/hookprobe/hookprobe/issues" target="_blank" rel="noopener noreferrer">Report a problem</a>
           </div>
-          <div class="mc-header-actions">
-            <button
-              class="mc-chip"
-              onClick={() => { setCopilotQuery('turn on the product health beacon'); setCopilotOpen(true); }}
-            >
-              ⌘ "turn on the product health beacon"
-            </button>
-            <span class="mc-mode-badge">● {MODE}</span>
-          </div>
-        </header>
-
-        <Show
-          when={GRANTS.feedback_beacon}
-          fallback={
-            <div class="mc-grid">
-              <Panel ctx="feedback" title="FEEDBACK & DIAGNOSTICS" span="span 12">
-                <div class="fbk-nograt">
-                  Manifest: <code>feedback_beacon</code> not granted on this device.
-                </div>
-              </Panel>
-            </div>
-          }
-        >
-          <div class="mc-grid">
-
-            {/* ── Product-health beacon (consent card) ─────────────────────── */}
-            <Panel ctx="feedback" title="PRODUCT-HEALTH BEACON" span="span 5">
-
-              <div class="fbk-toggle-row">
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={consentOn()}
-                  aria-labelledby="fbk-toggle-label"
-                  aria-describedby="fbk-toggle-help"
-                  class={`fbk-toggle${consentOn() ? ' fbk-toggle--on' : ''}`}
-                  onClick={toggleConsent}
-                >
-                  <span class="fbk-toggle-track" aria-hidden="true">
-                    <span class="fbk-toggle-thumb" />
-                  </span>
-                  <span class="fbk-toggle-word">{consentOn() ? 'ON' : 'OFF'}</span>
-                </button>
-                <div class="fbk-toggle-copy">
-                  <span id="fbk-toggle-label" class="fbk-toggle-label-text">
-                    Send the product-health beacon
-                  </span>
-                  <p id="fbk-toggle-help" class="fbk-help">{toggleHelp()}</p>
-                </div>
-              </div>
-
-              <Show when={state() !== 'disabled'}>
-                <div class="fbk-status-line">
-                  <span>Last sent: {LAST_SENT_AT}</span>
-                  <span>Next: {NEXT_SEND_ETA}</span>
-                  <span class={`fbk-status-word fbk-status-word--${state() === 'enabled-healthy' ? 'ok' : 'fail'}`}>
-                    Status: {state() === 'enabled-healthy' ? 'delivered' : 'failed'}
-                  </span>
-                </div>
-              </Show>
-
-              <Show when={state() === 'enabled-degraded'}>
-                <div class="fbk-banner" role="status">
-                  <span class="fbk-banner-dot" aria-hidden="true" />
-                  <span class="fbk-banner-text">
-                    Beacon on, but the last send failed — endpoint unreachable / offline. Enforcing your
-                    last choice; will retry. Export instead ⤓.
-                  </span>
-                </div>
-              </Show>
-
-              <div class="adm-divider" />
-
-              <div class="adm-section-head">NEVER SENT</div>
-              <p class="fbk-deny-line">
-                Never included: IPs, hostnames, flows, detections, IOCs, rules, files, users, or any
-                customer data. There is no free-text field.
-              </p>
-              <ul class="fbk-deny-list">
-                <For each={DENY_LIST}>{(item) => <li>{item}</li>}</For>
-              </ul>
-
-              <div class="adm-divider" />
-
-              <button class="hp-btn-primary fbk-export-btn" type="button" onClick={exportDiagnostics}>
-                Export diagnostics file ⤓
-              </button>
-              <p class="fbk-export-help">
-                Download this exact beacon.json to attach to a GitHub issue. Works with no connectivity.
-              </p>
-              <Show when={lastExportAt() !== null}>
-                <p class="fbk-export-meta">Last export: {lastExportAt()}</p>
-              </Show>
-
-              <Show when={consentOn()}>
-                <button
-                  type="button"
-                  class="fbk-demo-link"
-                  onClick={() => setDegraded((v) => !v)}
-                >
-                  (demo) simulate {degradedDemo() ? 'recovery' : 'a failed send'}
-                </button>
-              </Show>
-
-            </Panel>
-
-            {/* ── Live payload preview — the trust move ─────────────────────── */}
-            <Panel ctx="payload" title={payloadTitle()} span="span 7">
-              <div class="fbk-allowlist-caption">{allowlistCaption()}</div>
-              <pre class="fbk-payload inv-tech"><span class="hp-prompt">$</span> cat beacon.json
-{payloadText()}</pre>
-              <p class="fbk-beaconid-note">
-                Beacon ID is a salted one-way hash — it cannot be reversed to your device or serial.
-              </p>
-              <Show when={state() === 'enabled-healthy'}>
-                <p class="fbk-sent-confirm">This is exactly what was sent.</p>
-              </Show>
-            </Panel>
-
-            {/* ── Cloud-linked: separate, already-consented tenant offload ──── */}
-            <Show when={MODE === 'cloud-linked'}>
-              <Panel ctx="tenant-offload" title="TENANT EVIDENCE OFFLOAD · ADR 0009" span="span 12">
-                <div class="fbk-tenant-row">
-                  <div class="fbk-tenant-body">
-                    <div class="fbk-tenant-line">Managed by your MSSP tenant policy.</div>
-                    <div class="fbk-tenant-line">
-                      Status: <span class="fbk-tenant-status">{TENANT_OFFLOAD.status}</span>
-                      {' · endpoint: '}
-                      <span class="fbk-mono">{TENANT_OFFLOAD.endpoint}</span>
-                    </div>
-                    <div class="fbk-tenant-line">
-                      Consented at enrollment on {TENANT_OFFLOAD.consentedAt} by {TENANT_OFFLOAD.consentedBy}.
-                      {' '}
-                      <a class="adm-link" href="/admin/identity">View terms →</a>
-                    </div>
-                    <div class="fbk-tenant-note">
-                      This is a separate channel from the beacon above and is governed by your tenant
-                      agreement, not this toggle. To change it, see Administration → Enrollment &amp; mode.
-                    </div>
-                  </div>
-                  <span class="fbk-consented-pill">consented ✓</span>
-                </div>
-              </Panel>
-            </Show>
-
-          </div>
-        </Show>
-      </main>
-
+          <Show when={(uploadView()?.types.length ?? 0) > 0}>
+            <For each={uploadView()!.types}>{(t) => <span class="prow"><span>{PACK_LABEL[t.type] ?? t.type}</span><span>gen {t.generation} · {t.source}</span></span>}</For>
+          </Show>
+          <details>
+            <summary class="l0-card-sub" style={{ cursor: 'pointer', 'min-height': '32px' }}>Show the exact file</summary>
+            <pre class="pro-pre" aria-label="Diagnostics preview" style={{ margin: 0, 'white-space': 'pre-wrap', 'font-size': '12px' }}>{json(diagnostics())}</pre>
+          </details>
+        </div>
+      </div>
     </AppShell>
   );
 };
