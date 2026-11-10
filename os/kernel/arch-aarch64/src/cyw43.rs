@@ -2906,6 +2906,18 @@ pub fn ap_chanspec(channel: u32) -> u16 {
     (channel as u16 & 0xff) | 0x1000 | 0xc000
 }
 
+/// The PRIMARY (control) channel and the width (MHz) of a d11ac chanspec (inverse of `ap_chanspec`): for
+/// 40 / 80 MHz the chanspec carries the CENTRE channel and the control sideband.
+pub fn chanspec_primary(cs: u16) -> (u8, u16) {
+    let centre = (cs & 0xff) as u8;
+    let sb = ((cs >> 8) & 0x7) as u8;
+    match cs & 0x3800 {
+        0x2000 => (centre.wrapping_sub(6).wrapping_add(4 * (sb & 3)), 80),
+        0x1800 => (centre.wrapping_sub(2).wrapping_add(4 * (sb & 1)), 40),
+        _ => (centre, 20),
+    }
+}
+
 /// M-AP0: put the firmware into AP mode on `channel` with `ssid`, then start beaconing.
 /// `open` = no security (M-AP0/M-AP1); WPA2 authenticator (M-AP2) pins the RSN IE + keys.
 /// A valid unicast MAC must already be set (a prior scan/`wifi_scan` establishes cur_etheraddr).
