@@ -103,6 +103,31 @@ pub fn prev_reset_was_watchdog() -> bool {
     PREV_WDOG_RESET.load(Relaxed)
 }
 
+static mut CRASH: arch_aarch64::crashrec::Crash =
+    arch_aarch64::crashrec::Crash { kind: 0, esr: 0, elr: 0, far: 0, len: 0, msg: [0; arch_aarch64::crashrec::MSG] };
+static CRASH_SET: AtomicBool = AtomicBool::new(false);
+
+/// Phase 3 crash record: take what the previous boot's panic / fatal-fault path left (once, early at boot)
+/// and print it. Returns whether there was one.
+pub fn take_crash_at_boot() -> bool {
+    match arch_aarch64::crashrec::take() {
+        Some(c) => {
+            arch_aarch64::_print(format_args!(
+                " [CRASH] the previous boot ended in a {}: {} (esr={:#x} elr={:#x} far={:#x}) — recovered by a reset\n",
+                c.kind_name(), c.text(), c.esr, c.elr, c.far));
+            unsafe { *core::ptr::addr_of_mut!(CRASH) = c };
+            CRASH_SET.store(true, Relaxed);
+            true
+        }
+        None => false,
+    }
+}
+
+/// The previous boot's crash record, if it ended in a panic or a kernel fault.
+pub fn last_crash() -> Option<&'static arch_aarch64::crashrec::Crash> {
+    CRASH_SET.load(Relaxed).then(|| unsafe { &*core::ptr::addr_of!(CRASH) })
+}
+
 /// (armed, hypercall pets, worst gap between loop calls in ms, previous reset was a watchdog reset)
 pub fn stats(freq: u64) -> (bool, u64, u64, bool) {
     let f = freq.max(1);

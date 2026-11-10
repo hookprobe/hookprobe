@@ -115,6 +115,7 @@ Ppolsig
 Ppppoe
 Pr1ipc
 Prtwdog
+Pcrashrec
 Prulepack
 Pshield
 Pshieldlevels

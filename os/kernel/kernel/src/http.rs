@@ -582,6 +582,14 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             // Phase 3b: how the previous run ended — a watchdog-type reset means the unit recovered from a hang or
             // a crash (power-on = a normal power cycle / first boot). Last, so existing field order is unchanged.
             let _ = write!(w, ",\"last_reset\":\"{}\"", if crate::rtwdog::prev_reset_was_watchdog() { "watchdog (recovered from a hang or crash)" } else { "power-on" });
+            // Phase 3 crash record: why (the panic message / fault registers), when the previous boot crashed.
+            match crate::rtwdog::last_crash() {
+                Some(c) => {
+                    let _ = write!(w, ",\"last_crash\":{{\"kind\":\"{}\",\"message\":\"{}\",\"esr\":\"{:#x}\",\"elr\":\"{:#x}\",\"far\":\"{:#x}\"}}",
+                        c.kind_name(), c.text(), c.esr, c.elr, c.far);
+                }
+                None => w.raw(",\"last_crash\":null"),
+            }
             w.raw("}");
         }),
         // Audit A8: the "Get Online" pillar's read side — what the device applied, and from which source.

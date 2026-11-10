@@ -564,6 +564,9 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // survived MMU-on — the peripheral mapping is correct.
     kprint!(" mmu : enabled={} (39-bit VA, 1GiB blocks; RAM=Normal, periph=Device)\n",
         arch_aarch64::mmu_cm5::enabled());
+    // Phase 3 crash record: report (and clear) why the previous boot ended, if it panicked or faulted.
+    #[cfg(feature = "cm5")]
+    let _ = rtwdog::take_crash_at_boot();
     // VA!=PA proof: read the same physical word through the aliased high VA.
     let via_alias = unsafe { read_volatile((phys_probe as usize + sample_pa) as *const u64) };
     kprint!(" mmu : VA {:#x} -> PA {:#x} readback {} (VA!=PA: {})\n",
@@ -3783,8 +3786,14 @@ fn cm5_p10_probe() {
                         // Production phase 3a: from here on a loop that stops returning resets the SoC.
                         let wd = rtwdog::start(now());
                         kprint!(" [WDOG] runtime watchdog {} ({} s, petted from the AP loop)\n", if wd { "ARMED" } else { "not available (no HBoot hvc #3)" }, rtwdog::PET_SECS);
+                        #[cfg(feature = "crashtest")]
+                        let crash_at = now() + 120 * freq;
                         loop {
                             rtwdog::pet(now(), freq);
+                            #[cfg(feature = "crashtest")]
+                            if now() > crash_at && rtwdog::last_crash().is_none() { // once: the boot that reports it runs on
+                                panic!("crashtest: deliberate panic 120 s into the AP loop (bench build)");
+                            }
                             #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                             {
                                 if upload::take_trial_reboot() {
@@ -6874,6 +6883,9 @@ pub extern "C" fn kmain() -> ! {
         let _ = devbase::selftest();
         #[cfg(feature = "netsvc")]
         let _ = actions::rate_selftest();
+        let cr = arch_aarch64::crashrec::selftest();
+        kprint!(" [P-crashrec] {} — crash record (phase 3): the panic / fatal-fault path writes the reason into a reserved, cache-cleaned page; the next boot takes it once (a second take is empty), a flipped byte or a bare magic never reads as a crash, the message is made JSON-safe\n",
+            if cr { "PASS" } else { "FAIL" });
         let w = rtwdog::selftest();
         kprint!(" [P-rtwdog] {} — runtime watchdog (production phase 3a): armed only when HBoot advertises hvc #3 (an older HBoot, no EL2 gate or no handoff never arms), worst loop gap tracked for the heartbeat\n",
             if w { "PASS" } else { "FAIL" });
@@ -8165,6 +8177,20 @@ fn p8_l2struct() -> bool {
     ok &= bc_up_drop;
     kprint!("   broadcast-storm non-exempt on UPLINK -> RateLimit DROP fired: {} (A3 fix: bcast flood shed on ANY port) [{}]\n",
         bc_up_drop, if bc_up_drop { "ok" } else { "BUG" });
+
+    // --- a household, not a storm: 40 devices x 5 ordinary broadcasts (200 in the window, 4x the per-source
+    // threshold in aggregate) must NEVER fire or drop — the storm counter is per source (metal 2026-11-10).
+    let mut hh_bad = false;
+    for d in 0..40u8 {
+        let mut f = bc;
+        f[6..12].copy_from_slice(&[0x02, 0x66, 0x00, 0x00, 0x01, d]);
+        for _ in 0..5 {
+            hh_bad |= rules::l2_stateful_verdict(&f, 0, 3, PortRole::Uplink).is_some();
+        }
+    }
+    ok &= !hh_bad;
+    kprint!("   broadcast-storm: 40 devices x 5 broadcasts (aggregate 200) -> fired/dropped: {} (per-source counter) [{}]\n",
+        hh_bad, if hh_bad { "BUG" } else { "ok" });
 
     // --- broadcast-storm EXEMPT: an mDNS burst (01:00:5e:00:00:fb) must NEVER fire or drop.
     let mut md = [0u8; 64];
