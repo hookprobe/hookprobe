@@ -25,7 +25,17 @@ from cryptography.hazmat.primitives import serialization as ser
 
 
 def load(path):
-    return ser.load_pem_private_key(open(path, "rb").read(), password=None)
+    """Plain PKCS#8 PEM, or an encrypted one ("BEGIN ENCRYPTED PRIVATE KEY" — Mission Control's
+    passphrase-wrapped backup): the passphrase comes from HQ_KEY_PASSPHRASE or an interactive prompt."""
+    data = open(path, "rb").read()
+    password = None
+    if b"ENCRYPTED PRIVATE KEY" in data:
+        pw = os.environ.get("HQ_KEY_PASSPHRASE")
+        if pw is None:
+            import getpass
+            pw = getpass.getpass(f"passphrase for {path}: ")
+        password = pw.encode()
+    return ser.load_pem_private_key(data, password=password)
 
 
 def pubhex(k):

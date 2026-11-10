@@ -100,19 +100,22 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
+  const [staged, setStaged] = createSignal(true);
   const upload = async () => {
     const s = signed(); if (!s) return;
     setMsg('');
     try {
       const container = new File([new Uint8Array(s.sig), new Uint8Array(s.txt)], `${FILE[sec()].type}.pack`);
-      const m = await uploadPack(FILE[sec()].type, container, () => window.prompt('This changes how the device connects. Enter your owner key:', ''), () => undefined);
-      setMsg(`${m} The new settings apply at the next reboot; the previous generation is kept for rollback.`);
+      const r = await uploadPack(FILE[sec()].type, container, () => window.prompt('This changes how the device connects. Enter your owner key:', ''), () => undefined);
+      setStaged(r.staged);
+      setMsg(`${r.text} The previous generation is kept: Administration → Signed packs can roll back to it.`);
       setStep('done');
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      // "type" = this kernel does not accept this file over the network yet (ADR 0058 D1 not served).
-      setMsg(/: type$/.test(m) ? `The device answered that it doesn't accept ${FILE[sec()].name} over the network yet.` : m);
-      setStep('card');
+      // "type" = this kernel does not accept this file over the network yet (ADR 0058 D1 not served):
+      // only then is the boot card the way. Any other refusal (signature, generation…) is the answer.
+      if (/: type$/.test(m)) { setMsg(`The device answered that it doesn't accept ${FILE[sec()].name} over the network yet.`); setStep('card'); }
+      else setMsg(m);
     }
   };
 
@@ -308,9 +311,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
         </Show>
 
         <Show when={step() === 'done'}>
-          <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged for the next reboot</p>
-          <p class="l0-card-sub">It takes effect when the device restarts. Restart now, or let it apply at the next restart.</p>
-          <RestartButton primary />
+          <Show when={staged()} fallback={<p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Applied</p>}>
+            <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged: takes effect at the next restart</p>
+            <p class="l0-card-sub">Restart now, or let it apply at the next restart.</p>
+            <RestartButton primary />
+          </Show>
         </Show>
 
         <Show when={step() === 'card' && signed()}>
