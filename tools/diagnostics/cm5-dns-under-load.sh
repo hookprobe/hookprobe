@@ -4,7 +4,8 @@
 #   1. the bench Pi starts a continuous download from the local WAN-side sink (HQ_SINK_URL) on its AP interface;
 #   2. 40 queries to the AP's DNS (10.99.0.1), one a second, each up to 10 s, unique names (no cache hits) mixed
 #      with a cached one; the answer time of each is recorded;
-#   3. acceptance: 0 lost and p90 < 500 ms. Also printed: the same 40 queries to 1.1.1.1 through the same AP
+#   3. acceptance (operator decision 2026-11-10): no worse than the path baseline — the same queries to a public
+#      resolver through the same AP, same load, same run (lost <= baseline lost) — AND p90 < 500 ms. Also printed: the same 40 queries to 1.1.1.1 through the same AP
 #      (the path baseline) and the device's prio counters from the serial heartbeat.
 #   tools/diagnostics/cm5-dns-under-load.sh <serial-log> [pi]
 set -u -o pipefail
@@ -27,5 +28,5 @@ pi "pkill -f 'curl --interface $IF -s -o /dev/null -m 30'" >/dev/null 2>&1 || tr
 echo "  heqk DNS (10.99.0.1) under load: lost $lost/40, p90 ${p90} ms, max ${max} ms"
 echo "  path baseline (1.1.1.1 via the AP): lost $blost/40, p90 ${bp90} ms, max ${bmax} ms"
 tail -c 300000 "$LOG" | tr -d '\r\000' | grep -a "P11-AP3 beat" | tail -1 | grep -o "prio direct=[0-9]* queued=[0-9]* dropped=[0-9]*" | sed 's/^/  /'
-if [ "$lost" -eq 0 ] && [ "$p90" -lt 500 ]; then echo "DNS-UNDER-LOAD: PASS (0 lost, p90 ${p90} ms < 500)"; exit 0; fi
-echo "DNS-UNDER-LOAD: FAIL (lost $lost, p90 ${p90} ms; need 0 and < 500)"; exit 1
+if [ "$lost" -le "$blost" ] && [ "$p90" -lt 500 ]; then echo "DNS-UNDER-LOAD: PASS (lost $lost <= baseline $blost, p90 ${p90} ms < 500)"; exit 0; fi
+echo "DNS-UNDER-LOAD: FAIL (lost $lost vs baseline $blost, p90 ${p90} ms; need lost <= baseline and p90 < 500)"; exit 1

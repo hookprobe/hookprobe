@@ -44,6 +44,10 @@ pub enum Kind {
     /// Owner alert webhook (operator 2026-11-10): target = alerthook::Hook::encode (ip|port|fmt|min_sev|key),
     /// reason = the request path / topic. OP_SET installs, OP_REMOVE turns it off. Never a rule.
     AlertHook = 7,
+    /// Factory reset (owner, re-authenticated, confirm=ERASE): never a rule. Replaying one sets
+    /// `factory_reset_requested`; the next boot wipes the owner data (evidence ring, artifact manifest, sealed
+    /// snapshot) and LAST this journal — so a power cut mid-wipe leaves the request in place and the wipe re-runs.
+    FactoryReset = 8,
 }
 
 impl Kind {
@@ -56,6 +60,7 @@ impl Kind {
             5 => Some(Kind::Artifact),
             6 => Some(Kind::OwnerKey),
             7 => Some(Kind::AlertHook),
+            8 => Some(Kind::FactoryReset),
             _ => None,
         }
     }
@@ -68,6 +73,7 @@ impl Kind {
             Kind::Artifact => "artifact",
             Kind::OwnerKey => "owner_key",
             Kind::AlertHook => "alert_hook",
+            Kind::FactoryReset => "factory_reset",
         }
     }
 }
@@ -205,7 +211,19 @@ pub fn owner_rotation() -> Option<[u8; TARGET_MAX]> {
 /// The alert-hook record in force (kept so compaction can carry it).
 static mut HOOK_REC: Option<Record> = None;
 
+/// A replayed `FactoryReset` record: the boot path wipes the owner data before serving anything.
+static mut RESET_REQ: bool = false;
+pub fn factory_reset_requested() -> bool {
+    unsafe { RESET_REQ }
+}
+
 fn apply(r: &Record) -> Result<(), JErr> {
+    if r.kind == Kind::FactoryReset as u8 {
+        if r.op == OP_SET {
+            unsafe { RESET_REQ = true };
+        }
+        return Ok(());
+    }
     if r.kind == Kind::AlertHook as u8 {
         let rl = (r.rlen as usize).min(REASON_MAX);
         let h = if r.op == OP_SET { crate::alerthook::Hook::decode(&r.target[..r.tlen as usize], &r.reason[..rl]) } else { None };
@@ -325,10 +343,9 @@ impl Journal {
             NRULES = 0;
             ART_LEN = 0;
             *core::ptr::addr_of_mut!(OWNER_ROT) = None;
-        *core::ptr::addr_of_mut!(HOOK_REC) = None;
-        crate::alerthook::set(None);
             *core::ptr::addr_of_mut!(HOOK_REC) = None;
             crate::alerthook::set(None);
+            RESET_REQ = false;
         }
         self.last_mac = [0; 32];
         self.next_seq = 1;
@@ -464,10 +481,9 @@ impl Journal {
             NRULES = 0;
             ART_LEN = 0;
             *core::ptr::addr_of_mut!(OWNER_ROT) = None;
-        *core::ptr::addr_of_mut!(HOOK_REC) = None;
-        crate::alerthook::set(None);
             *core::ptr::addr_of_mut!(HOOK_REC) = None;
             crate::alerthook::set(None);
+            RESET_REQ = false;
         }
         for b in &recs[1..n] {
             let _ = apply(&Record::decode(b));
@@ -478,6 +494,31 @@ impl Journal {
         self.next_idx = n as u64;
         self.next_seq = base + (n as u64 - 1);
         Ok(())
+    }
+
+    /// Factory reset: zero the whole journal region — every record sector of both halves first (the replay
+    /// chain breaks at the first zeroed record, so an interrupted wipe already reads as an empty journal),
+    /// then the two epoch headers. RAM state is cleared; the next append starts epoch 1 again.
+    pub fn wipe<D: BlockDev + ?Sized>(&mut self, dev: &mut D) -> Result<u64, JErr> {
+        let z = [0u8; 512];
+        let mut n = 0u64;
+        for h in 0..2u8 {
+            for k in 1..self.half_sect() {
+                dev.write_block(self.half_lo(h) + k, &z).map_err(|_| JErr::Io)?;
+                n += 1;
+            }
+        }
+        for h in 0..2u8 {
+            dev.write_block(self.half_lo(h), &z).map_err(|_| JErr::Io)?;
+            n += 1;
+        }
+        clear();
+        self.last_mac = [0; 32];
+        self.next_seq = 1;
+        self.next_idx = 0;
+        self.epoch = 0;
+        self.half = 0;
+        Ok(n)
     }
 
     /// Append one record (seq + MAC are assigned here) and apply it. The device must be armed for the region.
@@ -576,6 +617,7 @@ pub fn clear() {
         *core::ptr::addr_of_mut!(OWNER_ROT) = None;
         *core::ptr::addr_of_mut!(HOOK_REC) = None;
         crate::alerthook::set(None);
+        RESET_REQ = false;
     }
 }
 
@@ -747,10 +789,29 @@ pub fn selftest() -> bool {
         clear();
         cleared && stays && after
     };
-    let pass = revoke_all && appended && replayed && rm && after_rm && keyed && tamper_ok && torn_ok && pinned_holds && unpinned_loosened && tightened && compacted && power_cut && full_ok;
+    // factory reset: the record replays as a request (and is never a rule); wipe zeroes the region, a replay of the
+    // wiped journal is empty (no request, no rule, nothing damaged) and the next append starts a fresh epoch 1
+    let factory = {
+        let mut d = MemDisk::new();
+        let mut j = Journal::new(0, 8, &srk);
+        let _ = j.append(&mut d, rec(Kind::ShieldBlock, OP_SET, b"games.example", 1, b"homework"));
+        let asked = j.append(&mut d, rec(Kind::FactoryReset, OP_SET, b"erase", 0, b"selling the box")).is_ok() && factory_reset_requested() && rule_count() == 1;
+        clear();
+        let mut j2 = Journal::new(0, 8, &srk);
+        let r = j2.replay(&d);
+        let replays = r.records == 2 && factory_reset_requested() && rule_count() == 1;
+        let wiped = j2.wipe(&mut d).map_or(false, |n| n == 8) && d.s.iter().all(|x| x.iter().all(|b| *b == 0)) && !factory_reset_requested() && rule_count() == 0;
+        let mut j3 = Journal::new(0, 8, &srk);
+        let r3 = j3.replay(&d);
+        let empty = r3.records == 0 && !r3.damaged && !factory_reset_requested() && j3.epoch() == 0;
+        let fresh = j3.append(&mut d, rec(Kind::ShieldAllow, OP_SET, b"school.example", 1, b"new owner")).is_ok() && j3.epoch() == 1 && rule_count() == 1;
+        clear();
+        asked && replays && wiped && empty && fresh
+    };
+    let pass = factory && revoke_all && appended && replayed && rm && after_rm && keyed && tamper_ok && torn_ok && pinned_holds && unpinned_loosened && tightened && compacted && power_cut && full_ok;
     arch_aarch64::_print(format_args!(
-        " [P-ownerjournal] {} — ADR 0055 owner policy journal (stage A + B compaction): append + apply={} replay reproduces the rules (deterministic reconcile)={} removal is a record={} another device key reads nothing={} tampering stops replay at the bad record={} torn tail -> verified prefix={} | precedence: a pinned signed line holds={} an unpinned one is loosened={} an owner rule tightens={} | compaction: 40 changes through a 7-record half, {} epochs, live rules kept, replay identical={} power cut mid-compaction -> the old epoch boots intact={} full only when the live state no longer fits ({} rules)={} | revoke-all record survives a replay (no owner rule after reboot, new rules accepted again)={}\n",
-        if pass { "PASS" } else { "FAIL" }, appended, replayed, rm && after_rm, keyed, tamper_ok, torn_ok, pinned_holds, unpinned_loosened, tightened, epochs, compacted, power_cut, ok_n, full_ok, revoke_all
+        " [P-ownerjournal] {} — ADR 0055 owner policy journal (stage A + B compaction): append + apply={} replay reproduces the rules (deterministic reconcile)={} removal is a record={} another device key reads nothing={} tampering stops replay at the bad record={} torn tail -> verified prefix={} | precedence: a pinned signed line holds={} an unpinned one is loosened={} an owner rule tightens={} | compaction: 40 changes through a 7-record half, {} epochs, live rules kept, replay identical={} power cut mid-compaction -> the old epoch boots intact={} full only when the live state no longer fits ({} rules)={} | revoke-all record survives a replay (no owner rule after reboot, new rules accepted again)={} | factory reset: request replays, wipe zeroes the region, the wiped journal is empty and starts a fresh epoch={}\n",
+        if pass { "PASS" } else { "FAIL" }, appended, replayed, rm && after_rm, keyed, tamper_ok, torn_ok, pinned_holds, unpinned_loosened, tightened, epochs, compacted, power_cut, ok_n, full_ok, revoke_all, factory
     ));
     pass
 }
