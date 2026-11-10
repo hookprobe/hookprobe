@@ -14107,7 +14107,7 @@ fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::
     if p1 == 0 {
         return None;
     }
-    let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
+    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
     dev.read_block(lba, &mut sec).ok()?;
     Some(hal::parse_wan_link(&sec))
 }
@@ -14138,7 +14138,7 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
     if p1 == 0 {
         return None;
     }
-    let (lba, n) = fat::locate_contiguous(dev, p1, POLICY_8_3)?;
+    let (lba, n) = crate::artstore::locate(dev, p1, POLICY_8_3)?;
     let mut buf = [0u8; hal::policy::POLICY_FILE_LEN];
     for k in 0..(n as usize).min(hal::policy::POLICY_FILE_LEN / 512) {
         dev.read_block(lba + k as u64, &mut sec).ok()?;
@@ -14148,7 +14148,7 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
     // byte; any failure is reported as a rejected policy (=> the management lockdown below), never applied.
     if let Some(key) = policysig::key() {
         let mut sig = [0u8; policysig::SIG_FILE_LEN];
-        let have = fat::locate_contiguous(dev, p1, policysig::SIG_8_3)
+        let have = crate::artstore::locate(dev, p1, policysig::SIG_8_3)
             .and_then(|(l, _)| dev.read_block(l, &mut sig).ok())
             .is_some();
         let r = if have { policysig::verify(&buf, &sig, &key, policysig::floor()) } else { Err(policysig::SigErr::Missing) };
@@ -14163,6 +14163,13 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
                 }
             }
             Err(e) => {
+                // ADR 0058: a staged store copy the verifier refuses (tampered / below the floor) is disabled for
+                // this boot and the boot-partition POLICY.TXT is loaded instead
+                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Policy) {
+                    crate::artstore::disable(crate::artstore::Ty::Policy);
+                    kprint!(" [POLICY] the staged (uploaded) POLICY was REFUSED ({:?}) — falling back to the boot partition copy\n", e);
+                    return load_policy(dev);
+                }
                 unsafe { POLICY_STATE = (3, 0) };
                 kprint!(" [POLICY] signature REFUSED ({:?}) — the policy is not parsed\n", e);
                 return Some(Err(hal::policy::PolicyErr::Unsigned));
@@ -14185,16 +14192,30 @@ fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr
     let r = (|| {
         dev.read_block(0, &mut sec).ok()?;
         let p1 = store::parse_mbr(&sec)[0].start;
-        let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
-        let (slba, _sn) = fat::locate_contiguous(dev, p1, policysig::WAN_SIG_8_3)?;
+        let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
+        let (slba, _sn) = crate::artstore::locate(dev, p1, policysig::WAN_SIG_8_3)?;
         dev.read_block(lba, &mut sec).ok()?;
         dev.read_block(slba, &mut sig).ok()?;
         Some(())
     })();
-    Some(match r {
+    let v = match r {
         None => Err(policysig::SigErr::Missing),
         Some(()) => policysig::verify_wan(&sec, &sig, &key),
-    })
+    };
+    // ADR 0058: a refused staged WAN copy falls back to the boot partition's WAN.TXT for this boot
+    if v.is_err() {
+        let p1 = (|| {
+            dev.read_block(0, &mut sec).ok()?;
+            Some(store::parse_mbr(&sec)[0].start)
+        })()
+        .unwrap_or(0);
+        if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wan) {
+            crate::artstore::disable(crate::artstore::Ty::Wan);
+            kprint!(" [WAN] the staged (uploaded) WAN.TXT was REFUSED — falling back to the boot partition copy\n");
+            return wan_signed(dev);
+        }
+    }
+    Some(v)
 }
 
 /// Read + parse WAN.TXT from a block device's first partition. None = no file (=> DHCP).
@@ -14206,7 +14227,7 @@ fn load_wan_cfg<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanMode, hal::W
     if p1 == 0 {
         return None;
     }
-    let (lba, _n) = fat::locate_contiguous(dev, p1, WAN_8_3)?;
+    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
     dev.read_block(lba, &mut sec).ok()?;
     Some(hal::parse_wan_cfg(&sec))
 }
