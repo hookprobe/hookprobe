@@ -375,6 +375,16 @@ fn wan_lcp(data: &[u8]) -> Option<hal::pppwire::LcpReq> {
     Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_lcp(&o) } else { hal::pppwire::LcpReq { malformed: true, ..hal::pppwire::LCP0 } })
 }
 
+#[cfg(feature = "mctls")]
+fn wan_ipcp(code: u8, data: &[u8]) -> Option<hal::pppwire::IpcpFacts> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::ipcp_facts(code, data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::IPCP_LEN }>(hal::lansvcabi::CMD_WAN_IPCP, &[code], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_ipcp(&o) } else { hal::pppwire::IpcpFacts { malformed: true, ..hal::pppwire::IPCP0 } })
+}
+
 /// Route the DHCP server's parse (step 2b) and the WAN control parsers (step 3) through `el0-lansvc` (called once
 /// at boot, before any client is served or the uplink comes up).
 pub fn install_dhcp() {
@@ -386,6 +396,7 @@ pub fn install_dhcp() {
         arch_aarch64::wanparse::EL0_DHCP6 = Some(wan_dhcp6);
         arch_aarch64::wanparse::EL0_PPPOE_DISC = Some(wan_pppoe_disc);
         arch_aarch64::wanparse::EL0_LCP = Some(wan_lcp);
+        arch_aarch64::wanparse::EL0_IPCP = Some(wan_ipcp);
     };
 }
 
@@ -536,12 +547,19 @@ pub fn selftest() -> bool {
     let lcp_in: &[u8] = &[1, 4, 0x05, 0xd4, 3, 4, 0xc0, 0x23, 0x0d, 3, 6];
     let (lk, le) = (hal::pppwire::lcp_classify(lcp_in), wanparse::lcp_req(lcp_in));
     let lcp = lk == le && le.auth == 0xc023 && le.nrej == 3 && le.rej[..3] == [0x0d, 3, 6] && wanparse::lcp_req(&[3, 1]).malformed;
-    let pppoe = pppoe && lcp;
+    // 3b-iii: an IPCP Configure-Nak (our address, DNS 1 + 2) and a Request with VJ compression (rejected) classify
+    // identically
+    let nak_in: &[u8] = &[3, 6, 10, 67, 0, 10, 129, 6, 1, 1, 1, 1, 131, 6, 9, 9, 9, 9];
+    let req_in: &[u8] = &[2, 6, 0, 0x2d, 0x0f, 1, 3, 6, 10, 67, 0, 1];
+    let ipcp = hal::pppwire::ipcp_facts(3, nak_in) == wanparse::ipcp(3, nak_in) && wanparse::ipcp(3, nak_in).dns2 == Some([9, 9, 9, 9])
+        && hal::pppwire::ipcp_facts(1, req_in) == wanparse::ipcp(1, req_in) && wanparse::ipcp(1, req_in).nrej == 6
+        && wanparse::ipcp(1, req_in).peer == Some([10, 67, 0, 1]);
+    let pppoe = pppoe && lcp && ipcp;
     let wan_ok = same_offer && other_xid && same_ra && junk && pppoe;
     let (_, c_after, _, _, _) = stats();
     let pass = where_ == "el0" && same_q && same_w && bad && recovered && same_d && bad_d && wan_ok && c_after > 0;
     arch_aarch64::_print(format_args!(
-        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request classification identical={}\n",
+        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak classification identical={}\n",
         if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe
     ));
     pass
