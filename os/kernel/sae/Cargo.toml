@@ -5,7 +5,9 @@ edition = "2021"
 publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 [dependencies]
-p256 = { version = "0.13.2", default-features = false, features = ["arithmetic", "expose-field"] }
+# p256 0.14 (crypto-bigint 0.7: RUSTSEC-2026-0387). The field type is no longer re-exported by p256; it is named
+# through elliptic_curve::FieldArithmetic, with arithmetic via the ff traits.
+p256 = { version = "0.14", default-features = false, features = ["arithmetic"] }
 sha2 = { version = "0.10.9", default-features = false }
 subtle = { version = "2.6", default-features = false }
 

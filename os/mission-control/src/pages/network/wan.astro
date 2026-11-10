@@ -1,0 +1,18 @@
+---
+/**
+ * /network/wan — Get Online (Layer 0 pillar): internet line(s), Wi-Fi, guest network, and an
+ * Advanced view of only what the device reports. The day-0 wizard stays at /setup.
+ *
+ * Spec: docs/architecture/MissionControl.md §6b · docs/design/mission-control-ui-requirements.md
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import GetOnlineApp from '../../components/GetOnlineApp';
+---
+
+<Shell
+  title="Get Online — HookProbe OS"
+  description="Your internet connection and Wi-Fi: what the device applied, and what this hardware can do."
+>
+  <GetOnlineApp client:load />
+</Shell>

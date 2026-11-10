@@ -47,7 +47,7 @@ function applyQsecbitHistory(history: QsecbitScoreRow[]): void {
   }
   const chrono = [...history].reverse().map((r) => resiliencePct(r.score));
   // A 1-point sparkline renders as a dot, not a line — pad so `heartbeat`'s consumers (which all
-  // assume >=2 points, e.g. OrganismOrb's polyline) never receive a degenerate array.
+  // assume >=2 points, e.g. Home's heartbeat polyline) never receive a degenerate array.
   setHeartbeat(chrono.length >= 2 ? chrono.slice(-20) : [...chrono, ...chrono]);
   setQsecbit(resiliencePct(history[0].score));
 }
