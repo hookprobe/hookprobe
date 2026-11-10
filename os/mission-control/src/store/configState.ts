@@ -12,7 +12,7 @@ import { post } from './actions';
 
 export interface ConfigView {
   state: 'none' | 'trial' | 'committed' | 'reverted' | 'refused' | string;
-  generation: number; floor: number; on_trial: number | null; window_s: number; elapsed_s: number;
+  generation: number; floor: number; on_trial: boolean; window_s: number; elapsed_s: number;
   auto_rollback: boolean; health: string;
   /** Management-plane change: not auto-committed — the owner must Keep it within the window or it reverts. */
   needs_confirm?: boolean;
