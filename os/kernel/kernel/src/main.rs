@@ -4119,7 +4119,33 @@ fn cm5_p10_probe() {
                                     // Plug-and-play WAN: the boot-time bringup is not the only chance. If the
                                     // uplink isn't usable and end0 now has a link, retry the lease every 10 s —
                                     // a cable plugged after boot (metal 2026-10-09) must not need a power-cycle.
-                                    if !up.usable() {
+                                    if !up.usable() && matches!(wan_mode, hal::WanMode::Dhcp) && up.mac != [0; 6] {
+                                        // Phase 3: DHCP acquired IN the loop (DISCOVER / REQUEST / gateway ARP sent here,
+                                        // replies consumed by wan_poll) — an ISP outage no longer stalls the LAN 5 s in 10.
+                                        let t = now();
+                                        if arch_aarch64::gem::phy_link_up(0) {
+                                            if t.wrapping_sub(last_wan_try) > 10 * freq {
+                                                last_wan_try = t;
+                                                wan_retries += 1;
+                                                if let Some((gig, changed)) = arch_aarch64::gem::sync_speed() {
+                                                    if changed {
+                                                        kprint!(" [WAN] link up after boot: MAC re-synced to {} (retry {})\n", if gig { "1 Gb/s" } else { "100 Mb/s" }, wan_retries);
+                                                    }
+                                                }
+                                                let (d, o, a, nk) = unsafe { uplink::DORA_STATS };
+                                                if wan_retries <= 3 || wan_retries % 30 == 0 {
+                                                    kprint!(" [WAN] no lease yet — in-loop DHCP: discovers={} offers={} acks={} naks={}\n", d, o, a, nk);
+                                                }
+                                            }
+                                            if uplink::wan_dora_tick(&mut up) {
+                                                kprint!(" [M-NAT0] WAN came up (in-loop DHCP, no LAN stall): leased {}.{}.{}.{} gw {}.{}.{}.{} dns {}.{}.{}.{}\n",
+                                                    up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3],
+                                                    up.dhcp.router[0], up.dhcp.router[1], up.dhcp.router[2], up.dhcp.router[3],
+                                                    up.dhcp.dns[0], up.dhcp.dns[1], up.dhcp.dns[2], up.dhcp.dns[3]);
+                                                wan_leased_at = now();
+                                            }
+                                        }
+                                    } else if !up.usable() {
                                         let t = now();
                                         if t.wrapping_sub(last_wan_try) > 10 * freq && arch_aarch64::gem::phy_link_up(0) {
                                             last_wan_try = t;
@@ -4163,6 +4189,13 @@ fn cm5_p10_probe() {
                                                 5 => {
                                                     wan_leased_at = t;
                                                     wan_renewals += 1;
+                                                }
+                                                r if (r == 6 || age > lease / 8 * 7) && matches!(wan_mode, hal::WanMode::Dhcp) && up.mac != [0; 6] => {
+                                                    // the lease is gone: re-acquire IN the loop (no blocking bring-up)
+                                                    kprint!(" [WAN] lease {} — re-acquiring in the loop\n", if r == 6 { "NAKed" } else { "past T2 without a renewal" });
+                                                    up.dhcp.ack_rx = false;
+                                                    up.arp_reply = false;
+                                                    wan_leased_at = t;
                                                 }
                                                 r if r == 6 || age > lease / 8 * 7 => {
                                                     rtwdog::pet(now(), freq);
