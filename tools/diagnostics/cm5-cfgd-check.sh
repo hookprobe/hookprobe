@@ -68,4 +68,20 @@ for _ in $(seq 1 90); do since | grep -a "trial NOT healthy within" >/dev/null &
 since | grep -a "\[CFGD\] trial NOT healthy within" >/dev/null; chk $? "B3 the trial reverted by itself after the window (no WAN)"
 up "$MC"; chk $? "B4 the device rebooted into the last-known-good: back on the management VLAN"
 since | grep -a "generation $G1 in force (committed)" >/dev/null; chk $? "B5 gen $G1 (last-known-good) in force again"
+# --- C: cleanup — roll the bundle back (no older verified half -> no bundle) so the per-file configuration applies
+python3 -I - "$MC" "$KEY" > "$T/c" <<'PY'
+import json, ssl, sys, urllib.parse, urllib.request, http.cookiejar
+mc, key = sys.argv[1], open(sys.argv[2]).read().strip()
+c = ssl.create_default_context(); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
+o = urllib.request.build_opener(urllib.request.HTTPSHandler(context=c), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+o.open(mc + "/api/login", urllib.parse.urlencode({"token": key}).encode(), timeout=10).read()
+s = json.loads(o.open(mc + "/api/session", timeout=10).read())
+rq = urllib.request.Request(mc + "/api/config/rollback", urllib.parse.urlencode({"reason": "cfgd check cleanup", "permanent": "true", "seq": s["next_seq"], "owner_key": key}).encode(), {"Origin": mc, "X-HQ-CSRF": s["csrf"]})
+try:
+    print(o.open(rq, timeout=10).read().decode())
+except urllib.error.HTTPError as e:
+    print(e.read().decode())
+PY
+mark=$(stat -c %s "$LOG"); $UP --reboot "cfgd cleanup" > /dev/null 2>&1; sleep 15; up "$MC"
+C=$(cfg "$MC"); grep -q '"state":"none"' <<<"$C"; chk $? "C1 cleanup: bundle rolled back, per-file configuration in force ($(cut -c1-80 "$T/c"))"
 [ "$ok" -eq "$n" ] && { echo "CFGD: PASS ($ok/$n)"; exit 0; } || { echo "CFGD: FAIL ($ok/$n)"; exit 1; }
