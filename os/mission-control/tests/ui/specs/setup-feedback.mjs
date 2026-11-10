@@ -32,7 +32,9 @@ export default async function (t) {
 
   ok(await vis(page.locator('text=Step 3 of 3 · Your key')), 'setup: step 3 creates the signing key');
   ok(await page.locator('button:has-text("Continue")').isDisabled(), 'setup: cannot continue without a key');
-  await page.click('text=Create a key in this browser'); await page.waitForTimeout(800);
+  await page.locator('label:has-text("Backup passphrase") input').fill('setup passphrase 1');
+  await page.locator('label:has-text("Repeat it") input').fill('setup passphrase 1');
+  await dl('Create key and download backup'); await page.waitForTimeout(500);
   await page.click('button:has-text("Continue")'); await page.waitForTimeout(200);
 
   ok(await vis(page.locator('.plan-diff-line--added', { hasText: 'wifi: "Popescu-Home"' })), 'setup: review shows the plan as a diff');
