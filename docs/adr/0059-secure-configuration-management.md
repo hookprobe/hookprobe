@@ -183,8 +183,22 @@ corrupt kernel state. Consequences:
 
 ## Rollout
 
-Phases 0 through 6 are in assessment §E. Security defects come first: Phase 0 (C1 through C4, H1, H2, M1) lands
-before any new feature.
+**MVP build order, confirmed by the operator on 2026-11-10:**
+1. Close the Phase 0 security defects (C1–C4, H1, H2, M1).
+2. Build HQCFG1 verification (assessment Phase 1).
+3. Build cfgd: stage, trial, commit and automatic revert (assessment Phase 2).
+4. Build the management ABI and the native `hsh` at EL0 (assessment Phase 5).
+
+Each step starts only after the previous one passes its gates.
+
+**Not ordered by the operator:** secrets at rest (Phase 3), delegation, revocation and the `mgmt_floor` move
+(Phase 4), and hardware anchoring (Phase 6). Their place in the schedule is not part of the confirmed order.
+**RPMB is already under a direct operator instruction to the heqk session:** build it, with the key write as a
+separate manufacturing operation. That instruction stands, and this ADR does not defer it. Where these phases and
+SEC-01 (ADR 0050 D4) sit relative to steps 2–4 is the operator's call. Until secrets at rest land, the MVP bundle carries the PPPoE password and PSK the
+way ADR 0058 does today, inside the signed region, and the UI keeps saying they are not protected at rest.
+
+Phase details are in assessment §E.
 
 Phase 6, the hardware anchoring work (SEC-3, RPMB, OTP), is made of manufacturing operations: Red-gated and never
 autonomous.
@@ -195,5 +209,8 @@ autonomous.
 2. WebAuthn verifier (ADR 0058 open item 1). It would let K_own live on a passkey or hardware security key.
 3. ML-DSA as a second configuration-signature algorithm (the envelope reserves `alg = 2`). Crypto agility per
    ADR 0002.
-4. Whether the zero-tail rule is enforced for every length-prefixed content pack, or only for configuration.
-   The heqk session is reviewing what each producer writes.
+4. ~~Zero-tail rule for length-prefixed packs.~~ **Not adopted (heqk session, 2026-11-10).** Verifying and
+   parsing one buffer already means nothing reads past the signed length. Store slots are not guaranteed to be
+   zero-filled after a shorter upload, so the rule could refuse legitimate files. HQCFG1 makes the question moot:
+   its envelope carries `total_len`, and nothing outside the signed length is ever parsed. D2 rule 2 therefore
+   reads "the parser sees exactly the signed bytes; duplicate keys are rejected".
