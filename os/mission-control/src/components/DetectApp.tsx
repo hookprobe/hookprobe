@@ -1,240 +1,183 @@
 /**
- * DetectApp — Detect (§4, NAPSE): detections, anomalies, and the rules behind them.
+ * DetectApp — Detect (`/detect/feed`, NAPSE): detections and the rules behind them (wireframe
+ * "Detect"; requirements doc §4).
  *
- * Spec: docs/architecture/MissionControl.md §4. Live detections feed (Suricata/YARA/Sigma/AI/
- * Behavioral) mapped to MITRE ATT&CK; each detection → Investigate (the story).
- * Capability-gated on `ids` in a real build. Cyber-industrial terminal soul.
+ *   Threat feed  severity + ATT&CK tactic filters; one card per detection with Open story / Graph
+ *   Rules        the device's real engines (rules loaded, hits, last run); authoring is greyed:
+ *                rules ship as signed packs (Administration → upload), not edited in the browser
+ *   ATT&CK       tactic heatmap from the loaded detections; a cell filters the feed
  *
- * WIRED to the real `hookprobe-api` read-API (ADR 0001): `GET /api/detections` + `/api/stream`
- * deltas via `store/detectLive.ts` — live detections feed, KPI row, and "top techniques" panel are
- * all real, computed from whatever the device has actually observed (never the old static demo
- * numbers). ENGINES (ADR 0026, `GET /api/engines`) is now PARTLY real: Sigma/YARA rows show REAL
- * loaded-rule counts / hit counts from their own status files; Suricata/AI Detection/Behavioral
- * stay on `store/detectMock.ts`'s static numbers, each row honestly badged "live" vs "mock" (see
- * `mergedEngines()` below) — never a blanket panel-title "mock" once part of it is real. ATT&CK
- * COVERAGE stays fully mock (no total-rule-catalog denominator endpoint yet); see
- * `detectLive.ts`'s doc comment for the exact split.
+ * Live: /api/detections (+ /api/stream), /api/engines, /api/incidents. With no device answering,
+ * the labelled sample feed renders. `.det-title` carries the rule message (the browser gate reads it).
  */
+import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { substrate } from '../store/mock';
+import { healthChecked } from '../store/health';
+import { severityLabel, formatTime, mitreName, mitreTactic, type DetectionRow } from '../store/api';
+import { startDetectLive, detections, detectStatus, detectError, engines } from '../store/detectLive';
+import { incidents, startInvestigateLive } from '../store/investigateLive';
+import { incidentHref } from '../store/routes';
+import AppShell from './AppShell';
 
-import { type Component, For, Show, onMount } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import LiveState from './LiveState';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
-import type { Tone } from '../store/missionMock';
-import { ENGINES, COVERAGE } from '../store/detectMock';
-import { severityLabel, formatTime, type DetectionRow } from '../store/api';
-import {
-  startDetectLive, detections, detectStatus, detectError, computeKpis, computeTopTechniques,
-  engines as liveEngines,
-} from '../store/detectLive';
+type Tab = 'feed' | 'rules' | 'mitre';
+type Sev = 'all' | 'critical' | 'high' | 'medium' | 'low';
+const TACTICS = ['Reconnaissance', 'Resource Development', 'Initial Access', 'Execution', 'Persistence', 'Privilege Escalation', 'Defense Evasion',
+  'Credential Access', 'Discovery', 'Lateral Movement', 'Collection', 'Command and Control', 'Exfiltration', 'Impact'];
 
-/** Merge `detectMock.ts`'s static ENGINES with whatever `/api/engines` actually reported. A row
- * whose live entry carries `source: "real"` (Sigma/YARA) is REPLACED with the live numbers; a
- * row with no live entry, or `source: "mock"` (Suricata/AI Detection/Behavioral), keeps the
- * static demo numbers — but every row is tagged `live` so the template can badge it honestly
- * instead of one blanket panel-level "mock" label. */
-function mergedEngines() {
-  const live = liveEngines();
-  return ENGINES.map((m) => {
-    const l = live.find((e) => e.name === m.name);
-    if (l && l.source === 'real') {
-      return {
-        name: m.name,
-        kind: m.kind,
-        rules: l.loaded_rules != null ? `${l.loaded_rules}` : (l.status === 'not_yet_run' ? 'not run yet' : m.rules),
-        hits: l.hits ?? 0,
-        status: (l.status === 'active' ? 'active' : 'degraded') as 'active' | 'degraded',
-        live: true,
-      };
-    }
-    return { ...m, live: false };
-  });
-}
+const now = Math.floor(Date.now() / 1000);
+const S = (id: string, sev: number, mitre: string, category: string, ago: number, rule_msg: string, src_ip: string, confidence: number): DetectionRow =>
+  ({ id, ts: now - ago, rule_id: 0, rule_msg, category, severity: sev, mitre, src_ip, dst_ip: '', dst_port: 0, confidence });
+const SAMPLE: DetectionRow[] = [
+  S('s1', 2, 'T1071', 'ioc', 300, 'Device resolved known C2 domain', 'Kitchen camera', 0.97),
+  S('s2', 2, 'T1046', 'scan', 320, 'IoT device scanning LAN', 'Kitchen camera', 0.92),
+  S('s3', 3, 'T1110', 'bruteforce', 86400, 'Brute force on router admin', 'This device', 0.88),
+  S('s4', 4, 'T1200', 'behavioral', 9000, 'New device without a known fingerprint', 'Unknown phone', 0.61),
+];
+const SAMPLE_ENGINES = [
+  { name: 'Suricata-compatible signatures', kind: 'signature', status: 'active', loaded_rules: 41203, hits: 38, last_run_ts: now - 60 },
+  { name: 'IOC lists', kind: 'ioc', status: 'active', loaded_rules: 1210, hits: 14, last_run_ts: now - 60 },
+  { name: 'Sigma', kind: 'log', status: 'active', loaded_rules: 3910, hits: 6, last_run_ts: now - 120 },
+  { name: 'YARA', kind: 'file', status: 'not_yet_run', loaded_rules: 2847, hits: 0, last_run_ts: null },
+];
 
-function toneVar(t: Tone): string {
-  return {
-    green: 'var(--hp-green)', amber: 'var(--hp-amber)', red: 'var(--hp-red)',
-    blue: 'var(--hp-cyan)', cyan: 'var(--hp-cyan)', purple: 'var(--hp-purple)',
-    orange: 'var(--hp-orange)', grey: 'var(--hp-grey)',
-  }[t];
-}
-function sevTone(s: ReturnType<typeof severityLabel>): Tone {
-  return s === 'critical' ? 'red' : s === 'high' ? 'amber' : s === 'medium' ? 'blue' : 'grey';
-}
-/** Confidence tier for the verdict pill — `detections` carries no blocked/alert outcome field yet
- * (see `store/api.ts`'s `DetectionRow` doc comment), so the pill honestly shows model confidence
- * instead of a fabricated enforcement verdict. */
-function confTier(c: number): 'high' | 'med' | 'low' {
-  return c >= 0.8 ? 'high' : c >= 0.5 ? 'med' : 'low';
-}
-
-const Panel: Component<{ ctx: string; title: string; span?: string; children: any }> = (p) => (
-  <section class="hp-terminal mc-panel" style={p.span ? { 'grid-column': p.span } : undefined}>
-    <div class="hp-terminal-bar">
-      <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
-      <span class="mc-panel-title">{p.title}</span>
-      <span class="hp-terminal-title">hookprobe@edge ~ {p.ctx}</span>
-    </div>
-    <div class="hp-terminal-body mc-panel-body">{p.children}</div>
-  </section>
-);
+const pct = (c: number) => Math.round(c <= 1 ? c * 100 : c);
 
 const DetectApp: Component = () => {
-  onMount(() => {
-    startDetectLive();
-  });
+  const [tab, setTab] = createSignal<Tab>('feed');
+  const [sev, setSev] = createSignal<Sev>('all');
+  const [tactic, setTactic] = createSignal<string | null>(null);
+  onMount(() => { startDetectLive(); startInvestigateLive(); });
 
-  const kpis = () => computeKpis(detections());
-  const topTechniques = () => computeTopTechniques(detections());
+  const sample = () => healthChecked() && !substrate();
+  const rows = (): DetectionRow[] => (sample() ? SAMPLE : detections());
+  const shown = createMemo(() => rows()
+    .filter((d) => sev() === 'all' || severityLabel(d.severity) === sev())
+    .filter((d) => !tactic() || mitreTactic(d.mitre) === tactic())
+    .sort((a, b) => b.ts - a.ts));
+  const counts = createMemo(() => {
+    const c: Record<string, number> = { all: rows().length };
+    for (const d of rows()) c[severityLabel(d.severity)] = (c[severityLabel(d.severity)] ?? 0) + 1;
+    return c;
+  });
+  const heat = createMemo(() => {
+    const m = new Map<string, number>();
+    for (const d of rows()) m.set(mitreTactic(d.mitre), (m.get(mitreTactic(d.mitre)) ?? 0) + 1);
+    return m;
+  });
+  const maxHeat = () => Math.max(1, ...heat().values());
+  const storyFor = (d: DetectionRow) => {
+    const inc = incidents().find((i) => i.device_ip === d.src_ip);
+    return inc ? incidentHref(inc.id) : '/investigate/queue';
+  };
+  const engineRows = () => (sample() ? SAMPLE_ENGINES : engines());
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/detect" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
-
-      <main class="dash-main">
-        <header class="mc-header">
+    <AppShell path="/detect/feed">
+      <main class="pro-main" aria-label="Detect">
+        <div class="pro-head">
           <div>
-            <h1 class="mc-h1">DETECT</h1>
-            <div class="mc-sub">Detections, anomalies &amp; the rules behind them · NAPSE</div>
+            <h1 class="pro-title">Detect</h1>
+            <p class="pro-sub">Detections and the rules behind them · NAPSE{substrate() ? ' · live from this device' : ''}</p>
           </div>
-          <div class="mc-header-actions">
-            <button class="mc-chip" onClick={() => setCopilotOpen(true)}>⌘ "today's ransomware?"</button>
-            <span class="mc-mode-badge">● ids granted</span>
-          </div>
-        </header>
-
-        <div class="mc-grid">
-
-          {/* KPI row — computed live from store/detectLive.ts's computeKpis(); "—" while loading/error */}
-          <div class="mc-cell--kpis det-kpis">
-            <For each={kpis()}>
-              {(k) => (
-                <div class="mc-kpi" style={{ '--tone': toneVar(k.tone) }}>
-                  <div class="mc-kpi-label">{k.label}</div>
-                  <div class="mc-kpi-value">{detectStatus() === 'error' ? '—' : k.value}</div>
-                </div>
-              )}
-            </For>
-          </div>
-
-          {/* Live detections — real GET /api/detections + /api/stream deltas */}
-          <Panel ctx="detections" title="LIVE DETECTIONS" span="span 7">
-            <Show
-              when={detectStatus() !== 'loading'}
-              fallback={<LiveState kind="loading" label="Loading live detections…" />}
-            >
-              <Show
-                when={detectStatus() !== 'error'}
-                fallback={<LiveState kind="error" label="Live detections unavailable" reason={detectError() ?? undefined} />}
-              >
-                <Show
-                  when={detections().length > 0}
-                  fallback={<LiveState kind="empty" label="No detections yet" reason="Nothing has fired on this device since it started watching — that's a good sign, not a broken feed." />}
-                >
-                  <ul class="det-feed">
-                    <For each={detections()}>
-                      {(d: DetectionRow) => (
-                        <li class="det-row">
-                          <span class="det-sev" style={{ background: toneVar(sevTone(severityLabel(d.severity))) }} title={severityLabel(d.severity)} aria-hidden="true" />
-                          <span class="det-time">{formatTime(d.ts)}</span>
-                          {/* real `category` (e.g. "port_scan", "brute_force") — the schema has no
-                              per-engine identity (Suricata/YARA/…) to show truthfully yet */}
-                          <span class="det-engine" title="detection category">{d.category}</span>
-                          <div class="det-body">
-                            <div class="det-title">{d.rule_msg}</div>
-                            <div class="det-flow">{d.src_ip || '—'} <span class="det-arrow">→</span> {d.dst_ip ? `${d.dst_ip}${d.dst_port ? `:${d.dst_port}` : ''}` : '—'}</div>
-                          </div>
-                          <span class="det-tech" title={d.mitre}>{d.mitre}</span>
-                          <span class={`det-verdict v--conf-${confTier(d.confidence)}`} title="model confidence — no enforcement-outcome field yet">
-                            {Math.round(d.confidence * 100)}%
-                          </span>
-                          <a class="det-link" href="/investigate/queue" aria-label="Investigate">↗</a>
-                        </li>
-                      )}
-                    </For>
-                  </ul>
-                </Show>
-              </Show>
-            </Show>
-          </Panel>
-
-          {/* Detection engines — Sigma/YARA rows are REAL (ADR 0026, /api/engines); the rest stay
-              mock, each row badged honestly rather than one blanket panel-level label. */}
-          <Panel ctx="engines · sigma/yara live · rest mock" title="DETECTION ENGINES" span="span 5">
-            <ul class="det-engines">
-              <For each={mergedEngines()}>
-                {(e) => (
-                  <li class="det-eng">
-                    <span class="det-eng-dot" classList={{ 'deg': e.status === 'degraded' }} aria-hidden="true" />
-                    <div class="det-eng-body">
-                      <div class="det-eng-name">
-                        {e.name} <span class="det-eng-kind">{e.kind}</span>{' '}
-                        <span class="det-eng-badge" classList={{ live: e.live }}>{e.live ? 'live' : 'mock'}</span>
-                      </div>
-                      <div class="det-eng-rules">{e.rules} rules</div>
-                    </div>
-                    <span class="det-eng-hits">{e.hits}<span class="det-eng-hk"> hits</span></span>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Panel>
-
-          {/* MITRE coverage — mock: no total-rule-catalog denominator endpoint yet */}
-          <Panel ctx="mitre · mock" title="ATT&CK COVERAGE" span="span 7">
-            <ul class="det-cov">
-              <For each={COVERAGE}>
-                {(c) => {
-                  const pct = Math.round((c.covered / c.total) * 100);
-                  const tone = pct >= 80 ? 'var(--hp-green)' : pct >= 55 ? 'var(--hp-amber)' : 'var(--hp-red)';
-                  return (
-                    <li class="det-cov-row">
-                      <span class="det-cov-tactic">{c.tactic}</span>
-                      <span class="det-cov-bar"><span class="det-cov-fill" style={{ width: `${pct}%`, background: tone }} /></span>
-                      <span class="det-cov-n">{c.covered}/{c.total}</span>
-                    </li>
-                  );
-                }}
-              </For>
-            </ul>
-          </Panel>
-
-          {/* Top techniques — real, computed from the loaded detections window */}
-          <Panel ctx="techniques" title="TOP TECHNIQUES · loaded window" span="span 5">
-            <Show
-              when={detectStatus() === 'live' && topTechniques().length > 0}
-              fallback={<LiveState kind={detectStatus() === 'loading' ? 'loading' : detectStatus() === 'error' ? 'error' : 'empty'}
-                label={detectStatus() === 'loading' ? 'Loading…' : detectStatus() === 'error' ? 'Unavailable' : 'No techniques observed yet'}
-                reason={detectStatus() === 'error' ? (detectError() ?? undefined) : undefined} />}
-            >
-              <ul class="det-top">
-                <For each={topTechniques()}>
-                  {(t) => (
-                    <li class="det-top-row">
-                      <span class="inv-tactic-id">{t.id}</span>
-                      <div class="det-top-body">
-                        <div class="det-top-name">{t.name}</div>
-                        <div class="det-top-tactic">{t.tactic}</div>
-                      </div>
-                      <span class="det-top-count">{t.count}</span>
-                    </li>
-                  )}
-                </For>
-              </ul>
-            </Show>
-          </Panel>
-
         </div>
-      </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+        <div class="tabs" role="tablist" aria-label="Detect views">
+          <For each={[['feed', 'Threat feed'], ['rules', 'Rules'], ['mitre', 'MITRE ATT&CK']] as [Tab, string][]}>{([t, label]) => (
+            <button class="tab" role="tab" aria-selected={tab() === t} onClick={() => setTab(t)}>{label}</button>
+          )}</For>
+        </div>
+
+        <Show when={tab() === 'feed'}>
+          <div class="l0-chips" role="group" aria-label="Severity">
+            <For each={['all', 'critical', 'high', 'medium', 'low'] as Sev[]}>{(s) => (
+              <button class={`l0-chip${sev() === s ? ' is-on' : ''}`} aria-pressed={sev() === s} onClick={() => setSev(s)}>
+                {s === 'all' ? 'All' : s[0].toUpperCase() + s.slice(1)} · {counts()[s] ?? 0}
+              </button>
+            )}</For>
+            <Show when={tactic()}>
+              <button class="l0-chip is-on" onClick={() => setTactic(null)} aria-label={`Clear tactic filter ${tactic()}`}>Tactic: {tactic()} ✕</button>
+            </Show>
+          </div>
+
+          <Show when={sample() || detectStatus() !== 'error'} fallback={
+            <div class="pcard"><p>Detections are not available right now.</p><p class="pcard-note">{detectError()}</p></div>
+          }>
+            <Show when={shown().length > 0} fallback={
+              <p class="l0-muted">{!sample() && detectStatus() === 'loading' ? 'Loading detections…' : 'No detections match. That is good news.'}</p>
+            }>
+              <div class="bento" role="list" aria-label="Detections">
+                <For each={shown().slice(0, 60)}>{(d) => (
+                  <article class="pcard span-6" role="listitem" style={{ 'text-align': 'left' }}>
+                    <span class="prow" style={{ border: 0, padding: 0 }}>
+                      <span><span class={`sev sev--${severityLabel(d.severity)}`}>{severityLabel(d.severity).toUpperCase()}</span>{d.mitre ? `${d.mitre} · ${mitreName(d.mitre)}` : 'No ATT&CK mapping'}</span>
+                      <span>{d.category} · {formatTime(d.ts)}</span>
+                    </span>
+                    <span class="det-title story-title" style={{ 'white-space': 'normal', 'font-size': '15px' }}>{d.rule_msg}</span>
+                    <span class="pcard-note">
+                      {sample() ? `Asset: ${d.src_ip}` : `${d.src_ip || '—'} → ${d.dst_ip ? `${d.dst_ip}${d.dst_port ? `:${d.dst_port}` : ''}` : '—'}`}
+                      {` · confidence ${pct(d.confidence)}%`}
+                    </span>
+                    <span class="l0-card-foot">
+                      <a class="hp-btn" href={sample() ? '/investigate/incident/?id=INC-0142' : storyFor(d)}>Open story</a>
+                      <a class="hp-btn" href={sample() ? '/investigate/incident/?id=INC-0142' : storyFor(d)}>Graph</a>
+                    </span>
+                  </article>
+                )}</For>
+              </div>
+              <Show when={shown().length > 60}><p class="pcard-note">Showing the newest 60 of {shown().length}.</p></Show>
+            </Show>
+          </Show>
+        </Show>
+
+        <Show when={tab() === 'rules'}>
+          <div class="inc-layout">
+            <section class="pcard" aria-label="Engines">
+              <p class="l0-label">Engines on this device</p>
+              <Show when={engineRows().length > 0} fallback={<p class="pcard-note">Waiting for engine status…</p>}>
+                <div class="l0-table-wrap"><table class="l0-table">
+                  <thead><tr><th scope="col">Engine</th><th scope="col">Status</th><th scope="col">Rules</th><th scope="col">Hits</th><th scope="col">Last run</th></tr></thead>
+                  <tbody><For each={engineRows()}>{(e) => (
+                    <tr>
+                      <td>{e.name}{e.kind ? <span class="l0-muted"> · {e.kind}</span> : ''}</td>
+                      <td>{e.status === 'active' ? 'Active' : e.status === 'not_yet_run' ? 'Not run yet' : 'Unknown'}</td>
+                      <td class="l0-num" style={{ 'font-weight': 400 }}>{e.loaded_rules?.toLocaleString() ?? '—'}</td>
+                      <td class="l0-num" style={{ 'font-weight': 400 }}>{e.hits?.toLocaleString() ?? '—'}</td>
+                      <td>{e.last_run_ts ? formatTime(e.last_run_ts) : '—'}</td>
+                    </tr>
+                  )}</For></tbody>
+                </table></div>
+              </Show>
+            </section>
+            <aside class="pcard" aria-label="Rule builder">
+              <p class="l0-label">Rule builder</p>
+              <p class="l0-card-sub">Rules run on this device only as signed packs, so a rule edited in the browser could never be trusted. Write a rule, test it, and sign it with your operator key; then upload the pack.</p>
+              <span class="gate gate--off" title="Rule packs are signed offline and uploaded">
+                <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Edit rule</button> <button class="hp-btn">Run test</button></span>
+                <span class="gate-reason" role="note">Authoring happens offline; this device accepts signed rule packs only.</span>
+              </span>
+              <a class="hp-btn" href="/admin/identity">Upload a signed rule pack</a>
+            </aside>
+          </div>
+        </Show>
+
+        <Show when={tab() === 'mitre'}>
+          <p class="l0-card-sub" style={{ margin: 0 }}>Brighter means more detections among those loaded. Select a tactic to filter the feed.</p>
+          <div class="bento" role="list" aria-label="ATT&CK tactics">
+            <For each={[...TACTICS, ...(heat().has('Unmapped') ? ['Unmapped'] : [])]}>{(t) => {
+              const n = () => heat().get(t) ?? 0;
+              return (
+                <button class="pcard span-4" role="listitem" onClick={() => { setTactic(t); setTab('feed'); }}
+                  style={{ background: n() ? `rgba(168, 85, 247, ${0.12 + 0.5 * (n() / maxHeat())})` : undefined }}
+                  aria-label={`${t}: ${n()} detection${n() === 1 ? '' : 's'}`}>
+                  <span style={{ 'font-size': '13px' }}>{t}</span>
+                  <span class="pcard-kpi" style={{ 'font-size': '20px' }}>{n()}</span>
+                </button>
+              );
+            }}</For>
+          </div>
+        </Show>
+      </main>
+    </AppShell>
   );
 };
 

@@ -31,6 +31,20 @@ and give an operator one place to understand and control what happens next.
 
 **The operating system is HookProbe OS. SOC is its default workspace. Hardware only unlocks capabilities.**
 
+<p align="center">
+  <img src="assets/hookprobe-journey.gif" alt="HookProbe customer journey, wireframes: scan the label QR to join the per-device setup Wi-Fi; a three-question setup conversation (internet, Wi-Fi name, signing key); online and protected; the calm Home screen; organizing devices into zones; an incident told as a story with a plan to approve; advanced PPPoE and VLAN settings built as a signed file; signing the change in the browser; applied on reboot with one-click rollback." width="900"/>
+</p>
+
+<p align="center"><em>From the box to a protected network, and every change after: the customer journey in the team's wireframes.</em></p>
+
+Where that journey stands in the code: the per-device setup Wi-Fi, the calm Home screen, zones as
+permanent owner rules, incident stories, and the Advanced editors that build and sign WAN / Wi-Fi /
+firewall files in the browser are built, and so is the three-question first-run setup that signs
+your internet and Wi-Fi settings. Uploading those signed files to a running device (until then they
+go on the boot card) and passkey signing are in progress — see the
+[configuration journey](docs/design/mission-control-ui-requirements.md#configuration-journey-from-flash-to-daily-use)
+and [ADR 0058](docs/adr/0058-owner-signed-runtime-config.md).
+
 ### Protect locally
 
 Inspect and respond at the device, without making cloud connectivity, an account, or an AI service a
@@ -123,12 +137,22 @@ os/kernel/tools/mc-e2e.sh
 The first command validates implemented kernel phases under QEMU. The second exercises a browser
 flow from a test attack through heqk detection to evidence in Mission Control.
 
+To check the Mission Control UI on its own (typecheck plus the behaviour suite, no QEMU needed), or
+everything CI runs for it:
+
+```sh
+os/mission-control/tests/ui/run.sh
+tools/ci/gates.sh g3
+```
+
 ### Explore the design
 
 - [HookProbe high-level design](docs/design/hookprobe-high-level-design.md)
 - [heqk low-level design](docs/design/heqk-low-level-design.md)
 - [OS architecture](docs/architecture/Readme.md)
 - [Mission Control specification](docs/architecture/MissionControl.md)
+- [Mission Control UI layouts and requirements](docs/design/mission-control-ui-requirements.md) (incl. the configuration journey)
+- [ADR 0058 — owner-signed configuration on a running device](docs/adr/0058-owner-signed-runtime-config.md)
 - [CM5 bench acceptance record](docs/design/bench-runbook-prod-mc-2026-11.md)
 - [Current roadmap and engineering gaps](docs/roadmap/BuildPlan.md)
 

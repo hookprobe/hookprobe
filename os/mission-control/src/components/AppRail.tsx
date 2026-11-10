@@ -1,71 +1,80 @@
 /**
- * AppRail — the shared, canonical left navigation rail.
- *
- * Nav is the MissionControl.md workspace set (§Navigation map) — the same on every
- * page. Visual matches ~/workspace.png: HOOKPROBE OS brand · nav · QSecBit score
- * card · Tenant · device (OS.HOOKPROBE.LOCAL) status. Pass `active` = the nav label.
+ * AppRail — the Pro (Layer 2) rail: every workspace (requirements doc §Global shell; wireframe
+ * ProRail). 13 workspaces in nav-map order (MissionControl.md §Navigation map), Customers only when
+ * cloud-linked / self-hosted (FR-05). Below them: the QSecBit mini-card, the tenant (non-standalone)
+ * and the device footer, then "Back to simple view".
  */
+import { type Component, For, Show } from 'solid-js';
+import { qsecbit, heartbeat, deployMode, substrate } from '../store/mock';
+import { degraded } from '../store/health';
+import { setProView } from '../store/layer';
+import Icon from './Icon';
 
-import { type Component, For } from 'solid-js';
-import { QSIDEBAR } from '../store/missionMock';
+interface Item { label: string; href: string; icon: string; match: string[]; linkedOnly?: boolean }
 
-interface Item { label: string; href: string; icon: string }
-// Canonical workspaces, in nav-map order (docs/architecture/MissionControl.md §Navigation map).
-const NAV: Item[] = [
-  { label: 'Mission Control', href: '/mission',           icon: '◎' },
-  { label: 'Workspace',       href: '/workspace',         icon: '▦' },
-  { label: 'Observe',         href: '/observe/events',    icon: '◉' },
-  { label: 'Detect',          href: '/detect/feed',       icon: '◈' },
-  { label: 'Investigate',     href: '/investigate/queue', icon: '⊚' },
-  { label: 'Protect',         href: '/protect/firewall',  icon: '⛨' },
-  { label: 'Network / Gateway', href: '/network/map',     icon: '⊞' },
-  { label: 'Automate',        href: '/automate/playbooks', icon: '⚙' },
-  { label: 'Intelligence',    href: '/intelligence/cves', icon: '✦' },
-  { label: 'Customers',       href: '/customers/managed', icon: '◫' },
-  { label: 'Business',        href: '/business/dashboard', icon: '$' },
-  { label: 'Knowledge',       href: '/knowledge/blog',    icon: '❏' },
-  { label: 'Administration',  href: '/admin/identity',    icon: '⚿' },
-  { label: 'AI Copilot',      href: '/mission',           icon: '⌘' },
+export const WORKSPACES: Item[] = [
+  { label: 'Mission Control',   href: '/mission',            icon: 'mission', match: ['/mission'] },
+  { label: 'Workspace',         href: '/workspace',          icon: 'workspace', match: ['/workspace'] },
+  { label: 'Observe',           href: '/observe/live',       icon: 'observe', match: ['/observe'] },
+  { label: 'Detect',            href: '/detect/feed',        icon: 'detect', match: ['/detect'] },
+  { label: 'Investigate',       href: '/investigate/queue',  icon: 'investigate', match: ['/investigate'] },
+  { label: 'Protect',           href: '/protect/firewall',   icon: 'shield', match: ['/protect'] },
+  { label: 'Network / Gateway', href: '/network/map',        icon: 'network', match: ['/network', '/setup'] },
+  { label: 'Automate',          href: '/automate/playbooks', icon: 'automate', match: ['/automate'] },
+  { label: 'Intelligence',      href: '/intelligence/cves',  icon: 'intel', match: ['/intelligence'] },
+  { label: 'Customers',         href: '/customers/managed',  icon: 'customers', match: ['/customers'], linkedOnly: true },
+  { label: 'Business',          href: '/business/dashboard', icon: 'business', match: ['/business'] },
+  { label: 'Knowledge',         href: '/knowledge/blog',     icon: 'knowledge', match: ['/knowledge'] },
+  { label: 'Administration',    href: '/admin/identity',     icon: 'admin', match: ['/admin'] },
 ];
 
-// minimal area sparkline (self-contained so the rail has no chart deps)
-function spark(data: number[], w: number, h: number) {
-  const max = Math.max(...data), min = Math.min(...data), rng = max - min || 1;
-  const p = data.map((v, i) => [2 + (i * (w - 4)) / (data.length - 1), h - 2 - ((v - min) / rng) * (h - 4)] as const);
-  const l = p.map((q, i) => `${i ? 'L' : 'M'}${q[0].toFixed(1)},${q[1].toFixed(1)}`).join(' ');
-  return { line: l, area: `${l} L${p[p.length - 1][0].toFixed(1)},${h} L${p[0][0].toFixed(1)},${h} Z` };
+export function workspaceActive(path: string, w: { match: string[] }): boolean {
+  return w.match.some((m) => path === m || path.startsWith(m + '/'));
 }
 
-const AppRail: Component<{ active: string }> = (props) => {
-  const s = spark(QSIDEBAR.spark, 150, 34);
-  return (
-    <aside class="rail2">
-      <a class="rail2-brand" href="/mission">
-        <span class="rail2-brand-mark">◣◢</span>
-        <span class="rail2-brand-txt">HOOKPROBE OS<em>Autonomous SOC Platform</em></span>
-      </a>
+function spark(data: number[], w: number, h: number): string {
+  if (data.length < 2) return '';
+  const max = Math.max(...data), min = Math.min(...data), rng = max - min || 1;
+  return data.map((v, i) => `${i ? 'L' : 'M'}${(2 + (i * (w - 4)) / (data.length - 1)).toFixed(1)},${(h - 2 - ((v - min) / rng) * (h - 4)).toFixed(1)}`).join(' ');
+}
 
-      <nav class="rail2-nav">
-        <For each={NAV}>{n => (
-          <a class={`rail2-item${n.label === props.active ? ' rail2-item--active' : ''}`} href={n.href}>
-            <span class="rail2-icon">{n.icon}</span>{n.label}
+const AppRail: Component<{ path: string }> = (props) => {
+  const items = () => WORKSPACES.filter((w) => !w.linkedOnly || deployMode() !== 'standalone');
+  return (
+    <nav class="shell-rail shell-rail--pro" aria-label="Workspaces">
+      <a href="/mission" class="shell-rail-brand">
+        <span class="shell-rail-mark" aria-hidden="true">◣◢</span>
+        <span class="shell-rail-label shell-rail-name">HOOK<em>PROBE</em> OS</span>
+      </a>
+      <div class="shell-rail-items">
+        <For each={items()}>{(w) => (
+          <a href={w.href} class={`shell-rail-item${workspaceActive(props.path, w) ? ' is-active' : ''}`}
+             aria-current={workspaceActive(props.path, w) ? 'page' : undefined} title={w.label}>
+            <span class="shell-rail-icon"><Icon name={w.icon} /></span>
+            <span class="shell-rail-label">{w.label}</span>
           </a>
         )}</For>
-      </nav>
-
-      <div class="rail2-qcard">
-        <span class="rail2-qcard-label">QSecBit Score</span>
-        <span class="rail2-qcard-score">{QSIDEBAR.score}<em>/100</em></span>
-        <svg viewBox="0 0 150 34" class="rail2-qcard-spark" preserveAspectRatio="none" aria-hidden="true">
-          <defs><linearGradient id="railqsb" x1="0" x2="0" y1="0" y2="1"><stop offset="0" stop-color="var(--hp-green)" stop-opacity="0.35" /><stop offset="1" stop-color="var(--hp-green)" stop-opacity="0" /></linearGradient></defs>
-          <path d={s.area} fill="url(#railqsb)" /><path d={s.line} fill="none" stroke="var(--hp-green)" stroke-width="1.5" />
-        </svg>
-        <span class="rail2-qcard-posture">{QSIDEBAR.posture}</span>
       </div>
 
-      <button class="rail2-tenant"><span><em>Tenant</em><b>HookProbe MSSP</b></span><span>▾</span></button>
-      <div class="rail2-os"><span class="rail2-os-dot" /><span><b>OS.HOOKPROBE.LOCAL</b><em>v1.0.0-beta.1</em></span></div>
-    </aside>
+      <div class="shell-rail-foot">
+        <a href="/mission" class="shell-rail-qcard" aria-label={`QSecBit ${qsecbit()}, open Mission Control`}>
+          <span class="shell-rail-qlabel shell-rail-label">QSecBit</span>
+          <span class="shell-rail-qscore">{qsecbit()}</span>
+          <svg class="shell-rail-label" viewBox="0 0 160 24" width="100%" height="24" preserveAspectRatio="none" aria-hidden="true">
+            <path d={spark(heartbeat(), 160, 24)} fill="none" stroke="var(--hp-green)" stroke-width="1.5" />
+          </svg>
+        </a>
+        <Show when={deployMode() !== 'standalone'}>
+          <p class="shell-rail-tenant shell-rail-label"><em>Tenant</em>this organisation</p>
+        </Show>
+        <button class="shell-rail-back shell-rail-label" onClick={() => setProView(false)}>← Back to simple view</button>
+        <p class="shell-rail-device shell-rail-label">
+          <span class={`shell-rail-dot${degraded() ? ' is-degraded' : ''}`} aria-hidden="true" />
+          os.hookprobe.local{substrate() ? '' : ' · preview'}
+          <span class="sr-only">{degraded() ? ', degraded' : ', online'}</span>
+        </p>
+      </div>
+    </nav>
   );
 };
 

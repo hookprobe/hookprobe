@@ -44,12 +44,12 @@ import {
   type Component, type Accessor,
   createSignal, createMemo, For, Show, batch, onMount, onCleanup,
 } from 'solid-js';
-import TopBar from './TopBar';
 import NetworkLive from './NetworkLive';
+import { healthChecked, loadHealth } from '../store/health';
 import { refetch, devicesStatus } from '../store/obsLive';
 import { refetchTls } from '../store/tlsLive';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen, substrate } from '../store/mock';
+import AppShell from './AppShell';
 import {
   type Device, type Zone, type NetworkPolicy, type TrustLevel, type PendingChange,
   POLICY_LABELS, DEVICE_ICONS, INITIAL_ZONES, INITIAL_DEVICES, buildPendingChange,
@@ -746,7 +746,7 @@ const NetworkMapSample: Component = () => {
 
   return (
     <>
-      <TopBar onOpenCopilot={() => setCopilotOpen(true)} />
+      <AppShell path="/network/map">
 
       <main class="main-content net-page" style={{ 'max-width': '1200px' }}>
 
@@ -883,13 +883,7 @@ const NetworkMapSample: Component = () => {
         )}
       </Show>
 
-      {/* AI Copilot overlay */}
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
+      </AppShell>
     </>
   );
 };
@@ -897,7 +891,10 @@ const NetworkMapSample: Component = () => {
 /** On a device: the live inventory (NetworkLive); the sample map only when no device API answers. */
 const NetworkMapApp: Component = () => {
   const [fails, setFails] = createSignal(0);
+  const [isMap, setIsMap] = createSignal(false);
   onMount(() => {
+    setIsMap(location.pathname.startsWith('/network/map'));
+    void loadHealth();
     const tick = async () => {
       await Promise.all([refetch(), refetchTls()]);
       if (devicesStatus() === 'error') setFails((n) => n + 1);
@@ -908,8 +905,13 @@ const NetworkMapApp: Component = () => {
   });
   return (
     <Show when={devicesStatus() === 'live'} fallback={
-      <Show when={fails() >= 2} fallback={<div class="shield-empty" role="status">Loading devices from this device…</div>}>
-        <NetworkMapSample />
+      <Show when={fails() >= 2 || (healthChecked() && !substrate())} fallback={
+        <AppShell path="/network/zones"><main class="l0-main"><p class="l0-muted" role="status">Loading devices from this device…</p></main></AppShell>
+      }>
+        {/* No device answering: the sample map on /network/map; Zones and List show sample devices. */}
+        <Show when={isMap()} fallback={<NetworkLive />}>
+          <NetworkMapSample />
+        </Show>
       </Show>
     }>
       <NetworkLive />

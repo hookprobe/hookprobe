@@ -67,7 +67,7 @@ Everything above "Substrate" is identical **from the operator's view** on every 
 
 One platform, one data model, one **evidence graph** (`Device → Interface → Packet → Connection → Session → Application → User → … → Threat → Incident → Response → Report`), one **Telemetry Fabric** (the elevated "logs"), one omnipresent **AI Copilot** (`⌘/Ctrl-K`). Workspaces are *views* over the shared kernel + core services, not separate apps.
 
-Workspaces: Mission Control · Workspace · Observe · Detect · Investigate · Protect · Automate · Intelligence · Customers · Business · Knowledge · Administration · AI Copilot.
+Workspaces: Mission Control · Workspace · Observe · Detect · Investigate · Protect · Network/Gateway · Automate · Intelligence · Customers · Business · Knowledge · Administration · AI Copilot.
 
 Lifecycle maps onto workspaces: **Build/Deploy** → Administration (Builder, Images, Modules, Provisioning, Enrollment, Edge Nodes); **Run** → Mission Control/Observe/Detect/Investigate/Protect/Automate/Intelligence; **Manage** → Administration/Customers/Business/Knowledge.
 

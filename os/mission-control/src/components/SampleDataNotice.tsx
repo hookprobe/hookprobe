@@ -1,24 +1,48 @@
 /**
- * SampleDataNotice — honesty label for the device-served Mission Control.
+ * SampleDataNotice — the "Sample data" banner (DR-03, requirements doc §Global banners). An operator
+ * must never mistake sample data for their own network:
  *
- * On heqk (`/api/health` → `substrate: "heqk"`) only some workspaces have a real API behind them;
- * the rest render their built-in sample data. An operator must never mistake sample data for
- * their network, so every page that is not (fully) live says so. Off-device (dev / Linux tier)
- * nothing is shown: those builds have their own live/mock badges.
+ *   - on the device (`/api/health` → `substrate: "heqk"`): every route without a real API behind
+ *     it says so; live routes show nothing;
+ *   - with no device answering at all (a preview / dev build): every route says so, once the
+ *     health check has failed (never flashed before it answers).
+ *
+ * Rendered inline at the top of AppShell's content, so it never covers the phone bottom tabs.
  */
 import { type Component, Show, createMemo, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
-import { loadHealth } from '../store/health';
+import { loadHealth, healthChecked } from '../store/health';
 
 /** What the heqk API backs today (os/kernel/kernel/src/http.rs routes). */
 const LIVE: Record<string, 'live' | string> = {
   '/': 'live',
+  '/mission': 'live',
+  '/protect/firewall': 'live',
+  '/automate/playbooks': 'live',
+  '/intelligence/cves': 'live',
+  '/admin/identity': 'live',
+  '/workspace': 'live',
+  '/customers/managed': 'live',
+  '/business/dashboard': 'live',
+  '/knowledge/blog': 'live',
   '/detect/feed': 'live',
   '/investigate/queue': 'live',
+  '/investigate/incident': 'live',
   '/observe/events': 'live',
+  '/observe/live': 'live',
+  '/network/devices': 'live',
   '/network/dns': 'live',
   '/network/map': 'live',
+  '/network/zones': 'live',
+  '/network/wan': 'live',
+  '/network/wan/advanced': 'live',
+  '/network/wifi': 'live',
+  '/protect/policies': 'live',
+  '/setup': 'live',
+  '/admin/feedback': 'live',
 };
+
+const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence, Administration, Workspace, Customers, Business, Knowledge';
 
 function norm(p: string): string {
   const t = p.replace(/\/index\.html$/, '/').replace(/\.html$/, '').replace(/\/+$/, '');
@@ -28,24 +52,21 @@ function norm(p: string): string {
 const SampleDataNotice: Component = () => {
   onMount(() => void loadHealth());
   const status = createMemo(() => {
-    if (substrate() !== 'heqk' || typeof location === 'undefined') return null;
-    const s = LIVE[norm(location.pathname)];
-    if (s === 'live') return null;
-    return s ?? "This view isn't served by this device yet — everything here is sample data.";
+    if (typeof location === 'undefined') return null;
+    if (substrate() === 'heqk') {
+      const n = norm(location.pathname);
+      // /investigate/<id> is one incident story (heqk serves the incident page for it): live like the queue.
+      const s = LIVE[n] ?? (n.startsWith('/investigate/') ? 'live' : undefined);
+      if (s === 'live') return null;
+      return `${s ?? "This view isn't served by this device yet, so everything here is sample data."} Live on this device: ${LIVE_NAMES}.`;
+    }
+    if (healthChecked() && !substrate()) return 'No device is answering, so everything here is sample data.';
+    return null;
   });
   return (
     <Show when={status()}>
-      <div
-        role="status"
-        style={{
-          position: 'fixed', left: '50%', bottom: '14px', transform: 'translateX(-50%)', 'z-index': '1000',
-          'max-width': 'min(92vw, 640px)', padding: '8px 14px', 'border-radius': '999px',
-          background: 'rgba(250, 204, 21, 0.12)', border: '1px solid rgba(250, 204, 21, 0.55)',
-          color: '#fde68a', font: '13px/1.35 system-ui, sans-serif', 'text-align': 'center',
-          'backdrop-filter': 'blur(6px)',
-        }}
-      >
-        <strong>Sample data</strong> — {status()} Live on this device: Home, Detect, Investigate, Observe, Shield, My Network.
+      <div class="hp-banner hp-banner--sample" role="status">
+        <strong>Sample data</strong> {status()}
       </div>
     </Show>
   );
