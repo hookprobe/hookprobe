@@ -475,7 +475,7 @@ pub fn rotate_selftest() -> bool {
     // revoke-all keeps the rotation; boot precedence: same OWNER.TXT -> rotated, a re-flashed one -> the file
     let kept = oj::owner_rotation().is_some();
     let (eff, _) = effective_owner(Some(file_owner));
-    let boot_rotated = eff.is_some_and(|o| o.verifier == verifier_for(&[5; 16], new.as_bytes()));
+    let boot_rotated = eff.is_some_and(|o| o.verifier == verifier_for(&sess, new.as_bytes()));
     crate::mcauth::set_owner_file_hash([0x22; 32]);
     let (eff2, _) = effective_owner(Some(file_owner));
     let reflash_wins = eff2 == Some(file_owner);
