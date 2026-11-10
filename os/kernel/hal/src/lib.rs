@@ -727,3 +727,5 @@ pub mod abslot;
 pub mod policy;
 pub mod defer;
 pub mod tlsabi;
+/// ADR 0050 D4 step 2: the EL0 LAN-services (DNS) server ABI.
+pub mod lansvcabi;

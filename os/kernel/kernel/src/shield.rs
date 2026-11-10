@@ -772,7 +772,9 @@ fn classify(name: &[u8]) -> (Verdict, u8) {
 // ---------------------------------------------------------------------------------------------------
 // DNS wire helpers
 
-use crate::dnswire::{parse_query, read_name, Q};
+use crate::dnswire::Q;
+/// The response walk result (one at a time: the AP loop is single-threaded).
+static mut WALK: crate::dnswire::Walk = crate::dnswire::WALK0;
 
 fn csum(b: &[u8], init: u32) -> u16 {
     let mut s = init;
@@ -888,7 +890,7 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
                 return Act::Pass;
             }
             let dns = &f[u + 8..u + ulen];
-            let Some(q) = parse_query(dns) else {
+            let Some(q) = crate::lansvc::dns_query(dns) else {
                 stat_unparsable();
                 return Act::Pass;
             };
@@ -932,7 +934,7 @@ pub fn on_client_frame(f: &[u8], me: &[u8; 6], out: &mut [u8], now: u64) -> Act 
             }
             let dl = u16::from_be_bytes([f[p], f[p + 1]]) as usize;
             let dns = &f[p + 2..(p + 2 + dl).min(14 + tot)];
-            let Some(q) = parse_query(dns) else { return Act::Pass };
+            let Some(q) = crate::lansvc::dns_query(dns) else { return Act::Pass };
             let v = decide_for_dev(&q.name[..q.nl], client, &smac);
             if v.answered() {
                 record(now, client, q.qtype, &q.name[..q.nl], Verdict::Tcp53Refused);
@@ -973,37 +975,22 @@ pub fn on_reply_frame(buf: &mut [u8], len: usize, now: u64) -> usize {
     if an == 0 || block_table().is_empty() {
         return len;
     }
-    let mut qn = [0u8; 256];
-    let Some((qnl, o)) = read_name(dns, 12, &mut qn, true) else { return len };
-    let qend = o + 4;
-    if qend > dns.len() {
+    // ADR 0050 D4 step 2: the answer walk runs in the EL0 LAN-services server (in-kernel only if it is not loaded)
+    let w = unsafe { &mut *core::ptr::addr_of_mut!(WALK) };
+    if crate::lansvc::dns_walk(dns, w).is_none() {
         return len;
     }
+    let (qn, qnl, qend) = (&w.qname, w.qnl, w.qend);
     let qv = decide(&qn[..qnl]);
     if matches!(qv, Verdict::Floor | Verdict::AllowRule) {
         return len;
     }
-    let mut p = qend;
     let mut hit = false;
-    for _ in 0..an.min(32) {
-        let mut nm = [0u8; 256];
-        let Some((_, e)) = read_name(dns, p, &mut nm, true) else { return len };
-        let Some(h) = dns.get(e..e + 10) else { return len };
-        let (ty, rdl) = (u16::from_be_bytes([h[0], h[1]]), u16::from_be_bytes([h[8], h[9]]) as usize);
-        let rd = e + 10;
-        if rd + rdl > dns.len() {
-            return len;
+    for k in 0..w.ncname {
+        if decide(&w.cnames[k][..w.cnl[k]]) == Verdict::Blocked {
+            hit = true;
+            break;
         }
-        if ty == 5 {
-            let mut tgt = [0u8; 256];
-            if let Some((tl, _)) = read_name(dns, rd, &mut tgt, true) {
-                if decide(&tgt[..tl]) == Verdict::Blocked {
-                    hit = true;
-                    break;
-                }
-            }
-        }
-        p = rd + rdl;
     }
     if !hit {
         return len;

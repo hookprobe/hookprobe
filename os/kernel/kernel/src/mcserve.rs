@@ -668,6 +668,7 @@ pub fn run() -> ! {
     // ADR 0051: the EL0 TLS server + MCTLS.CRT from the same boot disk (before the node: it decides :443).
     #[cfg(feature = "mctls")]
     crate::tlshost::bring_up(arch_aarch64::virtio_blk::VirtioBlk::open().as_ref());
+    let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 (loads the EL0 LAN-services server)
     let now_ms = || (cntpct().wrapping_sub(t0) / (frq / 1000).max(1)) as i64;
     // DHCP (QEMU's user-mode network serves 10.0.2.15), the production address path.
     let mut node = McNode::new(mac, NetMode::Dhcp, t0 ^ 0x4D43_5345_5256_4500).expect("one node per boot");
