@@ -41,5 +41,5 @@ export default async function (t) {
   ok(await page.locator('[aria-label="Restart"] button:has-text("Restart now")').isEnabled()
     && !(await vis(page.locator('[aria-label="Restart"] >> text=Preview:'))), 'admin: Restart offered on the device');
   await page.click('[aria-label="Settings"] >> text=Signing key'); await page.waitForTimeout(300);
-  ok(await vis(page.locator('[aria-label="Signing key"] >> text=Create a key in this browser')), 'admin: signing-key panel ready on the device');
+  ok(await vis(page.locator('[aria-label="Signing key"] >> text=Create key and download backup')), 'admin: signing-key panel ready on the device');
 }
