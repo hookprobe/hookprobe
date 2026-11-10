@@ -347,6 +347,15 @@ impl McState {
         Some(step)
     }
 
+    /// Readiness 3.7: set the wall clock from the board RTC before NTP answers. Timestamps become real time at once,
+    /// but the clock stays NOT synced — the first NTP reply may still step it by any amount (an RTC that drifted or
+    /// was set wrong is corrected, never locked in by the re-sync bound).
+    pub fn set_clock_provisional(&mut self, epoch_ms: u64, now_ticks: u64) -> i64 {
+        let step = self.sync_clock(epoch_ms, now_ticks).unwrap_or(0);
+        self.clock_synced = false;
+        step
+    }
+
     /// Wall time for a duration measured from the clock anchor (`boot_ticks`) — the serve loop's
     /// `now_ms` convention.
     pub fn epoch_at_ms(&self, ms_since_anchor: u64) -> u64 {
