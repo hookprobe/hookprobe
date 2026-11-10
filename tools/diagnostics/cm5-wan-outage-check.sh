@@ -25,10 +25,12 @@ python3 "$HERE/cm5-relay.py" --backend nano --dev auto cycle >/dev/null 2>&1
 wait_for "$mark" "\[P11-AP3\] persistent WPA2 AP serve loop up" 240; chk $? "the AP comes up although the WAN has no lease"
 "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1
 sleep 20
-L=$(pi "ping -c 60 -i 1 -W 1 10.99.0.1 | tail -2" 2>/dev/null); echo "  $L"
-loss=$(sed -n 's/.* \([0-9.]*\)% packet loss.*/\1/p' <<<"$L"); maxrtt=$(sed -n 's#.*= [0-9.]*/[0-9.]*/\([0-9.]*\)/.*#\1#p' <<<"$L")
-awk -v l="${loss:-100}" 'BEGIN{exit !(l <= 2)}'; chk $? "LAN responsive during the outage: ${loss:-?}% loss over 60 s (<= 2%)"
-awk -v m="${maxrtt:-99999}" 'BEGIN{exit !(m < 1000)}'; chk $? "no stall during the outage: worst RTT ${maxrtt:-?} ms (< 1 s; the old blocking retry froze the loop ~5 s)"
+# responsiveness: 60 HTTP requests to the AP, one a second (the AP does not answer ICMP echo on its LAN IP)
+L=$(pi "for k in \$(seq 1 60); do curl -s -o /dev/null -m 2 -w '%{http_code} %{time_total}\\n' http://10.99.0.1/api/health; sleep 1; done" 2>/dev/null)
+fails=$(awk '$1 == "000" {f++} END {print f+0}' <<<"$L"); worst=$(awk '{if ($2 > m) m = $2} END {printf "%.0f", m * 1000}' <<<"$L")
+echo "  60 HTTP probes: $fails failed, worst ${worst} ms"
+[ "$fails" -le 1 ]; chk $? "LAN responsive during the outage: $fails of 60 HTTP probes failed (<= 1)"
+[ "${worst:-99999}" -lt 1000 ]; chk $? "no stall during the outage: worst response ${worst} ms (< 1 s; the old blocking retry froze the loop ~5 s)"
 code=$(pi "curl -s -o /dev/null -m 8 -w '%{http_code}' http://10.99.0.1/api/health" 2>/dev/null)
 [ "$code" = 200 ] || [ "$code" = 401 ] || [ "$code" = 308 ]; chk $? "Mission Control answers over Wi-Fi during the outage (HTTP $code)"
 since "$mark" | grep -a "in-loop DHCP: discovers=" >/dev/null; chk $? "the WAN is being acquired in the loop (discovers counted)"
