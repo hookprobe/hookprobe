@@ -5,6 +5,7 @@ edition = "2021"
 publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 [dependencies]
+sae = { path = "../sae", optional = true }
 hal          = { path = "../hal" }
 arch-aarch64 = { path = "../arch-aarch64" }
 abi          = { path = "../abi" }
@@ -106,6 +107,7 @@ apmode = ["cm5", "arch-aarch64/gem-deep-rx"]
 crashtest = []
 # BENCH ONLY: the WPA3-SAE AP feasibility probe (arch-aarch64/wpa3probe). Never in a product image.
 wpa3probe = ["arch-aarch64/wpa3probe"]
+wpa3 = ["arch-aarch64/wpa3", "dep:sae"]
 # Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
 apmc = ["apmode", "mcserve"]
 # Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
