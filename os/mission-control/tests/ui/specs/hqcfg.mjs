@@ -40,6 +40,16 @@ export default async function (t) {
   await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(800);
   ok((await page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1).textContent()).trim() === V.public_key, 'imported the RFC 8032 test key');
 
+  // Enrolled device with a DIFFERENT owner key: signing here is blocked with the reason (the device would refuse it).
+  await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: 'ab'.repeat(32), owner_enrolled: true, owner_generation: 1, config_files_verified_by: 'owner', can: 'rotate', device_id: null }) }));
+  await go('/network/wifi');
+  await page.fill('input[placeholder="HookProbe-Home"]', 'Other-Owner'); await page.fill('input[type=password]', 'correct horse battery');
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  const od = page.locator('.drawer', { hasText: 'Apply all three together' });
+  ok(await vis(od.locator('text=only accepts settings signed with its owner key (abababab')) && await od.locator('button:has-text("the bundle")').isDisabled(),
+    'enrolled device with another owner key: signing blocked, with the reason and the fix');
+  ok(await vis(od.locator('[aria-label="Device binding"] >> text=Not bound to a device')), 'device_id null is shown as not bound');
+  await page.unroute('**/api/anchor');
   // An all-zero id (a device without an identity, e.g. QEMU) must NOT be presented as a binding.
   await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: null, owner_enrolled: false, owner_generation: 0, config_files_verified_by: 'none (standalone)', can: 'enroll', device_id: '0'.repeat(32) }) }));
   await go('/network/wifi');

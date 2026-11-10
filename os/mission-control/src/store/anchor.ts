@@ -14,7 +14,8 @@ export interface AnchorView {
   config_files_verified_by: string; can: 'enroll' | 'rotate' | string;
   /** Newer images: whether the device refuses unsigned configuration, and the per-file generation floors. */
   /** 32 hex: binds a configuration bundle to this device (HQCFG1 flags bit0 + device_id). */
-  device_id?: string;
+  /** null when the device has no identity (no SRK: QEMU, or OTP not available). */
+  device_id?: string | null;
   config_protected?: boolean; state?: 'protected' | 'CONFIG UNPROTECTED' | string;
   /** wan / wifi as {current, floor}; policy as one number (its floor) on current images. */
   floors?: Partial<Record<'wan' | 'wifi' | 'policy', { current: number; floor: number } | number>>;
