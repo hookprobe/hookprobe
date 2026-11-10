@@ -507,6 +507,12 @@ fn brute_key(src: u32, dst: u32, port: u16) -> u64 {
     h | 1
 }
 
+/// Test hook: is an attempt from `src` to `dst:port` in the (slow-tier) brute-force window?
+pub fn brute_tracked(src: u32, dst: u32, port: u16) -> bool {
+    let k = brute_key(src, dst, port);
+    BFS_KEY[(k as usize) % BRUTE_SLOTS].load(Ordering::Relaxed) == k
+}
+
 /// The admin SERVER answered `client` on `port` (a SYN-ACK from server -> client).
 pub fn brute_answer_at(server: u32, client: u32, port: u16, now: u64) {
     if !BRUTE_PORTS.contains(&port) || client == 0 {

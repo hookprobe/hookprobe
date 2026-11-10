@@ -15,6 +15,8 @@ sae = { path = "../sae", optional = true }
 wpa3probe = []
 # Phase 6 WPA3-SAE on the AP: host SAE responder (crate `sae`), mgmt_frame auth TX, AKM 8 4-way + PMF/IGTK.
 wpa3 = ["dep:sae"]
+# BENCH ONLY: does this firmware run a second BSS (guest SSID)? mbss read-back/set + bsscfg:ssid create, logged.
+guestprobe = []
 cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt
 # arm64-cloud tier (OCI Ampere A1 / QEMU virt gic-version=3): GICv3 sysreg CPU interface +
 # redistributors instead of the GICv2 MMIO GICC. Not combinable with cm5 (GIC-400 = v2).

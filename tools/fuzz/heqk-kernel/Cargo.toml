@@ -1,0 +1,45 @@
+[package]
+name = "heqk-kernel-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+boot-abi = { path = "../../../os/kernel/boot-abi" }
+
+[workspace]
+
+[[bin]]
+name = "http_req"
+path = "fuzz_targets/http_req.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dns_wire"
+path = "fuzz_targets/dns_wire.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tls_hello"
+path = "fuzz_targets/tls_hello.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "frame_meta"
+path = "fuzz_targets/frame_meta.rs"
+test = false
+doc = false
+bench = false

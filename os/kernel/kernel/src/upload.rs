@@ -16,7 +16,7 @@ use crate::actionapi::{form_get, origin_ok, Ctx};
 use crate::artstore::{self, Ty};
 use hal::{BlockDev, BlockErr};
 
-pub const CHUNK_MAX: usize = 2048;
+pub const CHUNK_MAX: usize = crate::httpreq::UPLOAD_CHUNK_MAX;
 const IDLE_MS: u64 = 10 * 60 * 1000;
 
 /// A `Sized` handle on the store device (the loaders are generic over `D: BlockDev`).

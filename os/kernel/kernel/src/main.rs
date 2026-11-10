@@ -58,6 +58,11 @@ mod mcmgmt;
 mod srckey;
 mod idsbench;
 mod ja4;
+// SEC-02: the pure TLS ClientHello / JA4 parser and the DNS wire parser (also in the host libFuzzer harness).
+mod tlshello;
+// G32: JA4 fingerprints per MAC as a private-MAC rotation hint.
+mod ja4id;
+mod dnswire;
 mod fpdb;
 mod devid;
 mod oui;
@@ -77,6 +82,8 @@ mod upload;
 mod discovery;
 #[cfg(feature = "netsvc")]
 mod actionapi;
+// SEC-02: the pure HTTP request + form parser (also built into the host libFuzzer harness).
+mod httpreq;
 // Parity G16: WAN health with hysteresis.
 mod wanhealth;
 // Parity G15: local SIEM export formats (RFC 5424 / OCSF JSON).
@@ -3425,6 +3432,7 @@ fn cm5_p10_probe() {
                                     kprint!(" [WPA3] WPA3 needs the passphrase (SAE cannot use a raw 64-hex PMK) — this AP stays WPA2-PSK\n");
                                 }
                             }
+                            cyw43::ap_set_max_clients(wifi.map_or(0, |c| c.max_clients as u32));
                             cyw43::ap_start(ap_ssid, ap_chan, ap_cs, false, &mut ap); // open=false => WPA2-PSK-CCMP beacon (or the WPA3 mode)
                             // The group key goes in ONCE per BSS (index 1, PRIMARY = the fw's default
                             // group TX key, as brcmfmac's add_key) — not per station, which reset the
@@ -4540,11 +4548,11 @@ fn cm5_p10_probe() {
                                                     let dk = dmac.map(|m| srckey::dev(&m)).unwrap_or(0);
                                                     let _ = rules::flow_scan_observe6(&wbuf[..n], srckey::v6net(&s6), dk);
                                                     if wbuf[20] == 6 {
-                                                        let lease = dmac.and_then(|m| dh.lease_for(&m)).map_or(0, u32::from_be_bytes);
+                                                        let lease = dmac.map_or(0, |m| srckey::v6_attrib(dh.lease_for(&m).map_or(0, u32::from_be_bytes), &m));
                                                         rules::brute_answer6(&wbuf[..n], lease); // G36: the answer that makes v6 brute force count
                                                     }
                                                     // G24a: an IOC-listed IPv6 source reaching a LAN device (attributed to that device)
-                                                    let _ = rules::ioc_v6_hit(dmac.and_then(|m| dh.lease_for(&m)).map_or(0, u32::from_be_bytes), &s6);
+                                                    let _ = rules::ioc_v6_hit(dmac.map_or(0, |m| srckey::v6_attrib(dh.lease_for(&m).map_or(0, u32::from_be_bytes), &m)), &s6);
                                                 }
                                                 let v6a = v6.on_wan(&wbuf[14..n], nms, &mut v6buf);
                                                 // `wan in` judges only genuinely NEW inbound traffic (no flow). A neighbor-table
@@ -7122,6 +7130,8 @@ pub extern "C" fn kmain() -> ! {
             kprint!(" [P-sae] {} — WPA3-SAE on the AP (Phase 6, host SAE because the firmware forwards SAE frames — batch 37): P-256 hunting-and-pecking commit + KCK/PMK/PMKID = IEEE 802.11-2020 Annex J.10={} | AP responder end to end (commit, confirm, PMK agreed; wrong password: confirm dropped, never answered, no PMK)={} | AKM 8 PTK (KDF-SHA256) = hostapd 2.11 sha256_prf={} | AES-128-CMAC EAPOL MIC = RFC 4493 examples 1-4={} | H2E (hash-to-element, SSWU) PWE = the Annex J.10 H2E vector={}\n",
                 if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e);
         }
+        let _ = ja4id::selftest();
+        let _ = srckey::v6only_selftest();
         let cr = arch_aarch64::crashrec::selftest() && {
             // self-heal backoff: an early previous self-heal reset blocks another; a late one, a panic or none do not
             use arch_aarch64::crashrec::{take, write};
