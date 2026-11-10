@@ -155,7 +155,7 @@ enum Conn {
     Sse { last_change: u64, last_ping_ms: u64 },
 }
 
-static mut STORAGE: [SocketStorage<'static>; ALL + 1] = [SocketStorage::EMPTY; ALL + 1];
+static mut STORAGE: [SocketStorage<'static>; ALL + 2] = [SocketStorage::EMPTY; ALL + 2]; // + SNTP + the alert webhook client
 // The SNTP client's one UDP socket (the +1 storage slot): two packets of 48 B each way.
 static mut NTP_RX_META: [udp::PacketMetadata; 2] = [udp::PacketMetadata::EMPTY; 2];
 static mut NTP_RX_BUF: [u8; 128] = [0; 128];
@@ -166,6 +166,17 @@ static mut TCP_TX_BUF: [[u8; TCP_TX]; ALL] = [[0; TCP_TX]; ALL];
 static mut REQ: [[u8; 4096]; ALL] = [[0; 4096]; ALL];
 static mut HEAD: [[u8; 512]; ALL] = [[0; 512]; ALL];
 static mut SCRATCH_BUF: [[u8; SCRATCH]; ALL] = [[0; SCRATCH]; ALL];
+// Owner alert webhook client (operator 2026-11-10): one outbound TCP socket, its buffers and state.
+static mut ALERT_RX_BUF: [u8; 512] = [0; 512];
+static mut ALERT_TX_BUF: [u8; 1536] = [0; 1536];
+static mut ALERT_REQ: [u8; 1400] = [0; 1400];
+static mut ALERT_GATE: crate::alerthook::Gate = crate::alerthook::Gate::new();
+#[derive(Clone, Copy)]
+enum AlertSt {
+    Idle,
+    Connecting { len: usize, since: i64 },
+    Sent { since: i64 },
+}
 static mut DEV: McDev = McDev::new();
 static mut STATE: McState = McState::new();
 static mut AUTH: Auth = Auth::new(None);
@@ -279,6 +290,11 @@ pub struct McNode {
     pub leased: bool,
     gw: Option<[u8; 4]>,
     ntp: Sntp,
+    alert_sock: SocketHandle,
+    alert: AlertSt,
+    /// Detections after this seq are alert candidates (None until the first look: history never alerts).
+    alert_cursor: Option<u64>,
+    alert_port: u16,
 }
 
 static NODE_TAKEN: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -337,9 +353,15 @@ impl McNode {
             let _ = u.bind(NTP_LOCAL_PORT);
             sockets.add(u)
         };
+        let alert_sock = {
+            let rx = tcp::SocketBuffer::new(unsafe { &mut ALERT_RX_BUF[..] });
+            let tx = tcp::SocketBuffer::new(unsafe { &mut ALERT_TX_BUF[..] });
+            sockets.add(tcp::Socket::new(rx, tx))
+        };
         Some(McNode {
             iface, sockets, handles, conns: [Conn::Reading { got: 0, since: 0, served: 0 }; ALL], tls_open: [false; TLS_N], tls_hs: [false; TLS_N], dhcp, mac, ip, leased: dhcp.is_none(), gw,
             ntp: Sntp { sock: ntp_sock, nonce: 0, rng: seed | 1, server: None, next_ms: 0, tries: 0, synced_once: false, result: None },
+            alert_sock, alert: AlertSt::Idle, alert_cursor: None, alert_port: 49_152 + (seed % 8_000) as u16,
         })
     }
 
@@ -433,9 +455,92 @@ impl McNode {
         if self.leased {
             self.sntp_step(now_ms);
         }
+        self.alert_step(st, now_ms);
         let dev = unsafe { &mut DEV };
         self.iface.poll(Instant::from_millis(now_ms), dev, &mut self.sockets);
         changed
+    }
+
+    /// Owner alert webhook: at most one request in flight; the next gated detection when idle.
+    fn alert_step(&mut self, st: &McState, now_ms: i64) {
+        use crate::alerthook as ah;
+        let Some(hook) = ah::get() else {
+            self.alert_cursor = None;
+            return;
+        };
+        let s = self.sockets.get_mut::<tcp::Socket>(self.alert_sock);
+        match self.alert {
+            AlertSt::Idle => {
+                let mut newest = None;
+                let mut pick: Option<(u64, u16, u32, u32, u16, u8)> = None;
+                let cursor = self.alert_cursor;
+                st.for_each_det_after(cursor, &mut |d, _ms| {
+                    newest = Some(newest.map_or(d.seq, |n: u64| n.max(d.seq)));
+                    if cursor.is_some() && pick.is_none_or(|p| d.seq < p.0) {
+                        pick = Some((d.seq, d.rule_id, d.src, d.dst, d.dport, d.verdict)); // the OLDEST unseen
+                    }
+                });
+                if cursor.is_none() {
+                    self.alert_cursor = Some(newest.unwrap_or(0)); // first look: history never alerts
+                    return;
+                }
+                let Some((seq, rule, src, dst, dport, verdict)) = pick else { return };
+                // one detection per step, oldest first: below-threshold and gated-out ones advance the cursor too
+                self.alert_cursor = Some(seq);
+                let info = crate::rulecat::lookup_or_generic(rule);
+                if info.severity > hook.min_sev {
+                    return;
+                }
+                let Some(held) = (unsafe { (*core::ptr::addr_of_mut!(ALERT_GATE)).admit(rule, src, now_ms as u64) }) else {
+                    unsafe { (*core::ptr::addr_of_mut!(ah::STATS_HELD)) += 1 };
+                    return;
+                };
+                let a = ah::Alert { seq, rule_id: crate::rulecat::HEQK_RULE_BAND + rule as u32, msg: info.msg, severity: info.severity, src, dst, dport,
+                    action: if verdict == 2 { "dropped" } else { "observed" }, held_back: held };
+                let n = ah::request(&hook, &a, unsafe { &mut *core::ptr::addr_of_mut!(ALERT_REQ) });
+                if n == 0 {
+                    return;
+                }
+                s.abort();
+                self.alert_port = if self.alert_port >= 65_000 { 49_152 } else { self.alert_port + 1 };
+                let ep = (IpAddress::v4(hook.ip[0], hook.ip[1], hook.ip[2], hook.ip[3]), hook.port);
+                if s.connect(self.iface.context(), ep, self.alert_port).is_ok() {
+                    ah::note_queued();
+                    self.alert = AlertSt::Connecting { len: n, since: now_ms };
+                } else {
+                    ah::note_result(0);
+                }
+            }
+            AlertSt::Connecting { len, since } => {
+                if s.may_send() {
+                    let req = unsafe { &(&*core::ptr::addr_of!(ALERT_REQ))[..len] };
+                    if s.send_slice(req).ok() == Some(len) {
+                        self.alert = AlertSt::Sent { since: now_ms };
+                    } else {
+                        s.abort();
+                        ah::note_result(0);
+                        self.alert = AlertSt::Idle;
+                    }
+                } else if now_ms - since > 10_000 || !s.is_open() {
+                    s.abort();
+                    ah::note_result(0);
+                    self.alert = AlertSt::Idle;
+                }
+            }
+            AlertSt::Sent { since } => {
+                let mut head = [0u8; 16];
+                let got = if s.can_recv() { s.recv_slice(&mut head).unwrap_or(0) } else { 0 };
+                if got >= 12 {
+                    ah::note_result(ah::status(&head[..got]));
+                    s.abort();
+                    self.alert = AlertSt::Idle;
+                } else if now_ms - since > 10_000 || (!s.is_open() && got == 0) {
+                    s.abort();
+                    ah::note_result(0);
+                    self.alert = AlertSt::Idle;
+                }
+            }
+        }
     }
 
     /// No SNTP from this node (the AP's node lives on the LAN side; its gateway is itself).

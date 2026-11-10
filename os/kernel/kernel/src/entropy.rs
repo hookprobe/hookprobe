@@ -48,6 +48,11 @@ compile_error!(
      cloud profile: the cloud HwTrng leaf is the real SMCCC TRNG, and a seeded path next to \
      it is the reused-ephemeral defect. Build the cloud image WITHOUT securechannel-selftest."
 );
+#[cfg(all(feature = "securechannel-host-responder", any(feature = "cm5", feature = "cloud")))]
+compile_error!(
+    "securechannel-host-responder (a seeded RESPONDER static for the operator's host-side super-PoP / \
+     responder-sim) must never be built into a device or cloud image."
+);
 #[cfg(all(feature = "securechannel-selftest", feature = "cm5"))]
 compile_error!(
     "securechannel-selftest (seeded/deterministic entropy) must NEVER be enabled on the \
