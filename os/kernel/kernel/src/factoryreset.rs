@@ -12,7 +12,7 @@
 //! A power cut anywhere before step 4 leaves the request in the journal, so the whole wipe runs again; one during
 //! step 4 leaves an empty journal (the record chain breaks at the first zeroed sector). Then one more reboot, so
 //! the device comes up exactly as shipped: OWNER.TXT is the owner key again, nothing restored.
-//!   2b. the enrolled owner configuration key in the anchor record (ADR 0058 D3; the vendor key + floor stay);
+//!   (the enrolled owner configuration key is NOT cleared — ADR 0059 Phase 0.6; a reflash resets it);
 //! Never touched: boot slots, POLICY.TXT / WAN.TXT, the device key (SRK), anti-rollback floors, OTP.
 
 macro_rules! kprint {
@@ -62,9 +62,10 @@ pub fn run(pf: &mut crate::prodfull::ProdFull) {
         .ok_or("no DataVolume")
         .and_then(|(lo, _)| zero_dv(lo, lo + crate::artstore::MAN_SECT));
     kprint!(" [FACTORY-RESET] 2/4 artifact manifest: {:?}\n", man);
-    // ADR 0058 D3: the enrolled owner configuration key goes too (the vendor key + POLICY floor stay)
-    let own = crate::anchor::clear_owner();
-    kprint!(" [FACTORY-RESET] 2b/4 owner configuration key: {:?}\n", own);
+    // The enrolled owner configuration key STAYS (ADR 0059 Phase 0.6): the owner TOKEN alone must not be able to
+    // drop the owner KEY and enroll another. A full reflash (physical access) still resets it; an owner-signed
+    // reset (HQRST1) is ADR 0059 Phase 2.
+    let own: Result<(), &str> = Ok(());
     let snap = pf.erase_snapshot();
     kprint!(" [FACTORY-RESET] 3/4 sealed snapshot (both A/B slots rewritten empty): {}\n", snap);
     if ev.is_err() || man.is_err() || own.is_err() || !snap {

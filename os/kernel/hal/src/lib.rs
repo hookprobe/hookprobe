@@ -401,6 +401,30 @@ pub enum WanCfgErr {
     BadGateway,
     /// Credential empty / too long / not printable.
     BadCred,
+    /// A key appears twice (a later line must never silently override an earlier one — SEC 2026-11-10: lines
+    /// appended after the signed length overrode the signed ones).
+    Duplicate,
+}
+
+/// The `key` of one config line (`key=value`, trimmed), None for blank / comment / magic / non-kv lines.
+fn line_key(raw: &[u8]) -> Option<&[u8]> {
+    let line = trim(raw);
+    if line.is_empty() || line[0] == b'#' || line == WAN_CFG_MAGIC {
+        return None;
+    }
+    let eq = line.iter().position(|&b| b == b'=')?;
+    Some(trim(&line[..eq]))
+}
+
+/// Any key given twice in a WAN.TXT body (bounded: the body is one 512-B sector).
+fn wan_dup_keys(body: &[u8]) -> bool {
+    for (i, a) in body.split(|&b| b == b'\n').enumerate() {
+        let Some(ka) = line_key(a) else { continue };
+        if body.split(|&b| b == b'\n').take(i).any(|b| line_key(b) == Some(ka)) {
+            return true;
+        }
+    }
+    false
 }
 
 fn parse_quad(v: &[u8]) -> Option<[u8; 4]> {
@@ -453,6 +477,9 @@ fn trim(mut s: &[u8]) -> &[u8] {
 /// ```
 pub fn parse_wan_cfg(buf: &[u8]) -> Result<WanMode, WanCfgErr> {
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    if wan_dup_keys(&buf[..end]) {
+        return Err(WanCfgErr::Duplicate);
+    }
     let mut magic = false;
     let (mut mode, mut ip, mut prefix, mut gw, mut dns) = (None::<&[u8]>, None, None, None, None);
     let (mut user, mut pass) = (None::<&[u8]>, None::<&[u8]>);
@@ -553,6 +580,9 @@ pub struct WanLink {
 
 pub fn parse_wan_link(buf: &[u8]) -> Result<WanLink, WanCfgErr> {
     let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+    if wan_dup_keys(&buf[..end]) {
+        return Err(WanCfgErr::Duplicate);
+    }
     let mut l = WanLink::default();
     let (mut mvlan, mut mmode, mut mip, mut mgw) = (0u16, None::<&[u8]>, None::<([u8; 4], u8)>, None::<[u8; 4]>);
     let vid = |v: &[u8]| -> Result<u16, WanCfgErr> {

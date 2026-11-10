@@ -14115,14 +14115,8 @@ pub static mut POLICY: hal::policy::Policy = hal::policy::Policy::new();
 /// WAN.TXT link keys (VLAN / QinQ / management sub-interface).
 fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::WanCfgErr>> {
     let mut sec = [0u8; 512];
-    dev.read_block(0, &mut sec).ok()?;
-    let p1 = store::parse_mbr(&sec)[0].start;
-    if p1 == 0 {
-        return None;
-    }
-    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
-    dev.read_block(lba, &mut sec).ok()?;
-    Some(hal::parse_wan_link(&sec))
+    let n = wan_body(dev, &mut sec)?;
+    Some(hal::parse_wan_link(&sec[..n]))
 }
 
 /// A station frame for Mission Control on the AP address: IPv4 TCP to `our_ip`:80/443.
@@ -14232,6 +14226,12 @@ fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr
                     break;
                 }
             }
+            // SEC 2026-11-10: keep EXACTLY the signed bytes [..len]; the parsers read this buffer and nothing else
+            // (they used to re-read the whole sector, so lines appended after the signed length overrode it)
+            if v.is_ok() {
+                let len = (u64::from_le_bytes(sig[16..24].try_into().unwrap()) as usize).min(512);
+                unsafe { WAN_VERIFIED = Some((sec, len)) };
+            }
             v
         }
     };
@@ -14251,6 +14251,28 @@ fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr
     Some(v)
 }
 
+/// The WAN.TXT bytes that verified (`wan_signed`), exactly the signed length.
+static mut WAN_VERIFIED: Option<([u8; 512], usize)> = None;
+
+/// What the WAN parsers may read: with an operator key, ONLY the verified signed bytes (None = nothing verified
+/// => the DHCP / untagged defaults); without a key (standalone image), the file as before.
+fn wan_body<D: hal::BlockDev>(dev: &D, out: &mut [u8; 512]) -> Option<usize> {
+    if policysig::config_key().is_some() {
+        let (b, l) = unsafe { WAN_VERIFIED }?;
+        *out = b;
+        return Some(l);
+    }
+    let mut sec = [0u8; 512];
+    dev.read_block(0, &mut sec).ok()?;
+    let p1 = store::parse_mbr(&sec)[0].start;
+    if p1 == 0 {
+        return None;
+    }
+    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
+    dev.read_block(lba, out).ok()?;
+    Some(512)
+}
+
 /// Is there a WAN.TXT (staged store copy or boot partition) at all?
 fn wan_present<D: hal::BlockDev>(dev: &D) -> bool {
     let mut sec = [0u8; 512];
@@ -14265,14 +14287,8 @@ fn wan_present<D: hal::BlockDev>(dev: &D) -> bool {
 #[allow(dead_code)]
 fn load_wan_cfg<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanMode, hal::WanCfgErr>> {
     let mut sec = [0u8; 512];
-    dev.read_block(0, &mut sec).ok()?;
-    let p1 = store::parse_mbr(&sec)[0].start;
-    if p1 == 0 {
-        return None;
-    }
-    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
-    dev.read_block(lba, &mut sec).ok()?;
-    Some(hal::parse_wan_cfg(&sec))
+    let n = wan_body(dev, &mut sec)?;
+    Some(hal::parse_wan_cfg(&sec[..n]))
 }
 
 /// `[P-wancfg]` — WAN.TXT parsing (hal::parse_wan_cfg) against fixed vectors.
