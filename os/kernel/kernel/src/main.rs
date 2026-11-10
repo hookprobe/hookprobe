@@ -3403,14 +3403,22 @@ fn cm5_p10_probe() {
                             kprint!("   [P11-AP2] try {}: channel {} chanspec {:#06x}\n", ap_tries, ap_chan, ap_cs);
                             #[cfg(feature = "wpa3probe")]
                             cyw43::probe_set_psk(ap_psk);
-                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise this build's default (WPA3 transition:
-                            // WPA2 clients keep joining, WPA3 clients get SAE + PMF). SAE needs the passphrase itself.
+                            // Phase 6: WPA3. WIFI.TXT `security=` wins; otherwise WPA2 — the proven default. Transition mode
+                            // is opt-in: on this firmware a WPA2-only (no-PMF) station is refused at association (status 38,
+                            // metal batches 45/46), so it must never be switched on silently. `HEQK_AP_SECURITY` (wpa3 |
+                            // wpa3-transition) changes the default for bench builds. SAE needs the passphrase itself.
                             #[cfg(feature = "wpa3")]
                             {
+                                let build_default = match option_env!("HEQK_AP_SECURITY") {
+                                    Some("wpa3") => cyw43::SEC_WPA3,
+                                    Some("wpa3-transition") => cyw43::SEC_WPA3_TRANSITION,
+                                    _ => cyw43::SEC_WPA2,
+                                };
                                 let want = match wifi.map(|c| c.security) {
                                     Some(wificfg::SEC_WPA2) => cyw43::SEC_WPA2,
                                     Some(wificfg::SEC_WPA3) => cyw43::SEC_WPA3,
-                                    _ => cyw43::SEC_WPA3_TRANSITION,
+                                    Some(wificfg::SEC_WPA3_TRANSITION) => cyw43::SEC_WPA3_TRANSITION,
+                                    _ => build_default,
                                 };
                                 let got = cyw43::ap_set_security(want, ap_ssid, ap_psk);
                                 if got != want {

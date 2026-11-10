@@ -7,7 +7,7 @@ during the autonomous work, and none will be made without the owner's explicit, 
 |---|---|---|
 | D-OTP — customer OTP provisioning | **Production blocker** | Production readiness = **BLOCKED**. Normal images never write OTP (`otp-provision` is a separate HBoot build). |
 | D-RPMB — eMMC RPMB key programming | **Owner decision required** | No RPMB access exists in the code (the eMMC driver has no partition-switch path). Evidence (RPMB size) collected read-only. |
-| WPA3 on the AP | **Decided (batch 37): host build, not a supplier dependency. Production readiness for WPA3 waits on that build being metal-proven.** | The firmware accepts `wpa_auth=SAE` and `mfp=2` but refuses in-firmware SAE (`sae_password`). It forwards each station's SAE Authentication frame to the host as event 188 `EXT_AUTH_FRAME_RX` (`docs/design/metal-evidence/20261110-batch37.md`). The host-side SAE responder, PMF/IGTK and the transmit path are the build; WPA2 stays the shipped default until then. |
+| WPA3 on the AP | **Built and metal-proven (batches 38–47): WPA3-SAE + PMF works as a host build.** Default stays WPA2; WPA3 is opt-in. | Host SAE (H2E + hunting-and-pecking) answered through `mgmt_frame`; firmware completion via `auth_status` (WL_EXTAUTH_SUCCESS); the AKM-8 4-way with the IGTK. Two client chipsets joined over SAE with PMF required (`WPA3: PASS (6/6)`, LAN suite 18/18). Transition mode refuses WPA2-only stations at association (status 38), so it is opt-in and documented (`docs/design/metal-evidence/20261110-batch38-47.md`). |
 
 ---
 
@@ -136,6 +136,13 @@ above; (c) which unit may be programmed first. Until then: the rollback gap is d
 and the human register.
 
 ---
+
+## WPA3 on the AP — BUILT and metal-proven (batches 38–47, 2026-11-10)
+
+See `docs/design/metal-evidence/20261110-batch38-47.md`.
+- `WIFI.TXT security=wpa3` (SAE only, PMF required): a WPA3 station joins, keys and passes traffic. The bench Pi's USB adapter and its onboard brcmfmac both did.
+- `security=wpa3-transition`: SAE stations join, but this firmware rejects a WPA2-only (no-PMF) station at association (status 38). It suits WPA3/PMF-capable fleets only.
+- The default stays `wpa2`. The production image needs the `wpa3` feature for any of this to be selectable; it does not change behaviour unless chosen.
 
 ## WPA3 on the AP — DECIDED by experiment (batch 37, 2026-11-10)
 

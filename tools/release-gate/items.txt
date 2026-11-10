@@ -25,10 +25,10 @@ REL-05 | reliability | 72 h soak under real traffic (final acceptance, after eve
 REL-06 | reliability | Thermal in the enclosure at sustained throughput | blocked:not run
 REL-07 | reliability | Client scale (many mixed clients, roaming, sleeping phones) | blocked:2 bench clients only
 REL-08 | reliability | Wi-Fi TX-stall root cause (recovery exists: kick + wedge self-heal reset) | blocked:root cause open
-REL-09 | reliability | Factory reset erases the owner data (journal, evidence log, snapshot, artifact manifest) and the unit returns as shipped | phase:Pownerjournal,metal:docs/design/metal-evidence/20261110-factory-reset.md:FACTORY-RESET: PASS
-NET-01 | network | DNS under a saturating download: no worse than the path baseline, p90 < 500 ms (acceptance pending the operator) | phase:Ptxprio,signoff:dns-under-load-acceptance
+REL-09 | reliability | Factory reset erases the owner data (journal, evidence log, snapshot, artifact manifest) and the unit returns as shipped | phase:Pownerjournal,metal:docs/design/metal-evidence/20261110-batch38-47.md:FACTORY-RESET: PASS
+NET-01 | network | DNS under a saturating download: lost <= the path baseline (public resolver via the same AP, same load, same run) AND p90 < 500 ms (operator-accepted 2026-11-10) | phase:Ptxprio,metal:docs/design/metal-evidence/dns-under-load.md:DNS-UNDER-LOAD: PASS
 NET-02 | network | LAN client end to end (DHCP, DNS, NAT, IPv6, holds) | metal:docs/design/metal-evidence/20261110-batch29.md:LAN-CLIENT: PASS
-NET-03 | network | WPA3-SAE + PMF on the AP (firmware forwards SAE auth frames to the host: event 188 EXT_AUTH_FRAME_RX; host SAE build) | metal:docs/design/metal-evidence/20261110-batch37.md:EXT_AUTH_FRAME_RX,blocked:host SAE responder + PMF/IGTK build and metal join (Phase 6)
+NET-03 | network | WPA3-SAE + PMF on the AP (host SAE; opt-in, WPA2 default; transition mode excludes WPA2-only stations on this firmware) | phase:Psae,metal:docs/design/metal-evidence/20261110-batch38-47.md:WPA3: PASS \(6/6\)
 SEC-01 | isolation | ADR 0050 D4: network-facing parsers in isolated EL0 servers (HTTP, DNS/DHCP, WAN clients, Noise) | blocked:G24b not built
 SEC-02 | isolation | Coverage-guided fuzzing of the kernel-crate parsers (journal, upload, store, HTTP, DNS) | blocked:only hal + boot_abi targets today
 SEC-03 | management | Mission Control end to end (HTTPS PQ hybrid, browser, actions) | e2e
