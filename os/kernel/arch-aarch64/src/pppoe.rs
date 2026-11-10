@@ -732,42 +732,13 @@ impl Pppoe {
             }
             CONF_REQ => {
                 self.stats.lcp_req_rx += 1;
-                // Classify every option: Reject unknown/unsupported, Nak an auth we cannot do.
-                let mut rej = [0u8; 128];
-                let mut nrej = 0;
-                let mut nak = [0u8; 16];
-                let mut nnak = 0;
-                let mut auth = 0u16;
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        return; // malformed: silently drop (RFC 1661)
-                    }
-                    let opt = &data[o..o + l];
-                    match t {
-                        1 | 2 | 5 => {} // MRU, ACCM (meaningless on PPPoE, harmless), Magic
-                        3 if l >= 4 => {
-                            let ap = be16(opt, 2);
-                            if ap == PPP_PAP && l == 4 {
-                                auth = PPP_PAP;
-                            } else if ap == PPP_CHAP && l == 5 && opt[4] == 5 {
-                                auth = PPP_CHAP;
-                            } else if nnak == 0 {
-                                // Suggest CHAP-MD5 (RFC 1994) instead.
-                                nak[..5].copy_from_slice(&[3, 5, 0xc2, 0x23, 5]);
-                                nnak = 5;
-                            }
-                        }
-                        _ => {
-                            if nrej + l <= rej.len() {
-                                rej[nrej..nrej + l].copy_from_slice(opt);
-                                nrej += l;
-                            }
-                        }
-                    }
-                    o += l;
+                // ADR 0050 D4 step 3b-ii: the option walk runs in EL0 (el0-lansvc) when it is loaded; the reply is built
+                // from the classified record (rejected options copied out of it), never by re-reading the frame here
+                let c = crate::wanparse::lcp_req(data);
+                if c.malformed {
+                    return; // malformed: silently drop (RFC 1661)
                 }
+                let (rej, nrej, nak, nnak, auth) = (c.rej, c.nrej as usize, c.nak, c.nnak as usize, c.auth);
                 if nrej > 0 {
                     self.send_ctl(tx, PPP_LCP, CONF_REJ, id, &rej[..nrej]);
                     self.stats.lcp_nak_rej_tx += 1;

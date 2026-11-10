@@ -365,6 +365,16 @@ fn wan_pppoe_disc(f: &[u8], plen: usize) -> Option<hal::pppwire::DiscTags> {
     Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_disc(&o) } else { hal::pppwire::DISC0 })
 }
 
+#[cfg(feature = "mctls")]
+fn wan_lcp(data: &[u8]) -> Option<hal::pppwire::LcpReq> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::lcp_classify(data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::LCP_LEN }>(hal::lansvcabi::CMD_WAN_LCP_REQ, &[], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_lcp(&o) } else { hal::pppwire::LcpReq { malformed: true, ..hal::pppwire::LCP0 } })
+}
+
 /// Route the DHCP server's parse (step 2b) and the WAN control parsers (step 3) through `el0-lansvc` (called once
 /// at boot, before any client is served or the uplink comes up).
 pub fn install_dhcp() {
@@ -375,6 +385,7 @@ pub fn install_dhcp() {
         arch_aarch64::wanparse::EL0_RA = Some(wan_ra);
         arch_aarch64::wanparse::EL0_DHCP6 = Some(wan_dhcp6);
         arch_aarch64::wanparse::EL0_PPPOE_DISC = Some(wan_pppoe_disc);
+        arch_aarch64::wanparse::EL0_LCP = Some(wan_lcp);
     };
 }
 
@@ -521,11 +532,16 @@ pub fn selftest() -> bool {
     let (k, e) = (hal::pppwire::disc_tags(&pf, tags.len()), wanparse::pppoe_disc(&pf, tags.len()));
     let pppoe = k == e && e.hu_len == 4 && e.host_uniq[..4] == [0xde, 0xad, 0xbe, 0xef] && e.cookie[..e.cookie_len as usize] == *b"ck1"
         && e.ac_name[..e.ac_name_len as usize] == *b"AC" && e.err;
+    // 3b-ii: an LCP Configure-Request (MRU, auth PAP, an unknown option 0x0d) classifies identically
+    let lcp_in: &[u8] = &[1, 4, 0x05, 0xd4, 3, 4, 0xc0, 0x23, 0x0d, 3, 6];
+    let (lk, le) = (hal::pppwire::lcp_classify(lcp_in), wanparse::lcp_req(lcp_in));
+    let lcp = lk == le && le.auth == 0xc023 && le.nrej == 3 && le.rej[..3] == [0x0d, 3, 6] && wanparse::lcp_req(&[3, 1]).malformed;
+    let pppoe = pppoe && lcp;
     let wan_ok = same_offer && other_xid && same_ra && junk && pppoe;
     let (_, c_after, _, _, _) = stats();
     let pass = where_ == "el0" && same_q && same_w && bad && recovered && same_d && bad_d && wan_ok && c_after > 0;
     arch_aarch64::_print(format_args!(
-        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags identical={}\n",
+        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request classification identical={}\n",
         if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe
     ));
     pass

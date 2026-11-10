@@ -122,6 +122,11 @@ pub extern "C" fn _start() -> ! {
             out[..rec.len()].copy_from_slice(&rec);
             exit(ST_OK, rec.len())
         }
+        CMD_WAN_LCP_REQ => {
+            let rec = hal::pppwire::encode_lcp(&hal::pppwire::lcp_classify(dns));
+            out[..rec.len()].copy_from_slice(&rec);
+            exit(ST_OK, rec.len())
+        }
         CMD_SELFTEST_FAULT => unsafe { core::ptr::read_volatile(0x10 as *const u32) as usize as *const u8; core::ptr::write_volatile(0x8 as *mut u32, 1); exit(ST_OK, 0) },
         _ => exit(ST_BAD_CMD, 0),
     }

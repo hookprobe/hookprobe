@@ -40,6 +40,18 @@ pub fn pppoe_disc(f: &[u8], plen: usize) -> hal::pppwire::DiscTags {
     }
 }
 
+pub type LcpFn = fn(&[u8]) -> Option<hal::pppwire::LcpReq>;
+pub static mut EL0_LCP: Option<LcpFn> = None;
+
+/// D4 step 3b-ii: an LCP Configure-Request's option classification (a server fault reads as malformed: dropped,
+/// the AC retransmits).
+pub fn lcp_req(data: &[u8]) -> hal::pppwire::LcpReq {
+    match unsafe { EL0_LCP } {
+        Some(h) => h(data).unwrap_or(hal::pppwire::LcpReq { malformed: true, ..hal::pppwire::LCP0 }),
+        None => hal::pppwire::lcp_classify(data),
+    }
+}
+
 pub fn dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
     match unsafe { EL0_DHCP6 } {
         Some(h) => h(ip, xid).flatten(),
