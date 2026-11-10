@@ -679,11 +679,15 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             hex(w, crate::policysig::key());
             // ADR 0059: this device's id for device-bound HQCFG1 bundles and HQCHAL1 elevation (public)
             let dev = crate::config_device_id();
-            w.raw(",\"device_id\":\"");
-            for b in dev {
-                let _ = write!(w, "{:02x}", b);
+            if dev == [0; 16] {
+                w.raw(",\"device_id\":null"); // no device identity (no SRK, e.g. QEMU): bundles stay unbound
+            } else {
+                w.raw(",\"device_id\":\"");
+                for b in dev {
+                    let _ = write!(w, "{:02x}", b);
+                }
+                w.raw("\"");
             }
-            w.raw("\"");
             w.raw(",\"owner_key\":");
             hex(w, crate::anchor::owner());
             // ADR 0059 0.5: no key at all = anyone with the card reconfigures the device; Mission Control shows a banner

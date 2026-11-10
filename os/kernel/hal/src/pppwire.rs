@@ -106,3 +106,85 @@ pub fn decode_disc(o: &[u8; DISC_LEN]) -> DiscTags {
     d.err = o[196] != 0;
     d
 }
+
+// ---- D4 step 3b-ii: PPP LCP Configure-Request option classification ------------------------------------------
+
+const PPP_PAP: u16 = 0xc023;
+const PPP_CHAP: u16 = 0xc223;
+
+/// What the AC's LCP Configure-Request asks for, and what we must answer (RFC 1661): the rejected options (copied
+/// out of the request — the engine replies with THESE bytes, never re-reads the frame), a Nak for an auth we cannot
+/// do, or Ack with the chosen auth.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LcpReq {
+    /// A malformed option list: silently dropped (RFC 1661).
+    pub malformed: bool,
+    pub auth: u16,
+    pub rej: [u8; 128],
+    pub nrej: u8,
+    pub nak: [u8; 16],
+    pub nnak: u8,
+}
+pub const LCP0: LcpReq = LcpReq { malformed: false, auth: 0, rej: [0; 128], nrej: 0, nak: [0; 16], nnak: 0 };
+
+/// Classify the options of an LCP Configure-Request's data (the bytes after code/id/length).
+pub fn lcp_classify(data: &[u8]) -> LcpReq {
+    let mut r = LCP0;
+    let mut nrej = 0usize;
+    let mut o = 0;
+    while o + 2 <= data.len() {
+        let (t, l) = (data[o], data[o + 1] as usize);
+        if l < 2 || o + l > data.len() {
+            r.malformed = true;
+            return r;
+        }
+        let opt = &data[o..o + l];
+        match t {
+            1 | 2 | 5 => {} // MRU, ACCM (meaningless on PPPoE, harmless), Magic
+            3 if l >= 4 => {
+                let ap = be16(opt, 2);
+                if ap == PPP_PAP && l == 4 {
+                    r.auth = PPP_PAP;
+                } else if ap == PPP_CHAP && l == 5 && opt[4] == 5 {
+                    r.auth = PPP_CHAP;
+                } else if r.nnak == 0 {
+                    // Suggest CHAP-MD5 (RFC 1994) instead.
+                    r.nak[..5].copy_from_slice(&[3, 5, 0xc2, 0x23, 5]);
+                    r.nnak = 5;
+                }
+            }
+            _ => {
+                if nrej + l <= r.rej.len() {
+                    r.rej[nrej..nrej + l].copy_from_slice(opt);
+                    nrej += l;
+                }
+            }
+        }
+        o += l;
+    }
+    r.nrej = nrej as u8;
+    r
+}
+
+pub const LCP_LEN: usize = 1 + 2 + 128 + 1 + 16 + 1;
+pub fn encode_lcp(r: &LcpReq) -> [u8; LCP_LEN] {
+    let mut o = [0u8; LCP_LEN];
+    o[0] = r.malformed as u8;
+    o[1..3].copy_from_slice(&r.auth.to_le_bytes());
+    o[3..131].copy_from_slice(&r.rej);
+    o[131] = r.nrej;
+    o[132..148].copy_from_slice(&r.nak);
+    o[148] = r.nnak;
+    o
+}
+pub fn decode_lcp(o: &[u8; LCP_LEN]) -> LcpReq {
+    let mut r = LCP0;
+    r.malformed = o[0] != 0;
+    let a = u16::from_le_bytes([o[1], o[2]]);
+    r.auth = if a == PPP_PAP || a == PPP_CHAP { a } else { 0 };
+    r.rej.copy_from_slice(&o[3..131]);
+    r.nrej = o[131].min(128);
+    r.nak.copy_from_slice(&o[132..148]);
+    r.nnak = o[148].min(16);
+    r
+}
