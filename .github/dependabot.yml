@@ -21,6 +21,7 @@ updates:
       - "/os/kernel/efiboot"
       - "/os/build/heqk-sign"
       - "/onboarding/enrollment/responder-sim"
+      - "/onboarding/enrollment/superpop"
       - "/os/build/kem-diff"
       - "/os/build/kem-diff/nostd-check"
     schedule: { interval: "weekly", day: "monday" }

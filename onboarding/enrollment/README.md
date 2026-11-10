@@ -9,6 +9,7 @@ policy. Without enrollment it keeps running as a full local SOC.
 |---|---|
 | Device side | [`enroll.rs`](../../os/kernel/kernel/src/enroll.rs), [`securechannel.rs`](../../os/kernel/kernel/src/securechannel.rs), [`controlplane.rs`](../../os/kernel/kernel/src/controlplane.rs), [`exportwire.rs`](../../os/kernel/kernel/src/exportwire.rs) |
 | **Control-plane responder** (host) | [`responder-sim/`](responder-sim/): it links the kernel's own `securechannel.rs`, so the wire bytes are identical |
+| **G19 super-PoP** (host, operator-run SASE tunnel endpoint) | [`superpop/`](superpop/): the same Noise channel carries tunnelled traffic to the internet; wire spec + runbook in its README |
 | Design | [heqk-control-plane](../../docs/design/heqk-control-plane.md) |
 
 ```sh
