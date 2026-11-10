@@ -144,6 +144,10 @@ account or cloud.
 
 ### D9: One management ABI; hsh runs at EL0
 
+The implementation specification is `docs/design/hsh-native-management-shell.md` (operator, 2026-11-10). Its §0
+reconciles that specification with the repository. Its R6 asks the operator to decide which transport `hsh` uses
+in production.
+
 The configuration manager (cfgd, in EL1) is the only component that writes configuration. It exposes a bounded
 set of messages: state, stage, confirm, rollback, enroll, rotate, delegate, revoke, challenge, recovery. Mission
 Control handlers, `hsh` and the AI assistant tool layer are thin clients of this ABI.
