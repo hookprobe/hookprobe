@@ -25,7 +25,7 @@ use hal::BlockDev;
 pub const WINDOW_S: u64 = 300;
 
 /// The device's REAL management paths: (interface, the device's own address there, prefix) — registered where the
-/// kernel brings each interface up (the AP / LAN bridge, eth1, the management VLAN). Empty = the shipped LAN
+/// kernel brings each interface up (the Wi-Fi AP, the management VLAN; Mission Control is not served on eth1). Empty = the shipped LAN
 /// addressing (10.99.0.1/24) is assumed.
 static mut PATHS: [(u8, [u8; 4], u8); 4] = [(0xff, [0; 4], 0); 4];
 pub fn set_path(ifc: hal::policy::If, dev_ip: [u8; 4], prefix: u8) {

@@ -3524,8 +3524,7 @@ fn cm5_p10_probe() {
                         let our_ip = [10u8, 99, 0, 1];
                         let offer_ip = [10u8, 99, 0, 10];
                         // ADR 0059 D7: the real management paths cfgd probes before staging a bundle
-                        cfgd::set_path(hal::policy::If::Lan, our_ip, 24);
-                        cfgd::set_path(hal::policy::If::Eth1, our_ip, 24);
+                        cfgd::set_path(hal::policy::If::Lan, our_ip, 24); // the AP (Mission Control is not served on eth1)
                         ratelimit::set_local_ip(0, u32::from_be_bytes(our_ip)); // ADR 0049 D3: our own addresses
                         let mut rx = [0u8; 2048];
                         let mut wbuf = [0u8; 2048];
@@ -4284,7 +4283,11 @@ fn cm5_p10_probe() {
                                             apcore::Client6::IdsDrop => v6_ids_drop[0] += 1,
                                             _ => {}
                                         }
-                                    } else if act == 0 && (up.usable() || unsafe { uplink::MGMT }.is_some()) && frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
+                                    } else if act == 0 && frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00
+                                        // ADR 0058 rule 7 (metal batch 58): a frame TO the device (Mission Control, ping on the AP
+                                        // address) is always handled — management over Wi-Fi must survive a WAN change that takes the
+                                        // uplink AND the management VLAN away; only FORWARDING waits for an uplink
+                                        && (up.usable() || unsafe { uplink::MGMT }.is_some() || frame[30..34] == our_ip) {
                                         // Not ours to answer → the forwarding path. Three gates, in order:
                                         // (1) (MAC,IP) must be a lease we handed out — anti-hijack;
                                         // (2) the signed rule plane (IDS/IPS) — a threat verdict DROPs here;
