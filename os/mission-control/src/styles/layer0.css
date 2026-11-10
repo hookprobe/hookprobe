@@ -145,3 +145,4 @@
 .setup-meter { display: flex; gap: 6px; }
 .setup-meter span { flex: 1; height: 6px; border-radius: 999px; background: rgba(255,255,255,.1); }
 .setup-meter span.is-on { background: var(--hp-green); }
+.dev-name-input { font: inherit; font-size: 16px; min-height: 44px; padding: 0 12px; width: 100%; box-sizing: border-box; background: var(--hp-surface); color: var(--hp-text-primary); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); }
