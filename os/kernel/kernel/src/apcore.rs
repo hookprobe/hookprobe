@@ -768,6 +768,95 @@ pub fn station_relay(frame: &[u8], dh: &arch_aarch64::dhcpd::ApDhcp, now_s: u64,
     }
 }
 
+// ---- AP TX priority (soak 2026-11-10: DNS lost / 2-s tails under a saturating download) -----------------------
+
+/// A frame to a Wi-Fi station that must not wait behind a bulk backlog: ARP, DHCP, DNS answers (UDP from port 53),
+/// ICMP / ICMPv6 (incl. neighbour discovery), and TCP segments with NO payload (pure ACK / SYN / FIN / RST — they
+/// pace the sender; delaying them throttles every flow). Narrow on purpose: generic small UDP (QUIC, games) stays
+/// in order with its flow — reordering it would look like loss to its congestion control.
+pub fn tx_priority(f: &[u8]) -> bool {
+    if f.len() < 14 {
+        return false;
+    }
+    match u16::from_be_bytes([f[12], f[13]]) {
+        0x0806 => true, // ARP
+        0x0800 if f.len() >= 34 => {
+            let ihl = ((f[14] & 0x0f) as usize) * 4;
+            let l4 = 14 + ihl;
+            let total = u16::from_be_bytes([f[16], f[17]]) as usize;
+            match f[23] {
+                1 => true, // ICMP
+                17 if f.len() >= l4 + 4 => {
+                    let (sp, dp) = (u16::from_be_bytes([f[l4], f[l4 + 1]]), u16::from_be_bytes([f[l4 + 2], f[l4 + 3]]));
+                    sp == 53 || sp == 67 || dp == 68
+                }
+                6 if f.len() >= l4 + 13 && ihl >= 20 => {
+                    let thl = ((f[l4 + 12] >> 4) as usize) * 4;
+                    total > 0 && total <= ihl + thl // no payload
+                }
+                _ => false,
+            }
+        }
+        0x86dd if f.len() >= 54 => {
+            let plen = u16::from_be_bytes([f[18], f[19]]) as usize;
+            match f[20] {
+                58 => true, // ICMPv6 (ND, RA, echo)
+                17 if f.len() >= 58 => {
+                    let (sp, dp) = (u16::from_be_bytes([f[54], f[55]]), u16::from_be_bytes([f[56], f[57]]));
+                    sp == 53 || sp == 547 || dp == 546
+                }
+                6 if f.len() >= 67 => {
+                    let thl = ((f[66] >> 4) as usize) * 4;
+                    plen > 0 && plen <= thl
+                }
+                _ => false,
+            }
+        }
+        _ => false,
+    }
+}
+
+/// `[P-txprio]`: the priority class — exactly the control frames, never bulk or generic small UDP.
+pub fn txprio_selftest() -> bool {
+    let mut f = [0u8; 1514];
+    let v4 = |f: &mut [u8; 1514], proto: u8, total: u16| {
+        *f = [0; 1514];
+        f[12] = 0x08; f[13] = 0x00; f[14] = 0x45;
+        f[16..18].copy_from_slice(&total.to_be_bytes());
+        f[23] = proto;
+    };
+    // DNS answer (UDP src 53)
+    v4(&mut f, 17, 80); f[34..36].copy_from_slice(&53u16.to_be_bytes()); f[36..38].copy_from_slice(&40000u16.to_be_bytes());
+    let dns = tx_priority(&f[..94]);
+    // QUIC-sized UDP from 443: not priority
+    f[34..36].copy_from_slice(&443u16.to_be_bytes());
+    let quic = !tx_priority(&f[..94]);
+    // pure TCP ACK (20 + 20 header, no payload) vs a 1460-byte segment
+    v4(&mut f, 6, 40); f[46] = 0x50;
+    let ack = tx_priority(&f[..54]);
+    v4(&mut f, 6, 1500); f[46] = 0x50;
+    let bulk = !tx_priority(&f[..1514]);
+    // ARP, ICMP, DHCP offer (dst 68)
+    f = [0; 1514]; f[12] = 0x08; f[13] = 0x06;
+    let arp = tx_priority(&f[..42]);
+    v4(&mut f, 1, 84);
+    let icmp = tx_priority(&f[..98]);
+    v4(&mut f, 17, 300); f[34..36].copy_from_slice(&67u16.to_be_bytes()); f[36..38].copy_from_slice(&68u16.to_be_bytes());
+    let dhcp = tx_priority(&f[..314]);
+    // IPv6: ICMPv6 yes, a big TCP segment no, a pure ACK yes
+    f = [0; 1514]; f[12] = 0x86; f[13] = 0xdd; f[20] = 58; f[18..20].copy_from_slice(&32u16.to_be_bytes());
+    let nd = tx_priority(&f[..86]);
+    f[20] = 6; f[18..20].copy_from_slice(&1440u16.to_be_bytes()); f[66] = 0x50;
+    let v6bulk = !tx_priority(&f[..1494]);
+    f[18..20].copy_from_slice(&20u16.to_be_bytes());
+    let v6ack = tx_priority(&f[..74]);
+    let pass = dns && quic && ack && bulk && arp && icmp && dhcp && nd && v6bulk && v6ack;
+    arch_aarch64::_print(format_args!(
+        " [P-txprio] {} — AP TX priority class: DNS answer={} generic small UDP stays bulk={} pure TCP ACK={} full segment stays bulk={} ARP={} ICMP={} DHCP={} ICMPv6={} v6 segment bulk={} v6 ACK={}\n",
+        if pass { "PASS" } else { "FAIL" }, dns, quic, ack, bulk, arp, icmp, dhcp, nd, v6bulk, v6ack));
+    pass
+}
+
 /// `[P-apcore-relay]` — step 3c.
 pub fn relay_selftest() -> bool {
     use arch_aarch64::dhcpd::ApDhcp;
