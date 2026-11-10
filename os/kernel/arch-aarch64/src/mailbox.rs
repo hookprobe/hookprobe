@@ -187,6 +187,36 @@ pub fn set_reboot_flags(flags: u32) -> Option<u32> {
     }
 }
 
+/// GET_RTC_REG (0x00030087) register 0 = RTC_TIME: the PMIC real-time clock in seconds since the Unix epoch
+/// (Linux `rtc-rpi`). Kept across warm resets; across power cuts only with a backup battery. The caller judges
+/// plausibility (an unset RTC counts from 0).
+pub fn rtc_time() -> Option<u32> {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        // [size, req, tag, val_size(8), code, reg, value, end]
+        let req = [0x20u32, 0, 0x0003_0087, 8, 0, 0, 0, 0];
+        for (i, &v) in req.iter().enumerate() {
+            write_volatile(buf.add(i), v);
+        }
+        if !transact(8) {
+            return None;
+        }
+        Some(read_volatile(buf.add(6)))
+    }
+}
+
+/// SET_RTC_REG (0x00038087) register 0: set the RTC to `secs` (Unix). HBoot's proxy refuses any other register.
+pub fn set_rtc_time(secs: u32) -> bool {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        let req = [0x20u32, 0, 0x0003_8087, 8, 0, 0, secs, 0];
+        for (i, &v) in req.iter().enumerate() {
+            write_volatile(buf.add(i), v);
+        }
+        transact(8)
+    }
+}
+
 /// NOTIFY_REBOOT (0x00030048): tell the firmware a reboot is imminent, so it can commit
 /// any pending state (including the reboot flags) before the SoC resets. Linux issues
 /// this on EVERY reboot, flags or not (raspberrypi.c:222).

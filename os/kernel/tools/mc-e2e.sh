@@ -138,6 +138,10 @@ echo "$ES" | jget "d['nodes']['detections']>=2 and d['nodes']['incidents']>=1 an
 EG=$(curl -s -m 10 $C "$B/api/evidence/graph?node=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1],safe=""))' "$IID")")
 echo "$EG" | jget "d['node_count']>=2 and any(n['type']=='Threat' for n in d['nodes'])" | grep -q True \
   && ok "/api/evidence/graph drills from the incident to its rules and targets" || bad "/api/evidence/graph: $EG"
+# Audit A8: the Get Online read side requires the session; under QEMU there is no AP, so it must say so
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/network")" = 401 ] && ok "/api/network requires the owner session" || bad "/api/network reachable without a session"
+NW=$(curl -s -m 10 $C "$B/api/network")
+grep -q '"available":false' <<<"$NW" && ok "/api/network answers honestly without an AP (available:false, no invented values)" || bad "/api/network: $NW"
 IN=$(curl -s -m 10 $C "$B/api/intel")
 echo "$IN" | jget "d['ioc']['mode']=='detect-only' and 'devices' in d and d['ioc']['file'] in ('none','loaded','refused')" | grep -q True \
   && ok "/api/intel reports the IOC pack (detect-only) and the device-policy file" || bad "/api/intel: $IN"

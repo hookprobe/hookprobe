@@ -1,3 +1,8 @@
+> **HISTORICAL (banner 2026-11-10).** This is the July 2026 audit and its fix plan; most findings were fixed since.
+> It is NOT the current implementation status. Current: `PRODUCTION_READINESS.md` (ordered checklist),
+> `heqk-parity-gaps.md` and `heqk-audit-2026-11-10.md` (repository-root design docs) and the release
+> gate `tools/release-gate/` (every item tied to evidence).
+
 # HEQK Remediation Plan — Full Code Audit + Fix Plan (P0–P17)
 
 **Produced:** 2026-07-23, by a 6-agent deep audit + multi-kernel/academic research pass

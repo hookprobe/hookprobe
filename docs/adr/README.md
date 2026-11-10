@@ -64,3 +64,7 @@ bootc/Debian Linux tier remain as dated records and apply only to `legacy/linux-
 | [0054](0054-ap-provisioning-per-device-credential.md) | Wi-Fi AP provisioning: per-device setup credential | Accepted (increment 1 built) | — |
 | [0055](0055-owner-policy-journal.md) | Owner policy journal: durable owner settings from Mission Control | Proposed contract (direction approved 2026-11-09); amends 0053 D1/S7 | — |
 | [0056](0056-device-upload-interface.md) | Device-side upload interface (signed artifacts over HTTPS) | Proposed contract (direction approved 2026-11-09); flasher countersign pending | — |
+| [0057](0057-shield-protection-levels.md) | Shield protection levels (categories + relaxed/balanced/strict) | Implemented, metal-proven | — |
+| [0052 CI/CD](0052-autonomous-cicd-gate-spine-and-heal-loop.md) | Autonomous CI/CD gate spine and heal loop (**duplicate number** — proposed renumber to 0058, operator decision) | Proposed; gates implemented | — |
+
+Implementation status per ADR, with code evidence and deviations: `docs/design/heqk-audit-2026-11-10.md` §2.

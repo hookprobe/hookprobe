@@ -116,11 +116,21 @@ pub struct Auth {
     sessions: [([u8; 16], u64); MAX_SESSIONS],
     fails: u32,
     fail_window_start: u64,
+    /// Per-source login failures: (IPv4, failures in the window, window start). A source that keeps
+    /// guessing throttles only itself; `GLOBAL_LOGIN_FAILS` bounds all sources together.
+    src: [(u32, u32, u64); SRC_SLOTS],
+    login_fails: u32,
+    login_window_start: u64,
 }
+
+const SRC_SLOTS: usize = 16;
+/// All sources together, per window — far above one household's typing, far below a useful guess rate
+/// against a 128-character random owner token.
+const GLOBAL_LOGIN_FAILS: u32 = 60;
 
 impl Auth {
     pub const fn new(owner: Option<Owner>) -> Self {
-        Auth { owner, sessions: [([0; 16], 0); MAX_SESSIONS], fails: 0, fail_window_start: 0 }
+        Auth { owner, sessions: [([0; 16], 0); MAX_SESSIONS], fails: 0, fail_window_start: 0, src: [(0, 0, 0); SRC_SLOTS], login_fails: 0, login_window_start: 0 }
     }
 
     pub fn claimed(&self) -> bool {
@@ -130,16 +140,31 @@ impl Auth {
     /// Exchange the owner token for a session id. `rand16` supplies 16 random bytes (`None` =
 /// entropy failure → `NoEntropy`, never a predictable id).
     pub fn login(&mut self, token: &[u8], now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>) -> Result<[u8; 16], LoginErr> {
+        self.login_from([0; 4], token, now_ms, rand16)
+    }
+
+    /// `login` for a client at `peer`: failures are counted per source (5 per minute each) and for all
+    /// sources together (`GLOBAL_LOGIN_FAILS`), so a hostile LAN host throttles itself, not the owner.
+    pub fn login_from(&mut self, peer: [u8; 4], token: &[u8], now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>) -> Result<[u8; 16], LoginErr> {
         let owner = self.owner.ok_or(LoginErr::Unclaimed)?;
-        if now_ms.saturating_sub(self.fail_window_start) >= FAIL_WINDOW_MS {
-            self.fail_window_start = now_ms;
-            self.fails = 0;
+        if now_ms.saturating_sub(self.login_window_start) >= FAIL_WINDOW_MS {
+            self.login_window_start = now_ms;
+            self.login_fails = 0;
         }
-        if self.fails >= MAX_FAILS_PER_WINDOW {
+        let ip = u32::from_be_bytes(peer);
+        // this source's slot (a stale window counts as zero), else the slot with the oldest window
+        let i = (0..SRC_SLOTS).find(|&k| self.src[k].0 == ip && self.src[k].2 != 0)
+            .unwrap_or_else(|| (0..SRC_SLOTS).min_by_key(|&k| self.src[k].2).unwrap_or(0));
+        // (a window start of 0 = an empty slot: never matched, always re-initialised)
+        if self.src[i].0 != ip || self.src[i].2 == 0 || now_ms.saturating_sub(self.src[i].2) >= FAIL_WINDOW_MS {
+            self.src[i] = (ip, 0, now_ms.max(1));
+        }
+        if self.src[i].1 >= MAX_FAILS_PER_WINDOW || self.login_fails >= GLOBAL_LOGIN_FAILS {
             return Err(LoginErr::Throttled);
         }
         if !ct_eq(&verifier_for(&owner.salt, token), &owner.verifier) {
-            self.fails += 1;
+            self.src[i].1 += 1;
+            self.login_fails += 1;
             return Err(LoginErr::BadToken);
         }
         let id = rand16().ok_or(LoginErr::NoEntropy)?;
@@ -250,6 +275,8 @@ pub fn mcauth_selftest() -> bool {
     for _ in 0..MAX_FAILS_PER_WINDOW {
         let _ = auth.login(b"x", 4000, || Some([3; 16]));
     }
+    // a source that guessed 5 times is throttled; another source (the owner on another device) still signs in
+    let other_src = auth.login_from([10, 99, 0, 23], token, 4002, || Some([6; 16])).is_ok();
     let throttled = auth.login(token, 4001, || Some([4; 16])) == Err(LoginErr::Throttled)
         && auth.login(token, 4000 + FAIL_WINDOW_MS + 1, || Some([5; 16])).is_ok();
     // G28 logout: ends this session only; `all` ends every session; a forged cookie ends nothing.
@@ -273,9 +300,9 @@ pub fn mcauth_selftest() -> bool {
             _ => false,
         }
     };
-    let pass = owner.is_some() && placeholder_unclaimed && unclaimed_refused && bad && good && session_ok && throttled && logout_ok;
-    kprint!(" [P-mcauth] {} — owner auth (ADR 0037 D3): verifier parsed={} placeholder=unclaimed={} unclaimed refuses login={} bad token refused={} token→session={} session cookie valid/forged/absent/expired={} throttle+recovery={} logout (this session / everywhere / forged ends nothing)={}\n",
-        if pass { "PASS" } else { "FAIL" }, owner.is_some(), placeholder_unclaimed, unclaimed_refused, bad, good, session_ok, throttled, logout_ok);
+    let pass = owner.is_some() && placeholder_unclaimed && unclaimed_refused && bad && good && session_ok && throttled && other_src && logout_ok;
+    kprint!(" [P-mcauth] {} — owner auth (ADR 0037 D3): verifier parsed={} placeholder=unclaimed={} unclaimed refuses login={} bad token refused={} token→session={} session cookie valid/forged/absent/expired={} throttle+recovery={} another source unaffected by a guessing host={} logout (this session / everywhere / forged ends nothing)={}\n",
+        if pass { "PASS" } else { "FAIL" }, owner.is_some(), placeholder_unclaimed, unclaimed_refused, bad, good, session_ok, throttled, other_src, logout_ok);
     pass
 }
 
