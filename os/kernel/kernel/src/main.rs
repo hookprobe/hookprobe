@@ -4168,7 +4168,7 @@ fn cm5_p10_probe() {
                                                 // Mission Control on the AP address; not on the client AP when management is
                                                 // configured (G12-M).
                                                 #[cfg(feature = "mcserve")]
-                                                if let Some(n) = mcn.as_mut().filter(|_| mc_wifi) {
+                                                if let Some(n) = mcn.as_mut().filter(|_| mc_wifi || apcore::alert_flow(frame, &our_ip)) {
                                                     n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
                                                 }
                                             }
