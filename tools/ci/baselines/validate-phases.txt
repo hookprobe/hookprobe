@@ -116,6 +116,7 @@ Ppppoe
 Pr1ipc
 Prtwdog
 Pverifyheap
+Ptxprio
 Pcrashrec
 Prulepack
 Pshield

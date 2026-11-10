@@ -3469,6 +3469,17 @@ fn cm5_p10_probe() {
                         let wq = unsafe { &mut (*core::ptr::addr_of_mut!(WQBUF)).0 };
                         let mut wq_len = [0usize; WQ_N];
                         let (mut wq_head, mut wq_n) = (0usize, 0usize);
+                        // AP TX priority (soak 2026-11-10: DNS answers lost / 2-s tails behind a saturating download):
+                        // control frames (`apcore::tx_priority`: ARP, DHCP, DNS answers, ICMP, payload-less TCP) skip
+                        // the bulk backlog — sent at once when credit allows, else from this queue, drained first.
+                        const PQ_N: usize = 32;
+                        const PQ_SZ: usize = 600;
+                        struct PqBuf([[u8; PQ_SZ]; PQ_N]);
+                        static mut PQBUF: PqBuf = PqBuf([[0; PQ_SZ]; PQ_N]);
+                        let pq = unsafe { &mut (*core::ptr::addr_of_mut!(PQBUF)).0 };
+                        let mut pq_len = [0usize; PQ_N];
+                        let (mut pq_head, mut pq_n, mut pq_fail) = (0usize, 0usize, 0u32);
+                        let (mut prio_direct, mut prio_queued, mut prio_dropped) = (0u32, 0u32, 0u32);
                         let mut trunc_drop = 0u32; // frames `net::parse` refuses (truncated/oversize) — not a rule
                         let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
@@ -3490,7 +3501,22 @@ fn cm5_p10_probe() {
                         macro_rules! wifi_send {
                             ($f:expr) => {{
                                 let f: &[u8] = $f;
-                                if wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
+                                if f.len() <= PQ_SZ && apcore::tx_priority(f) {
+                                    if pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
+                                        prio_direct += 1;
+                                        true
+                                    } else if pq_n < PQ_N {
+                                        let j = (pq_head + pq_n) % PQ_N;
+                                        pq[j][..f.len()].copy_from_slice(f);
+                                        pq_len[j] = f.len();
+                                        pq_n += 1;
+                                        prio_queued += 1;
+                                        true
+                                    } else {
+                                        prio_dropped += 1;
+                                        false
+                                    }
+                                } else if wq_n == 0 && pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
                                     true
                                 } else if wq_n < WQ_N && f.len() <= WQ_SZ {
                                     let j = (wq_head + wq_n) % WQ_N;
@@ -3854,7 +3880,27 @@ fn cm5_p10_probe() {
                             // host always drains the firmware's RX side before pushing more TX into it.
                             let tx_budget = if rx_busy { 1 } else { 20 };
                             let mut tx_round = 0;
-                            while wq_n > 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
+                            // priority frames first (control traffic never waits behind the bulk ring)
+                            while pq_n > 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
+                                tx_round += 1;
+                                let i = pq_head;
+                                if cyw43::ap_tx(&pq[i][..pq_len[i]]) {
+                                    pq_head = (i + 1) % PQ_N;
+                                    pq_n -= 1;
+                                    pq_fail = 0;
+                                } else {
+                                    pq_fail += 1;
+                                    if pq_fail >= 3 {
+                                        pq_head = (i + 1) % PQ_N;
+                                        pq_n -= 1;
+                                        prio_dropped += 1;
+                                        pq_fail = 0;
+                                        continue;
+                                    }
+                                    break;
+                                }
+                            }
+                            while wq_n > 0 && pq_n == 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
                                 tx_round += 1;
                                 let i = wq_head;
                                 if cyw43::ap_tx(&wq[i][..wq_len[i]]) {
@@ -3885,7 +3931,7 @@ fn cm5_p10_probe() {
                             {
                                 let (seq, max, _) = cyw43::ap_diag();
                                 let t = now();
-                                if max.wrapping_sub(seq) <= 2 && wq_n > 0 {
+                                if max.wrapping_sub(seq) <= 2 && wq_n + pq_n > 0 {
                                     if credit0_since == 0 {
                                         credit0_since = t;
                                         unstick_stage = 0;
@@ -3987,7 +4033,7 @@ fn cm5_p10_probe() {
                                 }
                             }
                             // A pending queue forces a read: the credit update arrives as a frame.
-                            let force = wq_n > 0 || now().wrapping_sub(last_force) > freq / 4;
+                            let force = wq_n + pq_n > 0 || now().wrapping_sub(last_force) > freq / 4;
                             if force {
                                 last_force = now();
                             }
@@ -4440,8 +4486,12 @@ fn cm5_p10_probe() {
                                                             if !arch_aarch64::rtl8111::tx_frame(&nbuf[..m]) {
                                                                 lan_tx_fail += 1;
                                                             }
+                                                        } else if m <= PQ_SZ && apcore::tx_priority(&nbuf[..m]) {
+                                                            if !wifi_send!(&nbuf[..m]) {
+                                                                nat_wifi_tx_fail += 1;
+                                                            }
                                                         } else if {
-                                                            let sent = wq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
+                                                            let sent = wq_n == 0 && pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(&nbuf[..m]);
                                                             if nat_trace < NAT_TRACE_N {
                                                                 nat_trace += 1;
                                                                 nat_trace_line("IN ", &nbuf[..m], if sent { "wifi=sent" } else if wq_n < WQ_N { "wifi=queued" } else { "wifi=DROP" });
@@ -4561,7 +4611,7 @@ fn cm5_p10_probe() {
                                     // Stall detector: deliveries waiting for credit AND no WiFi frame read in
                                     // 10 s while a station is associated = the SDPCM stream is wedged (metal
                                     // 2026-10-09: frozen counters, 29 frames pending). Say so, loudly, once.
-                                    if wq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
+                                    if wq_n + pq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
                                         if !stall_reported {
                                             kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged; a station re-join or a power-cycle recovers it\n", wq_n, wifi_frames);
                                             stall_reported = true;
@@ -4709,8 +4759,8 @@ fn cm5_p10_probe() {
                                                 dg[8], dg[9], dg[10], dg[11] & 0xffff, dg[11] >> 16, dg[12], dg[13], dg[14], dg[15], dg[3],
                                                 dg[3] & 0xff, (dg[3] >> 8) & 0xff);
                                         }
-                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
-                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop,
+                                        kprint!("   [P11-AP3 beat] wq queued={} flushed={} dropped={} (refused-head drops={}) pending={} trunc_drop={} | prio direct={} queued={} dropped={} pending={} | drop_rules {}:{} {}:{} {}:{} {}:{}\n",
+                                            wifi_tx_queued, wq_flushed, wifi_tx_dropped, wq_head_drop, wq_n, trunc_drop, prio_direct, prio_queued, prio_dropped, pq_n,
                                             rule_drops[0].0, rule_drops[0].1, rule_drops[1].0, rule_drops[1].1,
                                             rule_drops[2].0, rule_drops[2].1, rule_drops[3].0, rule_drops[3].1);
                                         ratelimit::set_local_ip(1, u32::from_be_bytes(up.dhcp.yiaddr));
@@ -6778,6 +6828,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
         let _ = apcore::relay_selftest();
+        let _ = apcore::txprio_selftest();
         let _ = apcore::ladder_selftest();
         let _ = ownerjournal::selftest();
         #[cfg(feature = "netsvc")]
