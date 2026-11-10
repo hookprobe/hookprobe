@@ -141,6 +141,17 @@ echo "$DNS" | jget "'lists' in d and 'counters' in d and isinstance(d['recent'],
 OR=$(curl -s -m 10 $C "$B/api/owner-rules")
 echo "$OR" | jget "d['persistent'] is False and isinstance(d['rules'],list) and 'journal' in d" | grep -q True && ok "ADR 0055 /api/owner-rules answers (RAM journal in QEMU: persistent=false)" || bad "/api/owner-rules: $OR"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/owner-rules")" = 401 ] && ok "/api/owner-rules requires the owner session" || bad "/api/owner-rules reachable without a session"
+# G47 device label (ADR 0058): an owner rename is a journal kind; the GET lists it (value = the label)
+CSRF=$(curl -s -m 10 $C "$B/api/session" | jget "d['csrf']"); SQN=$(curl -s -m 10 $C "$B/api/session" | jget "d['next_seq']")
+LR=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "op=set&kind=device_label&target=02:00:00:00:00:47&value=Mia%27s+iPad&reason=rename+test&permanent=true&seq=$SQN" --data-urlencode "owner_key=$TOKEN" "$B/api/owner-rules")
+curl -s -m 10 $C "$B/api/owner-rules" | jget "any(r['kind']=='device_label' and r['target']=='02:00:00:00:00:47' and r['value']==\"Mia's iPad\" for r in d['rules'])" | grep -q True && ok "G47: an owner rename is stored and listed (device_label)" || bad "device_label: $LR"
+BLR=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "op=set&kind=device_label&target=02:00:00:00:00:48&value=bad%22quote&reason=rename+test&permanent=true&seq=$((SQN+1))" --data-urlencode "owner_key=$TOKEN" "$B/api/owner-rules")
+grep -q '"refused":"value' <<<"$BLR" && ok "G47: a label outside the grammar is refused" || bad "bad label accepted: $BLR"
+# G49 reboot: refused without re-authentication (the QEMU run must not actually restart here)
+RB=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=apply+now&permanent=true&seq=$((SQN+2))&owner_key=wrong-key-000000000" "$B/api/reboot")
+grep -q 're-authentication failed' <<<"$RB" && ok "G49: /api/reboot refuses without owner re-authentication" || bad "reboot guard: $RB"
+# ADR 0058: the full trust-anchor key is exposed (null on an image without an operator key)
+curl -s -m 10 $C "$B/api/network" | jget "d.get('available') is False or 'public_key' in d['trust_anchor']" | grep -q True && ok "ADR 0058: /api/network trust_anchor carries public_key" || bad "trust_anchor public_key missing"
 UPS=$(curl -s -m 10 $C "$B/api/upload")
 echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices'] and all(t['source']=='boot' for t in d['types']) and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"

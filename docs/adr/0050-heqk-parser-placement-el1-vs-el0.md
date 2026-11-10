@@ -72,6 +72,11 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
    faults and restarts; mc-e2e asserts all of it. Still in EL1 for this step: smoltcp TCP and the route
    handlers (they consume typed fields only).
 2. LAN services (DHCP server + DNS forwarder) — reachable by every Wi-Fi client.
+   *Status 2026-11-10:* DNS done (step 2a). Shield's query and answer parsing runs in the new EL0 server
+   `el0-lansvc` (allocation-free, own ABI `hal::lansvcabi`), placed in the GB5 window's second 2 MiB block.
+   The kernel keeps every decision. A fault resets the server, and the message passes un-inspected as an
+   unparseable one always did. Metal-proven: `docs/design/metal-evidence/20261110-batch54-57.md`.
+   Still in EL1: the AP DHCP server's parser (arch crate), which is step 2b.
 3. WAN control (PPPoE/LCP/PAP, DHCPv4/v6, RA) — reachable by the ISP side.
 4. Control channel (Noise) — already authenticated after msg1; lowest exposure.
 5. WPA2 authenticator — tied to the CYW43455 driver; moves with the driver (ADR 0044 D4 #7).
