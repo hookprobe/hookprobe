@@ -361,6 +361,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             "/api/upload/finish" => up::finish(&c, req.body).map(Ok_::Fin),
             "/api/upload/activate" => up::activate(&c, req.body, auth).map(Ok_::Act),
             "/api/upload/abort" => up::abort(&c, req.body).map(|_| Ok_::Abort),
+            "/api/upload/rollback" => up::rollback(&c, req.body, auth).map(Ok_::Act),
             _ => Err("unknown upload step"),
         };
         return match r {
@@ -371,8 +372,8 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
                     Ok_::Fin(f) => write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{}}}", f.gen, f.active_gen, f.len),
                     Ok_::Act(a) => match a.journal_seq {
-                        Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":{}}}", a.gen, q),
-                        None => write!(w, "{{\"ok\":true,\"activated\":true,\"generation\":{},\"journal_seq\":null}}", a.gen),
+                        Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{}}}", a.staged, a.gen, q),
+                        None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null}}", a.staged, a.gen),
                     },
                     Ok_::Abort => write!(w, "{{\"ok\":true,\"aborted\":true}}"),
                 };
@@ -611,7 +612,21 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     }
                     w.raw("},\"changes\":\"signed configuration files (WIFI.TXT / WAN.TXT / POLICY.TXT)\"}");
                 }
-                (None, _) => w.raw("{\"available\":false}"),
+                (None, _) => {
+                    // no AP view, but the effective operator key is still a device fact the owner compares against
+                    w.raw("{\"available\":false,\"trust_anchor\":{\"public_key\":");
+                    match crate::policysig::key() {
+                        Some(k) => {
+                            w.raw("\"");
+                            for b in k {
+                                let _ = write!(w, "{:02x}", b);
+                            }
+                            w.raw("\"");
+                        }
+                        None => w.raw("null"),
+                    }
+                    w.raw("}}");
+                }
             }
         }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
