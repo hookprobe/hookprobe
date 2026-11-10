@@ -10,6 +10,7 @@ import { detections, startDetectLive } from './detectLive';
 import { devices, refetch as refetchDevices } from './obsLive';
 import { substrate } from './mock';
 import { healthChecked } from './health';
+import { incidentHref } from './routes';
 
 export type StoryCat = 'Security' | 'Devices' | 'Shield' | 'Network';
 export interface StoryEvent { ts: number; cat: StoryCat; title: string; sub: string; href: string; id: string }
@@ -34,7 +35,7 @@ function devName(d: { label?: string | null; mdns_name?: string | null; hostname
 const live = createMemo<StoryEvent[]>(() => {
   const out: StoryEvent[] = [];
   for (const i of incidents()) {
-    out.push({ id: `inc-${i.id}`, ts: i.ts, cat: 'Security', title: i.title, sub: `${i.device_ip} · ${i.priority} priority · ${i.status}`, href: '/investigate/queue' });
+    out.push({ id: `inc-${i.id}`, ts: i.ts, cat: 'Security', title: i.title, sub: `${i.device_ip} · ${i.priority} priority · ${i.status}`, href: incidentHref(i.id) });
   }
   // One line per rule and source (the device already collapses repeats; keep the newest).
   const seen = new Set<string>();
