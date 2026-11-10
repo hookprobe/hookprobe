@@ -60,6 +60,29 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
 .aitl-when { font: 11px var(--hp-font-mono); color: var(--hp-text-muted); }
 .aitl-what { font-size: 13px; }
 
+/* Observe: sources beside the table on desktop; a wrapping chip row above it below 1024 px */
+.obs-grid { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 20px; align-items: start; }
+.obs-sources { gap: 2px; padding: 12px; }
+@media (max-width: 1023px) {
+  .obs-grid { grid-template-columns: 1fr; }
+  .obs-sources { flex-direction: row; flex-wrap: wrap; gap: 6px; }
+  .obs-sources .l0-label { width: 100%; }
+  .obs-sources .shell-rail-item { width: auto; min-height: 40px; gap: 8px; }
+}
+
+/* Phone: table rows become cards (requirements doc §Mobile: "rows become cards with 3–4 key fields") */
+@media (max-width: 767px) {
+  .obs-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+  .obs-table, .obs-table tbody, .obs-table tr, .obs-table td { display: block; width: 100%; box-sizing: border-box; }
+  .obs-table tr { padding: 10px 12px; border-bottom: 1px solid var(--hp-border); display: grid; grid-template-columns: auto 1fr auto; gap: 2px 10px; }
+  .obs-table td { border: 0; padding: 0; }
+  .obs-table td:nth-child(1) { grid-column: 1; }
+  .obs-table td:nth-child(2) { grid-column: 2; color: var(--hp-text-secondary); font-size: 12px; }
+  .obs-table td:nth-child(4) { grid-column: 3; grid-row: 1; }
+  .obs-table td:nth-child(3) { grid-column: 1 / -1; font-weight: 600; }
+  .obs-table td:nth-child(5) { grid-column: 1 / -1; }
+}
+
 /* Incident story */
 .inc-head-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .inc-status { font-size: 12px; padding: 2px 10px; border-radius: 999px; border: 1px solid var(--hp-border); color: var(--hp-text-secondary); }
