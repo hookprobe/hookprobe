@@ -258,6 +258,14 @@ pub fn stats() -> (bool, u64, u64, u64) {
 /// path, role enforcement in the kernel, unknown messages, and EL0 fault containment.
 #[cfg(feature = "mctls")]
 pub fn selftest(now_ms: u64) -> bool {
+    crate::cfgd::set_selftest(true);
+    let r = selftest_inner(now_ms);
+    crate::cfgd::set_selftest(false);
+    r
+}
+
+#[cfg(feature = "mctls")]
+fn selftest_inner(now_ms: u64) -> bool {
     use hal::mgmtabi as m;
     let mut o = [0u8; 2048];
     let mut run = |l: &[u8], role: u8| -> ([u8; 2048], usize) {
