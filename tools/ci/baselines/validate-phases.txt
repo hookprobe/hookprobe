@@ -118,6 +118,7 @@ Prtwdog
 Pverifyheap
 Ptxprio
 Pwansig
+Pownerrotate
 Pcrashrec
 Prulepack
 Pshield
