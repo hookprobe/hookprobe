@@ -393,3 +393,32 @@ Security defects come first. Every phase is independently shippable and gated by
 | Regression | The existing WAN, VLAN, QinQ, PPPoE and policy selftests unchanged; CM5 metal acceptance (prod-mc) | `validate.sh`, `mc-e2e.sh`, metal |
 
 **PoC reproduction (C2), host-only:** a scratch crate that depends on `os/kernel/hal` calls `hal::parse_wan_cfg` and `hal::parse_wan_link` on a sector holding `"HQWAN1\nmode=dhcp\n"` followed by `"mode=static\nip=203.0.113.9/30\ngw=203.0.113.10\nvlan=4000\n"`. The result is `Static{203.0.113.9/30}`, VLAN 4000, while `sector[..17]` equals the signed bytes. Run it from outside `os/kernel` so that the kernel's `.cargo/config.toml` (build-std) does not apply. Phase 0.2 must turn this into a failing-then-passing hal test.
+
+---
+
+## Status log
+
+### 2026-11-10: build progress (heqk session)
+
+**Pushed: `a1486fe6` on `feat/heqk-prod-phases`.** Validate GREEN and mc-e2e PASS. Metal is pending
+(`cm5-config-journey-check.sh`). It contains:
+- the C2 fix (one verified buffer; duplicate keys refused);
+- 0.6 (a token-authorised factory reset keeps K_own).
+
+**Being validated on `wip/next2`:**
+- 0.3 (WAN/WIFI floors, anchor v3)
+- 0.4 (`artstore::fallback_step`: active half, then the other half, then FAT)
+- 0.5 (release gate; "CONFIG UNPROTECTED"; `/api/anchor` reports `config_protected`)
+- step 2 (`cfgbundle.rs`, checked against the UI's 24 shared vectors)
+- step 3 (`cfgd.rs`, `/api/config{,/confirm,/rollback}`)
+
+**Review findings sent to the heqk session (open):**
+1. **cfgd commits on "WAN usable" alone.** §B.5 also needs management reachable, plus an owner confirm for
+   remote changes. Otherwise a bundle that breaks the management VLAN auto-commits and locks out remote
+   management.
+2. **No D7 management-reachability check before staging.**
+3. **A committed bundle that fails verification at boot skips the last-known-good half.**
+
+**Residual risk accepted for now:** `anchor::accept_gen` keeps a one-generation rollback window. A card writer
+can therefore replay the immediately previous signed WAN/WIFI file from the FAT partition. This is subsumed by
+H6 (SEC-3 is open). The proposed hardening is to allow the window only on the owner-authenticated store path.
