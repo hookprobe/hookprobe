@@ -60,6 +60,12 @@ export function cap(id: string): CapAnswer {
   return { state: 'unknown', reason: '' };
 }
 
+/** Every grant and denial as the UI currently knows them (Administration → Edge node). */
+export function capList(): { granted: string[]; denied: [string, string][]; source: 'device' | 'sample' } {
+  const c = caps();
+  return { granted: [...c.granted].sort(), denied: [...c.denied.entries()].sort(), source: c.source };
+}
+
 /** All of `ids` granted (a control that needs several grants). */
 export function capAll(ids: string[]): CapAnswer {
   for (const id of ids) {
