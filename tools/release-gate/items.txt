@@ -14,7 +14,7 @@ TC-03 | trust chain | SEC-3 secure-boot fuses: provisioned, or explicitly out of
 TC-04 | trust chain | Owner-journal / pack rollback anchored in RPMB and checked at replay (or risk accepted) | signoff:rpmb
 TC-05 | trust chain | Device-pinned operator key + persisted POLICY floor | phase:Panchor
 TC-06 | trust chain | OS-image verifier (shared with HBoot) at the real image size | phase:Potaverify
-TC-07 | trust chain | WAN.TXT (incl. mgmt_floor) signed by the operator key; unsigned = floor ignored | phase:Pwansig,metal:docs/design/metal-evidence/20261110-batch31.md:WAN.TXT signature OK
+TC-07 | trust chain | WAN.TXT (incl. mgmt_floor) signed by the operator key; unsigned = floor ignored | phase:Pwansig,metal:docs/design/metal-evidence/20261110-batch31-32.md:WAN.TXT signature OK
 OTA-01 | update | OS update over Mission Control: verify, inactive slot, trial, commit-on-health | phase:P15otaimg,phase:Pabslot,metal:docs/design/metal-evidence/20261110-ota-a1.md:PASS
 OTA-02 | update | An unhealthy trial rolls back to the previous build | metal:docs/design/metal-evidence/20261110-batch29.md:OTA-ROLLBACK: PASS
 REL-01 | reliability | Runtime watchdog armed after the trial confirm | phase:Prtwdog,metal:docs/design/metal-evidence/20261110-batch29.md:WDOG\] armed=true
@@ -34,6 +34,6 @@ SEC-03 | management | Mission Control end to end (HTTPS PQ hybrid, browser, acti
 SEC-04 | management | Replay guard + write rate limit + login throttle | phase:Pseqfloor,phase:Pwriterate
 DET-01 | detection | Benign-corpus false-positive rate per rule (household captures) | blocked:benign corpus not collected
 DET-02 | detection | Rule 112 per source device; rule-pack reloads do not leak the heap | phase:Pverifyheap,phase:P8l2struct
-DET-03 | detection | Owner alert delivery (signed webhook, ntfy/Gotify-compatible) | blocked:not built
+DET-03 | detection | Owner alert delivery (signed webhook, ntfy/Gotify-compatible) | phase:Palerthook,metal:docs/design/metal-evidence/20261110-batch34-35.md:ALERT-HOOK: PASS
 CMP-01 | compliance | CE/RED + EN 18031, FCC, CRA SBOM / CVD / support period | signoff:certification
 CMP-02 | compliance | CYW43455 firmware redistribution terms | signoff:firmware-licence
