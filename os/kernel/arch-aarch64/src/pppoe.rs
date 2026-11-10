@@ -309,37 +309,25 @@ impl Pppoe {
 
     /// Walk the discovery tags of `f` (payload from 20, `plen` bytes). Returns (host_uniq_ok, error).
     fn read_tags(&mut self, f: &[u8], plen: usize, keep: bool) -> (bool, bool) {
-        let end = (20 + plen).min(f.len());
-        let mut o = 20;
-        let (mut hu_ok, mut err) = (false, false);
-        while o + 4 <= end {
-            let (t, l) = (be16(f, o), be16(f, o + 2) as usize);
-            let v0 = o + 4;
-            if v0 + l > end {
-                break;
+        // ADR 0050 D4 step 3b: the tag walk runs in EL0 (el0-lansvc) when it is loaded; the decisions stay here
+        let d = crate::wanparse::pppoe_disc(f, plen);
+        let hu_ok = d.hu_len as usize == self.host_uniq.len() && d.host_uniq[..self.host_uniq.len()] == self.host_uniq;
+        if keep {
+            // only tags that were present overwrite (as the old in-place walk did)
+            if d.cookie_len > 0 {
+                self.cookie_len = d.cookie_len as usize;
+                self.cookie[..self.cookie_len].copy_from_slice(&d.cookie[..self.cookie_len]);
             }
-            let v = &f[v0..v0 + l];
-            match t {
-                TAG_END => break,
-                TAG_HOST_UNIQ => hu_ok = v == self.host_uniq,
-                TAG_AC_COOKIE if keep => {
-                    self.cookie_len = l.min(64);
-                    self.cookie[..self.cookie_len].copy_from_slice(&v[..self.cookie_len]);
-                }
-                TAG_RELAY_SID if keep => {
-                    self.relay_len = l.min(64);
-                    self.relay[..self.relay_len].copy_from_slice(&v[..self.relay_len]);
-                }
-                TAG_AC_NAME if keep => {
-                    self.ac_name_len = l.min(32);
-                    self.ac_name[..self.ac_name_len].copy_from_slice(&v[..self.ac_name_len]);
-                }
-                TAG_SERVICE_NAME_ERR | TAG_AC_SYSTEM_ERR | TAG_GENERIC_ERR => err = true,
-                _ => {}
+            if d.relay_len > 0 {
+                self.relay_len = d.relay_len as usize;
+                self.relay[..self.relay_len].copy_from_slice(&d.relay[..self.relay_len]);
             }
-            o = v0 + l;
+            if d.ac_name_len > 0 {
+                self.ac_name_len = d.ac_name_len as usize;
+                self.ac_name[..self.ac_name_len].copy_from_slice(&d.ac_name[..self.ac_name_len]);
+            }
         }
-        (hu_ok, err)
+        (hu_ok, d.err)
     }
 
     // ── session framing ────────────────────────────────────────────────────────────────────
