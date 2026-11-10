@@ -13,10 +13,13 @@ ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
 "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1
-# bypass: resolve through a public resolver (through the AP, but not through Shield's answer)
+# bypass: the address is resolved OFF the AP path (here, on the bench host — as a DoH resolver or a hard-coded
+# IP would) and handed to the Pi, which connects by IP with the name as SNI. (Plain DNS to any resolver through
+# the AP is still Shield-inspected — that is not a bypass on heqk.)
 bypass() {   # <name> -> http code of an HTTPS GET to the name's real IP with SNI = name
-  pi "ip=\$(dig +short +time=3 +tries=2 @1.1.1.1 $1 A | grep -E '^[0-9.]+\$' | head -1); [ -n \"\$ip\" ] || { echo NOIP; exit; }; \
-      curl -s -o /dev/null -m 8 -w '%{http_code}' --resolve $1:443:\$ip https://$1/ 2>/dev/null || true"
+  local ip; ip=$(dig +short +time=3 +tries=2 @1.1.1.1 "$1" A | grep -E '^[0-9.]+$' | head -1)
+  [ -n "$ip" ] || { echo NOIP; return; }
+  pi "curl -s -o /dev/null -m 8 -w '%{http_code}' --resolve $1:443:$ip https://$1/ 2>/dev/null || true"
 }
 b=$(bypass doubleclick.net); echo "  doubleclick.net over a DNS bypass -> HTTP ${b}"
 [ "$b" = 000 ]; chk $? "a DNS bypass to a Shield-blocked name (ads) is refused at the TLS ClientHello"
