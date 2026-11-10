@@ -141,6 +141,7 @@ payload 2,518,296 B, **619 KB headroom**.
 | §2.1 #9 | IPv6 source identity keyed per boot (SipHash-2-4, hardware TRNG key) | `[P-v6src]` incl. the SipHash KAT |
 | WAN outage | DHCP acquisition in the serve loop (no 5-s-in-10 LAN stall during an ISP outage / late cable); NAKed / expired lease re-acquired in the loop | build; metal J8 next batch |
 | Bench | `cm5-ota-rollback-check.sh` (J2), `cm5-wan-outage-check.sh` (J8) | scripts |
+| Phase 4 | per-device behaviour baseline (IoT / camera / TV / printer learn their services for 24 h; a new service → rule 128, observe-only, hourly cap; phones never baselined) | `[P-devbase]` |
 
 Deferred with reason: A10 (detbench through `apcore`) — the corpus is captured on the bench subnet, not from
 leased AP clients, so the lease-bound `client4` gate would need a host→lease mapping layer first; the current
