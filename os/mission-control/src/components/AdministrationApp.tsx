@@ -269,7 +269,7 @@ const AdministrationApp: Component = () => {
             <Show when={sec() === 'reset'}>
               <div class="pcard" style={{ 'border-color': 'rgba(255,107,107,.45)' }}>
                 <p class="l0-label" style={{ color: 'var(--hp-red)' }}>Factory reset</p>
-                <p class="l0-card-sub">Erases every owner setting (owner rules, owner key, alert hook, uploaded packs) and restarts the device as shipped. Sign in afterwards with the key on its label. Your signed boot files are not touched.</p>
+                <p class="l0-card-sub">Erases owner settings (owner rules, a rotated sign-in key, alert hook, uploaded packs) and restarts the device as shipped. Sign in afterwards with the key on its label. Not touched: your signed boot files and an enrolled signing (owner) key — only re-flashing the device removes that.</p>
                 <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Type ERASE to confirm
                   <input style={field} value={erase()} onInput={(e) => setErase(e.currentTarget.value)} autocomplete="off" /></label>
                 <div class="l0-card-foot">
