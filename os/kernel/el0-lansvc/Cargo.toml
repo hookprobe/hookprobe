@@ -1,0 +1,27 @@
+# ADR 0050 D4 step 2 — the EL0 LAN-services server: DNS query / answer parsing for Shield, out of the kernel TCB.
+# A detached crate (own [workspace]) built by the kernel's build.rs exactly like el0-tlshost, loaded by the M5.1
+# ELF loader into EL0. Allocation-free; it compiles the kernel's own `dnswire.rs` (#[path]).
+[package]
+name = "el0-lansvc"
+version = "0.1.0"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[[bin]]
+name = "el0-lansvc"
+path = "src/main.rs"
+
+[features]
+cm5 = []
+
+[dependencies]
+hal = { path = "../hal" }
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1
