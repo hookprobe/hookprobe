@@ -34,7 +34,7 @@ const ConfigBanners: Component = () => {
       <Show when={configView()?.state === 'trial'}>
         <div class="hp-banner hp-banner--trial" role="status" aria-label="Configuration trial">
           <strong>Trying new settings</strong>
-          {' '}Configuration generation {configView()!.on_trial ?? configView()!.generation} is on trial.{' '}
+          {' '}Configuration generation {configView()!.generation} is on trial.{' '}
           <Show when={configView()!.needs_confirm} fallback={
             <Show when={configView()!.auto_rollback} fallback={<>It stays until you keep it or roll it back.</>}>
               If the internet does not work, the device goes back to the previous settings by itself in <b>{mmss(secondsLeft(now()))}</b>.
