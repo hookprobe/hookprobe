@@ -288,6 +288,10 @@ pub fn reset_audit() {
 // ---- replay guard: a strictly increasing sequence number per session ----
 
 static mut SEQS: [([u8; 4], u64); 8] = [([0; 4], 0); 8];
+/// The highest sequence number an EVICTED entry had (audit §2.1 #5, ADR 0053): a session whose entry was pushed
+/// out by newer sessions must continue ABOVE it — else a captured old request of that session replays once its
+/// memory is gone. `last_seq` reports it for an unknown session, so clients (they read `next_seq`) just work.
+static mut SEQ_FLOOR: u64 = 0;
 
 /// Accept `seq` for this session only if it is greater than the last accepted one.
 pub fn accept_seq(session: [u8; 4], seq: u64) -> bool {
@@ -302,8 +306,16 @@ pub fn accept_seq(session: [u8; 4], seq: u64) -> bool {
         e.1 = seq;
         return true;
     }
-    // new session: take the slot with the lowest seq (oldest)
+    // new (or evicted) session: never at or below what an evicted entry had reached
+    let floor = unsafe { &mut *core::ptr::addr_of_mut!(SEQ_FLOOR) };
+    if seq <= *floor {
+        return false;
+    }
+    // take the slot with the lowest seq (oldest); its high-water mark becomes the floor
     let i = (0..t.len()).min_by_key(|&i| t[i].1).unwrap_or(0);
+    if t[i].1 > *floor {
+        *floor = t[i].1;
+    }
     t[i] = (session, seq);
     true
 }
@@ -348,5 +360,27 @@ pub fn rate_selftest() -> bool {
 /// The last accepted sequence number for a session (0 if none) — the UI starts above it.
 pub fn last_seq(session: [u8; 4]) -> u64 {
     let t = unsafe { &*core::ptr::addr_of!(SEQS) };
-    t.iter().find(|e| e.0 == session).map_or(0, |e| e.1)
+    t.iter().find(|e| e.0 == session).map_or(unsafe { SEQ_FLOOR }, |e| e.1)
+}
+
+/// `[P-seq-floor]`: replay protection survives the eviction of a session's sequence entry.
+pub fn seq_floor_selftest() -> bool {
+    let a = [0xA0u8, 0, 0, 1];
+    let base = last_seq(a) + 1; // whatever earlier tests left
+    let ok1 = accept_seq(a, base + 5) && !accept_seq(a, base + 5);
+    // 8 other sessions push a's entry out
+    let mut pushed = true;
+    for k in 0..8u8 {
+        let o = [0xB0u8, 0, 0, k];
+        pushed &= accept_seq(o, last_seq(o) + base + 100 + k as u64);
+    }
+    let gone = unsafe { (*core::ptr::addr_of!(SEQS)).iter().all(|e| e.0 != a) };
+    let replay_refused = !accept_seq(a, base + 5) && !accept_seq(a, base + 6);
+    let next = last_seq(a) + 1; // what /api/session tells the client
+    let continues = accept_seq(a, next);
+    let pass = ok1 && pushed && gone && replay_refused && continues;
+    arch_aarch64::_print(format_args!(
+        " [P-seq-floor] {} — ADR 0053 replay guard survives eviction: in-session replay refused={} 8 newer sessions evicted it={} an old request of the evicted session refused={} the client's next_seq still accepted={}\n",
+        if pass { "PASS" } else { "FAIL" }, ok1, pushed && gone, replay_refused, continues));
+    pass
 }
