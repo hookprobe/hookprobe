@@ -27,11 +27,29 @@ export default async function (t) {
   // 1. Create a signing key in Administration.
   await go('/admin/identity');
   await page.click('[aria-label="Settings"] >> text=Signing key'); await page.waitForTimeout(300);
-  await page.click('text=Create a key in this browser'); await page.waitForTimeout(800);
+  const PASS = 'correct horse staple';
+  ok(await page.locator('button:has-text("Create key and download backup")').isDisabled(), 'signing key: needs a backup passphrase first');
+  await page.locator('label:has-text("Backup passphrase") input').fill(PASS);
+  await page.locator('label:has-text("Repeat it") input').fill(PASS);
+  const pem = (await dl('Create key and download backup')).toString();
+  await page.waitForTimeout(500);
   const pubHex = (await page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1).textContent()).trim();
   ok(/^[0-9a-f]{64}$/.test(pubHex), 'signing key created in the browser (32-byte public key)');
-  const pem = (await dl('Download backup (PEM)')).toString();
-  ok(pem.includes('BEGIN PRIVATE KEY'), 'PEM backup downloads');
+  ok(pem.includes('BEGIN ENCRYPTED PRIVATE KEY') && !pem.includes('BEGIN PRIVATE KEY'), 'backup is passphrase-wrapped (encrypted PKCS#8), downloaded once at creation');
+  ok(!(await page.locator('button:has-text("Download encrypted backup")').count()), 'key is stored non-extractable: no later export');
+  ok(await vis(page.locator('text=getting control back needs physical access')), 'loss consequence stated');
+
+  // Import round-trip: wrong passphrase refused; the right one restores the same key.
+  page.once('dialog', (d) => d.accept());
+  await page.click('text=Remove from this browser'); await page.waitForTimeout(400);
+  await page.click('text=Import a backup');
+  await page.fill('textarea', pem);
+  await page.locator('label:has-text("Backup passphrase") input').last().fill('wrong passphrase');
+  await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(1500);
+  ok(await vis(page.locator('text=Wrong passphrase')), 'import: wrong passphrase refused');
+  await page.locator('label:has-text("Backup passphrase") input').last().fill(PASS);
+  await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(1500);
+  ok((await page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1).textContent()).trim() === pubHex, 'import: the encrypted backup restores the same key');
 
   // 2. Wi-Fi editor: validation mirrors the device.
   await go('/network/wifi');
@@ -69,8 +87,8 @@ export default async function (t) {
   if (py) {
     const dir = mkdtempSync(join(tmpdir(), 'hp-sig-'));
     writeFileSync(join(dir, 'k.pem'), pem); writeFileSync(join(dir, 'WIFI.TXT'), txt);
-    execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/policy-sign.py'), 'sign-wifi', join(dir, 'k.pem'), join(dir, 'WIFI.TXT'), '7', join(dir, 'WIFI.SIG')], { stdio: 'ignore' });
-    ok(readFileSync(join(dir, 'WIFI.SIG')).equals(sig), 'browser signature is byte-identical to policy-sign.py sign-wifi');
+    execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/policy-sign.py'), 'sign-wifi', join(dir, 'k.pem'), join(dir, 'WIFI.TXT'), '7', join(dir, 'WIFI.SIG')], { stdio: 'ignore', env: { ...process.env, HQ_KEY_PASSPHRASE: PASS } });
+    ok(readFileSync(join(dir, 'WIFI.SIG')).equals(sig), 'browser signature is byte-identical to policy-sign.py sign-wifi (using the encrypted backup)');
   } else {
     console.log('  note  advanced-config: python cryptography not installed — byte-for-byte check vs policy-sign.py skipped');
   }

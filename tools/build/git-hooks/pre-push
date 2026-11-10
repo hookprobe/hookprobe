@@ -64,7 +64,7 @@ check_range() {
   local pattern="$3"
   local hits
   hits="$(git diff "$range" -- . ':(exclude)tools/build/git-hooks/pre-push' ':(exclude).gitleaks.toml' ':(exclude).github/workflows/secrets-scan.yml' \
-            | grep_cmd "$pattern" || true)"
+            | grep_cmd -e "$pattern" || true)"
   if [ -n "$hits" ]; then
     echo "PRE-PUSH SECRET TRIPWIRE [$label] -- refusing to push:" >&2
     echo "$hits" >&2
@@ -83,7 +83,8 @@ while read -r local_ref local_sha remote_ref remote_sha; do
     range="$remote_sha..$local_sha"
   fi
 
-  check_range "$range" "PEM private key"    '(BEGIN (RSA |EC |OPENSSH |DSA )?PRIVATE KEY)'
+  # Same pattern as the CI tripwire: armour header + key material (see secrets-scan.yml).
+  check_range "$range" "PEM private key"    '-----BEGIN (RSA |EC |OPENSSH |DSA |ENCRYPTED )?PRIVATE KEY-----(\s*$|\\n\s*[A-Za-z0-9+/]{20,})'
   check_range "$range" "GitHub token"       '(ghp|gho|ghs|ghu|ghr)_[A-Za-z0-9]{20,}'
   check_range "$range" "AWS access key"     'AKIA[0-9A-Z]{16}'
   check_range "$range" "Slack token"        'xox[baprs]-[A-Za-z0-9-]{10,}'

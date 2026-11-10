@@ -60,4 +60,10 @@ paths = [
 regexTarget = "match"
 regexes = [
   '''libcrux-secrets",\s+"libcrux-[a-z0-9-]+"''',
+  # (d) PEM armour NAMED or BUILT in source code, not key material, e.g. os/mission-control/src/store/signing.ts:
+  # an error message quoting the header (`"-----BEGIN PRIVATE KEY-----")`) and the backup export template
+  # (`-----BEGIN PRIVATE KEY-----\n${b64}…`). Allowed only when the header is directly followed by a closing
+  # quote/backtick/paren or by a `${` template placeholder. A real key is always followed by a line break or
+  # `\n` and base64, so a pasted real key still fires (verified with gitleaks v8.30.1 on generated keys).
+  '''-----BEGIN [A-Z ]*PRIVATE KEY-----(["'`)\]]|(\\n|\s)*\$\{)''',
 ]
