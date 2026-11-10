@@ -3925,6 +3925,9 @@ fn cm5_p10_probe() {
                             }
                             #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                             {
+                                if ownerapi::take_owner_reboot() {
+                                    reset_at = Some(now().wrapping_add(2 * freq)); // G49: the owner asked for a restart
+                                }
                                 if ownerapi::take_reset_reboot() {
                                     kprint!(" [FACTORY-RESET] request sealed in the journal — rebooting in 2 s to erase the owner data\n");
                                     reset_at = Some(now().wrapping_add(2 * freq));
