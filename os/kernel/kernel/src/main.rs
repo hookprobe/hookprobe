@@ -168,6 +168,8 @@ mod enroll;
 // M4.5 — control-plane INITIATOR: smoltcp-free hand-framed Noise handshake over the single drain.
 #[cfg(feature = "securechannel")]
 mod controlplane;
+#[cfg(feature = "securechannel")]
+mod g19;
 // M6 (ADR 0044 D3 B2) — on-device evidence/telemetry export over the enrolled channel.
 #[cfg(feature = "securechannel")]
 mod export;
@@ -4166,7 +4168,7 @@ fn cm5_p10_probe() {
                                                 // Mission Control on the AP address; not on the client AP when management is
                                                 // configured (G12-M).
                                                 #[cfg(feature = "mcserve")]
-                                                if let Some(n) = mcn.as_mut().filter(|_| mc_wifi) {
+                                                if let Some(n) = mcn.as_mut().filter(|_| mc_wifi || apcore::alert_flow(frame, &our_ip)) {
                                                     n.ingress(frame, (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
                                                 }
                                             }
@@ -6989,6 +6991,7 @@ pub extern "C" fn kmain() -> ! {
         // in-kernel responder over the exact smoltcp-free hand-framed UDP transport it runs on
         // metal (the metal half is the host MSSP-sim, deferred).
         controlplane::cp_selftest();
+        let _ = g19::selftest();
     }
 
     // --- M4.4 (P19-edge): the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's
