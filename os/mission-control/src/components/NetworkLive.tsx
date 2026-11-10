@@ -7,12 +7,12 @@
  * expires by itself, DHCP/DNS keep working).
  */
 import { type Component, For, Show, createMemo, createSignal } from 'solid-js';
-import TopBar from './TopBar';
-import { setCopilotOpen } from '../store/mock';
+
 import { devices } from '../store/obsLive';
 import { formatTime, type DeviceRow } from '../store/api';
 import { promptAndRun } from '../store/actions';
 import { tlsFor } from '../store/tlsLive';
+import AppShell from './AppShell';
 
 const GROUPS: { key: string; label: string; blurb: string }[] = [
   { key: 'full', label: 'Full access', blurb: 'Internet and the local network.' },
@@ -43,7 +43,7 @@ const NetworkLive: Component = () => {
   };
   return (
     <>
-      <TopBar onOpenCopilot={() => setCopilotOpen(true)} />
+      <AppShell path="/network/map">
       <main class="main-content net-page" style={{ 'max-width': '1100px' }}>
         <div class="net-page-header">
           <a href="/" class="net-back-link" aria-label="Back to Mission Control">← Mission Control</a>
@@ -116,6 +116,7 @@ const NetworkLive: Component = () => {
           and expires by itself.
         </div>
       </main>
+      </AppShell>
     </>
   );
 };

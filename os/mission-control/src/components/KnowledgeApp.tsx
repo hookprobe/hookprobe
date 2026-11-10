@@ -12,10 +12,9 @@
  */
 
 import { type Component, For, Show, createSignal } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
+import AppShell from './AppShell';
 import {
   type ContentStatus,
   KPIS, CONTENT_ITEMS, SEO_KEYWORDS, AI_SUGGESTIONS,
@@ -81,8 +80,7 @@ const KnowledgeApp: Component = () => {
   }
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/knowledge" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+    <AppShell path="/knowledge/blog">
 
       <main class="dash-main">
         <header class="mc-header">
@@ -209,13 +207,7 @@ const KnowledgeApp: Component = () => {
         </div>
       </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+    </AppShell>
   );
 };
 

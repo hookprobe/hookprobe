@@ -17,10 +17,9 @@
  */
 
 import { type Component, For } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
+import AppShell from './AppShell';
 import {
   type Kpi, type UserRole, type EdgeNode, type Channel,
   type ModuleRuntime, type ModuleStatus, type ModelStatus, type AutonomyLevel,
@@ -104,8 +103,7 @@ const AdministrationApp: Component = () => {
   const primaryNode = EDGE_NODES[0];
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/admin" mode="cloud-linked" onOpenCopilot={() => setCopilotOpen(true)} />
+    <AppShell path="/admin/identity">
 
       <main class="dash-main">
         <header class="mc-header">
@@ -506,13 +504,7 @@ const AdministrationApp: Component = () => {
         </div>
       </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+    </AppShell>
   );
 };
 

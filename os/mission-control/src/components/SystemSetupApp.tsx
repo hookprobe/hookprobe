@@ -11,7 +11,7 @@
  */
 
 import { type Component, For, Show, Switch, Match, createMemo } from 'solid-js';
-import LeftRail from './LeftRail';
+import AppShell from './AppShell';
 import {
   STEPS, DEVICE, TIMEZONES, WAN_OPTIONS, pwStrength, planDiff, stepStatus,
   step, setStep, model, patch, deploying, setDeploying, wanReady, setWanReady,
@@ -50,8 +50,7 @@ const SystemSetupApp: Component = () => {
   };
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/setup" mode="standalone" onOpenCopilot={() => {}} />
+    <AppShell path="/setup">
 
       <main class="dash-main set-main">
         {/* Header band */}
@@ -292,7 +291,7 @@ const SystemSetupApp: Component = () => {
           <StripItem icon="⏱" label="Uptime" value={DEVICE.uptime} />
         </footer>
       </main>
-    </div>
+    </AppShell>
   );
 };
 

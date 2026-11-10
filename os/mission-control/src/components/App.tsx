@@ -6,7 +6,7 @@
  *
  * Responsibilities:
  *   - Start the heartbeat interval (client-only, respects prefers-reduced-motion)
- *   - Wire ⌘K / Ctrl+K + Escape keyboard shortcuts
+ *   - (⌘K / Esc and the Copilot live in AppShell, shared by every route)
  *   - Compose: TopBar · OrganismOrb · PillarGrid · Needs-you · CommandPalette
  *
  * Note on hydration: Astro pre-renders this to static HTML at build time.
@@ -15,17 +15,13 @@
  */
 
 import { type Component, onMount, onCleanup } from 'solid-js';
-import {
-  copilotOpen, setCopilotOpen,
-  copilotQuery, setCopilotQuery,
-  setHeartbeat, security,
-} from '../store/mock';
+import { setHeartbeat, security } from '../store/mock';
 import { startLiveUpdates } from '../store/live';
+import { setProView } from '../store/layer';
 
-import TopBar         from './TopBar';
 import OrganismOrb    from './OrganismOrb';
 import PillarGrid     from './PillarGrid';
-import CommandPalette from './CommandPalette';
+import AppShell from './AppShell';
 
 const App: Component = () => {
   onMount(() => {
@@ -58,31 +54,15 @@ const App: Component = () => {
       }, 2000);
     });
 
-    // ── Keyboard shortcuts ──────────────────────────────────────────────────
-    const handleKey = (e: KeyboardEvent) => {
-      // ⌘K / Ctrl+K → toggle copilot
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault();
-        setCopilotOpen((v) => !v);
-      }
-      // Escape → close copilot
-      if (e.key === 'Escape' && copilotOpen()) {
-        setCopilotOpen(false);
-      }
-    };
-
-    window.addEventListener('keydown', handleKey);
-
     onCleanup(() => {
       if (heartbeatIv !== undefined) clearInterval(heartbeatIv);
-      window.removeEventListener('keydown', handleKey);
     });
   });
 
   return (
     <>
       {/* ── Persistent chrome ─────────────────────────────────────────────── */}
-      <TopBar onOpenCopilot={() => setCopilotOpen(true)} />
+      <AppShell path="/">
 
       {/* ── Main content ──────────────────────────────────────────────────── */}
       <main class="main-content">
@@ -134,20 +114,14 @@ const App: Component = () => {
           <span class="bottom-sep" aria-hidden="true">·</span>
           <a href="/observe/events">Timeline &amp; Export</a>
           <span class="bottom-sep" aria-hidden="true">·</span>
-          <button class="pro-view-btn" aria-label="Switch to Pro view (all 13 workspaces)">
+          <button class="pro-view-btn" onClick={() => { setProView(true); location.href = '/mission'; }} aria-label="Switch to Pro view (every workspace)">
             Pro view ⤢
           </button>
         </div>
 
       </main>
 
-      {/* ── AI Copilot overlay ────────────────────────────────────────────── */}
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
+      </AppShell>
     </>
   );
 };

@@ -39,10 +39,9 @@
  */
 
 import { type Component, For, Show, createSignal, createMemo } from 'solid-js';
-import LeftRail from './LeftRail';
-import CommandPalette from './CommandPalette';
 import type { DeployMode } from './LeftRail';
-import { setCopilotOpen, setCopilotQuery, copilotOpen, copilotQuery } from '../store/mock';
+import { setCopilotOpen, setCopilotQuery } from '../store/mock';
+import AppShell from './AppShell';
 import {
   type BeaconPayload,
   GRANTS, DEVICE_BEACON_BASE, CONSENT_TAG_ON, CONSENT_TAG_OFF,
@@ -134,8 +133,7 @@ const FeedbackApp: Component = () => {
   }
 
   return (
-    <div class="dash-layout">
-      <LeftRail active="/admin" mode={MODE} onOpenCopilot={() => setCopilotOpen(true)} />
+    <AppShell path="/admin/feedback">
 
       <main class="dash-main">
         <header class="mc-header">
@@ -299,13 +297,7 @@ const FeedbackApp: Component = () => {
         </Show>
       </main>
 
-      <CommandPalette
-        open={copilotOpen()}
-        query={copilotQuery()}
-        onQuery={setCopilotQuery}
-        onClose={() => { setCopilotOpen(false); setCopilotQuery(''); }}
-      />
-    </div>
+    </AppShell>
   );
 };
 
