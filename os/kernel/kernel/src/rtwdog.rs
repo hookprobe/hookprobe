@@ -128,6 +128,17 @@ pub fn last_crash() -> Option<&'static arch_aarch64::crashrec::Crash> {
     CRASH_SET.load(Relaxed).then(|| unsafe { &*core::ptr::addr_of!(CRASH) })
 }
 
+/// A self-heal reset is allowed unless the previous boot ended in one that came within 15 minutes of its boot
+/// (backoff: a fault that recurs at once stays up and reported instead of becoming a reboot loop).
+pub fn self_heal_allowed() -> bool {
+    self_heal_allowed_after(last_crash())
+}
+
+/// Pure decision behind [`self_heal_allowed`].
+pub fn self_heal_allowed_after(prev: Option<&arch_aarch64::crashrec::Crash>) -> bool {
+    !matches!(prev, Some(c) if c.kind == 3 && c.far < 15 * 60)
+}
+
 /// (armed, hypercall pets, worst gap between loop calls in ms, previous reset was a watchdog reset)
 pub fn stats(freq: u64) -> (bool, u64, u64, bool) {
     let f = freq.max(1);
