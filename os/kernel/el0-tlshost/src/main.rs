@@ -8,6 +8,12 @@
 
 extern crate alloc;
 
+/// The Mission Control request parser — the SAME source file the kernel used (and the host fuzz harness builds),
+/// now executed in this isolated server (ADR 0050 D4 step 1).
+#[path = "../../kernel/src/httpreq.rs"]
+#[allow(dead_code)]
+mod httpreq;
+
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::ptr::{read_volatile, write_volatile};
@@ -229,6 +235,31 @@ pub extern "C" fn _start() -> ! {
     let conn = rd32(H_CONN) as usize;
     let n = (rd32(H_IN_LEN) as usize).min(IN_MAX);
     let input = io(IN_OFF, n);
+    if cmd == CMD_HTTP_PARSE {
+        let base = input.as_ptr() as usize;
+        let span = |s: &[u8]| -> (u32, u32) { ((s.as_ptr() as usize).wrapping_sub(base) as u32, s.len() as u32) };
+        match httpreq::parse(input) {
+            Ok(r) => {
+                let mut rec = [0u32; HTTP_REC_LEN / 4];
+                rec[0] = if r.get { HF_GET } else { 0 } | if r.post { HF_POST } else { 0 } | if r.keep_alive { HF_KEEP_ALIVE } else { 0 }
+                    | if r.session.is_some() { HF_SESSION } else { 0 };
+                rec[1] = r.consumed as u32;
+                let fields: [&[u8]; 7] = [r.path.as_bytes(), r.query.as_bytes(), r.session.unwrap_or("").as_bytes(), r.body, r.host.as_bytes(), r.origin.as_bytes(), r.csrf.as_bytes()];
+                for (i, f) in fields.iter().enumerate() {
+                    let (o, l) = if f.is_empty() { (0, 0) } else { span(f) };
+                    rec[2 + 2 * i] = o;
+                    rec[3 + 2 * i] = l;
+                }
+                let out = io(OUT_PLAIN_OFF, HTTP_REC_LEN);
+                for (i, w) in rec.iter().enumerate() {
+                    out[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
+                }
+                exit(ST_OK, 0, HTTP_REC_LEN, 0)
+            }
+            Err(httpreq::ParseErr::Incomplete) => exit(ST_HTTP_INCOMPLETE, 0, 0, 0),
+            Err(httpreq::ParseErr::Bad) => exit(ST_HTTP_BAD, 0, 0, 0),
+        }
+    }
     if cmd == CMD_INIT {
         let r = init(input);
         input.fill(0); // the key scalar leaves the shared region

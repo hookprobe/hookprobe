@@ -55,6 +55,17 @@ pub const CMD_RECV: u32 = 3;
 pub const CMD_SEND: u32 = 4;
 /// OUT_TLS = close_notify (if the session got that far); the slot is freed.
 pub const CMD_CLOSE: u32 = 5;
+/// ADR 0050 D4 step 1: parse one HTTP/1.1 request (IN = the raw request bytes, plaintext) with the same
+/// `httpreq::parse` the kernel used, IN THIS SERVER. OUT_PLAIN = the `HTTP_REC_LEN`-byte canonical record:
+/// u32 flags (HF_*), u32 consumed, then 7 × (u32 offset, u32 length) into IN for path, query, session, body,
+/// host, origin, csrf. The kernel rebuilds the request from ITS OWN copy of the bytes after bounds + UTF-8
+/// checks — no HTTP parsing left in EL1. Works before INIT (plain-HTTP Mission Control).
+pub const CMD_HTTP_PARSE: u32 = 6;
+pub const HTTP_REC_LEN: usize = 64;
+pub const HF_GET: u32 = 1;
+pub const HF_POST: u32 = 2;
+pub const HF_KEEP_ALIVE: u32 = 4;
+pub const HF_SESSION: u32 = 8;
 
 // Status codes.
 pub const ST_OK: u32 = 0;
@@ -66,6 +77,10 @@ pub const ST_NOT_INIT: u32 = 5;
 pub const ST_PANIC: u32 = 6;
 pub const ST_BAD_INIT: u32 = 7;
 pub const ST_NOT_READY: u32 = 8;
+/// CMD_HTTP_PARSE: the header block is not complete yet (read more).
+pub const ST_HTTP_INCOMPLETE: u32 = 10;
+/// CMD_HTTP_PARSE: not an acceptable HTTP/1.x request (answer 400 and close).
+pub const ST_HTTP_BAD: u32 = 11;
 
 // Flags (out).
 pub const F_HANDSHAKE_DONE: u32 = 1;
