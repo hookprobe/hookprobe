@@ -68,6 +68,12 @@ fi
 # release → FATAL on dev keys; debug → allowed). Checks the source trusted_keys.rs/attest_keys.rs.
 "$ROOT/os/build/heqk-boot-key-check.sh"
 
+# ADR 0059 step 4a: the shell's development transport (hsh-dev) never ships — the production transport is the
+# operator's open decision (hsh spec R6).
+case ",$FEATURES," in
+  *,hsh-dev,*) [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ] || { echo "FATAL: hsh-dev (development shell transport) in a release build" >&2; exit 1; } ;;
+esac
+
 # Release-BLOCKING config-key gate (ADR 0059 Phase 0.5, C4): a RELEASE build of a device profile (it serves
 # Mission Control or the AP) must carry the operator configuration key — without it the device accepts UNSIGNED
 # WAN.TXT / WIFI.TXT / POLICY.TXT (anyone with the card reconfigures it). Debug builds may omit it (they boot

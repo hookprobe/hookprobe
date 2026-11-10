@@ -76,6 +76,11 @@ mod detbench;
 mod artstore;
 mod cfgbundle;
 mod cfgd;
+// ADR 0059 step 4a: the management ABI + the EL0 native shell
+#[cfg(feature = "mcserve")]
+mod mgmtabi;
+#[cfg(feature = "mcserve")]
+mod hsh;
 mod datavol;
 mod ownerjournal;
 mod alerthook;
@@ -3804,6 +3809,7 @@ fn cm5_p10_probe() {
                                 crate::tlshost::bring_up(Some(&dev));
                                 crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
                                 let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal
+                                let _ = crate::hsh::selftest(0); // ADR 0059 step 4a on metal: the EL0 shell + mgmtabi
                             }
                             mcserve::state().set_clock(0, mc_t0, freq);
                             #[cfg(feature = "appersist")]

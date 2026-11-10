@@ -68,6 +68,10 @@ fn main() {
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-lansvc", "el0lansvc-target", feat, "el0_lansvc.elf");
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("src/dnswire.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/lansvcabi.rs").display());
+        // ADR 0059 step 4a: hsh, the native management shell, as an EL0 excursion server (same substrate)
+        build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-hsh", "el0hsh-target", feat, "el0_hsh.elf");
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/hshabi.rs").display());
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/mgmtabi.rs").display());
     }
     println!("cargo:rerun-if-changed=build.rs");
 }

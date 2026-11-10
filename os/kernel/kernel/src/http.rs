@@ -311,6 +311,19 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
+    // ADR 0059 step 4a: the native shell over the authenticated session — a DEVELOPMENT transport only (`hsh-dev`,
+    // off by default, never in a release build): the production transport is the operator's open decision (hsh spec
+    // R6). Role = view (read-only commands).
+    #[cfg(feature = "hsh-dev")]
+    if req.post && req.path == "/api/hsh" {
+        let line = req.body.split(|&b| b == b'\n').next().unwrap_or(b"");
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let mut text = [0u8; 2048];
+        let n = crate::hsh::run_line(line, hal::mgmtabi::ROLE_VIEW, now_ms, &mut text);
+        let k = n.min(scratch.len());
+        scratch[..k].copy_from_slice(&text[..k]);
+        return Response { status: 200, ctype: "text/plain; charset=utf-8", body: Body::Scratch(k), location: None, set_cookie: None };
+    }
     // ADR 0059 step 3: commit the configuration trial now / roll the bundle back for the next boot
     if req.post && (req.path == "/api/config/confirm" || req.path == "/api/config/rollback") {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
