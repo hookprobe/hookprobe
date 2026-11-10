@@ -33,6 +33,7 @@ use hal::BlockDev;
 
 const MAGIC: &[u8; 8] = b"HQANCH1\0";
 const MAGIC2: &[u8; 8] = b"HQANCH2\0";
+const MAGIC3: &[u8; 8] = b"HQANCH3\0";
 const HAS_KEY: u64 = 1;
 const HAS_OWNER: u64 = 2;
 
@@ -46,6 +47,37 @@ pub struct Anchor {
     pub owner: Option<[u8; 32]>,
     /// Rotation generation of the owner key (1 at enrollment).
     pub owner_gen: u64,
+    /// ADR 0059 Phase 0.3: WAN / WIFI generation floors (record v3).
+    pub cfg: CfgGens,
+}
+
+/// Per-type configuration generations (ADR 0059 Phase 0.3, H1). `cur` = the generation last accepted at boot;
+/// `floor` = the lowest one still allowed. Accepting a NEWER generation moves the floor to the previous one, so a
+/// one-step rollback (the other A/B half, or the boot baseline it replaced) stays possible while any OLDER signed
+/// file replayed from the card is refused. cfgd (Phase 2) replaces this with "commit raises the floor to LKG".
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CfgGens {
+    pub wan_cur: u64,
+    pub wan_floor: u64,
+    pub wifi_cur: u64,
+    pub wifi_floor: u64,
+}
+impl CfgGens {
+    pub const ZERO: CfgGens = CfgGens { wan_cur: 0, wan_floor: 0, wifi_cur: 0, wifi_floor: 0 };
+}
+
+/// The pure acceptance rule: `Err` = below the floor (a replay); `Ok((cur, floor))` = the new pair.
+pub fn accept_gen(cur: u64, floor: u64, g: u64) -> Result<(u64, u64), ()> {
+    if g < floor {
+        return Err(());
+    }
+    if cur == 0 {
+        return Ok((g, g)); // first accepted generation: nothing older may come back
+    }
+    if g > cur {
+        return Ok((g, floor.max(cur)));
+    }
+    Ok((g, floor)) // the same generation, or a rollback within the window
 }
 
 /// The boot decision (pure — `[P-anchor]` covers every row of the table above).
@@ -94,21 +126,34 @@ fn encode(a: &Anchor) -> [u8; 512] {
         s[64..96].copy_from_slice(&k);
     }
     s[96..104].copy_from_slice(&a.owner_gen.to_le_bytes());
-    let h = boot_abi::sha256::digest(&s[..104]);
-    s[104..136].copy_from_slice(&h);
+    s[..8].copy_from_slice(MAGIC3);
+    s[104..112].copy_from_slice(&a.cfg.wan_cur.to_le_bytes());
+    s[112..120].copy_from_slice(&a.cfg.wan_floor.to_le_bytes());
+    s[120..128].copy_from_slice(&a.cfg.wifi_cur.to_le_bytes());
+    s[128..136].copy_from_slice(&a.cfg.wifi_floor.to_le_bytes());
+    let h = boot_abi::sha256::digest(&s[..136]);
+    s[136..168].copy_from_slice(&h);
     s
 }
 
 fn decode(s: &[u8; 512]) -> Option<Anchor> {
     let u = |o: usize| u64::from_le_bytes(s[o..o + 8].try_into().unwrap());
-    let v2 = &s[..8] == MAGIC2;
-    let ok = if v2 { boot_abi::sha256::digest(&s[..104])[..] == s[104..136] } else { &s[..8] == MAGIC && boot_abi::sha256::digest(&s[..64])[..] == s[64..96] };
+    let v3 = &s[..8] == MAGIC3;
+    let v2 = v3 || &s[..8] == MAGIC2;
+    let ok = if v3 {
+        boot_abi::sha256::digest(&s[..136])[..] == s[136..168]
+    } else if v2 {
+        boot_abi::sha256::digest(&s[..104])[..] == s[104..136]
+    } else {
+        &s[..8] == MAGIC && boot_abi::sha256::digest(&s[..64])[..] == s[64..96]
+    };
     if !ok {
         return None;
     }
     let key = (u(16) & HAS_KEY != 0).then(|| s[24..56].try_into().unwrap());
     let owner = (v2 && u(16) & HAS_OWNER != 0).then(|| s[64..96].try_into().unwrap());
-    Some(Anchor { key, policy_floor: u(56), seq: u(8), owner, owner_gen: if v2 { u(96) } else { 0 } })
+    let cfg = if v3 { CfgGens { wan_cur: u(104), wan_floor: u(112), wifi_cur: u(120), wifi_floor: u(128) } } else { CfgGens::ZERO };
+    Some(Anchor { key, policy_floor: u(56), seq: u(8), owner, owner_gen: if v2 { u(96) } else { 0 }, cfg })
 }
 
 /// The owner-enrollment proof of possession: the NEW key signs `HQENR1 ‖ key`.
@@ -213,6 +258,47 @@ pub fn store<D: BlockDev>(d: &mut D, lo: u64, prev: Option<Anchor>, mut a: Ancho
 static mut EFFECTIVE: Option<Option<[u8; 32]>> = None;
 static mut FLOOR: u64 = 0;
 static mut OWNER: Option<[u8; 32]> = None;
+static mut CFG: CfgGens = CfgGens::ZERO;
+
+/// The WAN / WIFI generation state installed at boot (all zero = nothing accepted yet / no DataVolume).
+pub fn cfg_gens() -> CfgGens {
+    unsafe { CFG }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum CfgTy {
+    Wan,
+    Wifi,
+}
+
+/// ADR 0059 Phase 0.3: check a verified WAN / WIFI generation against its floor and, when accepted, persist the
+/// new (cur, floor). Err = a replay below the floor (the caller refuses the file). A persist failure keeps the
+/// RAM state (the floor still applies this boot) and is reported by the caller's log.
+pub fn accept_cfg(t: CfgTy, g: u64) -> Result<(), u64> {
+    let c = cfg_gens();
+    let (cur, floor) = match t {
+        CfgTy::Wan => (c.wan_cur, c.wan_floor),
+        CfgTy::Wifi => (c.wifi_cur, c.wifi_floor),
+    };
+    let (ncur, nfloor) = accept_gen(cur, floor, g).map_err(|_| floor)?;
+    if (ncur, nfloor) == (cur, floor) {
+        return Ok(());
+    }
+    let mut n = c;
+    match t {
+        CfgTy::Wan => (n.wan_cur, n.wan_floor) = (ncur, nfloor),
+        CfgTy::Wifi => (n.wifi_cur, n.wifi_floor) = (ncur, nfloor),
+    }
+    unsafe { CFG = n };
+    #[cfg(all(feature = "cm5", feature = "p15-write"))]
+    if let Some((mut dev, lo)) = header_dev() {
+        let prev = load(&dev, lo);
+        if let Some(p) = prev {
+            let _ = store(&mut dev, lo, prev, Anchor { cfg: n, ..p });
+        }
+    }
+    Ok(())
+}
 static mut OWNER_GEN: u64 = 0;
 
 /// The enrolled owner configuration key (ADR 0058 D3) and its rotation generation.
@@ -272,10 +358,10 @@ pub fn selftest() -> bool {
         && decide(Some(k), None) == Decision::Keep(k);
     let mut m = Mem([[0; 512]; 2]);
     let empty = load(&m, 0).is_none();
-    let a1 = Anchor { key: Some(k), policy_floor: 3, seq: 0, owner: None, owner_gen: 0 };
+    let a1 = Anchor { key: Some(k), policy_floor: 3, seq: 0, owner: None, owner_gen: 0, cfg: CfgGens::ZERO };
     let w1 = store(&mut m, 0, None, a1);
     let r1 = load(&m, 0);
-    let w2 = store(&mut m, 0, r1, Anchor { key: Some(k), policy_floor: 5, seq: 0, owner: None, owner_gen: 0 });
+    let w2 = store(&mut m, 0, r1, Anchor { key: Some(k), policy_floor: 5, seq: 0, owner: None, owner_gen: 0, cfg: CfgGens::ZERO });
     let r2 = load(&m, 0);
     let round = w1 && w2 && r1.map(|a| (a.key, a.policy_floor, a.seq)) == Some((Some(k), 3, 1))
         && r2.map(|a| (a.policy_floor, a.seq)) == Some((5, 2));
@@ -291,14 +377,14 @@ pub fn selftest() -> bool {
     v1[56..64].copy_from_slice(&6u64.to_le_bytes());
     let h = boot_abi::sha256::digest(&v1[..64]);
     v1[64..96].copy_from_slice(&h);
-    let compat = decode(&v1) == Some(Anchor { key: Some(k), policy_floor: 6, seq: 4, owner: None, owner_gen: 0 });
+    let compat = decode(&v1) == Some(Anchor { key: Some(k), policy_floor: 6, seq: 4, owner: None, owner_gen: 0, cfg: CfgGens::ZERO });
     // ADR 0058 D3 owner key: enroll needs the new key's proof; one-shot; rotation signed by the enrolled key,
     // generation strictly increasing; the vendor key and the POLICY floor are carried unchanged
     let kp = |b: u8| ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([b; 32]));
     let sign = |p: &ed25519_compact::KeyPair, m: &[u8]| -> [u8; 64] { *p.sk.sign(m, Some(ed25519_compact::Noise::from_slice(&[5u8; 16]).unwrap())) };
     let (o1, o2, x) = (kp(0x51), kp(0x52), kp(0x53));
     let (p1, p2): ([u8; 32], [u8; 32]) = (*o1.pk, *o2.pk);
-    let base = Anchor { key: Some(k), policy_floor: 5, seq: 2, owner: None, owner_gen: 0 };
+    let base = Anchor { key: Some(k), policy_floor: 5, seq: 2, owner: None, owner_gen: 0, cfg: CfgGens::ZERO };
     let proof1 = sign(&o1, &enroll_msg(&p1));
     let e = check_enroll(base, &p1, &proof1);
     let enroll = e == Ok(Anchor { owner: Some(p1), owner_gen: 1, ..base })
@@ -330,11 +416,28 @@ pub fn selftest() -> bool {
     let after = crate::policysig::config_keys(true) == [Some(p1), None] && crate::policysig::config_keys(false) == [Some(p1), v];
     install_owner(saved.0, saved.1);
     let scope = before && after;
-    let owner_ok = compat && enroll && rotate && persist && scope;
+    // ADR 0059 Phase 0.3: WAN / WIFI generation floors — the first accepted generation is its own floor; a newer one
+    // moves the floor to the previous (one-step rollback stays possible); anything older is a replay; v3 record round
+    // trip, and a v2 record decodes with no floors
+    let rule = accept_gen(0, 0, 5) == Ok((5, 5)) && accept_gen(5, 5, 6) == Ok((6, 5)) && accept_gen(6, 5, 5) == Ok((5, 5))
+        && accept_gen(6, 5, 4) == Err(()) && accept_gen(6, 5, 9) == Ok((9, 6)) && accept_gen(9, 6, 9) == Ok((9, 6));
+    let g3 = CfgGens { wan_cur: 9, wan_floor: 6, wifi_cur: 3, wifi_floor: 3 };
+    let mut m3 = Mem([[0; 512]; 2]);
+    let w5 = store(&mut m3, 0, None, Anchor { cfg: g3, ..cur });
+    let v3 = w5 && load(&m3, 0).is_some_and(|a| a.cfg == g3 && a.owner == Some(p1) && a.policy_floor == cur.policy_floor);
+    let mut v2r = [0u8; 512];
+    v2r[..8].copy_from_slice(MAGIC2);
+    v2r[16..24].copy_from_slice(&HAS_KEY.to_le_bytes());
+    v2r[24..56].copy_from_slice(&k);
+    let h2 = boot_abi::sha256::digest(&v2r[..104]);
+    v2r[104..136].copy_from_slice(&h2);
+    let v2compat = decode(&v2r).is_some_and(|a| a.key == Some(k) && a.cfg == CfgGens::ZERO);
+    let floors = rule && v3 && v2compat;
+    let owner_ok = compat && enroll && rotate && persist && scope && floors;
     let pass = table && empty && round && torn && owner_ok;
     arch_aarch64::_print(format_args!(
-        " [P-anchor] {} — device-pinned policy trust anchor (ADR 0049 D1 TOFU): first key pinned, same key kept, a DIFFERENT image key ignored in favour of the pin, no key in the image never downgrades to unsigned={} ; sealed A/B record round trip (key + persisted POLICY floor)={} ; torn newest copy falls back to the older={} ; ADR 0058 D3 owner key: HQANCH1 compat={} enroll (proof of possession, one-shot, not the vendor key)={} rotate (signed by the enrolled key, generation up, new key proves possession)={} persisted with the vendor key + floor={} key scope (store copy = owner key only, boot-partition baseline also vendor)={}\n",
-        if pass { "PASS" } else { "FAIL" }, table, empty && round, torn, compat, enroll, rotate, persist, scope));
+        " [P-anchor] {} — device-pinned policy trust anchor (ADR 0049 D1 TOFU): first key pinned, same key kept, a DIFFERENT image key ignored in favour of the pin, no key in the image never downgrades to unsigned={} ; sealed A/B record round trip (key + persisted POLICY floor)={} ; torn newest copy falls back to the older={} ; ADR 0058 D3 owner key: HQANCH1 compat={} enroll (proof of possession, one-shot, not the vendor key)={} rotate (signed by the enrolled key, generation up, new key proves possession)={} persisted with the vendor key + floor={} key scope (store copy = owner key only, boot-partition baseline also vendor)={} ; ADR 0059 0.3 WAN/WIFI floors: rule (first=floor, newer moves floor to previous, older refused)={} v3 record={} v2 decodes with no floors={}\n",
+        if pass { "PASS" } else { "FAIL" }, table, empty && round, torn, compat, enroll, rotate, persist, scope, rule, v3, v2compat));
     pass
 }
 
@@ -354,10 +457,11 @@ pub fn boot(image: Option<[u8; 32]>) -> (Decision, Option<Anchor>, bool) {
     let floor = prev.map_or(0, |a| a.policy_floor);
     let mut wrote = false;
     if let Decision::Pin(k) = d {
-        wrote = store(&mut dev, lo, prev, Anchor { key: Some(k), policy_floor: floor, seq: 0, owner: prev.and_then(|a| a.owner), owner_gen: prev.map_or(0, |a| a.owner_gen) });
+        wrote = store(&mut dev, lo, prev, Anchor { key: Some(k), policy_floor: floor, seq: 0, owner: prev.and_then(|a| a.owner), owner_gen: prev.map_or(0, |a| a.owner_gen), cfg: prev.map_or(CfgGens::ZERO, |a| a.cfg) });
     }
     install(d, floor);
     install_owner(prev.and_then(|a| a.owner), prev.map_or(0, |a| a.owner_gen));
+    unsafe { CFG = prev.map_or(CfgGens::ZERO, |a| a.cfg) };
     (d, prev, wrote)
 }
 
@@ -371,7 +475,7 @@ pub fn raise_policy_floor(gen: u64) -> bool {
         return true;
     }
     let key = prev.and_then(|a| a.key).or_else(|| effective().flatten());
-    let ok = store(&mut dev, lo, prev, Anchor { key, policy_floor: gen, seq: 0, owner: prev.and_then(|a| a.owner), owner_gen: prev.map_or(0, |a| a.owner_gen) });
+    let ok = store(&mut dev, lo, prev, Anchor { key, policy_floor: gen, seq: 0, owner: prev.and_then(|a| a.owner), owner_gen: prev.map_or(0, |a| a.owner_gen), cfg: prev.map_or(CfgGens::ZERO, |a| a.cfg) });
     if ok {
         unsafe { FLOOR = gen };
     }
@@ -384,7 +488,7 @@ pub fn raise_policy_floor(gen: u64) -> bool {
 pub fn set_owner(k: &[u8; 32], proof: &[u8; 64], rotate: Option<(u64, [u8; 64])>) -> Result<u64, &'static str> {
     let Some((mut dev, lo)) = header_dev() else { return Err("no DataVolume: nothing can be pinned on this card") };
     let prev = load(&dev, lo);
-    let cur = prev.unwrap_or(Anchor { key: effective().flatten(), policy_floor: policy_floor(), seq: 0, owner: None, owner_gen: 0 });
+    let cur = prev.unwrap_or(Anchor { key: effective().flatten(), policy_floor: policy_floor(), seq: 0, owner: None, owner_gen: 0, cfg: cfg_gens() });
     let next = match rotate {
         None => check_enroll(cur, k, proof),
         Some((gen, sig)) => check_rotate(cur, k, gen, &sig, proof),

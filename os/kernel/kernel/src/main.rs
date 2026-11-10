@@ -3115,7 +3115,7 @@ fn cm5_p10_probe() {
                                 anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
                                 anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
                                 anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
-                                anchor::Decision::Standalone => kprint!(" [ANCHOR] no operator key pinned or compiled in (standalone device)\n"),
+                                anchor::Decision::Standalone => kprint!(" [ANCHOR] CONFIG UNPROTECTED — no operator key pinned or compiled in: unsigned WAN.TXT / WIFI.TXT / POLICY.TXT are accepted (a debug / standalone image; release builds refuse this, ADR 0059 0.5)\n"),
                             }
                         }
                         // ADR 0058 rule 6 (operator 2026-11-10): verify BEFORE parsing or applying. With an operator key, a
@@ -14181,9 +14181,9 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
             Err(e) => {
                 // ADR 0058: a staged store copy the verifier refuses (tampered / below the floor) is disabled for
                 // this boot and the boot-partition POLICY.TXT is loaded instead
-                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Policy) {
-                    crate::artstore::disable(crate::artstore::Ty::Policy);
-                    kprint!(" [POLICY] the staged (uploaded) POLICY was REFUSED ({:?}) — falling back to the boot partition copy\n", e);
+                // ADR 0059 Phase 0.4: active half -> the other half (refused anyway if below the floor) -> boot copy
+                if crate::artstore::fallback_step(dev, p1, crate::artstore::Ty::Policy) {
+                    kprint!(" [POLICY] the stored POLICY was REFUSED ({:?}) — trying the next copy (other store half, then the boot partition)\n", e);
                     return load_policy(dev);
                 }
                 unsafe { POLICY_STATE = (3, 0) };
@@ -14226,6 +14226,15 @@ fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr
                     break;
                 }
             }
+            // ADR 0059 Phase 0.3: a verified generation below the WAN floor is a replay (an older signed WAN.TXT
+            // dropped on the card) — refused like a bad signature
+            #[cfg(feature = "p15-write")]
+            if let Ok(g) = v {
+                if let Err(floor) = crate::anchor::accept_cfg(crate::anchor::CfgTy::Wan, g) {
+                    kprint!(" [WAN] WAN.TXT generation {} is below the floor {} — a replayed older file, REFUSED\n", g, floor);
+                    v = Err(policysig::SigErr::RolledBack { gen: g, floor });
+                }
+            }
             // SEC 2026-11-10: keep EXACTLY the signed bytes [..len]; the parsers read this buffer and nothing else
             // (they used to re-read the whole sector, so lines appended after the signed length overrode it)
             if v.is_ok() {
@@ -14242,9 +14251,10 @@ fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr
             Some(store::parse_mbr(&sec)[0].start)
         })()
         .unwrap_or(0);
-        if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wan) {
-            crate::artstore::disable(crate::artstore::Ty::Wan);
-            kprint!(" [WAN] the staged (uploaded) WAN.TXT was REFUSED — falling back to the boot partition copy\n");
+        // ADR 0059 Phase 0.4: active half -> the other (previous) half -> the boot-partition copy
+        if crate::artstore::fallback_step(dev, p1, crate::artstore::Ty::Wan) {
+            kprint!(" [WAN] the stored WAN.TXT was REFUSED — trying the {} \n",
+                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wan) { "previous generation (other store half)" } else { "boot partition copy" });
             return wan_signed(dev);
         }
     }
