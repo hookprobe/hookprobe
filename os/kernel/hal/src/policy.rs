@@ -258,6 +258,35 @@ pub struct Policy {
     pub pl_drops: [u32; BIND_MAX],
     /// Parity G15: `export syslog <ipv4> <port> via wan|mgmt [json]` — the SIEM collector (one).
     pub export: Option<Export>,
+    /// G19: `tunnel pop <ipv4> full` | `tunnel pop <ipv4> split <a.b.c.d/n>…` — the SASE tunnel to the operator's
+    /// super-PoP (signed, like every POLICY line). Absent = no tunnel: the device never depends on a PoP.
+    pub tunnel: Option<Tunnel>,
+}
+
+pub const TUNNEL_SPLIT_MAX: usize = 8;
+
+/// G19 tunnel policy: which LAN→internet IPv4 traffic rides the Noise tunnel to the PoP.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tunnel {
+    pub pop: [u8; 4],
+    /// true = every LAN→internet IPv4 flow; false = only the `split` prefixes.
+    pub full: bool,
+    pub split: [([u8; 4], u8); TUNNEL_SPLIT_MAX],
+    pub nsplit: usize,
+}
+
+impl Tunnel {
+    /// Does an IPv4 destination ride the tunnel?
+    pub fn carries(&self, dst: [u8; 4]) -> bool {
+        if self.full {
+            return true;
+        }
+        let d = u32::from_be_bytes(dst);
+        self.split[..self.nsplit].iter().any(|&(a, l)| {
+            let m = if l == 0 { 0 } else { u32::MAX << (32 - l as u32) };
+            d & m == u32::from_be_bytes(a) & m
+        })
+    }
 }
 
 /// A SIEM collector: detections are sent there as RFC 5424 syslog (or OCSF JSON) over UDP.
@@ -310,6 +339,7 @@ impl Policy {
             nroutes: 0,
             pl_drops: [0; BIND_MAX],
             export: None,
+            tunnel: None,
         }
     }
 
@@ -785,6 +815,33 @@ pub fn parse_policy(buf: &[u8], out: &mut Policy) -> Result<(), PolicyErr> {
                 }
                 out.export = Some(Export { ip, port, via, json });
             }
+            b"tunnel" => {
+                // tunnel pop <ipv4> full | tunnel pop <ipv4> split <a.b.c.d/n> [<a.b.c.d/n>…]
+                if nt < 4 || t[1] != b"pop" || out.tunnel.is_some() {
+                    return Err(bad);
+                }
+                let pop = parse_v4(t[2]).ok_or(bad)?;
+                if pop == [0; 4] || pop[0] >= 224 || pop == [255; 4] {
+                    return Err(bad);
+                }
+                let mut tun = Tunnel { pop, full: false, split: [([0; 4], 0); TUNNEL_SPLIT_MAX], nsplit: 0 };
+                match t[3] {
+                    b"full" if nt == 4 => tun.full = true,
+                    b"split" if nt >= 5 && nt - 4 <= TUNNEL_SPLIT_MAX => {
+                        for tok in &t[4..nt] {
+                            let p = parse_prefix(tok).ok_or(bad)?;
+                            if p.addr.v6 || p.len > 32 {
+                                return Err(bad);
+                            }
+                            let a = [p.addr.a[0], p.addr.a[1], p.addr.a[2], p.addr.a[3]];
+                            tun.split[tun.nsplit] = (a, p.len);
+                            tun.nsplit += 1;
+                        }
+                    }
+                    _ => return Err(bad),
+                }
+                out.tunnel = Some(tun);
+            }
             b"route" => {
                 // route DST [from SRC] via IF [gw ADDR] [metric N]
                 if nt < 4 {
@@ -966,4 +1023,43 @@ pub fn rx_tags(f: &[u8]) -> Option<(u16, u16, usize)> {
         return Some((vid(12), vid(16), 20));
     }
     Some((0, vid(12), 16))
+}
+
+#[cfg(test)]
+mod tunnel_tests {
+    use super::*;
+
+    fn parse(t: &[u8]) -> Result<Policy, PolicyErr> {
+        let mut p = Policy::new();
+        parse_policy(t, &mut p).map(|_| p)
+    }
+
+    #[test]
+    fn tunnel_full_and_split() {
+        let p = parse(b"HQPOL1\ntunnel pop 203.0.113.7 full\n").unwrap();
+        let t = p.tunnel.unwrap();
+        assert!(t.full && t.pop == [203, 0, 113, 7] && t.carries([8, 8, 8, 8]));
+        let p = parse(b"HQPOL1\ntunnel pop 203.0.113.7 split 10.20.0.0/16 192.0.2.0/24\n").unwrap();
+        let t = p.tunnel.unwrap();
+        assert!(!t.full && t.nsplit == 2);
+        assert!(t.carries([10, 20, 3, 4]) && t.carries([192, 0, 2, 9]) && !t.carries([8, 8, 8, 8]));
+    }
+
+    #[test]
+    fn tunnel_refusals_reject_the_file() {
+        for bad in [
+            &b"HQPOL1\ntunnel pop 0.0.0.0 full\n"[..],
+            b"HQPOL1\ntunnel pop 224.0.0.1 full\n",
+            b"HQPOL1\ntunnel pop 203.0.113.7\n",
+            b"HQPOL1\ntunnel pop 203.0.113.7 full extra\n",
+            b"HQPOL1\ntunnel pop 203.0.113.7 split\n",
+            b"HQPOL1\ntunnel pop 203.0.113.7 split 2001:db8::/32\n",
+            b"HQPOL1\ntunnel via 203.0.113.7 full\n",
+            b"HQPOL1\ntunnel pop 203.0.113.7 full\ntunnel pop 203.0.113.8 full\n",
+            b"HQPOL1\ntunnel pop 203.0.113.7 split 1.0.0.0/8 2.0.0.0/8 3.0.0.0/8 4.0.0.0/8 5.0.0.0/8 6.0.0.0/8 7.0.0.0/8 8.0.0.0/8 9.0.0.0/8\n",
+        ] {
+            assert!(parse(bad).is_err(), "{}", core::str::from_utf8(bad).unwrap());
+        }
+        assert!(parse(b"HQPOL1\n").unwrap().tunnel.is_none(), "no line = no tunnel");
+    }
 }

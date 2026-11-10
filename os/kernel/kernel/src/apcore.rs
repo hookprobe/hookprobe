@@ -177,6 +177,17 @@ pub fn forward4<N: ApNic>(
                 }
             }
         }
+        // G19: a flow the signed `tunnel` policy carries rides the Noise tunnel to the super-PoP (NAT to the inner
+        // /32, sealed DATA over UDP 7655) — after every check above (holds, device policy, Shield, IDS).
+        #[cfg(feature = "securechannel")]
+        Act::Allow if frame.len() >= 34 && crate::g19::carries([frame[30], frame[31], frame[32], frame[33]]) => {
+            let now_ms = (nic.now().saturating_mul(1000) / nic.freq().max(1)) as i64;
+            let ok = crate::g19::send(frame, nif, &cfg.inside_net, nst, nic.ticks(), now_ms, &mut |f| nic.wan_tx(f));
+            if !ok {
+                c.nat_tx_fail += 1;
+            }
+            ok
+        }
         Act::Allow => {
             let w = nic.wan();
             // `route … via wan gw X`: X's MAC (ARP-resolved); the default gateway otherwise.
@@ -340,7 +351,19 @@ pub fn mc_bound(f: &[u8], our_ip: &[u8; 4]) -> bool {
     let ihl = ((f[14] & 0x0f) as usize) * 4;
     let Some(p) = f.get(14 + ihl + 2..14 + ihl + 4) else { return false };
     let dport = u16::from_be_bytes([p[0], p[1]]);
-    dport == 80 || dport == 443
+    dport == 80 || dport == 443 || alert_flow(f, our_ip)
+}
+
+/// The owner alert webhook's return traffic (TCP from the configured receiver ip:port to the AP): the Mission
+/// Control node opened that connection, so its SYN-ACK / response must reach the node — also when Mission
+/// Control itself is served only on the management VLAN (metal 2026-11-10: the alert never connected).
+pub fn alert_flow(f: &[u8], our_ip: &[u8; 4]) -> bool {
+    if !cfg!(feature = "mcserve") || f.len() < 38 || f[12] != 0x08 || f[13] != 0x00 || f[23] != 6 || &f[30..34] != our_ip {
+        return false;
+    }
+    let ihl = ((f[14] & 0x0f) as usize) * 4;
+    let Some(p) = f.get(14 + ihl..14 + ihl + 2) else { return false };
+    crate::alerthook::get().is_some_and(|h| f[26..30] == h.ip && u16::from_be_bytes([p[0], p[1]]) == h.port)
 }
 
 /// The fate of one IPv4 frame from a Wi-Fi client that the AP itself did not answer (not DHCP / ARP for us).

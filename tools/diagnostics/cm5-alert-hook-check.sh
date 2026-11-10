@@ -8,7 +8,7 @@
 #      verifies, /api/alert-hook counts sent >= 1; then the hook is removed (op=remove) and the receiver stopped.
 #   tools/diagnostics/cm5-alert-hook-check.sh <owner-key-file> [mc] [pi] [pi-ip]
 set -u -o pipefail
-KEY="${1:?owner key file}"; MC="${2:-https://192.168.200.146}"; PI="${3:-claude@10.200.0.4}"; PIIP="${4:-10.99.0.10}"
+KEY="${1:?owner key file}"; MC="${2:-https://192.168.200.146}"; PI="${3:-claude@10.200.0.4}"; PIIP="${4:-}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 SECRET="bench-alert-secret-$(date +%s)"
 ok=0; n=0
@@ -19,6 +19,9 @@ login() { curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$M
 sess() { S=$(curl -sk -m 10 -b "$J" "$MC/api/session"); CS=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["csrf"])' "$S"); SQ=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["next_seq"])' "$S"); }
 post() { R=$(curl -sk -m 10 -b "$J" -H "Origin: $MC" -H "X-HQ-CSRF: $CS" --data "$1&seq=$SQ" --data-urlencode "owner_key=$(cat "$KEY")" "$MC/api/alert-hook"); SQ=$((SQ + 1)); }
 "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1
+# the Pi's CURRENT address on the AP (its lease can change between boots)
+[ -n "$PIIP" ] || PIIP=$(pi "ip -4 route get 10.99.0.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p'")
+echo "  receiver: $PIIP:8099"
 # receiver (verifies the signature with sha256(secret) as the HMAC key, exactly as the device keys it)
 pi "cat > /tmp/hq-alert-rx.py" <<'PY'
 import hashlib, hmac, http.server, sys
@@ -37,19 +40,25 @@ PY
 pi "rm -f /tmp/hq-alert-rx.log; nohup python3 /tmp/hq-alert-rx.py '$SECRET' >/dev/null 2>&1 &"
 sleep 2
 login; sess
-post "op=set&ip=$PIIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=high&reason=bench+alert+check&permanent=true" ; R1=$R
-post "op=set&ip=$PIIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=high&reason=bench+alert+check&permanent=true&secret=$SECRET"
+post "op=set&ip=$PIIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=low&reason=bench+alert+check&permanent=true" ; R1=$R
+post "op=set&ip=$PIIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=low&reason=bench+alert+check&permanent=true&secret=$SECRET"
 grep -q '"ok":true' <<<"$R" && grep -q 'secret' <<<"$R1"; chk $? "hook refused without a secret, accepted with one ($R)"
 curl -sk -m 10 -b "$J" "$MC/api/alert-hook" | grep -q '"configured":true'; chk $? "GET /api/alert-hook: configured"
 sleep 3
 # high-severity detection: rule 124 (answered SSH brute-force burst to the bench WAN host)
 pi "for i in \$(seq 1 30); do timeout 1 bash -c '</dev/tcp/10.100.0.1/22' 2>/dev/null; done" >/dev/null 2>&1
+# and a DNS bypass to a Shield-blocked name (rule 126 — repeatable: a fresh source port each time)
+ip=$(dig +short +time=3 +tries=2 @1.1.1.1 doubleclick.net A | grep -E '^[0-9.]+$' | head -1)
+[ -n "$ip" ] && pi "curl -s -o /dev/null -m 6 --resolve doubleclick.net:443:$ip https://doubleclick.net/" >/dev/null 2>&1
+# and a second high-severity detection (rule 302: an address in the bench IOC pack, 203.0.113.0/24) — either one
+# alerts; a per-(rule, device) cooldown from an earlier run must not leave the check without a trigger
+pi "timeout 3 bash -c '</dev/tcp/203.0.113.$((RANDOM % 200 + 20))/80' 2>/dev/null" >/dev/null 2>&1
 sleep 20
 L=$(pi "cat /tmp/hq-alert-rx.log 2>/dev/null")
 echo "$L" | sed 's/^/  rx: /' | cut -c1-200
 c=$(grep -c . <<<"$L"); [ "$c" -ge 1 ]; chk $? "an alert reached the receiver ($c request(s))"
 grep -q "^SIGOK" <<<"$L" && ! grep -q "^SIGBAD" <<<"$L"; chk $? "every alert's X-HQ-Signature verifies with the owner's secret"
-[ "$(grep -c 'rule 1200124' <<<"$L")" -le 1 ]; chk $? "one alert for the burst (storm gate), not one per attempt"
+[ "$(grep -c 'rule 1200124' <<<"$L")" -le 1 ] && [ "$(grep -c 'rule 1200302' <<<"$L")" -le 1 ] && [ "$(grep -c 'rule 1200126' <<<"$L")" -le 1 ]; chk $? "at most one alert per (rule, device) (storm gate), not one per attempt"
 S=$(curl -sk -m 10 -b "$J" "$MC/api/alert-hook"); echo "  status: $S" | cut -c1-200
 grep -qE '"sent":[1-9]' <<<"$S"; chk $? "/api/alert-hook counts the delivery"
 sess; post "op=remove&reason=bench+done&permanent=true"
