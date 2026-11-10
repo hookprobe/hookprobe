@@ -85,7 +85,7 @@ pub const USER_VA_HI: usize = 0xC000_0000;
 #[cfg(feature = "cm5")]
 pub const USER_VA_LO: usize = 0x1_4000_0000;
 #[cfg(feature = "cm5")]
-pub const USER_VA_HI: usize = 0x1_4020_0000;
+pub const USER_VA_HI: usize = arch_aarch64::mmu_cm5::USER_VA_BASE + arch_aarch64::mmu_cm5::USER_WINDOW; // ADR 0050 D4 step 2: the window's second 2 MiB block (el0-lansvc) — tied to the MMU so the two cannot drift
 
 /// Is `[va, va+len)` wholly inside the EL0 user VA window (and non-wrapping)?
 #[inline]
