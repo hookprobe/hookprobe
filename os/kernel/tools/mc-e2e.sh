@@ -154,7 +154,7 @@ grep -q 're-authentication failed' <<<"$RB" && ok "G49: /api/reboot refuses with
 curl -s -m 10 $C "$B/api/network" | jget "(lambda k: k is None or (len(k)==64 and all(c in '0123456789abcdef' for c in k)))(d['trust_anchor']['public_key'])" | grep -q True && ok "ADR 0058: /api/network trust_anchor carries public_key" || bad "trust_anchor public_key missing"
 # ADR 0058 D3: owner configuration key — the state is reported; enrollment needs re-auth and (QEMU) has no DataVolume
 AN=$(curl -s -m 10 $C "$B/api/anchor")
-echo "$AN" | jget "d['owner_enrolled'] is False and d['owner_key'] is None and d['can']=='enroll' and d['config_files_verified_by'] in ('vendor','none (standalone)')" | grep -q True && ok "ADR 0058 D3: /api/anchor reports the vendor key and no enrolled owner key" || bad "/api/anchor: $AN"
+echo "$AN" | jget "d['owner_enrolled'] is False and d['owner_key'] is None and d['can']=='enroll' and d['config_files_verified_by'] in ('vendor','none (standalone)') and d['config_protected']==(d['vendor_key'] is not None) and (d['config_protected'] or d['state']=='CONFIG UNPROTECTED') and 'wan' in d['floors']" | grep -q True && ok "ADR 0058 D3: /api/anchor reports the vendor key and no enrolled owner key" || bad "/api/anchor: $AN"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/anchor")" = 401 ] && ok "/api/anchor requires the owner session" || bad "/api/anchor reachable without a session"
 PK=$(printf '%064d' 7); PF=$(printf '%0128d' 7)
 AE=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "public_key=$PK&proof=$PF&seq=$((SQN+3))&owner_key=wrong-key-000000000" "$B/api/anchor/enroll")
