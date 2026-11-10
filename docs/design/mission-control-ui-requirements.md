@@ -1,6 +1,7 @@
 # Hookprobe UI Layouts & Technical Requirements
 
-> Imported 2026-11-10 from the team's shared doc "Hookprobe UI Layouts & Technical Requirements" (revision 10), together with the "Hookprobe Wireframes" design canvas. `docs/architecture/MissionControl.md` stays canonical; this doc adds breakpoints, phone rules and the numbered requirements (TR, FR, DR, NFR). Repo-side decisions are recorded in the appendix at the end.
+> Imported from the team's shared doc "Hookprobe UI Layouts & Technical Requirements" (revision 12, 10 Nov 2026), together with the "Hookprobe Wireframes" design canvas (incl. the "Advanced · signed configuration" page). `docs/architecture/MissionControl.md` stays canonical; this doc adds breakpoints, phone rules, the numbered requirements (TR, FR, DR, NFR) and the configuration journey. Repo-side decisions and verification notes are in the appendix at the end.
+
 
 ## Overview
 
@@ -359,6 +360,92 @@ The UI is a static Astro and SolidJS build served by the on-device kernel server
 | NFR-10 | Resilience | Offline and degraded states for every screen; local protection controls (DNS, zones, isolation) keep working without the cloud. |
 | NFR-11 | Quality | End-to-end gates: `os/kernel/tools/mc-e2e.sh` (API plus browser) in QEMU and `mc-e2e-metal.sh` on hardware, plus visual regression at 4 breakpoints. |
 
+## Configuration journey: from flash to daily use
+
+Today a customer can change only device access and Shield from Mission Control. Internet (DHCP, static, PPPoE), VLANs, Wi-Fi, prefix lists, ACLs and routes all live in **operator-signed files on the boot partition**. On the current kernel, Get Online is read-only: `/api/network` reports what was applied and says changes come from signed files. This section describes the repo as of commit `acd942c` (10 Nov 2026).
+
+**Three authorities decide who can change what** (ADR 0053, ADR 0055)
+
+| Authority | Who | What it can change | How long it lasts |
+|---|---|---|---|
+| Session action | Signed-in owner | Quarantine or release a device, pause Shield for one device for up to 1 h, allow a domain for up to 24 h, acknowledge an incident | Expires on its own (up to 7 days), lost on reboot |
+| Owner rule (journal) | Owner, typing the owner key again and confirming "permanent" | `device_policy` (full, internet_only, lan_only, quarantine, blocked), `shield_allow`, `shield_block`, `shield_profile`, `device_label`; dry-run preview available | Durable, audited, HMAC-chained journal |
+| Signed baseline | Operator's Ed25519 key, signing happens off the device | WAN, PPPoE, VLAN, management VLAN, Wi-Fi, prefix lists, ACLs, routes, SASE tunnel, block lists, IOC, rules | Until the next signed file; a generation number prevents rollback |
+
+ADR 0055 D1 explicitly rules out WAN, VLAN, PPPoE, routes, ACLs and Wi-Fi credentials as owner rules.
+
+**The journey stage by stage**
+
+| Stage | What the customer does | Mechanism in the repo | Status |
+|---|---|---|---|
+| 1. Flash and provision | Gets a unit with a Wi-Fi label (QR) and a sealed owner-key card | `tools/provisioning/provision-unit.py`; the image is built by `os/build/make-cm5-heqk-disk.sh`, which can bake in signed WAN, POLICY, WIFI, DEVICES and list files | Built (factory station). The browser flasher in ADR 0037 is proposed |
+| 2. First power-on | Joins `HookProbe-Setup-XXXX` with the per-device passphrase (`xxxx-xxxx-xxxx-xxxx`) | `apcred.rs`: credential derived from the device's sealing key, so there's no shared default (ADR 0054) | Built |
+| 3. Sign in | Opens Mission Control on the setup network and enters the owner key | `POST /api/login`, HTTPS from the owner CA (ADR 0051) | Built |
+| 4. Get online | Internet comes up as DHCP by default | `WAN.TXT` decides the mode; with no file, DHCP | DHCP works. The setup wizard (ADR 0010, `SystemSetupApp`) runs on mock data, and the kernel answers `/api/provision/launch` with "not implemented on heqk" |
+| 5. Rename Wi-Fi | Wants their own SSID and password | Signed `WIFI.TXT` replaces the setup credential | Needs re-signing and re-flashing. Uploads of Wi-Fi files are refused (ADR 0056 D2) |
+| 6. Organize devices | Puts kids' tablets on internet-only, blocks a camera | Owner journal (`POST /api/owner-rules`) or signed `DEVICES.TXT` | Works from Mission Control |
+| 7. Tune Shield | Picks relaxed, balanced or strict, allows a site | Owner journal, or signed `BLOCK.TXT` / `ALLOW.TXT` with categories (ADR 0057) | Works from Mission Control |
+| 8. Advanced network | PPPoE, ISP VLAN, management VLAN, firewall rules, failover routes | Signed `WAN.TXT` and `POLICY.TXT` | `POLICY.TXT` can be uploaded and applies on the next boot. `WAN.TXT` can't be uploaded |
+| 9. Keep current | New block lists, threat intel, rules | `/api/upload` (begin, chunk, finish, activate): signed packs, A/B slots, rollback (ADR 0056) | Built for data packs; OS images are phase 2 |
+| 10. Maintain | Rotate the owner key, factory reset | `POST /api/owner-key`, `POST /api/factory-reset` | Built |
+
+**Every setting and where it lives**
+
+| Setting | File | Keys or grammar | Change from Mission Control today? |
+|---|---|---|---|
+| Internet mode | `WAN.TXT` (`HQWAN1`) | `mode=dhcp`, `static` or `pppoe`; `ip=`, `gw=`, `dns=` for static | No: re-sign and re-flash |
+| PPPoE login | `WAN.TXT` | `pppoe_user=`, `pppoe_pass=` | No |
+| ISP VLAN and QinQ | `WAN.TXT` | `vlan=`, `vlan_outer=`, `pcp=` | No |
+| Management VLAN | `WAN.TXT` | `mgmt_vlan=`, `mgmt_ip=`, `mgmt_gw=`, `mgmt_floor=` | No |
+| Wi-Fi network | `WIFI.TXT` (`WIFI.SIG`) | `ssid=`, `psk=`, `channel=`, `security=` (wpa2, wpa3, wpa3-transition) | No. The parser has one SSID and no guest network |
+| Prefix lists | `POLICY.TXT` (`HQPOL1`) | `prefix-list NAME seq N permit or deny PREFIX [ge n] [le n]` | Upload a signed file, applies on the next boot |
+| ACLs | `POLICY.TXT` | `acl NAME seq N allow, block or drop PROTO SRC DST [PORT]`, `acl NAME default …`; stateful, first match, implicit drop | Same |
+| Attach to interface | `POLICY.TXT` | `interface lan, eth1, wan or mgmt acl or prefix-list in or out NAME` | Same |
+| Routes and failover | `POLICY.TXT` | `route DST [from SRC] via IF [gw ADDR] [metric N]`; two defaults with different metrics form a failover pair | Same |
+| SASE tunnel | `POLICY.TXT` | `tunnel pop IP full` or `split PREFIX…` | Same |
+| Device access | Owner journal, or `DEVICES.TXT` | `MAC policy [label] [shield=…]` | Yes, live |
+| Shield lists and level | Owner journal, or `BLOCK.TXT` / `ALLOW.TXT` | `#! category=`, `#! level=` | Yes, live |
+| IPv6 | Automatic | PPPoE IPV6CP, RA, DHCPv6-PD, stateful LAN firewall | Read-only status |
+
+Signing is done off the device with `tools/policy-sign.py` (`sign`, `sign-wan`, `sign-devices`, `sign-blocklist`) using the operator key. Only the public key is compiled into the device image. An image built without a policy key is "standalone" and accepts an unsigned `POLICY.TXT`.
+
+**What this means for the screens**
+
+- **Get Online needs two depths.** The simple layer shows status (already possible from `/api/network`). Advanced becomes a configuration builder: a form that produces `WAN.TXT`, `WIFI.TXT` or `POLICY.TXT`, shows the change as a diff, then goes through sign, upload and activate on the next boot, with the generation number and a rollback.
+- **Signing step: product decision needed.** The device never holds the operator's private key. Either the browser signs with a key the owner holds (WebCrypto or a hardware key, ADR 0053 option B), or the UI exports the draft for offline signing with `policy-sign.py` and the owner uploads the signed result.
+- **Device and Shield changes stay instant.** They use the owner journal, with a "permanent" confirmation and a dry-run preview.
+
+**Decision (Alina, 10 Nov 2026): the owner signs in the browser.** A signing key is provisioned during onboarding and held by the owner (a passkey, hardware key or browser-held key; it never leaves their control and is never stored on the device). Its public half becomes the device's operator key. Advanced changes then go: build the change, review the diff, sign in the browser, upload, apply on the next reboot, with rollback to the previous generation. This needs `/api/upload` to accept signed `WAN.TXT` and `WIFI.TXT` too (gap 1), and a way to enroll the owner's key as the policy key at first boot, since today that key is compiled into the image.
+
+**Gaps to raise with the team**
+
+1. `WAN.TXT` and `WIFI.TXT` can't be changed on a running device at all. A home user can't switch to PPPoE or rename Wi-Fi without re-flashing.
+2. The first-run setup wizard (ADR 0010) is a mock in the UI; nothing on the kernel accepts its "Launch".
+3. The policy header calls `POLICY.TXT` a file the AEGIS reconciler generates from intent, but I found no UI or API that writes it.
+4. There's one SSID only: no guest network or second SSID, although the wireframes show one.
+5. The generation floor that blocks rollback of an older policy is compile-time only. A persisted floor is deferred with RPMB (decision register, 8 Nov 2026).
+
+### Verified against the repo (main, 2026-11-10)
+
+Checked in code while integrating revision 12; these refine the section above.
+
+| Statement in the section | What the code says | Where |
+|---|---|---|
+| Owner rules include `device_label` | Not yet: the journal kinds are `device_policy`, `shield_allow`, `shield_block`, `shield_profile`. Rename therefore stays greyed in My Network. | `os/kernel/kernel/src/ownerapi.rs` |
+| `device_policy` includes `blocked` | Not yet: `full`, `internet_only`, `lan_only`, `quarantine`. | `os/kernel/kernel/src/devpolicy.rs` |
+| POLICY.TXT can be uploaded and applies on the next boot | Not yet: ADR 0056 D2 lists `policy`, but phase 1 excludes it; the upload store accepts `shield_block`, `shield_allow`, `ioc`, `rules`, `oui`, `devices` only. | `os/kernel/kernel/src/artstore.rs`, ADR 0056 |
+| The generation floor is compile-time only | Partly outdated: the device-pinned trust anchor persists the POLICY floor in the DataVolume and raises it on every accepted policy (`anchor::raise_policy_floor`); RPMB hardening is what is deferred. | `os/kernel/kernel/src/anchor.rs` |
+| The owner signs with a passkey or hardware key | Not with today's verifier: WebAuthn authenticators sign their own wrapped structure (authenticatorData + clientDataJSON), never the raw `HQ…` message the device checks. A browser-held Ed25519 key (or an imported `policy-sign.py` key) produces byte-identical signatures today; passkeys need a WebAuthn-aware verifier (ADR 0058). | `os/kernel/kernel/src/policysig.rs`, `wificfg.rs` |
+| The owner's key becomes the device's operator key | Not yet: the anchor pins the image's compiled key on first use (TOFU); enrolling an owner key and rotating a pinned key are not built. | `anchor.rs` ("Rotation … is not built") |
+
+Signature formats a browser must produce (all 512 B, zero-padded, Ed25519 — `os/kernel/tools/policy-sign.py` is the reference):
+
+| File | Signature file | Layout | Signed message |
+|---|---|---|---|
+| WAN.TXT (≤ 512 B, first line `HQWAN1`) | WAN.SIG | `HQNSIG1\0` · gen u64 LE · len u64 LE · sha256 · sig | `HQWAN1` · gen · len · sha256 |
+| WIFI.TXT (≤ 1 KiB, `key=value`) | WIFI.SIG | `HQWSIG1\0` · gen · len · sha256 · sig | `HQWIF1` · gen · len · sha256 |
+| POLICY.TXT (exactly 4096 B, starts `HQPOL1`, `\n`-padded) | POLICY.SIG | `HQPSIG1\0` · gen · sha256 · sig | `HQPOL1` · gen · sha256 |
+
 ## Open questions and assumptions
 
 - **Desktop app.** The repo has no native desktop app. Do we need a wrapper (for example Tauri), or is the desktop browser layout enough?
@@ -395,6 +482,8 @@ These record what was agreed while integrating the wireframes. They refine the s
 **Pro batch 6 (Customers + Business + Knowledge).** Customers is cloud-linked only: a standalone device says so and explains linking; a linked device with no tenant data says that. Business shows licensing on every device (HookProbe OS Community under the GNU AGPL-3.0, no account; offering it as a service or the account layer needs the commercial licence) and the signed packs it holds; billing and the marketplace are control-plane features, greyed with why. Knowledge ships real built-in runbooks (respond to an incident, move a device to a zone, update a signed pack, get alerts, lost owner key, keep more than the device holds), each linking to the screen it describes; authoring and the AI writer need a control plane's content service.
 
 **Test loop.** Every screen above is covered by `os/mission-control/tests/ui` (130 checks, preview mode) and the device end-to-end `os/kernel/tools/mc-e2e.sh`; both run in gate g3 (`tools/ci/gates.sh g3`).
+
+**Advanced signed configuration (ADR 0058, after revision 12).** Get Online → Advanced opens three editors as real routes — Internet `/network/wan/advanced` (WAN.TXT), Wi-Fi `/network/wifi` (WIFI.TXT), Firewall and routes `/protect/policies` (POLICY.TXT, 4096 B) — validated exactly as the device parses them, with the exact file shown as a draft (secrets masked). Review shows the diff against what the device reports; signing happens in the browser with the owner's Ed25519 key (Administration → Signing key: create, or import a `policy-sign.py` PEM; PEM backup), byte-identical to `policy-sign.py` (checked in the UI suite). Upload goes to `/api/upload` with type `wan` / `wifi` / `policy`; until the device serves those types it answers that it doesn't accept the file yet, and the two signed files are offered for the boot card. Passkeys / security keys are not offered: WebAuthn signatures are not what the device verifies (ADR 0058 D4).
 
 **Shell components (os/mission-control/src/components).** `AppShell` (top bar, rail, banners, Copilot, phone tabs) wraps every route. `LeftRail` is the Layer 0 rail (five pillars), `AppRail` the Pro rail. `Drawer` is the one 400 px side panel. `Gate` does capability gating: granted renders, denied greys out with a reason, denied plus `hide` or unknown hides. `PlanDiff` is the plan viewer.
 
