@@ -18,7 +18,7 @@ export default async function (t) {
   ok(await page.locator('.obs-table tbody tr').count() === 1, 'workspace: Clear recent keeps pinned items');
 
   await go('/admin/identity');
-  ok(await page.locator('[aria-label="Settings"] .shell-rail-item').count() === 7, 'admin: seven sections');
+  ok(await page.locator('[aria-label="Settings"] .shell-rail-item').count() === 8, 'admin: eight sections (incl. Signing key)');
   ok(await vis(page.getByText(/Platform manifest/)), 'admin: manifest card');
   ok(await page.locator('.inc-status', { hasText: '✓' }).count() >= 5, 'admin: granted capabilities listed');
   await page.click('[aria-label="Settings"] >> text=Signed packs'); await page.waitForTimeout(150);
