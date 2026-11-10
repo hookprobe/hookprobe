@@ -3438,6 +3438,17 @@ pub fn ap_sae_pmk(sta: &[u8; 6], now_ms: u64) -> Option<[u8; 32]> {
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_forget(sta: &[u8; 6]) {
     unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget(sta) }
+    wpa3_clear_pmksa();
+}
+
+/// Drop the PMKSA installed for the SAE completion (`pmkid_info` with an empty list). Hypothesis under test (metal
+/// batches 45/46): a station that did SAE and then returns with plain WPA2-PSK is refused at association (status 38)
+/// while the firmware still holds a PMKSA for its MAC. Cleared once the SAE 4-way is done and when a station leaves.
+#[cfg(feature = "wpa3")]
+fn wpa3_clear_pmksa() {
+    let mut pb = [0u8; 32];
+    let m = iovar_buf(b"pmkid_info", &0u32.to_le_bytes(), &mut pb);
+    let _ = bcdc_iovar_set(&pb[..m]);
 }
 
 #[cfg(feature = "wpa3")]
@@ -4115,6 +4126,10 @@ pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bo
         out.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
     }
     dbg_putc(b'A');
+    #[cfg(feature = "wpa3")]
+    if akm8 {
+        wpa3_clear_pmksa(); // keyed: the association no longer needs the PMKSA
+    }
 }
 
 /// One WiFi poll for the AP serve loop: what arrived, if anything. Costs ~100 µs when
