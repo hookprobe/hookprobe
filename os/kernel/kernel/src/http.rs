@@ -391,6 +391,23 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(403),
         };
     }
+    // Phase 7: factory reset — owner-write guards + re-auth + confirm=ERASE; seals a request, the device reboots
+    // and erases the owner data before serving anything (ownerapi::factory_reset, factoryreset::run).
+    if req.post && req.path == "/api/factory-reset" {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        return match crate::ownerapi::factory_reset(&c, req.body, auth) {
+            Ok(seq) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"seq\":{},\"note\":\"factory reset sealed; the device reboots in 2 s, erases the owner data and comes back as shipped (sign in with the label key)\"}}", seq);
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(403),
+        };
+    }
     // G28: owner-key rotation — same guards + re-auth with the current key; every session ends on success.
     if req.post && req.path == "/api/owner-key" {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
