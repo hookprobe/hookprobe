@@ -308,6 +308,43 @@ pub fn accept_seq(session: [u8; 4], seq: u64) -> bool {
     true
 }
 
+// ---- write rate limit per session (audit 2026-11-10 §2.1 #5, ADR 0053 / 0055) ----
+
+/// Writes (actions + owner-rule changes) one session may make per minute — far above a person clicking,
+/// far below a runaway script or a hijacked tab rewriting policy in a loop.
+pub const WRITES_PER_MIN: u32 = 20;
+static mut RATE: [([u8; 4], u64, u32); 8] = [([0; 4], 0, 0); 8];
+
+/// Count one write for `session` at `now_ms`; false = over the limit for this minute (refused, audited).
+pub fn rate_ok(session: [u8; 4], now_ms: u64) -> bool {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(RATE) };
+    let i = (0..t.len()).find(|&i| t[i].0 == session && t[i].1 != 0)
+        .unwrap_or_else(|| (0..t.len()).min_by_key(|&i| t[i].1).unwrap_or(0));
+    if t[i].0 != session || t[i].1 == 0 || now_ms.saturating_sub(t[i].1) >= 60_000 {
+        t[i] = (session, now_ms.max(1), 0);
+    }
+    if t[i].2 >= WRITES_PER_MIN {
+        return false;
+    }
+    t[i].2 += 1;
+    true
+}
+
+/// `[P-write-rate]`: 20 writes a minute per session, the 21st refused, another session unaffected, the
+/// next minute open again.
+pub fn rate_selftest() -> bool {
+    let (a, b) = ([1u8, 2, 3, 4], [9u8, 9, 9, 9]);
+    let first = (0..WRITES_PER_MIN).all(|k| rate_ok(a, 1_000 + k as u64));
+    let capped = !rate_ok(a, 2_000);
+    let other = rate_ok(b, 2_001);
+    let reopened = rate_ok(a, 61_500);
+    let pass = first && capped && other && reopened;
+    arch_aarch64::_print(format_args!(
+        " [P-write-rate] {} — per-session write limit (ADR 0053/0055, audit §2.1 #5): {} writes a minute accepted={} the next one refused={} another session unaffected={} open again after the minute={}\n",
+        if pass { "PASS" } else { "FAIL" }, WRITES_PER_MIN, first, capped, other, reopened));
+    pass
+}
+
 /// The last accepted sequence number for a session (0 if none) — the UI starts above it.
 pub fn last_seq(session: [u8; 4]) -> u64 {
     let t = unsafe { &*core::ptr::addr_of!(SEQS) };

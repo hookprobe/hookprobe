@@ -374,7 +374,8 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     }
     crate::actions::tick(now_ms);
     // ADR 0053: the only writes — reversible, TTL-bound actions behind origin + CSRF + replay guards.
-    if req.post && req.path == "/api/owner-rules" {
+    // ADR 0055 D7: `/api/owner-rules/revoke-all` is the same guarded handler with `op=revoke_all`.
+    if req.post && (req.path == "/api/owner-rules" || req.path == "/api/owner-rules/revoke-all") {
         // ADR 0055: durable owner rules (journal). Same guards as the actions + re-auth on every write.
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         return match crate::ownerapi::submit(&c, req.body, auth) {
