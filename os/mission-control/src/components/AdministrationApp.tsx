@@ -18,7 +18,7 @@ import { healthChecked, degraded } from '../store/health';
 import { capList } from '../store/capabilities';
 import { actionsView, refreshActions, post } from '../store/actions';
 import { ownerRules, refreshOwnerRules } from '../store/ownerRules';
-import { uploadView, refreshUploads, uploadPack, PACK_LABEL, type UploadStep } from '../store/packUpload';
+import { uploadView, refreshUploads, uploadPack, rollbackPack, PACK_LABEL, CONNECTIVITY, type UploadStep } from '../store/packUpload';
 import { fetchPlannerStatus, type PlannerStatus } from '../store/plannerApi';
 import AppShell from './AppShell';
 import SigningKeyPanel from './SigningKeyPanel';
@@ -54,13 +54,24 @@ const AdministrationApp: Component = () => {
     const f = file(); if (!f) return;
     setMsg(''); setSent(0);
     try {
-      const m = await uploadPack(packType(), f, () => window.prompt('This changes what the device enforces. Enter your owner key:', ''), (s, n) => { setStep(s); setSent(n); });
-      setMsg(m);
+      const r = await uploadPack(packType(), f, () => window.prompt('This changes what the device enforces. Enter your owner key:', ''), (s, n) => { setStep(s); setSent(n); });
+      setRolledStaged(r.staged); setMsg(r.text);
     } catch (e) {
       setStep(null);
       setMsg(e instanceof Error ? e.message : String(e));
       void refreshUploads(); // the refusal is in the device's own audit trail; show it
     }
+  };
+
+  const [rolledStaged, setRolledStaged] = createSignal(false);
+  const rollback = async (type: string, gen: number) => {
+    const conn = CONNECTIVITY.has(type);
+    if (!window.confirm(`Roll back ${PACK_LABEL[type] ?? type} from generation ${gen} to the previous verified generation kept on the device?${conn ? '\n\nThis re-applies the older connectivity settings at the next restart: if they no longer match your internet line or Wi-Fi, the device may go offline until you fix them on the boot card.' : ''}`)) return;
+    setMsg('');
+    try {
+      const r = await rollbackPack(type, () => window.prompt('Rolling back changes what the device runs. Enter your owner key:', ''));
+      setRolledStaged(r.staged); setMsg(r.text);
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   const rotate = async () => {
@@ -136,15 +147,20 @@ const AdministrationApp: Component = () => {
               <div class="pcard">
                 <p class="l0-label">Packs on this device</p>
                 <div class="l0-table-wrap"><table class="l0-table obs-table">
-                  <thead><tr><th scope="col">Pack</th><th scope="col">Generation</th><th scope="col">Source</th><th scope="col">Max size</th></tr></thead>
+                  <thead><tr><th scope="col">Pack</th><th scope="col">Generation</th><th scope="col">Source</th><th scope="col">Takes effect</th><th scope="col">Max size</th><th scope="col"><span class="sr-only">Rollback</span></th></tr></thead>
                   <tbody>
-                    <Show when={!sample()} fallback={<tr><td>{PACK_LABEL.ioc}</td><td>7</td><td>store</td><td>16 MB</td></tr>}>
-                      <For each={uploadView()?.types ?? []} fallback={<tr><td colSpan={4} class="l0-muted">Not reported.</td></tr>}>{(t) => (
-                        <tr><td>{PACK_LABEL[t.type] ?? t.type}</td><td class="l0-num" style={{ 'font-weight': 400 }}>{t.generation || '—'}</td><td>{t.source === 'store' ? 'uploaded' : 'from the boot image'}</td><td>{Math.round(t.cap / 1024)} KB</td></tr>
+                    <Show when={!sample()} fallback={<tr><td>{PACK_LABEL.ioc}</td><td>7</td><td>store</td><td>now</td><td>16 MB</td><td /></tr>}>
+                      <For each={uploadView()?.types ?? []} fallback={<tr><td colSpan={6} class="l0-muted">Not reported.</td></tr>}>{(t) => (
+                        <tr><td>{PACK_LABEL[t.type] ?? t.type}</td><td class="l0-num" style={{ 'font-weight': 400 }}>{t.generation || '—'}</td><td>{t.source === 'store' ? 'uploaded' : 'from the boot image'}</td>
+                          <td>{t.applies === 'next_boot' ? 'at the next restart' : t.applies === 'now' ? 'now' : '—'}</td><td>{Math.round(t.cap / 1024)} KB</td>
+                          <td><Show when={t.source === 'store' && t.generation > 0}>
+                            <button class="hp-btn" style={{ 'min-height': '32px' }} onClick={() => void rollback(t.type, t.generation)}>Roll back</button>
+                          </Show></td></tr>
                       )}</For>
                     </Show>
                   </tbody>
                 </table></div>
+                <Show when={rolledStaged()}><div class="l0-card-foot"><RestartButton label="Restart to apply the rollback" /></div></Show>
                 <Show when={uploadView() && !uploadView()!.store}><p class="gate-reason">This device has no artifact store (no data volume), so uploads are refused; packs come from the boot image.</p></Show>
               </div>
               <div class="pcard">
