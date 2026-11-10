@@ -1,0 +1,3 @@
+ secure boot: PASS (ed25519 AND SLH-DSA, svn OK)
+ [WIFI] no WIFI.TXT, no build-time PSK and no device-unique key — the AP will NOT start (it never runs open, never a shared password)
+ [MC-TLS] OFF — no device root key (SRK): refusing a guessable TLS key
