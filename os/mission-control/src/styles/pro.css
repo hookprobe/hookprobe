@@ -83,6 +83,9 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
   .obs-table td:nth-child(5) { grid-column: 1 / -1; }
 }
 
+.obs-grid--wide { grid-template-columns: 280px minmax(0, 1fr); }
+@media (max-width: 1023px) { .obs-grid--wide { grid-template-columns: 1fr; } }
+
 /* Automate: playbooks · pipeline · queue; stacks below 1280 px */
 .auto-grid { display: grid; grid-template-columns: 240px minmax(0, 1fr) 300px; gap: 20px; align-items: start; }
 @media (max-width: 1279px) { .auto-grid { grid-template-columns: 1fr; } .auto-grid .obs-sources { flex-direction: row; flex-wrap: wrap; } }
