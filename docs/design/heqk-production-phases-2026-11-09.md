@@ -64,6 +64,13 @@ target for the moved parser, and an EL0 fault injected in QEMU leaves forwarding
 ## Phase 6 — Wi-Fi product features
 WPA3-SAE with PMF (transition mode), a guest SSID on its own segment, a per-radio client cap.
 
+**Feasibility note (2026-11-10).** The CYW43455 firmware answers the `mfp` iovar (Linux brcmfmac trace,
+2026-11-05), so PMF on the WPA2 AP (IGTK / BIP in the host authenticator, RSN capabilities MFPC) is a host-side
+job. WPA3-SAE in **AP** mode needs either in-firmware SAE (`sae` + `fwsup`) or an external-SAE path (`sae_ext`);
+this firmware has no in-firmware supplicant (`fwsup`/`idsup` absent, 2026-09-10). The AP bring-up now prints
+the full feature string (`[WIFI-CAP]`, batch 30) to settle it. If neither token is present, WPA3-AP needs a
+different firmware build from the vendor — a supplier dependency (human register), not a code task.
+
 ## Phase 7 — legal and factory
 CYW43455 firmware redistribution terms, a per-unit provisioning tool (owner token, setup credential, label /
 QR, self-test log), factory reset, an RTC (wall clock without a network), and the certification file
