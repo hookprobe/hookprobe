@@ -889,6 +889,12 @@ pub fn mc_selftest() -> bool {
         let synced = step == Some(1_800_000_000_000 - 10_000) && before == Some(5_000) && after == Some(1_799_999_995_000) && t.clock_synced;
         let small = t.sync_clock(1_800_000_000_000 + 20_000 + 1_000, 30_000) == Some(1_000);
         let big = t.sync_clock(1_800_000_000_000 + 7_200_000 + 40_000, 40_000).is_none();
+        // Readiness 3.7: an RTC time is provisional — real timestamps at once, but NTP may still step it any amount.
+        let mut rt = McState::new();
+        rt.set_clock(0, 0, 1000);
+        let rtc_step = rt.set_clock_provisional(1_790_000_000_000, 1_000);
+        let rtc_ok = rtc_step == 1_790_000_000_000 - 1_000 && !rt.clock_synced
+            && rt.sync_clock(1_800_000_000_000, 2_000).is_some() && rt.clock_synced;
         // A restored (prior-boot, wall-clock) row is never moved by this boot's clock step.
         let mut r2 = McState::new();
         r2.push_restored(&crate::events::Event { ts: 0, src: 1, rule_id: 1, severity: 5, verdict: 2, class: 0, dst: 0, dport: 0 }, 1_799_000_000_000);
@@ -1003,7 +1009,7 @@ pub fn mc_selftest() -> bool {
         kprint!(" [P-mc-x] hosts={} incident-ids={} detail={} unknown={} timeline={} lease-devices={} engines={} evidence-stats={} graph={} reports={} query-decode={} qsecbit-decay={}\n",
             hosts_ok, ids_ok, detail_ok, unknown_ok, timeline_ok, leases_ok, engines_ok, stats_ok, graph_ok, reports_ok, q_ok, decay_ok);
         let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok && leases_ok && engines_ok && stats_ok && graph_ok && reports_ok && q_ok && decay_ok;
-        good && wrong_nonce && refused && synced && small && big && pinned && hosts_ok
+        good && wrong_nonce && refused && synced && small && big && rtc_ok && pinned && hosts_ok
     };
     // ADR 0051 D4: :80 -> https redirect keeps path+query, drops the port; a hostile Host never reaches
     // the Location header; the session cookie gains Secure only over TLS.
