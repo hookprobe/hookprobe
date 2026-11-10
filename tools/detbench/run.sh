@@ -9,10 +9,18 @@ IMG="${1:?corpus image (pcap2hqdb.py)}"; REP="${2:-}"
 HERE=$(cd "$(dirname "$0")" && pwd); K=$(cd "$HERE/../../os/kernel" && pwd)
 ( cd "$K" && CARGO_TARGET_DIR=target/detbench cargo build --features netsvc,securechannel,detbench >/tmp/detbench-build.$$ 2>&1 ) || { tail -20 /tmp/detbench-build.$$; exit 2; }
 KERN="$K/target/detbench/aarch64-unknown-none-softfloat/debug/kernel"
-OUT=$(timeout 1800 qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
-  -global virtio-mmio.force-legacy=false -drive file="$IMG",format=raw,if=none,id=hd0,readonly=on -device virtio-blk-device,drive=hd0 \
-  -kernel "$KERN" 2>&1 | tr -d '\r' | grep -a "\[DETBENCH\]")
-grep -q "DETBENCH\] DONE" <<<"$OUT" || { echo "no DONE marker — replay did not finish"; echo "$OUT"; exit 1; }
+RAW=$(mktemp); trap 'rm -f "$RAW"' EXIT
+timeout 1800 qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
+  -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 \
+  -drive file="$IMG",format=raw,if=none,id=hd0,readonly=on -device virtio-blk-device,drive=hd0 \
+  -kernel "$KERN" 2>&1 | tr -d '\r' > "$RAW"; QRC=${PIPESTATUS[0]}
+OUT=$(grep -a "\[DETBENCH\]" "$RAW")
+if ! grep -q "DETBENCH\] DONE" <<<"$OUT"; then
+  # Show WHY: the exit status (124 = the 1800 s timeout) and the tail of the raw console, not just the
+  # [DETBENCH] lines — an early panic or a QEMU error is otherwise invisible.
+  echo "no DONE marker — replay did not finish (qemu exit $QRC$([ "$QRC" = 124 ] && echo ', timed out after 1800 s'))"
+  echo "$OUT"; echo "--- last 40 console lines ---"; tail -n 40 "$RAW"; exit 1
+fi
 python3 - "$OUT" "$REP" <<'PY'
 import re, sys
 out, rep = sys.argv[1], sys.argv[2]
