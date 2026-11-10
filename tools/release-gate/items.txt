@@ -1,0 +1,39 @@
+# heqk release gate — every production item tied to evidence (machine-checked by check.py).
+# Format: id | area | requirement | evidence[,evidence...]
+# Evidence kinds (ALL listed evidence must hold for the item to pass):
+#   phase:<ID>                 validate.sh phase row "<ID> PASS" in the validate log given with --validate-log
+#   e2e                        "MC-E2E: PASS" in the mc-e2e log given with --e2e-log
+#   metal:<repo-path>:<regex>  an in-repo metal evidence file exists and matches the regex
+#   signoff:<name>             docs/release/signoffs/<name>.md with non-empty "Approved-by:" and "Decision:" lines
+#   blocked:<reason>           not built / not decided — fails until the line is replaced by real evidence
+# A release is READY only when every item passes. Never edit a line to pass without the evidence existing.
+
+TC-01 | trust chain | Production signing-key custody (HSM / ceremony) + reproducible signed release build | signoff:key-custody
+TC-02 | trust chain | Customer OTP provisioning (factory station; PRODUCTION BLOCKER) | signoff:otp-provisioning
+TC-03 | trust chain | SEC-3 secure-boot fuses: provisioned, or explicitly out of scope for this release | signoff:sec3-secure-boot
+TC-04 | trust chain | Owner-journal / pack rollback anchored in RPMB and checked at replay (or risk accepted) | signoff:rpmb
+TC-05 | trust chain | Device-pinned operator key + persisted POLICY floor | phase:Panchor
+TC-06 | trust chain | OS-image verifier (shared with HBoot) at the real image size | phase:Potaverify
+TC-07 | trust chain | WAN.TXT (incl. mgmt_floor) signed by the operator key; unsigned = floor ignored | phase:Pwansig,metal:docs/design/metal-evidence/20261110-batch31.md:WAN.TXT signature OK
+OTA-01 | update | OS update over Mission Control: verify, inactive slot, trial, commit-on-health | phase:P15otaimg,phase:Pabslot,metal:docs/design/metal-evidence/20261110-ota-a1.md:PASS
+OTA-02 | update | An unhealthy trial rolls back to the previous build | metal:docs/design/metal-evidence/20261110-batch29.md:OTA-ROLLBACK: PASS
+REL-01 | reliability | Runtime watchdog armed after the trial confirm | phase:Prtwdog,metal:docs/design/metal-evidence/20261110-batch29.md:WDOG\] armed=true
+REL-02 | reliability | Crash record survives the EL2-gate reset (J10) | phase:Pcrashrec,metal:docs/design/metal-evidence/20261110-batch30.md:CRASH-RECORD: PASS
+REL-03 | reliability | Board RTC wall clock across a warm reset (J13) | metal:docs/design/metal-evidence/20261110-batch30.md:wall clock .* from the board RTC
+REL-04 | reliability | Randomized power-loss torture: every acknowledged owner rule survives (J12) | metal:docs/design/metal-evidence/20261110-batch30.md:POWERLOSS-TORTURE: PASS
+REL-05 | reliability | 72 h soak under real traffic (final acceptance, after every build phase) | metal:docs/design/metal-evidence/soak-72h.md:SOAK: PASS
+REL-06 | reliability | Thermal in the enclosure at sustained throughput | blocked:not run
+REL-07 | reliability | Client scale (many mixed clients, roaming, sleeping phones) | blocked:2 bench clients only
+REL-08 | reliability | Wi-Fi TX-stall root cause (recovery exists: kick + wedge self-heal reset) | blocked:root cause open
+NET-01 | network | DNS / control frames not lost under a saturating download (AP TX priority) | phase:Ptxprio,metal:docs/design/metal-evidence/20261110-batch30.md:DNS-UNDER-LOAD: PASS
+NET-02 | network | LAN client end to end (DHCP, DNS, NAT, IPv6, holds) | metal:docs/design/metal-evidence/20261110-batch29.md:LAN-CLIENT: PASS
+NET-03 | network | WPA3-SAE / PMF on the AP: firmware capability evidence + decision | metal:docs/design/metal-evidence/20261110-batch30.md:\[WIFI-CAP\],signoff:wpa3
+SEC-01 | isolation | ADR 0050 D4: network-facing parsers in isolated EL0 servers (HTTP, DNS/DHCP, WAN clients, Noise) | blocked:G24b not built
+SEC-02 | isolation | Coverage-guided fuzzing of the kernel-crate parsers (journal, upload, store, HTTP, DNS) | blocked:only hal + boot_abi targets today
+SEC-03 | management | Mission Control end to end (HTTPS PQ hybrid, browser, actions) | e2e
+SEC-04 | management | Replay guard + write rate limit + login throttle | phase:Pseqfloor,phase:Pwriterate
+DET-01 | detection | Benign-corpus false-positive rate per rule (household captures) | blocked:benign corpus not collected
+DET-02 | detection | Rule 112 per source device; rule-pack reloads do not leak the heap | phase:Pverifyheap,phase:P8l2struct
+DET-03 | detection | Owner alert delivery (signed webhook, ntfy/Gotify-compatible) | blocked:not built
+CMP-01 | compliance | CE/RED + EN 18031, FCC, CRA SBOM / CVD / support period | signoff:certification
+CMP-02 | compliance | CYW43455 firmware redistribution terms | signoff:firmware-licence

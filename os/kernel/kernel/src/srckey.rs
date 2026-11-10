@@ -14,13 +14,66 @@ pub const TAG_DEV: u64 = 1 << 63;
 pub const TAG_V6NET: u64 = 1 << 62;
 const LOW: u64 = TAG_V6NET - 1; // bits 0..61
 
+use core::sync::atomic::Ordering::Relaxed;
+
+/// Per-boot SipHash key (audit 2026-11-10 §2.1 #9): with the old unkeyed FNV an attacker could pick a /64
+/// whose key collides with another source's and share (or poison) its rate / scan state. The AP sets it from
+/// the hardware TRNG before traffic flows (`set_key`); until then (and in QEMU) a fixed key keeps behaviour
+/// deterministic.
+static K0: AtomicU64 = AtomicU64::new(0x736f_6d65_7073_6575);
+static K1: AtomicU64 = AtomicU64::new(0x646f_7261_6e64_6f6d);
+
+pub fn set_key(k0: u64, k1: u64) {
+    K0.store(k0, Relaxed);
+    K1.store(k1, Relaxed);
+}
+
+/// SipHash-2-4 (Aumasson & Bernstein) over `b` with the boot key.
 fn fnv(b: &[u8]) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for &x in b {
-        h ^= x as u64;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    let (k0, k1) = (K0.load(Relaxed), K1.load(Relaxed));
+    let mut v = [k0 ^ 0x736f_6d65_7073_6575, k1 ^ 0x646f_7261_6e64_6f6d, k0 ^ 0x6c79_6765_6e65_7261, k1 ^ 0x7465_6462_7974_6573];
+    fn round(v: &mut [u64; 4]) {
+        v[0] = v[0].wrapping_add(v[1]);
+        v[1] = v[1].rotate_left(13) ^ v[0];
+        v[0] = v[0].rotate_left(32);
+        v[2] = v[2].wrapping_add(v[3]);
+        v[3] = v[3].rotate_left(16) ^ v[2];
+        v[0] = v[0].wrapping_add(v[3]);
+        v[3] = v[3].rotate_left(21) ^ v[0];
+        v[2] = v[2].wrapping_add(v[1]);
+        v[1] = v[1].rotate_left(17) ^ v[2];
+        v[2] = v[2].rotate_left(32);
     }
-    h
+    let mut chunks = b.chunks_exact(8);
+    for c in &mut chunks {
+        let m = u64::from_le_bytes(c.try_into().unwrap());
+        v[3] ^= m;
+        round(&mut v);
+        round(&mut v);
+        v[0] ^= m;
+    }
+    let r = chunks.remainder();
+    let mut last = [0u8; 8];
+    last[..r.len()].copy_from_slice(r);
+    let m = u64::from_le_bytes(last) | ((b.len() as u64 & 0xff) << 56);
+    v[3] ^= m;
+    round(&mut v);
+    round(&mut v);
+    v[0] ^= m;
+    v[2] ^= 0xff;
+    for _ in 0..4 {
+        round(&mut v);
+    }
+    v[0] ^ v[1] ^ v[2] ^ v[3]
+}
+
+/// SipHash-2-4 reference vector (key 00..0f, empty message = 0x726fdb47dd0e0e31) — `[P-v6src]` checks it.
+pub fn siphash_kat() -> bool {
+    let (a, b) = (K0.load(Relaxed), K1.load(Relaxed));
+    set_key(u64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]), u64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]));
+    let ok = fnv(&[]) == 0x726f_db47_dd0e_0e31;
+    set_key(a, b);
+    ok
 }
 
 /// An IPv4 source (host order).
@@ -112,7 +165,7 @@ pub fn selftest() -> bool {
     a2[15] = 0x77; // same /64, another (privacy) IID
     let mut b1 = a1;
     b1[7] = 2; // another /64
-    let keys = v6net(&a1) == v6net(&a2) && v6net(&a1) != v6net(&b1) && dev(&[2, 0, 0, 0, 0, 1]) != dev(&[2, 0, 0, 0, 0, 2])
+    let keys = siphash_kat() && v6net(&a1) == v6net(&a2) && v6net(&a1) != v6net(&b1) && dev(&[2, 0, 0, 0, 0, 1]) != dev(&[2, 0, 0, 0, 0, 2])
         && is_v6(v6net(&a1)) && is_v6(dev(&[2, 0, 0, 0, 0, 1])) && !is_v6(v4(0xffff_ffff))
         && v6net(&a1) & TAG_DEV == 0 && dev(&[2, 0, 0, 0, 0, 1]) & TAG_V6NET == 0;
     let lan_host: [u8; 16] = [0x20, 0x01, 0x0d, 0xb8, 0xff, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x99];

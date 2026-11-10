@@ -131,6 +131,7 @@ jobs:
             [ -e "firmware/brcm/$f" ] || echo "CI-PLACEHOLDER-NOT-FIRMWARE" > "firmware/brcm/$f"
           done
           cargo build -p kernel --features hboot,apmc,wifi-bigtx,appersist --release
+          ../../tools/ci/ap-size-gate.sh target/aarch64-unknown-none-softfloat/release/kernel   # audit A3
           if grep -rnE 'const [A-Z_]*(PSK|PASS)[A-Z_]*: &\[u8\] = b"' kernel/src arch-aarch64/src; then
             echo "FATAL: Wi-Fi credential literal in kernel source — use build-time env (ADR 0045)"; exit 1
           fi

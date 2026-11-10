@@ -94,7 +94,7 @@ Additional Information:
 
 ---
 
-## 🛡️ What heqk actually does (current truth, 2026-11-07)
+## 🛡️ What heqk actually does (current truth, updated 2026-11-10)
 
 > This section replaced a feature list copied from the **V1 Linux stack** (VXLAN pods, Django/NAXSI, Logto,
 > Grafana, a Kali countermeasure container, rsyslog/Loki, containers, default `admin/admin` credentials,
@@ -123,13 +123,33 @@ Additional Information:
 **Mission Control**
 - Owner authentication: a salted verifier from the flasher, **no default password**; an unclaimed device
   refuses every protected route; HttpOnly SameSite session cookies; no CORS. **[metal]**
-- Served over **plain HTTP today** — HTTPS is ADR 0051 (EL0 TLS server, local name-constrained CA). **[not built]**
+- HTTPS (ADR 0051): TLS 1.3 with X25519MLKEM768 in an isolated EL0 server, local name-constrained CA, :80
+  redirects. **[metal]** The certificate is provisioned offline by the operator; until it is, the image serves
+  the login over plain HTTP. **[gap]**
+- `POLICY.TXT` and every signed pack verified against the operator key (ADR 0049 D1, ADR 0056). **[metal]**
+  The operator key is pinned on the device at first use (trust anchor, DataVolume Header region) and an image
+  carrying a different key cannot replace it; the POLICY generation floor is persisted. **[metal]** Per-pack
+  generation floors are relative to the active pack (an erase can bring back an older signed pack). **[gap]**
+- IPv6 sources have an identity in the rate/scan tiers (ADR 0049 D2, `[P-v6src]`), SipHash-2-4 keyed per boot
+  from the hardware TRNG. **[qemu]**
+- OS update over the network: shared boot verifier on a streamed digest, SVN never below the running image,
+  inactive slot derived by the storage driver itself, tryboot trial, commit only when the AP serves and the
+  WAN is usable, automatic fallback otherwise. **[metal]** (J1 commit 9/9 twice, J2 rollback 7/7 — 2026-11-10)
+- Runtime watchdog after the trial confirm (16 s, EL2 gate). **[metal]** A kernel panic or fault resets through the
+  EL2 gate and leaves a crash record for the next boot (`/api/health` `last_crash`); a Wi-Fi stream wedged for
+  120 s resets the unit (with a backoff against reboot loops). **[qemu]** (metal J10 pending)
+- Mission Control writes: per-source login throttle, cross-origin login refused, per-session write rate limit
+  (20 per minute), owner revoke-all. **[qemu + mc-e2e]**
+- The TLS private scalar is re-derived from the SRK for each EL0 server start and zeroised in EL1. **[mc-e2e]**
+- HBoot never writes OTP unless built for factory provisioning (`otp-provision`). **[code]**
 
 **Not yet built (known gaps — do not assume these protections)**
-- `POLICY.TXT` is not yet signature-checked (ADR 0049 D1). **[not built]**
-- Control protocols (HTTP, DHCP, DNS, PPPoE, Noise) still parse in EL1; moving them to isolated EL0 servers is
-  ADR 0050. **[not built]**
-- IPv6 sources have no identity in the rate/scan tiers (ADR 0049 D2). **[not built]**
+- Control protocols (HTTP, DHCP, DNS, PPPoE, Noise, WPA2) still parse in EL1; moving them to isolated EL0
+  servers is ADR 0050 D4. **[not built]**
+- Owner-journal truncation / rollback by someone with the eMMC in hand is not detectable without a monotonic
+  counter outside the medium (eMMC RPMB needs a one-time key programming — an operator decision). **[gap]**
+- Blank-OTP units fail closed (no SRK → no HTTPS, persistence or setup credential) until factory provisioning
+  is decided. **[gap — operator decision]**
 
 ---
 
@@ -483,8 +503,13 @@ HookProbe security is built on:
 
 - [ ] Flash with an owner key (the factory default is UNCLAIMED — every protected route refuses until claimed).
 - [ ] Use a release-signed image (never a `HOOKPROBE_DEBUG_ACCESS` bench image in production).
-- [ ] Keep Mission Control on a trusted network until HTTPS lands (ADR 0051): it is plain HTTP today.
-- [ ] Treat physical access to the card as access to `POLICY.TXT` / `WAN.TXT` until policy signing lands (ADR 0049 D1).
+- [ ] Install the per-device Mission Control certificate (ADR 0051, offline provisioning): without it the login
+      is served over plain HTTP — keep such a unit on a trusted network.
+- [ ] Ship `POLICY.TXT` and every data pack signed with the operator key (ADR 0049 D1 / ADR 0056) — the first
+      boot pins that key; an unsigned or differently-signed file is refused. `WAN.TXT` is still unsigned:
+      physical access to the card = access to the WAN settings.
+- [ ] Provision customer OTP at the factory (decision record 2026-11-10) — a blank-OTP unit fails closed (no
+      HTTPS key, no persistence, no setup credential).
 - [ ] Watch the heartbeat counters (`faults`, `rx_lost`, stalls, policy drops) and `/api/health`.
 
 ---

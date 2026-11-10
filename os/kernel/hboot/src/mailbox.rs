@@ -160,13 +160,15 @@ pub extern "C" fn hboot_hvc_mbox(pa: u64, nwords: u64) -> u64 {
     // is coherent with EL1's cached write (same core, PIPT normal memory).
     let tag = unsafe { core::ptr::read_volatile((pa + 8) as *const u32) };
     // WHITELIST — exactly the kernel's arch mailbox ops. Anything else (OTP/serial/…) refused.
-    const ALLOWED: [u32; 6] = [
+    const ALLOWED: [u32; 8] = [
         0x0003_0002, // GET_CLOCK_RATE
         0x0003_8002, // SET_CLOCK_RATE
         0x0002_8001, // SET_POWER_STATE (WiFi/SDIO)
         0x0003_0064, // GET_REBOOT_FLAGS (tryboot)
         0x0003_8064, // SET_REBOOT_FLAGS (tryboot)
         0x0003_0048, // NOTIFY_REBOOT
+        0x0003_0087, // GET_RTC_REG (readiness 3.7: wall clock before NTP; read-only)
+        0x0003_8087, // SET_RTC_REG — register 0 (the time) ONLY, checked below
     ];
     let mut ok_tag = false;
     let mut i = 0;
@@ -178,6 +180,12 @@ pub extern "C" fn hboot_hvc_mbox(pa: u64, nwords: u64) -> u64 {
     }
     if !ok_tag {
         return 2; // refused: not a whitelisted op (OTP read attempt, or anything unexpected)
+    }
+    // SET_RTC_REG reaches the PMIC's other registers too — the alarm and the backup-battery CHARGER voltage. A
+    // compromised kernel must never enable trickle-charging of a non-rechargeable coin cell (a fire hazard), so
+    // only register 0 (RTC_TIME) may be written. Word 5 = the register id ([size, code, tag, len, code, reg, val]).
+    if tag == 0x0003_8087 && (n < 7 || unsafe { core::ptr::read_volatile((pa + 20) as *const u32) } != 0) {
+        return 2;
     }
     if unsafe { transact_at(pa, n) } {
         0
@@ -232,6 +240,7 @@ pub fn get_customer_otp() -> Option<[u32; 8]> {
 /// it cannot touch the serial/bootloader/device-key rows. Returns true iff the
 /// firmware reports a success response — the caller MUST additionally read back
 /// (`get_customer_otp`) and derive from the ACTUAL contents, never from intent.
+#[cfg(feature = "otp-provision")] // factory-only: a normal image never writes OTP
 pub fn set_customer_otp(words: &[u32; 8]) -> bool {
     unsafe {
         let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;

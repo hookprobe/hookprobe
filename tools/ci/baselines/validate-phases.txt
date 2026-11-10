@@ -13,6 +13,7 @@ P15fs
 P15g
 P15ota
 P15otafat
+P15otaimg
 P15p
 P15sf
 P16sha
@@ -65,12 +66,15 @@ PH6mb
 PH6net
 PH7caps
 PHprod
+Pabslot
 Pabstore
 Pacs
 Pactions
 Palertdedup
+Panchor
 Papcore
 Papcorelan
+Papcorerelay
 Papcorewan
 Papcred
 Partstore
@@ -78,6 +82,7 @@ Pbeaconbusy
 Pbrute
 Pdatavol
 Pdefer
+Pdevbase
 Pdevid
 Pdevpolicy
 Pdga
@@ -94,11 +99,14 @@ Pip6
 Pja4
 Pjitcall
 Planrelay
+Plateral6
 Pm6export
 Pmc
 Pmcauth
 Pmcmgmt
 Pmd5
+Pnatindex
+Potaverify
 Poui
 Pownerapi
 Pownerjournal
@@ -106,6 +114,11 @@ Ppolicy
 Ppolsig
 Ppppoe
 Pr1ipc
+Prtwdog
+Pverifyheap
+Ptxprio
+Pwansig
+Pcrashrec
 Prulepack
 Pshield
 Pshieldlevels
@@ -125,4 +138,6 @@ Pwasmel0
 Pwasmiel0
 Pwasmparity
 Pwificfg
+Pwriterate
+Pseqfloor
 Pwx

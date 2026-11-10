@@ -340,7 +340,11 @@ pub fn pcie_inbound_mip_doorbell() -> u32 {
 /// uses the latter). BOTH hardcode this depth. Updating only one silently strands every
 /// descriptor past the stale bound: the ring fills, they are never recycled, BNA fires and
 /// RX DIES. That cost two metal cycles; see syscall.s.
+#[cfg(not(feature = "gem-deep-rx"))]
 const NRX: usize = 128;
+/// The AP image (`gem-deep-rx`): the EL0 grant ceiling does not apply (no EL0 GEM driver runs there).
+#[cfg(feature = "gem-deep-rx")]
+const NRX: usize = 512;
 const RXBUF: usize = 2048;
 // Extended-BD descriptor = 6 u32 words / 24 bytes: {addr_lo, ctrl} + {addr_hi,
 // resvd} (DMA64) + {ts_1, ts_2} (PTP). RXEXT/TXEXT in DMACFG make the GEM use this

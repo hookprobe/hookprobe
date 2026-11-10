@@ -11,7 +11,7 @@
 //! journal status, and the recent refusals.
 use crate::actionapi::{form_get, origin_ok, Ctx};
 use crate::devpolicy::{Pol, ShieldProfile};
-use crate::ownerjournal::{self as oj, Kind, OP_REMOVE, OP_SET};
+use crate::ownerjournal::{self as oj, Kind, OP_CLEAR, OP_REMOVE, OP_SET};
 use hal::{BlockDev, BlockErr};
 
 /// A RAM block store for QEMU / images without persistence (the API and its guards stay testable).
@@ -153,8 +153,44 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     if !crate::mcauth::csrf_ok(c.session, c.csrf) {
         return refuse(c, "csrf");
     }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return refuse(c, "rate limited: at most 20 writes a minute per session");
+    }
     if !crate::actions::accept_seq(tag, seq) {
         return refuse(c, "replay");
+    }
+    // ADR 0055 D7/D8: revoke every owner rule at once (the signed baseline + management floor are untouched).
+    if op == "revoke_all" {
+        if reason.trim().len() < 3 {
+            return refuse(c, "reason required");
+        }
+        let mut n = 0usize;
+        oj::for_each(&mut |_r: &oj::Rule| n += 1);
+        let preview = Outcome { seq: 0, before: "owner rules active", after: "no owner rules (signed baseline only)", shadowed_by: "" };
+        if dry {
+            return Ok(preview);
+        }
+        if !permanent {
+            return refuse(c, "permanent=true required");
+        }
+        if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+            return refuse(c, "re-authentication failed");
+        }
+        let _ = n;
+        let mut r = oj::rec(Kind::DevicePolicy, OP_CLEAR, b"*", 0, reason.as_bytes());
+        r.session = u32::from_le_bytes(tag);
+        r.ms = c.now_ms;
+        let res = unsafe {
+            match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+                (Some(j), Some(d)) => j.append(&mut **d, r),
+                _ => return refuse(c, "no journal"),
+            }
+        };
+        return match res {
+            Ok(seq) => Ok(Outcome { seq, ..preview }),
+            Err(oj::JErr::Full) => refuse(c, "journal full"),
+            Err(_) => refuse(c, "storage error"),
+        };
     }
     let opc = match op {
         "set" => OP_SET,
@@ -347,11 +383,19 @@ pub fn selftest() -> bool {
     let n = fill(&mut buf, &["op=set&kind=shield_allow&target=a.example&reason=xyz&permanent=true", k, "&seq=5"]);
     let replay = submit(&good, &buf[..n], &mut auth) == Err("replay");
     let bad_origin = submit(&Ctx { origin: "https://evil.example", ..Ctx { ..good } }, b"op=set&kind=shield_allow&target=a.example&reason=xyz&permanent=true&seq=9", &mut auth) == Err("origin");
+    // ADR 0055 D7/D8: revoke ALL owner rules — re-auth required, then nothing the owner set remains
+    let n = fill(&mut buf, &["op=set&kind=shield_block&target=games.example&reason=homework&permanent=true", k, "&seq=10"]);
+    let two = submit(&good, &buf[..n], &mut auth).is_ok() && oj::shield_blocked(b"games.example") && oj::shield_allowed(b"school.example");
+    let n = fill(&mut buf, &["op=revoke_all&reason=start+over&permanent=true&owner_key=wrong&seq=11"]);
+    let ra_reauth = submit(&good, &buf[..n], &mut auth) == Err("re-authentication failed") && oj::shield_blocked(b"games.example");
+    let n = fill(&mut buf, &["op=revoke_all&reason=start+over&permanent=true", k, "&seq=12"]);
+    let revoked = submit(&good, &buf[..n], &mut auth).is_ok_and(|o| o.seq > 0) && !oj::shield_blocked(b"games.example") && !oj::shield_allowed(b"school.example");
+    let revoke_all = two && ra_reauth && revoked;
     oj::clear();
-    let pass = set && unconfirmed && reauth && dry && bad_mac && replay && bad_origin;
+    let pass = set && unconfirmed && reauth && dry && bad_mac && replay && bad_origin && revoke_all;
     arch_aarch64::_print(format_args!(
-        " [P-ownerapi] {} — ADR 0055 owner-rules API: permanent set (re-auth + permanent=true) lands in the journal={} unconfirmed set refused={} wrong owner key refused={} dry run previews without writing={} broadcast MAC refused={} replayed seq refused={} foreign Origin refused={}\n",
-        if pass { "PASS" } else { "FAIL" }, set, unconfirmed, reauth, dry, bad_mac, replay, bad_origin
+        " [P-ownerapi] {} — ADR 0055 owner-rules API: permanent set (re-auth + permanent=true) lands in the journal={} unconfirmed set refused={} wrong owner key refused={} dry run previews without writing={} broadcast MAC refused={} replayed seq refused={} foreign Origin refused={} revoke-all (re-auth, then no owner rule left)={}\n",
+        if pass { "PASS" } else { "FAIL" }, set, unconfirmed, reauth, dry, bad_mac, replay, bad_origin, revoke_all
     ));
     pass
 }

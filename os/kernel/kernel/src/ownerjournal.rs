@@ -64,6 +64,8 @@ impl Kind {
 
 pub const OP_SET: u8 = 1;
 pub const OP_REMOVE: u8 = 2;
+/// ADR 0055 D7/D8: revoke ALL owner rules (target "*"); the audit trail (artifact records) is kept.
+pub const OP_CLEAR: u8 = 3;
 pub const FLAG_CONFIRMED: u8 = 1; // the owner confirmed a permanent rule (re-auth + permanent: true)
 
 #[derive(Clone, Copy)]
@@ -183,6 +185,10 @@ pub fn for_each_artifact(f: &mut dyn FnMut(&Record)) {
 }
 
 fn apply(r: &Record) -> Result<(), JErr> {
+    if r.op == OP_CLEAR {
+        unsafe { NRULES = 0 };
+        return Ok(());
+    }
     if r.kind == Kind::Artifact as u8 {
         let a = unsafe { &mut *core::ptr::addr_of_mut!(ART) };
         unsafe {
@@ -409,7 +415,7 @@ impl Journal {
 
     /// Append one record (seq + MAC are assigned here) and apply it. The device must be armed for the region.
     pub fn append<D: BlockDev + ?Sized>(&mut self, dev: &mut D, mut r: Record) -> Result<u64, JErr> {
-        if Kind::from_u8(r.kind).is_none() || !(r.op == OP_SET || r.op == OP_REMOVE) || r.tlen == 0 {
+        if Kind::from_u8(r.kind).is_none() || !(r.op == OP_SET || r.op == OP_REMOVE || r.op == OP_CLEAR) || r.tlen == 0 {
             return Err(JErr::Invalid);
         }
         if self.half_cap() < 4 {
@@ -656,10 +662,25 @@ pub fn selftest() -> bool {
     }
     let full_ok = full && ok_n >= 6 && rule_count() == ok_n;
     clear();
-    let pass = appended && replayed && rm && after_rm && keyed && tamper_ok && torn_ok && pinned_holds && unpinned_loosened && tightened && compacted && power_cut && full_ok;
+    // ADR 0055 D7/D8: revoke-all is one sealed record; a replay (reboot) keeps the device rule-free
+    let revoke_all = {
+        let mut d = MemDisk::new();
+        let mut j = Journal::new(0, 8, &srk);
+        let _ = j.append(&mut d, rec(Kind::ShieldBlock, OP_SET, b"games.example", 1, b"homework"));
+        let _ = j.append(&mut d, rec(Kind::ShieldAllow, OP_SET, b"school.example", 1, b"school"));
+        let cleared = j.append(&mut d, rec(Kind::DevicePolicy, OP_CLEAR, b"*", 0, b"start over")).is_ok() && rule_count() == 0;
+        clear();
+        let mut j2 = Journal::new(0, 8, &srk);
+        let r = j2.replay(&d);
+        let stays = r.records == 3 && !r.damaged && rule_count() == 0 && !shield_blocked(b"games.example");
+        let after = j2.append(&mut d, rec(Kind::ShieldBlock, OP_SET, b"new.example", 1, b"again")).is_ok() && rule_count() == 1;
+        clear();
+        cleared && stays && after
+    };
+    let pass = revoke_all && appended && replayed && rm && after_rm && keyed && tamper_ok && torn_ok && pinned_holds && unpinned_loosened && tightened && compacted && power_cut && full_ok;
     arch_aarch64::_print(format_args!(
-        " [P-ownerjournal] {} — ADR 0055 owner policy journal (stage A + B compaction): append + apply={} replay reproduces the rules (deterministic reconcile)={} removal is a record={} another device key reads nothing={} tampering stops replay at the bad record={} torn tail -> verified prefix={} | precedence: a pinned signed line holds={} an unpinned one is loosened={} an owner rule tightens={} | compaction: 40 changes through a 7-record half, {} epochs, live rules kept, replay identical={} power cut mid-compaction -> the old epoch boots intact={} full only when the live state no longer fits ({} rules)={}\n",
-        if pass { "PASS" } else { "FAIL" }, appended, replayed, rm && after_rm, keyed, tamper_ok, torn_ok, pinned_holds, unpinned_loosened, tightened, epochs, compacted, power_cut, ok_n, full_ok
+        " [P-ownerjournal] {} — ADR 0055 owner policy journal (stage A + B compaction): append + apply={} replay reproduces the rules (deterministic reconcile)={} removal is a record={} another device key reads nothing={} tampering stops replay at the bad record={} torn tail -> verified prefix={} | precedence: a pinned signed line holds={} an unpinned one is loosened={} an owner rule tightens={} | compaction: 40 changes through a 7-record half, {} epochs, live rules kept, replay identical={} power cut mid-compaction -> the old epoch boots intact={} full only when the live state no longer fits ({} rules)={} | revoke-all record survives a replay (no owner rule after reboot, new rules accepted again)={}\n",
+        if pass { "PASS" } else { "FAIL" }, appended, replayed, rm && after_rm, keyed, tamper_ok, torn_ok, pinned_holds, unpinned_loosened, tightened, epochs, compacted, power_cut, ok_n, full_ok, revoke_all
     ));
     pass
 }

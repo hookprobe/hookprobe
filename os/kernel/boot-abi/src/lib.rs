@@ -179,10 +179,18 @@ pub const VERIFY_SLHDSA: u64 = 1 << 1;
 /// `hvc #1` before it fires, or HBoot resets the SoC and the firmware falls
 /// back to the known-good slot (config.txt). See BUILD_FLASH_PLAN.md (A/B boot).
 pub const BOOT_FLAG_TRIAL_WDOG: u64 = 1 << 0;
+/// This HBoot serves `hvc #3` (runtime watchdog pet, x0 = seconds). A kernel only pets when
+/// the flag is set — an older HBoot treats any unknown immediate as a reboot request.
+pub const BOOT_FLAG_RT_WDOG: u64 = 1 << 1;
+/// The previous reset was a PM watchdog reset (PM_RSTS HADWRF at HBoot entry): a hang the
+/// runtime watchdog recovered from, or a trial boot that never confirmed.
+pub const BOOT_FLAG_WDOG_RESET: u64 = 1 << 2;
 
 /// HBoot EL2 gate HVC immediates (from EL1): `hvc #0` = reboot request;
 /// `hvc #1` = A/B boot confirm (disarm the trial watchdog, commit this boot).
 pub const HVC_REBOOT: u64 = 0;
+/// `hvc #3` = runtime watchdog pet: re-arm the PM watchdog for x0 seconds (4..=16).
+pub const HVC_WDOG_PET: u64 = 3;
 pub const HVC_BOOT_CONFIRM: u64 = 1;
 
 /// SLH-DSA-SHA2-128s (FIPS 205) sizes.

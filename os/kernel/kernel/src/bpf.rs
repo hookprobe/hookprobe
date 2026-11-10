@@ -399,6 +399,10 @@ fn merge_into(slot: &mut Option<[Abs; 11]>, src: &[Abs; 11]) {
     }
 }
 
+/// Verifier state-table capacity without heap (rule packs cap a program at 512 instructions).
+const SCRATCH_PCS: usize = 1024;
+static mut SCRATCH: core::mem::MaybeUninit<[Option<[Abs; 11]>; SCRATCH_PCS]> = core::mem::MaybeUninit::zeroed();
+
 pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
     let n = prog.len();
     if n == 0 {
@@ -407,7 +411,21 @@ pub fn verify_prevail(prog: &[u64]) -> Result<u64, &'static str> {
     // Entry state: R1 = packet pointer at offset 0; everything else uninitialized.
     let mut entry = [Abs::Uninit; 11];
     entry[1] = Abs::Pkt { lo: 0, hi: 0 };
-    let mut in_st: Vec<Option<[Abs; 11]>> = vec![None; n];
+    // Phase 3f: the per-pc state table used to be a fresh `Vec` per call on the never-freeing bump heap
+    // (~450 B per instruction: a 512-instruction rule leaked ~230 KB of the 1 MiB heap on EVERY rule-pack load,
+    // so repeated signed uploads ended in rules refused for lack of heap). Programs up to `SCRATCH_PCS`
+    // reuse one static table (zero-initialised = .bss, no image bytes; verification is never re-entered).
+    let mut heap_st: Vec<Option<[Abs; 11]>>;
+    let in_st: &mut [Option<[Abs; 11]>] = if n <= SCRATCH_PCS {
+        let t = unsafe { &mut *(core::ptr::addr_of_mut!(SCRATCH) as *mut [Option<[Abs; 11]>; SCRATCH_PCS]) };
+        for s in t[..n].iter_mut() {
+            *s = None;
+        }
+        &mut t[..n]
+    } else {
+        heap_st = vec![None; n];
+        &mut heap_st[..]
+    };
     in_st[0] = Some(entry);
 
     let mut min_len: u64 = 0;
@@ -678,3 +696,21 @@ pub fn run(prog: &[u64], pkt: *const u8, len: usize) -> u64 {
     }
     INVALID
 }
+
+/// `[P-verify-heap]` (phase 3f): verifying a rule no longer consumes the never-freeing heap — 50 verifications
+/// of the threat rule leave `heap::used()` exactly where it was, and the verdict is unchanged.
+pub fn verify_heap_selftest() -> bool {
+    let before = crate::heap::used();
+    let first = verify_prevail(&THREAT_RULE);
+    let mut same = first.is_ok();
+    for _ in 0..50 {
+        same &= verify_prevail(&THREAT_RULE) == first;
+    }
+    let grew = crate::heap::used() - before;
+    let pass = same && grew == 0;
+    arch_aarch64::_print(format_args!(
+        " [P-verify-heap] {} — rule verification off the bump heap (phase 3f): 51 verifications, same result={} heap growth={} bytes (was ~450 B per instruction per load)\n",
+        if pass { "PASS" } else { "FAIL" }, same, grew));
+    pass
+}
+
