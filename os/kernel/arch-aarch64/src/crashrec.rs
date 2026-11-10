@@ -23,7 +23,7 @@ pub const MSG: usize = 400;
 #[repr(C)]
 struct Rec {
     magic: u64,
-    /// 1 = panic, 2 = unexpected kernel fault
+    /// 1 = panic, 2 = unexpected kernel fault, 3 = self-heal reset (the kernel chose to reset: `far` = uptime s)
     kind: u32,
     len: u32,
     esr: u64,
@@ -124,7 +124,11 @@ pub struct Crash {
 }
 impl Crash {
     pub fn kind_name(&self) -> &'static str {
-        if self.kind == 1 { "panic" } else { "kernel fault" }
+        match self.kind {
+            1 => "panic",
+            2 => "kernel fault",
+            _ => "self-heal reset",
+        }
     }
     pub fn text(&self) -> &str {
         core::str::from_utf8(&self.msg[..self.len]).unwrap_or("")
@@ -136,7 +140,7 @@ impl Crash {
 pub fn take() -> Option<Crash> {
     let r = unsafe { core::ptr::read_volatile(rec()) };
     let valid = r.magic == MAGIC
-        && (r.kind == 1 || r.kind == 2)
+        && (1..=3).contains(&r.kind)
         && (r.len as usize) <= MSG
         && r.sum == checksum(r.kind, r.len, r.esr, r.elr, r.far, &r.msg[..r.len as usize]);
     unsafe {
@@ -163,3 +167,16 @@ pub fn selftest() -> bool {
     let stale = take().is_none();
     first && second && corrupt && fault && stale
 }
+
+/// Self-heal reset (CM5): record why (`kind` 3, `uptime_s` in `far`), let the UART drain, reset through the EL2
+/// gate (`hvc #0`, the panic path). The next boot reports it like a crash. QEMU: never called (no reset gate).
+#[cfg(feature = "cm5")]
+pub fn self_heal_reset(uptime_s: u64, why: fmt::Arguments) -> ! {
+    write(3, 0, 0, uptime_s, why);
+    unsafe { core::arch::asm!("msr daifset, #0xf", options(nomem, nostack)) };
+    for _ in 0..50_000_000u64 {
+        core::hint::spin_loop();
+    }
+    unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
+}
+
