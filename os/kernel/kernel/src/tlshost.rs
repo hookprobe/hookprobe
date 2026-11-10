@@ -448,6 +448,6 @@ pub fn bring_up<D: hal::BlockDev>(dev: Option<&D>) {
     } else if have {
         kprint!(" [MC-TLS] HTTPS OFF — MCTLS.CRT present but rejected by the server (wrong key / malformed)\n");
     } else {
-        kprint!(" [MC-TLS] HTTPS OFF — no certificate provisioned (MCTLS.CRT empty); certify the key above with the owner CA\n");
+        kprint!(" [MC-TLS] HTTPS OFF — no certificate provisioned (MCTLS.CRT empty); certify the key above with the factory CA (mctls-provision.py)\n");
     }
 }
