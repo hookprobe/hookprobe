@@ -81,28 +81,28 @@ mod el0 {
             if !TRIED {
                 TRIED = true;
                 match load() {
-                    Some(s) => {
+                    Ok(s) => {
                         SRV = Some(s);
                         arch_aarch64::_print(format_args!(" [LANSVC] EL0 LAN-services server loaded at {:#x}: Shield's DNS query / answer parsing runs in EL0 (ADR 0050 D4 step 2)\n", BASE));
                     }
-                    None => arch_aarch64::_print(format_args!(" [LANSVC] EL0 server FAILED to load — DNS parsing stays in-kernel (reported in /api/health)\n")),
+                    Err(why) => arch_aarch64::_print(format_args!(" [LANSVC] EL0 server FAILED to load ({}) — DNS parsing stays in-kernel (reported in /api/health)\n", why)),
                 }
             }
             (*core::ptr::addr_of_mut!(SRV)).as_mut()
         }
     }
 
-    fn load() -> Option<Server> {
-        let parsed = crate::elf::parse(LANSVC_ELF).ok()?;
+    fn load() -> Result<Server, &'static str> {
+        let parsed = crate::elf::parse(LANSVC_ELF).map_err(|_| "ELF parse")?;
         let mut s = Server { entry: parsed.entry, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0 };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
-                return None; // the image must stay inside its own window
+                return Err("segment outside the window"); // the image must stay inside its own window
             }
             for p in 0..(g.memsz + 0xFFF) >> 12 {
                 let f = alloc();
                 if f == 0 {
-                    return None;
+                    return Err("out of frames (image)");
                 }
                 let voff = p * 0x1000;
                 let n = g.filesz.saturating_sub(voff).min(0x1000);
@@ -114,30 +114,30 @@ mod el0 {
                     arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
                 } else if g.writable() {
                     if s.nrw == RW_MAX {
-                        return None;
+                        return Err("too many RW pages");
                     }
                     s.rw[s.nrw] = (f, g.offset + voff, n);
                     s.nrw += 1;
                 }
                 if !map(g.vaddr + voff, f, g.executable(), g.writable()) {
-                    return None;
+                    return Err("map image page refused");
                 }
             }
         }
         for p in 0..STACK_PAGES {
             let f = alloc();
             if f == 0 || !map(BASE + STACK_OFF + p * 0x1000, f, false, true) {
-                return None;
+                return Err("map stack refused");
             }
         }
         for p in 0..IO_PAGES {
             let f = alloc();
             if f == 0 || !map(BASE + IO_OFF + p * 0x1000, f, false, true) {
-                return None;
+                return Err("map IO refused");
             }
             s.io[p] = f;
         }
-        Some(s)
+        Ok(s)
     }
 
     impl Server {
