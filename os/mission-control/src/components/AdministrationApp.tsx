@@ -56,6 +56,7 @@ const AdministrationApp: Component = () => {
     } catch (e) {
       setStep(null);
       setMsg(e instanceof Error ? e.message : String(e));
+      void refreshUploads(); // the refusal is in the device's own audit trail; show it
     }
   };
 
