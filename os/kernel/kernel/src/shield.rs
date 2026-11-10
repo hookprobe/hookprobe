@@ -1172,6 +1172,14 @@ pub fn reset_stats() {
     s.ioc = 0;
 }
 
+/// Rule 126 enforcement (operator 2026-11-10): a TLS connection that bypassed DNS (DoH / pinned IP / stale answer)
+/// to a name in a Shield BLOCK category for that device was refused. Logged in the Shield query log like a DNS
+/// block — the matched category comes from the per-device decision just made — with qtype 443 marking "TLS SNI".
+pub const QTYPE_TLS_SNI: u16 = 443;
+pub fn record_tls_block(client: u32, name: &[u8]) {
+    record(crate::clock::ticks(), client, QTYPE_TLS_SNI, name, Verdict::Blocked);
+}
+
 fn record(t: u64, client: u32, qtype: u16, name: &[u8], v: Verdict) {
     let s = st();
     s.c[v as usize] += 1;
