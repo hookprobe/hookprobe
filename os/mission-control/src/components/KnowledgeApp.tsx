@@ -1,212 +1,80 @@
 /**
- * KnowledgeApp — Knowledge (§11): the growth engine.
+ * KnowledgeApp — Knowledge (`/knowledge/blog`): runbooks, SOPs and docs on the same evidence as your
+ * incidents (wireframe "Knowledge"; requirements doc §11).
  *
- * Spec: docs/architecture/MissionControl.md §11. Blog CMS, SEO AI, keyword research,
- * page/video generator, runbooks, SOP, wiki, AI Writer. Content and security
- * knowledge share the same AI layer and evidence graph — a post-incident
- * write-up, a runbook, and a blog article are different lenses on the same
- * material. Drives marketing/SEO from inside the platform.
- *
- * Capability-gated on `knowledge` in a real build (manifest grants checked
- * against the signed Platform Manifest). Cyber-industrial terminal soul.
+ * On every device: built-in runbooks shipped with Mission Control (real, matching how these screens
+ * behave), each linking to the screen it describes. Writing your own content, the blog and the AI
+ * writer belong to a content service in a control plane, so they are greyed with that reason.
  */
-
-import { type Component, For, Show, createSignal } from 'solid-js';
-import { setCopilotOpen } from '../store/mock';
-import type { Tone } from '../store/missionMock';
+import { type Component, For, createMemo, createSignal } from 'solid-js';
 import AppShell from './AppShell';
-import {
-  type ContentStatus,
-  KPIS, CONTENT_ITEMS, SEO_KEYWORDS, AI_SUGGESTIONS,
-} from '../store/knwMock';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
+interface Doc { id: string; kind: 'Runbook' | 'SOP' | 'Guide'; title: string; summary: string; steps: string[]; link: [string, string] }
 
-function toneVar(t: Tone): string {
-  return {
-    green:  'var(--hp-green)',
-    amber:  'var(--hp-amber)',
-    red:    'var(--hp-red)',
-    blue:   'var(--hp-cyan)',
-    cyan:   'var(--hp-cyan)',
-    purple: 'var(--hp-purple)',
-    orange: 'var(--hp-orange)',
-    grey:   'var(--hp-grey)',
-  }[t];
-}
-
-function statusTone(s: ContentStatus): Tone {
-  return s === 'published' ? 'green' : s === 'review' ? 'blue' : 'amber';
-}
-
-function seoColor(score: number): string {
-  return score >= 80 ? 'var(--hp-green)' : score >= 60 ? 'var(--hp-amber)' : 'var(--hp-red)';
-}
-
-// ── Shared Panel (mirrors DetectApp Panel) ────────────────────────────────────
-
-const Panel: Component<{ ctx: string; title: string; span?: string; children: any }> = (p) => (
-  <section class="hp-terminal mc-panel" style={p.span ? { 'grid-column': p.span } : undefined}>
-    <div class="hp-terminal-bar">
-      <span class="hp-dot red"    aria-hidden="true" />
-      <span class="hp-dot yellow" aria-hidden="true" />
-      <span class="hp-dot green"  aria-hidden="true" />
-      <span class="mc-panel-title">{p.title}</span>
-      <span class="hp-terminal-title">hookprobe@edge ~ {p.ctx}</span>
-    </div>
-    <div class="hp-terminal-body mc-panel-body">{p.children}</div>
-  </section>
-);
-
-// ── KnowledgeApp ──────────────────────────────────────────────────────────────
+const DOCS: Doc[] = [
+  { id: 'incident', kind: 'Runbook', title: 'Respond to an incident', summary: 'From the alert to a closed, documented incident.',
+    steps: ['Open Investigate and pick the incident at the top of the queue (highest priority first).', 'Read the Story tab: each step shows the time, the engine and what happened.', 'Check "Why this was decided": confidence, evidence count and the ATT&CK technique. "Device rules · no AI model" means a deterministic rule match.', 'If the source is hostile, use "Hold source 1 h" — it expires on its own and is written to the audit log.', 'Print the Executive summary for your records, then Acknowledge.'],
+    link: ['/investigate/queue', 'Open Investigate'] },
+  { id: 'zone', kind: 'SOP', title: 'Move a device to another zone', summary: 'A permanent owner rule, previewed by the device before it applies.',
+    steps: ['Open My Network and select the device.', 'Under "Move to zone" pick the new zone. The device previews the change (before → after) without writing anything.', 'Approve, give a short reason and your owner key. The change is written to the journal.', 'Mission Control reads it back: "Applied and verified", or "Applied, but not kept across a restart" on a device without a persistent journal, or the reason a signed DEVICES.TXT line still wins.'],
+    link: ['/network/zones', 'Open My Network'] },
+  { id: 'pack', kind: 'SOP', title: 'Update a signed pack (rules, IOC, Shield lists)', summary: 'Packs are signed offline with your operator key; the device verifies before anything changes.',
+    steps: ['Build the pack offline and sign it with your operator key, producing X.TXT and X.SIG.', 'Make the container: cat X.SIG X.TXT > pack.bin.', 'Administration → Signed packs: choose the type and the file, then "Upload and verify" (owner key).', 'The device checks the digest, your signature and that the generation is newer, then asks for the owner key again to activate.', 'If activation is refused, the previous pack stays active.'],
+    link: ['/admin/identity', 'Open Administration'] },
+  { id: 'alerts', kind: 'Guide', title: 'Get alerts on your phone', summary: 'Send new incidents to ntfy, Gotify or your own JSON endpoint.',
+    steps: ['Automate → Notifications → "Set up alerts".', 'Choose the format, the server address and port, a path and a secret of at least 16 characters.', 'Pick the minimum severity (high is a good start).', 'Save with your owner key; the device reports the destination back. It sends at most a dozen alerts an hour and holds back the rest.'],
+    link: ['/automate/playbooks', 'Open Automate'] },
+  { id: 'key', kind: 'Runbook', title: 'Lost owner key', summary: 'Recover access without losing your evidence.',
+    steps: ['Power off the device and take out its boot disk (or the CM5 eMMC via USB boot).', 'Write a new OWNER.TXT made with your provisioning tool. A re-flashed OWNER.TXT always wins over a rotated key.', 'Boot and sign in with the new key; then rotate it from Administration → Identity and access if you want a fresh one.', 'Factory reset is the last resort: it erases every owner setting.'],
+    link: ['/admin/identity', 'Open Administration'] },
+  { id: 'export', kind: 'Guide', title: 'Keep more than the device can hold', summary: 'The device keeps a bounded window and says how much.',
+    steps: ['Timeline & Export shows what the device keeps (for example its newest 256 detections).', 'Export CSV or JSON of exactly the rows shown, or print a report.', 'For continuous copies, send alerts to your own system with the alert webhook.'],
+    link: ['/observe/events', 'Open Timeline & Export'] },
+];
 
 const KnowledgeApp: Component = () => {
-  const [writerInput,  setWriterInput]  = createSignal('');
-  const [writerOutput, setWriterOutput] = createSignal<string | null>(null);
-
-  function handleGenerate() {
-    const q = writerInput().trim();
-    if (!q) return;
-    setWriterOutput(
-      `> Generating: "${q}"…\n\n` +
-      `AEGIS AI writer queued. Output will appear here once the BYO LLM endpoint\n` +
-      `responds. Connect a model at Administration → AI Models → AEGIS endpoint.`
-    );
-  }
-
-  function useSuggestion(prompt: string) {
-    setWriterInput(prompt);
-    setWriterOutput(null);
-  }
+  const [sel, setSel] = createSignal(DOCS[0].id);
+  const [q, setQ] = createSignal('');
+  const shown = createMemo(() => DOCS.filter((d) => !q().trim() || `${d.title} ${d.summary} ${d.steps.join(' ')}`.toLowerCase().includes(q().trim().toLowerCase())));
+  const doc = () => DOCS.find((d) => d.id === sel()) ?? DOCS[0];
 
   return (
     <AppShell path="/knowledge/blog">
-
-      <main class="dash-main">
-        <header class="mc-header">
+      <main class="pro-main" aria-label="Knowledge">
+        <div class="pro-head">
           <div>
-            <h1 class="mc-h1">KNOWLEDGE</h1>
-            <div class="mc-sub">
-              Growth engine — Blog CMS · SEO AI · Keyword Research · Runbooks · Wiki · AI Writer
-            </div>
+            <h1 class="pro-title">Knowledge</h1>
+            <p class="pro-sub">Runbooks, SOPs and guides for this device, linked to the screens they describe</p>
           </div>
-          <div class="mc-header-actions">
-            <button class="mc-chip" onClick={() => setCopilotOpen(true)}>
-              ⌘ "draft a ransomware runbook"
-            </button>
-            <span class="mc-mode-badge">● knowledge granted</span>
-          </div>
-        </header>
+          <span class="gate gate--off">
+            <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">+ New</button> <button class="hp-btn">AI writer</button></span>
+            <span class="gate-reason" role="note">Writing your own content and the AI writer need the content service of a control plane.</span>
+          </span>
+        </div>
 
-        <div class="mc-grid">
-
-          {/* KPI row — 5 columns, full width */}
-          <div class="mc-cell--kpis knw-kpis">
-            <For each={KPIS}>
-              {(k) => (
-                <div class="mc-kpi" style={{ '--tone': toneVar(k.tone) }}>
-                  <div class="mc-kpi-label">{k.label}</div>
-                  <div class="mc-kpi-value">{k.value}</div>
-                </div>
-              )}
-            </For>
-          </div>
-
-          {/* Content list (posts / runbooks / docs / wiki / SOPs) */}
-          <Panel ctx="cms" title="CONTENT" span="span 7">
-            <ul class="knw-content">
-              <For each={CONTENT_ITEMS}>
-                {(item) => (
-                  <li class="knw-content-row">
-                    <span class="knw-type-badge" data-type={item.type}>{item.type}</span>
-                    <div class="knw-content-body">
-                      <div class="knw-content-title">{item.title}</div>
-                      <div class="knw-content-meta">{item.author} · {item.updatedAt}</div>
-                    </div>
-                    <span
-                      class="knw-status-badge"
-                      style={{ color: toneVar(statusTone(item.status)) }}
-                    >{item.status}</span>
-                    <span
-                      class="knw-seo-score"
-                      style={{ color: seoColor(item.seoScore) }}
-                      title={`SEO score: ${item.seoScore}/100`}
-                    >{item.seoScore}</span>
-                    <a class="det-link" href="/knowledge/blog" aria-label="Open content">↗</a>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Panel>
-
-          {/* SEO keywords */}
-          <Panel ctx="seo" title="SEO KEYWORDS" span="span 5">
-            <ul class="knw-kw">
-              <For each={SEO_KEYWORDS}>
-                {(kw) => (
-                  <li class="knw-kw-row">
-                    <div class="knw-kw-body">
-                      <div class="knw-kw-term">{kw.keyword}</div>
-                      <div class="knw-kw-vol">{kw.volume}</div>
-                    </div>
-                    <span class={`knw-kw-diff knw-diff--${kw.difficulty}`}>{kw.difficulty}</span>
-                    <span class="knw-kw-rank">
-                      #{kw.rank ?? '—'}
-                      <span class={`knw-kw-delta${kw.delta < 0 ? ' knw-delta--up' : kw.delta > 0 ? ' knw-delta--down' : ''}`}>
-                        {kw.delta < 0 ? `▲${Math.abs(kw.delta)}` : kw.delta > 0 ? `▼${kw.delta}` : '—'}
-                      </span>
-                    </span>
-                  </li>
-                )}
-              </For>
-            </ul>
-          </Panel>
-
-          {/* AI Writer — full-width terminal prompt */}
-          <Panel ctx="ai-writer" title="AI WRITER" span="span 12">
-            <div class="knw-writer">
-              <div class="knw-writer-suggestions">
-                <span class="knw-suggestions-label">Suggestions:</span>
-                <For each={AI_SUGGESTIONS}>
-                  {(s) => (
-                    <button
-                      class="knw-suggestion"
-                      onClick={() => useSuggestion(s.prompt)}
-                      title={s.prompt}
-                    >
-                      {s.prompt}
-                    </button>
-                  )}
-                </For>
-              </div>
-
-              <div class="knw-writer-input-row">
-                <span class="hp-prompt" aria-hidden="true">$</span>
-                <input
-                  class="knw-writer-input"
-                  type="text"
-                  placeholder="Generate a post-incident write-up, runbook, SEO article…"
-                  value={writerInput()}
-                  onInput={(e) => setWriterInput(e.currentTarget.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter') handleGenerate(); }}
-                  aria-label="AI Writer prompt"
-                  spellcheck={false}
-                  autocomplete="off"
-                />
-                <button class="knw-writer-run" onClick={handleGenerate}>
-                  Generate ↵
-                </button>
-              </div>
-
-              <Show when={writerOutput()}>
-                <pre class="knw-writer-output">{writerOutput()}</pre>
-              </Show>
-            </div>
-          </Panel>
-
+        <div class="obs-grid obs-grid--wide">
+          <nav class="pcard obs-sources" aria-label="Documents">
+            <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px', width: '100%' }}>Search
+              <input value={q()} onInput={(e) => setQ(e.currentTarget.value)} placeholder="key, zone, pack…"
+                style={{ font: 'inherit', 'min-height': '40px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' }} /></label>
+            <For each={shown()} fallback={<p class="pcard-note">No document matches.</p>}>{(d) => (
+              <button class={`shell-rail-item${sel() === d.id ? ' is-active' : ''}`} aria-pressed={sel() === d.id} onClick={() => setSel(d.id)}
+                style={{ 'flex-direction': 'column', 'align-items': 'flex-start', gap: '2px', 'min-height': '52px' }}>
+                <span>{d.title}</span><span class="pcard-note">{d.kind}</span>
+              </button>
+            )}</For>
+          </nav>
+          <article class="pcard" aria-label={doc().title}>
+            <span class="inc-status" style={{ 'align-self': 'flex-start' }}>{doc().kind}</span>
+            <h2 style={{ margin: 0, 'font-size': '20px' }}>{doc().title}</h2>
+            <p class="l0-card-sub" style={{ margin: 0 }}>{doc().summary}</p>
+            <ol style={{ margin: 0, 'padding-left': '20px', display: 'flex', 'flex-direction': 'column', gap: '8px', 'line-height': 1.5 }}>
+              <For each={doc().steps}>{(s) => <li>{s}</li>}</For>
+            </ol>
+            <div class="l0-card-foot"><a class="hp-btn hp-btn--primary" href={doc().link[0]}>{doc().link[1]} →</a></div>
+          </article>
         </div>
       </main>
-
     </AppShell>
   );
 };
