@@ -10,8 +10,9 @@
 //! measured, but a power cut loses it — that is fine, a power cut is not a crash. The record is checksummed,
 //! so stale or random memory never reads as a crash.
 //!
-//! CM5: the 64 KiB page at 0x3FF9_0000 — directly below HBoot's handoff pages (0x3FFA_0000..0x4000_0000),
-//! outside the kernel image, the page-table pool and the JIT pool. QEMU: a static buffer (the self-test
+//! CM5: 0x0800_0000 (128 MiB) — above the kernel image + .bss (~0x0218_0000), below the page-table pool
+//! (0x3000_0000). Chosen by measurement: canaries at 0x0800_0000 survived three EL2-gate resets in a row while
+//! 0x2000_0000, 0x3F00_0000 and the first choice 0x3FF9_0000 were overwritten by the boot firmware. QEMU: a static buffer (the self-test
 //! exercises the format; QEMU itself exits on a panic).
 
 use core::fmt::{self, Write};
@@ -34,7 +35,7 @@ struct Rec {
 }
 
 #[cfg(feature = "cm5")]
-const REC_PA: usize = 0x3FF9_0000;
+const REC_PA: usize = 0x0800_0000; // metal 2026-11-10 (batch 31): DRAM here survives the EL2-gate reset; 0x3FF9_0000 / 0x2000_0000 / 0x3F00_0000 do not
 
 #[cfg(not(feature = "cm5"))]
 static mut QEMU_REC: Rec = Rec { magic: 0, kind: 0, len: 0, esr: 0, elr: 0, far: 0, sum: 0, msg: [0; MSG] };
@@ -104,7 +105,7 @@ impl Write for Buf {
 /// crash write a checksummed canary at a few addresses outside every region heqk / HBoot use; the next boot reports
 /// which survived — that picks where the record can live (or proves it needs the eMMC).
 #[cfg(feature = "cm5")]
-pub const PROBES: [usize; 3] = [0x0800_0000, 0x2000_0000, 0x3F00_0000];
+pub const PROBES: [usize; 3] = [0x0800_1000, 0x2000_0000, 0x3F00_0000];
 #[cfg(feature = "cm5")]
 const CANARY: u64 = 0x5942_4f52_504b_5148; // "HQKPROBY"
 
