@@ -18,7 +18,7 @@ import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { networkView, startNetworkLive } from '../store/networkLive';
 import { uploadView, refreshUploads, uploadPack } from '../store/packUpload';
-import { ownerKey, loadOwnerKey, signPack, signPolicy, PACKS, download } from '../store/signing';
+import { ownerKey, loadOwnerKey, signPack, signPolicy, signBundle, ownerKeyId, PACKS, download } from '../store/signing';
 import {
   buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, checkPolicy, stagePolicy, lineDiff,
   type WanForm, type WifiForm, type PolicyForm, type AclRow,
@@ -27,6 +27,7 @@ import AppShell, { normPath } from './AppShell';
 import Drawer from './Drawer';
 import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
+import { buildBundle, fromLegacy } from '../store/hqcfg';
 
 type Sec = 'internet' | 'wifi' | 'firewall';
 const SECS: [Sec, string, string][] = [['internet', 'Internet', '/network/wan/advanced'], ['wifi', 'Wi-Fi', '/network/wifi'], ['firewall', 'Firewall and routes', '/protect/policies']];
@@ -74,13 +75,21 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     if (n.wifi) setWifi({ ...wifi(), ssid: n.wifi.ssid, channel: n.wifi.channel ? String(n.wifi.channel) : 'auto', security: /wpa3/i.test(n.wifi.security) ? 'wpa3-transition' : 'wpa2' });
   };
 
-  const text = createMemo(() => (sec() === 'internet' ? buildWan(wan()) : sec() === 'wifi' ? buildWifi(wifi()) : buildPolicyText(pol())));
-  const errors = createMemo(() => (sec() === 'internet' ? checkWan(wan()) : sec() === 'wifi' ? checkWifi(wifi()) : checkPolicy(pol())));
+  // The builders refuse (throw) rather than emit a file the device would reject; show that as a problem.
+  const built = createMemo(() => {
+    try { return { t: sec() === 'internet' ? buildWan(wan()) : sec() === 'wifi' ? buildWifi(wifi()) : buildPolicyText(pol()), err: '' }; }
+    catch (e) { return { t: '', err: e instanceof Error ? e.message : String(e) }; }
+  });
+  const text = () => built().t;
+  const errors = createMemo(() => {
+    const e = sec() === 'internet' ? checkWan(wan()) : sec() === 'wifi' ? checkWifi(wifi()) : checkPolicy(pol());
+    return built().err && !e.length ? [...e, built().err] : e;
+  });
   /** What the device reports today, as the same file (for the review diff). */
   const current = createMemo(() => {
     const n = networkView();
     if (!n?.available) return '';
-    if (sec() === 'internet' && n.wan) return buildWan({ ...wan(), mode: n.wan.mode as WanForm['mode'], vlanOn: n.wan.vlan > 0, vlan: String(n.wan.vlan), mgmtOn: !!n.management, mgmtVlan: n.management ? String(n.management.vlan) : '', pppoeUser: n.wan.mode === 'pppoe' ? '(current)' : '', pppoePass: n.wan.mode === 'pppoe' ? '(current)' : '' });
+    if (sec() === 'internet' && n.wan) try { return buildWan({ ...wan(), mode: n.wan.mode as WanForm['mode'], vlanOn: n.wan.vlan > 0, vlan: String(n.wan.vlan), mgmtOn: !!n.management, mgmtVlan: n.management ? String(n.management.vlan) : '', pppoeUser: n.wan.mode === 'pppoe' ? '(current)' : '', pppoePass: n.wan.mode === 'pppoe' ? '(current)' : '' }); } catch { return ''; }
     if (sec() === 'wifi' && n.wifi) return `ssid=${n.wifi.ssid}\npsk=(current)\n${n.wifi.channel ? `channel=${n.wifi.channel}\n` : ''}`;
     return '';
   });
@@ -100,20 +109,34 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
+  const [staged, setStaged] = createSignal(true);
   const upload = async () => {
     const s = signed(); if (!s) return;
     setMsg('');
     try {
       const container = new File([new Uint8Array(s.sig), new Uint8Array(s.txt)], `${FILE[sec()].type}.pack`);
-      const m = await uploadPack(FILE[sec()].type, container, () => window.prompt('This changes how the device connects. Enter your owner key:', ''), () => undefined);
-      setMsg(`${m} The new settings apply at the next reboot; the previous generation is kept for rollback.`);
+      const r = await uploadPack(FILE[sec()].type, container, () => window.prompt('This changes how the device connects. Enter your owner key:', ''), () => undefined);
+      setStaged(r.staged);
+      setMsg(`${r.text} The previous generation is kept: Administration → Signed packs can roll back to it.`);
       setStep('done');
     } catch (e) {
       const m = e instanceof Error ? e.message : String(e);
-      // "type" = this kernel does not accept this file over the network yet (ADR 0058 D1 not served).
-      setMsg(/: type$/.test(m) ? `The device answered that it doesn't accept ${FILE[sec()].name} over the network yet.` : m);
-      setStep('card');
+      // "type" = this kernel does not accept this file over the network yet (ADR 0058 D1 not served):
+      // only then is the boot card the way. Any other refusal (signature, generation…) is the answer.
+      if (/: type$/.test(m)) { setMsg(`The device answered that it doesn't accept ${FILE[sec()].name} over the network yet.`); setStep('card'); }
+      else setMsg(m);
     }
+  };
+
+  /** The current section as an HQCFG1 bundle + HQCSIG1 (same generation), signed with the browser key. */
+  const bundle = async () => {
+    setMsg('');
+    try {
+      const kind = sec() === 'internet' ? 'wan' : sec() === 'wifi' ? 'wifi' : 'policy';
+      const b = buildBundle({ [kind]: fromLegacy(kind, text()) }, genNum(), await ownerKeyId());
+      download('HQCFG1.BIN', b);
+      download('HQCFG1.SIG', await signBundle(b));
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   const startApply = () => { setStep('review'); setSigned(null); setMsg(''); setOpen(true); };
@@ -308,9 +331,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
         </Show>
 
         <Show when={step() === 'done'}>
-          <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged for the next reboot</p>
-          <p class="l0-card-sub">It takes effect when the device restarts. Restart now, or let it apply at the next restart.</p>
-          <RestartButton primary />
+          <Show when={staged()} fallback={<p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Applied</p>}>
+            <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged: takes effect at the next restart</p>
+            <p class="l0-card-sub">Restart now, or let it apply at the next restart.</p>
+            <RestartButton primary />
+          </Show>
         </Show>
 
         <Show when={step() === 'card' && signed()}>
@@ -320,6 +345,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             <button class="hp-btn hp-btn--primary" onClick={() => download(FILE[sec()].name, signed()!.txt, 'text/plain')}>Download {FILE[sec()].name}</button>
             <button class="hp-btn" onClick={() => download(FILE[sec()].sig, signed()!.sig)}>Download {FILE[sec()].sig}</button>
           </div>
+          <p class="pcard-note">Or the same settings as one signed configuration bundle (HQCFG1, ADR 0059), for devices that take bundles:</p>
+          <div class="l0-card-foot"><button class="hp-btn" onClick={() => void bundle()}>Download as a signed bundle</button></div>
+          <Show when={sec() !== 'firewall'}>
+            <p class="pcard-note">{sec() === 'wifi' ? 'The Wi-Fi password' : 'A PPPoE password'} is inside the signed file in clear: anyone holding the boot card can read it. It is not protected at rest yet.</p>
+          </Show>
         </Show>
         <Show when={msg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{msg()}</p></Show>
       </Drawer>
