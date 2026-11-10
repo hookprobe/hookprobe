@@ -100,11 +100,58 @@ impl Write for Buf {
     }
 }
 
+/// DRAM-retention probe (metal 2026-11-10: the record at 0x3FF9_0000 did not survive the EL2-gate reset). On every
+/// crash write a checksummed canary at a few addresses outside every region heqk / HBoot use; the next boot reports
+/// which survived — that picks where the record can live (or proves it needs the eMMC).
+#[cfg(feature = "cm5")]
+pub const PROBES: [usize; 3] = [0x0800_0000, 0x2000_0000, 0x3F00_0000];
+#[cfg(feature = "cm5")]
+const CANARY: u64 = 0x5942_4f52_504b_5148; // "HQKPROBY"
+
+#[cfg(feature = "cm5")]
+fn canary_words(a: usize) -> [u64; 8] {
+    let mut w = [0u64; 8];
+    for (i, x) in w.iter_mut().enumerate() {
+        *x = CANARY ^ (a as u64).rotate_left(i as u32 * 7) ^ (i as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+    w
+}
+
+#[cfg(feature = "cm5")]
+fn write_canaries() {
+    for &a in PROBES.iter() {
+        let w = canary_words(a);
+        for (i, x) in w.iter().enumerate() {
+            unsafe { core::ptr::write_volatile((a as *mut u64).add(i), *x) };
+        }
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) a, options(nostack)) };
+    }
+    unsafe { core::arch::asm!("dsb sy", options(nostack)) };
+}
+
+/// Which probe canaries survived since the last crash (bit i = PROBES[i]); clears them.
+#[cfg(feature = "cm5")]
+pub fn take_canaries() -> u8 {
+    let mut m = 0u8;
+    for (k, &a) in PROBES.iter().enumerate() {
+        let w = canary_words(a);
+        let ok = w.iter().enumerate().all(|(i, x)| unsafe { core::ptr::read_volatile((a as *const u64).add(i)) } == *x);
+        if ok {
+            m |= 1 << k;
+        }
+        unsafe { core::ptr::write_volatile(a as *mut u64, 0) };
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) a, options(nostack)) };
+    }
+    m
+}
+
 /// Write the record (panic/fault path: no allocation, no locks; called with interrupts masked).
 pub fn write(kind: u32, esr: u64, elr: u64, far: u64, msg: fmt::Arguments) {
     let mut b = Buf { b: [0; MSG], n: 0 };
     let _ = b.write_fmt(msg);
     let sum = checksum(kind, b.n as u32, esr, elr, far, &b.b[..b.n]);
+    #[cfg(feature = "cm5")]
+    write_canaries();
     unsafe {
         let r = rec();
         core::ptr::write_volatile(r, Rec { magic: MAGIC, kind, len: b.n as u32, esr, elr, far, sum, msg: b.b });
