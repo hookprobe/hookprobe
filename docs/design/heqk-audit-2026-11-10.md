@@ -164,7 +164,11 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 
 1. Production signing-key custody (HSM / ceremony) and the policy/pack key-custody model behind A4.
 2. Factory OTP provisioning: whether and when to run `hboot --features otp-provision` on production units
-   (irreversible). SEC-3 fuses stay out of scope.
+   (irreversible). SEC-3 fuses stay out of scope. **Consequence until decided:** a unit with blank customer
+   OTP attests with the SOFTWARE attestation key, whose private half is tracked in `hboot/src/attest_keys.rs`
+   (§2.1 #8) — its quotes prove nothing. Verifiers (MSSP / enrolment) must reject `otp_provisioned=0` quotes
+   in production; sealing on such a unit still uses the OTP-derived SRK read path (none to read → the unit
+   reports it). The bench CM5 is unaffected (provisioned in an earlier campaign).
 3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber), 0055 `pin` semantics, 0056 D1 boundary with the
    flasher owner, 0045/0046, retire 0035–0042.
 4. Persistent anti-rollback medium (RPMB vs sealed counter) — technical options can be prototyped (A), the
