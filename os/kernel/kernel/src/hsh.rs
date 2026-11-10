@@ -206,7 +206,7 @@ mod el0 {
 
 /// Run one command line for a caller holding `role`; the text answer goes into `out`. Returns its length.
 #[cfg(feature = "mctls")]
-pub fn run_line(line: &[u8], role: u8, now_ms: u64, out: &mut [u8]) -> usize {
+pub fn run_line(line: &[u8], role: u8, tag: [u8; 4], now_ms: u64, out: &mut [u8]) -> usize {
     use hal::hshabi::*;
     let msg_unavail = b"ERROR: Management service unavailable.\n";
     let Some(s) = el0::server() else {
@@ -218,15 +218,17 @@ pub fn run_line(line: &[u8], role: u8, now_ms: u64, out: &mut [u8]) -> usize {
     let (st, n) = s.call(CMD_LINE, &line[..line.len().min(IN_MAX)]);
     let n = match st {
         ST_TEXT => n,
-        ST_REQUEST if n == 4 => {
-            let mut rq = [0u8; 4];
+        ST_REQUEST if n == REQ_LEN => {
+            let mut rq = [0u8; REQ_LEN];
             s.read(OUT_OFF, &mut rq);
             let msg = u16::from_le_bytes([rq[0], rq[1]]);
+            let arg = u64::from_le_bytes(rq[4..12].try_into().unwrap());
+            let pl = &rq[12..12 + (rq[3] as usize).min(64)];
             // phase 2: the kernel authorises + serves; the shell formats
             let mut rep = [0u8; IN_MAX];
             rep[..2].copy_from_slice(&msg.to_le_bytes());
             rep[3] = rq[2];
-            let (res, len) = crate::mgmtabi::dispatch(msg, role, now_ms, &mut rep[4..]);
+            let (res, len) = crate::mgmtabi::dispatch(msg, role, tag, now_ms, arg, pl, &mut rep[4..]);
             rep[2] = res;
             let (st2, n2) = s.call(CMD_REPLY, &rep[..4 + len]);
             if st2 == ST_TEXT { n2 } else { 0 }
@@ -260,7 +262,7 @@ pub fn selftest(now_ms: u64) -> bool {
     let mut o = [0u8; 2048];
     let mut run = |l: &[u8], role: u8| -> ([u8; 2048], usize) {
         let mut b = [0u8; 2048];
-        let n = run_line(l, role, now_ms, &mut b);
+        let n = run_line(l, role, [0x5e, 0x1f, 0, 0], now_ms, &mut b);
         (b, n)
     };
     let has = |r: &([u8; 2048], usize), s: &[u8]| r.0[..r.1].windows(s.len()).any(|w| w == s);
@@ -286,7 +288,7 @@ pub fn selftest(now_ms: u64) -> bool {
         .iter()
         .all(|l| has(&run(l, v), b"not supported") || has(&run(l, v), b"Invalid argument"));
     let unknown = has(&run(b"rm -rf", v), b"Unknown command");
-    let later = has(&run(b"config stage 1", v), b"not supported") && has(&run(b"reboot", v), b"not supported");
+    let later = has(&run(b"config history", v), b"not supported") && has(&run(b"reboot", v), b"not supported");
     let parser = empty && at_max && over && toks && big && nonascii && ops && unknown && later;
     // every read command, formatted from the ABI reply (never printed before it)
     let reads = has(&run(b"info", v), b"HEQK Management Environment") && has(&run(b"version", v), b"HEQK ")
@@ -300,9 +302,58 @@ pub fn selftest(now_ms: u64) -> bool {
     let mut rec = [0u8; 256];
     let abi = [m::GET_INFO, m::GET_WAN, m::GET_QSECBIT, m::GET_CONFIG, m::GET_ANCHOR, m::GET_PARSERS]
         .iter()
-        .all(|&id| crate::mgmtabi::dispatch(id, v, now_ms, &mut rec) == (m::R_OK, m::reply_len(id).unwrap()))
-        && crate::mgmtabi::dispatch(999, m::ROLE_OWNER, now_ms, &mut rec).0 == m::R_UNKNOWN
-        && crate::mgmtabi::dispatch(m::GET_INFO, 0, now_ms, &mut rec).0 == m::R_DENIED;
+        .all(|&id| crate::mgmtabi::dispatch(id, v, [0; 4], now_ms, 0, &[], &mut rec) == (m::R_OK, m::reply_len(id).unwrap()))
+        && crate::mgmtabi::dispatch(999, m::ROLE_OWNER, [0; 4], now_ms, 0, &[], &mut rec).0 == m::R_UNKNOWN
+        && crate::mgmtabi::dispatch(m::GET_INFO, 0, [0; 4], now_ms, 0, &[], &mut rec).0 == m::R_DENIED;
+    // step 4b: configuration operations — denied below their role (view), answered with an Act record at owner; with
+    // nothing on trial / no store (QEMU) the refusal is honest; an unknown upload id cannot be staged
+    let cfg_denied = has(&run(b"config confirm", v), b"Permission denied") && has(&run(b"config rollback", v), b"Permission denied")
+        && has(&run(b"config stage 00000000000000aa", v), b"Permission denied");
+    let act = |msg: u16, arg: u64| -> Option<m::Act> {
+        let mut r = [0u8; 256];
+        match crate::mgmtabi::dispatch(msg, m::ROLE_OWNER, [0; 4], now_ms, arg, &[], &mut r) {
+            (m::R_OK, n) if n == m::ACT_LEN => Some(m::Act::decode(r[..m::ACT_LEN].try_into().unwrap())),
+            _ => None,
+        }
+    };
+    let cfg_owner = act(m::CFG_CONFIRM, 0).is_some_and(|a| !a.ok) && act(m::CFG_STAGE, 0xaa).is_some_and(|a| !a.ok && a.reason_str().contains("upload id"));
+    let abi = abi && cfg_denied && cfg_owner;
+    // step 4c: HQCHAL1 elevation — challenge, the ENROLLED owner key signs off-device, the session gains the owner role
+    // (config confirm is no longer denied); the nonce is single-use; a wrong key is refused; no owner key = nothing
+    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x4c; 32]));
+    let other = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x4d; 32]));
+    let saved = (crate::anchor::owner(), crate::anchor::owner_gen());
+    let t = [0xe1, 0xe7, 0, 1];
+    let chal = |tag: [u8; 4]| -> Option<m::Challenge> {
+        let mut r = [0u8; 256];
+        match crate::mgmtabi::dispatch(m::OWNER_CHALLENGE, v, tag, now_ms, 0, &[], &mut r) {
+            (m::R_OK, n) if n == m::CHAL_LEN => Some(m::Challenge::decode(r[..m::CHAL_LEN].try_into().unwrap())),
+            _ => None,
+        }
+    };
+    let elev = |tag: [u8; 4], sig: &[u8]| -> bool {
+        let mut r = [0u8; 256];
+        matches!(crate::mgmtabi::dispatch(m::OWNER_ELEVATE, v, tag, now_ms, 0, sig, &mut r), (m::R_OK, n) if n == m::ACT_LEN && m::Act::decode(r[..m::ACT_LEN].try_into().unwrap()).ok)
+    };
+    let sign = |k: &ed25519_compact::KeyPair, c: &m::Challenge| -> [u8; 64] { *k.sk.sign(&m::challenge_msg(&c.device_id, &c.nonce)[..], Some(ed25519_compact::Noise::from_slice(&[9u8; 16]).unwrap())) };
+    crate::mgmtabi::test_reset();
+    crate::anchor::install_owner(None, 0);
+    let no_owner = chal(t).is_some_and(|c| !c.owner_enrolled && !elev(t, &sign(&kp, &c)));
+    crate::anchor::install_owner(Some(*kp.pk), 1);
+    let c1 = chal(t);
+    let wrong = c1.is_some_and(|c| !elev(t, &sign(&other, &c)));
+    let c2 = chal(t);
+    let good = c2.is_some_and(|c| elev(t, &sign(&kp, &c))) && crate::mgmtabi::elevated(t, now_ms) == m::ROLE_OWNER;
+    let replay = c2.is_some_and(|c| !elev(t, &sign(&kp, &c)));
+    let mut r = [0u8; 256];
+    let allowed = crate::mgmtabi::dispatch(m::CFG_CONFIRM, v, t, now_ms, 0, &[], &mut r).0 == m::R_OK
+        && crate::mgmtabi::dispatch(m::CFG_CONFIRM, v, [0x99, 0, 0, 0], now_ms, 0, &[], &mut r).0 == m::R_DENIED;
+    let expired = crate::mgmtabi::elevated(t, now_ms + m::ELEVATE_TTL_S * 1000 + 1) == 0;
+    let shell = has(&run(b"owner challenge", v), b"HQCHAL1") && has(&run(b"owner elevate 00 11", v), b"Invalid argument");
+    crate::mgmtabi::test_reset();
+    crate::anchor::install_owner(saved.0, saved.1);
+    let elevation = no_owner && wrong && good && replay && allowed && expired && shell;
+    let abi = abi && elevation;
     // fault containment: a deliberate EL0 fault resets the shell, counted; the next command answers
     let (_, _, f0, r0) = stats();
     let faulted = el0::server().is_some_and(|s| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0 == hal::hshabi::ST_PANIC);
@@ -315,7 +366,7 @@ pub fn selftest(now_ms: u64) -> bool {
         if pass { "PASS" } else { "FAIL" }, parser, reads, denied, contained
     ));
     arch_aarch64::_print(format_args!(
-        " [P-mgmtabi] {} — ADR 0059 D9 management ABI: every read message answers with exactly its fixed record from the /api producers, an unknown id is refused, a caller without the role is denied={}\n",
+        " [P-mgmtabi] {} — ADR 0059 D9 management ABI: every read message answers with exactly its fixed record from the /api producers, an unknown id is refused, a caller without the role is denied; 4b config confirm / rollback / stage denied below their role and answered (honestly refused here) at owner | 4c HQCHAL1 elevation (no owner key = nothing, a wrong key refused, the owner key grants the owner role to THAT session only, nonce single-use, expires)={}\n",
         if abi { "PASS" } else { "FAIL" }, abi
     ));
     pass && abi

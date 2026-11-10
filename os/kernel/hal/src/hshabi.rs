@@ -37,6 +37,8 @@ pub const CMD_LINE: u32 = 1;
 pub const CMD_REPLY: u32 = 2;
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 
+/// ST_REQUEST record: `[msg u16][cmd0 u8][payload_len u8][arg u64][payload; 64]` (step 4c: an elevation signature).
+pub const REQ_LEN: usize = 12 + 64;
 pub const ST_TEXT: u32 = 0;
 pub const ST_REQUEST: u32 = 1;
 pub const ST_BAD_CMD: u32 = 2;
