@@ -63,6 +63,8 @@ mod tlshello;
 // G32: JA4 fingerprints per MAC as a private-MAC rotation hint.
 mod ja4id;
 mod dnswire;
+// ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server.
+mod lansvc;
 mod fpdb;
 mod devid;
 mod oui;
@@ -3774,6 +3776,7 @@ fn cm5_p10_probe() {
                                 kprint!(" [AP-MC] owner: {}\n", if owner.is_some() { "CLAIMED — sign-in required" } else { "UNCLAIMED — protected routes refuse" });
                                 #[cfg(feature = "mctls")]
                                 crate::tlshost::bring_up(Some(&dev));
+                                let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal
                             }
                             mcserve::state().set_clock(0, mc_t0, freq);
                             #[cfg(feature = "appersist")]
