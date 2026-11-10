@@ -1,0 +1,16 @@
+---
+/**
+ * /network/wifi — Advanced Wi-Fi settings (ADR 0058): AdvancedConfigApp builds, signs (in the browser) and uploads the file.
+ * Spec: docs/design/mission-control-ui-requirements.md §Configuration journey.
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import AdvancedConfigApp from '../../components/AdvancedConfigApp';
+---
+
+<Shell
+  title="Advanced Wi-Fi settings — HookProbe OS"
+  description="Wi-Fi name, password, security and channel — built as a signed WIFI.TXT."
+>
+  <AdvancedConfigApp path="/network/wifi" client:load />
+</Shell>
