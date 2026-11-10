@@ -20,6 +20,8 @@ const LIVE: Record<string, 'live' | string> = {
   '/protect/firewall': 'live',
   '/automate/playbooks': 'live',
   '/intelligence/cves': 'live',
+  '/admin/identity': 'live',
+  '/workspace': 'live',
   '/detect/feed': 'live',
   '/investigate/queue': 'live',
   '/investigate/incident': 'live',
@@ -32,7 +34,7 @@ const LIVE: Record<string, 'live' | string> = {
   '/network/wan': 'live',
 };
 
-const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence';
+const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence, Administration, Workspace';
 
 function norm(p: string): string {
   const t = p.replace(/\/index\.html$/, '/').replace(/\.html$/, '').replace(/\/+$/, '');

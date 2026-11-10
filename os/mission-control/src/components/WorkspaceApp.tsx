@@ -1,164 +1,83 @@
 /**
- * WorkspaceApp — Workspace (§2): the operator's personal work-tracker.
- *
- * Continuity hub — resume in-progress work, running activity log, items pinned to
- * investigate later, tasks, recent dashboards, saved searches. Built to match
- * ~/workspace.png. Clean cards; charts inline SVG. Spec: docs/architecture/MissionControl.md §2.
+ * WorkspaceApp — Workspace (`/workspace`): your recent and saved work, each row linking to the live
+ * object (wireframe "Workspace"; requirements doc §2). Kept in this browser (store/recents.ts): the
+ * device has no per-user work store, and the screen says so. Filter by type, pin what matters.
  */
-
-import { type Component, For, Show, createSignal } from 'solid-js';
+import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { workItems, loadWork, togglePin, clearUnpinned, type WorkType } from '../store/recents';
 import AppShell from './AppShell';
-import {
-  RESUME, ACTIVITY, PINNED, TASKS, TASK_TABS, DASHBOARDS, SEARCHES, STATUS, type Tone,
-} from '../store/workspaceMock';
 
-const TONE: Record<Tone, string> = {
-  green: 'var(--hp-green)', amber: 'var(--hp-amber)', red: 'var(--hp-red)', blue: '#4895ef',
-  purple: 'var(--hp-purple)', cyan: 'var(--hp-cyan)', orange: 'var(--hp-orange)', grey: 'var(--hp-grey)',
-};
-const ACT_TABS = ['All', 'Alerts', 'Investigations', 'Playbooks', 'System'];
+type Filter = 'All' | 'Pinned' | WorkType;
+const FILTERS: Filter[] = ['All', 'Pinned', 'Incident', 'Screen'];
 
-function sparkLine(data: number[], w: number, h: number) {
-  const max = Math.max(...data), min = Math.min(...data), rng = max - min || 1;
-  const p = data.map((v, i) => [1 + (i * (w - 2)) / (data.length - 1), h - 1 - ((v - min) / rng) * (h - 2)] as const);
-  return p.map((q, i) => `${i ? 'L' : 'M'}${q[0].toFixed(1)},${q[1].toFixed(1)}`).join(' ');
-}
-function prioTone(p: string): Tone {
-  return ({ Critical: 'red', High: 'orange', Medium: 'amber', Low: 'green' }[p] as Tone) || 'grey';
+function ago(ms: number): string {
+  const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+  if (s < 60) return 'just now';
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return new Date(ms).toLocaleDateString([], { day: 'numeric', month: 'short' });
 }
 
 const WorkspaceApp: Component = () => {
-  const [actTab, setActTab] = createSignal('All');
-  const [taskTab, setTaskTab] = createSignal(0);
-  const acts = () => (actTab() === 'All' ? ACTIVITY : ACTIVITY.filter(a => a.tab === actTab()));
+  const [filter, setFilter] = createSignal<Filter>('All');
+  onMount(() => loadWork());
+
+  const rows = createMemo(() => workItems().filter((w) =>
+    filter() === 'All' || (filter() === 'Pinned' ? w.pinned : w.type === filter())));
 
   return (
     <AppShell path="/workspace">
-
-      <main class="dash-main wsp">
-        {/* header */}
-        <header class="wsp-top">
-          <div class="wsp-title"><h1>Workspace</h1><span>Your recent work, pinned items and context across the platform.</span></div>
-          <div class="wsp-top-right">
-            <div class="wsp-search"><span>⌕</span><input placeholder="Search workspace..." /><kbd>⌘ K</kbd></div>
-            <button class="wsp-copilot">⌘ AI Copilot</button>
-            <button class="wsp-ic">🔔<span class="wsp-badge">7</span></button>
-            <button class="wsp-ic">?</button>
-            <span class="wsp-avatar">HP</span>
+      <main class="pro-main" aria-label="Workspace" style={{ 'max-width': '1100px' }}>
+        <div class="pro-head">
+          <div>
+            <h1 class="pro-title">Workspace</h1>
+            <p class="pro-sub">Your recent and saved work. Everything links to the live object · kept in this browser</p>
           </div>
-        </header>
+          <Show when={workItems().some((w) => !w.pinned)}>
+            <button class="hp-btn" onClick={clearUnpinned}>Clear recent</button>
+          </Show>
+        </div>
 
-        {/* Continue Where You Left Off */}
-        <section class="wsp-sec">
-          <div class="wsp-sec-head"><h2>Continue Where You Left Off</h2><div class="wsp-arrows"><button>‹</button><button>›</button></div></div>
-          <div class="wsp-resume">
-            <For each={RESUME}>{r => (
-              <article class="wsp-rcard">
-                <div class="wsp-rcard-top">
-                  <span class="wsp-rcard-ic" style={{ background: `color-mix(in srgb, ${TONE[r.tone]} 16%, transparent)`, color: TONE[r.tone] }}>{r.icon}</span>
-                  <span class="wsp-rcard-kind" style={{ color: TONE[r.tone] }}>{r.kind.toUpperCase()}</span>
-                </div>
-                <h3 class="wsp-rcard-title">{r.title}</h3>
-                <Show when={r.sub}><span class="wsp-rcard-sub">{r.sub}</span></Show>
-                <span class="wsp-rcard-upd">{r.updated}</span>
-                <div class="wsp-rcard-bar">
-                  <span class="wsp-rcard-fill" style={{ width: `${r.pct}%`, background: TONE[r.tone] }} />
-                  <b>{r.pct}%</b>
-                </div>
-              </article>
-            )}</For>
-          </div>
-        </section>
-
-        {/* middle: activity · pinned · tasks */}
-        <section class="wsp-mid">
-          {/* Recent Activity */}
-          <article class="wsp-card">
-            <header class="wsp-card-head">
-              <h2>Recent Activity</h2>
-              <div class="wsp-tabs"><For each={ACT_TABS}>{t => <button class={`wsp-tab${actTab() === t ? ' wsp-tab--on' : ''}`} onClick={() => setActTab(t)}>{t}</button>}</For></div>
-            </header>
-            <ul class="wsp-act">
-              <For each={acts()}>{a => (
-                <li>
-                  <span class="wsp-act-ic" style={{ background: `color-mix(in srgb, ${TONE[a.tone]} 16%, transparent)`, color: TONE[a.tone] }}>{a.icon}</span>
-                  <span class="wsp-act-text"><b>{a.title}</b><em>{a.meta}</em></span>
-                  <span class="wsp-act-time">{a.time}</span>
-                </li>
-              )}</For>
-            </ul>
-            <button class="wsp-more">View All Activity →</button>
-          </article>
-
-          {/* Pinned Items */}
-          <article class="wsp-card">
-            <header class="wsp-card-head"><h2>Pinned Items</h2><button class="wsp-link">Manage</button></header>
-            <ul class="wsp-pin">
-              <For each={PINNED}>{p => (
-                <li>
-                  <span class="wsp-pin-ic">{p.icon}</span>
-                  <span class="wsp-pin-text"><b>{p.title}</b><em>{p.type}</em></span>
-                  <Show when={p.badge}><span class="wsp-pin-badge" style={{ color: TONE[p.badgeTone] }}>{p.badge}</span></Show>
-                  <span class="wsp-pin-star">★</span>
-                </li>
-              )}</For>
-            </ul>
-            <button class="wsp-more">View All Pinned →</button>
-          </article>
-
-          {/* My Tasks */}
-          <article class="wsp-card">
-            <header class="wsp-card-head"><h2>My Tasks</h2><button class="wsp-link">View All</button></header>
-            <div class="wsp-tabs wsp-tabs--pill"><For each={TASK_TABS}>{(t, i) => <button class={`wsp-tab${taskTab() === i() ? ' wsp-tab--on' : ''}`} onClick={() => setTaskTab(i())}>{t}</button>}</For></div>
-            <ul class="wsp-task">
-              <For each={TASKS}>{t => (
-                <li>
-                  <span class="wsp-check" />
-                  <span class="wsp-task-text"><b>{t.title}</b><em>{t.sub}</em></span>
-                  <span class="wsp-task-prio"><span style={{ color: TONE[prioTone(t.prio)] }}>{t.prio}</span><i style={{ background: TONE[prioTone(t.prio)] }} /></span>
-                </li>
-              )}</For>
-            </ul>
-            <button class="wsp-more">View All Tasks →</button>
-          </article>
-        </section>
-
-        {/* bottom: dashboards · saved searches */}
-        <section class="wsp-bot">
-          <article class="wsp-card">
-            <header class="wsp-card-head"><h2>Recent Dashboards</h2></header>
-            <div class="wsp-dash">
-              <For each={DASHBOARDS}>{d => (
-                <div class="wsp-dcard">
-                  <b>{d.title}</b><em>{d.sub}</em>
-                  <svg viewBox="0 0 120 34" class="wsp-dspark" preserveAspectRatio="none" aria-hidden="true">
-                    <path d={sparkLine(d.data, 120, 34)} fill="none" stroke={TONE[d.tone]} stroke-width="1.5" />
-                  </svg>
-                  <span class="wsp-dtime">{d.time}</span>
-                </div>
-              )}</For>
-            </div>
-            <button class="wsp-more">View All Dashboards →</button>
-          </article>
-
-          <article class="wsp-card">
-            <header class="wsp-card-head"><h2>Saved Searches</h2><button class="wsp-link">Manage</button></header>
-            <ul class="wsp-search-list">
-              <For each={SEARCHES}>{s => (
-                <li><span class="wsp-search-ic">⌕</span><span class="wsp-search-text"><b>{s.title}</b><em>{s.updated}</em></span><button class="wsp-run">▶</button></li>
-              )}</For>
-            </ul>
-            <button class="wsp-more">View All Saved Searches →</button>
-          </article>
-        </section>
-
-        {/* status strip */}
-        <footer class="wsp-strip">
-          <span class="wsp-strip-ver"><span class="wsp-strip-dot" /> v1.0.0-beta.1 ›</span>
-          <For each={STATUS}>{s => (
-            <span class="wsp-strip-item"><span class="wsp-strip-ic" style={{ color: TONE[s.tone] }}>{s.icon}</span><span><em>{s.label}</em><b style={s.label === 'System Health' ? { color: 'var(--hp-green)' } : undefined}>{s.value}</b></span></span>
+        <div class="l0-chips" role="group" aria-label="Show">
+          <For each={FILTERS}>{(f) => (
+            <button class={`l0-chip${filter() === f ? ' is-on' : ''}`} aria-pressed={filter() === f} onClick={() => setFilter(f)}>
+              {f} · {f === 'All' ? workItems().length : f === 'Pinned' ? workItems().filter((w) => w.pinned).length : workItems().filter((w) => w.type === f).length}
+            </button>
           )}</For>
-        </footer>
+        </div>
+
+        <Show when={rows().length > 0} fallback={
+          <div class="pcard">
+            <p style={{ margin: 0 }}>Nothing here yet.</p>
+            <p class="pcard-note">Screens and incidents you open appear here; pin the ones you come back to.</p>
+            <div class="l0-card-foot">
+              <a class="hp-btn" href="/investigate/queue">Open the incident queue</a>
+              <a class="hp-btn" href="/observe/live">Watch live telemetry</a>
+              <a class="hp-btn" href="/detect/feed">Review detections</a>
+            </div>
+          </div>
+        }>
+          <div class="l0-table-wrap">
+            <table class="l0-table obs-table">
+              <thead><tr><th scope="col">Pin</th><th scope="col">Type</th><th scope="col">Title</th><th scope="col">Scope</th><th scope="col">Last opened</th></tr></thead>
+              <tbody>
+                <For each={rows()}>{(w) => (
+                  <tr>
+                    <td>
+                      <button class="tb-icon" style={{ 'min-height': '36px', 'min-width': '36px' }} aria-pressed={!!w.pinned}
+                        aria-label={w.pinned ? `Unpin ${w.title}` : `Pin ${w.title}`} onClick={() => togglePin(w.key)}>{w.pinned ? '★' : '☆'}</button>
+                    </td>
+                    <td><span class="inc-status">{w.type}</span></td>
+                    <td><a href={w.href} style={{ color: 'var(--hp-text-primary)', 'font-weight': 500 }}>{w.title}</a></td>
+                    <td class="l0-muted">{w.scope}</td>
+                    <td class="l0-num" style={{ 'font-weight': 400, 'font-size': '12px' }}>{ago(w.at)}</td>
+                  </tr>
+                )}</For>
+              </tbody>
+            </table>
+          </div>
+        </Show>
+        <p class="pcard-note">Saved searches, AI conversations and draft playbooks appear here once the device keeps them; today it keeps none, so nothing is invented.</p>
       </main>
     </AppShell>
   );
