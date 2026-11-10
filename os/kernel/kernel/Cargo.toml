@@ -75,6 +75,9 @@ netsvc = ["dep:smoltcp"]
 # serve loop never exits); its pure logic is the [P-mc] gate.
 # ADR 0051 — Mission Control HTTPS: embed the EL0 TLS server (el0-tlshost) and the :443 pump.
 mctls = []
+# ADR 0059 step 4a: DEVELOPMENT transport for the EL0 shell (POST /api/hsh). OFF by default; never in a release build
+# (the production transport — web console and/or UART RX — is the operator's open decision, hsh spec R6).
+hsh-dev = ["mcserve"]
 mcserve = ["netsvc", "mctls"]
 # M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
 # prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
