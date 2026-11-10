@@ -9,7 +9,7 @@
  */
 
 import { type Component, For, Show } from 'solid-js';
-import AppRail from './AppRail';
+import AppShell from './AppShell';
 import {
   VITALS, KPIS, THREATMAP, QSCORE, AI_DECISIONS, THREAT_CATS, INCIDENTS, RESOURCES, LIVE_FEED,
   type Tone, type Kpi,
@@ -93,8 +93,7 @@ const SEV: Record<string, string> = { high: 'var(--hp-red)', medium: 'var(--hp-o
 const MissionControlApp: Component = () => {
   const qpts = () => pts(QSCORE.trend, 300, 120, 6);
   return (
-    <div class="dash-layout">
-      <AppRail active="Mission Control" />
+    <AppShell path="/mission">
 
       <main class="dash-main mc2">
         {/* ── header ── */}
@@ -294,7 +293,7 @@ const MissionControlApp: Component = () => {
           <button class="mc2-link mc2-feed-all">View All Feed →</button>
         </footer>
       </main>
-    </div>
+    </AppShell>
   );
 };
 
