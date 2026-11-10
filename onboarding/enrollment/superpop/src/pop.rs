@@ -11,7 +11,7 @@
 
 use crate::entropy::EntropySource;
 use crate::securechannel::{
-    hs_chunk, responder_read_msg1, responder_write_msg2, AntiReplayRx, CipherState, HsReasm, ResponderRandomness,
+    hs_chunk, responder_read_msg1_with, responder_write_msg2, AntiReplayRx, CipherState, HsReasm, ResponderRandomness,
     ResponderStatic,
 };
 use crate::wire::{self, Assign, Msg, Sid};
@@ -176,16 +176,28 @@ impl Pop {
         }
         b.1 += 1;
 
-        // Identify the device: the IK msg1 carries its identity encrypted; responder_read_msg1
-        // verifies against ONE enrolled key, so try the allowlist (see README follow-up: a
-        // set-based variant avoids the O(n) decaps).
-        let mut found = None;
-        for (i, dev) in self.devices.iter().enumerate() {
-            if let Ok(p) = responder_read_msg1(&self.resp, &dev.pk, msg1) {
-                found = Some((i, p));
-                break;
-            }
-        }
+        // Identify the device: the IK msg1 carries its identity encrypted; one decapsulation, then
+        // the allowlist predicate sees the decrypted identity (constant-time compare per entry).
+        let hit = std::cell::Cell::new(None);
+        let devices = &self.devices;
+        let res = responder_read_msg1_with(
+            &self.resp,
+            |id| {
+                let mut found = None;
+                for (i, d) in devices.iter().enumerate() {
+                    if boot_abi::kdf::ct_eq(id, d.pk.as_ref()) {
+                        found = Some(i);
+                    }
+                }
+                hit.set(found);
+                found.is_some()
+            },
+            msg1,
+        );
+        let found = match (res, hit.get()) {
+            (Ok(p), Some(i)) => Some((i, p)),
+            _ => None,
+        };
         let Some((di, pend)) = found else {
             self.stats.handshakes_refused += 1;
             return vec![]; // unauthenticated: no keys, so silence (no CLOSE possible)
