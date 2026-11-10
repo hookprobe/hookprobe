@@ -1,0 +1,17 @@
+---
+/**
+ * /investigate/incident/?id=<id> — one incident as a story (canonical route /investigate/:id,
+ * MissionControl.md route map). Static page; IncidentApp reads the id from the query or the path.
+ * Spec: docs/architecture/MissionControl.md §5 · docs/design/mission-control-ui-requirements.md
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import IncidentApp from '../../components/IncidentApp';
+---
+
+<Shell
+  title="Incident — HookProbe OS"
+  description="One incident as a story: what happened, the evidence, why it was decided, and the plan to approve."
+>
+  <IncidentApp client:load />
+</Shell>
