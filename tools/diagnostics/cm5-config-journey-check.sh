@@ -66,6 +66,8 @@ python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); open(sys.argv[1],"wb").
 $SIGN sign-wan "$T/owner.key" "$T/BAD.TXT" $G4 "$T/BAD.SIG" >/dev/null
 $UP --type wan --sig "$T/BAD.SIG" --file "$T/BAD.TXT" > "$T/r" 2>&1; grep -q '"staged": true' "$T/r"; chk $? "C1 a disconnecting WAN.TXT (vlan 999, no mgmt) staged"
 mark=$(stat -c %s "$LOG"); $UP --reboot "check rule 7" > /dev/null 2>&1; sleep 60
+# the reboot drops the Pi's Wi-Fi association: re-join it before probing (batch 59: an un-joined Pi read as a defect)
+[ -n "${PI_SUDO_FILE:-}" ] && "$HERE/pi-ensure-ap.sh" >/dev/null 2>&1
 scp -q -o BatchMode=yes "$UPT" "$PI:/tmp/hq-upload.py" && scp -q -o BatchMode=yes "$KEY" "$PI:/tmp/hqcj.key"
 for _ in $(seq 1 60); do pi "curl -sk -o /dev/null -m 5 $AP_MC/" && break; sleep 5; done
 pi "curl -sk -o /dev/null -w '%{http_code}' -m 8 $AP_MC/api/health" | grep -q 200; chk $? "C2 Mission Control still answers on the Wi-Fi AP ($AP_MC) with the uplink gone"
