@@ -1,4 +1,4 @@
-//! Sealed-config / live apply step 9 — the WAN executor (docs/design/heqk-sealed-config-live-apply.md §3).
+//! Sealed-config / live apply step 9 — the WAN executor (the repo-root sealed-config / live-apply design, §3).
 //!
 //! A verified HQCFG1 bundle whose WAN section changed is applied in place, from the AP loop, after the HTTP reply:
 //!
