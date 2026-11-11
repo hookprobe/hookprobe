@@ -7079,6 +7079,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::ladder_selftest();
         let _ = ownerjournal::selftest();
         let _ = rpmb::selftest();
+        let _ = seal::inplace_selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
         #[cfg(feature = "netsvc")]
