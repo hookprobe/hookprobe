@@ -132,7 +132,27 @@ Both must be implemented and demonstrated; until then RPMB adds nothing.
 5. QEMU model of RPMB (counter + MAC) for the gate; metal on one designated unit after approval.
 
 **Approval requested:** (a) whether to use RPMB at all; (b) if yes, the SRK-derived key and the gating
-above; (c) which unit may be programmed first. Until then: the rollback gap is documented in SECURITY.md
+above; (c) which unit may be programmed first.
+
+### Implementation status (2026-11-11, operator 2026-11-10b: "implement the approved RPMB architecture, but keep
+all irreversible key programming behind a separate explicit manufacturing operation")
+
+Built, QEMU-gated (`[P-rpmb]`, branch feat/rpmb-anchor). No RPMB access on any unit; no key programmed anywhere.
+
+| Step | Status |
+|---|---|
+| 1. RPMB protocol | `kernel/src/rpmb.rs`: JEDEC data frames, HMAC-SHA256 over bytes 228..512, nonce-fresh authenticated reads, write-counter reads, authenticated writes that must advance the counter by exactly one; every response verified (type, nonce / counter, address, result, MAC). |
+| 1. Key programming | `Rpmb::program_key` exists only with `--features rpmb-provision`. `make-cm5-heqk-image.sh` refuses that feature, debug or release, unless `HEQK_MANUFACTURING_OP=rpmb-provision` names the operation. Nothing calls it yet. |
+| 1. eMMC transport | **Not built.** The CMD6 PARTITION_ACCESS switch, CMD23 reliable write, CMD25/CMD18 and the always-switch-back discipline need their own review and fault tests first. Until then `emmc.rs` has no partition-switch path. |
+| 2. Record | `rpmb::Hw` in block 0: epoch, last seq, head MAC, a one-epoch allowance (compaction / reset), a wiped flag. The POLICY and per-pack floors are not in it yet: they live in the anchor v3 record today. |
+| 3. Journal append | Journal record first, then the RPMB record. A power cut between the two leaves the journal one ahead: accepted and caught up at boot. |
+| 3. Compaction / reset | Two-phase. The allowance for the next epoch is anchored before the new header is written. A factory reset anchors "wiped, next epoch E+1" first; if RPMB fails, the reset is refused rather than leaving a permanent false rollback. |
+| 4. Replay | The chain must pass through the anchored (seq, MAC), or open exactly the allowed epoch. Otherwise it is a rollback: owner rules from that copy are not applied, appends are refused (nothing is anchored on top of the old copy), the API reports it, and a factory reset with the owner token recovers. Forwarding, IPS and the signed baseline are unaffected. |
+| 5. QEMU model | `rpmb::SimRpmb` (write-once key, counter, auth / counter / address failures, forged-response hook). |
+| Unprogrammed unit | RPMB inactive: the journal behaves exactly as before, never a false rollback. |
+| Not yet wired | The product image installs no anchor (no transport, and no SRK without OTP). `/api/owner` reporting of `rollback` / `anchor` and the Mission Control alert are the next step. |
+
+Still the owner's: (c) which unit may be programmed first, and the eMMC transport review. Until then: the rollback gap is documented in SECURITY.md
 and the human register.
 
 ---

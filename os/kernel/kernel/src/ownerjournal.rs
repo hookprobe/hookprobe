@@ -169,6 +169,31 @@ pub struct Replay {
     /// a record carried the magic but its MAC failed (tampering, or a torn write mid-record)
     pub damaged: bool,
     pub full: bool,
+    /// RPMB (decision record D-RPMB): the journal is OLDER than its anchored high-water mark — an older consistent
+    /// copy was restored. Owner rules from it are NOT applied; appends are refused until a factory reset.
+    pub rollback: bool,
+    /// the anchor this boot: 0 none / inactive, 1 verified, 2 verified + caught up (journal ahead after a power
+    /// cut), 3 first anchoring, 4 RPMB faulted (alert; the journal is used as before)
+    pub anchor: u8,
+}
+
+// ---- RPMB anchor (decision record 2026-11-10 D-RPMB) -------------------------------------------------------------
+/// The journal's rollback high-water mark lives outside the user area (RPMB, `crate::rpmb`). `load` = the anchored
+/// record (Ok(None) = never anchored; Err = no anchor this boot); `store` = an authenticated write.
+pub trait Anchor {
+    fn load(&mut self) -> Result<Option<crate::rpmb::Hw>, ()>;
+    fn store(&mut self, hw: &crate::rpmb::Hw) -> bool;
+    fn active(&self) -> bool;
+    /// RPMB answered but did not verify / failed (an alert), as opposed to simply absent (no key on this unit)
+    fn faulted(&self) -> bool;
+}
+static mut ANCHOR: Option<*mut (dyn Anchor + 'static)> = None;
+/// Install (or clear) the anchor. The caller keeps `a` alive while it is installed (single core, one owner).
+pub unsafe fn set_anchor(a: Option<&mut dyn Anchor>) {
+    ANCHOR = a.map(|r| core::mem::transmute::<*mut (dyn Anchor + '_), *mut (dyn Anchor + 'static)>(r as *mut dyn Anchor));
+}
+fn anchor() -> Option<&'static mut dyn Anchor> {
+    unsafe { ANCHOR.map(|p| &mut *p).filter(|a| a.active()) }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -177,6 +202,9 @@ pub enum JErr {
     Io,
     Invalid,
     TooManyRules,
+    /// a rollback was detected at replay: nothing is appended on top of the old copy (that would launder it into
+    /// the anchor); a factory reset (owner token) starts a fresh epoch above the anchor
+    RolledBack,
 }
 
 /// A valid epoch header: (epoch, base seq, its MAC).
@@ -192,6 +220,12 @@ pub struct Journal {
     next_idx: u64, // record index inside the active half (0 = the epoch header)
     epoch: u32,    // 0 = nothing written yet
     half: u8,
+    /// the first epoch a fresh (empty) journal opens: 1, or above the anchor after a factory reset
+    epoch_base: u32,
+    rolled_back: bool,
+    probe_hit: bool,
+    /// the anchored record seen at the last replay (the factory reset continues above it)
+    anchored: Option<crate::rpmb::Hw>,
 }
 
 /// The latest artifact audit records (replayed with the rules; ADR 0056 D6).
@@ -362,7 +396,7 @@ impl Journal {
     pub fn new(lo: u64, hi: u64, srk: &[u8; 32]) -> Journal {
         let prk = boot_abi::kdf::hkdf_extract(b"HQ-owner-journal", srk);
         let key = boot_abi::kdf::hkdf_expand32(&prk, b"HQ-owner-journal-v1");
-        Journal { lo, hi, key, last_mac: [0; 32], next_seq: 1, next_idx: 0, epoch: 0, half: 0 }
+        Journal { lo, hi, key, last_mac: [0; 32], next_seq: 1, next_idx: 0, epoch: 0, half: 0, epoch_base: 1, rolled_back: false, probe_hit: false, anchored: None }
     }
 
     fn half_sect(&self) -> u64 {
@@ -434,6 +468,69 @@ impl Journal {
         self.next_idx = 0;
         self.epoch = 0;
         self.half = 0;
+        self.rolled_back = false;
+        self.anchored = None;
+        let mut out = self.replay_chain(dev);
+        self.check_anchor(&mut out);
+        out
+    }
+
+    /// The anchor check after the chain walk (D-RPMB "replay checks the replayed head against the RPMB record").
+    fn check_anchor(&mut self, out: &mut Replay) {
+        let Some(a) = (unsafe { ANCHOR.map(|p| &mut *p) }) else {
+            out.anchor = 0;
+            return;
+        };
+        if !a.active() {
+            out.anchor = if a.faulted() { 4 } else { 0 };
+            return;
+        }
+        let hw = match a.load() {
+            Ok(h) => h,
+            Err(()) => {
+                out.anchor = if a.faulted() { 4 } else { 0 };
+                return;
+            }
+        };
+        let cur = crate::rpmb::Hw { epoch: self.epoch, seq: self.next_seq - 1, mac: self.last_mac, allow_epoch: 0, wiped: false };
+        let Some(h) = hw else {
+            // never anchored: anchor what is here (first use on this unit)
+            out.anchor = if self.epoch == 0 || a.store(&cur) { 3 } else { 4 };
+            return;
+        };
+        self.anchored = Some(h);
+        let ok = if self.epoch == 0 {
+            // an empty journal is expected only after an anchored factory reset (or before the first change)
+            if h.wiped {
+                self.epoch_base = h.allow_epoch.max(1);
+            }
+            h.wiped || (h.epoch == 0 && h.seq == 0)
+        } else if h.wiped {
+            self.epoch == h.allow_epoch // the epoch the anchored factory reset opened (an older copy is a rollback)
+        } else {
+            // the chain passed through the anchored (seq, MAC) — journal equal or ahead; or a compaction whose
+            // allowance was anchored but whose final anchor write did not happen (power cut)
+            (self.epoch == h.epoch && self.probe_hit) || (h.allow_epoch != 0 && self.epoch == h.allow_epoch)
+        };
+        if !ok {
+            // owner rules from the old copy are not applied — except an owner-requested factory reset, which is the
+            // recovery (it erases everything; an attacker replaying an old reset request gains nothing over this)
+            let reset = factory_reset_requested();
+            clear();
+            unsafe { RESET_REQ = reset };
+            self.rolled_back = true;
+            out.rollback = true;
+            out.anchor = 1;
+            return;
+        }
+        let caught_up = cur.epoch != h.epoch || cur.seq != h.seq;
+        out.anchor = if caught_up && self.epoch != 0 { if a.store(&cur) { 2 } else { 4 } } else { 1 };
+    }
+
+    fn replay_chain<D: BlockDev + ?Sized>(&mut self, dev: &D) -> Replay {
+        // the anchored (seq, MAC) to look for on the way (a rollback leaves the chain BEFORE it)
+        let probe = anchor().and_then(|a| a.load().ok().flatten()).filter(|h| !h.wiped);
+        self.probe_hit = false;
         let mut out = Replay::default();
         let (h0, h1) = (self.read_hdr(dev, 0), self.read_hdr(dev, 1));
         let best = match (h0, h1) {
@@ -451,6 +548,8 @@ impl Journal {
         self.last_mac = mac;
         self.next_seq = base;
         self.next_idx = 1;
+        let hit = |e: u32, s: u64, m: &[u8; 32]| probe.is_some_and(|p| p.epoch == e && p.seq == s && p.mac == *m);
+        self.probe_hit |= hit(epoch, base - 1, &mac);
         let mut sec = [0u8; 512];
         'outer: while self.next_idx < self.half_cap() {
             let lba = self.half_lo(h) + self.next_idx / 2;
@@ -478,6 +577,7 @@ impl Journal {
                 self.next_seq += 1;
                 self.next_idx += 1;
                 out.records += 1;
+                self.probe_hit |= hit(epoch, self.next_seq - 1, &want);
             }
         }
         out
@@ -571,6 +671,14 @@ impl Journal {
             }
             n += 1;
         }
+        // D-RPMB two-phase: anchor the allowance for e2 BEFORE the new header can be written (a power cut between
+        // the two leaves the old epoch, still anchored-compatible: replay accepts e2 only through this allowance)
+        if let Some(a) = anchor() {
+            let pre = crate::rpmb::Hw { epoch: self.epoch, seq: self.next_seq - 1, mac: self.last_mac, allow_epoch: e2, wiped: false };
+            if !a.store(&pre) {
+                return Err(JErr::Io);
+            }
+        }
         self.write_half(dev, other, &recs[..n])?;
         // the new epoch is live: rebuild the RAM state from exactly what was written (rule seq numbers change)
         let base = self.next_seq;
@@ -591,6 +699,7 @@ impl Journal {
         self.last_mac = prev;
         self.next_idx = n as u64;
         self.next_seq = base + (n as u64 - 1);
+        self.anchor_now();
         Ok(())
     }
 
@@ -598,6 +707,16 @@ impl Journal {
     /// chain breaks at the first zeroed record, so an interrupted wipe already reads as an empty journal),
     /// then the two epoch headers. RAM state is cleared; the next append starts epoch 1 again.
     pub fn wipe<D: BlockDev + ?Sized>(&mut self, dev: &mut D) -> Result<u64, JErr> {
+        // D-RPMB: "a factory reset writes a fresh empty-journal record, epoch E+1" — anchored FIRST, so an old copy
+        // restored after the reset is a rollback, and the next epoch continues above everything ever anchored
+        let top = self.epoch.max(self.epoch_base.saturating_sub(1)).max(self.anchored.map_or(0, |h| h.epoch.max(h.allow_epoch)));
+        if let Some(a) = anchor() {
+            let w = crate::rpmb::Hw { epoch: top, seq: 0, mac: [0; 32], allow_epoch: top + 1, wiped: true };
+            if !a.store(&w) {
+                return Err(JErr::Io); // RPMB fault: refuse rather than reset into a permanent false rollback
+            }
+            self.anchored = Some(w);
+        }
         let z = [0u8; 512];
         let mut n = 0u64;
         for h in 0..2u8 {
@@ -616,6 +735,8 @@ impl Journal {
         self.next_idx = 0;
         self.epoch = 0;
         self.half = 0;
+        self.rolled_back = false;
+        self.epoch_base = if anchor().is_some() { top + 1 } else { 1 };
         Ok(n)
     }
 
@@ -624,14 +745,20 @@ impl Journal {
         if Kind::from_u8(r.kind).is_none() || !(r.op == OP_SET || r.op == OP_REMOVE || r.op == OP_CLEAR) || r.tlen == 0 {
             return Err(JErr::Invalid);
         }
+        // after a detected rollback only the owner's factory reset is accepted (the recovery path); it is not
+        // anchored, so the old copy is never laundered into the high-water mark
+        if self.rolled_back && r.kind != Kind::FactoryReset as u8 {
+            return Err(JErr::RolledBack);
+        }
         if self.half_cap() < 4 {
             return Err(JErr::Full);
         }
         if self.epoch == 0 {
-            // first write ever: epoch 1 in half 0
-            let (h, m) = self.seal(&[0u8; 32], &Self::hdr(1, self.next_seq), 1);
+            // first write ever: epoch 1 in half 0 (or the epoch an anchored factory reset opened)
+            let e = self.epoch_base.max(1);
+            let (h, m) = self.seal(&[0u8; 32], &Self::hdr(e, self.next_seq), e);
             self.write_half(dev, 0, &[h])?;
-            self.epoch = 1;
+            self.epoch = e;
             self.half = 0;
             self.last_mac = m;
             self.next_idx = 1;
@@ -653,7 +780,26 @@ impl Journal {
         self.last_mac = mac;
         self.next_seq += 1;
         self.next_idx += 1;
+        // D-RPMB: journal first, then the anchor (a power cut between = journal one ahead = accepted + caught up)
+        if !self.rolled_back {
+            self.anchor_now();
+        }
         Ok(r.seq)
+    }
+
+    /// Anchor the current head (best effort: a failed write leaves the journal ahead, which replay accepts).
+    fn anchor_now(&mut self) {
+        if let Some(a) = anchor() {
+            let h = crate::rpmb::Hw { epoch: self.epoch, seq: self.next_seq - 1, mac: self.last_mac, allow_epoch: 0, wiped: false };
+            if a.store(&h) {
+                self.anchored = Some(h);
+            }
+        }
+    }
+
+    /// A rollback was detected at the last replay (the API reports it; appends are refused).
+    pub fn rolled_back(&self) -> bool {
+        self.rolled_back
     }
 }
 
@@ -939,4 +1085,124 @@ pub fn selftest() -> bool {
         if pass { "PASS" } else { "FAIL" }, appended, replayed, rm && after_rm, keyed, tamper_ok, torn_ok, pinned_holds, unpinned_loosened, tightened, epochs, compacted, power_cut, ok_n, full_ok, revoke_all, factory, labels
     ));
     pass
+}
+
+// ---- [P-rpmb] journal side (decision record D-RPMB) -------------------------------------------------------------
+
+/// The anchor scenarios on the same 8-sector journal as [P-ownerjournal], each over a fresh RPMB model:
+/// (rollback detected + owner rules not applied + appends refused, factory reset continues above the anchor and an
+/// older copy after it is a rollback, a power cut between the journal write and the anchor write is accepted and
+/// caught up, compactions stay anchored and a pre-compaction copy is a rollback, no key = inactive and unchanged).
+pub fn anchor_selftest() -> (bool, bool, bool, bool, bool) {
+    use crate::rpmb::{unit_key, RpmbAnchor, SimRpmb};
+    let srk = [0x42u8; 32];
+    let blk = |d: &[u8]| rec(Kind::ShieldBlock, OP_SET, d, 1, b"rpmb test");
+    let unblk = |d: &[u8]| rec(Kind::ShieldBlock, OP_REMOVE, d, 0, b"rpmb test");
+    let mut n = 0u8;
+    let mut fresh = move || {
+        n = n.wrapping_add(1);
+        [n; 16]
+    };
+    // 1 + 2: rollback of an owner's revoke, then the factory reset
+    let (rb_ok, reset_ok) = {
+        let mut sim: SimRpmb<2> = SimRpmb::new();
+        sim.sim_program(unit_key(&srk));
+        let mut a = RpmbAnchor::new(&mut sim, unit_key(&srk), &mut fresh);
+        unsafe { set_anchor(Some(&mut a)) };
+        let mut d = MemDisk::new();
+        let mut j = Journal::new(0, 8, &srk);
+        let _ = j.replay(&d);
+        let first = true;
+        let w = j.append(&mut d, blk(b"games.example")).is_ok() && j.append(&mut d, blk(b"chat.example")).is_ok();
+        let before_revoke = d.s;
+        let revoke = j.append(&mut d, unblk(b"games.example")).is_ok();
+        let mut j2 = Journal::new(0, 8, &srk);
+        let r2 = j2.replay(&d);
+        let normal = !r2.rollback && r2.anchor == 1 && !shield_blocked(b"games.example") && shield_blocked(b"chat.example");
+        d.s = before_revoke; // an attacker restores the older, validly MAC'd copy
+        let mut j3 = Journal::new(0, 8, &srk);
+        let r3 = j3.replay(&d);
+        let rb = r3.rollback && rule_count() == 0 && !shield_blocked(b"games.example") && j3.append(&mut d, blk(b"x.example")) == Err(JErr::RolledBack);
+        // the recovery: the owner's factory-reset request is still accepted, and survives the next boot's rollback check
+        let asked = j3.append(&mut d, rec(Kind::FactoryReset, OP_SET, b"erase", 0, b"recover")).is_ok();
+        let mut j3b = Journal::new(0, 8, &srk);
+        let r3b = j3b.replay(&d);
+        let rb = rb && asked && r3b.rollback && factory_reset_requested() && rule_count() == 0;
+        let mut j3 = j3b;
+        // factory reset with the owner token: anchored first, then the wipe; the next epoch is above everything
+        let wiped = j3.wipe(&mut d).is_ok();
+        let fresh_ok = j3.append(&mut d, blk(b"new.example")).is_ok() && j3.epoch() > 1;
+        let after_reset = d.s;
+        let mut j4 = Journal::new(0, 8, &srk);
+        let r4 = j4.replay(&d);
+        let clean = !r4.rollback && shield_blocked(b"new.example");
+        d.s = before_revoke; // the pre-reset copy again
+        let r5 = Journal::new(0, 8, &srk).replay(&d);
+        let old_after_reset = r5.rollback && rule_count() == 0;
+        d.s = after_reset;
+        let _ = Journal::new(0, 8, &srk).replay(&d);
+        unsafe { set_anchor(None) };
+        (first && w && revoke && normal && rb, wiped && fresh_ok && clean && old_after_reset)
+    };
+    // 3: power cut between the journal write and the anchor write -> journal one ahead -> accepted, caught up
+    let ahead_ok = {
+        let mut sim: SimRpmb<2> = SimRpmb::new();
+        sim.sim_program(unit_key(&srk));
+        let mut a = RpmbAnchor::new(&mut sim, unit_key(&srk), &mut fresh);
+        unsafe { set_anchor(Some(&mut a)) };
+        let mut d = MemDisk::new();
+        let mut j = Journal::new(0, 8, &srk);
+        let _ = j.replay(&d);
+        let w = j.append(&mut d, blk(b"a.example")).is_ok();
+        unsafe { set_anchor(None) };
+        let w2 = j.append(&mut d, blk(b"b.example")).is_ok(); // the anchor write "lost"
+        unsafe { set_anchor(Some(&mut a)) };
+        let r = Journal::new(0, 8, &srk).replay(&d);
+        let r2 = Journal::new(0, 8, &srk).replay(&d);
+        unsafe { set_anchor(None) };
+        w && w2 && !r.rollback && r.anchor == 2 && shield_blocked(b"b.example") && !r2.rollback && r2.anchor == 1
+    };
+    // 4: compactions (7 records per half) stay anchored; a copy from before a compaction is a rollback
+    let compact_ok = {
+        let mut sim: SimRpmb<2> = SimRpmb::new();
+        sim.sim_program(unit_key(&srk));
+        let mut a = RpmbAnchor::new(&mut sim, unit_key(&srk), &mut fresh);
+        unsafe { set_anchor(Some(&mut a)) };
+        let mut d = MemDisk::new();
+        let mut j = Journal::new(0, 8, &srk);
+        let _ = j.replay(&d);
+        let mut ok = true;
+        let mut snap = d.s;
+        for i in 0..24u8 {
+            let name = [b'h', b'0' + i % 10, b'.', b'e', b'x'];
+            ok &= j.append(&mut d, if i % 2 == 0 { blk(&name) } else { unblk(&name) }).is_ok();
+            if i == 5 {
+                snap = d.s;
+            }
+        }
+        let epochs = j.epoch();
+        let r = Journal::new(0, 8, &srk).replay(&d);
+        d.s = snap;
+        let r_old = Journal::new(0, 8, &srk).replay(&d);
+        unsafe { set_anchor(None) };
+        ok && epochs > 2 && !r.rollback && r.anchor == 1 && r_old.rollback
+    };
+    // 5: an unprogrammed unit: RPMB inactive, the journal behaves exactly as before (never a false rollback)
+    let inactive_ok = {
+        let mut sim: SimRpmb<2> = SimRpmb::new();
+        let mut a = RpmbAnchor::new(&mut sim, unit_key(&srk), &mut fresh);
+        unsafe { set_anchor(Some(&mut a)) };
+        let mut d = MemDisk::new();
+        let mut j = Journal::new(0, 8, &srk);
+        let r0 = j.replay(&d);
+        let w = j.append(&mut d, blk(b"a.example")).is_ok();
+        let snap = d.s;
+        let w2 = j.append(&mut d, unblk(b"a.example")).is_ok();
+        d.s = snap;
+        let r = Journal::new(0, 8, &srk).replay(&d);
+        unsafe { set_anchor(None) };
+        r0.anchor == 0 && w && w2 && !r.rollback && r.anchor == 0 && shield_blocked(b"a.example") && a.writes == 0
+    };
+    clear();
+    (rb_ok, reset_ok, ahead_ok, compact_ok, inactive_ok)
 }

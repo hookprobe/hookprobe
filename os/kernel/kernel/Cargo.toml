@@ -57,6 +57,10 @@ chacha20poly1305 = { version = "0.10", default-features = false, optional = true
 ed25519-compact = { version = "2", default-features = false }
 
 [features]
+# Decision record D-RPMB (operator 2026-11-10b): the IRREVERSIBLE RPMB key write (`rpmb::Rpmb::program_key`).
+# A manufacturing-only build: make-cm5-heqk-image.sh refuses it unless HEQK_MANUFACTURING_OP=rpmb-provision is set
+# explicitly for that one operation. Never in a product image; never run autonomously.
+rpmb-provision = []
 # M5.2 (Track C): compile the Wasm-host beachhead + its [P-wasm] QEMU gate — a
 # signed `.wasm` module is Ed25519-VERIFIED (fail-closed), then its exported fn is
 # executed by the bespoke minimal no_std interpreter in-kernel and the result checked
