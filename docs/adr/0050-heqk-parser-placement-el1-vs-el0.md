@@ -113,6 +113,9 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
    MFP-capable walk (`CMD_STA_MFPC`) — runs in `el0-lansvc` (`hal::eapolwire`, libFuzzer `eapol_wire`, 4.35 M runs
    clean). A server fault reads as "not ours" (the station retransmits) / "not MFP-capable". The key state machine,
    MIC / PTK / GTK and the SAE engine stay with the driver (this item's rule), so their move is the driver move.
+   *Metal 2026-11-11 (batches 62–63):* the first metal run found that the AP passes the rest of its SDPCM buffer
+   (over the EL0 input window), so no M2 was recognised; fixed by trimming to the 802.1X span (f7d3b933). On W22,
+   WPA3 transition 7/7 (SAE + WPA2-only stations keyed and authorized) and LAN client 18/18.
 
 Each step must keep the AP throughput (≥ the 2026-11-07 metal baseline: 80–160 Mbps) and pass the separation
 matrix + `mc-e2e` before the EL1 copy is deleted.
