@@ -94,6 +94,27 @@ pub fn lcp_peer(code: u8, data: &[u8]) -> hal::pppwire::LcpPeer {
     }
 }
 
+// ---- ADR 0050 D4 step 5b: the authenticator's M2 / M4 crypto over station frames ----
+pub type StaM2Fn = fn(&[u8; 32], &[u8; 6], &[u8; 6], &[u8; 32], bool, &[u8]) -> Option<Option<[u8; 48]>>;
+pub static mut EL0_STA_M2: Option<StaM2Fn> = None;
+pub type StaM4Fn = fn(&[u8; 16], bool, &[u8]) -> Option<bool>;
+pub static mut EL0_STA_M4: Option<StaM4Fn> = None;
+/// M2: the PTK when the station's MIC verifies (a server fault reads as "did not verify": the wait continues, the
+/// station retransmits — exactly the wrong-PSK path).
+pub fn sta_m2(pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], akm8: bool, m2: &[u8]) -> Option<[u8; 48]> {
+    match unsafe { EL0_STA_M2 } {
+        Some(h) => h(pmk, aa, spa, anonce, akm8, m2).flatten(),
+        None => hal::wpaauth::on_m2(pmk, aa, spa, anonce, akm8, m2),
+    }
+}
+/// M4: does the MIC verify (a server fault reads as no).
+pub fn sta_m4(kck: &[u8; 16], akm8: bool, m4: &[u8]) -> bool {
+    match unsafe { EL0_STA_M4 } {
+        Some(h) => h(kck, akm8, m4).unwrap_or(false),
+        None => hal::wpaauth::on_m4(kck, akm8, m4),
+    }
+}
+
 // ---- ADR 0050 D4 step 5a: the WPA authenticator's station-frame parsing ----
 pub type EapolFn = fn(&[u8], &[u8; 6], bool, u64) -> Option<Option<usize>>;
 pub static mut EL0_EAPOL: Option<EapolFn> = None;
