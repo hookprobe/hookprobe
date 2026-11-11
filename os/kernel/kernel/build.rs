@@ -68,6 +68,10 @@ fn main() {
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-lansvc", "el0lansvc-target", feat, "el0_lansvc.elf");
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("src/dnswire.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/lansvcabi.rs").display());
+        // ADR 0059 step 4a: hsh, the native management shell, as an EL0 excursion server (same substrate)
+        build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-hsh", "el0hsh-target", feat, "el0_hsh.elf");
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/hshabi.rs").display());
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/mgmtabi.rs").display());
     }
     println!("cargo:rerun-if-changed=build.rs");
 }
@@ -356,6 +360,22 @@ fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &
     std::fs::copy(&produced, &dest).unwrap_or_else(|e| {
         panic!("{name} ELF not found at {}: {e}", produced.display())
     });
+    // Image budget (hboot load window): strip symbols / debug sections from the embedded EL0 ELF — the M5.1 loader
+    // reads only the program headers + PT_LOAD bytes. ~216 KB across tlshost / lansvc / hsh (2026-11-10). Without
+    // llvm-objcopy the unstripped copy stays (correct, just larger).
+    let stripped = Path::new(out_dir).join(format!("{dest_name}.stripped"));
+    let ok = std::process::Command::new("llvm-objcopy")
+        .arg("--strip-all")
+        .arg(&dest)
+        .arg(&stripped)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if ok {
+        std::fs::rename(&stripped, &dest).expect("replace the EL0 ELF with its stripped copy");
+    } else {
+        println!("cargo:warning={name}: llvm-objcopy unavailable — embedding the unstripped EL0 ELF");
+    }
 }
 
 // A2 (M5.5) — build the REAL wasm32-wasip1 detection module (wasip1-fixture) via a NESTED

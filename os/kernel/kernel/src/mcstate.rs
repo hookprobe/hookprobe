@@ -644,6 +644,16 @@ impl McState {
         out.raw("}");
     }
 
+    /// The latest QSECBIT sample (risk milli-units, band) and how many are held — the producer behind
+    /// `GET /api/qsecbit` and the management ABI's GET_QSECBIT (one data model).
+    pub fn qsecbit_latest(&self) -> Option<(u32, &'static str, u32)> {
+        if self.qlen == 0 {
+            return None;
+        }
+        let r = self.qs[(self.qhead + self.qlen - 1) % QS_CAP].1;
+        Some((r, Self::band(r), self.qlen as u32))
+    }
+
     /// `GET /api/qsecbit` → `{latest, history (newest first), count}`.
     pub fn render_qsecbit(&self, limit: usize, out: &mut JsonBuf) {
         out.raw("{\"latest\":");
