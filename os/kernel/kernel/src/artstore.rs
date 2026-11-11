@@ -379,6 +379,14 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
             // ADR 0059 D7: remember whether this bundle keeps a management path (upload finish refuses it if not)
             let ok = crate::cfgd::keeps_mgmt_path(v.section(crate::cfgbundle::KIND_POLICY));
             unsafe { CONFIG_MGMT_OK = ok };
+            // step 8: which subsystems this bundle changes (only LIVE_CAPABLE ones are applied without a reboot)
+            unsafe {
+                CONFIG_CHANGES = crate::cfgd::changes_vs(
+                    v.section(crate::cfgbundle::KIND_POLICY),
+                    v.section(crate::cfgbundle::KIND_WAN),
+                    v.section(crate::cfgbundle::KIND_WIFI),
+                )
+            };
             // Q3: does this bundle carry a secret (a Wi-Fi section, or a WAN section with a PPPoE password)?
             unsafe { CONFIG_SECRET = v.section(crate::cfgbundle::KIND_WIFI).is_some() || v.section(crate::cfgbundle::KIND_WAN).is_some_and(wan_has_secret) };
             unsafe { POLICY_REFUSED = None };
@@ -552,6 +560,11 @@ fn commit<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), m: &Manifest, g:
 }
 
 static mut CONFIG_MGMT_OK: bool = true;
+static mut CONFIG_CHANGES: u8 = 0xff;
+/// Step 8: the subsystems the last `config` bundle `verify` saw would change.
+pub fn config_changes() -> u8 {
+    unsafe { CONFIG_CHANGES }
+}
 static mut CONFIG_SECRET: bool = false;
 /// Q3: whether the last `config` bundle `verify` saw carries a secret.
 pub fn config_secret() -> bool {

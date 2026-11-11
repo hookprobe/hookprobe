@@ -446,10 +446,13 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     Ok_::Begun(id) => write!(w, "{{\"ok\":true,\"id\":\"{:016x}\",\"chunk_max\":{}}}", id, up::CHUNK_MAX),
                     Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
                     Ok_::Fin(f) => write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{}}}", f.gen, f.active_gen, f.len),
-                    Ok_::Act(a) => match a.journal_seq {
-                        Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{}}}", a.staged, a.gen, q),
-                        None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null}}", a.staged, a.gen),
-                    },
+                    Ok_::Act(a) => {
+                        let applies = if a.live { "live" } else if a.staged { "next_boot" } else { "now" };
+                        match a.journal_seq {
+                            Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{},\"applies\":\"{}\",\"reboot_required\":{}}}", a.staged, a.gen, q, applies, a.staged),
+                            None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null,\"applies\":\"{}\",\"reboot_required\":{}}}", a.staged, a.gen, applies, a.staged),
+                        }
+                    }
                     Ok_::Abort => write!(w, "{{\"ok\":true,\"aborted\":true}}"),
                 };
             }),
