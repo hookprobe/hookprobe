@@ -172,3 +172,8 @@
 .plan-step--warn { border-color: rgba(255,170,0,.5); color: var(--hp-amber); }
 .plan-step--warn::before { content: "! "; }
 .plan-diff--volatile .plan-diff-status { color: var(--hp-amber); font-weight: 600; }
+.hp-banner--danger { background: rgba(255, 75, 75, 0.12); border: 1px solid rgba(255, 75, 75, 0.6); color: #ffb3b3; }
+.hp-banner--danger a { color: #ffd0d0; text-decoration: underline; }
+.hp-banner--trial { background: rgba(0, 180, 255, 0.10); border: 1px solid rgba(0, 180, 255, 0.5); color: var(--hp-text-primary); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.hp-banner-actions { display: inline-flex; gap: 8px; margin-left: auto; }
+.hp-banner-actions .hp-btn { min-height: 32px; }
