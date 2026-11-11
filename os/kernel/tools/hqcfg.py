@@ -21,7 +21,7 @@ silent; they are agreed with the kernel verifier (cfgbundle.rs) through the shar
 
 Canonical section text (refused otherwise): ASCII 0x20-0x7E + LF; every line ends in LF; no blank lines, no
 trailing whitespace; wan/wifi: one key=value per line, each key once; policy: each statement once, no
-repeated (list, seq), second default, interface binding or route (dst, from).
+repeated (list, seq), second default, interface binding or route (dst, from, via).
 The PPPoE password and Wi-Fi PSK travel inside the signed region in clear: they are NOT protected at rest
 until the secrets section (kind 8) ships.
 Keys: plain PKCS#8 PEM or Mission Control's encrypted backup (HQ_KEY_PASSPHRASE or a prompt).
@@ -74,7 +74,10 @@ def canonical(kind, body):
             elif w[0] == b"interface" and len(w) >= 4:
                 key = tuple(w[:4])
             elif w[0] == b"route" and len(w) > 1:
-                key = (b"route", w[1], w[3] if len(w) > 3 and w[2] == b"from" else b"any")
+                # (dst, from|any, via): metric-ordered failover through different interfaces is legitimate;
+                # a repeat through the same interface (only the metric differs) is a duplicate.
+                via = w[w.index(b"via") + 1] if b"via" in w[:-1] else b""
+                key = (b"route", w[1], w[3] if len(w) > 3 and w[2] == b"from" else b"any", via)
             else:
                 key = tuple(w)
         else:
@@ -239,6 +242,12 @@ def vectors(outdir):
     cases["duplicate-key-in-wifi"] = forged(wf, "wifi: repeated b'ssid'")
     crlf = full.replace(b"mode=pppoe\n", b"mode=pppo\r\n")  # same length; CR inside the wan section
     cases["cr-in-wan"] = forged(crlf, "wan: non-canonical byte or trailing space in b'mode=pppo\\r'")
+    fo = b"route 0.0.0.0/0 via wan metric 10\nroute 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100\n"
+    fob = build([("policy", fo)], 10, pk)
+    cases["two-default-routes-wan-mgmt"] = {"bundle": fob.hex(), "sig": sign(key, fob).hex(), "expect": "ok", "floor": 0}
+    same = build([("policy", b"route 0.0.0.0/0 via wan metric 10\nroute 10.9.0.0/16 via wan metric 99\n")], 11, pk)
+    same = same.replace(b"route 10.9.0.0/16 via wan metric 99\n", b"route 0.0.0.0/0 via wan metric 9999\n")  # same length
+    cases["duplicate-route-same-via"] = forged(same, "policy: repeated (b'route', b'0.0.0.0/0', b'any', b'wan')")
     # section byte ranges of the valid full bundle (offset from the start of the bundle)
     off, ranges = 48 + 4 * 3, []
     for k, b in sorted([("wan", wan), ("wifi", wifi), ("policy", pol)], key=lambda x: KINDS[x[0]]):

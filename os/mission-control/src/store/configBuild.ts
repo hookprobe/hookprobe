@@ -149,7 +149,7 @@ export function checkPolicy(f: PolicyForm): string[] {
   for (const r of f.routes) if (r.from.trim() && !/^[0-9a-fA-F:.]+\/\d{1,3}$/.test(r.from.trim())) e.push(`Route ${r.dst}: "from" is a prefix.`);
   // The device refuses a repeated statement (heqk config parser, duplicate keys refused): one line per
   // (list, seq), one default per access list, one binding per (interface, kind, direction), one route per
-  // (destination, from).
+  // (destination, from, via) — failover through different interfaces is allowed.
   const dup = (what: string, keys: string[]) => {
     const seen = new Set<string>();
     for (const k of keys) { if (seen.has(k)) e.push(`${what} ${k.replace(/\|/g, ' ')} appears twice.`); seen.add(k); }
@@ -158,7 +158,7 @@ export function checkPolicy(f: PolicyForm): string[] {
   dup('Access list', f.acls.map((a) => `${a.name}|seq|${a.seq}`));
   dup('Default for access list', f.defaults.map((d) => d.name));
   dup('Interface binding', f.binds.map((b) => `${b.iface}|${b.kind}|${b.dir}`));
-  dup('Route', f.routes.map((r) => `${r.dst.trim()}|from|${r.from.trim() || 'any'}`));
+  dup('Route', f.routes.map((r) => `${r.dst.trim()}|from|${r.from.trim() || 'any'}|via|${r.via}`));
   if (new TextEncoder().encode(buildPolicyText(f)).length > 4096) e.push('The policy is larger than the 4096 bytes the device reads.');
   return e;
 }
