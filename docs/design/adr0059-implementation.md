@@ -39,6 +39,12 @@ Status: built, QEMU (`[P-cfgbundle]` 24/24).
 
 **Bundle semantics:** a bundle is complete for the sections it carries. For a missing section, the per-file source applies.
 
+**While a bundle is in force** (committed or on trial), per-file `wan` / `wifi` / `policy` uploads are refused at `begin`. The refusal says: "a configuration bundle is in force: change this with a new bundle (type config), or roll the bundle back first". Without this, the bundle's section would silently win over the upload (metal batch 60). Rolling back with no older verified half clears the bundle.
+
+**Factory reset** (token-only) erases the store and resets the WAN / Wi-Fi / bundle generation floors, so the shipped boot-card baseline applies again. Before this, a kept WAN floor refused the shipped gen-2 WAN.TXT, and the device came up on DHCP without its management VLAN. The owner key and the POLICY floor (ADR 0049 D1) stay. **This needs your review:** replaying an older card file still requires physical card access, which is equivalent to a reflash.
+
+**Boot self-tests never change live configuration state.** `cfgd::set_selftest` makes confirm and rollback refuse during the `[P-hsh]` / `[P-mgmtabi]` boot tests. In metal batch 60, a boot self-test committed a live trial.
+
 Status: built, QEMU (`[P-cfgd]`). Metal: pending (trial, commit and revert on the bench).
 
 ## Step 4: management ABI + `hsh` (docs/design/hsh-native-management-shell.md)
