@@ -35,6 +35,14 @@ export default async function (t) {
   await go('/network/wan', 1500);
   ok(await vis(trial.locator('text=Keep it is required')) && !(await vis(trial.locator('text=by itself in'))), 'management-plane trial: Keep is required (not auto-committed)');
 
+  // A bundle in force: single-file changes are refused by the device, so the editor steers to the bundle.
+  await page.unroute('**/api/config');
+  await page.route('**/api/config', json({ state: 'committed', generation: 5, floor: 5, on_trial: false, window_s: 300, elapsed_s: 0, auto_rollback: true, needs_confirm: false, health: '' }));
+  await go('/network/wifi', 1500);
+  await page.fill('input[placeholder="HookProbe-Home"]', 'Locked'); await page.fill('input[type=password]', 'correct horse battery');
+  ok(await vis(page.locator('text=A configuration bundle is in force (generation 5)')) && await page.locator('button:has-text("Review and sign")').isDisabled(),
+    'bundle in force: single-file change disabled, steered to "Apply all three together"');
+
   // Floors in the key panel.
   await go('/admin/identity', 1200);
   await page.click('[aria-label="Settings"] >> text=Signing key'); await page.waitForTimeout(300);
