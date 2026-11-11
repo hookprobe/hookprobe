@@ -100,13 +100,13 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
    *Status 2026-11-11 (step 3b-iv/v, QEMU):* CHAP Challenge, IPv6CP Configure-Request and the AC's LCP
    Configure-Nak / Configure-Reject of our request are walked in `el0-lansvc` (`CMD_WAN_CHAP`, `CMD_WAN_IP6CP`,
    `CMD_WAN_LCP_PEER`; libFuzzer `ppp_ctl`). PAP replies carry no options (code + id only, read from the fixed PPP
-   header). **Proposed, for operator review:** SNTP replies (48 B, fixed offsets, nonce-checked) and WAN / mgmt ARP
-   + ICMP echo are fixed-offset, bounded, walk-free header reads — the D1.1 class — and stay in EL1; moving them
-   would add an EL0 round trip per frame without removing a walk from the TCB.
+   header). **Operator decision 2026-11-11:** the small fixed-format reply handlers stay in the kernel — SNTP replies
+   (48 B, fixed offsets, nonce-checked) and WAN / mgmt ARP + ICMP echo are fixed-offset, bounded, walk-free header
+   reads (the D1.1 class); moving them would add an EL0 round trip per frame without removing a walk from the TCB.
 4. Control channel (Noise) — already authenticated after msg1; lowest exposure.
-   *Open (operator decision):* the handshake is fused with the device identity key (HKDF(SRK, …)); moving it to
-   EL0 moves that key into an EL0 address space. The pre-authentication input is the fail-closed `HsReasm`
-   datagram reassembler (bounded, fuzzed by the kernel fuzz crate). Not moved until the key custody is decided.
+   **Operator decision 2026-11-11: the device identity key stays in the kernel**, so the Noise handshake (fused
+   with that key, HKDF(SRK, …)) stays in EL1. The pre-authentication input is the fail-closed `HsReasm` datagram
+   reassembler (bounded, fuzzed by the kernel fuzz crate). This step is closed as "not moved, by decision".
 5. WPA2 authenticator — tied to the CYW43455 driver; moves with the driver (ADR 0044 D4 #7).
    *Status 2026-11-11 (step 5a, QEMU):* the attacker-shaped part — EAPOL-Key classification of a station's M2 / M4
    (`CMD_STA_EAPOL`; the returned length is re-checked against the kernel's buffer before any copy) and the M2 RSNE
