@@ -28,6 +28,7 @@ import Drawer from './Drawer';
 import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
+import { configView, refreshConfig } from '../store/configState';
 
 type Sec = 'internet' | 'wifi' | 'firewall';
 const SECS: [Sec, string, string][] = [['internet', 'Internet', '/network/wan/advanced'], ['wifi', 'Wi-Fi', '/network/wifi'], ['firewall', 'Firewall and routes', '/protect/policies']];
@@ -61,6 +62,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
 
   onMount(() => {
     setSec(secFor(normPath(location.pathname)));
+    window.addEventListener('popstate', () => setSec(secFor(normPath(location.pathname))));
+    void refreshConfig();
     startNetworkLive(); void refreshUploads(); void loadOwnerKey();
   });
 
@@ -128,15 +131,35 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     }
   };
 
-  /** The current section as an HQCFG1 bundle + HQCSIG1 (same generation), signed with the browser key. */
-  const bundle = async () => {
-    setMsg('');
+  // ── All three together: one HQCFG1 bundle (ADR 0059). A bundle is the COMPLETE configuration for
+  // internet + Wi-Fi + firewall, applied as a health-checked trial; the device never reveals stored
+  // secrets, so the PPPoE password and Wi-Fi passphrase must be typed again here.
+  const [bOpen, setBOpen] = createSignal(false);
+  const [bMsg, setBMsg] = createSignal('');
+  const [bStep, setBStep] = createSignal<'review' | 'done' | 'files'>('review');
+  const [bFiles, setBFiles] = createSignal<{ bin: Uint8Array; sig: Uint8Array } | null>(null);
+  const takesBundles = () => !!uploadView()?.types.some((t) => t.type === 'config');
+  const bundleGen = () => Math.max(configView()?.generation ?? 0, configView()?.floor ?? 0, uploadView()?.types.find((t) => t.type === 'config')?.generation ?? 0) + 1;
+  const bundleProblems = createMemo(() => {
+    const e: string[] = [];
+    checkWan(wan()).forEach((x) => e.push(`Internet: ${x}`));
+    checkWifi(wifi()).forEach((x) => e.push(`Wi-Fi: ${x}`));
+    checkPolicy(pol()).forEach((x) => e.push(`Firewall: ${x}`));
+    if (wan().mode === 'pppoe' && (!wan().pppoePass || wan().pppoePass === '(current)')) e.push('Internet: type the PPPoE password again (the device never shows it).');
+    if (!wifi().psk) e.push('Wi-Fi: type the Wi-Fi password again (the device never shows it).');
+    return e;
+  });
+  const bundleSections = () => ({ wan: fromLegacy('wan', buildWan(wan())), wifi: fromLegacy('wifi', buildWifi(wifi())), policy: fromLegacy('policy', buildPolicyText(pol())) });
+  const applyBundle = async () => {
+    setBMsg('');
     try {
-      const kind = sec() === 'internet' ? 'wan' : sec() === 'wifi' ? 'wifi' : 'policy';
-      const b = buildBundle({ [kind]: fromLegacy(kind, text()) }, genNum(), await ownerKeyId());
-      download('HQCFG1.BIN', b);
-      download('HQCFG1.SIG', await signBundle(b));
-    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+      const b = buildBundle(bundleSections(), bundleGen(), await ownerKeyId());
+      const sig = await signBundle(b);
+      setBFiles({ bin: b, sig });
+      if (sample() || !takesBundles()) { setBStep('files'); return; }
+      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => window.prompt('This replaces the internet, Wi-Fi and firewall settings. Enter your owner key:', ''), () => undefined);
+      setBMsg(r.text); setBStep('done');
+    } catch (e) { setBMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   const startApply = () => { setStep('review'); setSigned(null); setMsg(''); setOpen(true); };
@@ -153,7 +176,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           </div>
         </div>
         <nav class="tabs" aria-label="Advanced sections">
-          <For each={SECS}>{([s, label, href]) => <a class="tab" href={href} aria-current={sec() === s ? 'page' : undefined} aria-selected={sec() === s} style={{ display: 'inline-flex', 'align-items': 'center', 'text-decoration': 'none' }}>{label}</a>}</For>
+          <For each={SECS}>{([s, label, href]) => <a class="tab" href={href} onClick={(e) => { e.preventDefault(); history.pushState(null, '', href); setSec(s); setOpen(false); }} aria-current={sec() === s ? 'page' : undefined} aria-selected={sec() === s} style={{ display: 'inline-flex', 'align-items': 'center', 'text-decoration': 'none' }}>{label}</a>}</For>
         </nav>
 
         <div class="tl" style={{ 'grid-template-columns': 'minmax(0, 1fr) 380px' }} ref={() => queueMicrotask(prefill)}>
@@ -292,6 +315,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             <p class="pcard-note">This is the exact file the device will receive (secrets hidden here). You sign it with your key on the next step.</p>
             <button class="hp-btn hp-btn--primary" disabled={errors().length > 0} onClick={startApply}>Review and sign →</button>
             <a class="hp-btn" href="/network/wan" style={{ 'justify-content': 'center' }}>Discard draft</a>
+            <div class="pcard" aria-label="Apply all together">
+              <p class="l0-label">Or apply all three together</p>
+              <p class="l0-card-sub">One signed bundle replaces internet + Wi-Fi + firewall together and runs as a health-checked trial: if the internet does not come back, the device goes back by itself. A single-section change (above) is not health-checked.</p>
+              <button class="hp-btn" onClick={() => { setBStep('review'); setBMsg(''); setBOpen(true); }}>Review all three →</button>
+            </div>
           </aside>
         </div>
       </main>
@@ -345,13 +373,50 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             <button class="hp-btn hp-btn--primary" onClick={() => download(FILE[sec()].name, signed()!.txt, 'text/plain')}>Download {FILE[sec()].name}</button>
             <button class="hp-btn" onClick={() => download(FILE[sec()].sig, signed()!.sig)}>Download {FILE[sec()].sig}</button>
           </div>
-          <p class="pcard-note">Or the same settings as one signed configuration bundle (HQCFG1, ADR 0059), for devices that take bundles:</p>
-          <div class="l0-card-foot"><button class="hp-btn" onClick={() => void bundle()}>Download as a signed bundle</button></div>
           <Show when={sec() !== 'firewall'}>
             <p class="pcard-note">{sec() === 'wifi' ? 'The Wi-Fi password' : 'A PPPoE password'} is inside the signed file in clear: anyone holding the boot card can read it. It is not protected at rest yet.</p>
           </Show>
         </Show>
         <Show when={msg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{msg()}</p></Show>
+      </Drawer>
+
+      <Drawer open={bOpen()} title="Apply all three together" crumb={`configuration bundle · generation ${bundleGen()}`} onClose={() => setBOpen(false)}>
+        <p class="l0-card-sub">The bundle is the complete configuration for internet, Wi-Fi and firewall. After the restart it runs as a trial: the device keeps it once the internet works, or goes back to the previous settings by itself. Changes to the management network must be kept by you within the window.</p>
+        <Show when={bStep() === 'review'}>
+          <For each={(['wan', 'wifi', 'policy'] as const)}>{(k) => (
+            <div class="pcard" style={{ padding: '10px 12px', gap: '6px' }}>
+              <p class="l0-label">{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'}</p>
+              <pre style={{ margin: 0, font: '12px/1.6 var(--hp-font-mono)', 'white-space': 'pre-wrap' }}>{(() => { try { return bundleSections()[k].replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••'); } catch (e) { return String((e as Error).message); } })()}</pre>
+            </div>
+          )}</For>
+          <Show when={wan().mode === 'pppoe'}>
+            <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>PPPoE password (again)
+              <input style={field} type="password" autocomplete="off" value={wan().pppoePass === '(current)' ? '' : wan().pppoePass} onInput={(e) => setWan({ ...wan(), pppoePass: e.currentTarget.value })} /></label>
+          </Show>
+          <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Wi-Fi password (again)
+            <input style={field} type="password" autocomplete="new-password" value={wifi().psk} onInput={(e) => setWifi({ ...wifi(), psk: e.currentTarget.value })} /></label>
+          <Show when={bundleProblems().length > 0}>
+            <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Bundle problems"><For each={bundleProblems()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For></ul>
+          </Show>
+          <p class="pcard-note">The passwords travel inside the signed bundle in clear: not protected at rest yet.</p>
+          <Show when={ownerKey()} fallback={<SigningKeyPanel compact />}>
+            <button class="hp-btn hp-btn--primary" disabled={bundleProblems().length > 0} onClick={() => void applyBundle()}>{takesBundles() ? 'Sign and upload the bundle' : 'Sign the bundle'}</button>
+          </Show>
+        </Show>
+        <Show when={bStep() === 'done'}>
+          <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged as a trial for the next restart</p>
+          <p class="l0-card-sub">After the restart a banner shows the trial with a countdown: keep it, or let it go back by itself.</p>
+          <RestartButton primary />
+        </Show>
+        <Show when={bStep() === 'files' && bFiles()}>
+          <p class="go-state--up" style={{ margin: 0 }}>✓ Signed in the browser</p>
+          <p class="l0-card-sub">{sample() ? 'Preview: no device is connected.' : 'This device does not take configuration bundles yet.'} The signed bundle can be checked with <code>hqcfg.py verify</code>.</p>
+          <div class="l0-card-foot">
+            <button class="hp-btn" onClick={() => download('HQCFG1.BIN', bFiles()!.bin)}>Download HQCFG1.BIN</button>
+            <button class="hp-btn" onClick={() => download('HQCFG1.SIG', bFiles()!.sig)}>Download HQCFG1.SIG</button>
+          </div>
+        </Show>
+        <Show when={bMsg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{bMsg()}</p></Show>
       </Drawer>
     </AppShell>
   );

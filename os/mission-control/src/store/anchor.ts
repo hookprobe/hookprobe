@@ -12,6 +12,10 @@ import { post } from './actions';
 export interface AnchorView {
   vendor_key: string | null; owner_key: string | null; owner_enrolled: boolean; owner_generation: number;
   config_files_verified_by: string; can: 'enroll' | 'rotate' | string;
+  /** Newer images: whether the device refuses unsigned configuration, and the per-file generation floors. */
+  config_protected?: boolean; state?: 'protected' | 'CONFIG UNPROTECTED' | string;
+  /** wan / wifi as {current, floor}; policy as one number (its floor) on current images. */
+  floors?: Partial<Record<'wan' | 'wifi' | 'policy', { current: number; floor: number } | number>>;
 }
 export const [anchorView, setAnchorView] = createSignal<AnchorView | null>(null);
 /** 'absent' = this device does not serve /api/anchor (older image). */
