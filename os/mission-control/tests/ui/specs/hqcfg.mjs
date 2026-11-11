@@ -31,6 +31,12 @@ export default async function (t) {
   let refused = '';
   try { canonicalSection('wifi', 'ssid=a\nssid=b\n'); } catch (e) { refused = e.message; }
   ok(/repeated/.test(refused), 'builder: a repeated key is refused before signing');
+  // Routes forwarding cannot honour (heqk routing review 2026-11-11): via lan / eth1, or IPv6 not exactly `via wan` without gw.
+  const honour = (line) => { try { canonicalSection('policy', line + '\n'); return 'ok'; } catch (e) { return e.message; } };
+  ok(/route forwarding cannot honour/.test(honour('route 10.9.0.0/16 via lan metric 5')), 'builder: a route via lan is refused');
+  ok(/route forwarding cannot honour/.test(honour('route 2001:db8::/32 via mgmt metric 5')), 'builder: an IPv6 route via mgmt is refused');
+  ok(/route forwarding cannot honour/.test(honour('route 2001:db8::/32 via wan gw 2001:db8::1')), 'builder: an IPv6 route with a gateway is refused');
+  ok(honour('route ::/0 via wan metric 10') === 'ok', 'builder: an IPv6 route via wan without a gateway is accepted');
 
   // 2. Browser end to end: import the test key, build the Wi-Fi vector in the editor, sign, download.
   await go('/admin/identity');
