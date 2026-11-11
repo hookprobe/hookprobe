@@ -65,3 +65,9 @@ name = "ppp_ctl"
 path = "fuzz_targets/ppp_ctl.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "eapol_wire"
+path = "fuzz_targets/eapol_wire.rs"
+test = false
+doc = false

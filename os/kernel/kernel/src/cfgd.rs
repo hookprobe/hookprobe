@@ -378,7 +378,9 @@ pub fn selftest() -> bool {
     let s1 = stage(d, 5, b"mode=dhcp\n") && artstore::entry(&*d, Ty::Config).is_some_and(|e| e.state == STATE_PENDING);
     let b1 = boot(d, Some(key), 0, 100) == Boot::Trial(5) && section(KIND_WAN) == Some(&b"mode=dhcp\n"[..]);
     let c1 = tick(d, 101, true) == Tick::Committed(5) && artstore::entry(&*d, Ty::Config).is_some_and(|e| e.state == STATE_ACTIVE)
-        && crate::anchor::cfg_gens().cfg_floor >= 5;
+        && crate::anchor::cfg_gens().cfg_floor >= 5
+        // metal batch 61: the upload path's "active generation" of a bundle is the manifest's, not HQCSIG1 [8..16]
+        && artstore::active_gen(&*d, 0, Ty::Config) == 5;
     let floor = crate::anchor::cfg_gens().cfg_floor;
     let r1 = boot(d, Some(key), floor, 200) == Boot::Committed(5);
     // 2. stage gen 6 (a WAN that never comes up) -> trial; the window passes -> revert to 5, reboot
