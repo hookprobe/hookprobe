@@ -648,7 +648,7 @@ pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, 
     Ok(gen)
 }
 
-// ---- configuration sealed at rest (design docs/design/heqk-sealed-config-live-apply.md §2, step 2) ----------------
+// ---- configuration sealed at rest (design the repo-root design doc heqk-sealed-config-live-apply §2, step 2) ----------------
 // A staged slot holds `[HQKSEAL1 header 128][ct(sig[..128] ‖ data[..len])]` from its signature sector on, under
 // `seal::cfg_key(SRK, type)` + `seal::cfg_policy(device_id)`. `Plain` is the read-only view the loaders read through:
 // the seal's MAC is checked before anything is decrypted, then the type's OWN signature verifier runs on the plaintext
