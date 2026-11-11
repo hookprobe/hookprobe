@@ -31,22 +31,39 @@ and give an operator one place to understand and control what happens next.
 
 **The operating system is HookProbe OS. SOC is its default workspace. Hardware only unlocks capabilities.**
 
-<p align="center">
-  <img src="assets/hookprobe-journey.gif" alt="HookProbe customer journey, wireframes: scan the label QR to join the per-device setup Wi-Fi; a three-question setup conversation (internet, Wi-Fi name, signing key); online and protected; the calm Home screen; organizing devices into zones; an incident told as a story with a plan to approve; advanced PPPoE and VLAN settings built as a signed file; signing the change in the browser; applied on reboot with one-click rollback." width="900"/>
-</p>
+### Manage it one way, from any client
 
-<p align="center"><em>From the box to a protected network, and every change after: the customer journey in the team's wireframes.</em></p>
+Every management client talks to the device through **one management interface** (the management
+ABI), and one component inside the kernel, **`cfgd`**, is the only thing that writes configuration.
 
-Where that journey stands in the code: the per-device setup Wi-Fi, the calm Home screen, zones as
-permanent owner rules, incident stories, and the Advanced editors that build and sign WAN / Wi-Fi /
-firewall files in the browser are built, and so is the three-question first-run setup that signs
-your internet and Wi-Fi settings. Signed files upload to a running device and apply at the next
-restart, with rollback; making your key the device's owner key is built; and internet + Wi-Fi +
-firewall can go as one signed bundle that runs as a trial and reverts by itself if the internet
-breaks (proven on CM5). Passkey signing and encrypting the stored passwords are still to come — see
-the [configuration journey](docs/design/mission-control-ui-requirements.md#configuration-journey-from-flash-to-daily-use),
-[ADR 0058](docs/adr/0058-owner-signed-runtime-config.md) and
-[ADR 0059](docs/adr/0059-secure-configuration-management.md).
+```text
+   hsh (native shell, EL0)     Mission Control (web UI)     AI copilot (tools)
+              └──────────────────────┼──────────────────────┘
+                          management ABI
+                                     │
+                     cfgd — the single configuration writer
+            authenticate · authorize · validate · stage · trial · commit / revert
+```
+
+- **`hsh`** is HookProbe's own management shell, built into the kernel. It is not Bash, BusyBox or a
+  Linux shell. It runs as an isolated user-mode component, sees the same numbers Mission Control
+  does, and cannot reach kernel internals. It passes its tests on CM5. How an operator reaches it in
+  production (serial console, a Mission Control console, or both) is still an open decision. See
+  the [`hsh` design](docs/design/hsh-native-management-shell.md).
+- **Mission Control** is the web UI, served by the device itself. It is a client of the same
+  interface, with nothing UI-specific on the device.
+- **Configuration is signed, not trusted.** The owner holds a signing key (in the browser, with an
+  encrypted backup) and enrolls it as the device's owner key; after that the device accepts only
+  configuration signed with it. Internet, Wi-Fi and firewall settings travel as one signed bundle,
+  bound to the device. A bundle starts as a **trial**: the device keeps it once the internet works,
+  or goes back to the last good settings by itself (proven on CM5). Changes to how you reach the
+  device must be confirmed by the owner.
+- Still to come: passkey signing, and encrypting the stored Wi-Fi and PPPoE passwords (until then
+  they are stored in clear inside the signed configuration).
+
+Details: [ADR 0058](docs/adr/0058-owner-signed-runtime-config.md) (owner-signed configuration),
+[ADR 0059](docs/adr/0059-secure-configuration-management.md) (secure configuration management) and
+the [Mission Control UI requirements](docs/design/mission-control-ui-requirements.md).
 
 ### Protect locally
 
@@ -98,7 +115,9 @@ capabilities shape what a device can do; they do not turn it into a different pr
 | **NAPSE, QSecBit, and HYDRA** | Network threat detection, security-posture signals, and threat-intelligence enrichment. |
 | **Evidence graph** | Connects assets, events, detections, incidents, and responses so each workspace can follow the same facts. |
 | **AEGIS** | Reconciles authorized intent into system state; optional AI assists planning but does not enforce it. |
-| **Mission Control** | The on-device operator experience, with workspaces for understanding and managing the system. |
+| **cfgd and the management ABI** | The single writer of device configuration: checks who asks and what is signed, stages a change as a trial, commits it or reverts it. Every management client goes through it. |
+| **hsh** | HookProbe's own management shell inside the kernel: a small, deterministic command line over the same management ABI. |
+| **Mission Control** | The on-device web experience, with workspaces for understanding and managing the system; a client of the same management ABI. |
 | **Optional control plane** | Adds fleet enrollment and coordination without becoming a requirement for local operation. |
 
 These are architectural responsibilities, not a promise that every named service is already a
@@ -156,6 +175,8 @@ tools/ci/gates.sh g3
 - [Mission Control specification](docs/architecture/MissionControl.md)
 - [Mission Control UI layouts and requirements](docs/design/mission-control-ui-requirements.md) (incl. the configuration journey)
 - [ADR 0058 — owner-signed configuration on a running device](docs/adr/0058-owner-signed-runtime-config.md)
+- [ADR 0059 — secure configuration management (cfgd, signed bundles, trial and revert)](docs/adr/0059-secure-configuration-management.md)
+- [`hsh` — the native management shell](docs/design/hsh-native-management-shell.md)
 - [CM5 bench acceptance record](docs/design/bench-runbook-prod-mc-2026-11.md)
 - [Current roadmap and engineering gaps](docs/roadmap/BuildPlan.md)
 
