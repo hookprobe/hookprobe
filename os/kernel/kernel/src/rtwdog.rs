@@ -180,3 +180,14 @@ pub fn selftest() -> bool {
     LAST_CALL.store(0, Relaxed);
     ok
 }
+
+/// Step 0 (F-d): the watchdog pet for long blocking steps inside other crates (installed as
+/// `arch_aarch64::uplink::LONG_STEP_PET`). Reads the generic timer itself; `pet` rate-limits the hypercall.
+pub fn long_step_pet() {
+    let (now, freq): (u64, u64);
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) now, options(nomem, nostack));
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) freq, options(nomem, nostack));
+    }
+    pet(now, freq.max(1));
+}
