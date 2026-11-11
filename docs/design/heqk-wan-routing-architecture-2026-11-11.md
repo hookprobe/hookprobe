@@ -89,7 +89,9 @@
   - NAT 4096 (`arch-aarch64/src/nat.rs:18`);
   - IPv6 neighbours 64 and flows 256 (`ip6lan.rs:17-22`);
   - 4 extra WAN next hops (`uplink.rs:1636`);
-  - POLICY text 4 KiB; HQCFG1 bundle 16 KiB with 8 section kinds and no routing kind
+  - POLICY text 4 KiB; HQCFG1 bundle 16 KiB. The **implemented** schema 1.0 accepts only the section
+    kinds wan (1), wifi (4) and policy (5). Any other kind or flag is refused (`kernel/src/cfgbundle.rs:17,
+    30-32, 167-171`). The assessment plans 8 kinds; none is a routing kind
     (`docs/design/secure-config-assessment-2026-11-10.md:161-173`).
 
 ### 1.4 Execution, configuration, capability primitives
@@ -335,7 +337,7 @@ struct ProtoQuota { neighbors: u16, prefixes_in: u32, lsas: u32, mem_kib: u32, c
 | Phase | Scope | Key ADRs |
 |---|---|---|
 | **R0** (prerequisite) | SMP through hboot with stage-2 on every core; DRAM discovery; budgets; persistent EL0 services; per-core data-plane sharding; capacity profile and qualification harness | **0060, 0061, 0062**; amend `ARCHITECTURE.md:142-175` |
-| R1 | Logical interfaces and demux; hierarchical FIB; VRF id in every key; fix `via lan/eth1`; IPv6 routes used by forwarding | Interface ADR (amends hsh R2 and ADR 0059 D3); HQCFG schema major |
+| R1 | Logical interfaces and demux; hierarchical FIB; VRF id in every key; real support for LAN-side next hops and IPv6 route selection. The interim fixes for the four §1.2/§1.3 defects are owned by the heqk session (2026-11-11). **The management VRF must keep** cfgd's D7 management-path invariant (`kernel/src/cfgd.rs:42-101`), and **frames addressed to the device's own address are handled without an uplink** (heqk rule-7 fix). | Interface ADR (amends hsh R2 and ADR 0059 D3); HQCFG schema major |
 | R2 | ribd and the install ring; safe FIB; route-explain API | RIB placement ADR |
 | R3 | Multi-WAN, per-next-hop health, NHG failover, ECMP, PBR, IPv6 multihoming, SQM, BFD-lite (EL1 fixed engine; an ADR 0050 exception) | Multi-WAN ADR |
 | R4 | Multiple VRFs, leaks, tenant bundles, policy objects, keyed IDS/NAT state, MPLS decode for the IDS | VRF ADR; ADR 0049 amendment; separation-matrix re-proof |
