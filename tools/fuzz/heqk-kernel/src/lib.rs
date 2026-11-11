@@ -1,7 +1,7 @@
 //! Host build of the kernel crate's network-facing parsers (release gate SEC-02). The kernel is a bare-metal binary,
 //! so its pure parser modules are compiled here from the SAME source files (`#[path]`), not copies:
 //! HTTP request + form bodies (`httpreq.rs`), DNS wire (`dnswire.rs`), TLS ClientHello / JA4 (`tlshello.rs`) and the
-//! frame classifier (`net.rs`). A parser that grows a `crate::` dependency breaks this build on purpose.
+//! frame classifier (`net.rs`), and the ADR 0059 HQCFG1 configuration-bundle verifier (`cfgbundle.rs`). A parser that grows a `crate::` dependency breaks this build on purpose.
 #![allow(dead_code, unused_imports)]
 
 #[path = "../../../../os/kernel/kernel/src/httpreq.rs"]
@@ -12,3 +12,5 @@ pub mod dnswire;
 pub mod tlshello;
 #[path = "../../../../os/kernel/kernel/src/net.rs"]
 pub mod net;
+#[path = "../../../../os/kernel/kernel/src/cfgbundle.rs"]
+pub mod cfgbundle;
