@@ -4000,6 +4000,28 @@ fn cm5_p10_probe() {
                                         unsafe { core::arch::asm!("hvc #0") };
                                     }
                                 }
+                                // sealed-config step 8: the live executors for a queued change / a live revert (after the HTTP
+                                // reply went out: the activation only queued it). Policy now; WAN step 9, Wi-Fi step 10.
+                                #[cfg(all(feature = "cm5", feature = "p15-write"))]
+                                if let Some(plan) = cfgd::take_apply() {
+                                    let mut ok = true;
+                                    if plan.changed & cfgd::CH_POLICY != 0 {
+                                        ok &= cfgd::with_device(|d| apply_policy_live(&artstore::Plain::new(d))).unwrap_or(false);
+                                    }
+                                    if plan.changed & !cfgd::LIVE_CAPABLE != 0 {
+                                        ok = false; // never queued by this build (LIVE_CAPABLE gate at activation)
+                                    }
+                                    kprint!(" [CFGD] {} generation {}: changes {:#04x} applied live={}\n", if plan.revert { "LIVE REVERT to" } else { "LIVE APPLY of" }, plan.generation, plan.changed, ok);
+                                    match cfgd::applied_device(ok, cyw43::now_secs()) {
+                                        cfgd::Tick::Reverting => kprint!(" [CFGD] live apply FAILED — reverting LIVE to the last-known-good\n"),
+                                        cfgd::Tick::Reverted(g) => kprint!(" [CFGD] reverted LIVE to generation {} (no reboot)\n", g),
+                                        cfgd::Tick::RevertReboot => {
+                                            kprint!(" [CFGD] the live revert itself FAILED — rebooting into the last-known-good\n");
+                                            reset_at = Some(now().wrapping_add(2 * freq));
+                                        }
+                                        _ => {}
+                                    }
+                                }
                                 // ADR 0059 step 3: commit the configuration trial once the WAN is usable; revert + reboot after the window
                                 match cfgd::tick_device(cyw43::now_secs(), up.usable()) {
                                     cfgd::Tick::Committed(g) => kprint!(" [CFGD] bundle generation {} COMMITTED (healthy: WAN usable) — the bundle floor is now {}\n", g, g),
