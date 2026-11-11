@@ -15,6 +15,15 @@ sae = { path = "../sae", optional = true }
 wpa3probe = []
 # Phase 6 WPA3-SAE on the AP: host SAE responder (crate `sae`), mgmt_frame auth TX, AKM 8 4-way + PMF/IGTK.
 wpa3 = ["dep:sae"]
+# REL-08 (soak 2026-11-11): work around the CYW43455 7.45.265 PMKID-cache expiry use-after-free (raspberrypi/linux
+# #7528) by patching ONE instruction of the downloaded firmware in chip RAM (the cache lifetime 3600 -> 0x7f000000
+# ticks, i.e. never expires). The shipped firmware file stays byte-exact. OFF until the operator rules on the
+# firmware licence question (CMP-02 "without modification").
+wifi-pmkid-noexpire = []
+# REL-08 the CORRECTION (preferred): replace the 7.45.265 PMKID-cache expiry walk (0x1c823c, 120 bytes) in chip RAM with
+# one that unlinks head / middle / tail / consecutive expiring entries before freeing them and keeps the 10-s timer
+# re-arm. Source: tools/firmware/rel08/pmkid_walk.s (assembled + linked at 0x1c823c). The file stays byte-exact.
+wifi-pmkid-fix = []
 # BENCH ONLY: does this firmware run a second BSS (guest SSID)? mbss read-back/set + bsscfg:ssid create, logged.
 guestprobe = []
 cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt
