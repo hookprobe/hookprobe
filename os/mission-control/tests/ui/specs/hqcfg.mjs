@@ -37,6 +37,25 @@ export default async function (t) {
   await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(800);
   ok((await page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1).textContent()).trim() === V.public_key, 'imported the RFC 8032 test key');
 
+  // Enrolled device with a DIFFERENT owner key: signing here is blocked with the reason (the device would refuse it).
+  await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: 'ab'.repeat(32), owner_enrolled: true, owner_generation: 1, config_files_verified_by: 'owner', can: 'rotate', device_id: null }) }));
+  await go('/network/wifi');
+  await page.fill('input[placeholder="HookProbe-Home"]', 'Other-Owner'); await page.fill('input[type=password]', 'correct horse battery');
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  const od = page.locator('.drawer', { hasText: 'Apply all three together' });
+  ok(await vis(od.locator('text=only accepts settings signed with its owner key (abababab')) && await od.locator('button:has-text("the bundle")').isDisabled(),
+    'enrolled device with another owner key: signing blocked, with the reason and the fix');
+  ok(await vis(od.locator('[aria-label="Device binding"] >> text=Not bound to a device')), 'device_id null is shown as not bound');
+  await page.unroute('**/api/anchor');
+  // An all-zero id (a device without an identity, e.g. QEMU) must NOT be presented as a binding.
+  await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: null, owner_enrolled: false, owner_generation: 0, config_files_verified_by: 'none (standalone)', can: 'enroll', device_id: '0'.repeat(32) }) }));
+  await go('/network/wifi');
+  await page.fill('input[placeholder="HookProbe-Home"]', 'Zero-Id'); await page.fill('input[type=password]', 'correct horse battery');
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  ok(await vis(page.locator('[aria-label="Device binding"] >> text=Not bound to a device')), 'an all-zero device id is shown as not bound (it means any device)');
+  await page.unroute('**/api/anchor');
+  // The device reports its id: bundles made here are bound to it.
+  await page.route('**/api/anchor', (r) => r.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ vendor_key: null, owner_key: null, owner_enrolled: false, owner_generation: 0, config_files_verified_by: 'none (standalone)', can: 'enroll', device_id: V.cases['bound-to-this-device'].device_id }) }));
   await go('/network/wifi');
   await page.fill('input[placeholder="HookProbe-Home"]', 'Popescu-Home');
   await page.fill('input[type=password]', 'correct horse battery');
@@ -59,6 +78,7 @@ export default async function (t) {
   ok(await vis(drawer.locator('text=type the PPPoE password again')), 'bundle: the PPPoE password must be typed again (never read back)');
   await drawer.locator('label:has-text("PPPoE password (again)") input').fill('s3cret');
   ok(await drawer.locator('button:has-text("Sign the bundle")').isEnabled(), 'bundle: all three sections valid → can sign');
+  ok(await vis(drawer.locator('[aria-label="Device binding"] >> text=Bound to this device (id 01234567')), 'bundle: bound to the device id the device reports');
   const files = [];
   page.on('download', async (d) => files.push([d.suggestedFilename(), readFileSync(await d.path())]));
   await drawer.locator('button:has-text("Sign the bundle")').click(); await page.waitForTimeout(800);
@@ -67,8 +87,11 @@ export default async function (t) {
   let out = '';
   try {
     const dir = mkdtempSync(join(tmpdir(), 'hqcfg-')); writeFileSync(join(dir, 'b'), bin); writeFileSync(join(dir, 's'), sig);
-    out = execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's')]).toString();
+    out = execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's'), '0', V.cases['bound-to-this-device'].device_id]).toString();
+    let other = '';
+    try { execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's')], { stdio: 'pipe' }); } catch (e) { other = String(e.stderr); }
+    ok(/bound to another device/.test(other), 'browser bundle is refused on any other device');
   } catch (e) { out = String(e.stdout ?? e.message); }
   ok(/--- wan/.test(out) && /pppoe_user=user@isp/.test(out) && /--- wifi/.test(out) && /ssid=Popescu-Home/.test(out) && /--- policy/.test(out),
-    'browser bundle (wan + wifi + policy) verifies with hqcfg.py exactly as the device will');
+    'browser bundle (wan + wifi + policy, device-bound) verifies with hqcfg.py exactly as the device will');
 }

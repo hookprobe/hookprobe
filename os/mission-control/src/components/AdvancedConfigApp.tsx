@@ -29,6 +29,7 @@ import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
 import { configView, refreshConfig } from '../store/configState';
+import { anchorView, refreshAnchor } from '../store/anchor';
 
 type Sec = 'internet' | 'wifi' | 'firewall';
 const SECS: [Sec, string, string][] = [['internet', 'Internet', '/network/wan/advanced'], ['wifi', 'Wi-Fi', '/network/wifi'], ['firewall', 'Firewall and routes', '/protect/policies']];
@@ -63,7 +64,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   onMount(() => {
     setSec(secFor(normPath(location.pathname)));
     window.addEventListener('popstate', () => setSec(secFor(normPath(location.pathname))));
-    void refreshConfig();
+    void refreshConfig(); void refreshAnchor();
     startNetworkLive(); void refreshUploads(); void loadOwnerKey();
   });
 
@@ -138,6 +139,17 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const [bMsg, setBMsg] = createSignal('');
   const [bStep, setBStep] = createSignal<'review' | 'done' | 'files'>('review');
   const [bFiles, setBFiles] = createSignal<{ bin: Uint8Array; sig: Uint8Array } | null>(null);
+  /** Bind the bundle to this device when it reports its id (it then refuses the bundle on any other device). */
+  // An all-zero id means 'any device' in HQCFG1 (and is what a device without an identity reports), so it is
+  // treated as no id: the bundle stays unbound and the drawer says so.
+  const deviceIdHex = () => { const h = anchorView()?.device_id; return h && /^[0-9a-f]{32}$/i.test(h) && /[1-9a-f]/i.test(h) ? h : ''; };
+  const deviceIdBytes = () => (deviceIdHex() ? Uint8Array.from(deviceIdHex().match(/../g)!, (x) => parseInt(x, 16)) : new Uint8Array(16));
+  /** After enrollment the device accepts internet / Wi-Fi / firewall / bundle files ONLY when signed by its
+   *  owner key (vendor- or other-key signatures are refused; a factory reset keeps the owner key). */
+  const keyMismatch = () => { const a = anchorView(); return !!(a?.owner_enrolled && a.owner_key && ownerKey() && a.owner_key !== ownerKey()!.pubHex); };
+  const MismatchNote = () => (
+    <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device only accepts settings signed with its owner key ({anchorView()!.owner_key!.slice(0, 8)}…), and the key in this browser is a different one, so the device would refuse anything signed here. <a href="/admin/identity">Import the owner key's backup</a> in Administration → Signing key.</p>
+  );
   const takesBundles = () => !!uploadView()?.types.some((t) => t.type === 'config');
   const bundleGen = () => Math.max(configView()?.generation ?? 0, configView()?.floor ?? 0, uploadView()?.types.find((t) => t.type === 'config')?.generation ?? 0) + 1;
   const bundleProblems = createMemo(() => {
@@ -153,7 +165,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const applyBundle = async () => {
     setBMsg('');
     try {
-      const b = buildBundle(bundleSections(), bundleGen(), await ownerKeyId());
+      const b = buildBundle(bundleSections(), bundleGen(), await ownerKeyId(), deviceIdBytes());
       const sig = await signBundle(b);
       setBFiles({ bin: b, sig });
       if (sample() || !takesBundles()) { setBStep('files'); return; }
@@ -348,7 +360,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
         <Show when={step() === 'sign'}>
           <Show when={ownerKey()} fallback={<SigningKeyPanel compact />}>
             <p class="l0-card-sub">Signing {FILE[sec()].name} · generation {genNum()} with your key {ownerKey()!.pubHex.slice(0, 8)}…</p>
-            <button class="hp-btn hp-btn--primary" onClick={() => void sign()}>Sign in this browser</button>
+            <Show when={keyMismatch()}><MismatchNote /></Show>
+            <button class="hp-btn hp-btn--primary" disabled={keyMismatch()} onClick={() => void sign()}>Sign in this browser</button>
           </Show>
         </Show>
 
@@ -398,9 +411,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <Show when={bundleProblems().length > 0}>
             <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Bundle problems"><For each={bundleProblems()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For></ul>
           </Show>
+          <p class="pcard-note" aria-label="Device binding">{deviceIdHex() ? `Bound to this device (id ${deviceIdHex().slice(0, 8)}…): any other device refuses it.` : 'Not bound to a device: this device does not report an identity, so the bundle would be accepted by any device that trusts your key.'}</p>
           <p class="pcard-note">The passwords travel inside the signed bundle in clear: not protected at rest yet.</p>
           <Show when={ownerKey()} fallback={<SigningKeyPanel compact />}>
-            <button class="hp-btn hp-btn--primary" disabled={bundleProblems().length > 0} onClick={() => void applyBundle()}>{takesBundles() ? 'Sign and upload the bundle' : 'Sign the bundle'}</button>
+            <Show when={keyMismatch()}><MismatchNote /></Show>
+            <button class="hp-btn hp-btn--primary" disabled={bundleProblems().length > 0 || keyMismatch()} onClick={() => void applyBundle()}>{takesBundles() ? 'Sign and upload the bundle' : 'Sign the bundle'}</button>
           </Show>
         </Show>
         <Show when={bStep() === 'done'}>
