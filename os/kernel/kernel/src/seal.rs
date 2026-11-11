@@ -330,7 +330,7 @@ pub fn unseal(
     Ok(ct_len)
 }
 
-// ---- configuration sealed at rest (design docs/design/heqk-sealed-config-live-apply.md, step 1) ---------------------
+// ---- configuration sealed at rest (design the repo-root design doc heqk-sealed-config-live-apply, step 1) ---------------------
 // In-place variants for the A/B configuration store: a 16 KiB HQCFG1 bundle does not fit SEAL_MAX_PT. Same HQKSEAL1
 // header and the same Encrypt-then-MAC; the reserved MAC-covered bytes 88..96 carry the configuration GENERATION so
 // the store's fallback can read it without decrypting (and a swapped generation fails the tag).
