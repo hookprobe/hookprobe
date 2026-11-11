@@ -67,6 +67,9 @@ bootc/Debian Linux tier remain as dated records and apply only to `legacy/linux-
 | [0057](0057-shield-protection-levels.md) | Shield protection levels (categories + relaxed/balanced/strict) | Implemented, metal-proven | — |
 | [0058](0058-owner-signed-runtime-config.md) | Owner-signed configuration on a running device (WAN, Wi-Fi, policy) | Proposed (operator decision 2026-11-10: the owner signs in the browser) | 0056 (extends D2, answers open item 2) |
 | [0059](0059-secure-configuration-management.md) | Secure configuration management: signed-bytes-only rule, HQCFG1 bundle, cfgd trial/commit/revert, key hierarchy, hsh at EL0, recovery | Proposed (2026-11-10; evidence: `docs/design/secure-config-assessment-2026-11-10.md`) | 0049 D1, 0056, 0058 (amends D2/D3/Consequences) |
+| [0060](0060-heqk-smp-execution-model-core-roles-bkl.md) | heqk SMP execution model, core roles (DP/CP/MG), admission-time allocation, transitional BKL with gates | Proposed (2026-11-11; operator direction recorded, review pending) | Replaces `os/kernel/ARCHITECTURE.md` single-core contract (after D3) |
+| [0061](0061-heqk-memory-budgets-and-admission.md) | heqk memory discovery, budgets and admission (every byte budgeted, no overcommit) | Proposed (2026-11-11) | — |
+| [0062](0062-heqk-microarchitectural-isolation-multi-tenant-pop.md) | Microarchitectural isolation and verified security eligibility for multi-tenant SASE PoPs (V0: eligibility verified, never configured) | Proposed (2026-11-11; operator decisions recorded, review pending) | Amends `HEQK_REMEDIATION_PLAN.md` §4.4, `SECURITY.md` CNTPCT residual, ADR 0050 |
 | [0052 CI/CD](0052-autonomous-cicd-gate-spine-and-heal-loop.md) | Autonomous CI/CD gate spine and heal loop (**duplicate number** — proposed renumber to 0058, operator decision) | Proposed; gates implemented | — |
 
 Implementation status per ADR, with code evidence and deviations: `docs/design/heqk-audit-2026-11-10.md` §2.
