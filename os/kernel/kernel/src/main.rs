@@ -83,6 +83,7 @@ mod mgmtabi;
 mod hsh;
 mod datavol;
 mod ownerjournal;
+mod rpmb;
 mod alerthook;
 #[cfg(feature = "netsvc")]
 mod ownerapi;
@@ -7051,6 +7052,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::txprio_selftest();
         let _ = apcore::ladder_selftest();
         let _ = ownerjournal::selftest();
+        let _ = rpmb::selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
         #[cfg(feature = "netsvc")]
