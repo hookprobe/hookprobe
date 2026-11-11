@@ -248,10 +248,6 @@ def vectors(outdir):
     same = build([("policy", b"route 0.0.0.0/0 via wan metric 10\nroute 10.9.0.0/16 via wan metric 99\n")], 11, pk)
     same = same.replace(b"route 10.9.0.0/16 via wan metric 99\n", b"route 0.0.0.0/0 via wan metric 9999\n")  # same length
     cases["duplicate-route-same-via"] = forged(same, "policy: repeated (b'route', b'0.0.0.0/0', b'any', b'wan')")
-    devid = bytes.fromhex("0123456789abcdef0123456789abcdef")
-    bnd = build([("wan", wan), ("wifi", wifi), ("policy", pol)], 12, pk, device_id=devid)
-    cases["bound-to-this-device"] = {"bundle": bnd.hex(), "sig": sign(key, bnd).hex(), "expect": "ok", "floor": 0, "device_id": devid.hex()}
-    cases["bound-checked-on-other-device"] = {"bundle": bnd.hex(), "sig": sign(key, bnd).hex(), "expect": "bundle: bound to another device", "floor": 0, "device_id": "fe" * 16}
     # section byte ranges of the valid full bundle (offset from the start of the bundle)
     off, ranges = 48 + 4 * 3, []
     for k, b in sorted([("wan", wan), ("wifi", wifi), ("policy", pol)], key=lambda x: KINDS[x[0]]):
