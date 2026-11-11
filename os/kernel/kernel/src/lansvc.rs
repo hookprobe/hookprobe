@@ -633,7 +633,12 @@ pub fn selftest() -> bool {
     ek[kd_at + 2..kd_at + 24].copy_from_slice(&[0x30, 20, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0x80, 0]);
     let sta_ok = hal::eapolwire::eapol_key(&ek, &sta, false, 1) == wanparse::eapol_key(&ek, &sta, false, 1)
         && wanparse::eapol_key(&ek, &sta, false, 1) == Some(145) && wanparse::eapol_key(&ek, &[9; 6], false, 1).is_none()
-        && wanparse::eapol_key(&ek, &sta, false, 2).is_none() && wanparse::m2_mfpc(&ek[14..], 4) && hal::eapolwire::m2_mfpc(&ek[14..], 4);
+        && wanparse::eapol_key(&ek, &sta, false, 2).is_none() && {
+            // metal batch 62: the AP hands the rest of its SDPCM buffer, longer than the EL0 input window
+            let mut big = [0u8; 3000];
+            big[..160].copy_from_slice(&ek);
+            wanparse::eapol_key(&big, &sta, false, 1) == Some(145)
+        } && wanparse::m2_mfpc(&ek[14..], 4) && hal::eapolwire::m2_mfpc(&ek[14..], 4);
     // 3b-v: the AC's Nak (MRU 1400 + magic) and Reject (MRU + magic) of our LCP request classify identically
     let lnak = [1u8, 4, 0x05, 0x78, 5, 6, 1, 2, 3, 4];
     let lcp_peer_ok = hal::pppwire::lcp_peer(3, &lnak) == wanparse::lcp_peer(3, &lnak)
