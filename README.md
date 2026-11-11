@@ -40,10 +40,13 @@ and give an operator one place to understand and control what happens next.
 Where that journey stands in the code: the per-device setup Wi-Fi, the calm Home screen, zones as
 permanent owner rules, incident stories, and the Advanced editors that build and sign WAN / Wi-Fi /
 firewall files in the browser are built, and so is the three-question first-run setup that signs
-your internet and Wi-Fi settings. Uploading those signed files to a running device (until then they
-go on the boot card) and passkey signing are in progress — see the
-[configuration journey](docs/design/mission-control-ui-requirements.md#configuration-journey-from-flash-to-daily-use)
-and [ADR 0058](docs/adr/0058-owner-signed-runtime-config.md).
+your internet and Wi-Fi settings. Signed files upload to a running device and apply at the next
+restart, with rollback; making your key the device's owner key is built; and internet + Wi-Fi +
+firewall can go as one signed bundle that runs as a trial and reverts by itself if the internet
+breaks (proven on CM5). Passkey signing and encrypting the stored passwords are still to come — see
+the [configuration journey](docs/design/mission-control-ui-requirements.md#configuration-journey-from-flash-to-daily-use),
+[ADR 0058](docs/adr/0058-owner-signed-runtime-config.md) and
+[ADR 0059](docs/adr/0059-secure-configuration-management.md).
 
 ### Protect locally
 
