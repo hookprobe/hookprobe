@@ -34,9 +34,12 @@ pub enum Ty {
     Wan = 6,
     Wifi = 7,
     Policy = 8,
+    /// ADR 0059 step 2: the HQCFG1 configuration bundle (wan + wifi + policy in ONE signed unit) — staged; cfgd
+    /// runs it as a health-checked trial (step 3).
+    Config = 9,
 }
-pub const NTY: usize = 9;
-pub const ALL: [Ty; NTY] = [Ty::Block, Ty::Allow, Ty::Ioc, Ty::Rules, Ty::Oui, Ty::Devices, Ty::Wan, Ty::Wifi, Ty::Policy];
+pub const NTY: usize = 10;
+pub const ALL: [Ty; NTY] = [Ty::Block, Ty::Allow, Ty::Ioc, Ty::Rules, Ty::Oui, Ty::Devices, Ty::Wan, Ty::Wifi, Ty::Policy, Ty::Config];
 /// Types at or past this index live in the SECOND manifest pair (store sectors 2/3, "HQSTMAN2"): the first
 /// manifest sector holds 6 entries; each group commits atomically on its own sector.
 pub const G1_FIRST: usize = 6;
@@ -46,7 +49,7 @@ fn group(t: Ty) -> usize {
 impl Ty {
     /// Staged types apply at the next boot (their loaders run once, at boot) — never hot-reloaded.
     pub fn staged(self) -> bool {
-        matches!(self, Ty::Wan | Ty::Wifi | Ty::Policy)
+        matches!(self, Ty::Wan | Ty::Wifi | Ty::Policy | Ty::Config)
     }
 }
 
@@ -69,6 +72,7 @@ const TYPES: [TyInfo; NTY] = [
     TyInfo { name: "wan", txt: b"WAN     TXT", sig: b"WAN     SIG", magic: b"HQNSIG1\0", cap: 512 },
     TyInfo { name: "wifi", txt: b"WIFI    TXT", sig: b"WIFI    SIG", magic: b"HQWSIG1\0", cap: 1024 },
     TyInfo { name: "policy", txt: b"POLICY  TXT", sig: b"POLICY  SIG", magic: b"HQPSIG1\0", cap: hal::policy::POLICY_FILE_LEN as u64 },
+    TyInfo { name: "config", txt: b"CONFIG  BIN", sig: b"CONFIG  SIG", magic: b"HQCSIG1\0", cap: crate::cfgbundle::MAX_BUNDLE as u64 },
 ];
 
 impl Ty {
@@ -106,8 +110,14 @@ pub struct Entry {
     pub gen: u64,
     pub len: u64,
     pub digest: [u8; 32],
+    /// ADR 0059 step 3 (cfgd): STATE_ACTIVE (committed / last-known-good) or STATE_PENDING (on trial).
+    pub state: u8,
+    /// Boots started while PENDING (a second boot while PENDING reverts).
+    pub trials: u8,
 }
-const E0: Entry = Entry { half: 0, gen: 0, len: 0, digest: [0; 32] };
+pub const STATE_ACTIVE: u8 = 0;
+pub const STATE_PENDING: u8 = 1;
+const E0: Entry = Entry { half: 0, gen: 0, len: 0, digest: [0; 32], state: STATE_ACTIVE, trials: 0 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Manifest {
@@ -133,6 +143,8 @@ impl Manifest {
             let e = &self.e[i];
             let o = 16 + k * 56;
             s[o] = e.half;
+            s[o + 1] = e.state;
+            s[o + 2] = e.trials;
             s[o + 8..o + 16].copy_from_slice(&e.gen.to_le_bytes());
             s[o + 16..o + 24].copy_from_slice(&e.len.to_le_bytes());
             s[o + 24..o + 56].copy_from_slice(&e.digest);
@@ -151,7 +163,9 @@ impl Manifest {
         for (k, i) in Self::range(g).enumerate() {
             let o = 16 + k * 56;
             e[i].half = s[o];
-            if e[i].half > 2 {
+            e[i].state = s[o + 1];
+            e[i].trials = s[o + 2];
+            if e[i].half > 2 || e[i].state > STATE_PENDING {
                 return None;
             }
             e[i].gen = u64::from_le_bytes(s[o + 8..o + 16].try_into().ok()?);
@@ -217,7 +231,7 @@ pub fn slot(store: (u64, u64), t: Ty, half: u8) -> (u64, u64) {
 }
 
 /// Types whose store copy failed its loader this boot (RAM only): `locate` falls back to FAT.
-static mut DISABLED: u8 = 0;
+static mut DISABLED: u16 = 0;
 pub fn disable(t: Ty) {
     unsafe { DISABLED |= 1 << t as u8 };
 }
@@ -235,14 +249,31 @@ fn sig_gen<D: BlockDev + ?Sized>(dev: &D, lba: u64, magic: &[u8; 8]) -> Option<u
 /// The store's committed slot for a type, if it is at least as new as the boot-FAT copy:
 /// `Some((sig_lba, data_lba, data_sect))`. Touches only the small FAT `.SIG` file (never walks the
 /// pack's own cluster chain — a 4 MiB OUI.TXT walk costs seconds on the eMMC).
+/// ADR 0059 Phase 0.4 (H2): types whose ACTIVE store half was refused this boot and that now read the OTHER half
+/// (the previous generation) before falling back to the boot-partition baseline. RAM only.
+static mut OTHER: u16 = 0;
+fn use_other(t: Ty) -> bool {
+    unsafe { OTHER & (1 << t as u8) != 0 }
+}
+
 fn store_copy<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> Option<(u64, u64, u64)> {
     if disabled(t) {
         return None;
     }
     let store = store_region(dev)?;
-    let e = read_manifest(dev, store).e[t as usize];
+    let mut e = read_manifest(dev, store).e[t as usize];
     if e.half == 0 {
         return None;
+    }
+    if use_other(t) {
+        // the previous generation: whatever its signature sector says (the loader verifies it, the floor applies)
+        e.half = if e.half == 1 { 2 } else { 1 };
+        let mut sec = [0u8; 512];
+        dev.read_block(slot(store, t, e.half).0, &mut sec).ok()?;
+        if &sec[..8] != t.info().magic {
+            return None;
+        }
+        e.gen = u64::from_le_bytes(sec[8..16].try_into().unwrap());
     }
     let i = t.info();
     let fat_gen = if p1 != 0 { crate::fat::locate_contiguous(dev, p1, i.sig).and_then(|(l, _)| sig_gen(dev, l, i.magic)) } else { None };
@@ -266,6 +297,15 @@ pub fn locate<D: BlockDev>(dev: &D, p1: u64, name: &[u8; 11]) -> Option<(u64, u6
 
 /// The active generation of a type (store or FAT), 0 if none — the anti-rollback floor for an upload.
 pub fn active_gen<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> u64 {
+    // HQCSIG1 carries no generation at [8..16] (alg | total_len | digest — the generation lives inside the signed
+    // bundle): the manifest records it at activation. Metal batch 61: reading [8..16] gave a garbage "active"
+    // generation that refused every newer bundle.
+    if t == Ty::Config {
+        return match locate(dev, p1, t.info().sig) {
+            Some(_) => entry(dev, t).map(|e| e.gen).unwrap_or(0),
+            None => 0,
+        };
+    }
     match locate(dev, p1, t.info().sig) {
         Some((s, _)) => sig_gen(dev, s, t.info().magic).unwrap_or(0),
         None => 0,
@@ -311,6 +351,24 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
                 _ => crate::policysig::verify(&buf[..n], sig, key, crate::policysig::floor()).map(|g| (g, n as u64)).map_err(|_| LoadErr::BadSignature),
             }
         }
+        Ty::Config => {
+            // ADR 0059 step 2: the bundle is exactly total_len bytes (from the HQCSIG1); cfgbundle verifies it whole
+            let len = u32::from_le_bytes([sig[9], sig[10], sig[11], sig[12]]) as usize;
+            if len > cap as usize || len < crate::cfgbundle::HDR {
+                return Err(LoadErr::BadSignature);
+            }
+            let buf = unsafe { &mut *core::ptr::addr_of_mut!(VBUF) };
+            let mut sec = [0u8; 512];
+            for k in 0..len.div_ceil(512) {
+                dev.read_block(data_lba + k as u64, &mut sec).map_err(|_| LoadErr::Io)?;
+                buf[k * 512..k * 512 + 512].copy_from_slice(&sec);
+            }
+            let v = crate::cfgbundle::verify(&buf[..len], sig, key, &crate::config_device_id(), 0).map_err(|_| LoadErr::BadSignature)?;
+            // ADR 0059 D7: remember whether this bundle keeps a management path (upload finish refuses it if not)
+            let ok = crate::cfgd::keeps_mgmt_path(v.section(crate::cfgbundle::KIND_POLICY));
+            unsafe { CONFIG_MGMT_OK = ok };
+            Ok((v.generation, len as u64))
+        }
         Ty::Devices | Ty::Rules => {
             let buf = unsafe { &mut *core::ptr::addr_of_mut!(VBUF) };
             let n = (cap as usize).min(buf.len());
@@ -341,7 +399,7 @@ pub fn reload<D: BlockDev>(dev: &D, t: Ty) -> Result<(), ()> {
         Ty::Oui => crate::oui::load(dev).file != 2,
         Ty::Devices => crate::devpolicy::load(dev).file != 2,
         // ADR 0058: staged — its boot loader verifies it again at the next boot (a refusal there falls back)
-        Ty::Wan | Ty::Wifi | Ty::Policy => true,
+        Ty::Wan | Ty::Wifi | Ty::Policy | Ty::Config => true,
     };
     if ok { Ok(()) } else { Err(()) }
 }
@@ -349,12 +407,30 @@ pub fn reload<D: BlockDev>(dev: &D, t: Ty) -> Result<(), ()> {
 /// Boot: a store copy its loader refused (tampered / torn at rest) is disabled for this boot and the module
 /// reloaded from the boot-FAT copy. Returns true when it fell back.
 pub fn boot_fallback<D: BlockDev>(dev: &D, p1: u64, t: Ty, refused: bool) -> bool {
-    if refused && from_store(dev, p1, t) {
-        disable(t);
-        let _ = reload(dev, t);
+    if refused && fallback_step(dev, p1, t) {
+        if reload(dev, t).is_err() && fallback_step(dev, p1, t) {
+            let _ = reload(dev, t);
+        }
         return true;
     }
     false
+}
+
+/// One step down the boot order after the copy just read was refused (ADR 0059 Phase 0.4): the active store half
+/// -> the OTHER store half (the previous generation, if it carries a signature) -> the boot-partition baseline.
+/// Returns true when there is something new to try (the caller re-runs its loader), false when nothing is left.
+pub fn fallback_step<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> bool {
+    if !from_store(dev, p1, t) {
+        return false; // already on the boot partition (or nothing at all)
+    }
+    if !use_other(t) {
+        unsafe { OTHER |= 1 << t as u8 };
+        if from_store(dev, p1, t) {
+            return true; // the other half exists: try it
+        }
+    }
+    disable(t);
+    true
 }
 
 // ---- activation (write build) ---------------------------------------------------------------------------
@@ -404,7 +480,9 @@ pub fn activate<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src_lba: u64, 
     let g = group(t);
     let mut m = old;
     if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
-    m.e[t as usize] = Entry { half, gen, len, digest: *digest };
+    // a new configuration bundle starts as a cfgd TRIAL (PENDING); everything else is committed at once
+    let state = if t == Ty::Config { STATE_PENDING } else { STATE_ACTIVE };
+    m.e[t as usize] = Entry { half, gen, len, digest: *digest, state, trials: 0 };
     commit(dev, store, &m, g)?;
     unsafe { DISABLED &= !(1 << t as u8) };
     if reload(dev, t).is_err() {
@@ -429,6 +507,39 @@ fn commit<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), m: &Manifest, g:
     Ok(())
 }
 
+static mut CONFIG_MGMT_OK: bool = true;
+/// The management-path invariant of the last `config` bundle `verify` saw (ADR 0059 D7).
+pub fn config_mgmt_ok() -> bool {
+    unsafe { CONFIG_MGMT_OK }
+}
+
+/// ADR 0059 step 3 (cfgd): rewrite one entry's trial state / half and commit its manifest group.
+pub fn set_entry<D: BlockDev + ?Sized>(dev: &mut D, t: Ty, f: impl FnOnce(&mut Entry)) -> Result<Entry, ActErr> {
+    let store = store_region(dev).ok_or(ActErr::NoStore)?;
+    let mut m = read_manifest(dev, store);
+    f(&mut m.e[t as usize]);
+    let g = group(t);
+    if g == 0 { m.seq += 1 } else { m.seq2 += 1 }
+    commit(dev, store, &m, g)?;
+    Ok(m.e[t as usize])
+}
+
+/// The type's current entry (E0 = nothing committed).
+pub fn entry<D: BlockDev + ?Sized>(dev: &D, t: Ty) -> Option<Entry> {
+    let store = store_region(dev)?;
+    Some(read_manifest(dev, store).e[t as usize])
+}
+
+/// Read a half's signature sector + verify it with the type's verifier: (gen, len, data_lba).
+pub fn verify_half<D: BlockDev + ?Sized>(dev: &D, t: Ty, half: u8, key: &[u8; 32]) -> Option<(u64, u64, u64)> {
+    let store = store_region(dev)?;
+    let (sl, dl) = slot(store, t, half);
+    let mut sig = [0u8; 512];
+    dev.read_block(sl, &mut sig).ok()?;
+    let (g, l) = verify(dev, t, &sig, dl, key).ok()?;
+    Some((g, l, dl))
+}
+
 /// ADR 0058: re-activate the OTHER half of a type (the previous generation), after verifying it again with the
 /// type's own verifier. Staged types apply at the next boot; packs reload now (rolled back on refusal). POLICY can
 /// never go below its persisted generation floor (its verifier refuses — `policysig::floor`).
@@ -449,7 +560,7 @@ pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, 
     let g = group(t);
     let mut m = old;
     if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
-    m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish() };
+    m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish(), state: STATE_ACTIVE, trials: 0 };
     commit(dev, store, &m, g)?;
     unsafe { DISABLED &= !(1 << t as u8) };
     if reload(dev, t).is_err() {
@@ -640,14 +751,29 @@ pub fn selftest() -> bool {
     let _ = d.read_block(dl, &mut s);
     s[0] ^= 1;
     let _ = d.write_block(dl, &s);
+    // ADR 0059 Phase 0.4: the active half (gen 7) tampered -> the OTHER half (gen 8, valid) loads, not the FAT copy;
+    // the other half tampered too -> only then the boot partition
     let refused = crate::devpolicy::load(d).file == 2;
-    let fell_back = boot_fallback(d, 0, Ty::Devices, refused) && locate(d, 0, b"DEVICES TXT").is_none();
-    unsafe { DISABLED = 0 };
+    let other_ok = boot_fallback(d, 0, Ty::Devices, refused) && locate(d, 0, b"DEVICES TXT") == Some((slot(store, Ty::Devices, 2).1, Ty::Devices.data_sect()))
+        && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x62]) == crate::devpolicy::Pol::LanOnly;
+    let (_, dl2) = slot(store, Ty::Devices, 2);
+    let _ = d.read_block(dl2, &mut s);
+    s[0] ^= 1;
+    let _ = d.write_block(dl2, &s);
+    let refused2 = crate::devpolicy::load(d).file == 2;
+    let fell_back = other_ok && refused2 && boot_fallback(d, 0, Ty::Devices, refused2) && locate(d, 0, b"DEVICES TXT").is_none();
+    if !fell_back {
+        arch_aarch64::_print(format_args!(" [P-artstore] debug fallback: other-half={} refused2={}\n", other_ok, refused2));
+    }
+    unsafe {
+        DISABLED = 0;
+        OTHER = 0;
+    }
     crate::policysig::selftest_key(None);
     crate::devpolicy::load_text(b"");
     let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && owner_rb && staged_ok && fell_back;
     arch_aarch64::_print(format_args!(
-        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest falls back to FAT={}\n",
+        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest active half -> the previous half, then FAT (ADR 0059 0.4)={}\n",
         if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, owner_rb, staged_ok, fell_back
     ));
     pass

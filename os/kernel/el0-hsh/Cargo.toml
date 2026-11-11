@@ -1,0 +1,26 @@
+# ADR 0059 step 4 — hsh, the native management shell, as an EL0 excursion server (hsh spec R1).
+# A detached crate (own [workspace]) built by the kernel's build.rs like el0-lansvc; allocation-free.
+[package]
+name = "el0-hsh"
+version = "0.1.0"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0052 G4)
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[[bin]]
+name = "el0-hsh"
+path = "src/main.rs"
+
+[features]
+cm5 = []
+
+[dependencies]
+hal = { path = "../hal" }
+
+[profile.release]
+panic = "abort"
+opt-level = "z"
+lto = true
+codegen-units = 1

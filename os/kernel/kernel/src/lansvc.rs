@@ -355,6 +355,88 @@ fn wan_dhcp6(ip: &[u8], xid: u32) -> Option<Option<hal::ip6::Dhcp6>> {
     Some((st == hal::lansvcabi::ST_OK).then(|| hal::ip6::decode_dhcp6(&o)))
 }
 
+#[cfg(feature = "mctls")]
+fn wan_pppoe_disc(f: &[u8], plen: usize) -> Option<hal::pppwire::DiscTags> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::disc_tags(f, plen));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::DISC_LEN }>(hal::lansvcabi::CMD_WAN_PPPOE_DISC, &(plen.min(0xffff) as u16).to_le_bytes(), f)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_disc(&o) } else { hal::pppwire::DISC0 })
+}
+
+#[cfg(feature = "mctls")]
+fn wan_lcp(data: &[u8]) -> Option<hal::pppwire::LcpReq> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::lcp_classify(data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::LCP_LEN }>(hal::lansvcabi::CMD_WAN_LCP_REQ, &[], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_lcp(&o) } else { hal::pppwire::LcpReq { malformed: true, ..hal::pppwire::LCP0 } })
+}
+
+#[cfg(feature = "mctls")]
+fn wan_ipcp(code: u8, data: &[u8]) -> Option<hal::pppwire::IpcpFacts> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::ipcp_facts(code, data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::IPCP_LEN }>(hal::lansvcabi::CMD_WAN_IPCP, &[code], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_ipcp(&o) } else { hal::pppwire::IpcpFacts { malformed: true, ..hal::pppwire::IPCP0 } })
+}
+
+#[cfg(feature = "mctls")]
+fn wan_chap(data: &[u8]) -> Option<hal::pppwire::ChapChallenge> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::chap_challenge(data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::CHAP_LEN }>(hal::lansvcabi::CMD_WAN_CHAP, &[], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_chap(&o) } else { hal::pppwire::CHAP0 })
+}
+#[cfg(feature = "mctls")]
+fn wan_ip6cp(data: &[u8]) -> Option<hal::pppwire::Ip6cpReq> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::ip6cp_req(data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::IP6CP_LEN }>(hal::lansvcabi::CMD_WAN_IP6CP, &[], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_ip6cp(&o) } else { hal::pppwire::Ip6cpReq { malformed: true, ..hal::pppwire::IP6CP0 } })
+}
+
+#[cfg(feature = "mctls")]
+fn wan_lcp_peer(code: u8, data: &[u8]) -> Option<hal::pppwire::LcpPeer> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::pppwire::lcp_peer(code, data));
+    }
+    let (st, o) = wan_call::<{ hal::pppwire::LCPPEER_LEN }>(hal::lansvcabi::CMD_WAN_LCP_PEER, &[code], data)?;
+    Some(if st == hal::lansvcabi::ST_OK { hal::pppwire::decode_lcp_peer(&o) } else { hal::pppwire::LCPPEER0 })
+}
+
+#[cfg(feature = "mctls")]
+fn sta_eapol(e: &[u8], sta: &[u8; 6], secure: bool, replay: u64) -> Option<Option<usize>> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::eapolwire::eapol_key(e, sta, secure, replay));
+    }
+    let mut pre = [0u8; 15];
+    pre[..6].copy_from_slice(sta);
+    pre[6] = secure as u8;
+    pre[7..15].copy_from_slice(&replay.to_le_bytes());
+    let (st, o) = wan_call::<3>(hal::lansvcabi::CMD_STA_EAPOL, &pre, e)?;
+    Some((st == hal::lansvcabi::ST_OK && o[0] != 0).then(|| u16::from_le_bytes([o[1], o[2]]) as usize))
+}
+#[cfg(feature = "mctls")]
+fn sta_mfpc(m2: &[u8], body_off: usize) -> Option<bool> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::eapolwire::m2_mfpc(m2, body_off));
+    }
+    let (st, o) = wan_call::<1>(hal::lansvcabi::CMD_STA_MFPC, &(body_off.min(0xffff) as u16).to_le_bytes(), m2)?;
+    Some(st == hal::lansvcabi::ST_OK && o[0] != 0)
+}
+
 /// Route the DHCP server's parse (step 2b) and the WAN control parsers (step 3) through `el0-lansvc` (called once
 /// at boot, before any client is served or the uplink comes up).
 pub fn install_dhcp() {
@@ -364,6 +446,14 @@ pub fn install_dhcp() {
         arch_aarch64::wanparse::EL0_DHCP_REPLY = Some(wan_dhcp_reply);
         arch_aarch64::wanparse::EL0_RA = Some(wan_ra);
         arch_aarch64::wanparse::EL0_DHCP6 = Some(wan_dhcp6);
+        arch_aarch64::wanparse::EL0_PPPOE_DISC = Some(wan_pppoe_disc);
+        arch_aarch64::wanparse::EL0_LCP = Some(wan_lcp);
+        arch_aarch64::wanparse::EL0_IPCP = Some(wan_ipcp);
+        arch_aarch64::wanparse::EL0_CHAP = Some(wan_chap);
+        arch_aarch64::wanparse::EL0_IP6CP = Some(wan_ip6cp);
+        arch_aarch64::wanparse::EL0_EAPOL = Some(sta_eapol);
+        arch_aarch64::wanparse::EL0_LCP_PEER = Some(wan_lcp_peer);
+        arch_aarch64::wanparse::EL0_MFPC = Some(sta_mfpc);
     };
 }
 
@@ -498,12 +588,70 @@ pub fn selftest() -> bool {
     let mut rbad = ra;
     rbad[42] ^= 1;
     let junk = wanparse::ra(&rbad).is_none() && wanparse::dhcp6(&ra, 7).is_none() && wanparse::dhcp6(&[0x60; 3], 7).is_none();
-    let wan_ok = same_offer && other_xid && same_ra && junk;
+    // D4 step 3b: a PADO's tags (host-uniq, cookie, AC-name, an error tag) walk to the same facts in EL0
+    let mut pf = [0u8; 120];
+    pf[12] = 0x88;
+    pf[13] = 0x63;
+    pf[14] = 0x11;
+    pf[15] = 0x07;
+    let tags: &[u8] = &[0x01, 0x03, 0, 4, 0xde, 0xad, 0xbe, 0xef, 0x01, 0x04, 0, 3, b'c', b'k', b'1', 0x01, 0x02, 0, 2, b'A', b'C', 0x02, 0x03, 0, 0];
+    pf[20..20 + tags.len()].copy_from_slice(tags);
+    pf[18..20].copy_from_slice(&(tags.len() as u16).to_be_bytes());
+    let (k, e) = (hal::pppwire::disc_tags(&pf, tags.len()), wanparse::pppoe_disc(&pf, tags.len()));
+    let pppoe = k == e && e.hu_len == 4 && e.host_uniq[..4] == [0xde, 0xad, 0xbe, 0xef] && e.cookie[..e.cookie_len as usize] == *b"ck1"
+        && e.ac_name[..e.ac_name_len as usize] == *b"AC" && e.err;
+    // 3b-ii: an LCP Configure-Request (MRU, auth PAP, an unknown option 0x0d) classifies identically
+    let lcp_in: &[u8] = &[1, 4, 0x05, 0xd4, 3, 4, 0xc0, 0x23, 0x0d, 3, 6];
+    let (lk, le) = (hal::pppwire::lcp_classify(lcp_in), wanparse::lcp_req(lcp_in));
+    let lcp = lk == le && le.auth == 0xc023 && le.nrej == 3 && le.rej[..3] == [0x0d, 3, 6] && wanparse::lcp_req(&[3, 1]).malformed;
+    // 3b-iii: an IPCP Configure-Nak (our address, DNS 1 + 2) and a Request with VJ compression (rejected) classify
+    // identically
+    let nak_in: &[u8] = &[3, 6, 10, 67, 0, 10, 129, 6, 1, 1, 1, 1, 131, 6, 9, 9, 9, 9];
+    let req_in: &[u8] = &[2, 6, 0, 0x2d, 0x0f, 1, 3, 6, 10, 67, 0, 1];
+    let ipcp = hal::pppwire::ipcp_facts(3, nak_in) == wanparse::ipcp(3, nak_in) && wanparse::ipcp(3, nak_in).dns2 == Some([9, 9, 9, 9])
+        && hal::pppwire::ipcp_facts(1, req_in) == wanparse::ipcp(1, req_in) && wanparse::ipcp(1, req_in).nrej == 6
+        && wanparse::ipcp(1, req_in).peer == Some([10, 67, 0, 1]);
+    // 3b-iv: a CHAP Challenge (16-byte value + name) and an IPv6CP Request (IID + an unknown option) identically
+    let ch_in: &[u8] = &[16, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, b'A', b'C'];
+    let i6_in: &[u8] = &[1, 10, 0, 0, 0, 0, 0, 0, 0, 1, 2, 4, 0, 0];
+    let ppp4 = hal::pppwire::chap_challenge(ch_in) == wanparse::chap(ch_in) && wanparse::chap(ch_in).vs == 16 && !wanparse::chap(&[70, 1]).ok
+        && hal::pppwire::ip6cp_req(i6_in) == wanparse::ip6cp(i6_in) && wanparse::ip6cp(i6_in).nrej == 4 && wanparse::ip6cp(i6_in).peer_iid[7] == 1;
+    let pppoe = pppoe && lcp && ipcp && ppp4;
+    // step 5a: an EAPOL-Key M2 (pairwise + MIC, replay 1, RSNE with MFP-capable) classifies identically; another
+    // station / a stale replay counter is not ours
+    let sta = [2u8, 0, 0, 0, 0, 0x5a];
+    let mut ek = [0u8; 160];
+    ek[6..12].copy_from_slice(&sta);
+    ek[12] = 0x88;
+    ek[13] = 0x8e;
+    ek[15] = 3;
+    ek[16..18].copy_from_slice(&(141u16).to_be_bytes()); // 802.1X body length
+    ek[19..21].copy_from_slice(&(0x010au16).to_be_bytes()); // key info: pairwise | MIC, ver 2
+    ek[23..31].copy_from_slice(&1u64.to_be_bytes());
+    let kd_at = 18 + 93;
+    ek[kd_at..kd_at + 2].copy_from_slice(&22u16.to_be_bytes());
+    ek[kd_at + 2..kd_at + 24].copy_from_slice(&[0x30, 20, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 4, 1, 0, 0, 0x0f, 0xac, 2, 0x80, 0]);
+    let sta_ok = hal::eapolwire::eapol_key(&ek, &sta, false, 1) == wanparse::eapol_key(&ek, &sta, false, 1)
+        && wanparse::eapol_key(&ek, &sta, false, 1) == Some(145) && wanparse::eapol_key(&ek, &[9; 6], false, 1).is_none()
+        && wanparse::eapol_key(&ek, &sta, false, 2).is_none() && {
+            // metal batch 62: the AP hands the rest of its SDPCM buffer, longer than the EL0 input window
+            let mut big = [0u8; 3000];
+            big[..160].copy_from_slice(&ek);
+            wanparse::eapol_key(&big, &sta, false, 1) == Some(145)
+        } && wanparse::m2_mfpc(&ek[14..], 4) && hal::eapolwire::m2_mfpc(&ek[14..], 4);
+    // 3b-v: the AC's Nak (MRU 1400 + magic) and Reject (MRU + magic) of our LCP request classify identically
+    let lnak = [1u8, 4, 0x05, 0x78, 5, 6, 1, 2, 3, 4];
+    let lcp_peer_ok = hal::pppwire::lcp_peer(3, &lnak) == wanparse::lcp_peer(3, &lnak)
+        && wanparse::lcp_peer(3, &lnak) == hal::pppwire::LcpPeer { mru: Some(1400), magic_nak: true, rej_mru: false, rej_magic: false }
+        && wanparse::lcp_peer(4, &lnak) == hal::pppwire::LcpPeer { mru: None, magic_nak: false, rej_mru: true, rej_magic: true }
+        && wanparse::lcp_peer(3, &[1, 9, 0]) == hal::pppwire::LCPPEER0;
+    let wan_ok_extra = sta_ok && lcp_peer_ok;
+    let wan_ok = same_offer && other_xid && same_ra && junk && pppoe && wan_ok_extra;
     let (_, c_after, _, _, _) = stats();
     let pass = where_ == "el0" && same_q && same_w && bad && recovered && same_d && bad_d && wan_ok && c_after > 0;
     arch_aarch64::_print(format_args!(
-        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={}\n",
-        if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk
+        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak + CHAP Challenge + IPv6CP Request classification identical, 3b-v the AC's LCP Nak/Reject identical, 5a EAPOL-Key M2 + RSNE MFP identical={}\n",
+        if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe
     ));
     pass
 }

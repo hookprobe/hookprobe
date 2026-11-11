@@ -44,6 +44,22 @@ pub const CMD_WAN_DHCP_REPLY: u32 = 4;
 pub const CMD_WAN_RA: u32 = 5;
 /// IN = `xid[4] LE` + a bare IPv6 packet. OUT = `ip6::DHCP6_LEN` (ST_NONE = not ours / invalid).
 pub const CMD_WAN_DHCP6: u32 = 6;
+/// D4 step 3b: IN = `plen u16 LE` + a PPPoE discovery frame (PADO / PADS). OUT = `pppwire::DISC_LEN`.
+pub const CMD_WAN_PPPOE_DISC: u32 = 7;
+/// D4 step 3b-ii: IN = an LCP Configure-Request's option bytes. OUT = `pppwire::LCP_LEN`.
+pub const CMD_WAN_LCP_REQ: u32 = 8;
+/// D4 step 3b-iii: IN = `code u8` + IPCP option bytes. OUT = `pppwire::IPCP_LEN`.
+pub const CMD_WAN_IPCP: u32 = 9;
+/// D4 step 3b-iv: IN = a CHAP Challenge's bytes after code/id/length. OUT = `pppwire::CHAP_LEN`.
+pub const CMD_WAN_CHAP: u32 = 10;
+/// IN = an IPv6CP Configure-Request's option bytes. OUT = `pppwire::IP6CP_LEN`.
+pub const CMD_WAN_IP6CP: u32 = 11;
+/// D4 step 3b-v: IN = `code u8` + the AC's LCP Nak / Reject data. OUT = `pppwire::encode_lcp_peer`.
+pub const CMD_WAN_LCP_PEER: u32 = 14;
+/// D4 step 5a: IN = `sta[6] secure u8 replay u64 LE` + an Ethernet frame. OUT = `[ok u8][n u16 LE]`.
+pub const CMD_STA_EAPOL: u32 = 12;
+/// IN = `body_off u16 LE` + an M2 802.1X frame. OUT = `[mfpc u8]`.
+pub const CMD_STA_MFPC: u32 = 13;
 /// Self-test only (kernel-issued at boot): the server faults on purpose, proving the D5 reset path.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 

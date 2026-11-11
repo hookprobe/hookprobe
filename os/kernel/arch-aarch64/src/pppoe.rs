@@ -309,37 +309,25 @@ impl Pppoe {
 
     /// Walk the discovery tags of `f` (payload from 20, `plen` bytes). Returns (host_uniq_ok, error).
     fn read_tags(&mut self, f: &[u8], plen: usize, keep: bool) -> (bool, bool) {
-        let end = (20 + plen).min(f.len());
-        let mut o = 20;
-        let (mut hu_ok, mut err) = (false, false);
-        while o + 4 <= end {
-            let (t, l) = (be16(f, o), be16(f, o + 2) as usize);
-            let v0 = o + 4;
-            if v0 + l > end {
-                break;
+        // ADR 0050 D4 step 3b: the tag walk runs in EL0 (el0-lansvc) when it is loaded; the decisions stay here
+        let d = crate::wanparse::pppoe_disc(f, plen);
+        let hu_ok = d.hu_len as usize == self.host_uniq.len() && d.host_uniq[..self.host_uniq.len()] == self.host_uniq;
+        if keep {
+            // only tags that were present overwrite (as the old in-place walk did)
+            if d.cookie_len > 0 {
+                self.cookie_len = d.cookie_len as usize;
+                self.cookie[..self.cookie_len].copy_from_slice(&d.cookie[..self.cookie_len]);
             }
-            let v = &f[v0..v0 + l];
-            match t {
-                TAG_END => break,
-                TAG_HOST_UNIQ => hu_ok = v == self.host_uniq,
-                TAG_AC_COOKIE if keep => {
-                    self.cookie_len = l.min(64);
-                    self.cookie[..self.cookie_len].copy_from_slice(&v[..self.cookie_len]);
-                }
-                TAG_RELAY_SID if keep => {
-                    self.relay_len = l.min(64);
-                    self.relay[..self.relay_len].copy_from_slice(&v[..self.relay_len]);
-                }
-                TAG_AC_NAME if keep => {
-                    self.ac_name_len = l.min(32);
-                    self.ac_name[..self.ac_name_len].copy_from_slice(&v[..self.ac_name_len]);
-                }
-                TAG_SERVICE_NAME_ERR | TAG_AC_SYSTEM_ERR | TAG_GENERIC_ERR => err = true,
-                _ => {}
+            if d.relay_len > 0 {
+                self.relay_len = d.relay_len as usize;
+                self.relay[..self.relay_len].copy_from_slice(&d.relay[..self.relay_len]);
             }
-            o = v0 + l;
+            if d.ac_name_len > 0 {
+                self.ac_name_len = d.ac_name_len as usize;
+                self.ac_name[..self.ac_name_len].copy_from_slice(&d.ac_name[..self.ac_name_len]);
+            }
         }
-        (hu_ok, err)
+        (hu_ok, d.err)
     }
 
     // ── session framing ────────────────────────────────────────────────────────────────────
@@ -456,24 +444,12 @@ impl Pppoe {
             CONF_REQ => {
                 self.stats.ip6cp_req_rx += 1;
                 // Accept the peer's Interface-Identifier unless it is zero or equals ours (RFC 5072
-                // §4.1: Nak with a different one); reject every other option.
-                let mut rej = [0u8; 64];
-                let mut nrej = 0;
-                let mut peer = [0u8; 8];
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        return;
-                    }
-                    if t == 1 && l == 10 {
-                        peer.copy_from_slice(&data[o + 2..o + 10]);
-                    } else if nrej + l <= rej.len() {
-                        rej[nrej..nrej + l].copy_from_slice(&data[o..o + l]);
-                        nrej += l;
-                    }
-                    o += l;
+                // §4.1: Nak with a different one); reject every other option. D4 step 3b-iv: the walk runs in EL0.
+                let r = crate::wanparse::ip6cp(data);
+                if r.malformed {
+                    return;
                 }
+                let (rej, nrej, peer) = (r.rej, r.nrej as usize, r.peer_iid);
                 if nrej > 0 {
                     self.send_ctl(tx, PPP_IPV6CP, CONF_REJ, id, &rej[..nrej]);
                 } else if peer == [0; 8] || peer == self.my_iid {
@@ -744,42 +720,13 @@ impl Pppoe {
             }
             CONF_REQ => {
                 self.stats.lcp_req_rx += 1;
-                // Classify every option: Reject unknown/unsupported, Nak an auth we cannot do.
-                let mut rej = [0u8; 128];
-                let mut nrej = 0;
-                let mut nak = [0u8; 16];
-                let mut nnak = 0;
-                let mut auth = 0u16;
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        return; // malformed: silently drop (RFC 1661)
-                    }
-                    let opt = &data[o..o + l];
-                    match t {
-                        1 | 2 | 5 => {} // MRU, ACCM (meaningless on PPPoE, harmless), Magic
-                        3 if l >= 4 => {
-                            let ap = be16(opt, 2);
-                            if ap == PPP_PAP && l == 4 {
-                                auth = PPP_PAP;
-                            } else if ap == PPP_CHAP && l == 5 && opt[4] == 5 {
-                                auth = PPP_CHAP;
-                            } else if nnak == 0 {
-                                // Suggest CHAP-MD5 (RFC 1994) instead.
-                                nak[..5].copy_from_slice(&[3, 5, 0xc2, 0x23, 5]);
-                                nnak = 5;
-                            }
-                        }
-                        _ => {
-                            if nrej + l <= rej.len() {
-                                rej[nrej..nrej + l].copy_from_slice(opt);
-                                nrej += l;
-                            }
-                        }
-                    }
-                    o += l;
+                // ADR 0050 D4 step 3b-ii: the option walk runs in EL0 (el0-lansvc) when it is loaded; the reply is built
+                // from the classified record (rejected options copied out of it), never by re-reading the frame here
+                let c = crate::wanparse::lcp_req(data);
+                if c.malformed {
+                    return; // malformed: silently drop (RFC 1661)
                 }
+                let (rej, nrej, nak, nnak, auth) = (c.rej, c.nrej as usize, c.nak, c.nnak as usize, c.auth);
                 if nrej > 0 {
                     self.send_ctl(tx, PPP_LCP, CONF_REJ, id, &rej[..nrej]);
                     self.stats.lcp_nak_rej_tx += 1;
@@ -797,35 +744,24 @@ impl Pppoe {
                 self.lcp_ack_rx = true;
                 self.lcp_maybe_open(now_ms, tx);
             }
+            // D4 step 3b-v: the AC's Nak / Reject of our request is walked in EL0; the kernel applies the record
             CONF_NAK if id == self.lcp_id && self.phase == Phase::Lcp => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    match t {
-                        1 if l == 4 => self.mru = be16(data, o + 2).min(PPPOE_MTU),
-                        5 if l == 6 => self.magic = self.magic.rotate_left(7) ^ 0x5a5a_a5a5,
-                        _ => {}
-                    }
-                    o += l;
+                let f = crate::wanparse::lcp_peer(CONF_NAK, data);
+                if let Some(m) = f.mru {
+                    self.mru = m.min(PPPOE_MTU);
+                }
+                if f.magic_nak {
+                    self.magic = self.magic.rotate_left(7) ^ 0x5a5a_a5a5;
                 }
                 self.send_lcp_req(now_ms, tx);
             }
             CONF_REJ if id == self.lcp_id && self.phase == Phase::Lcp => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    match t {
-                        1 => self.send_mru = false,
-                        5 => self.send_magic = false,
-                        _ => {}
-                    }
-                    o += l;
+                let f = crate::wanparse::lcp_peer(CONF_REJ, data);
+                if f.rej_mru {
+                    self.send_mru = false;
+                }
+                if f.rej_magic {
+                    self.send_magic = false;
                 }
                 self.send_lcp_req(now_ms, tx);
             }
@@ -876,18 +812,17 @@ impl Pppoe {
         }
         match code {
             1 => {
-                // Challenge: value-size, value, name. Response = MD5(id || secret || challenge).
-                if data.is_empty() {
+                // Challenge: value-size, value, name. Response = MD5(id || secret || challenge). D4 step 3b-iv: the
+                // parse runs in EL0; the secret and the MD5 never leave the kernel
+                let c = crate::wanparse::chap(data);
+                if !c.ok {
                     return;
                 }
-                let vs = data[0] as usize;
-                if 1 + vs > data.len() || vs > 64 {
-                    return;
-                }
+                let vs = c.vs as usize;
                 let mut m = [0u8; 1 + 64 + 64];
                 m[0] = id;
                 m[1..1 + self.plen].copy_from_slice(&self.pass[..self.plen]);
-                m[1 + self.plen..1 + self.plen + vs].copy_from_slice(&data[1..1 + vs]);
+                m[1 + self.plen..1 + self.plen + vs].copy_from_slice(&c.value[..vs]);
                 let h = hal::md5(&m[..1 + self.plen + vs]);
                 let mut d = [0u8; 1 + 16 + 64];
                 d[0] = 16;
@@ -915,29 +850,19 @@ impl Pppoe {
             return;
         }
         match code {
+            // ADR 0050 D4 step 3b-iii: the IPCP option walks run in EL0 (el0-lansvc) when it is loaded; the engine acts
+            // on the classified record (rejected options copied out of it)
             CONF_REQ => {
-                // The peer's own address (option 3); reject anything else (e.g. VJ compression).
-                let mut rej = [0u8; 64];
-                let mut nrej = 0;
-                let mut peer = self.peer_ip;
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        return;
-                    }
-                    if t == 3 && l == 6 {
-                        peer.copy_from_slice(&data[o + 2..o + 6]);
-                    } else if nrej + l <= rej.len() {
-                        rej[nrej..nrej + l].copy_from_slice(&data[o..o + l]);
-                        nrej += l;
-                    }
-                    o += l;
+                let f = crate::wanparse::ipcp(CONF_REQ, data);
+                if f.malformed {
+                    return;
                 }
-                if nrej > 0 {
-                    self.send_ctl(tx, PPP_IPCP, CONF_REJ, id, &rej[..nrej]);
+                if f.nrej > 0 {
+                    self.send_ctl(tx, PPP_IPCP, CONF_REJ, id, &f.rej[..f.nrej as usize]);
                 } else {
-                    self.peer_ip = peer;
+                    if let Some(p) = f.peer {
+                        self.peer_ip = p;
+                    }
                     self.send_ctl(tx, PPP_IPCP, CONF_ACK, id, data);
                     self.ipcp_ack_tx = true;
                     self.ipcp_maybe_open();
@@ -948,38 +873,25 @@ impl Pppoe {
                 self.ipcp_maybe_open();
             }
             CONF_NAK if id == self.ipcp_id => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    if l == 6 {
-                        let v = [data[o + 2], data[o + 3], data[o + 4], data[o + 5]];
-                        match t {
-                            3 => self.my_ip = v,
-                            129 => self.dns1 = v,
-                            131 => self.dns2 = v,
-                            _ => {}
-                        }
-                    }
-                    o += l;
+                let f = crate::wanparse::ipcp(CONF_NAK, data);
+                if let Some(v) = f.my_ip {
+                    self.my_ip = v;
+                }
+                if let Some(v) = f.dns1 {
+                    self.dns1 = v;
+                }
+                if let Some(v) = f.dns2 {
+                    self.dns2 = v;
                 }
                 self.send_ipcp_req(now_ms, tx);
             }
             CONF_REJ if id == self.ipcp_id => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    match t {
-                        129 => self.want_dns1 = false,
-                        131 => self.want_dns2 = false,
-                        _ => {}
-                    }
-                    o += l;
+                let f = crate::wanparse::ipcp(CONF_REJ, data);
+                if f.rej_dns1 {
+                    self.want_dns1 = false;
+                }
+                if f.rej_dns2 {
+                    self.want_dns2 = false;
                 }
                 self.send_ipcp_req(now_ms, tx);
             }

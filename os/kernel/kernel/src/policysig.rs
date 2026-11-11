@@ -148,10 +148,28 @@ pub fn wansig_selftest() -> bool {
     let tamper = verify_wan(&tampered, &mk(b"HQNSIG1\0", b"HQWAN1", &kp), &kp.pk) == Err(SigErr::DigestMismatch);
     let cross = verify_wan(&body, &mk(b"HQNSIG1\0", b"HQWIF1", &kp), &kp.pk) == Err(SigErr::BadSignature);
     let wrongkey = verify_wan(&body, &mk(b"HQNSIG1\0", b"HQWAN1", &other), &kp.pk) == Err(SigErr::BadSignature);
-    let pass = good && tamper && cross && wrongkey;
+    // SEC 2026-11-10 (peer finding): lines APPENDED after the signed length still verify (the digest covers
+    // [..len]) — so the parsers must read exactly [..len]: the appended override is invisible there, while the old
+    // whole-sector parse would have applied it. And a key given twice is refused outright.
+    let signed = b"HQWAN1\nmode=dhcp\n";
+    let mut sector = [0u8; 512];
+    sector[..signed.len()].copy_from_slice(signed);
+    let extra = b"mode=static\nip=203.0.113.9/30\ngw=203.0.113.10\nvlan=4000\n";
+    sector[signed.len()..signed.len() + extra.len()].copy_from_slice(extra);
+    let ssig = crate::artstore::test_sig(b"HQNSIG1\0", b"HQWAN1", 4, signed, &kp);
+    let still_verifies = verify_wan(&sector, &ssig, &kp.pk) == Ok(4);
+    let len = u64::from_le_bytes(ssig[16..24].try_into().unwrap()) as usize;
+    let appended = still_verifies && len == signed.len()
+        && hal::parse_wan_cfg(&sector[..len]) == Ok(hal::WanMode::Dhcp)
+        && hal::parse_wan_link(&sector[..len]).is_ok_and(|l| l.vlan == 0)
+        && hal::parse_wan_cfg(&sector) == Err(hal::WanCfgErr::Duplicate);
+    let dup = hal::parse_wan_cfg(b"HQWAN1\nmode=dhcp\nmode=static\n") == Err(hal::WanCfgErr::Duplicate)
+        && hal::parse_wan_link(b"HQWAN1\nvlan=100\n# x\nvlan = 4000\n") == Err(hal::WanCfgErr::Duplicate)
+        && hal::parse_wan_cfg(b"HQWAN1\nmode=dhcp\nvlan=100\nmgmt_vlan=200\n") == Ok(hal::WanMode::Dhcp);
+    let pass = good && tamper && cross && wrongkey && appended && dup;
     arch_aarch64::_print(format_args!(
-        " [P-wansig] {} — WAN.TXT signature (audit finding 11): signed file verifies={} a widened mgmt_floor after signing refused={} a WIFI-tagged signature refused={} another key refused={}\n",
-        if pass { "PASS" } else { "FAIL" }, good, tamper, cross, wrongkey));
+        " [P-wansig] {} — WAN.TXT signature (audit finding 11): signed file verifies={} a widened mgmt_floor after signing refused={} a WIFI-tagged signature refused={} another key refused={} | lines appended after the signed length never reach the parser={} a key given twice is refused={}\n",
+        if pass { "PASS" } else { "FAIL" }, good, tamper, cross, wrongkey, appended, dup));
     pass
 }
 

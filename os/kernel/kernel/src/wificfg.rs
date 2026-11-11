@@ -168,6 +168,10 @@ pub fn check_sig(sig: &[u8], key: &[u8; 32], body: &[u8]) -> Option<(u64, usize)
 
 /// Boot: WIFI.TXT (≤ 1 KiB) [+ WIFI.SIG when an operator key is compiled in]. None = no file (defaults).
 pub fn load<D: hal::BlockDev>(dev: &D) -> Option<Result<WifiCfg, CfgErr>> {
+    // ADR 0059 step 3: the wifi section of the HQCFG1 bundle in force (verified by cfgd)
+    if let Some(w) = crate::cfgd::section(crate::cfgbundle::KIND_WIFI) {
+        return Some(parse(w));
+    }
     let mut sec = [0u8; 512];
     dev.read_block(0, &mut sec).ok()?;
     let p1 = crate::store::parse_mbr(&sec)[0].start;
@@ -187,13 +191,23 @@ pub fn load<D: hal::BlockDev>(dev: &D) -> Option<Result<WifiCfg, CfgErr>> {
         let keys = crate::policysig::config_keys(crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wifi));
         let ok = crate::artstore::locate(dev, p1, b"WIFI    SIG")
             .and_then(|(l, _)| dev.read_block(l, &mut sig).ok())
-            .and_then(|_| keys.iter().flatten().find_map(|k| check_sig(&sig, k, &buf)));
+            .and_then(|_| keys.iter().flatten().find_map(|k| check_sig(&sig, k, &buf)))
+            // ADR 0059 Phase 0.3: a generation below the WIFI floor is a replay — refused like a bad signature
+            .filter(|&(g, _)| {
+                #[cfg(feature = "p15-write")]
+                if let Err(floor) = crate::anchor::accept_cfg(crate::anchor::CfgTy::Wifi, g, crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wifi)) {
+                    arch_aarch64::_print(format_args!(" [WIFI] WIFI.TXT generation {} is below the floor {} — a replayed older file, REFUSED\n", g, floor));
+                    return false;
+                }
+                let _ = g;
+                true
+            });
         match ok {
             Some((_, len)) => body = &buf[..len],
             None => {
                 // ADR 0058: a refused staged copy falls back to the boot partition's WIFI.TXT for this boot
-                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wifi) {
-                    crate::artstore::disable(crate::artstore::Ty::Wifi);
+                // ADR 0059 Phase 0.4: active half -> the other (previous) half -> the boot-partition copy
+                if crate::artstore::fallback_step(dev, p1, crate::artstore::Ty::Wifi) {
                     return load(dev);
                 }
                 return Some(Err(CfgErr::Missing("valid WIFI.SIG")));

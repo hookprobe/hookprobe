@@ -229,6 +229,11 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
     if artstore::key_for(ty).is_none() {
         return Err("no operator key in this image: unsigned packs are never accepted over the network");
     }
+    // ADR 0059: while an HQCFG1 bundle is in force its sections win over the per-file WAN / Wi-Fi / POLICY — a
+    // per-file upload would be silently ignored (metal batch 60). Refuse it, and say what to do instead.
+    if matches!(ty, Ty::Wan | Ty::Wifi | Ty::Policy) && dev().and_then(|d| artstore::entry(&*d, Ty::Config)).is_some_and(|e| e.half != 0) {
+        return Err("a configuration bundle is in force: change this with a new bundle (type config), or roll the bundle back first");
+    }
     #[cfg(feature = "p15-write")]
     if os && !(crate::otaimg::IMG_MIN..=crate::otaimg::IMG_MAX).contains(&size) {
         return Err("size");
@@ -358,6 +363,9 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     if len + 512 > u.size {
         return Err("file shorter than its signature says");
     }
+    if u.ty == Ty::Config && !artstore::config_mgmt_ok() {
+        return Err("refused: this configuration would leave no management path (HTTPS to the device on LAN / Wi-Fi, eth1 or the management VLAN)");
+    }
     let active = artstore::active_gen(&*d, p1(d), u.ty);
     if gen < active {
         return Err("rollback refused: generation older than the active pack");
@@ -396,6 +404,28 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
         return Err("re-authentication failed");
     }
+    activate_by_id(crate::mcauth::session_tag(c.session), c.now_ms, id.unwrap_or(0))
+}
+
+/// The type of the caller's VERIFIED upload `id` (None = unknown / not the caller's / not verified).
+pub fn verified_type(tag: [u8; 4], id: u64) -> Option<Ty> {
+    match up() {
+        Some(u) if u.id == id && u.session == tag && u.phase == Phase::Verified && !u.os => Some(u.ty),
+        _ => None,
+    }
+}
+
+/// Activate the caller's VERIFIED upload `id` (ADR 0059 step 4b: one path for Mission Control after its guards +
+/// re-authentication, and for the management ABI's CFG_STAGE after the kernel's role check). The upload must belong
+/// to the caller's session (`tag`).
+pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &'static str> {
+    let u = match up() {
+        Some(u) if u.id == id && u.session == tag => u,
+        _ => return Err("unknown upload id"),
+    };
+    if u.phase != Phase::Verified {
+        return Err("not verified (finish first)");
+    }
     let d = dev().ok_or("no artifact store")?;
     let (slo, _) = staging(d).ok_or("no staging region")?;
     #[cfg(feature = "p15-write")]
@@ -411,14 +441,14 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
                 if plan.active == b'a' { 'b' } else { 'a' }, plan.hash[0], plan.hash[1], plan.hash[2], plan.hash[3], plan.hash[4], plan.hash[5], plan.hash[6], plan.hash[7]);
             w.len
         };
-        let tag = crate::mcauth::session_tag(c.session);
+        let tag = tag;
         return match crate::otaimg::install(d, slo, &plan) {
             Ok(()) => {
                 unsafe { TRIAL_REBOOT = true };
-                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, c.now_ms), staged: true })
+                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true })
             }
             Err(e) => {
-                let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, c.now_ms);
+                let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, now_ms);
                 Err(e)
             }
         };
@@ -429,7 +459,11 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     let old = artstore::active_gen(&*d, p1(d), ty);
     // the content digest inside the signature sector: POLICY.SIG has no length field (digest at 16..48, over the
     // whole 4 KiB file); every other format carries len at 16..24 and the digest at 24..56
-    let digest: [u8; 32] = if ty == Ty::Policy { sig[16..48].try_into().unwrap() } else { sig[24..56].try_into().unwrap() };
+    let digest: [u8; 32] = match ty {
+        Ty::Policy => sig[16..48].try_into().unwrap(),
+        Ty::Config => sig[13..45].try_into().unwrap(), // HQCSIG1: sha256(bundle) at 13..45
+        _ => sig[24..56].try_into().unwrap(),
+    };
     let res = artstore::activate(d, ty, &sig, slo + 1, gen, len, &digest);
     *up() = None;
     let mut reason = [0u8; 64];
@@ -439,11 +473,11 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
         let _ = write!(w, "gen {}->{} sha256:{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}", old, gen, digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], digest[6], digest[7]);
         w.len
     };
-    let tag = crate::mcauth::session_tag(c.session);
+    let tag = tag;
     match res {
-        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged() }),
+        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms), staged: ty.staged() }),
         Err(artstore::ActErr::LoaderRefused) => {
-            let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, c.now_ms);
+            let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, now_ms);
             Err("the loader refused the new pack — rolled back to the previous one")
         }
         Err(artstore::ActErr::NoStore) => Err("no artifact store"),
