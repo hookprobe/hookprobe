@@ -74,6 +74,11 @@ def canonical(kind, body):
             elif w[0] == b"interface" and len(w) >= 4:
                 key = tuple(w[:4])
             elif w[0] == b"route" and len(w) > 1:
+                # routing review 2026-11-11 (same rule as hal::policy + cfgbundle.rs): refuse routes forwarding can
+                # never honour — via lan|eth1, or IPv6 other than `via wan` without a gateway
+                v = w[w.index(b"via") + 1] if b"via" in w[:-1] else b""
+                if v in (b"lan", b"eth1") or (b":" in w[1] and (v != b"wan" or b"gw" in w)):
+                    raise ValueError(f"policy: route forwarding cannot honour: {ln[:60]!r}")
                 # (dst, from|any, via): metric-ordered failover through different interfaces is legitimate;
                 # a repeat through the same interface (only the metric differs) is a duplicate.
                 via = w[w.index(b"via") + 1] if b"via" in w[:-1] else b""
@@ -248,6 +253,14 @@ def vectors(outdir):
     same = build([("policy", b"route 0.0.0.0/0 via wan metric 10\nroute 10.9.0.0/16 via wan metric 99\n")], 11, pk)
     same = same.replace(b"route 10.9.0.0/16 via wan metric 99\n", b"route 0.0.0.0/0 via wan metric 9999\n")  # same length
     cases["duplicate-route-same-via"] = forged(same, "policy: repeated (b'route', b'0.0.0.0/0', b'any', b'wan')")
+    # built with a valid same-length line, then swapped (build() itself refuses the bad line)
+    for name, ok_line, body in (("route-via-lan-refused", b"route 10.30.0.0/16 via wan\n", b"route 10.30.0.0/16 via lan\n"),
+                                ("route-v6-via-mgmt-refused", b"route 2001:db8:11::/48 via wan\n", b"route 2001:db8:1::/48 via mgmt\n")):
+        assert len(ok_line) == len(body)
+        rb = build([("policy", ok_line)], 12, pk).replace(ok_line, body)
+        cases[name] = forged(rb, f"policy: route forwarding cannot honour: {body[:-1]!r}")
+    v6w = build([("policy", b"route 2001:db8:1::/48 via wan\n")], 12, pk)
+    cases["route-v6-via-wan-ok"] = {"bundle": v6w.hex(), "sig": sign(key, v6w).hex(), "expect": "ok", "floor": 0}
     # section byte ranges of the valid full bundle (offset from the start of the bundle)
     off, ranges = 48 + 4 * 3, []
     for k, b in sorted([("wan", wan), ("wifi", wifi), ("policy", pol)], key=lambda x: KINDS[x[0]]):

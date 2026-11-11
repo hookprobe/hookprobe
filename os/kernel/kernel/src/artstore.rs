@@ -348,7 +348,13 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
             match t {
                 Ty::Wan => crate::policysig::verify_wan(&buf[..n], sig, key).map(|g| (g, u64::from_le_bytes(sig[16..24].try_into().unwrap()))).map_err(|_| LoadErr::BadSignature),
                 Ty::Wifi => crate::wificfg::check_sig(sig, key, &buf[..n]).map(|(g, l)| (g, l as u64)).ok_or(LoadErr::BadSignature),
-                _ => crate::policysig::verify(&buf[..n], sig, key, crate::policysig::floor()).map(|g| (g, n as u64)).map_err(|_| LoadErr::BadSignature),
+                _ => {
+                    let r = crate::policysig::verify(&buf[..n], sig, key, crate::policysig::floor()).map(|g| (g, n as u64)).map_err(|_| LoadErr::BadSignature);
+                    if r.is_ok() {
+                        check_policy_parses(&buf[..n]);
+                    }
+                    r
+                }
             }
         }
         Ty::Config => {
@@ -367,6 +373,15 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
             // ADR 0059 D7: remember whether this bundle keeps a management path (upload finish refuses it if not)
             let ok = crate::cfgd::keeps_mgmt_path(v.section(crate::cfgbundle::KIND_POLICY));
             unsafe { CONFIG_MGMT_OK = ok };
+            unsafe { POLICY_REFUSED = None };
+            if let Some(sec) = v.section(crate::cfgbundle::KIND_POLICY) {
+                let mut f = [0u8; 4096];
+                if crate::cfgbundle::policy_file(sec, &mut f) {
+                    check_policy_parses(&f);
+                } else {
+                    unsafe { POLICY_REFUSED = Some(hal::policy::PolicyErr::Full(0)) };
+                }
+            }
             Ok((v.generation, len as u64))
         }
         Ty::Devices | Ty::Rules => {
@@ -508,6 +523,21 @@ fn commit<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), m: &Manifest, g:
 }
 
 static mut CONFIG_MGMT_OK: bool = true;
+/// Routing review 2026-11-11: a staged POLICY (per-file, or a bundle's policy section) must PARSE, not only verify —
+/// a signed policy the parser refuses would put the device into the management lockdown at the next boot.
+/// The result of the last `verify` that carried a policy (None = parses / no policy).
+static mut POLICY_REFUSED: Option<hal::policy::PolicyErr> = None;
+static mut PSCRATCH: hal::policy::Policy = hal::policy::Policy::new();
+fn check_policy_parses(file: &[u8]) {
+    let p = unsafe { &mut *core::ptr::addr_of_mut!(PSCRATCH) };
+    *p = hal::policy::Policy::new();
+    let r = hal::policy::parse_policy(file, p).err().filter(|e| *e != hal::policy::PolicyErr::Unsigned);
+    unsafe { POLICY_REFUSED = r };
+}
+/// Why the last staged policy would be refused at boot (upload finish refuses it now).
+pub fn policy_refused() -> Option<hal::policy::PolicyErr> {
+    unsafe { POLICY_REFUSED }
+}
 /// The management-path invariant of the last `config` bundle `verify` saw (ADR 0059 D7).
 pub fn config_mgmt_ok() -> bool {
     unsafe { CONFIG_MGMT_OK }
