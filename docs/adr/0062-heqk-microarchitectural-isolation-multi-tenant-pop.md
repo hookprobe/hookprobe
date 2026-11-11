@@ -47,7 +47,10 @@ Neither CM5 nor N100 has SMT (verify per SKU).
 **V0. Security eligibility is verified, never configured.**
 - No configuration input, signature, session, CLI command or AI proposal can set a mitigation
   state or assurance class to PASS.
-- HQCFG has no key for it; cfgd refuses one under the closed-key rule.
+- HQCFG has no key for it; cfgd refuses one under the closed-key rule. The implemented schema 1.0
+  accepts only the wan, wifi and policy sections and refuses any unknown kind or flag
+  (`os/kernel/kernel/src/cfgbundle.rs:17, 30-32, 167-171`). A mitigation section would need a schema
+  major bump, which the verifier refuses by default. V0 forbids defining one.
 - **Mitigation state is computed each boot** by the boot-signed kernel from:
   1. detection (ID registers / CPUID, `IA32_ARCH_CAPABILITIES`, `SMCCC_ARCH_FEATURES`);
   2. configured-state self-tests;
