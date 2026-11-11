@@ -56,6 +56,10 @@ pub const CMD_WAN_CHAP: u32 = 10;
 pub const CMD_WAN_IP6CP: u32 = 11;
 /// D4 step 3b-v: IN = `code u8` + the AC's LCP Nak / Reject data. OUT = `pppwire::encode_lcp_peer`.
 pub const CMD_WAN_LCP_PEER: u32 = 14;
+/// D4 step 5b: IN = `wpaauth::M2_PRE` prefix + the M2 802.1X frame. OUT = `[ok u8][ptk 48]`.
+pub const CMD_STA_M2: u32 = 15;
+/// IN = `wpaauth::M4_PRE` prefix + the M4 frame. OUT = `[ok u8]`.
+pub const CMD_STA_M4: u32 = 16;
 /// D4 step 5a: IN = `sta[6] secure u8 replay u64 LE` + an Ethernet frame. OUT = `[ok u8][n u16 LE]`.
 pub const CMD_STA_EAPOL: u32 = 12;
 /// IN = `body_off u16 LE` + an M2 802.1X frame. OUT = `[mfpc u8]`.
