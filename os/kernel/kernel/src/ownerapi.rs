@@ -50,7 +50,7 @@ pub fn audit_artifact(ty: &str, value: u8, reason: &[u8], session: [u8; 4], ms: 
     }
 }
 static mut PERSISTENT: bool = false;
-static mut LAST_REPLAY: oj::Replay = oj::Replay { records: 0, damaged: false, full: false };
+static mut LAST_REPLAY: oj::Replay = oj::Replay { records: 0, damaged: false, full: false, rollback: false, anchor: 0 };
 
 /// Install the persistent store (AP image boot): `dev` armed for `[lo, hi)`, keyed by the device SRK.
 #[cfg_attr(not(feature = "appersist"), allow(dead_code))]
@@ -189,6 +189,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
         return match res {
             Ok(seq) => Ok(Outcome { seq, ..preview }),
             Err(oj::JErr::Full) => refuse(c, "journal full"),
+            Err(oj::JErr::RolledBack) => refuse(c, "rolled back: this journal is older than its anchored state — a factory reset is required before new owner changes"),
             Err(_) => refuse(c, "storage error"),
         };
     }
@@ -300,6 +301,7 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
         Ok(seq) => Ok(Outcome { seq, ..preview }),
         Err(oj::JErr::Full) => refuse(c, "journal full"),
         Err(oj::JErr::TooManyRules) => refuse(c, "too many rules"),
+        Err(oj::JErr::RolledBack) => refuse(c, "rolled back: this journal is older than its anchored state — a factory reset is required before new owner changes"),
         Err(_) => refuse(c, "storage error"),
     }
 }
@@ -312,7 +314,10 @@ fn kind_name(k: u8) -> &'static str {
 pub fn render(w: &mut crate::mcstate::JsonBuf) {
     use core::fmt::Write;
     let (persistent, rp) = unsafe { (PERSISTENT, LAST_REPLAY) };
-    let _ = write!(w, "{{\"persistent\":{},\"journal\":{{\"records\":{},\"damaged\":{},\"full\":{}}},\"rules\":[", persistent, rp.records, rp.damaged, rp.full);
+    // D-RPMB: `rollback` = an older copy of the journal was restored (owner rules from it are not applied; a factory
+    // reset recovers); `anchor` = none | verified | caught_up | first | faulted
+    let anchor = ["none", "verified", "caught_up", "first", "faulted"].get(rp.anchor as usize).copied().unwrap_or("none");
+    let _ = write!(w, "{{\"persistent\":{},\"journal\":{{\"records\":{},\"damaged\":{},\"full\":{},\"rollback\":{},\"anchor\":\"{}\"}},\"rules\":[", persistent, rp.records, rp.damaged, rp.full, rp.rollback, anchor);
     let mut first = true;
     oj::for_each(&mut |r: &oj::Rule| {
         if !first {
@@ -433,6 +438,7 @@ pub fn rotate_owner_key(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, sa
             Ok(seq)
         }
         Err(oj::JErr::Full) => Err("journal full"),
+        Err(oj::JErr::RolledBack) => Err("rolled back: this journal is older than its anchored state — a factory reset is required before new owner changes"),
         Err(_) => Err("storage error"),
     }
 }
@@ -502,6 +508,7 @@ pub fn factory_reset(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Re
             Ok(seq)
         }
         Err(oj::JErr::Full) => Err("journal full"),
+        Err(oj::JErr::RolledBack) => Err("rolled back: this journal is older than its anchored state — a factory reset is required before new owner changes"),
         Err(_) => Err("storage error"),
     }
 }
@@ -769,6 +776,7 @@ pub fn alert_hook(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     match res {
         Ok(seq) => Ok(seq),
         Err(oj::JErr::Full) => Err("journal full"),
+        Err(oj::JErr::RolledBack) => Err("rolled back: this journal is older than its anchored state — a factory reset is required before new owner changes"),
         Err(_) => Err("storage error"),
     }
 }
