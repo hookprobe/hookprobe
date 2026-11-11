@@ -9439,11 +9439,16 @@ fn p8_l7behav() -> bool {
         && !rules::refire_ok(116, src9, 1000 + 100)
         && rules::refire_ok(117, src9, 1000 + 100)
         && rules::refire_ok(116, ip(10, 30, 0, 10), 1000 + 100)
-        && rules::refire_ok(116, src9, 1000 + rules::BEHAVIORAL_COOLDOWN_SECS);
+        // beaconing (116) holds an hour: a 5-minute beacon period re-alerts once an hour, not every period
+        && !rules::refire_ok(116, src9, 1000 + rules::BEHAVIORAL_COOLDOWN_SECS + 6)
+        && !rules::refire_ok(116, src9, 1000 + rules::BEACON_COOLDOWN_SECS - 1)
+        && rules::refire_ok(116, src9, 1000 + rules::BEACON_COOLDOWN_SECS)
+        // the other behavioral rules keep the 300-s window
+        && rules::refire_ok(117, src9, 1000 + 100 + rules::BEHAVIORAL_COOLDOWN_SECS);
     ok &= c_cool;
     rules::refire_reset();
-    kprint!("   REFIRE cooldown {}s per (rule, source): suppresses repeats, other rules/sources independent, re-arms after the window [{}]\n",
-        rules::BEHAVIORAL_COOLDOWN_SECS, if c_cool { "ok" } else { "BUG" });
+    kprint!("   REFIRE cooldown {}s per (rule, source), beaconing {}s: suppresses repeats, other rules/sources independent, re-arms after the window [{}]\n",
+        rules::BEHAVIORAL_COOLDOWN_SECS, rules::BEACON_COOLDOWN_SECS, if c_cool { "ok" } else { "BUG" });
 
     // === DNS analytics: a DGA-shaped + a tunneling-shaped QNAME fire -> Observe/PASS; a
     //     normal "www.google.com" does NOT. Full UDP:53 frame, QNAME parsed in-kernel. ===
