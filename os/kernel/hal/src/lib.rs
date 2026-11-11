@@ -761,6 +761,7 @@ pub mod tlsabi;
 pub mod lansvcabi;
 pub mod dhcpwire;
 pub mod pppwire;
+pub mod eapolwire;
 pub mod mgmtabi;
 pub mod hshabi;
 pub mod ip6;

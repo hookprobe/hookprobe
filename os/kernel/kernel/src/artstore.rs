@@ -297,6 +297,15 @@ pub fn locate<D: BlockDev>(dev: &D, p1: u64, name: &[u8; 11]) -> Option<(u64, u6
 
 /// The active generation of a type (store or FAT), 0 if none — the anti-rollback floor for an upload.
 pub fn active_gen<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> u64 {
+    // HQCSIG1 carries no generation at [8..16] (alg | total_len | digest — the generation lives inside the signed
+    // bundle): the manifest records it at activation. Metal batch 61: reading [8..16] gave a garbage "active"
+    // generation that refused every newer bundle.
+    if t == Ty::Config {
+        return match locate(dev, p1, t.info().sig) {
+            Some(_) => entry(dev, t).map(|e| e.gen).unwrap_or(0),
+            None => 0,
+        };
+    }
     match locate(dev, p1, t.info().sig) {
         Some((s, _)) => sig_gen(dev, s, t.info().magic).unwrap_or(0),
         None => 0,

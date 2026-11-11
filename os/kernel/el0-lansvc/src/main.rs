@@ -142,6 +142,23 @@ pub extern "C" fn _start() -> ! {
             out[..rec.len()].copy_from_slice(&rec);
             exit(ST_OK, rec.len())
         }
+        CMD_WAN_LCP_PEER if n >= 1 => {
+            let rec = hal::pppwire::encode_lcp_peer(&hal::pppwire::lcp_peer(dns[0], &dns[1..]));
+            out[..rec.len()].copy_from_slice(&rec);
+            exit(ST_OK, rec.len())
+        }
+        CMD_STA_EAPOL if n >= 15 => {
+            let sta: [u8; 6] = [dns[0], dns[1], dns[2], dns[3], dns[4], dns[5]];
+            let replay = u64::from_le_bytes([dns[7], dns[8], dns[9], dns[10], dns[11], dns[12], dns[13], dns[14]]);
+            let r = hal::eapolwire::eapol_key(&dns[15..], &sta, dns[6] != 0, replay);
+            out[0] = r.is_some() as u8;
+            out[1..3].copy_from_slice(&(r.unwrap_or(0).min(0xffff) as u16).to_le_bytes());
+            exit(ST_OK, 3)
+        }
+        CMD_STA_MFPC if n >= 2 => {
+            out[0] = hal::eapolwire::m2_mfpc(&dns[2..], u16::from_le_bytes([dns[0], dns[1]]) as usize) as u8;
+            exit(ST_OK, 1)
+        }
         CMD_SELFTEST_FAULT => unsafe { core::ptr::read_volatile(0x10 as *const u32) as usize as *const u8; core::ptr::write_volatile(0x8 as *mut u32, 1); exit(ST_OK, 0) },
         _ => exit(ST_BAD_CMD, 0),
     }

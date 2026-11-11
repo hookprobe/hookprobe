@@ -59,21 +59,9 @@ pub fn eapol_match(rx: &[u8], ch: u8, doff: usize, sta: &[u8; 6], secure: bool, 
     if eth + body + 95 > rx.len() {
         return None;
     }
-    if u16::from_be_bytes([rx[eth + 12], rx[eth + 13]]) != 0x888E || &rx[eth + 6..eth + 12] != &sta[..] {
-        return None;
-    }
-    let ki = u16::from_be_bytes([rx[eth + body + 1], rx[eth + body + 2]]);
-    let pairwise_mic_noack = ki & 0x0008 != 0 && ki & 0x0100 != 0 && ki & 0x0080 == 0;
-    if !pairwise_mic_noack || (ki & 0x0200 != 0) != secure {
-        return None;
-    }
-    let mut rc = [0u8; 8];
-    rc.copy_from_slice(&rx[eth + body + 5..eth + body + 13]);
-    if u64::from_be_bytes(rc) != replay {
-        return None; // stale (previous session / previous retransmit)
-    }
-    let x1 = u16::from_be_bytes([rx[eth + 16], rx[eth + 17]]) as usize;
-    let n = 4 + x1;
+    // ADR 0050 D4 step 5a: the EAPOL-Key classification runs in EL0 (el0-lansvc) when it is loaded; the length it
+    // returns is re-checked here against this buffer before anything is copied
+    let n = crate::wanparse::eapol_key(&rx[eth..], sta, secure, replay)?;
     if eth + 14 + n > rx.len() {
         return None;
     }

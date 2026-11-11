@@ -375,3 +375,55 @@ pub fn decode_ip6cp(o: &[u8; IP6CP_LEN]) -> Ip6cpReq {
     r.nrej = o[73].min(64);
     r
 }
+
+// ---- D4 step 3b-v: the AC's LCP Configure-Nak / Configure-Reject of OUR request ----
+
+/// What the access concentrator's Nak / Reject of our LCP Configure-Request says. The kernel decides what to do
+/// with it (clamp the MRU, rotate the magic, stop sending an option) and re-sends.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LcpPeer {
+    /// Nak: the MRU the AC suggests (raw; the kernel clamps it).
+    pub mru: Option<u16>,
+    /// Nak: the AC suggests another magic number (loop suspected).
+    pub magic_nak: bool,
+    /// Reject: stop sending the MRU option / the magic-number option.
+    pub rej_mru: bool,
+    pub rej_magic: bool,
+}
+pub const LCPPEER0: LcpPeer = LcpPeer { mru: None, magic_nak: false, rej_mru: false, rej_magic: false };
+
+/// Walk the options of a Configure-Nak (`code` 3) or Configure-Reject (`code` 4). A malformed option ends the walk
+/// (what was read before it still counts, as before the move).
+pub fn lcp_peer(code: u8, data: &[u8]) -> LcpPeer {
+    let mut r = LCPPEER0;
+    let mut o = 0;
+    while o + 2 <= data.len() {
+        let (t, l) = (data[o], data[o + 1] as usize);
+        if l < 2 || o + l > data.len() {
+            break;
+        }
+        match (code, t) {
+            (CONF_NAK, 1) if l == 4 => r.mru = Some(u16::from_be_bytes([data[o + 2], data[o + 3]])),
+            (CONF_NAK, 5) if l == 6 => r.magic_nak = true,
+            (CONF_REJ, 1) => r.rej_mru = true,
+            (CONF_REJ, 5) => r.rej_magic = true,
+            _ => {}
+        }
+        o += l;
+    }
+    r
+}
+pub const LCPPEER_LEN: usize = 3;
+pub fn encode_lcp_peer(r: &LcpPeer) -> [u8; LCPPEER_LEN] {
+    let f = r.mru.is_some() as u8 | (r.magic_nak as u8) << 1 | (r.rej_mru as u8) << 2 | (r.rej_magic as u8) << 3;
+    let m = r.mru.unwrap_or(0).to_le_bytes();
+    [f, m[0], m[1]]
+}
+pub fn decode_lcp_peer(o: &[u8; LCPPEER_LEN]) -> LcpPeer {
+    LcpPeer {
+        mru: (o[0] & 1 != 0).then(|| u16::from_le_bytes([o[1], o[2]])),
+        magic_nak: o[0] & 2 != 0,
+        rej_mru: o[0] & 4 != 0,
+        rej_magic: o[0] & 8 != 0,
+    }
+}

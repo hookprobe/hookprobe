@@ -12,6 +12,10 @@ fuzz_target!(|data: &[u8]| {
     }
     let c = p::chap_challenge(data);
     assert!(p::decode_chap(&p::encode_chap(&c)) == c);
+    for code in [3u8, 4] {
+        let f = p::lcp_peer(code, data);
+        assert!(p::decode_lcp_peer(&p::encode_lcp_peer(&f)) == f);
+    }
     let r = p::ip6cp_req(data);
     assert!(p::decode_ip6cp(&p::encode_ip6cp(&r)) == r);
     if data.len() >= p::LCP_LEN {

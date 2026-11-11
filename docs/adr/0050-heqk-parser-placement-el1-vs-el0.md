@@ -97,8 +97,22 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
    re-read from the frame), IPCP Request / Nak / Reject (`CMD_WAN_IPCP`). `[P-pppoe]` (scripted AC, end to end) and
    `[P-lansvc]` parity pass. Still in EL1: LCP Nak/Reject from the AC, PAP/CHAP (the CHAP challenge), IPv6CP,
    WAN/mgmt ARP + ICMP, SNTP.
+   *Status 2026-11-11 (step 3b-iv/v, QEMU):* CHAP Challenge, IPv6CP Configure-Request and the AC's LCP
+   Configure-Nak / Configure-Reject of our request are walked in `el0-lansvc` (`CMD_WAN_CHAP`, `CMD_WAN_IP6CP`,
+   `CMD_WAN_LCP_PEER`; libFuzzer `ppp_ctl`). PAP replies carry no options (code + id only, read from the fixed PPP
+   header). **Proposed, for operator review:** SNTP replies (48 B, fixed offsets, nonce-checked) and WAN / mgmt ARP
+   + ICMP echo are fixed-offset, bounded, walk-free header reads — the D1.1 class — and stay in EL1; moving them
+   would add an EL0 round trip per frame without removing a walk from the TCB.
 4. Control channel (Noise) — already authenticated after msg1; lowest exposure.
+   *Open (operator decision):* the handshake is fused with the device identity key (HKDF(SRK, …)); moving it to
+   EL0 moves that key into an EL0 address space. The pre-authentication input is the fail-closed `HsReasm`
+   datagram reassembler (bounded, fuzzed by the kernel fuzz crate). Not moved until the key custody is decided.
 5. WPA2 authenticator — tied to the CYW43455 driver; moves with the driver (ADR 0044 D4 #7).
+   *Status 2026-11-11 (step 5a, QEMU):* the attacker-shaped part — EAPOL-Key classification of a station's M2 / M4
+   (`CMD_STA_EAPOL`; the returned length is re-checked against the kernel's buffer before any copy) and the M2 RSNE
+   MFP-capable walk (`CMD_STA_MFPC`) — runs in `el0-lansvc` (`hal::eapolwire`, libFuzzer `eapol_wire`, 4.35 M runs
+   clean). A server fault reads as "not ours" (the station retransmits) / "not MFP-capable". The key state machine,
+   MIC / PTK / GTK and the SAE engine stay with the driver (this item's rule), so their move is the driver move.
 
 Each step must keep the AP throughput (≥ the 2026-11-07 metal baseline: 80–160 Mbps) and pass the separation
 matrix + `mc-e2e` before the EL1 copy is deleted.
