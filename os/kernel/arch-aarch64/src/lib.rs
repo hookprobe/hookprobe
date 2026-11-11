@@ -59,9 +59,11 @@ pub mod wan6eth;
 pub mod reject;
 // WPA2 PMK KDF (PBKDF2-HMAC-SHA1) for P10-E STA association. CM5-only.
 #[cfg(feature = "cm5")]
-pub mod wpa;
+/// ADR 0050 D4 step 5b: the WPA crypto (SHA-1 / PRF / MIC, AES / key wrap / CMAC) lives in `hal` so `el0-lansvc`
+/// runs the same code; re-exported here so the driver call sites are unchanged.
+pub use hal::wpa;
 // AES-128 + RFC-3394 key wrap/unwrap + CMAC (WPA2 GTK, WPA3 AKM-8 MIC). Pure — also built for QEMU ([P-sae]).
-pub mod aes;
+pub use hal::aes;
 // The STRICT (fail-closed, never counter-seeded) rng200 leaf behind the kernel's
 // production entropy source. Distinct policy from hboot::rng — see rng200.rs.
 #[cfg(feature = "cm5")]

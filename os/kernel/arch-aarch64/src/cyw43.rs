@@ -4066,32 +4066,12 @@ pub fn ap_wait_assoc(budget: u32) -> Option<[u8; 6]> {
 }
 
 
-/// Verify an EAPOL-Key MIC (KDV2 HMAC-SHA1-128): recompute over the 802.1X frame `eapol`
-/// (= from the version byte to the end) with the 16-B MIC field at `mic_off` zeroed, and
-/// compare to the received MIC. `eapol` is a private copy so zeroing is safe.
-fn eapol_mic_ok(kck: &[u8; 16], eapol: &mut [u8], mic_off: usize, akm8: bool) -> bool {
-    let mut recv = [0u8; 16];
-    recv.copy_from_slice(&eapol[mic_off..mic_off + 16]);
-    for b in &mut eapol[mic_off..mic_off + 16] {
-        *b = 0;
-    }
-    eapol_mic(kck, eapol, akm8) == recv
-}
 
 /// The EAPOL-Key MIC: HMAC-SHA1-128 (key-descriptor version 2, AKM 2) or AES-128-CMAC (AKM 8 / SAE).
 fn eapol_mic(kck: &[u8; 16], eapol: &[u8], akm8: bool) -> [u8; 16] {
     if akm8 { crate::aes::aes_cmac(kck, eapol) } else { crate::wpa::wpa_mic_sha1(kck, eapol) }
 }
 
-/// PTK per AKM: PRF-SHA1 (AKM 2) or KDF-SHA256 (AKM 8).
-fn derive_ptk(akm8: bool, pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], snonce: &[u8; 32]) -> [u8; 48] {
-    #[cfg(feature = "wpa3")]
-    if akm8 {
-        return sae::ptk_sha256(pmk, aa, spa, anonce, snonce);
-    }
-    let _ = akm8;
-    crate::wpa::wpa_ptk(pmk, aa, spa, anonce, snonce)
-}
 
 /// Did the station's M2 RSNE (key data) advertise MFP-capable? ADR 0050 D4 step 5a: the walk runs in EL0.
 fn m2_mfpc(m2: &[u8], body_off: usize) -> bool {
@@ -4164,10 +4144,11 @@ pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bo
                 out.m2_rx = true;
                 dbg_putc(b'2');
                 snonce.copy_from_slice(&m2buf[(body - 14) + 13..(body - 14) + 45]);
-                ptk = derive_ptk(akm8, pmk, ap_mac, sta, &anonce, &snonce);
-                kck.copy_from_slice(&ptk[0..16]);
-                kek.copy_from_slice(&ptk[16..32]);
-                if mic_off + 16 <= m2len && eapol_mic_ok(&kck, &mut m2buf[..m2len], mic_off, akm8) {
+                // ADR 0050 D4 step 5b: PTK derivation over the station's SNonce + the M2 MIC check run in EL0
+                if let Some(p) = crate::wanparse::sta_m2(pmk, ap_mac, sta, &anonce, akm8, &m2buf[..m2len]) {
+                    ptk = p;
+                    kck.copy_from_slice(&ptk[0..16]);
+                    kek.copy_from_slice(&ptk[16..32]);
                     out.m2_mic_ok = true;
                     break;
                 }
@@ -4261,7 +4242,7 @@ pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bo
             KeyWait::Got(n) => {
                 out.m4_rx = true;
                 dbg_putc(b'4');
-                if mic_off + 16 <= n && eapol_mic_ok(&kck, &mut m4buf[..n], mic_off, akm8) {
+                if mic_off + 16 <= n && crate::wanparse::sta_m4(&kck, akm8, &m4buf[..n]) {
                     out.m4_mic_ok = true;
                     break;
                 }
