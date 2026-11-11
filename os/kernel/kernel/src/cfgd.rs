@@ -40,7 +40,6 @@ pub fn set_path(ifc: hal::policy::If, dev_ip: [u8; 4], prefix: u8) {
 /// management floor where it lies inside that subnet). Probing the running addressing, never sample constants.
 /// Checked at STAGE (a bundle that could only fail never becomes a trial).
 pub fn keeps_mgmt_path(policy_section: Option<&[u8]>) -> bool {
-    use hal::policy::{Act, Addr, Dir, If, Pkt};
     let Some(sec) = policy_section else { return true }; // no policy section: the policy in force is unchanged
     let mut file = [0u8; 4096];
     if !cfgbundle::policy_file(sec, &mut file) {
@@ -52,6 +51,26 @@ pub fn keeps_mgmt_path(policy_section: Option<&[u8]>) -> bool {
     if hal::policy::parse_policy(&file, pol).is_err() {
         return false; // an unparseable policy would lock management down at boot
     }
+    keeps_mgmt_path_parsed(pol)
+}
+
+/// F-e (sealed-config design §0): the address the authenticated owner manages the device from — recorded when an
+/// owner-authenticated upload begins or a configuration confirm arrives. A policy must keep THAT client's path too,
+/// not only sample hosts of the subnet (a `/32` block of the owner's own client used to pass).
+static mut OWNER: [u8; 4] = [0; 4];
+pub fn note_owner(peer: [u8; 4]) {
+    if peer != [0; 4] && peer != [127, 0, 0, 1] {
+        unsafe { OWNER = peer };
+    }
+}
+#[cfg(not(feature = "cm5"))]
+pub fn owner() -> [u8; 4] {
+    unsafe { OWNER }
+}
+
+/// The D7 probe on an already-parsed policy (stage check, and the live policy executor's re-probe before the swap).
+pub fn keeps_mgmt_path_parsed(pol: &mut hal::policy::Policy) -> bool {
+    use hal::policy::{Act, Addr, Dir, If, Pkt};
     let mut paths = unsafe { *core::ptr::addr_of!(PATHS) };
     #[cfg(feature = "cm5")]
     if let Some(m) = unsafe { *core::ptr::addr_of!(arch_aarch64::uplink::MGMT) } {
@@ -64,7 +83,7 @@ pub fn keeps_mgmt_path(policy_section: Option<&[u8]>) -> bool {
     }
     let (fnet, flen, fset) = crate::verdict::mgmt_floor();
     let ifs = [If::Lan, If::Eth1, If::Wan, If::Mgmt];
-    paths.iter().filter(|p| p.0 != 0xff).any(|&(i, dev, pl)| {
+    let any = paths.iter().filter(|p| p.0 != 0xff).any(|&(i, dev, pl)| {
         let ifc = ifs[i as usize];
         let mask = if pl == 0 { 0 } else { u32::MAX << (32 - pl as u32) };
         let d = u32::from_be_bytes(dev);
@@ -87,7 +106,56 @@ pub fn keeps_mgmt_path(policy_section: Option<&[u8]>) -> bool {
             let p = Pkt { proto: 6, src: Addr::v4(c.to_be_bytes()), dst: Addr::v4(dev), dport: 443 };
             pol.check(ifc, Dir::In, &p).0 == Act::Allow
         })
-    })
+    });
+    // F-e: the owner's own client keeps its path — on the interface whose subnet holds it, else (routed in from
+    // elsewhere) on the management VLAN when there is one
+    let owner = unsafe { OWNER };
+    if !any || owner == [0; 4] {
+        return any;
+    }
+    let o = u32::from_be_bytes(owner);
+    let on = paths.iter().filter(|p| p.0 != 0xff).find(|&&(_, dev, pl)| {
+        let mask = if pl == 0 { 0 } else { u32::MAX << (32 - pl as u32) };
+        (o & mask) == (u32::from_be_bytes(dev) & mask)
+    });
+    let path = on.or_else(|| paths.iter().find(|p| p.0 as usize == If::Mgmt.idx()));
+    match path {
+        Some(&(i, dev, _)) => {
+            let p = Pkt { proto: 6, src: Addr::v4(owner), dst: Addr::v4(dev), dport: 443 };
+            pol.check(ifs[i as usize], Dir::In, &p).0 == Act::Allow
+        }
+        None => true, // the owner is not on any of the device's management paths (unknown topology): the subnet probe stands
+    }
+}
+
+/// Step 7, the live policy executor: parse into `scratch`; refuse (keeping the policy in force) when it does not
+/// parse or would cut the management path / the owner's own client; otherwise swap it in with one struct copy and
+/// bump the policy generation. Never a live lockdown. Established flows are kept (Q4).
+pub fn swap_policy(file: &[u8], live: &mut hal::policy::Policy, scratch: &mut hal::policy::Policy) -> bool {
+    *scratch = hal::policy::Policy::new();
+    hal::policy::parse_policy(file, scratch).is_ok() && install_policy(live, scratch)
+}
+
+/// The second half of the swap, for a policy already parsed into `scratch` (the per-file chain).
+pub fn install_policy(live: &mut hal::policy::Policy, scratch: &mut hal::policy::Policy) -> bool {
+    if !keeps_mgmt_path_parsed(scratch) {
+        return false;
+    }
+    // the probe's own counts are not traffic
+    scratch.pl_drops = [0; hal::policy::BIND_MAX];
+    for a in scratch.acl.iter_mut() {
+        a.hits = [0; hal::policy::ACL_ENTRIES];
+        a.default_hits = 0;
+    }
+    *live = *scratch;
+    unsafe { POLICY_GEN += 1 };
+    true
+}
+
+/// Bumped on every live policy swap (the hook for SMP publication later, ADR 0060 D7).
+pub static mut POLICY_GEN: u64 = 0;
+pub fn policy_gen() -> u64 {
+    unsafe { POLICY_GEN }
 }
 
 /// Peer review 2026-11-10 (ADR 0059 §B.5): a bundle that touches the management plane (management VLAN / link keys
@@ -734,6 +802,48 @@ pub fn live_selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-cfgd-live] {} — sealed-config / live-apply step 6, the cfgd live engine (mock executors): only the changed subsystem is applied={} healthy -> committed live, no reboot={} an unusable WAN reverts LIVE after the window to the last-known-good sections={} a Wi-Fi change waits for the owner's confirm={} one change at a time={} a failed apply reverts live={} a failed revert asks for the reboot (manifest already at the LKG)={} a crash during the live trial boots the last-known-good={}\n",
         if pass { "PASS" } else { "FAIL" }, base && s1 && p_1, c1, s2 && p_2 && t2 && r2, s3 && c3, s4 && busy, f5, s5 && rb, s6 && crash
+    ));
+    pass
+}
+
+/// [P-cfgd-policy] (step 7): the live policy executor and the owner-address probe (F-e).
+#[cfg(not(feature = "cm5"))]
+pub fn policy_selftest() -> bool {
+    use hal::policy::Policy;
+    static mut LIVE: Policy = Policy::new();
+    static mut SCR: Policy = Policy::new();
+    let live = unsafe { &mut *core::ptr::addr_of_mut!(LIVE) };
+    let scr = unsafe { &mut *core::ptr::addr_of_mut!(SCR) };
+    let saved = unsafe { OWNER };
+    unsafe { OWNER = [0; 4] };
+    let p1: &[u8] = b"HQPOL1\nacl A seq 10 allow any any any\ninterface lan acl in A\n";
+    let p2: &[u8] = b"HQPOL1\nacl A seq 10 drop tcp any any 23\nacl A seq 20 allow any any any\ninterface lan acl in A\n";
+    // blocks ONE client (the owner's) from the device's HTTPS; every other LAN host still reaches it
+    let own: &[u8] = b"HQPOL1\nacl A seq 10 drop tcp 10.99.0.50/32 any 443\nacl A seq 20 allow any any any\ninterface lan acl in A\n";
+    let lock: &[u8] = b"HQPOL1\nacl A default drop\ninterface lan acl in A\ninterface eth1 acl in A\ninterface mgmt acl in A\n";
+    *live = Policy::new();
+    let g0 = policy_gen();
+    // 1. a good policy swaps in (one struct copy), the policy generation advances
+    let good = swap_policy(p1, live, scr) && live.nacl == 1 && policy_gen() == g0 + 1;
+    // 2. an unparseable policy is refused: the policy in force is kept, no generation bump, never a lockdown
+    let bad = !swap_policy(b"HQPOL1\nacl A seq 10 frobnicate\n", live, scr) && live.nacl == 1 && policy_gen() == g0 + 1;
+    // 3. a policy that cuts every management path is refused live too
+    let cut = !swap_policy(lock, live, scr) && live.nacl == 1;
+    // 4. F-e: without a known owner the /32 block passes the subnet probe; once the owner's client is known it is
+    //    refused (stage check and live swap alike)
+    let before = swap_policy(own, live, scr);
+    let _ = swap_policy(p1, live, scr);
+    note_owner([10, 99, 0, 50]);
+    let owner_ok = owner() == [10, 99, 0, 50] && !swap_policy(own, live, scr) && live.nacl == 1;
+    // another client of the owner's subnet blocked is fine (the owner's path stands)
+    let other = swap_policy(b"HQPOL1\nacl A seq 10 drop tcp 10.99.0.77/32 any 443\nacl A seq 20 allow any any any\ninterface lan acl in A\n", live, scr);
+    // 5. a tighter policy swaps in (established flows are kept: the swap touches only the rule table)
+    let tight = swap_policy(p2, live, scr) && live.nacl == 1 && live.acl[0].n == 2;
+    unsafe { OWNER = saved };
+    let pass = good && bad && cut && before && owner_ok && other && tight;
+    arch_aarch64::_print(format_args!(
+        " [P-cfgd-policy] {} — sealed-config / live-apply step 7, the live policy executor: a good policy swaps in and the policy generation advances={} an unparseable policy is refused and the policy in force kept (never a live lockdown)={} a policy cutting every management path is refused live={} F-e the owner's own client keeps its HTTPS path (a /32 block of it is refused once the owner is known)={} another client's /32 is fine={} a tighter policy swaps in={}\n",
+        if pass { "PASS" } else { "FAIL" }, good, bad, cut, before && owner_ok, other, tight
     ));
     pass
 }

@@ -7090,6 +7090,7 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(not(feature = "cm5"))]
         let _ = cfgd::selftest(); // ADR 0059 step 3: trial / commit / revert
         let _ = cfgd::live_selftest(); // sealed-config / live-apply step 6: the live engine (mock executors)
+        let _ = cfgd::policy_selftest(); // step 7: the live policy executor + the owner-address probe (F-e)
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
@@ -14240,13 +14241,35 @@ fn mc_mgmt_tx(f: &[u8], dst: [u8; 4]) -> bool {
 
 /// POLICY.TXT (up to 4 KiB, contiguous on the FAT boot partition) -> POLICY. None = no file.
 fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::PolicyErr>> {
+    load_policy_to(dev, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) })
+}
+
+/// Step 7 (sealed-config / live apply): the live policy executor cfgd's activation hook runs. The bundle's policy
+/// section, else (a revert to "no bundle") the per-file POLICY chain, is parsed into scratch and swapped in only
+/// when it parses and keeps the management path and the owner's own client. A failure keeps the policy in force
+/// (never a live lockdown) and makes cfgd revert.
+#[allow(dead_code)]
+fn apply_policy_live<D: hal::BlockDev>(dev: &D) -> bool {
+    static mut NEXT: hal::policy::Policy = hal::policy::Policy::new();
+    let live = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
+    let scratch = unsafe { &mut *core::ptr::addr_of_mut!(NEXT) };
+    *scratch = hal::policy::Policy::new();
+    let ok = match load_policy_to(dev, scratch) {
+        Some(Ok(())) | None => cfgd::install_policy(live, scratch),
+        Some(Err(_)) => false,
+    };
+    kprint!(" [POLICY] live apply: {} (policy generation {})\n", if ok { "swapped in" } else { "REFUSED — the policy in force is kept" }, cfgd::policy_gen());
+    ok
+}
+
+fn load_policy_to<D: hal::BlockDev>(dev: &D, out: &mut hal::policy::Policy) -> Option<Result<(), hal::policy::PolicyErr>> {
     // ADR 0059 step 3: the HQCFG1 bundle in force (verified once by cfgd) carries the policy section
     if let Some(p) = crate::cfgd::section(crate::cfgbundle::KIND_POLICY) {
         let mut f = [0u8; hal::policy::POLICY_FILE_LEN];
         if crate::cfgbundle::policy_file(p, &mut f) {
             unsafe { POLICY_STATE = (1, crate::cfgd::generation()) };
             kprint!(" [POLICY] from the HQCFG1 bundle (generation {}, {})\n", crate::cfgd::generation(), if crate::cfgd::on_trial() { "on trial" } else { "committed" });
-            return Some(hal::policy::parse_policy(&f, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }));
+            return Some(hal::policy::parse_policy(&f, out));
         }
     }
     let mut sec = [0u8; 512];
@@ -14294,7 +14317,7 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
                 // ADR 0059 Phase 0.4: active half -> the other half (refused anyway if below the floor) -> boot copy
                 if crate::artstore::fallback_step(dev, p1, crate::artstore::Ty::Policy) {
                     kprint!(" [POLICY] the stored POLICY was REFUSED ({:?}) — trying the next copy (other store half, then the boot partition)\n", e);
-                    return load_policy(dev);
+                    return load_policy_to(dev, out);
                 }
                 unsafe { POLICY_STATE = (3, 0) };
                 kprint!(" [POLICY] signature REFUSED ({:?}) — the policy is not parsed\n", e);
@@ -14305,7 +14328,7 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
         unsafe { POLICY_STATE = (2, 0) };
         kprint!(" [POLICY] no operator key in this image (standalone) — POLICY.TXT accepted unsigned\n");
     }
-    Some(hal::policy::parse_policy(&buf, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }))
+    Some(hal::policy::parse_policy(&buf, out))
 }
 
 /// WAN.SIG check (audit finding 11). None = no operator key (standalone: unsigned WAN.TXT is fine);
