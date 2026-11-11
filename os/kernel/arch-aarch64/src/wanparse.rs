@@ -102,6 +102,11 @@ pub static mut EL0_MFPC: Option<MfpcFn> = None;
 
 /// An EAPOL-Key from `sta` for this handshake step (a server fault reads as "not ours": the station retransmits).
 pub fn eapol_key(e: &[u8], sta: &[u8; 6], secure: bool, replay: u64) -> Option<usize> {
+    // The caller hands the rest of the SDPCM receive buffer (metal batch 62: longer than the EL0 input window, so
+    // every M2 read as "not ours"). The classification reads at most the key body (113 B) and the 802.1X length
+    // span (18 + body length): trim to that, which cannot change the answer.
+    let span = if e.len() >= 18 { (18 + u16::from_be_bytes([e[16], e[17]]) as usize).max(113) } else { e.len() };
+    let e = &e[..span.min(e.len())];
     match unsafe { EL0_EAPOL } {
         Some(h) => h(e, sta, secure, replay).flatten(),
         None => hal::eapolwire::eapol_key(e, sta, secure, replay),
