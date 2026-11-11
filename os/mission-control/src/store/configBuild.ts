@@ -142,6 +142,8 @@ export function checkPolicy(f: PolicyForm): string[] {
     if (!/^[0-9a-fA-F:.]+\/\d{1,3}$/.test(r.dst.trim())) e.push(`Route: "${r.dst}" is not a prefix.`);
     if (r.gw.trim() && !/^[0-9a-fA-F:.]+$/.test(r.gw.trim())) e.push(`Route ${r.dst}: gateway is an address.`);
     if (r.metric.trim() && !/^\d+$/.test(r.metric.trim())) e.push(`Route ${r.dst}: metric is a number.`);
+    if (r.via === 'lan' || r.via === 'eth1') e.push(`Route ${r.dst}: the device cannot send traffic out through ${r.via}; use wan or mgmt.`);
+    else if (r.dst.includes(':') && (r.via !== 'wan' || r.gw.trim())) e.push(`Route ${r.dst}: IPv6 routes can only go via wan, without a gateway.`);
   }
   for (const p of f.prefixes) {
     for (const [k, v] of [['ge', p.ge], ['le', p.le]] as const) if (v.trim() && !/^\d{1,3}$/.test(v.trim())) e.push(`Prefix list ${p.name}: ${k} must be a prefix length.`);
