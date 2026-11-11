@@ -71,8 +71,10 @@ struct Entry {
     dport: u16,
     bytes_out: u64,
     bytes_in: u64,
+    /// The WAN address this mapping was translated to (sealed-config step 9: `flush_wan` after a live WAN change).
+    wan: [u8; 4],
 }
-const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: 0, dport: 0, bytes_out: 0, bytes_in: 0 };
+const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: 0, dport: 0, bytes_out: 0, bytes_in: 0, wan: [0; 4] };
 static mut TABLE: [Entry; N] = [EMPTY; N];
 static mut HIDX: [u16; HN] = [0; HN];
 
@@ -220,7 +222,7 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
     if t[i].used {
         index_remove(t, i);
     }
-    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: now, dport: 0, bytes_out: 0, bytes_in: 0 };
+    t[i] = Entry { used: true, proto, in_if, in_mac: *in_mac, in_ip: *in_ip, in_port, last: now, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: now, dport: 0, bytes_out: 0, bytes_in: 0, wan: [0; 4] };
     index_insert(proto, in_ip, in_port, i);
     st.table_alloc += 1;
     i
@@ -265,6 +267,9 @@ fn entry_for_ext(proto: u8, ext: u16, now: u64) -> Option<Entry> {
 static MSS_LIMIT: core::sync::atomic::AtomicU16 = core::sync::atomic::AtomicU16::new(0);
 pub fn set_mss_limit(v: u16) {
     MSS_LIMIT.store(v, core::sync::atomic::Ordering::Relaxed);
+}
+pub fn mss_limit() -> u16 {
+    MSS_LIMIT.load(core::sync::atomic::Ordering::Relaxed)
 }
 fn mss_ceiling() -> u16 {
     match MSS_LIMIT.load(core::sync::atomic::Ordering::Relaxed) {
@@ -433,6 +438,7 @@ pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<
         let t = &mut *core::ptr::addr_of_mut!(TABLE);
         t[idx].dnat_from = match redirect { Some((ap, _)) => ap, None => [0; 4] };
         t[idx].dnat_to = match redirect { Some((_, r)) => r, None => [0; 4] };
+        t[idx].wan = *wan_ip;
     }
 
     out[..ip_end].copy_from_slice(&f[..ip_end]);
@@ -588,6 +594,49 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
     }
     st.in_fwd += 1;
     Some((ip_end, e.in_if))
+}
+
+/// Sealed-config step 9 (live WAN change): drop every mapping translated to the OLD WAN address — the flows through
+/// it are dead anyway (the upstream no longer routes it to us), and a stale mapping must not answer on the new one.
+/// Mappings made on another address are kept. Returns the number removed.
+pub fn flush_wan(old: [u8; 4]) -> usize {
+    if old == [0; 4] {
+        return 0;
+    }
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
+    let mut n = 0;
+    for i in 0..N {
+        if t[i].used && t[i].wan == old {
+            index_remove(t, i);
+            t[i] = EMPTY;
+            n += 1;
+        }
+    }
+    n
+}
+
+/// `flush_wan` on the live table (for [P-cfgd-wan]): mappings on two WAN addresses, the old one flushed — only its
+/// entries are gone and the index still resolves every other mapping to its own slot. Leaves no test entries.
+#[cfg(not(feature = "cm5"))]
+pub fn flush_wan_selftest() -> bool {
+    let (a, b) = ([192, 0, 2, 77], [198, 51, 100, 77]);
+    let mut st = NatStats::default();
+    let key = |k: usize| ([10u8, 99, 0xfe, k as u8], 61000 + k as u16);
+    let mut idx = [0usize; 8];
+    for k in 0..8 {
+        let (ip, port) = key(k);
+        idx[k] = lookup_or_alloc(17, 0, &[0; 6], &ip, port, 1, &mut st);
+        unsafe { (*core::ptr::addr_of_mut!(TABLE))[idx[k]].wan = if k % 2 == 0 { a } else { b } };
+    }
+    let removed = flush_wan(a) == 4 && flush_wan([0; 4]) == 0;
+    let t = unsafe { &*core::ptr::addr_of!(TABLE) };
+    let only = (0..8).all(|k| {
+        let (ip, port) = key(k);
+        let f = index_find(t, 17, &ip, port);
+        if k % 2 == 0 { f.is_none() && !t[idx[k]].used } else { f == Some(idx[k]) }
+    });
+    let rest = flush_wan(b) == 4;
+    removed && only && rest
 }
 
 /// One translated flow, read-only (Observe → flows). `dst` is the first destination the mapping

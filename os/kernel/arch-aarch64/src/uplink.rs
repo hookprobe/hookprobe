@@ -809,7 +809,8 @@ pub struct Wan6 {
     pub renew_ok: u32,
     pub last_renew_ms: u64,
 }
-pub static mut WAN6: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0, t1: 0, sid: [0; 64], sid_len: 0, xid: 0, got_ms: 0, renew_tx: 0, renew_ok: 0, last_renew_ms: 0 };
+const WAN6_NONE: Wan6 = Wan6 { ran: false, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0, t1: 0, sid: [0; 64], sid_len: 0, xid: 0, got_ms: 0, renew_tx: 0, renew_ok: 0, last_renew_ms: 0 };
+pub static mut WAN6: Wan6 = WAN6_NONE;
 
 /// IPv6 seen on the LIVE session (whole uptime, not just the 12-s probe): every v6 datagram and every
 /// Router Advertisement from the ISP — answers "does Digi ever send an RA?" — plus WAN v6 TX outcomes.
@@ -829,7 +830,8 @@ pub struct Wan6Eth {
     pub na_tx: u32,
     pub echo_tx: u32,
 }
-pub static mut WAN6_ETH: Wan6Eth = Wan6Eth { up: false, iid: [0; 8], ll: [0; 16], router_mac: [0; 6], router_ll: [0; 16], na_tx: 0, echo_tx: 0 };
+const WAN6_ETH_NONE: Wan6Eth = Wan6Eth { up: false, iid: [0; 8], ll: [0; 16], router_mac: [0; 6], router_ll: [0; 16], na_tx: 0, echo_tx: 0 };
+pub static mut WAN6_ETH: Wan6Eth = WAN6_ETH_NONE;
 pub static mut WAN6_FIRST_RA: Option<crate::ip6::Ra> = None;
 
 /// IPv6 over the open PPPoE session — PROBE ONLY (12-s cap, never fatal, IPv4 already works):
@@ -1003,7 +1005,11 @@ pub static mut DORA_STATS: (u32, u32, u32, u32) = (0, 0, 0, 0);
 
 /// Drive the in-loop DORA one step (cheap when nothing is due). True when the lease just became usable.
 pub fn wan_dora_tick(up: &mut UplinkResult) -> bool {
-    if up.mode != 0 || up.mac == [0; 6] {
+    // sealed-config step 9: a STATIC address is held already — only its gateway is resolved here (state 3)
+    if up.mode == 1 && up.dhcp.ack_rx && !up.usable() && unsafe { DORA.0 } != 3 {
+        unsafe { DORA = (3, [0; 4], 0) };
+    }
+    if up.mode > 1 || up.mac == [0; 6] || (up.mode == 1 && unsafe { DORA.0 } != 3) {
         return false;
     }
     if up.usable() {
@@ -1359,6 +1365,79 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         }
     }
     WanEvent::Idle
+}
+
+/// The management sub-interface as configured now (sealed-config step 9: re-configured live only when it changes).
+pub fn mgmt_current() -> Option<hal::MgmtIf> {
+    let m = unsafe { (*core::ptr::addr_of!(MGMT)).as_ref()? };
+    Some(hal::MgmtIf { vlan: unsafe { MGMT_VLAN }, stat: if m.dhcp.is_some() { None } else { Some((m.ip, m.prefix, m.gw)) } })
+}
+
+/// Sealed-config step 9, live WAN change — tear the WAN in force down: an orderly PADT for a PPPoE session (sent
+/// with the OLD tags, before the link is re-configured), then the PPP engine, the in-loop DORA / renewal, the IPv6
+/// (WAN6 / WAN6_ETH / RA re-probe) and next-hop state are reset. Counters are kept (uptime stats). Never touches the
+/// Wi-Fi AP, eth1 or the management sub-interface. Returns the old WAN address (0 = none held), for `nat::flush_wan`.
+pub fn wan_teardown(up: &mut UplinkResult) -> [u8; 4] {
+    unsafe {
+        if let Some(e) = (*core::ptr::addr_of!(PPP)).as_ref() {
+            if e.sid != 0 && up.started {
+                let mut tx = crate::pppoe::Tx::new();
+                e.padt(&mut tx);
+                for i in 0..tx.n {
+                    let _ = nic_tx(up.nic, tx.frame(i));
+                }
+            }
+        }
+        PPP = None;
+        DORA = (0, [0; 4], 0);
+        RENEW_XID = [0; 4];
+        RENEW_LAST_MS = 0;
+        RENEW_RESULT = 0;
+        WAN6 = WAN6_NONE;
+        WAN6_ETH = WAN6_ETH_NONE;
+        WAN6_FIRST_RA = None;
+        WAN6_RA_SEEN = false;
+        WAN6_REPROBE_MS = 0;
+        WAN_NH = [([0; 4], [0; 6], 0); 4];
+        WAN_NH_ASKED = [0; 4];
+    }
+    let old = if up.dhcp.ack_rx { up.dhcp.yiaddr } else { [0; 4] };
+    *up = UplinkResult::new(up.nic);
+    old
+}
+
+/// Sealed-config step 9: start the WAN in `mode` from the AP loop. DHCP and static do NOT block: the address is
+/// acquired (DHCP) / the gateway resolved (static) by `wan_dora_tick` + `wan_poll` in the loop. PPPoE still runs
+/// the bounded blocking dial (<= 30 s + probes; the watchdog is petted through `nic_rx`). `up` is the new result.
+pub fn wan_start(nic: Nic, inet_ip: &[u8; 4], mode: &hal::WanMode, up: &mut UplinkResult) {
+    *up = UplinkResult::new(nic);
+    match *mode {
+        hal::WanMode::Pppoe { .. } => bringup_with(nic, inet_ip, mode, up),
+        hal::WanMode::Dhcp => {
+            let _ = prelude(nic, inet_ip, up);
+        }
+        hal::WanMode::Static { ip, prefix, gw, dns } => {
+            up.mode = 1;
+            let link = prelude(nic, inet_ip, up);
+            up.dhcp.yiaddr = ip;
+            up.dhcp.router = gw;
+            up.dhcp.dns = dns;
+            up.dhcp.mask = (u32::MAX << (32 - prefix as u32)).to_be_bytes();
+            up.dhcp.ack_rx = true;
+            if link {
+                let mut small = [0u8; 128];
+                let n = build_arp(&mut small, &up.mac, &ip, &ip);
+                up.garp_tx = nic_tx(nic, &small[..n]);
+            }
+            unsafe { DORA = (3, [0; 4], 0) };
+        }
+    }
+}
+
+/// The PPPoE dial ended on a DEFINITIVE authentication failure (PAP / CHAP rejected, or no protocol in common) —
+/// sealed-config Q5: a live apply reverts at once instead of waiting out the trial window.
+pub fn pppoe_auth_failed() -> bool {
+    unsafe { (*core::ptr::addr_of!(PPP)).as_ref().is_some_and(|e| e.auth_failed()) }
 }
 
 /// Common start of every WAN mode: NIC up, link, our MAC, stale ring drained, TX re-armed.

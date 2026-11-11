@@ -970,6 +970,12 @@ impl Pppoe {
         Some(&f[22..20 + plen])
     }
 
+    /// The dial ended on a DEFINITIVE authentication failure (PAP / CHAP rejected, or no protocol in common) — not a
+    /// timeout that a retry may cure (sealed-config Q5: a live WAN apply reverts at once).
+    pub fn auth_failed(&self) -> bool {
+        self.phase == Phase::Down && matches!(self.why, DownWhy::AuthRejected | DownWhy::AuthUnsupported)
+    }
+
     /// Send a PADT for this session (orderly shutdown).
     pub fn padt(&self, tx: &mut Tx) {
         let (ac, sid) = (self.ac_mac, self.sid);
