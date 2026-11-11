@@ -71,3 +71,9 @@ name = "eapol_wire"
 path = "fuzz_targets/eapol_wire.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "mgmt_records"
+path = "fuzz_targets/mgmt_records.rs"
+test = false
+doc = false

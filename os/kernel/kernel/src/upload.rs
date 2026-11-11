@@ -363,6 +363,15 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     if len + 512 > u.size {
         return Err("file shorter than its signature says");
     }
+    if matches!(u.ty, Ty::Policy | Ty::Config) {
+        if let Some(e) = artstore::policy_refused() {
+            return Err(match e {
+                hal::policy::PolicyErr::Unsupported(_) => "refused: the policy has a route forwarding cannot honour (via lan / eth1, or an IPv6 route other than `via wan` without a gateway) — it would be refused at boot",
+                hal::policy::PolicyErr::Full(_) => "refused: the policy has more entries than the device holds — it would be refused at boot",
+                _ => "refused: the policy does not parse — it would be refused at boot (management lockdown)",
+            });
+        }
+    }
     if u.ty == Ty::Config && !artstore::config_mgmt_ok() {
         return Err("refused: this configuration would leave no management path (HTTPS to the device on LAN / Wi-Fi, eth1 or the management VLAN)");
     }
