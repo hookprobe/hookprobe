@@ -393,3 +393,93 @@ Security defects come first. Every phase is independently shippable and gated by
 | Regression | The existing WAN, VLAN, QinQ, PPPoE and policy selftests unchanged; CM5 metal acceptance (prod-mc) | `validate.sh`, `mc-e2e.sh`, metal |
 
 **PoC reproduction (C2), host-only:** a scratch crate that depends on `os/kernel/hal` calls `hal::parse_wan_cfg` and `hal::parse_wan_link` on a sector holding `"HQWAN1\nmode=dhcp\n"` followed by `"mode=static\nip=203.0.113.9/30\ngw=203.0.113.10\nvlan=4000\n"`. The result is `Static{203.0.113.9/30}`, VLAN 4000, while `sector[..17]` equals the signed bytes. Run it from outside `os/kernel` so that the kernel's `.cargo/config.toml` (build-std) does not apply. Phase 0.2 must turn this into a failing-then-passing hal test.
+
+---
+
+## Status log
+
+### 2026-11-10: build progress (heqk session)
+
+**Pushed: `a1486fe6` on `feat/heqk-prod-phases`.** Validate GREEN and mc-e2e PASS. Metal is pending
+(`cm5-config-journey-check.sh`). It contains:
+- the C2 fix (one verified buffer; duplicate keys refused);
+- 0.6 (a token-authorised factory reset keeps K_own).
+
+**Being validated on `wip/next2`:**
+- 0.3 (WAN/WIFI floors, anchor v3)
+- 0.4 (`artstore::fallback_step`: active half, then the other half, then FAT)
+- 0.5 (release gate; "CONFIG UNPROTECTED"; `/api/anchor` reports `config_protected`)
+- step 2 (`cfgbundle.rs`, checked against the UI's 24 shared vectors)
+- step 3 (`cfgd.rs`, `/api/config{,/confirm,/rollback}`)
+
+**Review findings sent to the heqk session (open):**
+1. **cfgd commits on "WAN usable" alone.** §B.5 also needs management reachable, plus an owner confirm for
+   remote changes. Otherwise a bundle that breaks the management VLAN auto-commits and locks out remote
+   management.
+2. **No D7 management-reachability check before staging.**
+3. **A committed bundle that fails verification at boot skips the last-known-good half.**
+
+**Residual risk accepted for now:** `anchor::accept_gen` keeps a one-generation rollback window. A card writer
+can therefore replay the immediately previous signed WAN/WIFI file from the FAT partition. This is subsumed by
+H6 (SEC-3 is open). The proposed hardening is to allow the window only on the owner-authenticated store path.
+
+### 2026-11-10: review round 2 (`wt-p2`)
+
+**Fixed by the heqk session:**
+1. **Bundles that touch the management plane are never auto-committed.** `cfgd::touches_mgmt` matches wan keys
+   `mgmt*`/`vlan*`/`pcp` or a policy `interface mgmt` line. Such a bundle needs `/api/config/confirm`, and
+   `/api/config` reports `needs_confirm`. Staging cannot be detected by ingress interface, because the request
+   context has none, so the rule is content-based.
+2. **D7 is enforced at stage.** See `keeps_mgmt_path` below.
+3. **A committed bundle that fails verification tries the other half first.**
+4. **The FAT replay window is closed.** `accept_cfg(.., from_store)` keeps a one-step rollback window only on the
+   store path. A FAT file must be at or above the generation in force. The residual risk noted above is closed.
+
+**Bundle semantics (agreed with the UI session):** a bundle is complete for the sections it carries. A missing
+section means the per-file source applies, not "unchanged".
+
+**Open:** `keeps_mgmt_path` probes fixed sample addresses rather than the running LAN/eth1/mgmt subnets and the
+device's own addresses. A policy that blocks only the real LAN subnet therefore passes. The fix (probe the real
+interface/subnet/address triples) has been sent to the heqk session.
+
+### 2026-11-10: `da5c5a59` pushed (`feat/heqk-prod-phases`)
+
+**What it contains:**
+- Phase 0.3 / 0.4 / 0.5;
+- step 2, `cfgbundle.rs` (24/24 shared vectors with the UI);
+- step 3, `cfgd.rs`, with every review point applied: management-plane bundles need confirmation (`route … via
+  mgmt` counts too); D7 is checked against the real paths; a refused committed bundle tries the other half
+  first; the FAT path has no rollback window.
+
+**Test status:**
+- validate is GREEN.
+- `keeps_mgmt_path` was verified in `da5c5a59`. It probes the registered interface paths (`cfgd::set_path`,
+  `uplink::MGMT`) and falls back to `10.99.0.1/24` only before any path is registered. **The open item from
+  round 2 is closed.**
+- Metal for C2 and 0.6 is running in bench batch 58.
+- The per-item status (built / QEMU / metal) lives in `docs/design/adr0059-implementation.md` on that branch.
+
+**Next:**
+- Step 4a (`mgmtabi` + `el0-hsh`), with `console-in` off by default until the operator decides the production
+  transport (hsh spec R6).
+
+### 2026-11-10: step 4a (heqk session, built, before push)
+
+`mgmtabi` + `el0-hsh` are built.
+
+**Transport:**
+- The only transport is `POST /api/hsh`, behind the `hsh-dev` feature.
+- `hsh-dev` is off by default, and `make-cm5-heqk-image.sh` refuses it in a release build.
+- No UART RX code exists, and `console-in` is not built (hsh spec R6 is still the operator's decision).
+
+**Read commands:** `info`, `version`, `uptime`, `wan status` / `interface show wan`, `qsecbit status`,
+`config status`, `owner status`, `security posture`. They are served by the same producers as `GET /api/*`
+(McState, cfgd, anchor, and the EL0 server counters). Every other command in the spec answers "Operation not
+supported (4b/4c)".
+
+**Tests:** `[P-hsh]` / `[P-mgmtabi]` run in QEMU and in the CM5 AP-boot self-test, plus mc-e2e.
+
+**Asked of the heqk session before push:**
+- `/api/hsh` sits behind the same owner session plus CSRF/Origin checks as the other writes;
+- that session maps to the `view` role;
+- every hsh request is journaled.
