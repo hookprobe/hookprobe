@@ -21,7 +21,7 @@ exec 9>"$CARGO_TARGET_DIR/.validate.lock"
 if ! flock -n 9; then echo "[lock] another validate.sh run holds $CARGO_TARGET_DIR — waiting for it..."; flock 9; fi
 KERNEL=$CARGO_TARGET_DIR/aarch64-unknown-none-softfloat/debug/kernel
 BUILD_LOG="$CARGO_TARGET_DIR/validate-build.log"
-LOG="$(mktemp)"
+LOG="${VALIDATE_KEEP_LOG:-$(mktemp)}"
 # virtio-net (v2) attached for P5b: the kernel ARPs the gateway and RXes the reply.
 QEMU="qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio -semihosting \
   -global virtio-mmio.force-legacy=false -netdev user,id=n0 -device virtio-net-device,netdev=n0 -kernel"
@@ -459,11 +459,11 @@ if [ "$FAILS" -gt 0 ]; then
     grep -v '^\s*$' "$LOG" | tail -12 | sed 's/^/ │    /'
   fi
   echo " └─ next: the kernel-validator agent diagnoses at $ff_ph's code and re-runs ./validate.sh"
-  rm -f "$LOG"
+  [ -n "${VALIDATE_KEEP_LOG:-}" ] || rm -f "$LOG"
   echo " VERDICT: REGRESSION — heal required (diagnostics above)."
   exit 1
 fi
-rm -f "$LOG"
+[ -n "${VALIDATE_KEEP_LOG:-}" ] || rm -f "$LOG"
 echo " VERDICT: all implemented phases GREEN. Kernel is healthy."
 echo " (continuous V&V + runtime self-heal (P6b); see LIFECYCLE.md + the kernel-validator agent.)"
 exit 0

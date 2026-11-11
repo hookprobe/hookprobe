@@ -62,6 +62,87 @@ pub struct FwdCounters {
     pub nat_tx_fail: u32,
     /// `lan|eth1 out` blocks after un-NAT act as drops (a reject would have to be re-NATed).
     pub block_as_drop: u32,
+    /// G19: flows the signed `tunnel` carries whose route said `via mgmt` — sent through the tunnel (or dropped
+    /// when it cannot send), never in cleartext out the management interface (routing review 2026-11-11).
+    pub g19_over_mgmt_route: u32,
+    /// A route's `gw` stopped answering ARP: taken out of route selection (metric failover) until it answers.
+    pub nh_dead: u32,
+}
+
+// ---- next-hop liveness (routing review 2026-11-11) -----------------------------------------------------------
+// A `route … gw X` whose X never answers ARP used to blackhole: the route stayed selected and every packet was
+// dropped "next hop unresolved". Now X counts as down once it has stayed unresolved for NH_DEAD_MS (≈3 ARP
+// requests at the 1/s limit) and route selection skips it, so the metric failover applies; while down it is
+// re-probed at most once a second and comes back as soon as it answers. Single writer: the forwarding path.
+// Keyed by (egress, gateway) — a VRF id joins the key with R1 (ADR 0060/0061).
+const NH_DEAD_MS: u64 = 3_000;
+const NH_SLOTS: usize = 8;
+#[derive(Clone, Copy)]
+struct NhLive {
+    via: u8,
+    gw: [u8; 4],
+    first_miss_ms: u64,
+    dead: bool,
+    last_probe_ms: u64,
+}
+static mut NH: [NhLive; NH_SLOTS] = [NhLive { via: 0xff, gw: [0; 4], first_miss_ms: 0, dead: false, last_probe_ms: 0 }; NH_SLOTS];
+
+fn nh_tab() -> &'static mut [NhLive; NH_SLOTS] {
+    unsafe { &mut *core::ptr::addr_of_mut!(NH) }
+}
+fn nh_is_dead(via: If, gw: [u8; 4]) -> bool {
+    nh_tab().iter().any(|e| e.via == via as u8 && e.gw == gw && e.dead)
+}
+/// Record a next-hop resolution result. Returns true when this call declared the next hop dead.
+fn nh_note(via: If, gw: [u8; 4], resolved: bool, now_ms: u64) -> bool {
+    let t = nh_tab();
+    let i = match t.iter().position(|e| e.via == via as u8 && e.gw == gw) {
+        Some(i) => i,
+        None if resolved => return false,
+        None => {
+            // a free slot, else the oldest live entry (a dead one is kept: it must stay out of selection)
+            let i = t.iter().position(|e| e.via == 0xff).or_else(|| t.iter().position(|e| !e.dead)).unwrap_or(0);
+            t[i] = NhLive { via: via as u8, gw, first_miss_ms: now_ms, dead: false, last_probe_ms: now_ms };
+            i
+        }
+    };
+    if resolved {
+        t[i].via = 0xff;
+        t[i].dead = false;
+        return false;
+    }
+    if !t[i].dead && now_ms.saturating_sub(t[i].first_miss_ms) >= NH_DEAD_MS {
+        t[i].dead = true;
+        return true;
+    }
+    false
+}
+/// Re-probe dead next hops (at most once a second each; the resolver itself rate-limits its ARP requests).
+fn nh_probe<N: ApNic>(nic: &mut N, now_ms: u64) {
+    for i in 0..NH_SLOTS {
+        let e = nh_tab()[i];
+        if !e.dead || now_ms.saturating_sub(e.last_probe_ms) < 1000 {
+            continue;
+        }
+        nh_tab()[i].last_probe_ms = now_ms;
+        let ok = if e.via == If::Mgmt as u8 { nic.mgmt_nexthop(e.gw).is_some() } else { nic.wan_nexthop(e.gw).is_some() };
+        if ok {
+            let _ = nh_note(if e.via == If::Mgmt as u8 { If::Mgmt } else { If::Wan }, e.gw, true, now_ms);
+        }
+    }
+}
+/// `[P-apcore]` only: pretend the tunnel carries this destination (the real `carries` needs a live tunnel).
+#[cfg(feature = "securechannel")]
+static mut TEST_CARRY: Option<[u8; 4]> = None;
+#[cfg(feature = "securechannel")]
+fn g19_carries(dst: [u8; 4]) -> bool {
+    (unsafe { TEST_CARRY }) == Some(dst) || crate::g19::carries(dst)
+}
+fn nh_clear() {
+    for e in nh_tab().iter_mut() {
+        e.via = 0xff;
+        e.dead = false;
+    }
 }
 
 /// Fixed per-port facts.
@@ -97,11 +178,17 @@ pub fn forward4<N: ApNic>(
         if act == Act::Allow {
             let mgmt_up = nic.mgmt().is_some_and(|m| m.up);
             let wan_up = nic.wan_up();
-            if let Some(r) = pol.route(&p.src, &p.dst, &|i| match i {
-                If::Wan => wan_up,
-                If::Mgmt => mgmt_up,
-                _ => false,
-            }) {
+            let now_ms = nic.now().saturating_mul(1000) / nic.freq().max(1);
+            nh_probe(nic, now_ms);
+            let live = |r: &hal::policy::Route| {
+                let up = match r.via {
+                    If::Wan => wan_up,
+                    If::Mgmt => mgmt_up,
+                    _ => false,
+                };
+                up && !r.gw.filter(|g| !g.v6).is_some_and(|g| nh_is_dead(r.via, [g.a[0], g.a[1], g.a[2], g.a[3]]))
+            };
+            if let Some(r) = pol.route_live(&p.src, &p.dst, &live) {
                 egress = r.via;
                 nh_ip = r.gw.filter(|g| !g.v6).map(|g| [g.a[0], g.a[1], g.a[2], g.a[3]]);
             }
@@ -160,9 +247,32 @@ pub fn forward4<N: ApNic>(
         }
     }
     match act {
+        // G19: a flow the signed `tunnel` policy carries rides the Noise tunnel to the super-PoP (NAT to the inner
+        // /32, sealed DATA over UDP 7655) — after every check above (holds, device policy, Shield, IDS).
+        #[cfg(feature = "securechannel")]
+        Act::Allow if frame.len() >= 34 && g19_carries([frame[30], frame[31], frame[32], frame[33]]) => {
+            // routing review 2026-11-11: checked BEFORE the `via mgmt` arm — a carried flow never leaves in
+            // cleartext out the management interface; if the tunnel cannot send, the packet is dropped (counted)
+            if egress == If::Mgmt {
+                c.g19_over_mgmt_route += 1;
+            }
+            let now_ms = (nic.now().saturating_mul(1000) / nic.freq().max(1)) as i64;
+            let ok = crate::g19::send(frame, nif, &cfg.inside_net, nst, nic.ticks(), now_ms, &mut |f| nic.wan_tx(f));
+            if !ok {
+                c.nat_tx_fail += 1;
+            }
+            ok
+        }
         Act::Allow if egress == If::Mgmt => {
             let Some(mg) = nic.mgmt() else { return false };
-            match nic.mgmt_nexthop(nh_ip.unwrap_or(mg.gw)) {
+            let r = nic.mgmt_nexthop(nh_ip.unwrap_or(mg.gw));
+            if let Some(g) = nh_ip {
+                let now_ms = nic.now().saturating_mul(1000) / nic.freq().max(1);
+                if nh_note(If::Mgmt, g, r.is_some(), now_ms) {
+                    c.nh_dead += 1;
+                }
+            }
+            match r {
                 Some(nmac) => {
                     if let Some(k) = nat::outbound_redirect(frame, nif, &cfg.inside_net, None, &mg.ip, &mg.mac, &nmac, nbuf, nic.ticks(), nst) {
                         c.pol_via_mgmt += 1;
@@ -177,22 +287,18 @@ pub fn forward4<N: ApNic>(
                 }
             }
         }
-        // G19: a flow the signed `tunnel` policy carries rides the Noise tunnel to the super-PoP (NAT to the inner
-        // /32, sealed DATA over UDP 7655) — after every check above (holds, device policy, Shield, IDS).
-        #[cfg(feature = "securechannel")]
-        Act::Allow if frame.len() >= 34 && crate::g19::carries([frame[30], frame[31], frame[32], frame[33]]) => {
-            let now_ms = (nic.now().saturating_mul(1000) / nic.freq().max(1)) as i64;
-            let ok = crate::g19::send(frame, nif, &cfg.inside_net, nst, nic.ticks(), now_ms, &mut |f| nic.wan_tx(f));
-            if !ok {
-                c.nat_tx_fail += 1;
-            }
-            ok
-        }
         Act::Allow => {
             let w = nic.wan();
             // `route … via wan gw X`: X's MAC (ARP-resolved); the default gateway otherwise.
             let gw_mac = match nh_ip {
-                Some(g) => match nic.wan_nexthop(g) {
+                Some(g) => match {
+                    let r = nic.wan_nexthop(g);
+                    let now_ms = nic.now().saturating_mul(1000) / nic.freq().max(1);
+                    if nh_note(If::Wan, g, r.is_some(), now_ms) {
+                        c.nh_dead += 1;
+                    }
+                    r
+                } {
                     Some(mac) => mac,
                     None => {
                         c.pol_mgmt_nh_miss += 1; // counted with the mgmt misses: "next hop unresolved"
@@ -1118,10 +1224,47 @@ pub fn selftest() -> bool {
     let quarantined = !go!(&f[..n], If::Lan) && nic.wan_n == w1 && c.pol_drop[If::Lan as usize] == 1;
     crate::devpolicy::load_text(b"");
     crate::shield::reset_stats();
-    let pass = snat && unresolved && txfail && block && drop && mg_down && via_mgmt && failover && shield && clean && quarantined;
+    // 9. routing review 2026-11-11: `via wan gw X` with a dead X fails over by metric instead of blackholing, and
+    //    comes back once X answers ARP again
+    nh_clear();
+    let _ = hal::policy::parse_policy(b"HQPOL1\nroute 0.0.0.0/0 via wan gw 100.64.7.254 metric 10\nroute 0.0.0.0/0 via mgmt metric 100\n", &mut pol);
+    nic.mgmt = Some(MgmtView { ip: [192, 168, 200, 146], mac: [0x02, 0x6d, 0, 0, 0, 0x46], gw: [192, 168, 200, 1], up: true });
+    nic.nexthop = None;
+    let (w2, m2) = (nic.wan_n, nic.mgmt_n);
+    let n = frame4(6, [93, 184, 216, 34], 443, &[], &mut f);
+    nic.t = 10_000;
+    let miss1 = !go!(&f[..n], If::Lan);
+    nic.t = 11_500;
+    let miss2 = !go!(&f[..n], If::Lan) && c.nh_dead == 0;
+    nic.t = 13_100; // unresolved for 3.1 s: declared dead (this packet still dropped)
+    let declared = !go!(&f[..n], If::Lan) && c.nh_dead == 1;
+    nic.t = 13_200; // the metric-100 route via mgmt carries it now
+    let failed_over = go!(&f[..n], If::Lan) && nic.mgmt_n == m2 + 1 && nic.wan_n == w2;
+    nic.nexthop = Some([0x02, 0x77, 0, 0, 0, 0xfe]);
+    nic.t = 14_300; // re-probe (>= 1 s since the last): X answers -> back on the WAN via X
+    let back = go!(&f[..n], If::Lan) && nic.wan_n == w2 + 1 && nic.last[0..6] == [0x02, 0x77, 0, 0, 0, 0xfe];
+    let nh_ok = miss1 && miss2 && declared && failed_over && back;
+    // 10. G19: a flow the signed tunnel carries, routed `via mgmt`, never leaves in cleartext out mgmt — the tunnel
+    //     sends it, or (no tunnel here) it is dropped and counted
+    #[cfg(feature = "securechannel")]
+    let g19_ok = {
+        let _ = hal::policy::parse_policy(b"HQPOL1\nroute 203.0.113.0/24 via mgmt\nroute 0.0.0.0/0 via wan\n", &mut pol);
+        unsafe { TEST_CARRY = Some([203, 0, 113, 7]) };
+        let (m3, w3, pv) = (nic.mgmt_n, nic.wan_n, c.pol_via_mgmt);
+        let n = frame4(6, [203, 0, 113, 7], 443, &[], &mut f);
+        let r = !go!(&f[..n], If::Lan) && nic.mgmt_n == m3 && nic.wan_n == w3 && c.g19_over_mgmt_route == 1 && c.pol_via_mgmt == pv;
+        unsafe { TEST_CARRY = None };
+        r
+    };
+    #[cfg(not(feature = "securechannel"))]
+    let g19_ok = true;
+    nic.mgmt = None;
+    nh_clear();
+    pol = Policy::new();
+    let pass = snat && unresolved && txfail && block && drop && mg_down && via_mgmt && failover && shield && clean && quarantined && nh_ok && g19_ok;
     arch_aarch64::_print(format_args!(
-        " [P-apcore] {} — G0 step 1: the AP's client IPv4 forwarding ladder (was the cm5-only fwd4! macro) on a recording fake NIC: SNAT to the WAN lease via the gateway={} unresolved next hop -> nothing sent={} WAN tx failure counted={} `lan in` block -> reject to the client, counted={} drop counted, silent={} mgmt gateway down -> default via WAN={} then SNATs to the mgmt address={} WAN down -> metric failover to mgmt={} Shield answers a blocked name locally={} clean DNS forwarded={} quarantined device never forwarded, not an ACL drop={}\n",
-        if pass { "PASS" } else { "FAIL" }, snat, unresolved, txfail, block, drop, mg_down, via_mgmt, failover, shield, clean, quarantined
+        " [P-apcore] {} — G0 step 1: the AP's client IPv4 forwarding ladder (was the cm5-only fwd4! macro) on a recording fake NIC: SNAT to the WAN lease via the gateway={} unresolved next hop -> nothing sent={} WAN tx failure counted={} `lan in` block -> reject to the client, counted={} drop counted, silent={} mgmt gateway down -> default via WAN={} then SNATs to the mgmt address={} WAN down -> metric failover to mgmt={} Shield answers a blocked name locally={} clean DNS forwarded={} quarantined device never forwarded, not an ACL drop={} | a dead `via wan gw X` (3 s without ARP) fails over by metric and returns when X answers={} a G19-carried flow routed via mgmt never leaves in cleartext on mgmt={}\n",
+        if pass { "PASS" } else { "FAIL" }, snat, unresolved, txfail, block, drop, mg_down, via_mgmt, failover, shield, clean, quarantined, nh_ok, g19_ok
     ));
     pass
 }

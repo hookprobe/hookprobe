@@ -14458,7 +14458,7 @@ route 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100
 route 10.20.0.0/16 via mgmt gw 192.168.200.1
 route 10.20.5.0/24 via wan
 route 0.0.0.0/0 from 10.99.0.128/25 via mgmt gw 192.168.200.1 metric 5
-route 2001:db8:1::/48 via mgmt
+route 2001:db8:1::/48 via wan
 ";
     let mut p = Policy::new();
     let parsed = parse_policy(txt, &mut p).is_ok() && p.npl == 5 && p.nacl == 2 && p.nbind == 3 && p.nroutes == 6
@@ -14493,7 +14493,7 @@ route 2001:db8:1::/48 via mgmt
         && r(cli, a4([10, 20, 5, 9]), &all_up) == Some((If::Wan, None, 0)) // /24 beats /16
         && r(cli, a4([10, 20, 9, 9]), &all_up) == Some((If::Mgmt, gw, 0))
         && r(cli, a4([8, 8, 8, 8]), &wan_down) == Some((If::Mgmt, gw, 100)) // failover by metric
-        && r(v6a(b"2a02::5"), v6a(b"2001:db8:1:5::1"), &all_up).map(|x| x.0) == Some(If::Mgmt)
+        && r(v6a(b"2a02::5"), v6a(b"2001:db8:1:5::1"), &all_up).map(|x| x.0) == Some(If::Wan)
         && r(v6a(b"2a02::5"), v6a(b"2606::1"), &all_up).is_none();
     // whole-file rejection, with the line number
     let mut q = Policy::new();
@@ -14504,7 +14504,12 @@ route 2001:db8:1::/48 via mgmt
         && parse_policy(b"HQPOL1\nacl A seq 1 drop any any any\ninterface dmz acl in A\n", &mut q) == Err(PolicyErr::Line(3))
         && parse_policy(b"HQPOL1\nroute 0.0.0.0/0 gw 1.2.3.4\n", &mut q) == Err(PolicyErr::Line(2)) // no via
         && parse_policy(b"HQPOL1\nprefix-list X seq 1 permit 10.0.0.0/8 ge\n", &mut q) == Err(PolicyErr::Line(2))
-        && parse_policy(b"acl A seq 1 drop any any any\n", &mut q) == Err(PolicyErr::NoMagic);
+        && parse_policy(b"acl A seq 1 drop any any any\n", &mut q) == Err(PolicyErr::NoMagic)
+        // routing review 2026-11-11: well-formed routes forwarding could never honour are refused, not silently dead
+        && parse_policy(b"HQPOL1\nroute 10.30.0.0/16 via lan\n", &mut q) == Err(PolicyErr::Unsupported(2))
+        && parse_policy(b"HQPOL1\nroute 10.30.0.0/16 via eth1 gw 10.99.1.2\n", &mut q) == Err(PolicyErr::Unsupported(2))
+        && parse_policy(b"HQPOL1\nroute 2001:db8:1::/48 via mgmt\n", &mut q) == Err(PolicyErr::Unsupported(2))
+        && parse_policy(b"HQPOL1\nroute ::/0 via wan gw 2001:db8::1\n", &mut q) == Err(PolicyErr::Unsupported(2));
     // WAN.TXT link keys
     let w: &[u8] = b"HQWAN1\nmode=pppoe\npppoe_user=u@isp\npppoe_pass=x\nvlan=100\nvlan_outer=10\npcp=3\nmgmt_vlan=200\nmgmt=static\nmgmt_ip=192.168.200.2/24\nmgmt_gw=192.168.200.1\n";
     let link_ok = hal::parse_wan_link(w) == Ok(hal::WanLink { vlan: 100, outer: 10, pcp: 3, mgmt: Some(hal::MgmtIf { vlan: 200, stat: Some(([192, 168, 200, 2], 24, [192, 168, 200, 1])) }), floor: None, floor_bad: false })

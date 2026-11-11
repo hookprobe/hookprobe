@@ -13,6 +13,8 @@ path = "src/lib.rs"
 [dependencies]
 libfuzzer-sys = "0.4"
 boot-abi = { path = "../../../os/kernel/boot-abi" }
+ed25519-compact = { version = "2", default-features = false }
+arch_aarch64 = { path = "arch-shim", package = "heqk-arch-shim" }
 
 [workspace]
 
@@ -40,6 +42,13 @@ bench = false
 [[bin]]
 name = "frame_meta"
 path = "fuzz_targets/frame_meta.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "cfg_bundle"
+path = "fuzz_targets/cfg_bundle.rs"
 test = false
 doc = false
 bench = false

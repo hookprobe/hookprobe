@@ -59,6 +59,29 @@ pub enum CfgErr {
     SectionTooLong(u8),
     NonCanonical(u8),
     Duplicate(u8),
+    /// A policy route forwarding could never honour (routing review 2026-11-11): `via lan|eth1`, or an IPv6 route
+    /// other than `via wan` without a gateway. Refused at stage time, the same rule as `hal::policy`.
+    UnsupportedRoute,
+}
+
+/// The route rule shared with `hal::policy::parse_policy`, `hqcfg.py` and the browser builder.
+fn route_unsupported(ln: &[u8]) -> bool {
+    let mut it = ln.split(|&b| b == b' ');
+    if it.next() != Some(&b"route"[..]) {
+        return false;
+    }
+    let v6 = it.next().is_some_and(|d| d.contains(&b':'));
+    let (mut via, mut gw, mut prev): (&[u8], bool, &[u8]) = (b"", false, b"");
+    for w in it {
+        if prev == b"via" {
+            via = w;
+        }
+        if w == b"gw" {
+            gw = true;
+        }
+        prev = w;
+    }
+    via == b"lan" || via == b"eth1" || (v6 && (via != b"wan" || gw))
 }
 
 /// A verified bundle: borrowed sections (kind, body) of the caller's buffer.
@@ -270,6 +293,9 @@ pub fn canonical(kind: u8, body: &[u8]) -> Result<(), CfgErr> {
     for (i, ln) in text.split(|&b| b == b'\n').enumerate() {
         if ln.is_empty() || ln.last() == Some(&b' ') || ln.iter().any(|&c| !(0x20..=0x7e).contains(&c)) {
             return Err(CfgErr::NonCanonical(kind));
+        }
+        if kind == KIND_POLICY && route_unsupported(ln) {
+            return Err(CfgErr::UnsupportedRoute);
         }
         let k = line_key(kind, ln)?;
         // bounded: a section is at most ~4 KiB, so at most ~2k lines
