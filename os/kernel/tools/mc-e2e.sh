@@ -99,6 +99,8 @@ BADR=$(python3 -I -c "import socket,sys,urllib.parse as u; p=u.urlparse(sys.argv
 grep -q " 400" <<<"$BADR" && ok "a malformed request line is refused by the EL0 parser (400)" || bad "malformed request: $BADR"
 # ADR 0050 D4 step 2: Shield's DNS parsing runs in the EL0 LAN-services server (boot self-test + health)
 grep -qa "\[P-lansvc\] PASS" "$LOG" && ok "Shield DNS parsing in the EL0 LAN-services server: same facts as in-kernel, fault contained ([P-lansvc])" || bad "lansvc: $(grep -a 'P-lansvc\|LANSVC' "$LOG" | head -3)"
+grep -qa "\[P-hsh\] PASS" "$LOG" && ok "ADR 0059 step 4a: the EL0 shell — parser limits, read commands via the management ABI, role enforced by the kernel, fault contained ([P-hsh])" || bad "hsh: $(grep -a 'P-hsh\|\[HSH\]' "$LOG" | head -3 | cut -c1-400)"
+grep -qa "\[P-mgmtabi\] PASS" "$LOG" && ok "ADR 0059 D9: management ABI read messages answer from the /api producers ([P-mgmtabi])" || bad "mgmtabi: $(grep -a 'P-mgmtabi' "$LOG" | head -2 | cut -c1-300)"
 HP=$(curl -s -m 10 $C "$B/api/health")
 echo "$HP" | jget "d['http_parser']['where']=='el0' and d['http_parser']['requests']>5 and d['http_parser']['parser_faults']==0 and d['http_parser']['server_faults']==0" | grep -q True && ok "Mission Control requests are parsed in the EL0 server (ADR 0050 D4 step 1), no faults: $(echo "$HP" | jget "d['http_parser']")" || bad "http parser placement: $(echo "$HP" | jget "d.get('http_parser')")"
 echo "$HP" | jget "d['dns_parser']['where']=='el0' and d['dns_parser']['el0_messages']>0" | grep -q True && ok "/api/health dns_parser: el0 $(echo "$HP" | jget "d['dns_parser']")" || bad "dns_parser: $(echo "$HP" | jget "d.get('dns_parser')")"
@@ -154,20 +156,25 @@ grep -q 're-authentication failed' <<<"$RB" && ok "G49: /api/reboot refuses with
 curl -s -m 10 $C "$B/api/network" | jget "(lambda k: k is None or (len(k)==64 and all(c in '0123456789abcdef' for c in k)))(d['trust_anchor']['public_key'])" | grep -q True && ok "ADR 0058: /api/network trust_anchor carries public_key" || bad "trust_anchor public_key missing"
 # ADR 0058 D3: owner configuration key — the state is reported; enrollment needs re-auth and (QEMU) has no DataVolume
 AN=$(curl -s -m 10 $C "$B/api/anchor")
-echo "$AN" | jget "d['owner_enrolled'] is False and d['owner_key'] is None and d['can']=='enroll' and d['config_files_verified_by'] in ('vendor','none (standalone)')" | grep -q True && ok "ADR 0058 D3: /api/anchor reports the vendor key and no enrolled owner key" || bad "/api/anchor: $AN"
+echo "$AN" | jget "d['owner_enrolled'] is False and d['owner_key'] is None and d['can']=='enroll' and d['config_files_verified_by'] in ('vendor','none (standalone)') and d['config_protected']==(d['vendor_key'] is not None) and (d['config_protected'] or d['state']=='CONFIG UNPROTECTED') and 'wan' in d['floors']" | grep -q True && ok "ADR 0058 D3: /api/anchor reports the vendor key and no enrolled owner key" || bad "/api/anchor: $AN"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/anchor")" = 401 ] && ok "/api/anchor requires the owner session" || bad "/api/anchor reachable without a session"
 PK=$(printf '%064d' 7); PF=$(printf '%0128d' 7)
 AE=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "public_key=$PK&proof=$PF&seq=$((SQN+3))&owner_key=wrong-key-000000000" "$B/api/anchor/enroll")
 grep -q 're-authentication failed' <<<"$AE" && ok "ADR 0058 D3: owner-key enrollment refuses without re-authentication" || bad "enroll guard: $AE"
 AE2=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "public_key=$PK&proof=$PF&seq=$((SQN+4))" --data-urlencode "owner_key=$TOKEN" "$B/api/anchor/enroll")
 grep -q '"refused":"no DataVolume' <<<"$AE2" && ok "ADR 0058 D3: enrollment with no DataVolume is refused honestly (QEMU)" || bad "enroll without DataVolume: $AE2"
+# ADR 0059 step 3: the configuration lifecycle is reported; confirm / rollback need re-auth and refuse honestly in QEMU
+CF=$(curl -s -m 10 $C "$B/api/config")
+echo "$CF" | jget "d['state']=='none' and d['on_trial'] is False and d['window_s']==300 and d['auto_rollback'] is True" | grep -q True && ok "ADR 0059: /api/config reports the cfgd lifecycle (no bundle in QEMU)" || bad "/api/config: $CF"
+CFR=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=confirm+test&permanent=true&seq=$((SQN+5))" --data-urlencode "owner_key=$TOKEN" "$B/api/config/confirm")
+grep -q '"refused":"no configuration' <<<"$CFR" && ok "ADR 0059: /api/config/confirm with nothing on trial is refused honestly" || bad "config confirm: $CFR"
 UPS=$(curl -s -m 10 $C "$B/api/upload")
-echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices','wan','wifi','policy'] and all(t['source']=='boot' for t in d['types']) and [t['applies'] for t in d['types']]==['now']*6+['next_boot']*3 and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
+echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices','wan','wifi','policy','config'] and all(t['source']=='boot' for t in d['types']) and [t['applies'] for t in d['types']]==['now']*6+['next_boot']*4 and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"
 # ADR 0058 rollback: owner re-authentication first; with no artifact store in QEMU nothing can be rolled back
-RBK=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+5))&owner_key=wrong-key-000000000" "$B/api/upload/rollback")
+RBK=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+6))&owner_key=wrong-key-000000000" "$B/api/upload/rollback")
 grep -q 're-authentication failed' <<<"$RBK" && ok "ADR 0058: /api/upload/rollback refuses without owner re-authentication" || bad "rollback guard: $RBK"
-RBN=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+6))" --data-urlencode "owner_key=$TOKEN" "$B/api/upload/rollback")
+RBN=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+7))" --data-urlencode "owner_key=$TOKEN" "$B/api/upload/rollback")
 grep -q '"refused":"no artifact store"' <<<"$RBN" && ok "ADR 0058: rollback with no artifact store is refused honestly" || bad "rollback without store: $RBN"
 EN=$(curl -s -m 10 $C "$B/api/engines")
 echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=2 for e in d['engines'])" | grep -q True \

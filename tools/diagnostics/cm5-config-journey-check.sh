@@ -6,7 +6,7 @@
 #      refused and an owner-signed one accepted (config files verified by the owner key only).
 #   C. rule 7: an owner-signed WAN.TXT that takes the uplink AND the management VLAN away still leaves Mission
 #      Control on the Wi-Fi AP; the bench Pi (a Wi-Fi client) rolls it back and restarts — the device returns.
-#   D. a factory reset clears the enrolled owner key (vendor key stays).
+#   D. a factory reset (owner TOKEN only) does NOT clear the enrolled owner key (ADR 0059 Phase 0.6).
 # Bench only: changes the bench unit's WAN; the next reflash resets everything.
 #   tools/diagnostics/cm5-config-journey-check.sh <owner-key-file> <serial-log> <vendor-key> [mc] [pi]
 set -u -o pipefail
@@ -66,6 +66,8 @@ python3 -c 'import sys; b=open(sys.argv[1],"rb").read(); open(sys.argv[1],"wb").
 $SIGN sign-wan "$T/owner.key" "$T/BAD.TXT" $G4 "$T/BAD.SIG" >/dev/null
 $UP --type wan --sig "$T/BAD.SIG" --file "$T/BAD.TXT" > "$T/r" 2>&1; grep -q '"staged": true' "$T/r"; chk $? "C1 a disconnecting WAN.TXT (vlan 999, no mgmt) staged"
 mark=$(stat -c %s "$LOG"); $UP --reboot "check rule 7" > /dev/null 2>&1; sleep 60
+# the reboot drops the Pi's Wi-Fi association: re-join it before probing (batch 59: an un-joined Pi read as a defect)
+[ -n "${PI_SUDO_FILE:-}" ] && "$HERE/pi-ensure-ap.sh" >/dev/null 2>&1
 scp -q -o BatchMode=yes "$UPT" "$PI:/tmp/hq-upload.py" && scp -q -o BatchMode=yes "$KEY" "$PI:/tmp/hqcj.key"
 for _ in $(seq 1 60); do pi "curl -sk -o /dev/null -m 5 $AP_MC/" && break; sleep 5; done
 pi "curl -sk -o /dev/null -w '%{http_code}' -m 8 $AP_MC/api/health" | grep -q 200; chk $? "C2 Mission Control still answers on the Wi-Fi AP ($AP_MC) with the uplink gone"
@@ -73,7 +75,7 @@ curl -sk -o /dev/null -m 5 "$MC/"; [ $? -ne 0 ]; chk $? "C3 the management VLAN 
 pi "python3 -I /tmp/hq-upload.py --mc $AP_MC --owner-key-file /tmp/hqcj.key --insecure --rollback wan" > "$T/r" 2>&1; grep -q '"ok": true' "$T/r"; chk $? "C4 rollback from the Wi-Fi client ($(cut -c1-100 "$T/r"))"
 pi "python3 -I /tmp/hq-upload.py --mc $AP_MC --owner-key-file /tmp/hqcj.key --insecure --reboot recover" > /dev/null 2>&1
 sleep 15; up "$MC"; chk $? "C5 after the restart the device is back on the management VLAN (gen $G3 restored)"
-# --- D: factory reset clears the owner key ---
+# --- D: factory reset keeps the owner key (only a reflash / an owner-signed reset may drop it) ---
 "$HERE/cm5-factory-reset-check.sh" "$KEY" "$LOG" "$MC" > "$T/fr" 2>&1; tail -1 "$T/fr" | sed 's/^/  /'
-A=$(anchor); grep -q '"owner_enrolled":false' <<<"$A" && grep -q '"vendor_key":"[0-9a-f]\{64\}"' <<<"$A"; chk $? "D1 factory reset: owner key cleared, vendor key kept"
+A=$(anchor); grep -q "\"owner_key\":\"$OPK\"" <<<"$A"; chk $? "D1 factory reset by the owner token keeps the enrolled owner key"
 [ "$ok" -eq "$n" ] && { echo "CONFIG-JOURNEY: PASS ($ok/$n)"; exit 0; } || { echo "CONFIG-JOURNEY: FAIL ($ok/$n)"; exit 1; }

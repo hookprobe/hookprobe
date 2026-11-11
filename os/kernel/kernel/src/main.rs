@@ -74,6 +74,13 @@ mod clock;
 #[cfg(feature = "detbench")]
 mod detbench;
 mod artstore;
+mod cfgbundle;
+mod cfgd;
+// ADR 0059 step 4a: the management ABI + the EL0 native shell
+#[cfg(feature = "mcserve")]
+mod mgmtabi;
+#[cfg(feature = "mcserve")]
+mod hsh;
 mod datavol;
 mod ownerjournal;
 mod alerthook;
@@ -3115,12 +3122,21 @@ fn cm5_p10_probe() {
                                 anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
                                 anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
                                 anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
-                                anchor::Decision::Standalone => kprint!(" [ANCHOR] no operator key pinned or compiled in (standalone device)\n"),
+                                anchor::Decision::Standalone => kprint!(" [ANCHOR] CONFIG UNPROTECTED — no operator key pinned or compiled in: unsigned WAN.TXT / WIFI.TXT / POLICY.TXT are accepted (a debug / standalone image; release builds refuse this, ADR 0059 0.5)\n"),
                             }
                         }
                         // ADR 0058 rule 6 (operator 2026-11-10): verify BEFORE parsing or applying. With an operator key, a
                         // WAN.TXT that does not verify is ignored WHOLE — DHCP, untagged, no management sub-interface, the
                         // default floor; the LAN / Wi-Fi management network is unaffected. No key (standalone) = as before.
+                        // ADR 0059 step 3: cfgd decides which HQCFG1 bundle (if any) is in force — committed, on trial, or
+                        // reverted — BEFORE the WAN / Wi-Fi / POLICY loaders read their sections from it
+                        match cfgd::boot_device(cyw43::now_secs()) {
+                            cfgd::Boot::None => {}
+                            cfgd::Boot::Committed(g) => kprint!(" [CFGD] HQCFG1 configuration bundle generation {} in force (committed)\n", g),
+                            cfgd::Boot::Trial(g) => kprint!(" [CFGD] HQCFG1 bundle generation {} on TRIAL: committed once the WAN is usable, reverted after {} s otherwise\n", g, cfgd::WINDOW_S),
+                            cfgd::Boot::Reverted { from, to } => kprint!(" [CFGD] bundle generation {} REVERTED (trial failed / second boot while pending) -> {}\n", from, if to == 0 { 0 } else { to }),
+                            cfgd::Boot::Refused => kprint!(" [CFGD] the committed bundle no longer verifies — IGNORED, the per-file configuration applies\n"),
+                        }
                         let (wan_sig, wan_txt) = match arch_aarch64::emmc::Emmc::probe() {
                             Ok(d) => (wan_signed(&d), wan_present(&d)),
                             Err(_) => (None, false),
@@ -3507,6 +3523,8 @@ fn cm5_p10_probe() {
                         kprint!(" [P11-AP3] persistent WPA2 AP serve loop up — event-driven pump (assoc/deauth/ARP/DHCP), WAN keep-alive, 5s heartbeat\n");
                         let our_ip = [10u8, 99, 0, 1];
                         let offer_ip = [10u8, 99, 0, 10];
+                        // ADR 0059 D7: the real management paths cfgd probes before staging a bundle
+                        cfgd::set_path(hal::policy::If::Lan, our_ip, 24); // the AP (Mission Control is not served on eth1)
                         ratelimit::set_local_ip(0, u32::from_be_bytes(our_ip)); // ADR 0049 D3: our own addresses
                         let mut rx = [0u8; 2048];
                         let mut wbuf = [0u8; 2048];
@@ -3790,6 +3808,7 @@ fn cm5_p10_probe() {
                                 crate::tlshost::bring_up(Some(&dev));
                                 crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
                                 let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal
+                                let _ = crate::hsh::selftest(0); // ADR 0059 step 4a on metal: the EL0 shell + mgmtabi
                             }
                             mcserve::state().set_clock(0, mc_t0, freq);
                             #[cfg(feature = "appersist")]
@@ -3966,6 +3985,15 @@ fn cm5_p10_probe() {
                                         kprint!(" [OTA] trial not healthy within 5 min (WAN never usable) — rebooting to the previous slot\n");
                                         unsafe { core::arch::asm!("hvc #0") };
                                     }
+                                }
+                                // ADR 0059 step 3: commit the configuration trial once the WAN is usable; revert + reboot after the window
+                                match cfgd::tick_device(cyw43::now_secs(), up.usable()) {
+                                    cfgd::Tick::Committed(g) => kprint!(" [CFGD] bundle generation {} COMMITTED (healthy: WAN usable) — the bundle floor is now {}\n", g, g),
+                                    cfgd::Tick::RevertReboot => {
+                                        kprint!(" [CFGD] trial NOT healthy within {} s (WAN never usable) — reverted to the last-known-good, rebooting\n", cfgd::WINDOW_S);
+                                        reset_at = Some(now().wrapping_add(2 * freq));
+                                    }
+                                    cfgd::Tick::Idle => {}
                                 }
                                 if reset_at.is_some_and(|t| now() > t) {
                                     let _ = arch_aarch64::mailbox::notify_reboot();
@@ -4255,7 +4283,11 @@ fn cm5_p10_probe() {
                                             apcore::Client6::IdsDrop => v6_ids_drop[0] += 1,
                                             _ => {}
                                         }
-                                    } else if act == 0 && (up.usable() || unsafe { uplink::MGMT }.is_some()) && frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00 {
+                                    } else if act == 0 && frame.len() >= 34 && frame[12] == 0x08 && frame[13] == 0x00
+                                        // ADR 0058 rule 7 (metal batch 58): a frame TO the device (Mission Control, ping on the AP
+                                        // address) is always handled — management over Wi-Fi must survive a WAN change that takes the
+                                        // uplink AND the management VLAN away; only FORWARDING waits for an uplink
+                                        && (up.usable() || unsafe { uplink::MGMT }.is_some() || frame[30..34] == our_ip) {
                                         // Not ours to answer → the forwarding path. Three gates, in order:
                                         // (1) (MAC,IP) must be a lease we handed out — anti-hijack;
                                         // (2) the signed rule plane (IDS/IPS) — a threat verdict DROPs here;
@@ -5663,6 +5695,18 @@ fn device_mac() -> [u8; 6] {
     [(k[0] & 0xFE) | 0x02, k[1], k[2], k[3], k[4], k[5]]
 }
 
+/// ADR 0059: this device's 16-byte id for configuration binding (HQCFG1 `device_id`) and owner elevation (HQCHAL1):
+/// sha256(device identity public key)[..16] — public, stable across OTA, distinct per device. All zero without an SRK
+/// (no identity: device-bound bundles cannot match; challenges still carry a per-boot nonce).
+pub fn config_device_id() -> [u8; 16] {
+    #[cfg(all(feature = "hboot", feature = "securechannel"))]
+    if let Some(kp) = device_identity_keypair() {
+        let d = boot_abi::sha256::digest(&kp.pk[..]);
+        return d[..16].try_into().unwrap();
+    }
+    [0; 16]
+}
+
 #[cfg(all(feature = "hboot", feature = "securechannel"))]
 fn device_identity_keypair() -> Option<ed25519_compact::KeyPair> {
     let srk = seal_srk()?;
@@ -6996,6 +7040,10 @@ pub extern "C" fn kmain() -> ! {
         let _ = lanrelay::selftest();
         let _ = datavol::selftest();
         let _ = artstore::selftest();
+        #[cfg(not(feature = "cm5"))]
+        let _ = cfgbundle::selftest(); // ADR 0059 step 2: HQCFG1 against the shared vectors
+        #[cfg(not(feature = "cm5"))]
+        let _ = cfgd::selftest(); // ADR 0059 step 3: trial / commit / revert
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
@@ -14115,14 +14163,8 @@ pub static mut POLICY: hal::policy::Policy = hal::policy::Policy::new();
 /// WAN.TXT link keys (VLAN / QinQ / management sub-interface).
 fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::WanCfgErr>> {
     let mut sec = [0u8; 512];
-    dev.read_block(0, &mut sec).ok()?;
-    let p1 = store::parse_mbr(&sec)[0].start;
-    if p1 == 0 {
-        return None;
-    }
-    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
-    dev.read_block(lba, &mut sec).ok()?;
-    Some(hal::parse_wan_link(&sec))
+    let n = wan_body(dev, &mut sec)?;
+    Some(hal::parse_wan_link(&sec[..n]))
 }
 
 /// A station frame for Mission Control on the AP address: IPv4 TCP to `our_ip`:80/443.
@@ -14145,6 +14187,15 @@ fn mc_mgmt_tx(f: &[u8], dst: [u8; 4]) -> bool {
 
 /// POLICY.TXT (up to 4 KiB, contiguous on the FAT boot partition) -> POLICY. None = no file.
 fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::PolicyErr>> {
+    // ADR 0059 step 3: the HQCFG1 bundle in force (verified once by cfgd) carries the policy section
+    if let Some(p) = crate::cfgd::section(crate::cfgbundle::KIND_POLICY) {
+        let mut f = [0u8; hal::policy::POLICY_FILE_LEN];
+        if crate::cfgbundle::policy_file(p, &mut f) {
+            unsafe { POLICY_STATE = (1, crate::cfgd::generation()) };
+            kprint!(" [POLICY] from the HQCFG1 bundle (generation {}, {})\n", crate::cfgd::generation(), if crate::cfgd::on_trial() { "on trial" } else { "committed" });
+            return Some(hal::policy::parse_policy(&f, unsafe { &mut *core::ptr::addr_of_mut!(POLICY) }));
+        }
+    }
     let mut sec = [0u8; 512];
     dev.read_block(0, &mut sec).ok()?;
     let p1 = store::parse_mbr(&sec)[0].start;
@@ -14187,9 +14238,9 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
             Err(e) => {
                 // ADR 0058: a staged store copy the verifier refuses (tampered / below the floor) is disabled for
                 // this boot and the boot-partition POLICY.TXT is loaded instead
-                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Policy) {
-                    crate::artstore::disable(crate::artstore::Ty::Policy);
-                    kprint!(" [POLICY] the staged (uploaded) POLICY was REFUSED ({:?}) — falling back to the boot partition copy\n", e);
+                // ADR 0059 Phase 0.4: active half -> the other half (refused anyway if below the floor) -> boot copy
+                if crate::artstore::fallback_step(dev, p1, crate::artstore::Ty::Policy) {
+                    kprint!(" [POLICY] the stored POLICY was REFUSED ({:?}) — trying the next copy (other store half, then the boot partition)\n", e);
                     return load_policy(dev);
                 }
                 unsafe { POLICY_STATE = (3, 0) };
@@ -14209,6 +14260,16 @@ fn load_policy<D: hal::BlockDev>(dev: &D) -> Option<Result<(), hal::policy::Poli
 #[allow(dead_code)]
 fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr>> {
     policysig::config_key()?;
+    // ADR 0059 step 3: the wan section of the HQCFG1 bundle in force (verified by cfgd) — exactly its bytes
+    if let Some(w) = crate::cfgd::section(crate::cfgbundle::KIND_WAN) {
+        let mut b = [0u8; 512];
+        if w.len() + 7 <= b.len() {
+            b[..7].copy_from_slice(b"HQWAN1\n");
+            b[7..7 + w.len()].copy_from_slice(w);
+            unsafe { WAN_VERIFIED = Some((b, 7 + w.len())) };
+            return Some(Ok(crate::cfgd::generation()));
+        }
+    }
     let mut p1w = 0;
     let mut sec = [0u8; 512];
     let mut sig = [0u8; 512];
@@ -14232,6 +14293,21 @@ fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr
                     break;
                 }
             }
+            // ADR 0059 Phase 0.3: a verified generation below the WAN floor is a replay (an older signed WAN.TXT
+            // dropped on the card) — refused like a bad signature
+            #[cfg(feature = "p15-write")]
+            if let Ok(g) = v {
+                if let Err(floor) = crate::anchor::accept_cfg(crate::anchor::CfgTy::Wan, g, crate::artstore::from_store(dev, p1w, crate::artstore::Ty::Wan)) {
+                    kprint!(" [WAN] WAN.TXT generation {} is below the floor {} — a replayed older file, REFUSED\n", g, floor);
+                    v = Err(policysig::SigErr::RolledBack { gen: g, floor });
+                }
+            }
+            // SEC 2026-11-10: keep EXACTLY the signed bytes [..len]; the parsers read this buffer and nothing else
+            // (they used to re-read the whole sector, so lines appended after the signed length overrode it)
+            if v.is_ok() {
+                let len = (u64::from_le_bytes(sig[16..24].try_into().unwrap()) as usize).min(512);
+                unsafe { WAN_VERIFIED = Some((sec, len)) };
+            }
             v
         }
     };
@@ -14242,17 +14318,43 @@ fn wan_signed<D: hal::BlockDev>(dev: &D) -> Option<Result<u64, policysig::SigErr
             Some(store::parse_mbr(&sec)[0].start)
         })()
         .unwrap_or(0);
-        if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wan) {
-            crate::artstore::disable(crate::artstore::Ty::Wan);
-            kprint!(" [WAN] the staged (uploaded) WAN.TXT was REFUSED — falling back to the boot partition copy\n");
+        // ADR 0059 Phase 0.4: active half -> the other (previous) half -> the boot-partition copy
+        if crate::artstore::fallback_step(dev, p1, crate::artstore::Ty::Wan) {
+            kprint!(" [WAN] the stored WAN.TXT was REFUSED — trying the {} \n",
+                if crate::artstore::from_store(dev, p1, crate::artstore::Ty::Wan) { "previous generation (other store half)" } else { "boot partition copy" });
             return wan_signed(dev);
         }
     }
     Some(v)
 }
 
+/// The WAN.TXT bytes that verified (`wan_signed`), exactly the signed length.
+static mut WAN_VERIFIED: Option<([u8; 512], usize)> = None;
+
+/// What the WAN parsers may read: with an operator key, ONLY the verified signed bytes (None = nothing verified
+/// => the DHCP / untagged defaults); without a key (standalone image), the file as before.
+fn wan_body<D: hal::BlockDev>(dev: &D, out: &mut [u8; 512]) -> Option<usize> {
+    if policysig::config_key().is_some() {
+        let (b, l) = unsafe { WAN_VERIFIED }?;
+        *out = b;
+        return Some(l);
+    }
+    let mut sec = [0u8; 512];
+    dev.read_block(0, &mut sec).ok()?;
+    let p1 = store::parse_mbr(&sec)[0].start;
+    if p1 == 0 {
+        return None;
+    }
+    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
+    dev.read_block(lba, out).ok()?;
+    Some(512)
+}
+
 /// Is there a WAN.TXT (staged store copy or boot partition) at all?
 fn wan_present<D: hal::BlockDev>(dev: &D) -> bool {
+    if crate::cfgd::section(crate::cfgbundle::KIND_WAN).is_some() {
+        return true;
+    }
     let mut sec = [0u8; 512];
     if dev.read_block(0, &mut sec).is_err() {
         return false;
@@ -14265,14 +14367,8 @@ fn wan_present<D: hal::BlockDev>(dev: &D) -> bool {
 #[allow(dead_code)]
 fn load_wan_cfg<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanMode, hal::WanCfgErr>> {
     let mut sec = [0u8; 512];
-    dev.read_block(0, &mut sec).ok()?;
-    let p1 = store::parse_mbr(&sec)[0].start;
-    if p1 == 0 {
-        return None;
-    }
-    let (lba, _n) = crate::artstore::locate(dev, p1, WAN_8_3)?;
-    dev.read_block(lba, &mut sec).ok()?;
-    Some(hal::parse_wan_cfg(&sec))
+    let n = wan_body(dev, &mut sec)?;
+    Some(hal::parse_wan_cfg(&sec[..n]))
 }
 
 /// `[P-wancfg]` — WAN.TXT parsing (hal::parse_wan_cfg) against fixed vectors.
