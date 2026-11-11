@@ -25,7 +25,7 @@ for (const name of specs) {
   const errors = [];
   page.on('pageerror', (e) => errors.push(e.message));
   const t = {
-    page, base,
+    page, base, at: '',
     ok(cond, msg) { if (cond) { passes++; console.log(`  PASS  ${name}: ${msg}`); } else { fails++; console.log(`  FAIL  ${name}: ${msg}`); } },
     async go(path, settle = 900) { await page.goto(base + path, { waitUntil: 'load' }); await page.waitForTimeout(settle); },
     async shot(file, full = false) { if (shots) await page.screenshot({ path: join(shots, `${name}-${file}.png`), fullPage: full }); },
@@ -40,7 +40,7 @@ for (const name of specs) {
     await spec(t);
   } catch (e) {
     fails++;
-    console.log(`  FAIL  ${name}: aborted — ${String(e.message || e).split('\n')[0]}`);
+    console.log(`  FAIL  ${name}: aborted${t.at ? ` at "${t.at}"` : ''} (${page.url()}) — ${String(e.message || e).split('\n')[0]}`);
   }
   if (errors.length) { fails++; console.log(`  FAIL  ${name}: page errors — ${errors.join(' | ')}`); }
   await ctx.close();
