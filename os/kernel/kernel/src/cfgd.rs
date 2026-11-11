@@ -444,6 +444,22 @@ fn section_digests() -> [[u8; 32]; 3] {
     d
 }
 
+/// The subsystems this build applies LIVE (grows with the executors: WAN step 9, Wi-Fi step 10). A bundle that changes
+/// anything else keeps the next-boot PENDING trial (step 8).
+pub const LIVE_CAPABLE: u8 = CH_POLICY;
+
+/// Which subsystems a verified bundle's sections would change against the sections in force (stage time).
+pub fn changes_vs(pol: Option<&[u8]>, wan: Option<&[u8]>, wifi: Option<&[u8]>) -> u8 {
+    let cur = section_digests();
+    let mut ch = 0u8;
+    for (i, (sec, bit)) in [(pol, CH_POLICY), (wan, CH_WAN), (wifi, CH_WIFI)].iter().enumerate() {
+        if sec.map_or([0u8; 32], boot_abi::sha256::digest) != cur[i] {
+            ch |= bit;
+        }
+    }
+    ch
+}
+
 /// Queue a just-activated (PENDING, never tried) bundle for live apply. `floor` = the committed bundle floor.
 pub fn queue_live<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>, floor: u64) -> Result<u64, &'static str> {
     if unsafe { PHASE } != Phase::Idle || on_trial() {
@@ -840,10 +856,17 @@ pub fn policy_selftest() -> bool {
     // 5. a tighter policy swaps in (established flows are kept: the swap touches only the rule table)
     let tight = swap_policy(p2, live, scr) && live.nacl == 1 && live.acl[0].n == 2;
     unsafe { OWNER = saved };
-    let pass = good && bad && cut && before && owner_ok && other && tight;
+    // step 8 gate: against no bundle in force, a policy-only bundle is live-capable; one with a WAN or Wi-Fi section
+    // keeps the next-boot trial until those executors exist (steps 9, 10)
+    clear();
+    let pol_only = changes_vs(Some(b"acl A seq 10 allow any any any\n"), None, None);
+    let with_wan = changes_vs(Some(b"acl A seq 10 allow any any any\n"), Some(b"mode=dhcp\n"), None);
+    let gate = pol_only == CH_POLICY && pol_only & !LIVE_CAPABLE == 0 && with_wan & !LIVE_CAPABLE != 0
+        && changes_vs(None, None, None) == 0;
+    let pass = good && bad && cut && before && owner_ok && other && tight && gate;
     arch_aarch64::_print(format_args!(
-        " [P-cfgd-policy] {} — sealed-config / live-apply step 7, the live policy executor: a good policy swaps in and the policy generation advances={} an unparseable policy is refused and the policy in force kept (never a live lockdown)={} a policy cutting every management path is refused live={} F-e the owner's own client keeps its HTTPS path (a /32 block of it is refused once the owner is known)={} another client's /32 is fine={} a tighter policy swaps in={}\n",
-        if pass { "PASS" } else { "FAIL" }, good, bad, cut, before && owner_ok, other, tight
+        " [P-cfgd-policy] {} — sealed-config / live-apply step 7, the live policy executor: a good policy swaps in and the policy generation advances={} an unparseable policy is refused and the policy in force kept (never a live lockdown)={} a policy cutting every management path is refused live={} F-e the owner's own client keeps its HTTPS path (a /32 block of it is refused once the owner is known)={} another client's /32 is fine={} a tighter policy swaps in={} step 8: only a policy-only change is applied live, WAN / Wi-Fi changes keep the next-boot trial={}\n",
+        if pass { "PASS" } else { "FAIL" }, good, bad, cut, before && owner_ok, other, tight, gate
     ));
     pass
 }
@@ -890,6 +913,32 @@ pub fn tick_device(now_s: u64, healthy: bool) -> Tick {
     let _ = (now_s, healthy);
     Tick::Idle
 }
+/// Step 8: queue the just-activated bundle for live apply on the device store.
+pub fn queue_live_device() -> Result<u64, &'static str> {
+    if in_selftest() {
+        return Err("self-test: no state change");
+    }
+    #[cfg(all(feature = "cm5", feature = "p15-write"))]
+    if let Some(d) = device() {
+        return queue_live(d, crate::policysig::config_key(), crate::anchor::cfg_gens().cfg_floor);
+    }
+    Err("no configuration store on this device")
+}
+/// Step 8: report the executors' result for the plan `take_apply` handed out.
+pub fn applied_device(ok: bool, now_s: u64) -> Tick {
+    #[cfg(all(feature = "cm5", feature = "p15-write"))]
+    if let Some(d) = device() {
+        return applied(d, ok, now_s);
+    }
+    let _ = (ok, now_s);
+    Tick::Idle
+}
+/// Read access for an executor that falls back to the per-file sources (the sealed view over cfgd's handle).
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+pub fn with_device<R>(f: impl FnOnce(&arch_aarch64::emmc::Emmc) -> R) -> Option<R> {
+    device().map(|d| f(&*d))
+}
+
 /// Self-tests exercise the ABI paths that would confirm / roll back: while set, those refuse WITHOUT touching the
 /// device's real configuration state (metal batch 60: a boot self-test committed a live trial).
 static mut SELFTEST: bool = false;
