@@ -308,6 +308,10 @@ pub enum PolicyErr {
     /// logs the rejection loudly and runs without operator policy until the file is fixed.
     Line(u16),
     Full(u16),
+    /// (line) well-formed, but forwarding could never honour it — refused rather than silently dead
+    /// (routing review 2026-11-11): `route … via lan|eth1` (no inside-segment routing until R1), an IPv6 route
+    /// other than `via wan` without a gateway (the WAN is the only IPv6 egress; no IPv6 next-hop resolution).
+    Unsupported(u16),
 }
 
 impl Default for Policy {
@@ -409,9 +413,16 @@ impl Policy {
     /// Route for (src, dst): longest destination prefix whose `from` holds `src`, then lowest metric on
     /// an interface `up` reports usable. None = no route (the caller's default path).
     pub fn route(&self, src: &Addr, dst: &Addr, up: &dyn Fn(If) -> bool) -> Option<Route> {
+        self.route_live(src, dst, &|r: &Route| up(r.via))
+    }
+
+    /// As `route`, with liveness judged per route (interface up AND its next hop reachable), so a `gw` that stops
+    /// answering ARP drops out and the metric failover takes over (routing review 2026-11-11; R1's per-next-hop
+    /// liveness in miniature).
+    pub fn route_live(&self, src: &Addr, dst: &Addr, live: &dyn Fn(&Route) -> bool) -> Option<Route> {
         let mut best: Option<Route> = None;
         for r in &self.routes[..self.nroutes] {
-            if !r.dst.contains(dst) || !self.addr_ok(&r.src, src) || !up(r.via) {
+            if !r.dst.contains(dst) || !self.addr_ok(&r.src, src) || !live(r) {
                 continue;
             }
             best = match best {
@@ -876,6 +887,9 @@ pub fn parse_policy(buf: &[u8], out: &mut Policy) -> Result<(), PolicyErr> {
                 }
                 if !via {
                     return Err(bad);
+                }
+                if matches!(r.via, If::Lan | If::Eth1) || (r.dst.addr.v6 && (r.via != If::Wan || r.gw.is_some())) {
+                    return Err(PolicyErr::Unsupported(ln));
                 }
                 if out.nroutes == ROUTE_MAX {
                     return Err(PolicyErr::Full(ln));

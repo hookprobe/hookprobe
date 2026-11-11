@@ -7,7 +7,7 @@
 set -u
 T="${1:-60}"; cd "$(dirname "$0")/heqk-hal" || exit 2
 rc=0
-for t in policy wan_cfg frame_facts glom abslot dhcp_wire pppoe_disc ppp_ctl; do
+for t in policy wan_cfg frame_facts glom abslot dhcp_wire pppoe_disc ppp_ctl eapol_wire mgmt_records; do
   mkdir -p corpus/$t
   ml=4096; [ "$t" = abslot ] && ml=32768   # (was `\&\&` inside $(...): `[` errored, abslot got 4096 = 8 sectors)
   if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=$ml > "/tmp/heqk-fuzz-$t.log" 2>&1; then
@@ -29,7 +29,7 @@ else
 fi
 # the kernel crate's network-facing parsers (same source files, #[path]) — SEC-02
 cd ../heqk-kernel || exit 2
-for t in http_req dns_wire tls_hello frame_meta; do
+for t in http_req dns_wire tls_hello frame_meta cfg_bundle; do
   mkdir -p corpus/$t
   if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=4096 > "/tmp/heqk-fuzz-$t.log" 2>&1; then
     echo "  ok   $t: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-$t.log | tail -1)"
