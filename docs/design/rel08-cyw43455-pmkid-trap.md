@@ -141,3 +141,11 @@ Run against the exact firmware we may legally ship:
   control (no re-join).
 - **B:** the original firmware plus the RAM patch, same trigger.
 - **Results:** `docs/design/metal-evidence/` (below, once run).
+
+## Operator decision 2026-11-11 (1A)
+
+The correction ships **on by default with `wpa3`**. Caveat from the operator: it needs **ongoing compatibility testing
+and vendor coordination** (Infineon case IFX-261111-2369681). Concretely:
+- every firmware upgrade re-runs `tools/firmware/rel08/check.sh` (the patch refuses to apply to any other image);
+- the REL-08 regression matrix (above) runs on every candidate release;
+- the correction is removed once a licensed Infineon release carries the fix.

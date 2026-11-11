@@ -150,6 +150,26 @@ mod el0 {
                 src = &src[n..];
             }
         }
+        /// Zero `n` bytes of the shared IO page at `off` (key material: operator 2026-11-11 decision 2A).
+        pub fn scrub(&mut self, mut off: usize, mut n: usize) {
+            while n > 0 && off < IO_SIZE {
+                let (pg, po) = (off / 0x1000, off % 0x1000);
+                let k = n.min(0x1000 - po);
+                for i in 0..k {
+                    unsafe { core::ptr::write_volatile((self.io[pg] + po + i) as *mut u8, 0) };
+                }
+                off += k;
+                n -= k;
+            }
+        }
+        /// Test hook: is this IO range all zero?
+        #[allow(dead_code)]
+        pub fn is_zero(&self, off: usize, n: usize) -> bool {
+            let mut b = [0u8; 64];
+            let k = n.min(64);
+            self.read(off, &mut b[..k]);
+            b[..k].iter().all(|&x| x == 0)
+        }
         pub fn read(&self, mut off: usize, mut out: &mut [u8]) {
             while !out.is_empty() && off < IO_SIZE {
                 let (pg, po) = (off / 0x1000, off % 0x1000);
@@ -415,6 +435,65 @@ fn wan_lcp_peer(code: u8, data: &[u8]) -> Option<hal::pppwire::LcpPeer> {
 }
 
 #[cfg(feature = "mctls")]
+fn sta_m2(pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], akm8: bool, m2: &[u8]) -> Option<Option<[u8; 48]>> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::wpaauth::on_m2(pmk, aa, spa, anonce, akm8, m2));
+    }
+    // operator 2026-11-11 decision 2A: the PMK reaches EL0 only through this one capability (the M2 command on the
+    // LAN-services server's IO page), is never logged nor exposed through the management ABI, and is erased from
+    // every copy the kernel controls (stack buffer, the IO page's input and output) as soon as the call returns
+    use hal::lansvcabi::*;
+    let s = el0::server()?;
+    if hal::wpaauth::M2_PRE + m2.len() > IN_MAX {
+        return Some(None);
+    }
+    let mut buf = [0u8; IN_MAX];
+    buf[0..32].copy_from_slice(pmk);
+    buf[32..38].copy_from_slice(aa);
+    buf[38..44].copy_from_slice(spa);
+    buf[44..76].copy_from_slice(anonce);
+    buf[76] = akm8 as u8;
+    let n = hal::wpaauth::M2_PRE + m2.len();
+    buf[hal::wpaauth::M2_PRE..n].copy_from_slice(m2);
+    let (st, len) = s.call(CMD_STA_M2, &buf[..n]);
+    hal::wpaauth::wipe(&mut buf[..hal::wpaauth::M2_PRE]);
+    let mut o = [0u8; hal::wpaauth::M2_OUT];
+    if st == ST_OK && len == o.len() {
+        s.read(OUT_OFF, &mut o);
+    }
+    s.scrub(IN_OFF, hal::wpaauth::M2_PRE);
+    s.scrub(OUT_OFF, hal::wpaauth::M2_OUT);
+    if st == ST_PANIC {
+        return None;
+    }
+    let r = (st == ST_OK && o[0] != 0).then(|| {
+        let mut p = [0u8; 48];
+        p.copy_from_slice(&o[1..49]);
+        p
+    });
+    hal::wpaauth::wipe(&mut o);
+    Some(r)
+}
+#[cfg(feature = "mctls")]
+fn sta_m4(kck: &[u8; 16], akm8: bool, m4: &[u8]) -> Option<bool> {
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(hal::wpaauth::on_m4(kck, akm8, m4));
+    }
+    let mut pre = [0u8; hal::wpaauth::M4_PRE];
+    pre[..16].copy_from_slice(kck);
+    pre[16] = akm8 as u8;
+    let r = wan_call::<1>(hal::lansvcabi::CMD_STA_M4, &pre, m4);
+    hal::wpaauth::wipe(&mut pre);
+    if let Some(s) = el0::server() {
+        s.scrub(hal::lansvcabi::IN_OFF, hal::wpaauth::M4_PRE);
+    }
+    let (st, o) = r?;
+    Some(st == hal::lansvcabi::ST_OK && o[0] != 0)
+}
+
+#[cfg(feature = "mctls")]
 fn sta_eapol(e: &[u8], sta: &[u8; 6], secure: bool, replay: u64) -> Option<Option<usize>> {
     if el0::server().is_none() {
         unsafe { IN_KERNEL += 1 };
@@ -454,6 +533,8 @@ pub fn install_dhcp() {
         arch_aarch64::wanparse::EL0_EAPOL = Some(sta_eapol);
         arch_aarch64::wanparse::EL0_LCP_PEER = Some(wan_lcp_peer);
         arch_aarch64::wanparse::EL0_MFPC = Some(sta_mfpc);
+        arch_aarch64::wanparse::EL0_STA_M2 = Some(sta_m2);
+        arch_aarch64::wanparse::EL0_STA_M4 = Some(sta_m4);
     };
 }
 
@@ -645,12 +726,52 @@ pub fn selftest() -> bool {
         && wanparse::lcp_peer(3, &lnak) == hal::pppwire::LcpPeer { mru: Some(1400), magic_nak: true, rej_mru: false, rej_magic: false }
         && wanparse::lcp_peer(4, &lnak) == hal::pppwire::LcpPeer { mru: None, magic_nak: false, rej_mru: true, rej_magic: true }
         && wanparse::lcp_peer(3, &[1, 9, 0]) == hal::pppwire::LCPPEER0;
-    let wan_ok_extra = sta_ok && lcp_peer_ok;
+    // 5b: M2 / M4 crypto in EL0 — for AKM 2 (PRF-SHA1 + HMAC-SHA1 MIC) and AKM 8 (KDF-SHA256 + AES-CMAC, the `sae`
+    // crate's KDF as the independent reference): identical PTK, MIC accepted; a flipped MIC bit / another PMK /
+    // a truncated frame refused; M4 likewise
+    let sta_crypto_ok = {
+        let (pmk, aa, spa, an, sn) = ([0x11u8; 32], [2u8, 0, 0, 0, 0, 1], [2u8, 0, 0, 0, 0, 0x5a], [0x22u8; 32], [0x33u8; 32]);
+        let mut all = true;
+        for akm8 in [false, true] {
+            #[cfg(not(feature = "wpa3"))]
+            if akm8 {
+                continue;
+            }
+            #[cfg(feature = "wpa3")]
+            let reference = if akm8 { sae::ptk_sha256(&pmk, &aa, &spa, &an, &sn) } else { hal::wpa::wpa_ptk(&pmk, &aa, &spa, &an, &sn) };
+            #[cfg(not(feature = "wpa3"))]
+            let reference = hal::wpa::wpa_ptk(&pmk, &aa, &spa, &an, &sn);
+            let mut kck = [0u8; 16];
+            kck.copy_from_slice(&reference[..16]);
+            let mut f = [0u8; 4 + 95 + 22];
+            f[0] = 2;
+            f[1] = 3;
+            f[2..4].copy_from_slice(&((95 + 22) as u16).to_be_bytes());
+            f[4] = 2;
+            f[5..7].copy_from_slice(&(if akm8 { 0x0108u16 } else { 0x010au16 }).to_be_bytes());
+            f[4 + 13..4 + 45].copy_from_slice(&sn);
+            let m = hal::wpaauth::mic(&kck, &f, akm8);
+            f[4 + 77..4 + 93].copy_from_slice(&m);
+            let good = wanparse::sta_m2(&pmk, &aa, &spa, &an, akm8, &f) == Some(reference);
+            let mut bad = f;
+            bad[4 + 80] ^= 1;
+            let flipped = wanparse::sta_m2(&pmk, &aa, &spa, &an, akm8, &bad).is_none();
+            let other_pmk = wanparse::sta_m2(&[0x12; 32], &aa, &spa, &an, akm8, &f).is_none();
+            let short = wanparse::sta_m2(&pmk, &aa, &spa, &an, akm8, &f[..60]).is_none();
+            let m4 = wanparse::sta_m4(&kck, akm8, &f) && !wanparse::sta_m4(&kck, akm8, &bad) && !wanparse::sta_m4(&[0; 16], akm8, &f);
+            // decision 2A: after the calls, the shared IO page holds neither the PMK (input) nor the PTK (output)
+            let _ = wanparse::sta_m2(&pmk, &aa, &spa, &an, akm8, &f);
+            let wiped = el0::server().map_or(true, |s| s.is_zero(hal::lansvcabi::IN_OFF, hal::wpaauth::M2_PRE) && s.is_zero(hal::lansvcabi::OUT_OFF, hal::wpaauth::M2_OUT));
+            all &= good && flipped && other_pmk && short && m4 && wiped;
+        }
+        all
+    };
+    let wan_ok_extra = sta_ok && lcp_peer_ok && sta_crypto_ok;
     let wan_ok = same_offer && other_xid && same_ra && junk && pppoe && wan_ok_extra;
     let (_, c_after, _, _, _) = stats();
     let pass = where_ == "el0" && same_q && same_w && bad && recovered && same_d && bad_d && wan_ok && c_after > 0;
     arch_aarch64::_print(format_args!(
-        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak + CHAP Challenge + IPv6CP Request classification identical, 3b-v the AC's LCP Nak/Reject identical, 5a EAPOL-Key M2 + RSNE MFP identical={}\n",
+        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak + CHAP Challenge + IPv6CP Request classification identical, 3b-v the AC's LCP Nak/Reject identical, 5a EAPOL-Key M2 + RSNE MFP identical, 5b M2/M4 PTK + MIC (AKM 2 and 8) identical, tampering refused, PMK/PTK wiped from the IO page={}\n",
         if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe
     ));
     pass

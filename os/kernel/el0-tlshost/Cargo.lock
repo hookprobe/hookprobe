@@ -49,6 +49,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "boot-abi"
+version = "0.1.0"
+
+[[package]]
 name = "cc"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -342,6 +346,9 @@ dependencies = [
 [[package]]
 name = "hal"
 version = "0.1.0"
+dependencies = [
+ "boot-abi",
+]
 
 [[package]]
 name = "heqk-tlsprov"
