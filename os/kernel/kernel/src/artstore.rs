@@ -1100,10 +1100,12 @@ fn sealed_selftest(d: &mut SparseDisk, store: (u64, u64), kp: &ed25519_compact::
             && locate(&p, 0, b"WAN     TXT") == Some((d2, Ty::Wan.data_sect()))
     } && verify_half(&*d, Ty::Wan, 2, key).is_some_and(|(g, l, _)| g == 4 && l == len);
     // one flipped ciphertext byte: the seal MAC fails, the half reads as zeros (refused); restored, it verifies again
+    // (a small WAN seals into the slot's FIRST sector — header 128 + signature 128 + data — so flip a byte INSIDE
+    // that sealed image; the following sectors are unauthenticated zero padding the view never serves)
     let mut s = [0u8; 512];
-    let _ = d.read_block(d2, &mut s);
-    s[3] ^= 0x40;
-    let _ = d.write_block(d2, &s);
+    let _ = d.read_block(s2, &mut s);
+    s[crate::seal::SEAL_HDR_LEN + 140] ^= 0x40;
+    let _ = d.write_block(s2, &s);
     let zeros = {
         let p = Plain::new(&*d);
         let mut sg = [0xffu8; 512];
@@ -1111,8 +1113,8 @@ fn sealed_selftest(d: &mut SparseDisk, store: (u64, u64), kp: &ed25519_compact::
         sg.iter().all(|&b| b == 0)
     };
     let flipped = zeros && verify_half(&*d, Ty::Wan, 2, key).is_none();
-    s[3] ^= 0x40;
-    let _ = d.write_block(d2, &s);
+    s[crate::seal::SEAL_HDR_LEN + 140] ^= 0x40;
+    let _ = d.write_block(s2, &s);
     let flipped = flipped && verify_half(&*d, Ty::Wan, 2, key).is_some();
     // half A still holds the plaintext gen 3: with the manifest marked sealed it is refused, so is a rollback to it
     let downgrade = verify_half(&*d, Ty::Wan, 1, key).is_none() && rollback(d, Ty::Wan, key) == Err(ActErr::NothingToRollBack)
