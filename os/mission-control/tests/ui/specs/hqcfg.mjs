@@ -25,6 +25,9 @@ export default async function (t) {
   const fo = 'route 0.0.0.0/0 via wan metric 10\nroute 0.0.0.0/0 via mgmt gw 192.168.200.1 metric 100\n';
   ok(Buffer.from(buildBundle({ policy: fo }, 10, kid)).toString('hex') === V.cases['two-default-routes-wan-mgmt'].bundle,
     'builder: metric-ordered failover (default route via wan and via mgmt) accepted, byte-identical to the vector');
+  const dev = Buffer.from(V.cases['bound-to-this-device'].device_id, 'hex');
+  ok(Buffer.from(buildBundle({ wan: s.wan, wifi: s.wifi, policy: s.policy }, 12, kid, dev)).toString('hex') === V.cases['bound-to-this-device'].bundle,
+    'builder: device-bound bundle (flags bit0 + device_id) byte-identical to the vector');
   let refused = '';
   try { canonicalSection('wifi', 'ssid=a\nssid=b\n'); } catch (e) { refused = e.message; }
   ok(/repeated/.test(refused), 'builder: a repeated key is refused before signing');
