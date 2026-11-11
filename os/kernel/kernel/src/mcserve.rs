@@ -669,6 +669,7 @@ pub fn run() -> ! {
     #[cfg(feature = "mctls")]
     crate::tlshost::bring_up(arch_aarch64::virtio_blk::VirtioBlk::open().as_ref());
     let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 (loads the EL0 LAN-services server)
+    let _ = crate::hsh::selftest(0); // ADR 0059 step 4a: the EL0 management shell + the management ABI
     let now_ms = || (cntpct().wrapping_sub(t0) / (frq / 1000).max(1)) as i64;
     // DHCP (QEMU's user-mode network serves 10.0.2.15), the production address path.
     let mut node = McNode::new(mac, NetMode::Dhcp, t0 ^ 0x4D43_5345_5256_4500).expect("one node per boot");

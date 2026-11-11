@@ -14,6 +14,7 @@
   policy-sign.py sign-wan KEYFILE WAN.TXT GEN OUT.SIG           # WAN mode / VLANs / mgmt_floor (<= 512 B; audit finding 11)
   policy-sign.py enroll-proof OWNERKEY                          # ADR 0058 D3: public_key + proof for POST /api/anchor/enroll
   policy-sign.py rotate OLDKEY NEWKEY GEN                       # ADR 0058 D3: public_key + proof + signature for /api/anchor/rotate
+  policy-sign.py challenge-sign OWNERKEY DEVICE_ID NONCE       # ADR 0059 4c: the hsh line "owner elevate <a> <b>" (HQCHAL1)
 
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
@@ -91,6 +92,12 @@ def main():
         old, new, gen = load(a[1]), load(a[2]), int(a[3])
         pk = bytes.fromhex(pubhex(new))
         print(f"public_key={pk.hex()}\nproof={new.sign(b'HQENR1' + pk).hex()}\ngeneration={gen}\nsignature={old.sign(b'HQROT1' + pk + struct.pack('<Q', gen)).hex()}")
+    elif a[:1] == ["challenge-sign"] and len(a) == 4:
+        k, dev, nonce = load(a[1]), bytes.fromhex(a[2]), bytes.fromhex(a[3])
+        if len(dev) != 16 or len(nonce) != 16:
+            sys.exit("device_id and nonce are 16 bytes (32 hex) each, as `owner challenge` prints them")
+        sig = k.sign(b"HQCHAL1" + dev + nonce).hex()
+        print(f"owner elevate {sig[:64]} {sig[64:]}")
     else:
         sys.exit(__doc__)
 

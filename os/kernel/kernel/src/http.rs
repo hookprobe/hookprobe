@@ -311,6 +311,59 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
+    // ADR 0059 step 4a: the native shell over the authenticated session — a DEVELOPMENT transport only (`hsh-dev`,
+    // off by default, never in a release build): the production transport is the operator's open decision (hsh spec
+    // R6). Role = view (read-only commands).
+    #[cfg(feature = "hsh-dev")]
+    if req.post && req.path == "/api/hsh" {
+        // same guards as every other /api write: the owner session (above), Origin, CSRF
+        if !crate::actionapi::origin_ok(req.origin, req.host) || !crate::mcauth::csrf_ok(req.session, req.csrf) {
+            return json(scratch, |w| w.raw("{\"ok\":false,\"refused\":\"origin or csrf\"}")).with_status(403);
+        }
+        let line = req.body.split(|&b| b == b'\n').next().unwrap_or(b"");
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        // every shell request is journaled as an hsh op (the baseline for the 4b "MC and hsh produce the same
+        // journal record" test): the command word(s), never arguments that could carry secrets
+        {
+            let mut why = [0u8; 64];
+            let mut k = 0;
+            for (i, w) in line.split(|&b| b == b' ').filter(|w| !w.is_empty()).take(2).enumerate() {
+                if i > 0 && k < why.len() {
+                    why[k] = b' ';
+                    k += 1;
+                }
+                for &c in w.iter().take(24) {
+                    if k < why.len() && (0x21..0x7f).contains(&c) {
+                        why[k] = c;
+                        k += 1;
+                    }
+                }
+            }
+            let _ = crate::ownerapi::audit_artifact("hsh", 1, &why[..k], crate::mcauth::session_tag(req.session), now_ms);
+        }
+        let mut text = [0u8; 2048];
+        let n = crate::hsh::run_line(line, hal::mgmtabi::ROLE_VIEW, crate::mcauth::session_tag(req.session), now_ms, &mut text);
+        let k = n.min(scratch.len());
+        scratch[..k].copy_from_slice(&text[..k]);
+        return Response { status: 200, ctype: "text/plain; charset=utf-8", body: Body::Scratch(k), location: None, set_cookie: None };
+    }
+    // ADR 0059 step 3: commit the configuration trial now / roll the bundle back for the next boot
+    if req.post && (req.path == "/api/config/confirm" || req.path == "/api/config/rollback") {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        let confirm = req.path == "/api/config/confirm";
+        return match crate::ownerapi::config_action(&c, req.body, auth, confirm) {
+            Ok(g) => json(scratch, |w| {
+                use core::fmt::Write;
+                let _ = write!(w, "{{\"ok\":true,\"{}\":true,\"generation\":{}}}", if confirm { "committed" } else { "rolled_back" }, g);
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+        };
+    }
     if req.post && req.path == "/api/factory-reset" {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         return match crate::ownerapi::factory_reset(&c, req.body, auth) {
@@ -595,6 +648,20 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             w.raw("}");
         }),
         // Audit A8: the "Get Online" pillar's read side — what the device applied, and from which source.
+        // ADR 0059 step 3: the configuration bundle lifecycle (cfgd)
+        "/api/config" => json(scratch, |w| {
+            use core::fmt::Write;
+            let st = match crate::cfgd::state() {
+                crate::cfgd::Boot::None => "none",
+                crate::cfgd::Boot::Committed(_) => "committed",
+                crate::cfgd::Boot::Trial(_) => if crate::cfgd::on_trial() { "trial" } else { "committed" },
+                crate::cfgd::Boot::Reverted { .. } => "reverted",
+                crate::cfgd::Boot::Refused => "refused",
+            };
+            let el = crate::cfgd::elapsed_s();
+            let _ = write!(w, "{{\"state\":\"{}\",\"generation\":{},\"floor\":{},\"on_trial\":{},\"needs_confirm\":{},\"window_s\":{},\"elapsed_s\":{},\"auto_rollback\":true,\"health\":\"WAN usable (Mission Control stays on the LAN / Wi-Fi regardless)\"}}",
+                st, crate::cfgd::generation(), crate::anchor::cfg_gens().cfg_floor, crate::cfgd::on_trial(), crate::cfgd::on_trial() && crate::cfgd::touches_mgmt(), crate::cfgd::WINDOW_S, if crate::cfgd::on_trial() { el } else { 0 });
+        }),
         // ADR 0058 D3: which key verifies what — the vendor key (content packs) and the owner's configuration key
         "/api/anchor" => json(scratch, |w| {
             use core::fmt::Write;
@@ -610,8 +677,24 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             };
             w.raw("{\"vendor_key\":");
             hex(w, crate::policysig::key());
+            // ADR 0059: this device's id for device-bound HQCFG1 bundles and HQCHAL1 elevation (public)
+            let dev = crate::config_device_id();
+            if dev == [0; 16] {
+                w.raw(",\"device_id\":null"); // no device identity (no SRK, e.g. QEMU): bundles stay unbound
+            } else {
+                w.raw(",\"device_id\":\"");
+                for b in dev {
+                    let _ = write!(w, "{:02x}", b);
+                }
+                w.raw("\"");
+            }
             w.raw(",\"owner_key\":");
             hex(w, crate::anchor::owner());
+            // ADR 0059 0.5: no key at all = anyone with the card reconfigures the device; Mission Control shows a banner
+            let protected = crate::policysig::config_key().is_some();
+            let g = crate::anchor::cfg_gens();
+            let _ = write!(w, ",\"config_protected\":{},\"state\":\"{}\",\"floors\":{{\"wan\":{{\"current\":{},\"floor\":{}}},\"wifi\":{{\"current\":{},\"floor\":{}}},\"policy\":{}}}",
+                protected, if protected { "protected" } else { "CONFIG UNPROTECTED" }, g.wan_cur, g.wan_floor, g.wifi_cur, g.wifi_floor, crate::policysig::floor());
             let _ = write!(w, ",\"owner_enrolled\":{},\"owner_generation\":{},\"config_files_verified_by\":\"{}\",\"can\":\"{}\",\"enroll_message\":\"HQENR1 || public_key (proof = Ed25519 by the new key)\",\"rotate_message\":\"HQROT1 || new public_key || generation u64 LE (signed by the enrolled key)\"}}",
                 crate::anchor::owner().is_some(), crate::anchor::owner_gen(),
                 if crate::anchor::owner().is_some() { "owner" } else if crate::policysig::key().is_some() { "vendor" } else { "none (standalone)" },

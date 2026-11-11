@@ -7,7 +7,7 @@
 set -u
 T="${1:-60}"; cd "$(dirname "$0")/heqk-hal" || exit 2
 rc=0
-for t in policy wan_cfg frame_facts glom abslot dhcp_wire; do
+for t in policy wan_cfg frame_facts glom abslot dhcp_wire pppoe_disc ppp_ctl; do
   mkdir -p corpus/$t
   ml=4096; [ "$t" = abslot ] && ml=32768   # (was `\&\&` inside $(...): `[` errored, abslot got 4096 = 8 sectors)
   if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=$ml > "/tmp/heqk-fuzz-$t.log" 2>&1; then

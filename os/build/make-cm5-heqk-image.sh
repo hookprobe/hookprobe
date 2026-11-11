@@ -68,6 +68,28 @@ fi
 # release → FATAL on dev keys; debug → allowed). Checks the source trusted_keys.rs/attest_keys.rs.
 "$ROOT/os/build/heqk-boot-key-check.sh"
 
+# ADR 0059 step 4a: the shell's development transport (hsh-dev) never ships — the production transport is the
+# operator's open decision (hsh spec R6).
+case ",$FEATURES," in
+  *,hsh-dev,*) [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ] || { echo "FATAL: hsh-dev (development shell transport) in a release build" >&2; exit 1; } ;;
+esac
+
+# Release-BLOCKING config-key gate (ADR 0059 Phase 0.5, C4): a RELEASE build of a device profile (it serves
+# Mission Control or the AP) must carry the operator configuration key — without it the device accepts UNSIGNED
+# WAN.TXT / WIFI.TXT / POLICY.TXT (anyone with the card reconfigures it). Debug builds may omit it (they boot
+# with "CONFIG UNPROTECTED" on the console and in /api/anchor).
+case ",$FEATURES," in
+  *,prod,*|*,prod-mc,*|*,mcserve,*|*,apmc,*)
+    if [ -z "${HEQK_POLICY_PUBKEY:-}" ]; then
+      if [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ]; then
+        echo "WARNING: no HEQK_POLICY_PUBKEY — this DEBUG image accepts unsigned configuration (CONFIG UNPROTECTED)" >&2
+      else
+        echo "FATAL: release build of a device profile ($FEATURES) without HEQK_POLICY_PUBKEY — it would accept unsigned WAN/WIFI/POLICY (ADR 0059 0.5). Pass --policy-key, or HOOKPROBE_DEBUG_ACCESS=1 for a debug image." >&2
+        exit 1
+      fi
+    fi ;;
+esac
+
 echo "== [M1] building heqk substrate (features=$FEATURES svn=$SVN) at $HEQK"
 cd "$HEQK"
 

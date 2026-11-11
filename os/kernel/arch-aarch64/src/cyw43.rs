@@ -4001,35 +4001,9 @@ fn derive_ptk(akm8: bool, pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &
     crate::wpa::wpa_ptk(pmk, aa, spa, anonce, snonce)
 }
 
-/// Did the station's M2 RSNE (key data) advertise MFP-capable? (PMF negotiated when our side is capable too.)
+/// Did the station's M2 RSNE (key data) advertise MFP-capable? ADR 0050 D4 step 5a: the walk runs in EL0.
 fn m2_mfpc(m2: &[u8], body_off: usize) -> bool {
-    let kl_at = body_off + 93;
-    if kl_at + 2 > m2.len() {
-        return false;
-    }
-    let kl = u16::from_be_bytes([m2[kl_at], m2[kl_at + 1]]) as usize;
-    let kd = &m2[(kl_at + 2).min(m2.len())..(kl_at + 2 + kl).min(m2.len())];
-    let mut i = 0;
-    while i + 2 <= kd.len() {
-        let (id, l) = (kd[i], kd[i + 1] as usize);
-        if id == 0x30 && i + 2 + l <= kd.len() {
-            let e = &kd[i + 2..i + 2 + l];
-            // version 2 | group 4 | pairwise count 2 + 4n | akm count 2 + 4m | caps 2
-            if e.len() < 8 {
-                return false;
-            }
-            let pc = u16::from_le_bytes([e[6], e[7]]) as usize;
-            let a = 8 + 4 * pc;
-            if a + 2 > e.len() {
-                return false;
-            }
-            let ac = u16::from_le_bytes([e[a], e[a + 1]]) as usize;
-            let c = a + 2 + 4 * ac;
-            return c + 2 <= e.len() && e[c] & 0x80 != 0;
-        }
-        i += 2 + l;
-    }
-    false
+    crate::wanparse::m2_mfpc(m2, body_off)
 }
 
 /// M-AP2: run the WPA2 4-way handshake as the AUTHENTICATOR for one associated `sta`.
