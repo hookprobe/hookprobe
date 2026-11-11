@@ -11,12 +11,16 @@
  * files are handed over for the boot card — the setup never pretends to have applied anything.
  * No `/api/provision/launch` is used: heqk does not serve it (gap G48).
  */
-import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { type Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { substrate, deviceStats } from '../store/mock';
 import { healthChecked, loadHealth } from '../store/health';
 import { networkView, startNetworkLive } from '../store/networkLive';
-import { uploadPack, refreshUploads } from '../store/packUpload';
-import { ownerKey, loadOwnerKey, signPack, PACKS, download } from '../store/signing';
+import { uploadPack, refreshUploads, uploadView } from '../store/packUpload';
+import { ownerKey, loadOwnerKey, signPack, signBundle, ownerKeyId, enrollProof, PACKS, download } from '../store/signing';
+import { anchorView, anchorState, refreshAnchor, enroll } from '../store/anchor';
+import { configView, refreshConfig } from '../store/configState';
+import { buildBundle, fromLegacy } from '../store/hqcfg';
+import ConfigBanners from './ConfigBanners';
 import { buildWan, buildWifi, checkWifi, checkWan, type WanForm } from '../store/configBuild';
 import SampleDataNotice from './SampleDataNotice';
 import SigningKeyPanel from './SigningKeyPanel';
@@ -46,7 +50,33 @@ const SetupApp: Component = () => {
   const [outs, setOuts] = createSignal<Out[]>([]);
   const [busy, setBusy] = createSignal('');
 
-  onMount(() => { void loadHealth(); startNetworkLive(); void loadOwnerKey(); void refreshUploads(); });
+  onMount(() => { void loadHealth(); startNetworkLive(); void loadOwnerKey(); void refreshUploads(); void refreshAnchor(); void refreshConfig(); });
+  const [enrollMsg, setEnrollMsg] = createSignal('');
+  /** Set when enrollment was refused (e.g. no data volume): setup falls back to the per-file files. */
+  const [noBundle, setNoBundle] = createSignal(false);
+  const [bundleDone, setBundleDone] = createSignal('');
+  // ADR 0059: a device that takes configuration bundles gets ONE wan+wifi bundle — a health-checked trial that
+  // reverts by itself if the internet does not come up (wrong PPPoE login). Its policy section is left out on
+  // purpose: the device keeps the per-file / boot-card firewall policy. A stored bundle verifies only against
+  // the ENROLLED owner key, so setup enrolls this browser's key first.
+  const bundleMode = () => !sample() && !noBundle() && anchorState() === 'ok' && !!uploadView()?.types.some((t) => t.type === 'config');
+  const enrolledMine = () => !!anchorView()?.owner_enrolled && anchorView()!.owner_key === ownerKey()?.pubHex;
+  const otherOwner = () => !!anchorView()?.owner_enrolled && !!ownerKey() && anchorView()!.owner_key !== ownerKey()!.pubHex;
+  const keyReady = () => !!ownerKey() && (!bundleMode() || enrolledMine());
+  const doEnroll = async () => {
+    setEnrollMsg('');
+    try {
+      if (!window.confirm('Make this key the device\u2019s owner key? This is one-shot: afterwards only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.')) return;
+      const k = window.prompt('Enter the owner key from the device\u2019s label:', '') ?? '';
+      if (!k) return;
+      const p = await enrollProof();
+      const r = await enroll({ public_key: p.publicKey, proof: p.proof, owner_key: k });
+      if (!r.ok) { setEnrollMsg(`The device refused: ${r.refused}`); if (/DataVolume|no (artifact|configuration) store/i.test(r.refused ?? '')) setNoBundle(true); void refreshAnchor(); }
+      else setEnrollMsg('This is now the device\u2019s owner key.');
+    } catch (e) { setEnrollMsg(e instanceof Error ? e.message : String(e)); }
+  };
+  // While waiting for the restart and the trial, keep reading /api/config.
+  onMount(() => { const t = setInterval(() => { if (bundleDone()) void refreshConfig(); }, 5000); onCleanup(() => clearInterval(t)); });
 
   const sample = () => healthChecked() && !substrate();
   const wanUp = () => networkView()?.wan?.up ?? deviceStats()?.wan?.up ?? false;
@@ -62,7 +92,23 @@ const SetupApp: Component = () => {
   const go = (s: Step) => setStep(s);
   const idx = () => ORDER.indexOf(step());
 
+  const launchBundle = async () => {
+    go('launch');
+    try {
+      setBusy('Signing your settings…');
+      const h = anchorView()?.device_id ?? '';
+      const dev = /^[0-9a-f]{32}$/i.test(h) && /[1-9a-f]/i.test(h) ? Uint8Array.from(h.match(/../g)!, (x) => parseInt(x, 16)) : new Uint8Array(16);
+      const gen = Math.max(configView()?.generation ?? 0, configView()?.floor ?? 0) + 1;
+      const b = buildBundle({ wan: fromLegacy('wan', buildWan(wanForm())), wifi: fromLegacy('wifi', buildWifi(wifiForm())) }, gen, await ownerKeyId(), dev);
+      const sig = await signBundle(b);
+      setBusy('Sending them to the device…');
+      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => window.prompt('Enter the owner key from the device\u2019s label:', ''), () => undefined);
+      setBundleDone(r.text); setBusy(''); go('done');
+    } catch (e) { setBusy(e instanceof Error ? e.message : String(e)); go('review'); }
+  };
+
   const launch = async () => {
+    if (bundleMode()) return launchBundle();
     go('launch');
     const res: Out[] = [];
     let files: [string, string, string, typeof PACKS.wan, string][];
@@ -153,8 +199,16 @@ const SetupApp: Component = () => {
           <p class="l0-label">Step 3 of 3 · Your key</p>
           <div class="setup-bubble">Create your signing key. Big changes — like your internet login or Wi-Fi — only apply when you sign them with this key.</div>
           <SigningKeyPanel compact />
+          <Show when={bundleMode() && ownerKey() && !enrolledMine() && !otherOwner()}>
+            <div class="setup-bubble" aria-label="Enroll">Now make it this device's owner key. It's one-shot: from then on only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.</div>
+            <button class="hp-btn setup-cta" onClick={() => void doEnroll()}>Make this the owner key</button>
+          </Show>
+          <Show when={bundleMode() && otherOwner()}>
+            <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device already has a different owner key ({anchorView()!.owner_key!.slice(0, 8)}…). Import that key's backup above to continue.</p>
+          </Show>
+          <Show when={enrollMsg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{enrollMsg()}</p></Show>
           <div class="setup-grow" />
-          <button class="hp-btn hp-btn--primary setup-cta" disabled={!ownerKey()} onClick={() => go('review')}>Continue</button>
+          <button class="hp-btn hp-btn--primary setup-cta" disabled={!keyReady()} onClick={() => go('review')}>Continue</button>
         </Show>
 
         <Show when={step() === 'review'}>
@@ -167,7 +221,11 @@ const SetupApp: Component = () => {
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>signed with your key {ownerKey()?.pubHex.slice(0, 8)}…</div>
           </div>
           <p class="pcard-note" style={{ margin: 0 }}>Your Wi-Fi password{mode() === 'pppoe' ? ' and PPPoE password are' : ' is'} stored in the signed file in clear: anyone holding the device's boot card can read {mode() === 'pppoe' ? 'them' : 'it'}. Not protected at rest yet.</p>
-          <p class="setup-p" style={{ 'font-size': '14px' }}>The new settings apply when the device restarts. Afterwards, join "{ssid()}" with your new password.</p>
+          <Show when={bundleMode()} fallback={
+            <p class="setup-p" style={{ 'font-size': '14px' }}>The new settings apply when the device restarts. Afterwards, join "{ssid()}" with your new password.</p>
+          }>
+            <p class="setup-p" style={{ 'font-size': '14px' }}>After the restart the device tries these settings for up to 5 minutes. If the internet doesn't come up (for example a wrong PPPoE password), it goes back to the previous settings by itself. The Wi-Fi isn't checked that way, so double-check its name and password.</p>
+          </Show>
           <div class="setup-grow" />
           <button class="hp-btn hp-btn--primary setup-cta" onClick={() => void launch()}>Launch</button>
         </Show>
@@ -180,7 +238,19 @@ const SetupApp: Component = () => {
           <div class="setup-grow" />
         </Show>
 
-        <Show when={step() === 'done'}>
+        <Show when={step() === 'done' && bundleDone()}>
+          <div class="setup-orb setup-orb--done" role="img" aria-label="Done">✓</div>
+          <h1 class="setup-h1">Ready. Restart to try your settings.</h1>
+          <p class="setup-p">{bundleDone()}</p>
+          <p class="setup-p" style={{ 'font-size': '14px' }}>After the restart, join "{ssid()}" with your new password and come back to this page: it shows the trial and a countdown. Mission Control stays reachable on the device's Wi-Fi during the trial.</p>
+          <RestartButton primary label="Restart and try them" />
+          <ConfigBanners />
+          <Show when={configView()?.state === 'committed'}><p class="go-state--up" role="status" style={{ margin: 0, 'font-weight': 600 }}>✓ Kept: you're online with your new settings.</p></Show>
+          <div class="setup-grow" />
+          <a class="hp-btn hp-btn--primary setup-cta" href="/">Open HookProbe</a>
+        </Show>
+
+        <Show when={step() === 'done' && !bundleDone()}>
           <Show when={allStaged()} fallback={
             <>
               <h1 class="setup-h1" style={{ 'font-size': '24px' }}>Your settings are signed.</h1>
