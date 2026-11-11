@@ -150,6 +150,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const MismatchNote = () => (
     <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device only accepts settings signed with its owner key ({anchorView()!.owner_key!.slice(0, 8)}…), and the key in this browser is a different one, so the device would refuse anything signed here. <a href="/admin/identity">Import the owner key's backup</a> in Administration → Signing key.</p>
   );
+  /** A configuration bundle in force: the device refuses single-file wan / wifi / policy uploads (ADR 0059). */
+  const bundleInForce = () => { const c = configView(); return !!c && (c.state === 'trial' || c.state === 'committed') && c.generation > 0; };
   const takesBundles = () => !!uploadView()?.types.some((t) => t.type === 'config');
   const bundleGen = () => Math.max(configView()?.generation ?? 0, configView()?.floor ?? 0, uploadView()?.types.find((t) => t.type === 'config')?.generation ?? 0) + 1;
   const bundleProblems = createMemo(() => {
@@ -325,7 +327,10 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
               </ul>
             </Show>
             <p class="pcard-note">This is the exact file the device will receive (secrets hidden here). You sign it with your key on the next step.</p>
-            <button class="hp-btn hp-btn--primary" disabled={errors().length > 0} onClick={startApply}>Review and sign →</button>
+            <Show when={bundleInForce()}>
+              <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>A configuration bundle is in force (generation {configView()!.generation}), so the device refuses single-file changes. Use "Apply all three together" below, with every section you want to keep.</p>
+            </Show>
+            <button class="hp-btn hp-btn--primary" disabled={errors().length > 0 || bundleInForce()} onClick={startApply}>Review and sign →</button>
             <a class="hp-btn" href="/network/wan" style={{ 'justify-content': 'center' }}>Discard draft</a>
             <div class="pcard" aria-label="Apply all together">
               <p class="l0-label">Or apply all three together</p>
