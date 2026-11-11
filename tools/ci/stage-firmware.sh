@@ -45,3 +45,10 @@ fi
 BIN="$WORK/x/usr/lib/firmware/cypress/cyfmac43455-sdio-standard.bin"
 echo "$BIN_SHA256  $BIN" | sha256sum -c --quiet || { echo "ABORT: firmware .bin sha256 mismatch"; exit 1; }
 FW_BIN_SRC="$BIN" "$ROOT/os/kernel/cm5-boot/stage-wifi-firmware.sh"
+# REL-08: the in-RAM PMKID-cache expiry correction must match its assembly source and the staged firmware's original
+# bytes (a firmware upgrade fails here instead of silently skipping / mis-applying the patch).
+if command -v llvm-mc >/dev/null 2>&1; then
+  "$ROOT/tools/firmware/rel08/check.sh"
+else
+  echo "REL-08 check: llvm-mc not installed — byte-exact source check skipped (the kernel still guards the 120 original bytes at load)"
+fi

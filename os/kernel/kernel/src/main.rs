@@ -3581,6 +3581,10 @@ fn cm5_p10_probe() {
                         let (mut prio_direct, mut prio_queued, mut prio_dropped) = (0u32, 0u32, 0u32);
                         let mut trunc_drop = 0u32; // frames `net::parse` refuses (truncated/oversize) — not a rule
                         let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
+                        // REL-08 (soak 2026-11-11): a firmware halt (mailbox FWHALT) is acted on at once, not after the
+                        // wedge detector arms (it needs queued deliveries, which an idle station never produces — 22 min)
+                        #[cfg(feature = "cm5")]
+                        let mut fw_halts_seen = cyw43::fw_halts();
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         let (mut wq_head_fail, mut wq_head_drop) = (0u32, 0u32);
                         // credit-stall diagnostics: last frames handed to the firmware (dst MAC low 3 bytes, len)
@@ -4772,6 +4776,24 @@ fn cm5_p10_probe() {
                                         if v6.ra_due(t * 1000 / freq) {
                                             let k = v6.build_ra(&[0x33, 0x33, 0, 0, 0, 1], &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], &mut v6buf);
                                             let _ = wifi_send!(&v6buf[..k]);
+                                        }
+                                    }
+                                    // REL-08: the Wi-Fi firmware HALTED (it trapped): nothing on the host recovers the chip short of a
+                                    // firmware reload, which heqk does not have — so the guarded self-heal reset runs now, with the
+                                    // trap registers in the sealed crash record (the root-cause evidence for the vendor).
+                                    #[cfg(feature = "cm5")]
+                                    if cyw43::fw_halts() != fw_halts_seen {
+                                        fw_halts_seen = cyw43::fw_halts();
+                                        let up = t / freq.max(1);
+                                        if let Some(sh) = cyw43::fw_shared() {
+                                            let _ = cyw43::fw_console_dump(&sh, 24);
+                                            cyw43::fw_trap_dump(&sh);
+                                        }
+                                        let tr = cyw43::fw_trap_regs().unwrap_or([0; 4]);
+                                        kprint!(" [SELF-HEAL] Wi-Fi firmware HALTED (mailbox FWHALT; trap type {:#x} epc {:#010x} lr {:#010x} pc {:#010x}) — {} (uptime {} s)\n",
+                                            tr[0], tr[1], tr[2], tr[3], if rtwdog::self_heal_allowed() { "resetting the unit" } else { "NOT resetting (an early self-heal already happened: back-off, stays up for a power cycle)" }, up);
+                                        if rtwdog::self_heal_allowed() {
+                                            arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi firmware trap {:#x} epc {:#010x} lr {:#010x} pc {:#010x} (mailbox FWHALT)", tr[0], tr[1], tr[2], tr[3]));
                                         }
                                     }
                                     // Stall detector: deliveries waiting for credit AND no WiFi frame read in
