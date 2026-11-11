@@ -14,6 +14,12 @@
 export const SCHEMA = 0x0100;
 export const KIND = { wan: 1, link: 2, lan: 3, wifi: 4, policy: 5, mgmt: 6, tunnel: 7, secrets: 8 } as const;
 export type SectionKind = keyof typeof KIND;
+/** Can the device's forwarding honour a route? Not via lan / eth1; an IPv6 destination only `via wan`, no gw. */
+export function routeHonourable(dst: string, via: string, hasGw: boolean): boolean {
+  if (via === 'lan' || via === 'eth1') return false;
+  if (dst.includes(':') && (via !== 'wan' || hasGw)) return false;
+  return true;
+}
 export const V1_KINDS: ReadonlySet<SectionKind> = new Set(['wan', 'wifi', 'policy']);
 const MAX = 16 << 10;
 
@@ -33,7 +39,11 @@ export function canonicalSection(kind: SectionKind, body: string): void {
       else if (w[0] === 'route' && w.length > 1) {
         // (dst, from|any, via): failover through different interfaces is fine; same interface twice is not.
         const v = w.indexOf('via');
-        key = `route ${w[1]} ${w.length > 3 && w[2] === 'from' ? w[3] : 'any'} ${v >= 0 && v < w.length - 1 ? w[v + 1] : ''}`;
+        const via = v >= 0 && v < w.length - 1 ? w[v + 1] : '';
+        // Routes forwarding can never honour are refused (heqk routing review 2026-11-11): egress via lan / eth1,
+        // or an IPv6 destination unless the route is exactly `via wan` with no gateway.
+        if (!routeHonourable(w[1], via, w.includes('gw'))) throw new Error(`policy: route forwarding cannot honour: ${ln}`);
+        key = `route ${w[1]} ${w.length > 3 && w[2] === 'from' ? w[3] : 'any'} ${via}`;
       }
       else key = ln;
     } else {
