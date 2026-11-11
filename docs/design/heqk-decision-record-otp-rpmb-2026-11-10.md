@@ -192,3 +192,9 @@ which this firmware lacks. Next step (a short metal experiment, no firmware chan
 mode with external auth and check whether a phone's SAE commit reaches the host as an auth-frame event. If it
 does, WPA3-SAE is a host-side build (SAE over P-256, PMF/IGTK); if not, WPA3 on the AP needs a different
 firmware build from the vendor (supplier dependency).
+
+### Operator decision 2026-11-11 (3A)
+
+Keep the RPMB implementation. Caveat: it is **preparation for hardware-backed anti-rollback, not yet an active security
+guarantee**. It protects nothing until the eMMC transport is reviewed and built and a unit's key is programmed through the
+manufacturing operation.

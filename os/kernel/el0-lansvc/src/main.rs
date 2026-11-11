@@ -147,6 +147,33 @@ pub extern "C" fn _start() -> ! {
             out[..rec.len()].copy_from_slice(&rec);
             exit(ST_OK, rec.len())
         }
+        CMD_STA_M2 if n >= hal::wpaauth::M2_PRE => {
+            let a = |r: core::ops::Range<usize>| -> &[u8] { &dns[r] };
+            let pmk: [u8; 32] = a(0..32).try_into().unwrap();
+            let aa: [u8; 6] = a(32..38).try_into().unwrap();
+            let spa: [u8; 6] = a(38..44).try_into().unwrap();
+            let anonce: [u8; 32] = a(44..76).try_into().unwrap();
+            let mut pmk = pmk;
+            let mut r = hal::wpaauth::on_m2(&pmk, &aa, &spa, &anonce, dns[76] != 0, &dns[hal::wpaauth::M2_PRE..n]);
+            out[0] = r.is_some() as u8;
+            out[1..49].copy_from_slice(&r.unwrap_or([0; 48]));
+            // operator 2026-11-11 (2A): the PMK and the PTK do not outlive this call in the server
+            hal::wpaauth::wipe(&mut pmk);
+            if let Some(p) = r.as_mut() {
+                hal::wpaauth::wipe(p);
+            }
+            hal::wpaauth::wipe(io(IN_OFF, hal::wpaauth::M2_PRE));
+            hal::wpaauth::wipe(&mut msg[..hal::wpaauth::M2_PRE]);
+            exit(ST_OK, hal::wpaauth::M2_OUT)
+        }
+        CMD_STA_M4 if n >= hal::wpaauth::M4_PRE => {
+            let mut kck: [u8; 16] = dns[0..16].try_into().unwrap();
+            out[0] = hal::wpaauth::on_m4(&kck, dns[16] != 0, &dns[hal::wpaauth::M4_PRE..n]) as u8;
+            hal::wpaauth::wipe(&mut kck);
+            hal::wpaauth::wipe(io(IN_OFF, 16));
+            hal::wpaauth::wipe(&mut msg[..16]);
+            exit(ST_OK, 1)
+        }
         CMD_STA_EAPOL if n >= 15 => {
             let sta: [u8; 6] = [dns[0], dns[1], dns[2], dns[3], dns[4], dns[5]];
             let replay = u64::from_le_bytes([dns[7], dns[8], dns[9], dns[10], dns[11], dns[12], dns[13], dns[14]]);
