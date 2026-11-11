@@ -449,8 +449,8 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     Ok_::Act(a) => {
                         let applies = if a.live { "live" } else if a.staged { "next_boot" } else { "now" };
                         match a.journal_seq {
-                            Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{},\"applies\":\"{}\",\"reboot_required\":{}}}", a.staged, a.gen, q, applies, a.staged),
-                            None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null,\"applies\":\"{}\",\"reboot_required\":{}}}", a.staged, a.gen, applies, a.staged),
+                            Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{},\"applies\":\"{}\",\"reboot_required\":{},\"needs_confirm\":{},\"window_s\":{}}}", a.staged, a.gen, q, applies, a.staged, a.needs_confirm, if !a.live { 0 } else if a.needs_confirm { crate::cfgd::WINDOW_S } else { crate::cfgd::TRIAL_AUTO_S }),
+                            None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null,\"applies\":\"{}\",\"reboot_required\":{},\"needs_confirm\":{},\"window_s\":{}}}", a.staged, a.gen, applies, a.staged, a.needs_confirm, if !a.live { 0 } else if a.needs_confirm { crate::cfgd::WINDOW_S } else { crate::cfgd::TRIAL_AUTO_S }),
                         }
                     }
                     Ok_::Abort => write!(w, "{{\"ok\":true,\"aborted\":true}}"),
