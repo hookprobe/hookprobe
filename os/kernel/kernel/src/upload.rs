@@ -64,6 +64,8 @@ struct Up {
     len: u64,
     /// An OS image (`os_image`), not a data pack: the container is the signed boot image itself.
     os: bool,
+    /// Q3 (set at finish): the verified configuration carries a secret (PPPoE password / any Wi-Fi).
+    secret: bool,
     #[cfg(feature = "p15-write")]
     plan: Option<crate::otaimg::Plan>,
 }
@@ -100,6 +102,41 @@ fn boot_facts() -> (u64, u64, Option<[u8; 32]>) {
 
 static mut DEV: Option<DevRef> = None;
 static mut UP: Option<Up> = None;
+
+// ---- staged configuration uploads stay in RAM (design heqk-sealed-config-live-apply F-b) ----
+// A WAN / Wi-Fi / POLICY / CONFIG container (signature sector ‖ file, at most 512 + 16 KiB) is received here, never
+// into the eMMC Staging region; it is verified from here and scrubbed when the upload ends.
+const STAGE_LEN: usize = 512 + crate::cfgbundle::MAX_BUNDLE;
+static mut STAGE_RAM: [u8; STAGE_LEN] = [0; STAGE_LEN];
+fn stage_ram() -> &'static mut [u8; STAGE_LEN] {
+    unsafe { &mut *core::ptr::addr_of_mut!(STAGE_RAM) }
+}
+/// The verifiers read the RAM container as a block device: LBA 0 = the signature sector, LBA 1.. = the file.
+struct RamStage;
+impl BlockDev for RamStage {
+    fn block_count(&self) -> u64 {
+        (STAGE_LEN / 512) as u64
+    }
+    fn read_block(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), BlockErr> {
+        let o = (lba as usize).checked_mul(512).filter(|o| o + 512 <= STAGE_LEN).ok_or(BlockErr::OutOfRange)?;
+        buf.copy_from_slice(&stage_ram()[o..o + 512]);
+        Ok(())
+    }
+}
+static mut RAMSTAGE: RamStage = RamStage;
+fn ram_dev() -> DevRef {
+    DevRef(core::ptr::addr_of_mut!(RAMSTAGE) as *mut dyn BlockDev)
+}
+fn ram_staged(u: &Up) -> bool {
+    !u.os && u.ty.staged()
+}
+/// End the upload in flight and scrub the RAM stage (it may hold a secret).
+fn end() {
+    *up() = None;
+    for b in stage_ram().iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) };
+    }
+}
 static mut CTR: u64 = 0;
 
 // ---- audit ring (RAM; activations are ALSO durable journal records) ----
@@ -184,7 +221,7 @@ fn guards(c: &Ctx, body: &[u8]) -> Result<(), &'static str> {
 pub fn expire(now_ms: u64) {
     if let Some(u) = up() {
         if now_ms.saturating_sub(u.last_ms) > IDLE_MS {
-            *up() = None;
+            end();
         }
     }
 }
@@ -261,7 +298,8 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
         m[12..20].copy_from_slice(&CTR.to_le_bytes());
         u64::from_le_bytes(boot_abi::sha256::digest(&m)[..8].try_into().unwrap()) | 1
     };
-    *up() = Some(Up { id, session: tag, ty, size, sha, got: 0, h: boot_abi::sha256::Hasher::new(), part: [0; 512], plen: 0, last_ms: c.now_ms, phase: Phase::Receiving, gen: 0, len: 0, os, #[cfg(feature = "p15-write")] plan: None });
+    end();
+    *up() = Some(Up { id, session: tag, ty, size, sha, got: 0, h: boot_abi::sha256::Hasher::new(), part: [0; 512], plen: 0, last_ms: c.now_ms, phase: Phase::Receiving, gen: 0, len: 0, os, secret: false, #[cfg(feature = "p15-write")] plan: None });
     Ok(Begun { id })
 }
 
@@ -283,13 +321,21 @@ pub fn chunk(c: &Ctx, query: &str, body: &[u8]) -> Result<u64, &'static str> {
     let d = dev().ok_or("no artifact store")?;
     let (slo, _) = staging(d).ok_or("no staging region")?;
     u.h.update(body);
+    if ram_staged(u) {
+        // configuration: RAM only (begin bounds size <= 512 + cap <= STAGE_LEN)
+        let o = u.got as usize;
+        stage_ram()[o..o + body.len()].copy_from_slice(body);
+        u.got += body.len() as u64;
+        u.last_ms = c.now_ms;
+        return Ok(u.got);
+    }
     for &byte in body {
         u.part[u.plen] = byte;
         u.plen += 1;
         if u.plen == 512 {
             let lba = slo + u.got / 512;
             if d.write_block(lba, &u.part).is_err() {
-                *up() = None;
+                end();
                 return Err("staging write failed");
             }
             u.plen = 0;
@@ -312,7 +358,7 @@ pub fn finish(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     let r = finish_inner(c, body);
     audit(c, "finish", ty, r.is_ok(), r.as_ref().err().copied().unwrap_or(""), r.as_ref().map_or(0, |f| f.gen));
     if r.is_err() {
-        *up() = None; // a failed verification ends the upload
+        end(); // a failed verification ends the upload
     }
     r
 }
@@ -351,9 +397,11 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
         return Ok(Finished { gen: plan.svn, active_gen: svn, len: plan.len });
     }
     let mut sig = [0u8; 512];
-    d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
+    let ram = ram_dev();
+    let (src, at): (&DevRef, u64) = if ram_staged(u) { (&ram, 0) } else { (&*d, slo) };
+    src.read_block(at, &mut sig).map_err(|_| "staging read failed")?;
     let key = artstore::key_for(u.ty).ok_or("no operator key")?;
-    let (gen, len) = artstore::verify(&*d, u.ty, &sig, slo + 1, &key).map_err(|e| match e {
+    let (gen, len) = artstore::verify(src, u.ty, &sig, at + 1, &key).map_err(|e| match e {
         crate::shield::LoadErr::DigestMismatch => "signature digest does not match the file",
         crate::shield::LoadErr::BadSignature => "bad signature (not the operator key, or a different pack type)",
         crate::shield::LoadErr::TooBig => "too big",
@@ -375,10 +423,16 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     if u.ty == Ty::Config && !artstore::config_mgmt_ok() {
         return Err("refused: this configuration would leave no management path (HTTPS to the device on LAN / Wi-Fi, eth1 or the management VLAN)");
     }
-    let active = artstore::active_gen(&*d, p1(d), u.ty);
+    let active = artstore::active_gen(&artstore::Plain::new(&*d), p1(d), u.ty);
     if gen < active {
         return Err("rollback refused: generation older than the active pack");
     }
+    u.secret = match u.ty {
+        Ty::Wan => artstore::wan_has_secret(&stage_ram()[512..512 + len as usize]),
+        Ty::Wifi => true,
+        Ty::Config => artstore::config_secret(),
+        _ => false,
+    };
     u.phase = Phase::Verified;
     u.gen = gen;
     u.len = len;
@@ -440,7 +494,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
     #[cfg(feature = "p15-write")]
     if u.os {
         let plan = u.plan.ok_or("not verified (finish first)")?;
-        *up() = None;
+        end();
         let (svn, _, _) = boot_facts();
         let mut reason = [0u8; 64];
         let rl = {
@@ -463,18 +517,38 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
         };
     }
     let mut sig = [0u8; 512];
-    d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
-    let (ty, gen, len) = (u.ty, u.gen, u.len);
-    let old = artstore::active_gen(&*d, p1(d), ty);
+    let staged = ram_staged(u);
+    if staged {
+        sig.copy_from_slice(&stage_ram()[..512]);
+    } else {
+        d.read_block(slo, &mut sig).map_err(|_| "staging read failed")?;
+    }
+    let (ty, gen, len, secret) = (u.ty, u.gen, u.len, u.secret);
+    let old = artstore::active_gen(&artstore::Plain::new(&*d), p1(d), ty);
     // the content digest inside the signature sector: POLICY.SIG has no length field (digest at 16..48, over the
     // whole 4 KiB file); every other format carries len at 16..24 and the digest at 24..56
-    let digest: [u8; 32] = match ty {
+    let mut digest: [u8; 32] = match ty {
         Ty::Policy => sig[16..48].try_into().unwrap(),
         Ty::Config => sig[13..45].try_into().unwrap(), // HQCSIG1: sha256(bundle) at 13..45
         _ => sig[24..56].try_into().unwrap(),
     };
-    let res = artstore::activate(d, ty, &sig, slo + 1, gen, len, &digest);
-    *up() = None;
+    let res = if !staged {
+        artstore::activate(d, ty, &sig, slo + 1, gen, len, &digest)
+    } else if artstore::cfg_seal_available() {
+        // sealed at rest; the audit records the digest of the SEALED image, never the plaintext's (F-a)
+        let r = artstore::activate_sealed(d, ty, &stage_ram()[..512 + len as usize], gen, len);
+        if let Ok(m) = &r {
+            digest = m.e[ty as usize].digest;
+        }
+        r
+    } else if secret {
+        // Q3: no device key (blank OTP) — a secret is never written in plaintext
+        end();
+        return Err("not stored: no device key — secrets are never written in plaintext");
+    } else {
+        artstore::activate_from(d, ty, &sig, artstore::Src::Ram(&stage_ram()[512..512 + len as usize]), gen, len, &digest)
+    };
+    end();
     let mut reason = [0u8; 64];
     let rl = {
         use core::fmt::Write;
@@ -517,7 +591,7 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     }
     let d = dev().ok_or("no artifact store")?;
     let opk = artstore::key_for(ty).ok_or("no operator key")?;
-    let old = artstore::active_gen(&*d, p1(d), ty);
+    let old = artstore::active_gen(&artstore::Plain::new(&*d), p1(d), ty);
     let res = artstore::rollback(d, ty, &opk);
     let tag = crate::mcauth::session_tag(c.session);
     let mut reason = [0u8; 64];
@@ -545,7 +619,7 @@ pub fn abort(c: &Ctx, body: &[u8]) -> Result<(), &'static str> {
         let mut b = [0u8; 192];
         let id = form_get(body, "id", &mut b).and_then(id_of);
         mine(c, id)?;
-        *up() = None;
+        end();
         Ok(())
     })();
     audit(c, "abort", ty, r.is_ok(), r.err().unwrap_or(""), 0);
@@ -560,7 +634,8 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
         let (g, src) = match dev() {
             Some(d) => {
                 let p = p1(d);
-                (artstore::active_gen(&*d, p, *t), if artstore::from_store(&*d, p, *t) { "store" } else { "boot" })
+                let pv = artstore::Plain::new(&*d);
+                (artstore::active_gen(&pv, p, *t), if artstore::from_store(&pv, p, *t) { "store" } else { "boot" })
             }
             None => (0, "boot"),
         };
@@ -699,17 +774,21 @@ pub fn selftest() -> bool {
     let mut cont2 = [0u8; 512 + 64];
     cont2[..512].copy_from_slice(&old);
     cont2[512..512 + body.len()].copy_from_slice(body);
-    let rollback = run_one(&c, &mut auth, &cont2[..512 + body.len()], "devices", &mut seq) == Err("rollback refused: generation older than the active pack");
+    let rollback = run_one(&c, &mut auth, &cont2[..512 + body.len()], "devices", &mut seq, false) == Err("rollback refused: generation older than the active pack");
     // a pack signed as DEVICES declared as an IOC pack: the IOC verifier refuses it
-    let cross = run_one(&c, &mut auth, cont, "ioc", &mut seq).map_or_else(|e| e.starts_with("malformed") || e.starts_with("bad signature"), |_| false);
+    let cross = run_one(&c, &mut auth, cont, "ioc", &mut seq, false).map_or_else(|e| e.starts_with("malformed") || e.starts_with("bad signature"), |_| false);
     // tampered byte after signing: the module's own verifier refuses (digest)
     let mut cont3 = [0u8; 512 + 64];
     cont3[..512 + body.len()].copy_from_slice(cont);
     cont3[520] ^= 1;
-    let tampered = run_one(&c, &mut auth, &cont3[..512 + body.len()], "devices", &mut seq).is_err();
+    let tampered = run_one(&c, &mut auth, &cont3[..512 + body.len()], "devices", &mut seq, false).is_err();
     // foreign Origin
     let foreign = begin(&Ctx { origin: "https://evil.example", ..Ctx { ..c } }, b"type=devices&size=600&seq=999", &mut auth).err() == Some("origin");
+    // design heqk-sealed-config-live-apply step 3: a configuration upload is staged in RAM only and sealed at rest
+    let cfg = cfg_selftest(&c, &mut auth, &kp, &mut seq);
     // clean up: nothing of the test survives into the running image
+    artstore::clear_cfg_seal();
+    end();
     unsafe {
         DEV = None;
         UP = None;
@@ -718,16 +797,77 @@ pub fn selftest() -> bool {
     crate::policysig::selftest_key(None);
     crate::devpolicy::load_text(b"");
     crate::ownerjournal::clear();
-    let pass = bad_type && too_big && reauth && out_of_order && chunks_ok && early && fin && staged_only && act && audited && rollback && cross && tampered && foreign;
+    let pass = bad_type && too_big && reauth && out_of_order && chunks_ok && early && fin && staged_only && act && audited && rollback && cross && tampered && foreign && cfg.iter().all(|&x| x);
     arch_aarch64::_print(format_args!(
-        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate: store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={}\n",
-        if pass { "PASS" } else { "FAIL" }, bad_type && too_big && reauth, out_of_order, chunks_ok, early, fin, staged_only, act, audited, rollback, cross, tampered, foreign
+        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate: store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={}\n",
+        if pass { "PASS" } else { "FAIL" }, bad_type && too_big && reauth, out_of_order, chunks_ok, early, fin, staged_only, act, audited, rollback, cross, tampered, foreign,
+        cfg[0], cfg[1], cfg[2], cfg[3]
     ));
     pass
 }
 
-/// Test helper: begin + chunks + finish (no activate) for one container. Ok(gen) or the refusal.
-fn run_one(c: &Ctx, auth: &mut crate::mcauth::Auth, cont: &[u8], ty: &str, seq: &mut u64) -> Result<u64, &'static str> {
+/// [P-upload] step 3: WAN uploads (the container in RAM, never the disk Staging region; sealed when there is a device
+/// key; Q3 without one). Returns [staging untouched + no secret on disk, sealed + ciphertext audit digest, no key:
+/// secret refused, no key: non-secret stored].
+fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::KeyPair, seq: &mut u64) -> [bool; 4] {
+    let disk = || unsafe { &*core::ptr::addr_of!(artstore::TEST_DISK) };
+    let (slo, shi) = dev().and_then(|d| staging(d)).unwrap_or((0, 0));
+    let stage_hash = || {
+        let d = disk();
+        let mut h = boot_abi::sha256::Hasher::new();
+        for i in 0..d.n {
+            if (slo..shi).contains(&d.lba[i]) {
+                h.update(&d.lba[i].to_le_bytes());
+                h.update(&d.data[i]);
+            }
+        }
+        h.finish()
+    };
+    let wan = |gen: u64, body: &[u8], seq: &mut u64, auth: &mut crate::mcauth::Auth| {
+        let mut cont = [0u8; 1024];
+        cont[..512].copy_from_slice(&artstore::test_sig(b"HQNSIG1\0", b"HQWAN1", gen, body, kp));
+        cont[512..512 + body.len()].copy_from_slice(body);
+        run_one(c, auth, &cont[..512 + body.len()], "wan", seq, true)
+    };
+    let entry = || dev().and_then(|d| artstore::entry(&*d, Ty::Wan)).unwrap_or(artstore::E0);
+    artstore::set_cfg_seal(Some([0x5c; 32]), 0x77);
+    let before = stage_hash();
+    let body = b"mode=pppoe\npppoe_user=up\npppoe_pass=s3cret\n";
+    let r = wan(5, body, seq, auth);
+    let e = entry();
+    let staging = r == Ok(5) && stage_hash() == before && !artstore::on_disk(disk(), b"s3cret") && !artstore::on_disk(disk(), b"pppoe_user=up");
+    // the journal's activation record names the SEALED image's digest, not the plaintext's
+    let hex8 = |d: &[u8; 32], out: &mut [u8; 23]| {
+        out[..7].copy_from_slice(b"sha256:");
+        for i in 0..8 {
+            out[7 + 2 * i] = b"0123456789abcdef"[(d[i] >> 4) as usize];
+            out[8 + 2 * i] = b"0123456789abcdef"[(d[i] & 15) as usize];
+        }
+    };
+    let (mut want, mut plain) = ([0u8; 23], [0u8; 23]);
+    hex8(&e.digest, &mut want);
+    hex8(&boot_abi::sha256::digest(body), &mut plain);
+    let mut last: Option<([u8; 64], usize)> = None;
+    crate::ownerjournal::for_each_artifact(&mut |rec| {
+        if rec.target() == b"wan" && rec.value == 1 {
+            let mut b = [0u8; 64];
+            let n = (rec.rlen as usize).min(64);
+            b[..n].copy_from_slice(&rec.reason[..n]);
+            last = Some((b, n));
+        }
+    });
+    let has = |r: &[u8], n: &[u8]| r.windows(n.len()).any(|w| w == n);
+    let sealed = e.sealed == 1 && e.gen == 5 && last.is_some_and(|(b, n)| has(&b[..n], &want) && !has(&b[..n], &plain));
+    // Q3: no device key — a PPPoE password is not persisted; a WAN without a secret keeps the signed plaintext path
+    artstore::set_cfg_seal(None, 0);
+    let refused = wan(6, b"mode=pppoe\npppoe_user=x\npppoe_pass=other\n", seq, auth) == Err("not stored: no device key — secrets are never written in plaintext")
+        && entry().gen == 5 && !artstore::on_disk(disk(), b"other");
+    let stored = wan(7, b"mode=dhcp\n", seq, auth) == Ok(7) && entry().gen == 7 && entry().sealed == 0 && stage_hash() == before;
+    [staging, sealed, refused, stored]
+}
+
+/// Test helper: begin + chunks + finish (+ activate when `act`) for one container. Ok(gen) or the refusal.
+fn run_one(c: &Ctx, auth: &mut crate::mcauth::Auth, cont: &[u8], ty: &str, seq: &mut u64, act: bool) -> Result<u64, &'static str> {
     use core::fmt::Write;
     let sha = boot_abi::sha256::digest(cont);
     let mut fb = [0u8; 300];
@@ -761,6 +901,15 @@ fn run_one(c: &Ctx, auth: &mut crate::mcauth::Auth, cont: &[u8], ty: &str, seq: 
         w.len
     };
     let r = finish(c, &fb[..n]).map(|f| f.gen);
-    *up() = None;
-    r
+    if r.is_err() || !act {
+        end();
+        return r;
+    }
+    let n = {
+        let mut w = crate::mcstate::JsonBuf::new(&mut fb);
+        *seq += 1;
+        let _ = write!(w, "id={:016x}&owner_key=owner-key-for-the-upload-test&seq={}", id, *seq);
+        w.len
+    };
+    activate(c, &fb[..n], auth).map(|a| a.gen)
 }

@@ -155,6 +155,8 @@ pub fn section(kind: u8) -> Option<&'static [u8]> {
 fn load_half<D: BlockDev + ?Sized>(dev: &D, half: u8, key: &[u8; 32], min_gen: u64) -> Option<u64> {
     let store = artstore::store_region(dev)?;
     let (sl, dl) = artstore::slot(store, Ty::Config, half);
+    // a sealed bundle is read through the plaintext view (seal MAC first, then cfgbundle's own signature check)
+    let dev = &artstore::Plain::new(dev);
     let mut sig = [0u8; 512];
     dev.read_block(sl, &mut sig).ok()?;
     let len = u32::from_le_bytes([sig[9], sig[10], sig[11], sig[12]]) as usize;
@@ -205,7 +207,7 @@ fn revert<D: BlockDev + ?Sized>(dev: &mut D, key: &[u8; 32], floor: u64) -> u64 
             x.trials = 0;
         })
         .map(|_| g),
-        None => artstore::set_entry(dev, Ty::Config, |x| *x = artstore::Entry { half: 0, gen: 0, len: 0, digest: [0; 32], state: STATE_ACTIVE, trials: 0 }).map(|_| 0),
+        None => artstore::set_entry(dev, Ty::Config, |x| *x = artstore::E0).map(|_| 0),
     };
     r.unwrap_or(0)
 }
