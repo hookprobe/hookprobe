@@ -1511,6 +1511,14 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
         return false;
     }
     unsafe { FW_VERIFY = backplane_verify(RAM_BASE, FW_BIN) };
+    #[cfg(all(feature = "wifi-pmkid-noexpire", not(feature = "wifi-pmkid-fix")))]
+    unsafe {
+        PMKID_PATCH = pmkid_noexpire_patch();
+    }
+    #[cfg(feature = "wifi-pmkid-fix")]
+    unsafe {
+        PMKID_PATCH = pmkid_walk_fix();
+    }
     unsafe { FW_STEP = 4 };
     // 5. NVRAM at the TOP OF THE *REAL* RAM (RAM_BASE + hardware ramsize - nlen). The
     //    closed CR4 firmware scans backward from the physical RAM top (0x198000+0xC8000
@@ -2251,6 +2259,82 @@ pub fn fw_trap_dump(sh: &FwShared) {
         crate::_print(format_args!("   [FWASSERT] line {} file {}\n", sh.assert_line,
             if ok { core::str::from_utf8(&f[..end]).unwrap_or("?") } else { "?" }));
     }
+}
+
+/// The firmware trap registers (type, epc, lr, pc) when sdpcm_shared reports a TRAP — for the sealed crash record
+/// (soak 2026-11-11: TRAP 4 data abort, dfar 0x19, pc 0x1c827a, lr 0x19a30d, FWID 01-b677b91b).
+pub fn fw_trap_regs() -> Option<[u32; 4]> {
+    let sh = fw_shared()?;
+    if sh.flags & SDPCM_SHARED_TRAP == 0 || sh.trap_addr == 0 {
+        return None;
+    }
+    let mut t = [0u8; 80];
+    if !ram_read(sh.trap_addr, &mut t) {
+        return None;
+    }
+    let r = |i: usize| u32::from_le_bytes([t[4 * i], t[4 * i + 1], t[4 * i + 2], t[4 * i + 3]]);
+    Some([r(0), r(1), r(18), r(19)])
+}
+/// Firmware halts the host mailbox has reported (HMB_DATA_FWHALT) since boot.
+pub fn fw_halts() -> u32 {
+    unsafe { HOSTMAIL_DIAG[4] }
+}
+
+/// REL-08: the 7.45.265 PMKID-cache insert sets each entry's lifetime with `mov.w r3, #0xe10` at 0x1c8e26; the
+/// 10-s expiry walk (0x1c823c) frees an expiring entry but relinks only the list HEAD, so an entry behind the head
+/// that expires first leaves a dangling pointer (TRAP 4, pc 0x1c827a, soak h 10.2). Patched in chip RAM after the
+/// download to `mov.w r3, #0x7f000000` (centuries; NOT -1, which the walk treats as a fatal `b .`): entries leave only
+/// through the 16-entry cap, whose head removal is correct. Applied only to the exact image (version string and the
+/// original instruction bytes), read back after the write. Some(true) = patched, Some(false) = write/readback failed,
+/// None = a different firmware (left untouched).
+#[cfg(any(feature = "wifi-pmkid-noexpire", feature = "wifi-pmkid-fix"))]
+pub static mut PMKID_PATCH: Option<bool> = None;
+
+/// REL-08 the correction: the expiry walk at 0x1c823c rewritten to unlink before freeing (head: head = next; middle /
+/// tail: prev->next = next; consecutive expiries keep prev), timer re-arm kept (list empty -> free the timer). Exactly
+/// the original 120 bytes; the timer callback pointer (0x1c8e84 -> 0x1c823d) is the only reference into the range.
+/// Source + assembly: tools/firmware/rel08/pmkid_walk.s. Same guards as the lifetime patch.
+#[cfg(feature = "wifi-pmkid-fix")]
+fn pmkid_walk_fix() -> Option<bool> {
+    const AT: u32 = 0x001c_823c;
+    const WALK_ORIG: [u8; 120] = [0x70, 0xb5, 0x03, 0x68, 0x05, 0x46, 0xd0, 0xf8, 0x38, 0x44, 0xd5, 0xf8, 0x30, 0x14, 0x98, 0x68, 0x56, 0xf6, 0xec, 0xfc, 0x15, 0xe0, 0xe6, 0x69, 0x83, 0xb9, 0xd5, 0xf8, 0x38, 0x34, 0x21, 0x46, 0x9c, 0x42, 0x2b, 0x68, 0x08, 0xbf, 0xc5, 0xf8, 0x38, 0x64, 0x58, 0x68, 0xff, 0xf7, 0x58, 0xff, 0x95, 0xf8, 0x34, 0x34, 0x01, 0x3b, 0x85, 0xf8, 0x34, 0x34, 0x01, 0xe0, 0x01, 0x3b, 0xa3, 0x61, 0x34, 0x46, 0x1c, 0xb1, 0xa3, 0x69, 0x5a, 0x1c, 0xe5, 0xd1, 0x14, 0xe0, 0x2b, 0x68, 0xd5, 0xf8, 0x38, 0x24, 0xd5, 0xf8, 0x30, 0x14, 0x98, 0x68, 0x32, 0xb9, 0x56, 0xf6, 0x41, 0xfd, 0xc5, 0xf8, 0x30, 0x44, 0x85, 0xf8, 0x34, 0x44, 0x70, 0xbd, 0x42, 0xf2, 0x10, 0x72, 0x23, 0x46, 0xbd, 0xe8, 0x70, 0x40, 0x56, 0xf6, 0x81, 0xbc, 0xfe, 0xe7];
+    const WALK_FIXED: [u8; 120] = [0xf0, 0xb5, 0x03, 0x68, 0x05, 0x46, 0xd0, 0xf8, 0x38, 0x44, 0xd5, 0xf8, 0x30, 0x14, 0x98, 0x68, 0x00, 0x27, 0x56, 0xf6, 0xeb, 0xfc, 0x15, 0xe0, 0xe6, 0x69, 0x7b, 0xb9, 0x17, 0xb9, 0xc5, 0xf8, 0x38, 0x64, 0x00, 0xe0, 0xfe, 0x61, 0x2b, 0x68, 0x21, 0x46, 0x58, 0x68, 0xff, 0xf7, 0x58, 0xff, 0x95, 0xf8, 0x34, 0x34, 0x01, 0x3b, 0x85, 0xf8, 0x34, 0x34, 0x02, 0xe0, 0x01, 0x3b, 0xa3, 0x61, 0x27, 0x46, 0x34, 0x46, 0x1c, 0xb1, 0xa3, 0x69, 0x5a, 0x1c, 0xe5, 0xd1, 0xfe, 0xe7, 0x2b, 0x68, 0xd5, 0xf8, 0x38, 0x24, 0xd5, 0xf8, 0x30, 0x14, 0x98, 0x68, 0x32, 0xb9, 0x56, 0xf6, 0x40, 0xfd, 0xc5, 0xf8, 0x30, 0x44, 0x85, 0xf8, 0x34, 0x44, 0xf0, 0xbd, 0x42, 0xf2, 0x10, 0x72, 0x23, 0x46, 0xbd, 0xe8, 0xf0, 0x40, 0x56, 0xf6, 0x80, 0xbc];
+    const VER: &[u8] = b"Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c";
+    let off = (AT - RAM_BASE) as usize;
+    if FW_BIN.len() < off + 120 || FW_BIN[off..off + 120] != WALK_ORIG || !FW_BIN.windows(VER.len()).any(|w| w == VER) {
+        return None;
+    }
+    if !backplane_write(AT, &WALK_FIXED) {
+        return Some(false);
+    }
+    let mut r = [0u8; 120];
+    Some(ram_read(AT, &mut r) && r == WALK_FIXED)
+}
+#[cfg(feature = "wifi-pmkid-noexpire")]
+fn pmkid_noexpire_patch() -> Option<bool> {
+    const AT: u32 = 0x001c_8e24; // word-aligned start; the instruction is at +2
+    const ORIG: [u8; 4] = [0x4f, 0xf4, 0x61, 0x63]; // mov.w r3, #0xe10
+    const NEW: [u8; 4] = [0x4f, 0xf0, 0xfe, 0x43]; // mov.w r3, #0x7f000000
+    const VER: &[u8] = b"Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c";
+    let off = (AT - RAM_BASE) as usize;
+    if FW_BIN.len() < off + 8 || FW_BIN[off + 2..off + 6] != ORIG || !FW_BIN.windows(VER.len()).any(|w| w == VER) {
+        return None;
+    }
+    let mut w = [0u8; 8];
+    w.copy_from_slice(&FW_BIN[off..off + 8]);
+    w[2..6].copy_from_slice(&NEW);
+    if !backplane_write(AT, &w) {
+        return Some(false);
+    }
+    let mut r = [0u8; 8];
+    Some(ram_read(AT, &mut r) && r == w)
+}
+/// The patch outcome for the boot log / health (None also when the feature is off).
+pub fn pmkid_patch() -> Option<bool> {
+    #[cfg(any(feature = "wifi-pmkid-noexpire", feature = "wifi-pmkid-fix"))]
+    return unsafe { PMKID_PATCH };
+    #[cfg(not(any(feature = "wifi-pmkid-noexpire", feature = "wifi-pmkid-fix")))]
+    None
 }
 
 /// WLC_GET_PKTCNTS (137): the firmware's own packet counters (rx_good, rx_bad, tx_good, tx_bad,
@@ -3210,6 +3294,14 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
         crate::_print(format_args!(" [WPA3] AP security {} — wpa_auth {:#x} set={} mfp {} set={} | events 188/189/190 armed={} | IGTK installed={} (algo {})\n",
             if s3.mode == SEC_WPA3 { "WPA3-SAE (PMF required)" } else { "WPA3 transition (WPA2-PSK + SAE, PMF capable)" },
             wpa3_fw_params().0, out.wpa_auth_ok, wpa3_fw_params().1, mfp3_ok, ev3, s3.igtk_set, s3.igtk_algo));
+        // REL-08: the PMKID-cache expiry hazard exists only when SAE stations are keyed (WPA3 modes); say what this
+        // boot does about it (the in-RAM lifetime patch, or nothing: the FWHALT self-heal is then the only guard)
+        crate::_print(format_args!(" [WPA3] PMKID-cache expiry (CYW43455 7.45.265 use-after-free, REL-08): {}\n", match pmkid_patch() {
+            Some(true) if cfg!(feature = "wifi-pmkid-fix") => "expiry walk CORRECTED in chip RAM (unlink before free, timer kept; the file is unmodified)",
+            Some(true) => "lifetime patched in chip RAM (entries never expire; the file is unmodified)",
+            Some(false) => "PATCH FAILED (write / read-back) — the FWHALT self-heal is the guard",
+            None => "not patched (feature off or another firmware) — the FWHALT self-heal is the guard",
+        }));
     }
     let mut sb = [0u8; 36];
     let slen = ssid.len().min(32);

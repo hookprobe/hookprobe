@@ -114,7 +114,10 @@ apmode = ["cm5", "arch-aarch64/gem-deep-rx"]
 crashtest = []
 # BENCH ONLY: the WPA3-SAE AP feasibility probe (arch-aarch64/wpa3probe). Never in a product image.
 wpa3probe = ["arch-aarch64/wpa3probe"]
-wpa3 = ["arch-aarch64/wpa3", "dep:sae"]
+# REL-08: every WPA3 build carries the PMKID-cache expiry correction (the defect only exists when SAE stations key)
+wpa3 = ["arch-aarch64/wpa3", "dep:sae", "wifi-pmkid-fix"]
+wifi-pmkid-noexpire = ["arch-aarch64/wifi-pmkid-noexpire"]
+wifi-pmkid-fix = ["arch-aarch64/wifi-pmkid-fix"]
 guestprobe = ["arch-aarch64/guestprobe"]
 # Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
 apmc = ["apmode", "mcserve"]
