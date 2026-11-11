@@ -21,12 +21,14 @@ export default async function (t) {
   ok(sampled.length === 0, `all ${ROUTES.length} routes render live device data (no sample banner)${sampled.length ? ': ' + sampled.join(', ') : ''}`);
 
   // 2. First-run setup describes the device's real WAN port (never the sample sentence).
+  t.at = 'setup: Start';
   await go('/setup', 2500);
   await page.click('button:has-text("Start")'); await page.waitForTimeout(300);
   const bubble = await page.locator('.setup-bubble').innerText();
   ok(!bubble.includes('I see a cable on the internet port'), `setup: internet step reflects the device, not the sample (“${bubble.slice(0, 70)}…”)`);
 
   // 3. Feedback: the beacon preview carries the device's own substrate; the export says "device".
+  t.at = 'feedback: Export diagnostics file';
   await go('/admin/feedback', 2500);
   const beacon = JSON.parse(await page.locator('[aria-label="Beacon preview"] pre').innerText());
   ok(beacon.device_class === 'heqk' && beacon.consent.startsWith('not given'), 'feedback: beacon preview filled from the device (heqk), consent not given');
@@ -37,9 +39,10 @@ export default async function (t) {
   ok(!/"ip"|gateway|"mac"|owner_key/i.test(JSON.stringify(diag)), 'feedback: live diagnostics carry no addresses or keys');
 
   // 4. Administration: Restart is offered for real (not the preview reason), and the signing-key panel renders.
+  t.at = 'admin: Restart / Signing key tab';
   await go('/admin/identity', 2500);
   ok(await page.locator('[aria-label="Restart"] button:has-text("Restart now")').isEnabled()
     && !(await vis(page.locator('[aria-label="Restart"] >> text=Preview:'))), 'admin: Restart offered on the device');
   await page.click('[aria-label="Settings"] >> text=Signing key'); await page.waitForTimeout(300);
-  ok(await vis(page.locator('[aria-label="Signing key"] >> text=Create a key in this browser')), 'admin: signing-key panel ready on the device');
+  ok(await vis(page.locator('[aria-label="Signing key"] >> text=Create key and download backup')), 'admin: signing-key panel ready on the device');
 }
