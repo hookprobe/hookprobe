@@ -875,6 +875,13 @@ pub fn resource_shed_verdict(src: u32) -> Option<Verdict> {
 /// this window are counted (corroboration still sees them) but raise no new event — a regular beacon or
 /// a sustained transfer would otherwise alert on every packet and evict the 256-row detection ring.
 pub const BEHAVIORAL_COOLDOWN_SECS: u64 = 300;
+/// Beaconing re-alert window (soak 2026-11-11: a 5-minute-period beacon re-alerted every period, 108 events in
+/// 9 h for one flow, because the 300-s window ended just before each beacon). A beacon IS periodic, so its
+/// alert is held for an hour per source; every suppressed trip still feeds corroboration and the counter.
+pub const BEACON_COOLDOWN_SECS: u64 = 3600;
+fn cooldown_for(rule_id: u16) -> u64 {
+    if rule_id == RULE_BEACON { BEACON_COOLDOWN_SECS } else { BEHAVIORAL_COOLDOWN_SECS }
+}
 const COOL_N: usize = 128;
 static COOL_KEY: [core::sync::atomic::AtomicU64; COOL_N] = [const { core::sync::atomic::AtomicU64::new(0) }; COOL_N];
 static COOL_AT: [core::sync::atomic::AtomicU64; COOL_N] = [const { core::sync::atomic::AtomicU64::new(0) }; COOL_N];
@@ -885,7 +892,7 @@ pub fn refire_ok(rule_id: u16, src: u32, now: u64) -> bool {
     use core::sync::atomic::Ordering::Relaxed;
     let key = ((rule_id as u64) << 32) | src as u64 | (1u64 << 63);
     let i = (key.wrapping_mul(0x9E37_79B9_7F4A_7C15) >> 57) as usize % COOL_N;
-    if COOL_KEY[i].load(Relaxed) == key && now.saturating_sub(COOL_AT[i].load(Relaxed)) < BEHAVIORAL_COOLDOWN_SECS {
+    if COOL_KEY[i].load(Relaxed) == key && now.saturating_sub(COOL_AT[i].load(Relaxed)) < cooldown_for(rule_id) {
         COOL_SUPPRESSED.fetch_add(1, Relaxed);
         return false;
     }
