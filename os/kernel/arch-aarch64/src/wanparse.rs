@@ -83,6 +83,38 @@ pub fn ip6cp(data: &[u8]) -> hal::pppwire::Ip6cpReq {
     }
 }
 
+pub type LcpPeerFn = fn(u8, &[u8]) -> Option<hal::pppwire::LcpPeer>;
+pub static mut EL0_LCP_PEER: Option<LcpPeerFn> = None;
+/// The AC's Nak / Reject of our LCP request (a server fault reads as "nothing suggested": we re-send unchanged and
+/// the retransmit bound applies).
+pub fn lcp_peer(code: u8, data: &[u8]) -> hal::pppwire::LcpPeer {
+    match unsafe { EL0_LCP_PEER } {
+        Some(h) => h(code, data).unwrap_or(hal::pppwire::LCPPEER0),
+        None => hal::pppwire::lcp_peer(code, data),
+    }
+}
+
+// ---- ADR 0050 D4 step 5a: the WPA authenticator's station-frame parsing ----
+pub type EapolFn = fn(&[u8], &[u8; 6], bool, u64) -> Option<Option<usize>>;
+pub static mut EL0_EAPOL: Option<EapolFn> = None;
+pub type MfpcFn = fn(&[u8], usize) -> Option<bool>;
+pub static mut EL0_MFPC: Option<MfpcFn> = None;
+
+/// An EAPOL-Key from `sta` for this handshake step (a server fault reads as "not ours": the station retransmits).
+pub fn eapol_key(e: &[u8], sta: &[u8; 6], secure: bool, replay: u64) -> Option<usize> {
+    match unsafe { EL0_EAPOL } {
+        Some(h) => h(e, sta, secure, replay).flatten(),
+        None => hal::eapolwire::eapol_key(e, sta, secure, replay),
+    }
+}
+/// M2's RSNE MFP-capable bit (a server fault reads as "not capable": PMF stays off for that station, as before).
+pub fn m2_mfpc(m2: &[u8], body_off: usize) -> bool {
+    match unsafe { EL0_MFPC } {
+        Some(h) => h(m2, body_off).unwrap_or(false),
+        None => hal::eapolwire::m2_mfpc(m2, body_off),
+    }
+}
+
 pub fn dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
     match unsafe { EL0_DHCP6 } {
         Some(h) => h(ip, xid).flatten(),

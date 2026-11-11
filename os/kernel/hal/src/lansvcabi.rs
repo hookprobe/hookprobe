@@ -54,6 +54,12 @@ pub const CMD_WAN_IPCP: u32 = 9;
 pub const CMD_WAN_CHAP: u32 = 10;
 /// IN = an IPv6CP Configure-Request's option bytes. OUT = `pppwire::IP6CP_LEN`.
 pub const CMD_WAN_IP6CP: u32 = 11;
+/// D4 step 3b-v: IN = `code u8` + the AC's LCP Nak / Reject data. OUT = `pppwire::encode_lcp_peer`.
+pub const CMD_WAN_LCP_PEER: u32 = 14;
+/// D4 step 5a: IN = `sta[6] secure u8 replay u64 LE` + an Ethernet frame. OUT = `[ok u8][n u16 LE]`.
+pub const CMD_STA_EAPOL: u32 = 12;
+/// IN = `body_off u16 LE` + an M2 802.1X frame. OUT = `[mfpc u8]`.
+pub const CMD_STA_MFPC: u32 = 13;
 /// Self-test only (kernel-issued at boot): the server faults on purpose, proving the D5 reset path.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 

@@ -744,35 +744,24 @@ impl Pppoe {
                 self.lcp_ack_rx = true;
                 self.lcp_maybe_open(now_ms, tx);
             }
+            // D4 step 3b-v: the AC's Nak / Reject of our request is walked in EL0; the kernel applies the record
             CONF_NAK if id == self.lcp_id && self.phase == Phase::Lcp => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    match t {
-                        1 if l == 4 => self.mru = be16(data, o + 2).min(PPPOE_MTU),
-                        5 if l == 6 => self.magic = self.magic.rotate_left(7) ^ 0x5a5a_a5a5,
-                        _ => {}
-                    }
-                    o += l;
+                let f = crate::wanparse::lcp_peer(CONF_NAK, data);
+                if let Some(m) = f.mru {
+                    self.mru = m.min(PPPOE_MTU);
+                }
+                if f.magic_nak {
+                    self.magic = self.magic.rotate_left(7) ^ 0x5a5a_a5a5;
                 }
                 self.send_lcp_req(now_ms, tx);
             }
             CONF_REJ if id == self.lcp_id && self.phase == Phase::Lcp => {
-                let mut o = 0;
-                while o + 2 <= data.len() {
-                    let (t, l) = (data[o], data[o + 1] as usize);
-                    if l < 2 || o + l > data.len() {
-                        break;
-                    }
-                    match t {
-                        1 => self.send_mru = false,
-                        5 => self.send_magic = false,
-                        _ => {}
-                    }
-                    o += l;
+                let f = crate::wanparse::lcp_peer(CONF_REJ, data);
+                if f.rej_mru {
+                    self.send_mru = false;
+                }
+                if f.rej_magic {
+                    self.send_magic = false;
                 }
                 self.send_lcp_req(now_ms, tx);
             }
