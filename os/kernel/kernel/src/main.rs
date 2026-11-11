@@ -3088,6 +3088,10 @@ fn cm5_p10_probe() {
                         // default floor; the LAN / Wi-Fi management network is unaffected. No key (standalone) = as before.
                         // ADR 0059 step 3: cfgd decides which HQCFG1 bundle (if any) is in force — committed, on trial, or
                         // reverted — BEFORE the WAN / Wi-Fi / POLICY loaders read their sections from it
+                        // Design heqk-sealed-config-live-apply step 5: with a device key, plaintext configuration is sealed at
+                        // rest once (crash-safe) and the old plaintext / stale Staging uploads scrubbed — before cfgd reads the
+                        // store. A failure is reported and skipped; the boot never blocks on it.
+                        let _ = artstore::migrate_device();
                         match cfgd::boot_device(cyw43::now_secs()) {
                             cfgd::Boot::None => {}
                             cfgd::Boot::Committed(g) => kprint!(" [CFGD] HQCFG1 configuration bundle generation {} in force (committed)\n", g),
@@ -7095,6 +7099,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = ownerjournal::selftest();
         let _ = rpmb::selftest();
         let _ = seal::inplace_selftest();
+        let _ = artstore::cfgseal_selftest(); // sealed-config step 5: migration + scrub + crash injection
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
         #[cfg(feature = "netsvc")]
