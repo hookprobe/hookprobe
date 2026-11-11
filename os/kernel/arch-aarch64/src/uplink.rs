@@ -42,6 +42,16 @@ const WAIT_MS: u64 = 5_000;
 /// Retransmit the lossy request every second of dry polling.
 const RETX_MS: u64 = 1_000;
 
+/// Step 0 (finding F-d): a hook the kernel installs to pet the runtime watchdog from inside long blocking steps (the
+/// PPPoE bring-up waits up to 30 s; the watchdog's hardware maximum is ~16 s). The kernel's `pet` rate-limits itself.
+pub static mut LONG_STEP_PET: Option<fn()> = None;
+#[inline]
+fn long_step_pet() {
+    if let Some(f) = unsafe { LONG_STEP_PET } {
+        f();
+    }
+}
+
 #[inline]
 fn cntpct() -> u64 {
     let v: u64;
@@ -401,6 +411,7 @@ fn nic_tx(nic: Nic, f: &[u8]) -> bool {
     }
 }
 fn nic_rx(nic: Nic, out: &mut [u8]) -> Option<usize> {
+    long_step_pet(); // every bring-up wait polls through here (DHCP / ARP / probe stages can sum past 16 s)
     match nic {
         Nic::End0 => end0_rx(out),
         Nic::Eth1 => rtl8111::rx_next(out),
@@ -697,6 +708,7 @@ fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mu
     let deadline = cntpct() + ticks_ms(30_000);
     let mut buf = [0u8; 2048];
     loop {
+        long_step_pet();
         for i in 0..tx.n {
             let _ = nic_tx(nic, tx.frame(i));
         }

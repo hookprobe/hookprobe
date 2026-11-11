@@ -3050,6 +3050,54 @@ fn cm5_p10_probe() {
                     // BSS beacons (validated by an attending operator seeing the SSID on a phone).
                     const AP_MODE: bool = cfg!(feature = "apmode");
                     if AP_MODE {
+                        // M-NAT0: the wired UPLINK. Operator topology: end0 (RP1 GEM) is ALWAYS
+                        // the WAN, eth1 (RTL8111H) is the LAN. Lease an IP on end0, resolve the
+                        // gateway, ping the internet — over the metal-proven GEM rings (armed by
+                        // the P8 GEM phase). Runs BEFORE the WiFi AP so the polled rings don't
+                        // interleave in the log; its lease + gw MAC are what M-NAT1+ NATs the
+                        // WiFi-AP and eth1-LAN clients through. eth1 is reported as the LAN port
+                        // (link + station MAC only — heqk will be its DHCP SERVER, never a client).
+                        use arch_aarch64::uplink::{self, Nic};
+                        unsafe { uplink::LONG_STEP_PET = Some(rtwdog::long_step_pet) };
+                        let mut up = uplink::UplinkResult::new(Nic::End0);
+                        // ADR 0049 D1: the device-pinned trust anchor decides which operator key verifies
+                        // WAN.TXT, POLICY.TXT and every signed pack — pinned before ANY of them is read (ADR 0058 rule 6).
+                        #[cfg(feature = "p15-write")]
+                        {
+                            let (d, prev, wrote) = anchor::boot(policysig::POLICY_PUBKEY);
+                            let fp = |k: [u8; 32]| u32::from_be_bytes([k[0], k[1], k[2], k[3]]);
+                            #[cfg(feature = "mcserve")]
+                            unsafe {
+                                let n = &mut *core::ptr::addr_of_mut!(NET);
+                                (n.anchor, n.anchor_fp) = match d {
+                                    anchor::Decision::Pin(k) => (1, fp(k)),
+                                    anchor::Decision::Keep(k) => (2, fp(k)),
+                                    anchor::Decision::Conflict { pinned } => (3, fp(pinned)),
+                                    anchor::Decision::Standalone => (4, 0),
+                                };
+                            }
+                            match d {
+                                anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
+                                anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
+                                anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
+                                anchor::Decision::Standalone => kprint!(" [ANCHOR] CONFIG UNPROTECTED — no operator key pinned or compiled in: unsigned WAN.TXT / WIFI.TXT / POLICY.TXT are accepted (a debug / standalone image; release builds refuse this, ADR 0059 0.5)\n"),
+                            }
+                        }
+                        // ADR 0058 rule 6 (operator 2026-11-10): verify BEFORE parsing or applying. With an operator key, a
+                        // WAN.TXT that does not verify is ignored WHOLE — DHCP, untagged, no management sub-interface, the
+                        // default floor; the LAN / Wi-Fi management network is unaffected. No key (standalone) = as before.
+                        // ADR 0059 step 3: cfgd decides which HQCFG1 bundle (if any) is in force — committed, on trial, or
+                        // reverted — BEFORE the WAN / Wi-Fi / POLICY loaders read their sections from it
+                        match cfgd::boot_device(cyw43::now_secs()) {
+                            cfgd::Boot::None => {}
+                            cfgd::Boot::Committed(g) => kprint!(" [CFGD] HQCFG1 configuration bundle generation {} in force (committed)\n", g),
+                            cfgd::Boot::Trial(g) => kprint!(" [CFGD] HQCFG1 bundle generation {} on TRIAL: committed once the WAN is usable, reverted after {} s otherwise\n", g, cfgd::WINDOW_S),
+                            cfgd::Boot::Reverted { from, to } => kprint!(" [CFGD] bundle generation {} REVERTED (trial failed / second boot while pending) -> {}\n", from, if to == 0 { 0 } else { to }),
+                            cfgd::Boot::Refused => kprint!(" [CFGD] the committed bundle no longer verifies — IGNORED, the per-file configuration applies\n"),
+                        }
+                        // Step 0 (sealed-config / live-apply design, finding F-c): the Wi-Fi settings load AFTER the trust anchor
+                        // is pinned and cfgd has decided which HQCFG1 bundle is in force — before, an owner-signed WIFI.TXT was
+                        // verified before the anchor was known and a bundle's wifi section was never seen at boot.
                         // Parity G20: SSID / PSK / channel from the operator-signed WIFI.TXT; the build-time
                         // env (bench images) is the fallback; neither = the AP does not start (never open).
                         let wcfg = match arch_aarch64::emmc::Emmc::probe() { Ok(dev) => wificfg::load(&dev), Err(_) => None };
@@ -3093,50 +3141,6 @@ fn cm5_p10_probe() {
                             loop {
                                 unsafe { core::arch::asm!("wfe", options(nomem, nostack)) };
                             }
-                        }
-                        // M-NAT0: the wired UPLINK. Operator topology: end0 (RP1 GEM) is ALWAYS
-                        // the WAN, eth1 (RTL8111H) is the LAN. Lease an IP on end0, resolve the
-                        // gateway, ping the internet — over the metal-proven GEM rings (armed by
-                        // the P8 GEM phase). Runs BEFORE the WiFi AP so the polled rings don't
-                        // interleave in the log; its lease + gw MAC are what M-NAT1+ NATs the
-                        // WiFi-AP and eth1-LAN clients through. eth1 is reported as the LAN port
-                        // (link + station MAC only — heqk will be its DHCP SERVER, never a client).
-                        use arch_aarch64::uplink::{self, Nic};
-                        let mut up = uplink::UplinkResult::new(Nic::End0);
-                        // ADR 0049 D1: the device-pinned trust anchor decides which operator key verifies
-                        // WAN.TXT, POLICY.TXT and every signed pack — pinned before ANY of them is read (ADR 0058 rule 6).
-                        #[cfg(feature = "p15-write")]
-                        {
-                            let (d, prev, wrote) = anchor::boot(policysig::POLICY_PUBKEY);
-                            let fp = |k: [u8; 32]| u32::from_be_bytes([k[0], k[1], k[2], k[3]]);
-                            #[cfg(feature = "mcserve")]
-                            unsafe {
-                                let n = &mut *core::ptr::addr_of_mut!(NET);
-                                (n.anchor, n.anchor_fp) = match d {
-                                    anchor::Decision::Pin(k) => (1, fp(k)),
-                                    anchor::Decision::Keep(k) => (2, fp(k)),
-                                    anchor::Decision::Conflict { pinned } => (3, fp(pinned)),
-                                    anchor::Decision::Standalone => (4, 0),
-                                };
-                            }
-                            match d {
-                                anchor::Decision::Pin(k) => kprint!(" [ANCHOR] operator key {:08x}… PINNED on this device (trust on first use){}\n", fp(k), if wrote { "" } else { " — NOT persisted (no DataVolume write)" }),
-                                anchor::Decision::Keep(k) => kprint!(" [ANCHOR] pinned operator key {:08x}… (POLICY generation floor {}: persisted {}, image {})\n", fp(k), policysig::floor(), prev.map_or(0, |a| a.policy_floor), policysig::POLICY_GEN_FLOOR),
-                                anchor::Decision::Conflict { pinned } => kprint!(" [ANCHOR] this image carries a DIFFERENT operator key — ignored; the pinned key {:08x}… stays the authority (rotation needs the operator's signed handover)\n", fp(pinned)),
-                                anchor::Decision::Standalone => kprint!(" [ANCHOR] CONFIG UNPROTECTED — no operator key pinned or compiled in: unsigned WAN.TXT / WIFI.TXT / POLICY.TXT are accepted (a debug / standalone image; release builds refuse this, ADR 0059 0.5)\n"),
-                            }
-                        }
-                        // ADR 0058 rule 6 (operator 2026-11-10): verify BEFORE parsing or applying. With an operator key, a
-                        // WAN.TXT that does not verify is ignored WHOLE — DHCP, untagged, no management sub-interface, the
-                        // default floor; the LAN / Wi-Fi management network is unaffected. No key (standalone) = as before.
-                        // ADR 0059 step 3: cfgd decides which HQCFG1 bundle (if any) is in force — committed, on trial, or
-                        // reverted — BEFORE the WAN / Wi-Fi / POLICY loaders read their sections from it
-                        match cfgd::boot_device(cyw43::now_secs()) {
-                            cfgd::Boot::None => {}
-                            cfgd::Boot::Committed(g) => kprint!(" [CFGD] HQCFG1 configuration bundle generation {} in force (committed)\n", g),
-                            cfgd::Boot::Trial(g) => kprint!(" [CFGD] HQCFG1 bundle generation {} on TRIAL: committed once the WAN is usable, reverted after {} s otherwise\n", g, cfgd::WINDOW_S),
-                            cfgd::Boot::Reverted { from, to } => kprint!(" [CFGD] bundle generation {} REVERTED (trial failed / second boot while pending) -> {}\n", from, if to == 0 { 0 } else { to }),
-                            cfgd::Boot::Refused => kprint!(" [CFGD] the committed bundle no longer verifies — IGNORED, the per-file configuration applies\n"),
                         }
                         let (wan_sig, wan_txt) = match arch_aarch64::emmc::Emmc::probe() {
                             Ok(d) => (wan_signed(&d), wan_present(&d)),
