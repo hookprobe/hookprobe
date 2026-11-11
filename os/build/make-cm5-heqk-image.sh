@@ -68,6 +68,12 @@ fi
 # release → FATAL on dev keys; debug → allowed). Checks the source trusted_keys.rs/attest_keys.rs.
 "$ROOT/os/build/heqk-boot-key-check.sh"
 
+# Decision record D-RPMB: the irreversible RPMB key write exists only in an explicit manufacturing build. Debug or
+# release, a product image never carries it; the operator names the operation to build it at all.
+case ",$FEATURES," in
+  *,rpmb-provision,*) [ "${HEQK_MANUFACTURING_OP:-}" = rpmb-provision ] || { echo "FATAL: rpmb-provision (irreversible RPMB key write) is a manufacturing-only build — set HEQK_MANUFACTURING_OP=rpmb-provision for that one operation" >&2; exit 1; } ;;
+esac
+
 # ADR 0059 step 4a: the shell's development transport (hsh-dev) never ships — the production transport is the
 # operator's open decision (hsh spec R6).
 case ",$FEATURES," in
