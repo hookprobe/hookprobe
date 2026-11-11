@@ -11,7 +11,7 @@
  *   rotate   a new key, authorised by the current one ("HQROT1"||new||gen), new backup, then swapped in
  * The private key and the passphrase never reach the device.
  */
-import { type Component, Show, createSignal, onMount } from 'solid-js';
+import { type Component, For, Show, createSignal, onMount } from 'solid-js';
 import { ownerKey, loadOwnerKey, checkSigning, signingSupported, generateOwnerKey, importOwnerKeyPem, exportOwnerKeyBackup, deleteOwnerKey, download, enrollProof, prepareRotation, MIN_PASSPHRASE } from '../store/signing';
 import { isEncryptedPem } from '../store/keyBackup';
 import { anchorView, anchorState, refreshAnchor, enroll, rotate } from '../store/anchor';
@@ -124,6 +124,15 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
           <Show when={!props.compact && anchorView()}>
             <div aria-label="Owner key on the device" style={{ display: 'grid', gap: '8px' }}>
               <span class="prow"><span>Device verifies settings with</span><span>{anchorView()!.config_files_verified_by}</span></span>
+              <Show when={anchorView()!.floors}>
+                <For each={(['wan', 'wifi', 'policy'] as const).filter((k) => anchorView()!.floors![k] !== undefined)}>{(k) => {
+                  const f = () => { const v = anchorView()!.floors![k]!; return typeof v === 'number' ? { current: null, floor: v } : v; };
+                  return (
+                    <span class="prow"><span>{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'} settings</span>
+                      <span>{f().current !== null ? `generation ${f().current} · ` : ''}older than {f().floor + 1} refused</span></span>
+                  );
+                }}</For>
+              </Show>
               <Show when={anchorView()!.can === 'enroll' && anchorView()!.vendor_key !== ownerKey()!.pubHex}>
                 <p class="l0-card-sub">Make this the device's owner key: from then on only files signed with it change the internet, Wi-Fi or firewall settings. One-shot; the factory files on the boot card keep working.</p>
                 <div class="l0-card-foot"><button class="hp-btn hp-btn--primary" disabled={busy()} onClick={() => void doEnroll()}>Make this the owner key</button></div>
