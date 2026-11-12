@@ -38,7 +38,7 @@ const SAMPLE_STAGES: Stage[] = [
   { name: 'Close', state: 'idle', auto: true, count: '—', why: 'Write the incident summary and close.' },
 ];
 
-const field = { font: 'inherit', 'min-height': '40px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' } as const;
+const field = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' } as const;
 
 const AutomateApp: Component = () => {
   const [book, setBook] = createSignal(0);
