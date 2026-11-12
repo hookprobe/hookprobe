@@ -13,9 +13,9 @@ const GICD: usize = 0x10_7FFF_9000; // BCM2712 GIC-400 Distributor
 #[cfg(feature = "cm5")]
 const GICC: usize = 0x10_7FFF_A000; // BCM2712 GIC-400 CPU interface
 
-const GICD_CTLR: usize = GICD + 0x000;
+const GICD_CTLR: usize = GICD;
 const GICD_ISENABLER: usize = GICD + 0x100; // one bit per intid
-const GICC_CTLR: usize = GICC + 0x000;
+const GICC_CTLR: usize = GICC;
 const GICC_PMR: usize = GICC + 0x004; // priority mask
 const GICC_IAR: usize = GICC + 0x00C; // interrupt acknowledge
 const GICC_EOIR: usize = GICC + 0x010; // end of interrupt
