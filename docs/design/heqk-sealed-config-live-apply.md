@@ -113,6 +113,15 @@ settings change **live**, never requiring a reboot.
 7. The policy executor plus `Ctx.peer` and the owner-address probe.
 8. The activation hook (`take_apply` in the AP loop).
 9. The WAN executor (non-blocking `wan_start`, `nat::flush_wan`). Metal: DHCP → static → PPPoE → DHCP live.
+   - **Status (2026-11-12, built, QEMU `[P-cfgd-wan]`, metal pending):** `kernel/src/wanlive.rs` (verify + parse
+     first, teardown, link, start) + `uplink::wan_teardown` / `wan_start` / `mgmt_current`, `nat::flush_wan` (each NAT
+     mapping now records its WAN address), `CH_WAN` in `LIVE_CAPABLE`.
+   - DHCP and static start **non-blocking** (the in-loop DORA; static resolves its gateway in the loop). PPPoE keeps
+     the bounded blocking dial (≤ 30 s + probes, watchdog petted through `nic_rx`), as the in-loop PPPoE retry does.
+   - Q5: a PAP/CHAP reject fails the apply at once (live revert, no window). A change of the management
+     sub-interface or floor is applied only when it differs, and then needs the owner's confirm.
+   - Metal must prove: DHCP → static → PPPoE → DHCP live (Mission Control on the AP reachable throughout), and a
+     wrong-PPPoE-password bundle reverting live early.
 10. The Wi-Fi executor. **Metal spike early:** repeated `ap_stop`/`ap_start` on the CYW43455.
 11. Management-VLAN changes under confirm.
 
