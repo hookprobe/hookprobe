@@ -79,9 +79,13 @@ netsvc = ["dep:smoltcp"]
 # serve loop never exits); its pure logic is the [P-mc] gate.
 # ADR 0051 — Mission Control HTTPS: embed the EL0 TLS server (el0-tlshost) and the :443 pump.
 mctls = []
-# ADR 0059 step 4a: DEVELOPMENT transport for the EL0 shell (POST /api/hsh). OFF by default; never in a release build
-# (the production transport — web console and/or UART RX — is the operator's open decision, hsh spec R6).
-hsh-dev = ["mcserve"]
+# ADR 0059 step 4a, R6 = D (operator 2026-11-12): the EL0 shell's web carrier (POST /api/hsh) over the authenticated
+# owner session — view commands on the session; a privileged command only with an owner-signed HQMGMT1 envelope,
+# verified by the same mgmtabi as every client (the carrier carries no authority). The AP product (apmc) carries it.
+# No UART RX in any build.
+hsh = ["mcserve"]
+# DEVELOPMENT-only shell extras (none today beyond `hsh`); never in a release build (make-cm5-heqk-image.sh refuses it).
+hsh-dev = ["hsh"]
 mcserve = ["netsvc", "mctls"]
 # M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
 # prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
@@ -120,7 +124,7 @@ wifi-pmkid-noexpire = ["arch-aarch64/wifi-pmkid-noexpire"]
 wifi-pmkid-fix = ["arch-aarch64/wifi-pmkid-fix"]
 guestprobe = ["arch-aarch64/guestprobe"]
 # Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
-apmc = ["apmode", "mcserve"]
+apmc = ["apmode", "mcserve", "hsh"]
 # Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
 # Default builds read once and never block (peer review COR-L1).
 stalldiag = ["apmode"]

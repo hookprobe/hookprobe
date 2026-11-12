@@ -1,57 +1,48 @@
 //! The management ABI dispatcher (ADR 0059 D9; hsh spec §14, R3): every `hal::mgmtabi` message is served HERE, by the
 //! SAME producers as `GET /api/*` (McState, cfgd, the anchor, the EL0 servers' counters), as fixed records — so
-//! Mission Control and `hsh` see identical numbers and get the same authorisation decision. Role-checked: a message
-//! the caller's role does not cover is DENIED (the shell only hides commands; this enforces).
+//! Mission Control and `hsh` see identical numbers and get the same authorisation decision.
+//!
+//! Authority (R6 = D, operator 2026-11-12): view messages need the view role (the carrier's authenticated session);
+//! EVERY message above view is authorised ONLY by an HQMGMT1 envelope signed by the enrolled owner key K_own (the
+//! device holds only its public half), verified HERE in EL1 before anything runs — whatever the carrier (the web
+//! console, Mission Control's confirm / rollback, a future CLI). The session's role never authorises a change.
+//!
+//! Replay: a per-boot EPOCH (8 bytes from the hardware TRNG on the CM5, drawn on first use) + a RAM sequence floor.
+//! Each accepted-for-verification envelope consumes its sequence (the floor rises to it). The floor need not persist:
+//! a reboot draws a new epoch, so every envelope signed for an earlier boot no longer matches (no eMMC write per
+//! operation, nothing to roll back). No TRNG word = no epoch = every privileged operation refused (fail-closed).
 
 use hal::mgmtabi as m;
 
-/// Serve `msg` for a caller holding `role` (session `tag`, argument `arg`) into `out`. Returns (result code, record
-/// length). Configuration operations are journaled HERE — allowed or refused — so Mission Control and `hsh` leave the
-/// same record for the same operation.
-pub fn dispatch(msg: u16, role: u8, tag: [u8; 4], now_ms: u64, arg: u64, payload: &[u8], out: &mut [u8]) -> (u8, usize) {
-    let role = role.max(elevated(tag, now_ms));
+/// Serve `msg` for a caller holding `role` (session `tag`, argument `arg`, the carrier's envelope `env`, empty = none)
+/// into `out`. Returns (result code, record length). Configuration operations are journaled HERE — allowed or refused
+/// — so Mission Control and `hsh` leave the same record for the same operation.
+pub fn dispatch(msg: u16, role: u8, tag: [u8; 4], now_ms: u64, arg: u64, env: &[u8], out: &mut [u8]) -> (u8, usize) {
     let need = m::role_for(msg);
     if need == u8::MAX {
         return (m::R_UNKNOWN, 0);
     }
-    if role < need {
-        if matches!(msg, m::CFG_CONFIRM | m::CFG_ROLLBACK | m::CFG_STAGE) {
-            journal(msg, false, 0, "denied: role", tag, now_ms);
-        }
+    if need <= m::ROLE_VIEW && role < need {
         return (m::R_DENIED, 0);
     }
     if msg == m::OWNER_CHALLENGE {
-        let c = challenge(tag, now_ms);
+        let c = challenge();
         let e = c.encode();
         out[..e.len()].copy_from_slice(&e);
         return (m::R_OK, e.len());
     }
-    if msg == m::OWNER_ELEVATE {
-        let r = elevate(tag, now_ms, payload);
-        let a = match r {
-            Ok(()) => m::Act::new(true, crate::anchor::owner_gen(), "owner role granted for 15 minutes"),
-            Err(e) => m::Act::new(false, 0, e),
-        };
-        let mut b = [0u8; 64];
-        let n = {
-            use core::fmt::Write;
-            let mut w = crate::mcstate::JsonBuf::new(&mut b);
-            let _ = write!(w, "elevate {}", a.reason_str());
-            w.len
-        };
-        let _ = crate::ownerapi::audit_artifact("hsh", if a.ok { 1 } else { 2 }, &b[..n], tag, now_ms);
-        let e = a.encode();
-        out[..e.len()].copy_from_slice(&e);
-        return (m::R_OK, e.len());
-    }
     if matches!(msg, m::CFG_CONFIRM | m::CFG_ROLLBACK | m::CFG_STAGE) {
-        let r: Result<u64, &str> = match msg {
-            m::CFG_CONFIRM => crate::cfgd::confirm_device(),
-            m::CFG_ROLLBACK => crate::cfgd::revert_device(),
-            _ => match crate::upload::verified_type(tag, arg) {
-                Some(crate::artstore::Ty::Config) => crate::upload::activate_by_id(tag, now_ms, arg).map(|a| a.gen),
-                Some(_) => Err("not a configuration bundle (upload type config)"),
-                None => Err("unknown or unverified upload id"),
+        // the envelope is the ONLY authority for a change (the session's role is not consulted)
+        let r: Result<u64, &str> = match verify_envelope(msg, arg, env) {
+            Err(e) => Err(e),
+            Ok(()) => match msg {
+                m::CFG_CONFIRM => crate::cfgd::confirm_device(),
+                m::CFG_ROLLBACK => crate::cfgd::revert_device(),
+                _ => match crate::upload::verified_type(tag, arg) {
+                    Some(crate::artstore::Ty::Config) => crate::upload::activate_by_id(tag, now_ms, arg).map(|a| a.gen),
+                    Some(_) => Err("not a configuration bundle (upload type config)"),
+                    None => Err("unknown or unverified upload id"),
+                },
             },
         };
         let a = match r {
@@ -62,6 +53,9 @@ pub fn dispatch(msg: u16, role: u8, tag: [u8; 4], now_ms: u64, arg: u64, payload
         let e = a.encode();
         out[..e.len()].copy_from_slice(&e);
         return (m::R_OK, e.len());
+    }
+    if role < need {
+        return (m::R_DENIED, 0);
     }
     match msg {
         m::GET_INFO => {
@@ -175,7 +169,7 @@ pub fn dispatch(msg: u16, role: u8, tag: [u8; 4], now_ms: u64, arg: u64, payload
     }
 }
 
-/// One owner-journal record per configuration operation (the same for every client).
+/// One owner-journal record per configuration operation (the same for every client), allowed or refused.
 fn journal(msg: u16, ok: bool, gen: u64, why: &str, tag: [u8; 4], now_ms: u64) {
     let op = match msg {
         m::CFG_CONFIRM => "confirm",
@@ -190,78 +184,131 @@ fn journal(msg: u16, ok: bool, gen: u64, why: &str, tag: [u8; 4], now_ms: u64) {
         w.len
     };
     let _ = crate::ownerapi::audit_artifact("config", if ok { 1 } else { 2 }, &b[..n], tag, now_ms);
-}
-
-// ---- step 4c: owner elevation (HQCHAL1) -----------------------------------------------------------------------
-
-#[derive(Clone, Copy)]
-struct Pending {
-    tag: [u8; 4],
-    nonce: [u8; 16],
-    until_ms: u64,
-}
-const SLOTS: usize = 4;
-static mut CHALLENGES: [Option<Pending>; SLOTS] = [None; SLOTS];
-static mut ELEVATED: [Option<([u8; 4], u64)>; SLOTS] = [None; SLOTS];
-static mut NONCE_CTR: u64 = 0;
-
-/// The role a session holds through elevation (0 = none / expired).
-pub fn elevated(tag: [u8; 4], now_ms: u64) -> u8 {
-    let e = unsafe { &*core::ptr::addr_of!(ELEVATED) };
-    if e.iter().flatten().any(|&(t, until)| t == tag && now_ms < until) { m::ROLE_OWNER } else { 0 }
-}
-
-/// A fresh single-use nonce for this session (one outstanding per session; the oldest slot is reused).
-fn challenge(tag: [u8; 4], now_ms: u64) -> m::Challenge {
-    let dev = crate::config_device_id();
-    let ctr = unsafe {
-        NONCE_CTR += 1;
-        NONCE_CTR
-    };
-    let mut h = boot_abi::sha256::Hasher::new();
-    h.update(b"HQCHAL1-nonce");
-    h.update(&dev);
-    h.update(&tag);
-    h.update(&now_ms.to_le_bytes());
-    h.update(&ctr.to_le_bytes());
-    let d = h.finish();
-    let nonce: [u8; 16] = d[..16].try_into().unwrap();
-    let c = unsafe { &mut *core::ptr::addr_of_mut!(CHALLENGES) };
-    let slot = c.iter().position(|p| p.is_none_or(|p| p.tag == tag || now_ms >= p.until_ms)).unwrap_or((ctr as usize) % SLOTS);
-    c[slot] = Some(Pending { tag, nonce, until_ms: now_ms + m::CHALLENGE_TTL_S * 1000 });
-    m::Challenge { device_id: dev, nonce, ttl_s: m::CHALLENGE_TTL_S as u32, owner_enrolled: crate::anchor::owner().is_some() }
-}
-
-/// Verify the owner's signature over this session's outstanding challenge; single-use (consumed either way).
-fn elevate(tag: [u8; 4], now_ms: u64, sig: &[u8]) -> Result<(), &'static str> {
-    let owner = crate::anchor::owner().ok_or("no owner key enrolled (enroll in Mission Control first)")?;
-    let c = unsafe { &mut *core::ptr::addr_of_mut!(CHALLENGES) };
-    let i = c.iter().position(|p| p.is_some_and(|p| p.tag == tag)).ok_or("no challenge outstanding (run owner challenge)")?;
-    let p = c[i].take().unwrap();
-    if now_ms >= p.until_ms {
-        return Err("challenge expired");
+    unsafe {
+        JOURNALED += 1;
+        LAST_JOURNAL = (msg, ok);
     }
-    if sig.len() != 64 {
-        return Err("signature must be 64 bytes");
+}
+static mut JOURNALED: u64 = 0;
+static mut LAST_JOURNAL: (u16, bool) = (0, false);
+/// Self-tests (QEMU): how many configuration operations were journaled, and the last one (message, allowed).
+#[cfg(not(feature = "cm5"))]
+pub fn journaled() -> (u64, u16, bool) {
+    unsafe { (JOURNALED, LAST_JOURNAL.0, LAST_JOURNAL.1) }
+}
+
+// ---- R6 = D: HQMGMT1 owner-signed command envelopes -------------------------------------------------------------
+
+static mut EPOCH: Option<[u8; 8]> = None;
+static mut FLOOR: u64 = 0;
+
+/// This boot's epoch (drawn once from the TRNG; None = no entropy: privileged operations are refused).
+pub fn epoch() -> Option<[u8; 8]> {
+    unsafe {
+        let e = &mut *core::ptr::addr_of_mut!(EPOCH);
+        if e.is_none() {
+            *e = crate::mcserve::rand16().map(|r| r[..8].try_into().unwrap());
+        }
+        *e
     }
-    let msg = m::challenge_msg(&crate::config_device_id(), &p.nonce);
-    let ok = match (ed25519_compact::PublicKey::from_slice(&owner), ed25519_compact::Signature::from_slice(sig)) {
-        (Ok(k), Ok(s)) => k.verify(&msg[..], &s).is_ok(),
+}
+/// The lowest sequence the next envelope may carry.
+pub fn next_seq() -> u64 {
+    unsafe { FLOOR + 1 }
+}
+
+/// What the next envelope must bind (OWNER_CHALLENGE; /api/config's `mgmt` object reads the same).
+pub fn challenge() -> m::Challenge {
+    m::Challenge {
+        device_id: crate::config_device_id(),
+        epoch: epoch().unwrap_or([0; 8]),
+        next_seq: next_seq(),
+        generation: crate::cfgd::generation(),
+        digest: crate::cfgd::bundle_digest(),
+        on_trial: crate::cfgd::on_trial(),
+        owner_enrolled: crate::anchor::owner().is_some(),
+    }
+}
+
+/// Every refusal `verify_envelope` can give (static, so Mission Control's JSON can name it).
+pub const ENV_REASONS: [&str; 11] = [
+    "refused: needs an owner-signed envelope",
+    "refused: no owner key enrolled",
+    "refused: malformed envelope",
+    "refused: signature is not the owner key's",
+    "refused: envelope is for another device",
+    "refused: no entropy for the boot epoch",
+    "refused: envelope from another boot",
+    "refused: replayed or stale sequence",
+    "refused: envelope is for another operation",
+    "refused: something else is on trial",
+    "refused: something else is in force",
+];
+const IN_FORCE: &str = ENV_REASONS[10];
+
+/// Decode a carrier's envelope: exactly 2 * ENV_LEN hex digits (either case), nothing else.
+pub fn unhex_envelope(h: &[u8], out: &mut [u8; m::ENV_LEN]) -> bool {
+    if h.len() != 2 * m::ENV_LEN {
+        return false;
+    }
+    let v = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    for (o, p) in out.iter_mut().zip(h.chunks(2)) {
+        match (v(p[0]), v(p[1])) {
+            (Some(a), Some(b)) => *o = a << 4 | b,
+            _ => return false,
+        }
+    }
+    true
+}
+
+/// Verify the carrier's envelope for (`msg`, `arg`): structure, the enrolled owner key's signature, this device, this
+/// boot, a fresh sequence (consumed once the signature verifies), the operation, and — for confirm / rollback — the
+/// exact bundle in force. Reasons fit the 56-byte Act record.
+pub fn verify_envelope(msg: u16, arg: u64, env: &[u8]) -> Result<(), &'static str> {
+    if env.is_empty() {
+        return Err("refused: needs an owner-signed envelope");
+    }
+    let owner = crate::anchor::owner().ok_or("refused: no owner key enrolled")?;
+    let (e, sig) = m::Envelope::parse(env).ok_or("refused: malformed envelope")?;
+    let signed = m::envelope_msg(&e.body());
+    let ok = match (ed25519_compact::PublicKey::from_slice(&owner), ed25519_compact::Signature::from_slice(&sig)) {
+        (Ok(k), Ok(s)) => k.verify(&signed[..], &s).is_ok(),
         _ => false,
     };
     if !ok {
-        return Err("signature does not verify with the enrolled owner key");
+        return Err("refused: signature is not the owner key's");
     }
-    let e = unsafe { &mut *core::ptr::addr_of_mut!(ELEVATED) };
-    let slot = e.iter().position(|x| x.is_none_or(|(t, u)| t == tag || now_ms >= u)).unwrap_or(0);
-    e[slot] = Some((tag, now_ms + m::ELEVATE_TTL_S * 1000));
+    if e.device_id != crate::config_device_id() {
+        return Err("refused: envelope is for another device");
+    }
+    let ep = epoch().ok_or("refused: no entropy for the boot epoch")?;
+    if e.epoch != ep {
+        return Err("refused: envelope from another boot");
+    }
+    if e.seq <= unsafe { FLOOR } {
+        return Err("refused: replayed or stale sequence");
+    }
+    unsafe { FLOOR = e.seq }; // consumed: valid signature, this device, this boot
+    if e.msg != msg || e.arg != arg {
+        return Err("refused: envelope is for another operation");
+    }
+    if matches!(msg, m::CFG_CONFIRM | m::CFG_ROLLBACK) {
+        if msg == m::CFG_CONFIRM && !crate::cfgd::on_trial() {
+            return Err("no configuration on trial");
+        }
+        if e.generation != crate::cfgd::generation() || e.digest != crate::cfgd::bundle_digest() {
+            return Err(if crate::cfgd::on_trial() { ENV_REASONS[9] } else { IN_FORCE });
+        }
+    } else if e.generation != 0 || e.digest != [0; 32] {
+        return Err("refused: envelope is for another operation");
+    }
     Ok(())
 }
 
-/// Self-tests: drop every challenge / elevation.
+/// Self-tests: a fresh epoch / floor (the next real envelope must use what OWNER_CHALLENGE then reports).
 pub fn test_reset() {
     unsafe {
-        CHALLENGES = [None; SLOTS];
-        ELEVATED = [None; SLOTS];
+        FLOOR = 0;
+        EPOCH = None;
     }
 }
