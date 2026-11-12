@@ -29,7 +29,7 @@ import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
 import { askOwnerKey } from '../store/approve';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
-import { configView, refreshConfig } from '../store/configState';
+import { configView, refreshConfig, restNote } from '../store/configState';
 import { anchorView, refreshAnchor } from '../store/anchor';
 
 type Sec = 'internet' | 'wifi' | 'firewall';
@@ -143,6 +143,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   // secrets, so the PPPoE password and Wi-Fi passphrase must be typed again here.
   const [bOpen, setBOpen] = createSignal(false);
   const [bMsg, setBMsg] = createSignal('');
+  const [bLive, setBLive] = createSignal(false);
+  const [bNeedsConfirm, setBNeedsConfirm] = createSignal(false);
   const [bStep, setBStep] = createSignal<'review' | 'done' | 'files'>('review');
   const [bFiles, setBFiles] = createSignal<{ bin: Uint8Array; sig: Uint8Array } | null>(null);
   /** Bind the bundle to this device when it reports its id (it then refuses the bundle on any other device). */
@@ -181,7 +183,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
       setBFiles({ bin: b, sig });
       if (sample() || !takesBundles()) { setBStep('files'); return; }
       const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => askOwnerKey('Send the bundle to the device?', 'It replaces the sections it carries, then runs as a trial.', 'Send'), () => undefined);
-      setBMsg(r.text); setBStep('done');
+      setBLive(!!r.live); setBNeedsConfirm(!!r.needsConfirm); setBMsg(r.text); setBStep('done');
     } catch (e) { setBMsg(e instanceof Error ? e.message : String(e)); }
   };
 
@@ -404,7 +406,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             <button class="hp-btn" onClick={() => download(FILE[sec()].sig, signed()!.sig)}>Download {FILE[sec()].sig}</button>
           </div>
           <Show when={sec() !== 'firewall'}>
-            <p class="pcard-note">{sec() === 'wifi' ? 'The Wi-Fi password' : 'A PPPoE password'} is inside the signed file in clear: anyone holding the boot card can read it. It is not protected at rest yet.</p>
+            <p class="pcard-note">{restNote()}</p>
           </Show>
         </Show>
         <Show when={msg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{msg()}</p></Show>
@@ -434,16 +436,21 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Bundle problems"><For each={bundleProblems()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For></ul>
           </Show>
           <p class="pcard-note" aria-label="Device binding">{deviceIdHex() ? `Bound to this device (id ${deviceIdHex().slice(0, 8)}…): any other device refuses it.` : 'Not bound to a device: this device does not report an identity, so the bundle would be accepted by any device that trusts your key.'}</p>
-          <p class="pcard-note">The passwords travel inside the signed bundle in clear: not protected at rest yet.</p>
+          <p class="pcard-note" aria-label="At rest">{restNote()}</p>
           <Show when={ownerKey()} fallback={<SigningKeyPanel compact />}>
             <Show when={keyMismatch()}><MismatchNote /></Show>
             <button class="hp-btn hp-btn--primary" disabled={bundleProblems().length > 0 || keyMismatch()} onClick={() => void applyBundle()}>{takesBundles() ? 'Sign and upload the bundle' : 'Sign the bundle'}</button>
           </Show>
         </Show>
         <Show when={bStep() === 'done'}>
-          <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged as a trial for the next restart</p>
-          <p class="l0-card-sub">After the restart a banner shows the trial with a countdown: keep it, or let it go back by itself.</p>
-          <RestartButton primary />
+          <Show when={bLive()} fallback={<>
+            <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Staged as a trial for the next restart</p>
+            <p class="l0-card-sub">After the restart a banner shows the trial with a countdown: keep it, or let it go back by itself.</p>
+            <RestartButton primary />
+          </>}>
+            <p class="go-state--up" style={{ margin: 0, 'font-weight': 600 }}>✓ Applied live: on trial now</p>
+            <p class="l0-card-sub">No restart needed. The banner at the top shows the countdown{bNeedsConfirm() ? ': press Keep it within the window, or the device switches back by itself.' : ': the device keeps it once the internet works, or switches back by itself.'}</p>
+          </Show>
         </Show>
         <Show when={bStep() === 'files' && bFiles()}>
           <p class="go-state--up" style={{ margin: 0 }}>✓ Signed in the browser</p>

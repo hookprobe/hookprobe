@@ -18,7 +18,7 @@ const ConfigBanners: Component = () => {
   onMount(() => {
     void refreshAnchor(); void refreshConfig();
     const tick = setInterval(() => setNow(Date.now()), 1000);
-    const poll = setInterval(() => { if (configView()?.state === 'trial') void refreshConfig(); }, 5000);
+    const poll = setInterval(() => { const c = configView(); if (c?.state === 'trial' || (c?.live && c.live.phase !== 'idle')) void refreshConfig(); }, 5000);
     onCleanup(() => { clearInterval(tick); clearInterval(poll); });
   });
   const run = async (f: () => Promise<string>) => { setMsg(''); try { setMsg(await f()); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); } };
@@ -29,6 +29,12 @@ const ConfigBanners: Component = () => {
         <div class="hp-banner hp-banner--danger" role="alert">
           <strong>Configuration unprotected</strong> This device accepts internet, Wi-Fi and firewall files that nobody signed, so anyone with its boot card can change them.{' '}
           <a href="/admin/identity">Make your key the owner key</a> to protect it.
+        </div>
+      </Show>
+      <Show when={configView()?.live?.phase === 'applying' || configView()?.live?.phase === 'reverting'}>
+        <div class="hp-banner hp-banner--trial" role="status" aria-label="Configuration applying">
+          <strong>{configView()!.live!.phase === 'applying' ? 'Applying new settings\u2026' : 'Switching back\u2026'}</strong>{' '}
+          {configView()!.live!.phase === 'applying' ? `Changing ${configView()!.live!.changes.map((c) => ({ wan: 'the internet', wifi: 'the Wi-Fi', policy: 'the firewall' } as Record<string, string>)[c] ?? c).join(', ') || 'the configuration'} now, without a restart.` : 'The new settings did not work; the previous ones are coming back.'}
         </div>
       </Show>
       <Show when={configView()?.state === 'trial'}>
@@ -43,14 +49,20 @@ const ConfigBanners: Component = () => {
             It changes how you reach this device, so <b class="trial-required">Keep it is required</b>: unless you keep it within <b>{mmss(secondsLeft(now()))}</b>, the device goes back to the previous settings{configView()!.floor ? ` (generation ${configView()!.floor})` : ''}.
           </Show>
           <Show when={configView()!.health}>{' '}<span class="l0-muted">({configView()!.health})</span></Show>
-          <span class="hp-banner-actions">
-            <button class="hp-btn hp-btn--primary" onClick={() => void run(confirmConfig)}>Keep it</button>
-            <button class="hp-btn" onClick={() => void run(rollbackConfig)}>Roll back now</button>
-          </span>
+          <Show when={configView()!.live?.mgmt_ok === false}>{' '}<b>Mission Control cannot reach the device the new way{configView()!.live!.mgmt_probe ? ` (${configView()!.live!.mgmt_probe})` : ''}.</b></Show>
+          <Show when={configView()!.envelope?.owner_enrolled !== false} fallback={<span class="l0-muted">{' '}Keeping or rolling back by hand needs your signing key as the owner key.</span>}>
+            <span class="hp-banner-actions">
+              <button class="hp-btn hp-btn--primary" onClick={() => void run(confirmConfig)}>Keep it</button>
+              <button class="hp-btn" onClick={() => void run(rollbackConfig)}>Roll back now</button>
+            </span>
+          </Show>
         </div>
       </Show>
-      <Show when={configView()?.state === 'reverted'}>
-        <div class="hp-banner hp-banner--sample" role="status"><strong>Settings rolled back</strong> The last configuration did not work, so the device went back to generation {configView()!.generation}.</div>
+      <Show when={configView()?.state === 'reverted' || (configView()?.live?.last.result === 'reverted' && configView()?.state !== 'trial')}>
+        <div class="hp-banner hp-banner--sample" role="status"><strong>Settings switched back</strong> The last change did not work, so the device went back to generation {configView()!.live?.last.result === 'reverted' ? configView()!.live!.last.generation : configView()!.generation}.</div>
+      </Show>
+      <Show when={configView()?.live?.last.result === 'revert_failed'}>
+        <div class="hp-banner hp-banner--danger" role="alert"><strong>Switching back failed</strong> The device could not restore the previous settings live; it restarts to recover them.</div>
       </Show>
       <Show when={msg()}><p class="hp-banner" role="status">{msg()}</p></Show>
     </>
