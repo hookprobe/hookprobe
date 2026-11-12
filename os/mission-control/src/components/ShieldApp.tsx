@@ -25,7 +25,7 @@ import {
 } from 'solid-js';
 import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState, dnsFailures } from '../store/dnsLive';
 import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
-import { setCopilotOpen } from '../store/mock';
+import { setCopilotOpen, substrate } from '../store/mock';
 import AppShell from './AppShell';
 import PageHeader from './PageHeader';
 import {
@@ -353,7 +353,7 @@ const ShieldApp: Component = () => {
         />
 
         <Show when={dnsLive()} fallback={
-        <Show when={dnsState() === 'absent'} fallback={<div class="shield-empty" role="status">{dnsFailures() >= 3 ? 'Still waiting for the device — retrying every 10 s…' : 'Loading Shield data from the device…'}</div>}>
+        <Show when={dnsState() === 'absent' && !substrate()} fallback={<div class="shield-empty" role="status">{dnsState() === 'absent' ? 'This device build does not serve Shield (no /api/dns), so there is nothing to show here.' : ''}{dnsFailures() >= 3 ? 'Still waiting for the device — retrying every 10 s…' : 'Loading Shield data from the device…'}</div>}>
         <div class="shield-grid">
 
           {/* Hero — blocked today + protection level */}
