@@ -563,6 +563,14 @@ impl SaeAp {
         }
     }
 
+    /// Forget every peer (the BSS is re-started with new settings).
+    pub fn forget_all(&mut self) {
+        for p in self.peers.iter_mut() {
+            p.st = St::Free;
+            p.sae = None;
+        }
+    }
+
     pub fn active(&self) -> usize {
         self.peers.iter().filter(|p| p.st != St::Free).count()
     }
