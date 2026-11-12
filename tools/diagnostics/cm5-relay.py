@@ -198,26 +198,28 @@ def main():
         cycle()
         print("power-cycled for a normal eMMC boot")
     elif a.cmd == "rpiboot":
-        # 2026-11-12: the operator heard ONE click — the board was never power-cycled while nRPIBOOT was held, so
-        # the ROM never saw the boot mode. Assert nRPIBOOT, CONFIRM it by read-back, let the contact settle, then
-        # power-cycle with nRPIBOOT still held (atomic inside the Nano firmware where available) and confirm again.
-        r.set(RPIBOOT, True)
+        # 2026-11-12 (operator, at the bench, LEDs + clicks): the order that works is POWER OFF first, THEN assert
+        # nRPIBOOT, THEN power back on with nRPIBOOT still held. Asserting nRPIBOOT first and cycling power after it
+        # left IN1 (power) unswitched — one click — and the ROM never entered USB boot. Proven by hand: P0, B1, P1 ->
+        # boot ROM 0a5c:2712 on USB within 1 s. Each step is read back.
+        r.set(POWER, True)  # IN1 energised = NC opens = board unpowered
         if isinstance(r, Nano):
             st = r.status()
-            if "rpiboot=1" not in st:
-                sys.exit(f"nRPIBOOT not asserted after B1 (read-back: {st or 'no reply'}) — stop")
-            time.sleep(0.5)
-            ms = max(1, min(100, int(round(a.off_secs * 10))))
-            reply = r.cmd(f"C{ms}", timeout=ms / 10 + 3)
-            if not reply.startswith("OK"):
-                sys.exit(f"power cycle C{ms} failed: {reply or 'no reply'} — stop")
+            if "power=0" not in st:
+                sys.exit(f"power not off after P0 (read-back: {st or 'no reply'}) — stop")
+        time.sleep(0.5)
+        r.set(RPIBOOT, True)  # IN2: nRPIBOOT asserted while the board is unpowered
+        if isinstance(r, Nano):
+            st = r.status()
+            if "power=0" not in st or "rpiboot=1" not in st:
+                sys.exit(f"want power=0 rpiboot=1, read {st or 'no reply'} — stop")
+        time.sleep(a.off_secs)  # caps drain
+        r.set(POWER, False)  # power back on, nRPIBOOT still held: the ROM latches USB boot
+        if isinstance(r, Nano):
             st = r.status()
             if "power=1" not in st or "rpiboot=1" not in st:
-                sys.exit(f"after the cycle the relays read {st or 'no reply'} (want power=1 rpiboot=1) — stop")
-            print(f"nRPIBOOT held, power-cycled {ms * 100} ms off ({st})")
-        else:
-            time.sleep(0.5)
-            cycle()
+                sys.exit(f"want power=1 rpiboot=1, read {st or 'no reply'} — stop")
+            print(f"power off -> nRPIBOOT held -> power on ({st})")
         t0 = time.time()
         while time.time() - t0 < a.rom_timeout and not bootrom_present():
             time.sleep(0.2)
