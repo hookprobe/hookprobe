@@ -93,6 +93,9 @@ mod rpmb;
 mod alerthook;
 #[cfg(feature = "netsvc")]
 mod ownerapi;
+// R6 = D: the HQMGMT1 owner-signed command envelope verifier (every privileged management operation)
+#[cfg(feature = "netsvc")]
+mod mgmtenv;
 #[cfg(feature = "netsvc")]
 mod upload;
 mod discovery;

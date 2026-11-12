@@ -164,7 +164,10 @@ corrupt kernel state. Consequences:
 envelopes (HQMGMT1) signed off-device by K_own and verified by the management ABI in EL1; the carrier (web console,
 Mission Control, any later carrier) carries no authority, and the owner session alone never authorises a change.
 Confirm and rollback envelopes bind the generation and digest of the bundle in force. Status and format:
-`docs/design/adr0059-implementation.md` step 4.
+`docs/design/adr0059-implementation.md` step 4. Same day, also converted: upload activate / rollback (every type),
+factory reset and owner-key rotation. Known deviation for this round: reboot, owner rules, operator actions and the
+alert hook still use owner-token re-authentication. Accepted consequence: with no owner key enrolled, no client can
+confirm or roll back by hand (a trial that needs a confirm reverts at the end of its window).
 
 ### D10: Recovery, ownership transfer, and honesty about anti-rollback
 
