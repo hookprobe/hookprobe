@@ -4373,16 +4373,39 @@ fn cm5_p10_probe() {
                                         rtwdog::pet(now(), freq);
                                         tries += 1;
                                         let mut auth = cyw43::ApAuth::new();
-                                        // WPA3: a station that just completed SAE keys with the SAE PMK (AKM 8)
+                                        // WPA3: keyed from the AKM / PMKID of the station's association request RSNE (12.6.10.3):
+                                        // SAE just completed -> its PMK; PMKSA caching with a PMKID we hold -> the cached PMK;
+                                        // AKM 8 with an unknown PMKID -> deauthenticated (reason 49) so it redoes SAE; PSK -> passphrase
                                         #[cfg(feature = "wpa3")]
-                                        let (apmk, akm8) = match cyw43::ap_sae_pmk(&sta, now() / (freq / 1000).max(1)) { Some(p) => (p, true), None => (pmk, false) };
+                                        let (apmk, akm8, apmkid) = {
+                                            let k = cyw43::ap_keying(&sta, now() / (freq / 1000).max(1), &pmk);
+                                            kprint!("   [P11-AP3] assoc RSNE akm={:#010x} pmkids={} -> {}\n", k.akm, k.n_pmkid, k.how.name());
+                                            if k.how == hal::rsnassoc::Keying::Reject {
+                                                let d = cyw43::ap_deauth(&sta, hal::rsnassoc::REASON_INVALID_PMKID);
+                                                kprint!(" [P11-AP3] no PMKSA for that PMKID: deauthenticated (reason 49, ok={}) — the station redoes SAE\n", d);
+                                                stas.remove(&sta);
+                                                break;
+                                            }
+                                            (k.pmk, k.akm8, k.pmkid)
+                                        };
                                         #[cfg(not(feature = "wpa3"))]
-                                        let (apmk, akm8) = (pmk, false);
-                                        cyw43::ap_authenticate(&ap.bssid, &sta, &apmk, akm8, &gtk, 1, &mut auth);
+                                        let (apmk, akm8, apmkid) = (pmk, false, None);
+                                        cyw43::ap_authenticate(&ap.bssid, &sta, &apmk, akm8, apmkid.as_ref(), &gtk, 1, &mut auth);
                                         kprint!("   [P11-AP3 auth] akm={} m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
                                             if akm8 { "SAE" } else { "PSK" }, auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
                                             auth.ptk_set, auth.authorized, auth.m2_mic_fail, auth.reassoc, auth.deauth, auth.replay);
                                         let _ = akm8;
+                                        // PMKSA caching whose M2 never verified (a stale / foreign PMKSA): not a wrong-password or
+                                        // attack signal — drop the PMKSA and send the station back to a full SAE (reason 49)
+                                        #[cfg(feature = "wpa3")]
+                                        if apmkid.is_some() && !auth.ptk_set && !auth.reassoc && (auth.m2_mic_fail > 0 || !auth.deauth) {
+                                            cyw43::ap_pmksa_drop(&sta);
+                                            let d = cyw43::ap_deauth(&sta, hal::rsnassoc::REASON_INVALID_PMKID);
+                                            kprint!(" [P11-AP3] cached PMKSA did not key (m2_rx={} mic_fail={}): PMKSA dropped, deauthenticated (reason 49, ok={}) — the station redoes SAE\n",
+                                                auth.m2_rx, auth.m2_mic_fail, d);
+                                            stas.remove(&sta);
+                                            break;
+                                        }
                                         if auth.ptk_set && auth.authorized {
                                             keyed += 1;
                                             kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n");
@@ -4392,7 +4415,7 @@ fn cm5_p10_probe() {
                                             continue;
                                         }
                                         kprint!(" [P11-AP3] 4-way incomplete ({}) — back to the pump\n",
-                                            if auth.deauth { "station left" } else if auth.m2_rx && !auth.m2_mic_ok { "M2 MIC never verified: wrong PSK?" } else if !auth.m2_rx { "no M2" } else { "no M4" });
+                                            if auth.deauth { "station left" } else if auth.m2_rx && !auth.m2_mic_ok { if akm8 { "M2 MIC never verified (AKM 8)" } else { "M2 MIC never verified: wrong PSK?" } } else if !auth.m2_rx { "no M2" } else { "no M4" });
                                         break;
                                     }
                                 }
@@ -7457,6 +7480,10 @@ pub extern "C" fn kmain() -> ! {
             let pass = j10 && e2e && ptk && cmac && h2e && wire;
             kprint!(" [P-sae] {} — WPA3-SAE on the AP (Phase 6, host SAE because the firmware forwards SAE frames — batch 37): P-256 hunting-and-pecking commit + KCK/PMK/PMKID = IEEE 802.11-2020 Annex J.10={} | AP responder end to end (commit, confirm, PMK agreed; wrong password: confirm dropped, never answered, no PMK)={} | AKM 8 PTK (KDF-SHA256) = hostapd 2.11 sha256_prf={} | AES-128-CMAC EAPOL MIC = RFC 4493 examples 1-4={} | H2E (hash-to-element, SSWU) PWE = the Annex J.10 H2E vector={} | 5c station-frame walk (hal::saewire, no curve library) == the curve library on on-curve / scalar range, malformed commits refused with no state={}\n",
                 if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e, wire);
+            // WPA3 reconnect with PMKSA caching (metal 2026-11-12: AKM 8 + PMKID, no SAE, was keyed as PSK)
+            let (rsn, cache) = (hal::rsnassoc::selftest(), sae::pmksa_selftest());
+            kprint!(" [P-pmksa] {} — WPA3 PMKSA caching on the AP (12.6.10.3): association-request RSNE walk (AKM, PMKID list; truncated at every field, wrong version, PMKID count past the end, RSNE behind other elements or behind the fixed fields) + decision (AKM 8 after SAE -> SAE PMK; AKM 8 + a cached PMKID -> that PMK; AKM 8 + unknown PMKID -> deauth reason 49; AKM 2 -> passphrase; unreadable / other AKM -> the old rule)={} | PMKSA cache (hit on MAC+PMKID only, expiry, one per station, bounded eviction, clear wipes, filled with the Annex J.10 SAE PMKID)={}\n",
+                if rsn && cache { "PASS" } else { "FAIL" }, rsn, cache);
         }
         let _ = ja4id::selftest();
         #[cfg(feature = "netsvc")]
