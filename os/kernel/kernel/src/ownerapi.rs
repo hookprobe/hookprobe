@@ -626,19 +626,22 @@ pub fn config_action(c: &Ctx, body: &[u8], confirm: bool) -> Result<u64, &'stati
     // `envelope`, 312 hex = HQMGMT1, bound to this device, this boot, a fresh sequence and the bundle in force),
     // verified by the management ABI: the same decision and journal record as `hsh`. The session guards above only
     // gate the transport. A missing / malformed field is passed on as "no envelope", so the refusal is journaled too.
+    #[cfg_attr(not(feature = "mcserve"), allow(unused_mut, unused_variables))]
     let mut env = [0u8; hal::mgmtabi::ENV_LEN];
+    #[cfg(feature = "mcserve")]
     let env_given = body
         .split(|&b| b == b'&')
         .find_map(|kv| kv.strip_prefix(b"envelope="))
         .is_some_and(|v| crate::mgmtabi::unhex_envelope(v, &mut env));
     let msg = if confirm { hal::mgmtabi::CFG_CONFIRM } else { hal::mgmtabi::CFG_ROLLBACK };
+    #[cfg_attr(not(feature = "mcserve"), allow(unused_mut))]
     let mut rec = [0u8; hal::mgmtabi::ACT_LEN];
     #[cfg(feature = "mcserve")]
     let (res, n) = crate::mgmtabi::dispatch(msg, hal::mgmtabi::ROLE_VIEW, tag, c.now_ms, 0, if env_given { &env[..] } else { &[] }, &mut rec);
     // builds without Mission Control's server have no envelope verifier: nothing can authorise a change (fail closed)
     #[cfg(not(feature = "mcserve"))]
     let (res, n) = {
-        let _ = (msg, tag, env_given);
+        let _ = (msg, tag, &env);
         (hal::mgmtabi::R_UNAVAILABLE, 0)
     };
     if res != hal::mgmtabi::R_OK || n != hal::mgmtabi::ACT_LEN {
