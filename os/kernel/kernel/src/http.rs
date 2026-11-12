@@ -694,8 +694,15 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                         first = false;
                     }
                 }
-                let _ = write!(w, "],\"needs_confirm\":{},\"window_s\":{},\"remaining_s\":{},\"last\":{{\"result\":\"{}\",\"generation\":{}}},\"policy_generation\":{}}}",
+                let _ = write!(w, "],\"needs_confirm\":{},\"window_s\":{},\"remaining_s\":{},\"last\":{{\"result\":\"{}\",\"generation\":{}}},\"policy_generation\":{}",
                     crate::cfgd::confirm_required(), win, left, lr, lg, crate::cfgd::policy_gen());
+                // live-apply follow-up (additive): the management re-probe during a trial (rule 7: WAN usable is not
+                // management reachable) — null outside a trial / not probed yet
+                let (mo, why) = crate::cfgd::mgmt_health();
+                let _ = match mo {
+                    Some(b) => write!(w, ",\"mgmt_ok\":{},\"mgmt_probe\":\"{}\"}}", b, why),
+                    None => write!(w, ",\"mgmt_ok\":null,\"mgmt_probe\":null}}"),
+                };
             }
             // R6 = D (additive): what the owner's HQMGMT1 envelope for confirm / rollback must bind — this device, this
             // boot's epoch, the next sequence, the bundle in force (generation + SHA-256 of the HQCFG1 bundle)
@@ -717,7 +724,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             }
             // design §3.8 (additive, before the closing brace): configuration at rest
             let ar = crate::artstore::at_rest();
-            let _ = write!(w, ",\"at_rest\":{{\"sealed\":{},\"secrets_protected\":{},\"migrated\":{},\"device_key\":{}}}}}", ar.sealed, ar.secrets_protected, ar.migrated, ar.device_key);
+            // Q3 (additive): a bundle in force held in RAM only (no device key) is never presented as protected or persisted
+            let vol = crate::cfgd::volatile();
+            let _ = write!(w, ",\"at_rest\":{{\"sealed\":{},\"secrets_protected\":{},\"migrated\":{},\"device_key\":{},\"volatile_ram_only\":{},\"persisted\":{}}}}}",
+                ar.sealed && !vol, ar.secrets_protected && !vol, ar.migrated, ar.device_key, vol, !vol);
         }),
         // ADR 0058 D3: which key verifies what — the vendor key (content packs) and the owner's configuration key
         "/api/anchor" => json(scratch, |w| {
