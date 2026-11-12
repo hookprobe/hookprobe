@@ -15,6 +15,7 @@ const dir = join(here, '../../os/mission-control/tests/ui/specs/live');
 const { chromium } = await import(pathToFileURL(join(pwDir, 'playwright', 'index.mjs')).href);
 const browser = await chromium.launch({ args: [`--ignore-certificate-errors-spki-list=${spki}`] });
 let fails = 0, passes = 0;
+const timing = []; // [ms, path] per page load (TLS slot pressure on metal)
 const specs = readdirSync(dir).filter((f) => f.endsWith('.mjs')).map((f) => f.replace(/\.mjs$/, '')).sort();
 for (const name of specs) {
   const { default: spec } = await import(pathToFileURL(join(dir, `${name}.mjs`)).href);
@@ -26,7 +27,7 @@ for (const name of specs) {
   const t = {
     page, base, at: '',
     ok(cond, msg) { if (cond) { passes++; console.log(`  PASS  ${name}: ${msg}`); } else { fails++; console.log(`  FAIL  ${name}: ${msg}`); } },
-    async go(path, settle = 900) { await page.goto(base + path, { waitUntil: 'load' }); await page.waitForTimeout(settle); },
+    async go(path, settle = 900) { const t0 = Date.now(); await page.goto(base + path, { waitUntil: 'load' }); timing.push([Date.now() - t0, path]); await page.waitForTimeout(settle); },
     async shot(file, full = false) { if (shots) await page.screenshot({ path: join(shots, `${name}-${file}.png`), fullPage: full }); },
     async vis(loc) { return loc.first().isVisible().catch(() => false); },
   };
@@ -45,5 +46,10 @@ for (const name of specs) {
   await ctx.close();
 }
 await browser.close();
+if (timing.length) {
+  const ms = timing.map((x) => x[0]).sort((a, b) => a - b);
+  const slow = [...timing].sort((a, b) => b[0] - a[0]).slice(0, 5).map(([m, p]) => `${p} ${m} ms`).join(', ');
+  console.log(`  TIMING page loads: n=${ms.length} median=${ms[ms.length >> 1]} ms p90=${ms[Math.floor(ms.length * 0.9)]} ms max=${ms[ms.length - 1]} ms | slowest: ${slow}`);
+}
 console.log(`MC-UI (live CM5, ${base}): ${fails === 0 ? 'PASS' : 'FAIL'} — ${passes} passed, ${fails} failed (${specs.join(', ')})`);
 process.exit(Math.min(fails, 100));
