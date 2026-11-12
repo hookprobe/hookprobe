@@ -71,6 +71,40 @@ ends; a trial that does not need a confirm still commits on its own when healthy
 Read this object immediately before signing. If anything is on trial, show the generation and (ideally) compare
 `digest` with the SHA-256 of the bundle file the owner staged, so the owner confirms exactly what they staged.
 
+### What the bundle in force holds (`sections`, `policy_text`, `wan_keys`, `wifi_keys`)
+
+An HQCFG1 bundle is the **whole** configuration: a bundle that leaves a section out removes it (the device falls
+back to the per-file `WAN.TXT` / `WIFI.TXT` / `POLICY.TXT`, else the built-in default). To change one setting (for
+example only the Wi-Fi password), rebuild the bundle from what is in force, change that one value, and stage it.
+`GET /api/config` (owner session only; 401 without) carries four additive fields for that:
+
+```json
+"sections": {
+  "wan":    {"present": true,  "digest": "<64 hex>"},
+  "wifi":   {"present": true,  "digest": "<64 hex>"},
+  "policy": {"present": false, "digest": null}
+},
+"policy_text": null,
+"wan_keys":  {"mode": "pppoe", "pppoe_user": "u@isp", "vlan": "35", "mgmt_vlan": "100", "mgmt": "static",
+              "mgmt_ip": "192.168.200.2/24", "mgmt_gw": "192.168.200.1", "mgmt_floor": "192.168.200.0/24",
+              "pppoe_pass_set": true},
+"wifi_keys": {"ssid": "Home", "security": "wpa3-transition", "channel": "40", "psk_set": true}
+```
+
+| Field | Meaning |
+|---|---|
+| `sections.<wan\|wifi\|policy>.present` | The bundle in force (on trial or committed) has this section. `false` for every section when no bundle is in force; that subsystem then runs from its per-file source or the default (not distinguished here). |
+| `sections.<…>.digest` | SHA-256 (64 hex) of exactly the section's bytes as carried in the bundle (the section body, no `HQWAN1` / `HQPOL1` header); `null` when absent. Compare with the SHA-256 of the section you would send: equal = unchanged. |
+| `policy_text` | The policy section's text exactly as in the bundle (JSON-escaped; at most 4089 bytes, the section cap). `null` when the bundle has no policy section; the per-file `POLICY.TXT` is not returned. |
+| `wan_keys` | The wan section's non-secret keys, values exactly as written (strings): any of `mode`, `ip`, `gw`, `dns`, `pppoe_user`, `vlan`, `vlan_outer`, `pcp`, `mgmt_vlan`, `mgmt`, `mgmt_ip`, `mgmt_gw`, `mgmt_floor`, in section order, plus `pppoe_pass_set` (a non-empty `pppoe_pass` is present). `null` when the section is absent or the device's WAN parser refuses it. |
+| `wifi_keys` | The wifi section's non-secret keys: any of `ssid`, `security`, `channel`, `max_clients`, in section order, plus `psk_set`. `null` when absent or refused by the Wi-Fi parser. |
+
+Secrets are never returned: `pppoe_pass` and `psk` appear only as `pppoe_pass_set` / `psk_set`. Keys are emitted
+from an explicit whitelist, so a key the device does not list here is never echoed. When rebuilding a section that
+has a secret, the owner re-enters it (the UI cannot read it back). An untouched section can be checked before
+staging: build it (one `key=value` per line, LF-terminated) and compare its SHA-256 with `sections.<…>.digest`
+(where the secret line sat is not reported, so a mismatch on a secret-bearing section can be ordering only).
+
 ## Step 2: build the envelope (156 bytes, little-endian)
 
 | Offset | Length | Field | Value |
