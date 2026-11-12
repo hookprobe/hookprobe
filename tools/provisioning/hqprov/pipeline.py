@@ -125,7 +125,7 @@ def step_capture_identity(args, pend):
 
 
 def step_owner(args, unit):
-    """Mint the owner key (ADR 0037 D3) once; keep it only in the 0600 secrets file."""
+    """Mint the owner key (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)) once; keep it only in the 0600 secrets file."""
     s = unit.secrets()
     if "owner_token" not in s:
         tok = owner.mint_token()

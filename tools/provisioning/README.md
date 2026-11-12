@@ -5,7 +5,7 @@ Python 3 standard library only (`openssl` CLI required for the TLS step; `qrenco
 encoder is used otherwise; `rsvg-convert`/`inkscape`/ImageMagick `convert` optional for PNG labels).
 
 Decisions it implements: ADR 0054 (per-device setup credential, read once off the serial console, printed on the
-label with a Wi-Fi QR), ADR 0037 D3 (owner key = physical possession), ADR 0051 (MC TLS certificate from the owner CA).
+label with a Wi-Fi QR), ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059) (owner key = physical possession), ADR 0051 (MC TLS certificate from the owner CA).
 
 ```
 provision-unit.py run           provision one unit (resumable)

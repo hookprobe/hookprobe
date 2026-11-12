@@ -17,7 +17,7 @@
   - **(B) The dataplane** — eBPF/XDP/TC, OVS, conntrack, nftables → **re-targeted** onto heqk's Packet Engine + BPF plane (heqk was *purpose-built* to receive exactly this).
   - **(C) The substrate/lifecycle** — Debian bootc, 42 systemd units, ~6.5k lines of bash, initramfs, greenboot, 7 out-of-tree WiFi drivers → **deleted** (much of it *evaporates*: sysctl/KSPP/systemd-sandboxing were faking what a capability microkernel gives natively).
 - **Scope discipline:** rpi-native tier (CM5 → Pi5 → Pi4) only. The **amd64/N100/UEFI/cloud tiers stay on Linux/bootc** (heqk is aarch64-only). The **app tier (containers/heavy services) runs in a monitored Linux *guest VM*** (heqk `ARCHITECTURE_BLUEPRINT` Zone 4) — heqk replaces Linux-as-substrate, not Linux-as-app-host.
-- **Governance:** the migration had *no home* and *contradicted* ADR 0035 D3. ADR 0043 supersedes that clause and reconciles ADR 0005; this plan is the epic that hangs off it, sequenced parallel to Track B per ADR 0035 D5 ("slide in underneath invisibly, neither track gates the other").
+- **Governance:** the migration had *no home* and *contradicted* ADR 0035 D3 (retired 2026-11-12; see 0043 (D3) / 0047). ADR 0043 supersedes that clause and reconciles ADR 0005; this plan is the epic that hangs off it, sequenced parallel to Track B per ADR 0035 D5 (retired 2026-11-12; see 0043 (D3) / 0047) ("slide in underneath invisibly, neither track gates the other").
 
 ---
 
@@ -76,12 +76,12 @@ Each phase is independently gate-laddered; nothing that boots green today regres
 - **Gate:** a signed Wasm detection module loads, verifies (ADR 0016), and fires into the persistent evidence graph on heqk.
 
 ### Phase M6 — App-tier overlay (Linux guest) & SOC UI — **os-architect / ux-architect**
-- Stand up the monitored Linux guest VM (Zone 4) for heavy stateful services (HYDRA 11-service stack, api/planner/rbac tokio services) and containers (ADR 0041), under a hard capability-reserved slice (ADR 0035 D8, enforced by heqk cap-spaces not cgroups). Mission Control served from the guest or a hosted control node; capability-gated rendering keys off the (re-sourced) manifest — **invisible to the operator** (ADR 0035 D5).
+- Stand up the monitored Linux guest VM (Zone 4) for heavy stateful services (HYDRA 11-service stack, api/planner/rbac tokio services) and containers (ADR 0041 (retired 2026-11-12; see 0044 D1 / 0047)), under a hard capability-reserved slice (ADR 0035 D8 (retired 2026-11-12; see 0043 (D3) / 0047), enforced by heqk cap-spaces not cgroups). Mission Control served from the guest or a hosted control node; capability-gated rendering keys off the (re-sourced) manifest — **invisible to the operator** (ADR 0035 D5 (retired 2026-11-12; see 0043 (D3) / 0047)).
 - **Gate:** full SOC workspaces render live on a heqk-substrate CM5 with the app tier in the guest; the security plane's guaranteed floor holds under a greedy-workload test.
 
 ### Phase M7 — Unbuild & minimize — **retirement-agent / product-steward**
 - Execute the retirement batches (§5). Delete the Debian base, stock+edge kernels, libbpf/glibc, dongle drivers, systemd/podman *from the rpi-native tier*. Mark ADRs 0029/0030/0032 obsolete on this tier.
-- **Gate:** the rpi-native heqk image passes the standing minimization gate (ADR 0039 durable filter); measured size + attack-surface reduction reported by telemetry-analyst (§6).
+- **Gate:** the rpi-native heqk image passes the standing minimization gate (ADR 0039 (retired 2026-11-12; see 0044 / 0047) durable filter); measured size + attack-surface reduction reported by telemetry-analyst (§6).
 
 **Parallel tracks (not gating the above):** heqk P10 D/E WiFi assoc/data; RTL8111 WAN datapath; capability-enforcement wiring + real IPC (heqk remediation R1) — R1 is a *prerequisite for M5's multi-server userspace* and should lead it.
 
@@ -133,7 +133,7 @@ Legend: ✅ works on heqk metal · 🟡 partial · ⬜ absent (build) · N/A tie
 | **Enforce (tri-state, legit-always-passes)** | `decide()`/TC-bpf/nft, PSI shed | 🟡 **tri-state `decide()` live on CM5 metal; 31/31 heqk-plane rows PROVEN-ON-METAL** (zero legit-drops); 0 QEMU-only; L5/L6 off-device (ADR 0044 D3) | full 33-row matrix (real Access interface for A1 via manifest reader; NAC/RA-guard/corroboration for L4-6/A9/A11 need M4) | **M2: heqk matrix (33) + Gate R on metal — 31/31 heqk-plane done; L5/L6 off-device; not yet Gate-R sign-off** |
 | **Persist evidence / QSecBit history** | SQLite on `/var/lib/hookprobe` | 🟢 **the evidence graph survives reboot on CM5 eMMC** (2026-09-08): sealed Event round-trip (`[SEPDIAG-EMMC-SEAL]`, real OTP SRK) AND the crash-safe multi-record LOG-STORE on a real 127-slot DataVolume (`[SEPDIAG-EMMC-DATAVOL]`: boot#1 3 records → boot#2 persisted=3 +3 → 6, in-order). Mechanism + persistence proven on silicon | production image-factory carves a dedicated DataVolume partition (metal proof used a p3-overlay); torn-tail recovery on real eMMC | M3: graph survives reboot ✓ |
 | **DNS sinkhole / RPZ** | dnsmasq/systemd-resolved + RPZ | ⬜ no resolver/net stack | resolver over M4 net stack | M4: "refuse a NAME, never a PACKET" holds |
-| **WiFi AP + WIDS** | brcmfmac + hostapd + nl80211 monitor | 🟡 scan only; no assoc/data/monitor | heqk P10 D/E + AP-control + monitor surface | Parallel: AP serves clients; ADR 0042 detectors fire |
+| **WiFi AP + WIDS** | brcmfmac + hostapd + nl80211 monitor | 🟡 scan only; no assoc/data/monitor | heqk P10 D/E + AP-control + monitor surface | Parallel: AP serves clients; ADR 0042 (retired 2026-11-12, no successor) detectors fire |
 | **WAN uplink** | RTL/cellular + PBR/NAT/TUN kill-switch | 🟡 RTL8111 link trained, datapath pending | RTL datapath + ADR 0004 envelope on native stack | M4: WAN up, kill-switch fails closed |
 | **OTA update** | registry pull → bootc/image-sync | 🟢 **on-device A/B flip proven on CM5** (2026-09-08): forward tryboot flip → boot candidate slot → confirm→commit (`[SEPDIAG-OTA]`) + rollback (M1 crit-4), no host PC | physical candidate DELIVERY (FAT-write new image to slot B + B→A promotion) needs a FAT32 writer; registry PULL needs M4 net stack | M3: A/B flip + rollback ✓; pull = M4 |
 | **Provisioning / zero-touch** | captive portal → reconciler → nft/hostapd | ⬜ needs net + FS + apply backend | re-target `reconcile_network` to heqk dataplane | M4/M5: intent→staged-diff→apply on heqk |
@@ -148,7 +148,7 @@ Legend: ✅ works on heqk metal · 🟡 partial · ⬜ absent (build) · N/A tie
 
 ## 7. Size reduction (the "reduce size" mandate)
 
-ADR 0035's byte-for-byte measurement of the current Pi image: **~89% Debian, ~4% HookProbe code, ~40% provable dead weight** (a 328 MB never-booted stock kernel + ~110 MB firmware for absent radios). Under heqk the rpi-native image becomes **kernel (ours, ~33k LOC Rust) + this-hardware firmware (CYW43455 blob) + static-Rust binaries + Wasm modules + BPF rules** — no apt/dpkg, no perl/python, no general coreutils, no second kernel, no shell, no SSH. This is ADR 0035 D6's Talos-radical end-state reached *structurally*, and per ADR 0035 D4 **the size win is a security win** — every package not shipped is a CVE that cannot apply and an exploit primitive that is absent. `telemetry-analyst` reports the measured before/after at M7 (target: order-of-magnitude image shrink on the rpi-native tier; freed CPU/RAM quantified for the edge-ML mission).
+ADR 0035 (retired 2026-11-12; see 0043 (D3) / 0047)'s byte-for-byte measurement of the current Pi image: **~89% Debian, ~4% HookProbe code, ~40% provable dead weight** (a 328 MB never-booted stock kernel + ~110 MB firmware for absent radios). Under heqk the rpi-native image becomes **kernel (ours, ~33k LOC Rust) + this-hardware firmware (CYW43455 blob) + static-Rust binaries + Wasm modules + BPF rules** — no apt/dpkg, no perl/python, no general coreutils, no second kernel, no shell, no SSH. This is ADR 0035 D6 (retired 2026-11-12; see 0043 (D3) / 0047)'s Talos-radical end-state reached *structurally*, and per ADR 0035 D4 (retired 2026-11-12; see 0043 (D3) / 0047) **the size win is a security win** — every package not shipped is a CVE that cannot apply and an exploit primitive that is absent. `telemetry-analyst` reports the measured before/after at M7 (target: order-of-magnitude image shrink on the rpi-native tier; freed CPU/RAM quantified for the edge-ML mission).
 
 ---
 
@@ -168,4 +168,4 @@ ADR 0035's byte-for-byte measurement of the current Pi image: **~89% Debian, ~4%
 
 ## 9. What lands in `docs/roadmap/BuildPlan.md`
 
-A new **Track C — heqk substrate (rpi-native)** parallel to Track B, with phases M0–M7 and their gates, plus the U1–U6 retirement batches and the §6 flow-validation matrix as the acceptance ledger. Track B (Linux) continues unchanged for the UEFI/amd64 tiers and as the shipping rpi-native image until Track C promotes. Neither track gates the other (ADR 0035 D5).
+A new **Track C — heqk substrate (rpi-native)** parallel to Track B, with phases M0–M7 and their gates, plus the U1–U6 retirement batches and the §6 flow-validation matrix as the acceptance ledger. Track B (Linux) continues unchanged for the UEFI/amd64 tiers and as the shipping rpi-native image until Track C promotes. Neither track gates the other (ADR 0035 D5 (retired 2026-11-12; see 0043 (D3) / 0047)).

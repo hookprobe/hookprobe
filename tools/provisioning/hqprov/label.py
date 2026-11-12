@@ -1,7 +1,7 @@
 """Label (setup credential + Wi-Fi QR) and owner-key card generation. SVG always; PNG when a converter exists.
 
 The label carries the setup credential (ADR 0054 D1: "printed on the device label with the matching Wi-Fi QR").
-The owner key (ADR 0037 D3) is deliberately NOT on the label: it goes on a separate card sealed in the box, so
+The owner key (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)) is deliberately NOT on the label: it goes on a separate card sealed in the box, so
 the Wi-Fi label alone (visible on the outside of the unit) never grants Mission Control access (ADR 0054 D4).
 """
 import os
