@@ -7,7 +7,9 @@
 //! - AKM 8 (SAE) right after a full SAE exchange -> that SAE PMK;
 //! - AKM 8 with a PMKID we hold for this station (PMKSA caching, open-system auth, no SAE) -> the cached PMK;
 //! - AKM 8 with no PMKID we know -> refuse (the station must redo SAE; keying it as PSK can never succeed);
-//! - AKM 2 (PSK) -> the passphrase PMK.
+//! - AKM 2 (PSK) -> the passphrase PMK;
+//! - an AKM the BSS does not offer right now (AKM 8 on a WPA2-only BSS, AKM 2 on a WPA3-only one — a station with a
+//!   stale scan after a live security change, metal 2026-11-12) -> refuse with reason 20 (invalid AKMP).
 //! Anything this parser cannot read keeps the earlier behaviour (`Legacy`). Pure, allocation-free, no secrets.
 
 /// 00-0F-AC:2 PSK and 00-0F-AC:8 SAE, as (OUI << 8 | type).
@@ -126,8 +128,12 @@ pub enum Keying {
     SaeFresh,
     /// AKM 8 + the station's PMKID at this index matches a cached PMKSA for it.
     SaeCached(usize),
-    /// AKM 8 with no PMKSA we hold: refuse (deauthenticate, reason 49 invalid PMKID) so the station redoes SAE.
+    /// AKM 8 + PMKIDs, none of which we hold: refuse (deauthenticate, reason 49 invalid PMKID) so it redoes SAE.
     Reject,
+    /// AKM 8 with no PMKID and no fresh SAE: refuse (reason 49).
+    SaeNoSae,
+    /// An AKM the BSS does not offer now (`offers`): refuse (reason 20 invalid AKMP).
+    NotOffered,
 }
 
 impl Keying {
@@ -138,25 +144,124 @@ impl Keying {
             Keying::SaeFresh => "SAE (just authenticated)",
             Keying::SaeCached(_) => "SAE (cached PMKSA)",
             Keying::Reject => "SAE with an unknown PMKID: reject",
+            Keying::SaeNoSae => "SAE AKM without SAE: reject",
+            Keying::NotOffered => "AKM not offered by this BSS: reject",
+        }
+    }
+    /// The deauthentication reason for a refusal; None = key the 4-way.
+    pub fn reason(&self) -> Option<u16> {
+        match self {
+            Keying::Reject | Keying::SaeNoSae => Some(REASON_INVALID_PMKID),
+            Keying::NotOffered => Some(REASON_INVALID_AKMP),
+            _ => None,
         }
     }
 }
 
 /// Reason code 49: invalid PMKID (IEEE 802.11-2020 Table 9-49).
 pub const REASON_INVALID_PMKID: u16 = 49;
+/// Reason code 20: invalid AKMP.
+pub const REASON_INVALID_AKMP: u16 = 20;
+/// The AKMs the BSS offers (`decide`'s `offers`): WPA2-PSK = PSK, WPA3-SAE = SAE, transition = both.
+pub const OFFER_PSK: u8 = 1;
+pub const OFFER_SAE: u8 = 2;
 
 /// The keying decision. `fresh_sae` = this station completed SAE within the responder TTL; `known` = a PMKID that a
-/// cached PMKSA of this station carries.
-pub fn decide(rsn: Option<&AssocRsn>, fresh_sae: bool, known: &mut dyn FnMut(&[u8; 16]) -> bool) -> Keying {
+/// cached PMKSA of this station carries; `offers` = OFFER_* bits of the BSS's current security.
+pub fn decide(rsn: Option<&AssocRsn>, offers: u8, fresh_sae: bool, known: &mut dyn FnMut(&[u8; 16]) -> bool) -> Keying {
     let Some(r) = rsn else { return Keying::Legacy };
     if r.n_akm != 1 {
         return Keying::Legacy;
     }
     match r.akm {
+        AKM_PSK if offers & OFFER_PSK == 0 => Keying::NotOffered,
+        AKM_SAE if offers & OFFER_SAE == 0 => Keying::NotOffered,
         AKM_PSK => Keying::Psk,
         AKM_SAE if fresh_sae => Keying::SaeFresh,
+        AKM_SAE if r.n_pmkid == 0 => Keying::SaeNoSae,
         AKM_SAE => r.pmkids().iter().position(|p| known(p)).map_or(Keying::Reject, Keying::SaeCached),
         _ => Keying::Legacy,
+    }
+}
+
+fn mac64(m: &[u8; 6]) -> u64 {
+    u64::from_le_bytes([m[0], m[1], m[2], m[3], m[4], m[5], 0, 0])
+}
+
+/// Per-station log rate limit. The refusal path (burst 1): a station with a stale scan re-associates every ~15 s for
+/// as long as it likes (134 times in 35 min on metal) — its first refusal is logged, then one line per `WINDOW_MS`
+/// with the count; the deauthentication failure detail once per station. The SAE trace (burst > 1): the first
+/// `burst` lines of a station per window, then the count on its next line. Bounded (the oldest window is reused).
+pub struct RejectLog {
+    e: [RejEntry; 8],
+    burst: u8,
+}
+#[derive(Clone, Copy)]
+struct RejEntry {
+    /// the station MAC as a u64
+    sta: u64,
+    used: bool,
+    /// events since the last logged line
+    n: u32,
+    /// lines logged in the current window, which started at `win_ms`
+    lines: u8,
+    win_ms: u64,
+    fail_logged: bool,
+}
+impl RejectLog {
+    pub const WINDOW_MS: u64 = 30_000;
+    pub const fn new() -> RejectLog {
+        RejectLog::with_burst(1)
+    }
+    pub const fn with_burst(burst: u8) -> RejectLog {
+        RejectLog { e: [RejEntry { sta: 0, used: false, n: 0, lines: 0, win_ms: 0, fail_logged: false }; 8], burst }
+    }
+    #[inline(never)]
+    fn slot(&self, sta: &[u8; 6]) -> Option<usize> {
+        let k = mac64(sta);
+        (0..self.e.len()).find(|&i| self.e[i].used && self.e[i].sta == k)
+    }
+    /// One event of `sta`. Some(n) = log a line now (n events including this one since its last line).
+    pub fn note(&mut self, sta: &[u8; 6], now_ms: u64) -> Option<u32> {
+        let i = match self.slot(sta) {
+            Some(i) => i,
+            None => {
+                // a free slot, else the oldest window
+                let mut i = 0;
+                for k in 1..self.e.len() {
+                    if (self.e[k].used, self.e[k].win_ms) < (self.e[i].used, self.e[i].win_ms) {
+                        i = k;
+                    }
+                }
+                self.e[i] = RejEntry { sta: mac64(sta), used: true, n: 0, lines: 0, win_ms: now_ms, fail_logged: false };
+                i
+            }
+        };
+        let x = &mut self.e[i];
+        x.n = x.n.saturating_add(1);
+        if now_ms.wrapping_sub(x.win_ms) >= Self::WINDOW_MS {
+            x.win_ms = now_ms;
+            x.lines = 0;
+        }
+        if x.lines >= self.burst {
+            return None;
+        }
+        x.lines += 1;
+        Some(core::mem::replace(&mut x.n, 0))
+    }
+    /// The station used up its lines for the current window: its other chatter stays quiet too.
+    pub fn muted(&self, sta: &[u8; 6], now_ms: u64) -> bool {
+        self.slot(sta).is_some_and(|i| self.e[i].lines >= self.burst && now_ms.wrapping_sub(self.e[i].win_ms) < Self::WINDOW_MS)
+    }
+    /// true once per station (streak): log the deauthentication failure detail.
+    pub fn first_fail(&mut self, sta: &[u8; 6]) -> bool {
+        self.slot(sta).is_some_and(|i| !core::mem::replace(&mut self.e[i].fail_logged, true))
+    }
+    /// The station keyed / left the streak: Some(events not yet logged) if it was in one.
+    pub fn clear(&mut self, sta: &[u8; 6]) -> Option<u32> {
+        let i = self.slot(sta)?;
+        self.e[i].used = false;
+        Some(self.e[i].n)
     }
 }
 
@@ -206,16 +311,47 @@ pub fn selftest() -> bool {
     let second = r.pmkid[1];
     let mut known = |p: &[u8; 16]| *p == second;
     let mut none = |_: &[u8; 16]| false;
-    ok &= decide(Some(&r), false, &mut known) == Keying::SaeCached(1);
-    ok &= decide(Some(&r), true, &mut known) == Keying::SaeFresh;
-    ok &= decide(Some(&r), false, &mut none) == Keying::Reject;
+    let all = OFFER_PSK | OFFER_SAE;
+    ok &= decide(Some(&r), all, false, &mut known) == Keying::SaeCached(1);
+    ok &= decide(Some(&r), OFFER_SAE, true, &mut known) == Keying::SaeFresh;
+    ok &= decide(Some(&r), all, false, &mut none) == Keying::Reject;
     let psk = AssocRsn { akm: AKM_PSK, n_akm: 1, ..r };
-    ok &= decide(Some(&psk), true, &mut known) == Keying::Psk;
-    ok &= decide(None, true, &mut known) == Keying::Legacy;
-    ok &= decide(Some(&AssocRsn { n_akm: 2, ..r }), false, &mut none) == Keying::Legacy;
-    ok &= decide(Some(&AssocRsn { akm: 0x000f_ac06, ..r }), false, &mut none) == Keying::Legacy;
-    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), false, &mut known) == Keying::Reject;
-    ok
+    ok &= decide(Some(&psk), all, true, &mut known) == Keying::Psk;
+    ok &= decide(Some(&psk), OFFER_PSK, false, &mut none) == Keying::Psk;
+    ok &= decide(None, all, true, &mut known) == Keying::Legacy;
+    ok &= decide(Some(&AssocRsn { n_akm: 2, ..r }), all, false, &mut none) == Keying::Legacy;
+    ok &= decide(Some(&AssocRsn { akm: 0x000f_ac06, ..r }), all, false, &mut none) == Keying::Legacy;
+    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), all, false, &mut known) == Keying::SaeNoSae;
+    // the metal case: a stale-scan station sends AKM 8 to a WPA2-only BSS (with or without SAE state) -> reason 20
+    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), OFFER_PSK, false, &mut none) == Keying::NotOffered;
+    ok &= decide(Some(&r), OFFER_PSK, true, &mut known) == Keying::NotOffered;
+    ok &= decide(Some(&psk), OFFER_SAE, false, &mut none) == Keying::NotOffered;
+    ok &= Keying::NotOffered.reason() == Some(20) && Keying::SaeNoSae.reason() == Some(49);
+    ok &= Keying::Reject.reason() == Some(49) && Keying::Psk.reason().is_none() && Keying::SaeCached(0).reason().is_none();
+    ok && rejectlog_selftest()
+}
+
+fn rejectlog_selftest() -> bool {
+    let mut l = RejectLog::new();
+    let (a, b) = ([1u8; 6], [2u8; 6]);
+    let w = RejectLog::WINDOW_MS;
+    let mut ok = !l.muted(&a, 0) && l.note(&a, 1000) == Some(1) && l.muted(&a, 1001);
+    ok &= l.first_fail(&a) && !l.first_fail(&a) && !l.first_fail(&b);
+    for t in 1..=5u64 {
+        ok &= l.note(&a, 1000 + t * 1000).is_none(); // quiet inside the window
+    }
+    ok &= l.note(&a, 1000 + w) == Some(6) && l.note(&a, 1001 + w).is_none() && l.clear(&a) == Some(1);
+    ok &= l.clear(&a).is_none() && !l.muted(&a, 1002 + w) && l.note(&a, 1003 + w) == Some(1);
+    // bounded: 20 stations fit in 8 slots, the newest is tracked
+    for k in 0..20u8 {
+        ok &= l.note(&[k, 9, 9, 9, 9, 9], 5 * w + k as u64) == Some(1);
+    }
+    ok &= l.muted(&[19, 9, 9, 9, 9, 9], 5 * w + 20);
+    // burst 3 (the SAE trace): three lines, then quiet, then the count once the window turns
+    let mut t = RejectLog::with_burst(3);
+    ok &= t.note(&a, 0) == Some(1) && t.note(&a, 1) == Some(1) && t.note(&a, 2) == Some(1) && t.muted(&a, 2);
+    ok &= t.note(&a, 3).is_none() && t.note(&a, 4).is_none() && t.muted(&a, 5);
+    ok && t.note(&a, w) == Some(3) && !t.muted(&a, w)
 }
 
 #[cfg(test)]
