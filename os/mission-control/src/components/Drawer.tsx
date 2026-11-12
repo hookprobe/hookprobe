@@ -3,7 +3,8 @@
  * panel, record detail drawers and the Copilot conversation all open here.
  *
  * 400 px overlay on desktop/compact, a full-height 80 % sheet on tablet, full width on phones.
- * Esc closes it; focus moves into it on open and back to the opener on close.
+ * Esc closes it; focus moves into it on open, stays inside it (Tab is trapped; the page behind is inert to
+ * keyboard focus) and goes back to the opener on close.
  */
 import { type Component, type JSX, Show, createEffect, onCleanup } from 'solid-js';
 
@@ -26,7 +27,14 @@ const Drawer: Component<Props> = (props) => {
     if (!props.open) return;
     opener = document.activeElement;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); props.onClose(); }
+      if (e.key === 'Escape') { e.stopPropagation(); props.onClose(); return; }
+      if (e.key !== 'Tab' || !panel || document.querySelector('.approve-sheet')) return;
+      const f = [...panel.querySelectorAll<HTMLElement>('a[href], button:not([disabled]), input:not([disabled]), select, textarea, [tabindex]:not([tabindex="-1"])')].filter((el) => el.offsetParent !== null);
+      if (!f.length) return;
+      const first = f[0], last = f[f.length - 1];
+      if (!panel.contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+      else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
     };
     document.addEventListener('keydown', onKey);
     queueMicrotask(() => panel?.querySelector<HTMLElement>('.drawer-close')?.focus());
@@ -39,7 +47,7 @@ const Drawer: Component<Props> = (props) => {
   return (
     <Show when={props.open}>
       <div class="drawer-scrim" onClick={() => props.onClose()} aria-hidden="true" />
-      <aside class="drawer" role="dialog" aria-label={props.title} ref={panel}>
+      <aside class="drawer" role="dialog" aria-modal="true" aria-label={props.title} ref={panel}>
         <header class="drawer-head">
           <h2 class="drawer-title">{props.title}</h2>
           <button class="drawer-close" onClick={() => props.onClose()} aria-label="Close panel">
