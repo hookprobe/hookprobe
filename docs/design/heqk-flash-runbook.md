@@ -15,7 +15,7 @@ Rule: **a flash is one deliberate, operator-approved action with a stop rule —
 Use `tools/diagnostics/cm5-rpiboot-check.sh` (add `--msd` to also expose the eMMC as USB mass storage, read-only)
 to prove the path without flashing. **Root cause of the 2026-11-12 failures:** the operator heard a single relay click —
 the board was not power-cycled while nRPIBOOT was held, so the ROM never saw the boot mode. **Operator procedure (2026-11-12, LEDs IN1/IN2):** rpiboot = energise IN1 (power OFF) + IN2 (nRPIBOOT) together →
-wait ~5 s → release BOTH (IN1 first, so nRPIBOOT is held at the instant power returns) → boot ROM `0a5c:2712` on USB.
+release IN1 (board powers up, nRPIBOOT held) → 3 s later release IN2 → boot ROM `0a5c:2712` on USB.
 After flashing, a normal boot = reset IN1 only (off → on). **Always run the paper test first:**
 `tools/diagnostics/cm5-relay.py --backend nano --dev auto --dry-run rpiboot` (and `… --dry-run boot`) prints the exact
 relay commands in order without touching anything. Asserting nRPIBOOT FIRST and cycling
