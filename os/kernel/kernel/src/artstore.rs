@@ -215,7 +215,7 @@ pub fn read_manifest<D: BlockDev + ?Sized>(dev: &D, store: (u64, u64)) -> Manife
             let mut m = MAN0;
             if dev.read_block(store.0 + 2 * g as u64 + k, &mut s).is_ok() && Manifest::decode_g(&s, g, &mut m).is_some() {
                 let seq = if g == 0 { m.seq } else { m.seq2 };
-                if best.as_ref().map_or(true, |b| seq >= if g == 0 { b.seq } else { b.seq2 }) {
+                if best.as_ref().is_none_or(|b| seq >= if g == 0 { b.seq } else { b.seq2 }) {
                     best = Some(m);
                 }
             }

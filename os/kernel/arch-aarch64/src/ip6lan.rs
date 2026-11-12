@@ -10,7 +10,7 @@
 //!   replies to a recorded flow, plus ICMPv6 errors (RFC 4890 §4.3.1: Destination Unreachable, Packet
 //!   Too Big, Time Exceeded, Parameter Problem — PMTU discovery breaks without Packet Too Big). Default
 //!   deny for everything else inbound. Hop limit is decremented both ways (<= 1 -> drop).
-//! The kernel loop only plumbs frames: Wi-Fi -> on_lan -> IDS verdict -> PPPoE; PPPoE -> on_wan -> Wi-Fi.
+//!   The kernel loop only plumbs frames: Wi-Fi -> on_lan -> IDS verdict -> PPPoE; PPPoE -> on_wan -> Wi-Fi.
 
 use crate::ip6::{l4_csum, link_local};
 
