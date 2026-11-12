@@ -446,7 +446,17 @@ fn section_digests() -> [[u8; 32]; 3] {
 
 /// The subsystems this build applies LIVE (grows with the executors: WAN step 9, Wi-Fi step 10). A bundle that changes
 /// anything else keeps the next-boot PENDING trial (step 8).
-pub const LIVE_CAPABLE: u8 = CH_POLICY;
+pub const LIVE_CAPABLE: u8 = CH_POLICY | CH_WAN;
+
+/// An executor found that the change it applies touches the management plane after all (step 9: the WAN executor when
+/// the management sub-interface / floor actually changes, incl. its removal): the trial never auto-commits.
+pub fn require_confirm() {
+    unsafe {
+        if PHASE == Phase::Applying {
+            NEEDS_CONFIRM = true;
+        }
+    }
+}
 
 /// Which subsystems a verified bundle's sections would change against the sections in force (stage time).
 pub fn changes_vs(pol: Option<&[u8]>, wan: Option<&[u8]>, wifi: Option<&[u8]>) -> u8 {
@@ -856,16 +866,17 @@ pub fn policy_selftest() -> bool {
     // 5. a tighter policy swaps in (established flows are kept: the swap touches only the rule table)
     let tight = swap_policy(p2, live, scr) && live.nacl == 1 && live.acl[0].n == 2;
     unsafe { OWNER = saved };
-    // step 8 gate: against no bundle in force, a policy-only bundle is live-capable; one with a WAN or Wi-Fi section
-    // keeps the next-boot trial until those executors exist (steps 9, 10)
+    // step 8 gate: against no bundle in force, a policy-only bundle is live-capable, and (step 9) one with a WAN
+    // section too; a Wi-Fi section keeps the next-boot trial until its executor exists (step 10)
     clear();
     let pol_only = changes_vs(Some(b"acl A seq 10 allow any any any\n"), None, None);
     let with_wan = changes_vs(Some(b"acl A seq 10 allow any any any\n"), Some(b"mode=dhcp\n"), None);
-    let gate = pol_only == CH_POLICY && pol_only & !LIVE_CAPABLE == 0 && with_wan & !LIVE_CAPABLE != 0
-        && changes_vs(None, None, None) == 0;
+    let with_wifi = changes_vs(None, Some(b"mode=dhcp\n"), Some(b"ssid=home\npsk=correct horse 1\n"));
+    let gate = pol_only == CH_POLICY && pol_only & !LIVE_CAPABLE == 0 && with_wan == CH_POLICY | CH_WAN && with_wan & !LIVE_CAPABLE == 0
+        && with_wifi & !LIVE_CAPABLE != 0 && changes_vs(None, None, None) == 0;
     let pass = good && bad && cut && before && owner_ok && other && tight && gate;
     arch_aarch64::_print(format_args!(
-        " [P-cfgd-policy] {} — sealed-config / live-apply step 7, the live policy executor: a good policy swaps in and the policy generation advances={} an unparseable policy is refused and the policy in force kept (never a live lockdown)={} a policy cutting every management path is refused live={} F-e the owner's own client keeps its HTTPS path (a /32 block of it is refused once the owner is known)={} another client's /32 is fine={} a tighter policy swaps in={} step 8: only a policy-only change is applied live, WAN / Wi-Fi changes keep the next-boot trial={}\n",
+        " [P-cfgd-policy] {} — sealed-config / live-apply step 7, the live policy executor: a good policy swaps in and the policy generation advances={} an unparseable policy is refused and the policy in force kept (never a live lockdown)={} a policy cutting every management path is refused live={} F-e the owner's own client keeps its HTTPS path (a /32 block of it is refused once the owner is known)={} another client's /32 is fine={} a tighter policy swaps in={} step 8/9: policy and WAN changes are applied live, a Wi-Fi change keeps the next-boot trial={}\n",
         if pass { "PASS" } else { "FAIL" }, good, bad, cut, before && owner_ok, other, tight, gate
     ));
     pass
