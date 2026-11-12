@@ -10,7 +10,7 @@ pub fn eapol_key(e: &[u8], sta: &[u8; 6], secure: bool, replay: u64) -> Option<u
     if body + 95 > e.len() {
         return None;
     }
-    if u16::from_be_bytes([e[12], e[13]]) != 0x888E || &e[6..12] != &sta[..] {
+    if u16::from_be_bytes([e[12], e[13]]) != 0x888E || e[6..12] != sta[..] {
         return None;
     }
     let ki = u16::from_be_bytes([e[body + 1], e[body + 2]]);
