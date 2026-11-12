@@ -1,3 +1,4 @@
+import { createSignal } from 'solid-js';
 /**
  * api — the shared, low-level `hookprobe-api` read-API client (ADR 0001: Rust/Axum).
  *
@@ -24,11 +25,16 @@
  */
 export const API_BASE = (import.meta.env.PUBLIC_API_BASE as string | undefined) ?? 'http://127.0.0.1:8420';
 
+/** Set when the device answers 401: the session ended, which is not the same as "no device". */
+export const [signedOut, setSignedOut] = createSignal(false);
+
 export async function fetchJson<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { headers: { accept: 'application/json' } });
+  if (res.status === 401) setSignedOut(true);
   if (!res.ok) {
     throw new Error(`${path} -> HTTP ${res.status}`);
   }
+  setSignedOut(false);
   return res.json() as Promise<T>;
 }
 
