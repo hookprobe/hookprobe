@@ -29,7 +29,7 @@
  *  hookprobe-api build report for the complete list.
  */
 
-import { setQsecbit, setHeartbeat, setSecurity, setLastChecked, security } from './mock';
+import { setQsecbit, setHeartbeat, setSecurity, setLastCheckedAt, security } from './mock';
 import {
   fetchJson, openStream, parseStreamPayload,
   type QsecbitScoreRow, type QsecbitResponse, type IncidentRow, type IncidentsResponse,
@@ -84,7 +84,7 @@ export async function startLiveUpdates(): Promise<boolean> {
     ]);
     applyQsecbitHistory(qsecbitRes.history ?? []);
     applyIncidents(incidentsRes.incidents ?? []);
-    setLastChecked('just now');
+    setLastCheckedAt(Date.now());
     started = true;
   } catch (e) {
     // API unreachable (dev box, or a device that hasn't first-booted yet) — stay on the mock
@@ -109,7 +109,7 @@ export async function startLiveUpdates(): Promise<boolean> {
         const pct = resiliencePct(latest.score);
         setQsecbit(pct);
         setHeartbeat((prev) => [...prev.slice(1), pct]);
-        setLastChecked('just now');
+        setLastCheckedAt(Date.now());
       }
       if (payload.incidents && payload.incidents.length > 0) {
         // Re-fetch the authoritative open-incident list rather than hand-accumulating deltas

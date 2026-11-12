@@ -9,6 +9,7 @@
  *
  * Rendered inline at the top of AppShell's content, so it never covers the phone bottom tabs.
  */
+import { signedOut } from '../store/api';
 import { type Component, Show, createMemo, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
 import { loadHealth, healthChecked } from '../store/health';
@@ -66,10 +67,16 @@ const SampleDataNotice: Component = () => {
     return null;
   });
   return (
-    <Show when={status()}>
-      <div class="hp-banner hp-banner--sample" role="status">
-        <strong>Sample data</strong> {status()}
+    <Show when={!signedOut()} fallback={
+      <div class="hp-banner hp-banner--danger" role="alert">
+        <strong>Signed out</strong> Your session on this device ended, so nothing here is current. <a href="/login">Sign in again</a>.
       </div>
+    }>
+      <Show when={status()}>
+        <div class="hp-banner hp-banner--sample" role="status">
+          <strong>Sample data</strong> {status()}
+        </div>
+      </Show>
     </Show>
   );
 };

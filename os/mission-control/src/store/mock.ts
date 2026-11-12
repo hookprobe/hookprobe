@@ -82,7 +82,8 @@ export interface DeviceStats { hostsActive: number; detections: number; detectio
   seen?: number; forwarded?: number; dropped?: number; rulesActive?: number; lastReset?: string; clock?: string }
 export const [deviceStats,     setDeviceStats]      = createSignal<DeviceStats | null>(null);
 export const [currentUser]                          = createSignal<string>('Admin');
-export const [lastChecked,     setLastChecked]      = createSignal<string>('just now');
+/** When the device last answered with fresh data (ms); 0 = not yet. */
+export const [lastCheckedAt, setLastCheckedAt] = createSignal<number>(0);
 
 export const [shield]                               = createSignal<ShieldStats>({
   adsBlocked:     4_812,
