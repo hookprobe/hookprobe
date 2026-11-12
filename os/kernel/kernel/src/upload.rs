@@ -708,25 +708,23 @@ pub fn abort(c: &Ctx, body: &[u8]) -> Result<(), &'static str> {
 }
 
 // "rollback_to" (R6 = D): `artstore::rollback_target` re-verifies (hashes) the whole previous half, so GET caches it
-// per type, keyed by the manifest entry + verifier key; every activation / rollback clears the cache first.
-type RbKey = (artstore::Entry, [u8; 32]);
-static mut RBT: [Option<(RbKey, Option<u64>)>; artstore::NTY] = [None; artstore::NTY];
+// per type: [half | state << 8 | 1 << 16, active gen, verifier key prefix, target + 1 (0 = none)]. Every activation /
+// rollback clears it first. Zero-initialised (.bss, not the payload).
+static mut RBT: [[u64; 4]; artstore::NTY] = [[0; 4]; artstore::NTY];
 fn rbt_clear() {
-    unsafe { RBT = [None; artstore::NTY] };
+    unsafe { RBT = [[0; 4]; artstore::NTY] };
 }
 /// The generation `POST /api/upload/rollback` would go to for `t` (what its envelope must bind), or None.
 fn rollback_to(d: &DevRef, t: Ty) -> Option<u64> {
     let opk = artstore::key_for(t)?;
-    let k = (artstore::entry(d, t)?, opk);
+    let e = artstore::entry(d, t)?;
+    let k = [e.half as u64 | (e.state as u64) << 8 | 1 << 16, e.gen, u64::from_le_bytes(opk[..8].try_into().ok()?)];
     let c = unsafe { &mut (*core::ptr::addr_of_mut!(RBT))[t as usize] };
-    match *c {
-        Some((ck, v)) if ck == k => v,
-        _ => {
-            let v = artstore::rollback_target(d, t, &opk);
-            *c = Some((k, v));
-            v
-        }
+    if c[..3] != k {
+        let v = artstore::rollback_target(d, t, &opk);
+        *c = [k[0], k[1], k[2], v.map_or(0, |g| g + 1)];
     }
+    c[3].checked_sub(1)
 }
 
 /// Owner-journal artifact record value → result: 1 done (activation, rollback, accepted envelope), 2 refused.
