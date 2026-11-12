@@ -1,7 +1,6 @@
 # hsh R6 — production management transport: options for decision (2026-11-12)
 
 Status: **DECIDED 2026-11-12 — option D** (owner-key-signed command envelopes; the web console is the first carrier; the carrier carries no authority). Input: the hsh spec (R6), ADR 0059 D9, the reviewer's principles.
-Nothing here is decided until the operator selects.
 
 ## Principles (reviewer, 2026-11-12)
 
