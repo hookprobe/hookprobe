@@ -10,6 +10,9 @@
 //!   0x03 ASSIGN    PoP→dev: inner_v4(4) ‖ plen(1) ‖ dns_v4(4) ‖ mtu LE16
 //!   0x04 ADDR_REQ  dev→PoP: empty
 //!   0x05 CLOSE     reason(1): 1 shutdown, 2 not authorised, 3 rekey
+//!   0x06 CAPS      flags(1): bit 0 = follows in-session rekey epochs (W4). Each side rekeys its own direction only
+//!                  after the peer's CAPS; both always follow the peer's epochs (seq high 32 bits = key epoch,
+//!                  securechannel `RecordTx` / `RecordRx`). A peer that does not know CAPS drops it.
 
 use boot_abi::sha256;
 
@@ -32,6 +35,8 @@ pub const T_KEEPALIVE: u8 = 0x02;
 pub const T_ASSIGN: u8 = 0x03;
 pub const T_ADDR_REQ: u8 = 0x04;
 pub const T_CLOSE: u8 = 0x05;
+pub const T_CAPS: u8 = 0x06;
+pub const CAPS_REKEY: u8 = 0x01;
 
 pub const CLOSE_SHUTDOWN: u8 = 1;
 pub const CLOSE_NOT_AUTHORISED: u8 = 2;
@@ -76,6 +81,7 @@ pub enum Msg<'a> {
     Assign(Assign),
     AddrReq,
     Close(u8),
+    Caps(u8),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +99,7 @@ pub fn decode(pt: &[u8]) -> Option<Msg<'_>> {
         T_KEEPALIVE if body.is_empty() => Some(Msg::Keepalive),
         T_ADDR_REQ if body.is_empty() => Some(Msg::AddrReq),
         T_CLOSE if body.len() == 1 => Some(Msg::Close(body[0])),
+        T_CAPS if body.len() == 1 => Some(Msg::Caps(body[0])),
         T_ASSIGN if body.len() == 11 => Some(Msg::Assign(Assign {
             inner: [body[0], body[1], body[2], body[3]],
             plen: body[4],
@@ -108,7 +115,7 @@ pub fn encode(m: &Msg<'_>, out: &mut [u8]) -> Option<usize> {
     let body_len = match m {
         Msg::Data(p) => p.len(),
         Msg::Keepalive | Msg::AddrReq => 0,
-        Msg::Close(_) => 1,
+        Msg::Close(_) | Msg::Caps(_) => 1,
         Msg::Assign(_) => 11,
     };
     if out.len() < 1 + body_len || 1 + body_len > MAX_PT {
@@ -124,6 +131,10 @@ pub fn encode(m: &Msg<'_>, out: &mut [u8]) -> Option<usize> {
         Msg::Close(r) => {
             out[0] = T_CLOSE;
             out[1] = *r;
+        }
+        Msg::Caps(f) => {
+            out[0] = T_CAPS;
+            out[1] = *f;
         }
         Msg::Assign(a) => {
             out[0] = T_ASSIGN;
@@ -157,7 +168,7 @@ mod tests {
     fn roundtrip_every_type() {
         let pkt = [0x45u8, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 100, 64, 0, 2, 1, 1, 1, 1];
         let a = Assign { inner: [100, 64, 0, 2], plen: 32, dns: [1, 1, 1, 1], mtu: DEFAULT_MTU };
-        for m in [Msg::Data(&pkt), Msg::Keepalive, Msg::AddrReq, Msg::Close(CLOSE_REKEY), Msg::Assign(a)] {
+        for m in [Msg::Data(&pkt), Msg::Keepalive, Msg::AddrReq, Msg::Close(CLOSE_REKEY), Msg::Caps(CAPS_REKEY), Msg::Assign(a)] {
             let mut b = [0u8; 64];
             let n = encode(&m, &mut b).unwrap();
             assert_eq!(decode(&b[..n]).unwrap(), m);

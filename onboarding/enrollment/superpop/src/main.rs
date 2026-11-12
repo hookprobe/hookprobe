@@ -230,7 +230,7 @@ fn run(args: &[String]) -> Result<(), String> {
 fn selftest() -> bool {
     match e2e_selftest::run() {
         Ok(()) => {
-            println!("superpop selftest: PASS — handshake, ASSIGN, DATA both ways, anti-spoof, replay, rebind");
+            println!("superpop selftest: PASS — handshake, ASSIGN, DATA both ways, anti-spoof, replay, rebind, in-session rekey (W4)");
             true
         }
         Err(e) => {
@@ -243,7 +243,8 @@ fn selftest() -> bool {
 mod e2e_selftest {
     //! The same scenario as the unit e2e tests, runnable on an operator host (`superpop selftest`).
     pub fn run() -> Result<(), String> {
-        crate::e2e_harness::scenario()
+        crate::e2e_harness::scenario()?;
+        crate::e2e_harness::rekey_scenario()
     }
 }
 mod e2e_harness;
