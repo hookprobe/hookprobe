@@ -2,7 +2,8 @@
 # tools/fuzz/run.sh [seconds-per-target] — coverage-guided libFuzzer runs over the host-buildable heqk
 # parsers (the `hal` crate: POLICY.TXT, WAN.TXT, frame facts / VLAN tags, SDIO glom, the A/B OTA slot derivation) and `boot-abi` (the signed-image verifier). The kernel-crate parsers
 # network-facing parsers run from the SAME source files via tools/fuzz/heqk-kernel (HTTP request + form bodies, DNS
-# wire, TLS ClientHello / JA4, frame classifier); fixed-layout MAC-verified stores stay with the in-kernel [P-fuzz].
+# wire, TLS ClientHello / JA4, frame classifier), and tools/fuzz/heqk-securechannel the control channel's record layer
+# (W4 rekey); fixed-layout MAC-verified stores stay with the in-kernel [P-fuzz].
 # Needs: nightly + `cargo install cargo-fuzz`. Exit 1 on any crash (the reproducer stays in artifacts/).
 set -u
 T="${1:-60}"; cd "$(dirname "$0")/heqk-hal" || exit 2
@@ -37,5 +38,13 @@ for t in http_req dns_wire tls_hello frame_meta cfg_bundle; do
     echo "  FAIL $t (crash or build error — see /tmp/heqk-fuzz-$t.log, reproducer in tools/fuzz/heqk-kernel/artifacts/$t/)"; rc=1
   fi
 done
+# the control channel's record layer (securechannel.rs: rekey epochs, replay windows, key retirement) — W4
+cd ../heqk-securechannel || exit 2
+mkdir -p corpus/record_rx
+if cargo +nightly fuzz run --fuzz-dir . record_rx corpus/record_rx -- -max_total_time="$T" -max_len=4096 > /tmp/heqk-fuzz-record_rx.log 2>&1; then
+  echo "  ok   record_rx: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-record_rx.log | tail -1)"
+else
+  echo "  FAIL record_rx (crash or build error — see /tmp/heqk-fuzz-record_rx.log, reproducer in tools/fuzz/heqk-securechannel/artifacts/record_rx/)"; rc=1
+fi
 [ $rc = 0 ] && echo "FUZZ: PASS (${T}s per target)" || echo "FUZZ: FAIL"
 exit $rc

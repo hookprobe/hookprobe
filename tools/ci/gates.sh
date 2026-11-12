@@ -20,7 +20,7 @@
 #   g3  Mission Control: UI typecheck + UI behaviour suite (os/mission-control/tests/ui) +
 #       end-to-end in QEMU (os/kernel/tools/mc-e2e.sh)
 #   g4  supply chain: cargo-deny (RustSec) on every lockfile, npm audit, SBOM
-#   g4r reproducibility: build the shipped `prod` kernel twice, hashes must match
+#   g4r reproducibility: build the SHIPPING flavour (tools/ci/shipping-features.txt) twice, hashes must match
 #   g6  metal (self-hosted CM5 runner only): mc-e2e-metal.sh
 #
 # Output: $CI_OUT (default out/ci)/gate-results.json + logs/<gate>.log — the
@@ -48,7 +48,7 @@ declare -A DESC=(
   [g2]="QEMU boot gate (validate.sh)"
   [g3]="Mission Control: typecheck + UI suite + end-to-end in QEMU (mc-e2e.sh)"
   [g4]="supply chain (cargo-deny/RustSec, npm audit, SBOM)"
-  [g4r]="reproducible build of the shipped prod kernel"
+  [g4r]="reproducible build of the shipping flavour kernel"
   [g6]="metal gate on the self-hosted CM5 bench"
 )
 
@@ -87,6 +87,10 @@ gate_g1() {
   tdir() { if [ -n "$T" ]; then echo "$T/$1"; else echo target/ci; fi; }
   step "clippy ratchet (heqk kernel workspace)" python3 -I tools/ci/clippy_ratchet.py --root "$ROOT"
   step "validate.sh phase ratchet"     python3 -I tools/ci/phase_ratchet.py --root "$ROOT"
+  # W4: the resolved feature graph of the SHIPPING flavour carries no development-only feature (any crate)
+  if need cargo; then
+    step "shipping-flavour guard (no dev/bench features)" python3 -I tools/ci/shipping_guard.py
+  fi
   # Host unit tests on STABLE: nightly build-std of std for the host broke on a newer nightly in CI
   # (E0152 duplicate lang item `sized`, 2026-11-08) and host tests need no build-std at all.
   step "host tests: heqk-tlsprov"      bash -c "cd os/kernel/tlsprov && CARGO_TARGET_DIR=$(tdir tlsprov) cargo +stable test --release --target x86_64-unknown-linux-gnu"
@@ -178,7 +182,9 @@ gate_g4() {
 
 gate_g4r() {
   need sha256sum || return 0
-  step "reproducible prod kernel (2 clean builds, identical hash)" tools/ci/repro.sh
+  # the shipping flavour (apmc) embeds the Mission Control UI: build it once, both builds read the same dist
+  step "build Mission Control UI"      ensure_ui
+  step "reproducible shipping kernel (2 clean builds, identical hash)" tools/ci/repro.sh
 }
 
 gate_g6() {
