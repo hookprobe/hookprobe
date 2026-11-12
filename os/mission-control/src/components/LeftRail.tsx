@@ -17,6 +17,7 @@ const PILLARS: Pillar[] = [
   { label: 'My Network',         href: '/network/zones',  icon: 'network', match: ['/network/zones', '/network/map', '/network/devices'] },
   { label: 'Get Online',         href: '/network/wan',    icon: 'online', match: ['/network/wan', '/network/wifi', '/setup'] },
   { label: 'Timeline & Export',  href: '/observe/events', icon: 'timeline', match: ['/observe/events'] },
+  { label: 'Settings',           href: '/admin/identity', icon: 'admin', match: ['/admin'] },
 ];
 
 export function pillarActive(path: string, p: { match: string[] }): boolean {
