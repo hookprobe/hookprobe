@@ -64,9 +64,7 @@ function nodeTone(type: string): Tone {
 const Panel: Component<{ ctx: string; title: string; children: any }> = (p) => (
   <section class="hp-terminal inv-panel">
     <div class="hp-terminal-bar">
-      <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
       <span class="mc-panel-title">{p.title}</span>
-      <span class="hp-terminal-title">hookprobe@edge ~ {p.ctx}</span>
     </div>
     <div class="hp-terminal-body inv-panel-body">{p.children}</div>
   </section>
@@ -159,9 +157,7 @@ const InvestigateApp: Component = () => {
           {/* Incident queue — real GET /api/incidents + /api/stream deltas */}
           <aside class="inv-queue hp-terminal">
             <div class="hp-terminal-bar">
-              <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
               <span class="mc-panel-title">INCIDENT QUEUE</span>
-              <span class="hp-terminal-title">~ queue</span>
             </div>
             <div class="inv-queue-list">
               <Show when={queueStatus() !== 'loading'} fallback={<LiveState kind="loading" label="Loading incidents…" />}>
@@ -337,9 +333,7 @@ const InvestigateApp: Component = () => {
                     {/* Proposed plan — no BYO-LLM planner has run (see Model above); honest, not fabricated */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
                         <span class="mc-panel-title">PROPOSED PLAN</span>
-                        <span class="hp-terminal-title">~ plan</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <LiveState
@@ -354,9 +348,7 @@ const InvestigateApp: Component = () => {
                         for whichever report was generated FOR this incident (if any). */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
                         <span class="mc-panel-title">EXECUTIVE REPORT</span>
-                        <span class="hp-terminal-title">~ reports/{selectedId()}</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <Show when={reportDetailStatus() !== 'loading'} fallback={<LiveState kind="loading" label="Loading report…" />}>
@@ -418,9 +410,7 @@ const InvestigateApp: Component = () => {
                     {/* Reports — GET /api/reports, the full list across every incident (browse any report). */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
                         <span class="mc-panel-title">ALL REPORTS</span>
-                        <span class="hp-terminal-title">~ reports</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <Show when={reportsStatus() !== 'loading'} fallback={<LiveState kind="loading" label="Loading reports…" />}>
@@ -452,9 +442,7 @@ const InvestigateApp: Component = () => {
                         "everything clickable" — drill into ANY node id from anywhere in the UI. */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="hp-dot red" aria-hidden="true" /><span class="hp-dot yellow" aria-hidden="true" /><span class="hp-dot green" aria-hidden="true" />
                         <span class="mc-panel-title">EVIDENCE GRAPH</span>
-                        <span class="hp-terminal-title">~ evidence/graph?node={graphNodeQuery()}</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <form class="inv-graph-form" onSubmit={submitGraphQuery}>

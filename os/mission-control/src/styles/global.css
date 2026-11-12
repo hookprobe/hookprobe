@@ -78,7 +78,7 @@ html {
 /* ---------------------------------------------------------------------------
  * Cyber-industrial SOUL (from hookprobe-com/astro-landing 404.astro):
  * faint cyan grid mesh · blinking cursor · cyan→green gradient · terminal-window
- * framing. Reusable primitives so every panel can feel like "hookprobe@edge".
+ * framing. Reusable primitives for panels.
  * ------------------------------------------------------------------------- */
 body::before {                          /* faint cyan grid mesh, faded at edges */
   content: "";
@@ -102,27 +102,20 @@ body > * { position: relative; z-index: 1; }   /* lift content above the mesh */
 @keyframes hp-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 .hp-blink { animation: hp-blink 1s step-end infinite; }
 
-/* Terminal-window framing — a panel you've SSH'd into (hookprobe@edge ~ ctx) */
+/* Panel frame (was the terminal window; now the wireframe card: border, label header, plain body) */
 .hp-terminal {
-  background: var(--hp-glass);
-  border: 1px solid var(--hp-border-accent);
+  background: var(--hp-surface, rgba(255,255,255,0.02));
+  border: 1px solid var(--hp-border);
   border-radius: var(--hp-radius-lg);
-  box-shadow: var(--hp-glow-cyan);
   overflow: hidden;
 }
 .hp-terminal-bar {
   display: flex; align-items: center; gap: 0.5rem;
-  padding: 0.55rem 0.9rem;
-  background: rgba(0,0,0,0.4);
-  border-bottom: 1px solid rgba(0,180,255,0.1);
+  padding: 14px 18px 0;
 }
-.hp-dot { width: 11px; height: 11px; border-radius: 50%; }
-.hp-dot.red { background: #ff5f56; }
-.hp-dot.yellow { background: #ffbd2e; }
-.hp-dot.green { background: #27c93f; }
-.hp-terminal-title { margin-left: auto; font-family: var(--hp-font-mono); font-size: 0.72rem; color: var(--hp-text-muted); }
-.hp-terminal-body { padding: 1rem 1.1rem; font-family: var(--hp-font-mono); }
-.hp-prompt { color: var(--hp-green); margin-right: 0.4rem; }   /* $ */
+.hp-terminal-title { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--hp-text-label, var(--hp-text-muted)); }
+.hp-terminal-body { padding: 12px 18px 18px; }
+.hp-prompt { color: var(--hp-text-muted); margin-right: 0.4rem; font-family: var(--hp-font-mono); font-size: 12px; }
 
 
 /* Brand gradient button (404 primary) */
@@ -354,6 +347,7 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 }
 
 .cmdpalette-esc-btn {
+  margin-left: auto;
   font-size: 10px;
   color: var(--hp-text-label);
   padding: 2px 6px;
@@ -390,16 +384,16 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 /* ---------------------------------------------------------------------------
  * Terminal-window framing on the live surfaces — the 404 soul, applied
  * ---------------------------------------------------------------------------*/
-/* Orb hero rendered as a "hookprobe@edge ~ status" terminal window */
+/* Orb hero rendered as a labelled card */
 
 
-/* Pillar cards as compact terminal windows (hookprobe@edge ~ shield, …) */
+/* Pillar cards as compact labelled cards */
 
 
-/* Copilot as a literal hookprobe@edge $ terminal session */
+/* Copilot dialog */
 .cmdpalette-modal.hp-terminal {
   background: var(--hp-glass);
-  box-shadow: 0 24px 72px rgba(0,0,0,0.65), var(--hp-glow-cyan);
+  box-shadow: 0 24px 72px rgba(0,0,0,0.65);
 }
 .cmd-term-body { padding: 14px 16px; }
 .cmd-prompt-row {
@@ -410,7 +404,7 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 .cmd-prompt-row .hp-prompt { color: var(--hp-green); white-space: nowrap; }
 .cmd-term-input {
   flex: 1; background: none; border: none; outline: none;
-  color: var(--hp-cyan); font-family: var(--hp-font-mono); font-size: 14px;
+  color: var(--hp-text-primary); font-family: inherit; font-size: 16px;
 }
 .cmd-term-input::placeholder { color: var(--hp-text-muted); }
 .cmd-output {
@@ -681,93 +675,54 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 .net-zone-card { overflow: hidden; }
 .net-zone-card:hover { border-color: var(--hp-border-accent); }
 
-/* Terminal title bar on each zone panel (hookprobe@edge ~ family, …) */
+/* Zone panel header */
 .net-zone-bar {
   margin: -16px -16px 4px;
   border-bottom: 1px solid rgba(0, 180, 255, 0.1);
 }
-.net-zone-bar .hp-dot { width: 9px; height: 9px; }
 
 /* ---------------------------------------------------------------------------
  * Shield (Pillar 1 — DNS / ad-blocker)
  * ---------------------------------------------------------------------------*/
-.shield-grid { display: flex; flex-direction: column; gap: 14px; }
-.shield-panel { background: var(--hp-glass); }
-.shield-panel-body { padding: 18px 20px; }
-.shield-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.shield-grid { display: flex; flex-direction: column; gap: 20px; }
+.shield-panel { display: flex; flex-direction: column; gap: 10px; }
+.shield-two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
 @media (max-width: 760px) { .shield-two-col { grid-template-columns: 1fr; } }
-
-.shield-hero-stat { display: flex; flex-direction: column; gap: 4px; }
-.shield-big {
-  font-size: 48px; font-weight: 800; line-height: 1;
-  letter-spacing: -0.02em; font-family: var(--hp-font-mono);
-}
-.shield-verdict { font-size: 14px; color: var(--hp-text-secondary); }
-.shield-verdict-threat { color: var(--hp-red); }
-.shield-statline {
-  font-family: var(--hp-font-mono); font-size: 11.5px;
-  color: var(--hp-text-muted); margin-top: 4px;
-}
-
-.shield-levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 18px; }
+.shield-hero-stat { display: flex; flex-direction: column; gap: 6px; }
+.shield-statline { font-size: 14px; line-height: 1.5; color: var(--hp-text-secondary); }
+.shield-levels { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
 @media (max-width: 620px) { .shield-levels { grid-template-columns: 1fr; } }
-.shield-level-btn {
-  text-align: left; background: var(--hp-surface); border: 1px solid var(--hp-border);
-  border-radius: var(--hp-radius); padding: 10px 12px; cursor: pointer;
-  display: flex; flex-direction: column; gap: 3px; color: inherit;
-  transition: border-color .15s, background .15s;
-}
-.shield-level-btn:hover:not(:disabled) { border-color: var(--hp-border-accent); }
-.shield-level-btn:disabled { opacity: .55; cursor: default; }
-.shield-level-btn--active { border-color: var(--hp-cyan); background: rgba(0,180,255,0.07); box-shadow: var(--hp-glow-cyan); }
-.shield-level-name { font-size: 13px; font-weight: 700; color: var(--hp-text-primary); }
-.shield-level-btn--active .shield-level-name { color: var(--hp-cyan); }
-.shield-level-blurb { font-size: 11px; color: var(--hp-text-muted); line-height: 1.35; }
-
-.shield-cats { list-style: none; display: flex; flex-direction: column; gap: 9px; }
-.shield-cat-row { display: grid; grid-template-columns: 112px 1fr auto; align-items: center; gap: 10px; font-size: 12.5px; }
-.shield-cat-label { color: var(--hp-text-secondary); }
-.shield-cat-bar { height: 7px; background: rgba(255,255,255,0.05); border-radius: 999px; overflow: hidden; }
-.shield-cat-fill { display: block; height: 100%; background: var(--hp-gradient); border-radius: 999px; }
-.shield-cat-count { font-family: var(--hp-font-mono); color: var(--hp-text-primary); font-size: 12px; min-width: 44px; text-align: right; }
+.shield-level-btn { font: inherit; text-align: left; display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; min-height: 44px; background: transparent; color: var(--hp-text-primary); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); cursor: pointer; }
+.shield-level-btn:hover:not(:disabled) { border-color: var(--hp-text-secondary); }
+.shield-level-btn:disabled { cursor: default; }
+.shield-level-btn--active { background: var(--hp-text-primary); color: var(--hp-void); border-color: var(--hp-text-primary); }
+.shield-level-name { font-size: 14px; font-weight: 700; }
+.shield-level-blurb { font-size: 13px; line-height: 1.4; opacity: .85; }
+.shield-cats { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.shield-cat-row { display: grid; grid-template-columns: minmax(96px, 1fr) 2fr auto; align-items: center; gap: 12px; font-size: 14px; padding: 10px 0; border-bottom: 1px solid var(--hp-border); }
+.shield-cat-label { color: var(--hp-text-primary); overflow-wrap: anywhere; }
+.shield-cat-bar { height: 6px; background: rgba(255,255,255,0.06); border-radius: 999px; overflow: hidden; }
+.shield-cat-fill { display: block; height: 100%; background: var(--hp-text-secondary); border-radius: 999px; }
+.shield-cat-count { font-family: var(--hp-font-mono); color: var(--hp-text-secondary); font-size: 13px; min-width: 44px; text-align: right; }
 .shield-cat-row--threat .shield-cat-fill { background: var(--hp-red); }
 .shield-cat-row--threat .shield-cat-label { color: var(--hp-red); }
-
-.shield-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
-.shield-tab {
-  background: none; border: 1px solid var(--hp-border); border-radius: var(--hp-radius-sm);
-  padding: 5px 10px; font-size: 12px; color: var(--hp-text-muted); cursor: pointer;
-  display: inline-flex; align-items: center; gap: 6px; font-family: var(--hp-font);
-}
-.shield-tab--active { color: var(--hp-cyan); border-color: var(--hp-border-accent); background: rgba(0,180,255,0.06); }
-.shield-tab-count { font-family: var(--hp-font-mono); font-size: 10px; opacity: .8; }
-
-.shield-list { list-style: none; display: flex; flex-direction: column; gap: 4px; margin-bottom: 12px; max-height: 220px; overflow-y: auto; }
-.shield-list-row { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: var(--hp-radius-sm); background: rgba(255,255,255,0.02); }
-.shield-domain { flex: 1; font-family: var(--hp-font-mono); font-size: 12.5px; color: var(--hp-text-primary); }
-.shield-src { font-size: 10px; font-weight: 600; padding: 1px 7px; border-radius: 999px; white-space: nowrap; }
-.src--system { color: var(--hp-text-muted); background: rgba(90,90,106,0.15); }
-.src--user { color: var(--hp-cyan);   background: rgba(0,180,255,0.08); }
-.src--ml { color: var(--hp-purple); background: rgba(168,85,247,0.08); }
-.shield-remove { background: none; border: none; color: var(--hp-text-muted); font-size: 18px; line-height: 1; cursor: pointer; padding: 0 4px; transition: color .15s; }
-.shield-remove:hover:not(:disabled) { color: var(--hp-red); }
-.shield-remove:disabled { opacity: .4; cursor: default; }
-.shield-empty { font-size: 12.5px; color: var(--hp-text-muted); padding: 8px 0 14px; line-height: 1.45; }
-
-.shield-add-row { display: flex; align-items: center; gap: 8px; border-top: 1px solid var(--hp-border); padding-top: 12px; }
-.shield-add-row .hp-prompt { color: var(--hp-green); font-family: var(--hp-font-mono); }
-.shield-add-input {
-  flex: 1; background: var(--hp-surface); border: 1px solid var(--hp-border);
-  border-radius: var(--hp-radius-sm); padding: 6px 10px; color: var(--hp-cyan);
-  font-family: var(--hp-font-mono); font-size: 12.5px; outline: none;
-}
-.shield-add-input:focus { border-color: var(--hp-border-accent); }
-.shield-add-btn { background: var(--hp-gradient); color: var(--hp-void); border: none; border-radius: var(--hp-radius-sm); padding: 6px 14px; font-weight: 600; font-size: 12px; cursor: pointer; }
-.shield-add-btn:disabled { opacity: .5; cursor: default; }
-
-.shield-scope-note { font-size: 12px; color: var(--hp-text-muted); text-align: center; padding: 4px; }
-.shield-scope-note a { color: var(--hp-cyan); text-decoration: none; }
-.shield-scope-note a:hover { text-decoration: underline; }
+.shield-tabs { display: flex; gap: 8px; }
+.shield-tab { font: inherit; font-size: 14px; min-height: 40px; padding: 6px 14px; border-radius: 999px; border: 1px solid var(--hp-border); background: transparent; color: var(--hp-text-secondary); cursor: pointer; }
+.shield-tab--active { background: var(--hp-text-primary); color: var(--hp-void); border-color: var(--hp-text-primary); }
+.shield-tab-count { font-size: 12px; opacity: .8; }
+.shield-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+.shield-list-row { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 12px; padding: 10px 0; border-bottom: 1px solid var(--hp-border); font-size: 14px; color: var(--hp-text-secondary); }
+.shield-domain { flex: 1 1 160px; font-size: 14px; color: var(--hp-text-primary); overflow-wrap: anywhere; }
+.shield-src { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--hp-border); white-space: nowrap; color: var(--hp-text-secondary); }
+.shield-remove { font: inherit; font-size: 13px; background: transparent; border: 1px solid var(--hp-border); border-radius: var(--hp-radius-sm); color: var(--hp-text-primary); cursor: pointer; padding: 4px 10px; min-height: 36px; }
+.shield-remove:hover:not(:disabled) { border-color: var(--hp-text-secondary); }
+.shield-remove:disabled { opacity: .5; cursor: default; }
+.shield-empty { font-size: 14px; color: var(--hp-text-muted); padding: 6px 0; line-height: 1.5; }
+.shield-add-row { display: flex; align-items: center; gap: 8px; }
+.shield-add-input { flex: 1 1 auto; font: inherit; font-size: 14px; min-height: 44px; padding: 0 12px; background: transparent; color: var(--hp-text-primary); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); box-sizing: border-box; min-width: 0; }
+.shield-add-input:focus-visible { outline: 2px solid var(--hp-cyan); outline-offset: 1px; }
+.shield-scope-note { font-size: 13px; color: var(--hp-text-muted); }
+.shield-scope-note a { color: var(--hp-cyan); }
 
 /* ===========================================================================
  * Mission Control (§1) — dense command center: left rail + bento grid
