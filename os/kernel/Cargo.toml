@@ -27,3 +27,11 @@ opt-level = 3
 [profile.release]
 panic = "abort"
 lto = true
+
+# Image budget (heqk8.img <= 5,242,880 B, hboot + kernel payload): signature verification runs rarely (boot, OTA,
+# uploads), so the Ed25519 and SLH-DSA verifiers are built for size, not speed — at opt-level 3 ed25519-compact's
+# double_scalarmult_vartime alone was ~94 KB of unrolled code (2026-11-12, live apply pushed the image 768 B over).
+[profile.release.package.ed25519-compact]
+opt-level = "s"
+[profile.release.package.fips205]
+opt-level = "s"
