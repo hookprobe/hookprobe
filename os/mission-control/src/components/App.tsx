@@ -10,7 +10,7 @@
  */
 import { type Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import {
-  qsecbit, heartbeat, setHeartbeat, protectionStatus, lastChecked, security, shield, network, substrate,
+  qsecbit, heartbeat, setHeartbeat, protectionStatus, lastCheckedAt, security, shield, network, substrate,
 } from '../store/mock';
 import { startLiveUpdates } from '../store/live';
 import { setProView } from '../store/layer';
@@ -38,6 +38,16 @@ const App: Component = () => {
   /** Sample values only once we know no device is answering; until then a neutral placeholder. */
   const sampleMode = () => healthChecked() && !substrate();
   const waiting = () => !device() && !sampleMode();
+  // "Last checked" ages for real: it is the time the device last sent fresh data, not a fixed "just now".
+  const [nowMs, setNowMs] = createSignal(Date.now());
+  onMount(() => { const t = setInterval(() => setNowMs(Date.now()), 15_000); onCleanup(() => clearInterval(t)); });
+  const checked = () => {
+    if (sampleMode()) return 'sample data';
+    const at = lastCheckedAt();
+    if (!at) return 'not yet';
+    const s = Math.max(0, Math.round((nowMs() - at) / 1000));
+    return s < 60 ? 'just now' : s < 3600 ? `${Math.round(s / 60)} min ago` : `${Math.round(s / 3600)} h ago`;
+  };
 
   onMount(() => {
     const noMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
@@ -98,6 +108,7 @@ const App: Component = () => {
     <AppShell path="/">
       <main class="l0-main" aria-label="Home">
         <section class="home-hero">
+          <Show when={!waiting()} fallback={<div class="home-orb" role="img" aria-label="Checking the device"><div class="home-orb-num"><b>…</b><span>Checking</span></div></div>}>
           <div class="home-orb" role="img" aria-label={`QSecBit score ${qsecbit()} out of 100: ${VERDICT[protectionStatus()]}`}>
             <svg viewBox="0 0 200 200" aria-hidden="true">
               <circle cx="100" cy="100" r={R} fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8" />
@@ -107,11 +118,12 @@ const App: Component = () => {
             </svg>
             <div class="home-orb-num" aria-hidden="true"><b>{qsecbit()}</b><span>QSecBit</span></div>
           </div>
+          </Show>
           <div class={`home-verdict home-verdict--${protectionStatus()}`}>
-            <h1>{VERDICT[protectionStatus()]}</h1>
+            <h1>{waiting() ? 'Checking your network\u2026' : VERDICT[protectionStatus()]}</h1>
             <p class="home-lead">{lead()}</p>
             <p class="home-meta">
-              <span>Last checked {lastChecked()}</span>
+              <span>Last checked {checked()}</span>
               <svg width="120" height="20" viewBox="0 0 120 20" aria-hidden="true">
                 <polyline fill="none" stroke="var(--hp-green)" stroke-width="1.5"
                   points={heartbeat().map((v, i, a) => `${((i / Math.max(1, a.length - 1)) * 120).toFixed(1)},${(20 - ((Math.max(60, v) - 60) / 40) * 20).toFixed(1)}`).join(' ')} />
