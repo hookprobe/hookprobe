@@ -3938,9 +3938,11 @@ fn cm5_p10_probe() {
                             let bi = unsafe { &*(boot_abi::BOOTINFO_ADDR as *const boot_abi::BootInfo) };
                             let b = if bi.magic == boot_abi::BOOTINFO_MAGIC { abboot::trial::classify(bi.kernel_hash) } else { otaimg::Boot::Unknown };
                             kprint!(" [OTA] this boot: {:?} build={}{}\n", b, option_env!("HEQK_BUILD_ID").unwrap_or("-"),
-                                if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves and the WAN is usable (5 min limit, else reboot to the previous slot)" } else { "" });
+                                if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves AND the WAN is usable, both for 30 s (5 min limit, else reboot to the previous slot)" } else { "" });
                             (b, now())
                         };
+                        #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
+                        let (mut ota_gate, ota_halts0) = (otaimg::CommitGate::new(), cyw43::fw_halts());
                         // Audit §2.1 #9: key the IPv6 source identity hash per boot from the hardware TRNG (an
                         // unkeyed hash let a chosen /64 collide with another source's rate / scan state).
                         if let (Some(a), Some(b)) = (arch_aarch64::rng200::next_word_strict(), arch_aarch64::rng200::next_word_strict()) {
@@ -4001,20 +4003,25 @@ fn cm5_p10_probe() {
                                 }
                                 #[cfg(feature = "hboot")]
                                 if let otaimg::Boot::Trial(l) = ota_boot {
-                                    if up.usable() {
-                                        match abboot::trial::commit(l) {
+                                    // release plan WS2: commit only when the WAN is usable AND the AP serves (BSS up in AP
+                                    // mode, no Wi-Fi firmware halt since boot), both continuously for COMMIT_STABLE_S
+                                    let ap_serving = ap.up_ok && ap.ssid_ok && ap.get_ap == 1 && cyw43::fw_halts() == ota_halts0;
+                                    match ota_gate.step(now() / freq, ota_t0 / freq, up.usable(), ap_serving) {
+                                        otaimg::Gate::Commit => match abboot::trial::commit(l) {
                                             Ok(n) => {
-                                                kprint!(" [OTA] COMMITTED slot {} ({} boot-config writes) — healthy trial: AP serving, WAN usable; the next cold boot runs it\n", l as char, n);
+                                                kprint!(" [OTA] COMMITTED slot {} ({} boot-config writes) — healthy trial: AP serving + WAN usable for {} s; the next cold boot runs it\n", l as char, n, otaimg::COMMIT_STABLE_S);
                                                 ota_boot = otaimg::Boot::Cold;
                                             }
                                             Err(e) => {
                                                 kprint!(" [OTA] commit failed: {:?} — rebooting to the previous slot\n", e);
                                                 unsafe { core::arch::asm!("hvc #0") };
                                             }
+                                        },
+                                        otaimg::Gate::Revert => {
+                                            kprint!(" [OTA] trial not healthy within {} s (WAN usable={} AP serving={}) — rebooting to the previous slot\n", otaimg::COMMIT_LIMIT_S, up.usable(), ap_serving);
+                                            unsafe { core::arch::asm!("hvc #0") };
                                         }
-                                    } else if now().wrapping_sub(ota_t0) > 300 * freq {
-                                        kprint!(" [OTA] trial not healthy within 5 min (WAN never usable) — rebooting to the previous slot\n");
-                                        unsafe { core::arch::asm!("hvc #0") };
+                                        otaimg::Gate::Wait => {}
                                     }
                                 }
                                 // sealed-config step 8: the live executors for a queued change / a live revert (after the HTTP
@@ -7391,6 +7398,8 @@ pub extern "C" fn kmain() -> ! {
     // B2: the A/B commit survives a cold boot (two-boot, factory-layout disk; SKIPs otherwise).
     #[cfg(all(feature = "p15-write", feature = "netsvc"))]
     otaimg::selftest();
+    #[cfg(all(feature = "p15-write", feature = "netsvc"))]
+    let _ = otaimg::gate_selftest(); // release plan WS2: the OTA commit gate (WAN usable AND AP serving, stable)
     #[cfg(feature = "p15-write")]
     abboot::abcommit_selftest();
 
