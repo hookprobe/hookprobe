@@ -910,6 +910,83 @@ pub fn rec(kind: Kind, op: u8, target: &[u8], value: u8, reason: &[u8]) -> Recor
     r
 }
 
+/// `[P-journal-sweep]` (release plan A9): a deterministic corruption sweep over the REAL replay — the owner journal
+/// is the device's on-disk rule state, read back at every boot from a medium an attacker with the card can edit. 3000
+/// mutated copies of a 5-record journal (random bytes, zeroed / swapped / duplicated sectors, both halves): replay
+/// never panics, never yields more records than were written, and whenever it reports the full chain undamaged the
+/// rule state is exactly the original (the chained MAC admits no edit).
+#[cfg_attr(feature = "cm5", allow(dead_code))]
+pub fn sweep_selftest() -> bool {
+    let srk = [0x5au8; 32];
+    let mut d = MemDisk::new();
+    clear();
+    let mut j = Journal::new(0, 8, &srk);
+    let mut built = true;
+    for (i, t) in [&b"a.example"[..], b"b.example", b"c.example", b"d.example", b"e.example"].iter().enumerate() {
+        let k = if i % 2 == 0 { Kind::ShieldBlock } else { Kind::ShieldAllow };
+        built &= j.append(&mut d, rec(k, OP_SET, t, 1, b"sweep")).is_ok();
+    }
+    built &= rule_count() == 5;
+    let mut x: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mut rnd = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let (mut iters, mut bad, mut full, mut refused) = (0u32, 0u32, 0u32, 0u32);
+    for _ in 0..3000 {
+        let mut t = MemDisk { s: d.s, writes: 0, fail_at: u32::MAX };
+        let edits = 1 + (rnd() % 4) as usize;
+        for _ in 0..edits {
+            let sec = (rnd() % 8) as usize;
+            match rnd() % 5 {
+                0 => t.s[sec] = [0; 512],
+                1 => {
+                    let other = (rnd() % 8) as usize;
+                    t.s[sec] = t.s[other];
+                }
+                2 => {
+                    let off = (rnd() % 512) as usize;
+                    t.s[sec][off] = rnd() as u8;
+                }
+                3 => {
+                    let off = (rnd() % 508) as usize;
+                    t.s[sec][off..off + 4].copy_from_slice(&(rnd() as u32).to_le_bytes());
+                }
+                _ => {
+                    let off = (rnd() % 512) as usize;
+                    t.s[sec][off] ^= 1 << (rnd() % 8);
+                }
+            }
+        }
+        clear();
+        let r = Journal::new(0, 8, &srk).replay(&t);
+        iters += 1;
+        if r.records > 5 || rule_count() > 5 {
+            bad += 1;
+        }
+        if r.records == 5 && !r.damaged {
+            full += 1;
+            // the chain verified end to end: the state must be exactly the original one
+            let same = rule_count() == 5 && shield_blocked(b"a.example") && shield_allowed(b"b.example") && shield_blocked(b"c.example")
+                && shield_allowed(b"d.example") && shield_blocked(b"e.example");
+            if !same {
+                bad += 1;
+            }
+        } else {
+            refused += 1;
+        }
+    }
+    clear();
+    let pass = built && iters == 3000 && bad == 0 && refused > 0;
+    arch_aarch64::_print(format_args!(
+        " [P-journal-sweep] {} — owner-journal replay under {} random corruptions (bytes, zeroed / swapped / duplicated sectors, both halves): no panic, never more records than written, a fully verified chain always equals the original state; violations={} (full chains {} / refused or truncated {})\n",
+        if pass { "PASS" } else { "FAIL" }, iters, bad, full, refused
+    ));
+    pass
+}
+
 pub fn selftest() -> bool {
     use crate::devpolicy::{self, Pol};
     let srk = [0x42u8; 32];
