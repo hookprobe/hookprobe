@@ -89,3 +89,9 @@ name = "sae_wire"
 path = "fuzz_targets/sae_wire.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "rsn_assoc"
+path = "fuzz_targets/rsn_assoc.rs"
+test = false
+doc = false
