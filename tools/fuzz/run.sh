@@ -28,9 +28,9 @@ if cargo +nightly fuzz run --fuzz-dir . payload_header corpus/payload_header -- 
 else
   echo "  FAIL payload_header (crash — reproducer in tools/fuzz/heqk-boot-abi/artifacts/payload_header/)"; rc=1
 fi
-# the kernel crate's network-facing parsers (same source files, #[path]) — SEC-02
+# the kernel crate's network-facing parsers (same source files, #[path]) — SEC-02; owner_journal = A9 (journal replay)
 cd ../heqk-kernel || exit 2
-for t in http_req dns_wire tls_hello frame_meta cfg_bundle; do
+for t in http_req dns_wire tls_hello frame_meta cfg_bundle owner_journal; do
   mkdir -p corpus/$t
   if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=4096 > "/tmp/heqk-fuzz-$t.log" 2>&1; then
     echo "  ok   $t: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-$t.log | tail -1)"
