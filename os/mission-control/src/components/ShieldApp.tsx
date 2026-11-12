@@ -16,7 +16,7 @@
  *   - Allow & Block lists they fully control — add/remove with a plan-as-diff.
  *
  * Every change opens the plan-as-diff strip before applying (app-wide mandate).
- * Terminal soul: each panel is a hookprobe@edge ~ <ctx> window.
+ * Layout follows the wireframe board "Shield": KPI cards, then labelled cards with plain rows.
  */
 
 import {
@@ -43,17 +43,12 @@ function sourceClass(s: ListEntry['source']): string {
   return s === 'system' ? 'src--system' : s === 'ml-learned' ? 'src--ml' : 'src--user';
 }
 
-// ── Terminal panel frame ──────────────────────────────────────────────────────
+// ── Card with a label (wireframe "Shield") ────────────────────────────────────
 
-const TermPanel: Component<{ ctx: string; class?: string; children: any }> = (props) => (
-  <section class={`hp-terminal shield-panel${props.class ? ` ${props.class}` : ''}`}>
-    <div class="hp-terminal-bar">
-      <span class="hp-dot red" aria-hidden="true" />
-      <span class="hp-dot yellow" aria-hidden="true" />
-      <span class="hp-dot green" aria-hidden="true" />
-      <span class="hp-terminal-title">hookprobe@edge ~ {props.ctx}</span>
-    </div>
-    <div class="hp-terminal-body shield-panel-body">{props.children}</div>
+const Panel: Component<{ title: string; children: any }> = (props) => (
+  <section class="pcard shield-panel" aria-label={props.title}>
+    <p class="l0-label">{props.title}</p>
+    {props.children}
   </section>
 );
 
@@ -120,7 +115,6 @@ const ListBlock: Component<ListPanelProps> = (props) => {
               <li class="shield-list-row">
                 <span class="shield-domain">{e.domain}</span>
                 <span class={`shield-src ${sourceClass(e.source)}`} title={`Source: ${SOURCE_LABELS[e.source]}`}>
-                  {e.source === 'system' && <span aria-hidden="true">🔒 </span>}
                   {SOURCE_LABELS[e.source]}
                 </span>
                 <Show when={e.source !== 'system'}>
@@ -137,11 +131,10 @@ const ListBlock: Component<ListPanelProps> = (props) => {
         </ul>
       </Show>
       <div class="shield-add-row">
-        <span class="hp-prompt" aria-hidden="true">$</span>
         <input
           class="shield-add-input"
           type="text"
-          placeholder="domain.com"
+          placeholder="example.com"
           value={draft()}
           onInput={(e) => setDraft(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
@@ -150,7 +143,7 @@ const ListBlock: Component<ListPanelProps> = (props) => {
           autocomplete="off"
           spellcheck={false}
         />
-        <button class="shield-add-btn" onClick={submit} disabled={props.disabled() || !draft().trim()}>Add</button>
+        <button class="hp-btn" onClick={submit} disabled={props.disabled() || !draft().trim()}>Add</button>
       </div>
     </>
   );
@@ -178,16 +171,9 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
         <div class="l0-card"><p class="l0-label">Hidden trackers caught</p><p class="l0-card-kpi">{(c()['blocked-cname'] ?? 0).toLocaleString()}</p></div>
         <div class="l0-card"><p class="l0-label">Share of lookups blocked</p><p class="l0-card-kpi">{pct(blocked(), queries())}%</p></div>
       </div>
-      <TermPanel ctx="shield" class="shield-hero">
-        <div class="shield-hero-top">
-          <div class="shield-hero-stat">
-            <div class="shield-big hp-text-gradient">{blocked().toLocaleString()}</div>
-            <div class="shield-verdict">
-              blocked of {queries().toLocaleString()} DNS queries since boot ({pct(blocked(), queries())}%)
-              <Show when={(c()['blocked-cname'] ?? 0) > 0}>
-                <span class="shield-verdict-threat"> · {c()['blocked-cname']} hidden trackers caught behind CNAMEs</span>
-              </Show>
-            </div>
+      <Panel title="Lists and policy">
+        <div class="shield-hero-stat">
+            <div class="shield-statline">{blocked().toLocaleString()} blocked of {queries().toLocaleString()} lookups since start-up.</div>
             <div class="shield-statline">
               {l().blocked_domains.toLocaleString()} blocked + {l().allowed_domains.toLocaleString()} allowed domains
               {' · '}lists {l().block_file === 'loaded' ? (l().signed ? `signed by your operator key (generation ${l().generation})` : 'unsigned (standalone)') : l().block_file === 'refused' ? `REFUSED (${l().refused}) — not loaded` : 'none loaded'}
@@ -197,19 +183,18 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
               Protection settings (block / allow lists, encrypted-DNS and Private Relay policy) come from the files signed with your
               operator key — change them by re-signing. For a temporary exception use "Allow 1 h" on a blocked query below; it expires by itself.
             </div>
-          </div>
         </div>
         <Show when={bypassers().length > 0}>
-          <div class="shield-scope-note" role="status">
-            ⚠ {bypassers().length} device{bypassers().length > 1 ? 's' : ''} tried to resolve outside Shield:{' '}
+          <div class="plan-diff-warn" role="status">
+            {bypassers().length} device{bypassers().length > 1 ? 's' : ''} tried to resolve outside Shield:{' '}
             {bypassers().map((x) => `${x.ip} (${VERDICT_LABEL[x.last_bypass ?? ''] ?? x.last_bypass})`).join(', ')}.
             Shield answers these so the device falls back to filtered DNS; a device that insists on encrypted DNS is not filtered.
           </div>
         </Show>
-      </TermPanel>
+      </Panel>
 
       <div class="shield-two-col">
-        <TermPanel ctx="top-blocked">
+        <Panel title="Top blocked">
           <Show when={props.d.top_blocked.length > 0} fallback={<div class="shield-empty">Nothing blocked yet.</div>}>
             <ul class="shield-cats">
               <For each={props.d.top_blocked.slice(0, 12)}>
@@ -225,8 +210,8 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
               </For>
             </ul>
           </Show>
-        </TermPanel>
-        <TermPanel ctx="devices">
+        </Panel>
+        <Panel title="Devices">
           <Show when={props.d.clients.length > 0} fallback={<div class="shield-empty">No DNS queries yet.</div>}>
             <ul class="shield-list">
               <For each={[...props.d.clients].sort((a, b) => b.queries - a.queries)}>
@@ -243,10 +228,10 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
               </For>
             </ul>
           </Show>
-        </TermPanel>
+        </Panel>
       </div>
 
-      <TermPanel ctx="query-log">
+      <Panel title="Recent lookups">
         <Show when={props.d.recent.length > 0} fallback={<div class="shield-empty">The query log is empty.</div>}>
           <ul class="shield-list" aria-label="Recent DNS queries, newest first">
             <For each={props.d.recent}>
@@ -263,10 +248,10 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
             </For>
           </ul>
         </Show>
-      </TermPanel>
+      </Panel>
 
       <Show when={msg()}><div class="shield-scope-note" role="status">{msg()}</div></Show>
-      <TermPanel ctx="actions">
+      <Panel title="Temporary actions">
         <Show when={(actionsView()?.active.length ?? 0) > 0} fallback={<div class="shield-empty">No temporary actions in force. Every action expires on its own; a reboot clears them all.</div>}>
           <ul class="shield-list">
             <For each={actionsView()!.active}>
@@ -287,7 +272,7 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
             </For>
           </ul>
         </Show>
-      </TermPanel>
+      </Panel>
 
       <div class="shield-scope-note">
         Lists are set when the device is flashed (BLOCK.TXT / ALLOW.TXT, signed with your operator key). The query log stays on
@@ -356,23 +341,13 @@ const ShieldApp: Component = () => {
         <Show when={dnsState() === 'absent' && !substrate()} fallback={<div class="shield-empty" role="status">{dnsState() === 'absent' ? 'This device build does not serve Shield (no /api/dns), so there is nothing to show here.' : ''}{dnsFailures() >= 3 ? 'Still waiting for the device — retrying every 10 s…' : 'Loading Shield data from the device…'}</div>}>
         <div class="shield-grid">
 
-          {/* Hero — blocked today + protection level */}
-          <TermPanel ctx="shield" class="shield-hero">
-            <div class="shield-hero-top">
-              <div class="shield-hero-stat">
-                <div class="shield-big hp-text-gradient">{SHIELD_TOTALS.blockedToday.toLocaleString()}</div>
-                <div class="shield-verdict">
-                  ads &amp; trackers blocked today
-                  <Show when={malwareTotal() > 0}>
-                    <span class="shield-verdict-threat"> · {malwareTotal()} malware/miner attempts stopped</span>
-                  </Show>
-                </div>
-                <div class="shield-statline">
-                  {SHIELD_TOTALS.queriesToday.toLocaleString()} queries · {(SHIELD_TOTALS.blockedToday / SHIELD_TOTALS.queriesToday * 100).toFixed(1)}% blocked · {SHIELD_TOTALS.avgInferenceMs}ms avg decision
-                </div>
-              </div>
-            </div>
-
+          {/* KPI cards, then the protection level (wireframe "Shield") */}
+          <div class="l0-grid-3" aria-label="Shield at a glance">
+            <div class="l0-card"><p class="l0-label">Ads and trackers today</p><p class="l0-card-kpi">{SHIELD_TOTALS.blockedToday.toLocaleString()}</p></div>
+            <div class="l0-card"><p class="l0-label">Malware and miners</p><p class="l0-card-kpi">{malwareTotal().toLocaleString()}</p></div>
+            <div class="l0-card"><p class="l0-label">Share of lookups blocked</p><p class="l0-card-kpi">{(SHIELD_TOTALS.blockedToday / SHIELD_TOTALS.queriesToday * 100).toFixed(1)}%</p></div>
+          </div>
+          <Panel title="Protection level">
             <div class="shield-levels" role="group" aria-label="Protection level">
               <For each={LEVELS}>
                 {(l) => (
@@ -388,12 +363,12 @@ const ShieldApp: Component = () => {
                 )}
               </For>
             </div>
-          </TermPanel>
+          </Panel>
 
           <div class="shield-two-col">
 
             {/* Category breakdown */}
-            <TermPanel ctx="categories">
+            <Panel title="Blocked today, by kind">
               <ul class="shield-cats">
                 <For each={categories}>
                   {(c) => (
@@ -407,10 +382,10 @@ const ShieldApp: Component = () => {
                   )}
                 </For>
               </ul>
-            </TermPanel>
+            </Panel>
 
             {/* Allow / Block lists */}
-            <TermPanel ctx="lists">
+            <Panel title="Your lists">
               <div class="shield-tabs" role="tablist">
                 <button
                   class={`shield-tab${tab() === 'block' ? ' shield-tab--active' : ''}`}
@@ -442,7 +417,7 @@ const ShieldApp: Component = () => {
                   onRemove={(d) => enqueue(buildShieldChange('remove-allow', { domain: d }))}
                 />
               </Show>
-            </TermPanel>
+            </Panel>
           </div>
 
           {/* Scope note */}

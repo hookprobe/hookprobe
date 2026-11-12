@@ -29,31 +29,35 @@ check(new URL(page.url()).pathname === '/', 'signing in with the owner key lands
 await page.goto(`${base}/detect/feed`, { waitUntil: 'load' });
 const c2 = page.locator('.det-title', { hasText: 'Known C2 port 4444 (DROP, framedrop)' }).first();
 // isVisible() does NOT wait; waitFor does (the rows arrive after /api/detections answers).
-check(await c2.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false), 'Detect feed shows the heqk C2-4444 detection (rule msg + wire action + class)');
+// Over HTTPS on a TCG-emulated QEMU (CI runners) a page's fan-out waits for the device's 8 TLS slots (the SSE
+// stream holds one), so /api/detections can answer after 20 s: CI 2026-11-12 logged it after the Shield page's
+// calls. Allow 60 s there; plain HTTP keeps 20 s.
+const ROWS_MS = spki ? 60000 : 20000;
+check(await c2.waitFor({ state: 'visible', timeout: ROWS_MS }).then(() => true).catch(() => false), 'Detect feed shows the heqk C2-4444 detection (rule msg + wire action + class)');
 check(!(await page.getByText('Live detections unavailable').isVisible().catch(() => false)), 'Detect feed is LIVE (no "unavailable" fallback)');
 await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-detect.png`, fullPage: true });
 
 // Home: the "Needs you" queue counts the device's real open incidents (mock says "Nothing to approve").
 await page.goto(`${base}/`, { waitUntil: 'load' });
 const needs = page.locator('.needs-msg');
-await needs.waitFor({ timeout: 15000 });
+await needs.waitFor({ timeout: ROWS_MS });
 // the live fetch replaces the mock text once /api/incidents answers
-await page.waitForFunction(() => /need your review/.test(document.querySelector('.needs-msg')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+await page.waitForFunction(() => /need your review/.test(document.querySelector('.needs-msg')?.textContent ?? ''), null, { timeout: ROWS_MS }).catch(() => {});
 const txt = (await needs.textContent())?.trim() ?? '';
 check(/^\d+ incidents? need your review\.$/.test(txt), `Home "Needs you" is live: "${txt}"`);
 await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-home.png`, fullPage: true });
 
 // Shield v2 (ADR 0052): the DNS page renders the device's live data, not the sample layout.
 await page.goto(`${base}/network/dns`, { waitUntil: 'load' });
-const live = page.getByText(/DNS queries since boot/);
-check(await live.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false), 'Shield page renders LIVE device data (/api/dns)');
+const live = page.getByText(/DNS queries since boot|lookups since start-up/).first();
+check(await live.waitFor({ state: 'visible', timeout: ROWS_MS }).then(() => true).catch(() => false), 'Shield page renders LIVE device data (/api/dns)');
 check(!(await page.getByText('Sample data').first().isVisible().catch(() => false)), 'Shield page shows no "Sample data" notice');
 await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-shield.png`, fullPage: true });
 
 // My Network (parity G13): the device inventory, grouped by the signed DEVICES.TXT policy — not the sample map.
 await page.goto(`${base}/network/map`, { waitUntil: 'load' });
 const netLive = page.getByText(/grouped by the policy in your signed DEVICES\.TXT/);
-check(await netLive.waitFor({ state: 'visible', timeout: 20000 }).then(() => true).catch(() => false), 'My Network renders the LIVE device inventory (/api/devices)');
+check(await netLive.waitFor({ state: 'visible', timeout: ROWS_MS }).then(() => true).catch(() => false), 'My Network renders the LIVE device inventory (/api/devices)');
 check(!(await page.getByText('Sample data').first().isVisible().catch(() => false)), 'My Network shows no "Sample data" notice');
 await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-network.png`, fullPage: true });
 
