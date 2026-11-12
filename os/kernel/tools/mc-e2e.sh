@@ -389,8 +389,47 @@ echo "$KA" | grep -qi "Re-using existing connection" && ok "keep-alive: two http
 head -c 3000 /dev/urandom | timeout 10 nc -q 2 "$HOST" "$HTTPS" >/dev/null 2>&1
 HS2=$(curl "${C[@]}" "$BS/api/health")
 [ "$(echo "$HS2" | jget "d['substrate']")" = heqk ] && ok "garbage on :443 fails that connection only — HTTPS keeps serving" || bad "https after garbage: $HS2"
+# Every slot held by an idle keep-alive session: a 9th client is SERVED (the least recently used idle session gets
+# close_notify + FIN for it), never refused — a RST there failed a browser's subresource (CI g3 2026-11-12).
+SLOTX=$(python3 -I - "$HTTPS" "$TLSD/ca/ca.pem" <<'PY' 2>&1
+import socket, ssl, sys, time
+ctx = ssl.create_default_context(cafile=sys.argv[2])
+def get():
+    t = ctx.wrap_socket(socket.create_connection(("127.0.0.1", int(sys.argv[1])), 20), server_hostname="heqk.local")
+    t.settimeout(20)
+    t.sendall(b"GET /api/health HTTP/1.1\r\nHost: heqk.local\r\n\r\n")
+    d = b""
+    while b"\r\n\r\n" not in d:
+        d += t.recv(4096)
+    h, b = d.split(b"\r\n\r\n", 1)
+    n = int([l.split(b":")[1] for l in h.split(b"\r\n") if l.lower().startswith(b"content-length")][0])
+    while len(b) < n:
+        b += t.recv(4096)
+    assert h.startswith(b"HTTP/1.1 200") and b"keep-alive" in h.lower(), h[:80]
+    return t
+idle = [get() for _ in range(8)]
+time.sleep(1.5)
+t0 = time.time(); get(); dt = time.time() - t0
+eof = 0
+for t in idle:
+    t.settimeout(0.5)
+    try:
+        eof += t.recv(1) == b""  # close_notify + FIN: a clean end, not a reset
+    except socket.timeout:
+        pass
+print(f"ninth={dt:.2f}s idle_closed_cleanly={eof}")
+PY
+)
+grep -Eq "^ninth=[0-4]\.[0-9]+s idle_closed_cleanly=[1-8]$" <<<"$SLOTX" && ok "all 8 HTTPS slots idle on keep-alive: a 9th client is served, not refused — an idle session ended cleanly for it (close_notify + FIN): $SLOTX" || bad "9th https client with every slot idle: $SLOTX"
 if [ "$BROWSER" = ran ]; then
   SPKI=$(openssl x509 -in <(dd if="$TLSD/MCTLS.CRT" bs=1 skip=12 count=$(python3 -I -c "import struct,sys;print(struct.unpack('<H',open(sys.argv[1],'rb').read()[10:12])[0])" "$TLSD/MCTLS.CRT") status=none) -inform DER -pubkey -noout | openssl pkey -pubin -outform DER | openssl dgst -sha256 -binary | base64)
+  # Regression (CI g3 2026-11-12): right after the stress above, signed-in browsers go Home (SSE open) -> Detect
+  # and every Detect API call must answer within 5 s, 6 times over. The device used to answer a SYN with RST
+  # while its 8 HTTPS slots were still draining Home's cancelled connections; Chromium failed that module
+  # script and the Detect page never made its API calls (60 s "no response"). tools/mc-e2e-tls-soak.sh loops it.
+  TSO=$(cd tools/mc-e2e && REPS=3 INNER=2 STALL_MS=5000 MC_E2E_SPKI="$SPKI" node tls-stall.mjs "https://heqk.local:$HTTPS" "$TOKEN" 2>&1)
+  grep -a "rep \|requests failed" <<<"$TSO" | sed 's/^/  /'
+  grep -aq '^TLS-STALL .* stalls=0 ' <<<"$TSO" && ok "after the TLS stress a signed-in browser's Home -> Detect API calls answer within 5 s, every time: $(grep -a '^TLS-STALL' <<<"$TSO")" || bad "https keep-alive stall: $(grep -a '^TLS-STALL' <<<"$TSO" || tail -3 <<<"$TSO")"
   (cd tools/mc-e2e && MC_E2E_SHOTS="$RUN" MC_E2E_SPKI="$SPKI" node ui-check.mjs "https://heqk.local:$HTTPS" "$TOKEN") && ok "browser: the UI over https (pinned to the device key) rendered live heqk data" || bad "browser over https failed"
 fi
 sleep 11
