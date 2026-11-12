@@ -54,8 +54,10 @@ bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b$G.bin" "$T/b$G.sig" "$@" >/
 B0=$(boots)
 # policies without management bindings (a change of them alone auto-commits)
 printf 'HQPOL1\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 0.0.0.0/0 via wan\n' > "$T/pa.txt"
-dns9() { pi "timeout 5 dig +short +time=2 +tries=1 -b \$(ip -4 -o addr show wlan1 | awk '{print \$4}' | cut -d/ -f1) @9.9.9.9 example.com" | grep -qE '^[0-9.]+$'; }
-dns9; chk $((1 - $?)) "A0 per-file policy-bench in force: DNS to 9.9.9.9 is DROPPED"
+dns9() { local r; r=$(pi 'a=$(ip -4 -o addr | awk '"'"'$4 ~ /^10\.99\.0\./ {split($4, x, "/"); print x[1]; exit}'"'"'); [ -n "$a" ] || { echo NOADDR; exit 0; }; timeout 5 dig +short +time=2 +tries=1 -b "$a" @9.9.9.9 example.com' 2>/dev/null)
+  [ "$r" = NOADDR ] && { echo "     (the Pi has no AP address 10.99.0.x — DNS probe not run)"; return 2; }   # 2: neither "answers" nor "dropped"
+  grep -qE '^[0-9.]+$' <<<"$r"; }
+dns9; r=$?; chk $([ $r = 1 ] && echo 0 || echo 1) "A0 per-file policy-bench in force: DNS to 9.9.9.9 is DROPPED"
 # --- A: a policy-only bundle applies LIVE and auto-commits (no management lines) ---
 bundle --policy "$T/pa.txt"
 grep -q '"applies": "live"' "$T/r$G" && grep -q '"reboot_required": false' "$T/r$G" && grep -q '"needs_confirm": false' "$T/r$G"
@@ -69,15 +71,15 @@ printf 'HQWAN1\nmode=static\nip=10.100.0.200/24\ngw=10.100.0.1\ndns=10.100.0.1\n
 bundle --wan "$T/ws.txt" --policy "$T/pa.txt"; GS=$G
 grep -q '"applies": "live"' "$T/r$G" && grep -q '"needs_confirm": true' "$T/r$G"; chk $? "B1 static WAN bundle gen $G: live, waits for the owner's confirm"
 waitlog "\[WAN\] live apply: mode STATIC" 30; chk $? "B2 WAN re-brought up live as STATIC"
-sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface wlan1 http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "B3 LAN client reaches the WAN side through the new static WAN"
+sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "B3 LAN client reaches the WAN side through the new static WAN"
 rule7; chk $? "B4 rule 7 during the trial"
-$UP --config-confirm "live check B" 2>\&1 | grep -qE \'"committed": ?true\'; chk $? "B5 owner confirm commits gen $G"
+$UP --config-confirm "live check B" 2>&1 | grep -qE '"committed": ?true'; chk $? "B5 owner confirm commits gen $G"
 # --- C: a static WAN whose gateway never answers -> LIVE revert to gen B after the 120-s window ---
 sed 's/^gw=.*/gw=10.100.0.254/' "$T/ws.txt" > "$T/wd.txt"
 bundle --wan "$T/wd.txt" --policy "$T/pa.txt"
 grep -q '"needs_confirm": false' "$T/r$G"; chk $? "C1 dead-gateway bundle gen $G: live, auto window (management unchanged)"
 waitlog "reverted LIVE to generation $GS" 100; chk $? "C2 not usable within the window -> reverted LIVE to gen $GS"
-sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface wlan1 http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "C3 the last-known-good WAN works again"
+sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "C3 the last-known-good WAN works again"
 [ "$(boots)" = "$B0" ]; chk $? "C4 no reboot so far (boot banners unchanged: $B0)"
 rule7; chk $? "C5 rule 7 after the live revert"
 # --- D (optional): a PPPoE bundle with a wrong password reverts at once (Q5), not after the window ---
