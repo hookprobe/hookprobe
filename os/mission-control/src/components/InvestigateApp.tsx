@@ -25,7 +25,8 @@
 import { type Component, For, Show, createSignal, createEffect, onMount } from 'solid-js';
 import LiveState from './LiveState';
 import { promptAndRun } from '../store/actions';
-import { setCopilotOpen } from '../store/mock';
+import { setCopilotOpen, substrate } from '../store/mock';
+import { healthChecked } from '../store/health';
 import type { Tone } from '../store/missionMock';
 import { formatTime, formatBytes, mitreName, mitreLabel, mitreTactic, type ProcessTreeNode } from '../store/api';
 import AppShell from './AppShell';
@@ -64,7 +65,7 @@ function nodeTone(type: string): Tone {
 const Panel: Component<{ ctx: string; title: string; children: any }> = (p) => (
   <section class="hp-terminal inv-panel">
     <div class="hp-terminal-bar">
-      <span class="mc-panel-title">{p.title}</span>
+      <span class="l0-label">{p.title}</span>
     </div>
     <div class="hp-terminal-body inv-panel-body">{p.children}</div>
   </section>
@@ -137,29 +138,34 @@ const InvestigateApp: Component = () => {
     void exploreEvidenceNode(graphInput() || selectedId() || '');
   }
 
+  const sample = () => healthChecked() && !substrate();
   return (
     <AppShell path="/investigate/queue">
 
       <main class="dash-main">
-        <header class="mc-header">
+        <div class="pro-head">
           <div>
-            <h1 class="mc-h1">INVESTIGATE</h1>
-            <div class="mc-sub">Every alert becomes an explained story · AEGIS</div>
+            <h1 class="pro-title">Investigate</h1>
+            <p class="pro-sub">Every alert becomes an explained story{sample() ? ' · sample data' : ''}</p>
           </div>
-          <div class="mc-header-actions">
-            <button class="mc-chip" onClick={() => setCopilotOpen(true)}>⌘ Ask AEGIS</button>
-            <span class="mc-mode-badge">● cloud-linked</span>
-          </div>
-        </header>
+          <button class="hp-btn" onClick={() => setCopilotOpen(true)}>Ask Copilot</button>
+        </div>
 
         <div class="inv-layout">
 
           {/* Incident queue — real GET /api/incidents + /api/stream deltas */}
           <aside class="inv-queue hp-terminal">
             <div class="hp-terminal-bar">
-              <span class="mc-panel-title">INCIDENT QUEUE</span>
+              <span class="l0-label">Incident queue</span>
             </div>
             <div class="inv-queue-list">
+              <Show when={!sample()} fallback={
+                <a class="inv-q-item" href="/investigate/incident" style={{ 'text-decoration': 'none', color: 'inherit', display: 'block' }}>
+                  <div class="inv-q-top"><span class="inv-pri pri--high">HIGH</span><span class="inv-q-time">13:05</span></div>
+                  <div class="inv-q-title">Kitchen camera contacted a malware host</div>
+                  <div class="inv-q-meta">10.66.0.42 · open · sample</div>
+                </a>
+              }>
               <Show when={queueStatus() !== 'loading'} fallback={<LiveState kind="loading" label="Loading incidents…" />}>
                 <Show when={queueStatus() !== 'error'} fallback={<LiveState kind="error" label="Incident queue unavailable" reason={queueError() ?? undefined} />}>
                   <Show when={incidents().length > 0} fallback={<LiveState kind="empty" label="No incidents yet" reason="Nothing has correlated into an incident on this device yet." />}>
@@ -181,10 +187,16 @@ const InvestigateApp: Component = () => {
                   </Show>
                 </Show>
               </Show>
+              </Show>
             </div>
           </aside>
 
           {/* Incident detail — real GET /api/incidents/:id */}
+          <Show when={!sample()} fallback={
+            <div class="inv-detail"><section class="pcard"><p class="l0-label">Sample data</p>
+              <p class="l0-card-sub">No device is answering, so the queue shows one sample incident. Open it to see how an incident reads as a story: what happened, why, the evidence and what to do.</p>
+              <div class="l0-card-foot"><a class="hp-btn" href="/investigate/incident">Open the sample incident</a></div></section></div>
+          }>
           <Show
             when={detailStatus() !== 'loading'}
             fallback={<div class="inv-detail"><LiveState kind="loading" label="Loading incident story…" /></div>}
@@ -333,7 +345,7 @@ const InvestigateApp: Component = () => {
                     {/* Proposed plan — no BYO-LLM planner has run (see Model above); honest, not fabricated */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="mc-panel-title">PROPOSED PLAN</span>
+                        <span class="l0-label">Proposed plan</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <LiveState
@@ -348,7 +360,7 @@ const InvestigateApp: Component = () => {
                         for whichever report was generated FOR this incident (if any). */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="mc-panel-title">EXECUTIVE REPORT</span>
+                        <span class="l0-label">Executive report</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <Show when={reportDetailStatus() !== 'loading'} fallback={<LiveState kind="loading" label="Loading report…" />}>
@@ -410,7 +422,7 @@ const InvestigateApp: Component = () => {
                     {/* Reports — GET /api/reports, the full list across every incident (browse any report). */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="mc-panel-title">ALL REPORTS</span>
+                        <span class="l0-label">All reports</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <Show when={reportsStatus() !== 'loading'} fallback={<LiveState kind="loading" label="Loading reports…" />}>
@@ -442,7 +454,7 @@ const InvestigateApp: Component = () => {
                         "everything clickable" — drill into ANY node id from anywhere in the UI. */}
                     <section class="hp-terminal inv-plan">
                       <div class="hp-terminal-bar">
-                        <span class="mc-panel-title">EVIDENCE GRAPH</span>
+                        <span class="l0-label">Evidence graph</span>
                       </div>
                       <div class="hp-terminal-body inv-plan-body">
                         <form class="inv-graph-form" onSubmit={submitGraphQuery}>
@@ -508,6 +520,7 @@ const InvestigateApp: Component = () => {
                 );
               })()}
             </Show>
+          </Show>
           </Show>
         </div>
       </main>
