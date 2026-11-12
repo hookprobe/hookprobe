@@ -43,6 +43,14 @@ async function build(b: Binding, e: EnvelopeState): Promise<string> {
   return signEnvelope({ msg: b.msg, deviceId: unhex(e.device_id, 16), epoch: unhex(e.epoch, 8), seq: BigInt(e.next_seq), arg: b.arg ?? 0n, generation: BigInt(b.generation ?? 0), digest });
 }
 
+/** A signed envelope (312 hex) for `binding`, from a fresh read of the device's envelope state — for carriers that
+ *  post it themselves (the hsh web console attaches it as the second line). */
+export async function envelopeFor(binding: Binding | ((e: EnvelopeState) => Binding)): Promise<string> {
+  const e = await readEnvelope();
+  if (!e) throw new Error('This device does not take signed owner actions (no envelope in GET /api/config).');
+  return build(typeof binding === 'function' ? binding(e) : binding, e);
+}
+
 type Res = { ok: boolean; refused?: string };
 
 /**
