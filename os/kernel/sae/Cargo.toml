@@ -5,6 +5,8 @@ edition = "2021"
 publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 
 [dependencies]
+# ADR 0050 D4 step 5c: the station-frame walk (hal::saewire) — shared with el0-lansvc, no curve library there
+hal = { path = "../hal" }
 # p256 0.14 (crypto-bigint 0.7: RUSTSEC-2026-0387). The field type is no longer re-exported by p256; it is named
 # through elliptic_curve::FieldArithmetic, with arithmetic via the ff traits.
 p256 = { version = "0.14", default-features = false, features = ["arithmetic"] }
