@@ -329,3 +329,130 @@ pub fn unseal(
     kdf::ctr_xor_nonce(&key.k_enc, &blob[O_NONCE..O_NONCE + NONCE_LEN], &mut out[..ct_len]);
     Ok(ct_len)
 }
+
+// ---- configuration sealed at rest (design the repo-root design doc heqk-sealed-config-live-apply, step 1) ---------------------
+// In-place variants for the A/B configuration store: a 16 KiB HQCFG1 bundle does not fit SEAL_MAX_PT. Same HQKSEAL1
+// header and the same Encrypt-then-MAC; the reserved MAC-covered bytes 88..96 carry the configuration GENERATION so
+// the store's fallback can read it without decrypting (and a swapped generation fails the tag).
+
+/// Largest plaintext sealed in place (a bundle 16 KiB + its signature sector).
+pub const SEAL_INPLACE_MAX_PT: usize = 16 * 1024 + 512;
+const O_GEN: usize = 88;
+
+/// The per-type configuration key: `HKDF(SRK, "HQ-cfg-at-rest-v1" ‖ ty)` — a sealed WAN slot copied into the Wi-Fi
+/// slot fails the tag. Used as the `srk` argument of the in-place functions.
+pub fn cfg_key(srk: &[u8; 32], ty: u8) -> [u8; 32] {
+    let prk = kdf::hkdf_extract(b"HQ-cfg-at-rest-v1", srk);
+    kdf::hkdf_expand32(&prk, &[b'c', b'f', b'g', ty])
+}
+
+/// The config seal policy: device-bound, not measurement- or SVN-bound (the configuration must survive OTA updates).
+pub fn cfg_policy(device_id: u64) -> Policy {
+    Policy { mask: 0, device_id, svn_floor: 0, pcr: [[0u8; 32]; NUM_PCR] }
+}
+
+/// Seal in place: `buf[SEAL_HDR_LEN..SEAL_HDR_LEN + pt_len]` holds the plaintext on entry; on return `buf[..len]` is
+/// the blob (header + ciphertext). Ok(blob length).
+pub fn seal_in_place(key: &[u8; 32], policy: &Policy, buf: &mut [u8], pt_len: usize, gen: u64) -> Result<usize, SealErr> {
+    if pt_len > SEAL_INPLACE_MAX_PT || buf.len() < SEAL_HDR_LEN + pt_len {
+        return Err(SealErr::TooLong);
+    }
+    let pd = policy.digest();
+    let k = SealKey::derive(key, &pd);
+    buf[..SEAL_HDR_LEN].fill(0);
+    buf[O_MAGIC..O_MAGIC + 8].copy_from_slice(SEAL_MAGIC);
+    put_u32(buf, O_VERSION, SEAL_VERSION);
+    put_u32(buf, O_MASK, policy.mask);
+    put_u64(buf, O_DEVID, policy.device_id);
+    put_u64(buf, O_FLOOR, policy.svn_floor);
+    buf[O_PDIGEST..O_PDIGEST + 32].copy_from_slice(&pd);
+    put_u32(buf, O_PTLEN, pt_len as u32);
+    put_u32(buf, O_CTLEN, pt_len as u32);
+    let nonce = gen_nonce();
+    buf[O_NONCE..O_NONCE + NONCE_LEN].copy_from_slice(&nonce);
+    put_u64(buf, O_GEN, gen);
+    kdf::ctr_xor_nonce(&k.k_enc, &nonce, &mut buf[SEAL_HDR_LEN..SEAL_HDR_LEN + pt_len]);
+    let (head, rest) = buf.split_at_mut(SEAL_HDR_LEN);
+    let tag = kdf::hmac_sha256_2(&k.k_mac, &head[..TAG_COVER], &rest[..pt_len]);
+    head[O_TAG..O_TAG + 32].copy_from_slice(&tag);
+    Ok(SEAL_HDR_LEN + pt_len)
+}
+
+/// The generation recorded in a sealed blob's (MAC-covered) header, without decrypting. Only trust it after unseal.
+pub fn sealed_gen(blob: &[u8]) -> Option<u64> {
+    (blob.len() >= SEAL_HDR_LEN && &blob[O_MAGIC..O_MAGIC + 8] == SEAL_MAGIC)
+        .then(|| u64::from_le_bytes(blob[O_GEN..O_GEN + 8].try_into().unwrap()))
+}
+
+/// Unseal in place: the tag is verified over the header + ciphertext BEFORE anything is decrypted (nothing is
+/// decrypted on failure); then `buf[SEAL_HDR_LEN..SEAL_HDR_LEN + len]` becomes the plaintext. Ok((len, generation)).
+pub fn unseal_in_place(key: &[u8; 32], cur: &Policy, buf: &mut [u8]) -> Result<(usize, u64), SealErr> {
+    if buf.len() < SEAL_HDR_LEN {
+        return Err(SealErr::ShortBlob);
+    }
+    if &buf[O_MAGIC..O_MAGIC + 8] != SEAL_MAGIC {
+        return Err(SealErr::BadMagic);
+    }
+    if get_u32(buf, O_VERSION) != SEAL_VERSION {
+        return Err(SealErr::BadVersion);
+    }
+    let ct_len = get_u32(buf, O_CTLEN) as usize;
+    if ct_len != get_u32(buf, O_PTLEN) as usize || ct_len > SEAL_INPLACE_MAX_PT || SEAL_HDR_LEN + ct_len > buf.len() {
+        return Err(SealErr::ShortBlob);
+    }
+    let pol = Policy { mask: get_u32(buf, O_MASK), device_id: cur.device_id, svn_floor: cur.svn_floor, pcr: cur.pcr };
+    if !kdf::ct_eq(&buf[O_DEVID..O_DEVID + 8], &cur.device_id.to_le_bytes()) {
+        return Err(SealErr::DeviceMismatch);
+    }
+    let pd = pol.digest();
+    if !kdf::ct_eq(&buf[O_PDIGEST..O_PDIGEST + 32], &pd) {
+        return Err(SealErr::PolicyMismatch);
+    }
+    let k = SealKey::derive(key, &pd);
+    let tag = kdf::hmac_sha256_2(&k.k_mac, &buf[..TAG_COVER], &buf[SEAL_HDR_LEN..SEAL_HDR_LEN + ct_len]);
+    if !kdf::ct_eq(&buf[O_TAG..O_TAG + 32], &tag) {
+        return Err(SealErr::Tag);
+    }
+    let gen = u64::from_le_bytes(buf[O_GEN..O_GEN + 8].try_into().unwrap());
+    let nonce: [u8; NONCE_LEN] = buf[O_NONCE..O_NONCE + NONCE_LEN].try_into().unwrap();
+    kdf::ctr_xor_nonce(&k.k_enc, &nonce, &mut buf[SEAL_HDR_LEN..SEAL_HDR_LEN + ct_len]);
+    Ok((ct_len, gen))
+}
+
+/// `[P-sealcfg]` (step 1): a 16.6 KiB in-place round trip; the plaintext is gone from the blob; a flipped ciphertext,
+/// header or generation byte is refused (nothing decrypted); another type's key and another device are refused.
+pub fn inplace_selftest() -> bool {
+    static mut B: [u8; SEAL_HDR_LEN + SEAL_INPLACE_MAX_PT] = [0; SEAL_HDR_LEN + SEAL_INPLACE_MAX_PT];
+    let buf = unsafe { &mut *core::ptr::addr_of_mut!(B) };
+    let srk = [0x5au8; 32];
+    let (kw, kf) = (cfg_key(&srk, 6), cfg_key(&srk, 7));
+    let pol = cfg_policy(0x1234);
+    let n = SEAL_INPLACE_MAX_PT;
+    let fill = |b: &mut [u8]| {
+        for (i, x) in b[SEAL_HDR_LEN..SEAL_HDR_LEN + n].iter_mut().enumerate() {
+            *x = (i % 251) as u8;
+        }
+        b[SEAL_HDR_LEN..SEAL_HDR_LEN + 15].copy_from_slice(b"pppoe_pass=s3cr");
+    };
+    fill(buf);
+    let sealed = seal_in_place(&kw, &pol, buf, n, 42).ok() == Some(SEAL_HDR_LEN + n);
+    let hidden = !buf.windows(15).any(|w| w == b"pppoe_pass=s3cr") && sealed_gen(buf) == Some(42);
+    let mut ok_rt = false;
+    let refuse = |b: &mut [u8], at: usize, k: &[u8; 32], p: &Policy| -> bool {
+        b[at] ^= 1;
+        let r = unseal_in_place(k, p, b).is_err();
+        b[at] ^= 1;
+        r
+    };
+    let flips = refuse(buf, SEAL_HDR_LEN + 1000, &kw, &pol) && refuse(buf, 88, &kw, &pol) && refuse(buf, 75, &kw, &pol);
+    let other_type = unseal_in_place(&kf, &pol, buf).is_err();
+    let other_dev = unseal_in_place(&kw, &cfg_policy(0x9999), buf).is_err();
+    if let Ok((len, gen)) = unseal_in_place(&kw, &pol, buf) {
+        ok_rt = len == n && gen == 42 && &buf[SEAL_HDR_LEN..SEAL_HDR_LEN + 15] == b"pppoe_pass=s3cr"
+            && buf[SEAL_HDR_LEN + 15..SEAL_HDR_LEN + n].iter().enumerate().all(|(i, &x)| x == ((i + 15) % 251) as u8);
+    }
+    let pass = sealed && hidden && flips && other_type && other_dev && ok_rt;
+    arch_aarch64::_print(format_args!(" [P-sealcfg] {} — config sealed at rest, step 1: 16.6 KiB in-place seal/unseal round trip={} the secret and the plaintext are gone from the blob, generation readable={} a flipped ciphertext / generation / nonce byte refused={} another type's key refused={} another device refused={}\n",
+        if pass { "PASS" } else { "FAIL" }, ok_rt, hidden, flips, other_type, other_dev));
+    pass
+}
