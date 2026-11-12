@@ -27,7 +27,7 @@ const KERN_VA_HI: usize = 0x8000_0000; // end of L1 slot 1
 /// RAM/text tables (slot 1). Fail-closed: a user map to a kernel VA is refused.
 #[inline]
 fn user_va_permitted(va: usize) -> bool {
-    !(va >= KERN_VA_LO && va < KERN_VA_HI)
+    !(KERN_VA_LO..KERN_VA_HI).contains(&va)
 }
 
 // Descriptor bits.
@@ -200,7 +200,7 @@ impl hal::Mmu for Mmu {
         extern "C" {
             static __stack_top: u8;
         }
-        let free_start = align_up(unsafe { addr_of!(__stack_top) as usize }, PAGE);
+        let free_start = align_up(addr_of!(__stack_top) as usize, PAGE);
         FRAME_NEXT.store(free_start, Ordering::Relaxed);
 
         // Identity map: GB0 = device (MMIO), GB1 = normal RAM — both EL1-only.
@@ -219,7 +219,7 @@ impl hal::Mmu for Mmu {
             core::arch::asm!("mrs {}, id_aa64mmfr0_el1", out(reg) ips);
             let ips = (ips & 0xF).min(5); // PARange, clamp to 48-bit
 
-            let mair: u64 = 0x00 | (0xFF << 8); // attr0 Device-nGnRnE, attr1 Normal WB
+            let mair: u64 = 0xFF << 8; // attr0 Device-nGnRnE, attr1 Normal WB
             let tcr: u64 = 25            // T0SZ = 39-bit VA
                 | (1 << 8)               // IRGN0 = WBWA
                 | (1 << 10)              // ORGN0 = WBWA
@@ -270,8 +270,8 @@ impl Mmu {
             static __text_start: u8;
             static __text_end: u8;
         }
-        let text_start = unsafe { addr_of!(__text_start) as usize };
-        let text_end = unsafe { addr_of!(__text_end) as usize };
+        let text_start = addr_of!(__text_start) as usize;
+        let text_end = addr_of!(__text_end) as usize;
         self.build_wx_ram_range(gb_base, l1_idx, text_start, text_end);
     }
 
@@ -470,7 +470,7 @@ impl Mmu {
         for i in 0..512 {
             unsafe { write_volatile((l1 as *mut u64).add(i), read_volatile(src.add(i))) };
         }
-        let asid = (NEXT_ASID.fetch_add(1, Ordering::Relaxed) & 0xFFFF) as u16;
+        let asid = NEXT_ASID.fetch_add(1, Ordering::Relaxed);
         (l1, asid)
     }
 

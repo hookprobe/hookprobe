@@ -30,7 +30,7 @@
 //! - Routes: candidates whose destination prefix holds the packet's destination and whose `from` (if any)
 //!   holds its source; the longest destination prefix wins; ties go to the lowest metric on an interface
 //!   that is UP — so two default routes with different metrics are a failover pair.
-//! Policy drops are operator intent, counted apart from IDS threat verdicts (ADR 0023).
+//!   Policy drops are operator intent, counted apart from IDS threat verdicts (ADR 0023).
 
 pub const PL_MAX: usize = 8;
 pub const PL_ENTRIES: usize = 16;

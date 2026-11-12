@@ -788,7 +788,7 @@ pub fn selftest() -> bool {
             let m4 = wanparse::sta_m4(&kck, akm8, &f) && !wanparse::sta_m4(&kck, akm8, &bad) && !wanparse::sta_m4(&[0; 16], akm8, &f);
             // decision 2A: after the calls, the shared IO page holds neither the PMK (input) nor the PTK (output)
             let _ = wanparse::sta_m2(&pmk, &aa, &spa, &an, akm8, &f);
-            let wiped = el0::server().map_or(true, |s| s.is_zero(hal::lansvcabi::IN_OFF, hal::wpaauth::M2_PRE) && s.is_zero(hal::lansvcabi::OUT_OFF, hal::wpaauth::M2_OUT));
+            let wiped = el0::server().is_none_or(|s| s.is_zero(hal::lansvcabi::IN_OFF, hal::wpaauth::M2_PRE) && s.is_zero(hal::lansvcabi::OUT_OFF, hal::wpaauth::M2_OUT));
             all &= good && flipped && other_pmk && short && m4 && wiped;
         }
         all

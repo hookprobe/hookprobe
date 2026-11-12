@@ -1122,7 +1122,7 @@ pub fn selftest() -> bool {
         let mut j2 = Journal::new(0, 8, &srk);
         let r = j2.replay(&d);
         let replays = r.records == 2 && factory_reset_requested() && rule_count() == 1;
-        let wiped = j2.wipe(&mut d).map_or(false, |n| n == 8) && d.s.iter().all(|x| x.iter().all(|b| *b == 0)) && !factory_reset_requested() && rule_count() == 0;
+        let wiped = j2.wipe(&mut d).is_ok_and(|n| n == 8) && d.s.iter().all(|x| x.iter().all(|b| *b == 0)) && !factory_reset_requested() && rule_count() == 0;
         let mut j3 = Journal::new(0, 8, &srk);
         let r3 = j3.replay(&d);
         let empty = r3.records == 0 && !r3.damaged && !factory_reset_requested() && j3.epoch() == 0;
