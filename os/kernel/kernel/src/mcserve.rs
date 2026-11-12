@@ -379,6 +379,15 @@ impl McNode {
         ok
     }
 
+    /// Stop answering on a secondary address (G12-M after a live WAN change moved / removed the management
+    /// sub-interface). The primary address cannot be removed here.
+    #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
+    pub fn remove_address(&mut self, ip: [u8; 4], prefix: u8) {
+        let cidr = IpCidr::new(IpAddress::v4(ip[0], ip[1], ip[2], ip[3]), prefix);
+        let primary = IpAddress::v4(self.ip[0], self.ip[1], self.ip[2], self.ip[3]);
+        self.iface.update_ip_addrs(|v| v.retain(|c| *c != cidr || c.address() == primary));
+    }
+
     /// Does this frame belong to the node (our MAC or broadcast)?
     pub fn wants(&self, frame: &[u8]) -> bool {
         is_for_us(frame, self.mac)
