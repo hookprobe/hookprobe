@@ -38,6 +38,7 @@ import {
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
 const LEVELS: ProtectionLevel[] = ['relaxed', 'balanced', 'strict'];
+const SAMPLE_TOP: [string, number, string][] = [['ads.example-tracker.net', 1204, 'Smart TV'], ['metrics.example-cdn.com', 866, 'Phones'], ['telemetry.example-iot.io', 412, 'Thermostat'], ['bad-site.example', 12, 'malware']];
 
 function sourceClass(s: ListEntry['source']): string {
   return s === 'system' ? 'src--system' : s === 'ml-learned' ? 'src--ml' : 'src--user';
@@ -363,6 +364,15 @@ const ShieldApp: Component = () => {
                 )}
               </For>
             </div>
+          </Panel>
+
+          {/* Board "Shield": top blocked today — domain · count · which device */}
+          <Panel title="Top blocked today">
+            <ul class="shield-list">
+              <For each={SAMPLE_TOP}>{([d, n, who]) => (
+                <li class="shield-list-row"><span class="shield-domain">{d}</span><span>{n.toLocaleString()} · {who}</span></li>
+              )}</For>
+            </ul>
           </Panel>
 
           <div class="shield-two-col">
