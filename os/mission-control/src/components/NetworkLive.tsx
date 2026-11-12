@@ -140,7 +140,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
           </Show>
         </Show>
         <p class="l0-card-sub">
-          Names and zones you set here are permanent owner rules (owner key); your signed DEVICES.TXT stays the baseline. "Isolate 1 h" is temporary and expires by itself.
+          Names and zones you set here are permanent owner rules (device password); your signed DEVICES.TXT stays the baseline. "Isolate 1 h" is temporary and expires by itself.
         </p>
       </main>
 
@@ -151,11 +151,11 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
             <Show when={!sample() && selected()!.mac && zoneOf(selected()!) !== 'quarantine'} fallback={
               <Show when={sample()}><span class="gate-reason">Preview: on a device this isolates it for an hour.</span></Show>
             }>
-              <button class="hp-btn hp-btn--primary" title="Quarantine for 1 hour (owner key; DHCP and DNS keep working; expires on its own)"
+              <button class="hp-btn hp-btn--primary" title="Quarantine for 1 hour (device password; DHCP and DNS keep working; expires on its own)"
                 onClick={async () => setMsg(await promptAndRun('isolate', selected()!.mac!, 3600))}>Isolate 1 h</button>
             </Show>
             <button class="hp-btn" aria-expanded={renaming()} disabled={!sample() && !selected()!.mac}
-              title={selected()!.mac || sample() ? 'Give this device a name (a permanent owner rule; owner key)' : 'No hardware address is on record, so a name cannot be attached'}
+              title={selected()!.mac || sample() ? 'Give this device a name (a permanent owner rule; device password)' : 'No hardware address is on record, so a name cannot be attached'}
               onClick={() => { if (renaming()) closeRename(); else { setRenaming(true); setNewName(nameOf(selected()!)); } }}>Rename</button>
           </Show>
         }>
@@ -184,7 +184,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
                       <button class="hp-btn" onClick={() => setNameReq({ op: 'remove', value: '' })}>Use the signed name</button>
                     </Show>
                   </div>
-                  <Show when={sample()}><p class="gate-reason">Preview: on a device the name becomes a permanent owner rule (owner key).</p></Show>
+                  <Show when={sample()}><p class="gate-reason">Preview: on a device the name becomes a permanent owner rule (device password).</p></Show>
                   <Show when={!sample() && nameReq() && d().mac}>
                     <Show keyed when={`${d().mac}|${nameReq()!.op}|${nameReq()!.value}`}>
                       <OwnerChangePlan title={`Rename ${nameOf(d())}`}
@@ -202,7 +202,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
                       disabled={sample() || !d().mac} onClick={() => setMoveTo(z.key)}>{z.label}</button>
                   )}</For>
                 </div>
-                <Show when={sample()}><p class="gate-reason">Preview: on a device this becomes a permanent owner rule (owner key).</p></Show>
+                <Show when={sample()}><p class="gate-reason">Preview: on a device this becomes a permanent owner rule (device password).</p></Show>
                 <Show when={!sample() && !d().mac}><p class="gate-reason">No hardware address is on record for this device, so a zone rule cannot be attached to it.</p></Show>
                 <Show when={!sample() && moveTo() && d().mac}>
                   <Show keyed when={`${d().mac}|${moveTo()}`}>

@@ -27,7 +27,7 @@ const RestartButton: Component<{ sample?: boolean; primary?: boolean; label?: st
   return (
     <span style={{ display: 'inline-flex', 'flex-direction': 'column', gap: '6px' }}>
       <button class={`hp-btn${props.primary ? ' hp-btn--primary' : ''}`} disabled={props.sample || busy()} onClick={() => void run()}>{props.label ?? 'Restart now'}</button>
-      <Show when={props.sample}><span class="gate-reason">Preview: on a device this restarts it (owner key).</span></Show>
+      <Show when={props.sample}><span class="gate-reason">Preview: on a device this restarts it (device password).</span></Show>
       <Show when={msg()}><span class="pro-sub" role="status">{msg()}</span></Show>
     </span>
   );
