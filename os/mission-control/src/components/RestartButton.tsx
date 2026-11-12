@@ -5,15 +5,15 @@
  */
 import { type Component, Show, createSignal } from 'solid-js';
 import { post } from '../store/actions';
+import { approve } from '../store/approve';
 
 const RestartButton: Component<{ sample?: boolean; primary?: boolean; label?: string }> = (props) => {
   const [msg, setMsg] = createSignal('');
   const [busy, setBusy] = createSignal(false);
   const run = async () => {
-    const reason = window.prompt('Reason for the restart (kept in the journal):', 'apply staged configuration');
-    if (!reason || reason.trim().length < 3) { setMsg('Cancelled: a reason of at least 3 characters is required.'); return; }
-    const key = window.prompt('Restarting interrupts the network for about a minute. Enter your owner key:', '');
-    if (!key) { setMsg('Cancelled: the owner key is required.'); return; }
+    const a = await approve({ title: 'Restart the device?', body: 'The network is down for about a minute while it restarts.', confirm: 'Restart', destructive: true, reason: { default: 'apply staged configuration' }, key: {} });
+    if (!a) { setMsg('Cancelled.'); return; }
+    const reason = a.reason, key = a.key;
     setBusy(true); setMsg('');
     try {
       const o = await post<{ ok: boolean; note?: string; refused?: string }>('/api/reboot', { reason: reason.trim(), permanent: 'true', owner_key: key });
