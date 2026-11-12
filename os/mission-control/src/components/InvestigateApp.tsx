@@ -27,7 +27,7 @@ import LiveState from './LiveState';
 import { promptAndRun } from '../store/actions';
 import { setCopilotOpen } from '../store/mock';
 import type { Tone } from '../store/missionMock';
-import { formatTime, formatBytes, mitreName, mitreTactic, type ProcessTreeNode } from '../store/api';
+import { formatTime, formatBytes, mitreName, mitreLabel, mitreTactic, type ProcessTreeNode } from '../store/api';
 import AppShell from './AppShell';
 import { incidentHref } from '../store/routes';
 import {
@@ -392,7 +392,7 @@ const InvestigateApp: Component = () => {
                                       <div class="inv-hyp-label">MITRE techniques</div>
                                       <ul class="inv-plan-steps">
                                         <For each={rep.report.mitre_techniques}>
-                                          {(t) => <li class="inv-plan-step">{t} · {mitreName(t)}</li>}
+                                          {(t) => <li class="inv-plan-step">{mitreLabel(t)}</li>}
                                         </For>
                                       </ul>
                                     </Show>

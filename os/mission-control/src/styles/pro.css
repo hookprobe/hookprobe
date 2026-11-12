@@ -5,6 +5,7 @@
 .pro-main { width: 100%; box-sizing: border-box; padding: 24px 32px 48px; display: flex; flex-direction: column; gap: 16px; max-width: 1760px; }
 @media (max-width: 767px) { .pro-main { padding: 16px; } }
 .pro-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.pro-head > .gate { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; max-width: 340px; text-align: right; }
 .pro-crumb { margin: 0 0 4px; font-size: 13px; color: var(--hp-text-muted); }
 .pro-crumb a { color: var(--hp-text-secondary); }
 .pro-title { margin: 0; font-size: 22px; font-weight: 700; color: var(--hp-text-primary); }
