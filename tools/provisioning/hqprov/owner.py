@@ -1,4 +1,4 @@
-"""Owner key (ADR 0037 D3) and the in-place boot-partition patches (OWNER.TXT, MCTLS.CRT).
+"""Owner key (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)) and the in-place boot-partition patches (OWNER.TXT, MCTLS.CRT).
 
 The mechanism is the one the image factory already defines (os/build/make-cm5-heqk-disk.sh:155-173, 335-364;
 kernel/src/mcauth.rs): the device stores only a salted verifier `sha256(salt || token)` in a FIXED 128-byte

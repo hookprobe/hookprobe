@@ -35,7 +35,7 @@ Locally a missing tool is a **skip**; under `CI_STRICT=1` (always in CI) it is a
 | g2 | heqk boots in QEMU and every implemented phase PASSes (`os/kernel/validate.sh`) | qemu-system-aarch64 |
 | g3 | heqk serves Mission Control end to end, incl. the real-browser HTTPS leg (device ECDSA key + X25519MLKEM768) | qemu, mtools, node, Playwright |
 | g4 | no known-vulnerable / yanked crate (RustSec via cargo-deny, `deny.toml`), licences + sources policy, npm audit (high+), CycloneDX SBOMs | cargo-deny, npm, syft |
-| g4r | the shipped `prod` kernel builds bit-for-bit identically twice (ADR 0036 R1) | nightly Rust |
+| g4r | the shipped `prod` kernel builds bit-for-bit identically twice (ADR 0036 (retired 2026-11-12, no successor; R1 gate now in 0063) R1) | nightly Rust |
 | g6 | `mc-e2e-metal.sh` on the CM5 bench (self-hosted runner, never from a PR) | bench |
 
 ### Ratchets (why the gates are green on day one and only get stricter)

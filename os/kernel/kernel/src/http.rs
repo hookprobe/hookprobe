@@ -211,7 +211,7 @@ fn render_actions(w: &mut JsonBuf) {
 /// `set_cookie` sentinel: expire the session cookie (logout).
 pub const CLEAR_COOKIE: [u8; 32] = [b'-'; 32];
 
-/// Route one request against the device state, enforcing owner authentication (ADR 0037 D3).
+/// Route one request against the device state, enforcing owner authentication (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)).
 /// `scratch` receives rendered JSON; `rand16` mints a session id on a successful login.
 pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: impl FnOnce() -> Option<[u8; 16]>, scratch: &mut [u8]) -> Response {
     // Public: the login page, the login action, and a minimal health probe.

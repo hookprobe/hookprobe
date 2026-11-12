@@ -24,4 +24,4 @@ heqk drives the CM5's CYW43455 directly, with no Linux and no wpa_supplicant:
 | Firmware | [`os/drivers/firmware/`](../../os/drivers/firmware/) |
 | Bring-up notes | [`P9_P10_BRINGUP.md`](../../os/kernel/P9_P10_BRINGUP.md), [`P9_WIFI_INVESTIGATION.md`](../../os/kernel/P9_WIFI_INVESTIGATION.md) |
 | Credentials + relay | [`apcred.rs`](../../os/kernel/kernel/src/apcred.rs), [`lanrelay.rs`](../../os/kernel/kernel/src/lanrelay.rs) |
-| Decisions | ADR 0049 D1 (signed files, WIFI.TXT), ADR 0054 (per-device setup credential), ADR 0034 (regdomain), ADR 0042 (Wi-Fi security surface) |
+| Decisions | ADR 0049 D1 (signed files, WIFI.TXT), ADR 0054 (per-device setup credential), ADR 0034 (regdomain), ADR 0042 (retired 2026-11-12, no successor) (Wi-Fi security surface) |

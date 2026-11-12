@@ -237,7 +237,7 @@ impl ProdFull {
         pf
     }
 
-    /// The owner verifier from the eMMC boot partition's OWNER.TXT (ADR 0037 D3), for the
+    /// The owner verifier from the eMMC boot partition's OWNER.TXT (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)), for the
     /// on-device Mission Control. `None` = unclaimed (or eMMC silent): every protected route refuses.
     /// ADR 0051: bring up the EL0 TLS server with `MCTLS.CRT` from the eMMC boot partition.
     #[cfg(feature = "mctls")]

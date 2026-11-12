@@ -689,7 +689,7 @@ pub fn run() -> ! {
     let t0 = cntpct();
     let st = state();
     st.set_clock(rtc_epoch_secs() * 1000, t0, frq);
-    // Owner verifier from the attached boot disk's OWNER.TXT (ADR 0037 D3); none = unclaimed.
+    // Owner verifier from the attached boot disk's OWNER.TXT (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)); none = unclaimed.
     let owner = arch_aarch64::virtio_blk::VirtioBlk::open().and_then(|d| crate::mcauth::load_owner(&d));
     set_owner(owner);
     kprint!(" [MC] owner: {}\n", if owner.is_some() { "CLAIMED (OWNER.TXT verifier loaded) — sign-in required" } else { "UNCLAIMED — every protected route refuses (flash with the owner key)" });
