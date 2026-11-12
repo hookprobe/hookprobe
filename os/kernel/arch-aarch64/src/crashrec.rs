@@ -216,6 +216,88 @@ pub fn selftest() -> bool {
     first && second && corrupt && fault && stale
 }
 
+/// Wi-Fi recovery record (audit A7, `kernel/src/wifiheal.rs`): the recovery state that must survive the ONE
+/// Wi-Fi self-heal reboot (flags: bit0 = this unit already rebooted once for Wi-Fi, bit1 = Wi-Fi degraded) and the
+/// diagnostic words captured BEFORE the last recovery action (firmware hash, trap registers, SDPCM credit state,
+/// counters — never a key, a passphrase or a station address). Same page as the crash record (CM5: +0x400, the
+/// measured-surviving DRAM), same FNV check; written on every recovery action, taken once at boot.
+pub const HEAL_WORDS: usize = 24;
+const HEAL_MAGIC: u64 = 0x314c_4857_4b51_4548; // "HEQKWHL1"
+
+#[repr(C)]
+struct HealRec {
+    magic: u64,
+    flags: u32,
+    words: [u32; HEAL_WORDS],
+    sum: u64,
+}
+
+#[cfg(not(feature = "cm5"))]
+static mut QEMU_HEAL: HealRec = HealRec { magic: 0, flags: 0, words: [0; HEAL_WORDS], sum: 0 };
+
+fn heal() -> *mut HealRec {
+    #[cfg(feature = "cm5")]
+    {
+        (REC_PA + 0x400) as *mut HealRec
+    }
+    #[cfg(not(feature = "cm5"))]
+    {
+        core::ptr::addr_of_mut!(QEMU_HEAL)
+    }
+}
+
+fn heal_sum(flags: u32, w: &[u32; HEAL_WORDS]) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for v in core::iter::once(flags).chain(w.iter().copied()) {
+        for b in v.to_le_bytes() {
+            h ^= b as u64;
+            h = h.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+    h
+}
+
+fn clean_range(base: usize, len: usize) {
+    let mut a = base & !63;
+    while a < base + len {
+        unsafe { core::arch::asm!("dc civac, {}", in(reg) a, options(nostack)) };
+        a += 64;
+    }
+    unsafe { core::arch::asm!("dsb sy", options(nostack)) };
+}
+
+/// Write the Wi-Fi recovery record (replaces the previous one).
+pub fn write_heal(flags: u32, words: &[u32; HEAL_WORDS]) {
+    let sum = heal_sum(flags, words);
+    unsafe { core::ptr::write_volatile(heal(), HealRec { magic: HEAL_MAGIC, flags, words: *words, sum }) };
+    clean_range(heal() as usize, core::mem::size_of::<HealRec>());
+}
+
+/// Take the Wi-Fi recovery record once (cleared; power-on garbage / a torn write reads as None).
+pub fn take_heal() -> Option<(u32, [u32; HEAL_WORDS])> {
+    let r = unsafe { core::ptr::read_volatile(heal()) };
+    let valid = r.magic == HEAL_MAGIC && r.sum == heal_sum(r.flags, &r.words);
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*heal()).magic), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*heal()).sum), 0);
+    }
+    clean_range(heal() as usize, core::mem::size_of::<HealRec>());
+    valid.then_some((r.flags, r.words))
+}
+
+/// `[P-wifiheal]` part: the recovery record is taken once, and a flipped word / a bare magic never reads back.
+pub fn heal_selftest() -> bool {
+    let w = [7u32; HEAL_WORDS];
+    write_heal(1, &w);
+    let once = take_heal() == Some((1, w)) && take_heal().is_none();
+    write_heal(2, &w);
+    unsafe { (*heal()).words[3] ^= 1 };
+    let torn = take_heal().is_none();
+    unsafe { (*heal()).magic = HEAL_MAGIC };
+    let stale = take_heal().is_none();
+    once && torn && stale
+}
+
 /// Self-heal reset (CM5): record why (`kind` 3, `uptime_s` in `far`), let the UART drain, reset through the EL2
 /// gate (`hvc #0`, the panic path). The next boot reports it like a crash. QEMU: never called (no reset gate).
 #[cfg(feature = "cm5")]

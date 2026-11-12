@@ -145,6 +145,9 @@ pub fn sdio_diag() -> (u32, u32) {
 /// `crc_idx` = check the response CRC + command index (true for R1/R5/R6/R1b;
 /// FALSE for R3/R4 — e.g. CMD5's R4 has no CRC or index, so checking it errors).
 fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<u32> {
+    if unsafe { RADIO_OFF } {
+        return None; // Wi-Fi degraded (wifiheal): every SDIO access fails at once, the bus is never touched
+    }
     let mut spin = 0u32;
     let inhibit = CMD_INHIBIT | if data { DAT_INHIBIT } else { 0 };
     while r32(PRESENT_STATE) & inhibit != 0 {
@@ -1644,6 +1647,79 @@ pub fn ver_result() -> (bool, [u8; 128], usize) {
     unsafe { (VER_OK, VER_BUF, VER_LEN) }
 }
 
+/// Wi-Fi degraded (audit A7, wifiheal): set by [`radio_off`]; `cmd` then fails every SDIO command at once.
+static mut RADIO_OFF: bool = false;
+
+/// Degrade (wifiheal terminal state): stop issuing SDIO commands and hold the chip in reset (WL_ON low). The wired
+/// LAN, the WAN and Mission Control never depend on the radio. Not undone in this boot.
+pub fn radio_off() {
+    unsafe { RADIO_OFF = true };
+    const GIO: usize = 0x10_7D50_8500;
+    unsafe {
+        let data = (GIO + 0x04) as *mut u32;
+        write_volatile(data, read_volatile(data) & !(1u32 << 28)); // WL_ON LOW
+        core::arch::asm!("dsb sy");
+    }
+}
+
+/// FNV-1a over the embedded firmware image: which firmware a diagnostic record is about (no secret in it).
+pub fn fw_hash() -> u32 {
+    let mut h: u32 = 0x811c_9dc5;
+    for &b in FW_BIN {
+        h = (h ^ b as u32).wrapping_mul(0x0100_0193);
+    }
+    h
+}
+
+/// Firmware RELOAD (audit A7 self-heal, the step after a BSS bounce or on a firmware halt): forget every host-side
+/// SDPCM / AP state the old firmware owned, pulse WL_ON, re-enumerate SDIO, download the SAME image through
+/// [`firmware_upload`] — which re-applies the REL-08 correction (`wifi-pmkid-fix`) exactly as at boot, from the same
+/// call site — then the preinit + WLC_UP part of the boot bring-up (no channel scan). The caller re-runs `ap_start` +
+/// `ap_install_gtk` on its current chanspec. Blocking for ~1-2 s (pets the runtime watchdog between steps).
+/// Returns 0 = ready, else the step that failed (1 chip probe, 2 download / F2, 3 control path, 4 WLC_UP).
+pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
+    let pet = || {
+        if let Some(f) = unsafe { crate::uplink::LONG_STEP_PET } {
+            f();
+        }
+    };
+    unsafe {
+        TX_SEQ = 255; // brcmf init: tx_seq 255, tx_max 0 => one boot credit
+        TX_MAX = 0;
+        FC_MASK = 0;
+        AP_DRAIN = false;
+        REG_DONE = false;
+        CON_LAST = 0;
+        VER_OK = false;
+        let g = &mut *core::ptr::addr_of_mut!(GLOM);
+        g.n = 0;
+        g.next = 0;
+    }
+    #[cfg(feature = "wpa3")]
+    unsafe {
+        (*core::ptr::addr_of_mut!(SAE_TAB)).forget_all(); // host state only: the old firmware is gone
+        (*core::ptr::addr_of_mut!(WPA3)).igtk_set = false;
+    }
+    let defer_on = unsafe { (*core::ptr::addr_of!(DEFER)).on };
+    set_defer(defer_on); // empties the parked-frame ring, keeps the mode
+    pet();
+    let _ = radio_power_on();
+    if chip_id_probe() != Some(0x4345) {
+        return 1;
+    }
+    pet();
+    if !firmware_upload(nvram_scratch) {
+        return 2;
+    }
+    pet();
+    if !unsafe { VER_OK } {
+        return 3;
+    }
+    let (_, _, up, _) = preinit_up();
+    pet();
+    if up { 0 } else { 4 }
+}
+
 static mut F2_DIAG: (u32, u32, u32) = (0, 0, 0);
 /// (CR4 IOCTL after activate — expect CPUHALT(0x20) CLEARED; CHIPCLKCSR — expect
 /// HT_AVAIL(0x80); last F2 IOR read) — diagnoses why F2 didn't come ready.
@@ -2657,6 +2733,13 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
 /// P10-D: enable events, bring the STA interface UP, start an escan, and collect the APs
 /// the firmware reports via WLC_E_ESCAN_RESULT (channel-1) events. Returns the AP count.
 pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
+    let (sv_ok, ev_ok, up_ok, infra_ok) = preinit_up();
+    scan_after_up(aps, sv_ok, ev_ok, up_ok, infra_ok)
+}
+
+/// Preinit + bring-up (the firmware's MAC, regulatory, event mask, WLC_UP, chanspec list) — the part of
+/// [`wifi_scan`] a firmware reload re-runs without the channel scan. Returns (scan_ver ok, event_msgs ok, up, infra).
+fn preinit_up() -> (bool, bool, bool, bool) {
     // 0. Query the firmware's supported scan-params version (informs v1 vs v2). Capture
     //    the GET status: -23 (BCME_UNSUPPORTED) => firmware is v1; success => v2.
     let mut sv = [0u8; 8];
@@ -2769,6 +2852,10 @@ pub fn wifi_scan(aps: &mut [ApInfo]) -> usize {
         PHY_NOISE_DIAG = pn_status;
         REG_DIAG.4 = chan_count;
     }
+    (sv_ok, ev_ok, up_ok, infra_ok)
+}
+
+fn scan_after_up(aps: &mut [ApInfo], sv_ok: bool, ev_ok: bool, up_ok: bool, infra_ok: bool) -> usize {
     // 4. escan. scan_ver=-23(UNSUPPORTED) => firmware is v1. The v1 escan initially returns
     //    BCME_NOTUP(-4) because the STA finishes coming up asynchronously after WLC_UP's ACK,
     //    so RETRY until it's accepted (status 0) or a non-NOTUP error. (If the fw ever reports
