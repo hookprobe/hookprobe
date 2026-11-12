@@ -25,6 +25,18 @@ pub const CFG_STAGE: u16 = 22;
 // message (role above view) is authorised ONLY by an HQMGMT1 envelope signed by the ENROLLED owner key K_own, from any
 // carrier — no session state authorises a change. Session elevation (the former OWNER_ELEVATE, id 31) is retired.
 pub const OWNER_CHALLENGE: u16 = 30;
+// Envelope-only message ids (R6 = D, operator 2026-11-12): Mission Control's owner endpoints, authorised by an
+// HQMGMT1 envelope with these ids — never dispatched through the shell (role_for: unknown). Binding:
+//   UPLOAD_ACTIVATE      arg = artifact type code (0..9 packs / config, 0xfe os_image), generation = the staged
+//                        pack's generation (os_image: SVN), digest = the staged content's SHA-256 (as finish reports)
+//   UPLOAD_ROLLBACK      arg = artifact type code, generation = the generation it rolls back TO, digest = zeros
+//   OWNER_FACTORY_RESET  arg = 0, generation = 0, digest = zeros (device + boot + sequence only)
+//   ANCHOR_ROTATE        arg = SHA-256(current owner public key)[..8] LE, generation = the rotation generation,
+//                        digest = SHA-256(new owner public key)
+pub const UPLOAD_ACTIVATE: u16 = 23;
+pub const UPLOAD_ROLLBACK: u16 = 24;
+pub const OWNER_FACTORY_RESET: u16 = 32;
+pub const ANCHOR_ROTATE: u16 = 33;
 
 // ---- result codes ----
 pub const R_OK: u8 = 0;
@@ -390,11 +402,11 @@ impl Challenge {
 //   off len  field
 //     0   8  magic "HQMGMT1\0"
 //     8   2  version u16 = 1
-//    10   2  msg u16 (the management message id: CFG_CONFIRM / CFG_ROLLBACK / CFG_STAGE)
+//    10   2  msg u16 (CFG_CONFIRM / CFG_ROLLBACK / CFG_STAGE / UPLOAD_* / OWNER_FACTORY_RESET / ANCHOR_ROTATE)
 //    12  16  device_id (config_device_id: the envelope is for THIS device only)
 //    28   8  epoch (this boot's, from OWNER_CHALLENGE / /api/config: an envelope dies with the boot it was made for)
 //    36   8  seq u64 (> the device's floor for this epoch; consumed on use: a replay is refused)
-//    44   8  arg u64 (CFG_STAGE: the verified upload id; else 0)
+//    44   8  arg u64 (CFG_STAGE: the verified upload id; the envelope-only messages: see their ids; else 0)
 //    52   8  generation u64 (CFG_CONFIRM / CFG_ROLLBACK: the bundle in force; else 0)
 //    60  32  digest (CFG_CONFIRM / CFG_ROLLBACK: SHA-256 of that HQCFG1 bundle; else zeros)
 //    92  64  Ed25519(K_own, "HQMGMT1-SIG" || bytes 0..92)

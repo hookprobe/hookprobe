@@ -1,26 +1,47 @@
 # Owner-signed management envelopes (HQMGMT1): API for Mission Control
 
-Status: built 2026-11-12 (heqk branch `feat/hsh-prod-transport`), QEMU self-tests `[P-hsh-web]` / `[P-mgmtabi]`,
-mc-e2e. Metal: pending. Decision: hsh spec R6 = D (operator, 2026-11-12), hard switch: no compatibility flag.
+Status: built 2026-11-12 (heqk branches `feat/hsh-prod-transport`, then `feat/hsh-signed-endpoints` for the owner
+endpoints below), QEMU self-tests `[P-hsh-web]` / `[P-mgmtabi]` / `[P-upload]`, mc-e2e. Metal: pending. Decision: hsh spec R6 = D (operator, 2026-11-12), hard switch: no compatibility flag.
 
 Audience: the Mission Control UI designer. The device side is done; this page is the contract the UI must follow.
 
 ## What changed
 
-`POST /api/config/confirm` and `POST /api/config/rollback` are authorised **only** by an envelope signed with the
-owner's configuration key `K_own` (the Ed25519 key enrolled through `/api/anchor/enroll`). The owner session and the
-`owner_key` token no longer authorise a change:
+These endpoints are authorised **only** by an envelope signed with the owner's configuration key `K_own` (the
+Ed25519 key enrolled through `/api/anchor/enroll`):
+
+| Endpoint | msg | Binds |
+|---|---|---|
+| `POST /api/config/confirm` | 20 | the bundle in force (generation + digest from `/api/config`) |
+| `POST /api/config/rollback` | 21 | the bundle in force |
+| `POST /api/upload/activate` (every type: packs, `wan` / `wifi` / `policy` / `config`, `os_image`) | 23 | type code + staged generation + staged digest (from `/api/upload/finish`) |
+| `POST /api/upload/rollback` | 24 | type code + the generation it rolls back TO |
+| `POST /api/factory-reset` | 32 | nothing else (device, boot, sequence) |
+| `POST /api/anchor/rotate` | 33 | the current owner key (fingerprint) + the new key (SHA-256) + the rotation generation |
+
+The owner session and the `owner_key` token no longer authorise any of them:
 
 - A request without a valid `envelope` is refused (HTTP 403), even with a correct `owner_key`.
-- The `owner_key` field is ignored on these two endpoints. Do not send it.
+- The `owner_key` field is ignored on these endpoints. Do not send it.
 - The device never holds the private key. The browser (or the owner's CLI) signs; the device verifies.
 
 The session, `Origin`, `X-HQ-CSRF`, the per-session `seq` and the write rate limit are unchanged: they gate the
 transport only.
 
-The same envelope also authorises the web console (`POST /api/hsh`, see below). Other owner endpoints (reboot,
-factory reset, uploads, anchor enroll / rotate, owner rules, actions, alert hook) are **unchanged for now** and still
-use `owner_key` re-authentication. They will move to envelopes in a later step; this page will say so when they do.
+The same envelope also authorises the web console (`POST /api/hsh`, see below).
+
+**Not envelopes (by design):** `POST /api/upload/begin` keeps the owner token (it stages only; nothing changes until
+`activate`). `POST /api/anchor/enroll` (the first, one-shot enrollment, ADR 0058 D3) keeps the owner token plus the
+HQENR1 proof of possession of the new key: no K_own exists yet to sign an envelope. `POST /api/owner-key` rotates the
+Mission Control sign-in token itself and keeps re-authentication with the current token.
+
+**Known deviation (operator, 2026-11-12, this round):** `POST /api/reboot`, `POST /api/owner-rules` (and
+`/revoke-all`), `POST /api/actions` (kinds that need re-authentication) and the alert-hook endpoint still use
+`owner_key` re-authentication. They move to envelopes in a later round; this page will say so when they do.
+
+**Accepted consequence:** with no owner key enrolled (`owner_enrolled: false`), no client can confirm, roll back,
+activate, factory-reset or rotate by hand. A trial that waits for a confirm reverts automatically when its window
+ends; a trial that does not need a confirm still commits on its own when healthy. Enroll an owner key first.
 
 ## Step 1: read what to bind
 
@@ -56,13 +77,19 @@ Read this object immediately before signing. If anything is on trial, show the g
 |---|---|---|---|
 | 0 | 8 | magic | ASCII `HQMGMT1` followed by one zero byte |
 | 8 | 2 | version | `1` (u16 LE) |
-| 10 | 2 | msg | `20` = confirm, `21` = rollback (u16 LE). `22` = stage is used by the shell only. |
+| 10 | 2 | msg | u16 LE: `20` confirm, `21` rollback, `23` upload activate, `24` upload rollback, `32` factory reset, `33` anchor rotate (`22` = stage, shell only) |
 | 12 | 16 | device_id | from `envelope.device_id` |
 | 28 | 8 | epoch | from `envelope.epoch` |
 | 36 | 8 | seq | u64 LE, at least `envelope.next_seq` |
-| 44 | 8 | arg | u64 LE, `0` for confirm / rollback |
-| 52 | 8 | generation | u64 LE, `envelope.generation` |
-| 60 | 32 | digest | `envelope.digest` |
+| 44 | 8 | arg | u64 LE: `0` for confirm / rollback / factory reset; the **type code** for upload activate / rollback; the **current key fingerprint** for rotate |
+| 52 | 8 | generation | u64 LE: confirm / rollback `envelope.generation`; activate the staged `generation`; upload rollback the generation to roll back TO; rotate the rotation `generation`; factory reset `0` |
+| 60 | 32 | digest | confirm / rollback `envelope.digest`; activate the staged `digest`; rotate SHA-256 of the new public key (32 raw bytes); upload rollback and factory reset all zeros |
+
+Type codes: `shield_block` 0, `shield_allow` 1, `ioc` 2, `rules` 3, `oui` 4, `devices` 5, `wan` 6, `wifi` 7,
+`policy` 8, `config` 9, `os_image` 254. Key fingerprint (rotate `arg`): the first 8 bytes of SHA-256 of the current
+owner public key (`/api/anchor` `owner_key`, 32 raw bytes), read as a little-endian u64.
+
+`device_id`, `epoch` and `next_seq` always come from `GET /api/config` `envelope`, read just before signing.
 | 92 | 64 | signature | Ed25519 by `K_own` over the ASCII bytes `HQMGMT1-SIG` (11 bytes, no terminator) followed by bytes 0..92 |
 
 Encode the 156 bytes as 312 hex digits (lower or upper case).
@@ -143,8 +170,40 @@ Refusals: `{"ok":false,"refused":"<reason>"}`.
 | 400 | `no configuration on trial` | nothing to confirm (the envelope was valid) |
 | 400 | `no configuration bundle in force`, `no configuration store on this device`, `refused by cfgd` | as today |
 | 400 | `management service unavailable` | device fault |
+| 403 | `refused: envelope binds another target` | (activate / upload rollback / rotate) the signed target is not the device's: re-read and sign again |
 
 Every request, accepted or refused, is recorded in the owner journal (type `config`) with its outcome.
+
+## The other envelope endpoints
+
+All take the same `Origin` + `X-HQ-CSRF` headers and the session `seq`; `envelope` is the 312-hex field. Envelope
+refusals are HTTP 403 with the `refused: …` reasons in the table above, plus `refused: envelope binds another target`
+when the signed type / generation / digest / key is not the one on the device.
+
+**Upload activate.** `POST /api/upload/finish` now also returns `"digest":"<64 hex>"` (the staged content's SHA-256:
+the HQCFG1 bundle for `config`, the POLICY.TXT file for `policy`, the pack body for the other packs, the image for
+`os_image`), and `GET /api/upload` `in_flight` carries `type_code`, `generation` and `digest` once verified. Before
+signing, compare `digest` with the SHA-256 of the owner's own file; if they differ, do not sign. Then
+`POST /api/upload/activate` with `id`, `seq`, `envelope` (msg 23, arg = type code, generation + digest as finish
+reported). `owner_key` is no longer read. `begin`, `chunk`, `finish` and `abort` are unchanged.
+
+**Upload rollback.** `POST /api/upload/rollback` with `type`, `seq`, `envelope` (msg 24, arg = type code,
+generation = the generation to roll back TO, digest zeros). The device verifies the previous half first; if its
+generation is not the signed one: `refused: envelope binds another target`. If there is nothing to roll back to:
+`nothing to roll back to (no verified previous generation)` (400).
+
+**Factory reset.** `POST /api/factory-reset` with `confirm=ERASE`, `reason`, `permanent=true`, `seq`, `envelope`
+(msg 32, arg 0, generation 0, digest zeros). Refusals are 403 as before.
+
+**Owner-key rotation.** `POST /api/anchor/rotate` with `public_key`, `proof`, `generation`, `signature` (HQROT1, as
+before), `seq` and `envelope` (msg 33, arg = fingerprint of the CURRENT owner key, generation = the same rotation
+`generation`, digest = SHA-256 of the NEW `public_key`). The device checks the envelope with the current key, then
+the HQROT1 signature and the proof as before. `owner_key` is no longer read here. First enrollment
+(`/api/anchor/enroll`) is unchanged.
+
+Owner-side reference: `policy-sign.py mgmt-sign --msg activate|pack-rollback|factory-reset|rotate …` and
+`hq-upload.py --sign-key K_OWN.pem` (activate after an upload, `--rollback TYPE --to-generation N`,
+`--factory-reset REASON`, `--rotate ROTATE.TXT`).
 
 ## The web console (`POST /api/hsh`)
 
