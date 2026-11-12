@@ -76,3 +76,30 @@ pub fn eapol_match(rx: &[u8], ch: u8, doff: usize, sta: &[u8; 6], secure: bool, 
         None => Some(KeyWait::Got(n)),
     }
 }
+
+/// Event 188 (EXT_AUTH_FRAME_RX) at event-message offset `ev`: the 802.11 Authentication frame addressed to `ap`.
+/// Fixed-offset header reads only (event datalen, the optional 16-byte rx metadata, frame control, addr1/addr2).
+/// Returns (station, body start, body end): the body is trimmed to the EVENT's own data length, never the rest of
+/// the SDPCM buffer (metal batch 62 lesson), so the SAE walk sees exactly the frame the station sent.
+pub fn sae_auth_body(rx: &[u8], ev: usize, ap: &[u8; 6]) -> Result<([u8; 6], usize, usize), &'static str> {
+    if ev + 72 > rx.len() {
+        return Err("short event");
+    }
+    let dl = u32::from_be_bytes([rx[ev + 44], rx[ev + 45], rx[ev + 46], rx[ev + 47]]) as usize;
+    let d = ev + 72;
+    let end = d.saturating_add(dl).min(rx.len());
+    // 16-byte rx metadata (version, chanspec, rssi, mactime, rate) then the 802.11 frame
+    let f = if end >= d + 16 + 24 && rx[d + 16] & 0xfc == 0xb0 {
+        d + 16
+    } else if end >= d + 24 && rx[d] & 0xfc == 0xb0 {
+        d
+    } else {
+        return Err("no auth frame");
+    };
+    let mut sta = [0u8; 6];
+    sta.copy_from_slice(&rx[f + 10..f + 16]);
+    if rx[f + 4..f + 10] != ap[..] || sta[0] & 1 != 0 {
+        return Err("not addressed to this AP");
+    }
+    Ok((sta, f + 24, end))
+}

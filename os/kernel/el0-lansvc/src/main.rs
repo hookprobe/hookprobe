@@ -4,6 +4,7 @@
 //! parser bug costs this server (the kernel resets it and passes the message, ADR 0050 D5), never the kernel.
 //! D4 step 2b: the DHCP server's client-frame parse (`hal::dhcpwire`) runs here too; step 3: the WAN control
 //! parsers (DHCPv4 replies, Router Advertisements, DHCPv6) — bytes from the ISP side.
+//! Step 5c: the WPA3-SAE responder's walk over a station's Commit / Confirm (`hal::saewire`).
 //! Allocation-free; no state survives a command.
 #![no_std]
 #![no_main]
@@ -185,6 +186,14 @@ pub extern "C" fn _start() -> ! {
         CMD_STA_MFPC if n >= 2 => {
             out[0] = hal::eapolwire::m2_mfpc(&dns[2..], u16::from_le_bytes([dns[0], dns[1]]) as usize) as u8;
             exit(ST_OK, 1)
+        }
+        // D4 step 5c: a station's SAE Commit / Confirm (public bytes only: no password, PWE, rand, KCK or PMK here)
+        CMD_STA_SAE if n >= 1 && n - 1 <= hal::saewire::BODY_MAX => {
+            let mut rec = hal::saewire::encode(&hal::saewire::parse(&dns[1..n], dns[0] != 0));
+            out[..rec.len()].copy_from_slice(&rec);
+            hal::wpaauth::wipe(&mut rec);
+            hal::wpaauth::wipe(&mut msg[..n]);
+            exit(ST_OK, hal::saewire::REC_LEN)
         }
         CMD_SELFTEST_FAULT => unsafe { core::ptr::read_volatile(0x10 as *const u32) as usize as *const u8; core::ptr::write_volatile(0x8 as *mut u32, 1); exit(ST_OK, 0) },
         _ => exit(ST_BAD_CMD, 0),

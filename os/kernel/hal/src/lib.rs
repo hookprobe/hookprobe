@@ -765,6 +765,8 @@ pub mod eapolwire;
 pub mod wpa;
 pub mod aes;
 pub mod wpaauth;
+// ADR 0050 D4 step 5c: the SAE responder's walk over a station's Commit / Confirm (el0-lansvc + kernel fallback)
+pub mod saewire;
 pub mod mgmtabi;
 pub mod hshabi;
 pub mod ip6;

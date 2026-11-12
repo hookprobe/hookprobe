@@ -13,6 +13,17 @@ panic = "abort"
 [profile.dev.package.boot-abi]
 opt-level = 3
 
+# The SAE curve arithmetic (P-256) optimised in debug builds too: [P-sae] and [P-lansvc-sae] (mc-e2e) run several
+# full SAE exchanges under QEMU TCG; unoptimised field arithmetic makes each one seconds long.
+[profile.dev.package.p256]
+opt-level = 3
+[profile.dev.package.primeorder]
+opt-level = 3
+[profile.dev.package.elliptic-curve]
+opt-level = 3
+[profile.dev.package.crypto-bigint]
+opt-level = 3
+
 [profile.release]
 panic = "abort"
 lto = true

@@ -64,6 +64,9 @@ pub const CMD_STA_M4: u32 = 16;
 pub const CMD_STA_EAPOL: u32 = 12;
 /// IN = `body_off u16 LE` + an M2 802.1X frame. OUT = `[mfpc u8]`.
 pub const CMD_STA_MFPC: u32 = 13;
+/// D4 step 5c: IN = `h2e_ok u8` + one SAE Authentication frame body (<= `saewire::BODY_MAX`). OUT = `saewire::REC_LEN`
+/// (`saewire::encode`): the checked Commit / Confirm facts. Public bytes only — no SAE secret crosses.
+pub const CMD_STA_SAE: u32 = 17;
 /// Self-test only (kernel-issued at boot): the server faults on purpose, proving the D5 reset path.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 

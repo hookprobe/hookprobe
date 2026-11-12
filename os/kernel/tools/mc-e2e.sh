@@ -42,7 +42,8 @@ if [ ! -f "$UI/dist/index.html" ]; then
 fi
 # Private target dir: never overwrite the shared target/ other builders/sessions flash from.
 export CARGO_TARGET_DIR=target/mc
-cargo build -p kernel --features mcserve >"$RUN/build.log" 2>&1 || { tail -20 "$RUN/build.log"; exit 2; }
+# wpa3: the SAE station-frame walk in el0-lansvc ([P-lansvc-sae], ADR 0050 D4 step 5c) needs the sae crate
+cargo build -p kernel --features mcserve,wpa3 >"$RUN/build.log" 2>&1 || { tail -20 "$RUN/build.log"; exit 2; }
 KERNEL=target/mc/aarch64-unknown-none-softfloat/debug/kernel
 
 echo "[1b] boot disk with an owner key (ADR 0037 D3: the device stores only a salted verifier)"
@@ -99,6 +100,7 @@ BADR=$(python3 -I -c "import socket,sys,urllib.parse as u; p=u.urlparse(sys.argv
 grep -q " 400" <<<"$BADR" && ok "a malformed request line is refused by the EL0 parser (400)" || bad "malformed request: $BADR"
 # ADR 0050 D4 step 2: Shield's DNS parsing runs in the EL0 LAN-services server (boot self-test + health)
 grep -qa "\[P-lansvc\] PASS" "$LOG" && ok "Shield DNS parsing in the EL0 LAN-services server: same facts as in-kernel, fault contained ([P-lansvc])" || bad "lansvc: $(grep -a 'P-lansvc\|LANSVC' "$LOG" | head -3)"
+grep -qa "\[P-lansvc-sae\] PASS" "$LOG" && ok "ADR 0050 D4 step 5c: the WPA3-SAE station-frame walk in el0-lansvc — same PMK as in-kernel, malformed / oversized refused, fault rejects + forgets, no SAE material on the IO page ([P-lansvc-sae])" || bad "lansvc-sae: $(grep -a 'P-lansvc-sae' "$LOG" | head -2 | cut -c1-400)"
 grep -qa "\[P-hsh\] PASS" "$LOG" && ok "ADR 0059 step 4a: the EL0 shell — parser limits, read commands via the management ABI, role enforced by the kernel, fault contained ([P-hsh])" || bad "hsh: $(grep -a 'P-hsh\|\[HSH\]' "$LOG" | head -3 | cut -c1-400)"
 grep -qa "\[P-mgmtabi\] PASS" "$LOG" && ok "ADR 0059 D9: management ABI read messages answer from the /api producers ([P-mgmtabi])" || bad "mgmtabi: $(grep -a 'P-mgmtabi' "$LOG" | head -2 | cut -c1-300)"
 HP=$(curl -s -m 10 $C "$B/api/health")

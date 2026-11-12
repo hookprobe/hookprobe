@@ -570,6 +570,7 @@ name = "sae"
 version = "0.1.0"
 dependencies = [
  "aes",
+ "hal",
  "p256",
  "sha2",
  "subtle",
