@@ -91,7 +91,8 @@ jobs:
           # The SHIPPING product: the Wi-Fi AP image with persistence (audit A3). Never with a bench PSK
           # (the per-device setup credential is the only AP key a product carries — ADR 0054, audit A6).
           [ -z "${HEQK_AP_PSK:-}" ] || { echo "FATAL: HEQK_AP_PSK is set — a release never carries a bench Wi-Fi key"; exit 1; }
-          (cd os/kernel && cargo build -p kernel --features hboot,apmc,wifi-bigtx,appersist --release \
+          SHIP=$(grep -v "^#" tools/ci/shipping-features.txt | tr -d "[:space:]")
+          (cd os/kernel && cargo build -p kernel --features "$SHIP" --release \
             && ../../tools/ci/ap-size-gate.sh target/aarch64-unknown-none-softfloat/release/kernel)
           cp os/kernel/target/aarch64-unknown-none-softfloat/release/kernel "dist-release/heqk-${GITHUB_REF_NAME}-ap.elf"
           syft scan dir:. -q -o "cyclonedx-json=dist-release/sbom-${GITHUB_REF_NAME}.cdx.json"
