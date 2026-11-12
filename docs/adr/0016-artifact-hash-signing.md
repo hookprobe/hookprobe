@@ -7,6 +7,7 @@ end of this document before reading D1/D2 as originally shipped** — the tracea
 (requirement → this ADR → audit finding → Fix A/B/C → regression tests → ADR 0017) is the point.
 **Deciders:** os-architect (author), security-auditor, release-engineer, verification-engineer, code-developer.
 **Relates to:** [ADR 0002](0002-crypto-agility-pqc.md) (crypto-agility; `module_signing` suite; hash alg is policy, not hardcoded), [ADR 0003](0003-platform-manifest-schema.md) (module model; `signature: required`), [ADR 0006](0006-os-hardening.md) (H3 dm-verity rootfs integrity — the block-layer complement of this ADR), [ADR 0009](0009-soc-brain-edge-cloud.md) (the `.cwasm` AOT `.sha256` sidecar this ADR reuses; the `--run-wasm` verify-before-run gate this ADR extends), [ADR 0015](0015-registry-driven-module-inclusion.md) (registry-driven staging; the `.sig`/`.wasm` files this ADR now cross-binds). Upholds the core invariant **"trust nothing unsigned"** — and closes the hole where the *unsigned thing actually executes*.
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 ---
 
