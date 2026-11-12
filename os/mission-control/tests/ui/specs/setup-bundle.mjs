@@ -48,15 +48,13 @@ export default async function (t) {
   await Promise.all([page.waitForEvent('download'), page.click('text=Create key and download backup')]); await page.waitForTimeout(600);
   ok(await page.locator('button:has-text("Continue")').isDisabled() && await vis(page.locator('[aria-label="Enroll"] >> text=one-shot')),
     'bundle setup: the owner key must be enrolled (one-shot, stated) before continuing');
-  const answers = ['', 'label-key'];
-  page.on('dialog', (d) => d.accept(answers.shift() ?? 'label-key'));
-  await page.click('button:has-text("Make this the owner key")'); await page.waitForTimeout(800);
+  await page.click('button:has-text("Make this the owner key")'); await t.approve({ key: 'label-key' }); await page.waitForTimeout(800);
   ok(await page.locator('button:has-text("Continue")').isEnabled(), 'bundle setup: enrolled → can continue');
   await page.click('button:has-text("Continue")'); await page.waitForTimeout(200);
   ok(await vis(page.locator('text=goes back to the previous settings by itself')) && await vis(page.locator("text=The Wi-Fi isn't checked that way")),
     'review: explains the trial (internet health-checked, Wi-Fi not)');
 
-  await page.click('button:has-text("Launch")'); await page.waitForTimeout(2500);
+  await page.click('button:has-text("Launch")'); await t.approve({ key: 'label-key' }); await page.waitForTimeout(2500);
   ok(state.type === 'config', 'launch: uploads ONE configuration bundle (type config), not per-file files');
   const ae = Buffer.from(state.activateEnv ?? '', 'hex');
   ok(ae.length === 156 && ae.readUInt16LE(10) === 23 && ae.readBigUInt64LE(44) === 9n && Number(ae.readBigUInt64LE(52)) === 7 && ae.subarray(12, 28).toString('hex') === DEV && !/owner_key/.test(state.activateForm ?? ''),

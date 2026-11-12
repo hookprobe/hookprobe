@@ -21,6 +21,8 @@ import { anchorView, anchorState, refreshAnchor, enroll } from '../store/anchor'
 import { configView, refreshConfig } from '../store/configState';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
 import ConfigBanners from './ConfigBanners';
+import { askOwnerKey } from '../store/approve';
+import ApproveSheet from './ApproveSheet';
 import { buildWan, buildWifi, checkWifi, checkWan, type WanForm } from '../store/configBuild';
 import SampleDataNotice from './SampleDataNotice';
 import SigningKeyPanel from './SigningKeyPanel';
@@ -66,8 +68,7 @@ const SetupApp: Component = () => {
   const doEnroll = async () => {
     setEnrollMsg('');
     try {
-      if (!window.confirm('Make this key the device\u2019s owner key? This is one-shot: afterwards only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.')) return;
-      const k = window.prompt('Enter the owner key from the device\u2019s label:', '') ?? '';
+      const k = await askOwnerKey('Make this key the device\u2019s owner key?', 'This is one-shot: afterwards only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.', 'Make it the owner key');
       if (!k) return;
       const p = await enrollProof();
       const r = await enroll({ public_key: p.publicKey, proof: p.proof, owner_key: k });
@@ -102,7 +103,7 @@ const SetupApp: Component = () => {
       const b = buildBundle({ wan: fromLegacy('wan', buildWan(wanForm())), wifi: fromLegacy('wifi', buildWifi(wifiForm())) }, gen, await ownerKeyId(), dev);
       const sig = await signBundle(b);
       setBusy('Sending them to the device…');
-      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => window.prompt('Enter the owner key from the device\u2019s label:', ''), () => undefined);
+      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => askOwnerKey('Send your settings to the device?', 'The device checks your signature before anything changes.', 'Send'), () => undefined);
       setBundleDone(r.text); setBusy(''); go('done');
     } catch (e) { setBusy(e instanceof Error ? e.message : String(e)); go('review'); }
   };
@@ -126,7 +127,7 @@ const SetupApp: Component = () => {
         if (sample()) { res.push({ name, txt, sig, sigName, result: 'signed (preview: no device)', staged: false }); continue; }
         setBusy(`Sending ${name} to the device…`);
         try {
-          const r = await uploadPack(type, new File([new Uint8Array(sig), new Uint8Array(txt)], `${type}.pack`), () => window.prompt('Enter the owner key from your card:', ''), () => undefined);
+          const r = await uploadPack(type, new File([new Uint8Array(sig), new Uint8Array(txt)], `${type}.pack`), () => askOwnerKey('Send your settings to the device?', 'The device checks your signature before anything changes.', 'Send'), () => undefined);
           res.push({ name, txt, sig, sigName, result: r.staged ? 'staged for the next restart' : 'applied', staged: true });
         } catch (e) {
           const m = e instanceof Error ? e.message : String(e);
@@ -152,6 +153,7 @@ const SetupApp: Component = () => {
         </ol>
       </header>
       <SampleDataNotice />
+      <ApproveSheet />
 
       <main class="setup-main">
         <Show when={step() === 'hi'}>
