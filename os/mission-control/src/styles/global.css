@@ -391,10 +391,6 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 
 
 /* Copilot dialog */
-.cmdpalette-modal.hp-terminal {
-  background: var(--hp-glass);
-  box-shadow: 0 24px 72px rgba(0,0,0,0.65);
-}
 .cmd-term-body { padding: 14px 16px; }
 .cmd-prompt-row {
   display: flex; align-items: center; gap: 8px;
