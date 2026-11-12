@@ -28,7 +28,7 @@ const ConfigBanners: Component = () => {
       <Show when={anchorView()?.state === 'CONFIG UNPROTECTED'}>
         <div class="hp-banner hp-banner--danger" role="alert">
           <strong>Configuration unprotected</strong> This device accepts internet, Wi-Fi and firewall files that nobody signed, so anyone with its boot card can change them.{' '}
-          <a href="/admin/identity">Make your key the owner key</a> to protect it.
+          <a href="/admin/identity">Make the device trust your signing key</a> to protect it.
         </div>
       </Show>
       <Show when={configView()?.live?.phase === 'applying' || configView()?.live?.phase === 'reverting'}>
@@ -50,7 +50,7 @@ const ConfigBanners: Component = () => {
           </Show>
           <Show when={configView()!.health}>{' '}<span class="l0-muted">({configView()!.health})</span></Show>
           <Show when={configView()!.live?.mgmt_ok === false}>{' '}<b>Mission Control cannot reach the device the new way{configView()!.live!.mgmt_probe ? ` (${configView()!.live!.mgmt_probe})` : ''}.</b></Show>
-          <Show when={configView()!.envelope?.owner_enrolled !== false} fallback={<span class="l0-muted">{' '}Keeping or rolling back by hand needs your signing key as the owner key.</span>}>
+          <Show when={configView()!.envelope?.owner_enrolled !== false} fallback={<span class="l0-muted">{' '}Keeping or rolling back by hand needs the device to trust your signing key.</span>}>
             <span class="hp-banner-actions">
               <button class="hp-btn hp-btn--primary" onClick={() => void run(confirmConfig)}>Keep it</button>
               <button class="hp-btn" onClick={() => void run(rollbackConfig)}>Roll back now</button>

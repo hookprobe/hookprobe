@@ -132,7 +132,7 @@ const AutomateApp: Component = () => {
           <aside style={{ display: 'flex', 'flex-direction': 'column', gap: '16px' }}>
             <section class="pcard" aria-label="Approval queue">
               <p class="l0-label">Approval queue · {sample() ? 1 : 0}</p>
-              <Show when={sample()} fallback={<p class="pcard-note">Nothing waiting. Durable changes are approved where you make them, with your owner key.</p>}>
+              <Show when={sample()} fallback={<p class="pcard-note">Nothing waiting. Durable changes are approved where you make them, with your device password or signing key.</p>}>
                 <span>Isolate file server NAS-01</span>
                 <span class="pcard-note">Requested by: Contain stage · risk: high · confidence 81%</span>
                 <div class="plan-diff-lines"><div class="plan-diff-line plan-diff-line--changed"><span class="plan-diff-mark">~</span>NAS-01: Family → Quarantine</div></div>
@@ -156,7 +156,7 @@ const AutomateApp: Component = () => {
       </main>
 
       <Drawer open={hookOpen()} title="Alert destination" onClose={() => setHookOpen(false)}
-        footer={<button class="hp-btn hp-btn--primary" disabled={!validHook()} onClick={async () => { setMsg(await saveAlertHook(form())); setHookOpen(false); }}>Save (owner key)</button>}>
+        footer={<button class="hp-btn hp-btn--primary" disabled={!validHook()} onClick={async () => { setMsg(await saveAlertHook(form())); setHookOpen(false); }}>Save (device password)</button>}>
         <p class="l0-card-sub">The device sends an alert for each new incident at or above the chosen severity, signed with your secret.</p>
         <div class="l0-chips" role="group" aria-label="Format">
           <For each={['ntfy', 'gotify', 'json'] as const}>{(f) => (
@@ -176,7 +176,7 @@ const AutomateApp: Component = () => {
             <button class={`l0-chip${form().min_severity === s ? ' is-on' : ''}`} aria-pressed={form().min_severity === s} onClick={() => setForm({ ...form(), min_severity: s })}>{s}</button>
           )}</For>
         </div>
-        <p class="pcard-note">Saving is a permanent change: the device asks for a reason and your owner key, then reports the destination back.</p>
+        <p class="pcard-note">Saving is a permanent change: the device asks for a reason and your device password, then reports the destination back.</p>
       </Drawer>
     </AppShell>
   );

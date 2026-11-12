@@ -25,7 +25,7 @@ export default async function (t) {
   ok(await page.locator('[aria-label="Pack type"] .l0-chip').count() === 9, 'admin: nine pack types (incl. internet, Wi-Fi, firewall)');
   ok(await page.locator('button:has-text("Upload and verify")').isDisabled(), 'admin: upload disabled in preview');
   await page.click('[aria-label="Settings"] >> text=Identity and access'); await page.waitForTimeout(150);
-  ok(await page.locator('button:has-text("Rotate owner key")').isDisabled(), 'admin: rotation needs a 16+ character key');
+  ok(await page.locator('button:has-text("Change device password")').isDisabled(), 'admin: rotation needs a 16+ character key');
   await page.click('[aria-label="Settings"] >> text=AI models'); await page.waitForTimeout(800);
   ok(await vis(page.locator('.gate--off', { hasText: 'no on-device planner' })), 'admin: planner endpoint greyed with the reason');
   await page.click('[aria-label="Settings"] >> text=Factory reset'); await page.waitForTimeout(150);

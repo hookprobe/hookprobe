@@ -29,6 +29,17 @@ interface Stored { privateKey: CryptoKey; publicKey: CryptoKey; created: number;
 
 export const [ownerKey, setOwnerKey] = createSignal<{ pubHex: string; created: number; source: 'generated' | 'imported'; exportable: boolean } | null>(null);
 export const MIN_PASSPHRASE = 10;
+/** True once the owner proved the backup of this browser's key opens (or imported it from a backup). Enrolling a key
+ *  that cannot be exported, with no working copy, would make losing this browser a re-flash. */
+export const [backupOk, setBackupOk] = createSignal(false);
+const okKey = (pub: string) => `hp-backup-ok:${pub}`;
+function readOk(pub: string): boolean { try { return localStorage.getItem(okKey(pub)) === '1'; } catch { return false; } }
+function markOk(pub: string): void { try { localStorage.setItem(okKey(pub), '1'); } catch { /* private window: this session only */ } setBackupOk(true); }
+/** Browsers that often block downloads or discard storage (captive portals, in-app web views). */
+export function limitedBrowser(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /CaptiveNetworkSupport|; wv\)|FBAN|FBAV|Instagram/i.test(navigator.userAgent) || !('download' in document.createElement('a'));
+}
 export const [signingSupported, setSigningSupported] = createSignal<boolean | null>(null);
 
 function idb(): Promise<IDBDatabase> {
@@ -81,6 +92,7 @@ export async function loadOwnerKey(): Promise<void> {
   try {
     const s = await idbGet();
     setOwnerKey(s ? { pubHex: await pubHexOf(s.publicKey), created: s.created, source: s.source, exportable: s.privateKey.extractable } : null);
+    setBackupOk(!!s && (s.source === 'imported' || readOk(await pubHexOf(s.publicKey))));
   } catch {
     setOwnerKey(null);
   }
@@ -127,7 +139,29 @@ export async function importOwnerKeyPem(pem: string, passphrase = ''): Promise<s
   await storePkcs8(der, 'imported');
   der.fill(0);
   await loadOwnerKey();
+  markOk(ownerKey()!.pubHex); // whoever imports a backup holds a working copy
   return ownerKey()!.pubHex;
+}
+
+/** The public key (hex) inside a backup file, without storing it. Throws on a wrong passphrase. */
+export async function backupPublicKey(pem: string, passphrase = ''): Promise<string> {
+  let der: Uint8Array;
+  if (isEncryptedPem(pem)) der = await unwrapPkcs8(pem, passphrase);
+  else if (/BEGIN PRIVATE KEY/.test(pem)) der = pemBody(pem);
+  else throw new Error('This is not a key backup file.');
+  const tmp = await crypto.subtle.importKey('pkcs8', new Uint8Array(der), { name: 'Ed25519' }, true, ['sign']);
+  der.fill(0);
+  const jwk = await crypto.subtle.exportKey('jwk', tmp);
+  const b = atob((jwk.x ?? '').replace(/-/g, '+').replace(/_/g, '/'));
+  return [...b].map((c) => c.charCodeAt(0).toString(16).padStart(2, '0')).join('');
+}
+
+/** Prove the backup works: it must decrypt with its passphrase and hold this browser's key. */
+export async function verifyBackup(pem: string, passphrase: string): Promise<void> {
+  const k = ownerKey();
+  if (!k) throw new Error('No signing key in this browser.');
+  if ((await backupPublicKey(pem, passphrase)) !== k.pubHex) throw new Error('This backup holds a different key. Pick the file saved when this key was made.');
+  markOk(k.pubHex);
 }
 
 /** Passphrase-wrapped backup of a key stored before keys became non-extractable. A non-extractable key
@@ -213,7 +247,7 @@ export async function enrollProof(): Promise<{ publicKey: string; proof: string 
  *  after the device accepted it — until then the current key stays. */
 export async function prepareRotation(generation: number, passphrase: string): Promise<{ publicKey: string; proof: string; signature: string; backup: string; commit: () => Promise<void> }> {
   checkPass(passphrase);
-  if (!(await idbGet())) throw new Error('No signing key in this browser: import the current owner key first.');
+  if (!(await idbGet())) throw new Error('No signing key in this browser: import the key the device trusts first.');
   const kp = (await crypto.subtle.generateKey({ name: 'Ed25519' }, true, ['sign', 'verify'])) as CryptoKeyPair;
   const pub = await pubHexOf(kp.publicKey);
   const proof = hex(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, kp.privateKey, new Uint8Array(cat(enc('HQENR1'), unhex(pub))))));
