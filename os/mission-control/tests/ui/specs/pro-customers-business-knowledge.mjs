@@ -16,8 +16,8 @@ export default async function (t) {
 
   await go('/knowledge/blog');
   ok(await page.locator('[aria-label="Documents"] .shell-rail-item').count() === 6, 'knowledge: six built-in documents');
-  await page.click('[aria-label="Documents"] >> text=Lost owner key'); await page.waitForTimeout(150);
-  ok(await vis(page.locator('article h2', { hasText: 'Lost owner key' })), 'knowledge: selecting opens the document');
+  await page.click('[aria-label="Documents"] >> text=Lost device password'); await page.waitForTimeout(150);
+  ok(await vis(page.locator('article h2', { hasText: 'Lost device password' })), 'knowledge: selecting opens the document');
   ok(await page.locator('article ol li').count() >= 3, 'knowledge: numbered steps');
   ok((await page.locator('article a.hp-btn--primary').getAttribute('href')) === '/admin/identity', 'knowledge: links to the screen it describes');
   await page.fill('[aria-label="Documents"] input', 'zone'); await page.waitForTimeout(150);

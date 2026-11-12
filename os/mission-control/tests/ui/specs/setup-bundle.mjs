@@ -45,10 +45,23 @@ export default async function (t) {
   // Key step: create, then the one-shot enrollment is required before continuing.
   await page.locator('label:has-text("Backup passphrase") input').fill('setup bundle pass');
   await page.locator('label:has-text("Repeat it") input').fill('setup bundle pass');
-  await Promise.all([page.waitForEvent('download'), page.click('text=Create key and download backup')]); await page.waitForTimeout(600);
+  const [dl] = await Promise.all([page.waitForEvent('download'), page.click('text=Create key and download backup')]); await page.waitForTimeout(600);
+  const backupPath = await dl.path();
   ok(await page.locator('button:has-text("Continue")').isDisabled() && await vis(page.locator('[aria-label="Enroll"] >> text=one-shot')),
-    'bundle setup: the owner key must be enrolled (one-shot, stated) before continuing');
-  await page.click('button:has-text("Make this the owner key")'); await t.approve({ key: 'label-key' }); await page.waitForTimeout(800);
+    'bundle setup: the signing key must be trusted by the device (one-shot, stated) before continuing');
+  // The backup must be proven before the one-shot enrollment.
+  ok(await page.locator('button:has-text("Make the device trust this key")').isDisabled() && await vis(page.locator('[aria-label="Check your backup"]')),
+    'enrollment waits until the backup is proven to open (the key cannot be exported)');
+  const chk = page.locator('[aria-label="Check your backup"]');
+  await chk.locator('input[type=file]').setInputFiles(backupPath);
+  await chk.locator('input[type=password]').fill('wrong passphrase!');
+  await chk.locator('button:has-text("Check backup")').click(); await page.waitForTimeout(1500);
+  ok(await vis(page.locator('text=Wrong passphrase')) && await page.locator('button:has-text("Make the device trust this key")').isDisabled(), 'a backup that does not open with the passphrase does not count');
+  await chk.locator('input[type=file]').setInputFiles(backupPath);
+  await chk.locator('input[type=password]').fill('setup bundle pass');
+  await chk.locator('button:has-text("Check backup")').click(); await page.waitForTimeout(1500);
+  ok(await page.locator('button:has-text("Make the device trust this key")').isEnabled(), 'backup proven: the device can now be told to trust the key');
+  await page.click('button:has-text("Make the device trust this key")'); await t.approve({ key: 'label-key' }); await page.waitForTimeout(800);
   ok(await page.locator('button:has-text("Continue")').isEnabled(), 'bundle setup: enrolled → can continue');
   await page.click('button:has-text("Continue")'); await page.waitForTimeout(200);
   ok(await vis(page.locator('text=goes back to the previous settings by itself')) && await vis(page.locator("text=The Wi-Fi isn't checked that way")),

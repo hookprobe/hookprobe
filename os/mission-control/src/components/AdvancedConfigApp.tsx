@@ -156,7 +156,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
    *  owner key (vendor- or other-key signatures are refused; a factory reset keeps the owner key). */
   const keyMismatch = () => { const a = anchorView(); return !!(a?.owner_enrolled && a.owner_key && ownerKey() && a.owner_key !== ownerKey()!.pubHex); };
   const MismatchNote = () => (
-    <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device only accepts settings signed with its owner key ({anchorView()!.owner_key!.slice(0, 8)}…), and the key in this browser is a different one, so the device would refuse anything signed here. <a href="/admin/identity">Import the owner key's backup</a> in Administration → Signing key.</p>
+    <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device only accepts settings signed with the signing key it trusts ({anchorView()!.owner_key!.slice(0, 8)}…), and the key in this browser is a different one, so the device would refuse anything signed here. <a href="/admin/identity">Import that key's backup</a> in Administration → Signing key.</p>
   );
   /** A configuration bundle in force: the device refuses single-file wan / wifi / policy uploads (ADR 0059). */
   const bundleInForce = () => { const c = configView(); return !!c && (c.state === 'trial' || c.state === 'committed') && c.generation > 0; };
@@ -386,7 +386,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
 
         <Show when={step() === 'upload'}>
           <p class="go-state--up" style={{ margin: 0 }}>✓ Signed in the browser</p>
-          <p class="l0-card-sub">Upload it: the device checks your signature and that the generation is newer, then stages it for the next boot (owner key).</p>
+          <p class="l0-card-sub">Upload it: the device checks your signature and that the generation is newer, then stages it for the next boot (device password to send; your signing key authorises it).</p>
           <button class="hp-btn hp-btn--primary" onClick={() => void upload()}>Upload to the device</button>
         </Show>
 

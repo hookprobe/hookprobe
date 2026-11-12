@@ -60,7 +60,7 @@ export default async function (t) {
   const tb = page.locator('[aria-label="Configuration trial"]');
   const cd = await tb.locator('b').first().innerText();
   ok(/^1:[23]\d$/.test(cd), `live trial: the countdown follows the device's remaining time (${cd} of a 120 s window)`);
-  ok(!(await vis(tb.locator('button:has-text("Keep it")'))) && await vis(tb.locator('text=needs your signing key as the owner key')), 'no Keep / Roll back buttons when no owner key is enrolled (they could only be refused)');
+  ok(!(await vis(tb.locator('button:has-text("Keep it")'))) && await vis(tb.locator('text=needs the device to trust your signing key')), 'no Keep / Roll back buttons when no owner key is enrolled (they could only be refused)');
   await serve({ ...base, generation: 5, live: live({ last: { result: 'reverted', generation: 5 } }) });
   await go('/network/wan', 1500);
   ok(await vis(page.locator('text=Settings switched back')) && await vis(page.locator('text=went back to generation 5')), 'after a live revert: "switched back to generation N"');

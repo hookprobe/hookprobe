@@ -12,14 +12,14 @@
  * The private key and the passphrase never reach the device.
  */
 import { type Component, For, Show, createSignal, onMount } from 'solid-js';
-import { ownerKey, loadOwnerKey, checkSigning, signingSupported, generateOwnerKey, importOwnerKeyPem, exportOwnerKeyBackup, deleteOwnerKey, download, enrollProof, prepareRotation, MIN_PASSPHRASE } from '../store/signing';
+import { backupOk, verifyBackup, limitedBrowser, ownerKey, loadOwnerKey, checkSigning, signingSupported, generateOwnerKey, importOwnerKeyPem, exportOwnerKeyBackup, deleteOwnerKey, download, enrollProof, prepareRotation, MIN_PASSPHRASE } from '../store/signing';
 import { isEncryptedPem } from '../store/keyBackup';
 import { anchorView, anchorState, refreshAnchor, enroll, rotate } from '../store/anchor';
 import { networkView } from '../store/networkLive';
 import { approve, askOwnerKey } from '../store/approve';
 
 const input = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)', width: '100%', 'box-sizing': 'border-box' } as const;
-const LOSS = 'If you lose both this browser’s key and the backup, getting control back needs physical access to the device: re-flashing its boot card. A factory reset does not remove an enrolled owner key.';
+const LOSS = 'If you lose both this browser’s key and the backup, getting control back needs physical access to the device: re-flashing its boot card. A factory reset does not change which signing key the device trusts.';
 
 const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
   const [msg, setMsg] = createSignal('');
@@ -44,12 +44,12 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
     const a = anchorView();
     if (a) {
       if (a.owner_key) return a.owner_key === me
-        ? { ok: true, text: 'This is the device’s owner key: it signs your internet, Wi-Fi and firewall settings.' }
-        : { ok: false, text: `The device has a different owner key (${a.owner_key.slice(0, 8)}…). Import that key's backup to sign for it.` };
+        ? { ok: true, text: 'The device trusts this signing key: it signs your internet, Wi-Fi and firewall settings.' }
+        : { ok: false, text: `The device trusts a different signing key (${a.owner_key.slice(0, 8)}…). Import that key's backup to sign for it.` };
       if (a.vendor_key) return a.vendor_key === me
         ? { ok: true, text: 'This is the image’s operator key: the device accepts files signed with it.' }
-        : { ok: false, text: `The device verifies files with the image's operator key (${a.vendor_key.slice(0, 8)}…), not this one. Make this key the owner key below.` };
-      return { ok: false, text: 'This device has no operator key (standalone): it accepts unsigned boot files. Make this key the owner key below.' };
+        : { ok: false, text: `The device verifies files with the image's operator key (${a.vendor_key.slice(0, 8)}…), not this one. Make the device trust this key below.` };
+      return { ok: false, text: 'This device has no operator key (standalone): it accepts unsigned boot files. Make the device trust this key below.' };
     }
     const t = networkView()?.trust_anchor;
     if (!t) return null;
@@ -66,12 +66,12 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
   }, 'Key created. Its backup (encrypted with your passphrase) downloaded: keep it offline. ' + LOSS);
 
   const doEnroll = () => run(async () => {
-    const k = await askOwnerKey('Make this key the device\u2019s owner key?', 'This is one-shot. Afterwards the device refuses internet, Wi-Fi and firewall changes that are unsigned or signed only with the image\u2019s key. The factory files on its boot card keep working. Changing the owner key later needs this key (rotate) or re-flashing the device; a factory reset keeps it.', 'Make it the owner key');
+    const k = await askOwnerKey('Make the device trust this signing key?', 'This is one-shot. Afterwards the device refuses internet, Wi-Fi and firewall changes that are unsigned or signed only with the image\u2019s key. The factory files on its boot card keep working. Changing it later needs this key (rotate) or re-flashing the device; a factory reset keeps it.', 'Trust this key');
     if (!k) throw new Error('Cancelled.');
     const p = await enrollProof();
     const r = await enroll({ public_key: p.publicKey, proof: p.proof, owner_key: k });
     if (!r.ok) throw new Error(`The device refused: ${r.refused}`);
-  }, 'Enrolled: this is now the device’s owner key.');
+  }, 'Done: the device now trusts this signing key.');
 
   const doRotate = () => run(async () => {
     const a = anchorView()!;
@@ -117,12 +117,23 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
           <span class="prow"><span>Public key</span><span style={{ 'white-space': 'normal', 'overflow-wrap': 'anywhere', 'text-align': 'right' }}>{ownerKey()!.pubHex}</span></span>
           <span class="prow"><span>Fingerprint</span><span>{fp()}…</span></span>
           <span class="prow"><span>Origin</span><span>{ownerKey()!.source === 'generated' ? 'created in this browser' : 'imported'} · {new Date(ownerKey()!.created).toLocaleDateString()}</span></span>
+          <Show when={!backupOk()}>
+            <div class="pcard" aria-label="Check your backup" style={{ 'border-color': 'rgba(255,170,0,.5)', padding: '12px' }}>
+              <p class="l0-label">Check your backup</p>
+              <p class="l0-card-sub" style={{ margin: 0 }}>This key cannot be copied out of the browser, so the downloaded file is its only other copy. Pick it and enter its passphrase to prove it opens before the device is told to trust this key.</p>
+              <Show when={limitedBrowser()}><p class="plan-diff-warn" style={{ margin: 0 }}>This looks like a sign-in or in-app browser, which often blocks downloads and forgets keys. Open this page in your normal browser first.</p></Show>
+              <input type="file" accept=".pem,application/x-pem-file,text/plain" aria-label="Backup file" onChange={async (e) => { const f = e.currentTarget.files?.[0]; setPem(f ? await f.text() : ''); }} />
+              <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Backup passphrase
+                <input style={input} type="password" value={pass()} onInput={(e) => setPass(e.currentTarget.value)} autocomplete="current-password" /></label>
+              <div class="l0-card-foot"><button class="hp-btn hp-btn--primary" disabled={!pem().includes('PRIVATE KEY') || busy()} onClick={() => void run(async () => { await verifyBackup(pem(), pass()); setPem(''); setPass(''); }, 'Backup checked: it opens and holds this key.')}>Check backup</button></div>
+            </div>
+          </Show>
           <Show when={trust()}>
             <p class={trust()!.ok ? 'go-state--up' : 'plan-diff-warn'} role="status" style={{ margin: 0 }}>{trust()!.ok ? '✓ ' : '⚠ '}{trust()!.text}</p>
           </Show>
 
           <Show when={!props.compact && anchorView()}>
-            <div aria-label="Owner key on the device" style={{ display: 'grid', gap: '8px' }}>
+            <div aria-label="Signing key on the device" style={{ display: 'grid', gap: '8px' }}>
               <span class="prow"><span>Device verifies settings with</span><span>{anchorView()!.config_files_verified_by}</span></span>
               <Show when={anchorView()!.floors}>
                 <For each={(['wan', 'wifi', 'policy'] as const).filter((k) => anchorView()!.floors![k] !== undefined)}>{(k) => {
@@ -134,18 +145,18 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
                 }}</For>
               </Show>
               <Show when={anchorView()!.can === 'enroll' && anchorView()!.vendor_key !== ownerKey()!.pubHex}>
-                <p class="l0-card-sub">Make this the device's owner key: from then on only files signed with it change the internet, Wi-Fi or firewall settings. One-shot; the factory files on the boot card keep working.</p>
-                <div class="l0-card-foot"><button class="hp-btn hp-btn--primary" disabled={busy()} onClick={() => void doEnroll()}>Make this the owner key</button></div>
+                <p class="l0-card-sub">Make the device trust this signing key: from then on only files signed with it change the internet, Wi-Fi or firewall settings. One-shot; the factory files on the boot card keep working.</p>
+                <div class="l0-card-foot"><button class="hp-btn hp-btn--primary" disabled={busy() || !backupOk()} onClick={() => void doEnroll()} title={backupOk() ? undefined : 'Check your backup first'}>Make the device trust this key</button></div>
               </Show>
               <Show when={anchorView()!.can === 'rotate' && anchorView()!.owner_key === ownerKey()!.pubHex}>
-                <p class="l0-card-sub">Rotate: make a new owner key, authorised by this one (generation {anchorView()!.owner_generation} → {anchorView()!.owner_generation + 1}). The new key gets its own encrypted backup.</p>
+                <p class="l0-card-sub">Rotate: make a new signing key, authorised by this one (generation {anchorView()!.owner_generation} → {anchorView()!.owner_generation + 1}). The new key gets its own encrypted backup.</p>
                 <PassFields />
-                <div class="l0-card-foot"><button class="hp-btn" disabled={!passOk() || busy()} onClick={() => void doRotate()}>Rotate the owner key</button></div>
+                <div class="l0-card-foot"><button class="hp-btn" disabled={!passOk() || busy()} onClick={() => void doRotate()}>Rotate the signing key</button></div>
               </Show>
             </div>
           </Show>
           <Show when={!props.compact && anchorState() === 'absent'}>
-            <p class="pcard-note">This device cannot enroll an owner key yet (ADR 0058); it verifies files with the image's operator key.</p>
+            <p class="pcard-note">This device cannot be told to trust a signing key yet; it verifies files with the image's operator key.</p>
           </Show>
 
           <div class="l0-card-foot">
