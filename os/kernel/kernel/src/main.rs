@@ -7179,6 +7179,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::txprio_selftest();
         let _ = apcore::ladder_selftest();
         let _ = ownerjournal::selftest();
+        let _ = ownerjournal::sweep_selftest(); // release plan A9: replay under 3000 random corruptions
         let _ = rpmb::selftest();
         let _ = seal::inplace_selftest();
         let _ = artstore::cfgseal_selftest(); // sealed-config step 5: migration + scrub + crash injection
