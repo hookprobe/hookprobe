@@ -7,10 +7,8 @@
 //! device holds only its public half), verified HERE in EL1 before anything runs — whatever the carrier (the web
 //! console, Mission Control's confirm / rollback, a future CLI). The session's role never authorises a change.
 //!
-//! Replay: a per-boot EPOCH (8 bytes from the hardware TRNG on the CM5, drawn on first use) + a RAM sequence floor.
-//! Each accepted-for-verification envelope consumes its sequence (the floor rises to it). The floor need not persist:
-//! a reboot draws a new epoch, so every envelope signed for an earlier boot no longer matches (no eMMC write per
-//! operation, nothing to roll back). No TRNG word = no epoch = every privileged operation refused (fail-closed).
+//! The verifier (signature, device, per-boot epoch, sequence floor) is `mgmtenv`, shared with Mission Control's own
+//! owner endpoints.
 
 use hal::mgmtabi as m;
 
@@ -49,7 +47,7 @@ pub fn dispatch(msg: u16, role: u8, tag: [u8; 4], now_ms: u64, arg: u64, env: &[
             Ok(g) => m::Act::new(true, g, if msg == m::CFG_STAGE { "staged: trial at the next boot" } else { "done" }),
             Err(e) => m::Act::new(false, 0, e),
         };
-        journal(msg, a.ok, a.generation, a.reason_str(), tag, now_ms);
+        crate::mgmtenv::journal(msg, a.ok, a.generation, a.reason_str(), tag, now_ms);
         let e = a.encode();
         out[..e.len()].copy_from_slice(&e);
         return (m::R_OK, e.len());
@@ -169,55 +167,9 @@ pub fn dispatch(msg: u16, role: u8, tag: [u8; 4], now_ms: u64, arg: u64, env: &[
     }
 }
 
-/// One owner-journal record per configuration operation (the same for every client), allowed or refused.
-fn journal(msg: u16, ok: bool, gen: u64, why: &str, tag: [u8; 4], now_ms: u64) {
-    let op = match msg {
-        m::CFG_CONFIRM => "confirm",
-        m::CFG_ROLLBACK => "rollback",
-        _ => "stage",
-    };
-    let mut b = [0u8; 64];
-    let n = {
-        use core::fmt::Write;
-        let mut w = crate::mcstate::JsonBuf::new(&mut b);
-        let _ = write!(w, "{} gen {} {}", op, gen, why);
-        w.len
-    };
-    let _ = crate::ownerapi::audit_artifact("config", if ok { 1 } else { 2 }, &b[..n], tag, now_ms);
-    unsafe {
-        JOURNALED += 1;
-        LAST_JOURNAL = (msg, ok);
-    }
-}
-static mut JOURNALED: u64 = 0;
-static mut LAST_JOURNAL: (u16, bool) = (0, false);
-/// Self-tests (QEMU): how many configuration operations were journaled, and the last one (message, allowed).
-#[cfg(not(feature = "cm5"))]
-pub fn journaled() -> (u64, u16, bool) {
-    unsafe { (JOURNALED, LAST_JOURNAL.0, LAST_JOURNAL.1) }
-}
+pub use crate::mgmtenv::{epoch, next_seq};
 
-// ---- R6 = D: HQMGMT1 owner-signed command envelopes -------------------------------------------------------------
-
-static mut EPOCH: Option<[u8; 8]> = None;
-static mut FLOOR: u64 = 0;
-
-/// This boot's epoch (drawn once from the TRNG; None = no entropy: privileged operations are refused).
-pub fn epoch() -> Option<[u8; 8]> {
-    unsafe {
-        let e = &mut *core::ptr::addr_of_mut!(EPOCH);
-        if e.is_none() {
-            *e = crate::mcserve::rand16().map(|r| r[..8].try_into().unwrap());
-        }
-        *e
-    }
-}
-/// The lowest sequence the next envelope may carry.
-pub fn next_seq() -> u64 {
-    unsafe { FLOOR + 1 }
-}
-
-/// What the next envelope must bind (OWNER_CHALLENGE; /api/config's `mgmt` object reads the same).
+/// What the next envelope must bind (OWNER_CHALLENGE; /api/config's `envelope` object reads the same).
 pub fn challenge() -> m::Challenge {
     m::Challenge {
         device_id: crate::config_device_id(),
@@ -230,85 +182,24 @@ pub fn challenge() -> m::Challenge {
     }
 }
 
-/// Every refusal `verify_envelope` can give (static, so Mission Control's JSON can name it).
-pub const ENV_REASONS: [&str; 11] = [
-    "refused: needs an owner-signed envelope",
-    "refused: no owner key enrolled",
-    "refused: malformed envelope",
-    "refused: signature is not the owner key's",
-    "refused: envelope is for another device",
-    "refused: no entropy for the boot epoch",
-    "refused: envelope from another boot",
-    "refused: replayed or stale sequence",
-    "refused: envelope is for another operation",
-    "refused: something else is on trial",
-    "refused: something else is in force",
-];
-const IN_FORCE: &str = ENV_REASONS[10];
-
-/// Decode a carrier's envelope: exactly 2 * ENV_LEN hex digits (either case), nothing else.
-pub fn unhex_envelope(h: &[u8], out: &mut [u8; m::ENV_LEN]) -> bool {
-    if h.len() != 2 * m::ENV_LEN {
-        return false;
-    }
-    let v = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
-    for (o, p) in out.iter_mut().zip(h.chunks(2)) {
-        match (v(p[0]), v(p[1])) {
-            (Some(a), Some(b)) => *o = a << 4 | b,
-            _ => return false,
-        }
-    }
-    true
-}
-
-/// Verify the carrier's envelope for (`msg`, `arg`): structure, the enrolled owner key's signature, this device, this
-/// boot, a fresh sequence (consumed once the signature verifies), the operation, and — for confirm / rollback — the
-/// exact bundle in force. Reasons fit the 56-byte Act record.
+/// The carrier's envelope for a configuration message: the shared verifier (`mgmtenv`), then the binding — for
+/// confirm / rollback the exact bundle in force, otherwise no generation / digest. Reasons fit the 56-byte Act record.
 pub fn verify_envelope(msg: u16, arg: u64, env: &[u8]) -> Result<(), &'static str> {
-    if env.is_empty() {
-        return Err("refused: needs an owner-signed envelope");
-    }
-    let owner = crate::anchor::owner().ok_or("refused: no owner key enrolled")?;
-    let (e, sig) = m::Envelope::parse(env).ok_or("refused: malformed envelope")?;
-    let signed = m::envelope_msg(&e.body());
-    let ok = match (ed25519_compact::PublicKey::from_slice(&owner), ed25519_compact::Signature::from_slice(&sig)) {
-        (Ok(k), Ok(s)) => k.verify(&signed[..], &s).is_ok(),
-        _ => false,
-    };
-    if !ok {
-        return Err("refused: signature is not the owner key's");
-    }
-    if e.device_id != crate::config_device_id() {
-        return Err("refused: envelope is for another device");
-    }
-    let ep = epoch().ok_or("refused: no entropy for the boot epoch")?;
-    if e.epoch != ep {
-        return Err("refused: envelope from another boot");
-    }
-    if e.seq <= unsafe { FLOOR } {
-        return Err("refused: replayed or stale sequence");
-    }
-    unsafe { FLOOR = e.seq }; // consumed: valid signature, this device, this boot
-    if e.msg != msg || e.arg != arg {
-        return Err("refused: envelope is for another operation");
-    }
+    let e = crate::mgmtenv::verify(msg, arg, env)?;
     if matches!(msg, m::CFG_CONFIRM | m::CFG_ROLLBACK) {
         if msg == m::CFG_CONFIRM && !crate::cfgd::on_trial() {
             return Err("no configuration on trial");
         }
         if e.generation != crate::cfgd::generation() || e.digest != crate::cfgd::bundle_digest() {
-            return Err(if crate::cfgd::on_trial() { ENV_REASONS[9] } else { IN_FORCE });
+            return Err(if crate::cfgd::on_trial() { crate::mgmtenv::ON_TRIAL } else { crate::mgmtenv::IN_FORCE });
         }
     } else if e.generation != 0 || e.digest != [0; 32] {
-        return Err("refused: envelope is for another operation");
+        return Err(crate::mgmtenv::OTHER_TARGET);
     }
     Ok(())
 }
 
 /// Self-tests: a fresh epoch / floor (the next real envelope must use what OWNER_CHALLENGE then reports).
 pub fn test_reset() {
-    unsafe {
-        FLOOR = 0;
-        EPOCH = None;
-    }
+    crate::mgmtenv::test_reset();
 }

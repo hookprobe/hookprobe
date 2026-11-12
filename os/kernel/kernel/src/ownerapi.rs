@@ -453,13 +453,13 @@ pub fn take_reset_reboot() -> bool {
 /// re-authentication with the owner key, behind the owner-write guards (origin, CSRF, rate, replay). It only
 /// appends a `FactoryReset` record to the sealed journal and asks for a reboot: the wipe itself runs at the
 /// next boot (`factoryreset::run`), before anything is served, so it is the same code path after a power cut.
+/// Authorised by an owner-signed envelope (R6 = D), not the owner token; `confirm=ERASE`, reason, permanent stay.
 /// Erased: owner rules / Shield profiles / alert hook / owner-key rotation (the journal), the sealed evidence
 /// log, the sealed snapshot (both A/B slots), the artifact manifest (packs fall back to the signed image).
 /// Kept: the boot slots, the signed POLICY.TXT / WAN.TXT, the label credential (OWNER.TXT), the device key and
 /// every anti-rollback floor — a reset device is the shipped device, never a downgraded one.
 pub fn factory_reset(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<u64, &'static str> {
-    let (mut b0, mut b1, mut b2, mut b3, mut b4) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
-    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+    let (mut b1, mut b2, mut b3, mut b4) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
     let confirm = form_get(body, "confirm", &mut b1).unwrap_or("");
     let reason = form_get(body, "reason", &mut b2).unwrap_or("");
     let permanent = form_get(body, "permanent", &mut b3) == Some("true");
@@ -486,9 +486,11 @@ pub fn factory_reset(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Re
     if !permanent {
         return Err("permanent=true required");
     }
-    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
-        return Err("re-authentication failed");
-    }
+    // R6 = D (operator 2026-11-12): authorised ONLY by an owner-signed HQMGMT1 envelope (OWNER_FACTORY_RESET, bound
+    // to this device, this boot and a fresh sequence; nothing else). The owner token no longer authorises it.
+    let mut env = [0u8; hal::mgmtabi::ENV_LEN];
+    let given = crate::mgmtenv::from_form(body, &mut env);
+    crate::mgmtenv::authorise(hal::mgmtabi::OWNER_FACTORY_RESET, 0, 0, &[0; 32], if given { &env[..] } else { &[] }, tag, c.now_ms)?;
     if unsafe { !PERSISTENT } {
         return Err("no persistent journal: nothing durable to erase (a reboot already forgets every owner change)");
     }
@@ -532,7 +534,8 @@ fn hexn<const N: usize>(s: &str) -> Option<[u8; N]> {
 }
 
 /// ADR 0058 D3 `POST /api/anchor/enroll` (public_key, proof) and `POST /api/anchor/rotate` (public_key, proof,
-/// generation, signature): owner-write guards + re-authentication. Enroll is one-shot (initial provisioning, operator
+/// generation, signature, envelope): owner-write guards; enroll + re-authentication (proof of possession), rotate +
+/// an owner-signed HQMGMT1 envelope (R6 = D) instead of the owner token. Enroll is one-shot (initial provisioning, operator
 /// 2026-11-10 rule 3); afterwards only a rotation signed by the enrolled key. The device verifies every signature;
 /// the session only decides whether to try. Returns the owner-key generation now in force.
 pub fn anchor_set(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, rotate: bool) -> Result<u64, &'static str> {
@@ -565,8 +568,25 @@ pub fn anchor_set(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, rotate: 
     } else {
         None
     };
-    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
-        return refuse(c, "re-authentication failed").map(|_| 0);
+    match rot {
+        // R6 = D (operator 2026-11-12): a rotation is authorised ONLY by an owner-signed HQMGMT1 envelope (ANCHOR_ROTATE)
+        // bound to the CURRENT owner key (arg = its fingerprint) and the NEW one (digest = SHA-256 of it) and the
+        // rotation generation — on top of the HQROT1 signature the anchor verifies. The owner token is not consulted.
+        Some((g, _)) => {
+            let cur = crate::anchor::owner().map_or(0, |k| crate::mgmtenv::fp8(&k));
+            let mut env = [0u8; hal::mgmtabi::ENV_LEN];
+            let given = crate::mgmtenv::from_form(body, &mut env);
+            if let Err(why) = crate::mgmtenv::authorise(hal::mgmtabi::ANCHOR_ROTATE, cur, g, &boot_abi::sha256::digest(&pk), if given { &env[..] } else { &[] }, tag, c.now_ms) {
+                return refuse(c, why).map(|_| 0);
+            }
+        }
+        // first enrollment (ADR 0058 D3, one-shot): no K_own exists yet to sign an envelope — the HQENR1 proof of
+        // possession of the new key is the authority, behind the owner token re-authentication (accepted design)
+        None => {
+            if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+                return refuse(c, "re-authentication failed").map(|_| 0);
+            }
+        }
     }
     #[cfg(all(feature = "cm5", feature = "p15-write"))]
     {
@@ -632,7 +652,7 @@ pub fn config_action(c: &Ctx, body: &[u8], confirm: bool) -> Result<u64, &'stati
     let env_given = body
         .split(|&b| b == b'&')
         .find_map(|kv| kv.strip_prefix(b"envelope="))
-        .is_some_and(|v| crate::mgmtabi::unhex_envelope(v, &mut env));
+        .is_some_and(|v| crate::mgmtenv::unhex(v, &mut env));
     let msg = if confirm { hal::mgmtabi::CFG_CONFIRM } else { hal::mgmtabi::CFG_ROLLBACK };
     #[cfg_attr(not(feature = "mcserve"), allow(unused_mut))]
     let mut rec = [0u8; hal::mgmtabi::ACT_LEN];
@@ -654,7 +674,7 @@ pub fn config_action(c: &Ctx, body: &[u8], confirm: bool) -> Result<u64, &'stati
         // the reason is the envelope / cfgd / upload refusal, as one of the static strings Mission Control shows
         let why = a.reason_str();
         #[cfg(feature = "mcserve")]
-        if let Some(r) = crate::mgmtabi::ENV_REASONS.iter().find(|r| **r == why) {
+        if let Some(r) = crate::mgmtenv::REASONS.iter().find(|r| **r == why) {
             return refuse(c, r).map(|_| 0);
         }
         refuse(c, if why.starts_with("no configuration store") { "no configuration store on this device" } else if why.starts_with("no configuration on trial") { "no configuration on trial" } else if why.starts_with("no configuration bundle") { "no configuration bundle in force" } else { "refused by cfgd" }).map(|_| 0)
