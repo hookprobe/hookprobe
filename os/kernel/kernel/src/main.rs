@@ -7252,6 +7252,8 @@ pub extern "C" fn kmain() -> ! {
     {
         // ADR 0047 D2: the on-device Mission Control server logic (parse/route/JSON/SSE).
         let _ = http::mc_selftest();
+        #[cfg(not(feature = "cm5"))]
+        let _ = http::cfgview_selftest(); // UI 2026-11-12: /api/config shows the bundle in force, never a secret
         let _ = mcauth::mcauth_selftest();
         acs_selftest();
         glom_selftest();
