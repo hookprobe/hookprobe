@@ -19,6 +19,7 @@
  */
 import { createSignal } from 'solid-js';
 import { wrapPkcs8, unwrapPkcs8, isEncryptedPem } from './keyBackup';
+import { envelopeBody } from './hqmgmt1';
 
 const DB = 'hp-signing';
 const STORE = 'keys';
@@ -229,6 +230,13 @@ export async function signBundle(bundle: Uint8Array): Promise<Uint8Array> {
   const len = new Uint8Array(4); new DataView(len.buffer).setUint32(0, bundle.length, true);
   const sig = await sign(cat(enc('HQCFG1-SIG'), d));
   return pad512(cat(enc('HQCSIG1\0'), new Uint8Array([1]), len, d, sig));
+}
+
+/** A complete HQMGMT1 envelope as 312 hex digits: body ‖ Ed25519(K_own, "HQMGMT1-SIG" ‖ body), signed with this
+ *  browser's key (which must be the device's enrolled owner key). */
+export async function signEnvelope(f: Parameters<typeof envelopeBody>[0]): Promise<string> {
+  const body = envelopeBody(f);
+  return hex(body) + hex(await sign(cat(enc('HQMGMT1-SIG'), body)));
 }
 
 /** sha256(this browser's public key)[0..8]: the bundle's signer_key_id. */

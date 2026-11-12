@@ -21,6 +21,7 @@ import { ownerRules, refreshOwnerRules } from '../store/ownerRules';
 import { uploadView, refreshUploads, uploadPack, rollbackPack, PACK_LABEL, CONNECTIVITY, type UploadStep } from '../store/packUpload';
 import { fetchPlannerStatus, type PlannerStatus } from '../store/plannerApi';
 import AppShell from './AppShell';
+import { postSigned, MSG } from '../store/envelope';
 import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
 import { startNetworkLive } from '../store/networkLive';
@@ -69,7 +70,8 @@ const AdministrationApp: Component = () => {
     if (!window.confirm(`Roll back ${PACK_LABEL[type] ?? type} from generation ${gen} to the previous verified generation kept on the device?${conn ? '\n\nThis re-applies the older connectivity settings at the next restart: if they no longer match your internet line or Wi-Fi, the device may go offline until you fix them on the boot card.' : ''}`)) return;
     setMsg('');
     try {
-      const r = await rollbackPack(type, () => window.prompt('Rolling back changes what the device runs. Enter your owner key:', ''));
+      // Signed with your signing key (R6 = D); the target generation must be one the device reports.
+      const r = await rollbackPack(type, uploadView()?.types.find((t) => t.type === type)?.rollback_to);
       setRolledStaged(r.staged); setMsg(r.text);
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
@@ -85,12 +87,13 @@ const AdministrationApp: Component = () => {
   };
 
   const reset = async () => {
-    const key = window.prompt('Factory reset erases every owner setting on this device. Enter your owner key:', '');
-    if (!key) return;
     const reason = window.prompt('Reason for the factory reset (kept until the erase):', '');
     if (!reason || reason.trim().length < 3) { setMsg('Cancelled: a reason is required.'); return; }
-    const r = await post<{ ok: boolean; refused?: string; note?: string }>('/api/factory-reset', { owner_key: key, confirm: 'ERASE', reason: reason.trim(), permanent: 'true' });
-    setMsg(r.ok ? (r.note ?? 'Factory reset sealed. The device restarts.') : `Refused by the device: ${r.refused}`);
+    // R6 = D: authorised by an HQMGMT1 envelope (msg 32) signed with your signing key, not the owner token.
+    try {
+      const r = await postSigned<{ ok: boolean; refused?: string; note?: string }>('/api/factory-reset', { confirm: 'ERASE', reason: reason.trim(), permanent: 'true' }, { msg: MSG.FACTORY_RESET });
+      setMsg(r.ok ? (r.note ?? 'Factory reset sealed. The device restarts.') : `Refused by the device: ${r.refused}`);
+    } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   return (
