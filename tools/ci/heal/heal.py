@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L2 heal loop driver (ADR 0052): gates → classify → rerun | autofix-in-isolation | escalate.
+"""L2 heal loop driver (ADR 0063): gates → classify → rerun | autofix-in-isolation | escalate.
 
     tools/ci/heal/heal.py                         run the PR gate set, heal what's red
     tools/ci/heal/heal.py --gates "g1 g4"         specific gates
@@ -200,7 +200,7 @@ def autofix(decision, log_text, args, state, outdir):
     if sh(GIT + ["diff", "--cached", "--quiet"], cwd=wt).returncode == 0:
         res.update(status="no_change", detail="agent made no change")
         return res
-    msg = f"autofix({decision['category']}): heal {decision['gate']} [{sig}]\n\n{notes}\n\nGenerated-by: tools/ci/heal (ADR 0052)"
+    msg = f"autofix({decision['category']}): heal {decision['gate']} [{sig}]\n\n{notes}\n\nGenerated-by: tools/ci/heal (ADR 0063)"
     sh(GIT + ["-c", "user.name=hookprobe-autofix", "-c", "user.email=autofix@hookprobe.invalid",
               "commit", "-q", "--no-verify", "-m", msg], cwd=wt, check=True)
     # The guard and its policy come from the TRUSTED tree running this loop (HERE), never from the
@@ -236,7 +236,7 @@ def autofix(decision, log_text, args, state, outdir):
         pr = sh(GIT + ["push", "--no-verify", "-q", "-u", "origin", branch], cwd=wt)
         res["pushed"] = pr.returncode == 0
         if pr.returncode == 0 and shutil.which("gh"):
-            body = f"**Autofix proposal (ADR 0052 L2)** — DRAFT, needs human review.\n\n{notes}\n\n" \
+            body = f"**Autofix proposal (ADR 0063 L2)** — DRAFT, needs human review.\n\n{notes}\n\n" \
                    f"- signature: `{sig}`\n- guard: PASS\n- gate `{decision['gate']}` re-ran green in isolation\n"
             p = sh(["gh", "pr", "create", "--draft", "--base", args.pr_base, "--head", branch,
                     "--title", f"autofix({decision['category']}): heal {decision['gate']}", "--body", body,

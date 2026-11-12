@@ -2,7 +2,7 @@
 name = "hal"
 version = "0.1.0"
 edition = "2021"
-publish = false  # first-party: never published to crates.io (ADR 0052 G4)
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
 
 [dependencies]
 # ADR 0050 D4 step 5b: HMAC-SHA256 for the AKM-8 (SAE) PTK KDF in `wpaauth` (boot-abi has no dependencies by default)

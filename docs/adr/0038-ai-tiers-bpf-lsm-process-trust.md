@@ -1,6 +1,6 @@
 # ADR 0038 — AI-tier architecture & the BPF-LSM process-trust framework
 
-**Status:** 🟡 Proposed (2026-07-17) — design-session posture, pending ratification. Records the
+**Status:** ⛔ **Retired by the operator 2026-11-12 — superseded** for the BPF-LSM process-trust part by [ADR 0047](0047-heqk-everywhere-on-device-mission-control.md) (no Linux kernel); the AI-tier model has no superseding ADR — was 🟡 Proposed (2026-07-17) — design-session posture, pending ratification. Records the
 "right altitude for each AI question" model and the kernel-side process-trust framework that a
 2026-07-17 architecture session converged on. **Partly implemented, partly vision — flagged per item:**
 the microsecond reflex tier (QSECBIT — Mahalanobis/entropy) and the first millisecond-semantic model
@@ -17,6 +17,7 @@ deterministic core, LLM assistive), [ADR 0014](0014-continuous-improvement-detec
 [ADR 0025](0025-aegis-byo-llm-planner.md) (the BYO-LLM copilot), [ADR 0035](0035-substrate-ownership-underlay-overlay.md)
 (the minimal/immutable underlay this posture starves attackers on), [ADR 0036](0036-verifiable-supply-chain-reproducible-bootstrappable.md)
 (the measurement/attestation chain the models fold into).
+**Retired by the operator 2026-11-12** (A12 follow-up, relayed by the coordinator; PR #1020). Decision text unchanged; kept as a historical record. Still cited as canon by `docs/design/heqk-status-2026-11-05.md`.
 
 ---
 

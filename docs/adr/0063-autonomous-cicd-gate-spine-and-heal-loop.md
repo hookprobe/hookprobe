@@ -1,12 +1,12 @@
-# ADR 0052 — Autonomous CI/CD: one deterministic gate spine, five lifecycle loops
+# ADR 0063 — Autonomous CI/CD: one deterministic gate spine, five lifecycle loops
 
-> **Duplicate number (noted 2026-11-12, A12 doc hygiene).** Two ADRs carry 0052: this one (2026-11-08) and
-> [ADR 0052 Shield v2](0052-shield-v2-dns-protection-on-heqk.md) (2026-11-07, the earlier one, which keeps 0052).
-> **Intended new number for this ADR: 0063** (the next free number; the 0058 proposed in
-> `docs/design/heqk-audit-2026-11-10.md` was taken by ADR 0058 on 2026-11-10). Not renumbered yet: about 25
-> files under `tools/ci/`, `.gitignore`, `.gitleaks.toml` and two `Cargo.toml` comments cite "ADR 0052" for this
-> record, so the renumber is an operator decision (ADR index: `docs/adr/README.md`). Until then, cite it as
-> "ADR 0052 (CI/CD)".
+> **Renumbered 2026-11-12 (operator decision): was ADR 0052.** Two ADRs carried 0052; [ADR 0052 Shield
+> v2](0052-shield-v2-dns-protection-on-heqk.md) (2026-11-07, the earlier one) keeps 0052, and this record (2026-11-08)
+> became 0063, the next free number (the 0058 first proposed in `docs/design/heqk-audit-2026-11-10.md` had been
+> taken on 2026-11-10). Every reference that meant this record was updated in the same change (`tools/ci/**`,
+> `.github/**`, `.gitignore`, `.gitleaks.toml`, the `publish = false` comments in the crate `Cargo.toml` files, one
+> comment in `os/kernel/kernel/src/main.rs`, `docs/compliance/cra-matrix.md`, `docs/adr/README.md`). An older
+> commit, issue or PR that says "ADR 0052" about the gate spine, the heal loop or G0–G6 / L1–L5 means this ADR.
 
 **Status:** 🟡 **Proposed (2026-11-08)** — operator review. Implementation landed on branch
 `worktree-autonomous-cicd` (tools/ci/**, 5 new workflows, root dependabot) and was validated
@@ -15,7 +15,7 @@ after merge + the one-time setup in `tools/ci/README.md`.
 **Status reconciled 2026-11-12:** still 🟡 Proposed — no operator ratification is recorded
 (`docs/design/heqk-audit-2026-11-10.md` §2: "gates run, never ratified"). The implementation is on main since
 PR #738 (2026-11-08, `tools/ci/**`, `tools/ci/gates.sh`) and later extended (shipping flavour PR #1011,
-shipping guard PR #1017). Ratification and the renumber (above) are operator decisions.
+shipping guard PR #1017). Ratification is an operator decision (renumber done 2026-11-12, above).
 **Deciders:** verification-engineer (gate ladder), release-engineer (release/rings/signing
 boundary), security-auditor (guard + workflow threat model), product-steward (this record),
 operator (ratification; branch protection + secrets + bench runner — **Red, operator-run**).
