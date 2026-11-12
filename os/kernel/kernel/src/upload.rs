@@ -921,7 +921,12 @@ fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::K
     });
     let has = |r: &[u8], n: &[u8]| r.windows(n.len()).any(|w| w == n);
     let sealed = e.sealed == 1 && e.gen == 5 && last.is_some_and(|(b, n)| has(&b[..n], &want) && !has(&b[..n], &plain));
-    // steps 8 + 11 (restored after the #1001 merge dropped it): a policy-only bundle activates LIVE (not staged for
+    // Q3: no device key — a PPPoE password is not persisted; a WAN without a secret keeps the signed plaintext path
+    artstore::set_cfg_seal(None, 0);
+    let refused = wan(6, b"mode=pppoe\npppoe_user=x\npppoe_pass=other\n", seq, auth) == Err("not stored: no device key — secrets are never written in plaintext")
+        && entry().gen == 5 && !artstore::on_disk(disk(), b"other");
+    let stored = wan(7, b"mode=dhcp\n", seq, auth) == Ok(7) && entry().gen == 7 && entry().sealed == 0 && stage_hash() == before;
+    // LAST (a bundle in the store makes the per-file WAN uploads above refuse) — steps 8 + 11 (restored after the #1001 merge dropped it): a policy-only bundle activates LIVE (not staged for
     // the next boot) and auto-commits; one with a management binding is live too but waits for the owner's confirm
     #[cfg(not(feature = "cm5"))]
     let handoff = {
@@ -938,11 +943,6 @@ fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::K
     };
     #[cfg(feature = "cm5")]
     let handoff = true; // the hand-off is exercised on QEMU (the self-test disk); metal proves it with cm5-cfgd-live-check
-    // Q3: no device key — a PPPoE password is not persisted; a WAN without a secret keeps the signed plaintext path
-    artstore::set_cfg_seal(None, 0);
-    let refused = wan(6, b"mode=pppoe\npppoe_user=x\npppoe_pass=other\n", seq, auth) == Err("not stored: no device key — secrets are never written in plaintext")
-        && entry().gen == 5 && !artstore::on_disk(disk(), b"other");
-    let stored = wan(7, b"mode=dhcp\n", seq, auth) == Ok(7) && entry().gen == 7 && entry().sealed == 0 && stage_hash() == before;
     [staging, sealed, refused, stored, handoff]
 }
 
