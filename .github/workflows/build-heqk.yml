@@ -23,10 +23,10 @@
 # (NOT date-pinned — heqk floats on nightly by its own choice, independent of
 # this repo's root workspace, which pins stable 1.96.0 in gate-ladder.yml).
 # components = rust-src (build-std) + llvm-tools; target =
-# aarch64-unknown-none-softfloat. dtolnay/rust-toolchain@nightly below mirrors
-# that pin exactly (no drift risk since heqk itself carries no date pin to
-# drift against); the checked-out os/kernel/rust-toolchain.toml remains the
-# authoritative override the moment any cargo command runs inside that dir.
+# aarch64-unknown-none-softfloat. Every toolchain step below installs the DATED nightly pinned in
+# os/kernel/rust-toolchain.toml (2026-11-12): a floating nightly silently changed codegen day to day and the AP
+# size gate measured a different compiler than the factory image ships (it grew the payload ~200 KB). Bump the pin
+# deliberately (toolchain file + every workflow), with the ap-size-gate as the check.
 # =============================================================================
 name: build-heqk
 
@@ -80,8 +80,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install pinned nightly toolchain (os/kernel/rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
         with:
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
 
@@ -156,7 +157,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
+        with:
+          toolchain: nightly-2026-07-20
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: tools/fuzz/run.sh
@@ -167,8 +170,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
         with:
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat
       - uses: Swatinem/rust-cache@v2
