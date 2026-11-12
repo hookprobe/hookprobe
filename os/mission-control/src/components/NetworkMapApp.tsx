@@ -156,14 +156,6 @@ const ZoneCard: Component<ZoneCardProps> = (props) => {
       role="region"
       aria-label={`${props.zone.name} zone — ${zoneDevices().length} devices`}
     >
-      {/* Terminal title bar — hookprobe@edge ~ <zone> */}
-      <div class="hp-terminal-bar net-zone-bar">
-        <span class="hp-dot red" aria-hidden="true" />
-        <span class="hp-dot yellow" aria-hidden="true" />
-        <span class="hp-dot green" aria-hidden="true" />
-        <span class="hp-terminal-title">hookprobe@edge ~ {props.zone.type}</span>
-      </div>
-
       {/* Zone header */}
       <div class="zone-header">
         <div class="zone-header-left">
