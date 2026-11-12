@@ -71,7 +71,11 @@ printf 'HQWAN1\nmode=static\nip=10.100.0.200/24\ngw=10.100.0.1\ndns=10.100.0.1\n
 bundle --wan "$T/ws.txt" --policy "$T/pa.txt"; GS=$G
 grep -q '"applies": "live"' "$T/r$G" && grep -q '"needs_confirm": true' "$T/r$G"; chk $? "B1 static WAN bundle gen $G: live, waits for the owner's confirm"
 waitlog "\[WAN\] live apply: mode STATIC" 30; chk $? "B2 WAN re-brought up live as STATIC"
-sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "B3 LAN client reaches the WAN side through the new static WAN"
+# B3: the gateway is resolved in the loop after the live switch — retry for up to 40 s, and on failure show the
+# device's WAN view (slow next-hop resolution vs never)
+b3=1; for _ in $(seq 1 8); do sleep 5; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206 && { b3=0; break; }; done
+[ $b3 = 0 ] || api /api/network | python3 -c 'import json,sys; d=json.load(sys.stdin); print("     WAN view:", json.dumps(d.get("wan", d))[:300])' 2>/dev/null
+chk $b3 "B3 LAN client reaches the WAN side through the new static WAN"
 rule7; chk $? "B4 rule 7 during the trial"
 $UP --config-confirm "live check B" 2>&1 | grep -qE '"committed": ?true'; chk $? "B5 owner confirm commits gen $G"
 # --- C: a static WAN whose gateway never answers -> LIVE revert to gen B after the 120-s window ---
