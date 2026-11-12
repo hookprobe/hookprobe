@@ -198,7 +198,7 @@ fn format(o: &mut Out, msg: u16, cmd0: u8, rec: &[u8]) -> bool {
                     let _ = writeln!(o, "Uptime:         {} s   clock: {}", i.uptime_s, if i.clock_synced { "NTP" } else { "unsynced" });
                     let _ = writeln!(o, "Detection:      {} rules armed, {} detections; seen {} forwarded {} dropped {}", i.rules_active, i.detections, i.seen, i.forwarded, i.dropped);
                     let _ = writeln!(o, "Configuration:  {} (generation {})   Security: {}", CFG_STATE[i.cfg_state as usize], i.cfg_gen, if i.config_protected { "CONFIG PROTECTED" } else { "CONFIG UNPROTECTED" });
-                    let _ = writeln!(o, "Owner key:      {}", if i.owner_enrolled { "ENROLLED" } else { "NONE" });
+                    let _ = writeln!(o, "Signing key:    {}", if i.owner_enrolled { "ENROLLED" } else { "NONE" });
                 }
             }
         }
