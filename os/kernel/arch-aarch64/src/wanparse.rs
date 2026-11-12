@@ -147,3 +147,43 @@ pub fn dhcp6(ip: &[u8], xid: u32) -> Option<Dhcp6> {
         None => hal::ip6::parse_dhcp6(ip, xid),
     }
 }
+
+// ---- ADR 0050 D4 step 5c: the SAE responder's walk over a station's Commit / Confirm ----
+/// `None` = the EL0 server faulted on this frame.
+pub type SaeFn = fn(&[u8], bool) -> Option<hal::saewire::Msg>;
+pub static mut EL0_SAE: Option<SaeFn> = None;
+
+/// One SAE Authentication frame body (already trimmed to the frame's own length by the caller) → its checked facts.
+/// `None` = the EL0 server faulted (the caller rejects the attempt and forgets the station's SAE state).
+pub fn sae_parse(body: &[u8], h2e_ok: bool) -> Option<hal::saewire::Msg> {
+    match unsafe { EL0_SAE } {
+        Some(h) => h(body, h2e_ok),
+        None => Some(hal::saewire::parse(body, h2e_ok)),
+    }
+}
+
+/// The AP's SAE step for one station frame: walk it (EL0 when installed), then run the kernel's state machine on the
+/// checked record. A server fault rejects this attempt only: nothing is sent, the station's SAE state is forgotten
+/// (it starts again with a new commit), the AP's security mode is untouched — never a fallback to WPA2.
+#[cfg(feature = "wpa3")]
+pub fn sae_respond(
+    tab: &mut sae::SaeAp,
+    now: u64,
+    own: &[u8; 6],
+    peer: &[u8; 6],
+    pt: Option<&sae::PT>,
+    password: &[u8],
+    body: &[u8],
+    rnd: &mut dyn FnMut() -> Option<[u8; 32]>,
+    out: &mut [Option<sae::Out>; 2],
+) -> sae::Event {
+    match sae_parse(body, pt.is_some()) {
+        Some(m) => tab.on_msg(now, own, peer, pt, password, &m, rnd, out),
+        None => {
+            out[0] = None;
+            out[1] = None;
+            tab.forget(peer);
+            sae::Event::Dropped(hal::saewire::reason(hal::saewire::R_FAULT))
+        }
+    }
+}
