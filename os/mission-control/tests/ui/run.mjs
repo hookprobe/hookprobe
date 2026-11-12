@@ -30,6 +30,17 @@ for (const name of specs) {
     async go(path, settle = 900) { await page.goto(base + path, { waitUntil: 'load' }); await page.waitForTimeout(settle); },
     async shot(file, full = false) { if (shots) await page.screenshot({ path: join(shots, `${name}-${file}.png`), fullPage: full }); },
     async vis(loc) { return loc.first().isVisible().catch(() => false); },
+    // Fill and submit the Approve sheet (store/approve.ts): { reason?, key?, passphrase? }.
+    async approve(v = {}) {
+      const s = page.locator('.approve-sheet');
+      await s.waitFor({ state: 'visible', timeout: 5000 });
+      if (v.reason !== undefined) await s.locator('label:has-text("Reason") input').fill(v.reason);
+      const pw = s.locator('input[type=password]');
+      if (v.key !== undefined) await pw.first().fill(v.key);
+      if (v.passphrase !== undefined) { await pw.nth(0).fill(v.passphrase); await pw.nth(1).fill(v.passphrase); }
+      await s.locator('button[type=submit]').click();
+      await s.waitFor({ state: 'hidden', timeout: 5000 });
+    },
   };
   try {
     if (token) {

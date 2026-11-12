@@ -14,6 +14,7 @@
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 import { post } from './actions';
+import { approve } from './approve';
 import type { ApplyUpdate, DiffLine } from '../components/PlanDiff';
 
 export type OwnerKind = 'device_policy' | 'shield_profile' | 'shield_allow' | 'shield_block' | 'device_label';
@@ -67,11 +68,9 @@ export async function previewOwnerChange(c: OwnerChange): Promise<{ lines: DiffL
 
 /** Approve: ask for a reason and the owner key, then write permanently. Returns the journal seq as id. */
 export async function applyOwnerChange(c: OwnerChange): Promise<{ id: string; note: string }> {
-  const reason = window.prompt(`Reason for this change (kept in the journal):`, '');
-  if (!reason || reason.trim().length < 3) throw new Error('Cancelled: a reason of at least 3 characters is required.');
-  const key = window.prompt('This is a permanent change. Enter your owner key:', '');
-  if (!key) throw new Error('Cancelled: the owner key is required.');
-  const o = await post<Outcome>('/api/owner-rules', { ...fields(c, reason.trim()), permanent: 'true', owner_key: key });
+  const a = await approve({ title: 'Make this a permanent rule?', body: `${KIND_LABEL[c.kind] ?? c.kind} for ${c.target}. The device writes it to its journal and keeps it across restarts.`, confirm: 'Approve', reason: {}, key: {} });
+  if (!a) throw new Error('Cancelled.');
+  const o = await post<Outcome>('/api/owner-rules', { ...fields(c, a.reason), permanent: 'true', owner_key: a.key });
   if (!o.ok) throw new Error(`The device refused it: ${o.refused}`);
   return { id: `${c.kind}|${c.target}|${o.seq ?? 0}`, note: `Journal record ${o.seq}.` };
 }

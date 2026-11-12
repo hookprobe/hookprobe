@@ -27,6 +27,7 @@ import AppShell, { normPath } from './AppShell';
 import Drawer from './Drawer';
 import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
+import { askOwnerKey } from '../store/approve';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
 import { configView, refreshConfig } from '../store/configState';
 import { anchorView, refreshAnchor } from '../store/anchor';
@@ -124,7 +125,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     setMsg('');
     try {
       const container = new File([new Uint8Array(s.sig), new Uint8Array(s.txt)], `${FILE[sec()].type}.pack`);
-      const r = await uploadPack(FILE[sec()].type, container, () => window.prompt('This changes how the device connects. Enter your owner key:', ''), () => undefined);
+      const r = await uploadPack(FILE[sec()].type, container, () => askOwnerKey('Send this file to the device?', 'It changes how the device connects. The device checks your signature first.', 'Send'), () => undefined);
       setStaged(r.staged);
       setMsg(`${r.text} The previous generation is kept: Administration → Signed packs can roll back to it.`);
       setStep('done');
@@ -176,7 +177,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
       const sig = await signBundle(b);
       setBFiles({ bin: b, sig });
       if (sample() || !takesBundles()) { setBStep('files'); return; }
-      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => window.prompt('This replaces the internet, Wi-Fi and firewall settings. Enter your owner key:', ''), () => undefined);
+      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => askOwnerKey('Send the bundle to the device?', 'It replaces the sections it carries, then runs as a trial.', 'Send'), () => undefined);
       setBMsg(r.text); setBStep('done');
     } catch (e) { setBMsg(e instanceof Error ? e.message : String(e)); }
   };
