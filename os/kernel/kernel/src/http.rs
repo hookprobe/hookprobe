@@ -321,6 +321,18 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         if !crate::actionapi::origin_ok(req.origin, req.host) || !crate::mcauth::csrf_ok(req.session, req.csrf) {
             return json(scratch, |w| w.raw("{\"ok\":false,\"refused\":\"origin or csrf\"}")).with_status(403);
         }
+        // the write rate limit + the session seq (`?seq=`, /api/session next_seq), as every other owner write
+        let tag = crate::mcauth::session_tag(req.session);
+        let seq = req.query.split('&').find_map(|kv| kv.strip_prefix("seq=")).and_then(|v| v.parse().ok()).unwrap_or(0);
+        let why = if !crate::actions::rate_ok(tag, now_ms) { "rate limited: at most 20 writes a minute per session" } else if !crate::actions::accept_seq(tag, seq) { "replay" } else { "" };
+        if !why.is_empty() {
+            return json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(if why == "replay" { 409 } else { 400 });
+        }
         let mut lines = req.body.split(|&b| b == b'\n').map(|l| l.strip_suffix(b"\r").unwrap_or(l));
         let line = lines.next().unwrap_or(b"");
         let mut env = [0u8; hal::mgmtabi::ENV_LEN];

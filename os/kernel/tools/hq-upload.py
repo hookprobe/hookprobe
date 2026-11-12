@@ -170,7 +170,8 @@ def main():
         conn_h = {**hdr, "Content-Type": "text/plain"}
         if conn[0] is None:
             connect()
-        conn[0].request("POST", "/api/hsh", body=body.encode(), headers={**conn_h, "Cookie": "; ".join(f"{k}={v}" for k, v in jar.items())})
+        # an owner write like the others: the session seq rides in ?seq= (rate limited, replay-checked)
+        conn[0].request("POST", f"/api/hsh?seq={seq}", body=body.encode(), headers={**conn_h, "Cookie": "; ".join(f"{k}={v}" for k, v in jar.items())})
         print(conn[0].getresponse().read().decode(errors="replace"), end="")
         return 0
     if a.rollback or a.reboot or a.enroll or a.rotate or a.factory_reset:
