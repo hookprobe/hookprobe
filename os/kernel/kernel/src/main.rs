@@ -82,6 +82,9 @@ mod wanlive;
 // sealed-config / live apply step 10: the Wi-Fi executor
 #[cfg_attr(not(all(feature = "cm5", feature = "p15-write")), allow(dead_code))]
 mod wifilive;
+// audit A7: Wi-Fi self-heal (the metal port is cm5-only, the mock self-test runs in QEMU)
+#[allow(dead_code)]
+mod wifiheal;
 // ADR 0059 step 4a: the management ABI + the EL0 native shell
 #[cfg(feature = "mcserve")]
 mod mgmtabi;
@@ -601,6 +604,8 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // Phase 3 crash record: report (and clear) why the previous boot ended, if it panicked or faulted.
     #[cfg(feature = "cm5")]
     let _ = rtwdog::take_crash_at_boot();
+    #[cfg(feature = "cm5")]
+    wifiheal::take_at_boot();
     // VA!=PA proof: read the same physical word through the aliased high VA.
     let via_alias = unsafe { read_volatile((phys_probe as usize + sample_pa) as *const u64) };
     kprint!(" mmu : VA {:#x} -> PA {:#x} readback {} (VA!=PA: {})\n",
@@ -3611,8 +3616,11 @@ fn cm5_p10_probe() {
                         let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
                         // REL-08 (soak 2026-11-11): a firmware halt (mailbox FWHALT) is acted on at once, not after the
                         // wedge detector arms (it needs queued deliveries, which an idle station never produces — 22 min)
-                        #[cfg(feature = "cm5")]
-                        let mut fw_halts_seen = cyw43::fw_halts();
+                        // Audit A7 self-heal: classify, then kick -> BSS bounce -> firmware reload -> one reboot -> degrade
+                        let mut heal = wifiheal::Heal::from_boot(wifiheal::boot_record(), !rtwdog::self_heal_allowed());
+                        heal.baseline(cyw43::fw_halts());
+                        let mut stas = wifiheal::StaSet::new();
+                        let mut wifi_off = false; // Degrade: the radio is off for this boot, wired + management keep running
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         let (mut wq_head_fail, mut wq_head_drop) = (0u32, 0u32);
                         // credit-stall diagnostics: last frames handed to the firmware (dst MAC low 3 bytes, len)
@@ -3621,7 +3629,7 @@ fn cm5_p10_probe() {
                         let (mut credit0_since, mut stall_diag_done) = (0u64, false);
                         // Stall experiment: stage 1 = bare dongle interrupt sent, 2 = one control frame sent.
                         // unstick = [episodes, recovered w/o poke, recovered after A (DEV_INT), after B (ctl), reached 2 s]
-                        let (mut unstick_stage, mut unstick_t) = (0u8, 0u64);
+                        let mut unstick_stage = 0u8;
                         let mut unstick = [0u32; 5];
                         // IPv6 LAN router + stateful firewall (stage 2): numbered from the DHCPv6-delegated prefix.
                         static mut V6: arch_aarch64::ip6lan::V6Lan = arch_aarch64::ip6lan::V6Lan::new();
@@ -3632,7 +3640,10 @@ fn cm5_p10_probe() {
                         macro_rules! wifi_send {
                             ($f:expr) => {{
                                 let f: &[u8] = $f;
-                                if f.len() <= PQ_SZ && apcore::tx_priority(f) {
+                                if wifi_off {
+                                    wifi_tx_dropped += 1;
+                                    false
+                                } else if f.len() <= PQ_SZ && apcore::tx_priority(f) {
                                     if pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
                                         prio_direct += 1;
                                         true
@@ -4160,26 +4171,54 @@ fn cm5_p10_probe() {
                                     break;
                                 }
                             }
+                            // Audit A7 self-heal (wifiheal): one classification per iteration. The Kick stage is the metal-proven
+                            // TX-to-station stall kick (2026-11-05, img 6ed4833: one control frame restarted it 2/2, a bare
+                            // dongle interrupt 0/2) — now issued only while tx_max is frozen with an awake station waiting.
+                            let heal_act = if wifi_off {
+                                wifiheal::Action::None
+                            } else {
+                                let (seq, max, _) = cyw43::ap_diag();
+                                let head = if pq_n > 0 { Some(&pq[pq_head][..6]) } else if wq_n > 0 { Some(&wq[wq_head % WQ_N][..6]) } else { None };
+                                let mut hd = [0u8; 6];
+                                let head = head.map(|h| { hd.copy_from_slice(h); hd });
+                                let smp = wifiheal::Sample { now_ms: now() / (freq / 1000).max(1), queued: (wq_n + pq_n) as u32, tx_seq: seq, tx_max: max,
+                                    rx_frames: wifi_frames, stations: stas.len(), fw_halts: cyw43::fw_halts() };
+                                let mut hp = MetalHeal { ssid: ap_ssid, cs: chosen_cs, gtk: &gtk, ap: &mut ap, head, nv: unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) } };
+                                heal.step(&smp, &mut hp)
+                            };
+                            match heal_act {
+                                wifiheal::Action::BssBounce | wifiheal::Action::FirmwareReload => {
+                                    // the stations re-join: what was queued for them is stale
+                                    wifi_tx_dropped += (wq_n + pq_n) as u32;
+                                    wq_n = 0;
+                                    pq_n = 0;
+                                    stas.clear();
+                                }
+                                wifiheal::Action::Degrade => {
+                                    wifi_off = true;
+                                    wifi_tx_dropped += (wq_n + pq_n) as u32;
+                                    wq_n = 0;
+                                    pq_n = 0;
+                                    stas.clear();
+                                    #[cfg(feature = "netsvc")]
+                                    capabilities::set_wifi_ap(false);
+                                    kprint!(" [WIFI-HEAL] DEGRADED — Wi-Fi recovery failed again after the one reboot: Wi-Fi is OFF for this boot (fault in /api/health wifi_heal); wired LAN, WAN and management keep running; no further resets\n");
+                                }
+                                _ => {}
+                            }
                             // TX-credit stall snapshot (once per episode): credit 0 for > 2 s with deliveries queued.
-                            {
+                            if !wifi_off {
                                 let (seq, max, _) = cyw43::ap_diag();
                                 let t = now();
                                 if max.wrapping_sub(seq) <= 2 && wq_n + pq_n > 0 {
                                     if credit0_since == 0 {
                                         credit0_since = t;
                                         unstick_stage = 0;
-                                    } else if unstick_stage == 0 && t.wrapping_sub(credit0_since) > freq / 10 {
-                                        // Firmware TX-to-station stall KICK (metal 2026-11-05, img 6ed4833): a bare dongle
-                                        // interrupt never restarted it (0/2); one control frame always did, within ~5 ms
-                                        // (2/2). The firmware only resumes the station's TX queue when its wl layer runs an
-                                        // ioctl. A MITIGATION, not a root cause: the firmware-side trigger is still unknown.
-                                        unstick[0] += 1;
-                                        let _ = cyw43::fw_pktcnts(); // one control frame (uses the reserved credit)
-                                        unstick_stage = 2;
-                                        unstick_t = t;
-                                    } else if unstick_stage == 2 && t.wrapping_sub(unstick_t) > freq / 2 {
-                                        let _ = cyw43::fw_pktcnts(); // still stuck 0.5 s later: kick again
-                                        unstick_t = t;
+                                    } else if heal_act == wifiheal::Action::Kick {
+                                        if unstick_stage == 0 {
+                                            unstick[0] += 1;
+                                            unstick_stage = 2;
+                                        }
                                     } else if !stall_diag_done && t.wrapping_sub(credit0_since) > 2 * freq {
                                         unstick[4] += 1;
                                         stall_diag_done = true;
@@ -4271,13 +4310,14 @@ fn cm5_p10_probe() {
                                 last_force = now();
                             }
                             let tpoll = cyw43::ticks();
-                            let ev = cyw43::ap_poll(&mut rx, force);
+                            let ev = if wifi_off { cyw43::ApEvent::Idle } else { cyw43::ap_poll(&mut rx, force) };
                             cyw43::prof_add(4, tpoll);
                             rx_busy = !matches!(ev, cyw43::ApEvent::Idle);
                             match ev {
                                 cyw43::ApEvent::Assoc(sta) => {
                                     assocs += 1;
                                     _last_sta = sta;
+                                    stas.add(&sta);
                                     kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
                                         sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                                     // A station that re-associates MID-handshake gets a fresh ANonce
@@ -4323,6 +4363,7 @@ fn cm5_p10_probe() {
                                     cyw43::ap_sae_forget(&sta);
                                     unsafe { (*core::ptr::addr_of_mut!(V6)).forget_mac(&sta) }; // release its IPv6 bindings (SAVI)
                                     leaves += 1;
+                                    stas.remove(&sta);
                                     kprint!("   [P11-AP3] station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left (deauth/disassoc)\n",
                                         sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                                 }
@@ -4787,7 +4828,7 @@ fn cm5_p10_probe() {
                                     }
                                     cyw43::prof_add(5, twan);
                                     let t = now();
-                                    if t.wrapping_sub(last_ht) > freq / 10 {
+                                    if !wifi_off && t.wrapping_sub(last_ht) > freq / 10 {
                                         cyw43::ap_keepalive();
                                         last_ht = t;
                                     }
@@ -4873,42 +4914,16 @@ fn cm5_p10_probe() {
                                             let _ = wifi_send!(&v6buf[..k]);
                                         }
                                     }
-                                    // REL-08: the Wi-Fi firmware HALTED (it trapped): nothing on the host recovers the chip short of a
-                                    // firmware reload, which heqk does not have — so the guarded self-heal reset runs now, with the
-                                    // trap registers in the sealed crash record (the root-cause evidence for the vendor).
-                                    #[cfg(feature = "cm5")]
-                                    if cyw43::fw_halts() != fw_halts_seen {
-                                        fw_halts_seen = cyw43::fw_halts();
-                                        let up = t / freq.max(1);
-                                        if let Some(sh) = cyw43::fw_shared() {
-                                            let _ = cyw43::fw_console_dump(&sh, 24);
-                                            cyw43::fw_trap_dump(&sh);
-                                        }
-                                        let tr = cyw43::fw_trap_regs().unwrap_or([0; 4]);
-                                        kprint!(" [SELF-HEAL] Wi-Fi firmware HALTED (mailbox FWHALT; trap type {:#x} epc {:#010x} lr {:#010x} pc {:#010x}) — {} (uptime {} s)\n",
-                                            tr[0], tr[1], tr[2], tr[3], if rtwdog::self_heal_allowed() { "resetting the unit" } else { "NOT resetting (an early self-heal already happened: back-off, stays up for a power cycle)" }, up);
-                                        if rtwdog::self_heal_allowed() {
-                                            arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi firmware trap {:#x} epc {:#010x} lr {:#010x} pc {:#010x} (mailbox FWHALT)", tr[0], tr[1], tr[2], tr[3]));
-                                        }
-                                    }
+                                    // REL-08: a firmware HALT (mailbox FWHALT) is acted on at once by wifiheal (above): trap registers
+                                    // + diagnostics into the crash-record page, then a firmware reload (the PMKID correction re-applied
+                                    // by the same download), bounded; a reset only when the reloads are spent.
                                     // Stall detector: deliveries waiting for credit AND no WiFi frame read in
                                     // 10 s while a station is associated = the SDPCM stream is wedged (metal
                                     // 2026-10-09: frozen counters, 29 frames pending). Say so, loudly, once.
                                     if wq_n + pq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
                                         if !stall_reported {
-                                            kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged; a station re-join or a power-cycle recovers it\n", wq_n, wifi_frames);
+                                            kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged (wifiheal escalates)\n", wq_n, wifi_frames);
                                             stall_reported = true;
-                                        }
-                                        // Phase 3c self-heal: still wedged after WIFI_WEDGE_RESET_S -> nothing in the loop recovers it
-                                        // (the runtime watchdog only sees a hung LOOP, and this loop keeps running) -> reset
-                                        // through the EL2 gate, reason recorded for the next boot. Backoff: not again when the
-                                        // previous boot was itself such a reset that came early (a firmware that wedges at once
-                                        // must not turn into a reboot loop — it stays up, reported, for a power cycle).
-                                        #[cfg(feature = "cm5")]
-                                        if t.wrapping_sub(stall_since) > WIFI_WEDGE_RESET_S * freq && rtwdog::self_heal_allowed() {
-                                            let up = t / freq.max(1);
-                                            kprint!(" [SELF-HEAL] Wi-Fi stream wedged for {} s with {} deliveries waiting — resetting the unit (uptime {} s)\n", WIFI_WEDGE_RESET_S, wq_n, up);
-                                            arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi stream wedged for {} s ({} deliveries waiting for TX credit, no frame from the firmware)", WIFI_WEDGE_RESET_S, wq_n));
                                         }
                                     } else if wifi_frames != stall_frames {
                                         stall_frames = wifi_frames;
@@ -4917,7 +4932,8 @@ fn cm5_p10_probe() {
                                     }
                                     // Phase 3g: drain the detection ring when a quarter full or every 250 ms (was: only in the
                                     // 5-s heartbeat — a burst from many sources overran the 64-slot ring and lost evidence).
-                                    if events::pending() >= events::CAPACITY / 4 || t.wrapping_sub(last_ev_drain) > freq / 4 {
+                                    // Audit A7: drained on every iteration that has anything pending (was: a quarter full / 250 ms).
+                                    if events::pending() > 0 || t.wrapping_sub(last_ev_drain) > freq / 4 {
                                         last_ev_drain = t;
                                         // Which rules dropped: drain the SOAR ring (nobody else does in apmode).
                                         loop {
@@ -4955,7 +4971,13 @@ fn cm5_p10_probe() {
                                     if t.wrapping_sub(last_beat) > 5 * freq {
                                         {
                                             beat_n += 1;
-                                            if beat_n == 2 || beat_n % 12 == 6 {
+                                            {
+                                                let (hs, hc, hk, hb, hr, hpr) = wifiheal::status();
+                                                kprint!("   [WIFI-HEAL] state={} last={} kicks={} bounces={} reloads={} post_reboot_boot={} stations={}\n", hs, hc, hk, hb, hr, hpr, stas.len());
+                                            }
+                                            if wifi_off {
+                                                // degraded: the radio is off — no firmware console / chanspec reads
+                                            } else if beat_n == 2 || beat_n % 12 == 6 {
                                                 if let Some(sh) = cyw43::fw_shared() {
                                                     let r = cyw43::fw_console_dump(&sh, 12);
                                                     kprint!("   [FWCON] (periodic) shared flags={:#06x} console={:?}\n", sh.flags, r);
@@ -4964,7 +4986,7 @@ fn cm5_p10_probe() {
                                                     kprint!("   [FWCON] sdpcm_shared not readable\n");
                                                 }
                                             }
-                                            if beat_n % 12 == 0 {
+                                            if beat_n % 12 == 0 && !wifi_off {
                                                 if let Some(cs) = cyw43::current_chanspec() {
                                                     ch_checks += 1;
                                                     ch_last = cs;
@@ -7175,6 +7197,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = cfgd::policy_selftest(); // step 7: the live policy executor + the owner-address probe (F-e)
         let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
         let _ = wifilive::selftest(); // step 10: the Wi-Fi executor (derive first, the BSS bounce, keys wiped, LKG revert)
+        let _ = wifiheal::selftest(); // audit A7: Wi-Fi self-heal (classify, kick -> bounce -> reload -> one reboot -> degrade)
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
@@ -14026,9 +14049,6 @@ fn rtc_plausible(secs: u32) -> bool {
     (1_767_225_600..4_102_444_800).contains(&secs)
 }
 
-/// Phase 3c: a Wi-Fi stream wedged this long (deliveries waiting, nothing read from the firmware) resets the unit.
-#[allow(dead_code)]
-const WIFI_WEDGE_RESET_S: u64 = 120;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -14503,6 +14523,97 @@ fn wifi_default() -> Option<wifilive::Want> {
 }
 
 /// The metal side of the Wi-Fi executor (the CYW43455 AP only: never the WAN, never eth1, never a firmware download).
+/// Audit A7: the Wi-Fi self-heal port on the CYW43455 (wifiheal::Port).
+#[cfg(feature = "cm5")]
+struct MetalHeal<'a> {
+    ssid: &'a [u8],
+    cs: u16,
+    gtk: &'a [u8; 16],
+    ap: &'a mut arch_aarch64::cyw43::ApResult,
+    /// The queued head's destination (the station a probe asks the firmware about).
+    head: Option<[u8; 6]>,
+    nv: &'a mut [u8],
+}
+#[cfg(feature = "cm5")]
+impl MetalHeal<'_> {
+    fn start(&mut self) -> bool {
+        use arch_aarch64::cyw43;
+        let (ch, _) = cyw43::chanspec_primary(self.cs);
+        cyw43::ap_start(self.ssid, ch as u32, self.cs, false, self.ap);
+        self.ap.gtk_set = cyw43::ap_install_gtk(self.gtk, 1);
+        self.ap.serve_ready() && self.ap.gtk_set
+    }
+}
+#[cfg(feature = "cm5")]
+impl wifiheal::Port for MetalHeal<'_> {
+    fn kick(&mut self) {
+        let _ = arch_aarch64::cyw43::fw_pktcnts(); // one control frame (uses the reserved credit)
+    }
+    fn probe(&mut self) -> wifiheal::Probe {
+        match self.head {
+            Some(m) if m[0] & 1 == 0 => match arch_aarch64::cyw43::fw_sta_info(&m) {
+                Some(i) if i.flags & 0x10 == 0 => wifiheal::Probe::Gone,
+                Some(i) if i.flags & 0x100 != 0 => wifiheal::Probe::Asleep,
+                Some(_) => wifiheal::Probe::Awake,
+                None => wifiheal::Probe::Failed,
+            },
+            _ => wifiheal::Probe::Unknown,
+        }
+    }
+    fn capture(&mut self, class: wifiheal::Class, d: &mut wifiheal::Diag) {
+        use arch_aarch64::cyw43;
+        use wifiheal::*;
+        d.w[W_FW_HASH] = cyw43::fw_hash();
+        d.w[W_PMKID_FIX] = match cyw43::pmkid_patch() {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => 0,
+        };
+        d.w[W_FC_MASK] = cyw43::fc_mask() as u32;
+        if let Some(sh) = cyw43::fw_shared() {
+            let _ = cyw43::fw_console_dump(&sh, 24);
+            cyw43::fw_trap_dump(&sh);
+        }
+        if let Some(tr) = cyw43::fw_trap_regs() {
+            d.w[W_TRAP..W_TRAP + 4].copy_from_slice(&tr);
+        }
+        if class != Class::Crash {
+            if let Some(c) = cyw43::fw_pktcnts() {
+                d.w[W_PKTCNT..W_PKTCNT + 5].copy_from_slice(&c);
+            }
+        }
+        wifiheal::print_diag(" [WIFI-HEAL] diagnostics before recovery", 0, d);
+    }
+    fn record(&mut self, flags: u32, d: &wifiheal::Diag) {
+        arch_aarch64::crashrec::write_heal(flags, &d.w);
+    }
+    fn bounce(&mut self) -> bool {
+        let _ = arch_aarch64::cyw43::ap_stop();
+        #[cfg(feature = "wpa3")]
+        arch_aarch64::cyw43::ap_sae_forget_all();
+        let ok = self.start();
+        kprint!(" [WIFI-HEAL] BSS bounce on chanspec {:#06x}: serve-ready={}\n", self.cs, ok);
+        ok
+    }
+    fn reload(&mut self) -> bool {
+        let r = arch_aarch64::cyw43::fw_reload(self.nv);
+        let ok = r == 0 && self.start();
+        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={}\n",
+            r, arch_aarch64::cyw43::pmkid_patch(), ok);
+        ok
+    }
+    fn reboot(&mut self, d: &wifiheal::Diag) {
+        let up = d.w[wifiheal::W_UPTIME_S] as u64;
+        kprint!(" [SELF-HEAL] Wi-Fi recovery exhausted ({} reloads) — the ONE reboot (a recurrence after it degrades)\n", d.w[wifiheal::W_COUNTS] >> 24);
+        arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi recovery exhausted: {} after {} reload(s); the next boot degrades Wi-Fi on a recurrence",
+            wifiheal::class_name(d.w[wifiheal::W_CLASS]), d.w[wifiheal::W_COUNTS] >> 24));
+    }
+    fn degrade(&mut self) {
+        let _ = arch_aarch64::cyw43::ap_stop();
+        arch_aarch64::cyw43::radio_off();
+    }
+}
+
 #[cfg(all(feature = "cm5", feature = "p15-write"))]
 struct MetalWifi {
     ap: arch_aarch64::cyw43::ApResult,
