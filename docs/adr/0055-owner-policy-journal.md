@@ -3,6 +3,11 @@
 **Status:** 🟡 Proposed contract (2026-11-09) — direction approved by the operator 2026-11-09 ("durable owner
 settings: approve — authenticated writable policy journal + audit"); this document is the contract to review
 before implementation. **Amends [ADR 0053](0053-operator-write-actions-on-device.md) D1 and S7** (see D9).
+**Status reconciled 2026-11-12:** status unchanged (Proposed contract) — no operator ratification of the contract
+text is recorded, and its "Open items for the operator" (the `pin` token, `blocked` vs `quarantine`) are still open.
+Implementation: built and metal-proven (owner rules 10/10 across a power cycle, `docs/design/heqk-audit-2026-11-10.md`
+§2 and §3; factory reset `docs/design/metal-evidence/20261110-batch38-47.md`); revoke-all added 2026-11-10; the
+signed `pin` token is not built.
 Builds on ADR 0022 (behavioural quarantine vs static allowlists), ADR 0023 (enforcement separation),
 ADR 0049 D1 (signed POLICY.TXT), ADR 0052 (Shield v2), ADR 0054 (per-device credential).
 

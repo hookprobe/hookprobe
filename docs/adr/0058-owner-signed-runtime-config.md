@@ -1,9 +1,14 @@
 # ADR 0058 — Owner-signed configuration on a running device (WAN, Wi-Fi, policy)
 
-**Status:** 🟡 Proposed (2026-11-10). Records the operator decision of 10 Nov 2026 ("the owner signs in the
+**Status:** 🟢 Accepted (operator, 2026-11-10 — the configuration journey and its eight rules approved; was 🟡 Proposed 2026-11-10). Amendments to D2 / D3 / Consequences are proposed by ADR 0059 (still Proposed). Records the operator decision of 10 Nov 2026 ("the owner signs in the
 browser", requirements doc §Configuration journey) and turns it into a device contract. Device-side items
 are for the heqk session (they touch `os/kernel`); the Mission Control half is built against this contract.
 Answers ADR 0056 open item 2 ("whether WIFI.TXT updates belong here").
+
+**Status reconciled 2026-11-12:** evidence for "Accepted": `docs/design/adr0058-implementation.md` (line 3, "ADR 0058
+… is accepted", and its table of the operator's eight configuration rules of 2026-11-10); built and metal-proven —
+config journey 20/20 on CM5 (`docs/design/metal-evidence/20261111-batch59-63.md`). Shipping still needs the G46
+security review of enrollment / rotation (release gate SEC-05, `signoff:g46-security-review`).
 
 ## Context
 

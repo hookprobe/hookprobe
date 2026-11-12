@@ -46,6 +46,8 @@ Status: built, QEMU (`[P-cfgbundle]` 24/24).
 
 Status: built, QEMU (`[P-cfgd]`). Metal: pending (trial, commit and revert on the bench).
 
+*Status reconciled 2026-11-12:* metal-proven since — cfgd 13/13 on CM5 in batch 63 (trial, owner confirm, commit across a reboot, automatic revert of a WAN-breaking bundle, rule 7) — `docs/design/metal-evidence/20261111-batch59-63.md`. Steps 4c (HQMGMT1 envelopes) and the sealed / live configuration work remain QEMU only, metal pending.
+
 ## Step 4: management ABI + `hsh` (docs/design/hsh-native-management-shell.md)
 
 - **4a — built, QEMU, metal (batch 59: `[P-hsh]` + `[P-mgmtabi]` PASS on CM5).**
