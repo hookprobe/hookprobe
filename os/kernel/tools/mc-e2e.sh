@@ -168,6 +168,7 @@ grep -q '"refused":"no DataVolume' <<<"$AE2" && ok "ADR 0058 D3: enrollment with
 # ADR 0059 step 3: the configuration lifecycle is reported; confirm / rollback need re-auth and refuse honestly in QEMU
 CF=$(curl -s -m 10 $C "$B/api/config")
 echo "$CF" | jget "d['state']=='none' and d['on_trial'] is False and d['window_s']==300 and d['auto_rollback'] is True" | grep -q True && ok "ADR 0059: /api/config reports the cfgd lifecycle (no bundle in QEMU)" || bad "/api/config: $CF"
+echo "$CF" | jget "d['live']['phase']=='idle' and d['live']['changes']==[] and d['live']['remaining_s']==0 and d['live']['last']['result']=='none' and isinstance(d['live']['policy_generation'], int) and d['needs_confirm'] is False" | grep -q True && ok "sealed-config live apply: /api/config carries the live engine's phase / changes / remaining_s / last outcome (idle in QEMU)" || bad "/api/config live: $CF"
 CFR=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=confirm+test&permanent=true&seq=$((SQN+5))" --data-urlencode "owner_key=$TOKEN" "$B/api/config/confirm")
 grep -q '"refused":"no configuration' <<<"$CFR" && ok "ADR 0059: /api/config/confirm with nothing on trial is refused honestly" || bad "config confirm: $CFR"
 UPS=$(curl -s -m 10 $C "$B/api/upload")
