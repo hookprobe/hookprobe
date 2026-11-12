@@ -72,7 +72,7 @@ export default async function (t) {
   ok(await vis(page.locator('[aria-label="Apply all together"] >> text=A single-section change (above) is not health-checked')), 'editor: bundle vs single-section difference is stated');
   await page.click('button:has-text("Review and sign")'); await page.waitForTimeout(300);
   await page.click('text=Looks right · sign it'); await page.click('text=Sign in this browser'); await page.waitForTimeout(800);
-  ok(await vis(page.locator('text=not protected at rest yet')), 'the Wi-Fi password is stated as not protected at rest');
+  ok(await vis(page.locator('text=not confirmed protected at rest')), 'without a device report, the passwords are not claimed protected at rest');
   ok(!(await page.locator('button:has-text("Download as a signed bundle")').count()), 'no single-section bundle (a bundle replaces all three sections)');
   await page.keyboard.press('Escape'); await page.waitForTimeout(200);
 
