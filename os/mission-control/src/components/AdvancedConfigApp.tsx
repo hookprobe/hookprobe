@@ -42,6 +42,10 @@ const FILE: Record<Sec, { name: string; sig: string; type: string }> = {
 };
 const secFor = (p: string): Sec => (p.startsWith('/network/wifi') ? 'wifi' : p.startsWith('/protect/policies') ? 'firewall' : 'internet');
 const field = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)', width: '100%', 'box-sizing': 'border-box' } as const;
+/** Table cells: the field look, compact (the wide padding cut values to "MGM" / "a"). */
+const cell = { ...field, 'min-height': '36px', padding: '0 8px', 'font-size': '14px' };
+/** Solid applies static style keys before a spread, so `{ ...cell, width }` kept width:100%; build the object first. */
+const cellW = (width: string) => ({ ...cell, width });
 
 type Step = 'review' | 'sign' | 'upload' | 'done' | 'card';
 
@@ -317,13 +321,13 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                   <thead><tr><th>List</th><th>Seq</th><th>Action</th><th>Proto</th><th>Source</th><th>Destination</th><th>Port</th><th><span class="sr-only">Remove</span></th></tr></thead>
                   <tbody><For each={pol().acls}>{(a, i) => (
                     <tr>
-                      <td><input style={{ ...field, 'min-height': '36px', width: '110px' }} value={a.name} onInput={(e) => setAcl(i(), { name: e.currentTarget.value })} aria-label="List name" /></td>
-                      <td><input style={{ ...field, 'min-height': '36px', width: '60px' }} value={a.seq} onInput={(e) => setAcl(i(), { seq: e.currentTarget.value })} aria-label="Sequence" /></td>
-                      <td><select style={{ ...field, 'min-height': '36px', width: '90px' }} value={a.action} onChange={(e) => setAcl(i(), { action: e.currentTarget.value as AclRow['action'] })} aria-label="Action"><option>allow</option><option>block</option><option>drop</option></select></td>
-                      <td><input style={{ ...field, 'min-height': '36px', width: '70px' }} value={a.proto} onInput={(e) => setAcl(i(), { proto: e.currentTarget.value })} aria-label="Protocol" /></td>
-                      <td><input style={{ ...field, 'min-height': '36px', width: '130px' }} value={a.src} onInput={(e) => setAcl(i(), { src: e.currentTarget.value })} aria-label="Source" /></td>
-                      <td><input style={{ ...field, 'min-height': '36px', width: '130px' }} value={a.dst} onInput={(e) => setAcl(i(), { dst: e.currentTarget.value })} aria-label="Destination" /></td>
-                      <td><input style={{ ...field, 'min-height': '36px', width: '80px' }} value={a.port} onInput={(e) => setAcl(i(), { port: e.currentTarget.value })} aria-label="Port" /></td>
+                      <td><input style={cellW('128px')} value={a.name} onInput={(e) => setAcl(i(), { name: e.currentTarget.value })} aria-label="List name" /></td>
+                      <td><input style={cellW('64px')} value={a.seq} onInput={(e) => setAcl(i(), { seq: e.currentTarget.value })} aria-label="Sequence" /></td>
+                      <td><select style={cellW('96px')} value={a.action} onChange={(e) => setAcl(i(), { action: e.currentTarget.value as AclRow['action'] })} aria-label="Action"><option>allow</option><option>block</option><option>drop</option></select></td>
+                      <td><input style={cellW('84px')} value={a.proto} onInput={(e) => setAcl(i(), { proto: e.currentTarget.value })} aria-label="Protocol" /></td>
+                      <td><input style={cellW('160px')} value={a.src} onInput={(e) => setAcl(i(), { src: e.currentTarget.value })} aria-label="Source" /></td>
+                      <td><input style={cellW('160px')} value={a.dst} onInput={(e) => setAcl(i(), { dst: e.currentTarget.value })} aria-label="Destination" /></td>
+                      <td><input style={cellW('84px')} value={a.port} onInput={(e) => setAcl(i(), { port: e.currentTarget.value })} aria-label="Port" /></td>
                       <td><button class="hp-btn" style={{ 'min-height': '36px' }} onClick={() => setPol({ ...pol(), acls: pol().acls.filter((_, j) => j !== i()) })} aria-label="Remove rule">✕</button></td>
                     </tr>
                   )}</For></tbody>
