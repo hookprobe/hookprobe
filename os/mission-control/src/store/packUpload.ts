@@ -12,10 +12,13 @@
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 import { post } from './actions';
+import { postSigned, MSG, TYPE_CODE } from './envelope';
 
-export interface PackSlot { type: string; cap: number; generation: number; source: 'store' | 'boot'; applies?: 'now' | 'next_boot' }
+export interface PackSlot { type: string; cap: number; generation: number; source: 'store' | 'boot'; applies?: 'now' | 'next_boot';
+  /** The verified generation a rollback would return to (kernel field pending on fix/mgmt-api-review-1112; rename to match). */
+  rollback_to?: number }
 export interface UploadEvent { ms: number; session: string; step: string; type: string; ok: boolean; generation: number; why: string }
-export interface UploadView { store: boolean; chunk_max: number; types: PackSlot[]; in_flight: null | { id: string; type: string; size: number; received: number; verified: boolean }; recent: UploadEvent[] }
+export interface UploadView { store: boolean; chunk_max: number; types: PackSlot[]; in_flight: null | { id: string; type: string; size: number; received: number; verified: boolean; type_code?: number; generation?: number; digest?: string }; recent: UploadEvent[] }
 
 export const [uploadView, setUploadView] = createSignal<UploadView | null>(null);
 export async function refreshUploads(): Promise<void> {
@@ -73,7 +76,7 @@ export async function sha256Hex(data: Uint8Array): Promise<string> {
 }
 
 export type UploadStep = 'begin' | 'upload' | 'verify' | 'activate' | 'done';
-interface Resp { ok: boolean; refused?: string; id?: string; chunk_max?: number; received?: number; generation?: number; active_generation?: number; staged?: boolean; activated?: boolean; journal_seq?: number }
+interface Resp { ok: boolean; refused?: string; id?: string; chunk_max?: number; received?: number; generation?: number; active_generation?: number; staged?: boolean; activated?: boolean; journal_seq?: number; live?: boolean; needs_confirm?: boolean }
 export interface UploadResult { text: string; staged: boolean; generation: number }
 
 async function session(): Promise<{ csrf: string }> {
@@ -100,23 +103,41 @@ export async function uploadPack(type: string, file: File, askKey: () => string 
   progress('verify', bytes.length);
   const f = await post<Resp>('/api/upload/finish', { id: b.id });
   if (!f.ok) throw new Error(`The device did not accept the pack: ${f.refused}`);
-  const key2 = askKey();
-  if (!key2) { await post('/api/upload/abort', { id: b.id }).catch(() => undefined); throw new Error('Cancelled before activation: the pack was verified but not activated.'); }
+  // R6 = D: activation is authorised by an HQMGMT1 envelope (msg 23) bound to exactly what the device verified —
+  // its type code, staged generation and staged digest (GET /api/upload → in_flight). The browser checks that digest
+  // against its own SHA-256 of the same bytes (everything after the 512-byte signature) before it signs.
   progress('activate', bytes.length);
-  const a = await post<Resp>('/api/upload/activate', { id: b.id, owner_key: key2 });
-  if (!a.ok) throw new Error(`Activation refused (the previous pack stays active): ${a.refused}`);
+  const abort = () => post('/api/upload/abort', { id: b.id! }).catch(() => undefined);
+  await refreshUploads();
+  const fl = uploadView()?.in_flight;
+  if (!fl || fl.id !== b.id || !fl.verified || fl.type_code === undefined || fl.generation === undefined || !fl.digest) {
+    await abort();
+    throw new Error('The device did not report what it verified, so this browser cannot sign the activation. Nothing changed.');
+  }
+  if (type !== 'os_image' && (await sha256Hex(bytes.subarray(512))) !== fl.digest.toLowerCase()) {
+    await abort();
+    throw new Error('The device verified different bytes from the file in this browser. Nothing was activated.');
+  }
+  let a: Resp;
+  try {
+    a = await postSigned<Resp>('/api/upload/activate', { id: b.id }, { msg: MSG.UPLOAD_ACTIVATE, arg: BigInt(fl.type_code), generation: fl.generation, digest: fl.digest });
+  } catch (e) { await abort(); throw e; }
+  if (!a.ok) { await abort(); throw new Error(`Activation refused (the previous pack stays active): ${a.refused}`); }
   progress('done', bytes.length);
   await refreshUploads();
   // `staged` comes from the device: next-boot types (wan / wifi / policy / os_image) only take effect at the next restart.
   const staged = a.staged ?? uploadView()?.types.find((t) => t.type === type)?.applies === 'next_boot';
+  // `live` (ADR 0059 step 3): a configuration bundle the device applied at once and is now trying.
+  if (a.live) return { staged: false, generation: a.generation ?? 0, text: `Generation ${a.generation} verified and applied live. It is on trial now: ${a.needs_confirm ? 'press Keep within the window, or it switches back by itself.' : 'the device keeps it once the internet works, or switches back by itself.'}` };
   return { staged, generation: a.generation ?? 0, text: staged ? `Generation ${a.generation} verified and staged: it takes effect at the next restart.` : `Generation ${a.generation} verified and applied now.` };
 }
 
 /** Roll a pack back to the other A/B half (re-verified by the device). Throws with the device's refusal. */
-export async function rollbackPack(type: string, askKey: () => string | null): Promise<UploadResult> {
-  const key = askKey();
-  if (!key) throw new Error('Cancelled: the owner key is required.');
-  const a = await post<Resp>('/api/upload/rollback', { type, owner_key: key });
+export async function rollbackPack(type: string, target: number | undefined): Promise<UploadResult> {
+  // R6 = D: msg 24 binds the type code and the generation it rolls back TO. That target must come from the device
+  // (a guessed one is refused and consumes a sequence number), so without it the rollback is not offered.
+  if (target === undefined || !(type in TYPE_CODE)) throw new Error('This device does not report which generation a rollback would return to yet, so it cannot be signed. Nothing changed.');
+  const a = await postSigned<Resp>('/api/upload/rollback', { type }, { msg: MSG.UPLOAD_ROLLBACK, arg: BigInt(TYPE_CODE[type]), generation: target });
   await refreshUploads();
   if (!a.ok) throw new Error(`Rollback refused: ${a.refused}`);
   const staged = !!a.staged;
