@@ -130,7 +130,9 @@ jobs:
           for f in cyw43455-sdio.bin cyw43455-sdio.clm_blob cyw43455-sdio-cm5.nvram.txt; do
             [ -e "firmware/brcm/$f" ] || echo "CI-PLACEHOLDER-NOT-FIRMWARE" > "firmware/brcm/$f"
           done
-          cargo build -p kernel --features hboot,apmc,wifi-bigtx,appersist --release
+          SHIP=$(grep -v "^#" ../../tools/ci/shipping-features.txt | tr -d "[:space:]")
+          echo "shipping flavour: $SHIP"
+          cargo build -p kernel --features "$SHIP" --release
           ../../tools/ci/ap-size-gate.sh target/aarch64-unknown-none-softfloat/release/kernel   # audit A3
           if grep -rnE 'const [A-Z_]*(PSK|PASS)[A-Z_]*: &\[u8\] = b"' kernel/src arch-aarch64/src; then
             echo "FATAL: Wi-Fi credential literal in kernel source — use build-time env (ADR 0045)"; exit 1
