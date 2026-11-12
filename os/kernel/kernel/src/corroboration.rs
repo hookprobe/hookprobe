@@ -17,10 +17,10 @@
 //!   * heqk has no segment-isolation primitive, so "quarantine-to-segment" could only be
 //!     a full `FrameDrop` of the source — exactly the legit-customer outage ADR 0023
 //!     forbids.
-//! So `decide_core` keeps mapping these findings to `Observe`; this module only RAISES
-//! the alert severity the SOC sees. AI/heuristics propose; the deterministic gate still
-//! says PASS (contract C9). The same observe-by-default posture that keeps the behavioral
-//! axes off the wire "by construction" (behavioral.rs / verdict.rs).
+//!     So `decide_core` keeps mapping these findings to `Observe`; this module only RAISES
+//!     the alert severity the SOC sees. AI/heuristics propose; the deterministic gate still
+//!     says PASS (contract C9). The same observe-by-default posture that keeps the behavioral
+//!     axes off the wire "by construction" (behavioral.rs / verdict.rs).
 //!
 //! Bounded + `no_std`: a small direct-mapped, window-reset per-source table, exactly the
 //! `ratelimit::touch_scan_slot` discipline (a colliding source EVICTS the slot, never
