@@ -686,6 +686,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             }
             // R6 = D (additive): what the owner's HQMGMT1 envelope for confirm / rollback must bind — this device, this
             // boot's epoch, the next sequence, the bundle in force (generation + SHA-256 of the HQCFG1 bundle)
+            #[cfg(feature = "mcserve")]
             {
                 let c = crate::mgmtabi::challenge();
                 let hx = |w: &mut crate::mcstate::JsonBuf, b: &[u8]| {

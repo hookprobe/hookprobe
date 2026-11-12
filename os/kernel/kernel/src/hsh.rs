@@ -342,7 +342,9 @@ pub fn selftest_web(now_ms: u64) -> bool {
     let replay = has(&run(b"config confirm", &good_env), b"replayed or stale");
     let older = has(&run(b"config confirm", &test_envelope(&kp, &mk(6, m::CFG_CONFIRM, 8, dig_n1))), b"replayed or stale");
     let (j1, last_msg, last_ok) = crate::mgmtabi::journaled();
-    let journaled = j1 - j0 == 14 && last_msg == m::CFG_CONFIRM && !last_ok;
+    // 13 configuration requests above (3 session-only + 7 refused envelopes + valid + replay + older)
+    let jn = j1 - j0;
+    let journaled = jn == 13 && last_msg == m::CFG_CONFIRM && !last_ok;
     let mut w = [0u8; 64];
     let jn = journal_words(b"  config\x01 \x1bstage 00000000000000aa", &mut w);
     let words = &w[..jn] == b"config stage";
@@ -366,8 +368,8 @@ pub fn selftest_web(now_ms: u64) -> bool {
     crate::cfgd::set_selftest(false);
     let pass = view && session_only && wrong_key && wrong_dev && wrong_boot && stale_n && other_op && tamper && malformed && good && replay && older && journaled && words && no_owner && tool;
     arch_aarch64::_print(format_args!(
-        " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={}\n",
-        if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, words, no_owner, tool
+        " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} ({} of 13) journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={}\n",
+        if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, jn, words, no_owner, tool
     ));
     pass
 }
