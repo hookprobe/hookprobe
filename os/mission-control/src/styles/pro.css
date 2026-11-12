@@ -99,7 +99,7 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
 .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--hp-border); overflow-x: auto; }
 .tab { font: inherit; font-size: 14px; min-height: 44px; padding: 0 14px; background: none; border: 0; border-bottom: 2px solid transparent; color: var(--hp-text-secondary); cursor: pointer; white-space: nowrap; }
 .tab:hover { color: var(--hp-text-primary); }
-.tab[aria-selected="true"] { color: #fff; border-bottom-color: var(--hp-cyan); font-weight: 600; }
+.tab[aria-current="page"], .tab[aria-selected="true"] { color: #fff; border-bottom-color: var(--hp-cyan); font-weight: 600; }
 .story { list-style: none; margin: 0; padding: 0; }
 .story-step { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 12px; }
 .story-rail { display: flex; flex-direction: column; align-items: center; }
