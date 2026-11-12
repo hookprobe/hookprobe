@@ -6,6 +6,11 @@ from the flasher owner (task #20)** on the boundary in D1 and the open items bef
 Compatible with ADR 0037 (static client-side browser flasher — "no backend" is a security property) and
 ADR 0051 (owner CA / Mission Control HTTPS): this interface never receives, generates or stores an owner
 private key.
+**Status reconciled 2026-11-12:** status unchanged (Proposed contract) — the flasher owner's countersign of the D1
+boundary is still not recorded. Implementation: phase 1 and phase 2 (`os_image`) metal-proven
+(`docs/design/metal-evidence/20261110-ota-a1.md`, `20261110-batch29.md`); since 2026-11-12 upload activate /
+rollback for every type need an owner-signed HQMGMT1 envelope (PR #1018, ADR 0059 D9 decision note) — QEMU only,
+metal pending. Open item 2 (WIFI.TXT) is answered by ADR 0058.
 
 ## Context
 

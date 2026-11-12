@@ -24,6 +24,7 @@ frontier 3.5 is *already* this), [ADR 0023](0023-enforcement-separation.md) (obs
 bloom veto that mis-vetoed would have to fail OPEN to respect it — one reason it does not fit our
 LPM/CIDR blocklist), [ADR 0003](0003-platform-manifest-schema.md) (the manifest the per-platform
 dataplane-tuning block extends).
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 ## Context — the actual data plane (ground truth, not assumed)
 

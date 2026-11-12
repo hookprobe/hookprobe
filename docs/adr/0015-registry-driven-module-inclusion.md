@@ -3,6 +3,7 @@
 **Status:** ✅ Accepted (2026-07-04) — implemented: `builder/gen-staging.sh` (generator) → `builder/generated/staging-plan.json` + `85-hookprobe-modules.preset`, `builder/stage-apply.sh` (applier), `builder/verify-staging.sh` (gate). Proposed 2026-07-03.
 **Deciders:** operator, os-architect, release-engineer, verification-engineer, code-developer.
 **Relates to:** [ADR 0003](0003-platform-manifest-schema.md) (module model; `runtime ∈ wasm/container/sysext/image-layer`; capability gating), [ADR 0009](0009-soc-brain-edge-cloud.md) (`--run-wasm` verify-before-run, native sysext siblings napse-capture/napse-quarantine), [ADR 0002](0002-crypto-agility-pqc.md) (`signature: required`, device verifies never signs), [ADR 0012](0012-release-definition-cortex-pass.md) (what a release *is* — this closes a completeness hole in it). Mirrors the platform invariant in `docs/architecture/Readme.md` ("adding future hardware = one file in `platforms/`").
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 ---
 

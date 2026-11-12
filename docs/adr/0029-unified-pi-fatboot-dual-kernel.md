@@ -2,10 +2,11 @@
 
 > ⛔ **Superseded on the rpi-native tier by [ADR 0043](0043-heqk-microkernel-substrate.md) (2026-07-24).** heqk is its own aarch64 boot image; there is no Linux kernel to fat-boot. Retained as history; still informs the UEFI-tier kernel story where applicable.
 
-**Status:** 🟡 Proposed (2026-07-08) — design accepted pending operator sign-off; **no build scripts rewritten yet** (this ADR is the design that gates the follow-on implementation). Classification for all four boards is already in-tree and test-locked; the boot-substrate work is what this ADR authorizes.
+**Status:** ⛔ Superseded (rpi-native tier: ADR 0043, 2026-07-24; every platform: ADR 0047, 2026-10-09) — was 🟡 Proposed (2026-07-08) — design accepted pending operator sign-off; **no build scripts rewritten yet** (this ADR is the design that gates the follow-on implementation). Classification for all four boards is already in-tree and test-locked; the boot-substrate work is what this ADR authorizes.
 **Status update 2026-11-09:** ⛔ **Superseded (by ADR 0043/0047).** This Linux-kernel boot-substrate design was never ratified; the CM5/Pi tier moved to the heqk microkernel (ADR 0043/0044) and ADR 0047 made heqk the substrate everywhere. Kept as a historical record; the files it names now live under `legacy/linux-tier/` (see `docs/PATHS.md`).
 **Deciders:** os-architect (author), release-engineer, verification-engineer, security-auditor.
 **Relates to:** [ADR 0019](0019-bootc-debian-substrate.md) (boot-model split: rpi-native A/B image-sync vs UEFI bootc — this ADR refines the rpi-native factory it names), [ADR 0017](0017-authenticated-aot-cache.md)/[ADR 0021](0021-multiarch-native-artifact-digests.md) (per-CPU-tier AOT selection — the A76 seam that must keep working per-board from a shared rootfs), [ADR 0003](0003-platform-manifest-schema.md) (manifest classification — the "detect once" contract), [ADR 0016](0016-artifact-hash-signing.md) (supply-chain signing the RPi-repo inputs must not break), `docs/architecture/driver-strategy.md` (driver vendoring discipline), `platforms/rpi4.yaml` + `platforms/rpi5.yaml`.
+**Status reconciled 2026-11-12:** the Status line said Proposed while the banner above and the ADR index (`docs/adr/README.md`) say Superseded by ADR 0043 / 0047; Status line aligned. Decision text unchanged; kept as history.
 
 ---
 
