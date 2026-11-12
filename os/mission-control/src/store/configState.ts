@@ -23,6 +23,12 @@ export interface ConfigView {
   /** How stored settings are protected (sealed with the device key, or not). */
   at_rest?: { sealed: boolean; secrets_protected: boolean; migrated: number; device_key: boolean; volatile_ram_only: boolean; persisted: boolean };
   envelope?: { owner_enrolled: boolean };
+  /** What the bundle in force holds (kernel #1055): a bundle replaces the WHOLE configuration, so an edit re-sends
+   *  the sections in force. Secrets are never served, only `<key>_set`. */
+  sections?: Record<'wan' | 'wifi' | 'policy', { present: boolean; digest: string | null }>;
+  policy_text?: string | null;
+  wan_keys?: Record<string, string | boolean> | null;
+  wifi_keys?: Record<string, string | boolean> | null;
 }
 export const [configView, setConfigView] = createSignal<ConfigView | null>(null);
 /** When the last answer arrived (ms), to count the trial window down between polls. */
