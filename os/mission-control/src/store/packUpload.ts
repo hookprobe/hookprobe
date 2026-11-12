@@ -77,7 +77,7 @@ export async function sha256Hex(data: Uint8Array): Promise<string> {
 
 export type UploadStep = 'begin' | 'upload' | 'verify' | 'activate' | 'done';
 interface Resp { ok: boolean; refused?: string; id?: string; chunk_max?: number; received?: number; generation?: number; active_generation?: number; staged?: boolean; activated?: boolean; journal_seq?: number; live?: boolean; needs_confirm?: boolean }
-export interface UploadResult { text: string; staged: boolean; generation: number }
+export interface UploadResult { text: string; staged: boolean; generation: number; live?: boolean; needsConfirm?: boolean }
 
 async function session(): Promise<{ csrf: string }> {
   return fetchJson<{ csrf: string }>('/api/session');
@@ -128,7 +128,7 @@ export async function uploadPack(type: string, file: File, askKey: () => Promise
   // `staged` comes from the device: next-boot types (wan / wifi / policy / os_image) only take effect at the next restart.
   const staged = a.staged ?? uploadView()?.types.find((t) => t.type === type)?.applies === 'next_boot';
   // `live` (ADR 0059 step 3): a configuration bundle the device applied at once and is now trying.
-  if (a.live) return { staged: false, generation: a.generation ?? 0, text: `Generation ${a.generation} verified and applied live. It is on trial now: ${a.needs_confirm ? 'press Keep within the window, or it switches back by itself.' : 'the device keeps it once the internet works, or switches back by itself.'}` };
+  if (a.live) return { staged: false, live: true, needsConfirm: !!a.needs_confirm, generation: a.generation ?? 0, text: `Generation ${a.generation} verified and applied live. It is on trial now: ${a.needs_confirm ? 'press Keep within the window, or it switches back by itself.' : 'the device keeps it once the internet works, or switches back by itself.'}` };
   return { staged, generation: a.generation ?? 0, text: staged ? `Generation ${a.generation} verified and staged: it takes effect at the next restart.` : `Generation ${a.generation} verified and applied now.` };
 }
 

@@ -17,6 +17,12 @@ export interface ConfigView {
   auto_rollback: boolean; health: string;
   /** Management-plane change: not auto-committed — the owner must Keep it within the window or it reverts. */
   needs_confirm?: boolean;
+  /** Live apply (ADR 0059 step 3): what the engine is doing now and how the last trial ended. */
+  live?: { phase: 'idle' | 'applying' | 'trial' | 'reverting' | string; changes: string[]; needs_confirm: boolean; window_s: number; remaining_s: number;
+    last: { result: 'none' | 'committed' | 'reverted' | 'revert_failed' | string; generation: number }; policy_generation: number; mgmt_ok: boolean | null; mgmt_probe: string | null };
+  /** How stored settings are protected (sealed with the device key, or not). */
+  at_rest?: { sealed: boolean; secrets_protected: boolean; migrated: number; device_key: boolean; volatile_ram_only: boolean; persisted: boolean };
+  envelope?: { owner_enrolled: boolean };
 }
 export const [configView, setConfigView] = createSignal<ConfigView | null>(null);
 /** When the last answer arrived (ms), to count the trial window down between polls. */
@@ -30,6 +36,8 @@ export async function refreshConfig(): Promise<void> {
 export function secondsLeft(now: number): number {
   const v = configView();
   if (!v || v.state !== 'trial') return 0;
+  // The device's own remaining time when it reports one (live trials: 120 s auto-commit, 300 s owner confirm).
+  if (v.live && v.live.phase === 'trial') return Math.max(0, Math.round(v.live.remaining_s - (now - configAt()) / 1000));
   return Math.max(0, Math.round(v.window_s - v.elapsed_s - (now - configAt()) / 1000));
 }
 
@@ -50,3 +58,12 @@ async function act(path: string, ask: string): Promise<string> {
 }
 export const confirmConfig = () => act('/api/config/confirm', 'Keep this configuration?');
 export const rollbackConfig = () => act('/api/config/rollback', 'Go back to the previous configuration? The device restarts.');
+
+/** How the Wi-Fi / PPPoE passwords inside signed configuration are stored, from the device's own report. */
+export function restNote(): string {
+  const r = configView()?.at_rest;
+  if (!r) return 'The passwords travel inside the signed configuration. This device does not report how it stores them, so they are not confirmed protected at rest.';
+  if (r.volatile_ram_only) return 'This device has no device key: the passwords apply, but they are kept only in memory, not after a restart.';
+  if (r.secrets_protected && r.device_key) return 'Stored encrypted with a key only this device has, so a copy of its storage cannot be read elsewhere.';
+  return 'Stored in clear on this device: anyone holding its storage can read them. Not protected at rest.';
+}
