@@ -224,12 +224,21 @@ static mut STATE: Boot = Boot::None;
 static mut GEN: u64 = 0;
 static mut T0: u64 = 0;
 static mut TRIAL: bool = false;
+/// SHA-256 of the HQCFG1 bundle in force (zeros = none): what an owner's confirm / rollback envelope binds to.
+#[cfg_attr(not(feature = "mcserve"), allow(dead_code))]
+static mut DIGEST: [u8; 32] = [0; 32];
 
 pub fn state() -> Boot {
     unsafe { STATE }
 }
 pub fn generation() -> u64 {
     unsafe { GEN }
+}
+/// The digest of the bundle in force (on trial or committed; zeros = none) — the same SHA-256 the bundle's HQCSIG1
+/// record carries, so the owner computes it from the file they staged (`sha256(bundle)`).
+#[cfg_attr(not(feature = "mcserve"), allow(dead_code))]
+pub fn bundle_digest() -> [u8; 32] {
+    unsafe { DIGEST }
 }
 pub fn on_trial() -> bool {
     unsafe { TRIAL }
@@ -282,6 +291,7 @@ fn load_half<D: BlockDev + ?Sized>(dev: &D, half: u8, key: &[u8; 32], min_gen: u
         SECS = secs;
         NSEC = n;
         GEN = v.generation;
+        DIGEST = boot_abi::sha256::digest(&buf[..len]);
     }
     Some(v.generation)
 }
@@ -290,6 +300,7 @@ fn clear() {
     unsafe {
         NSEC = 0;
         GEN = 0;
+        DIGEST = [0; 32];
         TRIAL = false;
     }
 }
@@ -1065,6 +1076,19 @@ pub fn set_selftest(on: bool) {
 }
 fn in_selftest() -> bool {
     unsafe { SELFTEST }
+}
+
+/// QEMU self-tests only: pose a bundle in force (`gen`, `digest`, on trial or not) for the envelope binding checks,
+/// and put it back afterwards. Never in a CM5 build.
+#[cfg(all(not(feature = "cm5"), feature = "hsh"))]
+pub fn test_pose(gen: u64, digest: [u8; 32], trial: bool) -> (u64, [u8; 32], bool) {
+    unsafe {
+        let was = (GEN, DIGEST, TRIAL);
+        GEN = gen;
+        DIGEST = digest;
+        TRIAL = trial;
+        was
+    }
 }
 
 pub fn confirm_device() -> Result<u64, &'static str> {
