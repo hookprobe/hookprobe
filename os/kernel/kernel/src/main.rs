@@ -9760,9 +9760,9 @@ fn p8_l7behav() -> bool {
 ///  * `guard_from_mbr` rejects a GPT-protective MBR, a too-low partition, and a
 ///    missing signature, and accepts a well-formed one;
 ///  * the reserved-window guard admits only LBA 2016..2047.
-/// Under `p15-write` it additionally drives the real store write path (read-back
-/// verified) through the RamDisk, whose write hook PANICS on any out-of-window
-/// LBA — the write-window-escape assertion.
+///    Under `p15-write` it additionally drives the real store write path (read-back
+///    verified) through the RamDisk, whose write hook PANICS on any out-of-window
+///    LBA — the write-window-escape assertion.
 #[cfg(not(feature = "cm5"))]
 fn p15_seal_selftest() {
     use seal::{Policy, SealBlob, SealErr};
@@ -10449,7 +10449,7 @@ fn p15_fs_selftest() {
 ///     `mount_sealed` by the seal MAC; the intact records survive.
 ///   * CROSS-RESTART — the VEK persists SEALED in the keystore, so boot 2 loads it
 ///     (created=false) and decrypts boot 1's records field-for-field.
-/// QEMU/virtio-blk-proven; the real eMMC write + OTP-bound SRK are metal (Gate R).
+///     QEMU/virtio-blk-proven; the real eMMC write + OTP-bound SRK are metal (Gate R).
 #[cfg(not(feature = "cm5"))]
 fn p15_sealfs_selftest() {
     let present = arch_aarch64::virtio_blk::VirtioBlk::open().is_some();
@@ -11192,7 +11192,7 @@ fn el0_preempt_spawn() {
     mmu.map_user_data_in(l1, ESTACK_VA, stack);
     mmu.map_user_data_in(l1, ECNT_VA, cnt);
     EL0_CNT_PA.store(cnt, Ordering::SeqCst); // kernel reads the counter via its physical frame
-    let kstack_top = unsafe { core::ptr::addr_of!(EL0_KSTACK) as usize + KSTACK_SIZE };
+    let kstack_top = core::ptr::addr_of!(EL0_KSTACK) as usize + KSTACK_SIZE;
     let sp = arch_aarch64::thread::make_el0_thread(kstack_top, ECODE_VA, ESTACK_VA + 0x1000, ECNT_VA);
     let ttbr0 = l1 as u64 | ((asid as u64) << 48);
     // CORE-6/DSN-6: even the preempt-loop TCB gets its OWN restart record, so if it
@@ -11232,7 +11232,7 @@ fn el0_fault_spawn() {
     const FSTACK_VA: usize = 0x8300_1000;
     mmu.map_user_code_in(l1, FCODE_VA, code);
     mmu.map_user_data_in(l1, FSTACK_VA, stack);
-    let kstack_top = unsafe { core::ptr::addr_of!(EL0_FKSTACK) as usize + KSTACK_SIZE };
+    let kstack_top = core::ptr::addr_of!(EL0_FKSTACK) as usize + KSTACK_SIZE;
     let sp = arch_aarch64::thread::make_el0_thread(kstack_top, FCODE_VA, FSTACK_VA + 0x1000, 0);
     let ttbr0 = l1 as u64 | ((asid as u64) << 48);
     // CORE-6: arm THIS TCB's own restart record (was the shared globals). Capture its
@@ -11742,7 +11742,7 @@ static CSPACE_INIT: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicB
 /// The per-tid CSpace table, initialised to all-`None` on first use.
 fn cspace_tab() -> &'static mut [Option<caps::CapSpace>; scheduler::MAX_THREADS] {
     use core::sync::atomic::Ordering;
-    let base = unsafe { core::ptr::addr_of_mut!(CSPACE) as *mut Option<caps::CapSpace> };
+    let base = core::ptr::addr_of_mut!(CSPACE) as *mut Option<caps::CapSpace>;
     if !CSPACE_INIT.load(Ordering::Acquire) {
         for i in 0..scheduler::MAX_THREADS {
             unsafe { base.add(i).write(None) };
@@ -11825,9 +11825,9 @@ fn build_root_cspace() {
 /// "child" CSpace ONLY the Frame, and only the READ right. The child must then:
 ///   * hold the Frame with R but NOT W and NOT G (rights narrowed, cannot amplify), and
 ///   * NOT hold the Endpoint at all (un-delegated authority is simply absent).
-/// This is the confused-deputy fix and the exact primitive P12 needs ("a publisher may
-/// hold Topic{W} but not Topic{R}"). Uses local CSpaces so it can't perturb the live
-/// per-tid CSPACE table or the scheduler.
+///     This is the confused-deputy fix and the exact primitive P12 needs ("a publisher may
+///     hold Topic{W} but not Topic{R}"). Uses local CSpaces so it can't perturb the live
+///     per-tid CSPACE table or the scheduler.
 fn cspace_isolation_demo() {
     use caps::{CapSpace, ObjType, G, R, W};
     let base = arch_aarch64::mmu::reserve_region(64 * 1024);
@@ -11879,14 +11879,14 @@ fn cspace_isolation_demo() {
 ///   3. `revoke` of the parent Untyped deletes both Frame caps and, because they carry a
 ///      mapping record, INVALIDATES their L3 entries (+ tlbi) — both descriptors read back
 ///      INVALID. Authority was severed BY revoke, through the cap, not by clearing a slot.
-/// Uses a local CSpace + real reserved frames; arch-neutral read-back so it validates
-/// under QEMU. #[cfg(not(cm5))] so the metal build is untouched (P10-BT lesson).
-/// A1a [P2-teardown] (CORE-2 CSpace kill-clear) — prove that a thread's CSpace is DROPPED on
-/// its final exit so a REUSED scheduler slot cannot inherit the dead task's caps (the
-/// confused-deputy `clear_cspace` closes, now wired into p12_task_exit + the fault-kill path).
-/// Table-level (uses a never-spawned spare slot, perturbs nothing live): install a CSpace
-/// holding a Frame cap -> it resolves; clear_cspace (what exit calls) -> the slot resolves
-/// NOTHING; a new occupant's OWN (empty) CSpace does NOT see the old cap.
+///      Uses a local CSpace + real reserved frames; arch-neutral read-back so it validates
+///      under QEMU. #[cfg(not(cm5))] so the metal build is untouched (P10-BT lesson).
+///      A1a [P2-teardown] (CORE-2 CSpace kill-clear) — prove that a thread's CSpace is DROPPED on
+///      its final exit so a REUSED scheduler slot cannot inherit the dead task's caps (the
+///      confused-deputy `clear_cspace` closes, now wired into p12_task_exit + the fault-kill path).
+///      Table-level (uses a never-spawned spare slot, perturbs nothing live): install a CSpace
+///      holding a Frame cap -> it resolves; clear_cspace (what exit calls) -> the slot resolves
+///      NOTHING; a new occupant's OWN (empty) CSpace does NOT see the old cap.
 #[cfg(not(feature = "cm5"))]
 fn p2_teardown_demo() {
     use caps::{CapSpace, ObjType};
@@ -12132,8 +12132,8 @@ fn p12_signal_poll() -> bool {
 ///   * a task WITHOUT `Topic{R}` is DENIED subscribe (the check falls out of
 ///     `has_rights` — "ungranted subscribe is REFUSED", RC_DENIED), and
 ///   * a task holding `Topic{R}` subscribes and RECEIVES the published event.
-/// This is the smart-farm property: a compromised sensor driver (Topic{W} only)
-/// simply cannot subscribe/actuate — that authority is not in its CSpace.
+///     This is the smart-farm property: a compromised sensor driver (Topic{W} only)
+///     simply cannot subscribe/actuate — that authority is not in its CSpace.
 #[cfg(not(feature = "cm5"))]
 fn p12_pubsub_authority() -> bool {
     use caps::{CapSpace, ObjType, G, R, W};
@@ -12237,7 +12237,7 @@ fn p12_el0_spawn() {
     mmu.map_user_data_in(wl1, WSTACK_VA, wstack);
     mmu.map_user_data_in(wl1, WRESULT_VA, wresult);
     P12_RESULT_PA.store(wresult, Ordering::SeqCst);
-    let wkstack = unsafe { core::ptr::addr_of!(EL0_WKSTACK) as usize + KSTACK_SIZE };
+    let wkstack = core::ptr::addr_of!(EL0_WKSTACK) as usize + KSTACK_SIZE;
     let wsp = arch_aarch64::thread::make_el0_thread(wkstack, WCODE_VA, WSTACK_VA + 0x1000, 0);
     let wttbr0 = wl1 as u64 | ((wasid as u64) << 48);
     if let Some(tid) = scheduler::spawn_as(wsp, 7, wttbr0) {
@@ -12266,7 +12266,7 @@ fn p12_el0_spawn() {
     const SSTACK_VA: usize = 0x8500_1000;
     mmu.map_user_code_in(sl1, SCODE_VA, scode);
     mmu.map_user_data_in(sl1, SSTACK_VA, sstack);
-    let skstack = unsafe { core::ptr::addr_of!(EL0_SKSTACK) as usize + KSTACK_SIZE };
+    let skstack = core::ptr::addr_of!(EL0_SKSTACK) as usize + KSTACK_SIZE;
     let ssp = arch_aarch64::thread::make_el0_thread(skstack, SCODE_VA, SSTACK_VA + 0x1000, 0);
     let sttbr0 = sl1 as u64 | ((sasid as u64) << 48);
     if let Some(tid) = scheduler::spawn_as(ssp, 6, sttbr0) {
@@ -12487,7 +12487,7 @@ fn r1_ipc_el0_spawn() {
     mmu.map_user_data_in(sl1, SSTACK_VA, sstack);
     mmu.map_user_data_in(sl1, SRESULT_VA, sresult);
     R1_SRESULT_PA.store(sresult, Ordering::SeqCst);
-    let skstack = unsafe { core::ptr::addr_of!(EL0_IPC_SKSTACK) as usize + KSTACK_SIZE };
+    let skstack = core::ptr::addr_of!(EL0_IPC_SKSTACK) as usize + KSTACK_SIZE;
     let ssp = arch_aarch64::thread::make_el0_thread(skstack, SCODE_VA, SSTACK_VA + 0x1000, 0);
     let sttbr0 = sl1 as u64 | ((sasid as u64) << 48);
     if let Some(tid) = scheduler::spawn_as(ssp, 9, sttbr0) {
@@ -12521,7 +12521,7 @@ fn r1_ipc_el0_spawn() {
     mmu.map_user_data_in(cl1, CSTACK_VA, cstack);
     mmu.map_user_data_in(cl1, CRESULT_VA, cresult);
     R1_CRESULT_PA.store(cresult, Ordering::SeqCst);
-    let ckstack = unsafe { core::ptr::addr_of!(EL0_IPC_CKSTACK) as usize + KSTACK_SIZE };
+    let ckstack = core::ptr::addr_of!(EL0_IPC_CKSTACK) as usize + KSTACK_SIZE;
     let csp = arch_aarch64::thread::make_el0_thread(ckstack, CCODE_VA, CSTACK_VA + 0x1000, 0);
     let cttbr0 = cl1 as u64 | ((casid as u64) << 48);
     if let Some(tid) = scheduler::spawn_as(csp, 8, cttbr0) {
@@ -12699,7 +12699,7 @@ fn m5_elf_loader_spawn() {
     }
     mmu.map_user_data_in(cl1, ELF_STACK_VA, cstack);
     ELF_CRESULT_PA.store(loaded.writable_pa, Ordering::SeqCst);
-    let ckstack = unsafe { core::ptr::addr_of!(EL0_ELF_CKSTACK) as usize + KSTACK_SIZE };
+    let ckstack = core::ptr::addr_of!(EL0_ELF_CKSTACK) as usize + KSTACK_SIZE;
     let csp = arch_aarch64::thread::make_el0_thread(ckstack, loaded.entry, ELF_STACK_VA + 0x1000, 0);
     let cttbr0 = cl1 as u64 | ((casid as u64) << 48);
     if let Some(tid) = scheduler::spawn_as(csp, 8, cttbr0) {
@@ -12725,7 +12725,7 @@ fn m5_elf_loader_spawn() {
     }
     mmu.map_user_code_in(sl1, ELF_SRV_CODE_VA, scode);
     mmu.map_user_data_in(sl1, ELF_SRV_STACK_VA, sstack);
-    let skstack = unsafe { core::ptr::addr_of!(EL0_ELF_SKSTACK) as usize + KSTACK_SIZE };
+    let skstack = core::ptr::addr_of!(EL0_ELF_SKSTACK) as usize + KSTACK_SIZE;
     let ssp = arch_aarch64::thread::make_el0_thread(skstack, ELF_SRV_CODE_VA, ELF_SRV_STACK_VA + 0x1000, 0);
     let sttbr0 = sl1 as u64 | ((sasid as u64) << 48);
     if let Some(tid) = scheduler::spawn_as(ssp, 9, sttbr0) {

@@ -725,7 +725,7 @@ pub fn ladder_selftest() -> bool {
     let _ = dh.alloc_for(&a, &[10, 99, 0, 10]);
     dh.commit(&a);
     let mut f = [0u8; 120];
-    let mut eth = |dst: [u8; 6], et: [u8; 2], f: &mut [u8; 120]| {
+    let eth = |dst: [u8; 6], et: [u8; 2], f: &mut [u8; 120]| {
         f.fill(0);
         f[0..6].copy_from_slice(&dst);
         f[6..12].copy_from_slice(&a);

@@ -5,7 +5,7 @@
 //!   §4.6.2, MTU §4.6.4) — the WAN /64 and the upstream router;
 //! - DHCPv6 prefix delegation (RFC 8415): Solicit (+ Rapid Commit) -> Advertise -> Request -> Reply
 //!   with IA_PD / IAPREFIX — the prefix the LAN would be numbered from, and the DNS servers.
-//! Packets here are bare IPv6 (no link header): on PPP the session carries them as protocol 0x0057.
+//!   Packets here are bare IPv6 (no link header): on PPP the session carries them as protocol 0x0057.
 
 /// ff02::2 — all routers.
 pub const ALL_ROUTERS: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2];

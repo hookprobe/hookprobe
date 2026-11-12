@@ -3,11 +3,11 @@
 //!   1. the line goes in; the shell returns text, or ONE management request (a `hal::mgmtabi` message id);
 //!   2. the kernel serves the request through `mgmtabi::dispatch` with the SESSION's role (the shell never decides
 //!      authority) and re-enters the shell with the fixed reply record; the shell formats it.
-//! A shell fault costs that command only (the server resets, ADR 0050 D5); forwarding never notices.
-//! Transport (R6 = D, operator 2026-11-12): the carrier carries no authority. The web carrier (`POST /api/hsh`,
-//! feature `hsh`) runs lines at the VIEW role on Mission Control's authenticated owner session; a privileged command
-//! (config confirm / rollback / stage) runs only with an HQMGMT1 envelope signed off-device by the owner key, which
-//! the carrier hands to `mgmtabi::dispatch` (EL1) — the same verifier every client uses. No UART carrier is built.
+//!      A shell fault costs that command only (the server resets, ADR 0050 D5); forwarding never notices.
+//!      Transport (R6 = D, operator 2026-11-12): the carrier carries no authority. The web carrier (`POST /api/hsh`,
+//!      feature `hsh`) runs lines at the VIEW role on Mission Control's authenticated owner session; a privileged command
+//!      (config confirm / rollback / stage) runs only with an HQMGMT1 envelope signed off-device by the owner key, which
+//!      the carrier hands to `mgmtabi::dispatch` (EL1) — the same verifier every client uses. No UART carrier is built.
 
 #[cfg(feature = "mctls")]
 mod el0 {
@@ -420,7 +420,7 @@ pub fn selftest(now_ms: u64) -> bool {
 fn selftest_inner(now_ms: u64) -> bool {
     use hal::mgmtabi as m;
     let mut o = [0u8; 2048];
-    let mut run = |l: &[u8], role: u8| -> ([u8; 2048], usize) {
+    let run = |l: &[u8], role: u8| -> ([u8; 2048], usize) {
         let mut b = [0u8; 2048];
         let n = run_line(l, role, [0x5e, 0x1f, 0, 0], now_ms, &[], &mut b);
         (b, n)

@@ -178,8 +178,8 @@ pub fn map_user_frame(va: usize, pa: usize, writable: bool) -> bool {
 ///   * `executable`            => AP RO + EL0-executable (RO+X code)   [caller must !writable]
 ///   * `writable && !exec`     => AP RW + non-exec       (RW+NX data)
 ///   * `!writable && !exec`    => AP RO + non-exec       (RO+NX rodata)
-/// The three cases are mutually exclusive; a W+X request is rejected by the caller
-/// (`caps::map_frame_cap_in`) before reaching here, so no page is ever both W and X.
+///     The three cases are mutually exclusive; a W+X request is rejected by the caller
+///     (`caps::map_frame_cap_in`) before reaching here, so no page is ever both W and X.
 #[cfg(not(feature = "cm5"))]
 pub fn map_user_frame_in(l1_root: usize, va: usize, pa: usize, writable: bool, executable: bool) -> bool {
     let m = mmu::Mmu;

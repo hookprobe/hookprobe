@@ -107,11 +107,11 @@ pub struct MeasureLog {
 // ---------------- Runtime attestation: per-boot ephemeral key (B-2) ----------
 /// Reserved page (below the quote) for the per-boot ephemeral attestation key
 /// + its AK-issued certificate. HBoot mints a fresh ephemeral ed25519 key each
-/// boot (seeded from the hardware TRNG), hybrid-signs a cert binding it to
-/// (svn, PCRs) with the device AK, then SCRUBS the AK private key. The kernel
-/// holds only the ephemeral key and signs verifier-supplied challenge nonces
-/// with it — genuine per-request freshness (closes B-2) without the device AK
-/// ever persisting in RAM or SLH-DSA signing living in the kernel.
+///   boot (seeded from the hardware TRNG), hybrid-signs a cert binding it to
+///   (svn, PCRs) with the device AK, then SCRUBS the AK private key. The kernel
+///   holds only the ephemeral key and signs verifier-supplied challenge nonces
+///   with it — genuine per-request freshness (closes B-2) without the device AK
+///   ever persisting in RAM or SLH-DSA signing living in the kernel.
 pub const ATTEST_EPH_ADDR: usize = 0x3FFB_0000;
 /// "HEQKEPH1" little-endian.
 pub const ATTEST_EPH_MAGIC: u64 = 0x31_48_50_45_4b_51_45_48;

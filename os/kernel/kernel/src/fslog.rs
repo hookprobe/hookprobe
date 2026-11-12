@@ -154,7 +154,7 @@ fn get_u64(b: &[u8], off: usize) -> u64 {
 
 /// Keyless 8-byte record digest: SHA-256 over header[0..24] (digest slot omitted)
 /// + payload[..len]. Integrity only (M3.3 adds the keyed seal); enough to detect
-/// any torn/partial write.
+///   any torn/partial write.
 fn record_digest(sec: &[u8; SEC], len: usize) -> [u8; 8] {
     let mut h = Hasher::new();
     h.update(&sec[0..R_DIGEST]); // magic, seq, len, rtype, reserved
