@@ -7278,6 +7278,8 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(not(feature = "cm5"))]
         let _ = cfgd::selftest(); // ADR 0059 step 3: trial / commit / revert
         let _ = cfgd::live_selftest(); // sealed-config / live-apply step 6: the live engine (mock executors)
+        #[cfg(not(feature = "cm5"))]
+        let _ = cfgd::lkg_selftest(); // metal 2026-11-12: the live revert goes to the persisted last-known-good
         let _ = cfgd::policy_selftest(); // step 7: the live policy executor + the owner-address probe (F-e)
         let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
         let _ = wifilive::selftest(); // step 10: the Wi-Fi executor (derive first, the BSS bounce, keys wiped, LKG revert)
