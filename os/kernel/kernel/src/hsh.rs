@@ -368,16 +368,20 @@ pub fn selftest_web(now_ms: u64) -> bool {
     let env = |seq: u64, msg: u16, arg: u64, gen: u64, dg: [u8; 32]| test_envelope(&kp, &m::Envelope { msg, device_id: c.device_id, epoch: c.epoch, seq, arg, generation: gen, digest: dg });
     let auth = |e: &[u8], msg: u16, arg: u64, gen: u64, dg: &[u8; 32]| crate::mgmtenv::authorise(msg, arg, gen, dg, e, t, now_ms);
     let j2 = crate::mgmtenv::journaled().0;
-    let endpoints = auth(&env(s0, m::OWNER_FACTORY_RESET, 0, 0, [0; 32]), m::OWNER_FACTORY_RESET, 0, 0, &[0; 32]).is_ok()
-        && auth(&env(s0 + 1, m::OWNER_FACTORY_RESET, 1, 0, [0; 32]), m::OWNER_FACTORY_RESET, 0, 0, &[0; 32]) == Err(crate::mgmtenv::REASONS[8])
-        && auth(&env(s0 + 2, m::ANCHOR_ROTATE, cur_fp, 2, [0x11; 32]), m::ANCHOR_ROTATE, cur_fp, 2, &new_dg) == Err(crate::mgmtenv::OTHER_TARGET)
+    let ep_reset = auth(&env(s0, m::OWNER_FACTORY_RESET, 0, 0, [0; 32]), m::OWNER_FACTORY_RESET, 0, 0, &[0; 32]).is_ok()
+        && auth(&env(s0 + 1, m::OWNER_FACTORY_RESET, 1, 0, [0; 32]), m::OWNER_FACTORY_RESET, 0, 0, &[0; 32]) == Err(crate::mgmtenv::REASONS[8]);
+    let ep_rotate = auth(&env(s0 + 2, m::ANCHOR_ROTATE, cur_fp, 2, [0x11; 32]), m::ANCHOR_ROTATE, cur_fp, 2, &new_dg) == Err(crate::mgmtenv::OTHER_TARGET)
         && auth(&env(s0 + 3, m::ANCHOR_ROTATE, cur_fp ^ 1, 2, new_dg), m::ANCHOR_ROTATE, cur_fp, 2, &new_dg) == Err(crate::mgmtenv::REASONS[8])
-        && auth(&env(s0 + 4, m::ANCHOR_ROTATE, cur_fp, 2, new_dg), m::ANCHOR_ROTATE, cur_fp, 2, &new_dg).is_ok()
-        && auth(&env(s0 + 5, m::UPLOAD_ACTIVATE, 5, 3, [0x33; 32]), m::UPLOAD_ACTIVATE, 5, 4, &[0x33; 32]) == Err(crate::mgmtenv::OTHER_TARGET)
+        && auth(&env(s0 + 4, m::ANCHOR_ROTATE, cur_fp, 2, new_dg), m::ANCHOR_ROTATE, cur_fp, 2, &new_dg).is_ok();
+    let ep_activate = auth(&env(s0 + 5, m::UPLOAD_ACTIVATE, 5, 3, [0x33; 32]), m::UPLOAD_ACTIVATE, 5, 4, &[0x33; 32]) == Err(crate::mgmtenv::OTHER_TARGET)
         && auth(&env(s0 + 6, m::UPLOAD_ACTIVATE, 5, 3, [0x33; 32]), m::UPLOAD_ACTIVATE, 9, 3, &[0x33; 32]) == Err(crate::mgmtenv::REASONS[8])
-        && auth(&env(s0 + 7, m::UPLOAD_ACTIVATE, 5, 3, [0x33; 32]), m::UPLOAD_ACTIVATE, 5, 3, &[0x33; 32]).is_ok()
-        && auth(&env(s0 + 7, m::UPLOAD_ACTIVATE, 5, 3, [0x33; 32]), m::UPLOAD_ACTIVATE, 5, 3, &[0x33; 32]) == Err(crate::mgmtenv::REASONS[7])
-        && crate::mgmtenv::journaled().0 - j2 == 5; // the five refusals (accepted ones are journaled by their handlers)
+        && auth(&env(s0 + 7, m::UPLOAD_ACTIVATE, 5, 3, [0x33; 32]), m::UPLOAD_ACTIVATE, 5, 3, &[0x33; 32]).is_ok();
+    let ep_replay = auth(&env(s0 + 7, m::UPLOAD_ACTIVATE, 5, 3, [0x33; 32]), m::UPLOAD_ACTIVATE, 5, 3, &[0x33; 32]) == Err(crate::mgmtenv::REASONS[7]);
+    // six refusals above (reset other-op; rotate other-target + other-op; activate other-target + other-op; replay) —
+    // the accepted ones are journaled by their own handlers, not by the verifier
+    let ep_jn = crate::mgmtenv::journaled().0 - j2;
+    let ep_journal = ep_jn == 6;
+    let endpoints = ep_reset && ep_rotate && ep_activate && ep_replay && ep_journal;
     // no owner key enrolled: nothing is privileged-capable
     crate::anchor::install_owner(None, 0);
     let no_owner = has(&run(b"config confirm", &test_envelope(&kp, &mk(8, m::CFG_CONFIRM, 8, dig_n1))), b"no owner key enrolled");
@@ -387,8 +391,8 @@ pub fn selftest_web(now_ms: u64) -> bool {
     crate::cfgd::set_selftest(false);
     let pass = view && session_only && wrong_key && wrong_dev && wrong_boot && stale_n && other_op && tamper && malformed && good && replay && older && journaled && words && no_owner && tool && endpoints;
     arch_aarch64::_print(format_args!(
-        " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} ({} of 13) journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={} owner endpoints (factory reset / rotate bound to current + new key / upload activate bound to type + generation + digest): exact binding accepted, other target / other operation / replay refused + journaled={}\n",
-        if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, jn, words, no_owner, tool, endpoints
+        " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} ({} of 13) journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={} owner endpoints — factory reset (exact accepted, other operation refused)={} rotate bound to current + new key (other target / other current key refused, exact accepted)={} upload activate bound to type + generation + digest (other generation / other type refused, exact accepted)={} replay refused={} refusals journaled={} ({} of 6)\n",
+        if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, jn, words, no_owner, tool, ep_reset, ep_rotate, ep_activate, ep_replay, ep_journal, ep_jn
     ));
     pass
 }

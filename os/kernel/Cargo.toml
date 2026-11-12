@@ -24,6 +24,12 @@ opt-level = 3
 [profile.dev.package.crypto-bigint]
 opt-level = 3
 
+# Ed25519 optimised in debug builds too: the R6 = D envelope self-tests ([P-upload], [P-hsh-web]) add owner-key signs
+# and verifies to boots that already verify many pack signatures; unoptimised under QEMU TCG each costs seconds, and
+# the OTA phase's boot ([P15-otaimg], last in its boot) runs against the same 300 s budget.
+[profile.dev.package.ed25519-compact]
+opt-level = 3
+
 [profile.release]
 panic = "abort"
 lto = true
