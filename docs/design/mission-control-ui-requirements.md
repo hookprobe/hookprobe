@@ -378,7 +378,7 @@ ADR 0055 D1 explicitly rules out WAN, VLAN, PPPoE, routes, ACLs and Wi-Fi creden
 
 | Stage | What the customer does | Mechanism in the repo | Status |
 |---|---|---|---|
-| 1. Flash and provision | Gets a unit with a Wi-Fi label (QR) and a sealed owner-key card | `tools/provisioning/provision-unit.py`; the image is built by `os/build/make-cm5-heqk-disk.sh`, which can bake in signed WAN, POLICY, WIFI, DEVICES and list files | Built (factory station). The browser flasher in ADR 0037 is proposed |
+| 1. Flash and provision | Gets a unit with a Wi-Fi label (QR) and a sealed owner-key card | `tools/provisioning/provision-unit.py`; the image is built by `os/build/make-cm5-heqk-disk.sh`, which can bake in signed WAN, POLICY, WIFI, DEVICES and list files | Built (factory station). The browser flasher in ADR 0037 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059) is proposed |
 | 2. First power-on | Joins `HookProbe-Setup-XXXX` with the per-device passphrase (`xxxx-xxxx-xxxx-xxxx`) | `apcred.rs`: credential derived from the device's sealing key, so there's no shared default (ADR 0054) | Built |
 | 3. Sign in | Opens Mission Control on the setup network and enters the owner key | `POST /api/login`, HTTPS from the owner CA (ADR 0051) | Built |
 | 4. Get online | Internet comes up as DHCP by default | `WAN.TXT` decides the mode; with no file, DHCP | DHCP works. The setup wizard (ADR 0010, `SystemSetupApp`) runs on mock data, and the kernel answers `/api/provision/launch` with "not implemented on heqk" |

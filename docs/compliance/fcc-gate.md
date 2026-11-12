@@ -9,7 +9,7 @@ revision and applicability) on the FCC KDB site by the TCB or lab; they were not
 | Area | Rule (47 CFR) | Product relevance | Evidence in repo | Status |
 |---|---|---|---|---|
 | 2.4 GHz Wi-Fi (and BT if enabled) | Part 15 subpart C, §15.247 | AP + STA on 2.4 GHz | None | LAB |
-| 5 GHz U-NII | Part 15 subpart E, §15.407 | AP on UNII-1 (36-48) only per repo; STA scan/association behaviour on other bands set by firmware | `wificfg.rs`, ADR 0034 D4, ADR 0042 | LAB |
+| 5 GHz U-NII | Part 15 subpart E, §15.407 | AP on UNII-1 (36-48) only per repo; STA scan/association behaviour on other bands set by firmware | `wificfg.rs`, ADR 0034 D4, ADR 0042 (retired 2026-11-12, no successor) | LAB |
 | DFS | §15.407(h) | AP excludes DFS channels (52-144) per repo; STA on DFS must be passive/slave only | `wificfg.rs` (channel 52 refused), `os/kernel/P9_WIFI_INVESTIGATION.md` | LAB: verify firmware cannot initiate on DFS |
 | Host unintentional emissions | Part 15 subpart B (§15.107, §15.109), SDoC (Part 2 subpart J) | Digital device (CM5 + carrier + Ethernet) | None | LAB |
 | Modular transmitter | §15.212 | Reliance on the CM5 module's grant, if one exists for the variant used | None | TCB / module vendor |
