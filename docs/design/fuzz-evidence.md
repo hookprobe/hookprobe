@@ -27,3 +27,23 @@ Fixed-layout, MAC/digest-verified-before-decode stores (owner-journal record, ar
   ok   frame_meta: Done 32999807 runs
 FUZZ: PASS (300s per target)
 ```
+
+## A9 — owner-journal replay (2026-11-12)
+
+`tools/fuzz/heqk-kernel` target `owner_journal` compiles `ownerjournal.rs` (with `rpmb.rs` and `alerthook.rs`, the
+types and record decoder its replay calls) from the device sources. `src/devpolicy.rs` is a host stand-in used only
+so the journal's self-test compiles; the self-test is not run.
+
+- Mode 0, raw sectors (someone with the card in a reader): the MAC gate refuses; no rule is applied without a valid
+  chain (asserted).
+- Mode 1, a valid MAC chain over fuzzed record bodies (the harness holds the unit key, as the kernel does): every
+  kind / op / length / target / reason reaches `apply` and the alert-hook decoder.
+- After each replay: accessors do not panic, the rule / artifact / label tables stay bounded, a second replay of the
+  same bytes gives the same state, and an accepted append on top survives the next replay.
+
+The form bodies of the upload and owner endpoints are covered by `http_req` (`form_get` over the same keys).
+Replaces the in-kernel fixed-seed `[P-fuzz]` as the coverage-guided check for the journal record decoder.
+
+```
+  ok   owner_journal: Done 1129642 runs (300 s, 0 crashes, cov 426)
+```
