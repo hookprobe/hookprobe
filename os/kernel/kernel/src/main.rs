@@ -4007,6 +4007,9 @@ fn cm5_p10_probe() {
                                         kprint!(" [CFGD] trial NOT healthy within {} s (WAN never usable) — reverted to the last-known-good, rebooting\n", cfgd::WINDOW_S);
                                         reset_at = Some(now().wrapping_add(2 * freq));
                                     }
+                                    // step 6: the live engine's outcomes (the executors are wired in step 8)
+                                    cfgd::Tick::Reverting => kprint!(" [CFGD] live trial not healthy / rolled back — reverting LIVE to the last-known-good\n"),
+                                    cfgd::Tick::Reverted(g) => kprint!(" [CFGD] reverted LIVE to generation {} (no reboot)\n", g),
                                     cfgd::Tick::Idle => {}
                                 }
                                 if reset_at.is_some_and(|t| now() > t) {
@@ -7086,6 +7089,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = cfgbundle::selftest(); // ADR 0059 step 2: HQCFG1 against the shared vectors
         #[cfg(not(feature = "cm5"))]
         let _ = cfgd::selftest(); // ADR 0059 step 3: trial / commit / revert
+        let _ = cfgd::live_selftest(); // sealed-config / live-apply step 6: the live engine (mock executors)
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
