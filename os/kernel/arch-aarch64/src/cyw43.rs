@@ -3505,6 +3505,12 @@ struct Wpa3 {
 static mut WPA3: Wpa3 = Wpa3 { mode: 0, pw: [0; 64], pw_len: 0, igtk: [0; 16], igtk_set: false, igtk_algo: 0, pkt_id: 0x4851_0000, tx_ok: 0, tx_fail: 0, txs_ack: 0, txs_noack: 0, accepted: 0, dropped: 0, logged: 0, chan: 0, ssid: [0; 32], ssid_len: 0, auth_status_ok: 0, auth_status_fail: 0, bcn_ie: [0; 64], bcn_ie_len: 0, mfp_rb: 0xff };
 #[cfg(feature = "wpa3")]
 static mut SAE_TAB: sae::SaeAp = sae::SaeAp::new();
+/// PMKSAs of stations that completed SAE (PMKSA caching on reconnect); cleared only when the credentials change.
+#[cfg(feature = "wpa3")]
+static mut PMKSA: sae::PmksaCache = sae::PmksaCache::new();
+/// The last (Re)Association Request's RSN choice (station, parsed RSNE) — read by `ap_keying`.
+#[cfg(feature = "wpa3")]
+static mut ASSOC_RSN: ([u8; 6], Option<hal::rsnassoc::AssocRsn>) = ([0; 6], None);
 /// H2E password element base (PT) for (SSID, passphrase), computed once at `ap_set_security`.
 #[cfg(feature = "wpa3")]
 static mut SAE_PT: Option<sae::PT> = None;
@@ -3550,6 +3556,10 @@ pub fn ap_security_prepare(mode: u8, ssid: &[u8], passphrase: &[u8]) -> Option<S
 #[cfg(feature = "wpa3")]
 pub fn ap_security_install(p: SecPrep, ssid: &[u8], passphrase: &[u8]) -> u8 {
     let s = w3();
+    // a PMKSA derived from another passphrase / SSID must never key again; the same credentials keep it (a bounce)
+    if s.pw[..s.pw_len as usize] != *passphrase || s.ssid[..s.ssid_len as usize] != *ssid {
+        unsafe { (*core::ptr::addr_of_mut!(PMKSA)).clear() };
+    }
     s.mode = p.mode;
     for b in s.pw.iter_mut() {
         unsafe { write_volatile(b, 0) }; // no tail of a longer previous passphrase
@@ -3737,7 +3747,9 @@ pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event 
     }
     let mut ast = None;
     if e == sae::Event::Accepted {
-        let pk = unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).pmkid_for(&sta, now_ms) }.unwrap_or([0; 16]);
+        let tab = unsafe { &mut *core::ptr::addr_of_mut!(SAE_TAB) };
+        unsafe { (*core::ptr::addr_of_mut!(PMKSA)).add_accepted(tab, &sta, now_ms) }; // a later PMKSA-caching reconnect
+        let pk = tab.pmkid_for(&sta, now_ms).unwrap_or([0; 16]);
         ast = Some(wpa3_auth_status(&sta, 0, &pk));
     }
     let s = w3();
@@ -3777,6 +3789,63 @@ fn wpa3_txstatus(rx: &[u8], ev: usize, et: u32, st: u32) {
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_pmk(sta: &[u8; 6], now_ms: u64) -> Option<[u8; 32]> {
     unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).pmk_for(sta, now_ms) }
+}
+
+/// How the 4-way for a just-associated station is keyed (IEEE 802.11-2020 12.6.10.3): from the AKM / PMKID in its
+/// association request RSNE (`hal::rsnassoc::decide`). `how == Reject`: the caller deauthenticates (`ap_deauth`).
+#[cfg(feature = "wpa3")]
+pub struct ApKeying {
+    pub how: hal::rsnassoc::Keying,
+    pub pmk: [u8; 32],
+    pub akm8: bool,
+    pub pmkid: Option<[u8; 16]>,
+    /// (station AKM suite, PMKIDs listed) for the log; akm 0 = no readable RSNE
+    pub akm: u32,
+    pub n_pmkid: u16,
+}
+
+#[cfg(feature = "wpa3")]
+pub fn ap_keying(sta: &[u8; 6], now_ms: u64, psk: &[u8; 32]) -> ApKeying {
+    use hal::rsnassoc::Keying as K;
+    let a = unsafe { &*core::ptr::addr_of!(ASSOC_RSN) };
+    let rsn = if a.0 == *sta { a.1.as_ref() } else { None };
+    let fresh = ap_sae_pmk(sta, now_ms);
+    let cache = unsafe { &mut *core::ptr::addr_of_mut!(PMKSA) };
+    let mut hit = None;
+    let how = hal::rsnassoc::decide(rsn, fresh.is_some(), &mut |p| {
+        hit = cache.get(sta, p, now_ms);
+        hit.is_some()
+    });
+    let (sae_pmk, pmkid) = match how {
+        K::SaeCached(i) => (hit, rsn.map(|r| r.pmkid[i % hal::rsnassoc::PMKIDS])),
+        K::SaeFresh | K::Legacy => (fresh, None),
+        _ => (None, None),
+    };
+    ApKeying {
+        how,
+        akm8: sae_pmk.is_some(),
+        pmk: sae_pmk.unwrap_or(if how == K::Reject { [0; 32] } else { *psk }),
+        pmkid,
+        akm: rsn.map_or(0, |r| r.akm),
+        n_pmkid: rsn.map_or(0, |r| r.n_pmkid),
+    }
+}
+
+/// Drop a station's cached PMKSA (its PMKSA-caching 4-way did not verify).
+#[cfg(feature = "wpa3")]
+pub fn ap_pmksa_drop(sta: &[u8; 6]) {
+    unsafe { (*core::ptr::addr_of_mut!(PMKSA)).remove(sta) }
+}
+
+/// Deauthenticate a station (WLC_SCB_DEAUTHENTICATE_FOR_REASON, brcmf_scb_val_le {reason, ea} — brcmfmac's AP
+/// del_station). The FullMAC firmware answers the association itself, so the host cannot send status 53 in the
+/// response; a deauthentication with reason 49 (invalid PMKID) right after it is the equivalent.
+#[cfg(feature = "wpa3")]
+pub fn ap_deauth(sta: &[u8; 6], reason: u16) -> bool {
+    let mut v = [0u8; 10];
+    v[0..2].copy_from_slice(&reason.to_le_bytes());
+    v[4..10].copy_from_slice(sta);
+    bcdc_dcmd(201, BCDC_SET, &v, &mut []).0
 }
 
 #[cfg(feature = "wpa3")]
@@ -4135,21 +4204,32 @@ fn wait_eapol(sta: &[u8; 6], secure: bool, replay: u64, dry_limit: u32, buf: &mu
 
 
 /// Build M1 (AP->STA): pairwise | ACK with the AKM's descriptor version (0x008a v2 / 0x0088 v0); ANonce; replay.
-fn build_m1(m1: &mut [u8; 14 + 4 + 95], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, ki: u16) {
+/// M1 (AP->STA); with `pmkid` (a cached PMKSA keys this 4-way) it carries the PMKID KDE (dd 14 00-0f-ac:4 PMKID) as
+/// hostapd sends it. Returns the frame length.
+fn build_m1(m1: &mut [u8; 14 + 4 + 95 + 22], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, ki: u16, pmkid: Option<&[u8; 16]>) -> usize {
     let body = 18usize;
     for b in m1.iter_mut() { *b = 0; }
+    let kd = if let Some(p) = pmkid {
+        m1[body + 95..body + 101].copy_from_slice(&[0xdd, 0x14, 0x00, 0x0f, 0xac, 0x04]);
+        m1[body + 101..body + 117].copy_from_slice(p);
+        22
+    } else {
+        0
+    };
+    m1[body + 93..body + 95].copy_from_slice(&(kd as u16).to_be_bytes());
     m1[0..6].copy_from_slice(sta);
     m1[6..12].copy_from_slice(ap_mac);
     m1[12] = 0x88;
     m1[13] = 0x8E;
     m1[14] = 2; // 802.1X version 2
     m1[15] = 0x03; // EAPOL-Key
-    m1[16..18].copy_from_slice(&95u16.to_be_bytes());
+    m1[16..18].copy_from_slice(&((95 + kd) as u16).to_be_bytes());
     m1[body] = 0x02; // RSN key descriptor
     m1[body + 1..body + 3].copy_from_slice(&ki.to_be_bytes());
     m1[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes()); // CCMP pairwise key length
     m1[body + 5..body + 13].copy_from_slice(&replay.to_be_bytes());
     m1[body + 13..body + 45].copy_from_slice(anonce);
+    body + 95 + kd
 }
 
 /// Build M3 (AP->STA) with the given replay and re-MIC it (the MIC covers the counter, so a
@@ -4224,13 +4304,13 @@ fn m2_mfpc(m2: &[u8], body_off: usize) -> bool {
 /// `ap_mac` = our BSSID; `pmk` = PBKDF2(passphrase, ssid); `gtk`/`gtk_keyid` = the group key.
 /// On success installs the per-station PTK (ea=sta) + the GTK (broadcast) via WLC_SET_KEY.
 pub fn ap_wpa2_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], gtk: &[u8; 16], gtk_keyid: u8, out: &mut ApAuth) {
-    ap_authenticate(ap_mac, sta, pmk, false, gtk, gtk_keyid, out)
+    ap_authenticate(ap_mac, sta, pmk, false, None, gtk, gtk_keyid, out)
 }
 
 /// The 4-way as authenticator for AKM 2 (`akm8` false: PSK, key-descriptor v2) or AKM 8 (`akm8` true: the SAE PMK,
 /// KDF-SHA256 + AES-CMAC, key-descriptor v0). With PMF negotiated (WPA3 modes, station MFP-capable) M3 also carries
-/// the IGTK KDE and the beacon's exact RSNE.
-pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool, gtk: &[u8; 16], gtk_keyid: u8, out: &mut ApAuth) {
+/// the IGTK KDE and the beacon's exact RSNE. `pmkid` = the cached PMKSA's PMKID (PMKSA caching): sent in M1.
+pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool, pmkid: Option<&[u8; 16]>, gtk: &[u8; 16], gtk_keyid: u8, out: &mut ApAuth) {
     out.sta = *sta;
     let ki1: u16 = if akm8 { 0x0088 } else { 0x008a };
     let ki3: u16 = if akm8 { 0x13c8 } else { 0x13ca };
@@ -4256,10 +4336,10 @@ pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bo
     // carries replay+1 and the reply must echo the LAST counter sent. Retransmit after 2
     // dry reads (~3 s), 3 sends max: a lost M1/M2 costs seconds, not the old 60 s cadence
     // that the supplicant rejected as a replay anyway.
-    let mut m1 = [0u8; 14 + 4 + 95];
+    let mut m1 = [0u8; 14 + 4 + 95 + 22];
     let mut replay: u64 = 1;
-    build_m1(&mut m1, sta, ap_mac, &anonce, replay, ki1);
-    out.m1_tx = sdpcm_data_tx(&m1);
+    let m1n = build_m1(&mut m1, sta, ap_mac, &anonce, replay, ki1, pmkid);
+    out.m1_tx = sdpcm_data_tx(&m1[..m1n]);
     out.m1_sends = 1;
     dbg_putc(b'1');
 
@@ -4301,8 +4381,8 @@ pub fn ap_authenticate(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bo
                     return; // the station never answered: let the outer loop re-wait
                 }
                 replay += 1;
-                build_m1(&mut m1, sta, ap_mac, &anonce, replay, ki1);
-                let _ = sdpcm_data_tx(&m1);
+                let m1n = build_m1(&mut m1, sta, ap_mac, &anonce, replay, ki1, pmkid);
+                let _ = sdpcm_data_tx(&m1[..m1n]);
                 out.m1_sends += 1;
             }
             KeyWait::Reassoc => {
@@ -4589,6 +4669,15 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
             }
             if (et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND) && st == 0 {
                 dbg_putc(b'C');
+                // WPA3: the event data = the (Re)Association Request's elements (brcmfmac `assoc_req_ies`); its RSNE
+                // says which AKM / PMKSA the station chose (ap_keying)
+                #[cfg(feature = "wpa3")]
+                unsafe {
+                    let ev = doff + 4 + (*rx.get(doff + 3).unwrap_or(&0) as usize) * 4;
+                    let dl = u32::from_be_bytes([rx[ev + 44], rx[ev + 45], rx[ev + 46], rx[ev + 47]]) as usize;
+                    let end = (ev + 72).saturating_add(dl).min(hw_len as usize).min(rx.len());
+                    *core::ptr::addr_of_mut!(ASSOC_RSN) = (sta, rx.get(ev + 72..end).and_then(hal::rsnassoc::assoc_rsn));
+                }
                 return ApEvent::Assoc(sta);
             }
             if et == WLC_E_DEAUTH_IND || et == WLC_E_DISASSOC_IND {
