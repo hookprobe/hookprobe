@@ -1,7 +1,11 @@
-# Pinned nightly (build-std + custom_test_frameworks are unstable).
-# Bump deliberately; keep rust-src (for build-std) and llvm-tools (rust-lld).
+# Pinned nightly (build-std + custom_test_frameworks are unstable). DATE-PINNED since 2026-11-12 (#1006):
+# a floating `nightly` let CI build a different compiler than the factory, and the AP shipping image came out
+# ~194 KB larger on CI's newer nightly (3,298,120 B, over the 3,137,736 B HBoot window) than on the factory
+# toolchain (3,104,072 B, fits). nightly-2026-07-20 = rustc 1.99.0-nightly (9f36de775 2026-07-19), the compiler
+# the shipped images are built with. Bump deliberately (one commit: change the date, re-run the AP size gate,
+# validate.sh and the clippy ratchet against the new compiler).
+# Keep rust-src (build-std), llvm-tools (rust-lld) and clippy (gate g1 lints with this same compiler).
 [toolchain]
-channel    = "nightly-2026-07-20"   # pinned 2026-11-12: = rustc 1.99.0-nightly 9f36de775 2026-07-19, the compiler every factory image + metal evidence was built with;
-                                      # CI honours it (a floating nightly grew the AP payload ~200 KB past the HBoot window)
+channel    = "nightly-2026-07-20"
 components = ["rust-src", "llvm-tools", "clippy"]
 targets    = ["aarch64-unknown-none-softfloat", "wasm32-wasip1"]  # wasm32-wasip1: kernel/build.rs builds the signed wasip1 fixture
