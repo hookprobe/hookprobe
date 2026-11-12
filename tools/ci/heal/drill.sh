@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tools/ci/heal/drill.sh — end-to-end fire drill of the L2 heal loop (ADR 0052).
+# tools/ci/heal/drill.sh — end-to-end fire drill of the L2 heal loop (ADR 0063).
 #
 # Proves the WHOLE loop on a real, seeded defect — not mocks:
 #   seed a bug in a throwaway clone → the gate goes red → classify → isolated autofix

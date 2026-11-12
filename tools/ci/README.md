@@ -1,4 +1,4 @@
-# tools/ci — the HookProbe gate spine and heal loop (ADR 0052)
+# tools/ci — the HookProbe gate spine and heal loop (ADR 0063)
 
 One deterministic gate ladder, run **identically** on a developer box and in GitHub Actions,
 plus an autonomous loop that turns red runs into reruns, draft fix-PRs, or human escalations.

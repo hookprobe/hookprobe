@@ -139,7 +139,7 @@ Additional Information:
   **[metal-proven (`docs/design/metal-evidence/20261111-batch59-63.md`: `[P-lansvc]` PASS on CM5, incl. 3b
   and 5a)]** Station-frame authenticator work (5b) and the WPA3-SAE Authentication-frame walk (5c, PR #1005;
   every SAE secret and the curve maths stay in EL1) **[QEMU only]** — metal pending.
-- WPA3: the CYW43455 firmware PMKID-cache use-after-free (REL-08, `docs/design/rel08-cyw43455-pmkid-trap.md`)
+- WPA3: the CYW43455 firmware PMKID-cache use-after-free (release gate REL-08b, `docs/design/rel08-cyw43455-pmkid-trap.md`)
   is corrected in chip RAM after the firmware download (feature `wifi-pmkid-fix`, on by default with `wpa3`,
   operator decision 2026-11-11 "1A"; exact-bytes + version guard, read-back, `tools/firmware/rel08/check.sh`).
   Dev-bench trigger test: no firmware halt in 1,670 s / 17 SAE keyings (same doc, experiment C).

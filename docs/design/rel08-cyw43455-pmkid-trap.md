@@ -1,5 +1,9 @@
 # REL-08: CYW43455 firmware trap at ~10 h in WPA3 AP mode (2026-11-11)
 
+> **2026-11-12:** the release gate splits REL-08 in two (`tools/release-gate/items.txt`): **REL-08b** is this defect
+> (PMKID-cache use-after-free, the RAM correction `wifi-pmkid-fix`); **REL-08a** is the separate, older Wi-Fi TX-stall
+> root cause. "REL-08" below means REL-08b; "the REL-08 regression matrix" keeps its name.
+
 ## What happened
 
 The REL-05 72 h soak on image W22 failed at hour 10.2.

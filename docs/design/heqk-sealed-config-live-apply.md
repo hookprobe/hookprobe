@@ -134,7 +134,7 @@ settings change **live**, never requiring a reboot.
      firmware's own value) → `ap_start` on the current chanspec → `ap_install_gtk`. It must come up serve-ready and
      keyed, else it returns false and cfgd reverts live. On success the AP loop's PMK / GTK are replaced; the
      passphrase and scratch keys are wiped with volatile writes. DHCP leases are kept (MAC-bound).
-   - The firmware is **not** re-downloaded, so the REL-08 in-RAM PMKID correction stays in place. A new `channel=`
+   - The firmware is **not** re-downloaded, so the REL-08b in-RAM PMKID correction stays in place. A new `channel=`
      takes effect at the next boot. The AP addressing, the WAN and eth1 are not touched. Mission Control's
      Wi-Fi/management-VLAN serving choice (G12-M) is still made at boot.
    - Metal must prove (R2): repeated live bounces on the CYW43455 (≥ 10 back to back) with no FWHALT and no SDIO
