@@ -74,8 +74,8 @@ case ",$FEATURES," in
   *,rpmb-provision,*) [ "${HEQK_MANUFACTURING_OP:-}" = rpmb-provision ] || { echo "FATAL: rpmb-provision (irreversible RPMB key write) is a manufacturing-only build — set HEQK_MANUFACTURING_OP=rpmb-provision for that one operation" >&2; exit 1; } ;;
 esac
 
-# ADR 0059 step 4a: the shell's development transport (hsh-dev) never ships — the production transport is the
-# operator's open decision (hsh spec R6).
+# ADR 0059 step 4a: the shell's development-only extras (hsh-dev) never ship. The production web carrier is the
+# separate `hsh` feature (carried by apmc); the UART transport is still the operator's open decision (hsh spec R6).
 case ",$FEATURES," in
   *,hsh-dev,*) [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ] || { echo "FATAL: hsh-dev (development shell transport) in a release build" >&2; exit 1; } ;;
 esac
