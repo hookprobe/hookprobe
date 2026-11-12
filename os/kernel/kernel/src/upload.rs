@@ -567,8 +567,29 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
             digest = m.e[ty as usize].digest;
         }
         r
+    } else if secret && ty == Ty::Config && artstore::config_changes() & !crate::cfgd::LIVE_CAPABLE == 0 {
+        // Q3 (operator decision): no device key — a secret-bearing bundle is applied LIVE but RAM-only: verified again
+        // by cfgd, never written to the store (no manifest, no floor), a reboot returns to the persisted configuration
+        let r = crate::cfgd::queue_live_volatile_device(&stage_ram()[..512 + len as usize]);
+        end();
+        let g = r?;
+        let mut reason = [0u8; 64];
+        let rl = {
+            use core::fmt::Write;
+            let mut w = crate::mcstate::JsonBuf::new(&mut reason);
+            let _ = write!(w, "gen {}->{} volatile_ram_only (not persisted)", old, g); // no digest: F-a
+            w.len
+        };
+        let needs_confirm = crate::cfgd::needs_confirm();
+        #[cfg(not(feature = "cm5"))]
+        unsafe {
+            LAST_LIVE = (true, false, needs_confirm);
+            LAST_AT_REST = "volatile_ram_only";
+        };
+        let journal_seq = crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms);
+        return Ok(Activated { gen: g, journal_seq, staged: false, at_rest: Some("volatile_ram_only"), live: true, needs_confirm });
     } else if secret {
-        // Q3: no device key (blank OTP) — a secret is never written in plaintext
+        // Q3: no device key (blank OTP) — a secret is never written in plaintext (and a per-file upload is next-boot)
         end();
         return Err("not stored: no device key — secrets are never written in plaintext");
     } else {
@@ -886,9 +907,9 @@ pub fn selftest() -> bool {
     crate::mgmtenv::test_reset();
     let pass = bad_type && too_big && reauth && out_of_order && chunks_ok && early && fin && staged_only && act && audited && rollback && cross && tampered && foreign && cfg.iter().all(|&x| x);
     arch_aarch64::_print(format_args!(
-        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate (R6 = D: owner token alone refused, envelope for another generation refused, the owner's envelope activates): store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={} a config bundle is handed to the live engine (policy-only: applies live, no reboot, auto-commit; management binding: live + owner confirm)={}\n",
+        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate (R6 = D: owner token alone refused, envelope for another generation refused, the owner's envelope activates): store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={} a config bundle is handed to the live engine (policy-only: applies live, no reboot, auto-commit; management binding: live + owner confirm)={} no device key: a secret-bearing bundle applies live RAM-only (at_rest volatile_ram_only, nothing on disk, manifest untouched)={}\n",
         if pass { "PASS" } else { "FAIL" }, bad_type && too_big && reauth, out_of_order, chunks_ok, early, fin, staged_only, act, audited, rollback, cross, tampered, foreign,
-        cfg[0], cfg[1], cfg[2], cfg[3], cfg[4]
+        cfg[0], cfg[1], cfg[2], cfg[3], cfg[4], cfg[5]
     ));
     pass
 }
@@ -899,10 +920,13 @@ pub fn selftest() -> bool {
 /// (live, staged, needs_confirm) of the last successful activation — read by the upload self-test.
 #[cfg(not(feature = "cm5"))]
 static mut LAST_LIVE: (bool, bool, bool) = (false, false, false);
+/// The `at_rest` of the last RAM-only (Q3) activation — read by the upload self-test.
+#[cfg(not(feature = "cm5"))]
+static mut LAST_AT_REST: &str = "";
 
 /// A signed HQCFG1 bundle container (HQCSIG1 sector + bundle) with one POLICY section, for the upload self-test.
 #[cfg(not(feature = "cm5"))]
-fn test_cfg_container(kp: &ed25519_compact::KeyPair, gen: u64, pol: &[u8], out: &mut [u8; 1024]) -> usize {
+fn test_cfg_container(kp: &ed25519_compact::KeyPair, gen: u64, kind: u8, pol: &[u8], out: &mut [u8; 1024]) -> usize {
     use crate::cfgbundle as cb;
     let key: [u8; 32] = *kp.pk;
     let mut b = [0u8; 512];
@@ -911,7 +935,7 @@ fn test_cfg_container(kp: &ed25519_compact::KeyPair, gen: u64, pol: &[u8], out: 
     b[12..20].copy_from_slice(&gen.to_le_bytes());
     b[36..44].copy_from_slice(&cb::key_id(&key));
     b[44] = 1;
-    b[48] = cb::KIND_POLICY;
+    b[48] = kind;
     b[50..52].copy_from_slice(&(pol.len() as u16).to_le_bytes());
     b[52..52 + pol.len()].copy_from_slice(pol);
     let n = 52 + pol.len();
@@ -930,7 +954,7 @@ fn test_cfg_container(kp: &ed25519_compact::KeyPair, gen: u64, pol: &[u8], out: 
     512 + n
 }
 
-fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::KeyPair, seq: &mut u64) -> [bool; 5] {
+fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::KeyPair, seq: &mut u64) -> [bool; 6] {
     let disk = || unsafe { &*core::ptr::addr_of!(artstore::TEST_DISK) };
     let (slo, shi) = dev().and_then(|d| staging(d)).unwrap_or((0, 0));
     let stage_hash = || {
@@ -990,18 +1014,35 @@ fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::K
     let handoff = {
         let mut cont = [0u8; 1024];
         crate::cfgd::set_test_live(true);
-        let n = test_cfg_container(kp, 40, b"acl A seq 10 allow any any any\ninterface lan acl in A\n", &mut cont);
+        let n = test_cfg_container(kp, 40, crate::cfgbundle::KIND_POLICY, b"acl A seq 10 allow any any any\ninterface lan acl in A\n", &mut cont);
         let live = run_one(c, auth, &cont[..n], "config", seq, true) == Ok(40) && unsafe { LAST_LIVE } == (true, false, false);
         crate::cfgd::set_test_live(false);
         crate::cfgd::set_test_live(true);
-        let n = test_cfg_container(kp, 41, b"acl M seq 10 allow any any any\ninterface mgmt acl in M\n", &mut cont);
+        let n = test_cfg_container(kp, 41, crate::cfgbundle::KIND_POLICY, b"acl M seq 10 allow any any any\ninterface mgmt acl in M\n", &mut cont);
         let confirm = run_one(c, auth, &cont[..n], "config", seq, true) == Ok(41) && unsafe { LAST_LIVE } == (true, false, true);
         crate::cfgd::set_test_live(false);
         live && confirm
     };
     #[cfg(feature = "cm5")]
     let handoff = true; // the hand-off is exercised on QEMU (the self-test disk); metal proves it with cm5-cfgd-live-check
-    [staging, sealed, refused, stored, handoff]
+    // Q3 (live-apply follow-up), still no device key: a secret-bearing BUNDLE is applied live, RAM-only — the reply says
+    // volatile_ram_only, the secret and the bundle never reach the disk, the manifest entry is untouched
+    #[cfg(not(feature = "cm5"))]
+    let volatile = {
+        let mut cont = [0u8; 1024];
+        crate::cfgd::set_test_live(true);
+        let e0 = dev().and_then(|d| artstore::entry(&*d, Ty::Config));
+        let n = test_cfg_container(kp, 50, crate::cfgbundle::KIND_WAN, b"mode=pppoe\npppoe_user=v@isp\npppoe_pass=v0latile\n", &mut cont);
+        let r = run_one(c, auth, &cont[..n], "config", seq, true) == Ok(50) && unsafe { LAST_LIVE } == (true, false, false)
+            && unsafe { LAST_AT_REST } == "volatile_ram_only" && crate::cfgd::volatile() && crate::cfgd::generation() == 50
+            && dev().and_then(|d| artstore::entry(&*d, Ty::Config)) == e0 && !artstore::on_disk(disk(), b"v0latile")
+            && !artstore::on_disk(disk(), b"pppoe_user=v@isp") && stage_hash() == before;
+        crate::cfgd::set_test_live(false);
+        r && !crate::cfgd::volatile()
+    };
+    #[cfg(feature = "cm5")]
+    let volatile = true;
+    [staging, sealed, refused, stored, handoff, volatile]
 }
 
 /// Test helper: begin + chunks + finish (+ activate when `act`) for one container. Ok(gen) or the refusal.

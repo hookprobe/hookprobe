@@ -116,8 +116,8 @@ settings change **live**, never requiring a reboot.
    - **Status (2026-11-12, built, QEMU `[P-cfgd-wan]`, metal pending):** `kernel/src/wanlive.rs` (verify + parse
      first, teardown, link, start) + `uplink::wan_teardown` / `wan_start` / `mgmt_current`, `nat::flush_wan` (each NAT
      mapping now records its WAN address), `CH_WAN` in `LIVE_CAPABLE`.
-   - DHCP and static start **non-blocking** (the in-loop DORA; static resolves its gateway in the loop). PPPoE keeps
-     the bounded blocking dial (≤ 30 s + probes, watchdog petted through `nic_rx`), as the in-loop PPPoE retry does.
+   - DHCP and static start **non-blocking** (the in-loop DORA; static resolves its gateway in the loop). PPPoE kept
+     the bounded blocking dial at first; since the follow-ups below it is non-blocking too (`pppoe::Dial`).
    - Q5: a PAP/CHAP reject fails the apply at once (live revert, no window). A change of the management
      sub-interface or floor is applied only when it differs, and then needs the owner's confirm.
    - Metal must prove: DHCP → static → PPPoE → DHCP live (Mission Control on the AP reachable throughout), and a
@@ -136,7 +136,13 @@ settings change **live**, never requiring a reboot.
      passphrase and scratch keys are wiped with volatile writes. DHCP leases are kept (MAC-bound).
    - The firmware is **not** re-downloaded, so the REL-08 in-RAM PMKID correction stays in place. A new `channel=`
      takes effect at the next boot. The AP addressing, the WAN and eth1 are not touched. Mission Control's
-     Wi-Fi/management-VLAN serving choice (G12-M) is still made at boot.
+     Wi-Fi/management-VLAN serving choice (G12-M) is re-evaluated after every live Wi-Fi or WAN apply / revert
+     (`mcmgmt::serve_on_wifi` from the credential in force and the running management sub-interface; the node's
+     management address follows the live sub-interface) — follow-up 2026-11-12, `[P-cfgd-wifi-after]`.
+   - **IPv6 at an AP restart (follow-up 2026-11-12, `[P-cfgd-wifi-after]`):** every bounce of the BSS calls
+     `clear_station_v6_state()` (main.rs): all SAVI bindings, neighbour entries and IPv6 pinholes of the old BSS are
+     dropped, the LAN numbering is kept and the RA burst restarts. The Wi-Fi self-heal bounce must call it too when
+     it lands.
    - Metal must prove (R2): repeated live bounces on the CYW43455 (≥ 10 back to back) with no FWHALT and no SDIO
      wedge. Stations re-join after an SSID change, a passphrase change and a `max_clients` change. This covers WPA2,
      WPA3-SAE and transition, both ways (WPA2 ↔ WPA3), with a WPA3 phone and a WPA2-only client. Mission Control
@@ -145,6 +151,47 @@ settings change **live**, never requiring a reboot.
      passphrase cannot derive must leave the BSS beaconing untouched. The `wifi-pmkid-fix` RAM correction must
      still be in place after bounces. The boot log line only repeats the boot-time result, so this needs a chip-RAM
      read-back of the patch site, or a WPA3 soak across bounces with no FWHALT.
+   - **Follow-ups (2026-11-12, release-plan Workstream 6, built, QEMU, metal pending):**
+     - **Non-blocking PPPoE dial** (`[P-cfgd-pppoe]`). `pppoe::Dial` wraps the unchanged engine (its parsers are
+       untouched): a budget per stage (Discovery 10 s, Requesting 6 s, LCP / auth / IPCP 10 s each), a fresh re-dial on
+       a stage timeout (a half-open session is PADT'd first), at most 3 attempts, an overall bound (60 s from the loop,
+       30 s at boot). `uplink::pppoe_dial_begin` / `pppoe_dial_poll` step it from the AP loop (at most 8 frames per
+       poll), for the live WAN apply AND the in-loop retry, so forwarding and Mission Control keep running (closes
+       F-d). The boot dial is the same machine stepped in a loop with the watchdog petted, then its pings and the
+       bounded IPv6 probe as before. After a loop dial, IPV6CP runs in the engine and RS / DHCPv6-PD in `pppoe_poll`
+       (`v6acq_*`, shared with the boot probe), so the loop never waits for IPv6 either.
+     - **Q5 from the loop** (`[P-cfgd-mgmt]`). A definitive reject (PAP/CHAP rejected, no protocol in common) now
+       arrives after the executor returned; the loop calls `cfgd::wan_auth_rejected` and the live trial reverts at once.
+       A timeout-only dial is not definitive: the in-loop retry and the window decide.
+     - **Management re-probe after a WAN change** (`[P-cfgd-mgmt]`). `wanlive::mgmt_reprobe`, fed once a second while a
+       trial runs: the management sub-interface must have its address and a resolved gateway, and the owner's own
+       client (F-e) must still have a path (on the AP; on-link on the management VLAN and resolved; or routed over the
+       resolved management gateway). A lost path makes the trial unhealthy even when the WAN is usable: it never
+       auto-commits and reverts at the window. `/api/config` reports `live.mgmt_ok` / `live.mgmt_probe` (null outside a
+       trial). The policy dimension stays the stage-time D7 check (a WAN-only change does not change the policy).
+     - **Q3 RAM-only apply** (`[P-cfgd-volatile]`, `[P-upload]`). With no device key, a secret-bearing HQCFG1 bundle
+       whose changes are all live-capable is verified by cfgd (signature, device, generation above the floor) and
+       applied live from RAM; its commit stays in RAM (no manifest write, no floor rise, nothing on disk). The activate
+       reply says `at_rest:"volatile_ram_only"`; `/api/config` `at_rest` adds `volatile_ram_only` and `persisted`, and
+       never reports a volatile configuration as sealed or protected. A live rollback / window revert re-loads the
+       persisted last-known-good (no manifest flip). A reboot returns to the persisted configuration. A later persisted
+       bundle's revert goes back to the persisted last-known-good, never to a volatile one. The journal records the
+       activation without a digest (F-a). Per-file uploads with a secret stay refused (next-boot only).
+   - **Metal must prove (follow-ups 2026-11-12):**
+     - Live WAN DHCP → PPPoE → DHCP with a Wi-Fi client streaming and Mission Control open: no forwarding stall during
+       the dial (the loop keeps serving), the `[M-NAT0] … PPPoE dialled in the loop` line, IPv6 PD re-acquired in the
+       loop (`[V6LAN]` renumbers).
+     - A bundle with a **wrong PPPoE password**: `[WAN] PPPoE dial REJECTED (authentication)` then `[CFGD] … reverting
+       LIVE` within seconds (not the window), management (AP + management VLAN) reachable throughout, the old WAN back.
+     - A PPPoE AC that does not answer: bounded re-dials (`gave up`), the watchdog never fires, the window reverts.
+     - A WAN bundle that keeps the WAN but breaks the management path (e.g. a management gateway that does not
+       answer): `/api/config` `live.mgmt_ok:false`, no auto-commit, live revert at 120 s.
+     - Wi-Fi + management-VLAN change with clients: Mission Control moves to / from the management VLAN as G12-M
+       says (`[AP-MC] … after the live change`), the owner's confirm commits.
+     - AP restart IPv6: a station with a SLAAC address and an open IPv6 flow, then a live SSID change; the station
+       re-joins (also with a new private MAC) and gets IPv6 again (no SAVI refusal, RA seen at once).
+     - No device key (blank OTP unit): a bundle with a PPPoE password activates `at_rest:"volatile_ram_only"`, applies
+       live, commits; nothing in the Store region (raw read); a **reboot** returns to the persisted configuration.
 11. Management-VLAN changes under confirm.
 
 ## 6. Open questions (operator)

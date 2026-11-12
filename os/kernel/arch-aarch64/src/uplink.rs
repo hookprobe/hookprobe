@@ -693,41 +693,121 @@ pub fn pppoe_info() -> Option<(crate::pppoe::Phase, crate::pppoe::DownWhy, u16, 
     }
 }
 
-/// PPPoE bring-up: discovery -> LCP -> PAP/CHAP -> IPCP over the NIC (30 s budget), then the
-/// negotiated address IS the lease (gateway = the PPP peer, next hop = the AC's MAC, MSS 1452),
-/// and the peer + internet probe are pinged THROUGH the session.
-fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mut UplinkResult) {
-    use crate::pppoe::{Phase, Pppoe, Tx, PPPOE_MSS};
+/// The dial in progress (sealed-config live-apply follow-up: the PPPoE dial is a bounded state machine stepped from
+/// the AP loop — the engine lives in PPP throughout, so `pppoe_info` / `pppoe_auth_failed` see it while it dials).
+static mut DIAL: Option<crate::pppoe::Dial> = None;
+static mut DIAL_BUF: [u8; 1600] = [0; 1600];
+/// Frames read per `pppoe_dial_poll` (the loop's other work keeps running between polls).
+const DIAL_RX_BURST: usize = 8;
+/// The overall bound of a dial started from the loop (a live WAN apply, the in-loop retry).
+pub const DIAL_LOOP_MS: u64 = 60_000;
+
+fn tx_flush(nic: Nic, tx: &mut crate::pppoe::Tx) {
+    for i in 0..tx.n {
+        let _ = nic_tx(nic, tx.frame(i));
+    }
+    tx.clear();
+}
+
+/// What one `pppoe_dial_poll` concluded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialEvent {
+    /// No dial in progress.
+    Idle,
+    Pending,
+    /// The session opened: `up` holds the negotiated address (usable now).
+    Up,
+    /// The dial ended: `auth` = a DEFINITIVE authentication failure (Q5), else out of attempts / budget.
+    Failed { auth: bool },
+}
+
+/// A dial in progress?
+pub fn pppoe_dialing() -> bool {
+    unsafe { (*core::ptr::addr_of!(DIAL)).is_some() }
+}
+
+/// Start a PPPoE dial WITHOUT waiting: NIC prelude, a fresh engine, PADI out. `out` is reset (not usable until
+/// `pppoe_dial_poll` returns `Up`). False = no NIC / no link (the in-loop retry tries again later).
+pub fn pppoe_dial_begin(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], budget_ms: u64, out: &mut UplinkResult) -> bool {
+    use crate::pppoe::{Dial, Pppoe, Tx};
+    unsafe {
+        DIAL = None;
+        V6ACQ.on = false;
+    }
+    *out = UplinkResult::new(nic);
+    out.mode = 2;
     if !prelude(nic, inet_ip, out) {
-        return;
+        return false;
     }
     let seed = cntpct();
     let mut eng = Pppoe::new(out.mac, user, pass, seed as u32, (seed >> 11) as u32 ^ 0x5eed_c0de);
     let mut tx = Tx::new();
-    eng.start(ms_now(), &mut tx);
-    let deadline = cntpct() + ticks_ms(30_000);
-    let mut buf = [0u8; 2048];
-    loop {
-        long_step_pet();
-        for i in 0..tx.n {
-            let _ = nic_tx(nic, tx.frame(i));
+    let d = Dial::begin(&mut eng, ms_now(), budget_ms, &mut tx);
+    tx_flush(nic, &mut tx);
+    unsafe {
+        PPP = Some(eng);
+        DIAL = Some(d);
+    }
+    true
+}
+
+/// A frame read elsewhere (wan_poll while the uplink is down) belongs to the dial in progress.
+fn dial_feed(nic: Nic, f: &[u8]) {
+    unsafe {
+        if let (Some(_), Some(e)) = ((*core::ptr::addr_of!(DIAL)).as_ref(), (*core::ptr::addr_of_mut!(PPP)).as_mut()) {
+            let mut tx = crate::pppoe::Tx::new();
+            e.rx(f, ms_now(), &mut tx);
+            tx_flush(nic, &mut tx);
         }
-        tx.clear();
-        if matches!(eng.phase, Phase::Open | Phase::Down) || cntpct() >= deadline {
-            break;
-        }
-        match nic_rx(nic, &mut buf) {
-            Some(n) if n >= 14 => {
-                out.rx_frames += 1;
-                eng.rx(&buf[..n.min(buf.len())], ms_now(), &mut tx);
+    }
+}
+
+/// Step the dial in progress: at most DIAL_RX_BURST frames into the engine, then its clocks (retransmits, stage
+/// budgets, re-dials). Never waits. On `Up` the negotiated address IS the lease (gateway = the PPP peer, next hop =
+/// the AC, MSS 1452); IPv6 then follows in the loop (IPV6CP in the engine, RS / DHCPv6-PD by `pppoe_poll`).
+pub fn pppoe_dial_poll(up: &mut UplinkResult) -> DialEvent {
+    use crate::pppoe::{DialStep, Tx};
+    let nic = up.nic;
+    unsafe {
+        let Some(d) = (*core::ptr::addr_of_mut!(DIAL)).as_mut() else { return DialEvent::Idle };
+        let Some(e) = (*core::ptr::addr_of_mut!(PPP)).as_mut() else {
+            DIAL = None;
+            return DialEvent::Idle;
+        };
+        let buf = &mut *core::ptr::addr_of_mut!(DIAL_BUF);
+        let mut tx = Tx::new();
+        for _ in 0..DIAL_RX_BURST {
+            let Some(n) = nic_rx(nic, buf) else { break };
+            if n >= 14 {
+                up.rx_frames += 1;
+                e.rx(&buf[..n.min(buf.len())], ms_now(), &mut tx);
+                tx_flush(nic, &mut tx);
             }
-            _ => eng.tick(ms_now(), &mut tx),
+        }
+        let st = d.step(e, ms_now(), &mut tx);
+        tx_flush(nic, &mut tx);
+        match st {
+            DialStep::Pending => DialEvent::Pending,
+            DialStep::Open => {
+                DIAL = None;
+                pppoe_opened(e, up);
+                v6acq_arm(30_000);
+                DialEvent::Up
+            }
+            DialStep::AuthFailed => {
+                DIAL = None;
+                DialEvent::Failed { auth: true }
+            }
+            DialStep::GaveUp(_) => {
+                DIAL = None;
+                DialEvent::Failed { auth: false }
+            }
         }
     }
-    if eng.phase != Phase::Open {
-        unsafe { PPP = Some(eng) };
-        return;
-    }
+}
+
+/// The session is open: its negotiated address is the lease.
+fn pppoe_opened(eng: &crate::pppoe::Pppoe, out: &mut UplinkResult) {
     out.dhcp.yiaddr = eng.my_ip;
     out.dhcp.router = eng.peer_ip;
     out.dhcp.dns = if eng.dns1 != [0; 4] { eng.dns1 } else { eng.dns2 };
@@ -736,7 +816,27 @@ fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mu
     out.dhcp.ack_rx = true;
     out.gw_mac = eng.ac_mac;
     out.arp_reply = true; // no ARP on a point-to-point link: the AC is the next hop
-    crate::nat::set_mss_limit(PPPOE_MSS);
+    crate::nat::set_mss_limit(crate::pppoe::PPPOE_MSS);
+}
+
+/// PPPoE bring-up at BOOT: the same bounded dial (30 s), stepped here with the watchdog petted, then the peer + the
+/// internet probe are pinged THROUGH the session and the bounded IPv6 probe runs.
+fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mut UplinkResult) {
+    use crate::pppoe::Tx;
+    if !pppoe_dial_begin(nic, inet_ip, user, pass, 30_000, out) {
+        return;
+    }
+    loop {
+        long_step_pet();
+        match pppoe_dial_poll(out) {
+            DialEvent::Pending => core::hint::spin_loop(),
+            DialEvent::Up => break,
+            _ => return,
+        }
+    }
+    let Some(eng) = (unsafe { (*core::ptr::addr_of_mut!(PPP)).as_mut() }) else { return };
+    let mut tx = Tx::new();
+    let mut buf = [0u8; 2048];
     // Ping the PPP peer, then the internet probe, through the session.
     let none = [0u8; 4];
     let mut small = [0u8; 128];
@@ -774,8 +874,7 @@ fn pppoe_bringup(nic: Nic, inet_ip: &[u8; 4], user: &[u8], pass: &[u8], out: &mu
             }
         }
     }
-    pppoe_v6_probe(nic, &mut eng, out);
-    unsafe { PPP = Some(eng) };
+    pppoe_v6_probe(nic, eng, out);
 }
 
 /// What the WAN v6 probe learned from the ISP (logged by the caller; nothing is configured from it
@@ -839,127 +938,166 @@ pub static mut WAN6_FIRST_RA: Option<crate::ip6::Ra> = None;
 /// DHCPv6 Solicit with IA_PD (+ Rapid Commit) -> Advertise -> Request -> Reply (the delegated prefix
 /// for the LAN, DNS). Results in WAN6 for the [WAN6] log line.
 fn pppoe_v6_probe(nic: Nic, eng: &mut crate::pppoe::Pppoe, out: &UplinkResult) {
-    use crate::ip6;
     use crate::pppoe::Tx;
-    let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
-    // Fresh state per dial (peer review COR-M3): a re-dial used to find reply=true from the last session,
-    // skip RS/DHCPv6 entirely, and keep advertising the OLD delegated prefix on the LAN.
-    *w = Wan6 { ran: true, ip6cp_up: false, ip6cp_off: false, my_iid: [0; 8], peer_iid: [0; 8], rs_tx: 0, ra: None, dhcp_tx: 0, dhcp_rx: 0, advertise: false, reply: false, status: 0, pd: None, dns: None, na: None, v6_frames_rx: 0, t1: 0, sid: [0; 64], sid_len: 0, xid: 0, got_ms: 0, renew_tx: 0, renew_ok: 0, last_renew_ms: 0 };
-    let cap = cntpct() + ticks_ms(12_000);
+    v6acq_arm(12_000);
+    let cap = ms_now() + 12_000;
     let mut buf = [0u8; 2048];
     let mut tx = Tx::new();
     // Service the engine (LCP echo, IPV6CP) on anything that is not session IPv6; return v6 packets.
     // 1. IPV6CP (it started with IPCP; give it up to 5 s more).
-    let dl = cntpct() + ticks_ms(5_000);
-    while !eng.ip6_up && !eng.ip6_off && cntpct() < dl.min(cap) {
+    let dl = ms_now() + 5_000;
+    while !eng.ip6_up && !eng.ip6_off && ms_now() < dl.min(cap) {
         match nic_rx(nic, &mut buf) {
             Some(n) if n >= 14 => eng.rx(&buf[..n.min(buf.len())], ms_now(), &mut tx),
             _ => eng.tick(ms_now(), &mut tx),
         }
-        for i in 0..tx.n {
-            let _ = nic_tx(nic, tx.frame(i));
-        }
-        tx.clear();
+        tx_flush(nic, &mut tx);
     }
-    w.ip6cp_up = eng.ip6_up;
-    w.ip6cp_off = eng.ip6_off;
-    w.my_iid = eng.my_iid;
-    w.peer_iid = eng.peer_iid;
     if !eng.ip6_up {
+        let _ = v6acq_tick(nic, eng, out.mac); // records the IPV6CP outcome
+        unsafe { V6ACQ.on = false };
         return;
     }
-    let mut pkt = [0u8; 400];
-    let mut enc = [0u8; 480];
-    let xid = (cntpct() as u32) & 0x00ff_ffff | 0x0100_0000;
-    let iaid = u32::from_be_bytes([out.mac[2], out.mac[3], out.mac[4], out.mac[5]]);
     // 2. RS (every 1.5 s, up to 3) until an RA; 3. DHCPv6 (every 2 s, up to 3 rounds).
-    let mut next_rs = 0u64;
-    let mut next_dhcp = 0u64;
-    let mut sid = [0u8; 64];
-    let mut sid_len = 0usize;
-    let mut adv_pd: Option<([u8; 16], u8)> = None;
-    while cntpct() < cap && !w.reply {
-        let now = cntpct();
-        if w.ra.is_none() && w.rs_tx < 3 && now >= next_rs {
-            let n = ip6::build_rs(&eng.my_iid, &mut pkt);
-            if let Some(en) = eng.encap_ipv6(&pkt[..n], &mut enc) {
-                let _ = nic_tx(nic, &enc[..en]);
-                w.rs_tx += 1;
-            }
-            next_rs = now + ticks_ms(1_500);
-        }
-        if w.dhcp_tx < 6 && now >= next_dhcp && (w.ra.is_some() || w.rs_tx >= 3) {
-            // Solicit (+Rapid Commit) until an Advertise; then Request for the advertised prefix.
-            let (msg, pd) = if w.advertise { (ip6::DHCP6_REQUEST, adv_pd) } else { (ip6::DHCP6_SOLICIT, None) };
-            let n = ip6::build_dhcp6(msg, xid, &out.mac, &eng.my_iid, iaid, &sid[..sid_len], pd.as_ref().map(|(p, l)| (p, *l)), !w.advertise, &mut pkt);
-            if let Some(en) = eng.encap_ipv6(&pkt[..n], &mut enc) {
-                let _ = nic_tx(nic, &enc[..en]);
-                w.dhcp_tx += 1;
-            }
-            next_dhcp = now + ticks_ms(2_000);
-        }
+    while v6acq_tick(nic, eng, out.mac) && ms_now() < cap {
         let Some(n) = nic_rx(nic, &mut buf) else {
             eng.tick(ms_now(), &mut tx);
-            for i in 0..tx.n {
-                let _ = nic_tx(nic, tx.frame(i));
-            }
-            tx.clear();
+            tx_flush(nic, &mut tx);
             continue;
         };
         let n = n.min(buf.len());
         let Some(ip) = eng.decap_ipv6(&buf[..n]) else {
             eng.rx(&buf[..n], ms_now(), &mut tx);
-            for i in 0..tx.n {
-                let _ = nic_tx(nic, tx.frame(i));
-            }
-            tx.clear();
+            tx_flush(nic, &mut tx);
             continue;
         };
-        w.v6_frames_rx += 1;
-        if let Some(ra) = crate::wanparse::ra(ip) {
-            if w.ra.is_none() {
-                w.ra = Some(ra);
-                next_dhcp = 0; // DHCPv6 right away
-            }
-            continue;
-        }
-        if let Some(d) = crate::wanparse::dhcp6(ip, xid) {
-            w.dhcp_rx += 1;
-            if d.status != 0 {
-                w.status = d.status;
-            }
-            if d.has_dns {
-                w.dns = Some(d.dns);
-            }
-            if d.msg == ip6::DHCP6_ADVERTISE && !w.advertise {
-                w.advertise = true;
-                sid_len = d.sid_len;
-                sid[..sid_len].copy_from_slice(&d.server_id[..sid_len]);
-                if d.has_pd {
-                    adv_pd = Some((d.prefix, d.plen));
-                }
-                next_dhcp = 0; // Request now
-            } else if d.msg == ip6::DHCP6_REPLY {
-                w.reply = true;
-                w.t1 = d.t1;
-                w.sid_len = sid_len.max(d.sid_len);
-                if d.sid_len > 0 {
-                    w.sid[..d.sid_len].copy_from_slice(&d.server_id[..d.sid_len]);
-                    w.sid_len = d.sid_len;
-                } else {
-                    w.sid[..sid_len].copy_from_slice(&sid[..sid_len]);
-                }
-                w.xid = xid;
-                w.got_ms = ms_now();
-                if d.has_pd {
-                    w.pd = Some((d.prefix, d.plen, d.valid));
-                }
-                if d.has_na {
-                    w.na = Some(d.na);
-                }
-            }
-        }
+        let _ = v6acq_rx(ip);
     }
+    unsafe { V6ACQ.on = false };
+}
+
+/// IPv6 acquisition over an open session (RS -> RA, DHCPv6 Solicit / Request -> Reply with IA_PD), shared by the
+/// bounded boot probe and the loop: a dial opened from the AP loop arms it and `pppoe_poll` steps it (sends when due,
+/// replies consumed as they arrive) — the loop never waits for IPv6.
+struct V6Acq {
+    on: bool,
+    xid: u32,
+    until: u64,
+    next_rs: u64,
+    next_dhcp: u64,
+    sid: [u8; 64],
+    sid_len: usize,
+    adv_pd: Option<([u8; 16], u8)>,
+}
+static mut V6ACQ: V6Acq = V6Acq { on: false, xid: 0, until: 0, next_rs: 0, next_dhcp: 0, sid: [0; 64], sid_len: 0, adv_pd: None };
+
+/// Fresh state per dial (peer review COR-M3): a re-dial used to find reply=true from the last session, skip RS /
+/// DHCPv6 entirely, and keep advertising the OLD delegated prefix on the LAN.
+fn v6acq_arm(for_ms: u64) {
+    unsafe {
+        WAN6 = WAN6_NONE;
+        WAN6.ran = true;
+        let now = ms_now();
+        V6ACQ = V6Acq { on: true, xid: (cntpct() as u32) & 0x00ff_ffff | 0x0100_0000, until: now + for_ms, next_rs: 0, next_dhcp: 0, sid: [0; 64], sid_len: 0, adv_pd: None };
+    }
+}
+
+/// Send what is due (RS until an RA, then DHCPv6). False once the acquisition is over (a Reply, IPv6 refused by the
+/// peer, or past its time) — it then stays off until the next dial.
+fn v6acq_tick(nic: Nic, eng: &crate::pppoe::Pppoe, mac: [u8; 6]) -> bool {
+    use crate::ip6;
+    let (w, a) = unsafe { (&mut *core::ptr::addr_of_mut!(WAN6), &mut *core::ptr::addr_of_mut!(V6ACQ)) };
+    if !a.on {
+        return false;
+    }
+    w.ip6cp_up = eng.ip6_up;
+    w.ip6cp_off = eng.ip6_off;
+    w.my_iid = eng.my_iid;
+    w.peer_iid = eng.peer_iid;
+    let now = ms_now();
+    if w.reply || eng.ip6_off || now >= a.until {
+        a.on = false;
+        return false;
+    }
+    if !eng.ip6_up {
+        return true; // IPV6CP still negotiating (the engine's clock runs it)
+    }
+    let mut pkt = [0u8; 400];
+    let mut enc = [0u8; 480];
+    if w.ra.is_none() && w.rs_tx < 3 && now >= a.next_rs {
+        let n = ip6::build_rs(&eng.my_iid, &mut pkt);
+        if let Some(en) = eng.encap_ipv6(&pkt[..n], &mut enc) {
+            let _ = nic_tx(nic, &enc[..en]);
+            w.rs_tx += 1;
+        }
+        a.next_rs = now + 1_500;
+    }
+    if w.dhcp_tx < 6 && now >= a.next_dhcp && (w.ra.is_some() || w.rs_tx >= 3) {
+        // Solicit (+Rapid Commit) until an Advertise; then Request for the advertised prefix.
+        let iaid = u32::from_be_bytes([mac[2], mac[3], mac[4], mac[5]]);
+        let (msg, pd) = if w.advertise { (ip6::DHCP6_REQUEST, a.adv_pd) } else { (ip6::DHCP6_SOLICIT, None) };
+        let n = ip6::build_dhcp6(msg, a.xid, &mac, &eng.my_iid, iaid, &a.sid[..a.sid_len], pd.as_ref().map(|(p, l)| (p, *l)), !w.advertise, &mut pkt);
+        if let Some(en) = eng.encap_ipv6(&pkt[..n], &mut enc) {
+            let _ = nic_tx(nic, &enc[..en]);
+            w.dhcp_tx += 1;
+        }
+        a.next_dhcp = now + 2_000;
+    }
+    true
+}
+
+/// A session IPv6 packet while acquiring: an RA (recorded; DHCPv6 starts at once) or a DHCPv6 answer to our
+/// transaction. True = it was a DHCPv6 answer (consumed).
+fn v6acq_rx(ip: &[u8]) -> bool {
+    let (w, a) = unsafe { (&mut *core::ptr::addr_of_mut!(WAN6), &mut *core::ptr::addr_of_mut!(V6ACQ)) };
+    if !a.on {
+        return false;
+    }
+    w.v6_frames_rx += 1;
+    if let Some(ra) = crate::wanparse::ra(ip) {
+        if w.ra.is_none() {
+            w.ra = Some(ra);
+            a.next_dhcp = 0; // DHCPv6 right away
+        }
+        return false;
+    }
+    let Some(d) = crate::wanparse::dhcp6(ip, a.xid) else { return false };
+    w.dhcp_rx += 1;
+    if d.status != 0 {
+        w.status = d.status;
+    }
+    if d.has_dns {
+        w.dns = Some(d.dns);
+    }
+    if d.msg == crate::ip6::DHCP6_ADVERTISE && !w.advertise {
+        w.advertise = true;
+        a.sid_len = d.sid_len;
+        a.sid[..a.sid_len].copy_from_slice(&d.server_id[..a.sid_len]);
+        if d.has_pd {
+            a.adv_pd = Some((d.prefix, d.plen));
+        }
+        a.next_dhcp = 0; // Request now
+    } else if d.msg == crate::ip6::DHCP6_REPLY {
+        w.reply = true;
+        w.t1 = d.t1;
+        w.sid_len = a.sid_len.max(d.sid_len);
+        if d.sid_len > 0 {
+            w.sid[..d.sid_len].copy_from_slice(&d.server_id[..d.sid_len]);
+            w.sid_len = d.sid_len;
+        } else {
+            w.sid[..a.sid_len].copy_from_slice(&a.sid[..a.sid_len]);
+        }
+        w.xid = a.xid;
+        w.got_ms = ms_now();
+        if d.has_pd {
+            w.pd = Some((d.prefix, d.plen, d.valid));
+        }
+        if d.has_na {
+            w.na = Some(d.na);
+        }
+        a.on = false;
+    }
+    true
 }
 
 /// DHCPv6 prefix-delegation RENEWAL (RFC 8415 §18.2.4; peer review COR-M3): at T1 after the last Reply,
@@ -1310,6 +1448,8 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
                     }
                     if e.phase == Phase::Down {
                         up.dhcp.ack_rx = false;
+                    } else {
+                        let _ = v6acq_tick(nic, e, up.mac); // IPv6 after a dial from the loop (cheap when off)
                     }
                 }
             }
@@ -1327,6 +1467,9 @@ fn pppoe_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         // Session IPv6 -> an Ethernet/IPv6 frame (dst = us, src = the AC) for the LAN v6 router.
         if let Some(ip6) = e.decap_ipv6(&buf[..n]) {
             WAN6_LIVE[0] += 1;
+            if v6acq_rx(ip6) {
+                return WanEvent::Idle; // the answer to the in-loop DHCPv6 acquisition
+            }
             // A Reply to our Renew: refresh the delegation (and the T1 clock).
             let w = &mut *core::ptr::addr_of_mut!(WAN6);
             if w.pd.is_some() && w.renew_tx > 0 {
@@ -1389,6 +1532,8 @@ pub fn wan_teardown(up: &mut UplinkResult) -> [u8; 4] {
             }
         }
         PPP = None;
+        DIAL = None;
+        V6ACQ.on = false;
         DORA = (0, [0; 4], 0);
         RENEW_XID = [0; 4];
         RENEW_LAST_MS = 0;
@@ -1406,13 +1551,16 @@ pub fn wan_teardown(up: &mut UplinkResult) -> [u8; 4] {
     old
 }
 
-/// Sealed-config step 9: start the WAN in `mode` from the AP loop. DHCP and static do NOT block: the address is
-/// acquired (DHCP) / the gateway resolved (static) by `wan_dora_tick` + `wan_poll` in the loop. PPPoE still runs
-/// the bounded blocking dial (<= 30 s + probes; the watchdog is petted through `nic_rx`). `up` is the new result.
+/// Sealed-config step 9: start the WAN in `mode` from the AP loop. Nothing blocks: the address is acquired (DHCP) /
+/// the gateway resolved (static) by `wan_dora_tick` + `wan_poll` in the loop, and a PPPoE dial is begun here and
+/// stepped by the loop (`pppoe_dial_poll`; live-apply follow-up — it used to be the blocking 30-s dial). `up` is the
+/// new result.
 pub fn wan_start(nic: Nic, inet_ip: &[u8; 4], mode: &hal::WanMode, up: &mut UplinkResult) {
     *up = UplinkResult::new(nic);
     match *mode {
-        hal::WanMode::Pppoe { .. } => bringup_with(nic, inet_ip, mode, up),
+        hal::WanMode::Pppoe { user, user_len, pass, pass_len } => {
+            let _ = pppoe_dial_begin(nic, inet_ip, &user[..user_len as usize], &pass[..pass_len as usize], DIAL_LOOP_MS, up);
+        }
         hal::WanMode::Dhcp => {
             let _ = prelude(nic, inet_ip, up);
         }
@@ -1603,11 +1751,14 @@ pub fn wan_poll(up: &mut UplinkResult, buf: &mut [u8]) -> WanEvent {
         // only receives through end0_rx. Internet frames are discarded here (no lease to own them) —
         // except the replies of the in-loop DHCP acquisition.
         let dora = unsafe { DORA.0 } == 1 || unsafe { DORA.0 } == 2;
-        if up.nic == Nic::End0 && (unsafe { MGMT_VLAN } != 0 || dora) {
+        let dialing = pppoe_dialing();
+        if up.nic == Nic::End0 && (unsafe { MGMT_VLAN } != 0 || dora || dialing) {
             if let Some(n) = nic_rx(up.nic, buf) {
                 let n = n.min(buf.len());
                 if dora && n >= 42 + 240 && buf[12] == 0x08 && buf[13] == 0x00 {
                     dora_reply(up, &buf[..n]);
+                } else if dialing && n >= 14 {
+                    dial_feed(up.nic, &buf[..n]); // a PPPoE discovery / session frame of the dial in progress
                 }
             }
         }
