@@ -14,7 +14,8 @@ const pages = [];
 const walk = (d) => { for (const f of readdirSync(d)) { const p = join(d, f); if (statSync(p).isDirectory()) walk(p); else if (f.endsWith('.html')) pages.push(p); } };
 walk(dist);
 
-const INLINE = /<script>([\s\S]*?)<\/script>/g;
+// Attribute-less inline scripts only (Astro's own output), any case, whitespace allowed before the closing '>'.
+const INLINE = /<script\s*>([\s\S]*?)<\/script\s*>/gi;
 const count = new Map();
 for (const p of pages) for (const m of readFileSync(p, 'utf8').matchAll(INLINE)) count.set(m[1], (count.get(m[1]) ?? 0) + 1);
 
