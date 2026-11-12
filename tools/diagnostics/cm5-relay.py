@@ -189,7 +189,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--backend", choices=["lcus", "hid", "nano"], required=True)
     ap.add_argument("--dev", required=True, help="device path, or auto (nano only)")
-    ap.add_argument("--off-secs", type=float, default=5.0, help="power-off dwell (CM5 caps drain)")
+    ap.add_argument("--off-secs", type=float, default=5.0, help="power-off dwell (CM5 caps drain; operator: 5 s, 10 s if too fast)")
+    ap.add_argument("--hold-secs", type=float, default=3.0, help="IN2 held after IN1 is released (operator: 3 s; 6 s if too fast)")
     ap.add_argument("--rom-timeout", type=float, default=15.0)
     ap.add_argument("--dry-run", action="store_true", help="paper test: print the relay commands in order, touch nothing")
     ap.add_argument("cmd", choices=["status", "off", "on", "cycle", "rpiboot", "boot"])
@@ -245,9 +246,9 @@ def main():
             time.sleep(a.off_secs)
         r.set(POWER, False)  # release IN1: the board powers up with nRPIBOOT still held
         if isinstance(r, Paper):
-            print("  (wait 3 s)")
+            print(f"  (wait {a.hold_secs:.0f} s)")
         else:
-            time.sleep(3.0)
+            time.sleep(a.hold_secs)
         r.set(RPIBOOT, False)  # release IN2 3 s later (operator procedure)
         if isinstance(r, Paper):
             print("  (wait up to --rom-timeout for the boot ROM 0a5c:2712 on USB, then: rpiboot -d mass-storage-gadget64, flash)")
