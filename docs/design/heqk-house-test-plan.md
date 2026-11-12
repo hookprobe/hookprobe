@@ -62,4 +62,4 @@ built with `hsh-dev` carries (release builds refuse the feature). A second bench
 
 Batch order: **MB1** (release-equivalent image `imgM2`): flash → live-apply check → Wi-Fi live spike → WPA3 → LAN
 client. **MB2** (`imgM2s` = `imgM2` + `hsh-dev`): flash → shell check → the house check above (it ends on the
-original setup) → reflash the release-equivalent image for the soak.
+original setup) → back to building (the 72 h soak is deferred by the operator, 2026-11-12).
