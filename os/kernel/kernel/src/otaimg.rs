@@ -292,3 +292,73 @@ pub fn classify<D: BlockDev>(d: &D, running: [u8; 32]) -> Boot {
     }
     Boot::Unknown
 }
+
+/// Release plan workstream 2 (OTA trust chain): a trial image commits only when BOTH the WAN is usable AND the Wi-Fi AP
+/// serves, continuously for COMMIT_STABLE_S (a transient never commits); past COMMIT_LIMIT_S without that the device
+/// reboots to the previous slot. Only this gate commits — the runtime watchdog never does.
+pub const COMMIT_STABLE_S: u64 = 30;
+pub const COMMIT_LIMIT_S: u64 = 300;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Gate {
+    Wait,
+    Commit,
+    Revert,
+}
+
+pub struct CommitGate {
+    healthy_since: Option<u64>,
+}
+
+impl CommitGate {
+    pub const fn new() -> Self {
+        CommitGate { healthy_since: None }
+    }
+    /// `now_s` / `t0_s` = seconds now / at the trial boot; `wan` = WAN usable; `ap` = the AP serves (BSS up and
+    /// beaconing in AP mode, no Wi-Fi firmware halt since this boot).
+    pub fn step(&mut self, now_s: u64, t0_s: u64, wan: bool, ap: bool) -> Gate {
+        if wan && ap {
+            let since = *self.healthy_since.get_or_insert(now_s);
+            if now_s.saturating_sub(since) >= COMMIT_STABLE_S {
+                return Gate::Commit;
+            }
+        } else {
+            self.healthy_since = None; // any dip restarts the stability window
+        }
+        if now_s.saturating_sub(t0_s) > COMMIT_LIMIT_S {
+            Gate::Revert
+        } else {
+            Gate::Wait
+        }
+    }
+}
+
+/// `[P-otagate]`: the commit gate's decisions.
+#[cfg(not(feature = "cm5"))]
+pub fn gate_selftest() -> bool {
+    // WAN usable but the AP down: never commits, reverts after the limit
+    let mut g = CommitGate::new();
+    let wan_only = (0..=COMMIT_LIMIT_S).all(|t| g.step(t, 0, true, false) == Gate::Wait) && g.step(COMMIT_LIMIT_S + 1, 0, true, false) == Gate::Revert;
+    // AP serving but no WAN: same
+    let mut g = CommitGate::new();
+    let ap_only = (0..=COMMIT_LIMIT_S).all(|t| g.step(t, 0, false, true) == Gate::Wait) && g.step(COMMIT_LIMIT_S + 1, 0, false, true) == Gate::Revert;
+    // both healthy: commits only after the stability window
+    let mut g = CommitGate::new();
+    let early = (10..10 + COMMIT_STABLE_S).all(|t| g.step(t, 0, true, true) == Gate::Wait);
+    let both = early && g.step(10 + COMMIT_STABLE_S, 0, true, true) == Gate::Commit;
+    // a dip restarts the window
+    let mut g = CommitGate::new();
+    let _ = g.step(10, 0, true, true);
+    let _ = g.step(35, 0, true, false);
+    let dip = g.step(36, 0, true, true) == Gate::Wait && g.step(36 + COMMIT_STABLE_S - 1, 0, true, true) == Gate::Wait
+        && g.step(36 + COMMIT_STABLE_S, 0, true, true) == Gate::Commit;
+    // healthy only near the end: the limit wins once it passes without a full stable window
+    let mut g = CommitGate::new();
+    let late = g.step(COMMIT_LIMIT_S - 5, 0, true, true) == Gate::Wait && g.step(COMMIT_LIMIT_S + 1, 0, true, true) == Gate::Revert;
+    let pass = wan_only && ap_only && both && dip && late;
+    arch_aarch64::_print(format_args!(
+        " [P-otagate] {} — OTA trial commit gate: WAN usable but AP down never commits (reverts after {} s)={} AP serving but no WAN never commits={} both healthy for {} s commits={} a dip restarts the stability window={} the limit wins over a late short recovery={}\n",
+        if pass { "PASS" } else { "FAIL" }, COMMIT_LIMIT_S, wan_only, ap_only, COMMIT_STABLE_S, both, dip, late
+    ));
+    pass
+}
