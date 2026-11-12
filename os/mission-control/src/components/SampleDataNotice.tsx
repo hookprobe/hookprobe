@@ -40,6 +40,8 @@ const LIVE: Record<string, 'live' | string> = {
   '/protect/policies': 'live',
   '/setup': 'live',
   '/admin/feedback': 'live',
+  '/admin/config': 'live',
+  '/admin/shell': 'live',
 };
 
 const LIVE_NAMES = 'Home, Shield, My Network, Get Online, Timeline, Mission Control, Detect, Investigate, Observe, Protect, Automate, Intelligence, Administration, Workspace, Customers, Business, Knowledge';

@@ -18,7 +18,9 @@ export interface PackSlot { type: string; cap: number; generation: number; sourc
   /** The verified generation a rollback would return to (GET /api/upload, kernel PR #1047; null = nothing to roll back to). */
   rollback_to?: number | null }
 export interface UploadEvent { ms: number; session: string; step: string; type: string; ok: boolean; generation: number; why: string }
-export interface UploadView { store: boolean; chunk_max: number; types: PackSlot[]; in_flight: null | { id: string; type: string; size: number; received: number; verified: boolean; type_code?: number; generation?: number; digest?: string }; recent: UploadEvent[] }
+export interface UploadView { store: boolean; chunk_max: number; types: PackSlot[]; in_flight: null | { id: string; type: string; size: number; received: number; verified: boolean; type_code?: number; generation?: number; digest?: string }; recent: UploadEvent[];
+  /** Owner-journal artifact records (kernel #1047): result ok | refused | unknown, detail as the device wrote it. */
+  activations?: { seq: number; ms: number; type: string; result: string; detail: string }[] }
 
 export const [uploadView, setUploadView] = createSignal<UploadView | null>(null);
 export async function refreshUploads(): Promise<void> {
