@@ -22,6 +22,7 @@ import { uploadView, refreshUploads, uploadPack, rollbackPack, PACK_LABEL, CONNE
 import { fetchPlannerStatus, type PlannerStatus } from '../store/plannerApi';
 import AppShell from './AppShell';
 import { postSigned, MSG } from '../store/envelope';
+import { approve, askOwnerKey } from '../store/approve';
 import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
 import { startNetworkLive } from '../store/networkLive';
@@ -40,6 +41,7 @@ const AdministrationApp: Component = () => {
   const [sent, setSent] = createSignal(0);
   const [msg, setMsg] = createSignal('');
   const [newKey, setNewKey] = createSignal('');
+  const [newKey2, setNewKey2] = createSignal('');
   const [erase, setErase] = createSignal('');
 
   onMount(() => {
@@ -55,7 +57,7 @@ const AdministrationApp: Component = () => {
     const f = file(); if (!f) return;
     setMsg(''); setSent(0);
     try {
-      const r = await uploadPack(packType(), f, () => window.prompt('This changes what the device enforces. Enter your owner key:', ''), (s, n) => { setStep(s); setSent(n); });
+      const r = await uploadPack(packType(), f, () => askOwnerKey('Send this pack to the device?', 'It changes what the device enforces. The device checks the signature and that it is newer first.', 'Send'), (s, n) => { setStep(s); setSent(n); });
       setRolledStaged(r.staged); setMsg(r.text);
     } catch (e) {
       setStep(null);
@@ -67,28 +69,29 @@ const AdministrationApp: Component = () => {
   const [rolledStaged, setRolledStaged] = createSignal(false);
   const rollback = async (type: string, gen: number) => {
     const conn = CONNECTIVITY.has(type);
-    if (!window.confirm(`Roll back ${PACK_LABEL[type] ?? type} from generation ${gen} to the previous verified generation kept on the device?${conn ? '\n\nThis re-applies the older connectivity settings at the next restart: if they no longer match your internet line or Wi-Fi, the device may go offline until you fix them on the boot card.' : ''}`)) return;
+    const target = uploadView()?.types.find((t) => t.type === type)?.rollback_to ?? undefined;
+    if (!(await approve({ title: `Roll back ${PACK_LABEL[type] ?? type}?`, body: `From generation ${gen} to generation ${target}, the previous verified one kept on the device.${conn ? '\n\nThis re-applies the older connectivity settings: if they no longer match your internet line or Wi-Fi, the device may go offline until you fix them.' : ''}`, confirm: 'Roll back', destructive: true }))) return;
     setMsg('');
     try {
       // Signed with your signing key (R6 = D); the target generation must be one the device reports.
-      const r = await rollbackPack(type, uploadView()?.types.find((t) => t.type === type)?.rollback_to);
+      const r = await rollbackPack(type, target);
       setRolledStaged(r.staged); setMsg(r.text);
     } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   const rotate = async () => {
-    const cur = window.prompt('Enter your CURRENT owner key:', '');
-    if (!cur) return;
-    const reason = window.prompt('Reason for rotating the owner key (kept in the journal):', '');
-    if (!reason || reason.trim().length < 3) { setMsg('Cancelled: a reason is required.'); return; }
+    const a = await approve({ title: 'Change the owner key?', body: 'Every session ends, including this one. Sign in again with the new key. If you lose it, only re-flashing OWNER.TXT gets you back in.', confirm: 'Change it', destructive: true, reason: {}, key: { label: 'Current owner key' } });
+    if (!a) return;
+    const cur = a.key, reason = a.reason;
     const r = await post<{ ok: boolean; refused?: string; note?: string }>('/api/owner-key', { owner_key: cur, new_owner_key: newKey(), reason: reason.trim(), permanent: 'true' });
     if (r.ok) { setMsg(r.note ?? 'Rotated. Sign in with the new key.'); setTimeout(() => { location.href = '/login'; }, 2500); }
     else setMsg(`Refused by the device: ${r.refused}`);
   };
 
   const reset = async () => {
-    const reason = window.prompt('Reason for the factory reset (kept until the erase):', '');
-    if (!reason || reason.trim().length < 3) { setMsg('Cancelled: a reason is required.'); return; }
+    const a = await approve({ title: 'Factory reset this device?', body: 'Erases owner settings and restarts the device as shipped. Your enrolled signing key and signed boot files stay.', confirm: 'Erase and restart', destructive: true, reason: {} });
+    if (!a) return;
+    const reason = a.reason;
     // R6 = D: authorised by an HQMGMT1 envelope (msg 32) signed with your signing key, not the owner token.
     try {
       const r = await postSigned<{ ok: boolean; refused?: string; note?: string }>('/api/factory-reset', { confirm: 'ERASE', reason: reason.trim(), permanent: 'true' }, { msg: MSG.FACTORY_RESET });
@@ -156,8 +159,8 @@ const AdministrationApp: Component = () => {
                       <For each={uploadView()?.types ?? []} fallback={<tr><td colSpan={6} class="l0-muted">Not reported.</td></tr>}>{(t) => (
                         <tr><td>{PACK_LABEL[t.type] ?? t.type}</td><td class="l0-num" style={{ 'font-weight': 400 }}>{t.generation || '—'}</td><td>{t.source === 'store' ? 'uploaded' : 'from the boot image'}</td>
                           <td>{t.applies === 'next_boot' ? 'at the next restart' : t.applies === 'now' ? 'now' : '—'}</td><td>{Math.round(t.cap / 1024)} KB</td>
-                          <td><Show when={t.source === 'store' && t.generation > 0}>
-                            <button class="hp-btn" style={{ 'min-height': '32px' }} onClick={() => void rollback(t.type, t.generation)}>Roll back</button>
+                          <td><Show when={typeof t.rollback_to === 'number'}>
+                            <button class="hp-btn" style={{ 'min-height': '44px' }} onClick={() => void rollback(t.type, t.generation)}>Roll back to {t.rollback_to}</button>
                           </Show></td></tr>
                       )}</For>
                     </Show>
@@ -206,8 +209,11 @@ const AdministrationApp: Component = () => {
                 <p class="l0-card-sub">The owner key signs you in and approves every durable change. Rotating it ends every session; the device keeps only a salted verifier, never the key.</p>
                 <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>New owner key (16–128 characters)
                   <input type="password" style={field} value={newKey()} onInput={(e) => setNewKey(e.currentTarget.value)} autocomplete="new-password" /></label>
+                <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Repeat the new owner key
+                  <input type="password" style={field} value={newKey2()} onInput={(e) => setNewKey2(e.currentTarget.value)} autocomplete="new-password" /></label>
+                <Show when={newKey2() && newKey() !== newKey2()}><p class="plan-diff-warn" style={{ margin: 0 }}>The new keys differ.</p></Show>
                 <div class="l0-card-foot">
-                  <button class="hp-btn hp-btn--primary" disabled={sample() || newKey().trim().length < 16 || newKey().length > 128} onClick={() => void rotate()}>Rotate owner key</button>
+                  <button class="hp-btn hp-btn--primary" disabled={sample() || newKey().trim().length < 16 || newKey().length > 128 || newKey() !== newKey2()} onClick={() => void rotate()}>Rotate owner key</button>
                   <Show when={substrate() === 'heqk'}>
                     <button class="hp-btn" onClick={async () => { try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* go anyway */ } location.href = '/login'; }}>Sign out</button>
                   </Show>
