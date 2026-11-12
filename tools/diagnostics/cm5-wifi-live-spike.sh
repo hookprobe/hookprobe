@@ -45,7 +45,10 @@ ensure_owner() { local e; e=$(api /api/config | python3 -c 'import json,sys; pri
   [ "$e" = True ] && return 0
   python3 -I "$ROOT/os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$T/enroll.txt" && $UP --enroll "$T/enroll.txt" > "$T/enroll.out" 2>&1
   local rc=$?; echo "     owner key enrolled for the R6 envelopes (rc=$rc: $(cut -c1-100 "$T/enroll.out"))"; return $rc; }
-rejoin() { for _ in $(seq 1 30); do pi "curl -sk -o /dev/null -w '%{http_code}' -m 5 --interface wlan0 $AP_MC/api/health" 2>/dev/null | grep -q 200 && return 0
+# joined = the Pi holds an AP lease (10.99.0.x) and the AP gateway answers. Mission Control is NOT the signal: by G12-M
+# (mcmgmt::serve_on_wifi) it leaves the AP once the owner's own Wi-Fi credential is in force with a management VLAN.
+apup() { pi "a=\$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}'); [ -n \"\$a\" ] && ping -c1 -W2 -I \$a 10.99.0.1 >/dev/null" 2>/dev/null; }
+rejoin() { for _ in $(seq 1 30); do apup && return 0
   PI_SUDO_FILE="$PS" "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1; sleep 3; done; return 1; }
 PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")
 SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'"); PSK=$(psudo "nmcli -s -g 802-11-wireless-security.psk con show '$PROF'")
@@ -77,5 +80,5 @@ GL=$G; push wpa3-transition
 waitlog "\[WIFI\] live apply" 20; chk $? "unconfirmed change gen $G applied live"
 rejoin; for _ in $(seq 1 200); do since | grep -aq "reverted LIVE to generation $GL" && break; sleep 2; done
 since | grep -aq "reverted LIVE to generation $GL"; chk $? "no confirm within the window -> reverted LIVE to gen $GL (no reboot)"
-rejoin; chk $? "the Pi re-joined the last-known-good AP; Mission Control answers"
+rejoin; chk $? "the Pi re-joined the last-known-good AP (lease + gateway)"
 [ "$ok" -eq "$n" ] && { echo "WIFI-LIVE-SPIKE: PASS ($ok/$n)"; exit 0; } || { echo "WIFI-LIVE-SPIKE: FAIL ($ok/$n)"; exit 1; }
