@@ -24,6 +24,19 @@ const PATHS: Record<string, string> = {
   approvals: 'M4 12l5 5L20 6',
   more:      'M5 12h.01M12 12h.01M19 12h.01',
   pro:       'M14 4h6v6M20 4l-7 7M10 20H4v-6M4 20l7-7',
+  // devices (map) — emoji rendered as empty boxes without a colour-emoji font
+  phone:     'M8 3h8v18H8zM11 18h2',
+  tablet:    'M6 3h12v18H6zM11 18h2',
+  laptop:    'M5 5h14v10H5zM2 19h20',
+  tv:        'M3 5h18v12H3zM8 21h8',
+  speaker:   'M7 3h10v18H7zM12 14m-3 0a3 3 0 1 0 6 0a3 3 0 1 0-6 0M12 7v.5',
+  camera:    'M3 8h4l2-3h6l2 3h4v11H3zM12 13m-3.5 0a3.5 3.5 0 1 0 7 0a3.5 3.5 0 1 0-7 0',
+  printer:   'M7 3h10v5H7zM7 16H4V8h16v8h-3M7 13h10v8H7z',
+  game:      'M6 9h12a3 3 0 0 1 3 3v2a3 3 0 0 1-5 2l-1-1H9l-1 1a3 3 0 0 1-5-2v-2a3 3 0 0 1 3-3zM8 11v3M6.5 12.5h3',
+  hub:       'M12 3a6 6 0 0 1 4 10.5V17H8v-3.5A6 6 0 0 1 12 3zM9 20h6',
+  watch:     'M8 6h8v12H8zM9 3h6M9 21h6',
+  pin:       'M12 16v5M8 3h8l-1 6 3 3H6l3-3z',
+  lock:      'M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3',
 };
 
 const Icon: Component<{ name: string; size?: number }> = (props) => (

@@ -198,7 +198,7 @@ const AdministrationApp: Component = () => {
                   )}</For>
                 </div>
                 <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Container file
-                  <input type="file" style={{ ...field, padding: '8px' }} onChange={(e) => setFile(e.currentTarget.files?.[0] ?? null)} /></label>
+                  <input type="file" style={Object.assign({}, field, { padding: '8px' })} onChange={(e) => setFile(e.currentTarget.files?.[0] ?? null)} /></label>
                 <Show when={step()}>
                   <ol class="plan-steps" aria-label="Upload progress">
                     <For each={STEPS}>{([s, label]) => {

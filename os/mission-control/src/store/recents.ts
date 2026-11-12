@@ -25,8 +25,10 @@ export function loadWork(): void { setWorkItems(read()); }
 /** Record a visit (newest first; pinned items are never evicted). */
 export function remember(item: Omit<WorkItem, 'at' | 'pinned'>): void {
   const items = read();
-  const old = items.find((x) => x.key === item.key);
-  const next = [{ ...item, at: Date.now(), pinned: old?.pinned ?? false }, ...items.filter((x) => x.key !== item.key)];
+  // one row per thing: a screen reached by several routes (My Network: /network/zones, /map, /devices) is one row
+  const same = (x: WorkItem) => x.key === item.key || (x.type === item.type && x.title === item.title);
+  const old = items.find(same);
+  const next = [{ ...item, at: Date.now(), pinned: old?.pinned ?? false }, ...items.filter((x) => !same(x))];
   const kept = [...next.filter((x) => x.pinned), ...next.filter((x) => !x.pinned)].slice(0, MAX);
   write(kept);
   setWorkItems(kept);
