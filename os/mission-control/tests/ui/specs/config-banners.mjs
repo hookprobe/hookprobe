@@ -48,6 +48,33 @@ export default async function (t) {
     'bundle in force: a new bundle without the firewall is refused (a bundle replaces all of it; leaving a section out removes it)');
   await page.keyboard.press('Escape'); await page.waitForTimeout(200);
 
+  // Live apply (ADR 0059 step 3): what the engine is doing, the device's own countdown, revert results, at rest.
+  const base = { state: 'committed', generation: 5, floor: 5, on_trial: false, window_s: 300, elapsed_s: 0, auto_rollback: true, needs_confirm: false, health: '' };
+  const live = (o) => ({ phase: 'idle', changes: [], needs_confirm: false, window_s: 120, remaining_s: 0, last: { result: 'none', generation: 0 }, policy_generation: 0, mgmt_ok: null, mgmt_probe: null, ...o });
+  const serve = async (cfg) => { await page.unroute('**/api/config'); await page.route('**/api/config', json(cfg)); };
+  await serve({ ...base, live: live({ phase: 'applying', changes: ['wan', 'wifi'] }) });
+  await go('/network/wan', 1500);
+  ok(await vis(page.locator('[aria-label="Configuration applying"] >> text=Changing the internet, the Wi-Fi now, without a restart')), 'live apply: an "Applying new settings" banner names what changes, no restart');
+  await serve({ ...base, state: 'trial', generation: 6, on_trial: true, live: live({ phase: 'trial', remaining_s: 95, window_s: 120 }), envelope: { owner_enrolled: false } });
+  await go('/network/wan', 1500);
+  const tb = page.locator('[aria-label="Configuration trial"]');
+  const cd = await tb.locator('b').first().innerText();
+  ok(/^1:[23]\d$/.test(cd), `live trial: the countdown follows the device's remaining time (${cd} of a 120 s window)`);
+  ok(!(await vis(tb.locator('button:has-text("Keep it")'))) && await vis(tb.locator('text=needs your signing key as the owner key')), 'no Keep / Roll back buttons when no owner key is enrolled (they could only be refused)');
+  await serve({ ...base, generation: 5, live: live({ last: { result: 'reverted', generation: 5 } }) });
+  await go('/network/wan', 1500);
+  ok(await vis(page.locator('text=Settings switched back')) && await vis(page.locator('text=went back to generation 5')), 'after a live revert: "switched back to generation N"');
+  await serve({ ...base, at_rest: { sealed: true, secrets_protected: true, migrated: 0, device_key: true, volatile_ram_only: false, persisted: true } });
+  await go('/network/wifi', 1500);
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  ok(await vis(page.locator('[aria-label="At rest"] >> text=Stored encrypted with a key only this device has')), 'at rest: sealed settings are reported as such (from GET /api/config at_rest)');
+  await page.keyboard.press('Escape');
+  await serve({ ...base, at_rest: { sealed: false, secrets_protected: false, migrated: 0, device_key: false, volatile_ram_only: true, persisted: false } });
+  await go('/network/wifi', 1500);
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  ok(await vis(page.locator('[aria-label="At rest"] >> text=kept only in memory, not after a restart')), 'at rest: no device key is said plainly (memory only)');
+  await page.keyboard.press('Escape');
+
   // Floors in the key panel.
   await go('/admin/identity', 1200);
   await page.click('[aria-label="Settings"] >> text=Signing key'); await page.waitForTimeout(300);
