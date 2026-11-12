@@ -82,15 +82,15 @@ Read this object immediately before signing. If anything is on trial, show the g
 | 28 | 8 | epoch | from `envelope.epoch` |
 | 36 | 8 | seq | u64 LE, at least `envelope.next_seq` |
 | 44 | 8 | arg | u64 LE: `0` for confirm / rollback / factory reset; the **type code** for upload activate / rollback; the **current key fingerprint** for rotate |
-| 52 | 8 | generation | u64 LE: confirm / rollback `envelope.generation`; activate the staged `generation`; upload rollback the generation to roll back TO; rotate the rotation `generation`; factory reset `0` |
+| 52 | 8 | generation | u64 LE: confirm / rollback `envelope.generation`; activate the staged `generation`; upload rollback the generation to roll back TO (`GET /api/upload` `types[].rollback_to`); rotate the rotation `generation`; factory reset `0` |
 | 60 | 32 | digest | confirm / rollback `envelope.digest`; activate the staged `digest`; rotate SHA-256 of the new public key (32 raw bytes); upload rollback and factory reset all zeros |
+| 92 | 64 | signature | Ed25519 by `K_own` over the ASCII bytes `HQMGMT1-SIG` (11 bytes, no terminator) followed by bytes 0..92 |
 
 Type codes: `shield_block` 0, `shield_allow` 1, `ioc` 2, `rules` 3, `oui` 4, `devices` 5, `wan` 6, `wifi` 7,
 `policy` 8, `config` 9, `os_image` 254. Key fingerprint (rotate `arg`): the first 8 bytes of SHA-256 of the current
 owner public key (`/api/anchor` `owner_key`, 32 raw bytes), read as a little-endian u64.
 
 `device_id`, `epoch` and `next_seq` always come from `GET /api/config` `envelope`, read just before signing.
-| 92 | 64 | signature | Ed25519 by `K_own` over the ASCII bytes `HQMGMT1-SIG` (11 bytes, no terminator) followed by bytes 0..92 |
 
 Encode the 156 bytes as 312 hex digits (lower or upper case).
 
@@ -188,9 +188,18 @@ signing, compare `digest` with the SHA-256 of the owner's own file; if they diff
 reported). `owner_key` is no longer read. `begin`, `chunk`, `finish` and `abort` are unchanged.
 
 **Upload rollback.** `POST /api/upload/rollback` with `type`, `seq`, `envelope` (msg 24, arg = type code,
-generation = the generation to roll back TO, digest zeros). The device verifies the previous half first; if its
-generation is not the signed one: `refused: envelope binds another target`. If there is nothing to roll back to:
+generation = the generation to roll back TO, digest zeros). Take that generation from `GET /api/upload`
+`types[].rollback_to` (the generation the rollback handler verifies against, from the same function; `null` = nothing
+to roll back to, do not offer the button). The device verifies the previous half first; if its generation is not the
+signed one: `refused: envelope binds another target`. If there is nothing to roll back to:
 `nothing to roll back to (no verified previous generation)` (400).
+
+**Upload history.** `GET /api/upload` `activations[]` lists the owner-journal artifact records (newest first): `seq`,
+`ms`, `type` (a pack type, `os_image`, or `config` / `upload` / `owner` / `anchor` / `hsh` for envelope and console
+records), `result` and `detail`. `result` is `"ok"` (done: an activation, a rollback, an accepted envelope, a console
+command), `"refused"` (refused or failed; nothing changed, or the store went back to the previous pack) or
+`"unknown"` (a value this build does not know). Tell an activation from a rollback by `detail`: `gen A->B sha256:…`
+(activation), `rollback gen A->B` (rollback), `<op> gen N <reason>` (envelope refusal).
 
 **Factory reset.** `POST /api/factory-reset` with `confirm=ERASE`, `reason`, `permanent=true`, `seq`, `envelope`
 (msg 32, arg 0, generation 0, digest zeros). Refusals are 403 as before.
@@ -207,7 +216,11 @@ Owner-side reference: `policy-sign.py mgmt-sign --msg activate|pack-rollback|fac
 
 ## The web console (`POST /api/hsh`)
 
-`POST /api/hsh`, owner session, headers `Origin` + `X-HQ-CSRF`, body `text/plain`:
+`POST /api/hsh?seq=N`, owner session, headers `Origin` + `X-HQ-CSRF`, body `text/plain`. `N` is the session write
+sequence (`/api/session` `next_seq`, one per request, as the `seq` form field of the other writes), and the request
+counts against the same 20-writes-a-minute session limit. Refused before the line runs: a missing / reused / stale
+`seq` → 409 `{"ok":false,"refused":"replay"}`; over the limit → 400 `{"ok":false,"refused":"rate limited: at most 20
+writes a minute per session"}`.
 
 - line 1: the command line (`help`, `info`, `config status`, `owner challenge`, `config confirm`, ...);
 - line 2 (optional): the 312-hex envelope for a privileged command (`config confirm`, `config rollback`,

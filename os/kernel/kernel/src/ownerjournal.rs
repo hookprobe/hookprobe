@@ -36,7 +36,8 @@ pub enum Kind {
     ShieldBlock = 3,  // target = domain, value = 1
     ShieldProfile = 4, // target = MAC, value = devpolicy::ShieldProfile
     /// ADR 0056 D6: an artifact activation (audit only — never a rule). target = pack type name,
-    /// value = 1 activated / 2 rolled back, reason = "gen A->B sha256:<16 hex>".
+    /// value = 1 done (activated / rolled back / envelope accepted) / 2 refused, reason = "gen A->B sha256:<16 hex>"
+    /// (rollback: "rollback gen A->B"; envelope: "<op> gen N <why>"). Shown by `upload::result_label`.
     Artifact = 5,
     /// G28: the owner rotated the Mission Control owner key (target = salt 16 ‖ verifier 32 ‖ sha256(OWNER.TXT)[..16]
     /// at rotation time). Never a rule; `revoke_all` does not touch it; the latest one wins.
