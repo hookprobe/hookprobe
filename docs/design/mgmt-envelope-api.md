@@ -216,7 +216,7 @@ Owner-side reference: `policy-sign.py mgmt-sign --msg activate|pack-rollback|fac
 
 ## The web console (`POST /api/hsh`)
 
-`POST /api/hsh?seq=N`, owner session, headers `Origin` + `X-HQ-CSRF`, body `text/plain`. `N` is the session write
+`POST /api/hsh?seq=N`, owner session, headers `Origin` + `X-HQ-CSRF`, body `text/plain`. `N` (decimal, below 2^32) is the session write
 sequence (`/api/session` `next_seq`, one per request, as the `seq` form field of the other writes), and the request
 counts against the same 20-writes-a-minute session limit. Refused before the line runs: a missing / reused / stale
 `seq` → 409 `{"ok":false,"refused":"replay"}`; over the limit → 400 `{"ok":false,"refused":"rate limited: at most 20
