@@ -6,11 +6,15 @@
 //! verify + parse FIRST (mode + link keys)        refused -> false, NOTHING touched (the WAN in force stays up)
 //! teardown: PPPoE PADT, PPP / DORA / RENEW / WAN6 state, the MSS default, nat::flush_wan(old WAN address)
 //! link: internet VLAN tags; the management sub-interface / floor ONLY when they change (-> owner confirm)
-//! start: DHCP / static in the loop (non-blocking), PPPoE the bounded dial (blocking, watchdog-petted)
-//! PPPoE authentication rejected (Q5)              -> false at once: cfgd reverts live without waiting out the window
+//! start: DHCP / static / PPPoE all begun here and completed IN the loop (the PPPoE dial is a bounded state machine,
+//!        `pppoe::Dial`, stepped by the loop: per-stage budgets, re-dials, an overall bound — never a blocking dial)
+//! PPPoE authentication rejected (Q5)              -> cfgd::wan_auth_rejected from the loop: the live trial reverts
+//!                                                    at once, without waiting out the window
 //! ```
 //!
-//! cfgd's trial then commits on `up.usable()` or reverts live (this executor re-runs with the last-known-good).
+//! cfgd's trial then commits on `up.usable()` AND the management re-probe (`mgmt_reprobe`: the management
+//! sub-interface's address / next hop, the owner's own client path) — a WAN that comes up but loses management never
+//! auto-commits, it reverts at the window — or reverts live (this executor re-runs with the last-known-good).
 //! The Wi-Fi AP and eth1 are never touched: Mission Control on the AP stays reachable throughout (rule 7).
 
 /// The hardware side (the metal `uplink`; a mock in [P-cfgd-wan]).
@@ -73,6 +77,68 @@ pub fn apply<P: WanPort>(port: &mut P, cfg: Option<(hal::WanMode, hal::WanLink)>
     }
     let rejected = port.start(&mode);
     (!rejected, Some(mode))
+}
+
+/// What the management re-probe sees after a WAN change (metal: `uplink::MGMT`, the AP addressing, cfgd's owner).
+#[derive(Clone, Copy)]
+pub struct MgmtSeen {
+    /// The management sub-interface: (address, prefix, gateway, gateway resolved); None = none configured.
+    pub mgmt: Option<([u8; 4], u8, [u8; 4], bool)>,
+    /// The AP addressing (Mission Control on the Wi-Fi side — a WAN apply never touches it).
+    pub lan: ([u8; 4], u8),
+    /// The owner's own client (cfgd F-e; 0 = unknown) and whether it resolves on the management VLAN.
+    pub owner: [u8; 4],
+    pub owner_resolved: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MgmtProbe {
+    Ok,
+    /// The management sub-interface has no address (static missing, or its DHCP lease not (re)acquired).
+    NoAddress,
+    /// Its gateway does not resolve.
+    NoNextHop,
+    /// The owner's own client is no longer reachable (on-link there but unresolved, or routed in with no next hop).
+    OwnerLost,
+}
+impl MgmtProbe {
+    pub fn word(self) -> &'static str {
+        match self {
+            MgmtProbe::Ok => "ok",
+            MgmtProbe::NoAddress => "management sub-interface has no address",
+            MgmtProbe::NoNextHop => "management gateway does not resolve",
+            MgmtProbe::OwnerLost => "the owner's client is not reachable",
+        }
+    }
+}
+
+fn in_net(a: [u8; 4], net: [u8; 4], pl: u8) -> bool {
+    let m = if pl == 0 { 0 } else { u32::MAX << (32 - pl.min(32) as u32) };
+    u32::from_be_bytes(a) & m == u32::from_be_bytes(net) & m
+}
+
+/// Rule 7 after a live WAN change: WAN reachability is not management reachability. Management is kept when the
+/// management sub-interface (if any) has its address and next hop, and the owner's own client still has a path: on
+/// the AP (untouched by a WAN apply), on-link on the management VLAN and resolved, or routed in over the management
+/// gateway. An owner on none of the device's paths (unknown topology) leaves the verdict to the sub-interface checks,
+/// as the D7 stage probe does.
+pub fn mgmt_reprobe(s: &MgmtSeen) -> MgmtProbe {
+    if let Some((ip, _, gw, gw_ok)) = s.mgmt {
+        if ip == [0; 4] {
+            return MgmtProbe::NoAddress;
+        }
+        if gw != [0; 4] && !gw_ok {
+            return MgmtProbe::NoNextHop;
+        }
+    }
+    if s.owner == [0; 4] || in_net(s.owner, s.lan.0, s.lan.1) {
+        return MgmtProbe::Ok;
+    }
+    match s.mgmt {
+        Some((ip, pl, _, _)) if in_net(s.owner, ip, pl) => if s.owner_resolved { MgmtProbe::Ok } else { MgmtProbe::OwnerLost },
+        Some((_, _, gw, gw_ok)) => if gw != [0; 4] && gw_ok { MgmtProbe::Ok } else { MgmtProbe::OwnerLost },
+        None => MgmtProbe::Ok,
+    }
 }
 
 // ---- [P-cfgd-wan] -------------------------------------------------------------------------------------------

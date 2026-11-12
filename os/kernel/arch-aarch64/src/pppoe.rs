@@ -976,6 +976,19 @@ impl Pppoe {
         self.phase == Phase::Down && matches!(self.why, DownWhy::AuthRejected | DownWhy::AuthUnsupported)
     }
 
+    /// Start over from discovery with the same credentials (the bounded dial's retry): a half-open session is
+    /// PADT'd first; the negotiation state is fresh, the counters are kept.
+    pub fn redial(&mut self, host_uniq: u32, magic: u32, now_ms: u64, tx: &mut Tx) {
+        if self.sid != 0 {
+            self.padt(tx);
+        }
+        let fresh = Pppoe::new(self.mac, &self.user[..self.ulen], &self.pass[..self.plen], host_uniq, magic);
+        let stats = self.stats;
+        *self = fresh;
+        self.stats = stats;
+        self.start(now_ms, tx);
+    }
+
     /// Send a PADT for this session (orderly shutdown).
     pub fn padt(&self, tx: &mut Tx) {
         let (ac, sid) = (self.ac_mac, self.sid);
@@ -988,5 +1001,102 @@ impl Pppoe {
         let o = self.disc_hdr(b, ac, CODE_PADT, sid);
         b[18..20].copy_from_slice(&0u16.to_be_bytes());
         tx.commit(o.max(60));
+    }
+}
+
+// ---- the bounded dial (sealed-config live apply follow-up: a PPPoE dial stepped from the AP loop) -------------
+// The engine above is already a frames-in / frames-out machine; `Dial` adds what the old blocking bring-up did with
+// a 30-s busy loop: a budget per stage, a fresh re-dial on a stage timeout, an overall bound — and nothing else. The
+// caller feeds received frames to the engine (`Pppoe::rx`) and calls `step` regularly; neither ever waits.
+
+/// Per-stage budget (ms): Discovery (PADI -> PADO), Requesting (PADR -> PADS), LCP, authentication, IPCP.
+pub const DIAL_STAGE_MS: [u64; 5] = [10_000, 6_000, 10_000, 10_000, 10_000];
+/// Dial attempts (each a fresh discovery) before the dial gives up; a definitive authentication failure never retries.
+pub const DIAL_ATTEMPTS: u8 = 3;
+
+/// What one `Dial::step` concluded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DialStep {
+    Pending,
+    Open,
+    /// PAP / CHAP rejected or no authentication protocol in common: definitive (sealed-config Q5).
+    AuthFailed,
+    /// Out of attempts or past the overall budget; the last stage's reason.
+    GaveUp(DownWhy),
+}
+
+pub struct Dial {
+    t0: u64,
+    budget_ms: u64,
+    stage: Phase,
+    stage_t0: u64,
+    pub attempts: u8,
+    pub stage_timeouts: u8,
+}
+
+fn stage_why(p: Phase) -> DownWhy {
+    match p {
+        Phase::Discovery => DownWhy::NoPado,
+        Phase::Requesting => DownWhy::NoPads,
+        Phase::Lcp => DownWhy::LcpTimeout,
+        Phase::Auth => DownWhy::AuthTimeout,
+        _ => DownWhy::IpcpTimeout,
+    }
+}
+
+impl Dial {
+    /// Start the engine's discovery and the dial's clocks (`budget_ms` = the overall bound).
+    pub fn begin(eng: &mut Pppoe, now_ms: u64, budget_ms: u64, tx: &mut Tx) -> Dial {
+        eng.start(now_ms, tx);
+        Dial { t0: now_ms, budget_ms, stage: Phase::Discovery, stage_t0: now_ms, attempts: 1, stage_timeouts: 0 }
+    }
+
+    /// Run the engine's retransmit clock, then judge: open, a definitive authentication failure, a stage past its
+    /// budget (re-dial while attempts remain), or the overall budget spent. Never blocks.
+    pub fn step(&mut self, eng: &mut Pppoe, now_ms: u64, tx: &mut Tx) -> DialStep {
+        let idx = |p: Phase| match p {
+            Phase::Discovery => Some(0),
+            Phase::Requesting => Some(1),
+            Phase::Lcp => Some(2),
+            Phase::Auth => Some(3),
+            Phase::Ipcp => Some(4),
+            _ => None,
+        };
+        if idx(eng.phase).is_some() {
+            eng.tick(now_ms, tx);
+        }
+        if eng.phase == Phase::Open {
+            return DialStep::Open;
+        }
+        if eng.auth_failed() {
+            return DialStep::AuthFailed;
+        }
+        if eng.phase != self.stage {
+            self.stage = eng.phase;
+            self.stage_t0 = now_ms;
+        }
+        let stage_out = match idx(eng.phase) {
+            Some(i) => now_ms.wrapping_sub(self.stage_t0) >= DIAL_STAGE_MS[i],
+            None => eng.phase == Phase::Down,
+        };
+        let spent = now_ms.wrapping_sub(self.t0) >= self.budget_ms;
+        if !stage_out && !spent {
+            return DialStep::Pending;
+        }
+        let why = if eng.phase == Phase::Down { eng.why } else { stage_why(eng.phase) };
+        if stage_out {
+            self.stage_timeouts = self.stage_timeouts.saturating_add(1);
+        }
+        if spent || self.attempts >= DIAL_ATTEMPTS {
+            eng.phase = Phase::Down;
+            eng.why = why;
+            return DialStep::GaveUp(why);
+        }
+        self.attempts += 1;
+        let seed = now_ms as u32 ^ (self.attempts as u32).wrapping_mul(0x9e37_79b9);
+        eng.redial(seed, seed.rotate_left(13) ^ 0x5eed_c0de, now_ms, tx);
+        self.stage = Phase::Discovery;
+        self.stage_t0 = now_ms;
+        DialStep::Pending
     }
 }

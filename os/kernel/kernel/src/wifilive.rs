@@ -366,3 +366,65 @@ pub fn selftest() -> bool {
     ));
     pass
 }
+
+/// [P-cfgd-wifi-after] (live-apply follow-up): what must follow a live Wi-Fi bounce — where Mission Control is served
+/// (re-evaluated from what runs NOW, never the boot decision) and the per-station IPv6 state of the bounced BSS.
+#[cfg(not(feature = "cm5"))]
+pub fn after_selftest() -> bool {
+    use arch_aarch64::ip6lan::V6Lan;
+    use crate::mcmgmt::serve_on_wifi;
+    // 1. G12-M re-evaluated: boot = client AP + management VLAN -> management only; a live revert to the setup
+    //    credential -> Wi-Fi again (onboarding); a live WAN change removing the management sub-interface -> Wi-Fi again;
+    //    one adding it on a client AP -> management only
+    let boot = !serve_on_wifi(false, true);
+    let to_setup = serve_on_wifi(true, true);
+    let mgmt_removed = serve_on_wifi(false, false);
+    let mgmt_added = !serve_on_wifi(false, true) && serve_on_wifi(true, false);
+    let mc = boot && to_setup && mgmt_removed && mgmt_added;
+    // 2. IPv6 at an AP restart: a station's SAVI binding (first-come) refuses another MAC its address; after the
+    //    bounce every binding is gone (a station re-joining with a new private MAC gets its address), the LAN
+    //    numbering is kept and the RA burst restarts at once
+    static mut V: V6Lan = V6Lan::new();
+    let v = unsafe { &mut *core::ptr::addr_of_mut!(V) };
+    *v = V6Lan::new();
+    let mut pd = [0u8; 16];
+    pd[..8].copy_from_slice(&[0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0x10]);
+    v.configure(&pd, 56, 86_400, &[2, 0xa9, 0, 0, 0, 1], None);
+    let (sta, other) = ([2u8, 0x51, 0, 0, 0, 7], [2u8, 0x51, 0, 0, 0, 8]);
+    let mut ll = [0u8; 16];
+    ll[..2].copy_from_slice(&[0xfe, 0x80]);
+    ll[8..].copy_from_slice(&[0, 0x51, 0, 0xff, 0xfe, 0, 0, 7]);
+    let frame = |mac: &[u8; 6], f: &mut [u8; 64]| {
+        *f = [0; 64];
+        f[..6].copy_from_slice(&[0x33, 0x33, 0, 0, 0, 1]);
+        f[6..12].copy_from_slice(mac);
+        f[12..14].copy_from_slice(&[0x86, 0xdd]);
+        f[14] = 0x60;
+        f[19] = 8; // payload length
+        f[20] = 17;
+        f[21] = 255;
+        f[22..38].copy_from_slice(&ll);
+        f[38..54].copy_from_slice(&[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+    };
+    let mut f = [0u8; 64];
+    let mut out = [0u8; 200];
+    frame(&sta, &mut f);
+    let _ = v.on_lan(&f[..62], 1_000, &mut out);
+    let bound = v.mac_of(&ll) == Some(sta);
+    frame(&other, &mut f);
+    let _ = v.on_lan(&f[..62], 1_100, &mut out);
+    let savi = v.stats.savi_refused == 1 && v.mac_of(&ll) == Some(sta);
+    let _ = v.ra_due(1_200);
+    let quiet = !v.ra_due(1_300);
+    v.forget_all_stations();
+    let cleared = v.mac_of(&ll).is_none() && v.up && v.prefix[..8] == pd[..8] && v.ra_due(1_400);
+    let _ = v.on_lan(&f[..62], 1_500, &mut out);
+    let rejoin = v.stats.savi_refused == 1 && v.mac_of(&ll) == Some(other);
+    let v6 = bound && savi && quiet && cleared && rejoin;
+    let pass = mc && v6;
+    arch_aarch64::_print(format_args!(
+        " [P-cfgd-wifi-after] {} — live-apply follow-up, after a live Wi-Fi / WAN apply: where Mission Control is served is re-evaluated from what runs now (client AP + management VLAN -> management only; back to the setup credential or the management VLAN removed -> Wi-Fi again)={} IPv6 at an AP restart: the bounce clears every station's SAVI binding / neighbour entry / pinhole (a station re-joining with a new MAC gets its address), the LAN numbering is kept, the RA burst restarts={}\n",
+        if pass { "PASS" } else { "FAIL" }, mc, v6
+    ));
+    pass
+}
