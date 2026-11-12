@@ -54,7 +54,7 @@ ensure_owner
 G=$(api /api/config | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max(d["generation"], d["floor"]))')
 FH0=$(tr -d '\r\000' < "$LOG" | grep -ac "FWHALT")
 mkw() { umask 077; printf 'ssid=%s\npsk=%s\nsecurity=%s\n' "$SSID" "$PSK" "$1" > "$T/w.txt"; }
-push() { G=$((G + 1)); mkw "$1"; $HQ bundle "$CK" $G "$T/b.bin" "$T/b.sig" --wifi "$T/w.txt" >/dev/null; shred -u "$T/w.txt"
+push() { G=$((G + 1)); mkw "$1"; $HQ bundle "$SIGN" $G "$T/b.bin" "$T/b.sig" --wifi "$T/w.txt" >/dev/null; shred -u "$T/w.txt"
   mark=$(stat -c %s "$LOG"); $UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; shred -u "$T/b.bin"; }
 t_all=$(date +%s)
 for i in $(seq 1 "$R"); do
