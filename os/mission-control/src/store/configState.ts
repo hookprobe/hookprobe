@@ -8,7 +8,7 @@
  */
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
-import { post } from './actions';
+import { postSigned, MSG } from './envelope';
 
 export interface ConfigView {
   state: 'none' | 'trial' | 'committed' | 'reverted' | 'refused' | string;
@@ -36,12 +36,14 @@ type Res = { ok: boolean; refused?: string; committed?: boolean; rolled_back?: b
 async function act(path: string, ask: string): Promise<string> {
   const reason = window.prompt(`${ask} Reason (kept in the journal):`, path.endsWith('confirm') ? 'works for me' : 'does not work');
   if (!reason || reason.trim().length < 3) throw new Error('Cancelled: a reason of at least 3 characters is required.');
-  const key = window.prompt('Enter your owner key:', '');
-  if (!key) throw new Error('Cancelled: the owner key is required.');
-  const r = await post<Res>(path, { reason: reason.trim(), permanent: 'true', owner_key: key });
+  // R6 = D: authorised by an HQMGMT1 envelope signed with this browser's (enrolled) key, bound to the bundle in
+  // force — the generation and digest come from the same GET /api/config read. The owner token is not used.
+  const confirm = path.endsWith('confirm');
+  const r = await postSigned<Res & { ok: boolean }>(path, { reason: reason.trim(), permanent: 'true' },
+    (e) => ({ msg: confirm ? MSG.CFG_CONFIRM : MSG.CFG_ROLLBACK, generation: e.generation, digest: e.digest }));
   await refreshConfig();
   if (!r.ok) throw new Error(`The device refused: ${r.refused}`);
-  return path.endsWith('confirm') ? `Kept: configuration generation ${r.generation} is now committed.` : `Rolled back from generation ${r.generation}. The device restarts with the previous configuration.`;
+  return confirm ? `Kept: configuration generation ${r.generation} is now committed.` : `Rolled back: the device is going back to the previous configuration (from generation ${r.generation}).`;
 }
 export const confirmConfig = () => act('/api/config/confirm', 'Keep this configuration?');
 export const rollbackConfig = () => act('/api/config/rollback', 'Go back to the previous configuration? The device restarts.');
