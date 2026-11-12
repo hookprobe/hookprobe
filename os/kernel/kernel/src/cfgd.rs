@@ -466,6 +466,29 @@ pub fn last_result() -> (u8, u64) {
     unsafe { LAST_RESULT }
 }
 
+/// The window of the trial in force: a live trial uses WINDOW_S when the owner must confirm, else TRIAL_AUTO_S; a
+/// boot trial (and no trial: the API's long-standing value) WINDOW_S.
+pub fn window_s() -> u64 {
+    if on_trial() && unsafe { PHASE } == Phase::Trial && !needs_confirm() {
+        TRIAL_AUTO_S
+    } else {
+        WINDOW_S
+    }
+}
+/// Whether the trial in force waits for the owner's confirm (live: the queue-time rule; boot: management lines).
+pub fn confirm_required() -> bool {
+    on_trial() && (needs_confirm() || touches_mgmt())
+}
+/// For the API: the live engine's phase as a word.
+pub fn phase_name() -> &'static str {
+    match phase() {
+        Phase::Idle => "idle",
+        Phase::Queued | Phase::Applying => "applying",
+        Phase::Trial => "trial",
+        Phase::RevertQueued | Phase::Reverting => "reverting",
+    }
+}
+
 /// The digest of each section kind of the bundle in force ([0; 32] = absent: the per-file source applies).
 fn section_digests() -> [[u8; 32]; 3] {
     let mut d = [[0u8; 32]; 3];
