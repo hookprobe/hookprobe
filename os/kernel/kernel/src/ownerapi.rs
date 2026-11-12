@@ -594,10 +594,11 @@ pub fn anchor_set(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, rotate: 
 }
 
 /// ADR 0059 step 3: `POST /api/config/confirm` (commit the trial now) and `/api/config/rollback` (the previous
-/// bundle for the next boot): reason + permanent=true + re-authentication, behind the owner-write guards.
-pub fn config_action(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, confirm: bool) -> Result<u64, &'static str> {
-    let (mut b0, mut b1, mut b2, mut b3) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
-    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+/// bundle for the next boot): reason + permanent=true behind the owner-write guards (session, Origin, CSRF, rate,
+/// sequence) — the transport gate — and (R6 = D) an `envelope` signed by the enrolled owner key that binds the bundle
+/// in force: the ONLY authority for the change (the owner token re-authentication no longer is).
+pub fn config_action(c: &Ctx, body: &[u8], confirm: bool) -> Result<u64, &'static str> {
+    let (mut b1, mut b2, mut b3) = ([0u8; 192], [0u8; 192], [0u8; 192]);
     let reason = form_get(body, "reason", &mut b1).unwrap_or("");
     let permanent = form_get(body, "permanent", &mut b2) == Some("true");
     let seq: u64 = form_get(body, "seq", &mut b3).and_then(|v| v.parse().ok()).unwrap_or(0);
@@ -620,25 +621,28 @@ pub fn config_action(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, confi
     if !permanent {
         return refuse(c, "permanent=true required").map(|_| 0);
     }
-    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
-        return refuse(c, "re-authentication failed").map(|_| 0);
-    }
-    // ADR 0059 step 4b: through the management ABI — the same authorisation decision and journal record as `hsh`
+    // R6 = D (hard switch, operator 2026-11-12): the owner token no longer authorises a change — no re-authentication
+    // here, an `owner_key` field is ignored. The change is authorised ONLY by the owner-signed envelope (form field
+    // `envelope`, 312 hex = HQMGMT1, bound to this device, this boot, a fresh sequence and the bundle in force),
+    // verified by the management ABI: the same decision and journal record as `hsh`. The session guards above only
+    // gate the transport. A missing / malformed field is passed on as "no envelope", so the refusal is journaled too.
+    #[cfg_attr(not(feature = "mcserve"), allow(unused_mut, unused_variables))]
+    let mut env = [0u8; hal::mgmtabi::ENV_LEN];
+    #[cfg(feature = "mcserve")]
+    let env_given = body
+        .split(|&b| b == b'&')
+        .find_map(|kv| kv.strip_prefix(b"envelope="))
+        .is_some_and(|v| crate::mgmtabi::unhex_envelope(v, &mut env));
     let msg = if confirm { hal::mgmtabi::CFG_CONFIRM } else { hal::mgmtabi::CFG_ROLLBACK };
+    #[cfg_attr(not(feature = "mcserve"), allow(unused_mut))]
     let mut rec = [0u8; hal::mgmtabi::ACT_LEN];
     #[cfg(feature = "mcserve")]
-    let (res, n) = crate::mgmtabi::dispatch(msg, hal::mgmtabi::ROLE_OWNER, tag, c.now_ms, 0, &[], &mut rec);
-    // builds without Mission Control's server have no ABI dispatcher: cfgd directly (no client can reach this then)
+    let (res, n) = crate::mgmtabi::dispatch(msg, hal::mgmtabi::ROLE_VIEW, tag, c.now_ms, 0, if env_given { &env[..] } else { &[] }, &mut rec);
+    // builds without Mission Control's server have no envelope verifier: nothing can authorise a change (fail closed)
     #[cfg(not(feature = "mcserve"))]
     let (res, n) = {
-        let r = if confirm { crate::cfgd::confirm_device() } else { crate::cfgd::revert_device() };
-        let a = match r {
-            Ok(g) => hal::mgmtabi::Act::new(true, g, "done"),
-            Err(e) => hal::mgmtabi::Act::new(false, 0, e),
-        };
-        rec.copy_from_slice(&a.encode());
-        let _ = (msg, tag);
-        (hal::mgmtabi::R_OK, hal::mgmtabi::ACT_LEN)
+        let _ = (msg, tag, &env);
+        (hal::mgmtabi::R_UNAVAILABLE, 0)
     };
     if res != hal::mgmtabi::R_OK || n != hal::mgmtabi::ACT_LEN {
         return refuse(c, "management service unavailable").map(|_| 0);
@@ -647,8 +651,12 @@ pub fn config_action(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth, confi
     if a.ok {
         Ok(a.generation)
     } else {
-        // the reason is the cfgd / upload refusal; keep the static strings Mission Control already shows
+        // the reason is the envelope / cfgd / upload refusal, as one of the static strings Mission Control shows
         let why = a.reason_str();
+        #[cfg(feature = "mcserve")]
+        if let Some(r) = crate::mgmtabi::ENV_REASONS.iter().find(|r| **r == why) {
+            return refuse(c, r).map(|_| 0);
+        }
         refuse(c, if why.starts_with("no configuration store") { "no configuration store on this device" } else if why.starts_with("no configuration on trial") { "no configuration on trial" } else if why.starts_with("no configuration bundle") { "no configuration bundle in force" } else { "refused by cfgd" }).map(|_| 0)
     }
 }
