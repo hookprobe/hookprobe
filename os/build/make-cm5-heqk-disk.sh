@@ -33,6 +33,8 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 HEQK="$ROOT/os/kernel"
 OUT="${OUT:-$ROOT/os/build/generated/cm5-heqk}"
 FEATURES="${FEATURES:-prod}"
+# FEATURES=shipping = the shipping Wi-Fi AP flavour, read from tools/ci/shipping-features.txt (one source of truth)
+if [ "$FEATURES" = shipping ]; then FEATURES=$(grep -v "^#" "$(cd "$(dirname "$0")/../.." && pwd)/tools/ci/shipping-features.txt" | tr -d "[:space:]"); fi
 # ADR 0054 / audit A6: a product image's only AP key is the per-device setup credential. A bench PSK in the
 # build environment would silently take precedence, so the factory refuses it unless explicitly opted in.
 if [ -n "${HEQK_AP_PSK:-}" ] && [ "${HEQK_ALLOW_BENCH_PSK:-0}" != 1 ]; then
