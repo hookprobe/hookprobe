@@ -76,6 +76,9 @@ mod detbench;
 mod artstore;
 mod cfgbundle;
 mod cfgd;
+// sealed-config / live apply step 9: the WAN executor
+#[cfg_attr(not(all(feature = "cm5", feature = "p15-write")), allow(dead_code))]
+mod wanlive;
 // ADR 0059 step 4a: the management ABI + the EL0 native shell
 #[cfg(feature = "mcserve")]
 mod mgmtabi;
@@ -3159,7 +3162,8 @@ fn cm5_p10_probe() {
                             kprint!(" [WAN] WAN.TXT NOT signed by the operator key ({:?}) — IGNORED (verify before apply): DHCP, untagged, no management sub-interface\n", e);
                         }
                         // The operator's WAN mode (WAN.TXT on the eMMC boot partition); DHCP when absent.
-                        let wan_mode: hal::WanMode = match arch_aarch64::emmc::Emmc::probe() {
+                        #[allow(unused_mut)] // re-assigned by the live WAN executor (sealed-config step 9, p15-write)
+                        let mut wan_mode: hal::WanMode = match arch_aarch64::emmc::Emmc::probe() {
                             _ if wan_refused => hal::WanMode::Dhcp,
                             Ok(dev) => match load_wan_cfg(&artstore::Plain::new(&dev)) {
                                 Some(Ok(mo)) => mo,
@@ -4005,12 +4009,25 @@ fn cm5_p10_probe() {
                                     }
                                 }
                                 // sealed-config step 8: the live executors for a queued change / a live revert (after the HTTP
-                                // reply went out: the activation only queued it). Policy now; WAN step 9, Wi-Fi step 10.
+                                // reply went out: the activation only queued it). Policy, WAN (step 9); Wi-Fi step 10.
                                 #[cfg(all(feature = "cm5", feature = "p15-write"))]
                                 if let Some(plan) = cfgd::take_apply() {
                                     let mut ok = true;
                                     if plan.changed & cfgd::CH_POLICY != 0 {
                                         ok &= cfgd::with_device(|d| apply_policy_live(&artstore::Plain::new(d))).unwrap_or(false);
+                                    }
+                                    // step 9: the WAN (after the policy; a failed policy apply stops a forward apply here,
+                                    // a revert re-applies everything it can)
+                                    if (ok || plan.revert) && plan.changed & cfgd::CH_WAN != 0 {
+                                        rtwdog::pet(now(), freq); // a PPPoE dial holds the loop (bounded; petted inside)
+                                        let (wok, nm) = cfgd::with_device(|d| apply_wan_live(&artstore::Plain::new(d), &mut up)).unwrap_or((false, None));
+                                        if let Some(m) = nm {
+                                            wan_mode = m;
+                                            wan_leased_at = 0;
+                                            last_wan_try = now();
+                                            wan_retries = 0;
+                                        }
+                                        ok &= wok;
                                     }
                                     if plan.changed & !cfgd::LIVE_CAPABLE != 0 {
                                         ok = false; // never queued by this build (LIVE_CAPABLE gate at activation)
@@ -4404,7 +4421,9 @@ fn cm5_p10_probe() {
                                     // Plug-and-play WAN: the boot-time bringup is not the only chance. If the
                                     // uplink isn't usable and end0 now has a link, retry the lease every 10 s —
                                     // a cable plugged after boot (metal 2026-10-09) must not need a power-cycle.
-                                    if !up.usable() && matches!(wan_mode, hal::WanMode::Dhcp) && up.mac != [0; 6] {
+                                    // sealed-config step 9: a static address already held resolves its gateway in the loop too
+                                    let in_loop = matches!(wan_mode, hal::WanMode::Dhcp) || matches!(wan_mode, hal::WanMode::Static { .. }) && up.dhcp.ack_rx;
+                                    if !up.usable() && in_loop && up.mac != [0; 6] {
                                         // Phase 3: DHCP acquired IN the loop (DISCOVER / REQUEST / gateway ARP sent here,
                                         // replies consumed by wan_poll) — an ISP outage no longer stalls the LAN 5 s in 10.
                                         let t = now();
@@ -7117,6 +7136,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = cfgd::selftest(); // ADR 0059 step 3: trial / commit / revert
         let _ = cfgd::live_selftest(); // sealed-config / live-apply step 6: the live engine (mock executors)
         let _ = cfgd::policy_selftest(); // step 7: the live policy executor + the owner-address probe (F-e)
+        let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
@@ -14287,6 +14307,71 @@ fn apply_policy_live<D: hal::BlockDev>(dev: &D) -> bool {
     };
     kprint!(" [POLICY] live apply: {} (policy generation {})\n", if ok { "swapped in" } else { "REFUSED — the policy in force is kept" }, cfgd::policy_gen());
     ok
+}
+
+/// Step 9 (sealed-config / live apply): the live WAN executor. Verify + parse FIRST — the bundle's WAN section
+/// (verified by cfgd), else (a revert to "no bundle") the per-file WAN chain, exactly as at boot; but where the boot
+/// falls back to DHCP, a live apply REFUSES and touches nothing. Then `wanlive::apply`: teardown, link, start.
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+fn apply_wan_live<D: hal::BlockDev>(dev: &D, up: &mut arch_aarch64::uplink::UplinkResult) -> (bool, Option<hal::WanMode>) {
+    let saved = unsafe { WAN_VERIFIED };
+    unsafe { WAN_VERIFIED = None }; // no stale bytes: only what verifies now is parsed
+    let sig = wan_signed(dev);
+    let refused = matches!(sig, Some(Err(e)) if e != policysig::SigErr::Missing || wan_present(dev));
+    let mut b = [0u8; 512];
+    let cfg = if refused { None } else { wanlive::parse(wan_body(dev, &mut b).map(|n| &b[..n])) };
+    if cfg.is_none() {
+        unsafe { WAN_VERIFIED = saved };
+        kprint!(" [WAN] live apply REFUSED ({}) — the WAN in force is kept
+", if refused { "signature" } else { "does not parse" });
+        return (false, None);
+    }
+    let mut port = MetalWan { up };
+    let r = wanlive::apply(&mut port, cfg);
+    let up = port.up;
+    kprint!(" [WAN] live apply: mode {} — {} (ip {}.{}.{}.{}){}
+",
+        match r.1 { Some(hal::WanMode::Dhcp) => "DHCP (acquired in the loop)", Some(hal::WanMode::Static { .. }) => "STATIC (gateway resolved in the loop)", _ => "PPPoE" },
+        if !r.0 { "PPPoE authentication REJECTED: reverting at once" } else if up.usable() { "up" } else { "coming up" },
+        up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3],
+        if cfgd::needs_confirm() { " — management plane changed: waits for the owner's confirm" } else { "" });
+    r
+}
+
+/// The metal side of the WAN executor (end0 only: never the Wi-Fi AP, never eth1).
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+struct MetalWan<'a> {
+    up: &'a mut arch_aarch64::uplink::UplinkResult,
+}
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+impl wanlive::WanPort for MetalWan<'_> {
+    fn teardown(&mut self) -> [u8; 4] {
+        arch_aarch64::uplink::wan_teardown(self.up)
+    }
+    fn link(&mut self, l: &hal::WanLink) {
+        arch_aarch64::uplink::link_configure(l);
+        #[cfg(feature = "mcserve")]
+        unsafe {
+            let n = &mut *core::ptr::addr_of_mut!(NET);
+            n.wan_vlan = l.vlan;
+            n.mgmt_vlan = l.mgmt.map_or(0, |m| m.vlan);
+        }
+    }
+    fn mgmt(&self) -> Option<hal::MgmtIf> {
+        arch_aarch64::uplink::mgmt_current()
+    }
+    fn set_mgmt(&mut self, m: Option<hal::MgmtIf>) {
+        match m {
+            Some(m) => {
+                let _ = arch_aarch64::uplink::mgmt_configure(&m);
+            }
+            None => unsafe { arch_aarch64::uplink::MGMT = None },
+        }
+    }
+    fn start(&mut self, mode: &hal::WanMode) -> bool {
+        arch_aarch64::uplink::wan_start(arch_aarch64::uplink::Nic::End0, &[8, 8, 8, 8], mode, self.up);
+        arch_aarch64::uplink::pppoe_auth_failed()
+    }
 }
 
 fn load_policy_to<D: hal::BlockDev>(dev: &D, out: &mut hal::policy::Policy) -> Option<Result<(), hal::policy::PolicyErr>> {
