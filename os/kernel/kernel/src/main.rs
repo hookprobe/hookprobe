@@ -3836,10 +3836,10 @@ fn cm5_p10_probe() {
                                 #[cfg(feature = "mctls")]
                                 crate::tlshost::bring_up(Some(&dev));
                                 crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
-                                let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal
-                                #[cfg(feature = "wpa3")]
-                                let _ = crate::lansvc::sae_selftest(); // ADR 0050 D4 step 5c: the SAE station-frame walk in EL0
-                                let _ = crate::hsh::selftest(0); // ADR 0059 step 4a on metal: the EL0 shell + mgmtabi
+                                let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal (incl. the 2A PMK-wipe check)
+                                // Image budget (2026-11-12): [P-lansvc-sae] and the hsh self-test run on QEMU / mc-e2e only
+                                // (mcserve.rs); on metal the SAE path is proven by real stations (cm5-wpa3-check) and the
+                                // management shell by the live-apply / cfgd checks. ~18 KB of test vectors off the device.
                             }
                             mcserve::state().set_clock(0, mc_t0, freq);
                             #[cfg(feature = "appersist")]

@@ -983,8 +983,33 @@ pub fn tick_device(now_s: u64, healthy: bool) -> Tick {
     let _ = (now_s, healthy);
     Tick::Idle
 }
+/// Upload self-test hook (QEMU): the live queue runs on the self-test disk, so `[P-upload]` proves the activation
+/// hand-off end to end (the #1001 merge had silently dropped it).
+#[cfg(not(feature = "cm5"))]
+static mut TEST_LIVE: bool = false;
+#[cfg(not(feature = "cm5"))]
+pub fn set_test_live(on: bool) {
+    unsafe {
+        TEST_LIVE = on;
+        if !on {
+            PHASE = Phase::Idle;
+            STATE = Boot::None;
+            CHANGED = 0;
+            NEEDS_CONFIRM = false;
+        }
+    }
+    if !on {
+        clear();
+    }
+}
+
 /// Step 8: queue the just-activated bundle for live apply on the device store.
 pub fn queue_live_device() -> Result<u64, &'static str> {
+    #[cfg(not(feature = "cm5"))]
+    if unsafe { TEST_LIVE } {
+        let d = unsafe { &mut *core::ptr::addr_of_mut!(artstore::TEST_DISK) };
+        return queue_live(d, crate::policysig::config_key(), crate::anchor::cfg_gens().cfg_floor);
+    }
     if in_selftest() {
         return Err("self-test: no state change");
     }
