@@ -518,6 +518,13 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
     if u.phase != Phase::Verified {
         return Err("not verified (finish first)");
     }
+    // metal 2026-11-12: never while a configuration change is in flight — writing the inactive half would overwrite
+    // the last-known-good that change reverts to (checked before anything is written). The upload is dropped (the
+    // staged bytes wiped) so the next one can begin; the owner re-uploads once the change resolves.
+    if u.ty == Ty::Config && crate::cfgd::busy() {
+        end();
+        return Err("a configuration change is already in progress");
+    }
     let d = dev().ok_or("no artifact store")?;
     let (slo, _) = staging(d).ok_or("no staging region")?;
     #[cfg(feature = "p15-write")]
@@ -1019,7 +1026,7 @@ fn test_cfg_container(kp: &ed25519_compact::KeyPair, gen: u64, kind: u8, pol: &[
     512 + n
 }
 
-fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::KeyPair, seq: &mut u64) -> [bool; 6] {
+fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::KeyPair, seq: &mut u64) -> [bool; 7] {
     let disk = || unsafe { &*core::ptr::addr_of!(artstore::TEST_DISK) };
     let (slo, shi) = dev().and_then(|d| staging(d)).unwrap_or((0, 0));
     let stage_hash = || {
@@ -1107,7 +1114,68 @@ fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::K
     };
     #[cfg(feature = "cm5")]
     let volatile = true;
-    [staging, sealed, refused, stored, handoff, volatile]
+    // metal 2026-11-12 (cm5-cfgd-live-check C2 -> E1) through the REAL upload path, sealed at rest: a bundle uploaded
+    // while another is on trial must be REFUSED before anything is written — it used to overwrite the last-known-good
+    // half and become the manifest entry, so the trial's revert then took the FAILED trial bundle for the last-known-good
+    // (and a reboot committed it). gen 60 auto-commits; gen 61 (management lines) is on trial, gen 62 arrives -> refused;
+    // confirmed: gen 63 (dead gateway) on trial, gen 64 arrives -> refused; the window reverts LIVE to 61, a reboot keeps
+    // 61. Unconfirmed: gen 61's window reverts to 60. The metal path: every bench WAN bundle carries vlan= / mgmt_ lines,
+    // so it is a NEEDS-CONFIRM trial (cfgd::touches_mgmt, 300 s window); the dead-gateway gen fails health there.
+    #[cfg(not(feature = "cm5"))]
+    let lkg = {
+        use crate::cfgd::{self as cd, Boot, Tick};
+        let t = || unsafe { &mut *core::ptr::addr_of_mut!(artstore::TEST_DISK) };
+        let mut cont = [0u8; 1024];
+        artstore::set_cfg_seal(Some([0x5c; 32]), 0x77);
+        let key = crate::policysig::config_key();
+        let e = || artstore::entry(&*t(), Ty::Config).unwrap_or(artstore::E0);
+        let w_ok = &b"mode=static\nip=10.100.0.200/24\ngw=10.100.0.1\nvlan=100\nmgmt_vlan=200\nmgmt=dhcp\n"[..];
+        let w_dead = &b"mode=static\nip=10.100.0.200/24\ngw=10.100.0.254\nvlan=100\nmgmt_vlan=200\nmgmt=dhcp\n"[..];
+        let w_dhcp = &b"mode=dhcp\nvlan=100\nmgmt_vlan=200\nmgmt=dhcp\n"[..];
+        let mut up = |g: u64, kind: u8, body: &[u8], seq: &mut u64, auth: &mut crate::mcauth::Auth| {
+            let n = test_cfg_container(kp, g, kind, body, &mut cont);
+            run_one(c, auth, &cont[..n], "config", seq, true)
+        };
+        let mut r = [false; 2];
+        for (i, confirm) in [true, false].into_iter().enumerate() {
+            cd::set_test_live(true);
+            let b = 60 + 10 * i as u64;
+            let ts = 10_000 * i as u64;
+            let g0 = up(b, crate::cfgbundle::KIND_POLICY, b"acl A seq 10 allow any any any\n", seq, auth) == Ok(b) && cd::take_apply().is_some()
+                && cd::applied(t(), true, ts + 1) == Tick::Idle && cd::tick(t(), ts + 2, true) == Tick::Committed(b);
+            let g1 = up(b + 1, crate::cfgbundle::KIND_WAN, w_ok, seq, auth) == Ok(b + 1) && cd::take_apply().is_some()
+                && cd::applied(t(), true, ts + 10) == Tick::Idle && cd::tick(t(), ts + 11, true) == Tick::Idle;
+            // a new bundle while gen b+1 is on trial: refused, the store untouched
+            let e1 = e();
+            let busy1 = up(b + 2, crate::cfgbundle::KIND_WAN, w_dhcp, seq, auth).is_err() && e() == e1 && cd::on_trial() && cd::generation() == b + 1;
+            let (lkg, flow) = if confirm {
+                let c1 = cd::commit(t()) == Ok(b + 1);
+                let g3 = up(b + 3, crate::cfgbundle::KIND_WAN, w_dead, seq, auth) == Ok(b + 3) && cd::take_apply().is_some()
+                    && cd::applied(t(), true, ts + 20) == Tick::Idle && cd::tick(t(), ts + 21, false) == Tick::Idle;
+                let e3 = e();
+                let busy3 = up(b + 4, crate::cfgbundle::KIND_WAN, w_dhcp, seq, auth).is_err() && e() == e3;
+                (b + 1, c1 && g3 && busy3 && cd::tick(t(), ts + 22 + cd::WINDOW_S, false) == Tick::Reverting)
+            } else {
+                (b, cd::tick(t(), ts + 22 + cd::WINDOW_S, true) == Tick::Reverting)
+            };
+            let rv = cd::take_apply().map_or(0, |p| p.generation);
+            let back = cd::applied(t(), true, ts + 23 + cd::WINDOW_S);
+            let ent = e();
+            let boot = cd::boot(t(), key, crate::anchor::cfg_gens().cfg_floor, ts + 5000);
+            r[i] = g0 && g1 && busy1 && flow && rv == lkg && back == Tick::Reverted(lkg) && ent.gen == lkg && ent.state == artstore::STATE_ACTIVE
+                && boot == Boot::Committed(lkg);
+            if !r[i] {
+                arch_aarch64::_print(format_args!(" [P-upload] lkg confirm={}: base={} trial={} upload-during-trial refused={} flow={} live revert -> gen {} ({:?}) entry gen {} boot {:?} (want {})\n",
+                    confirm, g0, g1, busy1, flow, rv, back, ent.gen, boot, lkg));
+            }
+            cd::set_test_live(false);
+        }
+        artstore::set_cfg_seal(None, 0);
+        r[0] && r[1]
+    };
+    #[cfg(feature = "cm5")]
+    let lkg = true;
+    [staging, sealed, refused, stored, handoff, volatile, lkg]
 }
 
 /// Test helper: begin + chunks + finish (+ activate when `act`) for one container. Ok(gen) or the refusal.

@@ -479,6 +479,13 @@ pub fn changes() -> u8 {
 pub fn needs_confirm() -> bool {
     unsafe { NEEDS_CONFIRM }
 }
+/// A configuration change is in flight (queued, applying, on trial — live or at boot — or reverting): a new bundle must
+/// not be activated now. Activation writes the INACTIVE half — the last-known-good this change reverts to — and
+/// re-points the manifest, so the change's revert would take the bundle on trial for the last-known-good (metal
+/// 2026-11-12: a failed trial became the committed configuration).
+pub fn busy() -> bool {
+    (unsafe { PHASE }) != Phase::Idle || on_trial()
+}
 pub fn last_result() -> (u8, u64) {
     unsafe { LAST_RESULT }
 }
@@ -1157,6 +1164,124 @@ fn live_volatile_checks(d: &mut artstore::SparseDisk, key: [u8; 32], mk: &dyn Fn
     [refused, applied_ram, rolled, window, reboot]
 }
 
+/// [P-cfgd-lkg] (metal 2026-11-12, cm5-cfgd-live-check C2): the live revert's target is the PERSISTED last-known-good.
+/// gen 1 auto-commits -> gen 2 (management lines) is confirmed by the owner -> gen 3 (dead gateway) never gets
+/// healthy: the live revert goes to gen 2 and a reboot keeps gen 2 — the failed bundle is never committed. Again with
+/// gen 2 never confirmed (its window reverts it to gen 1; gen 3's revert also goes to gen 1). Plaintext and sealed. Gens
+/// 2 and 3 carry vlan= / mgmt_ lines (as the bench bundles do), so they are NEEDS-CONFIRM trials (`touches_mgmt`, 300 s);
+/// gen 3 is the metal path: a needs-confirm trial that fails health. The metal defect itself (a bundle uploaded during
+/// a trial overwrote the last-known-good half) is reproduced through the upload path in [P-upload].
+#[cfg(not(feature = "cm5"))]
+pub fn lkg_selftest() -> bool {
+    use crate::cfgbundle::{KIND_POLICY, KIND_WAN};
+    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x63; 32]));
+    let key: [u8; 32] = *kp.pk;
+    let mk = |gen: u64, wan: &[u8], pol: &[u8]| -> ([u8; 1024], usize) {
+        // container: HQCSIG1 sector ‖ the bundle
+        let secs: [(u8, &[u8]); 2] = [(KIND_WAN, wan), (KIND_POLICY, pol)];
+        let present = secs.iter().filter(|x| !x.1.is_empty()).count();
+        let mut c = [0u8; 1024];
+        let b = &mut c[512..];
+        b[..8].copy_from_slice(cfgbundle::MAGIC);
+        b[8..10].copy_from_slice(&0x0100u16.to_le_bytes());
+        b[12..20].copy_from_slice(&gen.to_le_bytes());
+        b[36..44].copy_from_slice(&cfgbundle::key_id(&key));
+        b[44] = present as u8;
+        let (mut t, mut o) = (48, 48 + 4 * present);
+        for (k, body) in secs.iter().filter(|x| !x.1.is_empty()) {
+            b[t] = *k;
+            b[t + 2..t + 4].copy_from_slice(&(body.len() as u16).to_le_bytes());
+            b[o..o + body.len()].copy_from_slice(body);
+            t += 4;
+            o += body.len();
+        }
+        let dg = boot_abi::sha256::digest(&b[..o]);
+        let mut m = [0u8; 42];
+        m[..10].copy_from_slice(cfgbundle::SIG_TAG);
+        m[10..].copy_from_slice(&dg);
+        let sg = kp.sk.sign(&m[..], Some(ed25519_compact::Noise::from_slice(&[6u8; 16]).unwrap()));
+        c[..8].copy_from_slice(cfgbundle::SIG_MAGIC);
+        c[8] = 1;
+        c[9..13].copy_from_slice(&(o as u32).to_le_bytes());
+        c[13..45].copy_from_slice(&dg);
+        c[45..109].copy_from_slice(&sg[..]);
+        (c, o)
+    };
+    // an upload's activation: sealed into the inactive half with a device key, else the signed plaintext
+    let stage = |d: &mut artstore::SparseDisk, sealed: bool, gen: u64, wan: &[u8], pol: &[u8]| -> bool {
+        let (c, n) = mk(gen, wan, pol);
+        if sealed {
+            return artstore::activate_sealed(d, Ty::Config, &c[..512 + n], gen, n as u64).is_ok();
+        }
+        let sig: [u8; 512] = c[..512].try_into().unwrap();
+        artstore::activate_from(d, Ty::Config, &sig, artstore::Src::Ram(&c[512..512 + n]), gen, n as u64, &sig[13..45].try_into().unwrap()).is_ok()
+    };
+    let fl = || crate::anchor::cfg_gens().cfg_floor;
+    let pol = &b"acl A seq 10 allow any any any\n"[..];
+    let w2 = &b"mode=static\nip=10.100.0.200/24\ngw=10.100.0.1\nvlan=100\nmgmt_vlan=200\nmgmt=dhcp\n"[..];
+    let w3 = &b"mode=static\nip=10.100.0.200/24\ngw=10.100.0.254\nvlan=100\nmgmt_vlan=200\nmgmt=dhcp\n"[..];
+    let saved_cfg = crate::anchor::cfg_gens();
+    crate::policysig::selftest_key(Some(key));
+    let mut r = [false; 4];
+    for (i, &(sealed, confirm)) in [(false, true), (true, true), (false, false), (true, false)].iter().enumerate() {
+        let d = artstore::test_disk();
+        crate::anchor::test_set_cfg(crate::anchor::CfgGens::ZERO);
+        if sealed {
+            artstore::set_cfg_seal(Some([0x3c; 32]), 0x1eaf);
+        } else {
+            artstore::set_cfg_seal(None, 0);
+        }
+        clear();
+        unsafe {
+            STATE = Boot::None;
+            PHASE = Phase::Idle;
+        }
+        let t = 10_000 * i as u64;
+        // gen 1: policy only, auto-commits live
+        let g1 = stage(d, sealed, 1, b"", pol) && queue_live(d, Some(key), fl()) == Ok(1) && take_apply().is_some()
+            && applied(d, true, t + 1) == Tick::Idle && tick(d, t + 2, true) == Tick::Committed(1);
+        // gen 2: static WAN with the management lines — live, waits for the owner's confirm
+        let q2 = stage(d, sealed, 2, w2, pol) && queue_live(d, Some(key), fl()) == Ok(2) && needs_confirm() && take_apply().is_some()
+            && applied(d, true, t + 10) == Tick::Idle && tick(d, t + 11, true) == Tick::Idle;
+        let (g2, lkg) = if confirm {
+            (q2 && commit(d) == Ok(2) && fl() == 2, 2)
+        } else {
+            // never confirmed: the window reverts it live to gen 1
+            (q2 && tick(d, t + 12 + WINDOW_S, true) == Tick::Reverting && take_apply().is_some_and(|p| p.revert && p.generation == 1)
+                && applied(d, true, t + 13 + WINDOW_S) == Tick::Reverted(1), 1)
+        };
+        // gen 3: the gateway never answers — the window reverts it LIVE to the persisted last-known-good
+        let t3 = t + 1000;
+        let g3 = stage(d, sealed, 3, w3, pol) && queue_live(d, Some(key), fl()) == Ok(3) && take_apply().is_some()
+            && applied(d, true, t3) == Tick::Idle && tick(d, t3 + 1, false) == Tick::Idle
+            && tick(d, t3 + 2 + WINDOW_S, false) == Tick::Reverting;
+        let rv = take_apply().is_some_and(|p| p.revert && p.generation == lkg) && applied(d, true, t3 + 3 + WINDOW_S) == Tick::Reverted(lkg)
+            && generation() == lkg && artstore::entry(&*d, Ty::Config).is_some_and(|e| e.gen == lkg && e.state == STATE_ACTIVE);
+        // a reboot keeps the last-known-good; the failed bundle is never in force
+        let rb = boot(d, Some(key), fl(), t3 + 5000) == Boot::Committed(lkg) && section(KIND_WAN) == if confirm { Some(w2) } else { None };
+        r[i] = g1 && g2 && g3 && rv && rb;
+        if !r[i] {
+            arch_aarch64::_print(format_args!(" [P-cfgd-lkg] case {} (sealed={} confirmed={}): gen1={} gen2={} gen3 trial={} live revert={} (to {}) reboot={} (gen {})\n",
+                i, sealed, confirm, g1, g2, g3, rv, last_result().1, rb, generation()));
+        }
+    }
+    artstore::clear_cfg_seal();
+    crate::policysig::selftest_key(None);
+    clear();
+    unsafe {
+        STATE = Boot::None;
+        PHASE = Phase::Idle;
+        LAST_RESULT = (0, 0);
+    }
+    crate::anchor::test_set_cfg(saved_cfg);
+    let pass = r.iter().all(|&x| x);
+    arch_aarch64::_print(format_args!(
+        " [P-cfgd-lkg] {} — a live trial that never gets healthy reverts LIVE to the PERSISTED last-known-good and a reboot keeps it (the failed bundle is never committed): owner-confirmed gen 2, plaintext={} sealed={}; gen 2 never confirmed (reverted to gen 1), plaintext={} sealed={}\n",
+        if pass { "PASS" } else { "FAIL" }, r[0], r[1], r[2], r[3]
+    ));
+    pass
+}
+
 /// [P-cfgd-policy] (step 7): the live policy executor and the owner-address probe (F-e).
 #[cfg(not(feature = "cm5"))]
 pub fn policy_selftest() -> bool {
@@ -1351,7 +1476,11 @@ pub fn confirm_device() -> Result<u64, &'static str> {
     }
     #[cfg(all(feature = "cm5", feature = "p15-write"))]
     if let Some(d) = device() {
-        return commit(d);
+        let r = commit(d);
+        if let Ok(g) = r {
+            arch_aarch64::_print(format_args!(" [CFGD] bundle generation {} COMMITTED (owner confirm)\n", g));
+        }
+        return r;
     }
     Err("no configuration store on this device")
 }
