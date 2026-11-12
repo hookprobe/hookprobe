@@ -49,7 +49,7 @@ boots() { tr -d '\r\000' < "$LOG" | grep -ac "HEQK Core"; }
 ensure_owner
 gen0=$(api /api/config | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max(d["generation"], d["floor"]))')
 G=$gen0
-bundle() { G=$((G + 1)); $HQ bundle "$CK" $G "$T/b$G.bin" "$T/b$G.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
+bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b$G.bin" "$T/b$G.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
   $UP --type config --sig "$T/b$G.sig" --file "$T/b$G.bin" > "$T/r$G" 2>&1; }
 B0=$(boots)
 # policies without management bindings (a change of them alone auto-commits)

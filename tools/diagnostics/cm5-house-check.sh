@@ -58,7 +58,7 @@ dns9() { pi "timeout 5 dig +short +time=2 +tries=1 -b \$(ip -4 -o addr show wlan
 canon() { sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$1"; }
 ensure_owner
 G=$(cfgval 'max(d["generation"], d["floor"])')
-bundle() { G=$((G + 1)); $HQ bundle "$CK" $G "$T/b.bin" "$T/b.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
+bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b.bin" "$T/b.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
   $UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; shred -u "$T/b.bin"; }
 # ---- 0. baseline ----
 PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")
