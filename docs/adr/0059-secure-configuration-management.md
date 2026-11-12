@@ -160,6 +160,12 @@ corrupt kernel state. Consequences:
   signed by K_own.
 - Every operation, accepted or refused, is recorded in the HMAC-chained owner journal.
 
+**Decision note, 2026-11-12 (operator): R6 = D.** Privileged management operations are authorised only by command
+envelopes (HQMGMT1) signed off-device by K_own and verified by the management ABI in EL1; the carrier (web console,
+Mission Control, any later carrier) carries no authority, and the owner session alone never authorises a change.
+Confirm and rollback envelopes bind the generation and digest of the bundle in force. Status and format:
+`docs/design/adr0059-implementation.md` step 4.
+
 ### D10: Recovery, ownership transfer, and honesty about anti-rollback
 
 - **Clearing K_own** requires either a signature from K_own or physical presence: a 10-minute window opened by

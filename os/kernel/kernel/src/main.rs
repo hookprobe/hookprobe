@@ -5802,7 +5802,7 @@ fn device_mac() -> [u8; 6] {
     [(k[0] & 0xFE) | 0x02, k[1], k[2], k[3], k[4], k[5]]
 }
 
-/// ADR 0059: this device's 16-byte id for configuration binding (HQCFG1 `device_id`) and owner elevation (HQCHAL1):
+/// ADR 0059: this device's 16-byte id for configuration binding (HQCFG1 `device_id`) and owner-signed command envelopes (HQMGMT1):
 /// sha256(device identity public key)[..16] — public, stable across OTA, distinct per device. All zero without an SRK
 /// (no identity: device-bound bundles cannot match; challenges still carry a per-boot nonce).
 pub fn config_device_id() -> [u8; 16] {

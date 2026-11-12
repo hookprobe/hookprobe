@@ -4,8 +4,10 @@
 //!   2. the kernel serves the request through `mgmtabi::dispatch` with the SESSION's role (the shell never decides
 //!      authority) and re-enters the shell with the fixed reply record; the shell formats it.
 //! A shell fault costs that command only (the server resets, ADR 0050 D5); forwarding never notices.
-//! Transport (R6 is an operator decision): Mission Control's authenticated session (`POST /api/hsh`) today; UART RX
-//! stays off until the operator decides.
+//! Transport (R6 = D, operator 2026-11-12): the carrier carries no authority. The web carrier (`POST /api/hsh`,
+//! feature `hsh`) runs lines at the VIEW role on Mission Control's authenticated owner session; a privileged command
+//! (config confirm / rollback / stage) runs only with an HQMGMT1 envelope signed off-device by the owner key, which
+//! the carrier hands to `mgmtabi::dispatch` (EL1) — the same verifier every client uses. No UART carrier is built.
 
 #[cfg(feature = "mctls")]
 mod el0 {
@@ -204,9 +206,11 @@ mod el0 {
 }
 
 
-/// Run one command line for a caller holding `role`; the text answer goes into `out`. Returns its length.
+/// Run one command line for a caller holding `role` (view, from the carrier's session); `env` = the carrier's HQMGMT1
+/// envelope for a privileged command (empty = none). The envelope goes from the carrier straight to the EL1 verifier
+/// in `mgmtabi::dispatch` — the EL0 parser never sees it. The text answer goes into `out`; returns its length.
 #[cfg(feature = "mctls")]
-pub fn run_line(line: &[u8], role: u8, tag: [u8; 4], now_ms: u64, out: &mut [u8]) -> usize {
+pub fn run_line(line: &[u8], role: u8, tag: [u8; 4], now_ms: u64, env: &[u8], out: &mut [u8]) -> usize {
     use hal::hshabi::*;
     let msg_unavail = b"ERROR: Management service unavailable.\n";
     let Some(s) = el0::server() else {
@@ -214,7 +218,7 @@ pub fn run_line(line: &[u8], role: u8, tag: [u8; 4], now_ms: u64, out: &mut [u8]
         out[..n].copy_from_slice(&msg_unavail[..n]);
         return n;
     };
-    s.role = role;
+    s.role = role; // what `help` lists; the kernel decides every request
     let (st, n) = s.call(CMD_LINE, &line[..line.len().min(IN_MAX)]);
     let n = match st {
         ST_TEXT => n,
@@ -223,12 +227,12 @@ pub fn run_line(line: &[u8], role: u8, tag: [u8; 4], now_ms: u64, out: &mut [u8]
             s.read(OUT_OFF, &mut rq);
             let msg = u16::from_le_bytes([rq[0], rq[1]]);
             let arg = u64::from_le_bytes(rq[4..12].try_into().unwrap());
-            let pl = &rq[12..12 + (rq[3] as usize).min(64)];
-            // phase 2: the kernel authorises + serves; the shell formats
+            // phase 2: the kernel authorises (the session's role for view; the envelope for anything above) + serves;
+            // the shell formats
             let mut rep = [0u8; IN_MAX];
             rep[..2].copy_from_slice(&msg.to_le_bytes());
             rep[3] = rq[2];
-            let (res, len) = crate::mgmtabi::dispatch(msg, role, tag, now_ms, arg, pl, &mut rep[4..]);
+            let (res, len) = crate::mgmtabi::dispatch(msg, role, tag, now_ms, arg, env, &mut rep[4..]);
             rep[2] = res;
             let (st2, n2) = s.call(CMD_REPLY, &rep[..4 + len]);
             if st2 == ST_TEXT { n2 } else { 0 }
@@ -243,6 +247,129 @@ pub fn run_line(line: &[u8], role: u8, tag: [u8; 4], now_ms: u64, out: &mut [u8]
     let k = n.min(out.len()).min(OUT_MAX);
     s.read(OUT_OFF, &mut out[..k]);
     k
+}
+
+/// The web carrier (`POST /api/hsh`; the guards — owner session, Origin, CSRF — are the caller's): journal the command
+/// words, then run the line at the VIEW role. The carrier carries no authority (R6 = D): a privileged command runs
+/// only with `env`, an envelope signed by the owner key, which `mgmtabi::dispatch` verifies.
+#[cfg(feature = "hsh")]
+pub fn web(line: &[u8], env: &[u8], tag: [u8; 4], now_ms: u64, out: &mut [u8]) -> usize {
+    let mut why = [0u8; 64];
+    let k = journal_words(line, &mut why);
+    let _ = crate::ownerapi::audit_artifact("hsh", 1, &why[..k], tag, now_ms);
+    run_line(line, hal::mgmtabi::ROLE_VIEW, tag, now_ms, env, out)
+}
+
+/// What the journal keeps of a command line: the first two words (printable ASCII, 24 bytes each), never the
+/// arguments (and never the envelope, which is not part of the line).
+#[cfg(feature = "hsh")]
+pub fn journal_words(line: &[u8], why: &mut [u8; 64]) -> usize {
+    let mut k = 0;
+    for (i, w) in line.split(|&b| b == b' ').filter(|w| !w.is_empty()).take(2).enumerate() {
+        if i > 0 && k < why.len() {
+            why[k] = b' ';
+            k += 1;
+        }
+        for &c in w.iter().take(24) {
+            if k < why.len() && (0x21..0x7f).contains(&c) {
+                why[k] = c;
+                k += 1;
+            }
+        }
+    }
+    k
+}
+
+/// A test envelope signed with `k` (QEMU self-tests only; the device never holds the real K_own).
+#[cfg(all(feature = "hsh", not(feature = "cm5")))]
+fn test_envelope(k: &ed25519_compact::KeyPair, e: &hal::mgmtabi::Envelope) -> [u8; hal::mgmtabi::ENV_LEN] {
+    let body = e.body();
+    let sig = k.sk.sign(&hal::mgmtabi::envelope_msg(&body)[..], Some(ed25519_compact::Noise::from_slice(&[7u8; 16]).unwrap()));
+    let mut o = [0u8; hal::mgmtabi::ENV_LEN];
+    o[..hal::mgmtabi::ENV_BODY].copy_from_slice(&body);
+    o[hal::mgmtabi::ENV_BODY..].copy_from_slice(&sig[..]);
+    o
+}
+
+/// [P-hsh-web] (QEMU / mc-e2e): R6 = D on the web carrier, end to end through the EL0 shell. View commands answer on
+/// the session alone; confirm / rollback without an envelope are refused; a valid owner-signed envelope bound to the
+/// bundle in force is accepted; a wrong key, another device, another boot, a replayed sequence, a confirm for
+/// generation N while N+1 is on trial, an envelope for another operation and a tampered byte are refused; every
+/// configuration request is journaled with its outcome; the journal keeps command words only.
+#[cfg(all(feature = "hsh", not(feature = "cm5")))]
+pub fn selftest_web(now_ms: u64) -> bool {
+    use hal::mgmtabi as m;
+    crate::cfgd::set_selftest(true); // an accepted confirm reaches cfgd, which then changes nothing
+    let saved = (crate::anchor::owner(), crate::anchor::owner_gen());
+    crate::mgmtabi::test_reset();
+    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x6b; 32])); // test K_own (this test only)
+    let other = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x6c; 32]));
+    crate::anchor::install_owner(Some(*kp.pk), 1);
+    let dig_n = [0x4e; 32];
+    let dig_n1 = [0x4f; 32];
+    let posed = crate::cfgd::test_pose(8, dig_n1, true); // generation 8 (digest N+1) is on trial
+    let t = [0x3e, 0xb0, 0, 1];
+    let mut b = [0u8; 2048];
+    let mut run = |l: &[u8], env: &[u8]| -> ([u8; 2048], usize) {
+        let n = web(l, env, t, now_ms, &mut b);
+        (b, n)
+    };
+    let has = |r: &([u8; 2048], usize), s: &[u8]| r.0[..r.1].windows(s.len()).any(|w| w == s);
+    let c = crate::mgmtabi::challenge();
+    let mk = |seq: u64, msg: u16, gen: u64, dig: [u8; 32]| m::Envelope { msg, device_id: c.device_id, epoch: c.epoch, seq, arg: 0, generation: gen, digest: dig };
+    let j0 = crate::mgmtabi::journaled().0;
+    let view = has(&run(b"info", &[]), b"HEQK Management Environment") && has(&run(b"config status", &[]), b"config:")
+        && has(&run(b"owner challenge", &[]), b"HQMGMT1") && c.owner_enrolled && c.on_trial && c.generation == 8 && c.digest == dig_n1;
+    let session_only = has(&run(b"config confirm", &[]), b"needs an owner-signed envelope")
+        && has(&run(b"config rollback", &[]), b"needs an owner-signed envelope")
+        && has(&run(b"config stage 00000000000000aa", &[]), b"needs an owner-signed envelope");
+    let wrong_key = has(&run(b"config confirm", &test_envelope(&other, &mk(1, m::CFG_CONFIRM, 8, dig_n1))), b"not the owner key");
+    let mut e = mk(2, m::CFG_CONFIRM, 8, dig_n1);
+    e.device_id[0] ^= 1;
+    let wrong_dev = has(&run(b"config confirm", &test_envelope(&kp, &e)), b"another device");
+    let mut e = mk(3, m::CFG_CONFIRM, 8, dig_n1);
+    e.epoch[0] ^= 1;
+    let wrong_boot = has(&run(b"config confirm", &test_envelope(&kp, &e)), b"another boot");
+    let stale_n = has(&run(b"config confirm", &test_envelope(&kp, &mk(4, m::CFG_CONFIRM, 7, dig_n))), b"something else is on trial");
+    let other_op = has(&run(b"config confirm", &test_envelope(&kp, &mk(5, m::CFG_ROLLBACK, 8, dig_n1))), b"another operation");
+    let mut tampered = test_envelope(&kp, &mk(6, m::CFG_CONFIRM, 8, dig_n1));
+    tampered[40] ^= 0x01; // one byte of the sequence, after signing
+    let tamper = has(&run(b"config confirm", &tampered), b"not the owner key");
+    let malformed = has(&run(b"config confirm", &[0u8; 10]), b"malformed envelope");
+    // the valid one: reaches cfgd (which, in self-test mode, changes nothing)
+    let good_env = test_envelope(&kp, &mk(7, m::CFG_CONFIRM, 8, dig_n1));
+    let good = has(&run(b"config confirm", &good_env), b"self-test: no state change");
+    let replay = has(&run(b"config confirm", &good_env), b"replayed or stale");
+    let older = has(&run(b"config confirm", &test_envelope(&kp, &mk(6, m::CFG_CONFIRM, 8, dig_n1))), b"replayed or stale");
+    let (j1, last_msg, last_ok) = crate::mgmtabi::journaled();
+    let journaled = j1 - j0 == 14 && last_msg == m::CFG_CONFIRM && !last_ok;
+    let mut w = [0u8; 64];
+    let jn = journal_words(b"  config\x01 \x1bstage 00000000000000aa", &mut w);
+    let words = &w[..jn] == b"config stage";
+    // the owner-side tool and this verifier agree byte for byte: an envelope made by `policy-sign.py mgmt-sign` with
+    // the test key (device 00..0f, epoch 0102..08, seq 42, confirm, generation 9, digest 5a..) parses to those fields,
+    // re-encodes to the same body and verifies under the test public key
+    const KAT: &[u8; 312] = b"48514d474d54310001001400000102030405060708090a0b0c0d0e0f01020304050607082a00000000000000000000000000000009000000000000005a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5adfc7bdb7a85f4a16d96169c3d59a2637e34e004846b55873df5462fe705386a8214d8586401693da20cf3c71ee015f959484845e59d366148730d8ec761d020e";
+    let mut kat = [0u8; m::ENV_LEN];
+    let tool = crate::mgmtabi::unhex_envelope(KAT, &mut kat)
+        && m::Envelope::parse(&kat).is_some_and(|(e, sig)| {
+            let want = m::Envelope { msg: m::CFG_CONFIRM, device_id: core::array::from_fn(|i| i as u8), epoch: [1, 2, 3, 4, 5, 6, 7, 8], seq: 42, arg: 0, generation: 9, digest: [0x5a; 32] };
+            e == want && e.body()[..] == kat[..m::ENV_BODY]
+                && ed25519_compact::Signature::from_slice(&sig).is_ok_and(|s| kp.pk.verify(&m::envelope_msg(&e.body())[..], &s).is_ok())
+        });
+    // no owner key enrolled: nothing is privileged-capable
+    crate::anchor::install_owner(None, 0);
+    let no_owner = has(&run(b"config confirm", &test_envelope(&kp, &mk(8, m::CFG_CONFIRM, 8, dig_n1))), b"no owner key enrolled");
+    crate::cfgd::test_pose(posed.0, posed.1, posed.2);
+    crate::mgmtabi::test_reset();
+    crate::anchor::install_owner(saved.0, saved.1);
+    crate::cfgd::set_selftest(false);
+    let pass = view && session_only && wrong_key && wrong_dev && wrong_boot && stale_n && other_op && tamper && malformed && good && replay && older && journaled && words && no_owner && tool;
+    arch_aarch64::_print(format_args!(
+        " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={}\n",
+        if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, words, no_owner, tool
+    ));
+    pass
 }
 
 /// (loaded, commands, faults, restarts)
@@ -270,7 +397,7 @@ fn selftest_inner(now_ms: u64) -> bool {
     let mut o = [0u8; 2048];
     let mut run = |l: &[u8], role: u8| -> ([u8; 2048], usize) {
         let mut b = [0u8; 2048];
-        let n = run_line(l, role, [0x5e, 0x1f, 0, 0], now_ms, &mut b);
+        let n = run_line(l, role, [0x5e, 0x1f, 0, 0], now_ms, &[], &mut b);
         (b, n)
     };
     let has = |r: &([u8; 2048], usize), s: &[u8]| r.0[..r.1].windows(s.len()).any(|w| w == s);
@@ -313,55 +440,28 @@ fn selftest_inner(now_ms: u64) -> bool {
         .all(|&id| crate::mgmtabi::dispatch(id, v, [0; 4], now_ms, 0, &[], &mut rec) == (m::R_OK, m::reply_len(id).unwrap()))
         && crate::mgmtabi::dispatch(999, m::ROLE_OWNER, [0; 4], now_ms, 0, &[], &mut rec).0 == m::R_UNKNOWN
         && crate::mgmtabi::dispatch(m::GET_INFO, 0, [0; 4], now_ms, 0, &[], &mut rec).0 == m::R_DENIED;
-    // step 4b: configuration operations — denied below their role (view), answered with an Act record at owner; with
-    // nothing on trial / no store (QEMU) the refusal is honest; an unknown upload id cannot be staged
-    let cfg_denied = has(&run(b"config confirm", v), b"Permission denied") && has(&run(b"config rollback", v), b"Permission denied")
-        && has(&run(b"config stage 00000000000000aa", v), b"Permission denied");
-    let act = |msg: u16, arg: u64| -> Option<m::Act> {
+    // step 4b + R6 = D: configuration operations — refused on any session role without an owner-signed envelope
+    // (the full envelope matrix is [P-hsh-web]); the challenge reports what an envelope must bind
+    let refused = |msg: u16, role: u8| -> bool {
         let mut r = [0u8; 256];
-        match crate::mgmtabi::dispatch(msg, m::ROLE_OWNER, [0; 4], now_ms, arg, &[], &mut r) {
-            (m::R_OK, n) if n == m::ACT_LEN => Some(m::Act::decode(r[..m::ACT_LEN].try_into().unwrap())),
-            _ => None,
+        match crate::mgmtabi::dispatch(msg, role, [0; 4], now_ms, 0, &[], &mut r) {
+            (m::R_OK, n) if n == m::ACT_LEN => {
+                let a = m::Act::decode(r[..m::ACT_LEN].try_into().unwrap());
+                !a.ok && a.reason_str().contains("envelope")
+            }
+            _ => false,
         }
     };
-    let cfg_owner = act(m::CFG_CONFIRM, 0).is_some_and(|a| !a.ok) && act(m::CFG_STAGE, 0xaa).is_some_and(|a| !a.ok && a.reason_str().contains("upload id"));
-    let abi = abi && cfg_denied && cfg_owner;
-    // step 4c: HQCHAL1 elevation — challenge, the ENROLLED owner key signs off-device, the session gains the owner role
-    // (config confirm is no longer denied); the nonce is single-use; a wrong key is refused; no owner key = nothing
-    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x4c; 32]));
-    let other = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x4d; 32]));
-    let saved = (crate::anchor::owner(), crate::anchor::owner_gen());
-    let t = [0xe1, 0xe7, 0, 1];
-    let chal = |tag: [u8; 4]| -> Option<m::Challenge> {
+    let cfg_refused = has(&run(b"config confirm", v), b"envelope") && has(&run(b"config rollback", v), b"envelope")
+        && has(&run(b"config stage 00000000000000aa", v), b"envelope")
+        && [m::CFG_CONFIRM, m::CFG_ROLLBACK, m::CFG_STAGE].iter().all(|&msg| refused(msg, m::ROLE_OWNER) && refused(msg, v));
+    let chal = {
         let mut r = [0u8; 256];
-        match crate::mgmtabi::dispatch(m::OWNER_CHALLENGE, v, tag, now_ms, 0, &[], &mut r) {
-            (m::R_OK, n) if n == m::CHAL_LEN => Some(m::Challenge::decode(r[..m::CHAL_LEN].try_into().unwrap())),
-            _ => None,
-        }
+        crate::mgmtabi::dispatch(m::OWNER_CHALLENGE, v, [0; 4], now_ms, 0, &[], &mut r) == (m::R_OK, m::CHAL_LEN)
+            && m::Challenge::decode(r[..m::CHAL_LEN].try_into().unwrap()).device_id == crate::config_device_id()
     };
-    let elev = |tag: [u8; 4], sig: &[u8]| -> bool {
-        let mut r = [0u8; 256];
-        matches!(crate::mgmtabi::dispatch(m::OWNER_ELEVATE, v, tag, now_ms, 0, sig, &mut r), (m::R_OK, n) if n == m::ACT_LEN && m::Act::decode(r[..m::ACT_LEN].try_into().unwrap()).ok)
-    };
-    let sign = |k: &ed25519_compact::KeyPair, c: &m::Challenge| -> [u8; 64] { *k.sk.sign(&m::challenge_msg(&c.device_id, &c.nonce)[..], Some(ed25519_compact::Noise::from_slice(&[9u8; 16]).unwrap())) };
-    crate::mgmtabi::test_reset();
-    crate::anchor::install_owner(None, 0);
-    let no_owner = chal(t).is_some_and(|c| !c.owner_enrolled && !elev(t, &sign(&kp, &c)));
-    crate::anchor::install_owner(Some(*kp.pk), 1);
-    let c1 = chal(t);
-    let wrong = c1.is_some_and(|c| !elev(t, &sign(&other, &c)));
-    let c2 = chal(t);
-    let good = c2.is_some_and(|c| elev(t, &sign(&kp, &c))) && crate::mgmtabi::elevated(t, now_ms) == m::ROLE_OWNER;
-    let replay = c2.is_some_and(|c| !elev(t, &sign(&kp, &c)));
-    let mut r = [0u8; 256];
-    let allowed = crate::mgmtabi::dispatch(m::CFG_CONFIRM, v, t, now_ms, 0, &[], &mut r).0 == m::R_OK
-        && crate::mgmtabi::dispatch(m::CFG_CONFIRM, v, [0x99, 0, 0, 0], now_ms, 0, &[], &mut r).0 == m::R_DENIED;
-    let expired = crate::mgmtabi::elevated(t, now_ms + m::ELEVATE_TTL_S * 1000 + 1) == 0;
-    let shell = has(&run(b"owner challenge", v), b"HQCHAL1") && has(&run(b"owner elevate 00 11", v), b"Invalid argument");
-    crate::mgmtabi::test_reset();
-    crate::anchor::install_owner(saved.0, saved.1);
-    let elevation = no_owner && wrong && good && replay && allowed && expired && shell;
-    let abi = abi && elevation;
+    let retired = has(&run(b"owner elevate 00 11", v), b"not supported");
+    let abi = abi && cfg_refused && chal && retired;
     // fault containment: a deliberate EL0 fault resets the shell, counted; the next command answers
     let (_, _, f0, r0) = stats();
     let faulted = el0::server().is_some_and(|s| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0 == hal::hshabi::ST_PANIC);
@@ -374,7 +474,7 @@ fn selftest_inner(now_ms: u64) -> bool {
         if pass { "PASS" } else { "FAIL" }, parser, reads, denied, contained
     ));
     arch_aarch64::_print(format_args!(
-        " [P-mgmtabi] {} — ADR 0059 D9 management ABI: every read message answers with exactly its fixed record from the /api producers, an unknown id is refused, a caller without the role is denied; 4b config confirm / rollback / stage denied below their role and answered (honestly refused here) at owner | 4c HQCHAL1 elevation (no owner key = nothing, a wrong key refused, the owner key grants the owner role to THAT session only, nonce single-use, expires)={}\n",
+        " [P-mgmtabi] {} — ADR 0059 D9 management ABI: every read message answers with exactly its fixed record from the /api producers, an unknown id is refused, a caller without the role is denied; config confirm / rollback / stage refused on every session role without an owner-signed HQMGMT1 envelope, the challenge reports what to bind, session elevation retired (R6 = D)={}\n",
         if abi { "PASS" } else { "FAIL" }, abi
     ));
     pass && abi
