@@ -447,6 +447,10 @@ pub struct Activated {
     pub staged: bool,
     /// Design heqk-sealed-config-live-apply §3.8: how a staged configuration is stored ("sealed" | "plaintext_signed").
     pub at_rest: Option<&'static str>,
+    /// Step 8: a configuration bundle applied LIVE (no reboot), on trial now.
+    pub live: bool,
+    /// Step 11: the live trial waits for the owner's /api/config/confirm (management plane or Wi-Fi changed).
+    pub needs_confirm: bool,
 }
 
 /// `activate`: id, owner_key, seq. Store A/B write + readback + manifest commit + live reload.
@@ -510,7 +514,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
         return match crate::otaimg::install(d, slo, &plan) {
             Ok(()) => {
                 unsafe { TRIAL_REBOOT = true };
-                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true, at_rest: None })
+                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true, at_rest: None, live: false, needs_confirm: false })
             }
             Err(e) => {
                 let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, now_ms);
@@ -566,7 +570,21 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
     };
     let tag = tag;
     match res {
-        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms), staged: ty.staged(), at_rest }),
+        Ok(_) => {
+            let journal_seq = crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms);
+            // step 8: a bundle that changes only what this build applies live goes on a LIVE trial now (the AP loop's
+            // executors run after this reply); anything else keeps the next-boot trial. Restored 2026-11-12: the merge
+            // of #1001 (8142b7bf) had dropped this hand-off, so live apply never ran.
+            let live = ty == Ty::Config
+                && artstore::config_changes() & !crate::cfgd::LIVE_CAPABLE == 0
+                && crate::cfgd::queue_live_device().is_ok();
+            let needs_confirm = live && crate::cfgd::needs_confirm();
+            #[cfg(not(feature = "cm5"))]
+            unsafe {
+                LAST_LIVE = (live, ty.staged() && !live, needs_confirm)
+            };
+            Ok(Activated { gen, journal_seq, staged: ty.staged() && !live, at_rest, live, needs_confirm })
+        }
         Err(artstore::ActErr::LoaderRefused) => {
             let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, now_ms);
             Err("the loader refused the new pack — rolled back to the previous one")
@@ -614,7 +632,7 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
         rl = w.len;
     }
     match res {
-        Ok(gen) => Ok((Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged(), at_rest: None }, ty as u8)),
+        Ok(gen) => Ok((Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged(), at_rest: None, live: false, needs_confirm: false }, ty as u8)),
         Err(artstore::ActErr::NothingToRollBack) => Err("nothing to roll back to (no verified previous generation)"),
         Err(artstore::ActErr::LoaderRefused) => Err("the loader refused the previous pack — the current one stays active"),
         Err(artstore::ActErr::NoStore) => Err("no artifact store"),
@@ -810,9 +828,9 @@ pub fn selftest() -> bool {
     crate::ownerjournal::clear();
     let pass = bad_type && too_big && reauth && out_of_order && chunks_ok && early && fin && staged_only && act && audited && rollback && cross && tampered && foreign && cfg.iter().all(|&x| x);
     arch_aarch64::_print(format_args!(
-        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate: store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={}\n",
+        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate: store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={} a config bundle is handed to the live engine (policy-only: applies live, no reboot, auto-commit; management binding: live + owner confirm)={}\n",
         if pass { "PASS" } else { "FAIL" }, bad_type && too_big && reauth, out_of_order, chunks_ok, early, fin, staged_only, act, audited, rollback, cross, tampered, foreign,
-        cfg[0], cfg[1], cfg[2], cfg[3]
+        cfg[0], cfg[1], cfg[2], cfg[3], cfg[4]
     ));
     pass
 }
@@ -820,7 +838,41 @@ pub fn selftest() -> bool {
 /// [P-upload] step 3: WAN uploads (the container in RAM, never the disk Staging region; sealed when there is a device
 /// key; Q3 without one). Returns [staging untouched + no secret on disk, sealed + ciphertext audit digest, no key:
 /// secret refused, no key: non-secret stored].
-fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::KeyPair, seq: &mut u64) -> [bool; 4] {
+/// (live, staged, needs_confirm) of the last successful activation — read by the upload self-test.
+#[cfg(not(feature = "cm5"))]
+static mut LAST_LIVE: (bool, bool, bool) = (false, false, false);
+
+/// A signed HQCFG1 bundle container (HQCSIG1 sector + bundle) with one POLICY section, for the upload self-test.
+#[cfg(not(feature = "cm5"))]
+fn test_cfg_container(kp: &ed25519_compact::KeyPair, gen: u64, pol: &[u8], out: &mut [u8; 1024]) -> usize {
+    use crate::cfgbundle as cb;
+    let key: [u8; 32] = *kp.pk;
+    let mut b = [0u8; 512];
+    b[..8].copy_from_slice(cb::MAGIC);
+    b[8..10].copy_from_slice(&0x0100u16.to_le_bytes());
+    b[12..20].copy_from_slice(&gen.to_le_bytes());
+    b[36..44].copy_from_slice(&cb::key_id(&key));
+    b[44] = 1;
+    b[48] = cb::KIND_POLICY;
+    b[50..52].copy_from_slice(&(pol.len() as u16).to_le_bytes());
+    b[52..52 + pol.len()].copy_from_slice(pol);
+    let n = 52 + pol.len();
+    let dg = boot_abi::sha256::digest(&b[..n]);
+    let mut m = [0u8; 42];
+    m[..10].copy_from_slice(cb::SIG_TAG);
+    m[10..].copy_from_slice(&dg);
+    let sg = kp.sk.sign(&m[..], Some(ed25519_compact::Noise::from_slice(&[5u8; 16]).unwrap()));
+    *out = [0u8; 1024];
+    out[..8].copy_from_slice(cb::SIG_MAGIC);
+    out[8] = 1;
+    out[9..13].copy_from_slice(&(n as u32).to_le_bytes());
+    out[13..45].copy_from_slice(&dg);
+    out[45..109].copy_from_slice(&sg[..]);
+    out[512..512 + n].copy_from_slice(&b[..n]);
+    512 + n
+}
+
+fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::KeyPair, seq: &mut u64) -> [bool; 5] {
     let disk = || unsafe { &*core::ptr::addr_of!(artstore::TEST_DISK) };
     let (slo, shi) = dev().and_then(|d| staging(d)).unwrap_or((0, 0));
     let stage_hash = || {
@@ -874,7 +926,24 @@ fn cfg_selftest(c: &Ctx, auth: &mut crate::mcauth::Auth, kp: &ed25519_compact::K
     let refused = wan(6, b"mode=pppoe\npppoe_user=x\npppoe_pass=other\n", seq, auth) == Err("not stored: no device key — secrets are never written in plaintext")
         && entry().gen == 5 && !artstore::on_disk(disk(), b"other");
     let stored = wan(7, b"mode=dhcp\n", seq, auth) == Ok(7) && entry().gen == 7 && entry().sealed == 0 && stage_hash() == before;
-    [staging, sealed, refused, stored]
+    // LAST (a bundle in the store makes the per-file WAN uploads above refuse) — steps 8 + 11 (restored after the #1001 merge dropped it): a policy-only bundle activates LIVE (not staged for
+    // the next boot) and auto-commits; one with a management binding is live too but waits for the owner's confirm
+    #[cfg(not(feature = "cm5"))]
+    let handoff = {
+        let mut cont = [0u8; 1024];
+        crate::cfgd::set_test_live(true);
+        let n = test_cfg_container(kp, 40, b"acl A seq 10 allow any any any\ninterface lan acl in A\n", &mut cont);
+        let live = run_one(c, auth, &cont[..n], "config", seq, true) == Ok(40) && unsafe { LAST_LIVE } == (true, false, false);
+        crate::cfgd::set_test_live(false);
+        crate::cfgd::set_test_live(true);
+        let n = test_cfg_container(kp, 41, b"acl M seq 10 allow any any any\ninterface mgmt acl in M\n", &mut cont);
+        let confirm = run_one(c, auth, &cont[..n], "config", seq, true) == Ok(41) && unsafe { LAST_LIVE } == (true, false, true);
+        crate::cfgd::set_test_live(false);
+        live && confirm
+    };
+    #[cfg(feature = "cm5")]
+    let handoff = true; // the hand-off is exercised on QEMU (the self-test disk); metal proves it with cm5-cfgd-live-check
+    [staging, sealed, refused, stored, handoff]
 }
 
 /// Test helper: begin + chunks + finish (+ activate when `act`) for one container. Ok(gen) or the refusal.
