@@ -835,6 +835,10 @@ pub fn wire_selftest() -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pmksa_cache() {
+        assert!(super::pmksa_selftest());
+    }
     use super::*;
     fn hx(s: &str) -> [u8; 32] {
         let mut o = [0u8; 32];
@@ -1033,4 +1037,142 @@ mod tests {
         let (rs, re) = (r.own_scalar, r.own_element);
         assert_eq!(r.process_commit(&rs, &re), Err(SaeErr::BadCommit));
     }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// The AP's PMKSA cache (IEEE 802.11-2020 12.6.10.3): a station that completed SAE may later associate with
+// open-system authentication + its PMKID (PMKSA caching). Station MAC -> PMK + PMKID (the SAE PMKID, 12.4.5.4) +
+// expiry; filled on SAE Accepted. Bounded, static, wiped on removal, never logged.
+// ---------------------------------------------------------------------------------------------------------------
+
+pub const PMKSA_N: usize = 8;
+/// hostapd's dot11RSNAConfigPMKLifetime default (12 h).
+pub const PMKSA_LIFETIME_MS: u64 = 43_200_000;
+
+struct Pmksa {
+    mac: [u8; 6],
+    pmkid: [u8; 16],
+    pmk: [u8; 32],
+    /// 0 = free
+    exp: u64,
+}
+
+pub struct PmksaCache {
+    e: [Pmksa; PMKSA_N],
+}
+
+#[inline(never)]
+fn wipe(p: &mut Pmksa) {
+    // volatile whole-array stores: the wipe is never elided
+    unsafe {
+        core::ptr::write_volatile(&mut p.pmk, [0; 32]);
+        core::ptr::write_volatile(&mut p.pmkid, [0; 16]);
+    }
+    p.exp = 0;
+}
+
+impl PmksaCache {
+    pub const fn new() -> PmksaCache {
+        const E: Pmksa = Pmksa { mac: [0; 6], pmkid: [0; 16], pmk: [0; 32], exp: 0 };
+        PmksaCache { e: [E; PMKSA_N] }
+    }
+
+    /// Cache the PMKSA of `mac` (one per station: a newer SAE replaces it); full -> the entry closest to expiry goes.
+    #[inline(never)]
+    pub fn add(&mut self, mac: &[u8; 6], pmkid: &[u8; 16], pmk: &[u8; 32], now: u64) {
+        // this station's entry, else a free / expired one, else the one closest to expiry
+        let mut i = 0;
+        for (k, p) in self.e.iter().enumerate() {
+            if p.exp != 0 && p.mac == *mac {
+                i = k;
+                break;
+            }
+            if p.exp <= now || p.exp < self.e[i].exp {
+                i = k;
+            }
+        }
+        let p = &mut self.e[i];
+        wipe(p);
+        p.mac = *mac;
+        p.pmkid = *pmkid;
+        p.pmk = *pmk;
+        p.exp = now.saturating_add(PMKSA_LIFETIME_MS).max(1);
+    }
+
+    /// The PMK cached for (`mac`, `pmkid`) if unexpired (an expired entry is wiped here). The PMKID is public (the
+    /// station sends it in the clear), so a plain comparison is fine.
+    #[inline(never)]
+    pub fn get(&mut self, mac: &[u8; 6], pmkid: &[u8; 16], now: u64) -> Option<[u8; 32]> {
+        for p in self.e.iter_mut() {
+            if p.exp != 0 && p.mac == *mac && p.pmkid == *pmkid {
+                if p.exp <= now {
+                    wipe(p);
+                    return None;
+                }
+                return Some(p.pmk);
+            }
+        }
+        None
+    }
+
+    /// Cache the PMKSA of a peer `tab` just Accepted (its SAE PMK + PMKID).
+    #[inline(never)]
+    pub fn add_accepted(&mut self, tab: &SaeAp, mac: &[u8; 6], now: u64) {
+        if let Some(s) = tab.peers.iter().find(|p| p.st == St::Accepted && p.mac == *mac).and_then(|p| p.sae.as_ref()) {
+            self.add(mac, &s.pmkid, &s.pmk, now);
+        }
+    }
+
+    /// Forget the PMKSA of one station (its cached PMK did not verify: it must redo SAE).
+    pub fn remove(&mut self, mac: &[u8; 6]) {
+        for p in self.e.iter_mut().filter(|p| p.mac == *mac) {
+            wipe(p);
+        }
+    }
+
+    /// Forget every PMKSA (the passphrase or SSID changed: an old PMK must never key again).
+    #[inline(never)]
+    pub fn clear(&mut self) {
+        for p in self.e.iter_mut() {
+            wipe(p);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.e.iter().filter(|p| p.exp != 0).count()
+    }
+}
+
+/// `[P-pmksa]`: the PMKSA cache — hit on (MAC, PMKID); miss on another MAC / PMKID; expiry; replace per station;
+/// bounded eviction; clear wipes; the SAE PMKID that fills it is the Annex J.10 one (12.4.5.4).
+pub fn pmksa_selftest() -> bool {
+    let (a, b) = ([2u8, 0, 0, 0, 0, 1], [2u8, 0, 0, 0, 0, 2]);
+    let mut c = PmksaCache::new();
+    let mut ok = true;
+    c.add(&a, &[1; 16], &[0x11; 32], 1000);
+    ok &= c.get(&a, &[1; 16], 2000) == Some([0x11; 32]);
+    ok &= c.get(&b, &[1; 16], 2000).is_none() && c.get(&a, &[2; 16], 2000).is_none();
+    ok &= c.get(&a, &[1; 16], 1000 + PMKSA_LIFETIME_MS).is_none() && c.len() == 0;
+    c.add(&a, &[1; 16], &[0x11; 32], 0);
+    c.add(&a, &[3; 16], &[0x33; 32], 5);
+    ok &= c.len() == 1 && c.get(&a, &[1; 16], 6).is_none() && c.get(&a, &[3; 16], 6) == Some([0x33; 32]);
+    for k in 0..(PMKSA_N as u8 + 3) {
+        c.add(&[4, 0, 0, 0, 0, k], &[k; 16], &[k; 32], 10 + k as u64);
+    }
+    ok &= c.len() == PMKSA_N && c.get(&[4, 0, 0, 0, 0, PMKSA_N as u8 + 2], &[PMKSA_N as u8 + 2; 16], 100).is_some();
+    c.remove(&[4, 0, 0, 0, 0, PMKSA_N as u8 + 2]);
+    ok &= c.len() == PMKSA_N - 1 && c.get(&[4, 0, 0, 0, 0, PMKSA_N as u8 + 2], &[PMKSA_N as u8 + 2; 16], 100).is_none();
+    c.clear();
+    ok &= c.len() == 0 && c.e.iter().all(|p| p.pmk == [0; 32] && p.pmkid == [0; 16]);
+    // the PMKID SAE yields (what the station's RSNE then names): Annex J.10
+    let j10 = (|| {
+        let mut s = Sae::new(b"mekmitasdigoat", &[0x4d, 0x3f, 0x2f, 0xff, 0xe3, 0x87], &[0xa5, 0xd8, 0xaa, 0x95, 0x8e, 0x3c],
+            &unhex("992465fd3daa3c60aa6565b7f62a2a7f2e12dd12f198faf4fbed89d7ff1ace94"), &unhex("9507a90f777a044d6a0830b91ea3d5dd70bece44e1acffb86983b5e1bf9fb322")).ok()?;
+        s.process_commit(&unhex("591b96f3397fb945100848e7b550543b6720d88337ee93fc49fd6df7e08b5223"),
+            &unhex("e71b9bb048d3873f20556953a96c91536fd8ee6ca9b4a68a148b056a909be03e83ae208f60f8ef5537858074db06687032399862999b511e0a1552a5fea317c2")).ok()?;
+        let mut c = PmksaCache::new();
+        c.add(&a, &s.pmkid, &s.pmk, 0);
+        Some(c.get(&a, &unhex::<16>("8747a600eea3f9f22475df58ca1e5498"), 1) == Some(s.pmk))
+    })().unwrap_or(false);
+    ok && j10
 }
