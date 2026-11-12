@@ -511,21 +511,85 @@ struct Peer {
 
 pub struct SaeAp {
     peers: [Peer; PEERS],
+    /// Why a station's SAE state ended last (diagnostics only: no secret) — `diag`.
+    hist: [Hist; PEERS],
+}
+
+/// `SaeAp::diag` codes: what SAE state the AP holds / last held for a station (the association-refusal log).
+pub const SD_NONE: u8 = 0;
+pub const SD_COMMITTED: u8 = 1;
+pub const SD_ACCEPTED: u8 = 2;
+pub const SD_EXPIRED_ACCEPTED: u8 = 3;
+pub const SD_EXPIRED_COMMITTED: u8 = 4;
+pub const SD_CONFIRM_FAILED: u8 = 5;
+pub const SD_BAD_COMMIT: u8 = 6;
+pub const SD_LEFT_ACCEPTED: u8 = 7;
+pub const SD_LEFT_COMMITTED: u8 = 8;
+pub const SD_BOUNCE: u8 = 9;
+
+pub fn diag_name(code: u8) -> &'static str {
+    match code {
+        SD_COMMITTED => "Committed (no confirm yet)",
+        SD_ACCEPTED => "Accepted",
+        SD_EXPIRED_ACCEPTED => "Accepted but expired",
+        SD_EXPIRED_COMMITTED => "Committed then expired",
+        SD_CONFIRM_FAILED => "Confirm failed (wrong password?)",
+        SD_BAD_COMMIT => "bad commit",
+        SD_LEFT_ACCEPTED => "Accepted but forgotten (station left)",
+        SD_LEFT_COMMITTED => "Committed, forgotten (station left)",
+        SD_BOUNCE => "forgotten (BSS bounce)",
+        _ => "none",
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Hist {
+    mac: [u8; 6],
+    why: u8,
+    t_ms: u64,
 }
 
 impl SaeAp {
     pub const fn new() -> SaeAp {
         const P: Peer = Peer { mac: [0; 6], st: St::Free, t_ms: 0, sae: None };
-        SaeAp { peers: [P; PEERS] }
+        SaeAp { peers: [P; PEERS], hist: [Hist { mac: [0; 6], why: SD_NONE, t_ms: 0 }; PEERS] }
+    }
+
+    /// Free peer `i`, remembering why (`why` for Committed, `why - 1` for Accepted where the codes pair up).
+    fn end(&mut self, i: usize, why: u8, now: u64) {
+        let p = &mut self.peers[i];
+        if p.st == St::Free {
+            return;
+        }
+        let why = match (why, p.st) {
+            (SD_EXPIRED_COMMITTED, St::Accepted) => SD_EXPIRED_ACCEPTED,
+            (SD_LEFT_COMMITTED, St::Accepted) => SD_LEFT_ACCEPTED,
+            (w, _) => w,
+        };
+        let mac = p.mac;
+        p.st = St::Free;
+        p.sae = None;
+        let h = &mut self.hist;
+        let k = h.iter().position(|x| x.why != SD_NONE && x.mac == mac).unwrap_or_else(|| {
+            (0..PEERS).min_by_key(|&j| (h[j].why != SD_NONE, h[j].t_ms)).unwrap_or(0)
+        });
+        h[k] = Hist { mac, why, t_ms: now };
+    }
+
+    /// (SD_* code, age in ms of that state / event) for `mac` — the "why did ap_sae_pmk miss" diagnostic.
+    pub fn diag(&mut self, mac: &[u8; 6], now: u64) -> (u8, u64) {
+        if let Some(i) = self.slot(mac, now, false) {
+            let p = &self.peers[i];
+            return (if p.st == St::Accepted { SD_ACCEPTED } else { SD_COMMITTED }, now.saturating_sub(p.t_ms));
+        }
+        self.hist.iter().find(|x| x.why != SD_NONE && x.mac == *mac).map_or((SD_NONE, 0), |x| (x.why, now.saturating_sub(x.t_ms)))
     }
 
     fn slot(&mut self, mac: &[u8; 6], now: u64, create: bool) -> Option<usize> {
-        for (i, p) in self.peers.iter_mut().enumerate() {
-            if p.st != St::Free && now.saturating_sub(p.t_ms) > PEER_TTL_MS {
-                p.st = St::Free;
-                p.sae = None;
+        for i in 0..PEERS {
+            if self.peers[i].st != St::Free && now.saturating_sub(self.peers[i].t_ms) > PEER_TTL_MS {
+                self.end(i, SD_EXPIRED_COMMITTED, self.peers[i].t_ms + PEER_TTL_MS);
             }
-            let _ = i;
         }
         if let Some(i) = self.peers.iter().position(|p| p.st != St::Free && p.mac == *mac) {
             return Some(i);
@@ -555,19 +619,21 @@ impl SaeAp {
 
     /// Forget a peer (it left / its 4-way finished).
     pub fn forget(&mut self, mac: &[u8; 6]) {
-        for p in self.peers.iter_mut() {
-            if p.mac == *mac {
-                p.st = St::Free;
-                p.sae = None;
+        self.forget_at(mac, 0);
+    }
+    /// `forget` with the time, for the diagnostic history.
+    pub fn forget_at(&mut self, mac: &[u8; 6], now: u64) {
+        for i in 0..PEERS {
+            if self.peers[i].mac == *mac {
+                self.end(i, SD_LEFT_COMMITTED, now);
             }
         }
     }
 
     /// Forget every peer (the BSS is re-started with new settings).
     pub fn forget_all(&mut self) {
-        for p in self.peers.iter_mut() {
-            p.st = St::Free;
-            p.sae = None;
+        for i in 0..PEERS {
+            self.end(i, SD_BOUNCE, 0);
         }
     }
 
@@ -665,7 +731,8 @@ impl SaeAp {
                     s.set_rejected_groups(&rejected[..rej_len]);
                 }
                 if s.process_commit(&sc, &el).is_err() {
-                    self.peers[i].st = St::Free;
+                    self.peers[i].st = St::Committed; // so `end` records it (a fresh slot is still Free)
+                    self.end(i, SD_BAD_COMMIT, now);
                     return Event::Dropped("bad peer commit");
                 }
                 let mut o = Out::new(1, if h2e { ST_SAE_HASH_TO_ELEMENT } else { ST_SUCCESS });
@@ -683,12 +750,10 @@ impl SaeAp {
                 let Some(i) = self.slot(peer, now, false) else { return Event::Dropped("confirm from an unknown peer") };
                 let psc = m.send_confirm;
                 let c = m.confirm;
-                let p = &mut self.peers[i];
-                let Some(s) = p.sae.as_mut() else { return Event::Dropped("no state") };
+                let Some(s) = self.peers[i].sae.as_mut() else { return Event::Dropped("no state") };
                 if s.check_confirm(psc, &c).is_err() {
                     // wrong password (or forged): forget the peer, never answer
-                    p.st = St::Free;
-                    p.sae = None;
+                    self.end(i, SD_CONFIRM_FAILED, now);
                     return Event::Dropped("confirm does not verify");
                 }
                 let (sc, conf) = s.confirm();
@@ -696,6 +761,7 @@ impl SaeAp {
                 o.put(&sc.to_le_bytes());
                 o.put(&conf);
                 out[0] = Some(o);
+                let p = &mut self.peers[i];
                 p.st = St::Accepted;
                 p.t_ms = now;
                 Event::Accepted
@@ -755,6 +821,8 @@ pub fn selftest() -> (bool, bool, bool, bool) {
         let r = out[0]?;
         st.check_confirm(u16::from_le_bytes([r.body[6], r.body[7]]), r.body[8..40].try_into().ok()?).ok()?;
         let agreed = tab.pmk_for(&sta, 2) == Some(st.pmk);
+        // the diagnostic history: Accepted (age), then expired after the TTL
+        let agreed = agreed && tab.diag(&sta, 2) == (SD_ACCEPTED, 1) && tab.diag(&sta, 1 + PEER_TTL_MS + 7) == (SD_EXPIRED_ACCEPTED, 7);
         // wrong password: the confirm is dropped, never answered, no PMK
         let mut bad = Sae::new(b"wrong passphrase", &sta, &ap, &[0x31; 32], &[0x47; 32]).ok()?;
         c[8..40].copy_from_slice(&bad.own_scalar);
@@ -767,7 +835,13 @@ pub fn selftest() -> (bool, bool, bool, bool) {
         k[8..40].copy_from_slice(&cf);
         let refused = matches!(tab.on_frame(100_001, &ap, &sta, None, b"bench passphrase", &k, &mut rnd, &mut out), Event::Dropped(_))
             && out[0].is_none() && tab.pmk_for(&sta, 100_002).is_none();
-        Some(agreed && refused)
+        let refused = refused && tab.diag(&sta, 100_005) == (SD_CONFIRM_FAILED, 4);
+        // a commit, then the station leaves: "Committed, forgotten"; another MAC: none
+        let left = tab.on_frame(100_010, &ap, &sta, None, b"bench passphrase", &c, &mut rnd, &mut out) == Event::Committed
+            && tab.diag(&sta, 100_011) == (SD_COMMITTED, 1)
+            && { tab.forget_at(&sta, 100_020); tab.diag(&sta, 100_021) == (SD_LEFT_COMMITTED, 1) }
+            && tab.diag(&ap, 100_021) == (SD_NONE, 0);
+        Some(agreed && refused && left)
     })().unwrap_or(false);
     let mut pmk = [0u8; 32];
     for (i, b) in pmk.iter_mut().enumerate() {
