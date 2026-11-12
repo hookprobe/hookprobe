@@ -9,6 +9,7 @@
  */
 import { type Component, For, Show, createSignal } from 'solid-js';
 import AppShell from './AppShell';
+import AdminTabs from './AdminTabs';
 import { fetchJson } from '../store/api';
 import { envelopeFor, MSG } from '../store/envelope';
 import { approve } from '../store/approve';
@@ -64,6 +65,7 @@ const ShellApp: Component = () => {
             <p class="pro-sub">HookProbe's own command line, inside the device. It reads the same state as Mission Control and changes nothing by itself.</p>
           </div>
         </div>
+        <AdminTabs current="/admin/shell" />
         <div class="shell-info" role="note"><span><b>Role:</b> view (read-only)</span><span><b>Transport:</b> this signed-in session</span><span><b>Audit:</b> every command is journaled (first two words)</span></div>
         <Show when={unavailable()}><p class="gate-reason">{unavailable()}</p></Show>
         <div class="shell-grid">

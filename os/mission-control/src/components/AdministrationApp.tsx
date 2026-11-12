@@ -21,6 +21,7 @@ import { ownerRules, refreshOwnerRules } from '../store/ownerRules';
 import { uploadView, refreshUploads, uploadPack, rollbackPack, PACK_LABEL, CONNECTIVITY, type UploadStep } from '../store/packUpload';
 import { fetchPlannerStatus, type PlannerStatus } from '../store/plannerApi';
 import AppShell from './AppShell';
+import AdminTabs from './AdminTabs';
 import { postSigned, MSG } from '../store/envelope';
 import { approve, askOwnerKey } from '../store/approve';
 import SigningKeyPanel from './SigningKeyPanel';
@@ -126,6 +127,7 @@ const AdministrationApp: Component = () => {
             <p class="pro-sub">Identity, the device and its lifecycle{substrate() ? ' · live from this device' : ''}</p>
           </div>
         </div>
+        <AdminTabs current="/admin/identity" />
         <Show when={msg()}><p class="pro-sub" role="status">{msg()}</p></Show>
 
         <div class="obs-grid">

@@ -11,6 +11,7 @@
  */
 import { type Component, For, Show, onMount } from 'solid-js';
 import AppShell from './AppShell';
+import AdminTabs from './AdminTabs';
 import RestartButton from './RestartButton';
 import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
@@ -72,6 +73,7 @@ const ConfigurationApp: Component = () => {
             <p class="pro-sub">What is in force, who can change it, how it is stored, and what changed recently, as this device reports it.</p>
           </div>
         </div>
+        <AdminTabs current="/admin/config" />
         <Show when={msg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{msg()}</p></Show>
 
         <div class="cfg-grid">
