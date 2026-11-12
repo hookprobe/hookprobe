@@ -83,3 +83,9 @@ name = "wpa_auth"
 path = "fuzz_targets/wpa_auth.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "sae_wire"
+path = "fuzz_targets/sae_wire.rs"
+test = false
+doc = false

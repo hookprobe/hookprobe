@@ -3615,20 +3615,15 @@ fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> bool {
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event {
     let s = w3();
-    if s.mode == SEC_WPA2 || ev + 72 > rx.len() {
+    if s.mode == SEC_WPA2 {
         return sae::Event::Dropped("not in SAE mode");
     }
-    let dl = u32::from_be_bytes([rx[ev + 44], rx[ev + 45], rx[ev + 46], rx[ev + 47]]) as usize;
-    let d = ev + 72;
-    let end = (d + dl).min(rx.len());
-    // 16-byte rx metadata (version, chanspec, rssi, mactime, rate) then the 802.11 frame
-    let f = if end >= d + 16 + 24 && rx[d + 16] & 0xfc == 0xb0 { d + 16 } else if end >= d + 24 && rx[d] & 0xfc == 0xb0 { d } else { return sae::Event::Dropped("no auth frame") };
-    let mut sta = [0u8; 6];
-    sta.copy_from_slice(&rx[f + 10..f + 16]);
-    if rx[f + 4..f + 10] != ap[..] || sta[0] & 1 != 0 {
-        return sae::Event::Dropped("not addressed to this AP");
-    }
-    let body = &rx[f + 24..end];
+    // fixed-offset event / 802.11 header reads; the body is trimmed to the event's own length (apparse)
+    let (sta, b0, b1) = match crate::apparse::sae_auth_body(rx, ev, ap) {
+        Ok(x) => x,
+        Err(why) => return sae::Event::Dropped(why),
+    };
+    let body = &rx[b0..b1];
     let mut out = [None, None];
     let mut rnd = || {
         let mut r = [0u8; 32];
@@ -3638,8 +3633,15 @@ pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event 
         Some(r)
     };
     let pw_len = s.pw_len as usize;
-    let pw = s.pw;
-    let e = unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).on_frame(now_ms, ap, &sta, (*core::ptr::addr_of!(SAE_PT)).as_ref(), &pw[..pw_len], body, &mut rnd, &mut out) };
+    let mut pw = s.pw;
+    // ADR 0050 D4 step 5c: the station's Commit / Confirm is walked in el0-lansvc (public bytes only); the state
+    // machine and every secret stay here. An EL0 fault rejects this attempt and forgets the station's SAE state.
+    let e = unsafe {
+        crate::wanparse::sae_respond(&mut *core::ptr::addr_of_mut!(SAE_TAB), now_ms, ap, &sta, (*core::ptr::addr_of!(SAE_PT)).as_ref(), &pw[..pw_len], body, &mut rnd, &mut out)
+    };
+    for b in pw.iter_mut() {
+        unsafe { write_volatile(b, 0) }; // the stack copy of the passphrase
+    }
     let mut sent = 0;
     for o in out.iter().flatten() {
         if mgmt_auth_tx(ap, &sta, &o.body[..o.len]) {

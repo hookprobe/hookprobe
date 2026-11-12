@@ -3833,6 +3833,8 @@ fn cm5_p10_probe() {
                                 crate::tlshost::bring_up(Some(&dev));
                                 crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
                                 let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal
+                                #[cfg(feature = "wpa3")]
+                                let _ = crate::lansvc::sae_selftest(); // ADR 0050 D4 step 5c: the SAE station-frame walk in EL0
                                 let _ = crate::hsh::selftest(0); // ADR 0059 step 4a on metal: the EL0 shell + mgmtabi
                             }
                             mcserve::state().set_clock(0, mc_t0, freq);
@@ -7319,9 +7321,10 @@ pub extern "C" fn kmain() -> ! {
         {
             let (j10, e2e, ptk, h2e) = sae::selftest();
             let cmac = arch_aarch64::aes::cmac_selftest();
-            let pass = j10 && e2e && ptk && cmac && h2e;
-            kprint!(" [P-sae] {} — WPA3-SAE on the AP (Phase 6, host SAE because the firmware forwards SAE frames — batch 37): P-256 hunting-and-pecking commit + KCK/PMK/PMKID = IEEE 802.11-2020 Annex J.10={} | AP responder end to end (commit, confirm, PMK agreed; wrong password: confirm dropped, never answered, no PMK)={} | AKM 8 PTK (KDF-SHA256) = hostapd 2.11 sha256_prf={} | AES-128-CMAC EAPOL MIC = RFC 4493 examples 1-4={} | H2E (hash-to-element, SSWU) PWE = the Annex J.10 H2E vector={}\n",
-                if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e);
+            let wire = sae::wire_selftest();
+            let pass = j10 && e2e && ptk && cmac && h2e && wire;
+            kprint!(" [P-sae] {} — WPA3-SAE on the AP (Phase 6, host SAE because the firmware forwards SAE frames — batch 37): P-256 hunting-and-pecking commit + KCK/PMK/PMKID = IEEE 802.11-2020 Annex J.10={} | AP responder end to end (commit, confirm, PMK agreed; wrong password: confirm dropped, never answered, no PMK)={} | AKM 8 PTK (KDF-SHA256) = hostapd 2.11 sha256_prf={} | AES-128-CMAC EAPOL MIC = RFC 4493 examples 1-4={} | H2E (hash-to-element, SSWU) PWE = the Annex J.10 H2E vector={} | 5c station-frame walk (hal::saewire, no curve library) == the curve library on on-curve / scalar range, malformed commits refused with no state={}\n",
+                if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e, wire);
         }
         let _ = ja4id::selftest();
         #[cfg(feature = "netsvc")]
