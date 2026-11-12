@@ -14,14 +14,23 @@ import AppShell from './AppShell';
 import RestartButton from './RestartButton';
 import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
-import { configView, refreshConfig, restNote } from '../store/configState';
-import { anchorView, refreshAnchor } from '../store/anchor';
+import { configView, refreshConfig, restNote, type ConfigView } from '../store/configState';
+import { anchorView, refreshAnchor, type AnchorView } from '../store/anchor';
 import { uploadView, refreshUploads, rollbackPack } from '../store/packUpload';
 import { approve } from '../store/approve';
 import { createSignal } from 'solid-js';
 
 const STATE: Record<string, string> = { none: 'No bundle (per-file settings)', committed: 'Committed', trial: 'On trial', reverted: 'Switched back', refused: 'Refused at boot' };
 const TYPE: Record<string, string> = { config: 'Configuration bundle', wan: 'Internet file', wifi: 'Wi-Fi file', policy: 'Firewall file', shield_block: 'Shield block list', shield_allow: 'Shield allow list', ioc: 'Threat-intel pack', rules: 'Rule pack', oui: 'Vendor list', devices: 'Device policy', os_image: 'OS image' };
+
+// No device answering: the board's three cards with labelled sample values (the page banner says it is sample data).
+const SAMPLE_CFG = { state: 'committed', generation: 9, floor: 9, auto_rollback: true, at_rest: { sealed: true, secrets_protected: true, device_key: true, volatile_ram_only: false, persisted: true } } as unknown as ConfigView;
+const SAMPLE_ANCHOR = { state: 'protected', owner_enrolled: true, owner_key: '3f9a1c0e7b2d', owner_generation: 1, vendor_key: 'a81d44e2c905', device_id: '7c1e9b04d2a65f38', floors: { wan: 8, wifi: 8, policy: 8 } } as unknown as AnchorView;
+const SAMPLE_JOURNAL = [
+  { seq: 1, ms: 0, type: 'config', result: 'ok', detail: 'gen 7->8' },
+  { seq: 2, ms: 0, type: 'shield_block', result: 'ok', detail: 'gen 3->4' },
+  { seq: 3, ms: 0, type: 'config', result: 'ok', detail: 'gen 8->9' },
+];
 
 /** The journal's detail, in words: "gen 8->9 sha256:…" / "rollback gen 9->8" / "<op> gen N <reason>". */
 function describe(detail: string): string {
@@ -38,8 +47,9 @@ const ConfigurationApp: Component = () => {
   const [msg, setMsg] = createSignal('');
   onMount(() => { void refreshConfig(); void refreshAnchor(); void refreshUploads(); });
   const sample = () => healthChecked() && !substrate();
-  const c = () => configView();
-  const a = () => anchorView();
+  const c = () => (sample() ? SAMPLE_CFG : configView());
+  const a = () => (sample() ? SAMPLE_ANCHOR : anchorView());
+  const journal = () => (sample() ? SAMPLE_JOURNAL : uploadView()?.activations ?? []);
   const cfgSlot = () => uploadView()?.types.find((t) => t.type === 'config');
   const fp = (h?: string | null) => (h ? `${h.slice(0, 8)}…` : '—');
   const devId = () => { const d = a()?.device_id; return d && /[1-9a-f]/i.test(d) ? fp(d) : 'none (bundles not bound to this device)'; };
@@ -64,8 +74,7 @@ const ConfigurationApp: Component = () => {
         </div>
         <Show when={msg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{msg()}</p></Show>
 
-        <Show when={!sample()} fallback={<p class="gate-reason">Preview: no device is answering, so there is no configuration to show.</p>}>
-          <div class="cfg-grid">
+        <div class="cfg-grid">
             <div class="pcard" aria-label="Configuration in force">
               <p class="l0-label">Configuration in force</p>
               <span class="cfg-big">{c() ? `${STATE[c()!.state] ?? c()!.state}${c()!.generation ? ` · generation ${c()!.generation}` : ''}` : 'Not reported'}</span>
@@ -95,7 +104,7 @@ const ConfigurationApp: Component = () => {
                 <span class="prow"><span>Passwords protected</span><span>{c()!.at_rest!.secrets_protected ? 'yes' : 'no'}</span></span>
                 <span class="prow"><span>Device key</span><span>{c()!.at_rest!.device_key ? 'present' : 'missing'}</span></span>
               </Show>
-              <p class="pcard-note" style={{ margin: 0 }}>{restNote()}</p>
+              <p class="pcard-note" style={{ margin: 0 }}>{sample() ? 'Sample: on a device this says how its settings are protected at rest.' : restNote()}</p>
             </div>
           </div>
 
@@ -111,18 +120,20 @@ const ConfigurationApp: Component = () => {
 
             <div class="pcard" aria-label="Recent changes">
               <p class="l0-label">Recent changes (journal)</p>
-              <For each={[...(uploadView()?.activations ?? [])].reverse().slice(0, 8)} fallback={<p class="pcard-note" style={{ margin: 0 }}>Nothing recorded yet.</p>}>{(r) => (
+              <For each={[...journal()].reverse().slice(0, 8)} fallback={<p class="pcard-note" style={{ margin: 0 }}>Nothing recorded yet.</p>}>{(r) => (
                 <span class="prow"><span>{TYPE[r.type] ?? r.type} · {describe(r.detail)}</span><span class={r.result === 'ok' ? '' : 'cfg-refused'}>{r.result === 'ok' ? 'applied' : r.result}</span></span>
               )}</For>
               <div class="l0-card-foot">
-                <Show when={typeof cfgSlot()?.rollback_to === 'number'}>
+                <Show when={sample()}>
+                  <span class="gate gate--off"><span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Roll back to 8</button></span><span class="gate-reason" role="note">Preview: no device is answering.</span></span>
+                </Show>
+                <Show when={!sample() && typeof cfgSlot()?.rollback_to === 'number'}>
                   <button class="hp-btn" onClick={() => void rollBack(cfgSlot()!.rollback_to!)}>Roll back to {cfgSlot()!.rollback_to}</button>
                 </Show>
                 <RestartButton />
               </div>
             </div>
           </div>
-        </Show>
       </main>
     </AppShell>
   );
