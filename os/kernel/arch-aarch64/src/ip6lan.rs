@@ -257,6 +257,23 @@ impl V6Lan {
         }
     }
 
+    /// The AP was restarted (BSS bounce): EVERY station re-associates, so every SAVI binding, neighbour entry and
+    /// pinhole is stale — a binding left behind would refuse a re-joining station its own address (or keep a departed
+    /// station's address claimed), a pinhole would admit inbound traffic to an address nobody holds. The LAN
+    /// numbering is kept; the RA burst restarts so re-joining stations configure at once.
+    pub fn forget_all_stations(&mut self) {
+        for n in self.neigh.iter_mut() {
+            *n = Neigh { ip: [0; 16], mac: [0; 6], seen: 0 };
+        }
+        for f in self.flows.iter_mut() {
+            f.used = false;
+        }
+        self.pending = None;
+        self.ns_last = [([0; 16], 0); 8];
+        self.ra_burst = 0;
+        self.last_ra_ms = 0;
+    }
+
     /// A Neighbor Solicitation for `target` from the router (to its solicited-node multicast) — sent on a
     /// neighbor-cache miss so an evicted client is re-learned and the next retransmission is delivered.
     pub fn build_ns(&self, target: &[u8; 16], out: &mut [u8]) -> usize {

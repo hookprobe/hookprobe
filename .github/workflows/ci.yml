@@ -1,5 +1,5 @@
 # =============================================================================
-# ci.yml — the PR / main gate spine (ADR 0052 L1). Every job is a thin wrapper
+# ci.yml — the PR / main gate spine (ADR 0063 L1). Every job is a thin wrapper
 # around tools/ci/gates.sh so CI and a developer box run the IDENTICAL command.
 #
 #   g0  hygiene + CI wiring meta-gate + CI-tooling self-tests
@@ -51,8 +51,9 @@ jobs:
       - uses: actions/checkout@v7
         with: { fetch-depth: 0 }   # clippy ratchet lints the base commit (needs history)
       - uses: dtolnay/rust-toolchain@stable
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
         with:
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools, clippy
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
       - uses: Swatinem/rust-cache@v2
@@ -78,8 +79,9 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
         with:
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
       - uses: Swatinem/rust-cache@v2

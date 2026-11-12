@@ -1,14 +1,15 @@
 # ADR 0052 — Shield v2: DNS protection on heqk, built on the dnsXai model and its lessons
 
-**Status:** 🟢 Implemented, metal-proven (`docs/design/heqk-parity-gaps.md` G22) — was 🟡 Proposed (2026-11-07); operator ratification not separately recorded (see the note below) · **Supersedes:** the Shield v1 hook (`d2cee9b`, `os/kernel/kernel/src/dnsblock.rs`)
+**Status:** ✅ **Accepted by the operator 2026-11-12**; implemented, metal-proven (`docs/design/heqk-parity-gaps.md` G22) — was 🟡 Proposed (2026-11-07) · **Supersedes:** the Shield v1 hook (`d2cee9b`, `os/kernel/kernel/src/dnsblock.rs`)
 **Status update 2026-11-09:** ✅ **Accepted / implemented.** Shield v2 runs on heqk (`os/kernel/kernel/src/shield.rs` + `dnssink.rs`); per-client profiles and pause are done + metal-proven per `docs/design/heqk-parity-gaps.md` **G22** (also G8 DGA scoring, G31 bypass visibility). Open: list refresh without re-flash (needs the HTTPS upload channel).
 **Status reconciled 2026-11-12:** the header said Proposed while the 2026-11-09 update says Accepted / implemented.
 Implementation and metal evidence: `docs/design/heqk-parity-gaps.md` G22, G8, G31; ADR 0057 (2026-11-09, operator
 direction "yes, but as transparent policy profiles") builds on this ADR. No dated operator ratification of the
-ADR 0052 text itself was found in the repository — the operator should confirm "Accepted" or say otherwise. The
-duplicate number 0052 stays with this ADR (the earlier one); the CI/CD ADR 0052 is proposed for 0063.
+ADR 0052 text itself was found in the repository — the operator should confirm "Accepted" or say otherwise. *(Answered: accepted by the operator 2026-11-12.)* The
+duplicate number 0052 stays with this ADR (the earlier one); the CI/CD ADR was renumbered to [0063](0063-autonomous-cicd-gate-spine-and-heal-loop.md) on 2026-11-12.
 **Related:** ADR 0023 (enforcement separation — refuse a NAME, never a customer's PACKET), ADR 0033 (DNS sinkhole/RPZ on
 the Linux tier), ADR 0049 D1 (operator-signed files), ADR 0050 (parser placement).
+**Accepted by the operator 2026-11-12** (A12 follow-up, relayed by the coordinator; PR #1020). Decision text unchanged.
 
 ## Context
 
