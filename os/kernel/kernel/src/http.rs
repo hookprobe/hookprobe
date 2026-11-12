@@ -352,10 +352,13 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         let confirm = req.path == "/api/config/confirm";
         return match crate::ownerapi::config_action(&c, req.body, auth, confirm) {
-            Ok(g) => json(scratch, |w| {
+            Ok(g) => {
+                crate::cfgd::note_owner(req.peer);
+                json(scratch, |w| {
                 use core::fmt::Write;
                 let _ = write!(w, "{{\"ok\":true,\"{}\":true,\"generation\":{}}}", if confirm { "committed" } else { "rolled_back" }, g);
-            }),
+                })
+            }
             Err(why) => json(scratch, |w| {
                 w.raw("{\"ok\":false,\"refused\":");
                 w.string(why);
@@ -425,7 +428,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         let r = match req.path {
-            "/api/upload/begin" => up::begin(&c, req.body, auth).map(|b| Ok_::Begun(b.id)),
+            "/api/upload/begin" => up::begin(&c, req.body, auth).map(|b| {
+                crate::cfgd::note_owner(req.peer); // F-e: the owner's own client must keep its path
+                Ok_::Begun(b.id)
+            }),
             "/api/upload/chunk" => up::chunk(&c, req.query, req.body).map(Ok_::Chunk),
             "/api/upload/finish" => up::finish(&c, req.body).map(Ok_::Fin),
             "/api/upload/activate" => up::activate(&c, req.body, auth).map(Ok_::Act),
