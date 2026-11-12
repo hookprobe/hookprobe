@@ -21,6 +21,9 @@ publish = false  # first-party: never published to crates.io (ADR 0063 G4)
 default = ["securechannel", "securechannel-selftest"]
 securechannel = []
 securechannel-selftest = []
+# declared (off) so the shared securechannel.rs `cfg(feature = "securechannel-host-responder")` is a known cfg here
+# (unexpected_cfgs); responder-sim uses the selftest constructors, superpop uses the host-responder ones
+securechannel-host-responder = ["securechannel"]
 
 [dependencies]
 # The SAME crates + versions/features the kernel's `securechannel` feature pins, so the
