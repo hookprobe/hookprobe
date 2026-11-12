@@ -20,7 +20,7 @@ import { networkView, startNetworkLive } from '../store/networkLive';
 import { uploadView, refreshUploads, uploadPack } from '../store/packUpload';
 import { ownerKey, loadOwnerKey, signPack, signPolicy, signBundle, ownerKeyId, PACKS, download } from '../store/signing';
 import {
-  buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, parsePolicyText, checkPolicy, stagePolicy, lineDiff,
+  buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, parsePolicyText, checkPolicy, wanFormFrom, wifiFormFrom, stagePolicy, lineDiff,
   type WanForm, type WifiForm, type PolicyForm, type AclRow,
 } from '../store/configBuild';
 import AppShell, { normPath } from './AppShell';
@@ -29,6 +29,7 @@ import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
 import { askOwnerKey } from '../store/approve';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
+import { bundleInForce, takesBundles, bundleGen, deviceIdHex, deviceIdBytes } from '../store/bundle';
 import { configView, refreshConfig, restNote } from '../store/configState';
 import { anchorView, refreshAnchor } from '../store/anchor';
 
@@ -70,12 +71,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     const c = configView();
     if (!c || fromDevice() || (!c.wan_keys && !c.wifi_keys && !c.sections)) return;
     setFromDevice(true);
-    const s = (o: Record<string, string | boolean> | null | undefined, k: string) => (typeof o?.[k] === 'string' ? (o[k] as string) : '');
-    const w = c.wan_keys;
-    if (w) setWan({ ...wan(), mode: (s(w, 'mode') || 'dhcp') as WanForm['mode'], ip: s(w, 'ip'), gw: s(w, 'gw'), dns: s(w, 'dns'), pppoeUser: s(w, 'pppoe_user'), pppoePass: '',
-      vlanOn: !!s(w, 'vlan'), vlan: s(w, 'vlan'), vlanOuter: s(w, 'vlan_outer'), pcp: s(w, 'pcp'), mgmtOn: !!s(w, 'mgmt_vlan'), mgmtVlan: s(w, 'mgmt_vlan'), mgmtIp: s(w, 'mgmt_ip'), mgmtGw: s(w, 'mgmt_gw') });
-    const f = c.wifi_keys;
-    if (f) setWifi({ ...wifi(), ssid: s(f, 'ssid'), psk: '', security: (s(f, 'security') || 'wpa2') as WifiForm['security'], channel: s(f, 'channel') || 'auto', maxClients: s(f, 'max_clients') });
+    if (c.wan_keys) setWan(wanFormFrom(c.wan_keys));
+    if (c.wifi_keys) setWifi(wifiFormFrom(c.wifi_keys));
     const t = devPolicy();
     if (t) { const parsed = parsePolicyText(t); if (parsed) { setPol(parsed); setPolBase(JSON.stringify(parsed)); } else setPolEditable(false); }
     setPrefilled(true);
@@ -170,8 +167,6 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   /** Bind the bundle to this device when it reports its id (it then refuses the bundle on any other device). */
   // An all-zero id means 'any device' in HQCFG1 (and is what a device without an identity reports), so it is
   // treated as no id: the bundle stays unbound and the drawer says so.
-  const deviceIdHex = () => { const h = anchorView()?.device_id; return h && /^[0-9a-f]{32}$/i.test(h) && /[1-9a-f]/i.test(h) ? h : ''; };
-  const deviceIdBytes = () => (deviceIdHex() ? Uint8Array.from(deviceIdHex().match(/../g)!, (x) => parseInt(x, 16)) : new Uint8Array(16));
   /** After enrollment the device accepts internet / Wi-Fi / firewall / bundle files ONLY when signed by its
    *  owner key (vendor- or other-key signatures are refused; a factory reset keeps the owner key). */
   const keyMismatch = () => { const a = anchorView(); return !!(a?.owner_enrolled && a.owner_key && ownerKey() && a.owner_key !== ownerKey()!.pubHex); };
@@ -179,9 +174,6 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device only accepts settings signed with the signing key it trusts ({anchorView()!.owner_key!.slice(0, 8)}…), and the key in this browser is a different one, so the device would refuse anything signed here. <a href="/admin/identity">Import that key's backup</a> in Administration → Signing key.</p>
   );
   /** A configuration bundle in force: the device refuses single-file wan / wifi / policy uploads (ADR 0059). */
-  const bundleInForce = () => { const c = configView(); return !!c && (c.state === 'trial' || c.state === 'committed') && c.generation > 0; };
-  const takesBundles = () => !!uploadView()?.types.some((t) => t.type === 'config');
-  const bundleGen = () => Math.max(configView()?.generation ?? 0, configView()?.floor ?? 0, uploadView()?.types.find((t) => t.type === 'config')?.generation ?? 0) + 1;
   const bundleProblems = createMemo(() => {
     const e: string[] = [];
     checkWan(wan()).forEach((x) => e.push(`Internet: ${x}`));

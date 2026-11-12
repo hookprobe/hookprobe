@@ -14,8 +14,9 @@ import { networkView, networkState, startNetworkLive, type NetworkView } from '.
 import AppShell from './AppShell';
 import PageHeader from './PageHeader';
 import Gate from './Gate';
+import WifiSheet from './WifiSheet';
 
-const SIGNED = 'Set by the signed WIFI.TXT / WAN.TXT on this device. Changes are signed with your key in the browser and apply on the next reboot.';
+const SIGNED = 'Changes are signed with your signing key in this browser and apply live, without a restart, as a short trial: they keep themselves when everything works, or switch back by themselves.';
 
 /** Shown only when no device answers (preview build), under the Sample-data banner. */
 const SAMPLE: NetworkView = {
@@ -32,6 +33,7 @@ const MODE: Record<string, string> = { dhcp: 'automatic (DHCP)', static: 'static
 const GetOnlineApp: Component = () => {
   const [adv, setAdv] = createSignal(false);
   onMount(() => startNetworkLive());
+  const [sheet, setSheet] = createSignal(false);
 
   const device = () => substrate() === 'heqk';
   const n = (): NetworkView | null => (networkState() === 'absent' && !device() ? SAMPLE : networkView());
@@ -100,7 +102,8 @@ const GetOnlineApp: Component = () => {
                 <p class="l0-card-sub">From {n()!.wifi!.source}</p>
               </Show>
               <div class="l0-card-foot">
-                <a class="hp-btn" href="/network/wifi">Change name or password</a>
+                <button class="hp-btn hp-btn--primary" onClick={() => setSheet(true)}>Change password</button>
+                <a class="hp-btn" href="/network/wifi">More Wi-Fi settings</a>
               </div>
               <p class="pcard-note">{SIGNED}</p>
             </article>
@@ -114,7 +117,7 @@ const GetOnlineApp: Component = () => {
 
         <Show when={adv()}>
           <section aria-label="Advanced" style={{ display: 'flex', 'flex-direction': 'column', gap: '12px' }}>
-            <p class="l0-label">Change advanced settings · signed with your key, applied on the next reboot</p>
+            <p class="l0-label">Change advanced settings · signed with your key, applied live as a trial</p>
             <div class="l0-grid-3">
               <a class="l0-card" href="/network/wan/advanced" style={{ 'text-decoration': 'none', color: 'inherit' }}><b>Internet →</b><span class="l0-card-sub">DHCP · Static · PPPoE · ISP VLAN · management VLAN</span></a>
               <a class="l0-card" href="/network/wifi" style={{ 'text-decoration': 'none', color: 'inherit' }}><b>Wi-Fi →</b><span class="l0-card-sub">Name · password · WPA2/WPA3 · channel</span></a>
@@ -135,6 +138,7 @@ const GetOnlineApp: Component = () => {
           </section>
         </Show>
       </main>
+      <Show when={sheet()}><WifiSheet onClose={() => setSheet(false)} preview={!device()} /></Show>
     </AppShell>
   );
 };
