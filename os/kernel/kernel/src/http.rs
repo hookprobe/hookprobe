@@ -639,6 +639,12 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 }
                 None => w.raw(",\"last_crash\":null"),
             }
+            // Audit A7: the Wi-Fi self-heal state (additive). "degraded: ..." = Wi-Fi is off after a failed recovery in
+            // the boot after the one Wi-Fi reboot; wired LAN, WAN and management keep running.
+            {
+                let (hs, hc, hk, hb, hr, hpr) = crate::wifiheal::status();
+                let _ = write!(w, ",\"wifi_heal\":{{\"state\":\"{}\",\"last_class\":\"{}\",\"kicks\":{},\"bounces\":{},\"reloads\":{},\"after_wifi_reboot\":{}}}", hs, hc, hk, hb, hr, hpr);
+            }
             // ADR 0050 D4 step 1 / D5: where Mission Control requests are parsed, and the EL0 server's health
             #[cfg(feature = "mctls")]
             {
