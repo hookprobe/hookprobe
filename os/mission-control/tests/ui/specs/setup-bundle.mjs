@@ -79,4 +79,18 @@ export default async function (t) {
   state.config = { ...state.config, state: 'committed' };
   await page.waitForTimeout(5600);
   ok(await vis(page.locator('text=Kept: you\'re online with your new settings')), 'setup confirms when the device keeps the settings');
+
+  // Running setup again over the committed bundle: it would drop the firewall, so Launch is blocked.
+  await go('/setup', 1500);
+  t.at = 'setup again: start';
+  await page.click('button:has-text("Start")'); await page.waitForTimeout(300);
+  t.at = 'setup again: internet';
+  await page.locator('.setup-cta.hp-btn--primary').click(); await page.waitForTimeout(300);
+  t.at = 'setup again: wifi';
+  await page.fill('input[placeholder]:not([type=password])', 'Popescu-Home');
+  await page.fill('input[type=password]', 'Correct horse battery 9');
+  await page.click('button:has-text("Continue")'); await page.waitForTimeout(300);
+  await page.click('button:has-text("Continue")'); await page.waitForTimeout(300);
+  ok(await vis(page.locator('text=would remove its firewall')) && await page.locator('button:has-text("Launch")').isDisabled(),
+    'setup over a bundle in force is blocked: it would remove the firewall (a bundle is the whole configuration)');
 }
