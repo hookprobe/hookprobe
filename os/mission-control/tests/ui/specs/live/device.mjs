@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 const ROUTES = ['/', '/mission', '/workspace', '/observe/events', '/observe/live', '/detect/feed', '/investigate/queue',
   '/investigate/incident', '/protect/firewall', '/protect/policies', '/network/zones', '/network/map', '/network/devices',
   '/network/dns', '/network/wan', '/network/wan/advanced', '/network/wifi', '/automate/playbooks', '/intelligence/cves',
-  '/customers/managed', '/business/dashboard', '/knowledge/blog', '/admin/identity', '/admin/feedback', '/setup'];
+  '/customers/managed', '/business/dashboard', '/knowledge/blog', '/admin/identity', '/admin/feedback', '/admin/config', '/admin/shell', '/setup'];
 
 export default async function (t) {
   const { page, ok, go, vis } = t;

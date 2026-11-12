@@ -125,3 +125,26 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
 /* Feedback and diagnostics */
 .pro-grid { display: grid; gap: 16px; align-items: start; }
 .pro-pre { font: 12px/1.5 var(--hp-font-mono); background: var(--hp-surface); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); padding: 10px 12px; color: var(--hp-text-secondary); overflow-x: auto; }
+
+/* Configuration and keys (/admin/config) */
+.cfg-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; align-items: start; }
+.cfg-grid--2 { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: 16px; }
+@media (max-width: 1023px) { .cfg-grid, .cfg-grid--2 { grid-template-columns: minmax(0, 1fr); } }
+.cfg-big { font-size: 18px; font-weight: 700; color: var(--hp-text-primary); }
+.cfg-refused { color: #ffd27a; }
+
+/* Management shell (/admin/shell) */
+.shell-info { display: flex; flex-wrap: wrap; gap: 8px 18px; font-size: 13px; color: var(--hp-text-secondary); border: 1px dashed var(--hp-border); border-radius: var(--hp-radius); padding: 10px 14px; }
+.shell-grid { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; align-items: start; margin-top: 16px; }
+@media (max-width: 1023px) { .shell-grid { grid-template-columns: minmax(0, 1fr); } }
+.shell-console { border: 1px solid var(--hp-border); border-radius: var(--hp-radius-lg); overflow: hidden; display: flex; flex-direction: column; min-height: 420px; background: var(--hp-surface); }
+.shell-screen { flex: 1 1 auto; margin: 0; padding: 14px; font: 13px/1.6 var(--hp-font-mono); white-space: pre-wrap; overflow: auto; max-height: 60vh; color: var(--hp-text-primary); }
+.shell-input { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-top: 1px solid var(--hp-border); }
+.shell-prompt { font: 600 13px var(--hp-font-mono); color: var(--hp-cyan); }
+.shell-input input { flex: 1 1 auto; font: 16px var(--hp-font-mono); min-height: 44px; background: none; border: none; color: var(--hp-text-primary); }
+.shell-input input:focus-visible { outline: 2px solid var(--hp-cyan); outline-offset: 2px; }
+.shell-cmds { display: flex; flex-direction: column; gap: 8px; }
+.shell-cmd { font: 13px var(--hp-font-mono); text-align: left; min-height: 40px; padding: 6px 10px; background: var(--hp-surface); color: var(--hp-text-primary); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); cursor: pointer; }
+.shell-cmd:hover:not(:disabled) { border-color: var(--hp-cyan); }
+.shell-cmd:disabled { opacity: .5; cursor: not-allowed; }
+@media (pointer: coarse) { .shell-cmd { min-height: 44px; } }
