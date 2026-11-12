@@ -230,8 +230,8 @@ def main():
         print("IN1 reset — power-cycled for a normal eMMC boot")
     elif a.cmd == "rpiboot":
         # Operator procedure (2026-11-12, proven at the bench with the IN1/IN2 LEDs): energise IN1 (power OFF) and IN2
-        # (nRPIBOOT) together, wait for the caps to drain, then release BOTH — IN1 first, so nRPIBOOT is still held at
-        # the instant power returns and the ROM latches USB boot. Asserting nRPIBOOT first and cycling power after it
+        # (nRPIBOOT) together, wait for the caps to drain, release IN1 (board powers up with nRPIBOOT held), then release
+        # IN2 3 s later. Asserting nRPIBOOT first and cycling power after it
         # left IN1 unswitched (one click). Each step is read back on the Nano.
         r.set(POWER, True)
         r.set(RPIBOOT, True)
@@ -243,8 +243,12 @@ def main():
             print(f"  (wait {a.off_secs:.0f} s — caps drain)")
         else:
             time.sleep(a.off_secs)
-        r.set(POWER, False)
-        r.set(RPIBOOT, False)
+        r.set(POWER, False)  # release IN1: the board powers up with nRPIBOOT still held
+        if isinstance(r, Paper):
+            print("  (wait 3 s)")
+        else:
+            time.sleep(3.0)
+        r.set(RPIBOOT, False)  # release IN2 3 s later (operator procedure)
         if isinstance(r, Paper):
             print("  (wait up to --rom-timeout for the boot ROM 0a5c:2712 on USB, then: rpiboot -d mass-storage-gadget64, flash)")
             return
