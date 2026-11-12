@@ -8,7 +8,7 @@
  *         serves it; otherwise said so — never a sample count presented as yours
  *   Feeds STIX/TAXII and MISP subscriptions are a control-plane feature: shown greyed with why
  */
-import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { type Component, For, Show, createEffect, createMemo, createSignal, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { formatTime } from '../store/api';
@@ -36,6 +36,10 @@ const IntelligenceApp: Component = () => {
   const sample = () => healthChecked() && !substrate();
   const cves = () => (sample() ? SAMPLE_CVES : exploitFindings().map((f) => ({ ...f, assets: [] as string[] })));
   const cvesServed = () => sample() || exploitStatus() === 'live';
+  // The page is /intelligence/cves and the board opens on CVEs: start there once CVEs are actually served (sample, or a
+  // device reporting exploit findings); otherwise stay on IOC rather than open on an empty card. Only until the user picks.
+  let picked = false;
+  createEffect(() => { if (!picked && cvesServed()) setTab('cves'); });
   const selected = () => cves().find((c) => c.cve === sel()) ?? null;
 
   const iocHits = createMemo(() => {
@@ -63,7 +67,7 @@ const IntelligenceApp: Component = () => {
         </div>
         <div class="tabs" role="tablist" aria-label="Intelligence views">
           <For each={[['ioc', 'IOC'], ['cves', 'CVEs'], ['feeds', 'Feeds']] as [Tab, string][]}>{([t, label]) => (
-            <button class="tab" role="tab" aria-selected={tab() === t} onClick={() => setTab(t)}>{label}</button>
+            <button class="tab" role="tab" aria-selected={tab() === t} onClick={() => { picked = true; setTab(t); }}>{label}</button>
           )}</For>
         </div>
 
