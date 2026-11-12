@@ -77,8 +77,10 @@ $UP --config-confirm "live check B" 2>&1 | grep -qE '"committed": ?true'; chk $?
 # --- C: a static WAN whose gateway never answers -> LIVE revert to gen B after the 120-s window ---
 sed 's/^gw=.*/gw=10.100.0.254/' "$T/ws.txt" > "$T/wd.txt"
 bundle --wan "$T/wd.txt" --policy "$T/pa.txt"
-grep -q '"needs_confirm": false' "$T/r$G"; chk $? "C1 dead-gateway bundle gen $G: live, auto window (management unchanged)"
-waitlog "reverted LIVE to generation $GS" 100; chk $? "C2 not usable within the window -> reverted LIVE to gen $GS"
+# cfgd touches_mgmt(): any WAN section with mgmt / vlan / pcp lines needs the owner's confirm (presence-based, by
+# design) — every bench WAN carries vlan=100. An unhealthy trial still reverts LIVE when its window passes.
+grep -q '"applies": "live"' "$T/r$G" && grep -q '"needs_confirm": true' "$T/r$G"; chk $? "C1 dead-gateway bundle gen $G: live trial (vlan lines -> needs confirm, never confirmed)"
+waitlog "reverted LIVE to generation $GS" 180; chk $? "C2 not usable within the window -> reverted LIVE to gen $GS"
 sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "C3 the last-known-good WAN works again"
 [ "$(boots)" = "$B0" ]; chk $? "C4 no reboot so far (boot banners unchanged: $B0)"
 rule7; chk $? "C5 rule 7 after the live revert"
@@ -93,7 +95,7 @@ fi
 grep -v '^#' "$ROOT/docs/design/bench-task26/wan-vlan-mgmtdhcp.txt" > "$T/wh.txt"
 bundle --wan "$T/wh.txt" --policy "$T/pa.txt"; GE=$G
 waitlog "\[WAN\] live apply: mode DHCP" 30; chk $? "E1 DHCP WAN live (gen $G)"
-waitlog "bundle generation $G COMMITTED" 60; chk $? "E2 committed by itself once leased"
+sleep 15; $UP --config-confirm "live check E" 2>&1 | grep -qE '"committed": ?true'; chk $? "E2 owner confirm commits gen $G once leased (vlan lines -> needs confirm)"
 mark=$(stat -c %s "$LOG"); $UP --reboot "live check: survives reboot" >/dev/null 2>&1; sleep 20
 for _ in $(seq 1 60); do curl -sk -o /dev/null -m 5 "$MC/" && break; sleep 3; done
 since | grep -aq "generation $GE in force (committed)"; chk $? "E3 after a reboot gen $GE is in force (last-known-good)"
