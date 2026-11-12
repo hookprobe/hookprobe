@@ -91,6 +91,19 @@ export function buildWan(f: WanForm): string {
   return assertCanonical(l.join('\n') + '\n');
 }
 
+type Keys = Record<string, string | boolean> | null | undefined;
+const kv = (o: Keys, k: string) => (typeof o?.[k] === 'string' ? (o[k] as string) : '');
+/** The internet form from the keys the device reports for the bundle in force (kernel #1055). Secrets are never served:
+ *  `pppoePass` starts empty and must be typed again. */
+export function wanFormFrom(w: Keys): WanForm {
+  return { mode: (kv(w, 'mode') || 'dhcp') as WanForm['mode'], ip: kv(w, 'ip'), gw: kv(w, 'gw'), dns: kv(w, 'dns'), pppoeUser: kv(w, 'pppoe_user'), pppoePass: '',
+    vlanOn: !!kv(w, 'vlan'), vlan: kv(w, 'vlan'), vlanOuter: kv(w, 'vlan_outer'), pcp: kv(w, 'pcp'), mgmtOn: !!kv(w, 'mgmt_vlan'), mgmtVlan: kv(w, 'mgmt_vlan'), mgmtIp: kv(w, 'mgmt_ip'), mgmtGw: kv(w, 'mgmt_gw') };
+}
+/** The Wi-Fi form from the keys in force; `psk` starts empty (never served). */
+export function wifiFormFrom(f: Keys): WifiForm {
+  return { ssid: kv(f, 'ssid'), psk: '', security: (kv(f, 'security') || 'wpa2') as WifiForm['security'], channel: kv(f, 'channel') || 'auto', maxClients: kv(f, 'max_clients') };
+}
+
 export function checkWifi(f: WifiForm): string[] {
   const e: string[] = [];
   const ssid = new TextEncoder().encode(f.ssid);
