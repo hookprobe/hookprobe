@@ -14,8 +14,15 @@
   policy-sign.py sign-wan KEYFILE WAN.TXT GEN OUT.SIG           # WAN mode / VLANs / mgmt_floor (<= 512 B; audit finding 11)
   policy-sign.py enroll-proof OWNERKEY                          # ADR 0058 D3: public_key + proof for POST /api/anchor/enroll
   policy-sign.py rotate OLDKEY NEWKEY GEN                       # ADR 0058 D3: public_key + proof + signature for /api/anchor/rotate
-  policy-sign.py challenge-sign OWNERKEY DEVICE_ID NONCE       # ADR 0059 4c: the hsh line "owner elevate <a> <b>" (HQCHAL1)
+  policy-sign.py mgmt-sign OWNERKEY --device-id HEX --epoch HEX --seq N --msg confirm|rollback|stage
+                 [--generation N --digest HEX | --bundle HQCFG1.BIN] [--arg UPLOAD_ID]
+                                                                # R6 = D: an HQMGMT1 command envelope (312 hex)
 
+HQMGMT1 envelope (156 B, R6 = D): "HQMGMT1\\0" | version u16 = 1 | msg u16 (20 confirm, 21 rollback, 22 stage) |
+device_id[16] | epoch[8] | seq u64 | arg u64 | generation u64 | digest[32] | Ed25519(K_own, "HQMGMT1-SIG" || bytes 0..92),
+all little-endian. device_id / epoch / next sequence / generation / digest come from GET /api/config ("envelope")
+or the hsh command `owner challenge`; confirm / rollback bind the bundle in force (digest = sha256 of the HQCFG1
+bundle file, --bundle computes it). The device verifies with the enrolled owner public key; K_own never leaves you.
 POLICY.SIG (512 B): "HQPSIG1\\0" | gen u64 LE | sha256(POLICY.TXT) | Ed25519(key, "HQPOL1"|gen LE|sha256) | 0-pad.
 The device verifies it with the operator key compiled into its boot-signed image, before parsing the policy,
 and refuses a generation below the image's floor.
@@ -43,6 +50,41 @@ def load(path):
 
 def pubhex(k):
     return k.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
+
+
+MGMT_MSG = {"confirm": 20, "rollback": 21, "stage": 22}
+
+
+def mgmt_args(rest):
+    """--device-id HEX --epoch HEX --seq N --msg NAME [--generation N] [--digest HEX] [--bundle FILE] [--arg N]"""
+    kv = {}
+    it = iter(rest)
+    for k in it:
+        if not k.startswith("--"):
+            sys.exit(f"unexpected argument {k}")
+        kv[k[2:].replace("-", "_")] = next(it, None)
+    if kv.get("bundle"):
+        kv["digest"] = hashlib.sha256(open(kv.pop("bundle"), "rb").read()).hexdigest()
+    if kv.get("msg") in ("confirm", "rollback") and (kv.get("generation") is None or kv.get("digest") is None):
+        sys.exit("confirm / rollback bind the bundle in force: --generation and --digest (or --bundle), as /api/config 'envelope' shows them")
+    try:
+        return dict(device_id=bytes.fromhex(kv["device_id"]), epoch=bytes.fromhex(kv["epoch"]), seq=int(kv["seq"]),
+                    msg=kv["msg"], arg=int(kv.get("arg") or "0", 0), generation=int(kv.get("generation") or 0),
+                    digest=bytes.fromhex(kv.get("digest") or "00" * 32))
+    except (KeyError, TypeError, ValueError) as e:
+        sys.exit(f"mgmt-sign: {e!r} (needs --device-id --epoch --seq --msg)")
+
+
+def mgmt_envelope(k, device_id, epoch, seq, msg, arg=0, generation=0, digest=b"\0" * 32):
+    """The HQMGMT1 envelope bytes (156) signed by the owner key k (R6 = D)."""
+    if msg not in MGMT_MSG:
+        sys.exit(f"--msg must be one of {', '.join(MGMT_MSG)}")
+    if len(device_id) != 16 or len(epoch) != 8 or len(digest) != 32:
+        sys.exit("device_id is 16 bytes, epoch 8, digest 32 (hex as /api/config 'envelope' shows them)")
+    body = (b"HQMGMT1\0" + struct.pack("<HH", 1, MGMT_MSG[msg]) + device_id + epoch
+            + struct.pack("<QQQ", seq, arg, generation) + digest)
+    assert len(body) == 92
+    return body + k.sign(b"HQMGMT1-SIG" + body)
 
 
 def main():
@@ -92,12 +134,8 @@ def main():
         old, new, gen = load(a[1]), load(a[2]), int(a[3])
         pk = bytes.fromhex(pubhex(new))
         print(f"public_key={pk.hex()}\nproof={new.sign(b'HQENR1' + pk).hex()}\ngeneration={gen}\nsignature={old.sign(b'HQROT1' + pk + struct.pack('<Q', gen)).hex()}")
-    elif a[:1] == ["challenge-sign"] and len(a) == 4:
-        k, dev, nonce = load(a[1]), bytes.fromhex(a[2]), bytes.fromhex(a[3])
-        if len(dev) != 16 or len(nonce) != 16:
-            sys.exit("device_id and nonce are 16 bytes (32 hex) each, as `owner challenge` prints them")
-        sig = k.sign(b"HQCHAL1" + dev + nonce).hex()
-        print(f"owner elevate {sig[:64]} {sig[64:]}")
+    elif a[:1] == ["mgmt-sign"] and len(a) >= 2:
+        print(mgmt_envelope(load(a[1]), **mgmt_args(a[2:])).hex())
     else:
         sys.exit(__doc__)
 

@@ -33,9 +33,8 @@ Status: built, QEMU (`[P-cfgbundle]` 24/24).
 - **Refusal at stage:** a bundle with no management path is refused at upload. This is checked against the device's real addressing.
 - **Refused committed bundle:** a committed bundle that no longer verifies tries the other half first.
 - **API:**
-  - `GET /api/config`
-  - `POST /api/config/confirm`
-  - `POST /api/config/rollback`
+  - `GET /api/config` — additive (R6 = D): `envelope: {format: "HQMGMT1", device_id, epoch, next_seq, generation, digest, owner_enrolled}` (hex strings; `digest` = SHA-256 of the HQCFG1 bundle in force, zeros = none). This is what a confirm / rollback envelope must bind.
+  - `POST /api/config/confirm`, `POST /api/config/rollback` — **hard switch (R6 = D, operator 2026-11-12):** authorised only by a required `envelope` field (312 hex = the HQMGMT1 envelope signed by the enrolled owner key); the `owner_key` re-authentication no longer authorises a change and is ignored. `reason`, `permanent=true`, `seq`, Origin + `X-HQ-CSRF` stay as the transport gate. Refusals with an envelope problem are `403 {"ok":false,"refused":"refused: …"}`. Full request format, signing and error table for the UI: `docs/design/mgmt-envelope-api.md`.
 
 **Bundle semantics:** a bundle is complete for the sections it carries. For a missing section, the per-file source applies.
 
@@ -54,14 +53,18 @@ Status: built, QEMU (`[P-cfgd]`). Metal: pending (trial, commit and revert on th
   - `kernel/src/mgmtabi.rs` serves them from the same producers as `GET /api/*`, with a role check.
   - `el0-hsh` is an EL0 excursion shell: a bounded parser per spec §9, a static registry, and a two-phase flow (line → request → reply → text). It has no heap and no state.
   - The read commands are `info`, `version`, `uptime`, `wan status` / `interface show wan`, `qsecbit status`, `config status`, `owner status` and `security posture`.
-  - Transport: only the development `POST /api/hsh` (`hsh-dev`, off by default, refused in release builds), guarded by the owner session plus Origin and CSRF, with each request journaled. The production transport is the operator's open decision (R6), and there is no UART RX code.
-- **4b — built, QEMU validation running.**
-  - `CFG_CONFIRM` / `CFG_ROLLBACK` (role operate) and `CFG_STAGE <upload-id>` (role config, the caller's verified `config` upload).
-  - The dispatcher journals each operation, allowed or refused. Mission Control's `/api/config/confirm|rollback` now calls the same dispatch after its guards and re-authentication, so both clients get one authorisation decision and write one journal record.
-  - The shell's `view` role is denied these operations until elevation (4c).
-- **4c** (owner commands, `HQCHAL1` elevation): next.
+  - Transport (R6 = D, operator 2026-11-12): the web carrier `POST /api/hsh` (feature `hsh`, carried by the AP product `apmc`; `hsh-dev` stays development-only and refused in release builds). Guards: the owner session, Origin, CSRF; each request journaled (command words only). Body: line 1 = the command line; optional line 2 = an HQMGMT1 envelope (312 hex) for a privileged command. The envelope goes from the carrier straight to the EL1 verifier; the EL0 parser never sees it. There is no UART RX code.
+- **4b — built, QEMU.**
+  - `CFG_CONFIRM` / `CFG_ROLLBACK` and `CFG_STAGE <upload-id>` (the caller's verified `config` upload).
+  - The dispatcher journals each operation, allowed or refused. Mission Control's `/api/config/confirm|rollback` call the same dispatch after their guards, so all clients get one authorisation decision and write one journal record.
+- **4c — R6 = D, built, QEMU (`[P-hsh-web]`, `[P-mgmtabi]`).** Every message above view is authorised ONLY by an HQMGMT1 envelope signed by the enrolled owner key `K_own`; the session's role never authorises a change, and session elevation (`HQCHAL1`, `owner elevate`) is retired. `owner challenge` (view) shows what to bind.
+  - Envelope (156 B, little-endian): `"HQMGMT1\0"` | version u16 = 1 | msg u16 (20 confirm, 21 rollback, 22 stage) | device_id[16] | epoch[8] | seq u64 | arg u64 (stage: upload id) | generation u64 | digest[32] | Ed25519(K_own, `"HQMGMT1-SIG"` ‖ bytes 0..92).
+  - Verified in `mgmtabi` (EL1) before dispatch: the owner key's signature, this device id, this boot's epoch, seq above the floor (then consumed), the operation and argument, and for confirm / rollback the generation + digest of the bundle in force (else "something else is on trial / in force").
+  - Replay: a RAM sequence floor under a per-boot epoch drawn from the hardware TRNG (CM5). A reboot draws a new epoch, so envelopes signed for an earlier boot no longer match; nothing is written to the eMMC per operation. No TRNG word = no epoch = every privileged operation refused.
+  - Owner side: `os/kernel/tools/policy-sign.py mgmt-sign` builds an envelope; `hq-upload.py --sign-key … --config-confirm|--config-rollback|--hsh` signs locally and sends it. The private key never reaches the device.
+  - Consequence: with no owner key enrolled, nothing can confirm or roll back by hand (the trial still auto-commits when healthy or reverts after its window).
 
 ## Not done here
-- **Production transport (R6):** awaiting the operator's decision.
+- **UART carrier:** not built (R6 = D keeps the carrier free of authority; a UART carrier would be view + envelope paste).
 - **RPMB:** deferred until after the MVP.
 - **Owner-signed reset (`HQRST1`):** ADR 0059 Phase 2.

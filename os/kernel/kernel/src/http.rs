@@ -311,38 +311,24 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
-    // ADR 0059 step 4a: the native shell over the authenticated session — a DEVELOPMENT transport only (`hsh-dev`,
-    // off by default, never in a release build): the production transport is the operator's open decision (hsh spec
-    // R6). Role = view (read-only commands).
-    #[cfg(feature = "hsh-dev")]
+    // ADR 0059 step 4a, R6 = D (operator 2026-11-12): the native shell's web carrier over the authenticated owner
+    // session (feature `hsh`). Body: line 1 = the command line; optional line 2 = an HQMGMT1 envelope (312 hex) signed
+    // off-device by the owner key. The session runs view commands only; a privileged command runs only if
+    // mgmtabi::dispatch (EL1) verifies the envelope — the carrier carries no authority.
+    #[cfg(feature = "hsh")]
     if req.post && req.path == "/api/hsh" {
         // same guards as every other /api write: the owner session (above), Origin, CSRF
         if !crate::actionapi::origin_ok(req.origin, req.host) || !crate::mcauth::csrf_ok(req.session, req.csrf) {
             return json(scratch, |w| w.raw("{\"ok\":false,\"refused\":\"origin or csrf\"}")).with_status(403);
         }
-        let line = req.body.split(|&b| b == b'\n').next().unwrap_or(b"");
-        let line = line.strip_suffix(b"\r").unwrap_or(line);
-        // every shell request is journaled as an hsh op (the baseline for the 4b "MC and hsh produce the same
-        // journal record" test): the command word(s), never arguments that could carry secrets
-        {
-            let mut why = [0u8; 64];
-            let mut k = 0;
-            for (i, w) in line.split(|&b| b == b' ').filter(|w| !w.is_empty()).take(2).enumerate() {
-                if i > 0 && k < why.len() {
-                    why[k] = b' ';
-                    k += 1;
-                }
-                for &c in w.iter().take(24) {
-                    if k < why.len() && (0x21..0x7f).contains(&c) {
-                        why[k] = c;
-                        k += 1;
-                    }
-                }
-            }
-            let _ = crate::ownerapi::audit_artifact("hsh", 1, &why[..k], crate::mcauth::session_tag(req.session), now_ms);
-        }
+        let mut lines = req.body.split(|&b| b == b'\n').map(|l| l.strip_suffix(b"\r").unwrap_or(l));
+        let line = lines.next().unwrap_or(b"");
+        let mut env = [0u8; hal::mgmtabi::ENV_LEN];
+        // a second line that is not a well-formed envelope is passed on as "no envelope": refused + journaled
+        let env_ok = lines.next().is_some_and(|l| crate::mgmtabi::unhex_envelope(l, &mut env));
         let mut text = [0u8; 2048];
-        let n = crate::hsh::run_line(line, hal::mgmtabi::ROLE_VIEW, crate::mcauth::session_tag(req.session), now_ms, &mut text);
+        // journaled as an hsh op (command words only, never arguments or the envelope) inside hsh::web
+        let n = crate::hsh::web(line, if env_ok { &env[..] } else { &[] }, crate::mcauth::session_tag(req.session), now_ms, &mut text);
         let k = n.min(scratch.len());
         scratch[..k].copy_from_slice(&text[..k]);
         return Response { status: 200, ctype: "text/plain; charset=utf-8", body: Body::Scratch(k), location: None, set_cookie: None };
@@ -351,7 +337,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     if req.post && (req.path == "/api/config/confirm" || req.path == "/api/config/rollback") {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
         let confirm = req.path == "/api/config/confirm";
-        return match crate::ownerapi::config_action(&c, req.body, auth, confirm) {
+        return match crate::ownerapi::config_action(&c, req.body, confirm) {
             Ok(g) => {
                 crate::cfgd::note_owner(req.peer);
                 json(scratch, |w| {
@@ -364,7 +350,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 w.string(why);
                 w.raw("}");
             })
-            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+            .with_status(if matches!(why, "origin" | "csrf") || why.starts_with("refused: ") { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
     if req.post && req.path == "/api/factory-reset" {
@@ -698,6 +684,23 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = write!(w, "],\"needs_confirm\":{},\"window_s\":{},\"remaining_s\":{},\"last\":{{\"result\":\"{}\",\"generation\":{}}},\"policy_generation\":{}}}",
                     crate::cfgd::confirm_required(), win, left, lr, lg, crate::cfgd::policy_gen());
             }
+            // R6 = D (additive): what the owner's HQMGMT1 envelope for confirm / rollback must bind — this device, this
+            // boot's epoch, the next sequence, the bundle in force (generation + SHA-256 of the HQCFG1 bundle)
+            {
+                let c = crate::mgmtabi::challenge();
+                let hx = |w: &mut crate::mcstate::JsonBuf, b: &[u8]| {
+                    for x in b {
+                        let _ = write!(w, "{:02x}", x);
+                    }
+                };
+                w.raw(",\"envelope\":{\"format\":\"HQMGMT1\",\"device_id\":\"");
+                hx(w, &c.device_id);
+                w.raw("\",\"epoch\":\"");
+                hx(w, &c.epoch);
+                let _ = write!(w, "\",\"next_seq\":{},\"generation\":{},\"digest\":\"", c.next_seq, c.generation);
+                hx(w, &c.digest);
+                let _ = write!(w, "\",\"owner_enrolled\":{}}}", c.owner_enrolled);
+            }
             // design §3.8 (additive, before the closing brace): configuration at rest
             let ar = crate::artstore::at_rest();
             let _ = write!(w, ",\"at_rest\":{{\"sealed\":{},\"secrets_protected\":{},\"migrated\":{},\"device_key\":{}}}}}", ar.sealed, ar.secrets_protected, ar.migrated, ar.device_key);
@@ -717,7 +720,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             };
             w.raw("{\"vendor_key\":");
             hex(w, crate::policysig::key());
-            // ADR 0059: this device's id for device-bound HQCFG1 bundles and HQCHAL1 elevation (public)
+            // ADR 0059: this device's id for device-bound HQCFG1 bundles and HQMGMT1 envelopes (public)
             let dev = crate::config_device_id();
             if dev == [0; 16] {
                 w.raw(",\"device_id\":null"); // no device identity (no SRK, e.g. QEMU): bundles stay unbound

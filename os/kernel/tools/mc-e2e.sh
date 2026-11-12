@@ -43,7 +43,8 @@ fi
 # Private target dir: never overwrite the shared target/ other builders/sessions flash from.
 export CARGO_TARGET_DIR=target/mc
 # wpa3: the SAE station-frame walk in el0-lansvc ([P-lansvc-sae], ADR 0050 D4 step 5c) needs the sae crate
-cargo build -p kernel --features mcserve,wpa3 >"$RUN/build.log" 2>&1 || { tail -20 "$RUN/build.log"; exit 2; }
+# hsh: the shell's web carrier POST /api/hsh + [P-hsh-web] (R6 = D, owner-signed HQMGMT1 envelopes)
+cargo build -p kernel --features mcserve,wpa3,hsh >"$RUN/build.log" 2>&1 || { tail -20 "$RUN/build.log"; exit 2; }
 KERNEL=target/mc/aarch64-unknown-none-softfloat/debug/kernel
 
 echo "[1b] boot disk with an owner key (ADR 0037 D3: the device stores only a salted verifier)"
@@ -57,8 +58,29 @@ salt = os.urandom(16)
 line = f"HQOWN1 {salt.hex()} {hashlib.sha256(salt + sys.argv[2].encode()).hexdigest()}"
 open(sys.argv[1], "w").write(line.ljust(127) + "\n")
 PY
-mcopy -i "$PART" "$PART.owner" ::OWNER.TXT && dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none
-rm -f "$PART" "$PART.owner"
+# R6 = D: a TEST owner key K_own (seed 0x6b x 32, the same test key [P-hsh-web] uses). QEMU has no DataVolume to
+# enroll into, so the public half goes on the test disk (MGMTPK.TXT, read only by the QEMU build); the private half
+# stays here and signs HQMGMT1 envelopes with tools/policy-sign.py (mgmt-sign), as an owner's machine would.
+KOWN="$RUN/kown.pem"
+python3 -I - "$KOWN" "$PART.mgmtpk" <<'PY'
+import sys, os
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization as ser
+k = Ed25519PrivateKey.from_private_bytes(bytes([0x6b]) * 32)
+old = os.umask(0o077)
+open(sys.argv[1], "wb").write(k.private_bytes(ser.Encoding.PEM, ser.PrivateFormat.PKCS8, ser.NoEncryption()))
+os.umask(old)
+open(sys.argv[2], "w").write(k.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex() + "\n")
+PY
+TEST_KOWN_PK=$(cat "$PART.mgmtpk" | tr -d '\n')
+mcopy -i "$PART" "$PART.owner" ::OWNER.TXT && mcopy -i "$PART" "$PART.mgmtpk" ::MGMTPK.TXT && dd if="$PART" of="$DISK" bs=512 seek=2048 conv=notrunc status=none
+rm -f "$PART" "$PART.owner" "$PART.mgmtpk"
+# SIGN <confirm|rollback> [KEYFILE]: an HQMGMT1 envelope (312 hex) bound to what GET /api/config "envelope" reports now
+SIGN() { curl -s -m 10 $C "$B/api/config" | python3 -I -c "
+import sys, json, importlib.util
+spec = importlib.util.spec_from_file_location('ps', sys.argv[3]); ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
+e = json.load(sys.stdin)['envelope']
+print(ps.mgmt_envelope(ps.load(sys.argv[2]), bytes.fromhex(e['device_id']), bytes.fromhex(e['epoch']), int(e['next_seq']), sys.argv[1], 0, int(e['generation']), bytes.fromhex(e['digest'])).hex())" "$1" "${2:-$KOWN}" "$PWD/tools/policy-sign.py"; }
 JAR=$(mktemp)
 
 echo "[2] boot heqk in QEMU (host :$HTTP→80, :$P4444→4444, :$P23→23)"
@@ -103,6 +125,13 @@ grep -qa "\[P-lansvc\] PASS" "$LOG" && ok "Shield DNS parsing in the EL0 LAN-ser
 grep -qa "\[P-lansvc-sae\] PASS" "$LOG" && ok "ADR 0050 D4 step 5c: the WPA3-SAE station-frame walk in el0-lansvc — same PMK as in-kernel, malformed / oversized refused, fault rejects + forgets, no SAE material on the IO page ([P-lansvc-sae])" || bad "lansvc-sae: $(grep -a 'P-lansvc-sae' "$LOG" | head -2 | cut -c1-400)"
 grep -qa "\[P-hsh\] PASS" "$LOG" && ok "ADR 0059 step 4a: the EL0 shell — parser limits, read commands via the management ABI, role enforced by the kernel, fault contained ([P-hsh])" || bad "hsh: $(grep -a 'P-hsh\|\[HSH\]' "$LOG" | head -3 | cut -c1-400)"
 grep -qa "\[P-mgmtabi\] PASS" "$LOG" && ok "ADR 0059 D9: management ABI read messages answer from the /api producers ([P-mgmtabi])" || bad "mgmtabi: $(grep -a 'P-mgmtabi' "$LOG" | head -2 | cut -c1-300)"
+grep -qa "\[P-hsh-web\] PASS" "$LOG" && ok "R6 = D: owner-signed HQMGMT1 envelopes on the web carrier — view on the session alone; session-only / wrong key / other device / other boot / replay / gen N while N+1 on trial / other operation / tampered refused; valid accepted; each journaled ([P-hsh-web])" || bad "hsh-web: $(grep -a 'P-hsh-web' "$LOG" | head -2 | cut -c1-600)"
+HCS=$(curl -s -m 10 $C "$B/api/session" | jget "d['csrf']")
+HSH() { curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $HCS" -H 'Content-Type: text/plain' --data-binary "$1" "$B/api/hsh"; }
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 --data-binary 'info' "$B/api/hsh")" = 401 ] && ok "POST /api/hsh requires the owner session" || bad "/api/hsh reachable without a session"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 $C -H 'Origin: https://evil.example' -H "X-HQ-CSRF: $HCS" --data-binary 'info' "$B/api/hsh")" = 403 ] && ok "POST /api/hsh refuses a foreign Origin" || bad "/api/hsh foreign origin"
+HSH info | grep -q "HEQK Management Environment" && ok "web console: a view command answers on the session" || bad "web console info: $(HSH info | head -3)"
+HSH "config confirm" | grep -q "needs an owner-signed envelope" && ok "web console: config confirm on the session alone is refused (R6 = D)" || bad "web console confirm: $(HSH 'config confirm' | head -3)"
 HP=$(curl -s -m 10 $C "$B/api/health")
 echo "$HP" | jget "d['http_parser']['where']=='el0' and d['http_parser']['requests']>5 and d['http_parser']['parser_faults']==0 and d['http_parser']['server_faults']==0" | grep -q True && ok "Mission Control requests are parsed in the EL0 server (ADR 0050 D4 step 1), no faults: $(echo "$HP" | jget "d['http_parser']")" || bad "http parser placement: $(echo "$HP" | jget "d.get('http_parser')")"
 echo "$HP" | jget "d['dns_parser']['where']=='el0' and d['dns_parser']['el0_messages']>0" | grep -q True && ok "/api/health dns_parser: el0 $(echo "$HP" | jget "d['dns_parser']")" || bad "dns_parser: $(echo "$HP" | jget "d.get('dns_parser')")"
@@ -158,26 +187,37 @@ grep -q 're-authentication failed' <<<"$RB" && ok "G49: /api/reboot refuses with
 curl -s -m 10 $C "$B/api/network" | jget "(lambda k: k is None or (len(k)==64 and all(c in '0123456789abcdef' for c in k)))(d['trust_anchor']['public_key'])" | grep -q True && ok "ADR 0058: /api/network trust_anchor carries public_key" || bad "trust_anchor public_key missing"
 # ADR 0058 D3: owner configuration key — the state is reported; enrollment needs re-auth and (QEMU) has no DataVolume
 AN=$(curl -s -m 10 $C "$B/api/anchor")
-echo "$AN" | jget "d['owner_enrolled'] is False and d['owner_key'] is None and d['can']=='enroll' and d['config_files_verified_by'] in ('vendor','none (standalone)') and d['config_protected']==(d['vendor_key'] is not None) and (d['config_protected'] or d['state']=='CONFIG UNPROTECTED') and 'wan' in d['floors']" | grep -q True && ok "ADR 0058 D3: /api/anchor reports the vendor key and no enrolled owner key" || bad "/api/anchor: $AN"
+echo "$AN" | jget "d['owner_enrolled'] is True and d['owner_key']=='$TEST_KOWN_PK' and d['can']=='rotate' and d['config_files_verified_by']=='owner' and d['config_protected'] is True and 'wan' in d['floors']" | grep -q True && ok "ADR 0058 D3: /api/anchor reports the (QEMU test) owner key as enrolled — it verifies configuration and envelopes" || bad "/api/anchor: $AN"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/anchor")" = 401 ] && ok "/api/anchor requires the owner session" || bad "/api/anchor reachable without a session"
 PK=$(printf '%064d' 7); PF=$(printf '%0128d' 7)
 AE=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "public_key=$PK&proof=$PF&seq=$((SQN+3))&owner_key=wrong-key-000000000" "$B/api/anchor/enroll")
 grep -q 're-authentication failed' <<<"$AE" && ok "ADR 0058 D3: owner-key enrollment refuses without re-authentication" || bad "enroll guard: $AE"
 AE2=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "public_key=$PK&proof=$PF&seq=$((SQN+4))" --data-urlencode "owner_key=$TOKEN" "$B/api/anchor/enroll")
 grep -q '"refused":"no DataVolume' <<<"$AE2" && ok "ADR 0058 D3: enrollment with no DataVolume is refused honestly (QEMU)" || bad "enroll without DataVolume: $AE2"
-# ADR 0059 step 3: the configuration lifecycle is reported; confirm / rollback need re-auth and refuse honestly in QEMU
+# ADR 0059 step 3 + R6 = D (hard switch): the configuration lifecycle is reported; confirm / rollback are authorised
+# ONLY by an owner-signed HQMGMT1 envelope (the owner token no longer authorises a change); QEMU refuses honestly after
 CF=$(curl -s -m 10 $C "$B/api/config")
 echo "$CF" | jget "d['state']=='none' and d['on_trial'] is False and d['window_s']==300 and d['auto_rollback'] is True" | grep -q True && ok "ADR 0059: /api/config reports the cfgd lifecycle (no bundle in QEMU)" || bad "/api/config: $CF"
 echo "$CF" | jget "d['live']['phase']=='idle' and d['live']['changes']==[] and d['live']['remaining_s']==0 and d['live']['last']['result']=='none' and isinstance(d['live']['policy_generation'], int) and d['needs_confirm'] is False" | grep -q True && ok "sealed-config live apply: /api/config carries the live engine's phase / changes / remaining_s / last outcome (idle in QEMU)" || bad "/api/config live: $CF"
 CFR=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=confirm+test&permanent=true&seq=$((SQN+5))" --data-urlencode "owner_key=$TOKEN" "$B/api/config/confirm")
-grep -q '"refused":"no configuration' <<<"$CFR" && ok "ADR 0059: /api/config/confirm with nothing on trial is refused honestly" || bad "config confirm: $CFR"
+grep -q '"refused":"refused: needs an owner-signed envelope"' <<<"$CFR" && ok "R6 = D: a token-only /api/config/confirm (session + owner_key, no envelope) is refused" || bad "token-only confirm: $CFR"
+echo "$CF" | jget "d['envelope']['format']=='HQMGMT1' and len(d['envelope']['epoch'])==16 and d['envelope']['next_seq']>=1 and d['envelope']['generation']==0 and d['envelope']['digest']=='00'*32 and d['envelope']['owner_enrolled'] is True" | grep -q True && ok "R6 = D: /api/config reports what an envelope binds (device, boot epoch, next sequence, the bundle in force)" || bad "/api/config envelope: $CF"
+ENV1=$(SIGN confirm)
+CFE=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=confirm+test&permanent=true&seq=$((SQN+6))&envelope=$ENV1" "$B/api/config/confirm")
+grep -q '"refused":"no configuration on trial"' <<<"$CFE" && ok "R6 = D: an owner-signed envelope (policy-sign.py mgmt-sign, no owner token) is accepted and reaches cfgd — honestly nothing on trial in QEMU" || bad "signed confirm: $CFE"
+CFP=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=confirm+test&permanent=true&seq=$((SQN+7))&envelope=$ENV1" "$B/api/config/confirm")
+grep -q '"refused":"refused: replayed or stale sequence"' <<<"$CFP" && ok "R6 = D: the same envelope replayed is refused (403)" || bad "replayed envelope: $CFP"
+CRB=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=rollback+test&permanent=true&seq=$((SQN+8))&envelope=$(SIGN rollback)" "$B/api/config/rollback")
+grep -q '"refused":"no configuration store on this device"' <<<"$CRB" && ok "R6 = D: an owner-signed rollback envelope reaches cfgd — honestly no configuration store in QEMU" || bad "signed rollback: $CRB"
+HSH "config confirm
+$(SIGN confirm)" | grep -q "no configuration on trial" && ok "R6 = D: web console config confirm + envelope line verifies in EL1 and reaches cfgd (same decision as Mission Control)" || bad "web console signed confirm"
 UPS=$(curl -s -m 10 $C "$B/api/upload")
 echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices','wan','wifi','policy','config'] and all(t['source']=='boot' for t in d['types']) and [t['applies'] for t in d['types']]==['now']*6+['next_boot']*4 and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"
 # ADR 0058 rollback: owner re-authentication first; with no artifact store in QEMU nothing can be rolled back
-RBK=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+6))&owner_key=wrong-key-000000000" "$B/api/upload/rollback")
+RBK=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+9))&owner_key=wrong-key-000000000" "$B/api/upload/rollback")
 grep -q 're-authentication failed' <<<"$RBK" && ok "ADR 0058: /api/upload/rollback refuses without owner re-authentication" || bad "rollback guard: $RBK"
-RBN=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+7))" --data-urlencode "owner_key=$TOKEN" "$B/api/upload/rollback")
+RBN=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+9+1))" --data-urlencode "owner_key=$TOKEN" "$B/api/upload/rollback")
 grep -q '"refused":"no artifact store"' <<<"$RBN" && ok "ADR 0058: rollback with no artifact store is refused honestly" || bad "rollback without store: $RBN"
 EN=$(curl -s -m 10 $C "$B/api/engines")
 echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=2 for e in d['engines'])" | grep -q True \

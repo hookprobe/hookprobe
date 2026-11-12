@@ -7,6 +7,14 @@
   hq-upload.py --mc ... --owner-key-file KEY --reboot "apply WAN"    # G49: restart so staged settings apply
   hq-upload.py --mc ... --owner-key-file KEY --enroll PROOF.TXT      # ADR 0058 D3 (policy-sign.py enroll-proof output)
   hq-upload.py --mc ... --owner-key-file KEY --rotate ROTATE.TXT     # ADR 0058 D3 (policy-sign.py rotate output)
+  hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --config-confirm "reason" [--bundle HQCFG1.BIN]
+  hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --config-rollback "reason"
+  hq-upload.py --mc ... --owner-key-file KEY [--sign-key K_OWN.pem] --hsh "config status"   # the web console
+
+R6 = D: confirm / rollback (and privileged hsh commands) need an HQMGMT1 envelope signed by the enrolled owner key.
+This tool signs it LOCALLY with --sign-key (policy-sign.py's mgmt-sign; the private key never goes to the device),
+bound to what GET /api/config's "envelope" reports (device, boot epoch, next sequence, the bundle in force). With
+--bundle the digest is computed from your file and must match the device's — you confirm exactly what you staged.
 
 Types: shield_block, shield_allow, ioc, rules, oui, devices (apply now); wan, wifi, policy (staged: next boot). The pack must already be signed with the
 operator key (policy-sign.py sign-*); this tool never signs anything and never sees a private key. The
@@ -15,6 +23,7 @@ device verifies the signature with its own loader before it activates anything.
 Mission Control uses a certificate from the HookProbe factory CA (ADR 0051): pass --ca FACTORY-CA.crt to verify it,
 or --insecure on a bench.
 """
+import importlib.util, os
 import argparse, hashlib, http.cookiejar, json, ssl, sys, urllib.parse, urllib.request
 
 
@@ -31,6 +40,11 @@ def main():
     ap.add_argument("--reboot")
     ap.add_argument("--enroll")
     ap.add_argument("--rotate")
+    ap.add_argument("--sign-key")
+    ap.add_argument("--config-confirm")
+    ap.add_argument("--config-rollback")
+    ap.add_argument("--bundle")
+    ap.add_argument("--hsh")
     ap.add_argument("--ca")
     ap.add_argument("--insecure", action="store_true")
     a = ap.parse_args()
@@ -102,6 +116,44 @@ def main():
         seq += 1
         return req(path, urllib.parse.urlencode(kv).encode(), {**hdr, "Content-Type": "application/x-www-form-urlencoded"})
 
+    def envelope(msg, arg=0):
+        """R6 = D: sign an HQMGMT1 envelope locally with the owner key, bound to what the device reports."""
+        if not a.sign_key:
+            sys.exit("--sign-key (the enrolled owner key, PEM) is required for a privileged operation")
+        spec = importlib.util.spec_from_file_location("policy_sign", os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy-sign.py"))
+        ps = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ps)
+        e = req("/api/config").get("envelope") or {}
+        if not e.get("owner_enrolled"):
+            sys.exit(f"the device reports no enrolled owner key: {e}")
+        digest = bytes.fromhex(e["digest"])
+        if a.bundle:
+            mine = hashlib.sha256(open(a.bundle, "rb").read()).digest()
+            if mine != digest:
+                sys.exit(f"the bundle in force ({e['digest']}) is not {a.bundle} ({mine.hex()}): refusing to sign")
+        gen = int(e["generation"]) if msg in ("confirm", "rollback") else 0
+        return ps.mgmt_envelope(ps.load(a.sign_key), bytes.fromhex(e["device_id"]), bytes.fromhex(e["epoch"]), int(e["next_seq"]),
+                                msg, arg, gen, digest if gen else b"\0" * 32).hex()
+
+    if a.config_confirm or a.config_rollback:
+        confirm = bool(a.config_confirm)
+        env = envelope("confirm" if confirm else "rollback")
+        r = form1("/api/config/confirm" if confirm else "/api/config/rollback", reason=a.config_confirm or a.config_rollback,
+                  permanent="true", owner_key=key, envelope=env)
+        print(json.dumps(r))
+        return 0 if r.get("ok") else 1
+    if a.hsh is not None:
+        words = a.hsh.split()
+        msg = {("config", "confirm"): "confirm", ("config", "rollback"): "rollback", ("config", "stage"): "stage"}.get(tuple(words[:2]))
+        body = a.hsh
+        if msg:
+            body += "\n" + envelope(msg, (int(words[2], 16) if len(words[2]) == 16 else int(words[2])) if msg == "stage" and len(words) > 2 else 0)
+        conn_h = {**hdr, "Content-Type": "text/plain"}
+        if conn[0] is None:
+            connect()
+        conn[0].request("POST", "/api/hsh", body=body.encode(), headers={**conn_h, "Cookie": "; ".join(f"{k}={v}" for k, v in jar.items())})
+        print(conn[0].getresponse().read().decode(errors="replace"), end="")
+        return 0
     if a.rollback or a.reboot or a.enroll or a.rotate:
         if a.rollback:
             r = form1("/api/upload/rollback", type=a.rollback, owner_key=key)
