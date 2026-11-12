@@ -25,6 +25,8 @@ OUT="${OUT:-$ROOT/os/build/generated/cm5-heqk}"
 # Feature set: hboot (attested EL2 boot) + prod (the running IDS/IPS sensor loop). Add p10bt
 # for the Bluetooth LE-scan sensor path; omit for a faster boot.
 FEATURES="${FEATURES:-prod}"
+# FEATURES=shipping = the shipping Wi-Fi AP flavour, read from tools/ci/shipping-features.txt (one source of truth)
+if [ "$FEATURES" = shipping ]; then FEATURES=$(grep -v "^#" "$(cd "$(dirname "$0")/../.." && pwd)/tools/ci/shipping-features.txt" | tr -d "[:space:]"); fi
 # IMG_DIR: where the signed heqk8.img / heqk8-b.img are assembled. Default = the historical shared
 # cm5-boot/ (unchanged for existing flows); concurrent builders (the image factory, other
 # sessions) MUST pass a private dir — two builds writing cm5-boot/ race each other's flashes.

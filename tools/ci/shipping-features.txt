@@ -1,0 +1,5 @@
+# The SHIPPING Wi-Fi AP flavour — the ONE source of truth for CI (build-heqk.yml), release (release.yml) and the
+# factory (make-cm5-heqk-disk.sh / make-cm5-heqk-image.sh with FEATURES=shipping). Operator 2026-11-12: WPA3
+# transition AP with the CYW43455 PMKID-cache correction (wpa3 implies wifi-pmkid-fix, decision 1A); the
+# firmware's legal clearance is tracked as release gate CMP-02 (Infineon case IFX-261111-2369681).
+hboot,apmc,wifi-bigtx,appersist,wpa3
