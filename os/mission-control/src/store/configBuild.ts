@@ -166,6 +166,23 @@ export function checkPolicy(f: PolicyForm): string[] {
 }
 
 /** The policy text (definitions before use, as the device requires). */
+/** The device's policy section (GET /api/config → policy_text) as the editor's form. Null when a line uses a
+ *  statement this editor does not model (the text is then kept and re-sent verbatim, never rebuilt). */
+export function parsePolicyText(text: string): PolicyForm | null {
+  const f: PolicyForm = { prefixes: [], acls: [], defaults: [], binds: [], routes: [] };
+  for (const ln of text.split('\n').map((x) => x.trim()).filter((x) => x && x !== 'HQPOL1')) {
+    const w = ln.split(/\s+/);
+    let m: RegExpMatchArray | null;
+    if ((m = ln.match(/^prefix-list (\S+) seq (\d+) (permit|deny) (\S+)(?: ge (\d+))?(?: le (\d+))?$/))) f.prefixes.push({ name: m[1], seq: m[2], action: m[3] as PrefixRow['action'], prefix: m[4], ge: m[5] ?? '', le: m[6] ?? '' });
+    else if ((m = ln.match(/^acl (\S+) seq (\d+) (allow|block|drop) (\S+) (\S+) (\S+)(?: (\S+))?$/))) f.acls.push({ name: m[1], seq: m[2], action: m[3] as AclRow['action'], proto: m[4], src: m[5], dst: m[6], port: m[7] ?? '' });
+    else if ((m = ln.match(/^acl (\S+) default (allow|block|drop)$/))) f.defaults.push({ name: m[1], action: m[2] as AclRow['action'] });
+    else if (w[0] === 'interface' && w.length === 5 && /^(lan|eth1|wan|mgmt)$/.test(w[1]) && /^(acl|prefix-list)$/.test(w[2]) && /^(in|out)$/.test(w[3])) f.binds.push({ iface: w[1] as BindRow['iface'], kind: w[2] as BindRow['kind'], dir: w[3] as BindRow['dir'], name: w[4] });
+    else if ((m = ln.match(/^route (\S+)(?: from (\S+))? via (lan|eth1|wan|mgmt)(?: gw (\S+))?(?: metric (\d+))?$/))) f.routes.push({ dst: m[1], from: m[2] ?? '', via: m[3] as RouteRow['via'], gw: m[4] ?? '', metric: m[5] ?? '' });
+    else return null;
+  }
+  return f;
+}
+
 export function buildPolicyText(f: PolicyForm): string {
   const l = ['HQPOL1'];
   for (const p of f.prefixes) l.push(`prefix-list ${p.name} seq ${p.seq} ${p.action} ${p.prefix.trim()}${p.ge.trim() ? ` ge ${p.ge.trim()}` : ''}${p.le.trim() ? ` le ${p.le.trim()}` : ''}`);

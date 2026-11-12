@@ -28,6 +28,19 @@ import RestartButton from './RestartButton';
 import { startNetworkLive } from '../store/networkLive';
 
 type Sec = 'edge' | 'packs' | 'signing' | 'identity' | 'ai' | 'audit' | 'feedback' | 'reset';
+/** The device's refusals for a password change, in words (kernel ownerapi::rotate_owner_key). */
+const PW_REFUSED: Record<string, string> = {
+  're-authentication failed': 'the current password is wrong.',
+  'new_owner_key: 16-128 characters, different from the current key': 'the new password must be 16 to 128 characters and different from the current one.',
+  'reason required': 'give a reason of at least 3 characters.',
+  'rate limited: at most 20 writes a minute per session': 'too many changes in a minute; wait a moment and try again.',
+  replay: 'the request was sent twice; try again.',
+  'no journal: the rotation would not survive a reboot': 'this device has no storage to keep a new password across a restart, so it keeps the one on its label.',
+  'journal full': 'the device\u2019s settings journal is full.',
+  origin: 'the request did not come from this page; reload and try again.',
+  csrf: 'your session expired; reload and try again.',
+};
+
 const SECTIONS: [Sec, string][] = [['edge', 'Edge node'], ['packs', 'Signed packs'], ['signing', 'Signing key'], ['identity', 'Identity and access'], ['ai', 'AI models'], ['audit', 'Audit log'], ['feedback', 'Feedback and diagnostics'], ['reset', 'Factory reset']];
 const STEPS: [UploadStep, string][] = [['begin', 'Begin'], ['upload', 'Upload'], ['verify', 'Device verifies'], ['activate', 'Activate'], ['done', 'Active']];
 const field = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' } as const;
@@ -83,9 +96,14 @@ const AdministrationApp: Component = () => {
     const a = await approve({ title: 'Change the device password?', body: 'Every session ends, including this one. Sign in again with the new password. If you lose it, only re-flashing OWNER.TXT gets you back in.', confirm: 'Change it', destructive: true, reason: {}, key: { label: 'Current device password' } });
     if (!a) return;
     const cur = a.key, reason = a.reason;
-    const r = await post<{ ok: boolean; refused?: string; note?: string }>('/api/owner-key', { owner_key: cur, new_owner_key: newKey(), reason: reason.trim(), permanent: 'true' });
-    if (r.ok) { setMsg(r.note ?? 'Rotated. Sign in with the new key.'); setTimeout(() => { location.href = '/login'; }, 2500); }
-    else setMsg(`Refused by the device: ${r.refused}`);
+    let r: { ok: boolean; refused?: string };
+    try { r = await post<{ ok: boolean; refused?: string }>('/api/owner-key', { owner_key: cur, new_owner_key: newKey().trim(), reason: reason.trim(), permanent: 'true' }); }
+    catch { setMsg('The device did not answer. Your password is unchanged; try again.'); return; }
+    if (r.ok) {
+      setNewKey(''); setNewKey2('');
+      setMsg('Device password changed. Every session has ended: sign in again with the new password.');
+      setTimeout(() => { location.href = '/login'; }, 2500);
+    } else setMsg(`Not changed: ${PW_REFUSED[r.refused ?? ''] ?? `the device refused (${r.refused}).`}`);
   };
 
   const reset = async () => {
@@ -220,7 +238,7 @@ const AdministrationApp: Component = () => {
                     <button class="hp-btn" onClick={async () => { try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* go anyway */ } location.href = '/login'; }}>Sign out</button>
                   </Show>
                 </div>
-                <p class="pcard-note">Lost the key? Re-flash OWNER.TXT on the boot disk: it always wins over a rotated key.</p>
+                <p class="pcard-note">Lost the password? Re-flash OWNER.TXT on the boot disk: it always wins over a changed password.</p>
               </div>
             </Show>
 
