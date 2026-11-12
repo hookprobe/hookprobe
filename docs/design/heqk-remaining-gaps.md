@@ -46,3 +46,21 @@ Status `built` = committed + QEMU/host-proven, not yet on silicon.
 |---|---|---|---|---|
 | 17 | Wi-Fi firmware TX-stall root cause | mitigated (kick) | **Board** | |
 | 18 | Task #22 metal acceptance + Linux unbuild batches | open | **Board** | |
+
+## Status reconciled 2026-11-12 (A12 doc hygiene; main `58d83647`)
+
+The tables above are kept as written (history). Rows that changed since, with labels (`not built`, `QEMU only`,
+`metal pending`, `metal-proven (<evidence>)`, `blocked (<reason>)`):
+
+| # | Status 2026-11-12 | Evidence |
+|---|---|---|
+| 2 | POLICY generation floor persisted on the device (trust anchor, `anchor.rs`): metal-proven. RPMB anchoring prepared, not an active guarantee: blocked (manufacturing key write, operator decision — release gate TC-04) | `docs/design/heqk-audit-2026-11-10.md` §3.1 J4 |
+| 4 | done + metal (see the inline update and `heqk-parity-gaps.md` G24a) | `docs/design/metal-evidence/20261108-g24a-d2-v6src.md` |
+| 10 | no longer blocked on #4 (done); IPv6 on the management VLAN itself: not reconciled here — see `heqk-parity-gaps.md` | — |
+| 11 | done: TLS and the HTTP request parse both run in the EL0 server (ADR 0050 D4 step 1, 2026-11-10) | release gate SEC-01 text; `docs/design/metal-evidence/20261111-batch59-63.md` |
+| 12 | done: DNS (step 2a) and the DHCP server parse (2b) in `el0-lansvc`; metal-proven via `[P-lansvc]` on CM5 | `docs/design/metal-evidence/20261111-batch59-63.md` |
+| 13 | done: WAN DHCPv4 / RA / DHCPv6 (3a) and PPPoE / PPP (3b) parse in EL0; metal-proven via `[P-lansvc]` (incl. 3b) | `docs/design/metal-evidence/20261111-batch59-63.md` |
+| 14 | closed by decision: Noise stays in EL1 (identity-key custody, operator 2026-11-11). In-session record-layer rekey added (PR #1017): QEMU only, metal pending | ADR 0050 D4; `docs/design/heqk-audit-2026-11-10.md` §2.1 #12 |
+| 15 | partial: EAPOL-Key + RSNE walk (5a) metal-proven; station-frame work (5b) QEMU only; WPA3-SAE frame walk (5c, PR #1005) QEMU only, metal pending; the authenticator state machine still moves with the driver: not built (release gate SEC-01 blocked) | `docs/design/metal-evidence/20261111-batch59-63.md`; ADR 0050 D4 |
+| 17 | the ~10 h WPA3 firmware trap was root-caused (REL-08, CYW43455 PMKID-cache use-after-free) and is corrected in chip RAM (on by default with `wpa3`): 72 h soak + regression matrix metal pending; shipping blocked (written legal clearance, release gate CMP-02). The older TX-stall: still mitigated (kick) | `docs/design/rel08-cyw43455-pmkid-trap.md` |
+
