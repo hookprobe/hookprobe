@@ -34,9 +34,18 @@ except urllib.error.HTTPError as e:
     print(e.read().decode())
 PY
 }
+# R6 = D (PR #1010/#1013/#1018): activate + confirm need an HQMGMT1 envelope signed by the ENROLLED owner key; the
+# token only opens the session. SIGN_KEY (default: ~/heqk-owner-ca/bench-owner.key, a bench-only Ed25519 key) is that key; enrolled here if the device
+# reports none (bench unit: a reflash / factory reset clears it).
+SIGN="${SIGN_KEY:-$HOME/heqk-owner-ca/bench-owner.key}"  # the bench OWNER key (must differ from the vendor/config key)
+UP="$UP --sign-key $SIGN"
+ensure_owner() { local e; e=$(api /api/config | python3 -c 'import json,sys; print(bool(json.load(sys.stdin).get("envelope", {}).get("owner_enrolled")))')
+  [ "$e" = True ] && return 0
+  python3 -I "$ROOT/os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$T/enroll.txt" && $UP --enroll "$T/enroll.txt" > "$T/enroll.out" 2>&1
+  local rc=$?; echo "     owner key enrolled for the R6 envelopes (rc=$rc: $(cut -c1-100 "$T/enroll.out"))"; return $rc; }
 cfgval() { api /api/config | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 mc_up() { for _ in $(seq 1 60); do curl -sk -o /dev/null -m 5 "$MC/" && return 0; sleep 3; done; return 1; }
-confirm() { api /api/config/confirm "house check $1" | grep -q '"committed":true'; }
+confirm() { $UP --config-confirm "house check $1" 2>\&1 | grep -qE \'"committed": ?true\'; }
 reboot() { mark=$(stat -c %s "$LOG"); $UP --reboot "house check: $1" >/dev/null 2>&1; sleep 25; mc_up; }
 # Pi side: join a profile on wlan0 and prove the AP serves it (lease + Mission Control on the AP)
 join() { local r; for _ in 1 2 3; do psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; sleep 2
@@ -47,8 +56,9 @@ join() { local r; for _ in 1 2 3; do psudo "nmcli dev disconnect wlan0" >/dev/nu
 refused() { psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; sleep 2; ! psudo "nmcli -w 25 con up '$1' ifname wlan0" 2>&1 | tail -1 | grep -q success; }
 dns9() { pi "timeout 5 dig +short +time=2 +tries=1 -b \$(ip -4 -o addr show wlan0 | awk '{print \$4}' | cut -d/ -f1) @9.9.9.9 example.com" 2>/dev/null | grep -qE '^[0-9.]+$'; }
 canon() { sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$1"; }
+ensure_owner
 G=$(cfgval 'max(d["generation"], d["floor"])')
-bundle() { G=$((G + 1)); $HQ bundle "$CK" $G "$T/b.bin" "$T/b.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
+bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b.bin" "$T/b.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
   $UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; shred -u "$T/b.bin"; }
 # ---- 0. baseline ----
 PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")

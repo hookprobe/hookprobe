@@ -35,11 +35,21 @@ except urllib.error.HTTPError as e:
     print(e.read().decode())
 PY
 }
+# R6 = D (PR #1010/#1013/#1018): activate + confirm need an HQMGMT1 envelope signed by the ENROLLED owner key; the
+# token only opens the session. SIGN_KEY (default: ~/heqk-owner-ca/bench-owner.key, a bench-only Ed25519 key) is that key; enrolled here if the device
+# reports none (bench unit: a reflash / factory reset clears it).
+SIGN="${SIGN_KEY:-$HOME/heqk-owner-ca/bench-owner.key}"  # the bench OWNER key (must differ from the vendor/config key)
+UP="$UP --sign-key $SIGN"
+ensure_owner() { local e; e=$(api /api/config | python3 -c 'import json,sys; print(bool(json.load(sys.stdin).get("envelope", {}).get("owner_enrolled")))')
+  [ "$e" = True ] && return 0
+  python3 -I "$ROOT/os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$T/enroll.txt" && $UP --enroll "$T/enroll.txt" > "$T/enroll.out" 2>&1
+  local rc=$?; echo "     owner key enrolled for the R6 envelopes (rc=$rc: $(cut -c1-100 "$T/enroll.out"))"; return $rc; }
 rule7() { pi "curl -sk -o /dev/null -w '%{http_code}' -m 8 $AP_MC/api/health" | grep -q 200; }
 boots() { tr -d '\r\000' < "$LOG" | grep -ac "HEQK Core"; }
+ensure_owner
 gen0=$(api /api/config | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max(d["generation"], d["floor"]))')
 G=$gen0
-bundle() { G=$((G + 1)); $HQ bundle "$CK" $G "$T/b$G.bin" "$T/b$G.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
+bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b$G.bin" "$T/b$G.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
   $UP --type config --sig "$T/b$G.sig" --file "$T/b$G.bin" > "$T/r$G" 2>&1; }
 B0=$(boots)
 # policies without management bindings (a change of them alone auto-commits)
@@ -61,7 +71,7 @@ grep -q '"applies": "live"' "$T/r$G" && grep -q '"needs_confirm": true' "$T/r$G"
 waitlog "\[WAN\] live apply: mode STATIC" 30; chk $? "B2 WAN re-brought up live as STATIC"
 sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface wlan1 http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "B3 LAN client reaches the WAN side through the new static WAN"
 rule7; chk $? "B4 rule 7 during the trial"
-api /api/config/confirm "live check B" | grep -q '"committed":true'; chk $? "B5 owner confirm commits gen $G"
+$UP --config-confirm "live check B" 2>\&1 | grep -qE \'"committed": ?true\'; chk $? "B5 owner confirm commits gen $G"
 # --- C: a static WAN whose gateway never answers -> LIVE revert to gen B after the 120-s window ---
 sed 's/^gw=.*/gw=10.100.0.254/' "$T/ws.txt" > "$T/wd.txt"
 bundle --wan "$T/wd.txt" --policy "$T/pa.txt"
