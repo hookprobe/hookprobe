@@ -52,7 +52,7 @@ export default async function (t) {
   await page.fill('input[placeholder="HookProbe-Home"]', 'Other-Owner'); await page.fill('input[type=password]', 'correct horse battery');
   await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
   const od = page.locator('.drawer', { hasText: 'Apply all three together' });
-  ok(await vis(od.locator('text=only accepts settings signed with its owner key (abababab')) && await od.locator('button:has-text("the bundle")').isDisabled(),
+  ok(await vis(od.locator('text=only accepts settings signed with the signing key it trusts (abababab')) && await od.locator('button:has-text("the bundle")').isDisabled(),
     'enrolled device with another owner key: signing blocked, with the reason and the fix');
   ok(await vis(od.locator('[aria-label="Device binding"] >> text=Not bound to a device')), 'device_id null is shown as not bound');
   await page.unroute('**/api/anchor');

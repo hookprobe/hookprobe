@@ -38,7 +38,7 @@ export async function fp8(pubHex: string): Promise<bigint> {
 export interface Binding { msg: number; arg?: bigint; generation?: bigint | number; digest?: Uint8Array | string }
 
 async function build(b: Binding, e: EnvelopeState): Promise<string> {
-  if (!e.owner_enrolled) throw new Error('This device has no owner key yet. Make your signing key the owner key first (Administration → Signing key).');
+  if (!e.owner_enrolled) throw new Error('This device does not trust a signing key yet. Make it trust yours first (Administration → Signing key).');
   const digest = typeof b.digest === 'string' ? unhex(b.digest, 32) : b.digest ?? ZERO32;
   return signEnvelope({ msg: b.msg, deviceId: unhex(e.device_id, 16), epoch: unhex(e.epoch, 8), seq: BigInt(e.next_seq), arg: b.arg ?? 0n, generation: BigInt(b.generation ?? 0), digest });
 }

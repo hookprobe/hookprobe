@@ -16,7 +16,7 @@ import { substrate, deviceStats } from '../store/mock';
 import { healthChecked, loadHealth } from '../store/health';
 import { networkView, startNetworkLive } from '../store/networkLive';
 import { uploadPack, refreshUploads, uploadView } from '../store/packUpload';
-import { ownerKey, loadOwnerKey, signPack, signBundle, ownerKeyId, enrollProof, PACKS, download } from '../store/signing';
+import { backupOk, ownerKey, loadOwnerKey, signPack, signBundle, ownerKeyId, enrollProof, PACKS, download } from '../store/signing';
 import { anchorView, anchorState, refreshAnchor, enroll } from '../store/anchor';
 import { configView, refreshConfig, restNote } from '../store/configState';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
@@ -71,12 +71,12 @@ const SetupApp: Component = () => {
   const doEnroll = async () => {
     setEnrollMsg('');
     try {
-      const k = await askOwnerKey('Make this key the device\u2019s owner key?', 'This is one-shot: afterwards only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.', 'Make it the owner key');
+      const k = await askOwnerKey('Make the device trust this signing key?', 'This is one-shot: afterwards only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.', 'Trust this key');
       if (!k) return;
       const p = await enrollProof();
       const r = await enroll({ public_key: p.publicKey, proof: p.proof, owner_key: k });
       if (!r.ok) { setEnrollMsg(`The device refused: ${r.refused}`); if (/DataVolume|no (artifact|configuration) store/i.test(r.refused ?? '')) setNoBundle(true); void refreshAnchor(); }
-      else setEnrollMsg('This is now the device\u2019s owner key.');
+      else setEnrollMsg('Done: the device now trusts this signing key.');
     } catch (e) { setEnrollMsg(e instanceof Error ? e.message : String(e)); }
   };
   // While waiting for the restart and the trial, keep reading /api/config.
@@ -205,11 +205,12 @@ const SetupApp: Component = () => {
           <div class="setup-bubble">Create your signing key. Big changes — like your internet login or Wi-Fi — only apply when you sign them with this key.</div>
           <SigningKeyPanel compact />
           <Show when={bundleMode() && ownerKey() && !enrolledMine() && !otherOwner()}>
-            <div class="setup-bubble" aria-label="Enroll">Now make it this device's owner key. It's one-shot: from then on only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.</div>
-            <button class="hp-btn setup-cta" onClick={() => void doEnroll()}>Make this the owner key</button>
+            <div class="setup-bubble" aria-label="Enroll">Now make the device trust this signing key. It's one-shot: from then on only settings signed with it are accepted. A factory reset keeps it; only re-flashing removes it.</div>
+            <button class="hp-btn setup-cta" disabled={!backupOk()} onClick={() => void doEnroll()}>Make the device trust this key</button>
+            <Show when={!backupOk()}><p class="gate-reason" style={{ margin: 0 }}>Check your backup above first.</p></Show>
           </Show>
           <Show when={bundleMode() && otherOwner()}>
-            <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device already has a different owner key ({anchorView()!.owner_key!.slice(0, 8)}…). Import that key's backup above to continue.</p>
+            <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device already trusts a different signing key ({anchorView()!.owner_key!.slice(0, 8)}…). Import that key's backup above to continue.</p>
           </Show>
           <Show when={enrollMsg()}><p class="pro-sub" role="status" style={{ margin: 0 }}>{enrollMsg()}</p></Show>
           <div class="setup-grow" />
