@@ -108,10 +108,10 @@ const AutomateApp: Component = () => {
 
           <section class="pcard" aria-label="Pipeline" style={{ 'min-width': 0 }}>
             <h2 style={{ margin: 0, 'font-size': '18px' }}>{sample() ? SAMPLE_BOOKS[book()].name : 'Built-in response'}</h2>
-            <div class="aitl" role="list" aria-label="Stages" style={{ gap: '8px', 'scroll-snap-type': 'x mandatory' }}>
+            <div role="list" aria-label="Stages" style={{ display: 'grid', 'grid-template-columns': 'repeat(auto-fill, minmax(120px, 1fr))', gap: '8px' }}>
               <For each={stages()}>{(s, i) => (
                 <button class="pcard" role="listitem" aria-pressed={stage() === i()} onClick={() => setStage(i())}
-                  style={{ 'flex': '0 0 132px', 'scroll-snap-align': 'start', padding: '12px', gap: '4px', 'border-color': stage() === i() ? 'var(--hp-cyan)' : undefined }}>
+                  style={{ padding: '12px', gap: '4px', 'text-align': 'left', 'border-color': stage() === i() ? 'var(--hp-cyan)' : undefined }}>
                   <span style={{ 'font-size': '11px', color: tone(s.state) }}>● {s.state}</span>
                   <span style={{ 'font-weight': 600 }}>{s.name}</span>
                   <span class="pcard-note">{s.count}</span>
@@ -136,6 +136,10 @@ const AutomateApp: Component = () => {
                 <span>Isolate file server NAS-01</span>
                 <span class="pcard-note">Requested by: Contain stage · risk: high · confidence 81%</span>
                 <div class="plan-diff-lines"><div class="plan-diff-line plan-diff-line--changed"><span class="plan-diff-mark">~</span>NAS-01: Family → Quarantine</div></div>
+                <span class="gate gate--off">
+                  <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><span class="l0-card-foot"><button class="hp-btn hp-btn--primary">Approve</button><button class="hp-btn">Reject</button></span></span>
+                  <span class="gate-reason" role="note">Preview: on a device with the automation engine you approve or reject here.</span>
+                </span>
               </Show>
             </section>
             <section class="pcard" aria-label="Notifications">

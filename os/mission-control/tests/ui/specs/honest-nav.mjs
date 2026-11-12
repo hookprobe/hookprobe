@@ -9,7 +9,7 @@ export default async function (t) {
   ok(await vis(page.locator('nav[aria-label="Main"] a[href="/admin/identity"]')), 'simple view: the rail links to Settings (Administration)');
   await page.evaluate(() => localStorage.setItem('hp.proView', '1'));
   await go('/mission');
-  ok(await page.locator('nav[aria-label="Workspaces"] a[href="/"]', { hasText: 'Home (simple view)' }).count() === 1, 'Pro view: the rail links back to the simple Home');
+  ok(await page.locator('nav[aria-label="Workspaces"] a[href="/"]', { hasText: 'Home' }).count() === 1, 'Pro view: the rail links back to the simple Home');
   await page.evaluate(() => localStorage.setItem('hp.proView', '0'));
 
   // Signed out: 401 from the device.

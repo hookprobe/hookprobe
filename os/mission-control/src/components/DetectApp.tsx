@@ -13,7 +13,7 @@
 import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
-import { severityLabel, formatTime, mitreName, mitreTactic, type DetectionRow } from '../store/api';
+import { severityLabel, formatTime, mitreLabel, mitreTactic, type DetectionRow } from '../store/api';
 import { startDetectLive, detections, detectStatus, detectError, engines } from '../store/detectLive';
 import { incidents, startInvestigateLive } from '../store/investigateLive';
 import { incidentHref } from '../store/routes';
@@ -109,7 +109,7 @@ const DetectApp: Component = () => {
                 <For each={shown().slice(0, 60)}>{(d) => (
                   <article class="pcard span-6" role="listitem" style={{ 'text-align': 'left' }}>
                     <span class="prow" style={{ border: 0, padding: 0 }}>
-                      <span><span class={`sev sev--${severityLabel(d.severity)}`}>{severityLabel(d.severity).toUpperCase()}</span>{d.mitre ? `${d.mitre} · ${mitreName(d.mitre)}` : 'No ATT&CK mapping'}</span>
+                      <span><span class={`sev sev--${severityLabel(d.severity)}`}>{severityLabel(d.severity).toUpperCase()}</span>{d.mitre ? mitreLabel(d.mitre) : 'No ATT&CK mapping'}</span>
                       <span>{d.category} · {formatTime(d.ts)}</span>
                     </span>
                     <span class="det-title story-title" style={{ 'white-space': 'normal', 'font-size': '15px' }}>{d.rule_msg}</span>

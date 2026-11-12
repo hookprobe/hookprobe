@@ -13,7 +13,7 @@ import Icon from './Icon';
 interface Item { label: string; href: string; icon: string; match: string[]; linkedOnly?: boolean }
 
 export const WORKSPACES: Item[] = [
-  { label: 'Home (simple view)', href: '/',                  icon: 'home', match: ['/__home'] },
+  { label: 'Home',              href: '/',                  icon: 'home', match: ['/__home'] },
   { label: 'Mission Control',   href: '/mission',            icon: 'mission', match: ['/mission'] },
   { label: 'Workspace',         href: '/workspace',          icon: 'workspace', match: ['/workspace'] },
   { label: 'Observe',           href: '/observe/live',       icon: 'observe', match: ['/observe'] },
