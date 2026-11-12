@@ -18,7 +18,7 @@ const browser = await chromium.launch(spki ? {
 } : {});
 
 const DETECT_CALLS = ['/api/engines', '/api/detections', '/api/reports'];
-let navs = 0, calls = 0, stalls = 0, maxMs = 0;
+let navs = 0, calls = 0, stalls = 0, maxMs = 0, aborts = 0;
 const t0 = Date.now();
 const ts = () => ((Date.now() - t0) / 1000).toFixed(1);
 
@@ -62,24 +62,32 @@ for (let rep = 1; rep <= REPS; rep++) {
     const start = Date.now();
     await page.goto(`${base}/detect/feed`, { waitUntil: 'load', timeout: 60000 }).catch((e) => console.log(`    goto detect: ${e.message.split('\n')[0]}`));
     navs++;
-    // every Detect call answered, or the stall budget (x3, to measure how long it really takes) ran out
+    // Judged per Detect path: it must get a 200 that took <= STALL_MS. The page may cancel and re-issue its own
+    // fetches (net::ERR_ABORTED is the CLIENT's cancel — CI g3 2026-11-12 counted that as a stall although the
+    // re-issued calls answered in 27 ms), so an abort alone is not a stall; any other failure (a reset or refused
+    // connection, an error status) is, even if a later retry answered. Wait for every path's 200 or 3 x STALL_MS.
+    const ok = (p) => done.some((d) => d.path === p && d.status === 200);
     const deadline = Date.now() + STALL_MS * 3;
-    while (Date.now() < deadline && !DETECT_CALLS.every((p) => done.some((d) => d.path === p))) await page.waitForTimeout(100);
+    while (Date.now() < deadline && !DETECT_CALLS.every(ok)) await page.waitForTimeout(100);
     const mine = done.filter((d) => DETECT_CALLS.includes(d.path));
-    const missing = DETECT_CALLS.filter((p) => !mine.some((d) => d.path === p));
-    const worst = Math.max(0, ...mine.map((d) => d.ms));
-    calls += mine.length + missing.length;
+    const aborted = (d) => String(d.status) === 'failed:net::ERR_ABORTED';
+    const missing = DETECT_CALLS.filter((p) => !ok(p));
+    const slow = DETECT_CALLS.filter((p) => ok(p) && !done.some((d) => d.path === p && d.status === 200 && d.ms <= STALL_MS));
+    const broken = mine.filter((d) => d.status !== 200 && !aborted(d));
+    const worst = Math.max(0, ...mine.filter((d) => d.status === 200).map((d) => d.ms));
+    calls += DETECT_CALLS.length;
     maxMs = Math.max(maxMs, worst);
-    const bad = mine.filter((d) => d.ms > STALL_MS || d.status !== 200).length + missing.length;
+    aborts += mine.filter(aborted).length;
+    const bad = missing.length + slow.length + broken.length;
     stalls += bad;
     if (bad) {
       const now = Date.now();
       console.log(`      requests failed: ${failed.join(' ') || 'none'}; still open: ${[...inflight].filter(([q]) => !q.url().endsWith('/api/stream')).map(([q, t]) => `${new URL(q.url()).pathname}(${now - t}ms)`).join(' ') || 'none'}`);
     }
-    console.log(`    [${ts()}s] rep ${rep}.${j} Home->Detect ${Date.now() - start} ms: ${mine.map((d) => `${d.path}=${d.status}/${d.ms}ms`).join(' ')}${missing.length ? ' NO-ANSWER: ' + missing.join(' ') : ''}${bad ? `  <-- STALL (epoch ${(start / 1000).toFixed(1)})` : ''}`);
+    console.log(`    [${ts()}s] rep ${rep}.${j} Home->Detect ${Date.now() - start} ms: ${mine.map((d) => `${d.path}=${d.status}/${d.ms}ms`).join(' ')}${missing.length ? ' NO-ANSWER: ' + missing.join(' ') : ''}${slow.length ? ' SLOW: ' + slow.join(' ') : ''}${broken.length ? ' FAILED: ' + broken.map((d) => d.path).join(' ') : ''}${bad ? `  <-- STALL (epoch ${(start / 1000).toFixed(1)})` : ''}`);
   }
   await ctx.close();
 }
 await browser.close();
-console.log(`TLS-STALL reps=${REPS} navigations=${navs} calls=${calls} stalls=${stalls} max_ms=${maxMs}`);
+console.log(`TLS-STALL reps=${REPS} navigations=${navs} calls=${calls} stalls=${stalls} max_ms=${maxMs} client_aborted=${aborts}`);
 process.exit(stalls ? 1 : 0);
