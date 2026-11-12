@@ -1,5 +1,5 @@
 # =============================================================================
-# autoheal.yml — the L2 heal loop on GitHub (ADR 0052).
+# autoheal.yml — the L2 heal loop on GitHub (ADR 0063).
 #
 #   red run ──► triage (deterministic classify, one issue per failure signature)
 #                 ├─ rerun    → re-run the failed jobs once (transient infra / TCG budget)
@@ -103,7 +103,7 @@ jobs:
       - if: steps.key.outputs.ok == 'true'
         uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools, clippy
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
       - if: steps.key.outputs.ok == 'true'
@@ -155,7 +155,7 @@ jobs:
         with: { toolchain: stable }
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master
         with:
-          toolchain: nightly
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools, clippy
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
       - uses: taiki-e/install-action@3a3daafd3b7f23b8f65d9f5ba2db203fb59b79e2   # v2
@@ -211,7 +211,7 @@ jobs:
           git -c core.hooksPath=/dev/null push --no-verify -q origin "$BR"
           python3 -I -c 'import json,sys; m=json.load(open(sys.argv[1])); print(m["notes"])' "$RUNNER_TEMP/patch/meta.json" \
             | sed 's/@/(at)/g' > "$RUNNER_TEMP/notes.md"
-          { echo "**Autofix proposal (ADR 0052 L2) — DRAFT, needs human review.**"; echo
+          { echo "**Autofix proposal (ADR 0063 L2) — DRAFT, needs human review.**"; echo
             cat "$RUNNER_TEMP/notes.md"; echo
             echo "- signature: \`$SIG\` · gate \`$GATE\` re-ran green with no secrets present · trusted guard: PASS (twice)"
             [ -n "$ISSUE" ] && echo "- tracking issue: #$ISSUE"; } > "$RUNNER_TEMP/body.md"

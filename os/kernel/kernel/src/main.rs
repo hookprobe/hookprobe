@@ -82,6 +82,9 @@ mod wanlive;
 // sealed-config / live apply step 10: the Wi-Fi executor
 #[cfg_attr(not(all(feature = "cm5", feature = "p15-write")), allow(dead_code))]
 mod wifilive;
+// audit A7: Wi-Fi self-heal (the metal port is cm5-only, the mock self-test runs in QEMU)
+#[allow(dead_code)]
+mod wifiheal;
 // ADR 0059 step 4a: the management ABI + the EL0 native shell
 #[cfg(feature = "mcserve")]
 mod mgmtabi;
@@ -152,6 +155,17 @@ mod anchor;
 static mut NET: mcstate::NetInfo = mcstate::NET0;
 /// POLICY.TXT outcome (for NET): 0 none, 1 signed, 2 unsigned, 3 refused; and its generation.
 static mut POLICY_STATE: (u8, u64) = (0, 0);
+/// The AP's IPv6 LAN router + stateful firewall (module level so the BSS bounce paths can reach it).
+#[cfg(feature = "cm5")]
+static mut V6: arch_aarch64::ip6lan::V6Lan = arch_aarch64::ip6lan::V6Lan::new();
+
+/// Live-apply follow-up (IPv6 at an AP restart): the BSS was bounced (a live Wi-Fi apply / revert; the Wi-Fi self-heal
+/// bounce / firmware reload) — every station re-associates, so its SAVI bindings, neighbour entries and IPv6 pinholes are
+/// stale. Cleared together; stations are re-learned from their next packets and the RA burst restarts.
+#[cfg(feature = "cm5")]
+fn clear_station_v6_state() {
+    unsafe { (*core::ptr::addr_of_mut!(V6)).forget_all_stations() };
+}
 /// OS-image update over the upload channel (ADR 0056 phase 2 / production phase 1).
 #[cfg(all(feature = "p15-write", feature = "netsvc"))]
 #[allow(dead_code)]
@@ -601,6 +615,8 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     // Phase 3 crash record: report (and clear) why the previous boot ended, if it panicked or faulted.
     #[cfg(feature = "cm5")]
     let _ = rtwdog::take_crash_at_boot();
+    #[cfg(feature = "cm5")]
+    wifiheal::take_at_boot();
     // VA!=PA proof: read the same physical word through the aliased high VA.
     let via_alias = unsafe { read_volatile((phys_probe as usize + sample_pa) as *const u64) };
     kprint!(" mmu : VA {:#x} -> PA {:#x} readback {} (VA!=PA: {})\n",
@@ -3561,6 +3577,8 @@ fn cm5_p10_probe() {
                         let inside_net = [10u8, 99, 0];
                         let mut nat_wifi_tx_fail = 0u32;
                         let (mut wan_retries, mut last_wan_try) = (0u32, 0u64);
+                        #[cfg(all(feature = "p15-write", feature = "mcserve"))]
+                        let mut mprobe_at = 0u64; // the management re-probe during a configuration trial
                         let (mut wan_leased_at, mut wan_renewals) = (0u64, 0u32);
                         // IDS/IPS on BOTH NAT legs (packet::verdict = the signed rule plane, same code
                         // path as the inline datapath; rules::init ran at kmain) + the (MAC,IP) lease
@@ -3611,8 +3629,11 @@ fn cm5_p10_probe() {
                         let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
                         // REL-08 (soak 2026-11-11): a firmware halt (mailbox FWHALT) is acted on at once, not after the
                         // wedge detector arms (it needs queued deliveries, which an idle station never produces — 22 min)
-                        #[cfg(feature = "cm5")]
-                        let mut fw_halts_seen = cyw43::fw_halts();
+                        // Audit A7 self-heal: classify, then kick -> BSS bounce -> firmware reload -> one reboot -> degrade
+                        let mut heal = wifiheal::Heal::from_boot(wifiheal::boot_record(), !rtwdog::self_heal_allowed());
+                        heal.baseline(cyw43::fw_halts());
+                        let mut stas = wifiheal::StaSet::new();
+                        let mut wifi_off = false; // Degrade: the radio is off for this boot, wired + management keep running
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         let (mut wq_head_fail, mut wq_head_drop) = (0u32, 0u32);
                         // credit-stall diagnostics: last frames handed to the firmware (dst MAC low 3 bytes, len)
@@ -3621,10 +3642,9 @@ fn cm5_p10_probe() {
                         let (mut credit0_since, mut stall_diag_done) = (0u64, false);
                         // Stall experiment: stage 1 = bare dongle interrupt sent, 2 = one control frame sent.
                         // unstick = [episodes, recovered w/o poke, recovered after A (DEV_INT), after B (ctl), reached 2 s]
-                        let (mut unstick_stage, mut unstick_t) = (0u8, 0u64);
+                        let mut unstick_stage = 0u8;
                         let mut unstick = [0u32; 5];
-                        // IPv6 LAN router + stateful firewall (stage 2): numbered from the DHCPv6-delegated prefix.
-                        static mut V6: arch_aarch64::ip6lan::V6Lan = arch_aarch64::ip6lan::V6Lan::new();
+                        // IPv6 LAN router + stateful firewall (stage 2): numbered from the DHCPv6-delegated prefix (`V6`).
                         let mut v6buf = [0u8; 1600];
                         let mut v6_ids_drop = [0u32; 2]; // [outbound, inbound] IDS drops on IPv6
                         // Send one frame to the Wi-Fi clients: direct when nothing is queued and credit allows,
@@ -3632,7 +3652,10 @@ fn cm5_p10_probe() {
                         macro_rules! wifi_send {
                             ($f:expr) => {{
                                 let f: &[u8] = $f;
-                                if f.len() <= PQ_SZ && apcore::tx_priority(f) {
+                                if wifi_off {
+                                    wifi_tx_dropped += 1;
+                                    false
+                                } else if f.len() <= PQ_SZ && apcore::tx_priority(f) {
                                     if pq_n == 0 && cyw43::tx_credit_ok() && cyw43::ap_tx(f) {
                                         prio_direct += 1;
                                         true
@@ -3907,8 +3930,13 @@ fn cm5_p10_probe() {
                         };
                         // G12-M (ADR 0054): on the client AP (operator-signed WIFI.TXT) with a management VLAN, Mission
                         // Control is served on management only; the setup AP keeps it on Wi-Fi (onboarding happens there).
+                        // Re-evaluated after every live Wi-Fi / WAN apply (live-apply follow-up), never left at the boot decision.
                         #[cfg(feature = "mcserve")]
-                        let mc_wifi = wifi.is_none() || unsafe { (*core::ptr::addr_of!(uplink::MGMT)).is_none() };
+                        #[allow(unused_mut)] // re-evaluated by the live executors (p15-write)
+                        let mut mc_default = wifi.is_none();
+                        #[cfg(feature = "mcserve")]
+                        #[allow(unused_mut)]
+                        let mut mc_wifi = mcmgmt::serve_on_wifi(mc_default, unsafe { (*core::ptr::addr_of!(uplink::MGMT)).is_some() });
                         #[cfg(feature = "mcserve")]
                         let mut mc_mgmt: Option<([u8; 4], u8)> = None;
                         #[cfg(feature = "mcserve")]
@@ -4061,6 +4089,7 @@ fn cm5_p10_probe() {
                                             #[cfg(feature = "mcserve")]
                                             {
                                                 setup_live = _dflt; // the unclaimed reminder names the setup credential only while it runs
+                                                mc_default = _dflt;
                                             }
                                         }
                                         rtwdog::pet(now(), freq);
@@ -4068,6 +4097,25 @@ fn cm5_p10_probe() {
                                     }
                                     if plan.changed & !cfgd::LIVE_CAPABLE != 0 {
                                         ok = false; // never queued by this build (LIVE_CAPABLE gate at activation)
+                                    }
+                                    // live-apply follow-up (G12-M): where Mission Control is served follows what is running NOW
+                                    // (the credential in force, the management sub-interface), never the boot decision; the
+                                    // node's management address follows the live sub-interface (re-added below once addressed).
+                                    #[cfg(feature = "mcserve")]
+                                    {
+                                        let mg = unsafe { *core::ptr::addr_of!(uplink::MGMT) };
+                                        let was = mc_wifi;
+                                        mc_wifi = mcmgmt::serve_on_wifi(mc_default, mg.is_some());
+                                        if let Some((ip, pl)) = mc_mgmt.filter(|&(ip, pl)| !mg.is_some_and(|m| m.ip == ip && m.prefix == pl)) {
+                                            if let Some(n) = mcn.as_mut() {
+                                                n.remove_address(ip, pl);
+                                            }
+                                            mc_mgmt = None;
+                                            actions::set_mgmt_net(0, 0);
+                                        }
+                                        if was != mc_wifi {
+                                            kprint!(" [AP-MC] Mission Control {} after the live change (G12-M)\n", if mc_wifi { "served on Wi-Fi again" } else { "now on the management VLAN only" });
+                                        }
                                     }
                                     kprint!(" [CFGD] {} generation {}: changes {:#04x} applied live={}\n", if plan.revert { "LIVE REVERT to" } else { "LIVE APPLY of" }, plan.generation, plan.changed, ok);
                                     match cfgd::applied_device(ok, cyw43::now_secs()) {
@@ -4079,6 +4127,14 @@ fn cm5_p10_probe() {
                                         }
                                         _ => {}
                                     }
+                                }
+                                // live-apply follow-up (rule 7): while a trial runs, re-probe the management path once a second —
+                                // WAN reachability is not management reachability; a lost path holds the trial (it reverts, never
+                                // auto-commits). Not probed outside a trial.
+                                if cfgd::on_trial() && now().wrapping_sub(mprobe_at) > freq {
+                                    mprobe_at = now();
+                                    let p = wanlive::mgmt_reprobe(&mgmt_seen(our_ip));
+                                    cfgd::set_mgmt_health(Some(p == wanlive::MgmtProbe::Ok), p.word());
                                 }
                                 // ADR 0059 step 3: commit the configuration trial once the WAN is usable; revert + reboot after the window
                                 match cfgd::tick_device(cyw43::now_secs(), up.usable()) {
@@ -4160,26 +4216,54 @@ fn cm5_p10_probe() {
                                     break;
                                 }
                             }
+                            // Audit A7 self-heal (wifiheal): one classification per iteration. The Kick stage is the metal-proven
+                            // TX-to-station stall kick (2026-11-05, img 6ed4833: one control frame restarted it 2/2, a bare
+                            // dongle interrupt 0/2) — now issued only while tx_max is frozen with an awake station waiting.
+                            let heal_act = if wifi_off {
+                                wifiheal::Action::None
+                            } else {
+                                let (seq, max, _) = cyw43::ap_diag();
+                                let head = if pq_n > 0 { Some(&pq[pq_head][..6]) } else if wq_n > 0 { Some(&wq[wq_head % WQ_N][..6]) } else { None };
+                                let mut hd = [0u8; 6];
+                                let head = head.map(|h| { hd.copy_from_slice(h); hd });
+                                let smp = wifiheal::Sample { now_ms: now() / (freq / 1000).max(1), queued: (wq_n + pq_n) as u32, tx_seq: seq, tx_max: max,
+                                    rx_frames: wifi_frames, stations: stas.len(), fw_halts: cyw43::fw_halts() };
+                                let mut hp = MetalHeal { ssid: ap_ssid, cs: chosen_cs, gtk: &gtk, ap: &mut ap, head, nv: unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) } };
+                                heal.step(&smp, &mut hp)
+                            };
+                            match heal_act {
+                                wifiheal::Action::BssBounce | wifiheal::Action::FirmwareReload => {
+                                    // the stations re-join: what was queued for them is stale
+                                    wifi_tx_dropped += (wq_n + pq_n) as u32;
+                                    wq_n = 0;
+                                    pq_n = 0;
+                                    stas.clear();
+                                }
+                                wifiheal::Action::Degrade => {
+                                    wifi_off = true;
+                                    wifi_tx_dropped += (wq_n + pq_n) as u32;
+                                    wq_n = 0;
+                                    pq_n = 0;
+                                    stas.clear();
+                                    #[cfg(feature = "netsvc")]
+                                    capabilities::set_wifi_ap(false);
+                                    kprint!(" [WIFI-HEAL] DEGRADED — Wi-Fi recovery failed again after the one reboot: Wi-Fi is OFF for this boot (fault in /api/health wifi_heal); wired LAN, WAN and management keep running; no further resets\n");
+                                }
+                                _ => {}
+                            }
                             // TX-credit stall snapshot (once per episode): credit 0 for > 2 s with deliveries queued.
-                            {
+                            if !wifi_off {
                                 let (seq, max, _) = cyw43::ap_diag();
                                 let t = now();
                                 if max.wrapping_sub(seq) <= 2 && wq_n + pq_n > 0 {
                                     if credit0_since == 0 {
                                         credit0_since = t;
                                         unstick_stage = 0;
-                                    } else if unstick_stage == 0 && t.wrapping_sub(credit0_since) > freq / 10 {
-                                        // Firmware TX-to-station stall KICK (metal 2026-11-05, img 6ed4833): a bare dongle
-                                        // interrupt never restarted it (0/2); one control frame always did, within ~5 ms
-                                        // (2/2). The firmware only resumes the station's TX queue when its wl layer runs an
-                                        // ioctl. A MITIGATION, not a root cause: the firmware-side trigger is still unknown.
-                                        unstick[0] += 1;
-                                        let _ = cyw43::fw_pktcnts(); // one control frame (uses the reserved credit)
-                                        unstick_stage = 2;
-                                        unstick_t = t;
-                                    } else if unstick_stage == 2 && t.wrapping_sub(unstick_t) > freq / 2 {
-                                        let _ = cyw43::fw_pktcnts(); // still stuck 0.5 s later: kick again
-                                        unstick_t = t;
+                                    } else if heal_act == wifiheal::Action::Kick {
+                                        if unstick_stage == 0 {
+                                            unstick[0] += 1;
+                                            unstick_stage = 2;
+                                        }
                                     } else if !stall_diag_done && t.wrapping_sub(credit0_since) > 2 * freq {
                                         unstick[4] += 1;
                                         stall_diag_done = true;
@@ -4271,13 +4355,14 @@ fn cm5_p10_probe() {
                                 last_force = now();
                             }
                             let tpoll = cyw43::ticks();
-                            let ev = cyw43::ap_poll(&mut rx, force);
+                            let ev = if wifi_off { cyw43::ApEvent::Idle } else { cyw43::ap_poll(&mut rx, force) };
                             cyw43::prof_add(4, tpoll);
                             rx_busy = !matches!(ev, cyw43::ApEvent::Idle);
                             match ev {
                                 cyw43::ApEvent::Assoc(sta) => {
                                     assocs += 1;
                                     _last_sta = sta;
+                                    stas.add(&sta);
                                     kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
                                         sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                                     // A station that re-associates MID-handshake gets a fresh ANonce
@@ -4323,6 +4408,7 @@ fn cm5_p10_probe() {
                                     cyw43::ap_sae_forget(&sta);
                                     unsafe { (*core::ptr::addr_of_mut!(V6)).forget_mac(&sta) }; // release its IPv6 bindings (SAVI)
                                     leaves += 1;
+                                    stas.remove(&sta);
                                     kprint!("   [P11-AP3] station {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left (deauth/disassoc)\n",
                                         sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                                 }
@@ -4484,6 +4570,45 @@ fn cm5_p10_probe() {
                                                     up.dhcp.router[0], up.dhcp.router[1], up.dhcp.router[2], up.dhcp.router[3],
                                                     up.dhcp.dns[0], up.dhcp.dns[1], up.dhcp.dns[2], up.dhcp.dns[3]);
                                                 wan_leased_at = now();
+                                            }
+                                        }
+                                    } else if !up.usable() && matches!(wan_mode, hal::WanMode::Pppoe { .. }) {
+                                        // live-apply follow-up: the PPPoE dial (a live WAN apply, or this retry) is a bounded
+                                        // state machine stepped HERE — PADI .. IPCP with per-stage budgets and re-dials — so
+                                        // forwarding and Mission Control keep running while it dials (F-d closed for good).
+                                        if uplink::pppoe_dialing() {
+                                            match uplink::pppoe_dial_poll(&mut up) {
+                                                uplink::DialEvent::Up => {
+                                                    kprint!(" [M-NAT0] WAN came up (PPPoE dialled in the loop, retry {}): {}.{}.{}.{} peer {}.{}.{}.{} dns {}.{}.{}.{}\n", wan_retries,
+                                                        up.dhcp.yiaddr[0], up.dhcp.yiaddr[1], up.dhcp.yiaddr[2], up.dhcp.yiaddr[3],
+                                                        up.dhcp.router[0], up.dhcp.router[1], up.dhcp.router[2], up.dhcp.router[3],
+                                                        up.dhcp.dns[0], up.dhcp.dns[1], up.dhcp.dns[2], up.dhcp.dns[3]);
+                                                    wan_leased_at = now();
+                                                }
+                                                uplink::DialEvent::Failed { auth } => {
+                                                    if let Some((ph, why, .., st)) = uplink::pppoe_info().filter(|_| auth || wan_retries <= 3 || wan_retries % 30 == 0) {
+                                                        kprint!(" [WAN] PPPoE dial {} (retry {}): phase={:?} why={:?} stale_padt={}\n", if auth { "REJECTED (authentication)" } else { "gave up" }, wan_retries, ph, why, st.stale_padt);
+                                                    }
+                                                    if auth {
+                                                        cfgd::wan_auth_rejected(); // Q5: a live WAN trial reverts at once
+                                                    }
+                                                    last_wan_try = now();
+                                                }
+                                                _ => {}
+                                            }
+                                        } else {
+                                            let t = now();
+                                            if t.wrapping_sub(last_wan_try) > 10 * freq && arch_aarch64::gem::phy_link_up(0) {
+                                                last_wan_try = t;
+                                                wan_retries += 1;
+                                                if let Some((gig, changed)) = arch_aarch64::gem::sync_speed() {
+                                                    if changed {
+                                                        kprint!(" [WAN] link up after boot: MAC re-synced to {} (retry {})\n", if gig { "1 Gb/s" } else { "100 Mb/s" }, wan_retries);
+                                                    }
+                                                }
+                                                if let hal::WanMode::Pppoe { user, user_len, pass, pass_len } = wan_mode {
+                                                    let _ = uplink::pppoe_dial_begin(Nic::End0, &[8, 8, 8, 8], &user[..user_len as usize], &pass[..pass_len as usize], uplink::DIAL_LOOP_MS, &mut up);
+                                                }
                                             }
                                         }
                                     } else if !up.usable() {
@@ -4787,7 +4912,7 @@ fn cm5_p10_probe() {
                                     }
                                     cyw43::prof_add(5, twan);
                                     let t = now();
-                                    if t.wrapping_sub(last_ht) > freq / 10 {
+                                    if !wifi_off && t.wrapping_sub(last_ht) > freq / 10 {
                                         cyw43::ap_keepalive();
                                         last_ht = t;
                                     }
@@ -4873,42 +4998,16 @@ fn cm5_p10_probe() {
                                             let _ = wifi_send!(&v6buf[..k]);
                                         }
                                     }
-                                    // REL-08: the Wi-Fi firmware HALTED (it trapped): nothing on the host recovers the chip short of a
-                                    // firmware reload, which heqk does not have — so the guarded self-heal reset runs now, with the
-                                    // trap registers in the sealed crash record (the root-cause evidence for the vendor).
-                                    #[cfg(feature = "cm5")]
-                                    if cyw43::fw_halts() != fw_halts_seen {
-                                        fw_halts_seen = cyw43::fw_halts();
-                                        let up = t / freq.max(1);
-                                        if let Some(sh) = cyw43::fw_shared() {
-                                            let _ = cyw43::fw_console_dump(&sh, 24);
-                                            cyw43::fw_trap_dump(&sh);
-                                        }
-                                        let tr = cyw43::fw_trap_regs().unwrap_or([0; 4]);
-                                        kprint!(" [SELF-HEAL] Wi-Fi firmware HALTED (mailbox FWHALT; trap type {:#x} epc {:#010x} lr {:#010x} pc {:#010x}) — {} (uptime {} s)\n",
-                                            tr[0], tr[1], tr[2], tr[3], if rtwdog::self_heal_allowed() { "resetting the unit" } else { "NOT resetting (an early self-heal already happened: back-off, stays up for a power cycle)" }, up);
-                                        if rtwdog::self_heal_allowed() {
-                                            arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi firmware trap {:#x} epc {:#010x} lr {:#010x} pc {:#010x} (mailbox FWHALT)", tr[0], tr[1], tr[2], tr[3]));
-                                        }
-                                    }
+                                    // REL-08: a firmware HALT (mailbox FWHALT) is acted on at once by wifiheal (above): trap registers
+                                    // + diagnostics into the crash-record page, then a firmware reload (the PMKID correction re-applied
+                                    // by the same download), bounded; a reset only when the reloads are spent.
                                     // Stall detector: deliveries waiting for credit AND no WiFi frame read in
                                     // 10 s while a station is associated = the SDPCM stream is wedged (metal
                                     // 2026-10-09: frozen counters, 29 frames pending). Say so, loudly, once.
                                     if wq_n + pq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
                                         if !stall_reported {
-                                            kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged; a station re-join or a power-cycle recovers it\n", wq_n, wifi_frames);
+                                            kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged (wifiheal escalates)\n", wq_n, wifi_frames);
                                             stall_reported = true;
-                                        }
-                                        // Phase 3c self-heal: still wedged after WIFI_WEDGE_RESET_S -> nothing in the loop recovers it
-                                        // (the runtime watchdog only sees a hung LOOP, and this loop keeps running) -> reset
-                                        // through the EL2 gate, reason recorded for the next boot. Backoff: not again when the
-                                        // previous boot was itself such a reset that came early (a firmware that wedges at once
-                                        // must not turn into a reboot loop — it stays up, reported, for a power cycle).
-                                        #[cfg(feature = "cm5")]
-                                        if t.wrapping_sub(stall_since) > WIFI_WEDGE_RESET_S * freq && rtwdog::self_heal_allowed() {
-                                            let up = t / freq.max(1);
-                                            kprint!(" [SELF-HEAL] Wi-Fi stream wedged for {} s with {} deliveries waiting — resetting the unit (uptime {} s)\n", WIFI_WEDGE_RESET_S, wq_n, up);
-                                            arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi stream wedged for {} s ({} deliveries waiting for TX credit, no frame from the firmware)", WIFI_WEDGE_RESET_S, wq_n));
                                         }
                                     } else if wifi_frames != stall_frames {
                                         stall_frames = wifi_frames;
@@ -4917,7 +5016,8 @@ fn cm5_p10_probe() {
                                     }
                                     // Phase 3g: drain the detection ring when a quarter full or every 250 ms (was: only in the
                                     // 5-s heartbeat — a burst from many sources overran the 64-slot ring and lost evidence).
-                                    if events::pending() >= events::CAPACITY / 4 || t.wrapping_sub(last_ev_drain) > freq / 4 {
+                                    // Audit A7: drained on every iteration that has anything pending (was: a quarter full / 250 ms).
+                                    if events::pending() > 0 || t.wrapping_sub(last_ev_drain) > freq / 4 {
                                         last_ev_drain = t;
                                         // Which rules dropped: drain the SOAR ring (nobody else does in apmode).
                                         loop {
@@ -4955,7 +5055,13 @@ fn cm5_p10_probe() {
                                     if t.wrapping_sub(last_beat) > 5 * freq {
                                         {
                                             beat_n += 1;
-                                            if beat_n == 2 || beat_n % 12 == 6 {
+                                            {
+                                                let (hs, hc, hk, hb, hr, hpr) = wifiheal::status();
+                                                kprint!("   [WIFI-HEAL] state={} last={} kicks={} bounces={} reloads={} post_reboot_boot={} stations={}\n", hs, hc, hk, hb, hr, hpr, stas.len());
+                                            }
+                                            if wifi_off {
+                                                // degraded: the radio is off — no firmware console / chanspec reads
+                                            } else if beat_n == 2 || beat_n % 12 == 6 {
                                                 if let Some(sh) = cyw43::fw_shared() {
                                                     let r = cyw43::fw_console_dump(&sh, 12);
                                                     kprint!("   [FWCON] (periodic) shared flags={:#06x} console={:?}\n", sh.flags, r);
@@ -4964,7 +5070,7 @@ fn cm5_p10_probe() {
                                                     kprint!("   [FWCON] sdpcm_shared not readable\n");
                                                 }
                                             }
-                                            if beat_n % 12 == 0 {
+                                            if beat_n % 12 == 0 && !wifi_off {
                                                 if let Some(cs) = cyw43::current_chanspec() {
                                                     ch_checks += 1;
                                                     ch_last = cs;
@@ -7175,6 +7281,9 @@ pub extern "C" fn kmain() -> ! {
         let _ = cfgd::policy_selftest(); // step 7: the live policy executor + the owner-address probe (F-e)
         let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
         let _ = wifilive::selftest(); // step 10: the Wi-Fi executor (derive first, the BSS bounce, keys wiped, LKG revert)
+        let _ = wifiheal::selftest(); // audit A7: Wi-Fi self-heal (classify, kick -> bounce -> reload -> one reboot -> degrade)
+        #[cfg(not(feature = "cm5"))]
+        let _ = wifilive::after_selftest(); // follow-up: Mission Control serving re-evaluated + IPv6 state at an AP restart
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
@@ -13442,7 +13551,7 @@ fn p3_user_demo() {
 /// SAFETY contract: called ONLY from the `lower_sync_entry` asm vector stub, with `frame` pointing at
 /// the 34-word register frame that stub just pushed on the current kernel stack (always valid, aligned,
 /// exclusively owned for the duration of the call). No Rust code calls it, so the raw-pointer argument
-/// is an ABI fact, not an API — hence the scoped clippy allow rather than an `unsafe fn` (ADR 0052 G1).
+/// is an ABI fact, not an API — hence the scoped clippy allow rather than an `unsafe fn` (ADR 0063 G1).
 #[no_mangle]
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub extern "C" fn handle_lower_sync(frame: *mut u64) -> usize {
@@ -14026,9 +14135,6 @@ fn rtc_plausible(secs: u32) -> bool {
     (1_767_225_600..4_102_444_800).contains(&secs)
 }
 
-/// Phase 3c: a Wi-Fi stream wedged this long (deliveries waiting, nothing read from the firmware) resets the unit.
-#[allow(dead_code)]
-const WIFI_WEDGE_RESET_S: u64 = 120;
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
@@ -14354,6 +14460,20 @@ fn apply_policy_live<D: hal::BlockDev>(dev: &D) -> bool {
     ok
 }
 
+/// The management re-probe's view (live-apply follow-up): the management sub-interface as running now (address,
+/// gateway resolved), the AP addressing, and the owner's own client (resolved on the management VLAN when on-link).
+#[cfg(all(feature = "cm5", feature = "p15-write", feature = "mcserve"))]
+fn mgmt_seen(lan_ip: [u8; 4]) -> wanlive::MgmtSeen {
+    let owner = cfgd::owner();
+    let m = unsafe { *core::ptr::addr_of!(arch_aarch64::uplink::MGMT) };
+    let on_link = |m: &arch_aarch64::uplink::Mgmt| {
+        let mask = if m.prefix == 0 { 0 } else { u32::MAX << (32 - m.prefix.min(32) as u32) };
+        m.ip != [0; 4] && u32::from_be_bytes(owner) & mask == u32::from_be_bytes(m.ip) & mask
+    };
+    let owner_resolved = owner != [0; 4] && m.as_ref().is_some_and(|m| on_link(m)) && arch_aarch64::uplink::mgmt_nexthop(owner).is_some();
+    wanlive::MgmtSeen { mgmt: m.map(|m| (m.ip, m.prefix, m.gw, m.gw_mac.is_some())), lan: (lan_ip, 24), owner, owner_resolved }
+}
+
 /// Step 9 (sealed-config / live apply): the live WAN executor. Verify + parse FIRST — the bundle's WAN section
 /// (verified by cfgd), else (a revert to "no bundle") the per-file WAN chain, exactly as at boot; but where the boot
 /// falls back to DHCP, a live apply REFUSES and touches nothing. Then `wanlive::apply`: teardown, link, start.
@@ -14444,6 +14564,9 @@ fn apply_wifi_live<D: hal::BlockDev>(dev: &D, chanspec: u16, pmk: &mut [u8; 32],
     let mut port = MetalWifi { ap: arch_aarch64::cyw43::ApResult::new(), #[cfg(feature = "wpa3")] prep: None };
     let mut scratch = wifilive::Keys::new();
     let (ok, mode) = wifilive::apply(&mut port, &mut want, chanspec, pmk, gtk, &mut scratch);
+    if mode.is_some() {
+        clear_station_v6_state(); // the radio was bounced (even when it then failed to key): every station re-joins
+    }
     kprint!(" [WIFI] live apply: SSID {} bytes, security {} — {}\n", ssid_len,
         match mode { Some(0) => "WPA2-PSK", Some(1) => "WPA3-SAE", Some(_) => "WPA3 transition", None => "-" },
         if ok { "BSS re-started on the same channel, stations re-join; waits for the owner's confirm" } else if mode.is_none() { "REFUSED before the radio was touched (key derivation)" } else { "the BSS did NOT come up serve-ready + keyed: reverting live" });
@@ -14503,6 +14626,99 @@ fn wifi_default() -> Option<wifilive::Want> {
 }
 
 /// The metal side of the Wi-Fi executor (the CYW43455 AP only: never the WAN, never eth1, never a firmware download).
+/// Audit A7: the Wi-Fi self-heal port on the CYW43455 (wifiheal::Port).
+#[cfg(feature = "cm5")]
+struct MetalHeal<'a> {
+    ssid: &'a [u8],
+    cs: u16,
+    gtk: &'a [u8; 16],
+    ap: &'a mut arch_aarch64::cyw43::ApResult,
+    /// The queued head's destination (the station a probe asks the firmware about).
+    head: Option<[u8; 6]>,
+    nv: &'a mut [u8],
+}
+#[cfg(feature = "cm5")]
+impl MetalHeal<'_> {
+    fn start(&mut self) -> bool {
+        use arch_aarch64::cyw43;
+        let (ch, _) = cyw43::chanspec_primary(self.cs);
+        cyw43::ap_start(self.ssid, ch as u32, self.cs, false, self.ap);
+        self.ap.gtk_set = cyw43::ap_install_gtk(self.gtk, 1);
+        self.ap.serve_ready() && self.ap.gtk_set
+    }
+}
+#[cfg(feature = "cm5")]
+impl wifiheal::Port for MetalHeal<'_> {
+    fn kick(&mut self) {
+        let _ = arch_aarch64::cyw43::fw_pktcnts(); // one control frame (uses the reserved credit)
+    }
+    fn probe(&mut self) -> wifiheal::Probe {
+        match self.head {
+            Some(m) if m[0] & 1 == 0 => match arch_aarch64::cyw43::fw_sta_info(&m) {
+                Some(i) if i.flags & 0x10 == 0 => wifiheal::Probe::Gone,
+                Some(i) if i.flags & 0x100 != 0 => wifiheal::Probe::Asleep,
+                Some(_) => wifiheal::Probe::Awake,
+                None => wifiheal::Probe::Failed,
+            },
+            _ => wifiheal::Probe::Unknown,
+        }
+    }
+    fn capture(&mut self, class: wifiheal::Class, d: &mut wifiheal::Diag) {
+        use arch_aarch64::cyw43;
+        use wifiheal::*;
+        d.w[W_FW_HASH] = cyw43::fw_hash();
+        d.w[W_PMKID_FIX] = match cyw43::pmkid_patch() {
+            Some(true) => 1,
+            Some(false) => 2,
+            None => 0,
+        };
+        d.w[W_FC_MASK] = cyw43::fc_mask() as u32;
+        if let Some(sh) = cyw43::fw_shared() {
+            let _ = cyw43::fw_console_dump(&sh, 24);
+            cyw43::fw_trap_dump(&sh);
+        }
+        if let Some(tr) = cyw43::fw_trap_regs() {
+            d.w[W_TRAP..W_TRAP + 4].copy_from_slice(&tr);
+        }
+        if class != Class::Crash {
+            if let Some(c) = cyw43::fw_pktcnts() {
+                d.w[W_PKTCNT..W_PKTCNT + 5].copy_from_slice(&c);
+            }
+        }
+        wifiheal::print_diag(" [WIFI-HEAL] diagnostics before recovery", 0, d);
+    }
+    fn record(&mut self, flags: u32, d: &wifiheal::Diag) {
+        arch_aarch64::crashrec::write_heal(flags, &d.w);
+    }
+    fn bounce(&mut self) -> bool {
+        let _ = arch_aarch64::cyw43::ap_stop();
+        #[cfg(feature = "wpa3")]
+        arch_aarch64::cyw43::ap_sae_forget_all();
+        let ok = self.start();
+        clear_station_v6_state(); // every station re-associates: its SAVI / neighbour / pinhole state is stale
+        kprint!(" [WIFI-HEAL] BSS bounce on chanspec {:#06x}: serve-ready={}\n", self.cs, ok);
+        ok
+    }
+    fn reload(&mut self) -> bool {
+        let r = arch_aarch64::cyw43::fw_reload(self.nv);
+        let ok = r == 0 && self.start();
+        clear_station_v6_state(); // a reloaded radio has no stations: drop their IPv6 state too
+        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={}\n",
+            r, arch_aarch64::cyw43::pmkid_patch(), ok);
+        ok
+    }
+    fn reboot(&mut self, d: &wifiheal::Diag) {
+        let up = d.w[wifiheal::W_UPTIME_S] as u64;
+        kprint!(" [SELF-HEAL] Wi-Fi recovery exhausted ({} reloads) — the ONE reboot (a recurrence after it degrades)\n", d.w[wifiheal::W_COUNTS] >> 24);
+        arch_aarch64::crashrec::self_heal_reset(up, format_args!("Wi-Fi recovery exhausted: {} after {} reload(s); the next boot degrades Wi-Fi on a recurrence",
+            wifiheal::class_name(d.w[wifiheal::W_CLASS]), d.w[wifiheal::W_COUNTS] >> 24));
+    }
+    fn degrade(&mut self) {
+        let _ = arch_aarch64::cyw43::ap_stop();
+        arch_aarch64::cyw43::radio_off();
+    }
+}
+
 #[cfg(all(feature = "cm5", feature = "p15-write"))]
 struct MetalWifi {
     ap: arch_aarch64::cyw43::ApResult,
@@ -16110,4 +16326,98 @@ fn pppoe_selftest() {
     let ok = neg_ok && echo_ok && prej_ok && encap_ok && decap_ok && padt_ok && pap_ok && ka && stale_ok && short_ok;
     kprint!(" [P-pppoe] {} — PPPoE vs a scripted AC: discovery+cookie, LCP (ACFC rejected), CHAP-MD5 verified, IPCP Nak -> 10.67.0.10 dns 1.1.1.1/9.9.9.9 => open={} | Echo-Reply w/ magic={} IPV6CP run (AC IID acked, ours acked -> v6 up, IPv6 encap/decap) + CCP still Protocol-Rejected={} IPv4 encap={} decap={} PADT->down={} | PAP run open={} | client keepalive: one echo per interval, reply resets, 3 misses -> down (NoEcho)={} | stale-session sweep: PADT for an old SID, rate-limited, never broadcast={} | short (len 0/1) or not-to-us session frames refused by both decaps, no panic={}\n",
         if ok { "PASS" } else { "FAIL" }, neg_ok, echo_ok, prej_ok, encap_ok, decap_ok, padt_ok, pap_ok, ka, stale_ok, short_ok);
+
+    // ---- [P-cfgd-pppoe] (live-apply follow-up): the same engine driven by the bounded dial (`pppoe::Dial`) as the AP
+    // loop steps it — every step returns at once; the scripted AC answers with a delay, stays silent, or rejects.
+    fn new_ac(chap: bool) -> Ac {
+        Ac {
+            chap, lcp_reqs_sent: 0, cli_acked_us: false, we_acked_cli: false, authed: false, auth_started: false,
+            ipcp_started: false, chap_ok: false, pap_ok: false, cookie_echoed: false, rejected_acfc: false,
+            ipcp_nak_sent: false, ipcp_acked: false,
+        }
+    }
+    /// What a drive saw: (the dial's conclusion, steps taken, PADIs / PADTs the client sent, the clock at the end).
+    struct Drive {
+        st: arch_aarch64::pppoe::DialStep,
+        steps: u32,
+        padi: u32,
+        padt: u32,
+        now: u64,
+    }
+    /// Step the dial every 100 ms like the loop does; the AC hears the client only from `deaf_until` on, and never
+    /// hears session frames when `lcp_deaf` (discovery works, LCP never answers).
+    fn drive(pass: &[u8], chap: bool, deaf_until: u64, lcp_deaf: bool, budget: u64, max_ms: u64) -> (Drive, Pppoe) {
+        use arch_aarch64::pppoe::{Dial, DialStep};
+        let mut c = Pppoe::new(CLI, USER, pass, 0x0102_0304, 0x0a0b_0c0d);
+        let mut ac = new_ac(chap);
+        let mut tx = Tx::new();
+        let mut now = 0u64;
+        let mut d = Dial::begin(&mut c, now, budget, &mut tx);
+        let mut r = Drive { st: DialStep::Pending, steps: 0, padi: 0, padt: 0, now: 0 };
+        let mut q = Out { f: [[0; 256]; 4], len: [0; 4], n: 0 };
+        loop {
+            // the client's frames reach the AC (or not); the AC's answers are fed back one by one
+            for i in 0..tx.n {
+                let f = tx.frame(i);
+                let disc = be16(f, 12) == ETH_DISC;
+                r.padi += (disc && f[15] == 0x09) as u32;
+                r.padt += (disc && f[15] == 0xa7) as u32;
+                if now >= deaf_until && (disc || !lcp_deaf) {
+                    let mut o = Out { f: [[0; 256]; 4], len: [0; 4], n: 0 };
+                    ac.handle(f, &mut o);
+                    for k in 0..o.n {
+                        q.push(&o.f[k][..o.len[k]]);
+                    }
+                }
+            }
+            tx.clear();
+            let cur = core::mem::replace(&mut q, Out { f: [[0; 256]; 4], len: [0; 4], n: 0 });
+            for k in 0..cur.n {
+                c.rx(&cur.f[k][..cur.len[k]], now, &mut tx);
+                for i in 0..tx.n {
+                    let f = tx.frame(i);
+                    if now >= deaf_until && (be16(f, 12) == ETH_DISC || !lcp_deaf) {
+                        let mut o = Out { f: [[0; 256]; 4], len: [0; 4], n: 0 };
+                        ac.handle(f, &mut o);
+                        for j in 0..o.n {
+                            q.push(&o.f[j][..o.len[j]]);
+                        }
+                    }
+                }
+                tx.clear();
+            }
+            r.st = d.step(&mut c, now, &mut tx);
+            r.steps += 1;
+            if r.st != DialStep::Pending || now >= max_ms {
+                r.now = now;
+                return (r, c);
+            }
+            now += 100;
+        }
+    }
+    {
+        use arch_aarch64::pppoe::{DialStep, DIAL_ATTEMPTS, DIAL_STAGE_MS};
+        // 1. a responsive AC (CHAP): open on the first attempt, well inside the budget
+        let (r1, c1) = drive(SECRET_TV, true, 0, false, 60_000, 120_000);
+        let open = r1.st == DialStep::Open && c1.my_ip == [10, 67, 0, 10] && r1.padi == 1 && r1.now < 2_000;
+        // 2. the AC is silent past the discovery budget: the stage times out, a FRESH discovery follows, it opens
+        let (r2, _) = drive(SECRET_TV, true, DIAL_STAGE_MS[0] + 500, false, 60_000, 120_000);
+        let redial = r2.st == DialStep::Open && r2.now >= DIAL_STAGE_MS[0] && r2.now < DIAL_STAGE_MS[0] + 6_000;
+        // 3. an AC that never answers: DIAL_ATTEMPTS discoveries, then the dial gives up (NoPado) — bounded
+        let (r3, c3) = drive(SECRET_TV, true, u64::MAX, false, 60_000, 120_000);
+        let gave_up = r3.st == DialStep::GaveUp(DownWhy::NoPado) && c3.phase == Phase::Down
+            && r3.now >= DIAL_STAGE_MS[0] * DIAL_ATTEMPTS as u64 && r3.now < DIAL_STAGE_MS[0] * DIAL_ATTEMPTS as u64 + 1_000;
+        // 4. discovery answers, LCP never does: the LCP stage times out; the re-dial PADTs the half-open session first
+        let (r4, _) = drive(SECRET_TV, true, 0, true, 60_000, 120_000);
+        let padt = r4.st == DialStep::GaveUp(DownWhy::LcpTimeout) && r4.padt == DIAL_ATTEMPTS as u32 - 1 && r4.padi >= DIAL_ATTEMPTS as u32;
+        // 5. Q5: PAP with the wrong password -> AuthFailed at once (first attempt, no re-dial), the engine says so
+        let (r5, c5) = drive(b"wrong", false, 0, false, 60_000, 120_000);
+        let auth = r5.st == DialStep::AuthFailed && c5.auth_failed() && r5.padi == 1 && r5.now < 2_000;
+        // 6. the overall budget bounds the dial even while attempts remain
+        let (r6, _) = drive(SECRET_TV, true, u64::MAX, false, 15_000, 120_000);
+        let budget = matches!(r6.st, DialStep::GaveUp(_)) && r6.now >= 15_000 && r6.now < 15_200;
+        let ok = open && redial && gave_up && padt && auth && budget;
+        kprint!(" [P-cfgd-pppoe] {} — live-apply follow-up, the PPPoE dial as a bounded state machine stepped by the AP loop (PADI -> PADO -> PADR -> PADS -> LCP -> auth -> IPCP, every step returns at once): a responsive AC opens on the first attempt={} a stage past its budget re-dials with a fresh discovery and opens={} a silent AC: {} attempts then the dial gives up (NoPado), bounded={} a half-open session is PADT'd before the re-dial (LCP never answers)={} Q5: a rejected password ends the dial at once, no re-dial={} the overall budget bounds the dial={}\n",
+            if ok { "PASS" } else { "FAIL" }, open, redial, DIAL_ATTEMPTS, gave_up, padt, auth, budget);
+    }
 }

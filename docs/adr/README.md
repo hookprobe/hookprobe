@@ -42,40 +42,42 @@ bootc/Debian Linux tier remain as dated records and apply only to `legacy/linux-
 | [0032](0032-custom-edge-kernel-btf-mainline-rp1.md) | BTF-enabled edge kernel | Superseded | 0043 / 0047 |
 | [0033](0033-dns-sinkhole-rpz.md) | DNS sinkhole / RPZ enforcement | Accepted (Linux tier) | — (heqk counterpart: 0052) |
 | [0034](0034-adaptive-wifi-regdomain-and-calibration.md) | Adaptive Wi-Fi: regdomain + calibration | Accepted (Linux tier) | — |
-| [0035](0035-substrate-ownership-underlay-overlay.md) | HookProbe Linux: substrate ownership & underlay/overlay | Proposed | — |
-| [0036](0036-verifiable-supply-chain-reproducible-bootstrappable.md) | Verifiable supply chain | Proposed | — |
-| [0037](0037-zero-touch-onboarding-flasher-provisioning.md) | Zero-touch onboarding & flasher-as-factory | Proposed | — |
-| [0038](0038-ai-tiers-bpf-lsm-process-trust.md) | AI tiers & BPF-LSM process trust | Proposed | — |
-| [0039](0039-system-minimization-image-cleaning.md) | System minimization & image cleaning | Proposed | — |
-| [0040](0040-experience-ux-ui-scope-gui-features.md) | The experience layer: UX, UI scope, GUI features | Proposed | — |
-| [0041](0041-container-vm-overlay-management.md) | The container & VM overlay | Proposed | — |
-| [0042](0042-wifi-security-surface-wids-and-radio-tiers.md) | Wi-Fi as a security surface (WIDS) | Proposed | — |
+| [0035](0035-substrate-ownership-underlay-overlay.md) | HookProbe Linux: substrate ownership & underlay/overlay | Retired (operator 2026-11-12) | 0043 (D3) / 0047 |
+| [0036](0036-verifiable-supply-chain-reproducible-bootstrappable.md) | Verifiable supply chain | Retired (operator 2026-11-12) | — (R1 gate now in 0063) |
+| [0037](0037-zero-touch-onboarding-flasher-provisioning.md) | Zero-touch onboarding & flasher-as-factory | Retired (operator 2026-11-12) | in part 0051 / 0054 / 0058 / 0059 |
+| [0038](0038-ai-tiers-bpf-lsm-process-trust.md) | AI tiers & BPF-LSM process trust | Retired (operator 2026-11-12) | 0047 (BPF-LSM part) |
+| [0039](0039-system-minimization-image-cleaning.md) | System minimization & image cleaning | Retired (operator 2026-11-12) | 0044 / 0047 |
+| [0040](0040-experience-ux-ui-scope-gui-features.md) | The experience layer: UX, UI scope, GUI features | Retired (operator 2026-11-12) | — |
+| [0041](0041-container-vm-overlay-management.md) | The container & VM overlay | Retired (operator 2026-11-12) | 0044 D1 / 0047 |
+| [0042](0042-wifi-security-surface-wids-and-radio-tiers.md) | Wi-Fi as a security surface (WIDS) | Retired (operator 2026-11-12) | — |
 | [0043](0043-heqk-microkernel-substrate.md) | The heqk microkernel substrate | Ratified | in part by 0047 |
 | [0044](0044-zero-linux-rpi-native-cm5.md) | Zero-Linux on CM5 | Ratified | in part by 0047 (D2) |
-| [0045](0045-default-dev-test-credentials.md) | Default dev/test credentials | Proposed | — |
-| [0046](0046-github-migration-and-key-custody.md) | GitHub migration & key custody | Proposed (migration done 2026-11-07) | — |
+| [0045](0045-default-dev-test-credentials.md) | Default dev/test credentials | Accepted (operator 2026-11-12) | — |
+| [0046](0046-github-migration-and-key-custody.md) | GitHub migration & key custody | Accepted (operator 2026-11-12) — migration done 2026-11-07 | — |
 | [0047](0047-heqk-everywhere-on-device-mission-control.md) | heqk replaces Linux everywhere; Mission Control on device | Ratified | — |
 | [0048](0048-RESERVED.md) | Reserved: BOI / HookProbe Behavioural Genome | Reserved, not cut | — |
 | [0049](0049-wan-policy-authority-and-ipv6-source-identity.md) | WAN policy authority, IPv6 source identity | Accepted | — |
 | [0050](0050-heqk-parser-placement-el1-vs-el0.md) | heqk parser placement: EL1 vs EL0 | Accepted | — |
 | [0051](0051-mission-control-https.md) | Mission Control HTTPS | Accepted | — |
-| [0052](0052-shield-v2-dns-protection-on-heqk.md) | Shield v2: DNS protection on heqk | Implemented, metal-proven (G22); operator ratification not separately recorded | — |
+| [0052](0052-shield-v2-dns-protection-on-heqk.md) | Shield v2: DNS protection on heqk | Accepted (operator 2026-11-12); implemented, metal-proven (G22) | — |
 | [0053](0053-operator-write-actions-on-device.md) | Operator write actions in on-device Mission Control | Accepted with modifications | — |
 | [0054](0054-ap-provisioning-per-device-credential.md) | Wi-Fi AP provisioning: per-device setup credential | Accepted (increment 1 built) | — |
 | [0055](0055-owner-policy-journal.md) | Owner policy journal: durable owner settings from Mission Control | Proposed contract (direction approved 2026-11-09); amends 0053 D1/S7 | — |
 | [0056](0056-device-upload-interface.md) | Device-side upload interface (signed artifacts over HTTPS) | Proposed contract (direction approved 2026-11-09); flasher countersign pending | — |
 | [0057](0057-shield-protection-levels.md) | Shield protection levels (categories + relaxed/balanced/strict) | Implemented, metal-proven | — |
 | [0058](0058-owner-signed-runtime-config.md) | Owner-signed configuration on a running device (WAN, Wi-Fi, policy) | Accepted (operator 2026-11-10: configuration journey + eight rules; reconciled 2026-11-12) | 0056 (extends D2, answers open item 2) |
-| [0059](0059-secure-configuration-management.md) | Secure configuration management: signed-bytes-only rule, HQCFG1 bundle, cfgd trial/commit/revert, key hierarchy, hsh at EL0, recovery | Proposed, partly decided (MVP order confirmed 2026-11-10; D9 R6 = D 2026-11-12); evidence: `docs/design/secure-config-assessment-2026-11-10.md`, `docs/design/adr0059-implementation.md` | 0049 D1, 0056, 0058 (amends D2/D3/Consequences) |
+| [0059](0059-secure-configuration-management.md) | Secure configuration management: signed-bytes-only rule, HQCFG1 bundle, cfgd trial/commit/revert, key hierarchy, hsh at EL0, recovery | Accepted (operator 2026-11-12: D1–D8, D10 as written; D9 R6 = D; MVP order 2026-11-10); evidence: `docs/design/secure-config-assessment-2026-11-10.md`, `docs/design/adr0059-implementation.md` | 0049 D1, 0056, 0058 (amends D2/D3/Consequences) |
 | [0060](0060-heqk-smp-execution-model-core-roles-bkl.md) | heqk SMP execution model, core roles (DP/CP/MG), admission-time allocation, transitional BKL with gates | Proposed (2026-11-11; operator direction recorded, review pending) | Replaces `os/kernel/ARCHITECTURE.md` single-core contract (after D3) |
 | [0061](0061-heqk-memory-budgets-and-admission.md) | heqk memory discovery, budgets and admission (every byte budgeted, no overcommit) | Proposed (2026-11-11) | — |
 | [0062](0062-heqk-microarchitectural-isolation-multi-tenant-pop.md) | Microarchitectural isolation and verified security eligibility for multi-tenant SASE PoPs (V0: eligibility verified, never configured) | Proposed (2026-11-11; operator decisions recorded, review pending) | Amends `HEQK_REMEDIATION_PLAN.md` §4.4, `SECURITY.md` CNTPCT residual, ADR 0050 |
-| [0052 CI/CD](0052-autonomous-cicd-gate-spine-and-heal-loop.md) | Autonomous CI/CD gate spine and heal loop (**duplicate number** — proposed renumber to **0063**, operator decision; 0058 is taken since 2026-11-10) | Proposed; gates implemented on main (PR #738) | — |
+| [0063](0063-autonomous-cicd-gate-spine-and-heal-loop.md) | Autonomous CI/CD: one deterministic gate spine, five lifecycle loops (renumbered from the duplicate 0052 on 2026-11-12) | Proposed; gates implemented on main (PR #738) | — |
 
-**Duplicate number 0052 (open, operator decision).** Two files carry 0052: Shield v2 (2026-11-07, keeps 0052) and the
-autonomous CI/CD ADR (2026-11-08). Proposed new number for the CI/CD ADR: **0063** (next free; reserve it — do not
-reuse 0063 for anything else). Renumbering changes about 25 references under `tools/ci/` and a few config comments,
-so it waits for the operator. The CI/CD file carries a note at its top.
+**Duplicate number 0052 — resolved 2026-11-12 (operator decision).** Two files carried 0052: Shield v2 (2026-11-07)
+keeps 0052; the autonomous CI/CD ADR (2026-11-08) is now **[0063](0063-autonomous-cicd-gate-spine-and-heal-loop.md)**.
+Every reference that meant the CI/CD record was updated (`tools/ci/**`, `.github/**`, `.gitignore`, `.gitleaks.toml`,
+the crate `Cargo.toml` `publish = false` comments, one comment in `os/kernel/kernel/src/main.rs`,
+`docs/compliance/cra-matrix.md`); references meaning Shield v2 keep 0052. Older commits / issues / PRs that say
+"ADR 0052" about the gate spine or heal loop mean 0063.
 
 **Status reconciled 2026-11-12 (A12 doc hygiene).** Status lines changed: 0029, 0030, 0032 (Proposed → Superseded,
 matching this index and their banners); 0052 Shield (Proposed → Implemented, metal-proven; ratification to confirm);
@@ -85,5 +87,10 @@ partly decided). Dated notes only (no status change): 0052 CI/CD, 0055, 0056, an
 0046 (migration done 2026-11-07), 0052 CI/CD (+ renumber), 0055 / 0056 contracts, 0059 (rest), 0060–0062, and the
 retirement of 0035–0042. `docs/design/heqk-audit-2026-11-10.md` §2 also lists 0003, 0008, 0014, 0024–0026, 0028,
 0035, 0038, 0039, 0041 as Linux-tier; this index does not (left for the operator).
+
+**Operator decisions 2026-11-12 (later the same day, PR #1020 follow-up).** Accepted: 0052 Shield v2, 0059 (D1–D8 and
+D10 as written; R6 = D already recorded), 0045, 0046. Retired: 0035–0042 (superseding ADR in the last column where one
+exists; each file carries a dated note, incl. the clauses live tooling still cites). CI/CD ADR renumbered 0052 → 0063.
+Still awaiting the operator: 0055 / 0056 contracts, 0060–0062, 0063 (CI/CD) ratification.
 
 Implementation status per ADR, with code evidence and deviations: `docs/design/heqk-audit-2026-11-10.md` §2.

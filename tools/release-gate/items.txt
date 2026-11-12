@@ -25,7 +25,8 @@ REL-04 | reliability | Randomized power-loss torture: every acknowledged owner r
 REL-05 | reliability | 72 h soak under real traffic (final acceptance, after every build phase) | metal:docs/design/metal-evidence/soak-72h.md:SOAK: PASS
 REL-06 | reliability | Thermal in the enclosure at sustained throughput | blocked:not run
 REL-07 | reliability | Client scale (many mixed clients, roaming, sleeping phones) | blocked:2 bench clients only
-REL-08 | reliability | Wi-Fi TX-stall root cause (recovery exists: kick + wedge self-heal reset) | blocked:root cause open
+REL-08a | reliability | Wi-Fi TX-stall root cause (recovery: kick + wifiheal ladder) | blocked:root cause open — needs a documented trigger + self-heal metal evidence
+REL-08b | reliability | CYW43455 PMKID-cache use-after-free (WPA3 AP, ~10 h): RAM correction wifi-pmkid-fix | blocked:needs the REL-08 regression matrix on metal + CMP-02 firmware clearance
 REL-09 | reliability | Factory reset erases the owner data (journal, evidence log, snapshot, artifact manifest) and the unit returns as shipped | phase:Pownerjournal,metal:docs/design/metal-evidence/20261110-batch38-47.md:FACTORY-RESET: PASS
 NET-01 | network | DNS under a saturating download (operator rule 2026-11-10): >= 3 interleaved runs, >= 120 queries/side; p90 < 500 ms every run, one-sided Fisher p > 0.05 vs the path baseline, pooled single-try loss <= 8 % | phase:Ptxprio,metal:docs/design/metal-evidence/dns-under-load.md:DNS-UNDER-LOAD: PASS
 NET-02 | network | LAN client end to end (DHCP, DNS, NAT, IPv6, holds) | metal:docs/design/metal-evidence/20261110-batch29.md:LAN-CLIENT: PASS

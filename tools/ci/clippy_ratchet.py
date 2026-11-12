@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""G1 clippy ratchet for the heqk kernel workspace (ADR 0052).
+"""G1 clippy ratchet for the heqk kernel workspace (ADR 0063).
 
-heqk has never been clippy-clean (~230 findings at ADR 0052 time), so `-D warnings` would be
+heqk has never been clippy-clean (~230 findings at ADR 0063 time), so `-D warnings` would be
 permanently red and therefore ignored. A ratchet is the honest gate instead:
 
   * count clippy/rustc findings per (crate, lint) for our own crates;

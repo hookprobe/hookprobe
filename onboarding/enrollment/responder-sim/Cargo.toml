@@ -9,7 +9,7 @@
 name = "responder-sim"
 version = "0.1.0"
 edition = "2021"
-publish = false  # first-party: never published to crates.io (ADR 0052 G4)
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
 
 # Standalone workspace — do NOT get absorbed by the parent aarch64-none heqk workspace.
 [workspace]
@@ -21,6 +21,9 @@ publish = false  # first-party: never published to crates.io (ADR 0052 G4)
 default = ["securechannel", "securechannel-selftest"]
 securechannel = []
 securechannel-selftest = []
+# declared (off) so the shared securechannel.rs `cfg(feature = "securechannel-host-responder")` is a known cfg here
+# (unexpected_cfgs); responder-sim uses the selftest constructors, superpop uses the host-responder ones
+securechannel-host-responder = ["securechannel"]
 
 [dependencies]
 # The SAME crates + versions/features the kernel's `securechannel` feature pins, so the
