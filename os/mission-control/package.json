@@ -5,7 +5,7 @@
   "description": "HookProbe OS V2 — Mission Control (Layer 0 calm landing). Stack: Astro 7 + SolidJS + TypeScript. Build to static assets; served at runtime by Rust/Axum (no Node at runtime on edge). ADR 0001.",
   "scripts": {
     "dev": "astro dev",
-    "build": "astro build",
+    "build": "astro build && node scripts/shared-inline-scripts.mjs",
     "preview": "astro preview",
     "check": "astro check"
   },
