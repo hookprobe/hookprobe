@@ -451,6 +451,10 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                             Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{}", a.staged, a.gen, q),
                             None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null", a.staged, a.gen),
                         };
+                        // steps 8 + 11: whether it applied live (no reboot) and whether the owner must confirm in the window
+                        let applies = if a.live { "live" } else if a.staged { "next_boot" } else { "now" };
+                        let win = if !a.live { 0 } else if a.needs_confirm { crate::cfgd::WINDOW_S } else { crate::cfgd::TRIAL_AUTO_S };
+                        let _ = write!(w, ",\"applies\":\"{}\",\"reboot_required\":{},\"needs_confirm\":{},\"window_s\":{}", applies, a.staged, a.needs_confirm, win);
                         // design §3.8: how a staged configuration is stored (additive field)
                         match a.at_rest {
                             Some(r) => write!(w, ",\"at_rest\":\"{}\"}}", r),
