@@ -9,5 +9,5 @@
 | Per-unit factory provisioning station (identity, setup credential, owner key, TLS cert, label, self-test, record) | [`../../tools/provisioning/`](../../tools/provisioning/README.md) |
 | Signed operator policy | [`../kernel/tools/policy-sign.py`](../kernel/tools/policy-sign.py) |
 
-Decision: ADR 0037 (zero-touch onboarding / flasher).
+Decision: ADR 0037 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059) (zero-touch onboarding / flasher).
 **Not built yet:** the WebUSB browser flasher and raw/qcow2 downloads for the QEMU target.

@@ -5,7 +5,7 @@ measurement, drafting the retirement batches); every actual deletion below is **
 triages, operator approves) and additionally **metal-gated** — no batch may execute before its heqk
 replacement passes on CM5 metal (ADR 0044 D4/D5, ADR 0043). **Nothing in this document has been executed.**
 No code was changed, nothing was deleted, nothing was committed.
-**Author:** retirement-agent. **Relates to:** [ADR 0039](../adr/0039-system-minimization-image-cleaning.md)
+**Author:** retirement-agent. **Relates to:** [ADR 0039 (retired 2026-11-12; see 0044 / 0047)](../adr/0039-system-minimization-image-cleaning.md)
 (the minimization gate this batch feeds), [ADR 0043](../adr/0043-heqk-microkernel-substrate.md) /
 [ADR 0044](../adr/0044-zero-linux-rpi-native-cm5.md) (the substrate/app-host replacement), ADR 0029/0030/0032
 (the rpi-native Linux-kernel decisions being superseded), `docs/architecture/MIGRATION-heqk.md` §5/§6 (the source U1–U6
@@ -86,7 +86,7 @@ retirement-eligible once gated** (this is a confidence in the *mapping*, not a g
 |---|---|
 | **What** | 7 out-of-tree Realtek USB Wi-Fi drivers (`rtl8812au`, `rtl8821cu`, `rtl8821au`, `rtl88x2bu`, `rtl8852au`, `rtl8188eu`, `rtl8192eu`) + the hostapd stack, on this tier |
 | **heqk replacement** | Parallel track — heqk P10 D/E Wi-Fi AP assoc/WPA2/EAPOL/data on the on-board CYW43455 (the SASE-edge default) |
-| **Metal gate required** | AP serves clients over CYW43455 assoc/data; ADR 0042 WIDS detectors fire — on metal |
+| **Metal gate required** | AP serves clients over CYW43455 assoc/data; ADR 0042 (retired 2026-11-12, no successor) WIDS detectors fire — on metal |
 | **Status (2026-07-30)** | 🟡 partial — CYW43455 scan/control only; **no assoc/data yet** (`docs/roadmap/BuildPlan.md` "Parallel tracks" line). This is explicitly a **capability drop, not a like-for-like replacement**: the 7 USB dongles support *additional/aftermarket* radios; the heqk replacement targets only the *on-board* CYW43455 |
 | **Evidence** | `base/drivers/SOURCES.md` (7 pinned driver repos, ~228 MB of vendored source trees under `base/drivers/rtl*`); `docs/roadmap/BuildPlan.md` "Parallel tracks" note on heqk P10 D/E |
 | **Blast radius** | Medium — feature drop, not a security regression; any device relying on a USB dongle for its AP or as a monitor-mode radio loses that specific hardware option on the CM5/heqk tier only (Linux tiers keep the dongles) |
@@ -159,7 +159,7 @@ persistence skeleton, control-plane skeleton, module-runtime skeleton — not a 
 
 | Component | Size | Source |
 |---|---|---|
-| Built debug Pi image, actual bytes (`hookprobe-os-pi-debug-v8.img`, sparse 8 GB file) | **1.3 GB actual** [measured, 2026-07-30] | Confirms ADR 0039's own 2026-07-16 byte-for-byte `debugfs rdump` measurement of ~1.3 GB — same order today |
+| Built debug Pi image, actual bytes (`hookprobe-os-pi-debug-v8.img`, sparse 8 GB file) | **1.3 GB actual** [measured, 2026-07-30] | Confirms ADR 0039 (retired 2026-11-12; see 0044 / 0047)'s own 2026-07-16 byte-for-byte `debugfs rdump` measurement of ~1.3 GB — same order today |
 | — of which Debian | ~89% [cited, ADR 0039] | Not re-verified byte-for-byte this session; consistent with the file existing at ~1.3 GB with a ~40 MB HookProbe payload noted below |
 | — of which HookProbe's own code | ~4% (≈40 MB) [cited, ADR 0039] | |
 | — of which provable dead weight (never-booted stock kernel + unused-radio firmware) | ~40% (~438 MB: 328 MB stock kernel + 110 MB firmware) [cited, ADR 0039] | This dead weight is orthogonal to heqk — ADR 0039 D1/D2 already propose removing it from the *Linux* image regardless of the heqk migration |
@@ -182,7 +182,7 @@ persistence skeleton, control-plane skeleton, module-runtime skeleton — not a 
   not yet an apples-to-apples "full working SOC" comparison, because M3–M6 (storage, control-plane,
   module runtime, app tier) are not yet built/shipped inside `heqk8.img`. **The honest framing is
   structural, not final:** heqk's *architecture* (kernel + this-hardware firmware + static Rust binaries +
-  Wasm modules + BPF rules, no apt/dpkg/perl/python/coreutils/shell/SSH/second-kernel) is the ADR 0035 D6
+  Wasm modules + BPF rules, no apt/dpkg/perl/python/coreutils/shell/SSH/second-kernel) is the ADR 0035 D6 (retired 2026-11-12; see 0043 (D3) / 0047)
   Talos-radical end-state reached *by construction*, and every M-phase that lands adds bytes to `heqk8.img`
   while Linux's ~1.3 GB stays roughly flat or grows. The gap will compress as M3–M6 land but will very
   plausibly remain **one to two orders of magnitude**, because the components being dropped (Debian
@@ -195,13 +195,13 @@ persistence skeleton, control-plane skeleton, module-runtime skeleton — not a 
   library dependencies of those ~377 packages would be substantially larger again). Order of magnitude: a
   **single-digit-vs-triple-digit** dependency-surface reduction, even before counting Debian's own
   transitive `Depends:` chains.
-- **CVE-attack-surface reasoning (ADR 0035 D4's "size win is a security win," reapplied here):** every
+- **CVE-attack-surface reasoning (ADR 0035 D4 (retired 2026-11-12; see 0043 (D3) / 0047)'s "size win is a security win," reapplied here):** every
   package heqk does not ship is a CVE that cannot apply against this device. The 328 MB never-booted stock
   kernel, the 1,910 `.ko` modules per edge-kernel flavour, the 110 MB of firmware for radios the board does
   not have, `apt`/`dpkg`, and the general-purpose coreutils/shell/SSH surface are each an open-ended stream
   of future CVEs against code that literally does not run (the stock kernel) or is not present in the
   device's actual hardware set (foreign-radio firmware). heqk structurally cannot accumulate this class of
-  CVE because the code is not there to begin with — this is the same D4 argument ADR 0039 already made for
+  CVE because the code is not there to begin with — this is the same D4 argument ADR 0039 (retired 2026-11-12; see 0044 / 0047) already made for
   the Debian-trim, now made structurally rather than by subtraction.
 - **What this measurement does NOT yet show:** heqk does not yet have a working equivalent of persistent
   storage (M3 metal-pending), a control-plane network stack (M4 metal-pending, QEMU-green), a production
@@ -213,7 +213,7 @@ persistence skeleton, control-plane skeleton, module-runtime skeleton — not a 
 
 ---
 
-## 3. The ADR 0039 minimization gate for the rpi-native heqk image
+## 3. The ADR 0039 (retired 2026-11-12; see 0044 / 0047) minimization gate for the rpi-native heqk image
 
 ADR 0039 D4 already states the durable filter: *"A component earns its place only if it is on the
 boot → detect → enforce → report critical path, OR it is a capability the Platform Manifest grants on this
@@ -230,7 +230,7 @@ formally adopt at M7):**
    §2.3's structural argument, a reasonable first budget ceiling is **low tens of MB** for the whole
    on-device artifact set (kernel + signed module catalogue + firmware) — to be set precisely once M3–M5
    land real numbers, not asserted here as final.
-2. **Gate mechanic (reuses ADR 0039 D4's filter verbatim):** a build-time check (verification-engineer,
+2. **Gate mechanic (reuses ADR 0039 D4 (retired 2026-11-12; see 0044 / 0047)'s filter verbatim):** a build-time check (verification-engineer,
    alongside the existing `validate.sh` gate ladder) flags any newly-added component that is not on the
    boot → detect → enforce → report critical path and not a manifest-granted capability on CM5, before it
    merges. This is the same discipline ADR 0039 D4 established for the Debian image, ported to the heqk
@@ -242,7 +242,7 @@ formally adopt at M7):**
    over-broad capability grant. `security-auditor` co-owns this angle (a broad capability grant is both a
    size and a TCB concern).
 4. **Sign-off:** M7's own BuildPlan gate is *"the rpi-native heqk image passes the standing minimization
-   gate (ADR 0039); measured size + attack-surface reduction reported (telemetry-analyst)"* — this document
+   gate (ADR 0039 (retired 2026-11-12; see 0044 / 0047)); measured size + attack-surface reduction reported (telemetry-analyst)"* — this document
    proposes that ADR 0039 be updated (by product-steward, Amber) with a short "D5 — rpi-native/heqk
    standing gate" clause formalizing items 1–3 above, so M7 has a written gate to point at rather than an
    inferred one. **Proposal only — ADR 0039 is not edited by this document.**
@@ -280,7 +280,7 @@ three correctly point at the U-batch that will retire the code they governed (U1
 | U1 | Stock+edge kernel, initramfs, dm-verity, BTF/pahole, ADR 0029/0030 fat-boot | M1 | `:53` pass / `:4444` drop / rollback on CM5 metal | QEMU+CI-green; **metal ⬜** | M1 metal-green |
 | U2 | libbpf/CO-RE, XDP/TC build, bpftool/clang CI, OVS, nftables/conntrack | M2 | 0.7 separation matrix + Gate R, both directions, **on metal** | 31/31 heqk-plane metal-proven; L5/L6 OFF-DEVICE (ADR 0044 D3, not a heqk gap); full-matrix Gate-R pass + manifest port-role + product-steward ruling still required — NOT unlocked | M2 Gate 0.7 + Gate R metal-green (full 33) |
 | U3 | dm-crypt/LUKS, initramfs unlock, journald, sysctl/KSPP, systemd sandboxing | M3 | OTA + rollback + evidence-graph persistence **on real eMMC** | ~70-75% QEMU-green; **real eMMC driver ⬜** | M3 metal-green |
-| U4 | 7 Realtek USB Wi-Fi drivers + hostapd (this tier) | Parallel (P10 D/E) | CYW43455 AP serves clients + ADR 0042 detectors fire, on metal | 🟡 scan/control only, no assoc/data | Wi-Fi green + explicit scope decision |
+| U4 | 7 Realtek USB Wi-Fi drivers + hostapd (this tier) | Parallel (P10 D/E) | CYW43455 AP serves clients + ADR 0042 (retired 2026-11-12, no successor) detectors fire, on metal | 🟡 scan/control only, no assoc/data | Wi-Fi green + explicit scope decision |
 | U5 | 42 systemd units, ~6.5k LOC bash (rpi-native slice), greenboot, bootc/OCI/composefs, Podman | M5/M6 | Signed Wasm module fires on-device (M5); full SOC live, app-tier native-or-hosted (M6) | M5 ~15-20% QEMU-scaffolded; **M6 unstarted** | M5 + M6 metal-green (furthest from ready) |
 | U6 | Entire `base/Containerfile` (851 lines) + mkosi/bootc-image-builder, rpi-native tier | M6 | Full SOC workspaces live on heqk-substrate CM5 | ⬜ M6 unstarted | M6 metal-green (terminal batch) |
 
@@ -291,7 +291,7 @@ Linux's **~377-token** (rough) `apt-get install` surface. This is honestly a **s
 comparison (heqk's storage/network/module-runtime/app-tier layers are not yet built), expected to narrow as
 M3–M6 land but very plausibly remaining a one-to-two-order-of-magnitude reduction given the categorical
 absence of apt/dpkg/systemd/general-purpose-userland/second-kernel/foreign-radio-firmware from heqk's
-design. Every package not shipped is a CVE that cannot apply (ADR 0035 D4 / ADR 0039), and heqk achieves
+design. Every package not shipped is a CVE that cannot apply (ADR 0035 D4 (retired 2026-11-12; see 0043 (D3) / 0047) / ADR 0039 (retired 2026-11-12; see 0044 / 0047)), and heqk achieves
 ADR 0039's minimization goal **structurally**, per that ADR's own migration footer.
 
 **ADR-hygiene confirmation:** ADR 0029, 0030, and 0032 all already carry correct, unchanged rpi-native

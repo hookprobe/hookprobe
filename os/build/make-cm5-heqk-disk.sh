@@ -16,7 +16,7 @@
 #
 # --zero-linux  ship NO devicetree (config-nolinux.txt): zero Linux artifacts in the image. heqk
 #               never parses a DTB; the cost is the RTL8111 (eth1) PCIe link is not firmware-
-#               trained — fine for the passive-first GEM profile (ADR 0037 D4). METAL-UNPROVEN:
+#               trained — fine for the passive-first GEM profile (ADR 0037 D4 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)). METAL-UNPROVEN:
 #               proving it on the bench is the U1 gate. Default keeps the one proven .dtb.
 #
 # OWNER.TXT (ADR 0037 D3 — physical possession is the only credential, no default password): a

@@ -5,7 +5,7 @@
 #   g0 g1 g4   as in ci.yml, but against today's advisory DB (new CVEs on unchanged code)
 #   g2         validate.sh (QEMU) unconditionally — not path-filtered like build-heqk.yml
 #   g3         Mission Control e2e incl. the real-browser HTTPS/PQ leg
-#   g4r        reproducible build of the SHIPPING flavour kernel (tools/ci/shipping-features.txt; ADR 0036 Rung 1)
+#   g4r        reproducible build of the SHIPPING flavour kernel (tools/ci/shipping-features.txt; ADR 0036 (retired 2026-11-12, no successor; R1 gate now in 0063) Rung 1)
 #   matrix     regenerates the validation matrix from the live run and PROPOSES it as a PR
 #              (replaces os/kernel/.github/workflows/validation-matrix.yml, which was inert
 #              after the merge AND pushed straight to main, bypassing every gate)
