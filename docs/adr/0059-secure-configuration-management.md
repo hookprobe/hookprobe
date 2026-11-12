@@ -1,8 +1,8 @@
 # ADR 0059: Secure configuration management for heqk
 
-**Status:** 🟡 Proposed (2026-11-10), **partly decided by the operator**: the Rollout (MVP build order) was confirmed
-2026-11-10 and D9's production transport was decided 2026-11-12 (R6 = D, decision note in D9). The rest of the text
-still needs operator review.
+**Status:** ✅ **Accepted by the operator 2026-11-12** — D1–D8 and D10 as written (including the amendments to ADR
+0058 D2 / D3 / Consequences); D9's production transport R6 = D was decided 2026-11-12 (decision note in D9); the
+Rollout (MVP build order) was confirmed 2026-11-10. Was 🟡 Proposed (2026-11-10).
 **Status reconciled 2026-11-12:** the previous line said only "Needs operator review". Evidence for the two
 decisions: the Rollout section ("MVP build order, confirmed by the operator on 2026-11-10"), the D9 decision note,
 `docs/design/hsh-r6-transport-options.md` ("DECIDED 2026-11-12 — option D"). Implementation status (built / QEMU /
@@ -10,6 +10,7 @@ metal per step): `docs/design/adr0059-implementation.md`; steps 2–3 (HQCFG1, c
 (`docs/design/metal-evidence/20261111-batch59-63.md`, cfgd 13/13); the HQMGMT1 envelopes and the sealed / live
 configuration work are QEMU only, metal pending. No record was found that accepts D1–D8 and D10 as written
 (including the amendments to ADR 0058); the code is built against them.
+**Accepted by the operator 2026-11-12** (A12 follow-up, relayed by the coordinator; PR #1020): D1–D8 and D10 as written; R6 = D already recorded in D9. Decision text unchanged. The "No record was found" sentence in the reconciliation note above is answered by this acceptance.
 
 **Scope:** os/kernel (cfgd, anchor, verifiers), os/mission-control (bundle producer), os/build (release gate).
 
