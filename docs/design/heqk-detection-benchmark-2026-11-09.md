@@ -58,3 +58,26 @@ photo upload) — an informational, observe-only alert by design.
   public datasets for attack breadth.
 - The replay drives `packet::verdict` + the Shield DNS path + exfil accounting; detections that only run
   inside AP-loop glue are covered as the G0 extraction moves them into `apcore`.
+
+## DET-01 — household benign corpus (2026-11-12)
+
+Operator decision 2026-11-12: home LAN mirror via fortress, **metadata only**, stored locally on fortress001, never
+uploaded. Tooling:
+
+- `tools/detbench/home-capture.sh <hours> [iface] [dir]` — captures the home LAN OVS mirror port (`FTS-mirror`) one hour
+  per file into a 0700 directory (default `~/heqk-corpus/home`), gzipped per hour.
+- `tools/detbench/hdrstrip.py` — the privacy filter between tcpdump and the disk: keeps Ethernet (+2 tags), ARP,
+  IPv4/IPv6 (+ extension headers) and TCP/UDP/ICMP headers, zeroes every byte after them and pads to the original
+  length (length/rate rules see real sizes; `pcap2hqdb.py` keeps the frame). No payload byte is written. Checked on the
+  synthetic attack pcaps (57,000 data frames → 0 with bytes past the headers) and 20 s of the real mirror (9,848 frames,
+  0 with non-zero bytes past offset 200).
+
+Decision recorded (mid-stream trade-off, operator rule "decide, record, continue"): headers only means the
+content rules — DNS names / Shield, TLS ClientHello / JA4, rules 125 and 126 — get **no** false-positive figure from
+this corpus. Their FP evidence stays the LAN-client metal checks; a names-level corpus would need a new operator
+decision (household DNS names are personal data).
+
+Run: `gunzip -k home-*.pcap.gz; tools/detbench/pcap2hqdb.py CORPUS.img benign:<hours…> ; tools/detbench/run.sh CORPUS.img REPORT.md`.
+DET-01 stays **blocked** in `tools/release-gate/items.txt` until the per-rule FP table over the full capture is
+reviewed — the tooling existing is not the gate.
+Capture started 2026-11-12 ~15:00 for 24 h on fortress001.
