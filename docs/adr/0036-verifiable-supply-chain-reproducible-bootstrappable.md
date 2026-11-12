@@ -1,6 +1,6 @@
 # ADR 0036 — Verifiable supply chain: reproducible → provenance → transparency → bootstrappable
 
-**Status:** 🟡 Proposed (2026-07-17) — a design-session posture that records the "verify, don't trust"
+**Status:** ⛔ **Retired by the operator 2026-11-12** — no superseding ADR — was 🟡 Proposed (2026-07-17) — a design-session posture that records the "verify, don't trust"
 trust ladder as a ranked, honest roadmap; pending ratification. **Separates implemented-today from
 roadmap explicitly**: cosign-keyless image signing, hybrid ML-DSA-65+Ed25519 module signing, and
 SBOM/CBOM-per-image already ship (ADR 0016, ADR 0002); **everything this ADR adds — reproducible
@@ -13,6 +13,7 @@ covers the payload"; the digest this ADR makes a *rebuilder* recompute), [ADR 00
 (authenticated AOT — the same digest-before-execute discipline), [ADR 0035](0035-substrate-ownership-underlay-overlay.md)
 (the minimal owned base — a *smaller* trust surface to bootstrap), [ADR 0037](0037-zero-touch-onboarding-flasher-provisioning.md)
 (the client-side flasher + device self-verify that close the chain with zero trusted third parties).
+**Retired by the operator 2026-11-12** (A12 follow-up, relayed by the coordinator; PR #1020). Decision text unchanged; kept as a historical record. Still cited by live tooling: `tools/ci/repro.sh` and `tools/ci/README.md` (gate g4r) name "ADR 0036 R1" (reproducible build); that gate now belongs to [ADR 0063](0063-autonomous-cicd-gate-spine-and-heal-loop.md).
 
 ---
 

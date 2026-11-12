@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""L2 heal loop — GitHub side (ADR 0052): triage a FAILED workflow run.
+"""L2 heal loop — GitHub side (ADR 0063): triage a FAILED workflow run.
 
 Called by .github/workflows/autoheal.yml on `workflow_run: completed` (failure). It:
 
@@ -166,7 +166,7 @@ def main() -> int:
         print(f"not filing issues for event={run.get('event')} branch={run.get('head_branch')} (default-branch failures only)")
     if file_issues:
         gh("label", "create", "ci-autoheal", "--repo", a.repo, "--color", "B60205", "--force",
-           "--description", "Opened by the ADR 0052 heal loop")
+           "--description", "Opened by the ADR 0063 heal loop")
         created = 0
         for d in sorted(decisions, key=lambda d: SEVERITY.index(d["category"]) if d["category"] in SEVERITY else 99):
             if not needs_issue(d, run):
@@ -187,7 +187,7 @@ def main() -> int:
                 continue
             else:
                 url = gh("issue", "create", "--repo", a.repo, "--title", title, "--label", "ci-autoheal",
-                         "--body", body + "\n_Deterministic triage by tools/ci/heal/triage_run.py (ADR 0052)._").strip()
+                         "--body", body + "\n_Deterministic triage by tools/ci/heal/triage_run.py (ADR 0063)._").strip()
                 num = url.rsplit("/", 1)[-1]
                 created += 1
             if d is top:

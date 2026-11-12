@@ -1,8 +1,9 @@
 # ADR 0040 — The experience layer: UX principles, UI scope & GUI features (the "Apple of security")
 
-**Status:** 🟡 Proposed (2026-07-17) — captures the experience-layer principles from a design session; pending operator ratification. **`docs/architecture/MissionControl.md` remains the canonical UX/dashboard spec**; this ADR records the governing *decisions* that steer it (and the one net-new surface it predates), never a re-spec. Each decision is tagged **[realized] / [partial] / [vision]** for honesty.
+**Status:** ⛔ **Retired by the operator 2026-11-12** — no superseding ADR (current UX canon: `docs/architecture/MissionControl.md`, `docs/design/mission-control-ui-requirements.md`; on-device hosting: ADR 0047 D2) — was 🟡 Proposed (2026-07-17) — captures the experience-layer principles from a design session; pending operator ratification. **`docs/architecture/MissionControl.md` remains the canonical UX/dashboard spec**; this ADR records the governing *decisions* that steer it (and the one net-new surface it predates), never a re-spec. Each decision is tagged **[realized] / [partial] / [vision]** for honesty.
 **Deciders:** ux-architect (author), product-steward, os-architect, security-auditor.
 **Relates to:** [`docs/architecture/MissionControl.md`](../architecture/MissionControl.md) (the canonical UX spec — this ADR governs it, never duplicates it), [ADR 0037](0037-zero-touch-onboarding-flasher-provisioning.md) (onboarding / passive-first / flasher), [ADR 0035](0035-substrate-ownership-underlay-overlay.md) D7/D8 (the GUI-managed overlay + the hard-reserved security plane), [ADR 0010](0010-zero-touch-provisioning.md) (the captive portal that becomes Mission Control), [ADR 0038](0038-ai-tiers-bpf-lsm-process-trust.md) (the three AI tiers → the explanation panel / copilot), [ADR 0036](0036-verifiable-supply-chain-reproducible-bootstrappable.md) (the signed catalog's supply chain), [ADR 0025](0025-aegis-byo-llm-planner.md) (the BYO-LLM copilot).
+**Retired by the operator 2026-11-12** (A12 follow-up, relayed by the coordinator; PR #1020). Decision text unchanged; kept as a historical record.
 
 ---
 

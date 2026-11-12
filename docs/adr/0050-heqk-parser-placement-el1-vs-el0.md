@@ -157,7 +157,7 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
      with no PMK or passphrase. `[P-sae]` adds the walk-vs-curve-library parity.
 
    Metal must prove: WPA3 transition stations (SAE and WPA2-only) keyed and authorized, `cm5-wpa3-check` and
-   `cm5-lan-client` green, throughput ≥ the 2026-11-07 baseline, and no REL-08 regression on an SAE soak.
+   `cm5-lan-client` green, throughput ≥ the 2026-11-07 baseline, and no REL-08b (PMKID-cache use-after-free) regression on an SAE soak.
 
 Each step must keep the AP throughput (≥ the 2026-11-07 metal baseline: 80–160 Mbps) and pass the separation
 matrix + `mc-e2e` before the EL1 copy is deleted.
