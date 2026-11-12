@@ -85,6 +85,7 @@ export default async function (t) {
   await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
   const drawer = page.locator('.drawer', { hasText: 'Apply all three together' });
   ok(await vis(drawer.locator('text=type the PPPoE password again')), 'bundle: the PPPoE password must be typed again (never read back)');
+  ok(await vis(drawer.locator('[aria-label="Firewall not included"]')), 'bundle: the untouched example firewall is NOT included (the device keeps its own)');
   await drawer.locator('label:has-text("PPPoE password (again)") input').fill('s3cret');
   ok(await drawer.locator('button:has-text("Sign the bundle")').isEnabled(), 'bundle: all three sections valid → can sign');
   ok(await vis(drawer.locator('[aria-label="Device binding"] >> text=Bound to this device (id 01234567')), 'bundle: bound to the device id the device reports');
@@ -101,6 +102,14 @@ export default async function (t) {
     try { execFileSync('python3', ['-I', join(ROOT, 'os/kernel/tools/hqcfg.py'), 'verify', V.public_key, join(dir, 'b'), join(dir, 's')], { stdio: 'pipe' }); } catch (e) { other = String(e.stderr); }
     ok(/bound to another device/.test(other), 'browser bundle is refused on any other device');
   } catch (e) { out = String(e.stdout ?? e.message); }
-  ok(/--- wan/.test(out) && /pppoe_user=user@isp/.test(out) && /--- wifi/.test(out) && /ssid=Popescu-Home/.test(out) && /--- policy/.test(out),
-    'browser bundle (wan + wifi + policy, device-bound) verifies with hqcfg.py exactly as the device will');
+  ok(/--- wan/.test(out) && /pppoe_user=user@isp/.test(out) && /--- wifi/.test(out) && /ssid=Popescu-Home/.test(out) && !/--- policy/.test(out),
+    'browser bundle (wan + wifi, no firewall unless edited, device-bound) verifies with hqcfg.py exactly as the device will');
+  // Editing the Firewall tab is what puts a policy section in the bundle.
+  await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+  await page.click('.tab:has-text("Firewall")'); await page.waitForTimeout(200);
+  ok(await vis(page.locator('text=an example to start from')), 'firewall tab: the starting rules are labelled an example, not the device\'s firewall');
+  await page.click('text=+ From template: block device-to-device traffic'); await page.waitForTimeout(200);
+  ok(!(await vis(page.locator('text=an example to start from'))), 'firewall tab: once edited, the example notice goes away');
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  ok(await vis(page.locator('.drawer >> text=Replaced by your edits in the Firewall tab')), 'bundle: an edited firewall is included and says it replaces the current one');
 }
