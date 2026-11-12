@@ -162,6 +162,39 @@ pub fn policy_gen() -> u64 {
 /// in the wan section, or a policy binding on `mgmt`) is NEVER auto-committed on "WAN usable" — a site managed
 /// over the management VLAN could keep internet and lose its management path. It needs the owner's
 /// /api/config/confirm within the window, else it reverts.
+/// Step 11: a digest of the management-plane lines of the sections in force (WAN mgmt / VLAN / PCP keys, policy
+/// bindings and routes on `mgmt`). A change in EITHER direction — added, changed or REMOVED — needs the owner's
+/// confirm: a bundle that drops the management VLAN can cut the very path the owner manages the device over.
+fn mgmt_fp() -> [u8; 32] {
+    let mut h = boot_abi::sha256::Hasher::new();
+    for l in section(cfgbundle::KIND_WAN).unwrap_or(b"").split(|&b| b == b'\n') {
+        if l.starts_with(b"mgmt") || l.starts_with(b"vlan") || l.starts_with(b"pcp") {
+            h.update(l);
+            h.update(b"\n");
+        }
+    }
+    h.update(b"\x00");
+    for l in section(cfgbundle::KIND_POLICY).unwrap_or(b"").split(|&b| b == b'\n') {
+        if l.starts_with(b"interface mgmt ") || (l.starts_with(b"route ") && l.windows(9).any(|w| w == b" via mgmt")) {
+            h.update(l);
+            h.update(b"\n");
+        }
+    }
+    h.finish()
+}
+
+/// Step 11: the running device has a management sub-interface (from a bundle or the per-file WAN.TXT).
+fn mgmt_running() -> bool {
+    #[cfg(feature = "cm5")]
+    return unsafe { (*core::ptr::addr_of!(arch_aarch64::uplink::MGMT)).is_some() };
+    #[cfg(not(feature = "cm5"))]
+    unsafe {
+        TEST_MGMT_RUNNING
+    }
+}
+#[cfg(not(feature = "cm5"))]
+static mut TEST_MGMT_RUNNING: bool = false;
+
 pub fn touches_mgmt() -> bool {
     let wan = section(cfgbundle::KIND_WAN).unwrap_or(b"");
     let pol = section(cfgbundle::KIND_POLICY).unwrap_or(b"");
@@ -483,6 +516,7 @@ pub fn queue_live<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>, floo
     // persisted FIRST: from here on a crash / power cut / watchdog boots into the last-known-good
     artstore::set_entry(dev, Ty::Config, |x| x.trials = 1).map_err(|_| "store write failed")?;
     let old = section_digests();
+    let mgmt_before = mgmt_fp();
     let Some(g) = load_half(dev, e.half, &key, floor + 1) else {
         // does not verify (or not above the floor): back to the last-known-good, nothing was applied
         let to = revert(dev, &key, floor);
@@ -501,7 +535,12 @@ pub fn queue_live<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>, floo
     unsafe {
         CHANGED = ch;
         // the AP is a management path: a Wi-Fi change commits only when the owner confirms after re-joining
-        NEEDS_CONFIRM = touches_mgmt() || ch & CH_WIFI != 0;
+        // step 11: also when the management lines changed or were REMOVED, or the running management sub-interface
+        // would lose its keys (it came from the per-file WAN.TXT and the bundle's WAN section has none)
+        NEEDS_CONFIRM = touches_mgmt()
+            || ch & CH_WIFI != 0
+            || mgmt_fp() != mgmt_before
+            || (ch & CH_WAN != 0 && mgmt_running() && !section(cfgbundle::KIND_WAN).unwrap_or(b"").split(|&b| b == b'\n').any(|l| l.starts_with(b"mgmt")));
         PHASE = Phase::Queued;
         STATE = Boot::Trial(g);
     }
@@ -816,6 +855,25 @@ pub fn live_selftest() -> bool {
     let s6 = stage(d, 11, w2, f2, p2) && queue_live(d, Some(key), fl) == Ok(11) && take_apply().is_some() && applied(d, true, 800) == Tick::Idle;
     unsafe { PHASE = Phase::Idle };
     let crash = boot(d, Some(key), fl, 900) == Boot::Reverted { from: 11, to: 8 };
+    // 7. step 11: a bundle that REMOVES the management VLAN needs the owner's confirm (as does adding it); so does a
+    //    WAN change while a per-file management sub-interface runs and the bundle carries no mgmt keys
+    let wm = &b"mode=dhcp\nmgmt_vlan=20\nmgmt_ip=192.168.200.146/24\n"[..];
+    let fl7 = crate::anchor::cfg_gens().cfg_floor;
+    let add = stage(d, 12, wm, f2, p2) && queue_live(d, Some(key), fl7) == Ok(12) && needs_confirm()
+        && take_apply().is_some() && applied(d, true, 1000) == Tick::Idle && commit(d) == Ok(12);
+    let fl7 = crate::anchor::cfg_gens().cfg_floor;
+    let removed = stage(d, 13, w1, f2, p2) && queue_live(d, Some(key), fl7) == Ok(13) && needs_confirm()
+        && take_apply().is_some() && applied(d, true, 1100) == Tick::Idle && commit(d) == Ok(13);
+    let fl7 = crate::anchor::cfg_gens().cfg_floor;
+    unsafe { TEST_MGMT_RUNNING = true };
+    let perfile = stage(d, 14, w2, f2, p2) && queue_live(d, Some(key), fl7) == Ok(14) && needs_confirm();
+    unsafe { TEST_MGMT_RUNNING = false };
+    let _ = take_apply();
+    let _ = applied(d, true, 1200);
+    let _ = commit(d);
+    let fl7 = crate::anchor::cfg_gens().cfg_floor;
+    let plain = stage(d, 15, w1, f2, p2) && queue_live(d, Some(key), fl7) == Ok(15) && !needs_confirm();
+    let mgmt11 = add && removed && perfile && plain;
     crate::policysig::selftest_key(None);
     clear();
     unsafe {
@@ -824,10 +882,10 @@ pub fn live_selftest() -> bool {
         LAST_RESULT = (0, 0);
     }
     crate::anchor::test_set_cfg(saved_cfg);
-    let pass = base && s1 && p_1 && c1 && s2 && p_2 && t2 && r2 && s3 && c3 && s4 && busy && f5 && s5 && rb && s6 && crash;
+    let pass = base && s1 && p_1 && c1 && s2 && p_2 && t2 && r2 && s3 && c3 && s4 && busy && f5 && s5 && rb && s6 && crash && mgmt11;
     arch_aarch64::_print(format_args!(
-        " [P-cfgd-live] {} — sealed-config / live-apply step 6, the cfgd live engine (mock executors): only the changed subsystem is applied={} healthy -> committed live, no reboot={} an unusable WAN reverts LIVE after the window to the last-known-good sections={} a Wi-Fi change waits for the owner's confirm={} one change at a time={} a failed apply reverts live={} a failed revert asks for the reboot (manifest already at the LKG)={} a crash during the live trial boots the last-known-good={}\n",
-        if pass { "PASS" } else { "FAIL" }, base && s1 && p_1, c1, s2 && p_2 && t2 && r2, s3 && c3, s4 && busy, f5, s5 && rb, s6 && crash
+        " [P-cfgd-live] {} — sealed-config / live-apply step 6, the cfgd live engine (mock executors): only the changed subsystem is applied={} healthy -> committed live, no reboot={} an unusable WAN reverts LIVE after the window to the last-known-good sections={} a Wi-Fi change waits for the owner's confirm={} one change at a time={} a failed apply reverts live={} a failed revert asks for the reboot (manifest already at the LKG)={} a crash during the live trial boots the last-known-good={} step 11: adding OR removing the management VLAN (or dropping a per-file one) needs the owner's confirm, a plain WAN change does not={}\n",
+        if pass { "PASS" } else { "FAIL" }, base && s1 && p_1, c1, s2 && p_2 && t2 && r2, s3 && c3, s4 && busy, f5, s5 && rb, s6 && crash, mgmt11
     ));
     pass
 }
