@@ -262,7 +262,7 @@ Rows above are kept as written. Status since, per item:
 | A6 | built (release + factory refuse a bench PSK) | scripts |
 | A7 | crash record metal-proven (`20261110-batch33.md`, CRASH-RECORD 5/5); Wi-Fi wedge self-heal QEMU only; bounded Wi-Fi recovery → one reboot → stay up without Wi-Fi (operator 2026-11-12): not built; 72 h soak: deferred by the operator until features are built | — |
 | A8 | QEMU (mc-e2e) | — |
-| A9 | partial: `abslot`, `boot_abi::verify`, `record_rx` host fuzz targets; owner-journal replay sweep `[P-journal-sweep]` (PR #1016, QEMU only); host libFuzzer for journal replay / upload + owner forms: not built | `docs/design/fuzz-evidence.md` |
+| A9 | partial: `abslot`, `boot_abi::verify`, `record_rx` host fuzz targets; owner-journal replay sweep `[P-journal-sweep]` (PR #1016, QEMU only); host libFuzzer for journal replay built 2026-11-12 (`owner_journal`, 1.13 M runs / 0 crashes; upload + owner form bodies via `http_req`) | `docs/design/fuzz-evidence.md` |
 | A10 | deferred (§3.1) | — |
 | A11 | SEC-01 steps 1, 2a, 2b, 3, 5a metal-proven (`20261111-batch59-63.md`, `[P-lansvc]`); 5b and 5c (PR #1005) QEMU only, metal pending; Noise + SNTP / ARP / ICMP stay in EL1 by operator decision 2026-11-11; authenticator state machine moves with the driver: not built | ADR 0050 D4 status notes |
 | A12 | this reconciliation (docs only, 2026-11-12) | `docs/adr/README.md` |
