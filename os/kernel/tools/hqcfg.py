@@ -235,6 +235,13 @@ def vectors(outdir):
     cases["unknown-signer-key-id"] = forged(bytes(kid), "bundle: unknown signer key id")
     bound = bytearray(full); bound[10:12] = struct.pack("<H", 1); bound[20:36] = b"\x11" * 16
     cases["bound-to-other-device"] = forged(bytes(bound), "bundle: bound to another device")
+    # Device-bound bundles built the way Mission Control builds them (GET /api/anchor device_id): accepted on
+    # THIS device, refused on any other. Restored: a merge (124670ae lineage) dropped these two cases, which the
+    # Mission Control UI suite (tests/ui/specs/hqcfg.mjs) and the kernel [P-cfgbundle] vectors rely on.
+    devid = bytes.fromhex("0123456789abcdef0123456789abcdef")
+    bnd = build([("wan", wan), ("wifi", wifi), ("policy", pol)], 12, pk, device_id=devid)
+    cases["bound-to-this-device"] = {"bundle": bnd.hex(), "sig": sign(key, bnd).hex(), "expect": "ok", "floor": 0, "device_id": devid.hex()}
+    cases["bound-checked-on-other-device"] = {"bundle": bnd.hex(), "sig": sign(key, bnd).hex(), "expect": "bundle: bound to another device", "floor": 0, "device_id": "fe" * 16}
     for k in (2, 6, 9):
         unk = bytearray(full); unk[48] = k
         cases[f"kind-{k}-refused"] = forged(bytes(unk), f"bundle: unknown section kind {k}")
