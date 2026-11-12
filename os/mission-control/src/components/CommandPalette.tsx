@@ -11,8 +11,8 @@
  *    night', 'block the camera', 'is my Apple TV ok'. Intent, not navigation."
  *
  * Design soul (hookprobe-com/astro-landing 404.astro): rendered as a literal
- * `hookprobe@edge $` terminal session — the prompt is the intent line, the
- * answer + why/confidence/evidence/model are terminal output.
+ * Copilot dialog (wireframe Main: "⌘K" + input) — the input is the intent line, the
+ * answer + why/confidence/evidence/model follow it.
  *
  * Honest states (never a fake response — the OS invariant "the AI planner is assistive... model
  * is the operator's choice" made visible in the UI):
@@ -112,12 +112,9 @@ const CommandPalette: Component<Props> = (props) => {
       >
         <div class="cmdpalette-modal hp-terminal">
 
-          {/* Terminal title bar — hookprobe@edge ~ copilot */}
+          {/* Title bar */}
           <div class="hp-terminal-bar">
-            <span class="hp-dot red" aria-hidden="true" />
-            <span class="hp-dot yellow" aria-hidden="true" />
-            <span class="hp-dot green" aria-hidden="true" />
-            <span class="hp-terminal-title">hookprobe@edge ~ copilot</span>
+            <span class="hp-terminal-title">Copilot</span>
             <button
               class="cmdpalette-esc-btn"
               onClick={props.onClose}
@@ -131,7 +128,7 @@ const CommandPalette: Component<Props> = (props) => {
 
             {/* The intent line — a literal shell prompt. Enter submits. */}
             <div class="cmd-prompt-row">
-              <span class="hp-prompt" aria-hidden="true">hookprobe@edge $</span>
+              <span class="hp-prompt" aria-hidden="true">⌘K</span>
               <input
                 class="cmd-term-input"
                 type="text"
