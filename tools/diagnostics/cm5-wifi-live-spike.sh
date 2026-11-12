@@ -36,15 +36,25 @@ except urllib.error.HTTPError as e:
     print(e.read().decode())
 PY
 }
+# R6 = D (PR #1010/#1013/#1018): activate + confirm need an HQMGMT1 envelope signed by the ENROLLED owner key; the
+# token only opens the session. SIGN_KEY (default: ~/heqk-owner-ca/bench-owner.key, a bench-only Ed25519 key) is that key; enrolled here if the device
+# reports none (bench unit: a reflash / factory reset clears it).
+SIGN="${SIGN_KEY:-$HOME/heqk-owner-ca/bench-owner.key}"  # the bench OWNER key (must differ from the vendor/config key)
+UP="$UP --sign-key $SIGN"
+ensure_owner() { local e; e=$(api /api/config | python3 -c 'import json,sys; print(bool(json.load(sys.stdin).get("envelope", {}).get("owner_enrolled")))')
+  [ "$e" = True ] && return 0
+  python3 -I "$ROOT/os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$T/enroll.txt" && $UP --enroll "$T/enroll.txt" > "$T/enroll.out" 2>&1
+  local rc=$?; echo "     owner key enrolled for the R6 envelopes (rc=$rc: $(cut -c1-100 "$T/enroll.out"))"; return $rc; }
 rejoin() { for _ in $(seq 1 30); do pi "curl -sk -o /dev/null -w '%{http_code}' -m 5 --interface wlan0 $AP_MC/api/health" 2>/dev/null | grep -q 200 && return 0
   PI_SUDO_FILE="$PS" "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1; sleep 3; done; return 1; }
 PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")
 SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'"); PSK=$(psudo "nmcli -s -g 802-11-wireless-security.psk con show '$PROF'")
 [ -n "$SSID" ] && [ -n "$PSK" ] || { echo "SPIKE: cannot read the AP SSID / passphrase from the Pi profile"; exit 1; }
+ensure_owner
 G=$(api /api/config | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max(d["generation"], d["floor"]))')
 FH0=$(tr -d '\r\000' < "$LOG" | grep -ac "FWHALT")
 mkw() { umask 077; printf 'ssid=%s\npsk=%s\nsecurity=%s\n' "$SSID" "$PSK" "$1" > "$T/w.txt"; }
-push() { G=$((G + 1)); mkw "$1"; $HQ bundle "$CK" $G "$T/b.bin" "$T/b.sig" --wifi "$T/w.txt" >/dev/null; shred -u "$T/w.txt"
+push() { G=$((G + 1)); mkw "$1"; $HQ bundle "$SIGN" $G "$T/b.bin" "$T/b.sig" --wifi "$T/w.txt" >/dev/null; shred -u "$T/w.txt"
   mark=$(stat -c %s "$LOG"); $UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; shred -u "$T/b.bin"; }
 t_all=$(date +%s)
 for i in $(seq 1 "$R"); do
@@ -53,7 +63,7 @@ for i in $(seq 1 "$R"); do
   grep -q '"applies": "live"' "$T/r" && grep -q '"needs_confirm": true' "$T/r"; a=$?
   waitlog "\[WIFI\] live apply: SSID [0-9]* bytes, security $want — BSS re-started" 20; b=$?
   rejoin; c=$?; dt=$(( $(date +%s) - t0 ))
-  api /api/config/confirm "wifi spike $i" | grep -q '"committed":true'; d=$?
+  $UP --config-confirm "wifi spike $i" 2>\&1 | grep -qE \'"committed": ?true\'; d=$?
   chk $(( a | b | c | d )) "round $i: $want gen $G — live (reply=$a), BSS restarted (log=$b), Pi re-joined + MC on the AP (rejoin=$c, ${dt}s), confirm committed ($d)"
 done
 FH1=$(tr -d '\r\000' < "$LOG" | grep -ac "FWHALT")
