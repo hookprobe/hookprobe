@@ -1,6 +1,6 @@
 //! Minimal ARM semihosting — lets bare-metal code terminate QEMU (test harness
 //! + the P0 self-test). Requires QEMU's `-semihosting` flag. Not shipped on real
-//! hardware; a debug-build convenience only.
+//!   hardware; a debug-build convenience only.
 
 const SYS_EXIT: u64 = 0x18;
 const ADP_STOPPED_APPLICATION_EXIT: u64 = 0x2_0026;

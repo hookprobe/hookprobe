@@ -15,7 +15,7 @@ use core::fmt;
 ///    pre-programmed (115200) by the firmware, but physically reachable only
 ///    on the CM5 module itself (JST-SH pads / testpoints TP35/36) — no carrier
 ///    board routes it. Kept as a firmware-guaranteed fallback.
-/// The CM5 build prints every byte to BOTH.
+///    The CM5 build prints every byte to BOTH.
 pub struct Pl011;
 
 #[cfg(not(feature = "cm5"))]

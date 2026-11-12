@@ -277,7 +277,7 @@ pub fn load<D: BlockDev>(d: &D, lo: u64) -> Option<Anchor> {
         let mut s = [0u8; 512];
         if d.read_block(lo + i, &mut s).is_ok() {
             if let Some(a) = decode(&s) {
-                if best.map_or(true, |b| a.seq > b.seq) {
+                if best.is_none_or(|b| a.seq > b.seq) {
                     best = Some(a);
                 }
             }

@@ -47,7 +47,7 @@ fn rec() -> *mut Rec {
     }
     #[cfg(not(feature = "cm5"))]
     {
-        unsafe { core::ptr::addr_of_mut!(QEMU_REC) }
+        core::ptr::addr_of_mut!(QEMU_REC)
     }
 }
 

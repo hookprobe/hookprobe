@@ -246,7 +246,7 @@ pub const GLOM_MAX_SUBS: usize = 64; // 48-KB superframes of ~1.5-KB sub-frames 
 /// the superframe header); the LAST sublen is padded so the total is a whole number of `blk`-byte
 /// blocks. Returns (n, total) or None (brcmfmac then ignores the descriptor).
 pub fn glom_plan(desc: &[u8], blk: usize, out: &mut [u16; GLOM_MAX_SUBS]) -> Option<(usize, usize)> {
-    if desc.is_empty() || desc.len() % 2 != 0 || blk == 0 {
+    if desc.is_empty() || !desc.len().is_multiple_of(2) || blk == 0 {
         return None;
     }
     let n = desc.len() / 2;

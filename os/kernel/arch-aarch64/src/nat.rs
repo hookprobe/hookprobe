@@ -403,11 +403,11 @@ pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<
     };
     let l4p = 14 + ihl;
     let redirect = match dns {
-        Some((ap_ip, resolver)) if proto == 17 && &f[30..34] == &ap_ip[..] && l4p + 4 <= ip_end
+        Some((ap_ip, resolver)) if proto == 17 && f[30..34] == ap_ip[..] && l4p + 4 <= ip_end
             && u16::from_be_bytes([f[l4p + 2], f[l4p + 3]]) == 53 => Some((*ap_ip, *resolver)),
         _ => None,
     };
-    if redirect.is_none() && (&f[30..33] == &inside_net[..] || f[30..34] == [255; 4] || f[30] >= 224 || f[22] <= 1) {
+    if redirect.is_none() && (f[30..33] == inside_net[..] || f[30..34] == [255; 4] || f[30] >= 224 || f[22] <= 1) {
         st.out_drop += 1;
         return None; // local subnet / broadcast / multicast / TTL exhausted
     }
@@ -480,14 +480,14 @@ pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<
 /// no entry). The CALLER enforces the per-link size cap (the WiFi leg carries ≤
 /// `WIFI_MAX_FRAME`; eth1 a full MTU) and counts `in_too_big`.
 pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8; 6]; 2], out: &mut [u8], now: u64, st: &mut NatStats) -> Option<(usize, u8)> {
-    if f.len() < 14 || (&f[0..6] != &wan_mac[..]) {
+    if f.len() < 14 || (f[0..6] != wan_mac[..]) {
         return None; // promiscuous GEM: not addressed to us (no stat — that's the wire's noise)
     }
     let (ihl, ip_end, proto) = match parse_v4(f) {
         Some(t) => t,
         None => return None,
     };
-    if &f[30..34] != &wan_ip[..] {
+    if f[30..34] != wan_ip[..] {
         return None;
     }
     if f[22] <= 1 || ip_end > out.len() {
@@ -508,7 +508,7 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
         }
         let qihl = ((f[q] & 0x0f) as usize) * 4;
         let ql4 = q + qihl;
-        if qihl < 20 || ql4 + 8 > ip_end || &f[q + 12..q + 16] != &wan_ip[..] {
+        if qihl < 20 || ql4 + 8 > ip_end || f[q + 12..q + 16] != wan_ip[..] {
             st.in_drop += 1;
             return None;
         }

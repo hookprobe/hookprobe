@@ -7,8 +7,8 @@
 //!   * processed < budget ⇒ the ring drained/went quiet: SHRINK the budget
 //!     toward `min`, re-arm the RX IRQ, and go IDLE (the caller WFIs until the
 //!     next RX interrupt) — so an idle box burns no CPU.
-//! This bounds latency under load AND CPU under idle, adaptively — the
-//! edge-appropriate 1–2.5 GbE data plane, not a 100 GbE spin loop.
+//!     This bounds latency under load AND CPU under idle, adaptively — the
+//!     edge-appropriate 1–2.5 GbE data plane, not a 100 GbE spin loop.
 
 /// What the caller should do after a NAPI service call.
 #[derive(PartialEq, Clone, Copy)]

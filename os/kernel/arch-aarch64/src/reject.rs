@@ -6,7 +6,7 @@
 //! - anything else -> ICMP Destination Unreachable code 13 "communication administratively prohibited"
 //!   (RFC 1812 §5.2.7.1) / ICMPv6 type 1 code 1 (RFC 4443 §3.1), FROM the router's address, quoting
 //!   the offending packet (IPv4: header + 8 bytes; IPv6: as much as fits in 1280 bytes).
-//! Never answer an ICMP error or a RST (no error storms), nor a non-unicast destination.
+//!   Never answer an ICMP error or a RST (no error storms), nor a non-unicast destination.
 
 use crate::ip6::l4_csum;
 use hal::inet_csum;
