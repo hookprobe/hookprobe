@@ -76,9 +76,9 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
   const doRotate = () => run(async () => {
     const a = anchorView()!;
     const gen = a.owner_generation + 1;
-    const k = askOwnerKey(); if (!k) throw new Error('Cancelled: the owner key is required.');
+    // Signed with the current key (R6 = D) before the new one replaces it here; no owner token.
     const r0 = await prepareRotation(gen, pass());
-    const r = await rotate({ public_key: r0.publicKey, proof: r0.proof, generation: String(gen), signature: r0.signature, owner_key: k });
+    const r = await rotate({ public_key: r0.publicKey, proof: r0.proof, generation: String(gen), signature: r0.signature }, a.owner_key!);
     if (!r.ok) throw new Error(`The device refused (your current key is unchanged): ${r.refused}`);
     await r0.commit();
     download('owner-signing-key.pem', r0.backup, 'application/x-pem-file');
