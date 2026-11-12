@@ -95,7 +95,7 @@
 .l0-table { width: 100%; border-collapse: collapse; font-size: 14px; }
 .l0-table th { text-align: left; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--hp-text-muted); font-weight: 500; padding: 8px 10px; border-bottom: 1px solid var(--hp-border); }
 .l0-table td { padding: 10px; border-bottom: 1px solid var(--hp-border); color: var(--hp-text-primary); vertical-align: top; }
-.l0-table-wrap { overflow-x: auto; border: 1px solid var(--hp-border); border-radius: var(--hp-radius-lg); }
+.l0-table-wrap { position: relative; overflow-x: auto; border: 1px solid var(--hp-border); border-radius: var(--hp-radius-lg); }
 
 /* chips */
 .l0-chips { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -146,3 +146,13 @@
 .setup-meter span { flex: 1; height: 6px; border-radius: 999px; background: rgba(255,255,255,.1); }
 .setup-meter span.is-on { background: var(--hp-green); }
 .dev-name-input { font: inherit; font-size: 16px; min-height: 44px; padding: 0 12px; width: 100%; box-sizing: border-box; background: var(--hp-surface); color: var(--hp-text-primary); border: 1px solid var(--hp-border); border-radius: var(--hp-radius); }
+
+/* Advanced editors: form beside the draft on wide screens, stacked on tablets and phones (UX review P0-6) */
+.adv-grid { grid-template-columns: minmax(0, 1fr) 380px; }
+@media (max-width: 1023px) { .adv-grid { grid-template-columns: minmax(0, 1fr); } .adv-grid > * { min-width: 0; } }
+
+/* Touch: every tappable control at least 44 px high (WCAG 2.5.5 target size) */
+@media (pointer: coarse) {
+  .l0-chip, .l0-seg-item, .dev-btn, .shield-remove, .tab, .hp-btn { min-height: 44px; }
+  .shield-remove { min-width: 44px; }
+}
