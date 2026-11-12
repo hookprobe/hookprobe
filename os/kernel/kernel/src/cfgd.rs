@@ -513,8 +513,9 @@ pub fn phase_name() -> &'static str {
     }
 }
 
-/// The digest of each section kind of the bundle in force ([0; 32] = absent: the per-file source applies).
-fn section_digests() -> [[u8; 32]; 3] {
+/// The digest of each section kind of the bundle in force ([0; 32] = absent: the per-file source applies), in the
+/// order [policy, wan, wifi]. Also what GET /api/config reports as `sections.*.digest`.
+pub fn section_digests() -> [[u8; 32]; 3] {
     let mut d = [[0u8; 32]; 3];
     for (i, k) in [cfgbundle::KIND_POLICY, cfgbundle::KIND_WAN, cfgbundle::KIND_WIFI].iter().enumerate() {
         if let Some(b) = section(*k) {
@@ -1455,6 +1456,29 @@ pub fn set_selftest(on: bool) {
 }
 fn in_selftest() -> bool {
     unsafe { SELFTEST }
+}
+
+/// QEMU self-tests only ([P-cfgview]): pose `secs` as the sections in force (no signature: the render under test reads
+/// sections, it never verifies), written at the END of the buffer; `None` puts the previous table back.
+#[cfg(all(not(feature = "cm5"), feature = "netsvc"))]
+pub fn test_sections(secs: Option<&[(u8, &[u8])]>) {
+    static mut SAVED: ([(u8, usize, usize); 3], usize) = ([(0, 0, 0); 3], 0);
+    unsafe {
+        let Some(secs) = secs else {
+            (SECS, NSEC) = SAVED;
+            return;
+        };
+        SAVED = (SECS, NSEC);
+        let buf = &mut *core::ptr::addr_of_mut!(BUF);
+        let mut o = cfgbundle::MAX_BUNDLE - secs.iter().map(|s| s.1.len()).sum::<usize>();
+        NSEC = 0;
+        for &(k, b) in secs {
+            buf[o..o + b.len()].copy_from_slice(b);
+            SECS[NSEC] = (k, o, b.len());
+            NSEC += 1;
+            o += b.len();
+        }
+    }
 }
 
 /// QEMU self-tests only: pose a bundle in force (`gen`, `digest`, on trial or not) for the envelope binding checks,
