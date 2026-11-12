@@ -63,7 +63,7 @@ for i in $(seq 1 "$R"); do
   grep -q '"applies": "live"' "$T/r" && grep -q '"needs_confirm": true' "$T/r"; a=$?
   waitlog "\[WIFI\] live apply: SSID [0-9]* bytes, security $want — BSS re-started" 20; b=$?
   rejoin; c=$?; dt=$(( $(date +%s) - t0 ))
-  $UP --config-confirm "wifi spike $i" 2>\&1 | grep -qE \'"committed": ?true\'; d=$?
+  $UP --config-confirm "wifi spike $i" 2>&1 | grep -qE '"committed": ?true'; d=$?
   chk $(( a | b | c | d )) "round $i: $want gen $G — live (reply=$a), BSS restarted (log=$b), Pi re-joined + MC on the AP (rejoin=$c, ${dt}s), confirm committed ($d)"
 done
 FH1=$(tr -d '\r\000' < "$LOG" | grep -ac "FWHALT")

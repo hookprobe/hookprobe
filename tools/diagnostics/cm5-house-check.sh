@@ -45,16 +45,18 @@ ensure_owner() { local e; e=$(api /api/config | python3 -c 'import json,sys; pri
   local rc=$?; echo "     owner key enrolled for the R6 envelopes (rc=$rc: $(cut -c1-100 "$T/enroll.out"))"; return $rc; }
 cfgval() { api /api/config | python3 -c "import json,sys; d=json.load(sys.stdin); print($1)"; }
 mc_up() { for _ in $(seq 1 60); do curl -sk -o /dev/null -m 5 "$MC/" && return 0; sleep 3; done; return 1; }
-confirm() { $UP --config-confirm "house check $1" 2>\&1 | grep -qE \'"committed": ?true\'; }
+confirm() { $UP --config-confirm "house check $1" 2>&1 | grep -qE '"committed": ?true'; }
 reboot() { mark=$(stat -c %s "$LOG"); $UP --reboot "house check: $1" >/dev/null 2>&1; sleep 25; mc_up; }
 # Pi side: join a profile on wlan0 and prove the AP serves it (lease + Mission Control on the AP)
 join() { local r; for _ in 1 2 3; do psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; sleep 2
     r=$(psudo "nmcli -w 40 con up '$1' ifname wlan0" 2>&1 | tail -1); grep -q success <<<"$r" && break; sleep 5; done
   grep -q success <<<"$r" || return 1
   for _ in $(seq 1 15); do pi "ip -4 -o addr show wlan0" | grep -q "10\.99\.0\." && \
-    pi "curl -sk -o /dev/null -w '%{http_code}' -m 5 --interface wlan0 $AP_MC/api/health" | grep -q 200 && return 0; sleep 2; done; return 1; }
+    pi "curl -sk -o /dev/null -w '%{http_code}' -m 5 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') $AP_MC/api/health" | grep -q 200 && return 0; sleep 2; done; return 1; }
 refused() { psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; sleep 2; ! psudo "nmcli -w 25 con up '$1' ifname wlan0" 2>&1 | tail -1 | grep -q success; }
-dns9() { pi "timeout 5 dig +short +time=2 +tries=1 -b \$(ip -4 -o addr show wlan0 | awk '{print \$4}' | cut -d/ -f1) @9.9.9.9 example.com" 2>/dev/null | grep -qE '^[0-9.]+$'; }
+dns9() { local r; r=$(pi 'a=$(ip -4 -o addr | awk '"'"'$4 ~ /^10\.99\.0\./ {split($4, x, "/"); print x[1]; exit}'"'"'); [ -n "$a" ] || { echo NOADDR; exit 0; }; timeout 5 dig +short +time=2 +tries=1 -b "$a" @9.9.9.9 example.com' 2>/dev/null)
+  [ "$r" = NOADDR ] && { echo "     (the Pi has no AP address 10.99.0.x — DNS probe not run)"; return 2; }   # 2: neither "answers" nor "dropped"
+  grep -qE '^[0-9.]+$' <<<"$r"; }
 canon() { sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$1"; }
 ensure_owner
 G=$(cfgval 'max(d["generation"], d["floor"])')
@@ -67,7 +69,7 @@ SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'"); psudo "nmcli 
 python3 -I -c 'import secrets; print("hq-" + secrets.token_urlsafe(15))' > "$T/psk1"
 echo "baseline: generation $G, $(cfgval '"at_rest=" + json.dumps(d.get("at_rest"))'), Pi profile '$PROF'"
 join "$PROF"; chk $? "0.1 the Pi is on the AP with its original profile, Mission Control answers on the AP"
-dns9; chk $((1 - $?)) "0.2 original policy in force: DNS to 9.9.9.9 dropped"
+dns9; r=$?; chk $([ $r = 1 ] && echo 0 || echo 1) "0.2 original policy in force: DNS to 9.9.9.9 dropped"
 # ---- 1. change settings live ----
 printf 'HQWAN1\nmode=static\nip=10.100.0.200/24\ngw=10.100.0.1\ndns=10.100.0.1\nvlan=100\nmgmt_vlan=200\nmgmt=dhcp\n' > "$T/wan1"
 printf 'HQPOL1\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 0.0.0.0/0 via wan\n' > "$T/pol1"
@@ -108,12 +110,12 @@ grep -q '"applies": "live"' "$T/r"; chk $? "7.1 original-setup bundle gen $GC ap
 waitlog "\[WAN\] live apply: mode DHCP" 40; chk $? "7.2 WAN back to the bench DHCP (VLAN 100 + mgmt VLAN 200)"
 join "$PROF"; chk $? "7.3 the Pi's ORIGINAL profile reconnects"
 confirm C; chk $? "7.4 owner confirm commits gen $GC"
-dns9; chk $((1 - $?)) "7.5 original policy again: DNS to 9.9.9.9 dropped"
+dns9; r=$?; chk $([ $r = 1 ] && echo 0 || echo 1) "7.5 original policy again: DNS to 9.9.9.9 dropped"
 reboot "original kept"; chk $? "8.1 device back after reboot"
 since | grep -aq "generation $GC in force (committed)"; chk $? "8.2 gen $GC (original setup) in force after the reboot"
 join "$PROF"; chk $? "8.3 the Pi joins on its original profile after the reboot"
 refused hq-house; chk $? "8.4 the test passphrase is refused"
-join "$PROF" >/dev/null; dns9; chk $((1 - $?)) "8.5 original policy after the reboot: DNS to 9.9.9.9 dropped"
+join "$PROF" >/dev/null; dns9; r=$?; chk $([ $r = 1 ] && echo 0 || echo 1) "8.5 original policy after the reboot: DNS to 9.9.9.9 dropped"
 [ "$(cfgval 'd.get("at_rest",{}).get("sealed")')" = True ]; chk $? "8.6 sealed at rest"
 fh=$(tail -c +1 "$LOG" | tr -d '\r\000' | tail -c 3000000 | grep -ac "Wi-Fi firmware HALTED")
 echo "    firmware-halt lines in the recent serial log: $fh"

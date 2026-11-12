@@ -34,7 +34,7 @@ for _ in $(seq 1 15); do A6=$(pi "ip -6 -o addr show wlan1 scope global | awk '{
 echo "  wlan1 ($MV6): IPv4 addresses $A4, IPv6 $A6"
 [ "$A4" = 0 ] && [ -n "$A6" ]; chk $? "wlan1 is IPv6-only on the AP (no IPv4 lease, a global IPv6 address)"
 # bound to wlan1 (wlan0 is on the same AP with its own routes and lease: unbound attempts would be ITS traffic)
-pi "for i in \$(seq 1 30); do curl -s -m 1 --interface wlan1 telnet://[$V6HOST]:22 </dev/null >/dev/null 2>&1; done; true"
+pi "for i in \$(seq 1 30); do curl -s -m 1 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') telnet://[$V6HOST]:22 </dev/null >/dev/null 2>&1; done; true"
 sleep 3
 D=$(api "/api/detections?limit=200")
 grep -q "\"rule_id\":1200124[^}]*\"src_device\":\"$MV6\",\"src_ipv6_only\":true" <<<"$D"; chk $? "G36: rule 124 over IPv6 from the IPv6-only device, attributed to its MAC (src_device, src_ipv6_only)"
@@ -42,7 +42,7 @@ down
 # ---- G32: private-MAC rotation A -> B with the same TLS stacks
 hellos() {   # three distinct TLS client stacks from wlan1 (JA4 differs by ALPN / max version); the ClientHello is
              # fingerprinted even though the bench host's sshd answers it
-  pi "for o in '' '--http1.1' '--tls-max 1.2'; do timeout 4 curl -sk --interface wlan1 \$o --resolve example.net:22:$TLSHOST https://example.net:22/ >/dev/null 2>&1; done; true"
+  pi "for o in '' '--http1.1' '--tls-max 1.2'; do timeout 4 curl -sk --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') \$o --resolve example.net:22:$TLSHOST https://example.net:22/ >/dev/null 2>&1; done; true"
 }
 MA=02:6c:00:00:32:0a; MB=02:6c:00:00:32:0b
 up $MA auto; sleep 3; hellos; hellos; down
