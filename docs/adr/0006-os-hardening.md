@@ -10,6 +10,7 @@ enrollment, PCR-sealed secrets, remote attestation) + H3–H5 open.
 (eBPF dataplane — the hardening must not break it). Grounded in a 2026-07-01 deep-research pass
 (competition teardown + Linux-hardening survey; sources at the end). Verification was rate-limited
 mid-run, so claims are trusted from PRIMARY sources (bootc.dev, Bottlerocket, KSPP, NIST, vendor docs).
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 ## Context
 

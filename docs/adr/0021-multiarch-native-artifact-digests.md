@@ -18,6 +18,7 @@ Option<String>` already existed on `ArtifactDigest` since this ADR; the gap was 
 aot` consulted it), [ADR 0002](0002-crypto-agility-pqc.md) (digest alg remains named/policy,
 untouched here), [ADR 0015](0015-registry-driven-module-inclusion.md) (registry-driven staging;
 the `staging.artifacts[].src -> dest` convention this ADR's builder wiring reuses unchanged).
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 ---
 

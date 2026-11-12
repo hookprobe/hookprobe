@@ -62,6 +62,7 @@ HOLD `5GHz-VHT80-ch40` (reported as ch36/80MHz/center 5210, ~250 Mbit/s) — the
 a channel-*naming* quirk plus a false `ChanspecFailStorm` verdict (an 80 MHz block reports its primary
 as the block's lowest channel), NOT a hardware ceiling. See Extension BUG-W7. Real cross-border
 GeoIP-from-a-live-ISP-exit-IP remains opportunistically validated (depends on the WAN the box is behind).
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 **Deciders:** os-architect (author). Pending review: code-developer (the supervisor subcommand +
 reconciler wiring that starts/masks the supplicant and invokes the loop), security-auditor (the

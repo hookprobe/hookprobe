@@ -5,6 +5,7 @@ H3, done + reboot-proof). Supersedes the earlier draft; folds in the operator's 
 **Deciders:** operator (plan below), os-architect.
 **Relates to:** [ADR 0006](0006-os-hardening.md) (verity/integrity), [ADR 0002](0002-crypto-agility-pqc.md)
 (PQC/crypto-agility), `security/crypt/README.md`.
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 > **Amendment (operator, 2026-11-07) — licence.** The licence is **GNU AGPL-3.0 with commercial dual licensing**,
 > matching `LICENSING.md` (this ADR previously said Apache-2.0). Reasons: nothing is published yet, so starting

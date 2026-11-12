@@ -47,19 +47,27 @@ ABI), and one component inside the kernel, **`cfgd`**, is the only thing that wr
 
 - **`hsh`** is HookProbe's own management shell, built into the kernel. It is not Bash, BusyBox or a
   Linux shell. It runs as an isolated user-mode component, sees the same numbers Mission Control
-  does, and cannot reach kernel internals. It passes its tests on CM5. How an operator reaches it in
-  production (serial console, a Mission Control console, or both) is still an open decision. See
-  the [`hsh` design](docs/design/hsh-native-management-shell.md).
+  does, and cannot reach kernel internals. Its read commands pass on CM5
+  ([batch 59–63](docs/design/metal-evidence/20261111-batch59-63.md)). Production access was decided on
+  2026-11-12: a console in Mission Control over the owner's HTTPS session; every command that changes
+  something needs a request signed off-device with the owner's key, so the console itself carries no
+  authority. That signed path is QEMU-tested only (metal pending); no serial-console access is built.
+  See the [`hsh` design](docs/design/hsh-native-management-shell.md) and the
+  [signed request format](docs/design/mgmt-envelope-api.md).
 - **Mission Control** is the web UI, served by the device itself. It is a client of the same
   interface, with nothing UI-specific on the device.
 - **Configuration is signed, not trusted.** The owner holds a signing key (in the browser, with an
   encrypted backup) and enrolls it as the device's owner key; after that the device accepts only
   configuration signed with it. Internet, Wi-Fi and firewall settings travel as one signed bundle,
   bound to the device. A bundle starts as a **trial**: the device keeps it once the internet works,
-  or goes back to the last good settings by itself (proven on CM5). Changes to how you reach the
-  device must be confirmed by the owner.
-- Still to come: passkey signing, and encrypting the stored Wi-Fi and PPPoE passwords (until then
-  they are stored in clear inside the signed configuration).
+  or goes back to the last good settings by itself (proven on CM5 after a reboot,
+  [batch 59–63](docs/design/metal-evidence/20261111-batch59-63.md)). Changes to how you reach the
+  device must be confirmed by the owner, with a request signed by the owner's key.
+- Built on main 2026-11-12, **QEMU-tested only, not yet run on CM5**: stored configuration (including
+  the Wi-Fi and PPPoE passwords) encrypted at rest with a device-bound key, and firewall, internet and
+  Wi-Fi changes applied live, without a reboot, with the same trial and automatic revert
+  ([design and status](docs/design/heqk-sealed-config-live-apply.md)).
+- Still to come: passkey signing.
 
 Details: [ADR 0058](docs/adr/0058-owner-signed-runtime-config.md) (owner-signed configuration),
 [ADR 0059](docs/adr/0059-secure-configuration-management.md) (secure configuration management) and

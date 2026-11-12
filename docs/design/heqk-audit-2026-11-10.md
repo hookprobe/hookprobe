@@ -12,6 +12,10 @@ run named), **I** = implemented, not validated, **P** = partial, **M** = mock/de
 > for OTP (production blocker) and RPMB (owner decision required) + WPA3 (evidence pending):
 > `heqk-decision-record-otp-rpmb-2026-11-10.md`. No OTP or RPMB write was made during the autonomous work.
 
+> **Status reconciled 2026-11-12 (A12 doc hygiene):** the tables below are kept as written on 2026-11-10 (history).
+> What reached main since, with labels, is in §2.2 and §4.1. Labels: `not built`, `QEMU only`, `metal pending`,
+> `metal-proven (<evidence file>)`, `blocked (<reason>)`. Release readiness is `tools/release-gate/items.txt`.
+
 ## 1. Mission Control — feature truth table
 
 Routing: `os/kernel/kernel/src/http.rs` (public `/login`, `/api/login`, `/api/logout`, minimal `/api/health`;
@@ -55,8 +59,8 @@ yet say so (doc-only fix, no decision change).
 | 0049 WAN policy auth / IPv6 identity / scan evidence | D2, D3 V; **D1 deviates** (see 2.1) |
 | 0050 parser placement | P — TLS in EL0 (metal), TLS scalar no longer in EL1; HTTP / DHCP / DNS / WAN / Noise / WPA2 parsers still EL1 |
 | 0051 MC HTTPS | V (offline provisioning) |
-| 0052 Shield v2 | V (metal) — header still "Proposed" |
-| 0052 CI/CD (duplicate number) | I — gates run, never ratified; proposed renumber → 0058 |
+| 0052 Shield v2 | V (metal) — header still "Proposed" · *2026-11-12: header reconciled to "Implemented, metal-proven"; operator ratification not recorded* |
+| 0052 CI/CD (duplicate number) | I — gates run, never ratified; proposed renumber → 0058 · *2026-11-12: 0058 is taken (owner-signed runtime config); proposed renumber is now **0063**, operator decision — `docs/adr/README.md`* |
 | 0053 operator actions | V — per-session write rate limit (`[P-write-rate]`) and eviction-proof replay guard (`[P-seq-floor]`) added 2026-11-10 |
 | 0054 per-device AP credential | V |
 | 0055 owner journal | V (metal) — revoke-all added 2026-11-10 (`OP_CLEAR`); the signed `pin` token is still missing |
@@ -132,6 +136,22 @@ yet say so (doc-only fix, no decision change).
       seals the snapshot / evidence log / owner journal / sealed config, this image restores them (older blobs
       unseal), writes new ones, and they restore again after a power cycle. (`[P-sealnonce]` runs in the QEMU
       sequence only; it is not in the CM5 images.)
+
+### 2.2 ADRs 0058–0062 and changes on main (status reconciled 2026-11-12)
+
+| ADR | Status in code (2026-11-12, main `58d83647`) |
+|---|---|
+| 0058 owner-signed runtime config | Header now Accepted (operator 2026-11-10). WAN / WIFI / POLICY signed + A/B store + rollback + enroll / rotate: metal-proven (`docs/design/metal-evidence/20261111-batch59-63.md`, config journey 20/20). Enroll / rotate: blocked (G46 security review, gate SEC-05) |
+| 0059 secure configuration | Steps 0–3 (Phase 0, HQCFG1, cfgd): metal-proven (`20261111-batch59-63.md`, cfgd 13/13). Step 4a (`[P-hsh]`, `[P-mgmtabi]`): metal-proven (same file). Step 4c / R6 = D HQMGMT1 envelopes (PRs #1013, #1018): QEMU only, metal pending. Sealed config at rest + live apply (PRs #998–#1005, #1007, #1008): QEMU only, metal pending. Per step: `docs/design/adr0059-implementation.md` |
+| 0060 SMP / BKL | not built (Proposed; single-core contract still in force) |
+| 0061 memory budgets | not built (Proposed) |
+| 0062 multi-tenant PoP isolation | not built (Proposed) |
+
+§2.1 #10 (fuzz targets): owner-journal replay now has a deterministic corruption sweep, 3000 random corruptions
+replayed by the real code (`[P-journal-sweep]`, PR #1016) — QEMU only; a host libFuzzer target still needs the
+replay split out of the crate (not built). §2.1 #11 (`WAN.TXT` unsigned): fixed — WAN.TXT is signed (ADR 0058,
+ADR 0059 Phase 0.1–0.2), metal-proven (`20261111-batch59-63.md`, `WAN.TXT signature OK`; release gate TC-07).
+§2.1 #12 (W4 hygiene): merged to main as PR #1017 — QEMU only, metal pending (the four checks listed there).
 
 ## 3. E2E / validation evidence (this audit)
 
@@ -225,8 +245,32 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 | A9 | Fuzz targets: owner-journal replay, `otaimg::check`/PayloadHeader, upload/owner forms | 0 crashes over 10M runs | host libFuzzer |
 | A10 | Phase 4: G0 apcore steps 4–5, IPv6 lateral detection, detbench through apcore, household corpus | gates + benchmark report | QEMU |
 | A11 | Phase 5: EL0 parser isolation (HTTP → DHCP/DNS → WAN clients → Noise → WPA2) | each parser behind an excursion | QEMU + metal |
-| A12 | Doc hygiene: stale ADR headers, ADR 0052 duplicate → 0058, SECURITY.md built/not-built list, README matrix | docs match code | review |
+| A12 | Doc hygiene: stale ADR headers, ADR 0052 duplicate → 0058 *(2026-11-12: 0058 taken → proposed 0063)*, SECURITY.md built/not-built list, README matrix | docs match code | review |
 | A13 | W4 security hygiene (task #55): synthetic HQKSEAL1 nonce, in-session Noise rekey on the record layer + G19 CAPS, shipping-flavour feature guard, g4r on the shipping flavour, `record_rx` fuzz target — **built 2026-11-12, QEMU + metal pending** (§2.1 #12) | `[P-sealnonce]`, `[P-rekey]`, `[P-g19-rekey]` PASS; superpop `rekey_interop`; metal list in §2.1 #12 | QEMU + host + metal |
+
+### 4.1 Plan status reconciled 2026-11-12 (main `58d83647`)
+
+Rows above are kept as written. Status since, per item:
+
+| # | Status 2026-11-12 | Evidence |
+|---|---|---|
+| A1 | metal-proven | `docs/design/metal-evidence/20261110-ota-a1.md`, `20261110-batch29.md` (J1, J2). Commit gate tightened by PR #1015 (WAN usable AND AP serving for 30 s; only the gate commits): QEMU only, metal pending |
+| A2 | built (factory script) | §3.1 |
+| A3 | built; CI builds the shipping flavour from one source `tools/ci/shipping-features.txt` (PR #1011) + shipping guard (PR #1017) | CI gate |
+| A4 | part 1 metal-proven (§3.1 J4); per-pack floors not built (re-ranked low, §3.1) | — |
+| A5 | QEMU only (`[P-mcauth]`, `[P-write-rate]`, mc-e2e) | — |
+| A6 | built (release + factory refuse a bench PSK) | scripts |
+| A7 | crash record metal-proven (`20261110-batch33.md`, CRASH-RECORD 5/5); Wi-Fi wedge self-heal QEMU only; bounded Wi-Fi recovery → one reboot → stay up without Wi-Fi (operator 2026-11-12): not built; 72 h soak: deferred by the operator until features are built | — |
+| A8 | QEMU (mc-e2e) | — |
+| A9 | partial: `abslot`, `boot_abi::verify`, `record_rx` host fuzz targets; owner-journal replay sweep `[P-journal-sweep]` (PR #1016, QEMU only); host libFuzzer for journal replay / upload + owner forms: not built | `docs/design/fuzz-evidence.md` |
+| A10 | deferred (§3.1) | — |
+| A11 | SEC-01 steps 1, 2a, 2b, 3, 5a metal-proven (`20261111-batch59-63.md`, `[P-lansvc]`); 5b and 5c (PR #1005) QEMU only, metal pending; Noise + SNTP / ARP / ICMP stay in EL1 by operator decision 2026-11-11; authenticator state machine moves with the driver: not built | ADR 0050 D4 status notes |
+| A12 | this reconciliation (docs only, 2026-11-12) | `docs/adr/README.md` |
+| A13 | merged (PR #1017) — QEMU + host only, metal pending (§2.1 #12) | — |
+| Sealed config + live apply (the "house", steps 1–11) | merged: #998 (steps 1–3), #999 (6), #1000 (5), #1001 (7–8), #1002 (9), #1003 (11), #1004 (10), #1007 (live hand-off fix + image budget), #1008 (`/api/config` live object) — QEMU only, **metal pending** (checks from PR #1009 not yet run) | `docs/design/heqk-sealed-config-live-apply.md` |
+| hsh R6 = D | decided 2026-11-12 (PR #1010); built: #1013 (confirm / rollback / stage, web carrier `POST /api/hsh`), #1018 (upload activate / rollback, factory reset, owner-key rotation) — QEMU only, metal pending; reboot / owner rules / actions / alert hook still token = recorded deviation; UART carrier not built | `docs/design/adr0059-implementation.md` step 4 |
+| REL-08 PMKID correction | built, on by default with `wpa3` (operator 1A, 2026-11-11); dev-bench trigger test passed; 72 h soak + regression matrix metal pending; shipping blocked (written legal clearance, CMP-02) | `docs/design/rel08-cyw43455-pmkid-trap.md` |
+| Bench | flash runbook + read-only preflight, rpiboot entry fix (PR #1012) | `docs/design/heqk-flash-runbook.md` |
 
 ## 5. Human-dependency register (B — only these need the operator)
 
@@ -240,7 +284,7 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
    setup-AP credential. Secure, but not a sellable unit — **the OTP provisioning decision blocks production.**
    (Minor: the metal self-test `cm5_p15_block_seal` falls back to a constant key; it never runs in the AP image.)
    The bench CM5 is unaffected (provisioned in an earlier campaign).
-3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber), 0055 `pin` semantics, 0056 D1 boundary with the
+3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber, now proposed → 0063), 0055 `pin` semantics, 0056 D1 boundary with the
    flasher owner, 0045/0046, retire 0035–0042.
 4. **[Owner decision required — see the decision record]** Persistent anti-rollback medium (RPMB vs sealed counter) — technical options can be prototyped (A), the
    choice is the operator's. Update 2026-11-10: a counter on the same eMMC cannot detect owner-journal or pack

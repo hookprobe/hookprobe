@@ -13,6 +13,7 @@ resolver this RPZ actually loads into does not exist yet (see D5) — so NAME-le
 staged-and-validatable but not yet the default on-device path. code-developer built this on direct
 instruction (roadmap item A1); os-architect/security-auditor review of the module-registry wiring
 is complete for the arm64 staging leg.
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 **Update 2026-07-11 (metal note, product-steward).** The 2026-07-10 CM5/Pi4 pentest validated
 `dnsxai` live *scoring* (805 verdicts, iCloud DNS scored benign) but the DNS-sinkhole *block* of a
