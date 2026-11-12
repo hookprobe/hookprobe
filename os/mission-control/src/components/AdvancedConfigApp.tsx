@@ -13,7 +13,7 @@
  * the two signed files are offered for the boot card. Nothing here applies a change without the owner's
  * signature; the device re-verifies everything.
  */
-import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
+import { type Component, For, Show, createEffect, createMemo, createSignal, on, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { networkView, startNetworkLive } from '../store/networkLive';
@@ -54,6 +54,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     binds: [{ iface: 'mgmt', kind: 'acl', dir: 'in', name: 'MGMT_IN' }],
     routes: [{ dst: '0.0.0.0/0', from: '', via: 'wan', gw: '', metric: '10' }],
   });
+  // The device does not report its firewall text, so the form starts from an EXAMPLE. It is only ever signed when
+  // the owner actually edits it: a bundle carries a policy section only then (a bundle is the complete
+  // configuration for the sections it carries; without one the device keeps its own firewall).
+  const [polDirty, setPolDirty] = createSignal(false);
+  createEffect(on(pol, () => setPolDirty(true), { defer: true }));
   const [gen, setGen] = createSignal('');
   const [open, setOpen] = createSignal(false);
   const [step, setStep] = createSignal<Step>('review');
@@ -158,12 +163,12 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     const e: string[] = [];
     checkWan(wan()).forEach((x) => e.push(`Internet: ${x}`));
     checkWifi(wifi()).forEach((x) => e.push(`Wi-Fi: ${x}`));
-    checkPolicy(pol()).forEach((x) => e.push(`Firewall: ${x}`));
+    if (polDirty()) checkPolicy(pol()).forEach((x) => e.push(`Firewall: ${x}`));
     if (wan().mode === 'pppoe' && (!wan().pppoePass || wan().pppoePass === '(current)')) e.push('Internet: type the PPPoE password again (the device never shows it).');
     if (!wifi().psk) e.push('Wi-Fi: type the Wi-Fi password again (the device never shows it).');
     return e;
   });
-  const bundleSections = () => ({ wan: fromLegacy('wan', buildWan(wan())), wifi: fromLegacy('wifi', buildWifi(wifi())), policy: fromLegacy('policy', buildPolicyText(pol())) });
+  const bundleSections = (): { wan: string; wifi: string; policy?: string } => ({ wan: fromLegacy('wan', buildWan(wan())), wifi: fromLegacy('wifi', buildWifi(wifi())), ...(polDirty() ? { policy: fromLegacy('policy', buildPolicyText(pol())) } : {}) });
   const applyBundle = async () => {
     setBMsg('');
     try {
@@ -277,6 +282,9 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             </Show>
 
             <Show when={sec() === 'firewall'}>
+              <Show when={!polDirty()}>
+                <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>These rules are an <b>example</b> to start from, not your device's current firewall (the device does not report it). Signing them replaces the device's firewall, so change them to what you want first.</p>
+              </Show>
               <div class="pcard">
                 <p class="l0-label">Access lists · checked top to bottom, first match wins; replies to connections your network opened always come back</p>
                 <div class="l0-table-wrap"><table class="l0-table">
@@ -399,12 +407,17 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
       </Drawer>
 
       <Drawer open={bOpen()} title="Apply all three together" crumb={`configuration bundle · generation ${bundleGen()}`} onClose={() => setBOpen(false)}>
-        <p class="l0-card-sub">The bundle is the complete configuration for internet, Wi-Fi and firewall. After the restart it runs as a trial: the device keeps it once the internet works, or goes back to the previous settings by itself. Changes to the management network must be kept by you within the window.</p>
+        <p class="l0-card-sub">The bundle is the complete configuration for the sections it carries. After the restart it runs as a trial: the device keeps it once the internet works, or goes back to the previous settings by itself. Changes to the management network must be kept by you within the window.</p>
         <Show when={bStep() === 'review'}>
           <For each={(['wan', 'wifi', 'policy'] as const)}>{(k) => (
             <div class="pcard" style={{ padding: '10px 12px', gap: '6px' }}>
               <p class="l0-label">{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'}</p>
-              <pre style={{ margin: 0, font: '12px/1.6 var(--hp-font-mono)', 'white-space': 'pre-wrap' }}>{(() => { try { return bundleSections()[k].replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••'); } catch (e) { return String((e as Error).message); } })()}</pre>
+              <Show when={k !== 'policy' || polDirty()} fallback={
+                <p class="l0-card-sub" aria-label="Firewall not included" style={{ margin: 0 }}>Not included: the device keeps its current firewall. To replace it, edit the Firewall tab first.</p>
+              }>
+                <p class="pcard-note" style={{ margin: 0 }}>{k === 'policy' ? 'Replaced by your edits in the Firewall tab.' : 'Replaced by this section.'}</p>
+                <pre style={{ margin: 0, font: '12px/1.6 var(--hp-font-mono)', 'white-space': 'pre-wrap' }}>{(() => { try { return (bundleSections()[k] ?? '').replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••'); } catch (e) { return String((e as Error).message); } })()}</pre>
+              </Show>
             </div>
           )}</For>
           <Show when={wan().mode === 'pppoe'}>
