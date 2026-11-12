@@ -75,6 +75,18 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+# Design heqk-sealed-config-live-apply §2.7 (baseline lint): the factory baseline on the boot partition is signed but
+# PLAINTEXT, and the device seals only what it stores itself — so a RELEASE image carries no secret there. A PPPoE
+# password belongs in an owner upload (sealed at rest); the production AP uses the SRK-derived setup credential, so a
+# release image has no WIFI.TXT at all. Debug / bench images (HOOKPROBE_DEBUG_ACCESS=1) may still carry them.
+if [ "${HOOKPROBE_DEBUG_ACCESS:-0}" != 1 ]; then
+  if [ -n "$WAN_FILE" ] && grep -aq 'pppoe_pass=' "$WAN_FILE"; then
+    echo "FATAL: release image: --wan-file $WAN_FILE contains pppoe_pass= — the boot-partition baseline must carry no secrets (upload the PPPoE settings to the device, where they are sealed at rest; or HOOKPROBE_DEBUG_ACCESS=1 for a bench image)"; exit 1
+  fi
+  if [ -n "$WIFI_FILE" ]; then
+    echo "FATAL: release image: --wifi-file puts a WIFI.TXT (a PSK) on the boot partition — the factory baseline carries no secrets; the production AP uses the per-device SRK-derived setup credential (or HOOKPROBE_DEBUG_ACCESS=1 for a bench image)"; exit 1
+  fi
+fi
 for t in sfdisk mkfs.vfat mcopy mdir sha256sum python3; do
   command -v "$t" >/dev/null || { echo "FATAL: $t not on PATH (host build tool)"; exit 1; }
 done
