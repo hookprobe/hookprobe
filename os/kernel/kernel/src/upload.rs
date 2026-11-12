@@ -510,6 +510,7 @@ pub fn verified_type(tag: [u8; 4], id: u64) -> Option<Ty> {
 /// re-authentication, and for the management ABI's CFG_STAGE after the kernel's role check). The upload must belong
 /// to the caller's session (`tag`).
 pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &'static str> {
+    rbt_clear();
     let u = match up() {
         Some(u) if u.id == id && u.session == tag => u,
         _ => return Err("unknown upload id"),
@@ -676,6 +677,7 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
         return Err(crate::mgmtenv::OTHER_TARGET);
     }
     let old = artstore::active_gen(&artstore::Plain::new(&*d), p1(d), ty);
+    rbt_clear();
     let res = artstore::rollback(d, ty, &opk);
     if res.is_ok() && ty.staged() {
         artstore::refresh(&*d, None);
@@ -712,21 +714,56 @@ pub fn abort(c: &Ctx, body: &[u8]) -> Result<(), &'static str> {
     r
 }
 
+// "rollback_to" (R6 = D): `artstore::rollback_target` re-verifies (hashes) the whole previous half, so GET caches it
+// per type: [half | state << 8 | 1 << 16, active gen, verifier key prefix, target + 1 (0 = none)]. Every activation /
+// rollback clears it first. Zero-initialised (.bss, not the payload).
+static mut RBT: [[u64; 4]; artstore::NTY] = [[0; 4]; artstore::NTY];
+fn rbt_clear() {
+    unsafe { RBT = [[0; 4]; artstore::NTY] };
+}
+/// The generation `POST /api/upload/rollback` would go to for `t` (what its envelope must bind), or None.
+fn rollback_to(d: &DevRef, t: Ty) -> Option<u64> {
+    let opk = artstore::key_for(t)?;
+    let e = artstore::entry(d, t)?;
+    let k = [e.half as u64 | (e.state as u64) << 8 | 1 << 16, e.gen, u64::from_le_bytes(opk[..8].try_into().ok()?)];
+    let c = unsafe { &mut (*core::ptr::addr_of_mut!(RBT))[t as usize] };
+    if c[..3] != k {
+        let v = artstore::rollback_target(d, t, &opk);
+        *c = [k[0], k[1], k[2], v.map_or(0, |g| g + 1)];
+    }
+    c[3].checked_sub(1)
+}
+
+/// Owner-journal artifact record value → result: 1 done (activation, rollback, accepted envelope), 2 refused.
+pub fn result_label(v: u8) -> &'static str {
+    match v {
+        1 => "ok",
+        2 => "refused",
+        _ => "unknown",
+    }
+}
+
 /// `GET /api/upload`: what each type is running (generation + source) and the recent upload trail.
 pub fn render(w: &mut crate::mcstate::JsonBuf) {
     use core::fmt::Write;
     let _ = write!(w, "{{\"store\":{},\"chunk_max\":{},\"types\":[", installed(), CHUNK_MAX);
     for (i, t) in artstore::ALL.iter().enumerate() {
-        let (g, src) = match dev() {
+        let (g, src, rb) = match dev() {
             Some(d) => {
                 let p = p1(d);
                 let pv = artstore::Plain::new(&*d);
-                (artstore::active_gen(&pv, p, *t), if artstore::from_store(&pv, p, *t) { "store" } else { "boot" })
+                (artstore::active_gen(&pv, p, *t), if artstore::from_store(&pv, p, *t) { "store" } else { "boot" }, rollback_to(d, *t))
             }
-            None => (0, "boot"),
+            None => (0, "boot", None),
         };
-        let _ = write!(w, "{}{{\"type\":\"{}\",\"cap\":{},\"generation\":{},\"source\":\"{}\",\"applies\":\"{}\"}}", if i > 0 { "," } else { "" }, t.info().name, t.info().cap, g, src,
+        let _ = write!(w, "{}{{\"type\":\"{}\",\"cap\":{},\"generation\":{},\"source\":\"{}\",\"applies\":\"{}\",\"rollback_to\":", if i > 0 { "," } else { "" }, t.info().name, t.info().cap, g, src,
             if t.staged() { "next_boot" } else { "now" });
+        match rb {
+            Some(r) => {
+                let _ = write!(w, "{}}}", r);
+            }
+            None => w.raw("null}"),
+        }
     }
     w.raw("],\"in_flight\":");
     match up() {
@@ -759,7 +796,7 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
     crate::ownerjournal::for_each_artifact(&mut |r| {
         let _ = write!(w, "{}{{\"seq\":{},\"ms\":{},\"type\":", if k > 0 { "," } else { "" }, r.seq, r.ms);
         w.string(core::str::from_utf8(r.target()).unwrap_or("?"));
-        let _ = write!(w, ",\"result\":\"{}\",\"detail\":", if r.value == 1 { "activated" } else { "rolled back" });
+        let _ = write!(w, ",\"result\":\"{}\",\"detail\":", result_label(r.value));
         w.string(core::str::from_utf8(&r.reason[..r.rlen as usize]).unwrap_or(""));
         w.raw("}");
         k += 1;
@@ -897,6 +934,33 @@ pub fn selftest() -> bool {
     let tampered = run_one(&c, &mut auth, &cont3[..512 + body.len()], "devices", &mut seq, false).is_err();
     // foreign Origin
     let foreign = begin(&Ctx { origin: "https://evil.example", ..Ctx { ..c } }, b"type=devices&size=600&seq=999", &mut auth).err() == Some("origin");
+    // R6 = D review: GET "rollback_to" is what the rollback handler accepts; a refused activation reads "refused"
+    let rb_none = dev().is_some_and(|d| rollback_to(d, Ty::Devices).is_none()); // only gen 3 stored so far
+    let new4 = artstore::test_sig(b"HQDSIG1\0", b"HQDEV1", 4, body, &kp);
+    cont2[..512].copy_from_slice(&new4);
+    let act4 = run_one(&c, &mut auth, &cont2[..512 + body.len()], "devices", &mut seq, true) == Ok(4);
+    let to = dev().and_then(|d| rollback_to(d, Ty::Devices));
+    let mut rb = |gen: u64, seq: u64| {
+        crate::mgmtenv::test_sign_hex(&kown, hal::mgmtabi::UPLOAD_ROLLBACK, Ty::Devices as u64, gen, [0; 32], &mut eh);
+        self::rollback(&c, f!("type=devices&envelope={}&seq={}", core::str::from_utf8(&eh).unwrap_or(""), seq), &mut auth).map(|a| a.gen)
+    };
+    seq += 1;
+    let rb_wrong = rb(4, seq) == Err(crate::mgmtenv::OTHER_TARGET);
+    seq += 1;
+    let rb_ok = to == Some(3) && rb(3, seq) == Ok(3);
+    let mut jb = [0u8; 4096];
+    let js = {
+        unsafe { EHEAD = 0 };
+        let mut w = crate::mcstate::JsonBuf::new(&mut jb);
+        render(&mut w);
+        let n = if w.overflow { 0 } else { w.len };
+        &jb[..n]
+    };
+    let has = |x: &[u8]| js.windows(x.len()).any(|w| w == x);
+    // after the rollback the gen-4 half is the previous one (the cache was cleared); no other type has one
+    let rb_json = has(b"\"generation\":3,\"source\":\"store\",\"applies\":\"now\",\"rollback_to\":4}") && has(b"\"type\":\"ioc\",\"cap\":16777216,\"generation\":0,\"source\":\"boot\",\"applies\":\"now\",\"rollback_to\":null}");
+    let labels = has(b"\"result\":\"refused\",\"detail\":\"activate gen 3") && has(b"\"result\":\"ok\",\"detail\":\"rollback gen 4->3\"") && !has(b"rolled back");
+    let rbt = rb_none && act4 && rb_wrong && rb_ok && rb_json && labels;
     // design heqk-sealed-config-live-apply step 3: a configuration upload is staged in RAM only and sealed at rest
     let cfg = cfg_selftest(&c, &mut auth, &kp, &mut seq);
     // clean up: nothing of the test survives into the running image
@@ -912,11 +976,12 @@ pub fn selftest() -> bool {
     crate::ownerjournal::clear();
     crate::anchor::install_owner(saved_owner.0, saved_owner.1);
     crate::mgmtenv::test_reset();
-    let pass = bad_type && too_big && reauth && out_of_order && chunks_ok && early && fin && staged_only && act && audited && rollback && cross && tampered && foreign && cfg.iter().all(|&x| x);
+    let pass = bad_type && too_big && reauth && out_of_order && chunks_ok && early && fin && staged_only && act && audited && rollback && cross && tampered && foreign && rbt && cfg.iter().all(|&x| x);
     arch_aarch64::_print(format_args!(
-        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate (R6 = D: owner token alone refused, envelope for another generation refused, the owner's envelope activates): store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={} a config bundle is handed to the live engine (policy-only: applies live, no reboot, auto-commit; management binding: live + owner confirm)={} no device key: a secret-bearing bundle applies live RAM-only (at_rest volatile_ram_only, nothing on disk, manifest untouched)={} a bundle uploaded during a trial is refused, the revert keeps the last-known-good={}\n",
+        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate (R6 = D: owner token alone refused, envelope for another generation refused, the owner's envelope activates): store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} rollback_to = what rollback accepts, refused labelled refused={:?} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={} a config bundle is handed to the live engine (policy-only: applies live, no reboot, auto-commit; management binding: live + owner confirm)={} no device key: a secret-bearing bundle applies live RAM-only (at_rest volatile_ram_only, nothing on disk, manifest untouched)={}\n",
         if pass { "PASS" } else { "FAIL" }, bad_type && too_big && reauth, out_of_order, chunks_ok, early, fin, staged_only, act, audited, rollback, cross, tampered, foreign,
-        cfg[0], cfg[1], cfg[2], cfg[3], cfg[4], cfg[5], cfg[6]
+        [rb_none, act4, rb_wrong, rb_ok, rb_json, labels],
+        cfg[0], cfg[1], cfg[2], cfg[3], cfg[4], cfg[5]
     ));
     pass
 }

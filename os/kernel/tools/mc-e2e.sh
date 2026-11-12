@@ -97,7 +97,7 @@ qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio
   -device virtio-net-device,netdev=n0 \
   -drive file="$DISK",format=raw,if=none,id=hd0 -device virtio-blk-device,drive=hd0 -kernel "$KERNEL" >"$LOG" 2>&1 &
 QPID=$!
-cleanup() { [ "${MC_E2E_KEEP:-0}" = 1 ] || { kill "$QPID" 2>/dev/null; rm -f "$DISK" "$JAR"; }; }
+cleanup() { [ "${MC_E2E_KEEP:-0}" = 1 ] || { kill "$QPID" 2>/dev/null; rm -f "$DISK" "$JAR" "${JARH:-}"; }; }
 trap cleanup EXIT
 # "serving" is printed only once DHCP has leased an address (QEMU user-net serves 10.0.2.15).
 for _ in $(seq 1 90); do grep -qa "\[MC\] heqk Mission Control serving" "$LOG" && break; sleep 1; done
@@ -133,12 +133,35 @@ grep -qa "\[P-lansvc-sae\] PASS" "$LOG" && ok "ADR 0050 D4 step 5c: the WPA3-SAE
 grep -qa "\[P-hsh\] PASS" "$LOG" && ok "ADR 0059 step 4a: the EL0 shell — parser limits, read commands via the management ABI, role enforced by the kernel, fault contained ([P-hsh])" || bad "hsh: $(grep -a 'P-hsh\|\[HSH\]' "$LOG" | head -3 | cut -c1-400)"
 grep -qa "\[P-mgmtabi\] PASS" "$LOG" && ok "ADR 0059 D9: management ABI read messages answer from the /api producers ([P-mgmtabi])" || bad "mgmtabi: $(grep -a 'P-mgmtabi' "$LOG" | head -2 | cut -c1-300)"
 grep -qa "\[P-hsh-web\] PASS" "$LOG" && ok "R6 = D: owner-signed HQMGMT1 envelopes on the web carrier — view on the session alone; session-only / wrong key / other device / other boot / replay / gen N while N+1 on trial / other operation / tampered refused; valid accepted; each journaled ([P-hsh-web])" || bad "hsh-web: $(grep -a 'P-hsh-web' "$LOG" | head -2 | cut -c1-600)"
-HCS=$(curl -s -m 10 $C "$B/api/session" | jget "d['csrf']")
-HSH() { curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $HCS" -H 'Content-Type: text/plain' --data-binary "$1" "$B/api/hsh"; }
+# POST /api/hsh is an owner write: the session seq rides in ?seq= (/api/session next_seq) and it counts against the
+# 20-writes-a-minute limit, so the console runs in its own session (JARH) and keeps the main session's seq / budget.
+JARH=$(mktemp); curl -s -o /dev/null -m 10 -d "token=$TOKEN" "$B/api/login" -c "$JARH"
+HCS=$(curl -s -m 10 -b "$JARH" "$B/api/session" | jget "d['csrf']")
+HSQ() { curl -s -m 10 -b "$1" "$B/api/session" | jget "d['next_seq']"; }
+HSH() { curl -s -m 10 -b "$JARH" -H "Origin: $B" -H "X-HQ-CSRF: $HCS" -H 'Content-Type: text/plain' --data-binary "$1" "$B/api/hsh?seq=${2:-$(HSQ "$JARH")}"; }
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 --data-binary 'info' "$B/api/hsh")" = 401 ] && ok "POST /api/hsh requires the owner session" || bad "/api/hsh reachable without a session"
-[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 $C -H 'Origin: https://evil.example' -H "X-HQ-CSRF: $HCS" --data-binary 'info' "$B/api/hsh")" = 403 ] && ok "POST /api/hsh refuses a foreign Origin" || bad "/api/hsh foreign origin"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -b "$JARH" -H 'Origin: https://evil.example' -H "X-HQ-CSRF: $HCS" --data-binary 'info' "$B/api/hsh")" = 403 ] && ok "POST /api/hsh refuses a foreign Origin" || bad "/api/hsh foreign origin"
 HSH info | grep -q "HEQK Management Environment" && ok "web console: a view command answers on the session" || bad "web console info: $(HSH info | head -3)"
 HSH "config confirm" | grep -q "needs an owner-signed envelope" && ok "web console: config confirm on the session alone is refused (R6 = D)" || bad "web console confirm: $(HSH 'config confirm' | head -3)"
+# the session seq: a replayed / stale / missing ?seq= is refused (409) before the line runs, like every other write
+HQ=$(HSQ "$JARH"); HSH info "$HQ" | grep -q "HEQK Management Environment" && [ "$(HSH info "$HQ")" = '{"ok":false,"refused":"replay"}' ] \
+  && [ "$(HSH info $((HQ-1)))" = '{"ok":false,"refused":"replay"}' ] && [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -b "$JARH" -H "Origin: $B" -H "X-HQ-CSRF: $HCS" --data-binary info "$B/api/hsh")" = 409 ] \
+  && ok "POST /api/hsh: a replayed, stale or missing session seq is refused (409 replay)" || bad "/api/hsh seq: $(HSH info "$HQ")"
+# the write rate limit: 20 writes a minute per session, shared with the other owner writes (a fresh session JARR)
+JARR=$(mktemp); curl -s -o /dev/null -m 10 -d "token=$TOKEN" "$B/api/login" -c "$JARR"
+RCS=$(curl -s -m 10 -b "$JARR" "$B/api/session" | jget "d['csrf']"); RQ=$(HSQ "$JARR"); RN=0
+for k in $(seq 0 19); do curl -s -m 10 -b "$JARR" -H "Origin: $B" -H "X-HQ-CSRF: $RCS" --data-binary info "$B/api/hsh?seq=$((RQ+k))" | grep -q "HEQK Management Environment" && RN=$((RN+1)); done
+RL1=$(curl -s -w ' %{http_code}' -m 10 -b "$JARR" -H "Origin: $B" -H "X-HQ-CSRF: $RCS" --data-binary info "$B/api/hsh?seq=$((RQ+20))")
+RL2=$(curl -s -m 10 -b "$JARR" -H "Origin: $B" -H "X-HQ-CSRF: $RCS" --data "kind=ack&target=10.0.2.2&reason=rate+test&seq=$((RQ+21))" "$B/api/actions")
+[ "$RN" = 20 ] && grep -q '"refused":"rate limited: at most 20 writes a minute per session"} 400' <<<"$RL1" && grep -q 'rate limited' <<<"$RL2" \
+  && ok "POST /api/hsh is rate limited like every owner write: 20 a minute accepted, the 21st refused (400), and the same budget then refuses /api/actions" || bad "/api/hsh rate: accepted=$RN 21st=$RL1 actions=$RL2"
+curl -s -o /dev/null -m 10 -b "$JARR" -X POST "$B/api/logout"; rm -f "$JARR"
+# the owner CLI's console (hq-upload.py --hsh) sends the session seq the same way
+OKF=$(mktemp); printf '%s\n' "$TOKEN" >"$OKF"
+python3 -I tools/hq-upload.py --mc "$B" --owner-key-file "$OKF" --hsh info 2>&1 | grep -q "HEQK Management Environment" \
+  && python3 -I tools/hq-upload.py --mc "$B" --owner-key-file "$OKF" --sign-key "$KOWN" --hsh "config confirm" 2>&1 | grep -q "no configuration on trial" \
+  && ok "hq-upload.py --hsh (view, and config confirm + envelope) passes the seq / rate guards" || bad "hq-upload.py --hsh: $(python3 -I tools/hq-upload.py --mc "$B" --owner-key-file "$OKF" --hsh info 2>&1 | head -3)"
+rm -f "$OKF"
 HP=$(curl -s -m 10 $C "$B/api/health")
 echo "$HP" | jget "d['http_parser']['where']=='el0' and d['http_parser']['requests']>5 and d['http_parser']['parser_faults']==0 and d['http_parser']['server_faults']==0" | grep -q True && ok "Mission Control requests are parsed in the EL0 server (ADR 0050 D4 step 1), no faults: $(echo "$HP" | jget "d['http_parser']")" || bad "http parser placement: $(echo "$HP" | jget "d.get('http_parser')")"
 echo "$HP" | jget "d['dns_parser']['where']=='el0' and d['dns_parser']['el0_messages']>0" | grep -q True && ok "/api/health dns_parser: el0 $(echo "$HP" | jget "d['dns_parser']")" || bad "dns_parser: $(echo "$HP" | jget "d.get('dns_parser')")"
@@ -221,7 +244,7 @@ grep -q '"refused":"no configuration store on this device"' <<<"$CRB" && ok "R6 
 HSH "config confirm
 $(SIGN confirm)" | grep -q "no configuration on trial" && ok "R6 = D: web console config confirm + envelope line verifies in EL1 and reaches cfgd (same decision as Mission Control)" || bad "web console signed confirm"
 UPS=$(curl -s -m 10 $C "$B/api/upload")
-echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices','wan','wifi','policy','config'] and all(t['source']=='boot' for t in d['types']) and [t['applies'] for t in d['types']]==['now']*6+['next_boot']*4 and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
+echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices','wan','wifi','policy','config'] and all(t['source']=='boot' and t['rollback_to'] is None for t in d['types']) and [t['applies'] for t in d['types']]==['now']*6+['next_boot']*4 and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy, rollback_to null)" || bad "/api/upload: $UPS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"
 # ADR 0058 rollback: owner re-authentication first; with no artifact store in QEMU nothing can be rolled back
 # R6 = D (operator 2026-11-12): pack rollback, factory reset and owner-key rotation are authorised only by an
