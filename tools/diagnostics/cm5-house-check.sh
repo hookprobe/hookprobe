@@ -52,7 +52,7 @@ join() { local r; for _ in 1 2 3; do psudo "nmcli dev disconnect wlan0" >/dev/nu
     r=$(psudo "nmcli -w 40 con up '$1' ifname wlan0" 2>&1 | tail -1); grep -q success <<<"$r" && break; sleep 5; done
   grep -q success <<<"$r" || return 1
   for _ in $(seq 1 15); do pi "ip -4 -o addr show wlan0" | grep -q "10\.99\.0\." && \
-    pi "curl -sk -o /dev/null -w '%{http_code}' -m 5 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') $AP_MC/api/health" | grep -q 200 && return 0; sleep 2; done; return 1; }
+    pi "a=\$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}'); ping -c1 -W2 -I \$a 10.99.0.1 >/dev/null" && return 0; sleep 2; done; return 1; }
 refused() { psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; sleep 2; ! psudo "nmcli -w 25 con up '$1' ifname wlan0" 2>&1 | tail -1 | grep -q success; }
 dns9() { local r; r=$(pi 'a=$(ip -4 -o addr | awk '"'"'$4 ~ /^10\.99\.0\./ {split($4, x, "/"); print x[1]; exit}'"'"'); [ -n "$a" ] || { echo NOADDR; exit 0; }; timeout 5 dig +short +time=2 +tries=1 -b "$a" @9.9.9.9 example.com' 2>/dev/null)
   [ "$r" = NOADDR ] && { echo "     (the Pi has no AP address 10.99.0.x — DNS probe not run)"; return 2; }   # 2: neither "answers" nor "dropped"
