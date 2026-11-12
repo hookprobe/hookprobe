@@ -47,7 +47,7 @@ export default async function (t) {
     if (p === '/api/anchor') return route.fulfill(json({ vendor_key: null, owner_key: PUBHEX, owner_enrolled: true, owner_generation: 1, config_files_verified_by: 'owner', can: 'rotate', device_id: ENV.device_id, state: 'protected' }));
     if (p === '/api/config/confirm') return route.fulfill(json({ ok: true, committed: true, generation: 9 }));
     if (p === '/api/factory-reset') return route.fulfill(json({ ok: true, note: 'Factory reset sealed.' }));
-    if (p === '/api/upload' && m === 'GET') return route.fulfill(json({ store: true, chunk_max: 16384, recent: [], types: [{ type: 'ioc', cap: 16 << 20, generation: 3, source: 'store', applies: 'now' }], in_flight: state.upload }));
+    if (p === '/api/upload' && m === 'GET') return route.fulfill(json({ store: true, chunk_max: 16384, recent: [], types: [{ type: 'ioc', cap: 16 << 20, generation: 3, source: 'store', applies: 'now', rollback_to: state.rollbackTo ?? null }], in_flight: state.upload }));
     if (p === '/api/upload/begin') { state.upload = { id: 'u1', type: 'ioc', size: Number(form.size), received: 0, verified: false }; return route.fulfill(json({ ok: true, id: 'u1', chunk_max: 16384 })); }
     if (p === '/api/upload/chunk') { state.chunks.push(route.request().postDataBuffer()); return route.fulfill(json({ ok: true })); }
     if (p === '/api/upload/finish') {
@@ -56,10 +56,10 @@ export default async function (t) {
       return route.fulfill(json({ ok: true, generation: 4 }));
     }
     if (p === '/api/upload/activate') { state.upload = null; return route.fulfill(json({ ok: true, generation: 4, staged: false })); }
+    if (p === '/api/upload/rollback') return route.fulfill(json({ ok: true, generation: 3, staged: false }));
     if (p === '/api/upload/abort') { state.upload = null; return route.fulfill(json({ ok: true })); }
     return route.fulfill(json({}, 404));
   });
-  page.on('dialog', (d) => d.accept(d.message().startsWith('Enter') || /owner key/i.test(d.message()) ? 'label-key-123' : 'probe reason'));
 
   // Import the vector's key as this browser's signing key.
   await go('/admin/identity', 1200);
@@ -68,7 +68,12 @@ export default async function (t) {
   await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(800);
 
   // 2. Keep it on the trial banner → the exact reference envelope, no owner token.
-  await page.click('[aria-label="Configuration trial"] button:has-text("Keep it")'); await page.waitForTimeout(1200);
+  await page.click('[aria-label="Configuration trial"] button:has-text("Keep it")');
+  const sheet = page.locator('.approve-sheet');
+  await sheet.waitFor({ state: 'visible' });
+  ok(await sheet.getAttribute('aria-modal') === 'true' && (await sheet.locator('input[type=password]').count()) === 0 && await sheet.locator('label:has-text("Reason") input').inputValue() === 'works for me',
+    'Keep it opens the Approve sheet (modal, reason prefilled, no owner-key field: the signature is the authority)');
+  await t.approve({ reason: 'probe reason' }); await page.waitForTimeout(1200);
   const c = posts.find((x) => x.p === '/api/config/confirm');
   ok(c && c.form.envelope === VECTOR, 'Keep it sends the reference envelope byte-for-byte (msg 20, seq 42, generation 9, digest 5a…)');
   ok(c && !('owner_key' in c.form) && c.form.reason === 'probe reason', 'Keep it sends no owner token, only reason + envelope');
@@ -77,7 +82,7 @@ export default async function (t) {
   state.config = { ...state.config, envelope: { ...ENV, next_seq: 43 } };
   await page.click('[aria-label="Settings"] >> text=Factory reset'); await page.waitForTimeout(200);
   await page.fill('input[autocomplete=off]', 'ERASE');
-  await page.locator('button', { hasText: /factory reset|Erase/i }).last().click(); await page.waitForTimeout(1200);
+  await page.locator('button', { hasText: /factory reset|Erase/i }).last().click(); await t.approve({ reason: 'probe reason' }); await page.waitForTimeout(1200);
   const fr = posts.find((x) => x.p === '/api/factory-reset');
   const fe = fr && parse(fr.form.envelope ?? '');
   ok(fe && fe.sigOk && fe.msg === 32 && fe.seq === 43 && fe.arg === 0n && fe.gen === 0 && /^0+$/.test(fe.digest) && !('owner_key' in fr.form), 'factory reset: signed msg 32 bound to nothing else, no owner token');
@@ -88,27 +93,29 @@ export default async function (t) {
   const pack = Buffer.concat([Buffer.alloc(512, 7), Buffer.from('1.2.3.4 bad\n')]);
   await page.click('[aria-label="Pack type"] .l0-chip >> nth=2');
   await page.setInputFiles('input[type=file]', { name: 'ioc.pack', mimeType: 'application/octet-stream', buffer: pack });
-  const keyPrompts = [];
-  page.on('dialog', (d) => keyPrompts.push(d.message()));
-  await page.click('button:has-text("Upload and verify")'); await page.waitForTimeout(2000);
+  await page.click('button:has-text("Upload and verify")'); await t.approve({ key: 'label-key-123' }); await page.waitForTimeout(2000);
+  const secondKey = await vis(page.locator('.approve-sheet'));
   const act = posts.find((x) => x.p === '/api/upload/activate');
   const ae = act && parse(act.form.envelope ?? '');
   ok(ae && ae.sigOk && ae.msg === 23 && ae.arg === 2n && ae.gen === 4 && ae.digest === createHash('sha256').update(pack.subarray(512)).digest('hex') && !('owner_key' in act.form),
     'activate: signed msg 23 bound to type code, staged generation and the digest of the bytes the browser sent');
-  ok(keyPrompts.filter((m) => /owner key/i.test(m)).length === 1, 'pack upload asks for the owner key once (begin), not twice');
+  ok(!secondKey && posts.find((x) => x.p === '/api/upload/begin')?.form.owner_key === 'label-key-123', 'pack upload asks for the owner key once (begin, in the masked sheet), not twice');
 
   // 5. Device reports different bytes → the browser refuses to sign and aborts.
   state.tamper = true; state.chunks = []; state.config = { ...state.config, envelope: { ...ENV, next_seq: 45 } };
   const before = posts.filter((x) => x.p === '/api/upload/activate').length;
   await page.setInputFiles('input[type=file]', { name: 'ioc.pack', mimeType: 'application/octet-stream', buffer: pack });
-  await page.click('button:has-text("Upload and verify")'); await page.waitForTimeout(2000);
+  await page.click('button:has-text("Upload and verify")'); await t.approve({ key: 'label-key-123' }); await page.waitForTimeout(2000);
   ok(posts.filter((x) => x.p === '/api/upload/activate').length === before && posts.some((x) => x.p === '/api/upload/abort') && await vis(page.locator('text=verified different bytes')),
     'digest mismatch: nothing is signed or activated, the upload is aborted, and the owner is told why');
   state.tamper = false;
 
-  // 6. Pack rollback without a device-reported target: refused honestly, nothing posted.
-  const rb = posts.filter((x) => x.p === '/api/upload/rollback').length;
-  await page.locator('td button:has-text("Roll back")').first().click(); await page.waitForTimeout(600);
-  ok(posts.filter((x) => x.p === '/api/upload/rollback').length === rb && await vis(page.locator('text=does not report which generation a rollback would return to')),
-    'pack rollback is not signed without the target generation from the device');
+  // 6. Pack rollback: no button without a device-reported target; with rollback_to, a signed msg 24.
+  ok(!(await vis(page.locator('td button:has-text("Roll back")'))), 'no rollback offered when the device reports nothing to roll back to');
+  state.rollbackTo = 3; state.config = { ...state.config, envelope: { ...ENV, next_seq: 46 } };
+  await go('/admin/identity', 1200); await page.click('[aria-label="Settings"] >> text=Signed packs'); await page.waitForTimeout(300);
+  await page.click('td button:has-text("Roll back to 3")'); await t.approve(); await page.waitForTimeout(1200);
+  const rbp = posts.find((x) => x.p === '/api/upload/rollback');
+  const re = rbp && parse(rbp.form.envelope ?? '');
+  ok(re && re.sigOk && re.msg === 24 && re.arg === 2n && re.gen === 3 && /^0+$/.test(re.digest) && !('owner_key' in rbp.form), 'pack rollback: signed msg 24 bound to type code and the rollback_to generation, no owner token');
 }

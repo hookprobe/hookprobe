@@ -16,6 +16,7 @@ import { ownerKey, loadOwnerKey, checkSigning, signingSupported, generateOwnerKe
 import { isEncryptedPem } from '../store/keyBackup';
 import { anchorView, anchorState, refreshAnchor, enroll, rotate } from '../store/anchor';
 import { networkView } from '../store/networkLive';
+import { approve, askOwnerKey } from '../store/approve';
 
 const input = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)', width: '100%', 'box-sizing': 'border-box' } as const;
 const LOSS = 'If you lose both this browser’s key and the backup, getting control back needs physical access to the device: re-flashing its boot card. A factory reset does not remove an enrolled owner key.';
@@ -35,7 +36,6 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
     setMsg(''); setBusy(true);
     try { await f(); setMsg(ok); } catch (e) { setMsg(e instanceof Error ? e.message : String(e)); } finally { setBusy(false); }
   };
-  const askOwnerKey = () => window.prompt('This is a permanent change. Enter the device owner key (from its label):', '') ?? '';
 
   /** What the device trusts for signed configuration, compared in full where the device reports it. */
   const trust = () => {
@@ -66,8 +66,8 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
   }, 'Key created. Its backup (encrypted with your passphrase) downloaded: keep it offline. ' + LOSS);
 
   const doEnroll = () => run(async () => {
-    if (!window.confirm('Make this key the device’s owner key?\n\nThis is one-shot. Afterwards the device refuses internet, Wi-Fi and firewall uploads that are unsigned or signed only with the image’s key. The factory files on its boot card keep working. Changing the owner key later needs this key (rotate) or re-flashing the device; a factory reset keeps it.')) throw new Error('Cancelled.');
-    const k = askOwnerKey(); if (!k) throw new Error('Cancelled: the owner key is required.');
+    const k = await askOwnerKey('Make this key the device\u2019s owner key?', 'This is one-shot. Afterwards the device refuses internet, Wi-Fi and firewall changes that are unsigned or signed only with the image\u2019s key. The factory files on its boot card keep working. Changing the owner key later needs this key (rotate) or re-flashing the device; a factory reset keeps it.', 'Make it the owner key');
+    if (!k) throw new Error('Cancelled.');
     const p = await enrollProof();
     const r = await enroll({ public_key: p.publicKey, proof: p.proof, owner_key: k });
     if (!r.ok) throw new Error(`The device refused: ${r.refused}`);
@@ -150,14 +150,14 @@ const SigningKeyPanel: Component<{ compact?: boolean }> = (props) => {
 
           <div class="l0-card-foot">
             <Show when={ownerKey()!.exportable}>
-              <button class="hp-btn" disabled={busy()} onClick={() => {
-                const p = window.prompt(`Passphrase to encrypt the backup (at least ${MIN_PASSPHRASE} characters):`, '') ?? '';
-                void run(async () => download('owner-signing-key.pem', await exportOwnerKeyBackup(p), 'application/x-pem-file'), 'Encrypted backup downloaded.');
+              <button class="hp-btn" disabled={busy()} onClick={async () => {
+                const a = await approve({ title: 'Download an encrypted backup?', body: 'The passphrase encrypts the file; it is never sent anywhere.', confirm: 'Download', passphrase: { label: 'Backup passphrase', min: MIN_PASSPHRASE } });
+                if (a) void run(async () => download('owner-signing-key.pem', await exportOwnerKeyBackup(a.passphrase), 'application/x-pem-file'), 'Encrypted backup downloaded.');
               }}>Download encrypted backup</button>
             </Show>
             <Show when={!props.compact}>
               <button class="hp-btn" onClick={() => setImporting(!importing())}>Replace with another key</button>
-              <button class="hp-btn" onClick={() => { if (window.confirm('Remove the signing key from this browser? Without its backup it is gone for good.')) void run(deleteOwnerKey, 'Removed from this browser.'); }}>Remove from this browser</button>
+              <button class="hp-btn" onClick={async () => { if (await approve({ title: 'Remove the signing key from this browser?', body: 'Without its backup it is gone for good.', confirm: 'Remove', destructive: true })) void run(deleteOwnerKey, 'Removed from this browser.'); }}>Remove from this browser</button>
             </Show>
           </div>
         </Show>
