@@ -165,6 +165,9 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     checkWan(wan()).forEach((x) => e.push(`Internet: ${x}`));
     checkWifi(wifi()).forEach((x) => e.push(`Wi-Fi: ${x}`));
     if (polDirty()) checkPolicy(pol()).forEach((x) => e.push(`Firewall: ${x}`));
+    // A bundle is the WHOLE configuration (metal, 12 Nov): over a bundle in force, a section left out is REMOVED,
+    // not kept. The device does not report the firewall in force, so the owner must supply it.
+    else if (bundleInForce()) e.push('Firewall: a configuration bundle is in force, and a new bundle replaces all of it. This device does not report the firewall in force, so include the firewall you want (edit the Firewall tab): leaving it out removes it.');
     if (wan().mode === 'pppoe' && (!wan().pppoePass || wan().pppoePass === '(current)')) e.push('Internet: type the PPPoE password again (the device never shows it).');
     if (!wifi().psk) e.push('Wi-Fi: type the Wi-Fi password again (the device never shows it).');
     return e;
@@ -414,7 +417,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             <div class="pcard" style={{ padding: '10px 12px', gap: '6px' }}>
               <p class="l0-label">{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'}</p>
               <Show when={k !== 'policy' || polDirty()} fallback={
-                <p class="l0-card-sub" aria-label="Firewall not included" style={{ margin: 0 }}>Not included: the device keeps its current firewall. To replace it, edit the Firewall tab first.</p>
+                <p class="l0-card-sub" aria-label="Firewall not included" style={{ margin: 0 }}>Not included: the device keeps the firewall from its own files (no bundle is in force). To replace it, edit the Firewall tab first.</p>
               }>
                 <p class="pcard-note" style={{ margin: 0 }}>{k === 'policy' ? 'Replaced by your edits in the Firewall tab.' : 'Replaced by this section.'}</p>
                 <pre style={{ margin: 0, font: '12px/1.6 var(--hp-font-mono)', 'white-space': 'pre-wrap' }}>{(() => { try { return (bundleSections()[k] ?? '').replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••'); } catch (e) { return String((e as Error).message); } })()}</pre>

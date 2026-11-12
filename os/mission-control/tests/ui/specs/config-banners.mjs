@@ -42,6 +42,11 @@ export default async function (t) {
   await page.fill('input[placeholder="HookProbe-Home"]', 'Locked'); await page.fill('input[type=password]', 'correct horse battery');
   ok(await vis(page.locator('text=A configuration bundle is in force (generation 5)')) && await page.locator('button:has-text("Review and sign")').isDisabled(),
     'bundle in force: single-file change disabled, steered to "Apply all three together"');
+  await page.click('button:has-text("Review all three")'); await page.waitForTimeout(300);
+  const bd = page.locator('.drawer', { hasText: 'Apply all three together' });
+  ok(await vis(bd.locator('[aria-label="Bundle problems"] >> text=leaving it out removes it')) && ((await bd.locator('button:has-text("the bundle")').count()) === 0 || await bd.locator('button:has-text("the bundle")').isDisabled()),
+    'bundle in force: a new bundle without the firewall is refused (a bundle replaces all of it; leaving a section out removes it)');
+  await page.keyboard.press('Escape'); await page.waitForTimeout(200);
 
   // Floors in the key panel.
   await go('/admin/identity', 1200);
