@@ -19,14 +19,14 @@
 # key this CI environment deliberately does not have — see note at the bottom
 # of this file).
 #
-# Toolchain reality (os/kernel/rust-toolchain.toml): channel = "nightly"
-# (NOT date-pinned — heqk floats on nightly by its own choice, independent of
-# this repo's root workspace, which pins stable 1.96.0 in gate-ladder.yml).
-# components = rust-src (build-std) + llvm-tools; target =
-# aarch64-unknown-none-softfloat. dtolnay/rust-toolchain@nightly below mirrors
-# that pin exactly (no drift risk since heqk itself carries no date pin to
-# drift against); the checked-out os/kernel/rust-toolchain.toml remains the
-# authoritative override the moment any cargo command runs inside that dir.
+# Toolchain reality (os/kernel/rust-toolchain.toml): channel = "nightly-2026-07-20"
+# (DATE-PINNED since 2026-11-12, #1006: the floating "nightly" let CI build with a
+# newer compiler than the factory, and the AP image measured ~194 KB larger here).
+# components = rust-src (build-std) + llvm-tools + clippy; targets =
+# aarch64-unknown-none-softfloat + wasm32-wasip1. The checked-out
+# os/kernel/rust-toolchain.toml is authoritative: rustup installs and uses that
+# exact toolchain for every cargo command run inside os/kernel, whatever the
+# dtolnay/rust-toolchain@nightly step below installs as the default.
 # =============================================================================
 name: build-heqk
 
