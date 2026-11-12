@@ -15,6 +15,7 @@ libfuzzer-sys = "0.4"
 boot-abi = { path = "../../../os/kernel/boot-abi" }
 ed25519-compact = { version = "2", default-features = false }
 arch_aarch64 = { path = "arch-shim", package = "heqk-arch-shim" }
+hal = { path = "../../../os/kernel/hal" }
 
 [workspace]
 
@@ -49,6 +50,13 @@ bench = false
 [[bin]]
 name = "cfg_bundle"
 path = "fuzz_targets/cfg_bundle.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "owner_journal"
+path = "fuzz_targets/owner_journal.rs"
 test = false
 doc = false
 bench = false
