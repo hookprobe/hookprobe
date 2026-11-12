@@ -50,6 +50,7 @@ import { refetch, devicesStatus } from '../store/obsLive';
 import { refetchTls } from '../store/tlsLive';
 import { setCopilotOpen, substrate } from '../store/mock';
 import AppShell from './AppShell';
+import Icon from './Icon';
 import {
   type Device, type Zone, type NetworkPolicy, type TrustLevel, type PendingChange,
   POLICY_LABELS, DEVICE_ICONS, INITIAL_ZONES, INITIAL_DEVICES, buildPendingChange,
@@ -98,16 +99,16 @@ const DeviceTile: Component<DeviceTileProps> = (props) => (
     aria-label={`${props.device.name} — ${statusLabel(props.device.status)} — ${POLICY_LABELS[props.device.policy]}`}
     aria-pressed={props.selected()}
   >
-    <span class="tile-icon" aria-hidden="true">{DEVICE_ICONS[props.device.type]}</span>
+    <span class="tile-icon" aria-hidden="true"><Icon name={DEVICE_ICONS[props.device.type]} size={22} /></span>
 
     <div class="tile-body">
       <div class="tile-name">
         {props.device.name}
         {props.device.isApple && (
-          <span class="tile-apple-chip" aria-label="Apple linked">Apple ✦</span>
+          <span class="tile-apple-chip" aria-label="Apple linked">Apple</span>
         )}
         {props.device.isPinned && (
-          <span class="tile-pin" aria-label="Pinned to this zone" title="Pinned">📌</span>
+          <span class="tile-pin" aria-label="Pinned to this zone" title="Pinned"><Icon name="pin" size={14} /></span>
         )}
       </div>
 
@@ -169,10 +170,10 @@ const ZoneCard: Component<ZoneCardProps> = (props) => {
         <div class="zone-header-left">
           <span class="zone-name">{props.zone.name}</span>
           {props.zone.isSystem && (
-            <span class="zone-system-badge" aria-label="System zone — cannot be deleted">🔒</span>
+            <span class="zone-system-badge" aria-label="System zone — cannot be deleted"><Icon name="lock" size={14} /></span>
           )}
           {props.zone.isPinned && (
-            <span class="zone-pin" aria-label="Zone pinned" title="Pinned">📌</span>
+            <span class="zone-pin" aria-label="Zone pinned" title="Pinned"><Icon name="pin" size={14} /></span>
           )}
           <span class="zone-count">{onlineCount()}/{zoneDevices().length}</span>
         </div>
@@ -188,7 +189,7 @@ const ZoneCard: Component<ZoneCardProps> = (props) => {
               ? 'AirPlay, HomeKit, AirDrop active — click to turn off'
               : 'Turn on AirPlay, HomeKit, AirDrop for this zone'}
           >
-            <span aria-hidden="true">Apple ✦</span>
+            <span aria-hidden="true">Apple</span>
             <span class="toggle-pill" aria-hidden="true">
               {props.zone.appleEcosystem ? 'on' : 'off'}
             </span>
@@ -294,7 +295,7 @@ const DeviceDrawer: Component<DrawerProps> = (props) => {
         {/* Header */}
         <div class="drawer-header">
           <div class="drawer-title-row">
-            <span class="drawer-icon" aria-hidden="true">{DEVICE_ICONS[d().type]}</span>
+            <span class="drawer-icon" aria-hidden="true"><Icon name={DEVICE_ICONS[d().type]} size={28} /></span>
             <div class="drawer-title-block">
               <h2 class="drawer-name">{d().name}</h2>
               <div class="drawer-fingerprint">{d().fingerprint}</div>
@@ -324,7 +325,7 @@ const DeviceDrawer: Component<DrawerProps> = (props) => {
           {/* Apple linked chip */}
           <Show when={d().isApple}>
             <div class="drawer-apple-row">
-              <span class="drawer-apple-chip">Apple ✦ linked</span>
+              <span class="drawer-apple-chip">Apple linked</span>
               <span class="drawer-apple-note">
                 AirPlay, HomeKit &amp; AirDrop active within this zone
               </span>
@@ -426,7 +427,7 @@ const DeviceDrawer: Component<DrawerProps> = (props) => {
                 ? 'Unpin — allow AI suggestions'
                 : 'Pin — stay in this zone, ignore AI suggestions'}
             >
-              📌 {d().isPinned ? 'Pinned to this zone' : 'Pin to this zone'}
+              <Icon name="pin" size={14} /> {d().isPinned ? 'Pinned to this zone' : 'Pin to this zone'}
             </button>
             <div class="drawer-pin-note">
               {d().isPinned
@@ -828,10 +829,10 @@ const NetworkMapSample: Component = () => {
                     onClick={() => selectDevice(device.id)}
                     aria-label={`${device.name} — ${statusLabel(device.status)}`}
                   >
-                    <span class="list-icon" aria-hidden="true">{DEVICE_ICONS[device.type]}</span>
+                    <span class="list-icon" aria-hidden="true"><Icon name={DEVICE_ICONS[device.type]} size={18} /></span>
                     <span class="list-name">
                       {device.name}
-                      {device.isApple && <span class="tile-apple-chip">Apple ✦</span>}
+                      {device.isApple && <span class="tile-apple-chip">Apple</span>}
                     </span>
                     <span class="list-zone">{zoneName()}</span>
                     <span class="list-status">

@@ -53,7 +53,7 @@ const AppShell: Component<Props> = (props) => {
     loadProView();
     // Workspace: remember the screens you open (this browser only; incidents record themselves).
     const t = screenTitle(path());
-    if (t && path() !== '/workspace') remember({ key: `screen:${path()}`, type: 'Screen', title: t, href: path(), scope: 'This device' });
+    if (t && path() !== '/workspace') remember({ key: `screen:${t}`, type: 'Screen', title: t, href: path(), scope: 'This device' });
     void loadHealth();
     void startLiveUpdates(); // idempotent: the pill/score track the live device on every route
 

@@ -92,18 +92,18 @@ export const POLICY_LABELS: Record<NetworkPolicy, string> = {
   'quarantine':    'Quarantine',
 };
 
-/** Device-type icons (emoji — accessible with aria-hidden). */
+/** Device-type icons: names in components/Icon.tsx (stroke SVG; no emoji, which needs a colour-emoji font). */
 export const DEVICE_ICONS: Record<DeviceType, string> = {
-  phone:   '📱',
-  laptop:  '💻',
-  tablet:  '📱',
-  tv:      '📺',
-  speaker: '🔊',
-  camera:  '📷',
-  printer: '🖨',
-  game:    '🎮',
-  hub:     '💡',
-  watch:   '⌚',
+  phone:   'phone',
+  laptop:  'laptop',
+  tablet:  'tablet',
+  tv:      'tv',
+  speaker: 'speaker',
+  camera:  'camera',
+  printer: 'printer',
+  game:    'game',
+  hub:     'hub',
+  watch:   'watch',
 };
 
 // ── Plan-as-diff builder ──────────────────────────────────────────────────────

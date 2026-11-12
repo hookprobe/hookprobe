@@ -15,7 +15,7 @@ import { type Component, For, Show, createEffect, createSignal, onMount } from '
 import { substrate, setCopilotOpen, setCopilotQuery } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { promptAndRun } from '../store/actions';
-import { formatTime, mitreName, mitreTactic, type IncidentTimelineEvent, type ProcessTreeNode } from '../store/api';
+import { formatTime, mitreName, mitreLabel, mitreTactic, type IncidentTimelineEvent, type ProcessTreeNode } from '../store/api';
 import {
   detail, detailStatus, detailError, fetchIncidentDetail, mitreForRelatedEvents,
   timelineEvents, timelineStatus, fetchIncidentTimeline,
@@ -239,7 +239,7 @@ const IncidentApp: Component = () => {
                   <span class="prow"><span>Decided by</span><span>{sample() ? 'local · deterministic' : d()?.explanation.model ?? 'device rules · no AI model'}</span></span>
                   <Show when={mitre().length > 0}>
                     <p class="l0-label">ATT&amp;CK</p>
-                    <For each={mitre()}>{(m) => <span class="prow"><span>{m.id} · {mitreName(m.id)}</span><span>{mitreTactic(m.id)}</span></span>}</For>
+                    <For each={mitre()}>{(m) => <span class="prow"><span>{mitreLabel(m.id)}</span><span>{mitreTactic(m.id)}</span></span>}</For>
                   </Show>
                   <details>
                     <summary class="pcard-note" style={{ cursor: 'pointer' }}>Alternative hypotheses</summary>
