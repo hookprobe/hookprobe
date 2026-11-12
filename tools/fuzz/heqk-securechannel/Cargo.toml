@@ -1,0 +1,38 @@
+[package]
+name = "heqk-securechannel-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+# W4 (task #55): the control channel's record layer (securechannel.rs, the SAME file the kernel, responder-sim and
+# superpop compile) on attacker-shaped datagrams. Same crate versions as superpop / the kernel's `securechannel`.
+[features]
+default = ["securechannel", "securechannel-selftest"]
+securechannel = []
+securechannel-selftest = []
+securechannel-host-responder = []
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+libfuzzer-sys = "0.4"
+boot-abi = { path = "../../../os/kernel/boot-abi" }
+ml-kem = { version = "=0.3.4", default-features = false }
+x25519-dalek = { version = "2", default-features = false, features = ["static_secrets"] }
+chacha20poly1305 = { version = "0.10", default-features = false }
+ed25519-compact = { version = "2", default-features = false }
+getrandom = "0.2"
+arch_aarch64 = { path = "../../../onboarding/enrollment/responder-sim/arch-stub", package = "arch-stub" }
+
+[workspace]
+
+[[bin]]
+name = "record_rx"
+path = "fuzz_targets/record_rx.rs"
+test = false
+doc = false
+bench = false

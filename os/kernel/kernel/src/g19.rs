@@ -7,7 +7,10 @@
 //!   `AntiReplayRx::open_record`, RFC 6479 window), AD = `"HQT1" ‖ sid`,
 //!   sid = SHA-256("HQ-G19-sid-v1" ‖ handshake_hash)[0..8];
 //! * record plaintext = type ‖ body: DATA (one IPv4 packet), KEEPALIVE, ASSIGN (inner_v4 ‖ plen ‖ dns_v4 ‖ mtu LE16),
-//!   ADDR_REQ, CLOSE (reason).
+//!   ADDR_REQ, CLOSE (reason), CAPS (flags; W4: bit 0 = "I follow in-session rekey epochs").
+//! * W4 in-session rekey (`securechannel::RecordTx`/`RecordRx`): the seq's high 32 bits are the key epoch; each
+//!   side sends CAPS and starts rekeying its own direction only after the PEER's CAPS arrived (an older PoP
+//!   ignores CAPS and is never rekeyed at); both sides always follow a peer's epochs.
 //!
 //! Device duties: ADDR_REQ right after the handshake; NAT the tunnelled LAN flows to the ASSIGNed inner /32 (the
 //! existing NAT engine, with the inner address as its "WAN" address); clamp TCP MSS to mtu - 40; KEEPALIVE when
@@ -15,7 +18,7 @@
 //! by default: no `tunnel` line in the signed POLICY.TXT (or no pinned PoP key in the image) = no tunnel.
 #![cfg(feature = "securechannel")]
 
-use crate::securechannel::{AntiReplayRx, Session};
+use crate::securechannel::{RecordRx, RecordTx, RekeyPolicy, Session};
 
 pub const HS_PORT: u16 = 7654;
 pub const DATA_PORT: u16 = 7655;
@@ -24,6 +27,9 @@ pub const T_KEEPALIVE: u8 = 0x02;
 pub const T_ASSIGN: u8 = 0x03;
 pub const T_ADDR_REQ: u8 = 0x04;
 pub const T_CLOSE: u8 = 0x05;
+/// W4: capability flags (body = 1 byte). Unknown to an older peer, which drops it.
+pub const T_CAPS: u8 = 0x06;
+pub const CAPS_REKEY: u8 = 0x01;
 const MAGIC: &[u8; 4] = b"HQT1";
 /// Bytes a sealed record adds around the plaintext: magic + sid + seq + tag.
 pub const OVERHEAD: usize = 4 + 8 + 8 + 16;
@@ -74,12 +80,14 @@ pub struct Stats {
     pub rx_bad: u32,
     pub keepalives: u32,
     pub rehandshakes: u32,
+    /// W4: records refused because their key epoch is no longer held (rollback / retired key)
+    pub rx_stale: u32,
 }
 
 /// One established tunnel session (the transport keys of the Noise handshake).
 pub struct Tunnel {
-    sess: Session,
-    rx: AntiReplayRx,
+    tx: RecordTx,
+    rx: RecordRx,
     pub sid: [u8; 8],
     pub assign: Option<Assign>,
     last_rx_ms: i64,
@@ -90,9 +98,21 @@ pub struct Tunnel {
 
 impl Tunnel {
     pub fn new(sess: Session, now_ms: i64) -> Tunnel {
+        Self::with_policy(sess, now_ms, RekeyPolicy::DEFAULT)
+    }
+
+    /// The session's keys move into the rekeying record layer; the Session's own copies are wiped.
+    pub fn with_policy(mut sess: Session, now_ms: i64, pol: RekeyPolicy) -> Tunnel {
         let sid = sid_of(&sess.handshake_hash);
-        let rx = sess.recv.into_anti_replay();
-        Tunnel { sess, rx, sid, assign: None, last_rx_ms: now_ms, last_tx_ms: now_ms, since_ms: now_ms, stats: Stats::default() }
+        let rx = sess.recv.into_record_rx();
+        let tx = RecordTx::new(sess.send.clone(), now_ms, pol);
+        sess.wipe();
+        Tunnel { tx, rx, sid, assign: None, last_rx_ms: now_ms, last_tx_ms: now_ms, since_ms: now_ms, stats: Stats::default() }
+    }
+
+    /// (tx epoch, rx epoch, the peer follows rekeys) — epochs and the next sequence are logged, never keys.
+    pub fn epochs(&self) -> (u32, u32, bool, u64) {
+        (self.tx.epoch(), self.rx.epoch(), self.tx.armed(), self.tx.next_seq())
     }
 
     fn ad(&self) -> [u8; 12] {
@@ -113,7 +133,7 @@ impl Tunnel {
         let ad = self.ad();
         out[..4].copy_from_slice(MAGIC);
         out[4..12].copy_from_slice(&self.sid);
-        let n = self.sess.send.seal_record(&ad, &pt[..1 + body.len()], &mut out[12..])?;
+        let n = self.tx.seal(&ad, &pt[..1 + body.len()], &mut out[12..], now_ms)?;
         self.last_tx_ms = now_ms;
         if ty == T_DATA {
             self.stats.tx_data += 1;
@@ -130,10 +150,13 @@ impl Tunnel {
         }
         let ad = self.ad();
         let mut pt = [0u8; 1600];
-        let n = match self.rx.open_record(&ad, &dg[12..], &mut pt) {
+        let n = match self.rx.open(&ad, &dg[12..], &mut pt, now_ms) {
             Ok(n) if n >= 1 && n - 1 <= out.len() => n,
-            _ => {
+            r => {
                 self.stats.rx_bad += 1;
+                if r == Err(crate::securechannel::NoiseErr::Stale) {
+                    self.stats.rx_stale += 1;
+                }
                 return None;
             }
         };
@@ -143,6 +166,7 @@ impl Tunnel {
         match ty {
             T_ASSIGN => self.assign = parse_assign(&pt[1..n]).or(self.assign),
             T_DATA => self.stats.rx_data += 1,
+            T_CAPS if n == 2 && pt[1] & CAPS_REKEY != 0 => self.tx.arm(),
             _ => {}
         }
         Some((ty, n - 1))
@@ -150,7 +174,8 @@ impl Tunnel {
 
     /// Timers: KEEPALIVE after 15 s without sending; re-handshake after 45 s without hearing anything, or at 24 h.
     pub fn tick(&mut self, now_ms: i64) -> Act {
-        if now_ms - self.last_rx_ms >= SILENCE_REHANDSHAKE_MS || now_ms - self.since_ms >= SESSION_MAX_MS {
+        self.rx.tick(now_ms); // retire the previous epoch's key after its grace window
+        if now_ms - self.last_rx_ms >= SILENCE_REHANDSHAKE_MS || now_ms - self.since_ms >= SESSION_MAX_MS || self.tx.exhausted() {
             self.stats.rehandshakes += 1;
             return Act::Rehandshake;
         }
@@ -163,7 +188,8 @@ impl Tunnel {
 
     /// Overwrite the transport keys before the tunnel is dropped (re-handshake / shutdown).
     pub fn wipe(&mut self) {
-        self.sess.wipe();
+        self.tx.wipe();
+        self.rx.wipe();
     }
 }
 
@@ -225,8 +251,10 @@ struct Rt {
     wan_mac: [u8; 6],
     gw_mac: [u8; 6],
     handshakes: u32,
+    /// the key epochs last logged (tx, rx)
+    logged: (u32, u32),
 }
-static mut RT: Rt = Rt { cfg: None, cp_set: false, tun_set: false, wan_ip: [0; 4], wan_mac: [0; 6], gw_mac: [0; 6], handshakes: 0 };
+static mut RT: Rt = Rt { cfg: None, cp_set: false, tun_set: false, wan_ip: [0; 4], wan_mac: [0; 6], gw_mac: [0; 6], handshakes: 0, logged: (0, 0) };
 // Large state lives in zero-initialised statics (.bss, no image bytes); the *_set flags say when it is valid.
 static mut CP: core::mem::MaybeUninit<ControlPlane> = core::mem::MaybeUninit::zeroed();
 static mut TUN: core::mem::MaybeUninit<Tunnel> = core::mem::MaybeUninit::zeroed();
@@ -301,14 +329,29 @@ pub fn tick(now_ms: i64, wan_up: bool, wan_ip: [u8; 4], wan_mac: [u8; 6], gw_mac
                 rt().handshakes += 1;
                 arch_aarch64::_print(format_args!(" [G19] tunnel to the super-PoP {}.{}.{}.{} up (handshake #{}) — asking for an inner address\n",
                     cfg.pop[0], cfg.pop[1], cfg.pop[2], cfg.pop[3], rt().handshakes));
-                send_ctl(T_ADDR_REQ, now_ms, tx);
+                rt().logged = (0, 0);
+                send_ctl(T_ADDR_REQ, &[], now_ms, tx);
+                send_ctl(T_CAPS, &[CAPS_REKEY], now_ms, tx);
             }
         }
         return;
     }
+    if let Some(t) = tun() {
+        // W4: log key-epoch transitions (epoch numbers + the next sequence; never key material)
+        let (te, re, armed, seq) = t.epochs();
+        if (te, re) != rt().logged {
+            arch_aarch64::_print(format_args!(" [G19] rekey: tx epoch {} rx epoch {} (peer follows rekeys={}, next tx seq {:#x}, stale refused {})\n", te, re, armed, seq, t.stats.rx_stale));
+            rt().logged = (te, re);
+        }
+    }
     let act = tun().map_or(Act::None, |t| t.tick(now_ms));
     match act {
-        Act::SendKeepalive => send_ctl(T_KEEPALIVE, now_ms, tx),
+        Act::SendKeepalive => {
+            send_ctl(T_KEEPALIVE, &[], now_ms, tx);
+            if tun().is_some_and(|t| !t.epochs().2) {
+                send_ctl(T_CAPS, &[CAPS_REKEY], now_ms, tx); // the PoP's CAPS not seen yet: offer again
+            }
+        }
         Act::Rehandshake => {
             arch_aarch64::_print(format_args!(" [G19] nothing heard from the PoP for 45 s (or 24 h elapsed) — re-handshake\n"));
             drop_tun();
@@ -316,16 +359,16 @@ pub fn tick(now_ms: i64, wan_up: bool, wan_ip: [u8; 4], wan_mac: [u8; 6], gw_mac
         }
         Act::None => {
             if tun().is_some_and(|t| t.assign.is_none() && t.last_tx_ms + 2_000 < now_ms) {
-                send_ctl(T_ADDR_REQ, now_ms, tx); // ASSIGN lost: ask again
+                send_ctl(T_ADDR_REQ, &[], now_ms, tx); // ASSIGN lost: ask again
             }
         }
     }
 }
 
-fn send_ctl(ty: u8, now_ms: i64, tx: &mut dyn FnMut(&[u8]) -> bool) {
+fn send_ctl(ty: u8, body: &[u8], now_ms: i64, tx: &mut dyn FnMut(&[u8]) -> bool) {
     let (Some(cfg), Some(t)) = (rt().cfg, tun()) else { return };
     let mut pl = [0u8; 64];
-    let Some(k) = t.seal(ty, &[], &mut pl, now_ms) else { return };
+    let Some(k) = t.seal(ty, body, &mut pl, now_ms) else { return };
     let r = rt();
     let mut f = [0u8; 160];
     let n = crate::netsvc::build_hs_datagram(r.wan_mac, r.wan_ip, r.gw_mac, cfg.pop, DATA_PORT, &pl[..k], &mut f);
@@ -408,7 +451,7 @@ pub fn wan_ingress(buf: &mut [u8], n: usize, now_ms: i64) -> Option<usize> {
             }
             None
         }
-        _ => None, // KEEPALIVE echo / ADDR_REQ: liveness only
+        _ => None, // KEEPALIVE echo / ADDR_REQ / CAPS (handled in `open`): liveness only
     }
 }
 
@@ -468,10 +511,11 @@ pub fn selftest() -> bool {
     let Ok(rpend) = responder_read_msg1(&tv.resp, &tv.dev.pk, m1.as_slice()) else { return false };
     let Some((m2, rsess)) = responder_write_msg2(rpend, &tv.rrand, &0x5445_4E41u64.to_le_bytes()) else { return false };
     let Ok((dsess, _tenant)) = initiator_read_msg2(ipend, m2.as_slice()) else { return false };
+    let hh = dsess.handshake_hash;
     let mut dev = Tunnel::new(dsess, 0);
     // the PoP side: same sid from the same handshake hash; send = its send cipher, receive through a window
     let mut pop = Tunnel::new(rsess, 0);
-    let sid_ok = dev.sid == pop.sid && dev.sid == sid_of(&dev.sess.handshake_hash);
+    let sid_ok = dev.sid == pop.sid && dev.sid == sid_of(&hh);
     let mut dg = [0u8; 1700];
     let mut out = [0u8; 1600];
     // ADDR_REQ -> PoP; ASSIGN -> device
@@ -590,5 +634,94 @@ pub fn selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-g19] {} — G19 SASE tunnel, device side (PoP wire v1): sid agrees={} ADDR_REQ={} ASSIGN 100.64.0.2/32 mtu 1380={} DATA up={} down={} | replay refused={} forgery refused={} foreign sid refused={} | keepalive after 15 s={} re-handshake after 45 s silence={} ASSIGN bounds={} MSS clamp + checksum={} DATA re-addressed with valid IP/UDP/TCP checksums={}\n",
         if pass { "PASS" } else { "FAIL" }, sid_ok, req, assigned, up, down, replay, forgery, foreign, t_ka, t_quiet, bounds, clamped, ok_re));
+    pass
+}
+
+/// `[P-g19-rekey]` (W4) — rekey + session continuity on the tunnel (in-process loopback: the device `Tunnel` against
+/// a PoP built from the responder's session, the shared test vectors). Without CAPS nobody rekeys (an older PoP
+/// keeps working); after the CAPS exchange DATA keeps flowing both ways across several epochs (small thresholds);
+/// a captured pre-rekey record is refused after the grace window; the receiver logs epochs, never keys; a
+/// re-handshake (new session) starts again at epoch 0 with a fresh sid — no key or nonce state survives it.
+#[cfg(feature = "securechannel-selftest")]
+pub fn rekey_selftest() -> bool {
+    use crate::securechannel::{initiator_read_msg2, initiator_write_msg1, responder_read_msg1, responder_write_msg2, REKEY_GRACE_MS};
+    let tv = crate::securechannel::test_vectors();
+    let fp = boot_abi::sha256::digest(&tv.dev.pk[..]);
+    let mk = |irand: &crate::securechannel::InitiatorRandomness| -> Option<(Session, Session)> {
+        let (m1, ipend) = initiator_write_msg1(&tv.dev, &tv.resp.public(), irand, &fp)?;
+        let rpend = responder_read_msg1(&tv.resp, &tv.dev.pk, m1.as_slice()).ok()?;
+        let (m2, rsess) = responder_write_msg2(rpend, &tv.rrand, &0x5445_4E41u64.to_le_bytes())?;
+        let (dsess, _) = initiator_read_msg2(ipend, m2.as_slice()).ok()?;
+        Some((dsess, rsess))
+    };
+    let Some((dsess, rsess)) = mk(&tv.irand) else { return false };
+    let pol = RekeyPolicy { max_records: 3, max_bytes: 1 << 30, max_ms: 600_000 };
+    let mut dev = Tunnel::with_policy(dsess, 0, pol);
+    let mut pop = Tunnel::with_policy(rsess, 0, pol);
+    let (mut dg, mut out) = ([0u8; 1700], [0u8; 1600]);
+    let pkt = [0x45u8, 0, 0, 20, 0, 0, 0, 0, 64, 17, 0, 0, 100, 64, 0, 2, 8, 8, 8, 8];
+    // one DATA record each way at time t; true when both arrive intact
+    let both = |dev: &mut Tunnel, pop: &mut Tunnel, t: i64, keep: &mut Option<([u8; 1700], usize)>| -> bool {
+        let (mut dg, mut out) = ([0u8; 1700], [0u8; 1600]);
+        let n = dev.seal(T_DATA, &pkt, &mut dg, t).unwrap_or(0);
+        if keep.is_none() {
+            *keep = Some((dg, n));
+        }
+        let up = pop.open(&dg[..n], &mut out, t) == Some((T_DATA, 20)) && out[..20] == pkt;
+        let n = pop.seal(T_DATA, &pkt, &mut dg, t).unwrap_or(0);
+        up && dev.open(&dg[..n], &mut out, t) == Some((T_DATA, 20))
+    };
+    // (1) no CAPS: 8 records each way, nobody rekeys
+    let mut first = None;
+    let mut flow = (0..8).all(|k| both(&mut dev, &mut pop, k, &mut first));
+    let no_caps = flow && dev.epochs().0 == 0 && pop.epochs().0 == 0 && !dev.epochs().2;
+    // (2) CAPS both ways -> both senders armed
+    let n = dev.seal(T_CAPS, &[CAPS_REKEY], &mut dg, 10).unwrap_or(0);
+    let mut caps = pop.open(&dg[..n], &mut out, 10) == Some((T_CAPS, 1));
+    let n = pop.seal(T_CAPS, &[CAPS_REKEY], &mut dg, 11).unwrap_or(0);
+    caps &= dev.open(&dg[..n], &mut out, 11) == Some((T_CAPS, 1)) && dev.epochs().2 && pop.epochs().2;
+    // (3) 10 more records each way at 3 per epoch: continuity across epochs, both receivers follow
+    let mut ignore = None;
+    flow &= (20..30).all(|k| both(&mut dev, &mut pop, k, &mut ignore));
+    let (dte, dre, _, dseq) = dev.epochs();
+    let (pte, pre, _, _) = pop.epochs();
+    let epochs = dte >= 3 && pte >= 3 && dre == pte && pre == dte;
+    // (4) the very first (epoch-0) record captured on the wire: after the grace window it is refused as stale
+    let (r0, n0) = first.unwrap_or(([0; 1700], 0));
+    let t_late = 30 + REKEY_GRACE_MS + 1;
+    let _ = pop.tick(t_late);
+    let stale = pop.open(&r0[..n0], &mut out, t_late).is_none() && pop.stats.rx_stale >= 1;
+    // (5) the time threshold alone moves an idle tunnel's epoch (keepalive after 10 min)
+    let n = dev.seal(T_KEEPALIVE, &[], &mut dg, t_late + 600_000).unwrap_or(0);
+    let timed = dev.epochs().0 == dte + 1 && pop.open(&dg[..n], &mut out, t_late + 600_000) == Some((T_KEEPALIVE, 0)) && pop.epochs().1 == dte + 1;
+    // (6) re-handshake: a NEW session (fresh ephemerals) starts at epoch 0, unarmed, with a different sid; the old
+    //     tunnel's records do not open on it
+    let old_sid = dev.sid;
+    let n_old = dev.seal(T_DATA, &pkt, &mut dg, t_late + 600_001).unwrap_or(0);
+    let old_rec = dg;
+    dev.wipe();
+    pop.wipe();
+    let irand2 = crate::securechannel::InitiatorRandomness::from_test_seeds(
+        boot_abi::sha256::digest(b"HEQK-W4-eph-x"),
+        boot_abi::sha256::digest(b"HEQK-W4-eph-d"),
+        boot_abi::sha256::digest(b"HEQK-W4-eph-z"),
+        boot_abi::sha256::digest(b"HEQK-W4-encaps-m"),
+    );
+    let fresh = match mk(&irand2) {
+        Some((d2, r2)) => {
+            let (mut dev2, mut pop2) = (Tunnel::with_policy(d2, 0, pol), Tunnel::with_policy(r2, 0, pol));
+            let mut sid2 = old_rec;
+            sid2[4..12].copy_from_slice(&dev2.sid);
+            dev2.sid != old_sid
+                && dev2.epochs() == (0, 0, false, 0)
+                && pop2.open(&sid2[..n_old], &mut out, 0).is_none()
+                && both(&mut dev2, &mut pop2, 1, &mut None)
+        }
+        None => false,
+    };
+    let pass = no_caps && caps && flow && epochs && stale && timed && fresh;
+    arch_aarch64::_print(format_args!(
+        " [P-g19-rekey] {} — G19 tunnel in-session rekey: no CAPS -> nobody rekeys (an older PoP keeps working)={} CAPS exchange arms both senders={} DATA continues both ways across epochs={} both receivers follow (device tx/rx epoch {}/{}, PoP {}/{}, next device seq {:#x})={} the captured epoch-0 record refused after the grace window={} the time threshold alone rekeys an idle tunnel={} a re-handshake starts at epoch 0 with a new sid, old records refused={}\n",
+        if pass { "PASS" } else { "FAIL" }, no_caps, caps, flow, dte, dre, pte, pre, dseq, epochs, stale, timed, fresh));
     pass
 }

@@ -11,8 +11,8 @@
 
 use crate::entropy::EntropySource;
 use crate::securechannel::{
-    hs_chunk, responder_read_msg1_with, responder_write_msg2, AntiReplayRx, CipherState, HsReasm, ResponderRandomness,
-    ResponderStatic,
+    hs_chunk, responder_read_msg1_with, responder_write_msg2, HsReasm, RecordRx, RecordTx, RekeyPolicy,
+    ResponderRandomness, ResponderStatic,
 };
 use crate::wire::{self, Assign, Msg, Sid};
 use boot_abi::sha256;
@@ -67,8 +67,8 @@ pub fn in_prefix(ip: [u8; 4], (net, plen): ([u8; 4], u8)) -> bool {
 
 struct Sess {
     dev: usize,
-    send: CipherState,
-    rx: AntiReplayRx,
+    send: RecordTx,
+    rx: RecordRx,
     endpoint: SocketAddr,
     created_ms: u64,
     last_rx_ms: u64,
@@ -97,6 +97,8 @@ pub struct Stats {
     pub d2d_dropped: u64,
     pub tun_no_route: u64,
     pub rebinds: u64,
+    /// W4: devices that announced they follow rekey epochs (CAPS)
+    pub caps_rekey: u64,
 }
 
 pub struct Pop {
@@ -108,6 +110,10 @@ pub struct Pop {
     sid_by_dev: HashMap<usize, Sid>,
     reasm: HashMap<SocketAddr, (HsReasm, u64)>,
     hs_budget: HashMap<IpAddr, (u64, u32)>,
+    /// The latest event time seen (TUN reads carry none): drives the senders' time-based rekey.
+    now_ms: u64,
+    /// The thresholds this PoP's senders rekey at (once the device announced CAPS).
+    pub rekey: RekeyPolicy,
     pub stats: Stats,
 }
 
@@ -137,6 +143,8 @@ impl Pop {
             sid_by_dev: HashMap::new(),
             reasm: HashMap::new(),
             hs_budget: HashMap::new(),
+            now_ms: 0,
+            rekey: RekeyPolicy::DEFAULT,
             stats: Stats::default(),
         })
     }
@@ -224,13 +232,15 @@ impl Pop {
         if let Some(old) = self.sid_by_dev.remove(&di) {
             if let Some(mut s) = self.sessions.remove(&old) {
                 s.send.wipe();
+                s.rx.wipe();
             }
         }
         let sid = wire::sid_from_handshake_hash(&session.handshake_hash);
         let mut session = session;
-        let rx = session.recv.into_anti_replay();
-        session.recv.wipe();
-        let send = session.send;
+        let rx = session.recv.into_record_rx();
+        let send = RecordTx::new(session.send.clone(), now_ms as i64, self.rekey);
+        session.wipe();
+        self.now_ms = self.now_ms.max(now_ms);
         // The data endpoint is learned from the first authenticated data record (the device's
         // data socket may differ from its handshake socket, and NATs remap ports).
         let endpoint = SocketAddr::new(from.ip(), 0);
@@ -250,8 +260,9 @@ impl Pop {
             self.stats.unknown_sid += 1;
             return vec![];
         };
+        self.now_ms = self.now_ms.max(now_ms);
         let mut pt = [0u8; wire::MAX_PT + 16];
-        let n = match s.rx.open_record(&wire::ad(&sid), rec, &mut pt) {
+        let n = match s.rx.open(&wire::ad(&sid), rec, &mut pt, now_ms as i64) {
             Ok(n) => n,
             Err(_) => {
                 self.stats.records_bad += 1;
@@ -285,6 +296,18 @@ impl Pop {
                 vec![Out::Tun(p.to_vec())]
             }
             Some(Msg::Keepalive) => self.seal(sid, &Msg::Keepalive).into_iter().collect(),
+            Some(Msg::Caps(f)) => {
+                // the device follows our epochs: rekey this direction from now on; tell it we follow too
+                if f & wire::CAPS_REKEY != 0 {
+                    if let Some(s) = self.sessions.get_mut(&sid) {
+                        if !s.send.armed() {
+                            self.stats.caps_rekey += 1;
+                        }
+                        s.send.arm();
+                    }
+                }
+                self.seal(sid, &Msg::Caps(wire::CAPS_REKEY)).into_iter().collect()
+            }
             Some(Msg::AddrReq) => {
                 let a = Assign { inner: self.devices[dev].inner, plen: 32, dns: self.cfg.dns, mtu: self.cfg.mtu };
                 self.seal(sid, &Msg::Assign(a)).into_iter().collect()
@@ -292,6 +315,7 @@ impl Pop {
             Some(Msg::Close(_)) => {
                 if let Some(mut s) = self.sessions.remove(&sid) {
                     s.send.wipe();
+                    s.rx.wipe();
                 }
                 self.sid_by_dev.remove(&dev);
                 vec![]
@@ -321,6 +345,10 @@ impl Pop {
 
     /// Expire idle/over-age sessions and stale reassemblies; bound the rate-limit table.
     pub fn gc(&mut self, now_ms: u64) {
+        self.now_ms = self.now_ms.max(now_ms);
+        for s in self.sessions.values_mut() {
+            s.rx.tick(now_ms as i64); // retire a previous key epoch after its grace window
+        }
         let dead: Vec<Sid> = self
             .sessions
             .iter()
@@ -332,6 +360,7 @@ impl Pop {
         for sid in dead {
             if let Some(mut s) = self.sessions.remove(&sid) {
                 s.send.wipe();
+                s.rx.wipe();
                 if self.sid_by_dev.get(&s.dev) == Some(&sid) {
                     self.sid_by_dev.remove(&s.dev);
                 }
@@ -351,7 +380,7 @@ impl Pop {
         let mut dg = vec![0u8; wire::MAX_DGRAM];
         dg[..4].copy_from_slice(&wire::MAGIC);
         dg[4..wire::HDR_LEN].copy_from_slice(&sid);
-        let rl = s.send.seal_record(&wire::ad(&sid), &pt[..n], &mut dg[wire::HDR_LEN..])?;
+        let rl = s.send.seal(&wire::ad(&sid), &pt[..n], &mut dg[wire::HDR_LEN..], self.now_ms as i64)?;
         dg.truncate(wire::HDR_LEN + rl);
         Some(Out::Data(s.endpoint, dg))
     }
