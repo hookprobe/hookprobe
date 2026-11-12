@@ -3,28 +3,39 @@
 
   hq-upload.py --mc https://10.99.0.1 --owner-key-file KEY --type shield_block --sig BLOCK.SIG --file BLOCK.TXT [--no-activate]
   hq-upload.py --mc https://10.99.0.1 --owner-key-file KEY --status
-  hq-upload.py --mc ... --owner-key-file KEY --rollback wan          # ADR 0058: re-activate the previous generation
+  hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --rollback wan --to-generation N   # ADR 0058 (envelope)
   hq-upload.py --mc ... --owner-key-file KEY --reboot "apply WAN"    # G49: restart so staged settings apply
   hq-upload.py --mc ... --owner-key-file KEY --enroll PROOF.TXT      # ADR 0058 D3 (policy-sign.py enroll-proof output)
-  hq-upload.py --mc ... --owner-key-file KEY --rotate ROTATE.TXT     # ADR 0058 D3 (policy-sign.py rotate output)
+  hq-upload.py --mc ... --owner-key-file KEY --sign-key OLD_K_OWN.pem --rotate ROTATE.TXT   # ADR 0058 D3 (+ envelope)
+  hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --factory-reset "reason"   # erase owner data (envelope)
   hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --config-confirm "reason" [--bundle HQCFG1.BIN]
   hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --config-rollback "reason"
   hq-upload.py --mc ... --owner-key-file KEY [--sign-key K_OWN.pem] --hsh "config status"   # the web console
 
-R6 = D: confirm / rollback (and privileged hsh commands) need an HQMGMT1 envelope signed by the enrolled owner key.
+R6 = D: confirm / rollback, pack activate / rollback, factory reset, owner-key rotation (and privileged hsh commands)
+need an HQMGMT1 envelope signed by the enrolled owner key; the owner token (--owner-key-file) only opens the session.
 This tool signs it LOCALLY with --sign-key (policy-sign.py's mgmt-sign; the private key never goes to the device),
 bound to what GET /api/config's "envelope" reports (device, boot epoch, next sequence, the bundle in force). With
 --bundle the digest is computed from your file and must match the device's — you confirm exactly what you staged.
 
-Types: shield_block, shield_allow, ioc, rules, oui, devices (apply now); wan, wifi, policy (staged: next boot). The pack must already be signed with the
-operator key (policy-sign.py sign-*); this tool never signs anything and never sees a private key. The
-device verifies the signature with its own loader before it activates anything.
+Types: shield_block, shield_allow, ioc, rules, oui, devices (apply now); wan, wifi, policy, config (staged), os_image.
+The pack must already be signed with the operator key (policy-sign.py sign-*); this tool never signs packs. Its
+only signature is the activate envelope (--sign-key, local), bound to the type, generation and digest the device
+reports at finish — checked against your own file first. The device verifies the pack with its own loader.
 
 Mission Control uses a certificate from the HookProbe factory CA (ADR 0051): pass --ca FACTORY-CA.crt to verify it,
 or --insecure on a bench.
 """
 import importlib.util, os
 import argparse, hashlib, http.cookiejar, json, ssl, sys, urllib.parse, urllib.request
+
+
+def PS():
+    """policy-sign.py as a module (the envelope builder)."""
+    spec = importlib.util.spec_from_file_location("policy_sign", os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy-sign.py"))
+    ps = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ps)
+    return ps
 
 
 def main():
@@ -45,6 +56,8 @@ def main():
     ap.add_argument("--config-rollback")
     ap.add_argument("--bundle")
     ap.add_argument("--hsh")
+    ap.add_argument("--to-generation", type=int)
+    ap.add_argument("--factory-reset")
     ap.add_argument("--ca")
     ap.add_argument("--insecure", action="store_true")
     a = ap.parse_args()
@@ -116,24 +129,30 @@ def main():
         seq += 1
         return req(path, urllib.parse.urlencode(kv).encode(), {**hdr, "Content-Type": "application/x-www-form-urlencoded"})
 
-    def envelope(msg, arg=0):
-        """R6 = D: sign an HQMGMT1 envelope locally with the owner key, bound to what the device reports."""
+    def envelope(msg, arg=0, generation=None, digest=None):
+        """R6 = D: sign an HQMGMT1 envelope locally with the owner key, bound to what the device reports
+        (device id, boot epoch, next sequence); generation / digest default to the bundle in force (confirm / rollback)."""
         if not a.sign_key:
             sys.exit("--sign-key (the enrolled owner key, PEM) is required for a privileged operation")
-        spec = importlib.util.spec_from_file_location("policy_sign", os.path.join(os.path.dirname(os.path.abspath(__file__)), "policy-sign.py"))
-        ps = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(ps)
+        ps = PS()
         e = req("/api/config").get("envelope") or {}
         if not e.get("owner_enrolled"):
             sys.exit(f"the device reports no enrolled owner key: {e}")
+        dg = digest
         digest = bytes.fromhex(e["digest"])
-        if a.bundle:
+        if a.bundle and msg in ("confirm", "rollback"):
             mine = hashlib.sha256(open(a.bundle, "rb").read()).digest()
             if mine != digest:
                 sys.exit(f"the bundle in force ({e['digest']}) is not {a.bundle} ({mine.hex()}): refusing to sign")
         gen = int(e["generation"]) if msg in ("confirm", "rollback") else 0
+        if msg not in ("confirm", "rollback"):
+            digest = b"\0" * 32
+        if generation is not None:
+            gen = generation
+        if dg is not None:
+            digest = dg
         return ps.mgmt_envelope(ps.load(a.sign_key), bytes.fromhex(e["device_id"]), bytes.fromhex(e["epoch"]), int(e["next_seq"]),
-                                msg, arg, gen, digest if gen else b"\0" * 32).hex()
+                                msg, arg, gen, digest).hex()
 
     if a.config_confirm or a.config_rollback:
         confirm = bool(a.config_confirm)
@@ -154,14 +173,27 @@ def main():
         conn[0].request("POST", "/api/hsh", body=body.encode(), headers={**conn_h, "Cookie": "; ".join(f"{k}={v}" for k, v in jar.items())})
         print(conn[0].getresponse().read().decode(errors="replace"), end="")
         return 0
-    if a.rollback or a.reboot or a.enroll or a.rotate:
+    if a.rollback or a.reboot or a.enroll or a.rotate or a.factory_reset:
         if a.rollback:
-            r = form1("/api/upload/rollback", type=a.rollback, owner_key=key)
+            if a.to_generation is None:
+                sys.exit("--to-generation N (the generation to roll back to) is required: the envelope binds it")
+            env = envelope("pack-rollback", PS().TYPE_CODE[a.rollback], a.to_generation)
+            r = form1("/api/upload/rollback", type=a.rollback, envelope=env)
+        elif a.factory_reset:
+            r = form1("/api/factory-reset", confirm="ERASE", reason=a.factory_reset, permanent="true", envelope=envelope("factory-reset"))
         elif a.reboot:
             r = form1("/api/reboot", reason=a.reboot, permanent="true", owner_key=key)
+        elif a.rotate:
+            kv = dict(l.split("=", 1) for l in open(a.rotate).read().split() if "=" in l)
+            cur = req("/api/anchor").get("owner_key")
+            if not cur:
+                sys.exit("the device reports no enrolled owner key to rotate")
+            ps = PS()
+            env = envelope("rotate", ps.fp8(bytes.fromhex(cur)), int(kv["generation"]), hashlib.sha256(bytes.fromhex(kv["public_key"])).digest())
+            r = form1("/api/anchor/rotate", envelope=env, **kv)
         else:
-            kv = dict(l.split("=", 1) for l in open(a.enroll or a.rotate).read().split() if "=" in l)
-            r = form1("/api/anchor/rotate" if a.rotate else "/api/anchor/enroll", owner_key=key, **kv)
+            kv = dict(l.split("=", 1) for l in open(a.enroll).read().split() if "=" in l)
+            r = form1("/api/anchor/enroll", owner_key=key, **kv)
         print(json.dumps(r))
         return 0 if r.get("ok") else 1
     if a.type == "os_image":
@@ -210,7 +242,13 @@ def main():
     if a.no_activate:
         print("abort:", json.dumps(form("/api/upload/abort", id=uid)))
         return 0
-    r = form("/api/upload/activate", id=uid, owner_key=key)
+    # R6 = D: the activate envelope binds the type, generation and content digest the device reports at finish —
+    # checked against this tool's own file first (the digest of the pack body, or the image for os_image)
+    body_dg = hashlib.sha256(cont if a.type == "os_image" else open(a.file, "rb").read()).hexdigest()
+    if a.type != "os_image" and f.get("digest") != body_dg:
+        sys.exit(f"the device staged digest {f.get('digest')}, your file is {body_dg}: refusing to sign")
+    env = envelope("activate", PS().TYPE_CODE[a.type], int(f["generation"]), bytes.fromhex(f["digest"]))
+    r = form("/api/upload/activate", id=uid, envelope=env)
     print("activate:", json.dumps(r))
     return 0 if r.get("ok") else 1
 
