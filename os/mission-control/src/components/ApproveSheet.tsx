@@ -26,7 +26,7 @@ const ApproveSheet: Component = () => {
     const r = approveRequest();
     if (!r) return '';
     if (r.reason && reason().trim().length < 3) return 'Give a reason of at least 3 characters.';
-    if (r.key && !key()) return 'Enter the owner key.';
+    if (r.key && !key()) return 'Enter the device password.';
     if (r.passphrase) {
       if (pass().length < r.passphrase.min) return `The passphrase needs at least ${r.passphrase.min} characters.`;
       if (pass() !== pass2()) return 'The passphrases differ.';
@@ -69,7 +69,7 @@ const ApproveSheet: Component = () => {
               </label>
             </Show>
             <Show when={r().key}>
-              <label class="approve-field">{r().key!.label ?? 'Owner key (from the device’s label)'}
+              <label class="approve-field">{r().key!.label ?? 'Device password (on the device’s label)'}
                 <input class="approve-input" type="password" value={key()} onInput={(e) => setKey(e.currentTarget.value)} autocomplete="current-password" spellcheck={false} />
               </label>
             </Show>
