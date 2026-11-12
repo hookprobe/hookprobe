@@ -39,6 +39,18 @@ const TCP_TX: usize = 16 * 1024;
 const SCRATCH: usize = 64 * 1024;
 const HTTP_PORT: u16 = 80;
 const HTTPS_PORT: u16 = 443;
+/// A held SYN (Ethernet + IPv4 + TCP with options fits; a larger one is not held).
+#[cfg(feature = "mctls")]
+const SYN_FRAME: usize = 128;
+/// SYNs held while every HTTPS slot is taken (more are dropped silently: the client retransmits, never a RST).
+#[cfg(feature = "mctls")]
+const SYN_Q: usize = 8;
+/// A held SYN waits at most this long for a slot (then dropped: the client's own SYN retransmit tries again).
+#[cfg(feature = "mctls")]
+const SYN_HOLD_MS: i64 = 3000;
+/// A slot the device closed keeps its socket until the client acknowledges the response, at most this long.
+#[cfg(feature = "mctls")]
+const CLOSE_DRAIN_MS: i64 = 2000;
 /// TLS connections (ADR 0051): one EL0 TLS-server slot each, on top of the plain-HTTP pool.
 #[cfg(feature = "mctls")]
 const TLS_N: usize = hal::tlsabi::SLOTS;
@@ -284,6 +296,12 @@ pub struct McNode {
     tls_open: [bool; TLS_N],
     /// HTTPS slot `k` completed its handshake (counted once).
     tls_hs: [bool; TLS_N],
+    /// HTTPS slot `k`: [session opened, last activity (ciphertext in / the device's close)] (ms): the slot dump,
+    /// the idle slot a held SYN may claim, and how long a closing slot may drain.
+    tls_at: [[i64; 2]; TLS_N],
+    /// SYNs to :443 that arrived while every HTTPS slot was taken: held (not refused) until a slot listens again.
+    #[cfg(feature = "mctls")]
+    syn_q: [([u8; SYN_FRAME], usize, i64); SYN_Q],
     dhcp: Option<SocketHandle>,
     mac: [u8; 6],
     pub ip: [u8; 4],
@@ -359,7 +377,7 @@ impl McNode {
             sockets.add(tcp::Socket::new(rx, tx))
         };
         Some(McNode {
-            iface, sockets, handles, conns: [Conn::Reading { got: 0, since: 0, served: 0 }; ALL], tls_open: [false; TLS_N], tls_hs: [false; TLS_N], dhcp, mac, ip, leased: dhcp.is_none(), gw,
+            iface, sockets, handles, conns: [Conn::Reading { got: 0, since: 0, served: 0 }; ALL], tls_open: [false; TLS_N], tls_hs: [false; TLS_N], tls_at: [[0; 2]; TLS_N], #[cfg(feature = "mctls")] syn_q: [([0; SYN_FRAME], 0, 0); SYN_Q], dhcp, mac, ip, leased: dhcp.is_none(), gw,
             ntp: Sntp { sock: ntp_sock, nonce: 0, rng: seed | 1, server: None, next_ms: 0, tries: 0, synced_once: false, result: None },
             alert_sock, alert: AlertSt::Idle, alert_cursor: None, alert_port: 49_152 + (seed % 8_000) as u16,
         })
@@ -396,6 +414,15 @@ impl McNode {
     /// Feed one frame that already PASSed the detection plane.
     #[allow(static_mut_refs)]
     pub fn ingress(&mut self, frame: &[u8], now_ms: i64) {
+        #[cfg(feature = "mctls")]
+        if self.hold_syn(frame, now_ms) {
+            return;
+        }
+        self.feed(frame, now_ms);
+    }
+
+    #[allow(static_mut_refs)]
+    fn feed(&mut self, frame: &[u8], now_ms: i64) {
         let dev = unsafe { &mut DEV };
         let n = frame.len().min(MTU);
         let mut b = [0u8; MTU];
@@ -458,8 +485,11 @@ impl McNode {
             serve_conn(i, &mut Plain(s), &mut self.conns[i], st, now_ms as u64);
         }
         #[cfg(feature = "mctls")]
-        for i in CONNS..ALL {
-            self.tls_service(i, st, now_ms);
+        {
+            for i in CONNS..ALL {
+                self.tls_service(i, st, now_ms);
+            }
+            self.syn_step(now_ms);
         }
         if self.leased {
             self.sntp_step(now_ms);
@@ -760,16 +790,12 @@ pub fn run() -> ! {
             last_hb = now;
             let (lost, gated) = node.tx_stats();
             #[cfg(feature = "mctls")]
-            {
-                let mut ss = [0u8; TLS_N * 2];
-                node.tls_slot_states(&mut ss);
-                kprint!(" [MC-TLS slots] {}\n", core::str::from_utf8(&ss).unwrap_or("?"));
-            }
+            node.log_tls_slots(now);
             #[cfg(feature = "mctls")]
             if let Some(h) = crate::tlshost::host() {
                 let t = unsafe { TLS_STATS };
-                kprint!(" [MC-TLS hb] ready={} calls={} handshakes={} pq_hybrid={} records_out={} failed_closed={} rate_limited={} tls_errors={} timeouts={} faults={} restarts={}\n",
-                    h.ready, h.calls, t[0], t[3], t[1], t[2], t[4], h.tls_errors, h.timeouts, h.faults, h.restarts);
+                kprint!(" [MC-TLS hb] ready={} calls={} handshakes={} pq_hybrid={} records_out={} failed_closed={} rate_limited={} tls_errors={} timeouts={} faults={} restarts={} syn_held={} idle_closed={}\n",
+                    h.ready, h.calls, t[0], t[3], t[1], t[2], t[4], h.tls_errors, h.timeouts, h.faults, h.restarts, t[6], t[5]);
             }
             kprint!(" [MC hb] seen={} passed={} dropped={} detections={} qsecbit_raw={} rules_active={} tx_lost={} egress_gated={}\n",
                 st.seen, st.forwarded, st.dropped, st.detections(), telemetry::score(), crate::rules::active_rules(), lost, gated);
@@ -972,7 +998,7 @@ mod tls_side {
     pub(super) static mut CT: [u8; OUT_TLS_MAX] = [0; OUT_TLS_MAX];
     /// TLS-side counters for the heartbeat: [handshakes, records out, sessions failed closed, of the
     /// handshakes: hybrid post-quantum X25519MLKEM768].
-    pub static mut STATS: [u32; 5] = [0; 5]; // [4] = new sessions refused by the handshake rate limit
+    pub static mut STATS: [u32; 7] = [0; 7]; // [4] = new sessions refused by the handshake rate limit, [5] = idle sessions closed for a held SYN, [6] = SYNs held
 
     /// Handshake rate limit (ADR 0051): every handshake costs an ECDSA signature + ML-KEM work and is a
     /// timing sample of the signing key; a browser with keep-alive needs a handful. Token bucket over all
@@ -1088,28 +1114,40 @@ pub use tls_side::STATS as TLS_STATS;
 
 #[cfg(feature = "mctls")]
 impl McNode {
-    /// Diagnostics: one letter per HTTPS slot — L listen, S syn-recv, E established, W close-wait,
-    /// F fin-wait, C closing/last-ack, T time-wait, X closed, - none; uppercase+'*' = TLS session open.
-    pub fn tls_slot_states(&mut self, out: &mut [u8; TLS_N * 2]) {
+    /// Diagnostics (heartbeat): one letter per HTTPS slot — L listen, S syn-recv, E established, W close-wait,
+    /// F fin-wait, C closing/last-ack, T time-wait, X closed, - none; '*' = TLS session open — then, for every
+    /// slot not listening: HTTP state (R reading / S sending / V SSE), session age, ms since the last ciphertext
+    /// in, decrypted bytes waiting, TCP send / receive queues.
+    #[cfg(not(feature = "cm5"))]
+    fn log_tls_slots(&mut self, now: i64) {
+        let mut ss = [b' '; TLS_N * 2];
         for k in 0..TLS_N {
-            let (c, open) = match self.handles[CONNS + k] {
-                None => (b'-', false),
-                Some(h) => {
-                    let st = self.sockets.get_mut::<tcp::Socket>(h).state();
-                    (match st {
-                        tcp::State::Listen => b'L',
-                        tcp::State::SynReceived | tcp::State::SynSent => b'S',
-                        tcp::State::Established => b'E',
-                        tcp::State::CloseWait => b'W',
-                        tcp::State::FinWait1 | tcp::State::FinWait2 => b'F',
-                        tcp::State::Closing | tcp::State::LastAck => b'C',
-                        tcp::State::TimeWait => b'T',
-                        tcp::State::Closed => b'X',
-                    }, self.tls_open[k])
-                }
+            let Some(h) = self.handles[CONNS + k] else { ss[k * 2] = b'-'; continue };
+            ss[k * 2] = match self.sockets.get::<tcp::Socket>(h).state() {
+                tcp::State::Listen => b'L',
+                tcp::State::SynReceived | tcp::State::SynSent => b'S',
+                tcp::State::Established => b'E',
+                tcp::State::CloseWait => b'W',
+                tcp::State::FinWait1 | tcp::State::FinWait2 => b'F',
+                tcp::State::Closing | tcp::State::LastAck => b'C',
+                tcp::State::TimeWait => b'T',
+                tcp::State::Closed => b'X',
             };
-            out[k * 2] = c;
-            out[k * 2 + 1] = if open { b'*' } else { b' ' };
+            if self.tls_open[k] {
+                ss[k * 2 + 1] = b'*';
+            }
+        }
+        kprint!(" [MC-TLS slots] {}t={}s\n", core::str::from_utf8(&ss).unwrap_or("?"), now / 1000);
+        for k in 0..TLS_N {
+            let Some(h) = self.handles[CONNS + k] else { continue };
+            let s = self.sockets.get::<tcp::Socket>(h);
+            if ss[k * 2] == b'L' {
+                continue;
+            }
+            let c = match self.conns[CONNS + k] { Conn::Reading { got, .. } => (b'R', got), Conn::Sending { boff, .. } => (b'S', boff), Conn::Sse { .. } => (b'V', 0) };
+            let [o, l] = self.tls_at[k];
+            kprint!(" [MC-TLS slot {}] {}{} hs={} http={}{} age={}ms idle={}ms rxn={} sq={} rq={}\n", k, ss[k * 2] as char, ss[k * 2 + 1] as char, self.tls_hs[k] as u8, c.0 as char, c.1,
+                now - o, now - l, unsafe { tls_side::RXN[k] }, s.send_queue(), s.recv_queue());
         }
     }
 
@@ -1134,17 +1172,26 @@ impl McNode {
         // A connection that never got a TLS session and is already past Established (the client gave up —
         // its FIN arrived with or before the ClientHello) can never be served: drop it now, unread data and
         // all (metal/QEMU flood 2026-11-07: all 8 slots pinned in CloseWait this way).
+        // The device's OWN close (FIN-WAIT-1 / CLOSING / LAST-ACK) with response bytes still unacknowledged is
+        // different: TCP delivers (and retransmits) them for up to CLOSE_DRAIN_MS — aborting it at once dropped the
+        // tail of a response with its close_notify + FIN, and no RST either (the slot listens again before a poll).
+        let state = s.state();
         if !self.tls_open[k]
-            && !matches!(s.state(), tcp::State::Listen | tcp::State::SynReceived | tcp::State::Established | tcp::State::Closed)
+            && !matches!(state, tcp::State::Listen | tcp::State::SynReceived | tcp::State::Established | tcp::State::Closed)
+            && !(matches!(state, tcp::State::FinWait1 | tcp::State::Closing | tcp::State::LastAck)
+                && s.send_queue() > 0
+                && now_ms - self.tls_at[k][1] < CLOSE_DRAIN_MS)
         {
             s.abort();
         }
-        // With a session open: answer whatever the client sent before its FIN, then release.
+        // With a session open: answer whatever the client sent before its FIN, then release (close_notify + FIN).
         if self.tls_open[k] && s.state() == tcp::State::CloseWait && !s.can_recv() && unsafe { RXN[k] } == 0
             && matches!(self.conns[i], Conn::Reading { got: 0, .. })
         {
-            let _ = th.call(CMD_CLOSE, k, &[], secs);
+            let r = th.call(CMD_CLOSE, k, &[], secs);
+            let _ = flush_tls(th, s, r.tls_len);
             self.tls_open[k] = false;
+            self.tls_at[k][1] = now_ms;
             s.close();
         }
         if !s.is_open() {
@@ -1167,6 +1214,7 @@ impl McNode {
             }
             self.tls_open[k] = true;
             self.tls_hs[k] = false;
+            self.tls_at[k] = [now_ms; 2];
             unsafe { RXN[k] = 0 };
         }
         // Ciphertext in.
@@ -1176,6 +1224,7 @@ impl McNode {
             if n == 0 {
                 break;
             }
+            self.tls_at[k][1] = now_ms;
             let r = th.call(CMD_RECV, k, &ct[..n], secs);
             if r.status != ST_OK || !flush_tls(th, s, r.tls_len) {
                 unsafe { STATS[2] += 1 };
@@ -1201,7 +1250,13 @@ impl McNode {
                 *rn += r.plain_len;
             }
             if r.flags & (F_CLOSED | F_PEER_CLOSED) != 0 {
+                if r.flags & F_CLOSED == 0 {
+                    // the client's close_notify: answer with ours (RFC 8446 6.1) before the FIN
+                    let r = th.call(CMD_CLOSE, k, &[], secs);
+                    let _ = flush_tls(th, s, r.tls_len);
+                }
                 self.tls_open[k] = false;
+                self.tls_at[k][1] = now_ms;
                 s.close();
                 return;
             }
@@ -1209,6 +1264,96 @@ impl McNode {
         let mut open = self.tls_open[k];
         let mut p = TlsPipe { s, slot: k, secs, open: &mut open };
         serve_conn(i, &mut p, &mut self.conns[i], st, now_ms as u64);
+        if self.tls_open[k] && !open {
+            self.tls_at[k][1] = now_ms; // the device closed it (keep-alive idle / Connection: close): drain clock
+        }
         self.tls_open[k] = open;
+    }
+
+    /// Is any HTTPS slot listening (free for a new connection)?
+    fn tls_listening(&self) -> bool {
+        self.handles[CONNS..].iter().flatten().any(|h| self.sockets.get::<tcp::Socket>(*h).state() == tcp::State::Listen)
+    }
+
+    /// A SYN to :443 while no HTTPS slot listens is HELD, never refused. smoltcp has no accept backlog: the
+    /// SYN drew a RST, which a browser takes as a hard failure of that request — CI g3 2026-11-12: right after
+    /// Home -> Detect (Home's cancelled connections still draining, Chromium's new ones opening) a module script
+    /// got ERR_CONNECTION_RESET and the Detect page never made its API calls. Like a full Linux accept queue:
+    /// `syn_step` hands the SYN to the first slot listening again (closing an idle keep-alive slot for it if
+    /// needed); one held past SYN_HOLD_MS is dropped silently and the client's own SYN retransmit tries again.
+    fn hold_syn(&mut self, f: &[u8], now_ms: i64) -> bool {
+        let t = 14 + ((f.get(14).copied().unwrap_or(0) & 15) as usize) * 4;
+        if f.len() < t + 20 || f[12..14] != [8, 0] || f[23] != 6 || f[t + 2..t + 4] != HTTPS_PORT.to_be_bytes() || f[t + 13] & 0x16 != 0x02
+            || self.handles[CONNS].is_none() || self.tls_listening()
+        {
+            return false; // not a bare SYN to :443, HTTPS off (refused as before), or a slot is free: smoltcp as usual
+        }
+        let src = |g: &[u8]| {
+            let t = 14 + ((g[14] & 15) as usize) * 4;
+            (u32::from_be_bytes([g[26], g[27], g[28], g[29]]), [g[t], g[t + 1]])
+        };
+        if self.syn_q.iter().any(|(g, n, _)| *n > 0 && src(g) == src(f)) {
+            return true; // the client's retransmit of a SYN already held
+        }
+        if f.len() <= SYN_FRAME {
+            if let Some(q) = self.syn_q.iter_mut().find(|q| q.1 == 0) {
+                q.0[..f.len()].copy_from_slice(f);
+                (q.1, q.2) = (f.len(), now_ms);
+                unsafe { tls_side::STATS[6] += 1 };
+            }
+        }
+        true // held, or (queue full / oversized) dropped: never a RST for want of a slot
+    }
+
+    /// Held SYNs: expire, hand to listening slots (oldest first), and if one still waits, free a slot for it —
+    /// the least recently active idle keep-alive session (handshake done, no request, nothing queued either way,
+    /// idle >= 1 s so a just-connected socket is never taken from under its first request) gets close_notify +
+    /// FIN, which a browser treats like any idle keep-alive close. At most one such close is in flight.
+    #[allow(static_mut_refs)]
+    fn syn_step(&mut self, now_ms: i64) {
+        loop {
+            let mut oldest: Option<usize> = None;
+            for q in 0..SYN_Q {
+                if self.syn_q[q].1 > 0 && now_ms - self.syn_q[q].2 > SYN_HOLD_MS {
+                    self.syn_q[q].1 = 0;
+                }
+                if self.syn_q[q].1 > 0 && oldest.is_none_or(|o| self.syn_q[q].2 < self.syn_q[o].2) {
+                    oldest = Some(q);
+                }
+            }
+            let Some(q) = oldest else { return };
+            if !self.tls_listening() {
+                break;
+            }
+            let (f, n) = (self.syn_q[q].0, self.syn_q[q].1);
+            self.syn_q[q].1 = 0;
+            self.feed(&f[..n], now_ms);
+        }
+        let mut pick: Option<usize> = None;
+        for k in 0..TLS_N {
+            let Some(h) = self.handles[CONNS + k] else { continue };
+            let s = self.sockets.get::<tcp::Socket>(h);
+            if !matches!(s.state(), tcp::State::Established) {
+                if s.state() != tcp::State::SynReceived {
+                    return; // a slot is already on its way back to Listen
+                }
+                continue;
+            }
+            if self.tls_open[k] && self.tls_hs[k] && matches!(self.conns[CONNS + k], Conn::Reading { got: 0, .. })
+                && unsafe { tls_side::RXN[k] } == 0 && s.send_queue() == 0 && s.recv_queue() == 0
+                && now_ms - self.tls_at[k][1] >= 1000
+                && pick.is_none_or(|p| self.tls_at[k][1] < self.tls_at[p][1])
+            {
+                pick = Some(k);
+            }
+        }
+        let (Some(k), Some(th)) = (pick, crate::tlshost::host()) else { return };
+        let s = self.sockets.get_mut::<tcp::Socket>(self.handles[CONNS + k].unwrap());
+        let r = th.call(hal::tlsabi::CMD_CLOSE, k, &[], 0);
+        let _ = tls_side::flush_tls(th, s, r.tls_len);
+        s.close();
+        self.tls_open[k] = false;
+        self.tls_at[k][1] = now_ms;
+        unsafe { tls_side::STATS[5] += 1 };
     }
 }

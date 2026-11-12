@@ -279,6 +279,7 @@ impl TlsHost {
         }
         let status = self.r32(H_STATUS);
         if status == ST_PANIC {
+            kprint!(" [MC-TLS] EL0 server panicked (cmd {} slot {}): reset, every session lost\n", cmd, conn);
             self.reset();
             return Reply { status, tls_len: 0, plain_len: 0, flags: F_CLOSED };
         }
