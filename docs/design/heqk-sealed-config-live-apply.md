@@ -123,6 +123,28 @@ settings change **live**, never requiring a reboot.
    - Metal must prove: DHCP → static → PPPoE → DHCP live (Mission Control on the AP reachable throughout), and a
      wrong-PPPoE-password bundle reverting live early.
 10. The Wi-Fi executor. **Metal spike early:** repeated `ap_stop`/`ap_start` on the CYW43455.
+   - **Status (2026-11-12, built, QEMU `[P-cfgd-wifi]`, metal pending):** `kernel/src/wifilive.rs` (resolve, derive
+     first, bounce) + the `apply_wifi_live` glue in `main.rs`, run from the step-8 hook after policy and WAN. `CH_WIFI`
+     is in `LIVE_CAPABLE`; a Wi-Fi change still always waits for the owner's confirm (300 s), else cfgd reverts live.
+   - Resolve as boot does: the bundle's wifi section (one that does not parse is refused live), else `WIFI.TXT`, else
+     the default (build PSK or the SRK setup credential). Before the radio is touched: the PMK (PBKDF2 or raw hex),
+     a TRNG GTK and the SAE password element (`cyw43::ap_security_prepare`). Any failure leaves the AP untouched.
+   - Bounce: `ap_stop` (`WLC_DOWN`) → forget every station's SAE state + the PMKSA → install the security mode →
+     `max_clients` (before `ap_start`: the firmware applies `maxassoc` in the bring-up; a removed cap restores the
+     firmware's own value) → `ap_start` on the current chanspec → `ap_install_gtk`. It must come up serve-ready and
+     keyed, else it returns false and cfgd reverts live. On success the AP loop's PMK / GTK are replaced; the
+     passphrase and scratch keys are wiped with volatile writes. DHCP leases are kept (MAC-bound).
+   - The firmware is **not** re-downloaded, so the REL-08 in-RAM PMKID correction stays in place. A new `channel=`
+     takes effect at the next boot. The AP addressing, the WAN and eth1 are not touched. Mission Control's
+     Wi-Fi/management-VLAN serving choice (G12-M) is still made at boot.
+   - Metal must prove (R2): repeated live bounces on the CYW43455 (≥ 10 back to back) with no FWHALT and no SDIO
+     wedge. Stations re-join after an SSID change, a passphrase change and a `max_clients` change. This covers WPA2,
+     WPA3-SAE and transition, both ways (WPA2 ↔ WPA3), with a WPA3 phone and a WPA2-only client. Mission Control
+     must be reachable after the re-join, and the owner's confirm must commit (R3: the session survives). With no
+     confirm, the 300 s window must revert live to the old SSID and stations must re-join it. A bundle whose
+     passphrase cannot derive must leave the BSS beaconing untouched. The `wifi-pmkid-fix` RAM correction must
+     still be in place after bounces. The boot log line only repeats the boot-time result, so this needs a chip-RAM
+     read-back of the patch site, or a WPA3 soak across bounces with no FWHALT.
 11. Management-VLAN changes under confirm.
 
 ## 6. Open questions (operator)

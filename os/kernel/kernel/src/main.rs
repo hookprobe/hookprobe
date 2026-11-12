@@ -79,6 +79,9 @@ mod cfgd;
 // sealed-config / live apply step 9: the WAN executor
 #[cfg_attr(not(all(feature = "cm5", feature = "p15-write")), allow(dead_code))]
 mod wanlive;
+// sealed-config / live apply step 10: the Wi-Fi executor
+#[cfg_attr(not(all(feature = "cm5", feature = "p15-write")), allow(dead_code))]
+mod wifilive;
 // ADR 0059 step 4a: the management ABI + the EL0 native shell
 #[cfg(feature = "mcserve")]
 mod mgmtabi;
@@ -3393,7 +3396,8 @@ fn cm5_p10_probe() {
                         // PMK + GTK FIRST (fail-closed): never leave a WPA2 BSS beaconing with no
                         // authenticator behind it because the TRNG refused after the BSS was up.
                         // a 64-hex PSK is the PMK itself (WPA2); otherwise PBKDF2(passphrase, SSID)
-                        let pmk = if ap_psk.len() == 64 {
+                        #[allow(unused_mut)] // replaced by the live Wi-Fi executor (sealed-config step 10, p15-write)
+                        let mut pmk = if ap_psk.len() == 64 {
                             let mut k = [0u8; 32];
                             for (i, b) in k.iter_mut().enumerate() {
                                 let h = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
@@ -3580,6 +3584,9 @@ fn cm5_p10_probe() {
                         let wq = unsafe { &mut (*core::ptr::addr_of_mut!(WQBUF)).0 };
                         #[cfg(feature = "mcserve")]
                         let mut cred_reprint_at = 0u64; // first reminder ~5 min after power-on
+                        #[cfg(feature = "mcserve")]
+                        #[allow(unused_mut)] // cleared by the live Wi-Fi executor (sealed-config step 10, p15-write)
+                        let mut setup_live = true;
                         let mut wq_len = [0usize; WQ_N];
                         let (mut wq_head, mut wq_n) = (0usize, 0usize);
                         // AP TX priority (soak 2026-11-10: DNS answers lost / 2-s tails behind a saturating download):
@@ -4023,6 +4030,24 @@ fn cm5_p10_probe() {
                                             last_wan_try = now();
                                             wan_retries = 0;
                                         }
+                                        ok &= wok;
+                                    }
+                                    // step 10: the Wi-Fi AP last (a forward apply stops at an earlier failure; a revert
+                                    // re-applies everything it can). A Wi-Fi change always waits for the owner's confirm.
+                                    if (ok || plan.revert) && plan.changed & cfgd::CH_WIFI != 0 {
+                                        rtwdog::pet(now(), freq); // PBKDF2 + the SAE element + the bounce hold the loop (bounded)
+                                        let r = cfgd::with_device(|d| apply_wifi_live(&artstore::Plain::new(d), chosen_cs, &mut pmk, &mut gtk, &mut ap)).flatten();
+                                        let wok = r.is_some();
+                                        if let Some(_dflt) = r {
+                                            // deliveries queued for the old BSS's stations are void (they re-join and re-key)
+                                            wq_n = 0;
+                                            pq_n = 0;
+                                            #[cfg(feature = "mcserve")]
+                                            {
+                                                setup_live = _dflt; // the unclaimed reminder names the setup credential only while it runs
+                                            }
+                                        }
+                                        rtwdog::pet(now(), freq);
                                         ok &= wok;
                                     }
                                     if plan.changed & !cfgd::LIVE_CAPABLE != 0 {
@@ -5004,7 +5029,7 @@ fn cm5_p10_probe() {
                                         // Factory station: while the unit is UNCLAIMED, repeat the setup credential line every 5 min
                                         // (a capture that missed power-on no longer needs a reboot); never once an owner exists.
                                         #[cfg(feature = "mcserve")]
-                                        if let Some(c) = &setup {
+                                        if let Some(c) = setup.as_ref().filter(|_| setup_live) {
                                             if !mcserve::claimed() && now().wrapping_sub(cred_reprint_at) > 300 * freq {
                                                 cred_reprint_at = now();
                                                 let mut qb = [0u8; 64];
@@ -7133,6 +7158,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = cfgd::live_selftest(); // sealed-config / live-apply step 6: the live engine (mock executors)
         let _ = cfgd::policy_selftest(); // step 7: the live policy executor + the owner-address probe (F-e)
         let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
+        let _ = wifilive::selftest(); // step 10: the Wi-Fi executor (derive first, the BSS bounce, keys wiped, LKG revert)
         let _ = apcore::selftest();
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
@@ -14366,6 +14392,153 @@ impl wanlive::WanPort for MetalWan<'_> {
     fn start(&mut self, mode: &hal::WanMode) -> bool {
         arch_aarch64::uplink::wan_start(arch_aarch64::uplink::Nic::End0, &[8, 8, 8, 8], mode, self.up);
         arch_aarch64::uplink::pppoe_auth_failed()
+    }
+}
+
+/// Step 10 (sealed-config / live apply): the live Wi-Fi executor. Resolve FIRST, exactly as the boot chooses — the
+/// bundle's wifi section (verified by cfgd; one that does not parse is REFUSED live), else the per-file WIFI.TXT, else
+/// the default (the build env PSK, or the per-device setup credential) — then `wifilive::apply`: derive the PMK, a TRNG
+/// GTK and the SAE element before the radio is touched, then bounce the BSS on the CURRENT chanspec. The AP address,
+/// the WAN and eth1 are never touched. Some(default credential in force) when applied; None = refused / failed.
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+fn apply_wifi_live<D: hal::BlockDev>(dev: &D, chanspec: u16, pmk: &mut [u8; 32], gtk: &mut [u8; 16], ap: &mut arch_aarch64::cyw43::ApResult) -> Option<bool> {
+    let sec_default = match option_env!("HEQK_AP_SECURITY") {
+        Some("wpa3") => wificfg::SEC_WPA3,
+        Some("wpa2") => wificfg::SEC_WPA2,
+        _ => wificfg::SEC_WPA3_TRANSITION,
+    };
+    let mut want = wifilive::resolve(cfgd::section(cfgbundle::KIND_WIFI), sec_default, || wificfg::load(dev), wifi_default);
+    let Some(w) = want.as_ref() else {
+        kprint!(" [WIFI] live apply REFUSED (the Wi-Fi section does not parse / no credential) — the AP in force is kept\n");
+        return None;
+    };
+    let (ssid_len, dflt, chan) = (w.ssid_len, w.default, w.channel);
+    let (cur, _) = arch_aarch64::cyw43::chanspec_primary(chanspec);
+    if chan != 0 && chan != cur {
+        kprint!(" [WIFI] channel {} requested — a live change stays on channel {} (a new channel applies at the next boot)\n", chan, cur);
+    }
+    let mut port = MetalWifi { ap: arch_aarch64::cyw43::ApResult::new(), #[cfg(feature = "wpa3")] prep: None };
+    let mut scratch = wifilive::Keys::new();
+    let (ok, mode) = wifilive::apply(&mut port, &mut want, chanspec, pmk, gtk, &mut scratch);
+    kprint!(" [WIFI] live apply: SSID {} bytes, security {} — {}\n", ssid_len,
+        match mode { Some(0) => "WPA2-PSK", Some(1) => "WPA3-SAE", Some(_) => "WPA3 transition", None => "-" },
+        if ok { "BSS re-started on the same channel, stations re-join; waits for the owner's confirm" } else if mode.is_none() { "REFUSED before the radio was touched (key derivation)" } else { "the BSS did NOT come up serve-ready + keyed: reverting live" });
+    #[cfg(feature = "netsvc")]
+    {
+        capabilities::set_wifi_ap(port.ap.up_ok && port.ap.ssid_ok && ok);
+        #[cfg(feature = "wpa3")]
+        capabilities::set_wpa3(ok && arch_aarch64::cyw43::ap_security() != arch_aarch64::cyw43::SEC_WPA2);
+    }
+    if !ok {
+        return None;
+    }
+    *ap = port.ap;
+    #[cfg(feature = "mcserve")]
+    unsafe {
+        let n = &mut *core::ptr::addr_of_mut!(NET);
+        let k = (ssid_len as usize).min(32);
+        n.ssid = [0; 32];
+        n.ssid[..k].copy_from_slice(&want.as_ref().map_or([0; 32], |w| w.ssid)[..k]);
+        n.ssid_len = k as u8;
+        n.setup_ap = dflt;
+    }
+    Some(dflt)
+}
+
+/// The boot's default AP credential (no Wi-Fi configuration at all): the build env PSK on bench images, else the
+/// per-device setup credential derived from the SRK (none without an OTP-backed SRK: refused).
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+fn wifi_default() -> Option<wifilive::Want> {
+    let build_psk: &[u8] = match option_env!("HEQK_AP_PSK") { Some(s) => s.as_bytes(), None => b"" };
+    let mut w = wifilive::Want { ssid: [0; 32], ssid_len: 0, pass: [0; 64], pass_len: 0, security: wificfg::SEC_DEFAULT, max_clients: 0, channel: 0, default: true };
+    if build_psk.len() >= 8 {
+        let n = build_psk.len().min(64);
+        w.ssid[..7].copy_from_slice(b"heqk-ap");
+        w.ssid_len = 7;
+        w.pass[..n].copy_from_slice(&build_psk[..n]);
+        w.pass_len = n as u8;
+    } else {
+        #[cfg(feature = "hboot")]
+        {
+            let mut c = seal_srk().and_then(|k| apcred::derive(&k))?;
+            w.ssid[..apcred::SSID_LEN].copy_from_slice(&c.ssid);
+            w.ssid_len = apcred::SSID_LEN as u8;
+            w.pass[..apcred::PSK_LEN].copy_from_slice(&c.psk);
+            w.pass_len = apcred::PSK_LEN as u8;
+            hal::wpaauth::wipe(&mut c.psk);
+        }
+        #[cfg(not(feature = "hboot"))]
+        return None;
+    }
+    w.security = match option_env!("HEQK_AP_SECURITY") {
+        Some("wpa3") => wificfg::SEC_WPA3,
+        Some("wpa2") => wificfg::SEC_WPA2,
+        _ => wificfg::SEC_WPA3_TRANSITION,
+    };
+    Some(w)
+}
+
+/// The metal side of the Wi-Fi executor (the CYW43455 AP only: never the WAN, never eth1, never a firmware download).
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+struct MetalWifi {
+    ap: arch_aarch64::cyw43::ApResult,
+    #[cfg(feature = "wpa3")]
+    prep: Option<arch_aarch64::cyw43::SecPrep>,
+}
+#[cfg(all(feature = "cm5", feature = "p15-write"))]
+impl wifilive::WifiPort for MetalWifi {
+    fn pmk(&mut self, pass: &[u8], ssid: &[u8], out: &mut [u8; 32]) -> bool {
+        wifilive::derive_pmk(pass, ssid, out)
+    }
+    fn gtk(&mut self, out: &mut [u8; 16]) -> bool {
+        for k in 0..2 {
+            match arch_aarch64::rng200::next_word_strict() {
+                Some(w) => out[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+                None => return false,
+            }
+        }
+        true
+    }
+    fn prepare_security(&mut self, mode: u8, ssid: &[u8], pass: &[u8]) -> Option<u8> {
+        #[cfg(feature = "wpa3")]
+        {
+            let p = arch_aarch64::cyw43::ap_security_prepare(mode, ssid, pass)?;
+            let m = p.mode();
+            self.prep = Some(p);
+            Some(m)
+        }
+        #[cfg(not(feature = "wpa3"))]
+        {
+            let _ = (mode, ssid, pass);
+            Some(wificfg::SEC_WPA2)
+        }
+    }
+    fn stop(&mut self) -> bool {
+        arch_aarch64::cyw43::ap_stop()
+    }
+    fn forget_stations(&mut self) {
+        #[cfg(feature = "wpa3")]
+        arch_aarch64::cyw43::ap_sae_forget_all();
+    }
+    fn install_security(&mut self, ssid: &[u8], pass: &[u8]) {
+        #[cfg(feature = "wpa3")]
+        if let Some(p) = self.prep.take() {
+            let _ = arch_aarch64::cyw43::ap_security_install(p, ssid, pass);
+        }
+        #[cfg(not(feature = "wpa3"))]
+        let _ = (ssid, pass);
+    }
+    fn set_max_clients(&mut self, n: u8) {
+        arch_aarch64::cyw43::ap_set_max_clients(n as u32);
+    }
+    fn start(&mut self, ssid: &[u8], chanspec: u16) -> bool {
+        let (ch, _) = arch_aarch64::cyw43::chanspec_primary(chanspec);
+        arch_aarch64::cyw43::ap_start(ssid, ch as u32, chanspec, false, &mut self.ap);
+        self.ap.serve_ready()
+    }
+    fn install_gtk(&mut self, gtk: &[u8; 16]) -> bool {
+        self.ap.gtk_set = arch_aarch64::cyw43::ap_install_gtk(gtk, 1);
+        self.ap.gtk_set
     }
 }
 
