@@ -516,6 +516,32 @@ fn sta_mfpc(m2: &[u8], body_off: usize) -> Option<bool> {
     Some(st == hal::lansvcabi::ST_OK && o[0] != 0)
 }
 
+/// D4 step 5c: one station SAE Authentication frame body → its checked facts, walked in the EL0 server. `None` = the
+/// server faulted (the AP rejects the attempt and forgets the station's SAE state). Only public bytes cross: the
+/// body the station sent and the AP's H2E flag; the record back holds the station's own scalar / element / confirm.
+/// Both IO regions are still scrubbed after the call, so the page never carries one station's frame into the next.
+#[cfg(feature = "mctls")]
+fn sta_sae(body: &[u8], h2e_ok: bool) -> Option<hal::saewire::Msg> {
+    use hal::saewire as w;
+    if el0::server().is_none() {
+        unsafe { IN_KERNEL += 1 };
+        return Some(w::parse(body, h2e_ok));
+    }
+    // the caller trims to the event's own length; an over-long body is refused whole, never truncated to fit
+    if body.len() > w::BODY_MAX {
+        return Some(w::dropped(w::R_TOO_LONG));
+    }
+    let r = wan_call::<{ w::REC_LEN }>(hal::lansvcabi::CMD_STA_SAE, &[h2e_ok as u8], body);
+    if let Some(s) = el0::server() {
+        s.scrub(hal::lansvcabi::IN_OFF, 1 + body.len());
+        s.scrub(hal::lansvcabi::OUT_OFF, w::REC_LEN);
+    }
+    let (st, mut o) = r?;
+    let m = if st == hal::lansvcabi::ST_OK { w::decode(&o) } else { w::dropped(w::R_BAD_RECORD) };
+    hal::wpaauth::wipe(&mut o);
+    Some(m)
+}
+
 /// Route the DHCP server's parse (step 2b) and the WAN control parsers (step 3) through `el0-lansvc` (called once
 /// at boot, before any client is served or the uplink comes up).
 pub fn install_dhcp() {
@@ -535,6 +561,7 @@ pub fn install_dhcp() {
         arch_aarch64::wanparse::EL0_MFPC = Some(sta_mfpc);
         arch_aarch64::wanparse::EL0_STA_M2 = Some(sta_m2);
         arch_aarch64::wanparse::EL0_STA_M4 = Some(sta_m4);
+        arch_aarch64::wanparse::EL0_SAE = Some(sta_sae);
     };
 }
 
@@ -773,6 +800,214 @@ pub fn selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak + CHAP Challenge + IPv6CP Request classification identical, 3b-v the AC's LCP Nak/Reject identical, 5a EAPOL-Key M2 + RSNE MFP identical, 5b M2/M4 PTK + MIC (AKM 2 and 8) identical, tampering refused, PMK/PTK wiped from the IO page={}\n",
         if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe
+    ));
+    pass
+}
+
+/// [P-lansvc-sae] ADR 0050 D4 step 5c: the WPA3-SAE station-frame walk runs in `el0-lansvc`; the kernel keeps the
+/// state machine and every secret. Proves: the Annex J.10 peer commit decodes in EL0 to values that give the J.10
+/// PMK; a full exchange (hunting-and-pecking and H2E) through the EL0 path gives the station's PMK and the SAME AP
+/// commit / PMK as the in-kernel walk; malformed commits (another group, scalar = r, element off the curve,
+/// truncated, a body over IN_MAX) are refused with no state left; an event buffer far longer than IN_MAX is trimmed
+/// to the event's own length and accepted; a server fault rejects that attempt, forgets the station and the next
+/// exchange succeeds; the IO page holds no SAE material afterwards (in / out regions zero, neither the PMK nor the
+/// passphrase anywhere on the page).
+#[cfg(all(feature = "mctls", feature = "wpa3"))]
+pub fn sae_selftest() -> bool {
+    use arch_aarch64::wanparse;
+    use hal::saewire as w;
+    fn unhex<const N: usize>(h: &str) -> [u8; N] {
+        let b = h.as_bytes();
+        let v = |c: u8| match c { b'0'..=b'9' => c - b'0', b'a'..=b'f' => c - b'a' + 10, _ => 0 };
+        let mut o = [0u8; N];
+        for i in 0..N {
+            o[i] = v(b[2 * i]) << 4 | v(b[2 * i + 1]);
+        }
+        o
+    }
+    fn commit_body(s: &sae::Sae, h2e: bool) -> [u8; 109] {
+        let mut c = [0u8; 109];
+        c[0] = 3;
+        c[2] = 1;
+        c[4] = if h2e { 126 } else { 0 };
+        c[6] = 19;
+        c[8..40].copy_from_slice(&s.own_scalar);
+        c[40..104].copy_from_slice(&s.own_element);
+        c[104..109].copy_from_slice(&[255, 3, 92, 20, 0]); // H2E: Rejected Groups = {20}
+        c
+    }
+    /// One station exchange against `tab`; `el0` = through the hook (sae_respond) or the in-kernel walk (on_frame).
+    /// Some((AP commit scalar, AP PMK, station PMK)).
+    fn exchange(tab: &mut sae::SaeAp, el0: bool, pt: Option<&sae::PT>, ap: &[u8; 6], sta: &[u8; 6], pw: &[u8]) -> Option<([u8; 32], [u8; 32], [u8; 32])> {
+        let mut ctr = 0u8;
+        let mut rnd = || {
+            ctr = ctr.wrapping_add(1);
+            Some([ctr; 32])
+        };
+        let mut st = match pt {
+            Some(p) => {
+                let mut s = sae::Sae::new_h2e(p, sta, ap, &[0x31; 32], &[0x47; 32]).ok()?;
+                s.set_rejected_groups(&[20, 0]);
+                s
+            }
+            None => sae::Sae::new(pw, sta, ap, &[0x31; 32], &[0x47; 32]).ok()?,
+        };
+        let c = commit_body(&st, pt.is_some());
+        let cl = if pt.is_some() { 109 } else { 104 };
+        let mut out = [None, None];
+        let mut step = |tab: &mut sae::SaeAp, body: &[u8], out: &mut [Option<sae::Out>; 2]| {
+            if el0 { wanparse::sae_respond(tab, 0, ap, sta, pt, pw, body, &mut rnd, out) } else { tab.on_frame(0, ap, sta, pt, pw, body, &mut rnd, out) }
+        };
+        if step(tab, &c[..cl], &mut out) != sae::Event::Committed {
+            return None;
+        }
+        let a = out[0]?;
+        let mut asc = [0u8; 32];
+        asc.copy_from_slice(&a.body[8..40]);
+        st.process_commit(&asc, a.body[40..104].try_into().ok()?).ok()?;
+        let (sc, cf) = st.confirm();
+        let mut k = [0u8; 40];
+        k[0] = 3;
+        k[2] = 2;
+        k[6..8].copy_from_slice(&sc.to_le_bytes());
+        k[8..40].copy_from_slice(&cf);
+        if step(tab, &k, &mut out) != sae::Event::Accepted {
+            return None;
+        }
+        let r = out[0]?;
+        st.check_confirm(u16::from_le_bytes([r.body[6], r.body[7]]), r.body[8..40].try_into().ok()?).ok()?;
+        Some((asc, tab.pmk_for(sta, 1)?, st.pmk))
+    }
+    fn fault_hook(_: &[u8], _: bool) -> Option<w::Msg> {
+        let s = el0::server()?;
+        (s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0 != hal::lansvcabi::ST_PANIC).then_some(w::MSG0)
+    }
+
+    install_dhcp();
+    if el0::server().is_none() {
+        arch_aarch64::_print(format_args!(" [P-lansvc-sae] FAIL — the EL0 LAN-services server is not loaded\n"));
+        return false;
+    }
+    let (ap, sta) = ([0x76u8, 0x0d, 0x02, 0xf8, 0xd2, 0xda], [0xa8u8, 0x29, 0x48, 0x33, 0x73, 0x52]);
+    let pw: &[u8] = b"bench passphrase";
+
+    // (1) Annex J.10: the peer commit walked in EL0 → the J.10 KCK/PMK chain in the kernel
+    let kat = (|| {
+        let (a1, a2) = ([0x4d, 0x3f, 0x2f, 0xff, 0xe3, 0x87], [0xa5, 0xd8, 0xaa, 0x95, 0x8e, 0x3c]);
+        let mut c = [0u8; 104];
+        c[0] = 3;
+        c[2] = 1;
+        c[6] = 19;
+        c[8..40].copy_from_slice(&unhex::<32>("591b96f3397fb945100848e7b550543b6720d88337ee93fc49fd6df7e08b5223"));
+        c[40..104].copy_from_slice(&unhex::<64>("e71b9bb048d3873f20556953a96c91536fd8ee6ca9b4a68a148b056a909be03e83ae208f60f8ef5537858074db06687032399862999b511e0a1552a5fea317c2"));
+        let m = wanparse::sae_parse(&c, false)?;
+        if m.kind != w::K_COMMIT || m.scalar[..] != c[8..40] || m.element[..] != c[40..104] {
+            return None;
+        }
+        let mut s = sae::Sae::new(b"mekmitasdigoat", &a1, &a2, &unhex("992465fd3daa3c60aa6565b7f62a2a7f2e12dd12f198faf4fbed89d7ff1ace94"),
+            &unhex("9507a90f777a044d6a0830b91ea3d5dd70bece44e1acffb86983b5e1bf9fb322")).ok()?;
+        s.process_commit(&m.scalar, &m.element).ok()?;
+        Some(s.pmk == unhex::<32>("4e4dfab1a2dd8ac1a91790f953faaa452ae5c6873ab75b63605ba663f8a7fe59")
+            && s.pmkid == unhex::<16>("8747a600eea3f9f22475df58ca1e5498"))
+    })()
+    .unwrap_or(false);
+
+    // (2) full exchanges through EL0 == the in-kernel walk (same AP commit, same PMK, station agrees)
+    let (_, c0, _, _, _) = stats();
+    let mut ta = sae::SaeAp::new();
+    let mut tb = sae::SaeAp::new();
+    let e_hnp = exchange(&mut ta, true, None, &ap, &sta, pw);
+    let k_hnp = exchange(&mut tb, false, None, &ap, &sta, pw);
+    let hnp = matches!((e_hnp, k_hnp), (Some(e), Some(k)) if e == k && e.1 == e.2);
+    let (_, c1, _, _, _) = stats();
+    let via_el0 = c1 >= c0 + 2; // commit + confirm went through the server
+    let pt = sae::derive_pt(b"HookProbe-Setup", pw, None);
+    let mut tc = sae::SaeAp::new();
+    let h2e = pt.as_ref().and_then(|p| exchange(&mut tc, true, Some(p), &ap, &sta, pw)).is_some_and(|e| e.1 == e.2);
+    let pmk = e_hnp.map(|e| e.1).unwrap_or([0; 32]);
+
+    // (3) malformed commits refused, no state left
+    let mut ctr = 0x80u8;
+    let mut rnd = || {
+        ctr = ctr.wrapping_add(1);
+        Some([ctr; 32])
+    };
+    let Ok(st) = sae::Sae::new(pw, &sta, &ap, &[0x31; 32], &[0x47; 32]) else { return false };
+    let good = commit_body(&st, false);
+    let mut td = sae::SaeAp::new();
+    let mut out = [None, None];
+    let mut send = |td: &mut sae::SaeAp, body: &[u8], out: &mut [Option<sae::Out>; 2]| wanparse::sae_respond(td, 0, &ap, &sta, None, pw, body, &mut rnd, out);
+    let mut g = good;
+    g[6] = 20;
+    let bad_group = send(&mut td, &g[..104], &mut out) == sae::Event::Refused(77) && out[0].is_some_and(|o| o.body[4..8] == [77, 0, 19, 0]);
+    let mut sr = good;
+    sr[8..40].copy_from_slice(&unhex::<32>("ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551"));
+    let bad_scalar = send(&mut td, &sr[..104], &mut out) == sae::Event::Dropped(w::reason(w::R_SCALAR));
+    let mut eo = good;
+    eo[103] ^= 1;
+    let off_curve = send(&mut td, &eo[..104], &mut out) == sae::Event::Dropped(w::reason(w::R_ELEMENT));
+    let truncated = send(&mut td, &good[..70], &mut out) == sae::Event::Dropped(w::reason(w::R_COMMIT_LEN));
+    let mut big = [0u8; 2100];
+    big[..104].copy_from_slice(&good[..104]);
+    let (_, c2, _, _, _) = stats();
+    let oversized = send(&mut td, &big, &mut out) == sae::Event::Dropped(w::reason(w::R_TOO_LONG)) && stats().1 == c2;
+    let malformed = bad_group && bad_scalar && off_curve && truncated && oversized && td.active() == 0;
+
+    // (4) the AP hands a 3000-byte receive buffer: trimmed to the event's own length, the commit is accepted
+    let mut rx = [0u8; 3000];
+    rx[44..48].copy_from_slice(&((24 + 104) as u32).to_be_bytes());
+    rx[72] = 0xb0;
+    rx[76..82].copy_from_slice(&ap);
+    rx[82..88].copy_from_slice(&sta);
+    rx[96..200].copy_from_slice(&good[..104]);
+    rx[200..260].fill(0xa5); // the rest of the SDPCM buffer: not part of the frame
+    let trimmed = match arch_aarch64::apparse::sae_auth_body(&rx, 0, &ap) {
+        Ok((s, b0, b1)) => s == sta && b1 - b0 == 104 && send(&mut td, &rx[b0..b1], &mut out) == sae::Event::Committed && td.active() == 1,
+        Err(_) => false,
+    };
+    let untrimmed_refused = send(&mut sae::SaeAp::new(), &rx[96..], &mut out) == sae::Event::Dropped(w::reason(w::R_TOO_LONG));
+
+    // (5) a server fault on the confirm: rejected, nothing sent, the station's state forgotten; then recovered
+    let (_, _, f0, _, _) = stats();
+    let mut te = sae::SaeAp::new();
+    let mut ctr2 = 0u8;
+    let mut rnd2 = || {
+        ctr2 = ctr2.wrapping_add(1);
+        Some([ctr2; 32])
+    };
+    let committed = wanparse::sae_respond(&mut te, 0, &ap, &sta, None, pw, &good[..104], &mut rnd2, &mut out) == sae::Event::Committed && te.active() == 1;
+    let mut k = [0u8; 40];
+    k[0] = 3;
+    k[2] = 2;
+    k[6] = 1;
+    unsafe { wanparse::EL0_SAE = Some(fault_hook) };
+    let ev = wanparse::sae_respond(&mut te, 0, &ap, &sta, None, pw, &k, &mut rnd2, &mut out);
+    unsafe { wanparse::EL0_SAE = Some(sta_sae) };
+    let (_, _, f1, _, _) = stats();
+    let fault = committed && ev == sae::Event::Dropped(w::reason(w::R_FAULT)) && out[0].is_none() && te.active() == 0
+        && te.pmk_for(&sta, 1).is_none() && f1 == f0 + 1;
+    let recovered = exchange(&mut te, true, None, &ap, &sta, pw).is_some_and(|e| e.1 == pmk);
+
+    // (6) no SAE material on the IO page: in / out regions zero, neither the PMK nor the passphrase anywhere
+    let wiped = el0::server().is_some_and(|s| {
+        use hal::lansvcabi::*;
+        let zero = |off: usize, n: usize| (0..n).step_by(64).all(|o| s.is_zero(off + o, (n - o).min(64)));
+        let mut win = [0u8; 512];
+        let mut found = false;
+        let mut off = 0;
+        while off < IO_SIZE {
+            let n = win.len().min(IO_SIZE - off);
+            s.read(off, &mut win[..n]);
+            found |= win[..n].windows(32).any(|x| x == pmk) || win[..n].windows(pw.len()).any(|x| x == pw);
+            off += 448;
+        }
+        zero(IN_OFF, 1 + w::BODY_MAX) && zero(OUT_OFF, w::REC_LEN) && !found && pmk != [0; 32]
+    });
+
+    let pass = kat && hnp && via_el0 && h2e && malformed && trimmed && untrimmed_refused && fault && recovered && wiped;
+    arch_aarch64::_print(format_args!(
+        " [P-lansvc-sae] {} — ADR 0050 D4 step 5c: the WPA3-SAE station-frame walk (group, scalar range, element on the curve, Rejected Groups, confirm format) runs in el0-lansvc, the state machine and every secret stay in the kernel: Annex J.10 peer commit via EL0 -> J.10 PMK/PMKID={} | hunting-and-pecking exchange via EL0 == in-kernel walk (AP commit + PMK), station agrees={} (EL0 calls made={}) | H2E exchange via EL0={} | refused with no state: other group (77 + group 19), scalar = r, element off the curve, truncated, body over IN_MAX={} | a 3000-B receive buffer trimmed to the event length is accepted={} untrimmed refused={} | server fault -> attempt rejected, nothing sent, station forgotten={} next exchange OK={} | IO page holds no SAE material (in/out zero, no PMK, no passphrase)={}\n",
+        if pass { "PASS" } else { "FAIL" }, kat, hnp, via_el0, h2e, malformed, trimmed, untrimmed_refused, fault, recovered, wiped
     ));
     pass
 }

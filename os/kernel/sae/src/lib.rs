@@ -575,8 +575,9 @@ impl SaeAp {
         self.peers.iter().filter(|p| p.st != St::Free).count()
     }
 
-    /// One received SAE Authentication frame body from `peer` (we are `own`). `rnd` yields 32 random bytes
-    /// (fail-closed: `None` drops the frame). Returns what happened and the frame(s) to send.
+    /// One received SAE Authentication frame body from `peer` (we are `own`), walked in-kernel by `hal::saewire`
+    /// then answered by `on_msg` — the host-test / fallback entry. The AP's live path walks the body in el0-lansvc
+    /// (ADR 0050 D4 step 5c) and calls `on_msg` with the checked record.
     pub fn on_frame(
         &mut self,
         now: u64,
@@ -588,54 +589,47 @@ impl SaeAp {
         rnd: &mut dyn FnMut() -> Option<[u8; 32]>,
         out: &mut [Option<Out>; 2],
     ) -> Event {
+        let m = hal::saewire::parse(body, pt.is_some());
+        self.on_msg(now, own, peer, pt, password, &m, rnd, out)
+    }
+
+    /// One checked SAE frame (`hal::saewire::Msg`) from `peer`. `rnd` yields 32 random bytes (fail-closed: `None`
+    /// drops the frame). Returns what happened and the frame(s) to send. Every secret (password, PWE / PT, rand,
+    /// KCK, PMK) stays here; the peer scalar and element are re-validated by the curve library before use.
+    pub fn on_msg(
+        &mut self,
+        now: u64,
+        own: &[u8; 6],
+        peer: &[u8; 6],
+        pt: Option<&ProjectivePoint>,
+        password: &[u8],
+        m: &hal::saewire::Msg,
+        rnd: &mut dyn FnMut() -> Option<[u8; 32]>,
+        out: &mut [Option<Out>; 2],
+    ) -> Event {
+        use hal::saewire as w;
         out[0] = None;
         out[1] = None;
-        if body.len() < 6 || u16::from_le_bytes([body[0], body[1]]) != AUTH_ALG_SAE {
-            return Event::Dropped("not SAE");
-        }
-        let seq = u16::from_le_bytes([body[2], body[3]]);
-        let status = u16::from_le_bytes([body[4], body[5]]);
-        let rest = &body[6..];
-        match seq {
-            1 => {
-                let h2e = status == ST_SAE_HASH_TO_ELEMENT;
-                if (h2e && pt.is_none()) || (rest.len() >= 2 && u16::from_le_bytes([rest[0], rest[1]]) != GROUP_P256) {
+        match m.kind {
+            w::K_REFUSE_GROUP => {
+                let mut o = Out::new(1, ST_UNSUPPORTED_GROUP);
+                o.put(&GROUP_P256.to_le_bytes());
+                out[0] = Some(o);
+                Event::Refused(ST_UNSUPPORTED_GROUP)
+            }
+            w::K_COMMIT => {
+                let h2e = m.h2e;
+                if h2e && pt.is_none() {
+                    // re-checked here: H2E only when this AP offers it
                     let mut o = Out::new(1, ST_UNSUPPORTED_GROUP);
                     o.put(&GROUP_P256.to_le_bytes());
                     out[0] = Some(o);
                     return Event::Refused(ST_UNSUPPORTED_GROUP);
                 }
-                if status != ST_SUCCESS && !h2e {
-                    return Event::Dropped("commit status");
-                }
-                // group ‖ scalar ‖ element [‖ H2E: Rejected Groups / token container elements] (no anti-clogging
-                // token is ever requested here, so none precedes the scalar)
-                if rest.len() < 2 + 32 + 64 || (!h2e && rest.len() != 2 + 32 + 64) {
-                    return Event::Dropped("commit length");
-                }
-                let mut rejected = [0u8; 32];
-                let mut rej_len = 0usize;
-                let mut ei = 98;
-                while ei + 2 <= rest.len() {
-                    let (id, l) = (rest[ei], rest[ei + 1] as usize);
-                    if ei + 2 + l > rest.len() {
-                        return Event::Dropped("commit element length");
-                    }
-                    if id == 255 && l >= 1 && rest[ei + 2] == 92 {
-                        let g = &rest[ei + 3..ei + 2 + l];
-                        // downgrade protection: a "rejected" group we actually support means a forged rejection
-                        if g.len() % 2 != 0 || g.chunks(2).any(|c| u16::from_le_bytes([c[0], c[1]]) == GROUP_P256) || g.len() > 32 {
-                            return Event::Dropped("rejected groups list names a supported group");
-                        }
-                        rejected[..g.len()].copy_from_slice(g);
-                        rej_len = g.len();
-                    }
-                    ei += 2 + l;
-                }
-                let mut sc = [0u8; 32];
-                sc.copy_from_slice(&rest[2..34]);
-                let mut el = [0u8; 64];
-                el.copy_from_slice(&rest[34..98]);
+                let rej_len = (m.rej_len as usize).min(32);
+                let rejected = m.rej;
+                let sc = m.scalar;
+                let el = m.element;
                 let Some(i) = self.slot(peer, now, true) else { return Event::Dropped("peer table full") };
                 // a retransmitted commit in Committed resends our commit (same values); a new one restarts
                 if self.peers[i].st == St::Committed {
@@ -652,10 +646,10 @@ impl SaeAp {
                 }
                 let mut sae = None;
                 for _ in 0..4 {
-                    let (Some(r), Some(m)) = (rnd(), rnd()) else { return Event::Dropped("no entropy") };
+                    let (Some(r), Some(mk)) = (rnd(), rnd()) else { return Event::Dropped("no entropy") };
                     let made = match (h2e, pt) {
-                        (true, Some(p)) => Sae::new_h2e(p, own, peer, &r, &m),
-                        _ => Sae::new(password, own, peer, &r, &m),
+                        (true, Some(p)) => Sae::new_h2e(p, own, peer, &r, &mk),
+                        _ => Sae::new(password, own, peer, &r, &mk),
                     };
                     match made {
                         Ok(s) => {
@@ -685,14 +679,10 @@ impl SaeAp {
                 self.peers[i].t_ms = now;
                 Event::Committed
             }
-            2 => {
-                if status != ST_SUCCESS || rest.len() != 2 + 32 {
-                    return Event::Dropped("confirm format");
-                }
+            w::K_CONFIRM => {
                 let Some(i) = self.slot(peer, now, false) else { return Event::Dropped("confirm from an unknown peer") };
-                let psc = u16::from_le_bytes([rest[0], rest[1]]);
-                let mut c = [0u8; 32];
-                c.copy_from_slice(&rest[2..34]);
+                let psc = m.send_confirm;
+                let c = m.confirm;
                 let p = &mut self.peers[i];
                 let Some(s) = p.sae.as_mut() else { return Event::Dropped("no state") };
                 if s.check_confirm(psc, &c).is_err() {
@@ -710,7 +700,7 @@ impl SaeAp {
                 p.t_ms = now;
                 Event::Accepted
             }
-            _ => Event::Dropped("sequence"),
+            _ => Event::Dropped(w::reason(m.reason)),
         }
     }
 }
@@ -792,6 +782,57 @@ pub fn selftest() -> (bool, bool, bool, bool) {
     (j10, e2e, ptk, h2e)
 }
 
+/// ADR 0050 D4 step 5c (`[P-sae]`): the curve-library-free station-frame checks in `hal::saewire` (what el0-lansvc
+/// runs) agree with this crate's own: element on the curve <=> `decode_element`, scalar in range <=> `scalar_from_be`
+/// and not 0 / 1, over real commit elements and corrupted ones; malformed commits (another group, scalar = r, element
+/// off the curve, truncated, oversized) are refused and leave no peer state.
+pub fn wire_selftest() -> bool {
+    use hal::saewire as w;
+    let (a, b) = ([2u8, 0, 0, 0, 0, 1], [2u8, 0, 0, 0, 0, 2]);
+    let mut ok = true;
+    for k in 1..4u8 {
+        let Ok(s) = Sae::new(b"wire selftest", &a, &b, &[k.wrapping_mul(17).wrapping_add(3); 32], &[k.wrapping_mul(29).wrapping_add(5); 32]) else { return false };
+        let mut e = s.own_element;
+        ok &= w::on_curve(&e) && decode_element(&e).is_some();
+        e[(k as usize * 13) % 64] ^= 1 << k;
+        ok &= w::on_curve(&e) == decode_element(&e).is_some();
+        let sc = s.own_scalar;
+        let lib = |x: &[u8; 32]| scalar_from_be(x).is_some_and(|v| !bool::from(v.is_zero()) && v != Scalar::ONE);
+        ok &= w::scalar_in_range(&sc) == lib(&sc);
+        let mut one = [0u8; 32];
+        one[31] = 1;
+        ok &= !w::scalar_in_range(&one) && !lib(&one) && !w::scalar_in_range(&[0xff; 32]) && !lib(&[0xff; 32]);
+    }
+    let Ok(st) = Sae::new(b"wire selftest", &b, &a, &[0x31; 32], &[0x47; 32]) else { return false };
+    let mut c = [0u8; 104];
+    c[0] = 3;
+    c[2] = 1;
+    c[6] = 19;
+    c[8..40].copy_from_slice(&st.own_scalar);
+    c[40..104].copy_from_slice(&st.own_element);
+    let mut tab = SaeAp::new();
+    let mut ctr = 0u8;
+    let mut rnd = || {
+        ctr = ctr.wrapping_add(1);
+        Some([ctr; 32])
+    };
+    let mut out = [None, None];
+    let mut refused = |body: &[u8], tab: &mut SaeAp| -> bool {
+        let e = tab.on_frame(0, &a, &b, None, b"wire selftest", body, &mut rnd, &mut out);
+        matches!(e, Event::Dropped(_) | Event::Refused(_)) && tab.active() == 0
+    };
+    let mut g = c;
+    g[6] = 20;
+    let mut sr = c;
+    sr[8..40].copy_from_slice(&[0xff, 0xff, 0xff, 0xff, 0, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17, 0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51]);
+    let mut eo = c;
+    eo[103] ^= 1;
+    let mut big = [0u8; 2100];
+    big[..104].copy_from_slice(&c);
+    ok &= refused(&g, &mut tab) && refused(&sr, &mut tab) && refused(&eo, &mut tab) && refused(&c[..90], &mut tab) && refused(&big, &mut tab);
+    ok && w::parse(&c, false).kind == w::K_COMMIT
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,6 +849,7 @@ mod tests {
     #[test]
     fn kernel_selftest() {
         assert_eq!(selftest(), (true, true, true, true));
+        assert!(wire_selftest());
     }
     #[test]
     fn annex_j10() {
