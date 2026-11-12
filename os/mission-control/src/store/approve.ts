@@ -6,7 +6,7 @@
  *
  *   title / body     what is about to happen, in plain words
  *   reason           a journal reason (≥ 3 characters), with a default the owner can keep
- *   key              a masked owner-key field (the label on the device; still needed for sign-in-level actions)
+ *   key              a masked device-password field (the label on the device; still needed for sign-in-level actions)
  *   passphrase       a masked passphrase with a repeat field (backup encryption)
  *   destructive      red confirm button (reset, rollback, removal)
  */

@@ -236,7 +236,7 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
                     <span>{x.queries.toLocaleString()} queries · {x.blocked.toLocaleString()} blocked{x.bypass > 0 ? ` · ${x.bypass} bypass signals` : ''}</span>
                     <button class="shield-remove" title="Hold all traffic of this address for 1 hour (expires on its own)"
                       onClick={async () => setMsg(await promptAndRun('hold_ip', x.ip, 3600))}>Hold 1 h</button>
-                    <button class="shield-remove" title="Pause Shield's blocklists for this device for 1 hour (owner key; bypass controls stay on)"
+                    <button class="shield-remove" title="Pause Shield's blocklists for this device for 1 hour (device password; bypass controls stay on)"
                       onClick={async () => setMsg(await promptAndRun('shield_pause', x.ip, 3600))}>Pause 1 h</button>
                   </li>
                 )}
@@ -255,7 +255,7 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
                   <span class="shield-domain">{r.name}</span>
                   <span>{QTYPE[r.qtype] ?? r.qtype} · {r.client} · {time(r.ts)} · {isBlock(r.verdict) || isBypass(r.verdict) ? <strong>{VERDICT_LABEL[r.verdict] ?? r.verdict}</strong> : (VERDICT_LABEL[r.verdict] ?? r.verdict)}</span>
                   <Show when={r.verdict === 'blocked' || r.verdict === 'blocked-cname'}>
-                    <button class="shield-remove" title="Let this name through for 1 hour (owner key required)"
+                    <button class="shield-remove" title="Let this name through for 1 hour (device password required)"
                       onClick={async () => setMsg(await promptAndRun('shield_allow', r.name, 3600))}>Allow 1 h</button>
                   </Show>
                 </li>

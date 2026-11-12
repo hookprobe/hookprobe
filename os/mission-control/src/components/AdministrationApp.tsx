@@ -80,7 +80,7 @@ const AdministrationApp: Component = () => {
   };
 
   const rotate = async () => {
-    const a = await approve({ title: 'Change the owner key?', body: 'Every session ends, including this one. Sign in again with the new key. If you lose it, only re-flashing OWNER.TXT gets you back in.', confirm: 'Change it', destructive: true, reason: {}, key: { label: 'Current owner key' } });
+    const a = await approve({ title: 'Change the device password?', body: 'Every session ends, including this one. Sign in again with the new password. If you lose it, only re-flashing OWNER.TXT gets you back in.', confirm: 'Change it', destructive: true, reason: {}, key: { label: 'Current device password' } });
     if (!a) return;
     const cur = a.key, reason = a.reason;
     const r = await post<{ ok: boolean; refused?: string; note?: string }>('/api/owner-key', { owner_key: cur, new_owner_key: newKey(), reason: reason.trim(), permanent: 'true' });
@@ -190,7 +190,7 @@ const AdministrationApp: Component = () => {
                 <div class="l0-card-foot">
                   <button class="hp-btn hp-btn--primary" disabled={sample() || !file() || (step() !== null && step() !== 'done')} onClick={() => void upload()}>Upload and verify</button>
                 </div>
-                <Show when={sample()}><p class="gate-reason">Preview: on a device this uploads, verifies and activates the pack (owner key twice).</p></Show>
+                <Show when={sample()}><p class="gate-reason">Preview: on a device this uploads, verifies and activates the pack (device password once; activation is signed with your signing key).</p></Show>
               </div>
             </Show>
 
@@ -205,15 +205,15 @@ const AdministrationApp: Component = () => {
 
             <Show when={sec() === 'identity'}>
               <div class="pcard">
-                <p class="l0-label">Owner key</p>
-                <p class="l0-card-sub">The owner key signs you in and approves every durable change. Rotating it ends every session; the device keeps only a salted verifier, never the key.</p>
-                <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>New owner key (16–128 characters)
+                <p class="l0-label">Device password</p>
+                <p class="l0-card-sub">The device password (printed on its label) signs you in and confirms everyday changes. Changing it ends every session; the device keeps only a salted verifier, never the password. Settings that change how the device connects are signed with your signing key instead.</p>
+                <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>New device password (16–128 characters)
                   <input type="password" style={field} value={newKey()} onInput={(e) => setNewKey(e.currentTarget.value)} autocomplete="new-password" /></label>
-                <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Repeat the new owner key
+                <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Repeat the new device password
                   <input type="password" style={field} value={newKey2()} onInput={(e) => setNewKey2(e.currentTarget.value)} autocomplete="new-password" /></label>
-                <Show when={newKey2() && newKey() !== newKey2()}><p class="plan-diff-warn" style={{ margin: 0 }}>The new keys differ.</p></Show>
+                <Show when={newKey2() && newKey() !== newKey2()}><p class="plan-diff-warn" style={{ margin: 0 }}>The new passwords differ.</p></Show>
                 <div class="l0-card-foot">
-                  <button class="hp-btn hp-btn--primary" disabled={sample() || newKey().trim().length < 16 || newKey().length > 128 || newKey() !== newKey2()} onClick={() => void rotate()}>Rotate owner key</button>
+                  <button class="hp-btn hp-btn--primary" disabled={sample() || newKey().trim().length < 16 || newKey().length > 128 || newKey() !== newKey2()} onClick={() => void rotate()}>Change device password</button>
                   <Show when={substrate() === 'heqk'}>
                     <button class="hp-btn" onClick={async () => { try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* go anyway */ } location.href = '/login'; }}>Sign out</button>
                   </Show>
@@ -270,7 +270,7 @@ const AdministrationApp: Component = () => {
             <Show when={sec() === 'edge'}>
               <div class="pcard" aria-label="Restart">
                 <p class="l0-label">Restart</p>
-                <p class="l0-card-sub">Restarts the device (about a minute without network). Signed settings you have staged apply on the way up. Needs a reason and your owner key.</p>
+                <p class="l0-card-sub">Restarts the device (about a minute without network). Signed settings you have staged apply on the way up. Needs a reason and your device password.</p>
                 <RestartButton sample={sample()} />
               </div>
             </Show>
