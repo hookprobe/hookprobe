@@ -190,7 +190,7 @@ const ProtectApp: Component = () => {
           <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
             Domain
             <input value={newDomain()} onInput={(e) => setNewDomain(e.currentTarget.value)} placeholder="example.com"
-              style={{ font: 'inherit', 'min-height': '40px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' }} />
+              style={{ font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' }} />
           </label>
           <Show when={sample()} fallback={
             <button class="hp-btn hp-btn--primary" disabled={!validDomain()}

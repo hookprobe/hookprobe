@@ -29,7 +29,7 @@ import { startNetworkLive } from '../store/networkLive';
 type Sec = 'edge' | 'packs' | 'signing' | 'identity' | 'ai' | 'audit' | 'feedback' | 'reset';
 const SECTIONS: [Sec, string][] = [['edge', 'Edge node'], ['packs', 'Signed packs'], ['signing', 'Signing key'], ['identity', 'Identity and access'], ['ai', 'AI models'], ['audit', 'Audit log'], ['feedback', 'Feedback and diagnostics'], ['reset', 'Factory reset']];
 const STEPS: [UploadStep, string][] = [['begin', 'Begin'], ['upload', 'Upload'], ['verify', 'Device verifies'], ['activate', 'Activate'], ['done', 'Active']];
-const field = { font: 'inherit', 'min-height': '40px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' } as const;
+const field = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' } as const;
 
 const AdministrationApp: Component = () => {
   const [sec, setSec] = createSignal<Sec>('edge');
