@@ -66,6 +66,9 @@ struct Up {
     os: bool,
     /// Q3 (set at finish): the verified configuration carries a secret (PPPoE password / any Wi-Fi).
     secret: bool,
+    /// R6 = D (set at finish): the staged content's SHA-256 (os_image: the image digest) — what the owner's activate
+    /// envelope binds.
+    digest: [u8; 32],
     #[cfg(feature = "p15-write")]
     plan: Option<crate::otaimg::Plan>,
 }
@@ -299,7 +302,7 @@ fn begin_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<B
         u64::from_le_bytes(boot_abi::sha256::digest(&m)[..8].try_into().unwrap()) | 1
     };
     end();
-    *up() = Some(Up { id, session: tag, ty, size, sha, got: 0, h: boot_abi::sha256::Hasher::new(), part: [0; 512], plen: 0, last_ms: c.now_ms, phase: Phase::Receiving, gen: 0, len: 0, os, secret: false, #[cfg(feature = "p15-write")] plan: None });
+    *up() = Some(Up { id, session: tag, ty, size, sha, got: 0, h: boot_abi::sha256::Hasher::new(), part: [0; 512], plen: 0, last_ms: c.now_ms, phase: Phase::Receiving, gen: 0, len: 0, os, secret: false, digest: [0; 32], #[cfg(feature = "p15-write")] plan: None });
     Ok(Begun { id })
 }
 
@@ -350,7 +353,21 @@ pub struct Finished {
     pub gen: u64,
     pub active_gen: u64,
     pub len: u64,
+    /// R6 = D: the staged content's SHA-256 — the activate envelope binds it (with the type code and generation).
+    pub digest: [u8; 32],
 }
+
+/// The content digest inside a pack's signature sector: POLICY.SIG has no length field (digest at 16..48, over the
+/// whole 4 KiB file); HQCSIG1 carries sha256(bundle) at 13..45; every other format carries len at 16..24 and the
+/// digest at 24..56. The same digest the owner computes over the file it signed.
+fn content_digest(ty: Ty, sig: &[u8; 512]) -> [u8; 32] {
+    match ty {
+        Ty::Policy => sig[16..48].try_into().unwrap(),
+        Ty::Config => sig[13..45].try_into().unwrap(),
+        _ => sig[24..56].try_into().unwrap(),
+    }
+}
+
 
 /// `finish`: id, seq. Digest, then the module's own verifier, then anti-rollback (gen ≥ active).
 pub fn finish(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
@@ -393,8 +410,9 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
         u.phase = Phase::Verified;
         u.gen = plan.svn;
         u.len = plan.len;
+        u.digest = plan.hash;
         u.last_ms = c.now_ms;
-        return Ok(Finished { gen: plan.svn, active_gen: svn, len: plan.len });
+        return Ok(Finished { gen: plan.svn, active_gen: svn, len: plan.len, digest: plan.hash });
     }
     let mut sig = [0u8; 512];
     let ram = ram_dev();
@@ -436,8 +454,9 @@ fn finish_inner(c: &Ctx, body: &[u8]) -> Result<Finished, &'static str> {
     u.phase = Phase::Verified;
     u.gen = gen;
     u.len = len;
+    u.digest = content_digest(u.ty, &sig);
     u.last_ms = c.now_ms;
-    Ok(Finished { gen, active_gen: active, len })
+    Ok(Finished { gen, active_gen: active, len, digest: u.digest })
 }
 
 pub struct Activated {
@@ -453,7 +472,7 @@ pub struct Activated {
     pub needs_confirm: bool,
 }
 
-/// `activate`: id, owner_key, seq. Store A/B write + readback + manifest commit + live reload.
+/// `activate`: id, envelope, seq. Store A/B write + readback + manifest commit + live reload.
 pub fn activate(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Activated, &'static str> {
     let ty = cur_code();
     let r = activate_inner(c, body, auth);
@@ -465,14 +484,17 @@ fn activate_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     let mut b = [[0u8; 192]; 2];
     let [ref mut b0, ref mut b1] = b;
     let id = form_get(body, "id", b0).and_then(id_of);
-    let key = form_get(body, "owner_key", b1).unwrap_or("");
+    let _ = (b1, auth);
     let u = mine(c, id)?;
     if u.phase != Phase::Verified {
         return Err("not verified (finish first)");
     }
-    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
-        return Err("re-authentication failed");
-    }
+    // R6 = D (operator 2026-11-12): authorised ONLY by an owner-signed HQMGMT1 envelope (UPLOAD_ACTIVATE) bound to the
+    // type code, the staged generation and the staged content digest (finish reports both). Not the owner token.
+    let mut env = [0u8; hal::mgmtabi::ENV_LEN];
+    let given = crate::mgmtenv::from_form(body, &mut env);
+    crate::mgmtenv::authorise(hal::mgmtabi::UPLOAD_ACTIVATE, code(Some(u.ty), u.os) as u64, u.gen, &u.digest, if given { &env[..] } else { &[] },
+        crate::mcauth::session_tag(c.session), c.now_ms)?;
     activate_by_id(crate::mcauth::session_tag(c.session), c.now_ms, id.unwrap_or(0))
 }
 
@@ -533,11 +555,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
     let old = artstore::active_gen(&artstore::Plain::new(&*d), p1(d), ty);
     // the content digest inside the signature sector: POLICY.SIG has no length field (digest at 16..48, over the
     // whole 4 KiB file); every other format carries len at 16..24 and the digest at 24..56
-    let mut digest: [u8; 32] = match ty {
-        Ty::Policy => sig[16..48].try_into().unwrap(),
-        Ty::Config => sig[13..45].try_into().unwrap(), // HQCSIG1: sha256(bundle) at 13..45
-        _ => sig[24..56].try_into().unwrap(),
-    };
+    let mut digest: [u8; 32] = content_digest(ty, &sig);
     let mut at_rest = None;
     let res = if !staged {
         artstore::activate(d, ty, &sig, slo + 1, gen, len, &digest)
@@ -594,7 +612,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
     }
 }
 
-/// ADR 0058 `POST /api/upload/rollback`: type, owner_key, seq. Re-activates the OTHER half of that type (the
+/// ADR 0058 `POST /api/upload/rollback`: type, envelope (R6 = D; the owner token no longer authorises it), seq. Re-activates the OTHER half of that type (the
 /// previous generation) after verifying it again with the type's own verifier; staged types apply at the next
 /// boot. Owner re-authentication; POLICY never goes below its persisted generation floor.
 pub fn rollback(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Activated, &'static str> {
@@ -608,21 +626,32 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     let mut b = [[0u8; 192]; 2];
     let [ref mut b0, ref mut b1] = b;
     let ty = form_get(body, "type", b0).and_then(Ty::from_name).ok_or("type")?;
-    let key = form_get(body, "owner_key", b1).unwrap_or("");
+    let _ = (b1, auth);
     if up().is_some() {
         return Err("an upload is in flight (finish or abort it first)");
     }
-    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
-        return Err("re-authentication failed");
-    }
+    // R6 = D (operator 2026-11-12): authorised ONLY by an owner-signed HQMGMT1 envelope (UPLOAD_ROLLBACK) bound to the
+    // type code and the generation it rolls back TO. The signature, device, boot and sequence first (nothing touched);
+    // the target generation once the store says what the previous half is. Not the owner token.
+    let tag = crate::mcauth::session_tag(c.session);
+    let mut env = [0u8; hal::mgmtabi::ENV_LEN];
+    let given = crate::mgmtenv::from_form(body, &mut env);
+    let e = crate::mgmtenv::verify(hal::mgmtabi::UPLOAD_ROLLBACK, ty as u64, if given { &env[..] } else { &[] }).map_err(|why| {
+        crate::mgmtenv::journal(hal::mgmtabi::UPLOAD_ROLLBACK, false, 0, why, tag, c.now_ms);
+        why
+    })?;
     let d = dev().ok_or("no artifact store")?;
     let opk = artstore::key_for(ty).ok_or("no operator key")?;
+    let target = artstore::rollback_target(&*d, ty, &opk).ok_or("nothing to roll back to (no verified previous generation)")?;
+    if e.generation != target || e.digest != [0; 32] {
+        crate::mgmtenv::journal(hal::mgmtabi::UPLOAD_ROLLBACK, false, target, crate::mgmtenv::OTHER_TARGET, tag, c.now_ms);
+        return Err(crate::mgmtenv::OTHER_TARGET);
+    }
     let old = artstore::active_gen(&artstore::Plain::new(&*d), p1(d), ty);
     let res = artstore::rollback(d, ty, &opk);
     if res.is_ok() && ty.staged() {
         artstore::refresh(&*d, None);
     }
-    let tag = crate::mcauth::session_tag(c.session);
     let mut reason = [0u8; 64];
     let mut rl = 0;
     if let Ok(gen) = res {
@@ -674,7 +703,16 @@ pub fn render(w: &mut crate::mcstate::JsonBuf) {
     w.raw("],\"in_flight\":");
     match up() {
         Some(u) => {
-            let _ = write!(w, "{{\"id\":\"{:016x}\",\"type\":\"{}\",\"size\":{},\"received\":{},\"verified\":{}}}", u.id, if u.os { "os_image" } else { u.ty.info().name }, u.size, u.got, u.phase == Phase::Verified);
+            let _ = write!(w, "{{\"id\":\"{:016x}\",\"type\":\"{}\",\"size\":{},\"received\":{},\"verified\":{}", u.id, if u.os { "os_image" } else { u.ty.info().name }, u.size, u.got, u.phase == Phase::Verified);
+            // R6 = D (additive): once verified, what the activate envelope binds (type code, generation, digest)
+            if u.phase == Phase::Verified {
+                let _ = write!(w, ",\"type_code\":{},\"generation\":{},\"digest\":\"", code(Some(u.ty), u.os), u.gen);
+                for b in u.digest {
+                    let _ = write!(w, "{:02x}", b);
+                }
+                w.raw("\"");
+            }
+            w.raw("}");
         }
         None => w.raw("null"),
     }
@@ -725,6 +763,11 @@ pub fn selftest() -> bool {
     // operator key + store on the sparse test disk; the owner journal in RAM
     let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x42; 32]));
     crate::policysig::selftest_key(Some(*kp.pk));
+    // R6 = D: a TEST owner key K_own signs the activate / rollback envelopes (restored afterwards)
+    let kown = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x6b; 32]));
+    let saved_owner = (crate::anchor::owner(), crate::anchor::owner_gen());
+    crate::anchor::install_owner(Some(*kown.pk), 1);
+    crate::mgmtenv::test_reset();
     let disk = artstore::test_disk();
     install(disk);
     crate::ownerapi::install_ram(&[0x31u8; 32]);
@@ -792,10 +835,23 @@ pub fn selftest() -> bool {
     seq += 1;
     let early = activate(&c, f!("id={:016x}&owner_key={}&seq={}", id, k, seq), &mut auth).err() == Some("not verified (finish first)");
     seq += 1;
-    let fin = finish(&c, f!("id={:016x}&seq={}", id, seq)).is_ok_and(|f| f.gen == 3 && f.active_gen == 0 && f.len == body.len() as u64);
+    let finr = finish(&c, f!("id={:016x}&seq={}", id, seq)).map(|f| (f.gen, f.active_gen, f.len, f.digest));
+    let fin = finr.is_ok_and(|f| f.0 == 3 && f.1 == 0 && f.2 == body.len() as u64 && f.3 == boot_abi::sha256::digest(body));
     let staged_only = crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x71]) == crate::devpolicy::Pol::Full;
+    let dg = finr.map_or([0; 32], |f| f.3);
+    let mut eh = [0u8; 2 * hal::mgmtabi::ENV_LEN];
+    // R6 = D: the owner token alone no longer activates; an envelope for another generation is refused; the owner's
+    // envelope bound to (devices, 3, digest) activates
     seq += 1;
-    let act = activate(&c, f!("id={:016x}&owner_key={}&seq={}", id, k, seq), &mut auth).is_ok_and(|a| a.gen == 3) && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x71]) == crate::devpolicy::Pol::Quarantine;
+    let token_only = activate(&c, f!("id={:016x}&owner_key={}&seq={}", id, k, seq), &mut auth).err() == Some(crate::mgmtenv::REASONS[0]);
+    crate::mgmtenv::test_sign_hex(&kown, hal::mgmtabi::UPLOAD_ACTIVATE, Ty::Devices as u64, 4, dg, &mut eh);
+    seq += 1;
+    let other_gen = activate(&c, f!("id={:016x}&envelope={}&seq={}", id, core::str::from_utf8(&eh).unwrap_or(""), seq), &mut auth).err() == Some(crate::mgmtenv::OTHER_TARGET);
+    crate::mgmtenv::test_sign_hex(&kown, hal::mgmtabi::UPLOAD_ACTIVATE, Ty::Devices as u64, 3, dg, &mut eh);
+    seq += 1;
+    let act = token_only && other_gen
+        && activate(&c, f!("id={:016x}&envelope={}&seq={}", id, core::str::from_utf8(&eh).unwrap_or(""), seq), &mut auth).is_ok_and(|a| a.gen == 3)
+        && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x71]) == crate::devpolicy::Pol::Quarantine;
     let mut audited = false;
     crate::ownerjournal::for_each_artifact(&mut |r| audited |= r.target() == b"devices" && r.value == 1);
     // anti-rollback: an older generation verifies but is refused at finish
@@ -826,9 +882,11 @@ pub fn selftest() -> bool {
     crate::policysig::selftest_key(None);
     crate::devpolicy::load_text(b"");
     crate::ownerjournal::clear();
+    crate::anchor::install_owner(saved_owner.0, saved_owner.1);
+    crate::mgmtenv::test_reset();
     let pass = bad_type && too_big && reauth && out_of_order && chunks_ok && early && fin && staged_only && act && audited && rollback && cross && tampered && foreign && cfg.iter().all(|&x| x);
     arch_aarch64::_print(format_args!(
-        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate: store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={} a config bundle is handed to the live engine (policy-only: applies live, no reboot, auto-commit; management binding: live + owner confirm)={}\n",
+        " [P-upload] {} — ADR 0056 signed data-pack upload (begin/chunk/finish/activate over the owner session): unknown type / oversize / wrong owner key refused={} out-of-order chunk refused={} chunks staged={} activate before finish refused={} finish = sha256 + the module's own verifier (gen 3)={} nothing applied until activate={} activate (R6 = D: owner token alone refused, envelope for another generation refused, the owner's envelope activates): store A/B + live reload (device quarantined)={} durable journal audit record={} older generation refused (anti-rollback)={} cross-type pack refused={} tampered byte refused={} foreign Origin refused={} config upload: staging sectors unchanged + no secret on disk={} sealed at rest, audit = ciphertext digest={} no device key: secret refused for persistence={} no device key: non-secret stored signed={} a config bundle is handed to the live engine (policy-only: applies live, no reboot, auto-commit; management binding: live + owner confirm)={}\n",
         if pass { "PASS" } else { "FAIL" }, bad_type && too_big && reauth, out_of_order, chunks_ok, early, fin, staged_only, act, audited, rollback, cross, tampered, foreign,
         cfg[0], cfg[1], cfg[2], cfg[3], cfg[4]
     ));
@@ -980,16 +1038,23 @@ fn run_one(c: &Ctx, auth: &mut crate::mcauth::Auth, cont: &[u8], ty: &str, seq: 
         let _ = write!(w, "id={:016x}&seq={}", id, *seq);
         w.len
     };
-    let r = finish(c, &fb[..n]).map(|f| f.gen);
+    let r = finish(c, &fb[..n]).map(|f| (f.gen, f.digest));
     if r.is_err() || !act {
         end();
-        return r;
+        return r.map(|f| f.0);
     }
+    let (gen, dg) = r.unwrap_or((0, [0; 32]));
+    // R6 = D: the activate envelope, signed with the self-test's K_own (installed by `selftest`)
+    let kown = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x6b; 32]));
+    let mut eh = [0u8; 2 * hal::mgmtabi::ENV_LEN];
+    let tc = Ty::from_name(ty).map_or(0xff, |t| t as u64);
+    crate::mgmtenv::test_sign_hex(&kown, hal::mgmtabi::UPLOAD_ACTIVATE, tc, gen, dg, &mut eh);
+    let mut ab = [0u8; 400];
     let n = {
-        let mut w = crate::mcstate::JsonBuf::new(&mut fb);
+        let mut w = crate::mcstate::JsonBuf::new(&mut ab);
         *seq += 1;
-        let _ = write!(w, "id={:016x}&owner_key=owner-key-for-the-upload-test&seq={}", id, *seq);
+        let _ = write!(w, "id={:016x}&envelope={}&seq={}", id, core::str::from_utf8(&eh).unwrap_or(""), *seq);
         w.len
     };
-    activate(c, &fb[..n], auth).map(|a| a.gen)
+    activate(c, &ab[..n], auth).map(|a| a.gen)
 }
