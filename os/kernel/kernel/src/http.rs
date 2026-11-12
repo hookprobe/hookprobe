@@ -225,6 +225,73 @@ fn hsh_guard(req: &Req, tag: [u8; 4], now_ms: u64) -> &'static str {
 }
 
 /// `set_cookie` sentinel: expire the session cookie (logout).
+/// GET /api/config (additive): what the HQCFG1 bundle in force holds, so an edit of one setting can rebuild the WHOLE
+/// bundle (a section left out is removed). Per section: present + the SHA-256 of its bytes; the policy text; the
+/// non-secret wan / wifi keys — an explicit whitelist, values exactly as in the section, and only when the device's own
+/// parser accepts the section. A secret (pppoe_pass, psk) is never written: only `<key>_set`. Read-only; the route sits
+/// behind the owner session like every /api/ read.
+fn render_cfg_view(w: &mut JsonBuf) {
+    use crate::cfgbundle::{KIND_POLICY, KIND_WAN, KIND_WIFI};
+    use core::fmt::Write;
+    let sec = crate::cfgd::section;
+    let dg = crate::cfgd::section_digests(); // [policy, wan, wifi]
+    w.raw(",\"sections\":{");
+    for (i, (k, n)) in [(KIND_WAN, "wan"), (KIND_WIFI, "wifi"), (KIND_POLICY, "policy")].into_iter().enumerate() {
+        let _ = write!(w, "{}\"{}\":{{\"present\":{},\"digest\":", if i > 0 { "," } else { "" }, n, sec(k).is_some());
+        if sec(k).is_some() {
+            w.raw("\"");
+            for x in dg[(i + 1) % 3] {
+                let _ = write!(w, "{:02x}", x);
+            }
+            w.raw("\"}");
+        } else {
+            w.raw("null}");
+        }
+    }
+    w.raw("},\"policy_text\":");
+    match sec(KIND_POLICY).and_then(|b| core::str::from_utf8(b).ok()) {
+        Some(t) => w.string(t),
+        None => w.raw("null"),
+    }
+    let wan = sec(KIND_WAN).filter(|b| {
+        let mut f = [0u8; 512];
+        b.len() + 7 <= f.len() && {
+            f[..7].copy_from_slice(b"HQWAN1\n");
+            f[7..7 + b.len()].copy_from_slice(b);
+            let ok = hal::parse_wan_cfg(&f).is_ok() && hal::parse_wan_link(&f).is_ok();
+            hal::wpaauth::wipe(&mut f);
+            ok
+        }
+    });
+    let wifi = sec(KIND_WIFI).filter(|b| crate::wificfg::parse(b).map(|mut c| hal::wpaauth::wipe(&mut c.psk)).is_ok());
+    w.raw(",\"wan_keys\":");
+    cfg_keys(w, wan, &["mode", "ip", "gw", "dns", "pppoe_user", "vlan", "vlan_outer", "pcp", "mgmt_vlan", "mgmt", "mgmt_ip", "mgmt_gw", "mgmt_floor"], "pppoe_pass");
+    w.raw(",\"wifi_keys\":");
+    cfg_keys(w, wifi, &["ssid", "security", "channel", "max_clients"], "psk");
+}
+
+/// `{"<whitelisted key>":"<value>",…,"<secret>_set":bool}` from a canonical key=value section (null when absent).
+fn cfg_keys(w: &mut JsonBuf, body: Option<&[u8]>, allow: &[&str], secret: &str) {
+    let Some(body) = body else { return w.raw("null") };
+    w.raw("{");
+    let mut set = false;
+    for ln in body.split(|&c| c == b'\n') {
+        let Some(eq) = ln.iter().position(|&c| c == b'=') else { continue };
+        let (k, v) = (&ln[..eq], &ln[eq + 1..]);
+        if k == secret.as_bytes() {
+            set = !v.is_empty();
+        } else if let (Some(k), Ok(v)) = (allow.iter().find(|a| a.as_bytes() == k), core::str::from_utf8(v)) {
+            w.string(k);
+            w.raw(":");
+            w.string(v);
+            w.raw(",");
+        }
+    }
+    w.raw("\"");
+    w.raw(secret);
+    w.raw(if set { "_set\":true}" } else { "_set\":false}" });
+}
+
 pub const CLEAR_COOKIE: [u8; 32] = [b'-'; 32];
 
 /// Route one request against the device state, enforcing owner authentication (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)).
@@ -746,6 +813,8 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 hx(w, &c.digest);
                 let _ = write!(w, "\",\"owner_enrolled\":{}}}", c.owner_enrolled);
             }
+            // UI request 2026-11-12 (additive): what the bundle in force holds (sections, policy text, non-secret keys)
+            render_cfg_view(w);
             // design §3.8 (additive, before the closing brace): configuration at rest
             let ar = crate::artstore::at_rest();
             // Q3 (additive): a bundle in force held in RAM only (no device key) is never presented as protected or persisted
@@ -985,6 +1054,75 @@ pub fn https_redirect(r: &Req, out: &mut [u8]) -> usize {
     let _ = write!(w, "HTTP/1.1 308 Permanent Redirect\r\nLocation: https://{}{}{}{}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
         host, r.path, if r.query.is_empty() { "" } else { "?" }, r.query);
     if w.overflow { 0 } else { w.len }
+}
+
+/// `[P-cfgview]` — GET /api/config reports what the bundle in force holds (UI request 2026-11-12): owner session only;
+/// with no bundle every section is absent (present=false, digest / policy_text / keys null); with sections posed, each
+/// digest equals the SHA-256 computed here, policy_text is the section text JSON-escaped, the whitelisted keys are the
+/// section's own values, a secret (PPPoE password, PSK) appears only as `*_set` (the response is grepped for both),
+/// quotes / backslashes / control bytes are escaped, and a section the device's parser refuses reports null keys.
+#[cfg(not(feature = "cm5"))]
+pub fn cfgview_selftest() -> bool {
+    use crate::cfgbundle::{KIND_POLICY, KIND_WAN, KIND_WIFI};
+    use core::fmt::Write;
+    let has = |hay: &[u8], needle: &str| hay.windows(needle.len()).any(|w| w == needle.as_bytes());
+    let st = McState::new();
+    let salt = [7u8; 16];
+    let mut auth = Auth::new(Some(mcauth::Owner { salt, verifier: mcauth::verifier_for(&salt, b"hq-owner-selftest-token") }));
+    let mut sc = [0u8; 8192];
+    let login = handle(&parse(b"POST /api/login HTTP/1.1\r\nContent-Length: 29\r\n\r\ntoken=hq-owner-selftest-token").unwrap(), &st, &mut auth, 0, || Some([0x5A; 16]), &mut sc).status == 303;
+    let mut get = |authed: bool, sc: &mut [u8]| -> (u16, usize) {
+        let raw: &[u8] = if authed { b"GET /api/config HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n" } else { b"GET /api/config HTTP/1.1\r\n\r\n" };
+        let r = handle(&parse(raw).unwrap(), &st, &mut auth, 1, || Some([0; 16]), sc);
+        (r.status, match r.body { Body::Scratch(n) => n, _ => 0 })
+    };
+    let owner_only = login && get(false, &mut sc).0 == 401;
+    // per-file-only device: nothing from a bundle
+    crate::cfgd::test_sections(Some(&[]));
+    let (s0, n0) = get(true, &mut sc);
+    let none = s0 == 200
+        && has(&sc[..n0], "\"sections\":{\"wan\":{\"present\":false,\"digest\":null},\"wifi\":{\"present\":false,\"digest\":null},\"policy\":{\"present\":false,\"digest\":null}},\"policy_text\":null,\"wan_keys\":null,\"wifi_keys\":null,");
+    crate::cfgd::test_sections(None);
+    // a bundle with all three sections
+    let wan = &b"mode=pppoe\npppoe_user=u@isp\npppoe_pass=s3cr3t-PPP\nvlan=35\nmgmt_vlan=100\nmgmt=static\nmgmt_ip=192.168.200.2/24\nmgmt_gw=192.168.200.1\nmgmt_floor=192.168.200.0/24\n"[..];
+    let wifi = &b"ssid=Ho\"me\\Net\npsk=Wifi-PSK-test-9\nsecurity=wpa3-transition\nchannel=40\n"[..];
+    let pol = &b"acl A seq 10 allow tcp any any 443\nacl A default drop\ninterface lan acl A in\n"[..];
+    crate::cfgd::test_sections(Some(&[(KIND_WAN, wan), (KIND_WIFI, wifi), (KIND_POLICY, pol)]));
+    let (s1, n1) = get(true, &mut sc);
+    let r = &sc[..n1];
+    let mut exp = [0u8; 512];
+    let mut e = JsonBuf::new(&mut exp);
+    e.raw("\"sections\":{");
+    for (i, (n, b)) in [("wan", wan), ("wifi", wifi), ("policy", pol)].into_iter().enumerate() {
+        let _ = write!(e, "{}\"{}\":{{\"present\":true,\"digest\":\"", if i > 0 { "," } else { "" }, n);
+        for x in boot_abi::sha256::digest(b) {
+            let _ = write!(e, "{:02x}", x);
+        }
+        e.raw("\"}");
+    }
+    e.raw("},\"policy_text\":\"acl A seq 10 allow tcp any any 443\\nacl A default drop\\ninterface lan acl A in\\n\",");
+    let el = e.len;
+    let digests = core::str::from_utf8(&exp[..el]).is_ok_and(|x| has(r, x));
+    let keys = has(r, r#""wan_keys":{"mode":"pppoe","pppoe_user":"u@isp","vlan":"35","mgmt_vlan":"100","mgmt":"static","mgmt_ip":"192.168.200.2/24","mgmt_gw":"192.168.200.1","mgmt_floor":"192.168.200.0/24","pppoe_pass_set":true},"wifi_keys":{"ssid":"Ho\"me\\Net","security":"wpa3-transition","channel":"40","psk_set":true}"#);
+    let no_secret = s1 == 200 && !has(r, "s3cr3t-PPP") && !has(r, "Wifi-PSK-test-9") && !has(r, "\"psk\"") && !has(r, "\"pppoe_pass\"");
+    crate::cfgd::test_sections(None);
+    // a section the device's own parser refuses (no psk; a WAN key it does not know) reports null keys
+    crate::cfgd::test_sections(Some(&[(KIND_WAN, &b"mode=dhcp\nbogus=1\n"[..]), (KIND_WIFI, &b"ssid=x\n"[..])]));
+    let (_, n2) = get(true, &mut sc);
+    let refused = has(&sc[..n2], "\"wan\":{\"present\":true,") && has(&sc[..n2], "\"policy_text\":null,\"wan_keys\":null,\"wifi_keys\":null,");
+    crate::cfgd::test_sections(None);
+    // RFC 8259 escaping of every byte class the writer may meet
+    let mut eb = [0u8; 32];
+    let mut ew = JsonBuf::new(&mut eb);
+    ew.string("a\"b\\c\u{1}\n");
+    let el = ew.len;
+    let esc = &eb[..el] == br#""a\"b\\c\u0001\n""#;
+    let pass = owner_only && none && digests && keys && no_secret && refused && esc;
+    arch_aarch64::_print(format_args!(
+        " [P-cfgview] {} — GET /api/config shows what the HQCFG1 bundle in force holds (UI 2026-11-12): owner session only={} per-file device: present=false, digest/policy_text/keys null={} section digests = sha256(section) + policy_text escaped={} whitelisted wan/wifi keys as in the bundle={} PPPoE password / PSK never in the response (only *_set)={} parser-refused section -> null keys={} JSON escaping (quote, backslash, control)={}\n",
+        if pass { "PASS" } else { "FAIL" }, owner_only, none, digests, keys, no_secret, refused, esc
+    ));
+    pass
 }
 
 /// `[P-mc]` — the on-device Mission Control server logic, proven without a network: parse, route,
