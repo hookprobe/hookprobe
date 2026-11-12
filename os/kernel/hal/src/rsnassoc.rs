@@ -216,6 +216,12 @@ pub struct StaleGuard {
     n: u8,
 }
 
+impl Default for StaleGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StaleGuard {
     pub const fn new() -> StaleGuard {
         StaleGuard { at_ms: 0, prev: 0, armed: false, seen: [0; 8], n: 0 }
@@ -270,6 +276,12 @@ pub fn leave_predates_sae(accepted: bool, age_ms: u64) -> bool {
 pub struct FwPmksa {
     e: [([u8; 6], [u8; 16]); FwPmksa::MAX],
     n: u8,
+}
+
+impl Default for FwPmksa {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl FwPmksa {
