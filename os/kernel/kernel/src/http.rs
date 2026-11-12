@@ -208,6 +208,22 @@ fn render_actions(w: &mut JsonBuf) {
     w.raw("]}");
 }
 
+/// `POST /api/hsh` write guards (kept out of `handle`): "" = pass, else the refusal.
+#[cfg(feature = "hsh")]
+#[inline(never)]
+fn hsh_guard(req: &Req, tag: [u8; 4], now_ms: u64) -> &'static str {
+    let seq = query_u32(req.query, "seq").unwrap_or(0) as u64;
+    if !crate::actionapi::origin_ok(req.origin, req.host) || !crate::mcauth::csrf_ok(req.session, req.csrf) {
+        "origin or csrf"
+    } else if !crate::actions::rate_ok(tag, now_ms) {
+        "rate limited: at most 20 writes a minute per session"
+    } else if !crate::actions::accept_seq(tag, seq) {
+        "replay"
+    } else {
+        ""
+    }
+}
+
 /// `set_cookie` sentinel: expire the session cookie (logout).
 pub const CLEAR_COOKIE: [u8; 32] = [b'-'; 32];
 
@@ -317,21 +333,17 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
     // mgmtabi::dispatch (EL1) verifies the envelope — the carrier carries no authority.
     #[cfg(feature = "hsh")]
     if req.post && req.path == "/api/hsh" {
-        // same guards as every other /api write: the owner session (above), Origin, CSRF
-        if !crate::actionapi::origin_ok(req.origin, req.host) || !crate::mcauth::csrf_ok(req.session, req.csrf) {
-            return json(scratch, |w| w.raw("{\"ok\":false,\"refused\":\"origin or csrf\"}")).with_status(403);
-        }
-        // the write rate limit + the session seq (`?seq=`, /api/session next_seq), as every other owner write
+        // same guards as every other /api write: the owner session (above), Origin, CSRF, the write rate limit and the
+        // session seq (`?seq=`, /api/session next_seq)
         let tag = crate::mcauth::session_tag(req.session);
-        let seq = req.query.split('&').find_map(|kv| kv.strip_prefix("seq=")).and_then(|v| v.parse().ok()).unwrap_or(0);
-        let why = if !crate::actions::rate_ok(tag, now_ms) { "rate limited: at most 20 writes a minute per session" } else if !crate::actions::accept_seq(tag, seq) { "replay" } else { "" };
+        let why = hsh_guard(req, tag, now_ms);
         if !why.is_empty() {
             return json(scratch, |w| {
-                w.raw("{\"ok\":false,\"refused\":");
-                w.string(why);
-                w.raw("}");
+                w.raw("{\"ok\":false,\"refused\":\"");
+                w.raw(why);
+                w.raw("\"}");
             })
-            .with_status(if why == "replay" { 409 } else { 400 });
+            .with_status(match why.len() { 6 => 409, 14 => 403, _ => 400 });
         }
         let mut lines = req.body.split(|&b| b == b'\n').map(|l| l.strip_suffix(b"\r").unwrap_or(l));
         let line = lines.next().unwrap_or(b"");
@@ -340,7 +352,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         let env_ok = lines.next().is_some_and(|l| crate::mgmtenv::unhex(l, &mut env));
         let mut text = [0u8; 2048];
         // journaled as an hsh op (command words only, never arguments or the envelope) inside hsh::web
-        let n = crate::hsh::web(line, if env_ok { &env[..] } else { &[] }, crate::mcauth::session_tag(req.session), now_ms, &mut text);
+        let n = crate::hsh::web(line, if env_ok { &env[..] } else { &[] }, tag, now_ms, &mut text);
         let k = n.min(scratch.len());
         scratch[..k].copy_from_slice(&text[..k]);
         return Response { status: 200, ctype: "text/plain; charset=utf-8", body: Body::Scratch(k), location: None, set_cookie: None };
