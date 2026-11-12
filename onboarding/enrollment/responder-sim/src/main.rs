@@ -25,6 +25,7 @@ mod entropy;
 // The kernel secure-channel module, verbatim. `crate::entropy` inside it resolves to the
 // shim above; `boot_abi` + the RustCrypto crates resolve to this crate's deps.
 #[path = "../../../../os/kernel/kernel/src/securechannel.rs"]
+#[allow(dead_code)] // the shared module also carries the device-side record layer (rekey, W4) this sim does not use
 mod securechannel;
 // The kernel M6 export wire codec, verbatim (pure, no crate deps).
 #[path = "../../../../os/kernel/kernel/src/exportwire.rs"]

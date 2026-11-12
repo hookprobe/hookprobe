@@ -7182,6 +7182,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = ownerjournal::sweep_selftest(); // release plan A9: replay under 3000 random corruptions
         let _ = rpmb::selftest();
         let _ = seal::inplace_selftest();
+        let _ = seal::nonce_selftest(); // W4: HQKSEAL1 nonce uniqueness across reboots / key lifecycles
         let _ = artstore::cfgseal_selftest(); // sealed-config step 5: migration + scrub + crash injection
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
@@ -7290,6 +7291,8 @@ pub extern "C" fn kmain() -> ! {
         // metal (the metal half is the host MSSP-sim, deferred).
         controlplane::cp_selftest();
         let _ = g19::selftest();
+        let _ = securechannel::rekey_selftest(); // W4: in-session Noise rekey on the record layer
+        let _ = g19::rekey_selftest(); // W4: rekey + continuity on the G19 tunnel
     }
 
     // --- M4.4 (P19-edge): the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's

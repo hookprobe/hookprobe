@@ -27,6 +27,12 @@ Record plaintext = `type(1) ‖ body`:
 | `0x03` | ASSIGN | PoP→dev | `inner_v4(4) ‖ plen(1) ‖ dns_v4(4) ‖ mtu LE16` |
 | `0x04` | ADDR_REQ | dev→PoP | empty. Send right after the handshake (it also teaches the PoP the data endpoint). |
 | `0x05` | CLOSE | both | `reason(1)`: 1 shutdown, 3 rekey (2 is reserved) |
+| `0x06` | CAPS | both | `flags(1)`: bit 0 = "I follow in-session rekey epochs". Each side rekeys its own direction only after the peer's CAPS; the PoP answers a device's CAPS with its own. Older peers drop the unknown type, so they are never rekeyed at. |
+
+In-session rekey (W4): a record's LE64 seq carries the key epoch in its high 32 bits and the record index in its
+low 32 bits. Epoch e+1 uses `REKEY(k_e)` (Noise §11.3). A sender moves on at 2^20 records, 1 GiB or 1 h. A
+receiver keeps the previous epoch for 5 s, then wipes it, and refuses older epochs. It moves forward only on a
+record whose tag verifies (`securechannel::RecordTx` / `RecordRx`, shared with the device).
 
 PoP policy, enforced here:
 - **Anti-spoofing:** DATA must have src = the device's assigned inner address.

@@ -8,6 +8,8 @@
 //!   PRK  = HKDF-Extract(salt = policy_digest, ikm = SRK)
 //!   k_enc = HKDF-Expand(PRK, "HQKSEAL1-enc")   (CTR keystream key)
 //!   k_mac = HKDF-Expand(PRK, "HQKSEAL1-mac")   (HMAC tag key)
+//!   k_siv = HKDF-Expand(PRK, "HQKSEAL1-siv")   (synthetic-nonce key, W4 2026-11-12)
+//!   nonce = HMAC(k_siv, "HQKSEAL1-siv2" ‖ boot salt ‖ seq ‖ cntpct ‖ header[0..96] ‖ plaintext)[0..16]
 //!   ct   = CTR(k_enc, nonce, plaintext)         (fresh per-seal nonce, AUD-STO-1)
 //!   tag  = HMAC(k_mac, header[0..96] || ct)     (Encrypt-then-MAC; nonce in header)
 //!
@@ -93,6 +95,7 @@ impl Policy {
 pub struct SealKey {
     k_enc: [u8; 32],
     k_mac: [u8; 32],
+    k_siv: [u8; 32],
 }
 
 impl SealKey {
@@ -103,6 +106,7 @@ impl SealKey {
         SealKey {
             k_enc: kdf::hkdf_expand32(&prk, b"HQKSEAL1-enc"),
             k_mac: kdf::hkdf_expand32(&prk, b"HQKSEAL1-mac"),
+            k_siv: kdf::hkdf_expand32(&prk, b"HQKSEAL1-siv"),
         }
     }
 }
@@ -113,7 +117,7 @@ impl Drop for SealKey {
         for b in self.k_enc.iter_mut() {
             unsafe { core::ptr::write_volatile(b, 0) };
         }
-        for b in self.k_mac.iter_mut() {
+        for b in self.k_mac.iter_mut().chain(self.k_siv.iter_mut()) {
             unsafe { core::ptr::write_volatile(b, 0) };
         }
         core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
@@ -191,7 +195,16 @@ fn boot_salt() -> Option<[u8; 32]> {
     Some(s)
 }
 
-fn gen_nonce() -> [u8; NONCE_LEN] {
+/// The per-seal inputs that make a nonce fresh: the per-boot TRNG salt (absent in QEMU / when the TRNG fails),
+/// a within-boot strictly-monotonic counter and the cycle counter.
+#[derive(Clone, Copy)]
+struct Fresh {
+    salt: Option<[u8; 32]>,
+    seq: u64,
+    t: u64,
+}
+
+fn fresh() -> Fresh {
     use core::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -199,14 +212,29 @@ fn gen_nonce() -> [u8; NONCE_LEN] {
     unsafe {
         core::arch::asm!("mrs {}, cntpct_el0", out(reg) t, options(nomem, nostack));
     }
-    let mut h = Hasher::new();
-    h.update(b"HQKSEAL1-nonce");
-    if let Some(salt) = boot_salt() {
-        h.update(&salt);
+    Fresh { salt: boot_salt(), seq, t }
+}
+
+/// W4 (2026-11-12) — a SYNTHETIC per-seal nonce: `HMAC(k_siv, "HQKSEAL1-siv2" ‖ salt ‖ seq ‖ cntpct ‖ header ‖ pt)`.
+/// The old nonce was `SHA-256(salt ‖ seq ‖ cntpct)`: without the TRNG salt (QEMU, or a TRNG fault on metal) the
+/// counter and the cycle counter restart at every boot, so two boots could seal DIFFERENT plaintexts under the same
+/// key with the same nonce — CTR keystream reuse. Now a nonce can only repeat for the same key when the header AND
+/// the plaintext are identical too, and then the two blobs are identical (equality is all an observer learns):
+/// keystream reuse across reboots, re-seals and key lifecycles is excluded by construction, with or without the
+/// salt. The salt + counters still make re-seals of the same plaintext look unrelated. `head` = header[0..96] with
+/// the nonce field still zero (it carries device, floor, policy digest, lengths and the in-place generation).
+/// The nonce stays in the MAC-covered header, so unseal is unchanged (and older blobs still unseal).
+fn siv_nonce(k_siv: &[u8; 32], head: &[u8], pt: &[u8], f: &Fresh) -> [u8; NONCE_LEN] {
+    let mut pre = [0u8; 14 + 32 + 16 + TAG_COVER];
+    pre[..13].copy_from_slice(b"HQKSEAL1-siv2");
+    if let Some(s) = f.salt {
+        pre[13] = 1;
+        pre[14..46].copy_from_slice(&s);
     }
-    h.update(&seq.to_le_bytes());
-    h.update(&t.to_le_bytes());
-    let d = h.finish();
+    pre[46..54].copy_from_slice(&f.seq.to_le_bytes());
+    pre[54..62].copy_from_slice(&f.t.to_le_bytes());
+    pre[62..].copy_from_slice(&head[..TAG_COVER]);
+    let d = kdf::hmac_sha256_2(k_siv, &pre, pt);
     let mut n = [0u8; NONCE_LEN];
     n.copy_from_slice(&d[..NONCE_LEN]);
     n
@@ -219,6 +247,10 @@ pub fn seal(
     plaintext: &[u8],
     out: &mut SealBlob,
 ) -> Result<(), SealErr> {
+    seal_with(srk, policy, plaintext, out, &fresh())
+}
+
+fn seal_with(srk: &[u8; 32], policy: &Policy, plaintext: &[u8], out: &mut SealBlob, f: &Fresh) -> Result<(), SealErr> {
     if plaintext.len() > SEAL_MAX_PT {
         return Err(SealErr::TooLong);
     }
@@ -241,7 +273,7 @@ pub fn seal(
 
     // AUD-STO-1: fresh per-seal nonce, written into the MAC-covered header so it is
     // authenticated and available to unseal. Binds the CTR keystream to this seal.
-    let nonce = gen_nonce();
+    let nonce = siv_nonce(&key.k_siv, &b[..TAG_COVER], plaintext, f);
     b[O_NONCE..O_NONCE + NONCE_LEN].copy_from_slice(&nonce);
 
     // Ciphertext = CTR(k_enc, nonce, plaintext).
@@ -368,9 +400,12 @@ pub fn seal_in_place(key: &[u8; 32], policy: &Policy, buf: &mut [u8], pt_len: us
     buf[O_PDIGEST..O_PDIGEST + 32].copy_from_slice(&pd);
     put_u32(buf, O_PTLEN, pt_len as u32);
     put_u32(buf, O_CTLEN, pt_len as u32);
-    let nonce = gen_nonce();
-    buf[O_NONCE..O_NONCE + NONCE_LEN].copy_from_slice(&nonce);
     put_u64(buf, O_GEN, gen);
+    let nonce = {
+        let (head, rest) = buf.split_at(SEAL_HDR_LEN);
+        siv_nonce(&k.k_siv, head, &rest[..pt_len], &fresh())
+    };
+    buf[O_NONCE..O_NONCE + NONCE_LEN].copy_from_slice(&nonce);
     kdf::ctr_xor_nonce(&k.k_enc, &nonce, &mut buf[SEAL_HDR_LEN..SEAL_HDR_LEN + pt_len]);
     let (head, rest) = buf.split_at_mut(SEAL_HDR_LEN);
     let tag = kdf::hmac_sha256_2(&k.k_mac, &head[..TAG_COVER], &rest[..pt_len]);
@@ -454,5 +489,75 @@ pub fn inplace_selftest() -> bool {
     let pass = sealed && hidden && flips && other_type && other_dev && ok_rt;
     arch_aarch64::_print(format_args!(" [P-sealcfg] {} — config sealed at rest, step 1: 16.6 KiB in-place seal/unseal round trip={} the secret and the plaintext are gone from the blob, generation readable={} a flipped ciphertext / generation / nonce byte refused={} another type's key refused={} another device refused={}\n",
         if pass { "PASS" } else { "FAIL" }, ok_rt, hidden, flips, other_type, other_dev));
+    pass
+}
+
+/// `[P-sealnonce]` (W4): HQKSEAL1 nonce uniqueness across simulated reboots and key lifecycles. Worst case first:
+/// two "boots" with NO TRNG salt and the counters restarted at the same values seal different plaintexts — the old
+/// `SHA-256(seq ‖ cntpct)` nonce repeats there, the synthetic nonce does not; the same plaintext gives the same
+/// blob (equality only, no keystream reuse); a salt change, a re-seal after an SVN-floor bump and a new SRK each
+/// give a fresh nonce; 64 live seals of one plaintext in this boot are pairwise distinct; a re-used (transplanted)
+/// nonce and a flipped nonce byte fail the tag (nothing decrypted).
+#[cfg(all(feature = "netsvc", not(feature = "cm5")))] // the QEMU self-test sequence only
+pub fn nonce_selftest() -> bool {
+    let srk = [0x3cu8; 32];
+    let mut pol = cfg_policy(0x4242);
+    pol.svn_floor = 7;
+    let mut a = SealBlob::new();
+    let mut b = SealBlob::new();
+    let nonce = |x: &SealBlob| -> [u8; NONCE_LEN] { x.bytes[O_NONCE..O_NONCE + NONCE_LEN].try_into().unwrap() };
+    let boot = Fresh { salt: None, seq: 0, t: 1_000 };
+    let legacy = |f: &Fresh| -> [u8; 32] {
+        let mut h = Hasher::new();
+        h.update(b"HQKSEAL1-nonce");
+        h.update(&f.seq.to_le_bytes());
+        h.update(&f.t.to_le_bytes());
+        h.finish()
+    };
+    // (1) two reboots without a TRNG, identical counters, different plaintexts (same length, same key)
+    let ok_seal = seal_with(&srk, &pol, b"snapshot boot #1 counters=0001", &mut a, &boot).is_ok()
+        && seal_with(&srk, &pol, b"snapshot boot #2 counters=0002", &mut b, &boot).is_ok();
+    let legacy_reuse = legacy(&boot) == legacy(&boot);
+    let reboot_distinct = ok_seal && nonce(&a) != nonce(&b);
+    // (2) the same plaintext under identical inputs: identical blobs (CTR keystream reuse leaks nothing new)
+    let mut c = SealBlob::new();
+    let same_pt = seal_with(&srk, &pol, b"snapshot boot #1 counters=0001", &mut c, &boot).is_ok() && c.as_slice() == a.as_slice();
+    // (3) lifecycles: a different boot salt, an SVN-floor bump (new policy -> new key), a new SRK
+    let mut n_salt = SealBlob::new();
+    let mut n_floor = SealBlob::new();
+    let mut n_srk = SealBlob::new();
+    let pt = b"snapshot boot #1 counters=0001";
+    let mut pol2 = pol;
+    pol2.svn_floor = 8;
+    let lifec = seal_with(&srk, &pol, pt, &mut n_salt, &Fresh { salt: Some([0xa5; 32]), ..boot }).is_ok()
+        && seal_with(&srk, &pol2, pt, &mut n_floor, &boot).is_ok()
+        && seal_with(&[0x3du8; 32], &pol, pt, &mut n_srk, &boot).is_ok()
+        && [nonce(&n_salt), nonce(&n_floor), nonce(&n_srk)].iter().all(|n| *n != nonce(&a))
+        && nonce(&n_salt) != nonce(&n_floor)
+        && nonce(&n_floor) != nonce(&n_srk);
+    // (4) this boot, the live path: 64 seals of one plaintext -> 64 distinct nonces
+    let mut seen = [[0u8; NONCE_LEN]; 64];
+    let mut live = true;
+    for i in 0..64 {
+        let mut x = SealBlob::new();
+        live &= seal(&srk, &pol, pt, &mut x).is_ok();
+        seen[i] = nonce(&x);
+        live &= !seen[..i].contains(&seen[i]);
+        live &= unseal(&srk, &pol, x.as_slice(), &mut [0u8; 64]).ok() == Some(pt.len());
+    }
+    // (5) a re-used nonce (b's nonce transplanted into a) and a flipped nonce byte are refused
+    let mut out = [0u8; 64];
+    let rt = unseal(&srk, &pol, a.as_slice(), &mut out).ok() == Some(30) && &out[..30] == b"snapshot boot #1 counters=0001";
+    let mut t = SealBlob::new();
+    t.bytes[..a.len].copy_from_slice(a.as_slice());
+    t.len = a.len;
+    t.bytes[O_NONCE..O_NONCE + NONCE_LEN].copy_from_slice(&nonce(&b));
+    let transplant = unseal(&srk, &pol, t.as_slice(), &mut out) == Err(SealErr::Tag);
+    t.bytes[O_NONCE..O_NONCE + NONCE_LEN].copy_from_slice(&nonce(&a));
+    t.bytes[O_NONCE + 5] ^= 0x20;
+    let flipped = unseal(&srk, &pol, t.as_slice(), &mut out) == Err(SealErr::Tag);
+    let pass = legacy_reuse && reboot_distinct && same_pt && lifec && live && rt && transplant && flipped;
+    arch_aarch64::_print(format_args!(" [P-sealnonce] {} — HQKSEAL1 synthetic nonce: two simulated reboots without a TRNG salt, counters restarted (the old nonce repeats there={}) sealing different plaintexts get different nonces={} identical input gives the identical blob (no keystream reuse)={} new boot salt / SVN-floor re-seal / new SRK each give a fresh nonce={} 64 live seals pairwise distinct + unseal={} round trip={} a re-used (transplanted) nonce refused={} a flipped nonce byte refused={} salt_this_boot={}\n",
+        if pass { "PASS" } else { "FAIL" }, legacy_reuse, reboot_distinct, same_pt, lifec, live, rt, transplant, flipped, boot_salt().is_some()));
     pass
 }

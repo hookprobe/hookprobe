@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # =============================================================================
 # tools/ci/repro.sh — G4r: reproducible-build check for the SHIPPED heqk flavour
-# (ADR 0036 Rung 1, ADR 0052). Builds `--features prod --release` twice into two
+# (ADR 0036 Rung 1, ADR 0052). Builds the SHIPPING flavour (tools/ci/shipping-features.txt — the AP
+# product; W4 2026-11-12, was `prod`) `--release` twice into two
 # FRESH target dirs at two different absolute paths and requires byte-identical
 # kernel ELFs. A mismatch means something non-deterministic (timestamps, absolute
 # paths, HashMap order, build-script randomness) leaked into the image — which
@@ -12,7 +13,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CI_OUT="${CI_OUT:-$ROOT/out/ci}"
-FEATURES="${REPRO_FEATURES:-prod}"
+FEATURES="${REPRO_FEATURES:-$(grep -v "^#" "$ROOT/tools/ci/shipping-features.txt" | tr -d "[:space:]")}"
 mkdir -p "$CI_OUT"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/heqk-repro.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT

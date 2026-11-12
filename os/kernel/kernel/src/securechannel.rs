@@ -656,6 +656,9 @@ pub enum NoiseErr {
     /// M4.4 #9 — a record authenticated but its sequence number was an exact replay
     /// or fell below the RFC 6479 anti-replay window (a genuine-but-stale record).
     Replay,
+    /// W4 rekey — a record from a key epoch this receiver no longer holds (rolled back, retired after the grace
+    /// window) or too far ahead. Refused without decrypting anything.
+    Stale,
 }
 
 // ---------------------------------------------------------------------------
@@ -900,29 +903,12 @@ impl AntiReplayRx {
         ct_tag: &[u8],
         out: &mut [u8],
     ) -> Result<usize, NoiseErr> {
-        if ct_tag.len() < AEAD_TAG_LEN {
-            return Err(NoiseErr::Truncated);
-        }
-        let (ct, tag) = ct_tag.split_at(ct_tag.len() - AEAD_TAG_LEN);
-        if out.len() < ct.len() {
-            return Err(NoiseErr::Truncated);
-        }
-        out[..ct.len()].copy_from_slice(ct);
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&self.k));
-        let nb = CipherState::nonce_bytes(seq);
-        cipher
-            .decrypt_in_place_detached(
-                Nonce::from_slice(&nb),
-                ad,
-                &mut out[..ct.len()],
-                Tag::from_slice(tag),
-            )
-            .map_err(|_| NoiseErr::AeadAuth)?;
+        let n = aead_open(&self.k, seq, ad, ct_tag, out)?;
         // AEAD verified -> ONLY NOW consult + advance the window (RFC 4303 §3.4.3).
         if !self.win.validate(seq) {
             return Err(NoiseErr::Replay);
         }
-        Ok(ct.len())
+        Ok(n)
     }
 
     /// Open a `CipherState::seal_record` datagram (`LE64(seq) ‖ ct ‖ tag`) through the window.
@@ -933,6 +919,234 @@ impl AntiReplayRx {
         let mut sb = [0u8; RECORD_SEQ_LEN];
         sb.copy_from_slice(&rec[..RECORD_SEQ_LEN]);
         self.open(u64::from_le_bytes(sb), ad, &rec[RECORD_SEQ_LEN..], out)
+    }
+}
+
+/// AEAD-open `ct ‖ tag` under `k` at the Noise §12.3 nonce for `seq` into `out` (nothing trusted on failure).
+fn aead_open(k: &[u8; 32], seq: u64, ad: &[u8], ct_tag: &[u8], out: &mut [u8]) -> Result<usize, NoiseErr> {
+    if ct_tag.len() < AEAD_TAG_LEN {
+        return Err(NoiseErr::Truncated);
+    }
+    let (ct, tag) = ct_tag.split_at(ct_tag.len() - AEAD_TAG_LEN);
+    if out.len() < ct.len() {
+        return Err(NoiseErr::Truncated);
+    }
+    out[..ct.len()].copy_from_slice(ct);
+    ChaCha20Poly1305::new(Key::from_slice(k))
+        .decrypt_in_place_detached(Nonce::from_slice(&CipherState::nonce_bytes(seq)), ad, &mut out[..ct.len()], Tag::from_slice(tag))
+        .map_err(|_| NoiseErr::AeadAuth)?;
+    Ok(ct.len())
+}
+
+// ---------------------------------------------------------------------------
+// W4 (task #55) — in-session REKEY on the datagram record layer (Noise rev-34 §11.3 `Rekey()`), EL1.
+//
+// The wire format does not change: a record is still `LE64 seq ‖ ct ‖ tag` with the AEAD nonce = seq. The high 32
+// bits of `seq` are the KEY EPOCH, the low 32 bits the record index inside it. Epoch e+1's key is
+// `REKEY(k_e) = ENCRYPT(k_e, 2^64-1, "", 0^32)[0..32]` — one-way, so a key captured later never decrypts earlier
+// traffic, and both ends derive it without a message. Epoch 0 with its index < 2^32 is byte-identical to the
+// legacy `seal_record`, so a peer that never rekeys interoperates unchanged.
+//   * sender (`RecordTx`): moves to the next epoch at a threshold (records / bytes / time, `RekeyPolicy`) — only
+//     once ARMED (the peer said it follows); the old key is overwritten in place. Unarmed, it stops at 2^32
+//     records instead of wrapping into a value the peer would read as the next epoch (the owner re-handshakes).
+//   * receiver (`RecordRx`): the epoch comes from the authenticated nonce. The current epoch and (for a short
+//     grace window) the previous one each keep their own RFC 6479 window; a record for a later epoch (at most
+//     `REKEY_MAX_SKIP` ahead) is tried under the derived key and ADVANCES the receiver only if its tag verifies
+//     (a forgery can never move the epoch); anything older than the kept epochs — a rollback, or a record of a
+//     retired key — is refused as `Stale` without decrypting. Keys are never logged; epochs and sequence
+//     numbers are not secret (they are on the wire).
+// ---------------------------------------------------------------------------
+
+/// When a sender moves to the next key epoch: whichever comes first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RekeyPolicy {
+    pub max_records: u32,
+    pub max_bytes: u64,
+    pub max_ms: i64,
+}
+
+impl RekeyPolicy {
+    /// 2^20 records, 1 GiB of plaintext or one hour (the session itself is re-handshaken every 24 h).
+    pub const DEFAULT: RekeyPolicy = RekeyPolicy { max_records: 1 << 20, max_bytes: 1 << 30, max_ms: 3_600_000 };
+}
+
+/// A receiver keeps the previous epoch this long after the first record of the new one (in-flight reordering).
+pub const REKEY_GRACE_MS: i64 = 5_000;
+/// A receiver follows at most this many epochs at once (every record of the skipped epochs was lost).
+pub const REKEY_MAX_SKIP: u32 = 4;
+const EPOCH_LIMIT: u32 = u32::MAX - 1; // seq stays below 2^64-1, the nonce REKEY itself uses
+
+/// Noise §11.3: `REKEY(k) = ENCRYPT(k, maxnonce, zerolen, zeros)[0..32]` (the tag is discarded).
+fn rekey_key(k: &[u8; 32]) -> [u8; 32] {
+    let mut z = [0u8; 32];
+    let _ = ChaCha20Poly1305::new(Key::from_slice(k)).encrypt_in_place_detached(
+        Nonce::from_slice(&CipherState::nonce_bytes(u64::MAX)),
+        &[],
+        &mut z,
+    );
+    z
+}
+
+/// The SENDING half of a rekeying datagram channel.
+pub struct RecordTx {
+    cs: CipherState,
+    epoch: u32,
+    idx: u32,
+    bytes: u64,
+    epoch_ms: i64,
+    pol: RekeyPolicy,
+    armed: bool,
+}
+
+impl RecordTx {
+    /// Take over a transport CipherState (its counter continues as epoch 0's index).
+    pub fn new(cs: CipherState, now_ms: i64, pol: RekeyPolicy) -> RecordTx {
+        let idx = u32::try_from(cs.n).unwrap_or(u32::MAX);
+        RecordTx { cs, epoch: 0, idx, bytes: 0, epoch_ms: now_ms, pol, armed: false }
+    }
+    /// The peer follows epochs (its capability arrived over the authenticated channel).
+    pub fn arm(&mut self) {
+        self.armed = true;
+    }
+    pub fn armed(&self) -> bool {
+        self.armed
+    }
+    pub fn epoch(&self) -> u32 {
+        self.epoch
+    }
+    /// The sequence number the next record carries.
+    pub fn next_seq(&self) -> u64 {
+        ((self.epoch as u64) << 32) | self.idx as u64
+    }
+    /// Unarmed and out of indices: nothing more can be sent on this session (re-handshake).
+    pub fn exhausted(&self) -> bool {
+        self.idx == u32::MAX && (!self.armed || self.epoch >= EPOCH_LIMIT)
+    }
+    fn due(&self, now_ms: i64) -> bool {
+        self.idx >= self.pol.max_records || self.bytes >= self.pol.max_bytes || now_ms - self.epoch_ms >= self.pol.max_ms
+    }
+    /// Move to the next epoch now: derive the next key over the old one (overwritten), restart the index.
+    pub fn rekey(&mut self, now_ms: i64) -> bool {
+        if self.epoch >= EPOCH_LIMIT {
+            return false;
+        }
+        let mut nk = rekey_key(&self.cs.k);
+        scrub32(&mut self.cs.k);
+        self.cs.k = nk;
+        scrub32(&mut nk);
+        self.epoch += 1;
+        self.idx = 0;
+        self.bytes = 0;
+        self.epoch_ms = now_ms;
+        true
+    }
+    /// Seal one datagram record (`LE64 seq ‖ ct ‖ tag`), rekeying first when a threshold is reached and armed.
+    pub fn seal(&mut self, ad: &[u8], pt: &[u8], out: &mut [u8], now_ms: i64) -> Option<usize> {
+        if self.armed && (self.due(now_ms) || self.idx == u32::MAX) {
+            self.rekey(now_ms);
+        }
+        if self.idx == u32::MAX {
+            return None; // never wrap into the next epoch's sequence space
+        }
+        self.cs.n = self.next_seq();
+        let n = self.cs.seal_record(ad, pt, out)?;
+        self.idx += 1;
+        self.bytes = self.bytes.saturating_add(pt.len() as u64);
+        Some(n)
+    }
+    pub fn wipe(&mut self) {
+        self.cs.wipe();
+        self.idx = u32::MAX;
+        self.armed = false;
+    }
+}
+
+struct RxEpoch {
+    k: [u8; 32],
+    win: ReplayWindow,
+    epoch: u32,
+}
+
+/// The RECEIVING half: per-epoch anti-replay windows, authenticated epoch advance, old-key retirement.
+pub struct RecordRx {
+    cur: RxEpoch,
+    prev: Option<RxEpoch>,
+    prev_until_ms: i64,
+}
+
+impl CipherState {
+    /// The rekey-aware receiver over this cipher's key (epoch 0).
+    pub fn into_record_rx(&self) -> RecordRx {
+        RecordRx { cur: RxEpoch { k: self.k, win: ReplayWindow::new(), epoch: 0 }, prev: None, prev_until_ms: 0 }
+    }
+}
+
+impl RecordRx {
+    pub fn epoch(&self) -> u32 {
+        self.cur.epoch
+    }
+    /// The previous epoch's key is still held (inside its grace window).
+    #[cfg(feature = "securechannel-selftest")]
+    pub fn holds_prev(&self) -> bool {
+        self.prev.is_some()
+    }
+    /// Retire (wipe) the previous epoch's key once its grace window has passed.
+    pub fn tick(&mut self, now_ms: i64) {
+        if self.prev.is_some() && now_ms >= self.prev_until_ms {
+            self.retire_prev();
+        }
+    }
+    fn retire_prev(&mut self) {
+        if let Some(mut p) = self.prev.take() {
+            scrub32(&mut p.k);
+        }
+    }
+    /// Open one record: Ok(plaintext length). `AeadAuth` (forged / wrong key: nothing changes), `Replay`
+    /// (authenticated but already seen or below the window), `Stale` (an epoch no longer held, or too far ahead).
+    pub fn open(&mut self, ad: &[u8], rec: &[u8], out: &mut [u8], now_ms: i64) -> Result<usize, NoiseErr> {
+        if rec.len() < RECORD_SEQ_LEN + AEAD_TAG_LEN {
+            return Err(NoiseErr::Truncated);
+        }
+        self.tick(now_ms);
+        let seq = u64::from_le_bytes(rec[..RECORD_SEQ_LEN].try_into().unwrap_or([0; 8]));
+        let (e, i) = ((seq >> 32) as u32, seq & 0xffff_ffff);
+        let body = &rec[RECORD_SEQ_LEN..];
+        let slot = if e == self.cur.epoch {
+            Some(&mut self.cur)
+        } else {
+            self.prev.as_mut().filter(|p| p.epoch == e)
+        };
+        if let Some(ep) = slot {
+            let n = aead_open(&ep.k, seq, ad, body, out)?;
+            return if ep.win.validate(i) { Ok(n) } else { Err(NoiseErr::Replay) };
+        }
+        if e <= self.cur.epoch || e - self.cur.epoch > REKEY_MAX_SKIP || e > EPOCH_LIMIT {
+            return Err(NoiseErr::Stale); // rolled back / retired / implausibly far ahead
+        }
+        let mut k = self.cur.k;
+        for _ in 0..e - self.cur.epoch {
+            let nk = rekey_key(&k);
+            scrub32(&mut k);
+            k = nk;
+        }
+        let n = match aead_open(&k, seq, ad, body, out) {
+            Ok(n) => n,
+            Err(x) => {
+                scrub32(&mut k);
+                return Err(x); // a forged "next epoch" record never advances the receiver
+            }
+        };
+        let mut win = ReplayWindow::new();
+        win.validate(i);
+        self.retire_prev();
+        let old = core::mem::replace(&mut self.cur, RxEpoch { k, win, epoch: e });
+        self.prev = Some(old);
+        self.prev_until_ms = now_ms + REKEY_GRACE_MS;
+        Ok(n)
+    }
+    pub fn wipe(&mut self) {
+        self.retire_prev();
+        scrub32(&mut self.cur.k);
     }
 }
 
@@ -1773,4 +1987,100 @@ pub fn noise_selftest() -> bool {
     all &= hybrid_ok && fs_ok;
 
     all
+}
+
+/// `[P-rekey]` (W4) — the rekeying record layer over a real handshake's transport keys (in-process loopback).
+#[cfg(feature = "securechannel-selftest")]
+pub fn rekey_selftest() -> bool {
+    let tv = test_vectors();
+    let Some((i, r)) = run_handshake(&tv) else { return false };
+    let pol = RekeyPolicy { max_records: 4, max_bytes: 1 << 30, max_ms: 60_000 };
+    let ad = b"W4-rekey";
+    let mut tx = RecordTx::new(i.send.clone(), 0, pol);
+    let mut rx = r.recv.into_record_rx();
+    let mut out = [0u8; 64];
+    let seal = |tx: &mut RecordTx, pt: &[u8], t: i64| -> ([u8; 64], usize) {
+        let mut b = [0u8; 64];
+        let n = tx.seal(ad, pt, &mut b, t).unwrap_or(0);
+        (b, n)
+    };
+    // (1) unarmed: epoch 0 is byte-identical to the legacy seal_record (an old peer opens it); no rekey past
+    //     the record threshold until the peer's capability arms it
+    let (r0, n0) = seal(&mut tx, b"r0", 0);
+    let mut lb = [0u8; 64];
+    let ln = i.send.clone().seal_record(ad, b"r0", &mut lb).unwrap_or(1);
+    let mut legacy = r.recv.into_anti_replay();
+    let compat = n0 == ln && r0[..n0] == lb[..ln] && legacy.open_record(ad, &r0[..n0], &mut out).is_ok();
+    let mut unarmed = rx.open(ad, &r0[..n0], &mut out, 0).is_ok();
+    for _ in 0..5 {
+        let (b, n) = seal(&mut tx, b"rN", 1);
+        unarmed &= rx.open(ad, &b[..n], &mut out, 1).is_ok();
+    }
+    unarmed &= tx.epoch() == 0 && rx.epoch() == 0;
+    // (2) armed: 4 records per epoch. Epoch 1: deliver two, hold two (in flight).
+    tx.arm();
+    let e1: [([u8; 64], usize); 4] = core::array::from_fn(|_| seal(&mut tx, b"epoch-1", 10));
+    let mut cont = tx.epoch() == 1 && rx.open(ad, &e1[0].0[..e1[0].1], &mut out, 10).is_ok() && rx.open(ad, &e1[1].0[..e1[1].1], &mut out, 11).is_ok() && rx.epoch() == 1;
+    let old_key_dead = legacy.open_record(ad, &e1[0].0[..e1[0].1], &mut out) == Err(NoiseErr::AeadAuth);
+    let (e2a, n2a) = seal(&mut tx, b"epoch-2", 100);
+    cont &= tx.epoch() == 2 && rx.open(ad, &e2a[..n2a], &mut out, 100).is_ok() && rx.epoch() == 2 && rx.holds_prev();
+    // (3) a reordered epoch-1 record inside the grace window is accepted once; replays refused; rollback refused
+    let reorder = rx.open(ad, &e1[3].0[..e1[3].1], &mut out, 200).is_ok();
+    let replays = rx.open(ad, &e1[3].0[..e1[3].1], &mut out, 201) == Err(NoiseErr::Replay)
+        && rx.open(ad, &e2a[..n2a], &mut out, 202) == Err(NoiseErr::Replay);
+    let rollback = rx.open(ad, &r0[..n0], &mut out, 203) == Err(NoiseErr::Stale);
+    // (4) forgery: a genuine record re-labelled as the next epoch, and a flipped tag, fail closed; the receiver
+    //     does not move and the genuine record still opens afterwards
+    let mut fake = e2a;
+    fake[4] = 3; // seq high word: epoch 3
+    let (e2b, n2b) = seal(&mut tx, b"epoch-2b", 300);
+    let mut flip = e2b;
+    flip[n2b - 1] ^= 1;
+    let forgery = rx.open(ad, &fake[..n2a], &mut out, 300) == Err(NoiseErr::AeadAuth)
+        && rx.open(ad, &flip[..n2b], &mut out, 301) == Err(NoiseErr::AeadAuth)
+        && rx.epoch() == 2
+        && rx.open(ad, &e2b[..n2b], &mut out, 302).is_ok();
+    // (5) old-key retirement: after the grace window the epoch-1 key is wiped; its last held record is stale
+    let retired = rx.open(ad, &e1[2].0[..e1[2].1], &mut out, 100 + REKEY_GRACE_MS + 1) == Err(NoiseErr::Stale) && !rx.holds_prev();
+    // (6) the time threshold (2 records into epoch 2, one hour later) and the byte threshold (other direction)
+    let (e3, n3) = seal(&mut tx, b"epoch-3", 100 + pol.max_ms);
+    let by_time = tx.epoch() == 3 && rx.open(ad, &e3[..n3], &mut out, 100 + pol.max_ms).is_ok() && rx.epoch() == 3;
+    let mut tx2 = RecordTx::new(r.send.clone(), 0, RekeyPolicy { max_records: 1 << 20, max_bytes: 100, max_ms: 1 << 40 });
+    tx2.arm();
+    let mut rx2 = i.recv.into_record_rx();
+    let mut by_bytes = true;
+    for k in 0..3 {
+        let (b, n) = seal(&mut tx2, &[0x5a; 40], k);
+        by_bytes &= rx2.open(ad, &b[..n], &mut out, k).is_ok();
+    }
+    by_bytes &= tx2.epoch() == 0;
+    let (b, n) = seal(&mut tx2, &[0x5a; 40], 3);
+    by_bytes &= tx2.epoch() == 1 && rx2.open(ad, &b[..n], &mut out, 3).is_ok() && rx2.epoch() == 1;
+    // (7) lost epochs: the receiver follows 3 silent rekeys, refuses a jump past REKEY_MAX_SKIP
+    for _ in 0..3 {
+        tx.rekey(500);
+    }
+    let (s6, n6) = seal(&mut tx, b"epoch-6", 500);
+    let mut skip = rx.open(ad, &s6[..n6], &mut out, 500).is_ok() && rx.epoch() == 6;
+    for _ in 0..REKEY_MAX_SKIP + 1 {
+        tx.rekey(600);
+    }
+    let (s11, n11) = seal(&mut tx, b"epoch-11", 600);
+    skip &= rx.open(ad, &s11[..n11], &mut out, 600) == Err(NoiseErr::Stale) && rx.epoch() == 6;
+    // (8) an unarmed sender stops at 2^32 records (never wraps into the next epoch's sequence space); armed it rekeys;
+    //     a wiped sender seals nothing
+    let mut cs = i.send.clone();
+    cs.n = 0xffff_fffe;
+    let mut ux = RecordTx::new(cs.clone(), 0, pol);
+    let mut ax = RecordTx::new(cs, 0, pol);
+    ax.arm();
+    let mut b = [0u8; 64];
+    let mut wall = ux.seal(ad, b"x", &mut b, 0).is_some() && ux.seal(ad, b"x", &mut b, 0).is_none() && ux.exhausted();
+    wall &= ax.seal(ad, b"x", &mut b, 0).is_some() && ax.seal(ad, b"x", &mut b, 0).is_some() && ax.epoch() == 1 && !ax.exhausted();
+    ax.wipe();
+    wall &= ax.seal(ad, b"x", &mut b, 0).is_none();
+    let pass = compat && unarmed && cont && old_key_dead && reorder && replays && rollback && forgery && retired && by_time && by_bytes && skip && wall;
+    kprint!(" [P-rekey] {} — Noise in-session rekey (§11.3) on the datagram record layer, EL1, wire unchanged: epoch 0 byte-identical to the legacy record={} unarmed sender never rekeys={} armed: records continue across epochs={} the old key cannot open the new epoch={} a reordered previous-epoch record inside the {} ms grace accepted={} replays refused={} epoch rollback refused (Stale)={} forged next-epoch / flipped tag fail closed, receiver unmoved={} previous key retired after the grace window={} time threshold={} byte threshold={} follows {} silent rekeys, refuses more={} unarmed sender stops at 2^32 / armed rekeys / wiped seals nothing={} | tx epoch={} next seq={:#x} rx epoch={}\n",
+        if pass { "PASS" } else { "FAIL" }, compat, unarmed, cont, old_key_dead, REKEY_GRACE_MS, reorder, replays, rollback, forgery, retired, by_time, by_bytes, 3, skip, wall, tx.epoch(), tx.next_seq(), rx.epoch());
+    pass
 }
