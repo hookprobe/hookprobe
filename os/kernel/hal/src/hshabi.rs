@@ -3,7 +3,7 @@
 //!   1. CMD_LINE  : IN = one input line. OUT = text (ST_TEXT), or one management request (ST_REQUEST:
 //!                  `[msg u16][rsv u16]`) the kernel dispatches through `mgmtabi` with the session's role;
 //!   2. CMD_REPLY : IN = `[msg u16][result u8][rsv u8]` + the fixed reply record. OUT = the formatted text.
-//! The shell keeps no state between excursions. Shared by `el0-hsh` and the kernel so the two cannot drift.
+//!      The shell keeps no state between excursions. Shared by `el0-hsh` and the kernel so the two cannot drift.
 
 pub const BASE_QEMU: usize = 0xB800_0000;
 /// CM5: the GB5 window's second 2 MiB block, 1 MiB in (el0-lansvc uses its first 336 KiB).

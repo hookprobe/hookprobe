@@ -214,7 +214,7 @@ pub struct ReplyFacts {
 pub fn dhcp_reply_facts(eth: &[u8], xid: &[u8; 4], mac: &[u8; 6]) -> ReplyFacts {
     let mut f = ReplyFacts::default();
     if eth.len() < 42 + 240 { return f; }
-    if &eth[0..6] != &mac[..] && eth[0..6] != [0xff; 6] { return f; } // to us or broadcast
+    if eth[0..6] != mac[..] && eth[0..6] != [0xff; 6] { return f; } // to us or broadcast
     if eth[12] != 0x08 || eth[13] != 0x00 { return f; }        // IPv4
     let ihl = ((eth[14] & 0x0f) as usize) * 4;
     let l4 = 14 + ihl;
@@ -227,8 +227,8 @@ pub fn dhcp_reply_facts(eth: &[u8], xid: &[u8; 4], mac: &[u8; 6]) -> ReplyFacts 
     let b = l4 + 8; // BOOTP start
     if b + 240 > eth.len() || eth[b] != 2 { return f; }         // BOOTREPLY
     if eth[b + 236] != 0x63 || eth[b + 237] != 0x82 || eth[b + 238] != 0x53 || eth[b + 239] != 0x63 { return f; }
-    if &eth[b + 4..b + 8] != &xid[..] { return f; }             // our transaction
-    if &eth[b + 28..b + 34] != &mac[..] { return f; }           // our chaddr
+    if eth[b + 4..b + 8] != xid[..] { return f; }             // our transaction
+    if eth[b + 28..b + 34] != mac[..] { return f; }           // our chaddr
     let yi = b + 16;
     f.yiaddr.copy_from_slice(&eth[yi..yi + 4]);
     // Walk options (b+240..): [code][len][data], 0xff=end, 0x00=pad.

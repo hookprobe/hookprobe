@@ -450,8 +450,8 @@ impl CapSpace {
     ///     (RW+NX) OR executable (RO+X), NEVER both. A `writable && executable` request is
     ///     REFUSED here (defense in depth on top of the ELF parser's W^X check), so no PTE
     ///     can ever be both W and X regardless of how the caller derived its flags.
-    /// The rights model still gates writability: an EL0 code page is mapped from an R-only
-    /// cap (executable=true), a data page from a W cap (executable=false).
+    ///     The rights model still gates writability: an EL0 code page is mapped from an R-only
+    ///     cap (executable=true), a data page from a W cap (executable=false).
     #[cfg(not(feature = "cm5"))]
     pub fn map_frame_cap_in(
         &mut self,

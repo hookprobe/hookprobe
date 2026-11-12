@@ -12,7 +12,7 @@ pub const FRAME_BYTES: usize = FRAME_WORDS * 8; // 272
 /// Build the initial context for a new EL1 kernel thread so the first switch into
 /// it `eret`s to `entry` (EL1h, IRQs enabled) on stack `stack_top`.
 pub fn make_thread(stack_top: usize, entry: usize, arg: usize) -> usize {
-    debug_assert!(stack_top % 16 == 0);
+    debug_assert!(stack_top.is_multiple_of(16));
     let sp = (stack_top - FRAME_BYTES) as *mut u64;
     unsafe {
         for i in 0..FRAME_WORDS {
@@ -32,7 +32,7 @@ pub fn make_thread(stack_top: usize, entry: usize, arg: usize) -> usize {
 /// into it `eret`s to EL0 at `entry` with IRQs **enabled** — so the timer
 /// preempts it like any thread (closes B-6). Returns the initial kernel sp.
 pub fn make_el0_thread(kstack_top: usize, entry: usize, user_sp: usize, arg: usize) -> usize {
-    debug_assert!(kstack_top % 16 == 0);
+    debug_assert!(kstack_top.is_multiple_of(16));
     let sp = (kstack_top - FRAME_BYTES) as *mut u64;
     unsafe {
         for i in 0..FRAME_WORDS {

@@ -273,7 +273,7 @@ impl Heal {
             self.class = Class::Sleep;
             return Action::None;
         }
-        if d >= PROBE_MS && self.probe.map_or(true, |(_, at)| now.saturating_sub(at) >= REPROBE_MS) {
+        if d >= PROBE_MS && self.probe.is_none_or(|(_, at)| now.saturating_sub(at) >= REPROBE_MS) {
             self.probe = Some((p.probe(), now));
         }
         if matches!(self.probe, Some((Probe::Asleep | Probe::Gone, _))) {
