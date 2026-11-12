@@ -3002,9 +3002,21 @@ const WLC_SET_DTIMPRD: u32 = 78;
 
 /// Set a u32 iovar (brcmf_fil_iovar_int_set).
 fn iovar_set_u32(name: &[u8], v: u32) -> bool {
+    iovar_set_u32_st(name, v).0
+}
+/// (accepted, BCDC status: a negative BCME code when refused)
+fn iovar_set_u32_st(name: &[u8], v: u32) -> (bool, i32) {
     let mut b = [0u8; 48];
     let n = iovar_buf(name, &v.to_le_bytes(), &mut b);
-    bcdc_iovar_set(&b[..n])
+    let (ok, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &b[..n], &mut []);
+    (ok, st as i32)
+}
+
+/// The per-BSS security SETs (brcmf_configure_wpaie order: wsec, mfp, wpa_auth), each result + BCME code recorded.
+fn ap_set_sec(out: &mut ApResult, wsec: u32, mfp: u32, wpa_auth: u32) {
+    (out.wsec_ok, out.sec_bcme[0]) = iovar_set_u32_st(b"wsec", wsec);
+    (out.mfp_ok, out.sec_bcme[1]) = iovar_set_u32_st(b"mfp", mfp);
+    (out.wpa_auth_ok, out.sec_bcme[2]) = iovar_set_u32_st(b"wpa_auth", wpa_auth);
 }
 const WPA2_AUTH_PSK: u32 = 0x0080; // wpa_auth: WPA2-PSK
 const WSEC_PASSPHRASE: u16 = 0x0001; // wsec_pmk flag: `key` holds an ASCII passphrase (fw PBKDF2s)
@@ -3116,6 +3128,13 @@ pub struct ApResult {
     pub chan_fallback20: bool, // chanspec refused -> legacy WLC_SET_CHANNEL (20 MHz) used
     pub wsec_ok: bool,
     pub wpa_auth_ok: bool,
+    pub mfp_ok: bool,
+    /// BCDC status (negative BCME code) of the last wsec / mfp / wpa_auth SET; 0 = accepted
+    pub sec_bcme: [i32; 3],
+    /// the "bss" disable before the per-BSS security was accepted (a live bounce: WLC_UP re-enables the old BSS)
+    pub bss_down_ok: bool,
+    /// the security SETs were refused once and repeated with the radio DOWN
+    pub sec_retry: bool,
     pub up_ok: bool,
     pub ssid_ok: bool,      // WLC_SET_SSID (starts the BSS beaconing)
     pub get_ap: u32,        // WLC_GET_AP readback (1 = AP mode active)
@@ -3135,15 +3154,21 @@ impl ApResult {
     pub fn new() -> Self {
         ApResult {
             cap_has_ap: false, down_ok: false, apsta_ok: false, set_ap_ok: false, infra_ok: false,
-            chan_ok: false, chanspec_ok: false, chan_fallback20: false, wsec_ok: false, wpa_auth_ok: false, up_ok: false, ssid_ok: false,
+            chan_ok: false, chanspec_ok: false, chan_fallback20: false, wsec_ok: false, wpa_auth_ok: false, mfp_ok: false, sec_bcme: [0; 3], bss_down_ok: false, sec_retry: false, up_ok: false, ssid_ok: false,
             get_ap: 0, get_ap_ok: false, bssid: [0; 6], mac_set_ok: false, ev_ok: false,
             bssid_verified: false, bssid_readback: [0; 6], gtk_set: false, isolate_ok: false,
         }
     }
     /// The BSS is up AND the two things a client join silently depends on are in place:
     /// a non-zero BSSID we source frames from, and the assoc/deauth event indications.
+    /// ... and the firmware took the BSS security the host keys for (a refused wpa_auth / mfp leaves the radio in the
+    /// previous mode while the host authenticator runs the new one: metal 2026-11-12, live WPA2 <-> WPA3 change).
     pub fn serve_ready(&self) -> bool {
-        self.get_ap == 1 && self.ssid_ok && self.bssid != [0u8; 6] && self.ev_ok
+        self.get_ap == 1 && self.ssid_ok && self.bssid != [0u8; 6] && self.ev_ok && self.sec_ok()
+    }
+    /// wsec + wpa_auth accepted (+ mfp on WPA3 builds, where the mode needs it).
+    pub fn sec_ok(&self) -> bool {
+        self.wsec_ok && self.wpa_auth_ok && (self.mfp_ok || !cfg!(feature = "wpa3"))
     }
 }
 
@@ -3334,16 +3359,43 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     {
         w3().chan = channel;
     }
+    #[cfg(all(not(feature = "wpa3probe"), not(feature = "wpa3")))]
+    let mfp = 0;
+    #[cfg(feature = "wpa3")]
+    let mfp = if open { 0 } else { wpa3_fw_params().1 };
+    #[cfg(feature = "wpa3probe")]
+    let mfp = 2; // MFP required (WPA3)
+    // A live bounce (WLC_DOWN ... WLC_UP) brings the PREVIOUS BSS back up with the radio, and the firmware then
+    // refuses a wpa_auth / mfp change (metal 2026-11-12: WPA2 <-> WPA3 transition, set=false). Disable the BSS first
+    // (brcmf_bss_enable_le {bsscfgidx 0, enable 0}, brcmfmac's stop_ap); SET_SSID below starts it again. At boot
+    // there is no BSS yet and this is a no-op.
+    {
+        let mut bb = [0u8; 32];
+        let mut be = [0u8; 8];
+        be[0..4].copy_from_slice(&0u32.to_le_bytes());
+        let n = iovar_buf(b"bss", &be, &mut bb);
+        out.bss_down_ok = bcdc_iovar_set(&bb[..n]);
+    }
     let _ = iovar_set_u32(b"wme_bss_disable", 0); // WMM ON (QoS — required for HT/VHT aggregation)
     let _ = iovar_set_u32(b"auth", 0); // Open System 802.11 auth; PSK is the host 4-way
-    out.wsec_ok = iovar_set_u32(b"wsec", wsec);
-    #[cfg(all(not(feature = "wpa3probe"), not(feature = "wpa3")))]
-    let _ = iovar_set_u32(b"mfp", 0);
-    #[cfg(feature = "wpa3")]
-    let mfp3_ok = iovar_set_u32(b"mfp", if open { 0 } else { wpa3_fw_params().1 });
+    ap_set_sec(out, wsec, mfp, wpa_auth);
+    if !out.sec_ok() {
+        // still refused: the brcmfmac boot order sets these after UP, the firmware also takes them with the radio
+        // DOWN — repeat there once, then up again. A refusal that survives this keeps serve_ready() false.
+        out.sec_retry = true;
+        let _ = wlc_set_int(WLC_DOWN, 0);
+        ap_set_sec(out, wsec, mfp, wpa_auth);
+        out.up_ok = wlc_set_int(WLC_UP, 1);
+        delay(80_000);
+        let _ = ensure_ht_avail();
+    }
+    if out.sec_bcme != [0; 3] || out.sec_retry {
+        crate::_print(format_args!(" [WIFI] AP security SET: wsec {:#x} ok={} bcme {} | mfp {} ok={} bcme {} | wpa_auth {:#x} ok={} bcme {} | bss down ok={} retried with the radio down={} -> {}\n",
+            wsec, out.wsec_ok, out.sec_bcme[0], mfp, out.mfp_ok, out.sec_bcme[1], wpa_auth, out.wpa_auth_ok, out.sec_bcme[2],
+            out.bss_down_ok, out.sec_retry, if out.sec_ok() { "in force" } else { "REFUSED: the BSS is not serve-ready" }));
+    }
     #[cfg(feature = "wpa3probe")]
-    let mfp_ok = iovar_set_u32(b"mfp", 2); // MFP required (WPA3)
-    out.wpa_auth_ok = iovar_set_u32(b"wpa_auth", wpa_auth);
+    let mfp_ok = out.mfp_ok;
     #[cfg(feature = "wpa3probe")]
     {
         // in-firmware SAE (brcmf_wsec_sae_pwd_le: key_len u16 + key[128])
@@ -3382,7 +3434,7 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
         let s3 = w3();
         crate::_print(format_args!(" [WPA3] AP security {} — wpa_auth {:#x} set={} mfp {} set={} | events 188/189/190 armed={} | IGTK installed={} (algo {})\n",
             if s3.mode == SEC_WPA3 { "WPA3-SAE (PMF required)" } else { "WPA3 transition (WPA2-PSK + SAE, PMF capable)" },
-            wpa3_fw_params().0, out.wpa_auth_ok, wpa3_fw_params().1, mfp3_ok, ev3, s3.igtk_set, s3.igtk_algo));
+            wpa3_fw_params().0, out.wpa_auth_ok, wpa3_fw_params().1, out.mfp_ok, ev3, s3.igtk_set, s3.igtk_algo));
         // REL-08: the PMKID-cache expiry hazard exists only when SAE stations are keyed (WPA3 modes); say what this
         // boot does about it (the in-RAM lifetime patch, or nothing: the FWHALT self-heal is then the only guard)
         crate::_print(format_args!(" [WPA3] PMKID-cache expiry (CYW43455 7.45.265 use-after-free, REL-08): {}\n", match pmkid_patch() {
@@ -3489,7 +3541,6 @@ struct Wpa3 {
     txs_noack: u32,
     accepted: u32,
     dropped: u32,
-    logged: u32,
     chan: u32,
     ssid: [u8; 32],
     ssid_len: u8,
@@ -3502,7 +3553,7 @@ struct Wpa3 {
     mfp_rb: u32,
 }
 #[cfg(feature = "wpa3")]
-static mut WPA3: Wpa3 = Wpa3 { mode: 0, pw: [0; 64], pw_len: 0, igtk: [0; 16], igtk_set: false, igtk_algo: 0, pkt_id: 0x4851_0000, tx_ok: 0, tx_fail: 0, txs_ack: 0, txs_noack: 0, accepted: 0, dropped: 0, logged: 0, chan: 0, ssid: [0; 32], ssid_len: 0, auth_status_ok: 0, auth_status_fail: 0, bcn_ie: [0; 64], bcn_ie_len: 0, mfp_rb: 0xff };
+static mut WPA3: Wpa3 = Wpa3 { mode: 0, pw: [0; 64], pw_len: 0, igtk: [0; 16], igtk_set: false, igtk_algo: 0, pkt_id: 0x4851_0000, tx_ok: 0, tx_fail: 0, txs_ack: 0, txs_noack: 0, accepted: 0, dropped: 0, chan: 0, ssid: [0; 32], ssid_len: 0, auth_status_ok: 0, auth_status_fail: 0, bcn_ie: [0; 64], bcn_ie_len: 0, mfp_rb: 0xff };
 #[cfg(feature = "wpa3")]
 static mut SAE_TAB: sae::SaeAp = sae::SaeAp::new();
 /// PMKSAs of stations that completed SAE (PMKSA caching on reconnect); cleared only when the credentials change.
@@ -3511,6 +3562,18 @@ static mut PMKSA: sae::PmksaCache = sae::PmksaCache::new();
 /// The last (Re)Association Request's RSN choice (station, parsed RSNE) — read by `ap_keying`.
 #[cfg(feature = "wpa3")]
 static mut ASSOC_RSN: ([u8; 6], Option<hal::rsnassoc::AssocRsn>) = ([0; 6], None);
+/// The [WPA3] SAE / auth_status / tx-status trace, rate-limited PER STATION (the first 8 lines of a station per 30 s,
+/// then its count) — a global cap of 64 lines per boot hid every later SAE exchange (metal MB9, 2026-11-12).
+#[cfg(feature = "wpa3")]
+static mut SAE_LOG: hal::rsnassoc::RejectLog = hal::rsnassoc::RejectLog::with_burst(8);
+/// Some(lines of `sta` not logged since its last one) = log this [WPA3] line now.
+#[cfg(feature = "wpa3")]
+fn sae_log(sta: &[u8; 6]) -> Option<u32> {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    let ms = ticks() / (f / 1000).max(1);
+    unsafe { (*core::ptr::addr_of_mut!(SAE_LOG)).note(sta, ms) }.map(|n| n - 1)
+}
 /// H2E password element base (PT) for (SSID, passphrase), computed once at `ap_set_security`.
 #[cfg(feature = "wpa3")]
 static mut SAE_PT: Option<sae::PT> = None;
@@ -3698,8 +3761,7 @@ fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> bool {
             break;
         }
     }
-    if s.logged < 64 {
-        s.logged += 1;
+    if sae_log(sta).is_some() {
         crate::_print(format_args!(" [WPA3] auth_status: pmkid_info bcme {} | variants (802.11 status+ssid, EXTAUTH+ssid, status, EXTAUTH) bcme {:?} -> accepted variant {:?}\n",
             st_pk as i32, codes, took));
     }
@@ -3758,13 +3820,12 @@ pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event 
         sae::Event::Dropped(_) => s.dropped += 1,
         _ => {}
     }
-    if s.logged < 64 {
-        s.logged += 1;
+    if let Some(skipped) = sae_log(&sta) {
         let seq = if body.len() >= 4 { u16::from_le_bytes([body[2], body[3]]) } else { 0 };
         let st = if body.len() >= 6 { u16::from_le_bytes([body[4], body[5]]) } else { 0 };
         let grp = if seq == 1 && body.len() >= 8 { u16::from_le_bytes([body[6], body[7]]) } else { 0 };
-        crate::_print(format_args!(" [WPA3] SAE {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} seq {} status {} group {} ({} B) -> {:?}, {} frame(s) sent (mgmt_frame ok {} fail {}){}\n",
-            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], seq, st, grp, body.len(), e, sent, s.tx_ok, s.tx_fail,
+        crate::_print(format_args!(" [WPA3] SAE {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} seq {} status {} group {} ({} B) -> {:?}, {} frame(s) sent (mgmt_frame ok {} fail {}) [{} line(s) of this station not logged]{}\n",
+            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], seq, st, grp, body.len(), e, sent, s.tx_ok, s.tx_fail, skipped,
             match ast { Some(true) => " | auth_status -> firmware OK", Some(false) => " | auth_status REFUSED by the firmware", None => "" }));
     }
     e
@@ -3778,8 +3839,7 @@ fn wpa3_txstatus(rx: &[u8], ev: usize, et: u32, st: u32) {
     let d = ev + 72;
     let id = if d + 4 <= rx.len() { u32::from_le_bytes([rx[d], rx[d + 1], rx[d + 2], rx[d + 3]]) } else { 0 };
     if st == 0 { s.txs_ack += 1 } else { s.txs_noack += 1 }
-    if s.logged < 64 {
-        s.logged += 1;
+    if sae_log(&[0xff; 6]).is_some() {
         crate::_print(format_args!(" [WPA3] mgmt_frame tx-status event {} status {} packet_id {:#x} (last sent {:#x}{})\n",
             et, st, id, s.pkt_id, if id == s.pkt_id { ", layout OK" } else { "" }));
     }
@@ -3792,7 +3852,7 @@ pub fn ap_sae_pmk(sta: &[u8; 6], now_ms: u64) -> Option<[u8; 32]> {
 }
 
 /// How the 4-way for a just-associated station is keyed (IEEE 802.11-2020 12.6.10.3): from the AKM / PMKID in its
-/// association request RSNE (`hal::rsnassoc::decide`). `how == Reject`: the caller deauthenticates (`ap_deauth`).
+/// association request RSNE (`hal::rsnassoc::decide`). `how.reason()` is Some: the caller deauthenticates (`ap_deauth`).
 #[cfg(feature = "wpa3")]
 pub struct ApKeying {
     pub how: hal::rsnassoc::Keying,
@@ -3802,6 +3862,8 @@ pub struct ApKeying {
     /// (station AKM suite, PMKIDs listed) for the log; akm 0 = no readable RSNE
     pub akm: u32,
     pub n_pmkid: u16,
+    /// the SAE state held / last held for the station (sae::SD_* code, age ms) — why a fresh-SAE lookup missed
+    pub sae: (u8, u64),
 }
 
 #[cfg(feature = "wpa3")]
@@ -3812,7 +3874,13 @@ pub fn ap_keying(sta: &[u8; 6], now_ms: u64, psk: &[u8; 32]) -> ApKeying {
     let fresh = ap_sae_pmk(sta, now_ms);
     let cache = unsafe { &mut *core::ptr::addr_of_mut!(PMKSA) };
     let mut hit = None;
-    let how = hal::rsnassoc::decide(rsn, fresh.is_some(), &mut |p| {
+    // the AKMs the BSS offers right now: a station with a stale scan (a live security change) is refused with reason 20
+    let offers = match w3().mode {
+        SEC_WPA2 => hal::rsnassoc::OFFER_PSK,
+        SEC_WPA3 => hal::rsnassoc::OFFER_SAE,
+        _ => hal::rsnassoc::OFFER_PSK | hal::rsnassoc::OFFER_SAE,
+    };
+    let how = hal::rsnassoc::decide(rsn, offers, fresh.is_some(), &mut |p| {
         hit = cache.get(sta, p, now_ms);
         hit.is_some()
     });
@@ -3824,10 +3892,11 @@ pub fn ap_keying(sta: &[u8; 6], now_ms: u64, psk: &[u8; 32]) -> ApKeying {
     ApKeying {
         how,
         akm8: sae_pmk.is_some(),
-        pmk: sae_pmk.unwrap_or(if how == K::Reject { [0; 32] } else { *psk }),
+        pmk: sae_pmk.unwrap_or(if how.reason().is_some() { [0; 32] } else { *psk }),
         pmkid,
         akm: rsn.map_or(0, |r| r.akm),
         n_pmkid: rsn.map_or(0, |r| r.n_pmkid),
+        sae: unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).diag(sta, now_ms) },
     }
 }
 
@@ -3837,20 +3906,46 @@ pub fn ap_pmksa_drop(sta: &[u8; 6]) {
     unsafe { (*core::ptr::addr_of_mut!(PMKSA)).remove(sta) }
 }
 
-/// Deauthenticate a station (WLC_SCB_DEAUTHENTICATE_FOR_REASON, brcmf_scb_val_le {reason, ea} — brcmfmac's AP
-/// del_station). The FullMAC firmware answers the association itself, so the host cannot send status 53 in the
-/// response; a deauthentication with reason 49 (invalid PMKID) right after it is the equivalent.
+/// How `ap_deauth` went: `via` = the ioctl the firmware accepted (201 / 143 / 122, 0 = none); `bcme` = the BCDC
+/// status of the 201 attempt (a negative BCME code; 0 with via 0 = no control reply); `gone` = the firmware has no
+/// SCB for the station (BCME_NOTFOUND / BCME_NOTASSOCIATED: it already dropped it), nothing left to do.
 #[cfg(feature = "wpa3")]
-pub fn ap_deauth(sta: &[u8; 6], reason: u16) -> bool {
+#[derive(Clone, Copy)]
+pub struct Deauth {
+    pub via: u32,
+    pub bcme: i32,
+    pub gone: bool,
+}
+
+/// Deauthenticate a station. First WLC_SCB_DEAUTHENTICATE_FOR_REASON (201, brcmf_scb_val_le {reason, ea} —
+/// brcmfmac's AP del_station). The FullMAC firmware answers the association itself, so the host cannot send a status
+/// in the response; a deauthentication with the reason right after it is the equivalent. If 201 is refused with
+/// anything but "no such SCB": WLC_SCB_DEAUTHENTICATE (143, ea only — `wl deauthenticate` without a reason), then
+/// WLC_SCB_DEAUTHORIZE (122, ea — `wl deauthorize`: the station's port stays shut, its 4-way never starts).
+#[cfg(feature = "wpa3")]
+pub fn ap_deauth(sta: &[u8; 6], reason: u16) -> Deauth {
     let mut v = [0u8; 10];
     v[0..2].copy_from_slice(&reason.to_le_bytes());
     v[4..10].copy_from_slice(sta);
-    bcdc_dcmd(201, BCDC_SET, &v, &mut []).0
+    let (ok, st) = bcdc_dcmd(201, BCDC_SET, &v, &mut []);
+    let bcme = st as i32;
+    let mut d = Deauth { via: 0, bcme, gone: !ok && (bcme == -30 || bcme == -17) };
+    if ok {
+        d.via = 201;
+    } else if !d.gone {
+        for c in [143u32, 122] {
+            if bcdc_dcmd(c, BCDC_SET, sta, &mut []).0 {
+                d.via = c;
+                break;
+            }
+        }
+    }
+    d
 }
 
 #[cfg(feature = "wpa3")]
-pub fn ap_sae_forget(sta: &[u8; 6]) {
-    unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget(sta) }
+pub fn ap_sae_forget(sta: &[u8; 6], now_ms: u64) {
+    unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget_at(sta, now_ms) }
     wpa3_clear_pmksa();
 }
 

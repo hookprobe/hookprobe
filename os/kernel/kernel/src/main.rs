@@ -3633,6 +3633,9 @@ fn cm5_p10_probe() {
                         let mut heal = wifiheal::Heal::from_boot(wifiheal::boot_record(), !rtwdog::self_heal_allowed());
                         heal.baseline(cyw43::fw_halts());
                         let mut stas = wifiheal::StaSet::new();
+                        // WPA3: per-station rate limit of the association-refusal log (a stale-scan station retries ~15 s)
+                        #[cfg(feature = "wpa3")]
+                        let mut rejlog = hal::rsnassoc::RejectLog::new();
                         let mut wifi_off = false; // Degrade: the radio is off for this boot, wired + management keep running
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         let (mut wq_head_fail, mut wq_head_drop) = (0u32, 0u32);
@@ -4363,8 +4366,15 @@ fn cm5_p10_probe() {
                                     assocs += 1;
                                     _last_sta = sta;
                                     stas.add(&sta);
-                                    kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
-                                        sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
+                                    // a station in a refusal streak whose next summary line is not due stays quiet
+                                    #[cfg(feature = "wpa3")]
+                                    let quiet = rejlog.muted(&sta, now() / (freq / 1000).max(1));
+                                    #[cfg(not(feature = "wpa3"))]
+                                    let quiet = false;
+                                    if !quiet {
+                                        kprint!("   [P11-AP3] assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} — 4-way...\n",
+                                            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
+                                    }
                                     // A station that re-associates MID-handshake gets a fresh ANonce
                                     // immediately (its previous ASSOC_IND used to be dropped by the
                                     // old read loops — the "sometimes takes forever" texture).
@@ -4375,17 +4385,31 @@ fn cm5_p10_probe() {
                                         let mut auth = cyw43::ApAuth::new();
                                         // WPA3: keyed from the AKM / PMKID of the station's association request RSNE (12.6.10.3):
                                         // SAE just completed -> its PMK; PMKSA caching with a PMKID we hold -> the cached PMK;
-                                        // AKM 8 with an unknown PMKID -> deauthenticated (reason 49) so it redoes SAE; PSK -> passphrase
+                                        // AKM 8 with an unknown / no PMKID -> deauthenticated (reason 49) so it redoes SAE; an AKM
+                                        // the BSS does not offer now (stale scan after a live security change) -> reason 20; PSK ->
+                                        // passphrase. Refusals are rate-limited per station (first, then a count every 30 s).
                                         #[cfg(feature = "wpa3")]
                                         let (apmk, akm8, apmkid) = {
-                                            let k = cyw43::ap_keying(&sta, now() / (freq / 1000).max(1), &pmk);
-                                            kprint!("   [P11-AP3] assoc RSNE akm={:#010x} pmkids={} -> {}\n", k.akm, k.n_pmkid, k.how.name());
-                                            if k.how == hal::rsnassoc::Keying::Reject {
-                                                let d = cyw43::ap_deauth(&sta, hal::rsnassoc::REASON_INVALID_PMKID);
-                                                kprint!(" [P11-AP3] no PMKSA for that PMKID: deauthenticated (reason 49, ok={}) — the station redoes SAE\n", d);
+                                            let ms = now() / (freq / 1000).max(1);
+                                            let k = cyw43::ap_keying(&sta, ms, &pmk);
+                                            if let Some(reason) = k.how.reason() {
+                                                let d = cyw43::ap_deauth(&sta, reason);
+                                                if let Some(n) = rejlog.note(&sta, ms) {
+                                                    kprint!("   [P11-AP3] assoc RSNE akm={:#010x} pmkids={} -> {} (SAE state: {}, {} ms) -> deauthenticated (reason {}): {} ioctl={} bcme={} [{} refusal(s) of this station since its last line]\n",
+                                                        k.akm, k.n_pmkid, k.how.name(), sae::diag_name(k.sae.0), k.sae.1, reason,
+                                                        if d.via != 0 { "ok" } else if d.gone { "station already gone" } else { "REFUSED" }, d.via, d.bcme, n);
+                                                }
+                                                if d.via == 0 && !d.gone && rejlog.first_fail(&sta) {
+                                                    kprint!(" [P11-AP3] the firmware refused 201/143/122 (201 bcme={}): the station is not told to leave\n", d.bcme);
+                                                }
                                                 stas.remove(&sta);
                                                 break;
                                             }
+                                            if let Some(n) = rejlog.clear(&sta) {
+                                                kprint!("   [P11-AP3] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left its refusal streak ({} unlogged) — 4-way...\n",
+                                                    sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], n);
+                                            }
+                                            kprint!("   [P11-AP3] assoc RSNE akm={:#010x} pmkids={} -> {}\n", k.akm, k.n_pmkid, k.how.name());
                                             (k.pmk, k.akm8, k.pmkid)
                                         };
                                         #[cfg(not(feature = "wpa3"))]
@@ -4401,8 +4425,8 @@ fn cm5_p10_probe() {
                                         if apmkid.is_some() && !auth.ptk_set && !auth.reassoc && (auth.m2_mic_fail > 0 || !auth.deauth) {
                                             cyw43::ap_pmksa_drop(&sta);
                                             let d = cyw43::ap_deauth(&sta, hal::rsnassoc::REASON_INVALID_PMKID);
-                                            kprint!(" [P11-AP3] cached PMKSA did not key (m2_rx={} mic_fail={}): PMKSA dropped, deauthenticated (reason 49, ok={}) — the station redoes SAE\n",
-                                                auth.m2_rx, auth.m2_mic_fail, d);
+                                            kprint!(" [P11-AP3] cached PMKSA did not key (m2_rx={} mic_fail={}): PMKSA dropped, deauthenticated (reason 49, ioctl={} bcme={} gone={}) — the station redoes SAE\n",
+                                                auth.m2_rx, auth.m2_mic_fail, d.via, d.bcme, d.gone);
                                             stas.remove(&sta);
                                             break;
                                         }
@@ -4428,7 +4452,7 @@ fn cm5_p10_probe() {
                                 }
                                 cyw43::ApEvent::Leave(sta) => {
                                     #[cfg(feature = "wpa3")]
-                                    cyw43::ap_sae_forget(&sta);
+                                    cyw43::ap_sae_forget(&sta, now() / (freq / 1000).max(1));
                                     unsafe { (*core::ptr::addr_of_mut!(V6)).forget_mac(&sta) }; // release its IPv6 bindings (SAVI)
                                     leaves += 1;
                                     stas.remove(&sta);
@@ -7482,7 +7506,7 @@ pub extern "C" fn kmain() -> ! {
                 if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e, wire);
             // WPA3 reconnect with PMKSA caching (metal 2026-11-12: AKM 8 + PMKID, no SAE, was keyed as PSK)
             let (rsn, cache) = (hal::rsnassoc::selftest(), sae::pmksa_selftest());
-            kprint!(" [P-pmksa] {} — WPA3 PMKSA caching on the AP (12.6.10.3): association-request RSNE walk (AKM, PMKID list; truncated at every field, wrong version, PMKID count past the end, RSNE behind other elements or behind the fixed fields) + decision (AKM 8 after SAE -> SAE PMK; AKM 8 + a cached PMKID -> that PMK; AKM 8 + unknown PMKID -> deauth reason 49; AKM 2 -> passphrase; unreadable / other AKM -> the old rule)={} | PMKSA cache (hit on MAC+PMKID only, expiry, one per station, bounded eviction, clear wipes, filled with the Annex J.10 SAE PMKID)={}\n",
+            kprint!(" [P-pmksa] {} — WPA3 PMKSA caching on the AP (12.6.10.3): association-request RSNE walk (AKM, PMKID list; truncated at every field, wrong version, PMKID count past the end, RSNE behind other elements or behind the fixed fields) + decision (AKM 8 after SAE -> SAE PMK; AKM 8 + a cached PMKID -> that PMK; AKM 8 + unknown PMKID or no PMKID -> deauth reason 49; an AKM the BSS does not offer -> reason 20; AKM 2 -> passphrase; unreadable / other AKM -> the old rule; per-station refusal log rate limit)={} | PMKSA cache (hit on MAC+PMKID only, expiry, one per station, bounded eviction, clear wipes, filled with the Annex J.10 SAE PMKID)={}\n",
                 if rsn && cache { "PASS" } else { "FAIL" }, rsn, cache);
         }
         let _ = ja4id::selftest();
