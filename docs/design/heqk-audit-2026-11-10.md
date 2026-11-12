@@ -272,6 +272,27 @@ Rows above are kept as written. Status since, per item:
 | REL-08 PMKID correction | built, on by default with `wpa3` (operator 1A, 2026-11-11); dev-bench trigger test passed; 72 h soak + regression matrix metal pending; shipping blocked (written legal clearance, CMP-02) | `docs/design/rel08-cyw43455-pmkid-trap.md` |
 | Bench | flash runbook + read-only preflight, rpiboot entry fix (PR #1012) | `docs/design/heqk-flash-runbook.md` |
 
+**A7 status — Wi-Fi field self-heal (2026-11-12, branch feat/selfheal-txfreeze, QEMU gate `[P-wifiheal]`).**
+`kernel/src/wifiheal.rs` classifies each AP-loop tick before acting: congestion (credit window exhausted, completions
+still advancing) and no / power-save / gone station never trigger recovery; a firmware crash is the mailbox FWHALT
+event (not a timer); a persistent TX freeze (queued, window exhausted, `tx_max` frozen, awake station) escalates
+kick (100 ms, every 500 ms) → BSS bounce (10 s) → firmware reload (10 s after the bounce settles; a 2nd reload only
+60 s after the 1st) → one reboot. Diagnostics (firmware hash, PMKID-fix status, trap registers, SDPCM credit state,
+queue depth, counters, attempt) are written to the crash-record page before every action. The boot after that reboot
+degrades on a recurrence within 30 min: Wi-Fi off, `/api/health` `wifi_heal.state` = degraded, no further reset;
+wired LAN, WAN and management keep running. The firmware reload (`cyw43::fw_reload`) uses the boot's
+`firmware_upload`, so the REL-08 PMKID correction is re-applied exactly as at boot. The old 120-s wedge reset and the
+immediate FWHALT reset are replaced by this ladder. The event ring is now drained on every iteration that has
+anything pending; overruns stay counted (`[EVENTS]`, export seal). The heap is a bump allocator with no reclaim
+(`heap.rs`); the AP loop allocates nothing per iteration (`[P-wifiheal]` and `[P-verify-heap]` check zero growth).
+**Metal must still prove:** (1) a documented TX-freeze trigger (the 2026-11-05 station TX stall, or a forced one)
+produces kick → bounce → reload with the bounded timings above and a `[WIFI-HEAL]` diagnostics line before each;
+(2) a firmware reload brings the BSS back serve-ready with `PMKID correction Some(true)` and stations re-join;
+(3) a FWHALT (REL-08 soak) is followed by a reload, not a reset; (4) after exhausted reloads the unit reboots once and
+the next boot prints the previous recovery record; (5) a recurrence then degrades with Wi-Fi off while the wired LAN,
+WAN and Mission Control on the management VLAN keep serving; (6) repeated cycles over the 72-h soak stay stable
+(no reset loop, `worst_loop_gap_ms` well under the 16-s watchdog during a reload).
+
 ## 5. Human-dependency register (B — only these need the operator)
 
 1. Production signing-key custody (HSM / ceremony) and the policy/pack key-custody model behind A4.
