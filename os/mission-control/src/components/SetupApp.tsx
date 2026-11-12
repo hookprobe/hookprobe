@@ -61,6 +61,8 @@ const SetupApp: Component = () => {
   // reverts by itself if the internet does not come up (wrong PPPoE login). Its policy section is left out on
   // purpose: the device keeps the per-file / boot-card firewall policy. A stored bundle verifies only against
   // the ENROLLED owner key, so setup enrolls this browser's key first.
+  /** A bundle already in force: a new bundle replaces ALL of it, and setup carries no firewall section. */
+  const overBundle = () => { const c = configView(); return !!c && (c.state === 'trial' || c.state === 'committed') && c.generation > 0; };
   const bundleMode = () => !sample() && !noBundle() && anchorState() === 'ok' && !!uploadView()?.types.some((t) => t.type === 'config');
   const enrolledMine = () => !!anchorView()?.owner_enrolled && anchorView()!.owner_key === ownerKey()?.pubHex;
   const otherOwner = () => !!anchorView()?.owner_enrolled && !!ownerKey() && anchorView()!.owner_key !== ownerKey()!.pubHex;
@@ -229,7 +231,10 @@ const SetupApp: Component = () => {
             <p class="setup-p" style={{ 'font-size': '14px' }}>After the restart the device tries these settings for up to 5 minutes. If the internet doesn't come up (for example a wrong PPPoE password), it goes back to the previous settings by itself. The Wi-Fi isn't checked that way, so double-check its name and password.</p>
           </Show>
           <div class="setup-grow" />
-          <button class="hp-btn hp-btn--primary setup-cta" onClick={() => void launch()}>Launch</button>
+          <Show when={bundleMode() && overBundle()}>
+            <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>This device already runs a signed configuration (generation {configView()!.generation}). Setup sends only internet and Wi-Fi, which would remove its firewall. Change settings in Get Online → Advanced instead, where all three go together.</p>
+          </Show>
+          <button class="hp-btn hp-btn--primary setup-cta" disabled={bundleMode() && overBundle()} onClick={() => void launch()}>Launch</button>
         </Show>
 
         <Show when={step() === 'launch'}>
