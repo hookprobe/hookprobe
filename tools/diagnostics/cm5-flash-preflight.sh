@@ -18,7 +18,10 @@ if [ -f "$D/disk.img" ] && [ -f "$D/heqk8.img" ]; then
   [ -f "$D.log" ] && grep -aq "FACTORY: PASS" "$D.log" && ok "factory log says PASS ($D.log)" || wn "no factory PASS line next to the image ($D.log)"
 else no "missing $D/disk.img or $D/heqk8.img"; fi
 # 2. host tools + credentials (no secret is read or printed)
-command -v rpiboot >/dev/null || [ -x /usr/bin/rpiboot ] || [ -x /usr/local/bin/rpiboot ] && ok "rpiboot present" || no "rpiboot not installed"
+# flash-image.sh needs the VENDORED usbboot (rpiboot + mass-storage-gadget64) next to it — the distro rpiboot cannot
+# parse the BCM2712 gadget (2026-11-12: a worktree without it fell back to /usr/bin/rpiboot and the flash failed)
+UB="$HERE/../../os/kernel/tools/usbboot"
+[ -x "$UB/rpiboot" ] && [ -d "$UB/mass-storage-gadget64" ] && ok "vendored usbboot present ($UB)" || no "vendored usbboot missing at $UB (rpiboot + mass-storage-gadget64) — build it: make -C os/kernel/tools/usbboot"
 [ -n "${SUDO_PASS_FILE:-}" ] && [ -f "$SUDO_PASS_FILE" ] && [ "$(stat -c %a "$SUDO_PASS_FILE")" = 600 ] && ok "sudo password file present, mode 600" || wn "SUDO_PASS_FILE not set / not 0600 (the flash step needs sudo)"
 df_k=$(df -k --output=avail "$HOME" | tail -1); [ "$df_k" -gt 2000000 ] && ok "free space $((df_k / 1024)) MiB" || no "less than 2 GiB free in \$HOME"
 # 3. relay rig: reachable, and in the resting state (power on, rpiboot released) — status only
