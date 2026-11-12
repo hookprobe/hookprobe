@@ -39,7 +39,7 @@ const FILE: Record<Sec, { name: string; sig: string; type: string }> = {
   firewall: { name: 'POLICY.TXT', sig: 'POLICY.SIG', type: 'policy' },
 };
 const secFor = (p: string): Sec => (p.startsWith('/network/wifi') ? 'wifi' : p.startsWith('/protect/policies') ? 'firewall' : 'internet');
-const field = { font: 'inherit', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)', width: '100%', 'box-sizing': 'border-box' } as const;
+const field = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)', width: '100%', 'box-sizing': 'border-box' } as const;
 
 type Step = 'review' | 'sign' | 'upload' | 'done' | 'card';
 
@@ -198,7 +198,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <For each={SECS}>{([s, label, href]) => <a class="tab" href={href} onClick={(e) => { e.preventDefault(); history.pushState(null, '', href); setSec(s); setOpen(false); }} aria-current={sec() === s ? 'page' : undefined} aria-selected={sec() === s} style={{ display: 'inline-flex', 'align-items': 'center', 'text-decoration': 'none' }}>{label}</a>}</For>
         </nav>
 
-        <div class="tl" style={{ 'grid-template-columns': 'minmax(0, 1fr) 380px' }} ref={() => queueMicrotask(prefill)}>
+        <div class="tl adv-grid" ref={() => queueMicrotask(prefill)}>
           <section style={{ display: 'flex', 'flex-direction': 'column', gap: '16px', 'min-width': 0 }}>
             <Show when={sec() === 'internet'}>
               <div class="pcard">
