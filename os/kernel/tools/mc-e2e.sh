@@ -47,7 +47,7 @@ export CARGO_TARGET_DIR=target/mc
 cargo build -p kernel --features mcserve,wpa3,hsh >"$RUN/build.log" 2>&1 || { tail -20 "$RUN/build.log"; exit 2; }
 KERNEL=target/mc/aarch64-unknown-none-softfloat/debug/kernel
 
-echo "[1b] boot disk with an owner key (ADR 0037 D3: the device stores only a salted verifier)"
+echo "[1b] boot disk with an owner key (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059): the device stores only a salted verifier)"
 TOKEN="E2E$(python3 -I -c 'import secrets;print(secrets.token_hex(12))')"
 DISK=$(mktemp /tmp/mc-e2e-disk.XXXX.img); PART=$(mktemp)
 truncate -s 64M "$DISK"; printf 'start=2048, size=129024, type=c\n' | sfdisk --quiet --label dos "$DISK"
