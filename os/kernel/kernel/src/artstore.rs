@@ -622,6 +622,17 @@ pub fn verify_half<D: BlockDev + ?Sized>(dev: &D, t: Ty, half: u8, key: &[u8; 32
     Some((g, l, dl))
 }
 
+/// R6 = D: the generation `rollback` would re-activate (the OTHER half, verified with the type's own verifier), or
+/// None — what an owner's rollback envelope must bind, checked before anything is written.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+pub fn rollback_target<D: BlockDev + ?Sized>(dev: &D, t: Ty, key: &[u8; 32]) -> Option<u64> {
+    let cur = entry(dev, t)?.half;
+    if cur == 0 {
+        return None;
+    }
+    verify_half(dev, t, if cur == 1 { 2 } else { 1 }, key).map(|(g, _, _)| g)
+}
+
 /// ADR 0058: re-activate the OTHER half of a type (the previous generation), after verifying it again with the
 /// type's own verifier. Staged types apply at the next boot; packs reload now (rolled back on refusal). POLICY can
 /// never go below its persisted generation floor (its verifier refuses — `policysig::floor`).

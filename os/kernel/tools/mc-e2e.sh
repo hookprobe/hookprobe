@@ -81,6 +81,13 @@ import sys, json, importlib.util
 spec = importlib.util.spec_from_file_location('ps', sys.argv[3]); ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
 e = json.load(sys.stdin)['envelope']
 print(ps.mgmt_envelope(ps.load(sys.argv[2]), bytes.fromhex(e['device_id']), bytes.fromhex(e['epoch']), int(e['next_seq']), sys.argv[1], 0, int(e['generation']), bytes.fromhex(e['digest'])).hex())" "$1" "${2:-$KOWN}" "$PWD/tools/policy-sign.py"; }
+# SIGNX <msg> <arg> <generation> <digest hex | -> [KEYFILE]: an envelope for Mission Control's owner endpoints (R6 = D)
+SIGNX() { curl -s -m 10 $C "$B/api/config" | python3 -I -c "
+import sys, json, importlib.util
+spec = importlib.util.spec_from_file_location('ps', sys.argv[6]); ps = importlib.util.module_from_spec(spec); spec.loader.exec_module(ps)
+e = json.load(sys.stdin)['envelope']
+dg = bytes(32) if sys.argv[4] == '-' else bytes.fromhex(sys.argv[4])
+print(ps.mgmt_envelope(ps.load(sys.argv[5]), bytes.fromhex(e['device_id']), bytes.fromhex(e['epoch']), int(e['next_seq']), sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), dg).hex())" "$1" "$2" "$3" "$4" "${5:-$KOWN}" "$PWD/tools/policy-sign.py"; }
 JAR=$(mktemp)
 
 echo "[2] boot heqk in QEMU (host :$HTTP→80, :$P4444→4444, :$P23→23)"
@@ -215,10 +222,27 @@ UPS=$(curl -s -m 10 $C "$B/api/upload")
 echo "$UPS" | jget "d['store'] is False and [t['type'] for t in d['types']]==['shield_block','shield_allow','ioc','rules','oui','devices','wan','wifi','policy','config'] and all(t['source']=='boot' for t in d['types']) and [t['applies'] for t in d['types']]==['now']*6+['next_boot']*4 and d['in_flight'] is None" | grep -q True && ok "ADR 0056 /api/upload answers (no artifact store in QEMU: every pack from the boot copy)" || bad "/api/upload: $UPS"
 [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'type=devices&size=600' "$B/api/upload/begin")" = 401 ] && ok "/api/upload/begin requires the owner session" || bad "/api/upload/begin reachable without a session"
 # ADR 0058 rollback: owner re-authentication first; with no artifact store in QEMU nothing can be rolled back
-RBK=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+9))&owner_key=wrong-key-000000000" "$B/api/upload/rollback")
-grep -q 're-authentication failed' <<<"$RBK" && ok "ADR 0058: /api/upload/rollback refuses without owner re-authentication" || bad "rollback guard: $RBK"
-RBN=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+9+1))" --data-urlencode "owner_key=$TOKEN" "$B/api/upload/rollback")
-grep -q '"refused":"no artifact store"' <<<"$RBN" && ok "ADR 0058: rollback with no artifact store is refused honestly" || bad "rollback without store: $RBN"
+# R6 = D (operator 2026-11-12): pack rollback, factory reset and owner-key rotation are authorised only by an
+# owner-signed envelope too; the owner token alone is refused. A second session keeps these writes out of the first
+# session's 20-writes-a-minute budget.
+RBK=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+9))" --data-urlencode "owner_key=$TOKEN" "$B/api/upload/rollback")
+grep -q '"refused":"refused: needs an owner-signed envelope"' <<<"$RBK" && ok "R6 = D: a token-only /api/upload/rollback is refused (needs an owner-signed envelope)" || bad "token-only pack rollback: $RBK"
+RBN=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "type=wan&seq=$((SQN+9+1))&envelope=$(SIGNX pack-rollback 6 1 -)" "$B/api/upload/rollback")
+grep -q '"refused":"no artifact store"' <<<"$RBN" && ok "R6 = D: an owner-signed pack-rollback envelope verifies; QEMU then refuses honestly (no artifact store)" || bad "signed pack rollback: $RBN"
+JAR2=$(mktemp); curl -s -o /dev/null -m 10 -d "token=$TOKEN" "$B/api/login" -c "$JAR2"
+C2="-b $JAR2"; S2=$(curl -s -m 10 $C2 "$B/api/session"); CS2=$(echo "$S2" | jget "d['csrf']"); Q2=$(echo "$S2" | jget "d['next_seq']")
+FR=$(curl -s -m 10 $C2 -H "Origin: $B" -H "X-HQ-CSRF: $CS2" --data "confirm=ERASE&reason=e2e+reset&permanent=true&seq=$Q2" --data-urlencode "owner_key=$TOKEN" "$B/api/factory-reset")
+grep -q '"refused":"refused: needs an owner-signed envelope"' <<<"$FR" && ok "R6 = D: a token-only /api/factory-reset is refused" || bad "token-only factory reset: $FR"
+FR2=$(curl -s -m 10 $C2 -H "Origin: $B" -H "X-HQ-CSRF: $CS2" --data "confirm=ERASE&reason=e2e+reset&permanent=true&seq=$((Q2+1))&envelope=$(SIGNX factory-reset 0 0 -)" "$B/api/factory-reset")
+grep -q '"refused":"no persistent journal' <<<"$FR2" && ok "R6 = D: an owner-signed factory-reset envelope verifies; QEMU then refuses honestly (RAM journal: nothing durable to erase)" || bad "signed factory reset: $FR2"
+RPK=$(printf '%064d' 9); RSG=$(printf '%0128d' 9)
+CURFP=$(python3 -I -c "import hashlib,struct,sys; print(struct.unpack('<Q', hashlib.sha256(bytes.fromhex(sys.argv[1])).digest()[:8])[0])" "$TEST_KOWN_PK")
+NEWDG=$(python3 -I -c "import hashlib,sys; print(hashlib.sha256(bytes.fromhex(sys.argv[1])).hexdigest())" "$RPK")
+RT=$(curl -s -m 10 $C2 -H "Origin: $B" -H "X-HQ-CSRF: $CS2" --data "public_key=$RPK&proof=$PF&generation=2&signature=$RSG&seq=$((Q2+2))&envelope=$(SIGNX rotate $CURFP 2 $(printf '%064d' 1))" "$B/api/anchor/rotate")
+grep -q '"refused":"refused: envelope binds another target"' <<<"$RT" && ok "R6 = D: a rotate envelope signed for another new key is refused" || bad "rotate wrong target: $RT"
+RT2=$(curl -s -m 10 $C2 -H "Origin: $B" -H "X-HQ-CSRF: $CS2" --data "public_key=$RPK&proof=$PF&generation=2&signature=$RSG&seq=$((Q2+3))&envelope=$(SIGNX rotate $CURFP 2 $NEWDG)" "$B/api/anchor/rotate")
+grep -q '"refused":"no DataVolume' <<<"$RT2" && ok "R6 = D: a rotate envelope bound to the current + new key verifies; QEMU then refuses honestly (no DataVolume)" || bad "signed rotate: $RT2"
+rm -f "$JAR2"
 EN=$(curl -s -m 10 $C "$B/api/engines")
 echo "$EN" | jget "len(d['engines'])>=6 and all(e['source']=='real' for e in d['engines']) and any(e['kind']=='signature' and e['hits']>=2 for e in d['engines'])" | grep -q True \
   && ok "/api/engines: the device's real detection tiers, signature hits counted" || bad "/api/engines: $EN"

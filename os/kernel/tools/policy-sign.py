@@ -14,11 +14,13 @@
   policy-sign.py sign-wan KEYFILE WAN.TXT GEN OUT.SIG           # WAN mode / VLANs / mgmt_floor (<= 512 B; audit finding 11)
   policy-sign.py enroll-proof OWNERKEY                          # ADR 0058 D3: public_key + proof for POST /api/anchor/enroll
   policy-sign.py rotate OLDKEY NEWKEY GEN                       # ADR 0058 D3: public_key + proof + signature for /api/anchor/rotate
-  policy-sign.py mgmt-sign OWNERKEY --device-id HEX --epoch HEX --seq N --msg confirm|rollback|stage
-                 [--generation N --digest HEX | --bundle HQCFG1.BIN] [--arg UPLOAD_ID]
+  policy-sign.py mgmt-sign OWNERKEY --device-id HEX --epoch HEX --seq N
+                 --msg confirm|rollback|stage|activate|pack-rollback|factory-reset|rotate  [per-message binding,
+                 see mgmt_args: --generation --digest --bundle --arg --type --current-key --new-key]
                                                                 # R6 = D: an HQMGMT1 command envelope (312 hex)
 
-HQMGMT1 envelope (156 B, R6 = D): "HQMGMT1\\0" | version u16 = 1 | msg u16 (20 confirm, 21 rollback, 22 stage) |
+HQMGMT1 envelope (156 B, R6 = D): "HQMGMT1\\0" | version u16 = 1 | msg u16 (20 confirm, 21 rollback, 22 stage,
+23 activate, 24 pack-rollback, 32 factory-reset, 33 rotate) |
 device_id[16] | epoch[8] | seq u64 | arg u64 | generation u64 | digest[32] | Ed25519(K_own, "HQMGMT1-SIG" || bytes 0..92),
 all little-endian. device_id / epoch / next sequence / generation / digest come from GET /api/config ("envelope")
 or the hsh command `owner challenge`; confirm / rollback bind the bundle in force (digest = sha256 of the HQCFG1
@@ -52,11 +54,25 @@ def pubhex(k):
     return k.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
 
 
-MGMT_MSG = {"confirm": 20, "rollback": 21, "stage": 22}
+MGMT_MSG = {"confirm": 20, "rollback": 21, "stage": 22, "activate": 23, "pack-rollback": 24, "factory-reset": 32, "rotate": 33}
+# artifact type codes (kernel artstore::Ty; os_image 0xfe) — the `arg` of activate / pack-rollback envelopes
+TYPE_CODE = {"shield_block": 0, "shield_allow": 1, "ioc": 2, "rules": 3, "oui": 4, "devices": 5, "wan": 6, "wifi": 7,
+             "policy": 8, "config": 9, "os_image": 0xFE}
+
+
+def fp8(pk):
+    """An owner key's fingerprint as rotate envelopes carry it in `arg`: SHA-256(public key)[..8], little-endian."""
+    return struct.unpack("<Q", hashlib.sha256(pk).digest()[:8])[0]
 
 
 def mgmt_args(rest):
-    """--device-id HEX --epoch HEX --seq N --msg NAME [--generation N] [--digest HEX] [--bundle FILE] [--arg N]"""
+    """--device-id HEX --epoch HEX --seq N --msg NAME, then per message:
+       confirm / rollback   --generation N --digest HEX | --bundle FILE      (the bundle in force)
+       stage                --arg UPLOAD_ID
+       activate             --type NAME --generation N --digest HEX | --file PACK   (as /api/upload/finish reports)
+       pack-rollback        --type NAME --generation N                       (the generation it rolls back TO)
+       factory-reset        (nothing else)
+       rotate               --current-key HEX --new-key HEX --generation N   (public keys; N = rotation generation)"""
     kv = {}
     it = iter(rest)
     for k in it:
@@ -65,8 +81,21 @@ def mgmt_args(rest):
         kv[k[2:].replace("-", "_")] = next(it, None)
     if kv.get("bundle"):
         kv["digest"] = hashlib.sha256(open(kv.pop("bundle"), "rb").read()).hexdigest()
-    if kv.get("msg") in ("confirm", "rollback") and (kv.get("generation") is None or kv.get("digest") is None):
-        sys.exit("confirm / rollback bind the bundle in force: --generation and --digest (or --bundle), as /api/config 'envelope' shows them")
+    msg = kv.get("msg")
+    need = {"confirm": ("generation", "digest"), "rollback": ("generation", "digest"), "activate": ("type", "generation"),
+            "pack-rollback": ("type", "generation"), "rotate": ("current_key", "new_key", "generation")}.get(msg, ())
+    missing = [n for n in need if kv.get(n) is None]
+    if missing:
+        sys.exit(f"mgmt-sign --msg {msg}: missing --{' --'.join(m.replace('_', '-') for m in missing)} (see policy-sign.py mgmt-sign)")
+    if msg in ("activate", "pack-rollback"):
+        if kv["type"] not in TYPE_CODE:
+            sys.exit(f"--type must be one of {', '.join(TYPE_CODE)}")
+        kv["arg"] = str(TYPE_CODE[kv["type"]])
+    if msg == "activate" and kv.get("digest") is None:
+        sys.exit("activate binds the staged content: --digest (as /api/upload/finish reports it)")
+    if msg == "rotate":
+        kv["arg"] = str(fp8(bytes.fromhex(kv["current_key"])))
+        kv["digest"] = hashlib.sha256(bytes.fromhex(kv["new_key"])).hexdigest()
     try:
         return dict(device_id=bytes.fromhex(kv["device_id"]), epoch=bytes.fromhex(kv["epoch"]), seq=int(kv["seq"]),
                     msg=kv["msg"], arg=int(kv.get("arg") or "0", 0), generation=int(kv.get("generation") or 0),

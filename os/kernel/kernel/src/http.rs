@@ -308,7 +308,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 w.string(why);
                 w.raw("}");
             })
-            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") || crate::mgmtenv::REASONS.contains(&why) { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
     // ADR 0059 step 4a, R6 = D (operator 2026-11-12): the native shell's web carrier over the authenticated owner
@@ -325,7 +325,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         let line = lines.next().unwrap_or(b"");
         let mut env = [0u8; hal::mgmtabi::ENV_LEN];
         // a second line that is not a well-formed envelope is passed on as "no envelope": refused + journaled
-        let env_ok = lines.next().is_some_and(|l| crate::mgmtabi::unhex_envelope(l, &mut env));
+        let env_ok = lines.next().is_some_and(|l| crate::mgmtenv::unhex(l, &mut env));
         let mut text = [0u8; 2048];
         // journaled as an hsh op (command words only, never arguments or the envelope) inside hsh::web
         let n = crate::hsh::web(line, if env_ok { &env[..] } else { &[] }, crate::mcauth::session_tag(req.session), now_ms, &mut text);
@@ -431,7 +431,14 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = match o {
                     Ok_::Begun(id) => write!(w, "{{\"ok\":true,\"id\":\"{:016x}\",\"chunk_max\":{}}}", id, up::CHUNK_MAX),
                     Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
-                    Ok_::Fin(f) => write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{}}}", f.gen, f.active_gen, f.len),
+                    Ok_::Fin(f) => {
+                        // R6 = D (additive): the staged content's SHA-256 — the activate envelope binds it
+                        let _ = write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{},\"digest\":\"", f.gen, f.active_gen, f.len);
+                        for b in f.digest {
+                            let _ = write!(w, "{:02x}", b);
+                        }
+                        write!(w, "\"}}")
+                    }
                     Ok_::Act(a) => {
                         let _ = match a.journal_seq {
                             Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{}", a.staged, a.gen, q),
@@ -455,7 +462,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 w.string(why);
                 w.raw("}");
             })
-            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") { 403 } else if why == "replay" { 409 } else { 400 }),
+            .with_status(if matches!(why, "origin" | "csrf" | "re-authentication failed") || crate::mgmtenv::REASONS.contains(&why) { 403 } else if why == "replay" { 409 } else { 400 }),
         };
     }
     if req.post && (req.path == "/api/actions" || req.path == "/api/actions/revoke") {
