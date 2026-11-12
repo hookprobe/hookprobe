@@ -18,7 +18,7 @@ import { networkView, startNetworkLive } from '../store/networkLive';
 import { uploadPack, refreshUploads, uploadView } from '../store/packUpload';
 import { ownerKey, loadOwnerKey, signPack, signBundle, ownerKeyId, enrollProof, PACKS, download } from '../store/signing';
 import { anchorView, anchorState, refreshAnchor, enroll } from '../store/anchor';
-import { configView, refreshConfig } from '../store/configState';
+import { configView, refreshConfig, restNote } from '../store/configState';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
 import ConfigBanners from './ConfigBanners';
 import { askOwnerKey } from '../store/approve';
@@ -57,6 +57,7 @@ const SetupApp: Component = () => {
   /** Set when enrollment was refused (e.g. no data volume): setup falls back to the per-file files. */
   const [noBundle, setNoBundle] = createSignal(false);
   const [bundleDone, setBundleDone] = createSignal('');
+  const [bundleLive, setBundleLive] = createSignal(false);
   // ADR 0059: a device that takes configuration bundles gets ONE wan+wifi bundle — a health-checked trial that
   // reverts by itself if the internet does not come up (wrong PPPoE login). Its policy section is left out on
   // purpose: the device keeps the per-file / boot-card firewall policy. A stored bundle verifies only against
@@ -106,7 +107,7 @@ const SetupApp: Component = () => {
       const sig = await signBundle(b);
       setBusy('Sending them to the device…');
       const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => askOwnerKey('Send your settings to the device?', 'The device checks your signature before anything changes.', 'Send'), () => undefined);
-      setBundleDone(r.text); setBusy(''); go('done');
+      setBundleLive(!!r.live); setBundleDone(r.text); setBusy(''); go('done');
     } catch (e) { setBusy(e instanceof Error ? e.message : String(e)); go('review'); }
   };
 
@@ -224,7 +225,7 @@ const SetupApp: Component = () => {
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>wifi: "{ssid()}" · WPA3 + WPA2</div>
             <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>signed with your key {ownerKey()?.pubHex.slice(0, 8)}…</div>
           </div>
-          <p class="pcard-note" style={{ margin: 0 }}>Your Wi-Fi password{mode() === 'pppoe' ? ' and PPPoE password are' : ' is'} stored in the signed file in clear: anyone holding the device's boot card can read {mode() === 'pppoe' ? 'them' : 'it'}. Not protected at rest yet.</p>
+          <p class="pcard-note" style={{ margin: 0 }}>{restNote()}</p>
           <Show when={bundleMode()} fallback={
             <p class="setup-p" style={{ 'font-size': '14px' }}>The new settings apply when the device restarts. Afterwards, join "{ssid()}" with your new password.</p>
           }>
@@ -247,10 +248,10 @@ const SetupApp: Component = () => {
 
         <Show when={step() === 'done' && bundleDone()}>
           <div class="setup-orb setup-orb--done" role="img" aria-label="Done">✓</div>
-          <h1 class="setup-h1">Ready. Restart to try your settings.</h1>
+          <h1 class="setup-h1">{bundleLive() ? 'Trying your settings now.' : 'Ready. Restart to try your settings.'}</h1>
           <p class="setup-p">{bundleDone()}</p>
-          <p class="setup-p" style={{ 'font-size': '14px' }}>After the restart, join "{ssid()}" with your new password and come back to this page: it shows the trial and a countdown. Mission Control stays reachable on the device's Wi-Fi during the trial.</p>
-          <RestartButton primary label="Restart and try them" />
+          <p class="setup-p" style={{ 'font-size': '14px' }}>{bundleLive() ? 'Join' : 'After the restart, join'} "{ssid()}" with your new password and come back to this page: it shows the trial and a countdown. Mission Control stays reachable on the device's Wi-Fi during the trial.</p>
+          <Show when={!bundleLive()}><RestartButton primary label="Restart and try them" /></Show>
           <ConfigBanners />
           <Show when={configView()?.state === 'committed'}><p class="go-state--up" role="status" style={{ margin: 0, 'font-weight': 600 }}>✓ Kept: you're online with your new settings.</p></Show>
           <div class="setup-grow" />
