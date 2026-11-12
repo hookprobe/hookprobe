@@ -214,7 +214,9 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <div>
             <p class="pro-crumb"><a href="/network/wan">Get Online</a> / Advanced</p>
             <h1 class="pro-title">Advanced settings</h1>
-            <p class="pro-sub">Changes here are signed with your key and apply on the next reboot. Only options this device supports are shown.</p>
+            <p class="pro-sub">{takesBundles()
+              ? 'Changes are signed with your key and apply live, without a restart, as a short trial: they keep themselves when everything works, or switch back by themselves. Only options this device supports are shown.'
+              : 'Changes here are signed with your key and apply on the next reboot. Only options this device supports are shown.'}</p>
           </div>
         </div>
         <nav class="tabs" aria-label="Advanced sections">
@@ -354,27 +356,41 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
 
           <aside class="tl-side" aria-label="Draft file">
             <div class="pcard" style={{ 'border-width': '2px', padding: 0, overflow: 'hidden', gap: 0 }}>
-              <span class="prow" style={{ padding: '10px 14px' }}><span style={{ 'font-weight': 600 }}>{FILE[sec()].name} · draft</span><span>generation {activeGen() || '?'} → {genNum()}</span></span>
+              <span class="prow" style={{ padding: '10px 14px' }}><span style={{ 'font-weight': 600 }}>{FILE[sec()].name} · draft</span><span>{takesBundles() ? `bundle generation ${bundleGen() - 1} → ${bundleGen()}` : `generation ${activeGen() || '?'} → ${genNum()}`}</span></span>
               <pre style={{ margin: 0, padding: '14px', font: '13px/1.7 var(--hp-font-mono)', background: 'rgba(255,255,255,.03)', 'white-space': 'pre-wrap', 'overflow-wrap': 'anywhere' }}>{text().replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••')}</pre>
             </div>
-            <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Generation (must be higher than the active one)
-              <input style={field} inputmode="numeric" value={gen()} placeholder={String(activeGen() + 1)} onInput={(e) => setGen(e.currentTarget.value.replace(/\D/g, ''))} /></label>
             <Show when={errors().length > 0}>
               <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Problems">
                 <For each={errors()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For>
               </ul>
             </Show>
-            <p class="pcard-note">This is the exact file the device will receive (secrets hidden here). You sign it with your key on the next step.</p>
-            <Show when={bundleInForce()}>
-              <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>A configuration bundle is in force (generation {configView()!.generation}), so the device refuses single-file changes. Use "Apply all three together" below, with every section you want to keep.</p>
+            {/* Wireframe AdvInternet / AdvApply: the signed bundle is the default path (live, trial, switches back by itself) */}
+            <Show when={takesBundles()} fallback={
+              <>
+                <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Generation (must be higher than the active one)
+                  <input style={field} inputmode="numeric" value={gen()} placeholder={String(activeGen() + 1)} onInput={(e) => setGen(e.currentTarget.value.replace(/\D/g, ''))} /></label>
+                <p class="pcard-note">This is the exact file the device will receive (secrets hidden here). You sign it with your key on the next step.</p>
+                <Show when={bundleInForce()}>
+                  <p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>A configuration bundle is in force (generation {configView()!.generation}), so the device refuses single-file changes. Use "Apply all three together" below, with every section you want to keep.</p>
+                </Show>
+                <button class="hp-btn hp-btn--primary" disabled={errors().length > 0 || bundleInForce()} onClick={startApply}>Review and sign →</button>
+                <a class="hp-btn" href="/network/wan" style={{ 'justify-content': 'center' }}>Discard draft</a>
+                <div class="pcard" aria-label="Apply all together">
+                  <p class="l0-label">Or apply all three together</p>
+                  <p class="l0-card-sub">One signed bundle replaces internet + Wi-Fi + firewall together and runs as a health-checked trial: if the internet does not come back, the device goes back by itself. A single-section change (above) is not health-checked.</p>
+                  <button class="hp-btn" onClick={() => { setBStep('review'); setBMsg(''); setBOpen(true); }}>Review all three →</button>
+                </div>
+              </>
+            }>
+              <p class="pcard-note">Sent with your internet, Wi-Fi and firewall in one signed bundle (secrets hidden here). It applies live, no restart; if the internet does not come back, the device switches back by itself.</p>
+              <button class="hp-btn hp-btn--primary" onClick={() => { setBStep('review'); setBMsg(''); setBOpen(true); }}>Review and apply live →</button>
+              <a class="hp-btn" href="/network/wan" style={{ 'justify-content': 'center' }}>Discard draft</a>
+              <Show when={!bundleInForce()} fallback={
+                <p class="pcard-note" style={{ margin: 0 }}>A configuration bundle is in force (generation {configView()!.generation}), so single-file changes are refused: every change goes in a bundle.</p>
+              }>
+                <button class="hp-btn" style={{ 'font-size': '13px' }} disabled={errors().length > 0} onClick={startApply}>Send just this file instead · next restart, no automatic rollback</button>
+              </Show>
             </Show>
-            <button class="hp-btn hp-btn--primary" disabled={errors().length > 0 || bundleInForce()} onClick={startApply}>Review and sign →</button>
-            <a class="hp-btn" href="/network/wan" style={{ 'justify-content': 'center' }}>Discard draft</a>
-            <div class="pcard" aria-label="Apply all together">
-              <p class="l0-label">Or apply all three together</p>
-              <p class="l0-card-sub">One signed bundle replaces internet + Wi-Fi + firewall together and runs as a health-checked trial: if the internet does not come back, the device goes back by itself. A single-section change (above) is not health-checked.</p>
-              <button class="hp-btn" onClick={() => { setBStep('review'); setBMsg(''); setBOpen(true); }}>Review all three →</button>
-            </div>
           </aside>
         </div>
       </main>
