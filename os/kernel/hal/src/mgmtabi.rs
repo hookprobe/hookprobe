@@ -20,14 +20,11 @@ pub const CFG_CONFIRM: u16 = 20;
 pub const CFG_ROLLBACK: u16 = 21;
 /// arg = the caller's VERIFIED upload id (type `config`): activate it -> PENDING -> trial at the next boot
 pub const CFG_STAGE: u16 = 22;
-// step 4c: owner elevation (hsh spec §6.3). CHALLENGE: a single-use nonce (120 s) bound to this device;
-// ELEVATE: payload = Ed25519 by the ENROLLED owner key over "HQCHAL1" || device_id || nonce -> this session holds the
-// owner role for ELEVATE_TTL_S. Enrollment / rotation stay in Mission Control (two or three signatures, and there is
-// no owner key to elevate with before enrollment).
+// step 4c, R6 = D (operator 2026-11-12): owner-key-signed command envelopes. OWNER_CHALLENGE (view) returns what an
+// envelope must bind (device id, this boot's epoch, the next sequence, the configuration in force); every privileged
+// message (role above view) is authorised ONLY by an HQMGMT1 envelope signed by the ENROLLED owner key K_own, from any
+// carrier — no session state authorises a change. Session elevation (the former OWNER_ELEVATE, id 31) is retired.
 pub const OWNER_CHALLENGE: u16 = 30;
-pub const OWNER_ELEVATE: u16 = 31;
-pub const ELEVATE_TTL_S: u64 = 900;
-pub const CHALLENGE_TTL_S: u64 = 120;
 
 // ---- result codes ----
 pub const R_OK: u8 = 0;
@@ -48,7 +45,7 @@ pub fn role_for(msg: u16) -> u8 {
         GET_INFO | GET_WAN | GET_QSECBIT | GET_CONFIG | GET_ANCHOR | GET_PARSERS => ROLE_VIEW,
         CFG_CONFIRM | CFG_ROLLBACK => ROLE_OPERATE,
         CFG_STAGE => ROLE_CONFIG,
-        OWNER_CHALLENGE | OWNER_ELEVATE => ROLE_VIEW,
+        OWNER_CHALLENGE => ROLE_VIEW,
         _ => u8::MAX,
     }
 }
@@ -62,7 +59,7 @@ pub fn reply_len(msg: u16) -> Option<usize> {
         GET_CONFIG => CFG_LEN,
         GET_ANCHOR => ANCHOR_LEN,
         GET_PARSERS => PARSERS_LEN,
-        CFG_CONFIRM | CFG_ROLLBACK | CFG_STAGE | OWNER_ELEVATE => ACT_LEN,
+        CFG_CONFIRM | CFG_ROLLBACK | CFG_STAGE => ACT_LEN,
         OWNER_CHALLENGE => CHAL_LEN,
         _ => return None,
     })
@@ -349,34 +346,110 @@ impl Act {
     }
 }
 
-/// OWNER_CHALLENGE reply: what the owner signs, off-device: "HQCHAL1" || device_id || nonce.
+/// OWNER_CHALLENGE reply: what the next envelope must carry. `generation` / `digest` = the HQCFG1 bundle in force (on
+/// trial or committed; 0 / zeros = none), which CFG_CONFIRM / CFG_ROLLBACK envelopes bind to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Challenge {
     pub device_id: [u8; 16],
-    pub nonce: [u8; 16],
-    pub ttl_s: u32,
-    /// false = no owner key is enrolled: nothing can be elevated (enroll in Mission Control first).
+    pub epoch: [u8; 8],
+    pub next_seq: u64,
+    pub generation: u64,
+    pub digest: [u8; 32],
+    pub on_trial: bool,
+    /// false = no owner key is enrolled: no privileged operation is possible (enroll in Mission Control first).
     pub owner_enrolled: bool,
 }
-pub const CHAL_LEN: usize = 16 + 16 + 4 + 1;
+pub const CHAL_LEN: usize = 16 + 8 + 8 + 8 + 32 + 1 + 1;
 impl Challenge {
     pub fn encode(&self) -> [u8; CHAL_LEN] {
         let mut o = [0u8; CHAL_LEN];
         o[..16].copy_from_slice(&self.device_id);
-        o[16..32].copy_from_slice(&self.nonce);
-        o[32..36].copy_from_slice(&self.ttl_s.to_le_bytes());
-        o[36] = self.owner_enrolled as u8;
+        o[16..24].copy_from_slice(&self.epoch);
+        o[24..32].copy_from_slice(&self.next_seq.to_le_bytes());
+        o[32..40].copy_from_slice(&self.generation.to_le_bytes());
+        o[40..72].copy_from_slice(&self.digest);
+        o[72] = self.on_trial as u8;
+        o[73] = self.owner_enrolled as u8;
         o
     }
     pub fn decode(b: &[u8; CHAL_LEN]) -> Self {
-        Challenge { device_id: b[..16].try_into().unwrap(), nonce: b[16..32].try_into().unwrap(), ttl_s: u32_at(b, 32), owner_enrolled: b[36] != 0 }
+        Challenge {
+            device_id: b[..16].try_into().unwrap(),
+            epoch: b[16..24].try_into().unwrap(),
+            next_seq: u64_at(b, 24),
+            generation: u64_at(b, 32),
+            digest: b[40..72].try_into().unwrap(),
+            on_trial: b[72] != 0,
+            owner_enrolled: b[73] != 0,
+        }
     }
 }
-/// The message the owner signs to elevate.
-pub fn challenge_msg(device_id: &[u8; 16], nonce: &[u8; 16]) -> [u8; 39] {
-    let mut m = [0u8; 39];
-    m[..7].copy_from_slice(b"HQCHAL1");
-    m[7..23].copy_from_slice(device_id);
-    m[23..].copy_from_slice(nonce);
+
+// ---- HQMGMT1: the owner-signed command envelope (R6 = D) ----
+//
+//   off len  field
+//     0   8  magic "HQMGMT1\0"
+//     8   2  version u16 = 1
+//    10   2  msg u16 (the management message id: CFG_CONFIRM / CFG_ROLLBACK / CFG_STAGE)
+//    12  16  device_id (config_device_id: the envelope is for THIS device only)
+//    28   8  epoch (this boot's, from OWNER_CHALLENGE / /api/config: an envelope dies with the boot it was made for)
+//    36   8  seq u64 (> the device's floor for this epoch; consumed on use: a replay is refused)
+//    44   8  arg u64 (CFG_STAGE: the verified upload id; else 0)
+//    52   8  generation u64 (CFG_CONFIRM / CFG_ROLLBACK: the bundle in force; else 0)
+//    60  32  digest (CFG_CONFIRM / CFG_ROLLBACK: SHA-256 of that HQCFG1 bundle; else zeros)
+//    92  64  Ed25519(K_own, "HQMGMT1-SIG" || bytes 0..92)
+pub const ENV_MAGIC: &[u8; 8] = b"HQMGMT1\0";
+pub const ENV_TAG: &[u8; 11] = b"HQMGMT1-SIG";
+pub const ENV_VERSION: u16 = 1;
+pub const ENV_BODY: usize = 92;
+pub const ENV_LEN: usize = ENV_BODY + 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Envelope {
+    pub msg: u16,
+    pub device_id: [u8; 16],
+    pub epoch: [u8; 8],
+    pub seq: u64,
+    pub arg: u64,
+    pub generation: u64,
+    pub digest: [u8; 32],
+}
+impl Envelope {
+    /// The signed body (bytes 0..92).
+    pub fn body(&self) -> [u8; ENV_BODY] {
+        let mut o = [0u8; ENV_BODY];
+        o[..8].copy_from_slice(ENV_MAGIC);
+        o[8..10].copy_from_slice(&ENV_VERSION.to_le_bytes());
+        o[10..12].copy_from_slice(&self.msg.to_le_bytes());
+        o[12..28].copy_from_slice(&self.device_id);
+        o[28..36].copy_from_slice(&self.epoch);
+        o[36..44].copy_from_slice(&self.seq.to_le_bytes());
+        o[44..52].copy_from_slice(&self.arg.to_le_bytes());
+        o[52..60].copy_from_slice(&self.generation.to_le_bytes());
+        o[60..92].copy_from_slice(&self.digest);
+        o
+    }
+    /// Structure only (the signature is the kernel's to verify): exact length, magic, version.
+    pub fn parse(b: &[u8]) -> Option<(Self, [u8; 64])> {
+        if b.len() != ENV_LEN || &b[..8] != ENV_MAGIC || u16::from_le_bytes([b[8], b[9]]) != ENV_VERSION {
+            return None;
+        }
+        let e = Envelope {
+            msg: u16::from_le_bytes([b[10], b[11]]),
+            device_id: b[12..28].try_into().unwrap(),
+            epoch: b[28..36].try_into().unwrap(),
+            seq: u64_at(b, 36),
+            arg: u64_at(b, 44),
+            generation: u64_at(b, 52),
+            digest: b[60..92].try_into().unwrap(),
+        };
+        Some((e, b[92..].try_into().unwrap()))
+    }
+}
+/// The message K_own signs.
+pub fn envelope_msg(body: &[u8; ENV_BODY]) -> [u8; 11 + ENV_BODY] {
+    let mut m = [0u8; 11 + ENV_BODY];
+    m[..11].copy_from_slice(ENV_TAG);
+    m[11..].copy_from_slice(body);
     m
 }

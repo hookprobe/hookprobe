@@ -212,7 +212,7 @@ fn auth() -> &'static mut Auth {
 /// 16 bytes for a session id: the hardware TRNG on the CM5 (fail-closed: no TRNG => `None`, the
 /// login is refused, the sensor keeps running); QEMU has no TRNG, so a hash of the cycle counter + a counter stands in
 /// (QEMU-ONLY — never shipped: the CM5 build takes the TRNG branch).
-fn rand16() -> Option<[u8; 16]> {
+pub(crate) fn rand16() -> Option<[u8; 16]> {
     #[cfg(feature = "cm5")]
     {
         let a = arch_aarch64::rng200::next_word_strict();
@@ -643,6 +643,25 @@ pub fn drain_events(st: &mut McState, mut each: impl FnMut(&events::Event)) {
     }
 }
 
+/// QEMU only: MGMTPK.TXT on the test boot disk = 64 hex digits of a test owner public key (see `run`).
+#[cfg(all(not(feature = "cm5"), feature = "hsh"))]
+fn qemu_test_owner_pk<D: hal::BlockDev>(dev: &D) -> Option<[u8; 32]> {
+    let mut sec = [0u8; 512];
+    dev.read_block(0, &mut sec).ok()?;
+    let p1 = crate::store::parse_mbr(&sec)[0].start;
+    if p1 == 0 {
+        return None;
+    }
+    let (lba, _) = crate::fat::locate_contiguous(dev, p1, b"MGMTPK  TXT")?;
+    dev.read_block(lba, &mut sec).ok()?;
+    let v = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+    let mut pk = [0u8; 32];
+    for (i, o) in pk.iter_mut().enumerate() {
+        *o = v(sec[2 * i])? << 4 | v(sec[2 * i + 1])?;
+    }
+    Some(pk)
+}
+
 /// QEMU virt: boot straight into the device's Mission Control service. Never returns.
 #[cfg(not(feature = "cm5"))]
 pub fn run() -> ! {
@@ -665,6 +684,14 @@ pub fn run() -> ! {
     let owner = arch_aarch64::virtio_blk::VirtioBlk::open().and_then(|d| crate::mcauth::load_owner(&d));
     set_owner(owner);
     kprint!(" [MC] owner: {}\n", if owner.is_some() { "CLAIMED (OWNER.TXT verifier loaded) — sign-in required" } else { "UNCLAIMED — every protected route refuses (flash with the owner key)" });
+    // R6 = D, QEMU ONLY (this fn is `not(cm5)`): an owner PUBLIC key from the test boot disk (MGMTPK.TXT, 64 hex) stands
+    // in for an enrolled K_own — QEMU has no DataVolume to enroll into — so mc-e2e can send real HQMGMT1 envelopes
+    // signed by its test key. The CM5 owner key comes only from the sealed anchor (ADR 0058 D3).
+    #[cfg(feature = "hsh")]
+    if let Some(pk) = arch_aarch64::virtio_blk::VirtioBlk::open().and_then(|d| qemu_test_owner_pk(&d)) {
+        crate::anchor::install_owner(Some(pk), 1);
+        kprint!(" [MC] QEMU test owner key from MGMTPK.TXT: {:02x}{:02x}{:02x}{:02x}… (envelopes verify against it)\n", pk[0], pk[1], pk[2], pk[3]);
+    }
     // ADR 0051: the EL0 TLS server + MCTLS.CRT from the same boot disk (before the node: it decides :443).
     #[cfg(feature = "mctls")]
     crate::tlshost::bring_up(arch_aarch64::virtio_blk::VirtioBlk::open().as_ref());
@@ -672,6 +699,8 @@ pub fn run() -> ! {
     #[cfg(feature = "wpa3")]
     let _ = crate::lansvc::sae_selftest(); // ADR 0050 D4 step 5c: the SAE station-frame walk in EL0
     let _ = crate::hsh::selftest(0); // ADR 0059 step 4a: the EL0 management shell + the management ABI
+    #[cfg(feature = "hsh")]
+    let _ = crate::hsh::selftest_web(0); // R6 = D: owner-signed HQMGMT1 envelopes on the web carrier
     let now_ms = || (cntpct().wrapping_sub(t0) / (frq / 1000).max(1)) as i64;
     // DHCP (QEMU's user-mode network serves 10.0.2.15), the production address path.
     let mut node = McNode::new(mac, NetMode::Dhcp, t0 ^ 0x4D43_5345_5256_4500).expect("one node per boot");
