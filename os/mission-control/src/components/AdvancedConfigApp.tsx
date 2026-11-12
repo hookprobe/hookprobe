@@ -13,14 +13,14 @@
  * the two signed files are offered for the boot card. Nothing here applies a change without the owner's
  * signature; the device re-verifies everything.
  */
-import { type Component, For, Show, createEffect, createMemo, createSignal, on, onMount } from 'solid-js';
+import { type Component, For, Show, createEffect, createMemo, createSignal, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { networkView, startNetworkLive } from '../store/networkLive';
 import { uploadView, refreshUploads, uploadPack } from '../store/packUpload';
 import { ownerKey, loadOwnerKey, signPack, signPolicy, signBundle, ownerKeyId, PACKS, download } from '../store/signing';
 import {
-  buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, checkPolicy, stagePolicy, lineDiff,
+  buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, parsePolicyText, checkPolicy, stagePolicy, lineDiff,
   type WanForm, type WifiForm, type PolicyForm, type AclRow,
 } from '../store/configBuild';
 import AppShell, { normPath } from './AppShell';
@@ -58,8 +58,28 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   // The device does not report its firewall text, so the form starts from an EXAMPLE. It is only ever signed when
   // the owner actually edits it: a bundle carries a policy section only then (a bundle is the complete
   // configuration for the sections it carries; without one the device keeps its own firewall).
-  const [polDirty, setPolDirty] = createSignal(false);
-  createEffect(on(pol, () => setPolDirty(true), { defer: true }));
+  // "Edited" = differs from where the form started (the example, or the firewall in force once prefilled).
+  const [polBase, setPolBase] = createSignal(JSON.stringify(pol()));
+  const polDirty = () => JSON.stringify(pol()) !== polBase();
+  // The bundle in force, as the device reports it (kernel #1055): the editors start from it, and an untouched
+  // firewall is re-sent verbatim (byte-for-byte), never rebuilt.
+  const devPolicy = () => (configView()?.sections?.policy?.present ? configView()!.policy_text ?? null : null);
+  const [polEditable, setPolEditable] = createSignal(true);
+  const [fromDevice, setFromDevice] = createSignal(false);
+  createEffect(() => {
+    const c = configView();
+    if (!c || fromDevice() || (!c.wan_keys && !c.wifi_keys && !c.sections)) return;
+    setFromDevice(true);
+    const s = (o: Record<string, string | boolean> | null | undefined, k: string) => (typeof o?.[k] === 'string' ? (o[k] as string) : '');
+    const w = c.wan_keys;
+    if (w) setWan({ ...wan(), mode: (s(w, 'mode') || 'dhcp') as WanForm['mode'], ip: s(w, 'ip'), gw: s(w, 'gw'), dns: s(w, 'dns'), pppoeUser: s(w, 'pppoe_user'), pppoePass: '',
+      vlanOn: !!s(w, 'vlan'), vlan: s(w, 'vlan'), vlanOuter: s(w, 'vlan_outer'), pcp: s(w, 'pcp'), mgmtOn: !!s(w, 'mgmt_vlan'), mgmtVlan: s(w, 'mgmt_vlan'), mgmtIp: s(w, 'mgmt_ip'), mgmtGw: s(w, 'mgmt_gw') });
+    const f = c.wifi_keys;
+    if (f) setWifi({ ...wifi(), ssid: s(f, 'ssid'), psk: '', security: (s(f, 'security') || 'wpa2') as WifiForm['security'], channel: s(f, 'channel') || 'auto', maxClients: s(f, 'max_clients') });
+    const t = devPolicy();
+    if (t) { const parsed = parsePolicyText(t); if (parsed) { setPol(parsed); setPolBase(JSON.stringify(parsed)); } else setPolEditable(false); }
+    setPrefilled(true);
+  });
   const [gen, setGen] = createSignal('');
   const [open, setOpen] = createSignal(false);
   const [step, setStep] = createSignal<Step>('review');
@@ -169,12 +189,13 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     if (polDirty()) checkPolicy(pol()).forEach((x) => e.push(`Firewall: ${x}`));
     // A bundle is the WHOLE configuration (metal, 12 Nov): over a bundle in force, a section left out is REMOVED,
     // not kept. The device does not report the firewall in force, so the owner must supply it.
-    else if (bundleInForce()) e.push('Firewall: a configuration bundle is in force, and a new bundle replaces all of it. This device does not report the firewall in force, so include the firewall you want (edit the Firewall tab): leaving it out removes it.');
+    else if (bundleInForce() && !configView()?.sections) e.push('Firewall: a configuration bundle is in force, and a new bundle replaces all of it. This device does not report the firewall in force, so include the firewall you want (edit the Firewall tab): leaving it out removes it.');
     if (wan().mode === 'pppoe' && (!wan().pppoePass || wan().pppoePass === '(current)')) e.push('Internet: type the PPPoE password again (the device never shows it).');
     if (!wifi().psk) e.push('Wi-Fi: type the Wi-Fi password again (the device never shows it).');
     return e;
   });
-  const bundleSections = (): { wan: string; wifi: string; policy?: string } => ({ wan: fromLegacy('wan', buildWan(wan())), wifi: fromLegacy('wifi', buildWifi(wifi())), ...(polDirty() ? { policy: fromLegacy('policy', buildPolicyText(pol())) } : {}) });
+  const bundleSections = (): { wan: string; wifi: string; policy?: string } => ({ wan: fromLegacy('wan', buildWan(wan())), wifi: fromLegacy('wifi', buildWifi(wifi())),
+    ...(polDirty() ? { policy: fromLegacy('policy', buildPolicyText(pol())) } : devPolicy() ? { policy: fromLegacy('policy', devPolicy()!) } : {}) });
   const applyBundle = async () => {
     setBMsg('');
     try {
@@ -288,8 +309,15 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             </Show>
 
             <Show when={sec() === 'firewall'}>
-              <Show when={!polDirty()}>
+              <Show when={!polDirty() && !devPolicy()}>
                 <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>These rules are an <b>example</b> to start from, not your device's current firewall (the device does not report it). Signing them replaces the device's firewall, so change them to what you want first.</p>
+              </Show>
+              <Show when={devPolicy() && polEditable() && !polDirty()}>
+                <p class="pcard-note" role="note" style={{ margin: 0 }}>These are the rules in force on the device. Change them and they replace it; leave them and a bundle sends them again unchanged.</p>
+              </Show>
+              <Show when={devPolicy() && !polEditable()}>
+                <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>The firewall in force uses statements this editor does not handle, so it is shown as text and sent again unchanged. Edit it with the policy tools instead.</p>
+                <pre class="pro-pre" aria-label="Firewall in force">{devPolicy()}</pre>
               </Show>
               <div class="pcard">
                 <p class="l0-label">Access lists · checked top to bottom, first match wins; replies to connections your network opened always come back</p>
@@ -418,10 +446,10 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <For each={(['wan', 'wifi', 'policy'] as const)}>{(k) => (
             <div class="pcard" style={{ padding: '10px 12px', gap: '6px' }}>
               <p class="l0-label">{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'}</p>
-              <Show when={k !== 'policy' || polDirty()} fallback={
+              <Show when={k !== 'policy' || polDirty() || !!devPolicy()} fallback={
                 <p class="l0-card-sub" aria-label="Firewall not included" style={{ margin: 0 }}>Not included: the device keeps the firewall from its own files (no bundle is in force). To replace it, edit the Firewall tab first.</p>
               }>
-                <p class="pcard-note" style={{ margin: 0 }}>{k === 'policy' ? 'Replaced by your edits in the Firewall tab.' : 'Replaced by this section.'}</p>
+                <p class="pcard-note" style={{ margin: 0 }}>{k === 'policy' ? (polDirty() ? 'Replaced by your edits in the Firewall tab.' : 'Kept: sent again exactly as in force.') : 'Replaced by this section.'}</p>
                 <pre style={{ margin: 0, font: '12px/1.6 var(--hp-font-mono)', 'white-space': 'pre-wrap' }}>{(() => { try { return (bundleSections()[k] ?? '').replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••'); } catch (e) { return String((e as Error).message); } })()}</pre>
               </Show>
             </div>
