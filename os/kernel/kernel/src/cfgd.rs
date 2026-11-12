@@ -63,7 +63,7 @@ pub fn note_owner(peer: [u8; 4]) {
         unsafe { OWNER = peer };
     }
 }
-#[cfg(not(feature = "cm5"))]
+#[cfg_attr(not(any(feature = "mcserve", feature = "netsvc")), allow(dead_code))]
 pub fn owner() -> [u8; 4] {
     unsafe { OWNER }
 }
@@ -292,6 +292,7 @@ fn load_half<D: BlockDev + ?Sized>(dev: &D, half: u8, key: &[u8; 32], min_gen: u
         NSEC = n;
         GEN = v.generation;
         DIGEST = boot_abi::sha256::digest(&buf[..len]);
+        VOLATILE = false;
     }
     Some(v.generation)
 }
@@ -302,6 +303,7 @@ fn clear() {
         GEN = 0;
         DIGEST = [0; 32];
         TRIAL = false;
+        VOLATILE = false;
     }
 }
 
@@ -385,13 +387,17 @@ pub fn commit<D: BlockDev + ?Sized>(dev: &mut D) -> Result<u64, &'static str> {
     if !on_trial() {
         return Err("no configuration on trial");
     }
-    artstore::set_entry(dev, Ty::Config, |x| {
-        x.state = STATE_ACTIVE;
-        x.trials = 0;
-    })
-    .map_err(|_| "store write failed")?;
     let g = generation();
-    crate::anchor::commit_cfg_floor(g);
+    // Q3: a RAM-only bundle commits in RAM only — no manifest write, no floor (the persisted configuration, which a
+    // reboot returns to, must keep verifying above the floor)
+    if !volatile() {
+        artstore::set_entry(dev, Ty::Config, |x| {
+            x.state = STATE_ACTIVE;
+            x.trials = 0;
+        })
+        .map_err(|_| "store write failed")?;
+        crate::anchor::commit_cfg_floor(g);
+    }
     unsafe {
         TRIAL = false;
         STATE = Boot::Committed(g);
@@ -405,7 +411,7 @@ pub fn commit<D: BlockDev + ?Sized>(dev: &mut D) -> Result<u64, &'static str> {
 
 /// REVERT now (trial timeout, or the owner): the previous half becomes active for the NEXT boot.
 pub fn revert_now<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>) -> Result<u64, &'static str> {
-    if unsafe { PHASE } == Phase::Trial {
+    if unsafe { PHASE } == Phase::Trial || (volatile() && unsafe { PHASE } == Phase::Idle) {
         start_live_revert(dev);
         return Ok(unsafe { REVERT_GEN });
     }
@@ -559,6 +565,12 @@ pub fn queue_live<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>, floo
         }
         return Err("the configuration does not verify");
     };
+    Ok(queued(old, mgmt_before, g))
+}
+
+/// The common tail of a queued live change: what changed, whether the owner must confirm, the trial state.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+fn queued(old: [[u8; 32]; 3], mgmt_before: [u8; 32], g: u64) -> u64 {
     let new = section_digests();
     let mut ch = 0u8;
     for (i, bit) in [CH_POLICY, CH_WAN, CH_WIFI].iter().enumerate() {
@@ -567,6 +579,8 @@ pub fn queue_live<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>, floo
         }
     }
     unsafe {
+        FAIL_NOW = false;
+        MGMT_OK = None;
         CHANGED = ch;
         // the AP is a management path: a Wi-Fi change commits only when the owner confirms after re-joining
         // step 11: also when the management lines changed or were REMOVED, or the running management sub-interface
@@ -578,7 +592,95 @@ pub fn queue_live<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>, floo
         PHASE = Phase::Queued;
         STATE = Boot::Trial(g);
     }
-    Ok(g)
+    g
+}
+
+// ---- Q3: RAM-only live apply when there is no device key (live-apply follow-up) -----------------------------
+// A secret-bearing bundle (a Wi-Fi section, a PPPoE password) cannot be sealed without the per-device SRK and is never
+// written in plaintext. It may still be applied LIVE, held in RAM only: verified exactly like a stored bundle
+// (signature before any parse, above the committed floor), run through the same live trial, and on commit kept in RAM
+// — no manifest write, no floor rise. A reboot returns to the persisted configuration. The API reports it as
+// `volatile_ram_only`, never as protected or persisted. A later persisted bundle's live revert goes back to the
+// persisted last-known-good, never to the volatile one.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+static mut VOLATILE: bool = false;
+/// The bundle in force (on trial or committed) lives in RAM only.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+pub fn volatile() -> bool {
+    unsafe { VOLATILE }
+}
+
+/// Queue a verified secret-bearing container (`cont` = the HQCSIG1 sector ‖ the bundle) for a RAM-only live apply.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+pub fn queue_live_volatile(key: Option<[u8; 32]>, floor: u64, cont: &[u8]) -> Result<u64, &'static str> {
+    if unsafe { PHASE } != Phase::Idle || on_trial() {
+        return Err("a configuration change is already in progress");
+    }
+    let key = key.ok_or("no configuration key")?;
+    let sig: &[u8; 512] = cont.get(..512).and_then(|s| s.try_into().ok()).ok_or("the configuration does not verify")?;
+    let len = u32::from_le_bytes([sig[9], sig[10], sig[11], sig[12]]) as usize;
+    if !(cfgbundle::HDR..=cfgbundle::MAX_BUNDLE).contains(&len) || cont.len() < 512 + len {
+        return Err("the configuration does not verify");
+    }
+    let bundle = &cont[512..512 + len];
+    // signature (and device binding, generation above the committed floor) BEFORE anything is parsed or replaced
+    let v = cfgbundle::verify(bundle, sig, &key, &crate::config_device_id(), floor).map_err(|_| "the configuration does not verify")?;
+    let mut secs = [(0u8, 0usize, 0usize); 3];
+    let mut n = 0;
+    for (k, b) in v.sections() {
+        secs[n] = (k, b.as_ptr() as usize - bundle.as_ptr() as usize, b.len());
+        n += 1;
+    }
+    let g = v.generation;
+    let old = section_digests();
+    let mgmt_before = mgmt_fp();
+    unsafe {
+        let buf = &mut *core::ptr::addr_of_mut!(BUF);
+        buf[..len].copy_from_slice(bundle);
+        SECS = secs;
+        NSEC = n;
+        GEN = g;
+        DIGEST = boot_abi::sha256::digest(bundle);
+        VOLATILE = true;
+    }
+    Ok(queued(old, mgmt_before, g))
+}
+
+// ---- the trial's health beyond "WAN usable" (live-apply follow-up) ------------------------------------------
+// Q5 in the loop: the PPPoE dial is no longer blocking, so a definitive authentication reject arrives after the
+// executor returned — the loop reports it here and the live trial reverts at once (no window).
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+static mut FAIL_NOW: bool = false;
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+pub fn wan_auth_rejected() {
+    unsafe {
+        if matches!(PHASE, Phase::Applying | Phase::Trial) && CHANGED & CH_WAN != 0 {
+            FAIL_NOW = true;
+        }
+    }
+}
+/// Rule 7 after a WAN change: the management re-probe (`wanlive::mgmt_reprobe` — the management sub-interface's
+/// address / next hop and the owner's own client path), fed by the loop while a trial runs. Some(false) holds the
+/// trial (never auto-committed: it reverts at the window); None = not probed.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+static mut MGMT_OK: Option<bool> = None;
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+static mut MGMT_WHY: &str = "";
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+pub fn set_mgmt_health(ok: Option<bool>, why: &'static str) {
+    unsafe {
+        MGMT_OK = ok;
+        MGMT_WHY = why;
+    }
+}
+/// For the API: (management re-probe result, its reason) while a trial runs.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+pub fn mgmt_health() -> (Option<bool>, &'static str) {
+    if on_trial() {
+        unsafe { (MGMT_OK, MGMT_WHY) }
+    } else {
+        (None, "")
+    }
 }
 
 /// The AP loop: what to (re-)apply now, if anything (the executors read `section()`: the new bundle, or after a
@@ -602,23 +704,37 @@ pub fn take_apply() -> Option<Plan> {
 /// Live revert: the manifest flips to the last-known-good FIRST, then its sections are loaded for the executors.
 fn start_live_revert<D: BlockDev + ?Sized>(dev: &mut D) {
     let floor = crate::anchor::cfg_gens().cfg_floor;
-    let to = match crate::policysig::config_key() {
-        Some(k) => {
-            let to = revert(dev, &k, floor);
-            if to == 0 || load_half(dev, artstore::entry(dev, Ty::Config).map_or(0, |x| x.half), &k, floor).is_none() {
+    let key = crate::policysig::config_key();
+    let to = if volatile() {
+        // Q3: nothing of the RAM-only bundle was persisted — the persisted entry IS the last-known-good (no flip)
+        let e = artstore::entry(dev, Ty::Config).unwrap_or(artstore::E0);
+        match key.filter(|_| e.half != 0 && e.state == STATE_ACTIVE).and_then(|k| load_half(dev, e.half, &k, floor)) {
+            Some(g) => g,
+            None => {
                 clear();
                 0
-            } else {
-                to
             }
         }
-        None => {
-            clear();
-            0
+    } else {
+        match key {
+            Some(k) => {
+                let to = revert(dev, &k, floor);
+                if to == 0 || load_half(dev, artstore::entry(dev, Ty::Config).map_or(0, |x| x.half), &k, floor).is_none() {
+                    clear();
+                    0
+                } else {
+                    to
+                }
+            }
+            None => {
+                clear();
+                0
+            }
         }
     };
     unsafe {
         TRIAL = false;
+        FAIL_NOW = false;
         REVERT_GEN = to;
         PHASE = Phase::RevertQueued;
     }
@@ -671,7 +787,13 @@ pub enum Tick {
 /// Called from the AP loop: commit once healthy, revert after the window.
 pub fn tick<D: BlockDev + ?Sized>(dev: &mut D, now_s: u64, healthy: bool) -> Tick {
     unsafe { LAST = now_s };
+    // a WAN that comes up but loses the management path is NOT healthy (rule 7)
+    let healthy = healthy && unsafe { MGMT_OK } != Some(false);
     if unsafe { PHASE } == Phase::Trial {
+        if unsafe { FAIL_NOW } {
+            start_live_revert(dev); // Q5: the PPPoE authentication was rejected — revert now, not at the window
+            return Tick::Reverting;
+        }
         if healthy && !needs_confirm() {
             return match commit(dev) {
                 Ok(g) => Tick::Committed(g),
@@ -906,8 +1028,11 @@ pub fn live_selftest() -> bool {
     let _ = applied(d, true, 1200);
     let _ = commit(d);
     let fl7 = crate::anchor::cfg_gens().cfg_floor;
-    let plain = stage(d, 15, w1, f2, p2) && queue_live(d, Some(key), fl7) == Ok(15) && !needs_confirm();
+    let plain = stage(d, 15, w1, f2, p2) && queue_live(d, Some(key), fl7) == Ok(15) && !needs_confirm()
+        && take_apply().is_some() && applied(d, true, 1300) == Tick::Idle && tick(d, 1301, true) == Tick::Committed(15);
     let mgmt11 = add && removed && perfile && plain;
+    let (mg, q5) = live_mgmt_checks(d, key, &stage);
+    let vol = live_volatile_checks(d, key, &mk);
     crate::policysig::selftest_key(None);
     clear();
     unsafe {
@@ -917,11 +1042,119 @@ pub fn live_selftest() -> bool {
     }
     crate::anchor::test_set_cfg(saved_cfg);
     let pass = base && s1 && p_1 && c1 && s2 && p_2 && t2 && r2 && s3 && c3 && s4 && busy && f5 && s5 && rb && s6 && crash && mgmt11;
+    let pm = mg.iter().all(|&x| x) && q5;
+    arch_aarch64::_print(format_args!(
+        " [P-cfgd-mgmt] {} — live-apply follow-up, rule 7 after a WAN change (WAN reachability is not management reachability): the re-probe sees a management sub-interface without an address / without a resolved gateway / the owner's on-link client unresolved / a routed owner without a management gateway as LOST, the owner on the AP, resolved, or routed over a resolved gateway as kept={} a live WAN trial whose management is lost is NOT auto-committed although the WAN is usable, the API reports it, the window reverts it live={} the same change with management kept auto-commits={} Q5 in the loop: a PPPoE authentication reject reported after the executor returned reverts the live trial at once (no window)={}\n",
+        if pm { "PASS" } else { "FAIL" }, mg[0], mg[1], mg[2], q5
+    ));
+    let pv = vol.iter().all(|&x| x);
+    arch_aarch64::_print(format_args!(
+        " [P-cfgd-volatile] {} — live-apply follow-up, Q3 RAM-only apply (no device key): a tampered or not-newer-than-the-floor bundle is refused before anything is replaced={} a verified secret-bearing bundle applies live from RAM and commits in RAM only — manifest entry, floor and disk unchanged, the secret never on disk, reported volatile={} a live rollback of it re-loads the persisted last-known-good without a manifest flip={} a RAM-only trial that is not healthy reverts live at the window={} a reboot after a RAM-only commit returns to the persisted configuration={}\n",
+        if pv { "PASS" } else { "FAIL" }, vol[0], vol[1], vol[2], vol[3], vol[4]
+    ));
+    let pass = pass && pm && pv;
     arch_aarch64::_print(format_args!(
         " [P-cfgd-live] {} — sealed-config / live-apply step 6, the cfgd live engine (mock executors): only the changed subsystem is applied={} healthy -> committed live, no reboot={} an unusable WAN reverts LIVE after the window to the last-known-good sections={} a Wi-Fi change waits for the owner's confirm={} one change at a time={} a failed apply reverts live={} a failed revert asks for the reboot (manifest already at the LKG)={} a crash during the live trial boots the last-known-good={} step 11: adding OR removing the management VLAN (or dropping a per-file one) needs the owner's confirm, a plain WAN change does not={}\n",
         if pass { "PASS" } else { "FAIL" }, base && s1 && p_1, c1, s2 && p_2 && t2 && r2, s3 && c3, s4 && busy, f5, s5 && rb, s6 && crash, mgmt11
     ));
     pass
+}
+
+/// [P-cfgd-mgmt]: the management re-probe (pure) and its effect on a live WAN trial; Q5 from the loop. Runs on the
+/// live self-test's disk after generation 15 committed. Returns ([pure probe, lost -> held + reverted, kept ->
+/// committed], Q5).
+#[cfg(not(feature = "cm5"))]
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+fn live_mgmt_checks(d: &mut artstore::SparseDisk, key: [u8; 32], stage: &dyn Fn(&mut artstore::SparseDisk, u64, &[u8], &[u8], &[u8]) -> bool) -> ([bool; 3], bool) {
+    use crate::wanlive::{mgmt_reprobe, MgmtProbe as P, MgmtSeen};
+    let lan = ([10, 99, 0, 1], 24);
+    let seen = |mgmt: Option<([u8; 4], u8, [u8; 4], bool)>, owner: [u8; 4], owner_resolved: bool| MgmtSeen { mgmt, lan, owner, owner_resolved };
+    let m = Some(([192, 168, 200, 2], 24, [192, 168, 200, 1], true));
+    let pure = mgmt_reprobe(&seen(None, [10, 99, 0, 50], false)) == P::Ok
+        && mgmt_reprobe(&seen(Some(([0; 4], 0, [0; 4], false)), [0; 4], false)) == P::NoAddress
+        && mgmt_reprobe(&seen(Some(([192, 168, 200, 2], 24, [192, 168, 200, 1], false)), [10, 99, 0, 50], false)) == P::NoNextHop
+        && mgmt_reprobe(&seen(m, [192, 168, 200, 50], false)) == P::OwnerLost
+        && mgmt_reprobe(&seen(m, [192, 168, 200, 50], true)) == P::Ok
+        && mgmt_reprobe(&seen(m, [172, 16, 0, 9], false)) == P::Ok
+        && mgmt_reprobe(&seen(Some(([192, 168, 200, 2], 24, [0; 4], true)), [172, 16, 0, 9], false)) == P::OwnerLost
+        && mgmt_reprobe(&seen(m, [10, 99, 0, 50], false)) == P::Ok
+        && mgmt_reprobe(&seen(None, [172, 16, 0, 9], false)) == P::Ok
+        && P::Ok.word() == "ok" && P::NoNextHop.word() != P::OwnerLost.word();
+    let (w1, w3) = (&b"mode=dhcp\n"[..], &b"mode=static\nip=192.0.2.10/24\ngw=192.0.2.1\n"[..]);
+    let f2 = &b"ssid=home\npsk=correct horse 2\n"[..];
+    let p2 = &b"acl A seq 10 allow any any any\nacl A seq 20 drop tcp any any 23\n"[..];
+    let fl = crate::anchor::cfg_gens().cfg_floor;
+    // a plain WAN change (auto-commit): usable WAN, management LOST -> held, reported, reverted live at the window
+    let lost = stage(d, 16, w3, f2, p2) && queue_live(d, Some(key), fl) == Ok(16) && !needs_confirm() && take_apply().is_some()
+        && applied(d, true, 2000) == Tick::Idle && {
+            set_mgmt_health(Some(false), P::NoNextHop.word());
+            tick(d, 2001, true) == Tick::Idle
+        }
+        && phase() == Phase::Trial && mgmt_health() == (Some(false), P::NoNextHop.word())
+        && tick(d, 2002 + TRIAL_AUTO_S, true) == Tick::Reverting && take_apply().is_some_and(|p| p.revert && p.generation == 15)
+        && applied(d, true, 2200) == Tick::Reverted(15) && mgmt_health() == (None, "");
+    let fl = crate::anchor::cfg_gens().cfg_floor;
+    let kept = stage(d, 17, w3, f2, p2) && queue_live(d, Some(key), fl) == Ok(17) && take_apply().is_some() && applied(d, true, 2300) == Tick::Idle
+        && {
+            set_mgmt_health(Some(true), P::Ok.word());
+            tick(d, 2301, true) == Tick::Committed(17)
+        };
+    // Q5: the dial is stepped by the loop now, so the reject arrives after the executor returned
+    wan_auth_rejected(); // no trial: ignored
+    let fl = crate::anchor::cfg_gens().cfg_floor;
+    let wp = &b"mode=pppoe\npppoe_user=u@isp\npppoe_pass=wrong\n"[..];
+    let q5 = stage(d, 18, wp, f2, p2) && queue_live(d, Some(key), fl) == Ok(18) && take_apply().is_some() && applied(d, true, 2400) == Tick::Idle
+        && tick(d, 2401, false) == Tick::Idle && {
+            wan_auth_rejected();
+            tick(d, 2402, false) == Tick::Reverting
+        }
+        && take_apply().is_some_and(|p| p.revert && p.generation == 17) && applied(d, true, 2403) == Tick::Reverted(17);
+    let _ = w1;
+    ([pure, lost, kept], q5)
+}
+
+/// [P-cfgd-volatile]: Q3 RAM-only live apply on the live self-test's disk (generation 17 persisted + committed).
+#[cfg(not(feature = "cm5"))]
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+fn live_volatile_checks(d: &mut artstore::SparseDisk, key: [u8; 32], mk: &dyn Fn(u64, &[u8], &[u8], &[u8]) -> ([u8; 1024], [u8; 512], usize)) -> [bool; 5] {
+    use crate::cfgbundle::KIND_WAN;
+    let f2 = &b"ssid=home\npsk=correct horse 2\n"[..];
+    let p2 = &b"acl A seq 10 allow any any any\nacl A seq 20 drop tcp any any 23\n"[..];
+    let wv = &b"mode=pppoe\npppoe_user=v@isp\npppoe_pass=v0latile\n"[..];
+    let fl = crate::anchor::cfg_gens().cfg_floor;
+    let cont = |gen: u64| {
+        let (b, sig, n) = mk(gen, wv, f2, p2);
+        let mut c = [0u8; 512 + 1024];
+        c[..512].copy_from_slice(&sig);
+        c[512..512 + n].copy_from_slice(&b[..n]);
+        (c, 512 + n)
+    };
+    let e0 = artstore::entry(&*d, Ty::Config);
+    let same = |d: &artstore::SparseDisk| artstore::entry(d, Ty::Config) == e0 && crate::anchor::cfg_gens().cfg_floor == fl && !artstore::on_disk(d, b"v0latile");
+    // 1. verified BEFORE anything is replaced: a flipped bundle byte, a generation not above the floor
+    let (mut bad, n) = cont(19);
+    bad[512 + 60] ^= 1;
+    let (old, no) = cont(fl);
+    let refused = queue_live_volatile(Some(key), fl, &bad[..n]).is_err() && queue_live_volatile(Some(key), fl, &old[..no]).is_err()
+        && queue_live_volatile(None, fl, &cont(19).0[..n]).is_err()
+        && generation() == 17 && !volatile() && phase() == Phase::Idle && section(KIND_WAN) != Some(wv);
+    // 2. applied live from RAM; the commit stays in RAM (no manifest write, no floor, nothing on disk)
+    let (c, n) = cont(19);
+    let applied_ram = queue_live_volatile(Some(key), fl, &c[..n]) == Ok(19) && volatile() && section(KIND_WAN) == Some(wv)
+        && take_apply() == Some(Plan { changed: CH_WAN, revert: false, generation: 19 }) && applied(d, true, 2500) == Tick::Idle
+        && tick(d, 2501, true) == Tick::Committed(19) && volatile() && generation() == 19 && same(d);
+    // 3. the owner rolls it back live: the persisted entry IS the last-known-good (no flip)
+    let rolled = revert_now(d, Some(key)) == Ok(17) && take_apply().is_some_and(|p| p.revert && p.generation == 17)
+        && applied(d, true, 2502) == Tick::Reverted(17) && !volatile() && generation() == 17 && section(KIND_WAN) != Some(wv) && same(d);
+    // 4. a RAM-only trial that never gets healthy reverts live at the window
+    let window = queue_live_volatile(Some(key), fl, &c[..n]) == Ok(19) && take_apply().is_some() && applied(d, true, 2600) == Tick::Idle
+        && tick(d, 2601 + TRIAL_AUTO_S, false) == Tick::Reverting && take_apply().is_some() && applied(d, true, 2700) == Tick::Reverted(17)
+        && !volatile() && same(d);
+    // 5. a reboot after a RAM-only commit: the persisted configuration, nothing volatile
+    let reboot = queue_live_volatile(Some(key), fl, &c[..n]) == Ok(19) && take_apply().is_some() && applied(d, true, 2800) == Tick::Idle
+        && tick(d, 2801, true) == Tick::Committed(19) && same(d) && boot(d, Some(key), fl, 2900) == Boot::Committed(17) && !volatile()
+        && generation() == 17;
+    [refused, applied_ram, rolled, window, reboot]
 }
 
 /// [P-cfgd-policy] (step 7): the live policy executor and the owner-address probe (F-e).
@@ -1030,6 +1263,8 @@ pub fn set_test_live(on: bool) {
             STATE = Boot::None;
             CHANGED = 0;
             NEEDS_CONFIRM = false;
+            MGMT_OK = None;
+            FAIL_NOW = false;
         }
     }
     if !on {
@@ -1053,6 +1288,25 @@ pub fn queue_live_device() -> Result<u64, &'static str> {
     }
     Err("no configuration store on this device")
 }
+/// Q3: queue a secret-bearing bundle for a RAM-only live apply (no device key). Needs the device's configuration
+/// store all the same: the live revert re-loads the persisted last-known-good from it.
+#[cfg_attr(not(feature = "netsvc"), allow(dead_code))]
+pub fn queue_live_volatile_device(cont: &[u8]) -> Result<u64, &'static str> {
+    #[cfg(not(feature = "cm5"))]
+    if unsafe { TEST_LIVE } {
+        return queue_live_volatile(crate::policysig::config_key(), crate::anchor::cfg_gens().cfg_floor, cont);
+    }
+    if in_selftest() {
+        return Err("self-test: no state change");
+    }
+    #[cfg(all(feature = "cm5", feature = "p15-write"))]
+    if device().is_some() {
+        return queue_live_volatile(crate::policysig::config_key(), crate::anchor::cfg_gens().cfg_floor, cont);
+    }
+    let _ = cont;
+    Err("not stored: no device key — secrets are never written in plaintext")
+}
+
 /// Step 8: report the executors' result for the plan `take_apply` handed out.
 pub fn applied_device(ok: bool, now_s: u64) -> Tick {
     #[cfg(all(feature = "cm5", feature = "p15-write"))]

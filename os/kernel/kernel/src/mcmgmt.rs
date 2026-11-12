@@ -73,6 +73,14 @@ pub fn route(frame: &[u8], mgmt: Option<([u8; 4], u8)>) -> Route {
     Route::Wifi
 }
 
+/// G12-M: is Mission Control served to Wi-Fi clients? On the setup AP (the default credential: onboarding happens
+/// there) always; on the client AP only while no management sub-interface exists (then it moves to management).
+/// Evaluated at boot AND after every live Wi-Fi / WAN apply (live-apply follow-up: never stale boot state).
+#[cfg_attr(not(any(feature = "mcserve", feature = "netsvc")), allow(dead_code))]
+pub fn serve_on_wifi(default_credential: bool, mgmt_configured: bool) -> bool {
+    default_credential || !mgmt_configured
+}
+
 /// The local answer to the node's ARP who-has (a `Route::ArpLocal` frame): "<target> is at
 /// PEER_PLACEHOLDER", addressed back to the node. Returns its length.
 pub fn arp_reply(req: &[u8], node_mac: [u8; 6], out: &mut [u8; 64]) -> Option<usize> {
