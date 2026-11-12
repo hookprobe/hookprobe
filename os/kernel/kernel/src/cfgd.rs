@@ -283,12 +283,20 @@ pub fn commit<D: BlockDev + ?Sized>(dev: &mut D) -> Result<u64, &'static str> {
     unsafe {
         TRIAL = false;
         STATE = Boot::Committed(g);
+        if PHASE == Phase::Trial {
+            PHASE = Phase::Idle;
+            LAST_RESULT = (1, g);
+        }
     }
     Ok(g)
 }
 
 /// REVERT now (trial timeout, or the owner): the previous half becomes active for the NEXT boot.
 pub fn revert_now<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>) -> Result<u64, &'static str> {
+    if unsafe { PHASE } == Phase::Trial {
+        start_live_revert(dev);
+        return Ok(unsafe { REVERT_GEN });
+    }
     let key = key.ok_or("no configuration key")?;
     let e = artstore::entry(dev, Ty::Config).ok_or("no artifact store")?;
     if e.half == 0 {
@@ -302,8 +310,191 @@ pub fn revert_now<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>) -> R
     Ok(to)
 }
 
+// ---- live apply (design docs/design heqk-sealed-config-live-apply, step 6): "move the chairs without leaving" ----
+// A new bundle is applied in place by the AP loop's executors (policy, then WAN, then Wi-Fi — only what changed),
+// runs a live trial, commits when healthy (or on the owner's confirm), and otherwise REVERTS LIVE to the
+// last-known-good. The manifest semantics are the boot path's: `trials = 1` is persisted BEFORE anything is
+// applied, so a crash / power cut / watchdog during the live trial boots into the last-known-good. A reboot is the
+// last resort only (the revert's executors failed).
+
+/// Changed-subsystem bits (apply order: policy, WAN, Wi-Fi).
+pub const CH_POLICY: u8 = 1;
+pub const CH_WAN: u8 = 2;
+pub const CH_WIFI: u8 = 4;
+/// Trial window for a change that may commit by itself (WAN usable + management path) — confirm-bound changes keep
+/// WINDOW_S.
+pub const TRIAL_AUTO_S: u64 = 120;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Idle,
+    /// A verified bundle is loaded; the executors run on the next loop iteration (after the HTTP reply went out).
+    Queued,
+    Applying,
+    Trial,
+    /// The manifest already points at the last-known-good; its sections are loaded; the executors re-apply them.
+    RevertQueued,
+    Reverting,
+}
+
+/// What the AP loop must (re-)apply.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Plan {
+    pub changed: u8,
+    pub revert: bool,
+    pub generation: u64,
+}
+
+static mut PHASE: Phase = Phase::Idle;
+static mut CHANGED: u8 = 0;
+static mut NEEDS_CONFIRM: bool = false;
+static mut REVERT_GEN: u64 = 0;
+/// (result, generation): 0 none, 1 committed, 2 reverted live, 3 revert failed (reboot into the last-known-good).
+static mut LAST_RESULT: (u8, u64) = (0, 0);
+
+pub fn phase() -> Phase {
+    unsafe { PHASE }
+}
+pub fn changes() -> u8 {
+    unsafe { CHANGED }
+}
+pub fn needs_confirm() -> bool {
+    unsafe { NEEDS_CONFIRM }
+}
+pub fn last_result() -> (u8, u64) {
+    unsafe { LAST_RESULT }
+}
+
+/// The digest of each section kind of the bundle in force ([0; 32] = absent: the per-file source applies).
+fn section_digests() -> [[u8; 32]; 3] {
+    let mut d = [[0u8; 32]; 3];
+    for (i, k) in [cfgbundle::KIND_POLICY, cfgbundle::KIND_WAN, cfgbundle::KIND_WIFI].iter().enumerate() {
+        if let Some(b) = section(*k) {
+            d[i] = boot_abi::sha256::digest(b);
+        }
+    }
+    d
+}
+
+/// Queue a just-activated (PENDING, never tried) bundle for live apply. `floor` = the committed bundle floor.
+pub fn queue_live<D: BlockDev + ?Sized>(dev: &mut D, key: Option<[u8; 32]>, floor: u64) -> Result<u64, &'static str> {
+    if unsafe { PHASE } != Phase::Idle || on_trial() {
+        return Err("a configuration change is already in progress");
+    }
+    let key = key.ok_or("no configuration key")?;
+    let e = artstore::entry(dev, Ty::Config).ok_or("no artifact store")?;
+    if e.half == 0 || e.state != STATE_PENDING || e.trials != 0 {
+        return Err("no new configuration to apply");
+    }
+    // persisted FIRST: from here on a crash / power cut / watchdog boots into the last-known-good
+    artstore::set_entry(dev, Ty::Config, |x| x.trials = 1).map_err(|_| "store write failed")?;
+    let old = section_digests();
+    let Some(g) = load_half(dev, e.half, &key, floor + 1) else {
+        // does not verify (or not above the floor): back to the last-known-good, nothing was applied
+        let to = revert(dev, &key, floor);
+        if to == 0 || load_half(dev, artstore::entry(dev, Ty::Config).map_or(0, |x| x.half), &key, floor).is_none() {
+            clear();
+        }
+        return Err("the configuration does not verify");
+    };
+    let new = section_digests();
+    let mut ch = 0u8;
+    for (i, bit) in [CH_POLICY, CH_WAN, CH_WIFI].iter().enumerate() {
+        if old[i] != new[i] {
+            ch |= bit;
+        }
+    }
+    unsafe {
+        CHANGED = ch;
+        // the AP is a management path: a Wi-Fi change commits only when the owner confirms after re-joining
+        NEEDS_CONFIRM = touches_mgmt() || ch & CH_WIFI != 0;
+        PHASE = Phase::Queued;
+        STATE = Boot::Trial(g);
+    }
+    Ok(g)
+}
+
+/// The AP loop: what to (re-)apply now, if anything (the executors read `section()`: the new bundle, or after a
+/// revert the last-known-good / the per-file sources).
+pub fn take_apply() -> Option<Plan> {
+    unsafe {
+        match PHASE {
+            Phase::Queued => {
+                PHASE = Phase::Applying;
+                Some(Plan { changed: CHANGED, revert: false, generation: GEN })
+            }
+            Phase::RevertQueued => {
+                PHASE = Phase::Reverting;
+                Some(Plan { changed: CHANGED, revert: true, generation: REVERT_GEN })
+            }
+            _ => None,
+        }
+    }
+}
+
+/// Live revert: the manifest flips to the last-known-good FIRST, then its sections are loaded for the executors.
+fn start_live_revert<D: BlockDev + ?Sized>(dev: &mut D) {
+    let floor = crate::anchor::cfg_gens().cfg_floor;
+    let to = match crate::policysig::config_key() {
+        Some(k) => {
+            let to = revert(dev, &k, floor);
+            if to == 0 || load_half(dev, artstore::entry(dev, Ty::Config).map_or(0, |x| x.half), &k, floor).is_none() {
+                clear();
+                0
+            } else {
+                to
+            }
+        }
+        None => {
+            clear();
+            0
+        }
+    };
+    unsafe {
+        TRIAL = false;
+        REVERT_GEN = to;
+        PHASE = Phase::RevertQueued;
+    }
+}
+
+/// The executors' outcome for the plan `take_apply` returned. `Tick::RevertReboot` = even the last-known-good could
+/// not be re-applied: reboot (the manifest already points at it).
+pub fn applied<D: BlockDev + ?Sized>(dev: &mut D, ok: bool, now_s: u64) -> Tick {
+    unsafe {
+        match PHASE {
+            Phase::Applying if ok => {
+                PHASE = Phase::Trial;
+                TRIAL = true;
+                T0 = now_s;
+                LAST = now_s;
+                Tick::Idle
+            }
+            Phase::Applying => {
+                start_live_revert(dev);
+                Tick::Reverting
+            }
+            Phase::Reverting if ok => {
+                PHASE = Phase::Idle;
+                LAST_RESULT = (2, REVERT_GEN);
+                STATE = if REVERT_GEN == 0 { Boot::None } else { Boot::Committed(REVERT_GEN) };
+                Tick::Reverted(REVERT_GEN)
+            }
+            Phase::Reverting => {
+                PHASE = Phase::Idle;
+                LAST_RESULT = (3, REVERT_GEN);
+                Tick::RevertReboot
+            }
+            _ => Tick::Idle,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tick {
+    /// Live trial: the window passed / the owner rolled back — the last-known-good is queued for the executors.
+    Reverting,
+    /// Live revert done: the last-known-good (this generation, 0 = per-file) is in force again, no reboot.
+    Reverted(u64),
     Idle,
     Committed(u64),
     /// The window passed without health: reverted — the caller reboots into the last-known-good configuration.
@@ -313,6 +504,20 @@ pub enum Tick {
 /// Called from the AP loop: commit once healthy, revert after the window.
 pub fn tick<D: BlockDev + ?Sized>(dev: &mut D, now_s: u64, healthy: bool) -> Tick {
     unsafe { LAST = now_s };
+    if unsafe { PHASE } == Phase::Trial {
+        if healthy && !needs_confirm() {
+            return match commit(dev) {
+                Ok(g) => Tick::Committed(g),
+                Err(_) => Tick::Idle,
+            };
+        }
+        let window = if needs_confirm() { WINDOW_S } else { TRIAL_AUTO_S };
+        if trial_elapsed(now_s) > window {
+            start_live_revert(dev);
+            return Tick::Reverting;
+        }
+        return Tick::Idle;
+    }
     if !on_trial() {
         return Tick::Idle;
     }
@@ -417,6 +622,118 @@ pub fn selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-cfgd] {} — ADR 0059 step 3 cfgd (single writer, staged -> trial -> commit / revert): a staged bundle boots as a TRIAL and the loaders read its sections={} healthy -> COMMIT, the bundle floor rises={} committed bundle on the next boot={} a trial that never gets healthy reverts after the window={} the next boot runs the last-known-good={} a second boot while PENDING (crash / power cut) reverts={} an older bundle never becomes a trial={} a bundle touching the management VLAN waits for the owner's confirm (never auto-committed)={} D7: a policy that leaves no management path is refused at stage={}\n",
         if pass { "PASS" } else { "FAIL" }, s1 && b1, c1, r1, s2 && b2 && t2, back, s3 && b3 && crash, s4 && old, s5 && b5 && held, d7
+    ));
+    pass
+}
+
+// ---- [P-cfgd-live] (step 6) ---------------------------------------------------------------------------------
+
+/// The live engine on the RAM store with mock executors: only changed subsystems are applied; healthy -> commit
+/// without a reboot; an unhealthy WAN reverts LIVE after the window to the last-known-good sections; a Wi-Fi change
+/// waits for the owner's confirm; a failed apply reverts live; a failed revert asks for the reboot; one change at a
+/// time; a crash during the live trial boots into the last-known-good.
+#[cfg(not(feature = "cm5"))]
+pub fn live_selftest() -> bool {
+    use crate::cfgbundle::{KIND_POLICY, KIND_WAN, KIND_WIFI};
+    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x62; 32]));
+    let key: [u8; 32] = *kp.pk;
+    let d = artstore::test_disk();
+    let mk = |gen: u64, wan: &[u8], wifi: &[u8], pol: &[u8]| -> ([u8; 1024], [u8; 512], usize) {
+        let secs: [(u8, &[u8]); 3] = [(KIND_WAN, wan), (KIND_WIFI, wifi), (KIND_POLICY, pol)];
+        let present: usize = secs.iter().filter(|x| !x.1.is_empty()).count();
+        let mut b = [0u8; 1024];
+        b[..8].copy_from_slice(cfgbundle::MAGIC);
+        b[8..10].copy_from_slice(&0x0100u16.to_le_bytes());
+        b[12..20].copy_from_slice(&gen.to_le_bytes());
+        b[36..44].copy_from_slice(&cfgbundle::key_id(&key));
+        b[44] = present as u8;
+        let mut t = 48;
+        let mut o = 48 + 4 * present;
+        for (k, body) in secs.iter().filter(|x| !x.1.is_empty()) {
+            b[t] = *k;
+            b[t + 2..t + 4].copy_from_slice(&(body.len() as u16).to_le_bytes());
+            b[o..o + body.len()].copy_from_slice(body);
+            t += 4;
+            o += body.len();
+        }
+        let dg = boot_abi::sha256::digest(&b[..o]);
+        let mut m = [0u8; 42];
+        m[..10].copy_from_slice(cfgbundle::SIG_TAG);
+        m[10..].copy_from_slice(&dg);
+        let sg = kp.sk.sign(&m[..], Some(ed25519_compact::Noise::from_slice(&[4u8; 16]).unwrap()));
+        let mut sig = [0u8; 512];
+        sig[..8].copy_from_slice(cfgbundle::SIG_MAGIC);
+        sig[8] = 1;
+        sig[9..13].copy_from_slice(&(o as u32).to_le_bytes());
+        sig[13..45].copy_from_slice(&dg);
+        sig[45..109].copy_from_slice(&sg[..]);
+        (b, sig, o)
+    };
+    let stage = |d: &mut artstore::SparseDisk, gen: u64, wan: &[u8], wifi: &[u8], pol: &[u8]| -> bool {
+        let (b, sig, n) = mk(gen, wan, wifi, pol);
+        let at = artstore::store_region(&*d).map_or(0, |s| s.1 + 40);
+        let mut s0 = [0u8; 512];
+        let mut s1 = [0u8; 512];
+        s0.copy_from_slice(&b[..512]);
+        s1.copy_from_slice(&b[512..]);
+        let _ = d.write_block(at, &s0);
+        let _ = d.write_block(at + 1, &s1);
+        artstore::activate(d, Ty::Config, &sig, at, gen, n as u64, &sig[13..45].try_into().unwrap()).is_ok()
+    };
+    let saved_cfg = crate::anchor::cfg_gens();
+    crate::policysig::selftest_key(Some(key));
+    clear();
+    let (w1, w2) = (&b"mode=dhcp\n"[..], &b"mode=static\nip=192.0.2.9/24\ngw=192.0.2.1\n"[..]);
+    let (f1, f2) = (&b"ssid=home\npsk=correct horse 1\n"[..], &b"ssid=home\npsk=correct horse 2\n"[..]);
+    let (p1, p2) = (&b"acl A seq 10 allow any any any\n"[..], &b"acl A seq 10 allow any any any\nacl A seq 20 drop tcp any any 23\n"[..]);
+    // baseline: gen 5 committed through the boot path
+    let base = stage(d, 5, w1, f1, p1) && boot(d, Some(key), 0, 10) == Boot::Trial(5) && tick(d, 11, true) == Tick::Committed(5);
+    let mut fl = crate::anchor::cfg_gens().cfg_floor;
+    // 1. policy-only change: only the policy is (re)applied; healthy -> committed live, no reboot
+    let s1 = stage(d, 6, w1, f1, p2) && queue_live(d, Some(key), fl) == Ok(6);
+    let p_1 = take_apply() == Some(Plan { changed: CH_POLICY, revert: false, generation: 6 }) && section(KIND_POLICY) == Some(p2);
+    let c1 = applied(d, true, 100) == Tick::Idle && phase() == Phase::Trial && tick(d, 101, true) == Tick::Committed(6)
+        && phase() == Phase::Idle && last_result() == (1, 6) && artstore::entry(&*d, Ty::Config).is_some_and(|e| e.state == STATE_ACTIVE && e.gen == 6);
+    fl = crate::anchor::cfg_gens().cfg_floor;
+    // 2. a WAN that never becomes usable: the window passes -> LIVE revert to gen 6 (its WAN section re-applied)
+    let s2 = stage(d, 7, w2, f1, p2) && queue_live(d, Some(key), fl) == Ok(7);
+    let p_2 = take_apply() == Some(Plan { changed: CH_WAN, revert: false, generation: 7 });
+    let t2 = applied(d, true, 200) == Tick::Idle && tick(d, 200 + TRIAL_AUTO_S / 2, false) == Tick::Idle
+        && tick(d, 201 + TRIAL_AUTO_S, false) == Tick::Reverting;
+    let r2 = take_apply() == Some(Plan { changed: CH_WAN, revert: true, generation: 6 }) && section(KIND_WAN) == Some(w1)
+        && applied(d, true, 400) == Tick::Reverted(6) && phase() == Phase::Idle && last_result() == (2, 6)
+        && artstore::entry(&*d, Ty::Config).is_some_and(|e| e.state == STATE_ACTIVE && e.gen == 6);
+    // 3. a Wi-Fi change: healthy is not enough (the AP is a management path) — the owner's confirm commits it
+    let s3 = stage(d, 8, w1, f2, p2) && queue_live(d, Some(key), fl) == Ok(8) && needs_confirm();
+    let c3 = take_apply().is_some_and(|p| p.changed == CH_WIFI) && applied(d, true, 500) == Tick::Idle
+        && tick(d, 501, true) == Tick::Idle && phase() == Phase::Trial && commit(d) == Ok(8) && phase() == Phase::Idle;
+    fl = crate::anchor::cfg_gens().cfg_floor;
+    // 4. one change at a time
+    let s4 = stage(d, 9, w2, f2, p2) && queue_live(d, Some(key), fl) == Ok(9);
+    let busy = queue_live(d, Some(key), fl).is_err();
+    // 5. the apply fails -> LIVE revert to 8; then (gen 10) the revert itself fails -> reboot into the LKG
+    let f5 = take_apply().is_some() && applied(d, false, 600) == Tick::Reverting
+        && take_apply() == Some(Plan { changed: CH_WAN, revert: true, generation: 8 }) && applied(d, true, 601) == Tick::Reverted(8);
+    let s5 = stage(d, 10, w2, f2, p2) && queue_live(d, Some(key), fl) == Ok(10);
+    let rb = take_apply().is_some() && applied(d, false, 700) == Tick::Reverting && take_apply().is_some_and(|p| p.revert)
+        && applied(d, false, 701) == Tick::RevertReboot && last_result() == (3, 8)
+        && artstore::entry(&*d, Ty::Config).is_some_and(|e| e.gen == 8 && e.state == STATE_ACTIVE);
+    // 6. a crash during a live trial: trials=1 was persisted first -> the next boot reverts to the last-known-good
+    let s6 = stage(d, 11, w2, f2, p2) && queue_live(d, Some(key), fl) == Ok(11) && take_apply().is_some() && applied(d, true, 800) == Tick::Idle;
+    unsafe { PHASE = Phase::Idle };
+    let crash = boot(d, Some(key), fl, 900) == Boot::Reverted { from: 11, to: 8 };
+    crate::policysig::selftest_key(None);
+    clear();
+    unsafe {
+        STATE = Boot::None;
+        PHASE = Phase::Idle;
+        LAST_RESULT = (0, 0);
+    }
+    crate::anchor::test_set_cfg(saved_cfg);
+    let pass = base && s1 && p_1 && c1 && s2 && p_2 && t2 && r2 && s3 && c3 && s4 && busy && f5 && s5 && rb && s6 && crash;
+    arch_aarch64::_print(format_args!(
+        " [P-cfgd-live] {} — sealed-config / live-apply step 6, the cfgd live engine (mock executors): only the changed subsystem is applied={} healthy -> committed live, no reboot={} an unusable WAN reverts LIVE after the window to the last-known-good sections={} a Wi-Fi change waits for the owner's confirm={} one change at a time={} a failed apply reverts live={} a failed revert asks for the reboot (manifest already at the LKG)={} a crash during the live trial boots the last-known-good={}\n",
+        if pass { "PASS" } else { "FAIL" }, base && s1 && p_1, c1, s2 && p_2 && t2 && r2, s3 && c3, s4 && busy, f5, s5 && rb, s6 && crash
     ));
     pass
 }
