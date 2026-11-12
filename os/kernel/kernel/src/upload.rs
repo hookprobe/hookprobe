@@ -445,10 +445,8 @@ pub struct Activated {
     pub journal_seq: Option<u64>,
     /// ADR 0058: a staged type (wan / wifi / policy) applies at the next boot, not now.
     pub staged: bool,
-    /// Step 8: a configuration bundle applied LIVE (no reboot), on trial now.
-    pub live: bool,
-    /// Step 11: the live trial waits for the owner's /api/config/confirm (management plane or Wi-Fi changed).
-    pub needs_confirm: bool,
+    /// Design heqk-sealed-config-live-apply §3.8: how a staged configuration is stored ("sealed" | "plaintext_signed").
+    pub at_rest: Option<&'static str>,
 }
 
 /// `activate`: id, owner_key, seq. Store A/B write + readback + manifest commit + live reload.
@@ -512,7 +510,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
         return match crate::otaimg::install(d, slo, &plan) {
             Ok(()) => {
                 unsafe { TRIAL_REBOOT = true };
-                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true, live: false, needs_confirm: false })
+                Ok(Activated { gen: plan.svn, journal_seq: crate::ownerapi::audit_artifact("os_image", 1, &reason[..rl], tag, now_ms), staged: true, at_rest: None })
             }
             Err(e) => {
                 let _ = crate::ownerapi::audit_artifact("os_image", 2, &reason[..rl], tag, now_ms);
@@ -536,9 +534,11 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
         Ty::Config => sig[13..45].try_into().unwrap(), // HQCSIG1: sha256(bundle) at 13..45
         _ => sig[24..56].try_into().unwrap(),
     };
+    let mut at_rest = None;
     let res = if !staged {
         artstore::activate(d, ty, &sig, slo + 1, gen, len, &digest)
     } else if artstore::cfg_seal_available() {
+        at_rest = Some("sealed");
         // sealed at rest; the audit records the digest of the SEALED image, never the plaintext's (F-a)
         let r = artstore::activate_sealed(d, ty, &stage_ram()[..512 + len as usize], gen, len);
         if let Ok(m) = &r {
@@ -550,8 +550,12 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
         end();
         return Err("not stored: no device key — secrets are never written in plaintext");
     } else {
+        at_rest = Some("plaintext_signed");
         artstore::activate_from(d, ty, &sig, artstore::Src::Ram(&stage_ram()[512..512 + len as usize]), gen, len, &digest)
     };
+    if staged && res.is_ok() {
+        artstore::refresh(&*d, None);
+    }
     end();
     let mut reason = [0u8; 64];
     let rl = {
@@ -562,15 +566,7 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
     };
     let tag = tag;
     match res {
-        Ok(_) => {
-            let journal_seq = crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms);
-            // step 8: a bundle that changes only what this build applies live goes on a LIVE trial now (the AP loop's
-            // executors run after this reply); anything else keeps the next-boot trial
-            let live = ty == Ty::Config
-                && artstore::config_changes() & !crate::cfgd::LIVE_CAPABLE == 0
-                && crate::cfgd::queue_live_device().is_ok();
-            Ok(Activated { gen, journal_seq, staged: ty.staged() && !live, live, needs_confirm: live && crate::cfgd::needs_confirm() })
-        }
+        Ok(_) => Ok(Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, now_ms), staged: ty.staged(), at_rest }),
         Err(artstore::ActErr::LoaderRefused) => {
             let _ = crate::ownerapi::audit_artifact(ty.info().name, 2, &reason[..rl], tag, now_ms);
             Err("the loader refused the new pack — rolled back to the previous one")
@@ -605,6 +601,9 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     let opk = artstore::key_for(ty).ok_or("no operator key")?;
     let old = artstore::active_gen(&artstore::Plain::new(&*d), p1(d), ty);
     let res = artstore::rollback(d, ty, &opk);
+    if res.is_ok() && ty.staged() {
+        artstore::refresh(&*d, None);
+    }
     let tag = crate::mcauth::session_tag(c.session);
     let mut reason = [0u8; 64];
     let mut rl = 0;
@@ -615,7 +614,7 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
         rl = w.len;
     }
     match res {
-        Ok(gen) => Ok((Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged(), live: false, needs_confirm: false }, ty as u8)),
+        Ok(gen) => Ok((Activated { gen, journal_seq: crate::ownerapi::audit_artifact(ty.info().name, 1, &reason[..rl], tag, c.now_ms), staged: ty.staged(), at_rest: None }, ty as u8)),
         Err(artstore::ActErr::NothingToRollBack) => Err("nothing to roll back to (no verified previous generation)"),
         Err(artstore::ActErr::LoaderRefused) => Err("the loader refused the previous pack — the current one stays active"),
         Err(artstore::ActErr::NoStore) => Err("no artifact store"),
