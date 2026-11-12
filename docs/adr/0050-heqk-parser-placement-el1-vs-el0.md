@@ -133,6 +133,31 @@ server substrate (D4 #1) plus a per-server heap, not a kernel allocator change.
    *Metal 2026-11-11 (batches 62–63):* the first metal run found that the AP passes the rest of its SDPCM buffer
    (over the EL0 input window), so no M2 was recognised; fixed by trimming to the 802.1X span (f7d3b933). On W22,
    WPA3 transition 7/7 (SAE + WPA2-only stations keyed and authorized) and LAN client 18/18.
+   *Status 2026-11-12 (step 5c, QEMU):* the WPA3-SAE responder's walk over a station's Authentication frame runs in
+   `el0-lansvc` (`hal::saewire`, `CMD_STA_SAE`, libFuzzer `sae_wire`). Placement choice (b): the server parses and
+   validates only; the per-station state machine and every SAE secret stay in the kernel's `sae` crate.
+   - **Moved to EL0:** algorithm / sequence / status, group 19 check (status 77 answer), the Commit length rules,
+     the trailing element walk (H2E Rejected Groups and the downgrade check), the scalar range 1 < s < r, the
+     element check (x, y < p, on the curve, done without a curve library), and the Confirm format. The server
+     returns one fixed 168-B record; the kernel re-checks the kind and the Rejected Groups length / content.
+   - **Stays in EL1:** the fixed-offset event / 802.11 header reads (`apparse::sae_auth_body`, which trims the body
+     to the event's own data length — the batch 62 lesson), the state table, PWE / PT, rand / mask, our commit,
+     K / KCK / PMK / PMKID, the confirm computation and its check under the KCK, `auth_status`. The curve library
+     re-validates the scalar and element (fixed 32 / 64 B) before use. The in-kernel `hal::saewire` copy runs only
+     when the EL0 server is absent (D5, as 5a / 5b).
+   - **Crosses the boundary:** in: an H2E-offered flag and the body the station sent (≤ 512 B, longer is refused
+     whole, never truncated); out: the station's own scalar / element / Rejected Groups / send-confirm / confirm.
+     No password, PWE, PT, rand, KCK or PMK, so the 2A capability is not widened. The kernel still scrubs the IO
+     input and output and wipes its record copy after every call; the server wipes its copies before it exits.
+   - **Fault:** rejects that attempt only — nothing is sent, the station's SAE state is forgotten (it starts again
+     with a new commit). The AP's security mode never changes, so there is no fallback to WPA2.
+   - **Tested:** `[P-lansvc-sae]` (mc-e2e, now built with `wpa3`) covers the Annex J.10 commit via EL0, hunting-and-
+     pecking and H2E exchanges equal to the in-kernel walk, malformed commits (group, scalar = r, off-curve,
+     truncated, over IN_MAX), a 3000-B receive buffer trimmed to the event length, a server fault, and an IO page
+     with no PMK or passphrase. `[P-sae]` adds the walk-vs-curve-library parity.
+
+   Metal must prove: WPA3 transition stations (SAE and WPA2-only) keyed and authorized, `cm5-wpa3-check` and
+   `cm5-lan-client` green, throughput ≥ the 2026-11-07 baseline, and no REL-08 regression on an SAE soak.
 
 Each step must keep the AP throughput (≥ the 2026-11-07 metal baseline: 80–160 Mbps) and pass the separation
 matrix + `mc-e2e` before the EL1 copy is deleted.
