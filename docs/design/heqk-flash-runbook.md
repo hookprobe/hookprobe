@@ -14,9 +14,14 @@ Rule: **a flash is one deliberate, operator-approved action with a stop rule —
 
 Use `tools/diagnostics/cm5-rpiboot-check.sh` (add `--msd` to also expose the eMMC as USB mass storage, read-only)
 to prove the path without flashing. **Root cause of the 2026-11-12 failures:** the operator heard a single relay click —
-the board was not power-cycled while nRPIBOOT was held, so the ROM never saw the boot mode. `cm5-relay.py rpiboot`
-now asserts nRPIBOOT, confirms it by read-back, settles, power-cycles atomically inside the Nano (`C<n>`, 5 s off) and
-confirms `power=1 rpiboot=1` before waiting for the ROM; listen for **two** relays (rpiboot, then power off/on).
+the board was not power-cycled while nRPIBOOT was held, so the ROM never saw the boot mode. **Operator procedure (2026-11-12, LEDs IN1/IN2):** rpiboot = energise IN1 (power OFF) + IN2 (nRPIBOOT) together →
+release IN1 (board powers up, nRPIBOOT held) → 3 s later release IN2 → boot ROM `0a5c:2712` on USB.
+After flashing, a normal boot = reset IN1 only (off → on). **Always run the paper test first:**
+`tools/diagnostics/cm5-relay.py --backend nano --dev auto --dry-run rpiboot` (and `… --dry-run boot`) prints the exact
+relay commands in order without touching anything. Asserting nRPIBOOT FIRST and cycling
+power after it left IN1 unswitched (one click). `cm5-relay.py rpiboot` now uses the proven order and reads the relay
+state back after every step. The read-back says what the controller drove, NOT that a contact moved — the operator's
+LEDs / clicks are the ground truth when in doubt.
 Verified after the fix: boot ROM `0a5c:2712` enumerated within 7 s.
 
 
