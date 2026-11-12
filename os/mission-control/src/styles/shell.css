@@ -193,3 +193,9 @@
 .approve-actions .hp-btn:disabled { opacity: 1; background: transparent; color: var(--hp-text-muted); border-color: rgba(255,255,255,.12); cursor: not-allowed; }
 .approve-danger { background: #c0392b; color: #fff; border-color: #c0392b; }
 @media (max-width: 767px) { .approve-scrim { align-items: flex-end; padding: 0; } .approve-sheet { max-width: none; border-radius: 14px 14px 0 0; padding-bottom: calc(20px + env(safe-area-inset-bottom)); } }
+
+/* Visual pass A (UX review step 9): form controls take the page font, every focusable control shows a visible
+   focus ring (beats the old `outline: none` rules), and disabled buttons look disabled instead of half-lit. */
+button, input, select, textarea { font: inherit; }
+:is(a, button, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid var(--hp-cyan); outline-offset: 2px; }
+.hp-btn:disabled, .hp-btn--primary:disabled { opacity: 1; background: transparent; color: var(--hp-text-muted); border-color: rgba(255, 255, 255, 0.12); box-shadow: none; cursor: not-allowed; }
