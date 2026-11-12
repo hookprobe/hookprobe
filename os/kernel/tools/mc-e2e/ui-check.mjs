@@ -16,7 +16,7 @@ page.on('response', (r) => { if (r.url().includes('/api/')) apiCalls.push(`${r.s
 let fails = 0;
 const check = (ok, what) => { console.log(`    ${ok ? 'ok ' : 'BAD'} ${what}`); if (!ok) fails++; };
 
-// Sign in through the device's own login page with the owner key (ADR 0037 D3).
+// Sign in through the device's own login page with the owner key (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)).
 const token = process.argv[3] ?? '';
 await page.goto(`${base}/detect/feed`, { waitUntil: 'load' });
 check(new URL(page.url()).pathname === '/login', 'an unauthenticated browser is sent to the login page');

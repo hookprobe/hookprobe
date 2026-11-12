@@ -1,4 +1,4 @@
-//! Owner authentication for the on-device Mission Control (ADR 0037 D3, ADR 0047 D2).
+//! Owner authentication for the on-device Mission Control (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059), ADR 0047 D2).
 //!
 //! **Physical possession is the only credential; no default password, ever.** The flasher mints
 //! a random owner TOKEN at flash time and shows it to the operator once. The device stores only a
@@ -9,7 +9,7 @@
 //! - `/api/login` with the right token mints a session (128-bit id from the caller's RNG) carried
 //!   in an `HttpOnly; SameSite=Strict` cookie — same-origin `fetch` and `EventSource` send it.
 //! - An UNCLAIMED device (no verifier) refuses every protected route: there is NO open
-//!   "first visitor claims it" window (the race ADR 0037 closes).
+//!   "first visitor claims it" window (the race ADR 0037 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059) closes).
 //! - Failed logins are throttled (a 128-bit token is not brute-forceable anyway; the throttle
 //!   just keeps a flood from costing CPU).
 //!

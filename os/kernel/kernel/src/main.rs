@@ -1915,7 +1915,7 @@ fn cm5_prod_service() -> ! {
         kprint!(" [WASMMETAL] {} — bespoke no_std interpreter verified + executed a signed module on metal (M5 beachhead on CM5)\n",
             if w.a_verify_run && w.bad_result == 1 && w.ok_result == 0 && w.b_fail_closed && w.b_unsigned { "PASS" } else { "FAIL" });
     }
-    // ADR 0047 D2 — Mission Control served by heqk on the CM5 (`prod-mc`). PASSIVE-FIRST (ADR 0037
+    // ADR 0047 D2 — Mission Control served by heqk on the CM5 (`prod-mc`). PASSIVE-FIRST (ADR 0037 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)
     // D4): PASS frames are observed, never re-transmitted, so the device cannot break the network
     // it sits on; only the node's own replies (ARP/ICMP/DHCP/HTTP) go out the GEM. TRNG-seeded
     // (TCP ISNs) and fail-closed: no TRNG => no node, the sensor still runs.
@@ -1924,7 +1924,7 @@ fn cm5_prod_service() -> ! {
         Some(seed) => {
             let mac = device_mac();
             mcserve::state().set_clock(0, t0, cntfrq); // SNTP sets the epoch once the network is up
-            // Owner verifier from the eMMC boot partition (ADR 0037 D3): no file = UNCLAIMED, and
+            // Owner verifier from the eMMC boot partition (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)): no file = UNCLAIMED, and
             // every protected route refuses — never an open claim window.
             let owner = pf.read_owner();
             mcserve::set_owner(owner);
@@ -2558,7 +2558,7 @@ fn cm5_prod_service() -> ! {
                             };
                         // ENFORCE: forward; a TX-completion timeout is counted (AUDIT D2) so
                         // seen == forwarded + dropped + tx_fail holds and a lost PASS is visible.
-                        // PASSIVE (prod-mc, ADR 0037 D4): a PASS frame is OBSERVED and counted, never
+                        // PASSIVE (prod-mc, ADR 0037 D4 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)): a PASS frame is OBSERVED and counted, never
                         // re-transmitted — no hairpin back out the port it arrived on.
                         if !handled && cfg!(feature = "prod-mc") {
                             forwarded += 1;
