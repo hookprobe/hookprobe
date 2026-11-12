@@ -73,7 +73,7 @@ grep -q '"applies": "live"' "$T/r$G" && grep -q '"needs_confirm": true' "$T/r$G"
 waitlog "\[WAN\] live apply: mode STATIC" 30; chk $? "B2 WAN re-brought up live as STATIC"
 # B3: the gateway is resolved in the loop after the live switch — retry for up to 40 s, and on failure show the
 # device's WAN view (slow next-hop resolution vs never)
-b3=1; for _ in $(seq 1 8); do sleep 5; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206 && { b3=0; break; }; done
+b3=1; for _ in $(seq 1 8); do sleep 5; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -qE "^(200|206)$" && { b3=0; break; }; done
 [ $b3 = 0 ] || api /api/network | python3 -c 'import json,sys; d=json.load(sys.stdin); print("     WAN view:", json.dumps(d.get("wan", d))[:300])' 2>/dev/null
 chk $b3 "B3 LAN client reaches the WAN side through the new static WAN"
 rule7; chk $? "B4 rule 7 during the trial"
@@ -85,7 +85,7 @@ bundle --wan "$T/wd.txt" --policy "$T/pa.txt"
 # design) — every bench WAN carries vlan=100. An unhealthy trial still reverts LIVE when its window passes.
 grep -q '"applies": "live"' "$T/r$G" && grep -q '"needs_confirm": true' "$T/r$G"; chk $? "C1 dead-gateway bundle gen $G: live trial (vlan lines -> needs confirm, never confirmed)"
 waitlog "reverted LIVE to generation $GS" 180; chk $? "C2 not usable within the window -> reverted LIVE to gen $GS"
-sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -q 206; chk $? "C3 the last-known-good WAN works again"
+sleep 10; pi "curl -s -o /dev/null -w '%{http_code}' -m 10 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') http://10.100.0.1:8088/blob -r 0-1023" | grep -qE "^(200|206)$"; chk $? "C3 the last-known-good WAN works again"
 [ "$(boots)" = "$B0" ]; chk $? "C4 no reboot so far (boot banners unchanged: $B0)"
 rule7; chk $? "C5 rule 7 after the live revert"
 # --- D (optional): a PPPoE bundle with a wrong password reverts at once (Q5), not after the window ---
