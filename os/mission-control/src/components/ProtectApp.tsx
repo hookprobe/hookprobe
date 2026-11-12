@@ -11,8 +11,8 @@
  *   Policies      the signed IOC pack and DEVICES.TXT, recent refused writes, inline segmentation
  *                 (gated on `openvswitch`)
  *
- * Per-segment fail-open / fail-closed controls are not shown: the device does not report its fail
- * mode, and a control that cannot be read back must not be offered.
+ * Per-segment fail-open / fail-closed (board "Protect"): a greyed card with the reason. The device does not report
+ * its fail mode, and a control that cannot be read back must not be offered as if it worked.
  */
 import { type Component, For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
@@ -175,6 +175,14 @@ const ProtectApp: Component = () => {
               <p class="l0-label">Inline segmentation (VLAN / OVS)</p>
               <p class="l0-card-sub">Zones are enforced in the device itself. Switch-level segmentation needs Open vSwitch.</p>
               <Gate cap="openvswitch"><button class="hp-btn">Configure segmentation</button></Gate>
+            </section>
+            <section class="pcard span-12" aria-label="Segment posture">
+              <p class="l0-label">Segment posture (fail-open / fail-closed)</p>
+              <p class="l0-card-sub">What each segment does if inspection stops: keep traffic flowing (fail-open, the default) or hold it (fail-closed).</p>
+              <span class="gate gate--off">
+                <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Change posture</button></span>
+                <span class="gate-reason" role="note">This device does not report its fail mode yet, so it cannot be shown or changed here: a setting that cannot be read back is not offered.</span>
+              </span>
             </section>
           </div>
         </Show>
