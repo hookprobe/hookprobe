@@ -3100,7 +3100,7 @@ fn cm5_p10_probe() {
                         // verified before the anchor was known and a bundle's wifi section was never seen at boot.
                         // Parity G20: SSID / PSK / channel from the operator-signed WIFI.TXT; the build-time
                         // env (bench images) is the fallback; neither = the AP does not start (never open).
-                        let wcfg = match arch_aarch64::emmc::Emmc::probe() { Ok(dev) => wificfg::load(&dev), Err(_) => None };
+                        let wcfg = match arch_aarch64::emmc::Emmc::probe() { Ok(dev) => wificfg::load(&artstore::Plain::new(&dev)), Err(_) => None };
                         let wifi = match wcfg {
                             Some(Ok(c)) => {
                                 kprint!(" [WIFI] WIFI.TXT: SSID \"{}\", channel {}{}\n", core::str::from_utf8(&c.ssid[..c.ssid_len as usize]).unwrap_or("?"),
@@ -3143,7 +3143,10 @@ fn cm5_p10_probe() {
                             }
                         }
                         let (wan_sig, wan_txt) = match arch_aarch64::emmc::Emmc::probe() {
-                            Ok(d) => (wan_signed(&d), wan_present(&d)),
+                            Ok(d) => {
+                                let d = artstore::Plain::new(&d);
+                                (wan_signed(&d), wan_present(&d))
+                            }
                             Err(_) => (None, false),
                         };
                         // a WAN.TXT without its WAN.SIG is unsigned too; no WAN.TXT at all = the DHCP default
@@ -3154,7 +3157,7 @@ fn cm5_p10_probe() {
                         // The operator's WAN mode (WAN.TXT on the eMMC boot partition); DHCP when absent.
                         let wan_mode: hal::WanMode = match arch_aarch64::emmc::Emmc::probe() {
                             _ if wan_refused => hal::WanMode::Dhcp,
-                            Ok(dev) => match load_wan_cfg(&dev) {
+                            Ok(dev) => match load_wan_cfg(&artstore::Plain::new(&dev)) {
                                 Some(Ok(mo)) => mo,
                                 Some(Err(e)) => {
                                     kprint!(" [WAN] WAN.TXT invalid ({:?}) — falling back to DHCP\n", e);
@@ -3173,7 +3176,7 @@ fn cm5_p10_probe() {
                         // Link (VLAN / QinQ / management sub-interface) + POLICY.TXT — before any WAN mode comes up,
                         // so DHCP / PPPoE already ride the tagged internet sub-interface.
                         if let Ok(dev) = arch_aarch64::emmc::Emmc::probe() {
-                            match load_wan_link(&dev).filter(|_| !wan_refused) {
+                            match load_wan_link(&artstore::Plain::new(&dev)).filter(|_| !wan_refused) {
                                 Some(Ok(l)) => {
                                     #[cfg(feature = "mcserve")]
                                     unsafe {
@@ -3218,7 +3221,7 @@ fn cm5_p10_probe() {
                                 Some(Err(e)) => kprint!(" [LINK] WAN.TXT link keys invalid ({:?}) — internet untagged, no management sub-interface\n", e),
                                 None => {}
                             }
-                            match load_policy(&dev) {
+                            match load_policy(&artstore::Plain::new(&dev)) {
                                 Some(Ok(())) => {
                                     let pol = unsafe { &*core::ptr::addr_of!(POLICY) };
                                     kprint!(" [POLICY] loaded: {} prefix-lists, {} ACLs, {} interface bindings, {} routes\n", pol.npl, pol.nacl, pol.nbind, pol.nroutes);
@@ -3279,9 +3282,11 @@ fn cm5_p10_probe() {
                                             kprint!(" [AP-STORE] stored {} pack REFUSED by its loader — boot copy loaded instead\n", t.info().name);
                                         }
                                     }
+                                    let pv = artstore::Plain::new(&dev);
                                     for t in artstore::ALL {
-                                        if artstore::from_store(&dev, p1, t) {
-                                            kprint!(" [AP-STORE] {} from the artifact store (generation {})\n", t.info().name, artstore::active_gen(&dev, p1, t));
+                                        if artstore::from_store(&pv, p1, t) {
+                                            kprint!(" [AP-STORE] {} from the artifact store (generation {}{})\n", t.info().name, artstore::active_gen(&pv, p1, t),
+                                                if artstore::entry(&dev, t).is_some_and(|e| e.sealed == 1) { ", sealed at rest" } else { "" });
                                         }
                                     }
                                 }
@@ -5769,6 +5774,16 @@ fn print_id_line() {
     }
 }
 
+/// Configuration sealed at rest (artstore::Plain / activate_sealed): the device's SRK + the HBoot handoff's device id
+/// (the values the other seal users pass). None without an SRK (blank OTP / QEMU): config is never sealed under a
+/// synthetic key.
+pub fn cfg_seal_source() -> Option<([u8; 32], u64)> {
+    #[cfg(feature = "hboot")]
+    return seal_srk().and_then(|k| read_seal_handoff().map(|h| (k, h.device_id)));
+    #[cfg(not(feature = "hboot"))]
+    None
+}
+
 /// PH2a (AUDIT R1): consume the SRK from the fixed handoff page EXACTLY ONCE — copy it into
 /// kernel-private `.bss` (not the well-known 0x3FFA_0000 address, and never EL0-mappable),
 /// then SCRUB the 32 SRK bytes in the page (write-zero + `dsb` + `dc civac` to DRAM) so the
@@ -7079,6 +7094,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::ladder_selftest();
         let _ = ownerjournal::selftest();
         let _ = rpmb::selftest();
+        let _ = seal::inplace_selftest();
         #[cfg(feature = "netsvc")]
         let _ = ownerapi::selftest();
         #[cfg(feature = "netsvc")]
