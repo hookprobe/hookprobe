@@ -151,6 +151,27 @@ class Nano:
         return self.cmd("?")
 
 
+class Paper:
+    """--dry-run: print the relay commands in order; touch nothing (operator paper test before any real run)."""
+
+    def __init__(self, dev=None):
+        self.st = {1: "power=1", 2: "rpiboot=0"}
+
+    def set(self, ch, on):
+        name = "IN1 power relay" if ch == POWER else "IN2 nRPIBOOT relay"
+        if ch == POWER:
+            print(f"  {'P0' if on else 'P1'}  {name} {'ENERGISED (board OFF)' if on else 'released (board ON)'}")
+        else:
+            print(f"  {'B1' if on else 'B0'}  {name} {'ENERGISED (nRPIBOOT held)' if on else 'released'}")
+
+    def status(self):
+        return "HQRELAY1 power=1 rpiboot=1 (paper)"
+
+    def cmd(self, line, timeout=2.0):
+        print(f"  {line}")
+        return "OK (paper)"
+
+
 def bootrom_present():
     for d in glob.glob("/sys/bus/usb/devices/*/idVendor"):
         base = os.path.dirname(d)
@@ -170,13 +191,18 @@ def main():
     ap.add_argument("--dev", required=True, help="device path, or auto (nano only)")
     ap.add_argument("--off-secs", type=float, default=5.0, help="power-off dwell (CM5 caps drain)")
     ap.add_argument("--rom-timeout", type=float, default=15.0)
+    ap.add_argument("--dry-run", action="store_true", help="paper test: print the relay commands in order, touch nothing")
     ap.add_argument("cmd", choices=["status", "off", "on", "cycle", "rpiboot", "boot"])
     a = ap.parse_args()
-    if a.dev == "auto":
+    if a.dev == "auto" and not a.dry_run:
         if a.backend != "nano":
             sys.exit("--dev auto is only for --backend nano")
         a.dev = find_nano()
-    r = {"lcus": Lcus, "hid": Hid, "nano": Nano}[a.backend](a.dev)
+    if a.dry_run:
+        print(f"PAPER TEST ({a.cmd}) — no relay is touched; the real run sends exactly these, in this order:")
+        r = Paper()
+    else:
+        r = {"lcus": Lcus, "hid": Hid, "nano": Nano}[a.backend](a.dev)
 
     def cycle():
         r.set(POWER, True)  # energise = NC opens = board unpowered
@@ -194,37 +220,43 @@ def main():
     elif a.cmd == "cycle":
         cycle()
     elif a.cmd == "boot":
-        r.set(RPIBOOT, False)
+        # operator: after flashing, reset IN1 only (IN2 is already released by rpiboot)
+        if isinstance(r, Paper):
+            r.set(POWER, True)
+            print(f"  (wait {a.off_secs:.0f} s)")
+            r.set(POWER, False)
+            return
         cycle()
-        print("power-cycled for a normal eMMC boot")
+        print("IN1 reset — power-cycled for a normal eMMC boot")
     elif a.cmd == "rpiboot":
-        # 2026-11-12 (operator, at the bench, LEDs + clicks): the order that works is POWER OFF first, THEN assert
-        # nRPIBOOT, THEN power back on with nRPIBOOT still held. Asserting nRPIBOOT first and cycling power after it
-        # left IN1 (power) unswitched — one click — and the ROM never entered USB boot. Proven by hand: P0, B1, P1 ->
-        # boot ROM 0a5c:2712 on USB within 1 s. Each step is read back.
-        r.set(POWER, True)  # IN1 energised = NC opens = board unpowered
-        if isinstance(r, Nano):
-            st = r.status()
-            if "power=0" not in st:
-                sys.exit(f"power not off after P0 (read-back: {st or 'no reply'}) — stop")
-        time.sleep(0.5)
-        r.set(RPIBOOT, True)  # IN2: nRPIBOOT asserted while the board is unpowered
+        # Operator procedure (2026-11-12, proven at the bench with the IN1/IN2 LEDs): energise IN1 (power OFF) and IN2
+        # (nRPIBOOT) together, wait for the caps to drain, then release BOTH — IN1 first, so nRPIBOOT is still held at
+        # the instant power returns and the ROM latches USB boot. Asserting nRPIBOOT first and cycling power after it
+        # left IN1 unswitched (one click). Each step is read back on the Nano.
+        r.set(POWER, True)
+        r.set(RPIBOOT, True)
         if isinstance(r, Nano):
             st = r.status()
             if "power=0" not in st or "rpiboot=1" not in st:
-                sys.exit(f"want power=0 rpiboot=1, read {st or 'no reply'} — stop")
-        time.sleep(a.off_secs)  # caps drain
-        r.set(POWER, False)  # power back on, nRPIBOOT still held: the ROM latches USB boot
+                sys.exit(f"want power=0 rpiboot=1 (IN1 + IN2 on), read {st or 'no reply'} — stop")
+        if isinstance(r, Paper):
+            print(f"  (wait {a.off_secs:.0f} s — caps drain)")
+        else:
+            time.sleep(a.off_secs)
+        r.set(POWER, False)
+        r.set(RPIBOOT, False)
+        if isinstance(r, Paper):
+            print("  (wait up to --rom-timeout for the boot ROM 0a5c:2712 on USB, then: rpiboot -d mass-storage-gadget64, flash)")
+            return
         if isinstance(r, Nano):
             st = r.status()
-            if "power=1" not in st or "rpiboot=1" not in st:
-                sys.exit(f"want power=1 rpiboot=1, read {st or 'no reply'} — stop")
-            print(f"power off -> nRPIBOOT held -> power on ({st})")
+            if "power=1" not in st or "rpiboot=0" not in st:
+                sys.exit(f"want power=1 rpiboot=0 (both released), read {st or 'no reply'} — stop")
+            print(f"IN1 + IN2 on -> both released, IN1 first ({st})")
         t0 = time.time()
         while time.time() - t0 < a.rom_timeout and not bootrom_present():
             time.sleep(0.2)
         ok = bootrom_present()
-        r.set(RPIBOOT, False)
         if not ok:
             sys.exit(f"boot ROM (0a5c:2712) did not enumerate within {a.rom_timeout}s — check the RPIBOOT wiring")
         print("CM5 boot ROM enumerated — run rpiboot -d mass-storage-gadget64 next")
