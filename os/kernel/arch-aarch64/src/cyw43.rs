@@ -3112,6 +3112,8 @@ static mut PROBE_EVENTS: u32 = 0;
 
 /// WIFI.TXT `max_clients`: the associated-station cap applied at the next `ap_start` (0 = the firmware's default).
 static mut AP_MAXASSOC: u32 = 0;
+/// The firmware's own `maxassoc`, read before the first cap is set (0 = never read).
+static mut AP_MAXASSOC_FW: u32 = 0;
 pub fn ap_set_max_clients(n: u32) {
     unsafe { AP_MAXASSOC = n };
 }
@@ -3317,7 +3319,17 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     guest_probe();
     // client cap (WIFI.TXT max_clients): set, then read back what the firmware actually runs
     let want = unsafe { AP_MAXASSOC };
+    if want == 0 && unsafe { AP_MAXASSOC_FW } > 0 {
+        // a live re-start without a cap (sealed-config step 10): back to the firmware's own default
+        let _ = iovar_set_u32(b"maxassoc", unsafe { AP_MAXASSOC_FW });
+    }
     if want > 0 {
+        if unsafe { AP_MAXASSOC_FW } == 0 {
+            let mut fb = [0u8; 4];
+            if bcdc_iovar_get(b"maxassoc", &mut fb) {
+                unsafe { AP_MAXASSOC_FW = u32::from_le_bytes(fb) };
+            }
+        }
         let set = iovar_set_u32(b"maxassoc", want);
         let mut mb = [0u8; 4];
         let rb = if bcdc_iovar_get(b"maxassoc", &mut mb) { u32::from_le_bytes(mb) } else { 0 };
@@ -3419,16 +3431,50 @@ fn w3() -> &'static mut Wpa3 {
 /// AP stays WPA2 (returns the mode actually used).
 #[cfg(feature = "wpa3")]
 pub fn ap_set_security(mode: u8, ssid: &[u8], passphrase: &[u8]) -> u8 {
+    let p = ap_security_prepare(mode, ssid, passphrase).unwrap_or(SecPrep { mode: sec_mode(mode, passphrase), pt: None });
+    ap_security_install(p, ssid, passphrase)
+}
+
+/// A security mode prepared WITHOUT touching the radio or the running AP state (sealed-config step 10: everything
+/// that can fail is derived before the live BSS bounce).
+#[cfg(feature = "wpa3")]
+pub struct SecPrep {
+    mode: u8,
+    pt: Option<sae::PT>,
+}
+#[cfg(feature = "wpa3")]
+impl SecPrep {
+    pub fn mode(&self) -> u8 {
+        self.mode
+    }
+}
+#[cfg(feature = "wpa3")]
+fn sec_mode(mode: u8, passphrase: &[u8]) -> u8 {
+    if mode <= SEC_WPA3_TRANSITION && (8..=63).contains(&passphrase.len()) { mode } else { SEC_WPA2 }
+}
+/// The mode that will run and (WPA3 modes) the H2E password element. None = the SAE element cannot be derived.
+#[cfg(feature = "wpa3")]
+pub fn ap_security_prepare(mode: u8, ssid: &[u8], passphrase: &[u8]) -> Option<SecPrep> {
+    let mode = sec_mode(mode, passphrase);
+    let pt = if mode != SEC_WPA2 { Some(sae::derive_pt(ssid, passphrase, None)?) } else { None };
+    Some(SecPrep { mode, pt })
+}
+/// Install a prepared mode (before `ap_start`); returns the mode actually used.
+#[cfg(feature = "wpa3")]
+pub fn ap_security_install(p: SecPrep, ssid: &[u8], passphrase: &[u8]) -> u8 {
     let s = w3();
-    let pass_ok = (8..=63).contains(&passphrase.len());
-    s.mode = if mode <= SEC_WPA3_TRANSITION && pass_ok { mode } else { SEC_WPA2 };
+    s.mode = p.mode;
+    for b in s.pw.iter_mut() {
+        unsafe { write_volatile(b, 0) }; // no tail of a longer previous passphrase
+    }
     let n = passphrase.len().min(64);
     s.pw[..n].copy_from_slice(&passphrase[..n]);
     s.pw_len = n as u8;
+    s.ssid = [0; 32];
     let sl = ssid.len().min(32);
     s.ssid[..sl].copy_from_slice(&ssid[..sl]);
     s.ssid_len = sl as u8;
-    unsafe { *core::ptr::addr_of_mut!(SAE_PT) = if s.mode != SEC_WPA2 { sae::derive_pt(ssid, passphrase, None) } else { None } };
+    unsafe { *core::ptr::addr_of_mut!(SAE_PT) = p.pt };
     s.mode
 }
 
@@ -3647,6 +3693,13 @@ pub fn ap_sae_pmk(sta: &[u8; 6], now_ms: u64) -> Option<[u8; 32]> {
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_forget(sta: &[u8; 6]) {
     unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget(sta) }
+    wpa3_clear_pmksa();
+}
+
+/// Forget EVERY station's SAE state and the firmware's PMKSA (the live BSS bounce, sealed-config step 10).
+#[cfg(feature = "wpa3")]
+pub fn ap_sae_forget_all() {
+    unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget_all() }
     wpa3_clear_pmksa();
 }
 

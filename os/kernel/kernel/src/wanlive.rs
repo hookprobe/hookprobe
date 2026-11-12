@@ -178,8 +178,8 @@ pub fn selftest() -> bool {
     m6.mgmt = Some(mg);
     let (ok6, _) = apply(&mut m6, parse(Some(b"HQWAN1\nmode=dhcp\n")));
     let changed = ok6 && &m6.log[..m6.n] == b"tlms" && m6.mgmt.is_none();
-    // 6. the LIVE_CAPABLE gate: a WAN bundle is applied live now, a Wi-Fi section still keeps the next-boot trial
-    let gate = crate::cfgd::CH_WAN & !crate::cfgd::LIVE_CAPABLE == 0 && crate::cfgd::CH_WIFI & !crate::cfgd::LIVE_CAPABLE != 0;
+    // 6. the LIVE_CAPABLE gate: a WAN bundle is applied live (and, since step 10, a Wi-Fi section too)
+    let gate = crate::cfgd::CH_WAN & !crate::cfgd::LIVE_CAPABLE == 0 && crate::cfgd::CH_WIFI & !crate::cfgd::LIVE_CAPABLE == 0;
     let (fnet, flen, fset) = saved_floor;
     crate::verdict::reset_mgmt_floor();
     if fset {
@@ -188,7 +188,7 @@ pub fn selftest() -> bool {
     arch_aarch64::nat::set_mss_limit(0);
     let pass = refused && order && padt && nat && reject && same && changed && gate;
     arch_aarch64::_print(format_args!(
-        " [P-cfgd-wan] {} — sealed-config / live-apply step 9, the WAN executor: a WAN that does not verify / parse is refused and nothing is touched={} teardown -> link -> start, the PPP / DORA / WAN6 state reset and the MSS default restored={} the PADT for an open PPPoE session={} the NAT flush removes only the old WAN address's mappings={} a rejected PPPoE password fails the apply at once (live revert, no window)={} the management sub-interface is re-configured only when its keys change={} WAN bundles apply live, Wi-Fi still next boot={}\n",
+        " [P-cfgd-wan] {} — sealed-config / live-apply step 9, the WAN executor: a WAN that does not verify / parse is refused and nothing is touched={} teardown -> link -> start, the PPP / DORA / WAN6 state reset and the MSS default restored={} the PADT for an open PPPoE session={} the NAT flush removes only the old WAN address's mappings={} a rejected PPPoE password fails the apply at once (live revert, no window)={} the management sub-interface is re-configured only when its keys change={} WAN (and Wi-Fi) bundles apply live={}\n",
         if pass { "PASS" } else { "FAIL" }, refused, order, padt, nat, reject, same && changed, gate
     ));
     pass
