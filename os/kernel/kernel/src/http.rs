@@ -447,10 +447,14 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     Ok_::Chunk(got) => write!(w, "{{\"ok\":true,\"received\":{}}}", got),
                     Ok_::Fin(f) => write!(w, "{{\"ok\":true,\"verified\":true,\"generation\":{},\"active_generation\":{},\"length\":{}}}", f.gen, f.active_gen, f.len),
                     Ok_::Act(a) => {
-                        let applies = if a.live { "live" } else if a.staged { "next_boot" } else { "now" };
-                        match a.journal_seq {
-                            Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{},\"applies\":\"{}\",\"reboot_required\":{}}}", a.staged, a.gen, q, applies, a.staged),
-                            None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null,\"applies\":\"{}\",\"reboot_required\":{}}}", a.staged, a.gen, applies, a.staged),
+                        let _ = match a.journal_seq {
+                            Some(q) => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":{}", a.staged, a.gen, q),
+                            None => write!(w, "{{\"ok\":true,\"activated\":true,\"staged\":{},\"generation\":{},\"journal_seq\":null", a.staged, a.gen),
+                        };
+                        // design §3.8: how a staged configuration is stored (additive field)
+                        match a.at_rest {
+                            Some(r) => write!(w, ",\"at_rest\":\"{}\"}}", r),
+                            None => write!(w, "}}"),
                         }
                     }
                     Ok_::Abort => write!(w, "{{\"ok\":true,\"aborted\":true}}"),
@@ -668,8 +672,11 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 crate::cfgd::Boot::Refused => "refused",
             };
             let el = crate::cfgd::elapsed_s();
-            let _ = write!(w, "{{\"state\":\"{}\",\"generation\":{},\"floor\":{},\"on_trial\":{},\"needs_confirm\":{},\"window_s\":{},\"elapsed_s\":{},\"auto_rollback\":true,\"health\":\"WAN usable (Mission Control stays on the LAN / Wi-Fi regardless)\"}}",
+            let _ = write!(w, "{{\"state\":\"{}\",\"generation\":{},\"floor\":{},\"on_trial\":{},\"needs_confirm\":{},\"window_s\":{},\"elapsed_s\":{},\"auto_rollback\":true,\"health\":\"WAN usable (Mission Control stays on the LAN / Wi-Fi regardless)\"",
                 st, crate::cfgd::generation(), crate::anchor::cfg_gens().cfg_floor, crate::cfgd::on_trial(), crate::cfgd::on_trial() && crate::cfgd::touches_mgmt(), crate::cfgd::WINDOW_S, if crate::cfgd::on_trial() { el } else { 0 });
+            // design §3.8 (additive, before the closing brace): configuration at rest
+            let ar = crate::artstore::at_rest();
+            let _ = write!(w, ",\"at_rest\":{{\"sealed\":{},\"secrets_protected\":{},\"migrated\":{},\"device_key\":{}}}}}", ar.sealed, ar.secrets_protected, ar.migrated, ar.device_key);
         }),
         // ADR 0058 D3: which key verifies what — the vendor key (content packs) and the owner's configuration key
         "/api/anchor" => json(scratch, |w| {

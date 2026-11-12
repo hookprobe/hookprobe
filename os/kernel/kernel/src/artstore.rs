@@ -717,14 +717,31 @@ fn seal_magic_at<D: BlockDev + ?Sized>(dev: &D, lba: u64) -> bool {
 /// INACTIVE half of `t`, read it back, commit the manifest entry (sealed, digest = sha256 of the sealed image; a
 /// CONFIG bundle starts PENDING like `activate`). `dev` must have its write window armed over the Store region.
 pub fn activate_sealed<D: BlockDev + ?Sized>(dev: &mut D, t: Ty, plain: &[u8], gen: u64, len: u64) -> Result<Manifest, ActErr> {
+    let store = store_region(&*dev).ok_or(ActErr::NoStore)?;
+    let old = read_manifest(&*dev, store);
+    let half = if old.e[t as usize].half == 1 { 2 } else { 1 };
+    let digest = seal_write(dev, store, t, plain, gen, len, half)?;
+    let g = group(t);
+    let mut m = old;
+    if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
+    let state = if t == Ty::Config { STATE_PENDING } else { STATE_ACTIVE };
+    m.e[t as usize] = Entry { half, gen, len, digest, state, trials: 0, sealed: 1 };
+    commit(dev, store, &m, g)?;
+    unsafe {
+        DISABLED &= !(1 << t as u8);
+        OTHER &= !(1 << t as u8);
+    }
+    Ok(m)
+}
+
+/// Seal `plain` (signature sector ‖ `len` file bytes; never SEALBUF itself) into `half` of `t`, read it back, zero the
+/// rest of the slot (a longer previous plaintext must not survive behind a shorter seal). Returns sha256(sealed image).
+fn seal_write<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), t: Ty, plain: &[u8], gen: u64, len: u64, half: u8) -> Result<[u8; 32], ActErr> {
     let (srk, devid) = seal_ctx().ok_or(ActErr::NoStore)?;
     let n = len as usize;
     if !t.staged() || len > t.info().cap || plain.len() < 512 + n {
         return Err(ActErr::Io);
     }
-    let store = store_region(&*dev).ok_or(ActErr::NoStore)?;
-    let old = read_manifest(&*dev, store);
-    let half = if old.e[t as usize].half == 1 { 2 } else { 1 };
     let (sl, _) = slot(store, t, half);
     let b = unsafe {
         CSTATE = 0;
@@ -756,17 +773,8 @@ pub fn activate_sealed<D: BlockDev + ?Sized>(dev: &mut D, t: Ty, plain: &[u8], g
             return Err(ActErr::Readback);
         }
     }
-    let g = group(t);
-    let mut m = old;
-    if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
-    let state = if t == Ty::Config { STATE_PENDING } else { STATE_ACTIVE };
-    m.e[t as usize] = Entry { half, gen, len, digest, state, trials: 0, sealed: 1 };
-    commit(dev, store, &m, g)?;
-    unsafe {
-        DISABLED &= !(1 << t as u8);
-        OTHER &= !(1 << t as u8);
-    }
-    Ok(m)
+    zero_span(dev, sl, nsec as u64, 1 + t.data_sect())?;
+    Ok(digest)
 }
 
 /// The read-only plaintext view of a device (see the section comment). Writes are refused.
@@ -871,6 +879,253 @@ impl<D: BlockDev + ?Sized> BlockDev for Plain<'_, D> {
     }
 }
 
+// ---- step 5: one-time migration to sealed at rest, the scrub, the at-rest report (design §2.5 / §2.6) ----------
+// At boot, with a device key: every staged entry still plaintext + ACTIVE (a PENDING trial migrates once it resolves)
+// is verified with its own verifier, sealed into its INACTIVE half, verified again through `Plain`, and only then the
+// manifest flips to it (one atomic sector). A crash before that commit leaves the verified plaintext in force and the
+// next boot retries; after it, the old plaintext half and stale Staging uploads are zeroed (idempotent, every boot:
+// data sectors first, the signature sector last, so a torn scrub keeps its magic and is found again). Without a device
+// key nothing is sealed or deleted — plaintext secrets are only reported (Q3). The boot never blocks on a failure.
+
+/// What `GET /api/config` reports as `at_rest`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AtRest {
+    pub device_key: bool,
+    /// Every present staged entry is sealed.
+    pub sealed: bool,
+    /// No secret-bearing configuration (a PPPoE password, any Wi-Fi config) is stored in plaintext.
+    pub secrets_protected: bool,
+    /// Entries migrated this boot.
+    pub migrated: u8,
+}
+static mut AT_REST: AtRest = AtRest { device_key: false, sealed: true, secrets_protected: true, migrated: 0 };
+pub fn at_rest() -> AtRest {
+    let mut a = unsafe { AT_REST };
+    a.device_key = cfg_seal_available();
+    a
+}
+
+/// Zero sectors `base + from .. base + to` that are not zero yet (ascending).
+fn zero_span<D: BlockDev + ?Sized>(dev: &mut D, base: u64, from: u64, to: u64) -> Result<(), ActErr> {
+    let mut s = [0u8; 512];
+    for l in base + from..base + to {
+        dev.read_block(l, &mut s).map_err(|_| ActErr::Io)?;
+        if s.iter().any(|&b| b != 0) {
+            dev.write_block(l, &[0; 512]).map_err(|_| ActErr::Io)?;
+        }
+    }
+    Ok(())
+}
+/// Zero a plaintext container at `sl` (signature sector + `t`'s data sectors): the data first, the magic last.
+fn zero_container<D: BlockDev + ?Sized>(dev: &mut D, sl: u64, t: Ty) -> Result<(), ActErr> {
+    zero_span(dev, sl, 1, 1 + t.data_sect())?;
+    zero_span(dev, sl, 0, 1)
+}
+
+/// Does `half` of `t` hold a PLAINTEXT container carrying a secret (read raw — reporting only, nothing is parsed)?
+fn plain_secret<D: BlockDev + ?Sized>(dev: &D, store: (u64, u64), t: Ty, half: u8) -> bool {
+    let (sl, dl) = slot(store, t, half);
+    let mut s = [0u8; 512];
+    if dev.read_block(sl, &mut s).is_err() || &s[..8] != t.info().magic {
+        return false;
+    }
+    match t {
+        Ty::Wifi => true,
+        Ty::Wan | Ty::Config => {
+            let mut w = [0u8; 522];
+            for k in 0..t.data_sect() {
+                w.copy_within(512.., 0);
+                if dev.read_block(dl + k, &mut s).is_err() {
+                    return true; // unreadable: do not claim it is clean
+                }
+                w[10..].copy_from_slice(&s);
+                // a bundle's section table (count at 44, {kind, rsv, len u16} from 48): a Wi-Fi section is a secret
+                if wan_has_secret(&w) || (t == Ty::Config && k == 0 && (0..(s[44] as usize).min(8)).any(|i| s[48 + 4 * i] == crate::cfgbundle::KIND_WIFI)) {
+                    return true;
+                }
+            }
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Recompute the at-rest report from the store (after the migration, and after every staged activation / rollback).
+pub fn refresh<D: BlockDev + ?Sized>(dev: &D, migrated: Option<u8>) -> AtRest {
+    let mut a = at_rest();
+    if let Some(n) = migrated {
+        a.migrated = n;
+    }
+    if let Some(store) = store_region(dev) {
+        let m = read_manifest(dev, store);
+        a.sealed = ALL[G1_FIRST..].iter().all(|&t| m.e[t as usize].half == 0 || m.e[t as usize].sealed == 1);
+        a.secrets_protected = !ALL[G1_FIRST..].iter().any(|&t| plain_secret(dev, store, t, 1) || plain_secret(dev, store, t, 2));
+    }
+    unsafe { AT_REST = a };
+    a
+}
+
+/// Seal one plaintext ACTIVE entry into its inactive half and commit it (see the section comment).
+fn migrate_one<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), t: Ty, e: Entry) -> Result<(), ActErr> {
+    let key = key_for(t).ok_or(ActErr::NothingToRollBack)?;
+    let (sl, dl) = slot(store, t, e.half);
+    let mut sig = [0u8; 512];
+    dev.read_block(sl, &mut sig).map_err(|_| ActErr::Io)?;
+    // its own verifier first (a copy that does not verify is left to the normal boot fallback)
+    let (g, l) = verify(&*dev, t, &sig, dl, &key).map_err(|_| ActErr::NothingToRollBack)?;
+    let n = l.max(e.len).min(t.info().cap) as usize;
+    let other = if e.half == 1 { 2 } else { 1 };
+    let buf = unsafe { &mut *core::ptr::addr_of_mut!(VBUF) };
+    buf[..512].copy_from_slice(&sig);
+    let mut r = Ok(());
+    let mut sec = [0u8; 512];
+    for k in 0..n.div_ceil(512) {
+        if dev.read_block(dl + k as u64, &mut sec).is_err() {
+            r = Err(ActErr::Io);
+            break;
+        }
+        buf[512 + k * 512..1024 + k * 512].copy_from_slice(&sec);
+    }
+    let digest = r.and_then(|_| seal_write(dev, store, t, &buf[..512 + n], e.gen, n as u64, other));
+    for b in buf[..512 + n.div_ceil(512) * 512].iter_mut() {
+        unsafe { core::ptr::write_volatile(b, 0) }; // the plaintext (it may hold a secret) leaves RAM
+    }
+    sec.fill(0);
+    let digest = digest?;
+    // the sealed copy must verify to the same signed (generation, length) through the loaders' view before it counts
+    if !verify_half(&*dev, t, other, &key).is_some_and(|(g2, l2, _)| g2 == g && l2 == l) {
+        return Err(ActErr::Readback);
+    }
+    let mut m = read_manifest(&*dev, store);
+    m.seq2 += 1;
+    m.e[t as usize] = Entry { half: other, digest, sealed: 1, ..e };
+    commit(dev, store, &m, group(t))?;
+    unsafe {
+        DISABLED &= !(1 << t as u8);
+        OTHER &= !(1 << t as u8);
+    }
+    Ok(())
+}
+
+/// Scrub a sealed entry's slots: a plaintext container in either half is zeroed, and a sealed half's sectors past
+/// its sealed image. Returns whether anything plaintext was found.
+fn scrub_type<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), t: Ty) -> Result<bool, ActErr> {
+    let mut found = false;
+    for half in [1u8, 2] {
+        let (sl, _) = slot(store, t, half);
+        let mut s = [0u8; 512];
+        dev.read_block(sl, &mut s).map_err(|_| ActErr::Io)?;
+        if &s[..8] == t.info().magic {
+            found = true;
+            zero_container(dev, sl, t)?;
+        } else if &s[..8] == crate::seal::SEAL_MAGIC {
+            let blob = crate::seal::SEAL_HDR_LEN as u64 + u32::from_le_bytes(s[68..72].try_into().unwrap()) as u64;
+            zero_span(dev, sl, blob.div_ceil(512).max(1), 1 + t.data_sect())?;
+        }
+    }
+    Ok(found)
+}
+
+/// The older group-1 manifest copy still naming a plaintext entry that is now sealed (it carries the plaintext
+/// digest, F-a): rewrite it with the current entries.
+fn scrub_manifest<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64)) -> Result<bool, ActErr> {
+    let cur = read_manifest(&*dev, store);
+    let mut s = [0u8; 512];
+    for k in 0..2u64 {
+        let mut m = MAN0;
+        if dev.read_block(store.0 + 2 + k, &mut s).is_ok() && Manifest::decode_g(&s, 1, &mut m).is_some() && m.seq2 != cur.seq2
+            && ALL[G1_FIRST..].iter().any(|&t| cur.e[t as usize].sealed == 1 && m.e[t as usize].sealed == 0 && m.e[t as usize].half != 0)
+        {
+            let mut n = cur;
+            n.seq2 += 1;
+            commit(dev, store, &n, 1)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Stale uploads in the Staging region from before RAM staging (step 3): a staged-type container there is zeroed.
+fn scrub_staging<D: BlockDev + ?Sized>(dev: &mut D) -> Result<bool, ActErr> {
+    let mut s = [0u8; 512];
+    dev.read_block(0, &mut s).map_err(|_| ActErr::Io)?;
+    let Some(dv) = crate::datavol::DataVol::from_mbr(&s) else { return Ok(false) };
+    let (lo, _) = dv.region(crate::datavol::Region::Staging);
+    dev.read_block(lo, &mut s).map_err(|_| ActErr::Io)?;
+    match ALL[G1_FIRST..].iter().find(|t| &s[..8] == t.info().magic) {
+        Some(&t) => zero_container(dev, lo, t).map(|_| true),
+        None => Ok(false),
+    }
+}
+
+/// The boot step (before cfgd): migrate, scrub, report. `dev` must be write-armed over Store ∪ Staging.
+pub fn migrate<D: BlockDev + ?Sized>(dev: &mut D, log: bool) -> AtRest {
+    let mut n = 0u8;
+    if let Some(store) = store_region(&*dev) {
+        let key = cfg_seal_available();
+        for t in ALL[G1_FIRST..].iter().copied() {
+            let e = read_manifest(&*dev, store).e[t as usize];
+            if key && e.half != 0 && e.sealed == 0 && e.state == STATE_ACTIVE {
+                match migrate_one(dev, store, t, e) {
+                    Ok(()) => {
+                        n += 1;
+                        if log {
+                            arch_aarch64::_print(format_args!(" [CFGSEAL] migrated {} generation {} to sealed at rest\n", t.info().name, e.gen));
+                        }
+                    }
+                    Err(x) if log => arch_aarch64::_print(format_args!(" [CFGSEAL] {} generation {} NOT migrated ({:?}) — the signed plaintext stays in force; retried next boot\n", t.info().name, e.gen, x)),
+                    Err(_) => {}
+                }
+            }
+            if key && read_manifest(&*dev, store).e[t as usize].sealed == 1 {
+                match scrub_type(dev, store, t) {
+                    Ok(true) if log => arch_aarch64::_print(format_args!(" [CFGSEAL] scrubbed the plaintext {} copy (best effort: eMMC wear levelling may keep old pages)\n", t.info().name)),
+                    Err(x) if log => arch_aarch64::_print(format_args!(" [CFGSEAL] scrub of {} failed ({:?}) — retried next boot\n", t.info().name, x)),
+                    _ => {}
+                }
+            }
+        }
+        if key {
+            if let Err(x) = scrub_manifest(dev, store) {
+                if log {
+                    arch_aarch64::_print(format_args!(" [CFGSEAL] manifest scrub failed ({:?}) — retried next boot\n", x));
+                }
+            }
+        }
+        match scrub_staging(dev) {
+            Ok(true) if log => arch_aarch64::_print(format_args!(" [CFGSEAL] scrubbed a stale plaintext upload from the Staging region\n")),
+            Err(x) if log => arch_aarch64::_print(format_args!(" [CFGSEAL] Staging scrub failed ({:?}) — retried next boot\n", x)),
+            _ => {}
+        }
+    }
+    let a = refresh(&*dev, Some(n));
+    if log && !a.secrets_protected {
+        arch_aarch64::_print(format_args!(" [CFGSEAL] secrets NOT protected at rest ({})\n", if a.device_key { "a plaintext entry is not migrated yet" } else { "no device key" }));
+    }
+    a
+}
+
+/// CM5 boot glue: an eMMC handle write-armed over Store ∪ Staging only, used once (before `cfgd::boot_device`).
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
+pub fn migrate_device() -> AtRest {
+    #[cfg(all(feature = "cm5", feature = "p15-write"))]
+    if let Ok(mut dev) = arch_aarch64::emmc::Emmc::probe() {
+        let mut mbr = [0u8; 512];
+        if dev.read_block(0, &mut mbr).is_ok() {
+            if let Some(dv) = crate::datavol::DataVol::from_mbr(&mbr) {
+                let (blo, bhi) = dv.bounds();
+                dev.set_data_volume(blo, bhi);
+                let (lo, _) = dv.region(crate::datavol::Region::Store);
+                let (_, hi) = dv.region(crate::datavol::Region::Staging);
+                if dev.arm_write_window(lo, hi) == (lo, hi) {
+                    return migrate(&mut dev, true);
+                }
+            }
+        }
+    }
+    at_rest()
+}
+
 // ---- [P-artstore] ------------------------------------------------------------------------------------------
 
 /// The key that verifies type `t`: the owner's configuration key for WAN / Wi-Fi / POLICY (ADR 0058 D3), the
@@ -885,11 +1140,13 @@ pub struct SparseDisk {
     pub data: [[u8; 512]; 192],
     pub n: usize,
     pub size: u64,
+    /// Crash injection: the write with this index (0 = the first after `writes` was reset) and every later one fail.
     pub fail_writes_from: u64,
+    pub writes: u64,
 }
 impl SparseDisk {
     pub const fn new(size: u64) -> SparseDisk {
-        SparseDisk { lba: [0; 192], data: [[0; 512]; 192], n: 0, size, fail_writes_from: u64::MAX }
+        SparseDisk { lba: [0; 192], data: [[0; 512]; 192], n: 0, size, fail_writes_from: u64::MAX, writes: 0 }
     }
 }
 impl BlockDev for SparseDisk {
@@ -907,9 +1164,10 @@ impl BlockDev for SparseDisk {
         Ok(())
     }
     fn write_block(&mut self, lba: u64, buf: &[u8; 512]) -> Result<(), BlockErr> {
-        if lba >= self.size || lba >= self.fail_writes_from {
+        if lba >= self.size || self.writes >= self.fail_writes_from {
             return Err(BlockErr::WriteRefused);
         }
+        self.writes += 1;
         match self.lba[..self.n].iter().position(|&l| l == lba) {
             Some(i) => self.data[i] = *buf,
             None if self.n < self.lba.len() => {
@@ -1149,4 +1407,134 @@ fn sealed_selftest(d: &mut SparseDisk, store: (u64, u64), kp: &ed25519_compact::
 
 fn kp_other() -> [u8; 32] {
     *ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x43; 32])).pk
+}
+
+// ---- [P-cfgseal] (design heqk-sealed-config-live-apply step 5) -------------------------------------------------------
+
+const CS_BODY: &[u8] = b"mode=pppoe\npppoe_user=cs\npppoe_pass=cs-s3cret\n";
+const CS_SECRET: &[u8] = b"cs-s3cret";
+
+/// A fresh test disk as an older device left it: plaintext WAN gen 2 (half A) and gen 3 (half B, active), plus a
+/// stale plaintext WAN upload at the start of the Staging region. Returns (disk, store, staging start).
+fn cs_setup(kp: &ed25519_compact::KeyPair) -> (&'static mut SparseDisk, (u64, u64), u64) {
+    let d = test_disk();
+    let dig = boot_abi::sha256::digest(CS_BODY);
+    let mut sig = [0u8; 512];
+    for g in [2u64, 3] {
+        sig = test_sig(b"HQNSIG1\0", b"HQWAN1", g, CS_BODY, kp);
+        let _ = activate_from(d, Ty::Wan, &sig, Src::Ram(CS_BODY), g, CS_BODY.len() as u64, &dig);
+    }
+    let mut mbr = [0u8; 512];
+    let _ = d.read_block(0, &mut mbr);
+    let lo = crate::datavol::DataVol::from_mbr(&mbr).map_or(0, |v| v.region(crate::datavol::Region::Staging).0);
+    let mut sec = [0u8; 512];
+    sec[..CS_BODY.len()].copy_from_slice(CS_BODY);
+    let _ = d.write_block(lo, &sig);
+    let _ = d.write_block(lo + 1, &sec);
+    let store = store_region(d).unwrap_or((0, 0));
+    unsafe {
+        DISABLED = 0;
+        OTHER = 0;
+    }
+    d.writes = 0;
+    (d, store, lo)
+}
+
+/// The WAN loaders' path (locate -> Plain -> the WAN verifier) yields generation `gen` with the original body.
+fn cs_loads(d: &SparseDisk, key: &[u8; 32], gen: u64) -> bool {
+    let p = Plain::new(d);
+    let (Some((sl, _)), Some((dl, _))) = (locate(&p, 0, b"WAN     SIG"), locate(&p, 0, b"WAN     TXT")) else { return false };
+    let (mut sg, mut ds) = ([0u8; 512], [0u8; 512]);
+    p.read_block(sl, &mut sg).is_ok() && p.read_block(dl, &mut ds).is_ok() && verify(&p, Ty::Wan, &sg, dl, key) == Ok((gen, CS_BODY.len() as u64))
+        && ds[..CS_BODY.len()] == *CS_BODY
+}
+
+pub fn cfgseal_selftest() -> bool {
+    let saved = unsafe { AT_REST };
+    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x42; 32]));
+    let key: [u8; 32] = *kp.pk;
+    crate::policysig::selftest_key(Some(key));
+    set_cfg_seal(Some([0x6d; 32]), 0x5eed_0005);
+    let wan = Ty::Wan as usize;
+    let zero = |d: &SparseDisk, l: u64| {
+        let mut s = [0xffu8; 512];
+        d.read_block(l, &mut s).is_ok() && s.iter().all(|&b| b == 0)
+    };
+    // (a) + (e): the plaintext ACTIVE WAN migrates into the other half; no secret / plaintext digest left anywhere
+    let (d, store, stg) = cs_setup(&kp);
+    let before = read_manifest(d, store).e[wan];
+    let r = migrate(d, false);
+    let e = read_manifest(d, store).e[wan];
+    let a = before.half == 2 && before.sealed == 0 && r.migrated == 1 && r.sealed && r.secrets_protected && r.device_key
+        && e.sealed == 1 && e.half == 1 && e.gen == 3 && e.len == before.len && e.state == STATE_ACTIVE
+        && !on_disk(d, CS_SECRET) && !on_disk(d, &boot_abi::sha256::digest(CS_BODY)) && cs_loads(d, &key, 3);
+    let st = zero(d, stg) && zero(d, stg + 1);
+    // a second boot is a no-op (idempotent, nothing written)
+    d.writes = 0;
+    let again = migrate(d, false).migrated == 0 && d.writes == 0 && cs_loads(d, &key, 3);
+    let total = {
+        let (d, _, _) = cs_setup(&kp);
+        let _ = migrate(d, false);
+        d.writes
+    };
+    // (b) a power cut at EVERY write of the migration, then a fresh boot: always a verified configuration
+    let mut bad = u64::MAX;
+    for k in 0..total {
+        let (d, store, _) = cs_setup(&kp);
+        d.fail_writes_from = k;
+        let _ = migrate(d, false);
+        d.fail_writes_from = u64::MAX;
+        unsafe {
+            DISABLED = 0;
+            OTHER = 0;
+        }
+        let e = read_manifest(d, store).e[wan];
+        let mid = cs_loads(d, &key, 3) && ((e.sealed == 0 && e.half == 2) || (e.sealed == 1 && e.half == 1));
+        let r2 = migrate(d, false);
+        let e2 = read_manifest(d, store).e[wan];
+        let after = cs_loads(d, &key, 3) && e2.sealed == 1 && e2.half == 1 && r2.secrets_protected && !on_disk(d, CS_SECRET);
+        if !(mid && after) {
+            bad = k;
+            break;
+        }
+    }
+    let crash = total >= 5 && bad == u64::MAX;
+    // (c) a PENDING configuration bundle is left alone (it migrates once its trial resolves)
+    let (d, store, _) = cs_setup(&kp);
+    let _ = set_entry(d, Ty::Config, |x| {
+        x.half = 1;
+        x.gen = 5;
+        x.state = STATE_PENDING;
+    });
+    let r = migrate(d, false);
+    let c = read_manifest(d, store).e[Ty::Config as usize];
+    let pend = r.migrated == 1 && c.half == 1 && c.sealed == 0 && c.state == STATE_PENDING && c.gen == 5;
+    // (d) no device key: nothing sealed, nothing deleted, reported unprotected; a non-config Staging upload stays
+    set_cfg_seal(None, 0);
+    let (d, store, stg) = cs_setup(&kp);
+    let other = test_sig(b"HQDSIG1\0", b"HQDEV1", 1, b"x\n", &kp);
+    let _ = d.write_block(stg, &other);
+    let r = migrate(d, false);
+    let mut s = [0u8; 512];
+    let _ = d.read_block(stg, &mut s);
+    let e = read_manifest(d, store).e[wan];
+    let nokey = r.migrated == 0 && !r.device_key && !r.secrets_protected && !r.sealed && e.sealed == 0 && e.half == 2
+        && on_disk(d, CS_SECRET) && cs_loads(d, &key, 3);
+    let keep = s == other;
+    clear_cfg_seal();
+    crate::policysig::selftest_key(None);
+    unsafe {
+        DISABLED = 0;
+        OTHER = 0;
+        AT_REST = saved;
+    }
+    let pass = a && st && again && crash && pend && nokey && keep;
+    arch_aarch64::_print(format_args!(
+        " [P-cfgseal] {} — configuration sealed at rest, step 5 (migration + scrub): a plaintext ACTIVE WAN with pppoe_pass= migrates to sealed=1 on the other half, no secret / plaintext digest left on disk, the loader path returns the same configuration={} stale plaintext Staging upload zeroed={} second boot is a no-op={} power cut at every one of {} migration writes then a fresh boot -> always the verified original or the sealed copy, never nothing / a mix={}{} PENDING bundle not migrated={} no device key: nothing migrated or deleted, secrets_protected=false={} non-config Staging content kept={}\n",
+        if pass { "PASS" } else { "FAIL" }, a, st, again, total, crash, if bad != u64::MAX { " (first bad write index logged)" } else { "" }, pend, nokey, keep
+    ));
+    if bad != u64::MAX {
+        arch_aarch64::_print(format_args!(" [P-cfgseal] debug crash at write {}\n", bad));
+    }
+    pass
 }
