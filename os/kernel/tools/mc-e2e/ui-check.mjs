@@ -30,8 +30,9 @@ await page.goto(`${base}/detect/feed`, { waitUntil: 'load' });
 const c2 = page.locator('.det-title', { hasText: 'Known C2 port 4444 (DROP, framedrop)' }).first();
 // isVisible() does NOT wait; waitFor does (the rows arrive after /api/detections answers).
 // Over HTTPS on a TCG-emulated QEMU (CI runners) a page's fan-out waits for the device's 8 TLS slots (the SSE
-// stream holds one), so /api/detections can answer after 20 s: CI 2026-11-12 logged it after the Shield page's
-// calls. Allow 60 s there; plain HTTP keeps 20 s.
+// stream holds one), so /api/detections can answer after 20 s. Allow 60 s there; plain HTTP keeps 20 s.
+// (CI g3 2026-11-12's 60 s "no response" was not slowness: the device RST a SYN while every slot was busy and the
+// page lost a module script — fixed in mcserve.rs hold_syn; tls-stall.mjs is the regression.)
 const ROWS_MS = spki ? 60000 : 20000;
 check(await c2.waitFor({ state: 'visible', timeout: ROWS_MS }).then(() => true).catch(() => false), 'Detect feed shows the heqk C2-4444 detection (rule msg + wire action + class)');
 check(!(await page.getByText('Live detections unavailable').isVisible().catch(() => false)), 'Detect feed is LIVE (no "unavailable" fallback)');

@@ -304,8 +304,9 @@ pub extern "C" fn _start() -> ! {
             if n > SEND_CHUNK {
                 exit(ST_TOO_BIG, 0, 0, 0);
             }
-            let data: Vec<u8> = input.to_vec();
-            match pump(s, Some(&data), false) {
+            // straight from the IO region (IN never overlaps OUT_TLS): no SEND_CHUNK-sized heap copy — with 8
+            // sessions on the heap that allocation failed (an EL0 panic resets EVERY session; QEMU soak 2026-11-12)
+            match pump(s, Some(input), false) {
                 Ok((t, p, f)) => exit(ST_OK, t, p, f),
                 Err(e) => exit(e, 0, 0, 0),
             }
