@@ -59,8 +59,8 @@ yet say so (doc-only fix, no decision change).
 | 0049 WAN policy auth / IPv6 identity / scan evidence | D2, D3 V; **D1 deviates** (see 2.1) |
 | 0050 parser placement | P — TLS in EL0 (metal), TLS scalar no longer in EL1; HTTP / DHCP / DNS / WAN / Noise / WPA2 parsers still EL1 |
 | 0051 MC HTTPS | V (offline provisioning) |
-| 0052 Shield v2 | V (metal) — header still "Proposed" · *2026-11-12: header reconciled to "Implemented, metal-proven"; operator ratification not recorded* |
-| 0052 CI/CD (duplicate number) | I — gates run, never ratified; proposed renumber → 0058 · *2026-11-12: 0058 is taken (owner-signed runtime config); proposed renumber is now **0063**, operator decision — `docs/adr/README.md`* |
+| 0052 Shield v2 | V (metal) — header still "Proposed" · *2026-11-12: header reconciled to "Implemented, metal-proven"; accepted by the operator 2026-11-12* |
+| 0052 CI/CD (duplicate number) | I — gates run, never ratified; proposed renumber → 0058 · *2026-11-12: 0058 is taken (owner-signed runtime config); proposed renumber is now **0063**, operator decision — `docs/adr/README.md`* · *2026-11-12 (later): renumbered to [ADR 0063](../adr/0063-autonomous-cicd-gate-spine-and-heal-loop.md) by operator decision* |
 | 0053 operator actions | V — per-session write rate limit (`[P-write-rate]`) and eviction-proof replay guard (`[P-seq-floor]`) added 2026-11-10 |
 | 0054 per-device AP credential | V |
 | 0055 owner journal | V (metal) — revoke-all added 2026-11-10 (`OP_CLEAR`); the signed `pin` token is still missing |
@@ -245,7 +245,7 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 | A9 | Fuzz targets: owner-journal replay, `otaimg::check`/PayloadHeader, upload/owner forms | 0 crashes over 10M runs | host libFuzzer |
 | A10 | Phase 4: G0 apcore steps 4–5, IPv6 lateral detection, detbench through apcore, household corpus | gates + benchmark report | QEMU |
 | A11 | Phase 5: EL0 parser isolation (HTTP → DHCP/DNS → WAN clients → Noise → WPA2) | each parser behind an excursion | QEMU + metal |
-| A12 | Doc hygiene: stale ADR headers, ADR 0052 duplicate → 0058 *(2026-11-12: 0058 taken → proposed 0063)*, SECURITY.md built/not-built list, README matrix | docs match code | review |
+| A12 | Doc hygiene: stale ADR headers, ADR 0052 duplicate → 0058 *(2026-11-12: 0058 taken → renumbered to 0063)*, SECURITY.md built/not-built list, README matrix | docs match code | review |
 | A13 | W4 security hygiene (task #55): synthetic HQKSEAL1 nonce, in-session Noise rekey on the record layer + G19 CAPS, shipping-flavour feature guard, g4r on the shipping flavour, `record_rx` fuzz target — **built 2026-11-12, QEMU + metal pending** (§2.1 #12) | `[P-sealnonce]`, `[P-rekey]`, `[P-g19-rekey]` PASS; superpop `rekey_interop`; metal list in §2.1 #12 | QEMU + host + metal |
 
 ### 4.1 Plan status reconciled 2026-11-12 (main `58d83647`)
@@ -269,8 +269,29 @@ Rows above are kept as written. Status since, per item:
 | A13 | merged (PR #1017) — QEMU + host only, metal pending (§2.1 #12) | — |
 | Sealed config + live apply (the "house", steps 1–11) | merged: #998 (steps 1–3), #999 (6), #1000 (5), #1001 (7–8), #1002 (9), #1003 (11), #1004 (10), #1007 (live hand-off fix + image budget), #1008 (`/api/config` live object) — QEMU only, **metal pending** (checks from PR #1009 not yet run) | `docs/design/heqk-sealed-config-live-apply.md` |
 | hsh R6 = D | decided 2026-11-12 (PR #1010); built: #1013 (confirm / rollback / stage, web carrier `POST /api/hsh`), #1018 (upload activate / rollback, factory reset, owner-key rotation) — QEMU only, metal pending; reboot / owner rules / actions / alert hook still token = recorded deviation; UART carrier not built | `docs/design/adr0059-implementation.md` step 4 |
-| REL-08 PMKID correction | built, on by default with `wpa3` (operator 1A, 2026-11-11); dev-bench trigger test passed; 72 h soak + regression matrix metal pending; shipping blocked (written legal clearance, CMP-02) | `docs/design/rel08-cyw43455-pmkid-trap.md` |
+| REL-08b PMKID correction | built, on by default with `wpa3` (operator 1A, 2026-11-11); dev-bench trigger test passed; 72 h soak + regression matrix metal pending; shipping blocked (written legal clearance, CMP-02) | `docs/design/rel08-cyw43455-pmkid-trap.md` |
 | Bench | flash runbook + read-only preflight, rpiboot entry fix (PR #1012) | `docs/design/heqk-flash-runbook.md` |
+
+**A7 status — Wi-Fi field self-heal (2026-11-12, branch feat/selfheal-txfreeze, QEMU gate `[P-wifiheal]`).**
+`kernel/src/wifiheal.rs` classifies each AP-loop tick before acting: congestion (credit window exhausted, completions
+still advancing) and no / power-save / gone station never trigger recovery; a firmware crash is the mailbox FWHALT
+event (not a timer); a persistent TX freeze (queued, window exhausted, `tx_max` frozen, awake station) escalates
+kick (100 ms, every 500 ms) → BSS bounce (10 s) → firmware reload (10 s after the bounce settles; a 2nd reload only
+60 s after the 1st) → one reboot. Diagnostics (firmware hash, PMKID-fix status, trap registers, SDPCM credit state,
+queue depth, counters, attempt) are written to the crash-record page before every action. The boot after that reboot
+degrades on a recurrence within 30 min: Wi-Fi off, `/api/health` `wifi_heal.state` = degraded, no further reset;
+wired LAN, WAN and management keep running. The firmware reload (`cyw43::fw_reload`) uses the boot's
+`firmware_upload`, so the REL-08 PMKID correction is re-applied exactly as at boot. The old 120-s wedge reset and the
+immediate FWHALT reset are replaced by this ladder. The event ring is now drained on every iteration that has
+anything pending; overruns stay counted (`[EVENTS]`, export seal). The heap is a bump allocator with no reclaim
+(`heap.rs`); the AP loop allocates nothing per iteration (`[P-wifiheal]` and `[P-verify-heap]` check zero growth).
+**Metal must still prove:** (1) a documented TX-freeze trigger (the 2026-11-05 station TX stall, or a forced one)
+produces kick → bounce → reload with the bounded timings above and a `[WIFI-HEAL]` diagnostics line before each;
+(2) a firmware reload brings the BSS back serve-ready with `PMKID correction Some(true)` and stations re-join;
+(3) a FWHALT (REL-08 soak) is followed by a reload, not a reset; (4) after exhausted reloads the unit reboots once and
+the next boot prints the previous recovery record; (5) a recurrence then degrades with Wi-Fi off while the wired LAN,
+WAN and Mission Control on the management VLAN keep serving; (6) repeated cycles over the 72-h soak stay stable
+(no reset loop, `worst_loop_gap_ms` well under the 16-s watchdog during a reload).
 
 ## 5. Human-dependency register (B — only these need the operator)
 
@@ -284,8 +305,8 @@ Rows above are kept as written. Status since, per item:
    setup-AP credential. Secure, but not a sellable unit — **the OTP provisioning decision blocks production.**
    (Minor: the metal self-test `cm5_p15_block_seal` falls back to a constant key; it never runs in the AP image.)
    The bench CM5 is unaffected (provisioned in an earlier campaign).
-3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber, now proposed → 0063), 0055 `pin` semantics, 0056 D1 boundary with the
-   flasher owner, 0045/0046, retire 0035–0042.
+3. ADR ratifications / countersigns: 0052 CI/CD (+ renumber — *2026-11-12: renumbered to 0063; still not ratified*), 0055 `pin` semantics, 0056 D1 boundary with the
+   flasher owner, 0045/0046, retire 0035–0042. *2026-11-12: 0045, 0046, 0052 Shield and 0059 accepted; 0035–0042 retired (operator); still open: 0055 `pin`, 0056 D1 countersign, 0063 (CI/CD) ratification.*
 4. **[Owner decision required — see the decision record]** Persistent anti-rollback medium (RPMB vs sealed counter) — technical options can be prototyped (A), the
    choice is the operator's. Update 2026-11-10: a counter on the same eMMC cannot detect owner-journal or pack
    rollback by someone holding the card (both roll back together); only RPMB (or an OTP/fuse counter) can, and

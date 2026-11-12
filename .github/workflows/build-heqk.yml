@@ -80,8 +80,9 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Install pinned nightly toolchain (os/kernel/rust-toolchain.toml)
-        uses: dtolnay/rust-toolchain@nightly
+        uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
         with:
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
 
@@ -116,7 +117,7 @@ jobs:
         run: |
           set -euo pipefail
           # prod/prod-mc embed the licensed CYW43455 firmware (gitignored): stage the sha256-pinned
-          # blob first, or a fresh runner cannot compile the shipped flavour at all (ADR 0052).
+          # blob first, or a fresh runner cannot compile the shipped flavour at all (ADR 0063).
           ../../tools/ci/stage-firmware.sh
           cargo build -p kernel --features prod --release
           # prod-mc = THE production CM5 profile (ADR 0047: Mission Control served by heqk on the
@@ -156,7 +157,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
+        with:
+          toolchain: nightly-2026-07-20
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
       - name: tools/fuzz/run.sh
@@ -167,8 +170,9 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@nightly
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
         with:
+          toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat
       - uses: Swatinem/rust-cache@v2

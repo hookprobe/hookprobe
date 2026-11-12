@@ -1,9 +1,10 @@
 # ADR 0042 — Wi-Fi as a SECURITY SURFACE (WIDS): own the radio, not the blob
 
-- **Status:** 🟡 Proposed (direction accepted 2026-07-17; implementation phased — see Validation)
+- **Status:** ⛔ **Retired by the operator 2026-11-12** — no superseding ADR (written for the Linux brcmfmac / hostapd tier; the heqk AP is covered by ADR 0054 and the CYW43455 work) — was 🟡 Proposed (direction accepted 2026-07-17; implementation phased — see Validation)
 - **Date:** 2026-07-17
 - **Supersedes/extends:** none. **Depends on:** ADR 0034 (adaptive Wi-Fi, esp. Extension RC-DFS),
   ADR 0023 (enforcement separation), ADR 0003 (capabilities), ADR 0002 (trust-nothing-unsigned).
+**Retired by the operator 2026-11-12** (A12 follow-up, relayed by the coordinator; PR #1020). Decision text unchanged; kept as a historical record. Still cited: `docs/design/heqk-unbuild.md` names "ADR 0042 WIDS detectors" in a metal gate.
 
 ## Context — the DFS dead-end forced a better question
 
