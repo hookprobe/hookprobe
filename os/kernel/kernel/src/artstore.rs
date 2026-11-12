@@ -114,10 +114,14 @@ pub struct Entry {
     pub state: u8,
     /// Boots started while PENDING (a second boot while PENDING reverts).
     pub trials: u8,
+    /// Sealed at rest (design heqk-sealed-config-live-apply §2): the slot holds an HQKSEAL1 blob under the per-type
+    /// configuration key and `digest` is the hash of the SEALED image. Once set, a plaintext slot of this type is
+    /// refused (no downgrade). Manifest byte `o+3`; an older manifest decodes as 0.
+    pub sealed: u8,
 }
 pub const STATE_ACTIVE: u8 = 0;
 pub const STATE_PENDING: u8 = 1;
-const E0: Entry = Entry { half: 0, gen: 0, len: 0, digest: [0; 32], state: STATE_ACTIVE, trials: 0 };
+pub const E0: Entry = Entry { half: 0, gen: 0, len: 0, digest: [0; 32], state: STATE_ACTIVE, trials: 0, sealed: 0 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Manifest {
@@ -145,6 +149,7 @@ impl Manifest {
             s[o] = e.half;
             s[o + 1] = e.state;
             s[o + 2] = e.trials;
+            s[o + 3] = e.sealed;
             s[o + 8..o + 16].copy_from_slice(&e.gen.to_le_bytes());
             s[o + 16..o + 24].copy_from_slice(&e.len.to_le_bytes());
             s[o + 24..o + 56].copy_from_slice(&e.digest);
@@ -165,7 +170,8 @@ impl Manifest {
             e[i].half = s[o];
             e[i].state = s[o + 1];
             e[i].trials = s[o + 2];
-            if e[i].half > 2 || e[i].state > STATE_PENDING {
+            e[i].sealed = s[o + 3];
+            if e[i].half > 2 || e[i].state > STATE_PENDING || e[i].sealed > 1 {
                 return None;
             }
             e[i].gen = u64::from_le_bytes(s[o + 8..o + 16].try_into().ok()?);
@@ -373,6 +379,8 @@ pub fn verify<D: BlockDev + ?Sized>(dev: &D, t: Ty, sig: &[u8; 512], data_lba: u
             // ADR 0059 D7: remember whether this bundle keeps a management path (upload finish refuses it if not)
             let ok = crate::cfgd::keeps_mgmt_path(v.section(crate::cfgbundle::KIND_POLICY));
             unsafe { CONFIG_MGMT_OK = ok };
+            // Q3: does this bundle carry a secret (a Wi-Fi section, or a WAN section with a PPPoE password)?
+            unsafe { CONFIG_SECRET = v.section(crate::cfgbundle::KIND_WIFI).is_some() || v.section(crate::cfgbundle::KIND_WAN).is_some_and(wan_has_secret) };
             unsafe { POLICY_REFUSED = None };
             if let Some(sec) = v.section(crate::cfgbundle::KIND_POLICY) {
                 let mut f = [0u8; 4096];
@@ -461,11 +469,22 @@ pub enum ActErr {
     NothingToRollBack,
 }
 
+/// Where `activate` reads the pack's bytes from: device sectors (disk staging) or a RAM container body.
+#[derive(Clone, Copy)]
+pub enum Src<'a> {
+    Lba(u64),
+    Ram(&'a [u8]),
+}
+
 /// Copy a verified pack (`sig` + `len` bytes at `src_lba` — the staging area) into the inactive half of
 /// type `t`, read it back, commit the manifest, reload the module. On a loader refusal the previous
 /// manifest is re-committed and the module reloaded again (rollback). `dev` must already have its write
 /// window armed over the Store region.
 pub fn activate<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src_lba: u64, gen: u64, len: u64, digest: &[u8; 32]) -> Result<Manifest, ActErr> {
+    activate_from(dev, t, sig, Src::Lba(src_lba), gen, len, digest)
+}
+/// `activate` with the bytes from `src` (a RAM-staged upload: `Src::Ram(file bytes)`).
+pub fn activate_from<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src: Src, gen: u64, len: u64, digest: &[u8; 32]) -> Result<Manifest, ActErr> {
     let store = store_region(dev).ok_or(ActErr::NoStore)?;
     let old = read_manifest(dev, store);
     let cur = old.e[t as usize].half;
@@ -474,7 +493,17 @@ pub fn activate<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src_lba: u64, 
     let n = len.div_ceil(512);
     let mut sec = [0u8; 512];
     for k in 0..n {
-        dev.read_block(src_lba + k, &mut sec).map_err(|_| ActErr::Io)?;
+        match src {
+            Src::Lba(l) => dev.read_block(l + k, &mut sec).map_err(|_| ActErr::Io)?,
+            Src::Ram(r) => {
+                let o = (k * 512) as usize;
+                let e = (o + 512).min(r.len());
+                sec = [0; 512];
+                if o < e {
+                    sec[..e - o].copy_from_slice(&r[o..e]);
+                }
+            }
+        }
         dev.write_block(dl + k, &sec).map_err(|_| ActErr::Io)?;
     }
     dev.write_block(sl, sig).map_err(|_| ActErr::Io)?;
@@ -497,7 +526,7 @@ pub fn activate<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src_lba: u64, 
     if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
     // a new configuration bundle starts as a cfgd TRIAL (PENDING); everything else is committed at once
     let state = if t == Ty::Config { STATE_PENDING } else { STATE_ACTIVE };
-    m.e[t as usize] = Entry { half, gen, len, digest: *digest, state, trials: 0 };
+    m.e[t as usize] = Entry { half, gen, len, digest: *digest, state, trials: 0, sealed: 0 };
     commit(dev, store, &m, g)?;
     unsafe { DISABLED &= !(1 << t as u8) };
     if reload(dev, t).is_err() {
@@ -523,6 +552,15 @@ fn commit<D: BlockDev + ?Sized>(dev: &mut D, store: (u64, u64), m: &Manifest, g:
 }
 
 static mut CONFIG_MGMT_OK: bool = true;
+static mut CONFIG_SECRET: bool = false;
+/// Q3: whether the last `config` bundle `verify` saw carries a secret.
+pub fn config_secret() -> bool {
+    unsafe { CONFIG_SECRET }
+}
+/// Q3: a WAN body that carries the PPPoE password.
+pub fn wan_has_secret(b: &[u8]) -> bool {
+    b.windows(11).any(|w| w == b"pppoe_pass=")
+}
 /// Routing review 2026-11-11: a staged POLICY (per-file, or a bundle's policy section) must PARSE, not only verify —
 /// a signed policy the parser refuses would put the device into the management lockdown at the next boot.
 /// The result of the last `verify` that carried a policy (None = parses / no policy).
@@ -564,9 +602,10 @@ pub fn entry<D: BlockDev + ?Sized>(dev: &D, t: Ty) -> Option<Entry> {
 pub fn verify_half<D: BlockDev + ?Sized>(dev: &D, t: Ty, half: u8, key: &[u8; 32]) -> Option<(u64, u64, u64)> {
     let store = store_region(dev)?;
     let (sl, dl) = slot(store, t, half);
+    let p = Plain::new(dev);
     let mut sig = [0u8; 512];
-    dev.read_block(sl, &mut sig).ok()?;
-    let (g, l) = verify(dev, t, &sig, dl, key).ok()?;
+    p.read_block(sl, &mut sig).ok()?;
+    let (g, l) = verify(&p, t, &sig, dl, key).ok()?;
     Some((g, l, dl))
 }
 
@@ -582,15 +621,21 @@ pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, 
     }
     let other = if cur == 1 { 2 } else { 1 };
     let (sl, dl) = slot(store, t, other);
-    let mut sig = [0u8; 512];
-    dev.read_block(sl, &mut sig).map_err(|_| ActErr::Io)?;
-    let (gen, len) = verify(&*dev, t, &sig, dl, key).map_err(|_| ActErr::NothingToRollBack)?;
+    let sealed = t.staged() && seal_magic_at(&*dev, sl);
+    let (gen, len) = {
+        let p = Plain::new(&*dev);
+        let mut sig = [0u8; 512];
+        p.read_block(sl, &mut sig).map_err(|_| ActErr::Io)?;
+        verify(&p, t, &sig, dl, key).map_err(|_| ActErr::NothingToRollBack)?
+    };
+    // the manifest digest of a sealed slot is the hash of the SEALED image (never the plaintext digest, F-a)
+    let (from, n) = if sealed { (sl, (crate::seal::SEAL_HDR_LEN + SIG_KEEP) as u64 + len) } else { (dl, len) };
     let mut h = boot_abi::sha256::Hasher::new();
-    crate::store::stream_blocks(&*dev, dl, len, &mut |c| h.update(c)).ok_or(ActErr::Io)?;
+    crate::store::stream_blocks(&*dev, from, n, &mut |c| h.update(c)).ok_or(ActErr::Io)?;
     let g = group(t);
     let mut m = old;
     if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
-    m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish(), state: STATE_ACTIVE, trials: 0 };
+    m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish(), state: STATE_ACTIVE, trials: 0, sealed: sealed as u8 };
     commit(dev, store, &m, g)?;
     unsafe { DISABLED &= !(1 << t as u8) };
     if reload(dev, t).is_err() {
@@ -601,6 +646,216 @@ pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, 
         return Err(ActErr::LoaderRefused);
     }
     Ok(gen)
+}
+
+// ---- configuration sealed at rest (design the repo-root design doc heqk-sealed-config-live-apply §2, step 2) ----------------
+// A staged slot holds `[HQKSEAL1 header 128][ct(sig[..128] ‖ data[..len])]` from its signature sector on, under
+// `seal::cfg_key(SRK, type)` + `seal::cfg_policy(device_id)`. `Plain` is the read-only view the loaders read through:
+// the seal's MAC is checked before anything is decrypted, then the type's OWN signature verifier runs on the plaintext
+// as before. A seal that does not authenticate, or a plaintext slot of a type the manifest marks sealed, reads as zeros
+// (every loader refuses it and the fallback chain applies: other half -> boot partition -> default).
+
+/// Signature bytes kept inside the seal (every config signature format ends by byte 120).
+const SIG_KEEP: usize = 128;
+/// The largest staged slot (CONFIG: 1 signature sector + 32 data sectors) — the seal / unseal work buffer.
+const SLOT_MAX: usize = (1 + crate::cfgbundle::MAX_BUNDLE.div_ceil(512)) * 512;
+const _: () = assert!(crate::seal::SEAL_INPLACE_MAX_PT >= SIG_KEEP + crate::cfgbundle::MAX_BUNDLE);
+/// One buffer for `activate_sealed` and the single-entry `Plain` cache (activation invalidates the cache).
+static mut SEALBUF: [u8; SLOT_MAX] = [0; SLOT_MAX];
+/// The cache key: (type, half, the raw seal header) — a rewritten slot has a new nonce / tag.
+static mut CKEY: (u8, u8, [u8; 128]) = (0xff, 0, [0; 128]);
+/// 0 = empty, 1 = authenticated plaintext of CLEN bytes at SEALBUF[128..], 2 = refused.
+static mut CSTATE: u8 = 0;
+static mut CLEN: usize = 0;
+
+/// The seal context: None = the device's own (SRK + device id from the HBoot handoff, read on use — no second copy
+/// of the SRK is kept here); Some(x) = set explicitly (self-tests).
+static mut SEAL_OVR: Option<Option<([u8; 32], u64)>> = None;
+pub fn set_cfg_seal(srk: Option<[u8; 32]>, device_id: u64) {
+    unsafe {
+        SEAL_OVR = Some(srk.map(|k| (k, device_id)));
+        CSTATE = 0;
+    }
+}
+/// Back to the device's own seal context (end of a self-test).
+pub fn clear_cfg_seal() {
+    unsafe {
+        SEAL_OVR = None;
+        CSTATE = 0;
+    }
+}
+fn seal_ctx() -> Option<([u8; 32], u64)> {
+    match unsafe { SEAL_OVR } {
+        Some(x) => x,
+        None => crate::cfg_seal_source(),
+    }
+}
+/// Is there a device key to seal configuration under (no SRK = blank OTP: never a synthetic key)?
+pub fn cfg_seal_available() -> bool {
+    seal_ctx().is_some()
+}
+
+fn seal_magic_at<D: BlockDev + ?Sized>(dev: &D, lba: u64) -> bool {
+    let mut s = [0u8; 512];
+    dev.read_block(lba, &mut s).is_ok() && &s[..8] == crate::seal::SEAL_MAGIC
+}
+
+/// Seal a verified staged container (`plain` = its 512-byte signature sector ‖ the file, `len` file bytes) into the
+/// INACTIVE half of `t`, read it back, commit the manifest entry (sealed, digest = sha256 of the sealed image; a
+/// CONFIG bundle starts PENDING like `activate`). `dev` must have its write window armed over the Store region.
+pub fn activate_sealed<D: BlockDev + ?Sized>(dev: &mut D, t: Ty, plain: &[u8], gen: u64, len: u64) -> Result<Manifest, ActErr> {
+    let (srk, devid) = seal_ctx().ok_or(ActErr::NoStore)?;
+    let n = len as usize;
+    if !t.staged() || len > t.info().cap || plain.len() < 512 + n {
+        return Err(ActErr::Io);
+    }
+    let store = store_region(&*dev).ok_or(ActErr::NoStore)?;
+    let old = read_manifest(&*dev, store);
+    let half = if old.e[t as usize].half == 1 { 2 } else { 1 };
+    let (sl, _) = slot(store, t, half);
+    let b = unsafe {
+        CSTATE = 0;
+        &mut *core::ptr::addr_of_mut!(SEALBUF)
+    };
+    const H: usize = crate::seal::SEAL_HDR_LEN;
+    b[H..H + SIG_KEEP].copy_from_slice(&plain[..SIG_KEEP]);
+    b[H + SIG_KEEP..H + SIG_KEEP + n].copy_from_slice(&plain[512..512 + n]);
+    let key = crate::seal::cfg_key(&srk, t as u8);
+    let r = crate::seal::seal_in_place(&key, &crate::seal::cfg_policy(devid), b, SIG_KEEP + n, gen);
+    let blob = match r {
+        Ok(l) => l,
+        Err(_) => {
+            b.fill(0);
+            return Err(ActErr::Io);
+        }
+    };
+    let nsec = blob.div_ceil(512);
+    b[blob..nsec * 512].fill(0);
+    let digest = boot_abi::sha256::digest(&b[..blob]);
+    let mut sec = [0u8; 512];
+    for k in 0..nsec {
+        sec.copy_from_slice(&b[k * 512..k * 512 + 512]);
+        dev.write_block(sl + k as u64, &sec).map_err(|_| ActErr::Io)?;
+    }
+    for k in 0..nsec {
+        dev.read_block(sl + k as u64, &mut sec).map_err(|_| ActErr::Io)?;
+        if sec[..] != b[k * 512..k * 512 + 512] {
+            return Err(ActErr::Readback);
+        }
+    }
+    let g = group(t);
+    let mut m = old;
+    if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
+    let state = if t == Ty::Config { STATE_PENDING } else { STATE_ACTIVE };
+    m.e[t as usize] = Entry { half, gen, len, digest, state, trials: 0, sealed: 1 };
+    commit(dev, store, &m, g)?;
+    unsafe {
+        DISABLED &= !(1 << t as u8);
+        OTHER &= !(1 << t as u8);
+    }
+    Ok(m)
+}
+
+/// The read-only plaintext view of a device (see the section comment). Writes are refused.
+pub struct Plain<'a, D: BlockDev + ?Sized> {
+    dev: &'a D,
+    store: Option<(u64, u64)>,
+    /// Staged types the manifest marks sealed (bit = type).
+    sealed: u16,
+}
+impl<'a, D: BlockDev + ?Sized> Plain<'a, D> {
+    pub fn new(dev: &'a D) -> Self {
+        let store = store_region(dev);
+        let mut sealed = 0u16;
+        if let Some(st) = store {
+            let m = read_manifest(dev, st);
+            for t in ALL {
+                if t.staged() && m.e[t as usize].sealed == 1 {
+                    sealed |= 1 << t as u8;
+                }
+            }
+        }
+        unsafe { CSTATE = 0 }; // each view authenticates its slots again (nothing stale across views)
+        Plain { dev, store, sealed }
+    }
+}
+/// The staged slot `lba` falls in: (type, half, sector index in the slot, the slot's signature LBA).
+fn staged_slot(store: (u64, u64), lba: u64) -> Option<(Ty, u8, u64, u64)> {
+    let base = store.0 + MAN_SECT;
+    let span = half_span(store);
+    let rel = lba.checked_sub(base)?;
+    let half = rel / span;
+    if half > 1 {
+        return None;
+    }
+    let o = rel % span;
+    ALL[G1_FIRST..].iter().copied().find(|t| (t.off()..t.off() + 1 + t.data_sect()).contains(&o)).map(|t| (t, half as u8 + 1, o - t.off(), lba - (o - t.off())))
+}
+/// Authenticate + decrypt a sealed slot into the cache (once per (type, half, header)). true = plaintext cached.
+fn unseal_slot(dev: &dyn Fn(u64, &mut [u8]) -> bool, t: Ty, half: u8, sl: u64, hdr: &[u8; 512]) -> bool {
+    unsafe {
+        let k = &*core::ptr::addr_of!(CKEY);
+        if CSTATE != 0 && k.0 == t as u8 && k.1 == half && k.2[..] == hdr[..128] {
+            return CSTATE == 1;
+        }
+        let b = &mut *core::ptr::addr_of_mut!(SEALBUF);
+        let n = (1 + t.data_sect() as usize) * 512;
+        let ok = match seal_ctx() {
+            Some((srk, devid)) if dev(sl, &mut b[..n]) => {
+                match crate::seal::unseal_in_place(&crate::seal::cfg_key(&srk, t as u8), &crate::seal::cfg_policy(devid), &mut b[..n]) {
+                    Ok((l, _)) if l >= SIG_KEEP => {
+                        CLEN = l;
+                        true
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+        if !ok {
+            b.fill(0);
+        }
+        let mut h = [0u8; 128];
+        h.copy_from_slice(&hdr[..128]);
+        CKEY = (t as u8, half, h);
+        CSTATE = if ok { 1 } else { 2 };
+        ok
+    }
+}
+impl<D: BlockDev + ?Sized> BlockDev for Plain<'_, D> {
+    fn block_count(&self) -> u64 {
+        self.dev.block_count()
+    }
+    fn read_block(&self, lba: u64, buf: &mut [u8; 512]) -> Result<(), BlockErr> {
+        let Some((t, half, k, sl)) = self.store.and_then(|st| staged_slot(st, lba)) else {
+            return self.dev.read_block(lba, buf);
+        };
+        let mut hdr = [0u8; 512];
+        self.dev.read_block(sl, &mut hdr)?;
+        if &hdr[..8] != crate::seal::SEAL_MAGIC {
+            if self.sealed & (1 << t as u8) != 0 {
+                *buf = [0; 512]; // a plaintext slot where the manifest says sealed: a downgrade, refused
+                return Ok(());
+            }
+            return self.dev.read_block(lba, buf);
+        }
+        let rd = |l: u64, out: &mut [u8]| self.dev.read_blocks(l, out).is_ok();
+        *buf = [0; 512];
+        if unseal_slot(&rd, t, half, sl, &hdr) {
+            // signature sector = the kept signature bytes; data sector k = data[(k-1)*512..], zero-padded
+            let b = unsafe { &*core::ptr::addr_of!(SEALBUF) };
+            let pt = &b[crate::seal::SEAL_HDR_LEN..crate::seal::SEAL_HDR_LEN + unsafe { CLEN }];
+            let (from, to) = if k == 0 { (0, SIG_KEEP) } else { (SIG_KEEP + (k as usize - 1) * 512, SIG_KEEP + k as usize * 512) };
+            let to = to.min(pt.len());
+            if from < to {
+                buf[..to - from].copy_from_slice(&pt[from..to]);
+            }
+        }
+        Ok(())
+    }
+    fn write_block(&mut self, _lba: u64, _buf: &[u8; 512]) -> Result<(), BlockErr> {
+        Err(BlockErr::WriteRefused)
+    }
 }
 
 // ---- [P-artstore] ------------------------------------------------------------------------------------------
@@ -776,6 +1031,11 @@ pub fn selftest() -> bool {
         arch_aarch64::_print(format_args!(" [P-artstore] debug wan: ver={} act={:?} seq {}->{} seq2={} half={} gen={} active={} locate={:?}\n",
             wver, wa.is_ok(), seq0, wm.seq, wm.seq2, wm.e[Ty::Wan as usize].half, wm.e[Ty::Wan as usize].gen, active_gen(d, 0, Ty::Wan), locate(d, 0, b"WAN     TXT")));
     }
+    // design heqk-sealed-config-live-apply step 2: a WAN with a PPPoE password sealed at rest
+    let (sealed_ok, sealed_dbg) = sealed_selftest(d, store, &kp, &key);
+    if !sealed_ok {
+        arch_aarch64::_print(format_args!(" [P-artstore] debug sealed: {:?}\n", sealed_dbg));
+    }
     // tampered at rest: boot fallback disables the store copy for this boot
     let (_, dl) = slot(store, Ty::Devices, 1);
     let _ = d.read_block(dl, &mut s);
@@ -801,12 +1061,77 @@ pub fn selftest() -> bool {
     }
     crate::policysig::selftest_key(None);
     crate::devpolicy::load_text(b"");
-    let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && owner_rb && staged_ok && fell_back;
+    let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && owner_rb && staged_ok && fell_back && sealed_ok;
     arch_aarch64::_print(format_args!(
-        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest active half -> the previous half, then FAT (ADR 0059 0.4)={}\n",
-        if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, owner_rb, staged_ok, fell_back
+        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest active half -> the previous half, then FAT (ADR 0059 0.4)={} sealed WAN at rest: no secret / no plaintext digest on disk={} Plain view: seal MAC then the WAN verifier={} flipped ciphertext byte -> half reads as zeros (refused)={} plaintext slot under sealed=1 refused (no downgrade)={} old manifest decodes sealed=0, sealed>1 rejected={}\n",
+        if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, owner_rb, staged_ok, fell_back,
+        sealed_dbg[0], sealed_dbg[1], sealed_dbg[2], sealed_dbg[3], sealed_dbg[4]
     ));
     pass
+}
+
+/// Is `needle` anywhere on the sparse disk (within a sector)?
+pub fn on_disk(d: &SparseDisk, needle: &[u8]) -> bool {
+    d.data[..d.n].iter().any(|s| s.windows(needle.len()).any(|w| w == needle))
+}
+
+/// [P-artstore] sealed-at-rest checks (step 2). The WAN slot holds a plaintext gen 3 in half A on entry.
+fn sealed_selftest(d: &mut SparseDisk, store: (u64, u64), kp: &ed25519_compact::KeyPair, key: &[u8; 32]) -> (bool, [bool; 5]) {
+    set_cfg_seal(Some([0x5c; 32]), 0x0123_4567_89ab_cdef);
+    let body = b"mode=pppoe\npppoe_user=art\npppoe_pass=s3cret\n";
+    let sig = test_sig(b"HQNSIG1\0", b"HQWAN1", 4, body, kp);
+    let mut cont = [0u8; 1024];
+    cont[..512].copy_from_slice(&sig);
+    cont[512..512 + body.len()].copy_from_slice(body);
+    let len = body.len() as u64;
+    let pdig = boot_abi::sha256::digest(body);
+    let a = activate_sealed(d, Ty::Wan, &cont[..512 + body.len()], 4, len);
+    let e = read_manifest(d, store).e[Ty::Wan as usize];
+    let at_rest = a.is_ok() && e.sealed == 1 && e.half == 2 && e.gen == 4 && e.digest != pdig && !on_disk(d, b"s3cret") && !on_disk(d, &pdig);
+    // the loaders' view: the signature sector + the file come back, the WAN verifier accepts them
+    let (s2, d2) = slot(store, Ty::Wan, 2);
+    let view = {
+        let p = Plain::new(&*d);
+        let (mut sg, mut ds) = ([0u8; 512], [0u8; 512]);
+        let _ = p.read_block(s2, &mut sg);
+        let _ = p.read_block(d2, &mut ds);
+        sg[..SIG_KEEP] == sig[..SIG_KEEP] && sg[SIG_KEEP..].iter().all(|&b| b == 0) && ds[..body.len()] == body[..]
+            && verify(&p, Ty::Wan, &sg, d2, key) == Ok((4, len)) && active_gen(&p, 0, Ty::Wan) == 4
+            && locate(&p, 0, b"WAN     TXT") == Some((d2, Ty::Wan.data_sect()))
+    } && verify_half(&*d, Ty::Wan, 2, key).is_some_and(|(g, l, _)| g == 4 && l == len);
+    // one flipped ciphertext byte: the seal MAC fails, the half reads as zeros (refused); restored, it verifies again
+    // (a small WAN seals into the slot's FIRST sector — header 128 + signature 128 + data — so flip a byte INSIDE
+    // that sealed image; the following sectors are unauthenticated zero padding the view never serves)
+    let mut s = [0u8; 512];
+    let _ = d.read_block(s2, &mut s);
+    s[crate::seal::SEAL_HDR_LEN + 140] ^= 0x40;
+    let _ = d.write_block(s2, &s);
+    let zeros = {
+        let p = Plain::new(&*d);
+        let mut sg = [0xffu8; 512];
+        let _ = p.read_block(s2, &mut sg);
+        sg.iter().all(|&b| b == 0)
+    };
+    let flipped = zeros && verify_half(&*d, Ty::Wan, 2, key).is_none();
+    s[crate::seal::SEAL_HDR_LEN + 140] ^= 0x40;
+    let _ = d.write_block(s2, &s);
+    let flipped = flipped && verify_half(&*d, Ty::Wan, 2, key).is_some();
+    // half A still holds the plaintext gen 3: with the manifest marked sealed it is refused, so is a rollback to it
+    let downgrade = verify_half(&*d, Ty::Wan, 1, key).is_none() && rollback(d, Ty::Wan, key) == Err(ActErr::NothingToRollBack)
+        && read_manifest(d, store).e[Ty::Wan as usize].half == 2;
+    // manifest byte o+3: an old manifest (0) decodes sealed=0; a value > 1 is not a manifest
+    let mut m = MAN0;
+    m.e[Ty::Wan as usize].half = 1;
+    let mut sct = m.encode_g(1);
+    let mut out = MAN0;
+    let old = Manifest::decode_g(&sct, 1, &mut out).is_some() && out.e[Ty::Wan as usize].sealed == 0;
+    sct[16 + 3] = 2;
+    let dg = boot_abi::sha256::digest(&sct[..480]);
+    sct[480..].copy_from_slice(&dg);
+    let manifest = old && Manifest::decode_g(&sct, 1, &mut out).is_none();
+    clear_cfg_seal();
+    let r = [at_rest, view, flipped, downgrade, manifest];
+    (r.iter().all(|&x| x), r)
 }
 
 fn kp_other() -> [u8; 32] {
