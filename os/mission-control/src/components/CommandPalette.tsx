@@ -110,7 +110,7 @@ const CommandPalette: Component<Props> = (props) => {
         aria-modal="true"
         aria-label="AI Copilot"
       >
-        <div class="cmdpalette-modal hp-terminal">
+        <div class="cmdpalette-modal">
 
           {/* Title bar */}
           <div class="hp-terminal-bar">
