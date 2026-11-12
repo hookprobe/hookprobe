@@ -14,10 +14,11 @@ export default async function (t) {
   await t.shot('automate', true);
 
   await go('/intelligence/cves');
+  ok(await page.locator('.tab[aria-selected="true"]').textContent() === 'CVEs' && await page.locator('.obs-table tbody tr').count() === 3, 'intel: opens on CVEs (the route and the board), CVE table');
+  await page.click('.tab:has-text("IOC")'); await page.waitForTimeout(150);
   ok(await vis(page.locator('[aria-label="Threat-intel pack"]')), 'intel: IOC pack card');
   ok(await page.locator('[aria-label="Matches on this network"] .prow').count() === 2, 'intel: matches listed');
   await page.click('.tab:has-text("CVEs")'); await page.waitForTimeout(150);
-  ok(await page.locator('.obs-table tbody tr').count() === 3, 'intel: CVE table');
   await page.click('.obs-table tbody tr >> nth=0 >> button'); await page.waitForTimeout(250);
   ok(await vis(page.locator('.drawer-title', { hasText: 'CVE-2024-3094' })), 'intel: CVE drawer');
   ok(await vis(page.locator('.drawer >> text=Home server')), 'intel: exposed assets in the drawer');
