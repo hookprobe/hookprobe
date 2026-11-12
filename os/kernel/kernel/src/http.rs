@@ -677,7 +677,27 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             };
             let el = crate::cfgd::elapsed_s();
             let _ = write!(w, "{{\"state\":\"{}\",\"generation\":{},\"floor\":{},\"on_trial\":{},\"needs_confirm\":{},\"window_s\":{},\"elapsed_s\":{},\"auto_rollback\":true,\"health\":\"WAN usable (Mission Control stays on the LAN / Wi-Fi regardless)\"",
-                st, crate::cfgd::generation(), crate::anchor::cfg_gens().cfg_floor, crate::cfgd::on_trial(), crate::cfgd::on_trial() && crate::cfgd::touches_mgmt(), crate::cfgd::WINDOW_S, if crate::cfgd::on_trial() { el } else { 0 });
+                st, crate::cfgd::generation(), crate::anchor::cfg_gens().cfg_floor, crate::cfgd::on_trial(), crate::cfgd::confirm_required(), crate::cfgd::window_s(), if crate::cfgd::on_trial() { el } else { 0 });
+            // sealed-config / live apply (design §3 API, additive): the live engine's phase, what changed, the time
+            // left before an automatic commit / revert, and the last outcome — so Mission Control can show
+            // "applying… / waits for your confirm (mm:ss left) / reverted to generation N"
+            {
+                let ch = crate::cfgd::changes();
+                let win = crate::cfgd::window_s();
+                let left = if crate::cfgd::on_trial() { win.saturating_sub(el) } else { 0 };
+                let (lr, lg) = crate::cfgd::last_result();
+                let lr = match lr { 1 => "committed", 2 => "reverted", 3 => "revert_failed", _ => "none" };
+                let _ = write!(w, ",\"live\":{{\"phase\":\"{}\",\"changes\":[", crate::cfgd::phase_name());
+                let mut first = true;
+                for (bit, name) in [(crate::cfgd::CH_POLICY, "policy"), (crate::cfgd::CH_WAN, "wan"), (crate::cfgd::CH_WIFI, "wifi")] {
+                    if ch & bit != 0 && crate::cfgd::phase_name() != "idle" {
+                        let _ = write!(w, "{}\"{}\"", if first { "" } else { "," }, name);
+                        first = false;
+                    }
+                }
+                let _ = write!(w, "],\"needs_confirm\":{},\"window_s\":{},\"remaining_s\":{},\"last\":{{\"result\":\"{}\",\"generation\":{}}},\"policy_generation\":{}}}",
+                    crate::cfgd::confirm_required(), win, left, lr, lg, crate::cfgd::policy_gen());
+            }
             // design §3.8 (additive, before the closing brace): configuration at rest
             let ar = crate::artstore::at_rest();
             let _ = write!(w, ",\"at_rest\":{{\"sealed\":{},\"secrets_protected\":{},\"migrated\":{},\"device_key\":{}}}}}", ar.sealed, ar.secrets_protected, ar.migrated, ar.device_key);
