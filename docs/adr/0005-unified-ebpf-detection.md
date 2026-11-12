@@ -8,6 +8,7 @@
 (capability model + `runtime: sysext`), `modules/napse-capture/` (the sysext), `crates/hookprobe-manifest/src/inspect.rs`
 (the reconciler). Grounded in a 2026-07-01 deep-research pass (24 authoritative sources, 25
 adversarially-verified claims; sources listed at the end).
+**Status reconciled 2026-11-12:** applies to the legacy Linux tier only (`legacy/linux-tier/`, path map `docs/PATHS.md`); heqk replaces Linux on every platform ([ADR 0047](0047-heqk-everywhere-on-device-mission-control.md), 2026-10-09). Status matches the ADR index (`docs/adr/README.md`, "Linux tier"); the decision text is unchanged.
 
 ## Context
 
