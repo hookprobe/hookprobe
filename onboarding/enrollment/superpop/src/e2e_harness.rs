@@ -5,12 +5,16 @@ use crate::entropy::OsEntropy;
 use crate::pop::{Config, Device, Out, Pop, SESSION_IDLE_MS};
 use crate::securechannel::{
     hs_chunk, initiator_read_msg2, initiator_write_msg1, AntiReplayRx, CipherState, HsReasm, InitiatorRandomness,
-    ResponderStatic,
+    NoiseErr, RecordRx, RecordTx, RekeyPolicy, ResponderStatic, Session,
 };
 use crate::wire::{self, Assign, Msg, Sid};
 use boot_abi::sha256;
 use ed25519_compact::{KeyPair, Seed};
 use std::net::SocketAddr;
+
+macro_rules! ensure {
+    ($c:expr, $($m:tt)*) => { if !$c { return Err(format!($($m)*)); } };
+}
 
 pub const TENANT: u64 = 0x5445_4E41;
 
@@ -62,6 +66,11 @@ impl Dev {
 
 /// Run the device handshake against `pop` from `from`; `claim_fp` overrides the msg1 payload.
 pub fn handshake(pop: &mut Pop, kp: &KeyPair, from: SocketAddr, now: u64, claim_fp: Option<[u8; 32]>) -> Result<Dev, String> {
+    handshake_session(pop, kp, from, now, claim_fp).map(Dev::from_session)
+}
+
+/// The handshake, returning the device's raw Noise session.
+pub fn handshake_session(pop: &mut Pop, kp: &KeyPair, from: SocketAddr, now: u64, claim_fp: Option<[u8; 32]>) -> Result<Session, String> {
     let resp_pub = responder().public();
     let mut ent = OsEntropy;
     let rnd = InitiatorRandomness::from_entropy(&mut ent).map_err(|e| format!("{e:?}"))?;
@@ -93,7 +102,95 @@ pub fn handshake(pop: &mut Pop, kp: &KeyPair, from: SocketAddr, now: u64, claim_
         return Err("tenant mismatch in msg2".into());
     }
     let _ = &mut session;
-    Ok(Dev::from_session(session))
+    Ok(session)
+}
+
+/// W4: a device with the kernel's rekeying record layer (as heqk's G19 tunnel runs it).
+pub struct RDev {
+    pub sid: Sid,
+    tx: RecordTx,
+    rx: RecordRx,
+}
+
+impl RDev {
+    pub fn from_session(mut session: Session, pol: RekeyPolicy) -> RDev {
+        let sid = wire::sid_from_handshake_hash(&session.handshake_hash);
+        let rx = session.recv.into_record_rx();
+        let tx = RecordTx::new(session.send.clone(), 0, pol);
+        session.wipe();
+        RDev { sid, tx, rx }
+    }
+    pub fn seal(&mut self, m: &Msg<'_>, now: u64) -> Vec<u8> {
+        let mut pt = [0u8; wire::MAX_PT];
+        let n = wire::encode(m, &mut pt).unwrap();
+        let mut dg = vec![0u8; wire::MAX_DGRAM];
+        dg[..4].copy_from_slice(&wire::MAGIC);
+        dg[4..wire::HDR_LEN].copy_from_slice(&self.sid);
+        let rl = self.tx.seal(&wire::ad(&self.sid), &pt[..n], &mut dg[wire::HDR_LEN..], now as i64).unwrap();
+        dg.truncate(wire::HDR_LEN + rl);
+        dg
+    }
+    pub fn open(&mut self, dg: &[u8], now: u64) -> Result<Vec<u8>, NoiseErr> {
+        let (_, rec) = wire::parse_dgram(dg).ok_or(NoiseErr::Truncated)?;
+        let mut pt = [0u8; wire::MAX_PT + 16];
+        let n = self.rx.open(&wire::ad(&self.sid), rec, &mut pt, now as i64)?;
+        if wire::decode(&pt[..n]) == Some(Msg::Caps(wire::CAPS_REKEY)) {
+            self.tx.arm();
+        }
+        Ok(pt[..n].to_vec())
+    }
+}
+
+/// W4 interop: a rekeying device against this PoP. Until CAPS nobody rekeys; after the CAPS exchange both
+/// directions move through several key epochs (small thresholds) with every record delivered; a captured
+/// pre-rekey record is refused (stale) on both sides; a legacy device (no CAPS) is never rekeyed at.
+pub fn rekey_scenario() -> Result<(), String> {
+    let pol = RekeyPolicy { max_records: 3, max_bytes: 1 << 30, max_ms: 600_000 };
+    let mut pop = new_pop();
+    pop.rekey = pol;
+    let a = dev_kp(b"G19-TEST-device-A");
+    let from = addr("10.0.0.5:40001");
+    let mut dev = RDev::from_session(handshake_session(&mut pop, &a, addr("10.0.0.5:7654"), 1_000, None)?, pol);
+    let (_, dg) = one_data(pop.on_data(from, &dev.seal(&Msg::AddrReq, 1_010), 1_010))?;
+    ensure!(matches!(wire::decode(&dev.open(&dg, 1_010).map_err(|e| format!("{e:?}"))?), Some(Msg::Assign(_))), "no ASSIGN");
+    let pkt = ipv4([100, 64, 0, 2], [9, 9, 9, 9], b"rekey");
+    let reply = ipv4([9, 9, 9, 9], [100, 64, 0, 2], b"rekey back");
+    // unarmed: no epoch moves on either side
+    let first = dev.seal(&Msg::Data(&pkt), 1_020);
+    ensure!(pop.on_data(from, &first, 1_020) == vec![Out::Tun(pkt.clone())], "pre-CAPS DATA lost");
+    let (_, first_down) = one_data(pop.on_tun(&reply))?;
+    ensure!(dev.open(&first_down, 1_021).is_ok(), "pre-CAPS reply lost");
+    for t in 0..5 {
+        ensure!(pop.on_data(from, &dev.seal(&Msg::Data(&pkt), 1_030 + t), 1_030 + t).len() == 1, "unarmed DATA lost");
+    }
+    ensure!(dev.tx.epoch() == 0 && dev.rx.epoch() == 0, "rekeyed without CAPS");
+    // CAPS exchange
+    let (_, dg) = one_data(pop.on_data(from, &dev.seal(&Msg::Caps(wire::CAPS_REKEY), 1_100), 1_100))?;
+    ensure!(dev.open(&dg, 1_100).map_err(|e| format!("{e:?}"))? == [wire::T_CAPS, wire::CAPS_REKEY], "no CAPS reply");
+    ensure!(dev.tx.armed() && pop.stats.caps_rekey == 1, "CAPS did not arm both sides");
+    // continuity across epochs, both directions
+    for t in 0..12u64 {
+        let now = 1_200 + t;
+        ensure!(pop.on_data(from, &dev.seal(&Msg::Data(&pkt), now), now) == vec![Out::Tun(pkt.clone())], "DATA lost at {t} (epoch {})", dev.tx.epoch());
+        let (_, dg) = one_data(pop.on_tun(&reply))?;
+        ensure!(wire::decode(&dev.open(&dg, now).map_err(|e| format!("down {t}: {e:?}"))?) == Some(Msg::Data(&reply)), "reply lost at {t}");
+    }
+    ensure!(dev.tx.epoch() >= 3 && dev.rx.epoch() >= 3, "epochs did not move: tx {} rx {}", dev.tx.epoch(), dev.rx.epoch());
+    // a captured epoch-0 record is stale on both sides
+    let bad = pop.stats.records_bad;
+    ensure!(pop.on_data(from, &first, 1_300).is_empty() && pop.stats.records_bad == bad + 1, "pre-rekey record accepted by the PoP");
+    ensure!(dev.open(&first_down, 1_300) == Err(NoiseErr::Stale), "pre-rekey record accepted by the device");
+    // a legacy device (no CAPS) on the same PoP is never rekeyed at
+    let b = dev_kp(b"G19-TEST-device-B");
+    let bfrom = addr("10.0.0.6:40001");
+    let mut old = handshake(&mut pop, &b, addr("10.0.0.6:7654"), 2_000, None)?;
+    let _ = one_data(pop.on_data(bfrom, &old.seal(&Msg::AddrReq), 2_000))?;
+    let breply = ipv4([9, 9, 9, 9], [100, 64, 0, 3], b"legacy");
+    for _ in 0..10 {
+        let (_, dg) = one_data(pop.on_tun(&breply))?;
+        ensure!(wire::decode(&old.open(&dg)?) == Some(Msg::Data(&breply)), "legacy device lost a reply");
+    }
+    Ok(())
 }
 
 impl Dev {
@@ -127,9 +224,6 @@ fn one_data(outs: Vec<Out>) -> Result<(SocketAddr, Vec<u8>), String> {
     }
 }
 
-macro_rules! ensure {
-    ($c:expr, $($m:tt)*) => { if !$c { return Err(format!($($m)*)); } };
-}
 
 pub fn new_pop() -> Pop {
     let a = dev_kp(b"G19-TEST-device-A");
@@ -233,6 +327,11 @@ mod tests {
     #[test]
     fn end_to_end_scenario() {
         scenario().unwrap();
+    }
+
+    #[test]
+    fn rekey_interop() {
+        rekey_scenario().unwrap();
     }
 
     #[test]

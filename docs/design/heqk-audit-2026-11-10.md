@@ -96,6 +96,42 @@ yet say so (doc-only fix, no decision change).
     floor that decides which sources are always allowed (ADR 0023). Physical access to the card can widen it.
     Fix (A): sign WAN.TXT like POLICY.TXT (same operator key, same pinned anchor), or move the floor into the
     signed POLICY family. Release gate item TC-07.
+12. **W4 security hygiene (release plan Workstream 4, task #55) — built 2026-11-12 (`feat/sec-hygiene`), QEMU + metal pending.**
+    - *HQKSEAL1 nonce.* Was `SHA-256("HQKSEAL1-nonce" ‖ boot salt ‖ seq ‖ cntpct)[0..16]`. The boot salt comes from the
+      RNG200 TRNG on the CM5 only; without it (QEMU, or a TRNG fault on metal, where the draw is silently retried)
+      `seq` and `cntpct` restart every boot, so two boots could seal different plaintexts under one key with one
+      nonce: CTR keystream reuse. Now the nonce is synthetic: `HMAC(k_siv, "HQKSEAL1-siv2" ‖ salt ‖ seq ‖ cntpct ‖
+      header[0..96] ‖ plaintext)[0..16]`, `k_siv = HKDF-Expand(PRK, "HQKSEAL1-siv")`. A repeat under one key now
+      needs an identical header and plaintext (and then the blobs are identical), with or without the salt. The
+      format is unchanged (the nonce stays in the MAC-covered header, so older blobs still unseal). `[P-sealnonce]`.
+      No change to the SRK, key custody, OTP or RPMB.
+    - *Noise rekey (EL1).* The datagram record layer (`securechannel::RecordTx` / `RecordRx`) rekeys in session
+      (Noise §11.3 `REKEY`, one-way) at 2^20 records, 1 GiB or 1 h, whichever comes first. The wire format is
+      unchanged: the seq's high 32 bits are the key epoch. Each epoch has its own replay window. The previous
+      epoch is accepted for 5 s (reordering) and then wiped. Older epochs (rollback, retired key) are refused
+      without decrypting. A next-epoch record moves the receiver only if its tag verifies. An unarmed sender stops
+      at 2^32 records instead of wrapping. On the G19 tunnel each side starts rekeying only after the peer's
+      CAPS record (type 0x06, bit 0); an older PoP ignores CAPS and is never rekeyed at. The superpop
+      (`onboarding/enrollment/superpop`) follows and answers CAPS. Epoch transitions are logged
+      (`[G19] rekey: tx epoch … rx epoch …`), key material is not. The 24 h re-handshake stays. The Noise
+      handshake and the device identity key are unchanged and stay in EL1. `[P-rekey]`, `[P-g19-rekey]`, superpop
+      `rekey_interop` (host, g1).
+    - *CI.* `tools/ci/shipping_guard.py` resolves every crate's features for `tools/ci/shipping-features.txt` and
+      fails if a development-only feature is active anywhere (hsh-dev, wpa3probe, wifi-pmkid-noexpire, p15-bench,
+      crashtest, securechannel-selftest / -host-responder, rpmb/otp-provision, the self-rebooting and bench
+      diagnostics). It runs in g1, build-heqk (shipped-flavour job) and release. g4r (nightly reproducibility) now
+      builds the shipping flavour instead of `prod`. New fuzz target `record_rx` (tools/fuzz/heqk-securechannel,
+      the control channel's record layer): 102 k runs in 60 s, 0 crashes.
+    - **Metal must prove:** (1) rekey over the real channel: with the PoP rebuilt from this commit, a G19 tunnel
+      on the CM5 logs `[G19] rekey: tx epoch 1 …` after CAPS and a threshold (bench: a low-threshold build or a
+      long iperf), and DATA keeps flowing through the transition (no 45 s silence re-handshake). (2) The session
+      continues or fails closed: forged or replayed datagrams sent at the PoP / device data port are counted
+      (`rx_bad` / `rx_stale`) and never delivered. (3) A reboot or reconnect does not bring back stale key or
+      nonce state: after a power cycle the first handshake is at epoch 0 with a new sid, and records captured
+      before the cycle are refused. (4) Sealed storage across the nonce change: an image from before this commit
+      seals the snapshot / evidence log / owner journal / sealed config, this image restores them (older blobs
+      unseal), writes new ones, and they restore again after a power cycle. (`[P-sealnonce]` runs in the QEMU
+      sequence only; it is not in the CM5 images.)
 
 ## 3. E2E / validation evidence (this audit)
 
@@ -190,6 +226,7 @@ Ordered by dependency and customer impact. Each item: QEMU gate first, then a CM
 | A10 | Phase 4: G0 apcore steps 4–5, IPv6 lateral detection, detbench through apcore, household corpus | gates + benchmark report | QEMU |
 | A11 | Phase 5: EL0 parser isolation (HTTP → DHCP/DNS → WAN clients → Noise → WPA2) | each parser behind an excursion | QEMU + metal |
 | A12 | Doc hygiene: stale ADR headers, ADR 0052 duplicate → 0058, SECURITY.md built/not-built list, README matrix | docs match code | review |
+| A13 | W4 security hygiene (task #55): synthetic HQKSEAL1 nonce, in-session Noise rekey on the record layer + G19 CAPS, shipping-flavour feature guard, g4r on the shipping flavour, `record_rx` fuzz target — **built 2026-11-12, QEMU + metal pending** (§2.1 #12) | `[P-sealnonce]`, `[P-rekey]`, `[P-g19-rekey]` PASS; superpop `rekey_interop`; metal list in §2.1 #12 | QEMU + host + metal |
 
 ## 5. Human-dependency register (B — only these need the operator)
 
