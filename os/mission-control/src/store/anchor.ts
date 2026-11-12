@@ -8,6 +8,7 @@
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 import { post } from './actions';
+import { postSigned, MSG, fp8 } from './envelope';
 
 export interface AnchorView {
   vendor_key: string | null; owner_key: string | null; owner_enrolled: boolean; owner_generation: number;
@@ -33,6 +34,11 @@ type Res = { ok: boolean; refused?: string; note?: string; owner_generation?: nu
 export async function enroll(f: { public_key: string; proof: string; owner_key: string }): Promise<Res> {
   const r = await post<Res>('/api/anchor/enroll', f); await refreshAnchor(); return r;
 }
-export async function rotate(f: { public_key: string; proof: string; generation: string; signature: string; owner_key: string }): Promise<Res> {
-  const r = await post<Res>('/api/anchor/rotate', f); await refreshAnchor(); return r;
+/** Rotate the owner key (ADR 0058 D3). Since R6 = D the request is authorised by an HQMGMT1 envelope (msg 33) signed
+ *  with the CURRENT owner key: arg = fingerprint of the current key, generation = the rotation generation,
+ *  digest = SHA-256 of the new public key. The owner token is not used. */
+export async function rotate(f: { public_key: string; proof: string; generation: string; signature: string }, currentOwnerHex: string): Promise<Res> {
+  const newDigest = new Uint8Array(await crypto.subtle.digest('SHA-256', Uint8Array.from(f.public_key.match(/../g) ?? [], (x) => parseInt(x, 16))));
+  const r = await postSigned<Res & { ok: boolean }>('/api/anchor/rotate', f, { msg: MSG.ANCHOR_ROTATE, arg: await fp8(currentOwnerHex), generation: BigInt(f.generation), digest: newDigest });
+  await refreshAnchor(); return r;
 }

@@ -3,6 +3,7 @@
 // at generation max(generation, floor)+1 — then show the trial. The device is mocked by route interception
 // with the shapes heqk serves; the uploaded bundle is verified with os/kernel/tools/hqcfg.py.
 import { writeFileSync, mkdtempSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
@@ -22,12 +23,12 @@ export default async function (t) {
     if (p === '/api/session') return route.fulfill(json({ csrf: 'x', next_seq: 1 }));
     if (p === '/api/anchor') return route.fulfill(json({ vendor_key: null, owner_key: state.enrolledKey, owner_enrolled: !!state.enrolledKey, owner_generation: state.enrolledKey ? 1 : 0, config_files_verified_by: state.enrolledKey ? 'owner' : 'none (standalone)', can: state.enrolledKey ? 'rotate' : 'enroll', device_id: DEV, state: 'CONFIG UNPROTECTED' }));
     if (p === '/api/anchor/enroll' && m === 'POST') { state.enrolledKey = new URLSearchParams(route.request().postData()).get('public_key'); return route.fulfill(json({ ok: true, owner_generation: 1 })); }
-    if (p === '/api/config') return route.fulfill(json(state.config));
-    if (p === '/api/upload' && m === 'GET') return route.fulfill(json({ store: true, chunk_max: 16384, in_flight: null, recent: [], types: [{ type: 'wan', cap: 512, generation: 0, source: 'boot', applies: 'next_boot' }, { type: 'config', cap: 16384, generation: 0, source: 'boot', applies: 'next_boot' }] }));
+    if (p === '/api/config') return route.fulfill(json({ ...state.config, envelope: { format: 'HQMGMT1', device_id: DEV, epoch: '0102030405060708', next_seq: 5, generation: state.config.generation, digest: '00'.repeat(32), owner_enrolled: !!state.enrolledKey } }));
+    if (p === '/api/upload' && m === 'GET') return route.fulfill(json({ store: true, chunk_max: 16384, in_flight: state.inFlight ?? null, recent: [], types: [{ type: 'wan', cap: 512, generation: 0, source: 'boot', applies: 'next_boot' }, { type: 'config', cap: 16384, generation: 0, source: 'boot', applies: 'next_boot' }] }));
     if (p === '/api/upload/begin') { state.type = new URLSearchParams(route.request().postData()).get('type'); return route.fulfill(json({ ok: true, id: 'u1', chunk_max: 16384 })); }
     if (p === '/api/upload/chunk') { state.chunks.push(route.request().postDataBuffer()); return route.fulfill(json({ ok: true })); }
-    if (p === '/api/upload/finish') return route.fulfill(json({ ok: true }));
-    if (p === '/api/upload/activate') return route.fulfill(json({ ok: true, activated: true, staged: true, generation: 7 }));
+    if (p === '/api/upload/finish') { const box = Buffer.concat(state.chunks); state.inFlight = { id: 'u1', type: 'config', size: box.length, received: box.length, verified: true, type_code: 9, generation: 7, digest: createHash('sha256').update(box.subarray(512)).digest('hex') }; return route.fulfill(json({ ok: true })); }
+    if (p === '/api/upload/activate') { state.activateEnv = new URLSearchParams(route.request().postData()).get('envelope'); state.activateForm = route.request().postData(); state.inFlight = null; return route.fulfill(json({ ok: true, activated: true, staged: true, generation: 7 })); }
     return route.fulfill(json({}, 404));
   });
 
@@ -57,6 +58,9 @@ export default async function (t) {
 
   await page.click('button:has-text("Launch")'); await page.waitForTimeout(2500);
   ok(state.type === 'config', 'launch: uploads ONE configuration bundle (type config), not per-file files');
+  const ae = Buffer.from(state.activateEnv ?? '', 'hex');
+  ok(ae.length === 156 && ae.readUInt16LE(10) === 23 && ae.readBigUInt64LE(44) === 9n && Number(ae.readBigUInt64LE(52)) === 7 && ae.subarray(12, 28).toString('hex') === DEV && !/owner_key/.test(state.activateForm ?? ''),
+    'launch: activation is an owner-signed HQMGMT1 envelope (msg 23, type config, generation 7, this device), no owner token');
   ok(await vis(page.locator('h1', { hasText: 'Restart to try your settings' })) && await vis(page.locator('button:has-text("Restart and try them")')), 'done: restart to start the trial');
 
   // The uploaded container = HQCSIG1 (512) || bundle; verify like the device, bound to DEV.
