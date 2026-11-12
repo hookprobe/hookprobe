@@ -15,8 +15,8 @@ import { post } from './actions';
 import { postSigned, MSG, TYPE_CODE } from './envelope';
 
 export interface PackSlot { type: string; cap: number; generation: number; source: 'store' | 'boot'; applies?: 'now' | 'next_boot';
-  /** The verified generation a rollback would return to (kernel field pending on fix/mgmt-api-review-1112; rename to match). */
-  rollback_to?: number }
+  /** The verified generation a rollback would return to (GET /api/upload, kernel PR #1047; null = nothing to roll back to). */
+  rollback_to?: number | null }
 export interface UploadEvent { ms: number; session: string; step: string; type: string; ok: boolean; generation: number; why: string }
 export interface UploadView { store: boolean; chunk_max: number; types: PackSlot[]; in_flight: null | { id: string; type: string; size: number; received: number; verified: boolean; type_code?: number; generation?: number; digest?: string }; recent: UploadEvent[] }
 
@@ -84,11 +84,11 @@ async function session(): Promise<{ csrf: string }> {
 }
 
 /** Run the whole flow; `progress` reports the step and the bytes sent. Throws with the device's refusal. */
-export async function uploadPack(type: string, file: File, askKey: () => string | null, progress: (s: UploadStep, sent: number) => void): Promise<UploadResult> {
+export async function uploadPack(type: string, file: File, askKey: () => Promise<string | null> | string | null, progress: (s: UploadStep, sent: number) => void): Promise<UploadResult> {
   const bytes = new Uint8Array(await file.arrayBuffer());
   const sha = await sha256Hex(bytes);
-  const key = askKey();
-  if (!key) throw new Error('Cancelled: the owner key is required.');
+  const key = await askKey();
+  if (!key) throw new Error('Cancelled.');
   progress('begin', 0);
   const b = await post<Resp>('/api/upload/begin', { type, size: String(bytes.length), sha256: sha, owner_key: key });
   if (!b.ok || !b.id) throw new Error(`Refused at begin: ${b.refused}`);
@@ -133,10 +133,10 @@ export async function uploadPack(type: string, file: File, askKey: () => string 
 }
 
 /** Roll a pack back to the other A/B half (re-verified by the device). Throws with the device's refusal. */
-export async function rollbackPack(type: string, target: number | undefined): Promise<UploadResult> {
+export async function rollbackPack(type: string, target: number | null | undefined): Promise<UploadResult> {
   // R6 = D: msg 24 binds the type code and the generation it rolls back TO. That target must come from the device
   // (a guessed one is refused and consumes a sequence number), so without it the rollback is not offered.
-  if (target === undefined || !(type in TYPE_CODE)) throw new Error('This device does not report which generation a rollback would return to yet, so it cannot be signed. Nothing changed.');
+  if (typeof target !== 'number' || !(type in TYPE_CODE)) throw new Error('This device does not report which generation a rollback would return to yet, so it cannot be signed. Nothing changed.');
   const a = await postSigned<Resp>('/api/upload/rollback', { type }, { msg: MSG.UPLOAD_ROLLBACK, arg: BigInt(TYPE_CODE[type]), generation: target });
   await refreshUploads();
   if (!a.ok) throw new Error(`Rollback refused: ${a.refused}`);

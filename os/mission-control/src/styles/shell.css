@@ -177,3 +177,19 @@
 .hp-banner--trial { background: rgba(0, 180, 255, 0.10); border: 1px solid rgba(0, 180, 255, 0.5); color: var(--hp-text-primary); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .hp-banner-actions { display: inline-flex; gap: 8px; margin-left: auto; }
 .hp-banner-actions .hp-btn { min-height: 32px; }
+
+/* Approve sheet (store/approve.ts): the one consent / credential dialog */
+.approve-scrim { position: fixed; inset: 0; z-index: 1000; background: rgba(4, 4, 8, 0.72); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.approve-sheet { width: 100%; max-width: 440px; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--hp-surface-elevated); border: 1px solid var(--hp-border-strong, rgba(255,255,255,.14)); border-radius: 14px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; }
+.approve-title { margin: 0; font-size: 18px; font-weight: 700; color: var(--hp-text-primary); }
+.approve-body { margin: 0; font-size: 14px; line-height: 1.5; color: var(--hp-text-secondary); white-space: pre-line; }
+.approve-form { display: flex; flex-direction: column; gap: 12px; margin-top: 4px; }
+.approve-field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--hp-text-secondary); }
+.approve-input { font: inherit; font-size: 16px; min-height: 44px; padding: 0 12px; background: var(--hp-surface); color: var(--hp-text-primary); border: 1px solid rgba(255,255,255,.18); border-radius: var(--hp-radius); box-sizing: border-box; width: 100%; }
+.approve-input:focus-visible { outline: 2px solid var(--hp-cyan); outline-offset: 1px; }
+.approve-problem { margin: 0; font-size: 13px; color: #ffd27a; }
+.approve-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.approve-actions .hp-btn { min-height: 44px; }
+.approve-actions .hp-btn:disabled { opacity: 1; background: transparent; color: var(--hp-text-muted); border-color: rgba(255,255,255,.12); cursor: not-allowed; }
+.approve-danger { background: #c0392b; color: #fff; border-color: #c0392b; }
+@media (max-width: 767px) { .approve-scrim { align-items: flex-end; padding: 0; } .approve-sheet { max-width: none; border-radius: 14px 14px 0 0; padding-bottom: calc(20px + env(safe-area-inset-bottom)); } }

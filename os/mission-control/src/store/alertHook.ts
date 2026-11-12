@@ -5,6 +5,7 @@
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 import { post } from './actions';
+import { approve } from './approve';
 
 export interface AlertHookView {
   configured: boolean;
@@ -22,10 +23,9 @@ export async function refreshAlertHook(): Promise<void> {
 
 /** Durable write: asks for a reason and the owner key. Returns a message for the UI. */
 export async function saveAlertHook(s: AlertHookSettings | null): Promise<string> {
-  const reason = window.prompt(s ? 'Reason for this alert destination (kept in the journal):' : 'Reason for removing the alert destination:', '');
-  if (!reason || reason.trim().length < 3) return 'Cancelled: a reason of at least 3 characters is required.';
-  const key = window.prompt('This is a permanent change. Enter your owner key:', '');
-  if (!key) return 'Cancelled: the owner key is required.';
+  const a = await approve({ title: s ? 'Send alerts to this destination?' : 'Stop sending alerts?', body: s ? `${s.format} · ${s.ip}:${s.port}${s.path}` : undefined, confirm: s ? 'Save' : 'Remove', destructive: !s, reason: {}, key: {} });
+  if (!a) return 'Cancelled.';
+  const reason = a.reason, key = a.key;
   const f: Record<string, string> = s
     ? { op: 'set', ip: s.ip, port: String(s.port), format: s.format, path: s.path, secret: s.secret, min_severity: s.min_severity, reason: reason.trim(), permanent: 'true', owner_key: key }
     : { op: 'remove', reason: reason.trim(), permanent: 'true', owner_key: key };

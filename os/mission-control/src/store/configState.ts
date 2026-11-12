@@ -9,6 +9,7 @@
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 import { postSigned, MSG } from './envelope';
+import { approve } from './approve';
 
 export interface ConfigView {
   state: 'none' | 'trial' | 'committed' | 'reverted' | 'refused' | string;
@@ -34,8 +35,10 @@ export function secondsLeft(now: number): number {
 
 type Res = { ok: boolean; refused?: string; committed?: boolean; rolled_back?: boolean; generation?: number };
 async function act(path: string, ask: string): Promise<string> {
-  const reason = window.prompt(`${ask} Reason (kept in the journal):`, path.endsWith('confirm') ? 'works for me' : 'does not work');
-  if (!reason || reason.trim().length < 3) throw new Error('Cancelled: a reason of at least 3 characters is required.');
+  const keep = path.endsWith('confirm');
+  const a = await approve({ title: ask, body: keep ? 'The device keeps these settings as the new last-known-good.' : 'The device goes back to the previous settings.', confirm: keep ? 'Keep' : 'Roll back', destructive: !keep, reason: { default: keep ? 'works for me' : 'does not work' } });
+  if (!a) throw new Error('Cancelled.');
+  const reason = a.reason;
   // R6 = D: authorised by an HQMGMT1 envelope signed with this browser's (enrolled) key, bound to the bundle in
   // force — the generation and digest come from the same GET /api/config read. The owner token is not used.
   const confirm = path.endsWith('confirm');

@@ -5,6 +5,7 @@
  */
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
+import { approve } from './approve';
 
 export interface ActiveAction { id: number; kind: string; target: string; expires_in_s: number }
 export interface AuditRow { session: string; kind: string; target: string; ttl_s: number; ok: boolean; result: string; reason: string }
@@ -41,13 +42,10 @@ export function revokeAction(id: number) {
 
 /** Ask for a reason (and the owner key when needed), then run. Returns a message for the UI. */
 export async function promptAndRun(kind: 'ack' | 'hold_ip' | 'isolate' | 'shield_allow' | 'shield_pause', target: string, ttlS: number): Promise<string> {
-  const reason = window.prompt(`Reason for ${kind.replace('_', ' ')} on ${target} (recorded in the audit log):`, '');
-  if (!reason || reason.trim().length < 3) return 'Cancelled — a reason is required.';
-  let key: string | undefined;
-  if (kind === 'isolate' || kind === 'shield_allow' || kind === 'shield_pause') {
-    key = window.prompt('This action needs your owner key again:', '') ?? undefined;
-    if (!key) return 'Cancelled — owner key required.';
-  }
-  const r = await runAction(kind, target, ttlS, reason.trim(), key);
-  return r.ok ? `Done — expires on its own${ttlS ? ` in ${Math.round(ttlS / 60)} min` : ''}.` : `Refused by the device: ${r.refused}`;
+  const needsKey = kind === 'isolate' || kind === 'shield_allow' || kind === 'shield_pause';
+  const what = { ack: 'Acknowledge', hold_ip: 'Hold the address', isolate: 'Isolate the device', shield_allow: 'Allow through Shield', shield_pause: 'Pause Shield' }[kind];
+  const a = await approve({ title: `${what}?`, body: `${target}${ttlS ? ` · for ${Math.round(ttlS / 60)} min, then it ends by itself` : ''}. Recorded in the audit log.`, confirm: what, reason: {}, ...(needsKey ? { key: {} } : {}) });
+  if (!a) return 'Cancelled.';
+  const r = await runAction(kind, target, ttlS, a.reason, needsKey ? a.key : undefined);
+  return r.ok ? (ttlS ? `Done: it ends by itself in ${Math.round(ttlS / 60)} min.` : 'Done.') : `Refused by the device: ${r.refused}`;
 }

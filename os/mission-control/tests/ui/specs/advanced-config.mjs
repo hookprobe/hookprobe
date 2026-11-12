@@ -40,8 +40,7 @@ export default async function (t) {
   ok(await vis(page.locator('text=getting control back needs physical access')), 'loss consequence stated');
 
   // Import round-trip: wrong passphrase refused; the right one restores the same key.
-  page.once('dialog', (d) => d.accept());
-  await page.click('text=Remove from this browser'); await page.waitForTimeout(400);
+  await page.click('text=Remove from this browser'); await t.approve(); await page.waitForTimeout(400);
   await page.click('text=Import a backup');
   await page.fill('textarea', pem);
   await page.locator('label:has-text("Backup passphrase") input').last().fill('wrong passphrase');
