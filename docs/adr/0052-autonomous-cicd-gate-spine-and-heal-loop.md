@@ -1,9 +1,21 @@
 # ADR 0052 — Autonomous CI/CD: one deterministic gate spine, five lifecycle loops
 
+> **Duplicate number (noted 2026-11-12, A12 doc hygiene).** Two ADRs carry 0052: this one (2026-11-08) and
+> [ADR 0052 Shield v2](0052-shield-v2-dns-protection-on-heqk.md) (2026-11-07, the earlier one, which keeps 0052).
+> **Intended new number for this ADR: 0063** (the next free number; the 0058 proposed in
+> `docs/design/heqk-audit-2026-11-10.md` was taken by ADR 0058 on 2026-11-10). Not renumbered yet: about 25
+> files under `tools/ci/`, `.gitignore`, `.gitleaks.toml` and two `Cargo.toml` comments cite "ADR 0052" for this
+> record, so the renumber is an operator decision (ADR index: `docs/adr/README.md`). Until then, cite it as
+> "ADR 0052 (CI/CD)".
+
 **Status:** 🟡 **Proposed (2026-11-08)** — operator review. Implementation landed on branch
 `worktree-autonomous-cicd` (tools/ci/**, 5 new workflows, root dependabot) and was validated
 locally (see *Evidence*); GitHub-side behaviour (autoheal issues/PRs, metal runner) activates
 after merge + the one-time setup in `tools/ci/README.md`.
+**Status reconciled 2026-11-12:** still 🟡 Proposed — no operator ratification is recorded
+(`docs/design/heqk-audit-2026-11-10.md` §2: "gates run, never ratified"). The implementation is on main since
+PR #738 (2026-11-08, `tools/ci/**`, `tools/ci/gates.sh`) and later extended (shipping flavour PR #1011,
+shipping guard PR #1017). Ratification and the renumber (above) are operator decisions.
 **Deciders:** verification-engineer (gate ladder), release-engineer (release/rings/signing
 boundary), security-auditor (guard + workflow threat model), product-steward (this record),
 operator (ratification; branch protection + secrets + bench runner — **Red, operator-run**).
