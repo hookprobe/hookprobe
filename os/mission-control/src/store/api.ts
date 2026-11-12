@@ -464,6 +464,12 @@ export function mitreName(id: string): string {
   return MITRE_TAXONOMY[id]?.name ?? id;
 }
 
+/** "T1071 · Application Layer Protocol", or just the id when the name is not known (never "T1200 · T1200"). */
+export function mitreLabel(id: string): string {
+  const n = mitreName(id);
+  return n && n !== id ? `${id} · ${n}` : id;
+}
+
 export function mitreTactic(id: string): string {
   return MITRE_TAXONOMY[id]?.tactic ?? 'Unmapped';
 }

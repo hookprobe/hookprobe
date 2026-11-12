@@ -50,6 +50,7 @@
 .shell-rail-name em { font-style: normal; color: var(--hp-cyan); }
 .shell-rail-items { display: flex; flex-direction: column; gap: 1px; }
 .shell-rail-item { display: flex; align-items: center; gap: 12px; min-height: 40px; padding: 0 12px; border-radius: var(--hp-radius); color: var(--hp-text-secondary); text-decoration: none; font-size: 13.5px; font-weight: 500; background: none; border: 0; font-family: inherit; cursor: pointer; text-align: left; width: 100%; box-sizing: border-box; }
+.shell-rail-item .shell-rail-label { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .shell-rail-item:hover { background: rgba(255,255,255,.04); color: var(--hp-text-primary); }
 .shell-rail-item.is-active { background: linear-gradient(90deg, rgba(0,180,255,.16), rgba(0,180,255,.03)); color: #fff; box-shadow: inset 2px 0 0 var(--hp-cyan); font-weight: 600; }
 .shell-rail-item.is-active .shell-rail-icon { color: var(--hp-cyan); opacity: 1; }
