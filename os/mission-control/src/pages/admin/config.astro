@@ -1,0 +1,12 @@
+---
+/**
+ * /admin/config — Administration → Configuration and keys (canvas board AdminConfig).
+ */
+
+import Shell from '../../layouts/Shell.astro';
+import ConfigurationApp from '../../components/ConfigurationApp';
+---
+
+<Shell title="Configuration and keys — HookProbe OS" description="Configuration and keys, as this device reports it.">
+  <ConfigurationApp client:load />
+</Shell>

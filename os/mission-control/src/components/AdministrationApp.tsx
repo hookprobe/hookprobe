@@ -115,6 +115,8 @@ const AdministrationApp: Component = () => {
             <For each={SECTIONS}>{([s, label]) => (
               <button class={`shell-rail-item${sec() === s ? ' is-active' : ''}`} aria-pressed={sec() === s} onClick={() => { setSec(s); setMsg(''); }}>{label}</button>
             )}</For>
+            <a class="shell-rail-item" href="/admin/config">Configuration and keys</a>
+            <a class="shell-rail-item" href="/admin/shell">Shell</a>
           </nav>
 
           <section style={{ display: 'flex', 'flex-direction': 'column', gap: '16px', 'min-width': 0 }}>
