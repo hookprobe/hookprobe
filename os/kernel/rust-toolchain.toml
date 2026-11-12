@@ -3,5 +3,5 @@
 [toolchain]
 channel    = "nightly-2026-07-20"   # pinned 2026-11-12: = rustc 1.99.0-nightly 9f36de775 2026-07-19, the compiler every factory image + metal evidence was built with;
                                       # CI honours it (a floating nightly grew the AP payload ~200 KB past the HBoot window)
-components = ["rust-src", "llvm-tools"]
+components = ["rust-src", "llvm-tools", "clippy"]
 targets    = ["aarch64-unknown-none-softfloat", "wasm32-wasip1"]  # wasm32-wasip1: kernel/build.rs builds the signed wasip1 fixture
