@@ -361,21 +361,42 @@ fn build_el0_crate(kernel_manifest_dir: &str, out_dir: &str, name: &str, tdir: &
         panic!("{name} ELF not found at {}: {e}", produced.display())
     });
     // Image budget (hboot load window): strip symbols / debug sections from the embedded EL0 ELF — the M5.1 loader
-    // reads only the program headers + PT_LOAD bytes. ~216 KB across tlshost / lansvc / hsh (2026-11-10). Without
-    // llvm-objcopy the unstripped copy stays (correct, just larger).
+    // reads only the program headers + PT_LOAD bytes. ~216 KB across tlshost / lansvc / hsh (2026-11-10).
+    // llvm-objcopy comes from PATH or, failing that, from the pinned toolchain's llvm-tools component (the same
+    // fallback tools/ci/ap-size-gate.sh uses). CI runners have no `llvm-objcopy` on PATH, so before this fallback
+    // the AP image there silently embedded the UNSTRIPPED ELFs and measured ~228 KB over the HBoot window (#1006).
     let stripped = Path::new(out_dir).join(format!("{dest_name}.stripped"));
-    let ok = std::process::Command::new("llvm-objcopy")
-        .arg("--strip-all")
-        .arg(&dest)
-        .arg(&stripped)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false);
+    let strip_with = |tool: &Path| {
+        std::process::Command::new(tool)
+            .arg("--strip-all")
+            .arg(&dest)
+            .arg(&stripped)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    };
+    let ok = strip_with(Path::new("llvm-objcopy")) || toolchain_objcopy().is_some_and(|t| strip_with(&t));
     if ok {
         std::fs::rename(&stripped, &dest).expect("replace the EL0 ELF with its stripped copy");
+    } else if std::env::var("CARGO_FEATURE_HBOOT").is_ok() {
+        // A factory (hboot) image with unstripped EL0 ELFs is ~216 KB larger and can exceed the HBoot load window:
+        // refuse rather than build an image that may not boot.
+        panic!("{name}: llvm-objcopy not found on PATH nor in the toolchain (rustup component add llvm-tools) — \
+                refusing to embed an unstripped EL0 ELF in an hboot image");
     } else {
         println!("cargo:warning={name}: llvm-objcopy unavailable — embedding the unstripped EL0 ELF");
     }
+}
+
+/// `llvm-objcopy` shipped with the active Rust toolchain's llvm-tools component
+/// (`<sysroot>/lib/rustlib/<host>/bin/llvm-objcopy`), if present.
+fn toolchain_objcopy() -> Option<std::path::PathBuf> {
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".into());
+    let out = std::process::Command::new(rustc).args(["--print", "sysroot"]).output().ok()?;
+    let sysroot = String::from_utf8(out.stdout).ok()?;
+    let host = std::env::var("HOST").ok()?;
+    let p = std::path::Path::new(sysroot.trim()).join("lib/rustlib").join(host).join("bin/llvm-objcopy");
+    p.is_file().then_some(p)
 }
 
 // A2 (M5.5) — build the REAL wasm32-wasip1 detection module (wasip1-fixture) via a NESTED
