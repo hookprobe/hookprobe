@@ -464,6 +464,67 @@ pub fn fallback_step<D: BlockDev>(dev: &D, p1: u64, t: Ty) -> bool {
     true
 }
 
+/// BENCH ONLY (cargo feature `artstore-bench`; forbidden in the shipping flavour by tools/ci/shipping_guard.py): the
+/// ADR 0059 Phase 0.4 metal trigger. It flips byte 0 of the first data sector of a type's ACTIVE store half — exactly
+/// what [P-artstore] does on the RAM disk — and nothing else: no manifest change, no reload, no reboot. The next boot's
+/// unchanged loader refuses that half and the real `boot_fallback` / `fallback_step` loads the OTHER half. Refused
+/// (nothing written) unless the type has a store entry and the other half verifies with the type's own verifier at a
+/// generation not older than the boot-partition copy (so the fallback can only land on that half).
+#[cfg(feature = "artstore-bench")]
+pub mod bench {
+    use super::{read_manifest, sig_gen, slot, store_region, verify_half, Ty};
+    use hal::BlockDev;
+
+    /// What was tampered: the active half (1 = A, 2 = B) + its generation + the sector, and the other half's generation.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Tampered {
+        pub half: u8,
+        pub gen: u64,
+        pub lba: u64,
+        pub other_gen: u64,
+    }
+
+    pub fn half_name(h: u8) -> char {
+        if h == 1 { 'A' } else { 'B' }
+    }
+
+    pub fn tamper_active<D: BlockDev>(dev: &mut D, p1: u64, t: Ty, key: &[u8; 32]) -> Result<Tampered, &'static str> {
+        if t == Ty::Config {
+            return Err("refused: config reverts through its cfgd trial, not the Phase 0.4 half fallback");
+        }
+        let store = store_region(&*dev).ok_or("refused: no artifact store on this device")?;
+        let e = read_manifest(&*dev, store).e[t as usize];
+        if e.half == 0 {
+            return Err("refused: this type has no artifact-store entry (activate two generations first)");
+        }
+        let other = if e.half == 1 { 2 } else { 1 };
+        let (og, _, _) = verify_half(&*dev, t, other, key).ok_or("refused: the other half holds no valid generation (activate a second generation first)")?;
+        let fat = if p1 != 0 { crate::fat::locate_contiguous(&*dev, p1, t.info().sig).and_then(|(l, _)| sig_gen(&*dev, l, t.info().magic)) } else { None };
+        if og < fat.unwrap_or(0) {
+            return Err("refused: the other half is older than the boot-partition copy (the fallback would load the boot copy)");
+        }
+        let (_, dl) = slot(store, t, e.half);
+        let mut s = [0u8; 512];
+        dev.read_block(dl, &mut s).map_err(|_| "refused: store read failed")?;
+        s[0] ^= 1;
+        dev.write_block(dl, &s).map_err(|_| "store write failed")?;
+        let mut back = [0u8; 512];
+        dev.read_block(dl, &mut back).map_err(|_| "store readback failed")?;
+        if back != s {
+            return Err("store readback failed");
+        }
+        Ok(Tampered { half: e.half, gen: e.gen, lba: dl, other_gen: og })
+    }
+
+    /// Self-tests: forget this boot's fallback state (what a reboot does).
+    pub fn selftest_reboot() {
+        unsafe {
+            super::DISABLED = 0;
+            super::OTHER = 0;
+        }
+    }
+}
+
 // ---- activation (write build) ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

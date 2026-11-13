@@ -31,7 +31,7 @@ class ShippingGuard(unittest.TestCase):
     def test_dev_feature_in_any_crate_fails(self):
         for crate, feat in [("kernel", "hsh-dev"), ("kernel", "securechannel-selftest"), ("arch-aarch64", "wpa3probe"),
                             ("arch-aarch64", "wifi-pmkid-noexpire"), ("kernel", "p15-bench"), ("kernel", "crashtest"),
-                            ("kernel", "wifiheal-bench")]:
+                            ("kernel", "wifiheal-bench"), ("kernel", "artstore-bench")]:
             bad = CLEAN + f"{crate} v0.1.0 (/src/x) |cm5,{feat}|\n"
             self.assertIn((crate, feat), sg.active(bad))
             self.assertEqual(self.run_tree(bad), 1, feat)

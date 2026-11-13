@@ -7364,6 +7364,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = ownerapi::rotate_selftest();
         #[cfg(feature = "netsvc")]
         let _ = upload::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = upload::bench_selftest(); // [P-artstore-bench] (feature artstore-bench) / [P-artstore-bench-off] (default)
         #[cfg(all(feature = "securechannel", feature = "p15-write"))]
         let _ = evlog::selftest();
         let _ = rules::jit_call_selftest();

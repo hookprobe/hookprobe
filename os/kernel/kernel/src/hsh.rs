@@ -261,7 +261,42 @@ pub fn web(line: &[u8], env: &[u8], tag: [u8; 4], now_ms: u64, out: &mut [u8]) -
     if let Some(n) = heal_test(line, env, tag, now_ms, out) {
         return n;
     }
+    #[cfg(feature = "artstore-bench")]
+    if let Some(n) = artstore_test(line, env, tag, now_ms, out) {
+        return n;
+    }
     run_line(line, hal::mgmtabi::ROLE_VIEW, tag, now_ms, env, out)
+}
+
+/// BENCH ONLY (feature `artstore-bench`, never shipped): `artstore tamper-test <type>`, the ADR 0059 Phase 0.4 metal
+/// trigger (upload::tamper_test). Fixed words only (the type name, exact compare). Needs an owner-signed HQMGMT1
+/// envelope (ARTSTORE_TAMPER_TEST, arg = the type code) verified by the same mgmtenv as every privileged operation;
+/// journaled. Never reboots. None = not this command.
+#[cfg(feature = "artstore-bench")]
+fn artstore_test(line: &[u8], env: &[u8], tag: [u8; 4], now_ms: u64, out: &mut [u8]) -> Option<usize> {
+    use core::fmt::Write;
+    let rest = line.strip_prefix(b"artstore tamper-test")?;
+    if !rest.is_empty() && rest[0] != b' ' {
+        return None;
+    }
+    let word = rest.trim_ascii();
+    let mut w = crate::mcstate::JsonBuf::new(out);
+    let ty = core::str::from_utf8(word).ok().and_then(crate::artstore::Ty::from_name).filter(|t| *t != crate::artstore::Ty::Config);
+    match ty {
+        None => {
+            let _ = write!(w, "usage: artstore tamper-test shield_block|shield_allow|ioc|rules|oui|devices|wan|wifi|policy   (BENCH build)\n");
+        }
+        Some(t) => match crate::upload::tamper_test(t, env, tag, now_ms) {
+            Err(why) => {
+                let _ = write!(w, "artstore tamper-test {}: {}\n", t.info().name, why);
+            }
+            Ok(x) => {
+                let _ = write!(w, "artstore tamper-test {}: accepted (BENCH build) — tampered active half {} (gen {}) lba {}; the other half holds gen {} — reboot to see the fallback\n",
+                    t.info().name, crate::artstore::bench::half_name(x.half), x.gen, x.lba, x.other_gen);
+            }
+        },
+    }
+    Some(w.len)
 }
 
 /// BENCH ONLY (feature `wifiheal-bench`, never shipped): `wifi heal-test [status|freeze|freeze-once|fwhalt|clear]`,
@@ -451,6 +486,32 @@ pub fn selftest_web(now_ms: u64) -> bool {
     };
     #[cfg(not(feature = "wifiheal-bench"))]
     let heal = true;
+    // BENCH ONLY: the artifact-store tamper trigger — a change only with an envelope bound to its type; without the
+    // feature the shell does not know the command and a validly signed msg-41 envelope is never consumed
+    #[cfg(feature = "artstore-bench")]
+    let art = {
+        let s1 = crate::mgmtenv::next_seq();
+        let bare = has(&run(b"artstore tamper-test devices", &[]), b"needs an owner-signed envelope");
+        let mut e = mk(s1, m::ARTSTORE_TAMPER_TEST, 0, [0; 32]);
+        e.arg = crate::artstore::Ty::Ioc as u64;
+        let other = has(&run(b"artstore tamper-test devices", &test_envelope(&kp, &e)), b"another operation");
+        let mut e = mk(s1 + 1, m::ARTSTORE_TAMPER_TEST, 0, [0; 32]);
+        e.arg = crate::artstore::Ty::Devices as u64;
+        // no store on this QEMU carrier: the envelope verifies, the handler refuses
+        let reached = has(&run(b"artstore tamper-test devices", &test_envelope(&kp, &e)), b"artstore tamper-test devices: refused: no artifact store");
+        let usage = has(&run(b"artstore tamper-test config", &[]), b"usage: artstore tamper-test") && has(&run(b"artstore tamper-test", &[]), b"usage:");
+        let pass = bare && other && reached && usage;
+        arch_aarch64::_print(format_args!(" [P-hsh-artstore-bench] {} — BENCH ONLY artstore tamper-test on the web carrier: no envelope refused={} envelope for another type refused={} signed envelope reaches the handler={} config / no type = usage={}\n",
+            if pass { "PASS" } else { "FAIL" }, bare, other, reached, usage));
+        pass
+    };
+    #[cfg(not(feature = "artstore-bench"))]
+    let art = {
+        let s1 = crate::mgmtenv::next_seq();
+        let mut e = mk(s1, m::ARTSTORE_TAMPER_TEST, 0, [0; 32]);
+        e.arg = 5; // devices
+        has(&run(b"artstore tamper-test devices", &test_envelope(&kp, &e)), b"Unknown command") && crate::mgmtenv::next_seq() == s1
+    };
     // no owner key enrolled: nothing is privileged-capable
     crate::anchor::install_owner(None, 0);
     let no_owner = has(&run(b"config confirm", &test_envelope(&kp, &mk(8, m::CFG_CONFIRM, 8, dig_n1))), b"no owner key enrolled");
@@ -458,10 +519,10 @@ pub fn selftest_web(now_ms: u64) -> bool {
     crate::mgmtabi::test_reset();
     crate::anchor::install_owner(saved.0, saved.1);
     crate::cfgd::set_selftest(false);
-    let pass = view && session_only && wrong_key && wrong_dev && wrong_boot && stale_n && other_op && tamper && malformed && good && replay && older && journaled && words && no_owner && tool && endpoints && heal;
+    let pass = view && session_only && wrong_key && wrong_dev && wrong_boot && stale_n && other_op && tamper && malformed && good && replay && older && journaled && words && no_owner && tool && endpoints && heal && art;
     arch_aarch64::_print(format_args!(
-        " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} ({} of 13) journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={} owner endpoints — factory reset (exact accepted, other operation refused)={} rotate bound to current + new key (other target / other current key refused, exact accepted)={} upload activate bound to type + generation + digest (other generation / other type refused, exact accepted)={} replay refused={} refusals journaled={} ({} of 6)\n",
-        if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, jn, words, no_owner, tool, ep_reset, ep_rotate, ep_activate, ep_replay, ep_journal, ep_jn
+        " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} ({} of 13) journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={} owner endpoints — factory reset (exact accepted, other operation refused)={} rotate bound to current + new key (other target / other current key refused, exact accepted)={} upload activate bound to type + generation + digest (other generation / other type refused, exact accepted)={} replay refused={} refusals journaled={} ({} of 6) msg 41 artstore tamper-test (BENCH: envelope-only; default build: Unknown command, envelope not consumed)={}\n",
+        if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, jn, words, no_owner, tool, ep_reset, ep_rotate, ep_activate, ep_replay, ep_journal, ep_jn, art
     ));
     pass
 }
