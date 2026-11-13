@@ -536,11 +536,20 @@ pub fn activate_from<D: BlockDev>(dev: &mut D, t: Ty, sig: &[u8; 512], src: Src,
     let state = if t == Ty::Config { STATE_PENDING } else { STATE_ACTIVE };
     m.e[t as usize] = Entry { half, gen, len, digest: *digest, state, trials: 0, sealed: 0 };
     commit(dev, store, &m, g)?;
-    unsafe { DISABLED &= !(1 << t as u8) };
+    // The new manifest entry names the half that now serves: clear BOTH this boot's fallbacks for the type. OTHER
+    // left set (Phase 0.4: the active half was refused at boot) would flip the loader back onto the refused half and
+    // every later upload / rollback of the type would be refused until a reflash (found building the 0.4 bench trigger).
+    let prev = unsafe { (DISABLED, OTHER) };
+    unsafe {
+        DISABLED &= !(1 << t as u8);
+        OTHER &= !(1 << t as u8);
+    }
     if reload(dev, t).is_err() {
         let mut back = old;
         if g == 0 { back.seq = m.seq + 1 } else { back.seq2 = m.seq2 + 1 }
         let _ = commit(dev, store, &back, g);
+        // the old manifest is back: so is the fallback state that went with it
+        unsafe { (DISABLED, OTHER) = prev };
         let _ = reload(dev, t);
         return Err(ActErr::LoaderRefused);
     }
@@ -661,11 +670,20 @@ pub fn rollback<D: BlockDev>(dev: &mut D, t: Ty, key: &[u8; 32]) -> Result<u64, 
     if g == 0 { m.seq = old.seq + 1 } else { m.seq2 = old.seq2 + 1 }
     m.e[t as usize] = Entry { half: other, gen, len, digest: h.finish(), state: STATE_ACTIVE, trials: 0, sealed: sealed as u8 };
     commit(dev, store, &m, g)?;
-    unsafe { DISABLED &= !(1 << t as u8) };
+    // The new manifest entry names the half that now serves: clear BOTH this boot's fallbacks for the type. OTHER
+    // left set (Phase 0.4: the active half was refused at boot) would flip the loader back onto the refused half and
+    // every later upload / rollback of the type would be refused until a reflash (found building the 0.4 bench trigger).
+    let prev = unsafe { (DISABLED, OTHER) };
+    unsafe {
+        DISABLED &= !(1 << t as u8);
+        OTHER &= !(1 << t as u8);
+    }
     if reload(dev, t).is_err() {
         let mut back = old;
         if g == 0 { back.seq = m.seq + 1 } else { back.seq2 = m.seq2 + 1 }
         let _ = commit(dev, store, &back, g);
+        // the old manifest is back: so is the fallback state that went with it
+        unsafe { (DISABLED, OTHER) = prev };
         let _ = reload(dev, t);
         return Err(ActErr::LoaderRefused);
     }
@@ -1328,6 +1346,20 @@ pub fn selftest() -> bool {
     let refused = crate::devpolicy::load(d).file == 2;
     let other_ok = boot_fallback(d, 0, Ty::Devices, refused) && locate(d, 0, b"DEVICES TXT") == Some((slot(store, Ty::Devices, 2).1, Ty::Devices.data_sect()))
         && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x62]) == crate::devpolicy::Pol::LanOnly;
+    // ... and the fallback is not sticky against a fresh upload: gen 9 activated while this boot reads the OTHER half
+    // lands in that half, is in force and clears the fallback (it was refused as LoaderRefused before the fix)
+    let body3 = b"02:00:00:00:00:63 quarantine art-test-3\n";
+    let sig3 = test_sig(b"HQDSIG1\0", b"HQDEV1", 9, body3, &kp);
+    let mut sec3 = [0u8; 512];
+    sec3[..body3.len()].copy_from_slice(body3);
+    let _ = d.write_block(stage, &sec3);
+    let a9 = activate(d, Ty::Devices, &sig3, stage, 9, body3.len() as u64, &boot_abi::sha256::digest(body3));
+    let m9 = read_manifest(d, store);
+    let after_other = other_ok && a9.is_ok() && !use_other(Ty::Devices) && m9.e[Ty::Devices as usize].half == 2 && m9.e[Ty::Devices as usize].gen == 9
+        && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x63]) == crate::devpolicy::Pol::Quarantine;
+    if !after_other {
+        arch_aarch64::_print(format_args!(" [P-artstore] debug upload-after-fallback: other={} act={:?} half={} gen={}\n", other_ok, a9, m9.e[Ty::Devices as usize].half, m9.e[Ty::Devices as usize].gen));
+    }
     let (_, dl2) = slot(store, Ty::Devices, 2);
     let _ = d.read_block(dl2, &mut s);
     s[0] ^= 1;
@@ -1343,10 +1375,10 @@ pub fn selftest() -> bool {
     }
     crate::policysig::selftest_key(None);
     crate::devpolicy::load_text(b"");
-    let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && owner_rb && staged_ok && fell_back && sealed_ok;
+    let pass = fits && ver && ver_bad && ver_wrong_key && empty && act && ab && torn && rollback && owner_rb && staged_ok && fell_back && after_other && sealed_ok;
     arch_aarch64::_print(format_args!(
-        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest active half -> the previous half, then FAT (ADR 0059 0.4)={} sealed WAN at rest: no secret / no plaintext digest on disk={} Plain view: seal MAC then the WAN verifier={} flipped ciphertext byte -> half reads as zeros (refused)={} plaintext slot under sealed=1 refused (no downgrade)={} old manifest decodes sealed=0, sealed>1 rejected={}\n",
-        if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, owner_rb, staged_ok, fell_back,
+        " [P-artstore] {} — ADR 0056 D5 artifact store (DataVolume Store region, A/B slot per pack type, two-copy manifest): every type fits a half at its cap={} module's own verifier accepts the signed pack={} tampered / wrong-key refused={} empty store -> FAT={} activate: A half + manifest + live reload through the real loader={} next activation -> the other half={} torn manifest -> previous copy={} loader refusal rolls back={} owner rollback to the verified other half (ADR 0058)={} staged WAN.TXT in manifest group 1, store preferred={} tampered-at-rest active half -> the previous half, then FAT (ADR 0059 0.4)={} upload after that fallback loads + clears it={} sealed WAN at rest: no secret / no plaintext digest on disk={} Plain view: seal MAC then the WAN verifier={} flipped ciphertext byte -> half reads as zeros (refused)={} plaintext slot under sealed=1 refused (no downgrade)={} old manifest decodes sealed=0, sealed>1 rejected={}\n",
+        if pass { "PASS" } else { "FAIL" }, fits, ver, ver_bad && ver_wrong_key, empty, act, ab, torn, rollback, owner_rb, staged_ok, fell_back, after_other,
         sealed_dbg[0], sealed_dbg[1], sealed_dbg[2], sealed_dbg[3], sealed_dbg[4]
     ));
     pass
