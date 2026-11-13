@@ -10,7 +10,8 @@ export default async function (t) {
   ok(await page.locator('[aria-label="Pack type"] button[aria-pressed="true"]').textContent().then((x) => /OS image/.test(x ?? '')), 'Update: opens Signed packs with the OS image type chosen');
 
   // A device serving /api/system (kernel feat/api-system)
-  let sys = { version: '0.9.3', build: 'd231eae7', slot: 'B', trial: true, svn: 12, storage: { used: 1.2e9, total: 7.3e9, retention_days: 7 } };
+  // Final shape (docs/design/mgmt-envelope-api.md, kernel #1108): version always null, the build id identifies the image
+  let sys = { version: null, build: 'm19-3f2a9c1', slot: 'B', trial: true, svn: 12, storage: { used: 1.2e9, total: 7.3e9, retention_days: null } };
   const json = (b, s = 200) => ({ status: s, contentType: 'application/json', body: JSON.stringify(b) });
   await page.route('**/api/**', (r) => {
     const p = new URL(r.request().url()).pathname;
@@ -19,13 +20,17 @@ export default async function (t) {
     return r.fulfill(json({}, 404));
   });
   await go('/admin/identity', 1500);
-  ok(await vis(card.locator('text=0.9.3 · build d231eae7')) && await vis(card.locator('text=B · on trial')) && await vis(card.locator('text=1.2 GB of 7.3 GB · 7 days kept')) && await vis(card.locator('text=security version 12')),
-    'device: version and build, boot slot on trial, storage and retention, security version');
+  ok(await vis(card.locator('text=build m19-3f2a9c1')) && await vis(card.locator('text=B · on trial')) && await vis(card.locator('.prow', { hasText: '1.2 GB of 7.3 GB' }))
+    && !(await card.locator('text=days kept').count()) && await vis(card.locator('text=security version 12')),
+    'metal: the build id (version is always null), boot slot on trial, storage (no invented retention window), security version');
 
-  // Nulls (QEMU) read "not reported", never filled in
-  sys = { version: null, build: '', slot: 'A', trial: false, svn: 3, storage: null };
+  // QEMU: everything null — every row says not reported, and "null" never reaches the screen
+  sys = { version: null, build: null, slot: null, trial: null, svn: null, storage: { used: null, total: null, retention_days: null } };
   await go('/admin/identity', 1500);
-  ok(await vis(card.locator('text=not reported by this device yet')) && await card.locator('.prow', { hasText: 'Storage' }).textContent().then((x) => /not reported/.test(x ?? '')), 'device nulls: version and storage say not reported');
+  const text = (await card.textContent()) ?? '';
+  ok(/not reported by this device yet/.test(text) && !/\bnull\b|NaN|undefined/.test(text)
+    && await card.locator('.prow', { hasText: 'Boot slot' }).textContent().then((x) => /not reported/.test(x ?? ''))
+    && await card.locator('.prow', { hasText: 'Storage' }).textContent().then((x) => /not reported/.test(x ?? '')), 'QEMU nulls: every row says not reported, no "null" on screen');
 
   // An older image without /api/system: the card keeps working, without slot / storage rows
   sys = null;
