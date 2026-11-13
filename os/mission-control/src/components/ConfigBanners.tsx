@@ -39,6 +39,7 @@ const ConfigBanners: Component = () => {
       </Show>
       <Show when={configView()?.state === 'trial'}>
         <div class="hp-banner hp-banner--trial" role="status" aria-label="Configuration trial">
+          <span class="hp-banner-text">
           <strong>Trying new settings</strong>
           {' '}Configuration generation {configView()!.generation} is on trial.{' '}
           <Show when={configView()!.needs_confirm} fallback={
@@ -46,10 +47,11 @@ const ConfigBanners: Component = () => {
               If the internet does not work, the device goes back to the previous settings{configView()!.floor ? ` (generation ${configView()!.floor})` : ''} by itself in <b>{mmss(secondsLeft(now()))}</b>.
             </Show>
           }>
-            It changes how you reach this device, so <b class="trial-required">Keep it is required</b>: unless you keep it within <b>{mmss(secondsLeft(now()))}</b>, the device goes back to the previous settings{configView()!.floor ? ` (generation ${configView()!.floor})` : ''}.
+            It changes how you reach this device, so <b class="trial-required">press Keep it within {mmss(secondsLeft(now()))}</b>, or the device goes back to the previous settings{configView()!.floor ? ` (generation ${configView()!.floor})` : ''}.
           </Show>
           <Show when={configView()!.health}>{' '}<span class="l0-muted">({configView()!.health})</span></Show>
           <Show when={configView()!.live?.mgmt_ok === false}>{' '}<b>Mission Control cannot reach the device the new way{configView()!.live!.mgmt_probe ? ` (${configView()!.live!.mgmt_probe})` : ''}.</b></Show>
+          </span>
           <Show when={configView()!.envelope?.owner_enrolled !== false} fallback={<span class="l0-muted">{' '}Keeping or rolling back by hand needs the device to trust your signing key.</span>}>
             <span class="hp-banner-actions">
               <button class="hp-btn hp-btn--primary" onClick={() => void run(confirmConfig)}>Keep it</button>

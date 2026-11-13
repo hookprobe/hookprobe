@@ -5,7 +5,8 @@
  * (store/bundle.ts) and the device applies it live as a trial; the Keep banner (ConfigBanners) finishes it.
  */
 import { type Component, Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { refreshConfig } from '../store/configState';
+import { refreshConfig, confirmConfig } from '../store/configState';
+import { approveRequest } from '../store/approve';
 import { refreshAnchor } from '../store/anchor';
 import { refreshUploads } from '../store/packUpload';
 import { loadOwnerKey } from '../store/signing';
@@ -24,6 +25,12 @@ const WifiSheet: Component<{ onClose: () => void; preview?: boolean }> = (props)
   // the network just set, kept only while this sheet is open, so its QR code can be shown (never sent or stored)
   const [shared, setShared] = createSignal<{ ssid: string; psk: string; security: string } | null>(null);
   const [showQr, setShowQr] = createSignal(false);
+  const [kept, setKept] = createSignal(false);
+  const [keepMsg, setKeepMsg] = createSignal('');
+  const keep = async () => {
+    try { setKeepMsg(await confirmConfig()); setKept(true); }
+    catch (e) { const m = e instanceof Error ? e.message : String(e); if (m !== 'Cancelled.') setKeepMsg(`Not kept: ${m}`); }
+  };
   const [err, setErr] = createSignal('');
   let box: HTMLDivElement | undefined;
   const opener = document.activeElement as HTMLElement | null;
@@ -34,7 +41,7 @@ const WifiSheet: Component<{ onClose: () => void; preview?: boolean }> = (props)
 
   const close = () => { props.onClose(); queueMicrotask(() => opener?.focus?.()); };
   const onKey = (e: KeyboardEvent) => {
-    if (showQr()) return; // the QR sheet on top handles its own keys (Esc closes only it)
+    if (showQr() || approveRequest()) return; // a sheet on top (QR code, confirm) handles its own keys
     if (e.key === 'Escape' && !busy()) { e.preventDefault(); close(); return; }
     if (e.key !== 'Tab' || !box) return;
     const f = [...box.querySelectorAll<HTMLElement>('input, button:not([disabled]), a[href]')];
@@ -72,10 +79,12 @@ const WifiSheet: Component<{ onClose: () => void; preview?: boolean }> = (props)
             <p class="approve-body" role="status">{done()!.confirm
               ? 'The device is switching to the new Wi-Fi now. Devices drop off and join again with the new password. Reconnect this phone or computer, open Mission Control and press Keep within 5 minutes, or the old Wi-Fi comes back by itself.'
               : 'The device is switching to the new Wi-Fi now. It keeps the change by itself once everything works, or switches back on its own.'}</p>
-            <p class="pcard-note" style={{ margin: 0 }}>{done()!.text}</p>
+            <Show when={keepMsg()}><p class="pcard-note" role="status" style={{ margin: 0 }}>{keepMsg()}</p></Show>
             <div class="approve-actions">
               <Show when={shared()}><button type="button" class="hp-btn" onClick={() => setShowQr(true)}>Show QR code</button></Show>
-              <button type="button" class="hp-btn hp-btn--primary" onClick={close}>Done</button>
+              {/* Board AdvApply: "Keep the new Wi-Fi" in the result, not only in the banner behind this sheet */}
+              <Show when={done()!.confirm && !kept()}><button type="button" class="hp-btn hp-btn--primary" onClick={() => void keep()}>Keep the new Wi-Fi</button></Show>
+              <button type="button" class={`hp-btn${done()!.confirm && !kept() ? '' : ' hp-btn--primary'}`} onClick={close}>Done</button>
             </div>
             <Show when={showQr() && shared()}><QrSheet ssid={shared()!.ssid} psk={shared()!.psk} security={shared()!.security} onClose={() => setShowQr(false)} /></Show>
           </>
