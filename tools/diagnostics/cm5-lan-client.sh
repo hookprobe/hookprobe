@@ -35,8 +35,17 @@ r=1; for _ in $(seq 1 15); do pi "ip -6 route | grep -q 'default.*$IF' && ping -
 chk $r "IPv6 (delegated prefix, SLAAC) reaches the WAN-side router"
 
 # 2. Shield: blocked name -> NXDOMAIN, allowed name resolves
-R=$(pi "dig +time=3 +tries=1 @10.99.0.1 $BLOCKED A" )
-grep -q "status: NXDOMAIN" <<<"$R"; chk $? "Shield: $BLOCKED -> NXDOMAIN"
+# Each try is logged: MB17b / MB18 saw the device count the query as blocked (serial [SHIELD] blocked=1 from the Pi)
+# while the Pi's one 3 s dig got no reply at all — a lost answer, not a policy fault. A lost reply stays visible
+# ("try N: no reply"); the check passes only on a real NXDOMAIN, and fails on any other answer (a resolved address).
+r=1; for k in 1 2 3; do
+  R=$(pi "dig +time=3 +tries=1 @10.99.0.1 $BLOCKED A")
+  if grep -q "status: NXDOMAIN" <<<"$R"; then r=0; [ $k = 1 ] || echo "     NXDOMAIN on try $k"; break; fi
+  S=$(grep -oE "status: [A-Z]+" <<<"$R"); echo "     try $k: ${S:-no reply}"
+  [ -n "$S" ] && break   # an answer that is not NXDOMAIN is a Shield failure, no retry
+  sleep 1
+done
+chk $r "Shield: $BLOCKED -> NXDOMAIN"
 pi "dig +short +time=3 +tries=1 @10.99.0.1 debian.org A | grep -qE '^[0-9.]+$'"; chk $? "Shield: an allowed name resolves"
 
 # 2b. G22 per-client Shield profile: the bench DEVICES.TXT gives the Pi shield=strict, so Private Relay (only
