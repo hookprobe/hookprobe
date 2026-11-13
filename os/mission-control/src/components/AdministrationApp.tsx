@@ -299,11 +299,11 @@ const AdministrationApp: Component = () => {
                   const sys = () => systemView();
                   return (
                     <>
-                      <span class="prow"><span>Version</span><span>{sample() ? 'sample' : sys()?.version ? `${sys()!.version}${sys()!.build ? ` · build ${sys()!.build}` : ''}` : 'not reported by this device yet'}</span></span>
-                      <span class="prow"><span>Signed OS image</span><span>{sample() ? 'generation 14' : sys() ? `security version ${sys()!.svn}` : os() ? `generation ${os()!.generation}${os()!.source === 'boot' ? ' (from the boot card)' : ''}` : 'not reported'}</span></span>
+                      <span class="prow"><span>Version</span><span>{sample() ? 'sample' : sys()?.version ? `${sys()!.version}${sys()!.build ? ` · build ${sys()!.build}` : ''}` : sys()?.build ? `build ${sys()!.build}` : 'not reported by this device yet'}</span></span>
+                      <span class="prow"><span>Signed OS image</span><span>{sample() ? 'generation 14' : sys()?.svn != null ? `security version ${sys()!.svn}` : os() ? `generation ${os()!.generation}${os()!.source === 'boot' ? ' (from the boot card)' : ''}` : 'not reported'}</span></span>
                       <Show when={sample() || sys()}>
-                        <span class="prow"><span>Boot slot</span><span>{sample() ? 'A' : `${sys()!.slot}${sys()!.trial ? ' · on trial (confirms itself once healthy)' : ''}`}</span></span>
-                        <span class="prow"><span>Storage</span><span>{sample() ? '1.2 GB of 7.3 GB · 7 days kept' : sys()!.storage ? `${bytesOf(sys()!.storage!.used, sys()!.storage!.total)}${sys()!.storage!.retention_days != null ? ` · ${sys()!.storage!.retention_days} days kept` : ''}` : 'not reported'}</span></span>
+                        <span class="prow"><span>Boot slot</span><span>{sample() ? 'A' : sys()!.slot ? `${sys()!.slot}${sys()!.trial ? ' · on trial (confirms itself once healthy)' : ''}` : 'not reported'}</span></span>
+                        <span class="prow"><span>Storage</span><span>{sample() ? '1.2 GB of 7.3 GB' : (() => { const st = sys()!.storage; return st && st.used != null && st.total != null ? `${bytesOf(st.used, st.total)}${st.retention_days != null ? ` · ${st.retention_days} days kept` : ''}` : 'not reported'; })()}</span></span>
                       </Show>
                       <p class="l0-card-sub" style={{ margin: 0 }}>Updates are signed OS images: the device checks the signature and that the image is newer, keeps the previous one, and starts the new one on the next restart.</p>
                       <div class="l0-card-foot">
