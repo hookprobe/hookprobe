@@ -141,6 +141,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
         </Show>
         <p class="l0-card-sub">
           Names and zones you set here are permanent owner rules (device password); your signed DEVICES.TXT stays the baseline. "Isolate 1 h" is temporary and expires by itself.
+          {' '}Rules beyond zones (ports, addresses, routes) are in <a href="/protect/policies">Firewall and routes</a>.
         </p>
       </main>
 
