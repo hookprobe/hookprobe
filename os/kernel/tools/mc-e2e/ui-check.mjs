@@ -29,17 +29,11 @@ check(new URL(page.url()).pathname === '/', 'signing in with the owner key lands
 await page.goto(`${base}/detect/feed`, { waitUntil: 'load' });
 const c2 = page.locator('.det-title', { hasText: 'Known C2 port 4444 (DROP, framedrop)' }).first();
 // isVisible() does NOT wait; waitFor does (the rows arrive after /api/detections answers).
-// Over HTTPS on a TCG-emulated QEMU (CI runners) a page load right after the [7] TLS stress steps can STALL: the
-// Detect page's own requests get no answer until a navigation tears Chromium's sockets down (CI #1070/#1072,
-// 2026-11-12) — a kernel TLS keep-alive/slot bug the heqk session is fixing. Until then: wait 30 s, reload once, and
-// print a WARN so the workaround stays visible (remove it with the kernel fix). Plain HTTP keeps 20 s, no reload.
+// HTTPS on TCG-emulated QEMU (CI) is slow, so it gets 60 s; plain HTTP 20 s. No reload: the page-change stall
+// (all TLS slots busy -> RST on the next SYN -> a shared script failed -> the island never ran) was fixed in the
+// kernel (#1078: SYN hold/replay, clean idle close), so a miss here is a real failure again.
 const ROWS_MS = spki ? 60000 : 20000;
-let rows = await c2.waitFor({ state: 'visible', timeout: spki ? 30000 : ROWS_MS }).then(() => true).catch(() => false);
-if (!rows && spki) {
-  console.log('    WARN Detect over https: no rows after 30 s; reloading once (kernel TLS stall workaround, see ui-check.mjs)');
-  await page.reload({ waitUntil: 'load' });
-  rows = await c2.waitFor({ state: 'visible', timeout: 30000 }).then(() => true).catch(() => false);
-}
+const rows = await c2.waitFor({ state: 'visible', timeout: ROWS_MS }).then(() => true).catch(() => false);
 check(rows, 'Detect feed shows the heqk C2-4444 detection (rule msg + wire action + class)');
 check(!(await page.getByText('Live detections unavailable').isVisible().catch(() => false)), 'Detect feed is LIVE (no "unavailable" fallback)');
 await page.screenshot({ path: `${process.env.MC_E2E_SHOTS || '/tmp'}/mc-e2e-detect.png`, fullPage: true });
