@@ -739,6 +739,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 #[cfg(feature = "wifiheal-bench")]
                 let _ = write!(w, ",\"wifi_heal_bench\":{{\"mode\":\"{}\",\"injected_fwhalts\":{}}}", crate::wifiheal::bench::mode_name(), crate::wifiheal::bench::halts());
             }
+            // BENCH ONLY: this image carries the ADR 0059 Phase 0.4 tamper trigger (absent from every product image)
+            #[cfg(feature = "artstore-bench")]
+            w.raw(",\"artstore_bench\":true");
             // ADR 0050 D4 step 1 / D5: where Mission Control requests are parsed, and the EL0 server's health
             #[cfg(feature = "mctls")]
             {

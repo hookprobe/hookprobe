@@ -713,6 +713,157 @@ fn rollback_inner(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Resul
     }
 }
 
+/// BENCH ONLY (feature `artstore-bench`, never shipped): the ADR 0059 Phase 0.4 metal trigger behind the web console's
+/// `artstore tamper-test <type>`. Authorised ONLY by an owner-signed HQMGMT1 envelope (ARTSTORE_TAMPER_TEST, arg = the
+/// type code, generation 0, digest zeros) through the same verifier as every privileged operation (replay / sequence /
+/// device / boot rules unchanged); then `artstore::bench::tamper_active` flips byte 0 of the first data sector of the
+/// type's ACTIVE half. Journaled either way; never reboots (the operator does, to see the fallback).
+#[cfg(feature = "artstore-bench")]
+pub fn tamper_test(t: Ty, env: &[u8], tag: [u8; 4], now_ms: u64) -> Result<artstore::bench::Tampered, &'static str> {
+    let m = hal::mgmtabi::ARTSTORE_TAMPER_TEST;
+    crate::mgmtenv::authorise(m, t as u64, 0, &[0; 32], env, tag, now_ms)?;
+    let r = if up().is_some() {
+        Err("refused: an upload is in flight (finish or abort it first)")
+    } else {
+        match (dev(), artstore::key_for(t)) {
+            (None, _) => Err("refused: no artifact store"),
+            (_, None) => Err("refused: no operator key in this image"),
+            (Some(d), Some(key)) => {
+                let p = p1(d);
+                artstore::bench::tamper_active(d, p, t, &key)
+            }
+        }
+    };
+    match r {
+        Ok(x) => {
+            rbt_clear();
+            crate::mgmtenv::journal(m, true, x.gen, "accepted", tag, now_ms);
+            arch_aarch64::_print(format_args!(" [ARTSTORE-BENCH] tampered {} active half {} (gen {}) lba {} — reboot to see the fallback\n",
+                t.info().name, artstore::bench::half_name(x.half), x.gen, x.lba));
+        }
+        Err(why) => crate::mgmtenv::journal(m, false, 0, why, tag, now_ms),
+    }
+    r
+}
+
+/// [P-artstore-bench] (feature `artstore-bench`) / [P-artstore-bench-off] (default build), QEMU: the bench trigger on
+/// the sparse RAM disk with DEVICES gen 7 (half A) + gen 8 (half B, active).
+#[cfg(not(feature = "cm5"))]
+pub fn bench_selftest() -> bool {
+    use hal::mgmtabi as m;
+    let kp = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x42; 32]));
+    crate::policysig::selftest_key(Some(*kp.pk));
+    let kown = ed25519_compact::KeyPair::from_seed(ed25519_compact::Seed::new([0x6b; 32]));
+    let saved_owner = (crate::anchor::owner(), crate::anchor::owner_gen());
+    crate::anchor::install_owner(Some(*kown.pk), 1);
+    crate::mgmtenv::test_reset();
+    crate::ownerapi::install_ram(&[0x31u8; 32]);
+    crate::devpolicy::load_text(b"");
+    let disk = artstore::test_disk();
+    install(disk);
+    let store = dev().and_then(|d| artstore::store_region(&*d));
+    let stage = store.map_or(0, |s| s.1 + 10);
+    let b7: &[u8] = b"02:00:00:00:00:61 quarantine bench-gen-7\n";
+    let b8: &[u8] = b"02:00:00:00:00:62 quarantine bench-gen-8\n";
+    let act = |gen: u64, body: &[u8]| -> bool {
+        let Some(d) = dev() else { return false };
+        let sig = artstore::test_sig(b"HQDSIG1\0", b"HQDEV1", gen, body, &kp);
+        let mut sec = [0u8; 512];
+        sec[..body.len()].copy_from_slice(body);
+        d.write_block(stage, &sec).is_ok() && artstore::activate(d, Ty::Devices, &sig, stage, gen, body.len() as u64, &boot_abi::sha256::digest(body)).is_ok()
+    };
+    let env = |msg: u16, arg: u64| -> [u8; hal::mgmtabi::ENV_LEN] {
+        let mut h = [0u8; 2 * hal::mgmtabi::ENV_LEN];
+        crate::mgmtenv::test_sign_hex(&kown, msg, arg, 0, [0; 32], &mut h);
+        let mut e = [0u8; hal::mgmtabi::ENV_LEN];
+        let _ = crate::mgmtenv::unhex(&h, &mut e);
+        e
+    };
+    let sector = |lba: u64| -> [u8; 512] {
+        let mut s = [0u8; 512];
+        if let Some(d) = dev() {
+            let _ = d.read_block(lba, &mut s);
+        }
+        s
+    };
+    let (a_dl, b_dl) = store.map_or((0, 0), |s| (artstore::slot(s, Ty::Devices, 1).1, artstore::slot(s, Ty::Devices, 2).1));
+    let tag = [0x5e, 0xb0, 0, 41];
+    #[cfg(feature = "artstore-bench")]
+    let (pass, line) = {
+        use crate::mgmtenv::REASONS;
+        let gen7 = act(7, b7);
+        // only ONE generation stored: the other half holds nothing -> refused, nothing written
+        let a0 = sector(a_dl);
+        let one = tamper_test(Ty::Devices, &env(m::ARTSTORE_TAMPER_TEST, Ty::Devices as u64), tag, 0).err()
+            == Some("refused: the other half holds no valid generation (activate a second generation first)") && sector(a_dl) == a0;
+        let gen8 = act(8, b8);
+        // a type with no store entry
+        let none = tamper_test(Ty::Ioc, &env(m::ARTSTORE_TAMPER_TEST, Ty::Ioc as u64), tag, 0).err()
+            == Some("refused: this type has no artifact-store entry (activate two generations first)");
+        let (a1, b1) = (sector(a_dl), sector(b_dl));
+        // the envelope rules of every privileged operation: none, another operation, another type
+        let bare = tamper_test(Ty::Devices, &[], tag, 0).err() == Some(REASONS[0]);
+        let other_op = tamper_test(Ty::Devices, &env(m::UPLOAD_ROLLBACK, Ty::Devices as u64), tag, 0).err() == Some(REASONS[8]);
+        let other_ty = tamper_test(Ty::Devices, &env(m::ARTSTORE_TAMPER_TEST, Ty::Ioc as u64), tag, 0).err() == Some(REASONS[8]);
+        let untouched = sector(a_dl) == a1 && sector(b_dl) == b1;
+        let j0 = crate::mgmtenv::journaled().0;
+        let good = env(m::ARTSTORE_TAMPER_TEST, Ty::Devices as u64);
+        let r = tamper_test(Ty::Devices, &good, tag, 0);
+        let mut want = b1;
+        want[0] ^= 1;
+        let tampered = r == Ok(artstore::bench::Tampered { half: 2, gen: 8, lba: b_dl, other_gen: 7 }) && sector(b_dl) == want && sector(a_dl) == a1;
+        let replay = tamper_test(Ty::Devices, &good, tag, 0).err() == Some(REASONS[7]) && sector(b_dl) == want;
+        let journaled = crate::mgmtenv::journaled() == (j0 + 2, m::ARTSTORE_TAMPER_TEST, false);
+        // the next boot: the unchanged loader refuses the active half (gen 8) -> the real fallback loads the OTHER half
+        // (gen 7), not the boot-partition copy
+        artstore::bench::selftest_reboot();
+        let fallback = dev().is_some_and(|d| {
+            let refused = crate::devpolicy::load(&*d).file == 2;
+            refused && artstore::boot_fallback(&*d, 0, Ty::Devices, refused)
+                && artstore::locate(&*d, 0, b"DEVICES TXT") == Some((a_dl, artstore::Ty::Devices.info().cap.div_ceil(512)))
+                && artstore::active_gen(&*d, 0, Ty::Devices) == 7
+                && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x61]) == crate::devpolicy::Pol::Quarantine
+                && crate::devpolicy::policy_of(&[2, 0, 0, 0, 0, 0x62]) == crate::devpolicy::Pol::Full
+        });
+        let pass = gen7 && gen8 && one && none && bare && other_op && other_ty && untouched && tampered && replay && journaled && fallback;
+        (pass, [gen7 && gen8, one, none, bare && other_op && other_ty && untouched, tampered, replay, journaled, fallback])
+    };
+    #[cfg(not(feature = "artstore-bench"))]
+    let (pass, line) = {
+        // no handler is compiled in: a validly signed msg-41 envelope cannot drive any operation this build has (the
+        // verifier binds the message id), and nothing in the store changes
+        let stored = act(7, b7) && act(8, b8);
+        let (a1, b1) = (sector(a_dl), sector(b_dl));
+        let e41 = env(m::ARTSTORE_TAMPER_TEST, Ty::Devices as u64);
+        let refused = crate::mgmtenv::authorise(m::UPLOAD_ROLLBACK, Ty::Devices as u64, 0, &[0; 32], &e41, tag, 0) == Err(crate::mgmtenv::REASONS[8])
+            && crate::mgmtenv::authorise(m::UPLOAD_ACTIVATE, Ty::Devices as u64, 0, &[0; 32], &e41, tag, 0).is_err();
+        let untouched = sector(a_dl) == a1 && sector(b_dl) == b1 && dev().is_some_and(|d| artstore::active_gen(&*d, 0, Ty::Devices) == 8);
+        let pass = stored && refused && untouched;
+        (pass, [stored, refused, untouched, true, true, true, true, true])
+    };
+    artstore::clear_cfg_seal();
+    unsafe {
+        DEV = None;
+        UP = None;
+    }
+    crate::policysig::selftest_key(None);
+    crate::devpolicy::load_text(b"");
+    crate::ownerjournal::clear();
+    crate::anchor::install_owner(saved_owner.0, saved_owner.1);
+    crate::mgmtenv::test_reset();
+    #[cfg(feature = "artstore-bench")]
+    arch_aarch64::_print(format_args!(
+        " [P-artstore-bench] {} — BENCH ONLY (feature artstore-bench, forbidden in the shipping flavour) ADR 0059 Phase 0.4 trigger, msg 41 ARTSTORE_TAMPER_TEST: DEVICES gen 7 (A) + gen 8 (B, active) stored={} one generation only -> refused, nothing written={} type with no store entry refused={} no envelope / another operation / another type refused, store untouched={} owner-signed envelope flips byte 0 of the ACTIVE half's first data sector (half B, gen 8), half A untouched={} replay refused={} journaled={} next boot: the loader refuses half B -> the OTHER half (gen 7) is in force, not the boot copy={}\n",
+        if pass { "PASS" } else { "FAIL" }, line[0], line[1], line[2], line[3], line[4], line[5], line[6], line[7]
+    ));
+    #[cfg(not(feature = "artstore-bench"))]
+    arch_aarch64::_print(format_args!(
+        " [P-artstore-bench-off] {} — default build: msg 41 ARTSTORE_TAMPER_TEST is not compiled in (BENCH feature artstore-bench off): no handler; DEVICES gen 7 + gen 8 stored={} a validly signed msg-41 envelope drives no compiled-in operation (refused: another operation)={} both store halves byte-identical, gen 8 still in force={}\n",
+        if pass { "PASS" } else { "FAIL" }, line[0], line[1], line[2]
+    ));
+    pass
+}
+
 /// `abort`: id, seq.
 pub fn abort(c: &Ctx, body: &[u8]) -> Result<(), &'static str> {
     let ty = cur_code();

@@ -52,6 +52,7 @@ FORBIDDEN = {
     "stajoin": "WPA2 STA join proof (build-time credentials)",
     "detbench": "detection benchmark corpus replay (QEMU)",
     "wifiheal-bench": "Wi-Fi self-heal metal trigger (injects a synthetic TX freeze / FWHALT)",
+    "artstore-bench": "artifact-store metal trigger (tampers the ACTIVE store half on the eMMC, ADR 0059 0.4)",
 }
 
 LINE = re.compile(r"^([A-Za-z0-9_\-]+) v\S+.*?\|([A-Za-z0-9_,\-]*)\|")
