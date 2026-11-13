@@ -44,6 +44,8 @@ fi
 export CARGO_TARGET_DIR=target/mc
 # wpa3: the SAE station-frame walk in el0-lansvc ([P-lansvc-sae], ADR 0050 D4 step 5c) needs the sae crate
 # hsh: the shell's web carrier POST /api/hsh + [P-hsh-web] (R6 = D, owner-signed HQMGMT1 envelopes)
+# GET /api/system reports the build id; pin one so the assertion checks it is THIS build's
+export HEQK_BUILD_ID="${HEQK_BUILD_ID:-mc-e2e}"
 cargo build -p kernel --features mcserve,wpa3,hsh >"$RUN/build.log" 2>&1 || { tail -20 "$RUN/build.log"; exit 2; }
 KERNEL=target/mc/aarch64-unknown-none-softfloat/debug/kernel
 
@@ -235,6 +237,11 @@ echo "$CF" | jget "d['live']['mgmt_ok'] is None and d['live']['mgmt_probe'] is N
 # whitelisted keys, secrets only as *_set) is [P-cfgview] in validate.sh's boot
 echo "$CF" | jget "all(d['sections'][k]=={'present':False,'digest':None} for k in ('wan','wifi','policy')) and d['policy_text'] is None and d['wan_keys'] is None and d['wifi_keys'] is None" | grep -q True && ok "/api/config sections: a per-file-only device reports wan / wifi / policy present=false, digest / policy_text / wan_keys / wifi_keys null" || bad "/api/config sections: $CF"
 ! grep -qE '"(psk|pppoe_pass|passphrase)"|'"$TOKEN" <<<"$CF" && [ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/config")" = 401 ] && ok "/api/config: owner session only (401 without), and no secret key or the owner token in the response" || bad "/api/config secret / auth: $CF"
+# UI 2026-11-13: GET /api/system — owner session only; the build id under test; QEMU has no HBoot (no A/B slot, no
+# SVN), no release version and no DataVolume, so those are null (never invented)
+SY=$(curl -s -m 10 $C "$B/api/system")
+[ "$(curl -s -o /dev/null -w '%{http_code}' -m 10 "$B/api/system")" = 401 ] && ok "/api/system: owner session only (401 without)" || bad "/api/system without a session is not 401"
+echo "$SY" | HB="$HEQK_BUILD_ID" jget "set(d)=={'version','build','slot','trial','svn','storage'} and set(d['storage'])=={'used','total','retention_days'} and d['build']==__import__('os').environ['HB'] and d['version'] is None and d['slot'] is None and d['trial'] is None and d['svn'] is None and all(v is None for v in d['storage'].values())" | grep -q True && ok "/api/system: version / build / slot / trial / svn / storage present, build = this build ($HEQK_BUILD_ID), nulls where QEMU has no A/B, SVN or DataVolume" || bad "/api/system: $SY"
 # [P-cfgd-pppoe] / [P-cfgd-mgmt] / [P-cfgd-volatile] / [P-cfgd-wifi-after] run in validate.sh's boot (rows Pcfgdpppoe ...), not in this mcserve boot
 CFR=$(curl -s -m 10 $C -H "Origin: $B" -H "X-HQ-CSRF: $CSRF" --data "reason=confirm+test&permanent=true&seq=$((SQN+5))" --data-urlencode "owner_key=$TOKEN" "$B/api/config/confirm")
 grep -q '"refused":"refused: needs an owner-signed envelope"' <<<"$CFR" && ok "R6 = D: a token-only /api/config/confirm (session + owner_key, no envelope) is refused" || bad "token-only confirm: $CFR"
