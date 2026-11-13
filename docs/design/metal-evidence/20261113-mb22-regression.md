@@ -25,7 +25,7 @@ Sprint E style: every metal check in one batch on ONE image, hashes recorded.
 | Wi-Fi firmware halts | **0** |
 | WPA3 counters over the batch | SAE joins 25, authorized 34, M4 failures 0, reason-49 0, reason-20 0, stale-view guard 15 (each a refuse-once + deauth `ok` after a live security change, as designed), late leaves kept 4 |
 
-Total: 157 of 157 check rows passed. Not in this batch (proven on metal earlier this week, unchanged code): OTA update +
+Total: 165 of 165 check rows passed. Not in this batch (proven on metal earlier this week, unchanged code): OTA update +
 rollback (MB16), Wi-Fi self-heal ladder (MB15, bench image), Phase 0.4 (MB21, bench image).
 
 Open: DNS-01 (`20261113-mb19-mb20.md`). Not run: the 72 h soak (deferred by the operator).
