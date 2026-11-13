@@ -49,11 +49,17 @@ export default async function (t) {
   // 5. Screens built 12 Nov, read-only: nothing below signs, uploads or sends.
   t.at = 'get online: Change password sheet';
   await go('/network/wan', 2500);
-  await page.click('section[aria-label="Wi-Fi"] button:has-text("Change password")'); await page.waitForTimeout(1500);
-  const sheet = page.locator('[role=dialog][aria-labelledby="wifi-sheet-title"]');
-  ok(await vis(sheet) && !(await vis(sheet.locator('text=Preview: no device is connected'))), 'get online: the Wi-Fi sheet opens on the device (a form, or why it cannot change it here)');
-  await page.keyboard.press('Escape'); await page.waitForTimeout(300);
-  ok(!(await vis(sheet)), 'get online: Esc closes the Wi-Fi sheet without sending anything');
+  // QEMU runs no Wi-Fi network (the card offers "Set up Wi-Fi"); the CM5 AP image does (Change password opens the sheet)
+  const wifiCard = page.locator('section[aria-label="Wi-Fi"]');
+  if (await vis(wifiCard.locator('button:has-text("Change password")'))) {
+    await wifiCard.locator('button:has-text("Change password")').click(); await page.waitForTimeout(1500);
+    const sheet = page.locator('[role=dialog][aria-labelledby="wifi-sheet-title"]');
+    ok(await vis(sheet) && !(await vis(sheet.locator('text=Preview: no device is connected'))), 'get online: the Wi-Fi sheet opens on the device (a form, or why it cannot change it here)');
+    await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+    ok(!(await vis(sheet)), 'get online: Esc closes the Wi-Fi sheet without sending anything');
+  } else {
+    ok(await vis(wifiCard.locator('a:has-text("Set up Wi-Fi")')) && !(await wifiCard.locator('button:has-text("Share QR")').count()), 'get online: no Wi-Fi network on this device: "Set up Wi-Fi", nothing to change or share');
+  }
 
   t.at = 'admin config: device values';
   await go('/admin/config', 2500);
