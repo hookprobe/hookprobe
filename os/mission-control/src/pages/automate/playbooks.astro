@@ -1,7 +1,7 @@
 ---
 /**
  * /automate/playbooks — Automate (§7, SOAR): playbooks, agents, workflows.
- * Static Astro shell + Solid client:load island. Spec: docs/architecture/MissionControl.md §7.
+ * Static Astro shell + Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image). Spec: docs/architecture/MissionControl.md §7.
  */
 
 import Shell from '../../layouts/Shell.astro';
@@ -12,5 +12,5 @@ import AutomateApp from '../../components/AutomateApp';
   title="Automate — HookProbe OS"
   description="SOAR orchestration: CI/CD-style playbooks, AI agents, and approval queue powered by AEGIS — detect, contain, notify, recover, and close with intent-driven automation."
 >
-  <AutomateApp client:load />
+  <AutomateApp client:only="solid-js" />
 </Shell>
