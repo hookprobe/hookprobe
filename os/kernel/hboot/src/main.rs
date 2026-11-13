@@ -25,6 +25,8 @@ mod mmu;
 mod rng;
 mod rollback;
 mod stage2;
+#[cfg(feature = "t0inv")]
+mod t0inv;
 mod watchdog;
 // The boot trust root (ed25519 + SLH-DSA public keys) moved to the SHARED
 // `boot_abi::verify` so HBoot's boot-time verify and the kernel's M3.4 OTA
@@ -65,7 +67,7 @@ pub(crate) fn puts(s: &str) {
     }
 }
 
-fn puthex(v: u64) {
+pub(crate) fn puthex(v: u64) {
     puts("0x");
     for i in (0..16).rev() {
         let n = ((v >> (i * 4)) & 0xf) as u8;
@@ -160,6 +162,11 @@ pub extern "C" fn hboot_main(dtb_pa: u64) -> ! {
     puts(" a/b    : safety watchdog armed BEFORE verify ");
     puthex(wdog_secs_early as u64);
     puts("s — any refusal below now RESETS to the known-good slot instead of hanging\n");
+
+    // ADR 0062 T0 inventory (opt-in `t0inv` build only): read-only discovery, AFTER the safety watchdog so a fault
+    // here resets to the known-good slot instead of parking.
+    #[cfg(feature = "t0inv")]
+    t0inv::run(dtb_pa);
 
     // Locate and validate the payload header.
     let hdr = (IMAGE_BASE + HBOOT_PAYLOAD_OFFSET) as *const PayloadHeader;
