@@ -345,6 +345,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             </Show>
 
             <Show when={sec() === 'firewall'}>
+              <p class="pcard-note" style={{ margin: 0 }}>Which devices may talk to each other is easier with zones in <a href="/network/zones">My Network</a>; use these rules for ports, addresses and routes.</p>
               <Show when={!polDirty() && !devPolicy()}>
                 <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>These rules are an <b>example</b> to start from, not your device's current firewall (the device does not report it). Signing them replaces the device's firewall, so change them to what you want first.</p>
               </Show>
@@ -398,7 +399,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             </div>
             <Show when={errors().length > 0}>
               <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Problems">
-                <For each={errors()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For>
+                <For each={errors()}>{(e) => <li class={/^Password:/.test(e) && sec() === 'wifi' && !wifi().psk ? 'pcard-note' : 'plan-diff-warn'}>{/^Password:/.test(e) && sec() === 'wifi' && !wifi().psk ? 'Type the Wi-Fi password: the device never shows the current one.' : e}</li>}</For>
               </ul>
             </Show>
             {/* Wireframe AdvInternet / AdvApply: the signed bundle is the default path (live, trial, switches back by itself) */}
