@@ -150,6 +150,8 @@
 /* Advanced editors: form beside the draft on wide screens, stacked on tablets and phones (UX review P0-6) */
 .adv-grid { grid-template-columns: minmax(0, 1fr) 380px; }
 @media (max-width: 1023px) { .adv-grid { grid-template-columns: minmax(0, 1fr); } .adv-grid > * { min-width: 0; } }
+/* Firewall rules need ~1000 px: below 1760 px the draft panel goes under the editor instead of squeezing the table */
+@media (max-width: 1759px) { .adv-grid--wide { grid-template-columns: minmax(0, 1fr); } .adv-grid--wide > aside { max-width: 720px; } }
 
 /* Touch: every tappable control at least 44 px high (WCAG 2.5.5 target size) */
 @media (pointer: coarse) {

@@ -19,6 +19,13 @@ export default async function (t) {
   await go('/protect/policies', 1500);
   const clipped = await page.evaluate(() => [...document.querySelectorAll('.l0-table input')].filter((i) => i.value && i.scrollWidth > i.clientWidth + 1).map((i) => i.value));
   ok(clipped.length === 0, `firewall rule cells are readable (clipped: ${clipped.join(', ') || 'none'})`);
+  // the whole rule table fits at laptop widths (the draft panel goes under the editor on the Firewall tab)
+  for (const w of [1280, 1440]) {
+    await page.setViewportSize({ width: w, height: 900 }); await go('/protect/policies', 1000);
+    const fit = await page.evaluate(() => { const x = document.querySelector('main .l0-table-wrap'); return x ? x.scrollWidth <= x.clientWidth + 1 : false; });
+    ok(fit, `firewall table at ${w} px: every column visible, no sideways scroll`);
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
 
   // Automate: every stage is inside the pipeline card (a grid, not a row clipping Notify)
   await go('/automate/playbooks', 1500);
