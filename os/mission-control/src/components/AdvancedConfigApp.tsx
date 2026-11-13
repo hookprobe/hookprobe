@@ -20,7 +20,7 @@ import { networkView, startNetworkLive } from '../store/networkLive';
 import { uploadView, refreshUploads, uploadPack } from '../store/packUpload';
 import { ownerKey, loadOwnerKey, signPack, signPolicy, signBundle, ownerKeyId, PACKS, download } from '../store/signing';
 import {
-  buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, parsePolicyText, checkPolicy, wanFormFrom, wifiFormFrom, stagePolicy, lineDiff,
+  buildWan, checkWan, buildWifi, checkWifi, buildPolicyText, parsePolicyText, checkPolicy, wanFormFrom, wifiFormFrom, unknownKeys, WAN_KEYS, WIFI_KEYS, stagePolicy, lineDiff,
   type WanForm, type WifiForm, type PolicyForm, type AclRow,
 } from '../store/configBuild';
 import AppShell, { normPath } from './AppShell';
@@ -51,7 +51,7 @@ type Step = 'review' | 'sign' | 'upload' | 'done' | 'card';
 
 const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const [sec, setSec] = createSignal<Sec>(secFor(props.path ?? '/network/wan/advanced'));
-  const [wan, setWan] = createSignal<WanForm>({ mode: 'dhcp', ip: '', gw: '', dns: '', pppoeUser: '', pppoePass: '', vlanOn: false, vlan: '', vlanOuter: '', pcp: '', mgmtOn: false, mgmtVlan: '', mgmtIp: '', mgmtGw: '' });
+  const [wan, setWan] = createSignal<WanForm>({ mode: 'dhcp', ip: '', gw: '', dns: '', pppoeUser: '', pppoePass: '', vlanOn: false, vlan: '', vlanOuter: '', pcp: '', mgmtFloor: '', mgmtOn: false, mgmtVlan: '', mgmtIp: '', mgmtGw: '' });
   const [wifi, setWifi] = createSignal<WifiForm>({ ssid: '', psk: '', security: 'wpa3-transition', channel: 'auto', maxClients: '' });
   const [pol, setPol] = createSignal<PolicyForm>({
     prefixes: [{ name: 'ADMIN', seq: '10', action: 'permit', prefix: '10.0.99.0/24', ge: '', le: '' }],
@@ -188,6 +188,9 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
     // A bundle is the WHOLE configuration (metal, 12 Nov): over a bundle in force, a section left out is REMOVED,
     // not kept. The device does not report the firewall in force, so the owner must supply it.
     else if (bundleInForce() && !configView()?.sections) e.push('Firewall: a configuration bundle is in force, and a new bundle replaces all of it. This device does not report the firewall in force, so include the firewall you want (edit the Firewall tab): leaving it out removes it.');
+    // a key the device reports that this editor cannot carry would be DROPPED by a bundle (it is the whole configuration)
+    const lost = [...unknownKeys(configView()?.wan_keys, WAN_KEYS).map((k) => `internet "${k}"`), ...unknownKeys(configView()?.wifi_keys, WIFI_KEYS).map((k) => `Wi-Fi "${k}"`)];
+    if (lost.length) e.push(`This device has settings this editor cannot keep (${lost.join(', ')}); a bundle from here would remove them. Change them with a signed file made offline instead.`);
     if (wan().mode === 'pppoe' && (!wan().pppoePass || wan().pppoePass === '(current)')) e.push('Internet: type the PPPoE password again (the device never shows it).');
     if (!wifi().psk) e.push('Wi-Fi: type the Wi-Fi password again (the device never shows it).');
     return e;
@@ -309,6 +312,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                     <label class="l0-card-sub">Gateway<input style={field} value={wan().mgmtGw} onInput={(e) => setWan({ ...wan(), mgmtGw: e.currentTarget.value })} placeholder="10.0.99.1" /></label>
                   </div>
                 </Show>
+                <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Management access floor (the admins' network that can always reach this device; empty = none)
+                  <input style={field} value={wan().mgmtFloor} onInput={(e) => setWan({ ...wan(), mgmtFloor: e.currentTarget.value })} placeholder="10.0.99.0/24" /></label>
               </div>
             </Show>
 
