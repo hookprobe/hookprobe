@@ -264,6 +264,20 @@ impl StaleGuard {
 /// milliseconds of its SAE confirm; a genuine leave in this window only costs the SAE state its TTL.
 pub const LEAVE_GRACE_MS: u64 = 2_000;
 
+/// WLC_SCB_DEAUTHENTICATE_FOR_REASON's argument, brcmf_scb_val_le {__le32 val; u8 ea[6]}: 12 bytes with the struct's
+/// tail padding (C sizeof, what brcmfmac sends). The 10-byte form was refused BCME_BUFTOOSHORT (-14) on every call
+/// (metal MB13: all 18 deauthentications fell back to 143, which sends no reason).
+pub fn scb_val(reason: u16, sta: &[u8; 6]) -> [u8; 12] {
+    let mut v = [0u8; 12];
+    v[0..2].copy_from_slice(&reason.to_le_bytes());
+    v[4..10].copy_from_slice(sta);
+    v
+}
+
+/// How long an SAE completion is watched for the station's association before the AP logs that none came (with the
+/// auth_status timing and the firmware console) — a station associates within milliseconds of our confirm.
+pub const SAE_WATCH_MS: u64 = 2_000;
+
 /// Does a leave event of a station whose host SAE state is `accepted` (SAE confirm verified, not yet keyed / left),
 /// `age_ms` after that Accepted, belong to an EARLIER attempt (ignore it for the SAE / PMKSA state)?
 pub fn leave_predates_sae(accepted: bool, age_ms: u64) -> bool {
@@ -583,6 +597,8 @@ fn pmksa_list_selftest() -> bool {
     // a leave right after the station's SAE Accepted belongs to its earlier attempt
     ok &= leave_predates_sae(true, 0) && leave_predates_sae(true, LEAVE_GRACE_MS - 1);
     ok &= !leave_predates_sae(true, LEAVE_GRACE_MS) && !leave_predates_sae(false, 0);
+    // 201's argument: reason LE32, the MAC, 2 bytes of tail padding
+    ok &= scb_val(2, &[1, 2, 3, 4, 5, 6]) == [2, 0, 0, 0, 1, 2, 3, 4, 5, 6, 0, 0];
     // auth_status: the accepted variant first, the rest in order
     ok && auth_status_order(None) == [0, 1, 2, 3] && auth_status_order(Some(1)) == [1, 0, 2, 3]
         && auth_status_order(Some(3)) == [3, 0, 1, 2] && auth_status_order(Some(7)) == [0, 1, 2, 3]
