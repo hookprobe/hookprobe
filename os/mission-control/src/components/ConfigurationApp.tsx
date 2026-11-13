@@ -26,7 +26,7 @@ const TYPE: Record<string, string> = { config: 'Configuration bundle', wan: 'Int
 
 // No device answering: the board's three cards with labelled sample values (the page banner says it is sample data).
 const SAMPLE_CFG = { state: 'committed', generation: 9, floor: 9, auto_rollback: true, at_rest: { sealed: true, secrets_protected: true, device_key: true, volatile_ram_only: false, persisted: true } } as unknown as ConfigView;
-const SAMPLE_ANCHOR = { state: 'protected', owner_enrolled: true, owner_key: '3f9a1c0e7b2d', owner_generation: 1, vendor_key: 'a81d44e2c905', device_id: '7c1e9b04d2a65f38', floors: { wan: 8, wifi: 8, policy: 8 } } as unknown as AnchorView;
+const SAMPLE_ANCHOR = { state: 'protected', owner_enrolled: true, owner_key: 'abababababab', owner_generation: 1, vendor_key: 'cdcdcdcdcdcd', device_id: '7c1e9b04d2a65f38', floors: { wan: 8, wifi: 8, policy: 8 } } as unknown as AnchorView;
 const SAMPLE_JOURNAL = [
   { seq: 1, ms: 0, type: 'config', result: 'ok', detail: 'gen 7->8' },
   { seq: 2, ms: 0, type: 'shield_block', result: 'ok', detail: 'gen 3->4' },
