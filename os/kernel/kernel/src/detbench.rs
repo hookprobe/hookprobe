@@ -114,6 +114,16 @@ pub fn run() -> bool {
                 None => continue,
             };
             rules[i].1[lab] += 1;
+            // DET-01 review: the first 3 hits per rule and label, with the flow that fired (local corpus only)
+            if rules[i].1[lab] <= 3 {
+                // IPv6 events (e.g. rule 121 rogue RA) carry no IPv4 tuple — print the fields only for IPv4 frames
+                let v4 = len >= 14 && f[12] == 0x08 && f[13] == 0x00;
+                let (a, b) = if v4 { (e.src.to_be_bytes(), e.dst.to_be_bytes()) } else { ([0u8; 4], [0u8; 4]) };
+                arch_aarch64::_print(format_args!(
+                    " [DETBENCH] hit rule={} label={} t={}s src={}.{}.{}.{} dst={}.{}.{}.{} dport={}\n",
+                    e.rule_id, label(lab), rel / 1_000_000, if v4 { "" } else { "(IPv6 frame, no IPv4 tuple) " }, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], e.dport
+                ));
+            }
         }
         done += 1;
     }
