@@ -36,6 +36,13 @@ pub struct EvLog {
     pub failed: u64,
 }
 
+/// EVID-01 (decision C): the seal policy of the evidence log and the snapshot — device id only. `Policy::digest` hashes
+/// the floor and the selected PCRs, so both are zeroed here: a later build, a rollback or a raised floor derives the
+/// SAME key and reads the history (it was STRICT = PCR0|1|2 + floor: every OTA opened an empty log, MB16).
+pub fn evidence_policy(device_id: u64) -> Policy {
+    Policy { mask: boot_abi::SEAL_POLICY_DEVICE, device_id, svn_floor: 0, pcr: [[0u8; 32]; boot_abi::NUM_PCR] }
+}
+
 pub fn vek_of(srk: &[u8; 32]) -> [u8; 32] {
     let prk = boot_abi::kdf::hkdf_extract(b"HQ-evidence-log", srk);
     boot_abi::kdf::hkdf_expand32(&prk, b"HQ-evidence-log-v1")
@@ -185,7 +192,7 @@ pub fn selftest() -> bool {
     let (lo, _) = dv.region(crate::datavol::Region::Evidence);
     let hi = lo + 1 + 8; // a small ring for the test: 8 records
     let srk = [0x5a; 32];
-    let pol = Policy { mask: 0, device_id: 7, svn_floor: 0, pcr: [[0u8; 32]; boot_abi::NUM_PCR] };
+    let pol = evidence_policy(7);
     let Ok(mut store) = SealedStore::open(&mut *d) else {
         arch_aarch64::_print(format_args!(" [P-evlog] FAIL — test store\n"));
         return false;
@@ -230,6 +237,17 @@ pub fn selftest() -> bool {
         got += 1;
     });
     let survives = got == 50 && order;
+    // EVID-01: the next boot after an OTA update (other PCR values, a raised SVN floor, same device) builds its policy
+    // the same way and reads the whole history; the old STRICT binding opened an empty log here
+    let strict = |pcr: u8, floor: u64| Policy { mask: boot_abi::SEAL_POLICY_STRICT, device_id: 7, svn_floor: floor, pcr: [[pcr; 32]; boot_abi::NUM_PCR] };
+    let after_ota = evidence_policy(7).digest() == pol.digest() && strict(1, 1).digest() != strict(2, 5).digest();
+    let mut got2 = 0u32;
+    if let Ok(l2b) = EvLog::open(&mut store, lo, hi, &srk, evidence_policy(7)) {
+        l2b.for_each(&store, &mut |_| got2 += 1);
+    }
+    let ota = after_ota && got2 == 50;
+    // another device id on the same SRK reads nothing (the binding that stays)
+    let other_dev = EvLog::open(&mut store, lo, hi, &srk, evidence_policy(8)).map_or(false, |o| o.log.count() == 0);
     // another device key reads nothing (the records are sealed under HKDF(SRK))
     let Ok(other) = EvLog::open(&mut store, lo, hi, &[0x11; 32], pol) else { return false };
     let foreign = other.log.count() == 0;
@@ -261,10 +279,10 @@ pub fn selftest() -> bool {
             unknown_ok &= b[15] & IMG_EPOCH != 0 && b[0..8] == [0u8; 8];
         }
     });
-    let pass = fresh && batched && !clear && survives && foreign && tamper && ring && unknown_ok;
+    let pass = fresh && batched && !clear && survives && ota && other_dev && foreign && tamper && ring && unknown_ok;
     arch_aarch64::_print(format_args!(
-        " [P-evlog] {} — #54 sealed evidence log (fslog ring in the DataVolume Evidence region, HQKSEAL1 records under HKDF(SRK)): formatted on first use={} batched {} events/record, held < 60 s then flushed={} ciphertext at rest (no plaintext source)={} remount reads every event back in order={} another device key reads nothing={} flipped ciphertext byte drops only that record={} bounded ring (oldest overwritten)={} pre-clock batch = time unknown={}\n",
-        if pass { "PASS" } else { "FAIL" }, fresh, PER_REC, batched, !clear, survives, foreign, tamper, ring, unknown_ok
+        " [P-evlog] {} — #54 sealed evidence log (fslog ring in the DataVolume Evidence region, HQKSEAL1 records under HKDF(SRK)): formatted on first use={} batched {} events/record, held < 60 s then flushed={} ciphertext at rest (no plaintext source)={} remount reads every event back in order={} EVID-01: the boot after an OTA (other PCRs, raised floor) reads the whole history={} another device id reads nothing={} another device key reads nothing={} flipped ciphertext byte drops only that record={} bounded ring (oldest overwritten)={} pre-clock batch = time unknown={}\n",
+        if pass { "PASS" } else { "FAIL" }, fresh, PER_REC, batched, !clear, survives, ota, other_dev, foreign, tamper, ring, unknown_ok
     ));
     pass
 }
