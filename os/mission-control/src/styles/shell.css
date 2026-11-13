@@ -201,3 +201,4 @@ button, input, select, textarea { font: inherit; }
 :is(a, button, input, select, textarea, summary, [tabindex]):focus-visible { outline: 2px solid var(--hp-cyan); outline-offset: 2px; }
 .hp-btn:disabled, .hp-btn--primary:disabled { opacity: 1; background: transparent; color: var(--hp-text-muted); border-color: rgba(255, 255, 255, 0.12); box-shadow: none; cursor: not-allowed; }
 .approve-check { display: flex; align-items: center; gap: 8px; font-size: 14px; color: var(--hp-text-secondary); min-height: 32px; }
+.qr-code { display: block; width: min(100%, 280px); aspect-ratio: 1; margin: 4px auto 0; border-radius: 8px; }

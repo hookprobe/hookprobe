@@ -7,6 +7,7 @@ import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { rendered, GOLD } from './wifi-qr.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..');
 const DEV = '00112233445566778899aabbccddeeff';
@@ -64,6 +65,13 @@ export default async function (t) {
   await sheet.locator('label:has-text("Device password") input').fill('label-password-0001');
   await sheet.locator('button:has-text("Change password")').click(); await page.waitForTimeout(1500);
   ok(await vis(sheet.locator('text=press Keep within 5 minutes')), 'after sending: live trial explained, with Keep within 5 minutes');
+  // the network just set can be shared as a QR code (password still in this sheet only), and Esc closes only the QR
+  await sheet.locator('button:has-text("Show QR code")').click(); await page.waitForTimeout(300);
+  const want = GOLD.find((c) => c.text === 'WIFI:T:WPA;S:Popescu-Home;P:Our new family password;;').rows;
+  const got = await rendered(page);
+  ok(got.length === want.length && got.every((r, i) => r === want[i]), 'after the change: "Show QR code" renders the code for the new password');
+  await page.keyboard.press('Escape'); await page.waitForTimeout(200);
+  ok(!(await page.locator('[aria-labelledby="qr-sheet-title"]').count()) && await vis(sheet), 'Esc closes the QR code only, the Wi-Fi sheet stays');
   ok(new URLSearchParams(st.begin).get('type') === 'config' && new URLSearchParams(st.begin).get('owner_key') === 'label-password-0001', 'sent as a configuration bundle, authorised with the device password');
 
   const box = Buffer.concat(st.chunks), dir = mkdtempSync(join(tmpdir(), 'l0wifi-'));
