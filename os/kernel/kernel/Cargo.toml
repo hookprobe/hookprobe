@@ -135,6 +135,9 @@ wifiheal-bench = []
 # first data sector of that type's ACTIVE artifact-store half on the eMMC; the next boot's unchanged loader refuses it
 # and the real fallback loads the OTHER half. Never in a product image (tools/ci/shipping_guard.py forbids it).
 artstore-bench = []
+# BENCH ONLY (never shipped): firmware console read every beat (5 s, 64 lines) and drained on a crash before the
+# reload, plus every trap register and 32 stack words — the full trap dump of a vendor test firmware (REL-08, 7.45.314)
+fwcon-fast = ["arch-aarch64/fwcon-fast"]
 # Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
 # Default builds read once and never block (peer review COR-L1).
 stalldiag = ["apmode"]
