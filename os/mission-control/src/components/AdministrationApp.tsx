@@ -290,6 +290,27 @@ const AdministrationApp: Component = () => {
             </Show>
 
             <Show when={sec() === 'edge'}>
+              {/* Board "Admin": the operating system — signed image generation, update, roll back (from /api/upload) */}
+              <div class="pcard" aria-label="Operating system">
+                <p class="l0-label">Operating system</p>
+                {(() => {
+                  const os = () => uploadView()?.types.find((t) => t.type === 'os_image');
+                  return (
+                    <>
+                      <span class="prow"><span>Signed OS image</span><span>{sample() ? 'generation 14' : os() ? `generation ${os()!.generation}${os()!.source === 'boot' ? ' (from the boot card)' : ''}` : 'not reported'}</span></span>
+                      <span class="prow"><span>Version and channel</span><span>{sample() ? 'sample' : 'not reported by this device yet'}</span></span>
+                      <p class="l0-card-sub" style={{ margin: 0 }}>Updates are signed OS images: the device checks the signature and that the image is newer, keeps the previous one, and starts the new one on the next restart.</p>
+                      <div class="l0-card-foot">
+                        <button class="hp-btn" onClick={() => { setSec('packs'); setPackType('os_image'); setMsg(''); }}>Update</button>
+                        {/* The signed pack rollback (msg 24) covers data packs only; an OS image falls back through the boot
+                            loader's A/B trial, which the device does not report here yet — so no button that cannot work. */}
+                        <span class="gate gate--off"><span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Roll back</button></span>
+                          <span class="gate-reason" role="note">{sample() ? 'Preview: no device is answering.' : 'A new OS image that fails to start falls back to the previous one by itself; a manual roll back is not offered here yet.'}</span></span>
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
               <div class="pcard" aria-label="Restart">
                 <p class="l0-label">Restart</p>
                 <p class="l0-card-sub">Restarts the device (about a minute without network). Signed settings you have staged apply on the way up. Needs a reason and your device password.</p>

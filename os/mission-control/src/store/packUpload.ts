@@ -31,6 +31,7 @@ export const PACK_LABEL: Record<string, string> = {
   shield_block: 'Shield block list (BLOCK.TXT)', shield_allow: 'Shield allow list (ALLOW.TXT)', ioc: 'Threat-intel pack (IOC.TXT)',
   rules: 'Signed rule pack (RULES.BIN)', oui: 'Vendor list (OUI.TXT)', devices: 'Device policy (DEVICES.TXT)',
   wan: 'Internet settings (WAN.TXT)', wifi: 'Wi-Fi settings (WIFI.TXT)', policy: 'Firewall policy (POLICY.TXT)',
+  os_image: 'OS image (signed boot image; starts on the next restart)',
 };
 /** Types whose rollback changes how the device connects. */
 export const CONNECTIVITY = new Set(['wan', 'wifi', 'policy']);
