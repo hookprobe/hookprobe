@@ -12,6 +12,13 @@ set -u -o pipefail
 KEY="${1:?owner key}"; LOG="${2:?serial log}"; NEW="${3:?signed image}"; BID="${4:?new build id}"; PREV="${5:?running build id}"
 MC="${6:-https://192.168.200.146}"; HERE=$(cd "$(dirname "$0")" && pwd); UP="$HERE/../../os/kernel/tools/hq-upload.py"
 SP="${SUDO_PASS_FILE:?SUDO_PASS_FILE}"
+# R6 = D: activating an os_image needs an HQMGMT1 envelope signed by the ENROLLED owner key (msg 23); the token only
+# opens the session. SIGN_KEY (default ~/heqk-owner-ca/bench-owner.key, bench-only) is enrolled first if none is.
+SIGN="${SIGN_KEY:-$HOME/heqk-owner-ca/bench-owner.key}"
+ensure_owner() { local e; e=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --hsh "info" 2>/dev/null | grep -ai "signing key" | grep -c ENROLLED)
+  [ "$e" -ge 1 ] && return 0
+  local t; t=$(mktemp); python3 -I "$HERE/../../os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$t" && python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --enroll "$t" >/dev/null 2>&1; local rc=$?; rm -f "$t"; return $rc; }
+ensure_owner || echo "     (owner key enrollment failed — the activation will be refused)"
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 since() { tail -c +$(($1 + 1)) "$LOG" | tr -d '\r\000'; }
@@ -20,7 +27,7 @@ unblock() { sudo -S -p '' nft delete table inet hqota < "$SP" 2>/dev/null || tru
 trap unblock EXIT
 
 mark=$(stat -c %s "$LOG")
-R=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --type os_image --file "$NEW" 2>&1); echo "$R" | tail -2
+R=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --sign-key "$SIGN" --type os_image --file "$NEW" 2>&1); echo "$R" | tail -2
 grep -q '^activate: {"ok": true' <<<"$R"; chk $? "upload + activate of the new image"
 # block the trial's WAN DHCP before it boots
 NFT=$(mktemp); printf 'table inet hqota {\n chain input { type filter hook input priority -10; iifname "enp4s0.100" udp dport 67 drop; }\n}\n' > "$NFT"
