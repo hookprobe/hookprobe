@@ -127,7 +127,15 @@ if [ -f tools/verifier-harness.rs ]; then
   rm -f "$VH_LOG" "$OUT.vh"
 fi
 
-cargo build -p hboot --release
+# HBOOT_FEATURES (bench only, e.g. `t0inv` = ADR 0062 T0 read-only inventory): HBoot features are not in the kernel
+# graph the shipping guard resolves, so this script refuses them in any release build. Unset = the default HBoot.
+if [ -n "${HBOOT_FEATURES:-}" ]; then
+  [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ] || { echo "FATAL: HBOOT_FEATURES=$HBOOT_FEATURES is bench-only — set HOOKPROBE_DEBUG_ACCESS=1 for a debug image" >&2; exit 1; }
+  echo "WARNING: HBoot built with bench features: $HBOOT_FEATURES (DEBUG image, never ship)" >&2
+  cargo build -p hboot --release --features "$HBOOT_FEATURES"
+else
+  cargo build -p hboot --release
+fi
 export HEQK_GIT="${HEQK_GIT:-$(git -C "$(dirname "$0")" rev-parse --short=10 HEAD 2>/dev/null || echo unknown)}"  # [ID] line
 cargo build -p kernel --features "$FEATURES" --release
 

@@ -4,6 +4,11 @@
 //! owns platform discovery and hands over this structure (the seed of the
 //! Phase-2 HEQK Object Model).
 
+/// Bounded DTB reader for HBoot platform discovery (ADR 0061 D1, ADR 0062 T0). Pure; LTO drops it from
+/// any image that does not call it.
+pub mod fdt;
+/// ADR 0062 T0: pure ID-register decoding + the SMCCC probe gate/order (detected state only, never a PASS).
+pub mod t0;
 pub mod kdf;
 pub mod sha256;
 /// The ONE hybrid secure-boot verifier + embedded trust root, shared by HBoot's

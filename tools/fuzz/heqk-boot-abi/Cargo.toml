@@ -19,3 +19,10 @@ path = "fuzz_targets/payload_header.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "fdt_parse"
+path = "fuzz_targets/fdt_parse.rs"
+test = false
+doc = false
+bench = false
