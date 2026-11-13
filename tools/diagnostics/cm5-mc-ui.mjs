@@ -11,7 +11,8 @@ const [pwDir, base, spki, shots = ''] = process.argv.slice(2);
 const token = process.env.UI_LIVE_TOKEN || '';
 if (!token) { console.log('UI_LIVE_TOKEN (the device password) is required'); process.exit(2); }
 const here = dirname(fileURLToPath(import.meta.url));
-const dir = join(here, '../../os/mission-control/tests/ui/specs/live');
+// MC_UI_SPECS: run another read-only spec directory instead (e.g. tools/diagnostics/mc-ui-specs, owned by diagnostics)
+const dir = process.env.MC_UI_SPECS || join(here, '../../os/mission-control/tests/ui/specs/live');
 const { chromium } = await import(pathToFileURL(join(pwDir, 'playwright', 'index.mjs')).href);
 const browser = await chromium.launch({ args: [`--ignore-certificate-errors-spki-list=${spki}`] });
 let fails = 0, passes = 0;
@@ -30,6 +31,7 @@ for (const name of specs) {
     async go(path, settle = 900) { const t0 = Date.now(); await page.goto(base + path, { waitUntil: 'load' }); timing.push([Date.now() - t0, path]); await page.waitForTimeout(settle); },
     async shot(file, full = false) { if (shots) await page.screenshot({ path: join(shots, `${name}-${file}.png`), fullPage: full }); },
     async vis(loc) { return loc.first().isVisible().catch(() => false); },
+    shotPath(file) { return shots ? join(shots, `${name}-${file}.png`) : ''; },
   };
   try {
     await page.goto(base + '/login', { waitUntil: 'load' });
