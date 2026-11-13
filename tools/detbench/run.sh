@@ -15,6 +15,7 @@ timeout 1800 qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -ser
   -drive file="$IMG",format=raw,if=none,id=hd0,readonly=on -device virtio-blk-device,drive=hd0 \
   -kernel "$KERN" 2>&1 | tr -d '\r' > "$RAW"; QRC=${PIPESTATUS[0]}
 OUT=$(grep -a "\[DETBENCH\]" "$RAW")
+HITS=$(grep -a "\[DETBENCH\] hit " "$RAW" | sed "s/^.*\[DETBENCH\] hit //")
 if ! grep -q "DETBENCH\] DONE" <<<"$OUT"; then
   # Show WHY: the exit status (124 = the 1800 s timeout) and the tail of the raw console, not just the
   # [DETBENCH] lines — an early panic or a QEMU error is otherwise invisible.
@@ -46,3 +47,8 @@ print(text)
 if rep:
     open(rep, "w").write(text + "\n")
 PY
+# DET-01 review: the flows behind each rule's first hits (corpus is local; never published)
+if [ -n "$HITS" ]; then
+  echo; echo "First hits per rule (rule label t src dst dport):"; echo "$HITS" | sed 's/^/  /'
+  [ -n "$REP" ] && { echo; echo "## First hits per rule"; echo; echo '```'; echo "$HITS"; echo '```'; } >> "$REP"
+fi
