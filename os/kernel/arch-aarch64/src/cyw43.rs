@@ -2326,6 +2326,20 @@ pub fn fw_trap_dump(sh: &FwShared) {
             let r = |i: usize| u32::from_le_bytes([t[4 * i], t[4 * i + 1], t[4 * i + 2], t[4 * i + 3]]);
             crate::_print(format_args!("   [FWTRAP] type={:#x} epc={:#010x} cpsr={:#x} spsr={:#x} r0={:#x} r1={:#x} r2={:#x} r3={:#x} sp={:#010x} lr={:#010x} pc={:#010x}\n",
                 r(0), r(1), r(2), r(3), r(4), r(5), r(6), r(7), r(17), r(18), r(19)));
+            #[cfg(feature = "fwcon-fast")]
+            {
+                // BENCH: the rest of the register file (r4..r12 = words 8..16) and 32 stack words from sp
+                crate::_print(format_args!("   [FWTRAP] r4={:#x} r5={:#x} r6={:#x} r7={:#x} r8={:#x} r9={:#x} r10={:#x} r11={:#x} r12={:#x}\n",
+                    r(8), r(9), r(10), r(11), r(12), r(13), r(14), r(15), r(16)));
+                let mut st = [0u8; 128];
+                if ram_read(r(17), &mut st) {
+                    for row in 0..8 {
+                        let w = |i: usize| u32::from_le_bytes([st[4 * i], st[4 * i + 1], st[4 * i + 2], st[4 * i + 3]]);
+                        let b = row * 4;
+                        crate::_print(format_args!("   [FWSTACK] sp+{:#04x} {:08x} {:08x} {:08x} {:08x}\n", b * 4, w(b), w(b + 1), w(b + 2), w(b + 3)));
+                    }
+                }
+            }
         }
     }
     if sh.flags & SDPCM_SHARED_ASSERT != 0 {
