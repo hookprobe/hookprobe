@@ -157,15 +157,15 @@ Levels: implemented / configured / verified. NI = not implemented; DO = design o
 | Mitigation | CM5 today | N100 today |
 |---|---|---|
 | Spectre-v1 barriers / masking | PARTIAL (`devq.rs`) / – / none → **UNKNOWN** | DO → **UNKNOWN** |
-| Spectre-v2 | NI / NI / none → **UNKNOWN** | DO → **UNKNOWN** |
-| BHB | NI / NI / none → **UNKNOWN** | DO → **UNKNOWN** |
-| SSB | NI / NI / none → **UNKNOWN** | DO → **UNKNOWN** |
-| Meltdown-class | not audited (X9) → **UNKNOWN** | DO → **UNKNOWN** |
+| Spectre-v2 | NI / NI / none → **UNKNOWN** (MB23 detected: CSV2=1, firmware WA1 = not affected) | DO → **UNKNOWN** |
+| BHB | NI / NI / none → **UNKNOWN** (MB23 detected: no CLRBHB, firmware WA3 NOT_SUPPORTED → the in-kernel loop is the only route) | DO → **UNKNOWN** |
+| SSB | NI / NI / none → **UNKNOWN** (MB23 detected: SSBS=1, firmware WA2 not required) | DO → **UNKNOWN** |
+| Meltdown-class | not audited (X9) → **UNKNOWN** (MB23 detected: CSV3=1) | DO → **UNKNOWN** |
 | x86 data sampling | N/A | DO → **UNKNOWN** |
-| Constant-time tenant crypto | ChaCha20-Poly1305 implemented; timing test NI → **UNKNOWN** | DO → **UNKNOWN** |
+| Constant-time tenant crypto | ChaCha20-Poly1305 implemented; timing test NI → **UNKNOWN** (MB23 detected: AES+PMULL and SHA2 instructions) | DO → **UNKNOWN** |
 | Tenant parser isolation | NI → **UNKNOWN** | DO |
 | Tenant timer coarsening | NI (EL0 `CNTPCT` granted) → **UNKNOWN** | DO |
-| Firmware / microcode floor | NI (not measured) → **UNKNOWN** | DO |
+| Firmware / microcode floor | NI (not measured) → **UNKNOWN** (MB23: MIDR 0x414fd0b1, VC fw 0x6a15b5c5; TF-A identity unknown, SOC_ID unsupported) | DO |
 
 **Expected hardware facts (from vendor advisories; to be confirmed by discovery and verification,
 never assumed):**
@@ -176,7 +176,9 @@ never assumed):**
   - SSBS is expected;
   - CSV3 is expected;
   - no MPAM, so isolation comes from core partitioning (private L1/L2, shared L3);
-  - **whether EL3 firmware provides the SMCCC workarounds is UNKNOWN.**
+  - EL3 firmware (TF-A) answered on MB23: PSCI 1.1, SMCCC 1.2, WORKAROUND_1 = 1 (not affected),
+    WORKAROUND_2 = -2 (not required), WORKAROUND_3 = -1 (not supported). Evidence:
+    `docs/design/heqk-t0-cm5-inventory-mb23.md`. All of this is detected state, not verified.
 - **N100 (Gracemont):** eIBRS/IBPB, BHI controls, SSBD, RDCL_NO and data-sampling flags (e.g.
   RFDS) all to be confirmed through `IA32_ARCH_CAPABILITIES` and microcode; CET expected.
 
@@ -185,13 +187,14 @@ never assumed):**
 ## Tests to move CM5 from UNKNOWN to VERIFIED
 
 **Preconditions:**
-- the bench is free (after the REL-05 soak, 2026-11-14 03:17 UTC);
+- a bench slot from the heqk session (the REL-05 soak was deferred by the operator on 2026-11-12);
 - a dev-key-signed `spec-test` image that is **never shipped** and is refused by production trust
   roots. It contains the EL0 attack images and a switch to disable each mitigation for positive
   controls;
 - **T3f needs SMP** (ADR 0060).
 
-**T0 — inventory, per tuple:**
+**T0 — inventory, per tuple** (implemented in PR #1125, HBoot feature `t0inv`; first run on CM5 in MB23, see
+`docs/design/heqk-t0-cm5-inventory-mb23.md`):
 - Dump the DTB `/cpus` `enable-method` and the `/psci` node with its method.
 - Read `MIDR_EL1` (expect part 0xD0B; record rXpY) and `ID_AA64PFR0/1`, `ISAR0/1/2`, `MMFR*`.
 - From hboot at EL2, call `SMCCC_VERSION`, `SMCCC_ARCH_FEATURES(WORKAROUND_1/2/3)` and `SOC_ID`.

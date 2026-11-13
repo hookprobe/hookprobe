@@ -28,6 +28,13 @@ if cargo +nightly fuzz run --fuzz-dir . payload_header corpus/payload_header -- 
 else
   echo "  FAIL payload_header (crash — reproducer in tools/fuzz/heqk-boot-abi/artifacts/payload_header/)"; rc=1
 fi
+# the firmware DTB reader HBoot uses for platform discovery (boot_abi::fdt — ADR 0061 D1, ADR 0062 T0)
+mkdir -p corpus/fdt_parse
+if cargo +nightly fuzz run --fuzz-dir . fdt_parse corpus/fdt_parse -- -max_total_time="$T" -max_len=131072 > /tmp/heqk-fuzz-fdt_parse.log 2>&1; then
+  echo "  ok   fdt_parse: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-fdt_parse.log | tail -1)"
+else
+  echo "  FAIL fdt_parse (crash or build error — see /tmp/heqk-fuzz-fdt_parse.log, reproducer in tools/fuzz/heqk-boot-abi/artifacts/fdt_parse/)"; rc=1
+fi
 # the kernel crate's network-facing parsers (same source files, #[path]) — SEC-02; owner_journal = A9 (journal replay)
 cd ../heqk-kernel || exit 2
 for t in http_req dns_wire tls_hello frame_meta cfg_bundle owner_journal; do

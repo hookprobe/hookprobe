@@ -211,6 +211,23 @@ pub fn board_serial() -> Option<u64> {
     }
 }
 
+/// ADR 0062 T0 (feature `t0inv`, read-only): a GET tag answering two u32 words — GET_FIRMWARE_REVISION
+/// (0x00000001, one word), GET_BOARD_REVISION (0x00010002, one word), GET_ARM_MEMORY (0x00010005, base + size).
+#[cfg(feature = "t0inv")]
+pub fn get_u32x2(tag: u32) -> Option<(u32, u32)> {
+    unsafe {
+        let buf = core::ptr::addr_of_mut!(MBOX_BUF) as *mut u32;
+        let req = [0x20u32, 0, tag, 8, 0, 0, 0, 0];
+        for (i, &v) in req.iter().enumerate() {
+            core::ptr::write_volatile(buf.add(i), v);
+        }
+        if !transact(8) {
+            return None;
+        }
+        Some((core::ptr::read_volatile(buf.add(5)), core::ptr::read_volatile(buf.add(6))))
+    }
+}
+
 /// GET_USER_OTP (0x00030024) block 1 = customer OTP (8 words / 256 bits).
 /// None if unreadable; Some(words) otherwise (all-zero = blank/unprovisioned).
 pub fn get_customer_otp() -> Option<[u32; 8]> {
