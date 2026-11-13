@@ -35,10 +35,11 @@ sudo -S -p '' nft -f "$NFT" < "$SP"; rm -f "$NFT"
 sudo -S -p '' nft list table inet hqota < "$SP" >/dev/null 2>&1; chk $? "bench WAN DHCP blocked for the trial"
 wait_for "$mark" "\[OTA\] this boot: Trial" 300; chk $? "the device trial-boots the new image"
 since "$mark" | grep -a "build=$BID" >/dev/null; chk $? "the trial runs the uploaded build ($BID)"
-wait_for "$mark" "\[OTA\] trial not healthy within 5 min" 480; chk $? "the trial never gets a usable WAN and gives up after its deadline"
+# kernel prints: "[OTA] trial not healthy within 300 s (WAN usable=… AP serving=…)"
+wait_for "$mark" "\[OTA\] trial not healthy within" 480; chk $? "the trial never gets a usable WAN and gives up after its deadline"
 since "$mark" | grep -a "\[OTA\] COMMITTED" >/dev/null; [ $? -ne 0 ]; chk $? "the unhealthy trial never committed"
-m2=$(stat -c %s "$LOG")
 unblock
-wait_for "$m2" "\[OTA\] this boot: Cold build=$PREV" 300; chk $? "the next boot runs the previous build ($PREV) — rolled back"
+# from the original mark: the rollback boot follows the deadline within seconds (a later mark can miss it)
+wait_for "$mark" "\[OTA\] this boot: Cold build=$PREV" 300; chk $? "the next boot runs the previous build ($PREV) — rolled back"
 echo "OTA-ROLLBACK: $([ $ok = $n ] && echo PASS || echo FAIL) ($ok/$n)"
 [ $ok = $n ]
