@@ -6,9 +6,12 @@
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 
+/** Shape per docs/design/mgmt-envelope-api.md (kernel #1108): version is always null today (the build id is the
+ *  identifier); slot / trial without the factory A/B layout, svn without HBoot, used / total without a DataVolume are
+ *  null; retention_days is null (the evidence log is a ring, not a time window). */
 export interface SystemView {
-  version: string | null; build: string; slot: 'A' | 'B'; trial: boolean; svn: number;
-  storage: { used: number; total: number; retention_days: number | null } | null;
+  version: string | null; build: string | null; slot: 'A' | 'B' | null; trial: boolean | null; svn: number | null;
+  storage: { used: number | null; total: number | null; retention_days: number | null } | null;
 }
 
 export const [systemView, setSystemView] = createSignal<SystemView | null>(null);
