@@ -201,13 +201,20 @@ PHASES=(
   "P7|[P7] PASS|plan|Validation|CM5/RP1 metal bring-up"
 )
 
+# HEQK_VALIDATE_FEATX=a,b: extra features for the main QEMU build (e.g. a BENCH-only feature's own gate). Rows that
+# only exist with such a feature are added here, so the default run is unchanged.
+FEATX="${HEQK_VALIDATE_FEATX:-}"
+case ",$FEATX," in
+  *,wifiheal-bench,*) PHASES+=("Pwifihealbench|[P-wifiheal-bench] PASS|impl|Validation|BENCH ONLY (feature wifiheal-bench, forbidden in the shipping flavour): the Wi-Fi self-heal metal trigger shapes wifiheal's classifier INPUT (a synthetic persistent TX freeze with the credit window latched, or an injected FWHALT event) and the unchanged ladder acts — freeze-once -> kick 100 ms -> bounce 10 s -> reload 25 s -> cleared; fwhalt -> diagnostics + reload at once; cleared before 10 s -> kicks only; persistent -> reload #2 after the 60-s backoff -> ONE reboot; the boot after it -> Degrade; no probe of the synthetic head; zero heap growth") ;;
+esac
+
 echo "==================================================================="
 echo " HEQK Core — Kernel Agent Validator (Hardened Edge Quantum-safe Kernel)"
 echo "==================================================================="
 
 # --- Stage 1: build -------------------------------------------------------
-echo -n "[build] cargo build ... "
-if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost,wpa3 >"$BUILD_LOG" 2>&1; then
+echo -n "[build] cargo build${FEATX:+ (+$FEATX)} ... "
+if ! cargo build --features netsvc,securechannel,securechannel-selftest,wasmhost,wpa3${FEATX:+,$FEATX} >"$BUILD_LOG" 2>&1; then
   echo "FAIL"; echo "  --- build output (last 100 lines) ---"; tail -n 100 "$BUILD_LOG"
   echo "GAP: build broken — cannot validate. Fix compile errors first."; exit 2
 fi
