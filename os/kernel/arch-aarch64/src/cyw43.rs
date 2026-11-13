@@ -3306,6 +3306,12 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     for e in [WLC_E_AUTH_IND, WLC_E_ASSOC_IND, WLC_E_REASSOC_IND, WLC_E_DISASSOC_IND, WLC_E_DEAUTH_IND] {
         mask[(e / 8) as usize] |= 1 << (e % 8);
     }
+    // WPA3: the firmware's OWN deauth / disassoc of a station too (e.g. reason 6 to an association it did not see
+    // authenticated) — only the SAE watch logs them (`sae_watch_event`); everything else treats them as Other
+    #[cfg(feature = "wpa3")]
+    for e in [WLC_E_DEAUTH, WLC_E_DISASSOC] {
+        mask[(e / 8) as usize] |= 1 << (e % 8);
+    }
     let mut iob = [0u8; 64];
     let nm = iovar_buf(b"event_msgs", &mask, &mut iob);
     out.ev_ok = bcdc_iovar_set(&iob[..nm]);
@@ -3765,20 +3771,31 @@ fn mgmt_auth_tx(ap: &[u8; 6], da: &[u8; 6], body: &[u8]) -> bool {
     ok
 }
 
+/// What one `auth_status` hand-over did: the variant taken (None = all refused), each variant's BCDC status (0 = not
+/// tried, 1 = no control reply / not sent, else the BCME code), the `pmkid_info` status before it and the list size.
+#[cfg(feature = "wpa3")]
+#[derive(Clone, Copy)]
+struct AuthSt {
+    took: Option<u8>,
+    codes: [i32; 4],
+    pk: i32,
+    pk_n: u8,
+}
+
 /// Tell the firmware the host finished (or failed) SAE for `sta` — brcmfmac's external-auth completion
 /// (`auth_status`, brcmf_auth_req_status_le: flags = 802.11 status, peer, ssid_len, ssid[32], pmkid[16]). Without
 /// it the firmware still treats the station as unauthenticated (metal batch 39: reason 6 / assoc status 16).
+/// Prints nothing: it runs BEFORE our confirm goes out (`ap_sae_rx`), and a serial line here delayed it.
 #[cfg(feature = "wpa3")]
-fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> bool {
+fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> AuthSt {
     let s = w3();
     // PMKSA first (brcmfmac's ext-auth order): this station's entry added to the firmware's list, the others kept
     unsafe { (*core::ptr::addr_of_mut!(FW_PMKSA)).put(sta, pmkid) };
-    let st_pk = fw_pmksa_set();
+    let pk = fw_pmksa_set();
     // variants until the firmware takes one: flags = 802.11 status (upstream brcmfmac) or WL_EXTAUTH_SUCCESS 4
     // (bcmdhd); with and without the SSID. The one this firmware took last time is tried first.
     let success = status == 0;
-    let mut codes = [0i32; 4];
-    let mut took = None;
+    let mut r = AuthSt { took: None, codes: [0; 4], pk, pk_n: unsafe { (*core::ptr::addr_of!(FW_PMKSA)).len() } as u8 };
     let vars = [(status, true), (if success { 4 } else { 3 }, true), (status, false), (if success { 4 } else { 3 }, false)];
     let known = unsafe { AUTH_VARIANT };
     for k in hal::rsnassoc::auth_status_order(if known < 4 { Some(known as usize) } else { None }) {
@@ -3794,25 +3811,98 @@ fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> bool {
         let mut ib = [0u8; 96];
         let n = iovar_buf(b"auth_status", &a, &mut ib);
         let (ok, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ib[..n], &mut []);
-        codes[k] = st as i32;
+        r.codes[k] = if ok || st != 0 { st as i32 } else { 1 };
         if ok {
-            took = Some(k);
+            r.took = Some(k as u8);
             unsafe { AUTH_VARIANT = k as u8 };
             break;
         }
     }
-    if sae_log(sta).is_some() {
-        crate::_print(format_args!(" [WPA3] auth_status: pmkid_info bcme {} (firmware PMKSA list {} entr(ies)) | variants (802.11 status+ssid, EXTAUTH+ssid, status, EXTAUTH) bcme {:?} (0 = not tried) -> accepted variant {:?}\n",
-            st_pk, unsafe { (*core::ptr::addr_of!(FW_PMKSA)).len() }, codes, took));
+    if r.took.is_some() { s.auth_status_ok += 1 } else { s.auth_status_fail += 1 }
+    r
+}
+
+/// The SAE completion under watch until the station associates (or `hal::rsnassoc::SAE_WATCH_MS` pass): one line
+/// either way, with when the firmware was told (`auth_status`) and when our confirm went out, relative to the
+/// station's confirm reaching the host — the metal diagnostic for "SAE Accepted, association status 16" (MB13).
+#[cfg(feature = "wpa3")]
+struct SaeWatch {
+    sta: [u8; 6],
+    armed: bool,
+    /// ticks when the station's confirm was handed to `ap_sae_rx`
+    t0: u64,
+    /// µs from t0: auth_status done, our confirm sent
+    ast_us: u32,
+    tx_us: u32,
+    ast: AuthSt,
+    /// other firmware events of the station logged in the window (bounded)
+    evs: u8,
+}
+#[cfg(feature = "wpa3")]
+static mut WATCH: SaeWatch = SaeWatch { sta: [0; 6], armed: false, t0: 0, ast_us: 0, tx_us: 0, ast: AuthSt { took: None, codes: [0; 4], pk: 0, pk_n: 0 }, evs: 0 };
+/// ticks of the last firmware console dump by the watch (at most one per 10 s)
+#[cfg(feature = "wpa3")]
+static mut WATCH_CON: u64 = 0;
+
+#[cfg(feature = "wpa3")]
+fn us_since(t0: u64) -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    ticks().wrapping_sub(t0).saturating_mul(1_000_000) / f.max(1)
+}
+
+#[cfg(feature = "wpa3")]
+fn watch_head(w: &SaeWatch) {
+    let m = w.sta;
+    crate::_print(format_args!(" [WPA3] SAE->assoc {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: ", m[0], m[1], m[2], m[3], m[4], m[5]));
+}
+
+/// A firmware AP event (`ap_poll`): the watched station's association ends the watch with its timing; its other
+/// events in the window (auth / deauth / disassoc, an association with a failure status) are logged as they come.
+#[cfg(feature = "wpa3")]
+fn sae_watch_event(et: u32, st: u32, reason: u32, sta: &[u8; 6]) {
+    let w = unsafe { &mut *core::ptr::addr_of_mut!(WATCH) };
+    if !w.armed || w.sta != *sta {
+        return;
     }
-    if took.is_some() { s.auth_status_ok += 1 } else { s.auth_status_fail += 1 }
-    took.is_some()
+    let ms = us_since(w.t0) / 1000;
+    if (et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND) && st == 0 {
+        w.armed = false;
+        watch_head(w);
+        crate::_print(format_args!("associated {} ms after its confirm reached the host (auth_status done +{} us, variant {:?}; our confirm sent +{} us)\n",
+            ms, w.ast_us, w.ast.took, w.tx_us));
+    } else if w.evs < 6 {
+        w.evs += 1;
+        watch_head(w);
+        crate::_print(format_args!("firmware event {} status {} reason {} at +{} ms\n", et, st, reason, ms));
+    }
+}
+
+/// Called every AP-loop pass (cheap when nothing is watched): a watched SAE completion with no association after
+/// `SAE_WATCH_MS` logs its timing, the auth_status detail and the firmware console (at most one dump per 10 s).
+#[cfg(feature = "wpa3")]
+pub fn ap_sae_watch_tick() {
+    let w = unsafe { &mut *core::ptr::addr_of_mut!(WATCH) };
+    if !w.armed || us_since(w.t0) < hal::rsnassoc::SAE_WATCH_MS * 1000 {
+        return;
+    }
+    w.armed = false;
+    watch_head(w);
+    crate::_print(format_args!("NO association within {} ms of its confirm (auth_status done +{} us: pmkid_info bcme {} list {}, variants bcme {:?} -> {:?}; our confirm sent +{} us)\n",
+        hal::rsnassoc::SAE_WATCH_MS, w.ast_us, w.ast.pk, w.ast.pk_n, w.ast.codes, w.ast.took, w.tx_us));
+    if unsafe { WATCH_CON } == 0 || us_since(unsafe { WATCH_CON }) > 10_000_000 {
+        unsafe { WATCH_CON = ticks() };
+        if let Some(sh) = fw_shared() {
+            let _ = fw_console_dump(&sh, 24);
+        }
+    }
 }
 
 /// Event 188: one SAE Authentication frame from a station. `ev` = the event message start (as `parse_ap_event`).
 /// Runs the responder and transmits its answer. Returns the responder's verdict for the log.
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event {
+    let t0 = ticks();
     let s = w3();
     if s.mode == SEC_WPA2 {
         return sae::Event::Dropped("not in SAE mode");
@@ -3841,18 +3931,29 @@ pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event 
     for b in pw.iter_mut() {
         unsafe { write_volatile(b, 0) }; // the stack copy of the passphrase
     }
+    // Accepted: the firmware is told (pmkid_info + auth_status) BEFORE our confirm goes out. The station associates
+    // within milliseconds of verifying our confirm, and the FullMAC firmware answers that association itself: told
+    // after the confirm, it raced the station's association and dropped it as unauthenticated (metal MB13: ~15
+    // "auth_status -> firmware OK" per round with no association reaching the host, station status 16).
+    let mut ast = None;
+    let mut ast_us = 0;
+    if e == sae::Event::Accepted {
+        let tab = unsafe { &mut *core::ptr::addr_of_mut!(SAE_TAB) };
+        unsafe { (*core::ptr::addr_of_mut!(PMKSA)).add_accepted(tab, &sta, now_ms) }; // a later PMKSA-caching reconnect
+        let pk = tab.pmkid_for(&sta, now_ms).unwrap_or([0; 16]);
+        ast = Some(wpa3_auth_status(&sta, 0, &pk));
+        ast_us = us_since(t0) as u32;
+    }
     let mut sent = 0;
     for o in out.iter().flatten() {
         if mgmt_auth_tx(ap, &sta, &o.body[..o.len]) {
             sent += 1;
         }
     }
-    let mut ast = None;
-    if e == sae::Event::Accepted {
-        let tab = unsafe { &mut *core::ptr::addr_of_mut!(SAE_TAB) };
-        unsafe { (*core::ptr::addr_of_mut!(PMKSA)).add_accepted(tab, &sta, now_ms) }; // a later PMKSA-caching reconnect
-        let pk = tab.pmkid_for(&sta, now_ms).unwrap_or([0; 16]);
-        ast = Some(wpa3_auth_status(&sta, 0, &pk));
+    let tx_us = us_since(t0) as u32;
+    if let Some(a) = ast {
+        let w = unsafe { &mut *core::ptr::addr_of_mut!(WATCH) };
+        *w = SaeWatch { sta, armed: true, t0, ast_us, tx_us, ast: a, evs: 0 };
     }
     let s = w3();
     match e {
@@ -3864,9 +3965,13 @@ pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event 
         let seq = if body.len() >= 4 { u16::from_le_bytes([body[2], body[3]]) } else { 0 };
         let st = if body.len() >= 6 { u16::from_le_bytes([body[4], body[5]]) } else { 0 };
         let grp = if seq == 1 && body.len() >= 8 { u16::from_le_bytes([body[6], body[7]]) } else { 0 };
-        crate::_print(format_args!(" [WPA3] SAE {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} seq {} status {} group {} ({} B) -> {:?}, {} frame(s) sent (mgmt_frame ok {} fail {}) [{} line(s) of this station not logged]{}\n",
-            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], seq, st, grp, body.len(), e, sent, s.tx_ok, s.tx_fail, skipped,
-            match ast { Some(true) => " | auth_status -> firmware OK", Some(false) => " | auth_status REFUSED by the firmware", None => "" }));
+        crate::_print(format_args!(" [WPA3] SAE {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} seq {} status {} group {} ({} B) -> {:?}, {} frame(s) sent +{} us (mgmt_frame ok {} fail {}) [{} line(s) of this station not logged]",
+            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], seq, st, grp, body.len(), e, sent, tx_us, s.tx_ok, s.tx_fail, skipped));
+        match ast {
+            Some(a) => crate::_print(format_args!(" | auth_status {} +{} us before our confirm: pmkid_info bcme {} (firmware PMKSA list {}) | variants (802.11 status+ssid, EXTAUTH+ssid, status, EXTAUTH) bcme {:?} (0 = not tried, 1 = no reply) -> {:?}\n",
+                if a.took.is_some() { "-> firmware OK" } else { "REFUSED by the firmware" }, ast_us, a.pk, a.pk_n, a.codes, a.took)),
+            None => crate::_print(format_args!("\n")),
+        }
     }
     e
 }
@@ -3983,10 +4088,8 @@ pub struct Deauth {
 /// WLC_SCB_DEAUTHORIZE (122, ea — `wl deauthorize`: the station's port stays shut, its 4-way never starts).
 #[cfg(feature = "wpa3")]
 pub fn ap_deauth(sta: &[u8; 6], reason: u16) -> Deauth {
-    let mut v = [0u8; 10];
-    v[0..2].copy_from_slice(&reason.to_le_bytes());
-    v[4..10].copy_from_slice(sta);
-    let (ok, st) = bcdc_dcmd(201, BCDC_SET, &v, &mut []);
+    // 12 bytes (hal::rsnassoc::scb_val): the 10-byte form was refused BCME_BUFTOOSHORT on every call (metal MB13)
+    let (ok, st) = bcdc_dcmd(201, BCDC_SET, &hal::rsnassoc::scb_val(reason, sta), &mut []);
     let bcme = st as i32;
     let mut d = Deauth { via: 0, bcme, gone: !ok && (bcme == -30 || bcme == -17) };
     if ok {
@@ -4889,6 +4992,8 @@ pub fn ap_poll(rx: &mut [u8], force: bool) -> ApEvent {
                     wpa3_txstatus(rx, ev, et, st);
                     return ApEvent::Other;
                 }
+                let rs = rx.get(ev + 36..ev + 40).map_or(0, |b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+                sae_watch_event(et, st, rs, &sta);
             }
             if (et == WLC_E_ASSOC_IND || et == WLC_E_REASSOC_IND) && st == 0 {
                 dbg_putc(b'C');
