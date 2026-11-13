@@ -125,6 +125,11 @@ wifi-pmkid-fix = ["arch-aarch64/wifi-pmkid-fix"]
 guestprobe = ["arch-aarch64/guestprobe"]
 # Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
 apmc = ["apmode", "mcserve", "hsh"]
+# BENCH ONLY (audit A7 metal proof): the Wi-Fi self-heal trigger — `wifi heal-test freeze|freeze-once|fwhalt|clear`
+# on the web console (POST /api/hsh, owner session + an owner-signed HQMGMT1 envelope per change) injects a synthetic
+# persistent TX freeze or a FWHALT event into wifiheal's classifier INPUT; the real kick / bounce / firmware reload /
+# reboot / degrade code acts on it. Never in a product image (tools/ci/shipping_guard.py forbids it).
+wifiheal-bench = []
 # Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
 # Default builds read once and never block (peer review COR-L1).
 stalldiag = ["apmode"]

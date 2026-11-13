@@ -147,6 +147,8 @@ fn op(msg: u16) -> (&'static str, &'static str) {
         m::UPLOAD_ROLLBACK => ("upload", "rollback"),
         m::OWNER_FACTORY_RESET => ("owner", "factory-reset"),
         m::ANCHOR_ROTATE => ("anchor", "rotate"),
+        #[cfg(feature = "wifiheal-bench")]
+        m::WIFI_HEAL_TEST => ("wifi", "heal-test"),
         _ => ("mgmt", "?"),
     }
 }
