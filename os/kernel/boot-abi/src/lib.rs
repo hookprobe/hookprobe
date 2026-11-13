@@ -261,6 +261,12 @@ pub const SEAL_POLICY_BASE: u32 = SEAL_MASK_PCR0 | SEAL_MASK_DEVICE_ID | SEAL_MA
 pub const SEAL_POLICY_STRICT: u32 =
     SEAL_MASK_PCR0 | SEAL_MASK_PCR1 | SEAL_MASK_PCR2 | SEAL_MASK_DEVICE_ID | SEAL_MASK_SVN_FLOOR;
 
+/// `device` policy — EVID-01 (operator decision C, 2026-11-13): the evidence log + snapshot. Bound to the per-device
+/// SRK (OTP-derived, EL1 cannot re-read OTP since SEC-2) and the device id only: NO PCRs and NO SVN floor, so the
+/// history survives every signed OTA update, rollback and HBoot change (secure boot + the floor already stop a
+/// foreign or rolled-back image from running). Same binding as the owner journal and the sealed configuration.
+pub const SEAL_POLICY_DEVICE: u32 = SEAL_MASK_DEVICE_ID;
+
 /// SealHandoff.flags bits.
 /// bit0: the SRK is REAL — derived in HBoot from the OTP secret with EL1 unable
 /// to read OTP (V3 closed). 0 = synthetic/absent: measurement binding is
