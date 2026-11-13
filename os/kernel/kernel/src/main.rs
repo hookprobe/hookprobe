@@ -4357,6 +4357,11 @@ fn cm5_p10_probe() {
                             if force {
                                 last_force = now();
                             }
+                            // WPA3: an SAE completion with no association after 2 s logs its timing + the firmware console
+                            #[cfg(feature = "wpa3")]
+                            if !wifi_off {
+                                cyw43::ap_sae_watch_tick();
+                            }
                             let tpoll = cyw43::ticks();
                             let ev = if wifi_off { cyw43::ApEvent::Idle } else { cyw43::ap_poll(&mut rx, force) };
                             cyw43::prof_add(4, tpoll);
