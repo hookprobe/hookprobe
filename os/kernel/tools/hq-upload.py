@@ -11,6 +11,7 @@
   hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --config-confirm "reason" [--bundle HQCFG1.BIN]
   hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --config-rollback "reason"
   hq-upload.py --mc ... --owner-key-file KEY [--sign-key K_OWN.pem] --hsh "config status"   # the web console
+  hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --hsh "wifi heal-test freeze"   # BENCH builds only
 
 R6 = D: confirm / rollback, pack activate / rollback, factory reset, owner-key rotation (and privileged hsh commands)
 need an HQMGMT1 envelope signed by the enrolled owner key; the owner token (--owner-key-file) only opens the session.
@@ -167,6 +168,12 @@ def main():
         body = a.hsh
         if msg:
             body += "\n" + envelope(msg, (int(words[2], 16) if len(words[2]) == 16 else int(words[2])) if msg == "stage" and len(words) > 2 else 0)
+        elif tuple(words[:2]) == ("wifi", "heal-test") and len(words) > 2 and words[2] != "status":
+            # BENCH builds only (kernel feature wifiheal-bench): each change is bound to its op code
+            op = PS().HEAL_TEST_OP.get(words[2])
+            if op is None:
+                sys.exit(f"wifi heal-test: one of status, {', '.join(PS().HEAL_TEST_OP)}")
+            body += "\n" + envelope("wifi-heal-test", op)
         conn_h = {**hdr, "Content-Type": "text/plain"}
         if conn[0] is None:
             connect()

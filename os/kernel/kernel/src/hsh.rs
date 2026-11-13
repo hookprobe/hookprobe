@@ -257,7 +257,52 @@ pub fn web(line: &[u8], env: &[u8], tag: [u8; 4], now_ms: u64, out: &mut [u8]) -
     let mut why = [0u8; 64];
     let k = journal_words(line, &mut why);
     let _ = crate::ownerapi::audit_artifact("hsh", 1, &why[..k], tag, now_ms);
+    #[cfg(feature = "wifiheal-bench")]
+    if let Some(n) = heal_test(line, env, tag, now_ms, out) {
+        return n;
+    }
     run_line(line, hal::mgmtabi::ROLE_VIEW, tag, now_ms, env, out)
+}
+
+/// BENCH ONLY (feature `wifiheal-bench`, never shipped): `wifi heal-test [status|freeze|freeze-once|fwhalt|clear]`,
+/// the Wi-Fi self-heal metal trigger (wifiheal::bench). Fixed words only (exact compare, nothing else is parsed in
+/// EL1). `status` answers on the session; every change needs an owner-signed HQMGMT1 envelope (WIFI_HEAL_TEST, arg =
+/// the op code) verified by the same mgmtenv as every privileged operation, and is journaled. None = not this command.
+#[cfg(feature = "wifiheal-bench")]
+fn heal_test(line: &[u8], env: &[u8], tag: [u8; 4], now_ms: u64, out: &mut [u8]) -> Option<usize> {
+    use crate::wifiheal::bench;
+    use core::fmt::Write;
+    let rest = line.strip_prefix(b"wifi heal-test")?;
+    if !rest.is_empty() && rest[0] != b' ' {
+        return None;
+    }
+    let word = rest.trim_ascii();
+    let mut w = crate::mcstate::JsonBuf::new(out);
+    let op = if word.is_empty() || word == b"status" { Some(0) } else { bench::op_code(word) };
+    match op {
+        None => {
+            let _ = write!(w, "usage: wifi heal-test [status|freeze|freeze-once|fwhalt|clear]   (BENCH build)\n");
+        }
+        Some(0) => {}
+        Some(code) => {
+            let m = hal::mgmtabi::WIFI_HEAL_TEST;
+            match crate::mgmtenv::authorise(m, code, 0, &[0; 32], env, tag, now_ms) {
+                Err(why) => {
+                    let _ = write!(w, "wifi heal-test {}: {}\n", core::str::from_utf8(word).unwrap_or("?"), why);
+                }
+                Ok(()) => {
+                    let ok = bench::set(code);
+                    crate::mgmtenv::journal(m, ok, 0, if ok { "accepted" } else { "refused" }, tag, now_ms);
+                    let _ = write!(w, "wifi heal-test {}: accepted (BENCH build) — the AP loop applies it on its next tick ([WIFI-HEAL] lines on the console)\n",
+                        core::str::from_utf8(word).unwrap_or("?"));
+                }
+            }
+        }
+    }
+    let (hs, hc, hk, hb, hr, hpr) = crate::wifiheal::status();
+    let _ = write!(w, "wifi heal-test: injection mode={} injected_fwhalts={} | self-heal state={} last_class={} kicks={} bounces={} reloads={} after_wifi_reboot={}\n",
+        bench::mode_name(), bench::halts(), hs, hc, hk, hb, hr, hpr);
+    Some(w.len)
 }
 
 /// What the journal keeps of a command line: the first two words (printable ASCII, 24 bytes each), never the
@@ -382,6 +427,30 @@ pub fn selftest_web(now_ms: u64) -> bool {
     let ep_jn = crate::mgmtenv::journaled().0 - j2;
     let ep_journal = ep_jn == 6;
     let endpoints = ep_reset && ep_rotate && ep_activate && ep_replay && ep_journal;
+    // BENCH ONLY: the Wi-Fi self-heal trigger — status on the session; a change only with an envelope bound to its op
+    #[cfg(feature = "wifiheal-bench")]
+    let heal = {
+        use crate::wifiheal::bench as hb;
+        let saved = hb::selftest_enter();
+        let st = has(&run(b"wifi heal-test", &[]), b"injection mode=off") && has(&run(b"wifi heal-test status", &[]), b"self-heal state=");
+        let bare = has(&run(b"wifi heal-test freeze", &[]), b"needs an owner-signed envelope") && !hb::frozen();
+        let s1 = crate::mgmtenv::next_seq();
+        let other = has(&run(b"wifi heal-test freeze", &test_envelope(&kp, &mk(s1, m::WIFI_HEAL_TEST, 0, [0; 32]))), b"another operation") && !hb::frozen();
+        let mut e = mk(s1 + 1, m::WIFI_HEAL_TEST, 0, [0; 32]);
+        e.arg = hb::OP_FREEZE;
+        let on = has(&run(b"wifi heal-test freeze", &test_envelope(&kp, &e)), b"accepted") && hb::frozen();
+        let mut e = mk(s1 + 2, m::WIFI_HEAL_TEST, 0, [0; 32]);
+        e.arg = hb::OP_CLEAR;
+        let off = has(&run(b"wifi heal-test clear", &test_envelope(&kp, &e)), b"injection mode=off") && !hb::frozen();
+        let usage = has(&run(b"wifi heal-test reboot", &[]), b"usage: wifi heal-test");
+        hb::selftest_leave(saved);
+        let pass = st && bare && other && on && off && usage;
+        arch_aarch64::_print(format_args!(" [P-hsh-heal-bench] {} — BENCH ONLY wifi heal-test on the web carrier: status on the session={} change without an envelope refused={} envelope for another op refused={} signed freeze accepted + applied={} signed clear={} unknown word = usage={}\n",
+            if pass { "PASS" } else { "FAIL" }, st, bare, other, on, off, usage));
+        pass
+    };
+    #[cfg(not(feature = "wifiheal-bench"))]
+    let heal = true;
     // no owner key enrolled: nothing is privileged-capable
     crate::anchor::install_owner(None, 0);
     let no_owner = has(&run(b"config confirm", &test_envelope(&kp, &mk(8, m::CFG_CONFIRM, 8, dig_n1))), b"no owner key enrolled");
@@ -389,7 +458,7 @@ pub fn selftest_web(now_ms: u64) -> bool {
     crate::mgmtabi::test_reset();
     crate::anchor::install_owner(saved.0, saved.1);
     crate::cfgd::set_selftest(false);
-    let pass = view && session_only && wrong_key && wrong_dev && wrong_boot && stale_n && other_op && tamper && malformed && good && replay && older && journaled && words && no_owner && tool && endpoints;
+    let pass = view && session_only && wrong_key && wrong_dev && wrong_boot && stale_n && other_op && tamper && malformed && good && replay && older && journaled && words && no_owner && tool && endpoints && heal;
     arch_aarch64::_print(format_args!(
         " [P-hsh-web] {} — R6 = D (owner-signed HQMGMT1 envelopes; the carrier carries no authority) on the web carrier POST /api/hsh: view commands on the session alone={} confirm / rollback / stage on the session alone refused={} wrong key={} another device={} another boot={} confirm for gen N while N+1 on trial={} another operation={} tampered byte={} malformed={} all refused; a valid envelope accepted={} replay / older sequence refused={} every request journaled with its outcome={} ({} of 13) journal keeps command words only={} no owner key = nothing privileged={} policy-sign.py mgmt-sign vector verifies byte for byte={} owner endpoints — factory reset (exact accepted, other operation refused)={} rotate bound to current + new key (other target / other current key refused, exact accepted)={} upload activate bound to type + generation + digest (other generation / other type refused, exact accepted)={} replay refused={} refusals journaled={} ({} of 6)\n",
         if pass { "PASS" } else { "FAIL" }, view, session_only, wrong_key, wrong_dev, wrong_boot, stale_n, other_op, tamper, malformed, good, replay && older, journaled, jn, words, no_owner, tool, ep_reset, ep_rotate, ep_activate, ep_replay, ep_journal, ep_jn
