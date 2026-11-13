@@ -15,6 +15,7 @@ import AppShell from './AppShell';
 import PageHeader from './PageHeader';
 import Gate from './Gate';
 import WifiSheet from './WifiSheet';
+import QrSheet from './QrSheet';
 
 const SIGNED = 'Changes are signed with your signing key in this browser and apply live, without a restart, as a short trial: they keep themselves when everything works, or switch back by themselves.';
 
@@ -34,6 +35,7 @@ const GetOnlineApp: Component = () => {
   const [adv, setAdv] = createSignal(false);
   onMount(() => startNetworkLive());
   const [sheet, setSheet] = createSignal(false);
+  const [qr, setQr] = createSignal(false);
 
   const device = () => substrate() === 'heqk';
   const n = (): NetworkView | null => (networkState() === 'absent' && !device() ? SAMPLE : networkView());
@@ -103,6 +105,7 @@ const GetOnlineApp: Component = () => {
               </Show>
               <div class="l0-card-foot">
                 <button class="hp-btn hp-btn--primary" onClick={() => setSheet(true)}>Change password</button>
+                <button class="hp-btn" onClick={() => setQr(true)} disabled={!n()?.wifi}>Share QR</button>
                 <a class="hp-btn" href="/network/wifi">More Wi-Fi settings</a>
               </div>
               <p class="pcard-note">{SIGNED}</p>
@@ -139,6 +142,7 @@ const GetOnlineApp: Component = () => {
         </Show>
       </main>
       <Show when={sheet()}><WifiSheet onClose={() => setSheet(false)} preview={!device()} /></Show>
+      <Show when={qr() && n()?.wifi}><QrSheet ssid={n()!.wifi!.ssid} security={/wpa3/i.test(n()!.wifi!.security) && !/wpa2/i.test(n()!.wifi!.security) ? 'wpa3' : 'wpa2'} onClose={() => setQr(false)} /></Show>
     </AppShell>
   );
 };
