@@ -43,7 +43,7 @@ export default async function (t) {
   await page.fill('input[type=password]', 'New family password 2026');
   await page.click('button:has-text("Review all three")'); await page.waitForTimeout(400);
   const d = page.locator('.drawer', { hasText: 'Apply all three together' });
-  ok(!(await vis(d.locator('text=leaving it out removes it'))) && await vis(d.locator('text=Kept: sent again exactly as in force')), 'bundle: the firewall in force is kept (no edit demanded)');
+  ok(!(await vis(d.locator('text=leaving it out removes it'))) && await vis(d.locator('text=Unchanged: sent again exactly as in force')), 'bundle: the firewall in force is kept (no edit demanded)');
   ok(await vis(d.locator('text=type the PPPoE password again')), 'bundle: the PPPoE password is typed again (the device never serves it)');
   await d.locator('label:has-text("PPPoE password (again)") input').fill('isp-secret');
   const files = [];
