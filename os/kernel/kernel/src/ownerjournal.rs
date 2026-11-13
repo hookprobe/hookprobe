@@ -409,6 +409,10 @@ impl Journal {
     fn half_lo(&self, h: u8) -> u64 {
         self.lo + h as u64 * self.half_sect()
     }
+    /// Bytes of the active half written so far (epoch header + records) — `GET /api/system` storage.
+    pub fn used_bytes(&self) -> u64 {
+        self.next_idx * REC_LEN as u64
+    }
     /// Current epoch (0 = empty) — reported by the API.
     pub fn epoch(&self) -> u32 {
         self.epoch

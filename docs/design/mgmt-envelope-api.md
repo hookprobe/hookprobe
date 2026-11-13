@@ -264,3 +264,27 @@ The answer is `text/plain`. View commands run on the session alone. A privileged
 answers `ERROR: Configuration rejected. (refused: ...)` with the reasons above. `owner challenge` prints the same
 values as `GET /api/config` `envelope`. The journal keeps only the first two command words, never arguments or the
 envelope. Session elevation (`owner elevate`) no longer exists.
+
+## Read-only: `GET /api/system`
+
+Added 2026-11-13 (UI request). Owner session, same auth as `GET /api/config` (401 without a session, 403 on an
+unclaimed device). No envelope: it changes nothing.
+
+```json
+{"version": null, "build": "rel-20261113a", "slot": "B", "trial": false, "svn": 7,
+ "storage": {"used": 3276800, "total": 7516192768, "retention_days": null}}
+```
+
+| Field | Meaning |
+|---|---|
+| `version` | A release version string. Always `null` today: the kernel carries no release version (the crate version `0.1.0` is not one). Show the `build`. |
+| `build` | The image's build id (`HEQK_BUILD_ID` at build time; the same id the console prints as `[OTA] this boot: … build=`). `null` for a build made without one. |
+| `slot` | `"A"` or `"B"`: the boot slot this image runs from, as classified at boot from HBoot's measurement and the slot headers. `null` when the device has no factory A/B layout or the image matches neither slot (and always in QEMU). |
+| `trial` | `true`: this is a tryboot TRIAL of an update that has not committed yet (it commits once the AP serves and the WAN is usable for 30 s, else the device reboots to the previous slot within 5 min). Becomes `false` the moment it commits. `null` when `slot` is `null`. |
+| `svn` | The security version number of the running image (HBoot's handoff). An update must carry an SVN at least this high. `null` without HBoot (QEMU). |
+| `storage.total` | Size of the DataVolume (the eMMC data partition) in bytes. |
+| `storage.used` | Bytes written in it: the evidence log (superblock + record slots in use), the owner journal (records in the active half) and the artifact store (active payload of each type). Cheap: from RAM, except the artifact manifest, re-read at most once a minute (an activation shows within 60 s). |
+| `storage.retention_days` | Always `null` today: the evidence log is a bounded ring (oldest overwritten), not a time window, so the device computes no retention in days. |
+
+`storage.used` and `storage.total` are both `null` when there is no DataVolume (QEMU, a build without on-device
+persistence, or a disk without the 0xDA partition). The object always has all three keys.

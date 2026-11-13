@@ -281,14 +281,28 @@ pub enum Boot {
     Unknown,
 }
 
+/// `GET /api/system`: this boot as `classify` found it — the running slot's letter (b'a' / b'b'), bit 7 = a trial not
+/// committed yet (cleared by `committed`). 0 = never classified (no HBoot, no factory A/B layout, or Unknown).
+static mut RUNNING: u8 = 0;
+pub fn running() -> u8 {
+    unsafe { RUNNING }
+}
+/// The trial gate committed the running slot: it is now the cold-boot slot.
+pub fn committed() {
+    unsafe { RUNNING &= 0x7f }
+}
+
 /// Classify this boot from HBoot's measurement and the two slot headers.
 pub fn classify<D: BlockDev>(d: &D, running: [u8; 32]) -> Boot {
     let Some(run) = hal::abslot::inactive_slot_run(|l, b| d.read_block(l, b).is_ok()) else { return Boot::Unknown };
     if stored_hash(d, run.active_lo) == Some(running) {
+        unsafe { RUNNING = run.active };
         return Boot::Cold;
     }
     if stored_hash(d, run.lo) == Some(running) {
-        return Boot::Trial(if run.active == b'a' { b'b' } else { b'a' });
+        let l = if run.active == b'a' { b'b' } else { b'a' };
+        unsafe { RUNNING = l | 0x80 };
+        return Boot::Trial(l);
     }
     Boot::Unknown
 }
