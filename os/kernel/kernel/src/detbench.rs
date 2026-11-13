@@ -116,13 +116,24 @@ pub fn run() -> bool {
             rules[i].1[lab] += 1;
             // DET-01 review: the first 3 hits per rule and label, with the flow that fired (local corpus only)
             if rules[i].1[lab] <= 3 {
-                // IPv6 events (e.g. rule 121 rogue RA) carry no IPv4 tuple — print the fields only for IPv4 frames
-                let v4 = len >= 14 && f[12] == 0x08 && f[13] == 0x00;
-                let (a, b) = if v4 { (e.src.to_be_bytes(), e.dst.to_be_bytes()) } else { ([0u8; 4], [0u8; 4]) };
-                arch_aarch64::_print(format_args!(
-                    " [DETBENCH] hit rule={} label={} t={}s {}src={}.{}.{}.{} dst={}.{}.{}.{} dport={}\n",
-                    e.rule_id, label(lab), rel / 1_000_000, if v4 { "" } else { "(IPv6 frame, no IPv4 tuple) " }, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], e.dport
-                ));
+                // The frame's own kind decides what identifies it: IPv4 -> the event's tuple; ARP (rule 127 / 102,
+                // no IPv4 header) -> sender IP + MAC and target IP; IPv6 (rule 121 rogue RA ...) -> the source MAC.
+                // MB 2026-11-13: ARP hits were printed as "IPv6 frame", which hid the proxy-ARP router behind 127.
+                let et = if len >= 14 { [f[12], f[13]] } else { [0, 0] };
+                let sm = if len >= 12 { [f[6], f[7], f[8], f[9], f[10], f[11]] } else { [0u8; 6] };
+                let (a, b) = (e.src.to_be_bytes(), e.dst.to_be_bytes());
+                let head = format_args!(" [DETBENCH] hit rule={} label={} t={}s ", e.rule_id, label(lab), rel / 1_000_000);
+                match et {
+                    [0x08, 0x06] if len >= 42 => arch_aarch64::_print(format_args!(
+                        "{}ARP op={} sender={}.{}.{}.{} is-at {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} target={}.{}.{}.{} (eth src {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x})\n",
+                        head, u16::from_be_bytes([f[20], f[21]]), f[28], f[29], f[30], f[31], f[22], f[23], f[24], f[25], f[26], f[27],
+                        f[38], f[39], f[40], f[41], sm[0], sm[1], sm[2], sm[3], sm[4], sm[5])),
+                    [0x08, 0x00] => arch_aarch64::_print(format_args!(
+                        "{}src={}.{}.{}.{} dst={}.{}.{}.{} dport={}\n", head, a[0], a[1], a[2], a[3], b[0], b[1], b[2], b[3], e.dport)),
+                    _ => arch_aarch64::_print(format_args!(
+                        "{}ethertype={:02x}{:02x} (no IPv4 tuple) eth src {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                        head, et[0], et[1], sm[0], sm[1], sm[2], sm[3], sm[4], sm[5])),
+                }
             }
         }
         done += 1;
