@@ -1,7 +1,7 @@
 ---
 /**
  * /detect/feed — Detect (§4, NAPSE): detections + the rules behind them.
- * Static Astro shell + Solid client:load island. Spec: docs/architecture/MissionControl.md §4.
+ * Static Astro shell + Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image). Spec: docs/architecture/MissionControl.md §4.
  */
 
 import Shell from '../../layouts/Shell.astro';
@@ -12,5 +12,5 @@ import DetectApp from '../../components/DetectApp';
   title="Detect — HookProbe OS"
   description="Live detections from Suricata, YARA, Sigma, AI and behavioral engines, mapped to MITRE ATT&CK — each handing off to Investigate."
 >
-  <DetectApp client:load />
+  <DetectApp client:only="solid-js" />
 </Shell>
