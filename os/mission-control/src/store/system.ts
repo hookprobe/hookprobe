@@ -22,6 +22,7 @@ export async function refreshSystem(): Promise<void> {
 
 /** "1.2 GB of 7.3 GB" (decimal units, as storage is sold). */
 export function bytesOf(used: number, total: number): string {
-  const g = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`);
+  // small amounts in B / KB: a fresh flash uses 512 B (the evidence-log superblock), which "0 MB" made look empty or broken
+  const g = (b: number) => (b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : b >= 1e6 ? `${Math.round(b / 1e6)} MB` : b >= 1e3 ? `${Math.round(b / 1e3)} KB` : `${b} B`);
   return `${g(used)} of ${g(total)}`;
 }
