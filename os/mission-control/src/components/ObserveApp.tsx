@@ -173,7 +173,11 @@ const ObserveApp: Component = () => {
         <div class="dev-facts">
           <For each={sel()?.facts ?? []}>{([k, v]) => <p class="l0-card-sub">{k}<b>{v}</b></p>}</For>
         </div>
-        <p class="pcard-note">Packet capture is not kept on this device. Send events to your own system from Timeline &amp; Export to keep them longer.</p>
+        <p class="l0-label">Packets</p>
+        <span class="gate gate--off">
+          <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Download pcap</button></span>
+          <span class="gate-reason" role="note">This device does not keep packet captures. Send events to your own system from Timeline &amp; Export to keep them longer.</span>
+        </span>
       </Drawer>
     </AppShell>
   );
