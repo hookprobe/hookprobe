@@ -12,6 +12,7 @@
   hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --config-rollback "reason"
   hq-upload.py --mc ... --owner-key-file KEY [--sign-key K_OWN.pem] --hsh "config status"   # the web console
   hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --hsh "wifi heal-test freeze"   # BENCH builds only
+  hq-upload.py --mc ... --owner-key-file KEY --sign-key K_OWN.pem --hsh "artstore tamper-test devices"   # BENCH only
 
 R6 = D: confirm / rollback, pack activate / rollback, factory reset, owner-key rotation (and privileged hsh commands)
 need an HQMGMT1 envelope signed by the enrolled owner key; the owner token (--owner-key-file) only opens the session.
@@ -174,6 +175,12 @@ def main():
             if op is None:
                 sys.exit(f"wifi heal-test: one of status, {', '.join(PS().HEAL_TEST_OP)}")
             body += "\n" + envelope("wifi-heal-test", op)
+        elif tuple(words[:2]) == ("artstore", "tamper-test") and len(words) > 2:
+            # BENCH builds only (kernel feature artstore-bench): the envelope is bound to the artifact type code
+            tc = PS().TYPE_CODE.get(words[2])
+            if tc is None or words[2] in ("config", "os_image"):
+                sys.exit("artstore tamper-test: one of shield_block, shield_allow, ioc, rules, oui, devices, wan, wifi, policy")
+            body += "\n" + envelope("artstore-tamper-test", tc)
         conn_h = {**hdr, "Content-Type": "text/plain"}
         if conn[0] is None:
             connect()
