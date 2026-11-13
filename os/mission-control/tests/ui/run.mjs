@@ -32,7 +32,7 @@ for (const name of specs) {
     async vis(loc) { return loc.first().isVisible().catch(() => false); },
     // Fill and submit the Approve sheet (store/approve.ts): { reason?, key?, passphrase? }.
     async approve(v = {}) {
-      const s = page.locator('.approve-sheet');
+      const s = page.locator('.approve-sheet[aria-labelledby="approve-title"]');
       await s.waitFor({ state: 'visible', timeout: 5000 });
       if (v.reason !== undefined) await s.locator('label:has-text("Reason") input').fill(v.reason);
       const pw = s.locator('input[type=password]');

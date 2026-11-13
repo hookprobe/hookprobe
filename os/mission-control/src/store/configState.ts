@@ -63,7 +63,7 @@ async function act(path: string, ask: string): Promise<string> {
   return confirm ? `Kept: configuration generation ${r.generation} is now committed.` : `Rolled back: the device is going back to the previous configuration (from generation ${r.generation}).`;
 }
 export const confirmConfig = () => act('/api/config/confirm', 'Keep this configuration?');
-export const rollbackConfig = () => act('/api/config/rollback', 'Go back to the previous configuration? The device restarts.');
+export const rollbackConfig = () => act('/api/config/rollback', 'Go back to the previous configuration? It is applied live, without a restart.');
 
 /** How the Wi-Fi / PPPoE passwords inside signed configuration are stored, from the device's own report. */
 export function restNote(): string {

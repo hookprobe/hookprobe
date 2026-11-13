@@ -35,6 +35,7 @@ export default async function (t) {
     if (p === '/api/upload/chunk') { st.chunks.push(r.request().postDataBuffer()); return r.fulfill(json({ ok: true })); }
     if (p === '/api/upload/finish') { const box = Buffer.concat(st.chunks); st.inFlight = { id: 'u1', type: 'config', size: box.length, received: box.length, verified: true, type_code: 9, generation: 10, digest: createHash('sha256').update(box.subarray(512)).digest('hex') }; return r.fulfill(json({ ok: true })); }
     if (p === '/api/upload/activate') { st.inFlight = null; return r.fulfill(json({ ok: true, activated: true, live: true, needs_confirm: true, generation: 10 })); }
+    if (p === '/api/config/confirm') { st.confirmed = r.request().postData() ?? ''; return r.fulfill(json({ ok: true, committed: true, generation: 10 })); }
     return r.fulfill(json({}, 404));
   });
 
@@ -72,6 +73,12 @@ export default async function (t) {
   ok(got.length === want.length && got.every((r, i) => r === want[i]), 'after the change: "Show QR code" renders the code for the new password');
   await page.keyboard.press('Escape'); await page.waitForTimeout(200);
   ok(!(await page.locator('[aria-labelledby="qr-sheet-title"]').count()) && await vis(sheet), 'Esc closes the QR code only, the Wi-Fi sheet stays');
+  // Keep is in the result itself (board AdvApply "Keep the new Wi-Fi"), signed like the banner's
+  await sheet.locator('button:has-text("Keep the new Wi-Fi")').click(); await page.waitForTimeout(300);
+  await t.approve({ reason: 'works for me' }); await page.waitForTimeout(800);
+  const env = new URLSearchParams(st.confirmed ?? '').get('envelope') ?? '';
+  ok(env.length === 312 && await vis(sheet.locator('text=Kept: configuration generation 10 is now committed')) && !(await sheet.locator('button:has-text("Keep the new Wi-Fi")').count()),
+    'Keep the new Wi-Fi: a signed confirm (HQMGMT1 envelope) from the result sheet, then it says it is kept');
   ok(new URLSearchParams(st.begin).get('type') === 'config' && new URLSearchParams(st.begin).get('owner_key') === 'label-password-0001', 'sent as a configuration bundle, authorised with the device password');
 
   const box = Buffer.concat(st.chunks), dir = mkdtempSync(join(tmpdir(), 'l0wifi-'));
