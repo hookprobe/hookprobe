@@ -101,7 +101,7 @@ const GetOnlineApp: Component = () => {
               }>
                 <span class="go-link-name">{n()!.wifi!.ssid}</span>
                 <p class="l0-card-sub">{n()!.wifi!.width_mhz >= 80 || n()!.wifi!.channel > 14 ? '5 GHz' : '2.4 GHz'} · channel {n()!.wifi!.channel} · {n()!.wifi!.security}</p>
-                <p class="l0-card-sub">From {n()!.wifi!.source}</p>
+                <p class="l0-card-sub">{/bundle/i.test(n()!.wifi!.source) ? 'Set by your signed configuration' : 'Set by the settings stored on this device'}</p>
               </Show>
               <div class="l0-card-foot">
                 <button class="hp-btn hp-btn--primary" onClick={() => setSheet(true)}>Change password</button>
