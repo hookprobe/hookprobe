@@ -25,8 +25,13 @@ _image_header:
 .global _start
 _start:
     mov     x21, x0             // firmware DTB PA — stash before ANY clobber
+    // Only the boot core runs HBoot. Cortex-A76 has MPIDR.MT=1: cores differ in Aff1 (0x000 / 0x100 / 0x200 / 0x300 on
+    // BCM2712, T0 inventory MB23), so Aff0 alone is 0 on EVERY core. Compare Aff3..Aff0 (MPIDR[39:32] + [23:0]) with
+    // the boot core's 0; latent today (TF-A holds secondaries until PSCI CPU_ON), required before ADR 0060 SMP.
     mrs     x2, mpidr_el1
-    and     x2, x2, #0xff
+    mov     x3, #0xffffff
+    movk    x3, #0xff, lsl #32
+    and     x2, x2, x3
     cbnz    x2, park
 
     msr     daifset, #0xf
