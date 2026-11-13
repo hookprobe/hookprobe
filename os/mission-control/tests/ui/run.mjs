@@ -1,6 +1,7 @@
 // Mission Control UI suite runner — see run.sh. Usage: node run.mjs <playwright node_modules> <base url> [spec…]
 // Live mode (UI_LIVE_TOKEN set, called by os/kernel/tools/mc-e2e.sh): runs specs/live/*.mjs against a real
 // heqk device, signing in with the owner key first. Live specs must be read-only (the e2e run continues).
+// Metal mode (UI_SPEC_DIR=specs/metal + UI_LIVE_TOKEN): the change journeys, opt-in, see specs/metal/README.
 import { readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -10,7 +11,8 @@ const here = dirname(fileURLToPath(import.meta.url));
 const { chromium } = await import(pathToFileURL(join(pwDir, 'playwright', 'index.mjs')).href);
 const shots = process.env.UI_SHOTS || '';
 const token = process.env.UI_LIVE_TOKEN || '';
-const dir = join(here, token ? 'specs/live' : 'specs');
+// UI_SPEC_DIR=specs/metal: opt-in specs that CHANGE the device (run by the heqk session in a metal batch, never in g3).
+const dir = join(here, process.env.UI_SPEC_DIR || (token ? 'specs/live' : 'specs'));
 
 const specs = readdirSync(dir).filter((f) => f.endsWith('.mjs')).map((f) => f.replace(/\.mjs$/, '')).sort()
   .filter((s) => only.length === 0 || only.includes(s));
@@ -19,7 +21,7 @@ const browser = await chromium.launch();
 let fails = 0, passes = 0;
 for (const name of specs) {
   const { default: spec } = await import(pathToFileURL(join(dir, `${name}.mjs`)).href);
-  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true, ignoreHTTPSErrors: process.env.UI_INSECURE_TLS === '1' });
   const page = await ctx.newPage();
   page.setDefaultTimeout(6000);
   const errors = [];
