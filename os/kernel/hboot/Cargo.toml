@@ -34,3 +34,7 @@ path = "src/main.rs"
 # Off in every normal build (operator 2026-11-09: no OTP writes outside an approved provisioning step);
 # a default image never contains the OTP write and uses the software AK on a blank unit.
 otp-provision = []
+# ADR 0062 T0 inventory: READ-ONLY platform discovery printed as `[T0-inv]` lines (ID registers, firmware DTB,
+# VC-mailbox GET tags, and the SMCCC/PSCI probe gated on DTB psci=smc AND EL3). Never in a production image;
+# a default build is unchanged.
+t0inv = []
