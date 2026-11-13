@@ -35,6 +35,7 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
 .prow:last-child { border-bottom: 0; }
 .prow > span:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .prow > span:last-child { color: var(--hp-text-secondary); white-space: nowrap; font-family: var(--hp-font-mono); font-size: 12px; }
+@media (max-width: 767px) { .prow { flex-wrap: wrap; gap: 2px 12px; } .prow > span:first-child { white-space: normal; } .prow > span:last-child { white-space: normal; text-align: left; overflow-wrap: anywhere; } }
 .pbar { display: flex; align-items: center; gap: 8px; font-size: 12px; width: 100%; }
 .pbar-name { width: 92px; flex: 0 0 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--hp-text-secondary); }
 .pbar-track { flex: 1; height: 8px; border-radius: 999px; background: rgba(255,255,255,.07); overflow: hidden; }

@@ -42,7 +42,7 @@ export default async function (t) {
   await page.click('[aria-label="Settings"] >> text=Signing key'); await page.waitForTimeout(300);
   await page.click('text=Import a backup'); await page.fill('textarea', PEM);
   await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(800);
-  ok(await vis(page.locator('[aria-label="Settings"] a[href="/admin/config"]')) && await vis(page.locator('[aria-label="Settings"] a[href="/admin/shell"]')), 'Administration links to Configuration and keys and to Shell');
+  ok(await vis(page.locator('nav[aria-label="Administration pages"] a[href="/admin/config"]')) && await vis(page.locator('nav[aria-label="Administration pages"] a[href="/admin/shell"]')), 'Administration links to Configuration and keys and to Shell (tab strip)');
 
   // Configuration and keys.
   await go('/admin/config', 1500);
