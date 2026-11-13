@@ -4045,6 +4045,7 @@ fn cm5_p10_probe() {
                                             Ok(n) => {
                                                 kprint!(" [OTA] COMMITTED slot {} ({} boot-config writes) — healthy trial: AP serving + WAN usable for {} s; the next cold boot runs it\n", l as char, n, otaimg::COMMIT_STABLE_S);
                                                 ota_boot = otaimg::Boot::Cold;
+                                                otaimg::committed();
                                             }
                                             Err(e) => {
                                                 kprint!(" [OTA] commit failed: {:?} — rebooting to the previous slot\n", e);

@@ -91,7 +91,7 @@ pub fn take_trial_reboot() -> bool {
 
 /// (running SVN, anti-rollback floor for an update, payload hash HBoot measured). Without an HBoot
 /// handoff (QEMU) there is no running measurement and the floor is the compile-time 1.
-fn boot_facts() -> (u64, u64, Option<[u8; 32]>) {
+pub fn boot_facts() -> (u64, u64, Option<[u8; 32]>) {
     #[cfg(feature = "hboot")]
     {
         use boot_abi::{BootInfo, BOOTINFO_ADDR, BOOTINFO_MAGIC};
@@ -172,6 +172,20 @@ pub fn installed() -> bool {
     unsafe { (*core::ptr::addr_of!(DEV)).is_some() }
 }
 
+/// `GET /api/system` storage: bytes of the artifact store's active payloads, from the manifest re-read at most once a
+/// minute (cached; an activation shows within 60 s).
+#[cfg_attr(not(feature = "appersist"), allow(dead_code))]
+pub fn store_used(now_ms: u64) -> u64 {
+    static mut C: (u64, u64) = (0, u64::MAX);
+    let c = unsafe { &mut *core::ptr::addr_of_mut!(C) };
+    if c.1 == u64::MAX || now_ms.wrapping_sub(c.1) >= 60_000 {
+        c.0 = dev()
+            .and_then(|d| Some(artstore::read_manifest(&*d, artstore::store_region(&*d)?).e.iter().filter(|e| e.half != 0).map(|e| e.len).sum()))
+            .unwrap_or(0);
+        c.1 = now_ms;
+    }
+    c.0
+}
 fn dev() -> Option<&'static mut DevRef> {
     unsafe { (*core::ptr::addr_of_mut!(DEV)).as_mut() }
 }
