@@ -44,7 +44,9 @@ ensure_owner() { local e; e=$(api /api/config | python3 -c 'import json,sys; pri
   [ "$e" = True ] && return 0
   python3 -I "$ROOT/os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$T/enroll.txt" && $UP --enroll "$T/enroll.txt" > "$T/enroll.out" 2>&1
   local rc=$?; echo "     owner key enrolled for the R6 envelopes (rc=$rc: $(cut -c1-100 "$T/enroll.out"))"; return $rc; }
-rule7() { pi "curl -sk -o /dev/null -w '%{http_code}' -m 8 $AP_MC/api/health" | grep -q 200; }
+# rule 7 probe: up to 2 tries, each miss printed (MB17b A5 missed once while B4 / C5 with the same policy passed)
+rule7() { local c k; for k in 1 2; do c=$(pi "curl -sk -o /dev/null -w '%{http_code}' -m 8 $AP_MC/api/health")
+  [ "$c" = 200 ] && { [ $k = 1 ] || echo "     rule 7: 200 on try $k"; return 0; }; echo "     rule 7 try $k: http ${c:-none}"; sleep 2; done; return 1; }
 boots() { tr -d '\r\000' < "$LOG" | grep -ac "HEQK Core"; }
 ensure_owner
 gen0=$(api /api/config | python3 -c 'import json,sys; d=json.load(sys.stdin); print(max(d["generation"], d["floor"]))')
