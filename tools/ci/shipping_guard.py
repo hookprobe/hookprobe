@@ -51,6 +51,7 @@ FORBIDDEN = {
     "netmetal": "GEM<->smoltcp first-light bridge",
     "stajoin": "WPA2 STA join proof (build-time credentials)",
     "detbench": "detection benchmark corpus replay (QEMU)",
+    "wifiheal-bench": "Wi-Fi self-heal metal trigger (injects a synthetic TX freeze / FWHALT)",
 }
 
 LINE = re.compile(r"^([A-Za-z0-9_\-]+) v\S+.*?\|([A-Za-z0-9_,\-]*)\|")
