@@ -3,7 +3,8 @@
 # config_protected + floors); 0.3 WAN generation floors — a newer signed WAN.TXT is accepted and moves the floor, an
 # OLDER one is refused at boot ("below the floor ... REFUSED") and the WAN keeps working, the floor survives reboots.
 # Run on a freshly flashed image BEFORE any HQCFG1 bundle is committed (a bundle's WAN section takes precedence).
-# 0.4 (other-half fallback) needs a corrupted store half on the eMMC — QEMU evidence only ([P-artstore]).
+# 0.4 (other-half fallback) needs a corrupted store half on the eMMC: tools/diagnostics/cm5-artstore-fallback-check.sh on
+# a BENCH image built with the `artstore-bench` feature (QEMU: [P-artstore], [P-artstore-bench]).
 #   tools/diagnostics/cm5-phase0-check.sh <owner-key-file> <serial-log> [mc]
 set -u -o pipefail
 KEY="${1:?owner key file}"; LOG="${2:?serial log}"; MC="${3:-https://192.168.200.146}"

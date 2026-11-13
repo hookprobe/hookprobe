@@ -41,6 +41,11 @@ pub const ANCHOR_ROTATE: u16 = 33;
 // `wifi heal-test …` on the web console. Envelope-only (role_for: unknown); arg = 1 freeze, 2 freeze-once, 3 fwhalt,
 // 4 clear; generation = 0, digest = zeros.
 pub const WIFI_HEAL_TEST: u16 = 40;
+// BENCH ONLY (kernel feature `artstore-bench`, never in the shipping flavour): the ADR 0059 Phase 0.4 metal trigger
+// `artstore tamper-test <type>` on the web console — flips byte 0 of the first data sector of the type's ACTIVE store
+// half so the next boot proves the fallback to the OTHER half. Envelope-only (role_for: unknown); arg = the artifact
+// type code (artstore::Ty as u8); generation = 0, digest = zeros.
+pub const ARTSTORE_TAMPER_TEST: u16 = 41;
 
 // ---- result codes ----
 pub const R_OK: u8 = 0;
