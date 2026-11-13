@@ -293,6 +293,21 @@ the next boot prints the previous recovery record; (5) a recurrence then degrade
 WAN and Mission Control on the management VLAN keep serving; (6) repeated cycles over the 72-h soak stay stable
 (no reset loop, `worst_loop_gap_ms` well under the 16-s watchdog during a reload).
 
+### 4.2 Metal status added 2026-11-13 (main after #1120)
+
+Evidence only. This section marks no release gate complete. Rows not listed keep their 4.1 status.
+
+| # | Status 2026-11-13 | Evidence |
+|---|---|---|
+| A1 | tightened commit gate (#1015) metal-proven: commit only once the AP serves and the WAN is usable; trial, commit, cold boot of the new build, and rollback of an unhealthy trial | `metal-evidence/20261113-mb16-ota.md` (OTA 9/9 + rollback) |
+| A7 | Wi-Fi self-heal ladder metal-proven with the bench trigger (#1095): kick → bounce → firmware reload ×2 with backoff → one reboot → previous record printed; an injected FWHALT → reload at once, no reset; a recurrence after the reboot → degraded (Wi-Fi off, management VLAN still serving, no reset); clear → Wi-Fi back. Items 1–5 of 4.1's list, with the freeze / FWHALT injected by the bench trigger (not a natural firmware halt). Open: (6) the 72 h soak, and a natural FWHALT | `metal-evidence/20261113-mb15-selfheal.md` (51/51) |
+| A11 | 5a / 5b metal-proven: `[P-lansvc] PASS` ("5a EAPOL-Key M2 + RSNE MFP identical, 5b M2/M4 PTK + MIC (AKM 2 and 8) identical, PMK/PTK wiped") prints at every AP-image boot on the CM5. 5c: the live SAE hook (`wanparse::EL0_SAE`) is installed at every AP boot (`install_dhcp`), so every real WPA3 join runs through EL0; its vector self-test `[P-lansvc-sae]` stays QEMU-only (image budget). The authenticator state machine is still in EL1 (not built) | serial (MB19–MB21 boots); `20261113-mb17b-mb18.md` (WPA3 7/7); `20261112-mb9-mb10.md` / `20261113-mb11-mb13.md` (SAE joins) |
+| ADR 0059 Phase 0 | 0.3 + 0.5 metal-proven (Phase 0 check 9/9, three batches). **0.4 metal-proven**: active store half tampered → the other half loads, not the boot copy. Found and fixed with it: an upload or rollback after that fallback was refused until a reflash (#1119, QEMU negative control + metal) | `20261113-mb17b-mb18.md`, `20261113-mb19-mb20.md`, `20261113-mb21-phase04.md` |
+| Sealed config + live apply | metal-proven: house plan 33/33 (MB14, MB17), live apply 20/20 (MB19), Wi-Fi live spike 14/14 (MB17) | `20261113-mb14.md`, `20261113-mb17.md`, `20261113-mb19-mb20.md` |
+| hsh R6 = D | owner-signed envelopes used on metal by every check above (confirm, rollback, upload activate, reboot, bench triggers) | the same records |
+| `GET /api/system` | metal-proven (build, slot, trial, SVN, DataVolume usage) + the Mission Control OS card in a browser | `20261113-mb19-mb20.md` |
+| Open | DNS-01: the first blocked DNS answer per boot is held ~3 s (pre-existing; evidence and hypothesis in `20261113-mb19-mb20.md`) | — |
+
 ## 5. Human-dependency register (B — only these need the operator)
 
 1. Production signing-key custody (HSM / ceremony) and the policy/pack key-custody model behind A4.
