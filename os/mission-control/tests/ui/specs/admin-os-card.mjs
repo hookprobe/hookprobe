@@ -24,6 +24,11 @@ export default async function (t) {
     && !(await card.locator('text=days kept').count()) && await vis(card.locator('text=security version 12')),
     'metal: the build id (version is always null), boot slot on trial, storage (no invented retention window), security version');
 
+  // metal MB19 (fresh flash): 512 B used reads as 512 B, not "0 MB"
+  sys = { version: null, build: 'm19-db8821e9', slot: 'A', trial: false, svn: 1, storage: { used: 512, total: 465567744, retention_days: null } };
+  await go('/admin/identity', 1500);
+  ok(await vis(card.locator('.prow', { hasText: '512 B of 466 MB' })) && await vis(card.locator('text=build m19-db8821e9')), 'metal MB19 values: 512 B of 466 MB (not "0 MB"), build shown');
+
   // QEMU: everything null — every row says not reported, and "null" never reaches the screen
   sys = { version: null, build: null, slot: null, trial: null, svn: null, storage: { used: null, total: null, retention_days: null } };
   await go('/admin/identity', 1500);
