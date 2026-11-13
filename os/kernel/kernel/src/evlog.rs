@@ -141,6 +141,7 @@ pub fn install(srk: &[u8; 32], policy: Policy) -> Option<(u64, u64)> {
     let mut mbr = [0u8; 512];
     dev.read_block(0, &mut mbr).ok()?;
     let dv = crate::datavol::DataVol::from_mbr(&mbr)?;
+    dv.note();
     let (elo, ehi) = dv.region(crate::datavol::Region::Evidence);
     let (lo, hi) = (elo, (elo + EVLOG_SECT).min(ehi));
     let (blo, bhi) = dv.bounds();

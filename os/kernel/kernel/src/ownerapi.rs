@@ -50,6 +50,16 @@ pub fn audit_artifact(ty: &str, value: u8, reason: &[u8], session: [u8; 4], ms: 
     }
 }
 static mut PERSISTENT: bool = false;
+/// Bytes the persistent journal has written (0 for the RAM journal) — `GET /api/system` storage.
+#[cfg_attr(not(feature = "appersist"), allow(dead_code))]
+pub fn journal_used() -> u64 {
+    unsafe {
+        match (*core::ptr::addr_of!(J)).as_ref() {
+            Some(j) if PERSISTENT => j.used_bytes(),
+            _ => 0,
+        }
+    }
+}
 static mut LAST_REPLAY: oj::Replay = oj::Replay { records: 0, damaged: false, full: false, rollback: false, anchor: 0 };
 
 /// Install the persistent store (AP image boot): `dev` armed for `[lo, hi)`, keyed by the device SRK.

@@ -73,6 +73,28 @@ impl DataVol {
     pub fn bounds(&self) -> (u64, u64) {
         (self.start, self.start + self.sect)
     }
+
+    /// Remember the partition size for `usage` (the AP image's evidence-log mount calls this once at boot).
+    pub fn note(&self) {
+        unsafe { SECT = self.sect }
+    }
+}
+
+/// The DataVolume size in sectors as mounted this boot; 0 = none found (QEMU, no 0xDA partition).
+static mut SECT: u64 = 0;
+
+/// `GET /api/system` `storage`: (used, total) bytes of the DataVolume, None without one. Used = the evidence ring's
+/// superblock + written record slots + the owner journal's written records + the active artifact-store payloads
+/// (manifest read at most once a minute). All from RAM except that cached manifest read: no scan per request.
+#[cfg(feature = "appersist")]
+pub fn usage(now_ms: u64) -> Option<(u64, u64)> {
+    let total = unsafe { SECT } * 512;
+    if total == 0 {
+        return None;
+    }
+    let mut ev = 0;
+    crate::evlog::with(&mut |l, _| ev = (l.log.count() + 1) * 512);
+    Some((ev + crate::ownerapi::journal_used() + crate::upload::store_used(now_ms), total))
 }
 
 /// `[P-datavol]`
