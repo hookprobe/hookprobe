@@ -21,6 +21,7 @@ import { ownerRules, refreshOwnerRules } from '../store/ownerRules';
 import { uploadView, refreshUploads, uploadPack, rollbackPack, PACK_LABEL, CONNECTIVITY, type UploadStep } from '../store/packUpload';
 import { fetchPlannerStatus, type PlannerStatus } from '../store/plannerApi';
 import AppShell from './AppShell';
+import { systemView, refreshSystem, bytesOf } from '../store/system';
 import AdminTabs from './AdminTabs';
 import { postSigned, MSG } from '../store/envelope';
 import { approve, askOwnerKey } from '../store/approve';
@@ -59,7 +60,7 @@ const AdministrationApp: Component = () => {
   const [erase, setErase] = createSignal('');
 
   onMount(() => {
-    void refreshActions(); void refreshOwnerRules(); void refreshUploads(); startNetworkLive();
+    void refreshActions(); void refreshOwnerRules(); void refreshUploads(); void refreshSystem(); startNetworkLive();
     void fetchPlannerStatus().then(setPlanner).catch(() => setPlanner('unreachable'));
   });
 
@@ -295,10 +296,15 @@ const AdministrationApp: Component = () => {
                 <p class="l0-label">Operating system</p>
                 {(() => {
                   const os = () => uploadView()?.types.find((t) => t.type === 'os_image');
+                  const sys = () => systemView();
                   return (
                     <>
-                      <span class="prow"><span>Signed OS image</span><span>{sample() ? 'generation 14' : os() ? `generation ${os()!.generation}${os()!.source === 'boot' ? ' (from the boot card)' : ''}` : 'not reported'}</span></span>
-                      <span class="prow"><span>Version and channel</span><span>{sample() ? 'sample' : 'not reported by this device yet'}</span></span>
+                      <span class="prow"><span>Version</span><span>{sample() ? 'sample' : sys()?.version ? `${sys()!.version}${sys()!.build ? ` · build ${sys()!.build}` : ''}` : 'not reported by this device yet'}</span></span>
+                      <span class="prow"><span>Signed OS image</span><span>{sample() ? 'generation 14' : sys() ? `security version ${sys()!.svn}` : os() ? `generation ${os()!.generation}${os()!.source === 'boot' ? ' (from the boot card)' : ''}` : 'not reported'}</span></span>
+                      <Show when={sample() || sys()}>
+                        <span class="prow"><span>Boot slot</span><span>{sample() ? 'A' : `${sys()!.slot}${sys()!.trial ? ' · on trial (confirms itself once healthy)' : ''}`}</span></span>
+                        <span class="prow"><span>Storage</span><span>{sample() ? '1.2 GB of 7.3 GB · 7 days kept' : sys()!.storage ? `${bytesOf(sys()!.storage!.used, sys()!.storage!.total)}${sys()!.storage!.retention_days != null ? ` · ${sys()!.storage!.retention_days} days kept` : ''}` : 'not reported'}</span></span>
+                      </Show>
                       <p class="l0-card-sub" style={{ margin: 0 }}>Updates are signed OS images: the device checks the signature and that the image is newer, keeps the previous one, and starts the new one on the next restart.</p>
                       <div class="l0-card-foot">
                         <button class="hp-btn" onClick={() => { setSec('packs'); setPackType('os_image'); setMsg(''); }}>Update</button>
