@@ -78,7 +78,7 @@ G0=$(dev 't["generation"]'); N=$((G0 + 1)); M=$((G0 + 2)); echo "     devices ge
 pack $N; pack $M
 upload $N; chk $? "1.1 signed DEVICES gen $N uploaded + activated (owner-signed envelope) ($(grep -o '"ok": [a-z]*' "$T/up$N" | tr '\n' ' '))"
 upload $M; chk $? "1.2 signed DEVICES gen $M uploaded + activated ($(grep -o '"ok": [a-z]*' "$T/up$M" | tr '\n' ' '))"
-[ "$(dev 't["source"], t["generation"], t.get("rollback_to")')" = "('store', $M, $N)" ]
+[ "$(dev 't["source"], t["generation"], t.get("rollback_to")')" = "store $M $N" ]
 chk $? "1.3 /api/upload devices: store gen $M, the other half verifies at gen $N ($(dev 't'))"
 
 # ---- 2. the trigger: tamper the ACTIVE half ----
@@ -103,7 +103,7 @@ since | grep -aq "\[AP-STORE\] stored devices pack REFUSED by its loader"; chk $
 since | grep -aq "\[AP-STORE\] devices from the artifact store (generation $N)"
 chk $? "4.3 serial: devices from the artifact store, generation $N = the OTHER half ($(since | grep -a '\[AP-STORE\] devices from' | tail -1 | cut -c1-100))"
 ! since | grep -aq "\[AP-STORE\] devices from the artifact store (generation $M)"; chk $? "4.4 serial: NOT the tampered generation $M"
-[ "$(dev 't["source"], t["generation"]')" = "('store', $N)" ]; chk $? "4.5 /api/upload devices: store gen $N, not the boot copy ($(dev 't'))"
+[ "$(dev 't["source"], t["generation"]')" = "store $N" ]; chk $? "4.5 /api/upload devices: store gen $N, not the boot copy ($(dev 't'))"
 mgmt200 && sleep 10 && mgmt200 && curl -sk -o /dev/null -m 8 "$MC/"; chk $? "4.6 the device boots and serves normally (/api/health 200 twice, / answers)"
 ! since | grep -aqE "\[CRASH\]|PANIC|panicked"; chk $? "4.7 no crash / panic in this boot"
 
@@ -114,5 +114,5 @@ reboot "restore devices half $HALF"; chk $? "5.2 device back after the restore r
 waitlog "\[AP-STORE\] devices from the artifact store" 60
 ! since | grep -aq "stored devices pack REFUSED" && since | grep -aq "\[AP-STORE\] devices from the artifact store (generation $M)"
 chk $? "5.3 serial: no refusal, devices from the artifact store at generation $M again"
-[ "$(dev 't["source"], t["generation"], t.get("rollback_to")')" = "('store', $M, $N)" ]; chk $? "5.4 /api/upload devices: store gen $M, rollback_to $N (both halves valid)"
+[ "$(dev 't["source"], t["generation"], t.get("rollback_to")')" = "store $M $N" ]; chk $? "5.4 /api/upload devices: store gen $M, rollback_to $N (both halves valid)"
 [ "$ok" -eq "$n" ] && { echo "ARTSTORE-FALLBACK: PASS ($ok/$n)"; exit 0; } || { echo "ARTSTORE-FALLBACK: FAIL ($ok/$n)"; exit 1; }
