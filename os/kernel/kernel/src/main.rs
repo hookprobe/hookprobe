@@ -4451,8 +4451,13 @@ fn cm5_p10_probe() {
                                     }
                                 }
                                 cyw43::ApEvent::Leave(sta) => {
+                                    // a leave of the station's earlier attempt, processed after its new SAE Accepted, must
+                                    // not undo that SAE (metal MB11 house check: association status 16)
                                     #[cfg(feature = "wpa3")]
-                                    cyw43::ap_sae_forget(&sta, now() / (freq / 1000).max(1));
+                                    if !cyw43::ap_sae_forget(&sta, now() / (freq / 1000).max(1)) {
+                                        kprint!("   [P11-AP3] leave of {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} predates its SAE (accepted < 2 s ago): SAE state + PMKSA kept\n",
+                                            sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
+                                    }
                                     unsafe { (*core::ptr::addr_of_mut!(V6)).forget_mac(&sta) }; // release its IPv6 bindings (SAVI)
                                     leaves += 1;
                                     stas.remove(&sta);
@@ -7506,7 +7511,7 @@ pub extern "C" fn kmain() -> ! {
                 if pass { "PASS" } else { "FAIL" }, j10, e2e, ptk, cmac, h2e, wire);
             // WPA3 reconnect with PMKSA caching (metal 2026-11-12: AKM 8 + PMKID, no SAE, was keyed as PSK)
             let (rsn, cache) = (hal::rsnassoc::selftest(), sae::pmksa_selftest());
-            kprint!(" [P-pmksa] {} — WPA3 PMKSA caching on the AP (12.6.10.3): association-request RSNE walk (AKM, PMKID list; truncated at every field, wrong version, PMKID count past the end, RSNE behind other elements or behind the fixed fields) + decision (AKM 8 after SAE -> SAE PMK; AKM 8 + a cached PMKID -> that PMK; AKM 8 + unknown PMKID or no PMKID -> deauth reason 49; an AKM the BSS does not offer -> reason 20; AKM 2 -> passphrase; unreadable / other AKM -> the old rule; per-station refusal log rate limit)={} | PMKSA cache (hit on MAC+PMKID only, expiry, one per station, bounded eviction, clear wipes, filled with the Annex J.10 SAE PMKID)={}\n",
+            kprint!(" [P-pmksa] {} — WPA3 PMKSA caching on the AP (12.6.10.3): association-request RSNE walk (AKM, PMKID list; truncated at every field, wrong version, PMKID count past the end, RSNE behind other elements or behind the fixed fields) + decision (AKM 8 after SAE -> SAE PMK; AKM 8 + a cached PMKID -> that PMK; AKM 8 + unknown PMKID or no PMKID -> deauth reason 49; an AKM the BSS does not offer -> reason 20; AKM 2 -> passphrase; unreadable / other AKM -> the old rule; per-station refusal log rate limit; live-security-change stale-view guard: the first join within 30 s with an AKM the previous BSS offered -> reason 2 once, new-only AKM / same-mode bounce / window closed / 9th station -> keyed; the M3 fallback RSNE+RSNXE per mode = the metal beacon captures)={} | PMKSA cache (hit on MAC+PMKID only, expiry, one per station, bounded eviction, clear wipes, filled with the Annex J.10 SAE PMKID)={}\n",
                 if rsn && cache { "PASS" } else { "FAIL" }, rsn, cache);
         }
         let _ = ja4id::selftest();
@@ -14818,7 +14823,7 @@ impl wifilive::WifiPort for MetalWifi {
     fn install_security(&mut self, ssid: &[u8], pass: &[u8]) {
         #[cfg(feature = "wpa3")]
         if let Some(p) = self.prep.take() {
-            let _ = arch_aarch64::cyw43::ap_security_install(p, ssid, pass);
+            let _ = arch_aarch64::cyw43::ap_security_install_live(p, ssid, pass);
         }
         #[cfg(not(feature = "wpa3"))]
         let _ = (ssid, pass);
