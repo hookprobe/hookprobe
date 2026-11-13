@@ -111,12 +111,10 @@ impl ProdFull {
             Some(h) => (h.device_id, h.svn_floor, h.pcr),
             None => (0, 0, [[0u8; 32]; boot_abi::NUM_PCR]),
         };
-        let policy = Policy {
-            mask: boot_abi::SEAL_POLICY_STRICT,
-            device_id,
-            svn_floor,
-            pcr,
-        };
+        // EVID-01 (operator decision C, 2026-11-13): evidence + snapshot are bound to the device (SRK + device id), not to
+        // the measured build, so the history survives OTA updates and rollbacks (STRICT emptied it at every update)
+        let _ = (svn_floor, pcr);
+        let policy = crate::evlog::evidence_policy(device_id);
         let mut pf = ProdFull {
             last_gen: 0,
             emmc: None,
