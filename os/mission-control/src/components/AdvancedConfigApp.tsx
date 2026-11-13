@@ -194,6 +194,25 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   });
   const bundleSections = (): { wan: string; wifi: string; policy?: string } => ({ wan: fromLegacy('wan', buildWan(wan())), wifi: fromLegacy('wifi', buildWifi(wifi())),
     ...(polDirty() ? { policy: fromLegacy('policy', buildPolicyText(pol())) } : devPolicy() ? { policy: fromLegacy('policy', devPolicy()!) } : {}) });
+  /** A section as the device has it in force (same canonical form as the bundle), or null when not reported. */
+  const mask = (t: string) => t.replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••');
+  const inForce = (k: 'wan' | 'wifi' | 'policy'): string | null => {
+    const c = configView(); if (!c?.sections?.[k]?.present) return null;
+    try {
+      if (k === 'policy') return c.policy_text ? fromLegacy('policy', c.policy_text) : null;
+      if (k === 'wan') return c.wan_keys ? fromLegacy('wan', buildWan({ ...wanFormFrom(c.wan_keys), pppoePass: 'x' })) : null;
+      return c.wifi_keys ? fromLegacy('wifi', buildWifi({ ...wifiFormFrom(c.wifi_keys), psk: 'xxxxxxxx' })) : null;
+    } catch { return null; }
+  };
+  /** Board AdvApply "Preview the change": what the bundle removes and adds per section (secrets masked on both sides). */
+  const sectionDiff = (k: 'wan' | 'wifi' | 'policy') => {
+    let now = ''; try { now = mask(bundleSections()[k] ?? ''); } catch { return null; }
+    const was = inForce(k); if (was === null) return null;
+    const a = mask(was).split('\n').filter(Boolean), b = now.split('\n').filter(Boolean);
+    const left = [...a], added: string[] = [];
+    for (const l of b) { const i = left.indexOf(l); if (i >= 0) left.splice(i, 1); else added.push(l); }
+    return { removed: left, added, same: b.length - added.length };
+  };
   const applyBundle = async () => {
     setBMsg('');
     try {
@@ -486,11 +505,22 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
               <Show when={k !== 'policy' || polDirty() || !!devPolicy()} fallback={
                 <p class="l0-card-sub" aria-label="Firewall not included" style={{ margin: 0 }}>Not included: the device keeps the firewall from its own files (no bundle is in force). To replace it, edit the Firewall tab first.</p>
               }>
-                <p class="pcard-note" style={{ margin: 0 }}>{k === 'policy' ? (polDirty() ? 'Replaced by your edits in the Firewall tab.' : 'Kept: sent again exactly as in force.') : 'Replaced by this section.'}</p>
-                <pre style={{ margin: 0, font: '12px/1.6 var(--hp-font-mono)', 'white-space': 'pre-wrap' }}>{(() => { try { return (bundleSections()[k] ?? '').replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••'); } catch (e) { return String((e as Error).message); } })()}</pre>
+                <Show when={sectionDiff(k)} fallback={<>
+                  <p class="pcard-note" style={{ margin: 0 }}>{k === 'policy' ? (polDirty() ? 'Replaced by your edits in the Firewall tab.' : 'Kept: sent again exactly as in force.') : 'Replaces the device\u2019s current setting (the device does not report it, so no comparison).'}</p>
+                  <pre style={{ margin: 0, font: '12px/1.6 var(--hp-font-mono)', 'white-space': 'pre-wrap' }}>{(() => { try { return mask(bundleSections()[k] ?? ''); } catch (e) { return String((e as Error).message); } })()}</pre>
+                </>}>{(d) => (
+                  <Show when={d().removed.length || d().added.length} fallback={<p class="pcard-note" aria-label={`${k} unchanged`} style={{ margin: 0 }}>Unchanged: sent again exactly as in force{k !== 'policy' ? ' (the password, which the device never shows, is sent again as typed)' : ''}.</p>}>
+                    <div class="plan-diff-lines" aria-label={`${k} changes`}>
+                      <For each={d().removed}>{(l) => <div class="plan-diff-line plan-diff-line--removed"><span class="plan-diff-mark">−</span>{l}</div>}</For>
+                      <For each={d().added}>{(l) => <div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>{l}</div>}</For>
+                    </div>
+                    <p class="pcard-note" style={{ margin: 0 }}>{d().same} line{d().same === 1 ? '' : 's'} unchanged.</p>
+                  </Show>
+                )}</Show>
               </Show>
             </div>
           )}</For>
+          <p class="l0-card-sub" style={{ margin: 0 }}>A bundle carries every section, even the ones you did not change, and the device never shows passwords back: type them again, even if they stay the same.</p>
           <Show when={wan().mode === 'pppoe'}>
             <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>PPPoE password (again)
               <input style={field} type="password" autocomplete="off" value={wan().pppoePass === '(current)' ? '' : wan().pppoePass} onInput={(e) => setWan({ ...wan(), pppoePass: e.currentTarget.value })} /></label>
