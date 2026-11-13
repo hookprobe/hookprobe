@@ -1,7 +1,7 @@
 /**
  * ShieldApp — Shield (Pillar 1: DNS / ad-blocker) Solid island.
  *
- * Route: /network/dns  (Astro static page, Solid client:load island)
+ * Route: /network/dns  (Astro static page, Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image))
  *
  * Spec references:
  *   - docs/research/v2-customer-experience.md §0 (Pillar 1 — Shield) + §progressive disclosure
