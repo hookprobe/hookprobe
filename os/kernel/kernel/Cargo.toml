@@ -130,6 +130,11 @@ apmc = ["apmode", "mcserve", "hsh"]
 # persistent TX freeze or a FWHALT event into wifiheal's classifier INPUT; the real kick / bounce / firmware reload /
 # reboot / degrade code acts on it. Never in a product image (tools/ci/shipping_guard.py forbids it).
 wifiheal-bench = []
+# BENCH ONLY (ADR 0059 Phase 0.4 metal proof): `artstore tamper-test <type>` on the web console (POST /api/hsh, owner
+# session + an owner-signed HQMGMT1 envelope, msg ARTSTORE_TAMPER_TEST = 41, arg = the type code) flips byte 0 of the
+# first data sector of that type's ACTIVE artifact-store half on the eMMC; the next boot's unchanged loader refuses it
+# and the real fallback loads the OTHER half. Never in a product image (tools/ci/shipping_guard.py forbids it).
+artstore-bench = []
 # Bench: the Wi-Fi TX-stall snapshot reads its counters twice 1 s apart (blocks the AP loop ~2 s).
 # Default builds read once and never block (peer review COR-L1).
 stalldiag = ["apmode"]
