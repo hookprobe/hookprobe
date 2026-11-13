@@ -177,10 +177,12 @@
 .hp-banner--danger a { color: #ffd0d0; text-decoration: underline; }
 .hp-banner--trial { background: rgba(0, 180, 255, 0.10); border: 1px solid rgba(0, 180, 255, 0.5); color: var(--hp-text-primary); display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .hp-banner-actions { display: inline-flex; gap: 8px; margin-left: auto; }
-.hp-banner-actions .hp-btn { min-height: 32px; }
+.hp-banner-text { flex: 1 1 320px; min-width: 0; }
+.hp-banner-actions .hp-btn { min-height: 44px; }
 
 /* Approve sheet (store/approve.ts): the one consent / credential dialog */
 .approve-scrim { position: fixed; inset: 0; z-index: 1000; background: rgba(4, 4, 8, 0.72); display: flex; align-items: center; justify-content: center; padding: 16px; }
+.approve-scrim--top { z-index: 1100; } /* the confirm sheet opens from inside other sheets (Wi-Fi Keep): always on top */
 .approve-sheet { width: 100%; max-width: 440px; max-height: calc(100dvh - 32px); overflow-y: auto; background: var(--hp-surface-elevated); border: 1px solid var(--hp-border-strong, rgba(255,255,255,.14)); border-radius: 14px; padding: 20px; box-sizing: border-box; display: flex; flex-direction: column; gap: 10px; }
 .approve-title { margin: 0; font-size: 18px; font-weight: 700; color: var(--hp-text-primary); }
 .approve-body { margin: 0; font-size: 14px; line-height: 1.5; color: var(--hp-text-secondary); white-space: pre-line; }
