@@ -13,6 +13,8 @@ import AdminTabs from './AdminTabs';
 import { fetchJson } from '../store/api';
 import { envelopeFor, MSG } from '../store/envelope';
 import { approve } from '../store/approve';
+import { substrate } from '../store/mock';
+import { healthChecked } from '../store/health';
 
 const COMMANDS = ['help', 'version', 'info', 'uptime', 'interface show wan', 'qsecbit status', 'config status', 'owner status', 'security posture', 'owner challenge', 'config confirm', 'config rollback'];
 const PRIVILEGED: Record<string, number> = { 'config confirm': MSG.CFG_CONFIRM, 'config rollback': MSG.CFG_ROLLBACK };
@@ -67,19 +69,19 @@ const ShellApp: Component = () => {
         </div>
         <AdminTabs current="/admin/shell" />
         <div class="shell-info" role="note"><span><b>Role:</b> view (read-only)</span><span><b>Transport:</b> this signed-in session</span><span><b>Audit:</b> every command is journaled (first two words)</span></div>
-        <Show when={unavailable()}><p class="gate-reason">{unavailable()}</p></Show>
+        <Show when={unavailable() || (healthChecked() && !substrate())}><p class="gate-reason">{unavailable() || 'Preview: no device is answering, so there is no shell to talk to.'}</p></Show>
         <div class="shell-grid">
           <section class="shell-console" aria-label="Shell">
             <pre class="shell-screen" ref={screen} aria-live="polite">{lines().join('\n')}</pre>
             <form class="shell-input" onSubmit={(e) => { e.preventDefault(); void send(cmd()); }}>
               <label for="hsh-line" class="shell-prompt">hsh&gt;</label>
-              <input id="hsh-line" value={cmd()} onInput={(e) => setCmd(e.currentTarget.value)} placeholder="type a command, or pick one" autocomplete="off" spellcheck={false} disabled={!!unavailable()} />
+              <input id="hsh-line" value={cmd()} onInput={(e) => setCmd(e.currentTarget.value)} placeholder="type a command, or pick one" autocomplete="off" spellcheck={false} disabled={!!unavailable() || (healthChecked() && !substrate())} />
               <button type="button" class="hp-btn" onClick={() => setLines([''])}>Clear</button>
             </form>
           </section>
           <aside class="shell-cmds" aria-label="Commands in this build">
             <p class="l0-label">Commands</p>
-            <For each={COMMANDS}>{(c) => <button class="shell-cmd" disabled={busy() || !!unavailable()} onClick={() => void send(c)}>{c}</button>}</For>
+            <For each={COMMANDS}>{(c) => <button class="shell-cmd" disabled={busy() || !!unavailable() || (healthChecked() && !substrate())} onClick={() => void send(c)}>{c}</button>}</For>
             <p class="pcard-note">Read-only by default. <code>config confirm</code> and <code>config rollback</code> are signed with your signing key here; the session alone cannot change anything.</p>
           </aside>
         </div>

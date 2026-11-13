@@ -104,9 +104,11 @@ const GetOnlineApp: Component = () => {
                 <p class="l0-card-sub">From {n()!.wifi!.source}</p>
               </Show>
               <div class="l0-card-foot">
-                <button class="hp-btn hp-btn--primary" onClick={() => setSheet(true)}>Change password</button>
-                <button class="hp-btn" onClick={() => setQr(true)} disabled={!n()?.wifi}>Share QR</button>
-                <a class="hp-btn" href="/network/wifi">More Wi-Fi settings</a>
+                <Show when={n()?.wifi} fallback={<a class="hp-btn hp-btn--primary" href="/network/wifi">Set up Wi-Fi</a>}>
+                  <button class="hp-btn hp-btn--primary" onClick={() => setSheet(true)}>Change password</button>
+                  <button class="hp-btn" onClick={() => setQr(true)}>Share QR</button>
+                  <a class="hp-btn" href="/network/wifi">More Wi-Fi settings</a>
+                </Show>
               </div>
               <p class="pcard-note">{SIGNED}</p>
             </article>
@@ -114,6 +116,7 @@ const GetOnlineApp: Component = () => {
               <span class="go-link-name">Guest Wi-Fi</span>
               <p class="l0-card-sub">A separate network for visitors: internet only, no access to your devices.</p>
               <div class="l0-card-foot"><Gate cap="guest_ssid"><button class="hp-btn">Turn on guest Wi-Fi</button></Gate></div>
+              <p class="pcard-note" style={{ margin: 0 }}>This device runs one Wi-Fi network. Put visitors in an internet-only zone in <a href="/network/zones">My Network</a> instead.</p>
             </article>
           </div>
         </section>

@@ -129,15 +129,13 @@ const AdministrationApp: Component = () => {
           </div>
         </div>
         <AdminTabs current="/admin/identity" />
-        <Show when={msg()}><p class="pro-sub" role="status">{msg()}</p></Show>
+        <Show when={msg() && sec() !== 'identity'}><p class="pro-sub" role="status">{msg()}</p></Show>
 
         <div class="obs-grid">
           <nav class="pcard obs-sources" aria-label="Settings">
             <For each={SECTIONS}>{([s, label]) => (
               <button class={`shell-rail-item${sec() === s ? ' is-active' : ''}`} aria-pressed={sec() === s} onClick={() => { setSec(s); setMsg(''); }}>{label}</button>
             )}</For>
-            <a class="shell-rail-item" href="/admin/config">Configuration and keys</a>
-            <a class="shell-rail-item" href="/admin/shell">Shell</a>
           </nav>
 
           <section style={{ display: 'flex', 'flex-direction': 'column', gap: '16px', 'min-width': 0 }}>
@@ -241,6 +239,7 @@ const AdministrationApp: Component = () => {
                     <button class="hp-btn" onClick={async () => { try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch { /* go anyway */ } location.href = '/login'; }}>Sign out</button>
                   </Show>
                 </div>
+                <Show when={msg()}><p class={/^Not changed/.test(msg()) ? 'plan-diff-warn' : 'go-state--up'} role="status" style={{ margin: 0 }}>{msg()}</p></Show>
                 <p class="pcard-note">Lost the password? Re-flash OWNER.TXT on the boot disk: it always wins over a changed password.</p>
               </div>
             </Show>
