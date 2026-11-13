@@ -15,12 +15,12 @@
   policy-sign.py enroll-proof OWNERKEY                          # ADR 0058 D3: public_key + proof for POST /api/anchor/enroll
   policy-sign.py rotate OLDKEY NEWKEY GEN                       # ADR 0058 D3: public_key + proof + signature for /api/anchor/rotate
   policy-sign.py mgmt-sign OWNERKEY --device-id HEX --epoch HEX --seq N
-                 --msg confirm|rollback|stage|activate|pack-rollback|factory-reset|rotate  [per-message binding,
+                 --msg confirm|rollback|stage|activate|pack-rollback|factory-reset|rotate|wifi-heal-test  [per-message binding,
                  see mgmt_args: --generation --digest --bundle --arg --type --current-key --new-key]
                                                                 # R6 = D: an HQMGMT1 command envelope (312 hex)
 
 HQMGMT1 envelope (156 B, R6 = D): "HQMGMT1\\0" | version u16 = 1 | msg u16 (20 confirm, 21 rollback, 22 stage,
-23 activate, 24 pack-rollback, 32 factory-reset, 33 rotate) |
+23 activate, 24 pack-rollback, 32 factory-reset, 33 rotate; 40 wifi-heal-test = BENCH builds only) |
 device_id[16] | epoch[8] | seq u64 | arg u64 | generation u64 | digest[32] | Ed25519(K_own, "HQMGMT1-SIG" || bytes 0..92),
 all little-endian. device_id / epoch / next sequence / generation / digest come from GET /api/config ("envelope")
 or the hsh command `owner challenge`; confirm / rollback bind the bundle in force (digest = sha256 of the HQCFG1
@@ -54,7 +54,10 @@ def pubhex(k):
     return k.public_key().public_bytes(ser.Encoding.Raw, ser.PublicFormat.Raw).hex()
 
 
-MGMT_MSG = {"confirm": 20, "rollback": 21, "stage": 22, "activate": 23, "pack-rollback": 24, "factory-reset": 32, "rotate": 33}
+MGMT_MSG = {"confirm": 20, "rollback": 21, "stage": 22, "activate": 23, "pack-rollback": 24, "factory-reset": 32, "rotate": 33,
+            "wifi-heal-test": 40}
+# BENCH ONLY (kernel feature wifiheal-bench): the `arg` of a wifi-heal-test envelope = the hsh word's op code
+HEAL_TEST_OP = {"freeze": 1, "freeze-once": 2, "fwhalt": 3, "clear": 4}
 # artifact type codes (kernel artstore::Ty; os_image 0xfe) — the `arg` of activate / pack-rollback envelopes
 TYPE_CODE = {"shield_block": 0, "shield_allow": 1, "ioc": 2, "rules": 3, "oui": 4, "devices": 5, "wan": 6, "wifi": 7,
              "policy": 8, "config": 9, "os_image": 0xFE}
@@ -72,7 +75,8 @@ def mgmt_args(rest):
        activate             --type NAME --generation N --digest HEX | --file PACK   (as /api/upload/finish reports)
        pack-rollback        --type NAME --generation N                       (the generation it rolls back TO)
        factory-reset        (nothing else)
-       rotate               --current-key HEX --new-key HEX --generation N   (public keys; N = rotation generation)"""
+       rotate               --current-key HEX --new-key HEX --generation N   (public keys; N = rotation generation)
+       wifi-heal-test       --arg freeze|freeze-once|fwhalt|clear            (BENCH builds only: wifi heal-test …)"""
     kv = {}
     it = iter(rest)
     for k in it:
@@ -93,6 +97,10 @@ def mgmt_args(rest):
         kv["arg"] = str(TYPE_CODE[kv["type"]])
     if msg == "activate" and kv.get("digest") is None:
         sys.exit("activate binds the staged content: --digest (as /api/upload/finish reports it)")
+    if msg == "wifi-heal-test":
+        if kv.get("arg") not in HEAL_TEST_OP:
+            sys.exit(f"wifi-heal-test: --arg must be one of {', '.join(HEAL_TEST_OP)}")
+        kv["arg"] = str(HEAL_TEST_OP[kv["arg"]])
     if msg == "rotate":
         kv["arg"] = str(fp8(bytes.fromhex(kv["current_key"])))
         kv["digest"] = hashlib.sha256(bytes.fromhex(kv["new_key"])).hexdigest()

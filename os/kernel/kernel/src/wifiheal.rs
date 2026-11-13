@@ -208,6 +208,10 @@ impl Heal {
     /// The FWHALT counter when the AP loop starts (halts before it are the boot's business).
     pub fn baseline(&mut self, fw_halts: u32) {
         self.halts_seen = fw_halts;
+        #[cfg(feature = "wifiheal-bench")]
+        {
+            self.halts_seen = fw_halts.wrapping_add(bench::halts()); // the bench offset is part of the counter
+        }
     }
 
     pub fn degraded(&self) -> bool {
@@ -227,9 +231,32 @@ impl Heal {
 
     /// One tick. Never blocks except inside a bounce / reload the port runs (bounded, rare).
     pub fn step<P: Port>(&mut self, s: &Sample, p: &mut P) -> Action {
+        // BENCH ONLY (feature `wifiheal-bench`, never shipped): the bench trigger shapes the classifier's INPUT (a
+        // synthetic persistent TX freeze, or an injected FWHALT event); everything after it — the classification and
+        // the port's real kick / bounce / firmware reload / reboot / degrade — is the production path.
+        #[cfg(feature = "wifiheal-bench")]
+        let shaped = bench::shape(*s);
+        #[cfg(feature = "wifiheal-bench")]
+        let s = &shaped;
         let a = self.step_inner(s, p);
+        #[cfg(feature = "wifiheal-bench")]
+        bench::after(a);
         publish(self);
         a
+    }
+
+    /// BENCH ONLY: one parseable console line per ladder step, printed BEFORE the port acts (after the diagnostics
+    /// line for a bounce / reload / reboot / degrade), with the loop clock so a metal check can bound the timings.
+    #[cfg(feature = "wifiheal-bench")]
+    fn note(&self, a: Action, c: Class, s: &Sample) {
+        if bench::quiet() {
+            return;
+        }
+        let stall = if self.stall_since == 0 { 0 } else { s.now_ms.saturating_sub(self.stall_since) };
+        arch_aarch64::_print(format_args!(
+            " [WIFI-HEAL] step={} class={} t_ms={} stall_ms={} kicks={} bounces={} reloads={} post_reboot={} bench={}\n",
+            ["none", "kick", "bounce", "reload", "reboot", "degraded"][a as usize], c.name(), s.now_ms, stall, self.kicks, self.bounces,
+            self.reloads_boot, self.in_window(s.now_ms), bench::mode_name()));
     }
 
     fn step_inner<P: Port>(&mut self, s: &Sample, p: &mut P) -> Action {
@@ -273,6 +300,13 @@ impl Heal {
             self.class = Class::Sleep;
             return Action::None;
         }
+        // BENCH ONLY: a synthetic freeze has no real queued head to ask the firmware about (decided by the station
+        // count, as for a broadcast head)
+        #[cfg(feature = "wifiheal-bench")]
+        if !bench::frozen() && d >= PROBE_MS && self.probe.is_none_or(|(_, at)| now.saturating_sub(at) >= REPROBE_MS) {
+            self.probe = Some((p.probe(), now));
+        }
+        #[cfg(not(feature = "wifiheal-bench"))]
         if d >= PROBE_MS && self.probe.is_none_or(|(_, at)| now.saturating_sub(at) >= REPROBE_MS) {
             self.probe = Some((p.probe(), now));
         }
@@ -290,11 +324,15 @@ impl Heal {
             self.bounces += 1;
             self.last_bounce = Some(now);
             self.last_action = now;
+            #[cfg(feature = "wifiheal-bench")]
+            self.note(Action::BssBounce, Class::Freeze, s);
             let _ = p.bounce();
             self.settle(now);
             return Action::BssBounce;
         }
         if d >= KICK_MS && (self.ep_kicks == 0 || now.saturating_sub(self.last_kick) >= KICK_REPEAT_MS) {
+            #[cfg(feature = "wifiheal-bench")]
+            self.note(Action::Kick, Class::Freeze, s);
             p.kick();
             self.ep_kicks += 1;
             self.kicks += 1;
@@ -337,6 +375,8 @@ impl Heal {
         self.reloads_boot += 1;
         self.last_reload = Some(now);
         self.last_action = now;
+        #[cfg(feature = "wifiheal-bench")]
+        self.note(Action::FirmwareReload, c, s);
         if !p.reload() {
             self.reload_fails += 1;
             self.pending = Some(c); // retried after the backoff, or terminal once the budget is spent
@@ -350,11 +390,15 @@ impl Heal {
         if self.in_window(s.now_ms) {
             self.capture(c, Action::Degrade, s, p, F_REBOOTED | F_DEGRADED);
             self.st = St::Degraded;
+            #[cfg(feature = "wifiheal-bench")]
+            self.note(Action::Degrade, c, s);
             p.degrade();
             return Action::Degrade;
         }
         self.capture(c, Action::RebootOnce, s, p, F_REBOOTED);
         self.st = St::Rebooting;
+        #[cfg(feature = "wifiheal-bench")]
+        self.note(Action::RebootOnce, c, s);
         let d = self.last.unwrap_or(Diag { w: [0; WORDS] });
         p.reboot(&d);
         Action::RebootOnce
@@ -448,6 +492,132 @@ pub fn status() -> (&'static str, &'static str, u32, u32, u32, bool) {
         c >> 24,
         FLAGS.load(Relaxed) & 1 != 0,
     )
+}
+
+/// BENCH ONLY (cargo feature `wifiheal-bench`; forbidden in the shipping flavour by tools/ci/shipping_guard.py): the
+/// metal trigger for the self-heal ladder. It changes the classifier's INPUT only — never the actions:
+///   freeze       a synthetic persistent TX freeze: the credit window held exhausted (tx_max == tx_seq, latched), a
+///                delivery queued and an awake station waiting — until `clear`. The real ladder runs: kick -> BSS
+///                bounce -> firmware reload -> 2nd reload after the backoff -> the ONE reboot (or Degrade in the boot
+///                after that reboot).
+///   freeze-once  the same, cleared automatically by the first firmware reload (proves reload -> BSS serve-ready ->
+///                stations re-join without walking on to the reboot).
+///   fwhalt       one FWHALT event added to the mailbox counter the classifier reads: the firmware-crash branch.
+///   clear        stop the synthetic freeze (an injected FWHALT count stays: the counter only grows).
+/// Driven over the web console (`POST /api/hsh`, `wifi heal-test …`, an owner-signed HQMGMT1 envelope per change).
+#[cfg(feature = "wifiheal-bench")]
+pub mod bench {
+    use super::{Action, Sample};
+    use core::sync::atomic::{AtomicBool, AtomicU32, Ordering::Relaxed};
+
+    pub const OP_FREEZE: u64 = 1;
+    pub const OP_FREEZE_ONCE: u64 = 2;
+    pub const OP_FWHALT: u64 = 3;
+    pub const OP_CLEAR: u64 = 4;
+
+    /// 0 off, 1 freeze (until clear), 2 freeze-once (cleared by the first firmware reload)
+    static MODE: AtomicU32 = AtomicU32::new(0);
+    /// injected FWHALT events (monotonic: added to the mailbox counter)
+    static HALTS: AtomicU32 = AtomicU32::new(0);
+    /// 0 = no freeze engaged, else 0x100 | the tx_seq the freeze holds
+    static LATCH: AtomicU32 = AtomicU32::new(0);
+    /// changes requested / changes announced on the console by the loop
+    static GEN: AtomicU32 = AtomicU32::new(0);
+    static SHOWN: AtomicU32 = AtomicU32::new(0);
+    static QUIET: AtomicBool = AtomicBool::new(false);
+
+    /// The command word for an op (the hsh command and hq-upload.py use the same codes as the envelope `arg`).
+    pub fn op_code(w: &[u8]) -> Option<u64> {
+        Some(match w {
+            b"freeze" => OP_FREEZE,
+            b"freeze-once" => OP_FREEZE_ONCE,
+            b"fwhalt" => OP_FWHALT,
+            b"clear" => OP_CLEAR,
+            _ => return None,
+        })
+    }
+
+    pub fn set(op: u64) -> bool {
+        match op {
+            OP_FREEZE => MODE.store(1, Relaxed),
+            OP_FREEZE_ONCE => MODE.store(2, Relaxed),
+            OP_FWHALT => {
+                HALTS.fetch_add(1, Relaxed);
+            }
+            OP_CLEAR => MODE.store(0, Relaxed),
+            _ => return false,
+        }
+        GEN.fetch_add(1, Relaxed);
+        true
+    }
+
+    pub fn frozen() -> bool {
+        MODE.load(Relaxed) != 0
+    }
+    pub fn halts() -> u32 {
+        HALTS.load(Relaxed)
+    }
+    pub fn mode_name() -> &'static str {
+        ["off", "freeze", "freeze-once"][MODE.load(Relaxed).min(2) as usize]
+    }
+    pub fn quiet() -> bool {
+        QUIET.load(Relaxed)
+    }
+
+    /// The classifier input with the injection applied.
+    pub fn shape(mut s: Sample) -> Sample {
+        s.fw_halts = s.fw_halts.wrapping_add(HALTS.load(Relaxed));
+        if MODE.load(Relaxed) == 0 {
+            LATCH.store(0, Relaxed);
+        } else {
+            let l = LATCH.load(Relaxed);
+            let seq = if l == 0 {
+                LATCH.store(0x100 | s.tx_seq as u32, Relaxed);
+                s.tx_seq
+            } else {
+                l as u8
+            };
+            s.tx_seq = seq;
+            s.tx_max = seq; // credit window 0, completions frozen
+            s.queued = s.queued.max(1);
+            s.stations = s.stations.max(1);
+        }
+        let g = GEN.load(Relaxed);
+        if g != SHOWN.load(Relaxed) {
+            SHOWN.store(g, Relaxed);
+            if !quiet() {
+                arch_aarch64::_print(format_args!(" [WIFI-HEAL] bench injection applied: mode={} injected_fwhalts={} t_ms={}\n",
+                    mode_name(), HALTS.load(Relaxed), s.now_ms));
+            }
+        }
+        s
+    }
+
+    /// After a step: `freeze-once` ends with the first firmware reload.
+    pub fn after(a: Action) {
+        if a == Action::FirmwareReload && MODE.load(Relaxed) == 2 {
+            MODE.store(0, Relaxed);
+            GEN.fetch_add(1, Relaxed);
+            SHOWN.store(GEN.load(Relaxed), Relaxed);
+            if !quiet() {
+                arch_aarch64::_print(format_args!(" [WIFI-HEAL] bench freeze-once cleared by the firmware reload\n"));
+            }
+        }
+    }
+
+    /// [P-wifiheal] only: silence the console lines and restore the state afterwards.
+    pub fn selftest_enter() -> (u32, u32, u32, u32) {
+        QUIET.store(true, Relaxed);
+        (MODE.load(Relaxed), HALTS.load(Relaxed), LATCH.load(Relaxed), GEN.load(Relaxed))
+    }
+    pub fn selftest_leave(saved: (u32, u32, u32, u32)) {
+        MODE.store(saved.0, Relaxed);
+        HALTS.store(saved.1, Relaxed);
+        LATCH.store(saved.2, Relaxed);
+        GEN.store(saved.3, Relaxed);
+        SHOWN.store(saved.3, Relaxed);
+        QUIET.store(false, Relaxed);
+    }
 }
 
 /// Associated stations (the loop's view: ASSOC_IND adds, DEAUTH / DISASSOC removes).
@@ -691,9 +861,90 @@ pub fn selftest() -> bool {
     publish(&Heal::from_boot(None, false));
     let heap = crate::heap::used() == heap0;
     let pass = congestion && nosta && sleep && ladder && diag && once && degrade && early && later && crash1 && crash2 && refill && record && sta && st && heap;
+    // BENCH ONLY: the metal trigger reaches the real ladder ([P-wifiheal-bench], its own line)
+    #[cfg(feature = "wifiheal-bench")]
+    let pass = pass && bench_selftest();
     arch_aarch64::_print(format_args!(
         " [P-wifiheal] {} — audit A7 Wi-Fi self-heal: congestion (completions advancing) no action={} no station no action={} power-save / gone station: kicks then no recovery={} freeze ladder kick 100ms/500ms -> bounce 10s -> reload 25s -> reload 85s (60s backoff) -> RebootOnce 100s={} diagnostics captured + recorded before every bounce / reload / reboot={} at most one reboot={} post-reboot recurrence -> Degrade, no reset, halts ignored={} early self-heal counts as rebooted={} new incident after the window={} firmware halt -> reload at once, backoff, failed reload retried, then reboot={}/{} budget refill after 1 h={} record taken once, torn = none={} stations={} status={} heap growth 0={}\n",
         if pass { "PASS" } else { "FAIL" }, congestion, nosta, sleep, ladder, diag, once, degrade, early, later, crash1, crash2, refill, record, sta, st, heap
+    ));
+    pass
+}
+
+/// [P-wifiheal-bench] (feature `wifiheal-bench` only): the bench trigger shapes the classifier input and the UNCHANGED
+/// ladder acts on it — healthy traffic + `freeze-once` -> kick 100 ms -> bounce 10 s -> reload 25 s, then cleared (no
+/// probe of a synthetic head); `fwhalt` -> diagnostics + reload at once; `freeze` cleared before 10 s -> kicks only;
+/// a persistent `freeze` -> reload #2 after the 60-s backoff -> the ONE reboot, and in the boot after it -> Degrade;
+/// unknown ops refused; the bench state is restored afterwards.
+#[cfg(feature = "wifiheal-bench")]
+fn bench_selftest() -> bool {
+    use bench::*;
+    let saved = selftest_enter();
+    let heap0 = crate::heap::used();
+    // healthy traffic: completions advance every tick, nothing queued
+    let mut healthy = |t: u64, s: &mut Sample| {
+        s.queued = 0;
+        s.tx_max = (t / 50) as u8;
+        s.tx_seq = s.tx_max.wrapping_sub(5);
+    };
+    // a. no injection: nothing (an Asleep probe would stop a ladder; the synthetic freeze never asks it)
+    let mut h = Heal::from_boot(None, false);
+    let mut m = Mock::new(Probe::Asleep);
+    run(&mut h, &mut m, 1_000, 30_000, &mut healthy);
+    let idle = m.n == 0 && h.class == Class::Healthy;
+    // b. freeze-once at 30.05 s: engages (latched window) at 30.1 s -> kick at 30.2 s -> bounce at 40.1 s -> reload at
+    //    55.1 s (settle 5 s + 10 s) -> cleared by that reload: nothing more, ever
+    let once_set = set(OP_FREEZE_ONCE) && frozen();
+    run(&mut h, &mut m, 30_050, 200_000, &mut healthy);
+    let (mut kt, mut bt, mut lt) = ([0u64; 2], [0u64; 2], [0u64; 2]);
+    let (_, nb, nl) = (m.times(b'k', &mut kt), m.times(b'b', &mut bt), m.times(b'L', &mut lt));
+    let ladder = once_set && near(kt[0], 30_200) && nb == 1 && near(bt[0], 40_100) && nl == 1 && near(lt[0], 55_100)
+        && m.count(b'R') + m.count(b'D') + m.count(b'p') == 0 && m.diag_first() && !frozen() && h.class == Class::Healthy;
+    // c. fwhalt: one injected FWHALT event -> diagnostics (firmware-crash) then the reload, at once
+    let mut h2 = Heal::from_boot(None, false);
+    h2.baseline(0);
+    let mut m2 = Mock::new(Probe::Awake);
+    run(&mut h2, &mut m2, 1_000, 5_000, &mut healthy);
+    let halt_set = set(OP_FWHALT);
+    run(&mut h2, &mut m2, 5_050, 5_050, &mut healthy);
+    let fwhalt = halt_set && m2.calls() == b"crL" && m2.recorded_class == Class::Crash as u32 && h2.class == Class::Crash;
+    // ...the injected count persists (a counter only grows): no second crash on the next ticks
+    run(&mut h2, &mut m2, 5_100, 20_000, &mut healthy);
+    let fwhalt_once = m2.count(b'L') == 1;
+    // d. freeze, cleared after 5 s: kicks only, never a bounce
+    let mut h3 = Heal::from_boot(None, false);
+    h3.baseline(0); // as the AP loop does: the injected FWHALT count above is part of the counter
+    let mut m3 = Mock::new(Probe::Awake);
+    set(OP_FREEZE);
+    run(&mut h3, &mut m3, 1_000, 6_000, &mut healthy);
+    set(OP_CLEAR);
+    run(&mut h3, &mut m3, 6_050, 200_000, &mut healthy);
+    let cleared = m3.count(b'k') >= 5 && m3.count(b'b') + m3.count(b'L') + m3.count(b'R') == 0 && !frozen();
+    // e. a persistent freeze: bounce, reload, reload #2 after the backoff, the ONE reboot; the boot after it -> Degrade
+    let mut h4 = Heal::from_boot(None, false);
+    h4.baseline(0); // as the AP loop does: the injected FWHALT count above is part of the counter
+    let mut m4 = Mock::new(Probe::Awake);
+    set(OP_FREEZE);
+    run(&mut h4, &mut m4, 1_000, 400_000, &mut healthy);
+    let mut l4 = [0u64; 4];
+    let nl4 = m4.times(b'L', &mut l4);
+    let reboot = m4.count(b'b') == 1 && nl4 == 2 && l4[1] - l4[0] >= RELOAD_BACKOFF_MS && m4.count(b'R') == 1 && m4.count(b'D') == 0 && m4.diag_first();
+    let mut h5 = Heal::from_boot(Some((F_REBOOTED, [0; WORDS])), false);
+    h5.baseline(0); // as the AP loop does: the injected FWHALT count above is part of the counter
+    let mut m5 = Mock::new(Probe::Awake);
+    run(&mut h5, &mut m5, 1_000, 400_000, &mut healthy);
+    let degrade = h5.degraded() && m5.count(b'D') == 1 && m5.count(b'R') == 0;
+    set(OP_CLEAR);
+    // f. the op words; anything else refused
+    let ops = op_code(b"freeze") == Some(OP_FREEZE) && op_code(b"freeze-once") == Some(OP_FREEZE_ONCE) && op_code(b"fwhalt") == Some(OP_FWHALT)
+        && op_code(b"clear") == Some(OP_CLEAR) && op_code(b"reboot").is_none() && !set(0) && !set(9);
+    let heap = crate::heap::used() == heap0;
+    selftest_leave(saved);
+    publish(&Heal::from_boot(None, false));
+    let pass = idle && ladder && fwhalt && fwhalt_once && cleared && reboot && degrade && ops && heap;
+    arch_aarch64::_print(format_args!(
+        " [P-wifiheal-bench] {} — BENCH ONLY metal trigger (feature wifiheal-bench, never shipped) shapes the classifier input, the real ladder acts: no injection = nothing={} freeze-once -> kick 100 ms -> bounce 10 s -> reload 25 s -> cleared by the reload, no probe of the synthetic head={} fwhalt -> diagnostics + reload at once={} once only={} freeze cleared before 10 s = kicks only={} persistent freeze -> reload #2 after the backoff -> ONE reboot={} the boot after it -> Degrade={} op words / unknown refused={} heap growth 0={}\n",
+        if pass { "PASS" } else { "FAIL" }, idle, ladder, fwhalt, fwhalt_once, cleared, reboot, degrade, ops, heap
     ));
     pass
 }
