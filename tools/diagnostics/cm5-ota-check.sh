@@ -13,6 +13,13 @@ set -u -o pipefail
 # failure — that reported a false BAD on metal 2026-11-10 although HBoot printed 'secure boot: PASS')
 KEY="${1:?owner key}"; LOG="${2:?serial log}"; NEW="${3:?signed new heqk8.img}"; BID="${4:?build id of the new image}"
 MC="${5:-https://192.168.200.146}"; HERE=$(cd "$(dirname "$0")" && pwd); UP="$HERE/../../os/kernel/tools/hq-upload.py"
+# R6 = D: activating an os_image needs an HQMGMT1 envelope signed by the ENROLLED owner key (msg 23); the token only
+# opens the session. SIGN_KEY (default ~/heqk-owner-ca/bench-owner.key, bench-only) is enrolled first if none is.
+SIGN="${SIGN_KEY:-$HOME/heqk-owner-ca/bench-owner.key}"
+ensure_owner() { local e; e=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --hsh "info" 2>/dev/null | grep -ai "signing key" | grep -c ENROLLED)
+  [ "$e" -ge 1 ] && return 0
+  local t; t=$(mktemp); python3 -I "$HERE/../../os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$t" && python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --enroll "$t" >/dev/null 2>&1; local rc=$?; rm -f "$t"; return $rc; }
+ensure_owner || echo "     (owner key enrollment failed — the activation will be refused)"
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 since() { tail -c +$(($1 + 1)) "$LOG" | tr -d '\r\000'; }
@@ -24,13 +31,13 @@ BAD=$(mktemp); trap 'rm -f "$BAD"' EXIT
 cp "$NEW" "$BAD"; python3 - "$BAD" <<'PY'
 import sys; p = sys.argv[1]; b = bytearray(open(p, 'rb').read()); b[0x200000 + 7992 + 4096] ^= 0x40; open(p, 'wb').write(b)
 PY
-R=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --type os_image --file "$BAD" 2>&1)
+R=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --sign-key "$SIGN" --type os_image --file "$BAD" 2>&1)
 grep -q "bad signature" <<<"$R"; chk $? "a corrupted image is refused at finish (bad signature)"
 ! grep -q '^activate: {"ok": true' <<<"$R"; chk $? "the corrupted image is never activated"
 
 # 2. the real image
 mark=$(stat -c %s "$LOG")
-R=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --type os_image --file "$NEW" 2>&1); echo "$R" | tail -3
+R=$(python3 "$UP" --mc "$MC" --owner-key-file "$KEY" --insecure --sign-key "$SIGN" --type os_image --file "$NEW" 2>&1); echo "$R" | tail -3
 grep -q '^activate: {"ok": true' <<<"$R"; chk $? "upload: begin / chunks / finish (verified) / activate (written + re-hashed from the slot)"
 wait_for "$mark" "\[OTA\] tryboot flag set" 60; chk $? "the device trial-boots the new slot (tryboot one-shot)"
 wait_for "$mark" "\[OTA\] this boot: Trial" 240; chk $? "the trial boot classifies itself as a TRIAL"
