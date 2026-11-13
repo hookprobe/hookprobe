@@ -261,7 +261,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <For each={SECS}>{([s, label, href]) => <a class="tab" href={href} onClick={(e) => { e.preventDefault(); history.pushState(null, '', href); setSec(s); setOpen(false); }} aria-current={sec() === s ? 'page' : undefined} aria-selected={sec() === s} style={{ display: 'inline-flex', 'align-items': 'center', 'text-decoration': 'none' }}>{label}</a>}</For>
         </nav>
 
-        <div class="tl adv-grid" ref={() => queueMicrotask(prefill)}>
+        <div class={`tl adv-grid${sec() === 'firewall' ? ' adv-grid--wide' : ''}`} ref={() => queueMicrotask(prefill)}>
           <section style={{ display: 'flex', 'flex-direction': 'column', gap: '16px', 'min-width': 0 }}>
             <Show when={sec() === 'internet'}>
               <div class="pcard">
@@ -367,8 +367,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                       <td><input style={cellW('64px')} value={a.seq} onInput={(e) => setAcl(i(), { seq: e.currentTarget.value })} aria-label="Sequence" /></td>
                       <td><select style={cellW('96px')} value={a.action} onChange={(e) => setAcl(i(), { action: e.currentTarget.value as AclRow['action'] })} aria-label="Action"><option>allow</option><option>block</option><option>drop</option></select></td>
                       <td><input style={cellW('84px')} value={a.proto} onInput={(e) => setAcl(i(), { proto: e.currentTarget.value })} aria-label="Protocol" /></td>
-                      <td><input style={cellW('160px')} value={a.src} onInput={(e) => setAcl(i(), { src: e.currentTarget.value })} aria-label="Source" /></td>
-                      <td><input style={cellW('160px')} value={a.dst} onInput={(e) => setAcl(i(), { dst: e.currentTarget.value })} aria-label="Destination" /></td>
+                      <td><input style={cellW('150px')} value={a.src} onInput={(e) => setAcl(i(), { src: e.currentTarget.value })} aria-label="Source" /></td>
+                      <td><input style={cellW('150px')} value={a.dst} onInput={(e) => setAcl(i(), { dst: e.currentTarget.value })} aria-label="Destination" /></td>
                       <td><input style={cellW('84px')} value={a.port} onInput={(e) => setAcl(i(), { port: e.currentTarget.value })} aria-label="Port" /></td>
                       <td><button class="hp-btn" style={{ 'min-height': '36px' }} onClick={() => setPol({ ...pol(), acls: pol().acls.filter((_, j) => j !== i()) })} aria-label="Remove rule">✕</button></td>
                     </tr>
