@@ -37,6 +37,10 @@ pub const UPLOAD_ACTIVATE: u16 = 23;
 pub const UPLOAD_ROLLBACK: u16 = 24;
 pub const OWNER_FACTORY_RESET: u16 = 32;
 pub const ANCHOR_ROTATE: u16 = 33;
+// BENCH ONLY (kernel feature `wifiheal-bench`, never in the shipping flavour): the Wi-Fi self-heal metal trigger
+// `wifi heal-test …` on the web console. Envelope-only (role_for: unknown); arg = 1 freeze, 2 freeze-once, 3 fwhalt,
+// 4 clear; generation = 0, digest = zeros.
+pub const WIFI_HEAL_TEST: u16 = 40;
 
 // ---- result codes ----
 pub const R_OK: u8 = 0;
