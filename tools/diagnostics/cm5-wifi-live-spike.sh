@@ -76,7 +76,7 @@ done
 FH1=$(tr -d '\r\000' < "$LOG" | grep -ac "FWHALT")
 [ "$FH1" = "$FH0" ]; chk $? "no firmware halt across $R live bounces in $(( $(date +%s) - t_all )) s"
 # --- an UNconfirmed change: the window passes -> LIVE revert to the last-known-good, the Pi re-joins it ---
-GL=$G; push wpa3-transition
+GL=$G; push wpa2   # must DIFFER from round 10 (wpa3-transition), else cfgd sees changes 0x00 and nothing bounces
 waitlog "\[WIFI\] live apply" 20; chk $? "unconfirmed change gen $G applied live"
 rejoin; for _ in $(seq 1 200); do since | grep -aq "reverted LIVE to generation $GL" && break; sleep 2; done
 since | grep -aq "reverted LIVE to generation $GL"; chk $? "no confirm within the window -> reverted LIVE to gen $GL (no reboot)"
