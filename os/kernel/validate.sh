@@ -207,6 +207,10 @@ FEATX="${HEQK_VALIDATE_FEATX:-}"
 case ",$FEATX," in
   *,wifiheal-bench,*) PHASES+=("Pwifihealbench|[P-wifiheal-bench] PASS|impl|Validation|BENCH ONLY (feature wifiheal-bench, forbidden in the shipping flavour): the Wi-Fi self-heal metal trigger shapes wifiheal's classifier INPUT (a synthetic persistent TX freeze with the credit window latched, or an injected FWHALT event) and the unchanged ladder acts — freeze-once -> kick 100 ms -> bounce 10 s -> reload 25 s -> cleared; fwhalt -> diagnostics + reload at once; cleared before 10 s -> kicks only; persistent -> reload #2 after the 60-s backoff -> ONE reboot; the boot after it -> Degrade; no probe of the synthetic head; zero heap growth") ;;
 esac
+case ",$FEATX," in
+  *,artstore-bench,*) PHASES+=("Partstorebench|[P-artstore-bench] PASS|impl|Validation|BENCH ONLY (feature artstore-bench, forbidden in the shipping flavour): the ADR 0059 Phase 0.4 metal trigger, msg 41 ARTSTORE_TAMPER_TEST — authorised only by an owner-signed HQMGMT1 envelope bound to the type (none / another operation / another type / replay refused, store untouched); a type with no store entry or with only ONE stored generation refused, nothing written; the accepted trigger flips byte 0 of the ACTIVE half's first data sector (DEVICES gen 8, half B) and nothing else; at the next boot the unchanged loader refuses half B and the real boot_fallback loads the OTHER half (gen 7 in force, its device policy live), not the boot-partition copy") ;;
+  *) PHASES+=("Partstorebenchoff|[P-artstore-bench-off] PASS|impl|Validation|default build: msg 41 ARTSTORE_TAMPER_TEST is not compiled in (feature artstore-bench off) — no handler; a validly owner-signed msg-41 envelope drives no compiled-in operation (refused: another operation) and both DEVICES store halves stay byte-identical with gen 8 in force") ;;
+esac
 
 echo "==================================================================="
 echo " HEQK Core — Kernel Agent Validator (Hardened Edge Quantum-safe Kernel)"
