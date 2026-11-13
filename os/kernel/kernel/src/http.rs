@@ -913,6 +913,36 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 }
             }
         }),
+        // UI request 2026-11-13: what is running (build, A/B slot, trial, SVN) and how full the DataVolume is.
+        // Read-only, owner session; null where this build / device has no such fact (QEMU: no A/B, no DataVolume).
+        "/api/system" => json(scratch, |w| {
+            use core::fmt::Write;
+            w.raw("{\"version\":null,\"build\":");
+            match option_env!("HEQK_BUILD_ID") {
+                Some(b) => w.string(b),
+                None => w.raw("null"),
+            }
+            #[cfg(feature = "p15-write")]
+            let r = crate::otaimg::running();
+            #[cfg(not(feature = "p15-write"))]
+            let r = 0u8;
+            let _ = match r {
+                0 => write!(w, ",\"slot\":null,\"trial\":null"),
+                r => write!(w, ",\"slot\":\"{}\",\"trial\":{}", (r & 0x7f).to_ascii_uppercase() as char, r & 0x80 != 0),
+            };
+            let _ = match crate::upload::boot_facts() {
+                (s, _, Some(_)) => write!(w, ",\"svn\":{}", s),
+                _ => write!(w, ",\"svn\":null"),
+            };
+            #[cfg(feature = "appersist")]
+            let u = crate::datavol::usage(now_ms);
+            #[cfg(not(feature = "appersist"))]
+            let u: Option<(u64, u64)> = None;
+            let _ = match u {
+                Some((u, t)) => write!(w, ",\"storage\":{{\"used\":{},\"total\":{},\"retention_days\":null}}}}", u, t),
+                None => write!(w, ",\"storage\":{{\"used\":null,\"total\":null,\"retention_days\":null}}}}"),
+            };
+        }),
         "/api/stream" => Response { status: 200, ctype: "text/event-stream", body: Body::Sse, location: None, set_cookie: None },
         p if p.starts_with("/api/") => json(scratch, |w| w.raw("{\"error\":\"not implemented on heqk\"}")).with_status(404),
         p => match asset_for(p) {
