@@ -1,7 +1,7 @@
 ---
 /**
  * /workspace — Workspace (§2): your recent and saved work in one place.
- * Static Astro shell + Solid client:load island. Spec: docs/architecture/MissionControl.md §2.
+ * Static Astro shell + Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image). Spec: docs/architecture/MissionControl.md §2.
  */
 
 import Shell from '../layouts/Shell.astro';
@@ -12,5 +12,5 @@ import WorkspaceApp from '../components/WorkspaceApp';
   title="Workspace — HookProbe OS"
   description="Your recent incidents, reports, saved searches, AI conversations, bookmarks, and draft playbooks — all linked back to the live evidence graph."
 >
-  <WorkspaceApp client:load />
+  <WorkspaceApp client:only="solid-js" />
 </Shell>

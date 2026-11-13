@@ -3,7 +3,7 @@
  * /mission — Mission Control (§1), the dense command center.
  *
  * Rebuilt to the team wireframe (Mission Control), live from the device.
- * Static Astro shell + one Solid client:load island (left rail + bento grid).
+ * Static Astro shell + one Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image) (left rail + bento grid).
  * The calm `/` landing is the standalone-mode surface; this is cloud-linked.
  *
  * Spec: docs/architecture/MissionControl.md §1.
@@ -17,5 +17,5 @@ import MissionControlApp from '../components/MissionControlApp';
   title="Mission Control — HookProbe OS"
   description="Global security operations overview — Organism status, threat pulse, AI activity, incidents, fleet and customer health."
 >
-  <MissionControlApp client:load />
+  <MissionControlApp client:only="solid-js" />
 </Shell>

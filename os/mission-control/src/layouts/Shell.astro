@@ -3,7 +3,7 @@
  * Shell — HTML document wrapper.
  *
  * Provides: <html>, <head> (charset, viewport, meta, CSS import), <body>.
- * JS is supplied by the page's Solid client:load island, which renders the global AppShell
+ * JS is supplied by the page's Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image), which renders the global AppShell
  * (top bar, rail, Sample-data banner, Copilot, phone tabs).
  */
 
@@ -37,6 +37,7 @@ const {
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   </head>
   <body>
+    <noscript><p style="padding:24px;font:16px system-ui">Mission Control needs JavaScript. Turn it on for this device's address and reload.</p></noscript>
     <slot />
   </body>
 </html>
