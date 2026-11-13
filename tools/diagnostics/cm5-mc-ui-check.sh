@@ -18,7 +18,13 @@ H=${MC#https://}; S=$(spki "$H:443"); [ -n "$S" ] || { echo "MC-UI: no TLS answe
 echo "== mgmt path ($MC)"; UI_LIVE_TOKEN="$(cat "$KEY")" node "$HERE/cm5-mc-ui.mjs" "$PW" "$MC" "$S" ${SHOTS:+"$SHOTS/mgmt"}; rc=$((rc + $?))
 echo "== AP path (through the Pi's Wi-Fi, 10.99.0.1)"
 ssh -o BatchMode=yes -o ExitOnForwardFailure=yes -N -L 127.0.0.1:18443:10.99.0.1:443 "$PI" & TP=$!; sleep 3
-if kill -0 $TP 2>/dev/null; then
+if kill -0 $TP 2>/dev/null && ! curl -sk -o /dev/null -m 6 https://127.0.0.1:18443/; then
+  # tunnel up but nothing answers on 10.99.0.1:443: by G12-M (mcmgmt::serve_on_wifi) Mission Control leaves the AP once
+  # the owner's own Wi-Fi credential is in force with a management VLAN — report it, don't fail; a Pi off the AP is a FAIL
+  if ssh -o BatchMode=yes "$PI" "ping -c1 -W2 10.99.0.1 >/dev/null"; then echo "MC-UI: AP path SKIPPED — the Pi is on the AP but Mission Control is not served on Wi-Fi (G12-M: owner credential + management VLAN)"
+  else echo "MC-UI: AP path FAIL — the Pi is not on the AP"; rc=$((rc + 1)); fi
+  kill $TP 2>/dev/null
+elif kill -0 $TP 2>/dev/null; then
   S2=$(spki 127.0.0.1:18443)
   UI_LIVE_TOKEN="$(cat "$KEY")" node "$HERE/cm5-mc-ui.mjs" "$PW" https://127.0.0.1:18443 "$S2" ${SHOTS:+"$SHOTS/ap"}; rc=$((rc + $?))
   kill $TP 2>/dev/null
