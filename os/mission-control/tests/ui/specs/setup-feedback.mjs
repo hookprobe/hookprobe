@@ -14,7 +14,7 @@ export default async function (t) {
   ok(await vis(page.locator('h1', { hasText: "Let's get you online" })), 'setup: greets with the three-question promise');
   ok(!(await vis(page.locator('nav[aria-label="Workspaces"], .app-rail'))), 'setup: no rail (a conversation, not the console)');
   await page.click('button:has-text("Start")'); await page.waitForTimeout(200);
-  ok(await vis(page.locator('text=Step 1 of 3 · Internet')), 'setup: step 1 asks about the internet');
+  ok(await vis(page.locator('text=Step 1 of 4 · Internet')), 'setup: step 1 asks about the internet');
 
   // PPPoE branch validates like the device, then back to automatic.
   await page.click('text=I have a PPPoE login');
@@ -22,7 +22,7 @@ export default async function (t) {
   await page.click('text=Use automatic instead');
   await page.click('button:has-text("Yes, use it")'); await page.waitForTimeout(200);
 
-  ok(await vis(page.locator('text=Step 2 of 3 · Wi-Fi')), 'setup: step 2 asks for Wi-Fi');
+  ok(await vis(page.locator('text=Step 2 of 4 · Wi-Fi')), 'setup: step 2 asks for Wi-Fi');
   await page.fill('input[placeholder="HookProbe-Home"]', 'Popescu-Home');
   await page.fill('input[type=password]', 'short');
   ok(await page.locator('button:has-text("Continue")').isDisabled(), 'setup: short Wi-Fi password refused like the device');
@@ -30,7 +30,9 @@ export default async function (t) {
   ok(await page.locator('.setup-meter span.is-on').count() === 3, 'setup: strength meter fills for a strong password');
   await page.click('button:has-text("Continue")'); await page.waitForTimeout(200);
 
-  ok(await vis(page.locator('text=Step 3 of 3 · Your key')), 'setup: step 3 creates the signing key');
+  ok(await vis(page.locator('text=Step 3 of 4 · Your key')), 'setup: step 3 creates the signing key');
+  // every step label agrees with the 4 progress dots (it said "of 3" next to 4 dots, and Review had no number)
+  ok(await page.locator('.setup-dots').getAttribute('aria-label') === 'Step 3 of 4', 'setup: the progress dots and the step label agree (3 of 4)');
   ok(await page.locator('button:has-text("Continue")').isDisabled(), 'setup: cannot continue without a key');
   await page.locator('label:has-text("Backup passphrase") input').fill('setup passphrase 1');
   await page.locator('label:has-text("Repeat it") input').fill('setup passphrase 1');
