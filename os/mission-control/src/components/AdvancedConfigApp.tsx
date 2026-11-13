@@ -27,7 +27,7 @@ import AppShell, { normPath } from './AppShell';
 import Drawer from './Drawer';
 import SigningKeyPanel from './SigningKeyPanel';
 import RestartButton from './RestartButton';
-import { askOwnerKey } from '../store/approve';
+import { approve, askOwnerKey } from '../store/approve';
 import { buildBundle, fromLegacy } from '../store/hqcfg';
 import { bundleInForce, takesBundles, bundleGen, deviceIdHex, deviceIdBytes } from '../store/bundle';
 import { configView, refreshConfig, restNote } from '../store/configState';
@@ -108,7 +108,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
 
   // The builders refuse (throw) rather than emit a file the device would reject; show that as a problem.
   const built = createMemo(() => {
-    try { return { t: sec() === 'internet' ? buildWan(wan()) : sec() === 'wifi' ? buildWifi(wifi()) : buildPolicyText(pol()), err: '' }; }
+    try { return { t: sec() === 'internet' ? buildWan(wan()) : sec() === 'wifi' ? buildWifi(wifi()) : !polEditable() && devPolicy() ? devPolicy()! : buildPolicyText(pol()), err: '' }; }
     catch (e) { return { t: '', err: e instanceof Error ? e.message : String(e) }; }
   });
   const text = () => built().t;
@@ -205,10 +205,25 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
       const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => askOwnerKey('Send the bundle to the device?', 'It replaces the sections it carries, then runs as a trial.', 'Send'),
         (st) => setBPhase(st === 'activate' || st === 'done' ? 3 : 2));
       setBLive(!!r.live); setBNeedsConfirm(!!r.needsConfirm); setBMsg(r.text); setBStep('done'); setBPhase(r.live ? 4 : 3);
+      void refreshConfig(); void refreshUploads(); // the trial banner (and its Keep button) and the next generation, now
     } catch (e) { setBPhase(0); setBMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   const startApply = () => { setStep('review'); setSigned(null); setMsg(''); setOpen(true); };
+  /** Template "block device-to-device": replaces the LAN_IN list, so when that list already has rules it says which
+   *  ones go and asks first (it used to drop them silently). The device does not report its LAN range: check the subnet. */
+  const [tmplNote, setTmplNote] = createSignal('');
+  const applyTemplate = async () => {
+    const gone = pol().acls.filter((a) => a.name === 'LAN_IN');
+    if (gone.length && !(await approve({ title: 'Replace the LAN_IN rules?', destructive: true, confirm: 'Replace them',
+      body: `The template replaces the ${gone.length} LAN_IN rule${gone.length === 1 ? '' : 's'} in the editor:\n${gone.map((a) => `· ${a.action} ${a.proto} ${a.src} → ${a.dst}${a.port ? ` port ${a.port}` : ''}`).join('\n')}\n\nNothing is sent until you review and apply.` }))) return;
+    setPol({
+      ...pol(),
+      acls: [...pol().acls.filter((a) => a.name !== 'LAN_IN'), { name: 'LAN_IN', seq: '10', action: 'block', proto: 'any', src: '10.66.0.0/24', dst: '10.66.0.0/24', port: '' }, { name: 'LAN_IN', seq: '20', action: 'allow', proto: 'any', src: 'any', dst: 'any', port: '' }],
+      binds: [...pol().binds.filter((b) => !(b.iface === 'lan' && b.kind === 'acl')), { iface: 'lan', kind: 'acl', dir: 'in', name: 'LAN_IN' }],
+    });
+    setTmplNote('Template added. Check the subnet (10.66.0.0/24): this device does not report its LAN range.');
+  };
   const setAcl = (i: number, patch: Partial<AclRow>) => setPol({ ...pol(), acls: pol().acls.map((a, j) => (j === i ? { ...a, ...patch } : a)) });
 
   return (
@@ -318,9 +333,10 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                 <p class="pcard-note" role="note" style={{ margin: 0 }}>These are the rules in force on the device. Change them and they replace it; leave them and a bundle sends them again unchanged.</p>
               </Show>
               <Show when={devPolicy() && !polEditable()}>
-                <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>The firewall in force uses statements this editor does not handle, so it is shown as text and sent again unchanged. Edit it with the policy tools instead.</p>
+                <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>The firewall in force uses statements this editor does not handle, so it is shown as text and sent again unchanged; it cannot be edited here. To change it, sign a new policy file offline (os/kernel/tools/policy-sign.py) and upload it in Administration → Signed packs.</p>
                 <pre class="pro-pre" aria-label="Firewall in force">{devPolicy()}</pre>
               </Show>
+              <Show when={polEditable()}>
               <div class="pcard">
                 <p class="l0-label">Access lists · checked top to bottom, first match wins; replies to connections your network opened always come back</p>
                 <div class="l0-table-wrap"><table class="l0-table">
@@ -340,12 +356,9 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                 </table></div>
                 <div class="l0-card-foot">
                   <button class="hp-btn" onClick={() => setPol({ ...pol(), acls: [...pol().acls, { name: 'LAN_IN', seq: String((pol().acls.length + 1) * 10), action: 'allow', proto: 'any', src: 'any', dst: 'any', port: '' }] })}>+ Rule</button>
-                  <button class="hp-btn" onClick={() => setPol({
-                    ...pol(),
-                    acls: [...pol().acls.filter((a) => a.name !== 'LAN_IN'), { name: 'LAN_IN', seq: '10', action: 'block', proto: 'any', src: '10.66.0.0/24', dst: '10.66.0.0/24', port: '' }, { name: 'LAN_IN', seq: '20', action: 'allow', proto: 'any', src: 'any', dst: 'any', port: '' }],
-                    binds: [...pol().binds.filter((b) => !(b.iface === 'lan' && b.kind === 'acl')), { iface: 'lan', kind: 'acl', dir: 'in', name: 'LAN_IN' }],
-                  })}>+ From template: block device-to-device traffic</button>
+                  <button class="hp-btn" onClick={() => void applyTemplate()}>+ From template: block device-to-device traffic</button>
                 </div>
+                <Show when={tmplNote()}><p class="plan-diff-warn" role="status" style={{ margin: 0 }}>{tmplNote()}</p></Show>
                 <p class="pcard-note">Anything not matched: the list's default (unset = drop). Block rejects so the sender knows; drop is silent.</p>
               </div>
               <div class="pcard">
@@ -355,6 +368,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                 <For each={pol().routes}>{(r) => <span class="prow"><span>route {r.dst}</span><span>via {r.via}{r.gw ? ` gw ${r.gw}` : ''}{r.metric ? ` metric ${r.metric}` : ''}</span></span>}</For>
                 <p class="pcard-note">Two default routes with different metrics form an automatic failover pair.</p>
               </div>
+              </Show>
             </Show>
           </section>
 

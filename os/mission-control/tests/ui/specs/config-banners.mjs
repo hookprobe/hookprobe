@@ -33,7 +33,7 @@ export default async function (t) {
   await page.unroute('**/api/config');
   await page.route('**/api/config', json({ state: 'trial', generation: 5, floor: 3, on_trial: true, window_s: 300, elapsed_s: 10, auto_rollback: true, needs_confirm: true, health: 'internet up' }));
   await go('/network/wan', 1500);
-  ok(await vis(trial.locator('text=Keep it is required')) && !(await vis(trial.locator('text=by itself in'))), 'management-plane trial: Keep is required (not auto-committed)');
+  ok(await vis(trial.locator('text=press Keep it within')) && !(await vis(trial.locator('text=by itself in'))), 'management-plane trial: Keep is required (not auto-committed)');
 
   // A bundle in force: single-file changes are refused by the device, so the editor steers to the bundle.
   await page.unroute('**/api/config');
