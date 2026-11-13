@@ -89,7 +89,7 @@ const SetupApp: Component = () => {
     : wanUp() ? `I see the internet port already ${wanMode() === 'dhcp' ? 'getting an address automatically' : `connected (${wanMode()})`}.`
     : 'I don’t see an internet connection on the internet port yet.');
 
-  const wanForm = (): WanForm => ({ mode: mode(), ip: '', gw: '', dns: '', pppoeUser: user(), pppoePass: pass(), vlanOn: false, vlan: '', vlanOuter: '', pcp: '', mgmtOn: false, mgmtVlan: '', mgmtIp: '', mgmtGw: '' });
+  const wanForm = (): WanForm => ({ mode: mode(), ip: '', gw: '', dns: '', pppoeUser: user(), pppoePass: pass(), vlanOn: false, vlan: '', vlanOuter: '', pcp: '', mgmtOn: false, mgmtVlan: '', mgmtIp: '', mgmtGw: '', mgmtFloor: '' });
   const wifiForm = () => ({ ssid: ssid(), psk: psk(), security: 'wpa3-transition' as const, channel: 'auto', maxClients: '' });
   const wanErrors = createMemo(() => (mode() === 'pppoe' ? checkWan(wanForm()) : []));
   const wifiErrors = createMemo(() => checkWifi(wifiForm()));

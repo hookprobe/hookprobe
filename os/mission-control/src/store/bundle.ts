@@ -8,7 +8,7 @@ import { anchorView } from './anchor';
 import { uploadView, uploadPack, type UploadResult, type UploadStep } from './packUpload';
 import { ownerKey, signBundle, ownerKeyId } from './signing';
 import { buildBundle, fromLegacy } from './hqcfg';
-import { buildWan, buildWifi, wanFormFrom, wifiFormFrom, type WifiForm } from './configBuild';
+import { buildWan, buildWifi, wanFormFrom, wifiFormFrom, unknownKeys, WAN_KEYS, WIFI_KEYS, type WifiForm } from './configBuild';
 import { networkView } from './networkLive';
 
 export const bundleInForce = () => { const c = configView(); return !!c && (c.state === 'trial' || c.state === 'committed') && c.generation > 0; };
@@ -22,6 +22,8 @@ export function wifiBlock(): string {
   const a = anchorView(), k = ownerKey();
   if (!takesBundles()) return 'This device does not take signed settings over the network yet.';
   if (bundleInForce() && !configView()?.sections) return 'This device does not report its settings in force, so the change has to be made in the advanced editor.';
+  if (unknownKeys(configView()?.wan_keys, WAN_KEYS).length || unknownKeys(configView()?.wifi_keys, WIFI_KEYS).length)
+    return 'This device has settings this screen cannot keep, so a change from here would remove them. Change the Wi-Fi with a signed file made offline instead.';
   if (!a?.owner_enrolled) return 'Wi-Fi changes are signed with your signing key, and this device does not trust one yet.';
   if (!k) return 'Wi-Fi changes are signed with your signing key, and it is not in this browser.';
   if (a.owner_key !== k.pubHex) return 'The signing key in this browser is not the one this device trusts.';
