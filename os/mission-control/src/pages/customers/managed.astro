@@ -1,7 +1,7 @@
 ---
 /**
  * /customers/managed — Customers (§9): recursive multi-tenant portal.
- * Static Astro shell + Solid client:load island. Spec: docs/architecture/MissionControl.md §9.
+ * Static Astro shell + Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image). Spec: docs/architecture/MissionControl.md §9.
  * Cloud-linked / self-hosted only — capability-gated at the manifest level.
  */
 
@@ -13,5 +13,5 @@ import CustomersApp from '../../components/CustomersApp';
   title="Customers — HookProbe OS"
   description="Recursive multi-tenant portal. HookProbe → MSSP → Customer → Customer … unlimited depth, hard per-tenant isolation, cloud-linked."
 >
-  <CustomersApp client:load />
+  <CustomersApp client:only="solid-js" />
 </Shell>

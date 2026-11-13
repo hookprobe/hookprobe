@@ -2,7 +2,7 @@
 /**
  * /network/dns — Shield (Pillar 1) DNS ad/tracker/malware blocking.
  *
- * Astro shell: static pre-render, one Solid client:load island.
+ * Astro shell: static pre-render, one Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image).
  * Linked from Home's Shield card and the Layer 0 rail.
  *
  * Spec: docs/research/v2-customer-experience.md §0 (Pillar 1) · V1 dnsXai engine.
@@ -16,5 +16,5 @@ import ShieldApp from '../../components/ShieldApp';
   title="Shield — HookProbe OS"
   description="DNS ad, tracker and malware blocking — see what's blocked, set protection level, and control allow/block lists."
 >
-  <ShieldApp client:load />
+  <ShieldApp client:only="solid-js" />
 </Shell>

@@ -1,7 +1,7 @@
 /**
  * NetworkMapApp — My Network (Pillar 2) Solid island.
  *
- * Route: /network/map  (Astro static page, Solid client:load island)
+ * Route: /network/map  (Astro static page, Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image))
  *
  * Spec references:
  *   - docs/research/v2-customer-experience.md §3.2 (Pillar 2 — My Network)

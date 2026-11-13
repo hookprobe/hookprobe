@@ -1,7 +1,7 @@
 ---
 /**
  * /investigate/queue — Investigate (§5, AEGIS): incident-as-story.
- * Static Astro shell + Solid client:load island (left rail + queue + detail).
+ * Static Astro shell + Solid client:only island (browser-rendered; no prerendered markup, ~60 KB gz less in the device image) (left rail + queue + detail).
  * Spec: docs/architecture/MissionControl.md §5.
  */
 
@@ -13,5 +13,5 @@ import InvestigateApp from '../../components/InvestigateApp';
   title="Investigate — HookProbe OS"
   description="Every alert becomes an explained story — incident timeline, why AEGIS decided, evidence, ATT&CK context, and a plan to approve."
 >
-  <InvestigateApp client:load />
+  <InvestigateApp client:only="solid-js" />
 </Shell>

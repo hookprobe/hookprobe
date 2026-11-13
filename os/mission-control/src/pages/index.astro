@@ -3,7 +3,7 @@
  * / — Mission Control Layer 0 (calm landing).
  *
  * Astro owns the outer HTML shell; the interactive surface is the single
- * Solid island (client:load). Static output means this page is pre-rendered
+ * Solid island (client:only). Static output means this page is pre-rendered
  * to HTML at `astro build` time; Solid hydrates on the client.
  *
  * Route map (MissionControl.md §Appendix):
@@ -18,5 +18,5 @@ import App   from '../components/App';
 ---
 
 <Shell>
-  <App client:load />
+  <App client:only="solid-js" />
 </Shell>
