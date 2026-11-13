@@ -13,6 +13,8 @@ export interface WanForm {
   pppoeUser: string; pppoePass: string;
   vlanOn: boolean; vlan: string; vlanOuter: string; pcp: string;
   mgmtOn: boolean; mgmtVlan: string; mgmtIp: string; mgmtGw: string;
+  /** mgmt_floor: the management-access floor (admins' network that can always reach the device), e.g. 10.0.99.0/24. */
+  mgmtFloor: string;
 }
 export interface WifiForm { ssid: string; psk: string; security: 'wpa2' | 'wpa3' | 'wpa3-transition'; channel: string; maxClients: string }
 
@@ -63,6 +65,10 @@ export function checkWan(f: WanForm): string[] {
     if (f.mgmtIp.trim() && !/^\d{1,3}(\.\d{1,3}){3}\/\d{1,2}$/.test(f.mgmtIp.trim())) e.push('Management address must look like 10.0.99.2/24.');
     if (f.mgmtGw.trim() && quad(f.mgmtGw) === null) e.push('Management gateway must be an IPv4 address.');
   }
+  if (f.mgmtFloor.trim()) {
+    const m = f.mgmtFloor.trim().match(/^(\d{1,3}(?:\.\d{1,3}){3})\/(\d{1,2})$/);
+    if (!m || quad(m[1]) === null || +m[2] < 8 || +m[2] > 32) e.push('Management access floor must be a network /8 to /32, like 10.0.99.0/24.');
+  }
   return e;
 }
 
@@ -88,6 +94,7 @@ export function buildWan(f: WanForm): string {
     l.push(`mgmt_vlan=${f.mgmtVlan.trim()}`);
     if (f.mgmtIp.trim()) { l.push('mgmt=static', `mgmt_ip=${f.mgmtIp.trim()}`); if (f.mgmtGw.trim()) l.push(`mgmt_gw=${f.mgmtGw.trim()}`); } else l.push('mgmt=dhcp');
   }
+  if (f.mgmtFloor.trim()) l.push(`mgmt_floor=${f.mgmtFloor.trim()}`);
   return assertCanonical(l.join('\n') + '\n');
 }
 
@@ -97,12 +104,18 @@ const kv = (o: Keys, k: string) => (typeof o?.[k] === 'string' ? (o[k] as string
  *  `pppoePass` starts empty and must be typed again. */
 export function wanFormFrom(w: Keys): WanForm {
   return { mode: (kv(w, 'mode') || 'dhcp') as WanForm['mode'], ip: kv(w, 'ip'), gw: kv(w, 'gw'), dns: kv(w, 'dns'), pppoeUser: kv(w, 'pppoe_user'), pppoePass: '',
-    vlanOn: !!kv(w, 'vlan'), vlan: kv(w, 'vlan'), vlanOuter: kv(w, 'vlan_outer'), pcp: kv(w, 'pcp'), mgmtOn: !!kv(w, 'mgmt_vlan'), mgmtVlan: kv(w, 'mgmt_vlan'), mgmtIp: kv(w, 'mgmt_ip'), mgmtGw: kv(w, 'mgmt_gw') };
+    vlanOn: !!kv(w, 'vlan'), vlan: kv(w, 'vlan'), vlanOuter: kv(w, 'vlan_outer'), pcp: kv(w, 'pcp'), mgmtOn: !!kv(w, 'mgmt_vlan'), mgmtVlan: kv(w, 'mgmt_vlan'), mgmtIp: kv(w, 'mgmt_ip'), mgmtGw: kv(w, 'mgmt_gw'), mgmtFloor: kv(w, 'mgmt_floor') };
 }
 /** The Wi-Fi form from the keys in force; `psk` starts empty (never served). */
 export function wifiFormFrom(f: Keys): WifiForm {
   return { ssid: kv(f, 'ssid'), psk: '', security: (kv(f, 'security') || 'wpa2') as WifiForm['security'], channel: kv(f, 'channel') || 'auto', maxClients: kv(f, 'max_clients') };
 }
+
+/** Keys the editors carry. A key the device reports outside these would be dropped by a bundle (it is the whole
+ *  configuration), so bundles are refused until the editor learns it (mgmt_floor was dropped this way, 13 Nov). */
+export const WAN_KEYS = new Set(['mode', 'ip', 'gw', 'dns', 'pppoe_user', 'pppoe_pass_set', 'vlan', 'vlan_outer', 'pcp', 'mgmt_vlan', 'mgmt', 'mgmt_ip', 'mgmt_gw', 'mgmt_floor']);
+export const WIFI_KEYS = new Set(['ssid', 'security', 'channel', 'max_clients', 'psk_set']);
+export function unknownKeys(keys: Keys, known: Set<string>): string[] { return Object.keys(keys ?? {}).filter((k) => !known.has(k)); }
 
 export function checkWifi(f: WifiForm): string[] {
   const e: string[] = [];
