@@ -149,3 +149,9 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
 .shell-cmd:hover:not(:disabled) { border-color: var(--hp-cyan); }
 .shell-cmd:disabled { opacity: .5; cursor: not-allowed; }
 @media (pointer: coarse) { .shell-cmd { min-height: 44px; } }
+.apply-steps { list-style: none; margin: 0 0 4px; padding: 0; display: flex; flex-wrap: wrap; border: 1px solid var(--hp-border); border-radius: var(--hp-radius); overflow: hidden; }
+.apply-steps li { flex: 1 1 auto; padding: 8px 10px; font-size: 13px; color: var(--hp-text-secondary); border-right: 1px solid var(--hp-border); white-space: nowrap; }
+.apply-steps li:last-child { border-right: 0; }
+.apply-steps li span { font-family: var(--hp-font-mono); font-size: 12px; margin-right: 4px; }
+.apply-steps li.is-done { background: rgba(255,255,255,.04); }
+.apply-steps li.is-now { background: var(--hp-text-primary); color: var(--hp-void); font-weight: 600; }

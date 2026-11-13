@@ -167,6 +167,8 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const [bLive, setBLive] = createSignal(false);
   const [bNeedsConfirm, setBNeedsConfirm] = createSignal(false);
   const [bStep, setBStep] = createSignal<'review' | 'done' | 'files'>('review');
+  /** Board AdvApply's progress: 0 Review · 1 Sign · 2 Send and check · 3 Apply live · 4 Trial. */
+  const [bPhase, setBPhase] = createSignal(0);
   const [bFiles, setBFiles] = createSignal<{ bin: Uint8Array; sig: Uint8Array } | null>(null);
   /** Bind the bundle to this device when it reports its id (it then refuses the bundle on any other device). */
   // An all-zero id means 'any device' in HQCFG1 (and is what a device without an identity reports), so it is
@@ -195,13 +197,15 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   const applyBundle = async () => {
     setBMsg('');
     try {
+      setBPhase(1);
       const b = buildBundle(bundleSections(), bundleGen(), await ownerKeyId(), deviceIdBytes());
       const sig = await signBundle(b);
       setBFiles({ bin: b, sig });
       if (sample() || !takesBundles()) { setBStep('files'); return; }
-      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => askOwnerKey('Send the bundle to the device?', 'It replaces the sections it carries, then runs as a trial.', 'Send'), () => undefined);
-      setBLive(!!r.live); setBNeedsConfirm(!!r.needsConfirm); setBMsg(r.text); setBStep('done');
-    } catch (e) { setBMsg(e instanceof Error ? e.message : String(e)); }
+      const r = await uploadPack('config', new File([new Uint8Array(sig), new Uint8Array(b)], 'config.pack'), () => askOwnerKey('Send the bundle to the device?', 'It replaces the sections it carries, then runs as a trial.', 'Send'),
+        (st) => setBPhase(st === 'activate' || st === 'done' ? 3 : 2));
+      setBLive(!!r.live); setBNeedsConfirm(!!r.needsConfirm); setBMsg(r.text); setBStep('done'); setBPhase(r.live ? 4 : 3);
+    } catch (e) { setBPhase(0); setBMsg(e instanceof Error ? e.message : String(e)); }
   };
 
   const startApply = () => { setStep('review'); setSigned(null); setMsg(''); setOpen(true); };
@@ -378,12 +382,12 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                 <div class="pcard" aria-label="Apply all together">
                   <p class="l0-label">Or apply all three together</p>
                   <p class="l0-card-sub">One signed bundle replaces internet + Wi-Fi + firewall together and runs as a health-checked trial: if the internet does not come back, the device goes back by itself. A single-section change (above) is not health-checked.</p>
-                  <button class="hp-btn" onClick={() => { setBStep('review'); setBMsg(''); setBOpen(true); }}>Review all three →</button>
+                  <button class="hp-btn" onClick={() => { setBStep('review'); setBPhase(0); setBMsg(''); setBOpen(true); }}>Review all three →</button>
                 </div>
               </>
             }>
               <p class="pcard-note">Sent with your internet, Wi-Fi and firewall in one signed bundle (secrets hidden here). It applies live, no restart; if the internet does not come back, the device switches back by itself.</p>
-              <button class="hp-btn hp-btn--primary" onClick={() => { setBStep('review'); setBMsg(''); setBOpen(true); }}>Review and apply live →</button>
+              <button class="hp-btn hp-btn--primary" onClick={() => { setBStep('review'); setBPhase(0); setBMsg(''); setBOpen(true); }}>Review and apply live →</button>
               <a class="hp-btn" href="/network/wan" style={{ 'justify-content': 'center' }}>Discard draft</a>
               <Show when={!bundleInForce()} fallback={
                 <p class="pcard-note" style={{ margin: 0 }}>A configuration bundle is in force (generation {configView()!.generation}), so single-file changes are refused: every change goes in a bundle.</p>
@@ -453,7 +457,14 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
       </Drawer>
 
       <Drawer open={bOpen()} title="Apply all three together" crumb={`configuration bundle · generation ${bundleGen()}`} onClose={() => setBOpen(false)}>
-        <p class="l0-card-sub">The bundle is the complete configuration for the sections it carries. After the restart it runs as a trial: the device keeps it once the internet works, or goes back to the previous settings by itself. Changes to the management network must be kept by you within the window.</p>
+        <Show when={takesBundles() && !sample()}>
+          <ol class="apply-steps" aria-label="Progress">
+            <For each={['Review', 'Sign', 'Send and check', 'Apply live', 'Trial']}>{(label, i) => (
+              <li class={i() === bPhase() ? 'is-now' : i() < bPhase() ? 'is-done' : ''} aria-current={i() === bPhase() ? 'step' : undefined}><span>{i() + 1}</span> {label}</li>
+            )}</For>
+          </ol>
+        </Show>
+        <p class="l0-card-sub">The bundle is the complete configuration for the sections it carries: a section left out is removed. {takesBundles() ? 'It applies live, without a restart, then runs as a trial' : 'After the restart it runs as a trial'}: the device keeps it once the internet works, or goes back to the previous settings by itself. Changes to the Wi-Fi or the management network must be kept by you within the window.</p>
         <Show when={bStep() === 'review'}>
           <For each={(['wan', 'wifi', 'policy'] as const)}>{(k) => (
             <div class="pcard" style={{ padding: '10px 12px', gap: '6px' }}>
