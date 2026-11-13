@@ -8,20 +8,20 @@ const PUBHEX = createPublicKey(createPrivateKey({ key: PKCS8, format: 'der', typ
 
 export default async function (t) {
   const { page, ok, go, vis } = t;
-  const st = { chunks: [] };
+  const st = { chunks: [], trial: false };
   const json = (b, s = 200) => ({ status: s, contentType: 'application/json', body: JSON.stringify(b) });
   await page.route('**/api/**', (r) => {
     const p = new URL(r.request().url()).pathname, m = r.request().method();
     if (p === '/api/health') return r.fulfill(json({ substrate: 'heqk', mode: 'standalone' }));
     if (p === '/api/session') return r.fulfill(json({ csrf: 'x', next_seq: 1 }));
     if (p === '/api/anchor') return r.fulfill(json({ vendor_key: null, owner_key: PUBHEX, owner_enrolled: true, owner_generation: 1, config_files_verified_by: 'owner', can: 'rotate', device_id: DEV, state: 'protected' }));
-    if (p === '/api/config') return r.fulfill(json({ state: 'none', generation: 0, floor: 0, on_trial: false, needs_confirm: false, window_s: 300, elapsed_s: 0, auto_rollback: true, health: '',
+    if (p === '/api/config') return r.fulfill(json({ state: st.trial ? 'trial' : 'none', generation: st.trial ? 1 : 0, floor: 0, on_trial: st.trial, needs_confirm: st.trial, window_s: 300, elapsed_s: 0, auto_rollback: true, health: '',
       envelope: { format: 'HQMGMT1', device_id: DEV, epoch: '0102030405060708', next_seq: 5, generation: 0, digest: '00'.repeat(32), owner_enrolled: true } }));
     if (p === '/api/upload' && m === 'GET') return r.fulfill(json({ store: true, chunk_max: 16384, in_flight: st.inFlight ?? null, recent: [], types: [{ type: 'config', cap: 16384, generation: 0, source: 'boot', applies: 'live' }] }));
     if (p === '/api/upload/begin') return r.fulfill(json({ ok: true, id: 'u1', chunk_max: 16384 }));
     if (p === '/api/upload/chunk') { st.chunks.push(r.request().postDataBuffer()); return r.fulfill(json({ ok: true })); }
     if (p === '/api/upload/finish') { const box = Buffer.concat(st.chunks); st.inFlight = { id: 'u1', type: 'config', size: box.length, received: box.length, verified: true, type_code: 9, generation: 1, digest: createHash('sha256').update(box.subarray(512)).digest('hex') }; return r.fulfill(json({ ok: true })); }
-    if (p === '/api/upload/activate') { st.inFlight = null; return r.fulfill(json({ ok: true, activated: true, live: true, needs_confirm: true, generation: 1 })); }
+    if (p === '/api/upload/activate') { st.inFlight = null; st.trial = true; return r.fulfill(json({ ok: true, activated: true, live: true, needs_confirm: true, generation: 1 })); }
     return r.fulfill(json({}, 404));
   });
   await go('/admin/identity', 1200);
@@ -39,4 +39,6 @@ export default async function (t) {
   await d.locator('button:has-text("Sign and upload the bundle")').click(); await page.waitForTimeout(300);
   await t.approve({ key: 'label-password-0001' }); await page.waitForTimeout(1500);
   ok(await now() === 'Trial' && await d.locator('.apply-steps li.is-done').count() === 4, 'stepper: after a live apply it is on Trial, the four steps before done');
+  // the trial banner (the only Keep button for a Wi-Fi change) shows right after the apply, without a reload
+  ok(await vis(page.locator('.hp-banner--trial')) && await vis(page.locator('.hp-banner--trial button:has-text("Keep it")')), 'after the apply: the trial banner with Keep shows at once');
 }

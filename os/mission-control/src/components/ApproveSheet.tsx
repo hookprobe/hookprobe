@@ -58,7 +58,7 @@ const ApproveSheet: Component = () => {
 
   return (
     <Show when={approveRequest()}>{(r) => (
-      <div class="approve-scrim" onClick={(e) => { if (e.target === e.currentTarget) close(false); }}>
+      <div class="approve-scrim approve-scrim--top" onClick={(e) => { if (e.target === e.currentTarget) close(false); }}>
         <div class="approve-sheet" ref={box} role="dialog" aria-modal="true" aria-labelledby="approve-title" aria-describedby="approve-body">
           <h2 id="approve-title" class="approve-title">{r().title}</h2>
           <Show when={r().body}><p id="approve-body" class="approve-body">{r().body}</p></Show>
