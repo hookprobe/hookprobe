@@ -163,13 +163,13 @@ const SetupApp: Component = () => {
           <div class="setup-grow" />
           <div class="setup-orb" role="img" aria-label="HookProbe" />
           <h1 class="setup-h1">Hi. Let's get you online.</h1>
-          <p class="setup-p">Three quick questions. Nothing to type unless you want to.</p>
+          <p class="setup-p">Your internet, your Wi-Fi name and password, and a signing key that keeps your settings yours. Nothing changes until you tap Launch.</p>
           <div class="setup-grow" />
           <button class="hp-btn hp-btn--primary setup-cta" onClick={() => go('internet')}>Start</button>
         </Show>
 
         <Show when={step() === 'internet'}>
-          <p class="l0-label">Step 1 of 3 · Internet</p>
+          <p class="l0-label">Step 1 of 4 · Internet</p>
           <div class="setup-bubble">{sees()} {wanUp() || sample() ? 'Use it as your internet?' : 'Plug the cable from your modem into the internet port, or use your ISP login.'}</div>
           <Show when={mode() === 'pppoe'}>
             <label class="l0-card-sub">PPPoE username<input style={field} value={user()} onInput={(e) => setUser(e.currentTarget.value)} autocomplete="off" placeholder="from your ISP letter" /></label>
@@ -187,7 +187,7 @@ const SetupApp: Component = () => {
         </Show>
 
         <Show when={step() === 'wifi'}>
-          <p class="l0-label">Step 2 of 3 · Wi-Fi</p>
+          <p class="l0-label">Step 2 of 4 · Wi-Fi</p>
           <div class="setup-bubble">Name your Wi-Fi and pick a password.</div>
           <label class="l0-card-sub">Wi-Fi name<input style={field} value={ssid()} onInput={(e) => setSsid(e.currentTarget.value)} placeholder={networkView()?.wifi?.ssid ?? 'HookProbe-Home'} /></label>
           <label class="l0-card-sub">Password<input style={field} type="password" value={psk()} onInput={(e) => setPsk(e.currentTarget.value)} placeholder="At least 12 characters" autocomplete="new-password" /></label>
@@ -201,7 +201,7 @@ const SetupApp: Component = () => {
         </Show>
 
         <Show when={step() === 'key'}>
-          <p class="l0-label">Step 3 of 3 · Your key</p>
+          <p class="l0-label">Step 3 of 4 · Your key</p>
           <div class="setup-bubble">Create your signing key. Big changes — like your internet login or Wi-Fi — only apply when you sign them with this key.</div>
           <SigningKeyPanel compact />
           <Show when={bundleMode() && ownerKey() && !enrolledMine() && !otherOwner()}>
@@ -218,7 +218,7 @@ const SetupApp: Component = () => {
         </Show>
 
         <Show when={step() === 'review'}>
-          <p class="l0-label">Review</p>
+          <p class="l0-label">Step 4 of 4 · Review</p>
           <div class="setup-bubble">Here's what I'll set up. Nothing changes until you tap Launch.</div>
           <Show when={busy()}><p class="plan-diff-warn" role="alert" style={{ margin: 0 }}>{busy()}</p></Show>
           <div class="plan-diff-lines">
