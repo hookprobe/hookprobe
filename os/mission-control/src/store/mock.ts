@@ -63,6 +63,12 @@ export interface TimelineStats {
 // ── Reactive signals ─────────────────────────────────────────────────────────
 
 export const [qsecbit,         setQsecbit]         = createSignal<number>(92);
+/** True once a device reported a score (/api/qsecbit). On a device without one, screens show "—", never the sample 92. */
+export const [qsecbitKnown, setQsecbitKnown] = createSignal(false);
+/** The score as text: the sample 92 only when no device answers. */
+export const qsecbitShown = (): string => (substrate() && !qsecbitKnown() ? '—' : String(qsecbit()));
+/** The score for gauges (0 when a device has not reported one). */
+export const qsecbitGauge = (): number => (substrate() && !qsecbitKnown() ? 0 : qsecbit());
 /** Derived from the live resilience % with the device's own bands (risk < 0.3 GREEN, < 0.7 AMBER,
  *  else RED — `mcstate.rs` `band`), so the pill can never say PROTECTED under attack. */
 export const protectionStatus = (): ProtectionStatus => {

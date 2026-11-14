@@ -104,7 +104,7 @@ const ProtectApp: Component = () => {
                       <td>{KIND_LABEL[r.kind] ?? r.kind}{r.kind === 'device_policy' || r.kind === 'shield_profile' ? ` → ${r.value}` : ''}</td>
                       <td style={{ 'overflow-wrap': 'anywhere' }}>{r.target}</td>
                       <td>{r.effective ? <span class="go-state--up">Effective</span> : <span class="go-state--down">Shadowed by {r.shadowed_by}</span>}</td>
-                      <td><button class="hp-btn" disabled={sample()} onClick={() => setChange({ op: 'remove', kind: r.kind as OwnerKind, target: r.target })}>Remove</button></td>
+                      <td><button class="hp-btn" disabled={sample()} title={sample() ? 'Preview: no device is answering' : undefined} onClick={() => setChange({ op: 'remove', kind: r.kind as OwnerKind, target: r.target })}>Remove</button></td>
                     </tr>
                   )}</For>
                 </Show>
@@ -137,7 +137,7 @@ const ProtectApp: Component = () => {
                     <span>{a.kind.replace('_', ' ')} · {a.target}</span>
                     <span style={{ display: 'flex', gap: '8px', 'align-items': 'center' }}>
                       {a.expires_in_s ? `${Math.ceil(a.expires_in_s / 60)} min left` : 'in force'}
-                      <button class="hp-btn" style={{ 'min-height': '32px' }} disabled={sample()}
+                      <button class="hp-btn" style={{ 'min-height': '32px' }} disabled={sample()} title={sample() ? 'Preview: no device is answering' : undefined}
                         onClick={async () => { const r = await revokeAction(a.id); setMsg(r.ok ? `Ended ${a.kind.replace('_', ' ')} on ${a.target}.` : `Refused: ${r.refused}`); }}>End now</button>
                     </span>
                   </span>
