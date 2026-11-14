@@ -5058,6 +5058,16 @@ fn cm5_p10_probe() {
                                         // (Re)number the LAN when the WAN has a delegated prefix (also after a WAN re-dial).
                                         let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                         let w6 = unsafe { uplink::WAN6 };
+                                        // L-01b: the prefix is gone (not renewed, or the WAN is down) — tell the clients once
+                                        // (zero lifetimes), then stop advertising
+                                        if v6.up && (w6.pd.is_none() || !up.usable()) {
+                                            let k = v6.withdraw(&[0x33, 0x33, 0, 0, 0, 1], &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], &mut v6buf);
+                                            if k > 0 {
+                                                let _ = wifi_send!(&v6buf[..k]);
+                                            }
+                                            kprint!(" [V6LAN] delegated prefix {} — final RA with zero lifetimes sent, LAN stops advertising it\n",
+                                                if w6.pd.is_none() { "expired / withdrawn" } else { "unusable (WAN down)" });
+                                        }
                                         if let Some((pd, plen, valid)) = w6.pd {
                                             if up.usable() && (!v6.up || v6.prefix[..8] != pd[..8]) {
                                                 // G17.2: the LAN MTU follows the WAN — 1492 inside PPPoE, else the router's RA MTU
@@ -5070,8 +5080,6 @@ fn cm5_p10_probe() {
                                                 kprint!(" [V6LAN] LAN numbered from {:x?}/{}: router {:x}:{:x}:{:x}:{:x}::1/64 — RA (SLAAC, MTU {}, RDNSS={}) on the AP, stateful firewall default-deny inbound\n",
                                                     &pd[..8], plen, g(0), g(1), g(2), g(3), v6.mtu, v6.has_dns);
                                             }
-                                        } else if v6.up && !up.usable() {
-                                            v6.up = false;
                                         }
                                         // Management sub-interface: ARP, ping under `mgmt in`, and replies of flows routed out
                                         // management (un-NAT -> `mgmt in` -> `<lan|eth1> out` -> the client).
@@ -15680,14 +15688,27 @@ fn ip6_selftest() {
             let rejoin = matches!(w.on_lan(&f[..n4], 3_200, &mut out), LanAction::Forward(_));
             v_ok && claim_refused && victim_still && rejoin
         };
-        let r = ra_ok && na_ok && out_ok && in_ok && deny_ok && ptb_ok && spoof_ok && ll_ok && savi_ok && ns_ok && flood_ok;
+        // L-01b: losing the delegation sends one RA with router lifetime 0 and prefix valid / preferred 0, then stops
+        let wd_ok = {
+            let mut z = V6Lan::new();
+            z.configure(&pd, 56, 3600, &apmac, None);
+            let mut f = [0u8; 256];
+            let n = z.withdraw(&[0x33, 0x33, 0, 0, 0, 1], &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], &mut f);
+            // RA body at 54: router lifetime [60..62]; first option SLLA 8 B at 70, then PIO 32 B at 78: valid [82..86] preferred [86..90]
+            let zero = n > 0 && f[54] == 134 && f[60..62] == [0, 0] && f[78] == 3 && f[82..90] == [0; 8] && f[94..102] == pd[..8];
+            let silent = !z.up && z.withdraw(&[0; 6], &[0; 16], &mut f) == 0;
+            let lapse = arch_aarch64::ip6lan::pd_lapsed(3_600_000 + 5, 5, 3600) && !arch_aarch64::ip6lan::pd_lapsed(3_599_999, 5, 3600)
+                && !arch_aarch64::ip6lan::pd_lapsed(u64::MAX / 2, 0, u32::MAX);
+            zero && silent && lapse
+        };
+        let r = ra_ok && na_ok && out_ok && in_ok && deny_ok && ptb_ok && spoof_ok && ll_ok && savi_ok && ns_ok && flood_ok && wd_ok;
         if !r {
-            kprint!("   [P-ip6 lan] ra={} na={} out={} in={} deny={} ptb={} spoof={} ll={} savi={} ns={} flood={}\n", ra_ok, na_ok, out_ok, in_ok, deny_ok, ptb_ok, spoof_ok, ll_ok, savi_ok, ns_ok, flood_ok);
+            kprint!("   [P-ip6 lan] ra={} na={} out={} in={} deny={} ptb={} spoof={} ll={} savi={} ns={} flood={} withdraw={}\n", ra_ok, na_ok, out_ok, in_ok, deny_ok, ptb_ok, spoof_ok, ll_ok, savi_ok, ns_ok, flood_ok, wd_ok);
         }
         r
     };
     let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok && renew_ok;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings={}\n",
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings + a lost delegation is withdrawn with zero lifetimes (L-01b)={}\n",
         if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, renew_ok, lan_ok);
 }
 

@@ -83,6 +83,12 @@ pub enum WanAction {
     Solicit(usize),
 }
 
+/// Whether a delegated prefix obtained (or last renewed) at `got_ms` with `valid` seconds of lifetime has run out at
+/// `now_ms` (L-01b). An infinite lifetime (u32::MAX) never lapses.
+pub fn pd_lapsed(now_ms: u64, got_ms: u64, valid: u32) -> bool {
+    valid != u32::MAX && now_ms.wrapping_sub(got_ms) >= valid as u64 * 1000
+}
+
 pub struct V6Lan {
     pub up: bool,
     /// LAN /64 (only the first 8 bytes matter).
@@ -98,6 +104,8 @@ pub struct V6Lan {
     /// Prefix lifetimes advertised to clients (bounded by the delegation).
     valid: u32,
     preferred: u32,
+    /// Router lifetime in RAs (s): 1800 while serving; 0 in the final RA that withdraws the prefix (L-01b).
+    router_lifetime: u16,
     neigh: [Neigh; NEIGH_N],
     flows: [Flow; FLOW_N],
     pub stats: Stats,
@@ -154,6 +162,7 @@ impl V6Lan {
             mtu: LAN_MTU,
             valid: 0,
             preferred: 0,
+            router_lifetime: 1800,
             neigh: [Neigh { ip: [0; 16], mac: [0; 6], seen: 0 }; NEIGH_N],
             flows: [Flow { local: [0; 16], remote: [0; 16], proto: 0, lport: 0, rport: 0, seen: 0, used: false }; FLOW_N],
             stats: Stats {
@@ -188,6 +197,7 @@ impl V6Lan {
         // Advertise bounded lifetimes; an "infinite" delegation still gets refreshed RAs.
         self.valid = valid.min(86_400);
         self.preferred = (valid / 2).min(14_400);
+        self.router_lifetime = 1800;
         self.up = true;
         self.ra_burst = 0;
         self.last_ra_ms = 0;
@@ -363,7 +373,7 @@ impl V6Lan {
         r[0] = 134;
         r[4] = 64; // cur hop limit for clients
         r[5] = 0; // M=0 O=0: SLAAC; DNS via RDNSS
-        r[6..8].copy_from_slice(&1800u16.to_be_bytes()); // router lifetime
+        r[6..8].copy_from_slice(&self.router_lifetime.to_be_bytes()); // router lifetime (0 = withdrawing)
         let mut k = 16;
         // Source link-layer address
         r[k] = 1;
@@ -392,6 +402,22 @@ impl V6Lan {
         }
         self.stats.ra_tx += 1;
         Self::finish_icmp(out, &ll, dst, il)
+    }
+
+    /// The delegated prefix is gone (the ISP stopped renewing it, or the WAN went down): one last RA that tells the
+    /// clients so — router lifetime 0, prefix valid / preferred 0 (RFC 7084 L-13) — then the LAN stops advertising.
+    /// Without it the clients kept a dead prefix (and the AP as default router) until its old lifetime ran out
+    /// (LAN assessment L-01b, 2026-11-14). Returns the frame length (0 when nothing was being advertised).
+    pub fn withdraw(&mut self, dmac: &[u8; 6], dst: &[u8; 16], out: &mut [u8]) -> usize {
+        if !self.up {
+            return 0;
+        }
+        self.valid = 0;
+        self.preferred = 0;
+        self.router_lifetime = 0;
+        let n = self.build_ra(dmac, dst, out);
+        self.up = false;
+        n
     }
 
     /// Periodic unsolicited RA: 3 fast ones (4 s apart) after configure, then every 60 s.
