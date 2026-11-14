@@ -54,6 +54,15 @@ pub enum Route {
 
 /// Classify one node egress frame. `mgmt` = (management address, prefix), when configured.
 pub fn route(frame: &[u8], mgmt: Option<([u8; 4], u8)>) -> Route {
+    // A-03 (LAN assessment 2026-11-14): the node's default gateway is its OWN AP address (a stand-in: the host
+    // re-addresses every node frame), so a reply to any off-subnet source — a SYN NATed to the device's WAN address and
+    // routed back by the upstream router, or simply a spoofed one — makes smoltcp ask "who-has <own address> tell
+    // <own address>". Nobody on Wi-Fi answers that; the never-resolving gateway then held the neighbour cache's shared
+    // ARP rate limit, the real peers' entries expired behind it, and every connection stalled until reboot. The host
+    // answers it like any management neighbour.
+    if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 && frame[28..32] == frame[38..42] {
+        return Route::ArpLocal;
+    }
     let Some((mip, prefix)) = mgmt else { return Route::Wifi };
     if frame.len() >= 42 && frame[12] == 0x08 && frame[13] == 0x06 {
         let tip = [frame[38], frame[39], frame[40], frame[41]];
@@ -143,12 +152,17 @@ pub fn selftest() -> bool {
     // a Wi-Fi-side who-has (10.99.0.12) is not intercepted
     let n2 = arch_aarch64::mgmtproto::arp_frame(&mut req, 1, &node, &[10, 99, 0, 1], &[0; 6], &[10, 99, 0, 12], &[0xff; 6]);
     let arp_wifi = route(&req[..n2], Some((mgmt_ip, 24))) == Route::Wifi;
+    // A-03: the node's who-has for its OWN address (its stand-in default gateway, asked when replying to an off-subnet
+    // source) is answered locally — with and without a management interface
+    let n3 = arch_aarch64::mgmtproto::arp_frame(&mut req, 1, &node, &[10, 99, 0, 1], &[0; 6], &[10, 99, 0, 1], &[0xff; 6]);
+    let self_gw = route(&req[..n3], Some((mgmt_ip, 24))) == Route::ArpLocal && route(&req[..n3], None) == Route::ArpLocal
+        && arp_reply(&req[..n3], node, &mut rep).is_some_and(|k| k >= 42 && rep[28..32] == [10, 99, 0, 1]);
     to_wire(&mut reply, [0x02, 0, 0, 0, 0, 0x02], [0x00, 0xd0, 0xb4, 0x03, 0xb7, 0x11]);
     let wire_ok = reply[0..6] == [0x00, 0xd0, 0xb4, 0x03, 0xb7, 0x11] && reply[6..12] == [0x02, 0, 0, 0, 0, 0x02];
-    let pass = in_ok && other_port_refused && other_dst_refused && to_mgmt && stays_wifi && arp_local && arp_ok && arp_wifi && wire_ok;
+    let pass = in_ok && other_port_refused && other_dst_refused && to_mgmt && stays_wifi && arp_local && arp_ok && arp_wifi && self_gw && wire_ok;
     arch_aarch64::_print(format_args!(
-        " [P-mcmgmt] {} — G12-M Mission Control on the management VLAN: ingress only TCP 80/443 to the mgmt address={} (other port refused={} other host refused={}) | egress to the mgmt subnet leaves on mgmt={} Wi-Fi traffic stays on Wi-Fi={} | node ARP for mgmt peers answered locally={}/{} (Wi-Fi ARP untouched={}) | re-addressed for the wire={}\n",
-        if pass { "PASS" } else { "FAIL" }, in_ok, other_port_refused, other_dst_refused, to_mgmt, stays_wifi, arp_local, arp_ok, arp_wifi, wire_ok
+        " [P-mcmgmt] {} — G12-M Mission Control on the management VLAN: ingress only TCP 80/443 to the mgmt address={} (other port refused={} other host refused={}) | egress to the mgmt subnet leaves on mgmt={} Wi-Fi traffic stays on Wi-Fi={} | node ARP for mgmt peers answered locally={}/{} (Wi-Fi ARP untouched={}) | A-03 who-has its own address (off-subnet reply gateway) answered locally={} | re-addressed for the wire={}\n",
+        if pass { "PASS" } else { "FAIL" }, in_ok, other_port_refused, other_dst_refused, to_mgmt, stays_wifi, arp_local, arp_ok, arp_wifi, self_gw, wire_ok
     ));
     pass
 }
