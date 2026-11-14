@@ -114,6 +114,9 @@ const IncidentApp: Component = () => {
         <Show when={!resolved() || id() || sample()} fallback={
           <div class="l0-card"><p>No incident selected.</p><a class="hp-btn" href="/investigate/queue">Open the incident queue</a></div>
         }>
+          <Show when={sample() && id() && id() !== SAMPLE.id}>
+            <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>{id()} is not in the sample data (no device is answering), so the sample incident {SAMPLE.id} is shown instead.</p>
+          </Show>
           <div class="pro-head">
             <div style={{ 'min-width': 0 }}>
               <p class="pro-crumb"><a href="/investigate/queue">Investigate</a> / <a href="/investigate/queue">Queue</a> / {sample() ? SAMPLE.id : id()}</p>
