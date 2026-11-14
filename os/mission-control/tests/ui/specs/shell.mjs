@@ -32,8 +32,10 @@ export default async function (t) {
   ok(await page.locator('.drawer').count() === 0, 'Esc closes the Drawer');
   ok(await page.evaluate(() => document.activeElement?.classList.contains('pcard')), 'focus returns to the opener');
 
-  // PlanDiff: a failed approve names the failure and offers Retry (preview has no device)
-  await go('/investigate/incident/?id=INC-0142');
+  // PlanDiff: a failed approve names the failure and offers Retry (preview has no device). The sample incident's plan is
+  // greyed now (pro-incident-polish), so the failure path is exercised on Protect's new-rule plan.
+  await go('/protect/firewall');
+  await page.click('button:has-text("+ Rule")'); await page.waitForTimeout(250);
   await page.click('.plan-diff >> text=Approve plan'); await page.waitForTimeout(300);
   ok(/Failed/.test(await page.locator('.plan-diff-status').textContent()), 'PlanDiff: failure is stated');
   ok(await vis(page.locator('.plan-diff >> text=Retry')), 'PlanDiff: Retry offered');
