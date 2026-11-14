@@ -9,6 +9,7 @@
 
 | ID | Sev | Finding | Evidence | Owner | Status |
 |---|---|---|---|---|---|
+| **A-03** | **High** | **Management UI DoS:** an unauthenticated LAN-side TCP port scan (nmap `-sT`) **wedges Mission Control** — both `:443` and `:80` stop answering (SYN, no SYN-ACK; device mgmt-policy drops = 0, so frames reach the stack), and it **stays dead until the device is rebooted**. Confirmed *wedged, not slot exhaustion*: MC stayed dead for 3 min with the scan paused and the scanner holding zero connections. `:80` dying too ⇒ broader than TLS slot accounting | full `-p-` `-sT` sweep from 192.168.200.1; heqk observed from 3 sources; 3-min paused recovery test = still dead | heqk | 🔴 open — **root cause heqk's to find** (bisecting the sequence) |
 | **W-01** | Med | CM5 AP in **WPA2/WPA3 transition mode** (AKM PSK+SAE); WPA2 clients downgradable, offline PSK guess from captured handshake | beacon RSN AKM `2,8` (M0 §5, verified by extractor) | heqk | 🟡 accepted (shipping default 2026-11-10) |
 | **W-02** | Med | **PMF optional** (MFPC=1, MFPR=0) in transition mode; unprotected deauth/disassoc for PSK clients | RSN caps `0x008c` | heqk | 🟡 accepted for transition; **verify MFPR=1 in WPA3-only** |
 | **W-03** | Med | Country IE advertises **DFS ch52–140 (RO)** the firmware can't use (`allow_dfs=false`, UNII-1 only); advertise-vs-use mismatch | beacon country IE vs `iw reg get` phy0 `country 99 DFS-UNSET` | heqk | 🔴 open — tagged **RED / EN 18031 compliance** |
