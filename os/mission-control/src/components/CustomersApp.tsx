@@ -62,7 +62,7 @@ const CustomersApp: Component = () => {
             <section style={{ display: 'flex', 'flex-direction': 'column', gap: '16px', 'min-width': 0 }}>
               <div class="pro-head">
                 <h2 style={{ margin: 0, 'font-size': '20px' }}>{t().label}</h2>
-                <div class="l0-head-actions"><a class="hp-btn" href="/mission">Open as this customer</a><span class="gate gate--off" title="Customer reports are made by the control plane (cloud-linked or self-hosted), not by this device"><span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn hp-btn--primary">Generate report</button></span><span class="gate-reason" role="note">Reports come from the control plane, not this device.</span></span></div>
+                <div class="l0-head-actions"><span class="gate gate--off"><span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Open as this customer</button></span><span class="gate-reason" role="note">Switching into a customer's console comes from the control plane; this preview has no tenants to switch to.</span></span><span class="gate gate--off" title="Customer reports are made by the control plane (cloud-linked or self-hosted), not by this device"><span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn hp-btn--primary">Generate report</button></span><span class="gate-reason" role="note">Reports come from the control plane, not this device.</span></span></div>
               </div>
               <div class="bento">
                 <div class="pcard span-4"><p class="l0-label">Security score</p><p class="pcard-kpi">{t().score}</p></div>
