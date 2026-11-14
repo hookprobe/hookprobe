@@ -1,6 +1,8 @@
 [package]
 name = "boot-abi"
-version = "0.0.26"
+version = "0.1.0"  # PINNED — do not bump with releases: the crate version feeds symbol mangling, so it changes
+                   # boot-abi (linked into HBoot)'s bytes, and OTA refuses an image whose boot loader differs ("boot-loader updates are
+                   # USB-only"). Bumping it strands every installed device on USB reflash. Release version: hal::release.
 license = "AGPL-3.0-only"
 edition = "2021"
 publish = false  # first-party: never published to crates.io (ADR 0063 G4)
