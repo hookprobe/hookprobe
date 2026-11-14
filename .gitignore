@@ -68,11 +68,12 @@ os/build/.heqk-dev-keys/
 out/ci/
 __pycache__/
 
-# Hardware design files are a private company asset (ADR 0064 D2): never commit them here.
-/hardware/
-*.kicad_pcb
-*.kicad_sch
-*.kicad_pro
-*.kicad_sym
-*.kicad_mod
-*.step
+# Hardware (ADR 0064 D2): designs are public under CERN-OHL-S-2.0, but third-party documents are
+# not ours to redistribute, and KiCad local state never belongs in git.
+/hardware/**/datasheet.pdf
+/hardware/**/datasheet.png
+/hardware/**/vendor/radxa_*/
+/hardware/**/.history/
+/hardware/**/*.kicad_prl
+/hardware/**/*-backups/
+/hardware/**/fp-info-cache
