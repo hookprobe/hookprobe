@@ -5119,9 +5119,10 @@ fn cm5_p10_probe() {
                                             }
                                             if wifi_off {
                                                 // degraded: the radio is off — no firmware console / chanspec reads
-                                            } else if beat_n == 2 || beat_n % 12 == 6 {
+                                            } else if beat_n == 2 || beat_n % 12 == 6 || cfg!(feature = "fwcon-fast") {
                                                 if let Some(sh) = cyw43::fw_shared() {
-                                                    let r = cyw43::fw_console_dump(&sh, 12);
+                                                    // BENCH fwcon-fast: every beat, 64 lines, so a vendor trap dump never wraps the 1 KiB ring
+                                                    let r = cyw43::fw_console_dump(&sh, if cfg!(feature = "fwcon-fast") { 64 } else { 12 });
                                                     kprint!("   [FWCON] (periodic) shared flags={:#06x} console={:?}\n", sh.flags, r);
                                                     cyw43::fw_trap_dump(&sh);
                                                 } else {
@@ -14742,7 +14743,7 @@ impl wifiheal::Port for MetalHeal<'_> {
         };
         d.w[W_FC_MASK] = cyw43::fc_mask() as u32;
         if let Some(sh) = cyw43::fw_shared() {
-            let _ = cyw43::fw_console_dump(&sh, 24);
+            let _ = cyw43::fw_console_dump(&sh, if cfg!(feature = "fwcon-fast") { 96 } else { 24 });
             cyw43::fw_trap_dump(&sh);
         }
         if let Some(tr) = cyw43::fw_trap_regs() {
