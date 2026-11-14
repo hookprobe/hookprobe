@@ -56,6 +56,12 @@ function viewFor(path: string): View {
   return path.startsWith('/network/devices') ? 'list' : path.startsWith('/network/map') ? 'map' : 'zones';
 }
 
+/** A time of day for today, a date and time otherwise ("First seen 17:26" three days ago read as later than "Last seen 17:25"). */
+function when(ts: number): string {
+  const d = new Date(ts * 1000);
+  return d.toDateString() === new Date().toDateString() ? formatTime(ts) : d.toLocaleString([], { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
+
 const NetworkLive: Component<{ path?: string }> = (props) => {
   const [path, setPath] = createSignal(props.path ?? '/network/zones');
   const [msg, setMsg] = createSignal('');
@@ -120,7 +126,7 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
                       <td><button class="dev-btn" style={{ border: 0, padding: 0, background: 'none', 'min-height': '32px' }} onClick={() => setSel(d.id)}>{nameOf(d)}</button></td>
                       <td>{ZONES.find((z) => z.key === zoneOf(d))?.label}</td>
                       <td class="l0-num" style={{ 'font-weight': 400 }}>{d.ip}</td>
-                      <td>{formatTime(d.last_seen)}</td>
+                      <td>{when(d.last_seen)}</td>
                       <td>{d.active === false ? 'Lease expired' : 'Online'}</td>
                     </tr>
                   )}</For>
@@ -150,7 +156,10 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
         footer={
           <Show when={selected()}>
             <Show when={!sample() && selected()!.mac && zoneOf(selected()!) !== 'quarantine'} fallback={
-              <Show when={sample()}><span class="gate-reason">Preview: on a device this isolates it for an hour.</span></Show>
+              <Show when={sample()}>
+                <span class="gate gate--off"><span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn hp-btn--primary">Isolate 1 h</button></span>
+                  <span class="gate-reason" role="note">Preview: on a device this isolates it for an hour.</span></span>
+              </Show>
             }>
               <button class="hp-btn hp-btn--primary" title="Quarantine for 1 hour (device password; DHCP and DNS keep working; expires on its own)"
                 onClick={async () => setMsg(await promptAndRun('isolate', selected()!.mac!, 3600))}>Isolate 1 h</button>
@@ -169,8 +178,8 @@ const NetworkLive: Component<{ path?: string }> = (props) => {
                 <p class="l0-card-sub">Identified as<b>{kindOf(d())}{d().confidence ? ` (${d().confidence}% via ${d().id_source})` : ''}</b></p>
                 <p class="l0-card-sub">Address<b>{d().ip}</b></p>
                 <p class="l0-card-sub">Hardware address<b>{d().mac ?? '—'}{d().private_mac ? ' (private)' : ''}</b></p>
-                <p class="l0-card-sub">First seen<b>{formatTime(d().first_seen)}</b></p>
-                <p class="l0-card-sub">Last seen<b>{formatTime(d().last_seen)}</b></p>
+                <p class="l0-card-sub">First seen<b>{when(d().first_seen)}</b></p>
+                <p class="l0-card-sub">Last seen<b>{when(d().last_seen)}</b></p>
               </div>
               <Show when={renaming()}>
                 <div aria-label="Rename">
