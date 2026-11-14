@@ -4929,9 +4929,11 @@ fn cm5_p10_probe() {
                                             let ntp_ours = wanntp::is_ours(&wbuf[..n], up.dhcp.yiaddr);
                                             #[cfg(not(feature = "mcserve"))]
                                             let ntp_ours = false;
-                                            if apcore::WanProbe::is_reply(&wbuf[..n], up.dhcp.yiaddr) {
-                                                if let Some((Some(st), internet, rtt)) = whprobe.on_frame(&wbuf[..n], up.dhcp.yiaddr, &mut whealth, now(), freq) {
-                                                    kprint!(" [WAN-HEALTH] {} ({} probe answered, rtt {} ms)\n", st.name(), if internet { "internet" } else { "gateway" }, rtt);
+                                            let prx = whprobe.on_frame(&wbuf[..n], up.dhcp.yiaddr, &mut whealth, now(), freq);
+                                            if prx != apcore::ProbeRx::NotOurs {
+                                                // a gateway answer never changes the state (WanHealth decides on the anchors)
+                                                if let apcore::ProbeRx::Answered(Some(st), _, rtt) = prx {
+                                                    kprint!(" [WAN-HEALTH] {} (internet probe answered, rtt {} ms)\n", st.name(), rtt);
                                                 }
                                             } else if ntp_ours {
                                                 // Parity G11: our SNTP answer (validated: server asked, port 123, our nonce).
