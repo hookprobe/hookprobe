@@ -33,6 +33,15 @@ exploited (receive-only rule).
 | **LAN++** | — | **Login rate-limit works:** `/api/login` returns **429** after ~2 failed attempts from one source (fast 429, not a slow drip); confirms the per-source brute-force throttle | 10 benign identical POSTs → 303,303,429×8 | ✅ good |
 | **T-LAN1** | — | TCP surface of 192.168.200.146: **only 80+443 open, 998/1000 filtered (dropped)** on top-1000; full 65535 sweep in progress | nmap -sT -T2 | ▶ full sweep running |
 
+### AP-side assessment (from wlan0 client 10.99.0.10 of HookProbe-Setup-R3Q1, 2026-11-14)
+
+| ID | Sev | Finding | Evidence | Status |
+|---|---|---|---|---|
+| **AP+** | — | **Good:** Mission Control is NOT served on the AP gateway (10.99.0.1:80/443 no-connect, G12-M); mgmt UI 80/443 **filtered from the AP side**; Shield DNS filters ads (`doubleclick.net` → no answer), no `version.bind` leak, `ANY` returns nothing (no amplification), normal names resolve | curl/dig/`/dev/tcp` | ✅ |
+| **A-01** | Med? | **AP clients can reach upstream RFC1918 networks via the CM5 WAN:** from wlan0, `192.168.200.1:22` (mgmt-VLAN host, fortress) is **TCP-open**, `192.168.200.146` answers ICMP, `10.200.0.1` (fortress LAN) is reachable. MC's own ports are filtered, but the surrounding segments are routable from a Wi-Fi client | `ping -I wlan0`, `/dev/tcp/192.168.200.1/22` OPEN, `ip route get → via 10.99.0.1 dev wlan0` | 🔴 open — **heqk to judge.** Likely bench-topology-influenced (fortress routes between the CM5 WAN and the mgmt/LAN segments; in production the WAN is the ISP). Real question: should the CM5 AP block client→RFC1918-on-WAN by default? |
+| **A-02** | info | **Client isolation (`ap_isolate`) not testable** — only one station (this Pi) is associated, so no second client to attempt to reach. Needs a second station to confirm | subnet sweep 10.99.0.0/24: only .10 (us) + .1 (gw) | ⏸ retest with a 2nd client |
+| **L-01✓** | — | RA on the AP hands the documentation prefix `2001:db8:ff00::/64` (reconfirmed) — by design on the bench | `ip -6 route dev wlan0` | 🟡 by design |
+
 ## B. Fix plan by owner
 
 ### heqk kernel session
