@@ -1,0 +1,25 @@
+[Unit]
+Description=Pi 4 wireless sensor — local read-only dashboard (management LAN only)
+After=network-online.target pi4-wsensor.service
+Wants=pi4-wsensor.service
+
+[Service]
+Type=simple
+Environment=WSENSOR_DATA_DIR=/var/lib/pi4-wsensor
+# WSENSOR_DASH_BIND auto-detects the mgmt IP; set it explicitly to pin the interface.
+# WSENSOR_DASH_PORT=8099 ; optional token gate: create /etc/pi4-wsensor/dashboard.token
+ExecStart=/usr/bin/python3 /opt/pi4-wsensor/wsensor-dashboard.py
+Restart=on-failure
+RestartSec=10
+# read-only server: no write access needed beyond reading the data dir
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/pi4-wsensor /etc/pi4-wsensor
+ProtectHome=yes
+PrivateTmp=yes
+DynamicUser=yes
+SupplementaryGroups=
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target

@@ -13,12 +13,14 @@ install -d -m 0755 /opt/pi4-wsensor /etc/pi4-wsensor
 install -d -m 0755 /var/lib/pi4-wsensor   # health.json + events readable by the dashboard/operator
 # keep raw captures private
 install -d -m 0700 /var/lib/pi4-wsensor/pcap
-for f in wsensor-supervisor.sh dongle-lock.sh wsensor_extract.py m0-inventory.sh m0-monitor-test.sh; do
+for f in wsensor-supervisor.sh dongle-lock.sh wsensor_extract.py m0-inventory.sh m0-monitor-test.sh \
+         dfs-watch.sh ap-isolate-test.sh wsensor-dashboard.py; do
   install -m 0755 "$SRC/$f" /opt/pi4-wsensor/
 done
 [ -f "$SRC/README.md" ] && install -m 0644 "$SRC/README.md" /opt/pi4-wsensor/
 [ -f /etc/pi4-wsensor/wsensor.conf ] || install -m 0644 "$SRC/wsensor.conf" /etc/pi4-wsensor/
 install -m 0644 "$SRC/pi4-wsensor.service" /etc/systemd/system/
+install -m 0644 "$SRC/pi4-wsensor-dashboard.service" /etc/systemd/system/
 systemctl daemon-reload
 if [ "${1:-}" = --enable ]; then systemctl enable --now pi4-wsensor.service; fi
 echo "installed. status: systemctl status pi4-wsensor; health: cat /var/lib/pi4-wsensor/health.json"
