@@ -68,6 +68,13 @@ The sensor is a standalone Linux bench tool (ADR 0047). Two non-exclusive paths:
 **Bench decision (reasonable default, revisit on request):** build the standalone dashboard now; offer heqk the
 endpoint shape for the additive path. No work is blocked waiting on ARCH-1.
 
+### operator (optional hardware)
+- **HW-DFS:** the RTL8811AU monitor dongle cannot receive on DFS/radar channels (52–64, 100–144) — proven against
+  ground truth. DFS-channel wireless monitoring (rogue/beacon analysis on DFS, verifying the AP's DFS/CAC and
+  beacon IEs over the air) needs a **DFS-capable monitor adapter (MT7612U-class)**. Not required for non-DFS
+  coverage or the LAN work; it's the right ask only if over-the-air DFS monitoring is wanted. heqk takes DFS beacon
+  IEs from its own `wlan0` client scans in the meantime.
+
 ### operator
 1. **INFRA-1:** run once — `! ssh -t claude@10.200.0.4 'bash ~/pi4-wsensor/bootstrap-sudo.sh'` — to install the
    sensor and grant the narrow sensor-only sudo rule. Until then M1 capture and the soak can't run.
