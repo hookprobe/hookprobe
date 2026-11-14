@@ -5,7 +5,7 @@
  * and the device footer, then "Back to simple view".
  */
 import { type Component, For, Show } from 'solid-js';
-import { qsecbit, heartbeat, deployMode, substrate } from '../store/mock';
+import { qsecbit, qsecbitShown, qsecbitGauge, heartbeat, deployMode, substrate } from '../store/mock';
 import { degraded } from '../store/health';
 import { setProView } from '../store/layer';
 import Icon from './Icon';
@@ -58,9 +58,9 @@ const AppRail: Component<{ path: string }> = (props) => {
       </div>
 
       <div class="shell-rail-foot">
-        <a href="/mission" class="shell-rail-qcard" aria-label={`QSecBit ${qsecbit()}, open Mission Control`}>
+        <a href="/mission" class="shell-rail-qcard" aria-label={`QSecBit ${qsecbitShown()}, open Mission Control`}>
           <span class="shell-rail-qlabel shell-rail-label">QSecBit</span>
-          <span class="shell-rail-qscore">{qsecbit()}</span>
+          <span class="shell-rail-qscore">{qsecbitShown()}</span>
           <svg class="shell-rail-label" viewBox="0 0 160 24" width="100%" height="24" preserveAspectRatio="none" aria-hidden="true">
             <path d={spark(heartbeat(), 160, 24)} fill="none" stroke="var(--hp-green)" stroke-width="1.5" />
           </svg>

@@ -7,7 +7,7 @@
  * Identical on every route; only the content and side panel change.
  */
 import { type Component, Show, For, createSignal, createEffect, onCleanup, onMount } from 'solid-js';
-import { qsecbit, protectionStatus, deployMode, currentUser, substrate, security } from '../store/mock';
+import { qsecbit, qsecbitShown, qsecbitGauge, protectionStatus, deployMode, currentUser, substrate, security } from '../store/mock';
 import { loadHealth, degraded } from '../store/health';
 import { proView, setProView, scope, setScope, SCOPES, setNavOpen } from '../store/layer';
 
@@ -43,10 +43,10 @@ const TopBar: Component<Props> = (props) => {
       <a
         href="/mission"
         class={`organism-pill organism-pill--${protectionStatus()}`}
-        aria-label={`Security status: ${WORD[protectionStatus()]}, QSecBit ${qsecbit()}. Open Mission Control`}
+        aria-label={`Security status: ${WORD[protectionStatus()]}, QSecBit ${qsecbitShown()}. Open Mission Control`}
       >
         <span class="organism-pill-dot" aria-hidden="true" />
-        <span class="tb-mono">{qsecbit()}</span>
+        <span class="tb-mono">{qsecbitShown()}</span>
         <span>{WORD[protectionStatus()]}</span>
       </a>
 
