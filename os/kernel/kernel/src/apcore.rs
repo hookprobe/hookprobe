@@ -667,6 +667,10 @@ pub fn tick_selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-apcore-tick] {} — G0 step 5a: LAN IPv6 lifecycle — first delegation configures={} waits for a usable WAN={} no delegation, nothing={} steady keeps={} lapsed delegation withdraws (zero lifetimes)={} WAN down withdraws={} ISP renumbering withdraws the old prefix then configures the new={} | per-rule drop table counts, a full table leaves others uncounted={}\n",
         if pass { "PASS" } else { "FAIL" }, first, wait_wan, none, steady, lapsed, wan_down, renumber, counted
+    ));
+    pass
+}
+
 /// G0 step 4: where one frame received on the management sub-interface goes (after `mgmt_poll` answered ARP / ping).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MgmtOut {
