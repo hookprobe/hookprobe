@@ -98,7 +98,9 @@ os/mission-control/ the UI, embedded into heqk by os/kernel/kernel/build.rs
 os/build/           image build engine (make-cm5-heqk-image.sh / -disk.sh, heqk-sign)
 os/{drivers,networking,security,device-identity,provisioning}/   index READMEs into os/kernel
                     (os/drivers/firmware/ holds the CYW43455 blobs)
-appliance/{cm5,waveshare-dual-eth}/   hardware profiles
+appliance/{cm5,waveshare-dual-eth,hookprobe-sbc}/   hardware profiles (how the OS sees a board)
+                    (hookprobe-sbc = HookProbe's own RK3588 board; design files are a PRIVATE company asset,
+                    never in this public repo; gated behind CM5 validation: ADR 0064)
 onboarding/{wifi,enrollment,setup-ui}/  enrollment/responder-sim = host control-plane responder
 docs/{architecture,getting-started,security,roadmap,adr,design,research}/
 tools/{build,flash,diagnostics}/
