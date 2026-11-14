@@ -264,7 +264,7 @@ Rows above are kept as written. Status since, per item:
 | A8 | QEMU (mc-e2e) | — |
 | A9 | partial: `abslot`, `boot_abi::verify`, `record_rx` host fuzz targets; owner-journal replay sweep `[P-journal-sweep]` (PR #1016, QEMU only); host libFuzzer for journal replay built 2026-11-12 (`owner_journal`, 1.13 M runs / 0 crashes; upload + owner form bodies via `http_req`) | `docs/design/fuzz-evidence.md` |
 | A10 | deferred (§3.1) | — |
-| A11 | SEC-01 steps 1, 2a, 2b, 3, 5a metal-proven (`20261111-batch59-63.md`, `[P-lansvc]`); 5b and 5c (PR #1005) QEMU only, metal pending; Noise + SNTP / ARP / ICMP stay in EL1 by operator decision 2026-11-11; authenticator state machine moves with the driver: not built | ADR 0050 D4 status notes |
+| A11 | SEC-01 steps 1, 2a, 2b, 3, 5a, 5b metal-proven (`20261111-batch59-63.md`, `[P-lansvc]`); 5c metal-proven 2026-11-14 (`sae_frames_el0` = 8 from a real WPA3 join, in-kernel 0 — `20261114-evening.md`); Noise + SNTP / ARP / ICMP stay in EL1 by operator decision 2026-11-11; authenticator state machine moves with the driver: not built | ADR 0050 D4 status notes |
 | A12 | this reconciliation (docs only, 2026-11-12) | `docs/adr/README.md` |
 | A13 | merged (PR #1017) — QEMU + host only, metal pending (§2.1 #12) | — |
 | Sealed config + live apply (the "house", steps 1–11) | merged: #998 (steps 1–3), #999 (6), #1000 (5), #1001 (7–8), #1002 (9), #1003 (11), #1004 (10), #1007 (live hand-off fix + image budget), #1008 (`/api/config` live object) — QEMU only, **metal pending** (checks from PR #1009 not yet run) | `docs/design/heqk-sealed-config-live-apply.md` |
