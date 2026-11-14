@@ -1,6 +1,7 @@
 # ADR 0064 — HookProbe hardware program: from CM5 to a HookProbe board (RK3588), after CM5 is validated
 
-**Status:** 🟡 **Proposed (2026-11-14)**. Operator review. Records the direction the operator set on 2026-11-14:
+**Status:** 🟡 **Proposed (2026-11-14)**; **D6 decided by the operator (2026-11-14): CERN-OHL-S-2.0 + commercial
+hardware licence, design published at H5.** The rest awaits operator review. Records the direction the operator set on 2026-11-14:
 once HookProbe OS is validated on CM5, HookProbe moves to dedicated hardware of its own, through an intermediate
 board with the same processor. Clauses are tagged **[realized]**, **[partial]** or **[vision]** (the ADR
 0043/0044/0047 discipline).
@@ -44,9 +45,9 @@ No hardware engineering spend (routing, fabrication, components) and no RK3588 d
 until gate **H0** below is green. Design research may continue. Hardware is a second product line built on a
 validated OS, not a way around CM5's open items.
 
-### D2 · Hardware design files are company assets, kept private **[realized: this change]**
-Schematics, layouts, generator scripts, BOMs and 3D models live in a **private** repository (`hookprobe-hardware`),
-never in this public AGPL repository. A `.gitignore` guard here blocks KiCad files and a `hardware/` tree. The public repo
+### D2 · Hardware design files stay private until H5 **[realized: this change]**
+Schematics, layouts, generator scripts, BOMs and 3D models live in a **private** repository (`hookprobe-hardware`)
+until a revision passes H4 and is published under D6. They never go into this AGPL software repository. A `.gitignore` guard here blocks KiCad files and a `hardware/` tree. The public repo
 holds only the OS-facing view: this ADR and the board profile in `appliance/hookprobe-sbc/`, keeping the CLAUDE.md
 design test (**adding hardware = one profile in `appliance/`, no UI, installer or API change**).
 
@@ -91,18 +92,31 @@ branch on the board name.
   crypto posture. Same derivation interface, different key source.
 - **Power:** until the boot chain negotiates USB-C PD, the **DC jack is the supported power input**.
 
-### D6 · Publication model: operator decision, private by default **[open]**
-Facts the decision rests on:
+### D6 · Publication model: dual licence, published at H5 **[decided: operator 2026-11-14]**
+**Decision:** the hardware is dual-licensed, mirroring the software's AGPL-3.0 + commercial model:
+- **CERN-OHL-S-2.0** for everyone. Anyone may study, build and sell the design. Anyone who distributes a modified
+  board must publish their changed design sources under the same licence.
+- **A commercial hardware licence** for manufacturers who want closed derivatives or white-label units without
+  publishing their changes.
+- **The trademark stays reserved.** "HookProbe" and any "HookProbe Certified" mark are not granted by either
+  licence. Official signed releases, the device trust root and cloud/MSSP enrollment stay HookProbe's, so the
+  certified board is the reference worth buying.
+- **Timing:** the design stays **private until H5**. The first published revision is the one that passed H4
+  prototype bring-up, never an unrouted or unproven one. Until then, only this OS-facing ADR and the
+  `appliance/hookprobe-sbc/` profile are public. Each later revision is published when it passes its own H4-style
+  gate.
+- Third-party material in the design (vendor symbols, parts derived from the Radxa reference) is checked for
+  redistribution rights before H5, and removed or replaced where needed.
+
+Facts the decision rested on:
 - Every CERN-OHL variant (P, W, S) lets anyone copy, build and sell the design. **S** additionally makes them
   publish their changes. A CERN licence does not keep a design a company asset. What protects you is the
   **HookProbe trademark** and being the reference source.
 - Raspberry Pi is not open hardware. Its compute modules are closed, its boards ship only reduced schematic PDFs,
   and only the IO/carrier boards are released as design files.
 
-Options: **(a)** private permanently; **(b)** the Raspberry Pi model: publish reduced schematic PDFs, pinouts and
-mechanical drawings, keep the sources and layout private; **(c)** publish the full design under CERN-OHL-S-2.0
-after H4, trademark reserved; **(d)** (b) now or at H4, then (c) for older revisions once a newer one ships.
-Until the operator decides, the design stays **private (a)**. Publishing cannot be undone; private can change.
+Alternatives the operator considered and declined: a closed compute module with open carrier boards (the Raspberry
+Pi model), and keeping the design private permanently.
 
 ### D7 · Honesty floor for hardware claims **[realized: this clause]**
 Extends ADR 0047 D4. Until H4 passes, no external material says HookProbe "has", "ships" or "sells" a board.
@@ -125,7 +139,8 @@ This repository's gates cover the OS side: the board profile and, from H2, the b
 - No `os/kernel` work, purchase or fabrication follows from this ADR until H0 is green (D1).
 
 ## Open items (for the operator)
-1. Choose the publication model (D6), and ratify D1–D8.
+1. Ratify D1–D5, D7, D8 (D6 decided 2026-11-14: CERN-OHL-S-2.0 + commercial, published at H5). Draft the
+   commercial hardware licence terms and the "HookProbe Certified" criteria before H5.
 2. Pick the intermediate RK3588 board (D3; ROCK 5B suggested).
 3. Name a hardware lead or design house for H3 (routing, SI/PI review).
 4. Confirm the exact QCN9274 module (Fortress board file suggests Compex WLE7002E25) or its successor.
