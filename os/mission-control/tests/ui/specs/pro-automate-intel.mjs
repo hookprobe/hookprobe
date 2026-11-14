@@ -6,10 +6,10 @@ export default async function (t) {
   ok(await page.locator('.auto-grid .shell-rail-item').count() === 3, 'automate: sample playbooks');
   ok(await page.locator('[aria-label="Stages"] .pcard').count() === 7, 'automate: seven pipeline stages');
   await page.click('[aria-label="Stages"] .pcard:has-text("Contain")'); await page.waitForTimeout(150);
-  ok(await vis(page.locator('text=Isolating a server always needs approval')), 'automate: stage explains why');
+  ok(await vis(page.locator('text=Blocking needs your approval')), 'automate: stage explains why');
   ok(await vis(page.locator('.gate--off', { hasText: 'Needs approval' })), 'automate: autonomy toggle greyed with its reason');
   ok(await vis(page.locator('.gate--off', { hasText: '+ New playbook' })), 'automate: new playbook greyed with its reason');
-  ok(await vis(page.locator('[aria-label="Approval queue"] >> text=NAS-01')), 'automate: approval queue item');
+  ok(await vis(page.locator('[aria-label="Approval queue"] >> text=Block 12 credential-stuffing IPs')), 'automate: approval queue item');
   ok(await vis(page.locator('[aria-label="Notifications"]')), 'automate: notifications card');
   await t.shot('automate', true);
 
