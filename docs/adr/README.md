@@ -19,7 +19,7 @@ bootc/Debian Linux tier remain as dated records and apply only to `legacy/linux-
 | [0009](0009-soc-brain-edge-cloud.md) | The SOC brain: two-tier detect→track→trace→display | Accepted | — |
 | [0010](0010-zero-touch-provisioning.md) | Zero-touch provisioning: the captive portal | Accepted (portal not built; 2026-07-17 amendment Proposed) | — |
 | [0011](0011-product-cortex.md) | Product Cortex: agentic PLM on the evidence graph | Accepted | — |
-| [0012](0012-release-definition-cortex-pass.md) | What a release is: versioning, channels, rings | Accepted | — |
+| [0012](0012-release-definition-cortex-pass.md) | What a release is: versioning, channels, rings | Accepted; D1 amended 2026-11-14 (operator): named releases `v<major>.<minor>-<n>` + codename, first is v0.0-26 "Zamolxis" (was calendar versioning) | — |
 | [0013](0013-cortex-evolution-apis.md) | Product Cortex evolution | Accepted | — |
 | [0014](0014-continuous-improvement-detection-lifecycle.md) | Continuous-improvement detection lifecycle | Accepted (2026-07-15 amendment Proposed) | — |
 | [0015](0015-registry-driven-module-inclusion.md) | Registry-driven module inclusion | Accepted (Linux tier) | — |

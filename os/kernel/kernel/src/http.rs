@@ -927,7 +927,11 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         // Read-only, owner session; null where this build / device has no such fact (QEMU: no A/B, no DataVolume).
         "/api/system" => json(scratch, |w| {
             use core::fmt::Write;
-            w.raw("{\"version\":null,\"build\":");
+            w.raw("{\"version\":");
+            w.string(hal::release::VERSION);
+            w.raw(",\"codename\":");
+            w.string(hal::release::CODENAME);
+            w.raw(",\"build\":");
             match option_env!("HEQK_BUILD_ID") {
                 Some(b) => w.string(b),
                 None => w.raw("null"),

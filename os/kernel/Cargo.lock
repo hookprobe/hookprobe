@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "abi"
-version = "0.1.0"
+version = "0.0.26"
 
 [[package]]
 name = "aead"
@@ -29,7 +29,7 @@ dependencies = [
 
 [[package]]
 name = "arch-aarch64"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "hal",
  "sae",
@@ -64,7 +64,7 @@ dependencies = [
 
 [[package]]
 name = "boot-abi"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "ed25519-compact",
  "fips205",
@@ -327,7 +327,7 @@ dependencies = [
 
 [[package]]
 name = "hal"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "boot-abi",
 ]
@@ -343,7 +343,7 @@ dependencies = [
 
 [[package]]
 name = "hboot"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "boot-abi",
  "ed25519-compact",
@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "kernel"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "abi",
  "arch-aarch64",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "sae"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "aes",
  "hal",

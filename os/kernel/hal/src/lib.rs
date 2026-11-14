@@ -849,6 +849,8 @@ pub fn md5(data: &[u8]) -> [u8; 16] {
     out
 }
 
+/// The HookProbe OS release identity (version, codename), shared by the kernel, hsh and `/api/system`.
+pub mod release;
 /// WAN policy engine: prefix lists, ACLs, routes, sub-interface encapsulation (POLICY.TXT).
 pub mod abslot;
 pub mod policy;

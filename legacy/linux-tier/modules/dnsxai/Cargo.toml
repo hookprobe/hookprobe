@@ -1,6 +1,6 @@
 [package]
 name = "dnsxai"
-version = "0.1.0"
+version = "0.0.26"
 edition = "2021"
 description = "DNS/DGA anomaly classifier — HookProbe OS V2 detection module"
 license = "AGPL-3.0-only"

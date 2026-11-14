@@ -547,6 +547,7 @@ pub extern "C" fn kmain(bootinfo_pa: u64) -> ! {
     console.write_str("\n================================================\n");
     console.write_str(" HEQK Core on BCM2712 (Raspberry Pi CM5) — real silicon\n");
     console.write_str("================================================\n");
+    kprint!(" os  : {} v{} \"{}\"\n", hal::release::PRODUCT, hal::release::VERSION, hal::release::CODENAME);
     kprint!(" boot: running at EL{}\n", el);
     kprint!(" cpu : MIDR_EL1={:#010x} (part {:#05x}; 0xd0b=Cortex-A76)\n", midr, (midr >> 4) & 0xfff);
     kprint!(" uart: RP1 UART0 @ 0x1C00030000 (bootloader window, GPIO14/15 header)\n");
@@ -7011,6 +7012,7 @@ pub extern "C" fn kmain() -> ! {
     console.write_str("\n================================================\n");
     console.write_str(" HEQK Core — Hardened Edge Quantum-safe Kernel\n");
     console.write_str("================================================\n");
+    kprint!(" os  : {} v{} \"{}\"\n", hal::release::PRODUCT, hal::release::VERSION, hal::release::CODENAME);
     kprint!(" boot: running at EL{}\n", el);
     // Reaching Rust at EL1 with vectors installed (they carry every IRQ below)
     // validates the P0 boot chain end to end.

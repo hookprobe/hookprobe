@@ -1,6 +1,6 @@
 [package]
 name = "hookprobe-sigma"
-version = "0.1.0"
+version = "0.0.26"
 edition = "2021"
 description = "Sigma rule ingestion + evaluation — HookProbe OS V2 detection module (a practical Sigma subset, native host binary)."
 license = "AGPL-3.0-only"

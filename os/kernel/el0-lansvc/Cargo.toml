@@ -3,7 +3,7 @@
 # ELF loader into EL0. Allocation-free; it compiles the kernel's own `dnswire.rs` (#[path]).
 [package]
 name = "el0-lansvc"
-version = "0.1.0"
+version = "0.0.26"
 edition = "2021"
 publish = false  # first-party: never published to crates.io (ADR 0063 G4)
 license = "AGPL-3.0-only"

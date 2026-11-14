@@ -2,7 +2,7 @@
 # RustCrypto ml-kem — differential + determinism gates on the host. Not part of any device build.
 [package]
 name = "kem-diff"
-version = "0.1.0"
+version = "0.0.26"
 edition = "2021"
 license = "AGPL-3.0-only"
 publish = false

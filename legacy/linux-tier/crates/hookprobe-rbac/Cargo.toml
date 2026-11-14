@@ -1,6 +1,6 @@
 [package]
 name = "hookprobe-rbac"
-version = "0.1.0"
+version = "0.0.26"
 license = "AGPL-3.0-only"
 edition = "2021"
 description = "HookProbe OS RBAC enforcement seam (ADR 0008 + ADR 0028): the role/verb model (parsed straight from security/rbac/roles.yaml, embedded — data, not code) plus an identity-token authorization decision, consumed as an axum middleware by hookprobe-api and hookprobe-planner. Standalone-loopback stays permissive by construction (no account required to run the device); enforcement activates the moment a bearer identity is presented or the peer is not local."

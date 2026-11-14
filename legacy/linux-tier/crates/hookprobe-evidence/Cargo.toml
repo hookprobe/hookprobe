@@ -1,6 +1,6 @@
 [package]
 name = "hookprobe-evidence"
-version = "0.1.0"
+version = "0.0.26"
 license = "AGPL-3.0-only"
 edition = "2021"
 description = "HookProbe OS evidence graph — the track/trace spine (ADR 0009 step 2). SQLite (edge tier)."

@@ -51,6 +51,16 @@ and reconciled into `docs/roadmap/BuildPlan.md` by product-steward.
 
 ### D1 · One versioning scheme
 
+> **Amendment (operator, 2026-11-14): calendar versioning is replaced by named releases.** The current OS is
+> classified as **HookProbe OS v0.0-26 "Zamolxis"**. Releases are shown as `v<major>.<minor>-<n>` with a codename;
+> Cargo and npm carry the same numbers in SemVer form, `<major>.<minor>.<n>` (`0.0.26`). The one source of truth is
+> `os/kernel/hal/src/release.rs` (`VERSION`, `CODENAME`, `SEMVER`), which the device reports in its boot banner,
+> `/api/system` and `hsh version`. Every HookProbe crate and package carries the SemVer form, and
+> `tools/ci/release_check.py` (gate g0) fails on any drift. Each release has a note in `docs/releases/v<version>.md`.
+> The git tag is `v<version>` (`v0.0-26`); the tag-triggered CI and the digest-blessing rule below are unchanged.
+> **Open for the operator:** what `<n>` counts (release number vs. year 2026) and when `<minor>` advances.
+> The calendar scheme in the table below is superseded; the rest of D1 stands.
+
 | | Decision |
 |---|---|
 | Release version | **Calendar**: `YYYY.M[.patch]` (e.g. `2026.7`, `2026.7.1`) — matches the existing `2026.6` convention already used in `base/README.md` image-tag examples. |

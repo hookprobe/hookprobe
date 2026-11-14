@@ -1,6 +1,6 @@
 [package]
 name = "dga-lm"
-version = "0.1.0"
+version = "0.0.26"
 edition = "2021"
 description = "dga-lm — int8 char-level DGA (domain-generation-algorithm) classifier, base-tier-build-ticket.md Phase 4"
 license = "AGPL-3.0-only"

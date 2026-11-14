@@ -13,7 +13,7 @@ dependencies = [
 
 [[package]]
 name = "aegis-guard"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "hookprobe-mgmt-guard",
 ]
@@ -923,7 +923,7 @@ checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 
 [[package]]
 name = "dga-lm"
-version = "0.1.0"
+version = "0.0.26"
 
 [[package]]
 name = "digest"
@@ -978,7 +978,7 @@ dependencies = [
 
 [[package]]
 name = "dnsxai"
-version = "0.1.0"
+version = "0.0.26"
 
 [[package]]
 name = "document-features"
@@ -1345,7 +1345,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hookprobe-api"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "axum",
@@ -1364,7 +1364,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-bootstrap"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1374,7 +1374,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-dns-sinkhole"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1386,7 +1386,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-evidence"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1398,7 +1398,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-execsnoop"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "hookprobe-manifest",
@@ -1410,7 +1410,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-exploit"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1423,7 +1423,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-hydra"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1436,7 +1436,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-manifest"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "ed25519-dalek",
@@ -1454,11 +1454,11 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-mgmt-guard"
-version = "0.1.0"
+version = "0.0.26"
 
 [[package]]
 name = "hookprobe-planner"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "axum",
@@ -1479,7 +1479,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-rbac"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "axum",
@@ -1495,7 +1495,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-sigma"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "serde_json",
  "serde_yaml",
@@ -1503,7 +1503,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-supervisor"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "clap",
@@ -1518,7 +1518,7 @@ dependencies = [
 
 [[package]]
 name = "hookprobe-yara-scan"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "serde_json",
  "yara-x",
@@ -2075,11 +2075,11 @@ dependencies = [
 
 [[package]]
 name = "napse"
-version = "0.1.0"
+version = "0.0.26"
 
 [[package]]
 name = "napse-l2guard"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "hex",
@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "napse-loader"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "hookprobe-manifest",
@@ -2105,7 +2105,7 @@ dependencies = [
 
 [[package]]
 name = "napse-quarantine"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "hex",
@@ -2342,7 +2342,7 @@ dependencies = [
 
 [[package]]
 name = "qsecbit"
-version = "0.1.0"
+version = "0.0.26"
 
 [[package]]
 name = "quote"
@@ -2430,7 +2430,7 @@ dependencies = [
 
 [[package]]
 name = "redteam-engine"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "anyhow",
  "clap",
