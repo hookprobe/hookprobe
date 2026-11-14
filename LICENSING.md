@@ -80,6 +80,15 @@ Modifications to AGPL components must be shared if you distribute them or offer
 them as a network service. Proprietary components cannot be used or modified
 without a commercial license.
 
+## Hardware (HookProbe boards)
+
+HookProbe's own board designs follow the same dual model (ADR 0064 D6):
+**CERN-OHL-S-2.0** (anyone may build and sell; modified designs must be published
+under the same licence) **or a commercial hardware licence** (closed derivatives,
+white-label). The "HookProbe" name and any "HookProbe Certified" mark are not
+licensed by either. Board designs are published when a revision passes prototype
+bring-up (ADR 0064 H5); until then they are private and not in this repository.
+
 ---
 
 ## Contact
