@@ -53,6 +53,7 @@ FORBIDDEN = {
     "detbench": "detection benchmark corpus replay (QEMU)",
     "wifiheal-bench": "Wi-Fi self-heal metal trigger (injects a synthetic TX freeze / FWHALT)",
     "artstore-bench": "artifact-store metal trigger (tampers the ACTIVE store half on the eMMC, ADR 0059 0.4)",
+    "fwcon-fast": "firmware console read every beat + full trap / stack dump (vendor test-firmware diagnostics, REL-08)",
     "t0inv": "ADR 0062 T0 inventory (hboot: ID registers, DTB, mailbox GET tags, gated SMCCC probe — bench only)",
 }
 
