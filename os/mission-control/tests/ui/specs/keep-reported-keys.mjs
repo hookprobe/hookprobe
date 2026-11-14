@@ -34,7 +34,7 @@ export default async function (t) {
     if (p === '/api/upload/begin') return r.fulfill(json({ ok: true, id: 'u1', chunk_max: 16384 }));
     if (p === '/api/upload/chunk') { st.chunks.push(r.request().postDataBuffer()); return r.fulfill(json({ ok: true })); }
     if (p === '/api/upload/finish') { const box = Buffer.concat(st.chunks); st.inFlight = { id: 'u1', type: 'config', size: box.length, received: box.length, verified: true, type_code: 9, generation: 6, digest: createHash('sha256').update(box.subarray(512)).digest('hex') }; return r.fulfill(json({ ok: true })); }
-    if (p === '/api/upload/activate') { st.inFlight = null; return r.fulfill(json({ ok: true, activated: true, live: true, needs_confirm: true, generation: 6 })); }
+    if (p === '/api/upload/activate') { st.inFlight = null; return r.fulfill(json({ ok: true, activated: true, applies: 'live', reboot_required: false, needs_confirm: true, generation: 6 })); }
     return r.fulfill(json({}, 404));
   });
   await go('/admin/identity', 1200);
