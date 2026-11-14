@@ -154,7 +154,10 @@
 @media (max-width: 1759px) { .adv-grid--wide { grid-template-columns: minmax(0, 1fr); } .adv-grid--wide > aside { max-width: 720px; } }
 
 /* Touch: every tappable control at least 44 px high (WCAG 2.5.5 target size) */
-@media (pointer: coarse) {
+@media (pointer: coarse), (max-width: 767px) {
   .l0-chip, .l0-seg-item, .dev-btn, .shield-remove, .tab, .hp-btn { min-height: 44px; }
   .shield-remove { min-width: 44px; }
+  /* phones: every control in the page (filter chips, row buttons, Map/List, Yes/Not now) */
+  main button, main [role=tab], main select, main input:not([type=checkbox]):not([type=radio]) { min-height: 44px !important; }
+  main button { min-width: 44px !important; }
 }
