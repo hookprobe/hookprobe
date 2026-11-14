@@ -612,11 +612,21 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
     // needs the target's SYN-ACK. The responder's frame (SYN-ACK / RST) is keyed on its DESTINATION (the
     // prober) and its SOURCE port (the probed port).
     let dst = crate::net::eth_ipv4_dst(frame).unwrap_or(0);
-    if flags & TCP_RST != 0 || (flags & TCP_SYN != 0 && flags & TCP_ACK != 0) {
-        crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & TCP_SYN != 0);
+    // A-03 (LAN assessment 2026-11-14): this device never probes anyone, and client traffic is classified
+    // BEFORE NAT. So a frame FROM one of its own addresses is never a scan, and an RST / SYN-ACK TO one of them
+    // is a client ending (or a peer answering) a connection the device served — e.g. every nmap -sT / curl
+    // abort RST to Mission Control — not a "closed-port answer to the device's probe". Crediting those named
+    // the device itself as a port scanner (rule 113 with src = the management address). The device's OWN answers
+    // (src = local) still credit the prober below — they are the evidence ADR 0049 D3 wants.
+    let to_self = crate::ratelimit::is_local_ip(dst);
+    if to_self && (flags & TCP_RST != 0 || (flags & TCP_SYN != 0 && flags & TCP_ACK != 0)) {
+        // nothing to credit (see above); fall through to the source's own wall check
+    } else if flags & TCP_RST != 0 || (flags & TCP_SYN != 0 && flags & TCP_ACK != 0) {
+        let probed = crate::ratelimit::scan_response_observe(dst as u64, meta.src_port, flags & TCP_SYN != 0);
         // slow-scan tier: a CLOSED-port answer (RST) to `dst`'s probe, counted over 30 minutes. Observe-only:
-        // the fast tier owns enforcement; this only makes a patient sweep visible.
-        if flags & TCP_RST != 0 && crate::ratelimit::slow_scan_observe(dst as u64, meta.src_port, crate::behavioral::now_secs()) {
+        // the fast tier owns enforcement; this only makes a patient sweep visible. Only an RST answering a SYN
+        // probe `dst` really sent counts (A-03) — a client abort RST answers none.
+        if flags & TCP_RST != 0 && probed && crate::ratelimit::slow_scan_observe(dst as u64, meta.src_port, crate::behavioral::now_secs()) {
             let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(dst));
             fire(RULE_PORT_SCAN, SEV_MED, v, dst);
         }
@@ -629,8 +639,8 @@ pub fn flow_scan_verdict(frame: &[u8], src: u32) -> Option<Verdict> {
         crate::ratelimit::syn_scan_observe(src64, meta.dst_port, crate::ratelimit::is_local_ip(dst));
     }
 
-    if !crate::ratelimit::scan_over_ratelimit(src64) {
-        return None; // below the distinct-port wall (or established) → clean/Observe
+    if crate::ratelimit::is_local_ip(src) || !crate::ratelimit::scan_over_ratelimit(src64) {
+        return None; // the device's own frame (A-03), or below the distinct-port wall (or established) → Observe
     }
     // The distinct-port wall is crossed with zero establishment. Build the ctx: `for_src`
     // already sources `confirmed` from `scan_confirmed` (>= CONFIRM ports ⇒ durable
