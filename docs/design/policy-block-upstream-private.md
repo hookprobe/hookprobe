@@ -50,4 +50,4 @@ check:
 - client → 10.99.0.1:53, 1.1.1.1:443 and 93.184.216.34:80 are **allowed**;
 - without the lines, nothing is blocked.
 
-Not yet shown on metal. The next bench policy run should include it.
+Shown on metal 2026-11-14 (`docs/design/metal-evidence/20261114-late.md` §3): applied as a signed live bundle, a Wi-Fi client was refused at once on 192.168.200.1:22 and 172.20.200.1:22, DNS and the internet kept working, and restoring the previous policy made them reachable again.
