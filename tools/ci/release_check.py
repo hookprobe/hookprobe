@@ -18,6 +18,13 @@ import sys
 
 SKIP_DIRS = {"target", "node_modules", ".git", ".claude"}
 
+# Boot-loader crates keep a FIXED version, never the release's: a crate version feeds rustc's symbol mangling, so
+# bumping it changes HBoot's bytes, and an OTA whose boot loader differs from the installed one is refused ("boot-loader
+# updates are USB-only") — the v0.0-26 alignment would have stranded every installed device on USB reflash
+# (2026-11-14, bench OTA refused; reverting these two restored a byte-identical HBoot). They must equal BOOT_PIN.
+BOOT_PIN = "0.1.0"
+BOOT_PINNED = {"hboot", "boot-abi"}
+
 
 def release_identity(root):
     src = open(os.path.join(root, "os/kernel/hal/src/release.rs"), encoding="utf-8").read()
@@ -58,9 +65,12 @@ def check(root):
     for dirpath, filenames in walk(root):
         rel = os.path.relpath(dirpath, root).replace(os.sep, "/")
         if "Cargo.toml" in filenames:
-            v = package_version(open(os.path.join(dirpath, "Cargo.toml"), encoding="utf-8").read())
-            if v is not None and v != semver:
-                problems.append(f"{rel}/Cargo.toml: version {v} != {semver}")
+            text_t = open(os.path.join(dirpath, "Cargo.toml"), encoding="utf-8").read()
+            v = package_version(text_t)
+            nm = re.search(r'^\s*name\s*=\s*"([^"]*)"', text_t, re.M)
+            want = BOOT_PIN if nm and nm.group(1) in BOOT_PINNED else semver
+            if v is not None and v != want:
+                problems.append(f"{rel}/Cargo.toml: version {v} != {want}" + (" (boot-loader crate: pinned, see BOOT_PIN)" if want == BOOT_PIN else ""))
         if "Cargo.lock" in filenames:
             text = open(os.path.join(dirpath, "Cargo.lock"), encoding="utf-8").read()
             for block in text.split("\n[[package]]\n")[1:]:
@@ -68,8 +78,9 @@ def check(root):
                     continue
                 name = re.search(r'^name = "([^"]*)"', block, re.M)
                 ver = re.search(r'^version = "([^"]*)"', block, re.M)
-                if name and ver and ver.group(1) != semver:
-                    problems.append(f"{rel}/Cargo.lock: {name.group(1)} {ver.group(1)} != {semver}")
+                want = BOOT_PIN if name and name.group(1) in BOOT_PINNED else semver
+                if name and ver and ver.group(1) != want:
+                    problems.append(f"{rel}/Cargo.lock: {name.group(1)} {ver.group(1)} != {want}")
         if "package.json" in filenames and not (rel + "/").startswith("legacy/"):
             pkg = json.load(open(os.path.join(dirpath, "package.json"), encoding="utf-8"))
             if pkg.get("version") != semver:
