@@ -7,7 +7,7 @@ Provides common utilities for threat detection, logging, and event creation.
 Consumes events from the NAPSE event bus.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 6.0.0
 """
 

@@ -9,7 +9,7 @@ Implements privacy-preserving data processing for Qsecbit analysis:
 - Pseudonymization
 
 Author: HookProbe Team
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

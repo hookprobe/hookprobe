@@ -1,7 +1,7 @@
 """
 AEGIS - AI-Enhanced Guardian Intelligence System
 
-Proprietary AI security assistant for the HookProbe platform.
+AI security assistant for the HookProbe platform.
 Autonomous, multi-agent security consciousness with:
 
   - 8 specialized agents (ORACLE, GUARDIAN, WATCHDOG, SHIELD, VIGIL, SCOUT, FORGE, MEDIC)
@@ -31,7 +31,7 @@ Submodules:
 - client: Top-level singleton managing full stack
 
 Author: Andrei Toma
-License: Proprietary - see LICENSING.md in project root
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 
@@ -76,7 +76,7 @@ from .client import (
 
 __version__ = "2.0.0"
 __author__ = "Andrei Toma"
-__license__ = "Proprietary"
+__license__ = "AGPL-3.0"
 
 __all__ = [
     # Types

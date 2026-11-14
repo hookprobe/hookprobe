@@ -22,7 +22,7 @@ You are working within the HookProbe codebase — a federated cybersecurity mesh
 - **Databases**: PostgreSQL, SQLite, ClickHouse, Redis
 - **Web Frameworks**: Flask with blueprints, AdminLTE (Fortress), Forty-inspired (Guardian)
 - **Network**: OVS bridges, VLAN segmentation, OpenFlow rules
-- **Licensing**: Dual license (AGPL + Commercial) — be aware of proprietary vs open components
+- **Licensing**: Dual license (AGPL-3.0 + Commercial); all HookProbe software is AGPL-3.0
 
 Always consider this project context when reviewing code, but apply your review methodology universally regardless of the specific technology.
 

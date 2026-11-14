@@ -17,7 +17,7 @@ Core Principles:
 "The key is not a secret you know - it's a state you ARE"
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

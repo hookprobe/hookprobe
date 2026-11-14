@@ -11,7 +11,7 @@
  *   4. AF_XDP redirect for zero-copy delivery to Rust engine
  *
  * Author: HookProbe Team
- * License: Proprietary
+ * License: AGPL-3.0 - see LICENSE file
  * Version: 1.0.0
  */
 

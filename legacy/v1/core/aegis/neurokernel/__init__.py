@@ -24,7 +24,7 @@ Architecture layers (phased rollout):
   Layer 5: AEGIS Integration (Phase 5)
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

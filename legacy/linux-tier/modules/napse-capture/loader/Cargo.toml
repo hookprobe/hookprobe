@@ -1,6 +1,7 @@
 [package]
 name = "napse-loader"
 version = "0.1.0"
+license = "AGPL-3.0-only"
 edition = "2021"
 
 # The userspace half of napse-capture: probe each NIC → attach the CO-RE detection object as native

@@ -16,7 +16,7 @@ The camouflage system operates at two speeds:
     - Userspace (Cerebellum): Honeypot management, banner mutation, tarpits
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

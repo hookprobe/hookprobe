@@ -30,7 +30,7 @@ Thread-safety: Uses file-based advisory lock (flock) since multiple
 dnsmasq events can fire concurrently.
 
 Version: 1.0.0
-License: Proprietary (HookProbe Commercial)
+License: AGPL-3.0 - see LICENSE file
 """
 
 import fcntl

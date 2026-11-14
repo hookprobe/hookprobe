@@ -22,7 +22,7 @@
  *       -lxdp -lbpf -lelf -lz
  *
  * Author: HookProbe Team
- * License: Proprietary
+ * License: AGPL-3.0 - see LICENSE file
  * Version: 27.0.0
  */
 
