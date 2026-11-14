@@ -5102,18 +5102,18 @@ fn cm5_p10_probe() {
                                         // (Re)number the LAN when the WAN has a delegated prefix (also after a WAN re-dial).
                                         let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                         let w6 = unsafe { uplink::WAN6 };
-                                        // L-01b: the prefix is gone (not renewed, or the WAN is down) — tell the clients once
-                                        // (zero lifetimes), then stop advertising
-                                        if v6.up && (w6.pd.is_none() || !up.usable()) {
+                                        // G0 step 5a: apcore::v6_lan_step decides (L-01b withdraw, ISP renumbering, first numbering)
+                                        let step = apcore::v6_lan_step(v6.up, &v6.prefix, w6.pd.as_ref().map(|d| &d.0), up.usable());
+                                        if matches!(step, apcore::V6Step::Withdraw { .. } | apcore::V6Step::Renumber) {
                                             let k = v6.withdraw(&[0x33, 0x33, 0, 0, 0, 1], &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], &mut v6buf);
                                             if k > 0 {
                                                 let _ = wifi_send!(&v6buf[..k]);
                                             }
-                                            kprint!(" [V6LAN] delegated prefix {} — final RA with zero lifetimes sent, LAN stops advertising it\n",
-                                                if w6.pd.is_none() { "expired / withdrawn" } else { "unusable (WAN down)" });
+                                            kprint!(" [V6LAN] delegated prefix {} — final RA with zero lifetimes sent for the old prefix\n",
+                                                match step { apcore::V6Step::Renumber => "renumbered by the ISP", apcore::V6Step::Withdraw { expired: true } => "expired / withdrawn", _ => "unusable (WAN down)" });
                                         }
-                                        if let Some((pd, plen, valid)) = w6.pd {
-                                            if up.usable() && (!v6.up || v6.prefix[..8] != pd[..8]) {
+                                        if let (apcore::V6Step::Configure | apcore::V6Step::Renumber, Some((pd, plen, valid))) = (step, w6.pd) {
+                                            {
                                                 // G17.2: the LAN MTU follows the WAN — 1492 inside PPPoE, else the router's RA MTU
                                                 // (bounded 1280..1500) or 1500.
                                                 v6.mtu = if up.mode == 2 { arch_aarch64::ip6lan::LAN_MTU } else {
@@ -5210,16 +5210,7 @@ fn cm5_p10_probe() {
                                                 if e.verdict != 2 {
                                                     continue;
                                                 }
-                                                let mut placed = false;
-                                                for slot in rule_drops.iter_mut() {
-                                                    if slot.0 == e.rule_id || slot.1 == 0 {
-                                                        slot.0 = e.rule_id;
-                                                        slot.1 += 1;
-                                                        placed = true;
-                                                        break;
-                                                    }
-                                                }
-                                                let _ = placed;
+                                                let _ = apcore::note_rule_drop(&mut rule_drops, e.rule_id); // G0 step 5a
                                             }
                                         }
                                     }
@@ -7474,6 +7465,7 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(not(feature = "cm5"))]
         let _ = wifilive::after_selftest(); // follow-up: Mission Control serving re-evaluated + IPv6 state at an AP restart
         let _ = apcore::selftest();
+        let _ = apcore::tick_selftest(); // G0 step 5a
         let _ = apcore::mgmt_selftest(); // G0 step 4
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
