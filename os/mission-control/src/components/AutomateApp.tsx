@@ -28,14 +28,36 @@ const SAMPLE_BOOKS = [
   { name: 'Compromised IoT device', meta: 'Ran 1× · last 13:05' },
   { name: 'New unknown device', meta: 'Ran 4× · last 10:40' },
 ];
-const SAMPLE_STAGES: Stage[] = [
-  { name: 'Detect', state: 'done', auto: true, count: '1', why: 'NAPSE rule "Admin brute force" fired: more than 5 failed logins per minute from one source.' },
-  { name: 'Validate', state: 'done', auto: true, count: '2 feeds', why: 'HYDRA confirms the source IPs appear on 2 credential-stuffing feeds.' },
-  { name: 'Contain', state: 'waiting', auto: false, count: '12 IPs', why: 'AEGIS proposes rate-limiting the admin page and blocking the 12 source IPs. Isolating a server always needs approval.' },
-  { name: 'Notify', state: 'idle', auto: true, count: '—', why: 'Send a notification to the admin with the evidence.' },
-  { name: 'Recover', state: 'idle', auto: true, count: '—', why: 'Lift the rate limit after 1 hour of quiet.' },
-  { name: 'Verify', state: 'idle', auto: true, count: '—', why: 'Check no legitimate logins were blocked.' },
-  { name: 'Close', state: 'idle', auto: true, count: '—', why: 'Write the incident summary and close.' },
+/** One pipeline per sample playbook (they all showed the credential-stuffing one). Containment follows enforcement
+ *  separation: block or isolate only on confirmed evidence, time-bounded, and approval for anything durable. */
+const SAMPLE_STAGES: Stage[][] = [
+  [
+    { name: 'Detect', state: 'done', auto: true, count: '1', why: 'NAPSE rule "Admin brute force" fired: more than 5 failed logins per minute from one source.' },
+    { name: 'Validate', state: 'done', auto: true, count: '2 feeds', why: 'HYDRA confirms the source IPs appear on 2 credential-stuffing feeds.' },
+    { name: 'Contain', state: 'waiting', auto: false, count: '12 IPs', why: 'AEGIS proposes rate-limiting the admin page and blocking the 12 source IPs. Blocking needs your approval.' },
+    { name: 'Notify', state: 'idle', auto: true, count: '—', why: 'Send a notification to the admin with the evidence.' },
+    { name: 'Recover', state: 'idle', auto: true, count: '—', why: 'Lift the rate limit after 1 hour of quiet.' },
+    { name: 'Verify', state: 'idle', auto: true, count: '—', why: 'Check no legitimate logins were blocked.' },
+    { name: 'Close', state: 'idle', auto: true, count: '—', why: 'Write the incident summary and close.' },
+  ],
+  [
+    { name: 'Detect', state: 'done', auto: true, count: '2', why: 'The kitchen camera resolved a known C2 domain and then scanned the LAN (INC-0142).' },
+    { name: 'Validate', state: 'done', auto: true, count: '1 IOC', why: 'HYDRA matches the domain to the signed IOC pack: confirmed, not a guess.' },
+    { name: 'Contain', state: 'done', auto: true, count: '1 device', why: 'Confirmed C2 contact: the camera was isolated for 1 hour (DHCP and DNS keep working); it ends by itself.' },
+    { name: 'Notify', state: 'done', auto: true, count: '1', why: 'The owner was notified with the evidence and the story.' },
+    { name: 'Recover', state: 'waiting', auto: false, count: '—', why: 'Release the camera after a firmware update, or keep it isolated: your choice.' },
+    { name: 'Verify', state: 'idle', auto: true, count: '—', why: 'Watch the camera for 24 hours after release.' },
+    { name: 'Close', state: 'idle', auto: true, count: '—', why: 'Write the incident summary and close.' },
+  ],
+  [
+    { name: 'Detect', state: 'done', auto: true, count: '1', why: 'A new device joined without a known fingerprint ("Unknown phone").' },
+    { name: 'Validate', state: 'done', auto: true, count: '—', why: 'No threat-intel match and no suspicious traffic: observed only.' },
+    { name: 'Contain', state: 'waiting', auto: false, count: '1 device', why: 'AEGIS suggests the Guests zone (internet only). A zone move is durable, so it needs your approval.' },
+    { name: 'Notify', state: 'idle', auto: true, count: '—', why: 'Tell the owner a new device joined.' },
+    { name: 'Recover', state: 'idle', auto: true, count: '—', why: 'Nothing to undo unless you move it back.' },
+    { name: 'Verify', state: 'idle', auto: true, count: '—', why: 'Confirm the device works on the Guests zone.' },
+    { name: 'Close', state: 'idle', auto: true, count: '—', why: 'Close once the owner has decided.' },
+  ],
 ];
 
 const field = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padding: '0 12px', background: 'var(--hp-surface)', color: 'var(--hp-text-primary)', border: '1px solid var(--hp-border)', 'border-radius': 'var(--hp-radius)' } as const;
@@ -69,7 +91,7 @@ const AutomateApp: Component = () => {
     { name: 'Verify', state: 'done', auto: true, count: `QSecBit ${qsecbit()}`, why: 'The resilience score is recomputed continuously over the recent risk window.' },
     { name: 'Close', state: openInc() ? 'waiting' : 'done', auto: false, count: `${openInc()} open`, why: 'Incidents stay open until you acknowledge them in Investigate.' },
   ]);
-  const stages = () => (sample() ? SAMPLE_STAGES : liveStages());
+  const stages = () => (sample() ? SAMPLE_STAGES[book()] ?? SAMPLE_STAGES[0] : liveStages());
   const sel = () => stages()[stage()] ?? stages()[0];
   const tone = (s: Stage['state']) => (s === 'done' ? 'var(--hp-green)' : s === 'active' ? 'var(--hp-cyan)' : s === 'waiting' ? 'var(--hp-amber)' : 'var(--hp-text-muted)');
   const validHook = () => /^\d{1,3}(\.\d{1,3}){3}$/.test(form().ip) && form().port > 0 && form().port < 65536 && form().secret.length >= 16;
@@ -133,9 +155,9 @@ const AutomateApp: Component = () => {
             <section class="pcard" aria-label="Approval queue">
               <p class="l0-label">Approval queue · {sample() ? 1 : 0}</p>
               <Show when={sample()} fallback={<p class="pcard-note">Nothing waiting. Durable changes are approved where you make them, with your device password or signing key.</p>}>
-                <span>Isolate file server NAS-01</span>
-                <span class="pcard-note">Requested by: Contain stage · risk: high · confidence 81%</span>
-                <div class="plan-diff-lines"><div class="plan-diff-line plan-diff-line--changed"><span class="plan-diff-mark">~</span>NAS-01: Family → Quarantine</div></div>
+                <span>Block 12 credential-stuffing IPs</span>
+                <span class="pcard-note">Requested by: Credential stuffing · Contain · on 2 threat feeds · expires in 24 h</span>
+                <div class="plan-diff-lines"><div class="plan-diff-line plan-diff-line--added"><span class="plan-diff-mark">+</span>block 12 source IPs on the admin page (24 h)</div></div>
                 <span class="gate gate--off">
                   <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><span class="l0-card-foot"><button class="hp-btn hp-btn--primary">Approve</button><button class="hp-btn">Reject</button></span></span>
                   <span class="gate-reason" role="note">Preview: on a device with the automation engine you approve or reject here.</span>
