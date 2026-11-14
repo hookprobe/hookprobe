@@ -18,6 +18,7 @@
   <a href="#what-hookprobe-can-do">What it can do</a> ·
   <a href="#system-architecture">Architecture</a> ·
   <a href="#try-hookprobe">Try HookProbe</a> ·
+  <a href="#hardware-roadmap-the-hookprobe-board">Hardware roadmap</a> ·
   <a href="CONTRIBUTING.md">Contribute</a>
 </p>
 
@@ -147,6 +148,63 @@ Read the [HookProbe Manifesto](legacy/v1/MANIFESTO.md) for the project's origina
 Its technical descriptions refer to the earlier V1 implementation; this repository's current
 architecture is documented in the designs linked above.
 
+## Hardware roadmap: the HookProbe board
+
+HookProbe OS runs on a Raspberry Pi Compute Module 5 today. Next, we are designing a board of our own: a
+security appliance built around the RK3588, with everything a home or small-office gateway needs on one
+board.
+
+<p align="center">
+  <img src="assets/hookprobe-board-illustration.svg" alt="Illustration of the HookProbe board: all ports on one edge, the RK3588 under one cooler, TPM and Thread radio on the board, Wi-Fi 7, 5G, NVMe and an accelerator on M.2 cards underneath" width="720"/>
+</p>
+
+| | Raspberry Pi CM5 today | HookProbe board |
+|---|---|---|
+| Ethernet | 1 GbE + a carrier port | **2 × 2.5 GbE** |
+| Device identity | Derived from one-time-programmable fuses | **TPM 2.0 key store** |
+| Wi-Fi | Wi-Fi 5, on-module | **Wi-Fi 7 (Qualcomm QCN9274), M.2** |
+| Backup internet | — | **5G modem (Sierra Wireless EM9293) + nano-SIM** |
+| Local retention | eMMC | **eMMC + NVMe SSD** |
+| On-device AI | — | **RK3588 NPU + M.2 accelerator slot** |
+
+The software doesn't fork for it. The board is one hardware profile, and each part unlocks its
+feature in Mission Control once it is proven on real hardware.
+
+**The path.** Each step is a pass/fail test on real hardware:
+
+| Gate | What has to be true | Status |
+|---|---|---|
+| **H0** | HookProbe OS validated on CM5: long-run soak, thermal and scale tests, independent security sign-off, hardware test gate green | **in progress** |
+| **H1** | The kernel's hardware layer separated, so a new board is a profile, not a fork | planned |
+| **H2** | HookProbe OS proven on an off-the-shelf RK3588 board, with Wi-Fi 7 and 5G brought up there first | planned |
+| **H3** | Our board routed, then reviewed for signal and power integrity | planned |
+| **H4** | Prototypes built and measured: both ports, NVMe, TPM, radios, thermal | planned |
+| **H5** | Release: reproducible board image, manufacturing package, design files published | planned |
+
+**Where it stands (November 2026).** Rev A schematic and component placement are complete and pass
+90 automated design checks. The board is not routed yet and has not been built; there is nothing to
+buy. Performance figures will come from prototype measurements.
+
+**Reference material.**
+- [ADR 0064: HookProbe hardware program](docs/adr/0064-hookprobe-hardware-program.md): the gates, the driver
+  work, the boot chain and root of trust, and the licence.
+- [`appliance/hookprobe-sbc/`](appliance/hookprobe-sbc/): how HookProbe OS sees the board and what each part
+  unlocks.
+- [Build Plan, Track H](docs/roadmap/BuildPlan.md): live status.
+- The schematics, layout and BOM are published at **H5** under **CERN-OHL-S-2.0**, with a commercial licence
+  for closed derivatives ([LICENSING.md](LICENSING.md#hardware-hookprobe-boards)).
+
+**Help us build it.** We are looking for:
+- **Hardware engineers** with RK3588 / LPDDR4X layout experience for routing and signal- and power-integrity
+  review (H3), and for prototype bring-up (H4).
+- **Kernel and driver developers** for the RK3588 port: PCIe, RTL8125, NVMe, TPM, Qualcomm Wi-Fi 7, 5G (H1–H2).
+- **Sponsors and funders** for prototype runs, compliance testing and the first production batch.
+
+Sponsor through [GitHub Sponsors](https://github.com/sponsors/hookprobe) or
+[Open Collective](https://opencollective.com/hookprobe). To work on the board, fund it or partner with us,
+start a thread in [GitHub Discussions](https://github.com/hookprobe/hookprobe/discussions) or email
+**qsecbit@hookprobe.com**.
+
 ## Try HookProbe
 
 ### Explore the dashboard demo
@@ -186,6 +244,7 @@ tools/ci/gates.sh g3
 - [ADR 0059 — secure configuration management (cfgd, signed bundles, trial and revert)](docs/adr/0059-secure-configuration-management.md)
 - [`hsh` — the native management shell](docs/design/hsh-native-management-shell.md)
 - [CM5 bench acceptance record](docs/design/bench-runbook-prod-mc-2026-11.md)
+- [ADR 0064 — HookProbe hardware program (the RK3588 board)](docs/adr/0064-hookprobe-hardware-program.md)
 - [Current roadmap and engineering gaps](docs/roadmap/BuildPlan.md)
 
 ## Contribute
