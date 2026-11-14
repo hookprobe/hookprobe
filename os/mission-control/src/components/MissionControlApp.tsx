@@ -24,6 +24,7 @@ import { actionsView, refreshActions } from '../store/actions';
 import { devices } from '../store/obsLive';
 import { networkView, startNetworkLive } from '../store/networkLive';
 import { startStory, storyEvents, hhmm } from '../store/story';
+import { CAMERA, SAMPLE_AT, sampleWhen } from '../store/sampleClock';
 import { incidentHref } from '../store/routes';
 import AppShell from './AppShell';
 import Drawer from './Drawer';
@@ -66,9 +67,9 @@ const MissionControlApp: Component = () => {
   // ── Incidents / actions ──────────────────────────────────────────────
   const openInc = () => incidents().filter((i) => i.status !== 'resolved' && i.status !== 'closed');
   const SAMPLE_INC = [
-    { id: 's1', priority: 'HIGH', title: 'Kitchen camera contacted malware host', when: '13:05' },
-    { id: 's2', priority: 'MEDIUM', title: 'Brute force on admin page', when: 'yesterday' },
-    { id: 's3', priority: 'LOW', title: 'New unknown device', when: '10:40' },
+    { id: 's1', priority: 'HIGH', title: 'Kitchen camera contacted malware host', when: sampleWhen(CAMERA.isolated) },
+    { id: 's2', priority: 'MEDIUM', title: 'Brute force on admin page', when: sampleWhen(SAMPLE_AT.bruteForce) },
+    { id: 's3', priority: 'LOW', title: 'New unknown device', when: sampleWhen(SAMPLE_AT.unknownDevice) },
   ];
   const actions = () => actionsView()?.active ?? [];
   const audit = () => (actionsView()?.audit ?? []).filter((a) => a.ok).slice(0, 3);
