@@ -38,6 +38,8 @@ acquire)
     printf 'if=%s\ndrv=%s\nnm=%s\nmac=%s\n' "$d" "$(drvof "$d")" "$(nmstate "$d")" \
       "$(cat "/sys/class/net/$d/address")" | sudo tee "$STATE" >/dev/null
   fi
+  # snapshot NM profiles (UUID:NAME) so release can prove none were touched; we never edit profiles
+  nmcli -t -f UUID,NAME con show 2>/dev/null | sort | sudo tee /run/lock/hp-dongle.nm-profiles >/dev/null
   sudo nmcli dev set "$d" managed no 2>/dev/null || true
   sudo ip link set "$d" down
   sudo iw dev "$d" set type monitor
@@ -57,8 +59,13 @@ release)
   [ "$drv" = "$R_drv" ] || ok=0
   case "$now" in unmanaged|unavailable|"") ok=0;; esac
   [ "$t" = managed ] || ok=0
+  missing=""
+  if [ -f /run/lock/hp-dongle.nm-profiles ]; then
+    missing=$(comm -23 /run/lock/hp-dongle.nm-profiles <(nmcli -t -f UUID,NAME con show 2>/dev/null | sort) | paste -sd' ')
+    [ -z "$missing" ] || { echo "NM PROFILES MISSING since acquire: $missing"; ok=0; }
+  fi
   if [ "$ok" = 1 ]; then
-    sudo rm -f "$STATE"
+    sudo rm -f "$STATE" /run/lock/hp-dongle.nm-profiles
     if [ "$(awk '{print $1}' "$LOCK" 2>/dev/null)" = monitor ]; then sudo rm -f "$LOCK"; fi
     echo "released $d: type=$t nm=$now drv=$drv"
   else
