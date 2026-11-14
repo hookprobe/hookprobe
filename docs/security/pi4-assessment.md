@@ -12,7 +12,8 @@
 | **W-01** | Med | CM5 AP in **WPA2/WPA3 transition mode** (AKM PSK+SAE); WPA2 clients downgradable, offline PSK guess from captured handshake | beacon RSN AKM `2,8` (M0 §5, verified by extractor) | heqk | 🟡 accepted (shipping default 2026-11-10) |
 | **W-02** | Med | **PMF optional** (MFPC=1, MFPR=0) in transition mode; unprotected deauth/disassoc for PSK clients | RSN caps `0x008c` | heqk | 🟡 accepted for transition; **verify MFPR=1 in WPA3-only** |
 | **W-03** | Med | Country IE advertises **DFS ch52–140 (RO)** the firmware can't use (`allow_dfs=false`, UNII-1 only); advertise-vs-use mismatch | beacon country IE vs `iw reg get` phy0 `country 99 DFS-UNSET` | heqk | 🔴 open — tagged **RED / EN 18031 compliance** |
-| **L-01** | Med | **CM5 AP advertises a documentation IPv6 prefix** `2001:db8:ff00::/64` via RA (RFC 3849, non-routable); AP clients get unusable global IPv6, and the RA default route points at the AP | Pi `wlan0` SLAAC `2001:db8:ff00:0:…/64`, `… proto ra`, RA router LL ↔ BSSID `76:0d:02:f8:d2:da` (M0 capture) | heqk | 🔴 open (confirm intent: bench placeholder vs bug) |
+| **L-01** | — | CM5 AP advertises IPv6 prefix `2001:db8:ff00::/64` via RA. **Bench config, by design** (heqk): the AP numbers its LAN from the prefix delegated over WAN by DHCPv6-PD; fortress deliberately delegates documentation space on the bench, so nothing leaks; a real ISP would delegate a routable GUA | Pi `wlan0` SLAAC `2001:db8:ff00:0:…/64`, RA router LL ↔ BSSID `76:0d:02:f8:d2:da` | heqk | 🟡 by design |
+| **L-01b** | Med | **Real check (derived from L-01):** when **no** prefix is delegated over WAN, the AP should send **no RA prefix** (not fall back to doc space or a stale prefix) | not yet tested | this bench | ⏸ needs a later window |
 | **W-04** | — | Beacon RSNX / beacon-protection / WPS / vendor IEs / VHT-op not yet assessed (M0 beacon truncated at snaplen 256) | — | this bench | ⏸ needs an M1 window (full-length mgmt capture) |
 | **UI-01** | Low | Mission Control has **no Wireless / rogue-AP view and no 802.11 telemetry source** in Observe | wireframe session report | wireframe | 🔴 open (needs the sensor API shape) |
 | **INFRA-1** | — | Bench `sudo` needs a password this session can't obtain; sensor service install blocked | classifier denials; `/etc/sudoers.d/010_global-tty` shares the timestamp | operator | ⏸ needs operator to run `bootstrap-sudo.sh` |
@@ -37,9 +38,16 @@ exploited (receive-only rule).
 
 ### wireframe-artifact-integration session
 1. **UI-01:** add an **802.11 source** to the Observe event table (`/observe/live`), not a separate app. The
-   sensor emits JSONL events; proposed per-event shape below. A Wireless status card under Network/Gateway can
-   later read the sensor `health.json` (coverage on/off, channel, drops) — capability-gated, sample-only when no
-   sensor answers, and it must show `coverage=off` honestly when the radio is time-shared away.
+   sensor emits JSONL events; per-event shape below, confirmed by the wireframe session and mapped to the Observe
+   row `{ts, source:"Wireless", entity, severity, summary, facts}` (entity = ssid for beacon/probe_resp, bssid
+   otherwise; probe_req shows "hidden SSID (len N)", never cleartext; facts drawer = dBm/security/AKM/PMF/protected).
+   A Wireless health card reads `health.json` and says "not listening (radio shared with the bench)" when off.
+
+   ⚠️ **Blocked on an architecture decision (ARCH-1), not on the UI.** Mission Control is served by heqk on the
+   device and only calls its own same-origin `/api`; per ADR 0047, new product capability lands in heqk and Linux
+   is only a dev host. So a Linux-side Pi sensor **cannot be a Mission Control source by itself**. For Observe to
+   show wireless, **heqk must expose/ingest** the events (e.g. device `GET /api/wireless {coverage, events[]}`).
+   The UI chip + card can be wired only once that device endpoint exists.
 
 ```json
 {"event_id":"uuid","ts":1731570020.5,"source":"wireless","kind":"beacon|deauth|probe_req|...",
@@ -48,6 +56,17 @@ exploited (receive-only rule).
  "pmf_capable":true,"pmf_required":false,"protected":true}
 ```
 (probe-request events carry `ssid_hash`+`ssid_len`, never a cleartext SSID — privacy.)
+
+### ARCH-1 — how the sensor's data reaches Mission Control (operator + heqk decision)
+The sensor is a standalone Linux bench tool (ADR 0047). Two non-exclusive paths:
+- **(default, needs nobody) Standalone local dashboard on the Pi** — the original project spec §8 asks for a local
+  dashboard over the management LAN. The sensor serves its own read-only dashboard from `health.json` + the event
+  JSONL. This ships without any heqk change and is what this bench builds next (M3).
+- **(additive, operator-gated) heqk ingests** — heqk exposes `GET /api/wireless` (or accepts a push) so the events
+  appear as the Observe "Wireless" source inside Mission Control. This is the "one system" end state but needs heqk
+  work and an operator call; it does not block the standalone dashboard.
+**Bench decision (reasonable default, revisit on request):** build the standalone dashboard now; offer heqk the
+endpoint shape for the additive path. No work is blocked waiting on ARCH-1.
 
 ### operator
 1. **INFRA-1:** run once — `! ssh -t claude@10.200.0.4 'bash ~/pi4-wsensor/bootstrap-sudo.sh'` — to install the
