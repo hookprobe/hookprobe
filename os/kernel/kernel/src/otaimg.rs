@@ -320,30 +320,55 @@ pub enum Gate {
     Revert,
 }
 
+/// A DFS channel's channel-availability check (CAC) silences the AP — the BSS is "up" but sends no beacons and no
+/// client can join (task #88: the gate committed during the ~60 s CAC on ch52). While the firmware reports CAC the AP
+/// does not count as serving, and the revert deadline moves out by the CAC time seen, up to this allowance (EN 301 893:
+/// 60 s CAC, 600 s on the 5600–5650 MHz weather channels; 660 s leaves a margin).
+pub const COMMIT_CAC_ALLOW_S: u64 = 660;
+
+/// Whether the firmware DFS state lets the AP serve: CAC (1, 4, 5, 6) and a channel switch (3) do not; idle (0, a
+/// non-DFS channel) and in-service monitoring (2) do. `None` (no answer) = unknown: the BSS-up test alone decides.
+pub fn dfs_lets_ap_serve(state: Option<u32>) -> bool {
+    !matches!(state, Some(1) | Some(3) | Some(4) | Some(5) | Some(6))
+}
+
 pub struct CommitGate {
     healthy_since: Option<u64>,
+    last_s: Option<u64>,
+    cac_s: u64,
 }
 
 impl CommitGate {
     pub const fn new() -> Self {
-        CommitGate { healthy_since: None }
+        CommitGate { healthy_since: None, last_s: None, cac_s: 0 }
     }
     /// `now_s` / `t0_s` = seconds now / at the trial boot; `wan` = WAN usable; `ap` = the AP serves (BSS up and
-    /// beaconing in AP mode, no Wi-Fi firmware halt since this boot).
-    pub fn step(&mut self, now_s: u64, t0_s: u64, wan: bool, ap: bool) -> Gate {
-        if wan && ap {
+    /// beaconing in AP mode, no Wi-Fi firmware halt since this boot); `cac` = the firmware reports a DFS CAC / channel
+    /// switch (the AP is silent whatever the BSS state says).
+    pub fn step(&mut self, now_s: u64, t0_s: u64, wan: bool, ap: bool, cac: bool) -> Gate {
+        if cac {
+            if let Some(l) = self.last_s {
+                self.cac_s = self.cac_s.saturating_add(now_s.saturating_sub(l));
+            }
+        }
+        self.last_s = Some(now_s);
+        if wan && ap && !cac {
             let since = *self.healthy_since.get_or_insert(now_s);
             if now_s.saturating_sub(since) >= COMMIT_STABLE_S {
                 return Gate::Commit;
             }
         } else {
-            self.healthy_since = None; // any dip restarts the stability window
+            self.healthy_since = None; // any dip (or a CAC) restarts the stability window
         }
-        if now_s.saturating_sub(t0_s) > COMMIT_LIMIT_S {
+        if now_s.saturating_sub(t0_s) > COMMIT_LIMIT_S + self.cac_s.min(COMMIT_CAC_ALLOW_S) {
             Gate::Revert
         } else {
             Gate::Wait
         }
+    }
+    /// Seconds of DFS CAC seen during this trial (the deadline extension, before the cap).
+    pub fn cac_s(&self) -> u64 {
+        self.cac_s
     }
 }
 
@@ -352,27 +377,43 @@ impl CommitGate {
 pub fn gate_selftest() -> bool {
     // WAN usable but the AP down: never commits, reverts after the limit
     let mut g = CommitGate::new();
-    let wan_only = (0..=COMMIT_LIMIT_S).all(|t| g.step(t, 0, true, false) == Gate::Wait) && g.step(COMMIT_LIMIT_S + 1, 0, true, false) == Gate::Revert;
+    let wan_only = (0..=COMMIT_LIMIT_S).all(|t| g.step(t, 0, true, false, false) == Gate::Wait) && g.step(COMMIT_LIMIT_S + 1, 0, true, false, false) == Gate::Revert;
     // AP serving but no WAN: same
     let mut g = CommitGate::new();
-    let ap_only = (0..=COMMIT_LIMIT_S).all(|t| g.step(t, 0, false, true) == Gate::Wait) && g.step(COMMIT_LIMIT_S + 1, 0, false, true) == Gate::Revert;
+    let ap_only = (0..=COMMIT_LIMIT_S).all(|t| g.step(t, 0, false, true, false) == Gate::Wait) && g.step(COMMIT_LIMIT_S + 1, 0, false, true, false) == Gate::Revert;
     // both healthy: commits only after the stability window
     let mut g = CommitGate::new();
-    let early = (10..10 + COMMIT_STABLE_S).all(|t| g.step(t, 0, true, true) == Gate::Wait);
-    let both = early && g.step(10 + COMMIT_STABLE_S, 0, true, true) == Gate::Commit;
+    let early = (10..10 + COMMIT_STABLE_S).all(|t| g.step(t, 0, true, true, false) == Gate::Wait);
+    let both = early && g.step(10 + COMMIT_STABLE_S, 0, true, true, false) == Gate::Commit;
     // a dip restarts the window
     let mut g = CommitGate::new();
-    let _ = g.step(10, 0, true, true);
-    let _ = g.step(35, 0, true, false);
-    let dip = g.step(36, 0, true, true) == Gate::Wait && g.step(36 + COMMIT_STABLE_S - 1, 0, true, true) == Gate::Wait
-        && g.step(36 + COMMIT_STABLE_S, 0, true, true) == Gate::Commit;
+    let _ = g.step(10, 0, true, true, false);
+    let _ = g.step(35, 0, true, false, false);
+    let dip = g.step(36, 0, true, true, false) == Gate::Wait && g.step(36 + COMMIT_STABLE_S - 1, 0, true, true, false) == Gate::Wait
+        && g.step(36 + COMMIT_STABLE_S, 0, true, true, false) == Gate::Commit;
     // healthy only near the end: the limit wins once it passes without a full stable window
     let mut g = CommitGate::new();
-    let late = g.step(COMMIT_LIMIT_S - 5, 0, true, true) == Gate::Wait && g.step(COMMIT_LIMIT_S + 1, 0, true, true) == Gate::Revert;
-    let pass = wan_only && ap_only && both && dip && late;
+    let late = g.step(COMMIT_LIMIT_S - 5, 0, true, true, false) == Gate::Wait && g.step(COMMIT_LIMIT_S + 1, 0, true, true, false) == Gate::Revert;
+        // task #88: a DFS CAC (BSS up, AP silent) never commits; the trial then commits once in service
+    let mut g = CommitGate::new();
+    let cac60 = (0..60).all(|t| g.step(t, 0, true, true, true) == Gate::Wait)
+        && (60..60 + COMMIT_STABLE_S).all(|t| g.step(t, 0, true, true, false) == Gate::Wait)
+        && g.step(60 + COMMIT_STABLE_S, 0, true, true, false) == Gate::Commit;
+    // a 600 s weather-channel CAC moves the deadline out: no revert at the plain limit, commit after it
+    let mut g = CommitGate::new();
+    let weather = (0..600).all(|t| g.step(t, 0, true, true, true) == Gate::Wait)
+        && (600..600 + COMMIT_STABLE_S).all(|t| g.step(t, 0, true, true, false) == Gate::Wait)
+        && g.step(600 + COMMIT_STABLE_S, 0, true, true, false) == Gate::Commit;
+    // a CAC that never ends still reverts, at the limit + the capped allowance
+    let mut g = CommitGate::new();
+    let lim = COMMIT_LIMIT_S + COMMIT_CAC_ALLOW_S;
+    let endless = (0..=lim).all(|t| g.step(t, 0, true, true, true) == Gate::Wait) && g.step(lim + 1, 0, true, true, true) == Gate::Revert;
+    let states = dfs_lets_ap_serve(None) && dfs_lets_ap_serve(Some(0)) && dfs_lets_ap_serve(Some(2))
+        && [1u32, 3, 4, 5, 6].iter().all(|&x| !dfs_lets_ap_serve(Some(x)));
+let pass = wan_only && ap_only && both && dip && late && cac60 && weather && endless && states;
     arch_aarch64::_print(format_args!(
-        " [P-otagate] {} — OTA trial commit gate: WAN usable but AP down never commits (reverts after {} s)={} AP serving but no WAN never commits={} both healthy for {} s commits={} a dip restarts the stability window={} the limit wins over a late short recovery={}\n",
-        if pass { "PASS" } else { "FAIL" }, COMMIT_LIMIT_S, wan_only, ap_only, COMMIT_STABLE_S, both, dip, late
+        " [P-otagate] {} — OTA trial commit gate: WAN usable but AP down never commits (reverts after {} s)={} AP serving but no WAN never commits={} both healthy for {} s commits={} a dip restarts the stability window={} the limit wins over a late short recovery={} a 60 s DFS CAC never commits, then commits in service={} a 600 s weather CAC moves the deadline={} an endless CAC reverts at {} s={} DFS states classified={}\n",
+        if pass { "PASS" } else { "FAIL" }, COMMIT_LIMIT_S, wan_only, ap_only, COMMIT_STABLE_S, both, dip, late, cac60, weather, lim, endless, states
     ));
     pass
 }
