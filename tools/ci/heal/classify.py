@@ -84,9 +84,32 @@ def normalize(line: str) -> str:
     return s.strip()
 
 
+_GH_PREFIX = (
+    re.compile(r"^[^\t\n]*\t[^\t\n]*\t"),          # `gh run view --log`: "<job>\t<step>\t"
+    re.compile(r"^\d{4}-\d\d-\d\dT[\d:.]+Z ?"),    # then "<timestamp> " — ONE space, keep the line's own indent
+)
+
+
+def strip_gh_prefix(line: str) -> str:
+    """The raw line as the tool printed it, without the gh job/step/timestamp prefix. Rule patterns are matched
+    against THIS (a start-anchored `^\\s+FAIL\\s{2}` never matched a real CI log line before, so every mc-e2e failure
+    collapsed to the same `MC-E2E: FAIL (?)` evidence and one signature: #1028, #1065, #1166)."""
+    for rx in _GH_PREFIX:
+        line = rx.sub("", line, count=1)
+    return line
+
+
+def _e2e_check(line: str):
+    """`  FAIL  <check>[: detail]` -> `<check>` (the stable part; the detail carries live counters)."""
+    m = re.match(r"\s*FAIL\s{2}(\S.*)", line)
+    if not m:
+        return None
+    return re.split(r":\s|\s—\s", m.group(1), maxsplit=1)[0].strip()[:100]
+
+
 def classify_text(text: str, gate_hint: str = None) -> dict:
     """Pure: log text → decision dict. Unit-tested against fixtures."""
-    lines = text.splitlines()
+    lines = [strip_gh_prefix(l) for l in text.splitlines()]
     for cat, action, gate, pats in RULES:
         rxs = [re.compile(p, re.M) for p in pats]
         hits = [l for l in lines if any(r.search(l) for r in rxs)]
@@ -97,6 +120,11 @@ def classify_text(text: str, gate_hint: str = None) -> dict:
         if cat == "vulnerable_dependency" and not ids:
             ids = sorted(set(re.findall(r"ID: (\S+)", text)))
         key = "|".join(sorted(set(evidence[:5]))) + "|" + ",".join(ids)
+        if cat == "e2e_failure":
+            # one issue per failing CHECK: the same check failing again dedups, a different check gets its own issue
+            checks = sorted({c for c in (_e2e_check(h) for h in hits) if c})
+            if checks:
+                key = "e2e|" + "|".join(checks[:5])
         return {
             "category": cat,
             "action": action,
