@@ -58,7 +58,7 @@ The browser leg needs Node + Playwright Chromium (`~/.local/node`, `tools/mc-e2e
 
 **P2, other platforms (ADR 0047 D1, honest scale)**
 8. **Prerequisite on all targets:** the kernel crate calls `arch_aarch64::` directly at 336 sites (main.rs alone is ~11k lines). Route them through `hal` traits first, or every port forks the kernel.
-9. RK3588 (aarch64): GICv3, stmmac GMAC, eMMC variant, a U-Boot/TF-A handoff instead of `config.txt`/tryboot. **Weeks to months.**
+9. RK3588 (aarch64): GICv3, stmmac GMAC, eMMC variant, a U-Boot/TF-A handoff instead of `config.txt`/tryboot. **Weeks to months.** *(Note 2026-11-14: HookProbe's own RK3588 board uses 2× RTL8125 over PCIe, not stmmac, so it adds a DWC PCIe root complex, RTL8125, NVMe and TPM drivers. Sequence and full delta: ADR 0064 D3/D4.)*
 10. VM/cloud: virtio-**pci** (only virtio-mmio exists), UEFI boot, ENA/gVNIC for AWS/GCP. arm64 cloud is closest.
 11. x86_64 / N100: a new `arch-x86_64` (paging, IDT/APIC, ring 3, context switch), a UEFI loader replacing hboot, ACPI + PCIe/MSI-X, igc (i225/i226) NIC, NVMe, TPM 2.0 for the SRK, RDRAND, and an x86 BPF JIT (or the interpreter). **Multi-quarter.**
 
