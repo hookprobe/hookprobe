@@ -14,6 +14,12 @@ pub struct DeferRing<const N: usize, const SZ: usize> {
     pub diag: [u32; 3],
 }
 
+impl<const N: usize, const SZ: usize> Default for DeferRing<N, SZ> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<const N: usize, const SZ: usize> DeferRing<N, SZ> {
     pub const fn new() -> Self {
         DeferRing { buf: [[0; SZ]; N], meta: [(0, 0, 0); N], head: 0, len: 0, on: false, diag: [0; 3] }

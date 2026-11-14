@@ -419,6 +419,12 @@ struct RejEntry {
     win_ms: u64,
     fail_logged: bool,
 }
+impl Default for RejectLog {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RejectLog {
     pub const WINDOW_MS: u64 = 30_000;
     pub const fn new() -> RejectLog {
