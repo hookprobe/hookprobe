@@ -93,6 +93,9 @@ pub const RT_REACHGEN: u16 = 3;
 /// M4.5 TOFU-pinned operator public key (32-byte Ed25519). The independent policy trust root
 /// (C10) — pinned once, distinct from the online Noise static; a later differing key is refused.
 pub const RT_OPKEY: u16 = 4;
+/// Evidence batch tagged with the build that wrote it: a 16-byte build id (HEQK_BUILD_ID, zero-padded) then the
+/// event images. Readers accept both this and the untagged `RT_EVIDENCE` (records written before the tag).
+pub const RT_EVIDENCE_B: u16 = 5;
 pub const RT_TEST: u16 = 0x00FF;
 
 // Record header field offsets.
