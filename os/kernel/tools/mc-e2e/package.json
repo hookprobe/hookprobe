@@ -1,5 +1,6 @@
 {
   "name": "heqk-mc-e2e",
+  "version": "0.0.26",
   "private": true,
   "license": "AGPL-3.0-only",
   "type": "module",

@@ -9,7 +9,7 @@
 # on it (standalone-by-default: no PoP configured => no tunnel).
 [package]
 name = "superpop"
-version = "0.1.0"
+version = "0.0.26"
 edition = "2021"
 license = "AGPL-3.0-only"
 publish = false  # first-party: never published to crates.io (ADR 0063 G4)
