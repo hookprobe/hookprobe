@@ -3,7 +3,7 @@ name = "qsecbit"
 version = "0.1.0"
 edition = "2021"
 description = "QSECBIT composite cyber-resilience scorer — HookProbe OS V2 detection module"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 
 # Library: deterministic math engine, shared by the WASI binary and tests.
 # Tests run on the native target; the binary is built for wasm32-wasip1.

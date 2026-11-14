@@ -449,7 +449,7 @@ The majority of HookProbe is open source under AGPL v3.0:
 
 ### Documented Innovations
 
-Our proprietary components (Qsecbit algorithm, Neural Resonance protocol, dnsXai classifier, AIOCHI cognitive layer, SLA AI business continuity) are clearly documented. You can understand *what* they do and *why* - the implementation is protected, but the purpose is transparent.
+Our core components (Qsecbit algorithm, Neural Resonance protocol, dnsXai classifier, AIOCHI cognitive layer, SLA AI business continuity) are clearly documented and, since 2026-11-14, AGPL-3.0 like the rest. You can understand *what* they do and *why* - the implementation is protected, but the purpose is transparent.
 
 ### Privacy by Architecture
 
@@ -475,18 +475,18 @@ We didn't add privacy as an afterthought. The architecture ensures:
 ```
 hookprobe/
 ├── core/                    # Core Intelligence (documented)
-│   ├── aegis/               # AEGIS - Autonomous AI Orchestrator (proprietary)
-│   ├── napse/               # NAPSE - Neural Adaptive Packet Synthesis (proprietary)
+│   ├── aegis/               # AEGIS - Autonomous AI Orchestrator
+│   ├── napse/               # NAPSE - Neural Adaptive Packet Synthesis
 │   ├── htp/                 # Transport Protocol (open source)
-│   ├── qsecbit/             # AI Threat Scoring (documented, proprietary)
-│   └── neuro/               # Neural Authentication (documented, proprietary)
+│   ├── qsecbit/             # AI Threat Scoring
+│   └── neuro/               # Neural Authentication
 │
 ├── shared/                  # Shared Modules
-│   ├── dnsXai/              # AI DNS Protection (documented, proprietary)
+│   ├── dnsXai/              # AI DNS Protection
 │   ├── mesh/                # Collective Defense (open source)
-│   ├── dsm/                 # Decentralized Security (documented, proprietary)
-│   ├── aiochi/              # AIOCHI - AI Eyes Cognitive Layer (proprietary)
-│   ├── slaai/               # SLA AI Business Continuity (proprietary)
+│   ├── dsm/                 # Decentralized Security
+│   ├── aiochi/              # AIOCHI - AI Eyes Cognitive Layer
+│   ├── slaai/               # SLA AI Business Continuity
 │   ├── response/            # Automated Response (open source)
 │   └── cortex/              # 3D Visualization (open source)
 │

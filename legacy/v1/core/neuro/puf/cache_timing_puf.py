@@ -9,7 +9,7 @@ This PUF has lower uniqueness than SRAM or Clock Drift PUFs but
 provides additional entropy when combined via CompositeIdentity.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

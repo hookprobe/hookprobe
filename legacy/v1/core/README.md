@@ -1,6 +1,6 @@
 # HookProbe Core Intelligence
 
-The `core/` directory contains HookProbe's proprietary security intelligence modules.
+The `core/` directory contains HookProbe's security intelligence modules.
 
 ## Modules
 
@@ -59,6 +59,5 @@ Neuro: "Can you prove your sensor history through weight evolution?"
 
 ## Licensing
 
-The modules in this directory are **proprietary** and require a commercial license for SaaS/OEM use. See `LICENSING.md` in the project root for details.
-
-For personal/home use and internal business protection, these modules are free to use under the dual license terms.
+The modules in this directory are licensed under **AGPL-3.0** (relicensed to AGPL-3.0 by the copyright holder on 2026-11-14; see the repository root `LICENSING.md`). A commercial license is available
+for SaaS/OEM use without AGPL obligations.

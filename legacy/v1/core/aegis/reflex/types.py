@@ -5,7 +5,7 @@ Data model for the Surgical Interference system. Defines reflex levels,
 per-target state, score velocity tracking, and decision records.
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 

@@ -128,7 +128,7 @@ HookProbe is a **federated cybersecurity mesh**: a $75 Raspberry Pi running Hook
 **Primary Languages**: Python (core logic), Bash (deployment)
 **Web Frameworks**: Flask (Guardian, Fortress)
 **Deployment**: Podman containers with OVS networking
-**License**: Dual Licensed (AGPL v3.0 + Commercial) - see [Licensing](#licensing)
+**License**: AGPL-3.0-only, or commercial - see [Licensing](#licensing)
 
 ### Product Tiers
 
@@ -143,11 +143,8 @@ HookProbe is a **federated cybersecurity mesh**: a $75 Raspberry Pi running Hook
 
 ## Licensing
 
-Dual licensing model — know which license applies before advising on reuse. Full details: `LICENSING.md`. Contact: qsecbit@hookprobe.com.
-
-- **Open source (AGPL v3.0)**: `deploy/`, `products/guardian/`, `products/fortress/`, `shared/response/`, `shared/mesh/`, `core/htp/`, `docs/`.
-- **Proprietary (commercial license for SaaS/OEM use)**: `core/qsecbit/`, `core/neuro/`, `shared/dnsXai/`, `shared/dsm/`, `shared/slaai/`, `shared/aiochi/` (including the bubble modules), `products/fortress/lib/ml_fingerprint_classifier.py`, `behavior_clustering.py`, `presence_sensor.py`, and `products/fortress/lib/autopilot/`.
-- Personal/home and internal business use of everything is free; SaaS offerings and OEM embedding require a commercial license.
+All of `legacy/v1/` is **AGPL-3.0**, with a commercial license available (the former proprietary modules were
+relicensed to AGPL-3.0 by the copyright holder on 2026-11-14; see the repository root `LICENSING.md`). Contact: qsecbit@hookprobe.com.
 
 ---
 

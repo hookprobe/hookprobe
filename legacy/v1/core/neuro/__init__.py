@@ -13,7 +13,7 @@ Core Components:
 
 __version__ = "5.0.0"
 __author__ = "Andrei Toma"
-__license__ = "Proprietary"
+__license__ = "AGPL-3.0"
 
 from .core.ter import TER, TERGenerator, TERValidator
 from .core.posf import PoSFSigner, PoSFVerifier

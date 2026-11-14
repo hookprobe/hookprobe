@@ -19,7 +19,7 @@ An "episode" is a single-entity narrative record:
 This is what separates a stateful defender from a learning defender.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 22.0.0
 """
 

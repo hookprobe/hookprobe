@@ -19,7 +19,7 @@ Integration points:
     - Coordinated with: QSecBit XDPManager (prevent conflicts)
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

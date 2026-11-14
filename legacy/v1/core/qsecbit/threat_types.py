@@ -5,7 +5,7 @@ Defines all attack types, severities, and the canonical ThreatEvent
 data structure used throughout the unified threat detection engine.
 
 Author: HookProbe Team
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

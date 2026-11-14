@@ -1,6 +1,7 @@
 [package]
 name = "hookprobe-hydra"
 version = "0.1.0"
+license = "AGPL-3.0-only"
 edition = "2021"
 description = "HookProbe OS HYDRA — the IOC/threat-intel enrichment half of Intelligence (ADR 0027). Matches a bundled, dated indicator feed against the evidence graph's own flow/application data; folds enriched detections back into the SAME evidence graph hookprobe-exploit (the CVE-lens) already writes to. Standalone/air-gapped by default; a live STIX/TAXII/MISP fetch is additive, not built here."
 

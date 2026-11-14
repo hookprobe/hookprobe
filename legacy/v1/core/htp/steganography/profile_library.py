@@ -6,7 +6,7 @@ traffic: packet size distribution, inter-packet timing, burst patterns, and
 bandwidth envelope. The TrafficShaper uses these to mold HTP traffic.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

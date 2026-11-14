@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Multi-Modal Presence Sensor - Proprietary HookProbe Technology
+Multi-Modal Presence Sensor - HookProbe Technology
 
-PROPRIETARY AND CONFIDENTIAL
+License: AGPL-3.0 - see LICENSE file
 Copyright (c) 2024-2025 HookProbe Technologies
 Licensed under Commercial License - See LICENSING.md
 

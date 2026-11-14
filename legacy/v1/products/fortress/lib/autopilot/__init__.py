@@ -43,7 +43,7 @@ Resource Comparison:
     - AI Autopilot: 1% idle / 10% burst, <200MB RAM
 
 Copyright (c) 2024-2026 HookProbe Security
-License: Proprietary - Commercial license required for SaaS/OEM use
+License: AGPL-3.0 - see LICENSE file
 """
 
 from .dhcp_sentinel import (

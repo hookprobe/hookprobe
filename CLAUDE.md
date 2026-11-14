@@ -81,7 +81,7 @@ UX rules: capability-gated rendering · everything clickable (drills to evidence
 | **Cloud-linked (MSSP)** | `mssp.hookprobe.com` tenant | Fleets, multi-tenant, billing |
 | **Self-hosted control plane** | your own endpoint | Enterprise/gov fleet ops without our cloud |
 
-**Recursive multi-tenancy** (AWS-Organizations-style): `HookProbe → MSSP → Customer → Customer → …` by tenant inheritance, unlimited depth, no code changes. Hard per-tenant isolation (segregated data, scoped RBAC, separate keys). **Fleet** = pull-based GitOps; desired state (`hookprobe.yaml`) in Git; drift self-heal; staged rollout rings (canary → ring → fleet, health-gated). **Business model: open-core** — base OS + standalone SOC free under **GNU AGPL-3.0**; offering-as-a-service / the cloud/account layer requires a **commercial license** (dual-license, AGPL-3.0 + Commercial). See `LICENSING.md`.
+**Recursive multi-tenancy** (AWS-Organizations-style): `HookProbe → MSSP → Customer → Customer → …` by tenant inheritance, unlimited depth, no code changes. Hard per-tenant isolation (segregated data, scoped RBAC, separate keys). **Fleet** = pull-based GitOps; desired state (`hookprobe.yaml`) in Git; drift self-heal; staged rollout rings (canary → ring → fleet, health-gated). **Business model: dual licence** — **all software is AGPL-3.0-only** (no proprietary parts, incl. the former QSECBIT/dnsXai/DSM/NEURO claims, relicensed 2026-11-14); **hardware designs are CERN-OHL-S-2.0**; both also under a **commercial licence** (SaaS/OEM without publishing changes). Trademark reserved; contributions need the CLA; third-party components keep their own licences. New crates/packages declare `license = "AGPL-3.0-only"`. See `LICENSING.md`.
 
 ## Naming
 

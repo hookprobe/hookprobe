@@ -18,7 +18,7 @@ Templates cover the top 10 attack patterns detected by NAPSE/QSecBit:
  10. IP Spoofing (XDP drop src outside LAN)
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

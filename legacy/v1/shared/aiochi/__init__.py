@@ -42,12 +42,12 @@ Usage:
     manager.add_device(bubble.bubble_id, "AA:BB:CC:DD:EE:FF")
     manager.set_device_policy(bubble.bubble_id, "AA:BB:CC:DD:EE:FF", NetworkPolicy.FULL_ACCESS)
 
-License: Proprietary - Commercial License Required for SaaS/OEM use
+License: AGPL-3.0 - see LICENSE file
 """
 
 __version__ = "1.1.0"
 __author__ = "HookProbe Team"
-__license__ = "Proprietary"
+__license__ = "AGPL-3.0"
 
 from typing import TYPE_CHECKING
 

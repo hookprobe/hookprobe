@@ -9,7 +9,7 @@ readings, the reflex level is removed and the score decays to GREEN.
 The immune system inflames, then cools down.
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 

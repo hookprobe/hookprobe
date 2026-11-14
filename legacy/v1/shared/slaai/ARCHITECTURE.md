@@ -2,11 +2,11 @@
 
 **Version**: 1.0.0
 **Status**: Implementation Plan
-**License**: Proprietary (HookProbe Commercial)
+**License**: AGPL-3.0
 
 ## Executive Summary
 
-SLA AI is HookProbe's proprietary intelligent monitoring, fault prediction, and switching automation system designed to maximize Business Continuity while minimizing costs on metered backup connections.
+SLA AI is HookProbe's intelligent monitoring, fault prediction, and switching automation system designed to maximize Business Continuity while minimizing costs on metered backup connections.
 
 **Core Philosophy**: *Feel, Sense, Adapt, Learn, Optimize*
 

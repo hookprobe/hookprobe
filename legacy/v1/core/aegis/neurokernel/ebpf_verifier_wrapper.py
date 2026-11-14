@@ -5,7 +5,7 @@ Wraps the BCC compilation pipeline to provide structured verification
 results. When BCC is unavailable, returns SKIPPED status.
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

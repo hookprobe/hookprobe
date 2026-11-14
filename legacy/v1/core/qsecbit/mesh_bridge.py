@@ -13,7 +13,7 @@ distributed mesh consciousness, enabling:
 "One node's detection → Everyone's protection"
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

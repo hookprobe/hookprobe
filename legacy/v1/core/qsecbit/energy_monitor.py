@@ -14,7 +14,7 @@ Algorithm:
 7. Network direction-aware energy efficiency analysis (NEW v5.0)
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

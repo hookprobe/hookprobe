@@ -2,11 +2,11 @@
 
 **Version**: 1.0.0
 **Status**: Production Ready
-**License**: Proprietary (HookProbe Commercial)
+**License**: AGPL-3.0
 
 ## Executive Summary
 
-SLA AI is HookProbe's proprietary intelligent network continuity system designed to ensure **Business Continuity Objectives (BCO)** and **Business Process Objectives (BPO)** are met through predictive failover, cost-aware failback, and adaptive network management.
+SLA AI is HookProbe's intelligent network continuity system designed to ensure **Business Continuity Objectives (BCO)** and **Business Process Objectives (BPO)** are met through predictive failover, cost-aware failback, and adaptive network management.
 
 > **Core Philosophy**: *Feel, Sense, Adapt, Learn, Optimize*
 

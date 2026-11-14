@@ -14,7 +14,7 @@ Integration points:
     core/qsecbit/signatures/database.py — SignatureDatabase, ThreatSignature
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

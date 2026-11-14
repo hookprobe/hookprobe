@@ -17,7 +17,7 @@
  *   lib.popcount_buffer.argtypes = [ctypes.c_void_p, ctypes.c_size_t]
  *
  * Author: HookProbe Team
- * License: Proprietary
+ * License: AGPL-3.0 - see LICENSE file
  * Version: 27.0.0
  */
 

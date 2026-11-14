@@ -3,7 +3,7 @@
 **Version**: 2.0.0
 **Status**: Phase 2 — Split-Brain Architecture (Zig + Mojo)
 **Author**: Andrei Toma
-**License**: Proprietary - see LICENSING.md
+**License**: AGPL-3.0
 **Last Updated**: 2026-02-18
 **Tagline**: *"See every packet. Understand every intent."*
 
@@ -113,7 +113,7 @@ Stage 4: runtime          — Ubuntu slim, copies all artifacts
 
 ## Overview
 
-NAPSE is HookProbe's proprietary IDS/NSM/IPS engine -- a unified 3-layer architecture optimized for resource-constrained edge devices. Unlike general-purpose IDS tools designed for data-center visibility on powerful servers, NAPSE is designed from the ground up for the realities of edge computing: limited RAM, limited CPU, and a requirement for microsecond-level blocking decisions.
+NAPSE is HookProbe's IDS/NSM/IPS engine -- a unified 3-layer architecture optimized for resource-constrained edge devices. Unlike general-purpose IDS tools designed for data-center visibility on powerful servers, NAPSE is designed from the ground up for the realities of edge computing: limited RAM, limited CPU, and a requirement for microsecond-level blocking decisions.
 
 Traditional IDS/NSM approaches require running multiple heavyweight processes for network security monitoring, typically consuming **~2GB RAM** and **15-40% CPU** even when idle. This is the single largest resource bottleneck on 4GB Fortress devices and makes deployment on 256MB Sentinel devices impossible. Separate log formats require normalization and forwarding, and startup times (~25 seconds) create a window of blindness after every reboot.
 
@@ -1634,7 +1634,7 @@ Each protocol parser emits specific event types that map to existing HookProbe c
 
 ---
 
-*NAPSE is a proprietary component of HookProbe. Commercial license required for SaaS/OEM use. See LICENSING.md for details.*
+*NAPSE is licensed under AGPL-3.0, with a commercial license available. See LICENSING.md for details.*
 
 *HookProbe v5.2 "Neural" - Federated Cybersecurity Mesh*
 *"One node's detection -> Everyone's protection"*
