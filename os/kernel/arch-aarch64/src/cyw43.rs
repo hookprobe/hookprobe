@@ -4875,7 +4875,9 @@ fn key_on_m4(s: &mut KeySlot, m4: &[u8]) -> bool {
     }
     s.auth.m4_mic_ok = true;
     // flags 0 as brcmfmac's pairwise add_key (the PRIMARY flag belongs to the group key, installed at AP start)
-    s.auth.ptk_set = wlc_set_key(0, &s.tk, &s.sta, false);
+    // the firmware's reply to this SET is sometimes missed (metal: 23 handshakes `ptk_set=false authorized=true`);
+    // retry like the group-key install (a repeated SET of the same key is idempotent)
+    s.auth.ptk_set = (0..3).any(|_| wlc_set_key(0, &s.tk, &s.sta, false));
     dbg_putc(b'P');
     // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
     // "authorize" iovar is tried only if the ioctl is refused (each dcmd can discard queued data frames).
