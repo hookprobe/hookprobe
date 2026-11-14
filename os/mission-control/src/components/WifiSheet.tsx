@@ -83,7 +83,7 @@ const WifiSheet: Component<{ onClose: () => void; preview?: boolean }> = (props)
               : 'The device is switching to the new Wi-Fi now. It keeps the change by itself once everything works, or switches back on its own.'}</p>
             <Show when={keepMsg()}><p class="pcard-note" role="status" style={{ margin: 0 }}>{keepMsg()}</p></Show>
             <div class="approve-actions">
-              <Show when={shared()}><button type="button" class="hp-btn" onClick={() => setShowQr(true)}>Show QR code</button></Show>
+              <Show when={shared()}><button type="button" class="hp-btn" aria-label="Show QR code" onClick={() => setShowQr(true)}>QR code</button></Show>
               {/* Board AdvApply: "Keep the new Wi-Fi" in the result, not only in the banner behind this sheet */}
               <Show when={done()!.confirm && !kept()}><button type="button" class="hp-btn hp-btn--primary" onClick={() => void keep()}>Keep the new Wi-Fi</button></Show>
               <button type="button" class={`hp-btn${done()!.confirm && !kept() ? '' : ' hp-btn--primary'}`} onClick={close}>Done</button>

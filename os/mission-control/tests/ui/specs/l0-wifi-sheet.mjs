@@ -67,7 +67,10 @@ export default async function (t) {
   await sheet.locator('button:has-text("Change password")').click(); await page.waitForTimeout(1500);
   ok(await vis(sheet.locator('text=press Keep within 5 minutes')), 'after sending: live trial explained, with Keep within 5 minutes');
   // the network just set can be shared as a QR code (password still in this sheet only), and Esc closes only the QR
-  await sheet.locator('button:has-text("Show QR code")').click(); await page.waitForTimeout(300);
+  // the result's three actions fit on one row (Done wrapped to a second row on metal, MB30)
+  const tops = await sheet.locator('.approve-actions button').evaluateAll((bs) => bs.map((b) => Math.round(b.getBoundingClientRect().top)));
+  ok(tops.length === 3 && new Set(tops).size === 1, `after the change: QR code, Keep the new Wi-Fi and Done on one row (${tops.join(', ')})`);
+  await sheet.locator('button[aria-label="Show QR code"]').click(); await page.waitForTimeout(300);
   const want = GOLD.find((c) => c.text === 'WIFI:T:WPA;S:Popescu-Home;P:Our new family password;;').rows;
   const got = await rendered(page);
   ok(got.length === want.length && got.every((r, i) => r === want[i]), 'after the change: "Show QR code" renders the code for the new password');
