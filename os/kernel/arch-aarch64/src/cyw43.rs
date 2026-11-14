@@ -4567,6 +4567,14 @@ pub struct El0Keyer {
     pub abort: fn(&[u8; 6]),
 }
 pub static mut EL0_KEYER: Option<El0Keyer> = None;
+/// Handshakes the driver started in EL0 and has not seen finish (so the loop does not cross into EL0 to tick an idle
+/// authenticator: metal k3b made ~30 k idle EL0 calls / s before this). Cleared when the server stops answering.
+static mut EL0_PENDING: u32 = 0;
+/// When the EL0 authenticator was last ticked (resends are due at 1 s; a 100 ms tick is plenty).
+static mut EL0_TICK_MS: u64 = 0;
+fn el0_pending_add(d: i32) {
+    unsafe { EL0_PENDING = (EL0_PENDING as i64 + d as i64).clamp(0, 64) as u32 };
+}
 
 fn el0() -> Option<El0Keyer> {
     unsafe { *core::ptr::addr_of!(EL0_KEYER) }
@@ -4660,7 +4668,10 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
     // the EL0 authenticator first (ADR 0065 step 3b); the in-kernel copy when it cannot answer
     keyer().abort(sta);
     let r = match el0().and_then(|h| (h.start)(&st, now_ms, &mut out)) {
-        Some(r) => r,
+        Some(r) => {
+            el0_pending_add(1);
+            r
+        }
         None => keyer().start(st, now_ms, &mut out),
     };
     if let hal::wpakeyer::Out::Send(n) = r {
@@ -4676,6 +4687,9 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
 /// The station left: forget its handshake.
 pub fn ap_key_abort(sta: &[u8; 6]) {
     if let Some(h) = el0() {
+        if let Some(Some(_)) = (h.expect)(sta) {
+            el0_pending_add(-1);
+        }
         (h.abort)(sta);
     }
     keyer().abort(sta);
@@ -4734,7 +4748,18 @@ pub fn ap_key_rx(rx: &[u8], ch: u8, doff: usize) -> KeyRx {
     let now = KEY_NOW_MS.load(core::sync::atomic::Ordering::Relaxed);
     let r = if in_el0 {
         // a fault forgets the server's handshakes: this station's 4-way times out and it re-associates
-        el0().and_then(|h| (h.eapol)(&sta, &buf[..n], now, &mut out)).unwrap_or(hal::wpakeyer::Out::None)
+        match el0().and_then(|h| (h.eapol)(&sta, &buf[..n], now, &mut out)) {
+            Some(r) => {
+                if matches!(r, hal::wpakeyer::Out::Keyed { .. } | hal::wpakeyer::Out::Failed(_)) {
+                    el0_pending_add(-1);
+                }
+                r
+            }
+            None => {
+                unsafe { EL0_PENDING = 0 };
+                hal::wpakeyer::Out::None
+            }
+        }
     } else {
         keyer().on_eapol(&sta, &buf[..n], now, &mut DriverCrypto, &mut out)
     };
@@ -4761,7 +4786,24 @@ static KEY_NOW_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64
 pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     KEY_NOW_MS.store(now_ms, core::sync::atomic::Ordering::Relaxed);
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
-    let r = match el0().and_then(|h| (h.tick)(now_ms, &mut out)) {
+    // the EL0 authenticator is ticked only while it has handshakes, and at most every 100 ms
+    let due = unsafe { EL0_PENDING > 0 && now_ms.wrapping_sub(EL0_TICK_MS) >= 100 };
+    let el0r = if due {
+        unsafe { EL0_TICK_MS = now_ms };
+        match el0().and_then(|h| (h.tick)(now_ms, &mut out)) {
+            Some(r) => Some(r),
+            None => {
+                unsafe { EL0_PENDING = 0 };
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if matches!(el0r, Some(hal::wpakeyer::Out::Failed(_))) {
+        el0_pending_add(-1);
+    }
+    let r = match el0r {
         Some(hal::wpakeyer::Out::None) | None => keyer().tick(now_ms, &mut out),
         Some(r) => r,
     };
