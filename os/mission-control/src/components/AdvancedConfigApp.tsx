@@ -391,7 +391,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                   )}</For></tbody>
                 </table></div>
                 <div class="l0-card-foot">
-                  <button class="hp-btn" onClick={() => setPol({ ...pol(), acls: [...pol().acls, { name: 'LAN_IN', seq: String((pol().acls.length + 1) * 10), action: 'allow', proto: 'any', src: 'any', dst: 'any', port: '' }] })}>+ Rule</button>
+                  <button class="hp-btn" onClick={() => {
+                    // next free seq in that list (count-based numbering could repeat a seq the device already has)
+                    const top = Math.max(0, ...pol().acls.filter((a) => a.name === 'LAN_IN').map((a) => Number(a.seq) || 0));
+                    setPol({ ...pol(), acls: [...pol().acls, { name: 'LAN_IN', seq: String(top + 10), action: 'allow', proto: 'any', src: 'any', dst: 'any', port: '' }] });
+                  }}>+ Rule</button>
                   <button class="hp-btn" onClick={() => void applyTemplate()}>+ From template: block device-to-device traffic</button>
                 </div>
                 <Show when={tmplNote()}><p class="plan-diff-warn" role="status" style={{ margin: 0 }}>{tmplNote()}</p></Show>
