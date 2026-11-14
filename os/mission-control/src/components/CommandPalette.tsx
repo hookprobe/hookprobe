@@ -171,8 +171,8 @@ const CommandPalette: Component<Props> = (props) => {
                 <div class="cmd-honest-panel cmd-honest-panel--error">
                   <div class="cmd-honest-title">Copilot service unreachable</div>
                   <p class="cmd-honest-body">
-                    Could not reach the planner service. This is separate from whether a model is
-                    configured — check that `hookprobe-planner` is running.
+                    Could not reach the planner on this device. Check the AI model settings in
+                    Administration → AI models; the device works without one.
                   </p>
                 </div>
               </Show>
