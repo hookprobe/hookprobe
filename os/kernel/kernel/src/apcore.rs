@@ -65,6 +65,9 @@ pub struct FwdCounters {
     /// G19: flows the signed `tunnel` carries whose route said `via mgmt` — sent through the tunnel (or dropped
     /// when it cannot send), never in cleartext out the management interface (routing review 2026-11-11).
     pub g19_over_mgmt_route: u32,
+    /// A-03: client frames for one of the device's OWN addresses (management / WAN) refused here, never
+    /// routed out to come back as a hairpin through the upstream router.
+    pub to_self_refused: u32,
     /// A route's `gw` stopped answering ARP: taken out of route selection (metric failover) until it answers.
     pub nh_dead: u32,
 }
@@ -198,6 +201,19 @@ pub fn forward4<N: ApNic>(
     let pi = pif as usize;
     // answered / refused by Shield, a session hold or a device policy — not an ACL drop
     let mut shield = false;
+    // A-03 (LAN assessment 2026-11-14): a client frame for one of the device's OWN addresses (the management or
+    // WAN address — the AP address itself never reaches here) is never routed out: NATed to that same address and
+    // reflected by the upstream router it reached Mission Control as a SYN from the device's own address. The
+    // device answers for itself: refused like a policy reject (G12-M — Mission Control is not offered to Wi-Fi).
+    if act == Act::Allow && frame.len() >= 34 && crate::ratelimit::is_local_ip(u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]])) {
+        let mut dr = [0u8; 600];
+        if let Some(k) = arch_aarch64::reject::reject4(frame, &cfg.our_ip, &cfg.me, &mut dr) {
+            let _ = reply(&dr[..k]);
+        }
+        c.to_self_refused += 1;
+        act = Act::Drop;
+        shield = true;
+    }
     // ADR 0053: a session-made, TTL-bound hold on an IPv4 address (either direction)
     if act == Act::Allow && frame.len() >= 34 {
         let (a, b) = (u32::from_be_bytes([frame[26], frame[27], frame[28], frame[29]]), u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]]));
