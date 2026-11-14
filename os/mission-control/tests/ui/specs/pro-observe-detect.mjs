@@ -28,7 +28,7 @@ export default async function (t) {
   ok(await vis(page.locator('button:has-text("Paused")')), 'observe: pause freezes');
   await page.click('.obs-table tbody tr >> nth=0 >> button'); await page.waitForTimeout(250);
   ok(await vis(page.locator('.drawer')), 'observe: row opens the Drawer');
-  ok(await vis(page.locator('.drawer .gate-reason', { hasText: 'does not keep packet captures' })), 'observe: Download pcap shown greyed, with why (no capture on the device)');
+  ok(await vis(page.locator('.drawer .gate-reason', { hasText: 'Preview: no device is answering, so there is no capture' })), 'observe: Download pcap shown greyed, with why (preview: no device)');
 
   await page.setViewportSize({ width: 390, height: 844 });
   await go('/observe/live');
