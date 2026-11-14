@@ -90,6 +90,7 @@ mod wifiheal;
 mod mgmtabi;
 #[cfg(feature = "mcserve")]
 mod hsh;
+mod el0srv; // ADR 0065 step 2: the resident EL0 driver-server substrate (el0-wifi)
 mod datavol;
 mod ownerjournal;
 mod rpmb;
