@@ -4446,6 +4446,40 @@ fn cm5_p10_probe() {
                             if !wifi_off {
                                 cyw43::ap_sae_watch_tick();
                             }
+                            // G-E: a finished / abandoned 4-way (from ap_poll's Keyed event or ap_key_tick)
+                            macro_rules! key_done {
+                                ($d:expr) => {{
+                                    let d: cyw43::KeyDone = $d;
+                                    let (sta, auth, akm8) = (d.sta, d.auth, d.akm8);
+                                    kprint!("   [P11-AP3 auth] akm={} m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
+                                        if akm8 { "SAE" } else { "PSK" }, auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
+                                        auth.ptk_set, auth.authorized, auth.m2_mic_fail, auth.reassoc, auth.deauth, auth.replay);
+                                    'kd: {
+                                        // PMKSA caching whose M2 never verified (a stale / foreign PMKSA): drop it, back to a full SAE (reason 49)
+                                        #[cfg(feature = "wpa3")]
+                                        if d.cached && !auth.ptk_set {
+                                            cyw43::ap_pmksa_drop(&sta);
+                                            let dd = cyw43::ap_deauth(&sta, hal::rsnassoc::REASON_INVALID_PMKID);
+                                            kprint!(" [P11-AP3] cached PMKSA did not key (m2_rx={} mic_fail={}): PMKSA dropped, deauthenticated (reason 49, ioctl={} bcme={} gone={}) — the station redoes SAE\n",
+                                                auth.m2_rx, auth.m2_mic_fail, dd.via, dd.bcme, dd.gone);
+                                            stas.remove(&sta);
+                                            break 'kd;
+                                        }
+                                        if auth.ptk_set && auth.authorized {
+                                            keyed += 1;
+                                            kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n");
+                                            break 'kd;
+                                        }
+                                        kprint!(" [P11-AP3] 4-way incomplete ({}) — back to the pump\n",
+                                            if auth.m2_rx && !auth.m2_mic_ok { if akm8 { "M2 MIC never verified (AKM 8)" } else { "M2 MIC never verified: wrong PSK?" } } else if !auth.m2_rx { "no M2" } else { "no M4" });
+                                    }
+                                }};
+                            }
+                            if !wifi_off {
+                                if let Some(d) = cyw43::ap_key_tick(now() / (freq / 1000).max(1)) {
+                                    key_done!(d);
+                                }
+                            }
                             let tpoll = cyw43::ticks();
                             let ev = if wifi_off { cyw43::ApEvent::Idle } else { cyw43::ap_poll(&mut rx, force) };
                             cyw43::prof_add(4, tpoll);
@@ -4467,11 +4501,8 @@ fn cm5_p10_probe() {
                                     // A station that re-associates MID-handshake gets a fresh ANonce
                                     // immediately (its previous ASSOC_IND used to be dropped by the
                                     // old read loops — the "sometimes takes forever" texture).
-                                    let mut tries = 0u32;
-                                    loop {
-                                        rtwdog::pet(now(), freq);
-                                        tries += 1;
-                                        let mut auth = cyw43::ApAuth::new();
+                                    // G-E: the 4-way runs beside the loop (cyw43::ap_key_*): M1 now, the rest as frames arrive
+                                    'key: {
                                         // WPA3: keyed from the AKM / PMKID of the station's association request RSNE (12.6.10.3):
                                         // SAE just completed -> its PMK; PMKSA caching with a PMKID we hold -> the cached PMK;
                                         // AKM 8 with an unknown / no PMKID -> deauthenticated (reason 49) so it redoes SAE; an AKM
@@ -4492,7 +4523,7 @@ fn cm5_p10_probe() {
                                                     kprint!(" [P11-AP3] the firmware refused 201/143/122 (201 bcme={}): the station is not told to leave\n", d.bcme);
                                                 }
                                                 stas.remove(&sta);
-                                                break;
+                                                break 'key;
                                             }
                                             if let Some(n) = rejlog.clear(&sta) {
                                                 kprint!("   [P11-AP3] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left its refusal streak ({} unlogged) — 4-way...\n",
@@ -4503,35 +4534,15 @@ fn cm5_p10_probe() {
                                         };
                                         #[cfg(not(feature = "wpa3"))]
                                         let (apmk, akm8, apmkid) = (pmk, false, None);
-                                        cyw43::ap_authenticate(&ap.bssid, &sta, &apmk, akm8, apmkid.as_ref(), &gtk, 1, &mut auth);
-                                        kprint!("   [P11-AP3 auth] akm={} m1_sends={} m2_rx={} m2_mic={} m3_sends={} m4_rx={} m4_mic={} ptk_set={} authorized={} mic_fail={} reassoc={} deauth={} replay={}\n",
-                                            if akm8 { "SAE" } else { "PSK" }, auth.m1_sends, auth.m2_rx, auth.m2_mic_ok, auth.m3_sends, auth.m4_rx, auth.m4_mic_ok,
-                                            auth.ptk_set, auth.authorized, auth.m2_mic_fail, auth.reassoc, auth.deauth, auth.replay);
-                                        let _ = akm8;
-                                        // PMKSA caching whose M2 never verified (a stale / foreign PMKSA): not a wrong-password or
-                                        // attack signal — drop the PMKSA and send the station back to a full SAE (reason 49)
-                                        #[cfg(feature = "wpa3")]
-                                        if apmkid.is_some() && !auth.ptk_set && !auth.reassoc && (auth.m2_mic_fail > 0 || !auth.deauth) {
-                                            cyw43::ap_pmksa_drop(&sta);
-                                            let d = cyw43::ap_deauth(&sta, hal::rsnassoc::REASON_INVALID_PMKID);
-                                            kprint!(" [P11-AP3] cached PMKSA did not key (m2_rx={} mic_fail={}): PMKSA dropped, deauthenticated (reason 49, ioctl={} bcme={} gone={}) — the station redoes SAE\n",
-                                                auth.m2_rx, auth.m2_mic_fail, d.via, d.bcme, d.gone);
-                                            stas.remove(&sta);
-                                            break;
+                                        let ms = now() / (freq / 1000).max(1);
+                                        if !cyw43::ap_key_start(&ap.bssid, &sta, &apmk, akm8, apmkid.as_ref(), ms) {
+                                            kprint!(" [P11-AP3] 4-way not started: the TRNG failed (fail-closed)\n");
                                         }
-                                        if auth.ptk_set && auth.authorized {
-                                            keyed += 1;
-                                            kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n");
-                                            break;
-                                        }
-                                        if auth.reassoc && tries < 3 {
-                                            continue;
-                                        }
-                                        kprint!(" [P11-AP3] 4-way incomplete ({}) — back to the pump\n",
-                                            if auth.deauth { "station left" } else if auth.m2_rx && !auth.m2_mic_ok { if akm8 { "M2 MIC never verified (AKM 8)" } else { "M2 MIC never verified: wrong PSK?" } } else if !auth.m2_rx { "no M2" } else { "no M4" });
-                                        break;
                                     }
                                 }
+                                cyw43::ApEvent::Keyed(d) => key_done!(d),
+                                cyw43::ApEvent::Eapol => {}
+
                                 cyw43::ApEvent::Sae(_ev) => {
                                     // WPA3: a station's SAE commit / confirm (firmware event 188) — answered on the host
                                     #[cfg(feature = "wpa3")]
@@ -4540,6 +4551,7 @@ fn cm5_p10_probe() {
                                     }
                                 }
                                 cyw43::ApEvent::Leave(sta) => {
+                                    cyw43::ap_key_abort(&sta); // G-E: its handshake (if any) is over
                                     // a leave of the station's earlier attempt, processed after its new SAE Accepted, must
                                     // not undo that SAE (metal MB11 house check: association status 16)
                                     #[cfg(feature = "wpa3")]
