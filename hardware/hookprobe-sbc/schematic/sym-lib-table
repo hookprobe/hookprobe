@@ -1,0 +1,4 @@
+(sym_lib_table
+	(version 7)
+	(lib (name "hookprobe") (type "KiCad") (uri "${KIPRJMOD}/hookprobe.kicad_sym") (options "") (descr "HookProbe project symbols"))
+)

@@ -4,8 +4,8 @@
 ([ADR 0064](../../docs/adr/0064-hookprobe-hardware-program.md): H0 CM5 validated → H1 HAL decoupling → H2 heqk on an
 intermediate RK3588 board → H3 our board routed + reviewed → H4 prototype bring-up).
 
-The board's design files are a company asset in a private repository, not here (ADR 0064 D2). This page is only
-how HookProbe OS sees the board.
+The board's design files are in [`hardware/hookprobe-sbc/`](../../hardware/hookprobe-sbc/) (CERN-OHL-S-2.0 +
+commercial, ADR 0064 D6). This page is only how HookProbe OS sees the board.
 
 ## Capabilities the board would grant (once each driver passes its metal gate)
 

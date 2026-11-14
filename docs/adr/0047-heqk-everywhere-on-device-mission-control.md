@@ -13,8 +13,8 @@ ADR 0044 made zero-Linux the target on CM5 and left two things open: the other p
 ### D1 · heqk is the operating system on every platform **[vision → partial on QEMU-aarch64 + CM5]**
 HookProbe OS = the heqk capability microkernel plus software purpose-built around it, on QEMU/VM, CM5, RK3588, N100/x86_64 and cloud alike. No platform keeps Linux as its product substrate. Today heqk boots QEMU virt (aarch64) and CM5. Every other platform needs a port; the order and its real size are in `docs/design/heqk-everywhere-report-2026-10-09.md`.
 
-> **Note 2026-11-14 (ADR 0064, Proposed):** RK3588 gains a concrete target: HookProbe's own board (design files
-> are a private company asset). The port starts only after CM5 is validated (ADR 0064 H0) and goes to an intermediate RK3588 board
+> **Note 2026-11-14 (ADR 0064, Proposed):** RK3588 gains a concrete target: HookProbe's own board (design in
+> `hardware/hookprobe-sbc/`). The port starts only after CM5 is validated (ADR 0064 H0) and goes to an intermediate RK3588 board
 > (e.g. Radxa ROCK 5B) first. No decision text above is changed.
 
 ### D2 · Mission Control is served by heqk, on the device **[partial: this ADR's E2E milestone]**
