@@ -60,6 +60,11 @@ FIELDS = [
 ]
 IDX = {f: i for i, f in enumerate(FIELDS)}
 
+# Stable event schema identifier. Bump only on a breaking change; consumers (a local dashboard
+# now, possibly a heqk evidence-ingest path later per ARCH-1) key off this. See
+# docs/security/pi4-wireless-monitoring.md for the field contract.
+SCHEMA = "wsensor/1"
+
 SUBTYPES = {
     0: "assoc_req", 1: "assoc_resp", 2: "reassoc_req", 3: "reassoc_resp",
     4: "probe_req", 5: "probe_resp", 8: "beacon", 9: "atim", 10: "disassoc",
@@ -191,6 +196,7 @@ def rows_to_events(rows: Iterable[list[str]], sensor: str, hasher: SsidHasher,
             continue
         kind = SUBTYPES.get(sub, f"mgmt_{sub}")
         ev = {
+            "schema": SCHEMA,
             "event_id": str(uuid.uuid4()),
             "ts": round(ts, 6),
             "sensor": sensor,
@@ -245,6 +251,7 @@ def rows_to_events(rows: Iterable[list[str]], sensor: str, hasher: SsidHasher,
         yield ev
     if data_ctr:
         yield {
+            "schema": SCHEMA,
             "event_id": str(uuid.uuid4()),
             "ts": round(last_ts or 0, 6),
             "ts_first": round(first_ts or 0, 6),
