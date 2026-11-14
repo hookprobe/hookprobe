@@ -155,7 +155,7 @@ security appliance built around the RK3588, with everything a home or small-offi
 board.
 
 <p align="center">
-  <img src="assets/hookprobe-board-illustration.svg" alt="Illustration of the HookProbe board: all ports on one edge, the RK3588 under one cooler, TPM and Thread radio on the board, Wi-Fi 7, 5G, NVMe and an accelerator on M.2 cards underneath" width="720"/>
+  <img src="assets/hookprobe-board-illustration.svg" alt="Illustration of the HookProbe board: all ports on one edge, the RK3588 under one cooler, TPM and Thread radio on the board, Wi-Fi 7, 5G, NVMe and an AI accelerator on M.2 cards underneath" width="720"/>
 </p>
 
 | | Raspberry Pi CM5 today | HookProbe board |
@@ -165,7 +165,12 @@ board.
 | Wi-Fi | Wi-Fi 5, on-module | **Wi-Fi 7 (Qualcomm QCN9274), M.2** |
 | Backup internet | — | **5G modem (Sierra Wireless EM9293) + nano-SIM** |
 | Local retention | eMMC | **eMMC + NVMe SSD** |
-| On-device AI | — | **RK3588 NPU + M.2 accelerator slot** |
+| On-device AI | — | **RK3588 NPU (6 TOPS) + an M.2 slot for an AI accelerator card** |
+
+**Room for AI.** Besides the NPU built into the RK3588, the board has a dedicated **M.2 M-key 2280 slot for an AI
+accelerator card** (an NPU card, or an FPGA). Detection and classification models can run on the box with no cloud
+call, and the card can be upgraded as accelerators improve. In rev A the slot has one PCIe 3.0 lane and
+about 10 W of power. Which cards HookProbe OS supports will be decided on the prototype.
 
 The software doesn't fork for it. The board is one hardware profile, and each part unlocks its
 feature in Mission Control once it is proven on real hardware.
@@ -199,7 +204,8 @@ buy. Performance figures will come from prototype measurements.
 **Help us build it.** We are looking for:
 - **Hardware engineers** with RK3588 / LPDDR4X layout experience for routing and signal- and power-integrity
   review (H3), and for prototype bring-up (H4).
-- **Kernel and driver developers** for the RK3588 port: PCIe, RTL8125, NVMe, TPM, Qualcomm Wi-Fi 7, 5G (H1–H2).
+- **Kernel and driver developers** for the RK3588 port: PCIe, RTL8125, NVMe, TPM, Qualcomm Wi-Fi 7, 5G (H1–H2),
+  and the RK3588 NPU and M.2 AI accelerator cards.
 - **Sponsors and funders** for prototype runs, compliance testing and the first production batch.
 
 Sponsor through [GitHub Sponsors](https://github.com/sponsors/hookprobe) or

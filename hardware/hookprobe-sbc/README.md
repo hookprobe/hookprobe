@@ -27,7 +27,7 @@ built. Do not order it from these files.** See "What is not done" below.
 | Wi-Fi | M.2 E-key slot (2230) for a tri-band card |
 | 5G | M.2 B-key slot (3052) on USB 3, nano-SIM holder |
 | Thread / Matter | ESP32-H2-MINI-1 module |
-| Accelerator | M.2 M-key slot (2280) for an NPU or FPGA card |
+| AI accelerator | M.2 M-key slot (2280) for an AI accelerator (NPU) or FPGA card, PCIe 3.0 ×1, ~10 W budget |
 | USB | 2 x USB-C (USB 3, DisplayPort, power delivery), 2 x USB-A (USB 2.0, stacked) |
 | Security | TPM 2.0 (SLB 9670), reset tied to the platform reset |
 | Other | RTC with battery connector, fan header, debug serial port, power / reset header |

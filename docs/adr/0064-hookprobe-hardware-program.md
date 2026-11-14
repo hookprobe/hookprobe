@@ -34,6 +34,7 @@ metal), **ADR 0047** (heqk everywhere: RK3588 is in its D1 platform list, and it
 | Wi-Fi | **Qualcomm QCN9274 Wi-Fi 7** on M.2/PCIe (the Fortress card, `ath12k` on Linux) or an improved successor | CYW43455 (SDIO) |
 | Cellular | **Sierra Wireless EM9293 5G** on M.2/USB 3, MBIM control (the Fortress modem) | — |
 | Other radios | Thread/Matter module on a UART | — |
+| AI acceleration | RK3588 NPU (6 TOPS) + **M.2 M-key 2280 slot for an AI accelerator (NPU) or FPGA card** (rev A: PCIe 3.0 ×1, ~10 W) | — |
 | Root of trust | **TPM 2.0 (SPI)** + RK3588 OTP | OTP only |
 | Power | DC jack, or USB-C PD (needs negotiation in the boot chain) | 5 V |
 
@@ -144,6 +145,10 @@ runs under g2/g6 like any platform.
   which can cap Wi-Fi 7 throughput. Re-budget both from the chosen module's datasheet. Also confirm the card's M.2
   key and size. The EM9293 fits the B-key-on-USB-3 slot as designed. Its peak current is checked against the modem
   budget.
+- **The M.2 AI slot is a product feature, not a spare slot.** It lets detection models run on the box and be upgraded
+  with the card. Rev A gives it one PCIe 3.0 lane (the four `pcie30phy` lanes are split ×1 each) and a ~10 W
+  budget: enough for inference-class NPU cards, which are latency-bound, but a ×2 link is worth keeping if H3
+  re-allocates lanes. Supported cards are chosen at H2/H4 from what heqk can drive; none is claimed before then (D7).
 - On this board, "device identity in hardware key storage" becomes true, where on CM5 it is OTP-derived.
 - No `os/kernel` work, purchase or fabrication follows from this ADR until H0 is green (D1).
 
