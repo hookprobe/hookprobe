@@ -131,11 +131,12 @@ const IntelligenceApp: Component = () => {
       </main>
 
       <Drawer open={!!selected()} title={selected()?.cve ?? ''} crumb={selected() ? `${selected()!.component} · CVSS ${selected()!.cvss.toFixed(1)} · ${STATUS[selected()!.status] ?? selected()!.status}` : ''} onClose={() => setSel(null)}
-        footer={<button class="hp-btn hp-btn--primary" onClick={() => { location.href = '/automate/playbooks'; }}>Propose a fix plan</button>}>
+        footer={<span class="gate gate--off"><span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn hp-btn--primary">Propose a fix plan</button></span>
+          <span class="gate-reason" role="note">Fix plans need the AI planner and a software inventory of your devices; neither is on this device yet.</span></span>}>
         <p>{selected()?.summary}</p>
         <p class="l0-label">Exposed assets</p>
         <Show when={(selected()?.assets.length ?? 0) > 0} fallback={<p class="pcard-note">{selected()?.exposed ? selected()?.reason : 'No exposed assets in scope.'}</p>}>
-          <For each={selected()!.assets}>{(a) => <a class="l0-link-row" href="/network/devices">{a} →</a>}</For>
+          <For each={selected()!.assets}>{(a) => (sample() ? <p class="l0-card-sub" style={{ margin: 0 }}>{a}</p> : <a class="l0-link-row" href="/network/devices">{a} →</a>)}</For>
         </Show>
         <Show when={selected()?.fixed_version}><p class="pcard-note">Fixed in {selected()!.fixed_version}.</p></Show>
       </Drawer>
