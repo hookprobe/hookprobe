@@ -112,7 +112,13 @@ pub struct Det {
     pub abs: bool,
     pub dst: u32,
     pub dport: u16,
+    /// The build that detected it: an index into `McState::builds` (1-based; 0 = unknown, e.g. a record written
+    /// before builds were tagged).
+    pub build: u8,
 }
+
+/// Distinct builds a detection list can name at once (the running one + those its restored history came from).
+pub const BUILDS_CAP: usize = 8;
 
 /// No real reply can predate this build era (2026-01-01T00:00:00Z): an older time is a forged or
 /// unsynchronised server and is refused.
@@ -200,6 +206,11 @@ pub const NET0: NetInfo = NetInfo { ssid: [0; 32], ssid_len: 0, setup_ap: false,
 /// The device's Mission Control state. One instance, owned by the serve loop.
 pub struct McState {
     dets: [Det; DET_CAP],
+    /// Build ids (HEQK_BUILD_ID, zero-padded to 16 B) named by `Det::build`.
+    builds: [[u8; 16]; BUILDS_CAP],
+    nbuilds: u8,
+    /// `Det::build` of this boot's live detections (0 until `set_current_build`).
+    cur_build: u8,
     dhead: usize,
     dlen: usize,
     next_seq: u64,
@@ -253,7 +264,10 @@ pub const MAX_RESYNC_STEP_MS: i64 = 3_600_000;
 impl McState {
     pub const fn new() -> Self {
         McState {
-            dets: [Det { seq: 0, ts_ms: 0, src: 0, rule_id: 0, sev_points: 0, verdict: 0, class: 0, abs: false, dst: 0, dport: 0 }; DET_CAP],
+            dets: [Det { seq: 0, ts_ms: 0, src: 0, rule_id: 0, sev_points: 0, verdict: 0, class: 0, abs: false, dst: 0, dport: 0, build: 0 }; DET_CAP],
+            builds: [[0; 16]; BUILDS_CAP],
+            nbuilds: 0,
+            cur_build: 0,
             dhead: 0,
             dlen: 0,
             next_seq: 0,
@@ -378,16 +392,44 @@ impl McState {
     /// Record one drained SOAR event (the oldest is overwritten at capacity).
     pub fn push_event(&mut self, ev: &events::Event) {
         let ms = self.epoch_ms(ev.ts);
-        self.push_at(ev, ms, false);
+        self.push_at(ev, ms, false, self.cur_build);
+    }
+
+    /// The index of build tag `tag` (16 B, zero-padded), registered on first sight; 0 when the tag is all zero
+    /// (unknown) or the table is full.
+    pub fn build_index(&mut self, tag: &[u8; 16]) -> u8 {
+        if tag.iter().all(|&b| b == 0) {
+            return 0;
+        }
+        if let Some(i) = self.builds[..self.nbuilds as usize].iter().position(|b| b == tag) {
+            return i as u8 + 1;
+        }
+        if (self.nbuilds as usize) < BUILDS_CAP {
+            self.builds[self.nbuilds as usize] = *tag;
+            self.nbuilds += 1;
+            return self.nbuilds;
+        }
+        0
+    }
+
+    /// The running build: live detections from now on name it.
+    pub fn set_current_build(&mut self, tag: &[u8; 16]) {
+        self.cur_build = self.build_index(tag);
+    }
+
+    /// A restored detection's build (from its evidence record's tag; all-zero = unknown).
+    pub fn push_restored_from(&mut self, ev: &events::Event, epoch_ms: u64, tag: &[u8; 16]) {
+        let b = self.build_index(tag);
+        self.push_at(ev, epoch_ms, true, b);
     }
 
     /// Restore one prior-boot detection at its persisted wall-clock time (D1: the UI's detection
     /// list survives a reboot). Call before live events so restored rows are the oldest.
     pub fn push_restored(&mut self, ev: &events::Event, epoch_ms: u64) {
-        self.push_at(ev, epoch_ms, true);
+        self.push_at(ev, epoch_ms, true, 0);
     }
 
-    fn push_at(&mut self, ev: &events::Event, ts_ms: u64, abs: bool) {
+    fn push_at(&mut self, ev: &events::Event, ts_ms: u64, abs: bool, build: u8) {
         let d = Det {
             seq: self.next_seq,
             ts_ms,
@@ -399,6 +441,7 @@ impl McState {
             abs,
             dst: ev.dst,
             dport: ev.dport,
+            build,
         };
         self.next_seq += 1;
         self.dets[(self.dhead + self.dlen) % DET_CAP] = d;
@@ -698,7 +741,7 @@ impl McState {
         }
     }
 
-    fn det_row(out: &mut JsonBuf, d: &Det) {
+    fn det_row(&self, out: &mut JsonBuf, d: &Det) {
         let info = rulecat::lookup_or_generic(d.rule_id);
         let mut tmp = [0u8; 16];
         let src = if d.src == 0 || rulecat::src_is_mac_hash(d.rule_id) { "" } else { ipv4(d.src, &mut tmp) };
@@ -725,7 +768,13 @@ impl McState {
         let dst = if d.dst == 0 { "" } else { ipv4(d.dst, &mut tmp2) };
         out.raw(",\"dst_ip\":");
         out.string(dst);
-        let _ = write!(out, ",\"dst_port\":{},\"confidence\":{}}}", d.dport, Self::class_confidence(d.class));
+        let _ = write!(out, ",\"dst_port\":{},\"confidence\":{},\"build\":", d.dport, Self::class_confidence(d.class));
+        // Which build detected it (evidence history survives OTA updates, EVID-01): null when unknown.
+        match self.builds.get((d.build as usize).wrapping_sub(1)).filter(|_| d.build != 0) {
+            Some(b) => out.string(core::str::from_utf8(&b[..b.iter().position(|&c| c == 0).unwrap_or(16)]).unwrap_or("")),
+            None => out.raw("null"),
+        }
+        out.raw("}");
     }
 
     /// `GET /api/detections` → `{count, detections (newest first)}`. Rows that would overflow the
@@ -739,7 +788,7 @@ impl McState {
             if n > 0 {
                 out.raw(",");
             }
-            Self::det_row(out, d);
+            self.det_row(out, d);
             // keep room for the closing `],"count":N}`
             if out.overflow || out.len + 32 > out.buf.len() {
                 out.rewind(m);
