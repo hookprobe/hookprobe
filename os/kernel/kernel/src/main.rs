@@ -3445,6 +3445,12 @@ fn cm5_p10_probe() {
                         let mut ap = cyw43::ApResult::new();
                         let mut ap_tries = 0u32;
                         let mut chosen_cs: u16 = 0; // the chanspec the AP came up on (for the channel recheck)
+                        // task #90: DFS auto-channel (build opt-in HEQK_AP_DFS=1 until the operator's compliance call): the
+                        // non-DFS channel to fall back to, and the watch while the AP sits on a DFS channel
+                        let ap_dfs = matches!(option_env!("HEQK_AP_DFS"), Some("1"));
+                        let mut dfs_fallback_cs: u16 = if cyw43::allowed_chanspecs().contains(&0xe02a) { 0xe02a } else { cyw43::ap_chanspec(6) };
+                        let mut dfs_watch: Option<hal::DfsWatch> = None;
+                        let mut dfs_last_s = 0u64;
                         loop {
                             ap_tries += 1;
                             ap = cyw43::ApResult::new();
@@ -3465,7 +3471,15 @@ fn cm5_p10_probe() {
                                     neigh[k] = (a.chanspec, a.rssi);
                                 }
                                 let allowed = cyw43::allowed_chanspecs();
-                                let mut c = hal::acs_choose_allowed(&neigh[..nn], allowed);
+                                let mut c = hal::acs_choose_dfs(&neigh[..nn], allowed, ap_dfs);
+                                let nd = hal::acs_choose_allowed(&neigh[..nn], allowed);
+                                if nd.channel != 0 {
+                                    dfs_fallback_cs = nd.chanspec;
+                                }
+                                if ap_dfs {
+                                    kprint!("   [P11-ACS] DFS channels considered (HEQK_AP_DFS=1): choice {:#06x} dfs={} ~{} Mbps; non-DFS best {:#06x} ~{} Mbps (the fallback)\n",
+                                        c.chanspec, hal::chanspec_is_dfs(c.chanspec), c.est_mbps, nd.chanspec, nd.est_mbps);
+                                }
                                 let (cok, cst) = cyw43::chanspecs_status();
                                 kprint!("   [P11-ACS] regdomain: chanspecs GET ok={} status={:#x}; {} chanspecs allowed by the firmware for this country; 36/80 {} 11/20 {}\n",
                                     cok, cst, allowed.len(), if allowed.contains(&0xe02a) { "allowed" } else { "NOT allowed" },
@@ -3527,6 +3541,10 @@ fn cm5_p10_probe() {
                                 ap.bssid_verified);
                             if ap.serve_ready() && ap.gtk_set {
                                 chosen_cs = ap_cs;
+                                if hal::chanspec_is_dfs(ap_cs) {
+                                    dfs_watch = Some(hal::DfsWatch::new());
+                                    kprint!("   [P11-DFS] AP on DFS chanspec {:#06x}: the firmware runs the CAC (~60 s, AP silent) — watching; fallback {:#06x}\n", ap_cs, dfs_fallback_cs);
+                                }
                                 #[cfg(feature = "mcserve")]
                                 unsafe {
                                     let (p, w) = cyw43::chanspec_primary(ap_cs);
@@ -4265,6 +4283,40 @@ fn cm5_p10_probe() {
                                     kprint!(" [WIFI-HEAL] DEGRADED — Wi-Fi recovery failed again after the one reboot: Wi-Fi is OFF for this boot (fault in /api/health wifi_heal); wired LAN, WAN and management keep running; no further resets\n");
                                 }
                                 _ => {}
+                            }
+                            // task #90: an AP on a DFS channel — once a second: CAC finished? radar? A fallback moves the BSS to
+                            // the non-DFS choice (the stations re-join, like a heal bounce).
+                            if !wifi_off && dfs_watch.is_some() && now() / freq != dfs_last_s {
+                                dfs_last_s = now() / freq;
+                                let st = cyw43::dfs_cac_state();
+                                let on = cyw43::current_chanspec().map(|c| c == chosen_cs);
+                                let act = dfs_watch.as_mut().map_or(hal::DfsAct::Wait, |w| w.step(dfs_last_s, st, on));
+                                match act {
+                                    hal::DfsAct::InService => kprint!("   [P11-DFS] CAC done — AP in service on DFS chanspec {:#06x} (dfs_status {:?})\n", chosen_cs, st),
+                                    hal::DfsAct::Fallback(why) => {
+                                        kprint!("   [P11-DFS] leaving DFS chanspec {:#06x}: {} (dfs_status {:?}, on channel {:?}) -> non-DFS {:#06x}\n", chosen_cs, why, st, on, dfs_fallback_cs);
+                                        dfs_watch = None;
+                                        chosen_cs = dfs_fallback_cs;
+                                        let _ = cyw43::ap_stop();
+                                        #[cfg(feature = "wpa3")]
+                                        cyw43::ap_sae_forget_all();
+                                        let mut hp = MetalHeal { ssid: ap_ssid, cs: chosen_cs, gtk: &gtk, ap: &mut ap, head: None, nv: unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) } };
+                                        let ok = hp.start();
+                                        clear_station_v6_state();
+                                        wifi_tx_dropped += (wq_n + pq_n) as u32;
+                                        wq_n = 0;
+                                        pq_n = 0;
+                                        stas.clear();
+                                        #[cfg(feature = "mcserve")]
+                                        unsafe {
+                                            let (p, w) = cyw43::chanspec_primary(chosen_cs);
+                                            (*core::ptr::addr_of_mut!(NET)).channel = p as u16;
+                                            (*core::ptr::addr_of_mut!(NET)).width_mhz = w;
+                                        }
+                                        kprint!("   [P11-DFS] AP restarted on {:#06x}: serve-ready={}\n", chosen_cs, ok);
+                                    }
+                                    hal::DfsAct::Wait => {}
+                                }
                             }
                             // TX-credit stall snapshot (once per episode): credit 0 for > 2 s with deliveries queued.
                             if !wifi_off {
@@ -14267,7 +14319,36 @@ fn acs_selftest() {
     // (e) two strong 20-MHz neighbours on 36 and 40, 44/48 free, 2.4 crowded: 5 GHz/80 still beats
     //     a free 5 GHz/20 (433/3 = 144 > 87).
     let e = hal::acs_choose(&[(36 | 0x1000 | 0xc000, -40), (40 | 0x1000 | 0xc000, -45), (1 | 0x1000, -40), (6 | 0x1000, -40), (11 | 0x1000, -40)]);
-    let ok = (a.channel, a.mhz, a.chanspec) == (36, 80, 0xe02a)
+    // task #90: DFS candidates — never without the opt-in or without a regdomain list; ties keep non-DFS; a
+    // crowded UNII-1 block moves to 52/80 when allowed; the weather channels are never chosen.
+    let eu: [u16; 8] = [0xe02a, 0xe03a, 0xe06a, 0xe07a, 0xd078, 0xd034, 0x100b, 0x1006];
+    let dfs_tie = hal::acs_choose_dfs(&[], &eu, true).chanspec == 0xe02a;
+    let crowd36 = [(bw80_42, -50i16), (bw80_42, -55)];
+    let dfs_off = hal::acs_choose_dfs(&crowd36, &eu, false).chanspec == 0xe02a;
+    let dfs_nolist = hal::acs_choose_dfs(&crowd36, &[], true).chanspec == 0xe02a;
+    let dfs_on = hal::acs_choose_dfs(&crowd36, &eu, true);
+    let dfs_move = (dfs_on.channel, dfs_on.mhz, dfs_on.chanspec) == (52, 80, 0xe03a) && hal::chanspec_is_dfs(dfs_on.chanspec);
+    let both80 = [(bw80_42, -50i16), (bw80_42, -55), (0xe03a, -50), (0xe03a, -52), (0xe06a, -50), (0xe06a, -51)];
+    let wx = hal::acs_choose_dfs(&both80, &eu, true);
+    let no_weather = ![120u8, 124, 128].contains(&wx.channel) && wx.chanspec != 0xe07a;
+    let cls = !hal::chanspec_is_dfs(0xe02a) && !hal::chanspec_is_dfs(0x1006) && hal::chanspec_is_dfs(0xd034) && hal::chanspec_is_dfs(0xe06a);
+    // the watch: CAC then in service; a CAC that never ends; radar in service; one stale read never moves the AP
+    let mut w = hal::DfsWatch::new();
+    let cac_ok = (0..60).all(|t| w.step(t, Some(1), Some(true)) == hal::DfsAct::Wait) && w.step(61, Some(2), Some(true)) == hal::DfsAct::InService
+        && (62..400).all(|t| w.step(t, Some(2), Some(true)) == hal::DfsAct::Wait);
+    let mut w = hal::DfsWatch::new();
+    let stuck = (0..=hal::DfsWatch::CAC_MAX_S).all(|t| w.step(t, Some(1), Some(true)) == hal::DfsAct::Wait)
+        && matches!(w.step(hal::DfsWatch::CAC_MAX_S + 1, Some(1), Some(true)), hal::DfsAct::Fallback(_));
+    let mut w = hal::DfsWatch::new();
+    let _ = w.step(0, Some(1), Some(true));
+    let _ = w.step(61, Some(2), Some(true));
+    let blip = w.step(62, Some(3), Some(true)) == hal::DfsAct::Wait && w.step(63, Some(2), Some(true)) == hal::DfsAct::Wait
+        && w.step(64, None, None) == hal::DfsAct::Wait;
+    let radar = w.step(65, Some(3), Some(false)) == hal::DfsAct::Wait && matches!(w.step(66, Some(1), Some(false)), hal::DfsAct::Fallback(_));
+    let dfs_ok = dfs_tie && dfs_off && dfs_nolist && dfs_move && no_weather && cls && cac_ok && stuck && blip && radar;
+    kprint!(" [P11-acs-dfs] {} — DFS auto-channel: clean air keeps 36/80={} opt-in off keeps 36/80={} no regdomain list never DFS={} crowded UNII-1 -> 52/80 (DFS)={} weather channels never chosen (-> {:#06x})={} DFS classification={} | watch: 60 s CAC -> in service={} CAC past {} s -> fallback={} one stale read ignored={} radar in service -> fallback={}\n",
+        if dfs_ok { "PASS" } else { "FAIL" }, dfs_tie, dfs_off, dfs_nolist, dfs_move, wx.chanspec, no_weather, cls, cac_ok, hal::DfsWatch::CAC_MAX_S, stuck, blip, radar);
+    let ok = dfs_ok && (a.channel, a.mhz, a.chanspec) == (36, 80, 0xe02a)
         && (b.channel, b.mhz, b.chanspec) == (36, 80, 0xe02a) && b.score == 1
         && (c.channel, c.mhz) == (36, 80) && c.score == 0
         && (d.channel, d.mhz, d.chanspec) == (1, 20, 0x1001)
