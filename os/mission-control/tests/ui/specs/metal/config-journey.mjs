@@ -88,7 +88,14 @@ export default async function (t) {
     await sheet.locator('button:has-text("Change password")').click();
     await sheet.locator('text=Wi-Fi changed').waitFor({ timeout: 60000 });
     t.at = `wifi ${label}: keep`;
-    await sheet.locator('button:has-text("Keep the new Wi-Fi")').click();
+    await t.shot(`wifi-${label}-sent`, true);
+    if (await vis(sheet.locator('button:has-text("Keep the new Wi-Fi")'))) {
+      await sheet.locator('button:has-text("Keep the new Wi-Fi")').click();
+    } else {
+      ok(false, `wifi ${label}: the result sheet offered no "Keep the new Wi-Fi" (text: ${(await sheet.innerText()).replace(/\s+/g, ' ').slice(0, 160)}) — keeping from the banner`);
+      await page.keyboard.press('Escape'); await page.waitForTimeout(300);
+      await page.click('.hp-banner--trial button:has-text("Keep it")');
+    }
     await t.approve({ reason: `metal journey: ${label} Wi-Fi` });
     const c = await until((x) => x.state === 'committed' && x.generation > g0);
     ok(c.state === 'committed' && c.generation > g0, `Wi-Fi ${label}: kept from the result sheet, committed as generation ${c.generation} (from ${from ? 'the previous password' : '?'})`);

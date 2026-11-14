@@ -5,7 +5,7 @@
  * (store/bundle.ts) and the device applies it live as a trial; the Keep banner (ConfigBanners) finishes it.
  */
 import { type Component, Show, createSignal, onCleanup, onMount } from 'solid-js';
-import { refreshConfig, confirmConfig } from '../store/configState';
+import { refreshConfig, confirmConfig, configView } from '../store/configState';
 import { approveRequest } from '../store/approve';
 import { refreshAnchor } from '../store/anchor';
 import { refreshUploads } from '../store/packUpload';
@@ -62,7 +62,9 @@ const WifiSheet: Component<{ onClose: () => void; preview?: boolean }> = (props)
     setBusy(true); setErr('');
     try {
       const r = await sendBundle(wifiSections(form(), pppoe()), key());
-      setDone({ text: r.text, confirm: !!r.needsConfirm });
+      // a Wi-Fi change waits for the owner's Keep: trust the activation reply, and the device's own state as well
+      await refreshConfig();
+      setDone({ text: r.text, confirm: !!r.needsConfirm || configView()?.needs_confirm === true });
       setShared({ ssid: form().ssid, psk: form().psk, security: form().security });
       setPsk(''); setPppoe(''); setKey('');
       void refreshConfig();
