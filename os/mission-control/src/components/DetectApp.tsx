@@ -118,8 +118,10 @@ const DetectApp: Component = () => {
                       {` · confidence ${pct(d.confidence)}%`}
                     </span>
                     <span class="l0-card-foot">
-                      <a class="hp-btn" href={sample() ? '/investigate/incident/?id=INC-0142' : storyFor(d)}>Open story</a>
-                      <a class="hp-btn" href={sample() ? '/investigate/incident/?id=INC-0142' : storyFor(d)}>Graph</a>
+                      <Show when={!sample() || d.src_ip === 'Kitchen camera'} fallback={<span class="pcard-note">Not part of an incident in the sample data (only the kitchen camera's is).</span>}>
+                        <a class="hp-btn" href={sample() ? '/investigate/incident/?id=INC-0142' : storyFor(d)}>Open story</a>
+                        <a class="hp-btn" href={sample() ? '/investigate/incident/?id=INC-0142' : storyFor(d)}>Graph</a>
+                      </Show>
                     </span>
                   </article>
                 )}</For>
