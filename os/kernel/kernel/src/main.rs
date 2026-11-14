@@ -3645,7 +3645,7 @@ fn cm5_p10_probe() {
                         let (mut pq_head, mut pq_n, mut pq_fail) = (0usize, 0usize, 0u32);
                         let (mut prio_direct, mut prio_queued, mut prio_dropped) = (0u32, 0u32, 0u32);
                         let mut trunc_drop = 0u32; // frames `net::parse` refuses (truncated/oversize) — not a rule
-                        let (mut stall_frames, mut stall_since, mut stall_reported) = (0u64, 0u64, false);
+                        let mut wedge = apcore::WedgeWatch::default(); // G0 step 5c
                         // REL-08 (soak 2026-11-11): a firmware halt (mailbox FWHALT) is acted on at once, not after the
                         // wedge detector arms (it needs queued deliveries, which an idle station never produces — 22 min)
                         // Audit A7 self-heal: classify, then kick -> BSS bounce -> firmware reload -> one reboot -> degrade
@@ -3661,11 +3661,8 @@ fn cm5_p10_probe() {
                         // credit-stall diagnostics: last frames handed to the firmware (dst MAC low 3 bytes, len)
                         let mut sent_ring = [(0u32, 0u16); 4];
                         let mut sent_i = 0usize;
-                        let (mut credit0_since, mut stall_diag_done) = (0u64, false);
-                        // Stall experiment: stage 1 = bare dongle interrupt sent, 2 = one control frame sent.
-                        // unstick = [episodes, recovered w/o poke, recovered after A (DEV_INT), after B (ctl), reached 2 s]
-                        let mut unstick_stage = 0u8;
-                        let mut unstick = [0u32; 5];
+                        // G0 step 5c: the TX-credit stall episode (apcore::CreditEpisode; `unstick` counters on the beat)
+                        let mut credit = apcore::CreditEpisode::default();
                         // IPv6 LAN router + stateful firewall (stage 2): numbered from the DHCPv6-delegated prefix (`V6`).
                         let mut v6buf = [0u8; 1600];
                         let mut v6_ids_drop = [0u32; 2]; // [outbound, inbound] IDS drops on IPv6
@@ -3737,7 +3734,7 @@ fn cm5_p10_probe() {
                         // ---- WAN policy (task #26): per-interface counters [lan, eth1, wan, mgmt] ----
                         // Parity G16: WAN health probes (hysteresis) drive the failover, not ARP liveness alone.
                         let mut whealth = wanhealth::WanHealth::new();
-                        let (mut wh_slot, mut wh_out, mut wh_sent_at): (u32, Option<(u16, bool)>, u64) = (0, None, 0);
+                        let mut whprobe = apcore::WanProbe::default(); // G0 step 5c: G16 probe scheduling
                         let mut last_wan_probe = 0u64;
                         let mut rej = apcore::RejWin::default(); // `wan in` reject rate limit (20/s)
                         let mut wan_martian = 0u32; // WAN IPv4 sources that cannot come from the internet (dropped)
@@ -4366,99 +4363,77 @@ fn cm5_p10_probe() {
                             // TX-credit stall snapshot (once per episode): credit 0 for > 2 s with deliveries queued.
                             if !wifi_off {
                                 let (seq, max, _) = cyw43::ap_diag();
-                                let t = now();
-                                if max.wrapping_sub(seq) <= 2 && wq_n + pq_n > 0 {
-                                    if credit0_since == 0 {
-                                        credit0_since = t;
-                                        unstick_stage = 0;
-                                    } else if heal_act == wifiheal::Action::Kick {
-                                        if unstick_stage == 0 {
-                                            unstick[0] += 1;
-                                            unstick_stage = 2;
-                                        }
-                                    } else if !stall_diag_done && t.wrapping_sub(credit0_since) > 2 * freq {
-                                        unstick[4] += 1;
-                                        stall_diag_done = true;
-                                        let (rseq, gaps, maxahead) = cyw43::rx_diag();
-                                        kprint!(" [STALL-DIAG] tx credit <=2 (data-exhausted) for >2 s: tx_seq={} tx_max={} fc_mask={:#04x} | max window ever ahead of tx_seq={} | last rx seq={} rx seq gaps={} | sdio intstatus={:#010x} | queued={} wifi_frames={}\n",
-                                            seq, max, cyw43::fc_mask(), maxahead, rseq, gaps, cyw43::sdio_intstatus(), wq_n, wifi_frames);
-                                        // Bus clock evidence FIRST (before any probe that could perturb it). HT_AVAIL=0x80
-                                        // in CHIPCLKCSR, KSO=0x01 in SLEEPCSR, F2 ready=0x04 in IORDY.
-                                        let bc = cyw43::bus_clock_state();
-                                        kprint!("   [STALL-DIAG] bus clock: CHIPCLKCSR={:#04x} (HT_AVAIL={}) SLEEPCSR={:#04x} (KSO={}) IORDY={:#04x} (F2={})\n",
-                                            bc[0], bc[0] & 0x80 != 0, bc[1], bc[1] & 1 != 0, bc[2], bc[2] & 0x04 != 0);
-                                        for k in 0..wq_n.min(3) {
-                                            let j = (wq_head + k) % WQ_N;
-                                            kprint!("   [STALL-DIAG] queued[{}] dst {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} len {} ethertype {:#06x}\n", k,
-                                                wq[j][0], wq[j][1], wq[j][2], wq[j][3], wq[j][4], wq[j][5], wq_len[j], u16::from_be_bytes([wq[j][12], wq[j][13]]));
-                                        }
-                                        for k in 0..4 {
-                                            let (d, l) = sent_ring[(sent_i + k) % 4];
-                                            kprint!("   [STALL-DIAG] last-sent[{}] dst ..:{:06x} len {}\n", k, d, l);
-                                        }
-                                        // case 1 vs case 2: are the firmware's TX counters moving while credit is 0?
-                                        let c1 = cyw43::fw_pktcnts();
-                                        let t0 = now();
+                                let cev = credit.step(now(), freq, max.wrapping_sub(seq) <= 2, wq_n + pq_n > 0, heal_act == wifiheal::Action::Kick);
+                                if cev == apcore::CreditEv::Snapshot {
+                                    let (rseq, gaps, maxahead) = cyw43::rx_diag();
+                                    kprint!(" [STALL-DIAG] tx credit <=2 (data-exhausted) for >2 s: tx_seq={} tx_max={} fc_mask={:#04x} | max window ever ahead of tx_seq={} | last rx seq={} rx seq gaps={} | sdio intstatus={:#010x} | queued={} wifi_frames={}\n",
+                                        seq, max, cyw43::fc_mask(), maxahead, rseq, gaps, cyw43::sdio_intstatus(), wq_n, wifi_frames);
+                                    // Bus clock evidence FIRST (before any probe that could perturb it). HT_AVAIL=0x80
+                                    // in CHIPCLKCSR, KSO=0x01 in SLEEPCSR, F2 ready=0x04 in IORDY.
+                                    let bc = cyw43::bus_clock_state();
+                                    kprint!("   [STALL-DIAG] bus clock: CHIPCLKCSR={:#04x} (HT_AVAIL={}) SLEEPCSR={:#04x} (KSO={}) IORDY={:#04x} (F2={})\n",
+                                        bc[0], bc[0] & 0x80 != 0, bc[1], bc[1] & 1 != 0, bc[2], bc[2] & 0x04 != 0);
+                                    for k in 0..wq_n.min(3) {
+                                        let j = (wq_head + k) % WQ_N;
+                                        kprint!("   [STALL-DIAG] queued[{}] dst {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} len {} ethertype {:#06x}\n", k,
+                                            wq[j][0], wq[j][1], wq[j][2], wq[j][3], wq[j][4], wq[j][5], wq_len[j], u16::from_be_bytes([wq[j][12], wq[j][13]]));
+                                    }
+                                    for k in 0..4 {
+                                        let (d, l) = sent_ring[(sent_i + k) % 4];
+                                        kprint!("   [STALL-DIAG] last-sent[{}] dst ..:{:06x} len {}\n", k, d, l);
+                                    }
+                                    // case 1 vs case 2: are the firmware's TX counters moving while credit is 0?
+                                    let c1 = cyw43::fw_pktcnts();
+                                    let t0 = now();
+                                    #[cfg(feature = "stalldiag")]
+                                    while now().wrapping_sub(t0) < freq {} // 1-s pair only on the bench: the serve loop never blocks (peer review COR-L1)
+                                    let c2 = cyw43::fw_pktcnts();
+                                    kprint!("   [STALL-DIAG] fw pktcnts (rx_good,rx_bad,tx_good,tx_bad,rx_ocast) t0={:?} t0+1s={:?}\n", c1, c2);
+                                    if let (Some(a), Some(b)) = (c1, c2) {
+                                        kprint!("   [STALL-DIAG] => over 1 s: tx_good +{} tx_bad +{} rx_good +{} ({})\n",
+                                            b[2].wrapping_sub(a[2]), b[3].wrapping_sub(a[3]), b[0].wrapping_sub(a[0]),
+                                            if b[2] != a[2] { "firmware IS transmitting (case 2: credit not returned)" } else { "firmware NOT transmitting (case 1)" });
+                                    }
+                                    {
+                                        // Firmware's view of the station, twice 1 s apart (control credit is reserved).
+                                        let mut sta = [0u8; 6];
+                                        sta.copy_from_slice(&wq[wq_head % WQ_N][0..6]);
+                                        let s1 = cyw43::fw_sta_info(&sta);
+                                        let t1 = now();
                                         #[cfg(feature = "stalldiag")]
-                                        while now().wrapping_sub(t0) < freq {} // 1-s pair only on the bench: the serve loop never blocks (peer review COR-L1)
-                                        let c2 = cyw43::fw_pktcnts();
-                                        kprint!("   [STALL-DIAG] fw pktcnts (rx_good,rx_bad,tx_good,tx_bad,rx_ocast) t0={:?} t0+1s={:?}\n", c1, c2);
-                                        if let (Some(a), Some(b)) = (c1, c2) {
-                                            kprint!("   [STALL-DIAG] => over 1 s: tx_good +{} tx_bad +{} rx_good +{} ({})\n",
-                                                b[2].wrapping_sub(a[2]), b[3].wrapping_sub(a[3]), b[0].wrapping_sub(a[0]),
-                                                if b[2] != a[2] { "firmware IS transmitting (case 2: credit not returned)" } else { "firmware NOT transmitting (case 1)" });
-                                        }
-                                        {
-                                            // Firmware's view of the station, twice 1 s apart (control credit is reserved).
-                                            let mut sta = [0u8; 6];
-                                            sta.copy_from_slice(&wq[wq_head % WQ_N][0..6]);
-                                            let s1 = cyw43::fw_sta_info(&sta);
-                                            let t1 = now();
-                                            #[cfg(feature = "stalldiag")]
-                                        while now().wrapping_sub(t1) < freq {} // 1-s pair only on the bench: the serve loop never blocks (peer review COR-L1)
-                                            let s2 = cyw43::fw_sta_info(&sta);
-                                            for (tag, s) in [("t0", s1), ("t0+1s", s2)] {
-                                                match s {
-                                                    Some(i) => kprint!("   [STALL-DIAG] sta_info {}: ver={} len={} flags={:#x} (ASSOC={} AUTHO={} PS={} AMPDU={}) idle={}s in={}s tx_pkts={} tx_fail={} rx_ucast={} tx_rate={} rx_rate={} retry_exh={}\n",
-                                                        tag, i.ver, i.len, i.flags, i.flags & 0x10 != 0, i.flags & 0x20 != 0, i.flags & 0x100 != 0, i.flags & 0x8000 != 0,
-                                                        i.idle, i.in_secs, i.tx_pkts, i.tx_failures, i.rx_ucast, i.tx_rate, i.rx_rate, i.retry_exhausted),
-                                                    None => kprint!("   [STALL-DIAG] sta_info {}: GET failed\n", tag),
-                                                }
+                                    while now().wrapping_sub(t1) < freq {} // 1-s pair only on the bench: the serve loop never blocks (peer review COR-L1)
+                                        let s2 = cyw43::fw_sta_info(&sta);
+                                        for (tag, s) in [("t0", s1), ("t0+1s", s2)] {
+                                            match s {
+                                                Some(i) => kprint!("   [STALL-DIAG] sta_info {}: ver={} len={} flags={:#x} (ASSOC={} AUTHO={} PS={} AMPDU={}) idle={}s in={}s tx_pkts={} tx_fail={} rx_ucast={} tx_rate={} rx_rate={} retry_exh={}\n",
+                                                    tag, i.ver, i.len, i.flags, i.flags & 0x10 != 0, i.flags & 0x20 != 0, i.flags & 0x100 != 0, i.flags & 0x8000 != 0,
+                                                    i.idle, i.in_secs, i.tx_pkts, i.tx_failures, i.rx_ucast, i.tx_rate, i.rx_rate, i.retry_exhausted),
+                                                None => kprint!("   [STALL-DIAG] sta_info {}: GET failed\n", tag),
                                             }
                                         }
-                                        match cyw43::fw_shared() {
-                                            Some(sh) => {
-                                                kprint!("   [STALL-DIAG] fw sdpcm_shared @ {:#010x} flags={:#06x} (trap={} assert={}) console @ {:#010x}\n",
-                                                    sh.addr, sh.flags, sh.flags & cyw43::SDPCM_SHARED_TRAP != 0, sh.flags & cyw43::SDPCM_SHARED_ASSERT != 0, sh.console_addr);
-                                                cyw43::fw_trap_dump(&sh);
-                                                let hm = unsafe { cyw43::HOSTMAIL_DIAG };
-                                                kprint!("   [STALL-DIAG] host mailbox (data path): msgs={} last data={:#010x} fc-via-mailbox={} nak-handled={} fw-halt={}\n", hm[0], hm[1], hm[2], hm[3], hm[4]);
-                                                let r = cyw43::fw_console_dump(&sh, 40);
-                                                kprint!("   [STALL-DIAG] fw console: {:?} (lines, buf size, idx)\n", r);
-                                            }
-                                            None => kprint!("   [STALL-DIAG] fw sdpcm_shared NOT readable\n"),
+                                    }
+                                    match cyw43::fw_shared() {
+                                        Some(sh) => {
+                                            kprint!("   [STALL-DIAG] fw sdpcm_shared @ {:#010x} flags={:#06x} (trap={} assert={}) console @ {:#010x}\n",
+                                                sh.addr, sh.flags, sh.flags & cyw43::SDPCM_SHARED_TRAP != 0, sh.flags & cyw43::SDPCM_SHARED_ASSERT != 0, sh.console_addr);
+                                            cyw43::fw_trap_dump(&sh);
+                                            let hm = unsafe { cyw43::HOSTMAIL_DIAG };
+                                            kprint!("   [STALL-DIAG] host mailbox (data path): msgs={} last data={:#010x} fc-via-mailbox={} nak-handled={} fw-halt={}\n", hm[0], hm[1], hm[2], hm[3], hm[4]);
+                                            let r = cyw43::fw_console_dump(&sh, 40);
+                                            kprint!("   [STALL-DIAG] fw console: {:?} (lines, buf size, idx)\n", r);
                                         }
-                                        // Experiment: the brcmfmac wake path (KSO + HT request). Both steps act only if
-                                        // the bit is CLEAR, so on a healthy clock this is a no-op. If the next beat logs
-                                        // "credit RECOVERED", the stall was the bus clock.
-                                        let after = cyw43::bus_wake();
-                                        let bc2 = cyw43::bus_clock_state();
-                                        kprint!("   [STALL-DIAG] bus wake -> CHIPCLKCSR={:#04x} SLEEPCSR={:#04x} (watch for 'credit RECOVERED')\n", after, bc2[1]);
+                                        None => kprint!("   [STALL-DIAG] fw sdpcm_shared NOT readable\n"),
                                     }
-                                } else {
-                                    if credit0_since != 0 && !stall_diag_done && unstick_stage > 0 {
-                                        unstick[unstick_stage as usize + 1] += 1;
-                                        kprint!(" [UNSTICK] credit back {} ms after stage {} ({})\n", t.wrapping_sub(credit0_since) * 1000 / freq,
-                                            unstick_stage, if unstick_stage == 1 { "A: DEV_INT" } else { "B: control frame" });
-                                    } else if credit0_since != 0 && !stall_diag_done && t.wrapping_sub(credit0_since) > freq / 4 {
-                                        unstick[1] += 1;
-                                    }
-                                    unstick_stage = 0;
-                                                                        if stall_diag_done && credit0_since != 0 {
-                                        kprint!(" [STALL-DIAG] credit RECOVERED after {} ms\n", t.wrapping_sub(credit0_since) * 1000 / freq);
-                                    }
-                                    credit0_since = 0;
-                                    stall_diag_done = false;
+                                    // Experiment: the brcmfmac wake path (KSO + HT request). Both steps act only if
+                                    // the bit is CLEAR, so on a healthy clock this is a no-op. If the next beat logs
+                                    // "credit RECOVERED", the stall was the bus clock.
+                                    let after = cyw43::bus_wake();
+                                    let bc2 = cyw43::bus_clock_state();
+                                    kprint!("   [STALL-DIAG] bus wake -> CHIPCLKCSR={:#04x} SLEEPCSR={:#04x} (watch for 'credit RECOVERED')\n", after, bc2[1]);
+                                } else if let apcore::CreditEv::Unstuck { ms, stage } = cev {
+                                    kprint!(" [UNSTICK] credit back {} ms after stage {} ({})\n", ms, stage, if stage == 1 { "A: DEV_INT" } else { "B: control frame" });
+                                } else if let apcore::CreditEv::Recovered { ms } = cev {
+                                    kprint!(" [STALL-DIAG] credit RECOVERED after {} ms\n", ms);
                                 }
                             }
                             // A pending queue forces a read: the credit update arrives as a frame.
@@ -4954,15 +4929,9 @@ fn cm5_p10_probe() {
                                             let ntp_ours = wanntp::is_ours(&wbuf[..n], up.dhcp.yiaddr);
                                             #[cfg(not(feature = "mcserve"))]
                                             let ntp_ours = false;
-                                            let probe_seq = wanhealth::probe_reply(&wbuf[..n], up.dhcp.yiaddr);
-                                            if let Some(seq) = probe_seq {
-                                                if let Some((want, internet)) = wh_out.filter(|w| w.0 == seq) {
-                                                    let _ = want;
-                                                    let rtt = (now().wrapping_sub(wh_sent_at) / (freq / 1000).max(1)).min(u16::MAX as u64) as u16;
-                                                    if let Some(st) = whealth.report(internet, true, rtt) {
-                                                        kprint!(" [WAN-HEALTH] {} (internet probe answered, rtt {} ms)\n", st.name(), rtt);
-                                                    }
-                                                    wh_out = None;
+                                            if apcore::WanProbe::is_reply(&wbuf[..n], up.dhcp.yiaddr) {
+                                                if let Some((Some(st), internet, rtt)) = whprobe.on_frame(&wbuf[..n], up.dhcp.yiaddr, &mut whealth, now(), freq) {
+                                                    kprint!(" [WAN-HEALTH] {} ({} probe answered, rtt {} ms)\n", st.name(), if internet { "internet" } else { "gateway" }, rtt);
                                                 }
                                             } else if ntp_ours {
                                                 // Parity G11: our SNTP answer (validated: server asked, port 123, our nonce).
@@ -5175,15 +5144,8 @@ fn cm5_p10_probe() {
                                     // Stall detector: deliveries waiting for credit AND no WiFi frame read in
                                     // 10 s while a station is associated = the SDPCM stream is wedged (metal
                                     // 2026-10-09: frozen counters, 29 frames pending). Say so, loudly, once.
-                                    if wq_n + pq_n > 0 && wifi_frames == stall_frames && t.wrapping_sub(stall_since) > 10 * freq {
-                                        if !stall_reported {
-                                            kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged (wifiheal escalates)\n", wq_n, wifi_frames);
-                                            stall_reported = true;
-                                        }
-                                    } else if wifi_frames != stall_frames {
-                                        stall_frames = wifi_frames;
-                                        stall_since = t;
-                                        stall_reported = false;
+                                    if wedge.step(t, freq, wq_n + pq_n, wifi_frames) {
+                                        kprint!(" [P11-AP3] WIFI STALL — {} deliveries waiting for TX credit and no frame read for 10 s (wifi_frames={}): SDPCM stream wedged (wifiheal escalates)\n", wq_n, wifi_frames);
                                     }
                                     // Phase 3g: drain the detection ring when a quarter full or every 250 ms (was: only in the
                                     // 5-s heartbeat — a burst from many sources overran the 64-slot ring and lost evidence).
@@ -5295,7 +5257,7 @@ fn cm5_p10_probe() {
                                                 kprint!("   [P11-AP3 defer] station frames read by control requests: parked={} delivered={} ring-full={}\n", d[0], d[1], d[2]);
                                             }
                                             kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(unused)={} after_kick(ctl)={} reached_2s={}\n",
-                                                unstick[0], unstick[1], unstick[2], unstick[3], unstick[4]);
+                                                credit.unstick[0], credit.unstick[1], credit.unstick[2], credit.unstick[3], credit.unstick[4]);
                                             {
                                                 // Profiler since the last beat: count / total ms / max us per slot, and % of wall time.
                                                 let p = unsafe { &mut *core::ptr::addr_of_mut!(cyw43::PROF) };
@@ -5417,20 +5379,12 @@ fn cm5_p10_probe() {
                                         ratelimit::set_local_ip(2, unsafe { uplink::MGMT }.map_or(0, |m| u32::from_be_bytes(m.ip)));
                                         actions::tick((now().wrapping_sub(mc_t0_any) / (freq / 1000).max(1)) as u64); // ADR 0053 expiry
                                         // Parity G16: the previous probe unanswered = a failure; then send the next one.
-                                        if let Some((_, internet)) = wh_out.take() {
-                                            if let Some(st) = whealth.report(internet, false, 0) {
+                                        {
+                                            let wv = apcore::WanView { ip: up.dhcp.yiaddr, mac: up.mac, gw_mac: up.gw_mac, dns: up.dhcp.dns };
+                                            let mut tx = |f: &[u8]| uplink::wan_tx(&up, f);
+                                            if let Some((st, internet)) = whprobe.beat(&mut whealth, up.usable(), &wv, up.dhcp.router, now(), &mut tx) {
                                                 kprint!(" [WAN-HEALTH] {} ({} probe unanswered)\n", st.name(), if internet { "internet" } else { "gateway" });
                                             }
-                                        }
-                                        if up.usable() && up.gw_mac != [0u8; 6] {
-                                            let (dst, internet) = wanhealth::WanHealth::target(wh_slot, up.dhcp.router);
-                                            let mut pf = [0u8; 64];
-                                            let k = wanhealth::echo_request(&mut pf, &up.mac, &up.gw_mac, up.dhcp.yiaddr, dst, wh_slot as u16);
-                                            if uplink::wan_tx(&up, &pf[..k]) {
-                                                wh_out = Some((wh_slot as u16, internet));
-                                                wh_sent_at = now();
-                                            }
-                                            wh_slot = wh_slot.wrapping_add(1);
                                         }
                                         {
                                             let (wa, wp, wg, wr) = rtwdog::stats(freq);
@@ -7446,6 +7400,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = apcore::selftest();
         #[cfg(feature = "netsvc")]
         let _ = apcore::siem_selftest(); // G0 step 5b
+        let _ = apcore::timers_selftest(); // G0 step 5c
         let _ = apcore::mgmt_selftest(); // G0 step 4
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
