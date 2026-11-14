@@ -1600,7 +1600,8 @@ pub fn wan_selftest() -> bool {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WedgeWatch {
     frames: u64,
-    since: u64,
+    /// None until the first step: the 10 s window starts then, never at the counter's zero (review 2026-11-14).
+    since: Option<u64>,
     reported: bool,
 }
 
@@ -1608,14 +1609,18 @@ impl WedgeWatch {
     /// One loop iteration. True once per episode (the loop logs it; wifiheal does the escalation). A frame read
     /// re-arms it.
     pub fn step(&mut self, now: u64, freq: u64, queued: usize, wifi_frames: u64) -> bool {
-        if queued > 0 && wifi_frames == self.frames && now.wrapping_sub(self.since) > 10 * freq {
+        let Some(since) = self.since else {
+            (self.frames, self.since) = (wifi_frames, Some(now));
+            return false;
+        };
+        if queued > 0 && wifi_frames == self.frames && now.wrapping_sub(since) > 10 * freq {
             if !self.reported {
                 self.reported = true;
                 return true;
             }
         } else if wifi_frames != self.frames {
             self.frames = wifi_frames;
-            self.since = now;
+            self.since = Some(now);
             self.reported = false;
         }
         false
@@ -1638,7 +1643,8 @@ pub enum CreditEv {
 /// `unstick` = [episodes kicked, recovered by itself (> 250 ms), after stage 1 (DEV_INT, unused), after the kick, reached 2 s].
 #[derive(Clone, Copy, Debug, Default)]
 pub struct CreditEpisode {
-    since: u64,
+    /// Some(start tick) while an episode is open (review 2026-11-14: 0 was ambiguous as "none").
+    since: Option<u64>,
     diag_done: bool,
     stage: u8,
     pub unstick: [u32; 5],
@@ -1649,34 +1655,37 @@ impl CreditEpisode {
     /// issued its Kick this iteration.
     pub fn step(&mut self, t: u64, freq: u64, credit_low: bool, queued: bool, kicked: bool) -> CreditEv {
         if credit_low && queued {
-            if self.since == 0 {
-                self.since = t;
+            let Some(since) = self.since else {
+                self.since = Some(t);
                 self.stage = 0;
-            } else if kicked {
+                return CreditEv::None;
+            };
+            if kicked {
                 if self.stage == 0 {
                     self.unstick[0] += 1;
                     self.stage = 2;
                 }
-            } else if !self.diag_done && t.wrapping_sub(self.since) > 2 * freq {
+            } else if !self.diag_done && t.wrapping_sub(since) > 2 * freq {
                 self.unstick[4] += 1;
                 self.diag_done = true;
                 return CreditEv::Snapshot;
             }
             return CreditEv::None;
         }
-        let ms = t.wrapping_sub(self.since) * 1000 / freq.max(1);
         let mut ev = CreditEv::None;
-        if self.since != 0 && !self.diag_done && self.stage > 0 {
-            self.unstick[self.stage as usize + 1] += 1;
-            ev = CreditEv::Unstuck { ms, stage: self.stage };
-        } else if self.since != 0 && !self.diag_done && t.wrapping_sub(self.since) > freq / 4 {
-            self.unstick[1] += 1;
+        if let Some(since) = self.since {
+            let ms = t.wrapping_sub(since) * 1000 / freq.max(1);
+            if self.diag_done {
+                ev = CreditEv::Recovered { ms };
+            } else if self.stage > 0 {
+                self.unstick[self.stage as usize + 1] += 1;
+                ev = CreditEv::Unstuck { ms, stage: self.stage };
+            } else if t.wrapping_sub(since) > freq / 4 {
+                self.unstick[1] += 1;
+            }
         }
         self.stage = 0;
-        if self.diag_done && self.since != 0 {
-            ev = CreditEv::Recovered { ms };
-        }
-        self.since = 0;
+        self.since = None;
         self.diag_done = false;
         ev
     }
@@ -1687,8 +1696,20 @@ impl CreditEpisode {
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WanProbe {
     slot: u32,
-    out: Option<(u16, bool)>,
+    /// The outstanding probe: (seq, target address, internet anchor?).
+    out: Option<(u16, [u8; 4], bool)>,
     sent_at: u64,
+}
+
+/// What a WAN frame was to the prober.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ProbeRx {
+    /// Not an echo reply to our probe id: the loop handles the frame.
+    NotOurs,
+    /// Our probe id but not the outstanding probe (stale, duplicate, or not from the address probed): consumed, ignored.
+    Stale,
+    /// The outstanding probe's answer: (state change, internet anchor?, rtt ms).
+    Answered(Option<crate::wanhealth::State>, bool, u16),
 }
 
 impl WanProbe {
@@ -1697,36 +1718,33 @@ impl WanProbe {
     pub fn beat(&mut self, wh: &mut crate::wanhealth::WanHealth, usable: bool, wan: &WanView, gw_ip: [u8; 4], now: u64,
         tx: &mut dyn FnMut(&[u8]) -> bool) -> Option<(crate::wanhealth::State, bool)> {
         let mut change = None;
-        if let Some((_, internet)) = self.out.take() {
+        if let Some((_, _, internet)) = self.out.take() {
             change = wh.report(internet, false, 0).map(|s| (s, internet));
         }
         if usable && wan.gw_mac != [0u8; 6] {
             let (dst, internet) = crate::wanhealth::WanHealth::target(self.slot, gw_ip);
             let mut pf = [0u8; 64];
             let k = crate::wanhealth::echo_request(&mut pf, &wan.mac, &wan.gw_mac, wan.ip, dst, self.slot as u16);
+            // A failed send keeps the slot: the same target is tried next beat (review 2026-11-14 — advancing let
+            // alternate TX failures starve the gateway probe).
             if tx(&pf[..k]) {
-                self.out = Some((self.slot as u16, internet));
+                self.out = Some((self.slot as u16, dst, internet));
                 self.sent_at = now;
+                self.slot = self.slot.wrapping_add(1);
             }
-            self.slot = self.slot.wrapping_add(1);
         }
         change
     }
 
-    /// A WAN frame: if it answers the outstanding probe, report it. Returns `Some((state change, internet, rtt ms))`
-    /// when it was our probe's reply (whether or not the state changed), None otherwise.
-    pub fn on_frame(&mut self, f: &[u8], wan_ip: [u8; 4], wh: &mut crate::wanhealth::WanHealth, now: u64, freq: u64)
-        -> Option<(Option<crate::wanhealth::State>, bool, u16)> {
-        let seq = crate::wanhealth::probe_reply(f, wan_ip)?;
-        let (_, internet) = self.out.filter(|w| w.0 == seq)?;
+    /// A WAN frame. Parsed once: not ours, a stale / foreign answer (consumed), or the outstanding probe's reply —
+    /// matched by seq AND by source = the address probed (review 2026-11-14: a reply from anyone else, e.g. a spoofed
+    /// echo reply with the predictable seq, must not mark a dead anchor alive).
+    pub fn on_frame(&mut self, f: &[u8], wan_ip: [u8; 4], wh: &mut crate::wanhealth::WanHealth, now: u64, freq: u64) -> ProbeRx {
+        let Some(seq) = crate::wanhealth::probe_reply(f, wan_ip) else { return ProbeRx::NotOurs };
+        let Some((_, _, internet)) = self.out.filter(|w| w.0 == seq && f.get(26..30) == Some(&w.1[..])) else { return ProbeRx::Stale };
         let rtt = (now.wrapping_sub(self.sent_at) / (freq / 1000).max(1)).min(u16::MAX as u64) as u16;
         self.out = None;
-        Some((wh.report(internet, true, rtt), internet, rtt))
-    }
-
-    /// Whether a frame is a probe reply at all (answered or stale); the loop consumes those.
-    pub fn is_reply(f: &[u8], wan_ip: [u8; 4]) -> bool {
-        crate::wanhealth::probe_reply(f, wan_ip).is_some()
+        ProbeRx::Answered(wh.report(internet, true, rtt), internet, rtt)
     }
 }
 
@@ -1738,7 +1756,9 @@ pub fn timers_selftest() -> bool {
     let w1 = !w.step(100, f, 3, 5) && !w.step(5_000, f, 3, 5) && w.step(10_200, f, 3, 5) && !w.step(11_000, f, 3, 5);
     let w2 = !w.step(12_000, f, 3, 6) && !w.step(21_900, f, 3, 6) && w.step(22_100, f, 3, 6);
     let w3 = { let mut e = WedgeWatch::default(); !e.step(100, f, 0, 5) && !e.step(60_000, f, 0, 5) };
-    let wedge = w1 && w2 && w3;
+    // the window starts at the first step, not at tick 0: queued + no frame yet at t = 50 s is not a wedge until 60 s
+    let w4 = { let mut e = WedgeWatch::default(); !e.step(50_000, f, 3, 0) && !e.step(59_000, f, 3, 0) && e.step(60_100, f, 3, 0) };
+    let wedge = w1 && w2 && w3 && w4;
     // the credit episode
     let mut c = CreditEpisode::default();
     let c1 = c.step(1_000, f, true, true, false) == CreditEv::None && c.step(3_100, f, true, true, false) == CreditEv::Snapshot
@@ -1748,7 +1768,10 @@ pub fn timers_selftest() -> bool {
         && c.unstick[0] == 1 && c.step(5_300, f, true, false, false) == CreditEv::Unstuck { ms: 300, stage: 2 } && c.unstick[3] == 1;
     let c3 = c.step(6_000, f, true, true, false) == CreditEv::None && c.step(6_400, f, false, true, false) == CreditEv::None && c.unstick[1] == 1
         && c.step(7_000, f, true, true, false) == CreditEv::None && c.step(7_100, f, false, true, false) == CreditEv::None && c.unstick[1] == 1;
-    let credit = c1 && c2 && c3;
+    // an episode starting at tick 0 is still an episode (0 is not "none")
+    let c4 = { let mut e = CreditEpisode::default(); e.step(0, f, true, true, false) == CreditEv::None
+        && e.step(2_100, f, true, true, false) == CreditEv::Snapshot };
+    let credit = c1 && c2 && c3 && c4;
     // WAN-health probes: gateway then anchor, reply matched by seq and timed, an unanswered probe fails at the next beat
     let wan = WanView { ip: [100, 64, 7, 9], mac: [0x02, 0x77, 0, 0, 0, 0x09], gw_mac: [0x02, 0x77, 0, 0, 0, 0x01], dns: [1, 1, 1, 1] };
     let gw = [100, 64, 7, 1];
@@ -1770,9 +1793,12 @@ pub fn timers_selftest() -> bool {
     reply[30..34].copy_from_slice(&wan.ip);
     let mut stale = reply;
     stale[41] ^= 1; // another seq
-    let p2 = p.on_frame(&stale, wan.ip, &mut wh, 10_040, f).is_none() && WanProbe::is_reply(&stale, wan.ip);
-    let p3 = matches!(p.on_frame(&reply, wan.ip, &mut wh, 10_040, f), Some((_, false, 40))) && wh.probes == 1;
-    let p4 = p.on_frame(&reply, wan.ip, &mut wh, 10_050, f).is_none() && wh.probes == 1; // answered once only
+    let mut spoof = reply;
+    spoof[26..30].copy_from_slice(&[203, 0, 113, 7]); // right seq, wrong source
+    let p2 = p.on_frame(&stale, wan.ip, &mut wh, 10_040, f) == ProbeRx::Stale && p.on_frame(&spoof, wan.ip, &mut wh, 10_040, f) == ProbeRx::Stale
+        && p.on_frame(&[0u8; 60], wan.ip, &mut wh, 10_040, f) == ProbeRx::NotOurs;
+    let p3 = matches!(p.on_frame(&reply, wan.ip, &mut wh, 10_040, f), ProbeRx::Answered(_, false, 40)) && wh.probes == 1;
+    let p4 = p.on_frame(&reply, wan.ip, &mut wh, 10_050, f) == ProbeRx::Stale && wh.probes == 1; // answered once only
     let _ = beat!(true, &wan, 15_000);
     let to_anchor = last[30..34] == crate::wanhealth::ANCHORS[0];
     let _ = beat!(false, &wan, 20_000); // unanswered -> a failure; not usable -> nothing sent
@@ -1780,10 +1806,15 @@ pub fn timers_selftest() -> bool {
     let nogw = WanView { gw_mac: [0; 6], ..wan };
     let _ = beat!(true, &nogw, 25_000);
     let p6 = sent == 2 && wh.probes == 2; // no gateway MAC: nothing sent, nothing outstanding to fail
-    let probe = p1 && to_gw && p2 && p3 && p4 && to_anchor && p5 && p6;
+    // a failed send keeps the slot: the next beat retries the same target (slot 2 = the gateway)
+    let mut fail = |_: &[u8]| false;
+    let _ = p.beat(&mut wh, true, &wan, gw, 30_000, &mut fail); // slot 2 (gateway) fails
+    let _ = beat!(true, &wan, 35_000);
+    let retried = last[30..34] == gw && sent == 3;
+    let probe = p1 && to_gw && p2 && p3 && p4 && to_anchor && p5 && p6 && retried;
     let pass = wedge && credit && probe;
     arch_aarch64::_print(format_args!(
-        " [P-apcore-timers] {} — G0 step 5c: the Wi-Fi wedge detector fires once per 10 s episode, re-armed by a frame read, never with nothing queued={} the TX-credit episode (snapshot at 2 s, recovered, kick -> unstuck, self-recovery counted, a < 250 ms blip not)={} WAN-health probes (gateway first, reply matched by seq + timed 40 ms, stale/duplicate ignored, anchor next, unanswered = failure at the next beat, nothing sent without a lease or gateway MAC)={}\n",
+        " [P-apcore-timers] {} — G0 step 5c: the Wi-Fi wedge detector fires once per 10 s episode, re-armed by a frame read, never with nothing queued, window from the first step not tick 0={} the TX-credit episode (snapshot at 2 s, recovered, kick -> unstuck, self-recovery counted, a < 250 ms blip not, an episode at tick 0)={} WAN-health probes (gateway first, reply matched by seq + source + timed 40 ms, stale/duplicate/spoofed source ignored, a failed send retries the same target, anchor next, unanswered = failure at the next beat, nothing sent without a lease or gateway MAC)={}\n",
         if pass { "PASS" } else { "FAIL" }, wedge, credit, probe
     ));
     pass
