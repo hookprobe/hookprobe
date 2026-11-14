@@ -5073,18 +5073,18 @@ fn cm5_p10_probe() {
                                         // (Re)number the LAN when the WAN has a delegated prefix (also after a WAN re-dial).
                                         let v6 = unsafe { &mut *core::ptr::addr_of_mut!(V6) };
                                         let w6 = unsafe { uplink::WAN6 };
-                                        // L-01b: the prefix is gone (not renewed, or the WAN is down) — tell the clients once
-                                        // (zero lifetimes), then stop advertising
-                                        if v6.up && (w6.pd.is_none() || !up.usable()) {
+                                        // G0 step 5a: apcore::v6_lan_step decides (L-01b withdraw, ISP renumbering, first numbering)
+                                        let step = apcore::v6_lan_step(v6.up, &v6.prefix, w6.pd.as_ref().map(|d| &d.0), up.usable());
+                                        if matches!(step, apcore::V6Step::Withdraw { .. } | apcore::V6Step::Renumber) {
                                             let k = v6.withdraw(&[0x33, 0x33, 0, 0, 0, 1], &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], &mut v6buf);
                                             if k > 0 {
                                                 let _ = wifi_send!(&v6buf[..k]);
                                             }
-                                            kprint!(" [V6LAN] delegated prefix {} — final RA with zero lifetimes sent, LAN stops advertising it\n",
-                                                if w6.pd.is_none() { "expired / withdrawn" } else { "unusable (WAN down)" });
+                                            kprint!(" [V6LAN] delegated prefix {} — final RA with zero lifetimes sent for the old prefix\n",
+                                                match step { apcore::V6Step::Renumber => "renumbered by the ISP", apcore::V6Step::Withdraw { expired: true } => "expired / withdrawn", _ => "unusable (WAN down)" });
                                         }
-                                        if let Some((pd, plen, valid)) = w6.pd {
-                                            if up.usable() && (!v6.up || v6.prefix[..8] != pd[..8]) {
+                                        if let (apcore::V6Step::Configure | apcore::V6Step::Renumber, Some((pd, plen, valid))) = (step, w6.pd) {
+                                            {
                                                 // G17.2: the LAN MTU follows the WAN — 1492 inside PPPoE, else the router's RA MTU
                                                 // (bounded 1280..1500) or 1500.
                                                 v6.mtu = if up.mode == 2 { arch_aarch64::ip6lan::LAN_MTU } else {
@@ -5174,16 +5174,7 @@ fn cm5_p10_probe() {
                                                 if e.verdict != 2 {
                                                     continue;
                                                 }
-                                                let mut placed = false;
-                                                for slot in rule_drops.iter_mut() {
-                                                    if slot.0 == e.rule_id || slot.1 == 0 {
-                                                        slot.0 = e.rule_id;
-                                                        slot.1 += 1;
-                                                        placed = true;
-                                                        break;
-                                                    }
-                                                }
-                                                let _ = placed;
+                                                let _ = apcore::note_rule_drop(&mut rule_drops, e.rule_id); // G0 step 5a
                                             }
                                         }
                                     }
@@ -7403,6 +7394,7 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(feature = "netsvc")]
         let _ = apcore::siem_selftest(); // G0 step 5b
         let _ = apcore::timers_selftest(); // G0 step 5c
+        let _ = apcore::tick_selftest(); // G0 step 5a
         let _ = apcore::mgmt_selftest(); // G0 step 4
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
@@ -15539,6 +15531,21 @@ fn ip6_selftest() {
         let snm: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, v.ll[13], v.ll[14], v.ll[15]];
         let n = frame6(&mut f, &cmac, &[0x33, 0x33, 0xff, v.ll[13], v.ll[14], v.ll[15]], &cll, &snm, 58, 255, &ns);
         let na_ok = matches!(v.on_lan(&f[..n], 20, &mut out), LanAction::Reply(k) if out[54] == 136 && out[58] & 0x40 != 0 && out[62..78] == v.ll && k == 86);
+        // ping6 to the router (link-local and global): Echo Reply with the same id / seq / data and a valid checksum;
+        // an echo to the all-nodes multicast is not answered (no amplification)
+        let echo_req = [128u8, 0, 0, 0, 0x12, 0x34, 0, 7, b'h', b'e', b'q', b'k'];
+        let gdst = v.gua;
+        let n = frame6(&mut f, &cmac, &apmac, &cll, &gdst, 58, 64, &echo_req);
+        let e0 = v.stats.echo_tx;
+        let echo_g = matches!(v.on_lan(&f[..n], 21, &mut out), LanAction::Reply(k)
+            if k == 54 + 12 && out[0..6] == cmac && out[54] == 129 && out[58..66] == echo_req[4..12] && out[22..38] == gdst && out[38..54] == cll
+               && l4_csum(&gdst, &cll, 58, &out[54..k]) == 0);
+        let lldst = v.ll;
+        let n = frame6(&mut f, &cmac, &apmac, &cll, &lldst, 58, 64, &echo_req);
+        let echo_ll = matches!(v.on_lan(&f[..n], 22, &mut out), LanAction::Reply(_)) && v.stats.echo_tx == e0 + 2;
+        let n = frame6(&mut f, &cmac, &[0x33, 0x33, 0, 0, 0, 1], &cll, &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], 58, 64, &echo_req);
+        let echo_mc = matches!(v.on_lan(&f[..n], 23, &mut out), LanAction::Drop) && v.stats.echo_tx == e0 + 2;
+        let na_ok = na_ok && echo_g && echo_ll && echo_mc;
         // Outbound TCP SYN 443 from the client's global address -> Forward, hop 64 -> 63
         let mut tcp = [0u8; 20];
         tcp[0..2].copy_from_slice(&50000u16.to_be_bytes());
@@ -15672,7 +15679,7 @@ fn ip6_selftest() {
         r
     };
     let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok && renew_ok;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings + a lost delegation is withdrawn with zero lifetimes (L-01b)={}\n",
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA (+ ping6 to the router answered, not to multicast), SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings + a lost delegation is withdrawn with zero lifetimes (L-01b)={}\n",
         if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, renew_ok, lan_ok);
 }
 

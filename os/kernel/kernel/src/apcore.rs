@@ -705,6 +705,67 @@ pub fn siem_selftest() -> bool {
     pass
 }
 
+/// G0 step 5a: the LAN IPv6 lifecycle, decided once per loop from the WAN's delegation and usability.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum V6Step {
+    /// Nothing to change.
+    Keep,
+    /// Number the LAN from the delegation (first time, or after a withdrawal).
+    Configure,
+    /// The delegation now names ANOTHER prefix (ISP renumbering): withdraw the old one with a zero-lifetime RA, then
+    /// configure the new one — clients must not keep the dead prefix preferred (RFC 7084 L-13).
+    Renumber,
+    /// The prefix is gone (`expired` = not renewed / withdrawn; else the WAN is down): one zero-lifetime RA, then stop.
+    Withdraw { expired: bool },
+}
+
+/// `lan_up` / `lan_prefix` = what the LAN advertises now; `pd` = the WAN's delegated prefix (first 8 bytes), if any.
+pub fn v6_lan_step(lan_up: bool, lan_prefix: &[u8; 16], pd: Option<&[u8; 16]>, wan_usable: bool) -> V6Step {
+    match (lan_up, pd, wan_usable) {
+        (true, None, _) => V6Step::Withdraw { expired: true },
+        (true, Some(_), false) => V6Step::Withdraw { expired: false },
+        (true, Some(p), true) if p[..8] != lan_prefix[..8] => V6Step::Renumber,
+        (false, Some(_), true) => V6Step::Configure,
+        _ => V6Step::Keep,
+    }
+}
+
+/// G0 step 5a: count one wire DROP of `rule` in the beat's small per-rule table (first free or matching slot; a full
+/// table of other rules leaves it uncounted — the table is a diagnostic, never a limit).
+pub fn note_rule_drop(t: &mut [(u16, u32)], rule: u16) -> bool {
+    match t.iter_mut().find(|s| s.0 == rule || s.1 == 0) {
+        Some(s) => {
+            s.0 = rule;
+            s.1 += 1;
+            true
+        }
+        None => false,
+    }
+}
+
+/// `[P-apcore-tick]` — step 5a.
+pub fn tick_selftest() -> bool {
+    let a = [0x20u8, 0x01, 0x0d, 0xb8, 0xaa, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let b = [0x20u8, 0x01, 0x0d, 0xb8, 0xbb, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
+    let z = [0u8; 16];
+    let first = v6_lan_step(false, &z, Some(&a), true) == V6Step::Configure;
+    let wait_wan = v6_lan_step(false, &z, Some(&a), false) == V6Step::Keep;
+    let none = v6_lan_step(false, &z, None, true) == V6Step::Keep;
+    let steady = v6_lan_step(true, &a, Some(&a), true) == V6Step::Keep;
+    let lapsed = v6_lan_step(true, &a, None, true) == V6Step::Withdraw { expired: true };
+    let wan_down = v6_lan_step(true, &a, Some(&a), false) == V6Step::Withdraw { expired: false };
+    let renumber = v6_lan_step(true, &a, Some(&b), true) == V6Step::Renumber;
+    let mut t = [(0u16, 0u32); 3];
+    let counted = note_rule_drop(&mut t, 4) && note_rule_drop(&mut t, 4) && note_rule_drop(&mut t, 9) && note_rule_drop(&mut t, 12)
+        && !note_rule_drop(&mut t, 13) && t == [(4, 2), (9, 1), (12, 1)];
+    let pass = first && wait_wan && none && steady && lapsed && wan_down && renumber && counted;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-tick] {} — G0 step 5a: LAN IPv6 lifecycle — first delegation configures={} waits for a usable WAN={} no delegation, nothing={} steady keeps={} lapsed delegation withdraws (zero lifetimes)={} WAN down withdraws={} ISP renumbering withdraws the old prefix then configures the new={} | per-rule drop table counts, a full table leaves others uncounted={}\n",
+        if pass { "PASS" } else { "FAIL" }, first, wait_wan, none, steady, lapsed, wan_down, renumber, counted
+    ));
+    pass
+}
+
 /// G0 step 4: where one frame received on the management sub-interface goes (after `mgmt_poll` answered ARP / ping).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MgmtOut {
