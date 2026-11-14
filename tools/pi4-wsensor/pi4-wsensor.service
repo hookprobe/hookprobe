@@ -1,0 +1,31 @@
+[Unit]
+Description=Pi 4 wireless sensor (receive-only 802.11 monitor, time-shared dongle)
+Documentation=file:///opt/pi4-wsensor/README.md
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/opt/pi4-wsensor/wsensor-supervisor.sh
+# ExecStop is the SIGTERM trap: stops dumpcap and releases the dongle (verified restore)
+KillMode=mixed
+TimeoutStopSec=45
+Restart=on-failure
+RestartSec=15
+Nice=5
+# root is needed for iw/ip/nmcli on the dongle; everything else is fenced off
+NoNewPrivileges=no
+ProtectSystem=strict
+ReadWritePaths=/var/lib/pi4-wsensor /run/lock
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelModules=yes
+ProtectKernelTunables=no
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryMax=512M
+CPUQuota=150%
+
+[Install]
+WantedBy=multi-user.target
