@@ -176,7 +176,7 @@ const ObserveApp: Component = () => {
         <p class="l0-label">Packets</p>
         <span class="gate gate--off">
           <span class="gate-body" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true"><button class="hp-btn">Download pcap</button></span>
-          <span class="gate-reason" role="note">This device does not keep packet captures. Send events to your own system from Timeline &amp; Export to keep them longer.</span>
+          <span class="gate-reason" role="note">{sample() ? 'Preview: no device is answering, so there is no capture to download.' : 'This device does not keep packet captures.'} Send events to your own system from Timeline &amp; Export to keep them longer.</span>
         </span>
       </Drawer>
     </AppShell>
