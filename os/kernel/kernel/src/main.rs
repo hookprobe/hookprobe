@@ -3909,6 +3909,8 @@ fn cm5_p10_probe() {
                                 #[cfg(feature = "mctls")]
                                 crate::tlshost::bring_up(Some(&dev));
                                 crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
+                                #[cfg(feature = "mctls")]
+                                let _ = crate::el0srv::keyer::install(); // ADR 0065 step 3b: the WPA 4-way + its keys in el0-wifi
                                 let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal (incl. the 2A PMK-wipe check)
                                 // Image budget (2026-11-12): [P-lansvc-sae] and the hsh self-test run on QEMU / mc-e2e only
                                 // (mcserve.rs); on metal the SAE path is proven by real stations (cm5-wpa3-check) and the
@@ -5395,6 +5397,11 @@ fn cm5_p10_probe() {
                                         {
                                             let (wa, wp, wg, wr) = rtwdog::stats(freq);
                                             kprint!("   [WDOG] armed={} pets={} worst_loop_gap_ms={} prev_reset_was_watchdog={}\n", wa, wp, wg, wr);
+                                            #[cfg(feature = "mctls")]
+                                            {
+                                                let (c, f, r, h) = crate::el0srv::keyer::stats();
+                                                kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={}\n", c, f, r, h);
+                                            }
                                             let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
                                             kprint!("   [WAN renew] in-loop DHCP renewal: requests={} acks={} naks={} (full re-bring-ups counted in renewals=)\n", rq, ra, rn);
                                             kprint!("   [EVENTS] detection ring overruns={} (evidence lost before the drain; should stay 0)\n", events::overruns());
