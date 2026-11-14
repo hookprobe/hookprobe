@@ -9,7 +9,7 @@
 # `cargo build` on it in a clean env and embeds the resulting ELF (no committed binary).
 [package]
 name = "el0-wasmhost"
-version = "0.1.0"
+version = "0.0.26"
 license = "AGPL-3.0-only"
 edition = "2021"
 publish = false  # first-party: never published to crates.io (ADR 0063 G4)
