@@ -1041,12 +1041,14 @@ pub fn write_head_ka(resp: &Response, out: &mut [u8], secure: bool, keep: bool) 
     // never be usable cross-origin.
     let _ = write!(w, "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nServer: heqk\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n",
         resp.status, reason(resp.status), resp.ctype);
-    // LAN assessment H-01 (2026-11-14). Every response: no Referer leaves the device; no cross-origin opener.
+    // LAN assessment H-01 (2026-11-14). Every response: no Referer leaves for another site (`same-origin`, NOT
+    // `no-referrer`: that makes Chrome send `Origin: null` on the device's own form POSTs, and the login / write CSRF
+    // guard then refuses them — CI g3 caught it); no cross-origin opener.
     // HTML documents: a CSP that keeps the UI same-origin (Astro islands hydrate from inline scripts, hence
     // 'unsafe-inline'; no eval, no plug-ins, no framing, no foreign fetch / form target) and no powerful APIs.
     // No HSTS on purpose: the certificate chains to the owner's LOCAL CA, and HSTS on heqk.local would turn a
     // browser that has not imported that CA into a hard, un-bypassable lock-out from the device's own UI.
-    w.raw("Referrer-Policy: no-referrer\r\nCross-Origin-Opener-Policy: same-origin\r\n");
+    w.raw("Referrer-Policy: same-origin\r\nCross-Origin-Opener-Policy: same-origin\r\n");
     if resp.ctype.starts_with("text/html") {
         w.raw(CSP_HTML);
     }
@@ -1475,7 +1477,7 @@ pub fn mc_selftest() -> bool {
         let hw = handle(&parse(b"GET /api/health HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &sw, &mut auth, 1, || Some([0; 16]), &mut scratch);
         let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3},\"lan_relay\":{\"arp_proxied\":"));
         // H-01: security headers; the worst-case head (HTML + Location + cookie + gzip + keep-alive) fits HEAD_MAX
-        let hdrs = has(&hh[..k], "Referrer-Policy: no-referrer\r\nCross-Origin-Opener-Policy: same-origin\r\n") && !has(&hh[..k], "Content-Security-Policy");
+        let hdrs = has(&hh[..k], "Referrer-Policy: same-origin\r\nCross-Origin-Opener-Policy: same-origin\r\n") && !has(&hh[..k], "Content-Security-Policy");
         let worst = Response { status: 303, ctype: "text/html; charset=utf-8", body: Body::StaticGz(LOGIN_HTML), location: Some("/setup/wifi/advanced/security?step=confirm&from=overview"), set_cookie: Some([b'f'; 32]) };
         let mut big = [0u8; HEAD_MAX];
         let w = write_head_ka(&worst, &mut big, true, true);
