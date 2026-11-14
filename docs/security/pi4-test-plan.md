@@ -18,7 +18,7 @@
 | **T-DFS100** | AP beaconing on DFS ch100 (weather) | — | — | ❌ same HW-DFS limitation as ch52 |
 | **T-SOAK** | ≥2 h capture soak | service on ch36 across heqk windows | drops bounded, stalls self-recover, yields clean, temp stable | ▶ running (expect bounces during heqk reboots) |
 | **T-LAN1** | CM5 mgmt exposure | `nmap -sT -T2` of 192.168.200.146 | only intended ports; TLS/HTTP posture; login throttle | ✅ 80+443 only (998 filtered); TLS1.3-only; auth-gated; login 429 after ~2 fails. **Full `-p-` sweep triggered A-03 (MC DoS) and was aborted** |
-| **A-03** | **MC DoS via port scan** (High) | pause/recovery + 3-source confirm | — | ✅ **reproduced**: `-sT` sweep wedges MC (:80 and :443) until reboot; stayed dead 3 min with scan paused. Root cause = heqk |
+| **A-03** | **MC DoS: one self-sourced packet** (High) | single-probe repro + serial | — | ✅ **root cause confirmed**: one AP-client request to the device's own mgmt IP (NATed to its WAN addr, routed back) wedges MC :80+:443 until reboot. Scan was a red herring. Fix in progress (heqk) |
 | **T-LAN2** | AP-side exposure + client isolation | from wlan0 client: mgmt not on AP; `ap_isolate` on; DNS :53 posture | MC absent on AP; cannot reach other stations | ⏸ after "DFS done" |
 | **T-LAN3** | RA/DHCP options handed to client | read RA prefix/route on wlan0 | matches L-01 (doc prefix, by design); L-01b no-PD→no-RA later | ⏸ later window |
 
