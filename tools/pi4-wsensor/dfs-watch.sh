@@ -11,6 +11,7 @@
 # Does NOT transmit. Acquires via the time-share lock; releases on exit.
 set -uo pipefail
 export PATH=$PATH:/usr/sbin:/sbin
+SUDO=sudo; [ "$(id -u)" = 0 ] && SUDO=""
 HERE=$(cd "$(dirname "$0")" && pwd)
 FREQ=${1:?freq}; CENTER=${2:?center}; LABEL=${3:?label}; MAX=${4:-120}
 BSSID=${5:-76:0d:02:f8:d2:da}   # CM5 AP HookProbe-Setup-R3Q1
@@ -22,8 +23,22 @@ trap cleanup EXIT
 
 "$HERE/dongle-lock.sh" acquire >/dev/null || { echo "cannot acquire dongle (lock held?)"; exit 3; }
 D=$(awk -F= '$1=="if"{print $2}' /run/lock/hp-dongle.monitor-state)
-iw dev "$D" set freq "$FREQ" 80 "$CENTER" || { echo "retune failed"; exit 4; }
-echo "watching $LABEL ($FREQ/80 center $CENTER) for BSSID $BSSID up to ${MAX}s on $D"
+# radar channels often refuse an 80 MHz set in monitor; beacons ride the primary 20 MHz, so fall back.
+# the set can also EPERM transiently right after the link comes up, so retry the 20 MHz set.
+sleep 1
+$SUDO iw dev "$D" set freq 5180 2>/dev/null || true   # non-DFS anchor: rtw88 refuses a cold jump to a DFS channel
+sleep 1; width=80
+if ! $SUDO iw dev "$D" set freq "$FREQ" 80 "$CENTER" 2>/dev/null; then
+  width=20
+  for try in 1 2 3 4 5 6; do
+    if $SUDO iw dev "$D" set freq "$FREQ" 2>/dev/null; then break; fi
+    [ "$try" = 6 ] && { echo "retune failed (80 and 20 MHz) on $FREQ after 6 tries"; exit 4; }
+    sleep 1
+  done
+  echo "note: 80 MHz refused on $LABEL (DFS); capturing primary 20 MHz on $FREQ"
+fi
+got=$(iw dev "$D" info | awk '/channel/{print $2}')
+echo "watching $LABEL ($FREQ/${width}, AP pinned 80 MHz centre $CENTER) BSSID $BSSID up to ${MAX}s on $D (tuned ch$got)"
 
 # live capture; count all on-channel beacons and the first from BSSID. frame.time_relative is
 # seconds since capture start, i.e. a lower bound on when the AP began beaconing here.
