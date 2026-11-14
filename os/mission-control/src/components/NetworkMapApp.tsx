@@ -899,7 +899,7 @@ const NetworkMapApp: Component = () => {
   return (
     <Show when={devicesStatus() === 'live'} fallback={
       <Show when={healthChecked() && !substrate()} fallback={
-        <AppShell path="/network/zones"><main class="l0-main"><p class="l0-muted" role="status">{fails() >= 2
+        <AppShell path="/network/zones"><main class="l0-main"><p class="l0-muted" role="status">{fails() >= 1
           ? 'Cannot read the device list from this device right now. Retrying every 10 s; nothing shown here is sample data.'
           : 'Loading devices from this device…'}</p></main></AppShell>
       }>

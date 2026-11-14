@@ -11,7 +11,7 @@
  * With no device answering, the wireframe's sample playbooks render under the Sample-data banner.
  */
 import { type Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
-import { substrate, qsecbit } from '../store/mock';
+import { substrate, qsecbit, qsecbitShown, qsecbitGauge } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { detections, startDetectLive } from '../store/detectLive';
 import { incidents, startInvestigateLive } from '../store/investigateLive';
@@ -66,7 +66,7 @@ const AutomateApp: Component = () => {
     { name: 'Contain', state: acting() ? 'active' : 'idle', auto: true, count: `${acting()} in force`, why: 'Only a confirmed scan, a malformed frame, an L1/L2 flood or resource exhaustion is acted on, and every action reverts on its own. A legitimate connection always passes.' },
     { name: 'Notify', state: hook()?.configured ? (hook()!.sent ? 'done' : 'idle') : 'idle', auto: true, count: hook()?.configured ? `${hook()!.sent} sent` : 'off', why: hook()?.configured ? `Alerts at or above ${SEVERITY[hook()!.min_severity ?? 2]} go to ${hook()!.target} (${hook()!.format}), at most ${hook()!.max_per_hour} an hour.` : 'No alert destination is set. Add one to get alerts on your phone or in your own system.' },
     { name: 'Recover', state: (actionsView()?.active.length ?? 0) ? 'active' : 'idle', auto: true, count: 'automatic', why: 'Every protective action has a time limit and ends by itself; nothing needs undoing by hand.' },
-    { name: 'Verify', state: 'done', auto: true, count: `QSecBit ${qsecbit()}`, why: 'The resilience score is recomputed continuously over the recent risk window.' },
+    { name: 'Verify', state: 'done', auto: true, count: `QSecBit ${qsecbitShown()}`, why: 'The resilience score is recomputed continuously over the recent risk window.' },
     { name: 'Close', state: openInc() ? 'waiting' : 'done', auto: false, count: `${openInc()} open`, why: 'Incidents stay open until you acknowledge them in Investigate.' },
   ]);
   const stages = () => (sample() ? SAMPLE_STAGES : liveStages());
