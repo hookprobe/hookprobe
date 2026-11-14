@@ -10,6 +10,7 @@
  */
 import { type Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import { substrate, deviceStats } from '../store/mock';
+import { CAMERA, SAMPLE_NOW } from '../store/sampleClock';
 import { healthChecked } from '../store/health';
 import { formatTime, formatBytes, severityLabel } from '../store/api';
 import { flows, devices, refetch as refetchObs } from '../store/obsLive';
@@ -27,11 +28,11 @@ type Sev = 'critical' | 'high' | 'medium' | 'low' | 'info';
 interface Ev { id: string; ts: number; src: Src; entity: string; sev: Sev; sum: string; facts: [string, string][]; href?: string }
 
 const BLOCKED = new Set(['blocked', 'blocked-cname', 'tcp53-refused']);
-const now = Math.floor(Date.now() / 1000);
+const now = SAMPLE_NOW;
 const SAMPLE: Ev[] = [
-  { id: 's1', ts: now - 60, src: 'Detections', entity: 'Kitchen camera', sev: 'high', sum: 'Device isolated by policy', facts: [['Action', 'Isolate 1 h'], ['Reason', 'Contacted a known C2 domain']] },
-  { id: 's2', ts: now - 62, src: 'Connections', entity: 'Kitchen camera', sev: 'high', sum: '6 connection attempts to LAN hosts', facts: [['Protocol', 'tcp'], ['Targets', '6 local devices']] },
-  { id: 's3', ts: now - 69, src: 'DNS', entity: 'Kitchen camera', sev: 'medium', sum: 'First-seen domain resolved', facts: [['Verdict', 'blocked']] },
+  { id: 's1', ts: CAMERA.isolated, src: 'Detections', entity: 'Kitchen camera', sev: 'high', sum: 'Device isolated by policy', facts: [['Action', 'Isolate 1 h'], ['Reason', 'Contacted a known C2 domain']] },
+  { id: 's2', ts: CAMERA.scan, src: 'Connections', entity: 'Kitchen camera', sev: 'high', sum: '6 connection attempts to LAN hosts', facts: [['Protocol', 'tcp'], ['Targets', '6 local devices']] },
+  { id: 's3', ts: CAMERA.dns, src: 'DNS', entity: 'Kitchen camera', sev: 'medium', sum: 'First-seen domain resolved', facts: [['Verdict', 'blocked']] },
   { id: 's4', ts: now - 230, src: 'TLS', entity: 'Alina MacBook', sev: 'info', sum: 'TLS 1.3 to cloud storage', facts: [['JA4', 't13d1516h2_8daaf6152771_02713d6af862']] },
   { id: 's5', ts: now - 376, src: 'DNS', entity: 'Smart TV', sev: 'low', sum: '38 tracker lookups blocked', facts: [] },
   { id: 's6', ts: now - 778, src: 'Devices', entity: 'Ana iPad', sev: 'info', sum: 'Joined the network', facts: [] },
