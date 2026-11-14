@@ -340,6 +340,91 @@ impl DfsWatch {
 pub const SDPCM_HDRLEN: usize = 12;
 /// SDPCM channel of a glom descriptor / superframe.
 pub const SDPCM_GLOM_CHANNEL: u8 = 3;
+/// One received SDPCM frame's header (4-B hardware tag + 8-B software header), decoded and checked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SdpcmHdr {
+    /// Frame length from the hardware tag (header included).
+    pub len: u16,
+    pub seq: u8,
+    pub chan: u8,
+    /// Data offset: where the payload starts, from the frame start.
+    pub doff: usize,
+    /// The SW header's second word (flow-control mask + the firmware's TX window).
+    pub w1: u32,
+}
+
+/// Why a frame header is refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SdpcmBad {
+    /// The hardware tag's length and its complement disagree (brcmfmac "HW hdr error").
+    Tag,
+    /// The length cannot hold the header, or the data offset is inside the header or past the frame
+    /// (brcmfmac brcmf_sdio_hdparse: doffset < SDPCM_HDRLEN || doffset > len).
+    Bounds,
+}
+
+/// Decode the first 12 bytes the firmware handed over. `Ok(None)` = an empty read (no frame: length 0).
+/// Pure, fuzzed (`sdpcm_hdr`); the CM5 driver terminates a refused frame in the device (rxfail).
+pub fn sdpcm_hdr(b: &[u8]) -> Result<Option<SdpcmHdr>, SdpcmBad> {
+    let Some(h) = b.get(..SDPCM_HDRLEN) else { return Err(SdpcmBad::Bounds) };
+    let len = u16::from_le_bytes([h[0], h[1]]);
+    let ck = u16::from_le_bytes([h[2], h[3]]);
+    // length 0 = nothing to read (the driver's dry poll; the check word is not consulted, as before)
+    if len == 0 {
+        return Ok(None);
+    }
+    if len ^ ck != 0xffff {
+        return Err(SdpcmBad::Tag);
+    }
+    let w0 = u32::from_le_bytes([h[4], h[5], h[6], h[7]]);
+    let w1 = u32::from_le_bytes([h[8], h[9], h[10], h[11]]);
+    let doff = ((w0 >> 24) & 0xff) as usize;
+    if (len as usize) < SDPCM_HDRLEN || doff < SDPCM_HDRLEN || doff > len as usize {
+        return Err(SdpcmBad::Bounds);
+    }
+    Ok(Some(SdpcmHdr { len, seq: (w0 & 0xff) as u8, chan: ((w0 >> 8) & 0xf) as u8, doff, w1 }))
+}
+
+#[cfg(test)]
+mod sdpcm_hdr_tests {
+    use super::*;
+    fn hdr(len: u16, seq: u8, chan: u8, doff: u8, w1: u32) -> [u8; 12] {
+        let mut h = [0u8; 12];
+        h[0..2].copy_from_slice(&len.to_le_bytes());
+        h[2..4].copy_from_slice(&(!len).to_le_bytes());
+        h[4..8].copy_from_slice(&(seq as u32 | (chan as u32) << 8 | (doff as u32) << 24).to_le_bytes());
+        h[8..12].copy_from_slice(&w1.to_le_bytes());
+        h
+    }
+    #[test]
+    fn decodes_a_data_frame() {
+        let h = hdr(1514, 7, 2, 14, 0x0000_bb00);
+        assert_eq!(sdpcm_hdr(&h), Ok(Some(SdpcmHdr { len: 1514, seq: 7, chan: 2, doff: 14, w1: 0xbb00 })));
+    }
+    #[test]
+    fn empty_reads_are_no_frame() {
+        assert_eq!(sdpcm_hdr(&[0u8; 12]), Ok(None));
+        assert_eq!(sdpcm_hdr(&[0, 0, 0x34, 0x12, 9, 9, 9, 9, 9, 9, 9, 9]), Ok(None));
+    }
+    #[test]
+    fn a_header_only_credit_frame_is_valid() {
+        assert!(matches!(sdpcm_hdr(&hdr(12, 1, 0, 12, 0)), Ok(Some(_))));
+    }
+    #[test]
+    fn refuses_a_bad_tag() {
+        let mut h = hdr(100, 0, 2, 14, 0);
+        h[2] ^= 1;
+        assert_eq!(sdpcm_hdr(&h), Err(SdpcmBad::Tag));
+    }
+    #[test]
+    fn refuses_an_offset_inside_the_header_or_past_the_frame() {
+        assert_eq!(sdpcm_hdr(&hdr(100, 0, 2, 4, 0)), Err(SdpcmBad::Bounds));
+        assert_eq!(sdpcm_hdr(&hdr(100, 0, 2, 101, 0)), Err(SdpcmBad::Bounds));
+        assert_eq!(sdpcm_hdr(&hdr(8, 0, 2, 12, 0)), Err(SdpcmBad::Bounds));
+        assert_eq!(sdpcm_hdr(&[1u8; 5]), Err(SdpcmBad::Bounds));
+    }
+}
+
 /// Max subframes per superframe we accept.
 pub const GLOM_MAX_SUBS: usize = 64; // 48-KB superframes of ~1.5-KB sub-frames need > 32
 
