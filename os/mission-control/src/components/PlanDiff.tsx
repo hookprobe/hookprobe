@@ -28,6 +28,8 @@ interface Props {
   /** Follow a staged plan; call `update` as the reconciler reports; return a stop function. */
   watch?: (id: string, update: (u: ApplyUpdate) => void) => () => void;
   approveLabel?: string;
+  /** Set when this plan cannot be approved here (e.g. sample data): Approve / Reject shown greyed, with the reason. */
+  disabledReason?: string;
 }
 
 type Phase = 'idle' | 'staging' | 'staged' | 'applying' | 'verified' | 'volatile' | 'failed' | 'rejected';
@@ -110,7 +112,15 @@ const PlanDiff: Component<Props> = (props) => {
         {note() && ` ${note()}`}
       </p>
 
-      <Show when={!done()}>
+      <Show when={props.disabledReason}>
+        <span class="gate gate--off">
+          <span class="gate-body plan-diff-actions" ref={(el) => el.setAttribute('inert', '')} aria-hidden="true">
+            <button class="hp-btn hp-btn--primary">{props.approveLabel ?? 'Approve plan'}</button><button class="hp-btn">Reject</button>
+          </span>
+          <span class="gate-reason" role="note">{props.disabledReason}</span>
+        </span>
+      </Show>
+      <Show when={!done() && !props.disabledReason}>
         <div class="plan-diff-actions">
           <Show when={phase() === 'failed'} fallback={
             <button class="hp-btn hp-btn--primary" disabled={busy()} onClick={() => void approve()}>
