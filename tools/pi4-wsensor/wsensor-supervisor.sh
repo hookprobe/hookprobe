@@ -118,7 +118,7 @@ write_health() {
  "disk_used_pct":$(df --output=pcent "$DATA_DIR" | tail -1 | tr -dc 0-9),
  "limits":"single time-shared 1x1 radio; fixed channel only; no control frames or noise floor (rtw88); encrypted payloads not visible"}
 EOF
-  mv "$HEALTH.tmp" "$HEALTH"
+  mv "$HEALTH.tmp" "$HEALTH"; chmod 0644 "$HEALTH" 2>/dev/null || true
 }
 
 trap 'log "stopping"; release; write_health off stopped; exit 0' TERM INT
