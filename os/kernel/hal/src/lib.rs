@@ -282,6 +282,12 @@ pub struct DfsWatch {
     bad: u8,
 }
 
+impl Default for DfsWatch {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DfsWatch {
     /// A CAC is 60 s on the candidates (weather channels are never chosen); past this the AP gives up on DFS.
     pub const CAC_MAX_S: u64 = 90;

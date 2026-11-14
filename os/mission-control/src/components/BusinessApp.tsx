@@ -60,10 +60,11 @@ const BusinessApp: Component = () => {
 
         <Show when={tab() === 'overview'}>
           <Show when={sample()} fallback={<div class="pcard"><p style={{ margin: 0 }}>No billing data from the control plane yet.</p></div>}>
+            <p class="plan-diff-warn" role="note" style={{ margin: 0 }}>Preview of what a cloud-linked control plane shows (MSSP billing). A standalone device has no billing and shows licensing only.</p>
             <div class="bento">
               <div class="pcard span-4"><p class="l0-label">Active licenses</p><p class="pcard-kpi">45</p></div>
               <div class="pcard span-4"><p class="l0-label">Devices in use</p><p class="pcard-kpi">1,120</p></div>
-              <div class="pcard span-4"><p class="l0-label">Monthly revenue</p><p class="pcard-kpi">[MRR]</p></div>
+              <div class="pcard span-4"><p class="l0-label">Monthly revenue</p><p class="pcard-kpi">—</p><p class="pcard-note">Reported by your billing system, not this device.</p></div>
               <div class="span-12 l0-table-wrap"><table class="l0-table obs-table">
                 <thead><tr><th scope="col">Customer</th><th scope="col">Plan</th><th scope="col">Devices</th><th scope="col">Renews</th></tr></thead>
                 <tbody>

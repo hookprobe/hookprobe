@@ -24,6 +24,7 @@ import { actionsView, refreshActions } from '../store/actions';
 import { devices } from '../store/obsLive';
 import { networkView, startNetworkLive } from '../store/networkLive';
 import { startStory, storyEvents, hhmm } from '../store/story';
+import { CAMERA, SAMPLE_AT, sampleWhen } from '../store/sampleClock';
 import { incidentHref } from '../store/routes';
 import AppShell from './AppShell';
 import Drawer from './Drawer';
@@ -66,9 +67,9 @@ const MissionControlApp: Component = () => {
   // ── Incidents / actions ──────────────────────────────────────────────
   const openInc = () => incidents().filter((i) => i.status !== 'resolved' && i.status !== 'closed');
   const SAMPLE_INC = [
-    { id: 's1', priority: 'HIGH', title: 'Kitchen camera contacted malware host', when: '13:05' },
-    { id: 's2', priority: 'MEDIUM', title: 'Brute force on admin page', when: 'yesterday' },
-    { id: 's3', priority: 'LOW', title: 'New unknown device', when: '10:40' },
+    { id: 's1', priority: 'HIGH', title: 'Kitchen camera contacted malware host', when: sampleWhen(CAMERA.isolated) },
+    { id: 's2', priority: 'MEDIUM', title: 'Brute force on admin page', when: sampleWhen(SAMPLE_AT.bruteForce) },
+    { id: 's3', priority: 'LOW', title: 'New unknown device', when: sampleWhen(SAMPLE_AT.unknownDevice) },
   ];
   const actions = () => actionsView()?.active ?? [];
   const audit = () => (actionsView()?.audit ?? []).filter((a) => a.ok).slice(0, 3);
@@ -84,7 +85,7 @@ const MissionControlApp: Component = () => {
     fleet: () => ({ title: 'Fleet health', crumb: 'Fleet → site → device → manifest', body: 'Fleet status comes from your control plane. This device has not received fleet data yet.', href: '/admin/identity', hrefLabel: 'Open Administration' }),
     customers: () => ({ title: 'Customer health', crumb: 'Tenants → customer → score', body: 'Per-tenant scores come from your control plane. No tenant data has arrived yet.', href: '/customers/managed', hrefLabel: 'Open Customers' }),
     incidents: () => ({ title: 'Active incidents', crumb: 'Queue → incident story → evidence', body: 'Open incidents, highest priority first. Each one opens as a story with the evidence and the reason for every step.', href: '/investigate/queue', hrefLabel: 'Open Investigate' }),
-    actions: () => ({ title: 'Autonomous actions', crumb: 'Action → why → audit log → undo', body: 'Every protective action is time-bounded and expires on its own; the audit log records who or what started it and why. End any of them early from Shield or Protect.', href: '/network/dns', hrefLabel: 'Open Shield actions' }),
+    actions: () => ({ title: 'Autonomous actions', crumb: 'Action → why → audit log → undo', body: 'Actions the device takes by itself are time-bounded and end on their own. Durable changes (a zone move, a permanent block) happen only with your approval. The audit log records who or what started each one and why. End any of them early from Shield or Protect.', href: '/network/dns', hrefLabel: 'Open Shield actions' }),
     infra: () => ({ title: 'Infrastructure', crumb: 'Links → interfaces → flows', body: 'How this device sits between your internet line and your network. Open Network / Gateway for links, Wi-Fi and zones, or Observe for live flows.', href: '/network/map', hrefLabel: 'Open Network / Gateway' }),
     perf: () => ({ title: 'Performance', crumb: 'Packets → verdicts → retention', body: 'What the inline sensor has handled since start-up and how much evidence the device keeps. Data older than the window is offloaded or summarised, never silently lost.', href: '/observe/live', hrefLabel: 'Open Observe' }),
   };
@@ -195,7 +196,7 @@ const MissionControlApp: Component = () => {
             }>
               <span class="prow"><span>Isolated Kitchen camera</span><span>why →</span></span>
               <span class="prow"><span>Blocked 38 login attempts</span><span>why →</span></span>
-              <span class="prow"><span>Moved guest phone to Guests</span><span>why →</span></span>
+              <span class="prow"><span>Moved guest phone to Guests (you approved)</span><span>why →</span></span>
             </Show>
           </button>
 
