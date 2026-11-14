@@ -332,8 +332,11 @@ mod imp {
         let fresh = s.call(CMD_INIT) == Call::Done(ST_OK, 0, 1);
         // the rings were wiped by the reset: the frame queued before the fault is not handed to the new incarnation
         let wiped = tx_left && s.call(CMD_POLL) == Call::Done(ST_OK, 0, 2) && ring::pending(&s.rx) == 0;
-        // a second fault in a row doubles the backoff
-        let doubled = s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() > BACKOFF_MS;
+        // consecutive faults (no good call between them) double the backoff; a good call resets the streak
+        let f1 = s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() <= BACKOFF_MS;
+        let t1 = now_ms();
+        while now_ms() < t1 + BACKOFF_MS + 5 {}
+        let doubled = f1 && s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() > BACKOFF_MS;
         let pass = init && rx && tx && resident && hostile && fault && fresh && wiped && doubled;
         arch_aarch64::_print(format_args!(
             " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
