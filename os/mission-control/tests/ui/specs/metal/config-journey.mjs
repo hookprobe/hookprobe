@@ -7,8 +7,8 @@
 //   node os/mission-control/tests/ui/run.mjs os/kernel/tools/mc-e2e/node_modules https://<mgmt ip>
 // (run.mjs directly: run.sh serves a local build; here the UI comes from the device itself.)
 //
-// A bundle is the WHOLE configuration and the device never shows secrets back, so every journey needs the current
-// Wi-Fi password (and the PPPoE password when the internet uses PPPoE) to re-send them unchanged.
+// A bundle re-sends every section it carries and the device never shows secrets back: when it carries Wi-Fi (a Wi-Fi
+// section in force, or the Wi-Fi journey) MC_WIFI_PSK is needed, and MC_PPPOE_PASS when the internet uses PPPoE.
 //   1) firewall: add one harmless rule → Review and apply live → trial banner → Roll back → the policy in force is
 //      byte-for-byte the one before.
 //   2) Wi-Fi (MC_METAL_WIFI=1): Get Online → Change password → signed bundle → "Keep the new Wi-Fi" → committed;
@@ -21,7 +21,8 @@ export default async function (t) {
   const cfg = async () => (await page.request.get(`${base}/api/config`)).json();
   const until = async (pred, ms = 150000) => { const end = Date.now() + ms; let c; do { c = await cfg(); if (pred(c)) return c; await page.waitForTimeout(3000); } while (Date.now() < end); return c; };
   const token = env('UI_LIVE_TOKEN'), psk = env('MC_WIFI_PSK');
-  if (!env('MC_SIGNING_KEY_PEM') || !psk) { ok(false, 'MC_SIGNING_KEY_PEM and MC_WIFI_PSK are required (see the header)'); return; }
+  if (!env('MC_SIGNING_KEY_PEM')) { ok(false, 'MC_SIGNING_KEY_PEM is required (see the header)'); return; }
+  if (env('MC_METAL_WIFI') === '1' && (!psk || !env('MC_WIFI_PSK_NEW'))) { ok(false, 'the Wi-Fi journey needs MC_WIFI_PSK and MC_WIFI_PSK_NEW'); return; }
 
   t.at = 'import the owner signing key';
   await go('/admin/identity', 2500);
@@ -44,7 +45,11 @@ export default async function (t) {
     const d = page.locator('.drawer', { hasText: 'Apply all three together' });
     ok(await vis(d.locator('[aria-label="policy changes"] .plan-diff-line--added')), 'review: the new rule shows as a + line, the rest of the firewall unchanged');
     if (env('MC_PPPOE_PASS')) await d.locator('label:has-text("PPPoE password (again)") input').fill(env('MC_PPPOE_PASS'));
-    await d.locator('label:has-text("Wi-Fi password (again)") input').fill(psk);
+    // only when the bundle carries Wi-Fi (the bench's bundle in force has no Wi-Fi section: it is left out, #1141)
+    if (await vis(d.locator('label:has-text("Wi-Fi password (again)")'))) {
+      if (!psk) { ok(false, 'this bundle carries Wi-Fi: set MC_WIFI_PSK (the current Wi-Fi password)'); return; }
+      await d.locator('label:has-text("Wi-Fi password (again)") input').fill(psk);
+    }
     t.at = 'firewall: sign and send';
     await t.shot('before-send', true);
     // say WHY the button is not there / not enabled instead of timing out on the click

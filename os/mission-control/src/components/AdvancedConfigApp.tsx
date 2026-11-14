@@ -65,6 +65,11 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   // configuration for the sections it carries; without one the device keeps its own firewall).
   // "Edited" = differs from where the form started (the example, or the firewall in force once prefilled).
   const [polBase, setPolBase] = createSignal(JSON.stringify(pol()));
+  const [wanTouched, setWanTouched] = createSignal(false);
+  const [wifiTouched, setWifiTouched] = createSignal(false);
+  const editWan = (v: WanForm) => { setWanTouched(true); setWan(v); };
+  const editWifi = (v: WifiForm) => { setWifiTouched(true); setWifi(v); };
+  const carry = (k: 'wan' | 'wifi') => { const sec = configView()?.sections; return !sec || !!sec[k]?.present || (k === 'wan' ? wanTouched() : wifiTouched()); };
   const polDirty = () => JSON.stringify(pol()) !== polBase();
   // The bundle in force, as the device reports it (kernel #1055): the editors start from it, and an untouched
   // firewall is re-sent verbatim (byte-for-byte), never rebuilt.
@@ -182,20 +187,26 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   /** A configuration bundle in force: the device refuses single-file wan / wifi / policy uploads (ADR 0059). */
   const bundleProblems = createMemo(() => {
     const e: string[] = [];
-    checkWan(wan()).forEach((x) => e.push(`Internet: ${x}`));
-    checkWifi(wifi()).forEach((x) => e.push(`Wi-Fi: ${x}`));
+    if (carry('wan')) checkWan(wan()).forEach((x) => e.push(`Internet: ${x}`));
+    if (carry('wifi')) checkWifi(wifi()).forEach((x) => e.push(`Wi-Fi: ${x}`));
+    if (!carry('wan') && !carry('wifi') && !polDirty() && !devPolicy()) e.push('Nothing to send: change a setting first.');
     if (polDirty()) checkPolicy(pol()).forEach((x) => e.push(`Firewall: ${x}`));
     // A bundle is the WHOLE configuration (metal, 12 Nov): over a bundle in force, a section left out is REMOVED,
     // not kept. The device does not report the firewall in force, so the owner must supply it.
     else if (bundleInForce() && !configView()?.sections) e.push('Firewall: a configuration bundle is in force, and a new bundle replaces all of it. This device does not report the firewall in force, so include the firewall you want (edit the Firewall tab): leaving it out removes it.');
     // a key the device reports that this editor cannot carry would be DROPPED by a bundle (it is the whole configuration)
-    const lost = [...unknownKeys(configView()?.wan_keys, WAN_KEYS).map((k) => `internet "${k}"`), ...unknownKeys(configView()?.wifi_keys, WIFI_KEYS).map((k) => `Wi-Fi "${k}"`)];
+    const lost = [...(carry('wan') ? unknownKeys(configView()?.wan_keys, WAN_KEYS).map((k) => `internet "${k}"`) : []), ...(carry('wifi') ? unknownKeys(configView()?.wifi_keys, WIFI_KEYS).map((k) => `Wi-Fi "${k}"`) : [])];
     if (lost.length) e.push(`This device has settings this editor cannot keep (${lost.join(', ')}); a bundle from here would remove them. Change them with a signed file made offline instead.`);
-    if (wan().mode === 'pppoe' && (!wan().pppoePass || wan().pppoePass === '(current)')) e.push('Internet: type the PPPoE password again (the device never shows it).');
-    if (!wifi().psk) e.push('Wi-Fi: type the Wi-Fi password again (the device never shows it).');
+    if (carry('wan') && wan().mode === 'pppoe' && (!wan().pppoePass || wan().pppoePass === '(current)')) e.push('Internet: type the PPPoE password again (the device never shows it).');
+    if (carry('wifi') && !wifi().psk) e.push('Wi-Fi: type the Wi-Fi password again (the device never shows it).');
     return e;
   });
-  const bundleSections = (): { wan: string; wifi: string; policy?: string } => ({ wan: fromLegacy('wan', buildWan(wan())), wifi: fromLegacy('wifi', buildWifi(wifi())),
+  /** A bundle carries the sections in force plus the ones you edit; a section the bundle in force does not have (the
+   *  bench: no Wi-Fi section, its Wi-Fi from the per-file WIFI.TXT) is left out, so it keeps its per-file settings and
+   *  is not moved into the bundle (metal MB27). Older kernels without `sections`: every section, as before. */
+  const bundleSections = (): { wan?: string; wifi?: string; policy?: string } => ({
+    ...(carry('wan') ? { wan: fromLegacy('wan', buildWan(wan())) } : {}),
+    ...(carry('wifi') ? { wifi: fromLegacy('wifi', buildWifi(wifi())) } : {}),
     ...(polDirty() ? { policy: fromLegacy('policy', buildPolicyText(pol())) } : devPolicy() ? { policy: fromLegacy('policy', devPolicy()!) } : {}) });
   /** A section as the device has it in force (same canonical form as the bundle), or null when not reported. */
   const mask = (t: string) => t.replace(/(pppoe_pass|psk)=.*/g, '$1=••••••••');
@@ -271,49 +282,49 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                 <p class="l0-label">Connection type</p>
                 <div class="l0-seg" role="group" aria-label="Connection type" style={{ 'align-self': 'flex-start' }}>
                   <For each={[['dhcp', 'Automatic (DHCP)'], ['static', 'Static'], ['pppoe', 'PPPoE']] as [WanForm['mode'], string][]}>{([m, label]) => (
-                    <button class={`l0-seg-item${wan().mode === m ? ' is-active' : ''}`} aria-pressed={wan().mode === m} style={{ border: 0, font: 'inherit', cursor: 'pointer', background: wan().mode === m ? undefined : 'none' }} onClick={() => setWan({ ...wan(), mode: m })}>{label}</button>
+                    <button class={`l0-seg-item${wan().mode === m ? ' is-active' : ''}`} aria-pressed={wan().mode === m} style={{ border: 0, font: 'inherit', cursor: 'pointer', background: wan().mode === m ? undefined : 'none' }} onClick={() => editWan({ ...wan(), mode: m })}>{label}</button>
                   )}</For>
                 </div>
                 <Show when={wan().mode === 'dhcp'}><p class="l0-card-sub">The device asks your modem or ISP for an address automatically. Nothing else to fill in.</p></Show>
                 <Show when={wan().mode === 'pppoe'}>
                   <div class="l0-grid-2">
-                    <label class="l0-card-sub">PPPoE username<input style={field} value={wan().pppoeUser} onInput={(e) => setWan({ ...wan(), pppoeUser: e.currentTarget.value })} placeholder="from your ISP letter" autocomplete="off" /></label>
-                    <label class="l0-card-sub">PPPoE password<input style={field} type="password" value={wan().pppoePass} onInput={(e) => setWan({ ...wan(), pppoePass: e.currentTarget.value })} autocomplete="new-password" /></label>
+                    <label class="l0-card-sub">PPPoE username<input style={field} value={wan().pppoeUser} onInput={(e) => editWan({ ...wan(), pppoeUser: e.currentTarget.value })} placeholder="from your ISP letter" autocomplete="off" /></label>
+                    <label class="l0-card-sub">PPPoE password<input style={field} type="password" value={wan().pppoePass} onInput={(e) => editWan({ ...wan(), pppoePass: e.currentTarget.value })} autocomplete="new-password" /></label>
                   </div>
                 </Show>
                 <Show when={wan().mode === 'static'}>
                   <div class="l0-grid-3">
-                    <label class="l0-card-sub">Address / prefix<input style={field} value={wan().ip} onInput={(e) => setWan({ ...wan(), ip: e.currentTarget.value })} placeholder="192.0.2.10/24" /></label>
-                    <label class="l0-card-sub">Gateway<input style={field} value={wan().gw} onInput={(e) => setWan({ ...wan(), gw: e.currentTarget.value })} placeholder="192.0.2.1" /></label>
-                    <label class="l0-card-sub">DNS (optional)<input style={field} value={wan().dns} onInput={(e) => setWan({ ...wan(), dns: e.currentTarget.value })} placeholder="defaults to gateway" /></label>
+                    <label class="l0-card-sub">Address / prefix<input style={field} value={wan().ip} onInput={(e) => editWan({ ...wan(), ip: e.currentTarget.value })} placeholder="192.0.2.10/24" /></label>
+                    <label class="l0-card-sub">Gateway<input style={field} value={wan().gw} onInput={(e) => editWan({ ...wan(), gw: e.currentTarget.value })} placeholder="192.0.2.1" /></label>
+                    <label class="l0-card-sub">DNS (optional)<input style={field} value={wan().dns} onInput={(e) => editWan({ ...wan(), dns: e.currentTarget.value })} placeholder="defaults to gateway" /></label>
                   </div>
                 </Show>
               </div>
               <div class="pcard">
                 <label class="prow" style={{ border: 0, padding: 0, 'align-items': 'center' }}><span class="l0-label">ISP VLAN</span>
-                  <input type="checkbox" checked={wan().vlanOn} onChange={(e) => setWan({ ...wan(), vlanOn: e.currentTarget.checked })} style={{ width: '22px', height: '22px' }} /></label>
+                  <input type="checkbox" checked={wan().vlanOn} onChange={(e) => editWan({ ...wan(), vlanOn: e.currentTarget.checked })} style={{ width: '22px', height: '22px' }} /></label>
                 <p class="l0-card-sub">Some fibre ISPs need traffic tagged with a VLAN number. Check your ISP's instructions.</p>
                 <Show when={wan().vlanOn}>
                   <div class="l0-grid-3">
-                    <label class="l0-card-sub">VLAN ID<input style={field} value={wan().vlan} onInput={(e) => setWan({ ...wan(), vlan: e.currentTarget.value })} placeholder="6" inputmode="numeric" /></label>
-                    <label class="l0-card-sub">Outer VLAN (QinQ, optional)<input style={field} value={wan().vlanOuter} onInput={(e) => setWan({ ...wan(), vlanOuter: e.currentTarget.value })} placeholder="none" inputmode="numeric" /></label>
-                    <label class="l0-card-sub">Priority (PCP 0–7)<input style={field} value={wan().pcp} onInput={(e) => setWan({ ...wan(), pcp: e.currentTarget.value })} placeholder="0" inputmode="numeric" /></label>
+                    <label class="l0-card-sub">VLAN ID<input style={field} value={wan().vlan} onInput={(e) => editWan({ ...wan(), vlan: e.currentTarget.value })} placeholder="6" inputmode="numeric" /></label>
+                    <label class="l0-card-sub">Outer VLAN (QinQ, optional)<input style={field} value={wan().vlanOuter} onInput={(e) => editWan({ ...wan(), vlanOuter: e.currentTarget.value })} placeholder="none" inputmode="numeric" /></label>
+                    <label class="l0-card-sub">Priority (PCP 0–7)<input style={field} value={wan().pcp} onInput={(e) => editWan({ ...wan(), pcp: e.currentTarget.value })} placeholder="0" inputmode="numeric" /></label>
                   </div>
                 </Show>
               </div>
               <div class="pcard">
                 <label class="prow" style={{ border: 0, padding: 0, 'align-items': 'center' }}><span class="l0-label">Management VLAN (Pro)</span>
-                  <input type="checkbox" checked={wan().mgmtOn} onChange={(e) => setWan({ ...wan(), mgmtOn: e.currentTarget.checked })} style={{ width: '22px', height: '22px' }} /></label>
+                  <input type="checkbox" checked={wan().mgmtOn} onChange={(e) => editWan({ ...wan(), mgmtOn: e.currentTarget.checked })} style={{ width: '22px', height: '22px' }} /></label>
                 <p class="l0-card-sub">Reach Mission Control from a separate admin network on the same cable.</p>
                 <Show when={wan().mgmtOn}>
                   <div class="l0-grid-3">
-                    <label class="l0-card-sub">VLAN ID<input style={field} value={wan().mgmtVlan} onInput={(e) => setWan({ ...wan(), mgmtVlan: e.currentTarget.value })} placeholder="99" inputmode="numeric" /></label>
-                    <label class="l0-card-sub">Address / prefix (empty = DHCP)<input style={field} value={wan().mgmtIp} onInput={(e) => setWan({ ...wan(), mgmtIp: e.currentTarget.value })} placeholder="10.0.99.2/24" /></label>
-                    <label class="l0-card-sub">Gateway<input style={field} value={wan().mgmtGw} onInput={(e) => setWan({ ...wan(), mgmtGw: e.currentTarget.value })} placeholder="10.0.99.1" /></label>
+                    <label class="l0-card-sub">VLAN ID<input style={field} value={wan().mgmtVlan} onInput={(e) => editWan({ ...wan(), mgmtVlan: e.currentTarget.value })} placeholder="99" inputmode="numeric" /></label>
+                    <label class="l0-card-sub">Address / prefix (empty = DHCP)<input style={field} value={wan().mgmtIp} onInput={(e) => editWan({ ...wan(), mgmtIp: e.currentTarget.value })} placeholder="10.0.99.2/24" /></label>
+                    <label class="l0-card-sub">Gateway<input style={field} value={wan().mgmtGw} onInput={(e) => editWan({ ...wan(), mgmtGw: e.currentTarget.value })} placeholder="10.0.99.1" /></label>
                   </div>
                 </Show>
                 <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Management access floor (the admins' network that can always reach this device; empty = none)
-                  <input style={field} value={wan().mgmtFloor} onInput={(e) => setWan({ ...wan(), mgmtFloor: e.currentTarget.value })} placeholder="10.0.99.0/24" /></label>
+                  <input style={field} value={wan().mgmtFloor} onInput={(e) => editWan({ ...wan(), mgmtFloor: e.currentTarget.value })} placeholder="10.0.99.0/24" /></label>
               </div>
             </Show>
 
@@ -321,15 +332,15 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
               <div class="pcard">
                 <p class="l0-label">Network</p>
                 <div class="l0-grid-2">
-                  <label class="l0-card-sub">Wi-Fi name (1–32 characters)<input style={field} value={wifi().ssid} onInput={(e) => setWifi({ ...wifi(), ssid: e.currentTarget.value })} placeholder="HookProbe-Home" /></label>
-                  <label class="l0-card-sub">Password (8–63 characters)<input style={field} type="password" value={wifi().psk} onInput={(e) => setWifi({ ...wifi(), psk: e.currentTarget.value })} autocomplete="new-password" /></label>
+                  <label class="l0-card-sub">Wi-Fi name (1–32 characters)<input style={field} value={wifi().ssid} onInput={(e) => editWifi({ ...wifi(), ssid: e.currentTarget.value })} placeholder="HookProbe-Home" /></label>
+                  <label class="l0-card-sub">Password (8–63 characters)<input style={field} type="password" value={wifi().psk} onInput={(e) => editWifi({ ...wifi(), psk: e.currentTarget.value })} autocomplete="new-password" /></label>
                 </div>
               </div>
               <div class="pcard">
                 <p class="l0-label">Security</p>
                 <div class="l0-chips" role="group" aria-label="Security">
                   <For each={[['wpa2', 'WPA2'], ['wpa3', 'WPA3 only'], ['wpa3-transition', 'WPA3 + WPA2']] as [WifiForm['security'], string][]}>{([s, label]) => (
-                    <button class={`l0-chip${wifi().security === s ? ' is-on' : ''}`} aria-pressed={wifi().security === s} onClick={() => setWifi({ ...wifi(), security: s })}>{label}</button>
+                    <button class={`l0-chip${wifi().security === s ? ' is-on' : ''}`} aria-pressed={wifi().security === s} onClick={() => editWifi({ ...wifi(), security: s })}>{label}</button>
                   )}</For>
                 </div>
                 <p class="l0-card-sub">{{ wpa2: 'Works with every device. Choose this if older devices can’t connect.', wpa3: 'Strongest. Older devices without WPA3 won’t connect.', 'wpa3-transition': 'WPA3 for devices that support it, WPA2 for the rest.' }[wifi().security]}</p>
@@ -338,7 +349,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                 <p class="l0-label">Channel</p>
                 <div class="l0-chips" role="group" aria-label="Channel">
                   <For each={['auto', '1', '6', '11', '36', '40', '44', '48']}>{(c) => (
-                    <button class={`l0-chip${wifi().channel === c ? ' is-on' : ''}`} aria-pressed={wifi().channel === c} onClick={() => setWifi({ ...wifi(), channel: c })}>{c === 'auto' ? 'Auto' : c}</button>
+                    <button class={`l0-chip${wifi().channel === c ? ' is-on' : ''}`} aria-pressed={wifi().channel === c} onClick={() => editWifi({ ...wifi(), channel: c })}>{c === 'auto' ? 'Auto' : c}</button>
                   )}</For>
                 </div>
                 <p class="pcard-note">5 GHz is limited to channels 36–48 on this hardware (DFS channels aren't supported by the radio firmware).</p>
@@ -512,6 +523,9 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
           <For each={(['wan', 'wifi', 'policy'] as const)}>{(k) => (
             <div class="pcard" style={{ padding: '10px 12px', gap: '6px' }}>
               <p class="l0-label">{k === 'wan' ? 'Internet' : k === 'wifi' ? 'Wi-Fi' : 'Firewall'}</p>
+              <Show when={k === 'policy' || carry(k)} fallback={
+                <p class="l0-card-sub" aria-label={`${k} not included`} style={{ margin: 0 }}>Not included: it keeps its settings from the device's own files (the bundle in force has none for it). Change it in its tab to include it.</p>
+              }>
               <Show when={k !== 'policy' || polDirty() || !!devPolicy()} fallback={
                 <p class="l0-card-sub" aria-label="Firewall not included" style={{ margin: 0 }}>Not included: the device keeps the firewall from its own files (no bundle is in force). To replace it, edit the Firewall tab first.</p>
               }>
@@ -528,15 +542,18 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                   </Show>
                 )}</Show>
               </Show>
+              </Show>
             </div>
           )}</For>
-          <p class="l0-card-sub" style={{ margin: 0 }}>A bundle carries every section, even the ones you did not change, and the device never shows passwords back: type them again, even if they stay the same.</p>
-          <Show when={wan().mode === 'pppoe'}>
+          <Show when={carry('wan') || carry('wifi')}><p class="l0-card-sub" style={{ margin: 0 }}>A bundle carries every section it includes, even the ones you did not change, and the device never shows passwords back: type them again, even if they stay the same.</p></Show>
+          <Show when={carry('wan') && wan().mode === 'pppoe'}>
             <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>PPPoE password (again)
-              <input style={field} type="password" autocomplete="off" value={wan().pppoePass === '(current)' ? '' : wan().pppoePass} onInput={(e) => setWan({ ...wan(), pppoePass: e.currentTarget.value })} /></label>
+              <input style={field} type="password" autocomplete="off" value={wan().pppoePass === '(current)' ? '' : wan().pppoePass} onInput={(e) => editWan({ ...wan(), pppoePass: e.currentTarget.value })} /></label>
           </Show>
+          <Show when={carry('wifi')}>
           <label class="l0-card-sub" style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>Wi-Fi password (again)
-            <input style={field} type="password" autocomplete="new-password" value={wifi().psk} onInput={(e) => setWifi({ ...wifi(), psk: e.currentTarget.value })} /></label>
+            <input style={field} type="password" autocomplete="new-password" value={wifi().psk} onInput={(e) => editWifi({ ...wifi(), psk: e.currentTarget.value })} /></label>
+          </Show>
           <Show when={bundleProblems().length > 0}>
             <ul style={{ margin: 0, 'padding-left': '18px' }} aria-label="Bundle problems"><For each={bundleProblems()}>{(e) => <li class="plan-diff-warn">{e}</li>}</For></ul>
           </Show>
