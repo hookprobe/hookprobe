@@ -32,7 +32,7 @@ SNR). Monitoring is **part-time** (time-shared) and **fixed-channel** by default
 | DNS resolver posture | `dig` version.bind / ANY / ad domain | ✅ done — no version leak, no ANY amplification, ad filtering on |
 | MC served on AP? (segmentation) | TCP to AP gw 80/443 | ✅ done — not served on AP (good) |
 | Client → upstream RFC1918 reach | ping/TCP from wlan0 client | ✅ done — A-01 (clients reach mgmt VLAN/LAN; heqk to judge) |
-| Client isolation (`ap_isolate`) | subnet reach between stations | ⚠️ not testable — single station (A-02) |
+| Client isolation (`ap_isolate`) | `ap-isolate-test.sh` from one client toward a 2nd client on the SSID | ⚠️ A-02: tester ready; needs a 2nd client joined to the SSID (isolation is client↔client, so one station isn't enough) |
 | **Management-plane DoS** | one off-subnet TCP connection | ✅ **A-03 found + root-caused + fix-verified** (High) |
 
 **Not in scope / not run:** UDP service scan (needs root), ARP-spoof / rogue-DHCP / rogue-RA injection tests (would
