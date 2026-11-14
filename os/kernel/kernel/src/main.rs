@@ -3898,22 +3898,24 @@ fn cm5_p10_probe() {
                                 // snapshot — when it holds history, Mission Control is restored from it instead.
                                 let mut n = 0usize;
                                 let mut from_log = 0u64;
+                                // this boot's live detections name the running build (restored ones name theirs)
+                                mcserve::state().set_current_build(&evlog::build_tag());
                                 if let Some((srk, pol)) = pf.seal_params() {
                                     match evlog::install(&srk, pol) {
                                         Some((recs, _)) => {
                                             let mut total = 0u64;
                                             evlog::with(&mut |l, st| {
-                                                total = l.for_each(st, &mut |_| {});
+                                                total = l.for_each(st, &mut |_, _| {});
                                                 let skip = total.saturating_sub(mcstate::DET_CAP as u64);
                                                 let mut i = 0u64;
-                                                l.for_each(st, &mut |img| {
+                                                l.for_each(st, &mut |tag, img| {
                                                     if i >= skip {
                                                         if let Some(mut ev) = export::image_to_ev(img) {
                                                             let ms = u64::from_le_bytes(img[0..8].try_into().unwrap());
                                                             if img[15] & snapshot::IMG_EPOCH != 0 && ms != 0 {
                                                                 ev.verdict &= !snapshot::IMG_EPOCH;
                                                                 ev.ts = ms;
-                                                                mcserve::state().push_restored(&ev, ms);
+                                                                mcserve::state().push_restored_from(&ev, ms, tag);
                                                                 n += 1;
                                                             }
                                                         }
