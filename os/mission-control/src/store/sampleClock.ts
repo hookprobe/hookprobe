@@ -1,9 +1,19 @@
 /**
  * sampleClock — one clock for every sample story (no device answering), so pages agree with each other and
- * never show an event in the future. Everything is relative to page load: the kitchen-camera incident is
+ * never show an event in the future. Everything is relative to one anchor kept for the browser session: the kitchen-camera incident is
  * about a minute old everywhere (Home, Mission, Observe, Detect, Investigate, the incident story, Protect).
  */
-export const SAMPLE_NOW = Math.floor(Date.now() / 1000);
+function anchor(): number {
+  const now = Math.floor(Date.now() / 1000);
+  // Kept for the browser session, so moving between pages does not shift the story by a minute; renewed after 6 h.
+  try {
+    const v = Number(sessionStorage.getItem('hp.sampleNow'));
+    if (v > 0 && v <= now && now - v < 6 * 3600) return v;
+    sessionStorage.setItem('hp.sampleNow', String(now));
+  } catch { /* storage blocked: per page load */ }
+  return now;
+}
+export const SAMPLE_NOW = anchor();
 
 /** The kitchen-camera story (INC-0142), in order: DNS lookup → flagged by intel → TLS match → LAN scan → isolated 1 h. */
 export const CAMERA = {
