@@ -10,7 +10,7 @@
  */
 import { type Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import {
-  qsecbit, heartbeat, setHeartbeat, protectionStatus, lastCheckedAt, security, shield, network, substrate,
+  qsecbit, qsecbitShown, qsecbitGauge, heartbeat, setHeartbeat, protectionStatus, lastCheckedAt, security, shield, network, substrate,
 } from '../store/mock';
 import { startLiveUpdates } from '../store/live';
 import { setProView } from '../store/layer';
@@ -109,14 +109,14 @@ const App: Component = () => {
       <main class="l0-main" aria-label="Home">
         <section class="home-hero">
           <Show when={!waiting()} fallback={<div class="home-orb" role="img" aria-label="Checking the device"><div class="home-orb-num"><b>…</b><span>Checking</span></div></div>}>
-          <div class="home-orb" role="img" aria-label={`QSecBit score ${qsecbit()} out of 100: ${VERDICT[protectionStatus()]}`}>
+          <div class="home-orb" role="img" aria-label={`QSecBit score ${qsecbitShown()} out of 100: ${VERDICT[protectionStatus()]}`}>
             <svg viewBox="0 0 200 200" aria-hidden="true">
               <circle cx="100" cy="100" r={R} fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8" />
               <circle cx="100" cy="100" r={R} fill="none" stroke-width="8" stroke-linecap="round"
                 stroke={protectionStatus() === 'protected' ? 'var(--hp-green)' : protectionStatus() === 'needs-attention' ? 'var(--hp-amber)' : 'var(--hp-red)'}
-                stroke-dasharray={`${(qsecbit() / 100) * C} ${C}`} />
+                stroke-dasharray={`${(qsecbitGauge() / 100) * C} ${C}`} />
             </svg>
-            <div class="home-orb-num" aria-hidden="true"><b>{qsecbit()}</b><span>QSecBit</span></div>
+            <div class="home-orb-num" aria-hidden="true"><b>{qsecbitShown()}</b><span>QSecBit</span></div>
           </div>
           </Show>
           <div class={`home-verdict home-verdict--${protectionStatus()}`}>
