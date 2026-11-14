@@ -99,8 +99,9 @@ os/build/           image build engine (make-cm5-heqk-image.sh / -disk.sh, heqk-
 os/{drivers,networking,security,device-identity,provisioning}/   index READMEs into os/kernel
                     (os/drivers/firmware/ holds the CYW43455 blobs)
 appliance/{cm5,waveshare-dual-eth,hookprobe-sbc}/   hardware profiles (how the OS sees a board)
-                    (hookprobe-sbc = HookProbe's own RK3588 board; design files are a PRIVATE company asset,
-                    never in this public repo; gated behind CM5 validation: ADR 0064)
+hardware/           HookProbe board designs, public, CERN-OHL-S-2.0 + commercial (ADR 0064 D2/D6).
+                    hookprobe-sbc/ = own RK3588 board, rev A (KiCad from generator scripts; unrouted).
+                    Edit the scripts, never the .kicad_* output. Gated behind CM5 validation (H0).
 onboarding/{wifi,enrollment,setup-ui}/  enrollment/responder-sim = host control-plane responder
 docs/{architecture,getting-started,security,roadmap,adr,design,research}/
 tools/{build,flash,diagnostics}/
