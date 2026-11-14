@@ -5,7 +5,7 @@ A unified cyber resilience metric for AI-driven threat detection.
 Provides single-source-of-truth protection across OSI layers L2-L7.
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 
@@ -88,7 +88,7 @@ from .mesh_bridge import (
 
 __version__ = "5.0.0"
 __author__ = "Andrei Toma"
-__license__ = "Proprietary"
+__license__ = "AGPL-3.0"
 
 __all__ = [
     # Core qsecbit classes (backward compatible)

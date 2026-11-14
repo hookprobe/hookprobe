@@ -15,7 +15,7 @@ This is the central integration point for:
 "From one node's detection to everyone's protection"
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

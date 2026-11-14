@@ -12,7 +12,7 @@ Usage:
     event = parser.process_napse_mdns(record)  # MDNSRecord from NAPSE
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 6.0.0
 """
 

@@ -2,7 +2,7 @@
 """
 Weight-Hash Chain Validator
 
-PROPRIETARY AND CONFIDENTIAL
+License: AGPL-3.0 - see LICENSE file
 Copyright (c) 2024-2026 HookProbe Technologies
 Licensed under Commercial License - See LICENSING.md
 

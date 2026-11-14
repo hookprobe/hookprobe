@@ -43,7 +43,7 @@ def get_device_data_manager():
 
 
 # ============================================================
-# AI-POWERED DEVICE FINGERPRINTING (Proprietary)
+# AI-POWERED DEVICE FINGERPRINTING
 # ============================================================
 
 def get_ml_fingerprint_classifier():
@@ -80,7 +80,7 @@ def get_unified_fingerprint_engine():
 
 
 # ============================================================
-# ECOSYSTEM BUBBLE - ATMOSPHERIC PRESENCE (Proprietary)
+# ECOSYSTEM BUBBLE - ATMOSPHERIC PRESENCE
 # Unified module located at shared/aiochi/bubble/
 # ============================================================
 
@@ -163,7 +163,7 @@ def get_d2d_connection_graph():
 
 
 # ============================================================
-# AI AUTOPILOT - EVENT-DRIVEN EFFICIENCY (Proprietary)
+# AI AUTOPILOT - EVENT-DRIVEN EFFICIENCY
 # ============================================================
 
 def get_efficiency_engine():
@@ -256,17 +256,17 @@ __all__ = [
     'get_sdn_autopilot',
     'get_network_policy_manager',
     'get_device_data_manager',
-    # AI-Powered Device Fingerprinting (Proprietary)
+    # AI-Powered Device Fingerprinting
     'get_ml_fingerprint_classifier',
     'get_ja3_fingerprinter',
     'get_unified_fingerprint_engine',
-    # Ecosystem Bubble - Atmospheric Presence (Proprietary)
+    # Ecosystem Bubble - Atmospheric Presence
     'get_presence_sensor',
     'get_behavior_clustering_engine',
     'get_ecosystem_bubble_manager',
     'get_policy_resolver',
     'get_d2d_connection_graph',
-    # AI Autopilot - Event-Driven Efficiency (Proprietary)
+    # AI Autopilot - Event-Driven Efficiency
     'get_efficiency_engine',
     'get_dhcp_sentinel',
     'get_mac_watcher',

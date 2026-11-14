@@ -3,7 +3,7 @@ name = "hookprobe-sigma"
 version = "0.1.0"
 edition = "2021"
 description = "Sigma rule ingestion + evaluation — HookProbe OS V2 detection module (a practical Sigma subset, native host binary)."
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 
 # Library: rule parsing (YAML -> internal AST) + evaluation, shared by the binary and tests.
 [lib]
