@@ -1,7 +1,7 @@
 # ADR 0064 — HookProbe hardware program: from CM5 to a HookProbe board (RK3588), after CM5 is validated
 
 **Status:** 🟡 **Proposed (2026-11-14)**; **D6 decided by the operator (2026-11-14): CERN-OHL-S-2.0 + commercial
-hardware licence, design published at H5.** The rest awaits operator review. Records the direction the operator set on 2026-11-14:
+hardware licence; amended the same day: the design is published now, as work in progress.** The rest awaits operator review. Records the direction the operator set on 2026-11-14:
 once HookProbe OS is validated on CM5, HookProbe moves to dedicated hardware of its own, through an intermediate
 board with the same processor. Clauses are tagged **[realized]**, **[partial]** or **[vision]** (the ADR
 0043/0044/0047 discipline).
@@ -24,8 +24,7 @@ metal), **ADR 0047** (heqk everywhere: RK3588 is in its D1 platform list, and it
 - **ADR 0047 D1 already names RK3588 as a heqk platform**. `docs/design/heqk-everywhere-report-2026-10-09.md` §4 item
   9 sizes the port at "weeks to months".
 - **A board design exists** (rev A, RK3588, schematic and placement complete and checked, not routed, never built).
-  It is a **company asset kept outside this public repository** (D2). This ADR records only what HookProbe OS
-  needs to know about it.
+  It is published in `hardware/hookprobe-sbc/` as work in progress (D2, D6).
 
 | Function (OS-facing) | HookProbe board | CM5 today |
 |---|---|---|
@@ -45,11 +44,15 @@ No hardware engineering spend (routing, fabrication, components) and no RK3588 d
 until gate **H0** below is green. Design research may continue. Hardware is a second product line built on a
 validated OS, not a way around CM5's open items.
 
-### D2 · Hardware design files stay private until H5 **[realized: this change]**
-Schematics, layouts, generator scripts, BOMs and 3D models live in a **private** repository (`hookprobe-hardware`)
-until a revision passes H4 and is published under D6. They never go into this AGPL software repository. A `.gitignore` guard here blocks KiCad files and a `hardware/` tree. The public repo
-holds only the OS-facing view: this ADR and the board profile in `appliance/hookprobe-sbc/`, keeping the CLAUDE.md
-design test (**adding hardware = one profile in `appliance/`, no UI, installer or API change**).
+### D2 · Hardware design files live in `hardware/`, public, as work in progress **[realized]**
+*Amended 2026-11-14 (operator): "share it public, so we get feedback and show proof of work". Earlier the same
+day this clause kept the files private until H5.*
+Schematics, layouts, generator scripts, BOMs, renders and 3D models live in `hardware/<board>/` in this repository,
+under the D6 licence. The generator scripts are the source of truth; the `.kicad_*` files are their output. Every
+published revision carries its status in its README (rev A: **not routed, never built, do not manufacture**).
+Third-party datasheets and the Radxa reference schematic are not redistributed (`.gitignore` guard). The board's
+OS-facing view stays its profile in `appliance/hookprobe-sbc/`, keeping the CLAUDE.md design test (**adding
+hardware = one profile in `appliance/`, no UI, installer or API change**).
 
 ### D3 · Port through an intermediate board with the same processor **[vision]**
 Before our board, heqk is ported to and validated on an **intermediate RK3588 board** (a commercial board such as
@@ -92,7 +95,7 @@ branch on the board name.
   crypto posture. Same derivation interface, different key source.
 - **Power:** until the boot chain negotiates USB-C PD, the **DC jack is the supported power input**.
 
-### D6 · Publication model: dual licence, published at H5 **[decided: operator 2026-11-14]**
+### D6 · Publication model: dual licence, published as work in progress **[decided: operator 2026-11-14]**
 **Decision:** the hardware is dual-licensed, mirroring the software's AGPL-3.0 + commercial model:
 - **CERN-OHL-S-2.0** for everyone. Anyone may study, build and sell the design. Anyone who distributes a modified
   board must publish their changed design sources under the same licence.
@@ -101,12 +104,16 @@ branch on the board name.
 - **The trademark stays reserved.** "HookProbe" and any "HookProbe Certified" mark are not granted by either
   licence. Official signed releases, the device trust root and cloud/MSSP enrollment stay HookProbe's, so the
   certified board is the reference worth buying.
-- **Timing:** the design stays **private until H5**. The first published revision is the one that passed H4
-  prototype bring-up, never an unrouted or unproven one. Until then, only this OS-facing ADR and the
-  `appliance/hookprobe-sbc/` profile are public. Each later revision is published when it passes its own H4-style
-  gate.
-- Third-party material in the design (vendor symbols, parts derived from the Radxa reference) is checked for
-  redistribution rights before H5, and removed or replaced where needed.
+- **Timing (amended 2026-11-14, operator):** published **now, as work in progress**, from rev A onward, so the
+  community can review it and the work is visible. (The same-day first version said "private until H5".) Every
+  revision's README states its real status; D7 still forbids saying a board ships or performs until H4.
+- **Licence notice and Source Location** (CERN-OHL-S §4) are in `hardware/README.md`; the full text is
+  `hardware/LICENSE-CERN-OHL-S-2.0.txt`. Copyright holder: HookProbe, so the commercial licence can be granted.
+- **Contributions** must be licensable under both options. Before merging hardware pull requests from outside
+  HookProbe, the contributor agrees to HookProbe's contributor agreement (the same CLA as the software,
+  `LICENSING.md` Contact), or the dual licence breaks.
+- Third-party material (vendor symbols and footprints, values following the Radxa reference) stays under its
+  owners' terms, is listed in `hardware/README.md`, and is replaced if its terms do not allow redistribution.
 
 Facts the decision rested on:
 - Every CERN-OHL variant (P, W, S) lets anyone copy, build and sell the design. **S** additionally makes them
@@ -123,9 +130,11 @@ Extends ADR 0047 D4. Until H4 passes, no external material says HookProbe "has",
 Performance figures (2.5 GbE line rate, Wi-Fi 7, 5G, NPU throughput) are claimed only from H4 measurements.
 
 ### D8 · Hardware gate **[partial]**
-The design's checks (allocation/load budget in plain Python; full validation with `kicad-cli`) run in the private
-repository's own CI, not in this repository's gate spine, so no design file reaches public CI logs or artifacts.
-This repository's gates cover the OS side: the board profile and, from H2, the board's heqk image under g2/g6.
+The design's checks join the ADR 0063 gate spine: `design/allocation_check.py` needs only Python and can run on
+every PR touching `hardware/`; `validate.py` (about ten minutes, needs `kicad-cli`, currently a KiCad 10.99 nightly
+file format) runs nightly or on demand once KiCad is on a runner. Until then, `VALIDATION.md` is the evidence of
+record and is regenerated in the same change as any edit to the generator scripts. From H2 the board's heqk image
+runs under g2/g6 like any platform.
 
 ## Consequences
 
@@ -139,7 +148,7 @@ This repository's gates cover the OS side: the board profile and, from H2, the b
 - No `os/kernel` work, purchase or fabrication follows from this ADR until H0 is green (D1).
 
 ## Open items (for the operator)
-1. Ratify D1–D5, D7, D8 (D6 decided 2026-11-14: CERN-OHL-S-2.0 + commercial, published at H5). Draft the
+1. Ratify D1–D5, D7, D8 (D6 decided 2026-11-14: CERN-OHL-S-2.0 + commercial, published now as work in progress). Draft the
    commercial hardware licence terms and the "HookProbe Certified" criteria before H5.
 2. Pick the intermediate RK3588 board (D3; ROCK 5B suggested).
 3. Name a hardware lead or design house for H3 (routing, SI/PI review).

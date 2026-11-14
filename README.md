@@ -179,10 +179,10 @@ feature in Mission Control once it is proven on real hardware.
 | **H2** | HookProbe OS proven on an off-the-shelf RK3588 board, with Wi-Fi 7 and 5G brought up there first | planned |
 | **H3** | Our board routed, then reviewed for signal and power integrity | planned |
 | **H4** | Prototypes built and measured: both ports, NVMe, TPM, radios, thermal | planned |
-| **H5** | Release: reproducible board image, manufacturing package, design files published | planned |
+| **H5** | Release: reproducible board image, manufacturing package, certified units | planned |
 
-**Where it stands (November 2026).** Rev A schematic and component placement are complete and pass
-90 automated design checks. The board is not routed yet and has not been built; there is nothing to
+**Where it stands (November 2026).** Rev A schematic and component placement are complete, pass
+90 automated design checks, and are [public in this repository](hardware/hookprobe-sbc/). The board is not routed yet and has not been built; there is nothing to
 buy. Performance figures will come from prototype measurements.
 
 **Reference material.**
@@ -191,8 +191,10 @@ buy. Performance figures will come from prototype measurements.
 - [`appliance/hookprobe-sbc/`](appliance/hookprobe-sbc/): how HookProbe OS sees the board and what each part
   unlocks.
 - [Build Plan, Track H](docs/roadmap/BuildPlan.md): live status.
-- The schematics, layout and BOM are published at **H5** under **CERN-OHL-S-2.0**, with a commercial licence
-  for closed derivatives ([LICENSING.md](LICENSING.md#hardware-hookprobe-boards)).
+- **The design itself: [`hardware/hookprobe-sbc/`](hardware/hookprobe-sbc/)**: schematic (PDF and KiCad), component
+  placement, BOM, 3D model, the generator scripts and the validation report. Published as work in progress under
+  **CERN-OHL-S-2.0**, with a commercial licence for closed derivatives
+  ([`hardware/README.md`](hardware/README.md)). Review it and tell us what you find.
 
 **Help us build it.** We are looking for:
 - **Hardware engineers** with RK3588 / LPDDR4X layout experience for routing and signal- and power-integrity
