@@ -42,7 +42,7 @@ button.pcard:hover { border-color: rgba(0,180,255,.35); }
 .pbar-fill { display: block; height: 100%; background: var(--hp-purple); }
 .pbar-val { width: 44px; text-align: right; font-family: var(--hp-font-mono); }
 
-.sev { display: inline-block; min-width: 40px; padding: 1px 6px; margin-right: 8px; border-radius: var(--hp-radius-sm); font: 700 10px/16px var(--hp-font-mono); text-align: center; border: 1px solid currentColor; }
+.sev { display: inline-block; min-width: 40px; padding: 1px 6px; margin-right: 8px; border-radius: var(--hp-radius-sm); font: 700 11px/16px var(--hp-font-mono); text-align: center; border: 1px solid currentColor; }
 .sev--critical { color: var(--hp-red); } .sev--high { color: var(--hp-orange); } .sev--medium { color: var(--hp-amber); } .sev--low, .sev--info { color: var(--hp-text-secondary); }
 
 .mc-orb { display: flex; align-items: center; gap: 18px; }
