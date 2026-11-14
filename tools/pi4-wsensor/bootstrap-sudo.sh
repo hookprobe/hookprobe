@@ -16,9 +16,14 @@ cat >"$TMP" <<'EOF'
 Cmnd_Alias WSENSOR = /usr/bin/systemctl start pi4-wsensor, /usr/bin/systemctl stop pi4-wsensor, \
                      /usr/bin/systemctl restart pi4-wsensor, /usr/bin/systemctl enable pi4-wsensor, \
                      /usr/bin/systemctl disable pi4-wsensor, /usr/bin/systemctl status pi4-wsensor, \
+                     /usr/bin/systemctl start pi4-wsensor-dashboard, /usr/bin/systemctl stop pi4-wsensor-dashboard, \
+                     /usr/bin/systemctl restart pi4-wsensor-dashboard, /usr/bin/systemctl enable pi4-wsensor-dashboard, \
+                     /usr/bin/systemctl disable pi4-wsensor-dashboard, /usr/bin/systemctl status pi4-wsensor-dashboard, \
                      /opt/pi4-wsensor/dongle-lock.sh, /opt/pi4-wsensor/dongle-lock.sh *, \
-                     /opt/pi4-wsensor/m0-monitor-test.sh *, \
-                     /usr/bin/journalctl -u pi4-wsensor, /usr/bin/journalctl -u pi4-wsensor *
+                     /opt/pi4-wsensor/m0-monitor-test.sh *, /opt/pi4-wsensor/dfs-watch.sh *, \
+                     /opt/pi4-wsensor/ap-isolate-test.sh, /opt/pi4-wsensor/ap-isolate-test.sh *, \
+                     /usr/bin/journalctl -u pi4-wsensor, /usr/bin/journalctl -u pi4-wsensor *, \
+                     /usr/bin/journalctl -u pi4-wsensor-dashboard, /usr/bin/journalctl -u pi4-wsensor-dashboard *
 claude ALL=(root) NOPASSWD: WSENSOR
 EOF
 sudo visudo -cf "$TMP"
