@@ -10,6 +10,7 @@
  */
 import { type Component, For, Show, createEffect, createMemo, createSignal, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
+import { CAMERA } from '../store/sampleClock';
 import { healthChecked } from '../store/health';
 import { formatTime } from '../store/api';
 import { intel, refreshProtect } from '../store/protectLive';
@@ -44,7 +45,7 @@ const IntelligenceApp: Component = () => {
 
   const iocHits = createMemo(() => {
     if (sample()) return [
-      { ts: Math.floor(Date.now() / 1000) - 600, what: 'Known-bad TLS client (JA4 on the pack)', who: 'Kitchen camera', detail: 't13d1516h2_8daaf6152771_e5627efa2ab1' },
+      { ts: CAMERA.tls, what: 'Known-bad TLS client (JA4 on the pack)', who: 'Kitchen camera', detail: 't13d1516h2_8daaf6152771_e5627efa2ab1' },
       { ts: Math.floor(Date.now() / 1000) - 3600, what: 'Connected to a name Shield blocks', who: 'Smart TV', detail: 'ads.example-tracker.net' },
     ];
     const out: { ts: number; what: string; who: string; detail: string }[] = [];

@@ -12,6 +12,7 @@
  */
 import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
+import { CAMERA, SAMPLE_AT, SAMPLE_NOW } from '../store/sampleClock';
 import { healthChecked } from '../store/health';
 import { severityLabel, formatTime, mitreLabel, mitreTactic, type DetectionRow } from '../store/api';
 import { startDetectLive, detections, detectStatus, detectError, engines } from '../store/detectLive';
@@ -24,14 +25,14 @@ type Sev = 'all' | 'critical' | 'high' | 'medium' | 'low';
 const TACTICS = ['Reconnaissance', 'Resource Development', 'Initial Access', 'Execution', 'Persistence', 'Privilege Escalation', 'Defense Evasion',
   'Credential Access', 'Discovery', 'Lateral Movement', 'Collection', 'Command and Control', 'Exfiltration', 'Impact'];
 
-const now = Math.floor(Date.now() / 1000);
+const now = SAMPLE_NOW;
 const S = (id: string, sev: number, mitre: string, category: string, ago: number, rule_msg: string, src_ip: string, confidence: number): DetectionRow =>
   ({ id, ts: now - ago, rule_id: 0, rule_msg, category, severity: sev, mitre, src_ip, dst_ip: '', dst_port: 0, confidence });
 const SAMPLE: DetectionRow[] = [
-  S('s1', 2, 'T1071', 'ioc', 300, 'Device resolved known C2 domain', 'Kitchen camera', 0.97),
-  S('s2', 2, 'T1046', 'scan', 320, 'IoT device scanning LAN', 'Kitchen camera', 0.92),
-  S('s3', 3, 'T1110', 'bruteforce', 86400, 'Brute force on router admin', 'This device', 0.88),
-  S('s4', 4, 'T1200', 'behavioral', 9000, 'New device without a known fingerprint', 'Unknown phone', 0.61),
+  S('s1', 2, 'T1071', 'ioc', now - CAMERA.flagged, 'Device resolved known C2 domain', 'Kitchen camera', 0.97),
+  S('s2', 2, 'T1046', 'scan', now - CAMERA.scan, 'IoT device scanning LAN', 'Kitchen camera', 0.92),
+  S('s3', 3, 'T1110', 'bruteforce', now - SAMPLE_AT.bruteForce, 'Brute force on router admin', 'This device', 0.88),
+  S('s4', 4, 'T1200', 'behavioral', now - SAMPLE_AT.unknownDevice, 'New device without a known fingerprint', 'Unknown phone', 0.61),
 ];
 const SAMPLE_ENGINES = [
   { name: 'Suricata-compatible signatures', kind: 'signature', status: 'active', loaded_rules: 41203, hits: 38, last_run_ts: now - 60 },

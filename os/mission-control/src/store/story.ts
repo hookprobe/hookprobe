@@ -9,6 +9,7 @@ import { incidents, startInvestigateLive } from './investigateLive';
 import { detections, startDetectLive } from './detectLive';
 import { devices, refetch as refetchDevices } from './obsLive';
 import { substrate } from './mock';
+import { CAMERA, SAMPLE_AT } from './sampleClock';
 import { healthChecked } from './health';
 import { incidentHref } from './routes';
 
@@ -54,15 +55,13 @@ const live = createMemo<StoryEvent[]>(() => {
 });
 
 function sample(): StoryEvent[] {
-  const day = new Date(); day.setHours(0, 0, 0, 0);
-  const at = (dayOffset: number, h: number, m: number) => day.getTime() / 1000 - dayOffset * 86400 + h * 3600 + m * 60;
   return [
-    { id: 's1', ts: at(0, 16, 30), cat: 'Network', title: 'Wi-Fi channel changed', sub: 'Less interference on 5 GHz', href: '/network/wan' },
-    { id: 's2', ts: at(0, 13, 5), cat: 'Security', title: 'Kitchen camera isolated', sub: 'Contacted a malware host · handled automatically', href: '/investigate/queue' },
-    { id: 's3', ts: at(0, 10, 40), cat: 'Devices', title: 'New device joined', sub: 'Unnamed phone · waiting for a zone', href: '/network/zones' },
-    { id: 's4', ts: at(0, 7, 12), cat: 'Shield', title: 'Blocked 1,204 trackers', sub: 'Mostly from the smart TV', href: '/network/dns' },
-    { id: 's5', ts: at(1, 22, 14), cat: 'Security', title: 'Login attempts blocked', sub: '38 attempts on the router admin page from outside', href: '/investigate/queue' },
-    { id: 's6', ts: at(1, 9, 2), cat: 'Network', title: 'Update installed', sub: 'HookProbe OS · no restart needed', href: '/admin/identity' },
+    { id: 's2', ts: CAMERA.isolated, cat: 'Security', title: 'Kitchen camera isolated', sub: 'Contacted a malware host · handled automatically', href: '/investigate/queue' },
+    { id: 's1', ts: SAMPLE_AT.wifiChannel, cat: 'Network', title: 'Wi-Fi channel changed', sub: 'Less interference on 5 GHz', href: '/network/wan' },
+    { id: 's3', ts: SAMPLE_AT.unknownDevice, cat: 'Devices', title: 'New device joined', sub: 'Unnamed phone · waiting for a zone', href: '/network/zones' },
+    { id: 's4', ts: SAMPLE_AT.trackers, cat: 'Shield', title: 'Blocked 1,204 trackers', sub: 'Mostly from the smart TV', href: '/network/dns' },
+    { id: 's5', ts: SAMPLE_AT.bruteForce, cat: 'Security', title: 'Login attempts blocked', sub: '38 attempts on the router admin page from outside', href: '/investigate/queue' },
+    { id: 's6', ts: SAMPLE_AT.update, cat: 'Network', title: 'Update installed', sub: 'HookProbe OS · no restart needed', href: '/admin/identity' },
   ];
 }
 
@@ -93,7 +92,7 @@ export const hhmm = (ts: number) => {
     const m = Math.floor(ts / 60);
     return `+${Math.floor(m / 60)}h${String(m % 60).padStart(2, '0')}`;
   }
-  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
 };
 
 /** Events since local midnight (everything since boot while the device clock is unset). */
