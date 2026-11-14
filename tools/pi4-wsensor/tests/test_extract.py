@@ -132,8 +132,10 @@ class MgmtEventTests(unittest.TestCase):
 
     def test_event_schema_fields(self):
         (ev,) = events([beacon()])
-        for k in ("event_id", "ts", "sensor", "iface_role", "channel", "bssid", "classification", "source"):
+        for k in ("schema", "event_id", "ts", "sensor", "iface_role", "channel", "bssid",
+                  "classification", "source"):
             self.assertIn(k, ev)
+        self.assertEqual(ev["schema"], "wsensor/1")
 
     def test_freq_to_channel(self):
         self.assertEqual([wx.freq_to_channel(f) for f in (2412, 2437, 2484, 5180, 5745, 5955)],
