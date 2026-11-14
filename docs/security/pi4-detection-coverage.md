@@ -32,7 +32,7 @@ SNR). Monitoring is **part-time** (time-shared) and **fixed-channel** by default
 | DNS resolver posture | `dig` version.bind / ANY / ad domain | ✅ done — no version leak, no ANY amplification, ad filtering on |
 | MC served on AP? (segmentation) | TCP to AP gw 80/443 | ✅ done — not served on AP (good) |
 | Client → upstream RFC1918 reach | ping/TCP from wlan0 client | ✅ done — A-01 (clients reach mgmt VLAN/LAN; heqk to judge) |
-| Client isolation (`ap_isolate`) | `ap-isolate-test.sh` from one client toward a 2nd client on the SSID | ⚠️ A-02: tester ready; needs a 2nd client joined to the SSID (isolation is client↔client, so one station isn't enough) |
+| Client isolation (`ap_isolate`) | `ap-isolate-test.sh`, Pi client → phone client over the air | 🟢 A-02 (by design): radio `ap_isolate` IS on; client↔client traffic is **relayed + inspected by heqk**, never bridged (Pi↔phone ICMP went via heqk). Per-device isolation via device policy; guest SSID isolated by default |
 | **Management-plane DoS** | one off-subnet TCP connection | ✅ **A-03 found + root-caused + fix-verified** (High) |
 
 **Not in scope / not run:** UDP service scan (needs root), ARP-spoof / rogue-DHCP / rogue-RA injection tests (would
