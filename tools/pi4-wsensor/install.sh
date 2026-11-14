@@ -10,7 +10,9 @@ need=()
 for p in tshark iw; do command -v "$p" >/dev/null || need+=("$p"); done
 [ ${#need[@]} -eq 0 ] || DEBIAN_FRONTEND=noninteractive apt-get install -y -q "${need[@]}"
 install -d -m 0755 /opt/pi4-wsensor /etc/pi4-wsensor
-install -d -m 0750 /var/lib/pi4-wsensor
+install -d -m 0755 /var/lib/pi4-wsensor   # health.json + events readable by the dashboard/operator
+# keep raw captures private
+install -d -m 0700 /var/lib/pi4-wsensor/pcap
 for f in wsensor-supervisor.sh dongle-lock.sh wsensor_extract.py m0-inventory.sh m0-monitor-test.sh; do
   install -m 0755 "$SRC/$f" /opt/pi4-wsensor/
 done
