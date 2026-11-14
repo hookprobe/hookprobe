@@ -1332,6 +1332,11 @@ pub fn wan6_tick(up: &UplinkResult) {
     }
     let w = unsafe { &mut *core::ptr::addr_of_mut!(WAN6) };
     let Some((pfx, plen, valid)) = w.pd else { return };
+    // L-01b: a delegation the ISP did not renew ends at its valid lifetime — the LAN must stop advertising it
+    if crate::ip6lan::pd_lapsed(ms_now(), w.got_ms, valid) {
+        w.pd = None;
+        return;
+    }
     let t1 = if w.t1 == 0 { valid / 2 } else { w.t1 };
     if t1 == u32::MAX || valid == u32::MAX && w.t1 == 0 || w.sid_len == 0 {
         return;
