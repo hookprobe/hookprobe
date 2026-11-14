@@ -877,6 +877,13 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                         let _ = write!(w, ",\"wan\":{{\"up\":{},\"mode\":\"{}\",\"ip\":\"{}.{}.{}.{}\",\"gateway\":\"{}.{}.{}.{}\",\"vlan\":{},\"clients\":{}}}",
                             f.up, ["dhcp", "static", "pppoe"][(f.mode as usize).min(2)], f.ip[0], f.ip[1], f.ip[2], f.ip[3], n.gw[0], n.gw[1], n.gw[2], n.gw[3], n.wan_vlan, f.clients);
                     }
+                    if n.lan_prefix != 0 {
+                        let l = n.lan_ip;
+                        let m = if n.lan_prefix >= 32 { u32::MAX } else { !(u32::MAX >> n.lan_prefix) };
+                        let net = (u32::from_be_bytes(l) & m).to_be_bytes();
+                        let _ = write!(w, ",\"lan\":{{\"ip\":\"{}.{}.{}.{}\",\"prefix\":{},\"cidr\":\"{}.{}.{}.{}/{}\"}}",
+                            l[0], l[1], l[2], l[3], n.lan_prefix, net[0], net[1], net[2], net[3], n.lan_prefix);
+                    }
                     let p = n.v6_prefix;
                     let _ = write!(w, ",\"ipv6\":{{\"up\":{},\"lan_prefix\":\"{:x}:{:x}:{:x}:{:x}::/64\"}}", n.v6_up,
                         u16::from_be_bytes([p[0], p[1]]), u16::from_be_bytes([p[2], p[3]]), u16::from_be_bytes([p[4], p[5]]), u16::from_be_bytes([p[6], p[7]]));
