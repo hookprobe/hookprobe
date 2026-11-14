@@ -30,5 +30,5 @@ export default async function (t) {
 
   await page.setViewportSize({ width: 900, height: 1100 });
   await go('/investigate/incident/?id=INC-0142');
-  ok(await page.locator('.inc-plan-sticky').evaluate((el) => getComputedStyle(el).position === 'sticky'), 'incident tablet: plan is a sticky bar');
+  ok(await page.locator('.inc-plan-bar').evaluate((el) => getComputedStyle(el).position === 'sticky'), 'incident tablet: a sticky Review-plan bar');
 }
