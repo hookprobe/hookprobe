@@ -8,7 +8,7 @@ from the composite response.
 The key is NEVER stored — it's regenerated from PUF readings at each boot.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

@@ -5,7 +5,7 @@ Machine learning-based attack classification using extracted network features.
 Uses Random Forest for classification with signature-based fallback.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

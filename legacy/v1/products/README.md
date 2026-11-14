@@ -286,4 +286,4 @@ All products use the same transparent infrastructure from `shared/`:
 
 HTP-DSM-NEURO-QSECBIT-NSE: The Future of Endpoint Security
 
-AGPL v3.0 (Open Source Components) + Commercial License (Proprietary Components)
+AGPL-3.0, with a commercial license available

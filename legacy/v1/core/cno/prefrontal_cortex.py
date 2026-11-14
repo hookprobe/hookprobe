@@ -23,7 +23,7 @@ production deployment:
 Without this, Phase 20 is one prompt injection away from a router self-DoS.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 26.0.0
 """
 

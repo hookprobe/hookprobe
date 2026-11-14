@@ -2,13 +2,13 @@
 
 **Version**: 5.5.0
 **Status**: Production Ready
-**License**: Proprietary (Commercial license required for SaaS/OEM)
+**License**: AGPL-3.0
 
 ---
 
 ## Overview
 
-HookProbe Fortress includes two proprietary AI-powered features for intelligent device management:
+HookProbe Fortress includes two AI-powered features for intelligent device management:
 
 1. **AI Device Fingerprinting** - 99%+ accuracy device identification using ML/XGBoost
 2. **Ecosystem Bubble** - "Atmospheric Presence" networking for same-user device detection

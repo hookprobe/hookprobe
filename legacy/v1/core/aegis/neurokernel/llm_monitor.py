@@ -17,7 +17,7 @@ This module provides the monitoring framework with a pure-Python
 fallback that checks outputs and resource usage without eBPF.
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

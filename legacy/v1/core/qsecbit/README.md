@@ -7,7 +7,7 @@
 
 **Pillar 3 of HookProbe: Quantified Cyber Resilience**
 
-**Version**: 5.0.0 "Cortex" | **License**: Proprietary | **Author**: Andrei Toma
+**Version**: 5.0.0 "Cortex" | **License**: AGPL-3.0
 
 ---
 
@@ -1751,7 +1751,7 @@ mysql -h 10.100.1.10 -P 9030 -u root -p
 
 ## 📝 License
 
-Proprietary License - See `LICENSE` file in this directory.
+AGPL-3.0 - see the `LICENSE` file in this directory.
 
 ---
 

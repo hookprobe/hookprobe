@@ -8,7 +8,7 @@ Memory footprint: ~200KB for 500 signatures
 Lookup time: <0.1ms average (bloom filter + hash)
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

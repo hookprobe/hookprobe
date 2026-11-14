@@ -23,7 +23,7 @@ When the brain is uncertain or conflict is high, it does NOT commit — it
 recruits additional resources. The CNO now does the same.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 21.0.0
 """
 

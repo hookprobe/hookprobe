@@ -10,7 +10,7 @@
 #
 # Author: HookProbe Team
 # Version: 5.0.0
-# License: AGPL-3.0 - see LICENSE file (exception from proprietary dnsXai)
+# License: AGPL-3.0 - see LICENSE file
 # =============================================================================
 
 set -e

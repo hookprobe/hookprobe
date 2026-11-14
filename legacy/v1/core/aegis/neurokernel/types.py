@@ -5,7 +5,7 @@ Data types for the closed-loop kernel orchestration system.
 All types are plain dataclasses — no Pydantic needed for internal use.
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

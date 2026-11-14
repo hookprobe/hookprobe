@@ -6,7 +6,7 @@ a hardware-anchored TER that cannot be forged even with full software
 access. Also provides PUF-seeded weight evolution for NeuralEngine.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

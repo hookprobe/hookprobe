@@ -1,6 +1,7 @@
 [package]
 name = "napse-l2guard"
 version = "0.1.0"
+license = "AGPL-3.0-only"
 edition = "2021"
 
 # Ring-0 line-rate malformed-frame / malformed-ARP drop — the real enforcement point

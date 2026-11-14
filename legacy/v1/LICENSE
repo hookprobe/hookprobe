@@ -3,12 +3,11 @@ Copyright (C) 2024-2025 HookProbe Contributors
 
 This file is part of HookProbe.
 
-HookProbe is dual-licensed:
-- Open source components: GNU Affero General Public License v3.0 (AGPL-3.0)
-- Proprietary components: Commercial License (see LICENSING.md)
-
-This LICENSE file applies to the AGPL-licensed portions of HookProbe.
-For full licensing details, see LICENSING.md.
+All of HookProbe V1 (legacy/v1/) is licensed under the GNU Affero General
+Public License, version 3 only (SPDX: AGPL-3.0-only), whose full text follows,
+or a commercial licence from HookProbe. The components formerly marked
+proprietary were relicensed to AGPL-3.0-only on 2026-11-14. Policy of record:
+LICENSING.md at the repository root.
 
 ================================================================================
 

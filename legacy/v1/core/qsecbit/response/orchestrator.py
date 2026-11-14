@@ -5,7 +5,7 @@ Automated threat response system with XDP integration.
 Coordinates responses across multiple mitigation systems.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

@@ -12,7 +12,7 @@ Version 6.0 adds unified threat detection across OSI layers L2-L7:
 - Layer 7: SQL Injection, XSS, DNS Tunneling, HTTP Flood, Malware C2
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

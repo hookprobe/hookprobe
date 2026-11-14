@@ -9,7 +9,7 @@ This module provides the missing "glue" that connects:
 Closes the critical integration gaps identified in the architecture review.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

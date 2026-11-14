@@ -10,7 +10,7 @@
  * Exports events via ring buffer to userspace HealingEngine.
  *
  * Author: HookProbe Team
- * License: Proprietary
+ * License: AGPL-3.0 - see LICENSE file
  * Version: 1.0.0
  */
 

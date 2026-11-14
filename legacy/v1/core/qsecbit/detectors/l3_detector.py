@@ -9,7 +9,7 @@ Detects Layer 3 attacks:
 - IP Fragmentation Attacks (teardrop, overlapping fragments)
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 5.0.0
 """
 

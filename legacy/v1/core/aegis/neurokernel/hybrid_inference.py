@@ -18,7 +18,7 @@ Tier profiles:
     Nexus   (16GB+): Full — QSecBit fast + 8B local (no offload needed)
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

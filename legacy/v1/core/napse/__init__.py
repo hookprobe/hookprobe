@@ -1,7 +1,7 @@
 """
 NAPSE - Neural Adaptive Packet Synthesis Engine
 
-HookProbe's proprietary IDS/NSM/IPS engine with a split-brain
+HookProbe's IDS/NSM/IPS engine with a split-brain
 architecture optimized for resource-constrained edge devices.
 
 Architecture:
@@ -14,7 +14,7 @@ Data flow:
                                                                  -> ClickHouse
 
 Author: HookProbe Team
-License: Proprietary - see LICENSING.md
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 

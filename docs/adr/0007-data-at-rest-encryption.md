@@ -14,6 +14,10 @@ H3, done + reboot-proof). Supersedes the earlier draft; folds in the operator's 
 > HookProbe keeps **sole copyright** — **no outside contributions until a CLA exists**. The dual-licensing terms
 > get **one legal review before the first public release**.
 
+> **Note (2026-11-14).** "Crown jewels" below means secret **data** at rest (keys, credentials, threat intel, model
+> weights, customer data), not proprietary software. All HookProbe software is AGPL-3.0-only (or commercial),
+> with no proprietary components; hardware designs are CERN-OHL-S-2.0 (`LICENSING.md`).
+
 ## The decision that resolves open-vs-closed
 
 **The OS stays OPEN (GitHub, AGPL-3.0 + Commercial dual licence — see the 2026-11-07 amendment); the proprietary crown jewels are ENCRYPTED.** Open source is a

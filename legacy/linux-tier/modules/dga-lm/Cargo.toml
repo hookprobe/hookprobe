@@ -3,7 +3,7 @@ name = "dga-lm"
 version = "0.1.0"
 edition = "2021"
 description = "dga-lm — int8 char-level DGA (domain-generation-algorithm) classifier, base-tier-build-ticket.md Phase 4"
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 
 # Library: the tokenizer + int8 model forward-pass + dot-product kernels, shared by the
 # WASI binary and by native `cargo test` (the dot kernels are cross-checked against a

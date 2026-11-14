@@ -1,7 +1,7 @@
 """
 HookProbe MSSP Client — Single-contract piggyback architecture.
 
-PROPRIETARY AND CONFIDENTIAL
+License: AGPL-3.0 - see LICENSE file
 Copyright (c) 2024-2026 HookProbe Technologies
 
 Architecture:
