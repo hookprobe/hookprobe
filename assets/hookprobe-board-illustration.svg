@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1180" role="img" aria-labelledby="t d">
+  <title id="t">HookProbe board (illustration, not the board layout)</title>
+  <desc id="d">Every port on one edge: a DC jack, two 2.5 gigabit Ethernet jacks, two USB-C and a stacked USB-A. A heatsink with a fan covers the RK3588 processor and memory. Wi-Fi 7, 5G, NVMe and an accelerator sit underneath on M.2 cards.</desc>
+  <defs>
+    <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="10" cy="10" r="1.2" fill="#1d3550"/>
+    </pattern>
+    <linearGradient id="fin" x1="0" x2="1">
+      <stop offset="0" stop-color="#8f9bb0"/>
+      <stop offset="1" stop-color="#5d687c"/>
+    </linearGradient>
+  </defs>
+  <rect width="1400" height="1180" rx="28" fill="#0a0a0f"/>
+
+  <rect x="40" y="110" width="1320" height="1030" rx="22" fill="#0e1b2a" stroke="#1d3550" stroke-width="4"/>
+  <rect x="40" y="110" width="1320" height="1030" rx="22" fill="url(#grid)" opacity=".7"/>
+
+  <g fill="#0a0a0f" stroke="#8f9bb0" stroke-width="6">
+    <circle cx="90" cy="160" r="18"/><circle cx="1310" cy="160" r="18"/>
+    <circle cx="90" cy="1090" r="18"/><circle cx="1310" cy="1090" r="18"/>
+  </g>
+
+  <rect x="150" y="70" width="110" height="150" rx="10" fill="#1c1f2b" stroke="#5d687c" stroke-width="3"/>
+  <circle cx="205" cy="125" r="22" fill="#0a0a0f" stroke="#8f9bb0" stroke-width="4"/>
+  <g fill="#8f9bb0" stroke="#5d687c" stroke-width="3">
+    <rect x="300" y="60" width="180" height="190" rx="8"/>
+    <rect x="510" y="60" width="180" height="190" rx="8"/>
+  </g>
+  <g fill="#1c1f2b"><rect x="330" y="90" width="120" height="80" rx="4"/><rect x="540" y="90" width="120" height="80" rx="4"/></g>
+  <g fill="#00e08a"><rect x="318" y="72" width="22" height="12" rx="2"/><rect x="528" y="72" width="22" height="12" rx="2"/></g>
+  <g fill="#ffaa00"><rect x="440" y="72" width="22" height="12" rx="2"/><rect x="650" y="72" width="22" height="12" rx="2"/></g>
+  <g fill="#8f9bb0" stroke="#5d687c" stroke-width="3">
+    <rect x="730" y="78" width="96" height="60" rx="26"/>
+    <rect x="850" y="78" width="96" height="60" rx="26"/>
+    <rect x="980" y="60" width="150" height="170" rx="8"/>
+  </g>
+  <g fill="#1c1f2b">
+    <rect x="750" y="98" width="56" height="20" rx="10"/><rect x="870" y="98" width="56" height="20" rx="10"/>
+    <rect x="1002" y="88" width="106" height="40" rx="3"/><rect x="1002" y="160" width="106" height="40" rx="3"/>
+  </g>
+
+  <g fill="#1c1f2b" stroke="#5d687c" stroke-width="2">
+    <rect x="345" y="320" width="90" height="90" rx="6"/>
+    <rect x="555" y="320" width="90" height="90" rx="6"/>
+    <rect x="560" y="560" width="130" height="130" rx="8"/>
+  </g>
+  <g fill="#5d687c">
+    <rect x="520" y="520" width="34" height="28" rx="4"/><rect x="570" y="520" width="34" height="28" rx="4"/>
+    <rect x="620" y="520" width="34" height="28" rx="4"/><rect x="700" y="580" width="28" height="34" rx="4"/>
+    <rect x="700" y="630" width="28" height="34" rx="4"/><rect x="520" y="700" width="34" height="28" rx="4"/>
+    <rect x="620" y="700" width="34" height="28" rx="4"/>
+  </g>
+
+  <rect x="290" y="840" width="74" height="74" rx="6" fill="#1c1f2b" stroke="#00e08a" stroke-width="3"/>
+  <rect x="900" y="860" width="140" height="140" rx="6" fill="#1c1f2b" stroke="#5d687c" stroke-width="2"/>
+  <rect x="1170" y="840" width="150" height="190" rx="8" fill="#1c1f2b" stroke="#5d687c" stroke-width="2"/>
+  <rect x="1220" y="900" width="50" height="50" rx="3" fill="#5d687c"/>
+
+  <rect x="835" y="320" width="400" height="400" rx="16" fill="url(#fin)" stroke="#5d687c" stroke-width="3"/>
+  <g stroke="#5d687c" stroke-width="3" opacity=".55">
+    <line x1="860" y1="330" x2="860" y2="710"/><line x1="890" y1="330" x2="890" y2="710"/>
+    <line x1="1180" y1="330" x2="1180" y2="710"/><line x1="1210" y1="330" x2="1210" y2="710"/>
+  </g>
+  <circle cx="1035" cy="520" r="150" fill="#1c1f2b" stroke="#5d687c" stroke-width="4"/>
+  <g fill="#5d687c">
+    <path d="M1035 520 C1045 450 1095 420 1130 440 C1100 465 1070 495 1035 520Z"/>
+    <path d="M1035 520 C1105 530 1135 580 1115 615 C1090 585 1060 555 1035 520Z"/>
+    <path d="M1035 520 C1025 590 975 620 940 600 C970 575 1000 545 1035 520Z"/>
+    <path d="M1035 520 C965 510 935 460 955 425 C980 455 1010 485 1035 520Z"/>
+  </g>
+  <circle cx="1035" cy="520" r="34" fill="#0e1b2a" stroke="#00b4ff" stroke-width="3"/>
+  <text x="1035" y="526" text-anchor="middle" font-family="JetBrains Mono, Consolas, monospace" font-size="16" fill="#00b4ff">RK3588</text>
+
+  <g font-family="JetBrains Mono, Consolas, monospace" font-size="22" fill="#a3a3b4">
+    <text x="310" y="290">2 × 2.5 GbE</text>
+    <text x="740" y="290">2 × USB-C</text>
+    <text x="840" y="770">RK3588 + LPDDR4X under one cooler</text>
+    <text x="200" y="950">TPM 2.0</text>
+    <text x="1145" y="1065">Thread</text>
+    <text x="470" y="770">power 12–20 V</text>
+  </g>
+  <text x="700" y="1100" text-anchor="middle" font-family="JetBrains Mono, Consolas, monospace" font-size="20" fill="#7d7d90">underneath: Wi-Fi 7 · 5G · NVMe · accelerator  —  illustration, not the board layout</text>
+</svg>
