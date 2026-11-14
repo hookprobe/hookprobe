@@ -19,6 +19,23 @@ cat /var/lib/pi4-wsensor/health.json            # coverage, drops, stalls, temp,
 sudo journalctl -u pi4-wsensor -f               # live log
 ```
 
+## Local dashboard (read-only, management LAN only)
+`pi4-wsensor-dashboard.service` serves a self-contained page + `/api/health` + `/api/events` on the mgmt IP, port
+8099 (e.g. `http://10.200.0.4:8099/`). Offline (stdlib only, no external JS). It labels data **live / stale /
+unavailable** and never fabricates. Optional gate: create `/etc/pi4-wsensor/dashboard.token` and append
+`?token=<value>`. Never expose it to the internet.
+```
+sudo systemctl enable --now pi4-wsensor-dashboard      # scoped sudo
+```
+
+## ap_isolate test (A-02) — needs a second client
+`ap_isolate` isolates **clients on the same SSID** from each other, so it needs a 2nd device joined to
+`HookProbe-Setup-R3Q1` (phone/laptop), not a monitoring station. Then:
+```
+sudo /opt/pi4-wsensor/ap-isolate-test.sh            # auto-finds the peer, or pass its 10.99.0.x IP
+```
+Peer reachable ⇒ ap_isolate OFF; peer unreachable (but present) ⇒ ap_isolate ON.
+
 ## Time-share with the heqk bench — THE key operational rule
 The USB dongle (`wlan1`) is also heqk's second WPA3 station. The lock `/run/lock/hp-dongle.owner` arbitrates:
 - heqk takes it with `echo "heqk $(date -Is)" | sudo tee /run/lock/hp-dongle.owner`; the sensor yields in ~15 s.
