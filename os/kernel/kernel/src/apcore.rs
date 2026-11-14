@@ -610,6 +610,101 @@ pub fn client4<N: ApNic>(
     Client4::Forwarded(forward4(frame, port.pif, port.nif, cfg, pol, nst, c, nbuf, nic, reply))
 }
 
+/// G0 step 5b: the SIEM export's per-beat counters (the beat prints them).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SiemStats {
+    pub sent: u32,
+    pub lost: u32,
+    /// Beats with nothing to send through (no source address or next hop yet).
+    pub unrouted: u32,
+}
+
+/// G0 step 5b (parity G15): send the detections newer than `cursor` to the signed POLICY.TXT `export syslog` collector
+/// (RFC 5424 or OCSF JSON over UDP), at most 32 per beat, via the WAN lease or the management sub-interface; `cursor`
+/// advances past every detection handled (sent or lost — a lost UDP datagram is counted, never re-sent). Returns
+/// whether a route existed this beat.
+#[cfg(feature = "netsvc")]
+pub fn siem_export<N: ApNic>(nic: &mut N, ex: &hal::policy::Export, st: &crate::mcstate::McState, cursor: &mut Option<u64>, stats: &mut SiemStats) -> bool {
+    let (via_wan, src_ip, src_mac, nh) = match ex.via {
+        If::Mgmt => match nic.mgmt() {
+            Some(m) => (false, m.ip, m.mac, nic.mgmt_nexthop(ex.ip)),
+            None => (false, [0; 4], [0; 6], None),
+        },
+        _ => {
+            let w = nic.wan();
+            (true, w.ip, w.mac, (w.gw_mac != [0u8; 6]).then_some(w.gw_mac))
+        }
+    };
+    let Some(dmac) = nh.filter(|_| src_ip != [0; 4]) else {
+        stats.unrouted += 1;
+        return false;
+    };
+    let mut sent = 0u32;
+    let mut last = *cursor;
+    st.for_each_det_after(*cursor, &mut |d, ms| {
+        if sent >= 32 {
+            return; // bounded per beat; the rest go next beat
+        }
+        let info = crate::rulecat::lookup_or_generic(d.rule_id);
+        let det = crate::siem::Det {
+            seq: d.seq, ts_ms: ms, rule_id: crate::rulecat::HEQK_RULE_BAND + d.rule_id as u32, msg: info.msg,
+            category: info.category, mitre: info.mitre, severity: info.severity, src: d.src, dst: d.dst,
+            dport: d.dport, action: if d.verdict == 2 { "dropped" } else { "observed" },
+        };
+        let mut msg = [0u8; 700];
+        let n = if ex.json { crate::siem::ocsf_json(&det, "heqk-ap", &mut msg) } else { crate::siem::rfc5424(&det, "heqk-ap", &mut msg) };
+        let mut fr = [0u8; 760];
+        if n > 0 {
+            let k = crate::wanntp::udp4(&mut fr, &src_mac, &dmac, src_ip, ex.ip, 40514, ex.port, &msg[..n]);
+            let ok = if via_wan { nic.wan_tx(&fr[..k]) } else { nic.mgmt_tx(&fr[..k]) };
+            if ok { stats.sent += 1 } else { stats.lost += 1 }
+        }
+        last = Some(d.seq);
+        sent += 1;
+    });
+    *cursor = last;
+    true
+}
+
+/// `[P-apcore-siem]` — step 5b on the fake NIC.
+#[cfg(feature = "netsvc")]
+pub fn siem_selftest() -> bool {
+    let wan = WanView { ip: [100, 64, 7, 9], mac: [0x02, 0x77, 0, 0, 0, 0x09], gw_mac: [0x02, 0x77, 0, 0, 0, 0x01], dns: [1, 1, 1, 1] };
+    let mut nic = FakeNic { t: 1000, wan_up: true, wan, nexthop: None, mgmt: None, wan_ok: true, wan_n: 0, mgmt_n: 0, last: [0; 1600], last_len: 0 };
+    let mut st = crate::mcstate::McState::new();
+    st.set_clock(1_800_000_000_000, 0, 1000);
+    for i in 0..40u32 {
+        st.push_event(&crate::events::Event { ts: i as u64, src: 0x0a63_000a, rule_id: 4, severity: 5, verdict: if i % 2 == 0 { 2 } else { 1 }, class: 0, dst: 0x5db8_d822, dport: 4444 });
+    }
+    let ex = hal::policy::Export { ip: [192, 168, 200, 10], port: 514, via: If::Wan, json: false };
+    let mut cur = None;
+    let mut ss = SiemStats::default();
+    // 40 new detections: 32 this beat over the WAN to the collector (UDP 514, from the lease), 8 the next, then none
+    let b1 = siem_export(&mut nic, &ex, &st, &mut cur, &mut ss) && ss.sent == 32 && nic.wan_n == 32
+        && nic.last[0..6] == wan.gw_mac && nic.last[26..30] == wan.ip && nic.last[30..34] == [192, 168, 200, 10] && nic.last[36..38] == 514u16.to_be_bytes();
+    let b2 = siem_export(&mut nic, &ex, &st, &mut cur, &mut ss) && ss.sent == 40 && nic.wan_n == 40;
+    let b3 = siem_export(&mut nic, &ex, &st, &mut cur, &mut ss) && ss.sent == 40 && nic.wan_n == 40;
+    // OCSF JSON when asked
+    let mut cur_j = None;
+    let exj = hal::policy::Export { json: true, ..ex };
+    let _ = siem_export(&mut nic, &exj, &st, &mut cur_j, &mut ss);
+    let json = nic.last[42] == b'{';
+    // via mgmt with no management sub-interface: unrouted, the cursor does not move (nothing is lost)
+    let exm = hal::policy::Export { via: If::Mgmt, ..ex };
+    let mut cur_m = None;
+    let unrouted = !siem_export(&mut nic, &exm, &st, &mut cur_m, &mut ss) && ss.unrouted == 1 && cur_m.is_none();
+    // a failed send is counted as lost and not retried
+    nic.wan_ok = false;
+    st.push_event(&crate::events::Event { ts: 50, src: 0x0a63_000a, rule_id: 4, severity: 5, verdict: 2, class: 0, dst: 0, dport: 0 });
+    let lost = siem_export(&mut nic, &ex, &st, &mut cur, &mut ss) && ss.lost == 1 && siem_export(&mut nic, &ex, &st, &mut cur, &mut ss) && ss.lost == 1;
+    let pass = b1 && b2 && b3 && json && unrouted && lost;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-siem] {} — G0 step 5b: the SIEM export (parity G15) on the fake NIC: 40 detections -> 32 this beat to the collector over the WAN (UDP, from the lease, via the gateway)={} the other 8 next beat={} then nothing re-sent={} OCSF JSON when asked={} via mgmt without a management interface: unrouted, cursor kept={} a failed send counted lost, not retried={}\n",
+        if pass { "PASS" } else { "FAIL" }, b1, b2, b3, json, unrouted, lost
+    ));
+    pass
+}
+
 /// G0 step 4: where one frame received on the management sub-interface goes (after `mgmt_poll` answered ARP / ping).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MgmtOut {
