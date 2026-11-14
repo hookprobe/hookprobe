@@ -4,8 +4,8 @@
 ([ADR 0064](../../docs/adr/0064-hookprobe-hardware-program.md): H0 CM5 validated → H1 HAL decoupling → H2 heqk on an
 intermediate RK3588 board → H3 our board routed + reviewed → H4 prototype bring-up).
 
-The board's design files are a company asset in a private repository, not here (ADR 0064 D2). This page is only
-how HookProbe OS sees the board.
+The board's design files are in [`hardware/hookprobe-sbc/`](../../hardware/hookprobe-sbc/) (CERN-OHL-S-2.0 +
+commercial, ADR 0064 D6). This page is only how HookProbe OS sees the board.
 
 ## Capabilities the board would grant (once each driver passes its metal gate)
 
@@ -18,7 +18,7 @@ Granted from the Platform Manifest, never from the board name. Everything starts
 | local retention on NVMe (storage fact, sizes the retention window) | M.2 NVMe | H4 |
 | `wifi`, `wifi_ap` (WIDS receive-only) | Qualcomm QCN9274 Wi-Fi 7 (M.2, PCIe) | H2 bring-up → H4 |
 | `cellular` (5G) | Sierra Wireless EM9293 (M.2, USB 3, MBIM) | H2 bring-up → H4 |
-| `edge_ai` | RK3588 NPU; M.2 accelerator slot | later |
+| `edge_ai` | RK3588 NPU (6 TOPS); M.2 M-key 2280 AI accelerator slot (NPU or FPGA card, PCIe 3.0 ×1) | later |
 | Thread / Matter (**no token yet**: needs an ADR 0003 amendment) | Thread module on a UART | later |
 
 Token names are the ones in `legacy/linux-tier/manifest/schema/manifest.schema.json` and the legacy
