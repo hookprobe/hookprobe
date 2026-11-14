@@ -12,7 +12,7 @@
 //!   clock is written with "time unknown" (never a fake time).
 
 use crate::export::EV_IMAGE_LEN;
-use crate::fslog::{self, LogStore, SealCtx, MAX_SEALED_PAYLOAD, RT_EVIDENCE};
+use crate::fslog::{self, LogStore, SealCtx, MAX_SEALED_PAYLOAD, RT_EVIDENCE, RT_EVIDENCE_B};
 use crate::seal::Policy;
 use crate::snapshot::IMG_EPOCH;
 use crate::store::SealedStore;
@@ -21,7 +21,19 @@ use hal::BlockDev;
 /// 1 superblock + 4096 record slots (2 MiB): ~90k detections at 22 per record. Bounded by the boot scan (every
 /// slot is read at mount): ~1.5 s at the 25 MHz data clock (it was 22 s at the old 390 kHz clock, 2026-11-09).
 pub const EVLOG_SECT: u64 = 4097;
-pub const PER_REC: usize = MAX_SEALED_PAYLOAD / EV_IMAGE_LEN; // 22
+pub const PER_REC: usize = (MAX_SEALED_PAYLOAD - BUILD_TAG_LEN) / EV_IMAGE_LEN; // 21 (+ the build tag)
+/// Bytes of the build tag at the head of an `RT_EVIDENCE_B` record.
+pub const BUILD_TAG_LEN: usize = 16;
+
+/// This build's evidence tag: `HEQK_BUILD_ID` (first 16 bytes), zero-padded; all zero when the build has no id.
+pub fn build_tag() -> [u8; BUILD_TAG_LEN] {
+    let mut t = [0u8; BUILD_TAG_LEN];
+    if let Some(b) = option_env!("HEQK_BUILD_ID") {
+        let n = b.len().min(BUILD_TAG_LEN);
+        t[..n].copy_from_slice(&b.as_bytes()[..n]);
+    }
+    t
+}
 const FLUSH_S: u64 = 60;
 
 /// The log's RAM side: the volume key, the pending batch, counters.
@@ -61,16 +73,19 @@ impl EvLog {
         Ok(EvLog { log, vek, policy, pend: [[0; EV_IMAGE_LEN]; PER_REC], npend: 0, last_flush_s: 0, written: 0, failed: 0 })
     }
 
-    /// Every stored event, oldest first: `cb(image)`.
-    pub fn for_each<D: BlockDev>(&self, store: &SealedStore<D>, cb: &mut dyn FnMut(&[u8; EV_IMAGE_LEN])) -> u64 {
+    /// Every stored event, oldest first: `cb(build tag, image)`. The tag is all zero for records written before
+    /// evidence was tagged (`RT_EVIDENCE`): "unknown build", never a guessed one.
+    pub fn for_each<D: BlockDev>(&self, store: &SealedStore<D>, cb: &mut dyn FnMut(&[u8; BUILD_TAG_LEN], &[u8; EV_IMAGE_LEN])) -> u64 {
         let mut n = 0u64;
         let _ = self.log.for_each_sealed(store, &SealCtx { vek: &self.vek, policy: &self.policy }, |_, rt, pt| {
-            if rt != RT_EVIDENCE {
-                return;
-            }
-            for c in pt.chunks_exact(EV_IMAGE_LEN) {
+            let (tag, body) = match rt {
+                RT_EVIDENCE => ([0u8; BUILD_TAG_LEN], pt),
+                RT_EVIDENCE_B if pt.len() >= BUILD_TAG_LEN => (pt[..BUILD_TAG_LEN].try_into().unwrap(), &pt[BUILD_TAG_LEN..]),
+                _ => return,
+            };
+            for c in body.chunks_exact(EV_IMAGE_LEN) {
                 let img: &[u8; EV_IMAGE_LEN] = c.try_into().unwrap();
-                cb(img);
+                cb(&tag, img);
                 n += 1;
             }
         });
@@ -108,6 +123,7 @@ impl EvLog {
             return false;
         }
         let mut pt = [0u8; MAX_SEALED_PAYLOAD];
+        pt[..BUILD_TAG_LEN].copy_from_slice(&build_tag());
         for (i, img) in self.pend[..self.npend].iter().enumerate() {
             let mut im = *img;
             if im[15] & IMG_EPOCH == 0 {
@@ -115,10 +131,11 @@ impl EvLog {
                 im[0..8].copy_from_slice(&0u64.to_le_bytes());
                 im[15] |= IMG_EPOCH;
             }
-            pt[i * EV_IMAGE_LEN..(i + 1) * EV_IMAGE_LEN].copy_from_slice(&im);
+            let o = BUILD_TAG_LEN + i * EV_IMAGE_LEN;
+            pt[o..o + EV_IMAGE_LEN].copy_from_slice(&im);
         }
-        let n = self.npend * EV_IMAGE_LEN;
-        let ok = self.log.append_sealed(store, &SealCtx { vek: &self.vek, policy: &self.policy }, RT_EVIDENCE, &pt[..n]).is_ok();
+        let n = BUILD_TAG_LEN + self.npend * EV_IMAGE_LEN;
+        let ok = self.log.append_sealed(store, &SealCtx { vek: &self.vek, policy: &self.policy }, RT_EVIDENCE_B, &pt[..n]).is_ok();
         if ok {
             self.written += self.npend as u64;
         } else {
@@ -209,7 +226,7 @@ pub fn selftest() -> bool {
         b[15] |= IMG_EPOCH;
         b
     };
-    // 50 events with a clock: two full records (44) + a partial one flushed after a minute
+    // 50 events with a clock: two full records (42) + a partial one flushed after a minute
     let mut flushed = 0;
     for i in 0..50u32 {
         if l.push(img(&ev(i), 1_762_000_000_000 + i as u64)) && l.maybe_flush(&mut store, 10, true, false) {
@@ -231,21 +248,39 @@ pub fn selftest() -> bool {
     let Ok(l2) = EvLog::open(&mut store, lo, hi, &srk, pol) else { arch_aarch64::_print(format_args!(" [P-evlog] FAIL — step 3\n")); return false };
     let mut got = 0u32;
     let mut order = true;
-    l2.for_each(&store, &mut |b| {
+    let mut tagged = true;
+    l2.for_each(&store, &mut |tag, b| {
         let e = crate::export::image_to_ev(b);
         order &= e.map_or(false, |e| e.src == 0x0a63_0000 + got && e.rule_id == 100 + (got % 7) as u16);
+        tagged &= *tag == build_tag();
         got += 1;
     });
     let survives = got == 50 && order;
+    // every record names the build that wrote it; a record from before the tag (RT_EVIDENCE) reads as "unknown"
+    let mut legacy = [0u8; 2 * EV_IMAGE_LEN];
+    legacy[..EV_IMAGE_LEN].copy_from_slice(&img(&ev(9000), 1_762_000_200_000));
+    legacy[EV_IMAGE_LEN..].copy_from_slice(&img(&ev(9001), 1_762_000_200_001));
+    let mut l2w = l2;
+    let (vek_c, pol_c) = (l2w.vek, l2w.policy);
+    let wrote_legacy = l2w.log.append_sealed(&mut store, &SealCtx { vek: &vek_c, policy: &pol_c }, RT_EVIDENCE, &legacy).is_ok();
+    let (mut old_unknown, mut old_n) = (true, 0u32);
+    l2w.for_each(&store, &mut |tag, b| {
+        if crate::export::image_to_ev(b).map_or(false, |e| e.src >= 0x0a63_0000 + 9000) {
+            old_unknown &= *tag == [0u8; BUILD_TAG_LEN];
+            old_n += 1;
+        }
+    });
+    let build_tags = tagged && wrote_legacy && old_unknown && old_n == 2;
+    drop(l2w);
     // EVID-01: the next boot after an OTA update (other PCR values, a raised SVN floor, same device) builds its policy
     // the same way and reads the whole history; the old STRICT binding opened an empty log here
     let strict = |pcr: u8, floor: u64| Policy { mask: boot_abi::SEAL_POLICY_STRICT, device_id: 7, svn_floor: floor, pcr: [[pcr; 32]; boot_abi::NUM_PCR] };
     let after_ota = evidence_policy(7).digest() == pol.digest() && strict(1, 1).digest() != strict(2, 5).digest();
     let mut got2 = 0u32;
     if let Ok(l2b) = EvLog::open(&mut store, lo, hi, &srk, evidence_policy(7)) {
-        l2b.for_each(&store, &mut |_| got2 += 1);
+        l2b.for_each(&store, &mut |_, _| got2 += 1);
     }
-    let ota = after_ota && got2 == 50;
+    let ota = after_ota && got2 == 52; // the 50 + the 2 untagged ones
     // another device id on the same SRK reads nothing (the binding that stays)
     let other_dev = EvLog::open(&mut store, lo, hi, &srk, evidence_policy(8)).map_or(false, |o| o.log.count() == 0);
     // another device key reads nothing (the records are sealed under HKDF(SRK))
@@ -257,7 +292,7 @@ pub fn selftest() -> bool {
     let mut s2 = store;
     let _ = s2.store_sector(lo + 2, &raw);
     let Ok(l3) = EvLog::open(&mut s2, lo, hi, &srk, pol) else { arch_aarch64::_print(format_args!(" [P-evlog] FAIL — step 4\n")); return false };
-    let tamper = l3.log.count() == 2;
+    let tamper = l3.log.count() == 3; // 4 records (3 tagged + the untagged one), one flipped
     // ring: 9 more full records into 8 slots — the oldest are overwritten, the count stays bounded
     let Ok(mut l4) = EvLog::open(&mut s2, lo, hi, &srk, pol) else { arch_aarch64::_print(format_args!(" [P-evlog] FAIL — step 5\n")); return false };
     for r in 0..9u32 {
@@ -274,15 +309,15 @@ pub fn selftest() -> bool {
     }
     let _ = l5.maybe_flush(&mut s2, 2000, false, false);
     let mut unknown_ok = true;
-    l5.for_each(&s2, &mut |b| {
+    l5.for_each(&s2, &mut |_, b| {
         if crate::export::image_to_ev(b).map_or(false, |e| e.src >= 0x0a63_0000 + 5000) {
             unknown_ok &= b[15] & IMG_EPOCH != 0 && b[0..8] == [0u8; 8];
         }
     });
-    let pass = fresh && batched && !clear && survives && ota && other_dev && foreign && tamper && ring && unknown_ok;
+    let pass = fresh && batched && !clear && survives && build_tags && ota && other_dev && foreign && tamper && ring && unknown_ok;
     arch_aarch64::_print(format_args!(
-        " [P-evlog] {} — #54 sealed evidence log (fslog ring in the DataVolume Evidence region, HQKSEAL1 records under HKDF(SRK)): formatted on first use={} batched {} events/record, held < 60 s then flushed={} ciphertext at rest (no plaintext source)={} remount reads every event back in order={} EVID-01: the boot after an OTA (other PCRs, raised floor) reads the whole history={} another device id reads nothing={} another device key reads nothing={} flipped ciphertext byte drops only that record={} bounded ring (oldest overwritten)={} pre-clock batch = time unknown={}\n",
-        if pass { "PASS" } else { "FAIL" }, fresh, PER_REC, batched, !clear, survives, ota, other_dev, foreign, tamper, ring, unknown_ok
+        " [P-evlog] {} — #54 sealed evidence log (fslog ring in the DataVolume Evidence region, HQKSEAL1 records under HKDF(SRK)): formatted on first use={} batched {} events/record, held < 60 s then flushed={} ciphertext at rest (no plaintext source)={} remount reads every event back in order={} each record names its build, an untagged older record reads as unknown={} EVID-01: the boot after an OTA (other PCRs, raised floor) reads the whole history={} another device id reads nothing={} another device key reads nothing={} flipped ciphertext byte drops only that record={} bounded ring (oldest overwritten)={} pre-clock batch = time unknown={}\n",
+        if pass { "PASS" } else { "FAIL" }, fresh, PER_REC, batched, !clear, survives, build_tags, ota, other_dev, foreign, tamper, ring, unknown_ok
     ));
     pass
 }
