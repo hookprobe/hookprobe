@@ -153,7 +153,7 @@ const ListBlock: Component<ListPanelProps> = (props) => {
 // ── Live view (heqk device, ADR 0052) ──────────────────────────────────────────
 
 const pct = (a: number, b: number) => (b > 0 ? ((a / b) * 100).toFixed(1) : '0.0');
-const time = (ts: number) => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+const time = (ts: number) => new Date(ts * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const isBlock = (v: string) => v === 'blocked' || v === 'blocked-cname' || v === 'tcp53-refused';
 const isBypass = (v: string) => ['ddr', 'canary', 'relay-seen', 'relay-blocked', 'doh-seen', 'doh-blocked', 'dot-refused'].includes(v);
 

@@ -3707,6 +3707,33 @@ fn cm5_p10_probe() {
                                 }
                             }};
                         }
+                        // DNS-01 (metal 2026-11-14): a reply the AP BUILDS ITSELF for a client (Shield's sinkhole answer, a reject)
+                        // that enters the CYW43455 firmware within a few ms of the station's own uplink frame is often held by the
+                        // firmware for seconds (60 % of sinkholed lookups >= 2 s, 30 % > 10 s; forwarded answers, which come back
+                        // an upstream round trip later, never). Holding these replies 20 ms before the firmware fixed it: 20/20
+                        // sinkholed lookups in 23-27 ms, forwarded unchanged (image dfr20, Pi client, 25-query set). A bench build
+                        // may override the hold with HEQK_LOCAL_REPLY_DEFER_MS (0 = send at once, the old behaviour).
+                        const DEFER_MS: u64 = match option_env!("HEQK_LOCAL_REPLY_DEFER_MS") {
+                            Some(v) => { let b = v.as_bytes(); let mut n = 0u64; let mut i = 0; while i < b.len() { n = n * 10 + (b[i] - b'0') as u64; i += 1; } n }
+                            None => 20,
+                        };
+                        const DQ_N: usize = 8;
+                        let mut dq: [([u8; 600], usize, u64); DQ_N] = [([0u8; 600], 0, 0); DQ_N];
+                        let mut dq_n = 0usize;
+                        macro_rules! wifi_reply {
+                            ($f:expr) => {{
+                                let f: &[u8] = $f;
+                                if DEFER_MS == 0 || f.len() > 600 || dq_n == DQ_N {
+                                    wifi_send!(f)
+                                } else {
+                                    dq[dq_n].0[..f.len()].copy_from_slice(f);
+                                    dq[dq_n].1 = f.len();
+                                    dq[dq_n].2 = crate::clock::ticks().wrapping_add(DEFER_MS * (crate::clock::freq() / 1000).max(1));
+                                    dq_n += 1;
+                                    true
+                                }
+                            }};
+                        }
                         // ---- WAN policy (task #26): per-interface counters [lan, eth1, wan, mgmt] ----
                         // Parity G16: WAN health probes (hysteresis) drive the failover, not ARP liveness alone.
                         let mut whealth = wanhealth::WanHealth::new();
@@ -4205,6 +4232,21 @@ fn cm5_p10_probe() {
                             // host always drains the firmware's RX side before pushing more TX into it.
                             let tx_budget = if rx_busy { 1 } else { 20 };
                             let mut tx_round = 0;
+                            // DNS-01: release deferred local replies whose time has come
+                            if dq_n > 0 {
+                                let tn = crate::clock::ticks();
+                                let mut k = 0;
+                                while k < dq_n {
+                                    if (tn.wrapping_sub(dq[k].2) as i64) >= 0 {
+                                        let (buf, len) = (dq[k].0, dq[k].1);
+                                        let _ = wifi_send!(&buf[..len]);
+                                        dq[k] = dq[dq_n - 1];
+                                        dq_n -= 1;
+                                    } else {
+                                        k += 1;
+                                    }
+                                }
+                            }
                             // priority frames first (control traffic never waits behind the bulk ring)
                             while pq_n > 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
                                 tx_round += 1;
@@ -4604,7 +4646,7 @@ fn cm5_p10_probe() {
                                         let cfg = apcore::FwdCfg { our_ip, me: ap.bssid, inside_net };
                                         let mut hw = ApHw { up: &up, wh: &whealth };
                                         let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
-                                        let r = apcore::client4(frame, apcore::WIFI_PORT, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| wifi_send!(f));
+                                        let r = apcore::client4(frame, apcore::WIFI_PORT, cyw43::now_secs(), &mut dh, &cfg, pol, &mut nst, &mut fc, &mut nbuf, &mut hw, &mut |f: &[u8]| wifi_reply!(f));
                                         match r {
                                             apcore::Client4::BindDrop => bind_drop += 1,
                                             apcore::Client4::Trunc => trunc_drop += 1, // fail-closed, but NOT a rule drop

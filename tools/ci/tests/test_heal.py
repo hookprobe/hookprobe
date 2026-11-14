@@ -87,6 +87,22 @@ class Classifier(unittest.TestCase):
         self.assertEqual(a["category"], "clippy_regression")
         self.assertEqual(a["signature"], b["signature"])
 
+    def test_e2e_signature_per_failing_check(self):
+        # #1028 / #1065 / #1166 were three DIFFERENT mc-e2e failures that all got e2e_failure-5247587f3f39:
+        # the `^\s+FAIL` rule never matched behind the gh job/step/timestamp prefix, so only the summary
+        # `MC-E2E: FAIL (?)` was evidence. Now each failing check is part of the signature.
+        j = "heqk Mission Control end-to-end (QEMU + Chromium)\tmc-e2e.sh (API + TLS + browser legs)\t"
+        def log(ts, check):
+            return f"{j}{ts}Z   PASS  rule plane armed\n{j}{ts}Z   FAIL  {check}\n{j}{ts}Z MC-E2E: FAIL (1)"
+        dhcp = classify.classify_text(log("2026-11-12T10:39:01.1", "no DHCP lease (expected 10.0.2.15)"))
+        https = classify.classify_text(log("2026-11-12T18:45:41.2", "browser over https failed"))
+        system1 = classify.classify_text(log("2026-11-14T14:15:00.3", '/api/system: {"version":"0.0-26","slot":null,"seen":27}'))
+        system2 = classify.classify_text(log("2026-11-14T14:39:09.9", '/api/system: {"version":"0.0-26","slot":null,"seen":31}'))
+        self.assertEqual({d["category"] for d in (dhcp, https, system1)}, {"e2e_failure"})
+        self.assertEqual(len({dhcp["signature"], https["signature"], system1["signature"]}), 3)
+        self.assertEqual(system1["signature"], system2["signature"])  # same check, different live counters
+        self.assertTrue(any("FAIL" in e and "/api/system" in e for e in system1["evidence"]))
+
     def test_unknown_goes_to_human(self):
         d = classify.classify_text("something odd happened\nexit 1")
         self.assertEqual((d["category"], d["action"]), ("unknown", "human"))
