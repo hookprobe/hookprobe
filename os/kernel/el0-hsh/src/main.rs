@@ -104,7 +104,7 @@ enum Act {
 /// (words, what it does, help line). Read-only commands map to exactly ONE management message.
 const CMDS: &[(&[&str], u8, &str)] = &[
     (&["help"], 0, "help                  this list (only what this build supports)"),
-    (&["version"], 1, "version               HEQK build"),
+    (&["version"], 1, "version               OS version, codename and HEQK build"),
     (&["info"], 1, "info                  platform, counters, configuration + ownership state"),
     (&["uptime"], 1, "uptime                time since boot"),
     (&["interface", "show", "wan"], 2, "interface show wan    WAN state, address, mode, counters"),
@@ -188,7 +188,8 @@ fn format(o: &mut Out, msg: u16, cmd0: u8, rec: &[u8]) -> bool {
             let build = core::str::from_utf8(&i.build).unwrap_or("?").trim_end_matches('\0');
             match cmd0 {
                 b'v' => {
-                    let _ = writeln!(o, "HEQK {}", build);
+                    let _ = writeln!(o, "{} v{} \"{}\" - HEQK build {}", hal::release::PRODUCT, hal::release::VERSION,
+                        hal::release::CODENAME, build);
                 }
                 b'u' => {
                     let _ = writeln!(o, "up {} d {:02}:{:02}:{:02}", i.uptime_s / 86400, i.uptime_s / 3600 % 24, i.uptime_s / 60 % 60, i.uptime_s % 60);
