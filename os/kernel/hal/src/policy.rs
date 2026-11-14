@@ -1077,3 +1077,67 @@ mod tunnel_tests {
         assert!(parse(b"HQPOL1\n").unwrap().tunnel.is_none(), "no line = no tunnel");
     }
 }
+
+/// LAN assessment A-01 (2026-11-14): AP clients reach upstream private networks through the WAN by default
+/// (observe-by-default; an ISP modem's admin page lives there). An owner who wants them unreachable says so in
+/// the signed POLICY.TXT — no new code: a prefix list of the private ranges, with the AP's own subnet carved out
+/// (`deny` = "not in the list"), and one `block` entry on `lan in`. These tests pin that the documented snippet
+/// (docs/design/policy-block-upstream-private.md) parses and does exactly that.
+#[cfg(test)]
+mod a01_upstream_private_tests {
+    use super::*;
+
+    pub const SNIPPET: &[u8] = b"HQPOL1\n\
+prefix-list UPSTREAM-PRIVATE seq 5 deny 10.99.0.0/24 le 32\n\
+prefix-list UPSTREAM-PRIVATE seq 10 permit 10.0.0.0/8 le 32\n\
+prefix-list UPSTREAM-PRIVATE seq 20 permit 172.16.0.0/12 le 32\n\
+prefix-list UPSTREAM-PRIVATE seq 30 permit 192.168.0.0/16 le 32\n\
+acl LAN-IN seq 10 block any any pl:UPSTREAM-PRIVATE\n\
+acl LAN-IN default allow\n\
+interface lan acl in LAN-IN\n";
+
+    /// eth / IPv4 / TCP SYN `src -> dst:dport`.
+    fn tcp(src: [u8; 4], dst: [u8; 4], dport: u16) -> [u8; 54] {
+        let mut f = [0u8; 54];
+        f[12] = 0x08;
+        f[14] = 0x45;
+        f[17] = 40;
+        f[22] = 64;
+        f[23] = 6;
+        f[26..30].copy_from_slice(&src);
+        f[30..34].copy_from_slice(&dst);
+        f[34..36].copy_from_slice(&40000u16.to_be_bytes());
+        f[36..38].copy_from_slice(&dport.to_be_bytes());
+        f[46] = 0x50;
+        f[47] = 0x02;
+        f
+    }
+
+    fn act(p: &mut Policy, dst: [u8; 4], dport: u16) -> Act {
+        let f = tcp([10, 99, 0, 10], dst, dport);
+        p.check(If::Lan, Dir::In, &facts(&f).expect("parsable")).0
+    }
+
+    #[test]
+    fn snippet_blocks_upstream_private_only() {
+        let mut p = Policy::new();
+        parse_policy(SNIPPET, &mut p).expect("the documented snippet parses");
+        // upstream private networks: blocked (the Pi's A-01 reach: fortress mgmt host, LAN router, a modem)
+        assert_eq!(act(&mut p, [192, 168, 200, 1], 22), Act::Block);
+        assert_eq!(act(&mut p, [10, 200, 0, 1], 443), Act::Block);
+        assert_eq!(act(&mut p, [172, 20, 200, 5], 80), Act::Block);
+        assert_eq!(act(&mut p, [192, 168, 1, 1], 80), Act::Block);
+        // the AP's own subnet is carved out; the internet is untouched
+        assert_eq!(act(&mut p, [10, 99, 0, 1], 53), Act::Allow);
+        assert_eq!(act(&mut p, [1, 1, 1, 1], 443), Act::Allow);
+        assert_eq!(act(&mut p, [93, 184, 216, 34], 80), Act::Allow);
+    }
+
+    #[test]
+    fn default_policy_keeps_observe_by_default() {
+        // no POLICY.TXT entry -> nothing blocked (ADR 0023: legit traffic always passes unless the owner says so)
+        let mut p = Policy::new();
+        parse_policy(b"HQPOL1\n", &mut p).unwrap();
+        assert_eq!(act(&mut p, [192, 168, 200, 1], 22), Act::Allow);
+    }
+}
