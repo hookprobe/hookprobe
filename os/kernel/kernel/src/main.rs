@@ -3972,11 +3972,11 @@ fn cm5_p10_probe() {
                             let bi = unsafe { &*(boot_abi::BOOTINFO_ADDR as *const boot_abi::BootInfo) };
                             let b = if bi.magic == boot_abi::BOOTINFO_MAGIC { abboot::trial::classify(bi.kernel_hash) } else { otaimg::Boot::Unknown };
                             kprint!(" [OTA] this boot: {:?} build={}{}\n", b, option_env!("HEQK_BUILD_ID").unwrap_or("-"),
-                                if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves AND the WAN is usable, both for 30 s (5 min limit, else reboot to the previous slot)" } else { "" });
+                                if matches!(b, otaimg::Boot::Trial(_)) { " — TRIAL of an update: commit once the AP serves AND the WAN is usable, both for 30 s, not during a DFS CAC (5 min limit + the CAC time, else reboot to the previous slot)" } else { "" });
                             (b, now())
                         };
                         #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
-                        let (mut ota_gate, ota_halts0) = (otaimg::CommitGate::new(), cyw43::fw_halts());
+                        let (mut ota_gate, ota_halts0, mut ota_dfs) = (otaimg::CommitGate::new(), cyw43::fw_halts(), (0u64, None::<u32>));
                         // Audit §2.1 #9: key the IPv6 source identity hash per boot from the hardware TRNG (an
                         // unkeyed hash let a chosen /64 collide with another source's rate / scan state).
                         if let (Some(a), Some(b)) = (arch_aarch64::rng200::next_word_strict(), arch_aarch64::rng200::next_word_strict()) {
@@ -4040,7 +4040,18 @@ fn cm5_p10_probe() {
                                     // release plan WS2: commit only when the WAN is usable AND the AP serves (BSS up in AP
                                     // mode, no Wi-Fi firmware halt since boot), both continuously for COMMIT_STABLE_S
                                     let ap_serving = ap.up_ok && ap.ssid_ok && ap.get_ap == 1 && cyw43::fw_halts() == ota_halts0;
-                                    match ota_gate.step(now() / freq, ota_t0 / freq, up.usable(), ap_serving) {
+                                    // task #88: BSS up is not enough — a DFS CAC keeps the AP silent. Ask the firmware
+                                    // once a second (an SDIO control round-trip; only during a trial).
+                                    let ns = now() / freq;
+                                    if ns != ota_dfs.0 {
+                                        let st = cyw43::dfs_cac_state();
+                                        if st != ota_dfs.1 {
+                                            kprint!(" [OTA] trial: Wi-Fi DFS state {:?} (AP {} serving)\n", st, if otaimg::dfs_lets_ap_serve(st) { "may be" } else { "NOT" });
+                                        }
+                                        ota_dfs = (ns, st);
+                                    }
+                                    let in_cac = !otaimg::dfs_lets_ap_serve(ota_dfs.1);
+                                    match ota_gate.step(ns, ota_t0 / freq, up.usable(), ap_serving, in_cac) {
                                         otaimg::Gate::Commit => match abboot::trial::commit(l) {
                                             Ok(n) => {
                                                 kprint!(" [OTA] COMMITTED slot {} ({} boot-config writes) — healthy trial: AP serving + WAN usable for {} s; the next cold boot runs it\n", l as char, n, otaimg::COMMIT_STABLE_S);
@@ -4053,7 +4064,7 @@ fn cm5_p10_probe() {
                                             }
                                         },
                                         otaimg::Gate::Revert => {
-                                            kprint!(" [OTA] trial not healthy within {} s (WAN usable={} AP serving={}) — rebooting to the previous slot\n", otaimg::COMMIT_LIMIT_S, up.usable(), ap_serving);
+                                            kprint!(" [OTA] trial not healthy within {} s + {} s DFS CAC (WAN usable={} AP serving={} in CAC={}) — rebooting to the previous slot\n", otaimg::COMMIT_LIMIT_S, ota_gate.cac_s().min(otaimg::COMMIT_CAC_ALLOW_S), up.usable(), ap_serving, in_cac);
                                             unsafe { core::arch::asm!("hvc #0") };
                                         }
                                         otaimg::Gate::Wait => {}
