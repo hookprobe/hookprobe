@@ -176,7 +176,7 @@ static mut NTP_TX_BUF: [u8; 128] = [0; 128];
 static mut TCP_RX_BUF: [[u8; TCP_RX]; ALL] = [[0; TCP_RX]; ALL];
 static mut TCP_TX_BUF: [[u8; TCP_TX]; ALL] = [[0; TCP_TX]; ALL];
 static mut REQ: [[u8; 4096]; ALL] = [[0; 4096]; ALL];
-static mut HEAD: [[u8; 512]; ALL] = [[0; 512]; ALL];
+static mut HEAD: [[u8; http::HEAD_MAX]; ALL] = [[0; http::HEAD_MAX]; ALL];
 static mut SCRATCH_BUF: [[u8; SCRATCH]; ALL] = [[0; SCRATCH]; ALL];
 // Owner alert webhook client (operator 2026-11-10): one outbound TCP socket, its buffers and state.
 static mut ALERT_RX_BUF: [u8; 512] = [0; 512];
