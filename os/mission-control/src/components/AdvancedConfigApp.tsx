@@ -246,16 +246,18 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
   /** Template "block device-to-device": replaces the LAN_IN list, so when that list already has rules it says which
    *  ones go and asks first (it used to drop them silently). The device does not report its LAN range: check the subnet. */
   const [tmplNote, setTmplNote] = createSignal('');
+  /** The LAN range for templates: what the device reports (heqk #1140), else the factory default to check. */
+  const lanCidr = () => networkView()?.lan?.cidr || '10.99.0.0/24';
   const applyTemplate = async () => {
     const gone = pol().acls.filter((a) => a.name === 'LAN_IN');
     if (gone.length && !(await approve({ title: 'Replace the LAN_IN rules?', destructive: true, confirm: 'Replace them',
       body: `The template replaces the ${gone.length} LAN_IN rule${gone.length === 1 ? '' : 's'} in the editor:\n${gone.map((a) => `· ${a.action} ${a.proto} ${a.src} → ${a.dst}${a.port ? ` port ${a.port}` : ''}`).join('\n')}\n\nNothing is sent until you review and apply.` }))) return;
     setPol({
       ...pol(),
-      acls: [...pol().acls.filter((a) => a.name !== 'LAN_IN'), { name: 'LAN_IN', seq: '10', action: 'block', proto: 'any', src: '10.66.0.0/24', dst: '10.66.0.0/24', port: '' }, { name: 'LAN_IN', seq: '20', action: 'allow', proto: 'any', src: 'any', dst: 'any', port: '' }],
+      acls: [...pol().acls.filter((a) => a.name !== 'LAN_IN'), { name: 'LAN_IN', seq: '10', action: 'block', proto: 'any', src: lanCidr(), dst: lanCidr(), port: '' }, { name: 'LAN_IN', seq: '20', action: 'allow', proto: 'any', src: 'any', dst: 'any', port: '' }],
       binds: [...pol().binds.filter((b) => !(b.iface === 'lan' && b.kind === 'acl')), { iface: 'lan', kind: 'acl', dir: 'in', name: 'LAN_IN' }],
     });
-    setTmplNote('Template added. Check the subnet (10.66.0.0/24): this device does not report its LAN range.');
+    setTmplNote(networkView()?.lan?.cidr ? `Template added for your LAN, ${lanCidr()} (as this device reports it).` : `Template added. Check the subnet (${lanCidr()}): this device does not report its LAN range.`);
   };
   const setAcl = (i: number, patch: Partial<AclRow>) => setPol({ ...pol(), acls: pol().acls.map((a, j) => (j === i ? { ...a, ...patch } : a)) });
 

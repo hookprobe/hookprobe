@@ -12,6 +12,8 @@ export interface NetworkView {
   wan?: { up: boolean; mode: string; ip: string; gateway: string; vlan: number; clients: number };
   ipv6?: { up: boolean; lan_prefix: string };
   management?: { vlan: number; ip: string };
+  /** The LAN the device serves (heqk #1140), e.g. { ip: '10.99.0.1', prefix: 24, cidr: '10.99.0.0/24' }. */
+  lan?: { ip: string; prefix: number; cidr: string };
   policy?: { state: string; generation: number };
   trust_anchor?: { state: string; key: string; public_key?: string | null };
   changes?: string;

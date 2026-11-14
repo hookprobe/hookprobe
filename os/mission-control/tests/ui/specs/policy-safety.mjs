@@ -34,5 +34,5 @@ export default async function (t) {
   ok(await rows() === before && await page.locator('main .l0-table input[aria-label="Destination"]').first().inputValue() === '192.168.1.50', 'template cancelled: the rules are untouched');
   await page.click('button:has-text("From template: block device-to-device")'); await page.waitForTimeout(300);
   await sheet.locator('button:has-text("Replace them")').click(); await page.waitForTimeout(300);
-  ok(await vis(page.locator('text=Check the subnet (10.66.0.0/24)')), 'template applied: the subnet to check is stated (the device does not report its LAN range)');
+  ok(await vis(page.locator('text=Check the subnet (10.99.0.0/24)')), 'template applied: the subnet to check is stated (the device does not report its LAN range)');
 }
