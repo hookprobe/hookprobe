@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 1180" role="img" aria-labelledby="t d">
   <title id="t">HookProbe board (illustration, not the board layout)</title>
-  <desc id="d">Every port on one edge: a DC jack, two 2.5 gigabit Ethernet jacks, two USB-C and a stacked USB-A. A heatsink with a fan covers the RK3588 processor and memory. Wi-Fi 7, 5G, NVMe and an accelerator sit underneath on M.2 cards.</desc>
+  <desc id="d">Every port on one edge: a DC jack, two 2.5 gigabit Ethernet jacks, two USB-C and a stacked USB-A. A heatsink with a fan covers the RK3588 processor and memory. Wi-Fi 7, 5G, NVMe and an AI accelerator card sit underneath on M.2 slots.</desc>
   <defs>
     <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
       <circle cx="10" cy="10" r="1.2" fill="#1d3550"/>
@@ -79,5 +79,5 @@
     <text x="1145" y="1065">Thread</text>
     <text x="470" y="770">power 12–20 V</text>
   </g>
-  <text x="700" y="1100" text-anchor="middle" font-family="JetBrains Mono, Consolas, monospace" font-size="20" fill="#7d7d90">underneath: Wi-Fi 7 · 5G · NVMe · accelerator  —  illustration, not the board layout</text>
+  <text x="700" y="1100" text-anchor="middle" font-family="JetBrains Mono, Consolas, monospace" font-size="20" fill="#7d7d90">underneath: Wi-Fi 7 · 5G · NVMe · M.2 AI accelerator  —  illustration, not the board layout</text>
 </svg>

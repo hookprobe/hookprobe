@@ -1,0 +1,26 @@
+# local tooling
+.venv/
+__pycache__/
+*.pyc
+.DS_Store
+.claude/
+
+# KiCad local state and backups
+*.kicad_prl
+*-backups/
+fp-info-cache
+*.lck
+~*
+
+# third-party documents: not ours to redistribute (download from the manufacturers)
+vendor/**/datasheet.pdf
+vendor/**/datasheet.png
+vendor/radxa_rock5b/
+vendor/radxa_heatsink_4012/
+vendor/adamtech_USB-C31-D-RA-CS2/
+
+# intermediate renders (the published copies are in docs/images)
+layout/*.svg
+
+# KiCad local history (its own git repo)
+.history/
