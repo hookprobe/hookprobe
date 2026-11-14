@@ -91,6 +91,17 @@ index, RX flags. **Not delivered:** antenna **noise** (so no SNR), and control f
 | **W-03** | Country IE advertises DFS channels 52–140 (RO) while the CYW43455 firmware is `DFS-UNSET` (world domain). Advertised and actual regulatory capability disagree | beacon country IE vs `iw reg get` phy0 | Advertise only the channels the radio can actually use (UNII-1 while DFS is unsupported). Tracks the known brcmfmac country-handoff bug |
 | W-04 | Not yet assessed: RSNX (SAE-H2E/PK), beacon protection, WPS, vendor IEs, VHT op. **The beacon was truncated at snaplen 256** | capture setting | M1 captures beacons at full length (`-s 0` for mgmt) |
 
+**Triage with the heqk session (2026-11-14):**
+- **W-01 — accepted-by-design.** Transition mode is the shipping default (operator decision 2026-11-10) for client
+  compatibility. The owner can switch to WPA3-only (`security=wpa3` in a signed Wi-Fi bundle; live switching is
+  metal-proven). Residual risk: WPA2 clients stay exposed to offline guessing. SAE clients that have cached the AP
+  as SAE cannot be downgraded.
+- **W-02 — accepted-by-design for transition mode.** MFPR=1 would lock out WPA2-only clients, and SAE associations
+  negotiate PMF. **Follow-up:** re-check MFPR=1 when the AP is in WPA3-only mode (passive capture during an agreed
+  window).
+- **W-03 — OPEN, tagged for the compliance package (RED / EN 18031).** Known CLM limitation: heqk runs
+  `allow_dfs=false` and serves UNII-1 ch36–48 only, but the country IE still advertises channels it never uses.
+
 These findings are *observed* (from beacons). Their exploitability has **not** been tested, and won't be over the
 air (receive-only rule).
 
