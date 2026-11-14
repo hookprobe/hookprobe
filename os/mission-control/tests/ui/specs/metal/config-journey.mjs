@@ -46,7 +46,17 @@ export default async function (t) {
     if (env('MC_PPPOE_PASS')) await d.locator('label:has-text("PPPoE password (again)") input').fill(env('MC_PPPOE_PASS'));
     await d.locator('label:has-text("Wi-Fi password (again)") input').fill(psk);
     t.at = 'firewall: sign and send';
-    await d.locator('button:has-text("Sign and upload the bundle")').click();
+    await t.shot('before-send', true);
+    // say WHY the button is not there / not enabled instead of timing out on the click
+    const send = d.locator('button:has-text("Sign and upload the bundle"), button:has-text("Sign the bundle")');
+    const why = {
+      button: await send.count() ? (await send.first().isDisabled() ? 'disabled' : 'enabled') + ` "${(await send.first().textContent())?.trim()}"` : 'absent',
+      problems: await d.locator('[aria-label="Bundle problems"] li').allInnerTexts(),
+      keyPanel: await d.locator('.pcard[aria-label="Signing key"]').count() > 0,
+      mismatch: await d.locator('text=the key in this browser is a different one').count() > 0,
+    };
+    if (why.button !== `enabled "Sign and upload the bundle"`) { ok(false, `send not possible: ${JSON.stringify(why)}`); return; }
+    await send.first().click();
     await t.approve({ key: token });
     const trial = await until((c) => c.state === 'trial');
     ok(trial.state === 'trial' && trial.generation > before.generation, `applied live as a trial (generation ${before.generation} → ${trial.generation})`);
