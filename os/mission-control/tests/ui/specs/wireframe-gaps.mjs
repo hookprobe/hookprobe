@@ -1,13 +1,22 @@
 // Wireframe gap audit (2026-11-12), small fixes: map icons without emoji, one recents row per screen, readable
 // firewall cells, every Automate stage visible, no "T1200 · T1200".
 export default async function (t) {
-  const { page, ok, go } = t;
+  const { page, ok, go, vis } = t;
 
-  // Network map: stroke icons, not emoji (emoji render as empty boxes without a colour-emoji font)
-  await go('/network/map', 1500);
-  const emoji = await page.evaluate(() => /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(document.querySelector('main')?.innerText ?? ''));
-  const svgIcons = await page.locator('.tile-icon svg').count();
-  ok(!emoji && svgIcons > 0, 'network map: device icons are SVG, no emoji glyphs');
+  // Network map: the same Network screen as Zones (one device set, the Zones / Map / List switcher), no separate
+  // sample map with actions that pretended to apply (retired 14 Nov)
+  await go('/network/zones', 1200);
+  const zonesFirst = (await page.locator('main').innerText()).match(/Alina MacBook/) !== null;
+  await go('/network/map', 1200);
+  const mapText = await page.locator('main').innerText();
+  ok(zonesFirst && /Alina MacBook/.test(mapText) && !/Unknown Camera|Sam's iPhone/.test(mapText) && await page.locator('main a[href="/network/zones"]').count() > 0,
+    'network map: the same devices and switcher as Zones (no second sample app)');
+  // the device drawer: Isolate shown greyed with the reason; a time from another day carries its date
+  await page.locator('main button', { hasText: 'Alina MacBook' }).first().click(); await page.waitForTimeout(300);
+  ok(await vis(page.locator('.drawer .gate--off', { hasText: 'Isolate 1 h' })), 'network drawer (preview): Isolate shown greyed with the reason');
+  const first = await page.locator('.drawer .l0-card-sub', { hasText: 'First seen' }).innerText();
+  ok(/[A-Za-z]{3}/.test(first.replace('First seen', '')), `network drawer: "first seen" three days ago shows its date (${first.replace(/\s+/g, ' ')})`);
+  await page.keyboard.press('Escape');
 
   // Workspace recents: My Network reached by two routes is one row
   await page.evaluate(() => { try { localStorage.removeItem('hp.workspace.v1'); localStorage.setItem('hp.proView', '1'); } catch { /* */ } });
