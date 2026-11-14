@@ -298,7 +298,7 @@ const AdministrationApp: Component = () => {
                   const sys = () => systemView();
                   return (
                     <>
-                      <span class="prow"><span>Version</span><span>{sample() ? 'sample' : sys()?.version ? `${sys()!.version}${sys()!.build ? ` · build ${sys()!.build}` : ''}` : sys()?.build ? `build ${sys()!.build}` : 'not reported by this device yet'}</span></span>
+                      <span class="prow"><span>Version</span><span>{sample() ? 'sample' : sys()?.version ? `v${sys()!.version}${sys()!.codename ? ` "${sys()!.codename}"` : ''}${sys()!.build ? ` · build ${sys()!.build}` : ''}` : sys()?.build ? `build ${sys()!.build}` : 'not reported by this device yet'}</span></span>
                       <span class="prow"><span>Signed OS image</span><span>{sample() ? 'generation 14' : sys()?.svn != null ? `security version ${sys()!.svn}` : os() ? `generation ${os()!.generation}${os()!.source === 'boot' ? ' (from the boot card)' : ''}` : 'not reported'}</span></span>
                       <Show when={sample() || sys()}>
                         <span class="prow"><span>Boot slot</span><span>{sample() ? 'A' : sys()!.slot ? `${sys()!.slot}${sys()!.trial ? ' · on trial (confirms itself once healthy)' : ''}` : 'not reported'}</span></span>
