@@ -202,10 +202,13 @@ pub fn forward4<N: ApNic>(
     // answered / refused by Shield, a session hold or a device policy — not an ACL drop
     let mut shield = false;
     // A-03 (LAN assessment 2026-11-14): a client frame for one of the device's OWN addresses (the management or
-    // WAN address — the AP address itself never reaches here) is never routed out: NATed to that same address and
+    // WAN address; the AP's own address is excluded below) is never routed out: NATed to that same address and
     // reflected by the upstream router it reached Mission Control as a SYN from the device's own address. The
     // device answers for itself: refused like a policy reject (G12-M — Mission Control is not offered to Wi-Fi).
-    if act == Act::Allow && frame.len() >= 34 && crate::ratelimit::is_local_ip(u32::from_be_bytes([frame[30], frame[31], frame[32], frame[33]])) {
+    // NOT the AP's own address: DNS to it is answered by Shield further down this function (a refusal here broke every
+    // client's DNS to the AP — the bench caught it 2026-11-14, the same day).
+    let dst4 = [frame.get(30).copied().unwrap_or(0), frame.get(31).copied().unwrap_or(0), frame.get(32).copied().unwrap_or(0), frame.get(33).copied().unwrap_or(0)];
+    if act == Act::Allow && frame.len() >= 34 && dst4 != cfg.our_ip && crate::ratelimit::is_local_ip(u32::from_be_bytes(dst4)) {
         let mut dr = [0u8; 600];
         if let Some(k) = arch_aarch64::reject::reject4(frame, &cfg.our_ip, &cfg.me, &mut dr) {
             let _ = reply(&dr[..k]);
@@ -1228,6 +1231,19 @@ pub fn selftest() -> bool {
     let n = frame4(17, [1, 1, 1, 1], 53, q, &mut f);
     let w0 = nic.wan_n;
     let shield = !go!(&f[..n], If::Lan) && replies == 2 && nic.wan_n == w0 && c.pol_drop == [1, 0, 0, 0]; // an answer is not an ACL drop
+    // A-03 refuse-local, with the device's own addresses registered as on metal (AP = slot 0, management = slot 2):
+    // DNS to the AP address is still Shield's (answered here, never refused), while a client packet to the management
+    // address is refused locally (RST), never routed out. The first A-03 build refused DNS to the AP too.
+    crate::ratelimit::set_local_ip(0, u32::from_be_bytes(cfg.our_ip));
+    crate::ratelimit::set_local_ip(2, u32::from_be_bytes([192, 168, 200, 146]));
+    let (r0, refused0) = (replies, c.to_self_refused);
+    let n = frame4(17, cfg.our_ip, 53, q, &mut f);
+    let ap_dns = !go!(&f[..n], If::Lan) && replies == r0 + 1 && c.to_self_refused == refused0 && nic.wan_n == w0;
+    let n = frame4(6, [192, 168, 200, 146], 443, &[], &mut f);
+    let mgmt_refused = !go!(&f[..n], If::Lan) && c.to_self_refused == refused0 + 1 && replies == r0 + 2 && nic.wan_n == w0;
+    crate::ratelimit::set_local_ip(0, 0);
+    crate::ratelimit::set_local_ip(2, 0);
+    let shield = shield && ap_dns && mgmt_refused;
     // a clean name is forwarded (to the client's resolver through NAT)
     let q2 = b"\x12\x35\x01\x00\x00\x01\x00\x00\x00\x00\x00\x00\x04good\x07example\x00\x00\x01\x00\x01";
     let n = frame4(17, [1, 1, 1, 1], 53, q2, &mut f);
@@ -1279,7 +1295,7 @@ pub fn selftest() -> bool {
     pol = Policy::new();
     let pass = snat && unresolved && txfail && block && drop && mg_down && via_mgmt && failover && shield && clean && quarantined && nh_ok && g19_ok;
     arch_aarch64::_print(format_args!(
-        " [P-apcore] {} — G0 step 1: the AP's client IPv4 forwarding ladder (was the cm5-only fwd4! macro) on a recording fake NIC: SNAT to the WAN lease via the gateway={} unresolved next hop -> nothing sent={} WAN tx failure counted={} `lan in` block -> reject to the client, counted={} drop counted, silent={} mgmt gateway down -> default via WAN={} then SNATs to the mgmt address={} WAN down -> metric failover to mgmt={} Shield answers a blocked name locally={} clean DNS forwarded={} quarantined device never forwarded, not an ACL drop={} | a dead `via wan gw X` (3 s without ARP) fails over by metric and returns when X answers={} a G19-carried flow routed via mgmt never leaves in cleartext on mgmt={}\n",
+        " [P-apcore] {} — G0 step 1: the AP's client IPv4 forwarding ladder (was the cm5-only fwd4! macro) on a recording fake NIC: SNAT to the WAN lease via the gateway={} unresolved next hop -> nothing sent={} WAN tx failure counted={} `lan in` block -> reject to the client, counted={} drop counted, silent={} mgmt gateway down -> default via WAN={} then SNATs to the mgmt address={} WAN down -> metric failover to mgmt={} Shield answers a blocked name locally (also to the AP address, while a client packet to the management address is refused locally, A-03)={} clean DNS forwarded={} quarantined device never forwarded, not an ACL drop={} | a dead `via wan gw X` (3 s without ARP) fails over by metric and returns when X answers={} a G19-carried flow routed via mgmt never leaves in cleartext on mgmt={}\n",
         if pass { "PASS" } else { "FAIL" }, snat, unresolved, txfail, block, drop, mg_down, via_mgmt, failover, shield, clean, quarantined, nh_ok, g19_ok
     ));
     pass
