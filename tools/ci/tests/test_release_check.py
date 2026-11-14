@@ -51,6 +51,17 @@ class ReleaseCheck(unittest.TestCase):
         _, problems = rc.check(self.tree(pkg_version="0.1.0"))
         self.assertEqual([p for p in problems if "package.json" in p], ["os/mission-control/package.json: version 0.1.0 != 0.0.26"])
 
+    def test_boot_loader_crates_stay_pinned(self):
+        # HBoot's crates must keep BOOT_PIN (a bump changes HBoot's bytes -> every OTA is refused); release-versioned = drift
+        d = self.tree()
+        write(d, "os/kernel/hboot/Cargo.toml", f'[package]\nname = "hboot"\nversion = "{rc.BOOT_PIN}"\n')
+        write(d, "os/kernel/boot-abi/Cargo.toml", f'[package]\nname = "boot-abi"\nversion = "{rc.BOOT_PIN}"\n')
+        _, problems = rc.check(d)
+        self.assertEqual(problems, [])
+        write(d, "os/kernel/hboot/Cargo.toml", '[package]\nname = "hboot"\nversion = "0.0.26"\n')
+        _, problems = rc.check(d)
+        self.assertTrue(any("hboot" in p and "pinned" in p for p in problems))
+
     def test_missing_release_note_fails(self):
         _, problems = rc.check(self.tree(note=False))
         self.assertTrue(any("release note missing" in p for p in problems))
