@@ -5,7 +5,7 @@ Shared data types for the Cognitive Network Organism.
 All types are plain dataclasses — no external dependencies.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

@@ -3,12 +3,10 @@ Copyright (C) 2024-2026 HookProbe Contributors
 
 This file is part of HEQK, the microkernel of the HookProbe project.
 
-HEQK follows the HookProbe dual-licensing model:
-- Open source components: GNU Affero General Public License v3.0 (AGPL-3.0)
-- Proprietary components: Commercial License (see LICENSING.md)
-
-This LICENSE file applies to the AGPL-licensed portions of HEQK.
-For full licensing details, see LICENSING.md.
+HEQK is licensed under the GNU Affero General Public License, version 3 only
+(SPDX: AGPL-3.0-only), whose full text follows. It is also available under a
+commercial licence from HookProbe. Vendored third-party code (tools/usbboot/)
+keeps its own licence. Policy of record: LICENSING.md at the repository root.
 
 ================================================================================
 

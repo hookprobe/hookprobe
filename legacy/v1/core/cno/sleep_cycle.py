@@ -25,7 +25,7 @@ This is what converts the TTP_PATTERNS dict from a human-curated constant
 into a living organ that evolves with its adversary population.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 25.0.0
 """
 

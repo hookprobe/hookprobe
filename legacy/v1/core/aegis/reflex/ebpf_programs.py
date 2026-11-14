@@ -10,7 +10,7 @@ All programs guarded by BCC_AVAILABLE. Graceful fallback to iptables/tc
 when BCC is not installed (containers, ARM without bcc-tools).
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 

@@ -394,4 +394,4 @@ pytest tests/test_red_purple_teaming.py --cov=products.nexus.lib.red_purple_team
 
 ## License
 
-Proprietary - Part of HookProbe Nexus tier (Commercial License Required)
+AGPL-3.0 - see LICENSE file

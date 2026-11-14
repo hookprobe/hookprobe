@@ -1,7 +1,7 @@
 # AIOCHI - AI Eyes (AI OCHII in Romanian)
 
 **Version**: 1.0.0
-**Status**: Core Product - Proprietary
+**Status**: Core Product - AGPL-3.0
 **Philosophy**: *Less is more for everyone, but powerful monitoring underneath*
 
 ---

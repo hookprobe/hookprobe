@@ -1,7 +1,7 @@
 """
 HookProbe SLA AI - Intelligent Network Continuity
 
-Proprietary SLA monitoring, fault prediction, and switching automation
+SLA monitoring, fault prediction, and switching automation
 for maximizing Business Continuity while minimizing costs.
 
 Core Philosophy: Feel, Sense, Adapt, Learn, Optimize
@@ -14,7 +14,7 @@ Components:
     - CostTracker: Metered connection usage tracking
     - SLAEngine: Central coordinator
 
-License: Proprietary (HookProbe Commercial)
+License: AGPL-3.0 - see LICENSE file
 """
 
 __version__ = "1.0.0"

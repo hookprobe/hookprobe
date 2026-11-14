@@ -576,14 +576,11 @@ Maintainers may:
 
 HookProbe uses a **dual licensing model**:
 
-- **AGPL v3.0**: Open source components (deployment, Guardian, response, mesh, docs)
-- **Proprietary**: Core AI/ML innovations (Qsecbit, Neural Resonance, dnsXai ML, DSM)
+- **AGPL-3.0**: all HookProbe software, including the former proprietary modules (relicensed to AGPL-3.0 by the copyright holder on 2026-11-14; see the repository root `LICENSING.md`)
+- **Commercial**: the same code under a commercial license, for SaaS/OEM use without AGPL obligations
 
-By contributing to HookProbe, you agree that:
-
-1. **AGPL Components**: Your contributions to AGPL-licensed directories will be licensed under AGPL v3.0
-2. **Proprietary Components**: Contributions to proprietary directories require signing a Contributor License Agreement (CLA)
-3. **Documentation**: All documentation contributions are licensed under AGPL v3.0
+By contributing to HookProbe, you agree that your contributions are licensed under AGPL-3.0 and that you sign
+the Contributor License Agreement (CLA), so HookProbe can also offer them under the commercial license.
 
 For full licensing details, see [LICENSING.md](../LICENSING.md).
 
