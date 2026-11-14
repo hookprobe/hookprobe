@@ -5363,43 +5363,13 @@ fn cm5_p10_probe() {
                                             st.set_leases(&dh);
                                             // Parity G15: new detections -> the signed POLICY.TXT `export syslog` collector.
                                             if let Some(ex) = unsafe { (*core::ptr::addr_of!(POLICY)).export } {
-                                                let (via_wan, src_ip, src_mac, nh) = match ex.via {
-                                                    PIf::Mgmt => match unsafe { uplink::MGMT } {
-                                                        Some(m) => (false, m.ip, m.mac, uplink::mgmt_nexthop(ex.ip)),
-                                                        None => (false, [0; 4], [0; 6], None),
-                                                    },
-                                                    _ => (true, up.dhcp.yiaddr, up.mac, (up.gw_mac != [0u8; 6]).then_some(up.gw_mac)),
-                                                };
-                                                if let Some(dmac) = nh.filter(|_| src_ip != [0; 4]) {
-                                                    let mut sent = 0u32;
-                                                    let mut last = siem_cursor;
-                                                    st.for_each_det_after(siem_cursor, &mut |d, ms| {
-                                                        if sent >= 32 {
-                                                            return; // bounded per beat; the rest go next beat
-                                                        }
-                                                        let info = rulecat::lookup_or_generic(d.rule_id);
-                                                        let det = siem::Det {
-                                                            seq: d.seq, ts_ms: ms, rule_id: rulecat::HEQK_RULE_BAND + d.rule_id as u32, msg: info.msg,
-                                                            category: info.category, mitre: info.mitre, severity: info.severity, src: d.src, dst: d.dst,
-                                                            dport: d.dport, action: if d.verdict == 2 { "dropped" } else { "observed" },
-                                                        };
-                                                        let mut msg = [0u8; 700];
-                                                        let n = if ex.json { siem::ocsf_json(&det, "heqk-ap", &mut msg) } else { siem::rfc5424(&det, "heqk-ap", &mut msg) };
-                                                        let mut fr = [0u8; 760];
-                                                        if n > 0 {
-                                                            let k = wanntp::udp4(&mut fr, &src_mac, &dmac, src_ip, ex.ip, 40514, ex.port, &msg[..n]);
-                                                            let ok = if via_wan { uplink::wan_tx(&up, &fr[..k]) } else { uplink::mgmt_tx(&fr[..k]) };
-                                                            if ok { siem_sent += 1 } else { siem_lost += 1 }
-                                                        }
-                                                        last = Some(d.seq);
-                                                        sent += 1;
-                                                    });
-                                                    siem_cursor = last;
-                                                } else {
-                                                    siem_unrouted += 1;
-                                                }
+                                                // G0 step 5b: apcore::siem_export (RFC 5424 / OCSF over UDP, 32 per beat, via WAN or mgmt)
+                                                let mut hw = ApHw { up: &up, wh: &whealth };
+                                                let mut ss = apcore::SiemStats { sent: siem_sent, lost: siem_lost, unrouted: siem_unrouted };
+                                                let _ = apcore::siem_export(&mut hw, &ex, st, &mut siem_cursor, &mut ss);
+                                                (siem_sent, siem_lost, siem_unrouted) = (ss.sent, ss.lost, ss.unrouted);
                                                 kprint!("   [SIEM] export {}.{}.{}.{}:{} via {} ({}): sent={} lost={} unrouted beats={}\n", ex.ip[0], ex.ip[1], ex.ip[2], ex.ip[3], ex.port,
-                                                    if via_wan { "wan" } else { "mgmt" }, if ex.json { "OCSF JSON" } else { "RFC 5424" }, siem_sent, siem_lost, siem_unrouted);
+                                                    if ex.via == PIf::Mgmt { "mgmt" } else { "wan" }, if ex.json { "OCSF JSON" } else { "RFC 5424" }, siem_sent, siem_lost, siem_unrouted);
                                             }
                                             // Parity G11: ask for the time over the WAN (retry 15 s until set, then hourly).
                                             if up.usable() && up.gw_mac != [0u8; 6] {
@@ -7465,6 +7435,8 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(not(feature = "cm5"))]
         let _ = wifilive::after_selftest(); // follow-up: Mission Control serving re-evaluated + IPv6 state at an AP restart
         let _ = apcore::selftest();
+        #[cfg(feature = "netsvc")]
+        let _ = apcore::siem_selftest(); // G0 step 5b
         let _ = apcore::tick_selftest(); // G0 step 5a
         let _ = apcore::mgmt_selftest(); // G0 step 4
         let _ = apcore::wan_selftest();
