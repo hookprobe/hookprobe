@@ -281,4 +281,4 @@ See `shared/cortex/README.md` for complete documentation.
 
 **HookProbe Shared Infrastructure v5.0** — *Transparent Components for Transparent Security*
 
-AGPL v3.0 (Open Source Components) + Proprietary (Documented Innovations)
+AGPL-3.0, with a commercial license available

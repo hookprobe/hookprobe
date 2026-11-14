@@ -501,6 +501,10 @@ hookprobe/
 
 ## License & governance
 
+> **Decided (2026-11-14), superseding the recommendation below:** all HookProbe software is **AGPL-3.0-only**, with
+> no proprietary components; hardware designs are **CERN-OHL-S-2.0**; both are also offered under a commercial
+> licence. Policy of record: [`LICENSING.md`](../../LICENSING.md).
+
 Open-core — final license is a decision to lock, with a recommendation:
 
 - **Open core:** the base OS, standalone SOC, Senzorium / NAPSE / HYDRA, the AEGIS reconciler, the manifest, and the supervisor under a permissive OSS license — **Apache-2.0 recommended** for the widest community/DIY adoption. (Alternative: AGPL-3.0 if you want to force reciprocity from anyone offering it as a service — stronger moat, smaller adoption funnel. Pick deliberately.)

@@ -16,7 +16,7 @@ This module makes that distinction. Called every 10 minutes by the main
 loop; queries napse_flows for packet rates pre/post block.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 23.0.0
 """
 

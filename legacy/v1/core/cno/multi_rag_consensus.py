@@ -22,7 +22,7 @@ Consensus Rule:
     - Any single silo above 0.9 → escalate regardless
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

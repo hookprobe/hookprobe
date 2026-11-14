@@ -35,7 +35,7 @@ Usage:
     identity = manager.get_identity_by_mac("AA:BB:CC:DD:EE:FF")
 
 Version: 1.0.0
-License: Proprietary (HookProbe Commercial)
+License: AGPL-3.0 - see LICENSE file
 """
 
 import json

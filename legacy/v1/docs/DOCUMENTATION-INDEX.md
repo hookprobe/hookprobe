@@ -158,16 +158,10 @@ HookProbe uses a **dual licensing model**:
 | Threat response | `shared/response/` |
 | Documentation | `docs/` |
 
-### Proprietary (Commercial License for SaaS/OEM)
-| Innovation | Location |
-|------------|----------|
-| Qsecbit AI Algorithm | `core/qsecbit/` |
-| Neural Resonance Protocol | `core/neuro/` |
-| dnsXai ML Classifier | `shared/dnsXai/` |
-| DSM Consensus | `shared/dsm/` |
-| AIOCHI Cognitive Layer | `shared/aiochi/` |
-| SLA AI Business Continuity | `shared/slaai/` |
-| MSSP Cloud Platform | See [hookprobe-com](https://github.com/hookprobe/hookprobe-com) repository |
+### Formerly proprietary, now AGPL-3.0
+Qsecbit (`core/qsecbit/`), Neural Resonance (`core/neuro/`), dnsXai (`shared/dnsXai/`), DSM (`shared/dsm/`),
+AIOCHI (`shared/aiochi/`) and SLA AI (`shared/slaai/`) were relicensed to AGPL-3.0 by the copyright holder on 2026-11-14; see the repository root `LICENSING.md`. The MSSP cloud platform lives in a separate
+repository with its own terms.
 
 **Free for:** Personal use, internal business protection
 **Commercial license for:** MSSPs, SaaS providers, OEM integrations

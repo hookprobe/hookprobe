@@ -2,7 +2,7 @@
 """
 Purple Team Orchestrator - AI vs AI Simulation Engine
 
-PROPRIETARY AND CONFIDENTIAL
+License: AGPL-3.0 - see LICENSE file
 Copyright (c) 2024-2025 HookProbe Technologies
 Licensed under Commercial License - See LICENSING.md
 

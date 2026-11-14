@@ -8,7 +8,7 @@ Emits StandardSignal events for level transitions and recovery.
 Polls at 2s (faster than default 5s) for responsive reflex.
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 

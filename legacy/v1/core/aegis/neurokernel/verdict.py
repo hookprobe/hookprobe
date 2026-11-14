@@ -9,7 +9,7 @@ Verdicts flow:
     Nexus slow path  → Verdict (1-5 seconds, higher quality)
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

@@ -100,7 +100,7 @@ Not every response needs all sections — calibrate depth to the question's comp
 
 When working within the HookProbe ecosystem:
 - Use **rootless Podman** (never Docker, never sudo with Podman)
-- Follow the dual licensing model (AGPL for open components, proprietary for core innovations)
+- Follow the dual licensing model (all software AGPL-3.0, plus a commercial license option)
 - Respect product tier resource constraints (Sentinel: 256MB, Guardian: 1.5GB, Fortress: 4GB, Nexus: 16GB+)
 - Reference the security stack: HTP-DSM-NEURO-QSECBIT-NSE
 - Follow established code conventions: Python (Black, PEP 8, type hints), Bash (set -eu, shellcheck), Git (conventional commits)

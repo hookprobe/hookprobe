@@ -3,7 +3,7 @@
 *"Your network speaks human now."*
 
 **Version**: 1.0.0
-**License**: Proprietary (Commercial License Required for SaaS/OEM)
+**License**: AGPL-3.0
 
 ---
 
@@ -218,13 +218,8 @@ new_device:
 
 ## License
 
-AIOCHI is **proprietary** software. Commercial license required for:
-- SaaS/managed service offerings
-- OEM/embedded product distribution
-
-Free for:
-- Personal/home use
-- Internal business protection
+AIOCHI is licensed under **AGPL-3.0** (relicensed to AGPL-3.0 by the copyright holder on 2026-11-14; see the repository root `LICENSING.md`). A commercial license is available for SaaS/OEM use
+without AGPL obligations.
 
 Contact: qsecbit@hookprobe.com
 
