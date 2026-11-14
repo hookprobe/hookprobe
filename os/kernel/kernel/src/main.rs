@@ -4656,7 +4656,11 @@ fn cm5_p10_probe() {
                                         }
                                         true
                                     }
-                                    mcmgmt::Route::Mgmt(dst) => mc_mgmt_tx(f, dst),
+                                    mcmgmt::Route::Mgmt(dst) => {
+                                        let ok = mc_mgmt_tx(f, dst);
+                                        unsafe { MCM_DIAG[if ok { 2 } else { 3 }] += 1 };
+                                        ok
+                                    }
                                 });
                                 for r in arp_back.iter().take(na) {
                                     n.ingress(&r[..60], ms);
@@ -5093,6 +5097,9 @@ fn cm5_p10_probe() {
                                                                 if let (Some(n), Some(l)) = (mcn.as_mut(), mcmgmt::ingress(&mbuf[..k], mg.ip, ap.bssid, &mut mcbuf)) {
                                                                     if packet::verdict(&mcbuf[..l]).1 != packet::DROP {
                                                                         n.ingress(&mcbuf[..l], (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
+                                                                        unsafe { MCM_DIAG[0] += 1 };
+                                                                    } else {
+                                                                        unsafe { MCM_DIAG[1] += 1 };
                                                                     }
                                                                 }
                                                             }
@@ -5223,6 +5230,16 @@ fn cm5_p10_probe() {
                                                     kprint!("   [P11-AP3 policy] acl {} hits {:?} default {}\n", core::str::from_utf8(&a.name[..a.nlen]).unwrap_or("?"), &a.hits[..a.n], a.default_hits);
                                                 }
                                                 if let Some(mg) = unsafe { uplink::MGMT } {
+                                                    #[cfg(feature = "mcserve")]
+                                                    if let Some(n) = mcn.as_ref() {
+                                                        // A-03 (LAN assessment 2026-11-14): the management -> Mission Control path, end to end
+                                                        let mut sl = [0u8; mcserve::ALL];
+                                                        let na = n.slot_states(&mut sl);
+                                                        let (lost, gated) = n.tx_stats();
+                                                        let d = unsafe { MCM_DIAG };
+                                                        kprint!("   [P11-AP3 mc] mgmt->node={} ids_drop={} node->mgmt ok={} fail={} | slots {} addrs={} mc_mgmt={} | node tx_lost={} egress_gated={}\n",
+                                                            d[0], d[1], d[2], d[3], core::str::from_utf8(&sl).unwrap_or("?"), na, mc_mgmt.is_some(), lost, gated);
+                                                    }
                                                     kprint!("   [P11-AP3 mgmt] {}.{}.{}.{} gw {}.{}.{}.{} resolved={} | arp answered={} arp sent={} ping ok={} blocked={} dropped={} up(NAT)={} other={}\n",
                                                         mg.ip[0], mg.ip[1], mg.ip[2], mg.ip[3], mg.gw[0], mg.gw[1], mg.gw[2], mg.gw[3], mg.gw_mac.is_some(),
                                                         mg.stats[0], mg.stats[1], mg.stats[2], mg.stats[3], mg.stats[4], mg.stats[5], mg.stats[6]);
@@ -9290,6 +9307,44 @@ fn p8_flow() -> bool {
         ok &= seg_ok;
         kprint!("   segmentation reach: disarmed-noop + Full/InternetOnly/Quarantine x LAN/WAN/infra + mgmt-floor + fail-open-default [{}]\n",
             if seg_ok { "ok" } else { "BUG" });
+    }
+
+    // A-03 (LAN assessment 2026-11-14): a client that connects to the device and aborts (nmap -sT, curl / openssl
+    // RST) never makes the DEVICE a scanner; a client's abort RST to an internet server never makes the SERVER a
+    // slow scanner; a real slow sweep (SYN probe -> closed-port RST) still counts.
+    {
+        let me = [192u8, 168, 200, 146];
+        let cl = [192u8, 168, 200, 1];
+        ratelimit::set_local_ip(3, u32::from_be_bytes(me));
+        let mut own_none = true;
+        for i in 0..80u16 {
+            let sp = 50000 + i;
+            let _ = rules::flow_scan_verdict(&tcp_frame(cl, me, sp, 443, SYN), ip(cl));
+            own_none &= rules::flow_scan_verdict(&tcp_frame(me, cl, 443, sp, SYN_ACK), ip(me)).is_none();
+            let _ = rules::flow_scan_verdict(&tcp_frame(cl, me, sp, 443, ACK), ip(cl));
+            let _ = rules::flow_scan_verdict(&tcp_frame(cl, me, sp, 443, 0x04), ip(cl)); // the client's abort RST
+            own_none &= rules::flow_scan_verdict(&tcp_frame(me, cl, 443, sp, RST_ACK), ip(me)).is_none();
+        }
+        let self_ok = own_none && scan_distinct_ports(ip(me) as u64) == 0 && ratelimit::slow_scan_count(ip(me) as u64) == 0;
+        ratelimit::set_local_ip(3, 0);
+        let (c, srv) = ([10u8, 99, 0, 10], [93u8, 184, 216, 34]);
+        for i in 0..60u16 {
+            let sp = 40100 + i;
+            let _ = rules::flow_scan_verdict(&tcp_frame(c, srv, sp, 443, SYN), ip(c));
+            let _ = rules::flow_scan_verdict(&tcp_frame(srv, c, 443, sp, SYN_ACK), ip(srv));
+            let _ = rules::flow_scan_verdict(&tcp_frame(c, srv, sp, 443, ACK), ip(c));
+            let _ = rules::flow_scan_verdict(&tcp_frame(c, srv, sp, 443, RST_ACK), ip(c));
+        }
+        let abort_ok = ratelimit::slow_scan_count(ip(srv) as u64) == 0;
+        let p = [198u8, 51, 100, 77];
+        for port in 3000..3045u16 {
+            let _ = probe_closed(p, port);
+        }
+        let slow_ok = ratelimit::slow_scan_count(ip(p) as u64) >= ratelimit::SLOW_SCAN_PORTS;
+        let a03 = self_ok && abort_ok && slow_ok;
+        ok &= a03;
+        kprint!("   A-03: 80 aborted client connections never make the device a scanner={} 60 client abort RSTs never make an internet server a slow scanner={} a real slow sweep still counts={} [{}]\n",
+            self_ok, abort_ok, slow_ok, if a03 { "ok" } else { "BUG" });
     }
 
     kprint!(" [P8-flow] {} — distinct-dst-port scan: UNCONFIRMED->RateLimit(DROP), CONFIRMED->Quarantine(DROP); a legit busy source (150 ESTABLISHED flows / 100-per-sec burst) NEVER RateLimits/Quarantines; A11 corroboration is SEVERITY-only, never a wire drop (ADR 0018/0023, conntrack-equivalent)\n",
@@ -14583,6 +14638,10 @@ fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::
     let n = wan_body(dev, &mut sec)?;
     Some(hal::parse_wan_link(&sec[..n]))
 }
+
+/// A-03 diagnostics: [frames handed from management to the MC node, of those refused by the IDS verdict, node frames
+/// sent on management, node frames the management path could not send].
+static mut MCM_DIAG: [u32; 4] = [0; 4];
 
 /// A station frame for Mission Control on the AP address: IPv4 TCP to `our_ip`:80/443.
 #[allow(dead_code)]
