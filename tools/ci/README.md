@@ -112,5 +112,7 @@ call it; it is a no-op when the pinned blob is already staged.
 2. Secrets: `ANTHROPIC_API_KEY` (dedicated, spend-limited; enables autofix), optionally `AUTOFIX_TOKEN`.
 3. Register the bench host as a self-hosted runner labelled `cm5-bench` with `HEQK_METAL=1`, in a
    runner group restricted to `.github/workflows/metal.yml@refs/heads/main`; create the
-   `metal-bench` environment with a required reviewer.
+   `metal-bench` environment with a required reviewer. Then set the repository variable
+   `METAL_BENCH_RUNNER=true` (`gh variable set METAL_BENCH_RUNNER --body true`); without it
+   `metal.yml` is skipped rather than queueing for a runner that does not exist.
 4. A tag ruleset protecting `v*` (only maintainers may create release tags).
