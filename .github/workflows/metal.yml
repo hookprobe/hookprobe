@@ -38,7 +38,12 @@ jobs:
     # bench runner is wired to hardware + the LAN. Also configure, operator-side:
     #   - environment `metal-bench` with a required reviewer,
     #   - a runner group restricted to `.github/workflows/metal.yml@refs/heads/main`.
-    if: github.repository == 'hookprobe/hookprobe' && github.ref == 'refs/heads/main'
+    # Opt-in on the runner existing: with no `cm5-bench` runner registered the job would sit
+    # queued 24 h and then be cancelled (red every night). Set the repository variable
+    # METAL_BENCH_RUNNER=true once the bench runner is online; until then the job is skipped.
+    if: >-
+      github.repository == 'hookprobe/hookprobe' && github.ref == 'refs/heads/main'
+      && vars.METAL_BENCH_RUNNER == 'true'
     environment: metal-bench
     runs-on: [self-hosted, linux, cm5-bench]
     timeout-minutes: 90
