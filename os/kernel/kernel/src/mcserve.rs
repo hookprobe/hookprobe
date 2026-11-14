@@ -57,7 +57,7 @@ const TLS_N: usize = hal::tlsabi::SLOTS;
 #[cfg(not(feature = "mctls"))]
 const TLS_N: usize = 0;
 /// Every TCP connection slot: plain HTTP `0..CONNS`, HTTPS `CONNS..ALL`.
-const ALL: usize = CONNS + TLS_N;
+pub const ALL: usize = CONNS + TLS_N;
 
 #[cfg(not(feature = "cm5"))]
 #[inline]
@@ -656,6 +656,29 @@ impl McNode {
             dev.txq.copy_within(sent..dev.txn, 0);
             dev.txn -= sent;
         }
+    }
+
+    /// A-03 diagnostics (LAN assessment 2026-11-14: a port scan left Mission Control answering no SYN on the
+    /// management address): one character per TCP slot — plain HTTP first, then HTTPS — L listen, S SYN, E
+    /// established, W close-wait, F fin-wait, C closing / last-ack, T time-wait, X closed, - no socket; and the
+    /// number of addresses the node answers on.
+    pub fn slot_states(&self, out: &mut [u8; ALL]) -> usize {
+        for (k, o) in out.iter_mut().enumerate() {
+            *o = match self.handles[k] {
+                None => b'-',
+                Some(h) => match self.sockets.get::<tcp::Socket>(h).state() {
+                    tcp::State::Listen => b'L',
+                    tcp::State::SynReceived | tcp::State::SynSent => b'S',
+                    tcp::State::Established => b'E',
+                    tcp::State::CloseWait => b'W',
+                    tcp::State::FinWait1 | tcp::State::FinWait2 => b'F',
+                    tcp::State::Closing | tcp::State::LastAck => b'C',
+                    tcp::State::TimeWait => b'T',
+                    tcp::State::Closed => b'X',
+                },
+            };
+        }
+        self.iface.ip_addrs().len()
     }
 
     /// (tx_lost, egress_gated) — counted, never silent.
