@@ -1,0 +1,217 @@
+(kicad_footprint_lib
+	(version 20261031)
+	(generator "kicad_footprint_editor")
+	(generator_version "10.99")
+	(footprint "SOT-23-6_L2.9-W1.6-P0.95-LS2.8-BL"
+		(layer "F.Cu")
+		(property "Reference" "REF**"
+			(at 0 -5.149 0)
+			(layer "F.SilkS")
+			(uuid "b8107b40-11ed-412f-89d7-1e1b79bc0015")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Value" "SOT-23-6_L2.9-W1.6-P0.95-LS2.8-BL"
+			(at 0 5.149 0)
+			(layer "F.Fab")
+			(uuid "ab590a5d-34ac-490f-9dc9-3d569162a692")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(property "Datasheet" ""
+			(at 0 0 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "28c7732d-7330-4f25-ac38-61a5dba07a73")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "Description" ""
+			(at 0 0 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "96f0edac-77c5-4582-82a7-0bf8eff966e3")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(property "LCSC Part" "C2941042"
+			(at 0 0 0)
+			(layer "F.Fab")
+			(hide yes)
+			(uuid "7a94d9c3-84cb-4bea-9520-932eac1f3172")
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+			)
+		)
+		(attr smd)
+		(duplicate_pad_numbers_are_jumpers no)
+		(fp_line
+			(start -1.54 0.89)
+			(end -1.54 -0.89)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "1e0fd7ad-efbe-465b-a5ca-47b29853d14d")
+		)
+		(fp_line
+			(start 1.54 0.89)
+			(end 1.54 -0.89)
+			(stroke
+				(width 0.15)
+				(type solid)
+			)
+			(layer "F.SilkS")
+			(uuid "1fe7db4a-8ce2-4145-9c8b-3fdcbba3ef0b")
+		)
+		(fp_circle
+			(center -1.67 1.3)
+			(end -1.52 1.3)
+			(stroke
+				(width 0.3)
+				(type solid)
+			)
+			(fill no)
+			(layer "F.SilkS")
+			(uuid "0e88de43-8dd3-4a28-a6e7-a1a9d6364a04")
+		)
+		(fp_circle
+			(center -1.46 1.4)
+			(end -1.43 1.4)
+			(stroke
+				(width 0.06)
+				(type solid)
+			)
+			(fill no)
+			(layer "F.SilkS")
+			(uuid "24212dcf-2499-4ac6-b04d-08965273b3c4")
+		)
+		(fp_circle
+			(center -0.92 1.68)
+			(end -0.82 1.68)
+			(stroke
+				(width 0.2)
+				(type solid)
+			)
+			(fill no)
+			(layer "Cmts.User")
+			(uuid "d91977eb-d270-4412-a53f-9a96f1c4fc0b")
+		)
+		(fp_line
+			(start -1.46 -0.81)
+			(end 1.46 -0.81)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "fc509638-2918-456d-8b47-a6cac3bc1392")
+		)
+		(fp_line
+			(start -1.46 0.81)
+			(end -1.46 -0.81)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "5ceb3576-4ce9-43af-b168-76d0471a3e07")
+		)
+		(fp_line
+			(start 1.46 -0.81)
+			(end 1.46 0.81)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "85a2fa8c-7ff0-433d-8189-9e6441b3d954")
+		)
+		(fp_line
+			(start 1.46 0.81)
+			(end -1.46 0.81)
+			(stroke
+				(width 0.05)
+				(type solid)
+			)
+			(layer "F.CrtYd")
+			(uuid "064809fc-61d4-4d57-82e1-320773f4af73")
+		)
+		(fp_text user "${REFERENCE}"
+			(at 0 0 0)
+			(layer "F.Fab")
+			(uuid "9f129b00-5770-4e6f-8f70-fafaa28939c0")
+			(effects
+				(font
+					(size 1 1)
+					(thickness 0.15)
+				)
+			)
+		)
+		(pad "1" smd rect
+			(at -0.95 1.15)
+			(size 0.532 1.072)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(uuid "5c558019-e65e-4e31-8827-55954af88167")
+		)
+		(pad "2" smd rect
+			(at 0 1.15)
+			(size 0.532 1.072)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(uuid "bdfbb06f-5a89-4453-8b30-8879de6cfef5")
+		)
+		(pad "3" smd rect
+			(at 0.95 1.15)
+			(size 0.532 1.072)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(uuid "f57fe238-a9e4-49dd-9487-209e1bd480bc")
+		)
+		(pad "4" smd rect
+			(at 0.95 -1.15)
+			(size 0.532 1.072)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(uuid "ae78d039-fa84-4501-baba-19acf08bdc9d")
+		)
+		(pad "5" smd rect
+			(at 0 -1.15)
+			(size 0.532 1.072)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(uuid "479e38a7-9692-4b16-a959-63bf6a3ec3bb")
+		)
+		(pad "6" smd rect
+			(at -0.95 -1.15)
+			(size 0.532 1.072)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(uuid "a1ada0eb-5512-4894-a3bf-ad60aa2aede1")
+		)
+		(embedded_fonts no)
+		(model "${KIPRJMOD}/../vendor/lcsc_C2941042/part.3dshapes/SOT-23-6_L2.9-W1.6-H1.5-LS2.8-P0.95.wrl"
+			(offset
+				(xyz 0 0 0)
+			)
+			(scale
+				(xyz 1 1 1)
+			)
+			(rotate
+				(xyz 0 0 270)
+			)
+		)
+	)
+)

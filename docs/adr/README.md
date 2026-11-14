@@ -71,6 +71,7 @@ bootc/Debian Linux tier remain as dated records and apply only to `legacy/linux-
 | [0061](0061-heqk-memory-budgets-and-admission.md) | heqk memory discovery, budgets and admission (every byte budgeted, no overcommit) | Proposed (2026-11-11) | — |
 | [0062](0062-heqk-microarchitectural-isolation-multi-tenant-pop.md) | Microarchitectural isolation and verified security eligibility for multi-tenant SASE PoPs (V0: eligibility verified, never configured) | Proposed (2026-11-11; operator decisions recorded, review pending) | Amends `HEQK_REMEDIATION_PLAN.md` §4.4, `SECURITY.md` CNTPCT residual, ADR 0050 |
 | [0063](0063-autonomous-cicd-gate-spine-and-heal-loop.md) | Autonomous CI/CD: one deterministic gate spine, five lifecycle loops (renumbered from the duplicate 0052 on 2026-11-12) | Proposed; gates implemented on main (PR #738) | — |
+| [0064](0064-open-hardware-hookprobe-board.md) | Open hardware: from CM5 to a HookProbe board (RK3588), after CM5 is validated (gates H0–H5; ROCK 5B port first; design in `hardware/hookprobe-sbc/`) | Proposed (2026-11-14); licence (D6) awaits the operator | Extends 0047 D1/D4 |
 
 **Duplicate number 0052 — resolved 2026-11-12 (operator decision).** Two files carried 0052: Shield v2 (2026-11-07)
 keeps 0052; the autonomous CI/CD ADR (2026-11-08) is now **[0063](0063-autonomous-cicd-gate-spine-and-heal-loop.md)**.

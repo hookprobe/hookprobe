@@ -98,7 +98,9 @@ os/mission-control/ the UI, embedded into heqk by os/kernel/kernel/build.rs
 os/build/           image build engine (make-cm5-heqk-image.sh / -disk.sh, heqk-sign)
 os/{drivers,networking,security,device-identity,provisioning}/   index READMEs into os/kernel
                     (os/drivers/firmware/ holds the CYW43455 blobs)
-appliance/{cm5,waveshare-dual-eth}/   hardware profiles
+appliance/{cm5,waveshare-dual-eth,hookprobe-sbc}/   hardware profiles (how the OS sees a board)
+hardware/hookprobe-sbc/  open-hardware RK3588 board, rev A (KiCad + generator scripts; unrouted).
+                    Gated behind CM5 validation: ADR 0064 (H0 CM5 → ROCK 5B port → our board)
 onboarding/{wifi,enrollment,setup-ui}/  enrollment/responder-sim = host control-plane responder
 docs/{architecture,getting-started,security,roadmap,adr,design,research}/
 tools/{build,flash,diagnostics}/
