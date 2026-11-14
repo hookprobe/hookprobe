@@ -412,17 +412,19 @@ pub fn syn_scan_observe(src: u64, dst_port: u16, local_target: bool) -> u64 {
 
 /// The TARGET answered `scanner`'s probe to `port`: an RST (closed) or a SYN-ACK (`synack`, open). Only an
 /// outstanding probe in the scanner's current window is credited — an unsolicited response creates nothing.
-pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
+/// Returns whether the frame answered an OUTSTANDING probe (A-03: only then may the slow tier count it — a
+/// client's abort RST to a server it was talking to answers no probe).
+pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) -> bool {
     if scanner == 0 {
-        return;
+        return false;
     }
     let s = slot(scanner, FLOW_SRCS);
     if SCAN_SRC[s].load(Ordering::Relaxed) != scanner {
-        return;
+        return false;
     }
-    let Some(i) = port_entry(s, port, false) else { return };
+    let Some(i) = port_entry(s, port, false) else { return false };
     if SCAN_PORT_FLAGS[s][i].load(Ordering::Relaxed) & P_SYN == 0 {
-        return;
+        return false;
     }
     if set_flag(s, i, P_ANS) {
         SCAN_DISTINCT[s].fetch_add(1, Ordering::Relaxed);
@@ -430,6 +432,7 @@ pub fn scan_response_observe(scanner: u64, port: u16, synack: bool) {
     if synack {
         set_flag(s, i, P_SYNACK);
     }
+    true
 }
 
 /// Slow-scan tier (detection benchmark 2026-11-09: one port every 20 s never reached the 10-second wall):
@@ -443,6 +446,15 @@ static SLOW_SRC: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
 static SLOW_AT: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
 static SLOW_CNT: [AtomicU64; SLOW_N] = [const { AtomicU64::new(0) }; SLOW_N];
 static SLOW_BITS: [[AtomicU64; 16]; SLOW_N] = [const { [const { AtomicU64::new(0) }; 16] }; SLOW_N];
+/// Distinct closed-port answers counted for `scanner` in its current slow-scan window (0 = none / evicted).
+pub fn slow_scan_count(scanner: u64) -> u64 {
+    let s = slot(scanner | (3 << 40), SLOW_N);
+    if scanner == 0 || SLOW_SRC[s].load(Ordering::Relaxed) != scanner {
+        return 0;
+    }
+    SLOW_CNT[s].load(Ordering::Relaxed)
+}
+
 pub fn slow_scan_observe(scanner: u64, port: u16, now: u64) -> bool {
     if scanner == 0 {
         return false;
