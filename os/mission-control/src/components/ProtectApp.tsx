@@ -16,6 +16,7 @@
  */
 import { type Component, For, Show, createSignal, onCleanup, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
+import { CAMERA } from '../store/sampleClock';
 import { healthChecked } from '../store/health';
 import { actionsView, refreshActions, revokeAction } from '../store/actions';
 import { ownerRules, refreshOwnerRules, KIND_LABEL, type OwnerChange, type OwnerKind } from '../store/ownerRules';
@@ -56,7 +57,7 @@ const ProtectApp: Component = () => {
     ? [{ ip: '203.0.113.9', state: 'rate_limited' as const, reason: 'port scan', distinct_ports: 41, established: 0, expires_in_s: 540 }]
     : enforcement()?.sources ?? []);
   const active = () => (sample()
-    ? [{ id: 1, kind: 'isolate', target: 'Kitchen camera', expires_in_s: 2400 }]
+    ? [{ id: 1, kind: 'isolate', target: 'Kitchen camera', expires_in_s: CAMERA.isolationLeft }]
     : actionsView()?.active ?? []);
   const policy = () => (sample()
     ? 'observe by default; only a confirmed scan, a malformed frame, an L1/L2 flood or resource exhaustion is acted on, and every action self-reverts (ADR 0023)'

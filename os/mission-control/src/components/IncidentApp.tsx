@@ -26,6 +26,7 @@ import {
   type RelatedMitre,
 } from '../store/investigateLive';
 import { incidentIdFromLocation, incidentHref } from '../store/routes';
+import { CAMERA } from '../store/sampleClock';
 import { remember } from '../store/recents';
 import AppShell from './AppShell';
 import PlanDiff from './PlanDiff';
@@ -42,10 +43,10 @@ const SAMPLE = {
   why: 'The camera resolved a domain on 3 threat feeds, then tried to connect to 6 other devices. Policy allows auto-isolation of IoT devices.',
   confidence: 94, evidence: 4,
   steps: [
-    { t: '13:04:51', engine: 'Senzorium', title: 'Unusual DNS lookup', body: 'Kitchen camera resolved a domain it has never used before.', kind: 'flow' },
-    { t: '13:04:52', engine: 'HYDRA', title: 'Domain flagged', body: 'The domain appears on 3 threat-intel feeds as botnet command and control.', kind: 'detection' },
-    { t: '13:04:58', engine: 'NAPSE', title: 'Local scanning detected', body: 'The camera tried to connect to 6 other devices on the network.', kind: 'detection' },
-    { t: '13:05:00', engine: 'AEGIS', title: 'Isolated automatically', body: 'Internet and LAN access cut for 1 hour (it ends by itself). DHCP and DNS keep working.', kind: 'response' },
+    { t: formatTime(CAMERA.dns), engine: 'Senzorium', title: 'Unusual DNS lookup', body: 'Kitchen camera resolved a domain it has never used before.', kind: 'flow' },
+    { t: formatTime(CAMERA.flagged), engine: 'HYDRA', title: 'Domain flagged', body: 'The domain appears on 3 threat-intel feeds as botnet command and control.', kind: 'detection' },
+    { t: formatTime(CAMERA.scan), engine: 'NAPSE', title: 'Local scanning detected', body: 'The camera tried to connect to 6 other devices on the network.', kind: 'detection' },
+    { t: formatTime(CAMERA.isolated), engine: 'AEGIS', title: 'Isolated automatically', body: 'Internet and LAN access cut for 1 hour (it ends by itself). DHCP and DNS keep working.', kind: 'response' },
   ],
   plan: [
     { kind: 'changed' as const, text: 'camera: isolated for 1 h → isolated until you release it' },
@@ -135,7 +136,7 @@ const IncidentApp: Component = () => {
                 <Show when={status()}><span class="inc-status">{status()}</span></Show>
               </div>
               <p class="pro-sub">
-                {sample() ? `Sample data · ${SAMPLE.device_ip} · ATT&CK T1071 Application Layer Protocol · opened 13:05`
+                {sample() ? `Sample data · ${SAMPLE.device_ip} · ATT&CK T1071 Application Layer Protocol · opened ${formatTime(CAMERA.isolated)}`
                   : d() ? `${d()!.device_ip} · ${d()!.explanation.related_events.length} related detection${d()!.explanation.related_events.length === 1 ? '' : 's'} · opened ${formatTime(d()!.ts)}` : ''}
               </p>
             </div>
@@ -184,10 +185,10 @@ const IncidentApp: Component = () => {
                   <Show when={tab() === 'evidence'}>
                     <Show when={!sample()} fallback={
                       <div class="l0-table-wrap"><table class="l0-table"><thead><tr><th>Time</th><th>Type</th><th>Entity</th><th>Kept</th></tr></thead><tbody>
-                        <tr class={rowClass('s0')}><td>13:04:51</td><td>DNS query</td><td>Kitchen camera</td><td>Raw · 7 days</td></tr>
-                        <tr class={rowClass('s1')}><td>13:04:52</td><td>Intel match</td><td>Domain</td><td>Kept</td></tr>
-                        <tr class={rowClass('s2')}><td>13:04:58</td><td>Flows ×6</td><td>LAN devices</td><td>Raw · 7 days</td></tr>
-                        <tr class={rowClass('s3')}><td>13:05:00</td><td>Action</td><td>Isolation</td><td>Audit log</td></tr>
+                        <tr class={rowClass('s0')}><td>{formatTime(CAMERA.dns)}</td><td>DNS query</td><td>Kitchen camera</td><td>Raw · 7 days</td></tr>
+                        <tr class={rowClass('s1')}><td>{formatTime(CAMERA.flagged)}</td><td>Intel match</td><td>Domain</td><td>Kept</td></tr>
+                        <tr class={rowClass('s2')}><td>{formatTime(CAMERA.scan)}</td><td>Flows ×6</td><td>LAN devices</td><td>Raw · 7 days</td></tr>
+                        <tr class={rowClass('s3')}><td>{formatTime(CAMERA.isolated)}</td><td>Action</td><td>Isolation</td><td>Audit log</td></tr>
                       </tbody></table></div>
                     }>
                       <p class="l0-label">Linked evidence · {d()?.attack_path.node_count ?? 0} items</p>
