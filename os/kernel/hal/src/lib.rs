@@ -194,6 +194,29 @@ pub fn acs_choose(neigh: &[(u16, i16)]) -> AcsChoice {
 /// EMPTY `allowed` means "no list available" and applies no restriction (QEMU vectors / a
 /// firmware that does not answer); if NO candidate is allowed the result has channel 0.
 pub fn acs_choose_allowed(neigh: &[(u16, i16)], allowed: &[u16]) -> AcsChoice {
+    acs_choose_dfs(neigh, allowed, false)
+}
+
+/// A 5 GHz chanspec that occupies a DFS channel (52–144: radar detection + a channel-availability check before
+/// the AP may transmit).
+pub fn chanspec_is_dfs(cs: u16) -> bool {
+    if cs & 0xc000 != 0xc000 {
+        return false;
+    }
+    let (o, n) = occ5(cs);
+    o[..n].iter().any(|&c| (52..=144).contains(&c))
+}
+
+/// DFS candidates: 80 MHz on 52–64 and 100–112; 20 MHz on 52–64, 100–116 and 132–140. Never the 5600–5650 MHz
+/// weather channels (120 / 124 / 128, so not the 116–128 block either): their CAC is 10 minutes. 144 and 149+ are
+/// not in the EU table; the regdomain list filters whatever else the country forbids.
+pub const ACS_DFS80: [u8; 2] = [52, 100];
+pub const ACS_DFS20: [u8; 12] = [52, 56, 60, 64, 100, 104, 108, 112, 116, 132, 136, 140];
+
+/// `acs_choose_allowed` that may also choose a DFS channel (`dfs`). DFS candidates are ranked LAST, so they win
+/// only when strictly better than every non-DFS one (a CAC outage and radar moves are their cost), and only
+/// against a real regdomain list: with an EMPTY `allowed` (no list) no DFS channel is ever chosen.
+pub fn acs_choose_dfs(neigh: &[(u16, i16)], allowed: &[u16], dfs: bool) -> AcsChoice {
     let mut best = AcsChoice { channel: 0, chanspec: 0, mhz: 0, score: 0, est_mbps: 0 };
     let mut consider = |channel: u8, chanspec: u16, mhz: u8, strong: u64, peak: u32| {
         if !allowed.is_empty() && !allowed.contains(&chanspec) {
@@ -227,7 +250,81 @@ pub fn acs_choose_allowed(neigh: &[(u16, i16)], allowed: &[u16]) -> AcsChoice {
         }).count() as u64;
         consider(ch, ch as u16 | 0x1000, 20, strong, 72);
     }
+    if dfs && !allowed.is_empty() {
+        for p in ACS_DFS80 {
+            consider(p, (p as u16 + 6) | 0x2000 | 0xc000, 80, strong5(&[p, p + 4, p + 8, p + 12]), 433);
+        }
+        for ch in ACS_DFS20 {
+            consider(ch, ch as u16 | 0x1000 | 0xc000, 20, strong5(&[ch]), 87);
+        }
+    }
     best
+}
+
+/// What the DFS watch asks the AP loop to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DfsAct {
+    Wait,
+    /// The CAC finished: the AP is in service on the DFS channel.
+    InService,
+    /// Leave the DFS channel for the non-DFS fallback (the reason is logged).
+    Fallback(&'static str),
+}
+
+/// The AP on a DFS channel, watched once a second from the firmware `dfs_status` state (0 idle, 1 pre-ISM CAC,
+/// 2 in-service monitoring, 3 channel switch, 4 post-ISM CAC, 5 / 6 out-of-channel CAC) and the operating chanspec
+/// readback. The firmware runs the CAC and radar detection itself; on a radar hit it switches or silences the
+/// BSS — heqk then moves to the non-DFS fallback instead of following the firmware to another DFS channel.
+pub struct DfsWatch {
+    /// The first `step` (the watch starts with the serve loop's clock, not the bring-up's).
+    start_s: Option<u64>,
+    in_service: bool,
+    bad: u8,
+}
+
+impl DfsWatch {
+    /// A CAC is 60 s on the candidates (weather channels are never chosen); past this the AP gives up on DFS.
+    pub const CAC_MAX_S: u64 = 90;
+    pub const fn new() -> Self {
+        DfsWatch { start_s: None, in_service: false, bad: 0 }
+    }
+    pub fn in_service(&self) -> bool {
+        self.in_service
+    }
+    /// `state` = dfs_status word 0 (None = no answer); `on_chosen` = the chanspec readback equals the chosen one
+    /// (None = no answer). Two consecutive bad reads are needed, so one stale answer never moves the AP.
+    pub fn step(&mut self, now_s: u64, state: Option<u32>, on_chosen: Option<bool>) -> DfsAct {
+        let left = on_chosen == Some(false);
+        let start = *self.start_s.get_or_insert(now_s);
+        if !self.in_service {
+            if state == Some(2) && !left {
+                self.in_service = true;
+                self.bad = 0;
+                return DfsAct::InService;
+            }
+            if now_s.saturating_sub(start) > Self::CAC_MAX_S {
+                return DfsAct::Fallback("the CAC did not finish");
+            }
+            if left || matches!(state, Some(3) | Some(5) | Some(6)) {
+                self.bad += 1;
+                if self.bad >= 2 {
+                    return DfsAct::Fallback("radar during the CAC (channel switch / left the channel)");
+                }
+            } else {
+                self.bad = 0;
+            }
+            return DfsAct::Wait;
+        }
+        if left || matches!(state, Some(s) if s != 2) {
+            self.bad += 1;
+            if self.bad >= 2 {
+                return DfsAct::Fallback("radar in service (channel switch / CAC / left the channel)");
+            }
+        } else {
+            self.bad = 0;
+        }
+        DfsAct::Wait
+    }
 }
 
 // ── SDPCM RX glomming (superframes) — a port of brcmfmac brcmf_sdio_rxglom's framing rules. ──
