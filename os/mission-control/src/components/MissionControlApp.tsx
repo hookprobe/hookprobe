@@ -84,7 +84,7 @@ const MissionControlApp: Component = () => {
     fleet: () => ({ title: 'Fleet health', crumb: 'Fleet → site → device → manifest', body: 'Fleet status comes from your control plane. This device has not received fleet data yet.', href: '/admin/identity', hrefLabel: 'Open Administration' }),
     customers: () => ({ title: 'Customer health', crumb: 'Tenants → customer → score', body: 'Per-tenant scores come from your control plane. No tenant data has arrived yet.', href: '/customers/managed', hrefLabel: 'Open Customers' }),
     incidents: () => ({ title: 'Active incidents', crumb: 'Queue → incident story → evidence', body: 'Open incidents, highest priority first. Each one opens as a story with the evidence and the reason for every step.', href: '/investigate/queue', hrefLabel: 'Open Investigate' }),
-    actions: () => ({ title: 'Autonomous actions', crumb: 'Action → why → audit log → undo', body: 'Every protective action is time-bounded and expires on its own; the audit log records who or what started it and why. End any of them early from Shield or Protect.', href: '/network/dns', hrefLabel: 'Open Shield actions' }),
+    actions: () => ({ title: 'Autonomous actions', crumb: 'Action → why → audit log → undo', body: 'Actions the device takes by itself are time-bounded and end on their own. Durable changes (a zone move, a permanent block) happen only with your approval. The audit log records who or what started each one and why. End any of them early from Shield or Protect.', href: '/network/dns', hrefLabel: 'Open Shield actions' }),
     infra: () => ({ title: 'Infrastructure', crumb: 'Links → interfaces → flows', body: 'How this device sits between your internet line and your network. Open Network / Gateway for links, Wi-Fi and zones, or Observe for live flows.', href: '/network/map', hrefLabel: 'Open Network / Gateway' }),
     perf: () => ({ title: 'Performance', crumb: 'Packets → verdicts → retention', body: 'What the inline sensor has handled since start-up and how much evidence the device keeps. Data older than the window is offloaded or summarised, never silently lost.', href: '/observe/live', hrefLabel: 'Open Observe' }),
   };
@@ -195,7 +195,7 @@ const MissionControlApp: Component = () => {
             }>
               <span class="prow"><span>Isolated Kitchen camera</span><span>why →</span></span>
               <span class="prow"><span>Blocked 38 login attempts</span><span>why →</span></span>
-              <span class="prow"><span>Moved guest phone to Guests</span><span>why →</span></span>
+              <span class="prow"><span>Moved guest phone to Guests (you approved)</span><span>why →</span></span>
             </Show>
           </button>
 

@@ -9,7 +9,9 @@
  * Live data: /api/incidents/:id, …/timeline, …/processes, /api/evidence/graph, /api/reports/:id.
  * The device correlates deterministically: when no AI planner ran, the model line says so and no
  * plan is invented; the Copilot can propose one (PlanDiff, staged → applying → verified).
- * Below 1024 px the plan column moves under the story with a sticky "Review plan" bar.
+ * Below 1024 px the plan column moves under the story; a slim sticky "Review plan" bar (not the
+ * whole plan card, which covered the story on phones) jumps to it. Story steps and graph nodes open
+ * the Evidence tab at their item.
  */
 import { type Component, For, Show, createEffect, createSignal, onMount } from 'solid-js';
 import { substrate, setCopilotOpen, setCopilotQuery } from '../store/mock';
@@ -43,11 +45,11 @@ const SAMPLE = {
     { t: '13:04:51', engine: 'Senzorium', title: 'Unusual DNS lookup', body: 'Kitchen camera resolved a domain it has never used before.', kind: 'flow' },
     { t: '13:04:52', engine: 'HYDRA', title: 'Domain flagged', body: 'The domain appears on 3 threat-intel feeds as botnet command and control.', kind: 'detection' },
     { t: '13:04:58', engine: 'NAPSE', title: 'Local scanning detected', body: 'The camera tried to connect to 6 other devices on the network.', kind: 'detection' },
-    { t: '13:05:00', engine: 'AEGIS', title: 'Isolated automatically', body: 'Internet and LAN access cut. DHCP and DNS keep working.', kind: 'response' },
+    { t: '13:05:00', engine: 'AEGIS', title: 'Isolated automatically', body: 'Internet and LAN access cut for 1 hour (it ends by itself). DHCP and DNS keep working.', kind: 'response' },
   ],
   plan: [
-    { kind: 'added' as const, text: 'block domain for all zones' },
-    { kind: 'changed' as const, text: 'camera: isolated → internet only' },
+    { kind: 'changed' as const, text: 'camera: isolated for 1 h → isolated until you release it' },
+    { kind: 'added' as const, text: 'block the domain for all zones' },
     { kind: 'added' as const, text: 'notify me if it repeats' },
   ],
 };
@@ -65,6 +67,13 @@ const IncidentApp: Component = () => {
   const [msg, setMsg] = createSignal('');
   const [mitre, setMitre] = createSignal<RelatedMitre[]>([]);
   const [resolved, setResolved] = createSignal(false);
+  /** Evidence row to highlight after a story step or graph node is clicked (sample: row index; live: node id). */
+  const [focus, setFocus] = createSignal<string | null>(null);
+  const showEvidence = (key: string | null) => {
+    setFocus(key); setTab('evidence');
+    requestAnimationFrame(() => document.querySelector('[aria-label="Incident story"] tr.is-focus')?.scrollIntoView({ block: 'nearest' }));
+  };
+  const rowClass = (key: string) => (focus() === key ? 'is-focus' : '');
 
   onMount(() => {
     setId(incidentIdFromLocation(location));
@@ -161,11 +170,11 @@ const IncidentApp: Component = () => {
                               <span class={`story-dot story-dot--${s.kind}`} />
                               <Show when={i() < storyRows().length - 1}><span class="story-line" /></Show>
                             </span>
-                            <span class="story-body">
+                            <button class="story-body story-link" aria-label={`${s.title}: show the evidence`} onClick={() => showEvidence(sample() ? `s${i()}` : null)}>
                               <span class="story-meta">{s.meta}</span>
                               <span class="story-title">{s.title}</span>
                               <Show when={s.body}><span class="l0-card-sub">{s.body}</span></Show>
-                            </span>
+                            </button>
                           </li>
                         )}</For>
                       </ol>
@@ -175,15 +184,15 @@ const IncidentApp: Component = () => {
                   <Show when={tab() === 'evidence'}>
                     <Show when={!sample()} fallback={
                       <div class="l0-table-wrap"><table class="l0-table"><thead><tr><th>Time</th><th>Type</th><th>Entity</th><th>Kept</th></tr></thead><tbody>
-                        <tr><td>13:04:51</td><td>DNS query</td><td>Kitchen camera</td><td>Raw · 7 days</td></tr>
-                        <tr><td>13:04:52</td><td>Intel match</td><td>Domain</td><td>Kept</td></tr>
-                        <tr><td>13:04:58</td><td>Flows ×6</td><td>LAN devices</td><td>Raw · 7 days</td></tr>
-                        <tr><td>13:05:00</td><td>Action</td><td>Isolation</td><td>Audit log</td></tr>
+                        <tr class={rowClass('s0')}><td>13:04:51</td><td>DNS query</td><td>Kitchen camera</td><td>Raw · 7 days</td></tr>
+                        <tr class={rowClass('s1')}><td>13:04:52</td><td>Intel match</td><td>Domain</td><td>Kept</td></tr>
+                        <tr class={rowClass('s2')}><td>13:04:58</td><td>Flows ×6</td><td>LAN devices</td><td>Raw · 7 days</td></tr>
+                        <tr class={rowClass('s3')}><td>13:05:00</td><td>Action</td><td>Isolation</td><td>Audit log</td></tr>
                       </tbody></table></div>
                     }>
                       <p class="l0-label">Linked evidence · {d()?.attack_path.node_count ?? 0} items</p>
                       <div class="l0-table-wrap"><table class="l0-table"><thead><tr><th>Type</th><th>Item</th></tr></thead><tbody>
-                        <For each={d()?.attack_path.nodes ?? []}>{(nd) => <tr><td>{NODE[nd.type] ?? nd.type}</td><td style={{ 'overflow-wrap': 'anywhere' }}>{nd.label || nd.id}</td></tr>}</For>
+                        <For each={d()?.attack_path.nodes ?? []}>{(nd) => <tr class={rowClass(nd.id)}><td>{NODE[nd.type] ?? nd.type}</td><td style={{ 'overflow-wrap': 'anywhere' }}>{nd.label || nd.id}</td></tr>}</For>
                       </tbody></table></div>
                       <Show when={processRoots().length > 0}>
                         <p class="l0-label">Process tree</p>
@@ -196,17 +205,17 @@ const IncidentApp: Component = () => {
                   <Show when={tab() === 'graph'}>
                     <div class="chain" role="list" aria-label="Attack path">
                       <Show when={!sample()} fallback={
-                        <For each={['Kitchen camera', 'DNS lookup', 'Malware host', 'Isolated']}>{(x, i) => (
-                          <><span class="chain-node" role="listitem">{x}</span><Show when={i() < 3}><span aria-hidden="true">→</span></Show></>
+                        <For each={[['Kitchen camera', 's0'], ['DNS lookup', 's0'], ['Malware host', 's1'], ['Isolated', 's3']]}>{([x, k], i) => (
+                          <><span role="listitem"><button class="chain-node chain-link" onClick={() => showEvidence(k)}>{x}</button></span><Show when={i() < 3}><span aria-hidden="true">→</span></Show></>
                         )}</For>
                       }>
                         <For each={d()?.attack_path.nodes ?? []}>{(nd, i) => (
-                          <><span class="chain-node" role="listitem"><em>{NODE[nd.type] ?? nd.type}</em>{nd.label || nd.id}</span>
+                          <><span role="listitem"><button class="chain-node chain-link" onClick={() => showEvidence(nd.id)}><em>{NODE[nd.type] ?? nd.type}</em>{nd.label || nd.id}</button></span>
                             <Show when={i() < (d()?.attack_path.nodes.length ?? 0) - 1}><span aria-hidden="true">→</span></Show></>
                         )}</For>
                       </Show>
                     </div>
-                    <p class="pcard-note">{sample() ? '' : `${d()?.attack_path.node_count ?? 0} items linked by ${d()?.attack_path.edge_count ?? 0} relations in the evidence graph.`}</p>
+                    <p class="pcard-note">{sample() ? 'Select a step to see its evidence.' : `Select an item to see it in the evidence. ${d()?.attack_path.node_count ?? 0} items linked by ${d()?.attack_path.edge_count ?? 0} relations in the evidence graph.`}</p>
                   </Show>
 
                   <Show when={tab() === 'summary'}>
@@ -227,6 +236,10 @@ const IncidentApp: Component = () => {
                     </Show>
                     <div><button class="hp-btn" onClick={() => window.print()}>Print or save as PDF</button></div>
                   </Show>
+                </div>
+                <div class="inc-plan-bar">
+                  <span>{sample() ? `Proposed plan · ${SAMPLE.plan.length} changes` : 'No plan proposed yet'}</span>
+                  <button class="hp-btn hp-btn--primary" onClick={() => document.getElementById('inc-plan')?.scrollIntoView({ block: 'start', behavior: 'smooth' })}>Review plan</button>
                 </div>
               </section>
 
@@ -250,7 +263,7 @@ const IncidentApp: Component = () => {
                   </details>
                 </div>
 
-                <div class="pcard inc-plan-sticky">
+                <div class="pcard" id="inc-plan">
                   <Show when={sample()} fallback={
                     <>
                       <p class="l0-label">Proposed plan</p>
@@ -258,7 +271,7 @@ const IncidentApp: Component = () => {
                       <div><button class="hp-btn hp-btn--primary" onClick={askCopilot}>Ask Copilot for a plan</button></div>
                     </>
                   }>
-                    <PlanDiff lines={SAMPLE.plan} onApprove={() => Promise.reject(new Error('Preview: no device is connected to apply this.'))} />
+                    <PlanDiff lines={SAMPLE.plan} disabledReason="Sample data: no device is connected to apply this plan." onApprove={() => Promise.reject(new Error('Preview: no device is connected to apply this.'))} />
                   </Show>
                 </div>
               </aside>
