@@ -119,6 +119,11 @@ air (receive-only rule).
 - Driver stability: `rtw88_8821au` logs `firmware failed to leave lps state` / `failed to get tx report` (≈10× in
   ~2 days of STA use). M1 watches for capture stalls and recovers by bouncing the interface.
 - USB 2.0 via a hub (480M), fine for 1×1 capture. The microSD is the storage bottleneck for long PCAP retention.
+- **No DFS-channel capture (proven 2026-11-14).** The RTL8811AU/`rtw88_8821au` accepts `iw set freq` on DFS/radar
+  channels (52–64, 100–144) but **delivers no frames** there in monitor mode. Verified against ground truth: with
+  the CM5 AP confirmed beaconing on ch52 (heqk `wlan0` associated, −55 dBm), the dongle tuned to ch52 captured 0
+  beacons in 15 s, while the same dongle saw 200 beacons/5 s on ch36. DFS monitoring would need a DFS-capable
+  adapter (e.g. MT7612U) or AP-side capture. Non-DFS channels (36–48, 149–165, 2.4 GHz) capture normally.
 
 ## 7. Time-share protocol (agreed with the heqk session, 2026-11-14)
 
