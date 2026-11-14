@@ -11,7 +11,7 @@
 | Rogue / unexpected AP | beacon BSSID+SSID+security vs a baseline | ✅ data present (events carry bssid/ssid/security/akm); rule: baseline diff — validate via replay |
 | Evil-twin (same SSID, unexpected BSSID) | group events by ssid, flag new bssid | ✅ data present; replay-validated rule pending |
 | Unexpected open / WEP / WPA1 AP | `security` classification | ✅ classifier tested (7 classes, unit + live) |
-| Security downgrade (transition / PMF change) | `security`, `pmf_required`, `akm` deltas vs baseline | ✅ fields present; **surfaced W-01/W-02 on the CM5 live** |
+| Security downgrade (transition / PMF change) | `security`, `pmf_required`, `akm` deltas vs baseline | ✅ fields present; surfaced W-01/W-02 live; **W-02 confirmed: WPA3-only beacon = AKM8/MFPR=1 (metal)** |
 | Deauth / disassoc burst | `kind=deauth/disassoc` + `reason_code`, rate | ⚠️ data modelled & unit-tested; **none observed live**; validate by replay (no TX to generate them) |
 | Suspicious new station | `probe_req`/`assoc_req` SA, randomization flag | ✅ data present (probe SSIDs hashed for privacy) |
 | Channel change | beacon `ds_channel` / observed freq vs baseline | ✅ data present |
