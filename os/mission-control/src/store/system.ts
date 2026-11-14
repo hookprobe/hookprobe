@@ -6,11 +6,12 @@
 import { createSignal } from 'solid-js';
 import { fetchJson } from './api';
 
-/** Shape per docs/design/mgmt-envelope-api.md (kernel #1108): version is always null today (the build id is the
- *  identifier); slot / trial without the factory A/B layout, svn without HBoot, used / total without a DataVolume are
- *  null; retention_days is null (the evidence log is a ring, not a time window). */
+/** Shape per docs/design/mgmt-envelope-api.md (kernel #1108): version is the OS release ("0.0-26") with its codename
+ *  ("Zamolxis") from hal::release; older images send version null and no codename. slot / trial without the factory
+ *  A/B layout, svn without HBoot, used / total without a DataVolume are null; retention_days is null (the evidence
+ *  log is a ring, not a time window). */
 export interface SystemView {
-  version: string | null; build: string | null; slot: 'A' | 'B' | null; trial: boolean | null; svn: number | null;
+  version: string | null; codename?: string | null; build: string | null; slot: 'A' | 'B' | null; trial: boolean | null; svn: number | null;
   storage: { used: number | null; total: number | null; retention_days: number | null } | null;
 }
 

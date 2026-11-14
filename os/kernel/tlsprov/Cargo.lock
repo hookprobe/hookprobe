@@ -330,7 +330,7 @@ dependencies = [
 
 [[package]]
 name = "heqk-tlsprov"
-version = "0.1.0"
+version = "0.0.26"
 dependencies = [
  "chacha20poly1305",
  "hmac 0.12.1",

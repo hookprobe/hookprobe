@@ -1,6 +1,6 @@
 [package]
 name = "hookprobe-dns-sinkhole"
-version = "0.1.0"
+version = "0.0.26"
 license = "AGPL-3.0-only"
 edition = "2021"
 description = "HookProbe OS DNS sinkhole / RPZ enforcement (roadmap A1). The safest possible attack-block: refuses a NAME (per-query, reversible, NXDOMAIN/sinkhole), never a customer's PACKET — fits the 'legit customer always passes' invariant far better than a drop. Merges dnsxai's BLOCK_INSTANT verdicts + HYDRA's bundled domain IOCs into a signed-source, allowlist-guarded RPZ zone / dnsmasq blocklist, and records each sinkhole action as a reversible, TTL-able evidence-graph response."
