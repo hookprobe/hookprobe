@@ -27,7 +27,8 @@ import LiveState from './LiveState';
 import { promptAndRun } from '../store/actions';
 import { setCopilotOpen, substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
-import type { Tone } from '../store/missionMock';
+import { CAMERA, sampleWhen } from '../store/sampleClock';
+type Tone = 'green' | 'amber' | 'red' | 'blue' | 'purple' | 'cyan' | 'orange' | 'grey';
 import { formatTime, formatBytes, mitreName, mitreLabel, mitreTactic, type ProcessTreeNode } from '../store/api';
 import AppShell from './AppShell';
 import { incidentHref } from '../store/routes';
@@ -161,7 +162,7 @@ const InvestigateApp: Component = () => {
             <div class="inv-queue-list">
               <Show when={!sample()} fallback={
                 <a class="inv-q-item" href="/investigate/incident" style={{ 'text-decoration': 'none', color: 'inherit', display: 'block' }}>
-                  <div class="inv-q-top"><span class="inv-pri pri--high">HIGH</span><span class="inv-q-time">13:05</span></div>
+                  <div class="inv-q-top"><span class="inv-pri pri--high">HIGH</span><span class="inv-q-time">{sampleWhen(CAMERA.isolated)}</span></div>
                   <div class="inv-q-title">Kitchen camera contacted a malware host</div>
                   <div class="inv-q-meta">10.66.0.42 · open · sample</div>
                 </a>
