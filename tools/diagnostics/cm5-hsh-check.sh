@@ -12,11 +12,13 @@ set -u -o pipefail
 KEY="${1:?owner key file}"; LOG="${2:?serial log}"; CK="${3:?configuration signing key}"; MC="${4:-https://192.168.200.146}"
 HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/../.." && pwd)
 HQ="python3 -I $ROOT/os/kernel/tools/hqcfg.py"
-UP="python3 -I $ROOT/os/kernel/tools/hq-upload.py --mc $MC --owner-key-file $KEY --insecure"
+UP="python3 -I $ROOT/os/kernel/tools/hq-upload.py --mc $MC --owner-key-file $KEY --sign-key $CK --insecure"  # R6 = D: the activate is owner-signed
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 T=$(mktemp -d); chmod 700 "$T"; trap 'shred -u "$T"/* 2>/dev/null; rm -rf "$T"' EXIT
 # sh "<line>" [origin-override] -> prints the shell's reply (HTTP status on the last line as "HTTP <code>")
+# (/api/hsh is an owner write: the session's next seq rides in ?seq=, replay-checked — without it every line is
+# refused 409 'replay', which read as 'the shell does not answer')
 sh() { python3 -I - "$MC" "$KEY" "$1" "${2:-}" <<'PY'
 import json, ssl, sys, urllib.parse, urllib.request, http.cookiejar
 mc, key, line, origin = sys.argv[1], open(sys.argv[2]).read().strip(), sys.argv[3], sys.argv[4] or sys.argv[1]
@@ -24,7 +26,7 @@ c = ssl.create_default_context(); c.check_hostname = False; c.verify_mode = ssl.
 o = urllib.request.build_opener(urllib.request.HTTPSHandler(context=c), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
 o.open(mc + "/api/login", urllib.parse.urlencode({"token": key}).encode(), timeout=10).read()
 s = json.loads(o.open(mc + "/api/session", timeout=10).read())
-rq = urllib.request.Request(mc + "/api/hsh", line.encode("latin-1"), {"Origin": origin, "X-HQ-CSRF": s["csrf"], "Content-Type": "text/plain"})
+rq = urllib.request.Request(mc + "/api/hsh?seq=" + str(s["next_seq"]), line.encode("latin-1"), {"Origin": origin, "X-HQ-CSRF": s["csrf"], "Content-Type": "text/plain"})
 try:
     r = o.open(rq, timeout=15); print(r.read().decode("utf-8", "replace")); print("HTTP", r.status)
 except urllib.error.HTTPError as e:
@@ -49,7 +51,7 @@ PY
 }
 gen_api() { api /api/config | python3 -c 'import json,sys; print(json.load(sys.stdin)["generation"])'; }
 gen_sh() { sh "config status" | grep -oE "generation [0-9]+" | head -1 | awk '{print $2}'; }
-answers() { local r; r=$(sh "$1"); grep -q "HTTP 200" <<<"$r" && ! grep -qiE "^ERROR|fault|unsupported" <<<"$r" && [ "$(grep -vc '^HTTP' <<<"$r")" -ge 1 ]; }
+answers() { local r; r=$(sh "$1"); grep -q "HTTP 200" <<<"$r" && ! grep -qiE "^ERROR|shell fault|unsupported" <<<"$r" && [ "$(grep -vc '^HTTP' <<<"$r")" -ge 1 ]; }
 # --- transport guards ---
 c=$(curl -sk -o /dev/null -w '%{http_code}' -m 10 -X POST --data 'version' "$MC/api/hsh"); [ "$c" = 401 ] || [ "$c" = 403 ]; chk $? "T1 no owner session -> refused ($c)"
 sh "version" "https://evil.example" | grep -q "HTTP 403"; chk $? "T2 foreign Origin -> 403"
@@ -66,7 +68,7 @@ sh "config rollback" | grep -qiE "operate|not permitted|elevat|denied|refused"; 
 sh "frobnicate now" | grep -qiE "unknown|not a command|ERROR"; chk $? "P unknown command refused"
 sh "firewall show" | grep -qiE "not in this build|later|not yet|unsupported"; chk $? "P a spec command not in this build is refused as such"
 sh "config stage zz" | grep -qi "Invalid argument"; chk $? "P malformed argument refused (config stage zz)"
-sh "owner elevate 00 11" | grep -qi "Invalid argument"; chk $? "P malformed signature refused (owner elevate)"
+sh "owner elevate 00 11" | grep -qiE "Invalid argument|not supported"; chk $? "P malformed signature refused (owner elevate; 'not in this build' until ADR 0059 step 4b/4c)"
 long=$(python3 -c 'print("info " + "A" * 3000)'); sh "$long" > /dev/null; answers "version"; chk $? "F oversized line: the shell still answers afterwards"
 sh $'info \x01\x02\xff' > /dev/null; answers "uptime"; chk $? "F binary bytes: the shell still answers afterwards"
 # --- the shell agrees with the API through a live change and a reboot ---
