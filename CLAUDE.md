@@ -87,6 +87,8 @@ UX rules: capability-gated rendering · everything clickable (drills to evidence
 
 Software name is **always HookProbe OS**. *Guardian / Fortress / Virtual / Cloud* are marketing SKU names (hardware/target), never separate software.
 
+**Current release: HookProbe OS v0.0-26 "Zamolxis"** (operator, 2026-11-14; ADR 0012 D1 amendment). Display form `v<major>.<minor>-<n>` + codename; SemVer form `0.0.26` in every HookProbe Cargo.toml / package.json / local Cargo.lock entry. The single source is `os/kernel/hal/src/release.rs` (`VERSION`, `CODENAME`, `SEMVER`, compile-time checked against its own Cargo version); `tools/ci/release_check.py` (gate g0) fails on drift. A new release changes `release.rs`, every version (re-run the alignment), and adds `docs/releases/v<version>.md`. Tagging and signing a release stay operator (Red) steps.
+
 ## Repository layout (merged repo `hookprobe`, 2026-11-07)
 
 This repo is `github.com/hookprobe/hookprobe`. HookProbe OS is the top level, and the old V1

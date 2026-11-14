@@ -2,7 +2,7 @@
 # Separate crate: 0.3.x needs kem 0.3.0, which cannot coexist with 0.2.3's exact kem 0.3.0-pre.0 pin.
 [package]
 name = "kem-ctgrind-034"
-version = "0.1.0"
+version = "0.0.26"
 license = "AGPL-3.0-only"
 edition = "2021"
 publish = false

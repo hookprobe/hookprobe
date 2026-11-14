@@ -116,7 +116,7 @@ dependencies = [
 
 [[package]]
 name = "heqk-sign"
-version = "1.0.0"
+version = "0.0.26"
 dependencies = [
  "ed25519-compact",
  "fips205",

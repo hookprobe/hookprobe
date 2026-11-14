@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  Current release: <a href="docs/releases/v0.0-26.md"><strong>HookProbe OS v0.0-26 "Zamolxis"</strong></a> (pre-release)
+</p>
+
+<p align="center">
   <a href="https://github.com/hookprobe/hookprobe/stargazers"><img src="https://img.shields.io/github/stars/hookprobe/hookprobe?style=flat-square&label=stars" alt="GitHub stars"/></a>
   <a href="https://github.com/hookprobe/hookprobe/network/members"><img src="https://img.shields.io/github/forks/hookprobe/hookprobe?style=flat-square" alt="GitHub forks"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue?style=flat-square" alt="AGPL-3.0 license"/></a>
