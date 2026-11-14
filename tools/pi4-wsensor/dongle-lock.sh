@@ -9,6 +9,7 @@
 # Usage (on the Pi):  dongle-lock.sh status | acquire | release
 set -euo pipefail
 export PATH=$PATH:/usr/sbin:/sbin
+SUDO=sudo; [ "$(id -u)" = 0 ] && SUDO=""
 LOCK=/run/lock/hp-dongle.owner
 STATE=/run/lock/hp-dongle.monitor-state   # what we found, so release restores it exactly
 cmd=${1:-status}
@@ -33,27 +34,27 @@ acquire)
   owner=$(awk '{print $1}' "$LOCK" 2>/dev/null || true)
   if [ -n "$owner" ] && [ "$owner" != monitor ]; then echo "REFUSED: lock held by '$owner'"; exit 3; fi
   d=$(dongle_if) || { echo "no USB dongle present"; exit 4; }
-  echo "monitor $(date -Is)" | sudo tee "$LOCK" >/dev/null
+  echo "monitor $(date -Is)" | $SUDO tee "$LOCK" >/dev/null
   if [ ! -f "$STATE" ]; then
     printf 'if=%s\ndrv=%s\nnm=%s\nmac=%s\n' "$d" "$(drvof "$d")" "$(nmstate "$d")" \
-      "$(cat "/sys/class/net/$d/address")" | sudo tee "$STATE" >/dev/null
+      "$(cat "/sys/class/net/$d/address")" | $SUDO tee "$STATE" >/dev/null
   fi
   # snapshot NM profiles (UUID:NAME) so release can prove none were touched; we never edit profiles
-  nmcli -t -f UUID,NAME con show 2>/dev/null | sort | sudo tee /run/lock/hp-dongle.nm-profiles >/dev/null
-  sudo nmcli dev set "$d" managed no 2>/dev/null || true
-  sudo ip link set "$d" down
-  sudo iw dev "$d" set type monitor
-  sudo ip link set "$d" up
+  nmcli -t -f UUID,NAME con show 2>/dev/null | sort | $SUDO tee /run/lock/hp-dongle.nm-profiles >/dev/null
+  $SUDO nmcli dev set "$d" managed no 2>/dev/null || true
+  $SUDO ip link set "$d" down
+  $SUDO iw dev "$d" set type monitor
+  $SUDO ip link set "$d" up
   echo "acquired $d -> type=$(iftype "$d")" ;;
 release)
   [ -f "$STATE" ] || { echo "nothing to release"; exit 0; }
   R_if=$(awk -F= '$1=="if"{print $2}' "$STATE"); R_drv=$(awk -F= '$1=="drv"{print $2}' "$STATE")
   d=$(dongle_if || echo "$R_if")
-  sudo pkill -f "(tcpdump|dumpcap|airodump-ng|kismet).*$d" 2>/dev/null || true
-  sudo ip link set "$d" down
-  sudo iw dev "$d" set type managed
-  sudo ip link set "$d" up
-  sudo nmcli dev set "$d" managed yes 2>/dev/null || true
+  $SUDO pkill -f "(tcpdump|dumpcap|airodump-ng|kismet).*$d" 2>/dev/null || true
+  $SUDO ip link set "$d" down
+  $SUDO iw dev "$d" set type managed
+  $SUDO ip link set "$d" up
+  $SUDO nmcli dev set "$d" managed yes 2>/dev/null || true
   sleep 3
   now=$(nmstate "$d"); drv=$(drvof "$d"); t=$(iftype "$d"); ok=1
   [ "$drv" = "$R_drv" ] || ok=0
@@ -65,8 +66,8 @@ release)
     [ -z "$missing" ] || { echo "NM PROFILES MISSING since acquire: $missing"; ok=0; }
   fi
   if [ "$ok" = 1 ]; then
-    sudo rm -f "$STATE" /run/lock/hp-dongle.nm-profiles
-    if [ "$(awk '{print $1}' "$LOCK" 2>/dev/null)" = monitor ]; then sudo rm -f "$LOCK"; fi
+    $SUDO rm -f "$STATE" /run/lock/hp-dongle.nm-profiles
+    if [ "$(awk '{print $1}' "$LOCK" 2>/dev/null)" = monitor ]; then $SUDO rm -f "$LOCK"; fi
     echo "released $d: type=$t nm=$now drv=$drv"
   else
     echo "RELEASE INCOMPLETE: if=$d type=$t drv=$drv (was $R_drv) nm=$now -- lock kept, notify heqk"; exit 5
