@@ -44,6 +44,9 @@ struct Flow {
     used: bool,
 }
 
+/// Largest Echo Request body the router answers (an IPv6 minimum-MTU packet's ICMPv6 payload).
+pub const ECHO_MAX: usize = 1280 - 40;
+
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Stats {
     pub ra_tx: u32,
@@ -62,6 +65,8 @@ pub struct Stats {
     pub savi_refused: u32,
     /// Neighbor Solicitations sent on a cache miss.
     pub ns_tx: u32,
+    /// Echo Replies the router sent (ping6 to its link-local or global address).
+    pub echo_tx: u32,
 }
 
 pub enum LanAction {
@@ -167,7 +172,7 @@ impl V6Lan {
             flows: [Flow { local: [0; 16], remote: [0; 16], proto: 0, lport: 0, rport: 0, seen: 0, used: false }; FLOW_N],
             stats: Stats {
                 ra_tx: 0, rs_rx: 0, na_tx: 0, out_fwd: 0, in_fwd: 0, in_icmp_err: 0, drop_no_flow: 0,
-                drop_no_neigh: 0, drop_hop: 0, drop_src: 0, drop_bad: 0, flow_evict: 0, savi_refused: 0, ns_tx: 0,
+                drop_no_neigh: 0, drop_hop: 0, drop_src: 0, drop_bad: 0, flow_evict: 0, savi_refused: 0, ns_tx: 0, echo_tx: 0,
             },
             last_ra_ms: 0,
             ra_burst: 0,
@@ -486,8 +491,19 @@ impl V6Lan {
                 }
                 return LanAction::Drop; // DAD / someone else's address: not ours to answer
             }
+            // Echo Request to the router's own unicast address (link-local or global): answered, like IPv4 ping to the
+            // AP (Pi LAN assessment 2026-11-14: ping6 to the gateway got nothing). Never to multicast (no amplification).
+            if t == 128 && (dst == self.ll || dst == self.gua) && plen <= ECHO_MAX {
+                let mut dmac = [0u8; 6];
+                dmac.copy_from_slice(&f[6..12]);
+                let o = self.icmp_frame(out, &dmac, &dst, &src, plen);
+                out[o..o + plen].copy_from_slice(&ip[40..40 + plen]);
+                out[o] = 129;
+                self.stats.echo_tx += 1;
+                return LanAction::Reply(Self::finish_icmp(out, &dst, &src, plen));
+            }
             if is_mc(&dst) || dst == self.ll || dst == self.gua {
-                return LanAction::Drop; // other ND / echo to the router: not routed
+                return LanAction::Drop; // other ND / oversized echo to the router: not routed
             }
         }
         let special = dst == [0; 16] || dst == { let mut l = [0u8; 16]; l[15] = 1; l } || (dst[..10] == [0u8; 10] && dst[10] == 0xff && dst[11] == 0xff);
