@@ -5312,6 +5312,8 @@ fn cm5_p10_probe() {
                                                 let n = unsafe { &mut *core::ptr::addr_of_mut!(NET) };
                                                 n.gw = up.dhcp.router;
                                                 n.mgmt_ip = unsafe { (*core::ptr::addr_of!(uplink::MGMT)).as_ref().map_or([0; 4], |m| m.ip) };
+                                                n.lan_ip = our_ip; // the AP's LAN (inside_net /24) — UI 2026-11-14: firewall templates use the real range
+                                                n.lan_prefix = 24;
                                                 let v6 = unsafe { &*core::ptr::addr_of!(V6) };
                                                 n.v6_up = v6.up;
                                                 n.v6_prefix.copy_from_slice(&v6.prefix[..8]);
