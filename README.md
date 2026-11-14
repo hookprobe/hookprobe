@@ -282,9 +282,10 @@ Repository stars over time:
 
 ## License
 
-HookProbe is licensed under **AGPL-3.0**. Offering it as a service to others may require a commercial
-license; see [LICENSING.md](LICENSING.md) and [LICENSE](LICENSE). The original HookProbe V1
-implementation is preserved in [`legacy/v1/`](legacy/v1/).
+All HookProbe software is licensed under **AGPL-3.0-only**, and the hardware designs in
+[`hardware/`](hardware/) under **CERN-OHL-S-2.0**; both are also available under a commercial licence.
+Third-party components keep their own licences. See [LICENSING.md](LICENSING.md) and [LICENSE](LICENSE).
+The original HookProbe V1 implementation is preserved in [`legacy/v1/`](legacy/v1/).
 
 <p align="center">
   <strong>HookProbe OS</strong><br/>

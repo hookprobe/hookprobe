@@ -14,7 +14,7 @@ Based on data from:
 - IEEE OUI database
 - Community contributions
 
-Copyright (c) 2024 HookProbe - Proprietary
+Copyright (c) 2024 HookProbe - AGPL-3.0
 """
 
 import json

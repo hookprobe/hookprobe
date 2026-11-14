@@ -1,6 +1,7 @@
 [package]
 name = "hookprobe-api"
 version = "0.1.0"
+license = "AGPL-3.0-only"
 edition = "2021"
 description = "HookProbe OS Mission Control read-API (ADR 0001: Rust/Axum) — read-only HTTP+SSE over the hookprobe-evidence graph, capability/mode-aware via the Platform Manifest."
 

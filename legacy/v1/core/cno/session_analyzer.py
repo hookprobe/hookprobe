@@ -17,7 +17,7 @@ Data source: ClickHouse napse_intents + napse_flows + hydra_events
 Output: SynapticEvents with detected session anomalies
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

@@ -20,7 +20,7 @@ This is what makes Phases 21-23 mutually informative instead of
 independent. Without the workspace, each phase is an island.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 24.0.0
 """
 

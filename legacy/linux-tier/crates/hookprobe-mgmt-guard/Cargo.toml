@@ -3,7 +3,7 @@ name = "hookprobe-mgmt-guard"
 version = "0.1.0"
 edition = "2021"
 description = "Shared management-path allowlist predicate (mgmt subnet / gateway / WAN-self) — reused by hookprobe-manifest's scan-responder and the aegis-guard Wasm reflex module so the two enforcement paths can never diverge on what counts as 'never quarantine this'."
-license = "Apache-2.0"
+license = "AGPL-3.0-only"
 
 [lib]
 name = "hookprobe_mgmt_guard"
