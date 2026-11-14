@@ -22,6 +22,17 @@
 Severities are bench judgement; heqk owns final triage of its own items. L-01/W-03/W-04 are *observed*, not
 exploited (receive-only rule).
 
+### LAN assessment of the device management UI (192.168.200.146, from fortress VLAN 200, 2026-11-14)
+
+| ID | Sev | Finding | Evidence | Status |
+|---|---|---|---|---|
+| **LAN+** | — | **Strong baseline:** TLS 1.3 only (SSLv3/TLS1.0/1.1/1.2 all rejected); `Server: heqk`; UI auth-gated (302→/login); `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Cache-Control: no-store`; HTTP :80 → HTTPS 308 redirect; cert from local "HookProbe owner CA (heqk)" | openssl/curl | ✅ good |
+| **L-02** | Low | Cert SAN (`heqk.local`, `10.99.0.1`, `10.200.0.6`) **omits the mgmt IP `192.168.200.146`** → name mismatch when reaching the UI by its mgmt address | `openssl x509 -ext subjectAltName` | 🔴 open (heqk) — add the mgmt IP/hostname to the cert SAN |
+| **H-01** | Low | No **HSTS** (`Strict-Transport-Security`), **CSP**, `Referrer-Policy` or `Permissions-Policy` response headers on the mgmt UI | `curl -kI` | 🔴 open (heqk) — add HSTS + a CSP to the MC responses |
+| **L-03** | info | PQ TLS group `X25519MLKEM768` **not testable from this host** (fortress openssl can't offer it); negotiated classical X25519 + TLS_CHACHA20_POLY1305_SHA256 | openssl | ⏸ retest with a PQ-capable client |
+| **LAN++** | — | **Login rate-limit works:** `/api/login` returns **429** after ~2 failed attempts from one source (fast 429, not a slow drip); confirms the per-source brute-force throttle | 10 benign identical POSTs → 303,303,429×8 | ✅ good |
+| **T-LAN1** | — | TCP surface of 192.168.200.146: **only 80+443 open, 998/1000 filtered (dropped)** on top-1000; full 65535 sweep in progress | nmap -sT -T2 | ▶ full sweep running |
+
 ## B. Fix plan by owner
 
 ### heqk kernel session
@@ -67,6 +78,13 @@ The sensor is a standalone Linux bench tool (ADR 0047). Two non-exclusive paths:
   work and an operator call; it does not block the standalone dashboard.
 **Bench decision (reasonable default, revisit on request):** build the standalone dashboard now; offer heqk the
 endpoint shape for the additive path. No work is blocked waiting on ARCH-1.
+
+### operator (optional hardware)
+- **HW-DFS:** the RTL8811AU monitor dongle cannot receive on DFS/radar channels (52–64, 100–144) — proven against
+  ground truth. DFS-channel wireless monitoring (rogue/beacon analysis on DFS, verifying the AP's DFS/CAC and
+  beacon IEs over the air) needs a **DFS-capable monitor adapter (MT7612U-class)**. Not required for non-DFS
+  coverage or the LAN work; it's the right ask only if over-the-air DFS monitoring is wanted. heqk takes DFS beacon
+  IEs from its own `wlan0` client scans in the meantime.
 
 ### operator
 1. **INFRA-1:** run once — `! ssh -t claude@10.200.0.4 'bash ~/pi4-wsensor/bootstrap-sudo.sh'` — to install the
