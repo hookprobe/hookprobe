@@ -2653,21 +2653,22 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
         }
         delay(1_000);
     }
-    if hw_len == 0 {
-        return None;
-    }
-    if ((!(hw_len ^ hw_ck)) & 0xffff) != 0 {
-        // A corrupt frame tag: terminate it in the device, as brcmfmac's hdparse does
-        // (brcmf_sdio_rxfail(bus, false, false), sdio.c "HW hdr error") — leaving it in the F2 FIFO
-        // desyncs every later read (peer review COR-L6).
-        unsafe { AP_DIAG[15] += 1 };
-        sdio_rxfail_ex(false);
-        return None;
-    }
-    let w0r = u32::from_le_bytes([rx[4], rx[5], rx[6], rx[7]]);
-    let w1r = u32::from_le_bytes([rx[8], rx[9], rx[10], rx[11]]);
-    let channel = ((w0r >> 8) & 0xf) as u8;
-    let doffset = ((w0r >> 24) & 0xff) as usize;
+    // G-E: the header is decoded and checked by the pure, fuzzed `hal::sdpcm_hdr` (brcmfmac hdparse rules): a
+    // corrupt tag OR a data offset inside the header / past the frame is terminated in the device — leaving it in
+    // the F2 FIFO desyncs every later read (peer review COR-L6); passing it on let a payload overlap the header.
+    let _ = hw_ck;
+    let h = match hal::sdpcm_hdr(&rx[..BRCMF_FIRSTREAD]) {
+        Ok(Some(h)) => h,
+        Ok(None) => return None,
+        Err(_) => {
+            unsafe { AP_DIAG[15] += 1 };
+            sdio_rxfail_ex(false);
+            return None;
+        }
+    };
+    let (w0r, w1r) = ((h.seq as u32) | (h.chan as u32) << 8, h.w1);
+    let channel = h.chan;
+    let doffset = h.doff;
     unsafe {
         let seq = (w0r & 0xff) as u8;
         if RX_DIAG.3 != 0 && seq != (RX_DIAG.0 as u8).wrapping_add(1) {

@@ -43,6 +43,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "sdpcm_hdr"
+path = "fuzz_targets/sdpcm_hdr.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "abslot"
 path = "fuzz_targets/abslot.rs"
 test = false
