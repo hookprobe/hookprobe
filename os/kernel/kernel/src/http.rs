@@ -753,7 +753,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             }
             {
                 let (wh, c, f, r, k) = crate::lansvc::stats();
-                let _ = write!(w, ",\"dns_parser\":{{\"where\":\"{}\",\"el0_messages\":{},\"el0_faults\":{},\"el0_restarts\":{},\"in_kernel_messages\":{}}}", wh, c, f, r, k);
+                let _ = write!(w, ",\"dns_parser\":{{\"where\":\"{}\",\"el0_messages\":{},\"el0_faults\":{},\"el0_restarts\":{},\"in_kernel_messages\":{},\"sae_frames_el0\":{}}}", wh, c, f, r, k, crate::lansvc::sae_el0());
             }
             // the capability manifest's granted ids, echoed for the UI (last: existing field order unchanged)
             w.raw(",\"capabilities\":");
@@ -1434,9 +1434,28 @@ pub fn mc_selftest() -> bool {
         qn.set_clock(0, 0, 1000);
         qn.sample_qsecbit(1_000, 500); // a lifetime score from before the first sample is not current risk
         let decay_ok = r1 >= 600 && (450..=550).contains(&r2) && r3 < 50 && qn.latest_risk() == 0;
-        kprint!(" [P-mc-x] hosts={} incident-ids={} detail={} unknown={} timeline={} lease-devices={} engines={} evidence-stats={} graph={} reports={} query-decode={} qsecbit-decay={}\n",
-            hosts_ok, ids_ok, detail_ok, unknown_ok, timeline_ok, leases_ok, engines_ok, stats_ok, graph_ok, reports_ok, q_ok, decay_ok);
-        let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok && leases_ok && engines_ok && stats_ok && graph_ok && reports_ok && q_ok && decay_ok;
+        // evidence build tags: a live detection names the running build, a restored one the build its record names,
+        // an untagged (pre-tag) record "null" — never a guess
+        let builds_ok = {
+            let mut bt = McState::new();
+            bt.set_clock(1_800_000_000_000, 0, 1000);
+            let tag = |s: &[u8]| { let mut t = [0u8; 16]; t[..s.len()].copy_from_slice(s); t };
+            bt.push_restored_from(&crate::events::Event { ts: 0, src: 1, rule_id: 1, severity: 5, verdict: 2, class: 0, dst: 0, dport: 0 }, 1_799_000_000_000, &[0u8; 16]);
+            bt.push_restored_from(&crate::events::Event { ts: 0, src: 2, rule_id: 1, severity: 5, verdict: 2, class: 0, dst: 0, dport: 0 }, 1_799_000_001_000, &tag(b"m30-1d82b59f"));
+            bt.set_current_build(&tag(b"m31-0a28245b"));
+            bt.push_event(&crate::events::Event { ts: 5, src: 3, rule_id: 1, severity: 5, verdict: 2, class: 0, dst: 0, dport: 0 });
+            let mut o = [0u8; 4096];
+            let len = {
+                let mut w = JsonBuf::new(&mut o);
+                bt.render_detections(10, &mut w);
+                w.len
+            };
+            let t = core::str::from_utf8(&o[..len]).unwrap_or("");
+            t.contains("\"build\":\"m31-0a28245b\"") && t.contains("\"build\":\"m30-1d82b59f\"") && t.contains("\"build\":null")
+        };
+        kprint!(" [P-mc-x] hosts={} incident-ids={} detail={} unknown={} timeline={} lease-devices={} engines={} evidence-stats={} graph={} reports={} query-decode={} qsecbit-decay={} evidence-build-tags={}\n",
+            hosts_ok, ids_ok, detail_ok, unknown_ok, timeline_ok, leases_ok, engines_ok, stats_ok, graph_ok, reports_ok, q_ok, decay_ok, builds_ok);
+        let hosts_ok = hosts_ok && ids_ok && detail_ok && unknown_ok && timeline_ok && leases_ok && engines_ok && stats_ok && graph_ok && reports_ok && q_ok && decay_ok && builds_ok;
         good && wrong_nonce && refused && synced && small && big && rtc_ok && pinned && hosts_ok
     };
     // ADR 0051 D4: :80 -> https redirect keeps path+query, drops the port; a hostile Host never reaches

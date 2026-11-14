@@ -222,6 +222,14 @@ mod el0 {
 }
 
 static mut IN_KERNEL: u64 = 0;
+/// D4 step 5c on metal: station SAE Authentication frames walked by the EL0 server (an answer came back) — one WPA3
+/// join raises it, which is the metal proof that the EL0 path, not the in-kernel fallback, served it.
+static mut SAE_EL0: u64 = 0;
+
+/// Station SAE frames walked in EL0 since boot.
+pub fn sae_el0() -> u64 {
+    unsafe { SAE_EL0 }
+}
 
 /// (where, messages parsed in EL0, EL0 faults, EL0 restarts, messages parsed in-kernel)
 pub fn stats() -> (&'static str, u64, u64, u64, u64) {
@@ -537,6 +545,7 @@ fn sta_sae(body: &[u8], h2e_ok: bool) -> Option<hal::saewire::Msg> {
         s.scrub(hal::lansvcabi::OUT_OFF, w::REC_LEN);
     }
     let (st, mut o) = r?;
+    unsafe { SAE_EL0 += 1 };
     let m = if st == hal::lansvcabi::ST_OK { w::decode(&o) } else { w::dropped(w::R_BAD_RECORD) };
     hal::wpaauth::wipe(&mut o);
     Some(m)
