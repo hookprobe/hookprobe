@@ -15610,6 +15610,21 @@ fn ip6_selftest() {
         let snm: [u8; 16] = [0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0xff, v.ll[13], v.ll[14], v.ll[15]];
         let n = frame6(&mut f, &cmac, &[0x33, 0x33, 0xff, v.ll[13], v.ll[14], v.ll[15]], &cll, &snm, 58, 255, &ns);
         let na_ok = matches!(v.on_lan(&f[..n], 20, &mut out), LanAction::Reply(k) if out[54] == 136 && out[58] & 0x40 != 0 && out[62..78] == v.ll && k == 86);
+        // ping6 to the router (link-local and global): Echo Reply with the same id / seq / data and a valid checksum;
+        // an echo to the all-nodes multicast is not answered (no amplification)
+        let echo_req = [128u8, 0, 0, 0, 0x12, 0x34, 0, 7, b'h', b'e', b'q', b'k'];
+        let gdst = v.gua;
+        let n = frame6(&mut f, &cmac, &apmac, &cll, &gdst, 58, 64, &echo_req);
+        let e0 = v.stats.echo_tx;
+        let echo_g = matches!(v.on_lan(&f[..n], 21, &mut out), LanAction::Reply(k)
+            if k == 54 + 12 && out[0..6] == cmac && out[54] == 129 && out[58..66] == echo_req[4..12] && out[22..38] == gdst && out[38..54] == cll
+               && l4_csum(&gdst, &cll, 58, &out[54..k]) == 0);
+        let lldst = v.ll;
+        let n = frame6(&mut f, &cmac, &apmac, &cll, &lldst, 58, 64, &echo_req);
+        let echo_ll = matches!(v.on_lan(&f[..n], 22, &mut out), LanAction::Reply(_)) && v.stats.echo_tx == e0 + 2;
+        let n = frame6(&mut f, &cmac, &[0x33, 0x33, 0, 0, 0, 1], &cll, &[0xff, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], 58, 64, &echo_req);
+        let echo_mc = matches!(v.on_lan(&f[..n], 23, &mut out), LanAction::Drop) && v.stats.echo_tx == e0 + 2;
+        let na_ok = na_ok && echo_g && echo_ll && echo_mc;
         // Outbound TCP SYN 443 from the client's global address -> Forward, hop 64 -> 63
         let mut tcp = [0u8; 20];
         tcp[0..2].copy_from_slice(&50000u16.to_be_bytes());
@@ -15743,7 +15758,7 @@ fn ip6_selftest() {
         r
     };
     let ok = eui_ok && rs_ok && ra_ok && ra_refuse && sol_ok && adv_ok && xid_refuse && lan_ok && renew_ok;
-    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA, SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings + a lost delegation is withdrawn with zero lifetimes (L-01b)={}\n",
+    kprint!(" [P-ip6] {} — IPv6 WAN builders/parsers: EUI-64={} RS (checksum, hop 255)={} RA (router, O flag, /64 PIO A, lifetimes, MTU)={} RA bad-checksum/hop-limit refused={} DHCPv6 Solicit (IA_PD, rapid commit, UDP checksum)={} Advertise (server-id, IA_PD /56, DNS)={} wrong xid refused={} renew (server-id + IA_PD, T1/T2 parsed)={} | LAN router+firewall: RS->RA, NS->NA (+ ping6 to the router answered, not to multicast), SYN out (hop-1), SYN-ACK in to the client MAC, unsolicited inbound DENIED, an uncommitted (blocked) forward opens no pinhole, Packet-Too-Big quoting a live flow passes / quoting nothing of ours denied, spoofed src / link-local dst never routed, SAVI refuses another station's address, neighbor miss -> NS, a one-station source flood cannot evict/claim others + leave releases bindings + a lost delegation is withdrawn with zero lifetimes (L-01b)={}\n",
         if ok { "PASS" } else { "FAIL" }, eui_ok, rs_ok, ra_ok, ra_refuse, sol_ok, adv_ok, xid_refuse, renew_ok, lan_ok);
 }
 
