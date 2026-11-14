@@ -50,6 +50,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "el0_ring"
+path = "fuzz_targets/el0_ring.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "abslot"
 path = "fuzz_targets/abslot.rs"
 test = false
