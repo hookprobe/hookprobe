@@ -5091,42 +5091,32 @@ fn cm5_p10_probe() {
                                                 match uplink::mgmt_poll(&mut mbuf, &mut decide) {
                                                     uplink::MgmtEvent::Idle => break,
                                                     uplink::MgmtEvent::Frame(k) => {
-                                                        // Stateful like `wan in`: a reply to a flow routed out management (NAT session)
-                                                        // is admitted; anything else is new inbound traffic for `mgmt in`.
+                                                        // G0 step 4: apcore::on_mgmt_frame decides (un-NAT -> `<lan|eth1> out` -> IDS, else
+                                                        // `mgmt in` -> Mission Control); the loop only sends.
                                                         let mg = unsafe { uplink::MGMT }.unwrap();
-                                                        let lan_mac = uplink::ETH1_MAC;
-                                                        let nat_r = nat::inbound(&mbuf[..k], &mg.ip, &mg.mac, [&ap.bssid, &lan_mac], &mut nbuf, now(), &mut nst);
-                                                        if nat_r.is_none() {
-                                                            let allow = decide(&mbuf[..k]) == PAct::Allow;
-                                                            if !allow {
-                                                                fc.pol_drop[3] += 1;
-                                                            }
-                                                            // G12-M: Mission Control on the management address (after `mgmt in`).
-                                                            #[cfg(feature = "mcserve")]
-                                                            if allow && mc_mgmt.is_some() {
-                                                                if let (Some(n), Some(l)) = (mcn.as_mut(), mcmgmt::ingress(&mbuf[..k], mg.ip, ap.bssid, &mut mcbuf)) {
-                                                                    if packet::verdict(&mcbuf[..l]).1 != packet::DROP {
-                                                                        n.ingress(&mcbuf[..l], (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
-                                                                        unsafe { MCM_DIAG[0] += 1 };
-                                                                    } else {
-                                                                        unsafe { MCM_DIAG[1] += 1 };
-                                                                    }
+                                                        let pol = unsafe { &mut *core::ptr::addr_of_mut!(POLICY) };
+                                                        #[cfg(feature = "mcserve")]
+                                                        let (mc_on, mcb) = (mc_mgmt.is_some(), &mut mcbuf[..]);
+                                                        #[cfg(not(feature = "mcserve"))]
+                                                        let (mc_on, mut mcb0) = (false, [0u8; 64]);
+                                                        #[cfg(not(feature = "mcserve"))]
+                                                        let mcb = &mut mcb0[..];
+                                                        match apcore::on_mgmt_frame(&mbuf[..k], &mg.ip, &mg.mac, [&ap.bssid, &uplink::ETH1_MAC], &ap.bssid, mc_on,
+                                                            pol, &mut nst, &mut fc, &mut ids_drop_in, &mut nbuf, mcb, now()) {
+                                                            apcore::MgmtOut::ForMc(_l) => {
+                                                                #[cfg(feature = "mcserve")]
+                                                                if let Some(n) = mcn.as_mut() {
+                                                                    n.ingress(&mcbuf[.._l], (now().wrapping_sub(mc_t0) / (freq / 1000).max(1)) as i64);
+                                                                    unsafe { MCM_DIAG[0] += 1 };
                                                                 }
                                                             }
-                                                            continue;
-                                                        }
-                                                        if let Some((mm, in_if)) = nat_r {
-                                                            let oif = if in_if == nat::IF_ETH1 { PIf::Eth1 } else { PIf::Lan };
-                                                            let a = hal::policy::facts(&nbuf[..mm]).map(|p| unsafe { (*core::ptr::addr_of_mut!(POLICY)).check(oif, PDir::Out, &p).0 }).unwrap_or(PAct::Allow);
-                                                            if a != PAct::Allow {
-                                                                fc.pol_drop[oif as usize] += 1;
-                                                            } else if packet::verdict(&nbuf[..mm]).1 == packet::DROP {
-                                                                ids_drop_in += 1;
-                                                            } else if in_if == nat::IF_ETH1 {
+                                                            apcore::MgmtOut::ToEth1(mm) => {
                                                                 let _ = arch_aarch64::rtl8111::tx_frame(&nbuf[..mm]);
-                                                            } else if mm <= nat::WIFI_MAX_FRAME {
+                                                            }
+                                                            apcore::MgmtOut::ToWifi(mm) => {
                                                                 let _ = wifi_send!(&nbuf[..mm]);
                                                             }
+                                                            apcore::MgmtOut::Dropped => {}
                                                         }
                                                     }
                                                 }
@@ -7442,6 +7432,7 @@ pub extern "C" fn kmain() -> ! {
         #[cfg(not(feature = "cm5"))]
         let _ = wifilive::after_selftest(); // follow-up: Mission Control serving re-evaluated + IPv6 state at an AP restart
         let _ = apcore::selftest();
+        let _ = apcore::mgmt_selftest(); // G0 step 4
         let _ = apcore::wan_selftest();
         let _ = apcore::lan_selftest();
         let _ = apcore::relay_selftest();

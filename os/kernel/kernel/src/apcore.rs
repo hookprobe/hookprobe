@@ -610,6 +610,122 @@ pub fn client4<N: ApNic>(
     Client4::Forwarded(forward4(frame, port.pif, port.nif, cfg, pol, nst, c, nbuf, nic, reply))
 }
 
+/// G0 step 4: where one frame received on the management sub-interface goes (after `mgmt_poll` answered ARP / ping).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MgmtOut {
+    /// Dropped (`mgmt in` refused it, nothing serves it, or a policy / IDS / size check after un-NAT); counted.
+    Dropped,
+    /// For the Mission Control node: `mcbuf[..len]` (re-addressed to the node, `mgmt in` and the IDS passed).
+    ForMc(usize),
+    /// A reply to a flow routed out management, un-NATed for a client: `nbuf[..len]` to eth1.
+    ToEth1(usize),
+    /// … to a Wi-Fi client: `nbuf[..len]`.
+    ToWifi(usize),
+}
+
+/// The management sub-interface's inbound path (was inline in the AP loop): stateful like `wan in` — a reply to a flow
+/// routed out management (NAT session) is un-NATed, checked against `<lan|eth1> out` and the IDS, and goes to its
+/// client; anything else is new inbound traffic for `mgmt in`, and only Mission Control (G12-M, TCP 80 / 443 to the
+/// management address, when `mc_on_mgmt`) is served. `mgmt_ip` / `mgmt_mac` = the sub-interface; `inside` = the AP
+/// and eth1 MACs (the un-NATed frame's source).
+#[allow(clippy::too_many_arguments)]
+pub fn on_mgmt_frame(frame: &[u8], mgmt_ip: &[u8; 4], mgmt_mac: &[u8; 6], inside: [&[u8; 6]; 2], node_mac: &[u8; 6], mc_on_mgmt: bool,
+    pol: &mut Policy, nst: &mut NatStats, c: &mut FwdCounters, ids_drop_in: &mut u32, nbuf: &mut [u8], mcbuf: &mut [u8], now: u64) -> MgmtOut {
+    let Some((mm, in_if)) = nat::inbound(frame, mgmt_ip, mgmt_mac, inside, nbuf, now, nst) else {
+        let allow = hal::policy::facts(frame).map(|p| pol.check(If::Mgmt, Dir::In, &p).0).unwrap_or(Act::Drop) == Act::Allow; // unparseable = drop (H2)
+        if !allow {
+            c.pol_drop[If::Mgmt as usize] += 1;
+            return MgmtOut::Dropped;
+        }
+        // G12-M: Mission Control on the management address (after `mgmt in`)
+        if mc_on_mgmt {
+            if let Some(l) = crate::mcmgmt::ingress(frame, *mgmt_ip, *node_mac, mcbuf) {
+                if crate::packet::verdict(&mcbuf[..l]).1 != crate::packet::DROP {
+                    return MgmtOut::ForMc(l);
+                }
+                *ids_drop_in += 1;
+            }
+        }
+        return MgmtOut::Dropped;
+    };
+    let oif = if in_if == nat::IF_ETH1 { If::Eth1 } else { If::Lan };
+    let a = hal::policy::facts(&nbuf[..mm]).map(|p| pol.check(oif, Dir::Out, &p).0).unwrap_or(Act::Allow);
+    if a != Act::Allow {
+        c.pol_drop[oif as usize] += 1;
+        MgmtOut::Dropped
+    } else if crate::packet::verdict(&nbuf[..mm]).1 == crate::packet::DROP {
+        *ids_drop_in += 1;
+        MgmtOut::Dropped
+    } else if in_if == nat::IF_ETH1 {
+        MgmtOut::ToEth1(mm)
+    } else if mm <= nat::WIFI_MAX_FRAME {
+        MgmtOut::ToWifi(mm)
+    } else {
+        MgmtOut::Dropped
+    }
+}
+
+/// `[P-apcore-mgmt]` — step 4: the management inbound path on hand-built frames.
+pub fn mgmt_selftest() -> bool {
+    let mgmt_ip = [192u8, 168, 200, 146];
+    let mgmt_mac = [0x02u8, 0x4d, 0, 0, 0, 0x46];
+    let ap = [0x02u8, 0, 0, 0, 0, 0x01];
+    let lan = [0x02u8, 0x0e, 0, 0, 0, 0x01];
+    let node = [0x02u8, 0x0c, 0, 0, 0, 0x01];
+    let mut pol = Policy::new();
+    let mut nst = NatStats::default();
+    let mut c = FwdCounters::default();
+    let mut ids = 0u32;
+    let (mut nbuf, mut mcbuf) = ([0u8; 2048], [0u8; 1600]);
+    let mut f = [0u8; 400];
+    // an admin's SYN to the management address :443 (new inbound: `mgmt in`)
+    let syn = |dport: u16, f: &mut [u8; 400]| -> usize {
+        let n = frame4(6, mgmt_ip, dport, &[], f);
+        f[0..6].copy_from_slice(&mgmt_mac);
+        f[6..12].copy_from_slice(&[0x02, 0xad, 0, 0, 0, 0x01]);
+        f[26..30].copy_from_slice(&[192, 168, 200, 1]);
+        n
+    };
+    let n = syn(443, &mut f);
+    let to_mc = matches!(on_mgmt_frame(&f[..n], &mgmt_ip, &mgmt_mac, [&ap, &lan], &node, true, &mut pol, &mut nst, &mut c, &mut ids, &mut nbuf, &mut mcbuf, 1), MgmtOut::ForMc(l) if l == n && mcbuf[0..6] == node);
+    // Mission Control not served on management (setup AP / no `mgmt` MC): nothing serves it
+    let not_served = on_mgmt_frame(&f[..n], &mgmt_ip, &mgmt_mac, [&ap, &lan], &node, false, &mut pol, &mut nst, &mut c, &mut ids, &mut nbuf, &mut mcbuf, 2) == MgmtOut::Dropped;
+    // another port (22): not Mission Control
+    let n22 = syn(22, &mut f);
+    let other_port = on_mgmt_frame(&f[..n22], &mgmt_ip, &mgmt_mac, [&ap, &lan], &node, true, &mut pol, &mut nst, &mut c, &mut ids, &mut nbuf, &mut mcbuf, 3) == MgmtOut::Dropped;
+    // `mgmt in` refusing the admin: dropped and counted on the mgmt column, Mission Control never reached
+    hal::policy::parse_policy(b"HQPOL1\nacl MGMT-IN seq 10 drop any any any\ninterface mgmt acl in MGMT-IN\n", &mut pol).ok();
+    let n = syn(443, &mut f);
+    let refused = on_mgmt_frame(&f[..n], &mgmt_ip, &mgmt_mac, [&ap, &lan], &node, true, &mut pol, &mut nst, &mut c, &mut ids, &mut nbuf, &mut mcbuf, 4) == MgmtOut::Dropped
+        && c.pol_drop[If::Mgmt as usize] == 1;
+    pol = Policy::new();
+    // a reply to a client flow routed out management (NAT session): un-NATed to the Wi-Fi client
+    let n = frame4(6, [10, 20, 0, 5], 443, &[], &mut f);
+    let mut o = [0u8; 2048];
+    let k = nat::outbound_redirect(&f[..n], nat::IF_WIFI, &[10, 99, 0], None, &mgmt_ip, &mgmt_mac, &[0x02, 0xad, 0, 0, 0, 0x01], &mut o, 5, &mut nst).unwrap_or(0);
+    let mut r = [0u8; 400];
+    r[..k].copy_from_slice(&o[..k]);
+    r[0..6].copy_from_slice(&mgmt_mac);
+    r[6..12].copy_from_slice(&[0x02, 0xad, 0, 0, 0, 0x01]);
+    r[26..30].copy_from_slice(&o[30..34]); // server -> our management address, ports swapped
+    r[30..34].copy_from_slice(&o[26..30]);
+    r[34..36].copy_from_slice(&o[36..38]);
+    r[36..38].copy_from_slice(&o[34..36]);
+    r[47] = 0x12; // SYN-ACK
+    let replied = k > 0 && matches!(on_mgmt_frame(&r[..k], &mgmt_ip, &mgmt_mac, [&ap, &lan], &node, true, &mut pol, &mut nst, &mut c, &mut ids, &mut nbuf, &mut mcbuf, 6),
+        MgmtOut::ToWifi(m) if nbuf[30..34] == [10, 99, 0, 10] && m == k);
+    // `lan out` blocking that reply: dropped and counted on the lan column
+    hal::policy::parse_policy(b"HQPOL1\nacl LAN-OUT seq 10 drop any any any\ninterface lan acl out LAN-OUT\n", &mut pol).ok();
+    let lan_out = on_mgmt_frame(&r[..k], &mgmt_ip, &mgmt_mac, [&ap, &lan], &node, true, &mut pol, &mut nst, &mut c, &mut ids, &mut nbuf, &mut mcbuf, 7) == MgmtOut::Dropped
+        && c.pol_drop[If::Lan as usize] == 1;
+    let pass = to_mc && not_served && other_port && refused && replied && lan_out;
+    arch_aarch64::_print(format_args!(
+        " [P-apcore-mgmt] {} — G0 step 4: the management inbound path (was inline in the AP loop): an admin's SYN to :443 -> the Mission Control node={} not served when MC is not on management={} another port not Mission Control={} `mgmt in` drop counted, MC never reached={} a reply to a flow routed out management -> un-NATed to its Wi-Fi client={} `lan out` drop on that reply counted={}\n",
+        if pass { "PASS" } else { "FAIL" }, to_mc, not_served, other_port, refused, replied, lan_out
+    ));
+    pass
+}
+
 /// `[P-apcore-lan]` — step 3a on the fake NIC.
 pub fn lan_selftest() -> bool {
     use arch_aarch64::dhcpd::ApDhcp;
