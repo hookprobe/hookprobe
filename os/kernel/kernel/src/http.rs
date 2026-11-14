@@ -1037,6 +1037,15 @@ pub fn write_head_ka(resp: &Response, out: &mut [u8], secure: bool, keep: bool) 
     // never be usable cross-origin.
     let _ = write!(w, "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nServer: heqk\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\n",
         resp.status, reason(resp.status), resp.ctype);
+    // LAN assessment H-01 (2026-11-14). Every response: no Referer leaves the device; no cross-origin opener.
+    // HTML documents: a CSP that keeps the UI same-origin (Astro islands hydrate from inline scripts, hence
+    // 'unsafe-inline'; no eval, no plug-ins, no framing, no foreign fetch / form target) and no powerful APIs.
+    // No HSTS on purpose: the certificate chains to the owner's LOCAL CA, and HSTS on heqk.local would turn a
+    // browser that has not imported that CA into a hard, un-bypassable lock-out from the device's own UI.
+    w.raw("Referrer-Policy: no-referrer\r\nCross-Origin-Opener-Policy: same-origin\r\n");
+    if resp.ctype.starts_with("text/html") {
+        w.raw(CSP_HTML);
+    }
     if let Some(l) = resp.location {
         let _ = write!(w, "Location: {}\r\n", l);
     }
@@ -1064,6 +1073,13 @@ pub fn write_head_ka(resp: &Response, out: &mut [u8], secure: bool, keep: bool) 
     }
     w.len
 }
+
+/// The Content-Security-Policy + Permissions-Policy sent with every HTML document (see `write_head_ka`).
+pub const CSP_HTML: &str = "Content-Security-Policy: default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'\r\nPermissions-Policy: camera=(), microphone=(), geolocation=(), usb=(), serial=(), payment=()\r\n";
+
+/// Size of a response-head buffer: the worst case (HTML + Location + Set-Cookie + gzip + keep-alive) must fit —
+/// a truncated head has no blank line and the browser hangs. `[P-mc]` checks the worst case against it.
+pub const HEAD_MAX: usize = 1024;
 
 /// A complete `400 Bad Request` (no body).
 pub const BAD_REQUEST: &[u8] = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
@@ -1203,7 +1219,7 @@ pub fn mc_selftest() -> bool {
     let login = handle(&parse(b"POST /api/login HTTP/1.1\r\nContent-Length: 29\r\n\r\ntoken=hq-owner-selftest-token").unwrap(), &st, &mut auth, 0, || Some([0x5A; 16]), &mut scratch);
     let cookie = login.set_cookie;
     let login_ok = login.status == 303 && login.location == Some("/") && cookie.is_some();
-    let mut head = [0u8; 512];
+    let mut head = [0u8; HEAD_MAX];
     let hl = write_head(&login, &mut head);
     let cookie_hdr_ok = has(&head[..hl], "Set-Cookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a; HttpOnly; SameSite=Strict") && !has(&head[..hl], "Access-Control-Allow-Origin");
     // Unclaimed device: everything protected refuses, login refuses.
@@ -1432,7 +1448,7 @@ pub fn mc_selftest() -> bool {
         let bad = parse(b"GET / HTTP/1.1\r\nHost: evil.com\rSet-Cookie: x=1\r\n\r\n").map_or(true, |r| r.host.is_empty())
             && parse(b"GET / HTTP/1.1\r\nHost: a b/c\r\n\r\n").map_or(true, |r| r.host.is_empty());
         let login = handle(&parse(b"POST /api/login HTTP/1.1\r\nContent-Length: 29\r\n\r\ntoken=hq-owner-selftest-token").unwrap(), &st, &mut auth, 0, || Some([0x5A; 16]), &mut scratch);
-        let mut hh = [0u8; 512];
+        let mut hh = [0u8; HEAD_MAX];
         let a = write_head_tls(&login, &mut hh, true);
         let sec = has(&hh[..a], "Max-Age=43200; Secure\r\n");
         let b = write_head_tls(&login, &mut hh, false);
@@ -1454,7 +1470,16 @@ pub fn mc_selftest() -> bool {
         sw.set_wan(crate::mcstate::WanFacts { up: true, ip: [100, 71, 11, 24], mode: 2, ipv6: true, clients: 3, pkts_out: 10, pkts_in: 20, dns_inspected: 7, dns_blocked: 2, blocklist: 3 });
         let hw = handle(&parse(b"GET /api/health HTTP/1.1\r\nCookie: hq_session=5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a\r\n\r\n").unwrap(), &sw, &mut auth, 1, || Some([0; 16]), &mut scratch);
         let wan_ok = matches!(hw.body, Body::Scratch(n) if has(&scratch[..n], "\"wan\":{\"up\":true,\"ip\":\"100.71.11.24\",\"mode\":\"pppoe\",\"ipv6\":true,\"clients\":3,\"pkts_out\":10,\"pkts_in\":20,\"dns_inspected\":7,\"dns_blocked\":2,\"blocklist\":3},\"lan_relay\":{\"arp_proxied\":"));
-        red && v6 && bad && sec && plain && ka && kept && closed && wan_ok
+        // H-01: security headers; the worst-case head (HTML + Location + cookie + gzip + keep-alive) fits HEAD_MAX
+        let hdrs = has(&hh[..k], "Referrer-Policy: no-referrer\r\nCross-Origin-Opener-Policy: same-origin\r\n") && !has(&hh[..k], "Content-Security-Policy");
+        let worst = Response { status: 303, ctype: "text/html; charset=utf-8", body: Body::StaticGz(LOGIN_HTML), location: Some("/setup/wifi/advanced/security?step=confirm&from=overview"), set_cookie: Some([b'f'; 32]) };
+        let mut big = [0u8; HEAD_MAX];
+        let w = write_head_ka(&worst, &mut big, true, true);
+        let fits = w < HEAD_MAX - 64 && big[..w].ends_with(b"\r\n\r\n") && has(&big[..w], "frame-ancestors 'none'") && has(&big[..w], "Permissions-Policy: camera=()")
+            && !has(&big[..w], "Strict-Transport-Security");
+        kprint!(" [P-mc-hdr] {} — H-01 security headers: Referrer-Policy + COOP on every response={} CSP + Permissions-Policy on HTML, no HSTS (local CA), worst-case head {} of {} B={}\n",
+            if hdrs && fits { "PASS" } else { "FAIL" }, hdrs, w, HEAD_MAX, fits);
+        red && v6 && bad && sec && plain && ka && kept && closed && wan_ok && hdrs && fits
     };
     let pass = auth_ok && det_ok && inc_ok && qs_ok && eng_ok && errs_ok && sse_ok && ovf_ok && time_ok && tls_ok;
     kprint!(" [P-mc] {} — on-device Mission Control server (ADR 0047): owner-auth(401/302/public-health/bad-login/login→HttpOnly cookie/no-CORS/unclaimed-refuses)={} detections(rule band+catalogue+class+epoch ts, MAC-hash never an IP)={} incidents(per-source, worst-sev priority)={} qsecbit(windowed risk+band)={} engines(real tiers, no mock)={} 404/405/400/..-refused={} SSE update framing={} overflow→valid-500={} sntp(strict nonce/mode/stratum/floor + rows moved + >1h re-step refused)={} https(308 keeps path/query, drops port, hostile Host refused, Secure only over TLS) + keep-alive(1.1 default, close/1.0 end it, pipelined bytes kept, limits advertised)={} (ui assets embedded: {})\n",
