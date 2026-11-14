@@ -67,3 +67,12 @@ os/build/.heqk-dev-keys/
 # ADR 0063: gate-spine output (tools/ci/gates.sh results, logs, SBOMs, heal worktrees)
 out/ci/
 __pycache__/
+
+# Hardware design files are a private company asset (ADR 0064 D2): never commit them here.
+/hardware/
+*.kicad_pcb
+*.kicad_sch
+*.kicad_pro
+*.kicad_sym
+*.kicad_mod
+*.step
