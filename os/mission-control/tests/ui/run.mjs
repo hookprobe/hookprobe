@@ -54,6 +54,7 @@ for (const name of specs) {
   } catch (e) {
     fails++;
     console.log(`  FAIL  ${name}: aborted${t.at ? ` at "${t.at}"` : ''} (${page.url()}) — ${String(e.message || e).split('\n')[0]}`);
+    if (shots) await page.screenshot({ path: join(shots, `${name}-ABORT.png`), fullPage: true }).catch(() => {});
   }
   if (errors.length) { fails++; console.log(`  FAIL  ${name}: page errors — ${errors.join(' | ')}`); }
   await ctx.close();
