@@ -1334,6 +1334,18 @@ pub fn current_chanspec() -> Option<u16> {
     if ok { Some(u16::from_le_bytes([out[0], out[1]])) } else { None }
 }
 
+/// The firmware DFS state machine: word 0 of the `dfs_status` iovar (wl_dfs_status: state, duration ms, cleared
+/// chanspec). 0 idle (non-DFS channel), 1 pre-ISM CAC, 2 in-service monitoring, 3 channel switch, 4 post-ISM CAC,
+/// 5 / 6 out-of-channel CAC. Read-only GET (bench-verified on 7.45.265 and 7.45.314, 2026-11-14: state 1 for the
+/// ~60 s CAC on ch52/80, then 2 with the cleared chanspec). None = the firmware did not answer.
+pub fn dfs_cac_state() -> Option<u32> {
+    let mut out = [0u8; 16];
+    let mut req = [0u8; 32];
+    let n = iovar_buf(b"dfs_status", &[], &mut req);
+    let (ok, _) = bcdc_dcmd(WLC_GET_VAR, 0, &req[..n], &mut out);
+    if ok { Some(u32::from_le_bytes([out[0], out[1], out[2], out[3]])) } else { None }
+}
+
 /// SDIO bus speed: (CCCR SPEED 0x13 as read, host HOST_CTRL1 after, operating SDCLK MHz).
 static mut SDIO_SPEED_DIAG: (u8, u8, u32) = (0, 0, 0);
 pub fn sdio_speed_diag() -> (u8, u8, u32) {
