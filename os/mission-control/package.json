@@ -1,7 +1,7 @@
 {
   "name": "hookprobe-mission-control",
   "type": "module",
-  "version": "0.1.0",
+  "version": "0.0.26",
   "license": "AGPL-3.0-only",
   "description": "HookProbe OS V2 — Mission Control (Layer 0 calm landing). Stack: Astro 7 + SolidJS + TypeScript. Build to static assets; served at runtime by Rust/Axum (no Node at runtime on edge). ADR 0001.",
   "scripts": {

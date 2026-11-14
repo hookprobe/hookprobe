@@ -1,6 +1,6 @@
 [package]
 name = "heqk-hal-fuzz"
-version = "0.0.0"
+version = "0.0.26"
 license = "AGPL-3.0-only"
 publish = false
 edition = "2021"
