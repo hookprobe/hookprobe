@@ -15,7 +15,7 @@
  * (no CPU/memory: heqk does not report them).
  */
 import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
-import { qsecbit, heartbeat, protectionStatus, deployMode, deviceStats, substrate } from '../store/mock';
+import { qsecbit, qsecbitShown, qsecbitGauge, heartbeat, protectionStatus, deployMode, deviceStats, substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { startLiveUpdates } from '../store/live';
 import { incidents, startInvestigateLive } from '../store/investigateLive';
@@ -104,14 +104,14 @@ const MissionControlApp: Component = () => {
           <button class="pcard span-4" onClick={() => setOpen('health')} style={{ 'border-width': '2px' }}>
             <span class="l0-label">Global health</span>
             <span class="mc-orb">
-              <span class="mc-orb-ring" role="img" aria-label={`QSecBit ${qsecbit()}`}>
+              <span class="mc-orb-ring" role="img" aria-label={`QSecBit ${qsecbitShown()}`}>
                 <svg viewBox="0 0 100 100" aria-hidden="true">
                   <circle cx="50" cy="50" r={R} fill="none" stroke="rgba(255,255,255,.08)" stroke-width="6" />
                   <circle cx="50" cy="50" r={R} fill="none" stroke-width="6" stroke-linecap="round"
                     stroke={protectionStatus() === 'protected' ? 'var(--hp-green)' : protectionStatus() === 'needs-attention' ? 'var(--hp-amber)' : 'var(--hp-red)'}
-                    stroke-dasharray={`${(qsecbit() / 100) * C} ${C}`} />
+                    stroke-dasharray={`${(qsecbitGauge() / 100) * C} ${C}`} />
                 </svg>
-                <b aria-hidden="true">{qsecbit()}</b>
+                <b aria-hidden="true">{qsecbitShown()}</b>
               </span>
               <span style={{ display: 'flex', 'flex-direction': 'column', gap: '4px' }}>
                 <span style={{ 'font-size': '18px', 'font-weight': 700 }}>{WORD[protectionStatus()]}</span>

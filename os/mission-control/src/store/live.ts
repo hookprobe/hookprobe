@@ -29,7 +29,7 @@
  *  hookprobe-api build report for the complete list.
  */
 
-import { setQsecbit, setHeartbeat, setSecurity, setLastCheckedAt, security } from './mock';
+import { setQsecbit, setQsecbitKnown, setHeartbeat, setSecurity, setLastCheckedAt, security } from './mock';
 import {
   fetchJson, openStream, parseStreamPayload,
   type QsecbitScoreRow, type QsecbitResponse, type IncidentRow, type IncidentsResponse,
@@ -49,7 +49,7 @@ function applyQsecbitHistory(history: QsecbitScoreRow[]): void {
   // A 1-point sparkline renders as a dot, not a line — pad so `heartbeat`'s consumers (which all
   // assume >=2 points, e.g. Home's heartbeat polyline) never receive a degenerate array.
   setHeartbeat(chrono.length >= 2 ? chrono.slice(-20) : [...chrono, ...chrono]);
-  setQsecbit(resiliencePct(history[0].score));
+  setQsecbit(resiliencePct(history[0].score)); setQsecbitKnown(true);
 }
 
 function applyIncidents(incidents: IncidentRow[]): void {
@@ -107,7 +107,7 @@ export async function startLiveUpdates(): Promise<boolean> {
       if (payload.qsecbit && payload.qsecbit.length > 0) {
         const latest = payload.qsecbit[payload.qsecbit.length - 1];
         const pct = resiliencePct(latest.score);
-        setQsecbit(pct);
+        setQsecbit(pct); setQsecbitKnown(true);
         setHeartbeat((prev) => [...prev.slice(1), pct]);
         setLastCheckedAt(Date.now());
       }
