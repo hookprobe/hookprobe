@@ -18,7 +18,7 @@ Granted from the Platform Manifest, never from the board name. Everything starts
 | local retention on NVMe (storage fact, sizes the retention window) | M.2 NVMe | H4 |
 | `wifi`, `wifi_ap` (WIDS receive-only) | Qualcomm QCN9274 Wi-Fi 7 (M.2, PCIe) | H2 bring-up → H4 |
 | `cellular` (5G) | Sierra Wireless EM9293 (M.2, USB 3, MBIM) | H2 bring-up → H4 |
-| `edge_ai` | RK3588 NPU; M.2 accelerator slot | later |
+| `edge_ai` | RK3588 NPU (6 TOPS); M.2 M-key 2280 AI accelerator slot (NPU or FPGA card, PCIe 3.0 ×1) | later |
 | Thread / Matter (**no token yet**: needs an ADR 0003 amendment) | Thread module on a UART | later |
 
 Token names are the ones in `legacy/linux-tier/manifest/schema/manifest.schema.json` and the legacy
