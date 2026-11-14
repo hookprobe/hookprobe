@@ -13,7 +13,7 @@
 | **T-M1** | Monitor mode works, mgmt link survives | `m0-monitor-test.sh` 60 s ch36 | frames captured, 0 kernel drops, wlan0 stays associated, clean release | ✅ 3773 frames, 0 drops, wlan0 up 12/12, restored |
 | **T-H1** | **Pre-emption hand-back** | heqk writes `heqk` to lock; measure detect→release | release <60 s (target ~15 s), wlan1 managed+NM+same driver, hq-wpa3 intact | ✅ detect 7 s, release 4 s, **total 11 s**; re-acquired +11 s (12:02:46→12:02:57, journal) |
 | **T-S1** | Service honest coverage | start service, read health.json | coverage=on only while capturing; =off w/ reason when lock=heqk | ✅ coverage=on/capturing; =off on yield |
-| **T-DFS52** | AP beaconing on DFS ch52 after CAC | `dfs-watch.sh 5260 5290 ch52 120` on heqk signal | time-to-first CM5 beacon ≈ ≥60 s CAC; or silent | ⏸ awaiting "ch52 go" |
+| **T-DFS52** | AP behaviour on DFS ch52 with 802.11h OFF | `dfs-watch.sh 5260 5290 ch52 300` + sweep | AP must NOT beacon on a radar channel without DFS | ✅ R2: 0 beacons on ch52 in 300 s; fell back to **ch36** (sweep); correct DFS-safe behaviour |
 | **T-DFS100** | AP beaconing on DFS ch100 (weather) | `dfs-watch.sh 5500 5530 ch100 660` | time-to-first beacon up to ~600 s CAC; or silent | ⏸ awaiting signal |
 | **T-SOAK** | ≥2 h capture soak | service on ch36 across heqk windows | drops bounded, stalls self-recover, yields clean, temp stable | ▶ running (expect bounces during heqk reboots) |
 | **T-LAN1** | CM5 mgmt exposure | `nmap -sT -T2` of 192.168.200.146 (post-DFS) | only intended ports; TLS/HTTP posture; login throttle observed | ⏸ after "DFS done" (~13:20) |
