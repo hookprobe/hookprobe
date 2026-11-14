@@ -181,6 +181,9 @@ pub struct NetInfo {
     pub wan_vlan: u16,
     pub mgmt_vlan: u16,
     pub mgmt_ip: [u8; 4],
+    /// The AP's own LAN address and prefix length (the clients' network), e.g. 10.99.0.1/24.
+    pub lan_ip: [u8; 4],
+    pub lan_prefix: u8,
     pub gw: [u8; 4],
     pub v6_prefix: [u8; 8],
     pub v6_up: bool,
@@ -192,7 +195,7 @@ pub struct NetInfo {
     pub anchor_fp: u32,
 }
 
-pub const NET0: NetInfo = NetInfo { ssid: [0; 32], ssid_len: 0, setup_ap: false, channel: 0, width_mhz: 0, wan_vlan: 0, mgmt_vlan: 0, mgmt_ip: [0; 4], gw: [0; 4], v6_prefix: [0; 8], v6_up: false, policy: 0, policy_gen: 0, anchor: 0, anchor_fp: 0 };
+pub const NET0: NetInfo = NetInfo { ssid: [0; 32], ssid_len: 0, setup_ap: false, channel: 0, width_mhz: 0, wan_vlan: 0, mgmt_vlan: 0, mgmt_ip: [0; 4], lan_ip: [0; 4], lan_prefix: 0, gw: [0; 4], v6_prefix: [0; 8], v6_up: false, policy: 0, policy_gen: 0, anchor: 0, anchor_fp: 0 };
 
 /// The device's Mission Control state. One instance, owned by the serve loop.
 pub struct McState {
