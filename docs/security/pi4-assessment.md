@@ -22,6 +22,16 @@
 Severities are bench judgement; heqk owns final triage of its own items. L-01/W-03/W-04 are *observed*, not
 exploited (receive-only rule).
 
+### LAN assessment of the device management UI (192.168.200.146, from fortress VLAN 200, 2026-11-14)
+
+| ID | Sev | Finding | Evidence | Status |
+|---|---|---|---|---|
+| **LAN+** | — | **Strong baseline:** TLS 1.3 only (SSLv3/TLS1.0/1.1/1.2 all rejected); `Server: heqk`; UI auth-gated (302→/login); `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Cache-Control: no-store`; HTTP :80 → HTTPS 308 redirect; cert from local "HookProbe owner CA (heqk)" | openssl/curl | ✅ good |
+| **L-02** | Low | Cert SAN (`heqk.local`, `10.99.0.1`, `10.200.0.6`) **omits the mgmt IP `192.168.200.146`** → name mismatch when reaching the UI by its mgmt address | `openssl x509 -ext subjectAltName` | 🔴 open (heqk) — add the mgmt IP/hostname to the cert SAN |
+| **H-01** | Low | No **HSTS** (`Strict-Transport-Security`), **CSP**, `Referrer-Policy` or `Permissions-Policy` response headers on the mgmt UI | `curl -kI` | 🔴 open (heqk) — add HSTS + a CSP to the MC responses |
+| **L-03** | info | PQ TLS group `X25519MLKEM768` **not testable from this host** (fortress openssl can't offer it); negotiated classical X25519 + TLS_CHACHA20_POLY1305_SHA256 | openssl | ⏸ retest with a PQ-capable client |
+| **T-LAN1** | — | TCP port scan of 192.168.200.146 (nmap -sT -T2) | running | ▶ in progress |
+
 ## B. Fix plan by owner
 
 ### heqk kernel session
