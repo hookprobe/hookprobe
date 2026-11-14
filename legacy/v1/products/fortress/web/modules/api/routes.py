@@ -582,7 +582,7 @@ def get_blocked_domains():
 
 
 # ========================================
-# AI Fingerprinting API (Proprietary)
+# AI Fingerprinting API
 # ========================================
 
 # Lazy import for fingerprinting modules

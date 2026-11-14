@@ -9,7 +9,7 @@ This is the digital immune system: it inflames proportionally to threat
 severity and self-heals via the Bayesian recovery loop.
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 

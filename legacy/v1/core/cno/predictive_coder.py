@@ -20,7 +20,7 @@ from weights in São Paulo because each deployment sees different
 adversaries.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 23.0.0
 """
 

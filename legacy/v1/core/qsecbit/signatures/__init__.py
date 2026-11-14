@@ -5,7 +5,7 @@ Provides OSI L2-L7 attack signature matching with sub-millisecond detection
 for resource-constrained edge devices like Raspberry Pi.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

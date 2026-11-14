@@ -9,7 +9,7 @@ Integrates with Mirage adaptive honeypots for deep interaction
 and telemetry collection during sandbox period.
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

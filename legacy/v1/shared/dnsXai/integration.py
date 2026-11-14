@@ -14,7 +14,7 @@ Integration Points:
 
 Author: HookProbe Team
 Version: 5.0.0
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 """
 
 import sys

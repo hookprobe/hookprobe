@@ -24,7 +24,7 @@ Architecture:
          v
     Effective Policy -> OpenFlow Rules
 
-License: Proprietary - See LICENSING.md
+License: AGPL-3.0 - see LICENSE file
 """
 
 __version__ = "1.0.0"

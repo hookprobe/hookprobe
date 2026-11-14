@@ -11,7 +11,7 @@ Level 2 (SHADOW):     Q=0.60–0.85 — Redirect to Mirage honeypot
 Level 3 (DISCONNECT): Q=0.85–1.00 — Surgical SIGKILL + TCP_RST
 
 Author: Andrei Toma
-License: Proprietary - see LICENSE in this directory
+License: AGPL-3.0 - see LICENSE file
 Version: 2.0.0
 """
 

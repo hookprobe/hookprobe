@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Ecosystem Bubble Manager - Proprietary HookProbe Technology
+Ecosystem Bubble Manager - HookProbe Technology
 
 DEPRECATED: This module is being replaced by shared/aiochi/bubble/
 =================================================================
@@ -23,12 +23,12 @@ This file is kept for backwards compatibility but will be removed
 in a future release. Please migrate to the unified module.
 =================================================================
 
-PROPRIETARY AND CONFIDENTIAL
+License: AGPL-3.0 - see LICENSE file
 Copyright (c) 2024-2025 HookProbe Technologies
 Licensed under Commercial License - See LICENSING.md
 
 This module implements "Atmospheric Presence" networking - the flagship
-proprietary technology of HookProbe SDN Autopilot.
+part of HookProbe SDN Autopilot.
 
 The Vision:
 When you walk into a room with your iPhone, the SDN "sees" your arrival.
@@ -100,7 +100,7 @@ DB_TIMEOUT_SECONDS = 5.0
 
 logger = logging.getLogger(__name__)
 
-# Import our proprietary modules
+# Import our modules
 # Try both 'lib.' prefix (container) and direct import (standalone)
 HAS_PRESENCE = False
 try:

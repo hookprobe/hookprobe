@@ -14,7 +14,7 @@ Data source: ClickHouse napse_flows (historical baselines)
 Output: SynapticEvents with detected application anomalies
 
 Author: HookProbe Team
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 

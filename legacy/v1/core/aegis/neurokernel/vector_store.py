@@ -16,7 +16,7 @@ Memory budget:
     With metadata overhead: ~128MB (fits Fortress 4GB budget)
 
 Author: Andrei Toma
-License: Proprietary
+License: AGPL-3.0 - see LICENSE file
 Version: 1.0.0
 """
 
