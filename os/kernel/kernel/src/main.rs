@@ -14547,6 +14547,7 @@ fn load_wan_link<D: hal::BlockDev>(dev: &D) -> Option<Result<hal::WanLink, hal::
 
 /// A-03 diagnostics: [frames handed from management to the MC node, of those refused by the IDS verdict, node frames
 /// sent on management, node frames the management path could not send].
+#[cfg(all(feature = "mcserve", feature = "cm5"))]
 static mut MCM_DIAG: [u32; 4] = [0; 4];
 
 /// A station frame for Mission Control on the AP address: IPv4 TCP to `our_ip`:80/443.
