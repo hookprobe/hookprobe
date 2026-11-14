@@ -74,13 +74,27 @@ stateless calls (`el0-lansvc`) or own no hardware (`el0-tlshost`).
 ### D4 — Order, each step gated on metal **[partial]**
 
 1. **Measure** the EL0 round-trip cost on the CM5, for 0 / 64 / 1514-B payloads, against an in-kernel copy
-   (`lansvc::excursion_cost`, printed as `[EL0-COST]` at boot). **[realized: instrument; metal number pending]**
+   (`lansvc::excursion_cost`, printed as `[EL0-COST]` at boot). **[realized, metal 2026-11-14]**
+
+   Image `ec1`, 2,000 calls per size, same results on the trial boot and the cold boot:
+
+   | Payload | Median | Worst | In-kernel copy |
+   |---|---|---|---|
+   | 0 B | 388 ns | 3.1 µs (first call) | 0 ns |
+   | 64 B | 425 ns | 0.5–0.8 µs | 0 ns |
+   | 1514 B, copied in and out | 1.19–1.20 µs | 1.35 µs | 148 ns |
+
+   - At the worst case of ~24 k frames/s, one round trip per frame with no batching, that is ~29 ms of CPU per
+     second, ~3 % of one core.
+   - One SDIO frame read already costs ~0.8 ms of PIO (profiler, metal 2026-11-05), so the boundary is ~0.15 % of
+     the bus time.
+   - **The cost does not rule out step 4.** Batching through the rings lowers it further.
 2. **Substrate:** a resident-server class with a device-mapping capability, RX / TX rings, supervision and restart.
    Proven in QEMU with a fake device (the `apcore` fake-NIC pattern).
 3. **Control plane (option B):** the authenticator, SAE, PMKSA cache, ACS / DFS policy and event decoding move to
    `el0-wifi`. The bus stays in EL1. **Needs D3.** Per-frame cost is unchanged; only management frames cross.
-4. **Bus and SDPCM (option A):** move the rest, but only if step 1 shows the cost fits, per frame or batched per
-   loop iteration through the rings. Otherwise the bus stays in EL1, and this ADR records that with the number.
+4. **Bus and SDPCM (option A):** move the rest. Step 1 shows the cost fits (~1.2 µs per full frame, against ~0.8 ms
+   of SDIO PIO per frame). Its gate is still the D5 throughput floor on metal.
 
 ### D5 — Gates for every step **[vision]**
 
