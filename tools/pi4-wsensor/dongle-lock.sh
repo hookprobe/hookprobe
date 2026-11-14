@@ -8,6 +8,7 @@
 #   - release within 1 minute when heqk asks
 # Usage (on the Pi):  dongle-lock.sh status | acquire | release
 set -euo pipefail
+export PATH=$PATH:/usr/sbin:/sbin
 LOCK=/run/lock/hp-dongle.owner
 STATE=/run/lock/hp-dongle.monitor-state   # what we found, so release restores it exactly
 cmd=${1:-status}
