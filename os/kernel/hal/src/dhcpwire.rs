@@ -184,6 +184,12 @@ pub struct DhcpResult {
     pub udp68_seen: u32, // UDP frames arriving on client port 68 (OFFER/ACK candidates)
 }
 
+impl Default for DhcpResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DhcpResult {
     pub fn new() -> Self {
         DhcpResult {
