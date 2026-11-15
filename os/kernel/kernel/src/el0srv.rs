@@ -412,6 +412,25 @@ mod imp {
             (matches!(c, Call::Done(ST_OK, ..))).then(|| hal::wifisrvabi::rxmsg::decode_out(&o[..n], &mut rx)).flatten().map(|r| r.0)
         };
         let rx_el0 = rxr(false, &mut s) == Some(hal::sdio::RxRead::HostInt) && rxr(true, &mut s) == Some(hal::sdio::RxRead::Dry) && s.io_clean();
+        // a dry budget never makes the server wait or touch the counter (metal k4d: it trapped on the CM5, where EL0 has
+        // no counter access; QEMU grants it for P17) — it polls once and answers
+        let f0 = s.faults;
+        // as on the CM5: no EL0 counter access during this call (QEMU's P17 grants it); restored after
+        let kctl: u64;
+        unsafe {
+            core::arch::asm!("mrs {}, cntkctl_el1", out(reg) kctl, options(nomem, nostack));
+            core::arch::asm!("msr cntkctl_el1, {}", "isb", in(reg) kctl & !0b11, options(nomem, nostack));
+        }
+        let rx_nowait = {
+            let mut i = [0u8; hal::wifisrvabi::rxmsg::IN_LEN];
+            hal::wifisrvabi::rxmsg::encode_in(0x1800_2000, 800, true, false, 2048, &mut i);
+            let mut o = [0u8; OUT_MAX];
+            let (c, n) = s.call_lean(CMD_RX_READ, &i, &mut o);
+            let mut rx = [0u8; 2048];
+            matches!(c, Call::Done(ST_OK, ..)) && hal::wifisrvabi::rxmsg::decode_out(&o[..n], &mut rx).map(|r| r.0) == Some(hal::sdio::RxRead::Dry)
+        } && s.faults == f0;
+        unsafe { core::arch::asm!("msr cntkctl_el1, {}", "isb", in(reg) kctl, options(nomem, nostack)) };
+        let rx_el0 = rx_el0 && rx_nowait;
         // step 4c: a data frame built + written in EL0 over the grant: a small frame is attempted (the fake page fails
         // every command: Failed, byte mode); a 1514-B frame with block TX off is refused before the bus (TooBig); a
         // malformed request is refused (BAD_CMD); the lean call leaves no bytes on the IO page
@@ -451,7 +470,7 @@ mod imp {
         let doubled = f1 && s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() > BACKOFF_MS;
         let pass = init && rx && tx && resident && hostile && probe && rx_el0 && tx_el0 && ctl_el0 && fault && fresh && wiped && doubled;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} step 4b-2b: a frame read in EL0 over the grant (mailbox, then dry; IO page clean)={} step 4c: a data frame written in EL0 (attempted, too-big refused, bad request refused; IO page clean)={} step 4d: a control request written in EL0 (attempted, bad request refused; IO page clean)={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
+            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} step 4b-2b: a frame read in EL0 over the grant (mailbox, then dry; a dry budget never waits in EL0; IO page clean)={} step 4c: a data frame written in EL0 (attempted, too-big refused, bad request refused; IO page clean)={} step 4d: a control request written in EL0 (attempted, bad request refused; IO page clean)={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
             if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, rx_el0, tx_el0, ctl_el0, fault, fresh, wiped, doubled
         ));
         pass
@@ -621,8 +640,8 @@ pub mod keyer {
     /// Frame reads served by el0-wifi; replies refused by the kernel's re-check (each terminates the frame).
     pub static mut RX_EL0: u64 = 0;
     pub static mut RX_REFUSED: u64 = 0;
-    /// One frame read through el0-wifi. None = no server, backoff, a fault, or a refused reply (the driver reads
-    /// in-kernel instead; after a fault or a refusal it first terminates any half-read frame).
+    /// One frame read through el0-wifi (one poll). None = no server, backoff, a fault, or a refused reply (the driver
+    /// reads in-kernel instead).
     pub(crate) fn rx_read(sdb: u32, max_dry: u32, skip: bool, block: bool, rx: &mut [u8]) -> Option<(hal::sdio::RxRead, u32)> {
         use hal::wifisrvabi::rxmsg;
         let s = srv()?;
@@ -630,22 +649,8 @@ pub mod keyer {
         rxmsg::encode_in(sdb, max_dry, skip, block, rx.len(), &mut inp);
         let mut o = [0u8; OUT_MAX];
         let (c, n) = s.call_lean(CMD_RX_READ, &inp, &mut o);
-        let lost = |refused: bool| unsafe {
-            if refused {
-                RX_REFUSED += 1;
-            }
-            #[cfg(feature = "cm5")]
-            {
-                arch_aarch64::cyw43::EL0_RX_LOST = true;
-            }
-        };
-        match c {
-            Call::Done(ST_OK, ..) => {}
-            Call::Backoff => return None,
-            _ => {
-                lost(false);
-                return None;
-            }
+        if !matches!(c, Call::Done(ST_OK, ..)) {
+            return None;
         }
         match rxmsg::decode_out(&o[..n], rx) {
             Some(r) => {
@@ -653,7 +658,7 @@ pub mod keyer {
                 Some(r)
             }
             None => {
-                lost(true);
+                unsafe { RX_REFUSED += 1 };
                 None
             }
         }
