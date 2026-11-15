@@ -962,6 +962,7 @@ pub mod rsnassoc;
 pub mod mgmtabi;
 pub mod hshabi;
 pub mod el0ring;
+pub mod bcdc;
 pub mod sdio;
 pub mod wifisrvabi;
 pub mod wpakeyer;
