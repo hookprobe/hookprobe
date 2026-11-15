@@ -375,9 +375,11 @@ mod imp {
 // the driver uses its in-kernel copy of the same state machine (D5). A fault forgets the server's handshakes: those
 // stations' 4-ways time out and they re-associate.
 #[cfg(feature = "mctls")]
+// the bridge is reached through the CM5 driver hook (and, for SAE, the wpa3 selftest): unused in other QEMU builds
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub mod keyer {
     use super::imp::{load, Call, Server};
-    use hal::wifisrvabi::{keymsg, *};
+    use hal::wifisrvabi::{keymsg, saemsg, *};
     use hal::wpakeyer::{Out, Start};
 
     pub static mut WIFI: Option<Server> = None;
@@ -421,7 +423,7 @@ pub mod keyer {
         r.copy_from_slice(&o[2..10]);
         Some((o[0] != 0).then_some((o[1] != 0, u64::from_le_bytes(r))))
     }
-    fn eapol(sta: &[u8; 6], m: &[u8], now: u64, frame: &mut [u8]) -> Option<Out> {
+    pub(crate) fn eapol(sta: &[u8; 6], m: &[u8], now: u64, frame: &mut [u8]) -> Option<Out> {
         let mut inp = [0u8; IN_MAX];
         if m.len() > IN_MAX - 14 {
             return Some(Out::None);
@@ -444,6 +446,94 @@ pub mod keyer {
         }
     }
 
+    // ---- steps 3c / 3d: SAE + PMKSA in el0-wifi (the SAE PMK never enters the kernel) ----
+    fn ok_call(cmd: u32, inp: &[u8], out: &mut [u8]) -> Option<usize> {
+        let s = srv()?;
+        let (c, n) = s.call_io(cmd, inp, out);
+        matches!(c, Call::Done(ST_OK, ..)).then_some(n)
+    }
+    pub(crate) fn sae_setup(mode: u8, clear: bool, ssid: &[u8], pw: &[u8]) -> bool {
+        let mut inp = [0u8; 1 + 1 + 1 + 32 + 1 + 64];
+        let (sl, pl) = (ssid.len().min(32), pw.len().min(64));
+        inp[0] = mode;
+        inp[1] = clear as u8;
+        inp[2] = sl as u8;
+        inp[3..3 + sl].copy_from_slice(&ssid[..sl]);
+        inp[35] = pl as u8;
+        inp[36..36 + pl].copy_from_slice(&pw[..pl]);
+        let mut o = [0u8; 1];
+        let r = ok_call(CMD_SAE_SETUP, &inp, &mut o) == Some(1) && o[0] == 1;
+        hal::wpaauth::wipe(&mut inp);
+        r
+    }
+    pub(crate) fn sae_rx(ap: &[u8; 6], sta: &[u8; 6], now: u64, rnd: &[u8; SAE_RND], body: &[u8]) -> Option<saemsg::SaeRx> {
+        let pre = 6 + 6 + 8 + SAE_RND;
+        if body.len() > IN_MAX - pre {
+            return None;
+        }
+        let mut inp = [0u8; IN_MAX];
+        inp[..6].copy_from_slice(ap);
+        inp[6..12].copy_from_slice(sta);
+        inp[12..20].copy_from_slice(&now.to_le_bytes());
+        inp[20..20 + SAE_RND].copy_from_slice(rnd);
+        inp[pre..pre + body.len()].copy_from_slice(body);
+        let mut o = [0u8; saemsg::RX_OUT_LEN];
+        let n = ok_call(CMD_SAE_RX, &inp[..pre + body.len()], &mut o);
+        hal::wpaauth::wipe(&mut inp);
+        if n != Some(saemsg::RX_OUT_LEN) {
+            return None;
+        }
+        saemsg::decode_rx(&o)
+    }
+    pub(crate) fn sae_keying(sta: &[u8; 6], now: u64, offers: u8, rsn: Option<&hal::rsnassoc::AssocRsn>) -> Option<(hal::rsnassoc::Keying, bool, (u8, u64))> {
+        let mut inp = [0u8; 15 + saemsg::RSN_LEN];
+        inp[..6].copy_from_slice(sta);
+        inp[6..14].copy_from_slice(&now.to_le_bytes());
+        inp[14] = offers;
+        saemsg::encode_rsn(rsn, &mut inp[15..]);
+        let mut o = [0u8; 12];
+        if ok_call(CMD_SAE_KEYING, &inp, &mut o)? != 12 {
+            return None;
+        }
+        let how = saemsg::keying_from(o[0], o[1])?;
+        let mut a = [0u8; 8];
+        a.copy_from_slice(&o[3..11]);
+        Some((how, o[11] != 0, (o[2], u64::from_le_bytes(a))))
+    }
+    pub(crate) fn key_start_sae(st: &Start, now: u64, src: u8, pmkid: &[u8; 16], frame: &mut [u8]) -> Option<Out> {
+        let mut inp = [0u8; keymsg::START_LEN + 8 + 1 + 16];
+        keymsg::encode_start(st, &mut inp);
+        inp[keymsg::START_LEN..keymsg::START_LEN + 8].copy_from_slice(&now.to_le_bytes());
+        inp[keymsg::START_LEN + 8] = src;
+        inp[keymsg::START_LEN + 9..].copy_from_slice(pmkid);
+        let r = out_call(CMD_KEY_START_SAE, &inp, frame);
+        hal::wpaauth::wipe(&mut inp);
+        if matches!(r, Some(Out::Send(_))) {
+            unsafe { EL0_STARTS += 1 };
+        }
+        r
+    }
+    pub(crate) fn sae_forget(sta: &[u8; 6], now: u64, op: u8) -> Option<bool> {
+        let mut inp = [0u8; 15];
+        inp[..6].copy_from_slice(sta);
+        inp[6..14].copy_from_slice(&now.to_le_bytes());
+        inp[14] = op;
+        let mut o = [0u8; 1];
+        (ok_call(CMD_SAE_FORGET, &inp, &mut o)? == 1).then_some(o[0] != 0)
+    }
+    fn pmksa_remove(sta: &[u8; 6], all: bool) {
+        let mut inp = [0u8; 7];
+        inp[..6].copy_from_slice(sta);
+        inp[6] = all as u8;
+        let _ = ok_call(CMD_PMKSA_REMOVE, &inp, &mut []);
+    }
+
+    /// The bridge functions, for `sae_selftest`.
+    #[cfg(feature = "wpa3")]
+    pub mod test {
+        pub(crate) use super::{eapol, key_start_sae, sae_forget, sae_keying, sae_rx, sae_setup};
+    }
+
     /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     pub fn install() -> bool {
@@ -453,8 +543,10 @@ pub mod keyer {
                 unsafe { WIFI = Some(s) };
                 #[cfg(feature = "cm5")]
                 unsafe {
-                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort });
+                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove });
                 }
+                #[cfg(all(feature = "cm5", feature = "wpa3"))]
+                let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi loaded at {:#x}: the WPA 4-way authenticator and its keys run in EL0 (ADR 0065 step 3b; in-kernel copy = fallback) init={}\n", super::imp::BASE, ok));
                 ok
             }
@@ -533,4 +625,120 @@ pub mod keyer {
         ));
         pass
     }
+}
+
+/// `[P-el0srv-sae]` (QEMU): a WPA3 station does SAE + the 4-way against el0-wifi; the SAE PMK never enters the kernel.
+#[cfg(all(feature = "mctls", feature = "wpa3"))]
+pub fn sae_selftest() -> bool {
+    use hal::rsnassoc::{AssocRsn, Keying, PMKIDS};
+    use hal::wifisrvabi::*;
+    use hal::wpakeyer::{KeyData, Out, Start, FRAME_MAX};
+    use keyer::*;
+    let mut s = match imp::load(None) {
+        Ok(s) => s,
+        Err(_) => return false,
+    };
+    let _ = s.call(CMD_INIT);
+    unsafe { WIFI = Some(s) };
+    let ap = [2, 0xaa, 0, 0, 0, 1];
+    let sta = [2, 0x5a, 0, 0, 0, 9];
+    let pw = b"correct horse battery";
+    let setup = test::sae_setup(1, true, b"hq-test", pw);
+    // the station (hunting-and-pecking; AP and station hold the same password)
+    let mut st = match sae::Sae::new(pw, &sta, &ap, &[0x31; 32], &[0x32; 32]) {
+        Ok(x) => x,
+        Err(_) => return false,
+    };
+    let mut commit = [0u8; 104];
+    commit[0..2].copy_from_slice(&3u16.to_le_bytes());
+    commit[2..4].copy_from_slice(&1u16.to_le_bytes());
+    commit[6..8].copy_from_slice(&19u16.to_le_bytes());
+    commit[8..40].copy_from_slice(&st.own_scalar);
+    commit[40..104].copy_from_slice(&st.own_element);
+    let rnd = [0x77u8; SAE_RND];
+    let r1 = test::sae_rx(&ap, &sta, 10, &rnd, &commit);
+    let committed = r1.as_ref().is_some_and(|r| r.ev == 2 && r.n >= 1 && r.lens[0] == 104);
+    let mut ok_peer = false;
+    if let Some(r) = r1.as_ref() {
+        let mut sc = [0u8; 32];
+        let mut el = [0u8; 64];
+        sc.copy_from_slice(&r.frames[0][8..40]);
+        el.copy_from_slice(&r.frames[0][40..104]);
+        ok_peer = st.process_commit(&sc, &el).is_ok();
+    }
+    let (ssc, scf) = st.confirm();
+    let mut conf = [0u8; 40];
+    conf[0..2].copy_from_slice(&3u16.to_le_bytes());
+    conf[2..4].copy_from_slice(&2u16.to_le_bytes());
+    conf[6..8].copy_from_slice(&ssc.to_le_bytes());
+    conf[8..40].copy_from_slice(&scf);
+    let r2 = test::sae_rx(&ap, &sta, 20, &rnd, &conf);
+    let accepted = r2.as_ref().is_some_and(|r| {
+        let mut c = [0u8; 32];
+        c.copy_from_slice(&r.frames[0][8..40]);
+        r.ev == 3 && r.pmkid == st.pmkid && st.check_confirm(u16::from_le_bytes([r.frames[0][6], r.frames[0][7]]), &c).is_ok()
+    });
+    let clean1 = srv_clean();
+    // the keying decision runs in el0-wifi: AKM 8, no PMKID, a fresh SAE -> SaeFresh
+    let rsn8 = AssocRsn { akm: 0x000f_ac08, n_akm: 1, n_pmkid: 0, pmkid: [[0; 16]; PMKIDS] };
+    let fresh = test::sae_keying(&sta, 30, hal::rsnassoc::OFFER_SAE | hal::rsnassoc::OFFER_PSK, Some(&rsn8)).is_some_and(|(k, f, _)| k == Keying::SaeFresh && f);
+    // the 4-way keyed from the server's own PMK: the kernel's Start carries none
+    let mut rsne = [0u8; 40];
+    rsne[..4].copy_from_slice(&[0x30, 0x02, 0x01, 0x00]);
+    let start0 = Start { sta, aa: ap, pmk: [0; 32], akm8: true, pmkid: None, anonce: [0x22; 32],
+        kd: KeyData { rsne, rsne_len: 4, gtk: [0x33; 16], gtk_keyid: 1, igtk_kde: None } };
+    let mut fr = [0u8; FRAME_MAX];
+    let m1 = matches!(test::key_start_sae(&start0, 40, 1, &[0; 16], &mut fr), Some(Out::Send(_)));
+    let snonce = [0x55u8; 32];
+    let ptk = hal::wpaauth::ptk(true, &st.pmk, &ap, &sta, &start0.anonce, &snonce);
+    let mut kck = [0u8; 16];
+    kck.copy_from_slice(&ptk[..16]);
+    let frame = |replay: u64, secure: bool| {
+        let mut f = [0u8; 99];
+        f[0] = 2;
+        f[1] = 3;
+        f[2..4].copy_from_slice(&95u16.to_be_bytes());
+        f[4] = 2;
+        f[5..7].copy_from_slice(&((if secure { 0x0300u16 } else { 0x0100 }) | 0x0008).to_be_bytes());
+        f[9..17].copy_from_slice(&replay.to_be_bytes());
+        if !secure {
+            f[17..49].copy_from_slice(&snonce);
+        }
+        let mic = hal::wpaauth::mic(&kck, &f, true);
+        f[81..97].copy_from_slice(&mic);
+        f
+    };
+    let m3 = matches!(test::eapol(&sta, &frame(1, false), 50, &mut fr), Some(Out::Send(_)));
+    let keyed = matches!(test::eapol(&sta, &frame(2, true), 60, &mut fr), Some(Out::Keyed { tk, .. }) if tk[..] == ptk[32..48]);
+    let clean2 = srv_clean();
+    // the station leaves 5 s after Accepted (past the leave-predates-SAE window): the driver's forget (op 0) frees its
+    // SAE state, while the PMKSA stays cached
+    let fwd = test::sae_forget(&sta, 5_000, 0);
+    // a later reconnect with PMKSA caching: its PMKID names the cached PMKSA -> SaeCached (a still-fresh SAE would
+    // take precedence: decide prefers SaeFresh, so this is checked after the forget)
+    let mut rsnc = rsn8;
+    rsnc.n_pmkid = 1;
+    rsnc.pmkid[0] = st.pmkid;
+    let kc = test::sae_keying(&sta, 5_000, hal::rsnassoc::OFFER_SAE, Some(&rsnc));
+    let cached = fwd == Some(true) && kc.is_some_and(|(k, _, _)| k == Keying::SaeCached(0));
+    // no PMKID and no SAE state -> refused (the station must redo SAE)
+    let kn = test::sae_keying(&sta, 5_000, hal::rsnassoc::OFFER_SAE, Some(&rsn8));
+    let nosae = kn.is_some_and(|(k, _, _)| k == Keying::SaeNoSae);
+    if !(cached && nosae) {
+        let f = unsafe { (*core::ptr::addr_of!(keyer::WIFI)).as_ref().map_or(0, |s| s.faults) };
+        arch_aarch64::_print(format_args!(" [P-el0srv-sae] detail: forget -> {:?}, cached keying -> {:?}, no-PMKID keying -> {:?}, server faults {}\n",
+            fwd, kc.map(|(k, _, d)| (k, d.0)), kn.map(|(k, _, d)| (k, d.0)), f));
+    }
+    unsafe { WIFI = None };
+    let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae;
+    arch_aarch64::_print(format_args!(
+        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d: WPA3 in el0-wifi against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={}\n",
+        if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae
+    ));
+    pass
+}
+
+#[cfg(all(feature = "mctls", feature = "wpa3"))]
+fn srv_clean() -> bool {
+    unsafe { (*core::ptr::addr_of!(keyer::WIFI)).as_ref().is_some_and(|s| s.io_clean()) }
 }
