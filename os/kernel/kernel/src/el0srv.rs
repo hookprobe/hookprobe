@@ -143,8 +143,9 @@ mod imp {
         crate::clock::ticks() / (crate::clock::freq() / 1000).max(1)
     }
 
-    /// Load `el0-wifi` and grant it the device page at physical `dev_pa` (a frame the caller owns).
-    pub fn load(dev_pa: usize) -> Result<Server, &'static str> {
+    /// Load `el0-wifi`, granting it the device page at physical `dev_pa` when there is one (step 2's fake device;
+    /// step 3 needs none: the bus stays in EL1; step 4 grants the SDHCI page).
+    pub fn load(dev_pa: Option<usize>) -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(WIFI_ELF).map_err(|_| "ELF parse")?;
         let mut s = Server {
             entry: parsed.entry,
@@ -206,8 +207,10 @@ mod imp {
         }
         zero(c);
         s.ctrl = c;
-        if !map(BASE + DEV_OFF, dev_pa, Kind::Dev) {
-            return Err("map device refused");
+        if let Some(d) = dev_pa {
+            if !map(BASE + DEV_OFF, d, Kind::Dev) {
+                return Err("map device refused");
+            }
         }
         for (off, r) in [(RX_OFF, &mut s.rx), (TX_OFF, &mut s.tx)] {
             for p in 0..RING_PAGES {
@@ -279,6 +282,32 @@ mod imp {
         pub fn tx_push(&mut self, frame: &[u8]) -> bool {
             ring::push(&mut self.tx, frame)
         }
+        /// A command with input (IN area) and output (OUT area, copied into `out`, then scrubbed on the shared page:
+        /// a Keyed reply carries a TK — the 2A / D3 wipe discipline). Returns the call and the output length.
+        pub fn call_io(&mut self, cmd: u32, input: &[u8], out: &mut [u8]) -> (Call, usize) {
+            let n = input.len().min(IN_MAX);
+            unsafe { core::ptr::copy_nonoverlapping(input.as_ptr(), (self.ctrl + IN_OFF) as *mut u8, n) };
+            self.w32(H_IN_LEN, n as u32);
+            self.w32(H_OUT_LEN, 0);
+            let c = self.call(cmd);
+            let mut k = 0;
+            if matches!(c, Call::Done(ST_OK, ..)) {
+                k = (self.r32(H_OUT_LEN) as usize).min(OUT_MAX).min(out.len());
+                unsafe { core::ptr::copy_nonoverlapping((self.ctrl + OUT_OFF) as *const u8, out.as_mut_ptr(), k) };
+            }
+            for i in 0..OUT_MAX {
+                unsafe { core::ptr::write_volatile((self.ctrl + OUT_OFF + i) as *mut u8, 0) };
+            }
+            for i in 0..IN_MAX {
+                unsafe { core::ptr::write_volatile((self.ctrl + IN_OFF + i) as *mut u8, 0) };
+            }
+            (c, k)
+        }
+        /// Is any byte of the control page's IN / OUT areas non-zero? (the selftest's "no key left behind")
+        pub fn io_clean(&self) -> bool {
+            (0..IN_MAX).all(|i| unsafe { core::ptr::read_volatile((self.ctrl + IN_OFF + i) as *const u8) } == 0)
+                && (0..OUT_MAX).all(|i| unsafe { core::ptr::read_volatile((self.ctrl + OUT_OFF + i) as *const u8) } == 0)
+        }
         /// Milliseconds until the next call is allowed (0 = now).
         pub fn backoff_left_ms(&self) -> u64 {
             self.next_ok.saturating_sub(now_ms())
@@ -292,7 +321,7 @@ mod imp {
             return false;
         }
         zero(dev);
-        let mut s = match load(dev) {
+        let mut s = match load(Some(dev)) {
             Ok(s) => s,
             Err(why) => {
                 arch_aarch64::_print(format_args!(" [P-el0srv] FAIL — el0-wifi did not load: {}\n", why));
@@ -335,6 +364,172 @@ mod imp {
         arch_aarch64::_print(format_args!(
             " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
             if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, fault, fresh, wiped, doubled
+        ));
+        pass
+    }
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// ADR 0065 step 3b: the WPA 4-way authenticator runs in el0-wifi (its keys live there, operator D3 2026-11-15). The
+// driver calls it through the hook below; when the server is absent, faulted or in backoff the hook answers None and
+// the driver uses its in-kernel copy of the same state machine (D5). A fault forgets the server's handshakes: those
+// stations' 4-ways time out and they re-associate.
+#[cfg(feature = "mctls")]
+pub mod keyer {
+    use super::imp::{load, Call, Server};
+    use hal::wifisrvabi::{keymsg, *};
+    use hal::wpakeyer::{Out, Start};
+
+    pub static mut WIFI: Option<Server> = None;
+    /// Handshakes started in el0-wifi (the metal proof that the EL0 path, not the in-kernel copy, served them).
+    pub static mut EL0_STARTS: u64 = 0;
+
+    fn srv() -> Option<&'static mut Server> {
+        unsafe { (*core::ptr::addr_of_mut!(WIFI)).as_mut() }
+    }
+
+    fn out_call(cmd: u32, inp: &[u8], frame: &mut [u8]) -> Option<Out> {
+        let s = srv()?;
+        let mut o = [0u8; keymsg::OUT_MAX];
+        let (c, n) = s.call_io(cmd, inp, &mut o);
+        let r = match c {
+            Call::Done(ST_OK, ..) => keymsg::decode_out(&o[..n], frame),
+            _ => None,
+        };
+        hal::wpaauth::wipe(&mut o);
+        r
+    }
+    fn start(st: &Start, now: u64, frame: &mut [u8]) -> Option<Out> {
+        let mut inp = [0u8; keymsg::START_LEN + 8];
+        keymsg::encode_start(st, &mut inp);
+        inp[keymsg::START_LEN..].copy_from_slice(&now.to_le_bytes());
+        let r = out_call(CMD_KEY_START, &inp, frame);
+        hal::wpaauth::wipe(&mut inp);
+        if r.is_some() {
+            unsafe { EL0_STARTS += 1 };
+        }
+        r
+    }
+    fn expect(sta: &[u8; 6]) -> Option<Option<(bool, u64)>> {
+        let s = srv()?;
+        let mut o = [0u8; 10];
+        let (c, n) = s.call_io(CMD_KEY_EXPECT, sta, &mut o);
+        if !matches!(c, Call::Done(ST_OK, ..)) || n != 10 {
+            return None;
+        }
+        let mut r = [0u8; 8];
+        r.copy_from_slice(&o[2..10]);
+        Some((o[0] != 0).then_some((o[1] != 0, u64::from_le_bytes(r))))
+    }
+    fn eapol(sta: &[u8; 6], m: &[u8], now: u64, frame: &mut [u8]) -> Option<Out> {
+        let mut inp = [0u8; IN_MAX];
+        if m.len() > IN_MAX - 14 {
+            return Some(Out::None);
+        }
+        inp[..6].copy_from_slice(sta);
+        inp[6..14].copy_from_slice(&now.to_le_bytes());
+        inp[14..14 + m.len()].copy_from_slice(m);
+        let r = out_call(CMD_KEY_EAPOL, &inp[..14 + m.len()], frame);
+        hal::wpaauth::wipe(&mut inp);
+        r
+    }
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
+    fn tick(now: u64, frame: &mut [u8]) -> Option<Out> {
+        out_call(CMD_KEY_TICK, &now.to_le_bytes(), frame)
+    }
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
+    fn abort(sta: &[u8; 6]) {
+        if let Some(s) = srv() {
+            let _ = s.call_io(CMD_KEY_ABORT, sta, &mut []);
+        }
+    }
+
+    /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
+    pub fn install() -> bool {
+        match load(None) {
+            Ok(mut s) => {
+                let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
+                unsafe { WIFI = Some(s) };
+                #[cfg(feature = "cm5")]
+                unsafe {
+                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort });
+                }
+                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi loaded at {:#x}: the WPA 4-way authenticator and its keys run in EL0 (ADR 0065 step 3b; in-kernel copy = fallback) init={}\n", super::imp::BASE, ok));
+                ok
+            }
+            Err(why) => {
+                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi FAILED to load ({}) — the authenticator stays in-kernel\n", why));
+                false
+            }
+        }
+    }
+
+    /// (calls, faults, restarts, handshakes started in EL0) for the beat / health.
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
+    pub fn stats() -> (u64, u64, u64, u64) {
+        match srv() {
+            Some(s) => (s.calls, s.faults, s.restarts, unsafe { EL0_STARTS }),
+            None => (0, 0, 0, 0),
+        }
+    }
+
+    /// `[P-el0srv-keyer]` (QEMU): a full 4-way through el0-wifi against a simulated station.
+    pub fn selftest() -> bool {
+        use hal::wpakeyer::{FRAME_MAX, KeyData};
+        let mut s = match load(None) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let _ = s.call(CMD_INIT);
+        unsafe { WIFI = Some(s) };
+        let sta = [2, 0x5a, 0, 0, 0, 9];
+        let aa = [2, 0xaa, 0, 0, 0, 1];
+        let mut rsne = [0u8; 40];
+        rsne[..4].copy_from_slice(&[0x30, 0x02, 0x01, 0x00]);
+        let st = Start { sta, aa, pmk: [0x11; 32], akm8: false, pmkid: None, anonce: [0x22; 32],
+            kd: KeyData { rsne, rsne_len: 4, gtk: [0x33; 16], gtk_keyid: 1, igtk_kde: None } };
+        let mut fr = [0u8; FRAME_MAX];
+        let m1 = matches!(start(&st, 0, &mut fr), Some(Out::Send(_))) && expect(&sta) == Some(Some((false, 1)));
+        let clean1 = srv().is_some_and(|s| s.io_clean());
+        // the station: PTK from our ANonce + its SNonce, M2 / M4 signed with the KCK
+        let snonce = [0x55u8; 32];
+        let ptk = hal::wpaauth::ptk(false, &st.pmk, &aa, &sta, &st.anonce, &snonce);
+        let mut kck = [0u8; 16];
+        kck.copy_from_slice(&ptk[..16]);
+        let frame = |replay: u64, secure: bool| {
+            let mut f = [0u8; 99];
+            f[0] = 2;
+            f[1] = 3;
+            f[2..4].copy_from_slice(&95u16.to_be_bytes());
+            f[4] = 2;
+            f[5..7].copy_from_slice(&((if secure { 0x0300u16 } else { 0x0100 }) | 0x000a).to_be_bytes());
+            f[9..17].copy_from_slice(&replay.to_be_bytes());
+            if !secure {
+                f[17..49].copy_from_slice(&snonce);
+            }
+            let mic = hal::wpaauth::mic(&kck, &f, false);
+            f[81..97].copy_from_slice(&mic);
+            f
+        };
+        let m3 = matches!(eapol(&sta, &frame(1, false), 10, &mut fr), Some(Out::Send(_))) && expect(&sta) == Some(Some((true, 2)));
+        let keyed = match eapol(&sta, &frame(2, true), 20, &mut fr) {
+            Some(Out::Keyed { done, tk }) => tk[..] == ptk[32..48] && done.auth.m4_mic_ok,
+            _ => false,
+        };
+        let clean2 = srv().is_some_and(|s| s.io_clean());
+        let gone = expect(&sta) == Some(None);
+        // a fault mid-handshake forgets it (the station re-associates); the server is back after the backoff
+        let _ = start(&st, 30, &mut fr);
+        let faulted = srv().is_some_and(|s| s.call(CMD_SELFTEST_FAULT) == Call::Fault) && expect(&sta).is_none();
+        let t0 = crate::clock::ticks() / (crate::clock::freq() / 1000).max(1);
+        while crate::clock::ticks() / (crate::clock::freq() / 1000).max(1) < t0 + super::imp::BACKOFF_MS + 5 {}
+        let forgotten = expect(&sta) == Some(None);
+        unsafe { WIFI = None };
+        let pass = m1 && clean1 && m3 && keyed && clean2 && gone && faulted && forgotten;
+        arch_aarch64::_print(format_args!(
+            " [P-el0srv-keyer] {} — ADR 0065 step 3b: the WPA 4-way in el0-wifi against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed with the station's TK={} and no key left on the page={} the handshake ended={} a fault mid-handshake -> refused during the backoff={} then the new incarnation has forgotten it={}\n",
+            if pass { "PASS" } else { "FAIL" }, m1, clean1, m3, keyed, clean2, gone, faulted, forgotten
         ));
         pass
     }
