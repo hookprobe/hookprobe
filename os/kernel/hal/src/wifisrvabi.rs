@@ -421,9 +421,9 @@ pub const CMD_BUS_PROBE: u32 = 30;
 // ---- step 4b-2b: el0-wifi reads one SDPCM frame over its SDHCI grant (`crate::sdio::Bus::read_frame`) ----
 /// IN = [`rxmsg::encode_in`]. OUT = [`rxmsg::encode_out`].
 pub const CMD_RX_READ: u32 = 31;
-/// The longest dry wait the kernel hands el0-wifi (ms): the CM5 excursion budget is 20 ms, so the bring-up reads
-/// that wait up to 1.5 s for a reply stay in the kernel.
-pub const RX_EL0_MAX_DRY: u32 = 5;
+/// el0-wifi polls ONCE per `CMD_RX_READ` and never waits: EL0 has no counter access on the CM5 (metal 2026-11-15:
+/// a wait inside the server trapped on CNTFRQ/CNTPCT, EC 0x18). A dry budget is the kernel's loop around the calls.
+pub const RX_EL0_MAX_DRY: u32 = 0;
 
 /// The frame-read messages. The server's reply is NOT trusted: the kernel re-checks the frame's header itself
 /// (`crate::sdpcm_hdr`) and accepts a frame only when the claimed length is the header's.
@@ -680,6 +680,58 @@ pub mod txmsg {
             }
             assert_eq!(decode_r0(0), None);
             assert_eq!(decode_r0(6), None);
+        }
+    }
+}
+
+// ---- step 4d: el0-wifi builds and writes one control request (`crate::bcdc::request`) ----
+/// IN = [`ctlmsg::encode_in`]. OUT = nothing; R0 = 1 written / 4 the write failed (as [`txmsg::encode_r0`]). The
+/// kernel keeps the request id, the sequence and the credit, and matches the reply itself (`crate::bcdc::reply`).
+pub const CMD_TX_CTL: u32 = 33;
+
+pub mod ctlmsg {
+    use crate::bcdc::PAYLOAD_MAX;
+
+    pub const HDR: usize = 20;
+
+    /// (seq, interface, cmd, flags, request id, reply length, payload) -> the request length.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encode_in(seq: u8, ifidx: u8, cmd: u32, flags: u32, reqid: u16, reply_len: usize, payload: &[u8], o: &mut [u8]) -> Option<usize> {
+        if payload.len() > PAYLOAD_MAX || o.len() < HDR + payload.len() || reply_len > u32::MAX as usize {
+            return None;
+        }
+        o[0] = seq;
+        o[1] = ifidx;
+        o[2..4].fill(0);
+        o[4..8].copy_from_slice(&cmd.to_le_bytes());
+        o[8..12].copy_from_slice(&flags.to_le_bytes());
+        o[12..14].copy_from_slice(&reqid.to_le_bytes());
+        o[14..16].fill(0);
+        o[16..20].copy_from_slice(&(reply_len as u32).to_le_bytes());
+        o[HDR..HDR + payload.len()].copy_from_slice(payload);
+        Some(HDR + payload.len())
+    }
+    /// -> (seq, interface, cmd, flags, request id, reply length, payload).
+    #[allow(clippy::type_complexity)]
+    pub fn decode_in(b: &[u8]) -> Option<(u8, u8, u32, u32, u16, usize, &[u8])> {
+        if b.len() < HDR || b.len() > HDR + PAYLOAD_MAX {
+            return None;
+        }
+        let u = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+        Some((b[0], b[1], u(4), u(8), u16::from_le_bytes([b[12], b[13]]), u(16) as usize, &b[HDR..]))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn round_trips_and_refusals() {
+            let mut o = [0u8; super::super::IN_MAX];
+            let n = encode_in(3, 1, 263, 2, 0xbeef, 256, b"ver\0", &mut o).unwrap();
+            assert_eq!(decode_in(&o[..n]), Some((3, 1, 263, 2, 0xbeef, 256, &b"ver\0"[..])));
+            assert_eq!(encode_in(0, 0, 0, 0, 0, 0, &[0u8; PAYLOAD_MAX + 1], &mut o), None);
+            assert_eq!(decode_in(&o[..HDR - 1]), None);
         }
     }
 }
