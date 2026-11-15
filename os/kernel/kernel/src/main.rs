@@ -5401,7 +5401,8 @@ fn cm5_p10_probe() {
                                             #[cfg(feature = "mctls")]
                                             {
                                                 let (c, f, r, h) = crate::el0srv::keyer::stats();
-                                                kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={}\n", c, f, r, h);
+                                                let (rxe, rxr) = crate::el0srv::keyer::rx_stats();
+                                                kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={}\n", c, f, r, h, rxe, rxr);
                                             }
                                             let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
                                             kprint!("   [WAN renew] in-loop DHCP renewal: requests={} acks={} naks={} (full re-bring-ups counted in renewals=)\n", rq, ra, rn);

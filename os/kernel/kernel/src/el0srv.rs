@@ -329,6 +329,24 @@ mod imp {
             }
             (c, k)
         }
+        /// The hot-path variant of [`Self::call_io`] for commands that carry no key material (the frame read): only the
+        /// bytes used are copied and cleared. The output length is still clamped by the kernel, never trusted.
+        pub fn call_lean(&mut self, cmd: u32, input: &[u8], out: &mut [u8]) -> (Call, usize) {
+            let n = input.len().min(IN_MAX);
+            unsafe { core::ptr::copy_nonoverlapping(input.as_ptr(), (self.ctrl + IN_OFF) as *mut u8, n) };
+            self.w32(H_IN_LEN, n as u32);
+            self.w32(H_OUT_LEN, 0);
+            let c = self.call(cmd);
+            let mut k = 0;
+            if matches!(c, Call::Done(ST_OK, ..)) {
+                let m = (self.r32(H_OUT_LEN) as usize).min(OUT_MAX);
+                k = m.min(out.len());
+                unsafe { core::ptr::copy_nonoverlapping((self.ctrl + OUT_OFF) as *const u8, out.as_mut_ptr(), k) };
+                unsafe { core::ptr::write_bytes((self.ctrl + OUT_OFF) as *mut u8, 0, m) };
+            }
+            unsafe { core::ptr::write_bytes((self.ctrl + IN_OFF) as *mut u8, 0, n) };
+            (c, k)
+        }
         /// Is any byte of the control page's IN / OUT areas non-zero? (the selftest's "no key left behind")
         pub fn io_clean(&self) -> bool {
             (0..IN_MAX).all(|i| unsafe { core::ptr::read_volatile((self.ctrl + IN_OFF + i) as *const u8) } == 0)
@@ -381,6 +399,19 @@ mod imp {
         let (pc, pn) = s.call_io(CMD_BUS_PROBE, &[], &mut po);
         let probe = matches!(pc, Call::Done(ST_OK, ..)) && pn == po.len()
             && PROBE_REGS.iter().enumerate().all(|(i, off)| u32::from_le_bytes([po[i * 4], po[i * 4 + 1], po[i * 4 + 2], po[i * 4 + 3]]) == 0x4a00_0000 | (i as u32) << 8 | *off as u32);
+        // step 4b-2b: the frame read runs `hal::sdio::Bus::read_frame` over the grant. On the fake page every SDHCI
+        // command fails at once (the all-ones INT_STATUS clear reads back as an error), so the first read reports the
+        // mailbox interrupt (all ones includes I_HMB_HOST_INT) and a re-read past it reports dry; the lean call
+        // leaves no bytes on the IO page
+        let rxr = |skip: bool, s: &mut Server| {
+            let mut i = [0u8; hal::wifisrvabi::rxmsg::IN_LEN];
+            hal::wifisrvabi::rxmsg::encode_in(0x1800_2000, 0, skip, false, 2048, &mut i);
+            let mut o = [0u8; OUT_MAX];
+            let (c, n) = s.call_lean(CMD_RX_READ, &i, &mut o);
+            let mut rx = [0u8; 2048];
+            (matches!(c, Call::Done(ST_OK, ..))).then(|| hal::wifisrvabi::rxmsg::decode_out(&o[..n], &mut rx)).flatten().map(|r| r.0)
+        };
+        let rx_el0 = rxr(false, &mut s) == Some(hal::sdio::RxRead::HostInt) && rxr(true, &mut s) == Some(hal::sdio::RxRead::Dry) && s.io_clean();
         // a fault: reset + restart counted, the next call held off by the backoff, then a fresh incarnation
         let tx_left = s.tx_push(&[1, 2, 3]);
         let fault = s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.faults == 1 && s.restarts == 1 && s.call(CMD_INIT) == Call::Backoff;
@@ -394,10 +425,10 @@ mod imp {
         let t1 = now_ms();
         while now_ms() < t1 + BACKOFF_MS + 5 {}
         let doubled = f1 && s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() > BACKOFF_MS;
-        let pass = init && rx && tx && resident && hostile && probe && fault && fresh && wiped && doubled;
+        let pass = init && rx && tx && resident && hostile && probe && rx_el0 && fault && fresh && wiped && doubled;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
-            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, fault, fresh, wiped, doubled
+            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} step 4b-2b: a frame read in EL0 over the grant (mailbox, then dry; IO page clean)={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
+            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, rx_el0, fault, fresh, wiped, doubled
         ));
         pass
     }
@@ -562,6 +593,48 @@ pub mod keyer {
         let _ = ok_call(CMD_PMKSA_REMOVE, &inp, &mut []);
     }
 
+    // ---- step 4b-2b: the RX frame read in el0-wifi ----
+    /// Frame reads served by el0-wifi; replies refused by the kernel's re-check (each terminates the frame).
+    pub static mut RX_EL0: u64 = 0;
+    pub static mut RX_REFUSED: u64 = 0;
+    /// One frame read through el0-wifi. None = no server, backoff, a fault, or a refused reply (the driver reads
+    /// in-kernel instead; after a fault or a refusal it first terminates any half-read frame).
+    pub(crate) fn rx_read(sdb: u32, max_dry: u32, skip: bool, block: bool, rx: &mut [u8]) -> Option<(hal::sdio::RxRead, u32)> {
+        use hal::wifisrvabi::rxmsg;
+        let s = srv()?;
+        let mut inp = [0u8; rxmsg::IN_LEN];
+        rxmsg::encode_in(sdb, max_dry, skip, block, rx.len(), &mut inp);
+        let mut o = [0u8; OUT_MAX];
+        let (c, n) = s.call_lean(CMD_RX_READ, &inp, &mut o);
+        let lost = |refused: bool| unsafe {
+            if refused {
+                RX_REFUSED += 1;
+            }
+            #[cfg(feature = "cm5")]
+            {
+                arch_aarch64::cyw43::EL0_RX_LOST = true;
+            }
+        };
+        match c {
+            Call::Done(ST_OK, ..) => {}
+            Call::Backoff => return None,
+            _ => {
+                lost(false);
+                return None;
+            }
+        }
+        match rxmsg::decode_out(&o[..n], rx) {
+            Some(r) => {
+                unsafe { RX_EL0 += 1 };
+                Some(r)
+            }
+            None => {
+                lost(true);
+                None
+            }
+        }
+    }
+
     /// The bridge functions, for `sae_selftest`.
     #[cfg(feature = "wpa3")]
     pub mod test {
@@ -577,7 +650,7 @@ pub mod keyer {
                 unsafe { WIFI = Some(s) };
                 #[cfg(feature = "cm5")]
                 unsafe {
-                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove });
+                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read });
                 }
                 #[cfg(all(feature = "cm5", feature = "wpa3"))]
                 let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
@@ -617,6 +690,12 @@ pub mod keyer {
             Some(s) => (s.calls, s.faults, s.restarts, unsafe { EL0_STARTS }),
             None => (0, 0, 0, 0),
         }
+    }
+
+    /// (frame reads served by el0-wifi, replies the kernel refused).
+    #[cfg(feature = "cm5")]
+    pub fn rx_stats() -> (u64, u64) {
+        unsafe { (RX_EL0, RX_REFUSED) }
     }
 
     /// `[P-el0srv-keyer]` (QEMU): a full 4-way through el0-wifi against a simulated station.
