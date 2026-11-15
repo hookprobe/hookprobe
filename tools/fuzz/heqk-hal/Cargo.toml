@@ -50,10 +50,15 @@ doc = false
 bench = false
 
 [[bin]]
-name = "wpa_keyer"
-path = "fuzz_targets/wpa_keyer.rs"
 name = "el0_ring"
 path = "fuzz_targets/el0_ring.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wpa_keyer"
+path = "fuzz_targets/wpa_keyer.rs"
 test = false
 doc = false
 bench = false
