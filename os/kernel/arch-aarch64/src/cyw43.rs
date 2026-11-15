@@ -4556,6 +4556,38 @@ pub enum KeyRx {
 
 static mut KEYER: hal::wpakeyer::Keyer = hal::wpakeyer::Keyer::new();
 
+/// ADR 0065 step 3b: the authenticator in el0-wifi (set by the kernel when the server loads). Every call answers
+/// None when the server is absent, faulted or in its restart backoff: the in-kernel `KEYER` then serves (D5).
+#[derive(Clone, Copy)]
+pub struct El0Keyer {
+    pub start: fn(&hal::wpakeyer::Start, u64, &mut [u8]) -> Option<hal::wpakeyer::Out>,
+    pub expect: fn(&[u8; 6]) -> Option<Option<(bool, u64)>>,
+    pub eapol: fn(&[u8; 6], &[u8], u64, &mut [u8]) -> Option<hal::wpakeyer::Out>,
+    pub tick: fn(u64, &mut [u8]) -> Option<hal::wpakeyer::Out>,
+    pub abort: fn(&[u8; 6]),
+}
+pub static mut EL0_KEYER: Option<El0Keyer> = None;
+/// Handshakes the driver started in EL0 and has not seen finish (so the loop does not cross into EL0 to tick an idle
+/// authenticator: metal k3b made ~30 k idle EL0 calls / s before this). Cleared when the server stops answering.
+static mut EL0_PENDING: u32 = 0;
+/// When the EL0 authenticator was last ticked (resends are due at 1 s; a 100 ms tick is plenty).
+static mut EL0_TICK_MS: u64 = 0;
+fn el0_pending_add(d: i32) {
+    unsafe { EL0_PENDING = (EL0_PENDING as i64 + d as i64).clamp(0, 64) as u32 };
+}
+
+fn el0() -> Option<El0Keyer> {
+    unsafe { *core::ptr::addr_of!(EL0_KEYER) }
+}
+
+/// Who is keying `sta`: (in EL0?, (Secure, replay)).
+fn key_expect(sta: &[u8; 6]) -> Option<(bool, (bool, u64))> {
+    if let Some(Some(e)) = el0().and_then(|h| (h.expect)(sta)) {
+        return Some((true, e));
+    }
+    keyer().expect(sta).map(|e| (false, e))
+}
+
 fn keyer() -> &'static mut hal::wpakeyer::Keyer {
     unsafe { &mut *core::ptr::addr_of_mut!(KEYER) }
 }
@@ -4574,7 +4606,7 @@ impl hal::wpakeyer::KeyCrypto for DriverCrypto {
     }
 }
 
-/// Stations with a handshake in progress (the loop's health line).
+/// Stations with a handshake in progress in the in-kernel copy (the loop's health line).
 pub fn ap_key_pending() -> usize {
     keyer().pending()
 }
@@ -4633,9 +4665,19 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
     let _ = wlc_set_key(0, &[], sta, false);
     let mut st = hal::wpakeyer::Start { sta: *sta, aa: *ap_mac, pmk: *pmk, akm8, pmkid: pmkid.copied(), anonce, kd: key_data() };
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
-    if let hal::wpakeyer::Out::Send(n) = keyer().start(st, now_ms, &mut out) {
+    // the EL0 authenticator first (ADR 0065 step 3b); the in-kernel copy when it cannot answer
+    keyer().abort(sta);
+    let r = match el0().and_then(|h| (h.start)(&st, now_ms, &mut out)) {
+        Some(r) => {
+            el0_pending_add(1);
+            r
+        }
+        None => keyer().start(st, now_ms, &mut out),
+    };
+    if let hal::wpakeyer::Out::Send(n) = r {
         let _ = sdpcm_data_tx(&out[..n]);
     }
+    hal::wpaauth::wipe(&mut out);
     hal::wpaauth::wipe(&mut st.pmk);
     hal::wpaauth::wipe(&mut st.kd.gtk);
     dbg_putc(b'1');
@@ -4644,6 +4686,12 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
 
 /// The station left: forget its handshake.
 pub fn ap_key_abort(sta: &[u8; 6]) {
+    if let Some(h) = el0() {
+        if let Some(Some(_)) = (h.expect)(sta) {
+            el0_pending_add(-1);
+        }
+        (h.abort)(sta);
+    }
     keyer().abort(sta);
 }
 
@@ -4659,7 +4707,7 @@ fn key_candidate(rx: &[u8], ch: u8, doff: usize) -> Option<[u8; 6]> {
     }
     let mut sta = [0u8; 6];
     sta.copy_from_slice(&h[6..12]);
-    keyer().expect(&sta).map(|_| sta)
+    key_expect(&sta).map(|_| sta)
 }
 
 /// Install a keyed station's pairwise key and authorize it; the handshake's report.
@@ -4690,7 +4738,7 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
 /// One SDPCM frame from `ap_poll`: a keying station's M2 / M4 advances its handshake.
 pub fn ap_key_rx(rx: &[u8], ch: u8, doff: usize) -> KeyRx {
     let Some(sta) = key_candidate(rx, ch, doff) else { return KeyRx::NotOurs };
-    let Some((secure, replay)) = keyer().expect(&sta) else { return KeyRx::NotOurs };
+    let Some((in_el0, (secure, replay))) = key_expect(&sta) else { return KeyRx::NotOurs };
     let mut buf = [0u8; 512];
     let n = match eapol_match(rx, ch, doff, &sta, secure, replay, Some(&mut buf)) {
         Some(KeyWait::Got(n)) => n,
@@ -4698,7 +4746,23 @@ pub fn ap_key_rx(rx: &[u8], ch: u8, doff: usize) -> KeyRx {
     };
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
     let now = KEY_NOW_MS.load(core::sync::atomic::Ordering::Relaxed);
-    let r = keyer().on_eapol(&sta, &buf[..n], now, &mut DriverCrypto, &mut out);
+    let r = if in_el0 {
+        // a fault forgets the server's handshakes: this station's 4-way times out and it re-associates
+        match el0().and_then(|h| (h.eapol)(&sta, &buf[..n], now, &mut out)) {
+            Some(r) => {
+                if matches!(r, hal::wpakeyer::Out::Keyed { .. } | hal::wpakeyer::Out::Failed(_)) {
+                    el0_pending_add(-1);
+                }
+                r
+            }
+            None => {
+                unsafe { EL0_PENDING = 0 };
+                hal::wpakeyer::Out::None
+            }
+        }
+    } else {
+        keyer().on_eapol(&sta, &buf[..n], now, &mut DriverCrypto, &mut out)
+    };
     hal::wpaauth::wipe(&mut buf);
     let res = match r {
         hal::wpakeyer::Out::Send(k) => {
@@ -4722,7 +4786,27 @@ static KEY_NOW_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64
 pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     KEY_NOW_MS.store(now_ms, core::sync::atomic::Ordering::Relaxed);
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
-    let r = keyer().tick(now_ms, &mut out);
+    // the EL0 authenticator is ticked only while it has handshakes, and at most every 100 ms
+    let due = unsafe { EL0_PENDING > 0 && now_ms.wrapping_sub(EL0_TICK_MS) >= 100 };
+    let el0r = if due {
+        unsafe { EL0_TICK_MS = now_ms };
+        match el0().and_then(|h| (h.tick)(now_ms, &mut out)) {
+            Some(r) => Some(r),
+            None => {
+                unsafe { EL0_PENDING = 0 };
+                None
+            }
+        }
+    } else {
+        None
+    };
+    if matches!(el0r, Some(hal::wpakeyer::Out::Failed(_))) {
+        el0_pending_add(-1);
+    }
+    let r = match el0r {
+        Some(hal::wpakeyer::Out::None) | None => keyer().tick(now_ms, &mut out),
+        Some(r) => r,
+    };
     let res = match r {
         hal::wpakeyer::Out::Send(n) => {
             let _ = sdpcm_data_tx(&out[..n]);
