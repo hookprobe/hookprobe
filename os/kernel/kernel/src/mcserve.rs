@@ -760,6 +760,7 @@ pub fn run() -> ! {
     let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 (loads the EL0 LAN-services server)
     let _ = crate::el0srv::selftest(); // ADR 0065 step 2: the resident EL0 driver substrate (el0-wifi + a fake device)
     let _ = crate::el0srv::keyer::selftest(); // ADR 0065 step 3b: the WPA 4-way in el0-wifi
+    let _ = crate::lansvc::excursion_cost(200); // out-of-kernel Wi-Fi driver ADR, step 1 (QEMU: path only, times are not metal)
     #[cfg(feature = "wpa3")]
     let _ = crate::lansvc::sae_selftest(); // ADR 0050 D4 step 5c: the SAE station-frame walk in EL0
     let _ = crate::hsh::selftest(0); // ADR 0059 step 4a: the EL0 management shell + the management ABI
