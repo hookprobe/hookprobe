@@ -19,6 +19,7 @@ updates:
       - "/os/kernel/el0-wasmhost"
       - "/os/kernel/el0-lansvc"
       - "/os/kernel/el0-hsh"
+      - "/os/kernel/el0-wifi"
       - "/os/kernel/wasip1-fixture"
       - "/os/kernel/efiboot"
       - "/os/build/heqk-sign"

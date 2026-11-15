@@ -1,0 +1,10 @@
+fn main() {
+    let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    let script = if std::env::var("CARGO_FEATURE_CM5").is_ok() { "link-cm5.ld" } else { "link.ld" };
+    println!("cargo:rustc-link-arg=-T{dir}/{script}");
+    // 4 KiB segments in the file too (lld's aarch64 default 64 KiB pads 64 KiB before the first PT_LOAD)
+    println!("cargo:rustc-link-arg=-zmax-page-size=4096");
+    println!("cargo:rustc-link-arg=--gc-sections");
+    println!("cargo:rerun-if-changed=link.ld");
+    println!("cargo:rerun-if-changed=link-cm5.ld");
+}
