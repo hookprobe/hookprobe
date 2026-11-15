@@ -91,6 +91,7 @@ mod mgmtabi;
 #[cfg(feature = "mcserve")]
 mod hsh;
 mod el0srv; // ADR 0065 step 2: the resident EL0 driver-server substrate (el0-wifi)
+mod el0as; // ADR 0065 S0: each resident EL0 server in its own address space
 mod datavol;
 mod ownerjournal;
 mod rpmb;
