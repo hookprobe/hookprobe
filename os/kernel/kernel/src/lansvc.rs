@@ -551,6 +551,60 @@ fn sta_sae(body: &[u8], h2e_ok: bool) -> Option<hal::saewire::Msg> {
     Some(m)
 }
 
+/// The cost of one EL0 excursion on this CPU (the out-of-kernel Wi-Fi driver ADR, step 1): `iters` round trips of
+/// `CMD_NOP_COPY` per payload size, against the same copy done in-kernel. Prints `[EL0-COST]`; returns the median
+/// ns per call for each size (0, 64, 1514 B) — None without the server.
+pub fn excursion_cost(iters: u32) -> Option<[u64; 3]> {
+    #[cfg(feature = "mctls")]
+    {
+        let s = el0::server()?;
+        let f = crate::clock::freq().max(1);
+        let ns = |t: u64| t.saturating_mul(1_000_000_000) / f;
+        let buf = [0x5au8; 1514];
+        let mut med = [0u64; 3];
+        for (i, &len) in [0usize, 64, 1514].iter().enumerate() {
+            let mut v = [0u64; 64];
+            let k = (iters as usize).min(v.len()).max(1);
+            let mut fail = 0u32;
+            let mut worst = 0u64;
+            let t_all = crate::clock::ticks();
+            for r in 0..iters as usize {
+                let t0 = crate::clock::ticks();
+                let (st, n) = s.call(hal::lansvcabi::CMD_NOP_COPY, &buf[..len]);
+                let d = crate::clock::ticks().wrapping_sub(t0);
+                if st != hal::lansvcabi::ST_OK || n != len {
+                    fail += 1;
+                }
+                worst = worst.max(d);
+                if r < k {
+                    v[r] = d;
+                }
+            }
+            let avg = crate::clock::ticks().wrapping_sub(t_all) / u64::from(iters.max(1));
+            v[..k].sort_unstable();
+            med[i] = ns(v[k / 2]);
+            // the same copy in-kernel, for scale
+            let mut sink = [0u8; 1514];
+            let t0 = crate::clock::ticks();
+            for _ in 0..iters {
+                sink[..len].copy_from_slice(&buf[..len]);
+                core::hint::black_box(&sink);
+            }
+            let kcopy = crate::clock::ticks().wrapping_sub(t0) / u64::from(iters.max(1));
+            arch_aarch64::_print(format_args!(
+                " [EL0-COST] {} B payload x{}: median {} ns, avg {} ns, worst {} ns per EL0 round trip (in-kernel copy {} ns){}\n",
+                len, iters, med[i], ns(avg), ns(worst), ns(kcopy), if fail > 0 { " — CALLS FAILED" } else { "" }
+            ));
+        }
+        Some(med)
+    }
+    #[cfg(not(feature = "mctls"))]
+    {
+        let _ = iters;
+        None
+    }
+}
+
 /// Route the DHCP server's parse (step 2b) and the WAN control parsers (step 3) through `el0-lansvc` (called once
 /// at boot, before any client is served or the uplink comes up).
 pub fn install_dhcp() {
