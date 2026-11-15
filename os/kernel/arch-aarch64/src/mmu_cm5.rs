@@ -167,7 +167,10 @@ pub fn map_user_nc(va: usize, pa: usize) {
 /// being latent the moment range-mappers are added.
 #[inline]
 fn user_va_ok(va: usize) -> bool {
-    va >= USER_VA_BASE && va < USER_VA_BASE + M2 as usize && (va & 0xFFF) == 0
+    // ADR 0065 S0: a per-AS space covers the same two 2 MiB blocks as the global window (each block its own private
+    // L3); metal 2026-11-15: el0-lansvc (0x1_4020_0000) and el0-wifi (0x1_4034_0000) sit in the second block, and a
+    // first-block-only check refused their every page ("map image page refused").
+    va >= USER_VA_BASE && va < USER_VA_BASE + USER_WINDOW && (va & 0xFFF) == 0
 }
 /// The global (single-AS) window: both 2 MiB blocks.
 #[inline]
@@ -469,14 +472,17 @@ pub fn new_addr_space() -> (usize, u16) {
             core::ptr::write_volatile(dst.add(i), core::ptr::read_volatile(src.add(i)));
         }
     }
-    // Give this AS its own GB5 user window (private L2->L3).
+    // Give this AS its own GB5 user window: a private L2 with one private L3 per 2 MiB block of the window.
     let l2u = alloc_frame();
     let l3u = alloc_frame();
-    if l2u == 0 || l3u == 0 {
+    let l3u2 = alloc_frame();
+    if l2u == 0 || l3u == 0 || l3u2 == 0 {
         return (0, 0);
     }
+    const _: () = assert!(USER_WINDOW == 2 * M2 as usize);
     unsafe {
         core::ptr::write_volatile((l2u as *mut u64).add(0), (l3u as u64) | TABLE);
+        core::ptr::write_volatile((l2u as *mut u64).add(1), (l3u2 as u64) | TABLE);
         core::ptr::write_volatile(dst.add(USER_GB as usize), (l2u as u64) | TABLE);
         core::arch::asm!("dsb ish");
     }
@@ -493,17 +499,20 @@ pub fn new_addr_space() -> (usize, u16) {
     (l1, asid)
 }
 
-/// Locate an address space's private GB5 user L3 table from its L1 root.
-fn user_l3_of(l1_root: usize) -> *mut u64 {
+/// Locate the private user L3 table covering `va` (in the window, checked by the callers) from an L1 root.
+fn user_l3_of(l1_root: usize, va: usize) -> *mut u64 {
     let l1 = l1_root as *const u64;
     let e1 = unsafe { core::ptr::read_volatile(l1.add(USER_GB as usize)) };
     let l2 = (e1 & 0xFFFF_FFFF_F000) as *const u64;
-    let e2 = unsafe { core::ptr::read_volatile(l2.add(0)) };
+    if l2.is_null() {
+        return core::ptr::null_mut();
+    }
+    let e2 = unsafe { core::ptr::read_volatile(l2.add((va - USER_VA_BASE) / M2 as usize)) };
     (e2 & 0xFFFF_FFFF_F000) as *mut u64
 }
 
 /// Write an EL0 page into a specific address space's private user table (ASID-
-/// tagged / non-global). `va` must be in the GB5 user window's first 2 MiB block.
+/// tagged / non-global). `va` must be in the GB5 user window (either 2 MiB block).
 fn map_user_in(l1_root: usize, va: usize, desc: u64) -> bool {
     if l1_root == 0 {
         return false;
@@ -515,7 +524,7 @@ fn map_user_in(l1_root: usize, va: usize, desc: u64) -> bool {
     if !user_va_ok(va) {
         return false;
     }
-    let l3 = user_l3_of(l1_root);
+    let l3 = user_l3_of(l1_root, va);
     if l3.is_null() {
         return false;
     }
@@ -551,7 +560,7 @@ pub fn page_desc_in(l1_root: usize, va: usize) -> u64 {
     if l1_root == 0 || !user_va_ok(va) {
         return 0;
     }
-    let l3 = user_l3_of(l1_root);
+    let l3 = user_l3_of(l1_root, va);
     if l3.is_null() {
         return 0;
     }
