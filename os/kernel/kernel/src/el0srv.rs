@@ -110,8 +110,10 @@ mod imp {
         Code,
         Data,
         DataRo,
-        /// A device grant. Step 2's fake device is RAM, so it maps as data; step 4 maps the SDHCI page as Device.
+        /// A real MMIO grant (step 4: the SDHCI register page): Device-nGnRE, EL0 RW, never executable.
         Dev,
+        /// Step 2's fake device: a RAM page, mapped as data.
+        FakeDev,
     }
     fn map(va: usize, pa: usize, k: Kind) -> bool {
         #[cfg(feature = "cm5")]
@@ -122,7 +124,11 @@ mod imp {
                     m::map_user_code(va, pa);
                     true
                 }
-                Kind::Data | Kind::Dev => m::map_user_data(va, pa),
+                Kind::Data | Kind::FakeDev => m::map_user_data(va, pa),
+                Kind::Dev => {
+                    m::map_user_device(va, pa);
+                    true
+                }
                 Kind::DataRo => m::map_user_data_ro(va, pa),
             }
         }
@@ -131,7 +137,8 @@ mod imp {
             let m = arch_aarch64::Mmu;
             match k {
                 Kind::Code => m.map_user_code_page(va, pa),
-                Kind::Data | Kind::Dev => m.map_user_data_page(va, pa),
+                Kind::Data | Kind::FakeDev => m.map_user_data_page(va, pa),
+                Kind::Dev => m.map_user_device_page(va, pa),
                 Kind::DataRo => m.map_user_data_ro_page(va, pa),
             }
         }
@@ -143,9 +150,20 @@ mod imp {
         crate::clock::ticks() / (crate::clock::freq() / 1000).max(1)
     }
 
-    /// Load `el0-wifi`, granting it the device page at physical `dev_pa` when there is one (step 2's fake device;
+    /// Load `el0-wifi` with its device grant (step 2: a fake device;
     /// step 3 needs none: the bus stays in EL1; step 4 grants the SDHCI page).
-    pub fn load(dev_pa: Option<usize>) -> Result<Server, &'static str> {
+    /// What device page, if any, the server is granted.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    pub enum Grant {
+        None,
+        /// Step 2's fake device: a RAM frame the caller owns.
+        Fake(usize),
+        /// A real MMIO page (step 4: the SDHCI registers), mapped Device-nGnRE. Granted on the CM5 AP boot only.
+        #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
+        Mmio(usize),
+    }
+
+    pub fn load(grant: Grant) -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(WIFI_ELF).map_err(|_| "ELF parse")?;
         let mut s = Server {
             entry: parsed.entry,
@@ -207,9 +225,17 @@ mod imp {
         }
         zero(c);
         s.ctrl = c;
-        if let Some(d) = dev_pa {
-            if !map(BASE + DEV_OFF, d, Kind::Dev) {
-                return Err("map device refused");
+        match grant {
+            Grant::None => {}
+            Grant::Fake(d) => {
+                if !map(BASE + DEV_OFF, d, Kind::FakeDev) {
+                    return Err("map device refused");
+                }
+            }
+            Grant::Mmio(d) => {
+                if !map(BASE + DEV_OFF, d, Kind::Dev) {
+                    return Err("map device refused");
+                }
             }
         }
         for (off, r) in [(RX_OFF, &mut s.rx), (TX_OFF, &mut s.tx)] {
@@ -321,7 +347,7 @@ mod imp {
             return false;
         }
         zero(dev);
-        let mut s = match load(Some(dev)) {
+        let mut s = match load(Grant::Fake(dev)) {
             Ok(s) => s,
             Err(why) => {
                 arch_aarch64::_print(format_args!(" [P-el0srv] FAIL — el0-wifi did not load: {}\n", why));
@@ -347,6 +373,14 @@ mod imp {
         // a hostile driver's RX ring is refused, counted, resynced
         let hostile = s.call(CMD_SELFTEST_BAD_RING) == Call::Done(ST_OK, 0, 5)
             && s.rx_pop(&mut out) == ring::Pop::Bad && s.bad_rings == 1 && s.rx_pop(&mut out) == ring::Pop::Empty;
+        // step 4a: the server reads the granted page's identity registers (here: a known pattern in the fake device)
+        for (i, off) in PROBE_REGS.iter().enumerate() {
+            unsafe { core::ptr::write_volatile((dev + off) as *mut u32, 0x4a00_0000 | (i as u32) << 8 | *off as u32) };
+        }
+        let mut po = [0u8; PROBE_REGS.len() * 4];
+        let (pc, pn) = s.call_io(CMD_BUS_PROBE, &[], &mut po);
+        let probe = matches!(pc, Call::Done(ST_OK, ..)) && pn == po.len()
+            && PROBE_REGS.iter().enumerate().all(|(i, off)| u32::from_le_bytes([po[i * 4], po[i * 4 + 1], po[i * 4 + 2], po[i * 4 + 3]]) == 0x4a00_0000 | (i as u32) << 8 | *off as u32);
         // a fault: reset + restart counted, the next call held off by the backoff, then a fresh incarnation
         let tx_left = s.tx_push(&[1, 2, 3]);
         let fault = s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.faults == 1 && s.restarts == 1 && s.call(CMD_INIT) == Call::Backoff;
@@ -360,10 +394,10 @@ mod imp {
         let t1 = now_ms();
         while now_ms() < t1 + BACKOFF_MS + 5 {}
         let doubled = f1 && s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() > BACKOFF_MS;
-        let pass = init && rx && tx && resident && hostile && fault && fresh && wiped && doubled;
+        let pass = init && rx && tx && resident && hostile && probe && fault && fresh && wiped && doubled;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
-            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, fault, fresh, wiped, doubled
+            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
+            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, fault, fresh, wiped, doubled
         ));
         pass
     }
@@ -378,7 +412,7 @@ mod imp {
 // the bridge is reached through the CM5 driver hook (and, for SAE, the wpa3 selftest): unused in other QEMU builds
 #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub mod keyer {
-    use super::imp::{load, Call, Server};
+    use super::imp::{load, Call, Grant, Server};
     use hal::wifisrvabi::{keymsg, saemsg, *};
     use hal::wpakeyer::{Out, Start};
 
@@ -537,7 +571,7 @@ pub mod keyer {
     /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     pub fn install() -> bool {
-        match load(None) {
+        match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
             Ok(mut s) => {
                 let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
                 unsafe { WIFI = Some(s) };
@@ -547,6 +581,8 @@ pub mod keyer {
                 }
                 #[cfg(all(feature = "cm5", feature = "wpa3"))]
                 let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
+                #[cfg(feature = "cm5")]
+                bus_probe_check();
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi loaded at {:#x}: the WPA 4-way authenticator and its keys run in EL0 (ADR 0065 step 3b; in-kernel copy = fallback) init={}\n", super::imp::BASE, ok));
                 ok
             }
@@ -555,6 +591,23 @@ pub mod keyer {
                 false
             }
         }
+    }
+
+    /// ADR 0065 step 4a: el0-wifi reads the SDHCI identity registers through its Device mapping; they must equal the
+    /// kernel's own reads (the grant maps the right page with the right attributes).
+    #[cfg(feature = "cm5")]
+    fn bus_probe_check() -> bool {
+        let el1 = arch_aarch64::cyw43::sdhci_ident();
+        let mut o = [0u8; PROBE_REGS.len() * 4];
+        let ok = ok_call(CMD_BUS_PROBE, &[], &mut o) == Some(o.len());
+        let el0: [u32; 6] = core::array::from_fn(|i| u32::from_le_bytes([o[i * 4], o[i * 4 + 1], o[i * 4 + 2], o[i * 4 + 3]]));
+        let same = ok && el0 == el1;
+        arch_aarch64::_print(format_args!(
+            " [EL0-WIFI] step 4a bus probe: el0-wifi read the SDHCI page through its Device grant: caps {:#010x}/{:#010x} ver {:#06x} present {:#010x} hostctl {:#010x} clk {:#010x} — {}\n",
+            el0[0], el0[1], el0[2] >> 16, el0[3], el0[4], el0[5],
+            if same { "EQUAL to the kernel's reads" } else if ok { "DIFFERS from the kernel's reads" } else { "probe call failed" }
+        ));
+        same
     }
 
     /// (calls, faults, restarts, handshakes started in EL0) for the beat / health.
@@ -569,7 +622,7 @@ pub mod keyer {
     /// `[P-el0srv-keyer]` (QEMU): a full 4-way through el0-wifi against a simulated station.
     pub fn selftest() -> bool {
         use hal::wpakeyer::{FRAME_MAX, KeyData};
-        let mut s = match load(None) {
+        let mut s = match load(Grant::None) {
             Ok(s) => s,
             Err(_) => return false,
         };
@@ -634,7 +687,7 @@ pub fn sae_selftest() -> bool {
     use hal::wifisrvabi::*;
     use hal::wpakeyer::{KeyData, Out, Start, FRAME_MAX};
     use keyer::*;
-    let mut s = match imp::load(None) {
+    let mut s = match imp::load(imp::Grant::None) {
         Ok(s) => s,
         Err(_) => return false,
     };
