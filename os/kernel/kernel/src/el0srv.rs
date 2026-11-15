@@ -412,6 +412,21 @@ mod imp {
             (matches!(c, Call::Done(ST_OK, ..))).then(|| hal::wifisrvabi::rxmsg::decode_out(&o[..n], &mut rx)).flatten().map(|r| r.0)
         };
         let rx_el0 = rxr(false, &mut s) == Some(hal::sdio::RxRead::HostInt) && rxr(true, &mut s) == Some(hal::sdio::RxRead::Dry) && s.io_clean();
+        // step 4c: a data frame built + written in EL0 over the grant: a small frame is attempted (the fake page fails
+        // every command: Failed, byte mode); a 1514-B frame with block TX off is refused before the bus (TooBig); a
+        // malformed request is refused (BAD_CMD); the lean call leaves no bytes on the IO page
+        let txw = |eth: &[u8], big: bool, s: &mut Server| {
+            let mut i = [0u8; hal::wifisrvabi::txmsg::HDR + hal::wifisrvabi::txmsg::ETH_MAX];
+            let n = hal::wifisrvabi::txmsg::encode_in(5, 0, big, eth, &mut i).unwrap_or(0);
+            match s.call_lean(CMD_TX_DATA, &i[..n], &mut []).0 {
+                Call::Done(ST_OK, r0, _) => hal::wifisrvabi::txmsg::decode_r0(r0),
+                _ => None,
+            }
+        };
+        let tx_el0 = txw(&[0x66; 60], false, &mut s) == Some(hal::sdio::TxWrite::Failed { block: false })
+            && txw(&[0x66; 1514], false, &mut s) == Some(hal::sdio::TxWrite::TooBig)
+            && matches!(s.call_lean(CMD_TX_DATA, &[1, 2], &mut []).0, Call::Done(ST_BAD_CMD, ..))
+            && s.io_clean();
         // a fault: reset + restart counted, the next call held off by the backoff, then a fresh incarnation
         let tx_left = s.tx_push(&[1, 2, 3]);
         let fault = s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.faults == 1 && s.restarts == 1 && s.call(CMD_INIT) == Call::Backoff;
@@ -425,10 +440,10 @@ mod imp {
         let t1 = now_ms();
         while now_ms() < t1 + BACKOFF_MS + 5 {}
         let doubled = f1 && s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() > BACKOFF_MS;
-        let pass = init && rx && tx && resident && hostile && probe && rx_el0 && fault && fresh && wiped && doubled;
+        let pass = init && rx && tx && resident && hostile && probe && rx_el0 && tx_el0 && fault && fresh && wiped && doubled;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} step 4b-2b: a frame read in EL0 over the grant (mailbox, then dry; IO page clean)={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
-            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, rx_el0, fault, fresh, wiped, doubled
+            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} step 4b-2b: a frame read in EL0 over the grant (mailbox, then dry; IO page clean)={} step 4c: a data frame written in EL0 (attempted, too-big refused, bad request refused; IO page clean)={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
+            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, rx_el0, tx_el0, fault, fresh, wiped, doubled
         ));
         pass
     }
@@ -650,7 +665,7 @@ pub mod keyer {
                 unsafe { WIFI = Some(s) };
                 #[cfg(feature = "cm5")]
                 unsafe {
-                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read });
+                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data });
                 }
                 #[cfg(all(feature = "cm5", feature = "wpa3"))]
                 let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
@@ -692,10 +707,43 @@ pub mod keyer {
         }
     }
 
+    /// Data frames written by el0-wifi; calls lost to a fault / timeout (the kernel then terminates the write).
+    pub static mut TX_EL0: u64 = 0;
+    pub static mut TX_LOST: u64 = 0;
+    /// Step 4c: one data frame built and written by el0-wifi with sequence `seq`. None = no server / backoff (the
+    /// driver writes in-kernel); Some(Failed) after a fault, a timeout or an unknown answer, with
+    /// `cyw43::EL0_TX_LOST` set so the driver terminates a write that may have been cut off.
+    pub(crate) fn tx_data(seq: u8, ifidx: u8, big: bool, eth: &[u8]) -> Option<hal::sdio::TxWrite> {
+        use hal::wifisrvabi::txmsg;
+        let s = srv()?;
+        let mut inp = [0u8; txmsg::HDR + txmsg::ETH_MAX];
+        let n = txmsg::encode_in(seq, ifidx, big, eth, &mut inp)?;
+        let (c, _) = s.call_lean(CMD_TX_DATA, &inp[..n], &mut []);
+        let w = match c {
+            Call::Backoff => return None,
+            Call::Done(ST_OK, r0, _) => txmsg::decode_r0(r0),
+            _ => None,
+        };
+        match w {
+            Some(w) => {
+                unsafe { TX_EL0 += 1 };
+                Some(w)
+            }
+            None => {
+                unsafe { TX_LOST += 1 };
+                #[cfg(feature = "cm5")]
+                unsafe {
+                    arch_aarch64::cyw43::EL0_TX_LOST = true;
+                }
+                Some(hal::sdio::TxWrite::Failed { block: eth.len() + 16 > 512 })
+            }
+        }
+    }
+
     /// (frame reads served by el0-wifi, replies the kernel refused).
     #[cfg(feature = "cm5")]
-    pub fn rx_stats() -> (u64, u64) {
-        unsafe { (RX_EL0, RX_REFUSED) }
+    pub fn rx_stats() -> (u64, u64, u64, u64) {
+        unsafe { (RX_EL0, RX_REFUSED, TX_EL0, TX_LOST) }
     }
 
     /// `[P-el0srv-keyer]` (QEMU): a full 4-way through el0-wifi against a simulated station.

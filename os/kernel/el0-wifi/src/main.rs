@@ -13,6 +13,7 @@ use hal::wifisrvabi::keymsg;
 use hal::wpakeyer::{Direct, Keyer, Out, FRAME_MAX};
 use hal::wifisrvabi::saemsg;
 use hal::wifisrvabi::rxmsg;
+use hal::wifisrvabi::txmsg;
 use hal::wifisrvabi::*;
 
 #[cfg(not(feature = "cm5"))]
@@ -347,14 +348,30 @@ fn rx_read() -> ! {
     let r = bus.read_frame(sdb, &mut buf[..cap], max_dry.min(RX_EL0_MAX_DRY), skip, block, None, &mut delay_1ms);
     let mut o = [0u8; OUT_MAX];
     let n = rxmsg::encode_out(&r, &buf[..cap], bus.blk_diag, &mut o);
-    // the hot path: no key material crosses here, so only the bytes used are written / cleared (not the 4 KiB the
-    // keying commands scrub)
     io(OUT_OFF, n).copy_from_slice(&o[..n]);
     wr32(H_OUT_LEN, n as u32);
-    io(IN_OFF, rxmsg::IN_LEN).fill(0);
+    exit_lean(0)
+}
+
+/// The hot-path exit: no key material crosses on the frame commands, so only the input bytes used are cleared (not
+/// the 2 KiB IN scrub of `exit`, which the keying commands need).
+fn exit_lean(r0: u32) -> ! {
+    let n = (rd32(H_IN_LEN) as usize).min(IN_MAX);
+    io(IN_OFF, n).fill(0);
     wr32(H_STATUS, ST_OK);
-    wr32(H_R0, 0);
+    wr32(H_R0, r0);
     unsafe { core::arch::asm!("svc #0", in("x8") SYS_EXIT_USER, options(noreturn)) }
+}
+
+/// Step 4c: build ONE SDPCM data frame with the sequence the kernel assigned and write it to F2 (the kernel keeps
+/// the credit window and the flow-control mask, and advances the sequence only on `Sent`).
+fn tx_data() -> ! {
+    let Some((seq, ifidx, big, eth)) = txmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
+    let mut f = [0u8; hal::sdio::DATA_TX_BUF];
+    let n = hal::sdio::data_frame(seq, ifidx, eth, &mut f);
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let w = bus.write_frame(&f, n, big);
+    exit_lean(txmsg::encode_r0(w))
 }
 
 /// Commands served by this incarnation (in .bss: survives between calls, reset by the kernel after a fault).
@@ -407,6 +424,7 @@ pub extern "C" fn _start() -> ! {
         CMD_KEY_START_SAE => key_start_sae(),
         CMD_BUS_PROBE => bus_probe(),
         CMD_RX_READ => rx_read(),
+        CMD_TX_DATA => tx_data(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(rd32(H_CMD)),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring
