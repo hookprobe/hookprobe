@@ -27,6 +27,7 @@ import { startStory, storyEvents, hhmm } from '../store/story';
 import { CAMERA, SAMPLE_AT, sampleWhen } from '../store/sampleClock';
 import { incidentHref } from '../store/routes';
 import AppShell from './AppShell';
+import WifiDriverStatus from './WifiDriverStatus';
 import Drawer from './Drawer';
 
 const WORD = { protected: 'Protected', 'needs-attention': 'Needs attention', critical: 'At risk' } as const;
@@ -101,6 +102,7 @@ const MissionControlApp: Component = () => {
           </div>
         </div>
 
+        <WifiDriverStatus />
         <div class="bento">
           <button class="pcard span-4" onClick={() => setOpen('health')} style={{ 'border-width': '2px' }}>
             <span class="l0-label">Global health</span>
