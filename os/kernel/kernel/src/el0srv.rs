@@ -81,7 +81,6 @@ mod imp {
         entry: usize,
         sp_top: usize,
         ctrl: usize,
-        dev: usize,
         pub rx: PagedRing,
         pub tx: PagedRing,
         rw: [(usize, usize, usize); RW_MAX],
@@ -151,7 +150,6 @@ mod imp {
             entry: parsed.entry,
             sp_top: BASE + STACK_OFF + STACK_SIZE,
             ctrl: 0,
-            dev: dev_pa,
             rx: PagedRing { frames: [0; RING_PAGES] },
             tx: PagedRing { frames: [0; RING_PAGES] },
             rw: [(0, 0, 0); RW_MAX],
@@ -284,10 +282,6 @@ mod imp {
         /// Milliseconds until the next call is allowed (0 = now).
         pub fn backoff_left_ms(&self) -> u64 {
             self.next_ok.saturating_sub(now_ms())
-        }
-        /// Physical address of the granted device page.
-        pub fn dev_pa(&self) -> usize {
-            self.dev
         }
     }
 
