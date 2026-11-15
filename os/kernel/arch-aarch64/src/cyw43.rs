@@ -4481,94 +4481,13 @@ pub fn ap_dhcp_serve(our_mac: &[u8; 6], our_ip: &[u8; 4], offer_ip: &[u8; 4], bu
 // Crypto proven host-side (P-wifi-crypto): wpa_ptk/wpa_mic_sha1/aes_wrap/wpa_gtk_kde.
 // ===========================================================================
 
-#[derive(Clone, Copy)]
-pub struct ApAuth {
-    pub sta: [u8; 6],
-    pub m1_tx: bool,
-    pub m2_rx: bool,
-    pub m2_mic_ok: bool,
-    pub m3_tx: bool,
-    pub m4_rx: bool,
-    pub m4_mic_ok: bool,
-    pub ptk_set: bool,
-    pub gtk_set: bool, // (installed once at AP start — mirrored here for the verdict line)
-    pub authorized: bool,
-    pub reassoc: bool,  // the station (re)associated mid-handshake: restart with a fresh ANonce
-    pub deauth: bool,   // the station left mid-handshake: abandon
-    pub m1_sends: u32,
-    pub m3_sends: u32,
-    pub m2_mic_fail: u32, // MIC-failed pairwise frames ignored while waiting (hostapd keeps waiting)
-    pub replay: u64,      // the last replay counter sent
-}
-
-impl ApAuth {
-    pub fn new() -> Self {
-        ApAuth {
-            sta: [0; 6], m1_tx: false, m2_rx: false, m2_mic_ok: false, m3_tx: false,
-            m4_rx: false, m4_mic_ok: false, ptk_set: false, gtk_set: false, authorized: false,
-            reassoc: false, deauth: false, m1_sends: 0, m3_sends: 0, m2_mic_fail: 0, replay: 0,
-        }
-    }
-}
+/// Per-handshake counters (ADR 0065 step 3a: the pure keyer's type).
+pub type ApAuth = hal::wpakeyer::Auth;
 
 
 
 
-/// Build M1 (AP->STA): pairwise | ACK with the AKM's descriptor version (0x008a v2 / 0x0088 v0); ANonce; replay.
-/// M1 (AP->STA); with `pmkid` (a cached PMKSA keys this 4-way) it carries the PMKID KDE (dd 14 00-0f-ac:4 PMKID) as
-/// hostapd sends it. Returns the frame length.
-fn build_m1(m1: &mut [u8; 14 + 4 + 95 + 22], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, ki: u16, pmkid: Option<&[u8; 16]>) -> usize {
-    let body = 18usize;
-    for b in m1.iter_mut() { *b = 0; }
-    let kd = if let Some(p) = pmkid {
-        m1[body + 95..body + 101].copy_from_slice(&[0xdd, 0x14, 0x00, 0x0f, 0xac, 0x04]);
-        m1[body + 101..body + 117].copy_from_slice(p);
-        22
-    } else {
-        0
-    };
-    m1[body + 93..body + 95].copy_from_slice(&(kd as u16).to_be_bytes());
-    m1[0..6].copy_from_slice(sta);
-    m1[6..12].copy_from_slice(ap_mac);
-    m1[12] = 0x88;
-    m1[13] = 0x8E;
-    m1[14] = 2; // 802.1X version 2
-    m1[15] = 0x03; // EAPOL-Key
-    m1[16..18].copy_from_slice(&((95 + kd) as u16).to_be_bytes());
-    m1[body] = 0x02; // RSN key descriptor
-    m1[body + 1..body + 3].copy_from_slice(&ki.to_be_bytes());
-    m1[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes()); // CCMP pairwise key length
-    m1[body + 5..body + 13].copy_from_slice(&replay.to_be_bytes());
-    m1[body + 13..body + 45].copy_from_slice(anonce);
-    body + 95 + kd
-}
 
-/// Build M3 (AP->STA) with the given replay and re-MIC it (the MIC covers the counter, so a
-/// retransmit with a bumped counter must be re-signed). `wrapped` = the AES-wrapped key data.
-fn build_m3(m3: &mut [u8; 14 + 4 + 95 + 144], sta: &[u8; 6], ap_mac: &[u8; 6], anonce: &[u8; 32], replay: u64, kck: &[u8; 16], wrapped: &[u8], ki: u16, akm8: bool) -> usize {
-    let body = 18usize;
-    let kdw = wrapped.len().min(144);
-    for b in m3.iter_mut() { *b = 0; }
-    m3[0..6].copy_from_slice(sta);
-    m3[6..12].copy_from_slice(ap_mac);
-    m3[12] = 0x88;
-    m3[13] = 0x8E;
-    m3[14] = 2;
-    m3[15] = 0x03;
-    m3[16..18].copy_from_slice(&((95 + kdw) as u16).to_be_bytes());
-    m3[body] = 0x02;
-    // pairwise|install|ack|mic|secure|encrypted + descriptor version (0x13ca v2 / 0x13c8 v0).
-    m3[body + 1..body + 3].copy_from_slice(&ki.to_be_bytes());
-    m3[body + 3..body + 5].copy_from_slice(&16u16.to_be_bytes());
-    m3[body + 5..body + 13].copy_from_slice(&replay.to_be_bytes());
-    m3[body + 13..body + 45].copy_from_slice(anonce);
-    m3[body + 93..body + 95].copy_from_slice(&(kdw as u16).to_be_bytes());
-    m3[body + 95..body + 95 + kdw].copy_from_slice(&wrapped[..kdw]);
-    let end = body + 95 + kdw;
-    let mic = eapol_mic(kck, &m3[14..end], akm8); // MIC field still zero
-    m3[body + 77..body + 93].copy_from_slice(&mic);
-    end
-}
 
 /// Watch SDPCM channel-1 events for a client 802.11 association (`WLC_E_ASSOC_IND`) and return
 /// the station MAC (brcmf_event_msg_be.addr @ ev+48). Bounded; None if none in the window.
@@ -4600,10 +4519,6 @@ pub fn ap_wait_assoc(budget: u32) -> Option<[u8; 6]> {
 
 
 
-/// The EAPOL-Key MIC: HMAC-SHA1-128 (key-descriptor version 2, AKM 2) or AES-128-CMAC (AKM 8 / SAE).
-fn eapol_mic(kck: &[u8; 16], eapol: &[u8], akm8: bool) -> [u8; 16] {
-    if akm8 { crate::aes::aes_cmac(kck, eapol) } else { crate::wpa::wpa_mic_sha1(kck, eapol) }
-}
 
 
 /// Did the station's M2 RSNE (key data) advertise MFP-capable? ADR 0050 D4 step 5a: the walk runs in EL0.
@@ -4612,45 +4527,16 @@ fn m2_mfpc(m2: &[u8], body_off: usize) -> bool {
 }
 
 // ===========================================================================
-// G-E (2026-11-14): the NON-BLOCKING authenticator. The 4-way used to run inside one call from the AP loop
-// (`ap_authenticate`: M1, wait for M2, M3, wait for M4, up to 3 sends each, ~3 s per wait), so a station that never
-// answered froze forwarding, DNS and the TX drain for every client — metal: [WDOG] worst_loop_gap_ms 10–15.6 s, 220
-// handshakes with 3 M1 sends and no M2. Now `ap_key_start` sends M1 and returns; the station's EAPOL-Key frames come
-// through `ap_poll` (filtered by ethertype + source before the EL0 classifier runs); `ap_key_tick` retransmits after
-// KEY_RESEND_MS and gives up after 3 sends. Same frames, same replay rules, same EL0 MIC / PTK path (D4 step 5b).
+// The NON-BLOCKING authenticator (G-E, #1200), now the pure `hal::wpakeyer` state machine (ADR 0065 step 3a): this is
+// only the driver glue — the TRNG ANonce, the M3 key data this BSS sends (RSNE / GTK / IGTK), the frame I/O, and the
+// pairwise-key install + authorize. The same state machine runs in `el0-wifi` from step 3b; the M2 / M4 crypto here
+// goes through the EL0 LAN-services server (ADR 0050 D4 step 5b), unchanged.
 // ===========================================================================
 
-/// Retransmit interval for M1 / M3 (hostapd: 1 s after the first message).
-pub const KEY_RESEND_MS: u64 = 1000;
-/// Sends per message before the handshake is abandoned (hostapd dot11RSNAConfigPairwiseUpdateCount = 4; we keep 3).
-pub const KEY_MAX_SENDS: u32 = 3;
-const KEY_SLOTS: usize = 4;
+pub const KEY_RESEND_MS: u64 = hal::wpakeyer::RESEND_MS;
+pub const KEY_MAX_SENDS: u32 = hal::wpakeyer::MAX_SENDS;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum KStage {
-    M2,
-    M4,
-}
-
-#[derive(Clone, Copy)]
-struct KeySlot {
-    sta: [u8; 6],
-    ap_mac: [u8; 6],
-    pmk: [u8; 32],
-    akm8: bool,
-    pmkid: Option<[u8; 16]>,
-    anonce: [u8; 32],
-    replay: u64,
-    stage: KStage,
-    last_ms: u64,
-    kck: [u8; 16],
-    tk: [u8; 16],
-    wrapped: [u8; 144],
-    kdw: usize,
-    auth: ApAuth,
-}
-
-/// A finished handshake (keyed, or abandoned): the loop logs `auth` and acts on it.
+/// A finished or abandoned handshake: the loop logs `auth` and acts on it.
 #[derive(Clone, Copy)]
 pub struct KeyDone {
     pub sta: [u8; 6],
@@ -4668,46 +4554,72 @@ pub enum KeyRx {
     Done(KeyDone),
 }
 
-static mut KEYER: [Option<KeySlot>; KEY_SLOTS] = [None; KEY_SLOTS];
+static mut KEYER: hal::wpakeyer::Keyer = hal::wpakeyer::Keyer::new();
 
-fn keyer() -> &'static mut [Option<KeySlot>; KEY_SLOTS] {
+fn keyer() -> &'static mut hal::wpakeyer::Keyer {
     unsafe { &mut *core::ptr::addr_of_mut!(KEYER) }
 }
 
-/// Clear a slot, wiping its key material first.
-fn key_clear(o: &mut Option<KeySlot>) {
-    if let Some(s) = o.as_mut() {
-        hal::wpaauth::wipe(&mut s.pmk);
-        hal::wpaauth::wipe(&mut s.kck);
-        hal::wpaauth::wipe(&mut s.tk);
-        hal::wpaauth::wipe(&mut s.wrapped);
+/// The M2 / M4 crypto through the EL0 LAN-services server (in-kernel when it is absent, D5).
+struct DriverCrypto;
+impl hal::wpakeyer::KeyCrypto for DriverCrypto {
+    fn m2(&mut self, pmk: &[u8; 32], aa: &[u8; 6], spa: &[u8; 6], anonce: &[u8; 32], akm8: bool, m2: &[u8]) -> Option<[u8; 48]> {
+        crate::wanparse::sta_m2(pmk, aa, spa, anonce, akm8, m2)
     }
-    *o = None;
+    fn m4(&mut self, kck: &[u8; 16], akm8: bool, m4: &[u8]) -> bool {
+        crate::wanparse::sta_m4(kck, akm8, m4)
+    }
+    fn m2_mfpc(&mut self, m2: &[u8], body_off: usize) -> bool {
+        m2_mfpc(m2, body_off)
+    }
 }
 
 /// Stations with a handshake in progress (the loop's health line).
 pub fn ap_key_pending() -> usize {
-    keyer().iter().filter(|s| s.is_some()).count()
+    keyer().pending()
 }
 
-fn key_send_m1(s: &mut KeySlot) -> bool {
-    let ki1: u16 = if s.akm8 { 0x0088 } else { 0x008a };
-    let mut m1 = [0u8; 14 + 4 + 95 + 22];
-    let n = build_m1(&mut m1, &s.sta, &s.ap_mac, &s.anonce, s.replay, ki1, s.pmkid.as_ref());
-    sdpcm_data_tx(&m1[..n])
-}
-
-fn key_send_m3(s: &mut KeySlot) -> bool {
-    let ki3: u16 = if s.akm8 { 0x13c8 } else { 0x13ca };
-    let mut m3 = [0u8; 14 + 4 + 95 + 144];
-    let n = build_m3(&mut m3, &s.sta, &s.ap_mac, &s.anonce, s.replay, &s.kck, &s.wrapped[..s.kdw], ki3, s.akm8);
-    let ok = sdpcm_data_tx(&m3[..n]);
-    hal::wpaauth::wipe(&mut m3);
-    ok
+/// What M3 carries for this BSS: the RSNE (‖ RSNXE) it beacons, the GTK installed at AP start, and in the WPA3 modes
+/// the IGTK KDE (added only for a station that negotiates PMF).
+fn key_data() -> hal::wpakeyer::KeyData {
+    let mut rsne = [0u8; 40];
+    #[allow(unused_mut)]
+    let mut rl = RSN_IE_PSK_CCMP.len();
+    rsne[..rl].copy_from_slice(&RSN_IE_PSK_CCMP);
+    #[allow(unused_mut)]
+    let mut igtk = None;
+    #[cfg(feature = "wpa3")]
+    if w3().mode != SEC_WPA2 {
+        if w3().bcn_ie_len == 0 && !w3().bcn_join_retry {
+            w3().bcn_join_retry = true; // once per bring-up, never a control round-trip before every M3
+            let _ = wpa3_read_beacon_ies();
+        }
+        let s3 = w3();
+        if s3.bcn_ie_len > 0 {
+            // exactly what the firmware beacons (RSNE ‖ RSNXE)
+            rl = (s3.bcn_ie_len as usize).min(40);
+            rsne[..rl].copy_from_slice(&s3.bcn_ie[..rl]);
+        } else {
+            // batch 43: wpa_supplicant deauths with reason 17 unless M3 also repeats the RSNXE `f4 01 20`
+            let mut r = [0u8; 40];
+            rl = wpa3_rsne(&mut r).min(40);
+            rsne[..rl].copy_from_slice(&r[..rl]);
+        }
+        if !s3.m3_src_logged {
+            s3.m3_src_logged = true;
+            crate::_print(format_args!(" [WPA3] M3 RSNE source: {} ({} B)\n",
+                if s3.bcn_ie_len > 0 { "beacon read back" } else { "built" }, rl));
+        }
+        let mut k = [0u8; 30];
+        let _ = igtk_kde(&mut k);
+        igtk = Some(k);
+    }
+    let (gtk, gtk_keyid) = unsafe { *core::ptr::addr_of!(AP_GTK) };
+    hal::wpakeyer::KeyData { rsne, rsne_len: rl, gtk, gtk_keyid, igtk_kde: igtk }
 }
 
 /// Start (or restart, on a re-association) the 4-way for `sta`: fresh ANonce, the station's old pairwise key removed,
-/// M1 sent. Returns false when the TRNG failed (fail-closed: nothing sent). A full table evicts the oldest handshake.
+/// M1 sent. Returns false when the TRNG failed (fail-closed: nothing sent).
 pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool, pmkid: Option<&[u8; 16]>, now_ms: u64) -> bool {
     let mut anonce = [0u8; 32];
     for k in 0..4 {
@@ -4719,34 +4631,24 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
     // A station that re-associates while the fw still holds its PREVIOUS pairwise key would get our unicast M1
     // encrypted under the old PTK and drop it; hostapd removes the STA key on (re)assoc (WLC_SET_KEY, len 0).
     let _ = wlc_set_key(0, &[], sta, false);
-    let t = keyer();
-    let i = t.iter().position(|s| s.is_some_and(|s| s.sta == *sta))
-        .or_else(|| t.iter().position(|s| s.is_none()))
-        .unwrap_or_else(|| (0..KEY_SLOTS).min_by_key(|&i| t[i].map_or(0, |s| s.last_ms)).unwrap_or(0));
-    key_clear(&mut t[i]);
-    let mut auth = ApAuth::new();
-    auth.sta = *sta;
-    let mut s = KeySlot { sta: *sta, ap_mac: *ap_mac, pmk: *pmk, akm8, pmkid: pmkid.copied(), anonce, replay: 1, stage: KStage::M2,
-        last_ms: now_ms, kck: [0; 16], tk: [0; 16], wrapped: [0; 144], kdw: 0, auth };
-    s.auth.m1_tx = key_send_m1(&mut s);
-    s.auth.m1_sends = 1;
-    s.auth.replay = 1;
+    let mut st = hal::wpakeyer::Start { sta: *sta, aa: *ap_mac, pmk: *pmk, akm8, pmkid: pmkid.copied(), anonce, kd: key_data() };
+    let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
+    if let hal::wpakeyer::Out::Send(n) = keyer().start(st, now_ms, &mut out) {
+        let _ = sdpcm_data_tx(&out[..n]);
+    }
+    hal::wpaauth::wipe(&mut st.pmk);
+    hal::wpaauth::wipe(&mut st.kd.gtk);
     dbg_putc(b'1');
-    t[i] = Some(s);
     true
 }
 
 /// The station left: forget its handshake.
 pub fn ap_key_abort(sta: &[u8; 6]) {
-    for o in keyer().iter_mut() {
-        if o.is_some_and(|s| s.sta == *sta) {
-            key_clear(o);
-        }
-    }
+    keyer().abort(sta);
 }
 
 /// Cheap pre-filter (no EL0 call): an EAPOL frame (ethertype 0x888E) whose source is a keying station.
-fn key_candidate(rx: &[u8], ch: u8, doff: usize) -> Option<usize> {
+fn key_candidate(rx: &[u8], ch: u8, doff: usize) -> Option<[u8; 6]> {
     if ch != 2 || doff + 4 > rx.len() {
         return None;
     }
@@ -4755,144 +4657,61 @@ fn key_candidate(rx: &[u8], ch: u8, doff: usize) -> Option<usize> {
     if h[12..14] != [0x88, 0x8e] {
         return None;
     }
-    keyer().iter().position(|s| s.is_some_and(|s| h[6..12] == s.sta))
+    let mut sta = [0u8; 6];
+    sta.copy_from_slice(&h[6..12]);
+    keyer().expect(&sta).map(|_| sta)
+}
+
+/// Install a keyed station's pairwise key and authorize it; the handshake's report.
+fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
+    let mut auth = d.auth;
+    // flags 0 as brcmfmac's pairwise add_key (the PRIMARY flag belongs to the group key, installed at AP start).
+    // The firmware's reply to this SET is sometimes missed (metal: 23 handshakes `ptk_set=false authorized=true`):
+    // retry like the group-key install (a repeated SET of the same key is idempotent).
+    auth.ptk_set = (0..3).any(|_| wlc_set_key(0, &tk, &d.sta, false));
+    hal::wpaauth::wipe(&mut tk);
+    dbg_putc(b'P');
+    // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
+    // "authorize" iovar is tried only if the ioctl is refused (each dcmd can discard queued data frames).
+    auth.authorized = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []).0;
+    if !auth.authorized {
+        let mut ab = [0u8; 32];
+        let na = iovar_buf(b"authorize", &d.sta, &mut ab);
+        auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
+    }
+    dbg_putc(b'A');
+    #[cfg(feature = "wpa3")]
+    if d.akm8 {
+        wpa3_drop_pmksa(&d.sta); // keyed: the association no longer needs this station's PMKSA
+    }
+    KeyDone { sta: d.sta, akm8: d.akm8, cached: d.cached, auth }
 }
 
 /// One SDPCM frame from `ap_poll`: a keying station's M2 / M4 advances its handshake.
 pub fn ap_key_rx(rx: &[u8], ch: u8, doff: usize) -> KeyRx {
-    let Some(i) = key_candidate(rx, ch, doff) else { return KeyRx::NotOurs };
-    let t = keyer();
-    let Some(s) = t[i].as_mut() else { return KeyRx::NotOurs };
-    let secure = s.stage == KStage::M4;
+    let Some(sta) = key_candidate(rx, ch, doff) else { return KeyRx::NotOurs };
+    let Some((secure, replay)) = keyer().expect(&sta) else { return KeyRx::NotOurs };
     let mut buf = [0u8; 512];
-    let n = match eapol_match(rx, ch, doff, &s.sta, secure, s.replay, Some(&mut buf)) {
+    let n = match eapol_match(rx, ch, doff, &sta, secure, replay, Some(&mut buf)) {
         Some(KeyWait::Got(n)) => n,
         _ => return KeyRx::NotOurs, // not the EAPOL-Key we wait for (the loop sees the frame as data, as before)
     };
-    let done = match s.stage {
-        KStage::M2 => {
-            s.auth.m2_rx = true;
-            dbg_putc(b'2');
-            key_on_m2(s, &buf[..n])
-        }
-        KStage::M4 => {
-            s.auth.m4_rx = true;
-            dbg_putc(b'4');
-            key_on_m4(s, &buf[..n])
-        }
-    };
+    let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
+    let now = KEY_NOW_MS.load(core::sync::atomic::Ordering::Relaxed);
+    let r = keyer().on_eapol(&sta, &buf[..n], now, &mut DriverCrypto, &mut out);
     hal::wpaauth::wipe(&mut buf);
-    if !done {
-        return KeyRx::Consumed;
-    }
-    let d = KeyDone { sta: s.sta, akm8: s.akm8, cached: s.pmkid.is_some(), auth: s.auth };
-    key_clear(&mut t[i]);
-    KeyRx::Done(d)
-}
-
-/// M2 verified -> PTK -> M3 sent. Returns true when the handshake is over (it cannot continue).
-fn key_on_m2(s: &mut KeySlot, m2: &[u8]) -> bool {
-    let body = 18usize;
-    // ADR 0050 D4 step 5b: PTK derivation over the station's SNonce + the M2 MIC check run in EL0
-    let Some(mut ptk) = crate::wanparse::sta_m2(&s.pmk, &s.ap_mac, &s.sta, &s.anonce, s.akm8, m2) else {
-        s.auth.m2_mic_fail += 1; // wrong PSK, forged, or stale — keep waiting (hostapd)
-        return false;
+    let res = match r {
+        hal::wpakeyer::Out::Send(k) => {
+            dbg_putc(if secure { b'4' } else { b'3' });
+            let _ = sdpcm_data_tx(&out[..k]);
+            KeyRx::Consumed
+        }
+        hal::wpakeyer::Out::Keyed { done, tk } => KeyRx::Done(key_install(done, tk)),
+        hal::wpakeyer::Out::Failed(d) => KeyRx::Done(KeyDone { sta: d.sta, akm8: d.akm8, cached: d.cached, auth: d.auth }),
+        hal::wpakeyer::Out::None => KeyRx::Consumed,
     };
-    s.auth.m2_mic_ok = true;
-    s.kck.copy_from_slice(&ptk[0..16]);
-    let mut kek = [0u8; 16];
-    kek.copy_from_slice(&ptk[16..32]);
-    s.tk.copy_from_slice(&ptk[32..48]);
-    hal::wpaauth::wipe(&mut ptk);
-    // PMF: our side is capable in the WPA3 modes; negotiated when the station's M2 RSNE says MFP-capable.
-    #[cfg(feature = "wpa3")]
-    let pmf = w3().mode != SEC_WPA2 && m2_mfpc(m2, body - 14);
-    #[cfg(not(feature = "wpa3"))]
-    let pmf = false;
-    let _ = body;
-    // --- M3 key data = RSNE ++ GTK-KDE [++ IGTK-KDE], padded to /8, AES-key-wrapped under KEK.
-    let mut kd = [0u8; 136];
-    let mut rl = RSN_IE_PSK_CCMP.len();
-    kd[..rl].copy_from_slice(&RSN_IE_PSK_CCMP);
-    #[cfg(feature = "wpa3")]
-    if w3().mode != SEC_WPA2 {
-        if w3().bcn_ie_len == 0 && !w3().bcn_join_retry {
-            w3().bcn_join_retry = true; // once per bring-up, never a control round-trip before every M3
-            let _ = wpa3_read_beacon_ies();
-        }
-        let s3 = w3();
-        if s3.bcn_ie_len > 0 {
-            // exactly what the firmware beacons (RSNE ‖ RSNXE)
-            rl = s3.bcn_ie_len as usize;
-            kd[..rl].copy_from_slice(&s3.bcn_ie[..rl]);
-        } else {
-            // batch 43: wpa_supplicant deauths with reason 17 unless M3 also repeats the RSNXE `f4 01 20`
-            let mut r = [0u8; 40];
-            rl = wpa3_rsne(&mut r);
-            kd[..rl].copy_from_slice(&r[..rl]);
-        }
-        if !s3.m3_src_logged {
-            s3.m3_src_logged = true;
-            crate::_print(format_args!(" [WPA3] M3 RSNE source: {} ({} B)\n",
-                if s3.bcn_ie_len > 0 { "beacon read back" } else { "built" }, rl));
-        }
-    }
-    let (gtk, gtk_keyid) = unsafe { *core::ptr::addr_of!(AP_GTK) };
-    let kln = crate::wpa::wpa_gtk_kde(gtk_keyid, &gtk, &mut kd[rl..]);
-    let mut plen = rl + kln;
-    #[cfg(feature = "wpa3")]
-    if pmf {
-        plen += igtk_kde(&mut kd[plen..]);
-    }
-    let _ = pmf;
-    let unpadded = plen;
-    while plen % 8 != 0 {
-        kd[plen] = if plen == unpadded { 0xdd } else { 0x00 }; // 0xdd + 0x00 pad KDE
-        plen += 1;
-    }
-    let w = crate::aes::aes_wrap(&kek, &kd[..plen], &mut s.wrapped);
-    hal::wpaauth::wipe(&mut kek);
-    hal::wpaauth::wipe(&mut kd);
-    let Some(kdw) = w else { return true };
-    s.kdw = kdw;
-    // --- M3, replay+1, re-MIC'd per send (the MIC covers the counter).
-    s.replay += 1;
-    s.stage = KStage::M4;
-    s.auth.m3_tx = key_send_m3(s);
-    s.auth.m3_sends = 1;
-    s.auth.replay = s.replay;
-    s.last_ms = KEY_NOW_MS.load(core::sync::atomic::Ordering::Relaxed);
-    dbg_putc(b'3');
-    false
-}
-
-/// M4 verified -> the pairwise key installed + the station authorized. Returns true when over.
-fn key_on_m4(s: &mut KeySlot, m4: &[u8]) -> bool {
-    let mic_off = (18usize - 14) + 77;
-    if !(mic_off + 16 <= m4.len() && crate::wanparse::sta_m4(&s.kck, s.akm8, m4)) {
-        s.auth.m2_mic_fail += 1;
-        return false;
-    }
-    s.auth.m4_mic_ok = true;
-    // flags 0 as brcmfmac's pairwise add_key (the PRIMARY flag belongs to the group key, installed at AP start)
-    // the firmware's reply to this SET is sometimes missed (metal: 23 handshakes `ptk_set=false authorized=true`);
-    // retry like the group-key install (a repeated SET of the same key is idempotent)
-    s.auth.ptk_set = (0..3).any(|_| wlc_set_key(0, &s.tk, &s.sta, false));
-    dbg_putc(b'P');
-    // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
-    // "authorize" iovar is tried only if the ioctl is refused (each dcmd can discard queued data frames).
-    s.auth.authorized = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &s.sta, &mut []).0;
-    if !s.auth.authorized {
-        let mut ab = [0u8; 32];
-        let na = iovar_buf(b"authorize", &s.sta, &mut ab);
-        s.auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
-    }
-    dbg_putc(b'A');
-    #[cfg(feature = "wpa3")]
-    if s.akm8 {
-        wpa3_drop_pmksa(&s.sta); // keyed: the association no longer needs this station's PMKSA
-    }
-    true
+    hal::wpaauth::wipe(&mut out);
+    res
 }
 
 /// The loop's clock for the keyer (set by `ap_key_tick`; M3's send time is stamped from it).
@@ -4902,30 +4721,18 @@ static KEY_NOW_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64
 /// after KEY_MAX_SENDS unanswered sends the handshake is abandoned and returned.
 pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     KEY_NOW_MS.store(now_ms, core::sync::atomic::Ordering::Relaxed);
-    let t = keyer();
-    for i in 0..KEY_SLOTS {
-        let Some(s) = t[i].as_mut() else { continue };
-        if now_ms.wrapping_sub(s.last_ms) < KEY_RESEND_MS {
-            continue;
+    let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
+    let r = keyer().tick(now_ms, &mut out);
+    let res = match r {
+        hal::wpakeyer::Out::Send(n) => {
+            let _ = sdpcm_data_tx(&out[..n]);
+            None
         }
-        let sends = if s.stage == KStage::M2 { s.auth.m1_sends } else { s.auth.m3_sends };
-        if sends >= KEY_MAX_SENDS {
-            let d = KeyDone { sta: s.sta, akm8: s.akm8, cached: s.pmkid.is_some(), auth: s.auth };
-            key_clear(&mut t[i]);
-            return Some(d);
-        }
-        s.replay += 1;
-        s.auth.replay = s.replay;
-        s.last_ms = now_ms;
-        if s.stage == KStage::M2 {
-            let _ = key_send_m1(s);
-            s.auth.m1_sends += 1;
-        } else {
-            let _ = key_send_m3(s);
-            s.auth.m3_sends += 1;
-        }
-    }
-    None
+        hal::wpakeyer::Out::Failed(d) => Some(KeyDone { sta: d.sta, akm8: d.akm8, cached: d.cached, auth: d.auth }),
+        _ => None,
+    };
+    hal::wpaauth::wipe(&mut out);
+    res
 }
 
 /// The group key M3 carries (set when the AP installs it at start).

@@ -50,6 +50,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "wpa_keyer"
+path = "fuzz_targets/wpa_keyer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "abslot"
 path = "fuzz_targets/abslot.rs"
 test = false
