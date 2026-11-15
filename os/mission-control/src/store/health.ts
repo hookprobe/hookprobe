@@ -7,6 +7,7 @@ import { fetchJson } from './api';
 import { createSignal } from 'solid-js';
 import { setDeployMode, setSubstrate, setDeviceStats, type DeployMode } from './mock';
 import { setDeviceCapabilities } from './capabilities';
+import { setWifiDriver, parseWifiDriver } from './wifiDriver';
 
 const MODES: readonly DeployMode[] = ['standalone', 'cloud-linked', 'self-hosted'];
 let once: Promise<void> | null = null;
@@ -34,6 +35,8 @@ interface Health {
   rules_active?: number;
   last_reset?: string;
   clock?: string;
+  /** ADR 0065: the out-of-kernel Wi-Fi driver's measured health (store/wifiDriver.ts). */
+  wifi_driver?: unknown;
   wan?: { up: boolean; ip: string; mode: string; ipv6: boolean; clients: number; pkts_out: number; pkts_in: number; dns_inspected: number; dns_blocked?: number; blocklist?: number };
 }
 
@@ -46,6 +49,7 @@ async function readHealth(): Promise<'ok' | 'absent' | 'error'> {
     setDegraded(false);
     if (h.substrate) setSubstrate(h.substrate);
     if (Array.isArray(h.capabilities)) setDeviceCapabilities(h.capabilities);
+    setWifiDriver(parseWifiDriver(h.wifi_driver));
     if (h.mode && (MODES as readonly string[]).includes(h.mode)) setDeployMode(h.mode as DeployMode);
     if (typeof h.hosts_active === 'number' && typeof h.detections_cap === 'number') {
       setDeviceStats({
