@@ -354,7 +354,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
                     <button class={`l0-chip${wifi().channel === c ? ' is-on' : ''}`} aria-pressed={wifi().channel === c} onClick={() => editWifi({ ...wifi(), channel: c })}>{c === 'auto' ? 'Auto' : c}</button>
                   )}</For>
                 </div>
-                <p class="pcard-note">5 GHz is limited to channels 36–48 on this hardware (DFS channels aren't supported by the radio firmware).</p>
+                <p class="pcard-note">You can pick 5 GHz channels 36–48. Radar-checked (DFS) channels such as 52 can't be chosen here; Auto uses them only on builds that enable it, and then the Wi-Fi is silent for about a minute while it checks for radar.</p>
               </div>
               <div class="pcard l0-card--dashed">
                 <p class="l0-label">Guest network</p>
