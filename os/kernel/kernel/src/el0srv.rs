@@ -433,9 +433,11 @@ pub mod keyer {
         hal::wpaauth::wipe(&mut inp);
         r
     }
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     fn tick(now: u64, frame: &mut [u8]) -> Option<Out> {
         out_call(CMD_KEY_TICK, &now.to_le_bytes(), frame)
     }
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     fn abort(sta: &[u8; 6]) {
         if let Some(s) = srv() {
             let _ = s.call_io(CMD_KEY_ABORT, sta, &mut []);
@@ -443,6 +445,7 @@ pub mod keyer {
     }
 
     /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     pub fn install() -> bool {
         match load(None) {
             Ok(mut s) => {
@@ -463,6 +466,7 @@ pub mod keyer {
     }
 
     /// (calls, faults, restarts, handshakes started in EL0) for the beat / health.
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     pub fn stats() -> (u64, u64, u64, u64) {
         match srv() {
             Some(s) => (s.calls, s.faults, s.restarts, unsafe { EL0_STARTS }),
