@@ -381,6 +381,8 @@ mod imp {
 // the driver uses its in-kernel copy of the same state machine (D5). A fault forgets the server's handshakes: those
 // stations' 4-ways time out and they re-associate.
 #[cfg(feature = "mctls")]
+// the bridge is reached through the CM5 driver hook (and, for SAE, the wpa3 selftest): unused in other QEMU builds
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub mod keyer {
     use super::imp::{load, Call, Server};
     use hal::wifisrvabi::{keymsg, saemsg, *};
@@ -531,6 +533,7 @@ pub mod keyer {
     }
 
     /// The bridge functions, for `sae_selftest`.
+    #[cfg(feature = "wpa3")]
     pub mod test {
         pub(crate) use super::{eapol, key_start_sae, sae_forget, sae_keying, sae_rx, sae_setup};
     }
