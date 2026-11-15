@@ -417,6 +417,89 @@ impl<M: Mmio> Bus<M> {
     }
 }
 
+// ---- step 4c: writing one SDPCM data frame to F2 (the TX path el0-wifi runs) ----
+/// The data frame buffer: a 1514-B ethernet frame + the 16-B SDPCM / BDC header, padded to whole 512-B blocks.
+pub const DATA_TX_BUF: usize = 4 * 512;
+const SDPCM_DATA_CHANNEL: u32 = 2;
+const SDPCM_HDRLEN: usize = 12;
+
+/// Build one SDPCM data frame (HW tag, SW header with `seq`, the BDC header for interface `ifidx`, the ethernet
+/// frame). Returns the SDPCM length (header included); `out` is the whole buffer, its tail stays zero.
+pub fn data_frame(seq: u8, ifidx: u8, eth: &[u8], out: &mut [u8; DATA_TX_BUF]) -> usize {
+    out.fill(0);
+    let w0: u32 = (seq as u32) | (SDPCM_DATA_CHANNEL << 8) | ((SDPCM_HDRLEN as u32) << 24);
+    let bdc = SDPCM_HDRLEN;
+    out[bdc] = 0x20; // BDC flags: proto ver 2 << 4
+    out[bdc + 2] = ifidx & 0x0f; // flags2 = destination interface (0 = primary BSS)
+    let body = bdc + 4;
+    let n = eth.len().min(out.len() - body);
+    out[body..body + n].copy_from_slice(&eth[..n]);
+    let total = (body + n) as u16;
+    out[0..2].copy_from_slice(&total.to_le_bytes());
+    out[2..4].copy_from_slice(&(!total).to_le_bytes());
+    out[4..8].copy_from_slice(&w0.to_le_bytes());
+    total as usize
+}
+
+/// What one `write_frame` did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TxWrite {
+    /// Sent: `block` = the frame went as whole 512-B blocks (+ a byte-mode tail).
+    Sent { block: bool },
+    /// Longer than one byte-mode CMD53 and block TX is off in this build (refused; the caller counts it).
+    TooBig,
+    /// A block-mode write failed (`block` = true) or a byte-mode write failed.
+    Failed { block: bool },
+}
+
+impl<M: Mmio> Bus<M> {
+    /// Write ONE SDPCM frame (`frame[..len]`, padded to 4 B) to F2 exactly as the driver did inline:
+    /// - <= 512 B: one byte-mode CMD53 at 0x8000;
+    /// - larger, `big_tx`: whole 512-B blocks in ONE block-mode CMD53 at 0x8000, then the 4-B-aligned tail as a
+    ///   byte-mode CMD53 at the ADVANCED address 0x8000 + N*512 (the Linux sequence on this CM5; never a padding
+    ///   block, never a chunk restarted at 0x8000 — both wedged or desynced the firmware on metal);
+    /// - larger, no `big_tx`: refused (split byte-mode chunks desync the firmware's SDPCM stream).
+    pub fn write_frame(&mut self, frame: &[u8], len: usize, big_tx: bool) -> TxWrite {
+        let padded = (len + 3) & !3;
+        if padded > frame.len() {
+            return TxWrite::Failed { block: padded > 512 };
+        }
+        if padded <= 512 {
+            return if self.cmd53_write(2, F2_ADDR, &frame[..padded]) { TxWrite::Sent { block: false } } else { TxWrite::Failed { block: false } };
+        }
+        if !big_tx {
+            return TxWrite::TooBig;
+        }
+        let nblk = padded / 512;
+        let rem = padded % 512;
+        let mut ok = self.cmd53_write_blocks(2, F2_ADDR, &frame[..nblk * 512], nblk as u32, 512);
+        if ok && rem > 0 {
+            ok = self.cmd53_write(2, F2_ADDR + (nblk * 512) as u32, &frame[nblk * 512..padded]);
+        }
+        if ok { TxWrite::Sent { block: true } } else { TxWrite::Failed { block: true } }
+    }
+
+    /// brcmfmac's TX-error path (brcmf_sdio_txpkt -> abort F2, SFC_WF_TERM, wait for WFRAMEBC to drain): used after
+    /// a write that may have been cut off part-way (el0-wifi faulted inside it). Returns whether it drained.
+    pub fn txfail(&mut self) -> bool {
+        const SDIO_CCCR_ABORT: u32 = 0x06;
+        const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
+        const SFC_WF_TERM: u8 = 1 << 1;
+        const SBSDIO_FUNC1_WFRAMEBCLO: u32 = 0x10019;
+        const SBSDIO_FUNC1_WFRAMEBCHI: u32 = 0x1001A;
+        let _ = self.cmd52(true, 0, SDIO_CCCR_ABORT, 2);
+        let _ = self.cmd52(true, 1, SBSDIO_FUNC1_FRAMECTRL, SFC_WF_TERM);
+        for _ in 0..0xffu32 {
+            let hi = self.cmd52(false, 1, SBSDIO_FUNC1_WFRAMEBCHI, 0).unwrap_or(0xff);
+            let lo = self.cmd52(false, 1, SBSDIO_FUNC1_WFRAMEBCLO, 0).unwrap_or(0xff);
+            if hi == 0 && lo == 0 {
+                return true;
+            }
+        }
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -549,6 +632,41 @@ mod tests {
         *b.m.fifo.borrow_mut() = frame(1500, 2, 14, 7).into();
         let mut rx = [0u8; 600];
         assert!(matches!(b.read_frame(0, &mut rx, 0, false, false, None, &mut || {}), RxRead::Short { why: 8, .. }));
+    }
+
+
+    #[test]
+    fn data_frame_layout() {
+        let mut f = [0xffu8; DATA_TX_BUF];
+        let eth = [0x11u8; 60];
+        let n = data_frame(7, 1, &eth, &mut f);
+        assert_eq!(n, 76);
+        assert_eq!(u16::from_le_bytes([f[0], f[1]]), 76);
+        assert_eq!(u16::from_le_bytes([f[2], f[3]]), !76u16);
+        assert_eq!(u32::from_le_bytes([f[4], f[5], f[6], f[7]]), 7 | 2 << 8 | 12 << 24);
+        assert_eq!((f[12], f[13], f[14], f[15]), (0x20, 0, 1, 0));
+        assert!(f[16..76].iter().all(|&b| b == 0x11) && f[76..].iter().all(|&b| b == 0));
+        // the receive side's checker accepts what the transmit side builds
+        let h = crate::sdpcm_hdr(&f[..64]).unwrap().unwrap();
+        assert_eq!((h.len, h.seq, h.chan, h.doff), (76, 7, 2, 12));
+    }
+
+    #[test]
+    fn write_frame_small_big_and_refused() {
+        let mut f = [0u8; DATA_TX_BUF];
+        let n = data_frame(1, 0, &[0x22u8; 100], &mut f);
+        let mut b = Bus::new(Fake::new());
+        assert_eq!(b.write_frame(&f, n, false), TxWrite::Sent { block: false });
+        assert_eq!(b.m.data_out.borrow().len() * 4, (n + 3) & !3, "one byte-mode CMD53 of the padded length");
+        let n = data_frame(2, 0, &[0x33u8; 1514], &mut f);
+        assert_eq!(n, 1530);
+        assert_eq!(b.write_frame(&f, n, false), TxWrite::TooBig, "no block TX in this build: refused, not split");
+        let mut b = Bus::new(Fake::new());
+        assert_eq!(b.write_frame(&f, n, true), TxWrite::Sent { block: true });
+        assert_eq!(b.m.data_out.borrow().len() * 4, 1532, "2 blocks + the 508-B tail, no padding block");
+        let mut b = Bus::new(Fake::new());
+        *b.m.fail.borrow_mut() = true;
+        assert_eq!(b.write_frame(&f, 100, false), TxWrite::Failed { block: false });
     }
 
     #[test]
