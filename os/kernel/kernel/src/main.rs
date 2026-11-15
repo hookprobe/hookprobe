@@ -3911,6 +3911,7 @@ fn cm5_p10_probe() {
                                 crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
                                 #[cfg(feature = "mctls")]
                                 let _ = crate::el0srv::keyer::install(); // ADR 0065 step 3b: the WPA 4-way + its keys in el0-wifi
+                                let _ = crate::lansvc::excursion_cost(2000); // out-of-kernel Wi-Fi driver ADR, step 1 (once, ~tens of ms)
                                 let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal (incl. the 2A PMK-wipe check)
                                 // Image budget (2026-11-12): [P-lansvc-sae] and the hsh self-test run on QEMU / mc-e2e only
                                 // (mcserve.rs); on metal the SAE path is proven by real stations (cm5-wpa3-check) and the

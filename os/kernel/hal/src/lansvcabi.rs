@@ -67,6 +67,9 @@ pub const CMD_STA_MFPC: u32 = 13;
 /// D4 step 5c: IN = `h2e_ok u8` + one SAE Authentication frame body (<= `saewire::BODY_MAX`). OUT = `saewire::REC_LEN`
 /// (`saewire::encode`): the checked Commit / Confirm facts. Public bytes only — no SAE secret crosses.
 pub const CMD_STA_SAE: u32 = 17;
+/// Measurement only (kernel-issued once at boot, the out-of-kernel Wi-Fi driver ADR): IN = any bytes; the server copies
+/// them to OUT and exits. The round trip is the cost of one EL0 excursion carrying a payload of that size.
+pub const CMD_NOP_COPY: u32 = 18;
 /// Self-test only (kernel-issued at boot): the server faults on purpose, proving the D5 reset path.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 
