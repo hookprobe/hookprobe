@@ -286,6 +286,16 @@ fn key_start_sae() -> ! {
     exit(ST_OK, 0)
 }
 
+/// ADR 0065 step 4a: read the granted device page's identity registers (no read side effects; the kernel compares).
+fn bus_probe() -> ! {
+    let mut o = [0u8; PROBE_REGS.len() * 4];
+    for (i, off) in PROBE_REGS.iter().enumerate() {
+        let v = unsafe { read_volatile((DEV + off) as *const u32) };
+        o[i * 4..i * 4 + 4].copy_from_slice(&v.to_le_bytes());
+    }
+    reply(&o)
+}
+
 /// Commands served by this incarnation (in .bss: survives between calls, reset by the kernel after a fault).
 static mut SERVED: u32 = 0;
 
@@ -334,6 +344,7 @@ pub extern "C" fn _start() -> ! {
         CMD_POLL => exit(ST_OK, poll()),
         CMD_KEY_START | CMD_KEY_EXPECT | CMD_KEY_EAPOL | CMD_KEY_TICK | CMD_KEY_ABORT => key_cmd(rd32(H_CMD)),
         CMD_KEY_START_SAE => key_start_sae(),
+        CMD_BUS_PROBE => bus_probe(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(rd32(H_CMD)),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring
