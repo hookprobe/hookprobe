@@ -678,6 +678,8 @@ pub mod keyer {
             }
             Err(why) => {
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi FAILED to load ({}) — the authenticator stays in-kernel\n", why));
+                // the isolation report also runs on this path: a failed load must not hide behind the D5 fallback
+                let _ = crate::el0as::report();
                 false
             }
         }
