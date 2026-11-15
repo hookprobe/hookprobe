@@ -14,6 +14,7 @@ use hal::wpakeyer::{Direct, Keyer, Out, FRAME_MAX};
 use hal::wifisrvabi::saemsg;
 use hal::wifisrvabi::rxmsg;
 use hal::wifisrvabi::txmsg;
+use hal::wifisrvabi::ctlmsg;
 use hal::wifisrvabi::*;
 
 #[cfg(not(feature = "cm5"))]
@@ -322,30 +323,18 @@ impl hal::sdio::Mmio for UMmio {
 }
 static mut BUS: hal::sdio::Bus<UMmio> = hal::sdio::Bus::new(UMmio);
 
-/// ~1 ms on the monotonic counter (the kernel grants EL0 CNTPCT_EL0 and CNTFRQ_EL0, nothing else).
-fn delay_1ms() {
-    let (f, t0): (u64, u64);
-    unsafe {
-        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
-        core::arch::asm!("isb; mrs {}, cntpct_el0", out(reg) t0, options(nomem, nostack));
-    }
-    loop {
-        let t: u64;
-        unsafe { core::arch::asm!("isb; mrs {}, cntpct_el0", out(reg) t, options(nomem, nostack)) };
-        if t.wrapping_sub(t0) >= f / 1000 {
-            break;
-        }
-    }
-}
-
-/// Read ONE SDPCM frame off F2 (the same `Bus::read_frame` the kernel ran in-line). The mailbox interrupt is the
-/// kernel's (`HostInt`); the dry budget is capped well inside the excursion budget.
+/// Read ONE SDPCM frame off F2 (the same `Bus::read_frame` the kernel ran in-line): one poll. The mailbox interrupt
+/// is the kernel's (`HostInt`); a dry budget is the kernel's loop.
 fn rx_read() -> ! {
     let Some((sdb, max_dry, skip, block, cap)) = rxmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
     let mut buf = [0u8; 2048];
     let cap = cap.clamp(hal::sdio::FIRSTREAD, buf.len());
     let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
-    let r = bus.read_frame(sdb, &mut buf[..cap], max_dry.min(RX_EL0_MAX_DRY), skip, block, None, &mut delay_1ms);
+    // ONE poll, never a wait: EL0 has no counter access on the CM5 (CNTKCTL_EL1.EL0PCTEN is not granted; metal
+    // 2026-11-15, k4d: the 1 ms delay read CNTFRQ/CNTPCT here and every wait trapped, EC 0x18). The kernel loops and
+    // delays between polls.
+    let _ = max_dry;
+    let r = bus.read_frame(sdb, &mut buf[..cap], 0, skip, block, None, &mut || {});
     let mut o = [0u8; OUT_MAX];
     let n = rxmsg::encode_out(&r, &buf[..cap], bus.blk_diag, &mut o);
     io(OUT_OFF, n).copy_from_slice(&o[..n]);
@@ -407,6 +396,18 @@ fn poll() -> u32 {
     moved
 }
 
+/// Step 4d: build ONE control request with the kernel's sequence and request id and write it to F2 — one byte-mode
+/// CMD53, exactly as the driver's control path does (the kernel matches the reply).
+fn tx_ctl() -> ! {
+    let Some((seq, ifidx, cmd, flags, reqid, reply_len, payload)) = ctlmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
+    let mut f = [0u8; hal::bcdc::FRAME_MAX];
+    let n = hal::bcdc::request(seq, cmd, flags, reqid, ifidx, payload, reply_len, &mut f);
+    let padded = (n + 3) & !3;
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let ok = bus.cmd53_write(2, hal::sdio::F2_ADDR, &f[..padded]);
+    exit_lean(if ok { 1 } else { 4 })
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     if rd32(H_MAGIC) != MAGIC {
@@ -425,6 +426,7 @@ pub extern "C" fn _start() -> ! {
         CMD_BUS_PROBE => bus_probe(),
         CMD_RX_READ => rx_read(),
         CMD_TX_DATA => tx_data(),
+        CMD_TX_CTL => tx_ctl(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(rd32(H_CMD)),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring
