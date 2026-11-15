@@ -158,7 +158,8 @@ mod imp {
         None,
         /// Step 2's fake device: a RAM frame the caller owns.
         Fake(usize),
-        /// A real MMIO page (step 4: the SDHCI registers), mapped Device-nGnRE.
+        /// A real MMIO page (step 4: the SDHCI registers), mapped Device-nGnRE. Granted on the CM5 AP boot only.
+        #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
         Mmio(usize),
     }
 
