@@ -1710,6 +1710,10 @@ pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
     #[cfg(feature = "wpa3")]
     unsafe {
         (*core::ptr::addr_of_mut!(SAE_TAB)).forget_all(); // host state only: the old firmware is gone
+        #[cfg(feature = "wpa3")]
+        if let Some(h) = el0() {
+            let _ = (h.sae_forget)(&[0; 6], 0, 2);
+        }
         (*core::ptr::addr_of_mut!(WPA3)).igtk_set = false;
     }
     let defer_on = unsafe { (*core::ptr::addr_of!(DEFER)).on };
@@ -3680,7 +3684,8 @@ pub fn ap_security_prepare(mode: u8, ssid: &[u8], passphrase: &[u8]) -> Option<S
 pub fn ap_security_install(p: SecPrep, ssid: &[u8], passphrase: &[u8]) -> u8 {
     let s = w3();
     // a PMKSA derived from another passphrase / SSID must never key again; the same credentials keep it (a bounce)
-    if s.pw[..s.pw_len as usize] != *passphrase || s.ssid[..s.ssid_len as usize] != *ssid {
+    let changed = s.pw[..s.pw_len as usize] != *passphrase || s.ssid[..s.ssid_len as usize] != *ssid;
+    if changed {
         unsafe { (*core::ptr::addr_of_mut!(PMKSA)).clear() };
     }
     s.mode = p.mode;
@@ -3695,7 +3700,8 @@ pub fn ap_security_install(p: SecPrep, ssid: &[u8], passphrase: &[u8]) -> u8 {
     s.ssid[..sl].copy_from_slice(&ssid[..sl]);
     s.ssid_len = sl as u8;
     unsafe { *core::ptr::addr_of_mut!(SAE_PT) = p.pt };
-    s.mode
+    let _ = ap_sae_el0_sync(changed); // ADR 0065 step 3c: the SAE responder in el0-wifi gets the same credentials
+    w3().mode
 }
 
 /// `ap_security_install` for a LIVE change of the running BSS (sealed-config step 10, before its `ap_start`): also
@@ -3948,6 +3954,56 @@ pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event 
         }
         Some(r)
     };
+    // ADR 0065 step 3c: el0-wifi runs the exchange with every SAE secret; the kernel passes the body + fresh TRNG bytes
+    // and gets back only the frames to send and the PUBLIC PMKID. In-kernel below when the server cannot answer (D5).
+    if let Some(h) = el0() {
+        let mut pool = [0u8; hal::wifisrvabi::SAE_RND];
+        let mut ok = true;
+        for k in 0..hal::wifisrvabi::SAE_RND / 8 {
+            match crate::rng200::next_word_strict() {
+                Some(w) => pool[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+                None => ok = false,
+            }
+        }
+        let r = if ok { (h.sae_rx)(ap, &sta, now_ms, &pool, body) } else { None };
+        hal::wpaauth::wipe(&mut pool);
+        if let Some(r) = r {
+            let e = match r.ev {
+                1 => sae::Event::Dropped("dropped by el0-wifi"),
+                2 => sae::Event::Committed,
+                3 => sae::Event::Accepted,
+                4 => sae::Event::Refused(r.status),
+                _ => sae::Event::None,
+            };
+            let mut ast = None;
+            if e == sae::Event::Accepted {
+                ast = Some(wpa3_auth_status(&sta, 0, &r.pmkid)); // the firmware first, then our confirm (MB13)
+            }
+            let mut sent = 0;
+            for k in 0..r.n {
+                if mgmt_auth_tx(ap, &sta, &r.frames[k][..r.lens[k]]) {
+                    sent += 1;
+                }
+            }
+            let s = w3();
+            match e {
+                sae::Event::Accepted => s.accepted += 1,
+                sae::Event::Dropped(_) => s.dropped += 1,
+                _ => {}
+            }
+            if let Some(a) = ast {
+                let tx_us = us_since(t0) as u32;
+                let w = unsafe { &mut *core::ptr::addr_of_mut!(WATCH) };
+                *w = SaeWatch { sta, armed: true, t0, ast_us: tx_us, tx_us, ast: a, evs: 0 };
+            }
+            if sae_log(&sta).is_some() {
+                crate::_print(format_args!(" [WPA3] SAE {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} via el0-wifi -> {:?}, {} frame(s) sent\n",
+                    sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], e, sent));
+            }
+            return e;
+        }
+        // the server could not answer (fault / backoff): this attempt is handled in-kernel below
+    }
     let pw_len = s.pw_len as usize;
     let mut pw = s.pw;
     // ADR 0050 D4 step 5c: the station's Commit / Confirm is walked in el0-lansvc (public bytes only); the state
@@ -4057,11 +4113,41 @@ pub fn ap_keying(sta: &[u8; 6], now_ms: u64, psk: &[u8; 32]) -> ApKeying {
     use hal::rsnassoc::Keying as K;
     let a = unsafe { &*core::ptr::addr_of!(ASSOC_RSN) };
     let rsn = if a.0 == *sta { a.1.as_ref() } else { None };
+    // the AKMs the BSS offers right now: a station with a stale scan (a live security change) is refused with reason 20
+    let offers = offers_of(w3().mode);
+    unsafe { EL0_SAE_SRC = None };
+    // ADR 0065 step 3d: the decision runs in el0-wifi, next to the SAE / PMKSA tables; no PMK comes back
+    if let Some((mut how, fresh, diag)) = el0().and_then(|h| (h.sae_keying)(sta, now_ms, offers, rsn)) {
+        if how.reason().is_none() {
+            if let Some(r) = rsn {
+                if unsafe { (*core::ptr::addr_of_mut!(STALE)).check(sta, r.akm, now_ms) } {
+                    how = K::StaleView;
+                }
+            }
+        }
+        let src = match how {
+            K::SaeCached(i) => rsn.map(|r| (2u8, r.pmkid[i % hal::rsnassoc::PMKIDS])),
+            K::SaeFresh => Some((1u8, [0u8; 16])),
+            K::Legacy if fresh => Some((1u8, [0u8; 16])),
+            _ => None,
+        };
+        if let Some((k, p)) = src {
+            unsafe { EL0_SAE_SRC = Some((*sta, k, p)) };
+        }
+        return ApKeying {
+            how,
+            akm8: src.is_some(),
+            // the SAE PMK stays in el0-wifi; the PSK path keeps the passphrase PMK as before
+            pmk: if src.is_some() || how.reason().is_some() { [0; 32] } else { *psk },
+            pmkid: src.and_then(|(k, p)| (k == 2).then_some(p)),
+            akm: rsn.map_or(0, |r| r.akm),
+            n_pmkid: rsn.map_or(0, |r| r.n_pmkid),
+            sae: diag,
+        };
+    }
     let fresh = ap_sae_pmk(sta, now_ms);
     let cache = unsafe { &mut *core::ptr::addr_of_mut!(PMKSA) };
     let mut hit = None;
-    // the AKMs the BSS offers right now: a station with a stale scan (a live security change) is refused with reason 20
-    let offers = offers_of(w3().mode);
     let mut how = hal::rsnassoc::decide(rsn, offers, fresh.is_some(), &mut |p| {
         hit = cache.get(sta, p, now_ms);
         hit.is_some()
@@ -4094,6 +4180,9 @@ pub fn ap_keying(sta: &[u8; 6], now_ms: u64, psk: &[u8; 32]) -> ApKeying {
 /// Drop a station's cached PMKSA (its PMKSA-caching 4-way did not verify).
 #[cfg(feature = "wpa3")]
 pub fn ap_pmksa_drop(sta: &[u8; 6]) {
+    if let Some(h) = el0() {
+        (h.pmksa_remove)(sta, false);
+    }
     unsafe { (*core::ptr::addr_of_mut!(PMKSA)).remove(sta) }
 }
 
@@ -4139,6 +4228,13 @@ pub fn ap_deauth(sta: &[u8; 6], reason: u16) -> Deauth {
 /// Returns false when the leave was ignored for that reason.
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_forget(sta: &[u8; 6], now_ms: u64) -> bool {
+    if let Some(b) = el0().and_then(|h| (h.sae_forget)(sta, now_ms, 0)) {
+        unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget_at(sta, now_ms) }; // the in-kernel copy, if it ever served
+        if b {
+            wpa3_drop_pmksa(sta);
+        }
+        return b;
+    }
     let tab = unsafe { &mut *core::ptr::addr_of_mut!(SAE_TAB) };
     let (st, age) = tab.diag(sta, now_ms);
     if hal::rsnassoc::leave_predates_sae(st == sae::SD_ACCEPTED, age) {
@@ -4152,6 +4248,9 @@ pub fn ap_sae_forget(sta: &[u8; 6], now_ms: u64) -> bool {
 /// Forget EVERY station's SAE state and the firmware's PMKSA (the live BSS bounce, sealed-config step 10).
 #[cfg(feature = "wpa3")]
 pub fn ap_sae_forget_all() {
+    if let Some(h) = el0() {
+        let _ = (h.sae_forget)(&[0; 6], 0, 2);
+    }
     unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget_all() }
     unsafe { (*core::ptr::addr_of_mut!(FW_PMKSA)).clear() };
     let _ = fw_pmksa_set();
@@ -4565,6 +4664,28 @@ pub struct El0Keyer {
     pub eapol: fn(&[u8; 6], &[u8], u64, &mut [u8]) -> Option<hal::wpakeyer::Out>,
     pub tick: fn(u64, &mut [u8]) -> Option<hal::wpakeyer::Out>,
     pub abort: fn(&[u8; 6]),
+    // steps 3c / 3d: the SAE responder + PMKSA cache (the SAE PMK never enters the kernel)
+    pub sae_setup: fn(u8, bool, &[u8], &[u8]) -> bool,
+    pub sae_rx: fn(&[u8; 6], &[u8; 6], u64, &[u8; hal::wifisrvabi::SAE_RND], &[u8]) -> Option<hal::wifisrvabi::saemsg::SaeRx>,
+    pub sae_keying: fn(&[u8; 6], u64, u8, Option<&hal::rsnassoc::AssocRsn>) -> Option<(hal::rsnassoc::Keying, bool, (u8, u64))>,
+    pub key_start_sae: fn(&hal::wpakeyer::Start, u64, u8, &[u8; 16], &mut [u8]) -> Option<hal::wpakeyer::Out>,
+    pub sae_forget: fn(&[u8; 6], u64, u8) -> Option<bool>,
+    pub pmksa_remove: fn(&[u8; 6], bool),
+}
+
+/// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
+/// pmkid). `ap_key_start` hands it to the server instead of a PMK.
+#[cfg(feature = "wpa3")]
+static mut EL0_SAE_SRC: Option<([u8; 6], u8, [u8; 16])> = None;
+
+/// Push the installed security (mode, SSID, passphrase) to el0-wifi: called when the server loads, and by every
+/// security install. `clear` = the credentials changed (drop its PMKSA cache).
+#[cfg(feature = "wpa3")]
+pub fn ap_sae_el0_sync(clear: bool) -> bool {
+    let Some(h) = el0() else { return false };
+    let st = w3();
+    let mode = if st.mode == SEC_WPA2 { 0 } else { 1 };
+    (h.sae_setup)(mode, clear, &st.ssid[..st.ssid_len as usize], &st.pw[..st.pw_len as usize])
 }
 pub static mut EL0_KEYER: Option<El0Keyer> = None;
 /// Handshakes the driver started in EL0 and has not seen finish (so the loop does not cross into EL0 to tick an idle
@@ -4667,11 +4788,27 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
     // the EL0 authenticator first (ADR 0065 step 3b); the in-kernel copy when it cannot answer
     keyer().abort(sta);
-    let r = match el0().and_then(|h| (h.start)(&st, now_ms, &mut out)) {
+    // a station keyed from an SAE PMK that lives in el0-wifi (step 3d): the server supplies the PMK itself
+    #[cfg(feature = "wpa3")]
+    let via_sae = unsafe { (*core::ptr::addr_of_mut!(EL0_SAE_SRC)).take() }.filter(|x| x.0 == *sta && akm8);
+    #[cfg(not(feature = "wpa3"))]
+    let via_sae: Option<([u8; 6], u8, [u8; 16])> = None;
+    let el0r = match via_sae {
+        Some((_, k, p)) => el0().and_then(|h| (h.key_start_sae)(&st, now_ms, k, &p, &mut out)),
+        None => el0().and_then(|h| (h.start)(&st, now_ms, &mut out)),
+    };
+    let r = match el0r {
         Some(r) => {
-            el0_pending_add(1);
+            if matches!(r, hal::wpakeyer::Out::Send(_)) {
+                el0_pending_add(1);
+            } else if let hal::wpakeyer::Out::Failed(_) = r {
+                crate::_print(format_args!(" [EL0-WIFI] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}: no SAE PMK in el0-wifi for this keying (expired?) — not started; the station redoes SAE\n",
+                    sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]));
+            }
             r
         }
+        // the PMK is in el0-wifi and it cannot answer: no handshake (never a zero PMK); the station times out, redoes SAE
+        None if via_sae.is_some() => hal::wpakeyer::Out::None,
         None => keyer().start(st, now_ms, &mut out),
     };
     if let hal::wpakeyer::Out::Send(n) = r {

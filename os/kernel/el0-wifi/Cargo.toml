@@ -18,6 +18,8 @@ cm5 = []
 
 [dependencies]
 hal = { path = "../hal" }
+# ADR 0065 step 3c: the WPA3-SAE responder (curve + KDF) runs here with its secrets (operator D3)
+sae = { path = "../sae" }
 
 [profile.release]
 panic = "abort"
