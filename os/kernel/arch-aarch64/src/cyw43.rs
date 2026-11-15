@@ -137,6 +137,16 @@ const CMD53_IO_RW_EXTENDED: u16 = 53;
 /// distinguishes a card that never responds (timeout, INT_STATUS ~0) from a host
 /// that rejected the response (INT_ERR bits set).
 static mut SDIO_DIAG: (u32, u32) = (0, 0);
+/// ADR 0065 step 4a: the SDHCI identity registers as the kernel reads them (`hal::wifisrvabi::PROBE_REGS`), to compare
+/// with what el0-wifi reads through its device grant.
+pub fn sdhci_ident() -> [u32; 6] {
+    let mut v = [0u32; 6];
+    for (i, off) in hal::wifisrvabi::PROBE_REGS.iter().enumerate() {
+        v[i] = r32(*off);
+    }
+    v
+}
+
 pub fn sdio_diag() -> (u32, u32) {
     unsafe { SDIO_DIAG }
 }

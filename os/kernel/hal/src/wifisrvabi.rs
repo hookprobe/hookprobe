@@ -408,3 +408,12 @@ pub mod saemsg {
         }
     }
 }
+
+// ---- step 4a: the SDHCI register page granted to el0-wifi (read-only probe first) ----
+/// The BCM2712 SDHCI controller the CYW43455 sits on (CM5): the one MMIO page el0-wifi is granted (ADR 0065 D1).
+pub const SDHCI_PA_CM5: usize = 0x10_0110_0000;
+/// Registers with no read side effect, read by both sides and compared: capabilities 0x40 / 0x44, the host-version
+/// word 0xFC (version in [31:16]), present state 0x24, host control 0x28, clock control 0x2C.
+pub const PROBE_REGS: [usize; 6] = [0x40, 0x44, 0xFC, 0x24, 0x28, 0x2C];
+/// OUT = PROBE_REGS.len() × u32 (LE), read by el0-wifi from its device mapping.
+pub const CMD_BUS_PROBE: u32 = 30;
