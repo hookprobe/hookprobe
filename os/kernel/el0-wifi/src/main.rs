@@ -12,6 +12,7 @@ use hal::el0ring as ring;
 use hal::wifisrvabi::keymsg;
 use hal::wpakeyer::{Direct, Keyer, Out, FRAME_MAX};
 use hal::wifisrvabi::saemsg;
+use hal::wifisrvabi::rxmsg;
 use hal::wifisrvabi::*;
 
 #[cfg(not(feature = "cm5"))]
@@ -296,6 +297,66 @@ fn bus_probe() -> ! {
     reply(&o)
 }
 
+/// ADR 0065 step 4b-2b: the SDHCI registers through this server's Device grant.
+struct UMmio;
+impl hal::sdio::Mmio for UMmio {
+    fn r8(&self, o: usize) -> u8 {
+        unsafe { read_volatile((DEV + o) as *const u8) }
+    }
+    fn r16(&self, o: usize) -> u16 {
+        unsafe { read_volatile((DEV + o) as *const u16) }
+    }
+    fn r32(&self, o: usize) -> u32 {
+        unsafe { read_volatile((DEV + o) as *const u32) }
+    }
+    fn w8(&self, o: usize, v: u8) {
+        unsafe { write_volatile((DEV + o) as *mut u8, v) }
+    }
+    fn w16(&self, o: usize, v: u16) {
+        unsafe { write_volatile((DEV + o) as *mut u16, v) }
+    }
+    fn w32(&self, o: usize, v: u32) {
+        unsafe { write_volatile((DEV + o) as *mut u32, v) }
+    }
+}
+static mut BUS: hal::sdio::Bus<UMmio> = hal::sdio::Bus::new(UMmio);
+
+/// ~1 ms on the monotonic counter (the kernel grants EL0 CNTPCT_EL0 and CNTFRQ_EL0, nothing else).
+fn delay_1ms() {
+    let (f, t0): (u64, u64);
+    unsafe {
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
+        core::arch::asm!("isb; mrs {}, cntpct_el0", out(reg) t0, options(nomem, nostack));
+    }
+    loop {
+        let t: u64;
+        unsafe { core::arch::asm!("isb; mrs {}, cntpct_el0", out(reg) t, options(nomem, nostack)) };
+        if t.wrapping_sub(t0) >= f / 1000 {
+            break;
+        }
+    }
+}
+
+/// Read ONE SDPCM frame off F2 (the same `Bus::read_frame` the kernel ran in-line). The mailbox interrupt is the
+/// kernel's (`HostInt`); the dry budget is capped well inside the excursion budget.
+fn rx_read() -> ! {
+    let Some((sdb, max_dry, skip, block, cap)) = rxmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
+    let mut buf = [0u8; 2048];
+    let cap = cap.clamp(hal::sdio::FIRSTREAD, buf.len());
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let r = bus.read_frame(sdb, &mut buf[..cap], max_dry.min(RX_EL0_MAX_DRY), skip, block, None, &mut delay_1ms);
+    let mut o = [0u8; OUT_MAX];
+    let n = rxmsg::encode_out(&r, &buf[..cap], bus.blk_diag, &mut o);
+    // the hot path: no key material crosses here, so only the bytes used are written / cleared (not the 4 KiB the
+    // keying commands scrub)
+    io(OUT_OFF, n).copy_from_slice(&o[..n]);
+    wr32(H_OUT_LEN, n as u32);
+    io(IN_OFF, rxmsg::IN_LEN).fill(0);
+    wr32(H_STATUS, ST_OK);
+    wr32(H_R0, 0);
+    unsafe { core::arch::asm!("svc #0", in("x8") SYS_EXIT_USER, options(noreturn)) }
+}
+
 /// Commands served by this incarnation (in .bss: survives between calls, reset by the kernel after a fault).
 static mut SERVED: u32 = 0;
 
@@ -345,6 +406,7 @@ pub extern "C" fn _start() -> ! {
         CMD_KEY_START | CMD_KEY_EXPECT | CMD_KEY_EAPOL | CMD_KEY_TICK | CMD_KEY_ABORT => key_cmd(rd32(H_CMD)),
         CMD_KEY_START_SAE => key_start_sae(),
         CMD_BUS_PROBE => bus_probe(),
+        CMD_RX_READ => rx_read(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(rd32(H_CMD)),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring
