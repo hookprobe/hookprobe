@@ -9,13 +9,13 @@ pub const BASE_QEMU: usize = 0xBC00_0000;
 pub const BASE_CM5: usize = 0x1_4034_0000;
 pub const IMAGE_MAX: usize = 0x2_0000; // 128 KiB
 pub const STACK_OFF: usize = 0x2_0000;
-pub const STACK_SIZE: usize = 0x8000;
+pub const STACK_SIZE: usize = 0x1_0000; // 64 KiB: the SAE curve arithmetic (step 3c), as el0-lansvc
 /// One page: the command block below.
-pub const CTRL_OFF: usize = 0x2_8000;
+pub const CTRL_OFF: usize = 0x3_0000;
 /// One page: the device the kernel granted (step 2: the fake device; step 4: the SDHCI registers).
-pub const DEV_OFF: usize = 0x2_9000;
+pub const DEV_OFF: usize = 0x3_1000;
 /// Driver -> kernel frames (received from the device).
-pub const RX_OFF: usize = 0x3_0000;
+pub const RX_OFF: usize = 0x3_8000;
 /// Kernel -> driver frames (to send to the device).
 pub const TX_OFF: usize = RX_OFF + crate::el0ring::RING_BYTES + 0x1000;
 /// The window's end, relative to the base (must stay inside the platform's user window).
@@ -259,6 +259,153 @@ pub mod keymsg {
             assert_eq!(decode_out(&[2, 0], &mut f), None);
             assert_eq!(decode_out(&[9], &mut f), None);
             assert_eq!(decode_out(&[], &mut f), None);
+        }
+    }
+}
+
+// ---- steps 3c / 3d: the WPA3-SAE responder and the PMKSA cache in el0-wifi; the SAE PMK never leaves it ----
+/// IN = mode u8 ‖ clear_pmksa u8 ‖ ssid_len u8 ‖ ssid[32] ‖ pw_len u8 ‖ pw[64]. OUT = ok u8.
+pub const CMD_SAE_SETUP: u32 = 20;
+/// IN = ap 6 ‖ sta 6 ‖ now u64 ‖ rnd[SAE_RND] (fresh TRNG bytes) ‖ the Authentication frame body. OUT = [`saemsg`].
+pub const CMD_SAE_RX: u32 = 21;
+/// IN = sta 6 ‖ now u64 ‖ offers u8 ‖ the association RSNE facts ([`saemsg::encode_rsn`]). OUT = how ‖ idx ‖
+/// diag code ‖ diag age u64 ‖ fresh u8 (the decision only: never a PMK).
+pub const CMD_SAE_KEYING: u32 = 22;
+/// IN = [`keymsg::encode_start`] (pmk ignored) ‖ now u64 ‖ src u8 (1 = the fresh SAE PMK, 2 = the cached PMKSA) ‖
+/// pmkid[16]. The server takes the PMK from its own tables. OUT = [`keymsg::encode_out`].
+pub const CMD_KEY_START_SAE: u32 = 23;
+/// IN = sta 6 ‖ now u64 ‖ op u8 (0 forget_at, 1 forget, 2 forget_all). OUT = result u8 (forget_at's answer).
+pub const CMD_SAE_FORGET: u32 = 24;
+/// IN = sta 6 ‖ op u8 (0 remove one, 1 clear all).
+pub const CMD_PMKSA_REMOVE: u32 = 25;
+/// TRNG bytes the kernel passes per SAE_RX (the server has no TRNG; the exchange draws 32 B at a time, fail-closed).
+pub const SAE_RND: usize = 128;
+
+/// The SAE / keying messages (pure; kernel and el0-wifi).
+pub mod saemsg {
+    use crate::rsnassoc::{AssocRsn, Keying, PMKIDS};
+
+    pub const RSN_LEN: usize = 1 + 4 + 2 + 2 + 16 * PMKIDS;
+    pub fn encode_rsn(r: Option<&AssocRsn>, o: &mut [u8]) -> usize {
+        o[..RSN_LEN].fill(0);
+        if let Some(r) = r {
+            o[0] = 1;
+            o[1..5].copy_from_slice(&r.akm.to_le_bytes());
+            o[5..7].copy_from_slice(&r.n_akm.to_le_bytes());
+            o[7..9].copy_from_slice(&r.n_pmkid.to_le_bytes());
+            for i in 0..PMKIDS {
+                o[9 + 16 * i..25 + 16 * i].copy_from_slice(&r.pmkid[i]);
+            }
+        }
+        RSN_LEN
+    }
+    pub fn decode_rsn(b: &[u8]) -> Option<Option<AssocRsn>> {
+        let b = b.get(..RSN_LEN)?;
+        if b[0] == 0 {
+            return Some(None);
+        }
+        let mut r = AssocRsn { akm: u32::from_le_bytes([b[1], b[2], b[3], b[4]]), n_akm: u16::from_le_bytes([b[5], b[6]]),
+            n_pmkid: u16::from_le_bytes([b[7], b[8]]), pmkid: [[0; 16]; PMKIDS] };
+        for i in 0..PMKIDS {
+            r.pmkid[i].copy_from_slice(&b[9 + 16 * i..25 + 16 * i]);
+        }
+        Some(Some(r))
+    }
+    pub fn keying_code(k: &Keying) -> (u8, u8) {
+        match k {
+            Keying::Legacy => (0, 0),
+            Keying::Psk => (1, 0),
+            Keying::SaeFresh => (2, 0),
+            Keying::SaeCached(i) => (3, (*i).min(255) as u8),
+            Keying::Reject => (4, 0),
+            Keying::SaeNoSae => (5, 0),
+            Keying::NotOffered => (6, 0),
+            Keying::StaleView => (7, 0),
+        }
+    }
+    pub fn keying_from(c: u8, i: u8) -> Option<Keying> {
+        Some(match c {
+            0 => Keying::Legacy,
+            1 => Keying::Psk,
+            2 => Keying::SaeFresh,
+            3 => Keying::SaeCached((i as usize).min(PMKIDS - 1)),
+            4 => Keying::Reject,
+            5 => Keying::SaeNoSae,
+            6 => Keying::NotOffered,
+            7 => Keying::StaleView,
+            _ => return None,
+        })
+    }
+
+    /// SAE_RX reply: ev u8 (0 none, 1 dropped, 2 committed, 3 accepted, 4 refused) ‖ status u16 ‖ n u8 ‖
+    /// 2 × (len u16 ‖ body[FRAME]) ‖ pmkid[16] (Accepted: the PUBLIC PMKID the firmware's auth_status needs).
+    pub const FRAME: usize = 104;
+    pub const RX_OUT_LEN: usize = 1 + 2 + 1 + 2 * (2 + FRAME) + 16;
+    pub struct SaeRx {
+        pub ev: u8,
+        pub status: u16,
+        pub n: usize,
+        pub frames: [[u8; FRAME]; 2],
+        pub lens: [usize; 2],
+        pub pmkid: [u8; 16],
+    }
+    pub fn decode_rx(b: &[u8]) -> Option<SaeRx> {
+        let b = b.get(..RX_OUT_LEN)?;
+        let mut r = SaeRx { ev: b[0], status: u16::from_le_bytes([b[1], b[2]]), n: (b[3] as usize).min(2), frames: [[0; FRAME]; 2], lens: [0; 2], pmkid: [0; 16] };
+        if r.ev > 4 {
+            return None;
+        }
+        for k in 0..2 {
+            let o = 4 + k * (2 + FRAME);
+            let l = u16::from_le_bytes([b[o], b[o + 1]]) as usize;
+            if l > FRAME {
+                return None;
+            }
+            r.lens[k] = l;
+            r.frames[k].copy_from_slice(&b[o + 2..o + 2 + FRAME]);
+        }
+        r.pmkid.copy_from_slice(&b[RX_OUT_LEN - 16..]);
+        Some(r)
+    }
+    pub fn encode_rx(ev: u8, status: u16, frames: &[(&[u8]); 2], n: usize, pmkid: &[u8; 16], o: &mut [u8]) -> usize {
+        o[..RX_OUT_LEN].fill(0);
+        o[0] = ev;
+        o[1..3].copy_from_slice(&status.to_le_bytes());
+        o[3] = n.min(2) as u8;
+        for k in 0..2 {
+            let f = frames[k];
+            let l = f.len().min(FRAME);
+            let off = 4 + k * (2 + FRAME);
+            o[off..off + 2].copy_from_slice(&(l as u16).to_le_bytes());
+            o[off + 2..off + 2 + l].copy_from_slice(&f[..l]);
+        }
+        o[RX_OUT_LEN - 16..RX_OUT_LEN].copy_from_slice(pmkid);
+        RX_OUT_LEN
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn rsn_keying_and_rx_round_trip() {
+            let r = AssocRsn { akm: 0x000fac08, n_akm: 1, n_pmkid: 2, pmkid: [[1; 16], [2; 16], [0; 16], [0; 16]] };
+            let mut b = [0u8; RSN_LEN];
+            encode_rsn(Some(&r), &mut b);
+            let d = decode_rsn(&b).unwrap().unwrap();
+            assert!(d.akm == r.akm && d.n_pmkid == 2 && d.pmkid == r.pmkid);
+            encode_rsn(None, &mut b);
+            assert!(decode_rsn(&b).unwrap().is_none());
+            for k in [Keying::Legacy, Keying::Psk, Keying::SaeFresh, Keying::SaeCached(3), Keying::Reject, Keying::SaeNoSae, Keying::NotOffered, Keying::StaleView] {
+                let (c, i) = keying_code(&k);
+                assert_eq!(keying_from(c, i), Some(k));
+            }
+            let mut o = [0u8; RX_OUT_LEN];
+            encode_rx(3, 0, &[&[7u8; 40], &[8u8; 104]], 2, &[9; 16], &mut o);
+            let x = decode_rx(&o).unwrap();
+            assert!(x.ev == 3 && x.n == 2 && x.lens == [40, 104] && x.frames[0][..40] == [7; 40] && x.pmkid == [9; 16]);
+            o[4] = 0xff;
+            o[5] = 0xff;
+            assert!(decode_rx(&o).is_none(), "an oversized length from the server is refused");
         }
     }
 }
