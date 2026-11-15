@@ -294,6 +294,129 @@ impl<M: Mmio> Bus<M> {
     }
 }
 
+// ---- step 4b-2: reading one SDPCM frame off F2 (the RX path el0-wifi runs) ----
+/// The first read of every frame: hardware tag + software header + the start of the payload (brcmfmac FIRSTREAD).
+pub const FIRSTREAD: usize = 64;
+/// The F2 (WLAN data) FIFO address.
+pub const F2_ADDR: u32 = 0x8000;
+/// The SDIO core's interrupt status (backplane offset from the core base) and its mailbox bit.
+pub const SD_REG_INTSTATUS: u32 = 0x20;
+pub const I_HMB_HOST_INT: u32 = 1 << 7;
+
+/// What one `read_frame` found.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RxRead {
+    /// No frame waiting.
+    Dry,
+    /// The firmware raised its mailbox interrupt (the status is already cleared): handle the mailbox, then call
+    /// again with `skip_int`. Only when no `hostmail` callback was given (el0-wifi asks the kernel).
+    HostInt,
+    /// A corrupt hardware tag / data offset (`crate::sdpcm_hdr`): the frame was terminated in the device.
+    BadHdr { drained: bool },
+    /// The remainder could not be read: 8 = longer than the buffer, 9 = a block read failed, 10 = a byte read
+    /// failed. The frame was terminated (and the transfer aborted).
+    Short { why: u8, hw_len: u16, chan: u8, drained: bool },
+    /// A frame: its checked header, the valid length (clamped to the bytes really read), and whether the remainder
+    /// was read in block mode.
+    Frame { hdr: crate::SdpcmHdr, len: u16, block: bool },
+}
+
+impl<M: Mmio> Bus<M> {
+    /// brcmf_sdio_rxfail: terminate the current frame in the device (`abort` = also abort the F2 transfer, after a
+    /// read error), then wait for its byte count to drain. Returns whether it drained.
+    pub fn rxfail(&mut self, abort: bool) -> bool {
+        const SDIO_CCCR_ABORT: u32 = 0x06;
+        const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
+        const SFC_RF_TERM: u8 = 1 << 0;
+        const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1001B;
+        const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1001C;
+        if abort {
+            let _ = self.cmd52(true, 0, SDIO_CCCR_ABORT, 2);
+        }
+        let _ = self.cmd52(true, 1, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
+        for _ in 0..0xffffu32 {
+            let hi = self.cmd52(false, 1, SBSDIO_FUNC1_RFRAMEBCHI, 0).unwrap_or(0xff);
+            let lo = self.cmd52(false, 1, SBSDIO_FUNC1_RFRAMEBCLO, 0).unwrap_or(0xff);
+            if hi == 0 && lo == 0 {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Read ONE frame off F2 into `rx`, exactly as the driver did inline: poll / clear the SDIO core's interrupt
+    /// status (the mailbox interrupt goes to `hostmail`, or is returned as `HostInt`), the 64-B first read, the
+    /// header check, the remainder in one transfer (block mode when `block_rx` and > 512 B; the firmware expects it
+    /// whole), the unread tail zeroed (audit M-3 / L-15: never a previous frame's bytes). `max_dry` = dry polls,
+    /// `delay_1ms` between them. `sdb` = the SDIO core's backplane base.
+    #[allow(clippy::too_many_arguments)]
+    pub fn read_frame(&mut self, sdb: u32, rx: &mut [u8], max_dry: u32, skip_int: bool, block_rx: bool,
+        mut hostmail: Option<&mut dyn FnMut(&mut Self)>, delay_1ms: &mut dyn FnMut()) -> RxRead {
+        let mut skip = skip_int;
+        let mut waited = 0u32;
+        loop {
+            if !skip {
+                let intstat = self.bp_r32(sdb + SD_REG_INTSTATUS);
+                if intstat != 0 {
+                    let _ = self.bp_w32(sdb + SD_REG_INTSTATUS, intstat);
+                    if intstat & I_HMB_HOST_INT != 0 {
+                        match hostmail.as_mut() {
+                            Some(h) => h(self),
+                            None => return RxRead::HostInt,
+                        }
+                    }
+                }
+            }
+            skip = false;
+            let ok = self.cmd53_read(2, F2_ADDR, &mut rx[..FIRSTREAD]);
+            let (l, c) = (u16::from_le_bytes([rx[0], rx[1]]), u16::from_le_bytes([rx[2], rx[3]]));
+            if ok && (l != 0 || c != 0) {
+                break;
+            }
+            waited += 1;
+            if waited > max_dry {
+                return RxRead::Dry;
+            }
+            delay_1ms();
+        }
+        let hdr = match crate::sdpcm_hdr(&rx[..FIRSTREAD]) {
+            Ok(Some(h)) => h,
+            Ok(None) => return RxRead::Dry,
+            Err(_) => return RxRead::BadHdr { drained: self.rxfail(false) },
+        };
+        let hw_len = hdr.len;
+        let mut valid = FIRSTREAD;
+        let mut block = false;
+        if (hw_len as usize) > FIRSTREAD {
+            let rest = ((hw_len as usize) - FIRSTREAD + 3) & !3;
+            let end = (FIRSTREAD + rest).min(rx.len());
+            let want = end - FIRSTREAD;
+            let got = if block_rx && want > 512 {
+                let nblk = want.div_ceil(512);
+                let need = nblk * 512;
+                if FIRSTREAD + need <= rx.len() && self.cmd53_read_blocks(2, F2_ADDR, &mut rx[FIRSTREAD..FIRSTREAD + need], nblk as u32, 512) {
+                    block = true;
+                    want
+                } else {
+                    0
+                }
+            } else {
+                let n = if block_rx { want } else { want.min(512) };
+                if self.cmd53_read(2, F2_ADDR, &mut rx[FIRSTREAD..FIRSTREAD + n]) { n } else { 0 }
+            };
+            for b in rx[FIRSTREAD + got..end].iter_mut() {
+                *b = 0;
+            }
+            valid = FIRSTREAD + got;
+            if got < want || FIRSTREAD + rest > rx.len() {
+                let why = if FIRSTREAD + rest > rx.len() { 8 } else if want > 512 { 9 } else { 10 };
+                return RxRead::Short { why, hw_len, chan: hdr.chan, drained: self.rxfail(true) };
+            }
+        }
+        RxRead::Frame { hdr, len: hw_len.min(valid as u16), block }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,10 +432,12 @@ mod tests {
         data_out: RefCell<Vec<u32>>,
         ctr: RefCell<u32>,
         fail: RefCell<bool>,
+        /// When non-empty, BUF_DATA reads come from here (a frame in the F2 FIFO).
+        fifo: RefCell<std::collections::VecDeque<u32>>,
     }
     impl Fake {
         fn new() -> Self {
-            Fake { regs: RefCell::new([0; 64]), writes: RefCell::new(Vec::new()), data_out: RefCell::new(Vec::new()), ctr: RefCell::new(0), fail: RefCell::new(false) }
+            Fake { regs: RefCell::new([0; 64]), writes: RefCell::new(Vec::new()), data_out: RefCell::new(Vec::new()), ctr: RefCell::new(0), fail: RefCell::new(false), fifo: RefCell::new(Default::default()) }
         }
     }
     impl Mmio for Fake {
@@ -329,6 +454,7 @@ mod tests {
                 }
                 PRESENT_STATE => 0,
                 RESP0 => self.regs.borrow()[ARG1 / 4] & 0xFF,
+                BUF_DATA if !self.fifo.borrow().is_empty() => self.fifo.borrow_mut().pop_front().unwrap_or(0),
                 BUF_DATA => {
                     let mut c = self.ctr.borrow_mut();
                     *c += 1;
@@ -376,6 +502,53 @@ mod tests {
         assert_eq!(&b.m.data_out.borrow()[..], &[0x0403_0201, 0x05]);
         assert!(b.cmd53_write_blocks(2, 0x8000, &[7u8; 128], 2, 64));
         assert_eq!(b.m.data_out.borrow().len(), 2 + 32);
+    }
+
+
+    fn frame(len: u16, chan: u8, doff: u8, fill: u8) -> std::vec::Vec<u32> {
+        let mut b = std::vec![fill; len as usize];
+        b[0..2].copy_from_slice(&len.to_le_bytes());
+        b[2..4].copy_from_slice(&(!len).to_le_bytes());
+        b[4..8].copy_from_slice(&(3u32 | (chan as u32) << 8 | (doff as u32) << 24).to_le_bytes());
+        b[8..12].copy_from_slice(&0x0000_2000u32.to_le_bytes());
+        while b.len() % 4 != 0 {
+            b.push(0);
+        }
+        b.chunks(4).map(|c| u32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    }
+
+    #[test]
+    fn read_frame_reads_header_then_remainder() {
+        let mut b = Bus::new(Fake::new());
+        *b.m.fifo.borrow_mut() = frame(300, 2, 14, 0xab).into();
+        let mut rx = [0u8; 2048];
+        match b.read_frame(0x1800_2000, &mut rx, 0, false, false, None, &mut || {}) {
+            RxRead::Frame { hdr, len, block } => {
+                assert_eq!((hdr.chan, hdr.doff, hdr.len, len, block), (2, 14, 300, 300, false));
+                assert!(rx[64..300].iter().all(|&x| x == 0xab));
+            }
+            o => panic!("{o:?}"),
+        }
+    }
+
+    #[test]
+    fn read_frame_dry_and_bad_header() {
+        let mut b = Bus::new(Fake::new());
+        let mut rx = [0u8; 2048];
+        *b.m.fifo.borrow_mut() = std::vec![0u32; 16].into();
+        assert_eq!(b.read_frame(0, &mut rx, 0, false, false, None, &mut || {}), RxRead::Dry);
+        let mut bad = frame(100, 2, 14, 1);
+        bad[0] ^= 0x0001_0000; // break the check word
+        *b.m.fifo.borrow_mut() = bad.into();
+        assert!(matches!(b.read_frame(0, &mut rx, 0, false, false, None, &mut || {}), RxRead::BadHdr { .. }));
+    }
+
+    #[test]
+    fn read_frame_too_long_for_the_buffer_is_short() {
+        let mut b = Bus::new(Fake::new());
+        *b.m.fifo.borrow_mut() = frame(1500, 2, 14, 7).into();
+        let mut rx = [0u8; 600];
+        assert!(matches!(b.read_frame(0, &mut rx, 0, false, false, None, &mut || {}), RxRead::Short { why: 8, .. }));
     }
 
     #[test]
