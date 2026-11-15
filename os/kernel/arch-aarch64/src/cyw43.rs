@@ -2461,10 +2461,29 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
     // terminated, never left half-read (metal 2026-11-04); the unread tail zeroed and the length clamped to the bytes
     // read (audit M-3 / L-15). The mailbox interrupt comes back as `HostInt` (the kernel's mailbox handler uses the
     // same bus), then the read resumes without re-polling the status it just cleared.
+    // Step 4b-2b: a short-budget read (the AP loop's, `max_dry` <= RX_EL0_MAX_DRY) runs in el0-wifi over its SDHCI
+    // grant; the bring-up waits (up to 1.5 s) stay here, inside the 20 ms excursion budget. When the server is
+    // absent, in backoff, faulted or answers something the kernel's re-check refuses, the read is done in-kernel
+    // (D5) — after a fault or a refusal, first terminating any frame the server left half-read.
     let sdb = sdio_core_base();
+    let block = cfg!(feature = "wifi-bigrx");
+    let el0h = if max_dry <= hal::wifisrvabi::RX_EL0_MAX_DRY && !unsafe { RADIO_OFF } { el0() } else { None };
     let mut skip = false;
+    let mut el0_blk = None;
     let r = loop {
-        let r = bus().read_frame(sdb, rx, max_dry, skip, cfg!(feature = "wifi-bigrx"), None, &mut || delay(1_000));
+        let r = match el0h.map(|h| (h.rx_read)(sdb, max_dry, skip, block, rx)) {
+            Some(Some((r, blk))) => {
+                el0_blk = Some(blk);
+                r
+            }
+            Some(None) => {
+                if el0_srv_lost() {
+                    sdio_rxfail_ex(true);
+                }
+                bus().read_frame(sdb, rx, max_dry, skip, block, None, &mut || delay(1_000))
+            }
+            None => bus().read_frame(sdb, rx, max_dry, skip, block, None, &mut || delay(1_000)),
+        };
         if r != hal::sdio::RxRead::HostInt {
             break r;
         }
@@ -2488,7 +2507,7 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
         hal::sdio::RxRead::Short { why, hw_len, chan, drained } => {
             unsafe {
                 if why == 9 && cfg!(feature = "wifi-bigrx") {
-                    AP_DIAG[12] = bus().blk_diag;
+                    AP_DIAG[12] = el0_blk.unwrap_or(bus().blk_diag);
                 }
                 AP_DIAG[why as usize] += 1;
                 AP_DIAG[11] = (hw_len as u32) | ((chan as u32) << 16);
@@ -4423,6 +4442,8 @@ pub struct El0Keyer {
     pub key_start_sae: fn(&hal::wpakeyer::Start, u64, u8, &[u8; 16], &mut [u8]) -> Option<hal::wpakeyer::Out>,
     pub sae_forget: fn(&[u8; 6], u64, u8) -> Option<bool>,
     pub pmksa_remove: fn(&[u8; 6], bool),
+    // step 4b-2b: one SDPCM frame read by el0-wifi over its SDHCI grant (None = read in-kernel)
+    pub rx_read: fn(u32, u32, bool, bool, &mut [u8]) -> Option<(hal::sdio::RxRead, u32)>,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
@@ -4451,6 +4472,13 @@ fn el0_pending_add(d: i32) {
 
 fn el0() -> Option<El0Keyer> {
     unsafe { *core::ptr::addr_of!(EL0_KEYER) }
+}
+
+/// Set by the kernel's el0-wifi bridge when a call faulted / timed out or its reply was refused (vs a plain backoff,
+/// where no call was made): the frame read may have been left half-done in the device.
+pub static mut EL0_RX_LOST: bool = false;
+fn el0_srv_lost() -> bool {
+    unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_RX_LOST), false) }
 }
 
 /// Who is keying `sta`: (in EL0?, (Secure, replay)).
