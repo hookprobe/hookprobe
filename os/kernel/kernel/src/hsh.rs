@@ -511,6 +511,16 @@ pub fn selftest_web(now_ms: u64) -> bool {
 }
 
 /// (loaded, commands, faults, restarts)
+/// Load the EL0 shell now if it is not loaded yet (it otherwise loads on first use); true when it is loaded. The CM5
+/// AP beat uses it for the S0 isolation report over every resident server.
+#[cfg_attr(not(feature = "cm5"), allow(dead_code))]
+pub fn ensure_loaded() -> bool {
+    #[cfg(feature = "mctls")]
+    return el0::server().is_some();
+    #[cfg(not(feature = "mctls"))]
+    false
+}
+
 pub fn stats() -> (bool, u64, u64, u64) {
     #[cfg(feature = "mctls")]
     if let Some(s) = unsafe { (*core::ptr::addr_of!(el0::SRV)).as_ref() } {
