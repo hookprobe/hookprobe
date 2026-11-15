@@ -117,3 +117,17 @@ name = "rsn_assoc"
 path = "fuzz_targets/rsn_assoc.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "bcdc_reply"
+path = "fuzz_targets/bcdc_reply.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "el0_wifi_msgs"
+path = "fuzz_targets/el0_wifi_msgs.rs"
+test = false
+doc = false
+bench = false

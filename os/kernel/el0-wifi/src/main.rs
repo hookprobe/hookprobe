@@ -14,6 +14,7 @@ use hal::wpakeyer::{Direct, Keyer, Out, FRAME_MAX};
 use hal::wifisrvabi::saemsg;
 use hal::wifisrvabi::rxmsg;
 use hal::wifisrvabi::txmsg;
+use hal::wifisrvabi::ctlmsg;
 use hal::wifisrvabi::*;
 
 #[cfg(not(feature = "cm5"))]
@@ -407,6 +408,18 @@ fn poll() -> u32 {
     moved
 }
 
+/// Step 4d: build ONE control request with the kernel's sequence and request id and write it to F2 — one byte-mode
+/// CMD53, exactly as the driver's control path does (the kernel matches the reply).
+fn tx_ctl() -> ! {
+    let Some((seq, ifidx, cmd, flags, reqid, reply_len, payload)) = ctlmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
+    let mut f = [0u8; hal::bcdc::FRAME_MAX];
+    let n = hal::bcdc::request(seq, cmd, flags, reqid, ifidx, payload, reply_len, &mut f);
+    let padded = (n + 3) & !3;
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let ok = bus.cmd53_write(2, hal::sdio::F2_ADDR, &f[..padded]);
+    exit_lean(if ok { 1 } else { 4 })
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     if rd32(H_MAGIC) != MAGIC {
@@ -425,6 +438,7 @@ pub extern "C" fn _start() -> ! {
         CMD_BUS_PROBE => bus_probe(),
         CMD_RX_READ => rx_read(),
         CMD_TX_DATA => tx_data(),
+        CMD_TX_CTL => tx_ctl(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(rd32(H_CMD)),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring
