@@ -2453,6 +2453,22 @@ fn read_sdpcm_frame_raw(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     prof_add(if r.is_some() { 1 } else { 2 }, t0);
     r
 }
+/// One frame read in el0-wifi with a dry budget of `max_dry` ms, split into calls of at most RX_EL0_MAX_DRY ms (a
+/// dry call costs its budget + 1 poll, as the in-kernel loop counts it). None = the server could not serve it.
+fn el0_rx_chunked(h: El0Keyer, sdb: u32, max_dry: u32, skip: bool, block: bool, rx: &mut [u8]) -> Option<(hal::sdio::RxRead, u32)> {
+    let mut left = max_dry;
+    let mut skip = skip;
+    loop {
+        let d = left.min(hal::wifisrvabi::RX_EL0_MAX_DRY);
+        let r = (h.rx_read)(sdb, d, skip, block, rx)?;
+        if r.0 != hal::sdio::RxRead::Dry || left <= d {
+            return Some(r);
+        }
+        left -= d + 1;
+        skip = false;
+    }
+}
+
 fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
     // ADR 0065 step 4b-2: the bus traffic of reading one frame is `hal::sdio::Bus::read_frame` (host-tested; the
     // code el0-wifi runs). It keeps every rule this function had: the header checked by the fuzzed `hal::sdpcm_hdr`
@@ -2467,11 +2483,13 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
     // (D5) — after a fault or a refusal, first terminating any frame the server left half-read.
     let sdb = sdio_core_base();
     let block = cfg!(feature = "wifi-bigrx");
-    let el0h = if max_dry <= hal::wifisrvabi::RX_EL0_MAX_DRY && !unsafe { RADIO_OFF } { el0() } else { None };
+    // Step 4d: a longer wait (the control path's 800 ms) also runs in el0-wifi, as consecutive calls of at most
+    // RX_EL0_MAX_DRY ms each — every call stays inside the excursion budget.
+    let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
     let mut skip = false;
     let mut el0_blk = None;
     let r = loop {
-        let r = match el0h.map(|h| (h.rx_read)(sdb, max_dry, skip, block, rx)) {
+        let r = match el0h.map(|h| el0_rx_chunked(h, sdb, max_dry, skip, block, rx)) {
             Some(Some((r, blk))) => {
                 el0_blk = Some(blk);
                 r
@@ -4446,6 +4464,9 @@ pub struct El0Keyer {
     pub rx_read: fn(u32, u32, bool, bool, &mut [u8]) -> Option<(hal::sdio::RxRead, u32)>,
     // step 4c: one data frame built + written by el0-wifi with the kernel's sequence (None = write in-kernel)
     pub tx_data: fn(u8, u8, bool, &[u8]) -> Option<hal::sdio::TxWrite>,
+    // step 4d: one control request built + written by el0-wifi (None = write in-kernel)
+    #[allow(clippy::type_complexity)]
+    pub tx_ctl: fn(u8, u8, u32, u32, u16, usize, &[u8]) -> Option<bool>,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
@@ -6492,41 +6513,26 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
         return (false, 0);
     }
     let seq = unsafe { TX_SEQ };
-    // --- build the frame.
-    let mut frame = [0u8; DL_CHUNK + 64];
-    // SW word0: seq[0:7] | channel[8:11] | nextlen[16:23]=0 | doffset[24:31]=12.
-    let w0: u32 = (seq as u32)
-        | ((SDPCM_CONTROL_CHANNEL as u32) << 8)
-        | ((SDPCM_HDRLEN as u32) << 24);
-    // BCDC header. `len` = for a GET, the OUTPUT buffer size the firmware may fill
-    // (reply.len()); for a SET, the payload length. The frame still carries only the
-    // actual payload bytes; len just tells the firmware how much it may return.
-    let bcdc_len = if reply.is_empty() {
-        payload.len()
-    } else {
-        reply.len().max(payload.len())
+    // ADR 0065 step 4d: the request is built by `hal::bcdc::request` (the frame layout below, host-tested) and written
+    // as ONE byte-mode CMD53 to F2 — by el0-wifi when it is loaded, in-kernel otherwise (D5). The BCDC `len` is, for
+    // a GET, the OUTPUT buffer size the firmware may fill; for a SET, the payload length. The interface bits select
+    // the guest BSS while `with_if` does (0 = primary, byte-identical otherwise).
+    let ifidx = unsafe { CUR_IF } & 0xf;
+    let rid = reqid as u16;
+    let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
+    let tx_ok = match el0h.and_then(|h| (h.tx_ctl)(seq, ifidx, cmd, flags, rid, reply.len(), payload)) {
+        Some(ok) => {
+            if unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_TX_LOST), false) } {
+                let _ = bus().txfail();
+            }
+            ok
+        }
+        None => {
+            let mut frame = [0u8; hal::bcdc::FRAME_MAX];
+            let total = hal::bcdc::request(seq, cmd, flags, rid, ifidx, payload, reply.len(), &mut frame);
+            cmd53_write(2, F2_SDPCM_ADDR, &frame[..(total + 3) & !3])
+        }
     };
-    let bcdc = SDPCM_HDRLEN;
-    frame[bcdc..bcdc + 4].copy_from_slice(&cmd.to_le_bytes());
-    frame[bcdc + 4..bcdc + 8].copy_from_slice(&(bcdc_len as u32).to_le_bytes());
-    // BCDC_DCMD_IF (bits 12..15): which firmware interface the command is for (0 = the primary BSS; the guest BSS
-    // while `with_if` selects it). Always 0 outside a guest operation, so the primary path is byte-identical.
-    let flg = flags | (reqid << 16) | ((unsafe { CUR_IF } as u32 & 0xf) << 12); // SET bit + reqid in [31:16]
-    frame[bcdc + 8..bcdc + 12].copy_from_slice(&flg.to_le_bytes());
-    // status [bcdc+12..+16] left 0.
-    let body = bcdc + BCDC_HDRLEN;
-    let n = payload.len().min(frame.len() - body);
-    frame[body..body + n].copy_from_slice(&payload[..n]);
-    let total = (body + n) as u16; // SDPCM length: tag+swhdr+bcdc+payload (no tail pad)
-    // HW tag (LE16 len, LE16 ~len).
-    frame[0..2].copy_from_slice(&total.to_le_bytes());
-    frame[2..4].copy_from_slice(&(!total).to_le_bytes());
-    // SW header word0 @ off 4; word1 @ off 8 = 0 on TX.
-    frame[4..8].copy_from_slice(&w0.to_le_bytes());
-    // --- send on F2 (transfer padded to 4; firmware trims to the SDPCM length).
-    //     F2 SDPCM address = 0x8000 (4-byte-access flag), incrementing — per brcmf.
-    let padded = ((total as usize) + 3) & !3;
-    let tx_ok = cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded]);
     if tx_ok {
         unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) }; // seq wraps at 256
     }
@@ -6570,24 +6576,17 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
         last_len = hw_len;
         last_doff = doffset;
         let valid = (hw_len as usize).min(rx.len());
-        // A control (channel 0) frame with a BCDC header is our reply candidate.
-        if channel == SDPCM_CONTROL_CHANNEL
-            && doffset >= SDPCM_HDRLEN
-            && doffset + BCDC_HDRLEN <= valid
-        {
-            let bh = doffset;
-            let rflags = u32::from_le_bytes([rx[bh + 8], rx[bh + 9], rx[bh + 10], rx[bh + 11]]);
-            status = u32::from_le_bytes([rx[bh + 12], rx[bh + 13], rx[bh + 14], rx[bh + 15]]);
-            if (rflags >> 16) == reqid {
-                reqid_match = true;
-                got_ctrl = true;
-                let off = doffset + BCDC_HDRLEN;
-                if !reply.is_empty() && off < valid {
-                    let m = reply.len().min(valid - off);
-                    reply[..m].copy_from_slice(&rx[off..off + m]);
-                }
-                break 'frames;
+        // Our reply = a control (channel 0) frame with a whole BCDC header and our request id (`hal::bcdc::reply`,
+        // fuzzed: its input is the firmware's output). The id is compared on the 16 bits the frame carries.
+        if let hal::bcdc::Reply::Ours { status: st, off, end } = hal::bcdc::reply(&rx, valid, channel, doffset, rid) {
+            status = st;
+            reqid_match = true;
+            got_ctrl = true;
+            if !reply.is_empty() && off < end {
+                let m = reply.len().min(end - off);
+                reply[..m].copy_from_slice(&rx[off..off + m]);
             }
+            break 'frames;
         }
         // else: event/data frame or wrong reqid — park station frames for the serve loop (COR-M4),
         // then read the next.
