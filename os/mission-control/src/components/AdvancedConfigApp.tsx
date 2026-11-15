@@ -13,6 +13,7 @@
  * the two signed files are offered for the boot card. Nothing here applies a change without the owner's
  * signature; the device re-verifies everything.
  */
+import WifiDriverStatus from './WifiDriverStatus';
 import { type Component, For, Show, createEffect, createMemo, createSignal, onMount } from 'solid-js';
 import { substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
@@ -331,6 +332,7 @@ const AdvancedConfigApp: Component<{ path?: string }> = (props) => {
             </Show>
 
             <Show when={sec() === 'wifi'}>
+              <WifiDriverStatus calm />
               <div class="pcard">
                 <p class="l0-label">Network</p>
                 <div class="l0-grid-2">
