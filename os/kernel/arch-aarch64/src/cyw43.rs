@@ -4444,6 +4444,8 @@ pub struct El0Keyer {
     pub pmksa_remove: fn(&[u8; 6], bool),
     // step 4b-2b: one SDPCM frame read by el0-wifi over its SDHCI grant (None = read in-kernel)
     pub rx_read: fn(u32, u32, bool, bool, &mut [u8]) -> Option<(hal::sdio::RxRead, u32)>,
+    // step 4c: one data frame built + written by el0-wifi with the kernel's sequence (None = write in-kernel)
+    pub tx_data: fn(u8, u8, bool, &[u8]) -> Option<hal::sdio::TxWrite>,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
@@ -4477,6 +4479,8 @@ fn el0() -> Option<El0Keyer> {
 /// Set by the kernel's el0-wifi bridge when a call faulted / timed out or its reply was refused (vs a plain backoff,
 /// where no call was made): the frame read may have been left half-done in the device.
 pub static mut EL0_RX_LOST: bool = false;
+/// Set by the bridge when a data-frame write in el0-wifi faulted / timed out: the write may have been cut off.
+pub static mut EL0_TX_LOST: bool = false;
 fn el0_srv_lost() -> bool {
     unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_RX_LOST), false) }
 }
@@ -5830,8 +5834,6 @@ pub fn wifi_l4probe(sta_ip: &[u8; 4], gw_mac: &[u8; 6], out: &mut L4Result) {
 // Increment S1: derive the PTK from the captured M1, build + send M2, watch for M3.
 // ===========================================================================
 
-const SDPCM_DATA_CHANNEL: u8 = 2;
-
 /// Emit one debug char to the RP1 console UART (0x1C_0003_0000) — same UART kprint uses on
 /// cm5 — so the supplicant's stage is visible inline even if wifi_join never returns. Bounded.
 #[inline]
@@ -5875,8 +5877,6 @@ fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
 /// Send one ethernet frame as an SDPCM DATA frame (channel 2) over F2. Mirrors the control
 /// TX framing (bcdc_dcmd) but channel=2 with a 4-byte BDC data header instead of the BCDC
 /// dcmd header. Rides the same SDPCM tx-credit + sequence as control.
-/// SDPCM data TX build buffer: 4 x 512-B F2 blocks (the block-padded maximum frame is 3).
-const DATA_TX_BUF: usize = 4 * 512;
 
 fn sdpcm_data_tx(eth: &[u8]) -> bool {
     let t0 = ticks();
@@ -5898,68 +5898,43 @@ fn sdpcm_data_tx_inner(eth: &[u8]) -> bool {
         return false;
     }
     let seq = unsafe { TX_SEQ };
-    // Sized for the BLOCK-PADDED maximum: a 1514-B ethernet frame + the 16-B SDPCM/BDC header =
-    // 1530 B, padded to whole 512-B F2 blocks = 1536 B. (Was DL_CHUNK+64 = 1464 B: every frame
-    // padding to 3 blocks — any reply > ~1008 B, i.e. every QUIC packet — hit `need >
-    // frame.len()`, was refused uncounted, and wedged the in-order delivery queue. Metal
-    // 2026-11-04 [NAT-TRACE]: credit=40, pending=48, big_tx ok=0 fail=0.)
-    let mut frame = [0u8; DATA_TX_BUF];
-    let w0: u32 = (seq as u32)
-        | ((SDPCM_DATA_CHANNEL as u32) << 8)
-        | ((SDPCM_HDRLEN as u32) << 24);
-    let bdc = SDPCM_HDRLEN; // 12
-    frame[bdc] = 0x20; // BDC flags: proto ver 2 << 4
-    frame[bdc + 1] = 0; // priority
-    frame[bdc + 2] = unsafe { CUR_IF } & 0x0f; // flags2 = destination interface (0 = primary BSS)
-    frame[bdc + 3] = 0; // data_offset (4-byte units past the BDC header)
-    let body = bdc + 4;
-    let n = eth.len().min(frame.len() - body);
-    frame[body..body + n].copy_from_slice(&eth[..n]);
-    let total = (body + n) as u16;
-    frame[0..2].copy_from_slice(&total.to_le_bytes());
-    frame[2..4].copy_from_slice(&(!total).to_le_bytes());
-    frame[4..8].copy_from_slice(&w0.to_le_bytes());
-    let padded = ((total as usize) + 3) & !3;
-    // HARD LIMIT: one byte-mode CMD53 (512 B). Metal 2026-10-09 (img fd5b6ccb): sending a
-    // larger frame as consecutive <=512-B chunks DESYNCHRONISED the firmware's SDPCM stream
-    // — it treats each CMD53 as one transfer, so a 1234-B reply became three malformed
-    // frames; from that moment every later unicast (SYN-ACKs, FIN-ACKs, DNS) was silently
-    // dropped by the fw although the host saw TX success. Refuse instead (the caller counts
-    // it as too-big); the RX side's chunked remainder read IS valid (a 1350-B client frame
-    // crossed intact). A real >512-B TX needs block-mode CMD53 proven on metal first.
-    let ok = if padded > 512 {
-        #[cfg(feature = "wifi-bigtx")]
-        {
-            // EXACTLY the Linux sequence on this CM5 (mmc trace 2026-11-04, 12,289 of 12,664 block
-            // writes): whole blocks in ONE block-mode CMD53 at 0x8000 (incrementing), then the
-            // 4-byte-aligned TAIL as a byte-mode CMD53 at the ADVANCED address 0x8000 + N*512 —
-            // e.g. a 1532-B frame = "W F2 BLK incr 0x8000 2x512" + "W F2 byte incr 0x8400 508".
-            // No padding to an extra block (that wedged the firmware on metal: big_tx ok=4, then
-            // dead), and never restarting a chunk at 0x8000 (that desynced it on 2026-10-09).
-            let nblk = padded / 512;
-            let rem = padded % 512;
-            if padded > frame.len() {
-                unsafe { AP_DIAG[1] += 1 }; // never silent
-                false
-            } else {
-                let mut r = cmd53_write_blocks512(2, F2_SDPCM_ADDR, &frame[..nblk * 512], nblk as u32);
-                if r && rem > 0 {
-                    r = cmd53_write(2, F2_SDPCM_ADDR + (nblk * 512) as u32, &frame[nblk * 512..padded]);
-                }
-                unsafe { AP_DIAG[if r { 0 } else { 1 }] += 1 };
-                r
+    let ifidx = unsafe { CUR_IF } & 0x0f;
+    let big = cfg!(feature = "wifi-bigtx");
+    // ADR 0065 step 4c: the frame is built by `hal::sdio::data_frame` and written by `hal::sdio::Bus::write_frame`
+    // (the code el0-wifi runs) — in el0-wifi when it is loaded, in-kernel otherwise (D5). The rules are unchanged:
+    // - the buffer is sized for the BLOCK-PADDED maximum (1514 + 16 B = 1530, padded to 512-B blocks; metal
+    //   2026-11-04: a short buffer refused every QUIC-sized reply and wedged the delivery queue);
+    // - <= 512 B: one byte-mode CMD53; split byte-mode chunks desynced the firmware (metal 2026-10-09);
+    // - `wifi-bigtx`: whole blocks then the tail at the advanced address (the Linux sequence on this CM5).
+    // The credit accounting stays here: the sequence advances only on Sent. After an el0-wifi fault inside a write,
+    // the write is terminated in the device (brcmfmac's TX-error path) and the frame counts as failed.
+    let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
+    let w = match el0h.and_then(|h| (h.tx_data)(seq, ifidx, big, eth)) {
+        Some(w) => {
+            if unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_TX_LOST), false) } {
+                let _ = bus().txfail();
             }
+            w
         }
-        #[cfg(not(feature = "wifi-bigtx"))]
-        {
-            false // refused (counted too_big by the caller) — see the feature note in Cargo.toml
+        None => {
+            let mut frame = [0u8; hal::sdio::DATA_TX_BUF];
+            let total = hal::sdio::data_frame(seq, ifidx, eth, &mut frame);
+            bus().write_frame(&frame, total, big)
         }
-    } else {
-        let r = cmd53_write(2, F2_SDPCM_ADDR, &frame[..padded]);
-        if !r {
-            unsafe { AP_DIAG[4] += 1 };
+    };
+    let ok = match w {
+        hal::sdio::TxWrite::Sent { block } => {
+            if block {
+                unsafe { AP_DIAG[0] += 1 };
+            }
+            true
         }
-        r
+        hal::sdio::TxWrite::TooBig => false, // refused (counted too_big by the caller)
+        hal::sdio::TxWrite::Failed { block } => {
+            sync_diag();
+            unsafe { AP_DIAG[if block { 1 } else { 4 }] += 1 };
+            false
+        }
     };
     if ok {
         unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
@@ -5975,20 +5950,6 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
     if !ok {
         sync_diag();
         unsafe { AP_DIAG[12] = bus().blk_diag };
-    }
-    ok
-}
-
-/// BLOCK-mode CMD53 write of `nblocks` x 512-B blocks (data.len() >= nblocks*512) — the F2
-/// (WLAN data) block size programmed at bring-up. Mirrors `cmd53_write_blocks` (F1, 64-B
-/// blocks): wait BUF_WR_RDY before EACH block, W1C it, push 128 words, then wait Transfer
-/// Complete once. Multi-block PIO flow on this SDHCI is the open question this bench
-/// feature exists to answer (the F1 path once saw BUF_WR_RDY not re-assert for block 2).
-#[cfg(feature = "wifi-bigtx")]
-fn cmd53_write_blocks512(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
-    let ok = bus().cmd53_write_blocks(fnum, addr, data, nblocks, 512);
-    if !ok {
-        sync_diag();
     }
     ok
 }
