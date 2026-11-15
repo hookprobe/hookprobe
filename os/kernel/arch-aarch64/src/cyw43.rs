@@ -126,6 +126,44 @@ fn delay(us: u64) {
 }
 
 // --- SDIO command layer -------------------------------------------------------
+// ADR 0065 step 4b-1: the primitives are `hal::sdio::Bus` (the code el0-wifi runs too); these are the kernel's
+// wrappers over its own SDHCI mapping. The bus honours wifiheal's radio-off flag, and its diagnostics are copied
+// back into the statics the driver prints.
+struct KMmio;
+impl hal::sdio::Mmio for KMmio {
+    fn r8(&self, o: usize) -> u8 {
+        r8(o)
+    }
+    fn r16(&self, o: usize) -> u16 {
+        r16(o)
+    }
+    fn r32(&self, o: usize) -> u32 {
+        r32(o)
+    }
+    fn w8(&self, o: usize, v: u8) {
+        w8(o, v)
+    }
+    fn w16(&self, o: usize, v: u16) {
+        w16(o, v)
+    }
+    fn w32(&self, o: usize, v: u32) {
+        w32(o, v)
+    }
+}
+static mut BUS: hal::sdio::Bus<KMmio> = hal::sdio::Bus::new(KMmio);
+fn bus() -> &'static mut hal::sdio::Bus<KMmio> {
+    let b = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    b.off = unsafe { RADIO_OFF };
+    b
+}
+fn sync_diag() {
+    let b = unsafe { &*core::ptr::addr_of!(BUS) };
+    unsafe {
+        SDIO_DIAG = b.sdio_diag;
+        CMD53_DIAG = b.cmd53_diag;
+    }
+}
+
 /// SDIO command indices (SD spec + SDIO).
 const CMD3_SEND_RCA: u16 = 3;
 const CMD5_IO_OP_COND: u16 = 5;
@@ -155,129 +193,32 @@ pub fn sdio_diag() -> (u32, u32) {
 /// `crc_idx` = check the response CRC + command index (true for R1/R5/R6/R1b;
 /// FALSE for R3/R4 — e.g. CMD5's R4 has no CRC or index, so checking it errors).
 fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<u32> {
-    if unsafe { RADIO_OFF } {
-        return None; // Wi-Fi degraded (wifiheal): every SDIO access fails at once, the bus is never touched
+    let b = bus();
+    let r = b.cmd(idx, arg, resp_kind, crc_idx, data);
+    if r.is_none() {
+        sync_diag();
     }
-    let mut spin = 0u32;
-    let inhibit = CMD_INHIBIT | if data { DAT_INHIBIT } else { 0 };
-    while r32(PRESENT_STATE) & inhibit != 0 {
-        spin += 1;
-        if spin > 200_000 {
-            // Inhibit stuck (e.g. the command engine wedged on an in-band card
-            // interrupt) — soft-reset the CMD (+ DAT for data cmds) circuit to
-            // recover, then proceed. Standard SDHCI error recovery.
-            let mut rb = RST_CMD;
-            if data {
-                rb |= RST_DAT;
-            }
-            w8(0x2F, rb);
-            let mut rs = 0u32;
-            while r8(0x2F) & rb != 0 && rs < 200_000 {
-                rs += 1;
-            }
-            break;
-        }
-    }
-    w32(INT_STATUS, 0xFFFF_FFFF); // clear stale
-    w32(ARG1, arg);
-    let mut flags = resp_kind;
-    if crc_idx && resp_kind != 0 {
-        flags |= CMD_CRC_CHK | CMD_IDX_CHK;
-    }
-    if data {
-        flags |= CMD_DATA;
-    }
-    w16(CMD_XFER + 2, (idx << 8) | flags);
-    let mut spin = 0u32;
-    loop {
-        let st = r32(INT_STATUS);
-        if st & INT_ERR != 0 {
-            unsafe { SDIO_DIAG = (r32(PRESENT_STATE), st) };
-            return None;
-        }
-        if st & INT_CMD_DONE != 0 {
-            break;
-        }
-        spin += 1;
-        if spin > 1_000_000 {
-            unsafe { SDIO_DIAG = (r32(PRESENT_STATE), st) };
-            return None;
-        }
-    }
-    Some(r32(RESP0))
+    r
 }
 
 /// CMD52 (IO_RW_DIRECT): single-byte register access on SDIO function `fnum`.
 /// `write`=true writes `val`; returns the read/echoed byte.
 fn cmd52(write: bool, fnum: u32, addr: u32, val: u8) -> Option<u8> {
-    let arg = ((write as u32) << 31)
-        | ((fnum & 7) << 28)
-        | ((write as u32) << 27) // RAW (read-after-write) when writing
-        | ((addr & 0x1_FFFF) << 9)
-        | (val as u32);
-    cmd(CMD52_IO_RW_DIRECT, arg, RESP_48, true, false).map(|r| (r & 0xFF) as u8)
+    let r = bus().cmd52(write, fnum, addr, val);
+    if r.is_none() {
+        sync_diag();
+    }
+    r
 }
 
 /// CMD53 (IO_RW_EXTENDED) block/byte read into `out` from function `fnum` at
 /// `addr` (byte mode, incrementing). PIO via the buffer data port.
 fn cmd53_read(fnum: u32, addr: u32, out: &mut [u8]) -> bool {
-    let n = out.len().min(512);
-    // block size 1 handled as a byte transfer; count = n bytes.
-    w16(BLK_SIZE_CNT, n as u16); // byte count in low field for byte mode
-    w16(BLK_SIZE_CNT + 2, 1);
-    // Transfer Mode (0x0C low half) — REQUIRED for a data command. Linux
-    // sdhci_set_transfer_mode sets BLK_CNT_EN whenever data is present (only adds
-    // MULTI for >1 block), so a single-block read is BLK_CNT_EN | READ (0x12), not
-    // just READ (0x10). Written before the Command reg (0x0E), which cmd() issues.
-    w16(CMD_XFER, XM_READ | XM_BLKCNT_EN);
-    // F2 (WLAN data) is a FIFO: Linux brcmfmac reads it at a FIXED address, byte AND block mode
-    // (mmc trace on this CM5, 2026-11-04: 35,175 x "R F2 byte FIXED 0x8000"). F1 memory reads
-    // stay incrementing.
-    let incr: u32 = if fnum == 2 { 0 } else { 1 };
-    let arg = (0 << 31)            // read
-        | ((fnum & 7) << 28)
-        | (0 << 27)                 // byte mode (not block)
-        | (incr << 26)              // op-code: F2 fixed, F1 incrementing
-        | ((addr & 0x1_FFFF) << 9)
-        | (n as u32 & 0x1FF);
-    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
-        return false;
+    let ok = bus().cmd53_read(fnum, addr, out);
+    if !ok {
+        sync_diag();
     }
-    // PIO: wait buffer-read-ready (INT bit only — Present-State BUF_RD_EN b11 is
-    // unreliable on this controller and spurious-times-out the wait).
-    let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 {
-        if r32(INT_STATUS) & INT_ERR != 0 {
-            return false;
-        }
-        spin += 1;
-        if spin > 1_000_000 {
-            return false;
-        }
-    }
-    let mut i = 0;
-    while i < n {
-        let word = r32(BUF_DATA);
-        for b in 0..4 {
-            if i < n {
-                out[i] = ((word >> (b * 8)) & 0xFF) as u8;
-                i += 1;
-            }
-        }
-    }
-    // Wait Transfer Complete — de-asserts DAT_INHIBIT so the NEXT data command can
-    // issue. Skipping this left the re-read returning 0x00000000 (DAT stuck).
-    spin = 0;
-    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
-        if r32(INT_STATUS) & INT_ERR != 0 {
-            return false;
-        }
-        spin += 1;
-        if spin > 1_000_000 {
-            return false;
-        }
-    }
-    true
+    ok
 }
 
 // --- Backplane (SI) access via F1 -------------------------------------------
@@ -289,13 +230,11 @@ const SB_ADDR_HIGH: u32 = 0x1000C;
 const SI_ENUM_BASE: u32 = 0x1800_0000; // chipcommon core — chip-ID at +0x00
 
 fn set_backplane_window(addr: u32) -> bool {
-    // Window is 0x8000-aligned; program address bits [31:8] (brcmfmac masks the low
-    // byte with 0xFF after clearing the 15-bit offset — 0x80 dropped real bits for
-    // any window whose addr[14:8] != 0, e.g. cores above chipcommon).
-    let a = cmd52(true, 1, SB_ADDR_LOW, ((addr >> 8) & 0xFF) as u8);
-    let b = cmd52(true, 1, SB_ADDR_MID, ((addr >> 16) & 0xFF) as u8);
-    let c = cmd52(true, 1, SB_ADDR_HIGH, ((addr >> 24) & 0xFF) as u8);
-    a.is_some() && b.is_some() && c.is_some()
+    let ok = bus().set_backplane_window(addr);
+    if !ok {
+        sync_diag();
+    }
+    ok
 }
 
 /// BCM2712 SDHCI `cfg` quirk-block init (@ base+0x400) — the piece the plan flagged.
@@ -893,63 +832,11 @@ pub fn clm_chunk(flag: u16, chunk: &[u8], out: &mut [u8]) -> usize {
 
 // --- SDIO CMD53 write (byte mode) + backplane windowed write ------------------
 fn cmd53_write(fnum: u32, addr: u32, data: &[u8]) -> bool {
-    let n = data.len().min(512);
-    w16(BLK_SIZE_CNT, n as u16);
-    w16(BLK_SIZE_CNT + 2, 1);
-    // Transfer Mode = BLK_CNT_EN, WRITE direction (READ bit clear), single block.
-    // Explicit write clears any stale READ bit a prior cmd53_read left.
-    w16(CMD_XFER, XM_BLKCNT_EN);
-    let arg = (1 << 31)            // write
-        | ((fnum & 7) << 28)
-        | (0 << 27)                 // byte mode
-        | (1 << 26)                 // incrementing
-        | ((addr & 0x1_FFFF) << 9)
-        | (n as u32 & 0x1FF);
-    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
-        unsafe { CMD53_DIAG = (1, r32(INT_STATUS), r32(PRESENT_STATE)) };
-        return false;
+    let ok = bus().cmd53_write(fnum, addr, data);
+    if !ok {
+        sync_diag();
     }
-    // Wait Buffer-Write-Ready before pushing the FIFO — writing 0x20 early loses the
-    // block and XFER_COMPLETE never fires (the P10 step-3 firmware-write failure).
-    // (Present-State BUF_WR_EN b10 never asserts on this controller — gate on the
-    // INT bit only, or the wait spurious-times-out even though the FIFO is ready.)
-    let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 {
-        if r32(INT_STATUS) & INT_ERR != 0 {
-            unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-        spin += 1;
-        if spin > 1_000_000 {
-            unsafe { CMD53_DIAG = (3, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-    }
-    // PIO out: pack bytes into the 32-bit data port.
-    let mut i = 0;
-    while i < n {
-        let mut word = 0u32;
-        for b in 0..4 {
-            if i < n {
-                word |= (data[i] as u32) << (b * 8);
-                i += 1;
-            }
-        }
-        w32(BUF_DATA, word);
-    }
-    spin = 0;
-    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
-        if r32(INT_STATUS) & INT_ERR != 0 {
-            unsafe { CMD53_DIAG = (4, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-        spin += 1;
-        if spin > 2_000_000 {
-            unsafe { CMD53_DIAG = (5, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-    }
-    true
+    ok
 }
 
 static mut CMD53_DIAG: (u8, u32, u32) = (0, 0, 0);
@@ -971,65 +858,11 @@ fn set_func_block_size() {
 /// nblocks*64). This is how brcmfmac uploads firmware. PIO: wait BUF_WR_RDY before
 /// EACH block, push 64 B, then wait Transfer-Complete once at the end.
 fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
-    // AUDIT L-10: the push loop below indexes data[i..i+3] for nblocks*64 bytes
-    // with no length check. The sole caller currently pins nblocks to 1, but that
-    // .min(1) is a documented temporary isolation measure -- relaxing it for
-    // throughput would turn this into a slice-index panic (= abort = hang on metal).
-    let need = (nblocks as usize) * F1_BLOCK_SIZE as usize;
-    if data.len() < need {
-        return false;
+    let ok = bus().cmd53_write_blocks(fnum, addr, data, nblocks, F1_BLOCK_SIZE as usize);
+    if !ok {
+        sync_diag();
     }
-    w16(BLK_SIZE_CNT, F1_BLOCK_SIZE as u16); // block size = 64
-    w16(BLK_SIZE_CNT + 2, nblocks as u16); // block count
-    w16(CMD_XFER, XM_BLKCNT_EN | XM_MULTI); // block mode, multi, write dir
-    let arg = (1 << 31)               // write
-        | ((fnum & 7) << 28)
-        | (1 << 27)                    // BLOCK mode
-        | (1 << 26)                    // incrementing address
-        | ((addr & 0x1_FFFF) << 9)
-        | (nblocks & 0x1FF);           // block count in the count field
-    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
-        unsafe { CMD53_DIAG = (1, r32(INT_STATUS), r32(PRESENT_STATE)) };
-        return false;
-    }
-    let mut i = 0usize;
-    for _ in 0..nblocks {
-        let mut spin = 0u32;
-        while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 {
-            if r32(INT_STATUS) & INT_ERR != 0 {
-                unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
-                return false;
-            }
-            spin += 1;
-            if spin > 1_000_000 {
-                unsafe { CMD53_DIAG = (3, r32(INT_STATUS), r32(PRESENT_STATE)) };
-                return false;
-            }
-        }
-        w32(INT_STATUS, INT_BUF_WR_RDY); // clear (W1C) so the next block waits fresh
-        // push one 64-byte block (16 words)
-        for _ in 0..(F1_BLOCK_SIZE / 4) {
-            let word = (data[i] as u32)
-                | ((data[i + 1] as u32) << 8)
-                | ((data[i + 2] as u32) << 16)
-                | ((data[i + 3] as u32) << 24);
-            w32(BUF_DATA, word);
-            i += 4;
-        }
-    }
-    let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
-        if r32(INT_STATUS) & INT_ERR != 0 {
-            unsafe { CMD53_DIAG = (4, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-        spin += 1;
-        if spin > 4_000_000 {
-            unsafe { CMD53_DIAG = (5, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-    }
-    true
+    ok
 }
 
 /// Write `data` to backplane address `addr` in ≤32 KiB windows (F1). Uses BLOCK-mode
@@ -1070,22 +903,14 @@ fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
 // the chip-ID in Stage A. CMD53 data-phase register reads returned failure here
 // (0xFFFFFFFF), so we do NOT rely on it for the EROM walk / AI reset registers.
 fn bp_r32(addr: u32) -> u32 {
-    set_backplane_window(addr);
-    let base = addr & 0x7FFF;
-    let mut b = [0u8; 4];
-    for i in 0..4u32 {
-        b[i as usize] = cmd52(false, 1, base + i, 0).unwrap_or(0xFF);
-    }
-    u32::from_le_bytes(b)
+    bus().bp_r32(addr)
 }
 fn bp_w32(addr: u32, val: u32) -> bool {
-    set_backplane_window(addr);
-    // 32-bit ATOMIC write via CMD53 (4-byte-access flag 0x8000). CMD52 byte writes
-    // do NOT take on the AI wrapper control regs (IOCTL/RESET_CTL) — they need a
-    // single 32-bit access, so the CR4 CPUHALT never latched (halted=false) and the
-    // TCM stayed non-writable. Needs the func block size set first (it is, in
-    // firmware_upload before cr4_set_passive). Reads still use CMD52 bytes (work).
-    cmd53_write(1, (addr & 0x7FFF) | 0x8000, &val.to_le_bytes())
+    let ok = bus().bp_w32(addr, val);
+    if !ok {
+        sync_diag();
+    }
+    ok
 }
 
 // --- EROM walk: find a core's (regbase, wrapbase) by DMP part number -------------
@@ -6201,60 +6026,12 @@ fn sdpcm_data_tx_inner(eth: &[u8]) -> bool {
 /// wait BUF_RD_RDY before EACH block, W1C it, pull 128 words, then wait Transfer Complete.
 #[cfg(feature = "wifi-bigrx")]
 fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> bool {
-    const BS: usize = 512;
-    let need = (nblocks as usize) * BS;
-    if out.len() < need || nblocks == 0 || nblocks > 0x1ff {
-        return false;
+    let ok = bus().cmd53_read_blocks(fnum, addr, out, nblocks, 512);
+    if !ok {
+        sync_diag();
+        unsafe { AP_DIAG[12] = bus().blk_diag };
     }
-    w16(BLK_SIZE_CNT, BS as u16);
-    w16(BLK_SIZE_CNT + 2, nblocks as u16);
-    w16(CMD_XFER, XM_READ | XM_BLKCNT_EN | XM_MULTI);
-    // FIXED address — exactly the Linux sequence on this CM5 (mmc trace 2026-11-04): "R F2 byte
-    // FIXED 0x8000 64" then "R F2 BLK FIXED 0x8000 3x512". (img 7e84ab0 made ONLY the block read
-    // fixed while the byte first-read stayed incrementing — a mix Linux never issues.)
-    let incr: u32 = if fnum == 2 { 0 } else { 1 };
-    let arg = (0 << 31) | ((fnum & 7) << 28) | (1 << 27) | (incr << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
-    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
-        unsafe { AP_DIAG[12] = (1 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
-        return false;
-    }
-    let mut i = 0usize;
-    for _ in 0..nblocks {
-        let mut spin = 0u32;
-        while r32(INT_STATUS) & INT_BUF_RD_RDY == 0 {
-            if r32(INT_STATUS) & INT_ERR != 0 {
-                unsafe { AP_DIAG[12] = (2 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
-                return false;
-            }
-            spin += 1;
-            if spin > 1_000_000 {
-                unsafe { AP_DIAG[12] = (3 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
-                return false;
-            }
-        }
-        w32(INT_STATUS, INT_BUF_RD_RDY); // W1C so the next block waits fresh
-        for _ in 0..(BS / 4) {
-            let word = r32(BUF_DATA);
-            out[i] = (word & 0xff) as u8;
-            out[i + 1] = ((word >> 8) & 0xff) as u8;
-            out[i + 2] = ((word >> 16) & 0xff) as u8;
-            out[i + 3] = ((word >> 24) & 0xff) as u8;
-            i += 4;
-        }
-    }
-    let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
-        if r32(INT_STATUS) & INT_ERR != 0 {
-            unsafe { AP_DIAG[12] = (4 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
-            return false;
-        }
-        spin += 1;
-        if spin > 4_000_000 {
-            unsafe { AP_DIAG[12] = (5 << 24) | (r32(INT_STATUS) & 0xff_ffff) };
-            return false;
-        }
-    }
-    true
+    ok
 }
 
 /// BLOCK-mode CMD53 write of `nblocks` x 512-B blocks (data.len() >= nblocks*512) — the F2
@@ -6264,53 +6041,11 @@ fn cmd53_read_blocks512(fnum: u32, addr: u32, out: &mut [u8], nblocks: u32) -> b
 /// feature exists to answer (the F1 path once saw BUF_WR_RDY not re-assert for block 2).
 #[cfg(feature = "wifi-bigtx")]
 fn cmd53_write_blocks512(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
-    const BS: usize = 512;
-    let need = (nblocks as usize) * BS;
-    if data.len() < need || nblocks == 0 || nblocks > 0x1ff {
-        return false;
+    let ok = bus().cmd53_write_blocks(fnum, addr, data, nblocks, 512);
+    if !ok {
+        sync_diag();
     }
-    w16(BLK_SIZE_CNT, BS as u16);
-    w16(BLK_SIZE_CNT + 2, nblocks as u16);
-    w16(CMD_XFER, XM_BLKCNT_EN | XM_MULTI); // block mode, multi, write
-    let arg = (1 << 31) | ((fnum & 7) << 28) | (1 << 27) | (1 << 26) | ((addr & 0x1_FFFF) << 9) | (nblocks & 0x1FF);
-    if cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
-        unsafe { CMD53_DIAG = (1, r32(INT_STATUS), r32(PRESENT_STATE)) };
-        return false;
-    }
-    let mut i = 0usize;
-    for _ in 0..nblocks {
-        let mut spin = 0u32;
-        while r32(INT_STATUS) & INT_BUF_WR_RDY == 0 {
-            if r32(INT_STATUS) & INT_ERR != 0 {
-                unsafe { CMD53_DIAG = (2, r32(INT_STATUS), r32(PRESENT_STATE)) };
-                return false;
-            }
-            spin += 1;
-            if spin > 1_000_000 {
-                unsafe { CMD53_DIAG = (3, r32(INT_STATUS), r32(PRESENT_STATE)) };
-                return false;
-            }
-        }
-        w32(INT_STATUS, INT_BUF_WR_RDY); // W1C so the next block waits fresh
-        for _ in 0..(BS / 4) {
-            let word = (data[i] as u32) | ((data[i + 1] as u32) << 8) | ((data[i + 2] as u32) << 16) | ((data[i + 3] as u32) << 24);
-            w32(BUF_DATA, word);
-            i += 4;
-        }
-    }
-    let mut spin = 0u32;
-    while r32(INT_STATUS) & INT_XFER_DONE == 0 {
-        if r32(INT_STATUS) & INT_ERR != 0 {
-            unsafe { CMD53_DIAG = (4, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-        spin += 1;
-        if spin > 4_000_000 {
-            unsafe { CMD53_DIAG = (5, r32(INT_STATUS), r32(PRESENT_STATE)) };
-            return false;
-        }
-    }
-    true
+    ok
 }
 
 /// Outcome of the 4-way handshake attempt (S1 = up to M3).
