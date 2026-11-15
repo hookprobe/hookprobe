@@ -710,18 +710,28 @@ pub fn sae_selftest() -> bool {
     let m3 = matches!(test::eapol(&sta, &frame(1, false), 50, &mut fr), Some(Out::Send(_)));
     let keyed = matches!(test::eapol(&sta, &frame(2, true), 60, &mut fr), Some(Out::Keyed { tk, .. }) if tk[..] == ptk[32..48]);
     let clean2 = srv_clean();
-    // a later reconnect with PMKSA caching: its PMKID names the cached PMKSA -> SaeCached
+    // the station leaves 5 s after Accepted (past the leave-predates-SAE window): the driver's forget (op 0) frees its
+    // SAE state, while the PMKSA stays cached
+    let fwd = test::sae_forget(&sta, 5_000, 0);
+    // a later reconnect with PMKSA caching: its PMKID names the cached PMKSA -> SaeCached (a still-fresh SAE would
+    // take precedence: decide prefers SaeFresh, so this is checked after the forget)
     let mut rsnc = rsn8;
     rsnc.n_pmkid = 1;
     rsnc.pmkid[0] = st.pmkid;
-    let cached = test::sae_keying(&sta, 70, hal::rsnassoc::OFFER_SAE, Some(&rsnc)).is_some_and(|(k, _, _)| k == Keying::SaeCached(0));
-    // forgotten SAE state + no PMKID -> refused (the station must redo SAE)
-    let _ = test::sae_forget(&sta, 80, 1);
-    let nosae = test::sae_keying(&sta, 80, hal::rsnassoc::OFFER_SAE, Some(&rsn8)).is_some_and(|(k, _, _)| k == Keying::SaeNoSae);
+    let kc = test::sae_keying(&sta, 5_000, hal::rsnassoc::OFFER_SAE, Some(&rsnc));
+    let cached = fwd == Some(true) && kc.is_some_and(|(k, _, _)| k == Keying::SaeCached(0));
+    // no PMKID and no SAE state -> refused (the station must redo SAE)
+    let kn = test::sae_keying(&sta, 5_000, hal::rsnassoc::OFFER_SAE, Some(&rsn8));
+    let nosae = kn.is_some_and(|(k, _, _)| k == Keying::SaeNoSae);
+    if !(cached && nosae) {
+        let f = unsafe { (*core::ptr::addr_of!(keyer::WIFI)).as_ref().map_or(0, |s| s.faults) };
+        arch_aarch64::_print(format_args!(" [P-el0srv-sae] detail: forget -> {:?}, cached keying -> {:?}, no-PMKID keying -> {:?}, server faults {}\n",
+            fwd, kc.map(|(k, _, d)| (k, d.0)), kn.map(|(k, _, d)| (k, d.0)), f));
+    }
     unsafe { WIFI = None };
     let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae;
     arch_aarch64::_print(format_args!(
-        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d: WPA3 in el0-wifi against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} PMKSA-caching reconnect -> SaeCached={} forgotten + no PMKID -> SaeNoSae={}\n",
+        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d: WPA3 in el0-wifi against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={}\n",
         if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae
     ));
     pass
