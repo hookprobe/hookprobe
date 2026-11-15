@@ -367,13 +367,12 @@ pub mod saemsg {
         r.pmkid.copy_from_slice(&b[RX_OUT_LEN - 16..]);
         Some(r)
     }
-    pub fn encode_rx(ev: u8, status: u16, frames: &[(&[u8]); 2], n: usize, pmkid: &[u8; 16], o: &mut [u8]) -> usize {
+    pub fn encode_rx(ev: u8, status: u16, frames: &[&[u8]; 2], n: usize, pmkid: &[u8; 16], o: &mut [u8]) -> usize {
         o[..RX_OUT_LEN].fill(0);
         o[0] = ev;
         o[1..3].copy_from_slice(&status.to_le_bytes());
         o[3] = n.min(2) as u8;
-        for k in 0..2 {
-            let f = frames[k];
+        for (k, f) in frames.iter().enumerate() {
             let l = f.len().min(FRAME);
             let off = 4 + k * (2 + FRAME);
             o[off..off + 2].copy_from_slice(&(l as u16).to_le_bytes());
