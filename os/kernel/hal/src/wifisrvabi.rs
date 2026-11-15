@@ -421,9 +421,9 @@ pub const CMD_BUS_PROBE: u32 = 30;
 // ---- step 4b-2b: el0-wifi reads one SDPCM frame over its SDHCI grant (`crate::sdio::Bus::read_frame`) ----
 /// IN = [`rxmsg::encode_in`]. OUT = [`rxmsg::encode_out`].
 pub const CMD_RX_READ: u32 = 31;
-/// The longest dry wait the kernel hands el0-wifi (ms): the CM5 excursion budget is 20 ms, so the bring-up reads
-/// that wait up to 1.5 s for a reply stay in the kernel.
-pub const RX_EL0_MAX_DRY: u32 = 5;
+/// el0-wifi polls ONCE per `CMD_RX_READ` and never waits: EL0 has no counter access on the CM5 (metal 2026-11-15:
+/// a wait inside the server trapped on CNTFRQ/CNTPCT, EC 0x18). A dry budget is the kernel's loop around the calls.
+pub const RX_EL0_MAX_DRY: u32 = 0;
 
 /// The frame-read messages. The server's reply is NOT trusted: the kernel re-checks the frame's header itself
 /// (`crate::sdpcm_hdr`) and accepts a frame only when the claimed length is the header's.

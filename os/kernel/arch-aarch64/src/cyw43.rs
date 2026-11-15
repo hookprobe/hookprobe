@@ -1978,13 +1978,16 @@ pub fn sdpcm_frame_pending() -> bool {
 /// (sdio.c, abort=true, rtx=false): CMD52 abort of F2 through F0 (`brcmf_sdiod_abort`: CCCR
 /// ABORT 0x06 <- function number), then SBSDIO_FUNC1_FRAMECTRL (0x1000D) <- SFC_RF_TERM (bit 0),
 /// then wait until the device's remaining-frame byte count RFRAMEBCHI/LO (0x1001C/0x1001B) is
-/// zero (bounded, like brcmfmac's 0xffff retries).
+/// zero (bounded, like brcmfmac's 0xffff retries). The superframe (glom) reader's only; the single-frame reader
+/// terminates through `hal::sdio::Bus::read_frame`.
+#[cfg(feature = "wifi-bigrx")]
 fn sdio_rxfail() {
     sdio_rxfail_ex(true);
 }
 
 /// brcmf_sdio_rxfail(bus, abort, false): `abort` = also abort the in-flight F2 transfer (read errors);
 /// false = only terminate the frame (a corrupt header tag, nothing in flight).
+#[cfg(feature = "wifi-bigrx")]
 fn sdio_rxfail_ex(abort: bool) {
     unsafe { AP_DIAG[6] += 1 };
     if !bus().rxfail(abort) {
@@ -2453,19 +2456,20 @@ fn read_sdpcm_frame_raw(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     prof_add(if r.is_some() { 1 } else { 2 }, t0);
     r
 }
-/// One frame read in el0-wifi with a dry budget of `max_dry` ms, split into calls of at most RX_EL0_MAX_DRY ms (a
-/// dry call costs its budget + 1 poll, as the in-kernel loop counts it). None = the server could not serve it.
+/// One frame read through el0-wifi with a dry budget of `max_dry` ms: el0-wifi polls once per call (it never waits:
+/// EL0 has no counter on the CM5), the kernel delays 1 ms between dry polls — the in-kernel loop's count (max_dry + 1
+/// polls). None = the server could not serve a call.
 fn el0_rx_chunked(h: El0Keyer, sdb: u32, max_dry: u32, skip: bool, block: bool, rx: &mut [u8]) -> Option<(hal::sdio::RxRead, u32)> {
-    let mut left = max_dry;
+    let mut waited = 0u32;
     let mut skip = skip;
     loop {
-        let d = left.min(hal::wifisrvabi::RX_EL0_MAX_DRY);
-        let r = (h.rx_read)(sdb, d, skip, block, rx)?;
-        if r.0 != hal::sdio::RxRead::Dry || left <= d {
+        let r = (h.rx_read)(sdb, 0, skip, block, rx)?;
+        if r.0 != hal::sdio::RxRead::Dry || waited >= max_dry {
             return Some(r);
         }
-        left -= d + 1;
+        waited += 1;
         skip = false;
+        delay(1_000);
     }
 }
 
@@ -2483,8 +2487,8 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
     // (D5) — after a fault or a refusal, first terminating any frame the server left half-read.
     let sdb = sdio_core_base();
     let block = cfg!(feature = "wifi-bigrx");
-    // Step 4d: a longer wait (the control path's 800 ms) also runs in el0-wifi, as consecutive calls of at most
-    // RX_EL0_MAX_DRY ms each — every call stays inside the excursion budget.
+    // Step 4d: a longer wait (the control path's 800 ms) also reads through el0-wifi: one poll per call, the kernel
+    // delays between them.
     let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
     let mut skip = false;
     let mut el0_blk = None;
@@ -2494,12 +2498,11 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
                 el0_blk = Some(blk);
                 r
             }
-            Some(None) => {
-                if el0_srv_lost() {
-                    sdio_rxfail_ex(true);
-                }
-                bus().read_frame(sdb, rx, max_dry, skip, block, None, &mut || delay(1_000))
-            }
+            // The server could not serve it (absent, backoff, fault, refused reply): read in-kernel. No terminate
+            // here — metal k4d: a precautionary rxfail after a fault with no frame in flight killed good frames
+            // (rx_terminated=22, control replies lost); a frame really left half-read shows up as a bad header on
+            // this read and is terminated by that path.
+            Some(None) => bus().read_frame(sdb, rx, max_dry, skip, block, None, &mut || delay(1_000)),
             None => bus().read_frame(sdb, rx, max_dry, skip, block, None, &mut || delay(1_000)),
         };
         if r != hal::sdio::RxRead::HostInt {
@@ -4497,14 +4500,8 @@ fn el0() -> Option<El0Keyer> {
     unsafe { *core::ptr::addr_of!(EL0_KEYER) }
 }
 
-/// Set by the kernel's el0-wifi bridge when a call faulted / timed out or its reply was refused (vs a plain backoff,
-/// where no call was made): the frame read may have been left half-done in the device.
-pub static mut EL0_RX_LOST: bool = false;
 /// Set by the bridge when a data-frame write in el0-wifi faulted / timed out: the write may have been cut off.
 pub static mut EL0_TX_LOST: bool = false;
-fn el0_srv_lost() -> bool {
-    unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_RX_LOST), false) }
-}
 
 /// Who is keying `sta`: (in EL0?, (Secure, replay)).
 fn key_expect(sta: &[u8; 6]) -> Option<(bool, (bool, u64))> {
