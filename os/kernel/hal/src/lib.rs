@@ -961,7 +961,7 @@ pub mod saewire;
 pub mod rsnassoc;
 pub mod mgmtabi;
 pub mod hshabi;
-pub mod wpakeyer;
 pub mod el0ring;
 pub mod wifisrvabi;
+pub mod wpakeyer;
 pub mod ip6;
