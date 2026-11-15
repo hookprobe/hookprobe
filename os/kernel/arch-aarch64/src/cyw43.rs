@@ -1986,24 +1986,10 @@ fn sdio_rxfail() {
 /// brcmf_sdio_rxfail(bus, abort, false): `abort` = also abort the in-flight F2 transfer (read errors);
 /// false = only terminate the frame (a corrupt header tag, nothing in flight).
 fn sdio_rxfail_ex(abort: bool) {
-    const SDIO_CCCR_ABORT: u32 = 0x06;
-    const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
-    const SFC_RF_TERM: u8 = 1 << 0;
-    const SBSDIO_FUNC1_RFRAMEBCLO: u32 = 0x1001B;
-    const SBSDIO_FUNC1_RFRAMEBCHI: u32 = 0x1001C;
     unsafe { AP_DIAG[6] += 1 };
-    if abort {
-        let _ = cmd52(true, 0, SDIO_CCCR_ABORT, 2);
+    if !bus().rxfail(abort) {
+        unsafe { AP_DIAG[7] += 1 };
     }
-    let _ = cmd52(true, 1, SBSDIO_FUNC1_FRAMECTRL, SFC_RF_TERM);
-    for _ in 0..0xffffu32 {
-        let hi = cmd52(false, 1, SBSDIO_FUNC1_RFRAMEBCHI, 0).unwrap_or(0xff);
-        let lo = cmd52(false, 1, SBSDIO_FUNC1_RFRAMEBCLO, 0).unwrap_or(0xff);
-        if hi == 0 && lo == 0 {
-            return;
-        }
-    }
-    unsafe { AP_DIAG[7] += 1 };
 }
 
 /// Read ONE SDPCM frame off F2 (poll intstatus, 64-B first read + remainder), advancing
@@ -2468,132 +2454,63 @@ fn read_sdpcm_frame_raw(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)>
     r
 }
 fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
+    // ADR 0065 step 4b-2: the bus traffic of reading one frame is `hal::sdio::Bus::read_frame` (host-tested; the
+    // code el0-wifi runs). It keeps every rule this function had: the header checked by the fuzzed `hal::sdpcm_hdr`
+    // (a corrupt tag / data offset is terminated in the device, COR-L6); the remainder read as ONE transfer, block
+    // mode in the `wifi-bigrx` build (metal 2026-10-09: split reads stalled the SDPCM stream); a frame not read whole
+    // terminated, never left half-read (metal 2026-11-04); the unread tail zeroed and the length clamped to the bytes
+    // read (audit M-3 / L-15). The mailbox interrupt comes back as `HostInt` (the kernel's mailbox handler uses the
+    // same bus), then the read resumes without re-polling the status it just cleared.
     let sdb = sdio_core_base();
-    let mut hw_len;
-    let mut hw_ck;
-    let mut waited = 0u32;
-    loop {
-        let intstat = bp_r32(sdb + SD_REG_INTSTATUS);
-        if intstat != 0 {
-            let _ = bp_w32(sdb + SD_REG_INTSTATUS, intstat);
-            if intstat & I_HMB_HOST_INT != 0 {
-                hostmail(sdb);
-            }
+    let mut skip = false;
+    let r = loop {
+        let r = bus().read_frame(sdb, rx, max_dry, skip, cfg!(feature = "wifi-bigrx"), None, &mut || delay(1_000));
+        if r != hal::sdio::RxRead::HostInt {
+            break r;
         }
-        let ok = cmd53_read(2, F2_SDPCM_ADDR, &mut rx[..BRCMF_FIRSTREAD]);
-        hw_len = u16::from_le_bytes([rx[0], rx[1]]);
-        hw_ck = u16::from_le_bytes([rx[2], rx[3]]);
-        if ok && (hw_len != 0 || hw_ck != 0) {
-            break;
-        }
-        waited += 1;
-        if waited > max_dry {
-            return None; // dry — no more frames in the window
-        }
-        delay(1_000);
-    }
-    // G-E: the header is decoded and checked by the pure, fuzzed `hal::sdpcm_hdr` (brcmfmac hdparse rules): a
-    // corrupt tag OR a data offset inside the header / past the frame is terminated in the device — leaving it in
-    // the F2 FIFO desyncs every later read (peer review COR-L6); passing it on let a payload overlap the header.
-    let _ = hw_ck;
-    let h = match hal::sdpcm_hdr(&rx[..BRCMF_FIRSTREAD]) {
-        Ok(Some(h)) => h,
-        Ok(None) => return None,
-        Err(_) => {
-            unsafe { AP_DIAG[15] += 1 };
-            sdio_rxfail_ex(false);
-            return None;
+        hostmail(sdb);
+        skip = true;
+    };
+    sync_diag(); // the per-command failure diagnostics, as the per-call wrappers kept them
+    let rxfail_diag = |drained: bool| unsafe {
+        AP_DIAG[6] += 1;
+        if !drained {
+            AP_DIAG[7] += 1;
         }
     };
-    let (w0r, w1r) = ((h.seq as u32) | (h.chan as u32) << 8, h.w1);
-    let channel = h.chan;
-    let doffset = h.doff;
-    unsafe {
-        let seq = (w0r & 0xff) as u8;
-        if RX_DIAG.3 != 0 && seq != (RX_DIAG.0 as u8).wrapping_add(1) {
-            RX_DIAG.1 += 1; // firmware RX sequence gap (a frame we never read)
+    match r {
+        hal::sdio::RxRead::Dry | hal::sdio::RxRead::HostInt => None,
+        hal::sdio::RxRead::BadHdr { drained } => {
+            unsafe { AP_DIAG[15] += 1 };
+            rxfail_diag(drained);
+            None
         }
-        RX_DIAG.0 = seq as u32;
-        RX_DIAG.3 = 1;
-    }
-    apply_window(w1r);
-    // AUDIT M-3 / L-15: cmd53_read silently caps a byte-mode transfer at 512 bytes
-    // and still reports success, so for a frame claiming more than
-    // BRCMF_FIRSTREAD+512 the tail of `rx` is NEVER written by this frame. `rx` is
-    // reused across thousands of poll iterations, so every parser that keys its
-    // bounds off the device-supplied hw_len (the escan BSS parser, the BCDC reply
-    // copy) could assemble BSSIDs/SSIDs/ccode from STALE bytes of a previous frame.
-    // That is not memory-unsafe (all indices are bounded by rx.len()) but it is a
-    // data-integrity break across a trust boundary, and scan output IS a security
-    // signal here. Two defences, both fail-closed:
-    //   1. zero the region this frame could not fill, so a short read yields zeros
-    //      (which de-dup/validation rejects) rather than a previous frame's bytes;
-    //   2. clamp the hw_len we report to the bytes actually transferred, so every
-    //      downstream bound tightens instead of over-reading.
-    let mut valid = BRCMF_FIRSTREAD;
-    if (hw_len as usize) > BRCMF_FIRSTREAD {
-        let rest = ((hw_len as usize) - BRCMF_FIRSTREAD + 3) & !3;
-        let end = (BRCMF_FIRSTREAD + rest).min(rx.len());
-        // The remainder is ONE transfer. Metal 2026-10-09 (imgs fd5b6ccb/6e2f0190): reading
-        // it as consecutive <=512-B byte-mode CMD53s let the first big frame through intact,
-        // then STALLED the SDPCM stream for the rest of the boot (no further frames read,
-        // TX credit never returned, 29 deliveries stuck) — the firmware expects the remainder
-        // in a single read, exactly as brcmfmac does it (block mode when > the block size).
-        // Default build: a single byte-mode read capped at 512 B — a frame > ~560 B is
-        // truncated, fails `parse` and is counted `trunc_drop` (fail-closed, stream intact).
-        // `wifi-bigtx` bench build: one BLOCK-mode read of N x 512-B blocks for a remainder
-        // > 512 B (the fw pads the tail to the block size).
-        let want = end - BRCMF_FIRSTREAD;
-        let got = {
-            #[cfg(feature = "wifi-bigrx")]
-            {
-                if want > 512 {
-                    let nblk = (want + 511) / 512;
-                    let need = nblk * 512;
-                    if BRCMF_FIRSTREAD + need <= rx.len()
-                        && cmd53_read_blocks512(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..BRCMF_FIRSTREAD + need], nblk as u32)
-                    {
-                        unsafe { AP_DIAG[2] += 1 };
-                        want
-                    } else {
-                        0
-                    }
-                } else if cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..end]) {
-                    want
-                } else {
-                    0
-                }
-            }
-            #[cfg(not(feature = "wifi-bigrx"))]
-            {
-                let n = want.min(512);
-                if cmd53_read(2, F2_SDPCM_ADDR, &mut rx[BRCMF_FIRSTREAD..BRCMF_FIRSTREAD + n]) {
-                    n
-                } else {
-                    0
-                }
-            }
-        };
-        for b in rx[BRCMF_FIRSTREAD + got..end].iter_mut() {
-            *b = 0;
-        }
-        valid = BRCMF_FIRSTREAD + got;
-        // A frame we could not read WHOLE must be TERMINATED in the device, never left
-        // half-read: the remainder stays in the F2 FIFO and the SDPCM stream degrades, then
-        // wedges (metal 2026-11-04: after the first truncated reads TX credit only fell,
-        // 40 -> 0, and RX froze). brcmfmac never truncates — brcmf_sdio_rxfail.
-        if got < want || BRCMF_FIRSTREAD + rest > rx.len() {
+        hal::sdio::RxRead::Short { why, hw_len, chan, drained } => {
             unsafe {
-                let k = if BRCMF_FIRSTREAD + rest > rx.len() { 8 } else if want > 512 { 9 } else { 10 };
-                AP_DIAG[k] += 1;
-                AP_DIAG[11] = (hw_len as u32) | ((channel as u32) << 16);
+                if why == 9 && cfg!(feature = "wifi-bigrx") {
+                    AP_DIAG[12] = bus().blk_diag;
+                }
+                AP_DIAG[why as usize] += 1;
+                AP_DIAG[11] = (hw_len as u32) | ((chan as u32) << 16);
             }
-            sdio_rxfail();
-            return None;
+            rxfail_diag(drained);
+            None
+        }
+        hal::sdio::RxRead::Frame { hdr, len, block } => {
+            unsafe {
+                if block {
+                    AP_DIAG[2] += 1;
+                }
+                if RX_DIAG.3 != 0 && hdr.seq != (RX_DIAG.0 as u8).wrapping_add(1) {
+                    RX_DIAG.1 += 1; // firmware RX sequence gap (a frame we never read)
+                }
+                RX_DIAG.0 = hdr.seq as u32;
+                RX_DIAG.3 = 1;
+            }
+            apply_window(hdr.w1);
+            Some((hdr.chan, len, hdr.doff))
         }
     }
-    let hw_len = hw_len.min(valid as u16);
-    Some((channel, hw_len, doffset))
 }
 
 /// P10-D: enable events, bring the STA interface UP, start an escan, and collect the APs
