@@ -417,3 +417,194 @@ pub const SDHCI_PA_CM5: usize = 0x10_0110_0000;
 pub const PROBE_REGS: [usize; 6] = [0x40, 0x44, 0xFC, 0x24, 0x28, 0x2C];
 /// OUT = PROBE_REGS.len() × u32 (LE), read by el0-wifi from its device mapping.
 pub const CMD_BUS_PROBE: u32 = 30;
+
+// ---- step 4b-2b: el0-wifi reads one SDPCM frame over its SDHCI grant (`crate::sdio::Bus::read_frame`) ----
+/// IN = [`rxmsg::encode_in`]. OUT = [`rxmsg::encode_out`].
+pub const CMD_RX_READ: u32 = 31;
+/// The longest dry wait the kernel hands el0-wifi (ms): the CM5 excursion budget is 20 ms, so the bring-up reads
+/// that wait up to 1.5 s for a reply stay in the kernel.
+pub const RX_EL0_MAX_DRY: u32 = 5;
+
+/// The frame-read messages. The server's reply is NOT trusted: the kernel re-checks the frame's header itself
+/// (`crate::sdpcm_hdr`) and accepts a frame only when the claimed length is the header's.
+pub mod rxmsg {
+    use crate::sdio::{RxRead, FIRSTREAD};
+
+    pub const IN_LEN: usize = 12;
+    /// OUT header: kind, why, chan, flags (1 drained, 2 block), len u16, frame bytes u16, blk_diag u32.
+    pub const HDR: usize = 12;
+    /// The most frame bytes a reply carries (a successful read is at most 64 + 3 × 512 = 1600 B on this driver).
+    pub const FRAME_MAX: usize = super::OUT_MAX - HDR;
+    const DRY: u8 = 0;
+    const HOST_INT: u8 = 1;
+    const BAD_HDR: u8 = 2;
+    const SHORT: u8 = 3;
+    const FRAME: u8 = 4;
+
+    /// (SDIO core base, dry budget, skip the first intstatus poll, block-mode RX, the kernel's buffer size).
+    pub fn encode_in(sdb: u32, max_dry: u32, skip_int: bool, block_rx: bool, cap: usize, o: &mut [u8; IN_LEN]) {
+        o[0..4].copy_from_slice(&sdb.to_le_bytes());
+        o[4..8].copy_from_slice(&max_dry.to_le_bytes());
+        o[8] = skip_int as u8 | (block_rx as u8) << 1;
+        o[9] = 0;
+        o[10..12].copy_from_slice(&(cap.min(u16::MAX as usize) as u16).to_le_bytes());
+    }
+    pub fn decode_in(b: &[u8]) -> Option<(u32, u32, bool, bool, usize)> {
+        if b.len() != IN_LEN {
+            return None;
+        }
+        let sdb = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+        let dry = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);
+        Some((sdb, dry, b[8] & 1 != 0, b[8] & 2 != 0, u16::from_le_bytes([b[10], b[11]]) as usize))
+    }
+
+    /// The server's reply: the outcome, then (for a frame) its first `max(len, 64)` bytes. Returns the length.
+    pub fn encode_out(r: &RxRead, rx: &[u8], blk_diag: u32, o: &mut [u8]) -> usize {
+        let (kind, why, chan, flags, len, nb) = match *r {
+            RxRead::Dry => (DRY, 0, 0, 0, 0, 0),
+            RxRead::HostInt => (HOST_INT, 0, 0, 0, 0, 0),
+            RxRead::BadHdr { drained } => (BAD_HDR, 0, 0, drained as u8, 0, 0),
+            RxRead::Short { why, hw_len, chan, drained } => (SHORT, why, chan, drained as u8, hw_len, 0),
+            RxRead::Frame { hdr, len, block } => {
+                let nb = (len as usize).max(FIRSTREAD);
+                if nb > FRAME_MAX.min(rx.len()) {
+                    // cannot happen on this driver (see FRAME_MAX); report it as a terminated short frame
+                    (SHORT, 8, hdr.chan, 0, hdr.len, 0)
+                } else {
+                    (FRAME, 0, hdr.chan, (block as u8) << 1, len, nb)
+                }
+            }
+        };
+        o[0] = kind;
+        o[1] = why;
+        o[2] = chan;
+        o[3] = flags;
+        o[4..6].copy_from_slice(&len.to_le_bytes());
+        o[6..8].copy_from_slice(&(nb as u16).to_le_bytes());
+        o[8..12].copy_from_slice(&blk_diag.to_le_bytes());
+        o[HDR..HDR + nb].copy_from_slice(&rx[..nb]);
+        HDR + nb
+    }
+
+    /// The kernel's side: the outcome and blk_diag; a frame's bytes land in `rx` (the rest of `rx` zeroed: never a
+    /// previous frame's bytes, audit M-3 / L-15). None = a malformed or inconsistent reply (the caller counts it and
+    /// terminates the frame in the device).
+    pub fn decode_out(o: &[u8], rx: &mut [u8]) -> Option<(RxRead, u32)> {
+        if o.len() < HDR {
+            return None;
+        }
+        let len = u16::from_le_bytes([o[4], o[5]]);
+        let nb = u16::from_le_bytes([o[6], o[7]]) as usize;
+        let blk = u32::from_le_bytes([o[8], o[9], o[10], o[11]]);
+        let (drained, block) = (o[3] & 1 != 0, o[3] & 2 != 0);
+        if o[0] != FRAME && (nb != 0 || o.len() != HDR) {
+            return None;
+        }
+        let r = match o[0] {
+            DRY => RxRead::Dry,
+            HOST_INT => RxRead::HostInt,
+            BAD_HDR => RxRead::BadHdr { drained },
+            SHORT if (8..=10).contains(&o[1]) => RxRead::Short { why: o[1], hw_len: len, chan: o[2], drained },
+            FRAME => {
+                if o.len() != HDR + nb || nb < FIRSTREAD || nb > rx.len() {
+                    return None;
+                }
+                rx[..nb].copy_from_slice(&o[HDR..]);
+                for b in rx[nb..].iter_mut() {
+                    *b = 0;
+                }
+                let hdr = match crate::sdpcm_hdr(&rx[..FIRSTREAD]) {
+                    Ok(Some(h)) => h,
+                    _ => return None,
+                };
+                if hdr.len != len || nb != (len as usize).max(FIRSTREAD) || hdr.chan != o[2] {
+                    return None;
+                }
+                RxRead::Frame { hdr, len, block }
+            }
+            _ => return None,
+        };
+        Some((r, blk))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn frame(len: u16, chan: u8, doff: u8) -> [u8; 2048] {
+            let mut b = [0x5au8; 2048];
+            b[0..2].copy_from_slice(&len.to_le_bytes());
+            b[2..4].copy_from_slice(&(!len).to_le_bytes());
+            b[4..8].copy_from_slice(&(7u32 | (chan as u32) << 8 | (doff as u32) << 24).to_le_bytes());
+            b[8..12].copy_from_slice(&0x0000_2000u32.to_le_bytes());
+            b
+        }
+
+        #[test]
+        fn input_round_trips() {
+            let mut i = [0u8; IN_LEN];
+            encode_in(0x1800_2000, 3, true, false, 2048, &mut i);
+            assert_eq!(decode_in(&i), Some((0x1800_2000, 3, true, false, 2048)));
+            assert_eq!(decode_in(&i[..11]), None);
+        }
+
+        #[test]
+        fn a_frame_round_trips_and_the_kernel_rechecks_its_header() {
+            let src = frame(300, 2, 14);
+            let hdr = crate::sdpcm_hdr(&src[..64]).unwrap().unwrap();
+            let mut o = [0u8; super::super::OUT_MAX];
+            let n = encode_out(&RxRead::Frame { hdr, len: 300, block: false }, &src, 7, &mut o);
+            assert_eq!(n, HDR + 300);
+            let mut rx = [0xeeu8; 2048];
+            assert_eq!(decode_out(&o[..n], &mut rx), Some((RxRead::Frame { hdr, len: 300, block: false }, 7)));
+            assert_eq!(rx[..300], src[..300]);
+            assert!(rx[300..].iter().all(|&b| b == 0), "the rest of the kernel's buffer is zeroed");
+            // a short frame still carries its whole 64-B first read
+            let s = frame(40, 1, 12);
+            let h2 = crate::sdpcm_hdr(&s[..64]).unwrap().unwrap();
+            let n2 = encode_out(&RxRead::Frame { hdr: h2, len: 40, block: false }, &s, 0, &mut o);
+            assert_eq!(n2, HDR + 64);
+            assert!(matches!(decode_out(&o[..n2], &mut rx), Some((RxRead::Frame { len: 40, .. }, 0))));
+        }
+
+        #[test]
+        fn a_lying_server_is_refused() {
+            let src = frame(300, 2, 14);
+            let hdr = crate::sdpcm_hdr(&src[..64]).unwrap().unwrap();
+            let mut o = [0u8; super::super::OUT_MAX];
+            let n = encode_out(&RxRead::Frame { hdr, len: 300, block: true }, &src, 0, &mut o);
+            let mut rx = [0u8; 2048];
+            // a claimed length that is not the header's
+            let mut bad = o;
+            bad[4..6].copy_from_slice(&200u16.to_le_bytes());
+            assert_eq!(decode_out(&bad[..n], &mut rx), None);
+            // a corrupted header tag
+            let mut bad = o;
+            bad[HDR] ^= 1;
+            assert_eq!(decode_out(&bad[..n], &mut rx), None);
+            // more bytes than the kernel's buffer
+            assert_eq!(decode_out(&o[..n], &mut rx[..200]), None);
+            // a truncated reply
+            assert_eq!(decode_out(&o[..n - 1], &mut rx), None);
+            // an unknown kind, a bad Short reason, bytes on a non-frame
+            let mut z = [0u8; HDR + 1];
+            z[0] = 9;
+            assert_eq!(decode_out(&z[..HDR], &mut rx), None);
+            z[0] = SHORT;
+            z[1] = 3;
+            assert_eq!(decode_out(&z[..HDR], &mut rx), None);
+            z[0] = DRY;
+            assert_eq!(decode_out(&z, &mut rx), None);
+        }
+
+        #[test]
+        fn the_other_outcomes_round_trip() {
+            let mut o = [0u8; 64];
+            let mut rx = [0u8; 2048];
+            for r in [RxRead::Dry, RxRead::HostInt, RxRead::BadHdr { drained: true }, RxRead::Short { why: 9, hw_len: 1700, chan: 2, drained: false }] {
+                let n = encode_out(&r, &[], 0x1234, &mut o);
+                assert_eq!(decode_out(&o[..n], &mut rx), Some((r, 0x1234)));
+            }
+        }
+    }
+}
