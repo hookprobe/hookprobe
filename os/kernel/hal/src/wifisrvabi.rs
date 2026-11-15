@@ -608,3 +608,78 @@ pub mod rxmsg {
         }
     }
 }
+
+// ---- step 4c: el0-wifi builds and writes one SDPCM data frame (`crate::sdio::data_frame` / `Bus::write_frame`) ----
+/// IN = [`txmsg::encode_in`]. OUT = nothing; R0 = [`txmsg::encode_r0`]. The kernel keeps the credit accounting (the
+/// sequence number, the firmware's window and its flow-control mask): it hands the server the sequence to use and
+/// advances it only on `Sent`.
+pub const CMD_TX_DATA: u32 = 32;
+
+pub mod txmsg {
+    use crate::sdio::TxWrite;
+
+    pub const HDR: usize = 4;
+    /// The longest ethernet frame a request carries.
+    pub const ETH_MAX: usize = 1514;
+
+    /// (sequence, interface, block TX allowed, the ethernet frame) -> the request length.
+    pub fn encode_in(seq: u8, ifidx: u8, big_tx: bool, eth: &[u8], o: &mut [u8]) -> Option<usize> {
+        if eth.len() > ETH_MAX || o.len() < HDR + eth.len() {
+            return None;
+        }
+        o[0] = seq;
+        o[1] = ifidx;
+        o[2] = big_tx as u8;
+        o[3] = 0;
+        o[HDR..HDR + eth.len()].copy_from_slice(eth);
+        Some(HDR + eth.len())
+    }
+    pub fn decode_in(b: &[u8]) -> Option<(u8, u8, bool, &[u8])> {
+        if b.len() < HDR || b.len() > HDR + ETH_MAX || b[2] > 1 {
+            return None;
+        }
+        Some((b[0], b[1], b[2] == 1, &b[HDR..]))
+    }
+    pub fn encode_r0(w: TxWrite) -> u32 {
+        match w {
+            TxWrite::Sent { block: false } => 1,
+            TxWrite::Sent { block: true } => 2,
+            TxWrite::TooBig => 3,
+            TxWrite::Failed { block: false } => 4,
+            TxWrite::Failed { block: true } => 5,
+        }
+    }
+    pub fn decode_r0(r: u32) -> Option<TxWrite> {
+        Some(match r {
+            1 => TxWrite::Sent { block: false },
+            2 => TxWrite::Sent { block: true },
+            3 => TxWrite::TooBig,
+            4 => TxWrite::Failed { block: false },
+            5 => TxWrite::Failed { block: true },
+            _ => return None,
+        })
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn round_trips_and_refusals() {
+            let mut o = [0u8; super::super::IN_MAX];
+            let eth = [0x44u8; 1514];
+            let n = encode_in(9, 1, true, &eth, &mut o).unwrap();
+            assert_eq!(decode_in(&o[..n]), Some((9, 1, true, &eth[..])));
+            assert_eq!(encode_in(0, 0, false, &[0u8; 1515], &mut o), None);
+            assert_eq!(decode_in(&o[..3]), None);
+            let mut bad = o;
+            bad[2] = 7;
+            assert_eq!(decode_in(&bad[..n]), None);
+            for w in [TxWrite::Sent { block: false }, TxWrite::Sent { block: true }, TxWrite::TooBig, TxWrite::Failed { block: false }, TxWrite::Failed { block: true }] {
+                assert_eq!(decode_r0(encode_r0(w)), Some(w));
+            }
+            assert_eq!(decode_r0(0), None);
+            assert_eq!(decode_r0(6), None);
+        }
+    }
+}
