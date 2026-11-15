@@ -1,6 +1,6 @@
 # ADR 0065 — The CYW43455 Wi-Fi driver moves out of the heqk kernel; the kernel keeps only bus plumbing
 
-**Status:** 🟡 **Proposed (2026-11-14).** Direction set by the operator on 2026-11-14: an out-of-kernel (user-space)
+**Status:** 🟡 **Proposed (2026-11-14).** **D3 approved by the operator (2026-11-15).** Direction set by the operator on 2026-11-14: an out-of-kernel (user-space)
 Wi-Fi driver, with only the raw bus and interrupt plumbing inside the heqk kernel. D3 (where the keys live) and
 the go / no-go at each step's metal gate are the operator's. Clauses are tagged **[realized]**, **[partial]** or
 **[vision]** (the ADR 0043/0044/0047 discipline).
@@ -59,7 +59,7 @@ Everything else in `cyw43.rs`:
 The server is a new class: **resident for the whole boot and owning a device.** Today's EL0 servers are short,
 stateless calls (`el0-lansvc`) or own no hardware (`el0-tlshost`).
 
-### D3 — Keys (operator decision, required before step 3) **[vision]**
+### D3 — Keys — **decided by the operator 2026-11-15: approved with the safeguards below** **[vision]**
 
 - Moving the authenticator and the SAE engine puts the PMK / PTK / GTK / IGTK and the SAE secrets in EL0, across
   calls. That **widens the 2A decision of 2026-11-11** (the PMK enters EL0 through one call and is wiped).
