@@ -70,6 +70,10 @@ fn main() {
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/lansvcabi.rs").display());
         // ADR 0059 step 4a: hsh, the native management shell, as an EL0 excursion server (same substrate)
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-hsh", "el0hsh-target", feat, "el0_hsh.elf");
+        // ADR 0065 step 2: el0-wifi, the resident EL0 Wi-Fi driver server (step 2: a fake device)
+        build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-wifi", "el0wifi-target", feat, "el0_wifi.elf");
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/wifisrvabi.rs").display());
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/el0ring.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/hshabi.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/mgmtabi.rs").display());
     }
