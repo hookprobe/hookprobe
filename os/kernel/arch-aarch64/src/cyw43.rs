@@ -3618,6 +3618,7 @@ struct AuthSt {
 /// Prints nothing: it runs BEFORE our confirm goes out (`ap_sae_rx`), and a serial line here delayed it.
 #[cfg(feature = "wpa3")]
 fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> AuthSt {
+    let _wait = KeyingWait::new();
     let s = w3();
     // PMKSA first (brcmfmac's ext-auth order): this station's entry added to the firmware's list, the others kept
     unsafe { (*core::ptr::addr_of_mut!(FW_PMKSA)).put(sta, pmkid) };
@@ -4797,6 +4798,7 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     // retry like the group-key install (a repeated SET of the same key is idempotent).
     // S3c: a zero TK = el0-wpa keyed it and left the key in the key-transfer page: the bus server installs it from there
     // (the kernel never holds it), then the page is zeroed. A real TK = the in-kernel fallback keyed it (D5, until S3d).
+    let _wait = KeyingWait::new(); // also covers the firmware PMKSA-list update below (metal S4: an 819 ms wait there)
     if tk == [0u8; 16] && el0().is_some() {
         auth.ptk_set = (0..3).any(|_| set_key_keyx(hal::wpasrvabi::keyx::SLOT_TK, &d.sta, 0));
         if let Some(h) = el0() {
@@ -4817,8 +4819,11 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     dbg_putc(b'P');
     // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
     // "authorize" iovar is tried only if the ioctl is refused (each dcmd can discard queued data frames).
-    auth.authorized = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []).0;
-    if !auth.authorized {
+    let (ok, st) = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []);
+    auth.authorized = ok;
+    // the iovar only when the firmware REFUSED the ioctl (a BCDC error status); a reply that did not come in time
+    // (status 0) is a late reply to a request the firmware applies — a second wait would only lengthen the loop gap
+    if !ok && st != 0 {
         let mut ab = [0u8; 32];
         let na = iovar_buf(b"authorize", &d.sta, &mut ab);
         auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
@@ -4890,13 +4895,34 @@ pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     // Safe re-authentication: every station is deauthenticated (broadcast) and the passphrase re-provisioned.
     if el0().is_some_and(|h| (h.wpa_wiped)()) {
         let d = ap_deauth(&[0xff; 6], hal::rsnassoc::REASON_INVALID_PMKID);
-        unsafe { EL0_PENDING = 0 };
-        #[cfg(feature = "wpa3")]
-        let synced = ap_sae_el0_sync(true);
-        #[cfg(not(feature = "wpa3"))]
-        let synced = true;
-        let g = ap_group_keys_el0(); // new group keys too: the old ones died with the wiped server
-        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}), passphrase re-provisioned={}, new group keys installed={} — stations re-authenticate in full\n", d.via, d.bcme, d.gone, synced, g));
+        unsafe {
+            EL0_PENDING = 0;
+            WIPE_RESYNC = Some(now_ms);
+            WIPE_TRY_MS = 0;
+        }
+        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}); re-provisioning the passphrase and new group keys once el0-wpa is back — stations re-authenticate in full\n", d.via, d.bcme, d.gone));
+    }
+    // S4 metal: the re-provisioning after a wipe is RETRIED until it lands (the server is in its restart backoff right
+    // after the fault: one attempt there left el0-wpa with no passphrase and no station could ever key again)
+    if let Some(t0) = unsafe { WIPE_RESYNC } {
+        if el0().is_some() && now_ms.wrapping_sub(unsafe { WIPE_TRY_MS }) >= 200 {
+            unsafe { WIPE_TRY_MS = now_ms };
+            #[cfg(feature = "wpa3")]
+            let synced = ap_sae_el0_sync(true);
+            #[cfg(not(feature = "wpa3"))]
+            let synced = true;
+            if synced {
+                let g = ap_group_keys_el0(); // new group keys too: the old ones died with the wiped server
+                if g {
+                    unsafe { WIPE_RESYNC = None };
+                    #[cfg(feature = "wpa3")]
+                    let igtk = if w3().mode == SEC_WPA2 { "no IGTK (WPA2)" } else if w3().igtk_set { "IGTK installed" } else { "IGTK FAILED" };
+                    #[cfg(not(feature = "wpa3"))]
+                    let igtk = "no IGTK (WPA2)";
+                    crate::_print(format_args!(" [EL0-WPA] re-provisioned after the full wipe: passphrase re-provisioned=true, new group keys installed=true, {} ({} ms after the wipe)\n", igtk, now_ms.wrapping_sub(t0)));
+                }
+            }
+        }
     }
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
     // the EL0 authenticator is ticked only while it has handshakes, and at most every 100 ms
@@ -4934,6 +4960,10 @@ pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     hal::wpaauth::wipe(&mut out);
     res
 }
+
+/// S4: a full wipe whose re-provisioning (passphrase + new group keys) has not landed yet: Some(when it happened).
+static mut WIPE_RESYNC: Option<u64> = None;
+static mut WIPE_TRY_MS: u64 = 0;
 
 /// The group key M3 carries (set when the AP installs it at start).
 static mut AP_GTK: ([u8; 16], u8) = ([0; 16], 1);
@@ -6760,6 +6790,27 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
 
 /// The second half of a control request: read frames until the reply to `rid` (parking station frames for the serve
 /// loop), its body copied into `reply`. Shared by `bcdc_dcmd` and the S3c key-transfer install.
+/// How long `bcdc_wait` waits for a frame (ms). 800 by default; the station keying path (in the serve loop) uses
+/// `KEYING_DRY_MS`: a reply the firmware sends late (metal S4: ~810 ms, once in ~40 joins) cost two 800-ms waits —
+/// a 2.87 s loop gap — though the firmware applied the request anyway.
+static mut DCMD_DRY_MS: u32 = 800;
+const KEYING_DRY_MS: u32 = 250;
+/// While alive, the per-station control requests of the serve loop (key install, authorize, the firmware PMKSA list,
+/// auth_status) wait at most `KEYING_DRY_MS` per reply; BSS-level requests (bring-up, live apply) keep 800 ms.
+struct KeyingWait(u32);
+impl KeyingWait {
+    fn new() -> Self {
+        let prev = unsafe { DCMD_DRY_MS };
+        unsafe { DCMD_DRY_MS = KEYING_DRY_MS };
+        KeyingWait(prev)
+    }
+}
+impl Drop for KeyingWait {
+    fn drop(&mut self) {
+        unsafe { DCMD_DRY_MS = self.0 };
+    }
+}
+
 fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut rx = [0u8; 2048];
     let mut status = 0u32;
@@ -6772,7 +6823,7 @@ fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut any_rx = false;
     let intstat_seen = 0u32;
     'frames: for _frame in 0..40 {
-        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, 800) else {
+        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, unsafe { DCMD_DRY_MS }) else {
             break 'frames; // dry (or a frame that had to be terminated)
         };
         any_rx = true;

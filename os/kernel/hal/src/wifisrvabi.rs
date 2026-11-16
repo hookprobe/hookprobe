@@ -46,6 +46,9 @@ pub const CMD_KEYX_PEEK: u32 = 34;
 pub const CMD_SELFTEST_KEYX_WRITE: u32 = 97;
 /// Test only: fault on purpose (the supervisor's restart path).
 pub const CMD_SELFTEST_FAULT: u32 = 99;
+/// Bench fault injection (ADR 0065 S4, kernel feature `wifi-inject` only): the next CMD53 read this server issues
+/// stalls forever (an injected CMD53 timeout) — the kernel's budget faults it and restarts it.
+pub const CMD_INJECT_CMD53_STALL: u32 = 96;
 
 pub const ST_OK: u32 = 0;
 pub const ST_BAD_CMD: u32 = 2;
