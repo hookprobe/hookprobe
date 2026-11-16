@@ -125,7 +125,7 @@ wifi-pmkid-noexpire = ["arch-aarch64/wifi-pmkid-noexpire"]
 wifi-pmkid-fix = ["arch-aarch64/wifi-pmkid-fix"]
 guestprobe = ["arch-aarch64/guestprobe"]
 # Mission Control served BY the AP to its Wi-Fi clients at the AP address (HTTP + the EL0 TLS server).
-apmc = ["apmode", "mcserve", "hsh"]
+apmc = ["apmode", "mcserve", "hsh", "arch-aarch64/el0-keys"]
 # BENCH ONLY (audit A7 metal proof): the Wi-Fi self-heal trigger — `wifi heal-test freeze|freeze-once|fwhalt|clear`
 # on the web console (POST /api/hsh, owner session + an owner-signed HQMGMT1 envelope per change) injects a synthetic
 # persistent TX freeze or a FWHALT event into wifiheal's classifier INPUT; the real kick / bounce / firmware reload /

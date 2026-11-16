@@ -1014,7 +1014,8 @@ pub mod keyer {
 
     /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
-    pub fn install() -> bool {
+    /// (the bus server is up, el0-wpa is up and — on the CM5 — its group keys are installed).
+    pub fn install() -> (bool, bool) {
         // S2: the WPA security server first and independently — the keying / SAE / PMKSA hooks go to it, the frame and
         // control hooks to the bus server; each hook falls back to the in-kernel path when its server is absent (D5)
         let wpa = match super::imp::load_wpa() {
@@ -1025,7 +1026,8 @@ pub mod keyer {
                 ok
             }
             Err(why) => {
-                arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa FAILED to load ({}) — keying stays in-kernel\n", why));
+                arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa FAILED to load ({}) — {}\n", why,
+                    if cfg!(all(feature = "apmc", feature = "wpa3")) { "no station can key (S3d: no in-kernel fallback)" } else { "keying stays in-kernel" }));
                 false
             }
         };
@@ -1048,9 +1050,12 @@ pub mod keyer {
         #[cfg(all(feature = "cm5", feature = "wpa3"))]
         let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
         // S3b: the AP's group keys are replaced by el0-wpa's own (no station has keyed yet: the AP loop has not run)
+        #[allow(unused_mut)]
+        let mut keyed = wpa;
         #[cfg(feature = "cm5")]
         if wpa {
             let g = arch_aarch64::cyw43::ap_group_keys_el0();
+            keyed = g;
             arch_aarch64::_print(format_args!(" [EL0-WPA] group keys generated in el0-wpa and installed via the key-transfer page: {} (the kernel holds no GTK / IGTK)\n", if g { "ok" } else { "FAILED" }));
         }
         #[cfg(feature = "cm5")]
@@ -1060,7 +1065,7 @@ pub mod keyer {
         // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space (also when a load failed:
         // a failed load must not hide behind the D5 fallback)
         let _ = crate::el0as::report();
-        wpa && bus
+        (bus, keyed)
     }
 
     /// ADR 0065 step 4a: el0-wifi reads the SDHCI identity registers through its Device mapping; they must equal the
@@ -1371,6 +1376,8 @@ pub fn sae_selftest() -> bool {
     // S3c: a zero TK in the kernel's copy; the station's SAE-derived TK in key-transfer slot 0
     let keyed = matches!(test::eapol(&sta, &frame(2, true), 60, &mut fr), Some(Out::Keyed { tk, .. }) if tk == [0u8; 16])
         && imp::keyx_test_read(hal::wpasrvabi::keyx::SLOT_TK).is_some_and(|r| r.ea == sta && r.key[..16] == ptk[32..48]);
+    k1_needle(0, &st.pmk[..16]); // S3d K1: the SAE PMK and the station's TK must exist nowhere in kernel memory
+    k1_needle(1, &ptk[32..48]);
     imp::keyx_zero();
     let clean2 = srv_clean();
     // the station leaves 5 s after Accepted (past the leave-predates-SAE window): the driver's forget (op 0) frees its
@@ -1412,6 +1419,7 @@ pub fn sae_selftest() -> bool {
         let mic = hal::wpaauth::mic(&kck, &f, false);
         f[81..97].copy_from_slice(&mic);
         let m3 = matches!(test::eapol(&sta2, &f, 6_010, &mut fr), Some(Out::Send(_)));
+        k1_needle(2, &pmk[..16]); // K1: the WPA2-PSK PMK (el0-wpa derived it from the passphrase)
         m1 && m3
     };
     if !psk_own {
@@ -1425,10 +1433,23 @@ pub fn sae_selftest() -> bool {
         ent[..16].copy_from_slice(&[0x5a; 16]);
         ent[16..].copy_from_slice(&[0xa5; 16]);
         let made = keyer::group_new(&ent, true);
-        let g = imp::keyx_test_read(keyx::SLOT_GTK).is_some_and(|r| r.index == 1 && r.flags == hal::bcdc::WSEC_PRIMARY_KEY && r.key[..16] == [0x5a; 16]);
-        let i = imp::keyx_test_read(keyx::SLOT_IGTK).is_some_and(|r| r.index == 4 && r.algo == hal::bcdc::CRYPTO_ALGO_BIP && r.key[..16] == [0xa5; 16])
-            && imp::keyx_test_read(keyx::SLOT_IGTK_CCM).is_some_and(|r| r.algo == hal::bcdc::CRYPTO_ALGO_AES_CCM && r.key[..16] == [0xa5; 16]);
+        // S3d: the keys are pool outputs — never the kernel's entropy bytes themselves
+        let key16 = |r: &hal::wpasrvabi::keyx::Rec| {
+            let mut k = [0u8; 16];
+            k.copy_from_slice(&r.key[..16]);
+            k
+        };
+        let gr = imp::keyx_test_read(keyx::SLOT_GTK);
+        let gkey = gr.as_ref().map_or([0; 16], key16);
+        let ir = imp::keyx_test_read(keyx::SLOT_IGTK);
+        let ikey = ir.as_ref().map_or([0; 16], key16);
+        let not_ent = |k: &[u8; 16]| *k != [0; 16] && *k != [0x5a; 16] && *k != [0xa5; 16];
+        let g = gr.is_some_and(|r| r.index == 1 && r.flags == hal::bcdc::WSEC_PRIMARY_KEY) && not_ent(&gkey);
+        let i = ir.is_some_and(|r| r.index == 4 && r.algo == hal::bcdc::CRYPTO_ALGO_BIP) && not_ent(&ikey) && ikey != gkey
+            && imp::keyx_test_read(keyx::SLOT_IGTK_CCM).is_some_and(|r| r.algo == hal::bcdc::CRYPTO_ALGO_AES_CCM && key16(&r) == ikey);
         imp::keyx_zero();
+        k1_needle(3, &gkey); // K1: el0-wpa's GTK and IGTK
+        k1_needle(4, &ikey);
         // a WPA2 station's 4-way: M3's key data, unwrapped with its KEK, carries the GTK 0x5a.., not the kernel's 0x33..
         let sta3 = [2, 0x5d, 0, 0, 0, 0x0d];
         let pmk = hal::wpa::wpa_pmk(pw, b"hq-test");
@@ -1460,18 +1481,23 @@ pub fn sae_selftest() -> bool {
                 let dl = u16::from_be_bytes([fr[b + 97], fr[b + 98]]) as usize;
                 let mut plain = [0u8; 256];
                 match fr.get(b + 99..b + 99 + dl).and_then(|w| hal::aes::aes_unwrap(&kek, w, &mut plain)) {
-                    Some(pn) => plain[..pn].windows(16).any(|x| x == [0x5a; 16]) && !plain[..pn].windows(16).any(|x| x == [0x33; 16]),
+                    Some(pn) => plain[..pn].windows(16).any(|x| x == gkey) && !plain[..pn].windows(16).any(|x| x == [0x33; 16]),
                     None => false,
                 }
             }
             _ => false,
         };
-        let ok = made && g && i && m1 && gtk_in_m3;
+        // the pool ratchets: the SAME entropy again gives different group keys
+        let again = keyer::group_new(&ent, true) && imp::keyx_test_read(keyx::SLOT_GTK).is_some_and(|r| key16(&r) != gkey && key16(&r) != [0; 16]);
+        imp::keyx_zero();
+        let ok = made && g && i && m1 && gtk_in_m3 && again;
         if !ok {
-            arch_aarch64::_print(format_args!(" [P-el0srv-sae] S3b detail: made={} gtk rec={} igtk recs={} m1={} M3 carries el0-wpa's GTK={}\n", made, g, i, m1, gtk_in_m3));
+            arch_aarch64::_print(format_args!(" [P-el0srv-sae] S3b detail: made={} gtk rec={} igtk recs={} m1={} M3 carries el0-wpa's GTK={} ratchet={}\n", made, g, i, m1, gtk_in_m3, again));
         }
         ok
     };
+    // S3d K1: after the joins, none of their keys is anywhere in the kernel's data / bss / heap
+    let k1 = k1_scan();
     if !(cached && nosae) {
         let f = unsafe { (*core::ptr::addr_of!(keyer::WPA)).as_ref().map_or(0, |s| s.faults) };
         arch_aarch64::_print(format_args!(" [P-el0srv-sae] detail: forget -> {:?}, cached keying -> {:?}, no-PMKID keying -> {:?}, server faults {}\n",
@@ -1480,11 +1506,65 @@ pub fn sae_selftest() -> bool {
     // S2: the containment proof on this server (it holds a PMKSA entry for `sta` now)
     let _ = keyer::contain_selftest(&sta);
     unsafe { WPA = None };
-    let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae && psk_own && group_own;
+    let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae && psk_own && group_own && k1;
     arch_aarch64::_print(format_args!(
         " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d + 4g S2: WPA3 in el0-wpa against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={} S3a: a WPA2-PSK station keyed from el0-wpa's own PMK (the kernel passed none)={} S3b: group keys generated in el0-wpa, its GTK the one in M3={}\n",
         if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae, psk_own, group_own
     ));
+    pass
+}
+
+/// S3d K1 (QEMU): the keys a selftest join produced (SAE PMK, TK, PSK PMK, GTK, IGTK — first 16 bytes). The only
+/// place they may sit in kernel memory: this array, which the scan skips.
+#[cfg(all(feature = "mctls", feature = "wpa3"))]
+#[cfg_attr(feature = "cm5", allow(dead_code))] // the K1 scan is a QEMU selftest
+static mut K1N: [[u8; 16]; 5] = [[0; 16]; 5];
+#[cfg(all(feature = "mctls", feature = "wpa3"))]
+#[cfg_attr(feature = "cm5", allow(dead_code))] // the K1 scan is a QEMU selftest
+fn k1_needle(i: usize, k: &[u8]) {
+    unsafe { (*core::ptr::addr_of_mut!(K1N))[i].copy_from_slice(&k[..16]) };
+}
+
+/// `[P-el0wpa-k1]`: scan the kernel's whole RW image — .rodata / .data / .bss, the heap included (it is a .bss array) —
+/// for each needle. The EL0 servers' frames (above the boot stack) and the stack itself are outside the range: the
+/// test's own station-side copies live on the stack. PASS = every needle was set and none is found.
+#[cfg(all(feature = "mctls", feature = "wpa3"))]
+#[cfg_attr(feature = "cm5", allow(dead_code))] // the K1 scan is a QEMU selftest
+fn k1_scan() -> bool {
+    extern "C" {
+        static __text_end: u8;
+        static __bss_end: u8;
+    }
+    let lo = core::ptr::addr_of!(__text_end) as usize;
+    let hi = core::ptr::addr_of!(__bss_end) as usize;
+    let n = unsafe { *core::ptr::addr_of!(K1N) };
+    let xlo = core::ptr::addr_of!(K1N) as usize;
+    let xhi = xlo + core::mem::size_of::<[[u8; 16]; 5]>();
+    let set = n.iter().all(|k| *k != [0; 16]);
+    let heads: [u64; 5] = core::array::from_fn(|i| u64::from_le_bytes(n[i][..8].try_into().unwrap_or([0; 8])));
+    let mut hits = [0u32; 5];
+    let mut a = lo;
+    while a + 16 <= hi {
+        if a + 16 > xlo && a < xhi {
+            a = xhi;
+            continue;
+        }
+        let w = unsafe { core::ptr::read_unaligned(a as *const u64) };
+        for (i, h) in heads.iter().enumerate() {
+            if w == *h && unsafe { core::slice::from_raw_parts(a as *const u8, 16) } == n[i] {
+                hits[i] += 1;
+            }
+        }
+        a += 1;
+    }
+    let clean = hits.iter().all(|&h| h == 0);
+    let pass = set && clean;
+    arch_aarch64::_print(format_args!(
+        " [P-el0wpa-k1] {} — ADR 0065 4g S3d K1: after SAE + WPA2 joins and new group keys, kernel memory {:#x}..{:#x} ({} KiB: rodata, data, bss, heap) holds none of the keys: SAE PMK {} TK {} PSK PMK {} GTK {} IGTK {} hit(s) (needles set={})\n",
+        if pass { "PASS" } else { "FAIL" }, lo, hi, (hi - lo) / 1024, hits[0], hits[1], hits[2], hits[3], hits[4], set
+    ));
+    // the needles themselves go too
+    unsafe { *core::ptr::addr_of_mut!(K1N) = [[0; 16]; 5] };
     pass
 }
 
