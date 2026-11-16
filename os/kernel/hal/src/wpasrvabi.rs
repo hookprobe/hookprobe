@@ -42,5 +42,107 @@ pub const CMD_SELFTEST_FAULT: u32 = 99;
 pub const CMD_PMKSA_COUNT: u32 = 44;
 /// Test only: IN = a station MAC — the next command about that station faults (per-station containment proof).
 pub const CMD_SELFTEST_ARM_FAULT: u32 = 45;
+/// S3b: new group keys. IN = 32 B of TRNG entropy (the kernel's; design D-c) ‖ flags (bit0 = an IGTK too, PMF). The
+/// server takes its GTK / IGTK from it, keeps them, and writes the install records to key-transfer slots 1 (GTK),
+/// 2 (IGTK, BIP) and 3 (IGTK, AES-CCM: the firmware's fallback). R0 = 1.
+pub const CMD_GROUP_NEW: u32 = 46;
 /// The persistent state failed its check after a restart: the kernel must full-wipe (every station re-authenticates).
 pub const ST_STATE_BAD: u32 = 3;
+
+// ---- S3: the key-transfer page records (written by el0-wpa, read by el0-wifi, zeroed by the kernel) ----
+/// Bus server (el0-wifi) command: install the key in key-transfer slot `slot` as a WLC_SET_KEY control request.
+/// IN = [`keyx::encode_install`]; R0 = 1 written / 4 the write failed / 5 the record is absent or does not match
+/// what the kernel asked to install (station, key index) — refused, nothing sent.
+pub const CMD_KEY_INSTALL: u32 = 35;
+
+pub mod keyx {
+    /// Up to 4 records (the pairwise TK in slot 0; S3b: the GTK and the IGTK in slots 1 and 2).
+    pub const SLOTS: usize = 4;
+    pub const SLOT_SIZE: usize = 64;
+    pub const MAGIC: u32 = u32::from_le_bytes(*b"HQKX");
+    pub const SLOT_TK: u8 = 0;
+    pub const SLOT_GTK: u8 = 1;
+    pub const SLOT_IGTK: u8 = 2;
+    /// The IGTK again with AES-CCM (the firmware refuses BIP on some builds; brcmfmac falls back the same way).
+    pub const SLOT_IGTK_CCM: u8 = 3;
+
+    /// One key on its way to the chip.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Rec {
+        pub index: u32,
+        pub algo: u32,
+        pub flags: u32,
+        pub ea: [u8; 6],
+        pub klen: u8,
+        pub key: [u8; 32],
+    }
+    /// magic u32 @0, index @4, algo @8, flags @12, ea @16, klen @22, key @24..56.
+    pub fn encode(r: &Rec, o: &mut [u8; SLOT_SIZE]) {
+        o.fill(0);
+        o[0..4].copy_from_slice(&MAGIC.to_le_bytes());
+        o[4..8].copy_from_slice(&r.index.to_le_bytes());
+        o[8..12].copy_from_slice(&r.algo.to_le_bytes());
+        o[12..16].copy_from_slice(&r.flags.to_le_bytes());
+        o[16..22].copy_from_slice(&r.ea);
+        o[22] = r.klen.min(32);
+        o[24..56].copy_from_slice(&r.key);
+    }
+    pub fn decode(b: &[u8]) -> Option<Rec> {
+        let b = b.get(..SLOT_SIZE)?;
+        let u = |o: usize| u32::from_le_bytes([b[o], b[o + 1], b[o + 2], b[o + 3]]);
+        if u(0) != MAGIC || b[22] > 32 {
+            return None;
+        }
+        let mut ea = [0u8; 6];
+        ea.copy_from_slice(&b[16..22]);
+        let mut key = [0u8; 32];
+        key.copy_from_slice(&b[24..56]);
+        Some(Rec { index: u(4), algo: u(8), flags: u(12), ea, klen: b[22], key })
+    }
+    /// The install request the kernel sends the bus server: SDPCM seq, interface, BCDC request id, slot, and the
+    /// station + key index it expects in that slot.
+    pub const INSTALL_LEN: usize = 14;
+    pub fn encode_install(seq: u8, ifidx: u8, reqid: u16, slot: u8, ea: &[u8; 6], index: u32) -> [u8; INSTALL_LEN] {
+        let mut o = [0u8; INSTALL_LEN];
+        o[0] = seq;
+        o[1] = ifidx;
+        o[2..4].copy_from_slice(&reqid.to_le_bytes());
+        o[4] = slot;
+        o[5] = 0;
+        o[6..12].copy_from_slice(ea);
+        o[12..14].copy_from_slice(&(index as u16).to_le_bytes());
+        o
+    }
+    /// -> (seq, interface, request id, slot, station, key index).
+    #[allow(clippy::type_complexity)]
+    pub fn decode_install(b: &[u8]) -> Option<(u8, u8, u16, u8, [u8; 6], u32)> {
+        if b.len() != INSTALL_LEN || b[4] as usize >= SLOTS {
+            return None;
+        }
+        let mut ea = [0u8; 6];
+        ea.copy_from_slice(&b[6..12]);
+        Some((b[0], b[1], u16::from_le_bytes([b[2], b[3]]), b[4], ea, u16::from_le_bytes([b[12], b[13]]) as u32))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        #[test]
+        fn records_and_requests() {
+            let r = Rec { index: 0, algo: 4, flags: 0, ea: [2, 0x5a, 0, 0, 0, 9], klen: 16, key: [0x3c; 32] };
+            let mut o = [0u8; SLOT_SIZE];
+            encode(&r, &mut o);
+            assert_eq!(decode(&o), Some(r));
+            assert_eq!(decode(&[0u8; SLOT_SIZE]), None, "an empty (zeroed) slot is no record");
+            let mut bad = o;
+            bad[22] = 33;
+            assert_eq!(decode(&bad), None);
+            let i = encode_install(7, 0, 0x1234, SLOT_TK, &r.ea, 0);
+            assert_eq!(decode_install(&i), Some((7, 0, 0x1234, 0, r.ea, 0)));
+            let mut j = i;
+            j[4] = 9;
+            assert_eq!(decode_install(&j), None);
+            assert_eq!(decode_install(&i[..13]), None);
+        }
+    }
+}
