@@ -965,5 +965,6 @@ pub mod el0ring;
 pub mod bcdc;
 pub mod sdio;
 pub mod wifisrvabi;
+pub mod wpasrvabi;
 pub mod wpakeyer;
 pub mod ip6;
