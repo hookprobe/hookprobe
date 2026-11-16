@@ -91,6 +91,8 @@ mod imp {
         pub restarts: u64,
         /// Frames the kernel refused from a bad RX ring (resyncs).
         pub bad_rings: u64,
+        /// `crate::clock::ticks()` at the last fault / overrun (0 = none) — `/api/health` wifi_driver.
+        pub last_fault_ticks: u64,
         next_ok: u64,
         streak: u32,
     }
@@ -162,6 +164,7 @@ mod imp {
             faults: 0,
             restarts: 0,
             bad_rings: 0,
+            last_fault_ticks: 0,
             next_ok: 0,
             streak: 0,
         };
@@ -258,6 +261,7 @@ mod imp {
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
+                self.last_fault_ticks = crate::clock::ticks();
                 self.reset();
                 self.streak = self.streak.saturating_add(1);
                 let b = (BACKOFF_MS << (self.streak - 1).min(10)).min(BACKOFF_MAX_MS);
@@ -776,6 +780,21 @@ pub mod keyer {
                 Some(false)
             }
         }
+    }
+
+    /// `/api/health` wifi_driver.bus: (state, restarts, faults, ticks of the last fault or 0). State: "absent" = the
+    /// server is not loaded (the in-kernel driver serves — D5), "handed_to_wifiheal" = Wi-Fi was degraded after a
+    /// failed recovery, "backoff" = restarting after a fault, else "running". Only counters, nothing derived.
+    pub fn bus_health() -> (&'static str, u64, u64, u64) {
+        let Some(s) = srv() else { return ("absent", 0, 0, 0) };
+        let st = if crate::wifiheal::status().0.starts_with("degraded") {
+            "handed_to_wifiheal"
+        } else if s.backoff_left_ms() > 0 {
+            "backoff"
+        } else {
+            "running"
+        };
+        (st, s.restarts, s.faults, s.last_fault_ticks)
     }
 
     /// (frame reads served by el0-wifi, replies the kernel refused).
