@@ -752,7 +752,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                     if el0 { "el0" } else { "el1 (EL0 server not loaded)" }, n, f, t, r);
             }
             // ADR 0065: the Wi-Fi driver servers (UI contract agreed 2026-11-15: keys and epoch-second timestamps as
-            // here; "security" stays null until the el0-wpa security server exists)
+            // here; "security" = the el0-wpa WPA security server since step 4g S2)
             #[cfg(feature = "mctls")]
             {
                 let (bst, br, bf, bt) = crate::el0srv::keyer::bus_health();
@@ -762,7 +762,26 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 } else {
                     w.raw("null");
                 }
-                w.raw("},\"security\":null}");
+                w.raw("},\"security\":");
+                match crate::el0srv::keyer::wpa_health() {
+                    Some((sst, sr, sf, sw, stk, n)) => {
+                        let _ = write!(w, "{{\"state\":\"{}\",\"restarts\":{},\"faults\":{},\"full_wipes\":{},\"last_fault_ts\":", sst, sr, sf, sw);
+                        if stk != 0 && st.clock_synced {
+                            let _ = write!(w, "{}", st.epoch_ms(stk) / 1000);
+                        } else {
+                            w.raw("null");
+                        }
+                        w.raw(",\"pmksa_entries\":");
+                        match n {
+                            Some(n) => {
+                                let _ = write!(w, "{}", n);
+                            }
+                            None => w.raw("null"),
+                        }
+                        w.raw("}}");
+                    }
+                    None => w.raw("null}"),
+                }
             }
             {
                 let (wh, c, f, r, k) = crate::lansvc::stats();
