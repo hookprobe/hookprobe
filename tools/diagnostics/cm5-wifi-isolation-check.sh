@@ -46,6 +46,9 @@ PY
 }
 H() { api health 2>/dev/null; }   # bus_restarts bus_faults wpa_restarts wpa_faults full_wipes pmksa bus_state wpa_state
 f() { echo "$1" | awk -v i="$2" '{print $i}'; }
+# a reconnect that KEEPS the supplicant's PMKSA cache (an `iw disconnect` did not make the station leave at all):
+# wpa_supplicant's D-Bus Reassociate on that interface
+reassoc() { psudo "sh -c 'p=\$(busctl call fi.w1.wpa_supplicant1 /fi/w1/wpa_supplicant1 fi.w1.wpa_supplicant1 GetInterface s $1 | cut -d\\\" -f2); busctl call fi.w1.wpa_supplicant1 \$p fi.w1.wpa_supplicant1.Interface Reassociate'" >/dev/null 2>&1; }
 gw_ok() { pi "ping -c 2 -W 2 -I $1 10.99.0.1" >/dev/null 2>&1; }
 wait_gw() { for _ in $(seq 1 ${2:-20}); do gw_ok "$1" && return 0; sleep 2; done; return 1; }
 # station associations the AP logged since a mark, for one MAC: "akm pmkids how"
@@ -80,19 +83,19 @@ chk $? "E2 PMKSA entries preserved across the bus fault ($(f "$h0" 6) -> $(f "$h
 wait_gw wlan1 15 && wait_gw wlan0 15; chk $? "both stations still reach the gateway after the bus recovery (data path resynced)"
 
 # --- E3: a cached-PMKSA reconnect after the bus recovery ---
-m=$(mark); psudo "iw dev wlan1 disconnect" >/dev/null 2>&1; sleep 2; wait_gw wlan1 20; g=$?
+m=$(mark); reassoc wlan1; sleep 3; wait_gw wlan1 20; g=$?
 a=$(assoc_of "$m" "$A" | tail -1); echo "  A reconnect: $a (SAE frames: $(sae_of "$m" "$A"))"
 [ $g = 0 ] && grep -q " 1 SAE (cached PMKSA)" <<<"$a" && [ "$(sae_of "$m" "$A")" = 0 ]
 chk $? "E3 A re-joined from its cached PMKSA (pmkids=1, no SAE exchange) and reaches the gateway"
 
 # --- E4: a fault on B's M2 is contained ---
 h0=$(H); m=$(mark); echo "  inject: $(api wpa-station-m2 "$B")"
-psudo "iw dev wlan0 disconnect" >/dev/null 2>&1; sleep 2; wait_gw wlan0 30; gb=$?
+reassoc wlan0; sleep 3; wait_gw wlan0 30; gb=$?
 h1=$(H); echo "  health: $h0 -> $h1"
 since "$m" | grep -a "WIFI-INJECT\|WIFI-SPLIT\|ptk_set=" | head -6 | cut -c1-200 | sed 's/^/  /'
 [ $gb = 0 ] && [ "$(f "$h1" 4)" -gt "$(f "$h0" 4)" ] && [ "$(f "$h1" 5)" = "$(f "$h0" 5)" ]
 chk $? "E4 B's M2 faulted el0-wpa (faults $(f "$h0" 4) -> $(f "$h1" 4)), contained (full wipes $(f "$h0" 5) -> $(f "$h1" 5)); B retried, keyed and reaches the gateway"
-m2=$(mark); psudo "iw dev wlan1 disconnect" >/dev/null 2>&1; sleep 2; wait_gw wlan1 20; g=$?
+m2=$(mark); reassoc wlan1; sleep 3; wait_gw wlan1 20; g=$?
 a=$(assoc_of "$m2" "$A" | tail -1); echo "  A reconnect: $a"
 [ $g = 0 ] && grep -q " 1 SAE (cached PMKSA)" <<<"$a" && wait_gw wlan1 5
 chk $? "E4 A's PMKSA entry survived B's fault: A re-joined cached and stays connected"
@@ -103,12 +106,14 @@ since "$m" | grep -a "FULL WIPE\|full-wiped\|group keys generated" | head -3 | c
 hw=$(H); echo "  health right after: $hw"
 since "$m" | grep -aq "FULL WIPE: [1-9][0-9]* state page(s) + the key-transfer page zeroed"
 chk $? "E5 the WPA-server fault full-wiped: state pages + key-transfer page zeroed"
-since "$m" | grep -aq "full-wiped: every station deauthenticated.*new group keys installed=true"
-chk $? "E5 every station deauthenticated, passphrase re-provisioned, NEW group keys installed"
+sleep 3; since "$m" | grep -a "re-provisioned after the full wipe" | head -1 | cut -c1-200 | sed 's/^/  /'
+since "$m" | grep -aq "full-wiped: every station deauthenticated" && since "$m" | grep -aq "re-provisioned after the full wipe: passphrase re-provisioned=true, new group keys installed=true"
+chk $? "E5 every station deauthenticated, then the passphrase re-provisioned and NEW group keys installed"
 wait_gw wlan1 40; ga=$?; wait_gw wlan0 40; gb=$?
-a=$(assoc_of "$m" "$A" | head -1); b=$(assoc_of "$m" "$B" | head -1); echo "  A: $a (SAE frames $(sae_of "$m" "$A")) | B: $b (SAE frames $(sae_of "$m" "$B"))"
-[ $ga = 0 ] && [ $gb = 0 ] && [ "$(f "$hw" 5)" -gt "$(f "$h0" 5)" ] && grep -q " 0 SAE (just authenticated)" <<<"$a" && [ "$(sae_of "$m" "$A")" -ge 1 ]
-chk $? "E5 both stations re-joined; A redid full SAE (pmkids=0) — no cached PMKSA survived the wipe (full wipes $(f "$h0" 5) -> $(f "$hw" 5))"
+a=$(assoc_of "$m" "$A"); b=$(assoc_of "$m" "$B"); echo "  A: $(echo $a | tr '\n' ';') (SAE frames $(sae_of "$m" "$A")) | B: $(echo $b | tr '\n' ';') (SAE frames $(sae_of "$m" "$B"))"
+# a station first offers its old PMKID (refused: the cache is gone), then redoes SAE from scratch; never a cached keying
+[ $ga = 0 ] && [ $gb = 0 ] && [ "$(f "$hw" 5)" -gt "$(f "$h0" 5)" ] && grep -q " 0 SAE (just authenticated)" <<<"$a" && ! grep -q "cached PMKSA" <<<"$a$b" && [ "$(sae_of "$m" "$A")" -ge 1 ]
+chk $? "E5 both stations re-joined with a full SAE (pmkids=0); no cached PMKSA survived the wipe (full wipes $(f "$h0" 5) -> $(f "$hw" 5))"
 
 # --- E6: throughput ---
 T=$("$R/tools/diagnostics/cm5-throughput-check.sh" "$PI" auto 96 5 2>&1 | grep -a "THROUGHPUT" | tail -1); echo "  $T"
@@ -118,7 +123,7 @@ grep -q "PASS" <<<"$T"; chk $? "E6 throughput >= 96 Mbps (ADR 0065 baseline)"
 m=$(mark); good=0
 for i in $(seq 1 "$CYC"); do
   if [ $((i % 2)) = 1 ]; then ifc=wlan1; else ifc=wlan0; fi
-  psudo "iw dev $ifc disconnect" >/dev/null 2>&1; sleep 2
+  reassoc "$ifc"; sleep 3
   wait_gw "$ifc" 20 && good=$((good + 1))
 done
 auth=$(since "$m" | grep -a "P11-AP3 auth\]" ); na=$(grep -c . <<<"$auth"); nk=$(grep -c "ptk_set=true authorized=true" <<<"$auth")
