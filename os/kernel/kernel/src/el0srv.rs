@@ -742,6 +742,54 @@ pub mod keyer {
             CONSEC = 0;
         }
     }
+    // ---- D-c (operator 2026-11-16): the kernel keeps the TRNG and feeds el0-wpa's DRBG ----
+    const RESEED_EVERY_MS: u64 = 3_600_000;
+    pub static mut SEEDS: u64 = 0;
+    pub static mut SEED_FAILS: u64 = 0;
+    static mut LAST_SEED_MS: u64 = 0;
+    fn now_ms() -> u64 {
+        crate::clock::ticks() / (crate::clock::freq() / 1000).max(1)
+    }
+    /// `DRBG_SEED_LEN` bytes of fresh entropy, or None (fail closed). On the CM5: the hardware TRNG, strict (both FIFO
+    /// halves, health-checked). QEMU has no RNG200: its selftests seed from a counter-derived TEST pattern — this path is
+    /// not compiled in a CM5 build (the `entropy.rs` rule: no seeded source exists on metal).
+    fn trng_seed() -> Option<[u8; hal::wpasrvabi::DRBG_SEED_LEN]> {
+        let mut e = [0u8; hal::wpasrvabi::DRBG_SEED_LEN];
+        #[cfg(feature = "cm5")]
+        for k in 0..hal::wpasrvabi::DRBG_SEED_LEN / 8 {
+            e[k * 8..k * 8 + 8].copy_from_slice(&arch_aarch64::rng200::next_word_strict()?.to_le_bytes());
+        }
+        #[cfg(not(feature = "cm5"))]
+        for (i, b) in e.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(29) ^ (unsafe { SEEDS } as u8).wrapping_add(0x5c);
+        }
+        Some(e)
+    }
+    /// Seed (or reseed) el0-wpa's DRBG. False = the TRNG or the server refused (the caller fails closed).
+    fn seed_with(s: &mut Server) -> bool {
+        let Some(mut e) = trng_seed() else {
+            unsafe { SEED_FAILS += 1 };
+            if unsafe { SEED_FAILS } == 1 {
+                arch_aarch64::_print(format_args!(" [EL0-WPA] DRBG seed: the TRNG refused — el0-wpa generates nothing (fail closed)\n"));
+            }
+            return false;
+        };
+        let ok = matches!(s.call_io(hal::wpasrvabi::CMD_DRBG_SEED, &e, &mut []).0, Call::Done(ST_OK, 1, _));
+        hal::wpaauth::wipe(&mut e);
+        if ok {
+            unsafe {
+                SEEDS += 1;
+                LAST_SEED_MS = now_ms();
+            }
+        } else {
+            unsafe { SEED_FAILS += 1 };
+        }
+        ok
+    }
+    /// (seeds delivered, seed failures) — the `[WIFI-SPLIT]` line.
+    pub fn drbg_stats() -> (u64, u64) {
+        unsafe { (SEEDS, SEED_FAILS) }
+    }
     /// Taken by the driver after a full wipe (it then deauthenticates every station and re-sends the passphrase).
     #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
     pub(crate) fn take_wiped() -> bool {
@@ -781,7 +829,16 @@ pub mod keyer {
                 }
             }
         }
-        let (c, n) = s.call_io(cmd, inp, out);
+        // D-c: reseed hourly with fresh TRNG bytes (a failure leaves the DRBG on its current seed until its interval)
+        if cmd != hal::wpasrvabi::CMD_DRBG_SEED && unsafe { SEEDS } > 0 && now_ms().saturating_sub(unsafe { LAST_SEED_MS }) >= RESEED_EVERY_MS {
+            let _ = seed_with(s);
+        }
+        let (mut c, mut n) = s.call_io(cmd, inp, out);
+        // D-c: an unseeded / exhausted DRBG refused the call and changed nothing: seed it, retry once; a TRNG failure
+        // fails closed (the call's refusal stands)
+        if matches!(c, Call::Done(st, ..) if st == hal::wpasrvabi::ST_NEED_SEED) && cmd != hal::wpasrvabi::CMD_DRBG_SEED && seed_with(s) {
+            (c, n) = s.call_io(cmd, inp, out);
+        }
         match c {
             Call::Done(st, ..) if st == hal::wpasrvabi::ST_STATE_BAD => {
                 full_wipe();
@@ -883,7 +940,8 @@ pub mod keyer {
         hal::wpaauth::wipe(&mut inp);
         r
     }
-    pub(crate) fn sae_rx(ap: &[u8; 6], sta: &[u8; 6], now: u64, rnd: &[u8; SAE_RND], body: &[u8]) -> Option<saemsg::SaeRx> {
+    /// D-c: no kernel randomness crosses — the IN rnd region is reserved (zeros); el0-wpa draws from its DRBG.
+    pub(crate) fn sae_rx(ap: &[u8; 6], sta: &[u8; 6], now: u64, body: &[u8]) -> Option<saemsg::SaeRx> {
         let pre = 6 + 6 + 8 + SAE_RND;
         if body.len() > IN_MAX - pre {
             return None;
@@ -892,7 +950,6 @@ pub mod keyer {
         inp[..6].copy_from_slice(ap);
         inp[6..12].copy_from_slice(sta);
         inp[12..20].copy_from_slice(&now.to_le_bytes());
-        inp[20..20 + SAE_RND].copy_from_slice(rnd);
         inp[pre..pre + body.len()].copy_from_slice(body);
         let mut o = [0u8; saemsg::RX_OUT_LEN];
         let n = ok_call(CMD_SAE_RX, &inp[..pre + body.len()], &mut o);
@@ -1042,7 +1099,9 @@ pub mod keyer {
         let wpa = match super::imp::load_wpa() {
             Ok(mut p) => {
                 let ok = matches!(p.call(hal::wpasrvabi::CMD_INIT), Call::Done(ST_OK, ..));
-                arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa loaded at {:#x} in its own address space: the WPA 4-way, SAE and the PMKSA cache run here, supervised apart from the bus server (ADR 0065 step 4g S2) init={}\n", p.base(), ok));
+                // D-c: the DRBG is seeded with fresh TRNG bytes before anything can draw from it (fail closed if not)
+                let seeded = ok && seed_with(&mut p);
+                arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa loaded at {:#x} in its own address space: the WPA 4-way, SAE and the PMKSA cache run here, supervised apart from the bus server (ADR 0065 step 4g S2) init={} DRBG seeded from the kernel TRNG={}\n", p.base(), ok, seeded));
                 unsafe { WPA = Some(p) };
                 ok
             }
@@ -1215,11 +1274,10 @@ pub mod keyer {
             _ => None,
         }
     }
-    /// S3b: new group keys in el0-wpa from 32 B of kernel TRNG entropy (D-c); their install records land in the
-    /// key-transfer page. `igtk` = an IGTK too (PMF). The entropy buffer is the caller's to wipe.
-    pub(crate) fn group_new(entropy: &[u8; 32], igtk: bool) -> bool {
+    /// S3b: new group keys in el0-wpa — from its DRBG (D-c: the 32-byte entropy region of IN is reserved, zeros);
+    /// their install records land in the key-transfer page. `igtk` = an IGTK too (PMF).
+    pub(crate) fn group_new(igtk: bool) -> bool {
         let mut inp = [0u8; 33];
-        inp[..32].copy_from_slice(entropy);
         inp[32] = igtk as u8;
         let r = matches!(wpa_call(hal::wpasrvabi::CMD_GROUP_NEW, &inp, &mut [], None), Some((Call::Done(ST_OK, 1, _), _)));
         hal::wpaauth::wipe(&mut inp);
@@ -1366,7 +1424,6 @@ pub mod keyer {
 #[cfg(all(feature = "mctls", feature = "wpa3"))]
 pub fn sae_selftest() -> bool {
     use hal::rsnassoc::{AssocRsn, Keying, PMKIDS};
-    use hal::wifisrvabi::*;
     use hal::wpakeyer::{KeyData, Out, Start, FRAME_MAX};
     use keyer::*;
     let mut s = match imp::load_wpa() {
@@ -1374,7 +1431,15 @@ pub fn sae_selftest() -> bool {
         Err(_) => return false,
     };
     let _ = s.call(hal::wpasrvabi::CMD_INIT);
+    // D-c (operator 2026-11-16): a fresh el0-wpa has an unseeded DRBG and must refuse to generate (fail closed) —
+    // asked directly, bypassing the kernel's seed-and-retry; then seeding it makes the same call succeed
+    let unseeded_refuses = matches!(s.call_io(hal::wpasrvabi::CMD_GROUP_NEW, &[0u8; 33], &mut []).0, Call::Done(st, ..) if st == hal::wpasrvabi::ST_NEED_SEED);
     unsafe { WPA = Some(s) };
+    let seeded_works = keyer::group_new(false);
+    imp::keyx_zero();
+    if !(unseeded_refuses && seeded_works) {
+        arch_aarch64::_print(format_args!(" [P-el0srv-sae] D-c detail: unseeded refuses={} after the kernel seeds it works={}\n", unseeded_refuses, seeded_works));
+    }
     let ap = [2, 0xaa, 0, 0, 0, 1];
     let sta = [2, 0x5a, 0, 0, 0, 9];
     let pw = b"correct horse battery";
@@ -1390,8 +1455,7 @@ pub fn sae_selftest() -> bool {
     commit[6..8].copy_from_slice(&19u16.to_le_bytes());
     commit[8..40].copy_from_slice(&st.own_scalar);
     commit[40..104].copy_from_slice(&st.own_element);
-    let rnd = [0x77u8; SAE_RND];
-    let r1 = test::sae_rx(&ap, &sta, 10, &rnd, &commit);
+    let r1 = test::sae_rx(&ap, &sta, 10, &commit);
     let committed = r1.as_ref().is_some_and(|r| r.ev == 2 && r.n >= 1 && r.lens[0] == 104);
     let mut ok_peer = false;
     if let Some(r) = r1.as_ref() {
@@ -1407,7 +1471,7 @@ pub fn sae_selftest() -> bool {
     conf[2..4].copy_from_slice(&2u16.to_le_bytes());
     conf[6..8].copy_from_slice(&ssc.to_le_bytes());
     conf[8..40].copy_from_slice(&scf);
-    let r2 = test::sae_rx(&ap, &sta, 20, &rnd, &conf);
+    let r2 = test::sae_rx(&ap, &sta, 20, &conf);
     let accepted = r2.as_ref().is_some_and(|r| {
         let mut c = [0u8; 32];
         c.copy_from_slice(&r.frames[0][8..40]);
@@ -1500,10 +1564,7 @@ pub fn sae_selftest() -> bool {
     // station unwraps from M3 is el0-wpa's (the kernel's start record carried a different, dummy GTK)
     let group_own = {
         use hal::wpasrvabi::keyx;
-        let mut ent = [0u8; 32];
-        ent[..16].copy_from_slice(&[0x5a; 16]);
-        ent[16..].copy_from_slice(&[0xa5; 16]);
-        let made = keyer::group_new(&ent, true);
+        let made = keyer::group_new(true);
         // S3d: the keys are pool outputs — never the kernel's entropy bytes themselves
         let key16 = |r: &hal::wpasrvabi::keyx::Rec| {
             let mut k = [0u8; 16];
@@ -1514,7 +1575,7 @@ pub fn sae_selftest() -> bool {
         let gkey = gr.as_ref().map_or([0; 16], key16);
         let ir = imp::keyx_test_read(keyx::SLOT_IGTK);
         let ikey = ir.as_ref().map_or([0; 16], key16);
-        let not_ent = |k: &[u8; 16]| *k != [0; 16] && *k != [0x5a; 16] && *k != [0xa5; 16];
+        let not_ent = |k: &[u8; 16]| *k != [0; 16]; // D-c: DRBG outputs (no kernel entropy crosses any more)
         let g = gr.is_some_and(|r| r.index == 1 && r.flags == hal::bcdc::WSEC_PRIMARY_KEY) && not_ent(&gkey);
         let i = ir.is_some_and(|r| r.index == 4 && r.algo == hal::bcdc::CRYPTO_ALGO_BIP) && not_ent(&ikey) && ikey != gkey
             && imp::keyx_test_read(keyx::SLOT_IGTK_CCM).is_some_and(|r| r.algo == hal::bcdc::CRYPTO_ALGO_AES_CCM && key16(&r) == ikey);
@@ -1559,7 +1620,7 @@ pub fn sae_selftest() -> bool {
             _ => false,
         };
         // the pool ratchets: the SAME entropy again gives different group keys
-        let again = keyer::group_new(&ent, true) && imp::keyx_test_read(keyx::SLOT_GTK).is_some_and(|r| key16(&r) != gkey && key16(&r) != [0; 16]);
+        let again = keyer::group_new(true) && imp::keyx_test_read(keyx::SLOT_GTK).is_some_and(|r| key16(&r) != gkey && key16(&r) != [0; 16]);
         imp::keyx_zero();
         let ok = made && g && i && m1 && gtk_in_m3 && again;
         if !ok {
@@ -1577,10 +1638,10 @@ pub fn sae_selftest() -> bool {
     // S2: the containment proof on this server (it holds a PMKSA entry for `sta` now)
     let _ = keyer::contain_selftest(&sta);
     unsafe { WPA = None };
-    let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae && psk_own && group_own && k1;
+    let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae && psk_own && group_own && k1 && unseeded_refuses && seeded_works;
     arch_aarch64::_print(format_args!(
-        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d + 4g S2: WPA3 in el0-wpa against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={} S3a: a WPA2-PSK station keyed from el0-wpa's own PMK (the kernel passed none)={} S3b: group keys generated in el0-wpa, its GTK the one in M3={}\n",
-        if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae, psk_own, group_own
+        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d + 4g S2: WPA3 in el0-wpa against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={} S3a: a WPA2-PSK station keyed from el0-wpa's own PMK (the kernel passed none)={} S3b: group keys generated in el0-wpa, its GTK the one in M3={} D-c: an unseeded DRBG refuses to generate={} seeded from the kernel TRNG it works={}\n",
+        if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae, psk_own, group_own, unseeded_refuses, seeded_works
     ));
     pass
 }
