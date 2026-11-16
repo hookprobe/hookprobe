@@ -40,7 +40,8 @@ pub const CMD_SELFTEST_FAULT: u32 = 99;
 // (`crate::wifisrvabi::CMD_KEY_*`, `CMD_SAE_*`, `CMD_PMKSA_REMOVE`, the `keymsg` / `saemsg` encodings), plus: ----
 /// R0 = PMKSA cache entries (`/api/health` wifi_driver.security.pmksa_entries).
 pub const CMD_PMKSA_COUNT: u32 = 44;
-/// Test only: IN = a station MAC — the next command about that station faults (per-station containment proof).
+/// Test only: IN = a station MAC [‖ a command u32 LE] — the next command about that station (that command only, when
+/// given: S4 faults station B's M2 with `CMD_KEY_EAPOL`) faults (per-station containment proof).
 pub const CMD_SELFTEST_ARM_FAULT: u32 = 45;
 /// S3b: new group keys. IN = 32 B of TRNG entropy (the kernel's; design D-c) ‖ flags (bit0 = an IGTK too, PMF). The
 /// server mixes the entropy into its pool and derives its GTK / IGTK from the pool (S3d: never the entropy bytes

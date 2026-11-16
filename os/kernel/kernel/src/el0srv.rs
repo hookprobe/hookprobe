@@ -154,7 +154,7 @@ mod imp {
         /// Has frame rings (el0-wifi); never touch `rx` / `tx` otherwise (their frames are 0).
         rings: bool,
         state: [usize; WPA_STATE_PAGES],
-        nstate: usize,
+        pub nstate: usize,
         /// Full wipes (persistent state zeroed: every secret it held is gone).
         pub wipes: u64,
         entry: usize,
@@ -724,10 +724,13 @@ pub mod keyer {
     static mut WIPED: bool = false;
     /// A full wipe: every secret el0-wpa held is gone, every station must re-authenticate.
     fn full_wipe() {
+        let mut pages = 0;
         if let Some(s) = srv() {
             s.full_wipe();
+            pages = s.nstate;
         }
         super::imp::keyx_zero();
+        arch_aarch64::_print(format_args!(" [EL0-WPA] FULL WIPE: {} state page(s) + the key-transfer page zeroed (the PMKSA cache, SAE state, PMKs and group keys are gone)\n", pages));
         unsafe {
             WIPED = true;
             PENDING = None;
@@ -1207,6 +1210,47 @@ pub mod keyer {
     /// S3c: zero the key-transfer page after an install (the kernel writes zeros; it never reads it).
     pub(crate) fn keyx_done() {
         super::imp::keyx_zero();
+    }
+
+    /// (station faults contained, stations poisoned) — the `[WIFI-SPLIT]` line.
+    pub fn containment() -> (u64, u64) {
+        unsafe { (CONTAINED, POISONED) }
+    }
+
+    /// ADR 0065 S4 bench fault injection (feature `wifi-inject`; the request comes from `/api/bench/wifi-inject`).
+    /// Returns what was done, for the log and the API reply.
+    #[cfg(feature = "wifi-inject")]
+    pub fn inject(kind: &str, sta: Option<[u8; 6]>) -> Result<&'static str, &'static str> {
+        let r = match kind {
+            // 1: the bus server's next CMD53 read stalls (an injected CMD53 timeout) — its budget faults it
+            "cmd53-stall" => match bus_srv().map(|s| s.call_lean(CMD_INJECT_CMD53_STALL, &[], &mut []).0) {
+                Some(Call::Done(ST_OK, ..)) => "armed: the bus server's next CMD53 read stalls",
+                _ => return Err("bus server unavailable"),
+            },
+            "bus-fault" => match bus_srv().map(|s| s.call_lean(CMD_SELFTEST_FAULT, &[], &mut []).0) {
+                Some(Call::Fault) => "the bus server faulted (restart pending)",
+                _ => return Err("bus server unavailable"),
+            },
+            // 4: el0-wpa faults on this station's next EAPOL-Key (its M2) — contained to that station
+            "wpa-station-m2" => {
+                let s = sta.ok_or("sta required")?;
+                let mut inp = [0u8; 10];
+                inp[..6].copy_from_slice(&s);
+                inp[6..].copy_from_slice(&CMD_KEY_EAPOL.to_le_bytes());
+                match wpa_call(hal::wpasrvabi::CMD_SELFTEST_ARM_FAULT, &inp, &mut [], None) {
+                    Some((Call::Done(ST_OK, ..), _)) => "armed: el0-wpa faults on this station's next M2",
+                    _ => return Err("security server unavailable"),
+                }
+            }
+            // 5: a fault outside any station call — not containable: full wipe
+            "wpa-fault" => match wpa_call(hal::wpasrvabi::CMD_SELFTEST_FAULT, &[], &mut [], None) {
+                Some((Call::Fault, _)) => "el0-wpa faulted outside a station call: full wipe",
+                _ => return Err("security server unavailable"),
+            },
+            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault)"),
+        };
+        arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
+        Ok(r)
     }
 
     /// (state, restarts, faults, full wipes, ticks of the last fault or 0, PMKSA entries).
