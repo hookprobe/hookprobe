@@ -238,6 +238,16 @@ pub extern "C" fn _start() -> ! {
             write_volatile((BASE + KEYX_OFF) as *mut u8, 0xEE);
             exit(ST_OK, 0)
         },
+        // S4 bench isolation probe: read 8 bytes at a VA (another server's pages must fault here)
+        CMD_INJECT_READ_VA => {
+            let b = input();
+            if b.len() < 8 {
+                exit(ST_BAD_CMD, 0)
+            }
+            let va = u64::from_le_bytes([b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7]]) as usize;
+            let v = unsafe { read_volatile(va as *const u64) };
+            reply(&v.to_le_bytes())
+        }
         // S4 bench injection: arm a stuck CMD53 (one shot — this incarnation dies of it)
         CMD_INJECT_CMD53_STALL => unsafe {
             (*core::ptr::addr_of_mut!(BUS)).stall_next_cmd53 = true;
