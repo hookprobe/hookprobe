@@ -81,6 +81,7 @@ for _ in 1 2 3; do wait_gw wlan1 20 && break; psudo "ip link set wlan1 down; sle
 wait_gw wlan1 && wait_gw wlan0; chk $? "both stations joined (A=wlan1 $A SAE, B=wlan0 $B) and reach the gateway"
 echo "  A: $(assoc_of "$M0" "$A" | tail -1) | B: $(assoc_of "$M0" "$B" | tail -1)"
 
+if [ -z "${SOAK_ONLY:-}" ]; then
 # --- E1 + E2: an injected CMD53 timeout ---
 h0=$(H); echo "  health before: $h0"
 m=$(mark); echo "  inject: $(api cmd53-stall)"; sleep 6
@@ -147,17 +148,20 @@ tm=""; for k in 1 2 3; do T=$("$R/tools/diagnostics/cm5-throughput-check.sh" "$P
 med=$(tr ' ' '\n' <<<"$tm" | grep . | sort -n | sed -n 2p)
 awk -v m="${med:-0}" 'BEGIN{exit !(m >= 96)}'; chk $? "E6 throughput median of 3 runs ${med:-?} Mbps >= 96 (ADR 0065 baseline; runs:$tm)"
 
+fi  # SOAK_ONLY
 # --- E7: reconnect soak over both stations + the loop gap ---
-m=$(mark); good=0
+m=$(mark); good=0; newassoc=0
 for i in $(seq 1 "$CYC"); do
-  if [ $((i % 2)) = 1 ]; then ifc=wlan1; else ifc=wlan0; fi
+  if [ $((i % 2)) = 1 ]; then ifc=wlan1; mac=$A; else ifc=wlan0; mac=$B; fi
   [ "$ifc" = wlan1 ] && unwedge_a
-  timeout 90 bash -c "$(declare -f pi psudo reassoc recon); PI=$PI PS=$PS PROF=\"$PROF\" recon $ifc" >/dev/null 2>&1; sleep 2
-  wait_gw "$ifc" 40 && good=$((good + 1))
+  mc=$(mark)
+  timeout 90 bash -c "$(declare -f pi psudo reassoc dbus_cycle recon); PI=$PI PS=$PS PROF=\"$PROF\" recon $ifc" >/dev/null 2>&1; sleep 2
+  # a cycle counts only if this station really left and re-associated (a new AP association line) and reaches the gateway
+  poll_assoc "$mc" "$mac" 30 "SAE" >/dev/null && newassoc=$((newassoc + 1)) && wait_gw "$ifc" 40 && good=$((good + 1))
 done
 auth=$(since "$m" | grep -a "P11-AP3 auth\]" ); na=$(grep -c . <<<"$auth"); nk=$(grep -c "ptk_set=true authorized=true" <<<"$auth")
-echo "  soak: $good/$CYC reconnects reached the gateway; AP handshakes $na, keyed+authorized $nk"
-[ "$good" = "$CYC" ] && [ "$na" -ge "$CYC" ] && [ "$nk" = "$na" ]
+echo "  soak: $newassoc/$CYC cycles produced a new association, $good/$CYC then reached the gateway; AP handshakes $na, keyed+authorized $nk"
+[ "$good" = "$CYC" ] && [ "$newassoc" = "$CYC" ] && [ "$na" -ge "$CYC" ] && [ "$nk" = "$na" ]
 chk $? "E7 reconnect soak: $CYC cycles over both stations, every one keyed and authorized"
 gap=$(since "$M0" | grep -a -o "worst_loop_gap_ms=[0-9]*" | cut -d= -f2 | sort -n | tail -1)
 [ -n "$gap" ] && [ "$gap" -lt 2000 ]; chk $? "E7 [WDOG] worst_loop_gap_ms ${gap:-?} < 2000 throughout"
