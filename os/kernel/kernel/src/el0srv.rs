@@ -393,6 +393,10 @@ mod imp {
         /// behind is trusted by its next incarnation).
         fn reset(&mut self) {
             self.restarts += 1;
+            self.restore();
+        }
+        /// `reset` without counting a restart (a full wipe right after the fault that already counted one).
+        fn restore(&mut self) {
             for i in 0..self.nrw {
                 let (f, off, n) = self.rw[i];
                 zero(f);
@@ -409,7 +413,7 @@ mod imp {
         /// A full wipe (ADR 0065 step 4g): the reset, AND the persistent state pages zeroed — every secret the server
         /// held is gone. The next call starts a fresh, empty incarnation.
         pub fn full_wipe(&mut self) {
-            self.reset();
+            self.restore(); // S4 metal: the fault that led here already counted the restart (it was counted twice)
             for &f in &self.state[..self.nstate] {
                 zero(f);
             }
