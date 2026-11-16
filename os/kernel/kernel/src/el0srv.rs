@@ -174,6 +174,9 @@ mod imp {
         pub last_fault_ticks: u64,
         next_ok: u64,
         streak: u32,
+        /// Run once after each fault / budget overrun, before the server's next call (the bus server: recover the SDHCI
+        /// controller if the fault left a transfer in flight — ADR 0065 claims C1/C5).
+        pub on_fault: Option<fn() -> u8>,
     }
 
     fn alloc() -> usize {
@@ -270,6 +273,7 @@ mod imp {
             last_fault_ticks: 0,
             next_ok: 0,
             streak: 0,
+            on_fault: None,
         };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < base || g.vaddr + g.memsz > base + IMAGE_MAX {
@@ -375,11 +379,20 @@ mod imp {
             self.w32(H_CMD, cmd);
             self.w32(H_STATUS, ST_PANIC);
             self.calls += 1;
+            let t0 = crate::clock::ticks();
             let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, self.budget_us);
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
                 self.last_fault_ticks = crate::clock::ticks();
+                let rec = self.on_fault.map_or(9, |h| h());
+                // claims C1/C5: every fault of a recovering server, with what it was doing and how it ended
+                if self.on_fault.is_some() && self.faults <= 40 {
+                    let us = crate::clock::ticks().saturating_sub(t0) / (crate::clock::freq() / 1_000_000).max(1);
+                    arch_aarch64::_print(format_args!(" [EL0-FAULT] {} fault #{}: cmd={} kind={} after {} us (budget {} us) streak={} controller recover={}\n",
+                        self.name, self.faults, self.r32(H_CMD), match how { crate::Excursion::Timeout => "budget-overrun", crate::Excursion::Fault => "exception", _ => "panic-status" },
+                        us, self.budget_us, self.streak + 1, ["nothing in flight", "reset+abort+terminate", "reset did NOT clear", "-", "-", "-", "-", "-", "-", "n/a"][rec as usize]));
+                }
                 self.reset();
                 self.streak = self.streak.saturating_add(1);
                 let b = (BACKOFF_MS << (self.streak - 1).min(10)).min(BACKOFF_MAX_MS);
@@ -1054,6 +1067,11 @@ pub mod keyer {
         };
         let bus = match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
             Ok(mut s) => {
+                // claims C1/C5: a bus-server fault inside a CMD53 leaves the controller mid-transfer — recover it once
+                #[cfg(feature = "cm5")]
+                {
+                    s.on_fault = Some(arch_aarch64::cyw43::bus_recover_after_el0_fault);
+                }
                 let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
                 unsafe { WIFI = Some(s) };
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi (the bus server: SDIO / SDPCM / firmware I/O, no keys) loaded at {:#x} init={}\n", super::imp::BASE, ok));
@@ -1265,7 +1283,40 @@ pub mod keyer {
                 Some((Call::Fault, _)) => "el0-wpa faulted outside a station call: full wipe",
                 _ => return Err("security server unavailable"),
             },
-            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault)"),
+            // customer claim "security isolation": the bus server tries to read el0-wpa's image and its state pages (the
+            // PMKSA cache, SAE state, PMKs, group keys) — each must FAULT; the key-transfer page is readable (RO, by
+            // design) and must hold nothing between installs
+            "bus-read-wpa" => {
+                #[cfg(feature = "cm5")]
+                let base = hal::wpasrvabi::BASE_CM5;
+                #[cfg(not(feature = "cm5"))]
+                let base = hal::wpasrvabi::BASE_QEMU;
+                let probe = |va: usize| -> &'static str {
+                    let Some(s) = bus_srv() else { return "no bus server" };
+                    // a previous probe's fault leaves a short backoff: wait it out (bench path)
+                    let ms = |t: u64| t / (crate::clock::freq() / 1000).max(1);
+                    let until = ms(crate::clock::ticks()) + s.backoff_left_ms().min(500) + 1;
+                    while ms(crate::clock::ticks()) < until {}
+                    let mut o = [0u8; 8];
+                    match s.call_io(CMD_INJECT_READ_VA, &(va as u64).to_le_bytes(), &mut o) {
+                        (Call::Fault, _) => "FAULT (not mapped)",
+                        (Call::Done(ST_OK, ..), 8) if o == [0; 8] => "readable, zero",
+                        (Call::Done(ST_OK, ..), 8) => "READABLE WITH DATA",
+                        _ => "refused",
+                    }
+                };
+                let (img, st) = (probe(base), probe(base + hal::wpasrvabi::STATE_OFF));
+                let kx = probe(super::imp::BASE + KEYX_OFF);
+                let wpa = srv().map_or((0, 0), |s| (s.restarts, s.faults));
+                arch_aarch64::_print(format_args!(" [WIFI-ISOLATION] bus server reading el0-wpa: image {:#x} -> {}, state pages {:#x} -> {}, key-transfer page -> {} | el0-wpa restarts={} faults={}\n",
+                    base, img, base + hal::wpasrvabi::STATE_OFF, st, kx, wpa.0, wpa.1));
+                if img.starts_with("FAULT") && st.starts_with("FAULT") && kx == "readable, zero" {
+                    "bus server: el0-wpa image + state pages FAULT, key-transfer page empty"
+                } else {
+                    "ISOLATION PROBE FAILED (see [WIFI-ISOLATION])"
+                }
+            }
+            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | bus-read-wpa)"),
         };
         arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
         Ok(r)
