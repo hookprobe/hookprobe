@@ -4477,6 +4477,13 @@ pub struct El0Keyer {
 #[cfg(feature = "wpa3")]
 static mut EL0_SAE_SRC: Option<([u8; 6], u8, [u8; 16])> = None;
 
+/// Counter ticks -> milliseconds.
+#[cfg(feature = "wpa3")]
+fn ticks_to_ms(t: u64) -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    t / (f / 1000).max(1)
+}
 /// Push the installed security (mode, SSID, passphrase) to el0-wifi: called when the server loads, and by every
 /// security install. `clear` = the credentials changed (drop its PMKSA cache).
 #[cfg(feature = "wpa3")]
@@ -4484,7 +4491,11 @@ pub fn ap_sae_el0_sync(clear: bool) -> bool {
     let Some(h) = el0() else { return false };
     let st = w3();
     let mode = if st.mode == SEC_WPA2 { 0 } else { 1 };
-    (h.sae_setup)(mode, clear, &st.ssid[..st.ssid_len as usize], &st.pw[..st.pw_len as usize])
+    let t0 = ticks();
+    let ok = (h.sae_setup)(mode, clear, &st.ssid[..st.ssid_len as usize], &st.pw[..st.pw_len as usize]);
+    // S3a: the setup derives the H2E PT and the PBKDF2 PSK in el0-wpa — its cost on metal (el0-wpa's budget: 250 ms)
+    crate::_print(format_args!(" [EL0-WPA] setup (mode {}, PT + WPA2 PMK derived in el0-wpa) ok={} in {} ms\n", mode, ok, ticks_to_ms(ticks().wrapping_sub(t0))));
+    ok
 }
 pub static mut EL0_KEYER: Option<El0Keyer> = None;
 /// Handshakes the driver started in EL0 and has not seen finish (so the loop does not cross into EL0 to tick an idle
@@ -4595,8 +4606,18 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
     let via_sae = unsafe { (*core::ptr::addr_of_mut!(EL0_SAE_SRC)).take() }.filter(|x| x.0 == *sta && akm8);
     #[cfg(not(feature = "wpa3"))]
     let via_sae: Option<([u8; 6], u8, [u8; 16])> = None;
-    let el0r = match via_sae {
-        Some((_, k, p)) => el0().and_then(|h| (h.key_start_sae)(&st, now_ms, k, &p, &mut out)),
+    // ADR 0065 step 4g S3a: a WPA2-PSK station is keyed from el0-wpa's OWN PMK (source 3; it derived it from the
+    // passphrase at setup): the kernel's PMK never crosses. The kernel copy below stays the D5 fallback until S3d.
+    #[cfg(feature = "wpa3")]
+    let src = via_sae.map(|(_, k, p)| (k, p)).or(if akm8 { None } else { Some((3u8, [0u8; 16])) });
+    #[cfg(not(feature = "wpa3"))]
+    let src = via_sae.map(|(_, k, p)| (k, p));
+    let el0r = match src {
+        Some((k, p)) => {
+            let mut st0 = st;
+            st0.pmk = [0; 32];
+            el0().and_then(|h| (h.key_start_sae)(&st0, now_ms, k, &p, &mut out))
+        }
         None => el0().and_then(|h| (h.start)(&st, now_ms, &mut out)),
     };
     let r = match el0r {
