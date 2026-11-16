@@ -35,3 +35,12 @@ pub const CMD_STATE_READ: u32 = 41;
 pub const CMD_KEYX_PUT: u32 = 42;
 /// Test only: fault on purpose.
 pub const CMD_SELFTEST_FAULT: u32 = 99;
+
+// ---- S2: the security server's commands are the keying / SAE / PMKSA commands el0-wifi served
+// (`crate::wifisrvabi::CMD_KEY_*`, `CMD_SAE_*`, `CMD_PMKSA_REMOVE`, the `keymsg` / `saemsg` encodings), plus: ----
+/// R0 = PMKSA cache entries (`/api/health` wifi_driver.security.pmksa_entries).
+pub const CMD_PMKSA_COUNT: u32 = 44;
+/// Test only: IN = a station MAC — the next command about that station faults (per-station containment proof).
+pub const CMD_SELFTEST_ARM_FAULT: u32 = 45;
+/// The persistent state failed its check after a restart: the kernel must full-wipe (every station re-authenticates).
+pub const ST_STATE_BAD: u32 = 3;
