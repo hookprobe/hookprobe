@@ -408,9 +408,10 @@ fn sae_cmd(cmd: u32) -> ! {
             let (Some(sta), Some(now)) = (sta_of(inp), u64_at(inp, 6)) else { exit(ST_BAD_CMD, 0) };
             let Some(offers) = inp.get(14).copied() else { exit(ST_BAD_CMD, 0) };
             let Some(rsn) = saemsg::decode_rsn(&inp[15..]) else { exit(ST_BAD_CMD, 0) };
-            let fresh = tab().pmk_for(&sta, now).is_some();
+            let fresh_id = tab().pmkid_for(&sta, now);
+            let fresh = fresh_id.is_some();
             let c = cache();
-            let how = hal::rsnassoc::decide(rsn.as_ref(), offers, fresh, &mut |p| c.get(&sta, p, now).is_some());
+            let how = hal::rsnassoc::decide(rsn.as_ref(), offers, fresh_id.as_ref(), &mut |p| c.get(&sta, p, now).is_some());
             let (code, idx) = saemsg::keying_code(&how);
             let (dc, age) = tab().diag(&sta, now);
             o[0] = code;
