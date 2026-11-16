@@ -74,11 +74,18 @@ pub enum Class {
     Sleep = 2,
     Crash = 3,
     Freeze = 4,
+    /// ADR 0065 S4 (design §5 escalation): the EL0 bus server faulted `BUS_FAULTS_N` times within
+    /// `BUS_FAULT_WINDOW_MS` — its own restart is not recovering the bus: reload the firmware (the crash ladder).
+    BusFaults = 5,
 }
+
+/// Bus-server faults within this window that escalate to a firmware reload (design §5: "3 bus faults / 60 s").
+pub const BUS_FAULTS_N: usize = 3;
+pub const BUS_FAULT_WINDOW_MS: u64 = 60_000;
 
 impl Class {
     pub fn name(self) -> &'static str {
-        ["healthy", "congestion", "station-sleep", "firmware-crash", "tx-freeze"][self as usize]
+        ["healthy", "congestion", "station-sleep", "firmware-crash", "tx-freeze", "bus-faults"][self as usize]
     }
 }
 
@@ -119,6 +126,8 @@ pub struct Sample {
     pub stations: u8,
     /// The mailbox FWHALT counter.
     pub fw_halts: u32,
+    /// Faults of the EL0 bus server (`el0srv` restarts it after each; a burst escalates here).
+    pub bus_faults: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -154,6 +163,10 @@ pub struct Heal {
     post_reboot: bool,
     st: St,
     halts_seen: u32,
+    bus_seen: u64,
+    /// When the last `BUS_FAULTS_N` bus-server faults were seen (ring).
+    bus_marks: [u64; BUS_FAULTS_N],
+    bus_n: usize,
     last_max: Option<u8>,
     stall_since: u64,
     last_kick: u64,
@@ -184,6 +197,9 @@ impl Heal {
             post_reboot: flags & (F_REBOOTED | F_DEGRADED) != 0 || early_self_heal,
             st: St::Run,
             halts_seen: 0,
+            bus_seen: 0,
+            bus_marks: [0; BUS_FAULTS_N],
+            bus_n: 0,
             last_max: None,
             stall_since: 0,
             last_kick: 0,
@@ -273,6 +289,21 @@ impl Heal {
             self.halts_seen = s.fw_halts;
             self.class = Class::Crash;
             self.pending = Some(Class::Crash);
+        }
+        // 1b. a burst of bus-server faults (each already restarted the server): the bus itself is not recovering
+        if s.bus_faults != self.bus_seen {
+            let d = s.bus_faults.wrapping_sub(self.bus_seen).min(BUS_FAULTS_N as u64);
+            self.bus_seen = s.bus_faults;
+            for _ in 0..d {
+                self.bus_marks[self.bus_n % BUS_FAULTS_N] = now;
+                self.bus_n += 1;
+            }
+            let oldest = self.bus_marks[self.bus_n % BUS_FAULTS_N];
+            if self.bus_n >= BUS_FAULTS_N && now.saturating_sub(oldest) <= BUS_FAULT_WINDOW_MS && self.pending.is_none() {
+                self.class = Class::BusFaults;
+                self.pending = Some(Class::BusFaults);
+                self.bus_n = 0;
+            }
         }
         if let Some(c) = self.pending {
             return self.reload(c, s, p);
@@ -465,7 +496,7 @@ fn publish(h: &Heal) {
     let st = match h.st {
         St::Degraded => 2,
         St::Rebooting => 3,
-        St::Run if h.pending.is_some() || matches!(h.class, Class::Crash | Class::Freeze) => 1,
+        St::Run if h.pending.is_some() || matches!(h.class, Class::Crash | Class::Freeze | Class::BusFaults) => 1,
         St::Run => 0,
     };
     ST.store(st, Relaxed);
@@ -482,6 +513,7 @@ pub fn status() -> (&'static str, &'static str, u32, u32, u32, bool) {
         2 => Class::Sleep,
         3 => Class::Crash,
         4 => Class::Freeze,
+        5 => Class::BusFaults,
         _ => Class::Healthy,
     };
     (
@@ -743,7 +775,7 @@ impl Port for Mock {
 fn run(h: &mut Heal, m: &mut Mock, t0: u64, t1: u64, f: &mut dyn FnMut(u64, &mut Sample)) {
     let mut t = t0;
     while t <= t1 {
-        let mut s = Sample { now_ms: t, queued: 8, tx_seq: 40, tx_max: 40, rx_frames: 100, stations: 1, fw_halts: 0 };
+        let mut s = Sample { now_ms: t, queued: 8, tx_seq: 40, tx_max: 40, rx_frames: 100, stations: 1, fw_halts: 0, bus_faults: 0 };
         f(t, &mut s);
         NOW.store(t as u32, Relaxed);
         let _ = h.step(&s, m);
@@ -798,7 +830,7 @@ pub fn selftest() -> bool {
         && h.last.is_some_and(|d| d.w[W_CLASS] == Class::Freeze as u32 && d.w[W_ACTION] == Action::RebootOnce as u32
             && d.w[W_ATTEMPT] == 3 && d.w[W_QUEUED] == 8 && d.w[W_TX_SEQ] == 40 && d.w[W_FW_HASH] == 0xfeed_f00d
             && d.w[W_STATIONS] == 1 && d.w[W_COUNTS] >> 24 == 2);
-    let once = h.step(&Sample { now_ms: 500_000, queued: 8, tx_seq: 40, tx_max: 40, rx_frames: 0, stations: 1, fw_halts: 9 }, &mut m) == Action::None
+    let once = h.step(&Sample { now_ms: 500_000, queued: 8, tx_seq: 40, tx_max: 40, rx_frames: 0, stations: 1, fw_halts: 9, bus_faults: 0 }, &mut m) == Action::None
         && m.count(b'R') == 1;
     // 5. the boot after that reboot: the same failure within the window -> Degrade, Wi-Fi off, NO reset, ever
     let rec = Some((F_REBOOTED, h.last.map_or([0; WORDS], |d| d.w)));
@@ -806,7 +838,7 @@ pub fn selftest() -> bool {
     let mut m2 = Mock::new(Probe::Awake);
     run(&mut h2, &mut m2, 1_000, 30 * 60_000 + 60_000, &mut |_, _| {});
     let mut m2h = Mock::new(Probe::Awake); // a firmware halt while degraded: still nothing
-    let _ = h2.step(&Sample { now_ms: 40 * 60_000, queued: 8, tx_seq: 40, tx_max: 40, rx_frames: 0, stations: 1, fw_halts: 7 }, &mut m2h);
+    let _ = h2.step(&Sample { now_ms: 40 * 60_000, queued: 8, tx_seq: 40, tx_max: 40, rx_frames: 0, stations: 1, fw_halts: 7, bus_faults: 0 }, &mut m2h);
     let degrade = h2.degraded() && m2.count(b'D') == 1 && m2.count(b'R') == 0 && m2h.n == 0 && m2.diag_first()
         && m2.flags[m2.nrec - 1] == F_REBOOTED | F_DEGRADED && h2.prev.is_some_and(|(f, d)| f == F_REBOOTED && d.w[W_ACTION] == 4);
     // ...an early self-heal reset by the previous boot counts as "already rebooted" too
@@ -847,6 +879,22 @@ pub fn selftest() -> bool {
         });
     }
     let refill = m6.count(b'L') == 3 && m6.count(b'R') == 0;
+    // 7b. ADR 0065 S4 escalation: 3 bus-server faults within 60 s -> one firmware reload (class bus-faults); the same 3
+    //     faults 40 s apart -> nothing (each restart of the bus server recovered on its own)
+    let mut h7 = Heal::from_boot(None, false);
+    let mut m7 = Mock::new(Probe::Awake);
+    run(&mut h7, &mut m7, 1_000, 30_000, &mut |t, s| {
+        s.queued = 0;
+        s.bus_faults = if t >= 20_000 { 3 } else if t >= 10_000 { 2 } else if t >= 2_000 { 1 } else { 0 };
+    });
+    let bus_burst = m7.count(b'L') == 1 && m7.recorded_class == Class::BusFaults as u32;
+    let mut h8 = Heal::from_boot(None, false);
+    let mut m8 = Mock::new(Probe::Awake);
+    run(&mut h8, &mut m8, 1_000, 130_000, &mut |t, s| {
+        s.queued = 0;
+        s.bus_faults = if t >= 82_000 { 3 } else if t >= 42_000 { 2 } else if t >= 2_000 { 1 } else { 0 };
+    });
+    let bus_spread = m8.count(b'L') == 0 && m8.count(b'R') == 0;
     // 8. the record format: written, taken once, a flipped word never reads back
     let record = arch_aarch64::crashrec::heal_selftest();
     // 9. the station set; the published status; no heap use by any of it
@@ -860,13 +908,13 @@ pub fn selftest() -> bool {
     let st = status().0.starts_with("degraded") && status().5;
     publish(&Heal::from_boot(None, false));
     let heap = crate::heap::used() == heap0;
-    let pass = congestion && nosta && sleep && ladder && diag && once && degrade && early && later && crash1 && crash2 && refill && record && sta && st && heap;
+    let pass = congestion && nosta && sleep && ladder && diag && once && degrade && early && later && crash1 && crash2 && refill && bus_burst && bus_spread && record && sta && st && heap;
     // BENCH ONLY: the metal trigger reaches the real ladder ([P-wifiheal-bench], its own line)
     #[cfg(feature = "wifiheal-bench")]
     let pass = pass && bench_selftest();
     arch_aarch64::_print(format_args!(
-        " [P-wifiheal] {} — audit A7 Wi-Fi self-heal: congestion (completions advancing) no action={} no station no action={} power-save / gone station: kicks then no recovery={} freeze ladder kick 100ms/500ms -> bounce 10s -> reload 25s -> reload 85s (60s backoff) -> RebootOnce 100s={} diagnostics captured + recorded before every bounce / reload / reboot={} at most one reboot={} post-reboot recurrence -> Degrade, no reset, halts ignored={} early self-heal counts as rebooted={} new incident after the window={} firmware halt -> reload at once, backoff, failed reload retried, then reboot={}/{} budget refill after 1 h={} record taken once, torn = none={} stations={} status={} heap growth 0={}\n",
-        if pass { "PASS" } else { "FAIL" }, congestion, nosta, sleep, ladder, diag, once, degrade, early, later, crash1, crash2, refill, record, sta, st, heap
+        " [P-wifiheal] {} — audit A7 Wi-Fi self-heal: congestion (completions advancing) no action={} no station no action={} power-save / gone station: kicks then no recovery={} freeze ladder kick 100ms/500ms -> bounce 10s -> reload 25s -> reload 85s (60s backoff) -> RebootOnce 100s={} diagnostics captured + recorded before every bounce / reload / reboot={} at most one reboot={} post-reboot recurrence -> Degrade, no reset, halts ignored={} early self-heal counts as rebooted={} new incident after the window={} firmware halt -> reload at once, backoff, failed reload retried, then reboot={}/{} budget refill after 1 h={} 3 bus-server faults in 60 s -> one reload={} the same 3 spread over 80 s -> none={} record taken once, torn = none={} stations={} status={} heap growth 0={}\n",
+        if pass { "PASS" } else { "FAIL" }, congestion, nosta, sleep, ladder, diag, once, degrade, early, later, crash1, crash2, refill, bus_burst, bus_spread, record, sta, st, heap
     ));
     pass
 }
