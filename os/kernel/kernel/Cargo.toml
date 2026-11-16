@@ -87,6 +87,10 @@ mctls = []
 hsh = ["mcserve"]
 # DEVELOPMENT-only shell extras (none today beyond `hsh`); never in a release build (make-cm5-heqk-image.sh refuses it).
 hsh-dev = ["hsh"]
+# BENCH ONLY (ADR 0065 S4): Wi-Fi fault injection — POST /api/bench/wifi-inject (owner re-auth) stalls a CMD53 in
+# el0-wifi, faults it, faults el0-wpa on one station's command, or faults el0-wpa outside any station (full wipe).
+# Refused in a release build by os/build/make-cm5-heqk-image.sh (needs HOOKPROBE_DEBUG_ACCESS=1).
+wifi-inject = ["apmc"]
 mcserve = ["netsvc", "mctls"]
 # M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
 # prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
