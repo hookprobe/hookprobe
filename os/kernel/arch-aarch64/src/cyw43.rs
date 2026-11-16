@@ -1974,7 +1974,22 @@ pub fn sdpcm_frame_pending() -> bool {
     bp_r32(sdb + SD_REG_INTSTATUS) & I_HMB_FRAME_IND != 0
 }
 
-/// Terminate the F2 frame currently being read — a port of brcmfmac `brcmf_sdio_rxfail`
+/// ADR 0065 claims: after the EL0 bus server faulted or overran its budget, recover the controller ONCE if the fault left
+/// a transfer in flight (`hal::sdio::Bus::recover_abandoned`). (recovered, not-cleared) counts for the beat.
+pub static mut BUS_RECOVER: (u32, u32) = (0, 0);
+pub fn bus_recover_after_el0_fault() -> u8 {
+    let r = bus().recover_abandoned();
+    unsafe {
+        match r {
+            1 => BUS_RECOVER.0 += 1,
+            2 => BUS_RECOVER.1 += 1,
+            _ => {}
+        }
+    }
+    r
+}
+
+/// Terminate the F2 frame currently being read — a port of brcmf_sdio_rxfail
 /// (sdio.c, abort=true, rtx=false): CMD52 abort of F2 through F0 (`brcmf_sdiod_abort`: CCCR
 /// ABORT 0x06 <- function number), then SBSDIO_FUNC1_FRAMECTRL (0x1000D) <- SFC_RF_TERM (bit 0),
 /// then wait until the device's remaining-frame byte count RFRAMEBCHI/LO (0x1001C/0x1001B) is
@@ -4002,6 +4017,7 @@ pub fn ap_pmksa_drop(sta: &[u8; 6]) {
     if let Some(h) = el0() {
         (h.pmksa_remove)(sta, false);
     }
+    wpa3_drop_pmksa(sta); // el0-wpa no longer holds it: neither may the firmware (the keep experiment's removal path)
     unsafe { (*core::ptr::addr_of_mut!(PMKSA)).remove(sta) }
 }
 
@@ -4091,6 +4107,14 @@ fn fw_pmksa_set() -> i32 {
     if ok { 0 } else if st == 0 { -1000 } else { st as i32 }
 }
 
+/// The firmware's PMKSA list emptied (a full wipe: every PMKSA el0-wpa held is gone). Metal 2026-11-16 (task 111): this
+/// firmware does NOT reject an association whose PMKID it does not hold (no status 53, list kept in sync or not), so
+/// keeping per-station entries after keying bought nothing; a stale PMKID is refused by the AP after association.
+#[cfg(feature = "wpa3")]
+fn fw_pmksa_clear() -> i32 {
+    unsafe { (*core::ptr::addr_of_mut!(FW_PMKSA)).clear() };
+    fw_pmksa_set()
+}
 /// Drop `sta`'s PMKSA from the firmware (the others stay). Done when its SAE 4-way keyed (hypothesis from metal
 /// batches 45/46: a station that did SAE and returns with plain WPA2-PSK is refused at association, status 38, while
 /// the firmware still holds a PMKSA for its MAC) and when it leaves.
@@ -4900,6 +4924,9 @@ pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
             WIPE_RESYNC = Some(now_ms);
             WIPE_TRY_MS = 0;
         }
+        // every PMKSA is gone: the firmware's list too (a stale PMKID must never match there)
+        #[cfg(feature = "wpa3")]
+        let _ = fw_pmksa_clear();
         crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}); re-provisioning the passphrase and new group keys once el0-wpa is back — stations re-authenticate in full\n", d.via, d.bcme, d.gone));
     }
     // S4 metal: the re-provisioning after a wipe is RETRIED until it lands (the server is in its restart backoff right

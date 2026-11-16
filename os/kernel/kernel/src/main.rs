@@ -4351,7 +4351,8 @@ fn cm5_p10_probe() {
                                 let mut hd = [0u8; 6];
                                 let head = head.map(|h| { hd.copy_from_slice(h); hd });
                                 let smp = wifiheal::Sample { now_ms: now() / (freq / 1000).max(1), queued: (wq_n + pq_n) as u32, tx_seq: seq, tx_max: max,
-                                    rx_frames: wifi_frames, stations: stas.len(), fw_halts: cyw43::fw_halts() };
+                                    rx_frames: wifi_frames, stations: stas.len(), fw_halts: cyw43::fw_halts(),
+                                    bus_faults: crate::el0srv::keyer::bus_health().2 };
                                 let mut hp = MetalHeal { ssid: ap_ssid, cs: chosen_cs, gtk: &gtk, ap: &mut ap, head, nv: unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) } };
                                 heal.step(&smp, &mut hp)
                             };
