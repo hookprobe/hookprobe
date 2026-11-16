@@ -1,4 +1,4 @@
-# ADR 0065 — el0-wifi, the resident EL0 Wi-Fi driver server (step 2: drives a fake device in QEMU).
+# ADR 0065 — el0-wifi, the resident EL0 Wi-Fi BUS server (SDIO / SDPCM / firmware I/O; holds no keys since step 4g S2).
 # A detached crate (own [workspace]) built by the kernel build.rs like el0-hsh; allocation-free.
 [package]
 name = "el0-wifi"
@@ -18,8 +18,6 @@ cm5 = []
 
 [dependencies]
 hal = { path = "../hal" }
-# ADR 0065 step 3c: the WPA3-SAE responder (curve + KDF) runs here with its secrets (operator D3)
-sae = { path = "../sae" }
 
 [profile.release]
 panic = "abort"
