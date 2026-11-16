@@ -425,6 +425,14 @@ pub extern "C" fn _start() -> ! {
         CMD_KEY_START_SAE => key_start_sae(),
         CMD_BUS_PROBE => bus_probe(),
         CMD_RX_READ => rx_read(),
+        // S1: the key-transfer page el0-wpa writes is readable here (S3: a key record on its way to the chip)
+        CMD_KEYX_PEEK => {
+            let mut o = [0u8; 16];
+            for (i, b) in o.iter_mut().enumerate() {
+                *b = unsafe { read_volatile((BASE + KEYX_OFF + i) as *const u8) };
+            }
+            reply(&o)
+        }
         CMD_TX_DATA => tx_data(),
         CMD_TX_CTL => tx_ctl(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(rd32(H_CMD)),
@@ -434,6 +442,11 @@ pub extern "C" fn _start() -> ! {
             r[0..4].copy_from_slice(&1000u32.to_le_bytes());
             exit(ST_OK, 0)
         }
+        // it is mapped read-only here: this write must fault (the kernel counts it and resets this server only)
+        CMD_SELFTEST_KEYX_WRITE => unsafe {
+            write_volatile((BASE + KEYX_OFF) as *mut u8, 0xEE);
+            exit(ST_OK, 0)
+        },
         CMD_SELFTEST_FAULT => unsafe {
             write_volatile(0x8 as *mut u32, 1);
             exit(ST_OK, 0)
