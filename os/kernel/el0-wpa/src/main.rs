@@ -81,12 +81,16 @@ struct WpaState {
     pt: Option<sae::PT>,
     pw: [u8; 64],
     pw_len: usize,
+    /// S3a: the WPA2-PSK PMK, derived HERE from the passphrase (PBKDF2 over the SSID) or a 64-hex PSK — the kernel
+    /// starts a WPA2 4-way with "source 3" and never supplies a PMK.
+    psk: [u8; 32],
+    psk_set: bool,
     /// S1's substrate test counter (kept: the split selftest still uses it).
     counter: u64,
 }
 impl WpaState {
     const fn new() -> Self {
-        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, counter: 0 }
+        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, psk: [0; 32], psk_set: false, counter: 0 }
     }
 }
 /// The working copy (.bss: reset with the image after a fault) and whether it was loaded from the saved state.
@@ -249,6 +253,20 @@ fn sae_cmd(cmd: u32) -> ! {
             st.pw_len = pl;
             // mode 0 = WPA2 only: no SAE; otherwise the H2E PT for this SSID + passphrase
             st.pt = if mode != 0 { sae::derive_pt(&b[3..3 + sl], &b[36..36 + pl], None) } else { None };
+            // S3a: the WPA2-PSK PMK, derived here (a 64-hex PSK is the PMK itself; otherwise PBKDF2(passphrase, SSID))
+            let pw = &b[36..36 + pl];
+            hal::wpaauth::wipe(&mut st.psk);
+            st.psk_set = false;
+            if pl == 64 && pw.iter().all(|c| c.is_ascii_hexdigit()) {
+                let h = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+                for i in 0..32 {
+                    st.psk[i] = h(pw[2 * i]) << 4 | h(pw[2 * i + 1]);
+                }
+                st.psk_set = true;
+            } else if pl >= 8 {
+                st.psk = hal::wpa::wpa_pmk(pw, &b[3..3 + sl]);
+                st.psk_set = true;
+            }
             let ok = mode == 0 || st.pt.is_some();
             o[0] = ok as u8;
             reply(&o[..1])
@@ -360,6 +378,11 @@ fn key_start_sae() -> ! {
     let pmk = match src {
         1 => tab().pmk_for(&st.sta, now),
         2 => cache().get(&st.sta, &pmkid, now),
+        // S3a: WPA2-PSK — this server's own PMK
+        3 => {
+            let s = w();
+            s.psk_set.then_some(s.psk)
+        }
         _ => None,
     };
     let mut frame = [0u8; FRAME_MAX];
@@ -373,7 +396,7 @@ fn key_start_sae() -> ! {
             r
         }
         // no PMK here (expired / never accepted): a handshake that cannot start
-        None => Out::Failed(hal::wpakeyer::Done { sta: st.sta, akm8: true, cached: src == 2, auth: hal::wpakeyer::Auth::new() }),
+        None => Out::Failed(hal::wpakeyer::Done { sta: st.sta, akm8: src != 3, cached: src == 2, auth: hal::wpakeyer::Auth::new() }),
     };
     hal::wpaauth::wipe(&mut st.kd.gtk);
     let n = keymsg::encode_out(&r, &frame, &mut o);
