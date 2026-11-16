@@ -160,7 +160,8 @@ fn bounce<P: WifiPort>(port: &mut P, w: &Want, chanspec: u16, pmk: &mut [u8; 32]
 }
 
 /// The PMK as the boot derives it: a 64-hex PSK is the PMK itself (WPA2), else PBKDF2(passphrase, SSID).
-#[cfg_attr(not(all(feature = "cm5", feature = "p15-write")), allow(dead_code))]
+// S3d: an AP+MC WPA3 image derives no PMK in the kernel (el0-wpa does)
+#[cfg_attr(any(not(all(feature = "cm5", feature = "p15-write")), all(feature = "apmc", feature = "wpa3")), allow(dead_code))]
 pub fn derive_pmk(pass: &[u8], ssid: &[u8], out: &mut [u8; 32]) -> bool {
     if pass.len() == 64 {
         for (i, b) in out.iter_mut().enumerate() {
