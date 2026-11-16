@@ -39,6 +39,7 @@ pub struct Reply {
 
 pub struct TlsHost {
     entry: usize,
+    aspace: crate::el0as::El0As,
     sp_top: usize,
     io: [usize; IO_PAGES],
     heap: [usize; HEAP_PAGES],
@@ -77,30 +78,10 @@ fn alloc() -> usize {
     }
 }
 
-fn map(va: usize, pa: usize, exec: bool, write: bool) -> bool {
-    #[cfg(feature = "cm5")]
-    {
-        use arch_aarch64::mmu_cm5 as m;
-        if exec {
-            m::map_user_code(va, pa);
-            true
-        } else if write {
-            m::map_user_data(va, pa)
-        } else {
-            m::map_user_data_ro(va, pa)
-        }
-    }
-    #[cfg(not(feature = "cm5"))]
-    {
-        let m = arch_aarch64::Mmu;
-        if exec {
-            m.map_user_code_page(va, pa)
-        } else if write {
-            m.map_user_data_page(va, pa)
-        } else {
-            m.map_user_data_ro_page(va, pa)
-        }
-    }
+/// Map one page into the host's own address space (ADR 0065 S0).
+fn map(a: &crate::el0as::El0As, va: usize, pa: usize, exec: bool, write: bool) -> bool {
+    use crate::el0as::Map;
+    a.map(va, pa, if exec { Map::Code } else if write { Map::Data } else { Map::DataRo })
 }
 
 impl TlsHost {
@@ -109,8 +90,10 @@ impl TlsHost {
     /// `None` only when loading fails (TLS then simply stays off).
     pub fn load(scalar: &[u8; 32], chain: &[&[u8]]) -> Option<&'static mut TlsHost> {
         let parsed = crate::elf::parse(TLSHOST_ELF).ok()?;
+        let aspace = crate::el0as::El0As::new()?;
         let mut h = TlsHost {
             entry: parsed.entry,
+            aspace,
             sp_top: BASE + STACK_OFF + STACK_SIZE,
             io: [0; IO_PAGES],
             heap: [0; HEAP_PAGES],
@@ -150,27 +133,27 @@ impl TlsHost {
                     h.rw[h.nrw] = (f, s.offset + voff, n);
                     h.nrw += 1;
                 }
-                if !map(s.vaddr + voff, f, s.executable(), s.writable()) {
+                if !map(&aspace, s.vaddr + voff, f, s.executable(), s.writable()) {
                     return None;
                 }
             }
         }
         for p in 0..HEAP_PAGES {
             let f = alloc();
-            if f == 0 || !map(BASE + HEAP_OFF + p * 0x1000, f, false, true) {
+            if f == 0 || !map(&aspace, BASE + HEAP_OFF + p * 0x1000, f, false, true) {
                 return None;
             }
             h.heap[p] = f;
         }
         for p in 0..STACK_PAGES {
             let f = alloc();
-            if f == 0 || !map(BASE + STACK_OFF + p * 0x1000, f, false, true) {
+            if f == 0 || !map(&aspace, BASE + STACK_OFF + p * 0x1000, f, false, true) {
                 return None;
             }
         }
         for p in 0..IO_PAGES {
             let f = alloc();
-            if f == 0 || !map(BASE + IO_OFF + p * 0x1000, f, false, true) {
+            if f == 0 || !map(&aspace, BASE + IO_OFF + p * 0x1000, f, false, true) {
                 return None;
             }
             h.io[p] = f;
@@ -194,6 +177,7 @@ impl TlsHost {
         b[32..34].copy_from_slice(&n.to_le_bytes());
         h.init_blob = b;
         h.init_len = p;
+        crate::el0as::register("el0-tlshost", h.entry, h.aspace);
         unsafe { HOST = Some(h) };
         let h = host()?;
         h.init();
@@ -268,7 +252,7 @@ impl TlsHost {
         self.w32(H_ENT_LEN, elen as u32);
         self.write(IN_OFF, &input[..n]);
         self.calls += 1;
-        let how = crate::excursion_bounded(self.entry, self.sp_top, BUDGET_US);
+        let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, BUDGET_US);
         if how != crate::Excursion::Exited {
             match how {
                 crate::Excursion::Timeout => self.timeouts += 1,

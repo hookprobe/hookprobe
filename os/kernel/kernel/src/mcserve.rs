@@ -766,6 +766,7 @@ pub fn run() -> ! {
     #[cfg(feature = "wpa3")]
     let _ = crate::lansvc::sae_selftest(); // ADR 0050 D4 step 5c: the SAE station-frame walk in EL0
     let _ = crate::hsh::selftest(0); // ADR 0059 step 4a: the EL0 management shell + the management ABI
+    let _ = crate::el0as::report(); // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
     #[cfg(feature = "hsh")]
     let _ = crate::hsh::selftest_web(0); // R6 = D: owner-signed HQMGMT1 envelopes on the web carrier
     let now_ms = || (cntpct().wrapping_sub(t0) / (frq / 1000).max(1)) as i64;
