@@ -1265,7 +1265,40 @@ pub mod keyer {
                 Some((Call::Fault, _)) => "el0-wpa faulted outside a station call: full wipe",
                 _ => return Err("security server unavailable"),
             },
-            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault)"),
+            // customer claim "security isolation": the bus server tries to read el0-wpa's image and its state pages (the
+            // PMKSA cache, SAE state, PMKs, group keys) — each must FAULT; the key-transfer page is readable (RO, by
+            // design) and must hold nothing between installs
+            "bus-read-wpa" => {
+                #[cfg(feature = "cm5")]
+                let base = hal::wpasrvabi::BASE_CM5;
+                #[cfg(not(feature = "cm5"))]
+                let base = hal::wpasrvabi::BASE_QEMU;
+                let probe = |va: usize| -> &'static str {
+                    let Some(s) = bus_srv() else { return "no bus server" };
+                    // a previous probe's fault leaves a short backoff: wait it out (bench path)
+                    let ms = |t: u64| t / (crate::clock::freq() / 1000).max(1);
+                    let until = ms(crate::clock::ticks()) + s.backoff_left_ms().min(500) + 1;
+                    while ms(crate::clock::ticks()) < until {}
+                    let mut o = [0u8; 8];
+                    match s.call_io(CMD_INJECT_READ_VA, &(va as u64).to_le_bytes(), &mut o) {
+                        (Call::Fault, _) => "FAULT (not mapped)",
+                        (Call::Done(ST_OK, ..), 8) if o == [0; 8] => "readable, zero",
+                        (Call::Done(ST_OK, ..), 8) => "READABLE WITH DATA",
+                        _ => "refused",
+                    }
+                };
+                let (img, st) = (probe(base), probe(base + hal::wpasrvabi::STATE_OFF));
+                let kx = probe(super::imp::BASE + KEYX_OFF);
+                let wpa = srv().map_or((0, 0), |s| (s.restarts, s.faults));
+                arch_aarch64::_print(format_args!(" [WIFI-ISOLATION] bus server reading el0-wpa: image {:#x} -> {}, state pages {:#x} -> {}, key-transfer page -> {} | el0-wpa restarts={} faults={}\n",
+                    base, img, base + hal::wpasrvabi::STATE_OFF, st, kx, wpa.0, wpa.1));
+                if img.starts_with("FAULT") && st.starts_with("FAULT") && kx == "readable, zero" {
+                    "bus server: el0-wpa image + state pages FAULT, key-transfer page empty"
+                } else {
+                    "ISOLATION PROBE FAILED (see [WIFI-ISOLATION])"
+                }
+            }
+            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | bus-read-wpa)"),
         };
         arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
         Ok(r)
