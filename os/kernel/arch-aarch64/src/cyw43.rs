@@ -4890,13 +4890,34 @@ pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     // Safe re-authentication: every station is deauthenticated (broadcast) and the passphrase re-provisioned.
     if el0().is_some_and(|h| (h.wpa_wiped)()) {
         let d = ap_deauth(&[0xff; 6], hal::rsnassoc::REASON_INVALID_PMKID);
-        unsafe { EL0_PENDING = 0 };
-        #[cfg(feature = "wpa3")]
-        let synced = ap_sae_el0_sync(true);
-        #[cfg(not(feature = "wpa3"))]
-        let synced = true;
-        let g = ap_group_keys_el0(); // new group keys too: the old ones died with the wiped server
-        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}), passphrase re-provisioned={}, new group keys installed={} — stations re-authenticate in full\n", d.via, d.bcme, d.gone, synced, g));
+        unsafe {
+            EL0_PENDING = 0;
+            WIPE_RESYNC = Some(now_ms);
+            WIPE_TRY_MS = 0;
+        }
+        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}); re-provisioning the passphrase and new group keys once el0-wpa is back — stations re-authenticate in full\n", d.via, d.bcme, d.gone));
+    }
+    // S4 metal: the re-provisioning after a wipe is RETRIED until it lands (the server is in its restart backoff right
+    // after the fault: one attempt there left el0-wpa with no passphrase and no station could ever key again)
+    if let Some(t0) = unsafe { WIPE_RESYNC } {
+        if el0().is_some() && now_ms.wrapping_sub(unsafe { WIPE_TRY_MS }) >= 200 {
+            unsafe { WIPE_TRY_MS = now_ms };
+            #[cfg(feature = "wpa3")]
+            let synced = ap_sae_el0_sync(true);
+            #[cfg(not(feature = "wpa3"))]
+            let synced = true;
+            if synced {
+                let g = ap_group_keys_el0(); // new group keys too: the old ones died with the wiped server
+                if g {
+                    unsafe { WIPE_RESYNC = None };
+                    #[cfg(feature = "wpa3")]
+                    let igtk = if w3().mode == SEC_WPA2 { "no IGTK (WPA2)" } else if w3().igtk_set { "IGTK installed" } else { "IGTK FAILED" };
+                    #[cfg(not(feature = "wpa3"))]
+                    let igtk = "no IGTK (WPA2)";
+                    crate::_print(format_args!(" [EL0-WPA] re-provisioned after the full wipe: passphrase re-provisioned=true, new group keys installed=true, {} ({} ms after the wipe)\n", igtk, now_ms.wrapping_sub(t0)));
+                }
+            }
+        }
     }
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
     // the EL0 authenticator is ticked only while it has handshakes, and at most every 100 ms
@@ -4934,6 +4955,10 @@ pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     hal::wpaauth::wipe(&mut out);
     res
 }
+
+/// S4: a full wipe whose re-provisioning (passphrase + new group keys) has not landed yet: Some(when it happened).
+static mut WIPE_RESYNC: Option<u64> = None;
+static mut WIPE_TRY_MS: u64 = 0;
 
 /// The group key M3 carries (set when the AP installs it at start).
 static mut AP_GTK: ([u8; 16], u8) = ([0; 16], 1);
