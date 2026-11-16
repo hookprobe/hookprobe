@@ -4063,7 +4063,7 @@ pub fn ap_deauth(sta: &[u8; 6], reason: u16) -> Deauth {
 pub fn ap_sae_forget(sta: &[u8; 6], now_ms: u64) -> bool {
     if let Some(b) = el0().and_then(|h| (h.sae_forget)(sta, now_ms, 0)) {
         unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).forget_at(sta, now_ms) }; // the in-kernel copy, if it ever served
-        if b && !unsafe { FW_PMKSA_KEEP } {
+        if b {
             wpa3_drop_pmksa(sta);
         }
         return b;
@@ -4107,17 +4107,9 @@ fn fw_pmksa_set() -> i32 {
     if ok { 0 } else if st == 0 { -1000 } else { st as i32 }
 }
 
-/// PMKSA experiment (operator 2026-11-16, status-53 recovery; bench toggle through `wifi-inject`, default OFF = the
-/// metal-proven behaviour): keep each station's entry in the firmware's PMKSA list (`pmkid_info`) after keying and on
-/// leave, mirroring el0-wpa's PMKSA cache — the firmware can then answer a cached (open-auth + PMKID) association at
-/// once, and may reject a PMKID it does not hold. Entries still go when el0-wpa drops the PMKSA, and all on a wipe.
-#[cfg(feature = "wpa3")]
-pub static mut FW_PMKSA_KEEP: bool = false;
-#[cfg(feature = "wpa3")]
-pub fn set_fw_pmksa_keep(on: bool) {
-    unsafe { FW_PMKSA_KEEP = on };
-}
-/// The firmware's PMKSA list emptied (a full wipe: every PMKSA el0-wpa held is gone).
+/// The firmware's PMKSA list emptied (a full wipe: every PMKSA el0-wpa held is gone). Metal 2026-11-16 (task 111): this
+/// firmware does NOT reject an association whose PMKID it does not hold (no status 53, list kept in sync or not), so
+/// keeping per-station entries after keying bought nothing; a stale PMKID is refused by the AP after association.
 #[cfg(feature = "wpa3")]
 fn fw_pmksa_clear() -> i32 {
     unsafe { (*core::ptr::addr_of_mut!(FW_PMKSA)).clear() };
@@ -4863,9 +4855,7 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     dbg_putc(b'A');
     #[cfg(feature = "wpa3")]
     if d.akm8 {
-        if !unsafe { FW_PMKSA_KEEP } {
-            wpa3_drop_pmksa(&d.sta); // keyed: the association no longer needs this station's PMKSA
-        }
+        wpa3_drop_pmksa(&d.sta); // keyed: the association no longer needs this station's PMKSA
     }
     KeyDone { sta: d.sta, akm8: d.akm8, cached: d.cached, auth }
 }
