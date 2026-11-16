@@ -92,12 +92,16 @@ struct WpaState {
     igtk: [u8; 16],
     group_set: bool,
     igtk_set: bool,
+    /// S3d: the entropy pool. Every batch of kernel TRNG bytes is MIXED in (HMAC-SHA256); keys are derived from the
+    /// pool, which then ratchets forward — the bytes the kernel handed over are never themselves a key. (The kernel
+    /// still sources the entropy: design D-c, a later step grants the RNG to this server directly.)
+    pool: [u8; 32],
     /// S1's substrate test counter (kept: the split selftest still uses it).
     counter: u64,
 }
 impl WpaState {
     const fn new() -> Self {
-        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, psk: [0; 32], psk_set: false, gtk: [0; 16], gtk_keyid: 1, igtk: [0; 16], group_set: false, igtk_set: false, counter: 0 }
+        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, psk: [0; 32], psk_set: false, gtk: [0; 16], gtk_keyid: 1, igtk: [0; 16], group_set: false, igtk_set: false, pool: [0; 32], counter: 0 }
     }
 }
 /// The working copy (.bss: reset with the image after a fault) and whether it was loaded from the saved state.
@@ -217,8 +221,13 @@ fn group_new() -> ! {
         exit(ST_BAD_CMD, 0)
     }
     let s = w();
-    s.gtk.copy_from_slice(&b[..16]);
-    s.igtk.copy_from_slice(&b[16..32]);
+    // S3d: mix, derive, ratchet — the GTK / IGTK are pool outputs, never the kernel's bytes
+    s.pool = sae::hmac_sha256(&s.pool, &[b"HQ el0-wpa pool mix", &b[..32]]);
+    let mut k = sae::hmac_sha256(&s.pool, &[b"HQ el0-wpa group keys"]);
+    s.pool = sae::hmac_sha256(&s.pool, &[b"HQ el0-wpa pool next"]);
+    s.gtk.copy_from_slice(&k[..16]);
+    s.igtk.copy_from_slice(&k[16..32]);
+    hal::wpaauth::wipe(&mut k);
     s.gtk_keyid = 1;
     s.group_set = true;
     s.igtk_set = b[32] & 1 != 0;
