@@ -96,12 +96,15 @@ struct WpaState {
     /// pool, which then ratchets forward — the bytes the kernel handed over are never themselves a key. (The kernel
     /// still sources the entropy: design D-c, a later step grants the RNG to this server directly.)
     pool: [u8; 32],
+    /// D-c: the DRBG every secret random value comes from (SAE scalars / masks, GTK, IGTK). Seeded and reseeded by the
+    /// kernel with fresh TRNG bytes (`CMD_DRBG_SEED`); a full wipe zeroes it -> unseeded -> fail closed until reseeded.
+    drbg: hal::drbg::HmacDrbg,
     /// S1's substrate test counter (kept: the split selftest still uses it).
     counter: u64,
 }
 impl WpaState {
     const fn new() -> Self {
-        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, psk: [0; 32], psk_set: false, gtk: [0; 16], gtk_keyid: 1, igtk: [0; 16], group_set: false, igtk_set: false, pool: [0; 32], counter: 0 }
+        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, psk: [0; 32], psk_set: false, gtk: [0; 16], gtk_keyid: 1, igtk: [0; 16], group_set: false, igtk_set: false, pool: [0; 32], drbg: hal::drbg::HmacDrbg::new(), counter: 0 }
     }
 }
 /// The working copy (.bss: reset with the image after a fault) and whether it was loaded from the saved state.
@@ -222,10 +225,11 @@ fn group_new() -> ! {
         exit(ST_BAD_CMD, 0)
     }
     let s = w();
-    // S3d: mix, derive, ratchet — the GTK / IGTK are pool outputs, never the kernel's bytes
-    s.pool = sae::hmac_sha256(&s.pool, &[b"HQ el0-wpa pool mix", &b[..32]]);
-    let mut k = sae::hmac_sha256(&s.pool, &[b"HQ el0-wpa group keys"]);
-    s.pool = sae::hmac_sha256(&s.pool, &[b"HQ el0-wpa pool next"]);
+    // D-c: the GTK / IGTK come from the DRBG (the kernel's input bytes are reserved and ignored); unseeded -> refuse
+    let mut k = [0u8; 32];
+    if s.drbg.generate(&mut k, b"HQ el0-wpa group keys").is_err() {
+        exit(ST_NEED_SEED, 0)
+    }
     s.gtk.copy_from_slice(&k[..16]);
     s.igtk.copy_from_slice(&k[16..32]);
     hal::wpaauth::wipe(&mut k);
@@ -371,21 +375,27 @@ fn sae_cmd(cmd: u32) -> ! {
                 exit(ST_BAD_CMD, 0)
             }
             let (Some(ap), Some(sta), Some(now)) = (sta_of(inp), sta_of(&inp[6..]), u64_at(inp, 12)) else { exit(ST_BAD_CMD, 0) };
-            let rnd_pool = &inp[20..20 + SAE_RND];
-            let mut used = 0usize;
+            // D-c: the SAE randomness comes from el0-wpa's DRBG (IN's rnd region is reserved, sent as zeros)
+            let st = w();
+            let mut starved = false;
+            let drbg = &mut st.drbg;
             let mut rnd = || {
-                if used + 32 > SAE_RND {
-                    return None; // fail-closed: the frame is dropped, never answered with weak randomness
-                }
                 let mut r = [0u8; 32];
-                r.copy_from_slice(&rnd_pool[used..used + 32]);
-                used += 32;
+                if drbg.generate(&mut r, &[]).is_err() {
+                    starved = true;
+                    return None; // fail-closed: never weak randomness
+                }
                 Some(r)
             };
             let body = &inp[pre..];
             let mut out = [None, None];
-            let st = w();
             let e = st.sae.on_frame(now, &ap, &sta, st.pt.as_ref(), &st.pw[..st.pw_len], body, &mut rnd, &mut out);
+            if starved {
+                // roll back: nothing is saved and the next call reloads the last committed state from the state pages
+                // (on_frame may have touched the working copy before the DRBG refused); the kernel seeds and retries
+                unsafe { LOADED = false };
+                exit(ST_NEED_SEED, 0)
+            }
             let mut pmkid = [0u8; 16];
             let (ev, status) = match e {
                 sae::Event::None => (0, 0),
@@ -539,6 +549,15 @@ pub extern "C" fn _start() -> ! {
         CMD_KEY_START_SAE => key_start_sae(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(cmd),
         CMD_GROUP_NEW => group_new(),
+        CMD_DRBG_SEED => {
+            let b = input();
+            if b.len() != DRBG_SEED_LEN {
+                exit(ST_BAD_CMD, 0)
+            }
+            let s = w();
+            let r = if s.drbg.seeded() { s.drbg.reseed(b, b"HQ el0-wpa reseed") } else { s.drbg.instantiate(b, &s.counter.to_le_bytes(), b"HQ el0-wpa D-c") };
+            done(ST_OK, r.is_ok() as u32)
+        }
         CMD_PMKSA_COUNT => exit(ST_OK, unsafe { (*core::ptr::addr_of!(WORK)).pmksa.len() } as u32),
         CMD_SELFTEST_ARM_FAULT => {
             let b = input();

@@ -50,6 +50,13 @@ pub const CMD_SELFTEST_ARM_FAULT: u32 = 45;
 pub const CMD_GROUP_NEW: u32 = 46;
 /// The persistent state failed its check after a restart: the kernel must full-wipe (every station re-authenticates).
 pub const ST_STATE_BAD: u32 = 3;
+/// D-c: the DRBG is unseeded (never seeded, or full-wiped) or past its reseed interval: nothing was generated and
+/// nothing changed — the kernel seeds it (`CMD_DRBG_SEED`) and retries the call once; a TRNG failure fails closed.
+pub const ST_NEED_SEED: u32 = 4;
+/// D-c (operator 2026-11-16): IN = `DRBG_SEED_LEN` bytes of fresh kernel TRNG entropy. Instantiates el0-wpa's
+/// HMAC-DRBG (`hal::drbg`) when unseeded, reseeds it otherwise. R0 = 1 (seeded) / 0 (refused: too little entropy).
+pub const CMD_DRBG_SEED: u32 = 47;
+pub const DRBG_SEED_LEN: usize = 48;
 
 // ---- S3: the key-transfer page records (written by el0-wpa, read by el0-wifi, zeroed by the kernel) ----
 /// Bus server (el0-wifi) command: install the key in key-transfer slot `slot` as a WLC_SET_KEY control request.
