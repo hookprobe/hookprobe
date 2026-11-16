@@ -34,6 +34,9 @@ fn user_va_permitted(va: usize) -> bool {
 const VALID: u64 = 1 << 0;
 const TABLE: u64 = 1 << 1; // L1/L2 table (VALID|TABLE); L3 page also sets bit1
 const AF: u64 = 1 << 10; // access flag (fault if 0)
+/// Not-global: the TLB entry is tagged with the current ASID (a per-address-space page must never be a global
+/// entry — another ASID would hit it through the TLB).
+const NG: u64 = 1 << 11;
 const SH_IS: u64 = 0b11 << 8; // inner shareable
 const AP_RW_EL1: u64 = 0b00 << 6; // EL1 read/write, EL0 no access
 const AP_RW_EL0: u64 = 0b01 << 6; // EL0+EL1 read/write
@@ -141,6 +144,39 @@ impl Mmu {
 }
 
 impl Mmu {
+    /// The table an entry points to (None: not a table).
+    fn table_at(table: *mut u64, idx: usize) -> Option<*mut u64> {
+        if table.is_null() {
+            return None;
+        }
+        let e = unsafe { read_volatile(table.add(idx)) };
+        (e & VALID != 0 && e & TABLE != 0).then_some((e & ADDR_MASK) as *mut u64)
+    }
+
+    /// `get_or_create_table`, except that with `kernel` = the kernel's table at the same level, an entry still
+    /// pointing at the kernel's (shared) next-level table is first replaced by a private copy of it.
+    fn table_for_write(&self, table: *mut u64, idx: usize, kernel: Option<*mut u64>) -> Option<*mut u64> {
+        if let Some(k) = kernel {
+            if let (Some(mine), Some(shared)) = (Self::table_at(table, idx), Self::table_at(k, idx)) {
+                if mine == shared {
+                    let f = self.alloc_frame_raw();
+                    if f == 0 {
+                        return None;
+                    }
+                    for i in 0..512 {
+                        unsafe { write_volatile((f as *mut u64).add(i), read_volatile(shared.add(i))) };
+                    }
+                    unsafe {
+                        write_volatile(table.add(idx), f as u64 | VALID | TABLE);
+                        core::arch::asm!("dsb ish");
+                    }
+                    return Some(f as *mut u64);
+                }
+            }
+        }
+        self.get_or_create_table(table, idx)
+    }
+
     fn get_or_create_table(&self, table: *mut u64, idx: usize) -> Option<*mut u64> {
         let e = unsafe { read_volatile(table.add(idx)) };
         if e & VALID == 0 {
@@ -437,16 +473,23 @@ impl Mmu {
         let i1 = (va >> 30) & 0x1FF;
         let i2 = (va >> 21) & 0x1FF;
         let i3 = (va >> 12) & 0x1FF;
-        let l2 = match self.get_or_create_table(l1, i1) {
+        // ADR 0065 S0: a per-address-space mapping must land in tables PRIVATE to that space. `new_addr_space` copies
+        // the kernel's L1, so an L1/L2 entry may still point at a table the kernel (and every other space) shares:
+        // such a table is cloned into this space before it is written (the QEMU server windows share one GB).
+        let per_as = l1 != l1_ptr();
+        let k1 = if per_as { Some(l1_ptr()) } else { None };
+        let l2 = match self.table_for_write(l1, i1, k1) {
             Some(t) => t,
             None => return false,
         };
-        let l3 = match self.get_or_create_table(l2, i2) {
+        let k2 = k1.and_then(|k| Self::table_at(k, i1));
+        let l3 = match self.table_for_write(l2, i2, if per_as { Some(k2.unwrap_or(core::ptr::null_mut())) } else { None }) {
             Some(t) => t,
             None => return false,
         };
         let xn = if uxn { UXN } else { 0 } | if pxn { PXN } else { 0 };
-        let desc = (pa as u64 & ADDR_MASK) | (attr << 2) | AF | SH_IS | ap | xn | PAGE_DESC;
+        let ng = if per_as { NG } else { 0 };
+        let desc = (pa as u64 & ADDR_MASK) | (attr << 2) | AF | SH_IS | ap | xn | ng | PAGE_DESC;
         unsafe {
             write_volatile(l3.add(i3), desc);
             core::arch::asm!("dsb ish");
