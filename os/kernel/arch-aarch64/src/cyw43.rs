@@ -3965,7 +3965,7 @@ pub fn ap_keying(sta: &[u8; 6], now_ms: u64, psk: &[u8; 32]) -> ApKeying {
     #[cfg(el0_keys)]
     {
         let _ = psk;
-        let how = hal::rsnassoc::decide(rsn, offers, false, &mut |_| false);
+        let how = hal::rsnassoc::decide(rsn, offers, None, &mut |_| false);
         ApKeying { how, akm8: false, pmk: [0; 32], pmkid: None, akm: rsn.map_or(0, |r| r.akm), n_pmkid: rsn.map_or(0, |r| r.n_pmkid), sae: (0, 0) }
     }
     #[cfg(not(el0_keys))]
@@ -3973,7 +3973,8 @@ pub fn ap_keying(sta: &[u8; 6], now_ms: u64, psk: &[u8; 32]) -> ApKeying {
         let fresh = ap_sae_pmk(sta, now_ms);
         let cache = unsafe { &mut *core::ptr::addr_of_mut!(PMKSA) };
         let mut hit = None;
-        let mut how = hal::rsnassoc::decide(rsn, offers, fresh.is_some(), &mut |p| {
+        let fresh_id = unsafe { (*core::ptr::addr_of_mut!(SAE_TAB)).pmkid_for(sta, now_ms) };
+        let mut how = hal::rsnassoc::decide(rsn, offers, fresh_id.as_ref(), &mut |p| {
             hit = cache.get(sta, p, now_ms);
             hit.is_some()
         });

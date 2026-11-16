@@ -177,7 +177,15 @@ pub const OFFER_SAE: u8 = 2;
 
 /// The keying decision. `fresh_sae` = this station completed SAE within the responder TTL; `known` = a PMKID that a
 /// cached PMKSA of this station carries; `offers` = OFFER_* bits of the BSS's current security.
-pub fn decide(rsn: Option<&AssocRsn>, offers: u8, fresh_sae: bool, known: &mut dyn FnMut(&[u8; 16]) -> bool) -> Keying {
+/// `fresh` = the PMKID of a just-completed SAE exchange with this station, if any.
+///
+/// CM5 metal 2026-11-16 (reconnect soak, 1 of 12 joins: M2 MIC failed 3x): a just-completed SAE used to win over the
+/// PMKIDs the station listed. A station can complete SAE, abandon that attempt, and come back over open auth with an
+/// OLDER cached PMKSA (its PMKID in the RSNE): keying from the fresh SAE then used a PMK the station does not hold.
+/// The station's PMKID list decides: the fresh SAE only when it lists that PMKID (or lists none); else a cached PMKSA
+/// it names; else a refusal (it redoes SAE).
+pub fn decide(rsn: Option<&AssocRsn>, offers: u8, fresh: Option<&[u8; 16]>, known: &mut dyn FnMut(&[u8; 16]) -> bool) -> Keying {
+    let fresh_sae = fresh.is_some();
     let Some(r) = rsn else { return Keying::Legacy };
     if r.n_akm != 1 {
         return Keying::Legacy;
@@ -186,8 +194,8 @@ pub fn decide(rsn: Option<&AssocRsn>, offers: u8, fresh_sae: bool, known: &mut d
         AKM_PSK if offers & OFFER_PSK == 0 => Keying::NotOffered,
         AKM_SAE if offers & OFFER_SAE == 0 => Keying::NotOffered,
         AKM_PSK => Keying::Psk,
-        AKM_SAE if fresh_sae => Keying::SaeFresh,
-        AKM_SAE if r.n_pmkid == 0 => Keying::SaeNoSae,
+        AKM_SAE if r.n_pmkid == 0 => if fresh_sae { Keying::SaeFresh } else { Keying::SaeNoSae },
+        AKM_SAE if fresh.is_some_and(|f| r.pmkids().iter().any(|p| p == f)) => Keying::SaeFresh,
         AKM_SAE => r.pmkids().iter().position(|p| known(p)).map_or(Keying::Reject, Keying::SaeCached),
         _ => Keying::Legacy,
     }
@@ -529,20 +537,28 @@ pub fn selftest() -> bool {
     let mut known = |p: &[u8; 16]| *p == second;
     let mut none = |_: &[u8; 16]| false;
     let all = OFFER_PSK | OFFER_SAE;
-    ok &= decide(Some(&r), all, false, &mut known) == Keying::SaeCached(1);
-    ok &= decide(Some(&r), OFFER_SAE, true, &mut known) == Keying::SaeFresh;
-    ok &= decide(Some(&r), all, false, &mut none) == Keying::Reject;
+    let first = r.pmkid[0];
+    let other = [0xeeu8; 16];
+    ok &= decide(Some(&r), all, None, &mut known) == Keying::SaeCached(1);
+    // the fresh SAE wins only when the station lists ITS PMKID (or none) ...
+    ok &= decide(Some(&r), OFFER_SAE, Some(&first), &mut known) == Keying::SaeFresh;
+    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), OFFER_SAE, Some(&other), &mut none) == Keying::SaeFresh;
+    // ... the metal soak race: a fresh SAE the station abandoned, the station back with an OLDER cached PMKSA -> that one
+    ok &= decide(Some(&r), OFFER_SAE, Some(&other), &mut known) == Keying::SaeCached(1);
+    // ... and neither the fresh PMKID nor a known one listed -> refused (it redoes SAE), never keyed from the fresh PMK
+    ok &= decide(Some(&r), OFFER_SAE, Some(&other), &mut none) == Keying::Reject;
+    ok &= decide(Some(&r), all, None, &mut none) == Keying::Reject;
     let psk = AssocRsn { akm: AKM_PSK, n_akm: 1, ..r };
-    ok &= decide(Some(&psk), all, true, &mut known) == Keying::Psk;
-    ok &= decide(Some(&psk), OFFER_PSK, false, &mut none) == Keying::Psk;
-    ok &= decide(None, all, true, &mut known) == Keying::Legacy;
-    ok &= decide(Some(&AssocRsn { n_akm: 2, ..r }), all, false, &mut none) == Keying::Legacy;
-    ok &= decide(Some(&AssocRsn { akm: 0x000f_ac06, ..r }), all, false, &mut none) == Keying::Legacy;
-    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), all, false, &mut known) == Keying::SaeNoSae;
+    ok &= decide(Some(&psk), all, Some(&first), &mut known) == Keying::Psk;
+    ok &= decide(Some(&psk), OFFER_PSK, None, &mut none) == Keying::Psk;
+    ok &= decide(None, all, Some(&first), &mut known) == Keying::Legacy;
+    ok &= decide(Some(&AssocRsn { n_akm: 2, ..r }), all, None, &mut none) == Keying::Legacy;
+    ok &= decide(Some(&AssocRsn { akm: 0x000f_ac06, ..r }), all, None, &mut none) == Keying::Legacy;
+    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), all, None, &mut known) == Keying::SaeNoSae;
     // the metal case: a stale-scan station sends AKM 8 to a WPA2-only BSS (with or without SAE state) -> reason 20
-    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), OFFER_PSK, false, &mut none) == Keying::NotOffered;
-    ok &= decide(Some(&r), OFFER_PSK, true, &mut known) == Keying::NotOffered;
-    ok &= decide(Some(&psk), OFFER_SAE, false, &mut none) == Keying::NotOffered;
+    ok &= decide(Some(&AssocRsn { n_pmkid: 0, ..r }), OFFER_PSK, None, &mut none) == Keying::NotOffered;
+    ok &= decide(Some(&r), OFFER_PSK, Some(&first), &mut known) == Keying::NotOffered;
+    ok &= decide(Some(&psk), OFFER_SAE, None, &mut none) == Keying::NotOffered;
     ok &= Keying::NotOffered.reason() == Some(20) && Keying::SaeNoSae.reason() == Some(49);
     ok &= Keying::Reject.reason() == Some(49) && Keying::Psk.reason().is_none() && Keying::SaeCached(0).reason().is_none();
     ok &= Keying::StaleView.reason() == Some(2);
