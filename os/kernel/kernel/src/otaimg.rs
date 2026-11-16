@@ -332,6 +332,16 @@ pub fn dfs_lets_ap_serve(state: Option<u32>) -> bool {
     !matches!(state, Some(1) | Some(3) | Some(4) | Some(5) | Some(6))
 }
 
+/// Metal 2026-11-15 (k4d): a trial whose Wi-Fi driver was broken (every control reply lost, 10 el0-wifi faults,
+/// clients could not pass traffic) COMMITTED — "AP serving" only meant BSS up, and the once-a-second DFS query's
+/// failures read as "unknown, may serve". The AP now counts as serving only while the driver demonstrably works:
+/// no el0-wifi fault this step, and that control round trip answered within the last `CTL_DEAD_AFTER` seconds (it
+/// exercises the whole TX + RX path through the driver every second of the trial).
+pub const CTL_DEAD_AFTER: u32 = 3;
+pub fn wifi_path_ok(el0_faults_this_step: u64, ctl_unanswered_streak: u32) -> bool {
+    el0_faults_this_step == 0 && ctl_unanswered_streak < CTL_DEAD_AFTER
+}
+
 pub struct CommitGate {
     healthy_since: Option<u64>,
     last_s: Option<u64>,
@@ -410,10 +420,21 @@ pub fn gate_selftest() -> bool {
     let endless = (0..=lim).all(|t| g.step(t, 0, true, true, true) == Gate::Wait) && g.step(lim + 1, 0, true, true, true) == Gate::Revert;
     let states = dfs_lets_ap_serve(None) && dfs_lets_ap_serve(Some(0)) && dfs_lets_ap_serve(Some(2))
         && [1u32, 3, 4, 5, 6].iter().all(|&x| !dfs_lets_ap_serve(Some(x)));
-let pass = wan_only && ap_only && both && dip && late && cac60 && weather && endless && states;
+    // metal k4d: a dead driver (control channel unanswered) never commits and reverts at the limit; a single
+    // el0-wifi fault restarts the stability window
+    let mut g = CommitGate::new();
+    let dead = (0..=COMMIT_LIMIT_S).all(|t| g.step(t, 0, true, wifi_path_ok(0, (t as u32).min(9)), false) == Gate::Wait || t < 3)
+        && g.step(COMMIT_LIMIT_S + 1, 0, true, wifi_path_ok(0, 9), false) == Gate::Revert
+        && !wifi_path_ok(0, CTL_DEAD_AFTER) && wifi_path_ok(0, CTL_DEAD_AFTER - 1);
+    let mut g = CommitGate::new();
+    let _ = g.step(10, 0, true, wifi_path_ok(0, 0), false);
+    let fault = g.step(20, 0, true, wifi_path_ok(1, 0), false) == Gate::Wait
+        && g.step(10 + COMMIT_STABLE_S, 0, true, wifi_path_ok(0, 0), false) == Gate::Wait
+        && g.step(21 + COMMIT_STABLE_S, 0, true, wifi_path_ok(0, 0), false) == Gate::Commit;
+    let pass = wan_only && ap_only && both && dip && late && cac60 && weather && endless && states && dead && fault;
     arch_aarch64::_print(format_args!(
-        " [P-otagate] {} — OTA trial commit gate: WAN usable but AP down never commits (reverts after {} s)={} AP serving but no WAN never commits={} both healthy for {} s commits={} a dip restarts the stability window={} the limit wins over a late short recovery={} a 60 s DFS CAC never commits, then commits in service={} a 600 s weather CAC moves the deadline={} an endless CAC reverts at {} s={} DFS states classified={}\n",
-        if pass { "PASS" } else { "FAIL" }, COMMIT_LIMIT_S, wan_only, ap_only, COMMIT_STABLE_S, both, dip, late, cac60, weather, lim, endless, states
+        " [P-otagate] {} — OTA trial commit gate: WAN usable but AP down never commits (reverts after {} s)={} AP serving but no WAN never commits={} both healthy for {} s commits={} a dip restarts the stability window={} the limit wins over a late short recovery={} a 60 s DFS CAC never commits, then commits in service={} a 600 s weather CAC moves the deadline={} an endless CAC reverts at {} s={} DFS states classified={} a dead Wi-Fi driver (control channel unanswered) never commits={} an el0-wifi fault restarts the window={}\n",
+        if pass { "PASS" } else { "FAIL" }, COMMIT_LIMIT_S, wan_only, ap_only, COMMIT_STABLE_S, both, dip, late, cac60, weather, lim, endless, states, dead, fault
     ));
     pass
 }
