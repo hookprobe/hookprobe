@@ -76,6 +76,9 @@ jobs:
   heqk-qemu-gate:
     name: "heqk QEMU gate (validate.sh — NOT a metal gate)"
     runs-on: ubuntu-24.04
+    # D-d (2026-11-16): the overall job bound, separate from validate.sh's per-boot 600 s hang bound (7 boots worst
+    # case + the build). A hang can no longer hold a runner for GitHub's 6-hour default.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
 
