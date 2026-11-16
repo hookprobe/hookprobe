@@ -50,13 +50,15 @@ f() { echo "$1" | awk -v i="$2" '{print $i}'; }
 # wpa_supplicant's D-Bus Reassociate on that interface
 reassoc() { psudo "sh -c 'p=\$(busctl call fi.w1.wpa_supplicant1 /fi/w1/wpa_supplicant1 fi.w1.wpa_supplicant1 GetInterface s $1 | cut -d\\\" -f2); busctl call fi.w1.wpa_supplicant1 \$p fi.w1.wpa_supplicant1.Interface Reassociate'" >/dev/null 2>&1; }
 # wlan0 (brcmfmac, FullMAC: no host PMKSA caching) reconnects through NetworkManager; wlan1 keeps its PMKSA (Reassociate)
-recon() { if [ "$1" = wlan1 ]; then reassoc wlan1; else psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; psudo "timeout 50 nmcli -w 45 con up '$PROF' ifname wlan0" >/dev/null 2>&1; fi; }
+recon() { if [ "$1" = wlan1 ]; then dbus_cycle wlan1; else psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; psudo "timeout 50 nmcli -w 45 con up '$PROF' ifname wlan0" >/dev/null 2>&1; fi; }
 # wait (up to $3 s) for an association line of MAC $2 since mark $1 matching $4; prints it
 poll_assoc() { local t=0; while [ $t -lt "$3" ]; do local l; l=$(assoc_of "$1" "$2" | grep -a -- "$4" | tail -1); [ -n "$l" ] && { echo "$l"; return 0; }; sleep 2; t=$((t + 2)); done; return 1; }
 # the USB adapter (rtw88) can wedge (interface_disabled / SCAN-FAILED -100): bounce it before a step that needs it
 unwedge_a() { pi "nmcli -t -f GENERAL.STATE dev show wlan1" 2>/dev/null | grep -q "unavailable\|disconnected" || return 0
   psudo "ip link set wlan1 down; sleep 2; ip link set wlan1 up" >/dev/null 2>&1; sleep 3; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1; }
 pi_journal() { psudo "journalctl --since '$1' -u wpa_supplicant --no-pager" 2>/dev/null | grep -a "wlan1" | grep -aE "$2" | tail -3 | cut -c1-160 | sed 's/^/  pi: /'; }
+# a forced leave + rejoin that keeps the PMKSA cache (Reassociate was a no-op in ~1 of 3 soak cycles on wlan1)
+dbus_cycle() { psudo "sh -c 'p=\$(busctl call fi.w1.wpa_supplicant1 /fi/w1/wpa_supplicant1 fi.w1.wpa_supplicant1 GetInterface s $1 | cut -d\\\" -f2); busctl call fi.w1.wpa_supplicant1 \$p fi.w1.wpa_supplicant1.Interface Disconnect; sleep 1; busctl call fi.w1.wpa_supplicant1 \$p fi.w1.wpa_supplicant1.Interface Reconnect'" >/dev/null 2>&1; }
 gw_ok() { pi "ping -c 2 -W 2 -I $1 10.99.0.1" >/dev/null 2>&1; }
 wait_gw() { for _ in $(seq 1 ${2:-20}); do gw_ok "$1" && return 0; sleep 2; done; return 1; }
 # station associations the AP logged since a mark, for one MAC: "akm pmkids how"

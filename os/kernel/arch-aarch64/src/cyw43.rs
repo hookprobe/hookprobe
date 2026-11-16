@@ -3618,6 +3618,7 @@ struct AuthSt {
 /// Prints nothing: it runs BEFORE our confirm goes out (`ap_sae_rx`), and a serial line here delayed it.
 #[cfg(feature = "wpa3")]
 fn wpa3_auth_status(sta: &[u8; 6], status: u16, pmkid: &[u8; 16]) -> AuthSt {
+    let _wait = KeyingWait::new();
     let s = w3();
     // PMKSA first (brcmfmac's ext-auth order): this station's entry added to the firmware's list, the others kept
     unsafe { (*core::ptr::addr_of_mut!(FW_PMKSA)).put(sta, pmkid) };
@@ -4797,7 +4798,7 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     // retry like the group-key install (a repeated SET of the same key is idempotent).
     // S3c: a zero TK = el0-wpa keyed it and left the key in the key-transfer page: the bus server installs it from there
     // (the kernel never holds it), then the page is zeroed. A real TK = the in-kernel fallback keyed it (D5, until S3d).
-    unsafe { DCMD_DRY_MS = KEYING_DRY_MS };
+    let _wait = KeyingWait::new(); // also covers the firmware PMKSA-list update below (metal S4: an 819 ms wait there)
     if tk == [0u8; 16] && el0().is_some() {
         auth.ptk_set = (0..3).any(|_| set_key_keyx(hal::wpasrvabi::keyx::SLOT_TK, &d.sta, 0));
         if let Some(h) = el0() {
@@ -4827,7 +4828,6 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
         let na = iovar_buf(b"authorize", &d.sta, &mut ab);
         auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
     }
-    unsafe { DCMD_DRY_MS = 800 };
     dbg_putc(b'A');
     #[cfg(feature = "wpa3")]
     if d.akm8 {
@@ -6795,6 +6795,21 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
 /// a 2.87 s loop gap — though the firmware applied the request anyway.
 static mut DCMD_DRY_MS: u32 = 800;
 const KEYING_DRY_MS: u32 = 250;
+/// While alive, the per-station control requests of the serve loop (key install, authorize, the firmware PMKSA list,
+/// auth_status) wait at most `KEYING_DRY_MS` per reply; BSS-level requests (bring-up, live apply) keep 800 ms.
+struct KeyingWait(u32);
+impl KeyingWait {
+    fn new() -> Self {
+        let prev = unsafe { DCMD_DRY_MS };
+        unsafe { DCMD_DRY_MS = KEYING_DRY_MS };
+        KeyingWait(prev)
+    }
+}
+impl Drop for KeyingWait {
+    fn drop(&mut self) {
+        unsafe { DCMD_DRY_MS = self.0 };
+    }
+}
 
 fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut rx = [0u8; 2048];
