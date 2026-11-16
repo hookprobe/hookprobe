@@ -955,6 +955,8 @@ pub mod eapolwire;
 pub mod wpa;
 pub mod aes;
 pub mod wpaauth;
+/// ADR 0065 D-c: HMAC-DRBG for el0-wpa, seeded by kernel TRNG entropy.
+pub mod drbg;
 // ADR 0050 D4 step 5c: the SAE responder's walk over a station's Commit / Confirm (el0-lansvc + kernel fallback)
 pub mod saewire;
 // the station's (Re)Association Request RSNE (AKM, PMKIDs) and the AP's keying decision (PMKSA caching)

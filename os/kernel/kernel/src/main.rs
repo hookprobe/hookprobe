@@ -5462,8 +5462,9 @@ fn cm5_p10_probe() {
                                                 let (bst, brs, bft, _) = crate::el0srv::keyer::bus_health();
                                                 if let Some((wst, wrs, wft, wwp, _, pm)) = crate::el0srv::keyer::wpa_health() {
                                                     let (cn, po) = crate::el0srv::keyer::containment();
-                                                    kprint!("   [WIFI-SPLIT] bus {} restarts={} faults={} | wpa {} restarts={} faults={} full_wipes={} contained={} poisoned={} pmksa={}\n",
-                                                        bst, brs, bft, wst, wrs, wft, wwp, cn, po, pm.map_or(-1, |n| n as i64));
+                                                    let (ds, df) = crate::el0srv::keyer::drbg_stats();
+                                                    kprint!("   [WIFI-SPLIT] bus {} restarts={} faults={} | wpa {} restarts={} faults={} full_wipes={} contained={} poisoned={} pmksa={} | drbg seeds={} seed_fails={}\n",
+                                                        bst, brs, bft, wst, wrs, wft, wwp, cn, po, pm.map_or(-1, |n| n as i64), ds, df);
                                                 }
                                             }
                                             let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
