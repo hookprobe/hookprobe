@@ -1974,7 +1974,22 @@ pub fn sdpcm_frame_pending() -> bool {
     bp_r32(sdb + SD_REG_INTSTATUS) & I_HMB_FRAME_IND != 0
 }
 
-/// Terminate the F2 frame currently being read — a port of brcmfmac `brcmf_sdio_rxfail`
+/// ADR 0065 claims: after the EL0 bus server faulted or overran its budget, recover the controller ONCE if the fault left
+/// a transfer in flight (`hal::sdio::Bus::recover_abandoned`). (recovered, not-cleared) counts for the beat.
+pub static mut BUS_RECOVER: (u32, u32) = (0, 0);
+pub fn bus_recover_after_el0_fault() -> u8 {
+    let r = bus().recover_abandoned();
+    unsafe {
+        match r {
+            1 => BUS_RECOVER.0 += 1,
+            2 => BUS_RECOVER.1 += 1,
+            _ => {}
+        }
+    }
+    r
+}
+
+/// Terminate the F2 frame currently being read — a port of brcmf_sdio_rxfail
 /// (sdio.c, abort=true, rtx=false): CMD52 abort of F2 through F0 (`brcmf_sdiod_abort`: CCCR
 /// ABORT 0x06 <- function number), then SBSDIO_FUNC1_FRAMECTRL (0x1000D) <- SFC_RF_TERM (bit 0),
 /// then wait until the device's remaining-frame byte count RFRAMEBCHI/LO (0x1001C/0x1001B) is

@@ -108,6 +108,7 @@ if run C2; then
   left=$(( 152 - (SECONDS - t2) )); [ "$left" -gt 0 ] && sleep "$left"   # let A's 150-s traffic run finish
   sa=$(ping_stat wlan1 150); h1=$(H)
   echo "  A (traffic during B's fault + B's re-join) sent/recv/loss%/max-gap-ms: $sa | health $h0 -> $h1"
+  echo "  C2 window: worst loop gap $(since "$m" | grep -a -o 'worst_loop_gap_ms=[0-9]*' | cut -d= -f2 | sort -n | tail -1) ms; $(since "$m" | grep -ac 'WIFI-HEAL\] firmware reload\|BSS bounce') heal reload/bounce(s); prof max: $(since "$m" | grep -a -o 'ap_poll=[0-9]*x/[0-9]*ms([0-9]*%)/max[0-9]*us' | sed 's/.*max//' | sort -n | tail -1)"
   ! since "$m" | grep -ai "station" | grep -aqi "$A left"; aleft=$?
   [ "$(f "$h1" 4)" -gt "$(f "$h0" 4)" ] && [ "$(f "$h1" 5)" = "$(f "$h0" 5)" ] && [ $gb = 0 ] && [ $aleft = 0 ] \
     && awk -v l="$(echo "$sa" | cut -d' ' -f3)" -v g="$(echo "$sa" | cut -d' ' -f4)" 'BEGIN{exit !(l <= 1.0 && g < 1000)}'
@@ -120,10 +121,14 @@ if run C3; then
   # a standalone supplicant on wlan1 (control socket): the same client and the same commands for both kinds
   psudo "nmcli con down hq-iso-a" >/dev/null 2>&1; psudo "nmcli dev set wlan1 managed no" >/dev/null 2>&1; sleep 2
   pi "umask 077; printf 'ctrl_interface=/run/hq-claims\nsae_pwe=2\nnetwork={\n ssid=\"%s\"\n key_mgmt=SAE\n sae_password=\"%s\"\n ieee80211w=2\n}\n' '$SSID' '$PSK' > /tmp/hq-claims.conf"
-  psudo "wpa_supplicant -B -i wlan1 -D nl80211 -c /tmp/hq-claims.conf -P /run/hq-claims.pid" >/dev/null 2>&1; sleep 8
+  psudo "rm -f /tmp/hq-claims-sup.log; wpa_supplicant -B -i wlan1 -D nl80211 -c /tmp/hq-claims.conf -P /run/hq-claims.pid -dd -t -f /tmp/hq-claims-sup.log" >/dev/null 2>&1; sleep 8
   # on the Pi: time from `reconnect` to wpa_state=COMPLETED (4-way done), polled every 10 ms
   T=$(psudo "sh -c 'W=\"wpa_cli -p /run/hq-claims -i wlan1\"; t() { \$W disconnect >/dev/null; sleep 1; [ \"\$1\" = full ] && \$W pmksa_flush >/dev/null; a=\$(date +%s%N); \$W reconnect >/dev/null; i=0; while ! \$W status | grep -q wpa_state=COMPLETED; do sleep 0.01; i=\$((i+1)); [ \$i -gt 1500 ] && break; done; echo \$1 \$(( (\$(date +%s%N) - a) / 1000000 )); sleep 1; }; for k in \$(seq 1 $N); do t cached; t full; done'")
   pi "rm -f /tmp/hq-claims.conf"; psudo "kill \$(cat /run/hq-claims.pid)" >/dev/null 2>&1; sleep 1
+  # what the client did on the "cached" attempts (no key material in these lines)
+  echo "  supplicant: PMKSA cache tried $(psudo "grep -c 'try to use PMKSA caching' /tmp/hq-claims-sup.log") | SAE auth started $(psudo "grep -c 'SME: Trying to authenticate with' /tmp/hq-claims-sup.log") | PMKSA rejected/dropped $(psudo "grep -c 'PMKSA caching attempt rejected\|Drop PMKSA\|PMKSA-CACHE-REMOVED' /tmp/hq-claims-sup.log") | assoc reject $(psudo "grep -c 'CTRL-EVENT-ASSOC-REJECT' /tmp/hq-claims-sup.log") | auth timeout $(psudo "grep -c 'Authentication with .* timed out\|SME: Authentication timeout' /tmp/hq-claims-sup.log")"
+  psudo "grep -aE 'try to use PMKSA caching|CTRL-EVENT-ASSOC-REJECT|PMKSA caching attempt rejected|SME: Trying to authenticate|CTRL-EVENT-CONNECTED|auth_alg|status_code=' /tmp/hq-claims-sup.log | head -16 | cut -c1-170" | sed 's/^/    sup: /'
+  psudo "rm -f /tmp/hq-claims-sup.log" >/dev/null 2>&1
   psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1
   st() { echo "$T" | awk -v k="$1" '$1 == k {print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) printf "n=%d median=%d p90=%d min=%d max=%d", NR, a[int((NR+1)/2)], a[int(NR*0.9+0.999)], a[1], a[NR]}'; }
   sc=$(st cached); sf=$(st full); echo "  reconnect to 4-way complete (ms) — cached PMKSA: $sc | full SAE: $sf"
