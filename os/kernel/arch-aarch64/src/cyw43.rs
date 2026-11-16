@@ -4470,6 +4470,9 @@ pub struct El0Keyer {
     pub tx_ctl: fn(u8, u8, u32, u32, u16, usize, &[u8]) -> Option<bool>,
     // step 4g S2: el0-wpa was full-wiped (every secret gone): deauthenticate every station, re-provision the passphrase
     pub wpa_wiped: fn() -> bool,
+    // step 4g S3c: install key-transfer slot (slot, station, key index) as WLC_SET_KEY via the bus server; zero the page
+    pub key_install: fn(u8, u8, u16, u8, &[u8; 6], u32) -> Option<u32>,
+    pub keyx_done: fn(),
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
@@ -4676,7 +4679,16 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     // flags 0 as brcmfmac's pairwise add_key (the PRIMARY flag belongs to the group key, installed at AP start).
     // The firmware's reply to this SET is sometimes missed (metal: 23 handshakes `ptk_set=false authorized=true`):
     // retry like the group-key install (a repeated SET of the same key is idempotent).
-    auth.ptk_set = (0..3).any(|_| wlc_set_key(0, &tk, &d.sta, false));
+    // S3c: a zero TK = el0-wpa keyed it and left the key in the key-transfer page: the bus server installs it from there
+    // (the kernel never holds it), then the page is zeroed. A real TK = the in-kernel fallback keyed it (D5, until S3d).
+    if tk == [0u8; 16] && el0().is_some() {
+        auth.ptk_set = (0..3).any(|_| set_key_keyx(hal::wpasrvabi::keyx::SLOT_TK, &d.sta, 0));
+        if let Some(h) = el0() {
+            (h.keyx_done)();
+        }
+    } else {
+        auth.ptk_set = (0..3).any(|_| wlc_set_key(0, &tk, &d.sta, false));
+    }
     hal::wpaauth::wipe(&mut tk);
     dbg_putc(b'P');
     // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
@@ -5911,6 +5923,20 @@ const WSEC_PRIMARY_KEY: u32 = 0x0002;
 /// all-zero for the group key); `primary` sets WSEC_PRIMARY_KEY (pairwise). algo = CCMP.
 /// Field offsets are the brcmf_wsec_key_le layout (index@0 len@4 data@8 algo@112 flags@116
 /// ea@156). Returns true on a RESP_OK.
+/// S3c: the key install `bcdc_dcmd` sends next through el0-wifi from the key-transfer page: (slot, station, index).
+static mut KEYX_SEND: Option<(u8, [u8; 6], u32)> = None;
+/// Install the key el0-wpa left in key-transfer `slot` for `ea` / `index`: WLC_SET_KEY built by the bus server from the
+/// page (the kernel never holds the key), the reply matched here. The page is zeroed after the attempt.
+fn set_key_keyx(slot: u8, ea: &[u8; 6], index: u32) -> bool {
+    if el0().is_none() {
+        return false;
+    }
+    unsafe { KEYX_SEND = Some((slot, *ea, index)) };
+    let ok = bcdc_dcmd(WLC_SET_KEY, BCDC_SET, &[], &mut []).0;
+    unsafe { KEYX_SEND = None };
+    ok
+}
+
 fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
     let mut k = [0u8; 164];
     k[0..4].copy_from_slice(&index.to_le_bytes());
@@ -6549,6 +6575,17 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     let ifidx = unsafe { CUR_IF } & 0xf;
     let rid = reqid as u16;
     let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
+    // S3c: a key install armed by `set_key_keyx` — el0-wifi builds this request itself from the key-transfer page (the
+    // kernel never holds the key); the reply below is matched as for any request
+    if let Some((slot, ea, index)) = unsafe { (*core::ptr::addr_of_mut!(KEYX_SEND)).take() } {
+        let ok = el0h.and_then(|h| (h.key_install)(seq, ifidx, rid, slot, &ea, index)) == Some(1);
+        if ok {
+            unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
+        } else {
+            return (false, 0);
+        }
+        return bcdc_wait(rid, reply, want_diag);
+    }
     let tx_ok = match el0h.and_then(|h| (h.tx_ctl)(seq, ifidx, cmd, flags, rid, reply.len(), payload)) {
         Some(ok) => {
             if unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_TX_LOST), false) } {
@@ -6585,6 +6622,12 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     // superframes): any control request issued while traffic flowed could re-create the wedge.
     // Data/event frames that arrive while we wait are skipped (as before). 2 KB buffer so a
     // full-MTU data frame is read whole, not terminated.
+    bcdc_wait(rid, reply, want_diag)
+}
+
+/// The second half of a control request: read frames until the reply to `rid` (parking station frames for the serve
+/// loop), its body copied into `reply`. Shared by `bcdc_dcmd` and the S3c key-transfer install.
+fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut rx = [0u8; 2048];
     let mut status = 0u32;
     let mut got_ctrl = false;

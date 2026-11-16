@@ -183,6 +183,24 @@ fn cmd_sta(cmd: u32, inp: &[u8]) -> Option<[u8; 6]> {
     }
 }
 
+/// S3c: a finished handshake's pairwise key goes to the chip through the key-transfer page ONLY: the record is
+/// written to slot 0 for the bus server to install, and the kernel's copy of the reply carries a zero TK.
+fn keyed_to_keyx(r: &mut Out) {
+    if let Out::Keyed { done, tk } = r {
+        let rec = hal::wpasrvabi::keyx::Rec { index: 0, algo: hal::bcdc::CRYPTO_ALGO_AES_CCM, flags: 0, ea: done.sta, klen: 16, key: {
+            let mut k = [0u8; 32];
+            k[..16].copy_from_slice(tk);
+            k
+        } };
+        let mut o = [0u8; hal::wpasrvabi::keyx::SLOT_SIZE];
+        hal::wpasrvabi::keyx::encode(&rec, &mut o);
+        let slot = KEYX + hal::wpasrvabi::keyx::SLOT_TK as usize * hal::wpasrvabi::keyx::SLOT_SIZE;
+        unsafe { core::ptr::copy_nonoverlapping(o.as_ptr(), slot as *mut u8, o.len()) };
+        hal::wpaauth::wipe(&mut o);
+        hal::wpaauth::wipe(tk);
+    }
+}
+
 /// One authenticator command; the reply is an encoded `Out` (or the expect record).
 fn key_cmd(cmd: u32) -> ! {
     let k = &mut w().keyer;
@@ -220,6 +238,8 @@ fn key_cmd(cmd: u32) -> ! {
         }
         _ => exit(ST_BAD_CMD, 0),
     };
+    let mut r = r;
+    keyed_to_keyx(&mut r);
     let n = keymsg::encode_out(&r, &frame, &mut o);
     hal::wpaauth::wipe(&mut frame);
     // a Keyed reply carries the TK: the kernel installs it and scrubs the OUT area (2A / D3 wipe discipline)

@@ -112,3 +112,41 @@ mod tests {
         assert_eq!(reply(&f, 60, 0, 120, 7), Reply::OtherCtl);
     }
 }
+
+// ---- ADR 0065 step 4g S3: the firmware key install (WLC_SET_KEY), built from a key-transfer record ----
+/// WLC_SET_KEY (brcmf_wsec_key_le, 164 B).
+pub const WLC_SET_KEY: u32 = 45;
+pub const CRYPTO_ALGO_AES_CCM: u32 = 4;
+pub const CRYPTO_ALGO_BIP: u32 = 12;
+pub const WSEC_PRIMARY_KEY: u32 = 0x0002;
+pub const WSEC_KEY_LEN: usize = 164;
+
+/// The brcmf_wsec_key_le payload: index @0, len @4, data @8, algo @112, flags @116, ea @156.
+pub fn wsec_key(index: u32, key: &[u8], algo: u32, flags: u32, ea: &[u8; 6]) -> [u8; WSEC_KEY_LEN] {
+    let mut k = [0u8; WSEC_KEY_LEN];
+    k[0..4].copy_from_slice(&index.to_le_bytes());
+    let klen = key.len().min(32);
+    k[4..8].copy_from_slice(&(klen as u32).to_le_bytes());
+    k[8..8 + klen].copy_from_slice(&key[..klen]);
+    k[112..116].copy_from_slice(&algo.to_le_bytes());
+    k[116..120].copy_from_slice(&flags.to_le_bytes());
+    k[156..162].copy_from_slice(ea);
+    k
+}
+
+#[cfg(test)]
+mod wsec_tests {
+    use super::*;
+    #[test]
+    fn wsec_key_layout() {
+        let k = wsec_key(4, &[7u8; 16], CRYPTO_ALGO_BIP, WSEC_PRIMARY_KEY, &[1, 2, 3, 4, 5, 6]);
+        assert_eq!(u32::from_le_bytes([k[0], k[1], k[2], k[3]]), 4);
+        assert_eq!(u32::from_le_bytes([k[4], k[5], k[6], k[7]]), 16);
+        assert!(k[8..24].iter().all(|&b| b == 7) && k[24..112].iter().all(|&b| b == 0));
+        assert_eq!(u32::from_le_bytes([k[112], k[113], k[114], k[115]]), 12);
+        assert_eq!(u32::from_le_bytes([k[116], k[117], k[118], k[119]]), 2);
+        assert_eq!(&k[156..162], &[1, 2, 3, 4, 5, 6]);
+        // a delete (no key bytes)
+        assert_eq!(u32::from_le_bytes(wsec_key(0, &[], CRYPTO_ALGO_AES_CCM, 0, &[0; 6])[4..8].try_into().unwrap()), 0);
+    }
+}
