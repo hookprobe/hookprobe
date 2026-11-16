@@ -20,6 +20,7 @@ updates:
       - "/os/kernel/el0-lansvc"
       - "/os/kernel/el0-hsh"
       - "/os/kernel/el0-wifi"
+      - "/os/kernel/el0-wpa"
       - "/os/kernel/wasip1-fixture"
       - "/os/kernel/efiboot"
       - "/os/build/heqk-sign"
