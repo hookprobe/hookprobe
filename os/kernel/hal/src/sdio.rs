@@ -56,11 +56,15 @@ pub struct Bus<M: Mmio> {
     pub cmd53_diag: (u8, u32, u32),
     /// (stage << 24 | int status) of the last failed 512-B block transfer.
     pub blk_diag: u32,
+    /// Bench fault injection only (ADR 0065 S4, `wifi-inject`; el0-wifi `CMD_INJECT_CMD53_STALL`): the next CMD53
+    /// read is issued and then never completes — the caller's excursion budget is the only way out. Never set by the
+    /// kernel's own bus, and reset with the server's writable pages after its restart.
+    pub stall_next_cmd53: bool,
 }
 
 impl<M: Mmio> Bus<M> {
     pub const fn new(m: M) -> Self {
-        Bus { m, off: false, sdio_diag: (0, 0), cmd53_diag: (0, 0, 0), blk_diag: 0 }
+        Bus { m, off: false, sdio_diag: (0, 0), cmd53_diag: (0, 0, 0), blk_diag: 0, stall_next_cmd53: false }
     }
 
     /// Issue one command; Some(RESP0) when it completed without an error.
@@ -150,6 +154,14 @@ impl<M: Mmio> Bus<M> {
         let arg = ((fnum & 7) << 28) | (incr << 26) | ((addr & 0x1_FFFF) << 9) | (n as u32 & 0x1FF);
         if self.cmd(CMD53_IO_RW_EXTENDED, arg, RESP_48, true, true).is_none() {
             return false;
+        }
+        if self.stall_next_cmd53 {
+            // S4 injection: stuck inside this CMD53 — issued, its data never drained (the controller is left
+            // mid-transfer for the restarted server to recover)
+            loop {
+                let _ = self.m.r32(PRESENT_STATE);
+                core::hint::spin_loop();
+            }
         }
         if self.wait(INT_BUF_RD_RDY, 1_000_000).is_err() {
             return false;

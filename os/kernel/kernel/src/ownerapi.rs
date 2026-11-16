@@ -726,6 +726,49 @@ pub fn reboot(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<()
     Ok(())
 }
 
+/// ADR 0065 S4, BENCH ONLY (feature `wifi-inject`): `POST /api/bench/wifi-inject` — kind (cmd53-stall | bus-fault |
+/// wpa-station-m2 | wpa-fault), sta (aa:bb:cc:dd:ee:ff, for wpa-station-m2), reason, seq, owner_key. The same guards
+/// as the owner reboot: origin, CSRF, rate, replay, a reason, owner re-authentication.
+#[cfg(feature = "wifi-inject")]
+pub fn wifi_inject(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<&'static str, &'static str> {
+    let (mut b0, mut b1, mut b2, mut b3, mut b4) = ([0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192], [0u8; 192]);
+    let key = form_get(body, "owner_key", &mut b0).unwrap_or("");
+    let reason = form_get(body, "reason", &mut b1).unwrap_or("");
+    let kind = form_get(body, "kind", &mut b2).unwrap_or("");
+    let sta_s = form_get(body, "sta", &mut b3).unwrap_or("");
+    let seq: u64 = form_get(body, "seq", &mut b4).and_then(|v| v.parse().ok()).unwrap_or(0);
+    let tag = crate::mcauth::session_tag(c.session);
+    if !origin_ok(c.origin, c.host) {
+        return refuse(c, "origin").map(|_| "");
+    }
+    if !crate::mcauth::csrf_ok(c.session, c.csrf) {
+        return refuse(c, "csrf").map(|_| "");
+    }
+    if !crate::actions::rate_ok(tag, c.now_ms) {
+        return refuse(c, "rate limited: at most 20 writes a minute per session").map(|_| "");
+    }
+    if !crate::actions::accept_seq(tag, seq) {
+        return refuse(c, "replay").map(|_| "");
+    }
+    if reason.trim().len() < 3 {
+        return refuse(c, "reason required").map(|_| "");
+    }
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return refuse(c, "re-authentication failed").map(|_| "");
+    }
+    let mut sta = None;
+    if !sta_s.is_empty() {
+        let mut m = [0u8; 6];
+        let mut it = sta_s.trim().split(|ch| ch == ':' || ch == '-');
+        for b in m.iter_mut() {
+            *b = it.next().and_then(|h| u8::from_str_radix(h, 16).ok()).ok_or("bad sta")?;
+        }
+        sta = Some(m);
+    }
+    arch_aarch64::_print(format_args!(" [OWNER] BENCH wifi-inject {} requested ({})\n", kind, reason.trim()));
+    crate::el0srv::keyer::inject(kind, sta)
+}
+
 /// Boot-time half of the factory reset: zero the journal region (called last, after the other stores).
 pub fn wipe_journal() -> Result<u64, &'static str> {
     unsafe {

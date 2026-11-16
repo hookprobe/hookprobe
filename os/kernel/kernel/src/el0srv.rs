@@ -154,7 +154,7 @@ mod imp {
         /// Has frame rings (el0-wifi); never touch `rx` / `tx` otherwise (their frames are 0).
         rings: bool,
         state: [usize; WPA_STATE_PAGES],
-        nstate: usize,
+        pub nstate: usize,
         /// Full wipes (persistent state zeroed: every secret it held is gone).
         pub wipes: u64,
         entry: usize,
@@ -393,6 +393,10 @@ mod imp {
         /// behind is trusted by its next incarnation).
         fn reset(&mut self) {
             self.restarts += 1;
+            self.restore();
+        }
+        /// `reset` without counting a restart (a full wipe right after the fault that already counted one).
+        fn restore(&mut self) {
             for i in 0..self.nrw {
                 let (f, off, n) = self.rw[i];
                 zero(f);
@@ -409,7 +413,7 @@ mod imp {
         /// A full wipe (ADR 0065 step 4g): the reset, AND the persistent state pages zeroed — every secret the server
         /// held is gone. The next call starts a fresh, empty incarnation.
         pub fn full_wipe(&mut self) {
-            self.reset();
+            self.restore(); // S4 metal: the fault that led here already counted the restart (it was counted twice)
             for &f in &self.state[..self.nstate] {
                 zero(f);
             }
@@ -724,10 +728,13 @@ pub mod keyer {
     static mut WIPED: bool = false;
     /// A full wipe: every secret el0-wpa held is gone, every station must re-authenticate.
     fn full_wipe() {
+        let mut pages = 0;
         if let Some(s) = srv() {
             s.full_wipe();
+            pages = s.nstate;
         }
         super::imp::keyx_zero();
+        arch_aarch64::_print(format_args!(" [EL0-WPA] FULL WIPE: {} state page(s) + the key-transfer page zeroed (the PMKSA cache, SAE state, PMKs and group keys are gone)\n", pages));
         unsafe {
             WIPED = true;
             PENDING = None;
@@ -744,6 +751,20 @@ pub mod keyer {
     /// no single station: a fault there is not containable and wipes).
     fn wpa_call(cmd: u32, inp: &[u8], out: &mut [u8], sta: Option<[u8; 6]>) -> Option<(Call, usize)> {
         let s = srv()?;
+        // S4 metal: another station's fault must not reach this one. Right after a contained fault the server sits
+        // out a short backoff (50 ms, doubling per consecutive fault); a call about a station inside it would fail
+        // and, at the keying decision, turn into "unknown PMKID — refused" for a station whose PMKSA is intact. Wait a
+        // short backoff out (<= 100 ms: well inside the loop-gap gate) instead of failing.
+        if sta.is_some() {
+            let left = s.backoff_left_ms();
+            if left > 0 && left <= 100 {
+                let ms = |t: u64| t / (crate::clock::freq() / 1000).max(1);
+                let until = ms(crate::clock::ticks()) + left + 1;
+                while ms(crate::clock::ticks()) < until {
+                    core::hint::spin_loop();
+                }
+            }
+        }
         // the follow-up owed for a contained fault, once the server answers again
         if s.backoff_left_ms() == 0 {
             if let Some((p, poison)) = unsafe { (*core::ptr::addr_of_mut!(PENDING)).take() } {
@@ -1209,6 +1230,47 @@ pub mod keyer {
         super::imp::keyx_zero();
     }
 
+    /// (station faults contained, stations poisoned) — the `[WIFI-SPLIT]` line.
+    pub fn containment() -> (u64, u64) {
+        unsafe { (CONTAINED, POISONED) }
+    }
+
+    /// ADR 0065 S4 bench fault injection (feature `wifi-inject`; the request comes from `/api/bench/wifi-inject`).
+    /// Returns what was done, for the log and the API reply.
+    #[cfg(feature = "wifi-inject")]
+    pub fn inject(kind: &str, sta: Option<[u8; 6]>) -> Result<&'static str, &'static str> {
+        let r = match kind {
+            // 1: the bus server's next CMD53 read stalls (an injected CMD53 timeout) — its budget faults it
+            "cmd53-stall" => match bus_srv().map(|s| s.call_lean(CMD_INJECT_CMD53_STALL, &[], &mut []).0) {
+                Some(Call::Done(ST_OK, ..)) => "armed: the bus server's next CMD53 read stalls",
+                _ => return Err("bus server unavailable"),
+            },
+            "bus-fault" => match bus_srv().map(|s| s.call_lean(CMD_SELFTEST_FAULT, &[], &mut []).0) {
+                Some(Call::Fault) => "the bus server faulted (restart pending)",
+                _ => return Err("bus server unavailable"),
+            },
+            // 4: el0-wpa faults on this station's next EAPOL-Key (its M2) — contained to that station
+            "wpa-station-m2" => {
+                let s = sta.ok_or("sta required")?;
+                let mut inp = [0u8; 10];
+                inp[..6].copy_from_slice(&s);
+                inp[6..].copy_from_slice(&CMD_KEY_EAPOL.to_le_bytes());
+                match wpa_call(hal::wpasrvabi::CMD_SELFTEST_ARM_FAULT, &inp, &mut [], None) {
+                    Some((Call::Done(ST_OK, ..), _)) => "armed: el0-wpa faults on this station's next M2",
+                    _ => return Err("security server unavailable"),
+                }
+            }
+            // 5: a fault outside any station call — not containable: full wipe
+            "wpa-fault" => match wpa_call(hal::wpasrvabi::CMD_SELFTEST_FAULT, &[], &mut [], None) {
+                Some((Call::Fault, _)) => "el0-wpa faulted outside a station call: full wipe",
+                _ => return Err("security server unavailable"),
+            },
+            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault)"),
+        };
+        arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
+        Ok(r)
+    }
+
     /// (state, restarts, faults, full wipes, ticks of the last fault or 0, PMKSA entries).
     pub type WpaHealth = (&'static str, u64, u64, u64, u64, Option<u32>);
     /// `/api/health` wifi_driver.security (S2): (state, restarts, faults, full wipes, ticks of the last fault or 0,
@@ -1285,14 +1347,15 @@ pub mod keyer {
         // S2: a fault in a call about NO single station is not containable: a full wipe (the station re-associates);
         // the server is back after the backoff, empty
         let _ = start(&st, 30, &mut fr);
-        let faulted = matches!(wpa_call(CMD_SELFTEST_FAULT, &[], &mut [], None), Some((Call::Fault, _))) && expect(&sta).is_none();
-        let t0 = crate::clock::ticks() / (crate::clock::freq() / 1000).max(1);
-        while crate::clock::ticks() / (crate::clock::freq() / 1000).max(1) < t0 + super::imp::BACKOFF_MS + 5 {}
+        // during the backoff a call about no station is refused; a call about a station (S4) waits the short backoff
+        // out and is answered by the new, wiped incarnation — which has forgotten the station
+        let faulted = matches!(wpa_call(CMD_SELFTEST_FAULT, &[], &mut [], None), Some((Call::Fault, _)))
+            && matches!(wpa_call(hal::wpasrvabi::CMD_PMKSA_COUNT, &[], &mut [], None), Some((Call::Backoff, _)));
         let forgotten = expect(&sta) == Some(None);
         unsafe { WPA = None };
         let pass = m1 && clean1 && m3 && keyed && clean2 && gone && faulted && forgotten;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed: the kernel's copy has a zero TK, the station's TK is in key-transfer slot 0={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, refused during the backoff={} then the new incarnation has forgotten it={}\n",
+            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed: the kernel's copy has a zero TK, the station's TK is in key-transfer slot 0={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, a non-station call refused during the backoff={} a station call waits it out and the new incarnation has forgotten the station={}\n",
             if pass { "PASS" } else { "FAIL" }, m1, clean1, m3, keyed, clean2, gone, faulted, forgotten
         ));
         pass
