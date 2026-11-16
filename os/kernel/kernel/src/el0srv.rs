@@ -1455,9 +1455,11 @@ pub fn sae_selftest() -> bool {
         f[81..97].copy_from_slice(&mic);
         let gtk_in_m3 = match test::eapol(&sta3, &f, 7_010, &mut fr) {
             Some(Out::Send(n)) if n > 99 => {
-                let dl = u16::from_be_bytes([fr[97], fr[98]]) as usize;
+                // the keyer's frames are ethernet frames (the driver sends them as data): skip the 802.3 header
+                let b = if fr[12..14] == [0x88, 0x8e] { 14 } else { 0 };
+                let dl = u16::from_be_bytes([fr[b + 97], fr[b + 98]]) as usize;
                 let mut plain = [0u8; 256];
-                match fr.get(99..99 + dl).and_then(|w| hal::aes::aes_unwrap(&kek, w, &mut plain)) {
+                match fr.get(b + 99..b + 99 + dl).and_then(|w| hal::aes::aes_unwrap(&kek, w, &mut plain)) {
                     Some(pn) => plain[..pn].windows(16).any(|x| x == [0x5a; 16]) && !plain[..pn].windows(16).any(|x| x == [0x33; 16]),
                     None => false,
                 }
