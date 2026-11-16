@@ -174,6 +174,9 @@ mod imp {
         pub last_fault_ticks: u64,
         next_ok: u64,
         streak: u32,
+        /// Run once after each fault / budget overrun, before the server's next call (the bus server: recover the SDHCI
+        /// controller if the fault left a transfer in flight — ADR 0065 claims C1/C5).
+        pub on_fault: Option<fn()>,
     }
 
     fn alloc() -> usize {
@@ -270,6 +273,7 @@ mod imp {
             last_fault_ticks: 0,
             next_ok: 0,
             streak: 0,
+            on_fault: None,
         };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < base || g.vaddr + g.memsz > base + IMAGE_MAX {
@@ -380,6 +384,9 @@ mod imp {
             if st == ST_PANIC {
                 self.faults += 1;
                 self.last_fault_ticks = crate::clock::ticks();
+                if let Some(h) = self.on_fault {
+                    h();
+                }
                 self.reset();
                 self.streak = self.streak.saturating_add(1);
                 let b = (BACKOFF_MS << (self.streak - 1).min(10)).min(BACKOFF_MAX_MS);
@@ -1054,6 +1061,13 @@ pub mod keyer {
         };
         let bus = match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
             Ok(mut s) => {
+                // claims C1/C5: a bus-server fault inside a CMD53 leaves the controller mid-transfer — recover it once
+                #[cfg(feature = "cm5")]
+                {
+                    s.on_fault = Some(|| {
+                        let _ = arch_aarch64::cyw43::bus_recover_after_el0_fault();
+                    });
+                }
                 let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
                 unsafe { WIFI = Some(s) };
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi (the bus server: SDIO / SDPCM / firmware I/O, no keys) loaded at {:#x} init={}\n", super::imp::BASE, ok));
