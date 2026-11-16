@@ -177,6 +177,30 @@ fn tx_ctl() -> ! {
     exit_lean(if ok { 1 } else { 4 })
 }
 
+/// S3c: install a key from the key-transfer page (read-only here; el0-wpa wrote it) as a WLC_SET_KEY control
+/// request — the only way a key reaches the chip. The record must be the one the kernel asked for (station + key
+/// index), else nothing is sent. Every local copy is wiped before exit; the kernel zeroes the page.
+fn key_install() -> ! {
+    use hal::wpasrvabi::keyx;
+    let Some((seq, ifidx, reqid, slot, ea, index)) = keyx::decode_install(input()) else { exit(ST_BAD_CMD, 0) };
+    let mut raw = [0u8; keyx::SLOT_SIZE];
+    for (i, b) in raw.iter_mut().enumerate() {
+        *b = unsafe { read_volatile((BASE + KEYX_OFF + slot as usize * keyx::SLOT_SIZE + i) as *const u8) };
+    }
+    let rec = keyx::decode(&raw);
+    hal::wpaauth::wipe(&mut raw);
+    let Some(mut rec) = rec.filter(|r| r.ea == ea && r.index == index) else { exit_lean(5) };
+    let mut payload = hal::bcdc::wsec_key(rec.index, &rec.key[..rec.klen as usize], rec.algo, rec.flags, &rec.ea);
+    hal::wpaauth::wipe(&mut rec.key);
+    let mut f = [0u8; hal::bcdc::FRAME_MAX];
+    let n = hal::bcdc::request(seq, hal::bcdc::WLC_SET_KEY, hal::bcdc::SET, reqid, ifidx, &payload, 0, &mut f);
+    hal::wpaauth::wipe(&mut payload);
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let ok = bus.cmd53_write(2, hal::sdio::F2_ADDR, &f[..(n + 3) & !3]);
+    hal::wpaauth::wipe(&mut f);
+    exit_lean(if ok { 1 } else { 4 })
+}
+
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     if rd32(H_MAGIC) != MAGIC {
@@ -202,6 +226,7 @@ pub extern "C" fn _start() -> ! {
         }
         CMD_TX_DATA => tx_data(),
         CMD_TX_CTL => tx_ctl(),
+        hal::wpasrvabi::CMD_KEY_INSTALL => key_install(),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring
             let r = ring_at(RX_OFF);

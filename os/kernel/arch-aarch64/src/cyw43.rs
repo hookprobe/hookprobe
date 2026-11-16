@@ -3552,6 +3552,10 @@ fn wpa3_events() -> bool {
 /// to every PMF station in the IGTK KDE. brcmfmac-style index-4 key; algo BIP first, AES_CCM as the fallback.
 #[cfg(feature = "wpa3")]
 fn wpa3_igtk_install() {
+    // S3b: with el0-wpa loaded the IGTK is its own, installed by ap_group_keys_el0 (ap_install_gtk follows ap_start)
+    if el0().is_some() {
+        return;
+    }
     let s = w3();
     for k in 0..2 {
         match crate::rng200::next_word_strict() {
@@ -4209,7 +4213,52 @@ fn igtk_kde(out: &mut [u8]) -> usize {
 /// the per-ea pairwise key's flags 0. Installing it per station (the old shape) reset the
 /// group PN on every join, and flagging the PTK primary instead left the fw without a
 /// default group TX key — the likely reason AP-originated broadcast never decrypted.
+/// S3b: the AP's group keys from el0-wpa: it generates the GTK (and the IGTK in a WPA3 mode) from TRNG entropy, the
+/// bus server installs them from the key-transfer page, the page is zeroed — the kernel never holds them (its own
+/// AP_GTK / IGTK are zeroed). Every M3 carries el0-wpa's keys. False when el0-wpa is absent or an install failed.
+pub fn ap_group_keys_el0() -> bool {
+    let Some(h) = el0() else { return false };
+    let mut ent = [0u8; 32];
+    for k in 0..4 {
+        match crate::rng200::next_word_strict() {
+            Some(w) => ent[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+            None => return false,
+        }
+    }
+    #[cfg(feature = "wpa3")]
+    let want_igtk = w3().mode != SEC_WPA2;
+    #[cfg(not(feature = "wpa3"))]
+    let want_igtk = false;
+    let made = (h.group_new)(&ent, want_igtk);
+    hal::wpaauth::wipe(&mut ent);
+    if !made {
+        return false;
+    }
+    use hal::wpasrvabi::keyx;
+    let gtk_ok = (0..3).any(|_| set_key_keyx(keyx::SLOT_GTK, &[0; 6], 1));
+    #[cfg(feature = "wpa3")]
+    if want_igtk {
+        let s = w3();
+        s.igtk_set = false;
+        for (slot, algo) in [(keyx::SLOT_IGTK, CRYPTO_ALGO_BIP), (keyx::SLOT_IGTK_CCM, CRYPTO_ALGO_AES_CCM)] {
+            if set_key_keyx(slot, &[0; 6], 4) {
+                s.igtk_set = true;
+                s.igtk_algo = algo;
+                break;
+            }
+        }
+        hal::wpaauth::wipe(&mut s.igtk); // the KDE comes from el0-wpa now
+    }
+    (h.keyx_done)();
+    unsafe { AP_GTK = ([0; 16], 1) };
+    gtk_ok
+}
+
 pub fn ap_install_gtk(gtk: &[u8; 16], keyid: u8) -> bool {
+    // S3b: with el0-wpa loaded the group keys are its own (this kernel-made GTK is not used)
+    if el0().is_some() {
+        return ap_group_keys_el0();
+    }
     unsafe { AP_GTK = (*gtk, keyid) }; // G-E: M3 carries the group key installed here
     // Metal 2026-09-11: the first SET right after WLC_UP+SET_SSID missed its reply (the
     // dcmd reply hunt through the post-UP event burst), the second succeeded — retry.
@@ -4470,6 +4519,11 @@ pub struct El0Keyer {
     pub tx_ctl: fn(u8, u8, u32, u32, u16, usize, &[u8]) -> Option<bool>,
     // step 4g S2: el0-wpa was full-wiped (every secret gone): deauthenticate every station, re-provision the passphrase
     pub wpa_wiped: fn() -> bool,
+    // step 4g S3c: install key-transfer slot (slot, station, key index) as WLC_SET_KEY via the bus server; zero the page
+    pub key_install: fn(u8, u8, u16, u8, &[u8; 6], u32) -> Option<u32>,
+    pub keyx_done: fn(),
+    // step 4g S3b: new group keys in el0-wpa from kernel TRNG entropy (records in the key-transfer page)
+    pub group_new: fn(&[u8; 32], bool) -> bool,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
@@ -4477,6 +4531,13 @@ pub struct El0Keyer {
 #[cfg(feature = "wpa3")]
 static mut EL0_SAE_SRC: Option<([u8; 6], u8, [u8; 16])> = None;
 
+/// Counter ticks -> milliseconds.
+#[cfg(feature = "wpa3")]
+fn ticks_to_ms(t: u64) -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    t / (f / 1000).max(1)
+}
 /// Push the installed security (mode, SSID, passphrase) to el0-wifi: called when the server loads, and by every
 /// security install. `clear` = the credentials changed (drop its PMKSA cache).
 #[cfg(feature = "wpa3")]
@@ -4484,7 +4545,11 @@ pub fn ap_sae_el0_sync(clear: bool) -> bool {
     let Some(h) = el0() else { return false };
     let st = w3();
     let mode = if st.mode == SEC_WPA2 { 0 } else { 1 };
-    (h.sae_setup)(mode, clear, &st.ssid[..st.ssid_len as usize], &st.pw[..st.pw_len as usize])
+    let t0 = ticks();
+    let ok = (h.sae_setup)(mode, clear, &st.ssid[..st.ssid_len as usize], &st.pw[..st.pw_len as usize]);
+    // S3a: the setup derives the H2E PT and the PBKDF2 PSK in el0-wpa — its cost on metal (el0-wpa's budget: 250 ms)
+    crate::_print(format_args!(" [EL0-WPA] setup (mode {}, PT + WPA2 PMK derived in el0-wpa) ok={} in {} ms\n", mode, ok, ticks_to_ms(ticks().wrapping_sub(t0))));
+    ok
 }
 pub static mut EL0_KEYER: Option<El0Keyer> = None;
 /// Handshakes the driver started in EL0 and has not seen finish (so the loop does not cross into EL0 to tick an idle
@@ -4595,8 +4660,18 @@ pub fn ap_key_start(ap_mac: &[u8; 6], sta: &[u8; 6], pmk: &[u8; 32], akm8: bool,
     let via_sae = unsafe { (*core::ptr::addr_of_mut!(EL0_SAE_SRC)).take() }.filter(|x| x.0 == *sta && akm8);
     #[cfg(not(feature = "wpa3"))]
     let via_sae: Option<([u8; 6], u8, [u8; 16])> = None;
-    let el0r = match via_sae {
-        Some((_, k, p)) => el0().and_then(|h| (h.key_start_sae)(&st, now_ms, k, &p, &mut out)),
+    // ADR 0065 step 4g S3a: a WPA2-PSK station is keyed from el0-wpa's OWN PMK (source 3; it derived it from the
+    // passphrase at setup): the kernel's PMK never crosses. The kernel copy below stays the D5 fallback until S3d.
+    #[cfg(feature = "wpa3")]
+    let src = via_sae.map(|(_, k, p)| (k, p)).or(if akm8 { None } else { Some((3u8, [0u8; 16])) });
+    #[cfg(not(feature = "wpa3"))]
+    let src = via_sae.map(|(_, k, p)| (k, p));
+    let el0r = match src {
+        Some((k, p)) => {
+            let mut st0 = st;
+            st0.pmk = [0; 32];
+            el0().and_then(|h| (h.key_start_sae)(&st0, now_ms, k, &p, &mut out))
+        }
         None => el0().and_then(|h| (h.start)(&st, now_ms, &mut out)),
     };
     let r = match el0r {
@@ -4655,7 +4730,16 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     // flags 0 as brcmfmac's pairwise add_key (the PRIMARY flag belongs to the group key, installed at AP start).
     // The firmware's reply to this SET is sometimes missed (metal: 23 handshakes `ptk_set=false authorized=true`):
     // retry like the group-key install (a repeated SET of the same key is idempotent).
-    auth.ptk_set = (0..3).any(|_| wlc_set_key(0, &tk, &d.sta, false));
+    // S3c: a zero TK = el0-wpa keyed it and left the key in the key-transfer page: the bus server installs it from there
+    // (the kernel never holds it), then the page is zeroed. A real TK = the in-kernel fallback keyed it (D5, until S3d).
+    if tk == [0u8; 16] && el0().is_some() {
+        auth.ptk_set = (0..3).any(|_| set_key_keyx(hal::wpasrvabi::keyx::SLOT_TK, &d.sta, 0));
+        if let Some(h) = el0() {
+            (h.keyx_done)();
+        }
+    } else {
+        auth.ptk_set = (0..3).any(|_| wlc_set_key(0, &tk, &d.sta, false));
+    }
     hal::wpaauth::wipe(&mut tk);
     dbg_putc(b'P');
     // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
@@ -4733,7 +4817,8 @@ pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
         let synced = ap_sae_el0_sync(true);
         #[cfg(not(feature = "wpa3"))]
         let synced = true;
-        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}), passphrase re-provisioned={} — stations re-authenticate in full\n", d.via, d.bcme, d.gone, synced));
+        let g = ap_group_keys_el0(); // new group keys too: the old ones died with the wiped server
+        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}), passphrase re-provisioned={}, new group keys installed={} — stations re-authenticate in full\n", d.via, d.bcme, d.gone, synced, g));
     }
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
     // the EL0 authenticator is ticked only while it has handshakes, and at most every 100 ms
@@ -5890,6 +5975,20 @@ const WSEC_PRIMARY_KEY: u32 = 0x0002;
 /// all-zero for the group key); `primary` sets WSEC_PRIMARY_KEY (pairwise). algo = CCMP.
 /// Field offsets are the brcmf_wsec_key_le layout (index@0 len@4 data@8 algo@112 flags@116
 /// ea@156). Returns true on a RESP_OK.
+/// S3c: the key install `bcdc_dcmd` sends next through el0-wifi from the key-transfer page: (slot, station, index).
+static mut KEYX_SEND: Option<(u8, [u8; 6], u32)> = None;
+/// Install the key el0-wpa left in key-transfer `slot` for `ea` / `index`: WLC_SET_KEY built by the bus server from the
+/// page (the kernel never holds the key), the reply matched here. The page is zeroed after the attempt.
+fn set_key_keyx(slot: u8, ea: &[u8; 6], index: u32) -> bool {
+    if el0().is_none() {
+        return false;
+    }
+    unsafe { KEYX_SEND = Some((slot, *ea, index)) };
+    let ok = bcdc_dcmd(WLC_SET_KEY, BCDC_SET, &[], &mut []).0;
+    unsafe { KEYX_SEND = None };
+    ok
+}
+
 fn wlc_set_key(index: u32, key: &[u8], ea: &[u8; 6], primary: bool) -> bool {
     let mut k = [0u8; 164];
     k[0..4].copy_from_slice(&index.to_le_bytes());
@@ -6528,6 +6627,17 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     let ifidx = unsafe { CUR_IF } & 0xf;
     let rid = reqid as u16;
     let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
+    // S3c: a key install armed by `set_key_keyx` — el0-wifi builds this request itself from the key-transfer page (the
+    // kernel never holds the key); the reply below is matched as for any request
+    if let Some((slot, ea, index)) = unsafe { (*core::ptr::addr_of_mut!(KEYX_SEND)).take() } {
+        let ok = el0h.and_then(|h| (h.key_install)(seq, ifidx, rid, slot, &ea, index)) == Some(1);
+        if ok {
+            unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
+        } else {
+            return (false, 0);
+        }
+        return bcdc_wait(rid, reply, want_diag);
+    }
     let tx_ok = match el0h.and_then(|h| (h.tx_ctl)(seq, ifidx, cmd, flags, rid, reply.len(), payload)) {
         Some(ok) => {
             if unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_TX_LOST), false) } {
@@ -6564,6 +6674,12 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
     // superframes): any control request issued while traffic flowed could re-create the wedge.
     // Data/event frames that arrive while we wait are skipped (as before). 2 KB buffer so a
     // full-MTU data frame is read whole, not terminated.
+    bcdc_wait(rid, reply, want_diag)
+}
+
+/// The second half of a control request: read frames until the reply to `rid` (parking station frames for the serve
+/// loop), its body copied into `reply`. Shared by `bcdc_dcmd` and the S3c key-transfer install.
+fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut rx = [0u8; 2048];
     let mut status = 0u32;
     let mut got_ctrl = false;

@@ -46,8 +46,15 @@ mod imp {
             KEYX_FRAME
         }
     }
+    /// Selftests only (QEMU `[P-el0srv-keyer]` / `[P-el0srv-sae]`; never called on the CM5): the key-transfer record in
+    /// `slot` — the test station knows that key anyway. No product path reads the page.
+    #[cfg_attr(feature = "cm5", allow(dead_code))]
+    pub fn keyx_test_read(slot: u8) -> Option<hal::wpasrvabi::keyx::Rec> {
+        let f = keyx_frame();
+        let off = slot as usize * hal::wpasrvabi::keyx::SLOT_SIZE;
+        hal::wpasrvabi::keyx::decode(unsafe { core::slice::from_raw_parts((f + off) as *const u8, hal::wpasrvabi::keyx::SLOT_SIZE) })
+    }
     /// Zero the key-transfer page (the kernel writes zeros; it never reads it).
-    #[cfg_attr(feature = "cm5", allow(dead_code))] // the S1 selftest's; S3 zeroes it after every install
     pub fn keyx_zero() {
         let f = unsafe { KEYX_FRAME };
         if f != 0 {
@@ -69,7 +76,16 @@ mod imp {
         state_pages: usize,
         /// The key-transfer page: (offset, writable).
         keyx: Option<(usize, bool)>,
+        /// The excursion budget per call (µs).
+        budget_us: u64,
     }
+    /// el0-wpa's budget: management calls only (a handful per join), the heaviest = setup (H2E PT + the PBKDF2 PSK)
+    /// — never the frame path. A larger budget than the bus server's, so a slow setup is not a fault (a fault in a
+    /// call about no station full-wipes).
+    #[cfg(feature = "cm5")]
+    const WPA_BUDGET_US: u64 = 250_000;
+    #[cfg(not(feature = "cm5"))]
+    const WPA_BUDGET_US: u64 = BUDGET_US;
 
     #[cfg(feature = "cm5")]
     pub const BASE: usize = BASE_CM5;
@@ -133,6 +149,8 @@ mod imp {
         #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
         base: usize,
         magic: u32,
+        /// The excursion budget per call (µs).
+        budget_us: u64,
         /// Has frame rings (el0-wifi); never touch `rx` / `tx` otherwise (their frames are 0).
         rings: bool,
         state: [usize; WPA_STATE_PAGES],
@@ -211,13 +229,14 @@ mod imp {
 
     pub fn load(grant: Grant) -> Result<Server, &'static str> {
         load_spec(&Spec { name: "el0-wifi", elf: WIFI_ELF, base: BASE, magic: MAGIC, rings: true, state_off: 0, state_pages: 0,
-            keyx: Some((KEYX_OFF, false)) }, grant)
+            keyx: Some((KEYX_OFF, false)), budget_us: BUDGET_US }, grant)
     }
     /// ADR 0065 step 4g (S1): load el0-wpa — its own address space, persistent state pages, the key-transfer page RW,
     /// no device, no rings.
     pub fn load_wpa() -> Result<Server, &'static str> {
         load_spec(&Spec { name: "el0-wpa", elf: WPA_ELF, base: WPA_BASE, magic: hal::wpasrvabi::MAGIC, rings: false,
-            state_off: hal::wpasrvabi::STATE_OFF, state_pages: WPA_STATE_PAGES, keyx: Some((hal::wpasrvabi::KEYX_OFF, true)) }, Grant::None)
+            state_off: hal::wpasrvabi::STATE_OFF, state_pages: WPA_STATE_PAGES, keyx: Some((hal::wpasrvabi::KEYX_OFF, true)),
+            budget_us: WPA_BUDGET_US }, Grant::None)
     }
 
     fn load_spec(sp: &Spec, grant: Grant) -> Result<Server, &'static str> {
@@ -231,6 +250,7 @@ mod imp {
             elf: sp.elf,
             base,
             magic: sp.magic,
+            budget_us: sp.budget_us,
             rings: sp.rings,
             state: [0; WPA_STATE_PAGES],
             nstate: 0,
@@ -355,7 +375,7 @@ mod imp {
             self.w32(H_CMD, cmd);
             self.w32(H_STATUS, ST_PANIC);
             self.calls += 1;
-            let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, BUDGET_US);
+            let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, self.budget_us);
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
@@ -505,6 +525,27 @@ mod imp {
         let ro = w.call(CMD_SELFTEST_KEYX_WRITE) == Call::Fault
             && unsafe { core::slice::from_raw_parts(keyx_frame() as *const u8, 16) } == pat;
         keyx_zero();
+        // S3c: the bus server installs ONLY the record the kernel asked for: a key record for station A in slot 0;
+        // an install for station B is refused (R0 5); for A it builds + writes the request (the fake device refuses the
+        // write: R0 4); an empty slot is refused
+        let install = {
+            use hal::wpasrvabi::keyx;
+            let a = [2, 0x5a, 0, 0, 0, 9];
+            let rec = keyx::Rec { index: 0, algo: hal::bcdc::CRYPTO_ALGO_AES_CCM, flags: 0, ea: a, klen: 16, key: [0x77; 32] };
+            let mut b = [0u8; keyx::SLOT_SIZE];
+            keyx::encode(&rec, &mut b);
+            wait(BACKOFF_MS * 4 + 5);
+            let put = matches!(p.call_io(wp::CMD_KEYX_PUT, &b, &mut []), (Call::Done(ST_OK, ..), _));
+            let r0 = |w: &mut Server, ea: &[u8; 6]| match w.call_lean(hal::wpasrvabi::CMD_KEY_INSTALL, &keyx::encode_install(1, 0, 7, keyx::SLOT_TK, ea, 0), &mut []).0 {
+                Call::Done(ST_OK, r, _) => r,
+                _ => 0,
+            };
+            let wrong = r0(&mut w, &[2, 0x5b, 0, 0, 0, 0x0b]) == 5;
+            let right = r0(&mut w, &a) == 4;
+            keyx_zero();
+            let empty = r0(&mut w, &a) == 5;
+            put && wrong && right && empty
+        };
         // a full wipe zeroes the persistent state (every secret gone): a fresh, empty incarnation
         wait(BACKOFF_MS + 5);
         p.full_wipe();
@@ -512,10 +553,10 @@ mod imp {
         let wiped = p.call(wp::CMD_STATE_READ) == Call::Done(ST_OK, 0, 1) && p.wipes == 1;
         // both are in their own address spaces (the el0as report, run after this, covers them)
         let spaces = w.aspace != p.aspace;
-        let pass = init && bumped && own_fault && kept && untouched && put && peek && ro && wiped && spaces;
+        let pass = init && bumped && own_fault && kept && untouched && put && peek && ro && wiped && spaces && install;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv-split] {} — ADR 0065 step 4g S1: bus server el0-wifi + WPA security server el0-wpa, supervised apart: both load + answer={} el0-wpa persistent state written={} its own fault resets it={} and the restarted server still holds the state={} a BUS fault leaves el0-wpa's restarts / faults / state untouched={} key-transfer page: el0-wpa writes={} el0-wifi reads={} el0-wifi cannot write (faults, page intact)={} a full wipe zeroes the state={} separate address spaces={}\n",
-            if pass { "PASS" } else { "FAIL" }, init, bumped, own_fault, kept, untouched, put, peek, ro, wiped, spaces
+            " [P-el0srv-split] {} — ADR 0065 step 4g S1: bus server el0-wifi + WPA security server el0-wpa, supervised apart: both load + answer={} el0-wpa persistent state written={} its own fault resets it={} and the restarted server still holds the state={} a BUS fault leaves el0-wpa's restarts / faults / state untouched={} key-transfer page: el0-wpa writes={} el0-wifi reads={} el0-wifi cannot write (faults, page intact)={} a full wipe zeroes the state={} separate address spaces={} S3c: the bus server installs only the record asked for (other station refused, right one written, empty slot refused)={}\n",
+            if pass { "PASS" } else { "FAIL" }, init, bumped, own_fault, kept, untouched, put, peek, ro, wiped, spaces, install
         ));
         pass
     }
@@ -1002,10 +1043,16 @@ pub mod keyer {
         };
         #[cfg(feature = "cm5")]
         unsafe {
-            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped });
+            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new });
         }
         #[cfg(all(feature = "cm5", feature = "wpa3"))]
         let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
+        // S3b: the AP's group keys are replaced by el0-wpa's own (no station has keyed yet: the AP loop has not run)
+        #[cfg(feature = "cm5")]
+        if wpa {
+            let g = arch_aarch64::cyw43::ap_group_keys_el0();
+            arch_aarch64::_print(format_args!(" [EL0-WPA] group keys generated in el0-wpa and installed via the key-transfer page: {} (the kernel holds no GTK / IGTK)\n", if g { "ok" } else { "FAILED" }));
+        }
         #[cfg(feature = "cm5")]
         if bus {
             bus_probe_check();
@@ -1124,6 +1171,31 @@ pub mod keyer {
         (st, s.restarts, s.faults, s.last_fault_ticks)
     }
 
+    /// S3c: ask the bus server to install key-transfer slot `slot` (it must hold the key of `ea` / `index`) as a
+    /// WLC_SET_KEY request with this SDPCM seq / request id. No key byte passes through here. Some(1) = written.
+    pub(crate) fn key_install(seq: u8, ifidx: u8, reqid: u16, slot: u8, ea: &[u8; 6], index: u32) -> Option<u32> {
+        let s = bus_srv()?;
+        let inp = hal::wpasrvabi::keyx::encode_install(seq, ifidx, reqid, slot, ea, index);
+        match s.call_lean(hal::wpasrvabi::CMD_KEY_INSTALL, &inp, &mut []).0 {
+            Call::Done(ST_OK, r, _) => Some(r),
+            _ => None,
+        }
+    }
+    /// S3b: new group keys in el0-wpa from 32 B of kernel TRNG entropy (D-c); their install records land in the
+    /// key-transfer page. `igtk` = an IGTK too (PMF). The entropy buffer is the caller's to wipe.
+    pub(crate) fn group_new(entropy: &[u8; 32], igtk: bool) -> bool {
+        let mut inp = [0u8; 33];
+        inp[..32].copy_from_slice(entropy);
+        inp[32] = igtk as u8;
+        let r = matches!(wpa_call(hal::wpasrvabi::CMD_GROUP_NEW, &inp, &mut [], None), Some((Call::Done(ST_OK, 1, _), _)));
+        hal::wpaauth::wipe(&mut inp);
+        r
+    }
+    /// S3c: zero the key-transfer page after an install (the kernel writes zeros; it never reads it).
+    pub(crate) fn keyx_done() {
+        super::imp::keyx_zero();
+    }
+
     /// (state, restarts, faults, full wipes, ticks of the last fault or 0, PMKSA entries).
     pub type WpaHealth = (&'static str, u64, u64, u64, u64, Option<u32>);
     /// `/api/health` wifi_driver.security (S2): (state, restarts, faults, full wipes, ticks of the last fault or 0,
@@ -1186,7 +1258,13 @@ pub mod keyer {
         };
         let m3 = matches!(eapol(&sta, &frame(1, false), 10, &mut fr), Some(Out::Send(_))) && expect(&sta) == Some(Some((true, 2)));
         let keyed = match eapol(&sta, &frame(2, true), 20, &mut fr) {
-            Some(Out::Keyed { done, tk }) => tk[..] == ptk[32..48] && done.auth.m4_mic_ok,
+            // S3c: the kernel's copy carries a ZERO TK; the key waits in key-transfer slot 0 for the bus server
+            Some(Out::Keyed { done, tk }) => {
+                let rec = super::imp::keyx_test_read(hal::wpasrvabi::keyx::SLOT_TK);
+                let ok = tk == [0u8; 16] && done.auth.m4_mic_ok && rec.is_some_and(|r| r.ea == sta && r.index == 0 && r.key[..16] == ptk[32..48]);
+                super::imp::keyx_zero();
+                ok
+            }
             _ => false,
         };
         let clean2 = srv().is_some_and(|s| s.io_clean());
@@ -1201,7 +1279,7 @@ pub mod keyer {
         unsafe { WPA = None };
         let pass = m1 && clean1 && m3 && keyed && clean2 && gone && faulted && forgotten;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed with the station's TK={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, refused during the backoff={} then the new incarnation has forgotten it={}\n",
+            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed: the kernel's copy has a zero TK, the station's TK is in key-transfer slot 0={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, refused during the backoff={} then the new incarnation has forgotten it={}\n",
             if pass { "PASS" } else { "FAIL" }, m1, clean1, m3, keyed, clean2, gone, faulted, forgotten
         ));
         pass
@@ -1290,7 +1368,10 @@ pub fn sae_selftest() -> bool {
         f
     };
     let m3 = matches!(test::eapol(&sta, &frame(1, false), 50, &mut fr), Some(Out::Send(_)));
-    let keyed = matches!(test::eapol(&sta, &frame(2, true), 60, &mut fr), Some(Out::Keyed { tk, .. }) if tk[..] == ptk[32..48]);
+    // S3c: a zero TK in the kernel's copy; the station's SAE-derived TK in key-transfer slot 0
+    let keyed = matches!(test::eapol(&sta, &frame(2, true), 60, &mut fr), Some(Out::Keyed { tk, .. }) if tk == [0u8; 16])
+        && imp::keyx_test_read(hal::wpasrvabi::keyx::SLOT_TK).is_some_and(|r| r.ea == sta && r.key[..16] == ptk[32..48]);
+    imp::keyx_zero();
     let clean2 = srv_clean();
     // the station leaves 5 s after Accepted (past the leave-predates-SAE window): the driver's forget (op 0) frees its
     // SAE state, while the PMKSA stays cached
@@ -1305,6 +1386,92 @@ pub fn sae_selftest() -> bool {
     // no PMKID and no SAE state -> refused (the station must redo SAE)
     let kn = test::sae_keying(&sta, 5_000, hal::rsnassoc::OFFER_SAE, Some(&rsn8));
     let nosae = kn.is_some_and(|(k, _, _)| k == Keying::SaeNoSae);
+    // S3a: a WPA2-PSK station keyed from el0-wpa's OWN PMK (source 3; derived from the passphrase at setup) — the
+    // kernel passes a zero PMK; M2 verifies, and M3 comes back, only if the server derived the right one
+    let psk_own = {
+        let sta2 = [2, 0x5c, 0, 0, 0, 0x0c];
+        let pmk = hal::wpa::wpa_pmk(pw, b"hq-test");
+        let mut rsne2 = [0u8; 40];
+        rsne2[..4].copy_from_slice(&[0x30, 0x02, 0x01, 0x00]);
+        let st2 = Start { sta: sta2, aa: ap, pmk: [0; 32], akm8: false, pmkid: None, anonce: [0x44; 32],
+            kd: KeyData { rsne: rsne2, rsne_len: 4, gtk: [0x33; 16], gtk_keyid: 1, igtk_kde: None } };
+        let mut fr = [0u8; FRAME_MAX];
+        let m1 = matches!(test::key_start_sae(&st2, 6_000, 3, &[0; 16], &mut fr), Some(Out::Send(_)));
+        let sn = [0x66u8; 32];
+        let ptk = hal::wpaauth::ptk(false, &pmk, &ap, &sta2, &st2.anonce, &sn);
+        let mut kck = [0u8; 16];
+        kck.copy_from_slice(&ptk[..16]);
+        let mut f = [0u8; 99];
+        f[0] = 2;
+        f[1] = 3;
+        f[2..4].copy_from_slice(&95u16.to_be_bytes());
+        f[4] = 2;
+        f[5..7].copy_from_slice(&(0x0100u16 | 0x000a).to_be_bytes());
+        f[9..17].copy_from_slice(&1u64.to_be_bytes());
+        f[17..49].copy_from_slice(&sn);
+        let mic = hal::wpaauth::mic(&kck, &f, false);
+        f[81..97].copy_from_slice(&mic);
+        let m3 = matches!(test::eapol(&sta2, &f, 6_010, &mut fr), Some(Out::Send(_)));
+        m1 && m3
+    };
+    if !psk_own {
+        arch_aarch64::_print(format_args!(" [P-el0srv-sae] S3a: the WPA2-PSK 4-way from el0-wpa's own PMK FAILED\n"));
+    }
+    // S3b: el0-wpa's own group keys — generated from the entropy, written to key-transfer slots 1-3, and the GTK a
+    // station unwraps from M3 is el0-wpa's (the kernel's start record carried a different, dummy GTK)
+    let group_own = {
+        use hal::wpasrvabi::keyx;
+        let mut ent = [0u8; 32];
+        ent[..16].copy_from_slice(&[0x5a; 16]);
+        ent[16..].copy_from_slice(&[0xa5; 16]);
+        let made = keyer::group_new(&ent, true);
+        let g = imp::keyx_test_read(keyx::SLOT_GTK).is_some_and(|r| r.index == 1 && r.flags == hal::bcdc::WSEC_PRIMARY_KEY && r.key[..16] == [0x5a; 16]);
+        let i = imp::keyx_test_read(keyx::SLOT_IGTK).is_some_and(|r| r.index == 4 && r.algo == hal::bcdc::CRYPTO_ALGO_BIP && r.key[..16] == [0xa5; 16])
+            && imp::keyx_test_read(keyx::SLOT_IGTK_CCM).is_some_and(|r| r.algo == hal::bcdc::CRYPTO_ALGO_AES_CCM && r.key[..16] == [0xa5; 16]);
+        imp::keyx_zero();
+        // a WPA2 station's 4-way: M3's key data, unwrapped with its KEK, carries the GTK 0x5a.., not the kernel's 0x33..
+        let sta3 = [2, 0x5d, 0, 0, 0, 0x0d];
+        let pmk = hal::wpa::wpa_pmk(pw, b"hq-test");
+        let mut rsne3 = [0u8; 40];
+        rsne3[..4].copy_from_slice(&[0x30, 0x02, 0x01, 0x00]);
+        let st3 = Start { sta: sta3, aa: ap, pmk: [0; 32], akm8: false, pmkid: None, anonce: [0x45; 32],
+            kd: KeyData { rsne: rsne3, rsne_len: 4, gtk: [0x33; 16], gtk_keyid: 1, igtk_kde: None } };
+        let mut fr = [0u8; FRAME_MAX];
+        let m1 = matches!(test::key_start_sae(&st3, 7_000, 3, &[0; 16], &mut fr), Some(Out::Send(_)));
+        let sn = [0x67u8; 32];
+        let ptk = hal::wpaauth::ptk(false, &pmk, &ap, &sta3, &st3.anonce, &sn);
+        let (mut kck, mut kek) = ([0u8; 16], [0u8; 16]);
+        kck.copy_from_slice(&ptk[..16]);
+        kek.copy_from_slice(&ptk[16..32]);
+        let mut f = [0u8; 99];
+        f[0] = 2;
+        f[1] = 3;
+        f[2..4].copy_from_slice(&95u16.to_be_bytes());
+        f[4] = 2;
+        f[5..7].copy_from_slice(&(0x0100u16 | 0x000a).to_be_bytes());
+        f[9..17].copy_from_slice(&1u64.to_be_bytes());
+        f[17..49].copy_from_slice(&sn);
+        let mic = hal::wpaauth::mic(&kck, &f, false);
+        f[81..97].copy_from_slice(&mic);
+        let gtk_in_m3 = match test::eapol(&sta3, &f, 7_010, &mut fr) {
+            Some(Out::Send(n)) if n > 99 => {
+                // the keyer's frames are ethernet frames (the driver sends them as data): skip the 802.3 header
+                let b = if fr[12..14] == [0x88, 0x8e] { 14 } else { 0 };
+                let dl = u16::from_be_bytes([fr[b + 97], fr[b + 98]]) as usize;
+                let mut plain = [0u8; 256];
+                match fr.get(b + 99..b + 99 + dl).and_then(|w| hal::aes::aes_unwrap(&kek, w, &mut plain)) {
+                    Some(pn) => plain[..pn].windows(16).any(|x| x == [0x5a; 16]) && !plain[..pn].windows(16).any(|x| x == [0x33; 16]),
+                    None => false,
+                }
+            }
+            _ => false,
+        };
+        let ok = made && g && i && m1 && gtk_in_m3;
+        if !ok {
+            arch_aarch64::_print(format_args!(" [P-el0srv-sae] S3b detail: made={} gtk rec={} igtk recs={} m1={} M3 carries el0-wpa's GTK={}\n", made, g, i, m1, gtk_in_m3));
+        }
+        ok
+    };
     if !(cached && nosae) {
         let f = unsafe { (*core::ptr::addr_of!(keyer::WPA)).as_ref().map_or(0, |s| s.faults) };
         arch_aarch64::_print(format_args!(" [P-el0srv-sae] detail: forget -> {:?}, cached keying -> {:?}, no-PMKID keying -> {:?}, server faults {}\n",
@@ -1313,10 +1480,10 @@ pub fn sae_selftest() -> bool {
     // S2: the containment proof on this server (it holds a PMKSA entry for `sta` now)
     let _ = keyer::contain_selftest(&sta);
     unsafe { WPA = None };
-    let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae;
+    let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae && psk_own && group_own;
     arch_aarch64::_print(format_args!(
-        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d + 4g S2: WPA3 in el0-wpa against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={}\n",
-        if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae
+        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d + 4g S2: WPA3 in el0-wpa against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={} S3a: a WPA2-PSK station keyed from el0-wpa's own PMK (the kernel passed none)={} S3b: group keys generated in el0-wpa, its GTK the one in M3={}\n",
+        if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae, psk_own, group_own
     ));
     pass
 }
