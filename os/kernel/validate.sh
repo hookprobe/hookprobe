@@ -290,7 +290,10 @@ fi
 # 300 s: a healthy boot exits by semihosting long before this, so the limit only bounds a hang; at
 # 150 s the self-test-heavy p15-write boots (~100 s each at load 4) timed out under a concurrent build
 # and produced phantom FAILs (P15abcommit, Pwasmel0, Pwasip1 — 2026-11-09).
-QEMU_TIMEOUT="${HEQK_QEMU_TIMEOUT:-300}"
+# 600 s (operator decision D-d, 2026-11-16): P15otaimg sat near 300 s alone and timed out on a busy host. Only the
+# per-boot hang bound changes — no assertion, phase or metal gate is relaxed; CI keeps its own overall job timeout
+# (build-heqk.yml `timeout-minutes`).
+QEMU_TIMEOUT="${HEQK_QEMU_TIMEOUT:-600}"
 echo -n "[boot]  qemu virt ... "
 timeout "$QEMU_TIMEOUT" $QEMU "$KERNEL" >"$LOG" 2>&1
 RC=$?
