@@ -81,12 +81,23 @@ struct WpaState {
     pt: Option<sae::PT>,
     pw: [u8; 64],
     pw_len: usize,
+    /// S3a: the WPA2-PSK PMK, derived HERE from the passphrase (PBKDF2 over the SSID) or a 64-hex PSK — the kernel
+    /// starts a WPA2 4-way with "source 3" and never supplies a PMK.
+    psk: [u8; 32],
+    psk_set: bool,
+    /// S3b: the group keys — generated HERE (from kernel TRNG entropy), installed through the key-transfer page, put
+    /// into every M3 by this server: the kernel never holds them.
+    gtk: [u8; 16],
+    gtk_keyid: u8,
+    igtk: [u8; 16],
+    group_set: bool,
+    igtk_set: bool,
     /// S1's substrate test counter (kept: the split selftest still uses it).
     counter: u64,
 }
 impl WpaState {
     const fn new() -> Self {
-        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, counter: 0 }
+        WpaState { keyer: Keyer::new(), sae: sae::SaeAp::new(), pmksa: sae::PmksaCache::new(), pt: None, pw: [0; 64], pw_len: 0, psk: [0; 32], psk_set: false, gtk: [0; 16], gtk_keyid: 1, igtk: [0; 16], group_set: false, igtk_set: false, counter: 0 }
     }
 }
 /// The working copy (.bss: reset with the image after a fault) and whether it was loaded from the saved state.
@@ -179,6 +190,80 @@ fn cmd_sta(cmd: u32, inp: &[u8]) -> Option<[u8; 6]> {
     }
 }
 
+/// S3b: this server's group keys into a handshake's key data (the GTK, and the IGTK KDE for a PMF station).
+fn own_group_keys(kd: &mut hal::wpakeyer::KeyData) {
+    let s = unsafe { &*core::ptr::addr_of!(WORK) };
+    if !s.group_set {
+        return;
+    }
+    kd.gtk = s.gtk;
+    kd.gtk_keyid = s.gtk_keyid;
+    if kd.igtk_kde.is_some() && s.igtk_set {
+        // IGTK KDE (00-0F-AC:9): KeyID 4 ‖ IPN 0 ‖ IGTK
+        let mut k = [0u8; 30];
+        k[0] = 0xdd;
+        k[1] = 4 + 2 + 6 + 16;
+        k[2..6].copy_from_slice(&[0x00, 0x0f, 0xac, 0x09]);
+        k[6..8].copy_from_slice(&4u16.to_le_bytes());
+        k[14..30].copy_from_slice(&s.igtk);
+        kd.igtk_kde = Some(k);
+    }
+}
+/// S3b: new group keys from the kernel's TRNG entropy, kept here, their install records written to the page.
+fn group_new() -> ! {
+    use hal::wpasrvabi::keyx;
+    let b = input();
+    if b.len() != 33 {
+        exit(ST_BAD_CMD, 0)
+    }
+    let s = w();
+    s.gtk.copy_from_slice(&b[..16]);
+    s.igtk.copy_from_slice(&b[16..32]);
+    s.gtk_keyid = 1;
+    s.group_set = true;
+    s.igtk_set = b[32] & 1 != 0;
+    let put = |slot: u8, r: &keyx::Rec| {
+        let mut o = [0u8; keyx::SLOT_SIZE];
+        keyx::encode(r, &mut o);
+        unsafe { core::ptr::copy_nonoverlapping(o.as_ptr(), (KEYX + slot as usize * keyx::SLOT_SIZE) as *mut u8, o.len()) };
+        hal::wpaauth::wipe(&mut o);
+    };
+    let k32 = |k: &[u8; 16]| {
+        let mut x = [0u8; 32];
+        x[..16].copy_from_slice(k);
+        x
+    };
+    // the group key: index = key id, PRIMARY (the firmware's default group TX key), no peer
+    let mut r = keyx::Rec { index: s.gtk_keyid as u32, algo: hal::bcdc::CRYPTO_ALGO_AES_CCM, flags: hal::bcdc::WSEC_PRIMARY_KEY, ea: [0; 6], klen: 16, key: k32(&s.gtk) };
+    put(keyx::SLOT_GTK, &r);
+    if s.igtk_set {
+        r = keyx::Rec { index: 4, algo: hal::bcdc::CRYPTO_ALGO_BIP, flags: 0, ea: [0; 6], klen: 16, key: k32(&s.igtk) };
+        put(keyx::SLOT_IGTK, &r);
+        r.algo = hal::bcdc::CRYPTO_ALGO_AES_CCM;
+        put(keyx::SLOT_IGTK_CCM, &r);
+    }
+    hal::wpaauth::wipe(&mut r.key);
+    done(ST_OK, 1)
+}
+
+/// S3c: a finished handshake's pairwise key goes to the chip through the key-transfer page ONLY: the record is
+/// written to slot 0 for the bus server to install, and the kernel's copy of the reply carries a zero TK.
+fn keyed_to_keyx(r: &mut Out) {
+    if let Out::Keyed { done, tk } = r {
+        let rec = hal::wpasrvabi::keyx::Rec { index: 0, algo: hal::bcdc::CRYPTO_ALGO_AES_CCM, flags: 0, ea: done.sta, klen: 16, key: {
+            let mut k = [0u8; 32];
+            k[..16].copy_from_slice(tk);
+            k
+        } };
+        let mut o = [0u8; hal::wpasrvabi::keyx::SLOT_SIZE];
+        hal::wpasrvabi::keyx::encode(&rec, &mut o);
+        let slot = KEYX + hal::wpasrvabi::keyx::SLOT_TK as usize * hal::wpasrvabi::keyx::SLOT_SIZE;
+        unsafe { core::ptr::copy_nonoverlapping(o.as_ptr(), slot as *mut u8, o.len()) };
+        hal::wpaauth::wipe(&mut o);
+        hal::wpaauth::wipe(tk);
+    }
+}
+
 /// One authenticator command; the reply is an encoded `Out` (or the expect record).
 fn key_cmd(cmd: u32) -> ! {
     let k = &mut w().keyer;
@@ -188,6 +273,7 @@ fn key_cmd(cmd: u32) -> ! {
     let r = match cmd {
         CMD_KEY_START => {
             let (Some(mut st), Some(now)) = (keymsg::decode_start(inp), u64_at(inp, keymsg::START_LEN)) else { exit(ST_BAD_CMD, 0) };
+            own_group_keys(&mut st.kd);
             let r = k.start(st, now, &mut frame);
             hal::wpaauth::wipe(&mut st.pmk);
             hal::wpaauth::wipe(&mut st.kd.gtk);
@@ -216,6 +302,8 @@ fn key_cmd(cmd: u32) -> ! {
         }
         _ => exit(ST_BAD_CMD, 0),
     };
+    let mut r = r;
+    keyed_to_keyx(&mut r);
     let n = keymsg::encode_out(&r, &frame, &mut o);
     hal::wpaauth::wipe(&mut frame);
     // a Keyed reply carries the TK: the kernel installs it and scrubs the OUT area (2A / D3 wipe discipline)
@@ -249,6 +337,20 @@ fn sae_cmd(cmd: u32) -> ! {
             st.pw_len = pl;
             // mode 0 = WPA2 only: no SAE; otherwise the H2E PT for this SSID + passphrase
             st.pt = if mode != 0 { sae::derive_pt(&b[3..3 + sl], &b[36..36 + pl], None) } else { None };
+            // S3a: the WPA2-PSK PMK, derived here (a 64-hex PSK is the PMK itself; otherwise PBKDF2(passphrase, SSID))
+            let pw = &b[36..36 + pl];
+            hal::wpaauth::wipe(&mut st.psk);
+            st.psk_set = false;
+            if pl == 64 && pw.iter().all(|c| c.is_ascii_hexdigit()) {
+                let h = |c: u8| (c as char).to_digit(16).unwrap_or(0) as u8;
+                for i in 0..32 {
+                    st.psk[i] = h(pw[2 * i]) << 4 | h(pw[2 * i + 1]);
+                }
+                st.psk_set = true;
+            } else if pl >= 8 {
+                st.psk = hal::wpa::wpa_pmk(pw, &b[3..3 + sl]);
+                st.psk_set = true;
+            }
             let ok = mode == 0 || st.pt.is_some();
             o[0] = ok as u8;
             reply(&o[..1])
@@ -352,6 +454,7 @@ fn key_start_sae() -> ! {
     let inp = input();
     let k = &mut w().keyer;
     let (Some(mut st), Some(now)) = (keymsg::decode_start(inp), u64_at(inp, keymsg::START_LEN)) else { exit(ST_BAD_CMD, 0) };
+    own_group_keys(&mut st.kd);
     let src = inp.get(keymsg::START_LEN + 8).copied().unwrap_or(0);
     let mut pmkid = [0u8; 16];
     if let Some(p) = inp.get(keymsg::START_LEN + 9..keymsg::START_LEN + 25) {
@@ -360,6 +463,11 @@ fn key_start_sae() -> ! {
     let pmk = match src {
         1 => tab().pmk_for(&st.sta, now),
         2 => cache().get(&st.sta, &pmkid, now),
+        // S3a: WPA2-PSK — this server's own PMK
+        3 => {
+            let s = w();
+            s.psk_set.then_some(s.psk)
+        }
         _ => None,
     };
     let mut frame = [0u8; FRAME_MAX];
@@ -373,7 +481,7 @@ fn key_start_sae() -> ! {
             r
         }
         // no PMK here (expired / never accepted): a handshake that cannot start
-        None => Out::Failed(hal::wpakeyer::Done { sta: st.sta, akm8: true, cached: src == 2, auth: hal::wpakeyer::Auth::new() }),
+        None => Out::Failed(hal::wpakeyer::Done { sta: st.sta, akm8: src != 3, cached: src == 2, auth: hal::wpakeyer::Auth::new() }),
     };
     hal::wpaauth::wipe(&mut st.kd.gtk);
     let n = keymsg::encode_out(&r, &frame, &mut o);
@@ -420,6 +528,7 @@ pub extern "C" fn _start() -> ! {
         CMD_KEY_START | CMD_KEY_EXPECT | CMD_KEY_EAPOL | CMD_KEY_TICK | CMD_KEY_ABORT => key_cmd(cmd),
         CMD_KEY_START_SAE => key_start_sae(),
         CMD_SAE_SETUP | CMD_SAE_RX | CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => sae_cmd(cmd),
+        CMD_GROUP_NEW => group_new(),
         CMD_PMKSA_COUNT => exit(ST_OK, unsafe { (*core::ptr::addr_of!(WORK)).pmksa.len() } as u32),
         CMD_SELFTEST_ARM_FAULT => {
             unsafe { ARMED = sta_of(input()) };
