@@ -101,8 +101,11 @@ qemu-system-aarch64 -M virt -cpu cortex-a72 -m 512M -nographic -serial mon:stdio
 QPID=$!
 cleanup() { [ "${MC_E2E_KEEP:-0}" = 1 ] || { kill "$QPID" 2>/dev/null; rm -f "$DISK" "$JAR" "${JARH:-}"; }; }
 trap cleanup EXIT
-# "serving" is printed only once DHCP has leased an address (QEMU user-net serves 10.0.2.15).
-for _ in $(seq 1 90); do grep -qa "\[MC\] heqk Mission Control serving" "$LOG" && break; sleep 1; done
+# Wait for the LEASE line itself (QEMU user-net serves 10.0.2.15). A "serving ... (link-local fallback)" line comes
+# first: smoltcp's DHCP socket reports Deconfigured on its first poll, so the node announces the fallback before the
+# lease. Breaking on any "serving" line raced that on slow CI runners (#1218: the lease landed a moment later and every
+# API check then passed through the 10.0.2.15 port forward).
+for _ in $(seq 1 90); do grep -qa "\[MC\] heqk Mission Control serving on http://10.0.2.15" "$LOG" && break; sleep 1; done
 grep -a "\[MC\]" "$LOG" | sed 's/^/        /'
 grep -qa "serving on http://10.0.2.15:80 (DHCP lease)" "$LOG" && ok "address obtained by DHCP (10.0.2.15)" || bad "no DHCP lease (expected 10.0.2.15)"
 
