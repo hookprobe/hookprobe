@@ -91,6 +91,7 @@ mod mgmtabi;
 #[cfg(feature = "mcserve")]
 mod hsh;
 mod el0srv; // ADR 0065 step 2: the resident EL0 driver-server substrate (el0-wifi)
+mod el0as; // ADR 0065 S0: each resident EL0 server in its own address space
 mod datavol;
 mod ownerjournal;
 mod rpmb;
@@ -5400,6 +5401,15 @@ fn cm5_p10_probe() {
                                             kprint!("   [WDOG] armed={} pets={} worst_loop_gap_ms={} prev_reset_was_watchdog={}\n", wa, wp, wg, wr);
                                             #[cfg(feature = "mctls")]
                                             {
+                                                // ADR 0065 S0: once, with every resident server loaded (el0-hsh loads on first use; el0-lansvc
+                                                // after el0-wifi), the isolation report over all of them — the metal proof
+                                                static mut EL0_AS_ALL: bool = false;
+                                                if !unsafe { EL0_AS_ALL } {
+                                                    unsafe { EL0_AS_ALL = true };
+                                                    #[cfg(feature = "mcserve")]
+                                                    let _ = crate::hsh::ensure_loaded();
+                                                    let _ = crate::el0as::report();
+                                                }
                                                 let (c, f, r, h) = crate::el0srv::keyer::stats();
                                                 let (rxe, rxr, txe, txl, cte, ctl) = crate::el0srv::keyer::rx_stats();
                                                 kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl);

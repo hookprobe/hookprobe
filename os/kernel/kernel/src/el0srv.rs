@@ -79,6 +79,7 @@ mod imp {
 
     pub struct Server {
         entry: usize,
+        aspace: crate::el0as::El0As,
         sp_top: usize,
         ctrl: usize,
         pub rx: PagedRing,
@@ -115,33 +116,15 @@ mod imp {
         /// Step 2's fake device: a RAM page, mapped as data.
         FakeDev,
     }
-    fn map(va: usize, pa: usize, k: Kind) -> bool {
-        #[cfg(feature = "cm5")]
-        {
-            use arch_aarch64::mmu_cm5 as m;
-            match k {
-                Kind::Code => {
-                    m::map_user_code(va, pa);
-                    true
-                }
-                Kind::Data | Kind::FakeDev => m::map_user_data(va, pa),
-                Kind::Dev => {
-                    m::map_user_device(va, pa);
-                    true
-                }
-                Kind::DataRo => m::map_user_data_ro(va, pa),
-            }
-        }
-        #[cfg(not(feature = "cm5"))]
-        {
-            let m = arch_aarch64::Mmu;
-            match k {
-                Kind::Code => m.map_user_code_page(va, pa),
-                Kind::Data | Kind::FakeDev => m.map_user_data_page(va, pa),
-                Kind::Dev => m.map_user_device_page(va, pa),
-                Kind::DataRo => m.map_user_data_ro_page(va, pa),
-            }
-        }
+    /// Map one page into THIS server's own address space (ADR 0065 S0).
+    fn map(a: &crate::el0as::El0As, va: usize, pa: usize, k: Kind) -> bool {
+        use crate::el0as::Map;
+        a.map(va, pa, match k {
+            Kind::Code => Map::Code,
+            Kind::Data | Kind::FakeDev => Map::Data,
+            Kind::DataRo => Map::DataRo,
+            Kind::Dev => Map::Dev,
+        })
     }
     fn zero(f: usize) {
         unsafe { core::ptr::write_bytes(f as *mut u8, 0, 0x1000) };
@@ -165,8 +148,10 @@ mod imp {
 
     pub fn load(grant: Grant) -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(WIFI_ELF).map_err(|_| "ELF parse")?;
+        let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
         let mut s = Server {
             entry: parsed.entry,
+            aspace,
             sp_top: BASE + STACK_OFF + STACK_SIZE,
             ctrl: 0,
             rx: PagedRing { frames: [0; RING_PAGES] },
@@ -208,19 +193,19 @@ mod imp {
                 } else {
                     Kind::DataRo
                 };
-                if !map(g.vaddr + voff, f, k) {
+                if !map(&aspace, g.vaddr + voff, f, k) {
                     return Err("map image page refused");
                 }
             }
         }
         for p in 0..STACK_PAGES {
             let f = alloc();
-            if f == 0 || !map(BASE + STACK_OFF + p * 0x1000, f, Kind::Data) {
+            if f == 0 || !map(&aspace, BASE + STACK_OFF + p * 0x1000, f, Kind::Data) {
                 return Err("map stack refused");
             }
         }
         let c = alloc();
-        if c == 0 || !map(BASE + CTRL_OFF, c, Kind::Data) {
+        if c == 0 || !map(&aspace, BASE + CTRL_OFF, c, Kind::Data) {
             return Err("map control page refused");
         }
         zero(c);
@@ -228,12 +213,12 @@ mod imp {
         match grant {
             Grant::None => {}
             Grant::Fake(d) => {
-                if !map(BASE + DEV_OFF, d, Kind::FakeDev) {
+                if !map(&aspace, BASE + DEV_OFF, d, Kind::FakeDev) {
                     return Err("map device refused");
                 }
             }
             Grant::Mmio(d) => {
-                if !map(BASE + DEV_OFF, d, Kind::Dev) {
+                if !map(&aspace, BASE + DEV_OFF, d, Kind::Dev) {
                     return Err("map device refused");
                 }
             }
@@ -241,13 +226,14 @@ mod imp {
         for (off, r) in [(RX_OFF, &mut s.rx), (TX_OFF, &mut s.tx)] {
             for p in 0..RING_PAGES {
                 let f = alloc();
-                if f == 0 || !map(BASE + off + p * 0x1000, f, Kind::Data) {
+                if f == 0 || !map(&aspace, BASE + off + p * 0x1000, f, Kind::Data) {
                     return Err("map ring refused");
                 }
                 zero(f);
                 r.frames[p] = f;
             }
         }
+        crate::el0as::register("el0-wifi", s.entry, s.aspace);
         Ok(s)
     }
 
@@ -268,7 +254,7 @@ mod imp {
             self.w32(H_CMD, cmd);
             self.w32(H_STATUS, ST_PANIC);
             self.calls += 1;
-            let how = crate::excursion_bounded(self.entry, self.sp_top, BUDGET_US);
+            let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, BUDGET_US);
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
@@ -685,11 +671,15 @@ pub mod keyer {
                 let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
                 #[cfg(feature = "cm5")]
                 bus_probe_check();
+                // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
+                let _ = crate::el0as::report();
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi loaded at {:#x}: the WPA 4-way authenticator and its keys run in EL0 (ADR 0065 step 3b; in-kernel copy = fallback) init={}\n", super::imp::BASE, ok));
                 ok
             }
             Err(why) => {
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi FAILED to load ({}) — the authenticator stays in-kernel\n", why));
+                // the isolation report also runs on this path: a failed load must not hide behind the D5 fallback
+                let _ = crate::el0as::report();
                 false
             }
         }
