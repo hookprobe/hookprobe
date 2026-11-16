@@ -142,7 +142,7 @@ if run C3; then
   st2() { echo "$A3" | awk -v k="$1" '$1 == k {print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) printf "n=%d median=%d p90=%d min=%d max=%d", NR, a[int((NR+1)/2)], a[int(NR*0.9+0.999)], a[1], a[NR]}'; }
   ac=$(st2 cached); af=$(st2 full); echo "  AP + air: first auth frame sent -> connected (ms) — cached PMKSA: $ac | full SAE: $af"
   mc=$(echo "$ac" | grep -o 'median=[0-9]*' | cut -d= -f2); mf=$(echo "$af" | grep -o 'median=[0-9]*' | cut -d= -f2)
-  nc=$(echo "$ac" | grep -o 'n=[0-9]*' | cut -d= -f2); nf=$(echo "$af" | grep -o 'n=[0-9]*' | cut -d= -f2)
+  nc=$(echo "$ac" | grep -o '^n=[0-9]*' | cut -d= -f2); nf=$(echo "$af" | grep -o '^n=[0-9]*' | cut -d= -f2)
   [ "${nc:-0}" -ge $((N - 1)) ] && [ "${nf:-0}" -ge $((N - 1)) ] && [ "${mc:-99999}" -lt "${mf:-0}" ]
   chk $? "C3 cached-PMKSA reconnect median ${mc:-?} ms vs full SAE ${mf:-?} ms, auth frame sent -> connected ($nc / $nf attempts, classified by what went over the air; cached faster)"
 fi
