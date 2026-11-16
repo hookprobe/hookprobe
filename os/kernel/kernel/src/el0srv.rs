@@ -1347,14 +1347,15 @@ pub mod keyer {
         // S2: a fault in a call about NO single station is not containable: a full wipe (the station re-associates);
         // the server is back after the backoff, empty
         let _ = start(&st, 30, &mut fr);
-        let faulted = matches!(wpa_call(CMD_SELFTEST_FAULT, &[], &mut [], None), Some((Call::Fault, _))) && expect(&sta).is_none();
-        let t0 = crate::clock::ticks() / (crate::clock::freq() / 1000).max(1);
-        while crate::clock::ticks() / (crate::clock::freq() / 1000).max(1) < t0 + super::imp::BACKOFF_MS + 5 {}
+        // during the backoff a call about no station is refused; a call about a station (S4) waits the short backoff
+        // out and is answered by the new, wiped incarnation — which has forgotten the station
+        let faulted = matches!(wpa_call(CMD_SELFTEST_FAULT, &[], &mut [], None), Some((Call::Fault, _)))
+            && matches!(wpa_call(hal::wpasrvabi::CMD_PMKSA_COUNT, &[], &mut [], None), Some((Call::Backoff, _)));
         let forgotten = expect(&sta) == Some(None);
         unsafe { WPA = None };
         let pass = m1 && clean1 && m3 && keyed && clean2 && gone && faulted && forgotten;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed: the kernel's copy has a zero TK, the station's TK is in key-transfer slot 0={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, refused during the backoff={} then the new incarnation has forgotten it={}\n",
+            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed: the kernel's copy has a zero TK, the station's TK is in key-transfer slot 0={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, a non-station call refused during the backoff={} a station call waits it out and the new incarnation has forgotten the station={}\n",
             if pass { "PASS" } else { "FAIL" }, m1, clean1, m3, keyed, clean2, gone, faulted, forgotten
         ));
         pass
