@@ -751,6 +751,20 @@ pub mod keyer {
     /// no single station: a fault there is not containable and wipes).
     fn wpa_call(cmd: u32, inp: &[u8], out: &mut [u8], sta: Option<[u8; 6]>) -> Option<(Call, usize)> {
         let s = srv()?;
+        // S4 metal: another station's fault must not reach this one. Right after a contained fault the server sits
+        // out a short backoff (50 ms, doubling per consecutive fault); a call about a station inside it would fail
+        // and, at the keying decision, turn into "unknown PMKID — refused" for a station whose PMKSA is intact. Wait a
+        // short backoff out (<= 100 ms: well inside the loop-gap gate) instead of failing.
+        if sta.is_some() {
+            let left = s.backoff_left_ms();
+            if left > 0 && left <= 100 {
+                let ms = |t: u64| t / (crate::clock::freq() / 1000).max(1);
+                let until = ms(crate::clock::ticks()) + left + 1;
+                while ms(crate::clock::ticks()) < until {
+                    core::hint::spin_loop();
+                }
+            }
+        }
         // the follow-up owed for a contained fault, once the server answers again
         if s.backoff_left_ms() == 0 {
             if let Some((p, poison)) = unsafe { (*core::ptr::addr_of_mut!(PENDING)).take() } {
