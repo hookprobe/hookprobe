@@ -82,6 +82,9 @@ pub enum Class {
 /// Bus-server faults within this window that escalate to a firmware reload (design §5: "3 bus faults / 60 s").
 pub const BUS_FAULTS_N: usize = 3;
 pub const BUS_FAULT_WINDOW_MS: u64 = 60_000;
+/// Faults this close to the previous one are the SAME episode (a restart that faulted again while recovering) — metal
+/// C1: one stuck CMD53 cascaded into 4 faults within seconds and, counted singly, escalated straight to a reload.
+pub const BUS_EPISODE_MS: u64 = 2_000;
 
 impl Class {
     pub fn name(self) -> &'static str {
@@ -292,11 +295,14 @@ impl Heal {
         }
         // 1b. a burst of bus-server faults (each already restarted the server): the bus itself is not recovering
         if s.bus_faults != self.bus_seen {
-            let d = s.bus_faults.wrapping_sub(self.bus_seen).min(BUS_FAULTS_N as u64);
             self.bus_seen = s.bus_faults;
-            for _ in 0..d {
+            // one mark per EPISODE: a fault within BUS_EPISODE_MS of the last one belongs to the same episode
+            let last = if self.bus_n > 0 { self.bus_marks[(self.bus_n - 1) % BUS_FAULTS_N] } else { 0 };
+            if self.bus_n == 0 || now.saturating_sub(last) > BUS_EPISODE_MS {
                 self.bus_marks[self.bus_n % BUS_FAULTS_N] = now;
                 self.bus_n += 1;
+            } else {
+                self.bus_marks[(self.bus_n - 1) % BUS_FAULTS_N] = now; // the episode continues
             }
             let oldest = self.bus_marks[self.bus_n % BUS_FAULTS_N];
             if self.bus_n >= BUS_FAULTS_N && now.saturating_sub(oldest) <= BUS_FAULT_WINDOW_MS && self.pending.is_none() {
@@ -895,6 +901,14 @@ pub fn selftest() -> bool {
         s.bus_faults = if t >= 82_000 { 3 } else if t >= 42_000 { 2 } else if t >= 2_000 { 1 } else { 0 };
     });
     let bus_spread = m8.count(b'L') == 0 && m8.count(b'R') == 0;
+    // a cascade (4 faults within 1.5 s, one stuck CMD53) is ONE episode: no reload
+    let mut h9 = Heal::from_boot(None, false);
+    let mut m9 = Mock::new(Probe::Awake);
+    run(&mut h9, &mut m9, 1_000, 30_000, &mut |t, s| {
+        s.queued = 0;
+        s.bus_faults = if t >= 2_500 { 4 } else if t >= 2_000 { 3 } else if t >= 1_500 { 2 } else if t >= 1_200 { 1 } else { 0 };
+    });
+    let bus_cascade = m9.count(b'L') == 0;
     // 8. the record format: written, taken once, a flipped word never reads back
     let record = arch_aarch64::crashrec::heal_selftest();
     // 9. the station set; the published status; no heap use by any of it
@@ -908,13 +922,13 @@ pub fn selftest() -> bool {
     let st = status().0.starts_with("degraded") && status().5;
     publish(&Heal::from_boot(None, false));
     let heap = crate::heap::used() == heap0;
-    let pass = congestion && nosta && sleep && ladder && diag && once && degrade && early && later && crash1 && crash2 && refill && bus_burst && bus_spread && record && sta && st && heap;
+    let pass = congestion && nosta && sleep && ladder && diag && once && degrade && early && later && crash1 && crash2 && refill && bus_burst && bus_spread && bus_cascade && record && sta && st && heap;
     // BENCH ONLY: the metal trigger reaches the real ladder ([P-wifiheal-bench], its own line)
     #[cfg(feature = "wifiheal-bench")]
     let pass = pass && bench_selftest();
     arch_aarch64::_print(format_args!(
-        " [P-wifiheal] {} — audit A7 Wi-Fi self-heal: congestion (completions advancing) no action={} no station no action={} power-save / gone station: kicks then no recovery={} freeze ladder kick 100ms/500ms -> bounce 10s -> reload 25s -> reload 85s (60s backoff) -> RebootOnce 100s={} diagnostics captured + recorded before every bounce / reload / reboot={} at most one reboot={} post-reboot recurrence -> Degrade, no reset, halts ignored={} early self-heal counts as rebooted={} new incident after the window={} firmware halt -> reload at once, backoff, failed reload retried, then reboot={}/{} budget refill after 1 h={} 3 bus-server faults in 60 s -> one reload={} the same 3 spread over 80 s -> none={} record taken once, torn = none={} stations={} status={} heap growth 0={}\n",
-        if pass { "PASS" } else { "FAIL" }, congestion, nosta, sleep, ladder, diag, once, degrade, early, later, crash1, crash2, refill, bus_burst, bus_spread, record, sta, st, heap
+        " [P-wifiheal] {} — audit A7 Wi-Fi self-heal: congestion (completions advancing) no action={} no station no action={} power-save / gone station: kicks then no recovery={} freeze ladder kick 100ms/500ms -> bounce 10s -> reload 25s -> reload 85s (60s backoff) -> RebootOnce 100s={} diagnostics captured + recorded before every bounce / reload / reboot={} at most one reboot={} post-reboot recurrence -> Degrade, no reset, halts ignored={} early self-heal counts as rebooted={} new incident after the window={} firmware halt -> reload at once, backoff, failed reload retried, then reboot={}/{} budget refill after 1 h={} 3 bus-server faults in 60 s -> one reload={} the same 3 spread over 80 s -> none={} a 4-fault cascade in 1.5 s = one episode, no reload={} record taken once, torn = none={} stations={} status={} heap growth 0={}\n",
+        if pass { "PASS" } else { "FAIL" }, congestion, nosta, sleep, ladder, diag, once, degrade, early, later, crash1, crash2, refill, bus_burst, bus_spread, bus_cascade, record, sta, st, heap
     ));
     pass
 }
