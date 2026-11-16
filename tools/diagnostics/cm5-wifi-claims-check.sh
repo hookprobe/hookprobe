@@ -127,7 +127,7 @@ if run C3; then
   # on the Pi: time from `reconnect` to wpa_state=COMPLETED (4-way done), polled every 10 ms
   T=$(psudo "sh -c 'W=\"wpa_cli -p /run/hq-claims -i wlan1\"; t() { \$W disconnect >/dev/null; sleep 1; [ \"\$1\" = full ] && \$W pmksa_flush >/dev/null; a=\$(date +%s%N); \$W reconnect >/dev/null; i=0; while ! \$W status | grep -q wpa_state=COMPLETED; do sleep 0.01; i=\$((i+1)); [ \$i -gt 1500 ] && break; done; echo \$1 \$(( (\$(date +%s%N) - a) / 1000000 )); sleep 1; }; for k in \$(seq 1 $N); do t cached; t full; done'")
   pi "rm -f /tmp/hq-claims.conf"; psudo "kill \$(cat /run/hq-claims.pid)" >/dev/null 2>&1; sleep 1
-  SUPLOG=$(psudo "grep -aE 'PMKSA cache entry found|SME: Trying to authenticate|CTRL-EVENT-CONNECTED' /tmp/hq-claims-sup.log")
+  SUPLOG=$(psudo "grep -aE \"Control interface command 'RECONNECT'|SME: Trying to authenticate|Authentication request send successfully|SME: Authentication response|CTRL-EVENT-CONNECTED\" /tmp/hq-claims-sup.log")
   # what the client did on the "cached" attempts (no key material in these lines)
   echo "  supplicant: PMKSA cache tried $(psudo "grep -c 'try to use PMKSA caching' /tmp/hq-claims-sup.log") | SAE auth started $(psudo "grep -c 'SME: Trying to authenticate with' /tmp/hq-claims-sup.log") | PMKSA rejected/dropped $(psudo "grep -c 'PMKSA caching attempt rejected\|Drop PMKSA\|PMKSA-CACHE-REMOVED' /tmp/hq-claims-sup.log") | assoc reject $(psudo "grep -c 'CTRL-EVENT-ASSOC-REJECT' /tmp/hq-claims-sup.log") | auth timeout $(psudo "grep -c 'Authentication with .* timed out\|SME: Authentication timeout' /tmp/hq-claims-sup.log")"
   psudo "grep -aE 'try to use PMKSA caching|CTRL-EVENT-ASSOC-REJECT|PMKSA caching attempt rejected|SME: Trying to authenticate|CTRL-EVENT-CONNECTED|auth_alg|status_code=' /tmp/hq-claims-sup.log | head -16 | cut -c1-170" | sed 's/^/    sup: /'
@@ -135,15 +135,16 @@ if run C3; then
   psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1
   st() { echo "$T" | awk -v k="$1" '$1 == k {print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) printf "n=%d median=%d p90=%d min=%d max=%d", NR, a[int((NR+1)/2)], a[int(NR*0.9+0.999)], a[1], a[NR]}'; }
   sc=$(st cached); sf=$(st full); echo "  end-to-end reconnect (command -> 4-way complete, incl. the client's scan), ms — cached PMKSA: $sc | full SAE: $sf"
-  # the claim itself: authentication start -> connected, from the supplicant's own timestamps (the scan excluded),
-  # classified by what the client actually did (a "PMKSA cache entry found" line before the attempt = cached)
-  A3=$(echo "$SUPLOG" | awk '/PMKSA cache entry found/ {c=1} /SME: Trying to authenticate/ {t=$1+0; k=(c?"cached":"full"); c=0} /CTRL-EVENT-CONNECTED/ && t {printf "%s %d\n", k, ($1-t)*1000; t=0}')
+  # the claim itself, AP + air only: the client's first authentication frame SENT -> connected (the client's scan and
+  # its ~0.5 s driver latency to send that frame are excluded — metal: both are client-side, identical for both kinds).
+  # An attempt is "full" if any SAE (auth_type=3) response came back in it, "cached" otherwise (open auth + PMKID).
+  A3=$(echo "$SUPLOG" | awk '/RECONNECT/ {inatt=1; t=0; sae=0; next} inatt && /Authentication request send successfully/ && !t {t=$1+0} inatt && /auth_type=3/ {sae=1} inatt && /CTRL-EVENT-CONNECTED/ && t {printf "%s %d\n", (sae?"full":"cached"), ($1-t)*1000; inatt=0}')
   st2() { echo "$A3" | awk -v k="$1" '$1 == k {print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) printf "n=%d median=%d p90=%d min=%d max=%d", NR, a[int((NR+1)/2)], a[int(NR*0.9+0.999)], a[1], a[NR]}'; }
-  ac=$(st2 cached); af=$(st2 full); echo "  authentication -> connected (ms) — cached PMKSA: $ac | full SAE: $af"
+  ac=$(st2 cached); af=$(st2 full); echo "  AP + air: first auth frame sent -> connected (ms) — cached PMKSA: $ac | full SAE: $af"
   mc=$(echo "$ac" | grep -o 'median=[0-9]*' | cut -d= -f2); mf=$(echo "$af" | grep -o 'median=[0-9]*' | cut -d= -f2)
   nc=$(echo "$ac" | grep -o 'n=[0-9]*' | cut -d= -f2); nf=$(echo "$af" | grep -o 'n=[0-9]*' | cut -d= -f2)
   [ "${nc:-0}" -ge $((N - 1)) ] && [ "${nf:-0}" -ge $((N - 1)) ] && [ "${mc:-99999}" -lt "${mf:-0}" ]
-  chk $? "C3 cached-PMKSA authentication->connected median ${mc:-?} ms vs full SAE ${mf:-?} ms ($nc / $nf attempts classified from the client log; cached faster)"
+  chk $? "C3 cached-PMKSA reconnect median ${mc:-?} ms vs full SAE ${mf:-?} ms, auth frame sent -> connected ($nc / $nf attempts, classified by what went over the air; cached faster)"
 fi
 
 # ================= P53: post-wipe PMKSA recovery (operator 2026-11-16; task 111) =================
