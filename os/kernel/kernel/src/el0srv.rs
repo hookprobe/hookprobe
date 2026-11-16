@@ -1518,6 +1518,9 @@ pub fn sae_selftest() -> bool {
 /// place they may sit in kernel memory: this array, which the scan skips.
 #[cfg(all(feature = "mctls", feature = "wpa3"))]
 #[cfg_attr(feature = "cm5", allow(dead_code))] // the K1 scan is a QEMU selftest
+static mut K1_CANARY: [u8; 16] = [0; 16];
+#[cfg(all(feature = "mctls", feature = "wpa3"))]
+#[cfg_attr(feature = "cm5", allow(dead_code))]
 static mut K1N: [[u8; 16]; 5] = [[0; 16]; 5];
 #[cfg(all(feature = "mctls", feature = "wpa3"))]
 #[cfg_attr(feature = "cm5", allow(dead_code))] // the K1 scan is a QEMU selftest
@@ -1542,26 +1545,34 @@ fn k1_scan() -> bool {
     let xhi = xlo + core::mem::size_of::<[[u8; 16]; 5]>();
     let set = n.iter().all(|k| *k != [0; 16]);
     let heads: [u64; 5] = core::array::from_fn(|i| u64::from_le_bytes(n[i][..8].try_into().unwrap_or([0; 8])));
-    let mut hits = [0u32; 5];
-    let mut a = lo;
-    while a + 16 <= hi {
-        if a + 16 > xlo && a < xhi {
-            a = xhi;
-            continue;
-        }
-        let w = unsafe { core::ptr::read_unaligned(a as *const u64) };
-        for (i, h) in heads.iter().enumerate() {
-            if w == *h && unsafe { core::slice::from_raw_parts(a as *const u8, 16) } == n[i] {
-                hits[i] += 1;
+    let count = || {
+        let mut hits = [0u32; 5];
+        let mut a = lo;
+        while a + 16 <= hi {
+            if a + 16 > xlo && a < xhi {
+                a = xhi;
+                continue;
             }
+            let w = unsafe { core::ptr::read_unaligned(a as *const u64) };
+            for (i, h) in heads.iter().enumerate() {
+                if w == *h && unsafe { core::slice::from_raw_parts(a as *const u8, 16) } == n[i] {
+                    hits[i] += 1;
+                }
+            }
+            a += 1;
         }
-        a += 1;
-    }
+        hits
+    };
+    let hits = count();
+    // positive control: the scanner finds a key planted in .bss (then the plant is wiped)
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(K1_CANARY), n[3]) };
+    let found = count()[3] >= 1;
+    unsafe { core::ptr::write_volatile(core::ptr::addr_of_mut!(K1_CANARY), [0; 16]) };
     let clean = hits.iter().all(|&h| h == 0);
-    let pass = set && clean;
+    let pass = set && clean && found;
     arch_aarch64::_print(format_args!(
-        " [P-el0wpa-k1] {} — ADR 0065 4g S3d K1: after SAE + WPA2 joins and new group keys, kernel memory {:#x}..{:#x} ({} KiB: rodata, data, bss, heap) holds none of the keys: SAE PMK {} TK {} PSK PMK {} GTK {} IGTK {} hit(s) (needles set={})\n",
-        if pass { "PASS" } else { "FAIL" }, lo, hi, (hi - lo) / 1024, hits[0], hits[1], hits[2], hits[3], hits[4], set
+        " [P-el0wpa-k1] {} — ADR 0065 4g S3d K1: after SAE + WPA2 joins and new group keys, kernel memory {:#x}..{:#x} ({} KiB: rodata, data, bss, heap) holds none of the keys: SAE PMK {} TK {} PSK PMK {} GTK {} IGTK {} hit(s) (needles set={}; positive control: a GTK copy planted in .bss is found={})\n",
+        if pass { "PASS" } else { "FAIL" }, lo, hi, (hi - lo) / 1024, hits[0], hits[1], hits[2], hits[3], hits[4], set, found
     ));
     // the needles themselves go too
     unsafe { *core::ptr::addr_of_mut!(K1N) = [[0; 16]; 5] };
