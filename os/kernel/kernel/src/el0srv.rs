@@ -648,7 +648,9 @@ mod imp {
 // the bridge is reached through the CM5 driver hook (and, for SAE, the wpa3 selftest): unused in other QEMU builds
 #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
 pub mod keyer {
-    use super::imp::{load, Call, Grant, Server};
+    use super::imp::{Call, Server};
+    #[cfg(feature = "cm5")]
+    use super::imp::{load, Grant};
     use hal::wifisrvabi::{keymsg, saemsg, *};
     use hal::wpakeyer::{Out, Start};
 
@@ -659,14 +661,91 @@ pub mod keyer {
     /// Handshakes started in el0-wifi (the metal proof that the EL0 path, not the in-kernel copy, served them).
     pub static mut EL0_STARTS: u64 = 0;
 
+    /// The WPA security server (S2: every keying / SAE / PMKSA call goes here — never to the bus server).
     fn srv() -> Option<&'static mut Server> {
+        unsafe { (*core::ptr::addr_of_mut!(WPA)).as_mut() }
+    }
+    /// The bus server (frames, control requests, the SDHCI grant).
+    fn bus_srv() -> Option<&'static mut Server> {
         unsafe { (*core::ptr::addr_of_mut!(WIFI)).as_mut() }
     }
 
-    fn out_call(cmd: u32, inp: &[u8], frame: &mut [u8]) -> Option<Out> {
+    // ---- S2: fault containment for the security server (design docs/design/wifi-el0-split.md §4) ----
+    /// The station whose call faulted last, and the follow-up owed once the backoff is over: (station, poisoned =
+    /// its second fault in a row: its PMKSA entry goes too).
+    static mut FAULT_STA: Option<[u8; 6]> = None;
+    static mut PENDING: Option<([u8; 6], bool)> = None;
+    static mut CONSEC: u32 = 0;
+    /// Contained faults (one station forgotten), poisoned stations (PMKSA entry dropped), full wipes signalled.
+    pub static mut CONTAINED: u64 = 0;
+    pub static mut POISONED: u64 = 0;
+    /// Set by a full wipe; the driver takes it (deauthenticate everyone, re-provision the passphrase).
+    static mut WIPED: bool = false;
+    /// A full wipe: every secret el0-wpa held is gone, every station must re-authenticate.
+    fn full_wipe() {
+        if let Some(s) = srv() {
+            s.full_wipe();
+        }
+        super::imp::keyx_zero();
+        unsafe {
+            WIPED = true;
+            PENDING = None;
+            FAULT_STA = None;
+            CONSEC = 0;
+        }
+    }
+    /// Taken by the driver after a full wipe (it then deauthenticates every station and re-sends the passphrase).
+    #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
+    pub(crate) fn take_wiped() -> bool {
+        unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(WIPED), false) }
+    }
+    /// One call to the security server with containment. `sta` = the station the call is about (None = a call about
+    /// no single station: a fault there is not containable and wipes).
+    fn wpa_call(cmd: u32, inp: &[u8], out: &mut [u8], sta: Option<[u8; 6]>) -> Option<(Call, usize)> {
         let s = srv()?;
+        // the follow-up owed for a contained fault, once the server answers again
+        if s.backoff_left_ms() == 0 {
+            if let Some((p, poison)) = unsafe { (*core::ptr::addr_of_mut!(PENDING)).take() } {
+                let _ = s.call_io(CMD_KEY_ABORT, &p, &mut []);
+                let mut f = [0u8; 15];
+                f[..6].copy_from_slice(&p);
+                f[14] = 1; // forget this station's SAE state outright
+                let _ = s.call_io(CMD_SAE_FORGET, &f, &mut [0u8; 1]);
+                if poison {
+                    let mut r = [0u8; 7];
+                    r[..6].copy_from_slice(&p);
+                    let _ = s.call_io(CMD_PMKSA_REMOVE, &r, &mut []);
+                    unsafe { POISONED += 1 };
+                }
+            }
+        }
+        let (c, n) = s.call_io(cmd, inp, out);
+        match c {
+            Call::Done(st, ..) if st == hal::wpasrvabi::ST_STATE_BAD => {
+                full_wipe();
+                return Some((Call::Fault, 0));
+            }
+            Call::Fault => unsafe {
+                CONSEC += 1;
+                match sta {
+                    Some(x) if CONSEC < 3 => {
+                        let poison = FAULT_STA == Some(x);
+                        FAULT_STA = Some(x);
+                        PENDING = Some((x, poison));
+                        CONTAINED += 1;
+                    }
+                    _ => full_wipe(),
+                }
+            },
+            Call::Done(..) => unsafe { CONSEC = 0 },
+            Call::Backoff => {}
+        }
+        Some((c, n))
+    }
+
+    fn out_call(cmd: u32, inp: &[u8], frame: &mut [u8], sta: Option<[u8; 6]>) -> Option<Out> {
         let mut o = [0u8; keymsg::OUT_MAX];
-        let (c, n) = s.call_io(cmd, inp, &mut o);
+        let (c, n) = wpa_call(cmd, inp, &mut o, sta)?;
         let r = match c {
             Call::Done(ST_OK, ..) => keymsg::decode_out(&o[..n], frame),
             _ => None,
@@ -678,7 +757,7 @@ pub mod keyer {
         let mut inp = [0u8; keymsg::START_LEN + 8];
         keymsg::encode_start(st, &mut inp);
         inp[keymsg::START_LEN..].copy_from_slice(&now.to_le_bytes());
-        let r = out_call(CMD_KEY_START, &inp, frame);
+        let r = out_call(CMD_KEY_START, &inp, frame, Some(st.sta));
         hal::wpaauth::wipe(&mut inp);
         if r.is_some() {
             unsafe { EL0_STARTS += 1 };
@@ -686,9 +765,8 @@ pub mod keyer {
         r
     }
     fn expect(sta: &[u8; 6]) -> Option<Option<(bool, u64)>> {
-        let s = srv()?;
         let mut o = [0u8; 10];
-        let (c, n) = s.call_io(CMD_KEY_EXPECT, sta, &mut o);
+        let (c, n) = wpa_call(CMD_KEY_EXPECT, sta, &mut o, Some(*sta))?;
         if !matches!(c, Call::Done(ST_OK, ..)) || n != 10 {
             return None;
         }
@@ -704,25 +782,29 @@ pub mod keyer {
         inp[..6].copy_from_slice(sta);
         inp[6..14].copy_from_slice(&now.to_le_bytes());
         inp[14..14 + m.len()].copy_from_slice(m);
-        let r = out_call(CMD_KEY_EAPOL, &inp[..14 + m.len()], frame);
+        let r = out_call(CMD_KEY_EAPOL, &inp[..14 + m.len()], frame, Some(*sta));
         hal::wpaauth::wipe(&mut inp);
         r
     }
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     fn tick(now: u64, frame: &mut [u8]) -> Option<Out> {
-        out_call(CMD_KEY_TICK, &now.to_le_bytes(), frame)
+        out_call(CMD_KEY_TICK, &now.to_le_bytes(), frame, None)
     }
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     fn abort(sta: &[u8; 6]) {
-        if let Some(s) = srv() {
-            let _ = s.call_io(CMD_KEY_ABORT, sta, &mut []);
-        }
+        let _ = wpa_call(CMD_KEY_ABORT, sta, &mut [], Some(*sta));
     }
 
     // ---- steps 3c / 3d: SAE + PMKSA in el0-wifi (the SAE PMK never enters the kernel) ----
+    /// A security-server call that answers ST_OK + bytes; the station it is about comes from the message layout.
     fn ok_call(cmd: u32, inp: &[u8], out: &mut [u8]) -> Option<usize> {
-        let s = srv()?;
-        let (c, n) = s.call_io(cmd, inp, out);
+        let mac = |o: usize| inp.get(o..o + 6).map(|b| <[u8; 6]>::try_from(b).unwrap_or([0; 6]));
+        let sta = match cmd {
+            CMD_SAE_RX => mac(6),
+            CMD_SAE_KEYING | CMD_SAE_FORGET | CMD_PMKSA_REMOVE => mac(0),
+            _ => None,
+        };
+        let (c, n) = wpa_call(cmd, inp, out, sta)?;
         matches!(c, Call::Done(ST_OK, ..)).then_some(n)
     }
     pub(crate) fn sae_setup(mode: u8, clear: bool, ssid: &[u8], pw: &[u8]) -> bool {
@@ -779,7 +861,7 @@ pub mod keyer {
         inp[keymsg::START_LEN..keymsg::START_LEN + 8].copy_from_slice(&now.to_le_bytes());
         inp[keymsg::START_LEN + 8] = src;
         inp[keymsg::START_LEN + 9..].copy_from_slice(pmkid);
-        let r = out_call(CMD_KEY_START_SAE, &inp, frame);
+        let r = out_call(CMD_KEY_START_SAE, &inp, frame, Some(st.sta));
         hal::wpaauth::wipe(&mut inp);
         if matches!(r, Some(Out::Send(_))) {
             unsafe { EL0_STARTS += 1 };
@@ -809,7 +891,7 @@ pub mod keyer {
     /// reads in-kernel instead).
     pub(crate) fn rx_read(sdb: u32, max_dry: u32, skip: bool, block: bool, rx: &mut [u8]) -> Option<(hal::sdio::RxRead, u32)> {
         use hal::wifisrvabi::rxmsg;
-        let s = srv()?;
+        let s = bus_srv()?;
         let mut inp = [0u8; rxmsg::IN_LEN];
         rxmsg::encode_in(sdb, max_dry, skip, block, rx.len(), &mut inp);
         let mut o = [0u8; OUT_MAX];
@@ -829,6 +911,60 @@ pub mod keyer {
         }
     }
 
+    /// `[P-el0wpa-contain]` (QEMU) — ADR 0065 step 4g S2, operator evidence items 4 and 5 in miniature: a fault in one
+    /// station's call forgets only that station (another station's handshake and the PMKSA cache survive the server's
+    /// restart); a second fault on it in a row also drops its PMKSA entry; a fault outside any station call full-wipes.
+    /// Runs on the loaded el0-wpa after `sae_selftest` left a PMKSA entry for `a`.
+    #[cfg(feature = "wpa3")]
+    pub(crate) fn contain_selftest(a: &[u8; 6]) -> bool {
+        use hal::wpakeyer::{KeyData, FRAME_MAX};
+        use hal::wpasrvabi as wp;
+        let wait = || {
+            let ms = |t: u64| t / (crate::clock::freq() / 1000).max(1);
+            let t0 = ms(crate::clock::ticks());
+            while ms(crate::clock::ticks()) < t0 + super::imp::BACKOFF_MS * 4 + 5 {}
+        };
+        let count = || match wpa_call(wp::CMD_PMKSA_COUNT, &[], &mut [], None) {
+            Some((Call::Done(ST_OK, n, _), _)) => Some(n),
+            _ => None,
+        };
+        let b = [2, 0x5b, 0, 0, 0, 0x0b];
+        let c0 = count();
+        // station A also has a handshake in progress
+        let mut rsne = [0u8; 40];
+        rsne[..4].copy_from_slice(&[0x30, 0x02, 0x01, 0x00]);
+        let st = Start { sta: *a, aa: [2, 0xaa, 0, 0, 0, 1], pmk: [0x11; 32], akm8: false, pmkid: None, anonce: [0x22; 32],
+            kd: KeyData { rsne, rsne_len: 4, gtk: [0x33; 16], gtk_keyid: 1, igtk_kde: None } };
+        let mut fr = [0u8; FRAME_MAX];
+        let a_hs = matches!(start(&st, 6_000, &mut fr), Some(Out::Send(_))) && expect(a).is_some_and(|e| e.is_some());
+        // B's call faults: contained — the follow-up (forget B) runs once the server answers again
+        let (k0, p0) = unsafe { (CONTAINED, POISONED) };
+        let _ = wpa_call(wp::CMD_SELFTEST_ARM_FAULT, &b, &mut [], None);
+        let b_fault = matches!(wpa_call(CMD_KEY_EXPECT, &b, &mut [0u8; 10], Some(b)), Some((Call::Fault, _))) && unsafe { CONTAINED } == k0 + 1;
+        wait();
+        // the restarted server still has A's handshake and the PMKSA cache; B is forgotten
+        let a_kept = expect(a).is_some_and(|e| e.is_some());
+        let cache_kept = c0.is_some_and(|n| n >= 1) && count() == c0;
+        let b_gone = expect(&b) == Some(None);
+        // B faults again in a row: poisoned — its PMKSA entry is dropped too (the cache keeps A's)
+        let _ = wpa_call(wp::CMD_SELFTEST_ARM_FAULT, &b, &mut [], None);
+        let _ = wpa_call(CMD_KEY_EXPECT, &b, &mut [0u8; 10], Some(b));
+        wait();
+        let poisoned = count() == c0 && unsafe { POISONED } == p0 + 1;
+        // a fault in a call about no single station: full wipe — every secret gone, the driver told to re-key everyone
+        let w0 = srv().map_or(0, |s| s.wipes);
+        let _ = take_wiped();
+        let wiped_call = matches!(wpa_call(hal::wpasrvabi::CMD_SELFTEST_FAULT, &[], &mut [], None), Some((Call::Fault, _)));
+        wait();
+        let wiped = wiped_call && srv().is_some_and(|s| s.wipes == w0 + 1) && take_wiped() && count() == Some(0) && expect(a) == Some(None);
+        let pass = a_hs && b_fault && a_kept && cache_kept && b_gone && poisoned && wiped;
+        arch_aarch64::_print(format_args!(
+            " [P-el0wpa-contain] {} — ADR 0065 step 4g S2: per-station fault containment in el0-wpa: station A keying + a PMKSA entry={} a fault in station B's call is contained (not a wipe)={} after the restart A's handshake is still there={} the PMKSA cache is intact ({:?} entries)={} B is forgotten={} B's second fault in a row drops its PMKSA entry only={} a fault outside any station call full-wipes (cache empty, A forgotten, the driver told to re-key everyone)={}\n",
+            if pass { "PASS" } else { "FAIL" }, a_hs, b_fault, a_kept, c0, cache_kept, b_gone, poisoned, wiped
+        ));
+        pass
+    }
+
     /// The bridge functions, for `sae_selftest`.
     #[cfg(feature = "wpa3")]
     pub mod test {
@@ -838,39 +974,46 @@ pub mod keyer {
     /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     pub fn install() -> bool {
-        match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
-            Ok(mut s) => {
-                let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
-                unsafe { WIFI = Some(s) };
-                #[cfg(feature = "cm5")]
-                unsafe {
-                    arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl });
-                }
-                #[cfg(all(feature = "cm5", feature = "wpa3"))]
-                let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
-                #[cfg(feature = "cm5")]
-                bus_probe_check();
-                // S1: the security server, supervised apart from the bus server
-                match super::imp::load_wpa() {
-                    Ok(mut p) => {
-                        let ok = matches!(p.call(hal::wpasrvabi::CMD_INIT), Call::Done(ST_OK, ..));
-                        arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa loaded at {:#x} in its own address space, supervised apart from el0-wifi (ADR 0065 step 4g S1) init={}\n", p.base(), ok));
-                        unsafe { WPA = Some(p) };
-                    }
-                    Err(why) => arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa FAILED to load ({})\n", why)),
-                }
-                // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
-                let _ = crate::el0as::report();
-                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi loaded at {:#x}: the WPA 4-way authenticator and its keys run in EL0 (ADR 0065 step 3b; in-kernel copy = fallback) init={}\n", super::imp::BASE, ok));
+        // S2: the WPA security server first and independently — the keying / SAE / PMKSA hooks go to it, the frame and
+        // control hooks to the bus server; each hook falls back to the in-kernel path when its server is absent (D5)
+        let wpa = match super::imp::load_wpa() {
+            Ok(mut p) => {
+                let ok = matches!(p.call(hal::wpasrvabi::CMD_INIT), Call::Done(ST_OK, ..));
+                arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa loaded at {:#x} in its own address space: the WPA 4-way, SAE and the PMKSA cache run here, supervised apart from the bus server (ADR 0065 step 4g S2) init={}\n", p.base(), ok));
+                unsafe { WPA = Some(p) };
                 ok
             }
             Err(why) => {
-                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi FAILED to load ({}) — the authenticator stays in-kernel\n", why));
-                // the isolation report also runs on this path: a failed load must not hide behind the D5 fallback
-                let _ = crate::el0as::report();
+                arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa FAILED to load ({}) — keying stays in-kernel\n", why));
                 false
             }
+        };
+        let bus = match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
+            Ok(mut s) => {
+                let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
+                unsafe { WIFI = Some(s) };
+                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi (the bus server: SDIO / SDPCM / firmware I/O, no keys) loaded at {:#x} init={}\n", super::imp::BASE, ok));
+                ok
+            }
+            Err(why) => {
+                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi FAILED to load ({}) — the bus stays in-kernel\n", why));
+                false
+            }
+        };
+        #[cfg(feature = "cm5")]
+        unsafe {
+            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped });
         }
+        #[cfg(all(feature = "cm5", feature = "wpa3"))]
+        let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
+        #[cfg(feature = "cm5")]
+        if bus {
+            bus_probe_check();
+        }
+        // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space (also when a load failed:
+        // a failed load must not hide behind the D5 fallback)
+        let _ = crate::el0as::report();
+        wpa && bus
     }
 
     /// ADR 0065 step 4a: el0-wifi reads the SDHCI identity registers through its Device mapping; they must equal the
@@ -879,7 +1022,7 @@ pub mod keyer {
     fn bus_probe_check() -> bool {
         let el1 = arch_aarch64::cyw43::sdhci_ident();
         let mut o = [0u8; PROBE_REGS.len() * 4];
-        let ok = ok_call(CMD_BUS_PROBE, &[], &mut o) == Some(o.len());
+        let ok = bus_srv().is_some_and(|s| matches!(s.call_io(CMD_BUS_PROBE, &[], &mut o), (Call::Done(ST_OK, ..), n) if n == o.len()));
         let el0: [u32; 6] = core::array::from_fn(|i| u32::from_le_bytes([o[i * 4], o[i * 4 + 1], o[i * 4 + 2], o[i * 4 + 3]]));
         let same = ok && el0 == el1;
         arch_aarch64::_print(format_args!(
@@ -893,7 +1036,7 @@ pub mod keyer {
     /// (calls, faults, restarts, handshakes started in EL0) for the beat / health.
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     pub fn stats() -> (u64, u64, u64, u64) {
-        match srv() {
+        match bus_srv() {
             Some(s) => (s.calls, s.faults, s.restarts, unsafe { EL0_STARTS }),
             None => (0, 0, 0, 0),
         }
@@ -907,7 +1050,7 @@ pub mod keyer {
     /// `cyw43::EL0_TX_LOST` set so the driver terminates a write that may have been cut off.
     pub(crate) fn tx_data(seq: u8, ifidx: u8, big: bool, eth: &[u8]) -> Option<hal::sdio::TxWrite> {
         use hal::wifisrvabi::txmsg;
-        let s = srv()?;
+        let s = bus_srv()?;
         let mut inp = [0u8; txmsg::HDR + txmsg::ETH_MAX];
         let n = txmsg::encode_in(seq, ifidx, big, eth, &mut inp)?;
         let (c, _) = s.call_lean(CMD_TX_DATA, &inp[..n], &mut []);
@@ -941,7 +1084,7 @@ pub mod keyer {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn tx_ctl(seq: u8, ifidx: u8, cmd: u32, flags: u32, reqid: u16, reply_len: usize, payload: &[u8]) -> Option<bool> {
         use hal::wifisrvabi::ctlmsg;
-        let s = srv()?;
+        let s = bus_srv()?;
         let mut inp = [0u8; ctlmsg::HDR + hal::bcdc::PAYLOAD_MAX];
         let n = ctlmsg::encode_in(seq, ifidx, cmd, flags, reqid, reply_len, payload, &mut inp)?;
         let (c, _) = s.call_lean(CMD_TX_CTL, &inp[..n], &mut []);
@@ -970,7 +1113,7 @@ pub mod keyer {
     /// server is not loaded (the in-kernel driver serves — D5), "handed_to_wifiheal" = Wi-Fi was degraded after a
     /// failed recovery, "backoff" = restarting after a fault, else "running". Only counters, nothing derived.
     pub fn bus_health() -> (&'static str, u64, u64, u64) {
-        let Some(s) = srv() else { return ("absent", 0, 0, 0) };
+        let Some(s) = bus_srv() else { return ("absent", 0, 0, 0) };
         let st = if crate::wifiheal::status().0.starts_with("degraded") {
             "handed_to_wifiheal"
         } else if s.backoff_left_ms() > 0 {
@@ -979,6 +1122,22 @@ pub mod keyer {
             "running"
         };
         (st, s.restarts, s.faults, s.last_fault_ticks)
+    }
+
+    /// (state, restarts, faults, full wipes, ticks of the last fault or 0, PMKSA entries).
+    pub type WpaHealth = (&'static str, u64, u64, u64, u64, Option<u32>);
+    /// `/api/health` wifi_driver.security (S2): (state, restarts, faults, full wipes, ticks of the last fault or 0,
+    /// PMKSA cache entries or None when it could not be read). State: "absent" = not loaded (keying in-kernel, D5),
+    /// "backoff" = restarting after a fault, else "running". Only counters.
+    pub fn wpa_health() -> Option<WpaHealth> {
+        let Some(s) = srv() else { return Some(("absent", 0, 0, 0, 0, None)) };
+        let st = if s.backoff_left_ms() > 0 { "backoff" } else { "running" };
+        let (r, f, w, t) = (s.restarts, s.faults, s.wipes, s.last_fault_ticks);
+        let n = match wpa_call(hal::wpasrvabi::CMD_PMKSA_COUNT, &[], &mut [], None) {
+            Some((Call::Done(ST_OK, n, _), _)) => Some(n),
+            _ => None,
+        };
+        Some((st, r, f, w, t, n))
     }
 
     /// (frame reads served by el0-wifi, replies the kernel refused).
@@ -990,12 +1149,12 @@ pub mod keyer {
     /// `[P-el0srv-keyer]` (QEMU): a full 4-way through el0-wifi against a simulated station.
     pub fn selftest() -> bool {
         use hal::wpakeyer::{FRAME_MAX, KeyData};
-        let mut s = match load(Grant::None) {
+        let mut s = match super::imp::load_wpa() {
             Ok(s) => s,
             Err(_) => return false,
         };
-        let _ = s.call(CMD_INIT);
-        unsafe { WIFI = Some(s) };
+        let _ = s.call(hal::wpasrvabi::CMD_INIT);
+        unsafe { WPA = Some(s) };
         let sta = [2, 0x5a, 0, 0, 0, 9];
         let aa = [2, 0xaa, 0, 0, 0, 1];
         let mut rsne = [0u8; 40];
@@ -1032,16 +1191,17 @@ pub mod keyer {
         };
         let clean2 = srv().is_some_and(|s| s.io_clean());
         let gone = expect(&sta) == Some(None);
-        // a fault mid-handshake forgets it (the station re-associates); the server is back after the backoff
+        // S2: a fault in a call about NO single station is not containable: a full wipe (the station re-associates);
+        // the server is back after the backoff, empty
         let _ = start(&st, 30, &mut fr);
-        let faulted = srv().is_some_and(|s| s.call(CMD_SELFTEST_FAULT) == Call::Fault) && expect(&sta).is_none();
+        let faulted = matches!(wpa_call(CMD_SELFTEST_FAULT, &[], &mut [], None), Some((Call::Fault, _))) && expect(&sta).is_none();
         let t0 = crate::clock::ticks() / (crate::clock::freq() / 1000).max(1);
         while crate::clock::ticks() / (crate::clock::freq() / 1000).max(1) < t0 + super::imp::BACKOFF_MS + 5 {}
         let forgotten = expect(&sta) == Some(None);
-        unsafe { WIFI = None };
+        unsafe { WPA = None };
         let pass = m1 && clean1 && m3 && keyed && clean2 && gone && faulted && forgotten;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv-keyer] {} — ADR 0065 step 3b: the WPA 4-way in el0-wifi against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed with the station's TK={} and no key left on the page={} the handshake ended={} a fault mid-handshake -> refused during the backoff={} then the new incarnation has forgotten it={}\n",
+            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed with the station's TK={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, refused during the backoff={} then the new incarnation has forgotten it={}\n",
             if pass { "PASS" } else { "FAIL" }, m1, clean1, m3, keyed, clean2, gone, faulted, forgotten
         ));
         pass
@@ -1055,12 +1215,12 @@ pub fn sae_selftest() -> bool {
     use hal::wifisrvabi::*;
     use hal::wpakeyer::{KeyData, Out, Start, FRAME_MAX};
     use keyer::*;
-    let mut s = match imp::load(imp::Grant::None) {
+    let mut s = match imp::load_wpa() {
         Ok(s) => s,
         Err(_) => return false,
     };
-    let _ = s.call(CMD_INIT);
-    unsafe { WIFI = Some(s) };
+    let _ = s.call(hal::wpasrvabi::CMD_INIT);
+    unsafe { WPA = Some(s) };
     let ap = [2, 0xaa, 0, 0, 0, 1];
     let sta = [2, 0x5a, 0, 0, 0, 9];
     let pw = b"correct horse battery";
@@ -1146,14 +1306,16 @@ pub fn sae_selftest() -> bool {
     let kn = test::sae_keying(&sta, 5_000, hal::rsnassoc::OFFER_SAE, Some(&rsn8));
     let nosae = kn.is_some_and(|(k, _, _)| k == Keying::SaeNoSae);
     if !(cached && nosae) {
-        let f = unsafe { (*core::ptr::addr_of!(keyer::WIFI)).as_ref().map_or(0, |s| s.faults) };
+        let f = unsafe { (*core::ptr::addr_of!(keyer::WPA)).as_ref().map_or(0, |s| s.faults) };
         arch_aarch64::_print(format_args!(" [P-el0srv-sae] detail: forget -> {:?}, cached keying -> {:?}, no-PMKID keying -> {:?}, server faults {}\n",
             fwd, kc.map(|(k, _, d)| (k, d.0)), kn.map(|(k, _, d)| (k, d.0)), f));
     }
-    unsafe { WIFI = None };
+    // S2: the containment proof on this server (it holds a PMKSA entry for `sta` now)
+    let _ = keyer::contain_selftest(&sta);
+    unsafe { WPA = None };
     let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae;
     arch_aarch64::_print(format_args!(
-        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d: WPA3 in el0-wifi against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={}\n",
+        " [P-el0srv-sae] {} — ADR 0065 steps 3c/3d + 4g S2: WPA3 in el0-wpa against a real SAE station: setup (PT derived in EL0)={} its commit answered with ours={} our commit verifies at the station={} confirm -> Accepted, PMKID = the station's, our confirm verifies={} no secret on the shared page={} keying decided in EL0 (SaeFresh)={} 4-way started from the server's own PMK (the kernel passed none)={} M2 -> M3={} M4 -> keyed with the station's SAE-derived TK={} page clean={} after the station left: PMKSA-caching reconnect -> SaeCached={} no PMKID -> SaeNoSae={}\n",
         if pass { "PASS" } else { "FAIL" }, setup, committed, ok_peer, accepted, clean1, fresh, m1, m3, keyed, clean2, cached, nosae
     ));
     pass
@@ -1161,5 +1323,5 @@ pub fn sae_selftest() -> bool {
 
 #[cfg(all(feature = "mctls", feature = "wpa3"))]
 fn srv_clean() -> bool {
-    unsafe { (*core::ptr::addr_of!(keyer::WIFI)).as_ref().is_some_and(|s| s.io_clean()) }
+    unsafe { (*core::ptr::addr_of!(keyer::WPA)).as_ref().is_some_and(|s| s.io_clean()) }
 }
