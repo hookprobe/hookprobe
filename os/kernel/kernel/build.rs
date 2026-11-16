@@ -72,6 +72,9 @@ fn main() {
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-hsh", "el0hsh-target", feat, "el0_hsh.elf");
         // ADR 0065 step 2: el0-wifi, the resident EL0 Wi-Fi driver server (step 2: a fake device)
         build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-wifi", "el0wifi-target", feat, "el0_wifi.elf");
+        // ADR 0065 step 4g: el0-wpa, the separate WPA security server (same substrate, its own address space)
+        build_el0_crate(&dir, &std::env::var("OUT_DIR").unwrap(), "el0-wpa", "el0wpa-target", feat, "el0_wpa.elf");
+        println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/wpasrvabi.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/wifisrvabi.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/el0ring.rs").display());
         println!("cargo:rerun-if-changed={}", std::path::Path::new(&dir).join("../hal/src/hshabi.rs").display());
