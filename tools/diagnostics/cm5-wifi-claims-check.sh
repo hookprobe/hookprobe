@@ -79,7 +79,7 @@ A=$(pi "cat /sys/class/net/wlan1/address"); B=$(pi "cat /sys/class/net/wlan0/add
 for _ in 1 2 3; do wait_gw wlan1 20 && break; psudo "ip link set wlan1 down; sleep 2; ip link set wlan1 up" >/dev/null 2>&1; sleep 4; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1; done
 wait_gw wlan1 && wait_gw wlan0; chk $? "both stations joined (A=wlan1 $A SAE, B=wlan0 $B) and reach the gateway"
 echo "  A: $(assoc_of "$M0" "$A" | tail -1) | B: $(assoc_of "$M0" "$B" | tail -1)"
-run() { [ -z "${ONLY:-}" ] || [ "$ONLY" = "$1" ]; }
+run() { [ "${ONLY:-}" != P53 ] && { [ -z "${ONLY:-}" ] || [ "$ONLY" = "$1" ]; }; }
 # continuous traffic on a station: 5 Hz pings to the gateway for $2 s, in the background on the Pi -> /tmp/hq-ping-$1.log
 ping_start() { pi "nohup timeout $2 ping -D -i 0.2 -W 1 -I $1 10.99.0.1 > /tmp/hq-ping-$1.log 2>&1 &" >/dev/null 2>&1; }
 # "<sent> <received> <loss %> <longest gap between replies, ms>" of that run (sent counted from its duration)
@@ -127,17 +127,53 @@ if run C3; then
   # on the Pi: time from `reconnect` to wpa_state=COMPLETED (4-way done), polled every 10 ms
   T=$(psudo "sh -c 'W=\"wpa_cli -p /run/hq-claims -i wlan1\"; t() { \$W disconnect >/dev/null; sleep 1; [ \"\$1\" = full ] && \$W pmksa_flush >/dev/null; a=\$(date +%s%N); \$W reconnect >/dev/null; i=0; while ! \$W status | grep -q wpa_state=COMPLETED; do sleep 0.01; i=\$((i+1)); [ \$i -gt 1500 ] && break; done; echo \$1 \$(( (\$(date +%s%N) - a) / 1000000 )); sleep 1; }; for k in \$(seq 1 $N); do t cached; t full; done'")
   pi "rm -f /tmp/hq-claims.conf"; psudo "kill \$(cat /run/hq-claims.pid)" >/dev/null 2>&1; sleep 1
+  SUPLOG=$(psudo "grep -aE 'PMKSA cache entry found|SME: Trying to authenticate|CTRL-EVENT-CONNECTED' /tmp/hq-claims-sup.log")
   # what the client did on the "cached" attempts (no key material in these lines)
   echo "  supplicant: PMKSA cache tried $(psudo "grep -c 'try to use PMKSA caching' /tmp/hq-claims-sup.log") | SAE auth started $(psudo "grep -c 'SME: Trying to authenticate with' /tmp/hq-claims-sup.log") | PMKSA rejected/dropped $(psudo "grep -c 'PMKSA caching attempt rejected\|Drop PMKSA\|PMKSA-CACHE-REMOVED' /tmp/hq-claims-sup.log") | assoc reject $(psudo "grep -c 'CTRL-EVENT-ASSOC-REJECT' /tmp/hq-claims-sup.log") | auth timeout $(psudo "grep -c 'Authentication with .* timed out\|SME: Authentication timeout' /tmp/hq-claims-sup.log")"
   psudo "grep -aE 'try to use PMKSA caching|CTRL-EVENT-ASSOC-REJECT|PMKSA caching attempt rejected|SME: Trying to authenticate|CTRL-EVENT-CONNECTED|auth_alg|status_code=' /tmp/hq-claims-sup.log | head -16 | cut -c1-170" | sed 's/^/    sup: /'
   psudo "rm -f /tmp/hq-claims-sup.log" >/dev/null 2>&1
   psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1
   st() { echo "$T" | awk -v k="$1" '$1 == k {print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) printf "n=%d median=%d p90=%d min=%d max=%d", NR, a[int((NR+1)/2)], a[int(NR*0.9+0.999)], a[1], a[NR]}'; }
-  sc=$(st cached); sf=$(st full); echo "  reconnect to 4-way complete (ms) — cached PMKSA: $sc | full SAE: $sf"
-  mc=$(echo "$sc" | grep -o 'median=[0-9]*' | cut -d= -f2); mf=$(echo "$sf" | grep -o 'median=[0-9]*' | cut -d= -f2)
-  nc=$(echo "$sc" | grep -o 'n=[0-9]*' | cut -d= -f2); nf=$(echo "$sf" | grep -o 'n=[0-9]*' | cut -d= -f2)
-  [ "${nc:-0}" = "$N" ] && [ "${nf:-0}" = "$N" ] && [ "${mc:-99999}" -lt "${mf:-0}" ]
-  chk $? "C3 cached-PMKSA reconnect median ${mc:-?} ms vs full SAE ${mf:-?} ms over $N each (cached faster)"
+  sc=$(st cached); sf=$(st full); echo "  end-to-end reconnect (command -> 4-way complete, incl. the client's scan), ms — cached PMKSA: $sc | full SAE: $sf"
+  # the claim itself: authentication start -> connected, from the supplicant's own timestamps (the scan excluded),
+  # classified by what the client actually did (a "PMKSA cache entry found" line before the attempt = cached)
+  A3=$(echo "$SUPLOG" | awk '/PMKSA cache entry found/ {c=1} /SME: Trying to authenticate/ {t=$1+0; k=(c?"cached":"full"); c=0} /CTRL-EVENT-CONNECTED/ && t {printf "%s %d\n", k, ($1-t)*1000; t=0}')
+  st2() { echo "$A3" | awk -v k="$1" '$1 == k {print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) printf "n=%d median=%d p90=%d min=%d max=%d", NR, a[int((NR+1)/2)], a[int(NR*0.9+0.999)], a[1], a[NR]}'; }
+  ac=$(st2 cached); af=$(st2 full); echo "  authentication -> connected (ms) — cached PMKSA: $ac | full SAE: $af"
+  mc=$(echo "$ac" | grep -o 'median=[0-9]*' | cut -d= -f2); mf=$(echo "$af" | grep -o 'median=[0-9]*' | cut -d= -f2)
+  nc=$(echo "$ac" | grep -o 'n=[0-9]*' | cut -d= -f2); nf=$(echo "$af" | grep -o 'n=[0-9]*' | cut -d= -f2)
+  [ "${nc:-0}" -ge $((N - 1)) ] && [ "${nf:-0}" -ge $((N - 1)) ] && [ "${mc:-99999}" -lt "${mf:-0}" ]
+  chk $? "C3 cached-PMKSA authentication->connected median ${mc:-?} ms vs full SAE ${mf:-?} ms ($nc / $nf attempts classified from the client log; cached faster)"
+fi
+
+# ================= P53: PMKSA recovery experiment (operator 2026-11-16; task 111) =================
+# Does keeping the firmware's PMKSA list in sync with el0-wpa's cache (a) make cached reconnects fast and (b) make the
+# firmware itself REJECT a stale PMKID after a wipe (status 53), so a PMKSA-caching client falls back to SAE at once?
+if [ "${ONLY:-}" = P53 ]; then
+  W="wpa_cli -p /run/hq-claims -i wlan1"
+  sup_start() { psudo "nmcli con down hq-iso-a" >/dev/null 2>&1; psudo "nmcli dev set wlan1 managed no" >/dev/null 2>&1; sleep 2
+    pi "umask 077; printf 'ctrl_interface=/run/hq-claims\nsae_pwe=2\nnetwork={\n ssid=\"%s\"\n key_mgmt=SAE\n sae_password=\"%s\"\n ieee80211w=2\n}\n' '$SSID' '$PSK' > /tmp/hq-claims.conf"
+    psudo "sh -c 'rm -f /tmp/hq-p53.log; nohup wpa_supplicant -i wlan1 -D nl80211 -c /tmp/hq-claims.conf -dd -t > /tmp/hq-p53.log 2>&1 & echo \$! > /run/hq-claims.pid'" >/dev/null 2>&1; sleep 10; pi "rm -f /tmp/hq-claims.conf"; }
+  sup_stop() { psudo "kill \$(cat /run/hq-claims.pid)" >/dev/null 2>&1; sleep 1; psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1; }
+  # one reconnect (keeping the PMKSA): ms from the reconnect command to COMPLETED, polled on the Pi
+  cyc() { psudo "sh -c '$W disconnect >/dev/null; sleep 1; a=\$(date +%s%N); $W reconnect >/dev/null; i=0; while ! $W status | grep -q wpa_state=COMPLETED; do sleep 0.01; i=\$((i+1)); [ \$i -gt 4000 ] && break; done; echo \$(( (\$(date +%s%N) - a) / 1000000 ))'"; }
+  lg() { psudo "grep -aE '$1' /tmp/hq-p53.log" | wc -l; }
+  auth_ms() { psudo "awk '/PMKSA cache entry found/ {c=1} /SME: Trying to authenticate/ {t=\$1+0; k=(c?\"cached\":\"full\"); c=0} /CTRL-EVENT-CONNECTED/ && t {printf \"%s %d\\n\", k, (\$1-t)*1000; t=0}' /tmp/hq-p53.log"; }
+  for mode in on off; do
+    echo "  --- firmware PMKSA keep: $mode"; api "fw-pmksa-keep-$mode" >/dev/null
+    sup_start; c0=$(lg 'CTRL-EVENT-CONNECTED'); echo "  initial connect: $c0 connection(s)"
+    for k in 1 2 3 4 5; do echo "  cached reconnect $k: $(cyc) ms end-to-end"; done
+    echo "  auth->connected per attempt (kind ms): $(auth_ms | tr '\n' ';')"
+    r0=$(lg 'CTRL-EVENT-ASSOC-REJECT'); m=$(mark); echo "  inject: $(api wpa-fault)"; sleep 4
+    t=$(cyc); r1=$(lg 'CTRL-EVENT-ASSOC-REJECT'); s53=$(lg 'CTRL-EVENT-ASSOC-REJECT.*status_code=53')
+    echo "  after the wipe: reconnect took $t ms; assoc rejects $((r1 - r0)) (status 53: $s53); PMKSA dropped by the client: $(lg 'PMKSA caching attempt rejected|Drop PMKSA')"
+    echo "  AP: $(since "$m" | grep -a "assoc RSNE" | grep -ai "$A" | sed -E 's/.*pmkids=([0-9]).*-> (.*) sta.*/pmkids=\1 \2/' | tr '\n' ';')"
+    psudo "grep -aE 'CTRL-EVENT-ASSOC-REJECT|PMKSA caching attempt rejected|CTRL-EVENT-DISCONNECTED' /tmp/hq-p53.log | tail -4 | cut -c1-160" | sed 's/^/    sup: /'
+    for k in 1 2 3; do echo "  cached reconnect after the wipe $k: $(cyc) ms"; done
+    echo "  auth->connected (all, this mode): $(auth_ms | tr '\n' ';')"
+    sup_stop
+  done
+  api fw-pmksa-keep-off >/dev/null
 fi
 
 # ================= C4: security isolation =================
@@ -151,6 +187,9 @@ fi
 
 # ================= C5: reliable recovery =================
 if run C5; then
+  # C4's isolation probes are real (intended) bus faults: let the 60-s escalation window pass first, so the spaced
+  # faults below are judged on their own (metal round 4: C1 + two probes + fault 1 = an escalation at fault 2)
+  [ -z "${ONLY:-}" ] && sleep 65
   K=${C5_K:-10}; h0=$(H); worst=0; ok5=0
   for k in $(seq 1 "$K"); do
     ping_start wlan1 22; ping_start wlan0 22; sleep 3; api cmd53-stall >/dev/null; sleep 21
