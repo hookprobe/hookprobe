@@ -110,7 +110,8 @@ static mut LOADED: bool = false;
 /// Changed by the current command: save it before answering.
 static mut DIRTY: bool = false;
 /// Test only: a station whose next command faults.
-static mut ARMED: Option<[u8; 6]> = None;
+/// (station, command filter: 0 = any command about it).
+static mut ARMED: Option<([u8; 6], u32)> = None;
 
 const STATE_MAGIC: u64 = u64::from_le_bytes(*b"HQWPST01");
 const HDR: usize = 0x40;
@@ -520,8 +521,8 @@ pub extern "C" fn _start() -> ! {
         exit(ST_STATE_BAD, 0);
     }
     // test only: the armed station's next command faults (before it changes anything)
-    if let (Some(a), Some(s)) = (unsafe { ARMED }, cmd_sta(cmd, input())) {
-        if a == s {
+    if let (Some((a, only)), Some(s)) = (unsafe { ARMED }, cmd_sta(cmd, input())) {
+        if a == s && (only == 0 || only == cmd) {
             unsafe { write_volatile(0x8 as *mut u32, 1) };
         }
     }
@@ -540,7 +541,9 @@ pub extern "C" fn _start() -> ! {
         CMD_GROUP_NEW => group_new(),
         CMD_PMKSA_COUNT => exit(ST_OK, unsafe { (*core::ptr::addr_of!(WORK)).pmksa.len() } as u32),
         CMD_SELFTEST_ARM_FAULT => {
-            unsafe { ARMED = sta_of(input()) };
+            let b = input();
+            let only = b.get(6..10).map_or(0, |c| u32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+            unsafe { ARMED = sta_of(b).map(|s| (s, only)) };
             exit(ST_OK, 0)
         }
         CMD_KEYX_PUT => {
