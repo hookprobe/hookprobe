@@ -18,8 +18,10 @@ pub const DEV_OFF: usize = 0x3_1000;
 pub const RX_OFF: usize = 0x3_8000;
 /// Kernel -> driver frames (to send to the device).
 pub const TX_OFF: usize = RX_OFF + crate::el0ring::RING_BYTES + 0x1000;
+/// ADR 0065 S1: the key-transfer page, mapped READ-ONLY here (RW in el0-wpa, `crate::wpasrvabi::KEYX_OFF`).
+pub const KEYX_OFF: usize = TX_OFF + crate::el0ring::RING_BYTES;
 /// The window's end, relative to the base (must stay inside the platform's user window).
-pub const WINDOW_END: usize = TX_OFF + crate::el0ring::RING_BYTES;
+pub const WINDOW_END: usize = KEYX_OFF + 0x1000;
 
 // ---- control page ----
 pub const H_MAGIC: usize = 0; // u32 "HQWF"
@@ -38,6 +40,10 @@ pub const CMD_INIT: u32 = 1;
 pub const CMD_POLL: u32 = 2;
 /// Test only: misbehave as a hostile driver would — leave the RX ring inconsistent (the kernel must refuse it).
 pub const CMD_SELFTEST_BAD_RING: u32 = 98;
+/// S1: OUT = the first 16 bytes of the key-transfer page (proves el0-wifi can read what el0-wpa put there).
+pub const CMD_KEYX_PEEK: u32 = 34;
+/// Test only: WRITE the key-transfer page — it is read-only here, so this must fault.
+pub const CMD_SELFTEST_KEYX_WRITE: u32 = 97;
 /// Test only: fault on purpose (the supervisor's restart path).
 pub const CMD_SELFTEST_FAULT: u32 = 99;
 

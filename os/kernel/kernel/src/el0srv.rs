@@ -21,6 +21,54 @@ mod imp {
     use hal::wifisrvabi::*;
 
     static WIFI_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/el0_wifi.elf"));
+    /// ADR 0065 step 4g (S1): el0-wpa, the separate WPA security server.
+    static WPA_ELF: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/el0_wpa.elf"));
+    const WPA_STATE_PAGES: usize = hal::wpasrvabi::STATE_PAGES;
+    #[cfg(feature = "cm5")]
+    pub const WPA_BASE: usize = hal::wpasrvabi::BASE_CM5;
+    #[cfg(not(feature = "cm5"))]
+    pub const WPA_BASE: usize = hal::wpasrvabi::BASE_QEMU;
+    const _: () = assert!(WPA_BASE + hal::wpasrvabi::WINDOW_END <= crate::elf::USER_VA_HI);
+    // both servers' images, stacks and control pages sit at the same offsets from their bases
+    const _: () = assert!(hal::wpasrvabi::IMAGE_MAX == IMAGE_MAX && hal::wpasrvabi::STACK_OFF == STACK_OFF
+        && hal::wpasrvabi::STACK_SIZE == STACK_SIZE && hal::wpasrvabi::CTRL_OFF == CTRL_OFF);
+
+    /// The key-transfer page (one frame, shared: RW in el0-wpa, RO in el0-wifi; never in any other space).
+    static mut KEYX_FRAME: usize = 0;
+    fn keyx_frame() -> usize {
+        unsafe {
+            if KEYX_FRAME == 0 {
+                KEYX_FRAME = alloc();
+                if KEYX_FRAME != 0 {
+                    zero(KEYX_FRAME);
+                }
+            }
+            KEYX_FRAME
+        }
+    }
+    /// Zero the key-transfer page (the kernel writes zeros; it never reads it).
+    #[cfg_attr(feature = "cm5", allow(dead_code))] // the S1 selftest's; S3 zeroes it after every install
+    pub fn keyx_zero() {
+        let f = unsafe { KEYX_FRAME };
+        if f != 0 {
+            zero(f);
+        }
+    }
+
+    /// What a resident server is: its image, its window, and what the kernel maps for it.
+    struct Spec {
+        name: &'static str,
+        elf: &'static [u8],
+        base: usize,
+        magic: u32,
+        /// RX / TX frame rings (el0-wifi).
+        rings: bool,
+        /// Persistent state pages at `state_off` (el0-wpa): kept across a restart, zeroed by a full wipe.
+        state_off: usize,
+        state_pages: usize,
+        /// The key-transfer page: (offset, writable).
+        keyx: Option<(usize, bool)>,
+    }
 
     #[cfg(feature = "cm5")]
     pub const BASE: usize = BASE_CM5;
@@ -78,6 +126,16 @@ mod imp {
     }
 
     pub struct Server {
+        name: &'static str,
+        elf: &'static [u8],
+        base: usize,
+        magic: u32,
+        /// Has frame rings (el0-wifi); never touch `rx` / `tx` otherwise (their frames are 0).
+        rings: bool,
+        state: [usize; WPA_STATE_PAGES],
+        nstate: usize,
+        /// Full wipes (persistent state zeroed: every secret it held is gone).
+        pub wipes: u64,
         entry: usize,
         aspace: crate::el0as::El0As,
         sp_top: usize,
@@ -149,12 +207,34 @@ mod imp {
     }
 
     pub fn load(grant: Grant) -> Result<Server, &'static str> {
-        let parsed = crate::elf::parse(WIFI_ELF).map_err(|_| "ELF parse")?;
+        load_spec(&Spec { name: "el0-wifi", elf: WIFI_ELF, base: BASE, magic: MAGIC, rings: true, state_off: 0, state_pages: 0,
+            keyx: Some((KEYX_OFF, false)) }, grant)
+    }
+    /// ADR 0065 step 4g (S1): load el0-wpa — its own address space, persistent state pages, the key-transfer page RW,
+    /// no device, no rings.
+    pub fn load_wpa() -> Result<Server, &'static str> {
+        load_spec(&Spec { name: "el0-wpa", elf: WPA_ELF, base: WPA_BASE, magic: hal::wpasrvabi::MAGIC, rings: false,
+            state_off: hal::wpasrvabi::STATE_OFF, state_pages: WPA_STATE_PAGES, keyx: Some((hal::wpasrvabi::KEYX_OFF, true)) }, Grant::None)
+    }
+
+    fn load_spec(sp: &Spec, grant: Grant) -> Result<Server, &'static str> {
+        const BASE: usize = 0; // shadow the el0-wifi constant: every address below comes from the spec
+        let _ = BASE;
+        let base = sp.base;
+        let parsed = crate::elf::parse(sp.elf).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
         let mut s = Server {
+            name: sp.name,
+            elf: sp.elf,
+            base,
+            magic: sp.magic,
+            rings: sp.rings,
+            state: [0; WPA_STATE_PAGES],
+            nstate: 0,
+            wipes: 0,
             entry: parsed.entry,
             aspace,
-            sp_top: BASE + STACK_OFF + STACK_SIZE,
+            sp_top: base + STACK_OFF + STACK_SIZE,
             ctrl: 0,
             rx: PagedRing { frames: [0; RING_PAGES] },
             tx: PagedRing { frames: [0; RING_PAGES] },
@@ -169,7 +249,7 @@ mod imp {
             streak: 0,
         };
         for g in parsed.segs[..parsed.nsegs].iter() {
-            if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
+            if g.vaddr < base || g.vaddr + g.memsz > base + IMAGE_MAX {
                 return Err("segment outside the window");
             }
             for p in 0..(g.memsz + 0xFFF) >> 12 {
@@ -181,7 +261,7 @@ mod imp {
                 let n = g.filesz.saturating_sub(voff).min(0x1000);
                 zero(f);
                 if n > 0 {
-                    unsafe { core::ptr::copy_nonoverlapping(WIFI_ELF.as_ptr().add(g.offset + voff), f as *mut u8, n) };
+                    unsafe { core::ptr::copy_nonoverlapping(sp.elf.as_ptr().add(g.offset + voff), f as *mut u8, n) };
                 }
                 let k = if g.executable() {
                     arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
@@ -203,12 +283,12 @@ mod imp {
         }
         for p in 0..STACK_PAGES {
             let f = alloc();
-            if f == 0 || !map(&aspace, BASE + STACK_OFF + p * 0x1000, f, Kind::Data) {
+            if f == 0 || !map(&aspace, base + STACK_OFF + p * 0x1000, f, Kind::Data) {
                 return Err("map stack refused");
             }
         }
         let c = alloc();
-        if c == 0 || !map(&aspace, BASE + CTRL_OFF, c, Kind::Data) {
+        if c == 0 || !map(&aspace, base + CTRL_OFF, c, Kind::Data) {
             return Err("map control page refused");
         }
         zero(c);
@@ -216,27 +296,42 @@ mod imp {
         match grant {
             Grant::None => {}
             Grant::Fake(d) => {
-                if !map(&aspace, BASE + DEV_OFF, d, Kind::FakeDev) {
+                if !map(&aspace, base + DEV_OFF, d, Kind::FakeDev) {
                     return Err("map device refused");
                 }
             }
             Grant::Mmio(d) => {
-                if !map(&aspace, BASE + DEV_OFF, d, Kind::Dev) {
+                if !map(&aspace, base + DEV_OFF, d, Kind::Dev) {
                     return Err("map device refused");
                 }
             }
         }
-        for (off, r) in [(RX_OFF, &mut s.rx), (TX_OFF, &mut s.tx)] {
+        for (off, r) in [(RX_OFF, &mut s.rx), (TX_OFF, &mut s.tx)].into_iter().filter(|_| sp.rings) {
             for p in 0..RING_PAGES {
                 let f = alloc();
-                if f == 0 || !map(&aspace, BASE + off + p * 0x1000, f, Kind::Data) {
+                if f == 0 || !map(&aspace, base + off + p * 0x1000, f, Kind::Data) {
                     return Err("map ring refused");
                 }
                 zero(f);
                 r.frames[p] = f;
             }
         }
-        crate::el0as::register("el0-wifi", s.entry, s.aspace);
+        for p in 0..sp.state_pages.min(WPA_STATE_PAGES) {
+            let f = alloc();
+            if f == 0 || !map(&aspace, base + sp.state_off + p * 0x1000, f, Kind::Data) {
+                return Err("map state refused");
+            }
+            zero(f);
+            s.state[p] = f;
+            s.nstate = p + 1;
+        }
+        if let Some((off, writable)) = sp.keyx {
+            let f = keyx_frame();
+            if f == 0 || !map(&aspace, base + off, f, if writable { Kind::Data } else { Kind::DataRo }) {
+                return Err("map key-transfer page refused");
+            }
+        }
+        crate::el0as::register(sp.name, s.entry, s.aspace);
         Ok(s)
     }
 
@@ -253,7 +348,7 @@ mod imp {
             if t < self.next_ok {
                 return Call::Backoff;
             }
-            self.w32(H_MAGIC, MAGIC);
+            self.w32(H_MAGIC, self.magic);
             self.w32(H_CMD, cmd);
             self.w32(H_STATUS, ST_PANIC);
             self.calls += 1;
@@ -279,15 +374,37 @@ mod imp {
                 let (f, off, n) = self.rw[i];
                 zero(f);
                 if n > 0 {
-                    unsafe { core::ptr::copy_nonoverlapping(WIFI_ELF.as_ptr().add(off), f as *mut u8, n) };
+                    unsafe { core::ptr::copy_nonoverlapping(self.elf.as_ptr().add(off), f as *mut u8, n) };
                 }
             }
             zero(self.ctrl);
-            ring::reset(&mut self.rx);
-            ring::reset(&mut self.tx);
+            if self.rings {
+                ring::reset(&mut self.rx);
+                ring::reset(&mut self.tx);
+            }
+        }
+        /// A full wipe (ADR 0065 step 4g): the reset, AND the persistent state pages zeroed — every secret the server
+        /// held is gone. The next call starts a fresh, empty incarnation.
+        pub fn full_wipe(&mut self) {
+            self.reset();
+            for &f in &self.state[..self.nstate] {
+                zero(f);
+            }
+            self.wipes += 1;
+        }
+        /// The server's name (the isolation report, the beat).
+        pub fn name(&self) -> &'static str {
+            self.name
+        }
+        /// Its window's base VA.
+        pub fn base(&self) -> usize {
+            self.base
         }
         /// The kernel takes one received frame (the driver's RX ring; every value in it re-checked).
         pub fn rx_pop(&mut self, out: &mut [u8]) -> ring::Pop {
+            if !self.rings {
+                return ring::Pop::Empty;
+            }
             let p = ring::pop(&mut self.rx, out);
             if p == ring::Pop::Bad {
                 self.bad_rings += 1;
@@ -296,7 +413,7 @@ mod imp {
         }
         /// The kernel queues one frame for the driver to send.
         pub fn tx_push(&mut self, frame: &[u8]) -> bool {
-            ring::push(&mut self.tx, frame)
+            self.rings && ring::push(&mut self.tx, frame)
         }
         /// A command with input (IN area) and output (OUT area, copied into `out`, then scrubbed on the shared page:
         /// a Keyed reply carries a TK — the 2A / D3 wipe discipline). Returns the call and the output length.
@@ -346,6 +463,56 @@ mod imp {
         pub fn backoff_left_ms(&self) -> u64 {
             self.next_ok.saturating_sub(now_ms())
         }
+    }
+
+    /// `[P-el0srv-split]` (QEMU) — ADR 0065 step 4g S1 (operator decision 2026-11-15): the bus server (el0-wifi) and
+    /// the WPA security server (el0-wpa) are independently supervised, in separate address spaces.
+    pub fn split_selftest() -> bool {
+        use hal::wpasrvabi as wp;
+        let dev = alloc();
+        zero(dev);
+        let (Ok(mut w), Ok(mut p)) = (load(Grant::Fake(dev)), load_wpa()) else {
+            arch_aarch64::_print(format_args!(" [P-el0srv-split] FAIL — a server did not load\n"));
+            return false;
+        };
+        let wait = |ms: u64| {
+            let t = now_ms();
+            while now_ms() < t + ms {}
+        };
+        let init = w.call(CMD_INIT) == Call::Done(ST_OK, 0, 1) && p.call(wp::CMD_INIT) == Call::Done(ST_OK, 0, 1);
+        // the security server's persistent state survives ITS OWN restart (a fault resets image + control only)
+        let bumped = p.call(wp::CMD_STATE_BUMP) == Call::Done(ST_OK, 1, 2) && p.call(wp::CMD_STATE_BUMP) == Call::Done(ST_OK, 2, 3);
+        let own_fault = p.call(wp::CMD_SELFTEST_FAULT) == Call::Fault && p.restarts == 1;
+        wait(BACKOFF_MS + 5);
+        // a fresh incarnation (served counter from 1) still holds the state
+        let kept = p.call(wp::CMD_STATE_READ) == Call::Done(ST_OK, 2, 1);
+        // a BUS fault (and its reset) never touches the security server: its restarts, faults and state unchanged
+        let (pr, pf) = (p.restarts, p.faults);
+        let bus_fault = w.call(CMD_SELFTEST_FAULT) == Call::Fault && w.restarts == 1;
+        let untouched = bus_fault && p.restarts == pr && p.faults == pf && p.call(wp::CMD_STATE_READ) == Call::Done(ST_OK, 2, 2);
+        // the key-transfer page: el0-wpa writes it, el0-wifi reads it, el0-wifi cannot write it
+        let pat: [u8; 16] = core::array::from_fn(|i| 0xC0 ^ i as u8);
+        let mut o = [0u8; 16];
+        let put = matches!(p.call_io(wp::CMD_KEYX_PUT, &pat, &mut []), (Call::Done(ST_OK, 16, _), _));
+        wait(BACKOFF_MS + 5);
+        let (pc, pn) = w.call_io(CMD_KEYX_PEEK, &[], &mut o);
+        let peek = matches!(pc, Call::Done(ST_OK, ..)) && pn == 16 && o == pat;
+        let ro = w.call(CMD_SELFTEST_KEYX_WRITE) == Call::Fault
+            && unsafe { core::slice::from_raw_parts(keyx_frame() as *const u8, 16) } == pat;
+        keyx_zero();
+        // a full wipe zeroes the persistent state (every secret gone): a fresh, empty incarnation
+        wait(BACKOFF_MS + 5);
+        p.full_wipe();
+        wait(4 * BACKOFF_MS + 5);
+        let wiped = p.call(wp::CMD_STATE_READ) == Call::Done(ST_OK, 0, 1) && p.wipes == 1;
+        // both are in their own address spaces (the el0as report, run after this, covers them)
+        let spaces = w.aspace != p.aspace;
+        let pass = init && bumped && own_fault && kept && untouched && put && peek && ro && wiped && spaces;
+        arch_aarch64::_print(format_args!(
+            " [P-el0srv-split] {} — ADR 0065 step 4g S1: bus server el0-wifi + WPA security server el0-wpa, supervised apart: both load + answer={} el0-wpa persistent state written={} its own fault resets it={} and the restarted server still holds the state={} a BUS fault leaves el0-wpa's restarts / faults / state untouched={} key-transfer page: el0-wpa writes={} el0-wifi reads={} el0-wifi cannot write (faults, page intact)={} a full wipe zeroes the state={} separate address spaces={}\n",
+            if pass { "PASS" } else { "FAIL" }, init, bumped, own_fault, kept, untouched, put, peek, ro, wiped, spaces
+        ));
+        pass
     }
 
     /// `[P-el0srv]` (QEMU): the resident substrate with the fake device.
@@ -481,6 +648,9 @@ pub mod keyer {
     use hal::wpakeyer::{Out, Start};
 
     pub static mut WIFI: Option<Server> = None;
+    /// ADR 0065 step 4g (S1): the WPA security server, loaded beside el0-wifi in its own address space (S2 moves the
+    /// authenticator, SAE and PMKSA into it).
+    pub static mut WPA: Option<Server> = None;
     /// Handshakes started in el0-wifi (the metal proof that the EL0 path, not the in-kernel copy, served them).
     pub static mut EL0_STARTS: u64 = 0;
 
@@ -675,6 +845,15 @@ pub mod keyer {
                 let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
                 #[cfg(feature = "cm5")]
                 bus_probe_check();
+                // S1: the security server, supervised apart from the bus server
+                match super::imp::load_wpa() {
+                    Ok(mut p) => {
+                        let ok = matches!(p.call(hal::wpasrvabi::CMD_INIT), Call::Done(ST_OK, ..));
+                        arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa loaded at {:#x} in its own address space, supervised apart from el0-wifi (ADR 0065 step 4g S1) init={}\n", p.base(), ok));
+                        unsafe { WPA = Some(p) };
+                    }
+                    Err(why) => arch_aarch64::_print(format_args!(" [EL0-WPA] el0-wpa FAILED to load ({})\n", why)),
+                }
                 // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
                 let _ = crate::el0as::report();
                 arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi loaded at {:#x}: the WPA 4-way authenticator and its keys run in EL0 (ADR 0065 step 3b; in-kernel copy = fallback) init={}\n", super::imp::BASE, ok));
