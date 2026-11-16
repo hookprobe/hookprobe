@@ -27,6 +27,7 @@ mod el0 {
 
     pub struct Server {
         entry: usize,
+        aspace: crate::el0as::El0As,
         sp_top: usize,
         io: [usize; IO_PAGES],
         rw: [(usize, usize, usize); RW_MAX],
@@ -49,30 +50,10 @@ mod el0 {
             arch_aarch64::Mmu.alloc_frame()
         }
     }
-    fn map(va: usize, pa: usize, exec: bool, write: bool) -> bool {
-        #[cfg(feature = "cm5")]
-        {
-            use arch_aarch64::mmu_cm5 as m;
-            if exec {
-                m::map_user_code(va, pa);
-                true
-            } else if write {
-                m::map_user_data(va, pa)
-            } else {
-                m::map_user_data_ro(va, pa)
-            }
-        }
-        #[cfg(not(feature = "cm5"))]
-        {
-            let m = arch_aarch64::Mmu;
-            if exec {
-                m.map_user_code_page(va, pa)
-            } else if write {
-                m.map_user_data_page(va, pa)
-            } else {
-                m.map_user_data_ro_page(va, pa)
-            }
-        }
+    /// Map one page into THIS server's own address space (ADR 0065 S0).
+    fn map(a: &crate::el0as::El0As, va: usize, pa: usize, exec: bool, write: bool) -> bool {
+        use crate::el0as::Map;
+        a.map(va, pa, if exec { Map::Code } else if write { Map::Data } else { Map::DataRo })
     }
 
     /// The server, loaded on first use (once; a failed load is reported and the kernel parses in-kernel).
@@ -94,7 +75,8 @@ mod el0 {
 
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(LANSVC_ELF).map_err(|_| "ELF parse")?;
-        let mut s = Server { entry: parsed.entry, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0 };
+        let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0 };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -119,24 +101,25 @@ mod el0 {
                     s.rw[s.nrw] = (f, g.offset + voff, n);
                     s.nrw += 1;
                 }
-                if !map(g.vaddr + voff, f, g.executable(), g.writable()) {
+                if !map(&aspace, g.vaddr + voff, f, g.executable(), g.writable()) {
                     return Err("map image page refused");
                 }
             }
         }
         for p in 0..STACK_PAGES {
             let f = alloc();
-            if f == 0 || !map(BASE + STACK_OFF + p * 0x1000, f, false, true) {
+            if f == 0 || !map(&aspace, BASE + STACK_OFF + p * 0x1000, f, false, true) {
                 return Err("map stack refused");
             }
         }
         for p in 0..IO_PAGES {
             let f = alloc();
-            if f == 0 || !map(BASE + IO_OFF + p * 0x1000, f, false, true) {
+            if f == 0 || !map(&aspace, BASE + IO_OFF + p * 0x1000, f, false, true) {
                 return Err("map IO refused");
             }
             s.io[p] = f;
         }
+        crate::el0as::register("el0-lansvc", s.entry, s.aspace);
         Ok(s)
     }
 
@@ -193,7 +176,7 @@ mod el0 {
             self.write(H_STATUS, &ST_PANIC.to_le_bytes());
             self.write(IN_OFF, &input[..n]);
             self.calls += 1;
-            let how = crate::excursion_bounded(self.entry, self.sp_top, BUDGET_US);
+            let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, BUDGET_US);
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
