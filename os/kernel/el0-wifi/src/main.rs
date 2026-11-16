@@ -238,6 +238,11 @@ pub extern "C" fn _start() -> ! {
             write_volatile((BASE + KEYX_OFF) as *mut u8, 0xEE);
             exit(ST_OK, 0)
         },
+        // S4 bench injection: arm a stuck CMD53 (one shot — this incarnation dies of it)
+        CMD_INJECT_CMD53_STALL => unsafe {
+            (*core::ptr::addr_of_mut!(BUS)).stall_next_cmd53 = true;
+            exit(ST_OK, 0)
+        },
         CMD_SELFTEST_FAULT => unsafe {
             write_volatile(0x8 as *mut u32, 1);
             exit(ST_OK, 0)

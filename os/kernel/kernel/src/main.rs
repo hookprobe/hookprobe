@@ -4578,7 +4578,8 @@ fn cm5_p10_probe() {
                                                 kprint!("   [P11-AP3] {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x} left its refusal streak ({} unlogged) — 4-way...\n",
                                                     sta[0], sta[1], sta[2], sta[3], sta[4], sta[5], n);
                                             }
-                                            kprint!("   [P11-AP3] assoc RSNE akm={:#010x} pmkids={} -> {}\n", k.akm, k.n_pmkid, k.how.name());
+                                            kprint!("   [P11-AP3] assoc RSNE akm={:#010x} pmkids={} -> {} sta {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n", k.akm, k.n_pmkid, k.how.name(),
+                                                sta[0], sta[1], sta[2], sta[3], sta[4], sta[5]);
                                             (k.pmk, k.akm8, k.pmkid)
                                         };
                                         #[cfg(not(feature = "wpa3"))]
@@ -5457,6 +5458,13 @@ fn cm5_p10_probe() {
                                                 let (c, f, r, h) = crate::el0srv::keyer::stats();
                                                 let (rxe, rxr, txe, txl, cte, ctl) = crate::el0srv::keyer::rx_stats();
                                                 kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl);
+                                                // ADR 0065 S4: the two servers' supervision side by side (the fault-isolation evidence line)
+                                                let (bst, brs, bft, _) = crate::el0srv::keyer::bus_health();
+                                                if let Some((wst, wrs, wft, wwp, _, pm)) = crate::el0srv::keyer::wpa_health() {
+                                                    let (cn, po) = crate::el0srv::keyer::containment();
+                                                    kprint!("   [WIFI-SPLIT] bus {} restarts={} faults={} | wpa {} restarts={} faults={} full_wipes={} contained={} poisoned={} pmksa={}\n",
+                                                        bst, brs, bft, wst, wrs, wft, wwp, cn, po, pm.map_or(-1, |n| n as i64));
+                                                }
                                             }
                                             let (rq, ra, rn) = unsafe { uplink::RENEW_STATS };
                                             kprint!("   [WAN renew] in-loop DHCP renewal: requests={} acks={} naks={} (full re-bring-ups counted in renewals=)\n", rq, ra, rn);

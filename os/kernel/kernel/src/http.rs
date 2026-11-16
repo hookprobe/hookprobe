@@ -378,6 +378,24 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             .with_status(403),
         };
     }
+    // ADR 0065 S4 BENCH ONLY (`wifi-inject`): Wi-Fi fault injection for the fault-isolation evidence (owner re-auth)
+    #[cfg(feature = "wifi-inject")]
+    if req.post && req.path == "/api/bench/wifi-inject" {
+        let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
+        return match crate::ownerapi::wifi_inject(&c, req.body, auth) {
+            Ok(what) => json(scratch, |w| {
+                w.raw("{\"ok\":true,\"done\":");
+                w.string(what);
+                w.raw("}");
+            }),
+            Err(why) => json(scratch, |w| {
+                w.raw("{\"ok\":false,\"refused\":");
+                w.string(why);
+                w.raw("}");
+            })
+            .with_status(403),
+        };
+    }
     // ADR 0058 D3: enroll / rotate the owner's configuration key (guards + re-auth; the device verifies the proofs)
     if req.post && (req.path == "/api/anchor/enroll" || req.path == "/api/anchor/rotate") {
         let c = crate::actionapi::Ctx { session: req.session, origin: req.origin, host: req.host, csrf: req.csrf, now_ms };
