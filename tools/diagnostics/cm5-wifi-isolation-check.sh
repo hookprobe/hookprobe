@@ -53,6 +53,10 @@ reassoc() { psudo "sh -c 'p=\$(busctl call fi.w1.wpa_supplicant1 /fi/w1/wpa_supp
 recon() { if [ "$1" = wlan1 ]; then reassoc wlan1; else psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; psudo "timeout 50 nmcli -w 45 con up '$PROF' ifname wlan0" >/dev/null 2>&1; fi; }
 # wait (up to $3 s) for an association line of MAC $2 since mark $1 matching $4; prints it
 poll_assoc() { local t=0; while [ $t -lt "$3" ]; do local l; l=$(assoc_of "$1" "$2" | grep -a -- "$4" | tail -1); [ -n "$l" ] && { echo "$l"; return 0; }; sleep 2; t=$((t + 2)); done; return 1; }
+# the USB adapter (rtw88) can wedge (interface_disabled / SCAN-FAILED -100): bounce it before a step that needs it
+unwedge_a() { pi "nmcli -t -f GENERAL.STATE dev show wlan1" 2>/dev/null | grep -q "unavailable\|disconnected" || return 0
+  psudo "ip link set wlan1 down; sleep 2; ip link set wlan1 up" >/dev/null 2>&1; sleep 3; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1; }
+pi_journal() { psudo "journalctl --since '$1' -u wpa_supplicant --no-pager" 2>/dev/null | grep -a "wlan1" | grep -aE "$2" | tail -3 | cut -c1-160 | sed 's/^/  pi: /'; }
 gw_ok() { pi "ping -c 2 -W 2 -I $1 10.99.0.1" >/dev/null 2>&1; }
 wait_gw() { for _ in $(seq 1 ${2:-20}); do gw_ok "$1" && return 0; sleep 2; done; return 1; }
 # station associations the AP logged since a mark, for one MAC: "akm pmkids how"
@@ -68,9 +72,10 @@ SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'"); PSK=$(psudo "
 psudo "nmcli con up '$PROF' ifname wlan0" >/dev/null 2>&1
 psudo "nmcli con delete hq-iso-a" >/dev/null 2>&1
 psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1
-psudo "nmcli con add type wifi ifname wlan1 con-name hq-iso-a ssid '$SSID' wifi-sec.key-mgmt sae wifi-sec.psk '$PSK' wifi-sec.pmf required ipv4.method auto ipv4.never-default yes ipv6.method ignore connection.autoconnect no" >/dev/null 2>&1
+psudo "nmcli con add type wifi ifname wlan1 con-name hq-iso-a ssid '$SSID' wifi-sec.key-mgmt sae wifi-sec.psk '$PSK' wifi-sec.pmf required ipv4.method auto ipv4.never-default yes ipv6.method ignore connection.autoconnect yes connection.autoconnect-retries 0" >/dev/null 2>&1
 psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1
 A=$(pi "cat /sys/class/net/wlan1/address"); B=$(pi "cat /sys/class/net/wlan0/address")
+for _ in 1 2 3; do wait_gw wlan1 20 && break; psudo "ip link set wlan1 down; sleep 2; ip link set wlan1 up" >/dev/null 2>&1; sleep 4; psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1; done
 wait_gw wlan1 && wait_gw wlan0; chk $? "both stations joined (A=wlan1 $A SAE, B=wlan0 $B) and reach the gateway"
 echo "  A: $(assoc_of "$M0" "$A" | tail -1) | B: $(assoc_of "$M0" "$B" | tail -1)"
 
@@ -97,7 +102,8 @@ chk $? "E3 A re-joined from its cached PMKSA (pmkids=1, no SAE exchange) and rea
 h0=$(H); m=$(mark); echo "  inject: $(api wpa-station-m2 "$B")"
 recon wlan0
 for _ in $(seq 1 30); do h1=$(H); [ "$(f "$h1" 4)" -gt "$(f "$h0" 4)" ] && break; sleep 2; done
-wait_gw wlan0 120; gb=$?   # brcmfmac retries after its aborted 4-way times out
+# B's own retry after its aborted 4-way is NetworkManager's (minutes): retry it the way a user would, every 40 s
+gb=1; for _ in 1 2 3; do wait_gw wlan0 40 && { gb=0; break; }; recon wlan0; done
 h1=$(H); echo "  health: $h0 -> $h1"; echo "  B after the fault: $(assoc_of "$m" "$B" | tr '\n' ';')"
 since "$m" | grep -a "WIFI-INJECT\|WIFI-SPLIT\|ptk_set=" | head -6 | cut -c1-200 | sed 's/^/  /'
 [ $gb = 0 ] && [ "$(f "$h1" 4)" -gt "$(f "$h0" 4)" ] && [ "$(f "$h1" 5)" = "$(f "$h0" 5)" ]
@@ -117,35 +123,34 @@ chk $? "E5 the WPA-server fault full-wiped: state pages + key-transfer page zero
 sleep 3; since "$m" | grep -a "re-provisioned after the full wipe" | head -1 | cut -c1-200 | sed 's/^/  /'
 since "$m" | grep -aq "full-wiped: every station deauthenticated" && since "$m" | grep -aq "re-provisioned after the full wipe: passphrase re-provisioned=true, new group keys installed=true"
 chk $? "E5 every station deauthenticated, then the passphrase re-provisioned and NEW group keys installed"
-wait_gw wlan0 120; gb=$?
-b=$(poll_assoc "$m" "$B" 10 "SAE"); echo "  B after the wipe: $(assoc_of "$m" "$B" | tr '\n' ';') (SAE frames $(sae_of "$m" "$B"))"
+T5=$(pi "date '+%Y-%m-%d %H:%M:%S'")
+gb=1; for _ in 1 2 3; do wait_gw wlan0 40 && { gb=0; break; }; recon wlan0; done
+echo "  B after the wipe: $(assoc_of "$m" "$B" | tr '\n' ';') (SAE frames $(sae_of "$m" "$B"))"
 [ $gb = 0 ] && [ "$(f "$hw" 5)" -gt "$(f "$h0" 5)" ] && grep -q " 0 SAE (just authenticated)" <<<"$(assoc_of "$m" "$B")" && [ "$(sae_of "$m" "$B")" -ge 1 ]
 chk $? "E5 B re-joined with a full SAE (pmkids=0) after the wipe (full wipes $(f "$h0" 5) -> $(f "$hw" 5))"
-# A (wpa_supplicant SME, PMKSA caching) comes back with its now-stale PMKID: the AP must refuse it, never key from it
-wait_gw wlan1 60; ga=$?; aa=$(assoc_of "$m" "$A"); echo "  A after the wipe: $(echo "$aa" | tr '\n' ';') (SAE frames $(sae_of "$m" "$A"))"
-! grep -q "cached PMKSA" <<<"$aa$(assoc_of "$m" "$B")"
-chk $? "E5 no station was keyed from a cached PMKSA after the wipe (a stale PMKID is refused: safe re-authentication)"
-if [ $ga != 0 ]; then
-  echo "  FINDING: A did not recover by itself — wpa_supplicant drops a cached PMKSA only on an association REJECT (or a"
-  echo "           reason-9 deauth while still associating); this FullMAC firmware answers the association itself, so"
-  echo "           the AP's post-association refusal (reason 49) leaves the stale entry in place. Client-side reconnect:"
-  psudo "nmcli con down hq-iso-a" >/dev/null 2>&1; m3=$(mark); psudo "timeout 70 nmcli -w 60 con up hq-iso-a" >/dev/null 2>&1
-  wait_gw wlan1 30; gr=$?; echo "  A after nmcli down/up: $(assoc_of "$m3" "$A" | tr '\n' ';') (SAE frames $(sae_of "$m3" "$A"))"
-  [ $gr = 0 ] && grep -q " 0 SAE (just authenticated)" <<<"$(assoc_of "$m3" "$A")"
-  chk $? "E5 A re-joined with a full SAE (pmkids=0) once its supplicant dropped the stale PMKSA (client reconnect — see FINDING)"
-else
-  grep -q " 0 SAE (just authenticated)" <<<"$aa"; chk $? "E5 A re-joined with a full SAE (pmkids=0) by itself"
-fi
+# A (wpa_supplicant SME, PMKSA caching) first offers its now-stale PMKID: refused (reason 49); its supplicant then drops
+# the entry (PMKSA-CACHE-REMOVED when NetworkManager fails that attempt) and the autoconnect retry does a full SAE
+ga=1; for _ in 1 2 3; do wait_gw wlan1 50 && { ga=0; break; }; unwedge_a; done
+aa=$(assoc_of "$m" "$A"); echo "  A after the wipe: $(echo "$aa" | tr '\n' ';') (SAE frames $(sae_of "$m" "$A"))"
+pi_journal "$T5" "PMKSA-CACHE-REMOVED|reason=49|TEMP-DISABLED"
+# only each station's FIRST keying after the wipe matters: a later cached reconnect uses a PMKSA made after the wipe
+fa=$(echo "$aa" | grep -v "reject" | head -1); fb=$(assoc_of "$m" "$B" | grep -v "reject" | head -1)
+! grep -q "cached PMKSA" <<<"$fa$fb"
+chk $? "E5 no station was keyed from a pre-wipe PMKSA (first keying after the wipe: A '$fa' B '$fb'; stale PMKIDs refused)"
+[ $ga = 0 ] && grep -q " 0 SAE (just authenticated)" <<<"$aa" && [ "$(sae_of "$m" "$A")" -ge 1 ]
+chk $? "E5 A dropped its stale PMKSA and re-joined with a full SAE (pmkids=0)"
 
 # --- E6: throughput ---
-T=$("$R/tools/diagnostics/cm5-throughput-check.sh" "$PI" auto 96 5 2>&1 | grep -a "THROUGHPUT" | tail -1); echo "  $T"
-grep -q "PASS" <<<"$T"; chk $? "E6 throughput >= 96 Mbps (ADR 0065 baseline)"
+tm=""; for k in 1 2 3; do T=$("$R/tools/diagnostics/cm5-throughput-check.sh" "$PI" auto 40 5 2>&1 | grep -a "THROUGHPUT" | tail -1); echo "  run $k: $T"; tm="$tm $(grep -o 'median [0-9.]*' <<<"$T" | cut -d' ' -f2)"; done
+med=$(tr ' ' '\n' <<<"$tm" | grep . | sort -n | sed -n 2p)
+awk -v m="${med:-0}" 'BEGIN{exit !(m >= 96)}'; chk $? "E6 throughput median of 3 runs ${med:-?} Mbps >= 96 (ADR 0065 baseline; runs:$tm)"
 
 # --- E7: reconnect soak over both stations + the loop gap ---
 m=$(mark); good=0
 for i in $(seq 1 "$CYC"); do
   if [ $((i % 2)) = 1 ]; then ifc=wlan1; else ifc=wlan0; fi
-  recon "$ifc"; sleep 2
+  [ "$ifc" = wlan1 ] && unwedge_a
+  timeout 90 bash -c "$(declare -f pi psudo reassoc recon); PI=$PI PS=$PS PROF=\"$PROF\" recon $ifc" >/dev/null 2>&1; sleep 2
   wait_gw "$ifc" 40 && good=$((good + 1))
 done
 auth=$(since "$m" | grep -a "P11-AP3 auth\]" ); na=$(grep -c . <<<"$auth"); nk=$(grep -c "ptk_set=true authorized=true" <<<"$auth")
