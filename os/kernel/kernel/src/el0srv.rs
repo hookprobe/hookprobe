@@ -59,6 +59,7 @@ mod imp {
     struct Spec {
         name: &'static str,
         elf: &'static [u8],
+        #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
         base: usize,
         magic: u32,
         /// RX / TX frame rings (el0-wifi).
@@ -126,8 +127,10 @@ mod imp {
     }
 
     pub struct Server {
+        #[allow(dead_code)] // name() — reports
         name: &'static str,
         elf: &'static [u8],
+        #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
         base: usize,
         magic: u32,
         /// Has frame rings (el0-wifi); never touch `rx` / `tx` otherwise (their frames are 0).
@@ -393,10 +396,12 @@ mod imp {
             self.wipes += 1;
         }
         /// The server's name (the isolation report, the beat).
+        #[allow(dead_code)]
         pub fn name(&self) -> &'static str {
             self.name
         }
         /// Its window's base VA.
+        #[cfg_attr(not(feature = "cm5"), allow(dead_code))]
         pub fn base(&self) -> usize {
             self.base
         }
