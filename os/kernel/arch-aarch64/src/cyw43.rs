@@ -3552,6 +3552,10 @@ fn wpa3_events() -> bool {
 /// to every PMF station in the IGTK KDE. brcmfmac-style index-4 key; algo BIP first, AES_CCM as the fallback.
 #[cfg(feature = "wpa3")]
 fn wpa3_igtk_install() {
+    // S3b: with el0-wpa loaded the IGTK is its own, installed by ap_group_keys_el0 (ap_install_gtk follows ap_start)
+    if el0().is_some() {
+        return;
+    }
     let s = w3();
     for k in 0..2 {
         match crate::rng200::next_word_strict() {
@@ -4209,7 +4213,52 @@ fn igtk_kde(out: &mut [u8]) -> usize {
 /// the per-ea pairwise key's flags 0. Installing it per station (the old shape) reset the
 /// group PN on every join, and flagging the PTK primary instead left the fw without a
 /// default group TX key — the likely reason AP-originated broadcast never decrypted.
+/// S3b: the AP's group keys from el0-wpa: it generates the GTK (and the IGTK in a WPA3 mode) from TRNG entropy, the
+/// bus server installs them from the key-transfer page, the page is zeroed — the kernel never holds them (its own
+/// AP_GTK / IGTK are zeroed). Every M3 carries el0-wpa's keys. False when el0-wpa is absent or an install failed.
+pub fn ap_group_keys_el0() -> bool {
+    let Some(h) = el0() else { return false };
+    let mut ent = [0u8; 32];
+    for k in 0..4 {
+        match crate::rng200::next_word_strict() {
+            Some(w) => ent[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+            None => return false,
+        }
+    }
+    #[cfg(feature = "wpa3")]
+    let want_igtk = w3().mode != SEC_WPA2;
+    #[cfg(not(feature = "wpa3"))]
+    let want_igtk = false;
+    let made = (h.group_new)(&ent, want_igtk);
+    hal::wpaauth::wipe(&mut ent);
+    if !made {
+        return false;
+    }
+    use hal::wpasrvabi::keyx;
+    let gtk_ok = (0..3).any(|_| set_key_keyx(keyx::SLOT_GTK, &[0; 6], 1));
+    #[cfg(feature = "wpa3")]
+    if want_igtk {
+        let s = w3();
+        s.igtk_set = false;
+        for (slot, algo) in [(keyx::SLOT_IGTK, CRYPTO_ALGO_BIP), (keyx::SLOT_IGTK_CCM, CRYPTO_ALGO_AES_CCM)] {
+            if set_key_keyx(slot, &[0; 6], 4) {
+                s.igtk_set = true;
+                s.igtk_algo = algo;
+                break;
+            }
+        }
+        hal::wpaauth::wipe(&mut s.igtk); // the KDE comes from el0-wpa now
+    }
+    (h.keyx_done)();
+    unsafe { AP_GTK = ([0; 16], 1) };
+    gtk_ok
+}
+
 pub fn ap_install_gtk(gtk: &[u8; 16], keyid: u8) -> bool {
+    // S3b: with el0-wpa loaded the group keys are its own (this kernel-made GTK is not used)
+    if el0().is_some() {
+        return ap_group_keys_el0();
+    }
     unsafe { AP_GTK = (*gtk, keyid) }; // G-E: M3 carries the group key installed here
     // Metal 2026-09-11: the first SET right after WLC_UP+SET_SSID missed its reply (the
     // dcmd reply hunt through the post-UP event burst), the second succeeded — retry.
@@ -4473,6 +4522,8 @@ pub struct El0Keyer {
     // step 4g S3c: install key-transfer slot (slot, station, key index) as WLC_SET_KEY via the bus server; zero the page
     pub key_install: fn(u8, u8, u16, u8, &[u8; 6], u32) -> Option<u32>,
     pub keyx_done: fn(),
+    // step 4g S3b: new group keys in el0-wpa from kernel TRNG entropy (records in the key-transfer page)
+    pub group_new: fn(&[u8; 32], bool) -> bool,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
@@ -4766,7 +4817,8 @@ pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
         let synced = ap_sae_el0_sync(true);
         #[cfg(not(feature = "wpa3"))]
         let synced = true;
-        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}), passphrase re-provisioned={} — stations re-authenticate in full\n", d.via, d.bcme, d.gone, synced));
+        let g = ap_group_keys_el0(); // new group keys too: the old ones died with the wiped server
+        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}), passphrase re-provisioned={}, new group keys installed={} — stations re-authenticate in full\n", d.via, d.bcme, d.gone, synced, g));
     }
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
     // the EL0 authenticator is ticked only while it has handshakes, and at most every 100 ms
