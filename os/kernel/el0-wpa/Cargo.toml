@@ -18,6 +18,8 @@ cm5 = []
 
 [dependencies]
 hal = { path = "../hal" }
+# S2: the WPA3-SAE responder (curve + KDF) runs here with its secrets (operator D3 + the 2026-11-15 split)
+sae = { path = "../sae" }
 
 [profile.release]
 panic = "abort"
