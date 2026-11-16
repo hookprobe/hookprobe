@@ -1316,7 +1316,13 @@ pub mod keyer {
                     "ISOLATION PROBE FAILED (see [WIFI-ISOLATION])"
                 }
             }
-            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | bus-read-wpa)"),
+            // PMKSA status-53 experiment (task 111): keep the firmware's PMKSA list in sync with el0-wpa's cache, or not
+            #[cfg(feature = "wpa3")]
+            "fw-pmksa-keep-on" | "fw-pmksa-keep-off" => {
+                arch_aarch64::cyw43::set_fw_pmksa_keep(kind == "fw-pmksa-keep-on");
+                if kind == "fw-pmksa-keep-on" { "firmware PMKSA list now mirrors el0-wpa's cache" } else { "firmware PMKSA entries dropped after keying (default)" }
+            }
+            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | bus-read-wpa | fw-pmksa-keep-on | fw-pmksa-keep-off)"),
         };
         arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
         Ok(r)
