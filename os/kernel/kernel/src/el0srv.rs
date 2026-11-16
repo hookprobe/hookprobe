@@ -1056,7 +1056,15 @@ pub mod keyer {
         if wpa {
             let g = arch_aarch64::cyw43::ap_group_keys_el0();
             keyed = g;
-            arch_aarch64::_print(format_args!(" [EL0-WPA] group keys generated in el0-wpa and installed via the key-transfer page: {} (the kernel holds no GTK / IGTK)\n", if g { "ok" } else { "FAILED" }));
+            // S3d: the IGTK (WPA3 modes) is installed here too — the bring-up [WPA3] line predates it ("IGTK installed=false")
+            #[cfg(feature = "wpa3")]
+            let igtk = match arch_aarch64::cyw43::ap_security() != arch_aarch64::cyw43::SEC_WPA2 {
+                true => if arch_aarch64::cyw43::wpa3_diag().6 { "IGTK installed" } else { "IGTK FAILED" },
+                false => "no IGTK (WPA2)",
+            };
+            #[cfg(not(feature = "wpa3"))]
+            let igtk = "no IGTK (WPA2)";
+            arch_aarch64::_print(format_args!(" [EL0-WPA] group keys generated in el0-wpa and installed via the key-transfer page: GTK {}, {} (the kernel holds no GTK / IGTK)\n", if g { "ok" } else { "FAILED" }, igtk));
         }
         #[cfg(feature = "cm5")]
         if bus {
