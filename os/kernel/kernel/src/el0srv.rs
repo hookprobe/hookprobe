@@ -176,7 +176,7 @@ mod imp {
         streak: u32,
         /// Run once after each fault / budget overrun, before the server's next call (the bus server: recover the SDHCI
         /// controller if the fault left a transfer in flight — ADR 0065 claims C1/C5).
-        pub on_fault: Option<fn()>,
+        pub on_fault: Option<fn() -> u8>,
     }
 
     fn alloc() -> usize {
@@ -379,13 +379,19 @@ mod imp {
             self.w32(H_CMD, cmd);
             self.w32(H_STATUS, ST_PANIC);
             self.calls += 1;
+            let t0 = crate::clock::ticks();
             let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, self.budget_us);
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
                 self.last_fault_ticks = crate::clock::ticks();
-                if let Some(h) = self.on_fault {
-                    h();
+                let rec = self.on_fault.map_or(9, |h| h());
+                // claims C1/C5: every fault of a recovering server, with what it was doing and how it ended
+                if self.on_fault.is_some() && self.faults <= 40 {
+                    let us = crate::clock::ticks().saturating_sub(t0) / (crate::clock::freq() / 1_000_000).max(1);
+                    arch_aarch64::_print(format_args!(" [EL0-FAULT] {} fault #{}: cmd={} kind={} after {} us (budget {} us) streak={} controller recover={}\n",
+                        self.name, self.faults, self.r32(H_CMD), match how { crate::Excursion::Timeout => "budget-overrun", crate::Excursion::Fault => "exception", _ => "panic-status" },
+                        us, self.budget_us, self.streak + 1, ["nothing in flight", "reset+abort+terminate", "reset did NOT clear", "-", "-", "-", "-", "-", "-", "n/a"][rec as usize]));
                 }
                 self.reset();
                 self.streak = self.streak.saturating_add(1);
@@ -1064,9 +1070,7 @@ pub mod keyer {
                 // claims C1/C5: a bus-server fault inside a CMD53 leaves the controller mid-transfer — recover it once
                 #[cfg(feature = "cm5")]
                 {
-                    s.on_fault = Some(|| {
-                        let _ = arch_aarch64::cyw43::bus_recover_after_el0_fault();
-                    });
+                    s.on_fault = Some(arch_aarch64::cyw43::bus_recover_after_el0_fault);
                 }
                 let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
                 unsafe { WIFI = Some(s) };
