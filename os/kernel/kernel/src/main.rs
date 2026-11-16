@@ -4027,6 +4027,10 @@ fn cm5_p10_probe() {
                         };
                         #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
                         let (mut ota_gate, ota_halts0, mut ota_dfs) = (otaimg::CommitGate::new(), cyw43::fw_halts(), (0u64, None::<u32>));
+                        // the Wi-Fi driver's health during a trial: el0-wifi faults seen, unanswered DFS queries in a row,
+                        // the last verdict (logged on change)
+                        #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
+                        let (mut ota_el0f, mut ota_ctl_miss, mut ota_wifi_ok) = (0u64, 0u32, true);
                         // Audit §2.1 #9: key the IPv6 source identity hash per boot from the hardware TRNG (an
                         // unkeyed hash let a chosen /64 collide with another source's rate / scan state).
                         if let (Some(a), Some(b)) = (arch_aarch64::rng200::next_word_strict(), arch_aarch64::rng200::next_word_strict()) {
@@ -4089,18 +4093,33 @@ fn cm5_p10_probe() {
                                 if let otaimg::Boot::Trial(l) = ota_boot {
                                     // release plan WS2: commit only when the WAN is usable AND the AP serves (BSS up in AP
                                     // mode, no Wi-Fi firmware halt since boot), both continuously for COMMIT_STABLE_S
-                                    let ap_serving = ap.up_ok && ap.ssid_ok && ap.get_ap == 1 && cyw43::fw_halts() == ota_halts0;
                                     // task #88: BSS up is not enough — a DFS CAC keeps the AP silent. Ask the firmware
                                     // once a second (an SDIO control round-trip; only during a trial).
                                     let ns = now() / freq;
                                     if ns != ota_dfs.0 {
                                         let st = cyw43::dfs_cac_state();
+                                        // metal k4d: an unanswered query is a broken driver, not "unknown"
+                                        ota_ctl_miss = if st.is_some() { 0 } else { ota_ctl_miss.saturating_add(1) };
                                         if st != ota_dfs.1 {
                                             kprint!(" [OTA] trial: Wi-Fi DFS state {:?} (AP {} serving)\n", st, if otaimg::dfs_lets_ap_serve(st) { "may be" } else { "NOT" });
                                         }
                                         ota_dfs = (ns, st);
                                     }
                                     let in_cac = !otaimg::dfs_lets_ap_serve(ota_dfs.1);
+                                    #[cfg(all(feature = "mctls", feature = "cm5"))]
+                                    let el0f = crate::el0srv::keyer::stats().1;
+                                    #[cfg(not(all(feature = "mctls", feature = "cm5")))]
+                                    let el0f = 0u64;
+                                    let wifi_ok = otaimg::wifi_path_ok(el0f.saturating_sub(ota_el0f), ota_ctl_miss);
+                                    ota_el0f = el0f;
+                                    if wifi_ok != ota_wifi_ok {
+                                        ota_wifi_ok = wifi_ok;
+                                        kprint!(" [OTA] trial: Wi-Fi driver {} (el0-wifi faults {} | control round trips unanswered in a row {})\n",
+                                            if wifi_ok { "working again" } else { "NOT working — the AP does not count as serving" }, el0f, ota_ctl_miss);
+                                    }
+                                    // release plan WS2 + metal k4d: the AP serves = BSS up in AP mode, no firmware halt, AND the
+                                    // driver demonstrably passes control traffic with no el0-wifi fault
+                                    let ap_serving = ap.up_ok && ap.ssid_ok && ap.get_ap == 1 && cyw43::fw_halts() == ota_halts0 && wifi_ok;
                                     match ota_gate.step(ns, ota_t0 / freq, up.usable(), ap_serving, in_cac) {
                                         otaimg::Gate::Commit => match abboot::trial::commit(l) {
                                             Ok(n) => {
