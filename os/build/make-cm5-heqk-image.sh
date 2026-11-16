@@ -81,6 +81,10 @@ esac
 case ",$FEATURES," in
   *,hsh-dev,*) [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ] || { echo "FATAL: hsh-dev (development shell transport) in a release build" >&2; exit 1; } ;;
 esac
+# ADR 0065 S4: Wi-Fi fault injection is a bench feature — never in a release image.
+case ",$FEATURES," in
+  *,wifi-inject,*) [ "${HOOKPROBE_DEBUG_ACCESS:-0}" = 1 ] || { echo "FATAL: wifi-inject (bench Wi-Fi fault injection) in a release build" >&2; exit 1; } ;;
+esac
 
 # Release-BLOCKING config-key gate (ADR 0059 Phase 0.5, C4): a RELEASE build of a device profile (it serves
 # Mission Control or the AP) must carry the operator configuration key — without it the device accepts UNSIGNED
