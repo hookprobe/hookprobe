@@ -3770,16 +3770,8 @@ pub fn ap_sae_rx(rx: &[u8], ev: usize, ap: &[u8; 6], now_ms: u64) -> sae::Event 
     // ADR 0065 step 3c: el0-wifi runs the exchange with every SAE secret; the kernel passes the body + fresh TRNG bytes
     // and gets back only the frames to send and the PUBLIC PMKID. In-kernel below when the server cannot answer (D5).
     if let Some(h) = el0() {
-        let mut pool = [0u8; hal::wifisrvabi::SAE_RND];
-        let mut ok = true;
-        for k in 0..hal::wifisrvabi::SAE_RND / 8 {
-            match crate::rng200::next_word_strict() {
-                Some(w) => pool[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
-                None => ok = false,
-            }
-        }
-        let r = if ok { (h.sae_rx)(ap, &sta, now_ms, &pool, body) } else { None };
-        hal::wpaauth::wipe(&mut pool);
+        // D-c: el0-wpa draws the SAE randomness from its own DRBG (seeded by the kernel TRNG); no random bytes cross here
+        let r = (h.sae_rx)(ap, &sta, now_ms, body);
         if let Some(r) = r {
             let e = match r.ev {
                 1 => sae::Event::Dropped("dropped by el0-wifi"),
@@ -4265,19 +4257,11 @@ fn igtk_kde(out: &mut [u8]) -> usize {
 /// AP_GTK / IGTK are zeroed). Every M3 carries el0-wpa's keys. False when el0-wpa is absent or an install failed.
 pub fn ap_group_keys_el0() -> bool {
     let Some(h) = el0() else { return false };
-    let mut ent = [0u8; 32];
-    for k in 0..4 {
-        match crate::rng200::next_word_strict() {
-            Some(w) => ent[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
-            None => return false,
-        }
-    }
     #[cfg(feature = "wpa3")]
     let want_igtk = w3().mode != SEC_WPA2;
     #[cfg(not(feature = "wpa3"))]
     let want_igtk = false;
-    let made = (h.group_new)(&ent, want_igtk);
-    hal::wpaauth::wipe(&mut ent);
+    let made = (h.group_new)(want_igtk);
     if !made {
         return false;
     }
@@ -4565,7 +4549,7 @@ pub struct El0Keyer {
     pub abort: fn(&[u8; 6]),
     // steps 3c / 3d: the SAE responder + PMKSA cache (the SAE PMK never enters the kernel)
     pub sae_setup: fn(u8, bool, &[u8], &[u8]) -> bool,
-    pub sae_rx: fn(&[u8; 6], &[u8; 6], u64, &[u8; hal::wifisrvabi::SAE_RND], &[u8]) -> Option<hal::wifisrvabi::saemsg::SaeRx>,
+    pub sae_rx: fn(&[u8; 6], &[u8; 6], u64, &[u8]) -> Option<hal::wifisrvabi::saemsg::SaeRx>,
     pub sae_keying: fn(&[u8; 6], u64, u8, Option<&hal::rsnassoc::AssocRsn>) -> Option<(hal::rsnassoc::Keying, bool, (u8, u64))>,
     pub key_start_sae: fn(&hal::wpakeyer::Start, u64, u8, &[u8; 16], &mut [u8]) -> Option<hal::wpakeyer::Out>,
     pub sae_forget: fn(&[u8; 6], u64, u8) -> Option<bool>,
@@ -4582,8 +4566,8 @@ pub struct El0Keyer {
     // step 4g S3c: install key-transfer slot (slot, station, key index) as WLC_SET_KEY via the bus server; zero the page
     pub key_install: fn(u8, u8, u16, u8, &[u8; 6], u32) -> Option<u32>,
     pub keyx_done: fn(),
-    // step 4g S3b: new group keys in el0-wpa from kernel TRNG entropy (records in the key-transfer page)
-    pub group_new: fn(&[u8; 32], bool) -> bool,
+    // step 4g S3b: new group keys in el0-wpa, from its DRBG (D-c; records in the key-transfer page)
+    pub group_new: fn(bool) -> bool,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
