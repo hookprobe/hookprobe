@@ -3422,6 +3422,16 @@ fn cm5_p10_probe() {
                         // PMK + GTK FIRST (fail-closed): never leave a WPA2 BSS beaconing with no
                         // authenticator behind it because the TRNG refused after the BSS was up.
                         // a 64-hex PSK is the PMK itself (WPA2); otherwise PBKDF2(passphrase, SSID)
+                        // ADR 0065 step 4g S3d: in an AP+MC WPA3 image (cfg `el0_keys` in arch-aarch64) every key is el0-wpa's —
+                        // it derives the PSK PMK and the SAE PT from the passphrase and generates the GTK / IGTK; the kernel
+                        // derives none of them (zeros stand in where the old signatures take a key).
+                        #[cfg(all(feature = "apmc", feature = "wpa3"))]
+                        #[allow(unused_mut)]
+                        let mut pmk = [0u8; 32];
+                        #[cfg(all(feature = "apmc", feature = "wpa3"))]
+                        #[allow(unused_mut)]
+                        let mut gtk = [0u8; 16];
+                        #[cfg(not(all(feature = "apmc", feature = "wpa3")))]
                         #[allow(unused_mut)] // replaced by the live Wi-Fi executor (sealed-config step 10, p15-write)
                         let mut pmk = if ap_psk.len() == 64 {
                             let mut k = [0u8; 32];
@@ -3433,17 +3443,21 @@ fn cm5_p10_probe() {
                         } else {
                             arch_aarch64::wpa::wpa_pmk(ap_psk, ap_ssid)
                         };
+                        #[cfg(not(all(feature = "apmc", feature = "wpa3")))]
                         let mut gtk = [0u8; 16];
-                        let mut gtk_ok = true;
-                        for k in 0..2 {
-                            match arch_aarch64::rng200::next_word_strict() {
-                                Some(w) => gtk[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
-                                None => gtk_ok = false,
+                        #[cfg(not(all(feature = "apmc", feature = "wpa3")))]
+                        {
+                            let mut gtk_ok = true;
+                            for k in 0..2 {
+                                match arch_aarch64::rng200::next_word_strict() {
+                                    Some(w) => gtk[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+                                    None => gtk_ok = false,
+                                }
                             }
-                        }
-                        if !gtk_ok {
-                            kprint!(" [P11-AP2] GTK TRNG failed — AP NOT started (fail-closed)\n");
-                            return;
+                            if !gtk_ok {
+                                kprint!(" [P11-AP2] GTK TRNG failed — AP NOT started (fail-closed)\n");
+                                return;
+                            }
                         }
                         let mut ap = cyw43::ApResult::new();
                         let mut ap_tries = 0u32;
@@ -3542,7 +3556,10 @@ fn cm5_p10_probe() {
                                 ap.mac_set_ok, ap.ev_ok, ap.gtk_set,
                                 ap.bssid_readback[0], ap.bssid_readback[1], ap.bssid_readback[2], ap.bssid_readback[3], ap.bssid_readback[4], ap.bssid_readback[5],
                                 ap.bssid_verified);
-                            if ap.serve_ready() && ap.gtk_set {
+                            // S3d: in an `el0_keys` image the group keys come from el0-wpa, loaded once the AP is up
+                            // (`el0srv::keyer::install`, before the serve loop runs); it takes the BSS down if it cannot
+                            let group_keys_later = cfg!(all(feature = "apmc", feature = "wpa3"));
+                            if ap.serve_ready() && (ap.gtk_set || group_keys_later) {
                                 chosen_cs = ap_cs;
                                 if hal::chanspec_is_dfs(ap_cs) {
                                     dfs_watch = Some(hal::DfsWatch::new());
@@ -3911,7 +3928,15 @@ fn cm5_p10_probe() {
                                 crate::tlshost::bring_up(Some(&dev));
                                 crate::lansvc::install_dhcp(); // D4 step 2b: the DHCP server parses client frames in el0-lansvc
                                 #[cfg(feature = "mctls")]
-                                let _ = crate::el0srv::keyer::install(); // ADR 0065 step 3b: the WPA 4-way + its keys in el0-wifi
+                                let el0_keys_ok = crate::el0srv::keyer::install(); // ADR 0065 step 4g: the bus server + el0-wpa (every Wi-Fi key)
+                                // S3d: no in-kernel keying fallback here — a WPA BSS that el0-wpa cannot key must not beacon
+                                #[cfg(all(feature = "apmc", feature = "wpa3"))]
+                                if !el0_keys_ok.1 {
+                                    kprint!(" [EL0-WPA] FAIL — no security server: the BSS is taken down (it could never key a station; no in-kernel fallback)\n");
+                                    let _ = cyw43::ap_stop();
+                                }
+                                #[cfg(all(feature = "mctls", not(all(feature = "apmc", feature = "wpa3"))))]
+                                let _ = el0_keys_ok;
                                 let _ = crate::lansvc::excursion_cost(2000); // out-of-kernel Wi-Fi driver ADR, step 1 (once, ~tens of ms)
                                 let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 on metal (incl. the 2A PMK-wipe check)
                                 // Image budget (2026-11-12): [P-lansvc-sae] and the hsh self-test run on QEMU / mc-e2e only
@@ -14968,16 +14993,33 @@ struct MetalWifi {
 #[cfg(all(feature = "cm5", feature = "p15-write"))]
 impl wifilive::WifiPort for MetalWifi {
     fn pmk(&mut self, pass: &[u8], ssid: &[u8], out: &mut [u8; 32]) -> bool {
+        // S3d: el0-wpa derives the PMK from the passphrase `install_security` hands it; the kernel keeps zeros
+        #[cfg(all(feature = "apmc", feature = "wpa3"))]
+        {
+            let _ = (pass, ssid);
+            *out = [0; 32];
+            true
+        }
+        #[cfg(not(all(feature = "apmc", feature = "wpa3")))]
         wifilive::derive_pmk(pass, ssid, out)
     }
     fn gtk(&mut self, out: &mut [u8; 16]) -> bool {
-        for k in 0..2 {
-            match arch_aarch64::rng200::next_word_strict() {
-                Some(w) => out[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
-                None => return false,
-            }
+        // S3d: el0-wpa generates the group keys (`ap_install_gtk` -> `ap_group_keys_el0`); the kernel keeps zeros
+        #[cfg(all(feature = "apmc", feature = "wpa3"))]
+        {
+            *out = [0; 16];
+            true
         }
-        true
+        #[cfg(not(all(feature = "apmc", feature = "wpa3")))]
+        {
+            for k in 0..2 {
+                match arch_aarch64::rng200::next_word_strict() {
+                    Some(w) => out[k * 8..k * 8 + 8].copy_from_slice(&w.to_le_bytes()),
+                    None => return false,
+                }
+            }
+            true
+        }
     }
     fn prepare_security(&mut self, mode: u8, ssid: &[u8], pass: &[u8]) -> Option<u8> {
         #[cfg(feature = "wpa3")]
