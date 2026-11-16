@@ -121,7 +121,9 @@ if run C3; then
   # a standalone supplicant on wlan1 (control socket): the same client and the same commands for both kinds
   psudo "nmcli con down hq-iso-a" >/dev/null 2>&1; psudo "nmcli dev set wlan1 managed no" >/dev/null 2>&1; sleep 2
   pi "umask 077; printf 'ctrl_interface=/run/hq-claims\nsae_pwe=2\nnetwork={\n ssid=\"%s\"\n key_mgmt=SAE\n sae_password=\"%s\"\n ieee80211w=2\n}\n' '$SSID' '$PSK' > /tmp/hq-claims.conf"
-  psudo "rm -f /tmp/hq-claims-sup.log; wpa_supplicant -B -i wlan1 -D nl80211 -c /tmp/hq-claims.conf -P /run/hq-claims.pid -dd -t -f /tmp/hq-claims-sup.log" >/dev/null 2>&1; sleep 8
+  # (-f needs CONFIG_DEBUG_FILE, absent in this build: the daemon then never started — round 2. Redirect instead.)
+  psudo "sh -c 'rm -f /tmp/hq-claims-sup.log; nohup wpa_supplicant -i wlan1 -D nl80211 -c /tmp/hq-claims.conf -dd -t > /tmp/hq-claims-sup.log 2>&1 & echo \$! > /run/hq-claims.pid'" >/dev/null 2>&1; sleep 8
+  psudo "wpa_cli -p /run/hq-claims -i wlan1 status" 2>/dev/null | grep -q "wpa_state" || echo "  WARNING: the standalone supplicant is not answering"
   # on the Pi: time from `reconnect` to wpa_state=COMPLETED (4-way done), polled every 10 ms
   T=$(psudo "sh -c 'W=\"wpa_cli -p /run/hq-claims -i wlan1\"; t() { \$W disconnect >/dev/null; sleep 1; [ \"\$1\" = full ] && \$W pmksa_flush >/dev/null; a=\$(date +%s%N); \$W reconnect >/dev/null; i=0; while ! \$W status | grep -q wpa_state=COMPLETED; do sleep 0.01; i=\$((i+1)); [ \$i -gt 1500 ] && break; done; echo \$1 \$(( (\$(date +%s%N) - a) / 1000000 )); sleep 1; }; for k in \$(seq 1 $N); do t cached; t full; done'")
   pi "rm -f /tmp/hq-claims.conf"; psudo "kill \$(cat /run/hq-claims.pid)" >/dev/null 2>&1; sleep 1
