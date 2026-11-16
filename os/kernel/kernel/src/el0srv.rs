@@ -1124,10 +1124,12 @@ pub mod keyer {
         (st, s.restarts, s.faults, s.last_fault_ticks)
     }
 
+    /// (state, restarts, faults, full wipes, ticks of the last fault or 0, PMKSA entries).
+    pub type WpaHealth = (&'static str, u64, u64, u64, u64, Option<u32>);
     /// `/api/health` wifi_driver.security (S2): (state, restarts, faults, full wipes, ticks of the last fault or 0,
     /// PMKSA cache entries or None when it could not be read). State: "absent" = not loaded (keying in-kernel, D5),
     /// "backoff" = restarting after a fault, else "running". Only counters.
-    pub fn wpa_health() -> Option<(&'static str, u64, u64, u64, u64, Option<u32>)> {
+    pub fn wpa_health() -> Option<WpaHealth> {
         let Some(s) = srv() else { return Some(("absent", 0, 0, 0, 0, None)) };
         let st = if s.backoff_left_ms() > 0 { "backoff" } else { "running" };
         let (r, f, w, t) = (s.restarts, s.faults, s.wipes, s.last_fault_ticks);
