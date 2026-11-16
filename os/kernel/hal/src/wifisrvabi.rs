@@ -49,6 +49,9 @@ pub const CMD_SELFTEST_FAULT: u32 = 99;
 /// Bench fault injection (ADR 0065 S4, kernel feature `wifi-inject` only): the next CMD53 read this server issues
 /// stalls forever (an injected CMD53 timeout) — the kernel's budget faults it and restarts it.
 pub const CMD_INJECT_CMD53_STALL: u32 = 96;
+/// Bench isolation probe (ADR 0065 S4, `wifi-inject` only): IN = a u64 VA; the bus server reads 8 bytes there and
+/// replies them. Used on el0-wpa's image and state pages, which must FAULT (not mapped in the bus server's space).
+pub const CMD_INJECT_READ_VA: u32 = 95;
 
 pub const ST_OK: u32 = 0;
 pub const ST_BAD_CMD: u32 = 2;
