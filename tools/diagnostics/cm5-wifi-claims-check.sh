@@ -146,7 +146,7 @@ if run C3; then
   chk $? "C3 cached-PMKSA authentication->connected median ${mc:-?} ms vs full SAE ${mf:-?} ms ($nc / $nf attempts classified from the client log; cached faster)"
 fi
 
-# ================= P53: PMKSA recovery experiment (operator 2026-11-16; task 111) =================
+# ================= P53: post-wipe PMKSA recovery (operator 2026-11-16; task 111) =================
 # Does keeping the firmware's PMKSA list in sync with el0-wpa's cache (a) make cached reconnects fast and (b) make the
 # firmware itself REJECT a stale PMKID after a wipe (status 53), so a PMKSA-caching client falls back to SAE at once?
 if [ "${ONLY:-}" = P53 ]; then
@@ -159,8 +159,10 @@ if [ "${ONLY:-}" = P53 ]; then
   cyc() { psudo "sh -c '$W disconnect >/dev/null; sleep 1; a=\$(date +%s%N); $W reconnect >/dev/null; i=0; while ! $W status | grep -q wpa_state=COMPLETED; do sleep 0.01; i=\$((i+1)); [ \$i -gt 4000 ] && break; done; echo \$(( (\$(date +%s%N) - a) / 1000000 ))'"; }
   lg() { psudo "grep -aE '$1' /tmp/hq-p53.log" | wc -l; }
   auth_ms() { psudo "awk '/PMKSA cache entry found/ {c=1} /SME: Trying to authenticate/ {t=\$1+0; k=(c?\"cached\":\"full\"); c=0} /CTRL-EVENT-CONNECTED/ && t {printf \"%s %d\\n\", k, (\$1-t)*1000; t=0}' /tmp/hq-p53.log"; }
-  for mode in on off; do
-    echo "  --- firmware PMKSA keep: $mode"; api "fw-pmksa-keep-$mode" >/dev/null
+  # (metal 2026-11-16: keeping the firmware PMKSA list in sync made no difference and the firmware never answered a
+  # stale PMKID with status 53 — the toggle was removed; this section now records post-wipe recovery as it stands)
+  for mode in current; do
+    echo "  --- post-wipe recovery ($mode behaviour)"
     sup_start; c0=$(lg 'CTRL-EVENT-CONNECTED'); echo "  initial connect: $c0 connection(s)"
     for k in 1 2 3 4 5; do echo "  cached reconnect $k: $(cyc) ms end-to-end"; done
     echo "  auth->connected per attempt (kind ms): $(auth_ms | tr '\n' ';')"
@@ -173,7 +175,6 @@ if [ "${ONLY:-}" = P53 ]; then
     echo "  auth->connected (all, this mode): $(auth_ms | tr '\n' ';')"
     sup_stop
   done
-  api fw-pmksa-keep-off >/dev/null
 fi
 
 # ================= C4: security isolation =================
