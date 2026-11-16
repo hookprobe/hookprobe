@@ -42,6 +42,10 @@ pub const CMD_SELFTEST_FAULT: u32 = 99;
 pub const CMD_PMKSA_COUNT: u32 = 44;
 /// Test only: IN = a station MAC — the next command about that station faults (per-station containment proof).
 pub const CMD_SELFTEST_ARM_FAULT: u32 = 45;
+/// S3b: new group keys. IN = 32 B of TRNG entropy (the kernel's; design D-c) ‖ flags (bit0 = an IGTK too, PMF). The
+/// server takes its GTK / IGTK from it, keeps them, and writes the install records to key-transfer slots 1 (GTK),
+/// 2 (IGTK, BIP) and 3 (IGTK, AES-CCM: the firmware's fallback). R0 = 1.
+pub const CMD_GROUP_NEW: u32 = 46;
 /// The persistent state failed its check after a restart: the kernel must full-wipe (every station re-authenticates).
 pub const ST_STATE_BAD: u32 = 3;
 
@@ -59,6 +63,8 @@ pub mod keyx {
     pub const SLOT_TK: u8 = 0;
     pub const SLOT_GTK: u8 = 1;
     pub const SLOT_IGTK: u8 = 2;
+    /// The IGTK again with AES-CCM (the firmware refuses BIP on some builds; brcmfmac falls back the same way).
+    pub const SLOT_IGTK_CCM: u8 = 3;
 
     /// One key on its way to the chip.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
