@@ -427,8 +427,10 @@ pub fn gate_selftest() -> bool {
         && g.step(COMMIT_LIMIT_S + 1, 0, true, wifi_path_ok(0, 9), false) == Gate::Revert
         && !wifi_path_ok(0, CTL_DEAD_AFTER) && wifi_path_ok(0, CTL_DEAD_AFTER - 1);
     let mut g = CommitGate::new();
+    // healthy from t=10 would commit at t=40; the fault at t=20 restarts the window at t=21: no commit at 40, commit at 51
     let _ = g.step(10, 0, true, wifi_path_ok(0, 0), false);
     let fault = g.step(20, 0, true, wifi_path_ok(1, 0), false) == Gate::Wait
+        && g.step(21, 0, true, wifi_path_ok(0, 0), false) == Gate::Wait
         && g.step(10 + COMMIT_STABLE_S, 0, true, wifi_path_ok(0, 0), false) == Gate::Wait
         && g.step(21 + COMMIT_STABLE_S, 0, true, wifi_path_ok(0, 0), false) == Gate::Commit;
     let pass = wan_only && ap_only && both && dip && late && cac60 && weather && endless && states && dead && fault;
