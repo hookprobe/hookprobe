@@ -336,6 +336,26 @@ pub enum RxRead {
 impl<M: Mmio> Bus<M> {
     /// brcmf_sdio_rxfail: terminate the current frame in the device (`abort` = also abort the F2 transfer, after a
     /// read error), then wait for its byte count to drain. Returns whether it drained.
+    /// ADR 0065 claims (metal C1/C5): an EL0 bus server killed INSIDE a CMD53 leaves the controller mid-transfer —
+    /// CMD/DAT inhibit set, a half-read F2 frame in the device. Every later command then spins on the inhibit past the
+    /// restarted server's budget (a fault cascade). If, and only if, the controller still shows an inhibit: soft-reset
+    /// the CMD and DAT lines, then abort F2 and terminate the half-read frame. Nothing in flight -> nothing done (a blind
+    /// terminate drops a good frame: step 4d). 0 = nothing in flight, 1 = recovered, 2 = the reset did not clear.
+    pub fn recover_abandoned(&mut self) -> u8 {
+        if self.off || self.m.r32(PRESENT_STATE) & (CMD_INHIBIT | DAT_INHIBIT) == 0 {
+            return 0;
+        }
+        self.m.w8(0x2F, RST_CMD | RST_DAT);
+        let mut rs = 0u32;
+        while self.m.r8(0x2F) & (RST_CMD | RST_DAT) != 0 && rs < 200_000 {
+            rs += 1;
+        }
+        self.m.w32(INT_STATUS, 0xFFFF_FFFF);
+        let cleared = self.m.r32(PRESENT_STATE) & (CMD_INHIBIT | DAT_INHIBIT) == 0;
+        let _ = self.rxfail(true);
+        if cleared { 1 } else { 2 }
+    }
+
     pub fn rxfail(&mut self, abort: bool) -> bool {
         const SDIO_CCCR_ABORT: u32 = 0x06;
         const SBSDIO_FUNC1_FRAMECTRL: u32 = 0x1000D;
