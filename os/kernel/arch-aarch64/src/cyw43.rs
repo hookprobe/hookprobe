@@ -4797,6 +4797,7 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     // retry like the group-key install (a repeated SET of the same key is idempotent).
     // S3c: a zero TK = el0-wpa keyed it and left the key in the key-transfer page: the bus server installs it from there
     // (the kernel never holds it), then the page is zeroed. A real TK = the in-kernel fallback keyed it (D5, until S3d).
+    unsafe { DCMD_DRY_MS = KEYING_DRY_MS };
     if tk == [0u8; 16] && el0().is_some() {
         auth.ptk_set = (0..3).any(|_| set_key_keyx(hal::wpasrvabi::keyx::SLOT_TK, &d.sta, 0));
         if let Some(h) = el0() {
@@ -4817,12 +4818,16 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     dbg_putc(b'P');
     // AUTHORIZE: with a HOST authenticator the firmware keeps the station's 802.1X port blocked until told. The
     // "authorize" iovar is tried only if the ioctl is refused (each dcmd can discard queued data frames).
-    auth.authorized = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []).0;
-    if !auth.authorized {
+    let (ok, st) = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []);
+    auth.authorized = ok;
+    // the iovar only when the firmware REFUSED the ioctl (a BCDC error status); a reply that did not come in time
+    // (status 0) is a late reply to a request the firmware applies — a second wait would only lengthen the loop gap
+    if !ok && st != 0 {
         let mut ab = [0u8; 32];
         let na = iovar_buf(b"authorize", &d.sta, &mut ab);
         auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
     }
+    unsafe { DCMD_DRY_MS = 800 };
     dbg_putc(b'A');
     #[cfg(feature = "wpa3")]
     if d.akm8 {
@@ -6785,6 +6790,12 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
 
 /// The second half of a control request: read frames until the reply to `rid` (parking station frames for the serve
 /// loop), its body copied into `reply`. Shared by `bcdc_dcmd` and the S3c key-transfer install.
+/// How long `bcdc_wait` waits for a frame (ms). 800 by default; the station keying path (in the serve loop) uses
+/// `KEYING_DRY_MS`: a reply the firmware sends late (metal S4: ~810 ms, once in ~40 joins) cost two 800-ms waits —
+/// a 2.87 s loop gap — though the firmware applied the request anyway.
+static mut DCMD_DRY_MS: u32 = 800;
+const KEYING_DRY_MS: u32 = 250;
+
 fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut rx = [0u8; 2048];
     let mut status = 0u32;
@@ -6797,7 +6808,7 @@ fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut any_rx = false;
     let intstat_seen = 0u32;
     'frames: for _frame in 0..40 {
-        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, 800) else {
+        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, unsafe { DCMD_DRY_MS }) else {
             break 'frames; // dry (or a frame that had to be terminated)
         };
         any_rx = true;
