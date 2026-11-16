@@ -1,6 +1,8 @@
 # ADR 0065 — The CYW43455 Wi-Fi driver moves out of the heqk kernel; the kernel keeps only bus plumbing
 
-**Status:** 🟡 **Proposed (2026-11-14).** **D3 approved by the operator (2026-11-15).** Direction set by the operator on 2026-11-14: an out-of-kernel (user-space)
+**Status:** 🟡 **Proposed (2026-11-14).** **D3 approved by the operator (2026-11-15).** **D6 (two-server split) and D7
+(D-a, D-c, D-d, PMKSA recovery) decided by the operator (2026-11-15 / 2026-11-16) — amendment below.** The split is
+**not complete**: see *Implementation status*. Direction set by the operator on 2026-11-14: an out-of-kernel (user-space)
 Wi-Fi driver, with only the raw bus and interrupt plumbing inside the heqk kernel. D3 (where the keys live) and
 the go / no-go at each step's metal gate are the operator's. Clauses are tagged **[realized]**, **[partial]** or
 **[vision]** (the ADR 0043/0044/0047 discipline).
@@ -70,6 +72,8 @@ stateless calls (`el0-lansvc`) or own no hardware (`el0-tlshost`).
   - the same wipe discipline and "no key on the IO page after a call" checks as 2A;
   - never logged.
 - **Unchanged:** the device identity key and Noise stay in EL1 (operator decision 2026-11-11).
+- *Superseded in part by D6 (2026-11-15): the keys live in `el0-wpa`, not `el0-wifi`; "holds no other service" now
+  applies to `el0-wpa`.*
 
 ### D4 — Order, each step gated on metal **[partial]**
 
@@ -105,6 +109,57 @@ stateless calls (`el0-lansvc`) or own no hardware (`el0-tlshost`).
 - The separation matrix and `mc-e2e` green.
 - A server fault forgets only that server's state: stations re-join, and the AP's security mode never changes.
 - The EL1 copy is deleted only after the step's gate.
+
+### D6 — Two servers: bus and security — **decided by the operator 2026-11-15** **[partial]**
+
+> The Wi-Fi driver is TWO resident EL0 servers. `el0-wifi` (bus: SDHCI/SDIO, SDPCM, firmware I/O) is stateless across
+> a restart and may be restarted at any time. `el0-wpa` (4-way, SAE, PMKSA, GTK/IGTK, PSK PMK) keeps transactional
+> state that survives its own restart, and is never reset by a bus fault. Keys reach the chip only through a
+> key-transfer page (RW el0-wpa, RO el0-wifi) and the bus server's key-install call. The kernel brokers records and
+> never reads, copies or retains key material. The D5 in-kernel keying fallback is removed.
+
+Design: `docs/design/wifi-el0-split.md` (IPC, supervision and restart, timeouts, key isolation, performance).
+A fault in one station's handshake may make that station retry; it never affects another station or the PMKSA
+cache. A security-server fault outside a station call wipes every secret and forces full re-authentication.
+
+### D7 — Operator decisions of 2026-11-16 **[partial]**
+
+- **D-a — the AP passphrase stays in EL1 custody** (from the sealed configuration). The kernel may hand it to
+  `el0-wpa` when (re)provisioning needs it; temporary copies are wiped. `el0-wpa` derives and owns the PSK PMK and
+  all later key material. The kernel retains no derived key and no handshake state.
+- **D-c — the hardware RNG stays in the kernel.** The kernel feeds fresh TRNG entropy to an `el0-wpa` DRBG at
+  initialisation and on reseed; the RNG MMIO page is not granted to `el0-wpa`. Entropy failure fails closed.
+  Direct access is reconsidered only on measured performance or availability need.
+- **D-d — `validate.sh` QEMU per-boot timeout 600 s.** No assertion, test semantic or CM5 metal gate is relaxed; CI
+  keeps a separate overall job timeout.
+- **PMKSA recovery after a full wipe or reboot** — approved in principle, constrained: prefer a targeted
+  association rejection with status 53 (Invalid PMKID) if the firmware / AP path supports it and real clients
+  behave. **No generic MAC deny-list window** and nothing that could block a valid client. If targeted rejection is
+  not supported, the current behaviour stays (post-association refusal; the client drops its stale PMKSA when its
+  connection manager fails that attempt, then does a full SAE). Evidence required on CM5: after a full wipe and a
+  reboot, clients with and without cached PMKIDs, full SAE fallback, no unnecessary failed retry, no regression to
+  normal WPA3 reconnects.
+
+## Implementation status (2026-11-16 — source and CM5 metal; QEMU evidence alone marks nothing)
+
+| Clause | Status | Evidence |
+|---|---|---|
+| D4.1 measure | **[realized]** | metal `ec1`: 388 ns / 1.2 µs per EL0 round trip (#1206) |
+| D4.2 substrate | **[realized]** | #1208 (rings, grant, supervision, backoff) |
+| D4.3 control plane in EL0 | **[realized]** → moved to `el0-wpa` by D6 | #1209 #1211 #1212; S2 #1232 |
+| D4.4 bus in EL0: frame RX / TX / control requests | **[realized]** | 4a #1219, 4b-1 #1220, 4b-2 #1222 #1223, 4c #1224, 4d #1226; metal 98–106 Mbps |
+| D4.4 bus bring-up, firmware download, wifiheal reload | **[vision]** | still EL1 — the `SECURITY.md` honesty floor stands |
+| D6 per-server address spaces (ASIDs) | **[realized]** | S0 #1229; metal `[P-el0-as] PASS` over 5 servers |
+| D6 `el0-wpa` + independent supervision | **[realized]** | S1 #1231, S2 #1232; `/api/health` `wifi_driver` #1230 |
+| D6 keys via the key-transfer page only; GTK/IGTK/PSK PMK in `el0-wpa` | **[realized]** | S3a/b/c #1233; metal WPA3 7/7, IPv6 SLAAC over the el0-wpa GTK |
+| D6 in-kernel keying fallback removed (D-b) | **[realized]** | S3d #1235: compiled out of AP+MC images; `tools/el0keys-symcheck.sh` PASS on the shipping ELF; QEMU K1 scan (positive control) |
+| D6 fault isolation (operator evidence E1–E7) | **[partial — PR open]** | S4: metal `s4-b060c8b9` E1–E6 PASS, soak 50/50 keyed+authorized, worst loop gap 846 ms; four defects found and fixed on metal |
+| D7 D-a | **[partial]** | passphrase handed to `el0-wpa` on (re)provisioning; temporary-copy wipe audit pending |
+| D7 D-c | **[partial]** | kernel TRNG feeds `el0-wpa`; group keys from an HMAC pool; a real DRBG seeded at init + reseed is pending |
+| D7 D-d | **[partial — PR open]** | validate.sh 600 s + CI job timeout |
+| D7 PMKSA status-53 recovery | **[vision]** | firmware has PMKID-validation paths; CM5 experiment pending |
+
+The split is complete only when every row above is **[realized]** with CM5 evidence.
 
 ## Consequences
 
