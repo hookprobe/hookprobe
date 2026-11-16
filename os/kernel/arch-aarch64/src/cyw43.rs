@@ -3981,7 +3981,6 @@ pub fn ap_pmksa_drop(sta: &[u8; 6]) {
 /// How `ap_deauth` went: `via` = the ioctl the firmware accepted (201 / 143 / 122, 0 = none); `bcme` = the BCDC
 /// status of the 201 attempt (a negative BCME code; 0 with via 0 = no control reply); `gone` = the firmware has no
 /// SCB for the station (BCME_NOTFOUND / BCME_NOTASSOCIATED: it already dropped it), nothing left to do.
-#[cfg(feature = "wpa3")]
 #[derive(Clone, Copy)]
 pub struct Deauth {
     pub via: u32,
@@ -3994,7 +3993,6 @@ pub struct Deauth {
 /// in the response; a deauthentication with the reason right after it is the equivalent. If 201 is refused with
 /// anything but "no such SCB": WLC_SCB_DEAUTHENTICATE (143, ea only — `wl deauthenticate` without a reason), then
 /// WLC_SCB_DEAUTHORIZE (122, ea — `wl deauthorize`: the station's port stays shut, its 4-way never starts).
-#[cfg(feature = "wpa3")]
 pub fn ap_deauth(sta: &[u8; 6], reason: u16) -> Deauth {
     // 12 bytes (hal::rsnassoc::scb_val): the 10-byte form was refused BCME_BUFTOOSHORT on every call (metal MB13)
     let (ok, st) = bcdc_dcmd(201, BCDC_SET, &hal::rsnassoc::scb_val(reason, sta), &mut []);
@@ -4470,6 +4468,8 @@ pub struct El0Keyer {
     // step 4d: one control request built + written by el0-wifi (None = write in-kernel)
     #[allow(clippy::type_complexity)]
     pub tx_ctl: fn(u8, u8, u32, u32, u16, usize, &[u8]) -> Option<bool>,
+    // step 4g S2: el0-wpa was full-wiped (every secret gone): deauthenticate every station, re-provision the passphrase
+    pub wpa_wiped: fn() -> bool,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
@@ -4724,6 +4724,17 @@ static KEY_NOW_MS: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64
 /// after KEY_MAX_SENDS unanswered sends the handshake is abandoned and returned.
 pub fn ap_key_tick(now_ms: u64) -> Option<KeyDone> {
     KEY_NOW_MS.store(now_ms, core::sync::atomic::Ordering::Relaxed);
+    // ADR 0065 step 4g S2: the security server was full-wiped — its handshakes, SAE state and PMKSA cache are gone.
+    // Safe re-authentication: every station is deauthenticated (broadcast) and the passphrase re-provisioned.
+    if el0().is_some_and(|h| (h.wpa_wiped)()) {
+        let d = ap_deauth(&[0xff; 6], hal::rsnassoc::REASON_INVALID_PMKID);
+        unsafe { EL0_PENDING = 0 };
+        #[cfg(feature = "wpa3")]
+        let synced = ap_sae_el0_sync(true);
+        #[cfg(not(feature = "wpa3"))]
+        let synced = true;
+        crate::_print(format_args!(" [EL0-WPA] security server full-wiped: every station deauthenticated (via {} status {} gone={}), passphrase re-provisioned={} — stations re-authenticate in full\n", d.via, d.bcme, d.gone, synced));
+    }
     let mut out = [0u8; hal::wpakeyer::FRAME_MAX];
     // the EL0 authenticator is ticked only while it has handshakes, and at most every 100 ms
     let due = unsafe { EL0_PENDING > 0 && now_ms.wrapping_sub(EL0_TICK_MS) >= 100 };
