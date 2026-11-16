@@ -46,8 +46,15 @@ mod imp {
             KEYX_FRAME
         }
     }
+    /// Selftests only (QEMU `[P-el0srv-keyer]` / `[P-el0srv-sae]`; never called on the CM5): the key-transfer record in
+    /// `slot` — the test station knows that key anyway. No product path reads the page.
+    #[cfg_attr(feature = "cm5", allow(dead_code))]
+    pub fn keyx_test_read(slot: u8) -> Option<hal::wpasrvabi::keyx::Rec> {
+        let f = keyx_frame();
+        let off = slot as usize * hal::wpasrvabi::keyx::SLOT_SIZE;
+        hal::wpasrvabi::keyx::decode(unsafe { core::slice::from_raw_parts((f + off) as *const u8, hal::wpasrvabi::keyx::SLOT_SIZE) })
+    }
     /// Zero the key-transfer page (the kernel writes zeros; it never reads it).
-    #[cfg_attr(feature = "cm5", allow(dead_code))] // the S1 selftest's; S3 zeroes it after every install
     pub fn keyx_zero() {
         let f = unsafe { KEYX_FRAME };
         if f != 0 {
@@ -518,6 +525,27 @@ mod imp {
         let ro = w.call(CMD_SELFTEST_KEYX_WRITE) == Call::Fault
             && unsafe { core::slice::from_raw_parts(keyx_frame() as *const u8, 16) } == pat;
         keyx_zero();
+        // S3c: the bus server installs ONLY the record the kernel asked for: a key record for station A in slot 0;
+        // an install for station B is refused (R0 5); for A it builds + writes the request (the fake device refuses the
+        // write: R0 4); an empty slot is refused
+        let install = {
+            use hal::wpasrvabi::keyx;
+            let a = [2, 0x5a, 0, 0, 0, 9];
+            let rec = keyx::Rec { index: 0, algo: hal::bcdc::CRYPTO_ALGO_AES_CCM, flags: 0, ea: a, klen: 16, key: [0x77; 32] };
+            let mut b = [0u8; keyx::SLOT_SIZE];
+            keyx::encode(&rec, &mut b);
+            wait(BACKOFF_MS * 4 + 5);
+            let put = matches!(p.call_io(wp::CMD_KEYX_PUT, &b, &mut []), (Call::Done(ST_OK, ..), _));
+            let r0 = |w: &mut Server, ea: &[u8; 6]| match w.call_lean(hal::wpasrvabi::CMD_KEY_INSTALL, &keyx::encode_install(1, 0, 7, keyx::SLOT_TK, ea, 0), &mut []).0 {
+                Call::Done(ST_OK, r, _) => r,
+                _ => 0,
+            };
+            let wrong = r0(&mut w, &[2, 0x5b, 0, 0, 0, 0x0b]) == 5;
+            let right = r0(&mut w, &a) == 4;
+            keyx_zero();
+            let empty = r0(&mut w, &a) == 5;
+            put && wrong && right && empty
+        };
         // a full wipe zeroes the persistent state (every secret gone): a fresh, empty incarnation
         wait(BACKOFF_MS + 5);
         p.full_wipe();
@@ -525,10 +553,10 @@ mod imp {
         let wiped = p.call(wp::CMD_STATE_READ) == Call::Done(ST_OK, 0, 1) && p.wipes == 1;
         // both are in their own address spaces (the el0as report, run after this, covers them)
         let spaces = w.aspace != p.aspace;
-        let pass = init && bumped && own_fault && kept && untouched && put && peek && ro && wiped && spaces;
+        let pass = init && bumped && own_fault && kept && untouched && put && peek && ro && wiped && spaces && install;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv-split] {} — ADR 0065 step 4g S1: bus server el0-wifi + WPA security server el0-wpa, supervised apart: both load + answer={} el0-wpa persistent state written={} its own fault resets it={} and the restarted server still holds the state={} a BUS fault leaves el0-wpa's restarts / faults / state untouched={} key-transfer page: el0-wpa writes={} el0-wifi reads={} el0-wifi cannot write (faults, page intact)={} a full wipe zeroes the state={} separate address spaces={}\n",
-            if pass { "PASS" } else { "FAIL" }, init, bumped, own_fault, kept, untouched, put, peek, ro, wiped, spaces
+            " [P-el0srv-split] {} — ADR 0065 step 4g S1: bus server el0-wifi + WPA security server el0-wpa, supervised apart: both load + answer={} el0-wpa persistent state written={} its own fault resets it={} and the restarted server still holds the state={} a BUS fault leaves el0-wpa's restarts / faults / state untouched={} key-transfer page: el0-wpa writes={} el0-wifi reads={} el0-wifi cannot write (faults, page intact)={} a full wipe zeroes the state={} separate address spaces={} S3c: the bus server installs only the record asked for (other station refused, right one written, empty slot refused)={}\n",
+            if pass { "PASS" } else { "FAIL" }, init, bumped, own_fault, kept, untouched, put, peek, ro, wiped, spaces, install
         ));
         pass
     }
@@ -1015,7 +1043,7 @@ pub mod keyer {
         };
         #[cfg(feature = "cm5")]
         unsafe {
-            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped });
+            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done });
         }
         #[cfg(all(feature = "cm5", feature = "wpa3"))]
         let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
@@ -1137,6 +1165,21 @@ pub mod keyer {
         (st, s.restarts, s.faults, s.last_fault_ticks)
     }
 
+    /// S3c: ask the bus server to install key-transfer slot `slot` (it must hold the key of `ea` / `index`) as a
+    /// WLC_SET_KEY request with this SDPCM seq / request id. No key byte passes through here. Some(1) = written.
+    pub(crate) fn key_install(seq: u8, ifidx: u8, reqid: u16, slot: u8, ea: &[u8; 6], index: u32) -> Option<u32> {
+        let s = bus_srv()?;
+        let inp = hal::wpasrvabi::keyx::encode_install(seq, ifidx, reqid, slot, ea, index);
+        match s.call_lean(hal::wpasrvabi::CMD_KEY_INSTALL, &inp, &mut []).0 {
+            Call::Done(ST_OK, r, _) => Some(r),
+            _ => None,
+        }
+    }
+    /// S3c: zero the key-transfer page after an install (the kernel writes zeros; it never reads it).
+    pub(crate) fn keyx_done() {
+        super::imp::keyx_zero();
+    }
+
     /// (state, restarts, faults, full wipes, ticks of the last fault or 0, PMKSA entries).
     pub type WpaHealth = (&'static str, u64, u64, u64, u64, Option<u32>);
     /// `/api/health` wifi_driver.security (S2): (state, restarts, faults, full wipes, ticks of the last fault or 0,
@@ -1199,7 +1242,13 @@ pub mod keyer {
         };
         let m3 = matches!(eapol(&sta, &frame(1, false), 10, &mut fr), Some(Out::Send(_))) && expect(&sta) == Some(Some((true, 2)));
         let keyed = match eapol(&sta, &frame(2, true), 20, &mut fr) {
-            Some(Out::Keyed { done, tk }) => tk[..] == ptk[32..48] && done.auth.m4_mic_ok,
+            // S3c: the kernel's copy carries a ZERO TK; the key waits in key-transfer slot 0 for the bus server
+            Some(Out::Keyed { done, tk }) => {
+                let rec = super::imp::keyx_test_read(hal::wpasrvabi::keyx::SLOT_TK);
+                let ok = tk == [0u8; 16] && done.auth.m4_mic_ok && rec.is_some_and(|r| r.ea == sta && r.index == 0 && r.key[..16] == ptk[32..48]);
+                super::imp::keyx_zero();
+                ok
+            }
             _ => false,
         };
         let clean2 = srv().is_some_and(|s| s.io_clean());
@@ -1214,7 +1263,7 @@ pub mod keyer {
         unsafe { WPA = None };
         let pass = m1 && clean1 && m3 && keyed && clean2 && gone && faulted && forgotten;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed with the station's TK={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, refused during the backoff={} then the new incarnation has forgotten it={}\n",
+            " [P-el0srv-keyer] {} — ADR 0065 step 3b / 4g S2: the WPA 4-way in el0-wpa against a simulated station: M1 sent, M2 expected={} no key on the shared page after a call={} a verified M2 -> M3, M4 expected={} a verified M4 -> keyed: the kernel's copy has a zero TK, the station's TK is in key-transfer slot 0={} and no key left on the page={} the handshake ended={} a fault outside any station call -> full wipe, refused during the backoff={} then the new incarnation has forgotten it={}\n",
             if pass { "PASS" } else { "FAIL" }, m1, clean1, m3, keyed, clean2, gone, faulted, forgotten
         ));
         pass
@@ -1303,7 +1352,10 @@ pub fn sae_selftest() -> bool {
         f
     };
     let m3 = matches!(test::eapol(&sta, &frame(1, false), 50, &mut fr), Some(Out::Send(_)));
-    let keyed = matches!(test::eapol(&sta, &frame(2, true), 60, &mut fr), Some(Out::Keyed { tk, .. }) if tk[..] == ptk[32..48]);
+    // S3c: a zero TK in the kernel's copy; the station's SAE-derived TK in key-transfer slot 0
+    let keyed = matches!(test::eapol(&sta, &frame(2, true), 60, &mut fr), Some(Out::Keyed { tk, .. }) if tk == [0u8; 16])
+        && imp::keyx_test_read(hal::wpasrvabi::keyx::SLOT_TK).is_some_and(|r| r.ea == sta && r.key[..16] == ptk[32..48]);
+    imp::keyx_zero();
     let clean2 = srv_clean();
     // the station leaves 5 s after Accepted (past the leave-predates-SAE window): the driver's forget (op 0) frees its
     // SAE state, while the PMKSA stays cached
