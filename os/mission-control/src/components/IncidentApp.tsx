@@ -30,6 +30,10 @@ import { CAMERA } from '../store/sampleClock';
 import { remember } from '../store/recents';
 import AppShell from './AppShell';
 import PlanDiff from './PlanDiff';
+import DigDeeper from './DigDeeper';
+import { CaseCard, IncidentDeep, SAMPLE_INCIDENT, SAMPLE_DETECTIONS } from './IncidentExplain';
+import { detections, startDetectLive } from '../store/detectLive';
+import { parseIncident } from '../store/explain';
 
 type Tab = 'story' | 'evidence' | 'graph' | 'summary';
 const TABS: [Tab, string][] = [['story', 'Story'], ['evidence', 'Evidence'], ['graph', 'Graph'], ['summary', 'Executive summary']];
@@ -77,6 +81,7 @@ const IncidentApp: Component = () => {
   const rowClass = (key: string) => (focus() === key ? 'is-focus' : '');
 
   onMount(() => {
+    startDetectLive(); // the related detections: trigger source and attack path
     setId(incidentIdFromLocation(location));
     setResolved(true);
   });
@@ -101,6 +106,9 @@ const IncidentApp: Component = () => {
     if (sample()) remember({ key: `incident:${SAMPLE.id}`, type: 'Incident', title: SAMPLE.title, href: incidentHref(SAMPLE.id), scope: SAMPLE.device_ip });
   });
   const d = () => (detail() && detail()!.id === id() ? detail() : null);
+  /** The record with its optional extensions (explain.ts), or the labelled sample in preview. */
+  const xd = () => (sample() ? SAMPLE_INCIDENT : parseIncident(d()));
+  const xdets = () => (sample() ? SAMPLE_DETECTIONS : detections());
 
   const title = () => (sample() ? SAMPLE.title : d()?.title ?? (id() ?? 'Incident'));
   const priority = () => (sample() ? SAMPLE.priority : d()?.priority ?? '');
@@ -245,6 +253,7 @@ const IncidentApp: Component = () => {
               </section>
 
               <aside class="inc-side" aria-label="Decision">
+                <Show when={xd()}><CaseCard d={xd()!} dets={xdets()} timeline={sample() ? [] : timelineEvents()} sample={sample()} /></Show>
                 <div class="pcard">
                   <p class="l0-label">Why this was decided</p>
                   <p style={{ margin: 0 }}>{sample() ? SAMPLE.why : d()?.explanation.why ?? '…'}</p>
@@ -278,6 +287,11 @@ const IncidentApp: Component = () => {
               </aside>
             </div>
           </Show>
+        </Show>
+        <Show when={xd()}>
+          <DigDeeper title="Incident" crumb="incident → attack path → rule → sealed evidence → raw record">
+            <IncidentDeep d={xd()!} dets={xdets()} timeline={sample() ? [] : timelineEvents()} sample={sample()} />
+          </DigDeeper>
         </Show>
       </main>
     </AppShell>
