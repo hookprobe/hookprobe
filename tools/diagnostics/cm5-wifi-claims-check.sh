@@ -124,6 +124,7 @@ if run C3; then
   # (-f needs CONFIG_DEBUG_FILE, absent in this build: the daemon then never started — round 2. Redirect instead.)
   psudo "sh -c 'rm -f /tmp/hq-claims-sup.log; nohup wpa_supplicant -i wlan1 -D nl80211 -c /tmp/hq-claims.conf -dd -t > /tmp/hq-claims-sup.log 2>&1 & echo \$! > /run/hq-claims.pid'" >/dev/null 2>&1; sleep 8
   psudo "wpa_cli -p /run/hq-claims -i wlan1 status" 2>/dev/null | grep -q "wpa_state" || echo "  WARNING: the standalone supplicant is not answering"
+  m3=$(mark)
   # on the Pi: time from `reconnect` to wpa_state=COMPLETED (4-way done), polled every 10 ms
   T=$(psudo "sh -c 'W=\"wpa_cli -p /run/hq-claims -i wlan1\"; t() { \$W disconnect >/dev/null; sleep 1; [ \"\$1\" = full ] && \$W pmksa_flush >/dev/null; a=\$(date +%s%N); \$W reconnect >/dev/null; i=0; while ! \$W status | grep -q wpa_state=COMPLETED; do sleep 0.01; i=\$((i+1)); [ \$i -gt 1500 ] && break; done; echo \$1 \$(( (\$(date +%s%N) - a) / 1000000 )); sleep 1; }; for k in \$(seq 1 $N); do t cached; t full; done'")
   pi "rm -f /tmp/hq-claims.conf"; psudo "kill \$(cat /run/hq-claims.pid)" >/dev/null 2>&1; sleep 1
@@ -143,8 +144,16 @@ if run C3; then
   ac=$(st2 cached); af=$(st2 full); echo "  AP + air: first auth frame sent -> connected (ms) — cached PMKSA: $ac | full SAE: $af"
   mc=$(echo "$ac" | grep -o 'median=[0-9]*' | cut -d= -f2); mf=$(echo "$af" | grep -o 'median=[0-9]*' | cut -d= -f2)
   nc=$(echo "$ac" | grep -o '^n=[0-9]*' | cut -d= -f2); nf=$(echo "$af" | grep -o '^n=[0-9]*' | cut -d= -f2)
-  [ "${nc:-0}" -ge $((N - 1)) ] && [ "${nf:-0}" -ge $((N - 1)) ] && [ "${mc:-99999}" -lt "${mf:-0}" ]
-  chk $? "C3 cached-PMKSA reconnect median ${mc:-?} ms vs full SAE ${mf:-?} ms, auth frame sent -> connected ($nc / $nf attempts, classified by what went over the air; cached faster)"
+  # the AP's own clock: first authentication frame of the join (open auth or SAE commit) -> keyed + authorized. The
+  # verdict uses this: the client-side interval above also counts the bench's USB client losing its first SAE commit
+  # after a scan and retrying 2 s later (mac80211 "send auth (try 2/3)", metal 2026-11-17; the onboard client does not)
+  J=$(since "$m3" | grep -a "join took [0-9]* ms at the AP" | sed -E 's/.*join took ([0-9]+) ms at the AP \((SAE|open-auth) .*/\2 \1/')
+  st3() { echo "$J" | awk -v k="$1" '$1 == k {print $2}' | sort -n | awk '{a[NR]=$1} END {if (NR) printf "n=%d median=%d p90=%d min=%d max=%d", NR, a[int((NR+1)/2)], a[int(NR*0.9+0.999)], a[1], a[NR]}'; }
+  jc=$(st3 open-auth); jf=$(st3 SAE); echo "  at the AP: first auth frame -> keyed + authorized (ms) — cached PMKSA: $jc | full SAE: $jf"
+  apc=$(echo "$jc" | grep -o 'median=[0-9]*' | cut -d= -f2); apf=$(echo "$jf" | grep -o 'median=[0-9]*' | cut -d= -f2)
+  njc=$(echo "$jc" | grep -o '^n=[0-9]*' | cut -d= -f2); njf=$(echo "$jf" | grep -o '^n=[0-9]*' | cut -d= -f2)
+  [ "${njc:-0}" -ge $((N - 1)) ] && [ "${njf:-0}" -ge $((N - 1)) ] && [ "${apc:-99999}" -lt "${apf:-0}" ]
+  chk $? "C3 at the AP, a cached-PMKSA reconnect takes ${apc:-?} ms vs ${apf:-?} ms for a full SAE (median, first auth frame -> keyed; $njc / $njf joins); client-side (auth frame sent -> connected): cached ${mc:-?} ms vs full ${mf:-?} ms ($nc / $nf)"
 fi
 
 # ================= P53: post-wipe PMKSA recovery (operator 2026-11-16; task 111) =================
