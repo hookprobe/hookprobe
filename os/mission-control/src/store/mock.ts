@@ -20,7 +20,8 @@ import { createSignal } from 'solid-js';
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-export type ProtectionStatus = 'protected' | 'needs-attention' | 'critical';
+/** 'unknown' = a device answers but has not reported a score yet: never shown as protected. */
+export type ProtectionStatus = 'protected' | 'needs-attention' | 'critical' | 'unknown';
 export type DeployMode        = 'standalone' | 'cloud-linked' | 'self-hosted';
 
 export interface ShieldStats {
@@ -72,6 +73,7 @@ export const qsecbitGauge = (): number => (substrate() && !qsecbitKnown() ? 0 : 
 /** Derived from the live resilience % with the device's own bands (risk < 0.3 GREEN, < 0.7 AMBER,
  *  else RED — `mcstate.rs` `band`), so the pill can never say PROTECTED under attack. */
 export const protectionStatus = (): ProtectionStatus => {
+  if (substrate() && !qsecbitKnown()) return 'unknown'; // the seeded 92 is sample data, not this device
   const pct = qsecbit();
   return pct > 70 ? 'protected' : pct > 30 ? 'needs-attention' : 'critical';
 };
@@ -130,6 +132,10 @@ const INITIAL_HEARTBEAT: number[] = [
   92, 88, 85, 91, 89, 93, 88, 90, 92, 92,
 ];
 export const [heartbeat, setHeartbeat] = createSignal<number[]>(INITIAL_HEARTBEAT);
+/** True once the heartbeat holds the device's own samples (live.ts). */
+export const [heartbeatLive, setHeartbeatLive] = createSignal(false);
+/** What sparklines draw: the sample only when no device answers; on a device, nothing until it has scores. */
+export const heartbeatShown = (): number[] => (substrate() && !heartbeatLive() ? [] : heartbeat());
 
 // ── UI state ─────────────────────────────────────────────────────────────────
 
