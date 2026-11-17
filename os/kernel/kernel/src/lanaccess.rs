@@ -40,10 +40,63 @@ fn on_mgmt(dst: &Addr, mgmt: Option<([u8; 4], [u8; 4])>) -> bool {
     }
 }
 
+/// The management (address, gateway) the data path last reported — for the owner-exception guardrail.
+static mut MGMT_SEEN: Option<([u8; 4], [u8; 4])> = None;
+
+/// Why an owner exception for `dst` must be refused (None = acceptable): not upstream private, too broad, or the
+/// management network / the device's own addresses.
+pub fn exception_refusal(dst: &hal::policy::Prefix, any_device: bool) -> Option<&'static str> {
+    if !upstream_private(&dst.addr) {
+        return Some("value: only upstream private networks (RFC 1918, 169.254/16, IPv6 ULA) need an exception");
+    }
+    let floor = match (dst.addr.v6, any_device) {
+        (false, false) => 8,
+        (false, true) => 16,
+        (true, false) => 32,
+        (true, true) => 48,
+    };
+    if dst.len < floor {
+        return Some("value: prefix too broad (any device: /16 or narrower; one device: /8 or narrower; IPv6 /48 or /32)");
+    }
+    if !dst.addr.v6 {
+        let a = [dst.addr.a[0], dst.addr.a[1], dst.addr.a[2], dst.addr.a[3]];
+        if let Some((ip, gw)) = unsafe { MGMT_SEEN } {
+            let p = |x: [u8; 4]| dst.contains(&Addr::v4(x));
+            if p(ip) || p(gw) || on_mgmt(&dst.addr, Some((ip, gw))) {
+                return Some("value: the management network is never opened to Wi-Fi clients");
+            }
+        }
+        if crate::ratelimit::is_local_ip(u32::from_be_bytes(a)) {
+            return Some("value: the device's own addresses are not reached through an exception");
+        }
+    }
+    None
+}
+
+/// A temporary owner grant (RAM only — a reboot ends it): in force for `dur_s` seconds from now. Resolves the
+/// attributed blocks it covers.
+pub fn grant_temporary(mut x: hal::lanaccess::Exception, dur_s: u32) -> bool {
+    let now = now_ms();
+    x.expires_ms = now + dur_s as u64 * 1000;
+    let ok = table().add(x);
+    if ok {
+        unsafe { (*core::ptr::addr_of_mut!(BLOCKS)).resolve(&x, now) };
+    }
+    ok
+}
+
+/// An always-grant was journaled (the journal applied it): forget the blocks it covers.
+pub fn resolve_blocks(x: &hal::lanaccess::Exception) {
+    unsafe { (*core::ptr::addr_of_mut!(BLOCKS)).resolve(x, now_ms()) };
+}
+
 /// One client packet from `mac` (`src`) to `dst`:`dport`/`proto`. `acl_allow` = an explicit `allow` entry of the
 /// POLICY ACL on the client's interface matched (not the ACL's default). `mgmt` = (management address, gateway).
 #[allow(clippy::too_many_arguments)]
 pub fn check(mac: &[u8; 6], src: Addr, dst: Addr, dport: u16, proto: u8, acl_allow: bool, mgmt: Option<([u8; 4], [u8; 4])>, now_ms: u64) -> Verdict {
+    if mgmt.is_some() {
+        unsafe { MGMT_SEEN = mgmt };
+    }
     if !upstream_private(&dst) || dport == 53 && (proto == 17 || proto == 6) {
         return Verdict::NotPrivate;
     }
