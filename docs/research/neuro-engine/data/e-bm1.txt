@@ -1,0 +1,8 @@
+synthetic: 60 devices x 14 days hourly; learn days 1-10, score days 11-14
+ bloom_m  state_B     AUC   thr@1% detect @1% FPR: hour-level/incident-level                      benign-drift alerts
+persistence k = 6 alarming hours before a new item becomes normal
+     256      254   0.989     0.71 beacon_new_dst=0.93/0.93 dga=1.00/1.00 exfil=1.00/1.00 new_service=1.00/1.00 scan=1.00/1.00 39/160 hours
+    1024      638   0.999     0.71 beacon_new_dst=1.00/1.00 dga=1.00/1.00 exfil=1.00/1.00 new_service=1.00/1.00 scan=1.00/1.00 39/160 hours
+    4096     2174   0.999     0.71 beacon_new_dst=1.00/1.00 dga=1.00/1.00 exfil=1.00/1.00 new_service=1.00/1.00 scan=1.00/1.00 39/160 hours
+   16384     8318   0.999     0.71 beacon_new_dst=1.00/1.00 dga=1.00/1.00 exfil=1.00/1.00 new_service=1.00/1.00 scan=1.00/1.00 39/160 hours
+raw history replaced (10 days, ~110 B/row JSON, flows+dns): ~1.1 MB per device (ESTIMATE)

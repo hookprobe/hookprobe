@@ -1,0 +1,29 @@
+{
+ "devices": 60,
+ "seeds": "1,2,3,4,5",
+ "results": [
+  {
+   "bloom_bits": 1024,
+   "state_bytes": 638,
+   "auc_mean": 0.9963823514715435,
+   "auc_min": 0.9961025333533203,
+   "detect_at_1pct_fpr": {
+    "beacon_new_dst": 1.0,
+    "dga": 1.0,
+    "exfil": 1.0,
+    "new_service": 1.0,
+    "scan": 1.0
+   },
+   "incident_detect_at_1pct_fpr": {
+    "beacon_new_dst": 1.0,
+    "dga": 1.0,
+    "exfil": 1.0,
+    "new_service": 1.0,
+    "scan": 1.0
+   },
+   "drift_alerts": 123,
+   "drift_hours": 160
+  }
+ ],
+ "raw_history_bytes_per_device_estimate": 1052067.5
+}
