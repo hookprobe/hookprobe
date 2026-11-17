@@ -42,6 +42,10 @@ REAL = {
     "infra_transient": "warning: spurious network error (2 tries remaining): [6] Could not resolve host: x",
     "infra_transient#gitleaks": DTOLNAY_STEP + "\ncurl: (22) The requested URL returned error: 504",
     "infra_transient#syft": "[error] received HTTP status=504 for url='https://github.com/anchore/syft/releases/x'",
+    # #1240 (2026-11-16): a partial apt index on the runner was triaged `unknown` with only post-job git noise
+    "toolchain_env#apt": "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.0Z Package mtools is not available, but is referred to by another package.\n"
+                         "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.1Z E: Unable to locate package qemu-system-arm\n"
+                         "heqk QEMU gate\tInstall qemu-system-aarch64\t2026-11-16T18:44:54.2Z E: Package 'mtools' has no installation candidate",
 }
 
 
