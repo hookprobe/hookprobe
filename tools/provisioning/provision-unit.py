@@ -48,7 +48,7 @@ def build_parser():
                    help="'auto' (rpiboot mass-storage disk by-id) or an image file (dry run); never a host disk")
     r.add_argument("--unit-id", help="override the unit directory name (default: Wi-Fi MAC)")
     r.add_argument("--ca-dir", help="owner CA directory for mctls-provision.py (created on first use, name-constrained)")
-    r.add_argument("--tls-name", action="append", help="DNS SAN for the MC certificate (default heqk.local)")
+    r.add_argument("--tls-name", action="append", help="DNS SAN for the MC certificate (default heqk.local + <setup-label>.heqk.local)")
     r.add_argument("--tls-ip", action="append", help="IP SAN (default 10.99.0.1, the setup-AP address). Add the management address here too "
                    "(give it a DHCP reservation): the owner CA is name-constrained to the names/IPs it is created with, "
                    "so an address learnt later shows a name mismatch (LAN assessment L-02) until the unit is re-certified")
