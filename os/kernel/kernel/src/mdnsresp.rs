@@ -26,6 +26,8 @@ fn unit_name() -> &'static [u8] {
     let u = unsafe { &mut *core::ptr::addr_of_mut!(UNIT) };
     if u.1 == usize::MAX {
         u.1 = 0;
+        // the SRK exists only under HBoot (QEMU / non-hboot builds answer heqk.local alone)
+        #[cfg(feature = "hboot")]
         if let Some(c) = crate::seal_srk().and_then(|k| crate::apcred::derive(&k)) {
             let lab = &c.ssid[c.ssid.len() - 4..];
             let n = lab.len();
@@ -112,4 +114,14 @@ pub fn on_mgmt(frame: &[u8], me: &[u8; 6], ip: [u8; 4], now_s: u64, out: &mut [u
 /// (answered on Wi-Fi, answered on management, refused by device policy, rate-limited)
 pub fn counts() -> [u64; 4] {
     unsafe { COUNTS }
+}
+
+/// Seconds on the data path's counter (`cntpct_el0`) — the rate window; no driver clock needed.
+pub fn now_s() -> u64 {
+    let (v, f): (u64, u64);
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack));
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
+    }
+    v / f.max(1)
 }
