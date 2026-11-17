@@ -6877,6 +6877,9 @@ impl Drop for KeyingWait {
     }
 }
 
+/// Control-reply hunts that ran out of their overall budget while other frames kept arriving.
+pub static mut DCMD_DEADLINE_HITS: u32 = 0;
+
 fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut rx = [0u8; 2048];
     let mut status = 0u32;
@@ -6888,8 +6891,21 @@ fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut last_cksum_ok = false;
     let mut any_rx = false;
     let intstat_seen = 0u32;
+    // The WHOLE hunt is bounded by the dry budget, not each read: with station traffic flowing, every read returns some
+    // other frame just before its own dry wait ends, and 40 reads at a 5 Hz ping took 8.1 s with the AP loop blocked
+    // (CM5 soak 2026-11-17: a `pmkid_info` set whose reply never came, during a station's SAE join). Each read gets the
+    // time left; with no traffic this is the single dry wait it always was.
+    let budget = unsafe { DCMD_DRY_MS } as u64;
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    let t_start = ticks();
     'frames: for _frame in 0..40 {
-        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, unsafe { DCMD_DRY_MS }) else {
+        let spent = ticks().wrapping_sub(t_start) / (f / 1000).max(1);
+        if spent >= budget {
+            unsafe { DCMD_DEADLINE_HITS = DCMD_DEADLINE_HITS.wrapping_add(1) };
+            break 'frames;
+        }
+        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, (budget - spent) as u32) else {
             break 'frames; // dry (or a frame that had to be terminated)
         };
         any_rx = true;
