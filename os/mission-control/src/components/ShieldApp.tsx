@@ -27,6 +27,7 @@ import { dnsLive, startDnsLive, VERDICT_LABEL, QTYPE, type DnsLive, dnsState, dn
 import { actionsView, refreshActions, promptAndRun, revokeAction } from '../store/actions';
 import { setCopilotOpen, substrate } from '../store/mock';
 import AppShell from './AppShell';
+import { dnsAudit, blockSource, type DnsLiveX } from '../store/explain';
 import PageHeader from './PageHeader';
 import {
   type BlockCategory, type ProtectionLevel, type ListEntry, type ShieldChange,
@@ -157,6 +158,37 @@ const time = (ts: number) => new Date(ts * 1000).toLocaleTimeString([], { hour: 
 const isBlock = (v: string) => v === 'blocked' || v === 'blocked-cname' || v === 'tcp53-refused';
 const isBypass = (v: string) => ['ddr', 'canary', 'relay-seen', 'relay-blocked', 'doh-seen', 'doh-blocked', 'dot-refused'].includes(v);
 
+/** The audit view: what Shield answered itself, why, and where (all from GET /api/dns). */
+const ShieldAudit: Component<{ d: DnsLiveX }> = (props) => {
+  const a = () => dnsAudit(props.d);
+  return (
+    <Panel title="Audit">
+      <div class="l0-grid-3" aria-label="Shield audit totals">
+        <div class="l0-card"><p class="l0-label">Lookups seen</p><p class="l0-card-kpi">{a().total.toLocaleString()}</p></div>
+        <div class="l0-card"><p class="l0-label">Answered on this device</p><p class="l0-card-kpi">{a().answeredLocally.toLocaleString()}</p></div>
+        <div class="l0-card"><p class="l0-label">Blocked or refused</p><p class="l0-card-kpi">{a().blocked.toLocaleString()}</p></div>
+      </div>
+      <p class="l0-label">Why lookups were stopped or answered locally</p>
+      <Show when={a().reasons.length > 0} fallback={<div class="shield-empty">Nothing stopped yet.</div>}>
+        <ul class="shield-list" aria-label="Verdicts, largest first">
+          <For each={a().reasons.slice(0, 5)}>{(r) => (
+            <li class="shield-list-row"><span>{VERDICT_LABEL[r.verdict] ?? r.verdict}</span><span>{r.count.toLocaleString()}</span></li>
+          )}</For>
+        </ul>
+      </Show>
+      <p class="l0-label">Per interface</p>
+      <Show when={a().interfaces} fallback={<div class="shield-empty">This device build does not report per-interface counts yet. Per-device counts are under Devices.</div>}>
+        <ul class="shield-list" aria-label="Per-interface DNS counters">
+          <For each={a().interfaces!}>{(x) => (
+            <li class="shield-list-row"><span class="shield-domain">{x.name}</span><span>{x.queries.toLocaleString()} queries · {x.blocked.toLocaleString()} blocked</span></li>
+          )}</For>
+        </ul>
+      </Show>
+      <div class="shield-scope-note">Counted on this device since start-up. Nothing here is sent to any other service.</div>
+    </Panel>
+  );
+};
+
 const ShieldLive: Component<{ d: DnsLive }> = (props) => {
   const [msg, setMsg] = createSignal('');
   onMount(() => { void refreshActions(); });
@@ -193,6 +225,8 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
           </div>
         </Show>
       </Panel>
+
+      <ShieldAudit d={props.d as DnsLiveX} />
 
       <div class="shield-two-col">
         <Panel title="Top blocked">
@@ -239,7 +273,8 @@ const ShieldLive: Component<{ d: DnsLive }> = (props) => {
               {(r) => (
                 <li class={`shield-list-row${isBlock(r.verdict) ? ' shield-cat-row--threat' : ''}`}>
                   <span class="shield-domain">{r.name}</span>
-                  <span>{QTYPE[r.qtype] ?? r.qtype} · {r.client} · {time(r.ts)} · {isBlock(r.verdict) || isBypass(r.verdict) ? <strong>{VERDICT_LABEL[r.verdict] ?? r.verdict}</strong> : (VERDICT_LABEL[r.verdict] ?? r.verdict)}</span>
+                  <span>{QTYPE[r.qtype] ?? r.qtype} · {r.client} · {time(r.ts)} · {isBlock(r.verdict) || isBypass(r.verdict) ? <strong>{VERDICT_LABEL[r.verdict] ?? r.verdict}</strong> : (VERDICT_LABEL[r.verdict] ?? r.verdict)}
+                    <Show when={(isBlock(r.verdict) || isBypass(r.verdict)) && blockSource(r, props.d.lists)}><span class="shield-source"> · rule: {blockSource(r, props.d.lists)}</span></Show></span>
                   <Show when={r.verdict === 'blocked' || r.verdict === 'blocked-cname'}>
                     <button class="shield-remove" title="Let this name through for 1 hour (device password required)"
                       onClick={async () => setMsg(await promptAndRun('shield_allow', r.name, 3600))}>Allow 1 h</button>
