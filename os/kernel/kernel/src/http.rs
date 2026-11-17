@@ -739,6 +739,26 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 r[0], r[1], r[2], r[3], r[4], r[5]);
             // Phase 3b: how the previous run ended — a watchdog-type reset means the unit recovered from a hang or
             // a crash (power-on = a normal power cycle / first boot). Last, so existing field order is unchanged.
+            // L-02: the Mission Control certificate's names / addresses / expiry, and whether the address this browser
+            // used is one of them (false = the browser warned: Mission Control shows which address to use instead)
+            match crate::tlshost::cert_facts() {
+                Some(f) => {
+                    w.raw(",\"tls\":{\"names\":[");
+                    for i in 0..f.n_names {
+                        let _ = write!(w, "{}\"{}\"", if i > 0 { "," } else { "" }, core::str::from_utf8(f.name(i)).unwrap_or("?"));
+                    }
+                    w.raw("],\"ips\":[");
+                    for (i, a) in f.ips[..f.n_ips].iter().enumerate() {
+                        let _ = write!(w, "{}\"{}.{}.{}.{}\"", if i > 0 { "," } else { "" }, a[0], a[1], a[2], a[3]);
+                    }
+                    let host = req.host.rsplit_once(':').filter(|(_, p)| p.bytes().all(|c| c.is_ascii_digit())).map_or(req.host, |(h, _)| h);
+                    let _ = write!(w, "],\"not_after\":\"{}\",\"request_host\":\"{}\",\"request_host_covered\":{}}}",
+                        core::str::from_utf8(&f.not_after.0[..f.not_after.1 as usize]).unwrap_or("?"),
+                        if host.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'.' || c == b'-') { host } else { "?" },
+                        !host.is_empty() && f.covers(host.as_bytes()));
+                }
+                None => w.raw(",\"tls\":null"),
+            }
             let _ = write!(w, ",\"last_reset\":\"{}\"", if crate::rtwdog::prev_reset_was_watchdog() { "watchdog (recovered from a hang or crash)" } else { "power-on" });
             // Phase 3 crash record: why (the panic message / fault registers), when the previous boot crashed.
             match crate::rtwdog::last_crash() {
