@@ -353,6 +353,14 @@ pub const CERT_8_3: &[u8; 11] = b"MCTLS   CRT";
 pub const CERT_FILE_LEN: usize = 4096;
 const CERT_MAGIC: &[u8; 8] = b"HQCRT1\0\0";
 
+/// The served leaf certificate's names, addresses and expiry (None = no certificate / unreadable).
+static mut CERT_FACTS: Option<hal::x509lite::Facts> = None;
+
+/// L-02: the certificate facts (`/api/health` `tls`).
+pub fn cert_facts() -> Option<hal::x509lite::Facts> {
+    unsafe { CERT_FACTS }
+}
+
 /// Read `MCTLS.CRT` (all zeros / absent = not provisioned).
 pub fn load_cert_file<D: hal::BlockDev>(dev: &D, out: &mut [u8; CERT_FILE_LEN]) -> bool {
     let mut sec = [0u8; 512];
@@ -476,6 +484,10 @@ pub fn bring_up<D: hal::BlockDev>(dev: Option<&D>) {
     let mut file = [0u8; CERT_FILE_LEN];
     let have = dev.is_some_and(|d| load_cert_file(d, &mut file));
     let (chain, n) = cert_chain(&file);
+    // L-02: what the certificate covers (names, addresses, expiry), for Mission Control's certificate facts
+    if n > 0 {
+        unsafe { CERT_FACTS = hal::x509lite::facts(chain[0]) };
+    }
     let mut scalar = scalar;
     let loaded = TlsHost::load(&scalar, &chain[..n]);
     for x in scalar.iter_mut() {
