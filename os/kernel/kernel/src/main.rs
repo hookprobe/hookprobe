@@ -69,6 +69,7 @@ mod fpdb;
 mod devid;
 mod oui;
 mod lanrelay;
+mod lanaccess;
 mod apcore;
 mod clock;
 #[cfg(feature = "detbench")]
@@ -5297,6 +5298,11 @@ fn cm5_p10_probe() {
                                                 for a in &pol.acl[..pol.nacl] {
                                                     kprint!("   [P11-AP3 policy] acl {} hits {:?} default {}\n", core::str::from_utf8(&a.name[..a.nlen]).unwrap_or("?"), &a.hits[..a.n], a.default_hits);
                                                 }
+                                                {
+                                                    let la = lanaccess::counts();
+                                                    kprint!("   [P11-AP3 policy] A-01 upstream private: refused={} (fwd {}) allowed by owner exception={} by POLICY ACL={} exception refused by a guardrail={} | attributed blocks={}\n",
+                                                        la[0], fc.upstream_private_refused, la[1], la[2], la[3], lanaccess::blocks().n);
+                                                }
                                                 if let Some(mg) = unsafe { uplink::MGMT } {
                                                     #[cfg(feature = "mcserve")]
                                                     if let Some(n) = mcn.as_ref() {
@@ -7471,6 +7477,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = ioc::selftest();
         let _ = oui::selftest();
         let _ = lanrelay::selftest();
+        let _ = lanaccess::selftest();
         let _ = datavol::selftest();
         let _ = artstore::selftest();
         #[cfg(not(feature = "cm5"))]

@@ -68,6 +68,8 @@ pub struct FwdCounters {
     /// A-03: client frames for one of the device's OWN addresses (management / WAN) refused here, never
     /// routed out to come back as a hairpin through the upstream router.
     pub to_self_refused: u32,
+    /// A-01: client packets refused because they went to an upstream private network.
+    pub upstream_private_refused: u32,
     /// A route's `gw` stopped answering ARP: taken out of route selection (metric failover) until it answers.
     pub nh_dead: u32,
 }
@@ -176,8 +178,14 @@ pub fn forward4<N: ApNic>(
     let mut act = Act::Allow;
     let mut egress = If::Wan;
     let mut nh_ip: Option<[u8; 4]> = None;
+    // A-01: the packet's facts, and whether an explicit POLICY ACL `allow` entry (not the ACL's default) let it in
+    let mut pk: Option<hal::policy::Pkt> = None;
+    let mut acl_allow = false;
     if let Some(p) = hal::policy::facts(frame) {
-        act = pol.check(pif, Dir::In, &p).0;
+        let (a, d) = pol.check(pif, Dir::In, &p);
+        act = a;
+        acl_allow = a == Act::Allow && matches!(d, hal::policy::Decided::Acl(_, s) if s != u16::MAX);
+        pk = Some(p);
         if act == Act::Allow {
             let mgmt_up = nic.mgmt().is_some_and(|m| m.up);
             let wan_up = nic.wan_up();
@@ -216,6 +224,26 @@ pub fn forward4<N: ApNic>(
         c.to_self_refused += 1;
         act = Act::Drop;
         shield = true;
+    }
+    // A-01 (operator 2026-11-17): upstream private networks (beyond the WAN: RFC 1918, 169.254/16) are refused unless
+    // an owner exception or an explicit POLICY ACL `allow` covers them — answered at once (ICMP admin-prohibited /
+    // TCP RST, like a policy block) and attributed for Mission Control. The AP's own subnet is not upstream.
+    if act == Act::Allow && frame.len() >= 34 && dst4[..3] != cfg.inside_net {
+        if let Some(p) = pk {
+            let mut smac = [0u8; 6];
+            smac.copy_from_slice(&frame[6..12]);
+            let mg = nic.mgmt().map(|m| (m.ip, m.gw));
+            let now_ms = nic.now().saturating_mul(1000) / nic.freq().max(1);
+            if crate::lanaccess::check(&smac, p.src, p.dst, p.dport, p.proto, acl_allow, mg, now_ms) == crate::lanaccess::Verdict::Refused {
+                let mut dr = [0u8; 600];
+                if let Some(k) = arch_aarch64::reject::reject4(frame, &cfg.our_ip, &cfg.me, &mut dr) {
+                    let _ = reply(&dr[..k]);
+                }
+                c.upstream_private_refused += 1;
+                act = Act::Drop;
+                shield = true;
+            }
+        }
     }
     // ADR 0053: a session-made, TTL-bound hold on an IPv4 address (either direction)
     if act == Act::Allow && frame.len() >= 34 {
@@ -1099,12 +1127,32 @@ pub fn client6<N: ApNic>(
     match v6.on_lan(frame, now_ms, v6buf) {
         LanAction::Reply(k) => Client6::Reply(k),
         LanAction::Forward(k) => {
+            // A-01 (operator 2026-11-17): an upstream ULA (fc00::/7) is refused unless an owner exception or an explicit
+            // POLICY ACL `allow` covers it — the same fast reject as a `lan in` block, attributed for Mission Control
+            let mut a01 = false;
             let pa = hal::policy::facts(frame)
                 .map(|p| {
-                    let a = pol.check(If::Lan, Dir::In, &p).0;
+                    let (a, d) = pol.check(If::Lan, Dir::In, &p);
+                    if a == Act::Allow && frame.len() >= 12 {
+                        let acl_allow = matches!(d, hal::policy::Decided::Acl(_, s) if s != u16::MAX);
+                        let mut sm = [0u8; 6];
+                        sm.copy_from_slice(&frame[6..12]);
+                        if crate::lanaccess::check(&sm, p.src, p.dst, p.dport, p.proto, acl_allow, None, now_ms) == crate::lanaccess::Verdict::Refused {
+                            a01 = true;
+                            return (Act::Block, If::Lan as usize);
+                        }
+                    }
                     if a == Act::Allow { (pol.check(If::Wan, Dir::Out, &p).0, If::Wan as usize) } else { (a, If::Lan as usize) }
                 })
                 .unwrap_or((Act::Allow, 0));
+            if a01 {
+                c.upstream_private_refused += 1;
+                let mut rj = [0u8; 1400];
+                if let Some(r) = arch_aarch64::reject::reject6(frame, &v6.gua, me, &mut rj) {
+                    let _ = reply(&rj[..r]);
+                }
+                return Client6::Blocked;
+            }
             if frame.len() >= 54 {
                 let mut sm = [0u8; 6];
                 sm.copy_from_slice(&frame[6..12]);
