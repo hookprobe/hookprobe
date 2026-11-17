@@ -5313,7 +5313,7 @@ fn cm5_p10_probe() {
                                             }
                                             {
                                                 let d = cyw43::defer_diag();
-                                                kprint!("   [P11-AP3 defer] station frames read by control requests: parked={} delivered={} ring-full={}\n", d[0], d[1], d[2]);
+                                                kprint!("   [P11-AP3 defer] station frames read by control requests: parked={} delivered={} ring-full={} | control-reply hunts cut at their budget={}\n", d[0], d[1], d[2], unsafe { cyw43::DCMD_DEADLINE_HITS });
                                             }
                                             kprint!("   [P11-AP3 unstick] episodes={} self={} after_A(unused)={} after_kick(ctl)={} reached_2s={}\n",
                                                 credit.unstick[0], credit.unstick[1], credit.unstick[2], credit.unstick[3], credit.unstick[4]);
