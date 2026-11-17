@@ -231,6 +231,8 @@ if run C5; then
 fi
 
 # ================= C6: stability soak =================
+# (throughput samples on wlan0: wlan1's soak profile is never-default, so "auto" picked a station with no route to
+# the sink and measured 0.0 — metal 2026-11-17)
 if run C6 && [ "$SOAK_H" != 0 ]; then
   end=$(( $(date +%s) + SOAK_H * 3600 )); m=$(mark); h0=$(H); i=0; rok=0; rn=0; tps=""
   while [ "$(date +%s)" -lt "$end" ]; do
@@ -238,7 +240,7 @@ if run C6 && [ "$SOAK_H" != 0 ]; then
     sleep 60; if [ $((i % 2)) = 1 ]; then ifc=wlan1; mac=$A; else ifc=wlan0; mac=$B; fi
     mc=$(mark); [ "$ifc" = wlan1 ] && unwedge_a; recon "$ifc"; rn=$((rn + 1)); poll_assoc "$mc" "$mac" 30 "SAE" >/dev/null && wait_gw "$ifc" 40 && rok=$((rok + 1))
     [ $((i % 4)) = 0 ] && api cmd53-stall >/dev/null
-    if [ $((i % 6)) = 0 ]; then tpo=$("$R/tools/diagnostics/cm5-throughput-check.sh" "$PI" auto 40 5 2>&1); tps="$tps $(grep -o 'median [0-9.]*' <<<"$tpo" | cut -d' ' -f2)"
+    if [ $((i % 6)) = 0 ]; then tpo=$("$R/tools/diagnostics/cm5-throughput-check.sh" "$PI" wlan0 40 5 2>&1); tps="$tps $(grep -o 'median [0-9.]*' <<<"$tpo" | cut -d' ' -f2)"
       echo "  soak throughput sample: $(grep -E 'client interface|THROUGHPUT' <<<"$tpo" | tr '\n' ' ')"; fi
     sleep 170; echo "  soak $(date +%T): reconnects $rok/$rn | A $(ping_stat wlan1 290) | B $(ping_stat wlan0 290)"
   done
