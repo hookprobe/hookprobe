@@ -4517,7 +4517,10 @@ fn cm5_p10_probe() {
                                         }
                                         if auth.ptk_set && auth.authorized {
                                             keyed += 1;
-                                            kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n");
+                                            match cyw43::take_join_ms(&sta) {
+                                                Some((ms, sae)) => kprint!(" [P11-AP3] keyed + authorized — join took {} ms at the AP ({} first auth frame -> keyed); awaiting the client's DHCP\n", ms, if sae { "SAE" } else { "open-auth" }),
+                                                None => kprint!(" [P11-AP3] keyed + authorized — awaiting the client's DHCP\n"),
+                                            }
                                             break 'kd;
                                         }
                                         kprint!(" [P11-AP3] 4-way incomplete ({}) — back to the pump\n",
