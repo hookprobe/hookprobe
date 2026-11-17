@@ -8,7 +8,8 @@
     "dev": "astro dev",
     "build": "astro build && node scripts/shared-inline-scripts.mjs",
     "preview": "astro preview",
-    "check": "astro check"
+    "check": "astro check",
+    "test:unit": "node --test 'tests/unit/*.test.ts'"
   },
   "dependencies": {
     "@astrojs/solid-js": "7.1.5",
