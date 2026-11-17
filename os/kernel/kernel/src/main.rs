@@ -14979,11 +14979,19 @@ impl wifiheal::Port for MetalHeal<'_> {
         ok
     }
     fn reload(&mut self) -> bool {
+        // the AP loop is blocked for both steps (the watchdog is petted through them): the per-reload cost on record
+        let f: u64;
+        unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+        let ms = |a: u64, b: u64| b.wrapping_sub(a) / (f / 1000).max(1);
+        let now = || -> u64 { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
+        let (t0, b0) = (now(), unsafe { crate::el0srv::keyer::BP_EL0_BYTES });
         let r = arch_aarch64::cyw43::fw_reload(self.nv);
+        let t1 = now();
         let ok = r == 0 && self.start();
+        let t2 = now();
         clear_station_v6_state(); // a reloaded radio has no stations: drop their IPv6 state too
-        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={}\n",
-            r, arch_aarch64::cyw43::pmkid_patch(), ok);
+        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={} | firmware reload {} ms (download bytes written by el0-wifi: {}) + BSS start {} ms\n",
+            r, arch_aarch64::cyw43::pmkid_patch(), ok, ms(t0, t1), unsafe { crate::el0srv::keyer::BP_EL0_BYTES }.wrapping_sub(b0), ms(t1, t2));
         ok
     }
     fn reboot(&mut self, d: &wifiheal::Diag) {
