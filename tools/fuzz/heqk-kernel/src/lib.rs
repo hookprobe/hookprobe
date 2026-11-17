@@ -23,3 +23,5 @@ pub mod rpmb;
 #[path = "../../../../os/kernel/kernel/src/alerthook.rs"]
 pub mod alerthook;
 pub mod devpolicy;
+// A-01 (#1263): the journal replays owner exceptions into lanaccess::table(); a host stand-in over the real hal table
+pub mod lanaccess;
