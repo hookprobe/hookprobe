@@ -114,7 +114,7 @@ jobs:
         with: { node-version: "24" }
       - if: steps.key.outputs.ok == 'true'
         run: |
-          sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk
+          tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk
           npm install -g @anthropic-ai/claude-code@2.1.319
       - if: steps.key.outputs.ok == 'true'
         id: heal
@@ -162,7 +162,7 @@ jobs:
         with: { tool: cargo-deny }
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1   # v7.1.0
         with: { node-version: "24" }
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk
+      - run: tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk
       - name: Trusted guard (copied out BEFORE the patch is applied)
         run: |
           cp tools/ci/heal/autofix_guard.py tools/ci/heal/protected-paths.txt "$RUNNER_TEMP/"
