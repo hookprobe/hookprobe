@@ -140,7 +140,7 @@ cache. A security-server fault outside a station call wipes every secret and for
   reboot, clients with and without cached PMKIDs, full SAE fallback, no unnecessary failed retry, no regression to
   normal WPA3 reconnects.
 
-## Implementation status (2026-11-16 — source and CM5 metal; QEMU evidence alone marks nothing)
+## Implementation status (2026-11-17 — source and CM5 metal; QEMU evidence alone marks nothing)
 
 | Clause | Status | Evidence |
 |---|---|---|
@@ -153,11 +153,11 @@ cache. A security-server fault outside a station call wipes every secret and for
 | D6 `el0-wpa` + independent supervision | **[realized]** | S1 #1231, S2 #1232; `/api/health` `wifi_driver` #1230 |
 | D6 keys via the key-transfer page only; GTK/IGTK/PSK PMK in `el0-wpa` | **[realized]** | S3a/b/c #1233; metal WPA3 7/7, IPv6 SLAAC over the el0-wpa GTK |
 | D6 in-kernel keying fallback removed (D-b) | **[realized]** | S3d #1235: compiled out of AP+MC images; `tools/el0keys-symcheck.sh` PASS on the shipping ELF; QEMU K1 scan (positive control) |
-| D6 fault isolation (operator evidence E1–E7) | **[partial — PR open]** | S4: metal `s4-b060c8b9` E1–E6 PASS, soak 50/50 keyed+authorized, worst loop gap 846 ms; four defects found and fixed on metal |
-| D7 D-a | **[partial]** | passphrase handed to `el0-wpa` on (re)provisioning; temporary-copy wipe audit pending |
-| D7 D-c | **[partial]** | kernel TRNG feeds `el0-wpa`; group keys from an HMAC pool; a real DRBG seeded at init + reseed is pending |
-| D7 D-d | **[partial — PR open]** | validate.sh 600 s + CI job timeout |
-| D7 PMKSA status-53 recovery | **[vision]** | firmware has PMKID-validation paths; CM5 experiment pending |
+| D6 fault isolation (operator evidence E1–E7) | **[realized]** | S4 #1239: metal `s4-b060c8b9` E1–E7 PASS (soak 50/50 keyed + authorized, worst loop gap 846 ms); bus-fault cascade fix + episode escalation #1241 (one fault = 428–585 ms outage); firmware-reload bring-up 1964 → 533 ms (#1246, burst loop gap 954 ms) |
+| D7 D-a | **[realized]** | passphrase handed to `el0-wpa` on (re)provisioning; temporary-copy audit in #1242: the sealed-config custody copy is the only kernel copy, transfer buffers and the shared page are wiped, the in-kernel SAE stack copy is compiled out (S3d) |
+| D7 D-c | **[realized]** | #1242: SP 800-90A HMAC-DRBG in `el0-wpa` state pages, seeded by the kernel TRNG at load, reseeded hourly, `ST_NEED_SEED` fail-closed (strict TRNG); metal `dc-0f726481`: `drbg seeds=1` at load, survives a contained restart, reseeded after a full wipe, `seed_fails=0` |
+| D7 D-d | **[realized]** | #1237: validate.sh QEMU timeout 600 s; the overall CI job timeout is kept separately |
+| D7 PMKSA status-53 recovery | **[not supported by this firmware — current behaviour retained]** | CM5 experiment (2026-11-16): after a full wipe the firmware never rejects a stale PMKID with status 53, whether or not its PMKSA list is kept in sync. Per the decision, no deny-list and no workaround; the existing recovery stands. Related fix #1244: the keying decision follows the station's PMKID list (50/50 soak, 0 unkeyed handshakes) |
 
 The split is complete only when every row above is **[realized]** with CM5 evidence.
 
