@@ -797,7 +797,7 @@ pub fn on_mgmt_frame(frame: &[u8], mgmt_ip: &[u8; 4], mgmt_mac: &[u8; 6], inside
         }
         // L-02: the device's own names over mDNS, to hosts `mgmt in` lets in, where Mission Control is served
         if mc_on_mgmt {
-            if let Some(k) = crate::mdnsresp::on_mgmt(frame, mgmt_mac, *mgmt_ip, arch_aarch64::cyw43::now_secs(), nbuf) {
+            if let Some(k) = crate::mdnsresp::on_mgmt(frame, mgmt_mac, *mgmt_ip, crate::mdnsresp::now_s(), nbuf) {
                 return MgmtOut::ToMgmt(k);
             }
         }
