@@ -15,7 +15,7 @@
  * (no CPU/memory: heqk does not report them).
  */
 import { type Component, For, Show, createMemo, createSignal, onMount } from 'solid-js';
-import { qsecbit, qsecbitShown, qsecbitGauge, heartbeat, protectionStatus, deployMode, deviceStats, substrate } from '../store/mock';
+import { qsecbit, qsecbitShown, qsecbitGauge, heartbeatShown, protectionStatus, deployMode, deviceStats, substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
 import { startLiveUpdates } from '../store/live';
 import { incidents, startInvestigateLive } from '../store/investigateLive';
@@ -33,7 +33,7 @@ import DigDeeper from './DigDeeper';
 import { QsecbitBanner, QsecbitDeep, SAMPLE_QS } from './QsecbitBand';
 import { qsHistory, qsLoaded, startQsecbitLive } from '../store/qsecbitLive';
 
-const WORD = { protected: 'Protected', 'needs-attention': 'Needs attention', critical: 'At risk' } as const;
+const WORD = { protected: 'Protected', 'needs-attention': 'Needs attention', critical: 'At risk', unknown: 'Waiting for score' } as const;
 const R = 42, C = 2 * Math.PI * R;
 
 interface CardInfo { title: string; crumb: string; body: string; href: string; hrefLabel: string }
@@ -116,7 +116,7 @@ const MissionControlApp: Component = () => {
                 <svg viewBox="0 0 100 100" aria-hidden="true">
                   <circle cx="50" cy="50" r={R} fill="none" stroke="rgba(255,255,255,.08)" stroke-width="6" />
                   <circle cx="50" cy="50" r={R} fill="none" stroke-width="6" stroke-linecap="round"
-                    stroke={protectionStatus() === 'protected' ? 'var(--hp-green)' : protectionStatus() === 'needs-attention' ? 'var(--hp-amber)' : 'var(--hp-red)'}
+                    stroke={protectionStatus() === 'protected' ? 'var(--hp-green)' : protectionStatus() === 'needs-attention' ? 'var(--hp-amber)' : protectionStatus() === 'unknown' ? 'var(--hp-text-muted)' : 'var(--hp-red)'}
                     stroke-dasharray={`${(qsecbitGauge() / 100) * C} ${C}`} />
                 </svg>
                 <b aria-hidden="true">{qsecbitShown()}</b>
@@ -135,7 +135,7 @@ const MissionControlApp: Component = () => {
             <p class="pcard-kpi">{sample() ? '142' : n(ds()?.dropped)} <small>{sample() ? 'blocked today' : 'frames dropped since start-up'}</small></p>
             <svg width="100%" height="36" viewBox="0 0 300 36" preserveAspectRatio="none" aria-hidden="true">
               <polyline fill="none" stroke="var(--hp-cyan)" stroke-width="1.5"
-                points={heartbeat().map((v, i, a) => `${((i / Math.max(1, a.length - 1)) * 300).toFixed(1)},${(36 - ((Math.max(0, Math.min(100, v)) / 100) * 34)).toFixed(1)}`).join(' ')} />
+                points={heartbeatShown().map((v, i, a) => `${((i / Math.max(1, a.length - 1)) * 300).toFixed(1)},${(36 - ((Math.max(0, Math.min(100, v)) / 100) * 34)).toFixed(1)}`).join(' ')} />
             </svg>
             <span class="pcard-note">
               {sample() ? 'Top: scanning 61 · phishing 34 · botnet 12'
