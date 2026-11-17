@@ -1,0 +1,18 @@
+IoT-23 replay (CC BY 4.0) | split=dev | scenarios=10 | windows=40 | tokenizer: real (ggml-vocab-qwen35.gguf)
+  scenario Somfy-01                                 dev  flows=130      malicious_hours=0    benign_hours=2
+  scenario CTU-IoT-Malware-Capture-1-1              dev  flows=1008748  malicious_hours=112  benign_hours=0
+  scenario CTU-IoT-Malware-Capture-3-1              dev  flows=156103   malicious_hours=37   benign_hours=0
+  scenario CTU-IoT-Malware-Capture-42-1             dev  flows=4426     malicious_hours=1    benign_hours=8
+  scenario CTU-IoT-Malware-Capture-44-1             dev  flows=237      malicious_hours=2    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-48-1             dev  flows=1500000  malicious_hours=5    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-49-1             dev  flows=1500000  malicious_hours=3    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-52-1             dev  flows=1500000  malicious_hours=2    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-60-1             dev  flows=1500000  malicious_hours=11   benign_hours=11
+  scenario CTU-IoT-Malware-Capture-7-1              dev  flows=1500000  malicious_hours=3    benign_hours=0
+raw window tokens (median, extrapolated past 4000 rows): 514004
+ budget  incidents   identity   evidence flagged cards/benign win
+    256         58      0.948      0.741              1.3 (n=6)
+    512         58      0.948      0.741              1.3 (n=6)
+   1024         58      0.948      0.741              1.3 (n=6)
+   2048         58      0.948      0.741              1.3 (n=6)
+per family @512: c2 7/7/0  download 5/4/4  flood 16/14/14  heartbeat 5/5/0  malware 3/3/3  scan 22/22/22
