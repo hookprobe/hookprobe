@@ -45,8 +45,13 @@ post "op=set&ip=$PIIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=low&r
 grep -q '"ok":true' <<<"$R" && grep -q 'secret' <<<"$R1"; chk $? "hook refused without a secret, accepted with one ($R)"
 curl -sk -m 10 -b "$J" "$MC/api/alert-hook" | grep -q '"configured":true'; chk $? "GET /api/alert-hook: configured"
 sleep 3
-# high-severity detection: rule 124 (answered SSH brute-force burst to the bench WAN host)
-pi "for i in \$(seq 1 30); do timeout 1 bash -c '</dev/tcp/10.100.0.1/22' 2>/dev/null; done" >/dev/null 2>&1
+# the triggers below fire once per (rule, device) per BEHAVIORAL_COOLDOWN_SECS (300 s): a check run right after
+# another that tripped them (e.g. cm5-lan-client) would see nothing new — wait out what is left of the cooldown.
+# (The old SSH-burst trigger to the bench WAN host 10.100.0.1 is gone: A-01 refuses upstream private networks.)
+last=$(curl -sk -m 10 -b "$J" "$MC/api/detections?limit=200" | python3 -c 'import json,sys
+ts=[x.get("ts",0) for x in json.load(sys.stdin).get("detections",[]) if x.get("rule_id") in (1200126,1200302) and x.get("src_ip")==sys.argv[1]]
+print(int(max(ts)) if ts else 0)' "$PIIP" 2>/dev/null)
+wait_s=$(( ${last:-0} + 310 - $(date +%s) )); [ "$wait_s" -gt 0 ] && [ "$wait_s" -le 310 ] && { echo "  waiting ${wait_s} s for the per-device detection cooldown"; sleep "$wait_s"; }
 # and a DNS bypass to a Shield-blocked name (rule 126 — repeatable: a fresh source port each time)
 ip=$(dig +short +time=3 +tries=2 @1.1.1.1 doubleclick.net A | grep -E '^[0-9.]+$' | head -1)
 [ -n "$ip" ] && pi "curl -s -o /dev/null -m 6 --resolve doubleclick.net:443:$ip https://doubleclick.net/" >/dev/null 2>&1
