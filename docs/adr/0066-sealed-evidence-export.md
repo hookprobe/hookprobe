@@ -125,7 +125,8 @@ Also needed, separately:
 
 ## Verification
 
-- `cd onboarding/enrollment/evidence-export && cargo test` runs the unit tests, among them the three asked for:
+- `cd onboarding/enrollment/evidence-export && cargo test` runs the unit tests; CI runs them in gate g1
+  (`tools/ci/gates.sh`, "host tests: evidence-export"). Among them are the three asked for:
   privacy redaction (`anon::internal_addresses_are_redacted`, `wire::codec_refuses_internal_addresses`,
   `exporter::exported_frames_carry_no_internal_addresses`), tampered-record rejection
   (`record::tampered_records_are_rejected`, `exporter::tampered_record_is_reported_not_exported`), and offline
@@ -136,5 +137,7 @@ Also needed, separately:
   exports a sealed log over the loopback session and checks the received set.
 - `os/kernel` is untouched by this ADR's code, so `validate.sh` is unaffected.
 
-**Evidence (2026-11-17):** the library has **not yet been compiled or run**: the machine it was written on had no
-Rust toolchain and its DNS resolver refused `static.rust-lang.org`. Update this line with the `cargo test` result.
+**Evidence (2026-11-17):** CI gate g1 on hookprobe/hookprobe#1272 (Actions run 44178705052, job 134376924553)
+compiled the library with stable Rust, with no warnings, and passed **31 of 31** unit tests, the three sets above
+included. This proves the library against its stand-in sealer only; the HQKSEAL1 path and the on-device export
+stay unproven until the kernel wiring and its `[P-evexport]` phase land.
