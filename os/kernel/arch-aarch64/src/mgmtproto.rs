@@ -89,6 +89,17 @@ pub fn mgmt_frame(m: &mut Mgmt, buf: &mut [u8], n: usize, now: u64, decide: &mut
         }
         return MgmtEvent::Idle;
     }
+    // L-02: an mDNS query (IPv4 UDP to 224.0.0.251:5353) goes up like a frame for us — the caller applies `mgmt in`
+    // and answers only for the device's own names (kernel `mdnsresp`); nothing else multicast is taken in
+    if n >= 42 && buf[0..6] == [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb] && buf[12..14] == [0x08, 0x00] && buf[23] == 17
+        && buf[30..34] == [224, 0, 0, 251] && {
+            let u = 14 + ((buf[14] & 0x0f) as usize) * 4;
+            buf.get(u + 2..u + 4) == Some(&[0x14, 0xe9][..])
+        }
+    {
+        m.stats[5] += 1;
+        return MgmtEvent::Frame(n);
+    }
     if n < 34 || buf[12..14] != [0x08, 0x00] || buf[30..34] != m.ip || buf[0..6] != m.mac {
         m.stats[6] += 1;
         return MgmtEvent::Idle;
