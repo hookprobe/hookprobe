@@ -2,8 +2,8 @@
 //! 169.254/16, IPv6 ULA) unless an exception covers them. Every refusal is attributed (device, destination, port,
 //! count, first / last seen) so Mission Control can explain it and offer the exception (`GET /api/lan-access`).
 //!
-//! Exceptions come from the owner (owner journal, `kind=lan_access`, scoped + expiring) or from an explicit `allow`
-//! entry of the signed POLICY ACL on the LAN interface. Guardrails that no exception can lift:
+//! Exceptions come from the owner (owner journal, `kind=lan_access`, scoped + expiring) or from the signed POLICY:
+//! an explicit `allow` entry of the ACL on the LAN interface, or a specific (non-default) route to the destination. Guardrails that no exception can lift:
 //! * the management network (the management gateway, and the management address's /24) is never opened;
 //! * a device whose own policy refuses the LAN (`internet_only`, `quarantine`) is not opened by an exception.
 //!

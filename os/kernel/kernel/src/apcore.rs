@@ -199,6 +199,12 @@ pub fn forward4<N: ApNic>(
                 };
                 up && !r.gw.filter(|g| !g.v6).is_some_and(|g| nh_is_dead(r.via, [g.a[0], g.a[1], g.a[2], g.a[3]]))
             };
+            // A-01: a specific signed route (not a default route) to this destination is operator intent, like an
+            // explicit ACL `allow` — an internal network the operator chose to reach (e.g. `via mgmt`). Live or not:
+            // when that route is down the existing metric failover still applies.
+            if pol.route(&p.src, &p.dst, &|_| true).is_some_and(|r| r.dst.len > 0) {
+                acl_allow = true;
+            }
             if let Some(r) = pol.route_live(&p.src, &p.dst, &live) {
                 egress = r.via;
                 nh_ip = r.gw.filter(|g| !g.v6).map(|g| [g.a[0], g.a[1], g.a[2], g.a[3]]);
@@ -226,7 +232,7 @@ pub fn forward4<N: ApNic>(
         shield = true;
     }
     // A-01 (operator 2026-11-17): upstream private networks (beyond the WAN: RFC 1918, 169.254/16) are refused unless
-    // an owner exception or an explicit POLICY ACL `allow` covers them — answered at once (ICMP admin-prohibited /
+    // an owner exception, an explicit POLICY ACL `allow` or a specific signed route covers them — answered at once (ICMP admin-prohibited /
     // TCP RST, like a policy block) and attributed for Mission Control. The AP's own subnet is not upstream.
     if act == Act::Allow && frame.len() >= 34 && dst4[..3] != cfg.inside_net {
         if let Some(p) = pk {
