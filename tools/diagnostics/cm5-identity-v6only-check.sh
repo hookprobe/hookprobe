@@ -22,6 +22,8 @@ PSK=$(psudo "nmcli -s -g 802-11-wireless-security.psk con show '$PROF'")
 up() {   # <cloned-mac> <ipv4: auto|disabled>; with IPv4, a route to the bench host scoped to this profile only
   local r4=""; [ "$2" = auto ] && r4="ipv4.routes '10.100.0.1/32 10.99.0.1'"
   psudo "nmcli con delete hq-idtest" >/dev/null 2>&1
+  # the claims harness drives wlan1 with its own supplicant (unmanaged); make sure NetworkManager owns it again
+  psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; sleep 2
   psudo "nmcli con add type wifi ifname wlan1 con-name hq-idtest ssid '$SSID' wifi-sec.key-mgmt wpa-psk wifi-sec.psk '$PSK' wifi.cloned-mac-address $1 ipv4.method $2 ipv4.never-default yes $r4 ipv6.method auto connection.autoconnect no" >/dev/null 2>&1
   psudo "timeout 70 nmcli -w 60 con up hq-idtest" >/dev/null 2>&1
 }
