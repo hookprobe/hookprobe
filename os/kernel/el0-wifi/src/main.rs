@@ -188,6 +188,24 @@ fn bp_write() -> ! {
     exit_lean(if bus.backplane_write(addr, &i[4..], 64) { 1 } else { 4 })
 }
 
+/// Step 4e-2: one register operation of a firmware reload (chip probe, EROM walk, core reset, clocks) over this
+/// server's grant. The bus holds no window cache, so the kernel's and this server's operations interleave safely.
+fn bp_reg() -> ! {
+    let Some((op, f, addr, val)) = bp_reg_decode(input()) else { exit(ST_BAD_CMD, 0) };
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let (ok, v) = match op {
+        REG_CMD52_R => bus.cmd52(false, f as u32, addr, 0).map_or((false, 0), |b| (true, b as u32)),
+        REG_CMD52_W => bus.cmd52(true, f as u32, addr, val as u8).map_or((false, 0), |b| (true, b as u32)),
+        REG_BP_R32 => (true, bus.bp_r32(addr)),
+        REG_BP_W32 => (bus.bp_w32(addr, val), 0),
+        _ => (bus.set_backplane_window(addr), 0),
+    };
+    let mut o = [0u8; 8];
+    o[0] = ok as u8;
+    o[4..8].copy_from_slice(&v.to_le_bytes());
+    reply(&o)
+}
+
 /// S3c: install a key from the key-transfer page (read-only here; el0-wpa wrote it) as a WLC_SET_KEY control
 /// request — the only way a key reaches the chip. The record must be the one the kernel asked for (station + key
 /// index), else nothing is sent. Every local copy is wiped before exit; the kernel zeroes the page.
@@ -238,6 +256,7 @@ pub extern "C" fn _start() -> ! {
         CMD_TX_DATA => tx_data(),
         CMD_TX_CTL => tx_ctl(),
         CMD_BP_WRITE => bp_write(),
+        CMD_BP_REG => bp_reg(),
         hal::wpasrvabi::CMD_KEY_INSTALL => key_install(),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring

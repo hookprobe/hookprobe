@@ -1143,7 +1143,7 @@ pub mod keyer {
         };
         #[cfg(feature = "cm5")]
         unsafe {
-            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new, bp_write });
+            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new, bp_write, bp_reg });
         }
         #[cfg(all(feature = "cm5", feature = "wpa3"))]
         let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
@@ -1258,6 +1258,29 @@ pub mod keyer {
             _ => {
                 unsafe { BP_LOST += 1 };
                 Some(false)
+            }
+        }
+    }
+
+    /// Step 4e-2: register operations of a firmware reload run by el0-wifi; operations lost to a fault / timeout.
+    pub static mut REG_EL0_OPS: u64 = 0;
+    pub static mut REG_LOST: u64 = 0;
+    /// One register operation of a firmware reload (`hal::wifisrvabi::CMD_BP_REG`): Some((ok, value read)); None = no
+    /// server / backoff (the driver does it in-kernel). A fault reports (false, all-ones) — a failed bus read.
+    pub(crate) fn bp_reg(op: u8, fnum: u8, addr: u32, val: u32) -> Option<(bool, u32)> {
+        use hal::wifisrvabi::{bp_reg_in, CMD_BP_REG};
+        let s = bus_srv()?;
+        let mut out = [0u8; 8];
+        let (c, k) = s.call_lean(CMD_BP_REG, &bp_reg_in(op, fnum, addr, val), &mut out);
+        match c {
+            Call::Backoff => None,
+            Call::Done(ST_OK, _, _) if k == 8 => {
+                unsafe { REG_EL0_OPS += 1 };
+                Some((out[0] == 1, u32::from_le_bytes([out[4], out[5], out[6], out[7]])))
+            }
+            _ => {
+                unsafe { REG_LOST += 1 };
+                Some((false, u32::MAX))
             }
         }
     }
