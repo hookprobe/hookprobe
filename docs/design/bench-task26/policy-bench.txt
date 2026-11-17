@@ -5,6 +5,9 @@ acl MGMT-IN seq 10 allow any pl:ADMINS any
 # management answers only fortress's 192.168.200.1; everyone else: implicit deny
 interface mgmt acl in MGMT-IN
 # Wi-Fi clients: http to 1.1.1.1 is REJECTED (fast fail), DNS to 9.9.9.9 is DROPPED (silent)
+# A-01 (upstream private networks refused by default): the bench throughput sink on the WAN VLAN is an explicit,
+# operator-signed exception — exactly one host and port
+acl LAN-IN seq 5 allow tcp any 10.100.0.1/32 8088
 acl LAN-IN seq 10 block tcp any 1.1.1.1/32 80
 acl LAN-IN seq 20 drop udp any 9.9.9.9/32 53
 acl LAN-IN default allow

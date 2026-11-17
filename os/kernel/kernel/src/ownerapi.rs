@@ -142,8 +142,8 @@ fn pol_name(p: Pol) -> &'static str {
 
 /// Run every guard, then preview or append. Ok(outcome) or Err(why refused).
 pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Outcome, &'static str> {
-    let mut b = [[0u8; 192]; 9];
-    let [ref mut b0, ref mut b1, ref mut b2, ref mut b3, ref mut b4, ref mut b5, ref mut b6, ref mut b7, ref mut b8] = b;
+    let mut b = [[0u8; 192]; 10];
+    let [ref mut b0, ref mut b1, ref mut b2, ref mut b3, ref mut b4, ref mut b5, ref mut b6, ref mut b7, ref mut b8, ref mut b9] = b;
     let op = form_get(body, "op", b0).unwrap_or("");
     let kind_s = form_get(body, "kind", b1).unwrap_or("");
     let target_s = form_get(body, "target", b2).unwrap_or("");
@@ -153,6 +153,8 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
     let key = form_get(body, "owner_key", b6).unwrap_or("");
     let seq: u64 = form_get(body, "seq", b7).and_then(|v| v.parse().ok()).unwrap_or(0);
     let dry = form_get(body, "dry_run", b8) == Some("1");
+    // A-01 owner exceptions: a temporary grant's duration in seconds (absent = `permanent=true` decides)
+    let expires: Option<u32> = form_get(body, "expires", b9).and_then(|v| v.parse().ok());
     let tag = crate::mcauth::session_tag(c.session);
     if unsafe { (*core::ptr::addr_of!(J)).is_none() } {
         install_ram(&[0u8; 32]); // an image without persistence: rules last until reboot (`persistent: false`)
@@ -214,15 +216,19 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
         "shield_block" => Kind::ShieldBlock,
         "shield_profile" => Kind::ShieldProfile,
         "device_label" => Kind::DeviceLabel,
+        "lan_access" => Kind::LanAccess,
         _ => return refuse(c, "kind"),
     };
     if reason.trim().len() < 3 {
         return refuse(c, "reason required");
     }
+    if kind == Kind::LanAccess {
+        return lan_access(c, opc, target_s, value_s, reason, permanent, expires, key, dry, tag, auth);
+    }
     // target + value (and the before/after preview)
     let mut tbuf = [0u8; oj::TARGET_MAX];
     let (tlen, value, before, after, shadow): (usize, u8, &'static str, &'static str, &'static str) = match kind {
-        Kind::Artifact | Kind::OwnerKey | Kind::AlertHook | Kind::FactoryReset => return refuse(c, "kind"),
+        Kind::Artifact | Kind::OwnerKey | Kind::AlertHook | Kind::FactoryReset | Kind::LanAccess => return refuse(c, "kind"),
         Kind::DeviceLabel => {
             // G47: target = the device's MAC, value = the new label (owner_label grammar); remove = back to DEVICES.TXT
             let Some(m) = mac(target_s) else { return refuse(c, "target") };
@@ -311,6 +317,105 @@ pub fn submit(c: &Ctx, body: &[u8], auth: &mut crate::mcauth::Auth) -> Result<Ou
         Ok(seq) => Ok(Outcome { seq, ..preview }),
         Err(oj::JErr::Full) => refuse(c, "journal full"),
         Err(oj::JErr::TooManyRules) => refuse(c, "too many rules"),
+        Err(oj::JErr::RolledBack) => refuse(c, "rolled back: this journal is older than its anchored state — a factory reset is required before new owner changes"),
+        Err(_) => refuse(c, "storage error"),
+    }
+}
+
+/// A-01 (operator 2026-11-17, design #1253): an owner exception to the upstream-private block. `target` = a device
+/// MAC or `any`; `value` = `<address>[/<len>][:<port>[-<port>]]`; `expires` = seconds (600 ..= 7 days) for a
+/// temporary grant (RAM only, audit-journaled: a reboot ends it), or `permanent=true` for always (journaled,
+/// replayed at boot). Guardrails: only upstream private destinations, not too broad, never the management network
+/// or the device's own addresses; a device whose policy refuses the LAN stays refused (shown as shadowed).
+#[allow(clippy::too_many_arguments)]
+fn lan_access(c: &Ctx, opc: u8, target_s: &str, value_s: &str, reason: &str, permanent: bool, expires: Option<u32>, key: &str, dry: bool,
+    tag: [u8; 4], auth: &mut crate::mcauth::Auth) -> Result<Outcome, &'static str> {
+    let device = match target_s {
+        "any" => None,
+        t => Some(match mac(t) {
+            Some(m) => m,
+            None => return refuse(c, "target: a device MAC or 'any'"),
+        }),
+    };
+    let (pfx_s, ports) = match value_s.rsplit_once(':') {
+        Some((p, r)) if !p.contains(':') || p.contains('/') => {
+            let (lo, hi) = r.split_once('-').unwrap_or((r, r));
+            match (lo.parse::<u16>(), hi.parse::<u16>()) {
+                (Ok(lo), Ok(hi)) if lo > 0 && lo <= hi => (p, (lo, hi)),
+                _ => return refuse(c, "value: ports are <port> or <port>-<port>"),
+            }
+        }
+        _ => (value_s, (0, 0)),
+    };
+    let dst = if pfx_s.contains('/') {
+        match hal::policy::parse_prefix(pfx_s.as_bytes()) {
+            Some(p) => p,
+            None => return refuse(c, "value: <address>[/<len>][:<port>[-<port>]]"),
+        }
+    } else {
+        match hal::policy::parse_addr(pfx_s.as_bytes()) {
+            Some(a) => hal::policy::Prefix { addr: a, len: if a.v6 { 128 } else { 32 } },
+            None => return refuse(c, "value: <address>[/<len>][:<port>[-<port>]]"),
+        }
+    };
+    if let Some(why) = crate::lanaccess::exception_refusal(&dst, device.is_none()) {
+        return refuse(c, why);
+    }
+    if reason.trim().len() < 3 {
+        return refuse(c, "reason required");
+    }
+    let x = hal::lanaccess::Exception { device, dst, ports, expires_ms: 0 };
+    let dur = match (opc, expires, permanent) {
+        (OP_REMOVE, _, _) => 0,
+        (_, Some(s), _) if (600..=604_800).contains(&s) => s,
+        (_, Some(_), _) => return refuse(c, "expires: 600 to 604800 seconds"),
+        (_, None, true) => 0,
+        (_, None, false) => return refuse(c, "expires=<seconds> (temporary) or permanent=true (always) required"),
+    };
+    let shadow = match device {
+        Some(m) if !crate::devpolicy::check(&m, crate::devpolicy::Dest::Lan) => "device policy (internet_only / quarantine)",
+        _ => "",
+    };
+    let after = match (opc, dur) {
+        (OP_REMOVE, _) => "blocked",
+        (_, 0) => "allowed (always)",
+        _ => "allowed (temporary)",
+    };
+    let preview = Outcome { seq: 0, before: if opc == OP_REMOVE { "allowed" } else { "blocked" }, after, shadowed_by: shadow };
+    if dry {
+        return Ok(preview);
+    }
+    if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
+        return refuse(c, "re-authentication failed");
+    }
+    let mut t = [0u8; hal::lanaccess::SCOPE_LEN];
+    hal::lanaccess::encode(&x, dur, &mut t);
+    // value 1 = always (applied + replayed), 2 = temporary (audit only — held in RAM below)
+    let mut r = oj::rec(Kind::LanAccess, opc, &t, if opc == OP_SET && dur > 0 { 2 } else { 1 }, reason.as_bytes());
+    r.session = u32::from_le_bytes(tag);
+    r.ms = c.now_ms;
+    let res = unsafe {
+        match ((*core::ptr::addr_of_mut!(J)).as_mut(), (*core::ptr::addr_of_mut!(DEV)).as_mut()) {
+            (Some(j), Some(d)) => j.append(&mut **d, r),
+            _ => return refuse(c, "no journal"),
+        }
+    };
+    match res {
+        Ok(seq) => {
+            if opc == OP_SET {
+                if dur > 0 {
+                    if !crate::lanaccess::grant_temporary(x, dur) {
+                        return refuse(c, "too many exceptions");
+                    }
+                } else {
+                    crate::lanaccess::resolve_blocks(&x);
+                }
+            } else {
+                let _ = crate::lanaccess::table().remove(x.device, x.dst, x.ports); // a temporary one too
+            }
+            Ok(Outcome { seq, ..preview })
+        }
+        Err(oj::JErr::Full) => refuse(c, "journal full"),
         Err(oj::JErr::RolledBack) => refuse(c, "rolled back: this journal is older than its anchored state — a factory reset is required before new owner changes"),
         Err(_) => refuse(c, "storage error"),
     }
@@ -1024,11 +1129,35 @@ pub fn selftest() -> bool {
     let n = fill(&mut buf, &["op=revoke_all&reason=start+over&permanent=true", k, "&seq=12"]);
     let revoked = submit(&good, &buf[..n], &mut auth).is_ok_and(|o| o.seq > 0) && !oj::shield_blocked(b"games.example") && !oj::shield_allowed(b"school.example");
     let revoke_all = two && ra_reauth && revoked;
+    // A-01 owner exceptions (kind=lan_access): preview, temporary (RAM, in force now), always (journaled), guardrails, remove
+    let la0 = *crate::lanaccess::table();
+    let m51 = [2u8, 0, 0, 0, 0, 0x51];
+    let printer = hal::policy::Addr::v4([192, 168, 1, 50]);
+    let n = fill(&mut buf, &["op=set&kind=lan_access&target=02:00:00:00:00:51&value=192.168.1.50:631&reason=printing&expires=3600&dry_run=1&seq=13"]);
+    let la_dry = submit(&good, &buf[..n], &mut auth).is_ok_and(|o| o.seq == 0 && o.before == "blocked") && !crate::lanaccess::table().allows(&m51, &printer, 631, 1);
+    let n = fill(&mut buf, &["op=set&kind=lan_access&target=02:00:00:00:00:51&value=192.168.1.50:631&reason=printing&expires=3600", k, "&seq=14"]);
+    let la_tmp = submit(&good, &buf[..n], &mut auth).is_ok_and(|o| o.seq > 0 && o.after == "allowed (temporary)")
+        && crate::lanaccess::table().allows(&m51, &printer, 631, crate::lanaccess::now_ms())
+        && !crate::lanaccess::table().allows(&m51, &printer, 22, crate::lanaccess::now_ms());
+    let n = fill(&mut buf, &["op=set&kind=lan_access&target=any&value=192.168.1.20&reason=nas&permanent=true", k, "&seq=15"]);
+    let la_always = submit(&good, &buf[..n], &mut auth).is_ok_and(|o| o.after == "allowed (always)")
+        && crate::lanaccess::table().allows(&[2, 0, 0, 0, 0, 9], &hal::policy::Addr::v4([192, 168, 1, 20]), 445, u64::MAX - 1);
+    let n = fill(&mut buf, &["op=set&kind=lan_access&target=any&value=8.8.8.8&reason=nope&permanent=true", k, "&seq=16"]);
+    let la_public = submit(&good, &buf[..n], &mut auth).is_err();
+    let n = fill(&mut buf, &["op=set&kind=lan_access&target=any&value=10.0.0.0/8&reason=too+broad&permanent=true", k, "&seq=17"]);
+    let la_broad = submit(&good, &buf[..n], &mut auth).is_err();
+    let n = fill(&mut buf, &["op=set&kind=lan_access&target=02:00:00:00:00:51&value=192.168.1.50:631&reason=printing", k, "&seq=18"]);
+    let la_unconfirmed = submit(&good, &buf[..n], &mut auth).is_err();
+    let n = fill(&mut buf, &["op=remove&kind=lan_access&target=02:00:00:00:00:51&value=192.168.1.50:631&reason=done", k, "&seq=19"]);
+    let la_remove = submit(&good, &buf[..n], &mut auth).is_ok() && !crate::lanaccess::table().allows(&m51, &printer, 631, crate::lanaccess::now_ms());
+    let lan_access = la_dry && la_tmp && la_always && la_public && la_broad && la_unconfirmed && la_remove;
+    *crate::lanaccess::table() = la0;
     oj::clear();
-    let pass = set && unconfirmed && reauth && dry && bad_mac && replay && bad_origin && revoke_all;
+    let pass = set && unconfirmed && reauth && dry && bad_mac && replay && bad_origin && revoke_all && lan_access;
     arch_aarch64::_print(format_args!(
-        " [P-ownerapi] {} — ADR 0055 owner-rules API: permanent set (re-auth + permanent=true) lands in the journal={} unconfirmed set refused={} wrong owner key refused={} dry run previews without writing={} broadcast MAC refused={} replayed seq refused={} foreign Origin refused={} revoke-all (re-auth, then no owner rule left)={}\n",
-        if pass { "PASS" } else { "FAIL" }, set, unconfirmed, reauth, dry, bad_mac, replay, bad_origin, revoke_all
+        " [P-ownerapi] {} — ADR 0055 owner-rules API: permanent set (re-auth + permanent=true) lands in the journal={} unconfirmed set refused={} wrong owner key refused={} dry run previews without writing={} broadcast MAC refused={} replayed seq refused={} foreign Origin refused={} revoke-all (re-auth, then no owner rule left)={} A-01 lan_access (preview / temporary in force / always / public refused / too broad refused / needs expires or permanent / remove)={}/{}/{}/{}/{}/{}/{}\n",
+        if pass { "PASS" } else { "FAIL" }, set, unconfirmed, reauth, dry, bad_mac, replay, bad_origin, revoke_all,
+        la_dry, la_tmp, la_always, la_public, la_broad, la_unconfirmed, la_remove
     ));
     pass
 }
