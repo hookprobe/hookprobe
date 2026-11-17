@@ -19,16 +19,23 @@ fuzz_target!(|d: &[u8]| {
         for p in x.pmkids() {
             assert!(ies.windows(16).any(|w| w == p));
         }
-        let k = r::decide(Some(&x), offers, sel & 1 != 0, &mut |p| (p[0] & 1 != 0) == (sel & 2 != 0));
+        // a fresh SAE (bit 0) names its PMKID (#1244): the station's first PMKID when it lists one, so the
+        // fresh-PMKID match is reached, else a value the station did not list
+        let fresh: Option<[u8; 16]> = (sel & 1 != 0).then(|| x.pmkids().first().copied().unwrap_or([0x5a; 16]));
+        let k = r::decide(Some(&x), offers, fresh.as_ref(), &mut |p| (p[0] & 1 != 0) == (sel & 2 != 0));
         if x.akm == r::AKM_SAE && x.n_akm == 1 {
             assert!(k != r::Keying::Psk && k != r::Keying::Legacy);
             if offers & r::OFFER_SAE == 0 {
                 assert_eq!(k, r::Keying::NotOffered); // never key SAE on a BSS that does not offer it
             }
         }
+        if x.akm == r::AKM_SAE && x.n_akm == 1 && offers & r::OFFER_SAE != 0
+            && fresh.is_some_and(|f| x.pmkids().iter().any(|p| *p == f)) {
+            assert_eq!(k, r::Keying::SaeFresh); // the fresh SAE's own PMKID keys from the fresh PMK
+        }
         if let r::Keying::SaeCached(i) = k {
             assert!(i < x.pmkids().len());
         }
     }
-    assert_eq!(r::decide(None, offers, sel & 1 != 0, &mut |_| true), r::Keying::Legacy);
+    assert_eq!(r::decide(None, offers, (sel & 1 != 0).then_some(&[0x5a; 16]), &mut |_| true), r::Keying::Legacy);
 });
