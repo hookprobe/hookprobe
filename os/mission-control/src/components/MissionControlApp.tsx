@@ -29,6 +29,9 @@ import { incidentHref } from '../store/routes';
 import AppShell from './AppShell';
 import WifiDriverStatus from './WifiDriverStatus';
 import Drawer from './Drawer';
+import DigDeeper from './DigDeeper';
+import { QsecbitBanner, QsecbitDeep, SAMPLE_QS } from './QsecbitBand';
+import { qsHistory, qsLoaded, startQsecbitLive } from '../store/qsecbitLive';
 
 const WORD = { protected: 'Protected', 'needs-attention': 'Needs attention', critical: 'At risk' } as const;
 const R = 42, C = 2 * Math.PI * R;
@@ -43,6 +46,7 @@ const MissionControlApp: Component = () => {
     startDetectLive();
     startNetworkLive();
     startStory();
+    startQsecbitLive();
     void refreshActions();
   });
 
@@ -102,6 +106,7 @@ const MissionControlApp: Component = () => {
           </div>
         </div>
 
+        <QsecbitBanner history={sample() ? SAMPLE_QS : qsHistory()} dets={detections()} sample={sample()} loaded={sample() || qsLoaded()} />
         <WifiDriverStatus />
         <div class="bento">
           <button class="pcard span-4" onClick={() => setOpen('health')} style={{ 'border-width': '2px' }}>
@@ -246,6 +251,9 @@ const MissionControlApp: Component = () => {
             </Show>
           </div>
         </div>
+        <DigDeeper title="QSecBit" crumb="band → sliding window → band shifts → contributing detections">
+          <QsecbitDeep history={sample() ? SAMPLE_QS : qsHistory()} dets={detections()} sample={sample()} loaded={sample() || qsLoaded()} />
+        </DigDeeper>
       </main>
 
       <Drawer open={!!info()} title={info()?.title ?? ''} crumb={info()?.crumb} onClose={() => setOpen(null)}
