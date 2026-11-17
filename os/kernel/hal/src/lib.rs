@@ -945,6 +945,7 @@ pub mod release;
 /// WAN policy engine: prefix lists, ACLs, routes, sub-interface encapsulation (POLICY.TXT).
 pub mod abslot;
 pub mod policy;
+pub mod mdns;
 pub mod defer;
 pub mod tlsabi;
 /// ADR 0050 D4 step 2: the EL0 LAN-services (DNS) server ABI.

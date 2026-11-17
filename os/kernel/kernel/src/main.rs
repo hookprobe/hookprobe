@@ -69,6 +69,7 @@ mod fpdb;
 mod devid;
 mod oui;
 mod lanrelay;
+mod mdnsresp;
 mod apcore;
 mod clock;
 #[cfg(feature = "detbench")]
@@ -4659,6 +4660,12 @@ fn cm5_p10_probe() {
                                             dh.discovers, dh.offers_tx, dh.requests, dh.acks_tx, dh.active(), dh.arp_replies);
                                     } else if act == 0 && apcore::station_relay(frame, &dh, cyw43::now_secs(), &mut |f: &[u8]| wifi_send!(f)) {
                                         // G10 station-to-station (discovery relay / IPv6 relay / proxy-ARP): G0 step 3c
+                                        // L-02: an mDNS question for the device's own names is answered here (the relay above
+                                        // still copies the query to the other stations, unchanged)
+                                        let mut mo = [0u8; 600];
+                                        if let Some(k) = mdnsresp::on_wifi(frame, &ap.bssid, our_ip, cyw43::now_secs(), &mut mo) {
+                                            let _ = wifi_send!(&mo[..k]);
+                                        }
                                     } else if act == 0 && frame.len() >= 54 && frame[12] == 0x86 && frame[13] == 0xdd && unsafe { V6.up } {
                                         // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
                                         // verdict and out the PPPoE session (no NAT; the module records the flow so the
@@ -5200,6 +5207,9 @@ fn cm5_p10_probe() {
                                                             apcore::MgmtOut::ToWifi(mm) => {
                                                                 let _ = wifi_send!(&nbuf[..mm]);
                                                             }
+                                                            apcore::MgmtOut::ToMgmt(mm) => {
+                                                                let _ = uplink::mgmt_tx(&nbuf[..mm]);
+                                                            }
                                                             apcore::MgmtOut::Dropped => {}
                                                         }
                                                     }
@@ -5296,6 +5306,10 @@ fn cm5_p10_probe() {
                                                     uplink::wan_alive(&up, 15_000), wan_martian, fc.pol_drop, fc.pol_block, fc.block_as_drop, fc.pol_via_mgmt, fc.pol_mgmt_nh_miss, ld[0], ld[1], ld[2], ld[3], ld[4], ld[5]);
                                                 for a in &pol.acl[..pol.nacl] {
                                                     kprint!("   [P11-AP3 policy] acl {} hits {:?} default {}\n", core::str::from_utf8(&a.name[..a.nlen]).unwrap_or("?"), &a.hits[..a.n], a.default_hits);
+                                                }
+                                                {
+                                                    let md = mdnsresp::counts();
+                                                    kprint!("   [P11-AP3 mdns] device names answered: Wi-Fi={} management={} | not answered: device policy={} rate-limited={}\n", md[0], md[1], md[2], md[3]);
                                                 }
                                                 if let Some(mg) = unsafe { uplink::MGMT } {
                                                     #[cfg(feature = "mcserve")]
