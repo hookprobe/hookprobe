@@ -1,0 +1,21 @@
+IoT-23 replay (CC BY 4.0) | split=test | scenarios=13 | windows=47 | tokenizer: real (ggml-vocab-qwen35.gguf)
+  scenario CTU-Honeypot-Capture-4-1                 test flows=452      malicious_hours=0    benign_hours=22
+  scenario CTU-Honeypot-Capture-5-1                 test flows=1374     malicious_hours=0    benign_hours=6
+  scenario CTU-IoT-Malware-Capture-17-1             test flows=1500000  malicious_hours=1    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-20-1             test flows=3209     malicious_hours=2    benign_hours=22
+  scenario CTU-IoT-Malware-Capture-21-1             test flows=3286     malicious_hours=3    benign_hours=21
+  scenario CTU-IoT-Malware-Capture-33-1             test flows=1500000  malicious_hours=1    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-34-1             test flows=23145    malicious_hours=17   benign_hours=7
+  scenario CTU-IoT-Malware-Capture-35-1             test flows=1500000  malicious_hours=3    benign_hours=2
+  scenario CTU-IoT-Malware-Capture-36-1             test flows=1500000  malicious_hours=3    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-39-1             test flows=1500000  malicious_hours=1    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-43-1             test flows=1500000  malicious_hours=1    benign_hours=0
+  scenario CTU-IoT-Malware-Capture-8-1              test flows=10403    malicious_hours=23   benign_hours=1
+  scenario CTU-IoT-Malware-Capture-9-1              test flows=1500000  malicious_hours=5    benign_hours=4
+raw window tokens (median, extrapolated past 4000 rows): 43986
+ budget  incidents   identity   evidence flagged cards/benign win
+    256         49      0.878      0.653             1.1 (n=15)
+    512         49      0.878      0.653             1.1 (n=15)
+   1024         49      0.878      0.653             1.1 (n=15)
+   2048         49      0.878      0.653             1.1 (n=15)
+per family @512: c2 20/15/10  download 3/2/2  flood 5/5/5  heartbeat 5/5/0  malware 6/6/6  scan 10/10/9
