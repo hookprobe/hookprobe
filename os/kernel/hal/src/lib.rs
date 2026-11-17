@@ -946,6 +946,7 @@ pub mod release;
 pub mod abslot;
 pub mod policy;
 pub mod x509lite;
+pub mod mdns;
 pub mod lanaccess;
 pub mod defer;
 pub mod tlsabi;
