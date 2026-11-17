@@ -201,9 +201,33 @@ fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<
     r
 }
 
+/// ADR 0065 step 4e-2: while a firmware reload runs with el0-wifi loaded, its register operations (CMD52, 32-bit
+/// backplane access, the F1 window) go through the server; the kernel keeps only the sequencing. Set and cleared by
+/// [`fw_reload`]; never on the data path. (register ops in el0-wifi, ops this reload did in-kernel)
+static mut RELOAD_REGS_EL0: bool = false;
+pub static mut RELOAD_REG_OPS: (u64, u64) = (0, 0);
+fn el0_reg(op: u8, fnum: u32, addr: u32, val: u32) -> Option<(bool, u32)> {
+    if !unsafe { RELOAD_REGS_EL0 } {
+        return None;
+    }
+    let r = el0().and_then(|h| (h.bp_reg)(op, fnum as u8, addr, val));
+    unsafe {
+        if r.is_some() {
+            RELOAD_REG_OPS.0 += 1;
+        } else {
+            RELOAD_REG_OPS.1 += 1;
+        }
+    }
+    r
+}
+
 /// CMD52 (IO_RW_DIRECT): single-byte register access on SDIO function `fnum`.
 /// `write`=true writes `val`; returns the read/echoed byte.
 fn cmd52(write: bool, fnum: u32, addr: u32, val: u8) -> Option<u8> {
+    use hal::wifisrvabi::{REG_CMD52_R, REG_CMD52_W};
+    if let Some((ok, v)) = el0_reg(if write { REG_CMD52_W } else { REG_CMD52_R }, fnum, addr, val as u32) {
+        return ok.then_some(v as u8);
+    }
     let r = bus().cmd52(write, fnum, addr, val);
     if r.is_none() {
         sync_diag();
@@ -230,6 +254,9 @@ const SB_ADDR_HIGH: u32 = 0x1000C;
 const SI_ENUM_BASE: u32 = 0x1800_0000; // chipcommon core — chip-ID at +0x00
 
 fn set_backplane_window(addr: u32) -> bool {
+    if let Some((ok, _)) = el0_reg(hal::wifisrvabi::REG_WINDOW, 1, addr, 0) {
+        return ok;
+    }
     let ok = bus().set_backplane_window(addr);
     if !ok {
         sync_diag();
@@ -925,9 +952,15 @@ fn backplane_write_kernel(mut addr: u32, data: &[u8]) -> bool {
 // the chip-ID in Stage A. CMD53 data-phase register reads returned failure here
 // (0xFFFFFFFF), so we do NOT rely on it for the EROM walk / AI reset registers.
 fn bp_r32(addr: u32) -> u32 {
+    if let Some((_, v)) = el0_reg(hal::wifisrvabi::REG_BP_R32, 1, addr, 0) {
+        return v;
+    }
     bus().bp_r32(addr)
 }
 fn bp_w32(addr: u32, val: u32) -> bool {
+    if let Some((ok, _)) = el0_reg(hal::wifisrvabi::REG_BP_W32, 1, addr, val) {
+        return ok;
+    }
     let ok = bus().bp_w32(addr, val);
     if !ok {
         sync_diag();
@@ -1577,11 +1610,19 @@ pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
     set_defer(defer_on); // empties the parked-frame ring, keeps the mode
     pet();
     let _ = radio_power_on();
-    if chip_id_probe() != Some(0x4345) {
+    // step 4e-2: from here to the end of the download, register operations run in el0-wifi when it is loaded
+    unsafe {
+        RELOAD_REG_OPS = (0, 0);
+        RELOAD_REGS_EL0 = el0().is_some();
+    }
+    let probed = chip_id_probe() == Some(0x4345);
+    pet();
+    let uploaded = probed && firmware_upload(nvram_scratch);
+    unsafe { RELOAD_REGS_EL0 = false };
+    if !probed {
         return 1;
     }
-    pet();
-    if !firmware_upload(nvram_scratch) {
+    if !uploaded {
         return 2;
     }
     pet();
@@ -4625,6 +4666,8 @@ pub struct El0Keyer {
     pub group_new: fn(bool) -> bool,
     // step 4e: one slice of the firmware / NVRAM download written by el0-wifi (None = no server: write in-kernel)
     pub bp_write: fn(u32, &[u8]) -> Option<bool>,
+    // step 4e-2: one register operation of a firmware reload run by el0-wifi (None = do it in-kernel)
+    pub bp_reg: fn(u8, u8, u32, u32) -> Option<(bool, u32)>,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
