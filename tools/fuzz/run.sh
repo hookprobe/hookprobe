@@ -6,52 +6,38 @@
 # (W4 rekey); fixed-layout MAC-verified stores stay with the in-kernel [P-fuzz].
 # Needs: nightly + `cargo install cargo-fuzz`. Exit 1 on any crash (the reproducer stays in artifacts/).
 set -u
-T="${1:-60}"; cd "$(dirname "$0")/heqk-hal" || exit 2
+T="${1:-60}"; FUZZ="$(cd "$(dirname "$0")" && pwd)"
 rc=0
-for t in policy wan_cfg frame_facts glom sdpcm_hdr el0_ring wpa_keyer abslot dhcp_wire pppoe_disc ppp_ctl eapol_wire mgmt_records wpa_auth sae_wire rsn_assoc; do
-  mkdir -p corpus/$t
-  ml=4096; [ "$t" = abslot ] && ml=32768   # (was `\&\&` inside $(...): `[` errored, abslot got 4096 = 8 sectors)
-  if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=$ml > "/tmp/heqk-fuzz-$t.log" 2>&1; then
-    echo "  ok   $t: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-$t.log | tail -1)"
-  elif grep -qE "panicked at|SUMMARY: libFuzzer|deadly signal" "/tmp/heqk-fuzz-$t.log"; then
-    echo "  FAIL $t (crash — reproducer in tools/fuzz/heqk-hal/artifacts/$t/)"; grep -E "panicked at|SUMMARY" "/tmp/heqk-fuzz-$t.log" | head -3; rc=1
+
+# fuzz_one <crate dir> <target> <max_len>: run one target; on failure say whether it CRASHED or did not BUILD /
+# start, and print the lines that show why. (The kernel / boot-abi / securechannel targets used to print only
+# "crash or build error — see /tmp/...", a file CI never shows: #1264 was a build break triaged as "unknown".)
+fuzz_one() {
+  local dir=$1 t=$2 ml=$3 log="/tmp/heqk-fuzz-$2.log"
+  mkdir -p "$FUZZ/$dir/corpus/$t"
+  if (cd "$FUZZ/$dir" && cargo +nightly fuzz run --fuzz-dir . "$t" "corpus/$t" -- -max_total_time="$T" -max_len="$ml") > "$log" 2>&1; then
+    echo "  ok   $t: $(grep -oE 'Done [0-9]+ runs' "$log" | tail -1)"
+  elif grep -qE "panicked at|SUMMARY: libFuzzer|deadly signal" "$log"; then
+    echo "  FAIL $t (crash — reproducer in tools/fuzz/$dir/artifacts/$t/)"; grep -E "panicked at|SUMMARY" "$log" | head -3; rc=1
   else
     # Not a crash: the harness did not build or libFuzzer did not start. Say so instead of crying "crash".
-    echo "  FAIL $t (build/setup error, not a crash)"; grep -E "^error|could not|No such file" "/tmp/heqk-fuzz-$t.log" | head -5; rc=1
+    echo "  FAIL $t (build/setup error, not a crash)"; grep -E "^error|^ *--> |could not|No such file" "$log" | head -8; rc=1
   fi
+}
+
+for t in policy wan_cfg frame_facts glom sdpcm_hdr el0_ring wpa_keyer abslot dhcp_wire pppoe_disc ppp_ctl eapol_wire mgmt_records wpa_auth sae_wire rsn_assoc; do
+  ml=4096; [ "$t" = abslot ] && ml=32768   # abslot spans 64 sectors
+  fuzz_one heqk-hal "$t" "$ml"
 done
 # the OS-update / boot verifier (boot_abi::verify: header gates, streamed digest, Ed25519 + SLH-DSA, SVN floor)
-cd ../heqk-boot-abi || exit 2
-mkdir -p corpus/payload_header
-if cargo +nightly fuzz run --fuzz-dir . payload_header corpus/payload_header -- -max_total_time="$T" -max_len=8192 > /tmp/heqk-fuzz-payload_header.log 2>&1; then
-  echo "  ok   payload_header: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-payload_header.log | tail -1)"
-else
-  echo "  FAIL payload_header (crash — reproducer in tools/fuzz/heqk-boot-abi/artifacts/payload_header/)"; rc=1
-fi
+fuzz_one heqk-boot-abi payload_header 8192
 # the firmware DTB reader HBoot uses for platform discovery (boot_abi::fdt — ADR 0061 D1, ADR 0062 T0)
-mkdir -p corpus/fdt_parse
-if cargo +nightly fuzz run --fuzz-dir . fdt_parse corpus/fdt_parse -- -max_total_time="$T" -max_len=131072 > /tmp/heqk-fuzz-fdt_parse.log 2>&1; then
-  echo "  ok   fdt_parse: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-fdt_parse.log | tail -1)"
-else
-  echo "  FAIL fdt_parse (crash or build error — see /tmp/heqk-fuzz-fdt_parse.log, reproducer in tools/fuzz/heqk-boot-abi/artifacts/fdt_parse/)"; rc=1
-fi
+fuzz_one heqk-boot-abi fdt_parse 131072
 # the kernel crate's network-facing parsers (same source files, #[path]) — SEC-02; owner_journal = A9 (journal replay)
-cd ../heqk-kernel || exit 2
 for t in http_req dns_wire tls_hello frame_meta cfg_bundle owner_journal; do
-  mkdir -p corpus/$t
-  if cargo +nightly fuzz run --fuzz-dir . "$t" corpus/$t -- -max_total_time="$T" -max_len=4096 > "/tmp/heqk-fuzz-$t.log" 2>&1; then
-    echo "  ok   $t: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-$t.log | tail -1)"
-  else
-    echo "  FAIL $t (crash or build error — see /tmp/heqk-fuzz-$t.log, reproducer in tools/fuzz/heqk-kernel/artifacts/$t/)"; rc=1
-  fi
+  fuzz_one heqk-kernel "$t" 4096
 done
 # the control channel's record layer (securechannel.rs: rekey epochs, replay windows, key retirement) — W4
-cd ../heqk-securechannel || exit 2
-mkdir -p corpus/record_rx
-if cargo +nightly fuzz run --fuzz-dir . record_rx corpus/record_rx -- -max_total_time="$T" -max_len=4096 > /tmp/heqk-fuzz-record_rx.log 2>&1; then
-  echo "  ok   record_rx: $(grep -oE 'Done [0-9]+ runs' /tmp/heqk-fuzz-record_rx.log | tail -1)"
-else
-  echo "  FAIL record_rx (crash or build error — see /tmp/heqk-fuzz-record_rx.log, reproducer in tools/fuzz/heqk-securechannel/artifacts/record_rx/)"; rc=1
-fi
+fuzz_one heqk-securechannel record_rx 4096
 [ $rc = 0 ] && echo "FUZZ: PASS (${T}s per target)" || echo "FUZZ: FAIL"
 exit $rc
