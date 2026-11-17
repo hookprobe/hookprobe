@@ -27,4 +27,14 @@ Newest first. Each entry: what was investigated or changed, the evidence, and it
   `id, title, priority, status, device_ip, threat_score, ts, explanation{why, confidence, evidence,
   model, related_events}, attack_path`. Canvas v60 corrected to match.
 
-**Status:** analysis only. Nothing implemented.
+**Delivered (local)**
+- `agent/engineering-audit`: audit docs, 2 commits.
+- `agent/mc-honest-states` @ `02cb4780`: Copilot "no AI model" link fixed (AB-05). Evidence:
+  `astro check` 0 errors / 111 files; `astro build` 27 pages; in-app browser against the preview
+  build: no hash → "Edge node", `#ai` → AI models + "no on-device planner", `#nonsense` → "Edge
+  node". Local tooling trick: symlinked the main checkout's `node_modules` (read-only), removed
+  after. Playwright not installed, so the added spec line was not executed.
+- `git push` → 403 for account `hookprobes` on both branches. Nothing pushed.
+
+**Handed to other session:** AB-04 (TopBar "Protected" from sample 92; fake sparklines), as it
+owns the QSecBit files.

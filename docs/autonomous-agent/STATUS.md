@@ -12,14 +12,17 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-AB-05 + AB-06: Mission Control honest-state fixes (broken AI-models link, stale package
-description), branch `agent/mc-honest-states`.
+None running. **Blocked on GitHub write access:** `git push` returns 403 for the logged-in
+account `hookprobes` on `hookprobe/hookprobe`.
 
 ## Delivery ledger
 
 | Work | Branch | Implemented | Local tests | CI | Pushed | PR | Merged |
 |---|---|---|---|---|---|---|---|
-| Engineering audit docs | `agent/engineering-audit` | yes | n/a (docs) | pending | pending | pending | no |
+| Engineering audit docs | `agent/engineering-audit` | yes | n/a (docs) | — | **no (403)** | — | no |
+| AB-05 Copilot AI-models link | `agent/mc-honest-states` @ `02cb4780` | yes | astro check 0 errors; build 27 pages; browser check of 3 hash cases; Playwright spec added but **not run** (not installed) | — | **no (403)** | — | no |
+
+AB-06 (package.json description) deferred: `package.json` is claimed by the other session.
 
 ## Tests and coverage
 
