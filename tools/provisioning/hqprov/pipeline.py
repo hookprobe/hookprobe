@@ -7,6 +7,7 @@ import datetime
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -134,6 +135,18 @@ def step_owner(args, unit):
     unit.mark("owner", "ok", "owner key minted (verifier staged); token held only in secrets.json + owner card")
 
 
+def tls_default_names(setup_ssid):
+    """The certificate's DNS names (operator decision 2026-11-17, L-02): `heqk.local` plus a unit-unique
+    `<label>.heqk.local`, the label being the setup SSID's suffix (`HookProbe-Setup-R3Q1` -> `r3q1.heqk.local`),
+    so two units on one network do not collide. A subdomain of heqk.local, because the owner CA's name constraint
+    permits `DNS:heqk.local` and its subdomains only."""
+    names = ["heqk.local"]
+    label = setup_ssid.rsplit("-", 1)[-1].lower() if "-" in setup_ssid else ""
+    if re.fullmatch(r"[a-z0-9]{2,16}", label):
+        names.append(label + ".heqk.local")
+    return names
+
+
 def step_tls(args, unit, ident):
     if args.skip_tls:
         unit.mark("tls", "skipped", "--skip-tls: HTTPS stays off until a certificate is provisioned")
@@ -142,7 +155,7 @@ def step_tls(args, unit, ident):
     if not (unit.done("tls") and os.path.exists(crt)):
         need_tools(args)
         cmd = [sys.executable, bench.MCTLS_PROVISION, "--ca-dir", args.ca_dir, "--pub", ident["tls_pub"], "--out", crt]
-        for n in args.tls_name or ["heqk.local"]:
+        for n in args.tls_name or tls_default_names(ident.get("setup_ssid", "")):
             cmd += ["--name", n]
         for i in args.tls_ip or ["10.99.0.1"]:
             cmd += ["--ip", i]
