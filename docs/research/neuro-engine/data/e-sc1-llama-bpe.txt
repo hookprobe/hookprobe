@@ -1,0 +1,33 @@
+tokenizer: real (ggml-vocab-llama-bpe.gguf) | synthetic windows: 10 x 60 min @ 40 benign rows/min
+raw window: mean 3538 events, 588 KB, full RAW tokens: 236983, 236528, 236792, 237399, 236934, 236646, 236501, 236633, 236894, 236842
+rep            budget   tokens   identity   evidence
+RAW               128       71       0.00       0.00
+DETECTIONS        128      118       0.43       0.14
+TOPK              128      117       0.00       0.00
+CARDS-noalias     128      106       0.14       0.14
+CARDS             128      111       0.14       0.14
+RAW               256      198       0.00       0.00
+DETECTIONS        256      241       0.43       0.14
+TOPK              256      227       0.00       0.00
+CARDS-noalias     256      250       0.57       0.57
+CARDS             256      219       0.43       0.43
+RAW               512      462       0.01       0.01
+DETECTIONS        512      484       0.56       0.14
+TOPK              512      467       0.00       0.00
+CARDS-noalias     512      501       1.00       1.00
+CARDS             512      493       1.00       1.00
+RAW              1024      971       0.01       0.01
+DETECTIONS       1024      972       0.66       0.14
+TOPK             1024      932       0.00       0.00
+CARDS-noalias    1024     1010       1.00       1.00
+CARDS            1024     1009       1.00       1.00
+RAW              2048     1968       0.01       0.01
+DETECTIONS       2048     1256       0.71       0.14
+TOPK             2048     1880       0.00       0.00
+CARDS-noalias    2048     1689       1.00       1.00
+CARDS            2048     1508       1.00       1.00
+RAW              4096     3971       0.04       0.03
+DETECTIONS       4096     1256       0.71       0.14
+TOPK             4096     3769       0.00       0.00
+CARDS-noalias    4096     1689       1.00       1.00
+CARDS            4096     1508       1.00       1.00
