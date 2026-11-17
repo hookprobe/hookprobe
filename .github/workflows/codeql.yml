@@ -1,0 +1,65 @@
+# =============================================================================
+# codeql.yml — CodeQL code scanning, ADVANCED setup (replaces GitHub's default setup, operator 2026-11-17).
+#
+# Why advanced: the default setup cannot exclude test code, and CodeQL's Rust extractor does not know #[cfg(test)],
+# so every unit-test / self-test vector came back as a "Critical" hard-coded cryptographic value (#1316-#1368, all
+# false positives, dismissed by hand). Same languages, same `default` query suite, same triggers as before; the
+# difference is that test code is excluded:
+#   - test directories / files: paths-ignore in .github/codeql/codeql-config.yml
+#   - inline Rust test code: tools/ci/codeql_test_filter.py drops it from the SARIF between analyze and upload
+#     (every dropped result is listed in the job log).
+#
+# NOTE: GitHub refuses advanced-setup uploads while the default setup is enabled — the default setup must be
+# switched off (Settings → Code security → CodeQL → Disable, or `gh api -X PATCH .../code-scanning/default-setup
+# -f state=not-configured`) when this lands.
+# =============================================================================
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "23 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      security-events: write   # upload the SARIF
+      actions: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, c-cpp, javascript-typescript, python, rust]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { persist-credentials: false }
+      - uses: github/codeql-action/init@33d7b85da1a04171e211befe2c739303b9a4c066   # v4.39.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+          config-file: ./.github/codeql/codeql-config.yml
+      - uses: github/codeql-action/analyze@33d7b85da1a04171e211befe2c739303b9a4c066   # v4.39.3
+        with:
+          category: "/language:${{ matrix.language }}"
+          upload: never
+          output: sarif-results
+      - name: Drop results in test code (tools/ci/codeql_test_filter.py)
+        run: python3 tools/ci/codeql_test_filter.py sarif-results
+      - uses: github/codeql-action/upload-sarif@33d7b85da1a04171e211befe2c739303b9a4c066   # v4.39.3
+        with:
+          sarif_file: sarif-results
+          category: "/language:${{ matrix.language }}"

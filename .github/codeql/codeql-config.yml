@@ -1,0 +1,24 @@
+# CodeQL configuration for .github/workflows/codeql.yml (advanced setup; replaces the default setup, 2026-11-17).
+#
+# Test code is excluded. Test DIRECTORIES and files are ignored here (every language runs with build-mode: none,
+# which is what makes paths-ignore apply to Rust and C/C++ too). Inline Rust test code — #[cfg(test)] modules and
+# #[test] fns for every rule, on-device `*selftest*` fns for the crypto-constant rule only — is dropped from the
+# SARIF by tools/ci/codeql_test_filter.py before upload, because no path rule can reach it.
+#
+# Production code is NOT excluded: a finding there is triaged and, if false, dismissed with its reason.
+name: hookprobe CodeQL (test code excluded)
+
+paths-ignore:
+  - "**/tests/**"
+  - "**/test/**"
+  - "**/testdata/**"
+  - "**/__tests__/**"
+  - "**/fixtures/**"
+  - "**/benches/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
+  - "**/*.spec.ts"
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - "tools/fuzz/**"
+  - "os/kernel/tools/mc-e2e/**"

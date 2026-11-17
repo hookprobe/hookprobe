@@ -70,6 +70,7 @@ mod devid;
 mod oui;
 mod lanrelay;
 mod mdnsresp;
+mod lanaccess;
 mod apcore;
 mod clock;
 #[cfg(feature = "detbench")]
@@ -5315,6 +5316,9 @@ fn cm5_p10_probe() {
                                                 {
                                                     let md = mdnsresp::counts();
                                                     kprint!("   [P11-AP3 mdns] device names answered: Wi-Fi={} management={} | not answered: device policy={} rate-limited={}\n", md[0], md[1], md[2], md[3]);
+                                                    let la = lanaccess::counts();
+                                                    kprint!("   [P11-AP3 policy] A-01 upstream private: refused={} (fwd {}) allowed by owner exception={} by POLICY ACL={} exception refused by a guardrail={} | attributed blocks={}\n",
+                                                        la[0], fc.upstream_private_refused, la[1], la[2], la[3], lanaccess::blocks().n);
                                                 }
                                                 if let Some(mg) = unsafe { uplink::MGMT } {
                                                     #[cfg(feature = "mcserve")]
@@ -7490,6 +7494,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = ioc::selftest();
         let _ = oui::selftest();
         let _ = lanrelay::selftest();
+        let _ = lanaccess::selftest();
         let _ = datavol::selftest();
         let _ = artstore::selftest();
         #[cfg(not(feature = "cm5"))]
