@@ -245,7 +245,38 @@ def rep_cards(events, baseline, intern=True):
                                           best["rule_msg"].split("(")[-1].rstrip(")"))), w, hits
 
     used_dets = set()
+    # horizontal fan-out: one source, one destination port, many destination HOSTS (Mirai-style scans,
+    # worm propagation, floods spread over targets). Per-pair cards cannot see this pattern.
+    by_sport = collections.defaultdict(set)
+    fail_sport = collections.Counter()
+    tot_sport = collections.Counter()
     for (src, dst), rows in flows.items():
+        for r in rows:
+            by_sport[(src, r[1])].add(dst)
+            tot_sport[(src, r[1])] += 1
+            fail_sport[(src, r[1])] += r[4] == "rst"
+    fanned = set()
+    for (src, port), dsts in by_sport.items():
+        if len(dsts) >= 50:
+            n = tot_sport[(src, port)]
+            fail = 100 * fail_sport[(src, port)] // max(1, n)
+            hits = [d for d in dets.get(src, []) if d["dst_port"] in (0, port)]
+            note, dw = "", 0.0
+            if hits:
+                best = min(hits, key=lambda d: d["severity"])
+                note = " det=%s[%s,sev%d,%s]" % (best["category"], best["mitre"] or "-", best["severity"],
+                                                  best["rule_msg"].split("(")[-1].rstrip(")"))
+                dw = SEV_WEIGHT.get(best["severity"], 1.0)
+                for h in hits:
+                    used_dets.add(h["id"])
+            cards.append((4.0 + dw + min(3.0, len(dsts) / 500.0),
+                          "%s->*:%d n=%d fanout_hosts=%d fail=%d%%%s" % (I(src, kind_of(src)), port, n, len(dsts), fail, note),
+                          None))
+            fanned.add((src, port))
+    for (src, dst), rows in flows.items():
+        if all((src, r[1]) in fanned for r in rows):
+            cards.append((0.0, None, ("flow", src, dst, len(rows), sum(r[2] for r in rows))))
+            continue
         rows.sort()
         n = len(rows)
         ports = {r[1] for r in rows}
