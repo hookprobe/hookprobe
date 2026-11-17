@@ -252,5 +252,13 @@ class Station(Quiet):
         self.assertEqual(quiet(self.cli.main, r), 1)
 
 
+class TlsNames(unittest.TestCase):
+    def test_unit_unique_name_from_the_setup_ssid(self):
+        from hqprov.pipeline import tls_default_names
+        self.assertEqual(tls_default_names("HookProbe-Setup-R3Q1"), ["heqk.local", "r3q1.heqk.local"])
+        self.assertEqual(tls_default_names(""), ["heqk.local"])
+        self.assertEqual(tls_default_names("HookProbe-Setup-bad label!"), ["heqk.local"])
+
+
 if __name__ == "__main__":
     unittest.main()
