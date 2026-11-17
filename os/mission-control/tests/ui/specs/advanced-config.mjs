@@ -18,7 +18,7 @@ function edVerify(pubHex, msg, sig) {
 const u64 = (b, o) => Number(b.readBigUInt64LE(o));
 
 export default async function (t) {
-  const { page, ok, go, vis } = t;
+  const { page, ok, go, vis, seen } = t;
   const dl = async (label) => {
     const [d] = await Promise.all([page.waitForEvent('download'), page.click(`text=${label}`)]);
     return readFileSync(await d.path());
@@ -44,11 +44,14 @@ export default async function (t) {
   await page.click('text=Import a backup');
   await page.fill('textarea', pem);
   await page.locator('label:has-text("Backup passphrase") input').last().fill('wrong passphrase');
-  await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(1500);
-  ok(await vis(page.locator('text=Wrong passphrase')), 'import: wrong passphrase refused');
+  // the decrypt is a 600 000-iteration PBKDF2: wait for its outcome instead of a fixed sleep (#1257)
+  await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")');
+  ok(await seen(page.locator('text=Wrong passphrase')), 'import: wrong passphrase refused');
   await page.locator('label:has-text("Backup passphrase") input').last().fill(PASS);
-  await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")'); await page.waitForTimeout(1500);
-  ok((await page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1).textContent()).trim() === pubHex, 'import: the encrypted backup restores the same key');
+  await page.click('.pcard[aria-label="Signing key"] button:text-is("Import")');
+  const restored = page.locator('.prow', { hasText: 'Public key' }).locator('span').nth(1);
+  ok(await seen(page.locator('.prow', { hasText: 'Public key' }).locator(`span:text-is("${pubHex}")`))
+    && (await restored.textContent()).trim() === pubHex, 'import: the encrypted backup restores the same key');
 
   // 2. Wi-Fi editor: validation mirrors the device.
   await go('/network/wifi');
