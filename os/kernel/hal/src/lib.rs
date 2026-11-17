@@ -945,6 +945,7 @@ pub mod release;
 /// WAN policy engine: prefix lists, ACLs, routes, sub-interface encapsulation (POLICY.TXT).
 pub mod abslot;
 pub mod policy;
+pub mod x509lite;
 pub mod mdns;
 pub mod lanaccess;
 pub mod defer;
