@@ -4,6 +4,26 @@
 > approval**. Nothing it proposes has been built. Evidence behind each statement is classified in §5;
 > no result in this package was measured on a CM5.
 
+## 0. Phase 0 update (2026-11-18) — read first
+
+Phase 0 ran (blind set, real-traffic replay, six models; details in
+[`NEURO_PHASE0_RESULTS.md`](NEURO_PHASE0_RESULTS.md)). It **confirms the decision below with
+independent evidence** and sharpens it:
+
+- On 215 independently written cases every candidate model (0.35–2B) was **significantly worse than
+  the deterministic core at verdicts** (best 0.50 vs 0.59; McNemar p ≤ 0.04), while **L0 verdict + model
+  explanation** raised explanation coverage from 0.27 to 0.56–0.73 at the same verdict accuracy. The
+  model is an explainer, never the judge.
+- Grammar-closed decoding is mandatory ≤ 2B (free decoding: worse verdicts, more injection leakage,
+  0% valid output for Qwen3.5-0.8B).
+- Explainer shortlist: **Qwen3.5-0.8B** (fast tier, Romanian 1.00, projected ~6 s/incident on CM5),
+  **Qwen3-1.7B** (best coverage, ~13 s/incident). Hybrid models lose llama.cpp prompt-cache reuse —
+  fix with state snapshots (P5).
+- Evidence cards on real held-out malware traffic: 0.88 identity / 0.65 evidence recall (synthetic
+  had 1.00) — weakest on C&C. Behavioural memory: peer novelty works on real devices; the
+  hour-of-day profile fails cold-start. Both have concrete fixes; neither is at its kill criterion.
+- Still **no CM5 measurement** — a reachable bench unit is the blocking item.
+
 ## 1. The decision
 
 **Build HookProbe's local intelligence as "Evidence-First, Model-Last" (architecture D).**
