@@ -95,8 +95,7 @@ jobs:
 
       - name: Install qemu-system-aarch64
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk   # mkfs.vfat/mcopy/sfdisk: validate.sh P15 OTA + A/B phases build a real FAT32 image
+          tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk   # retried (#1240); mkfs.vfat/mcopy/sfdisk: validate.sh P15 OTA + A/B phases build a real FAT32 image
 
       - name: heqk validate.sh (build + QEMU boot + phase-gate report)
         run: ./validate.sh
@@ -186,8 +185,7 @@ jobs:
           node-version: "24"   # astro >= 7.4.7 requires node >= 22.23.4; match ci.yml / nightly.yml
       - name: Install qemu + FAT tools
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm dosfstools mtools
+          tools/ci/apt-install.sh qemu-system-arm dosfstools mtools
       - name: Install the e2e browser (Playwright Chromium)
         working-directory: os/kernel/tools/mc-e2e
         run: npm ci --no-audit --no-fund && npx playwright install --with-deps chromium

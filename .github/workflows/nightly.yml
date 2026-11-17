@@ -72,7 +72,7 @@ jobs:
           toolchain: nightly-2026-07-20
           components: rust-src, llvm-tools
           targets: aarch64-unknown-none-softfloat, wasm32-wasip1
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk
+      - run: tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk
       - run: tools/ci/gates.sh g2
       - name: Regenerate the validation matrix from the live run
         if: success()
@@ -112,8 +112,7 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: "24" }
       - run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends qemu-system-arm mtools dosfstools fdisk
+          tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk
           cd os/kernel/tools/mc-e2e && npm ci --no-audit --no-fund && npx playwright install --with-deps chromium
       - run: tools/ci/gates.sh g3
       - if: always()
