@@ -383,7 +383,12 @@ fn end0_rx(out: &mut [u8]) -> Option<usize> {
                 let l4 = 14 + ((out[14] & 0x0f) as usize) * 4;
                 l4 + 4 <= n && out[l4 + 2] == 0 && out[l4 + 3] == 68
             };
-            if !(is_arp || is_dhcp || out[0..6] == END0_MAC) {
+            // L-02: an mDNS query (224.0.0.251:5353) may ask for the device's own names (mgmtproto / mdnsresp decide)
+            let is_mdns = n >= 42 && out[0..6] == [0x01, 0x00, 0x5e, 0x00, 0x00, 0xfb] && out[12] == 0x08 && out[13] == 0x00 && out[23] == 17 && {
+                let l4 = 14 + ((out[14] & 0x0f) as usize) * 4;
+                l4 + 4 <= n && out[l4 + 2] == 0x14 && out[l4 + 3] == 0xe9
+            };
+            if !(is_arp || is_dhcp || is_mdns || out[0..6] == END0_MAC) {
                 continue;
             }
             unsafe {
