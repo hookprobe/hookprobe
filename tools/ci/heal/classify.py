@@ -41,7 +41,9 @@ RULES = [
     ("toolchain_env", "human", None, [
         r"is not installed for the toolchain", r"can't find crate for `(?:core|std)`",
         r"required tool '\S+' not installed", r"command not found",
-        r"\.\.\. skip \(no [\w./ -]+",  r"No such file or directory.*qemu"]),
+        r"\.\.\. skip \(no [\w./ -]+",  r"No such file or directory.*qemu",
+        # apt on the runner (#1240: a partial package index; tools/ci/apt-install.sh already retried 3x)
+        r"E: Unable to locate package ", r"has no installation candidate", r"apt-install: FAILED"]),
     ("infra_transient", "rerun", None, [
         r"Could not resolve host", r"Connection (?:reset|refused|timed out)", r"ETIMEDOUT|ECONNRESET|EAI_AGAIN",
         r"\b(?:502|503|504) (?:Bad Gateway|Service Unavailable|Gateway Time-out)",
