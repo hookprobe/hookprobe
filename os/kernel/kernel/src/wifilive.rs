@@ -123,7 +123,14 @@ pub trait WifiPort {
     /// Bring the BSS up on `chanspec`; true = serve-ready.
     fn start(&mut self, ssid: &[u8], chanspec: u16) -> bool;
     fn install_gtk(&mut self, gtk: &[u8; 16]) -> bool;
+    /// G-F: a millisecond clock for the phase timings (0 = none: the QEMU mock).
+    fn now_ms(&self) -> u64 {
+        0
+    }
 }
+
+/// G-F: the last bounce's phases, ms — (keys + security prepared, BSS down + security installed, BSS up + GTK).
+pub static mut PHASE_MS: [u64; 3] = [0; 3];
 
 /// Apply `want` (None = refused upstream: nothing is touched). On success the AP loop's `pmk` / `gtk` are replaced;
 /// `want`'s passphrase and `scratch` are wiped either way. Returns (applied, the mode now running when bounced).
@@ -136,18 +143,22 @@ pub fn apply<P: WifiPort>(port: &mut P, want: &mut Option<Want>, chanspec: u16, 
 }
 
 fn bounce<P: WifiPort>(port: &mut P, w: &Want, chanspec: u16, pmk: &mut [u8; 32], gtk: &mut [u8; 16], k: &mut Keys) -> (bool, Option<u8>) {
+    let t0 = port.now_ms();
     // everything that can fail, BEFORE the radio is touched
     if w.ssid_len == 0 || w.pass_len < 8 || chanspec == 0 || !port.pmk(w.pass(), w.ssid(), &mut k.pmk) || !port.gtk(&mut k.gtk) {
         return (false, None);
     }
     let Some(mode) = port.prepare_security(w.security, w.ssid(), w.pass()) else { return (false, None) };
+    let t1 = port.now_ms();
     // the bounce: stations drop and re-join with the new settings
     let _ = port.stop();
     port.forget_stations();
     port.install_security(w.ssid(), w.pass());
     port.set_max_clients(w.max_clients);
+    let t2 = port.now_ms();
     let ready = port.start(w.ssid(), chanspec);
     let keyed = ready && port.install_gtk(&k.gtk);
+    unsafe { PHASE_MS = [t1.wrapping_sub(t0), t2.wrapping_sub(t1), port.now_ms().wrapping_sub(t2)] };
     if !keyed {
         if ready {
             let _ = port.stop(); // a BSS that cannot key clients must not keep beaconing
