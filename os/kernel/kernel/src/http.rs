@@ -155,6 +155,68 @@ fn write_ip6(w: &mut JsonBuf, a: &[u8; 16]) {
 }
 
 /// `GET /api/tls` — TLS clients seen (JA4 + SNI per client), most recent first; IOC / Shield-bypass flags.
+fn write_addr(w: &mut JsonBuf, a: &hal::policy::Addr) {
+    use core::fmt::Write;
+    if a.v6 {
+        write_ip6(w, &a.a);
+    } else {
+        let _ = write!(w, "{}.{}.{}.{}", a.a[0], a.a[1], a.a[2], a.a[3]);
+    }
+}
+
+/// `GET /api/lan-access` (A-01): upstream private networks are refused by default. What was refused (attributed: the
+/// device, where it tried to go, how often, how long ago) and the exceptions in force (who, where, which ports,
+/// when they expire) — so Mission Control can explain a block and offer the exception.
+fn render_lan_access(w: &mut JsonBuf) {
+    use core::fmt::Write;
+    let now = crate::lanaccess::now_ms();
+    let c = crate::lanaccess::counts();
+    let _ = write!(w, "{{\"default\":\"block\",\"counts\":{{\"refused\":{},\"allowed_by_owner\":{},\"allowed_by_policy\":{},\"exception_refused_by_guardrail\":{}}},\"blocked\":[", c[0], c[1], c[2], c[3]);
+    let b = crate::lanaccess::blocks();
+    for (i, e) in b.b[..b.n].iter().enumerate() {
+        if i > 0 {
+            w.raw(",");
+        }
+        let m = e.mac;
+        let _ = write!(w, "{{\"device\":\"{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\",\"src\":\"", m[0], m[1], m[2], m[3], m[4], m[5]);
+        write_addr(w, &e.src);
+        w.raw("\",\"dst\":\"");
+        write_addr(w, &e.dst);
+        let _ = write!(w, "\",\"dport\":{},\"proto\":\"{}\",\"count\":{},\"first_seen_s_ago\":{},\"last_seen_s_ago\":{}}}",
+            e.dport, match e.proto { 6 => "tcp", 17 => "udp", 1 | 58 => "icmp", _ => "other" }, e.count,
+            now.saturating_sub(e.first_ms) / 1000, now.saturating_sub(e.last_ms) / 1000);
+    }
+    w.raw("],\"exceptions\":[");
+    let t = crate::lanaccess::table();
+    t.prune(now);
+    for (i, x) in t.e[..t.n].iter().enumerate() {
+        if i > 0 {
+            w.raw(",");
+        }
+        w.raw("{\"source\":\"owner\",\"device\":\"");
+        match x.device {
+            Some(m) => {
+                let _ = write!(w, "{:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}", m[0], m[1], m[2], m[3], m[4], m[5]);
+            }
+            None => w.raw("any"),
+        }
+        w.raw("\",\"dst\":\"");
+        write_addr(w, &x.dst.addr);
+        let _ = write!(w, "/{}\",\"ports\":", x.dst.len);
+        if x.ports == (0, 0) {
+            w.raw("null");
+        } else {
+            let _ = write!(w, "[{},{}]", x.ports.0, x.ports.1);
+        }
+        if x.expires_ms == 0 {
+            w.raw(",\"expires_in_s\":null}");
+        } else {
+            let _ = write!(w, ",\"expires_in_s\":{}}}", x.expires_ms.saturating_sub(now) / 1000);
+        }
+    }
+    w.raw("]}");
+}
+
 fn render_tls(w: &mut JsonBuf) {
     use core::fmt::Write;
     let _ = write!(w, "{{\"hellos\":{},\"clients\":[", crate::ja4::hellos());
@@ -631,6 +693,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             json(scratch, crate::upload::render)
         }
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
+        "/api/lan-access" => json(scratch, render_lan_access),
         "/api/capabilities" => json(scratch, crate::capabilities::render),
         "/api/planner/status" => json(scratch, |w| w.raw("{\"configured\":false,\"endpoint\":null,\"model\":null,\"message\":\"No AI planner is configured on this device\"}")),
         p if p.starts_with("/api/planner/proposals/") => json(scratch, |w| w.raw("{\"error\":\"not_found\",\"message\":\"no such proposal (no planner is configured on this device)\"}")).with_status(404),
