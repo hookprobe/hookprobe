@@ -10,6 +10,8 @@
 //! * on the management VLAN: a host the `mgmt in` ACL lets in (the caller has applied it).
 //!
 //! Rate-limited (one window per second, shared), so the device can never be made to flood a network.
+// the Wi-Fi entry point is called by the CM5 AP loop only (as apcore's AP paths)
+#![cfg_attr(not(feature = "apmode"), allow(dead_code))]
 use hal::mdns;
 
 /// Answers per second, all interfaces together.
@@ -55,8 +57,16 @@ fn rate_ok(now_s: u64) -> bool {
     true
 }
 
-/// An mDNS query frame (Ethernet / IPv4 / UDP to 5353)? (source MAC, source IP, source port, UDP payload)
-fn query(frame: &[u8]) -> Option<([u8; 6], [u8; 4], u16, &[u8])> {
+/// One mDNS query as received: source MAC, source IP, source port, UDP payload.
+struct Query<'a> {
+    sm: [u8; 6],
+    si: [u8; 4],
+    sp: u16,
+    q: &'a [u8],
+}
+
+/// An mDNS query frame (Ethernet / IPv4 / UDP to 5353)?
+fn query(frame: &[u8]) -> Option<Query<'_>> {
     if frame.len() < 42 || frame[12..14] != [0x08, 0x00] || frame[23] != 17 {
         return None;
     }
@@ -70,12 +80,12 @@ fn query(frame: &[u8]) -> Option<([u8; 6], [u8; 4], u16, &[u8])> {
     let si = [frame[26], frame[27], frame[28], frame[29]];
     let sp = u16::from_be_bytes([frame[u], frame[u + 1]]);
     let ul = (u16::from_be_bytes([frame[u + 4], frame[u + 5]]) as usize).min(frame.len() - u);
-    Some((sm, si, sp, frame.get(u + 8..u + ul.max(8))?))
+    Some(Query { sm, si, sp, q: frame.get(u + 8..u + ul.max(8))? })
 }
 
 /// One frame received on an interface whose address is `ip` (MAC `me`): the answer frame in `out`, if any.
 fn respond(frame: &[u8], me: &[u8; 6], ip: [u8; 4], now_s: u64, wifi: bool, out: &mut [u8]) -> Option<usize> {
-    let (sm, si, sp, q) = query(frame)?;
+    let Query { sm, si, sp, q } = query(frame)?;
     if wifi && !crate::devpolicy::check(&sm, crate::devpolicy::Dest::DeviceMgmt) {
         // decide on the names first: only a question for US counts as refused
         let mut tmp = [0u8; 512];
