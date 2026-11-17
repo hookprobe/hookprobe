@@ -4576,13 +4576,17 @@ pub struct El0Keyer {
 #[cfg(feature = "wpa3")]
 static mut EL0_SAE_SRC: Option<([u8; 6], u8, [u8; 16])> = None;
 
-/// Counter ticks -> milliseconds.
-#[cfg(feature = "wpa3")]
 /// When each station's current join began at the AP: its first authentication frame (open auth = firmware event 4,
 /// or an SAE commit = event 188), cleared when it leaves (events 5/6/11/12) or is reported keyed. Lets the AP report
 /// a reconnect's duration from its own clock, independent of the client's driver (metal 2026-11-17: the bench's USB
 /// client loses its first SAE commit after a scan and retries 2 s later, which client-side timing counts).
 static mut JOIN_T0: [([u8; 6], u64, bool); 16] = [([0; 6], 0, false); 16];
+
+fn join_now_ms() -> u64 {
+    let f: u64;
+    unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+    ticks() / (f / 1000).max(1)
+}
 
 fn note_auth_event(et: u32, sta: &[u8; 6]) {
     let t = unsafe { &mut *core::ptr::addr_of_mut!(JOIN_T0) };
@@ -4591,7 +4595,7 @@ fn note_auth_event(et: u32, sta: &[u8; 6]) {
             if t.iter().any(|e| e.0 == *sta && e.1 != 0) {
                 return; // already timing this join (an SAE confirm, or a retried auth frame)
             }
-            let now = ticks_to_ms(ticks()).max(1);
+            let now = join_now_ms().max(1);
             let slot = t.iter().position(|e| e.1 == 0).unwrap_or_else(|| (0..t.len()).min_by_key(|&i| t[i].1).unwrap_or(0));
             t[slot] = (*sta, now, et == 188);
         }
@@ -4608,11 +4612,13 @@ fn note_auth_event(et: u32, sta: &[u8; 6]) {
 pub fn take_join_ms(sta: &[u8; 6]) -> Option<(u64, bool)> {
     let t = unsafe { &mut *core::ptr::addr_of_mut!(JOIN_T0) };
     let e = t.iter_mut().find(|e| e.0 == *sta && e.1 != 0)?;
-    let r = (ticks_to_ms(ticks()).saturating_sub(e.1), e.2);
+    let r = (join_now_ms().saturating_sub(e.1), e.2);
     e.1 = 0;
     Some(r)
 }
 
+/// Counter ticks -> milliseconds.
+#[cfg(feature = "wpa3")]
 fn ticks_to_ms(t: u64) -> u64 {
     let f: u64;
     unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
