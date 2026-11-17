@@ -5473,8 +5473,9 @@ fn cm5_p10_probe() {
                                                 }
                                                 let (c, f, r, h) = crate::el0srv::keyer::stats();
                                                 let (rxe, rxr, txe, txl, cte, ctl) = crate::el0srv::keyer::rx_stats();
-                                                kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={} fw_bytes_written_in_el0={} fw_slices_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl,
-                                                    unsafe { crate::el0srv::keyer::BP_EL0_BYTES }, unsafe { crate::el0srv::keyer::BP_LOST });
+                                                kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={} fw_bytes_written_in_el0={} fw_slices_lost={} reload_reg_ops_in_el0={} reload_reg_ops_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl,
+                                                    unsafe { crate::el0srv::keyer::BP_EL0_BYTES }, unsafe { crate::el0srv::keyer::BP_LOST },
+                                                    unsafe { crate::el0srv::keyer::REG_EL0_OPS }, unsafe { crate::el0srv::keyer::REG_LOST });
                                                 // ADR 0065 S4: the two servers' supervision side by side (the fault-isolation evidence line)
                                                 let (bst, brs, bft, _) = crate::el0srv::keyer::bus_health();
                                                 if let Some((wst, wrs, wft, wwp, _, pm)) = crate::el0srv::keyer::wpa_health() {
@@ -15008,8 +15009,9 @@ impl wifiheal::Port for MetalHeal<'_> {
         let ok = r == 0 && self.start();
         let t2 = now();
         clear_station_v6_state(); // a reloaded radio has no stations: drop their IPv6 state too
-        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={} | firmware reload {} ms (download bytes written by el0-wifi: {}) + BSS start {} ms\n",
-            r, arch_aarch64::cyw43::pmkid_patch(), ok, ms(t0, t1), bp().wrapping_sub(b0), ms(t1, t2));
+        let (rg_el0, rg_k) = unsafe { arch_aarch64::cyw43::RELOAD_REG_OPS };
+        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={} | firmware reload {} ms (download bytes written by el0-wifi: {}; register ops in el0-wifi: {}, in-kernel: {}) + BSS start {} ms\n",
+            r, arch_aarch64::cyw43::pmkid_patch(), ok, ms(t0, t1), bp().wrapping_sub(b0), rg_el0, rg_k, ms(t1, t2));
         ok
     }
     fn reboot(&mut self, d: &wifiheal::Diag) {
