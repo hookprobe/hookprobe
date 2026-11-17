@@ -1697,3 +1697,6 @@ button { cursor: pointer; font-family: inherit; border: none; background: none; 
 
 /* My Network — TLS flags (rule 125 known-bad TLS client, rule 126 Shield bypass) */
 .net-flag { color: var(--hp-red); font-weight: 600; }
+/* A device that has not reported a score yet: neutral, never green (mock.ts protectionStatus 'unknown'). */
+.organism-pill--unknown { color: var(--hp-text-secondary); border-color: var(--hp-border); background: transparent; }
+.organism-pill--unknown .organism-pill-dot { background: var(--hp-text-muted); box-shadow: none; }

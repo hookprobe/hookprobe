@@ -17,6 +17,8 @@ interface Props {
   children: JSX.Element;
   /** Pinned bottom row (primary actions sit in the bottom third on phones). */
   footer?: JSX.Element;
+  /** 580 px instead of 400 px: the "Dig deeper" panels (raw records, attack path) need the room. */
+  wide?: boolean;
 }
 
 const Drawer: Component<Props> = (props) => {
@@ -47,7 +49,7 @@ const Drawer: Component<Props> = (props) => {
   return (
     <Show when={props.open}>
       <div class="drawer-scrim" onClick={() => props.onClose()} aria-hidden="true" />
-      <aside class="drawer" role="dialog" aria-modal="true" aria-label={props.title} ref={panel}>
+      <aside class={props.wide ? 'drawer drawer--wide' : 'drawer'} role="dialog" aria-modal="true" aria-label={props.title} ref={panel}>
         <header class="drawer-head">
           <h2 class="drawer-title">{props.title}</h2>
           <button class="drawer-close" onClick={() => props.onClose()} aria-label="Close panel">
