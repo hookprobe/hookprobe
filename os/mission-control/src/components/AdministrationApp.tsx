@@ -49,6 +49,12 @@ const field = { font: 'inherit', 'font-size': '16px', 'min-height': '44px', padd
 
 const AdministrationApp: Component = () => {
   const [sec, setSec] = createSignal<Sec>('edge');
+  // Deep link: `/admin/identity#ai` opens a section directly (the Copilot's "no model" panel links here).
+  onMount(() => {
+    const want = location.hash.slice(1);
+    const hit = SECTIONS.find(([s]) => s === want);
+    if (hit) setSec(hit[0]);
+  });
   const [planner, setPlanner] = createSignal<PlannerStatus | null | 'unreachable'>(null);
   const [packType, setPackType] = createSignal('ioc');
   const [file, setFile] = createSignal<File | null>(null);
