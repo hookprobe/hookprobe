@@ -4662,9 +4662,14 @@ fn cm5_p10_probe() {
                                         // G10 station-to-station (discovery relay / IPv6 relay / proxy-ARP): G0 step 3c
                                         // L-02: an mDNS question for the device's own names is answered here (the relay above
                                         // still copies the query to the other stations, unchanged)
-                                        let mut mo = [0u8; 600];
-                                        if let Some(k) = mdnsresp::on_wifi(frame, &ap.bssid, our_ip, cyw43::now_secs(), &mut mo) {
-                                            let _ = wifi_send!(&mo[..k]);
+                                        // — only where Mission Control is served to Wi-Fi (G12-M: the setup AP, or no management
+                                        // VLAN): the name must lead somewhere that answers
+                                        #[cfg(feature = "mcserve")]
+                                        if mc_wifi {
+                                            let mut mo = [0u8; 600];
+                                            if let Some(k) = mdnsresp::on_wifi(frame, &ap.bssid, our_ip, cyw43::now_secs(), &mut mo) {
+                                                let _ = wifi_send!(&mo[..k]);
+                                            }
                                         }
                                     } else if act == 0 && frame.len() >= 54 && frame[12] == 0x86 && frame[13] == 0xdd && unsafe { V6.up } {
                                         // IPv6 from a client: RS/NS answered here; anything routable goes through the IDS
