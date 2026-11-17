@@ -3096,6 +3096,26 @@ static mut AP_DRAIN_DRY_MS: u32 = 1500;
 const AP_DRAIN_DRY_MS_LATER: u32 = 100;
 
 pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut ApResult) {
+    let (to0, ot0, k0, ks0) = unsafe { (CTL_TIMEOUTS, CTL_OTHER, CTL_KICKS, CTL_KICK_SAVED) };
+    unsafe { CTL_SLOWEST = (0, 0, [0; 16]) };
+    ap_start_inner(ssid, channel, chanspec, open, out);
+    let n = unsafe { CTL_TIMEOUTS }.wrapping_sub(to0);
+    let (sl, sc, sn) = unsafe { CTL_SLOWEST };
+    fn name(b: &[u8; 16]) -> &str {
+        core::str::from_utf8(b).unwrap_or("?").trim_end_matches('\0')
+    }
+    let tl = unsafe { CTL_TO_LAST };
+    crate::_print(format_args!(" [AP-START] slowest control reply {} ms (cmd {} \"{}\"); no reply within the budget: {}; other control frames seen: {}; no-reply kicks: {} (reply came after it: {})\n",
+        sl, sc, name(&sn), n, unsafe { CTL_OTHER }.wrapping_sub(ot0), unsafe { CTL_KICKS }.wrapping_sub(k0), unsafe { CTL_KICK_SAVED }.wrapping_sub(ks0)));
+    if n > 0 {
+        let (er, vl, df, gr, gc) = unsafe { CTL_OTHER_LAST };
+        let (pid, pc, pn, pok) = unsafe { CTL_PREV_AT_OTHER };
+        crate::_print(format_args!("   [AP-START] last request with no reply: cmd {} \"{}\" | last other control frame: expected id {} frame len {} data offset {} carried id {} cmd {} | the request before: id {} cmd {} \"{}\" {}\n",
+            tl.0, name(&tl.1), er, vl, df, gr, gc, pid, pc, name(&pn), ["got NO reply", "got its reply", "its write FAILED"][pok.min(2) as usize]));
+    }
+}
+
+fn ap_start_inner(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut ApResult) {
     let _ = wake_chip();
     drain_firmware_mailbox();
     let _ = ensure_ht_avail();
@@ -6811,6 +6831,18 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
         BCDC_REQID
     };
     let want_diag = reqid == 1; // capture the first control round-trip (the ver probe)
+    // which request this is (cmd + the iovar name): named if its reply never comes (task 117)
+    unsafe {
+        CTL_PREV = (CTL_CUR_ID, CTL_CUR.0, CTL_CUR.1, CTL_CUR_OK);
+        CTL_CUR_ID = reqid as u32;
+        CTL_CUR_OK = 0;
+        CTL_CUR.0 = cmd;
+        CTL_CUR.1 = [0; 16];
+        if cmd == WLC_SET_VAR || cmd == WLC_GET_VAR {
+            let m = payload.iter().take(16).position(|&b| b == 0).unwrap_or(payload.len().min(16));
+            CTL_CUR.1[..m].copy_from_slice(&payload[..m]);
+        }
+    }
     // --- credit gate. The very first control frame rides the boot credit (tx_max-tx_seq
     //     = 1). Later frames need the firmware to advance tx_max via a reply's window byte.
     let cred = credit_avail();
@@ -6863,6 +6895,7 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
         }
     }
     if !tx_ok {
+        unsafe { CTL_CUR_OK = 2 };
         return (false, 0);
     }
     // --- RX DEMUX: the firmware interleaves channel-1 EVENT frames and channel-2 DATA
@@ -6904,6 +6937,62 @@ impl Drop for KeyingWait {
 /// Control-reply hunts that ran out of their overall budget while other frames kept arriving.
 pub static mut DCMD_DEADLINE_HITS: u32 = 0;
 
+/// The no-reply kick (task 117): after this long with no frame at all, `bcdc_wait` writes one control frame.
+const CTL_KICK_MS: u64 = 150;
+/// Kicks written; replies that came after a kick.
+pub static mut CTL_KICKS: u32 = 0;
+pub static mut CTL_KICK_SAVED: u32 = 0;
+
+/// One harmless control frame (GET "ver", its own request id, never waited for): the firmware sometimes releases a
+/// held reply only when the host writes another frame. Same write path and credit gate as `bcdc_dcmd`.
+fn ctl_kick() -> bool {
+    if !txctl_ok() {
+        return false;
+    }
+    let rid = unsafe {
+        BCDC_REQID = BCDC_REQID.wrapping_add(1);
+        BCDC_REQID
+    } as u16;
+    let mut req = [0u8; 16];
+    let n = iovar_buf(b"ver", &[], &mut req);
+    let seq = unsafe { TX_SEQ };
+    let ifidx = unsafe { CUR_IF } & 0xf;
+    let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
+    let ok = match el0h.and_then(|h| (h.tx_ctl)(seq, ifidx, WLC_GET_VAR, 0, rid, 32, &req[..n])) {
+        Some(ok) => {
+            if unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(EL0_TX_LOST), false) } {
+                let _ = bus().txfail();
+            }
+            ok
+        }
+        None => {
+            let mut frame = [0u8; hal::bcdc::FRAME_MAX];
+            let total = hal::bcdc::request(seq, WLC_GET_VAR, 0, rid, ifidx, &req[..n], 32, &mut frame);
+            cmd53_write(2, F2_SDPCM_ADDR, &frame[..(total + 3) & !3])
+        }
+    };
+    if ok {
+        unsafe { TX_SEQ = TX_SEQ.wrapping_add(1) };
+    }
+    ok
+}
+
+/// Control requests whose reply never came; the request being sent and the last one that timed out (cmd, iovar name).
+pub static mut CTL_TIMEOUTS: u32 = 0;
+/// Control frames for another request id seen while waiting: a late reply to a request that already timed out.
+pub static mut CTL_OTHER: u32 = 0;
+static mut CTL_OTHER_LAST: (u32, u32, u32, u32, u32) = (0, 0, 0, 0, 0);
+/// The request in flight: its id and outcome (0 = no reply yet / 1 = its reply came / 2 = its write failed);
+/// and the request before it (id, cmd, name, outcome) as it was when the next one started.
+static mut CTL_CUR_ID: u32 = 0;
+static mut CTL_CUR_OK: u8 = 0;
+static mut CTL_PREV: (u32, u32, [u8; 16], u8) = (0, 0, [0; 16], 0);
+static mut CTL_PREV_AT_OTHER: (u32, u32, [u8; 16], u8) = (0, 0, [0; 16], 0);
+/// The slowest control reply since the last reset: (ms, cmd, iovar name).
+static mut CTL_SLOWEST: (u32, u32, [u8; 16]) = (0, 0, [0; 16]);
+static mut CTL_CUR: (u32, [u8; 16]) = (0, [0; 16]);
+static mut CTL_TO_LAST: (u32, [u8; 16]) = (0, [0; 16]);
+
 fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let mut rx = [0u8; 2048];
     let mut status = 0u32;
@@ -6923,13 +7012,27 @@ fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
     let f: u64;
     unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
     let t_start = ticks();
+    // Task 117 (CM5 2026-11-17): the firmware sometimes holds a ready reply until the host writes another frame (the
+    // reply to request N surfaced only during N+1's wait, even with a 2 s budget). After CTL_KICK_MS with nothing,
+    // ONE harmless control frame is written (`ctl_kick`) and the wait goes on for our reply; the kick's own reply is
+    // skipped like any stale one. Same remedy as the serve loop's TX-stall kick.
+    let mut kicked = false;
     'frames: for _frame in 0..40 {
         let spent = ticks().wrapping_sub(t_start) / (f / 1000).max(1);
         if spent >= budget {
             unsafe { DCMD_DEADLINE_HITS = DCMD_DEADLINE_HITS.wrapping_add(1) };
             break 'frames;
         }
-        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, (budget - spent) as u32) else {
+        let dry = if kicked || budget <= CTL_KICK_MS { budget - spent } else { CTL_KICK_MS.saturating_sub(spent).max(1) };
+        let Some((channel, hw_len, doffset)) = read_sdpcm_frame_dry(&mut rx, dry as u32) else {
+            let now = ticks().wrapping_sub(t_start) / (f / 1000).max(1);
+            if !kicked && budget > CTL_KICK_MS && now >= CTL_KICK_MS && now < budget {
+                kicked = true;
+                if ctl_kick() {
+                    unsafe { CTL_KICKS = CTL_KICKS.wrapping_add(1) };
+                }
+                continue 'frames;
+            }
             break 'frames; // dry (or a frame that had to be terminated)
         };
         any_rx = true;
@@ -6940,7 +7043,25 @@ fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
         let valid = (hw_len as usize).min(rx.len());
         // Our reply = a control (channel 0) frame with a whole BCDC header and our request id (`hal::bcdc::reply`,
         // fuzzed: its input is the firmware's output). The id is compared on the 16 bits the frame carries.
-        if let hal::bcdc::Reply::Ours { status: st, off, end } = hal::bcdc::reply(&rx, valid, channel, doffset, rid) {
+        let r = hal::bcdc::reply(&rx, valid, channel, doffset, rid);
+        if let hal::bcdc::Reply::OtherCtl = r {
+            unsafe { CTL_OTHER = CTL_OTHER.wrapping_add(1) }; // a late reply to an earlier request (task 117)
+            // what that frame really is: (expected id, frame length, data offset, the id and cmd it carries)
+            let w = |o: usize| rx.get(doffset + o..doffset + o + 4).map_or(0xffff_ffff, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+            unsafe {
+                CTL_OTHER_LAST = (rid as u32, valid as u32, doffset as u32, w(8) >> 16, w(0));
+                CTL_PREV_AT_OTHER = CTL_PREV;
+            }
+        }
+        if let hal::bcdc::Reply::Ours { status: st, off, end } = r {
+            unsafe { CTL_CUR_OK = 1 };
+            if kicked {
+                unsafe { CTL_KICK_SAVED = CTL_KICK_SAVED.wrapping_add(1) };
+            }
+            let lat = (ticks().wrapping_sub(t_start) / (f / 1000).max(1)) as u32;
+            if lat > unsafe { CTL_SLOWEST.0 } {
+                unsafe { CTL_SLOWEST = (lat, CTL_CUR.0, CTL_CUR.1) };
+            }
             status = st;
             reqid_match = true;
             got_ctrl = true;
@@ -6970,6 +7091,12 @@ fn bcdc_wait(rid: u16, reply: &mut [u8], want_diag: bool) -> (bool, u32) {
         }
     }
     // success = got the control reply with our reqid and no BCDC error status.
+    if !got_ctrl {
+        unsafe {
+            CTL_TIMEOUTS = CTL_TIMEOUTS.wrapping_add(1);
+            CTL_TO_LAST = CTL_CUR;
+        }
+    }
     (got_ctrl && reqid_match && status == 0, status)
 }
 
