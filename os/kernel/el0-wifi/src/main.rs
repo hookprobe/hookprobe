@@ -177,6 +177,17 @@ fn tx_ctl() -> ! {
     exit_lean(if ok { 1 } else { 4 })
 }
 
+/// Step 4e: one slice of the firmware / NVRAM download, written through the F1 window.
+fn bp_write() -> ! {
+    let i = input();
+    if i.len() < 5 || i.len() - 4 > BP_WRITE_MAX {
+        exit(ST_BAD_CMD, 0)
+    }
+    let addr = u32::from_le_bytes([i[0], i[1], i[2], i[3]]);
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    exit_lean(if bus.backplane_write(addr, &i[4..], 64) { 1 } else { 4 })
+}
+
 /// S3c: install a key from the key-transfer page (read-only here; el0-wpa wrote it) as a WLC_SET_KEY control
 /// request — the only way a key reaches the chip. The record must be the one the kernel asked for (station + key
 /// index), else nothing is sent. Every local copy is wiped before exit; the kernel zeroes the page.
@@ -226,6 +237,7 @@ pub extern "C" fn _start() -> ! {
         }
         CMD_TX_DATA => tx_data(),
         CMD_TX_CTL => tx_ctl(),
+        CMD_BP_WRITE => bp_write(),
         hal::wpasrvabi::CMD_KEY_INSTALL => key_install(),
         CMD_SELFTEST_BAD_RING => {
             // a hostile driver: claim 1000 frames pending in the RX ring
