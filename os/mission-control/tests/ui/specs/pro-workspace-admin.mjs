@@ -31,4 +31,9 @@ export default async function (t) {
   await page.click('[aria-label="Settings"] >> text=Factory reset'); await page.waitForTimeout(150);
   ok(await page.locator('button:has-text("Erase this device")').isDisabled(), 'admin: erase needs ERASE typed (and a device)');
   await t.shot('admin', true);
+
+  // Deep link used by the Copilot's "no AI model" panel: /admin/identity#ai opens the AI models section.
+  await go('/workspace');
+  await go('/admin/identity#ai', 800);
+  ok(await vis(page.locator('.gate--off', { hasText: 'no on-device planner' })), 'admin: #ai deep link opens AI models');
 }
