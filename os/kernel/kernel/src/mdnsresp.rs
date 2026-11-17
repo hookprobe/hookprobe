@@ -5,7 +5,8 @@
 //! The station-to-station discovery relay (`lanrelay`) is unchanged.
 //!
 //! Who gets an answer:
-//! * on Wi-Fi: a station whose device policy lets it reach the device's own services (not `internet_only` /
+//! * on Wi-Fi, only while Mission Control is served to Wi-Fi (G12-M `serve_on_wifi`: the setup AP, or no management
+//!   VLAN — the name must lead somewhere that answers): a station whose device policy lets it reach the device's own services (not `internet_only` /
 //!   `quarantine` — legacy dropped mDNS for `internet_only` devices too);
 //! * on the management VLAN: a host the `mgmt in` ACL lets in (the caller has applied it).
 //!
