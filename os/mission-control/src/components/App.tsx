@@ -10,7 +10,7 @@
  */
 import { type Component, For, Show, createMemo, createSignal, onCleanup, onMount } from 'solid-js';
 import {
-  qsecbit, qsecbitShown, qsecbitGauge, heartbeat, setHeartbeat, protectionStatus, lastCheckedAt, security, shield, network, substrate,
+  qsecbit, qsecbitShown, qsecbitGauge, heartbeatShown, setHeartbeat, protectionStatus, lastCheckedAt, security, shield, network, substrate,
 } from '../store/mock';
 import { startLiveUpdates } from '../store/live';
 import { setProView } from '../store/layer';
@@ -27,6 +27,7 @@ const VERDICT = {
   protected:         'You’re protected.',
   'needs-attention': 'Something needs a look.',
   critical:          'We’re dealing with an attack.',
+  unknown:           'Waiting for the first score…',
 } as const;
 
 const R = 92;
@@ -113,7 +114,7 @@ const App: Component = () => {
             <svg viewBox="0 0 200 200" aria-hidden="true">
               <circle cx="100" cy="100" r={R} fill="none" stroke="rgba(255,255,255,.08)" stroke-width="8" />
               <circle cx="100" cy="100" r={R} fill="none" stroke-width="8" stroke-linecap="round"
-                stroke={protectionStatus() === 'protected' ? 'var(--hp-green)' : protectionStatus() === 'needs-attention' ? 'var(--hp-amber)' : 'var(--hp-red)'}
+                stroke={protectionStatus() === 'protected' ? 'var(--hp-green)' : protectionStatus() === 'needs-attention' ? 'var(--hp-amber)' : protectionStatus() === 'unknown' ? 'var(--hp-text-muted)' : 'var(--hp-red)'}
                 stroke-dasharray={`${(qsecbitGauge() / 100) * C} ${C}`} />
             </svg>
             <div class="home-orb-num" aria-hidden="true"><b>{qsecbitShown()}</b><span>QSecBit</span></div>
@@ -126,7 +127,7 @@ const App: Component = () => {
               <span>Last checked {checked()}</span>
               <svg width="120" height="20" viewBox="0 0 120 20" aria-hidden="true">
                 <polyline fill="none" stroke="var(--hp-green)" stroke-width="1.5"
-                  points={heartbeat().map((v, i, a) => `${((i / Math.max(1, a.length - 1)) * 120).toFixed(1)},${(20 - ((Math.max(60, v) - 60) / 40) * 20).toFixed(1)}`).join(' ')} />
+                  points={heartbeatShown().map((v, i, a) => `${((i / Math.max(1, a.length - 1)) * 120).toFixed(1)},${(20 - ((Math.max(60, v) - 60) / 40) * 20).toFixed(1)}`).join(' ')} />
               </svg>
             </p>
             <div><button class="hp-btn" onClick={() => setPanel('today')}>What happened today →</button></div>

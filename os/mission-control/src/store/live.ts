@@ -29,7 +29,7 @@
  *  hookprobe-api build report for the complete list.
  */
 
-import { setQsecbit, setQsecbitKnown, setHeartbeat, setSecurity, setLastCheckedAt, security } from './mock';
+import { setQsecbit, setQsecbitKnown, setHeartbeat, heartbeatLive, setHeartbeatLive, setSecurity, setLastCheckedAt, security } from './mock';
 import {
   fetchJson, openStream, parseStreamPayload,
   type QsecbitScoreRow, type QsecbitResponse, type IncidentRow, type IncidentsResponse,
@@ -49,6 +49,7 @@ function applyQsecbitHistory(history: QsecbitScoreRow[]): void {
   // A 1-point sparkline renders as a dot, not a line — pad so `heartbeat`'s consumers (which all
   // assume >=2 points, e.g. Home's heartbeat polyline) never receive a degenerate array.
   setHeartbeat(chrono.length >= 2 ? chrono.slice(-20) : [...chrono, ...chrono]);
+  setHeartbeatLive(true);
   setQsecbit(resiliencePct(history[0].score)); setQsecbitKnown(true);
 }
 
@@ -78,12 +79,15 @@ export async function startLiveUpdates(): Promise<boolean> {
   }
 
   try {
-    const [qsecbitRes, incidentsRes] = await Promise.all([
+    // Independent reads: a failed incidents read must not hide a score the device did report
+    // (the band and the status pill would then disagree).
+    const [qsecbitRes, incidentsRes] = await Promise.allSettled([
       fetchJson<QsecbitResponse>('/api/qsecbit?limit=20'),
       fetchJson<IncidentsResponse>('/api/incidents?limit=50'),
     ]);
-    applyQsecbitHistory(qsecbitRes.history ?? []);
-    applyIncidents(incidentsRes.incidents ?? []);
+    if (qsecbitRes.status === 'fulfilled') applyQsecbitHistory(qsecbitRes.value.history ?? []);
+    if (incidentsRes.status === 'fulfilled') applyIncidents(incidentsRes.value.incidents ?? []);
+    if (qsecbitRes.status === 'rejected' && incidentsRes.status === 'rejected') throw qsecbitRes.reason;
     setLastCheckedAt(Date.now());
     started = true;
   } catch (e) {
@@ -108,7 +112,9 @@ export async function startLiveUpdates(): Promise<boolean> {
         const latest = payload.qsecbit[payload.qsecbit.length - 1];
         const pct = resiliencePct(latest.score);
         setQsecbit(pct); setQsecbitKnown(true);
-        setHeartbeat((prev) => [...prev.slice(1), pct]);
+        // never append a real value to the sample series: start the device's own series instead
+        setHeartbeat((prev) => (heartbeatLive() ? [...prev, pct].slice(-20) : [pct, pct]));
+        setHeartbeatLive(true);
         setLastCheckedAt(Date.now());
       }
       if (payload.incidents && payload.incidents.length > 0) {
