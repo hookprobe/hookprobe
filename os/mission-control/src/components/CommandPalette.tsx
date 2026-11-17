@@ -17,8 +17,8 @@
  * Honest states (never a fake response — the OS invariant "the AI planner is assistive... model
  * is the operator's choice" made visible in the UI):
  *   - `checking`      — `GET /api/planner/status` in flight (on open).
- *   - `not-configured`— no model configured -> a clear "Connect a model at Administration → AI
- *                       Models" prompt, never a canned/fake answer.
+ *   - `not-configured`— no model configured -> the device's own message plus a link to
+ *                       Administration → AI models (`/admin/identity#ai`), never a canned/fake answer.
  *   - `unreachable`   — the planner SERVICE itself didn't answer (distinct from "not configured").
  *   - `idle`          — configured and ready; nothing submitted yet this session.
  *   - `loading`       — a `POST /api/planner/propose` call is in flight.
@@ -156,14 +156,14 @@ const CommandPalette: Component<Props> = (props) => {
                 <div class="cmd-honest-panel">
                   <div class="cmd-honest-title">No AI model connected</div>
                   <p class="cmd-honest-body">
-                    {status()?.message ?? 'Connect a model at Administration → AI Models.'}
+                    {status()?.message ?? 'No AI planner is configured on this device.'}
                   </p>
                   <p class="cmd-honest-hint">
                     Point at any OpenAI-compatible endpoint — a hosted API, or a local
                     Ollama/llama.cpp/vLLM server for air-gapped sites. Everything else on this
                     device keeps working with no model configured.
                   </p>
-                  <a class="cmd-honest-link" href="/administration/ai-models">Open Administration → AI Models →</a>
+                  <a class="cmd-honest-link" href="/admin/identity#ai">See AI model status in Administration →</a>
                 </div>
               </Show>
 
