@@ -52,6 +52,11 @@ pub enum Kind {
     /// G47 (ADR 0058): the owner's name for a device: target = MAC (6) ‖ label (1..=31 bytes, `label_ok`). The latest
     /// set for a MAC wins; remove (target = MAC) returns to the signed DEVICES.TXT label. Cosmetic: never a rule.
     DeviceLabel = 9,
+    /// A-01 (operator 2026-11-17): an owner exception to the upstream-private block. target = the scope
+    /// (`hal::lanaccess::encode`: device|any, prefix, ports, duration). value 1 = always (applied, replayed at boot);
+    /// value 2 = temporary (an AUDIT record only — never replayed: the API holds it in RAM, so a reboot ends it).
+    /// OP_REMOVE (target = the scope) removes it.
+    LanAccess = 10,
 }
 
 impl Kind {
@@ -66,6 +71,7 @@ impl Kind {
             7 => Some(Kind::AlertHook),
             8 => Some(Kind::FactoryReset),
             9 => Some(Kind::DeviceLabel),
+            10 => Some(Kind::LanAccess),
             _ => None,
         }
     }
@@ -80,6 +86,7 @@ impl Kind {
             Kind::AlertHook => "alert_hook",
             Kind::FactoryReset => "factory_reset",
             Kind::DeviceLabel => "device_label",
+            Kind::LanAccess => "lan_access",
         }
     }
 }
@@ -353,8 +360,22 @@ fn apply(r: &Record) -> Result<(), JErr> {
         }
         return Ok(());
     }
+    if r.kind == Kind::LanAccess as u8 {
+        let Some((x, _)) = hal::lanaccess::decode(&r.target[..r.tlen as usize]) else { return Ok(()) };
+        match (r.op, r.value) {
+            (OP_SET, 1) => {
+                let _ = crate::lanaccess::table().add(x); // always: in force now and after every boot
+            }
+            (OP_REMOVE, _) => {
+                let _ = crate::lanaccess::table().remove(x.device, x.dst, x.ports);
+            }
+            _ => {} // a temporary grant's audit record: the API holds it in RAM (a reboot ends it)
+        }
+        return Ok(());
+    }
     if r.op == OP_CLEAR {
         unsafe { NRULES = 0 };
+        crate::lanaccess::table().clear(); // "start over" ends every owner exception too
         return Ok(());
     }
     if r.kind == Kind::Artifact as u8 {
