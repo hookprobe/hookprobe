@@ -42,6 +42,11 @@ pub const CMD_POLL: u32 = 2;
 pub const CMD_SELFTEST_BAD_RING: u32 = 98;
 /// S1: OUT = the first 16 bytes of the key-transfer page (proves el0-wifi can read what el0-wpa put there).
 pub const CMD_KEYX_PEEK: u32 = 34;
+/// Step 4e: IN = backplane address (u32 LE) + up to [`BP_WRITE_MAX`] bytes; el0-wifi writes them through the F1
+/// window (`hal::sdio::Bus::backplane_write`). R0 = 1 written / 4 the write failed. The firmware / NVRAM download.
+pub const CMD_BP_WRITE: u32 = 35;
+/// Data bytes per [`CMD_BP_WRITE`]: the input page less the address, whole 64-B blocks.
+pub const BP_WRITE_MAX: usize = (IN_MAX - 4) / 64 * 64;
 /// Test only: WRITE the key-transfer page — it is read-only here, so this must fault.
 pub const CMD_SELFTEST_KEYX_WRITE: u32 = 97;
 /// Test only: fault on purpose (the supervisor's restart path).
