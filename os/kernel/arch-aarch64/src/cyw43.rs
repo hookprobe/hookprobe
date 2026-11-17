@@ -868,6 +868,28 @@ fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
 /// Write `data` to backplane address `addr` in ≤32 KiB windows (F1). Uses BLOCK-mode
 /// CMD53 (64-B blocks, ≤256 per burst) for the bulk, byte-mode for a <64-B tail.
 fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
+    // ADR 0065 step 4e: with el0-wifi loaded (a heal reload, a live re-bring-up), the download's bus writes run in the
+    // server, slice by slice; with no server (first boot, before it loads) they run here
+    if let Some(h) = el0() {
+        let mut off = 0usize;
+        while off < data.len() {
+            let n = (data.len() - off).min(hal::wifisrvabi::BP_WRITE_MAX);
+            match (h.bp_write)(addr + off as u32, &data[off..off + n]) {
+                Some(true) => off += n,
+                Some(false) => return false,
+                None => break, // the server went into backoff: finish in-kernel from here
+            }
+        }
+        if off == data.len() {
+            return true;
+        }
+        addr += off as u32;
+        return backplane_write_kernel(addr, &data[off..]);
+    }
+    backplane_write_kernel(addr, data)
+}
+
+fn backplane_write_kernel(mut addr: u32, data: &[u8]) -> bool {
     let mut off = 0usize;
     while off < data.len() {
         set_backplane_window(addr);
@@ -4581,6 +4603,8 @@ pub struct El0Keyer {
     pub keyx_done: fn(),
     // step 4g S3b: new group keys in el0-wpa, from its DRBG (D-c; records in the key-transfer page)
     pub group_new: fn(bool) -> bool,
+    // step 4e: one slice of the firmware / NVRAM download written by el0-wifi (None = no server: write in-kernel)
+    pub bp_write: fn(u32, &[u8]) -> Option<bool>,
 }
 
 /// The SAE source the last `ap_keying` chose for a station whose PMK lives in el0-wifi: (sta, 1 fresh | 2 cached,
