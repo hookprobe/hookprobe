@@ -15,7 +15,7 @@ interface Props {
   onOpenCopilot: () => void;
 }
 
-const WORD = { protected: 'Protected', 'needs-attention': 'Needs attention', critical: 'At risk' } as const;
+const WORD = { protected: 'Protected', 'needs-attention': 'Needs attention', critical: 'At risk', unknown: 'Waiting for score' } as const;
 
 const TopBar: Component<Props> = (props) => {
   onMount(() => void loadHealth());
