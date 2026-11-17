@@ -63,6 +63,19 @@ G=$(cfgval 'max(d["generation"], d["floor"])')
 bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b.bin" "$T/b.sig" "$@" >/dev/null; mark=$(stat -c %s "$LOG")
   $UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; shred -u "$T/b.bin"; }
 # ---- 0. baseline ----
+# the house starts from the image's own setup: the bench policy, the per-file WAN, no Wi-Fi section. A bundle left in
+# force by an earlier run (cfgd-live, hsh, a live spike) is replaced by a policy-only bundle with the bench policy
+# (removing a WAN / Wi-Fi section needs the owner's confirm), else 0.2 / 1.2 test that run's leftovers.
+pol_now=$(cfgval '(d.get("sections") or {}).get("policy", {}).get("digest") or ""' 2>/dev/null)
+pol_want=$(canon "$ROOT/docs/design/bench-task26/policy-bench.txt" | sha256sum | cut -c1-64)
+secs=$(cfgval '" ".join(k for k in ("wan","wifi") if ((d.get("sections") or {}).get(k) or {}).get("present"))' 2>/dev/null)
+if [ -n "$secs" ] || { [ -n "$pol_now" ] && [ "$pol_now" != "$pol_want" ]; }; then
+  bundle --policy "$ROOT/docs/design/bench-task26/policy-bench.txt"
+  waitlog "LIVE APPLY of generation $G" 30
+  grep -q '"needs_confirm": true' "$T/r" && { sleep 10; confirm "baseline"; }
+  waitlog "bundle generation $G COMMITTED" 45; echo "     baseline reset: sections ($secs) policy differed=$([ "$pol_now" != "$pol_want" ] && echo yes || echo no) -> policy-only gen $G committed=$([ $? = 0 ] && echo yes || echo NO)"
+  sleep 20
+fi
 PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")
 SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'"); psudo "nmcli -s -g 802-11-wireless-security.psk con show '$PROF'" > "$T/psk0"
 [ -n "$SSID" ] && [ -s "$T/psk0" ] || { echo "HOUSE: cannot read the AP profile from the Pi"; exit 1; }
