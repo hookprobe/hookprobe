@@ -1143,7 +1143,7 @@ pub mod keyer {
         };
         #[cfg(feature = "cm5")]
         unsafe {
-            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new });
+            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new, bp_write });
         }
         #[cfg(all(feature = "cm5", feature = "wpa3"))]
         let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded
@@ -1229,6 +1229,35 @@ pub mod keyer {
                     arch_aarch64::cyw43::EL0_TX_LOST = true;
                 }
                 Some(hal::sdio::TxWrite::Failed { block: eth.len() + 16 > 512 })
+            }
+        }
+    }
+
+    /// Step 4e: firmware / NVRAM download bytes written by el0-wifi; slices lost to a fault / timeout.
+    pub static mut BP_EL0_BYTES: u64 = 0;
+    pub static mut BP_LOST: u64 = 0;
+    /// One slice of the download (`hal::wifisrvabi::CMD_BP_WRITE`). None = no server / backoff (the driver writes
+    /// in-kernel); Some(false) = the write failed or the call faulted.
+    pub(crate) fn bp_write(addr: u32, data: &[u8]) -> Option<bool> {
+        use hal::wifisrvabi::{BP_WRITE_MAX, CMD_BP_WRITE};
+        let s = bus_srv()?;
+        if data.is_empty() || data.len() > BP_WRITE_MAX {
+            return Some(false);
+        }
+        let mut inp = [0u8; 4 + BP_WRITE_MAX];
+        inp[..4].copy_from_slice(&addr.to_le_bytes());
+        inp[4..4 + data.len()].copy_from_slice(data);
+        let (c, _) = s.call_lean(CMD_BP_WRITE, &inp[..4 + data.len()], &mut []);
+        match c {
+            Call::Backoff => None,
+            Call::Done(ST_OK, 1, _) => {
+                unsafe { BP_EL0_BYTES += data.len() as u64 };
+                Some(true)
+            }
+            Call::Done(ST_OK, 4, _) => Some(false),
+            _ => {
+                unsafe { BP_LOST += 1 };
+                Some(false)
             }
         }
     }

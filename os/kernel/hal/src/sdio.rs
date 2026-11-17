@@ -287,6 +287,33 @@ impl<M: Mmio> Bus<M> {
         a.is_some() && b.is_some() && c.is_some()
     }
 
+    /// Write `data` to backplane address `addr` through the F1 window (firmware / NVRAM download): one 64-B block per
+    /// CMD53 for the bulk (the multi-block PIO flow stalls on this card: DAT_INHIBIT held, no second BUF_WR_RDY), a
+    /// byte-mode CMD53 for a tail under one block, the window re-pointed at every 32 KiB edge. Shared by the kernel
+    /// and `el0-wifi` (ADR 0065 step 4e: the download's bus writes run in the server when it is loaded).
+    pub fn backplane_write(&mut self, mut addr: u32, data: &[u8], fbs: usize) -> bool {
+        let mut off = 0usize;
+        while off < data.len() {
+            if !self.set_backplane_window(addr) {
+                return false;
+            }
+            let win_off = (addr & 0x7FFF) as usize;
+            let avail = (data.len() - off).min(0x8000 - win_off);
+            let n = if avail >= fbs { fbs } else { avail };
+            let ok = if avail >= fbs {
+                self.cmd53_write_blocks(1, (win_off as u32) | 0x8000, &data[off..off + n], 1, fbs)
+            } else {
+                self.cmd53_write(1, (win_off as u32) | 0x8000, &data[off..off + n])
+            };
+            if !ok {
+                return false;
+            }
+            off += n;
+            addr += n as u32;
+        }
+        true
+    }
+
     /// A 32-bit backplane read (4 CMD52 bytes through the window; 0xFF per failed byte).
     pub fn bp_r32(&mut self, addr: u32) -> u32 {
         self.set_backplane_window(addr);
@@ -592,6 +619,24 @@ mod tests {
             }
             self.writes.borrow_mut().push((o, v));
         }
+    }
+
+    #[test]
+    fn backplane_write_moves_every_byte_in_order_across_a_window_edge() {
+        // 64 B before a 32 KiB window edge: one block there, then a block and a 10-B byte-mode tail past the edge
+        let mut b = Bus::new(Fake::new());
+        let data: Vec<u8> = (0..138u32).map(|i| (i * 7 + 3) as u8).collect();
+        assert!(b.backplane_write(0x0001_7FC0, &data, 64));
+        let out: Vec<u8> = b.m.data_out.borrow().iter().flat_map(|w| w.to_le_bytes()).collect();
+        assert_eq!(&out[..data.len()], &data[..]);
+        // the window was pointed once per CMD53 (3 writes x 3 CMD52 bytes), the last at the next 32 KiB window
+        let win: Vec<u32> = b.m.writes.borrow().iter().filter(|w| w.0 == ARG1 && (w.1 >> 28) & 7 == 1 && (w.1 >> 31) == 1 && ((w.1 >> 9) & 0x1FFFF) == SB_ADDR_MID).map(|w| w.1 & 0xFF).collect();
+        assert_eq!(win.len(), 3);
+        assert_eq!(*win.last().unwrap(), 0x01);
+        // a failing bus stops the download
+        let mut f = Bus::new(Fake::new());
+        *f.m.fail.borrow_mut() = true;
+        assert!(!f.backplane_write(0x0001_8000, &data, 64));
     }
 
     #[test]
