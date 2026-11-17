@@ -98,6 +98,7 @@ gate_g1() {
   step "host tests: heqk-tlsprov"      bash -c "cd os/kernel/tlsprov && CARGO_TARGET_DIR=$(tdir tlsprov) cargo +stable test --release --target x86_64-unknown-linux-gnu"
   step "host tests: responder-sim"     bash -c "cd onboarding/enrollment/responder-sim && CARGO_TARGET_DIR=$(tdir responder-sim) cargo +stable test --release"
   step "host tests: superpop (G19)"    bash -c "cd onboarding/enrollment/superpop && CARGO_TARGET_DIR=$(tdir superpop) cargo +stable test --release"
+  step "host tests: evidence-export"   bash -c "cd onboarding/enrollment/evidence-export && CARGO_TARGET_DIR=$(tdir evidence-export) cargo +stable test --release"
   step "host tests: heqk-sign"         bash -c "cd os/build/heqk-sign && CARGO_TARGET_DIR=$(tdir heqk-sign) cargo +stable test --release"
 }
 
