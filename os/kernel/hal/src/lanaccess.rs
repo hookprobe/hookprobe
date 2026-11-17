@@ -74,6 +74,13 @@ impl Table {
     pub fn clear(&mut self) {
         self.n = 0;
     }
+    /// Remove the exception with this scope (device, destination, ports); true if one was there.
+    pub fn remove(&mut self, device: Option<[u8; 6]>, dst: Prefix, ports: (u16, u16)) -> bool {
+        let Some(i) = self.e[..self.n].iter().position(|e| e.device == device && e.dst == dst && e.ports == ports) else { return false };
+        self.e[i] = self.e[self.n - 1];
+        self.n -= 1;
+        true
+    }
     /// Does an unexpired exception cover (device, destination, port)?
     pub fn allows(&self, mac: &[u8; 6], dst: &Addr, dport: u16, now_ms: u64) -> bool {
         self.e[..self.n].iter().any(|e| e.covers(mac, dst, dport, now_ms))
@@ -89,6 +96,47 @@ impl Table {
         }
         self.n = k;
     }
+}
+
+/// The owner journal's target bytes for one exception scope (`Kind::LanAccess`): flags (bit 0 any device, bit 1
+/// IPv6) ‖ MAC 6 ‖ address 16 ‖ prefix length ‖ ports lo 2 ‖ ports hi 2 ‖ duration s 4 (0 = always).
+pub const SCOPE_LEN: usize = 32;
+
+pub fn encode(x: &Exception, dur_s: u32, out: &mut [u8; SCOPE_LEN]) {
+    *out = [0; SCOPE_LEN];
+    out[0] = (x.device.is_none() as u8) | ((x.dst.addr.v6 as u8) << 1);
+    out[1..7].copy_from_slice(&x.device.unwrap_or([0; 6]));
+    out[7..23].copy_from_slice(&x.dst.addr.a);
+    out[23] = x.dst.len;
+    out[24..26].copy_from_slice(&x.ports.0.to_be_bytes());
+    out[26..28].copy_from_slice(&x.ports.1.to_be_bytes());
+    out[28..32].copy_from_slice(&dur_s.to_be_bytes());
+}
+
+/// (the exception without an expiry, its duration in seconds; 0 = always). None = malformed.
+pub fn decode(t: &[u8]) -> Option<(Exception, u32)> {
+    if t.len() != SCOPE_LEN || t[0] & !3 != 0 {
+        return None;
+    }
+    let v6 = t[0] & 2 != 0;
+    let len = t[23];
+    if len > if v6 { 128 } else { 32 } {
+        return None;
+    }
+    let mut a = [0u8; 16];
+    a.copy_from_slice(&t[7..23]);
+    let mut m = [0u8; 6];
+    m.copy_from_slice(&t[1..7]);
+    let x = Exception {
+        device: if t[0] & 1 != 0 { None } else { Some(m) },
+        dst: Prefix { addr: Addr { v6, a }, len },
+        ports: (u16::from_be_bytes([t[24], t[25]]), u16::from_be_bytes([t[26], t[27]])),
+        expires_ms: 0,
+    };
+    if x.ports.0 > x.ports.1 {
+        return None;
+    }
+    Some((x, u32::from_be_bytes([t[28], t[29], t[30], t[31]])))
 }
 
 /// One attributed block.
@@ -199,6 +247,26 @@ mod tests {
         // re-adding the same scope replaces it (no duplicates)
         assert!(t.add(Exception { device: None, dst: pfx(v4(192, 168, 1, 20), 32), ports: (0, 0), expires_ms: 5 }));
         assert_eq!(t.n, 1);
+    }
+
+    #[test]
+    fn scope_round_trips_and_removes() {
+        let x = Exception { device: Some(M1), dst: pfx(v4(192, 168, 1, 50), 32), ports: (631, 9100), expires_ms: 0 };
+        let mut t = [0u8; SCOPE_LEN];
+        encode(&x, 3600, &mut t);
+        assert_eq!(decode(&t), Some((x, 3600)));
+        let any = Exception { device: None, dst: pfx(v4(10, 0, 0, 0), 8), ports: (0, 0), expires_ms: 0 };
+        encode(&any, 0, &mut t);
+        assert_eq!(decode(&t), Some((any, 0)));
+        assert!(decode(&t[..31]).is_none());
+        let mut bad = t;
+        bad[23] = 33; // a /33
+        assert!(decode(&bad).is_none());
+        let mut tb = Table::new();
+        assert!(tb.add(x) && tb.add(any));
+        assert!(tb.remove(Some(M1), pfx(v4(192, 168, 1, 50), 32), (631, 9100)));
+        assert!(!tb.remove(Some(M1), pfx(v4(192, 168, 1, 50), 32), (631, 9100)), "already gone");
+        assert_eq!(tb.n, 1);
     }
 
     #[test]

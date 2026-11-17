@@ -32,6 +32,9 @@ for (const name of specs) {
     async go(path, settle = 900) { await page.goto(base + path, { waitUntil: 'load' }); await page.waitForTimeout(settle); },
     async shot(file, full = false) { if (shots) await page.screenshot({ path: join(shots, `${name}-${file}.png`), fullPage: full }); },
     async vis(loc) { return loc.first().isVisible().catch(() => false); },
+    // vis() that WAITS (up to `timeout` ms) — for results that arrive after slow work, e.g. a 600 000-iteration
+    // PBKDF2 backup decrypt, which a fixed sleep raced on slow CI runners (#1257).
+    async seen(loc, timeout = 20000) { return loc.first().waitFor({ state: 'visible', timeout }).then(() => true, () => false); },
     // Fill and submit the Approve sheet (store/approve.ts): { reason?, key?, passphrase? }.
     async approve(v = {}) {
       const s = page.locator('.approve-sheet[aria-labelledby="approve-title"]');
