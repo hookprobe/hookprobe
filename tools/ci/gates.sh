@@ -166,7 +166,8 @@ gate_g4() {
   fi
   if need npm; then
     while read -r d; do
-      step "npm audit (prod deps, high+) $d" bash -c "cd '$d' && npm audit --omit=dev --audit-level=high"
+      # high+ fails unless a reviewed, unexpired, still-unpatched exception covers it (tools/ci/npm-audit-exceptions.txt)
+      step "npm audit (prod deps, high+) $d" python3 "$ROOT/tools/ci/npm_audit_gate.py" "$d"
     done < <(lockdirs npm)
   fi
   if need syft; then
