@@ -49,7 +49,11 @@ f() { echo "$1" | awk -v i="$2" '{print $i}'; }
 # wpa_supplicant's D-Bus Reassociate on that interface
 reassoc() { psudo "sh -c 'p=\$(busctl call fi.w1.wpa_supplicant1 /fi/w1/wpa_supplicant1 fi.w1.wpa_supplicant1 GetInterface s $1 | cut -d\\\" -f2); busctl call fi.w1.wpa_supplicant1 \$p fi.w1.wpa_supplicant1.Interface Reassociate'" >/dev/null 2>&1; }
 # wlan0 (brcmfmac, FullMAC: no host PMKSA caching) reconnects through NetworkManager; wlan1 keeps its PMKSA (Reassociate)
-recon() { if [ "$1" = wlan1 ]; then dbus_cycle wlan1; else psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1; psudo "timeout 50 nmcli -w 45 con up '$PROF' ifname wlan0" >/dev/null 2>&1; fi; }
+# After a failed 4-way NetworkManager marks the profile need-auth and, with no secrets agent on the bench Pi, fails it
+# ("no-secrets", metal 2026-11-17 C2): the PSK goes in through a 0600 passwd-file, removed right after.
+recon() { if [ "$1" = wlan1 ]; then dbus_cycle wlan1; else psudo "nmcli dev disconnect wlan0" >/dev/null 2>&1
+  pi "umask 077; printf '802-11-wireless-security.psk:%s\n' '$PSK' > /tmp/hq-pw"
+  psudo "timeout 50 nmcli -w 45 con up '$PROF' ifname wlan0 passwd-file /tmp/hq-pw" >/dev/null 2>&1; pi "shred -u /tmp/hq-pw 2>/dev/null || rm -f /tmp/hq-pw"; fi; }
 # wait (up to $3 s) for an association line of MAC $2 since mark $1 matching $4; prints it
 poll_assoc() { local t=0; while [ $t -lt "$3" ]; do local l; l=$(assoc_of "$1" "$2" | grep -a -- "$4" | tail -1); [ -n "$l" ] && { echo "$l"; return 0; }; sleep 2; t=$((t + 2)); done; return 1; }
 # the USB adapter (rtw88) can wedge (interface_disabled / SCAN-FAILED -100): bounce it before a step that needs it
@@ -83,7 +87,7 @@ run() { [ "${ONLY:-}" != P53 ] && { [ -z "${ONLY:-}" ] || [ "$ONLY" = "$1" ]; };
 # continuous traffic on a station: 5 Hz pings to the gateway for $2 s, in the background on the Pi -> /tmp/hq-ping-$1.log
 ping_start() { pi "nohup timeout $2 ping -D -i 0.2 -W 1 -I $1 10.99.0.1 > /tmp/hq-ping-$1.log 2>&1 &" >/dev/null 2>&1; }
 # "<sent> <received> <loss %> <longest gap between replies, ms>" of that run (sent counted from its duration)
-ping_stat() { pi "cat /tmp/hq-ping-$1.log" 2>/dev/null | awk -v dur="$2" '/bytes from/ { gsub(/[\[\]]/, "", $1); t = $1 * 1000; if (p) { g = t - p; if (g > mg) mg = g }; p = t; r++ }
+ping_stat() { pi "cat /tmp/hq-ping-$1.log" 2>/dev/null | awk -v dur="$2" '/bytes from/ && $1 ~ /^\[[0-9]+\.[0-9]+\]$/ { gsub(/[\[\]]/, "", $1); t = $1 * 1000; if (p) { g = t - p; if (g > mg) mg = g }; p = t; r++ }
   END { s = int(dur / 0.2); printf "%d %d %.1f %d\n", s, r, (s > 0 ? 100 * (s - r) / s : 0), mg }'; }
 
 # ================= C1: recovery without losing authentication state =================
@@ -110,6 +114,7 @@ if run C2; then
   echo "  A (traffic during B's fault + B's re-join) sent/recv/loss%/max-gap-ms: $sa | health $h0 -> $h1"
   echo "  C2 window: worst loop gap $(since "$m" | grep -a -o 'worst_loop_gap_ms=[0-9]*' | cut -d= -f2 | sort -n | tail -1) ms; $(since "$m" | grep -ac 'WIFI-HEAL\] firmware reload\|BSS bounce') heal reload/bounce(s); prof max: $(since "$m" | grep -a -o 'ap_poll=[0-9]*x/[0-9]*ms([0-9]*%)/max[0-9]*us' | sed 's/.*max//' | sort -n | tail -1)"
   ! since "$m" | grep -ai "station" | grep -aqi "$A left"; aleft=$?
+  echo "  C2 parts: B's handshake fault counted $(f "$h0" 4) -> $(f "$h1" 4) | full wipes $(f "$h0" 5) -> $(f "$h1" 5) | B back on the gateway: $([ $gb = 0 ] && echo yes || echo NO) | A stayed associated: $([ $aleft = 0 ] && echo yes || echo NO)"
   [ "$(f "$h1" 4)" -gt "$(f "$h0" 4)" ] && [ "$(f "$h1" 5)" = "$(f "$h0" 5)" ] && [ $gb = 0 ] && [ $aleft = 0 ] \
     && awk -v l="$(echo "$sa" | cut -d' ' -f3)" -v g="$(echo "$sa" | cut -d' ' -f4)" 'BEGIN{exit !(l <= 1.0 && g < 1000)}'
   chk $? "C2 B's handshake faulted (contained, no wipe) and B re-keyed; A stayed associated with loss $(echo "$sa" | cut -d' ' -f3)% and longest gap $(echo "$sa" | cut -d' ' -f4) ms (bounds 1 %, 1000 ms)"
@@ -233,7 +238,8 @@ if run C6 && [ "$SOAK_H" != 0 ]; then
     sleep 60; if [ $((i % 2)) = 1 ]; then ifc=wlan1; mac=$A; else ifc=wlan0; mac=$B; fi
     mc=$(mark); [ "$ifc" = wlan1 ] && unwedge_a; recon "$ifc"; rn=$((rn + 1)); poll_assoc "$mc" "$mac" 30 "SAE" >/dev/null && wait_gw "$ifc" 40 && rok=$((rok + 1))
     [ $((i % 4)) = 0 ] && api cmd53-stall >/dev/null
-    [ $((i % 6)) = 0 ] && tps="$tps $("$R/tools/diagnostics/cm5-throughput-check.sh" "$PI" auto 40 5 2>&1 | grep -o 'median [0-9.]*' | cut -d' ' -f2)"
+    if [ $((i % 6)) = 0 ]; then tpo=$("$R/tools/diagnostics/cm5-throughput-check.sh" "$PI" auto 40 5 2>&1); tps="$tps $(grep -o 'median [0-9.]*' <<<"$tpo" | cut -d' ' -f2)"
+      echo "  soak throughput sample: $(grep -E 'client interface|THROUGHPUT' <<<"$tpo" | tr '\n' ' ')"; fi
     sleep 170; echo "  soak $(date +%T): reconnects $rok/$rn | A $(ping_stat wlan1 290) | B $(ping_stat wlan0 290)"
   done
   h1=$(H); auth=$(since "$m" | grep -a "P11-AP3 auth\]"); na=$(grep -c . <<<"$auth"); nk=$(grep -c "ptk_set=true authorized=true" <<<"$auth")
