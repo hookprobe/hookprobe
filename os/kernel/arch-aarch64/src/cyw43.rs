@@ -3068,6 +3068,11 @@ pub fn ap_set_max_clients(n: u32) {
     unsafe { AP_MAXASSOC = n };
 }
 
+/// Dry wait for `ap_start`'s backlog drain: 1.5 s on a boot's first bring-up, then
+/// `AP_DRAIN_DRY_MS_LATER` for every later bring-up (heal reload, live apply).
+static mut AP_DRAIN_DRY_MS: u32 = 1500;
+const AP_DRAIN_DRY_MS_LATER: u32 = 100;
+
 pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut ApResult) {
     let _ = wake_chip();
     drain_firmware_mailbox();
@@ -3095,13 +3100,20 @@ pub fn ap_start(ssid: &[u8], channel: u32, chanspec: u16, open: bool, out: &mut 
     // control reply through at most 40 frames / 0.8 s and otherwise returns (false, untouched
     // reply) — which is how the MAC GET came back zero. One dry read costs ~1.5 s, so stop
     // at the first dry read.
+    // Only the FIRST bring-up of a boot pays the full 1.5 s dry wait: that is the case the
+    // backlog comes from (the multi-second uplink phase). A heal reload or live apply arrives
+    // on a fresh or continuously drained mailbox, where 1.5 s of silence was pure outage
+    // (metal 2026-11-17: 1536 of a 1952 ms reload bring-up). 100 ms of silence still proves
+    // the queue is empty; the MAC readback below keeps its own fallback.
     {
         let mut rx = [0u8; 2048];
+        let dry = unsafe { AP_DRAIN_DRY_MS };
         for _ in 0..16 {
-            if read_sdpcm_frame(&mut rx).is_none() {
+            if read_sdpcm_frame_dry(&mut rx, dry).is_none() {
                 break;
             }
         }
+        unsafe { AP_DRAIN_DRY_MS = AP_DRAIN_DRY_MS_LATER };
     }
     let (_otp, established, _valid) = unsafe { MAC_DIAG };
     if established != [0u8; 6] {
