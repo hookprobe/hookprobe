@@ -777,6 +777,8 @@ pub enum MgmtOut {
     ToEth1(usize),
     /// … to a Wi-Fi client: `nbuf[..len]`.
     ToWifi(usize),
+    /// L-02: an mDNS answer for the device's own names, back out the management VLAN: `nbuf[..len]`.
+    ToMgmt(usize),
 }
 
 /// The management sub-interface's inbound path (was inline in the AP loop): stateful like `wan in` — a reply to a flow
@@ -792,6 +794,12 @@ pub fn on_mgmt_frame(frame: &[u8], mgmt_ip: &[u8; 4], mgmt_mac: &[u8; 6], inside
         if !allow {
             c.pol_drop[If::Mgmt as usize] += 1;
             return MgmtOut::Dropped;
+        }
+        // L-02: the device's own names over mDNS, to hosts `mgmt in` lets in, where Mission Control is served
+        if mc_on_mgmt {
+            if let Some(k) = crate::mdnsresp::on_mgmt(frame, mgmt_mac, *mgmt_ip, arch_aarch64::cyw43::now_secs(), nbuf) {
+                return MgmtOut::ToMgmt(k);
+            }
         }
         // G12-M: Mission Control on the management address (after `mgmt in`)
         if mc_on_mgmt {
