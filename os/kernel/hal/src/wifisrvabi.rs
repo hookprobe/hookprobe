@@ -42,6 +42,11 @@ pub const CMD_POLL: u32 = 2;
 pub const CMD_SELFTEST_BAD_RING: u32 = 98;
 /// S1: OUT = the first 16 bytes of the key-transfer page (proves el0-wifi can read what el0-wpa put there).
 pub const CMD_KEYX_PEEK: u32 = 34;
+/// Step 4e: IN = backplane address (u32 LE) + up to [`BP_WRITE_MAX`] bytes; el0-wifi writes them through the F1
+/// window (`hal::sdio::Bus::backplane_write`). R0 = 1 written / 4 the write failed. The firmware / NVRAM download.
+pub const CMD_BP_WRITE: u32 = 36;
+/// Data bytes per [`CMD_BP_WRITE`]: the input page less the address, whole 64-B blocks.
+pub const BP_WRITE_MAX: usize = (IN_MAX - 4) / 64 * 64;
 /// Test only: WRITE the key-transfer page — it is read-only here, so this must fault.
 pub const CMD_SELFTEST_KEYX_WRITE: u32 = 97;
 /// Test only: fault on purpose (the supervisor's restart path).
@@ -744,6 +749,26 @@ pub mod ctlmsg {
             assert_eq!(decode_in(&o[..n]), Some((3, 1, 263, 2, 0xbeef, 256, &b"ver\0"[..])));
             assert_eq!(encode_in(0, 0, 0, 0, 0, 0, &[0u8; PAYLOAD_MAX + 1], &mut o), None);
             assert_eq!(decode_in(&o[..HDR - 1]), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod cmd_numbers {
+    /// el0-wifi dispatches one `match` over its own commands AND `wpasrvabi::CMD_KEY_INSTALL`: a shared number sends
+    /// one command to the other's handler (step 4e-1's first CMD_BP_WRITE took 35 = CMD_KEY_INSTALL; QEMU S3c caught it).
+    #[test]
+    fn every_command_el0_wifi_dispatches_has_its_own_number() {
+        use super::*;
+        let all = [
+            CMD_INIT, CMD_POLL, CMD_BUS_PROBE, CMD_RX_READ, CMD_TX_DATA, CMD_TX_CTL, CMD_KEYX_PEEK, CMD_BP_WRITE,
+            crate::wpasrvabi::CMD_KEY_INSTALL, CMD_INJECT_READ_VA, CMD_INJECT_CMD53_STALL, CMD_SELFTEST_KEYX_WRITE,
+            CMD_SELFTEST_BAD_RING, CMD_SELFTEST_FAULT,
+        ];
+        for (i, a) in all.iter().enumerate() {
+            for b in &all[i + 1..] {
+                assert_ne!(a, b, "two el0-wifi commands share the number {a}");
+            }
         }
     }
 }

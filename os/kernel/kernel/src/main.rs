@@ -5466,7 +5466,8 @@ fn cm5_p10_probe() {
                                                 }
                                                 let (c, f, r, h) = crate::el0srv::keyer::stats();
                                                 let (rxe, rxr, txe, txl, cte, ctl) = crate::el0srv::keyer::rx_stats();
-                                                kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl);
+                                                kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={} fw_bytes_written_in_el0={} fw_slices_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl,
+                                                    unsafe { crate::el0srv::keyer::BP_EL0_BYTES }, unsafe { crate::el0srv::keyer::BP_LOST });
                                                 // ADR 0065 S4: the two servers' supervision side by side (the fault-isolation evidence line)
                                                 let (bst, brs, bft, _) = crate::el0srv::keyer::bus_health();
                                                 if let Some((wst, wrs, wft, wwp, _, pm)) = crate::el0srv::keyer::wpa_health() {
@@ -14983,11 +14984,24 @@ impl wifiheal::Port for MetalHeal<'_> {
         ok
     }
     fn reload(&mut self) -> bool {
+        // the AP loop is blocked for both steps (the watchdog is petted through them): the per-reload cost on record
+        let f: u64;
+        unsafe { core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack)) };
+        let ms = |a: u64, b: u64| b.wrapping_sub(a) / (f / 1000).max(1);
+        let now = || -> u64 { let v: u64; unsafe { core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack)) }; v };
+        // the download bytes el0-wifi wrote (only builds with the resident servers have them)
+        #[cfg(feature = "mctls")]
+        let bp = || unsafe { crate::el0srv::keyer::BP_EL0_BYTES };
+        #[cfg(not(feature = "mctls"))]
+        let bp = || 0u64;
+        let (t0, b0) = (now(), bp());
         let r = arch_aarch64::cyw43::fw_reload(self.nv);
+        let t1 = now();
         let ok = r == 0 && self.start();
+        let t2 = now();
         clear_station_v6_state(); // a reloaded radio has no stations: drop their IPv6 state too
-        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={}\n",
-            r, arch_aarch64::cyw43::pmkid_patch(), ok);
+        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={} | firmware reload {} ms (download bytes written by el0-wifi: {}) + BSS start {} ms\n",
+            r, arch_aarch64::cyw43::pmkid_patch(), ok, ms(t0, t1), bp().wrapping_sub(b0), ms(t1, t2));
         ok
     }
     fn reboot(&mut self, d: &wifiheal::Diag) {
