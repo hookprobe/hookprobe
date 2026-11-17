@@ -47,6 +47,31 @@ pub const CMD_KEYX_PEEK: u32 = 34;
 pub const CMD_BP_WRITE: u32 = 36;
 /// Data bytes per [`CMD_BP_WRITE`]: the input page less the address, whole 64-B blocks.
 pub const BP_WRITE_MAX: usize = (IN_MAX - 4) / 64 * 64;
+/// Step 4e-2: one register operation of a firmware reload (chip probe, EROM walk, core reset, clocks), run by
+/// el0-wifi over its own grant. IN = op (u8), function (u8), 2 pad, address (u32 LE), value (u32 LE) = 12 bytes.
+/// OUT = ok (u8: 1 / 0) + 3 pad + value read (u32 LE). Ops: [`REG_CMD52_R`] … [`REG_WINDOW`].
+pub const CMD_BP_REG: u32 = 37;
+pub const REG_CMD52_R: u8 = 0;
+pub const REG_CMD52_W: u8 = 1;
+pub const REG_BP_R32: u8 = 2;
+pub const REG_BP_W32: u8 = 3;
+pub const REG_WINDOW: u8 = 4;
+/// Encode one [`CMD_BP_REG`] request.
+pub fn bp_reg_in(op: u8, fnum: u8, addr: u32, val: u32) -> [u8; 12] {
+    let mut b = [0u8; 12];
+    b[0] = op;
+    b[1] = fnum;
+    b[4..8].copy_from_slice(&addr.to_le_bytes());
+    b[8..12].copy_from_slice(&val.to_le_bytes());
+    b
+}
+/// Decode a [`CMD_BP_REG`] request: (op, function, address, value); None = malformed or an unknown op / function.
+pub fn bp_reg_decode(i: &[u8]) -> Option<(u8, u8, u32, u32)> {
+    if i.len() != 12 || i[0] > REG_WINDOW || i[1] > 2 {
+        return None;
+    }
+    Some((i[0], i[1], u32::from_le_bytes([i[4], i[5], i[6], i[7]]), u32::from_le_bytes([i[8], i[9], i[10], i[11]])))
+}
 /// Test only: WRITE the key-transfer page — it is read-only here, so this must fault.
 pub const CMD_SELFTEST_KEYX_WRITE: u32 = 97;
 /// Test only: fault on purpose (the supervisor's restart path).
@@ -754,6 +779,23 @@ pub mod ctlmsg {
 }
 
 #[cfg(test)]
+mod bp_reg {
+    use super::*;
+    #[test]
+    fn round_trips_and_refuses_unknown_ops() {
+        let b = bp_reg_in(REG_BP_W32, 1, 0x1800_0000, 0xdead_beef);
+        assert_eq!(bp_reg_decode(&b), Some((REG_BP_W32, 1, 0x1800_0000, 0xdead_beef)));
+        let mut bad = b;
+        bad[0] = REG_WINDOW + 1;
+        assert_eq!(bp_reg_decode(&bad), None, "unknown op");
+        bad = b;
+        bad[1] = 3;
+        assert_eq!(bp_reg_decode(&bad), None, "no function 3 on this chip");
+        assert_eq!(bp_reg_decode(&b[..11]), None, "short");
+    }
+}
+
+#[cfg(test)]
 mod cmd_numbers {
     /// el0-wifi dispatches one `match` over its own commands AND `wpasrvabi::CMD_KEY_INSTALL`: a shared number sends
     /// one command to the other's handler (step 4e-1's first CMD_BP_WRITE took 35 = CMD_KEY_INSTALL; QEMU S3c caught it).
@@ -761,7 +803,7 @@ mod cmd_numbers {
     fn every_command_el0_wifi_dispatches_has_its_own_number() {
         use super::*;
         let all = [
-            CMD_INIT, CMD_POLL, CMD_BUS_PROBE, CMD_RX_READ, CMD_TX_DATA, CMD_TX_CTL, CMD_KEYX_PEEK, CMD_BP_WRITE,
+            CMD_INIT, CMD_POLL, CMD_BUS_PROBE, CMD_RX_READ, CMD_TX_DATA, CMD_TX_CTL, CMD_KEYX_PEEK, CMD_BP_WRITE, CMD_BP_REG,
             crate::wpasrvabi::CMD_KEY_INSTALL, CMD_INJECT_READ_VA, CMD_INJECT_CMD53_STALL, CMD_SELFTEST_KEYX_WRITE,
             CMD_SELFTEST_BAD_RING, CMD_SELFTEST_FAULT,
         ];
