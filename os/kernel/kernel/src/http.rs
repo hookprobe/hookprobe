@@ -741,6 +741,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
             // a crash (power-on = a normal power cycle / first boot). Last, so existing field order is unchanged.
             // L-02: the Mission Control certificate's names / addresses / expiry, and whether the address this browser
             // used is one of them (false = the browser warned: Mission Control shows which address to use instead)
+            #[cfg(not(feature = "mctls"))]
+            w.raw(",\"tls\":null");
+            #[cfg(feature = "mctls")]
             match crate::tlshost::cert_facts() {
                 Some(f) => {
                     w.raw(",\"tls\":{\"names\":[");
