@@ -1,0 +1,26 @@
+# evidence-export: the sealed-evidence EXPORT core (ADR 0066), as a pure no_std library.
+#
+# It reads records from the device's sealed evidence log (the fslog ring under evlog.rs), checks
+# each one, strips everything that may not leave the device, batches what is left into HQX3
+# frames, and keeps the "synced through" cursor: export marks records as synced, it never deletes
+# them. Sealing the frames onto the ML-KEM + X25519 Noise session is the caller's `Transport`
+# (on the device: securechannel.rs `RecordTx::seal`), so this crate carries no channel crypto.
+#
+# NOT wired into heqk yet: ADR 0066 lists the kernel hooks the wiring needs. Like responder-sim it
+# is its own workspace root, so it builds and tests on the host (`cargo test`) with stable Rust.
+[package]
+name = "evidence-export"
+version = "0.0.26"
+license = "AGPL-3.0-only"
+edition = "2021"
+publish = false  # first-party: never published to crates.io (ADR 0063 G4)
+
+# Standalone workspace: do NOT get absorbed by the parent aarch64-none heqk workspace.
+[workspace]
+
+[dependencies]
+# no_std SHA-256 / HMAC / HKDF, the same primitives the kernel's fslog + export.rs use.
+boot-abi = { path = "../../../os/kernel/boot-abi" }
+
+[lib]
+path = "src/lib.rs"
