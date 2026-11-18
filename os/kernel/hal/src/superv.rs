@@ -235,6 +235,104 @@ impl Journal {
     }
 }
 
+/// What happens when a component's own recovery is exhausted (plan Wave 2c C1 / C3).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[repr(u8)]
+pub enum Exhausted {
+    /// Keep restarting at the capped backoff (the service is refused meanwhile: fail closed).
+    KeepRestarting = 0,
+    /// Switch the component off for this boot and run degraded.
+    Degrade = 1,
+    /// One reboot, then degrade (only `critical` entries may name this).
+    RebootOnce = 2,
+}
+
+impl Exhausted {
+    pub fn name(self) -> &'static str {
+        ["keep-restarting", "degrade", "reboot-once"][self as usize]
+    }
+}
+
+/// One supervised component: the policy the single restart owner (the kernel) applies to it. The table is part of
+/// the signed image — nothing at run time can make a component critical or change its policy.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Entry {
+    pub name: &'static str,
+    /// May escalate to the reboot rung. Everything else stops at degrade / refusal.
+    pub critical: bool,
+    pub exhausted: Exhausted,
+    /// Consecutive faults restarted with no hold-off (a one-off fault costs the service nothing).
+    pub grace: u8,
+    /// The first hold-off after the grace; doubles per further consecutive fault up to `backoff_max_ms`.
+    pub backoff_ms: u64,
+    pub backoff_max_ms: u64,
+}
+
+/// The supervisor table. `wifi` is the Wi-Fi link as a whole (its ladder lives in `wifiheal`): the only critical
+/// entry — its ladder ends in one reboot, then degrade. The EL0 servers restart in place and never reboot the device.
+pub const TABLE: [Entry; 7] = [
+    Entry { name: "el0-wifi", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000 },
+    Entry { name: "el0-wpa", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000 },
+    Entry { name: "el0-tlshost", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
+    Entry { name: "el0-lansvc", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
+    Entry { name: "el0-hsh", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
+    Entry { name: "wifi", critical: true, exhausted: Exhausted::RebootOnce, grace: 0, backoff_ms: 0, backoff_max_ms: 0 },
+    Entry { name: "el0-neuro", critical: false, exhausted: Exhausted::Degrade, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
+];
+
+/// The table entry of a component (None = not supervised by name).
+pub fn entry(name: &str) -> Option<&'static Entry> {
+    TABLE.iter().find(|e| e.name == name)
+}
+
+impl Entry {
+    /// The hold-off after the `streak`-th consecutive fault (streak >= 1): 0 inside the grace, then
+    /// `backoff_ms << n`, capped.
+    pub fn hold_ms(&self, streak: u32) -> u64 {
+        if streak <= self.grace as u32 {
+            return 0;
+        }
+        let n = (streak - self.grace as u32 - 1).min(20);
+        (self.backoff_ms << n).min(self.backoff_max_ms)
+    }
+}
+
+/// One component's restart state under the table policy: the fault streak and when the next call may run. The one
+/// place the backoff is computed — every EL0 server embeds one (no server restarts in a tight loop).
+#[derive(Clone, Copy, Debug)]
+pub struct Sup {
+    pub entry: &'static Entry,
+    pub streak: u32,
+    pub next_ok_ms: u64,
+}
+
+impl Sup {
+    pub const fn new(entry: &'static Entry) -> Self {
+        Sup { entry, streak: 0, next_ok_ms: 0 }
+    }
+    /// May a call run now?
+    pub fn ready(&self, now_ms: u64) -> bool {
+        now_ms >= self.next_ok_ms
+    }
+    /// Hold-off left (0 = ready).
+    pub fn left_ms(&self, now_ms: u64) -> u64 {
+        self.next_ok_ms.saturating_sub(now_ms)
+    }
+    /// The component faulted (it has been reset): returns the hold-off before its next call.
+    pub fn fault(&mut self, now_ms: u64) -> u64 {
+        self.streak = self.streak.saturating_add(1);
+        let h = self.entry.hold_ms(self.streak);
+        self.next_ok_ms = now_ms + h;
+        h
+    }
+    /// A good call: the streak is over. Returns whether it ended one (the journal's close signal).
+    pub fn ok(&mut self) -> bool {
+        let was = self.streak > 0;
+        self.streak = 0;
+        was
+    }
+}
+
 /// Why the previous boot ended (plan Wave 2c C5: reason + culprit, as Fuchsia's last-reboot record): from the crash
 /// record the previous boot left (`crash_kind` 1 = panic, 2 = kernel fault, 3 = self-heal reset; its text) and
 /// whether the reset was watchdog-type. The culprit is the component that caused it, when one is known — a generic
@@ -342,6 +440,48 @@ mod tests {
         assert_eq!(last_boot_reason(Some(2), "Sync/SPx", true), ("kernel-fault", Some("kernel")));
         assert_eq!(last_boot_reason(Some(3), "Wi-Fi recovery exhausted: x", true), ("self-heal-reset", Some("wifi")));
         assert_eq!(last_boot_reason(Some(3), "something else", true), ("self-heal-reset", None));
+    }
+
+    #[test]
+    fn table_is_sane() {
+        for e in TABLE.iter() {
+            assert!(COMPONENTS.contains(&e.name), "{} not a journal component", e.name);
+            // only a critical entry may name the reboot rung
+            assert!(e.critical || e.exhausted != Exhausted::RebootOnce, "{}", e.name);
+            assert!(e.backoff_ms <= e.backoff_max_ms);
+        }
+        assert_eq!(TABLE.iter().filter(|e| e.critical).count(), 1);
+        assert!(entry("wifi").unwrap().critical);
+        assert!(entry("nope").is_none());
+    }
+
+    #[test]
+    fn backoff_policy() {
+        let w = entry("el0-wifi").unwrap();
+        assert_eq!([w.hold_ms(1), w.hold_ms(2), w.hold_ms(3), w.hold_ms(8), w.hold_ms(40)], [50, 100, 200, 5_000, 5_000]);
+        let t = entry("el0-tlshost").unwrap();
+        assert_eq!([t.hold_ms(1), t.hold_ms(2), t.hold_ms(3)], [0, 50, 100]);
+        let mut s = Sup::new(t);
+        assert!(s.ready(0));
+        assert_eq!(s.fault(1_000), 0); // the grace: a one-off fault restarts at once
+        assert!(s.ready(1_000));
+        assert_eq!(s.fault(1_000), 50); // a second in a row: held off
+        assert!(!s.ready(1_049) && s.ready(1_050));
+        assert_eq!(s.left_ms(1_010), 40);
+        assert!(s.ok());
+        assert!(!s.ok());
+        assert_eq!(s.fault(2_000), 0); // a good call reset the streak
+        // a server that faults on every call never restarts faster than the cap allows
+        let mut loopy = Sup::new(t);
+        let (mut now, mut restarts) = (0u64, 0u32);
+        while now < 60_000 {
+            if loopy.ready(now) {
+                loopy.fault(now);
+                restarts += 1;
+            }
+            now += 1;
+        }
+        assert!(restarts < 25, "{restarts} restarts in 60 s");
     }
 
     #[test]
