@@ -2,6 +2,18 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+## 2026-11-18 — Session 2 (cont.): my spec turned g3 red on `main`
+
+- #1298 (AB-12): CI green; g3 ran `gate-not-built` 9/9, UI suite 446/446.
+- #1299 (AB-09/10) was merged while g3 was running, and g3 **failed**: 5 of 6 `investigate-honest`
+  checks. Cause: a bug in my spec, not the app. Investigate renders the process panel and the report
+  list only after `/api/incidents/:id` loads; the spec's mock returned 404 for it, so the page showed
+  "Incident detail unavailable". The one check that passed asserted an absence, so it proved nothing.
+  I wrote the spec without being able to run it (no local Playwright, sandbox blocks a local mock).
+- Fix on `agent/mc-investigate-spec-fix`: mock the incident detail in the `render_incident` shape, and
+  assert the detail loaded first so a future failure names the cause. Until it merges, g3 on `main`
+  fails on this spec. Lesson: an unrun spec gets an explicit "the precondition loaded" check.
+
 ## 2026-11-18 — Session 2 (cont.): AB-09 and AB-10
 
 - #1298 merged with 13 checks still running; its CI result is recorded when it finishes.

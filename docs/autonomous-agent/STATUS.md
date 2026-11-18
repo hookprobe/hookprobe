@@ -12,7 +12,7 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-AB-09 and AB-10 (Investigate empty states) on `agent/mc-investigate-honest`, draft PR. #1298 (AB-12) merged before its CI finished.
+Fix for the `investigate-honest` UI spec (g3 red on `main` since #1299) on `agent/mc-investigate-spec-fix`, draft PR.
 
 ## Delivery ledger
 
@@ -24,8 +24,9 @@ AB-09 and AB-10 (Investigate empty states) on `agent/mc-investigate-honest`, dra
 | AB-06 package.json description | `agent/mc-pkg-description` | yes | release_check passes | green (18 pass) | yes | [#1280](https://github.com/hookprobe/hookprobe/pull/1280) | yes (2026-11-18) |
 | AB-11 Remove all owner rules (Protect) | `agent/mc-revoke-all` | yes | astro check 0 errors; build 27 pages; full flow in the in-app browser against a local mock device (dry run → approve → verified; requests match the heqk contract); new UI spec `revoke-all` not run locally (no Playwright) | green (17 pass; g3: 12/12 revoke-all checks, UI suite 437/437) | yes | [#1281](https://github.com/hookprobe/hookprobe/pull/1281) | yes (2026-11-18) |
 
-| AB-12 controls with no screen stay greyed | `agent/mc-intel-honest` | yes | astro check 0 errors; build 27 pages; browser against a mock device granting `multi_wan`, `guest_ssid`, `openvswitch`: all three greyed, inert, with the reason; new spec `gate-not-built` not run locally | running at merge | yes | [#1298](https://github.com/hookprobe/hookprobe/pull/1298) | yes (2026-11-18) |
-| AB-09/10 Investigate: process tree and reports cap | `agent/mc-investigate-honest` | yes | astro check 0 errors; build 27 pages; **no browser check** (this shell can no longer reach a local mock server); new spec `investigate-honest` not run locally | pending | yes | [#1299](https://github.com/hookprobe/hookprobe/pull/1299) draft | no |
+| AB-12 controls with no screen stay greyed | `agent/mc-intel-honest` | yes | astro check 0 errors; build 27 pages; browser against a mock device granting `multi_wan`, `guest_ssid`, `openvswitch`: all three greyed, inert, with the reason; new spec `gate-not-built` not run locally | green (g3: 9/9 gate-not-built, UI suite 446/446) | yes | [#1298](https://github.com/hookprobe/hookprobe/pull/1298) | yes (2026-11-18) |
+| AB-09/10 Investigate: process tree and reports cap | `agent/mc-investigate-honest` | yes | astro check 0 errors; build 27 pages; **no browser check** (this shell can no longer reach a local mock server); new spec `investigate-honest` not run locally | **red**: g3 5/6 `investigate-honest` checks failed (spec bug, see journal) | yes | [#1299](https://github.com/hookprobe/hookprobe/pull/1299) | yes (2026-11-18) |
+| Fix: `investigate-honest` spec mocks the incident detail | `agent/mc-investigate-spec-fix` | yes | `node --check`; reasoning only, no local Playwright | pending | yes | draft | no |
 
 AB-07 needed no change: the CVE tab has said "This device does not report software exposure yet" since `47a2ad85` (2026-11-10). The audit finding was wrong.
 
@@ -55,6 +56,6 @@ operation are listed in the journal (scheduled task in the desktop app, or a clo
 
 ## Next autonomous actions
 
-1. Read CI on #1298 (merged early) and the AB-09/10 PR; g3 is the first run of `investigate-honest`.
+1. Read g3 on the spec-fix PR; until it merges, g3 on `main` fails on `investigate-honest`.
 2. AB-02: rewrite getting-started as the real path (factory-provisioned unit, owner card).
 3. AB-16: docs outside `docs/adr/` that contradict ADR 0047.
