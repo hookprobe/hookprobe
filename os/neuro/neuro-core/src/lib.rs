@@ -467,7 +467,7 @@ impl Dna {
             self.admit_persistent(agg);
         }
         self.hours = self.hours.wrapping_add(1);
-        if self.hours % ROTATE_HOURS == 0 {
+        if self.hours.is_multiple_of(ROTATE_HOURS) {
             self.peers.rotate();
             self.dns.rotate();
         }
