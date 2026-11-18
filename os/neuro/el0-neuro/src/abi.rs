@@ -42,6 +42,8 @@ pub const CMD_EVENTS: u32 = 1;
 pub const CMD_CLOSE_HOUR: u32 = 2;
 pub const CMD_RESET_DEV: u32 = 3;
 pub const CMD_INFO: u32 = 4;
+/// Test only: the server panics, so the kernel can prove fault containment (as hsh's CMD_SELFTEST_FAULT).
+pub const CMD_SELFTEST_FAULT: u32 = 99;
 
 pub const ST_OK: u32 = 0;
 pub const ST_BAD_CMD: u32 = 2;
@@ -49,10 +51,10 @@ pub const ST_BAD_INPUT: u32 = 3;
 pub const ST_PANIC: u32 = 6;
 
 /// Event record, 16 bytes, little-endian:
-/// `[kind u8][flags u8][dev u16][fp u32][bytes u64]`
-/// - kind EV_FLOW: one flow to peer `fp` (fingerprint of ip:port, `neuro_core::fingerprint(peer_key(..))`),
-///   `bytes` sent by the device, one connection;
-/// - kind EV_VOLUME: bytes and one connection with no peer identity;
+/// `[kind u8][flags u8][dev u16][fp u32][bytes u48][conns u16]`
+/// - kind EV_FLOW: flow(s) to peer `fp` (fingerprint of ip:port, `neuro_core::fingerprint(peer_key(..))`):
+///   `bytes` sent by the device, `conns` connections (1 for a single flow; the kernel may aggregate);
+/// - kind EV_VOLUME: bytes and connections with no peer identity;
 /// - kind EV_DNS: one query for suffix `fp` (fingerprint of FNV-1a of the registered suffix); flags bit 0 = NXDOMAIN.
 ///
 /// The kernel computes fingerprints. The server never sees addresses or names.
