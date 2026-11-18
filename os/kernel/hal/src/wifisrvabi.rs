@@ -60,6 +60,11 @@ pub const REG_WINDOW: u8 = 4;
 /// check, bit 1 data phase); address = the argument; value = index (low 16 bits) | response kind (high 16 bits).
 /// OUT value = the response.
 pub const REG_CMD: u8 = 5;
+/// Step 4e-3b: an SDHCI host-controller register read / write (host reset, card presence, power, clock, bus width).
+/// Function byte = width in bytes (1, 2 or 4); address = the register offset inside the SDHCI window (< 0x1000,
+/// aligned to the width); value = what is written.
+pub const REG_HOST_R: u8 = 6;
+pub const REG_HOST_W: u8 = 7;
 /// Encode one [`CMD_BP_REG`] request.
 pub fn bp_reg_in(op: u8, fnum: u8, addr: u32, val: u32) -> [u8; 12] {
     let mut b = [0u8; 12];
@@ -71,7 +76,17 @@ pub fn bp_reg_in(op: u8, fnum: u8, addr: u32, val: u32) -> [u8; 12] {
 }
 /// Decode a [`CMD_BP_REG`] request: (op, function, address, value); None = malformed or an unknown op / function.
 pub fn bp_reg_decode(i: &[u8]) -> Option<(u8, u8, u32, u32)> {
-    if i.len() != 12 || i[0] > REG_CMD || i[1] > if i[0] == REG_CMD { 3 } else { 2 } {
+    if i.len() != 12 || i[0] > REG_HOST_W {
+        return None;
+    }
+    let addr = u32::from_le_bytes([i[4], i[5], i[6], i[7]]);
+    let ok = match i[0] {
+        REG_CMD => i[1] <= 3,
+        // a host register: width 1 / 2 / 4, aligned, inside the 4 KiB SDHCI window (the server can touch nothing else)
+        REG_HOST_R | REG_HOST_W => matches!(i[1], 1 | 2 | 4) && addr < 0x1000 && addr.is_multiple_of(i[1] as u32),
+        _ => i[1] <= 2,
+    };
+    if !ok {
         return None;
     }
     Some((i[0], i[1], u32::from_le_bytes([i[4], i[5], i[6], i[7]]), u32::from_le_bytes([i[8], i[9], i[10], i[11]])))
@@ -802,6 +817,12 @@ mod bp_reg {
         let mut c4 = c;
         c4[1] = 4;
         assert_eq!(bp_reg_decode(&c4), None, "unknown command flag");
+        // host registers: width 1/2/4, aligned, inside the SDHCI window
+        assert!(bp_reg_decode(&bp_reg_in(REG_HOST_W, 1, 0x29, 0x0f)).is_some());
+        assert!(bp_reg_decode(&bp_reg_in(REG_HOST_R, 4, 0x24, 0)).is_some());
+        assert_eq!(bp_reg_decode(&bp_reg_in(REG_HOST_R, 3, 0x24, 0)), None, "width 3");
+        assert_eq!(bp_reg_decode(&bp_reg_in(REG_HOST_R, 4, 0x26, 0)), None, "unaligned");
+        assert_eq!(bp_reg_decode(&bp_reg_in(REG_HOST_W, 4, 0x1000, 0)), None, "outside the window");
     }
 }
 
