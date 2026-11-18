@@ -128,7 +128,7 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
     }
     // why the previous boot ended (reason + culprit; the crash record's text as the detail)
     let c = crate::rtwdog::last_crash();
-    let (reason, culprit) = hal::superv::last_boot_reason(c.map(|c| c.kind), c.map_or("", |c| c.text()), crate::rtwdog::prev_reset_was_watchdog());
+    let (reason, culprit) = hal::superv::last_boot_reason(c.map(|c| c.kind), c.map_or("", |c| c.text()), crate::rtwdog::last_planned(), crate::rtwdog::prev_reset_was_watchdog());
     let _ = write!(w, "}},\"last_boot\":{{\"reason\":\"{}\",\"culprit\":", reason);
     match culprit {
         Some(n) => {
@@ -265,10 +265,11 @@ pub fn selftest() -> bool {
     #[cfg(not(feature = "netsvc"))]
     let doc = true;
     *j() = saved;
-    let ok = ladder && degrade && again && fault && unknown && table && policy && doc;
+    let plan_rec = arch_aarch64::crashrec::planned_selftest();
+    let ok = ladder && degrade && again && fault && unknown && table && policy && doc && plan_rec;
     arch_aarch64::_print(format_args!(
-        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={} | H2 supervisor table: only the Wi-Fi link is critical, no other entry may reboot={} a one-off server fault restarts at once, consecutive faults are held off (50 ms doubling, capped 5 s: < 25 restarts in 60 s of constant faulting), a good call resets it={} /api/recoveries renders well-formed={}\n",
-        if ok { "PASS" } else { "FAIL" }, ladder, degrade, again, fault, unknown, table, policy, doc
+        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={} | H2 supervisor table: only the Wi-Fi link is critical, no other entry may reboot={} a one-off server fault restarts at once, consecutive faults are held off (50 ms doubling, capped 5 s: < 25 restarts in 60 s of constant faulting), a good call resets it={} /api/recoveries renders well-formed={} H3a: the planned-reset reason is taken once, a torn / stale record never reads back={}\n",
+        if ok { "PASS" } else { "FAIL" }, ladder, degrade, again, fault, unknown, table, policy, doc, plan_rec
     ));
     ok
 }

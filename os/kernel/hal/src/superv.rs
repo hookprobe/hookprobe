@@ -333,17 +333,31 @@ impl Sup {
     }
 }
 
+/// Planned-reset codes (written before the reset, `arch crashrec::write_planned`).
+pub const PLANNED_OWNER_REBOOT: u32 = 1;
+pub const PLANNED_OTA_TRIAL: u32 = 2;
+pub const PLANNED_OTA_REVERT: u32 = 3;
+pub const PLANNED_FACTORY_RESET: u32 = 4;
+pub const PLANNED_CONFIG_REVERT: u32 = 5;
+
 /// Why the previous boot ended (plan Wave 2c C5: reason + culprit, as Fuchsia's last-reboot record): from the crash
-/// record the previous boot left (`crash_kind` 1 = panic, 2 = kernel fault, 3 = self-heal reset; its text) and
-/// whether the reset was watchdog-type. The culprit is the component that caused it, when one is known — a generic
-/// reason (a watchdog reset with no record) names none rather than guess.
-pub fn last_boot_reason(crash_kind: Option<u32>, text: &str, watchdog: bool) -> (&'static str, Option<&'static str>) {
-    match crash_kind {
-        Some(1) => ("kernel-panic", Some("kernel")),
-        Some(2) => ("kernel-fault", Some("kernel")),
-        Some(_) => ("self-heal-reset", if text.starts_with("Wi-Fi") { Some("wifi") } else { None }),
-        None if watchdog => ("watchdog", None),
-        None => ("power-on", None),
+/// record the previous boot left (`crash_kind` 1 = panic, 2 = kernel fault, 3 = self-heal reset; its text), the
+/// planned-reset reason it wrote, and whether the reset was watchdog-type. A crash record wins over a planned
+/// reason (a panic on the way down is the news). The culprit is the component that caused it, when one is known —
+/// a generic reason (a watchdog reset with no record) names none rather than guess.
+pub fn last_boot_reason(crash_kind: Option<u32>, text: &str, planned: Option<u32>, watchdog: bool) -> (&'static str, Option<&'static str>) {
+    match (crash_kind, planned) {
+        (Some(1), _) => ("kernel-panic", Some("kernel")),
+        (Some(2), _) => ("kernel-fault", Some("kernel")),
+        (Some(_), _) => ("self-heal-reset", if text.starts_with("Wi-Fi") { Some("wifi") } else { None }),
+        (None, Some(PLANNED_OWNER_REBOOT)) => ("owner-reboot", None),
+        (None, Some(PLANNED_OTA_TRIAL)) => ("ota-trial", None),
+        (None, Some(PLANNED_OTA_REVERT)) => ("ota-revert", Some("ota")),
+        (None, Some(PLANNED_FACTORY_RESET)) => ("factory-reset", None),
+        (None, Some(PLANNED_CONFIG_REVERT)) => ("config-revert", Some("config")),
+        (None, Some(_)) => ("planned", None),
+        (None, None) if watchdog => ("watchdog", None),
+        (None, None) => ("power-on", None),
     }
 }
 
@@ -434,12 +448,20 @@ mod tests {
 
     #[test]
     fn last_boot() {
-        assert_eq!(last_boot_reason(None, "", false), ("power-on", None));
-        assert_eq!(last_boot_reason(None, "", true), ("watchdog", None));
-        assert_eq!(last_boot_reason(Some(1), "panicked at x", true), ("kernel-panic", Some("kernel")));
-        assert_eq!(last_boot_reason(Some(2), "Sync/SPx", true), ("kernel-fault", Some("kernel")));
-        assert_eq!(last_boot_reason(Some(3), "Wi-Fi recovery exhausted: x", true), ("self-heal-reset", Some("wifi")));
-        assert_eq!(last_boot_reason(Some(3), "something else", true), ("self-heal-reset", None));
+        assert_eq!(last_boot_reason(None, "", None, false), ("power-on", None));
+        assert_eq!(last_boot_reason(None, "", None, true), ("watchdog", None));
+        assert_eq!(last_boot_reason(Some(1), "panicked at x", None, true), ("kernel-panic", Some("kernel")));
+        assert_eq!(last_boot_reason(Some(2), "Sync/SPx", None, true), ("kernel-fault", Some("kernel")));
+        assert_eq!(last_boot_reason(Some(3), "Wi-Fi recovery exhausted: x", None, true), ("self-heal-reset", Some("wifi")));
+        assert_eq!(last_boot_reason(Some(3), "something else", None, true), ("self-heal-reset", None));
+        // planned resets are named; a watchdog-type reset flag never hides them; a crash record wins over them
+        assert_eq!(last_boot_reason(None, "", Some(PLANNED_OWNER_REBOOT), true), ("owner-reboot", None));
+        assert_eq!(last_boot_reason(None, "", Some(PLANNED_OTA_TRIAL), false), ("ota-trial", None));
+        assert_eq!(last_boot_reason(None, "", Some(PLANNED_OTA_REVERT), true), ("ota-revert", Some("ota")));
+        assert_eq!(last_boot_reason(None, "", Some(PLANNED_FACTORY_RESET), true), ("factory-reset", None));
+        assert_eq!(last_boot_reason(None, "", Some(PLANNED_CONFIG_REVERT), true), ("config-revert", Some("config")));
+        assert_eq!(last_boot_reason(None, "", Some(99), true), ("planned", None));
+        assert_eq!(last_boot_reason(Some(1), "p", Some(PLANNED_OTA_TRIAL), true), ("kernel-panic", Some("kernel")));
     }
 
     #[test]
