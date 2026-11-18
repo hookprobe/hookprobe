@@ -43,6 +43,42 @@ impl ExportRx {
         self.frames += 1;
         Ok(f)
     }
+
+    /// Accept one tagged datagram from either stream on this session: the live HQX1 v2 frames
+    /// (`exportwire::AD`) or the sealed-evidence HQX3 frames (`wire::AD_FRAME`, ADR 0066). Both
+    /// share the device's send counter, so they share this one anti-replay window; the AD picks the
+    /// stream. A failed open leaves the window untouched (`AntiReplayRx::open`), so trying the
+    /// second AD after the first is safe and a forgery under either never burns a slot.
+    pub fn accept_any(&mut self, udp_payload: &[u8]) -> Result<Stream, RxErr> {
+        match self.accept(udp_payload) {
+            Err(RxErr::Channel) => {}
+            other => return other.map(|f| Stream::Live(Box::new(f))),
+        }
+        let rec = udp_payload.strip_prefix(&exportwire::DGRAM_TAG[..]).ok_or(RxErr::NotExport)?;
+        let mut pt = [0u8; evidence_export::wire::MAX_FRAME];
+        let n = self.rx.open_record(evidence_export::wire::AD_FRAME, rec, &mut pt).map_err(|_| RxErr::Channel)?;
+        Ok(Stream::Evidence(pt[..n].to_vec()))
+    }
+}
+
+/// What a tagged export datagram carried.
+#[derive(Debug)]
+pub enum Stream {
+    /// A live HQX1 v2 frame, already authenticated and loss-accounted.
+    Live(Box<Frame>),
+    /// An opened HQX3 plaintext for `evidence_rx::EvidenceRx::accept`.
+    Evidence(Vec<u8>),
+}
+
+/// Seal an HQX3 ack onto the session (`wire::AD_ACK`) as a tagged datagram for the device.
+pub fn ack_datagram(send: &mut crate::securechannel::CipherState, ack: &evidence_export::wire::Ack) -> Option<Vec<u8>> {
+    let mut pt = [0u8; evidence_export::wire::ACK_LEN];
+    let n = evidence_export::wire::serialize_ack(ack, &mut pt).ok()?;
+    let mut rec = [0u8; 8 + evidence_export::wire::ACK_LEN + 16];
+    let rl = send.seal_record(evidence_export::wire::AD_ACK, &pt[..n], &mut rec)?;
+    let mut d = exportwire::DGRAM_TAG.to_vec();
+    d.extend_from_slice(&rec[..rl]);
+    Some(d)
 }
 
 /// heqk rule ids whose `src` is a src-MAC hash, not an IPv4 address (IPv6 RA rules — see
@@ -214,5 +250,131 @@ mod tests {
         let last = d.len() - 1;
         d[last] ^= 1;
         assert_eq!(erx.accept(&d).unwrap_err(), RxErr::Channel, "tampered tag refused");
+    }
+
+    /// ADR 0066 end to end on a real PQ-hybrid session: the device library's `Exporter` reads a
+    /// sealed log and sends HQX3 frames; this receiver opens them on the SAME anti-replay window as
+    /// the live HQX1 stream, de-duplicates, and seals cumulative acks back; the device opens the
+    /// acks under `AD_ACK` and its synced position reaches the log head. One ack is lost on the way,
+    /// so the device resends and the receiver must store every event exactly once.
+    #[test]
+    fn sealed_evidence_round_trip_with_a_lost_ack() {
+        use crate::evidence_rx::{outcome_to_jsonl, EvidenceRx};
+        use evidence_export::anon::Policy;
+        use evidence_export::exporter::{Exporter, Geometry, Identity, SlotSource, Transport};
+        use evidence_export::queue::{Config, Link, SyncState};
+        use evidence_export::record::{SealOpener, BUILD_TAG_LEN, SEAL_HDR_LEN, SEAL_MAGIC};
+        use evidence_export::slot::{frame_slot, RT_EVIDENCE_B, SEC};
+        use evidence_export::wire::AD_ACK;
+        use ed25519_compact::{KeyPair, Seed};
+
+        // The library treats sealing as opaque (ADR 0066 D5); a pass-through stand-in keeps this test about the
+        // stream, not the cipher. HQKSEAL1 itself is proven only once the kernel wiring lands ([P-evexport]).
+        struct Plain;
+        impl SealOpener for Plain {
+            fn open(&self, blob: &[u8], out: &mut [u8]) -> Result<usize, ()> {
+                let n = blob.len() - SEAL_HDR_LEN;
+                out[..n].copy_from_slice(&blob[SEAL_HDR_LEN..]);
+                Ok(n)
+            }
+        }
+        struct Log(Vec<[u8; SEC]>);
+        impl SlotSource for Log {
+            fn geometry(&self) -> Geometry {
+                Geometry { nslots: 64, next_seq: self.0.len() as u64 }
+            }
+            fn read(&mut self, seq: u64, out: &mut [u8; SEC]) -> Result<(), ()> {
+                *out = self.0[seq as usize];
+                Ok(())
+            }
+        }
+        struct Tx<'a>(&'a mut CipherState, Vec<Vec<u8>>);
+        impl Transport for Tx<'_> {
+            fn send(&mut self, ad: &[u8], frame: &[u8]) -> Result<(), ()> {
+                let mut rec = [0u8; 8 + evidence_export::wire::MAX_FRAME + 16];
+                let rl = self.0.seal_record(ad, frame, &mut rec).ok_or(())?;
+                let mut d = exportwire::DGRAM_TAG.to_vec();
+                d.extend_from_slice(&rec[..rl]);
+                self.1.push(d);
+                Ok(())
+            }
+        }
+
+        // 12 log records × 2 events: an internal LAN source (must never leave) and a public one (kept).
+        let mut log = Log(Vec::new());
+        for seq in 0..12u64 {
+            let mut pt = vec![0u8; BUILD_TAG_LEN];
+            pt[..BUILD_TAG_LEN].copy_from_slice(b"e2e-build-tag-01");
+            for (src, rule) in [(0xC0A8_0132u32, 100u16), (0x0808_0808, 101)] {
+                pt.extend_from_slice(&(1_700_000_000_000 + seq).to_le_bytes());
+                pt.extend_from_slice(&src.to_le_bytes());
+                pt.extend_from_slice(&rule.to_le_bytes());
+                pt.extend_from_slice(&[3, 2]);
+            }
+            let mut blob = vec![0u8; SEAL_HDR_LEN];
+            blob[..8].copy_from_slice(SEAL_MAGIC);
+            blob.extend_from_slice(&pt);
+            let mut slot = [0u8; SEC];
+            assert!(frame_slot(seq, RT_EVIDENCE_B, &blob, &mut slot));
+            log.0.push(slot);
+        }
+
+        // A real handshake, both directions kept: device send/recv, responder send/recv.
+        let resp = crate::responder_static();
+        let dev = KeyPair::from_seed(Seed::new(boot_abi::sha256::digest(b"evidence-e2e-device")));
+        let fp = boot_abi::sha256::digest(&dev.pk[..]);
+        let mut ent = crate::entropy::OsEntropy;
+        let ir = InitiatorRandomness::from_entropy(&mut ent).unwrap();
+        let rr = ResponderRandomness::from_entropy(&mut ent).unwrap();
+        let (m1, ip) = initiator_write_msg1(&dev, &resp.public(), &ir, &fp).unwrap();
+        let rp = responder_read_msg1(&resp, &dev.pk, m1.as_slice()).unwrap();
+        let (m2, mut rs) = responder_write_msg2(rp, &rr, &7u64.to_le_bytes()).unwrap();
+        let (mut is, _) = initiator_read_msg2(ip, m2.as_slice()).unwrap();
+        let mut dev_ack_rx = is.recv.into_anti_replay();
+        let mut erx = ExportRx::new(rs.recv.into_anti_replay(), 7, fp);
+        let mut evrx = EvidenceRx::new(7, fp);
+
+        let cfg = Config { window: 2, ack_timeout_ms: 100, backoff_min_ms: 10, backoff_max_ms: 40 };
+        let keep_public = Policy { pseudonym_key: None, keep_public_src: true };
+        let mut x = Exporter::new(Identity { tenant_id: 7, device_fp: fp }, keep_public, SyncState::default(), cfg, 60_000);
+
+        // A live HQX1 frame on the same send counter first: the two streams must demux on one window.
+        let live = device_dgram(&mut is.send, &hdr(fp, 0, 0), &[Rec { rule_id: 1, verdict: 2, class: 5, ..Default::default() }]);
+        assert!(matches!(erx.accept_any(&live).unwrap(), Stream::Live(_)));
+
+        let mut jsonl = Vec::new();
+        let mut lost_one = false;
+        let mut now = 0u64;
+        for _ in 0..200 {
+            let mut tx = Tx(&mut is.send, Vec::new());
+            x.poll(now, Link::Up, &mut log, &Plain, &mut tx);
+            for d in tx.1 {
+                let Stream::Evidence(pt) = erx.accept_any(&d).unwrap() else { panic!("HQX3 read as live") };
+                let o = evrx.accept(&pt).unwrap();
+                jsonl.extend(outcome_to_jsonl(&o, &evrx, 1.0));
+                let Some(a) = o.ack(7) else { continue };
+                let ad = ack_datagram(&mut rs.send, &a).unwrap();
+                if !lost_one {
+                    lost_one = true; // the first ack never arrives
+                    continue;
+                }
+                let mut pt = [0u8; 64];
+                let n = dev_ack_rx.open_record(AD_ACK, &ad[exportwire::DGRAM_TAG.len()..], &mut pt).unwrap();
+                x.on_ack(&pt[..n]);
+            }
+            if x.state().synced.log_seq == 12 {
+                break;
+            }
+            now += 50;
+        }
+
+        assert_eq!(x.state().synced.log_seq, 12, "the device's synced position reaches the log head");
+        assert_eq!(evrx.stats.stored_events, 24, "every event stored exactly once");
+        assert!(evrx.stats.duplicate_events > 0, "the lost ack forced a resend that was de-duplicated");
+        let events: Vec<serde_json::Value> = jsonl.iter().map(|l| serde_json::from_str(l).unwrap()).filter(|v: &serde_json::Value| v["type"] == "heqk_evidence").collect();
+        assert_eq!(events.len(), 24);
+        assert!(jsonl.iter().all(|l| !l.contains("192.168.")), "no internal address reaches the control plane");
+        assert_eq!(events.iter().filter(|v| v["src_ip"] == "8.8.8.8").count(), 12);
+        assert_eq!(events.iter().filter(|v| v["src_kind"] == "redacted").count(), 12);
     }
 }

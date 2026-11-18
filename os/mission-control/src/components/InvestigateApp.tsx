@@ -27,7 +27,11 @@ import LiveState from './LiveState';
 import { promptAndRun } from '../store/actions';
 import { setCopilotOpen, substrate } from '../store/mock';
 import { healthChecked } from '../store/health';
+import { cap } from '../store/capabilities';
 import { CAMERA, sampleWhen } from '../store/sampleClock';
+/** heqk lists at most 32 reports (`/api/reports` clamps `limit` to 32 = MAX_INCIDENTS, newest activity first) and
+ *  does not say when it cut the list, so a full page is shown as capped (AB-10). */
+const DEVICE_REPORT_CAP = 32;
 type Tone = 'green' | 'amber' | 'red' | 'blue' | 'purple' | 'cyan' | 'orange' | 'grey';
 import { formatTime, formatBytes, mitreName, mitreLabel, mitreTactic, type ProcessTreeNode } from '../store/api';
 import AppShell from './AppShell';
@@ -333,7 +337,9 @@ const InvestigateApp: Component = () => {
                       <Panel ctx="processes" title={`PROCESS TREE${processStatus() === 'live' ? ` (${processCount()})` : ''}`}>
                         <Show when={processStatus() !== 'loading'} fallback={<LiveState kind="loading" label="Loading process tree…" />}>
                           <Show when={processStatus() !== 'error'} fallback={<LiveState kind="error" label="Process tree unavailable" reason={processError() ?? undefined} />}>
-                            <Show when={processRoots().length > 0} fallback={<LiveState kind="empty" label="No host process telemetry linked yet" reason="No host-telemetry process nodes have entered this incident's subgraph — this device's EDR layer may not have observed process activity for it yet." />}>
+                            <Show when={processRoots().length > 0} fallback={cap('host_telemetry').state === 'granted'
+                              ? <LiveState kind="empty" label="No host process telemetry linked yet" reason="No process activity from an endpoint agent has been linked to this incident yet." />
+                              : <LiveState kind="empty" label="This device does not see processes" reason="Process trees need an endpoint agent on each computer. This device watches the network, so this panel stays empty; the timeline and evidence above are what it saw." />}>
                               <ul class="inv-proc-tree">
                                 <For each={processRoots()}>{(r) => <ProcessTreeItem node={r} depth={0} />}</For>
                               </ul>
@@ -445,6 +451,9 @@ const InvestigateApp: Component = () => {
                                   )}
                                 </For>
                               </ul>
+                              <Show when={reports().length >= DEVICE_REPORT_CAP}>
+                                <p class="pcard-note" role="note">Showing the {DEVICE_REPORT_CAP} most recently active incidents, the most this device lists. Older ones are not shown here.</p>
+                              </Show>
                             </Show>
                           </Show>
                         </Show>
