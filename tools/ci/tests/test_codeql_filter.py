@@ -105,5 +105,54 @@ class Filter(unittest.TestCase):
         self.assertEqual(len(doc["runs"][0]["results"]), 2)
 
 
+class TestOnlyFiles(unittest.TestCase):
+    """A file whose `mod` declaration is under #[cfg(test)] is test code as a whole (#1370 / #1371: evidence-export's
+    `#[cfg(test)] mod testutil;`), while a sibling declared without it is production code (#1369: anon.rs)."""
+
+    def setUp(self):
+        self.root = tempfile.mkdtemp()
+        src = os.path.join(self.root, "src")
+        os.makedirs(os.path.join(src, "helpers"))
+        os.makedirs(os.path.join(src, "net", "wire"))
+        files = {
+            "lib.rs": "pub mod anon;\n\n#[cfg(test)]\nmod testutil;\n#[cfg(test)]\nmod helpers;\npub mod net;\n",
+            "anon.rs": "pub fn k() -> [u8; 4] { [1, 2, 3, 4] }\n",
+            "testutil.rs": "pub const KEY: [u8; 4] = [9, 9, 9, 9];\n",
+            "helpers/mod.rs": "pub mod vectors;\n",
+            "helpers/vectors.rs": "pub const V: [u8; 2] = [7, 7];\n",
+            "net.rs": "pub mod wire;\n#[cfg(all(test, feature = \"x\"))]\nmod fixtures;\n",
+            "net/wire/mod.rs": "pub fn parse() {}\n",
+            "net/fixtures.rs": "pub const F: [u8; 1] = [5];\n",
+        }
+        for name, body in files.items():
+            with open(os.path.join(src, name), "w") as fh:
+                fh.write(body)
+
+    def p(self, rel):
+        return os.path.join(self.root, "src", rel)
+
+    def test_cfg_test_mod_file_is_test_only(self):
+        self.assertTrue(f.test_only_file(self.p("testutil.rs")))
+
+    def test_sibling_production_file_is_not(self):
+        self.assertFalse(f.test_only_file(self.p("anon.rs")))
+        self.assertFalse(f.test_only_file(self.p("lib.rs")))
+
+    def test_nested_under_test_only_parent(self):
+        self.assertTrue(f.test_only_file(self.p("helpers/mod.rs")))
+        self.assertTrue(f.test_only_file(self.p("helpers/vectors.rs")))
+
+    def test_parent_module_file_layout(self):
+        self.assertTrue(f.test_only_file(self.p("net/fixtures.rs")))      # declared in net.rs under cfg(all(test, ..))
+        self.assertFalse(f.test_only_file(self.p("net/wire/mod.rs")))     # `pub mod wire;` in net.rs: production
+
+    def test_filter_drops_whole_test_only_file_for_every_rule(self):
+        doc = {"runs": [{"results": [
+            {"ruleId": rule, "locations": [{"physicalLocation": {"artifactLocation": {"uri": uri}, "region": {"startLine": 1}}}]}
+            for rule, uri in ((f.CRYPTO_RULE, "src/testutil.rs"), ("rust/other", "src/testutil.rs"), (f.CRYPTO_RULE, "src/anon.rs"))]}]}
+        self.assertEqual(f.filter_sarif(doc, self.root, log=lambda *_: None), 2)
+        self.assertEqual([r["locations"][0]["physicalLocation"]["artifactLocation"]["uri"] for r in doc["runs"][0]["results"]], ["src/anon.rs"])
+
+
 if __name__ == "__main__":
     unittest.main()
