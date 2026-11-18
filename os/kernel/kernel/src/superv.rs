@@ -20,7 +20,7 @@ pub fn journal() -> &'static Journal {
 
 /// Swap the journal out (self-tests run against an empty one and put the real one back).
 pub fn swap(with: Journal) -> Journal {
-    unsafe { MAYBE_OPEN = 0x7f }; // re-derived lazily: a stale bit only costs one ring scan
+    unsafe { MAYBE_OPEN = 0xff }; // re-derived lazily: a stale bit only costs one ring scan
     core::mem::replace(j(), with)
 }
 
