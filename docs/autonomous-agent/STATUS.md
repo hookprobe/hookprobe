@@ -22,7 +22,7 @@ AB-11 "Remove all owner rules" on `agent/mc-revoke-all` (draft PR). AB-06 in dra
 | AB-05 Copilot AI-models link | `agent/mc-honest-states` @ `02cb4780` | yes | astro check 0 errors; build 27 pages; browser check of 3 hash cases; Playwright spec added but not run locally | green (g3: "PASS pro-workspace-admin: admin: #ai deep link opens AI models") | yes | [#1268](https://github.com/hookprobe/hookprobe/pull/1268) | yes (2026-11-17) |
 | AB-17 stale register rows + ADR 0037 citations | `agent/docs-ab17` | yes | n/a (docs) | secrets-scan pass; ci + CodeQL still running at merge | yes | [#1279](https://github.com/hookprobe/hookprobe/pull/1279) | yes (2026-11-18) |
 | AB-06 package.json description | `agent/mc-pkg-description` | yes | release_check passes | pending | yes | [#1280](https://github.com/hookprobe/hookprobe/pull/1280) draft | no |
-| AB-11 Remove all owner rules (Protect) | `agent/mc-revoke-all` | yes | astro check 0 errors; build 27 pages; full flow in the in-app browser against a local mock device (dry run → approve → verified; requests match the heqk contract); new UI spec `revoke-all` not run locally (no Playwright) | pending | yes | draft | no |
+| AB-11 Remove all owner rules (Protect) | `agent/mc-revoke-all` | yes | astro check 0 errors; build 27 pages; full flow in the in-app browser against a local mock device (dry run → approve → verified; requests match the heqk contract); new UI spec `revoke-all` not run locally (no Playwright) | pending | yes | [#1281](https://github.com/hookprobe/hookprobe/pull/1281) draft | no |
 
 
 ## Tests and coverage
