@@ -22,7 +22,7 @@ PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")
 SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'")
 PSK=$(psudo "nmcli -s -g 802-11-wireless-security.psk con show '$PROF'")
 up() {   # <cloned-mac> <ipv4: auto|disabled>; with IPv4, a route to the bench host scoped to this profile only
-  local r4=""
+  local r4=""; [ "$2" = auto ] && r4="ipv4.routes '$TLSHOST/32 10.99.0.1'"   # never-default: a host route for the TLS target only
   psudo "nmcli con delete hq-idtest" >/dev/null 2>&1
   # the claims harness drives wlan1 with its own supplicant (unmanaged); make sure NetworkManager owns it again
   psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; sleep 2

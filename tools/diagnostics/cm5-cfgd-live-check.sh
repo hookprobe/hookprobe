@@ -64,9 +64,11 @@ dns9() { local r; r=$(pi 'a=$(ip -4 -o addr | awk '"'"'$4 ~ /^10\.99\.0\./ {spli
 # (changes 0x07 -> needs the owner's confirm -> the rest of this check cascades). Put a policy-only bundle with the
 # bench policy in force first (removing a WAN / Wi-Fi section needs the owner's confirm), so the check starts clean.
 secs=$(api /api/config | python3 -c 'import json,sys; s=json.load(sys.stdin).get("sections") or {}; print(" ".join(k for k in ("wan","wifi") if (s.get(k) or {}).get("present")))')
-if [ -n "$secs" ]; then
+# (always: even a policy-only bundle in force can carry `mgmt` bindings, and A1's policy has none — removing them is a
+#  management-plane change that rightly needs the owner's confirm; the baseline drops them so A1 changes filtering only)
+if true; then
   # hqcfg takes canonical ASCII only: the bench file's comments carry non-ASCII (an em dash) — strip comments / blanks
-  sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$ROOT/docs/design/bench-task26/policy-bench.txt" > "$T/pbase.txt"
+  sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' -e '/mgmt/d' "$ROOT/docs/design/bench-task26/policy-bench.txt" > "$T/pbase.txt"
   bundle --policy "$T/pbase.txt"
   waitlog "LIVE APPLY of generation $G" 30
   grep -q '"needs_confirm": true' "$T/r$G" && { sleep 10; $UP --config-confirm "live check baseline" >/dev/null 2>&1; }
