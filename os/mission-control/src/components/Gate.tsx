@@ -7,6 +7,8 @@
  *
  * granted → the children, untouched · denied → the children greyed out and inert, with the reason
  * written next to them (never a dead or no-op control) · denied + `hide`, or unknown → nothing.
+ * granted + `notBuilt` → greyed out like denied, with that reason: the device has the capability but
+ * Mission Control has no screen for it yet, so the control must not look usable.
  * The server still enforces every grant: hiding here is presentation only (NFR-08).
  */
 import { type Component, type JSX, Show } from 'solid-js';
@@ -18,13 +20,19 @@ interface Props {
   hide?: boolean;
   /** Render the reason inline (default) or only as a tooltip (dense toolbars). */
   reason?: 'inline' | 'tooltip';
+  /** The control's screen is not built yet: even when granted, grey it out with this reason (AB-12). */
+  notBuilt?: string;
   children: JSX.Element;
 }
 
 const Gate: Component<Props> = (props) => {
-  const answer = () => (Array.isArray(props.cap) ? capAll(props.cap) : cap(props.cap));
+  const raw = () => (Array.isArray(props.cap) ? capAll(props.cap) : cap(props.cap));
+  const answer = () => {
+    const a = raw();
+    return a.state === 'granted' && props.notBuilt ? { state: 'denied' as const, reason: props.notBuilt } : a;
+  };
   return (
-    <Show when={answer().state !== 'unknown' && !(answer().state === 'denied' && props.hide)}>
+    <Show when={answer().state !== 'unknown' && !(raw().state === 'denied' && props.hide)}>
       <Show when={answer().state === 'denied'} fallback={props.children}>
         <span class="gate gate--off" title={answer().reason}>
           {/* inert: no focus, no clicks, skipped by assistive tech — the reason below explains why */}
