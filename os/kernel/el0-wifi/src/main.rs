@@ -191,6 +191,7 @@ fn bp_write() -> ! {
 /// Step 4e-2: one register operation of a firmware reload (chip probe, EROM walk, core reset, clocks) over this
 /// server's grant. The bus holds no window cache, so the kernel's and this server's operations interleave safely.
 fn bp_reg() -> ! {
+    use hal::sdio::Mmio as _;
     let Some((op, f, addr, val)) = bp_reg_decode(input()) else { exit(ST_BAD_CMD, 0) };
     let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
     let (ok, v) = match op {
@@ -199,6 +200,20 @@ fn bp_reg() -> ! {
         REG_BP_R32 => (true, bus.bp_r32(addr)),
         REG_BP_W32 => (bus.bp_w32(addr, val), 0),
         REG_CMD => bus.cmd((val & 0xffff) as u16, addr, (val >> 16) as u16, f & 1 != 0, f & 2 != 0).map_or((false, 0), |r| (true, r)),
+        // 4e-3b: host-controller registers (width / alignment / window checked by the decoder)
+        REG_HOST_R => (true, match f {
+            1 => UMmio.r8(addr as usize) as u32,
+            2 => UMmio.r16(addr as usize) as u32,
+            _ => UMmio.r32(addr as usize),
+        }),
+        REG_HOST_W => {
+            match f {
+                1 => UMmio.w8(addr as usize, val as u8),
+                2 => UMmio.w16(addr as usize, val as u16),
+                _ => UMmio.w32(addr as usize, val),
+            }
+            (true, 0)
+        }
         _ => (bus.set_backplane_window(addr), 0),
     };
     let mut o = [0u8; 8];
