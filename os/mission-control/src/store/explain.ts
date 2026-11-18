@@ -114,7 +114,7 @@ export function parseRuleMsg(msg: string): { text: string; verdict?: 'DROP' | 'P
 
 export interface Trigger {
   kind: 'bpf' | 'wasm';
-  /** e.g. "Signed BPF rule 100042" or "Wasm module dga-detector". */
+  /** e.g. "Signed BPF rule 1200113" or "Wasm module dga-detector". */
   name: string;
   ruleId?: number;
   moduleHash?: string;
