@@ -8,7 +8,8 @@ Test DIRECTORIES are excluded by `paths-ignore` (.github/codeql/codeql-config.ym
 Two rules, deliberately different in scope:
 
   1. Items under `#[cfg(test)]` / `#[cfg(all(test, ..))]` / `#[test]` are never compiled into a device image, so
-     results there are dropped for EVERY rule.
+     results there are dropped for EVERY rule. That includes whole FILES whose `mod` declaration is under such an
+     attribute (`#[cfg(test)] mod testutil;`), directly or through a test-only parent module.
   2. On-device known-answer self-tests (`fn ...selftest...`) DO ship, so only `rust/hard-coded-cryptographic-value`
      is dropped there (their fixed vectors are public test vectors); every other rule still sees them.
 
@@ -17,6 +18,7 @@ Everything removed is printed (rule, file:line, why), so the CI log shows exactl
     codeql_test_filter.py <sarif file or dir> [--root REPO]
 """
 import argparse
+import functools
 import json
 import os
 import re
@@ -95,8 +97,62 @@ def test_ranges(src: str):
     return out
 
 
+@functools.lru_cache(maxsize=None)
+def _read(path: str):
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            return fh.read()
+    except OSError:
+        return None
+
+
+@functools.lru_cache(maxsize=None)
+def _file_facts(path: str):
+    """(masked source, test ranges) of a file, computed once (kernel main.rs is ~15k lines)."""
+    src = _read(path)
+    if src is None:
+        return None, []
+    return _mask(src), test_ranges(src)
+
+
+def _declaring_files(path: str):
+    """Files that may hold the `mod <name>;` declaring `path` (Rust 2018 module layout): for src/a/x.rs that is
+    src/a.rs or src/a/mod.rs; for a file next to the crate root, lib.rs / main.rs / mod.rs in the same dir."""
+    d, base = os.path.split(path)
+    name = os.path.splitext(base)[0]
+    if name in ("lib", "main"):
+        return name, []
+    if name == "mod":  # src/a/mod.rs is declared as `mod a;` one level up
+        d, name = os.path.split(d)
+    parent = d + ".rs"
+    return name, [os.path.join(d, f) for f in ("lib.rs", "main.rs", "mod.rs")] + [parent]
+
+
+def test_only_file(path: str, _depth: int = 0) -> bool:
+    """True when the whole file only compiles for tests: its `mod <name>;` declaration sits under #[cfg(test)]
+    (e.g. `#[cfg(test)] mod testutil;`), directly or through a test-only parent module."""
+    if _depth > 8:
+        return False
+    name, candidates = _declaring_files(path)
+    decl = re.compile(r"^\s*(?:pub(?:\([^)]*\))?\s+)?mod\s+" + re.escape(name) + r"\s*;", re.M)
+    for c in candidates:
+        if os.path.abspath(c) == os.path.abspath(path):
+            continue
+        masked, ranges = _file_facts(os.path.abspath(c))
+        if masked is None:
+            continue
+        m = decl.search(masked)
+        if not m:
+            continue
+        line = masked.count("\n", 0, m.start()) + 1
+        if any(a <= line <= b and k == "test" for a, b, k in ranges):
+            return True
+        return test_only_file(c, _depth + 1)  # declared here: test-only iff this file is
+    return False
+
+
 def filter_sarif(doc: dict, root: str, log=print) -> int:
-    cache, dropped = {}, 0
+    cache, whole, dropped = {}, {}, 0
     for run in doc.get("runs", []):
         kept = []
         for r in run.get("results", []):
@@ -105,13 +161,14 @@ def filter_sarif(doc: dict, root: str, log=print) -> int:
             line = loc.get("region", {}).get("startLine", 0)
             why = None
             if uri.endswith(".rs") and line:
+                p = os.path.join(root, uri)
                 if uri not in cache:
-                    p = os.path.join(root, uri)
-                    cache[uri] = []
-                    if os.path.isfile(p):
-                        with open(p, encoding="utf-8", errors="replace") as fh:
-                            cache[uri] = test_ranges(fh.read())
-                for a, b, kind in cache[uri]:
+                    src = _read(p) if os.path.isfile(p) else None
+                    cache[uri] = test_ranges(src) if src is not None else []
+                    whole[uri] = src is not None and test_only_file(p)
+                if whole[uri]:
+                    why = "file declared under #[cfg(test)] (test-only module)"
+                for a, b, kind in ([] if why else cache[uri]):
                     if a <= line <= b and (kind == "test" or r.get("ruleId") == CRYPTO_RULE):
                         why = "#[cfg(test)]/#[test] item" if kind == "test" else "on-device self-test (crypto-constant rule only)"
                         break
