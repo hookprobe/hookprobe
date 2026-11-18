@@ -154,7 +154,7 @@ fn write_ip6(w: &mut JsonBuf, a: &[u8; 16]) {
     }
 }
 
-/// `GET /api/tls` — TLS clients seen (JA4 + SNI per client), most recent first; IOC / Shield-bypass flags.
+/// One address as JSON text (IPv4 dotted, IPv6 hex groups).
 fn write_addr(w: &mut JsonBuf, a: &hal::policy::Addr) {
     use core::fmt::Write;
     if a.v6 {
@@ -217,6 +217,7 @@ fn render_lan_access(w: &mut JsonBuf) {
     w.raw("]}");
 }
 
+/// `GET /api/tls` — TLS clients seen (JA4 + SNI per client), most recent first; IOC / Shield-bypass flags.
 fn render_tls(w: &mut JsonBuf) {
     use core::fmt::Write;
     let _ = write!(w, "{{\"hellos\":{},\"clients\":[", crate::ja4::hellos());
