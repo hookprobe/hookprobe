@@ -1,0 +1,6 @@
+E-BM2a on IoT-23 | bloom=1024 bits | CALM=1.0 | PERSIST_K=6 | cold fallback=True
+1) NUISANCE on real benign devices (learn first half, score second half)
+   CTU-Honeypot-Capture-4-1           hours=22   scored=11   alarms/day @1/2/3 = 2.00 / 2.00 / 2.00  state=672 B
+   CTU-Honeypot-Capture-5-1           too short (6 active hours)
+2) ONSET, SEMI-SYNTHETIC (benign baseline, then k real infected hours substituted)
+   pairs=14  flagged within 4 h @1/2/3 = 1.00 / 1.00 / 1.00  first-hour drivers: {'novel': 14}

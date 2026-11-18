@@ -146,11 +146,14 @@ plus the per-device byte budget and fixed-point design for heqk.
 
 | Bloom bits | State per device | Hour AUC | Detection @ 1% FPR (beacon / DGA / exfil / new service / scan) | Benign-drift alert hours |
 |---|---|---|---|---|
-| 256 | 254 B | 0.989 | 0.93 / 1.00 / 1.00 / 1.00 / 1.00 | 39 / 160 |
-| **1024** | **638 B** | **0.999** | **1.00 / 1.00 / 1.00 / 1.00 / 1.00** | 39 / 160 |
-| 16384 | 8.3 KB | 0.999 | same | 39 / 160 |
+| 256 | 288 B | 0.993 | 0.93 / 1.00 / 1.00 / 1.00 / 1.00 | 30 / 160 |
+| **1024** | **672 B** | **0.999** | **1.00 / 1.00 / 1.00 / 1.00 / 1.00** | 30 / 160 |
+| 16384 | 8.4 KB | 0.999 | same | 30 / 160 |
 
-The raw history this replaces is ~1.1 MB per device (10 days, estimate) → **~1,700× smaller**. Bloom
+*(Re-run 2026-11-18 with the Phase 0b cold-start fallback, +34 B per device; the Phase 0 code gave
+254 / 638 B and 39 drift hours, otherwise the same. The k sweep below is from the Phase 0 code.)*
+
+The raw history this replaces is ~1.1 MB per device (10 days, estimate) → **~1,600× smaller**. Bloom
 width matters exactly where expected (256 bits saturates on chatty devices). The run *first failed*
 (AUC 0.87, no new-service detection) — diagnosis showed fan-out was not diurnal, the guard let a
 1.89-scoring anomaly teach the baseline, and the update policy had a **label leak** (it consulted
