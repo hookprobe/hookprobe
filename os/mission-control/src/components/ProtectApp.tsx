@@ -5,7 +5,7 @@
  *   header        the device's own enforcement policy (ADR 0023: observe by default)
  *   Rules         ADR 0055 owner rules (effective / shadowed by a pinned signed line); add a domain
  *                 block / allow or remove a rule through the plan-as-diff flow (dry run → owner key
- *                 → read-back verify)
+ *                 → read-back verify); "Remove all owner rules" is ADR 0055 D7/D8 revoke-all, same flow
  *   Enforcement   who the device acts against right now (/api/enforcement, all self-reverting) and
  *                 the time-bounded actions in force (/api/actions) with End now
  *   Policies      the signed IOC pack and DEVICES.TXT, recent refused writes, inline segmentation
@@ -19,12 +19,13 @@ import { substrate } from '../store/mock';
 import { CAMERA } from '../store/sampleClock';
 import { healthChecked } from '../store/health';
 import { actionsView, refreshActions, revokeAction } from '../store/actions';
-import { ownerRules, refreshOwnerRules, KIND_LABEL, type OwnerChange, type OwnerKind } from '../store/ownerRules';
+import { ownerRules, refreshOwnerRules, lanExceptions, refreshLanExceptions, KIND_LABEL, type OwnerChange, type OwnerKind } from '../store/ownerRules';
 import { enforcement, intel, refreshProtect } from '../store/protectLive';
 import AppShell from './AppShell';
 import Drawer from './Drawer';
 import Gate from './Gate';
 import OwnerChangePlan from './OwnerChangePlan';
+import RevokeAllPlan from './RevokeAllPlan';
 import PlanDiff from './PlanDiff';
 
 type Tab = 'rules' | 'enforcement' | 'policies';
@@ -40,12 +41,13 @@ const ProtectApp: Component = () => {
   const [tab, setTab] = createSignal<Tab>('rules');
   const [change, setChange] = createSignal<OwnerChange | null>(null);
   const [adding, setAdding] = createSignal(false);
+  const [revokingAll, setRevokingAll] = createSignal(false);
   const [newKind, setNewKind] = createSignal<OwnerKind>('shield_block');
   const [newDomain, setNewDomain] = createSignal('');
   const [msg, setMsg] = createSignal('');
 
   onMount(() => {
-    const tick = () => { void refreshProtect(); void refreshActions(); void refreshOwnerRules(); };
+    const tick = () => { void refreshProtect(); void refreshActions(); void refreshOwnerRules(); void refreshLanExceptions(); };
     tick();
     const t = setInterval(tick, 10_000);
     onCleanup(() => clearInterval(t));
@@ -64,7 +66,8 @@ const ProtectApp: Component = () => {
     : enforcement()?.policy ?? '');
   const validDomain = () => /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(newDomain().trim());
 
-  const closeDrawer = () => { setChange(null); setAdding(false); setNewDomain(''); void refreshOwnerRules(); };
+  const closeDrawer = () => { setChange(null); setAdding(false); setRevokingAll(false); setNewDomain(''); void refreshOwnerRules(); };
+  const anythingToRevoke = () => rules().length > 0 || (lanExceptions() ?? 0) > 0;
 
   return (
     <AppShell path="/protect/firewall">
@@ -117,6 +120,11 @@ const ProtectApp: Component = () => {
             {sample() ? '.' : ownerRules() ? (ownerRules()!.persistent ? ` (${ownerRules()!.journal.records} records).` : ' — this device has no persistent journal, so they last until restart.') : '.'}
             {' '}A rule pinned by a signed DEVICES.TXT line is recorded but does not take effect.
           </p>
+          <div>
+            <button class="hp-btn" disabled={sample() || !anythingToRevoke()}
+              title={sample() ? 'Preview: no device is answering' : !anythingToRevoke() ? 'No owner rules or LAN-access exceptions to remove' : undefined}
+              onClick={() => setRevokingAll(true)}>Remove all owner rules…</button>
+          </div>
         </Show>
 
         <Show when={tab() === 'enforcement'}>
@@ -189,7 +197,10 @@ const ProtectApp: Component = () => {
         </Show>
       </main>
 
-      <Drawer open={!!change() || adding()} title={adding() ? 'New rule' : change()?.op === 'remove' ? 'Remove rule' : 'Change'} onClose={closeDrawer}>
+      <Drawer open={!!change() || adding() || revokingAll()} title={revokingAll() ? 'Remove all owner rules' : adding() ? 'New rule' : change()?.op === 'remove' ? 'Remove rule' : 'Change'} onClose={closeDrawer}>
+        <Show when={revokingAll()}>
+          <RevokeAllPlan onDone={closeDrawer} />
+        </Show>
         <Show when={adding() && !change()}>
           <div class="l0-chips" role="group" aria-label="Rule type">
             <For each={['shield_block', 'shield_allow'] as OwnerKind[]}>{(k) => (
@@ -212,7 +223,9 @@ const ProtectApp: Component = () => {
         <Show keyed when={change()}>{(c) => (
           <OwnerChangePlan change={c} title={c.op === 'remove' ? 'Remove this owner rule' : 'Proposed rule'} onDone={closeDrawer} />
         )}</Show>
-        <p class="pcard-note">Rules for malicious domains are refused by the device: a confirmed threat-intel or malware entry always wins over an allow.</p>
+        <Show when={!revokingAll()}>
+          <p class="pcard-note">Rules for malicious domains are refused by the device: a confirmed threat-intel or malware entry always wins over an allow.</p>
+        </Show>
       </Drawer>
     </AppShell>
   );
