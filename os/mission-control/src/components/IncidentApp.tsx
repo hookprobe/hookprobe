@@ -44,17 +44,17 @@ const NODE: Record<string, string> = { inc: 'Incident', det: 'Detection', dev: '
 /** Shown only when no device answers (preview build), under the Sample-data banner. */
 const SAMPLE = {
   id: 'INC-0142', title: 'Kitchen camera contacted a malware host', device_ip: '10.66.0.42', priority: 'HIGH', status: 'open', ts: 0,
-  why: 'The camera resolved a domain on 3 threat feeds, then tried to connect to 6 other devices. Policy allows auto-isolation of IoT devices.',
+  why: "The camera's TLS client matched a known-malicious fingerprint (JA4) on your threat-intel pack, then it tried to connect to 6 other devices. A confirmed scan lets the device isolate it on its own; the isolation ends by itself.",
   confidence: 94, evidence: 4,
   steps: [
-    { t: formatTime(CAMERA.dns), engine: 'Senzorium', title: 'Unusual DNS lookup', body: 'Kitchen camera resolved a domain it has never used before.', kind: 'flow' },
-    { t: formatTime(CAMERA.flagged), engine: 'HYDRA', title: 'Domain flagged', body: 'The domain appears on 3 threat-intel feeds as botnet command and control.', kind: 'detection' },
-    { t: formatTime(CAMERA.scan), engine: 'NAPSE', title: 'Local scanning detected', body: 'The camera tried to connect to 6 other devices on the network.', kind: 'detection' },
+    { t: formatTime(CAMERA.dns), engine: 'Senzorium', title: 'Unusual connection', body: 'Kitchen camera opened a TLS connection to a host it has never used before.', kind: 'flow' },
+    { t: formatTime(CAMERA.flagged), engine: 'HYDRA', title: 'Client flagged', body: 'Its TLS fingerprint (JA4) is on your threat-intel pack as a known-malicious client (rule 1200125).', kind: 'detection' },
+    { t: formatTime(CAMERA.scan), engine: 'NAPSE', title: 'Local scanning detected', body: 'The camera tried to connect to 6 other devices on the network (rule 1200113).', kind: 'detection' },
     { t: formatTime(CAMERA.isolated), engine: 'AEGIS', title: 'Isolated automatically', body: 'Internet and LAN access cut for 1 hour (it ends by itself). DHCP and DNS keep working.', kind: 'response' },
   ],
   plan: [
     { kind: 'changed' as const, text: 'camera: isolated for 1 h → isolated until you release it' },
-    { kind: 'added' as const, text: 'block the domain for all zones' },
+    { kind: 'added' as const, text: 'Shield: always block the name it connected to' },
     { kind: 'added' as const, text: 'notify me if it repeats' },
   ],
 };
