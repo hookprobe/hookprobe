@@ -1583,6 +1583,18 @@ pub fn fw_hash() -> u32 {
 /// call site — then the preinit + WLC_UP part of the boot bring-up (no channel scan). The caller re-runs `ap_start` +
 /// `ap_install_gtk` on its current chanspec. Blocking for ~1-2 s (pets the runtime watchdog between steps).
 /// Returns 0 = ready, else the step that failed (1 chip probe, 2 download / F2, 3 control path, 4 WLC_UP).
+/// The last firmware reload's phases, ms: radio power-on, chip probe (enumeration + clocks + chip ID), firmware upload
+/// (incl. the core reset and the wait for the firmware's ready). Diagnostic (the 4e-3a reload-time investigation).
+pub static mut RELOAD_PHASE_MS: [u64; 3] = [0; 3];
+fn ms_now() -> u64 {
+    let (v, f): (u64, u64);
+    unsafe {
+        core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack));
+        core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
+    }
+    v / (f / 1000).max(1)
+}
+
 pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
     let pet = || {
         if let Some(f) = unsafe { crate::uplink::LONG_STEP_PET } {
@@ -1613,16 +1625,21 @@ pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
     let defer_on = unsafe { (*core::ptr::addr_of!(DEFER)).on };
     set_defer(defer_on); // empties the parked-frame ring, keeps the mode
     pet();
+    let t0 = ms_now();
     let _ = radio_power_on();
+    let t1 = ms_now();
     // step 4e-2: from here to the end of the download, register operations run in el0-wifi when it is loaded
     unsafe {
         RELOAD_REG_OPS = (0, 0);
-        RELOAD_REGS_EL0 = el0().is_some();
+        // bench A/B (HEQK_RELOAD_REGS_KERNEL=1 at build time): keep the reload's register ops in EL1 to measure the cost
+        RELOAD_REGS_EL0 = el0().is_some() && option_env!("HEQK_RELOAD_REGS_KERNEL").is_none();
     }
     let probed = chip_id_probe() == Some(0x4345);
+    let t2 = ms_now();
     pet();
     let uploaded = probed && firmware_upload(nvram_scratch);
     unsafe { RELOAD_REGS_EL0 = false };
+    unsafe { RELOAD_PHASE_MS = [t1 - t0, t2 - t1, ms_now() - t2] };
     if !probed {
         return 1;
     }
