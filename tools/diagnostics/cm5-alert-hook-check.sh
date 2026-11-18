@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # cm5-alert-hook-check — owner alert webhook on metal (operator 2026-11-10; release gate DET-03).
-#   1. the bench Pi runs a tiny ntfy-style receiver on :8099 that verifies X-HQ-Signature (HMAC-SHA256 with the
-#      secret below) and logs every request;
-#   2. the owner sets the hook through Mission Control (POST /api/alert-hook, re-auth) -> the Pi, format ntfy;
-#   3. the Pi triggers a high-severity detection (rule 124: 30 SSH attempts to the bench WAN host, answered);
+#   1. this host runs a tiny ntfy-style receiver on :8099 (bound to its address on Mission Control's network: the
+#      alert leaves from Mission Control's node — with a management VLAN that node is on the management network and
+#      has no path to a Wi-Fi client) that verifies X-HQ-Signature (HMAC-SHA256 with the secret below);
+#   2. the owner sets the hook through Mission Control (POST /api/alert-hook, re-auth) -> that receiver, format ntfy;
+#   3. the bench Pi (a Wi-Fi client) triggers high-severity detections (rules 126 / 302);
 #   4. acceptance: exactly ONE signed alert reaches the receiver for that burst (storm gate), its signature
 #      verifies, /api/alert-hook counts sent >= 1; then the hook is removed (op=remove) and the receiver stopped.
 #   tools/diagnostics/cm5-alert-hook-check.sh <owner-key-file> [mc] [pi] [pi-ip]
@@ -14,16 +15,18 @@ SECRET="bench-alert-secret-$(date +%s)"
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
-J=$(mktemp); trap 'rm -f "$J"; pi "pkill -f hq-alert-rx.py" >/dev/null 2>&1' EXIT
+J=$(mktemp); RXD=$(mktemp -d); RXPID=""
+trap 'rm -f "$J"; [ -n "$RXPID" ] && kill "$RXPID" 2>/dev/null; rm -rf "$RXD"' EXIT
+MCIP=$(sed -E 's#^https?://([^/:]+).*#\1#' <<<"$MC"); RXIP=$(ip -4 route get "$MCIP" | sed -n 's/.* src \([0-9.]*\).*/\1/p')
 login() { curl -sk -o /dev/null -m 10 --data-urlencode "token=$(cat "$KEY")" "$MC/api/login" -c "$J"; }
 sess() { S=$(curl -sk -m 10 -b "$J" "$MC/api/session"); CS=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["csrf"])' "$S"); SQ=$(python3 -c 'import json,sys;print(json.loads(sys.argv[1])["next_seq"])' "$S"); }
 post() { R=$(curl -sk -m 10 -b "$J" -H "Origin: $MC" -H "X-HQ-CSRF: $CS" --data "$1&seq=$SQ" --data-urlencode "owner_key=$(cat "$KEY")" "$MC/api/alert-hook"); SQ=$((SQ + 1)); }
 "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1
 # the Pi's CURRENT address on the AP (its lease can change between boots)
 [ -n "$PIIP" ] || PIIP=$(pi "ip -4 route get 10.99.0.1 | sed -n 's/.* src \([0-9.]*\).*/\1/p'")
-echo "  receiver: $PIIP:8099"
+echo "  receiver: $RXIP:8099 (this host, on Mission Control's network); triggers from the Pi at $PIIP"
 # receiver (verifies the signature with sha256(secret) as the HMAC key, exactly as the device keys it)
-pi "cat > /tmp/hq-alert-rx.py" <<'PY'
+cat > "$RXD/rx.py" <<'PY'
 import hashlib, hmac, http.server, sys
 key = hashlib.sha256(sys.argv[1].encode()).digest()
 class H(http.server.BaseHTTPRequestHandler):
@@ -31,22 +34,27 @@ class H(http.server.BaseHTTPRequestHandler):
         body = self.rfile.read(int(self.headers.get("Content-Length", "0")))
         sig = self.headers.get("X-HQ-Signature", "")
         good = sig == "sha256=" + hmac.new(key, body, hashlib.sha256).hexdigest()
-        with open("/tmp/hq-alert-rx.log", "a") as f:
+        with open(sys.argv[3], "a") as f:
             f.write(f"{'SIGOK' if good else 'SIGBAD'} {self.path} {self.headers.get('Title','')} | {body.decode(errors='replace')}\n")
         self.send_response(200); self.send_header("Content-Length", "2"); self.end_headers(); self.wfile.write(b"ok")
     def log_message(self, *a): pass
-http.server.HTTPServer(("0.0.0.0", 8099), H).serve_forever()
+http.server.HTTPServer((sys.argv[2], 8099), H).serve_forever()
 PY
-pi "rm -f /tmp/hq-alert-rx.log; nohup python3 /tmp/hq-alert-rx.py '$SECRET' >/dev/null 2>&1 &"
+python3 -I "$RXD/rx.py" "$SECRET" "$RXIP" "$RXD/rx.log" >/dev/null 2>&1 & RXPID=$!
 sleep 2
 login; sess
-post "op=set&ip=$PIIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=low&reason=bench+alert+check&permanent=true" ; R1=$R
-post "op=set&ip=$PIIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=low&reason=bench+alert+check&permanent=true&secret=$SECRET"
+post "op=set&ip=$RXIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=low&reason=bench+alert+check&permanent=true" ; R1=$R
+post "op=set&ip=$RXIP&port=8099&format=ntfy&path=/heqk-alerts&min_severity=low&reason=bench+alert+check&permanent=true&secret=$SECRET"
 grep -q '"ok":true' <<<"$R" && grep -q 'secret' <<<"$R1"; chk $? "hook refused without a secret, accepted with one ($R)"
 curl -sk -m 10 -b "$J" "$MC/api/alert-hook" | grep -q '"configured":true'; chk $? "GET /api/alert-hook: configured"
 sleep 3
-# high-severity detection: rule 124 (answered SSH brute-force burst to the bench WAN host)
-pi "for i in \$(seq 1 30); do timeout 1 bash -c '</dev/tcp/10.100.0.1/22' 2>/dev/null; done" >/dev/null 2>&1
+# the triggers below fire once per (rule, device) per BEHAVIORAL_COOLDOWN_SECS (300 s): a check run right after
+# another that tripped them (e.g. cm5-lan-client) would see nothing new — wait out what is left of the cooldown.
+# (The old SSH-burst trigger to the bench WAN host 10.100.0.1 is gone: A-01 refuses upstream private networks.)
+last=$(curl -sk -m 10 -b "$J" "$MC/api/detections?limit=200" | python3 -c 'import json,sys
+ts=[x.get("ts",0) for x in json.load(sys.stdin).get("detections",[]) if x.get("rule_id") in (1200126,1200302) and x.get("src_ip")==sys.argv[1]]
+print(int(max(ts)) if ts else 0)' "$PIIP" 2>/dev/null)
+wait_s=$(( ${last:-0} + 310 - $(date +%s) )); [ "$wait_s" -gt 0 ] && [ "$wait_s" -le 310 ] && { echo "  waiting ${wait_s} s for the per-device detection cooldown"; sleep "$wait_s"; }
 # and a DNS bypass to a Shield-blocked name (rule 126 — repeatable: a fresh source port each time)
 ip=$(dig +short +time=3 +tries=2 @1.1.1.1 doubleclick.net A | grep -E '^[0-9.]+$' | head -1)
 [ -n "$ip" ] && pi "curl -s -o /dev/null -m 6 --resolve doubleclick.net:443:$ip https://doubleclick.net/" >/dev/null 2>&1
@@ -54,7 +62,7 @@ ip=$(dig +short +time=3 +tries=2 @1.1.1.1 doubleclick.net A | grep -E '^[0-9.]+$
 # alerts; a per-(rule, device) cooldown from an earlier run must not leave the check without a trigger
 pi "timeout 3 bash -c '</dev/tcp/203.0.113.$((RANDOM % 200 + 20))/80' 2>/dev/null" >/dev/null 2>&1
 sleep 20
-L=$(pi "cat /tmp/hq-alert-rx.log 2>/dev/null")
+L=$(cat "$RXD/rx.log" 2>/dev/null)
 echo "$L" | sed 's/^/  rx: /' | cut -c1-200
 c=$(grep -c . <<<"$L"); [ "$c" -ge 1 ]; chk $? "an alert reached the receiver ($c request(s))"
 grep -q "^SIGOK" <<<"$L" && ! grep -q "^SIGBAD" <<<"$L"; chk $? "every alert's X-HQ-Signature verifies with the owner's secret"

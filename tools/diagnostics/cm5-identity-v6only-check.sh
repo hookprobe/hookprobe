@@ -8,7 +8,9 @@
 #   tools/diagnostics/cm5-identity-v6only-check.sh <owner-key-file> [mc] [pi]          (needs PI_SUDO_FILE)
 set -u -o pipefail
 KEY="${1:?owner key file}"; MC="${2:-https://192.168.200.146}"; PI="${3:-claude@10.200.0.4}"; PS="${PI_SUDO_FILE:?PI_SUDO_FILE}"
-V6HOST=2001:db8:100::1; TLSHOST=10.100.0.1
+V6HOST=2001:db8:100::1
+# public (A-01 refuses upstream private destinations such as the bench WAN host); the JA4 comes from the ClientHello
+TLSHOST=1.1.1.1; TLSPORT=443
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 pi() { ssh -o BatchMode=yes -o ConnectTimeout=8 "$PI" "$@"; }
@@ -20,8 +22,10 @@ PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")
 SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'")
 PSK=$(psudo "nmcli -s -g 802-11-wireless-security.psk con show '$PROF'")
 up() {   # <cloned-mac> <ipv4: auto|disabled>; with IPv4, a route to the bench host scoped to this profile only
-  local r4=""; [ "$2" = auto ] && r4="ipv4.routes '10.100.0.1/32 10.99.0.1'"
+  local r4=""; [ "$2" = auto ] && r4="ipv4.routes '$TLSHOST/32 10.99.0.1'"   # never-default: a host route for the TLS target only
   psudo "nmcli con delete hq-idtest" >/dev/null 2>&1
+  # the claims harness drives wlan1 with its own supplicant (unmanaged); make sure NetworkManager owns it again
+  psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; sleep 2
   psudo "nmcli con add type wifi ifname wlan1 con-name hq-idtest ssid '$SSID' wifi-sec.key-mgmt wpa-psk wifi-sec.psk '$PSK' wifi.cloned-mac-address $1 ipv4.method $2 ipv4.never-default yes $r4 ipv6.method auto connection.autoconnect no" >/dev/null 2>&1
   psudo "timeout 70 nmcli -w 60 con up hq-idtest" >/dev/null 2>&1
 }
@@ -34,7 +38,7 @@ for _ in $(seq 1 15); do A6=$(pi "ip -6 -o addr show wlan1 scope global | awk '{
 echo "  wlan1 ($MV6): IPv4 addresses $A4, IPv6 $A6"
 [ "$A4" = 0 ] && [ -n "$A6" ]; chk $? "wlan1 is IPv6-only on the AP (no IPv4 lease, a global IPv6 address)"
 # bound to wlan1 (wlan0 is on the same AP with its own routes and lease: unbound attempts would be ITS traffic)
-pi "for i in \$(seq 1 30); do curl -s -m 1 --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') telnet://[$V6HOST]:22 </dev/null >/dev/null 2>&1; done; true"
+pi "for i in \$(seq 1 30); do curl -s -m 1 --interface wlan1 telnet://[$V6HOST]:22 </dev/null >/dev/null 2>&1; done; true"
 sleep 3
 D=$(api "/api/detections?limit=200")
 grep -q "\"rule_id\":1200124[^}]*\"src_device\":\"$MV6\",\"src_ipv6_only\":true" <<<"$D"; chk $? "G36: rule 124 over IPv6 from the IPv6-only device, attributed to its MAC (src_device, src_ipv6_only)"
@@ -42,7 +46,7 @@ down
 # ---- G32: private-MAC rotation A -> B with the same TLS stacks
 hellos() {   # three distinct TLS client stacks from wlan1 (JA4 differs by ALPN / max version); the ClientHello is
              # fingerprinted even though the bench host's sshd answers it
-  pi "for o in '' '--http1.1' '--tls-max 1.2'; do timeout 4 curl -sk --interface \$(ip -4 -o addr | awk '\$4 ~ /^10\\.99\\.0\\./ {print \$2; exit}') \$o --resolve example.net:22:$TLSHOST https://example.net:22/ >/dev/null 2>&1; done; true"
+  pi "for o in '' '--http1.1' '--tls-max 1.2'; do timeout 4 curl -sk --interface wlan1 \$o --resolve example.net:$TLSPORT:$TLSHOST https://example.net:$TLSPORT/ >/dev/null 2>&1; done; true"
 }
 MA=02:6c:00:00:32:0a; MB=02:6c:00:00:32:0b
 up $MA auto; sleep 3; hellos; hellos; down
