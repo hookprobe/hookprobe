@@ -67,8 +67,9 @@ Check here before starting anything. One owner per file set.
 | Sealed evidence export (HQX3) + ADR 0066 | session "Hookprobe isolated branch setup" | `feat/sealed-evidence-export` | `onboarding/enrollment/evidence-export/`, `docs/adr/0066-sealed-evidence-export.md` | committed locally, not merged |
 | Mission Control explainability (Dig deeper drawer, Case card, QSecBit band, Shield audit) | session "Hookprobe isolated branch setup" | `feat/mc-explainability` (main checkout, 6 commits, local) | `os/mission-control/src/store/{explain,qsecbitLive}.ts`, `src/components/{DigDeeper,IncidentExplain,QsecbitBand,Drawer,IncidentApp,MissionControlApp,ShieldApp}.tsx`, `src/styles/pro.css` (end block), `src/store/{mock,live}.ts`, `src/components/{AppRail,App,TopBar}.tsx`, `src/styles/{global,layer0}.css` (appended lines), `package.json`, `tests/unit/`, `docs/adr/notes/2026-11-17-mc-explainability-payload.md` | committed locally, not merged |
 | Engineering audit + backlog | this agent | `agent/engineering-audit` | `docs/autonomous-agent/**` | merged (#1269) |
-| AB-11 Remove all owner rules | this agent | `agent/mc-revoke-all` | `src/components/{ProtectApp,RevokeAllPlan}.tsx`, `src/store/ownerRules.ts`, `tests/ui/specs/revoke-all.mjs` | pushed, PR #1281 (draft) |
-| AB-06 package.json description | this agent | `agent/mc-pkg-description` | `os/mission-control/package.json` | pushed, PR #1280 (draft) |
+| AB-12 notBuilt gate | this agent | `agent/mc-intel-honest` | `src/components/{Gate,GetOnlineApp,ProtectApp}.tsx`, `tests/ui/specs/gate-not-built.mjs` | pushed, draft PR |
+| AB-11 Remove all owner rules | this agent | `agent/mc-revoke-all` | `src/components/{ProtectApp,RevokeAllPlan}.tsx`, `src/store/ownerRules.ts`, `tests/ui/specs/revoke-all.mjs` | merged (#1281) |
+| AB-06 package.json description | this agent | `agent/mc-pkg-description` | `os/mission-control/package.json` | merged (#1280) |
 | AB-17 docs corrections | this agent | `agent/docs-ab17` | `docs/design/{heqk-parity-gaps,mission-control-ui-requirements}.md`, `os/provisioning/README.md`, `tools/{flash,provisioning}/README.md`, `appliance/waveshare-dual-eth/README.md` | merged (#1279) |
 | AB-05 Copilot AI-models link | this agent | `agent/mc-honest-states` | `src/components/{CommandPalette,AdministrationApp}.tsx`, `tests/ui/specs/pro-workspace-admin.mjs` | merged (#1268) |
 
