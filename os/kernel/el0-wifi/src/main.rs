@@ -198,6 +198,7 @@ fn bp_reg() -> ! {
         REG_CMD52_W => bus.cmd52(true, f as u32, addr, val as u8).map_or((false, 0), |b| (true, b as u32)),
         REG_BP_R32 => (true, bus.bp_r32(addr)),
         REG_BP_W32 => (bus.bp_w32(addr, val), 0),
+        REG_CMD => bus.cmd((val & 0xffff) as u16, addr, (val >> 16) as u16, f & 1 != 0, f & 2 != 0).map_or((false, 0), |r| (true, r)),
         _ => (bus.set_backplane_window(addr), 0),
     };
     let mut o = [0u8; 8];
