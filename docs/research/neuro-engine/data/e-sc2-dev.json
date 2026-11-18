@@ -1,0 +1,142 @@
+{
+ "split": "dev",
+ "scenarios": [
+  [
+   "Somfy-01",
+   "dev",
+   130,
+   0,
+   2
+  ],
+  [
+   "CTU-IoT-Malware-Capture-1-1",
+   "dev",
+   1008748,
+   112,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-3-1",
+   "dev",
+   156103,
+   37,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-42-1",
+   "dev",
+   4426,
+   1,
+   8
+  ],
+  [
+   "CTU-IoT-Malware-Capture-44-1",
+   "dev",
+   237,
+   2,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-48-1",
+   "dev",
+   1500000,
+   5,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-49-1",
+   "dev",
+   1500000,
+   3,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-52-1",
+   "dev",
+   1500000,
+   2,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-60-1",
+   "dev",
+   1500000,
+   11,
+   11
+  ],
+  [
+   "CTU-IoT-Malware-Capture-7-1",
+   "dev",
+   1500000,
+   3,
+   0
+  ]
+ ],
+ "windows": 40,
+ "rows": [
+  {
+   "budget": 256,
+   "incidents": 58,
+   "identity_recall": 0.9482758620689655,
+   "evidence_recall": 0.7413793103448276,
+   "benign_windows": 6,
+   "flagged_cards_per_benign_window": 1.3333333333333333
+  },
+  {
+   "budget": 512,
+   "incidents": 58,
+   "identity_recall": 0.9482758620689655,
+   "evidence_recall": 0.7413793103448276,
+   "benign_windows": 6,
+   "flagged_cards_per_benign_window": 1.3333333333333333
+  },
+  {
+   "budget": 1024,
+   "incidents": 58,
+   "identity_recall": 0.9482758620689655,
+   "evidence_recall": 0.7413793103448276,
+   "benign_windows": 6,
+   "flagged_cards_per_benign_window": 1.3333333333333333
+  },
+  {
+   "budget": 2048,
+   "incidents": 58,
+   "identity_recall": 0.9482758620689655,
+   "evidence_recall": 0.7413793103448276,
+   "benign_windows": 6,
+   "flagged_cards_per_benign_window": 1.3333333333333333
+  }
+ ],
+ "per_family_512": {
+  "scan": {
+   "incidents": 22,
+   "identity": 22,
+   "evidence": 22
+  },
+  "flood": {
+   "incidents": 16,
+   "identity": 14,
+   "evidence": 14
+  },
+  "c2": {
+   "incidents": 7,
+   "identity": 7,
+   "evidence": 0
+  },
+  "download": {
+   "incidents": 5,
+   "identity": 4,
+   "evidence": 4
+  },
+  "heartbeat": {
+   "incidents": 5,
+   "identity": 5,
+   "evidence": 0
+  },
+  "malware": {
+   "incidents": 3,
+   "identity": 3,
+   "evidence": 3
+  }
+ }
+}
