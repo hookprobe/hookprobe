@@ -122,7 +122,13 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
         Some(c) => w.string(c.text()),
         None => w.raw("null"),
     }
-    let _ = write!(w, "}},\"now_ms\":{},\"recoveries\":[", now_ms());
+    // H2: the supervisor table (fixed in the signed image) — who may escalate to a reboot, and each restart policy
+    w.raw("},\"supervised\":[");
+    for (i, e) in hal::superv::TABLE.iter().enumerate() {
+        let _ = write!(w, "{}{{\"component\":\"{}\",\"critical\":{},\"exhausted\":\"{}\",\"grace\":{},\"backoff_ms\":{},\"backoff_max_ms\":{}}}",
+            if i > 0 { "," } else { "" }, e.name, e.critical, e.exhausted.name(), e.grace, e.backoff_ms, e.backoff_max_ms);
+    }
+    let _ = write!(w, "],\"now_ms\":{},\"recoveries\":[", now_ms());
     for (i, r) in jj.newest_first().take(limit).enumerate() {
         let _ = write!(w, "{}{{\"seq\":{},\"component\":\"{}\",\"kind\":\"{}\",\"rung\":\"{}\",\"outcome\":\"{}\",\"repeats\":{},\"t_detect_ms\":{},",
             if i > 0 { "," } else { "" }, r.seq, component_name(r.component), r.kind.name(), r.rung.name(), r.outcome.name(), r.repeats, r.t_detect_ms);
@@ -134,6 +140,47 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
         }
     }
     w.raw("]}");
+}
+
+/// Brackets and braces balance outside string literals, and the document is one object.
+#[cfg(feature = "netsvc")]
+fn json_balanced(b: &[u8]) -> bool {
+    let (mut depth, mut in_str, mut esc, mut closed) = (0i32, false, false, false);
+    let mut stack = [0u8; 16];
+    for &c in b {
+        if closed {
+            return false; // bytes after the document
+        }
+        if in_str {
+            if esc {
+                esc = false;
+            } else if c == b'\\' {
+                esc = true;
+            } else if c == b'"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            b'"' => in_str = true,
+            b'{' | b'[' => {
+                if depth as usize >= stack.len() {
+                    return false;
+                }
+                stack[depth as usize] = c;
+                depth += 1;
+            }
+            b'}' | b']' => {
+                depth -= 1;
+                if depth < 0 || stack[depth as usize] != if c == b'}' { b'{' } else { b'[' } {
+                    return false;
+                }
+                closed = depth == 0;
+            }
+            _ => {}
+        }
+    }
+    closed && !in_str
 }
 
 /// [P-superv] (QEMU): the journal is fed by the real paths — a Wi-Fi ladder kick → bounce → healthy yields one
@@ -164,11 +211,41 @@ pub fn selftest() -> bool {
         && jj.by_kind[Kind::Budget as usize] == 1
         && jj.by_outcome[Outcome::Recovered as usize] == 2;
     let unknown = component_id("no-such-server") == component_id("other");
+    // H2: the table policy — only the Wi-Fi link is critical; a server that faults on every call is held off (capped)
+    let t = hal::superv::entry("el0-tlshost");
+    let table = hal::superv::TABLE.iter().filter(|e| e.critical).count() == 1
+        && hal::superv::entry("wifi").is_some_and(|e| e.critical && e.exhausted == hal::superv::Exhausted::RebootOnce)
+        && hal::superv::TABLE.iter().all(|e| e.critical || e.exhausted != hal::superv::Exhausted::RebootOnce);
+    let policy = t.is_some_and(|e| {
+        let mut s = hal::superv::Sup::new(e);
+        let one_off = s.fault(1_000) == 0 && s.ready(1_000);
+        let held = s.fault(1_000) == 50 && !s.ready(1_049) && s.ready(1_050);
+        let mut n = 0u32;
+        let mut now = 2_000u64;
+        while now < 62_000 {
+            if s.ready(now) {
+                s.fault(now);
+                n += 1;
+            }
+            now += 10;
+        }
+        one_off && held && n < 25 && s.ok() && s.fault(70_000) == 0
+    });
+    // the API document, rendered from the journal the test just filled: well-formed (brackets balance outside strings)
+    #[cfg(feature = "netsvc")]
+    let doc = {
+        static mut DOC: [u8; 8192] = [0; 8192];
+        let mut w = crate::mcstate::JsonBuf::new(unsafe { &mut *core::ptr::addr_of_mut!(DOC) });
+        render(&mut w, 64);
+        json_balanced(w.bytes()) && !w.overflow && w.bytes().ends_with(b"]}")
+    };
+    #[cfg(not(feature = "netsvc"))]
+    let doc = true;
     *j() = saved;
-    let ok = ladder && degrade && again && fault && unknown;
+    let ok = ladder && degrade && again && fault && unknown && table && policy && doc;
     arch_aarch64::_print(format_args!(
-        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={}\n",
-        if ok { "PASS" } else { "FAIL" }, ladder, degrade, again, fault, unknown
+        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={} | H2 supervisor table: only the Wi-Fi link is critical, no other entry may reboot={} a one-off server fault restarts at once, consecutive faults are held off (50 ms doubling, capped 5 s: < 25 restarts in 60 s of constant faulting), a good call resets it={} /api/recoveries renders well-formed={}\n",
+        if ok { "PASS" } else { "FAIL" }, ladder, degrade, again, fault, unknown, table, policy, doc
     ));
     ok
 }
