@@ -130,6 +130,29 @@ path. Nothing is marked done on QEMU alone where metal applies.
 **Order:** H1 → H2 → H3 → H4 → H5 → H6 (the acceptance gate for H1–H5) → H7 alongside. H1 and H2 are the foundation;
 H6 is what lets us claim the harness works.
 
-The second research pass (Fuchsia, Zephyr, ARINC 653, AUTOSAR WdgM / PHM, IEC 61508 / ISO 26262, seL4 MCS) is running;
-its findings will be added here as Wave 2c and folded into H2–H5 (expected: logical / program-flow supervision and
-deadline supervision from AUTOSAR WdgM, the error-level hierarchy and warm vs cold restart from ARINC 653).
+## Wave 2c — second research pass (2026-11-18)
+
+The second pass targeted Fuchsia, Zephyr, ARINC 653, AUTOSAR WdgM / PHM, IEC 61508 / ISO 26262 and seL4 MCS. Its claims
+were checked against primary sources (22 sources, 101 claims extracted, 25 verified by 3-vote adversarial review, 22
+confirmed). **Only Fuchsia and Zephyr survived verification.** No claim was confirmed for ARINC 653 health monitoring,
+AUTOSAR WdgM / PHM, the IEC 61508 / ISO 26262 diagnostic-coverage tables or seL4 MCS. Those stay **open research**, and
+nothing in H2–H5 may cite them as support until a later pass confirms it.
+
+What was confirmed, and what it changes:
+
+| # | Finding (source) | Folded into |
+|---|---|---|
+| C1 | "Fatal to system" is a per-component, policy-gated property: Fuchsia `on_terminate: reboot` defaults to none, works only for monikers on a security-policy allowlist, and is checked a second time at build time (RFC-0110, termination_policies.md) | **H2**: the supervisor table carries a `critical` flag fixed in the signed image; only critical entries may escalate straight to the reboot rung. Everything else stops at degrade |
+| C2 | Reboot happens in two stages: an orderly Admin/Reboot (topology torn down in reverse dependency order) with a bounded wait, then panic / watchdog (RFC-0110, RFC-0152) | **H3**: the reboot rung is "flush crash record + journal, then reset" under a deadline; the hardware watchdog forces the reset if the deadline passes |
+| C3 | Driver restart is opt-in (`host_restart_on_crash`, default false); without it the failed node is removed and the system runs degraded. A driver dropping its Node channel counts as a failure (DFv2 driver_runner.md) | **H2**: each entry states its default (`restart` or `remove-and-degrade`) and its restart unit. **H4**: an *abandoned endpoint* (a server that stops answering its protocol without faulting) is its own failure kind |
+| C4 | The restart owner tears the crashed instance down completely before the new one starts (driver_manager waits on DestroyChild, March 2026; medium confidence) | **H2** invariant, already true for `el0srv` (restore + ring wipe before the next call). Made explicit: the journal entry records `t_teardown` separately from `t_recovered` |
+| C5 | Reboot reasons are recorded as reason + culprit and exposed over an API and telemetry; some reasons are generic with no culprit (why_fuchsia_devices_reboot.md) | **H1** follow-up: the persisted record and the boot replay carry the culprit component and kind (the Wi-Fi record already does); `/api/recoveries` shows the last boot's reason |
+| C6 | Zephyr `task_wdt`: one channel per supervised thread, each with its own period and expiry action; a hardware watchdog backs it in case the task watchdog or the scheduler fails | **H4/H5**: per-server alive supervision (a liveness period for each resident server, not only per-call budgets), with the existing hardware watchdog as the fallback tier |
+| C7 | Zephyr fatal-error policy is a single hook owned by the integrator: abort the faulting thread (contained) or halt (kernel panic means reset) | Already matches heqk: an EL0 fault is contained, an EL1 fault goes through the crash record + reset. No change |
+
+Still unsupported, and the questions for a third, targeted pass: the AUTOSAR WdgM logical-supervision graph (checkpoints,
+transitions, failed-reference-cycle tolerance, local and global status), ARINC 653 warm vs cold partition restart and the
+process / partition / module error levels, the diagnostic coverage IEC 61508-2 Table A.10 and ISO 26262-5 Annex D give
+a simple vs windowed vs independent-time-base watchdog, and seL4 MCS scheduling contexts with timeout fault handlers
+(for H5). Until then, H5 (per-window CPU budget) is designed from the heqk excursion model and the first pass's QNX APS
+finding only.

@@ -12,7 +12,7 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-AB-09 and AB-10 (Investigate empty states) on `agent/mc-investigate-honest`, draft PR. #1298 (AB-12) merged before its CI finished.
+Fix for the `investigate-honest` UI spec (g3 red on `main` since #1299) on `agent/mc-investigate-spec-fix`, draft PR.
 
 ## Delivery ledger
 
@@ -26,6 +26,7 @@ AB-09 and AB-10 (Investigate empty states) on `agent/mc-investigate-honest`, dra
 
 | AB-12 controls with no screen stay greyed | `agent/mc-intel-honest` | yes | astro check 0 errors; build 27 pages; browser against a mock device granting `multi_wan`, `guest_ssid`, `openvswitch`: all three greyed, inert, with the reason; new spec `gate-not-built` not run locally | running at merge | yes | [#1298](https://github.com/hookprobe/hookprobe/pull/1298) | yes (2026-11-18) |
 | AB-09/10 Investigate: process tree and reports cap | `agent/mc-investigate-honest` | yes | astro check 0 errors; build 27 pages; **no browser check** (this shell can no longer reach a local mock server); new spec `investigate-honest` not run locally | pending | yes | [#1299](https://github.com/hookprobe/hookprobe/pull/1299) draft | no |
+| HookProbe logo in Mission Control (rails + favicon) | `agent/mc-brand-logo` | yes | astro check 0 errors; build 27 pages; browser: mark renders in the rail (22 px, theme colour), favicon is the mark | pending | yes | draft | no |
 
 AB-07 needed no change: the CVE tab has said "This device does not report software exposure yet" since `47a2ad85` (2026-11-10). The audit finding was wrong.
 
@@ -55,6 +56,6 @@ operation are listed in the journal (scheduled task in the desktop app, or a clo
 
 ## Next autonomous actions
 
-1. Read CI on #1298 (merged early) and the AB-09/10 PR; g3 is the first run of `investigate-honest`.
+1. Read g3 on the spec-fix PR; until it merges, g3 on `main` fails on `investigate-honest`.
 2. AB-02: rewrite getting-started as the real path (factory-provisioned unit, owner card).
 3. AB-16: docs outside `docs/adr/` that contradict ADR 0047.

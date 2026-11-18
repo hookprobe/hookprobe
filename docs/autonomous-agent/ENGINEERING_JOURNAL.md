@@ -2,6 +2,14 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+## 2026-11-18 — Session 2 (cont.): the real logo
+
+- Operator: "the logo here is the logo". Both rails showed a placeholder glyph ("◣◢") and the favicon was
+  a generic green circle. The mark is the hexagon symbol between "HOOK" and "PROBE" in
+  `assets/hookprobe-logo.svg`. New `LogoMark.tsx` draws it inline in `currentColor` (viewBox
+  `1128 25 580 620` in the path's own coordinates); `public/favicon.svg` is the white mark on the
+  existing dark tile. The design canvas uses near-black copies (TopBar wordmark, ProRail mark).
+
 ## 2026-11-18 — Session 2 (cont.): AB-09 and AB-10
 
 - #1298 merged with 13 checks still running; its CI result is recorded when it finishes.
