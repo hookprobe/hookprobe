@@ -1603,12 +1603,6 @@ pub fn fw_hash() -> u32 {
     h
 }
 
-/// Firmware RELOAD (audit A7 self-heal, the step after a BSS bounce or on a firmware halt): forget every host-side
-/// SDPCM / AP state the old firmware owned, pulse WL_ON, re-enumerate SDIO, download the SAME image through
-/// [`firmware_upload`] — which re-applies the REL-08 correction (`wifi-pmkid-fix`) exactly as at boot, from the same
-/// call site — then the preinit + WLC_UP part of the boot bring-up (no channel scan). The caller re-runs `ap_start` +
-/// `ap_install_gtk` on its current chanspec. Blocking for ~1-2 s (pets the runtime watchdog between steps).
-/// Returns 0 = ready, else the step that failed (1 chip probe, 2 download / F2, 3 control path, 4 WLC_UP).
 /// The last firmware reload's phases, ms: radio power-on, chip probe (enumeration + clocks + chip ID), firmware upload
 /// (incl. the core reset and the wait for the firmware's ready). Diagnostic (the 4e-3a reload-time investigation).
 pub static mut RELOAD_PHASE_MS: [u64; 3] = [0; 3];
@@ -1621,6 +1615,12 @@ fn ms_now() -> u64 {
     v / (f / 1000).max(1)
 }
 
+/// Firmware RELOAD (audit A7 self-heal, the step after a BSS bounce or on a firmware halt): forget every host-side
+/// SDPCM / AP state the old firmware owned, pulse WL_ON, re-enumerate SDIO, download the SAME image through
+/// [`firmware_upload`] — which re-applies the REL-08 correction (`wifi-pmkid-fix`) exactly as at boot, from the same
+/// call site — then the preinit + WLC_UP part of the boot bring-up (no channel scan). The caller re-runs `ap_start` +
+/// `ap_install_gtk` on its current chanspec. Blocking for ~1-2 s (pets the runtime watchdog between steps).
+/// Returns 0 = ready, else the step that failed (1 chip probe, 2 download / F2, 3 control path, 4 WLC_UP).
 pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
     let pet = || {
         if let Some(f) = unsafe { crate::uplink::LONG_STEP_PET } {
@@ -5019,9 +5019,10 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
     // "authorize" iovar is tried only if the ioctl is refused (each dcmd can discard queued data frames).
     let (ok, st) = bcdc_dcmd(WLC_SCB_AUTHORIZE, BCDC_SET, &d.sta, &mut []);
     auth.authorized = ok;
-    // the iovar only when the firmware REFUSED the ioctl (a BCDC error status); a reply that did not come in time
-    // (status 0) is a late reply to a request the firmware applies — a second wait would only lengthen the loop gap
-    if !ok && st != 0 {
+    // the iovar when the firmware REFUSED the ioctl (a BCDC error status) or never got it (R7: no credit / the write
+    // failed); a reply that did not come in time (status 0, sent) is a late reply to a request the firmware applies —
+    // a second wait would only lengthen the loop gap
+    if !ok && (st != 0 || unsafe { DCMD_NOT_SENT }) {
         let mut ab = [0u8; 32];
         let na = iovar_buf(b"authorize", &d.sta, &mut ab);
         auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
@@ -6917,7 +6918,11 @@ fn bcdc_iovar_get(name: &[u8], out: &mut [u8]) -> bool {
 /// on tx credit, sends via CMD53 F2, then polls the SDIO-core intstatus frame-ind bit,
 /// does the 64-B first read + remainder, validates the header, advances tx_max from the
 /// reply's SW window byte, and copies the reply body (after doffset+16) into `reply`.
+/// R7 (code review 2026-11-18): the last `bcdc_dcmd` never reached the firmware (no TX credit, or the control write
+/// failed) — as opposed to a request the firmware got but answered late. Both return (false, 0).
+static mut DCMD_NOT_SENT: bool = false;
 fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u32) {
+    unsafe { DCMD_NOT_SENT = false };
     let reqid = unsafe {
         BCDC_REQID = BCDC_REQID.wrapping_add(1);
         BCDC_REQID
@@ -6942,6 +6947,7 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
         if want_diag {
             unsafe { BCDC_DIAG[2] = cred as u32; }
         }
+        unsafe { DCMD_NOT_SENT = true };
         return (false, 0);
     }
     let seq = unsafe { TX_SEQ };
@@ -6987,7 +6993,10 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
         }
     }
     if !tx_ok {
-        unsafe { CTL_CUR_OK = 2 };
+        unsafe {
+            CTL_CUR_OK = 2;
+            DCMD_NOT_SENT = true;
+        }
         return (false, 0);
     }
     // --- RX DEMUX: the firmware interleaves channel-1 EVENT frames and channel-2 DATA
