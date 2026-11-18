@@ -9,6 +9,7 @@ import { qsecbit, qsecbitShown, qsecbitGauge, heartbeatShown, deployMode, substr
 import { degraded } from '../store/health';
 import { setProView } from '../store/layer';
 import Icon from './Icon';
+import LogoMark from './LogoMark';
 
 interface Item { label: string; href: string; icon: string; match: string[]; linkedOnly?: boolean }
 
@@ -44,7 +45,7 @@ const AppRail: Component<{ path: string }> = (props) => {
   return (
     <nav class="shell-rail shell-rail--pro" aria-label="Workspaces">
       <a href="/mission" class="shell-rail-brand">
-        <span class="shell-rail-mark" aria-hidden="true">◣◢</span>
+        <LogoMark class="shell-rail-mark" />
         <span class="shell-rail-label shell-rail-name">HOOK<em>PROBE</em> OS</span>
       </a>
       <div class="shell-rail-items">
