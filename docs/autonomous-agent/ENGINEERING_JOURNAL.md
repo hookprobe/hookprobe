@@ -2,6 +2,22 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+## 2026-11-18 — Session 2 (cont.): AB-06 and AB-11
+
+- **AB-06** (#1280): `package.json` description says heqk serves the UI. One line; `release_check.py` passes.
+- **AB-11**: Protect → Rules gains "Remove all owner rules…". Contract read from `ownerapi.rs`
+  (read-only): `POST /api/owner-rules/revoke-all`, `op=revoke_all`, reason ≥ 3, `dry_run=1` preview,
+  then `permanent=true` + `owner_key`. One `OP_CLEAR` journal record zeroes every owner rule and clears
+  the LAN-access exception table (`ownerjournal.rs:376`); signed baseline and management floor stay.
+  The UI previews with the device's dry run, lists what it reports (rules + LAN-access count), asks for
+  reason + device password in the destructive Approve sheet, and says "verified" only when
+  `/api/owner-rules` and `/api/lan-access` read back empty.
+- Evidence: `astro check` 0 errors; `astro build` 27 pages; full flow driven in the in-app browser
+  against a local mock device (Python, test data only): dry run → approve → "Applied and verified",
+  table empty, button disabled; the mock recorded exactly the two expected POSTs. New Playwright spec
+  `revoke-all.mjs` is not run locally (no Playwright here); CI g3 runs it.
+- Lesson from #1278/#1279: status updates now ride in the PR for the work they describe.
+
 ## 2026-11-18 — Session 2: AB-17 docs corrections
 
 - #1268 and #1269 were merged by the operator on 2026-11-17. `main` @ `1a4f2b11` also carries the
