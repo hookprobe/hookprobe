@@ -5,5 +5,5 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Real-browser leg of tools/mc-e2e.sh: loads Mission Control FROM the heqk device and asserts live (not mock) data.",
-  "devDependencies": { "playwright": "1.65.0" }
+  "devDependencies": { "playwright": "1.65.1" }
 }
