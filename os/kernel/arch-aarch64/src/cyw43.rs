@@ -231,8 +231,13 @@ fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<
 /// [`fw_reload`]; never on the data path. (register ops in el0-wifi, ops this reload did in-kernel)
 static mut RELOAD_REGS_EL0: bool = false;
 pub static mut RELOAD_REG_OPS: (u64, u64) = (0, 0);
+/// R1 (code review 2026-11-18): set while the kernel recovers the SDIO host after a bus-server fault — that recovery
+/// must run in EL1. During a reload every SDHCI access (`KMmio` -> `r8..w32`) routes to el0-wifi, so without this the
+/// recovery would call back into the very server that just faulted, before it is reset (re-entrant; a second fault
+/// would recurse without bound).
+static mut RECOVERING: bool = false;
 fn el0_reg(op: u8, fnum: u32, addr: u32, val: u32) -> Option<(bool, u32)> {
-    if !unsafe { RELOAD_REGS_EL0 } {
+    if !unsafe { RELOAD_REGS_EL0 } || unsafe { RECOVERING } {
         return None;
     }
     let r = el0().and_then(|h| (h.bp_reg)(op, fnum as u8, addr, val));
@@ -922,7 +927,7 @@ fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
 fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
     // ADR 0065 step 4e: with el0-wifi loaded (a heal reload, a live re-bring-up), the download's bus writes run in the
     // server, slice by slice; with no server (first boot, before it loads) they run here
-    if let Some(h) = el0() {
+    if let Some(h) = el0().filter(|_| !unsafe { RECOVERING }) {
         let mut off = 0usize;
         while off < data.len() {
             let n = (data.len() - off).min(hal::wifisrvabi::BP_WRITE_MAX);
@@ -2082,7 +2087,10 @@ pub fn sdpcm_frame_pending() -> bool {
 /// a transfer in flight (`hal::sdio::Bus::recover_abandoned`). (recovered, not-cleared) counts for the beat.
 pub static mut BUS_RECOVER: (u32, u32) = (0, 0);
 pub fn bus_recover_after_el0_fault() -> u8 {
+    // R1: always in EL1 — never through the server that just faulted
+    unsafe { RECOVERING = true };
     let r = bus().recover_abandoned();
+    unsafe { RECOVERING = false };
     unsafe {
         match r {
             1 => BUS_RECOVER.0 += 1,
