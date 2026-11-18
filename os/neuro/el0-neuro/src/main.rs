@@ -78,9 +78,9 @@ fn le16(b: &[u8]) -> u16 {
 fn le32(b: &[u8]) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
 }
-fn le64(b: &[u8]) -> u64 {
+fn le48(b: &[u8]) -> u64 {
     let mut a = [0u8; 8];
-    a.copy_from_slice(&b[..8]);
+    a[..6].copy_from_slice(&b[..6]);
     u64::from_le_bytes(a)
 }
 fn sat16(v: i64) -> u16 {
@@ -97,11 +97,12 @@ fn events(e: &mut Engine, inb: &[u8]) -> u32 {
         }
         e.slot(dev);
         let fp = le32(&rec[4..]);
-        let bytes = le64(&rec[8..]);
+        let bytes = le48(&rec[8..]);
+        let conns = le16(&rec[14..]) as u64;
         let (mem, agg) = (&e.dna[dev], &mut e.agg[dev]);
         match kind {
-            EV_FLOW => agg.add_flow(mem, Some(fp), bytes, 1),
-            EV_VOLUME => agg.add_flow(mem, None, bytes, 1),
+            EV_FLOW => agg.add_flow(mem, Some(fp), bytes, conns),
+            EV_VOLUME => agg.add_flow(mem, None, bytes, conns),
             EV_DNS => agg.add_dns(mem, fp, flags & 1 == 1),
             _ => {
                 bad = true;
@@ -192,6 +193,7 @@ pub extern "C" fn _start() -> ! {
             o[6..8].copy_from_slice(&1u16.to_le_bytes());
             exit(ST_OK, 8)
         }
+        CMD_SELFTEST_FAULT => panic!("requested fault"),
         _ => exit(ST_BAD_CMD, 0),
     }
 }
