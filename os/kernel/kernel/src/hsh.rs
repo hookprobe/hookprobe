@@ -623,13 +623,13 @@ fn selftest_inner(now_ms: u64) -> bool {
     let abi = abi && cfg_refused && chal && retired;
     // fault containment: a deliberate EL0 fault resets the shell, counted; the next command answers
     let (_, _, f0, r0) = stats();
-    let faulted = el0::server().is_some_and(|s| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0 == hal::hshabi::ST_PANIC);
+    let faulted = el0::server().is_some_and(|s| crate::superv::deliberate(|| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0) == hal::hshabi::ST_PANIC);
     let (_, _, f1, r1) = stats();
     let contained = faulted && f1 == f0 + 1 && r1 == r0 + 1 && has(&run(b"version", v), b"HEQK ");
     // H2 (the supervisor table's policy on a real server): two faults in a row -> the shell is held off — the next call
     // is refused WITHOUT an excursion (no new fault, no restart) — and answers again once the 50 ms hold-off is over
     let held = {
-        let fault = |s: &mut el0::Server| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0 == hal::hshabi::ST_PANIC;
+        let fault = |s: &mut el0::Server| crate::superv::deliberate(|| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0) == hal::hshabi::ST_PANIC;
         let two = el0::server().is_some_and(|s| fault(s) && fault(s));
         let (_, _, f2, r2) = stats();
         let refused = el0::server().is_some_and(|s| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0 == hal::hshabi::ST_PANIC);
