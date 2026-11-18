@@ -15049,8 +15049,9 @@ impl wifiheal::Port for MetalHeal<'_> {
         let t2 = now();
         clear_station_v6_state(); // a reloaded radio has no stations: drop their IPv6 state too
         let (rg_el0, rg_k) = unsafe { arch_aarch64::cyw43::RELOAD_REG_OPS };
-        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={} | firmware reload {} ms (download bytes written by el0-wifi: {}; register ops in el0-wifi: {}, in-kernel: {}) + BSS start {} ms\n",
-            r, arch_aarch64::cyw43::pmkid_patch(), ok, ms(t0, t1), bp().wrapping_sub(b0), rg_el0, rg_k, ms(t1, t2));
+        kprint!(" [WIFI-HEAL] firmware reload: bring-up step {} (0 = ready), PMKID correction {:?}, BSS serve-ready={} | firmware reload {} ms (download bytes written by el0-wifi: {}; register ops in el0-wifi: {}, in-kernel: {}; power {} + probe {} + upload {} ms) + BSS start {} ms\n",
+            r, arch_aarch64::cyw43::pmkid_patch(), ok, ms(t0, t1), bp().wrapping_sub(b0), rg_el0, rg_k,
+            unsafe { arch_aarch64::cyw43::RELOAD_PHASE_MS[0] }, unsafe { arch_aarch64::cyw43::RELOAD_PHASE_MS[1] }, unsafe { arch_aarch64::cyw43::RELOAD_PHASE_MS[2] }, ms(t1, t2));
         ok
     }
     fn reboot(&mut self, d: &wifiheal::Diag) {
