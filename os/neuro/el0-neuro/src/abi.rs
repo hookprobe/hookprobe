@@ -14,6 +14,7 @@
 //! Engine state lives in the server's own .bss, so the kernel must keep the server's data pages across
 //! excursions (as it does for el0-wpa's state pages). A reset or fault loses the memory; the DNA relearns
 //! (cold start, Phase 0b).
+#![allow(dead_code)] // the kernel side (not yet written) uses the constants this server does not
 
 pub const BASE_QEMU: usize = 0xBE00_0000; // PROPOSED
 pub const BASE_CM5: usize = 0x1_4026_0000; // PROPOSED: in the free gap 0x1_4025_4000..0x1_4030_0000
