@@ -58,10 +58,13 @@ impl Table {
     pub const fn new() -> Self {
         Table { e: [Exception { device: None, dst: Prefix { addr: Addr { v6: false, a: [0; 16] }, len: 0 }, ports: (0, 0), expires_ms: 0 }; EXC_MAX], n: 0 }
     }
-    /// Add (or replace an identical scope); false when full.
+    /// Add (or replace an identical scope); false when full. A temporary grant never downgrades an always exception of
+    /// the same scope (R3, code review 2026-11-18: it used to give the always one an expiry).
     pub fn add(&mut self, x: Exception) -> bool {
         if let Some(i) = self.e[..self.n].iter().position(|e| e.device == x.device && e.dst == x.dst && e.ports == x.ports) {
-            self.e[i] = x;
+            if !(self.e[i].expires_ms == 0 && x.expires_ms != 0) {
+                self.e[i] = x;
+            }
             return true;
         }
         if self.n == EXC_MAX {
@@ -70,6 +73,10 @@ impl Table {
         self.e[self.n] = x;
         self.n += 1;
         true
+    }
+    /// Would [`Table::add`] accept `x` (an identical scope is replaced in place, else a free slot is needed)?
+    pub fn has_room(&self, x: &Exception) -> bool {
+        self.n < EXC_MAX || self.e[..self.n].iter().any(|e| e.device == x.device && e.dst == x.dst && e.ports == x.ports)
     }
     pub fn clear(&mut self) {
         self.n = 0;
@@ -244,9 +251,23 @@ mod tests {
         assert!(t.allows(&M2, &v4(192, 168, 1, 20), 445, u64::MAX - 1));
         t.prune(3_600_000);
         assert_eq!(t.n, 1, "the expired one is gone, the permanent one stays");
-        // re-adding the same scope replaces it (no duplicates)
+        // R3: a temporary grant of the same scope never downgrades the always exception
         assert!(t.add(Exception { device: None, dst: pfx(v4(192, 168, 1, 20), 32), ports: (0, 0), expires_ms: 5 }));
         assert_eq!(t.n, 1);
+        assert_eq!(t.e[0].expires_ms, 0, "still always");
+        assert!(t.allows(&M2, &v4(192, 168, 1, 20), 445, 10));
+        // a temporary one is replaced by a later grant (no duplicates)
+        assert!(t.add(Exception { device: Some(M1), dst: pfx(v4(192, 168, 1, 50), 32), ports: (631, 631), expires_ms: 7 }));
+        assert!(t.add(Exception { device: Some(M1), dst: pfx(v4(192, 168, 1, 50), 32), ports: (631, 631), expires_ms: 9 }));
+        assert_eq!(t.n, 2);
+        // room: a full table has room only for a scope already in it
+        let mut f = Table::new();
+        for i in 0..EXC_MAX as u8 {
+            assert!(f.add(Exception { device: None, dst: pfx(v4(10, 0, i, 1), 32), ports: (0, 0), expires_ms: 0 }));
+        }
+        let fresh = Exception { device: None, dst: pfx(v4(10, 1, 0, 1), 32), ports: (0, 0), expires_ms: 0 };
+        assert!(!f.has_room(&fresh));
+        assert!(f.has_room(&Exception { dst: pfx(v4(10, 0, 3, 1), 32), ..fresh }));
     }
 
     #[test]
