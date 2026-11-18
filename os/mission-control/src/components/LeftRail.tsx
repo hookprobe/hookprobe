@@ -6,6 +6,7 @@
 import { type Component, For } from 'solid-js';
 import { proView, setProView } from '../store/layer';
 import Icon from './Icon';
+import LogoMark from './LogoMark';
 
 export type { DeployMode } from '../store/mock';
 
@@ -27,7 +28,7 @@ export function pillarActive(path: string, p: { match: string[] }): boolean {
 const LeftRail: Component<{ path: string }> = (props) => (
   <nav class="shell-rail" aria-label="Main">
     <a href="/" class="shell-rail-brand">
-      <span class="shell-rail-mark" aria-hidden="true">◣◢</span>
+      <LogoMark class="shell-rail-mark" />
       <span class="shell-rail-label shell-rail-name">HOOK<em>PROBE</em></span>
     </a>
     <div class="shell-rail-items">
