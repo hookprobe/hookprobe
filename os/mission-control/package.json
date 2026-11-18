@@ -3,7 +3,7 @@
   "type": "module",
   "version": "0.0.26",
   "license": "AGPL-3.0-only",
-  "description": "HookProbe OS V2 — Mission Control (Layer 0 calm landing). Stack: Astro 7 + SolidJS + TypeScript. Build to static assets; served at runtime by Rust/Axum (no Node at runtime on edge). ADR 0001.",
+  "description": "HookProbe OS V2 — Mission Control (Layer 0 calm landing). Stack: Astro 7 + SolidJS + TypeScript. Built to static assets and served on the device by heqk (no Node at runtime). ADR 0001, ADR 0047.",
   "scripts": {
     "dev": "astro dev",
     "build": "astro build && node scripts/shared-inline-scripts.mjs",
