@@ -53,3 +53,46 @@ pre-registration.
   device **and** does not raise benign alarms per device per day.
 - **Otherwise** A (the statistical DNA) stays in `el0-neuro`, and the result is reported as is.
 - **Either way the result is preliminary** until D1.
+
+## Results (2026-11-19), recorded after the pre-registration commit `7c56f1bc`
+
+**Data.** IoT-23 re-downloaded; MD5 `7132e603…` matches; 23 conn logs, the same as Phase 0.
+
+**Dev (design choices only).**
+- 3 benign timelines × 9 infected scenarios = 27 episodes; 168 training pairs.
+- The ridge penalty was chosen as **10** (dev AUC of B: 0.931 / 0.952 / 0.952 / 0.945 for 0.1 / 1 / 10 / 100).
+- Thresholds were calibrated to 1 alarm per device per week on dev negatives.
+
+| Dev | AUC | Incident detection | Benign alarms / device / day | Bytes / device |
+|---|---|---|---|---|
+| A — integer DNA | 0.949 | 0.52 | 0.000 | 1,214 |
+| B — learned SSM cell | 0.952 | 0.37 | 0.093 | 568 |
+| C — hybrid | 0.977 | 0.67 | 0.093 | 1,782 |
+
+**Test (run once, everything frozen from dev).** 5 benign timelines × 11 infected scenarios = 55 episodes.
+
+| Test | AUC | Incident detection @ 1 alarm/week (dev threshold) | Benign alarms / device / day | Bytes / device |
+|---|---|---|---|---|
+| **A — integer DNA** | **0.927** | **0.87** | 0.33 | 1,214 |
+| B — learned SSM cell | 0.886 | 0.09 | 0.00 | 568 |
+| C — hybrid | 0.907 | 0.87 | 0.33 | 1,782 |
+
+**Decision under the pre-registered rule: A stays.**
+- **B fails.** It is 0.041 AUC *below* A on test. Its dev-calibrated threshold transfers so poorly
+  that it catches 9% of incidents.
+- **C fails.** It uses more bytes than A by construction, and is 0.02 AUC below it on test.
+- **The learned cell is rejected for now** and `el0-neuro` keeps the statistical DNA.
+
+**Honest reading.**
+- **The samples are tiny.** Dev has 3 benign timelines and test has 5. Dev looked favourable to B
+  (+0.003 AUC) and test reversed it (−0.041): the variance of an 8-timeline study.
+- **The learned readout has nothing to stand on.** 168 benign training hours cannot learn device
+  behaviour that transfers.
+- **Thresholds do not transfer between splits at this size** for B or C. A's statistics need no
+  training, so its threshold moved less.
+- **This result says "not on IoT-23", not "never".** The question reopens only with D1 (≥ 14 days,
+  ≥ 20 devices, DNS) and a new pre-registration (e.g. a GRU, or more training hours).
+- **A's test nuisance rate (0.33 alarms/device/day, about 2.3 per week) is above the ≤ 1/week ship
+  gate.** That gate remains open and needs D1 to measure properly.
+
+Files: `data/p2-dev.*`, `data/p2-test.*` (readout weights omitted; reproducible from the script).
