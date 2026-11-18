@@ -3,10 +3,12 @@
 #   1. the bench Pi sends ordinary-rate IPv4 broadcasts (UDP to 10.99.0.255, 2 per second for 20 s): no rule 112;
 #   2. it floods (50 per second for 15 s): rule 112 fires, attributed to the Pi's address;
 # (client ARP never reaches the IDS — the AP proxies it — so the test uses IPv4 broadcasts, which do.)
-#   3. Mission Control still answers the Pi afterwards (the limit self-reverts; only broadcasts are shed).
-#   tools/diagnostics/cm5-bcast-storm-check.sh <owner-key-file> [mc] [pi] [pi-ip]
+#   3. afterwards the Pi still reaches the internet through the AP and Mission Control still answers (over the
+#      management address: with a management VLAN it is not served on Wi-Fi, G12-M) — only broadcasts are shed.
+#   tools/diagnostics/cm5-bcast-storm-check.sh <owner-key-file> [mc] [pi] [pi-ip]   (pi-ip default: the Pi's
+#   current address on the AP subnet — the lease changes across reboots; a stale address sends nothing)
 set -u -o pipefail
-KEY="${1:?owner key}"; MC="${2:-https://192.168.200.146}"; PI="${3:-claude@10.200.0.4}"; PIIP="${4:-10.99.0.10}"
+KEY="${1:?owner key}"; MC="${2:-https://192.168.200.146}"; PI="${3:-claude@10.200.0.4}"; PIIP="${4:-}"
 HERE=$(cd "$(dirname "$0")" && pwd)
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
@@ -24,6 +26,9 @@ s.bind(('$PIIP',0))
 for i in range($1): s.sendto(b'hq-j11',('10.99.0.255',9)); time.sleep($2)\"" >/dev/null 2>&1
 }
 "$HERE/pi-ensure-ap.sh" "$PI" >/dev/null 2>&1
+[ -n "$PIIP" ] || PIIP=$(ssh -o BatchMode=yes "$PI" "ip -4 -o addr show | awk '\$4 ~ /^10\\.99\\.0\\./ {sub(/\\/.*/, \"\", \$4); print \$4; exit}'" 2>/dev/null)
+[ -n "$PIIP" ] || { echo "BCAST-STORM: FAIL — the Pi has no address on the AP subnet"; exit 1; }
+echo "  the Pi on the AP: $PIIP"
 b0=$(storms); echo "  before: $b0"
 bcast 40 0.5
 sleep 3; b1=$(storms); echo "  after 2 per s: $b1"
@@ -33,7 +38,9 @@ sleep 3; b2=$(storms); echo "  after 50 per s: $b2"
 [ "${b2%% *}" -gt "${b1%% *}" ]; chk $? "a broadcast flood raises rule 112"
 grep -qw "$PIIP" <<<"${b2#* }"; chk $? "the storm is attributed to the flooding device ($PIIP)"
 sleep 12
-code=$(ssh -o BatchMode=yes "$PI" "curl -sk -o /dev/null -m 8 -w '%{http_code}' https://10.99.0.1/api/health" 2>/dev/null)
-[ "$code" = 200 ] || [ "$code" = 401 ]; chk $? "Mission Control answers the device after the flood (HTTP $code)"
+net=$(ssh -o BatchMode=yes "$PI" "ping -c 3 -W 2 -I $PIIP 1.1.1.1 >/dev/null 2>&1 && echo up")
+[ "$net" = up ]; chk $? "the flooding device still reaches the internet after the flood (only broadcasts are shed)"
+code=$(curl -sk -o /dev/null -m 8 -w '%{http_code}' "$MC/api/health")
+[ "$code" = 200 ] || [ "$code" = 401 ]; chk $? "Mission Control still answers after the flood (HTTP $code)"
 echo "BCAST-STORM: $([ $ok = $n ] && echo PASS || echo FAIL) ($ok/$n)"
 [ $ok = $n ]
