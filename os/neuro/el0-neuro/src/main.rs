@@ -89,7 +89,7 @@ fn sat16(v: i64) -> u16 {
 
 fn events(e: &mut Engine, inb: &[u8]) -> u32 {
     let mut bad = false;
-    for rec in inb.chunks_exact(EV_SIZE) {
+    for rec in inb.as_chunks::<EV_SIZE>().0 {
         let (kind, flags, dev) = (rec[0], rec[1], le16(&rec[2..]) as usize);
         if dev >= DEVICES {
             bad = true;
@@ -110,7 +110,7 @@ fn events(e: &mut Engine, inb: &[u8]) -> u32 {
         }
         e.active[dev] = true;
     }
-    if bad || inb.len() % EV_SIZE != 0 {
+    if bad || !inb.len().is_multiple_of(EV_SIZE) {
         ST_BAD_INPUT
     } else {
         ST_OK
