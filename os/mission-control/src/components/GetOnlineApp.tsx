@@ -84,7 +84,7 @@ const GetOnlineApp: Component = () => {
             <article class="l0-card l0-card--dashed">
               <div class="go-link-head"><span class="go-link-name">Backup line</span><span class="l0-muted" style={{ 'font-size': '13px' }}>Not set up</span></div>
               <p class="l0-card-sub">A second connection (LTE or another cable) keeps you online if the main one drops.</p>
-              <div class="l0-card-foot"><Gate cap="multi_wan"><button class="hp-btn">Add backup</button></Gate></div>
+              <div class="l0-card-foot"><Gate cap="multi_wan" notBuilt="Mission Control has no screen for this yet."><button class="hp-btn">Add backup</button></Gate></div>
             </article>
           </div>
         </section>
@@ -115,7 +115,7 @@ const GetOnlineApp: Component = () => {
             <article class="l0-card">
               <span class="go-link-name">Guest Wi-Fi</span>
               <p class="l0-card-sub">A separate network for visitors: internet only, no access to your devices.</p>
-              <div class="l0-card-foot"><Gate cap="guest_ssid"><button class="hp-btn">Turn on guest Wi-Fi</button></Gate></div>
+              <div class="l0-card-foot"><Gate cap="guest_ssid" notBuilt="Mission Control has no screen for this yet."><button class="hp-btn">Turn on guest Wi-Fi</button></Gate></div>
               <p class="pcard-note" style={{ margin: 0 }}>This device runs one Wi-Fi network. Put visitors in an internet-only zone in <a href="/network/zones">My Network</a> instead.</p>
             </article>
           </div>

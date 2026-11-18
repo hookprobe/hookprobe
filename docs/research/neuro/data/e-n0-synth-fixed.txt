@@ -1,0 +1,12 @@
+ENGINE = integer streaming DNA (dna_fixed.py), 1214 B/device incl. hour aggregator
+synthetic: 60 devices x 14 days hourly; learn days 1-10, score days 11-14
+ bloom_m  state_B     AUC   thr@1% detect @1% FPR: hour-level/incident-level                      benign-drift alerts
+persistence k = 6 alarming hours before a new item becomes normal | learn_hours=240 | cold fallback=True
+    1024     1214   0.999     1.21 beacon_new_dst=1.00/1.00 dga=1.00/1.00 exfil=1.00/1.00 new_service=1.00/1.00 scan=1.00/1.00 30/160 hours  benign alarms/dev/day@2.0=0.03
+raw history replaced (10 days, ~110 B/row JSON, flows+dns): ~1.1 MB per device (ESTIMATE)
+ENGINE = integer streaming DNA (dna_fixed.py), 1214 B/device incl. hour aggregator
+synthetic: 60 devices x 14 days hourly; learn days 1-10, score days 11-14
+ bloom_m  state_B     AUC   thr@1% detect @1% FPR: hour-level/incident-level                      benign-drift alerts
+persistence k = 6 alarming hours before a new item becomes normal | learn_hours=12 | cold fallback=True
+    1024     1214   0.929     2.83 beacon_new_dst=0.53/0.93 dga=1.00/1.00 exfil=1.00/1.00 new_service=0.40/0.80 scan=1.00/1.00 7/160 hours  benign alarms/dev/day@2.0=0.35
+raw history replaced (10 days, ~110 B/row JSON, flows+dns): ~1.1 MB per device (ESTIMATE)
