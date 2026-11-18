@@ -1103,11 +1103,9 @@ pub mod keyer {
         pub(crate) use super::{eapol, key_start_sae, sae_forget, sae_keying, sae_rx, sae_setup};
     }
 
-    /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
-    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
-    /// (the bus server is up, el0-wpa is up and — on the CM5 — its group keys are installed).
     /// Load el0-wifi (the bus server). Separate from [`install`] so it can run BEFORE the first-boot bring-up
     /// (step 4e-4); `install` then skips it.
+    #[cfg(feature = "cm5")]
     fn load_bus() -> bool {
         match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
             Ok(mut s) => {
@@ -1131,6 +1129,7 @@ pub mod keyer {
     /// ADR 0065 step 4e-4: load the bus server and wire the driver's hooks before the FIRST-BOOT Wi-Fi bring-up, so
     /// the chip probe and the firmware download run in el0-wifi as a reload does. The WPA security server loads later
     /// (`install`), as before; every hook falls back while its server is absent.
+    #[cfg(feature = "cm5")]
     pub fn load_bus_early() -> bool {
         let ok = load_bus();
         // only the bus entry points: the full hook table arrives with the WPA server (`install`) — the AP start in
@@ -1142,6 +1141,9 @@ pub mod keyer {
         ok
     }
 
+    /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
+    #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
+    /// (the bus server is up, el0-wpa is up and — on the CM5 — its group keys are installed).
     pub fn install() -> (bool, bool) {
         // S2: the WPA security server first and independently — the keying / SAE / PMKSA hooks go to it, the frame and
         // control hooks to the bus server; each hook falls back to the in-kernel path when its server is absent (D5)
