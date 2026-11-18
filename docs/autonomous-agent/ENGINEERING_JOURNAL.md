@@ -2,6 +2,16 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+## 2026-11-18 — Session 2 (cont.): real rule ids in the sample incident
+
+- The device reports rule ids as `HEQK_RULE_BAND` (1,200,000) + the kernel id (`rulecat.rs:12`). The
+  preview incident used 100004 / 100017, which no device emits, and a "domain on 3 threat feeds"
+  detection that has no rule: known-bad names are Shield blocks, not detections.
+- `IncidentExplain` and `IncidentApp` samples now tell the same story as the design canvas: rule
+  1200125 "Known-malicious TLS client (JA4)" (ioc_match, T1071.001, high), then 1200113 "Port scan"
+  (port_scan, T1046, medium), rule_msg in the device's "<msg> (<verdict>, <class>)" form; zone
+  Full access (IoT is not a zone). Unit-test fixtures keep their own arbitrary ids.
+
 ## 2026-11-18 — Session 2 (cont.): the real logo
 
 - Operator: "the logo here is the logo". Both rails showed a placeholder glyph ("◣◢") and the favicon was

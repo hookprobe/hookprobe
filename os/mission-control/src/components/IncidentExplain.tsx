@@ -20,15 +20,15 @@ import {
 export const SAMPLE_INCIDENT: IncidentDetailX = {
   id: 'INC-0142', ts: 0, title: 'Kitchen camera contacted a malware host', device_ip: '10.66.0.42',
   priority: 'HIGH', status: 'open', threat_score: 0.8,
-  explanation: { why: 'The camera resolved a domain on 3 threat feeds, then tried to connect to 6 other devices.', confidence: 0.94, evidence: 4, model: null, related_events: ['s:1', 's:2', 's:3'] },
+  explanation: { why: "The camera's TLS client matched a known-malicious fingerprint (JA4) on your threat-intel pack, then it tried to connect to 6 other devices.", confidence: 0.94, evidence: 4, model: null, related_events: ['s:1', 's:2', 's:3'] },
   attack_path: { incident: 'INC-0142', node_count: 0, edge_count: 0, nodes: [], edges: [] },
-  ingress: { interface: 'wlan0', zone: 'IoT' },
+  ingress: { interface: 'wlan0', zone: 'Full access' },
   evidence_ref: { record_id: 'sample-record', verified: true },
 };
 export const SAMPLE_DETECTIONS: DetectionRowX[] = [
-  { id: 's:1', ts: 0, rule_id: 100017, rule_msg: 'Lookup of a domain on a threat feed (PASS, observe)', category: 'c2', severity: 2, mitre: 'T1071.004', src_ip: '10.66.0.42', dst_ip: '', dst_port: 53, confidence: 0.6 },
-  { id: 's:2', ts: 0, rule_id: 100004, rule_msg: 'TCP port scan (DROP, framedrop)', category: 'scan', severity: 2, mitre: 'T1046', src_ip: '10.66.0.42', dst_ip: '10.66.0.7', dst_port: 23, confidence: 0.9 },
-  { id: 's:3', ts: 0, rule_id: 100004, rule_msg: 'TCP port scan (DROP, quarantine)', category: 'scan', severity: 2, mitre: 'T1046', src_ip: '10.66.0.42', dst_ip: '10.66.0.9', dst_port: 554, confidence: 0.9 },
+  { id: 's:1', ts: 0, rule_id: 1200125, rule_msg: 'Known-malicious TLS client (JA4) (PASS, observe)', category: 'ioc_match', severity: 2, mitre: 'T1071.001', src_ip: '10.66.0.42', dst_ip: '198.51.100.23', dst_port: 443, confidence: 0.6 },
+  { id: 's:2', ts: 0, rule_id: 1200113, rule_msg: 'Port scan (DROP, framedrop)', category: 'port_scan', severity: 3, mitre: 'T1046', src_ip: '10.66.0.42', dst_ip: '10.66.0.7', dst_port: 23, confidence: 0.9 },
+  { id: 's:3', ts: 0, rule_id: 1200113, rule_msg: 'Port scan (DROP, quarantine)', category: 'port_scan', severity: 3, mitre: 'T1046', src_ip: '10.66.0.42', dst_ip: '10.66.0.9', dst_port: 554, confidence: 0.9 },
 ];
 
 interface Props {
