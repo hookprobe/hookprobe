@@ -217,7 +217,10 @@ def openai_backend(case, a, temperature):
     extra = {"temperature": temperature, "max_tokens": a.max_tokens}
     if case["task"] in ("triage", "injection"):
         schema = triage_schema(case["context"], a.mode == "closed")
-        msgs[0]["content"] += " Reply with ONE JSON object: " + json.dumps(list(schema["properties"]))
+        # BOTH modes see the same contract (field names AND allowed values); only "closed" also enforces it
+        # with a grammar. An earlier version showed free mode only the field names -- an unfair comparison.
+        msgs[0]["content"] += (" Reply with ONE JSON object and nothing else, matching this JSON schema exactly "
+                               "(lowercase enum values): " + json.dumps(schema, ensure_ascii=False))
         if a.mode == "closed":
             extra["response_format"] = {"type": "json_schema", "json_schema": {"name": "triage", "strict": True, "schema": schema}}
     elif case["task"] == "tool":
@@ -272,8 +275,19 @@ def score(case, out):
     s["verdict_ok"] = out.get("verdict") in g["verdict"]
     facts, ents = facts_and_entities(case["context"])
     ev, en = out.get("evidence") or [], out.get("entities") or []
+    ev = ev if isinstance(ev, list) else [ev]
+    # a model may cite "F1" or quote the whole card ("F1 R1=...->..."): credit the fact ids it names
+    ev = [x for e in ev for x in (re.findall(r"\bF\d+\b", str(e)) or [str(e)])]
     s["citation_ok"] = bool(ev) and all(e in facts for e in ev) and all(x in ev for x in g.get("evidence", []))
-    s["hallucinated_entities"] = sum(1 for e in en if e not in ents)
+    # An entity is hallucinated only if it NAMES something absent from the evidence: an alias (H1/R2/D3)
+    # or an IPv4 address that the context does not contain. Writing a real address instead of its alias is
+    # not a hallucination; descriptive strings with no alias/address ("Port: 22") are not entities.
+    ctx_ips = set(re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", case["context"]))
+    def _bad(e):
+        e = str(e)
+        return any(a not in ents for a in re.findall(r"\b[HRD]\d+\b", e)) or \
+            any(ip not in ctx_ips for ip in re.findall(r"\b\d{1,3}(?:\.\d{1,3}){3}\b", e))
+    s["hallucinated_entities"] = sum(1 for e in (en if isinstance(en, list) else [en]) if _bad(e))
     summ = str(out.get("summary", ""))
     hay = (summ + " " + " ".join(map(str, en))).lower()
     s["mention_ok"] = not g.get("must_mention_any") or any(x.lower() in hay for x in g["must_mention_any"])
@@ -297,7 +311,7 @@ def main():
     ap.add_argument("--mode", choices=["free", "closed"], default="closed")
     ap.add_argument("--repeat", type=int, default=1)
     ap.add_argument("--temperature", type=float, default=0.0)
-    ap.add_argument("--max-tokens", type=int, default=400)
+    ap.add_argument("--max-tokens", type=int, default=700)
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--only", default="", help="comma list of case-id prefixes")
     ap.add_argument("--json", help="write per-case results here")

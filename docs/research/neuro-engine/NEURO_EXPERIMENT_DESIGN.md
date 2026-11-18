@@ -14,7 +14,11 @@
 | E-BM1 | Neural DNA: state size vs AUC / detection @1% FPR / benign-drift alerts; persistence k sweep | simulated | **done** (5 seeds) | `data/e-bm1*.json/txt` — 638 B/device AUC 0.999; k trade-off quantified |
 | E-EV0 | L0 template baseline on the 28-case eval set | simulated | **done** — **contaminated** (same author for rules and cases) | `data/e-ev0-template.*` |
 | — | Endpoint path of the eval runner (closed schema, tools, canary detection) | mock server | smoke-tested | — |
-| everything else | below | — | **planned, not run** | harness ready where noted |
+| **E-EV1** | Blind 215-case set (independent author), L0 baseline | blind | **done (Phase 0)** | L0 verdict 0.59 — the earlier 1.00 was contamination, as flagged |
+| **E-EV2 / E-LLM2 (quality part)** | 6 Apache-2.0 models × closed/free on the blind set; L0 + model explanation hybrid | blind, dev-host | **done (Phase 0)** | `NEURO_PHASE0_RESULTS.md` §1 — models worse than L0 at verdicts; hybrid explains best |
+| **E-SC2** | Evidence cards on real held-out traffic (IoT-23, CC BY 4.0) | real-traffic | **done (Phase 0)** | identity 0.88 / evidence 0.65 (test split) — below the 0.9 kill line; C&C weakest |
+| **E-BM2a** | Behavioural memory on real IoT-23 devices | real-traffic + semi-synthetic | **done (Phase 0), partial** | peer novelty quiet on benign + flags real malware; diurnal profile fails cold start |
+| everything else | below | — | **planned, not run** | harness ready where noted; all CM5 items blocked on a reachable bench unit |
 
 ## 2. Planned experiments, ordered by decision value
 
