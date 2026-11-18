@@ -168,11 +168,11 @@ Saving and restoring a fixed-prefix state snapshot (proposal P5) would remove mo
 
 | Item | Why it is open | Needs |
 |---|---|---|
-| Any CM5 measurement (E-HW1/2/6/7, E-LLM1/2, E-INT1, E-TH1) | no reachable CM5 bench unit | a CM5 on Raspberry Pi OS reachable over SSH |
+| Any CM5 measurement (E-HW1/2/6/7, E-LLM1/2, E-INT1, E-TH1) | **no CM5 is available** (operator, 2026-11-18) — deferred, not dropped | a CM5 on Raspberry Pi OS reachable over SSH; or, as a proxy, a **Raspberry Pi 5** (same BCM2712 SoC and LPDDR4X bus), with results labelled `pi5-linux`, never `cm5-*` |
 | Native-speaker review of Romanian answers | language check ≠ quality | a Romanian-speaking reviewer |
 | Second annotator for the blind set | single author | one more person, ~1 day |
 | Multi-day benign traffic for E-BM2 | IoT-23 benign captures ≤ 22 h | consented home/SMB capture |
-| Ternary (BitNet) comparison E-LB1 | bitnet.cpp needs a native build (no cmake here) | the CM5 bench unit |
+| Ternary (BitNet) comparison E-LB1 | bitnet.cpp needs a native build (no cmake here) | a CM5 or Pi 5 bench unit |
 | Free-mode baseline with an example answer | fairness of the closed-vs-free comparison | ~20 min of dev-host time |
 
 ## 7. Reproduce
@@ -188,3 +188,19 @@ python3 -I replay_bm_iot23.py <iot23 dir>                                 # E-BM
 
 Per-case outputs of the blind run: `data/runs-blind/` (model answers to synthetic cases; no real
 traffic). Aggregates: `data/e-ev1-*`, `data/e-sc2-*`, `data/e-bm2a.*`.
+
+## 8. Consequence of having no CM5 (2026-11-18)
+
+The operator confirmed no CM5 is available. What this means for the decision:
+
+- **Architecture D does not change.** Its core (L0 rules, evidence cards, behavioural memory) is
+  integer-only and runs without a model; Phase 0 validated it on independent and real-traffic data.
+- **The generative tier stays unratified.** The speed figures in §4 remain projections; the eval
+  gate's p95-latency and E-INT1 (does decoding hurt the packet path?) items cannot be passed without
+  hardware, so no explainer model may be enabled on a CM5 SKU until they are measured.
+- **Acceptable proxy:** a Raspberry Pi 5 shares the BCM2712 SoC and the 32-bit LPDDR4X bus, so
+  `cm5_bench.sh` runs unchanged and its bandwidth, decode and interference numbers transfer. Board-level
+  items (thermal in the HookProbe enclosure, power, eMMC vs SD/NVMe storage) do not, and stay open.
+- **Work that needs no hardware** and can continue: Romanian native review, second annotator,
+  jitter-tolerant periodicity and cold-start fallback for the behavioural memory (dev split only,
+  then re-test once), and the free-mode example-answer baseline.
