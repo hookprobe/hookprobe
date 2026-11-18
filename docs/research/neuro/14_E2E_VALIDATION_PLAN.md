@@ -41,7 +41,8 @@
 | el0-neuro builds for heqk | **done** | 5.4 KB code, 83 KB .bss, zero FP/SIMD |
 | heqk gate on the dev Mac | **done: all implemented phases GREEN** (3 min 31 s) | one real finding for HomePods: the WiFi/WPA crypto KAT is silently skipped since a file move; a verified one-line fix is in `data/heqk-gate-macos-2026-11-18.md` |
 | Learned recurrent model | **not started** | — |
-| Anything inside heqk, DP hookup, UI, metal, field | **not started** | — |
+| **el0-neuro inside heqk (QEMU)** — P3 + P4 (QEMU part) | **done** | 1,200/1,200 hour closes bit-exact through the real ABI; fault containment PASS; 64-device hour close 148 µs, ~51–88 ns/event (QEMU, not timing-faithful) — `data/p3-p4-heqk-report.md` |
+| Main-loop impact, DP hookup, UI, metal, field | **not started** | needs the HomePods integration (P5) |
 
 **The two weakest points** decide the order of the plan:
 1. **There is no realistic multi-day data with DNS.** Every usefulness number so far rests on synthetic
