@@ -70,7 +70,7 @@ telemetry ─▶ per-device recurrent LM state (RWKV-7 / Mamba hybrid) updated c
 | Expected resources | the highest continuous cost of all options; per-device state in MiB instead of bytes |
 
 **Verdict:** the appealing idea — "a model that remembers the network" — is real, but an LM is the
-wrong carrier for it. E-BM1 tracked 60 devices' behaviour in **638 bytes each**, inspectable and
+wrong carrier for it. E-BM1 tracked 60 devices' behaviour in **672 bytes each** (638 B before the Phase 0b cold-start fix), inspectable and
 integer-only. An RWKV state is ~12 MiB per stream and is written by untrusted input. Recurrent models
 remain candidates for the *generative* tier on quality/licence grounds (Qwen3.5, Granite-H), not as
 the memory.
