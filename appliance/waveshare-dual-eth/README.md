@@ -10,4 +10,5 @@ The bench carrier board for the CM5.
 
 Details: [`RP1_ETH2_RTL8111.md`](../../os/kernel/RP1_ETH2_RTL8111.md). Note that the zero-Linux
 image (`--zero-linux`, no devicetree) leaves the RTL8111 PCIe link untrained by firmware.
-That is fine for the passive-first GEM profile (ADR 0037 D4 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)).
+That is fine for the passive-first GEM profile (ADR 0037 D4; ADR 0037 is retired and kept as a historical
+record, and no later ADR restates D4).

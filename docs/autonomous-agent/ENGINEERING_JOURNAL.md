@@ -2,6 +2,24 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+## 2026-11-18 — Session 2: AB-17 docs corrections
+
+- #1268 and #1269 were merged by the operator on 2026-11-17. `main` @ `1a4f2b11` also carries the
+  other session's `feat/mc-explainability` and `feat/sealed-evidence-export`.
+- **G13:** the row was already marked done for the four Investigate routes. Re-checked:
+  `/api/manifest` and `/api/verdicts/dns` are served nowhere in `os/kernel` and nothing in
+  `os/mission-control/src` calls them. The row now says they were dropped, not done.
+- **G12:** "MC QR panel" was half true. Mission Control has a QR for the home Wi-Fi
+  (`QrSheet.tsx`, `51336c8f`), but no QR for the setup network, which is only on the printed
+  label. The row now says that, and stays open.
+- **G48:** the row said "until G43/G44 land". G44 is closed and G43 is built (QEMU only), so the
+  row now says both files upload on a running device.
+- **ADR 0037:** five citations read "ADR 0037 (retired …; see in part 0051 / 0054 / 0058 / 0059)",
+  an inserted phrase that broke the sentences. Each now names the decision that applies. Per
+  ADR 0037's own status note, D3 is still cited by ADR 0053/0054 and the browser flasher has no
+  other design, so those two stay attributed to ADR 0037 and are marked retired.
+- Not touched: `os/kernel/GAP_REGISTER.md` (kernel, homepods) and `docs/adr/` (protected).
+
 ## 2026-11-17 — Session 1: discovery
 
 **Setup**
