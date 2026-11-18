@@ -2,6 +2,20 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+## 2026-11-18 — Session 2 (cont.): AB-07 and AB-12
+
+- #1280 and #1281 merged with CI green. g3 ran the new `revoke-all` spec: 12/12, UI suite 437/437.
+- **AB-07**: no change. The Intelligence CVE tab has shown an honest empty state since
+  `47a2ad85` (2026-11-10); the audit's U-03 read the kernel gap (no `/api/exploitability`) as a UI
+  problem.
+- **AB-12**: heqk denies `multi_wan`, `guest_ssid` and `openvswitch` with reasons
+  (`capabilities.rs:28-30`), so the three handler-less buttons are greyed today. If one were granted,
+  `Gate` would render a live-looking button that does nothing. `Gate` gains `notBuilt`: granted +
+  `notBuilt` renders like denied with that reason. Applied to "Add backup", "Turn on guest Wi-Fi" and
+  "Configure segmentation". `hide` still keys on the real answer. Evidence: in-app browser against a
+  mock device granting all three: each greyed, inert, "Mission Control has no screen for this yet."
+  New spec `gate-not-built.mjs` (CI g3 runs it).
+
 ## 2026-11-18 — Session 2 (cont.): AB-06 and AB-11
 
 - **AB-06** (#1280): `package.json` description says heqk serves the UI. One line; `release_check.py` passes.
