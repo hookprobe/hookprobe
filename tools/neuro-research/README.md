@@ -24,6 +24,9 @@ Results are labelled by origin: `theoretical`, `simulated` (synthetic data on a 
 | `compare_freeex.py` | E-EV3: closed vs free vs free+example on the blind set, McNemar, canary safety, verdict bias | blind, dev-host | anywhere |
 | `memory_model.py` | Native programme Gate 7: RAM, per-token bytes, decode ceilings, eMMC load times per SKU | theoretical | anywhere |
 | `kernels/` | Native programme Gate 2: Q8/Q4/ternary-unpack/ternary-LUT dot kernels (NEON intrinsics), `dot_kernels.a76.s` (clang `-mcpu=cortex-a76`), `bench.c` (correctness + GEMV timing) | compiled / dev-host | any AArch64 host; CM5 for real numbers |
+| `dna_fixed.py` | Stage 1 (E-N0): integer-only streaming DNA — the bit-exact spec for `os/neuro/neuro-core` | — | anywhere |
+| `dna_fixed_eval.py` | E-N0 parity: the integer DNA inside the E-BM1 synthetic and E-BM2b IoT-23 experiments | simulated / real-traffic | anywhere |
+| `gen_golden.py` | conformance vectors + generated `log2_lut.rs` for the Rust engine | — | anywhere |
 | `cm5_bench.sh` | Gate-5 measurement plan for a CM5 **bench unit** on Raspberry Pi OS (bandwidth, storage, llama-bench sweep, server profile, interference, thermal soak). **Prepared, not run.** | cm5-linux | a lab CM5 only |
 
 ```bash
