@@ -1,0 +1,163 @@
+{
+ "split": "test",
+ "scenarios": [
+  [
+   "CTU-Honeypot-Capture-4-1",
+   "test",
+   452,
+   0,
+   22
+  ],
+  [
+   "CTU-Honeypot-Capture-5-1",
+   "test",
+   1374,
+   0,
+   6
+  ],
+  [
+   "CTU-IoT-Malware-Capture-17-1",
+   "test",
+   1500000,
+   1,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-20-1",
+   "test",
+   3209,
+   2,
+   22
+  ],
+  [
+   "CTU-IoT-Malware-Capture-21-1",
+   "test",
+   3286,
+   3,
+   21
+  ],
+  [
+   "CTU-IoT-Malware-Capture-33-1",
+   "test",
+   1500000,
+   1,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-34-1",
+   "test",
+   23145,
+   17,
+   7
+  ],
+  [
+   "CTU-IoT-Malware-Capture-35-1",
+   "test",
+   1500000,
+   3,
+   2
+  ],
+  [
+   "CTU-IoT-Malware-Capture-36-1",
+   "test",
+   1500000,
+   3,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-39-1",
+   "test",
+   1500000,
+   1,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-43-1",
+   "test",
+   1500000,
+   1,
+   0
+  ],
+  [
+   "CTU-IoT-Malware-Capture-8-1",
+   "test",
+   10403,
+   23,
+   1
+  ],
+  [
+   "CTU-IoT-Malware-Capture-9-1",
+   "test",
+   1500000,
+   5,
+   4
+  ]
+ ],
+ "windows": 47,
+ "rows": [
+  {
+   "budget": 256,
+   "incidents": 49,
+   "identity_recall": 0.8775510204081632,
+   "evidence_recall": 0.6530612244897959,
+   "benign_windows": 15,
+   "flagged_cards_per_benign_window": 1.1333333333333333
+  },
+  {
+   "budget": 512,
+   "incidents": 49,
+   "identity_recall": 0.8775510204081632,
+   "evidence_recall": 0.6530612244897959,
+   "benign_windows": 15,
+   "flagged_cards_per_benign_window": 1.1333333333333333
+  },
+  {
+   "budget": 1024,
+   "incidents": 49,
+   "identity_recall": 0.8775510204081632,
+   "evidence_recall": 0.6530612244897959,
+   "benign_windows": 15,
+   "flagged_cards_per_benign_window": 1.1333333333333333
+  },
+  {
+   "budget": 2048,
+   "incidents": 49,
+   "identity_recall": 0.8775510204081632,
+   "evidence_recall": 0.6530612244897959,
+   "benign_windows": 15,
+   "flagged_cards_per_benign_window": 1.1333333333333333
+  }
+ ],
+ "per_family_512": {
+  "scan": {
+   "incidents": 10,
+   "identity": 10,
+   "evidence": 9
+  },
+  "malware": {
+   "incidents": 6,
+   "identity": 6,
+   "evidence": 6
+  },
+  "flood": {
+   "incidents": 5,
+   "identity": 5,
+   "evidence": 5
+  },
+  "heartbeat": {
+   "incidents": 5,
+   "identity": 5,
+   "evidence": 0
+  },
+  "c2": {
+   "incidents": 20,
+   "identity": 15,
+   "evidence": 10
+  },
+  "download": {
+   "incidents": 3,
+   "identity": 2,
+   "evidence": 2
+  }
+ }
+}
