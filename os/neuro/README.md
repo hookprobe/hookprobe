@@ -1,0 +1,71 @@
+# os/neuro — HookProbe Neuro, stage 1: temporal security engine
+
+Stage 1 of the decision in [`docs/research/neuro/13`](../../docs/research/neuro/13_FINAL_ARCHITECTURE_DECISION.md),
+approved 2026-11-18:
+- the per-device behavioural memory ("Neural DNA") as integer-only `no_std` Rust;
+- packaged as an EL0 excursion server for heqk;
+- **with no kernel change**.
+
+The engine **observes and scores**. It never decides enforcement (ADR 0023, contract C9).
+
+| Crate | What | Target |
+|---|---|---|
+| [`neuro-core/`](neuro-core/) | the engine: integer streaming DNA. No `unsafe`, no allocation, no float, no dependencies. | any (`no_std`); tests on the host |
+| [`el0-neuro/`](el0-neuro/) | the EL0 server: shared-IO ABI (`src/abi.rs`, proposed), 64 device slots in `.bss`, commands EVENTS / CLOSE_HOUR / RESET_DEV / INFO | `aarch64-unknown-none-softfloat` |
+
+## Verification status — read before relying on it
+
+| Claim | Status | Evidence |
+|---|---|---|
+| The integer design loses nothing against the float DNA | **measured** (Python integer reference vs float, same experiments) | synthetic, 5 seeds: AUC 0.999 = 0.999 (10 days); **0.929 vs 0.928** (12 h cold start); identical per-kind detection, drift alerts and nuisance. IoT-23: Hue honeypot **2.00 alarms/day in both**; onset 14/14, all novelty-driven, in both. `docs/research/neuro/data/e-n0-*` |
+| The Rust port equals the integer reference bit for bit | **NOT YET RUN** — no Rust toolchain on the authoring host | `neuro-core/tests/golden.rs` replays 9,797 vector lines (1,200 hour closes, 155 alarms, Bloom rotations at 168/336 h) and checks every score part and the final profile |
+| `el0-neuro` builds for heqk | **NOT YET BUILT** | needs the pinned toolchain (`rust-toolchain.toml`, copied from `os/kernel`) |
+| Runs in QEMU-heqk / on CM5 | **not started** | needs HomePods: wire the crate into `kernel/build.rs`, assign the address range, move `abi.rs` into `hal/` (`docs/research/neuro/12` R1) |
+
+## Run the checks
+
+```bash
+cd os/neuro/neuro-core && cargo test --release -- --nocapture
+```
+
+```bash
+cd os/neuro/el0-neuro && cargo build --release --features cm5
+```
+
+To regenerate the vectors (deterministic; also regenerates `neuro-core/src/log2_lut.rs`):
+
+```bash
+python3 -I tools/neuro-research/gen_golden.py os/neuro/neuro-core
+```
+
+## Design points that matter for heqk
+
+- **Memory:** about 1.2–1.3 KiB per device, including the hour aggregator. Python estimate 1,214 B;
+  the exact Rust size is printed by the golden test.
+  - 64 devices take about 85 KiB of **zero-initialised `.bss`**, initialised per slot on first use.
+  - The table therefore adds nothing to the ELF the kernel embeds. The kernel image has ~33 KB of
+    headroom; the server's code still counts against it.
+- **Address range:** proposed at `0x1_4026_0000`, in the unused gap between `el0-lansvc` and `el0-hsh`
+  inside the 4 MiB GB5 window. The whole server, including IO, ends before `0x1_4030_0000`.
+- **State:** lives in the server's own pages. The kernel must keep them across excursions, as for
+  `el0-wpa`. A fault or reset loses the memory, and the DNA relearns through the cold-start path.
+- **Privacy and input:**
+  - the kernel sends **fingerprints**, not addresses or names;
+  - every record is bounds-checked;
+  - a malformed batch returns `ST_BAD_INPUT`;
+  - a panic ends only the excursion.
+- **Guarded learning:**
+  - calm hours teach;
+  - alarming hours teach only cold-slot statistics;
+  - a new peer becomes normal after 6 alarming hours (8-entry pending table per device).
+
+## Known open items
+
+1. Run the Rust tests and the build (needs a toolchain).
+2. **DNS signal on quiet devices.** One NXDOMAIN in three queries is a 33% share and raises an alarm.
+   The golden vectors show this, the float DNA has the same formula, and IoT-23 has no DNS to test it.
+   It needs a minimum query count before the NX term counts. That fix belongs on a dev split of real
+   DNS data, not here.
+3. Kernel side (HomePods): fingerprinting in the data plane, an hourly `CMD_CLOSE_HOUR`, and alarms as
+   evidence-graph nodes with the driver named.
+4. Multi-day benign traffic for the nuisance rate (`docs/research/neuro-engine` E-BM2).
