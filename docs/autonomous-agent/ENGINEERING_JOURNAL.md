@@ -16,7 +16,7 @@ Newest first. Each entry: what was investigated or changed, the evidence, and it
   against a local mock device (Python, test data only): dry run → approve → "Applied and verified",
   table empty, button disabled; the mock recorded exactly the two expected POSTs. New Playwright spec
   `revoke-all.mjs` is not run locally (no Playwright here); CI g3 runs it.
-- **`main` was rewritten** between 07:00 and 07:50 UTC: every commit from the #1267 merge
+- **`main` was rewritten** on 2026-11-18, after #1279 merged (seen at the next fetch): every commit from the #1267 merge
   (`ae2ad24a` → `ac57d996`) to #1279 has a new hash. Trees are byte-identical; the only difference
   is that GitHub's `gpgsig` on the merge commits was removed. Who did it and why is the operator's to
   confirm. Effect here: #1281 was re-parented with `git commit-tree` (same tree, no force-push), and
