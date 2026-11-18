@@ -258,15 +258,18 @@ impl TlsHost {
                 crate::Excursion::Timeout => self.timeouts += 1,
                 _ => self.faults += 1,
             }
+            let _ = crate::superv::server_fault("el0-tlshost", how == crate::Excursion::Timeout); // H1
             self.reset();
             return Reply { status: ST_PANIC, tls_len: 0, plain_len: 0, flags: F_CLOSED };
         }
         let status = self.r32(H_STATUS);
         if status == ST_PANIC {
             kprint!(" [MC-TLS] EL0 server panicked (cmd {} slot {}): reset, every session lost\n", cmd, conn);
+            let _ = crate::superv::server_fault("el0-tlshost", false); // H1
             self.reset();
             return Reply { status, tls_len: 0, plain_len: 0, flags: F_CLOSED };
         }
+        crate::superv::server_ok("el0-tlshost");
         if status == ST_TLS_ERROR {
             self.tls_errors += 1;
         }
