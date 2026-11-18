@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/license/1",
+  "title": "DataLicense",
+  "description": "A licence or terms-of-use document, with the permissions HookProbe needs decided explicitly. The licence gate (heqkdata/licensing.py) reads ONLY this registry: a source whose licence entry says 'unclear' for a use is treated as 'no' for that use.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "name", "spdx", "url", "class", "commercial_use", "training_use", "redistribution", "derivatives", "share_alike", "attribution_required", "notes", "verified_on"],
+  "properties": {
+    "id": { "$ref": "common.schema.json#/$defs/slug" },
+    "name": { "type": "string", "maxLength": 200 },
+    "spdx": { "type": ["string", "null"], "maxLength": 64 },
+    "url": { "type": ["string", "null"], "format": "uri" },
+    "class": { "type": "string", "enum": ["OPEN", "RESEARCH", "COMMERCIAL", "RESTRICTED", "UNKNOWN"] },
+    "commercial_use": { "type": "string", "enum": ["yes", "no", "unclear", "requires_agreement"] },
+    "training_use": { "type": "string", "enum": ["yes", "no", "unclear", "requires_agreement"] },
+    "redistribution": { "type": "string", "enum": ["yes", "no", "unclear", "requires_agreement"] },
+    "derivatives": { "type": "string", "enum": ["yes", "no", "unclear", "requires_agreement"] },
+    "share_alike": { "type": "boolean" },
+    "attribution_required": { "type": "boolean" },
+    "notes": { "type": ["string", "null"], "maxLength": 2000 },
+    "verified_on": { "$ref": "common.schema.json#/$defs/date" }
+  }
+}
