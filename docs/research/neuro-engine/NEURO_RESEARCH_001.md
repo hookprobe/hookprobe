@@ -26,8 +26,10 @@ network protection?
    that runs on heqk today, plus a pluggable, leased, bandwidth-paced, evidence-closed generative tier
    that can live on the device (larger SKUs, once kernel prerequisites land), on an NPU (RK3588 era),
    or on the owner's companion/PoP — with the product never depending on it.
-5. **Everything above is theoretical or simulated**; the experiments that would prove or kill it are
-   specified and partly scripted, and none has run on a CM5.
+5. **Phase 0 (2026-11-18) added the first independent evidence**: on 215 blind cases small models
+   were significantly worse than the deterministic core at verdicts but nearly tripled explanation
+   coverage when used as explainers; evidence cards reached 0.88 identity recall on held-out real
+   malware traffic. **Nothing has yet been measured on a CM5.**
 
 ## Documents
 
@@ -41,6 +43,7 @@ network protection?
 | 6 | [`NEURO_ARCHITECTURE_COMPARISON.md`](NEURO_ARCHITECTURE_COMPARISON.md) | 4 | BASE, A, B, C, D — diagrams, memory/execution/failure/security models; weighted value scoring + sensitivity |
 | 7 | [`NEURO_EXPERIMENT_DESIGN.md`](NEURO_EXPERIMENT_DESIGN.md) | 5 | done vs planned experiments, kill criteria, load profiles, UIE metric, statistics, eval gate |
 | 8 | [`NEURO_FINAL_RECOMMENDATION.md`](NEURO_FINAL_RECOMMENDATION.md) | 6–7 | decision, answers to the ten questions, what not to build, investment, roadmap awaiting approval |
+| 9 | [`NEURO_PHASE0_RESULTS.md`](NEURO_PHASE0_RESULTS.md) | Phase 0 | blind evaluation of six models, real-traffic replays (IoT-23), CM5 speed projection — **the first non-simulated evidence** |
 
 Raw outputs: [`data/`](data/). Scripts: [`tools/neuro-research/`](../../../tools/neuro-research/README.md).
 
