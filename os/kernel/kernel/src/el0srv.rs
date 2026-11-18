@@ -103,6 +103,7 @@ mod imp {
     #[cfg(not(feature = "cm5"))]
     const BUDGET_US: u64 = 2_000_000;
     /// First restart backoff (the supervisor table's, `hal::superv::TABLE`: doubles per consecutive fault, capped).
+    #[cfg_attr(feature = "cm5", allow(dead_code))] // the QEMU self-tests wait it out
     pub const BACKOFF_MS: u64 = 50;
 
     /// A ring as the kernel sees it: its physical frames, in order.
