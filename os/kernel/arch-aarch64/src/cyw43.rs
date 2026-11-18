@@ -231,11 +231,35 @@ fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<
 /// [`fw_reload`]; never on the data path. (register ops in el0-wifi, ops this reload did in-kernel)
 static mut RELOAD_REGS_EL0: bool = false;
 pub static mut RELOAD_REG_OPS: (u64, u64) = (0, 0);
+/// Step 4e-4: the first-boot bring-up's in-kernel RETRY (the bring-up through el0-wifi failed): no bus operation may
+/// route to the server while it runs — the download's writes included.
+static mut EL0_BYPASS: bool = false;
+/// Step 4e-4: the bus server's two bring-up entry points (download slice write, register operation), installed
+/// before the first-boot bring-up — WITHOUT the full hook table, which arrives with the WPA server (`EL0_KEYER`).
+#[allow(clippy::type_complexity)]
+pub static mut EL0_BUS: Option<(fn(u32, &[u8]) -> Option<bool>, fn(u8, u8, u32, u32) -> Option<(bool, u32)>)> = None;
+fn bus_hooks() -> Option<(fn(u32, &[u8]) -> Option<bool>, fn(u8, u8, u32, u32) -> Option<(bool, u32)>)> {
+    if unsafe { EL0_BYPASS } {
+        return None;
+    }
+    el0().map(|h| (h.bp_write, h.bp_reg)).or(unsafe { *core::ptr::addr_of!(EL0_BUS) })
+}
+/// Step 4e-4: route the FIRST-BOOT bring-up (chip probe + firmware upload) through el0-wifi, as a reload is
+/// (`on` = the server is loaded); counters reset when turned on. `kernel_only` = the in-kernel retry.
+pub fn bringup_regs_el0(on: bool, kernel_only: bool) {
+    unsafe {
+        if on {
+            RELOAD_REG_OPS = (0, 0);
+        }
+        RELOAD_REGS_EL0 = on && (el0().is_some() || (*core::ptr::addr_of!(EL0_BUS)).is_some());
+        EL0_BYPASS = kernel_only;
+    }
+}
 fn el0_reg(op: u8, fnum: u32, addr: u32, val: u32) -> Option<(bool, u32)> {
     if !unsafe { RELOAD_REGS_EL0 } {
         return None;
     }
-    let r = el0().and_then(|h| (h.bp_reg)(op, fnum as u8, addr, val));
+    let r = bus_hooks().and_then(|h| (h.1)(op, fnum as u8, addr, val));
     unsafe {
         if r.is_some() {
             RELOAD_REG_OPS.0 += 1;
@@ -922,11 +946,11 @@ fn cmd53_write_blocks(fnum: u32, addr: u32, data: &[u8], nblocks: u32) -> bool {
 fn backplane_write(mut addr: u32, data: &[u8]) -> bool {
     // ADR 0065 step 4e: with el0-wifi loaded (a heal reload, a live re-bring-up), the download's bus writes run in the
     // server, slice by slice; with no server (first boot, before it loads) they run here
-    if let Some(h) = el0() {
+    if let Some(h) = bus_hooks() {
         let mut off = 0usize;
         while off < data.len() {
             let n = (data.len() - off).min(hal::wifisrvabi::BP_WRITE_MAX);
-            match (h.bp_write)(addr + off as u32, &data[off..off + n]) {
+            match (h.0)(addr + off as u32, &data[off..off + n]) {
                 Some(true) => off += n,
                 Some(false) => return false,
                 None => break, // the server went into backoff: finish in-kernel from here
