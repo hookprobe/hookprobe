@@ -1,0 +1,23 @@
+# HookProbe Neuro, stage 1: the integer-only temporal security engine (docs/research/neuro/13).
+# A no_std library with no dependencies, no allocation and no floating point. It is used by the EL0
+# server `el0-neuro` and tested on the host against vectors generated from the Python reference
+# (tools/neuro-research/dna_fixed.py, gen_golden.py).
+[package]
+name = "neuro-core"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+
+[profile.release]
+panic = "abort"
+opt-level = 3
+lto = true
+codegen-units = 1
