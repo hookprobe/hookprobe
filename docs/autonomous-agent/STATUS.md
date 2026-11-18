@@ -20,7 +20,7 @@ AB-17 (stale gap-register rows and ADR 0037 citations) on `agent/docs-ab17`, dra
 |---|---|---|---|---|---|---|---|
 | Engineering audit docs | `agent/engineering-audit` | yes | n/a (docs) | green | yes | [#1269](https://github.com/hookprobe/hookprobe/pull/1269) | yes (2026-11-17) |
 | AB-05 Copilot AI-models link | `agent/mc-honest-states` @ `02cb4780` | yes | astro check 0 errors; build 27 pages; browser check of 3 hash cases; Playwright spec added but not run locally | green (g3: "PASS pro-workspace-admin: admin: #ai deep link opens AI models") | yes | [#1268](https://github.com/hookprobe/hookprobe/pull/1268) | yes (2026-11-17) |
-| AB-17 stale register rows + ADR 0037 citations | `agent/docs-ab17` | yes | n/a (docs); claims re-checked against `origin/main` @ `1a4f2b11` | pending | yes | draft | no |
+| AB-17 stale register rows + ADR 0037 citations | `agent/docs-ab17` | yes | n/a (docs); claims re-checked against `origin/main` @ `1a4f2b11` | pending | yes | [#1279](https://github.com/hookprobe/hookprobe/pull/1279) draft | no |
 
 AB-06 (package.json description) is unblocked: `feat/mc-explainability` merged, and the description still says "served at runtime by Rust/Axum".
 
