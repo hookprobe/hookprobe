@@ -55,10 +55,26 @@ bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b$G.bin" "$T/b$G.sig" "$@" >/
   $UP --type config --sig "$T/b$G.sig" --file "$T/b$G.bin" > "$T/r$G" 2>&1; }
 B0=$(boots)
 # policies without management bindings (a change of them alone auto-commits)
-printf 'HQPOL1\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 0.0.0.0/0 via wan\n' > "$T/pa.txt"
+printf 'HQPOL1\nacl LAN-IN seq 5 allow tcp any 10.100.0.1/32 8088\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 0.0.0.0/0 via wan\n' > "$T/pa.txt"
 dns9() { local r; r=$(pi 'a=$(ip -4 -o addr | awk '"'"'$4 ~ /^10\.99\.0\./ {split($4, x, "/"); print x[1]; exit}'"'"'); [ -n "$a" ] || { echo NOADDR; exit 0; }; timeout 5 dig +short +time=2 +tries=1 -b "$a" @9.9.9.9 example.com' 2>/dev/null)
   [ "$r" = NOADDR ] && { echo "     (the Pi has no AP address 10.99.0.x — DNS probe not run)"; return 2; }   # 2: neither "answers" nor "dropped"
   grep -qE '^[0-9.]+$' <<<"$r"; }
+# baseline: A1 must change the POLICY only. A bundle left in force by an earlier run (this check's E step, the house
+# check, a Wi-Fi live spike) can carry WAN / Wi-Fi sections; a policy-only bundle would then also remove those
+# (changes 0x07 -> needs the owner's confirm -> the rest of this check cascades). Put a policy-only bundle with the
+# bench policy in force first (removing a WAN / Wi-Fi section needs the owner's confirm), so the check starts clean.
+secs=$(api /api/config | python3 -c 'import json,sys; s=json.load(sys.stdin).get("sections") or {}; print(" ".join(k for k in ("wan","wifi") if (s.get(k) or {}).get("present")))')
+# (always: even a policy-only bundle in force can carry `mgmt` bindings, and A1's policy has none — removing them is a
+#  management-plane change that rightly needs the owner's confirm; the baseline drops them so A1 changes filtering only)
+if true; then
+  # hqcfg takes canonical ASCII only: the bench file's comments carry non-ASCII (an em dash) — strip comments / blanks
+  sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' -e '/mgmt/d' "$ROOT/docs/design/bench-task26/policy-bench.txt" > "$T/pbase.txt"
+  bundle --policy "$T/pbase.txt"
+  waitlog "LIVE APPLY of generation $G" 30
+  grep -q '"needs_confirm": true' "$T/r$G" && { sleep 10; $UP --config-confirm "live check baseline" >/dev/null 2>&1; }
+  waitlog "bundle generation $G COMMITTED" 45; echo "     baseline: sections in force before ($secs) -> policy-only bundle gen $G committed=$([ $? = 0 ] && echo yes || echo NO)"
+  sleep 20   # the per-file WAN comes back (DHCP in the loop)
+fi
 dns9; r=$?; chk $([ $r = 1 ] && echo 0 || echo 1) "A0 per-file policy-bench in force: DNS to 9.9.9.9 is DROPPED"
 # --- A: a policy-only bundle applies LIVE and auto-commits (no management lines) ---
 bundle --policy "$T/pa.txt"
