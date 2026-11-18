@@ -97,6 +97,35 @@ def dga_benchmark(examples):
     return out
 
 
+def dga_sweep(records, thresholds=(300, 400, 500, 600)):
+    """dga.rs over every labelled dns record (the scorer is not trained, so all splits are fair game):
+    FP rate on benign, recall overall and per family, at several thresholds."""
+    benign, by_family, other_mal = [], collections.defaultdict(list), collections.defaultdict(list)
+    for r in records:
+        if r["kind"] != "dns" or r["labels"]["label"] not in ("benign", "malicious"):
+            continue
+        s = dga_ref.score(r["body"]["qname"])
+        if r["labels"]["label"] == "benign":
+            benign.append(s)
+        elif r["labels"]["family"] == "phishing" or r["labels"]["family"] is None:
+            other_mal[r["provenance"]["source_id"]].append(s)
+        else:
+            by_family[r["labels"]["family"]].append(s)
+
+    def rates(xs):
+        return {str(t): round(sum(x >= t for x in xs) / len(xs), 4) for t in thresholds} if xs else {}
+
+    dga_all = [x for v in by_family.values() for x in v]
+    return {
+        "thresholds": list(thresholds),
+        "benign": {"n": len(benign), "fp_rate": rates(benign)},
+        "dga_all": {"n": len(dga_all), "recall": rates(dga_all)},
+        "other_malicious": {k: {"n": len(v), "flag_rate": rates(v)} for k, v in sorted(other_mal.items())},
+        "families": {k: {"n": len(v), "recall": rates(v)} for k, v in sorted(by_family.items())},
+        "families_zero_recall_at_device_threshold": sum(1 for v in by_family.values() if not any(x >= dga_ref.DGA_THRESHOLD for x in v)),
+    }
+
+
 def markdown(rep, bench=None, title="Data quality report"):
     L = [f"# {title}", "", f"Examples: **{rep['examples']}**. Human-verified share: {rep['human_verified_share']}. "
          f"Synthetic share: {rep['synthetic_share']}. Provenance completeness: {rep['provenance_completeness']}. "

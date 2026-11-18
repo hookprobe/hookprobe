@@ -160,6 +160,26 @@ def cmd_catalog(a):
     return 0
 
 
+def cmd_dga_eval(a):
+    """Threshold sweep of the shipped dga.rs scorer over all labelled DNS records in the store."""
+    from heqkdata import quality
+    st, reg = Store(), registry.Registry()
+    recs = (r for r in st.records() if licensing.decide(reg.licenses[r["provenance"]["license_id"]], "evaluation")[0])
+    res = quality.dga_sweep(recs)
+    if a.json:
+        print(json.dumps(res, indent=1, sort_keys=True))
+        return 0
+    T = res["thresholds"]
+    print(f"benign  n={res['benign']['n']:7d}  FP     " + "  ".join(f"@{t}={res['benign']['fp_rate'].get(str(t), 0):.4f}" for t in T))
+    print(f"DGA     n={res['dga_all']['n']:7d}  recall " + "  ".join(f"@{t}={res['dga_all']['recall'].get(str(t), 0):.3f}" for t in T))
+    for k, v in res["other_malicious"].items():
+        print(f"{k[:20]:20} n={v['n']:7d} flagged " + "  ".join(f"@{t}={v['flag_rate'].get(str(t), 0):.3f}" for t in T))
+    print(f"families with zero recall at {dga_ref.DGA_THRESHOLD}: {res['families_zero_recall_at_device_threshold']} of {len(res['families'])}")
+    for k, v in sorted(res["families"].items(), key=lambda kv: kv[1]["recall"].get(str(dga_ref.DGA_THRESHOLD), 0)):
+        print(f"  {k:18} n={v['n']:5d} " + "  ".join(f"@{t}={v['recall'].get(str(t), 0):.2f}" for t in T))
+    return 0
+
+
 def cmd_dga(a):
     for n in a.names:
         s = dga_ref.score(n)
@@ -205,6 +225,9 @@ def main(argv=None):
     s = sub.add_parser("catalog")
     s.add_argument("--out")
     s.set_defaults(fn=cmd_catalog)
+    s = sub.add_parser("dga-eval")
+    s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_dga_eval)
     s = sub.add_parser("dga")
     s.add_argument("names", nargs="+")
     s.set_defaults(fn=cmd_dga)

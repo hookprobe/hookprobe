@@ -40,6 +40,26 @@ class PipelineTests(unittest.TestCase):
         self.assertEqual(self.counts["f-cic"], (2, 1))        # short row
         self.assertEqual(self.counts["f-iocv1"], (2, 1))
         self.assertEqual(self.counts["f-dga"], (3, 1))        # duplicate skipped, invalid rejected
+        self.assertEqual(self.counts["f-phiusiil"], (2, 3))   # IP host, both-labels domain, short row
+        self.assertEqual(self.counts["f-umudga"], (2, 0))
+
+    def test_phiusiil_uses_domain_only(self):
+        recs = {r["body"]["qname"]: r for r in self.st.records("f-phiusiil")}
+        self.assertEqual(sorted(recs), ["login-verify.example", "www.example.com"])
+        self.assertEqual(recs["www.example.com"]["labels"]["label"], "benign")      # UCI: 1 = legitimate
+        self.assertEqual(recs["login-verify.example"]["labels"]["label"], "malicious")  # 0 = phishing
+        self.assertNotIn("victim", json.dumps(recs["login-verify.example"]))       # URL query never ingested
+
+    def test_umudga_family_from_folder(self):
+        fams = {r["labels"]["family"] for r in self.st.records("f-umudga")}
+        self.assertEqual(fams, {"gozi_gpl"})
+
+    def test_dga_sweep(self):
+        from heqkdata import quality
+        res = quality.dga_sweep(self.st.records())
+        self.assertIn("gozi_gpl", res["families"])
+        self.assertGreater(res["benign"]["n"], 0)
+        self.assertEqual(res["dga_all"]["recall"]["600"] <= res["dga_all"]["recall"]["300"], True)
 
     def test_dga_list_family_and_benchmark(self):
         recs = list(self.st.records("f-dga"))
