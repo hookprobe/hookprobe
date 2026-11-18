@@ -68,7 +68,11 @@ wait_gw() { for _ in $(seq 1 ${2:-20}); do gw_ok "$1" && return 0; sleep 2; done
 assoc_of() { since "$1" | grep -a "assoc RSNE" | grep -ai "sta $2" | sed -E 's/.*akm=(0x[0-9a-f]+) pmkids=([0-9]+) -> (.*) sta .*/\1 \2 \3/'; }
 sae_of() { since "$1" | grep -ai "\[WPA3\] SAE $2" | grep -c "Committed\|Accepted"; }
 
-cleanup() { psudo "nmcli con down hq-iso-a" >/dev/null 2>&1; psudo "nmcli con delete hq-iso-a" >/dev/null 2>&1; }
+# leave wlan1 as found: a supplicant this run started is stopped and NetworkManager owns the radio again (a later
+# check that drives wlan1 through nmcli otherwise finds it "unmanaged" and never joins)
+cleanup() { psudo "kill \$(cat /run/hq-claims.pid 2>/dev/null) 2>/dev/null; rm -f /run/hq-claims.pid" >/dev/null 2>&1
+  psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1
+  psudo "nmcli con down hq-iso-a" >/dev/null 2>&1; psudo "nmcli con delete hq-iso-a" >/dev/null 2>&1; }
 trap cleanup EXIT
 
 # --- the two stations ---
