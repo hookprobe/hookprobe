@@ -680,7 +680,7 @@ pub fn selftest() -> bool {
     // fault containment: deliberate EL0 fault -> reset, counted; the next query parses again
     let (where_, _, f0, r0, _) = stats();
     let faulted = match el0::server() {
-        Some(s) => s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0 == hal::lansvcabi::ST_PANIC,
+        Some(s) => crate::superv::deliberate(|| s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0 == hal::lansvcabi::ST_PANIC),
         None => false,
     };
     let (_, _, f1, r1, _) = stats();
@@ -937,7 +937,7 @@ pub fn sae_selftest() -> bool {
     }
     fn fault_hook(_: &[u8], _: bool) -> Option<w::Msg> {
         let s = el0::server()?;
-        (s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0 != hal::lansvcabi::ST_PANIC).then_some(w::MSG0)
+        (crate::superv::deliberate(|| s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0) != hal::lansvcabi::ST_PANIC).then_some(w::MSG0)
     }
 
     install_dhcp();
