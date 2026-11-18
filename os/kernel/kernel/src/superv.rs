@@ -107,6 +107,21 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
     for (i, o) in OUTCOME_NAMES.iter().enumerate().skip(1) {
         let _ = write!(w, "{}\"{}\":{}", if i > 1 { "," } else { "" }, o, jj.by_outcome[i]);
     }
+    // why the previous boot ended (reason + culprit; the crash record's text as the detail)
+    let c = crate::rtwdog::last_crash();
+    let (reason, culprit) = hal::superv::last_boot_reason(c.map(|c| c.kind), c.map_or("", |c| c.text()), crate::rtwdog::prev_reset_was_watchdog());
+    let _ = write!(w, "}},\"last_boot\":{{\"reason\":\"{}\",\"culprit\":", reason);
+    match culprit {
+        Some(n) => {
+            let _ = write!(w, "\"{}\"", n);
+        }
+        None => w.raw("null"),
+    }
+    w.raw(",\"detail\":");
+    match c {
+        Some(c) => w.string(c.text()),
+        None => w.raw("null"),
+    }
     let _ = write!(w, "}},\"now_ms\":{},\"recoveries\":[", now_ms());
     for (i, r) in jj.newest_first().take(limit).enumerate() {
         let _ = write!(w, "{}{{\"seq\":{},\"component\":\"{}\",\"kind\":\"{}\",\"rung\":\"{}\",\"outcome\":\"{}\",\"repeats\":{},\"t_detect_ms\":{},",
