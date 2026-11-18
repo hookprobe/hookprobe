@@ -120,12 +120,12 @@
 
 | Need | Best candidate | Status for HookProbe |
 |---|---|---|
-| DGA positives | **UMUDGA** (MIT) via `domain_list` adapter; 360netlab DGA code (MIT) to generate | **trainable now** |
+| DGA positives | **UMUDGA** (MIT) via `domain_list` adapter; 360netlab DGA code (MIT) to generate | **acquired** (51 × 1000-name samples, sha256-checked) |
 | Tunnelling / exfiltration | CIC-Bell-DNS-EXF-2021 (UNB CIC) | RESEARCH terms: evaluation for research only |
 | Malicious hosts | URLhaus, ThreatFox | RESTRICTED (subscription + AI consent) |
 | Botnet C2 IPs (live intel) | Feodo Tracker | ship as IOC pack: yes; train: needs consent |
 | Benign baseline | Tranco | UNKNOWN: ask the Tranco authors for terms, or build our own from consented HookProbe deployments (aggregate, k-anonymous) |
-| Phishing names (benign + phishing, labelled) | **PhiUSIIL** (CC BY 4.0, UCI) | trainable once fetched (adapter: R2) |
+| Phishing names + benign baseline | **PhiUSIIL** (CC BY 4.0, UCI; label 1 = legitimate, 0 = phishing) | **acquired**: 219,850 distinct domains; the benign half is the licence-clean baseline Tranco could not provide |
 | Lookalike / brand | (none open) | generate from `dga.rs` BRANDS × substitution rules, marked synthetic |
 | **Best route** | **HookProbe's own isolated-lab captures** of DNS tunnelling tools and DGA families re-implemented from published algorithms | owned data, no licence question, matches device telemetry |
 

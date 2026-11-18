@@ -15,7 +15,7 @@ from .adapters import Reject, Ctx
 
 def normalize(store, registry, acq, adapter_name=None, pseudonym_key=None, validator=None):
     source = registry.source(acq["source_id"])
-    name = adapter_name or (source["acquisition"] or {}).get("adapter")
+    name = adapter_name or (source["acquisition"] or {}).get("adapter") or source.get("adapter")
     if not name:
         raise RuntimeError(f"{source['id']}: no adapter declared; pass --adapter")
     mod = adapters.get(name)

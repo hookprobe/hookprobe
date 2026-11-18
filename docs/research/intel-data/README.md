@@ -9,10 +9,11 @@ behaviour, no kernel code and no ADR.
 |---|---|
 | [HEQK-SECURITY-INTELLIGENCE.md](HEQK-SECURITY-INTELLIGENCE.md) | architecture assessment of what exists; the canonical data model (30 entities); taxonomy alignment; pipeline |
 | [HEQK-DATASET-RESEARCH.md](HEQK-DATASET-RESEARCH.md) | findings from three research passes; licensing traps; regional (CH/LU/EU/UK/RO) routes; recommended actions |
-| [CATALOGUE.md](CATALOGUE.md) | generated table of all 149 sources and 122 licence decisions, with the gate result per purpose |
+| [CATALOGUE.md](CATALOGUE.md) | generated table of all 149 sources and 118 licence decisions, with the gate result per purpose |
 | [HEQK-DATA-GOVERNANCE.md](HEQK-DATA-GOVERNANCE.md) | licence gate, provenance, GDPR and telemetry consent, safe parsing, synthetic data, evaluation hygiene |
 | [HEQK-TRAINING-STRATEGY.md](HEQK-TRAINING-STRATEGY.md) | what each tier learns from; TrainingExample format; export spec; evaluation; roadmap R1–R8 |
-| [QUALITY-2026-11-18.md](QUALITY-2026-11-18.md) | quality report and manifest of the first real build (KEV + ATT&CK + synthetic SOC) |
+| [QUALITY-2026-11-18.md](QUALITY-2026-11-18.md) | quality report and manifest of the first real build: 269,076 examples (DNS 266,548 · KEV 1,786 · ATT&CK 706 · synthetic SOC 36) |
+| [DGA-BASELINE-2026-11-18.md](DGA-BASELINE-2026-11-18.md) | **measured:** the shipped `dga.rs` on 49,898 DGA names (50 families) and 135,796 benign names |
 
 Tooling: [`tools/intel-data/`](../../../tools/intel-data/).
 
@@ -26,5 +27,6 @@ Tooling: [`tools/intel-data/`](../../../tools/intel-data/).
      PhiUSIIL, Atomic Red Team, CALDERA, and HookProbe's own lab data.
 2. **The language model should be trained to explain, not to judge.** This follows Phase 0: small LMs
    judged worse than the deterministic core. Feeds stay live intelligence and are not memorised.
-3. **HookProbe's own DNS protection blocks security-research sites.** The lab resolver (dnsXai on the lab router) answers NXDOMAIN for feodotracker.abuse.ch, archive.ics.uci.edu, stratosphereips.org
-   and data.mendeley.com.
+3. **`dga.rs` never cries wolf, but it rarely catches DGAs.** At the device threshold it raised zero false positives on 135,796 benign names, and it caught 6.8% of DGA names; 31 of 50 families are never flagged ([baseline](DGA-BASELINE-2026-11-18.md)). This is the measured case for a tier-B DNS specialist.
+4. **HookProbe's own DNS protection blocks security-research sites.** The lab resolver (dnsXai on the lab router) answers NXDOMAIN for feodotracker.abuse.ch, archive.ics.uci.edu, stratosphereips.org
+   and data.mendeley.com. The operator allowlisted them on 2026-11-18 so the acquisitions could run.

@@ -68,7 +68,7 @@ exists, so the foundation feeds it instead of duplicating it.
 
 | Gap | Before | Now |
 |---|---|---|
-| Source and licence knowledge | Feeds hard-coded in scripts, licences unchecked (`hydra-feed-fetch.sh`, V1 `feed_sync.py`) | 149 catalogued sources and 122 licence decisions, all machine-checked ([catalogue](CATALOGUE.md)) |
+| Source and licence knowledge | Feeds hard-coded in scripts, licences unchecked (`hydra-feed-fetch.sh`, V1 `feed_sync.py`) | 149 catalogued sources and 118 licence decisions, all machine-checked ([catalogue](CATALOGUE.md)) |
 | A data model shared by datasets and heqk telemetry | Each experiment parsed its own format | `heqk.security-event/1` envelope + kind schemas, aligned to `det_row` / `siem.rs` |
 | Licence enforcement | none | `licensing.decide()` gates acquisition **and** build, per purpose |
 | Leak-free splits | per script | group-keyed splits + contamination check that fails the build |
@@ -173,7 +173,7 @@ place, and nothing is merged into a lossy "universal" field.
 ## 3. Pipeline (implemented)
 
 ```
-SOURCE DISCOVERY        research passes → registry/sources.json (149) + licenses.json (122)       heqk_data.py check
+SOURCE DISCOVERY        research passes → registry/sources.json (149) + licenses.json (118)       heqk_data.py check
 SOURCE REGISTRY         schema-validated, sorted, cross-checked (source ↔ licence ↔ collection)
 DATA ACQUISITION        fetch (https only, size-capped, redirect-checked) | register (manual)    heqk_data.py fetch/register
 LICENCE VALIDATION      licensing.decide(licence, purpose) at acquisition AND at build           heqk_data.py gate

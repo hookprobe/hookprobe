@@ -24,7 +24,8 @@ def parse(path, ctx):
     stem = re.sub(r"\.(txt|csv|list)(\.gz)?$", "", fname)
     benign = parent.lower() in BENIGN_DIRS or stem.lower() in BENIGN_DIRS
     label = "benign" if benign else "malicious"
-    family = None if benign else stem[:128]
+    # UMUDGA ships <family>/list/1000.txt: a numeric stem is a sample size, so the family is the folder
+    family = None if benign else ((parent if stem.isdigit() and parent else stem)[:128])
     seen = set()
     with safeio.open_text(path) as f:
         for n, ln in safeio.lines(f):
