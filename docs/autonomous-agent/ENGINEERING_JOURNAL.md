@@ -16,12 +16,12 @@ Newest first. Each entry: what was investigated or changed, the evidence, and it
   against a local mock device (Python, test data only): dry run → approve → "Applied and verified",
   table empty, button disabled; the mock recorded exactly the two expected POSTs. New Playwright spec
   `revoke-all.mjs` is not run locally (no Playwright here); CI g3 runs it.
-- **`main` was rewritten** on 2026-11-18, after #1279 merged (seen at the next fetch): every commit from the #1267 merge
-  (`ae2ad24a` → `ac57d996`) to #1279 has a new hash. Trees are byte-identical; the only difference
-  is that GitHub's `gpgsig` on the merge commits was removed. Who did it and why is the operator's to
-  confirm. Effect here: #1281 was re-parented with `git commit-tree` (same tree, no force-push), and
-  AB-06 moved to a new branch and PR #1282 because force-pushing #1280's branch was refused. #1280
-  is still open on the old history; merging it would bring back 41 duplicate commits.
+- **`main` was rewritten** on 2026-11-18 at the operator's request, to correct commit authorship
+  (old `main` `88d88169`, new `6e875c87`; trees identical). Work is now based only on the new
+  `origin/main`, never merged from old-history branches, and committed only as the `hookprobes`
+  noreply identity. #1281 was re-parented with `git commit-tree` (same tree, no force-push). The
+  other session replayed #1280 onto the new `main`; my first read missed that (I checked a stale
+  local worktree), so I opened a duplicate, #1282, to be closed.
 - Lesson from #1278/#1279: status updates now ride in the PR for the work they describe.
 
 ## 2026-11-18 — Session 2: AB-17 docs corrections
