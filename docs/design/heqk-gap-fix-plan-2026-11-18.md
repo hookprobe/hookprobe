@@ -104,3 +104,32 @@ WdgM / PHM, IEC 61508 / ISO 26262 diagnostic coverage, seL4 MCS. Those stay open
 
 Anti-patterns to keep out (from the research): reset loops (bounded by A5 decay + the one-reboot rule), competing
 restart owners (A3), recovery that masks a real fault (every recovery is journaled, A10, and counted toward escalation).
+
+### Execution plan for the autoheal harness (PR by PR)
+
+Grounded in the code as it is today:
+- `el0srv::Server` (el0-wifi, el0-wpa, el0-lansvc) already resets on a fault or budget overrun, with capped
+  exponential backoff (50 ms doubling to 5 s, `BACKOFF_MS` / `BACKOFF_MAX_MS`), and logs `[EL0-FAULT] … kind=…`;
+- **el0-tlshost has its own supervisor** (`tlshost::TlsHost`, its own restart / timeout / fault counters);
+- the Wi-Fi ladder lives in `wifiheal.rs`;
+- recovery evidence is spread over beat lines, `crashrec` and the sealed evidence log (`evlog`).
+
+Each step is one PR: host / QEMU tests + validate + mc-e2e + clippy ratchet, and a CM5 proof where it touches a metal
+path. Nothing is marked done on QEMU alone where metal applies.
+
+| Step | Scope | Files | Tests | CM5 proof |
+|---|---|---|---|---|
+| **H1** failure kinds + recovery journal (A2, A10) | `hal::superv::Kind` {Exception, Budget, InitRefused, Complaint, Probe, Planned} and `Recovery` {server, kind, rung, t_detect, t_recovered, outcome}; every server fault and every heal rung emits one; a 64-entry RAM ring, flushed to `evlog`; `GET /api/recoveries` | `hal/src/superv.rs` (new), `el0srv.rs`, `tlshost.rs`, `wifiheal.rs`, `http.rs` | host tests for the encoding; `[P-superv]` QEMU: an injected server fault yields exactly one journal entry with the right kind | `wifi-inject` fault + a C5 burst: entries with kind, rung and time-to-recover; survives a power cycle via `evlog` |
+| **H2** one supervisor table (A1, A3) | `superv.rs`: a static table per server (name, dependencies, state class, policy row, generation); `el0srv::Server` and `TlsHost` report into it and take restart decisions from it; start order from the dependencies with `CMD_INIT` = ready; a restart bumps the generation | `kernel/src/superv.rs` (new), `el0srv.rs`, `tlshost.rs`, `main.rs` (start order) | `[P-superv]`: dependency order; one restart per death; generation increments; no second restart path | boot order unchanged on the CM5 (`[EL0-*]` lines); claims C1–C5 unchanged |
+| **H3** policy table with decay and escalation (A5) | per (server, kind): backoff (existing 2^n cap) + a count-in-window decay + an escalation action past N restarts (Wi-Fi bus → firmware reload, already the ladder; TLS host → in-kernel HTTPS refusal + journaled degrade; LAN services → keep the in-kernel fallback where one exists) — never a reboot loop (the one-reboot rule stays global) | `hal/src/superv.rs` (pure policy, host-tested), `superv.rs` | host tests: a fault storm escalates once; decay restores; no action repeats inside its window | a TLS-host fault burst (bench injector) escalates and is journaled |
+| **H4** complaints + functional probes (A4, A6) | `superv::complain(server, why)`; probes on a slow cadence (≥ 60 s, jittered, inside the loop-gap budget): DNS answer from Shield, a TLS handshake to el0-tlshost from the kernel, AP serving (already in the OTA gate), a DHCP OFFER on loopback; a failing probe = a complaint | `superv.rs`, `apcore.rs` / `lansvc.rs` / `tlshost.rs` probe hooks | `[P-superv]` probes against QEMU servers; a broken server is detected by its probe | a hung-but-alive TLS host (injector: never answers) is detected by the probe and restarted; loop gap stays < 1 s |
+| **H5** CPU budget per window (A7) | per server: excursion time summed over a 1 s window against a budget; over budget = "bankrupt" → calls refused for the rest of the window + a Budget complaint; System (EL1) unbounded | `el0srv.rs` (accounting exists per call), `superv.rs` | host test of the window accounting; `[P-el0srv]` a spinning server is throttled, others keep their share | throughput + WPA3 unchanged under a CPU-hog injector in one server |
+| **H6** SWIFI at scale (A9) | a fault-injection campaign driver: random server faults (forced abort, budget hang, corrupted reply, register mutation in el0-wifi) at a configurable rate; QEMU nightly; CM5 on the relay rig | `tools/diagnostics/cm5-swifi.sh`, QEMU injector feature, `superv.rs` counters | QEMU: ≥ 10,000 injected faults, 0 kernel crashes, 0 isolation breaches (K1 scan), recovery rate per kind | CM5: ≥ 1,000 faults over a few hours: same acceptance + recovery-time percentiles; real-hardware recovery may need the reload rung (MINIX 3: ~99 % vs 100 % emulated) |
+| **H7** state classes + integrity (A8) | the table records each server's state class; persistent state pages (el0-wpa) get a checksum verified before reuse after a fault (else wipe + the existing re-provision path) | `superv.rs`, `el0srv.rs` (state pages) | `[P-el0wpa]`: a corrupted state page is detected and wiped, never reused | a corrupted-state injection on el0-wpa: wiped, stations re-key, journaled |
+
+**Order:** H1 → H2 → H3 → H4 → H5 → H6 (the acceptance gate for H1–H5) → H7 alongside. H1 and H2 are the foundation;
+H6 is what lets us claim the harness works.
+
+The second research pass (Fuchsia, Zephyr, ARINC 653, AUTOSAR WdgM / PHM, IEC 61508 / ISO 26262, seL4 MCS) is running;
+its findings will be added here as Wave 2c and folded into H2–H5 (expected: logical / program-flow supervision and
+deadline supervision from AUTOSAR WdgM, the error-level hierarchy and warm vs cold restart from ARINC 653).
