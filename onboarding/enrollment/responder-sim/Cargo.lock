@@ -161,6 +161,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f05391a505666bdf2b5d2626f41b7f0f49052b1e33cceac960eaa818008141da"
 
 [[package]]
+name = "evidence-export"
+version = "0.0.26"
+dependencies = [
+ "boot-abi",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -333,6 +340,7 @@ dependencies = [
  "boot-abi",
  "chacha20poly1305",
  "ed25519-compact",
+ "evidence-export",
  "getrandom",
  "ml-kem",
  "serde_json",
