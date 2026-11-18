@@ -110,6 +110,81 @@ export function verifyOwnerChange(c: OwnerChange, onVerified?: () => void) {
   };
 }
 
+/* ── Remove all owner rules (ADR 0055 D7/D8: heqk `POST /api/owner-rules/revoke-all`, `op=revoke_all`) ──
+ * One journal record clears every owner rule (zones, Shield profiles, always-allow / always-block, names) and ends
+ * every LAN-access exception. The signed baseline and the management floor are untouched. Same guards as a single
+ * rule: a dry run first, then a reason + owner-key re-authentication + permanent=true, then read back. */
+
+interface LanAccessView { exceptions: { device?: string; dst?: string }[] }
+export const [lanExceptions, setLanExceptions] = createSignal<number | null>(null);
+
+/** Count of LAN-access exceptions in force (`/api/lan-access`), or null when the device does not report it. */
+export async function refreshLanExceptions(): Promise<number | null> {
+  try {
+    const v = await fetchJson<LanAccessView>('/api/lan-access');
+    const n = Array.isArray(v.exceptions) ? v.exceptions.length : null;
+    setLanExceptions(n);
+    return n;
+  } catch {
+    setLanExceptions(null);
+    return null;
+  }
+}
+
+/** Dry run: the device confirms it would accept the revoke; the lines list what goes, read from the device. */
+export async function previewRevokeAll(): Promise<{ lines: DiffLine[]; warnings: string[] }> {
+  const o = await post<Outcome>('/api/owner-rules/revoke-all', { op: 'revoke_all', reason: 'preview from Mission Control', dry_run: '1' });
+  if (!o.ok) throw new Error(`The device refused the preview: ${o.refused}`);
+  const v = await refreshOwnerRules();
+  const lan = await refreshLanExceptions();
+  const lines: DiffLine[] = (v?.rules ?? []).map((r) => ({
+    kind: 'removed' as const,
+    text: `${KIND_LABEL[r.kind] ?? r.kind} · ${r.target}${r.kind === 'device_policy' || r.kind === 'shield_profile' ? ` (${r.value})` : ''}`,
+  }));
+  if (lan === null) lines.push({ kind: 'removed', text: 'Any LAN-access exceptions in force (this device did not list them)' });
+  else if (lan > 0) lines.push({ kind: 'removed', text: `LAN-access exceptions · ${lan} in force` });
+  lines.push({ kind: 'unchanged', text: 'Signed baseline (DEVICES.TXT, policy, Shield) and management access' });
+  const warnings: string[] = [];
+  if (!v) warnings.push('The device did not list its owner rules, so the list above may be incomplete.');
+  else if (v.rules.length === 0 && !lan) warnings.push('There are no owner rules to remove. Approving still writes a "start over" record to the journal.');
+  return { lines, warnings };
+}
+
+/** Approve: reason + owner key, then one permanent "start over" record. */
+export async function applyRevokeAll(): Promise<{ id: string; note: string }> {
+  const a = await approve({
+    title: 'Remove every owner rule?',
+    body: 'Every rule you added on this device ends, and LAN-access exceptions end too. The signed baseline applies as shipped. This cannot be undone; you would add the rules again one by one.',
+    confirm: 'Remove all', destructive: true, reason: {}, key: {},
+  });
+  if (!a) throw new Error('Cancelled.');
+  const o = await post<Outcome>('/api/owner-rules/revoke-all', { op: 'revoke_all', reason: a.reason, permanent: 'true', owner_key: a.key });
+  if (!o.ok) throw new Error(`The device refused it: ${o.refused}`);
+  return { id: `revoke_all|${o.seq ?? 0}`, note: `Journal record ${o.seq}.` };
+}
+
+/** PlanDiff `watch`: verified only when the device reports no owner rules and no LAN-access exceptions. */
+export function verifyRevokeAll(onVerified?: () => void) {
+  return (_id: string, update: (u: ApplyUpdate) => void): (() => void) => {
+    let stop = false;
+    update({ state: 'applying' });
+    void (async () => {
+      for (let i = 0; i < 5 && !stop; i++) {
+        const v = await refreshOwnerRules();
+        const lan = await refreshLanExceptions();
+        if (v && v.rules.length === 0 && !lan) {
+          onVerified?.();
+          update({ state: 'verified', detail: `No owner rules are left${lan === null ? '' : ' and no LAN-access exceptions'}; the signed baseline applies.` });
+          return;
+        }
+        await new Promise((res) => setTimeout(res, 1000));
+      }
+      if (!stop) update({ state: 'failed', detail: 'The device still reports owner rules. Check the list on Protect → Rules.' });
+    })();
+    return () => { stop = true; };
+  };
+}
+
 /** device_label grammar, as heqk checks it: 1–31 printable ASCII — letters, digits, space and . _ - ' ( ) , —
  *  no leading or trailing space. Returns the problem, or '' when valid. */
 export function checkLabel(v: string): string {
