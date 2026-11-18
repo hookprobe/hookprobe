@@ -17,12 +17,20 @@ export default async function (t) {
       if (p === '/api/incidents') return r.fulfill(json({ count: n, incidents: incidents(n) }));
       if (p.startsWith('/api/incidents/') && p.endsWith('/processes')) return r.fulfill(json({ incident: decodeURIComponent(p.split('/')[3]), found: true, process_count: 0, roots: [] }));
       if (p === '/api/reports') return r.fulfill(json({ count: n, reports: reports(n) }));
+      // The detail panels (process tree, report list) render only once the selected incident's detail loads.
+      const m = p.match(/^\/api\/incidents\/([^/]+)$/);
+      if (m) {
+        const id = decodeURIComponent(m[1]), row = incidents(n).find((x) => x.id === id) ?? incidents(n)[0];
+        return r.fulfill(json({ ...row, explanation: { why: 'Port scan seen from this address.', confidence: 80, evidence: 1, model: null, related_events: [] },
+          attack_path: { incident: id, node_count: 1, edge_count: 0, nodes: [{ id: `ip:${row.device_ip}`, type: 'ip', label: row.device_ip }], edges: [] } }));
+      }
       return r.fulfill(json({}, 404));
     });
   };
 
   await mock(32, ['ids', 'wan']);
   await go('/investigate/queue', 2500);
+  ok(await vis(page.locator('.inv-title', { hasText: 'Port scan from 198.51.100.1' })), 'detail: the selected incident loaded (the panels below depend on it)');
   ok(await vis(page.locator('.hp-live-state', { hasText: 'This device does not see processes' })), 'process tree: no host_telemetry → says this device does not see processes');
   ok(!(await vis(page.locator('text=EDR layer may not have observed'))), 'process tree: no hint of an EDR layer that does not exist');
   ok(await page.locator('.inv-report-row').count() === 32, 'reports: the 32 rows the device returned');
