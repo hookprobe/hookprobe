@@ -87,6 +87,9 @@ mod wifilive;
 // audit A7: Wi-Fi self-heal (the metal port is cm5-only, the mock self-test runs in QEMU)
 #[allow(dead_code)]
 mod wifiheal;
+// autoheal harness H1: the recovery journal (every EL0 server restart, every Wi-Fi heal rung) -> /api/recoveries
+#[allow(dead_code)]
+mod superv;
 // ADR 0059 step 4a: the management ABI + the EL0 native shell
 #[cfg(feature = "mcserve")]
 mod mgmtabi;
@@ -3710,6 +3713,9 @@ fn cm5_p10_probe() {
                         // wedge detector arms (it needs queued deliveries, which an idle station never produces — 22 min)
                         // Audit A7 self-heal: classify, then kick -> BSS bounce -> firmware reload -> one reboot -> degrade
                         let mut heal = wifiheal::Heal::from_boot(wifiheal::boot_record(), !rtwdog::self_heal_allowed());
+                        if wifiheal::boot_record().is_some_and(|(f, _)| f & wifiheal::F_REBOOTED != 0) {
+                            superv::boot_after_wifi_reboot(); // H1: the reboot rung, closed by the first healthy tick
+                        }
                         heal.baseline(cyw43::fw_halts());
                         let mut stas = wifiheal::StaSet::new();
                         // WPA3: per-station rate limit of the association-refusal log (a stale-scan station retries ~15 s)
@@ -4411,7 +4417,9 @@ fn cm5_p10_probe() {
                                     rx_frames: wifi_frames, stations: stas.len(), fw_halts: cyw43::fw_halts(),
                                     bus_faults };
                                 let mut hp = MetalHeal { ssid: ap_ssid, cs: chosen_cs, gtk: &gtk, ap: &mut ap, head, nv: unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) } };
-                                heal.step(&smp, &mut hp)
+                                let a = heal.step(&smp, &mut hp);
+                                superv::wifi_heal(a as u8, heal.class == wifiheal::Class::Healthy, smp.now_ms); // H1
+                                a
                             };
                             match heal_act {
                                 wifiheal::Action::BssBounce | wifiheal::Action::FirmwareReload => {
@@ -7569,6 +7577,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = cfgd::policy_selftest(); // step 7: the live policy executor + the owner-address probe (F-e)
         let _ = wanlive::selftest(); // step 9: the WAN executor (verify first, teardown, NAT flush, PPPoE auth reject)
         let _ = wifilive::selftest(); // step 10: the Wi-Fi executor (derive first, the BSS bounce, keys wiped, LKG revert)
+        let _ = superv::selftest(); // autoheal harness H1: the recovery journal
         let _ = wifiheal::selftest(); // audit A7: Wi-Fi self-heal (classify, kick -> bounce -> reload -> one reboot -> degrade)
         #[cfg(not(feature = "cm5"))]
         let _ = wifilive::after_selftest(); // follow-up: Mission Control serving re-evaluated + IPv6 state at an AP restart

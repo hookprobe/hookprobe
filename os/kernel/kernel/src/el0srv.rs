@@ -393,11 +393,15 @@ mod imp {
                         self.name, self.faults, self.r32(H_CMD), match how { crate::Excursion::Timeout => "budget-overrun", crate::Excursion::Fault => "exception", _ => "panic-status" },
                         us, self.budget_us, self.streak + 1, ["nothing in flight", "reset+abort+terminate", "reset did NOT clear", "-", "-", "-", "-", "-", "-", "n/a"][rec as usize]));
                 }
+                let _ = crate::superv::server_fault(self.name, how == crate::Excursion::Timeout); // H1: one journal entry per episode
                 self.reset();
                 self.streak = self.streak.saturating_add(1);
                 let b = (BACKOFF_MS << (self.streak - 1).min(10)).min(BACKOFF_MAX_MS);
                 self.next_ok = now_ms() + b;
                 return Call::Fault;
+            }
+            if self.streak > 0 {
+                crate::superv::server_ok(self.name); // H1: the first good call after a fault closes the entry
             }
             self.streak = 0;
             Call::Done(st, self.r32(H_R0), self.r32(H_SERVED))
@@ -677,10 +681,21 @@ mod imp {
         };
         // a fault: reset + restart counted, the next call held off by the backoff, then a fresh incarnation
         let tx_left = s.tx_push(&[1, 2, 3]);
+        // H1: the fault is journaled — exactly one entry (kind exception, rung restart), closed Recovered by the first good
+        // call after the backoff (the journal is swapped out for the test and restored after it)
+        let saved = crate::superv::swap(hal::superv::Journal::new());
         let fault = s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.faults == 1 && s.restarts == 1 && s.call(CMD_INIT) == Call::Backoff;
+        let opened = {
+            let j = crate::superv::journal();
+            j.total() == 1 && j.get(1).is_some_and(|r| r.kind == hal::superv::Kind::Exception && r.rung == hal::superv::Rung::Restart && r.outcome == hal::superv::Outcome::Pending)
+        };
         let t0 = now_ms();
         while now_ms() < t0 + BACKOFF_MS + 5 {}
         let fresh = s.call(CMD_INIT) == Call::Done(ST_OK, 0, 1);
+        let journaled = opened && {
+            let j = crate::superv::journal();
+            j.total() == 1 && j.get(1).is_some_and(|r| r.outcome == hal::superv::Outcome::Recovered && r.duration_ms().is_some_and(|d| d >= BACKOFF_MS))
+        };
         // the rings were wiped by the reset: the frame queued before the fault is not handed to the new incarnation
         let wiped = tx_left && s.call(CMD_POLL) == Call::Done(ST_OK, 0, 2) && ring::pending(&s.rx) == 0;
         // consecutive faults (no good call between them) double the backoff; a good call resets the streak
@@ -688,10 +703,11 @@ mod imp {
         let t1 = now_ms();
         while now_ms() < t1 + BACKOFF_MS + 5 {}
         let doubled = f1 && s.call(CMD_SELFTEST_FAULT) == Call::Fault && s.backoff_left_ms() > BACKOFF_MS;
-        let pass = init && rx && tx && resident && hostile && probe && rx_el0 && tx_el0 && ctl_el0 && fault && fresh && wiped && doubled;
+        let _ = crate::superv::swap(saved); // the doubled faults above stay out of the real journal too
+        let pass = init && rx && tx && resident && hostile && probe && rx_el0 && tx_el0 && ctl_el0 && fault && fresh && wiped && doubled && journaled;
         arch_aarch64::_print(format_args!(
-            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} step 4b-2b: a frame read in EL0 over the grant (mailbox, then dry; a dry budget never waits in EL0; IO page clean)={} step 4c: a data frame written in EL0 (attempted, too-big refused, bad request refused; IO page clean)={} step 4d: a control request written in EL0 (attempted, bad request refused; IO page clean)={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={}\n",
-            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, rx_el0, tx_el0, ctl_el0, fault, fresh, wiped, doubled
+            " [P-el0srv] {} — ADR 0065 step 2, the resident EL0 driver substrate (el0-wifi + a fake device): loads with a device grant + two rings, INIT answers={} device RX -> driver -> RX ring -> kernel={} kernel -> TX ring -> driver -> device (1514 B)={} resident (served counter kept across calls)={} a hostile RX ring is refused, counted, resynced={} step 4a: the device page's identity registers read through the grant={} step 4b-2b: a frame read in EL0 over the grant (mailbox, then dry; a dry budget never waits in EL0; IO page clean)={} step 4c: a data frame written in EL0 (attempted, too-big refused, bad request refused; IO page clean)={} step 4d: a control request written in EL0 (attempted, bad request refused; IO page clean)={} a fault resets + is counted + the next call waits for the backoff={} then a fresh incarnation (counter from 1)={} rings wiped by the reset={} consecutive faults double the backoff={} H1: the fault journaled once, closed Recovered after the backoff={}\n",
+            if pass { "PASS" } else { "FAIL" }, init, rx, tx, resident, hostile, probe, rx_el0, tx_el0, ctl_el0, fault, fresh, wiped, doubled, journaled
         ));
         pass
     }
