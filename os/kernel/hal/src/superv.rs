@@ -235,6 +235,20 @@ impl Journal {
     }
 }
 
+/// Why the previous boot ended (plan Wave 2c C5: reason + culprit, as Fuchsia's last-reboot record): from the crash
+/// record the previous boot left (`crash_kind` 1 = panic, 2 = kernel fault, 3 = self-heal reset; its text) and
+/// whether the reset was watchdog-type. The culprit is the component that caused it, when one is known — a generic
+/// reason (a watchdog reset with no record) names none rather than guess.
+pub fn last_boot_reason(crash_kind: Option<u32>, text: &str, watchdog: bool) -> (&'static str, Option<&'static str>) {
+    match crash_kind {
+        Some(1) => ("kernel-panic", Some("kernel")),
+        Some(2) => ("kernel-fault", Some("kernel")),
+        Some(_) => ("self-heal-reset", if text.starts_with("Wi-Fi") { Some("wifi") } else { None }),
+        None if watchdog => ("watchdog", None),
+        None => ("power-on", None),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,6 +332,16 @@ mod tests {
         }
         assert_eq!(j.by_outcome[Outcome::Failed as usize], 1);
         assert!(!j.is_open(H));
+    }
+
+    #[test]
+    fn last_boot() {
+        assert_eq!(last_boot_reason(None, "", false), ("power-on", None));
+        assert_eq!(last_boot_reason(None, "", true), ("watchdog", None));
+        assert_eq!(last_boot_reason(Some(1), "panicked at x", true), ("kernel-panic", Some("kernel")));
+        assert_eq!(last_boot_reason(Some(2), "Sync/SPx", true), ("kernel-fault", Some("kernel")));
+        assert_eq!(last_boot_reason(Some(3), "Wi-Fi recovery exhausted: x", true), ("self-heal-reset", Some("wifi")));
+        assert_eq!(last_boot_reason(Some(3), "something else", true), ("self-heal-reset", None));
     }
 
     #[test]
