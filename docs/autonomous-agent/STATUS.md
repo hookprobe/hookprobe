@@ -12,14 +12,14 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-Waiting for CI on the two draft PRs. Write access for `hookprobes` granted 2026-11-17.
+Both draft PRs are CI-green and waiting for operator review. Write access for `hookprobes` granted 2026-11-17.
 
 ## Delivery ledger
 
 | Work | Branch | Implemented | Local tests | CI | Pushed | PR | Merged |
 |---|---|---|---|---|---|---|---|
-| Engineering audit docs | `agent/engineering-audit` | yes | n/a (docs) | running | yes | [#1269](https://github.com/hookprobe/hookprobe/pull/1269) draft | no |
-| AB-05 Copilot AI-models link | `agent/mc-honest-states` @ `02cb4780` | yes | astro check 0 errors; build 27 pages; browser check of 3 hash cases; Playwright spec added but not run locally | running (g3 is the first run of the new spec) | yes | [#1268](https://github.com/hookprobe/hookprobe/pull/1268) draft | no |
+| Engineering audit docs | `agent/engineering-audit` | yes | n/a (docs) | **green** (14 pass, 2 skipped by design) | yes | [#1269](https://github.com/hookprobe/hookprobe/pull/1269) draft | no |
+| AB-05 Copilot AI-models link | `agent/mc-honest-states` @ `02cb4780` | yes | astro check 0 errors; build 27 pages; browser check of 3 hash cases; Playwright spec added but not run locally | **green** (17 pass incl. g3: "PASS pro-workspace-admin: admin: #ai deep link opens AI models") | yes | [#1268](https://github.com/hookprobe/hookprobe/pull/1268) draft | no |
 
 AB-06 (package.json description) deferred: `package.json` is claimed by the other session.
 
