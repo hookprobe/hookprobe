@@ -4171,11 +4171,17 @@ fn cm5_p10_probe() {
                                 #[cfg(all(feature = "cm5", feature = "p15-write"))]
                                 if let Some(plan) = cfgd::take_apply() {
                                     let mut ok = true;
+                                    // G-F: what each executor holds the loop for (ms: policy, WAN, Wi-Fi)
+                                    let ms_since = |t: u64| now().wrapping_sub(t) / (freq / 1000).max(1);
+                                    let mut held = [0u64; 3];
+                                    let t_ex = now();
                                     if plan.changed & cfgd::CH_POLICY != 0 {
                                         ok &= cfgd::with_device(|d| apply_policy_live(&artstore::Plain::new(d))).unwrap_or(false);
                                     }
+                                    held[0] = ms_since(t_ex);
                                     // step 9: the WAN (after the policy; a failed policy apply stops a forward apply here,
                                     // a revert re-applies everything it can)
+                                    let t_ex = now();
                                     if (ok || plan.revert) && plan.changed & cfgd::CH_WAN != 0 {
                                         rtwdog::pet(now(), freq); // a PPPoE dial holds the loop (bounded; petted inside)
                                         let (wok, nm) = cfgd::with_device(|d| apply_wan_live(&artstore::Plain::new(d), &mut up)).unwrap_or((false, None));
@@ -4189,6 +4195,8 @@ fn cm5_p10_probe() {
                                     }
                                     // step 10: the Wi-Fi AP last (a forward apply stops at an earlier failure; a revert
                                     // re-applies everything it can). A Wi-Fi change always waits for the owner's confirm.
+                                    held[1] = ms_since(t_ex);
+                                    let t_ex = now();
                                     if (ok || plan.revert) && plan.changed & cfgd::CH_WIFI != 0 {
                                         rtwdog::pet(now(), freq); // PBKDF2 + the SAE element + the bounce hold the loop (bounded)
                                         let r = cfgd::with_device(|d| apply_wifi_live(&artstore::Plain::new(d), chosen_cs, &mut pmk, &mut gtk, &mut ap)).flatten();
@@ -4206,6 +4214,7 @@ fn cm5_p10_probe() {
                                         rtwdog::pet(now(), freq);
                                         ok &= wok;
                                     }
+                                    held[2] = ms_since(t_ex);
                                     if plan.changed & !cfgd::LIVE_CAPABLE != 0 {
                                         ok = false; // never queued by this build (LIVE_CAPABLE gate at activation)
                                     }
@@ -4228,7 +4237,9 @@ fn cm5_p10_probe() {
                                             kprint!(" [AP-MC] Mission Control {} after the live change (G12-M)\n", if mc_wifi { "served on Wi-Fi again" } else { "now on the management VLAN only" });
                                         }
                                     }
-                                    kprint!(" [CFGD] {} generation {}: changes {:#04x} applied live={}\n", if plan.revert { "LIVE REVERT to" } else { "LIVE APPLY of" }, plan.generation, plan.changed, ok);
+                                    kprint!(" [CFGD] {} generation {}: changes {:#04x} applied live={} | the loop held {} ms (policy {} + WAN {} + Wi-Fi {} = keys {} / down {} / up {})\n",
+                                        if plan.revert { "LIVE REVERT to" } else { "LIVE APPLY of" }, plan.generation, plan.changed, ok, held[0] + held[1] + held[2], held[0], held[1], held[2],
+                                        unsafe { wifilive::PHASE_MS[0] }, unsafe { wifilive::PHASE_MS[1] }, unsafe { wifilive::PHASE_MS[2] });
                                     match cfgd::applied_device(ok, cyw43::now_secs()) {
                                         cfgd::Tick::Reverting => kprint!(" [CFGD] live apply FAILED — reverting LIVE to the last-known-good\n"),
                                         cfgd::Tick::Reverted(g) => kprint!(" [CFGD] reverted LIVE to generation {} (no reboot)\n", g),
@@ -15051,6 +15062,14 @@ struct MetalWifi {
 }
 #[cfg(all(feature = "cm5", feature = "p15-write"))]
 impl wifilive::WifiPort for MetalWifi {
+    fn now_ms(&self) -> u64 {
+        let (v, f): (u64, u64);
+        unsafe {
+            core::arch::asm!("mrs {}, cntpct_el0", out(reg) v, options(nomem, nostack));
+            core::arch::asm!("mrs {}, cntfrq_el0", out(reg) f, options(nomem, nostack));
+        }
+        v / (f / 1000).max(1)
+    }
     fn pmk(&mut self, pass: &[u8], ssid: &[u8], out: &mut [u8; 32]) -> bool {
         // S3d: el0-wpa derives the PMK from the passphrase `install_security` hands it; the kernel keeps zeros
         #[cfg(all(feature = "apmc", feature = "wpa3"))]
