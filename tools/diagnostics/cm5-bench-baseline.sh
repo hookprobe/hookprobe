@@ -26,7 +26,8 @@ PY
 }
 # hqcfg takes canonical ASCII: drop comments / blanks (the bench file's comments are not ASCII)
 sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$ROOT/docs/design/bench-task26/policy-bench.txt" > "$T/p.txt"
-want=$(sha256sum < "$T/p.txt" | cut -c1-64)
+# the device digests the section as encoded in the bundle (hqcfg from_legacy), not the text file
+want=$(python3 -I -c 'import hashlib, sys; sys.path.insert(0, sys.argv[1]); import hqcfg; print(hashlib.sha256(hqcfg.from_legacy("policy", open(sys.argv[2], "rb").read())).hexdigest())' "$ROOT/os/kernel/tools" "$T/p.txt")
 C=$(cfg)
 read -r secs pol gen <<<"$(python3 -c 'import json,sys; d=json.loads(sys.argv[1]); s=d.get("sections") or {}
 print(",".join(k for k in ("wan","wifi") if (s.get(k) or {}).get("present")) or "-", (s.get("policy") or {}).get("digest") or "-", max(d["generation"], d["floor"]))' "$C")"
