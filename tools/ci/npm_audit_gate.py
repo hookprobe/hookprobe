@@ -115,9 +115,14 @@ def main() -> int:
         if "error" in audit:
             print(f"npm audit failed: {audit['error']}")
             return 1
-    failures, accepted = decide(root_advisories(audit), load_exceptions(), datetime.date.today())
+    advisories, exceptions = root_advisories(audit), load_exceptions()
+    failures, accepted = decide(advisories, exceptions, datetime.date.today())
     for line in accepted:
         print(f"  accepted  {line}")
+    for ghsa in sorted(set(exceptions) - set(advisories)):
+        # informational: the advisory is gone here (fixed, upgraded away, or WITHDRAWN as GHSA-fc5q-39xc-vjpf was on
+        # 2026-11-18) — delete the entry once no other lockfile needs it, so stale exceptions do not pile up
+        print(f"  unused    {ghsa} ({exceptions[ghsa]['package']}): no current advisory in {a.dir}")
     for line in failures:
         print(f"  FAIL      {line}")
     n = len(failures)
