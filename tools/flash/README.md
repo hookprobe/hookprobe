@@ -18,4 +18,5 @@ bundled `usbboot` (`os/kernel/tools/usbboot/`) by relative path.
 
 All of them erase or modify the device, so the operator runs them (`sudo`). Serial console:
 see [`tools/diagnostics/`](../diagnostics/).
-**Not built yet:** the WebUSB browser flasher (ADR 0037 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059)).
+**Not built yet:** the WebUSB browser flasher. Its only design is ADR 0037, which was retired on 2026-11-12,
+so no current decision covers it.
