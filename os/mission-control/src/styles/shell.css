@@ -45,7 +45,7 @@
 .shell-rail-wrap { flex: 0 0 auto; position: sticky; top: 56px; height: calc(100dvh - 56px); z-index: 90; }
 .shell-rail { width: 212px; height: 100%; box-sizing: border-box; overflow-y: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 4px; background: rgba(8, 8, 12, 0.92); border-right: 1px solid var(--hp-border); }
 .shell-rail-brand { display: flex; align-items: center; gap: 10px; padding: 4px 10px 14px; color: var(--hp-text-primary); text-decoration: none; }
-.shell-rail-mark { color: var(--hp-cyan); font-size: 18px; letter-spacing: -3px; }
+.shell-rail-mark { color: var(--hp-text-primary); flex: 0 0 auto; display: block; }
 .shell-rail-name { font-weight: 800; font-size: 14px; letter-spacing: .4px; }
 .shell-rail-name em { font-style: normal; color: var(--hp-cyan); }
 .shell-rail-items { display: flex; flex-direction: column; gap: 1px; }
