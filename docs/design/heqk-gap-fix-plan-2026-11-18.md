@@ -57,3 +57,50 @@ status edits (ADR 0065 D4.4, ADR 0044 D1/D3 [vision] rows). Excluded here: REL-0
 Wave 1 first (R1 and R2 are the priority), each fix as its own PR: QEMU selftest + host tests + validate + mc-e2e
 (CI) + clippy ratchet, and a CM5 proof where the defect is on a metal path (R1, R6, R7, R8). Then E1 (metal-proven),
 E2–E4. Every PR states its evidence; nothing is marked done on QEMU alone where metal applies.
+
+## Wave 2b — the autoheal harness (deep research, 2026-11-18)
+
+A deep-research run (102 agents; every claim needed 2 of 3 adversarial votes to survive) compared heqk's
+self-monitoring and recovery with **QNX Neutrino HAM / APS**, the **MINIX 3 Reincarnation Server** and its fault-injection
+results, and **NIO's dependable seL4 design** (seL4 Summit 2025). Sources: QNX SDP 7.1 / 8.0 docs (HAM conditions /
+actions, APS bankruptcy); Herder et al., DSN 2007 / 2009, ;login: 2010; seL4 Summit 2025 "Towards dependable".
+**Not covered by any surviving claim:** Fuchsia restart policies, Zephyr, ARINC 653 health monitoring, AUTOSAR
+WdgM / PHM, IEC 61508 / ISO 26262 diagnostic coverage, seL4 MCS. Those stay open questions, not inputs to this plan.
+
+### What heqk already has (and where it is ahead)
+
+- **Hangs are caught by construction.** EL0 servers run as bounded synchronous excursions with a per-call time budget
+  (`budget_us`): a server that hangs or loops is cut off and reset on that call. QNX / MINIX need a heartbeat for this;
+  in MINIX 3 fault injection heartbeats found only ~4–5 % of failures, but exactly the hangs nothing else catches.
+- **Pristine images in RAM.** Each server restarts from its signed ELF embedded in the kernel image, never from storage
+  (MINIX 3 needed a RAM copy for the disk driver; heqk has it for every server).
+- **One restart owner per server** (`el0srv::Server`: fault → reset → backoff → reload on the next call).
+- **A recovery ladder with an end state** (Wi-Fi: kick → BSS bounce → firmware reload → ONE reboot → degrade) and a
+  hardware watchdog + crash record; config and OTA have trial / commit / revert.
+
+### Gaps against the research, and the plan
+
+| # | Research finding (confidence) | heqk today | Gap → plan |
+|---|---|---|---|
+| A1 | One supervisor holding a **declared table per server**: conditions, actions, start order, readiness handshake, identity stable across restarts (QNX HAM; high) | Each `Server` supervises itself; start order is code order in `main.rs`; readiness = `CMD_INIT` reply | A supervisor table (`superv.rs`): per server, its failure kinds → action, dependencies (el0-wpa after the bus server, el0-tlshost after DataVolume), readiness = `CMD_INIT` OK, generation counter as the stable identity. One place to read the whole tree. |
+| A2 | **Failure kinds** drive the response; abnormal death vs exit; two heartbeat severities (QNX; high) | `[EL0-FAULT]` lines + counters; the crash record only for the self-heal reset | A typed failure kind (exception, budget overrun, refused-init, complaint, planned update) in every server fault record and in `/api/health`; the ladder branches on it. |
+| A3 | **Restart only on death; every other signal becomes a kill first** — no competing restart paths (QNX HAM; high) | Faults and budget overruns already reset; Wi-Fi heal has its own reload path beside the server reset | Route every recovery trigger (budget, complaint, heal) through "kill → the server's single restart owner"; the firmware reload stays a separate, device-level rung. |
+| A4 | **Six trigger channels**, incl. a **complaint** from a peer (MINIX 3 RS; high) | Exceptions, budgets, Wi-Fi stall signals; no generic complaint | A complaint call: a client reports its server (el0-wpa → bus timeouts, the data path → a stalled TX ring, Mission Control → TLS host unresponsive); complaints count toward the ladder like faults. |
+| A5 | **Declarative, context-aware policy with capped exponential backoff + decay** (MINIX 3 RS: `1<<n`, cap 30; high) | Backoff per server is fixed-step; the Wi-Fi ladder is code (R8 just added an episode cap) | A policy table (server × kind × count-in-window → action, backoff 2^n capped, decay window); replaces hard-coded branches; host-tested like `wifiheal`. |
+| A6 | **Functional probes**: liveness = "the service works", not "the process runs" (NIO seL4; medium) | Bench checks only (cm5-* scripts); OTA gate checks AP serving + WAN usable | In-device probes on a slow cadence: AP beacon + a self-association check, a DHCP lease round-trip on loopback, a DNS answer from Shield, a TLS handshake to el0-tlshost; a failing probe is a complaint (A4). |
+| A7 | **Temporal isolation with a watchable fault**: per-partition CPU budget, bankruptcy event, throttle / cancel / (test-only) reboot policies (QNX APS; high) | Per-CALL budget only; no aggregate CPU budget per server per window | Per-server CPU budget per window (sum of excursion time), a bankruptcy event to the supervisor, throttle by refusing calls for the window; Basic policy (notify + throttle) in production. |
+| A8 | **State is the limit of restart**: transparent only for stateless servers; checkpointing poor for fast-changing state (MINIX 3; high) | el0-wpa keeps persistent state pages (PMKSA survives a bus fault, metal claims C1/C5); TLS sessions are lost on a TLS-host restart; Wi-Fi state is rebuilt by the reload | Classify each server's state (stateless / re-derivable / persistent) in the supervisor table; persistent state pages only where it matters (el0-wpa today); a state-integrity check (checksum) before reuse after a fault. |
+| A9 | **Fault injection at scale** proves isolation (MINIX 3: 3.4 M faults into 4 drivers, no OS crash; ~99 % recovered on real hardware vs 100 % emulated; medium–high) | `wifi-inject` (CMD53 stall, server faults, bus-fault bursts) + claims C1–C6; tens of faults per run | A SWIFI harness: random faults (server code / register mutation, forced aborts, injected hangs, SDIO stalls) at thousands per hour in QEMU and on the CM5 rig; acceptance = no kernel crash, no isolation breach (K1 memory scan), recovery rate and time per kind recorded. |
+| A10 | **Evidence per recovery** | Beat lines, crash record, `/api/health` fields scattered per subsystem | One recovery journal (kind, server, rung, time-to-recover, outcome) in the sealed evidence log; Mission Control reads it. |
+
+### Order (after Wave 1)
+
+1. **A2 + A10** (typed failure kinds + one recovery journal): small, and every later item reports through them.
+2. **A1 + A3 + A5** (supervisor table, single restart path, policy table with capped backoff): the core.
+3. **A4 + A6** (complaints, functional probes): detection beyond crashes.
+4. **A7** (CPU budget per window): temporal isolation.
+5. **A9** (SWIFI at scale, QEMU then metal): the acceptance gate for 1–4.
+6. **A8** (state classes + integrity check): with each server as it is touched.
+
+Anti-patterns to keep out (from the research): reset loops (bounded by A5 decay + the one-reboot rule), competing
+restart owners (A3), recovery that masks a real fault (every recovery is journaled, A10, and counted toward escalation).
