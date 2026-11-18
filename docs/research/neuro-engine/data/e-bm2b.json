@@ -1,0 +1,171 @@
+{
+ "benign_devices": [
+  {
+   "scenario": "CTU-Honeypot-Capture-4-1",
+   "active_hours": 22,
+   "scored_hours": 11,
+   "alarms_per_day": {
+    "1.0": 2.0,
+    "2.0": 2.0,
+    "3.0": 2.0
+   },
+   "state_bytes": 672
+  }
+ ],
+ "onset": [
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-1-1",
+   "first_hour_score": 17253.333333333336,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-20-1",
+   "first_hour_score": 43.333333333333336,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-21-1",
+   "first_hour_score": 20.0,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-3-1",
+   "first_hour_score": 8456.666666666668,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-34-1",
+   "first_hour_score": 26.666666666666668,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-35-1",
+   "first_hour_score": 574920.0,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-36-1",
+   "first_hour_score": 1894723.3333333335,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-42-1",
+   "first_hour_score": 100.0,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-48-1",
+   "first_hour_score": 577003.3333333334,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-49-1",
+   "first_hour_score": 2422523.3333333335,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-60-1",
+   "first_hour_score": 33.333333333333336,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-7-1",
+   "first_hour_score": 1512390.0,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-8-1",
+   "first_hour_score": 26.666666666666668,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  },
+  {
+   "benign": "CTU-Honeypot-Capture-4-1",
+   "infected": "CTU-IoT-Malware-Capture-9-1",
+   "first_hour_score": 641123.3333333334,
+   "flagged": {
+    "1.0": true,
+    "2.0": true,
+    "3.0": true
+   },
+   "driver": "novel"
+  }
+ ]
+}

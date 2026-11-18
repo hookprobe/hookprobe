@@ -1,0 +1,7 @@
+K=2048 rows=32768 correctness mismatches=0
+kernel     bits/w    matrix MB    ms/GEMV  weight GB/s
+q8           9.00         75.5       1.25        60.64
+q4           5.00         41.9       1.30        32.39
+t2u          3.00         25.2       1.58        15.98
+t2l          4.00         33.6       0.75        44.56
+t2lp         2.00         16.8       1.08        15.51
