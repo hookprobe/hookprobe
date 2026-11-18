@@ -44,7 +44,7 @@ def main():
     ap.add_argument("--cases", help="re-score saved outputs with the CURRENT scorer (consistent across runs)")
     a = ap.parse_args()
     rows = []
-    for p in sorted(glob.glob(os.path.join(a.run, "*-closed.json")) + glob.glob(os.path.join(a.run, "*-free.json"))):
+    for p in sorted(glob.glob(os.path.join(a.run, "*-closed.json")) + glob.glob(os.path.join(a.run, "*-free.json")) + glob.glob(os.path.join(a.run, "*-freeex.json"))):
         base = os.path.basename(p)[:-5]
         model, mode = base.rsplit("-", 1)
         res = load(p)

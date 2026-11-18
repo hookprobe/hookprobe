@@ -19,6 +19,7 @@
 | **E-SC2** | Evidence cards on real held-out traffic (IoT-23, CC BY 4.0) | real-traffic | **done (Phase 0)** | identity 0.88 / evidence 0.65 (test split) — below the 0.9 kill line; C&C weakest |
 | **E-BM2a** | Behavioural memory on real IoT-23 devices | real-traffic + semi-synthetic | **done (Phase 0), partial** | peer novelty quiet on benign + flags real malware; diurnal profile fails cold start |
 | **E-BM2b** | Cold-start fallback (pooled profile, warm-up, cold slots learn statistics) | simulated + real-traffic | **done (Phase 0b)** | synthetic 12 h history: 21.2 → 0.35 benign alarms/device-day; Hue honeypot 11 → 2/day; onset 14/14 kept — `NEURO_PHASE0_RESULTS.md` §9 |
+| **E-EV3** | Free mode with a plain-words contract + one example answer (fair baseline) | blind, dev-host | **done (Phase 0b)** | free ≈ closed on verdicts (5/6 models, McNemar p ≥ 0.12); models anchor on the example; all ≈ constant-answer baselines (0.41–0.43); closed safer on injections — `NEURO_PHASE0_RESULTS.md` §10 |
 | **E-SC2b** | Jitter-tolerant periodicity | real-traffic, dev split only | **rejected (Phase 0b)** | C&C evidence 0/7 → 1/7, heartbeat 0/5 → 0/5, benign flags 1.3 → 2.0 per window; test split not used |
 | everything else | below | — | **planned, not run** | harness ready where noted; all CM5 items blocked on a reachable bench unit |
 

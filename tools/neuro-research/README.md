@@ -21,6 +21,9 @@ Results are labelled by origin: `theoretical`, `simulated` (synthetic data on a 
 | `replay_bm_iot23.py` | E-BM2a/b: behavioural memory on real IoT-23 devices (nuisance) + semi-synthetic onset; `--no-cold-fallback` reproduces Phase 0 | real-traffic | anywhere |
 | `profile_gaps_iot23.py` | E-SC2b: gap statistics of C&C/heartbeat vs benign pairs, dev split only | real-traffic | anywhere |
 | `eval/blind/` | E-EV1: 215 blind cases by an independent author (never tune on these) | — | — |
+| `compare_freeex.py` | E-EV3: closed vs free vs free+example on the blind set, McNemar, canary safety, verdict bias | blind, dev-host | anywhere |
+| `memory_model.py` | Native programme Gate 7: RAM, per-token bytes, decode ceilings, eMMC load times per SKU | theoretical | anywhere |
+| `kernels/` | Native programme Gate 2: Q8/Q4/ternary-unpack/ternary-LUT dot kernels (NEON intrinsics), `dot_kernels.a76.s` (clang `-mcpu=cortex-a76`), `bench.c` (correctness + GEMV timing) | compiled / dev-host | any AArch64 host; CM5 for real numbers |
 | `cm5_bench.sh` | Gate-5 measurement plan for a CM5 **bench unit** on Raspberry Pi OS (bandwidth, storage, llama-bench sweep, server profile, interference, thermal soak). **Prepared, not run.** | cm5-linux | a lab CM5 only |
 
 ```bash
