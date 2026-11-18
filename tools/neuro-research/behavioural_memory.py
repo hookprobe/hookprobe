@@ -77,6 +77,11 @@ class AgingBloom:
 
 
 CALM = 1.0       # score below which an hour may teach the state
+SLOT_MIN = 3     # cold start: an hour-of-day slot is trusted fully only after this many updates
+COLD_WIDEN = 1.0  # extra tolerance (log2 units, i.e. 2x) while a slot leans on the pooled profile
+COLD_FALLBACK = True  # Phase 0b fix; False reproduces the Phase 0 behaviour
+COLD_LEARN = True     # a still-cold slot learns its volume/activity statistics even on an alarming hour
+                      # (never new peers or DNS: those still need PERSIST_K hours) -- else it can never warm
 PERSIST_K = 6    # alarming new items become normal only after this many alarming hours (drift vs poisoning)
 
 
@@ -90,42 +95,76 @@ class DNA:
         self.fmu = [0.0] * 24   # log2 distinct-peer EWMA per hour of day (fan-out is diurnal too)
         self.fdev = [1.0] * 24
         self.nx = 0.0
+        # cold-start fallback (Phase 0b): per-slot update counts + an all-hours pooled profile. A slot
+        # with little history is scored against the pooled profile, widened, instead of against zero.
+        self.n = [0] * 24
+        self.n_all = 0
+        self.p_act, self.p_bmu, self.p_bdev, self.p_fmu, self.p_fdev = 0.0, 0.0, 1.0, 0.0, 1.0
         self.nov_mu, self.nov_dev = 0.0, 0.5   # the device's OWN normal rate of new peers per hour
         self.peers = AgingBloom(m_bits)
         self.dns = AgingBloom(m_bits)
         self.pending = {}  # candidate new-normal items -> consecutive-hour count (bounded, see admit)
 
     def nbytes(self):
-        return 24 + 48 + 48 + 2 + 4 + self.peers.nbytes() + self.dns.nbytes()
+        cold = (24 + 10) if COLD_FALLBACK else 0  # u8 counts per slot + 5 pooled f16
+        return 24 + 48 + 48 + 2 + 4 + cold + self.peers.nbytes() + self.dns.nbytes()
+
+    def _base(self, hr):
+        """(act, bmu, bdev, fmu, fdev) to score hour-of-day slot hr against."""
+        slot = (self.act[hr], self.bmu[hr], self.bdev[hr], self.fmu[hr], self.fdev[hr])
+        if not COLD_FALLBACK or self.n[hr] >= SLOT_MIN:
+            return slot
+        if self.n_all == 0:
+            return slot
+        w = self.n[hr] / SLOT_MIN
+        pool = (self.p_act, self.p_bmu, self.p_bdev, self.p_fmu, self.p_fdev)
+        m = [w * a + (1 - w) * b for a, b in zip(slot, pool)]
+        widen = (1 - w) * COLD_WIDEN
+        return m[0] + widen, m[1], m[2] + widen, m[3], m[4] + widen
 
     def score(self, hr, obs):
         conns, peers, bytes_out, suffixes, nx_share = obs
+        b_act, b_mu, b_dev, f_mu, f_dev = self._base(hr)
         lb = math.log2(1 + bytes_out)
-        vol = max(0.0, (lb - self.bmu[hr]) / (self.bdev[hr] + 0.5))
+        vol = max(0.0, (lb - b_mu) / (b_dev + 0.5))
         lf = math.log2(1 + len(peers))
-        fan = max(0.0, (lf - self.fmu[hr]) / (self.fdev[hr] + 0.5))
+        fan = max(0.0, (lf - f_mu) / (f_dev + 0.5))
         novel_peers = [p for p in peers if p not in self.peers]
         # surprise relative to THIS device's learned novelty rate: one new peer is loud for a camera
         # (rate ~0) and quiet for a laptop (rate > 0). Same rule, no per-kind branches.
         nov = max(0.0, (len(novel_peers) - self.nov_mu) / (self.nov_dev + 0.3))
         novel_dns = [s for s in suffixes if s not in self.dns]
         dns = (len(novel_dns) / max(1, len(suffixes))) * min(1.0, len(novel_dns) / 5.0) * 4 + max(0.0, nx_share - self.nx) * 8
-        act = max(0.0, math.log2(1 + conns) - self.act[hr] - 1.5)
+        act = max(0.0, math.log2(1 + conns) - b_act - 1.5)
         return max(vol, fan, nov, dns, act), {"vol": vol, "fan": fan, "novel": nov, "dns": dns, "act": act}
 
     def update(self, hr, obs, admit_items=True):
         conns, peers, bytes_out, suffixes, nx_share = obs
         a = self.ALPHA
+        if COLD_FALLBACK:
+            # warm-up: a running mean until 1/n < ALPHA, so a slot's first sample initialises it
+            # instead of being shrunk toward zero (the Phase 0 EWMA started every slot at 0)
+            self.n[hr] = min(255, self.n[hr] + 1)
+            self.n_all = min(65535, self.n_all + 1)
+            a = max(self.ALPHA, 1.0 / self.n[hr])
+            ap = max(self.ALPHA, 1.0 / self.n_all)
+            lb0, lf0, lc0 = math.log2(1 + bytes_out), math.log2(1 + len(peers)), math.log2(1 + conns)
+            self.p_bdev = (1 - ap) * self.p_bdev + ap * abs(lb0 - self.p_bmu) if self.n_all > 1 else 1.0
+            self.p_bmu = (1 - ap) * self.p_bmu + ap * lb0
+            self.p_fdev = (1 - ap) * self.p_fdev + ap * abs(lf0 - self.p_fmu) if self.n_all > 1 else 1.0
+            self.p_fmu = (1 - ap) * self.p_fmu + ap * lf0
+            self.p_act = (1 - ap) * self.p_act + ap * lc0
         n_new = sum(1 for p in peers if p not in self.peers)
         self.nov_dev = (1 - a) * self.nov_dev + a * abs(n_new - self.nov_mu)
         self.nov_mu = (1 - a) * self.nov_mu + a * n_new
         self.act[hr] = (1 - a) * self.act[hr] + a * math.log2(1 + conns)
         lb = math.log2(1 + bytes_out)
+        first = COLD_FALLBACK and self.n[hr] == 1
         d = abs(lb - self.bmu[hr])
         self.bmu[hr] = (1 - a) * self.bmu[hr] + a * lb
-        self.bdev[hr] = (1 - a) * self.bdev[hr] + a * d
+        self.bdev[hr] = self.bdev[hr] if first else (1 - a) * self.bdev[hr] + a * d
         lf = math.log2(1 + len(peers))
-        self.fdev[hr] = (1 - a) * self.fdev[hr] + a * abs(lf - self.fmu[hr])
+        self.fdev[hr] = self.fdev[hr] if first else (1 - a) * self.fdev[hr] + a * abs(lf - self.fmu[hr])
         self.fmu[hr] = (1 - a) * self.fmu[hr] + a * lf
         self.nx = (1 - a) * self.nx + a * nx_share
         if admit_items:
@@ -133,6 +172,9 @@ class DNA:
                 self.peers.add(p)
             for s in suffixes:
                 self.dns.add(s)
+
+    def cold(self, hr):
+        return COLD_FALLBACK and COLD_LEARN and self.n[hr] < SLOT_MIN
 
     def admit_persistent(self, peers, suffixes, k=3):
         """A NEW item that keeps appearing for k scored hours becomes normal (drift adaptation)."""
@@ -147,7 +189,7 @@ class DNA:
             self.pending = dict(sorted(self.pending.items(), key=lambda kv: -kv[1])[:128])
 
 
-def simulate(seed, n_devices, m_bits, threshold_q=0.99):
+def simulate(seed, n_devices, m_bits, threshold_q=0.99, learn_hours=240):
     r = random.Random(seed)
     devs = []
     kinds = list(KINDS)
@@ -215,7 +257,8 @@ def simulate(seed, n_devices, m_bits, threshold_q=0.99):
             a, obs = observe(i, h)
             hr = h % 24
             if h < 24 * 10:
-                dnas[i].update(hr, obs)
+                if h >= 24 * 10 - learn_hours:  # learn_hours < 240 simulates a device that was just installed
+                    dnas[i].update(hr, obs)
                 continue
             s, parts = dnas[i].score(hr, obs)
             drift = (drift_dev == i and h >= drift_start and hr in devs[i]["peak"])
@@ -226,6 +269,8 @@ def simulate(seed, n_devices, m_bits, threshold_q=0.99):
             if s < CALM:
                 dnas[i].update(hr, obs, admit_items=True)
             else:
+                if dnas[i].cold(hr):
+                    dnas[i].update(hr, obs, admit_items=False)
                 dnas[i].admit_persistent({p for p in obs[1] if p not in dnas[i].peers},
                                          {x for x in obs[3] if x not in dnas[i].dns}, k=PERSIST_K)
     return rows, dnas[0].nbytes(), devs, drift_dev
@@ -276,18 +321,26 @@ def main():
     ap.add_argument("--json")
     ap.add_argument("--persist-k", type=int, default=PERSIST_K)
     ap.add_argument("--blooms", default="256,1024,4096,16384")
+    ap.add_argument("--learn-hours", type=int, default=240, help="history before scoring (cold start if < 24)")
+    ap.add_argument("--no-cold-fallback", action="store_true", help="reproduce the Phase 0 DNA")
+    ap.add_argument("--no-cold-learn", action="store_true")
     a = ap.parse_args()
     globals()["PERSIST_K"] = a.persist_k
+    globals()["COLD_FALLBACK"] = not a.no_cold_fallback
+    globals()["COLD_LEARN"] = not a.no_cold_learn
     out = []
     print("synthetic: %d devices x 14 days hourly; learn days 1-10, score days 11-14" % a.devices)
     print("%8s %8s %7s %8s %-62s %s" % ("bloom_m", "state_B", "AUC", "thr@1%", "detect @1% FPR: hour-level/incident-level",
                                          "benign-drift alerts"))
-    print("persistence k = %d alarming hours before a new item becomes normal" % PERSIST_K)
+    print("persistence k = %d alarming hours before a new item becomes normal | learn_hours=%d | cold fallback=%s" % (
+        PERSIST_K, a.learn_hours, COLD_FALLBACK))
     for m in [int(x) for x in a.blooms.split(",")]:
-        aucs, per, dr_a, dr_h, thrs, sb, inc = [], {}, 0, 0, [], 0, {}
+        aucs, per, dr_a, dr_h, thrs, sb, inc, fa = [], {}, 0, 0, [], 0, {}, []
         for s in [int(x) for x in a.seeds.split(",")]:
-            rows, sb, devs, _ = simulate(s, a.devices, m)
+            rows, sb, devs, _ = simulate(s, a.devices, m, learn_hours=a.learn_hours)
             aucs.append(auc(rows))
+            # absolute nuisance at a FIXED score threshold (2.0, as in replay_bm_iot23): alarms/device/day
+            fa.append(sum(1 for r in rows if not r[1] and r[0] > 2.0) / (a.devices * 4.0))
             thr, d, da, dh, ir = evaluate(rows)
             for k, v in ir.items():
                 inc.setdefault(k, []).append(v)
@@ -297,12 +350,12 @@ def main():
             for k, v in d.items():
                 per.setdefault(k, []).append(v)
         pk = " ".join("%s=%.2f/%.2f" % (k, statistics.mean(per[k]), statistics.mean(inc[k])) for k in sorted(per))
-        print("%8d %8d %7.3f %8.2f %-62s %d/%d hours" % (m, sb, statistics.mean(aucs), statistics.mean(thrs), pk,
-                                                         dr_a, dr_h))
+        print("%8d %8d %7.3f %8.2f %-62s %d/%d hours  benign alarms/dev/day@2.0=%.2f" % (
+            m, sb, statistics.mean(aucs), statistics.mean(thrs), pk, dr_a, dr_h, statistics.mean(fa)))
         out.append({"bloom_bits": m, "state_bytes": sb, "auc_mean": statistics.mean(aucs),
                     "auc_min": min(aucs), "detect_at_1pct_fpr": {k: statistics.mean(v) for k, v in per.items()},
                     "incident_detect_at_1pct_fpr": {k: statistics.mean(v) for k, v in inc.items()},
-                    "drift_alerts": dr_a, "drift_hours": dr_h})
+                    "drift_alerts": dr_a, "drift_hours": dr_h, "benign_alarms_per_device_day_at_2": statistics.mean(fa)})
     # what the state replaces: 10 days of raw per-device rows (flow + dns summaries at ~110 B/row as JSON)
     rows_per_dev_day = statistics.mean(KINDS[k][1] * (len(KINDS[k][0]) + 0.15 * (24 - len(KINDS[k][0])))
                                        for k in KINDS) * 1.5
