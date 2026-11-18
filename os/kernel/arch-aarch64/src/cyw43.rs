@@ -71,26 +71,47 @@ const FBR_F1_BLKSIZE_HI: u32 = 0x111;
 
 #[inline]
 fn r8(o: usize) -> u8 {
+    // step 4e-3b: during a firmware reload with el0-wifi loaded, host-controller access runs in the server too
+    if let Some((_, v)) = el0_reg(hal::wifisrvabi::REG_HOST_R, 1, o as u32, 0) {
+        return v as u8;
+    }
     unsafe { read_volatile((SDHCI + o) as *const u8) }
 }
 #[inline]
 fn w8(o: usize, v: u8) {
+    if el0_reg(hal::wifisrvabi::REG_HOST_W, 1, o as u32, v as u32).is_some() {
+        return;
+    }
     unsafe { write_volatile((SDHCI + o) as *mut u8, v) };
 }
 #[inline]
 fn r16(o: usize) -> u16 {
+    // step 4e-3b: during a firmware reload with el0-wifi loaded, host-controller access runs in the server too
+    if let Some((_, v)) = el0_reg(hal::wifisrvabi::REG_HOST_R, 2, o as u32, 0) {
+        return v as u16;
+    }
     unsafe { read_volatile((SDHCI + o) as *const u16) }
 }
 #[inline]
 fn w16(o: usize, v: u16) {
+    if el0_reg(hal::wifisrvabi::REG_HOST_W, 2, o as u32, v as u32).is_some() {
+        return;
+    }
     unsafe { write_volatile((SDHCI + o) as *mut u16, v) };
 }
 #[inline]
 fn r32(o: usize) -> u32 {
+    // step 4e-3b: during a firmware reload with el0-wifi loaded, host-controller access runs in the server too
+    if let Some((_, v)) = el0_reg(hal::wifisrvabi::REG_HOST_R, 4, o as u32, 0) {
+        return v as u32;
+    }
     unsafe { read_volatile((SDHCI + o) as *const u32) }
 }
 #[inline]
 fn w32(o: usize, v: u32) {
+    if el0_reg(hal::wifisrvabi::REG_HOST_W, 4, o as u32, v as u32).is_some() {
+        return;
+    }
     unsafe { write_volatile((SDHCI + o) as *mut u32, v) };
 }
 
