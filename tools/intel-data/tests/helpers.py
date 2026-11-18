@@ -57,6 +57,8 @@ SOURCES = [
     src("f-cic", "t-research", "cicflowmeter_csv", ("network_intelligence",)),
     src("f-iocv1", "t-cc-by-sa", "hookprobe_ioc_v1", ("live_intel",)),
     src("f-dga", "t-open", "domain_list"),
+    src("f-phiusiil", "t-open", "phiusiil_csv"),
+    src("f-umudga", "t-open", "domain_list"),
     src("hookprobe-synthetic-soc", "agpl-3.0-only", None, ("soc_reasoning",)),
 ]
 
@@ -64,6 +66,7 @@ FIXTURE_FILES = {
     "f-attack": "stix_bundle.json", "f-kev": "kev.json", "f-urlhaus": "urlhaus.csv", "f-feodo": "feodo.json",
     "f-tranco": "tranco.csv", "f-iot23": "zeek/CTU-IoT-Fixture-1-1/conn.log.labeled", "f-cic": "cic.csv",
     "f-iocv1": "ioc-v1.json", "f-dga": "dga/necurs.txt",
+    "f-phiusiil": "phiusiil.csv", "f-umudga": "umudga/gozi_gpl/1000.txt",
 }
 
 
