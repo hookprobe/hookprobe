@@ -1,6 +1,6 @@
 # Status
 
-_Updated 2026-11-17._
+_Updated 2026-11-18._
 
 ## Platform status
 
@@ -12,16 +12,17 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-Waiting for CI on the two draft PRs. Write access for `hookprobes` granted 2026-11-17.
+AB-17 (stale gap-register rows and ADR 0037 citations) on `agent/docs-ab17`, draft PR. #1268 and #1269 are merged.
 
 ## Delivery ledger
 
 | Work | Branch | Implemented | Local tests | CI | Pushed | PR | Merged |
 |---|---|---|---|---|---|---|---|
-| Engineering audit docs | `agent/engineering-audit` | yes | n/a (docs) | running | yes | [#1269](https://github.com/hookprobe/hookprobe/pull/1269) draft | no |
-| AB-05 Copilot AI-models link | `agent/mc-honest-states` @ `02cb4780` | yes | astro check 0 errors; build 27 pages; browser check of 3 hash cases; Playwright spec added but not run locally | running (g3 is the first run of the new spec) | yes | [#1268](https://github.com/hookprobe/hookprobe/pull/1268) draft | no |
+| Engineering audit docs | `agent/engineering-audit` | yes | n/a (docs) | green | yes | [#1269](https://github.com/hookprobe/hookprobe/pull/1269) | yes (2026-11-17) |
+| AB-05 Copilot AI-models link | `agent/mc-honest-states` @ `02cb4780` | yes | astro check 0 errors; build 27 pages; browser check of 3 hash cases; Playwright spec added but not run locally | green (g3: "PASS pro-workspace-admin: admin: #ai deep link opens AI models") | yes | [#1268](https://github.com/hookprobe/hookprobe/pull/1268) | yes (2026-11-17) |
+| AB-17 stale register rows + ADR 0037 citations | `agent/docs-ab17` | yes | n/a (docs); claims re-checked against `origin/main` @ `1a4f2b11` | pending | yes | draft | no |
 
-AB-06 (package.json description) deferred: `package.json` is claimed by the other session.
+AB-06 (package.json description) is unblocked: `feat/mc-explainability` merged, and the description still says "served at runtime by Rust/Axum".
 
 ## Tests and coverage
 
@@ -36,7 +37,6 @@ GitHub CI only, and reported as such.
 |---|---|
 | AB-01 trust chain, AB-03 shipping flavour, AB-13/14 CI wiring, AB-19 metal | operator |
 | AB-07, AB-08 | homepods (HP-01, HP-02) |
-| AB-04 and Investigate-area items | other session (`feat/mc-explainability`) |
 | AB-15 rename | operator naming choice |
 
 ## HomePods dependencies
@@ -50,7 +50,6 @@ operation are listed in the journal (scheduled task in the desktop app, or a clo
 
 ## Next autonomous actions
 
-1. Finish AB-05/06, push, draft PR, read CI.
-2. AB-17 docs corrections (no code risk).
-3. AB-11 revoke-all control (UI + confirm) once the other session's `feat/mc-explainability` lands,
-   to avoid shell conflicts.
+1. Read CI on the AB-17 PR.
+2. AB-06 package.json description (one line, now unblocked).
+3. AB-11 revoke-all control (UI + confirm); `feat/mc-explainability` has landed, so the shell is free.
