@@ -11,13 +11,16 @@
 |---|---|---|---|---|
 | E-RF1 | Theoretical resource model (decode/prefill bounds, state memory, bandwidth share, storage tier, cold activation), calibrated vs published Pi 5 data | theoretical | **done** | `data/e-rf1.md` — under-predicts published decode by 11–21% |
 | E-SC1 | Semantic compression: RAW vs DETECTIONS vs TOPK vs evidence cards, token budgets 128–4096, real tokenizers | simulated | **done** (10 seeds × 2 tokenizers) | `data/e-sc1-*.txt/json` — cards: identity + evidence recall 1.00 at ~500 tokens vs ~323K raw |
-| E-BM1 | Neural DNA: state size vs AUC / detection @1% FPR / benign-drift alerts; persistence k sweep | simulated | **done** (5 seeds) | `data/e-bm1*.json/txt` — 638 B/device AUC 0.999; k trade-off quantified |
+| E-BM1 | Neural DNA: state size vs AUC / detection @1% FPR / benign-drift alerts; persistence k sweep | simulated | **done** (5 seeds) | `data/e-bm1*.json/txt` — 672 B/device AUC 0.999 (re-run with the Phase 0b fix); k trade-off quantified |
 | E-EV0 | L0 template baseline on the 28-case eval set | simulated | **done** — **contaminated** (same author for rules and cases) | `data/e-ev0-template.*` |
 | — | Endpoint path of the eval runner (closed schema, tools, canary detection) | mock server | smoke-tested | — |
 | **E-EV1** | Blind 215-case set (independent author), L0 baseline | blind | **done (Phase 0)** | L0 verdict 0.59 — the earlier 1.00 was contamination, as flagged |
 | **E-EV2 / E-LLM2 (quality part)** | 6 Apache-2.0 models × closed/free on the blind set; L0 + model explanation hybrid | blind, dev-host | **done (Phase 0)** | `NEURO_PHASE0_RESULTS.md` §1 — models worse than L0 at verdicts; hybrid explains best |
 | **E-SC2** | Evidence cards on real held-out traffic (IoT-23, CC BY 4.0) | real-traffic | **done (Phase 0)** | identity 0.88 / evidence 0.65 (test split) — below the 0.9 kill line; C&C weakest |
 | **E-BM2a** | Behavioural memory on real IoT-23 devices | real-traffic + semi-synthetic | **done (Phase 0), partial** | peer novelty quiet on benign + flags real malware; diurnal profile fails cold start |
+| **E-BM2b** | Cold-start fallback (pooled profile, warm-up, cold slots learn statistics) | simulated + real-traffic | **done (Phase 0b)** | synthetic 12 h history: 21.2 → 0.35 benign alarms/device-day; Hue honeypot 11 → 2/day; onset 14/14 kept — `NEURO_PHASE0_RESULTS.md` §9 |
+| **E-EV3** | Free mode with a plain-words contract + one example answer (fair baseline) | blind, dev-host | **done (Phase 0b)** | free ≈ closed on verdicts (5/6 models, McNemar p ≥ 0.12); models anchor on the example; all ≈ constant-answer baselines (0.41–0.43); closed safer on injections — `NEURO_PHASE0_RESULTS.md` §10 |
+| **E-SC2b** | Jitter-tolerant periodicity | real-traffic, dev split only | **rejected (Phase 0b)** | C&C evidence 0/7 → 1/7, heartbeat 0/5 → 0/5, benign flags 1.3 → 2.0 per window; test split not used |
 | everything else | below | — | **planned, not run** | harness ready where noted; all CM5 items blocked on a reachable bench unit |
 
 ## 2. Planned experiments, ordered by decision value

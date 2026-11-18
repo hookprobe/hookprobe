@@ -89,6 +89,13 @@ class Tok:
         return self.count(sample) / max(1, len(sample.encode()))
 
 
+
+# Jitter-tolerant periodicity (Phase 0b): REJECTED on the IoT-23 dev split -- C&C evidence 0/7 -> 1/7,
+# heartbeat 0/5 -> 0/5, flagged cards per benign window 1.3 -> 2.0. Off by default; set JITTER = 0.25 to
+# reproduce. Real benign polling is far more regular than real C&C, so regularity alone is not the signal.
+JITTER = 0.0              # a gap counts if within JITTER x (k x median gap), k = 1..3
+PERIODIC_MIN_SHARE = 0.6  # ...and at least this share of gaps must count
+
 def fill(lines, budget, tok, residual=None):
     """Select a prefix of `lines` that fits `budget` tokens when joined with newlines, and return the EXACT
     token count of the joined prompt text. Selection uses a per-kind tokens-per-byte ratio measured on the
@@ -288,11 +295,19 @@ def rep_cards(events, baseline, intern=True):
         if n >= 8:
             gaps = [b[0] - a[0] for a, b in zip(rows, rows[1:])]
             mu = statistics.mean(gaps)
+            med = statistics.median(gaps)
             if mu >= 5:  # beacons are seconds-to-hours apart; sub-5s regularity is a burst, not a beacon
                 cv = statistics.pstdev(gaps) / mu
                 if cv < 0.1:
                     flags.append("periodic=%ds cv=%.2f" % (round(mu), cv))
                     w += 3
+            if JITTER and not any(f.startswith("periodic") for f in flags) and med >= 5:
+                # jitter-tolerant (Phase 0b): most gaps near the median, or near a whole multiple of it
+                # (a missed beat). Weaker evidence than the strict rule, so a lower weight.
+                near = sum(1 for g in gaps if min(abs(g - k * med) for k in (1, 2, 3)) <= JITTER * med)
+                if near >= PERIODIC_MIN_SHARE * len(gaps):
+                    flags.append("periodic~%ds jit=%d%%" % (round(med), round(100 * JITTER)))
+                    w += 1.5
         if out_b >= 100_000_000:
             flags.append("out=%.1fGB" % (out_b / 1e9))
             w += 4

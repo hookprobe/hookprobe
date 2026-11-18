@@ -64,7 +64,7 @@ efficiency (`NEURO_ARCHITECTURE_COMPARISON.md`).
    behavioural memory: **≤ a few MiB, integer-only, no model** — it classifies, correlates across
    cards, remembers per-device behaviour and explains in EN/RO templates. Simulated, it compiled an
    hour of telemetry (~323K tokens raw) into ~500 tokens with full incident recall, and separated
-   injected anomalies at AUC 0.999 with 638 bytes per device. What it cannot do is converse or weigh
+   injected anomalies at AUC 0.999 with 672 bytes per device. What it cannot do is converse or weigh
    free-text context; that is the generative tier's job.
 2. **Can we avoid keeping a generative LLM resident?** **Yes, by design.** Idle generative memory is
    zero; a lease costs ~1–11 s of cold activation from eMMC for 0.6–1.7B Q4_0 models (theoretical),

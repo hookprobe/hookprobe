@@ -66,6 +66,8 @@ def run(dna, series, t_offset=0):
         if s < bm.CALM:
             dna.update(hr, obs, admit_items=True)
         else:
+            if dna.cold(hr):
+                dna.update(hr, obs, admit_items=False)
             dna.admit_persistent({p for p in obs[1] if p not in dna.peers}, set(), k=bm.PERSIST_K)
     return out
 
@@ -76,7 +78,9 @@ def main():
     ap.add_argument("--bloom", type=int, default=1024)
     ap.add_argument("--max-rows", type=int, default=1_500_000)
     ap.add_argument("--json")
+    ap.add_argument("--no-cold-fallback", action="store_true", help="reproduce the Phase 0 DNA")
     a = ap.parse_args()
+    bm.COLD_FALLBACK = not a.no_cold_fallback
     files = sorted(glob.glob(os.path.join(a.root, "**", "conn.log.labeled"), recursive=True))
     benign, infected = [], []
     for p in files:
@@ -95,7 +99,8 @@ def main():
             mal_hours = [(h, o) for h, o in series]
             infected.append((name, host, mal_hours))
     res = {"benign_devices": [], "onset": []}
-    print("E-BM2a on IoT-23 | bloom=%d bits | CALM=%.1f | PERSIST_K=%d" % (a.bloom, bm.CALM, bm.PERSIST_K))
+    print("E-BM2a on IoT-23 | bloom=%d bits | CALM=%.1f | PERSIST_K=%d | cold fallback=%s" % (
+        a.bloom, bm.CALM, bm.PERSIST_K, bm.COLD_FALLBACK))
     print("1) NUISANCE on real benign devices (learn first half, score second half)")
     for name, host, series in benign:
         if len(series) < 8:

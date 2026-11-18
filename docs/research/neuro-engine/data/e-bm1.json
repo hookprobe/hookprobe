@@ -4,9 +4,9 @@
  "results": [
   {
    "bloom_bits": 256,
-   "state_bytes": 254,
-   "auc_mean": 0.9888913872649444,
-   "auc_min": 0.948004630323623,
+   "state_bytes": 288,
+   "auc_mean": 0.9929912223721248,
+   "auc_min": 0.9684038708173021,
    "detect_at_1pct_fpr": {
     "beacon_new_dst": 0.9333333333333333,
     "dga": 1.0,
@@ -21,13 +21,14 @@
     "new_service": 1.0,
     "scan": 1.0
    },
-   "drift_alerts": 39,
-   "drift_hours": 160
+   "drift_alerts": 30,
+   "drift_hours": 160,
+   "benign_alarms_per_device_day_at_2": 0.025
   },
   {
    "bloom_bits": 1024,
-   "state_bytes": 638,
-   "auc_mean": 0.9990955878678859,
+   "state_bytes": 672,
+   "auc_mean": 0.9991055813721081,
    "auc_min": 0.99902563333833,
    "detect_at_1pct_fpr": {
     "beacon_new_dst": 1.0,
@@ -43,13 +44,14 @@
     "new_service": 1.0,
     "scan": 1.0
    },
-   "drift_alerts": 39,
-   "drift_hours": 160
+   "drift_alerts": 30,
+   "drift_hours": 160,
+   "benign_alarms_per_device_day_at_2": 0.025
   },
   {
    "bloom_bits": 4096,
-   "state_bytes": 2174,
-   "auc_mean": 0.9990356268425523,
+   "state_bytes": 2208,
+   "auc_mean": 0.9990406235946635,
    "auc_min": 0.99902563333833,
    "detect_at_1pct_fpr": {
     "beacon_new_dst": 1.0,
@@ -65,13 +67,14 @@
     "new_service": 1.0,
     "scan": 1.0
    },
-   "drift_alerts": 39,
-   "drift_hours": 160
+   "drift_alerts": 30,
+   "drift_hours": 160,
+   "benign_alarms_per_device_day_at_2": 0.025
   },
   {
    "bloom_bits": 16384,
-   "state_bytes": 8318,
-   "auc_mean": 0.9990356268425523,
+   "state_bytes": 8352,
+   "auc_mean": 0.9990406235946635,
    "auc_min": 0.99902563333833,
    "detect_at_1pct_fpr": {
     "beacon_new_dst": 1.0,
@@ -87,8 +90,9 @@
     "new_service": 1.0,
     "scan": 1.0
    },
-   "drift_alerts": 39,
-   "drift_hours": 160
+   "drift_alerts": 30,
+   "drift_hours": 160,
+   "benign_alarms_per_device_day_at_2": 0.025
   }
  ],
  "raw_history_bytes_per_device_estimate": 1052067.5
