@@ -760,6 +760,10 @@ pub mod keyer {
     pub static mut SEEDS: u64 = 0;
     pub static mut SEED_FAILS: u64 = 0;
     static mut LAST_SEED_MS: u64 = 0;
+    /// R9 (code review 2026-11-18): the last hourly-reseed ATTEMPT — a failed reseed used to be retried on every later
+    /// call (TRNG reads + an extra excursion on the keying path); now at most once per `RESEED_RETRY_MS`.
+    static mut LAST_RESEED_TRY_MS: u64 = 0;
+    const RESEED_RETRY_MS: u64 = 60_000;
     fn now_ms() -> u64 {
         crate::clock::ticks() / (crate::clock::freq() / 1000).max(1)
     }
@@ -843,7 +847,12 @@ pub mod keyer {
             }
         }
         // D-c: reseed hourly with fresh TRNG bytes (a failure leaves the DRBG on its current seed until its interval)
-        if cmd != hal::wpasrvabi::CMD_DRBG_SEED && unsafe { SEEDS } > 0 && now_ms().saturating_sub(unsafe { LAST_SEED_MS }) >= RESEED_EVERY_MS {
+        // (R9: a failed attempt waits RESEED_RETRY_MS; the fail-closed ST_NEED_SEED path below is unchanged)
+        let now = now_ms();
+        if cmd != hal::wpasrvabi::CMD_DRBG_SEED && unsafe { SEEDS } > 0 && now.saturating_sub(unsafe { LAST_SEED_MS }) >= RESEED_EVERY_MS
+            && now.saturating_sub(unsafe { LAST_RESEED_TRY_MS }) >= RESEED_RETRY_MS
+        {
+            unsafe { LAST_RESEED_TRY_MS = now };
             let _ = seed_with(s);
         }
         let (mut c, mut n) = s.call_io(cmd, inp, out);

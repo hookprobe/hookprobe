@@ -85,6 +85,10 @@ pub const BUS_FAULT_WINDOW_MS: u64 = 60_000;
 /// Faults this close to the previous one are the SAME episode (a restart that faulted again while recovering) — metal
 /// C1: one stuck CMD53 cascaded into 4 faults within seconds and, counted singly, escalated straight to a reload.
 pub const BUS_EPISODE_MS: u64 = 2_000;
+/// R8 (code review 2026-11-18): an episode is capped — a bus that keeps faulting every < 2 s used to be one endless
+/// episode and never escalated. Past this length or this many faults, the next fault opens a new episode.
+pub const BUS_EPISODE_MAX_MS: u64 = 10_000;
+pub const BUS_EPISODE_MAX_FAULTS: u32 = 10;
 
 impl Class {
     pub fn name(self) -> &'static str {
@@ -170,6 +174,9 @@ pub struct Heal {
     /// When the last `BUS_FAULTS_N` bus-server faults were seen (ring).
     bus_marks: [u64; BUS_FAULTS_N],
     bus_n: usize,
+    /// R8: when the current episode began, and its faults so far.
+    bus_ep_start: u64,
+    bus_ep_faults: u32,
     last_max: Option<u8>,
     stall_since: u64,
     last_kick: u64,
@@ -203,6 +210,8 @@ impl Heal {
             bus_seen: 0,
             bus_marks: [0; BUS_FAULTS_N],
             bus_n: 0,
+            bus_ep_start: 0,
+            bus_ep_faults: 0,
             last_max: None,
             stall_since: 0,
             last_kick: 0,
@@ -298,9 +307,13 @@ impl Heal {
             self.bus_seen = s.bus_faults;
             // one mark per EPISODE: a fault within BUS_EPISODE_MS of the last one belongs to the same episode
             let last = if self.bus_n > 0 { self.bus_marks[(self.bus_n - 1) % BUS_FAULTS_N] } else { 0 };
-            if self.bus_n == 0 || now.saturating_sub(last) > BUS_EPISODE_MS {
+            self.bus_ep_faults = self.bus_ep_faults.saturating_add(1);
+            let capped = now.saturating_sub(self.bus_ep_start) > BUS_EPISODE_MAX_MS || self.bus_ep_faults > BUS_EPISODE_MAX_FAULTS;
+            if self.bus_n == 0 || now.saturating_sub(last) > BUS_EPISODE_MS || capped {
                 self.bus_marks[self.bus_n % BUS_FAULTS_N] = now;
                 self.bus_n += 1;
+                self.bus_ep_start = now;
+                self.bus_ep_faults = 1;
             } else {
                 self.bus_marks[(self.bus_n - 1) % BUS_FAULTS_N] = now; // the episode continues
             }
@@ -909,6 +922,15 @@ pub fn selftest() -> bool {
         s.bus_faults = if t >= 2_500 { 4 } else if t >= 2_000 { 3 } else if t >= 1_500 { 2 } else if t >= 1_200 { 1 } else { 0 };
     });
     let bus_cascade = m9.count(b'L') == 0;
+    // R8: a bus faulting steadily every 1 s (each restart "recovering" in between) escalates — it used to be one endless
+    // episode that never reloaded
+    let mut h10 = Heal::from_boot(None, false);
+    let mut m10 = Mock::new(Probe::Awake);
+    run(&mut h10, &mut m10, 1_000, 60_000, &mut |t, s| {
+        s.queued = 0;
+        s.bus_faults = if t >= 2_000 { (t - 1_000) / 1_000 } else { 0 };
+    });
+    let bus_steady = m10.count(b'L') >= 1 && m10.recorded_class == Class::BusFaults as u32;
     // 8. the record format: written, taken once, a flipped word never reads back
     let record = arch_aarch64::crashrec::heal_selftest();
     // 9. the station set; the published status; no heap use by any of it
@@ -922,13 +944,13 @@ pub fn selftest() -> bool {
     let st = status().0.starts_with("degraded") && status().5;
     publish(&Heal::from_boot(None, false));
     let heap = crate::heap::used() == heap0;
-    let pass = congestion && nosta && sleep && ladder && diag && once && degrade && early && later && crash1 && crash2 && refill && bus_burst && bus_spread && bus_cascade && record && sta && st && heap;
+    let pass = congestion && nosta && sleep && ladder && diag && once && degrade && early && later && crash1 && crash2 && refill && bus_burst && bus_spread && bus_cascade && bus_steady && record && sta && st && heap;
     // BENCH ONLY: the metal trigger reaches the real ladder ([P-wifiheal-bench], its own line)
     #[cfg(feature = "wifiheal-bench")]
     let pass = pass && bench_selftest();
     arch_aarch64::_print(format_args!(
-        " [P-wifiheal] {} — audit A7 Wi-Fi self-heal: congestion (completions advancing) no action={} no station no action={} power-save / gone station: kicks then no recovery={} freeze ladder kick 100ms/500ms -> bounce 10s -> reload 25s -> reload 85s (60s backoff) -> RebootOnce 100s={} diagnostics captured + recorded before every bounce / reload / reboot={} at most one reboot={} post-reboot recurrence -> Degrade, no reset, halts ignored={} early self-heal counts as rebooted={} new incident after the window={} firmware halt -> reload at once, backoff, failed reload retried, then reboot={}/{} budget refill after 1 h={} 3 bus-server faults in 60 s -> one reload={} the same 3 spread over 80 s -> none={} a 4-fault cascade in 1.5 s = one episode, no reload={} record taken once, torn = none={} stations={} status={} heap growth 0={}\n",
-        if pass { "PASS" } else { "FAIL" }, congestion, nosta, sleep, ladder, diag, once, degrade, early, later, crash1, crash2, refill, bus_burst, bus_spread, bus_cascade, record, sta, st, heap
+        " [P-wifiheal] {} — audit A7 Wi-Fi self-heal: congestion (completions advancing) no action={} no station no action={} power-save / gone station: kicks then no recovery={} freeze ladder kick 100ms/500ms -> bounce 10s -> reload 25s -> reload 85s (60s backoff) -> RebootOnce 100s={} diagnostics captured + recorded before every bounce / reload / reboot={} at most one reboot={} post-reboot recurrence -> Degrade, no reset, halts ignored={} early self-heal counts as rebooted={} new incident after the window={} firmware halt -> reload at once, backoff, failed reload retried, then reboot={}/{} budget refill after 1 h={} 3 bus-server faults in 60 s -> one reload={} the same 3 spread over 80 s -> none={} a 4-fault cascade in 1.5 s = one episode, no reload={} steady faults every 1 s escalate (R8)={} record taken once, torn = none={} stations={} status={} heap growth 0={}\n",
+        if pass { "PASS" } else { "FAIL" }, congestion, nosta, sleep, ladder, diag, once, degrade, early, later, crash1, crash2, refill, bus_burst, bus_spread, bus_cascade, bus_steady, record, sta, st, heap
     ));
     pass
 }

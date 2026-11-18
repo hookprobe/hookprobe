@@ -1,7 +1,7 @@
 # ADR 0066 — Sealed evidence export: replay the sealed evidence log over the enrolled PQ channel
 
 **Status:** 🟡 **Proposed (2026-11-17).** The host library is written (`onboarding/enrollment/evidence-export/`);
-**nothing is wired into heqk**. The wiring is a kernel change and needs the hooks in *Kernel interface* below.
+the control-plane receiver is in `responder-sim` (`evidence_rx.rs`); **nothing is wired into heqk**. The wiring is a kernel change and needs the hooks in *Kernel interface* below.
 Clauses are tagged **[realized]**, **[partial]** or **[vision]** (the ADR 0043/0044/0047 discipline).
 **Deciders:** operator (ratification; whether public attacker addresses may leave the device, D3); os-architect
 (D1, D4); security-auditor (D3, the privacy claim); verification-engineer (the gate in *Verification*).
@@ -120,8 +120,29 @@ Also needed, separately:
 - **Attack paths and Wasm module identity** are not in the log image either (rule id, severity and verdict are).
   Exporting them needs the same image change.
 - **Unflushed events** (the RAM batch, up to 60 s) reach HQX3 only once `evlog` writes the record.
-- **The receiver**: `responder-sim/src/export_rx.rs` should accept HQX3 under `AD_FRAME`, de-duplicate on the
-  cursor and answer with an ack under `AD_ACK`.
+- **The device must receive acks as datagrams.** The control plane seals each ack with `seal_record` under
+  `AD_ACK` and tags it `HQXR`, on the same send counter as the reach-policy record. The device opens it with an
+  `AntiReplayRx` built from its session receive key (`CipherState::into_anti_replay`), not with the in-order
+  `decrypt_into`, so a lost or reordered ack never desyncs later ones.
+
+### The receiver **[realized]** (2026-11-18)
+
+`responder-sim` (`src/evidence_rx.rs`, wired into `--live`) receives HQX3 next to the live HQX1 stream:
+
+- **One window, two streams.** Both streams come off the device's one send counter, so they share one
+  `AntiReplayRx`; the associated data picks the stream (`export_rx::ExportRx::accept_any`). A failed open leaves
+  the window untouched, so trying the second AD is safe.
+- **De-duplication on the cursor.** The receiver keeps `through`, the end of the contiguous range it holds, and
+  its last 64 stored frames. A resend that is fully held is a duplicate and is acked again. A resend that grew
+  (the log advanced while the ack was lost) must match the held part record for record, and only the tail is
+  stored. A frame that starts beyond `through` is stored only if it reports evictions (the gap is written to
+  the evidence output); otherwise it is held and not acked, because an earlier batch is missing and acking it
+  would let the device drop that batch unseen. The device's ack timeout resends it.
+- **Acks are the frame's own `(batch_seq, to)`.** The device advances only on an ack naming a batch it sent with
+  that end (D2), so an ack can never move it past evidence the receiver does not hold.
+- **Output** is JSON Lines next to the live stream's: `heqk_evidence` per new event (a public source, a
+  pseudonym or nothing, never an internal address) and `heqk_evidence_frame` per frame (range, new and duplicate
+  counts, rejected and evicted log records, any gap, the QSECBIT window).
 
 ## Verification
 
@@ -135,9 +156,19 @@ Also needed, separately:
 - The tests use a stand-in sealer (`testutil::TestOpener`), not HQKSEAL1: the library treats opening as opaque.
   The HQKSEAL1 path is proven once the kernel wiring lands, by a new `[P-evexport]` phase in `validate.sh` that
   exports a sealed log over the loopback session and checks the received set.
+- `cd onboarding/enrollment/responder-sim && cargo test` runs the receiver's tests (CI gate g1, "host tests:
+  responder-sim"). `export_rx::sealed_evidence_round_trip_with_a_lost_ack` runs the library's `Exporter` against
+  this receiver over a real ML-KEM-768 + X25519 session, with a live HQX1 frame on the same counter and the first
+  ack lost: every event is stored once, no internal address reaches the output, and the device's synced position
+  reaches the log head.
 - `os/kernel` is untouched by this ADR's code, so `validate.sh` is unaffected.
 
 **Evidence (2026-11-17):** CI gate g1 on hookprobe/hookprobe#1272 (Actions run 44178705052, job 134376924553)
 compiled the library with stable Rust, with no warnings, and passed **31 of 31** unit tests, the three sets above
 included. This proves the library against its stand-in sealer only; the HQKSEAL1 path and the on-device export
 stay unproven until the kernel wiring and its `[P-evexport]` phase land.
+
+**Evidence (2026-11-18), receiver:** on macOS (stable Rust 1.100, an isolated worktree), `responder-sim`'s
+tests pass 13 of 13 (9 new receiver tests and the end-to-end round trip above, plus the 3 existing live-stream
+tests), with no new clippy warnings, and `--selftest` passes. The pass-through sealer in the round trip again
+stands in for HQKSEAL1.
