@@ -694,6 +694,7 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
         }
         "/api/devices" => json(scratch, |w| st.render_devices(limit(200, 256), w)),
         "/api/lan-access" => json(scratch, render_lan_access),
+        "/api/recoveries" => json(scratch, |w| crate::superv::render(w, limit(64, 64))), // autoheal harness H1
         "/api/capabilities" => json(scratch, crate::capabilities::render),
         "/api/planner/status" => json(scratch, |w| w.raw("{\"configured\":false,\"endpoint\":null,\"model\":null,\"message\":\"No AI planner is configured on this device\"}")),
         p if p.starts_with("/api/planner/proposals/") => json(scratch, |w| w.raw("{\"error\":\"not_found\",\"message\":\"no such proposal (no planner is configured on this device)\"}")).with_status(404),
