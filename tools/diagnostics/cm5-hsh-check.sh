@@ -77,6 +77,9 @@ G=$((g0 + 1)); [ "$(api /api/config | python3 -c 'import json,sys; d=json.load(s
 printf 'HQPOL1\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 0.0.0.0/0 via wan\n' > "$T/p"
 $HQ bundle "$CK" $G "$T/b.bin" "$T/b.sig" --policy "$T/p" >/dev/null
 $UP --type config --sig "$T/b.sig" --file "$T/b.bin" > "$T/r" 2>&1; grep -q '"applies": "live"' "$T/r"; chk $? "C a policy bundle gen $G applies live"
+# a bundle in force with WAN / Wi-Fi sections (left by another check) makes this policy-only bundle remove them: the
+# device then waits for the owner's confirm (management plane) — give it, as the owner would, or it reverts at reboot
+grep -q '"needs_confirm": true' "$T/r" && { sleep 10; $UP --config-confirm "hsh check" >/dev/null 2>&1; echo "     (the bundle removed WAN / Wi-Fi sections: owner confirm given)"; }
 for _ in $(seq 1 20); do sh "config status" | grep -q "generation $G" && break; sleep 2; done
 sh "config status" | grep -q "generation $G"; chk $? "C the shell sees gen $G live (no reboot)"
 for _ in $(seq 1 20); do sh "config status" | grep -qi "committed\|in force" && break; sleep 2; done
