@@ -22,6 +22,8 @@ PROF=$(pi "nmcli -t -f NAME con show | grep -i hookprobe | head -1")
 SSID=$(psudo "nmcli -s -g 802-11-wireless.ssid con show '$PROF'")
 PSK=$(psudo "nmcli -s -g 802-11-wireless-security.psk con show '$PROF'")
 [ -n "$SSID" ] && [ -n "$PSK" ] || { echo "WPA3: could not read the AP SSID / passphrase from the Pi profile '$PROF'"; exit 1; }
+# wlan1 may have been left unmanaged by a run that drove it with its own supplicant (the claims check)
+psudo "nmcli dev set wlan1 managed yes" >/dev/null 2>&1; sleep 2
 psudo "nmcli dev wifi rescan ifname wlan1" >/dev/null 2>&1; sleep 6
 pi "nmcli -f SSID,SECURITY,CHAN dev wifi list ifname wlan1" | grep -F "$SSID" | head -2 | sed 's/^/  scan: /'
 psudo "iw dev wlan1 scan dump" 2>/dev/null | awk -v s="$SSID" '/^BSS /{b=$0} /SSID: /{x=($2==s)} x&&/RSN:|Authentication suites|Capabilities: .*(PTKSA|MFP)|Group mgmt/' | head -6 | sed 's/^/  rsn: /'
