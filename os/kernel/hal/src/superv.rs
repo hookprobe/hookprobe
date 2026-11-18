@@ -82,7 +82,9 @@ pub const KIND_NAMES: [&str; 6] = ["exception", "budget-overrun", "init-refused"
 pub const OUTCOME_NAMES: [&str; 4] = ["pending", "recovered", "escalated", "failed"];
 
 /// The components that recover, by a stable id (the journal stores the id, the API prints the name).
-pub const COMPONENTS: [&str; 7] = ["el0-wifi", "el0-wpa", "el0-tlshost", "el0-lansvc", "el0-hsh", "wifi", "other"];
+/// `el0-neuro` (the on-device inference server, a separate track) is listed ahead of its integration so its faults are
+/// attributed by name from the first day. At most 8 components (the kernel keeps a u8 bitmask).
+pub const COMPONENTS: [&str; 8] = ["el0-wifi", "el0-wpa", "el0-tlshost", "el0-lansvc", "el0-hsh", "wifi", "el0-neuro", "other"];
 
 /// The id of a component name (unknown names map to "other").
 pub fn component_id(name: &str) -> u8 {
@@ -321,7 +323,8 @@ mod tests {
     #[test]
     fn names() {
         assert_eq!(component_id("el0-tlshost"), 2);
-        assert_eq!(component_id("nope"), 6);
+        assert_eq!(component_id("nope"), 7);
+        assert_eq!(component_id("el0-neuro"), 6);
         assert_eq!(component_name(component_id("wifi")), "wifi");
         assert_eq!(Kind::Budget.name(), KIND_NAMES[1]);
         assert_eq!(Rung::Reload.name(), "reload");
