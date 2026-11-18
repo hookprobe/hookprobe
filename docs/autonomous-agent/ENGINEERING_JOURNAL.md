@@ -2,6 +2,23 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+## 2026-11-18 — Session 2 (cont.): AB-09 and AB-10
+
+- #1298 merged with 13 checks still running; its CI result is recorded when it finishes.
+- homepods' `heqk-gap-fix-plan-2026-11-18.md` (#1297) is kernel-only (R1–R10, E1–E5); no overlap.
+- **AB-09**: heqk serves an always-empty process tree on purpose (`http.rs:713`, no EDR agent), but
+  the panel said "this device's EDR layer may not have observed process activity for it yet". The
+  empty state now keys on capability `host_telemetry`: granted → "not linked yet"; otherwise "This
+  device does not see processes" with why. Capability-gated, not substrate-branched. HP-09 asks
+  homepods to deny `host_telemetry` with a reason so the device states it.
+- **AB-10**: `/api/reports` clamps `limit` to 32 (`http.rs:741`, `MAX_INCIDENTS` = 32, most recent
+  activity first) and does not say when it cut the list. A full page of 32 now shows "Showing the 32
+  most recently active incidents, the most this device lists."
+- Evidence: `astro check` 0 errors; `astro build` 27 pages. **Not browser-checked**: the mock server
+  binds and answers inside its own process, but this shell's sandbox now refuses localhost between
+  processes and the in-app browser cannot reach it either. New spec `investigate-honest.mjs` covers
+  both states and both capability cases; its first run is CI g3.
+
 ## 2026-11-18 — Session 2 (cont.): AB-07 and AB-12
 
 - #1280 and #1281 merged with CI green. g3 ran the new `revoke-all` spec: 12/12, UI suite 437/437.
