@@ -22,7 +22,9 @@ independent evidence** and sharpens it:
 - Evidence cards on real held-out malware traffic: 0.88 identity / 0.65 evidence recall (synthetic
   had 1.00) — weakest on C&C. Behavioural memory: peer novelty works on real devices; the
   hour-of-day profile fails cold-start. Both have concrete fixes; neither is at its kill criterion.
-- Still **no CM5 measurement** — a reachable bench unit is the blocking item.
+- Still **no CM5 measurement**, and the operator has confirmed no CM5 is available. The core of D is
+  unaffected; the generative tier stays unratified until a CM5 or a Raspberry Pi 5 proxy (same
+  BCM2712, results labelled `pi5-linux`) is measured — see `NEURO_PHASE0_RESULTS.md` §8.
 
 ## 1. The decision
 
