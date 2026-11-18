@@ -364,7 +364,9 @@ fn apply(r: &Record) -> Result<(), JErr> {
         let Some((x, _)) = hal::lanaccess::decode(&r.target[..r.tlen as usize]) else { return Ok(()) };
         match (r.op, r.value) {
             (OP_SET, 1) => {
-                let _ = crate::lanaccess::table().add(x); // always: in force now and after every boot
+                // always: in force now and after every boot (R4: expired temporaries are dropped first; the API refused a
+                // grant that could not be held before journaling it)
+                let _ = crate::lanaccess::can_add(&x) && crate::lanaccess::table().add(x);
             }
             (OP_REMOVE, _) => {
                 let _ = crate::lanaccess::table().remove(x.device, x.dst, x.ports);

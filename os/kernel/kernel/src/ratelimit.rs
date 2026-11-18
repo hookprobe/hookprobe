@@ -290,6 +290,21 @@ pub fn is_local_ip(ip: u32) -> bool {
     ip != 0 && LOCAL_IPS.iter().any(|a| a.load(Ordering::Relaxed) == ip as u64)
 }
 
+/// One of the device's own IPv4 addresses (self-tests).
+pub fn first_local_ip() -> Option<u32> {
+    LOCAL_IPS.iter().map(|a| a.load(Ordering::Relaxed) as u32).find(|&ip| ip != 0)
+}
+
+/// Does `net`/`len` contain one of the device's own addresses? (R5, code review 2026-11-18: an A-01 owner exception
+/// may never cover the device itself — the network address alone is not the test.)
+pub fn prefix_has_local_ip(net: u32, len: u8) -> bool {
+    let mask = if len == 0 { 0 } else { u32::MAX << (32 - len.min(32) as u32) };
+    LOCAL_IPS.iter().any(|a| {
+        let ip = a.load(Ordering::Relaxed) as u32;
+        ip != 0 && ip & mask == net & mask
+    })
+}
+
 /// The GLOBAL flow-table occupancy GAUGE (the conntrack-equivalent fill) behind the A7
 /// saturation signal. heqk tracks no teardown, so occupancy is measured as NEW flows
 /// (SYN-only segments) inside a sliding `FLOW_IDLE_SECS` horizon — two buckets, the
