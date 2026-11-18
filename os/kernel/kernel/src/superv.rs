@@ -35,11 +35,30 @@ fn mark(c: u8) {
     unsafe { MAYBE_OPEN |= 1 << c };
 }
 
+/// Set while a self-test faults a server ON PURPOSE (some run at every boot, on metal too): those faults are
+/// journaled as `planned`, so an `exception` in the journal is always a real one.
+static mut DELIBERATE: bool = false;
+
+/// Run `f`, journaling any server fault inside it as `planned` (a self-test's deliberate fault).
+pub fn deliberate<T>(f: impl FnOnce() -> T) -> T {
+    let was = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(DELIBERATE), true) };
+    let r = f();
+    unsafe { DELIBERATE = was };
+    r
+}
+
 /// An EL0 server faulted (`budget` = it overran its time budget) and is being reset + restarted.
 pub fn server_fault(name: &str, budget: bool) -> u32 {
     let c = component_id(name);
     mark(c);
-    j().open(c, if budget { Kind::Budget } else { Kind::Exception }, Rung::Restart, now_ms())
+    let kind = if unsafe { DELIBERATE } {
+        Kind::Planned
+    } else if budget {
+        Kind::Budget
+    } else {
+        Kind::Exception
+    };
+    j().open(c, kind, Rung::Restart, now_ms())
 }
 
 /// An EL0 server's initialisation failed or was refused.
@@ -201,15 +220,19 @@ pub fn selftest() -> bool {
         && b.is_some_and(|r| r.rung == Rung::Bounce && r.outcome == Outcome::Recovered && r.duration_ms() == Some(800));
     wifi_heal(5, false, 3_000);
     let degrade = journal().get(3).is_some_and(|r| r.rung == Rung::Degrade && r.outcome == Outcome::Failed) && journal().pending() == 0;
+    // a self-test's deliberate fault is journaled as planned, never as an exception
+    let d = deliberate(|| server_fault("el0-hsh", false));
+    server_ok("el0-hsh");
+    let planned = journal().get(d).is_some_and(|r| r.kind == Kind::Planned && r.outcome == Outcome::Recovered) && journal().by_kind[Kind::Exception as usize] == 0;
     let s = server_fault("el0-tlshost", true);
     let again = server_fault("el0-tlshost", false) == s;
     server_ok("el0-tlshost");
     server_ok("el0-tlshost");
     let jj = journal();
-    let fault = jj.total() == 4
+    let fault = planned && jj.total() == 5
         && jj.get(s).is_some_and(|r| r.kind == Kind::Budget && r.outcome == Outcome::Recovered && r.repeats == 1)
         && jj.by_kind[Kind::Budget as usize] == 1
-        && jj.by_outcome[Outcome::Recovered as usize] == 2;
+        && jj.by_outcome[Outcome::Recovered as usize] == 3;
     let unknown = component_id("no-such-server") == component_id("other");
     // H2: the table policy — only the Wi-Fi link is critical; a server that faults on every call is held off (capped)
     let t = hal::superv::entry("el0-tlshost");
