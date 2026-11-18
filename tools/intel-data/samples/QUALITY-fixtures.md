@@ -1,4 +1,4 @@
-# Data quality report — 2026.11.18-3b2bac698eb1 (research)
+# Data quality report — 2026.11.18-6283713ff3ed (research)
 
 Examples: **56**. Human-verified share: 0.0714. Synthetic share: 0.6429. Provenance completeness: 1.0. Licence completeness: 1.0.
 
@@ -10,11 +10,11 @@ Examples: **56**. Human-verified share: 0.0714. Synthetic share: 0.6429. Provena
 | attack_intelligence/test | None: 1 |
 | dns_intelligence/test | benign: 2, malicious: 2 |
 | dns_intelligence/train | benign: 3, malicious: 4 |
-| network_intelligence/test | malicious: 1 |
+| network_intelligence/dev | malicious: 1 |
 | network_intelligence/train | benign: 2, malicious: 2 |
-| soc_reasoning/dev | benign: 4, malicious: 8 |
-| soc_reasoning/test | malicious: 12 |
-| soc_reasoning/train | benign: 8, malicious: 4 |
+| soc_reasoning/dev | malicious: 4 |
+| soc_reasoning/test | benign: 4 |
+| soc_reasoning/train | benign: 8, malicious: 20 |
 | vulnerability_intelligence/train | None: 2 |
 
 ## Sources and licences
@@ -46,6 +46,9 @@ Class imbalance (max/min label count): dns_intelligence 1.2, network_intelligenc
 
 - excluded exact_duplicates: 0
 - build: dns_benign_dropped_conflict = 1
+- build: net_group:f-cic:192.168.10.5-198.51.100.3-50000-80-6@2017-07-07 03 = 1/1
+- build: net_group:f-cic:192.168.10.6-192.168.10.50-40000-22-6@2017-07-07 03 = 1/1
+- build: net_group:f-iot23:CTU-IoT-Fixture-1-1 = 3/3
 
 Contamination problems: **0**
 

@@ -179,5 +179,26 @@ class DgaReferenceTests(unittest.TestCase):
         self.assertEqual(dga_ref.score(b"com"), 0)
 
 
+class StratifiedSplitTests(unittest.TestCase):
+    def test_few_groups_every_split_gets_both_labels_and_no_leak(self):
+        from heqkdata import splits
+        sizes = [(500, 0.99), (500, 0.9), (460, 1.0), (200, 0.95), (88, 0.9), (66, 0.5), (64, 0.5), (28, 0.0), (9, 0.0), (5, 1.0), (3, 0.0)]
+        ex = []
+        for gi, (n, mal) in enumerate(sizes):
+            for i in range(n):
+                ex.append({"id": f"{gi}-{i}", "collection": "c", "content_sha256": f"{gi}-{i}",
+                           "split": {"group_key": f"g{gi}", "name": None, "strategy": None},
+                           "target": {"label": "malicious" if i < n * mal else "benign"},
+                           "input": {"records": [{"record_id": f"r{gi}-{i}"}]}})
+        splits.assign(ex, {"train": 0.7, "dev": 0.15, "test": 0.15}, "group_stratified")
+        for s in ("train", "dev", "test"):
+            labs = {e["target"]["label"] for e in ex if e["split"]["name"] == s}
+            self.assertEqual(labs, {"benign", "malicious"}, s)
+        self.assertEqual(splits.check_contamination(ex), [])
+        again = [dict(e, split=dict(e["split"], name=None)) for e in ex]
+        splits.assign(again, {"train": 0.7, "dev": 0.15, "test": 0.15}, "group_stratified")
+        self.assertEqual([e["split"]["name"] for e in again], [e["split"]["name"] for e in ex])  # deterministic
+
+
 if __name__ == "__main__":
     unittest.main()

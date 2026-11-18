@@ -170,7 +170,7 @@
         "classify"
       ],
       "split": {
-        "strategy": "group_hash",
+        "strategy": "group_stratified",
         "group_key": "capture scenario (IoT-23 / CTU) or source host",
         "fractions": {
           "train": 0.7,
@@ -218,7 +218,7 @@
         "explain"
       ],
       "split": {
-        "strategy": "group_hash",
+        "strategy": "group_stratified",
         "group_key": "scenario template",
         "fractions": {
           "train": 0.7,
@@ -231,7 +231,7 @@
         "hookprobe-synthetic-soc"
       ],
       "status": "partial",
-      "notes": "Synthetic templates only (ground_truth.type = synthetic). The 215-case blind set in tools/neuro-research/eval/blind is evaluation-only and is never ingested here."
+      "notes": "Synthetic templates only (ground_truth.type = synthetic). The 215-case blind set in tools/neuro-research/eval/blind is evaluation-only and is never ingested here. With 9 templates (groups) no split can be label-balanced; its dev/test splits are format checks, not evaluation."
     },
     {
       "id": "vulnerability_intelligence",

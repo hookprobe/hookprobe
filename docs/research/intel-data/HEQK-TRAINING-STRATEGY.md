@@ -95,7 +95,7 @@ instructions. Distillation runs the same way: the teacher's outputs are stored a
 | # | Collection | Implemented now | Next real source (licence-cleared) | Blocked on |
 |---|---|---|---|---|
 | 01 | DNS | builder; dga.rs benchmark; **266,548 examples** from UMUDGA (MIT) + PhiUSIIL (CC BY 4.0) | an open DGA/tunnel corpus (see research §3); HookProbe lab captures of DNS tunnelling tools (iodine, dnscat2) in the isolated lab | a benign baseline with a clear licence (Tranco UNKNOWN; Cloudflare Radar NC); abuse.ch AI-training consent |
-| 02 | Network | Zeek (IoT-23, CTU) + CICFlowMeter adapters | IoT-23 (CC BY 4.0) via `register` | — |
+| 02 | Network | Zeek (IoT-23, CTU) + CICFlowMeter adapters; **96,662 examples** from 11 IoT-23 scenarios (≤ 25,000 flows per scenario, whole-scenario stratified splits) | the 12 large IoT-23 captures (sampled at registration), CTU-13 (CC BY), Kitsune (CC BY 4.0), LANL (CC0) | — |
 | 03 | Attack | ATT&CK knowledge | Atomic Red Team (MIT) test metadata; OTRF Security-Datasets (MIT) / Splunk attack_data (Apache-2.0) host logs; **lab traces** | the isolated lab (below) |
 | 04 | Malware | — (specified) | sandbox-report metadata with a training licence | abuse.ch consent, or a vendor agreement |
 | 05 | Vulnerability | KEV knowledge | CVE List v5 (CVE ToU), CWE/CAPEC (MITRE ToU), Vulnrichment (CC0), GHSA (CC BY 4.0) | — |
@@ -138,9 +138,9 @@ The data contract is the same on every target; only model size changes.
 
 | Step | Deliverable | Gate to pass |
 |---|---|---|
-| R1 (this PR) | registry (149 sources, 118 licences), schemas, pipeline, tests, acquisitions: KEV, ATT&CK, Feodo, PhiUSIIL, UMUDGA; dga.rs baseline | `heqk_data.py check` + unit tests green |
+| R1 (this PR) | registry (149 sources, 118 licences), schemas, pipeline, tests, acquisitions: KEV, ATT&CK, Feodo, PhiUSIIL, UMUDGA, IoT-23 (11 of 23 scenarios); dga.rs baseline | `heqk_data.py check` + unit tests green |
 | R2 | licence actions: abuse.ch/Spamhaus AI-training consent request; Tranco terms confirmation; CIRCL MISP community application; DNSC cooperation proposal; UPB research partnership | registry entries updated by reviewed commits |
-| R3 | IoT-23 registered and normalised; collection 02 first real build; neuro E-N2 consumes it | contamination 0; cross-scenario results |
+| R3 | remaining IoT-23 captures (sampled), CTU-13; neuro E-N2 consumes collection 02 | contamination 0; cross-scenario results |
 | R4 | isolated attack lab + capture → collection 03 traces | security-auditor review of the lab isolation |
 | R5 | consent flow + telemetry adapter (heqk export frame v2 → `detection` records) | governance §3 checklist; legal review |
 | R6 | first tier B DNS specialist trained on a licence-clean build; compared with `dga.rs` on the same test split | FP per device-day ≤ dga.rs at equal recall |
