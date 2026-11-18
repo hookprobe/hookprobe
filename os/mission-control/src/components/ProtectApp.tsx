@@ -183,7 +183,7 @@ const ProtectApp: Component = () => {
             <section class="pcard span-6" aria-label="Inline segmentation">
               <p class="l0-label">Inline segmentation (VLAN / OVS)</p>
               <p class="l0-card-sub">Zones are enforced in the device itself. Switch-level segmentation needs Open vSwitch.</p>
-              <Gate cap="openvswitch"><button class="hp-btn">Configure segmentation</button></Gate>
+              <Gate cap="openvswitch" notBuilt="Mission Control has no screen for this yet."><button class="hp-btn">Configure segmentation</button></Gate>
             </section>
             <section class="pcard span-12" aria-label="Segment posture">
               <p class="l0-label">Segment posture (fail-open / fail-closed)</p>
