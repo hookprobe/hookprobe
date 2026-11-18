@@ -1,0 +1,7 @@
+dev: 3 benign timelines, 9 infected scenarios
+test: 5 benign timelines, 11 infected scenarios (frozen from dev: ridge=10)
+phase=test episodes=55
+cand      AUC incident det @1/wk      benign alarms/dev/day  bytes/dev
+A      0.9267              0.873                      0.333       1214
+B      0.8859              0.091                      0.000        568
+C      0.9068              0.873                      0.333       1782
