@@ -1,0 +1,28 @@
+# HookProbe Neuro stage 1: the temporal security engine as an EL0 excursion server
+# (docs/research/neuro/05 §2.3 "N0"). It follows the detached-crate pattern of os/kernel/el0-*.
+# The crate lives OUTSIDE os/kernel (HomePods-owned). Wiring it into kernel/build.rs, assigning its address
+# range and adding its ABI to hal/ are HomePods decisions (docs/research/neuro/12 R1).
+[package]
+name = "el0-neuro"
+version = "0.0.26"
+edition = "2021"
+publish = false
+license = "AGPL-3.0-only"
+
+[workspace]
+
+[[bin]]
+name = "el0-neuro"
+path = "src/main.rs"
+
+[features]
+cm5 = []
+
+[dependencies]
+neuro-core = { path = "../neuro-core" }
+
+[profile.release]
+panic = "abort"
+opt-level = "s"
+lto = true
+codegen-units = 1
