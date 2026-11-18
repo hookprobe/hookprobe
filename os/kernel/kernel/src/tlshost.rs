@@ -55,6 +55,11 @@ pub struct TlsHost {
     pub timeouts: u32,
     pub faults: u32,
     pub restarts: u32,
+    /// H2: the restart state under the supervisor table's policy.
+    sup: hal::superv::Sup,
+    /// A reset left the server un-initialised: the next permitted call re-INITs it first. (The reset used to re-INIT
+    /// through `call` itself — an INIT that faulted reset again and recursed without bound.)
+    need_init: bool,
     pub tls_errors: u32,
 }
 
@@ -107,6 +112,8 @@ impl TlsHost {
             timeouts: 0,
             faults: 0,
             restarts: 0,
+            sup: hal::superv::Sup::new(hal::superv::entry("el0-tlshost").unwrap_or(&hal::superv::TABLE[0])),
+            need_init: false,
             tls_errors: 0,
         };
         for s in parsed.segs[..parsed.nsegs].iter() {
@@ -185,6 +192,7 @@ impl TlsHost {
     }
 
     fn init(&mut self) {
+        self.need_init = false; // a fault inside this INIT sets it again (reset) — never a nested INIT
         let mut blob = self.init_blob;
         let Some(mut k) = device_tls_scalar(0) else {
             self.ready = false;
@@ -202,7 +210,9 @@ impl TlsHost {
             self.read(OUT_TLS_OFF, &mut k);
             self.pubkey = k;
             self.ready = r.flags & F_HANDSHAKE_DONE != 0;
-        } else {
+        } else if !self.need_init {
+            // INIT answered and refused: no HTTPS. (An INIT that FAULTED leaves `ready` as it was: the server is restarting
+            // under the supervisor's hold-off, the next permitted call re-INITs it, and plain :80 keeps redirecting.)
             self.ready = false;
         }
     }
@@ -239,6 +249,17 @@ impl TlsHost {
     /// Run one command in a bounded excursion. On timeout / fault the server is reset (every TLS
     /// session is lost, which the caller sees as `ST_PANIC`) and re-initialised.
     pub fn call(&mut self, cmd: u32, conn: usize, input: &[u8], unix_secs: u64) -> Reply {
+        // H2: inside the restart hold-off (consecutive faults) the call is refused like a fault — fail closed
+        if !self.sup.ready(crate::superv::now_ms()) {
+            return Reply { status: ST_PANIC, tls_len: 0, plain_len: 0, flags: F_CLOSED };
+        }
+        // a reset deferred its re-INIT to here; if that INIT faults too the server stays down until the next hold-off ends
+        if self.need_init && cmd != CMD_INIT {
+            self.init();
+            if self.need_init {
+                return Reply { status: ST_PANIC, tls_len: 0, plain_len: 0, flags: F_CLOSED };
+            }
+        }
         let n = input.len().min(IN_MAX);
         self.w32(H_MAGIC, MAGIC);
         self.w32(H_CMD, cmd);
@@ -259,6 +280,7 @@ impl TlsHost {
                 _ => self.faults += 1,
             }
             let _ = crate::superv::server_fault("el0-tlshost", how == crate::Excursion::Timeout); // H1
+            let _ = self.sup.fault(crate::superv::now_ms());
             self.reset();
             return Reply { status: ST_PANIC, tls_len: 0, plain_len: 0, flags: F_CLOSED };
         }
@@ -266,10 +288,13 @@ impl TlsHost {
         if status == ST_PANIC {
             kprint!(" [MC-TLS] EL0 server panicked (cmd {} slot {}): reset, every session lost\n", cmd, conn);
             let _ = crate::superv::server_fault("el0-tlshost", false); // H1
+            let _ = self.sup.fault(crate::superv::now_ms());
             self.reset();
             return Reply { status, tls_len: 0, plain_len: 0, flags: F_CLOSED };
         }
-        crate::superv::server_ok("el0-tlshost");
+        if self.sup.ok() {
+            crate::superv::server_ok("el0-tlshost");
+        }
         if status == ST_TLS_ERROR {
             self.tls_errors += 1;
         }
@@ -281,7 +306,8 @@ impl TlsHost {
         }
     }
 
-    /// Fail closed and recover: restore the image's data/bss pages, zero the heap and IO region, re-INIT.
+    /// Fail closed and recover: restore the image's data/bss pages, zero the heap and IO region; the re-INIT runs at the
+    /// next permitted call (H2: after the supervisor's hold-off, and never nested inside the faulted call).
     fn reset(&mut self) {
         self.restarts += 1;
         for i in 0..self.nrw {
@@ -296,7 +322,7 @@ impl TlsHost {
         for f in self.heap.iter().chain(self.io.iter()) {
             unsafe { core::ptr::write_bytes(*f as *mut u8, 0, 0x1000) };
         }
-        self.init();
+        self.need_init = true;
     }
 }
 
