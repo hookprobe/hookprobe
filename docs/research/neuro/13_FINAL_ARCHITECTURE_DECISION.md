@@ -141,6 +141,16 @@ security inference", is kept. It is moved to **the scale that fits the evidence*
 | **Unverified hypotheses** | ternary is faster than Q4 on A76 (`02` §3); RWKV-7 explains as well as a hybrid (E-N3); a learned per-device cell beats DNA (E-N2); open-loop pacing protects DP p99 (E-N5b) |
 | **Potential original research** | grammar-sparse logits (`10` §3 rank 1); OS admission of signed model packages (rank 2); on-gateway per-device learned recurrent state with measured cost (rank 3). **Novelty is not claimed; each needs a professional search.** |
 
+## Status after approval (2026-11-18)
+
+Stage 1 was approved. Work is in `os/neuro/` (outside `os/kernel`):
+- **Integer streaming reference** `tools/neuro-research/dna_fixed.py` matches the float DNA in the same
+  experiments: synthetic AUC 0.999/0.999 and 0.929 vs 0.928 at cold start; IoT-23 Hue 2/day in both;
+  onset 14/14 in both.
+- **Rust port** `os/neuro/neuro-core` and server `os/neuro/el0-neuro` are written, with 1,200
+  bit-exact golden hour closes. They are **not yet compiled or tested**: there is no Rust toolchain on
+  the authoring host.
+
 ## Approval requested
 
 1. **Stage 1 implementation:** `el0-neuro` N0 plus the E-N0 harness, on a new branch, as an EL0 crate.
