@@ -4,10 +4,10 @@
 #
 # An entry stops counting on its expiry date, or as soon as the advisory publishes a patched release (then
 # upgrade). Keep the reason concrete: why the vulnerable code cannot be reached, and what would change that.
+# The gate prints `unused` for an entry no lockfile needs any more — delete it then.
+#
+# History:
+#   GHSA-fc5q-39xc-vjpf (picomatch <= 4.0.7 ReDoS, build-time only) — added 2026-11-17 (#1265) while no patched
+#   release existed; the advisory was WITHDRAWN by GitHub on 2026-11-18 (npm audit clean again), entry removed.
 
-# picomatch <= 4.0.7 ReDoS via single-branch repeated extglobs (+(*)). No patched release exists (4.0.7 is the
-# latest; npm's suggested "fix" is a major downgrade of astro to 5.3.0). picomatch runs only in the Mission
-# Control BUILD (astro / vite / tinyglobby / unstorage on the build host): the UI ships as static assets embedded in
-# heqk, no Node runs on the device (ADR 0047), and every glob it evaluates comes from our own config and source,
-# never from a request. Re-review: when picomatch publishes a fix (the gate then fails until we upgrade).
-GHSA-fc5q-39xc-vjpf | picomatch | 2026-12-17 | build-time only (astro/vite globs from our own config); no Node on the device; no patched release exists
+# (no exceptions in force)
