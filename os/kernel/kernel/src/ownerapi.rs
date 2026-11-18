@@ -388,6 +388,10 @@ fn lan_access(c: &Ctx, opc: u8, target_s: &str, value_s: &str, reason: &str, per
     if !auth.reauth(key.trim().as_bytes(), c.now_ms) {
         return refuse(c, "re-authentication failed");
     }
+    // R4: refuse BEFORE anything is journaled when the exception could not be held (it used to report success)
+    if opc == OP_SET && !crate::lanaccess::can_add(&x) {
+        return refuse(c, "too many exceptions");
+    }
     let mut t = [0u8; hal::lanaccess::SCOPE_LEN];
     hal::lanaccess::encode(&x, dur, &mut t);
     // value 1 = always (applied + replayed), 2 = temporary (audit only — held in RAM below)

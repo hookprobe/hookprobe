@@ -1151,7 +1151,10 @@ pub fn client6<N: ApNic>(
                 .map(|p| {
                     let (a, d) = pol.check(If::Lan, Dir::In, &p);
                     if a == Act::Allow && frame.len() >= 12 {
-                        let acl_allow = matches!(d, hal::policy::Decided::Acl(_, s) if s != u16::MAX);
+                        // R6 (code review 2026-11-18): a specific signed route to the destination is operator intent here
+                        // too, as on the IPv4 path (`forward4`) — the same policy must not be read differently per family
+                        let acl_allow = matches!(d, hal::policy::Decided::Acl(_, s) if s != u16::MAX)
+                            || pol.route(&p.src, &p.dst, &|_| true).is_some_and(|r| r.dst.len > 0);
                         let mut sm = [0u8; 6];
                         sm.copy_from_slice(&frame[6..12]);
                         if crate::lanaccess::check(&sm, p.src, p.dst, p.dport, p.proto, acl_allow, None, now_ms) == crate::lanaccess::Verdict::Refused {
