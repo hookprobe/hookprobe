@@ -258,3 +258,45 @@ Files: `data/e-bm1.*`, `data/e-bm1-cold.*` (synthetic), `data/e-bm2b.*` (IoT-23)
 quote. The design target (< 1 nuisance alert per device per week, E-BM2) still needs multi-day benign
 traffic. The new risk: an attacker active during a slot's first three updates can teach that slot's
 *volume* profile (not its peers). Peer novelty, which drove every real onset detection, is unaffected.
+
+## 10. Phase 0b — a fair free-mode baseline (E-EV3, 2026-11-18)
+
+**Why.** In Phase 0, free mode got the raw JSON schema in its prompt, and small models copied the
+schema back instead of answering (Qwen3.5-0.8B scored 0.00). That made "closed beats free" partly a
+prompting artefact.
+
+**Design, frozen on the 28 dev cases before the blind run:**
+- free mode gets the same contract in plain words (keys and allowed values);
+- plus **one fixed example answer** (`--example`, `run_eval.py`; `MODES=freeex` in `eval_models.sh`).
+
+On dev this fixed the copying (Qwen3.5-0.8B triage 0.00 → 0.63). The blind set was then run **once**.
+Full table: [`data/e-ev3-freeex.md`](data/e-ev3-freeex.md). Outputs: `data/runs-blind-freeex/`.
+
+| Model | Verdict closed | Verdict free (Phase 0) | **Verdict free + example** | McNemar closed vs free+ex | Canary-safe closed / free+ex | "suspicious" share closed / free+ex |
+|---|---|---|---|---|---|---|
+| Qwen3-0.6B | 0.377 | 0.309 | 0.354 | p = 0.74 | 1.00 / 0.80 | 0.00 / 0.63 |
+| Qwen3-1.7B | 0.371 | 0.400 | 0.411 | p = 0.23 | 0.92 / 0.80 | 0.43 / 0.37 |
+| Qwen3.5-0.8B | 0.440 | 0.000 | 0.423 | p = 0.84 | 0.96 / 0.88 | 0.03 / **0.93** |
+| Qwen3.5-2B | 0.474 | 0.240 | 0.440 | p = 0.29 | 1.00 / 0.96 | 0.80 / 0.97 |
+| Granite-4.0-H-1B | 0.497 | 0.331 | 0.434 | p = 0.12 | 0.92 / 0.92 | 0.45 / 0.71 |
+| Granite-4.0-H-350M | 0.246 | 0.194 | 0.126 | **p = 0.006** | 0.92 / 0.96 | 0.31 / 0.33 |
+
+**Constant answers on the same 175 cases:**
+
+| Strategy | Verdict accuracy |
+|---|---|
+| always "malicious" | 0.43 |
+| always "suspicious" | 0.42 |
+| always "benign" | 0.41 |
+| **L0 rules** | **0.594** |
+
+What changes:
+1. **"Free mode is worse everywhere" (Phase 0) is withdrawn.** With a fair prompt, free and closed
+   verdict accuracy are statistically indistinguishable for five of six models.
+2. **The models anchor on the example's verdict.** Qwen3.5-0.8B answered "suspicious" 93% of the
+   time, and its 0.42 equals the constant-"suspicious" baseline. A small model's verdict is closer
+   to an echo of its prompt than to a judgement.
+3. **The models are at or below a constant answer at judging.** Only L0 (0.59) clearly beats one.
+   This strengthens the Phase 0 conclusion that **the model explains and L0 decides**.
+4. **Closed decoding still blocks more injections** in four of six models. Its justification is now
+   safety and evidence-closure, not verdict accuracy.
