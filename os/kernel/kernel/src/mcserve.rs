@@ -544,6 +544,7 @@ impl McNode {
                 self.alert_port = if self.alert_port >= 65_000 { 49_152 } else { self.alert_port + 1 };
                 let ep = (IpAddress::v4(hook.ip[0], hook.ip[1], hook.ip[2], hook.ip[3]), hook.port);
                 if s.connect(self.iface.context(), ep, self.alert_port).is_ok() {
+                    unsafe { crate::mcmgmt::OUT_FLOW = Some((hook.ip, hook.port, self.alert_port)) };
                     ah::note_queued();
                     self.alert = AlertSt::Connecting { len: n, since: now_ms };
                 } else {
@@ -559,11 +560,13 @@ impl McNode {
                         s.abort();
                         ah::note_result(0);
                         self.alert = AlertSt::Idle;
+                    unsafe { crate::mcmgmt::OUT_FLOW = None };
                     }
                 } else if now_ms - since > 10_000 || !s.is_open() {
                     s.abort();
                     ah::note_result(0);
                     self.alert = AlertSt::Idle;
+                    unsafe { crate::mcmgmt::OUT_FLOW = None };
                 }
             }
             AlertSt::Sent { since } => {
@@ -573,10 +576,12 @@ impl McNode {
                     ah::note_result(ah::status(&head[..got]));
                     s.abort();
                     self.alert = AlertSt::Idle;
+                    unsafe { crate::mcmgmt::OUT_FLOW = None };
                 } else if now_ms - since > 10_000 || (!s.is_open() && got == 0) {
                     s.abort();
                     ah::note_result(0);
                     self.alert = AlertSt::Idle;
+                    unsafe { crate::mcmgmt::OUT_FLOW = None };
                 }
             }
         }

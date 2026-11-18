@@ -33,12 +33,49 @@ pub fn ingress(frame: &[u8], mgmt_ip: [u8; 4], node_mac: [u8; 6], out: &mut [u8]
         return None;
     }
     let dport = u16::from_be_bytes([frame[l4 + 2], frame[l4 + 3]]);
-    if dport != 80 && dport != 443 {
+    if dport != 80 && dport != 443 && !is_out_flow(frame, mgmt_ip) {
         return None;
     }
     out[..frame.len()].copy_from_slice(frame);
     out[0..6].copy_from_slice(&node_mac);
     Some(frame.len())
+}
+
+/// DET-03: the one outbound connection the node itself opened (the owner's alert hook): (peer, peer port, local
+/// port). Its replies reach the node on the management side — the shared management address otherwise hands the node
+/// only TCP to 80 / 443, and `mgmt in` is stateless. Set by the alert sender while it connects / waits, cleared after.
+pub static mut OUT_FLOW: Option<([u8; 4], u16, u16)> = None;
+
+/// Is `frame` (IPv4 TCP, to `mgmt_ip`) a reply on the node's own outbound flow?
+pub fn is_out_flow(frame: &[u8], mgmt_ip: [u8; 4]) -> bool {
+    let Some((peer, pport, lport)) = (unsafe { OUT_FLOW }) else { return false };
+    if frame.len() < 54 || frame[12] != 0x08 || frame[13] != 0x00 || frame[23] != 6 || frame[30..34] != mgmt_ip || frame[26..30] != peer {
+        return false;
+    }
+    let l4 = 14 + ((frame[14] & 0x0f) as usize) * 4;
+    l4 + 4 <= frame.len() && u16::from_be_bytes([frame[l4], frame[l4 + 1]]) == pport && u16::from_be_bytes([frame[l4 + 2], frame[l4 + 3]]) == lport
+}
+
+/// DET-03 diagnostics: node egress frames by route (Wi-Fi, management, local ARP) and the last SYN the node sent
+/// (destination, port, route 0 Wi-Fi / 1 management / 2 local).
+#[cfg_attr(not(feature = "apmc"), allow(dead_code))] // the AP loop (apmc) counts and reports these
+pub static mut EGRESS: [u32; 3] = [0; 3];
+#[cfg_attr(not(feature = "apmc"), allow(dead_code))] // the AP loop (apmc) counts and reports these
+pub static mut LAST_SYN: ([u8; 4], u16, u8) = ([0; 4], 0, 0);
+#[cfg_attr(not(feature = "apmc"), allow(dead_code))] // the AP loop (apmc) counts and reports these
+pub fn note_egress(frame: &[u8], r: &Route) {
+    let k = match r {
+        Route::Wifi => 0,
+        Route::Mgmt(_) => 1,
+        Route::ArpLocal => 2,
+    };
+    unsafe { EGRESS[k] += 1 };
+    if frame.len() >= 54 && frame[12] == 0x08 && frame[13] == 0x00 && frame[23] == 6 {
+        let l4 = 14 + ((frame[14] & 0x0f) as usize) * 4;
+        if l4 + 14 <= frame.len() && frame[l4 + 13] & 0x12 == 0x02 {
+            unsafe { LAST_SYN = ([frame[30], frame[31], frame[32], frame[33]], u16::from_be_bytes([frame[l4 + 2], frame[l4 + 3]]), k as u8) };
+        }
+    }
 }
 
 /// Where a frame the node emitted must go.
@@ -159,10 +196,25 @@ pub fn selftest() -> bool {
         && arp_reply(&req[..n3], node, &mut rep).is_some_and(|k| k >= 42 && rep[28..32] == [10, 99, 0, 1]);
     to_wire(&mut reply, [0x02, 0, 0, 0, 0, 0x02], [0x00, 0xd0, 0xb4, 0x03, 0xb7, 0x11]);
     let wire_ok = reply[0..6] == [0x00, 0xd0, 0xb4, 0x03, 0xb7, 0x11] && reply[6..12] == [0x02, 0, 0, 0, 0, 0x02];
-    let pass = in_ok && other_port_refused && other_dst_refused && to_mgmt && stays_wifi && arp_local && arp_ok && arp_wifi && self_gw && wire_ok;
+    // DET-03: the reply on the node's own outbound flow (alert hook: mgmt:51533 -> admin:8099) reaches the node; a
+    // different peer port, or no flow open, does not
+    let mut synack = syn;
+    synack[34..36].copy_from_slice(&8099u16.to_be_bytes());
+    synack[36..38].copy_from_slice(&51533u16.to_be_bytes());
+    let saved = unsafe { OUT_FLOW };
+    unsafe { OUT_FLOW = Some((admin, 8099, 51533)) };
+    let flow_in = ingress(&synack, mgmt_ip, node, &mut out).is_some();
+    let mut wrong = synack;
+    wrong[34..36].copy_from_slice(&8100u16.to_be_bytes());
+    let wrong_refused = ingress(&wrong, mgmt_ip, node, &mut out).is_none();
+    unsafe { OUT_FLOW = None };
+    let closed_refused = ingress(&synack, mgmt_ip, node, &mut out).is_none();
+    unsafe { OUT_FLOW = saved };
+    let own_flow = flow_in && wrong_refused && closed_refused;
+    let pass = in_ok && other_port_refused && other_dst_refused && to_mgmt && stays_wifi && arp_local && arp_ok && arp_wifi && self_gw && wire_ok && own_flow;
     arch_aarch64::_print(format_args!(
-        " [P-mcmgmt] {} — G12-M Mission Control on the management VLAN: ingress only TCP 80/443 to the mgmt address={} (other port refused={} other host refused={}) | egress to the mgmt subnet leaves on mgmt={} Wi-Fi traffic stays on Wi-Fi={} | node ARP for mgmt peers answered locally={}/{} (Wi-Fi ARP untouched={}) | A-03 who-has its own address (off-subnet reply gateway) answered locally={} | re-addressed for the wire={}\n",
-        if pass { "PASS" } else { "FAIL" }, in_ok, other_port_refused, other_dst_refused, to_mgmt, stays_wifi, arp_local, arp_ok, arp_wifi, self_gw, wire_ok
+        " [P-mcmgmt] {} — G12-M Mission Control on the management VLAN: ingress only TCP 80/443 to the mgmt address={} (other port refused={} other host refused={}) | egress to the mgmt subnet leaves on mgmt={} Wi-Fi traffic stays on Wi-Fi={} | node ARP for mgmt peers answered locally={}/{} (Wi-Fi ARP untouched={}) | A-03 who-has its own address (off-subnet reply gateway) answered locally={} | re-addressed for the wire={} | DET-03 own outbound flow's reply admitted / other port / flow closed refused={}/{}/{}\n",
+        if pass { "PASS" } else { "FAIL" }, in_ok, other_port_refused, other_dst_refused, to_mgmt, stays_wifi, arp_local, arp_ok, arp_wifi, self_gw, wire_ok, flow_in, wrong_refused, closed_refused
     ));
     pass
 }
