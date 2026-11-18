@@ -5331,6 +5331,14 @@ fn cm5_p10_probe() {
                                                     kprint!("   [P11-AP3 policy] A-01 upstream private: refused={} (fwd {}) allowed by owner exception={} by POLICY ACL={} exception refused by a guardrail={} | attributed blocks={}\n",
                                                         la[0], fc.upstream_private_refused, la[1], la[2], la[3], lanaccess::blocks().n);
                                                 }
+                                                // #129: the HTTPS server's own counters on the AP image too (only the wired production loop
+                                                // printed them) — rate limiting vs a server fault / restart under back-to-back logins
+                                                #[cfg(feature = "mctls")]
+                                                if let Some(h) = crate::tlshost::host() {
+                                                    let t = unsafe { mcserve::TLS_STATS };
+                                                    kprint!("   [MC-TLS hb] ready={} calls={} handshakes={} pq_hybrid={} records_out={} failed_closed={} rate_limited={} tls_errors={} timeouts={} faults={} restarts={}\n",
+                                                        h.ready, h.calls, t[0], t[3], t[1], t[2], t[4], h.tls_errors, h.timeouts, h.faults, h.restarts);
+                                                }
                                                 if let Some(mg) = unsafe { uplink::MGMT } {
                                                     #[cfg(feature = "mcserve")]
                                                     if let Some(n) = mcn.as_ref() {
