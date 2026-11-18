@@ -130,16 +130,32 @@ def build_dns(records, cap_per_source=None, stats=None):
 
 
 # ---------------------------------------------------------------------------- 02 network intelligence
-def build_network(records, cap_per_source=None, stats=None):
+NET_CAP_PER_GROUP = 25_000
+
+
+def _net_group(rec):
+    srid = rec["provenance"]["source_record_id"] or ""
+    return srid.split(":", 1)[0] if ":" in srid else (rec["body"]["orig_ip"] or rec["record_id"])
+
+
+def build_network(records, cap_per_source=None, stats=None, cap_per_group=NET_CAP_PER_GROUP):
+    """Flows -> classify examples. Capped per capture scenario (deterministic hash sample) so one huge
+    capture (IoT-23 1-1 has ~1M flows) cannot dominate the collection; the per-scenario counts before
+    and after the cap are reported in the build stats."""
+    stats = stats if stats is not None else {}
     out = []
     by_src = {}
     for r in records:
         if r["kind"] == "flow" and r["labels"]["label"] in ("malicious", "benign"):
-            by_src.setdefault(r["provenance"]["source_id"], []).append(r)
-    for sid, recs in sorted(by_src.items()):
-        for rec in _sample(recs, cap_per_source, "net:" + sid):
-            srid = rec["provenance"]["source_record_id"] or ""
-            group = srid.split(":", 1)[0] if ":" in srid else (rec["body"]["orig_ip"] or rec["record_id"])
+            by_src.setdefault(r["provenance"]["source_id"], {}).setdefault(_net_group(r), []).append(r)
+    for sid, groups in sorted(by_src.items()):
+        kept = []
+        for g, recs in sorted(groups.items()):
+            sel = _sample(recs, cap_per_group, f"net:{sid}:{g}")
+            stats[f"net_group:{sid}:{g}"] = f"{len(sel)}/{len(recs)}"
+            kept += sel
+        for rec in _sample(kept, cap_per_source, "net:" + sid):
+            group = _net_group(rec)
             lm = rec["labels"]["attack_mapping"]
             quality = "low" if sid.startswith("cic-") else "medium"
             gt = truth("dataset_label", False, f"{sid} label {rec['labels']['original_label']!r}", quality,
