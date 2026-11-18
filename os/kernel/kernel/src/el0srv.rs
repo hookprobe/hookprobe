@@ -1106,6 +1106,42 @@ pub mod keyer {
     /// Load el0-wifi (no device: the bus stays in EL1 in step 3) and route the driver's authenticator to it.
     #[cfg(feature = "cm5")] // only the CM5 AP loop (main.rs cm5_p10_probe) wires the keyer in
     /// (the bus server is up, el0-wpa is up and — on the CM5 — its group keys are installed).
+    /// Load el0-wifi (the bus server). Separate from [`install`] so it can run BEFORE the first-boot bring-up
+    /// (step 4e-4); `install` then skips it.
+    fn load_bus() -> bool {
+        match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
+            Ok(mut s) => {
+                // claims C1/C5: a bus-server fault inside a CMD53 leaves the controller mid-transfer — recover it once
+                #[cfg(feature = "cm5")]
+                {
+                    s.on_fault = Some(arch_aarch64::cyw43::bus_recover_after_el0_fault);
+                }
+                let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
+                unsafe { WIFI = Some(s) };
+                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi (the bus server: SDIO / SDPCM / firmware I/O, no keys) loaded at {:#x} init={}\n", super::imp::BASE, ok));
+                ok
+            }
+            Err(why) => {
+                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi FAILED to load ({}) — the bus stays in-kernel\n", why));
+                false
+            }
+        }
+    }
+
+    /// ADR 0065 step 4e-4: load the bus server and wire the driver's hooks before the FIRST-BOOT Wi-Fi bring-up, so
+    /// the chip probe and the firmware download run in el0-wifi as a reload does. The WPA security server loads later
+    /// (`install`), as before; every hook falls back while its server is absent.
+    pub fn load_bus_early() -> bool {
+        let ok = load_bus();
+        // only the bus entry points: the full hook table arrives with the WPA server (`install`) — the AP start in
+        // between must not see keying hooks with no security server behind them
+        #[cfg(feature = "cm5")]
+        if ok {
+            unsafe { arch_aarch64::cyw43::EL0_BUS = Some((bp_write, bp_reg)) };
+        }
+        ok
+    }
+
     pub fn install() -> (bool, bool) {
         // S2: the WPA security server first and independently — the keying / SAE / PMKSA hooks go to it, the frame and
         // control hooks to the bus server; each hook falls back to the in-kernel path when its server is absent (D5)
@@ -1124,23 +1160,8 @@ pub mod keyer {
                 false
             }
         };
-        let bus = match load(if cfg!(feature = "cm5") { Grant::Mmio(SDHCI_PA_CM5) } else { Grant::None }) {
-            Ok(mut s) => {
-                // claims C1/C5: a bus-server fault inside a CMD53 leaves the controller mid-transfer — recover it once
-                #[cfg(feature = "cm5")]
-                {
-                    s.on_fault = Some(arch_aarch64::cyw43::bus_recover_after_el0_fault);
-                }
-                let ok = matches!(s.call(CMD_INIT), Call::Done(ST_OK, ..));
-                unsafe { WIFI = Some(s) };
-                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi (the bus server: SDIO / SDPCM / firmware I/O, no keys) loaded at {:#x} init={}\n", super::imp::BASE, ok));
-                ok
-            }
-            Err(why) => {
-                arch_aarch64::_print(format_args!(" [EL0-WIFI] el0-wifi FAILED to load ({}) — the bus stays in-kernel\n", why));
-                false
-            }
-        };
+        // 4e-4: the bus server may already be loaded (before the first-boot bring-up)
+        let bus = if unsafe { (*core::ptr::addr_of!(WIFI)).is_some() } { true } else { load_bus() };
         #[cfg(feature = "cm5")]
         unsafe {
             arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new, bp_write, bp_reg });
