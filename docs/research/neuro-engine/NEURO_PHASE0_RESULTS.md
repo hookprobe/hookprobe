@@ -204,3 +204,57 @@ The operator confirmed no CM5 is available. What this means for the decision:
 - **Work that needs no hardware** and can continue: Romanian native review, second annotator,
   jitter-tolerant periodicity and cold-start fallback for the behavioural memory (dev split only,
   then re-test once), and the free-mode example-answer baseline.
+
+## 9. Phase 0b — the two fixes proposed in §5 (2026-11-18)
+
+Both fixes were tried with the rules set in §2–§3: periodicity changes on the IoT-23 **dev split
+only**; the behavioural-memory change designed on synthetic data, then run **once** on IoT-23.
+
+### 9.1 Jitter-tolerant periodicity — rejected
+
+Timing of the dev-split pairs (`tools/neuro-research/profile_gaps_iot23.py`) showed why the strict rule misses C&C: real C&C and heartbeat gaps have a coefficient of
+variation of **0.28–0.54**, while benign cloud polling in the same captures is near-perfect (**0.02**).
+A rule that counts a gap if it falls within 25% of 1–3× the median gap, with ≥ 60% of gaps counting:
+
+| Dev split @512 | Strict rule (Phase 0) | Jitter-tolerant |
+|---|---|---|
+| C&C evidence | 0 / 7 | 1 / 7 |
+| Heartbeat evidence | 0 / 5 | 0 / 5 |
+| Evidence recall (all) | 0.741 | 0.759 |
+| Flagged cards per benign window | 1.3 | **2.0** |
+
+One more evidenced incident for 54% more benign flags. **Rejected; the test split was not touched.**
+The code stays, off by default (`JITTER = 0.0` in `semantic_compression.py`). The lesson: on real IoT
+traffic, *regularity is not what distinguishes C&C* — benign devices poll more regularly than malware
+does. What should distinguish it is **novelty against the device's own baseline** (a periodic pair the
+device never had before), which needs a learned baseline that IoT-23's infected-from-the-start
+captures cannot provide. It stays open for a consented home/SMB capture.
+
+### 9.2 Behavioural-memory cold start — fixed
+
+Three changes in `behavioural_memory.DNA` (+34 B per device, 672 B total at 1,024-bit Blooms):
+
+1. **Warm-up:** a slot's first samples are a running mean (α = max(0.15, 1/n)) instead of an EWMA
+   starting from zero — Phase 0 slots took ~10 days to converge even when visited.
+2. **Pooled fallback:** a slot with fewer than 3 updates is scored against a blend of its own profile
+   and an all-hours pooled profile, widened by up to 2×, instead of against zero.
+3. **Cold slots learn statistics on an alarming hour** (volume, activity, fan-out — never new peers or
+   DNS suffixes, which still need 6 alarming hours). Without this a slot whose first visit alarms can
+   never warm up.
+
+| Run | History before scoring | AUC | Benign alarms / device-day (score > 2) | Incident detection @1% FPR (beacon / DGA / exfil / new service / scan) |
+|---|---|---|---|---|
+| synthetic, Phase 0 DNA | 10 days | 0.999 | 0.03 | 1.00 all |
+| synthetic, Phase 0b DNA | 10 days | 0.999 | 0.03 | 1.00 all (benign-drift alert hours 39 → 30) |
+| synthetic, Phase 0 DNA | **12 hours** | 0.699 | **21.2** | 0.00 / 0.00 / 0.67 / 0.00 / 1.00 |
+| synthetic, Phase 0b DNA | **12 hours** | 0.928 | **0.35** | 0.93 / 1.00 / 1.00 / 0.80 / 1.00 |
+| **IoT-23 Hue honeypot (real)**, Phase 0 → 0b | 11 active hours | — | **11 → 2 per day** | — |
+| **IoT-23 onset (semi-synthetic)**, Phase 0 → 0b | 11 active hours | — | — | 14 / 14 → 14 / 14 flagged; drivers 10 novelty + 4 volume → **14 novelty** |
+
+Files: `data/e-bm1.*`, `data/e-bm1-cold.*` (synthetic), `data/e-bm2b.*` (IoT-23).
+
+**What this does and does not show.** The synthetic gain is large and the real benign device improves
+5.5×, but the real evidence is **one device over 11 scored hours** — not a nuisance rate anyone should
+quote. The design target (< 1 nuisance alert per device per week, E-BM2) still needs multi-day benign
+traffic. The new risk: an attacker active during a slot's first three updates can teach that slot's
+*volume* profile (not its peers). Peer novelty, which drove every real onset detection, is unaffected.

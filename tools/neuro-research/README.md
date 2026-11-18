@@ -18,7 +18,8 @@ Results are labelled by origin: `theoretical`, `simulated` (synthetic data on a 
 | `eval_models.sh` | Phase 0: each model via llama-server, closed + free decoding, on a case file | dev-host / cm5-linux | anywhere with llama.cpp |
 | `summarize_runs.py` | Phase 0: re-scores saved outputs with the current scorer; L0-verdict + model-explanation hybrid; token counts → PROJECTED CM5 s/incident | dev-host + projection | anywhere |
 | `replay_iot23.py` | E-SC2: evidence cards on real IoT-23 flows (CC BY 4.0, not committed), dev/test split by scenario hash | real-traffic | anywhere |
-| `replay_bm_iot23.py` | E-BM2a: behavioural memory on real IoT-23 devices (nuisance) + semi-synthetic onset | real-traffic | anywhere |
+| `replay_bm_iot23.py` | E-BM2a/b: behavioural memory on real IoT-23 devices (nuisance) + semi-synthetic onset; `--no-cold-fallback` reproduces Phase 0 | real-traffic | anywhere |
+| `profile_gaps_iot23.py` | E-SC2b: gap statistics of C&C/heartbeat vs benign pairs, dev split only | real-traffic | anywhere |
 | `eval/blind/` | E-EV1: 215 blind cases by an independent author (never tune on these) | — | — |
 | `cm5_bench.sh` | Gate-5 measurement plan for a CM5 **bench unit** on Raspberry Pi OS (bandwidth, storage, llama-bench sweep, server profile, interference, thermal soak). **Prepared, not run.** | cm5-linux | a lab CM5 only |
 
