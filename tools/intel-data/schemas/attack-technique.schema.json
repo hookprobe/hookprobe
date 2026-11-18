@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/attack-technique/1",
+  "title": "AttackTechnique",
+  "description": "One MITRE ATT&CK technique or sub-technique, normalised from the ATT&CK STIX 2.1 bundle. The STIX id is preserved so every record traces back to the upstream object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "technique_id", "stix_id", "name", "tactics", "platforms", "description", "detection", "data_sources", "is_subtechnique", "deprecated", "revoked", "attack_version", "modified"],
+  "properties": {
+    "schema": { "const": "heqk.attack-technique/1" },
+    "technique_id": { "$ref": "common.schema.json#/$defs/attack_technique_id" },
+    "stix_id": { "type": "string", "pattern": "^attack-pattern--[0-9a-f-]{36}$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "tactics": {
+      "description": "Kill-chain phase names as ATT&CK publishes them (e.g. command-and-control).",
+      "type": "array",
+      "items": { "type": "string", "pattern": "^[a-z-]+$" },
+      "uniqueItems": true
+    },
+    "platforms": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "uniqueItems": true },
+    "description": { "type": "string", "maxLength": 32768 },
+    "detection": { "type": ["string", "null"], "maxLength": 32768 },
+    "data_sources": { "type": "array", "items": { "type": "string", "maxLength": 128 } },
+    "is_subtechnique": { "type": "boolean" },
+    "deprecated": { "type": "boolean" },
+    "revoked": { "type": "boolean" },
+    "attack_version": { "type": ["string", "null"] },
+    "modified": { "$ref": "common.schema.json#/$defs/nullable_timestamp" }
+  }
+}
