@@ -56,6 +56,10 @@ pub const REG_CMD52_W: u8 = 1;
 pub const REG_BP_R32: u8 = 2;
 pub const REG_BP_W32: u8 = 3;
 pub const REG_WINDOW: u8 = 4;
+/// Step 4e-3a: one SD command (card enumeration: CMD5 / CMD3 / CMD7). Function byte = flags (bit 0 CRC + index
+/// check, bit 1 data phase); address = the argument; value = index (low 16 bits) | response kind (high 16 bits).
+/// OUT value = the response.
+pub const REG_CMD: u8 = 5;
 /// Encode one [`CMD_BP_REG`] request.
 pub fn bp_reg_in(op: u8, fnum: u8, addr: u32, val: u32) -> [u8; 12] {
     let mut b = [0u8; 12];
@@ -67,7 +71,7 @@ pub fn bp_reg_in(op: u8, fnum: u8, addr: u32, val: u32) -> [u8; 12] {
 }
 /// Decode a [`CMD_BP_REG`] request: (op, function, address, value); None = malformed or an unknown op / function.
 pub fn bp_reg_decode(i: &[u8]) -> Option<(u8, u8, u32, u32)> {
-    if i.len() != 12 || i[0] > REG_WINDOW || i[1] > 2 {
+    if i.len() != 12 || i[0] > REG_CMD || i[1] > if i[0] == REG_CMD { 3 } else { 2 } {
         return None;
     }
     Some((i[0], i[1], u32::from_le_bytes([i[4], i[5], i[6], i[7]]), u32::from_le_bytes([i[8], i[9], i[10], i[11]])))
@@ -786,12 +790,18 @@ mod bp_reg {
         let b = bp_reg_in(REG_BP_W32, 1, 0x1800_0000, 0xdead_beef);
         assert_eq!(bp_reg_decode(&b), Some((REG_BP_W32, 1, 0x1800_0000, 0xdead_beef)));
         let mut bad = b;
-        bad[0] = REG_WINDOW + 1;
+        bad[0] = REG_CMD + 1;
         assert_eq!(bp_reg_decode(&bad), None, "unknown op");
         bad = b;
         bad[1] = 3;
         assert_eq!(bp_reg_decode(&bad), None, "no function 3 on this chip");
         assert_eq!(bp_reg_decode(&b[..11]), None, "short");
+        // an SD command: flags (CRC + index check, data phase) ride in the function byte, index | response kind in value
+        let c = bp_reg_in(REG_CMD, 3, 0x0012_3400, 5 | (2 << 16));
+        assert_eq!(bp_reg_decode(&c), Some((REG_CMD, 3, 0x0012_3400, 5 | (2 << 16))));
+        let mut c4 = c;
+        c4[1] = 4;
+        assert_eq!(bp_reg_decode(&c4), None, "unknown command flag");
     }
 }
 

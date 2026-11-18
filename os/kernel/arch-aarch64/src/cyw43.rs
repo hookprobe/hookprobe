@@ -193,6 +193,10 @@ pub fn sdio_diag() -> (u32, u32) {
 /// `crc_idx` = check the response CRC + command index (true for R1/R5/R6/R1b;
 /// FALSE for R3/R4 — e.g. CMD5's R4 has no CRC or index, so checking it errors).
 fn cmd(idx: u16, arg: u32, resp_kind: u16, crc_idx: bool, data: bool) -> Option<u32> {
+    // step 4e-3a: a reload's card enumeration (CMD5 / CMD3 / CMD7) runs in el0-wifi when it is loaded
+    if let Some((ok, r)) = el0_reg(hal::wifisrvabi::REG_CMD, crc_idx as u32 | (data as u32) << 1, arg, idx as u32 | (resp_kind as u32) << 16) {
+        return ok.then_some(r);
+    }
     let b = bus();
     let r = b.cmd(idx, arg, resp_kind, crc_idx, data);
     if r.is_none() {
