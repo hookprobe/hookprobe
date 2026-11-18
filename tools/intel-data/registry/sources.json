@@ -1390,7 +1390,8 @@
     "https://github.com/GintsEngelen/WTMC2021-Code",
     "https://intrusion-detection.distrinet-research.be/WTMC2021/"
    ],
-   "notes": "The licence section on the dataset page only says the data is 'publicly available for researchers' and asks for citation of the ICISSP paper. UNB CIC FAQ (datasets index page), answering the question 'What is your policy of using your dataset collections by private companies, for commercial use?', says: 'You may redistribute, republish, and mirror our datasets in any form; however, any use or redistribution of the data must include a citation to the dataset and the research paper listed on the webpage.' This is permissive in practice but is not a formal licence and does not expressly grant commercial or model-training rights, so it is classed RESEARCH/unclear. Get written confirmation from CIC before commercial training. The download link leads to a registration form. Kaggle re-uploads carry conflicting licence fields (chethuhn/network-intrusion-dataset says 'CC0: Public Domain'; dhoogla/cicids2017 says 'CC BY-NC-SA 4.0'). Neither overrides UNB's terms."
+   "notes": "The licence section on the dataset page only says the data is 'publicly available for researchers' and asks for citation of the ICISSP paper. UNB CIC FAQ (datasets index page), answering the question 'What is your policy of using your dataset collections by private companies, for commercial use?', says: 'You may redistribute, republish, and mirror our datasets in any form; however, any use or redistribution of the data must include a citation to the dataset and the research paper listed on the webpage.' This is permissive in practice but is not a formal licence and does not expressly grant commercial or model-training rights, so it is classed RESEARCH/unclear. Get written confirmation from CIC before commercial training. The download link leads to a registration form. Kaggle re-uploads carry conflicting licence fields (chethuhn/network-intrusion-dataset says 'CC0: Public Domain'; dhoogla/cicids2017 says 'CC BY-NC-SA 4.0'). Neither overrides UNB's terms.",
+   "adapter": "cicflowmeter_csv"
   },
   {
    "id": "ciciot2023",
@@ -1868,7 +1869,8 @@
     "https://www.unb.ca/cic/datasets/ids-2018.html",
     "https://www.unb.ca/cic/datasets/index.html"
    ],
-   "notes": "UNB CIC FAQ (datasets index page), answering the question 'What is your policy of using your dataset collections by private companies, for commercial use?', says: 'You may redistribute, republish, and mirror our datasets in any form; however, any use or redistribution of the data must include a citation to the dataset and the research paper listed on the webpage.' This is permissive in practice but is not a formal licence and does not expressly grant commercial or model-training rights, so it is classed RESEARCH/unclear. Get written confirmation from CIC before commercial training. Public S3 bucket, no sign-in needed. Kaggle re-upload solarmainframe/ids-intrusion-csv is labelled 'CC BY 4.0' by the uploader, which does not override CIC's terms."
+   "notes": "UNB CIC FAQ (datasets index page), answering the question 'What is your policy of using your dataset collections by private companies, for commercial use?', says: 'You may redistribute, republish, and mirror our datasets in any form; however, any use or redistribution of the data must include a citation to the dataset and the research paper listed on the webpage.' This is permissive in practice but is not a formal licence and does not expressly grant commercial or model-training rights, so it is classed RESEARCH/unclear. Get written confirmation from CIC before commercial training. Public S3 bucket, no sign-in needed. Kaggle re-upload solarmainframe/ids-intrusion-csv is labelled 'CC BY 4.0' by the uploader, which does not override CIC's terms.",
+   "adapter": "cicflowmeter_csv"
   },
   {
    "id": "csic-2010-http",
@@ -1978,7 +1980,8 @@
     "https://www.stratosphereips.org/datasets-overview",
     "https://www.stratosphereips.org/datasets-faq"
    ],
-   "notes": "The datasets overview page says 'The CTU-13 dataset is published with the license Creative Commons CC-BY' and links CC BY 2.0. The FAQ says no permission is needed if cited. personal_data is a judgement: real university hosts are present, but I did not verify whether IPs were anonymised. The archive contains live malware binaries, so handle it in a sandbox."
+   "notes": "The datasets overview page says 'The CTU-13 dataset is published with the license Creative Commons CC-BY' and links CC BY 2.0. The FAQ says no permission is needed if cited. personal_data is a judgement: real university hosts are present, but I did not verify whether IPs were anonymised. The archive contains live malware binaries, so handle it in a sandbox.",
+   "adapter": "zeek_conn_labeled"
   },
   {
    "id": "cve-list-v5",
@@ -2244,7 +2247,8 @@
     "https://intrusion-detection.distrinet-research.be/CNS2022/Dataset_Download.html",
     "https://github.com/GintsEngelen/WTMC2021-Code"
    ],
-   "notes": "The download page text was read, but the actual file host link and file sizes were not checked. The pages give no licence. Lanvin et al. 2022 (CRiSIS, 'Errors in the CICIDS2017 dataset...', HAL hal-03775466) also publish a critique, but I could not find a download location for their corrected data. The DistriNet hosts did not resolve on the local resolver and were reached via public DNS."
+   "notes": "The download page text was read, but the actual file host link and file sizes were not checked. The pages give no licence. Lanvin et al. 2022 (CRiSIS, 'Errors in the CICIDS2017 dataset...', HAL hal-03775466) also publish a critique, but I could not find a download location for their corrected data. The DistriNet hosts did not resolve on the local resolver and were reached via public DNS.",
+   "adapter": "cicflowmeter_csv"
   },
   {
    "id": "dns-threats-palau-2019",
@@ -4241,7 +4245,7 @@
    "labels_available": true,
    "label_quality": "Semi-automatic rule-based labels (manual analysis, the labelling spreadsheet, and the Flaber tool). Heavily dominated by port-scan flows.",
    "known_limitations": "Extreme imbalance. Few benign devices (3 captures). Malware runs are long with repetitive traffic.",
-   "license_id": "iot-23-terms",
+   "license_id": "cc-by-4.0",
    "license_class": "OPEN",
    "commercial_use": "yes",
    "training_use": "yes",
@@ -4264,7 +4268,8 @@
     "https://zenodo.org/api/records/4743746",
     "https://www.stratosphereips.org/datasets-faq"
    ],
-   "notes": "The Zenodo record license field is cc-by-4.0, and access_right is open. The Stratosphere page has no separate licence block. personal_data is set to none because the benign captures come from lab devices (judgement)."
+   "notes": "The Zenodo record license field is cc-by-4.0, and access_right is open. The Stratosphere page has no separate licence block. personal_data is set to none because the benign captures come from lab devices (judgement).",
+   "adapter": "zeek_conn_labeled"
   },
   {
    "id": "iscx-url2016",
@@ -4351,7 +4356,7 @@
    "labels_available": true,
    "label_quality": "Per-packet labels within each attack capture.",
    "known_limitations": "Single small lab per attack. Labels are per capture scenario.",
-   "license_id": "kitsune-network-attack-terms",
+   "license_id": "cc-by-4.0",
    "license_class": "OPEN",
    "commercial_use": "yes",
    "training_use": "yes",
@@ -5518,7 +5523,8 @@
     "https://api.github.com/repos/360netlab/DGA",
     "https://github.com/360netlab/DGA"
    ],
-   "notes": "The MIT licence covers the repo contents (code, md5, docs). The historical data.netlab.360.com feed had its own terms that I could not verify, and the host was unreachable. Generating DGA domains from MIT code is the cleanest path to commercial DGA training data."
+   "notes": "The MIT licence covers the repo contents (code, md5, docs). The historical data.netlab.360.com feed had its own terms that I could not verify, and the host was unreachable. Generating DGA domains from MIT code is the cleanest path to commercial DGA training data.",
+   "adapter": "domain_list"
   },
   {
    "id": "nist-nvd-api2",
@@ -6054,7 +6060,7 @@
    "labels_available": true,
    "label_quality": "Labels come from the source lists. Some features (e.g. URLSimilarityIndex) are reported in the community as near-perfect separators, which suggests leakage (not verified here).",
    "known_limitations": "Possible feature leakage. Phishing URLs are short-lived. Upstream feed terms are not documented on UCI.",
-   "license_id": "phiusiil-phishing-url-terms",
+   "license_id": "cc-by-4.0",
    "license_class": "OPEN",
    "commercial_use": "yes",
    "training_use": "yes",
@@ -6069,7 +6075,12 @@
     "dns_intelligence"
    ],
    "priority": 3,
-   "acquisition": null,
+   "acquisition": {
+    "url": "https://archive.ics.uci.edu/static/public/967/data.csv",
+    "adapter": "phiusiil_csv",
+    "max_bytes": 268435456,
+    "compression": null
+   },
    "verified_on": "2026-11-18",
    "verification_status": "verified",
    "evidence": [
@@ -7492,7 +7503,7 @@
    "labels_available": true,
    "label_quality": "Algorithmic ground truth (generated domains), with family labels.",
    "known_limitations": "Generated, not observed in the wild. Families date to 2020. Benign class composition not verified.",
-   "license_id": "umudga-terms",
+   "license_id": "mit",
    "license_class": "OPEN",
    "commercial_use": "yes",
    "training_use": "yes",
@@ -7515,7 +7526,8 @@
     "https://api.github.com/repos/Cyberdefence-Lab-Murcia/UMUDGA",
     "https://zenodo.org/records/3618221"
    ],
-   "notes": "The Mendeley page licence field reads MIT (both in the rendered HTML and in JSON-LD). The GitHub code repo is also MIT. The Zenodo DOI release 10.5281/zenodo.3618221 (code) shows 'other-open'. The Data in Brief article links CC BY 4.0 for the article itself. The record count comes from the search snippet of the Mendeley description, not a file count."
+   "notes": "The Mendeley page licence field reads MIT (both in the rendered HTML and in JSON-LD). The GitHub code repo is also MIT. The Zenodo DOI release 10.5281/zenodo.3618221 (code) shows 'other-open'. The Data in Brief article links CC BY 4.0 for the article itself. The record count comes from the search snippet of the Mendeley description, not a file count.",
+   "adapter": "domain_list"
   },
   {
    "id": "unit42-timely-threat-intel",

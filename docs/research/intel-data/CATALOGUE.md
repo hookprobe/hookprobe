@@ -327,9 +327,7 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `int-microsoft-for-startups-terms` | COMMERCIAL | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `int-oracle-for-startups-terms` | COMMERCIAL | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `int-shadowserver-reports-terms` | RESTRICTED | requires_agreement | unclear | no | no | Per-source terms from the regional research pass. |
-| `iot-23-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
 | `iscx-url2016-terms` | RESEARCH | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
-| `kitsune-network-attack-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
 | `lu-circl-ail-framework-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the regional research pass. |
 | `lu-circl-hashlookup-terms` | OPEN | yes | yes | yes | no | Per-source terms from the regional research pass. |
 | `lu-circl-misp-communities-terms` | RESTRICTED | requires_agreement | requires_agreement | no | no | Per-source terms from the regional research pass. |
@@ -354,7 +352,6 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `osv-dev-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
 | `phishstats-terms` | RESTRICTED | unclear | requires_agreement | no | no | Per-source terms from the feeds research pass. |
 | `phishtank-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the feeds research pass. |
-| `phiusiil-phishing-url-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
 | `recorded-future-terms` | COMMERCIAL | requires_agreement | no | no | no | Per-source terms from the feeds research pass. |
 | `ro-bitdefender-malware-ioc-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `ro-bitdefender-voyager-terms` | RESTRICTED | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
@@ -378,7 +375,6 @@ Sources: COMMERCIAL 11, OPEN 57, RESEARCH 19, RESTRICTED 27, UNKNOWN 35 — tota
 | `uk-cisp-terms` | RESTRICTED | requires_agreement | no | no | no | Per-source terms from the regional research pass. |
 | `uk-ncsc-annual-review-acd-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the regional research pass. |
 | `uk-ncsc-github-terms` | OPEN | yes | unclear | yes | no | Per-source terms from the regional research pass. |
-| `umudga-terms` | OPEN | yes | yes | yes | no | Per-source terms from the academic research pass. |
 | `unsw-nb15-terms` | RESEARCH | requires_agreement | requires_agreement | unclear | no | Per-source terms from the academic research pass. |
 | `uq-netflow-nids-terms` | UNKNOWN | unclear | unclear | unclear | no | Per-source terms from the academic research pass. |
 | `yara-forge-terms` | UNKNOWN | unclear | unclear | yes | no | Per-source terms from the feeds research pass. |

@@ -1007,21 +1007,6 @@
    "verified_on": "2026-11-18"
   },
   {
-   "id": "iot-23-terms",
-   "name": "Creative Commons Attribution 4.0 International (Zenodo record)",
-   "spdx": null,
-   "url": "https://creativecommons.org/licenses/by/4.0/",
-   "class": "OPEN",
-   "commercial_use": "yes",
-   "training_use": "yes",
-   "redistribution": "yes",
-   "derivatives": "yes",
-   "share_alike": false,
-   "attribution_required": true,
-   "notes": "Per-source terms from the academic research pass.",
-   "verified_on": "2026-11-18"
-  },
-  {
    "id": "iscx-url2016-terms",
    "name": "UNB CIC dataset terms (custom, no named licence) (no licence note on the page; FAQ applies)",
    "spdx": null,
@@ -1031,21 +1016,6 @@
    "training_use": "unclear",
    "redistribution": "unclear",
    "derivatives": "unclear",
-   "share_alike": false,
-   "attribution_required": true,
-   "notes": "Per-source terms from the academic research pass.",
-   "verified_on": "2026-11-18"
-  },
-  {
-   "id": "kitsune-network-attack-terms",
-   "name": "Creative Commons Attribution 4.0 International (UCI page)",
-   "spdx": null,
-   "url": "https://creativecommons.org/licenses/by/4.0/legalcode",
-   "class": "OPEN",
-   "commercial_use": "yes",
-   "training_use": "yes",
-   "redistribution": "yes",
-   "derivatives": "yes",
    "share_alike": false,
    "attribution_required": true,
    "notes": "Per-source terms from the academic research pass.",
@@ -1412,21 +1382,6 @@
    "verified_on": "2026-11-18"
   },
   {
-   "id": "phiusiil-phishing-url-terms",
-   "name": "Creative Commons Attribution 4.0 International (UCI page)",
-   "spdx": null,
-   "url": "https://creativecommons.org/licenses/by/4.0/legalcode",
-   "class": "OPEN",
-   "commercial_use": "yes",
-   "training_use": "yes",
-   "redistribution": "yes",
-   "derivatives": "yes",
-   "share_alike": false,
-   "attribution_required": true,
-   "notes": "Per-source terms from the academic research pass.",
-   "verified_on": "2026-11-18"
-  },
-  {
    "id": "recorded-future-terms",
    "name": "Recorded Future commercial terms",
    "spdx": null,
@@ -1769,21 +1724,6 @@
    "share_alike": false,
    "attribution_required": true,
    "notes": "Per-source terms from the regional research pass.",
-   "verified_on": "2026-11-18"
-  },
-  {
-   "id": "umudga-terms",
-   "name": "MIT License (Mendeley Data licence field)",
-   "spdx": null,
-   "url": "http://opensource.org/licenses/MIT",
-   "class": "OPEN",
-   "commercial_use": "yes",
-   "training_use": "yes",
-   "redistribution": "yes",
-   "derivatives": "yes",
-   "share_alike": false,
-   "attribution_required": true,
-   "notes": "Per-source terms from the academic research pass.",
    "verified_on": "2026-11-18"
   },
   {
