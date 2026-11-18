@@ -65,7 +65,9 @@ dns9() { local r; r=$(pi 'a=$(ip -4 -o addr | awk '"'"'$4 ~ /^10\.99\.0\./ {spli
 # bench policy in force first (removing a WAN / Wi-Fi section needs the owner's confirm), so the check starts clean.
 secs=$(api /api/config | python3 -c 'import json,sys; s=json.load(sys.stdin).get("sections") or {}; print(" ".join(k for k in ("wan","wifi") if (s.get(k) or {}).get("present")))')
 if [ -n "$secs" ]; then
-  bundle --policy "$ROOT/docs/design/bench-task26/policy-bench.txt"
+  # hqcfg takes canonical ASCII only: the bench file's comments carry non-ASCII (an em dash) — strip comments / blanks
+  sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$ROOT/docs/design/bench-task26/policy-bench.txt" > "$T/pbase.txt"
+  bundle --policy "$T/pbase.txt"
   waitlog "LIVE APPLY of generation $G" 30
   grep -q '"needs_confirm": true' "$T/r$G" && { sleep 10; $UP --config-confirm "live check baseline" >/dev/null 2>&1; }
   waitlog "bundle generation $G COMMITTED" 45; echo "     baseline: sections in force before ($secs) -> policy-only bundle gen $G committed=$([ $? = 0 ] && echo yes || echo NO)"

@@ -70,7 +70,9 @@ pol_now=$(cfgval '(d.get("sections") or {}).get("policy", {}).get("digest") or "
 pol_want=$(canon "$ROOT/docs/design/bench-task26/policy-bench.txt" | sha256sum | cut -c1-64)
 secs=$(cfgval '" ".join(k for k in ("wan","wifi") if ((d.get("sections") or {}).get(k) or {}).get("present"))' 2>/dev/null)
 if [ -n "$secs" ] || { [ -n "$pol_now" ] && [ "$pol_now" != "$pol_want" ]; }; then
-  bundle --policy "$ROOT/docs/design/bench-task26/policy-bench.txt"
+  # hqcfg takes canonical ASCII only: the bench file's comments carry non-ASCII (an em dash) — strip comments / blanks
+  sed -e 's/[[:space:]]*$//' -e '/^#/d' -e '/^$/d' "$ROOT/docs/design/bench-task26/policy-bench.txt" > "$T/pbase.txt"
+  bundle --policy "$T/pbase.txt"
   waitlog "LIVE APPLY of generation $G" 30
   grep -q '"needs_confirm": true' "$T/r" && { sleep 10; confirm "baseline"; }
   waitlog "bundle generation $G COMMITTED" 45; echo "     baseline reset: sections ($secs) policy differed=$([ "$pol_now" != "$pol_want" ] && echo yes || echo no) -> policy-only gen $G committed=$([ $? = 0 ] && echo yes || echo NO)"
