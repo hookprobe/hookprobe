@@ -1,0 +1,8 @@
+ [P-neuro] warm-up excursion: status 6 in 1987317 us (a pending stale tick shows as 6 / ~budget)
+ [P-neuro] el0-neuro loaded at 0xbe000000: info st=0 len=8 devices=64 bytes/device=1296 rw_pages=21
+ [P-neuro-golden] PASS — 1200/1200 hour closes bit-exact through the real ABI (CMD_EVENTS x1200 batches, 8567 events; CMD_CLOSE_HOUR x1200)
+ [P-neuro-fault] PASS — short batch->3 bad device->3 bad hour->3 (want 3); forced panic->6 (want 6) server reset, kernel alive, next INFO->0
+ [P-neuro-cost] QEMU (TCG, NOT timing-faithful): 8567 events in 30114 us over 1200 excursions = 3515 ns/event incl. excursion entry/exit; hour-close mean 24 us, max 934 us; largest excursion 934 us; budget 2000000 us
+ [P-neuro-load] QEMU (TCG, NOT timing-faithful): 38400 events in 75 batches of 512 -> 88 ns/event gross, 51 ns/event net of the 18 us empty-excursion overhead; largest batch excursion 118 us; 64-device hour close: status 0 (64 devices reported) in 148 us
+ [P-neuro] PASS — el0-neuro inside heqk: golden bit-exact=true fault-contained=true
+ [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 P-wasmi-el0 P-wasm-parity P-wasip1 P-wasip1-cat GREEN
