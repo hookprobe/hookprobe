@@ -55,7 +55,7 @@ bundle() { G=$((G + 1)); $HQ bundle "$SIGN" $G "$T/b$G.bin" "$T/b$G.sig" "$@" >/
   $UP --type config --sig "$T/b$G.sig" --file "$T/b$G.bin" > "$T/r$G" 2>&1; }
 B0=$(boots)
 # policies without management bindings (a change of them alone auto-commits)
-printf 'HQPOL1\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 0.0.0.0/0 via wan\n' > "$T/pa.txt"
+printf 'HQPOL1\nacl LAN-IN seq 5 allow tcp any 10.100.0.1/32 8088\nacl LAN-IN seq 10 block tcp any 1.1.1.1/32 80\nacl LAN-IN default allow\ninterface lan acl in LAN-IN\nroute 0.0.0.0/0 via wan\n' > "$T/pa.txt"
 dns9() { local r; r=$(pi 'a=$(ip -4 -o addr | awk '"'"'$4 ~ /^10\.99\.0\./ {split($4, x, "/"); print x[1]; exit}'"'"'); [ -n "$a" ] || { echo NOADDR; exit 0; }; timeout 5 dig +short +time=2 +tries=1 -b "$a" @9.9.9.9 example.com' 2>/dev/null)
   [ "$r" = NOADDR ] && { echo "     (the Pi has no AP address 10.99.0.x — DNS probe not run)"; return 2; }   # 2: neither "answers" nor "dropped"
   grep -qE '^[0-9.]+$' <<<"$r"; }
