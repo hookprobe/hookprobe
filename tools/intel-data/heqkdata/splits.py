@@ -24,6 +24,8 @@ def assign(examples, fractions, strategy="group_hash", seed="heqk-v1", holdout_s
             x = _frac(seed, e["split"]["group_key"])
             e["split"]["name"] = "train" if x < tr else ("dev" if x < tr + dv else "test")
             e["split"]["strategy"] = strategy
+    elif strategy == "group_stratified":
+        _stratified(examples, fractions, seed)
     elif strategy == "time":
         first = {}
         for e in examples:
@@ -51,6 +53,43 @@ def assign(examples, fractions, strategy="group_hash", seed="heqk-v1", holdout_s
     else:
         raise ValueError(f"unknown split strategy {strategy!r}")
     return examples
+
+
+FEW_GROUPS = 100
+
+
+def _stratified(examples, fractions, seed):
+    """Whole groups, label-balanced: groups (largest first, ties by hash) go to the split whose per-label
+    targets they overshoot least. Deterministic. Used when a collection has too few groups for hashing to
+    balance labels (IoT-23 has 23 scenarios; a hash split once put 7,824 benign vs 48 malicious in test)."""
+    groups = {}
+    for e in examples:
+        groups.setdefault(e["split"]["group_key"], []).append(e)
+    labels = sorted({str(e["target"]["label"]) for e in examples})
+    total = {lab: sum(1 for e in examples if str(e["target"]["label"]) == lab) for lab in labels}
+    names = ("train", "dev", "test")
+    target = {s: {lab: fractions[s] * total[lab] for lab in labels} for s in names}
+    have = {s: {lab: 0 for lab in labels} for s in names}
+    order = sorted(groups, key=lambda g: (-len(groups[g]), _frac(seed, g)))
+    for g in order:
+        cnt = {lab: sum(1 for e in groups[g] if str(e["target"]["label"]) == lab) for lab in labels}
+
+        def cost(s):
+            c = 0.0
+            for lab in labels:
+                if target[s][lab] <= 0:
+                    c += cnt[lab] * 10.0
+                else:
+                    c += max(0.0, have[s][lab] + cnt[lab] - target[s][lab]) / target[s][lab] - \
+                        min(cnt[lab], max(0.0, target[s][lab] - have[s][lab])) / target[s][lab]
+            return c
+
+        best = min(names, key=lambda s: (cost(s), names.index(s)))
+        for lab in labels:
+            have[best][lab] += cnt[lab]
+        for e in groups[g]:
+            e["split"]["name"] = best
+            e["split"]["strategy"] = "group_stratified"
 
 
 def check_contamination(examples):

@@ -5,9 +5,23 @@
   "description": "One supervised example for the HEQK intelligence tiers (docs/research/neuro/09: B fast specialists, C temporal, D language). The same record serves training and evaluation; `split` says which. The input is evidence (events or evidence cards), never raw packets. The target holds what the label source asserted; `reasoning` is null unless a human or an explicitly synthetic generator wrote it. Confidence is null unless the label source gives one: this tooling never invents calibration.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema", "id", "collection", "task", "lang", "input", "target", "ground_truth", "provenance", "split", "content_sha256"],
+  "required": [
+    "schema",
+    "id",
+    "collection",
+    "task",
+    "lang",
+    "input",
+    "target",
+    "ground_truth",
+    "provenance",
+    "split",
+    "content_sha256"
+  ],
   "properties": {
-    "schema": { "const": "heqk.training-example/1" },
+    "schema": {
+      "const": "heqk.training-example/1"
+    },
     "id": {
       "description": "<collection prefix>-<first 16 hex of content_sha256>; stable across rebuilds of the same content.",
       "type": "string",
@@ -15,57 +29,143 @@
     },
     "collection": {
       "type": "string",
-      "enum": ["dns_intelligence", "network_intelligence", "attack_intelligence", "malware_intelligence", "vulnerability_intelligence", "soc_reasoning"]
+      "enum": [
+        "dns_intelligence",
+        "network_intelligence",
+        "attack_intelligence",
+        "malware_intelligence",
+        "vulnerability_intelligence",
+        "soc_reasoning"
+      ]
     },
     "task": {
       "description": "classify = verdict on one event (tier B training/eval); triage = verdict + next step on an evidence window (tier D eval, L0 comparison); explain = write the why given a SUPPLIED verdict (tier D's actual job); map_attack = technique mapping; knowledge = taxonomy fact recall for retrieval/eval.",
       "type": "string",
-      "enum": ["classify", "triage", "explain", "map_attack", "knowledge"]
+      "enum": [
+        "classify",
+        "triage",
+        "explain",
+        "map_attack",
+        "knowledge"
+      ]
     },
-    "lang": { "type": "string", "enum": ["en", "ro"] },
+    "lang": {
+      "type": "string",
+      "enum": [
+        "en",
+        "ro"
+      ]
+    },
     "input": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["records", "context", "question"],
+      "required": [
+        "records",
+        "context",
+        "question"
+      ],
       "properties": {
         "records": {
           "description": "Normalised records (heqk.security-event/1) the example is built from, in time order. Bounded: an example is a window, not a dataset.",
           "type": "array",
           "minItems": 1,
           "maxItems": 64,
-          "items": { "$ref": "security-event.schema.json" }
+          "items": {
+            "$ref": "security-event.schema.json"
+          }
         },
         "context": {
           "description": "Untrusted-by-construction environment facts (device role, network segment). Free text from telemetry must be quoted here, never placed in the question.",
           "type": "object",
-          "additionalProperties": { "type": ["string", "number", "boolean", "null"] }
+          "additionalProperties": {
+            "type": [
+              "string",
+              "number",
+              "boolean",
+              "null"
+            ]
+          }
         },
-        "question": { "type": "string", "minLength": 1, "maxLength": 512 }
+        "question": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        }
       }
     },
     "target": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["label", "confidence", "severity", "attack_mapping", "evidence", "reasoning", "false_positive_considerations", "recommended_action", "answer"],
+      "required": [
+        "label",
+        "confidence",
+        "severity",
+        "attack_mapping",
+        "evidence",
+        "reasoning",
+        "false_positive_considerations",
+        "recommended_action",
+        "answer"
+      ],
       "properties": {
-        "label": { "anyOf": [{ "$ref": "common.schema.json#/$defs/label" }, { "type": "null" }] },
-        "confidence": { "$ref": "common.schema.json#/$defs/nullable_probability" },
-        "severity": { "$ref": "common.schema.json#/$defs/nullable_severity" },
-        "attack_mapping": { "$ref": "common.schema.json#/$defs/attack_mapping" },
+        "label": {
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/label"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "$ref": "common.schema.json#/$defs/nullable_probability"
+        },
+        "severity": {
+          "$ref": "common.schema.json#/$defs/nullable_severity"
+        },
+        "attack_mapping": {
+          "$ref": "common.schema.json#/$defs/attack_mapping"
+        },
         "evidence": {
           "description": "record_ids from input.records that support the label.",
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "uniqueItems": true
         },
-        "reasoning": { "type": ["string", "null"], "maxLength": 4096 },
-        "false_positive_considerations": { "type": "array", "items": { "type": "string", "maxLength": 512 }, "maxItems": 8 },
+        "reasoning": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 4096
+        },
+        "false_positive_considerations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "maxItems": 8
+        },
         "recommended_action": {
-          "anyOf": [{ "$ref": "common.schema.json#/$defs/recommended_action" }, { "type": "null" }]
+          "anyOf": [
+            {
+              "$ref": "common.schema.json#/$defs/recommended_action"
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "answer": {
           "description": "Free-text answer for knowledge / explain tasks; null for pure classification.",
-          "type": ["string", "null"],
+          "type": [
+            "string",
+            "null"
+          ],
           "maxLength": 8192
         }
       }
@@ -73,54 +173,140 @@
     "ground_truth": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "verified", "label_source", "label_quality", "notes"],
+      "required": [
+        "type",
+        "verified",
+        "label_source",
+        "label_quality",
+        "notes"
+      ],
       "properties": {
         "type": {
           "description": "dataset_label: the upstream dataset's label. feed_assertion: a threat feed listed it (true at listing time, not forever). knowledge_base: a taxonomy fact. analyst: a HookProbe human reviewed it. synthetic: generated; never presented as real telemetry.",
           "type": "string",
-          "enum": ["dataset_label", "feed_assertion", "knowledge_base", "analyst", "synthetic"]
+          "enum": [
+            "dataset_label",
+            "feed_assertion",
+            "knowledge_base",
+            "analyst",
+            "synthetic"
+          ]
         },
         "verified": {
           "description": "true only when a human reviewed this example or the upstream label is documented as manually verified.",
           "type": "boolean"
         },
-        "label_source": { "type": "string", "maxLength": 256 },
-        "label_quality": { "type": "string", "enum": ["high", "medium", "low", "unknown"] },
-        "notes": { "type": ["string", "null"], "maxLength": 1024 }
+        "label_source": {
+          "type": "string",
+          "maxLength": 256
+        },
+        "label_quality": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "unknown"
+          ]
+        },
+        "notes": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 1024
+        }
       }
     },
     "provenance": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["builder", "source_ids", "license_ids", "created_at"],
+      "required": [
+        "builder",
+        "source_ids",
+        "license_ids",
+        "created_at"
+      ],
       "properties": {
         "builder": {
           "type": "object",
           "additionalProperties": false,
-          "required": ["name", "version"],
+          "required": [
+            "name",
+            "version"
+          ],
           "properties": {
-            "name": { "$ref": "common.schema.json#/$defs/slug" },
-            "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+            "name": {
+              "$ref": "common.schema.json#/$defs/slug"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+            }
           }
         },
-        "source_ids": { "type": "array", "minItems": 1, "items": { "$ref": "common.schema.json#/$defs/slug" }, "uniqueItems": true },
-        "license_ids": { "type": "array", "minItems": 1, "items": { "$ref": "common.schema.json#/$defs/slug" }, "uniqueItems": true },
-        "created_at": { "$ref": "common.schema.json#/$defs/timestamp" }
+        "source_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "common.schema.json#/$defs/slug"
+          },
+          "uniqueItems": true
+        },
+        "license_ids": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "common.schema.json#/$defs/slug"
+          },
+          "uniqueItems": true
+        },
+        "created_at": {
+          "$ref": "common.schema.json#/$defs/timestamp"
+        }
       }
     },
     "split": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "group_key", "strategy"],
+      "required": [
+        "name",
+        "group_key",
+        "strategy"
+      ],
       "properties": {
-        "name": { "type": ["string", "null"], "enum": ["train", "dev", "test", "blind", null] },
+        "name": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "train",
+            "dev",
+            "test",
+            "blind",
+            null
+          ]
+        },
         "group_key": {
           "description": "Everything sharing a group_key lands in the same split (registrable domain, scenario, CVE, source host). Prevents near-duplicate leakage.",
           "type": "string",
           "minLength": 1,
           "maxLength": 256
         },
-        "strategy": { "type": ["string", "null"], "enum": ["group_hash", "time", "source_holdout", null] }
+        "strategy": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "enum": [
+            "group_hash",
+            "group_stratified",
+            "time",
+            "source_holdout",
+            null
+          ]
+        }
       }
     },
     "content_sha256": {
