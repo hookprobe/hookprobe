@@ -4762,7 +4762,7 @@ fn cm5_p10_probe() {
                                 let _ = n.service(mcserve::state(), ms);
                                 let mut arp_back = [[0u8; 64]; 4];
                                 let mut na = 0usize;
-                                n.flush(|f| match mcmgmt::route(f, mc_mgmt) {
+                                n.flush(|f| match { let r = mcmgmt::route(f, mc_mgmt); mcmgmt::note_egress(f, &r); r } {
                                     mcmgmt::Route::Wifi => wifi_send!(f),
                                     mcmgmt::Route::ArpLocal => {
                                         if na < arp_back.len() && mcmgmt::arp_reply(f, ap.bssid, &mut arp_back[na]).is_some() {
@@ -5339,8 +5339,11 @@ fn cm5_p10_probe() {
                                                         let na = n.slot_states(&mut sl);
                                                         let (lost, gated) = n.tx_stats();
                                                         let d = unsafe { MCM_DIAG };
-                                                        kprint!("   [P11-AP3 mc] mgmt->node={} ids_drop={} node->mgmt ok={} fail={} | slots {} addrs={} mc_mgmt={} | node tx_lost={} egress_gated={}\n",
-                                                            d[0], d[1], d[2], d[3], core::str::from_utf8(&sl).unwrap_or("?"), na, mc_mgmt.is_some(), lost, gated);
+                                                        kprint!("   [P11-AP3 mc] mgmt->node={} ids_drop={} node->mgmt ok={} fail={} | slots {} addrs={} mc_mgmt={} | node tx_lost={} egress_gated={} | egress wifi={} mgmt={} arp_local={} last_syn {}.{}.{}.{}:{} route={}\n",
+                                                            d[0], d[1], d[2], d[3], core::str::from_utf8(&sl).unwrap_or("?"), na, mc_mgmt.is_some(), lost, gated,
+                                                            unsafe { mcmgmt::EGRESS[0] }, unsafe { mcmgmt::EGRESS[1] }, unsafe { mcmgmt::EGRESS[2] },
+                                                            unsafe { mcmgmt::LAST_SYN.0[0] }, unsafe { mcmgmt::LAST_SYN.0[1] }, unsafe { mcmgmt::LAST_SYN.0[2] }, unsafe { mcmgmt::LAST_SYN.0[3] },
+                                                            unsafe { mcmgmt::LAST_SYN.1 }, unsafe { mcmgmt::LAST_SYN.2 });
                                                     }
                                                     kprint!("   [P11-AP3 mgmt] {}.{}.{}.{} gw {}.{}.{}.{} resolved={} | arp answered={} arp sent={} ping ok={} blocked={} dropped={} up(NAT)={} other={}\n",
                                                         mg.ip[0], mg.ip[1], mg.ip[2], mg.ip[3], mg.gw[0], mg.gw[1], mg.gw[2], mg.gw[3], mg.gw_mac.is_some(),
