@@ -2905,6 +2905,47 @@ fn cm5_p9_rx() {
     }
 }
 
+/// The NVRAM scratch of the Wi-Fi bring-up and of every firmware reload (the heal path reuses it).
+#[cfg(feature = "cm5")]
+static mut NVSCRATCH: [u8; 4096] = [0; 4096];
+
+/// ADR 0065 step 4e-4: the first-boot chip probe + firmware upload (Stage A + B). With the resident servers built in,
+/// el0-wifi is loaded first and every bus operation runs in it, as a reload does; if that bring-up fails it is redone
+/// ONCE fully in-kernel (radio power-cycled), so a server problem never costs the device its Wi-Fi at boot.
+/// Returns (chip ID, F2 ready).
+#[cfg(feature = "cm5")]
+fn first_bringup() -> (Option<u16>, bool) {
+    use arch_aarch64::cyw43;
+    let run = || {
+        let p = cyw43::chip_id_probe();
+        let f2 = p == Some(0x4345) && cyw43::firmware_upload(unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) });
+        (p, f2)
+    };
+    #[cfg(feature = "mctls")]
+    let el0 = crate::el0srv::keyer::load_bus_early();
+    #[cfg(not(feature = "mctls"))]
+    let el0 = false;
+    if !el0 {
+        return run();
+    }
+    cyw43::bringup_regs_el0(true, false);
+    let (p, f2) = run();
+    let (ops, kops) = unsafe { cyw43::RELOAD_REG_OPS };
+    cyw43::bringup_regs_el0(false, false);
+    kprint!(" [EL0-WIFI] first-boot bring-up through el0-wifi: chip {} F2 {} | register ops in el0-wifi: {}, in-kernel: {}\n",
+        if p == Some(0x4345) { "0x4345" } else { "NOT found" }, if f2 { "ready" } else { "NOT ready" }, ops, kops);
+    if p == Some(0x4345) && f2 {
+        return (p, f2);
+    }
+    kprint!(" [EL0-WIFI] first-boot bring-up through el0-wifi FAILED — redone once in-kernel (radio power-cycled)\n");
+    cyw43::radio_off();
+    let _ = cyw43::radio_power_on();
+    cyw43::bringup_regs_el0(false, true);
+    let r = run();
+    cyw43::bringup_regs_el0(false, false);
+    r
+}
+
 /// P10 Stage A — CYW43455 WiFi (SDIO) bring-up: read the chip common-core ID and
 /// confirm 0x4345 (BCM4345/6 = CYW43455). First step toward the regdomain backlog
 /// (Stage C: clmload + country iovar). WL_ON rail + clk_emmc2 are mailbox-owned and
@@ -2923,12 +2964,10 @@ fn cm5_p10_probe() {
     kprint!(" [P10] CYW43455 WiFi (SDIO) — power on radio (WL_ON gpio28 + clk_emmc2), then Stage A\n");
     let clk = cyw43::radio_power_on();
     kprint!(" [P10] WL_ON asserted; clk_emmc2 = {} Hz {}\n", clk, if clk > 0 { "(clock live)" } else { "(clock OFF — mailbox failed?)" });
-    match cyw43::chip_id_probe() {
+    let (probe, f2) = first_bringup();
+    match probe {
         Some(0x4345) => {
             kprint!(" [P10-A] PASS — SDIO link up; chip ID 0x4345 (BCM4345/6 / CYW43455)\n");
-            // Stage B: firmware + NVRAM upload, start ARMCR4, enable F2.
-            static mut NVSCRATCH: [u8; 4096] = [0; 4096];
-            let f2 = cyw43::firmware_upload(unsafe { &mut NVSCRATCH });
             let (erom, cr4b, cr4w) = cyw43::erom_diag();
             {
                 let (spd, hc1, mhz) = arch_aarch64::cyw43::sdio_speed_diag();
