@@ -66,7 +66,7 @@ pub fn exception_refusal(dst: &hal::policy::Prefix, any_device: bool) -> Option<
                 return Some("value: the management network is never opened to Wi-Fi clients");
             }
         }
-        if crate::ratelimit::is_local_ip(u32::from_be_bytes(a)) {
+        if crate::ratelimit::prefix_has_local_ip(u32::from_be_bytes(a), dst.len) {
             return Some("value: the device's own addresses are not reached through an exception");
         }
     }
@@ -83,6 +83,14 @@ pub fn grant_temporary(mut x: hal::lanaccess::Exception, dur_s: u32) -> bool {
         unsafe { (*core::ptr::addr_of_mut!(BLOCKS)).resolve(&x, now) };
     }
     ok
+}
+
+/// R4 (code review 2026-11-18): can one more exception of this scope be held? Expired temporary grants are dropped
+/// first (they used to occupy slots until someone opened `/api/lan-access`).
+pub fn can_add(x: &hal::lanaccess::Exception) -> bool {
+    let t = table();
+    t.prune(now_ms());
+    t.has_room(x)
 }
 
 /// An always-grant was journaled (the journal applied it): forget the blocks it covers.
@@ -139,7 +147,7 @@ pub fn selftest() -> bool {
     let printer = Addr::v4([192, 168, 1, 50]);
     let mgmt = Some(([192, 168, 200, 146], [192, 168, 200, 1]));
     // runs on every boot (CM5 too): leave no trace in what Mission Control shows
-    let (c0, b_save, t_save) = unsafe { (COUNTS, *core::ptr::addr_of!(BLOCKS), *core::ptr::addr_of!(TABLE)) };
+    let (c0, b_save, t_save, m_save) = unsafe { (COUNTS, *core::ptr::addr_of!(BLOCKS), *core::ptr::addr_of!(TABLE), MGMT_SEEN) };
     let b0 = blocks().n;
     let public = check(&m1, src, Addr::v4([1, 1, 1, 1]), 443, 6, false, mgmt, 1) == Verdict::NotPrivate;
     let dns = check(&m1, src, Addr::v4([192, 168, 1, 1]), 53, 17, false, mgmt, 1) == Verdict::NotPrivate;
@@ -154,16 +162,26 @@ pub fn selftest() -> bool {
     let mut ula = [0u8; 16];
     ula[0] = 0xfd;
     let v6 = check(&m1, Addr::v6([0x20; 16]), Addr::v6(ula), 443, 6, false, mgmt, 5) == Verdict::Refused;
+    // R5: a prefix that CONTAINS one of the device's own addresses is refused (not only its network address)
+    let own = crate::ratelimit::first_local_ip();
+    let own_net_refused = own.is_none_or(|ip| {
+        let net = hal::policy::Prefix { addr: Addr::v4((ip & 0xffff_ff00).to_be_bytes()), len: 24 };
+        !upstream_private(&net.addr) || exception_refusal(&net, false).is_some()
+    });
     let c1 = counts();
     unsafe {
         COUNTS = c0;
         BLOCKS = b_save;
         TABLE = t_save;
+        // R2 (code review 2026-11-18): the self-test's fake management network must not outlive it — a device with no
+        // management VLAN would otherwise refuse real exceptions to 192.168.200.0/24
+        MGMT_SEEN = m_save;
     }
-    let ok = public && dns && refused && attributed && excepted && expired && acl && mgmt_guard && v6 && c1[3] > c0[3];
+    let mgmt_restored = unsafe { MGMT_SEEN } == m_save; // R2
+    let ok = public && dns && refused && attributed && excepted && expired && acl && mgmt_guard && v6 && c1[3] > c0[3] && own_net_refused && mgmt_restored;
     arch_aarch64::_print(format_args!(
-        " [P-lanaccess] {} — A-01 upstream private networks refused by default: public untouched={} DNS left to Shield={} refused + attributed={}/{} owner exception (scoped, expiring)={}/{} POLICY ACL allow={} management network never opened={} IPv6 ULA refused={}\n",
-        if ok { "PASS" } else { "FAIL" }, public, dns, refused, attributed, excepted, expired, acl, mgmt_guard, v6));
+        " [P-lanaccess] {} — A-01 upstream private networks refused by default: public untouched={} DNS left to Shield={} refused + attributed={}/{} owner exception (scoped, expiring)={}/{} POLICY ACL allow={} management network never opened={} IPv6 ULA refused={} own network refused={} self-test leaves no management network behind={}\n",
+        if ok { "PASS" } else { "FAIL" }, public, dns, refused, attributed, excepted, expired, acl, mgmt_guard, v6, own_net_refused, mgmt_restored));
     ok
 }
 

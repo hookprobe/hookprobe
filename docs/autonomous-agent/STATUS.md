@@ -12,7 +12,7 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-AB-09 and AB-10 (Investigate empty states) on `agent/mc-investigate-honest`, draft PR. #1298 (AB-12) merged before its CI finished.
+Fix for the `investigate-honest` UI spec (g3 red on `main` since #1299) on `agent/mc-investigate-spec-fix`, draft PR.
 
 ## Delivery ledger
 
@@ -56,6 +56,6 @@ operation are listed in the journal (scheduled task in the desktop app, or a clo
 
 ## Next autonomous actions
 
-1. Read CI on #1298 (merged early) and the AB-09/10 PR; g3 is the first run of `investigate-honest`.
+1. Read g3 on the spec-fix PR; until it merges, g3 on `main` fails on `investigate-honest`.
 2. AB-02: rewrite getting-started as the real path (factory-provisioned unit, owner card).
 3. AB-16: docs outside `docs/adr/` that contradict ADR 0047.
