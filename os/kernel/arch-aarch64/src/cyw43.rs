@@ -1631,8 +1631,7 @@ pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
     // step 4e-2: from here to the end of the download, register operations run in el0-wifi when it is loaded
     unsafe {
         RELOAD_REG_OPS = (0, 0);
-        // bench A/B (HEQK_RELOAD_REGS_KERNEL=1 at build time): keep the reload's register ops in EL1 to measure the cost
-        RELOAD_REGS_EL0 = el0().is_some() && option_env!("HEQK_RELOAD_REGS_KERNEL").is_none();
+        RELOAD_REGS_EL0 = el0().is_some();
     }
     let probed = chip_id_probe() == Some(0x4345);
     let t2 = ms_now();
