@@ -24,6 +24,19 @@ import json, ssl, sys, urllib.parse, urllib.request, http.cookiejar
 mc, key, line, origin = sys.argv[1], open(sys.argv[2]).read().strip(), sys.argv[3], sys.argv[4] or sys.argv[1]
 c = ssl.create_default_context(); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
 o = urllib.request.build_opener(urllib.request.HTTPSHandler(context=c), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+# #129: Mission Control's connection rate limiter resets bursts of new TLS sessions (by design: rate_limited in
+# [MC-TLS hb], no fault); every call here opens a fresh session, so back off and retry a reset — HTTP errors still raise
+_open = o.open
+def _retry(*a, **k):
+    import time
+    for i in range(5):
+        try:
+            return _open(*a, **k)
+        except (ConnectionResetError, urllib.error.URLError) as e:
+            if isinstance(e, urllib.error.HTTPError) or i == 4 or not isinstance(getattr(e, "reason", e), ConnectionResetError):
+                raise
+            time.sleep(1.5 * (i + 1))
+o.open = _retry
 o.open(mc + "/api/login", urllib.parse.urlencode({"token": key}).encode(), timeout=10).read()
 s = json.loads(o.open(mc + "/api/session", timeout=10).read())
 rq = urllib.request.Request(mc + "/api/hsh?seq=" + str(s["next_seq"]), line.encode("latin-1"), {"Origin": origin, "X-HQ-CSRF": s["csrf"], "Content-Type": "text/plain"})
@@ -38,6 +51,19 @@ import json, ssl, sys, urllib.parse, urllib.request, http.cookiejar
 mc, key, path, reason = sys.argv[1], open(sys.argv[2]).read().strip(), sys.argv[3], sys.argv[4]
 c = ssl.create_default_context(); c.check_hostname = False; c.verify_mode = ssl.CERT_NONE
 o = urllib.request.build_opener(urllib.request.HTTPSHandler(context=c), urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+# #129: Mission Control's connection rate limiter resets bursts of new TLS sessions (by design: rate_limited in
+# [MC-TLS hb], no fault); every call here opens a fresh session, so back off and retry a reset — HTTP errors still raise
+_open = o.open
+def _retry(*a, **k):
+    import time
+    for i in range(5):
+        try:
+            return _open(*a, **k)
+        except (ConnectionResetError, urllib.error.URLError) as e:
+            if isinstance(e, urllib.error.HTTPError) or i == 4 or not isinstance(getattr(e, "reason", e), ConnectionResetError):
+                raise
+            time.sleep(1.5 * (i + 1))
+o.open = _retry
 o.open(mc + "/api/login", urllib.parse.urlencode({"token": key}).encode(), timeout=10).read()
 if not reason:
     print(o.open(mc + path, timeout=10).read().decode()); sys.exit(0)
