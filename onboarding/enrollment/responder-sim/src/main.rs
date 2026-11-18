@@ -12,7 +12,9 @@
 //!                                        bind UDP :7654, reassemble the device's broadcast
 //!                                        msg1, answer msg2 unicast; print Established + keys;
 //!                                        serve the reach policy; receive M6 evidence exports
-//!                                        (HQXR-tagged datagram records) → evidence JSONL.
+//!                                        (HQXR-tagged datagram records) → evidence JSONL;
+//!                                        sealed-evidence HQX3 batches (ADR 0066) are
+//!                                        de-duplicated on their log cursor and acked.
 //!
 //! The responder STATIC keypair is derived from the SAME provisioning seeds whose PUBLIC half
 //! is baked into the device image (kernel testdata/provisioned_mssp_pub.bin), so the device
@@ -32,6 +34,7 @@ mod securechannel;
 #[allow(dead_code)]
 mod exportwire;
 mod export_rx;
+mod evidence_rx;
 
 use boot_abi::sha256;
 use ed25519_compact::{KeyPair, PublicKey as EdPub, Seed};
@@ -251,6 +254,8 @@ fn run_live(dev_ip: &str, dev_pk: EdPub, gen: u64, evidence_out: &str) -> std::i
     let mut reasm = HsReasm::new();
     let mut buf = [0u8; 2048];
     let mut live: Option<Live> = None;
+    // Per device, NOT per session: a device that re-handshakes resends from its last acked position.
+    let mut evidence_rx: Option<evidence_rx::EvidenceRx> = None;
     let mut handshakes = 0u32;
     loop {
         let (n, from) = sock.recv_from(&mut buf)?;
@@ -262,8 +267,8 @@ fn run_live(dev_ip: &str, dev_pk: EdPub, gen: u64, evidence_out: &str) -> std::i
         // M6 EXPORT — tagged datagram records (demuxed on the tag, never trial-decrypted).
         if buf[..n].starts_with(&exportwire::DGRAM_TAG[..]) {
             match live.as_mut() {
-                Some(l) => match l.exports.accept(&buf[..n]) {
-                    Ok(f) => {
+                Some(l) => match l.exports.accept_any(&buf[..n]) {
+                    Ok(export_rx::Stream::Live(f)) => {
                         let lines = export_rx::frame_to_jsonl(&f, &l.exports.tracker, epoch_now());
                         for line in &lines {
                             writeln!(evidence, "{line}")?;
@@ -272,6 +277,32 @@ fn run_live(dev_ip: &str, dev_pk: EdPub, gen: u64, evidence_out: &str) -> std::i
                         println!(" [sim] M6 export frame #{} boots={} events={} qsecbit={} | gap={} late={} device_lost={} overruns={}",
                             f.hdr.frame_seq, f.hdr.boots, f.n, f.hdr.qsecbit_score, l.exports.tracker.gap_events,
                             l.exports.tracker.late_events, f.hdr.lost, f.hdr.overruns);
+                    }
+                    // ADR 0066: sealed evidence replayed from the device's log, de-duplicated on its cursor.
+                    Ok(export_rx::Stream::Evidence(pt)) => {
+                        let erx = evidence_rx.get_or_insert_with(|| evidence_rx::EvidenceRx::new(SEG_TENANT, l.device_fp));
+                        if erx.device_fp() != l.device_fp {
+                            *erx = evidence_rx::EvidenceRx::new(SEG_TENANT, l.device_fp);
+                        }
+                        match erx.accept(&pt) {
+                            Ok(o) => {
+                                for line in evidence_rx::outcome_to_jsonl(&o, erx, epoch_now()) {
+                                    writeln!(evidence, "{line}")?;
+                                }
+                                evidence.flush()?;
+                                let acked = match o.ack(SEG_TENANT) {
+                                    Some(a) => match export_rx::ack_datagram(&mut l.session.send, &a) {
+                                        Some(d) => sock.send_to(&d, (dev_ip, HS_PORT)).is_ok(),
+                                        None => false,
+                                    },
+                                    None => false,
+                                };
+                                let s = erx.stats;
+                                println!(" [sim] HQX3 evidence: {o:?} | acked={acked} through={:?} stored={} dup={} held={} evicted={} rejected={}",
+                                    erx.through(), s.stored_events, s.duplicate_events, s.held_frames, s.evicted_records, s.rejected_records);
+                            }
+                            Err(e) => eprintln!(" [sim] HQX3 evidence refused: {e:?}"),
+                        }
                     }
                     Err(e) => eprintln!(" [sim] M6 export refused: {e:?}"),
                 },
