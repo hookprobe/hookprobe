@@ -824,7 +824,10 @@ pub enum MgmtOut {
 pub fn on_mgmt_frame(frame: &[u8], mgmt_ip: &[u8; 4], mgmt_mac: &[u8; 6], inside: [&[u8; 6]; 2], node_mac: &[u8; 6], mc_on_mgmt: bool,
     pol: &mut Policy, nst: &mut NatStats, c: &mut FwdCounters, ids_drop_in: &mut u32, nbuf: &mut [u8], mcbuf: &mut [u8], now: u64) -> MgmtOut {
     let Some((mm, in_if)) = nat::inbound(frame, mgmt_ip, mgmt_mac, inside, nbuf, now, nst) else {
-        let allow = hal::policy::facts(frame).map(|p| pol.check(If::Mgmt, Dir::In, &p).0).unwrap_or(Act::Drop) == Act::Allow; // unparseable = drop (H2)
+        // DET-03: a reply on the node's own outbound connection (the alert hook) is not new inbound traffic: the
+        // stateless `mgmt in` ACL is for connections TO the device; the IDS verdict below still applies
+        let own_flow = mc_on_mgmt && crate::mcmgmt::is_out_flow(frame, *mgmt_ip);
+        let allow = own_flow || hal::policy::facts(frame).map(|p| pol.check(If::Mgmt, Dir::In, &p).0).unwrap_or(Act::Drop) == Act::Allow; // unparseable = drop (H2)
         if !allow {
             c.pol_drop[If::Mgmt as usize] += 1;
             return MgmtOut::Dropped;
