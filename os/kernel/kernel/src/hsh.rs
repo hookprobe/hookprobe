@@ -164,9 +164,11 @@ mod el0 {
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
+                let _ = crate::superv::server_fault("el0-hsh", how == crate::Excursion::Timeout); // H1
                 self.reset();
                 return (ST_PANIC, 0);
             }
+            crate::superv::server_ok("el0-hsh");
             (st, (self.r32(H_OUT_LEN) as usize).min(OUT_MAX))
         }
         /// Fail closed and recover: restore the image's data/bss pages and zero the IO region.
