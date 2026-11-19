@@ -1,0 +1,40 @@
+devices with traffic: 27 / 27 listed; held out: ['AwairAirQuality', 'BelkinWemoMotionSensor', 'HPPrinter', 'PhilipsHue', 'TPLinkSmartPlug', 'WithingsSleepSensor', 'WithingsSmartScale']
+  AmazonEcho               days h/d/t  45/ 23/ 23  hours h/d/t  1022/  479/  400
+  AugustDoorBell           days h/d/t  54/ 27/ 27  hours h/d/t  1175/  582/  613
+  AwairAirQuality          days h/d/t  14/  7/  7  hours h/d/t   274/  168/  115  HELD-OUT
+  BelkinCamera             days h/d/t   7/  4/  4  hours h/d/t   121/   67/   56
+  BelkinWemoMotionSensor   days h/d/t  38/ 19/ 20  hours h/d/t   841/  386/  415  HELD-OUT
+  BelkinWemoSwitch         days h/d/t  52/ 26/ 27  hours h/d/t  1154/  576/  575
+  BlipCareBPMeter          days h/d/t   4/  2/  2  hours h/d/t     4/    2/    3
+  CanaryCamera             days h/d/t   3/  1/  2  hours h/d/t    45/   24/   23
+  HPPrinter                days h/d/t  69/ 35/ 35  hours h/d/t  1561/  757/  743  HELD-OUT
+  HelloBarbie              days h/d/t   6/  3/  4  hours h/d/t     9/   11/   15
+  LiFXBulb                 days h/d/t  47/ 23/ 24  hours h/d/t  1029/  494/  502
+  NestDropCam              days h/d/t  80/ 40/ 40  hours h/d/t  1826/  866/  837
+  NestProtectSmokeAlarm    days h/d/t  74/ 37/ 37  hours h/d/t    81/   41/   40
+  NetatmoWeatherStation    days h/d/t  71/ 35/ 36  hours h/d/t  1555/  745/  768
+  NetatmoWelcome           days h/d/t  64/ 32/ 33  hours h/d/t  1441/  672/  610
+  PhilipsHue               days h/d/t  41/ 21/ 21  hours h/d/t   804/  428/  445  HELD-OUT
+  PixStarPhotoFrame        days h/d/t  13/  7/  7  hours h/d/t   245/  144/  127
+  RingDoorBell             days h/d/t  11/  6/  6  hours h/d/t   201/  130/  134
+  SamsungCamera            days h/d/t  60/ 30/ 30  hours h/d/t  1345/  438/  662
+  SamsungSmartThings       days h/d/t  54/ 27/ 27  hours h/d/t  1225/  597/  513
+  TPLinkCamera             days h/d/t  22/ 11/ 11  hours h/d/t   445/  239/  254
+  TPLinkSmartPlug          days h/d/t  16/  8/  8  hours h/d/t   347/  192/  129  HELD-OUT
+  TribySpeaker             days h/d/t  46/ 23/ 23  hours h/d/t   982/  511/  367
+  WithingsBabyMonitor      days h/d/t   8/  4/  4  hours h/d/t   178/   96/   77
+  WithingsSleepSensor      days h/d/t  43/ 22/ 22  hours h/d/t   941/  463/  371  HELD-OUT
+  WithingsSmartScale       days h/d/t  83/ 42/ 42  hours h/d/t   140/   65/   65  HELD-OUT
+  iHome                    days h/d/t  14/  7/  8  hours h/d/t   245/  168/  110
+IoT-23 dev split: 9 infected scenarios for splicing
+dev q_min=0   alarms/dev/week median 46.800 max 168.00 (devices >1: 21/21)  DGA onset detect 1.000
+dev q_min=3   alarms/dev/week median 46.800 max 168.00 (devices >1: 21/21)  DGA onset detect 1.000
+dev q_min=5   alarms/dev/week median 46.800 max 168.00 (devices >1: 21/21)  DGA onset detect 1.000
+dev q_min=10  alarms/dev/week median 46.800 max 168.00 (devices >1: 21/21)  DGA onset detect 1.000
+dev q_min=20  alarms/dev/week median 46.800 max 168.00 (devices >1: 21/21)  DGA onset detect 1.000
+Q2 choice on dev: q_min = None
+  ridge=0.1    pairs=14308 dev AUC(B)=0.8083
+  ridge=1      pairs=14308 dev AUC(B)=0.8083
+  ridge=10     pairs=14308 dev AUC(B)=0.8086
+  ridge=100    pairs=14308 dev AUC(B)=0.8141
+dev AUC: A(DNA) 0.9103  B 0.8141 (ridge 100)  B threshold @1/week 92.4501
