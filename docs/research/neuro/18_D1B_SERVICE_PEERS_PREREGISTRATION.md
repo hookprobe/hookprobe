@@ -126,3 +126,27 @@ On the primary dataset:
 2. **`d1_analysis.py`:** a `--peer-key` mode. No other change.
 3. **The fresh dataset (primary gate):** for the HookProbe home network, the owner's consent (D2) and a
    flow + DNS-answer export; otherwise a licence-checked public set.
+
+## Primary dataset, chosen (2026-11-19, before download; only the public metadata has been read)
+
+**Deakin IoT Traffic Dataset (D-IoT).**
+- Authors: Pasquini, Vasa, Habibi Gharakheili, Logothetis, Chambers, Tran.
+- Deakin University, Figshare article 28013234, **version 2** (published 2025-02-05), DOI
+  `10.26187/deakin.28013234.v2`, **CC BY 4.0**.
+
+**How it meets the criteria:**
+- 24 consumer IoT devices (19 types).
+- Device-filtered, full-packet captures (`IoT_<date>.pcap`): 150 daily files, 2023-05-15 → 2024-05-29,
+  38.29 GB in all.
+- The captures keep every layer, so DNS is included.
+- A **different testbed and period** from UNSW 2016–17. One author is shared.
+- It ships interaction metadata (`activeInteractions.csv`, `passiveInteractions.csv`).
+
+**Files used:** only the 150 `IoT_*.pcap` files plus the CSVs (`macAddresses.csv` gives the device
+identity). The 88 `pcapFull` files, which carry traffic from 36 non-IoT devices, are **not downloaded**.
+
+**Digests:** `data/d1b-deakin-manifest.tsv` lists the name, size and MD5 of every file to be used, taken from
+Figshare. Every downloaded file must match its line before it is converted.
+
+**Caveat, as with D1:** the description says "a controlled environment under normal operating
+conditions". This is a lab with scripted interactions, not a lived-in home.
