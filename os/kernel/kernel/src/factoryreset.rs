@@ -87,6 +87,7 @@ pub fn run(pf: &mut crate::prodfull::ProdFull) {
 
 /// The same reset the watchdog self-heal uses (HBoot's EL2 `hvc #0` vector resets the SoC).
 fn reboot() -> ! {
+    arch_aarch64::crashrec::write_planned(hal::superv::PLANNED_FACTORY_RESET);
     let _ = arch_aarch64::mailbox::notify_reboot();
     unsafe { core::arch::asm!("hvc #0", options(noreturn)) }
 }

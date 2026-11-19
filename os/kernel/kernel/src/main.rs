@@ -4083,6 +4083,8 @@ fn cm5_p10_probe() {
                         #[cfg(all(feature = "p15-write", feature = "mcserve"))]
                         let mut trial_at: Option<u64> = None;
                         let mut reset_at: Option<u64> = None;
+                        // H3a: why (hal::superv::PLANNED_*) — written to the planned-reset record right before the reset
+                        let mut reset_why: u32 = hal::superv::PLANNED_OWNER_REBOOT;
                         // Production phase 1 step 5: repair an interrupted commit, then classify this boot.
                         #[cfg(all(feature = "p15-write", feature = "mcserve", feature = "hboot"))]
                         let (mut ota_boot, ota_t0) = {
@@ -4152,10 +4154,12 @@ fn cm5_p10_probe() {
                             {
                                 if ownerapi::take_owner_reboot() {
                                     reset_at = Some(now().wrapping_add(2 * freq)); // G49: the owner asked for a restart
+                                    reset_why = hal::superv::PLANNED_OWNER_REBOOT;
                                 }
                                 if ownerapi::take_reset_reboot() {
                                     kprint!(" [FACTORY-RESET] request sealed in the journal — rebooting in 2 s to erase the owner data\n");
                                     reset_at = Some(now().wrapping_add(2 * freq));
+                                    reset_why = hal::superv::PLANNED_FACTORY_RESET;
                                 }
                                 if upload::take_trial_reboot() {
                                     trial_at = Some(now().wrapping_add(2 * freq));
@@ -4201,11 +4205,13 @@ fn cm5_p10_probe() {
                                             }
                                             Err(e) => {
                                                 kprint!(" [OTA] commit failed: {:?} — rebooting to the previous slot\n", e);
+                                                arch_aarch64::crashrec::write_planned(hal::superv::PLANNED_OTA_REVERT);
                                                 unsafe { core::arch::asm!("hvc #0") };
                                             }
                                         },
                                         otaimg::Gate::Revert => {
                                             kprint!(" [OTA] trial not healthy within {} s + {} s DFS CAC (WAN usable={} AP serving={} in CAC={}) — rebooting to the previous slot\n", otaimg::COMMIT_LIMIT_S, ota_gate.cac_s().min(otaimg::COMMIT_CAC_ALLOW_S), up.usable(), ap_serving, in_cac);
+                                            arch_aarch64::crashrec::write_planned(hal::superv::PLANNED_OTA_REVERT);
                                             unsafe { core::arch::asm!("hvc #0") };
                                         }
                                         otaimg::Gate::Wait => {}
@@ -4291,6 +4297,7 @@ fn cm5_p10_probe() {
                                         cfgd::Tick::RevertReboot => {
                                             kprint!(" [CFGD] the live revert itself FAILED — rebooting into the last-known-good\n");
                                             reset_at = Some(now().wrapping_add(2 * freq));
+                                            reset_why = hal::superv::PLANNED_CONFIG_REVERT;
                                         }
                                         _ => {}
                                     }
@@ -4309,6 +4316,7 @@ fn cm5_p10_probe() {
                                     cfgd::Tick::RevertReboot => {
                                         kprint!(" [CFGD] trial NOT healthy within {} s (WAN never usable) — reverted to the last-known-good, rebooting\n", cfgd::WINDOW_S);
                                         reset_at = Some(now().wrapping_add(2 * freq));
+                                        reset_why = hal::superv::PLANNED_CONFIG_REVERT;
                                     }
                                     // step 6: the live engine's outcomes (the executors are wired in step 8)
                                     cfgd::Tick::Reverting => kprint!(" [CFGD] live trial not healthy / rolled back — reverting LIVE to the last-known-good\n"),
@@ -4316,6 +4324,7 @@ fn cm5_p10_probe() {
                                     cfgd::Tick::Idle => {}
                                 }
                                 if reset_at.is_some_and(|t| now() > t) {
+                                    arch_aarch64::crashrec::write_planned(reset_why);
                                     let _ = arch_aarch64::mailbox::notify_reboot();
                                     unsafe { core::arch::asm!("hvc #0", options(noreturn)) };
                                 }
@@ -4324,7 +4333,10 @@ fn cm5_p10_probe() {
                                     let notified = arch_aarch64::mailbox::notify_reboot();
                                     kprint!(" [OTA] tryboot flag set={:?} notify={} — rebooting into the trial slot\n", set, notified);
                                     #[cfg(feature = "hboot")]
-                                    unsafe { core::arch::asm!("hvc #0") };
+                                    {
+                                        arch_aarch64::crashrec::write_planned(hal::superv::PLANNED_OTA_TRIAL);
+                                        unsafe { core::arch::asm!("hvc #0") };
+                                    }
                                     trial_at = None;
                                 }
                             }
