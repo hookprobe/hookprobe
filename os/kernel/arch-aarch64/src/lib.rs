@@ -41,6 +41,7 @@ pub mod rtl8111;
 pub mod uplink;
 // NAT engine: pure frame translation (no MMIO) — built on every target so QEMU tests it.
 pub mod nat;
+pub mod perfctr;
 // PPPoE client engine (pure frame state machine) — built on every target so QEMU tests it.
 pub mod pppoe;
 // IPv6 WAN builders/parsers (RS/RA, DHCPv6 IA_PD) — pure, built on every target so QEMU tests it.
