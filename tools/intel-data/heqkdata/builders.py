@@ -266,7 +266,7 @@ def build_soc_synthetic(n_per_scenario=4, seed=7):
             }
             ctx = {"device_role": "iot_camera" if cat == "lateral_movement" else "workstation", "synthetic": True}
             tgt = target("malicious" if mal else "benign", severity=sev, attack=mapping([tech], [tac], "heqk_rulecat"),
-                         evidence=[rec["record_id"]], reasoning="SYNTHETIC: " + why.format(**params), fp=fp, action=action)
+                         evidence=[rec["record_id"]], reasoning="SYNTHETIC: " + why.format(**params), fp=[s.format(**params) for s in fp], action=action)
             gt = truth("synthetic", False, "soc-templates-v1", "unknown",
                        "Template-generated illustration; not real telemetry. Use for format/teaching, never as evidence.")
             out.append(example("soc_reasoning", "triage", [rec], "Assess this detection: verdict, severity, ATT&CK, next step.",
