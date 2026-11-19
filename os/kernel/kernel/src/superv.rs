@@ -113,6 +113,10 @@ pub fn wifi_heal(act: u8, healthy: bool, t_ms: u64) {
         }
         Some(r) => {
             jj.open(c, Kind::Probe, r, t_ms);
+            // the port runs a bounce / reload synchronously inside the ladder step: `now` is when it returned
+            if matches!(r, Rung::Bounce | Rung::Reload) {
+                jj.acted(c, now_ms().max(t_ms));
+            }
         }
         None if healthy && jj.is_open(c) => {
             let _ = jj.close(c, Outcome::Recovered, t_ms);
@@ -166,6 +170,12 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
     for (i, r) in jj.newest_first().take(limit).enumerate() {
         let _ = write!(w, "{}{{\"seq\":{},\"component\":\"{}\",\"kind\":\"{}\",\"rung\":\"{}\",\"outcome\":\"{}\",\"repeats\":{},\"t_detect_ms\":{},",
             if i > 0 { "," } else { "" }, r.seq, component_name(r.component), r.kind.name(), r.rung.name(), r.outcome.name(), r.repeats, r.t_detect_ms);
+        match r.action_ms() {
+            Some(a) => {
+                let _ = write!(w, "\"action_ms\":{},", a);
+            }
+            None => w.raw("\"action_ms\":null,"),
+        }
         match r.duration_ms() {
             Some(d) => {
                 let _ = write!(w, "\"t_done_ms\":{},\"duration_ms\":{}}}", r.t_done_ms, d);
