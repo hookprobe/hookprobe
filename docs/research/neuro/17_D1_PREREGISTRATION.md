@@ -109,3 +109,16 @@ alarm or detection number existed when this was written. Implementation: `tools/
 - B's threshold is calibrated on dev benign hours at 1 alarm per device-week.
 - "Without raising nuisance" means B's test median ≤ the DNA's test median.
 - Labelled attack periods: the authors' README was not downloaded, so none are known. Every hour is treated as benign (as pre-registered).
+
+## Result (2026-11-19, test opened once)
+
+Details: `data/d1-results.md`.
+
+- **Q1 fails:** the median is 72 benign alarms per device per week on test. 19 of 21 devices are above 1.
+- **Q2:** no `q_min` qualifies on dev, because NXDOMAIN is not the driver.
+- **Q3:** all spliced attacks were detected, and the AUC is 0.884.
+- **Q4:** the DNA stays.
+
+**Decision:** the temporal tier does **not** ship as an alarm source. It remains an evidence feature until a
+fix passes a new pre-registration. The leading candidate fix: peers keyed by service (resolved name), not
+by exact address.
