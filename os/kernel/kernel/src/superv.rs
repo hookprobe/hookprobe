@@ -77,6 +77,55 @@ pub fn server_fault(name: &str, budget: bool) -> u32 {
     j().open(c, kind, Rung::Restart, now_ms())
 }
 
+// --- H5: the per-component CPU budget per window ---
+static mut CPU: [hal::superv::CpuWindow; 8] = [hal::superv::CpuWindow::new(); 8];
+/// Components whose throttle entry is open in the journal.
+static mut THROTTLED: u8 = 0;
+
+fn cpu(c: u8) -> &'static mut hal::superv::CpuWindow {
+    unsafe { &mut (*core::ptr::addr_of_mut!(CPU))[(c & 7) as usize] }
+}
+
+/// May component `c` (a `hal::superv::C_*` id) run a call now? False = its CPU budget for this window is used up:
+/// the caller refuses the call like a fault (fail closed). The first refusal of an episode is journaled (kind
+/// budget-overrun, rung throttle); the first call admitted afterwards closes it.
+pub fn cpu_admit(c: u8) -> bool {
+    cpu_admit_at(c, now_ms())
+}
+
+pub fn cpu_admit_at(c: u8, now: u64) -> bool {
+    // enforced on metal only: QEMU's emulated CPU time is not the device's (a TLS handshake under TCG would trip a
+    // budget sized for the A76) — there every component is measured, none refused
+    #[cfg(feature = "cm5")]
+    let budget = hal::superv::cpu_budget_ms(c);
+    #[cfg(not(feature = "cm5"))]
+    let budget = 0;
+    cpu_admit_with(c, now, budget)
+}
+
+fn cpu_admit_with(c: u8, now: u64, budget: u32) -> bool {
+    let (ok, first) = cpu(c).admit(now, budget);
+    let bit = 1u8 << (c & 7);
+    if ok {
+        if unsafe { THROTTLED } & bit != 0 {
+            unsafe { THROTTLED &= !bit };
+            let _ = j().close(c, Outcome::Recovered, now);
+        }
+    } else if first && unsafe { THROTTLED } & bit == 0 {
+        unsafe { THROTTLED |= bit };
+        j().open(c, Kind::Budget, Rung::Throttle, now);
+        arch_aarch64::_print(format_args!(" [SUPERV] {} used its CPU budget ({} ms per {} ms window): calls refused until the next window (journaled, rung throttle)\n",
+            hal::superv::component_name(c), budget, hal::superv::CPU_WINDOW_MS));
+    }
+    ok
+}
+
+/// A call of component `c` that started at `t0_ticks` just returned: charge its duration.
+pub fn cpu_charge(c: u8, t0_ticks: u64) {
+    let us = crate::clock::ticks().saturating_sub(t0_ticks) / (crate::clock::freq() / 1_000_000).max(1);
+    cpu(c).charge(us);
+}
+
 /// H4a: a server answered a functional probe WRONGLY (no fault): it is being reset like a fault.
 pub fn server_probe_failed(name: &str) -> u32 {
     let c = component_id(name);
@@ -207,6 +256,13 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
         let _ = write!(w, "{}{{\"component\":\"{}\",\"critical\":{},\"exhausted\":\"{}\",\"grace\":{},\"backoff_ms\":{},\"backoff_max_ms\":{}}}",
             if i > 0 { "," } else { "" }, e.name, e.critical, e.exhausted.name(), e.grace, e.backoff_ms, e.backoff_max_ms);
     }
+    // H5: CPU use per component per window (us); budget 0 = measured only
+    w.raw("],\"cpu\":[");
+    for (i, e) in hal::superv::TABLE.iter().filter(|e| e.name != "wifi").enumerate() {
+        let c = cpu(component_id(e.name));
+        let _ = write!(w, "{}{{\"component\":\"{}\",\"window_ms\":{},\"budget_ms\":{},\"last_us\":{},\"peak_us\":{},\"throttled_windows\":{},\"refused_calls\":{}}}",
+            if i > 0 { "," } else { "" }, e.name, hal::superv::CPU_WINDOW_MS, e.cpu_ms_per_window, c.last_us, c.peak_us, c.throttled_windows, c.refused_calls);
+    }
     let (pr, pf) = probe_stats();
     let _ = write!(w, "],\"probes\":{{\"period_ms\":{},\"run\":{},\"failed\":{}}},\"now_ms\":{},\"recoveries\":[", hal::superv::PROBE_PERIOD_MS, pr, pf, now_ms());
     for (i, r) in jj.newest_first().take(limit).enumerate() {
@@ -332,11 +388,33 @@ pub fn selftest() -> bool {
     #[cfg(not(feature = "netsvc"))]
     let doc = true;
     *j() = saved;
+    // H5: the CPU budget on the kernel's own path (el0-neuro's slot: no server uses it in this boot; fake clock)
+    let cpu_ok = {
+        let saved_j = core::mem::replace(j(), Journal::new());
+        let c = hal::superv::C_NEURO;
+        let saved_w = core::mem::replace(cpu(c), hal::superv::CpuWindow::new());
+        let t = 10_000_000u64;
+        let a1 = cpu_admit_with(c, t, 200);
+        cpu(c).charge(250_000); // 250 ms against a 200 ms budget
+        let refused = !cpu_admit_with(c, t + 300, 200) && !cpu_admit_with(c, t + 900, 200);
+        let jr = journal().total() == 1 && journal().get(1).is_some_and(|r| r.kind == Kind::Budget && r.rung == Rung::Throttle && r.outcome == Outcome::Pending);
+        let again = cpu_admit_with(c, t + 1_000, 200);
+        let closed = journal().get(1).is_some_and(|r| r.outcome == Outcome::Recovered && r.duration_ms() == Some(700));
+        let counted = cpu(c).throttled_windows == 1 && cpu(c).refused_calls == 2 && cpu(c).last_us == 250_000;
+        // an unlimited component (the data-path server) is measured and never refused
+        let w0 = core::mem::replace(cpu(hal::superv::C_WIFI_SRV), hal::superv::CpuWindow::new());
+        cpu(hal::superv::C_WIFI_SRV).charge(5_000_000);
+        let unlimited = cpu_admit_with(hal::superv::C_WIFI_SRV, t, hal::superv::cpu_budget_ms(hal::superv::C_WIFI_SRV)) && journal().total() == 1;
+        *cpu(hal::superv::C_WIFI_SRV) = w0;
+        *cpu(c) = saved_w;
+        *j() = saved_j;
+        a1 && refused && jr && again && closed && counted && unlimited
+    };
     let plan_rec = arch_aarch64::crashrec::planned_selftest();
-    let ok = ladder && degrade && again && fault && unknown && table && policy && doc && plan_rec;
+    let ok = ladder && degrade && again && fault && unknown && table && policy && doc && plan_rec && cpu_ok;
     arch_aarch64::_print(format_args!(
-        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={} | H2 supervisor table: only the Wi-Fi link is critical, no other entry may reboot={} a one-off server fault restarts at once, consecutive faults are held off (50 ms doubling, capped 5 s: < 25 restarts in 60 s of constant faulting), a fault-free stable period resets it (H3b: a good call alone does not — flapping is held off too)={} /api/recoveries renders well-formed={} H3a: the planned-reset reason is taken once, a torn / stale record never reads back={}\n",
-        if ok { "PASS" } else { "FAIL" }, ladder, degrade, again, fault, unknown, table, policy, doc, plan_rec
+        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={} | H2 supervisor table: only the Wi-Fi link is critical, no other entry may reboot={} a one-off server fault restarts at once, consecutive faults are held off (50 ms doubling, capped 5 s: < 25 restarts in 60 s of constant faulting), a fault-free stable period resets it (H3b: a good call alone does not — flapping is held off too)={} /api/recoveries renders well-formed={} H3a: the planned-reset reason is taken once, a torn / stale record never reads back={} H5: a component over its CPU budget is refused for the rest of the window (journaled budget-overrun / throttle), admitted in the next (entry closed), the data-path server is never refused={}\n",
+        if ok { "PASS" } else { "FAIL" }, ladder, degrade, again, fault, unknown, table, policy, doc, plan_rec, cpu_ok
     ));
     ok
 }
