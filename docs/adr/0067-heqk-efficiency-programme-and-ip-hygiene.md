@@ -1,6 +1,8 @@
 # ADR 0067: heqk efficiency programme, measured gates and IP hygiene
 
-**Status:** 🟡 Proposed (2026-11-19). Needs operator review.
+**Status:** 🟡 Proposed (2026-11-19). Amended 2026-11-19 (operator decisions, see "Amendment" below).
+Not ratified: the licensing-sensitive and patent-sensitive decisions (D5–D9 as protectable subject matter,
+D10 learning, D11, D12, D13) stay subject to counsel. The engineering decisions (D1–D4) are being built.
 
 **Scope:** os/kernel (data plane, EL0 call boundary, NAT, frame pool, JIT, Wasm host, evidence log,
 build targets), hboot (signature verify cost), tools/ci (performance ratchet), licensing and
@@ -16,9 +18,10 @@ provenance of everything compiled into a heqk image.
 - ADR 0065 (Wi-Fi driver out of the kernel);
 - `docs/roadmap/heqk-efficiency-build-plan.md` (the work items, gates and autonomy rules).
 
-**Publication note.** This file describes ideas judged distinctive (D5–D9). Under EPC Art. 54 a
-public push is prior art against our own later filing; there is no grace period in the EU. The
-operator decides patent-or-publish for D5–D9 **before** this branch is pushed (D12).
+**Publication note (corrected 2026-11-19).** This file describes ideas judged distinctive (D5–D9). It
+was pushed to the public repository on 2026-11-19 (PR #1340, merged the same day). The decision point
+that D12 originally required "before a push" has therefore passed for D5–D9 as described here. See the
+disclosure record under D12. Nothing in this ADR labels those mechanisms unpublished.
 
 ## Context
 
@@ -125,9 +128,9 @@ its only data-plane action is D8 shedding.
   recorded history.
 - Every enforcement evidence record carries the configuration generation and the ruleset hash in
   force, and the module or model version when one contributed, in the same sealed record.
-- Behavioural learning changes (Neuro) are journalled with the owner's signed confirmation in one
-  atomic record. This is decided in principle only: the Neuro engine needs its own ADR (0048)
-  and must be on `main` first.
+- Behavioural learning changes (Neuro) journalled with the owner's signed confirmation in one atomic
+  record are a **proposed architectural direction, not an approved Neuro implementation**. Nothing
+  here approves a Neuro design: that needs its own ADR (0048). Subject to counsel (D13, review C).
 - Fleet sharing of behavioural observations is deferred until counsel has reviewed it.
 
 No SQL engine and no general database enters the kernel or the packet path.
@@ -138,7 +141,10 @@ No SQL engine and no general database enters the kernel or the packet path.
 - Vendor firmware, regulatory blobs and NVRAM files are separate files on the boot partition,
   loaded at run time under their owners' terms. They are not `include_bytes!` inputs.
 - Every driver has a provenance entry: its sources (datasheet, register map, specification,
-  permissively licensed code, or a functional note) and who read what. Code whose only recorded
+  permissively licensed code, or a functional note) and who read what. The register is
+  `docs/security/driver-provenance.md`; g0 (`tools/ci/provenance_check.py`) fails when a driver file
+  under `os/kernel/arch-aarch64/src` or `os/kernel/hboot/src` has no row. No class in the register is a
+  finding of independent implementation. Code whose only recorded
   source is a GPL-2.0 file is rewritten from a functional note by someone who did not read that
   file.
 - Every source file carries an SPDX header; g0 checks it. Dependencies stay permissive-only
@@ -146,14 +152,55 @@ No SQL engine and no general database enters the kernel or the packet path.
 - New work is implemented from papers, standards and datasheets. Linux and seL4 kernel sources
   are not read for it.
 
-**D12. Publish-or-patent is decided before a push.** For each of D5–D9 the operator records one of:
-file first, publish defensively, or keep unpublished. Defensive publication means an enabling
-description in this repo **and** a dated copy at Technical Disclosure Commons. Standards are
-implemented exactly (FIPS 203, RFC 9669, the W3C Wasm specification).
+**D12. Publish-or-patent is decided before a push — for anything not yet public.** For a new mechanism
+the operator records one of: file first, publish defensively, or keep unpublished, before it is pushed.
+Defensive publication means an enabling description in this repo **and** a dated copy at Technical
+Disclosure Commons. Standards are implemented exactly (FIPS 203, RFC 9669, the W3C Wasm specification).
 
-**D13. Counsel reviews before shipping:** D5 and D7 against flow-offload and megaflow patents; D10
-learning against feedback-gated anomaly-learning patents; any replay-style recovery; F13 and F14.
-These are operator (Red) steps. The work may be built and measured behind a feature flag first.
+*Disclosure record for D5–D9 (facts, 2026-11-19).* These were public before any D12 decision was
+recorded:
+
+| Mechanism | Described publicly | Implemented publicly |
+|---|---|---|
+| D5 policy-specialised packet path | this ADR, 2026-11-19 (PR #1340) | first steps only: guards read from a rule program at install (PR #1355, 2026-11-19; TCP-flag guards to follow). The fused program is not written |
+| D6 sign-time native compilation of detection modules | this ADR, 2026-11-19 | no |
+| D7 revocable verdict token | this ADR, 2026-11-19 | no |
+| D8 inspection shedding recorded as evidence | this ADR, 2026-11-19 | no |
+| D9 thermal budget | this ADR, 2026-11-19 | no |
+
+This record does not say that every implementation detail is public, and it does not settle the legal
+status of any patent claim. Counsel establishes the disclosure dates, the technical scope disclosed and
+what protection remains (D13, review B).
+
+**D13. Counsel reviews before shipping**, as three separate reviews, each answering copyright,
+open-source licence obligations, patent infringement and patentability as different questions:
+
+- **Review A — embedded firmware and Linux-derived drivers:** F13 and F14, licence compatibility and
+  distribution obligations, the clean-room method.
+- **Review B — flow-related mechanisms:** D5, D7, D8 against flow-offload, megaflow and security
+  patents; the D5–D9 disclosure record.
+- **Review C — Neuro and learning:** D10 (recovery by recorded steps, transactional learning,
+  owner-confirmed learning records), the feedback-gated anomaly-learning patents, later fleet sharing.
+
+These are operator (Red) steps. Development is not blocked on them: the work may be built and measured
+behind a feature flag first. Code that a review has questioned does not ship until it is resolved.
+
+## Amendment (2026-11-19, operator decisions)
+
+1. D12 corrected: D5–D9 were public before a patent-or-publish decision was recorded; the disclosure
+   record states that.
+2. D11 names the committed location of the provenance register and its gate.
+3. The licensing-sensitive and patent-sensitive decisions stay subject to counsel; D13 is three reviews.
+4. D10: transactional learning is a proposed direction, not an approved Neuro implementation.
+5. The GPL-derived driver code is rewritten by a clean-room process (functional note from the
+   datasheet, separate implementer, metal comparison, counsel review before shipping). The present
+   implementation is not deleted and git history is not rewritten as a substitute for remediation.
+6. E9 (evidence-log mount scan) is dropped; see the build plan.
+7. The first CM5 bench slot is batch B1: timing baselines, AP+NAT throughput, firmware separation.
+   Acceptance: functional regression, the 33-row separation matrix, timings within 8 %, evidence
+   under `docs/design/metal-evidence/`.
+8. This ADR stays Proposed until the operator has reviewed the amended text and the legal risks
+   have been assessed.
 
 ## Consequences
 
