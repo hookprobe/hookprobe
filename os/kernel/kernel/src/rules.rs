@@ -835,6 +835,9 @@ pub fn scan_response_hook(frame: &[u8]) {
 /// Rule IDs for the M2.3 resource-shed layers (distinct from the M2.1/M2.2 tiers).
 pub const RULE_CONN_RATE_SHED: u16 = 114; // L1 blanket per-source new-conn cap
 pub const RULE_RESOURCE_SHED: u16 = 115; // L2 saturation / L3 pressure top-talker shed
+/// ADR 0067 D8: observe-only detectors were paused under pressure for an interval (an evidence
+/// event, never a wire action). Its `src` field carries the number of observations skipped.
+pub const RULE_INSPECTION_SHED: u16 = 129;
 
 /// M2.3 — map a resource-shed TRIGGER (rate / saturation / pressure — all identity-blind)
 /// to a tri-state verdict via `decide()`, so the mgmt `Allowlisted` floor is HONORED: a

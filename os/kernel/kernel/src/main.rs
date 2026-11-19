@@ -58,6 +58,7 @@ mod apcred;
 mod mcmgmt;
 mod srckey;
 mod idsbench;
+mod inspshed;
 mod ja4;
 // SEC-02: the pure TLS ClientHello / JA4 parser and the DNS wire parser (also in the host libFuzzer harness).
 mod tlshello;
@@ -7668,6 +7669,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();
         let _ = rulepack::guard_selftest();
+        let _ = inspshed::selftest();
         #[cfg(feature = "netsvc")]
         let _ = actionapi::selftest();
         let _ = apcred::selftest();
