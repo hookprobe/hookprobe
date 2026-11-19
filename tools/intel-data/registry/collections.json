@@ -1,0 +1,278 @@
+{
+  "schema": "heqk.collection/1",
+  "entries": [
+    {
+      "id": "attack_intelligence",
+      "number": "03",
+      "name": "Penetration Testing and Attack Intelligence",
+      "prefix": "atk",
+      "purpose": "Technique knowledge (ATT&CK) and, later, labelled attack traces from authorised, isolated lab simulations (Atomic Red Team, CALDERA, Stratus Red Team) so the language tier can name what it sees and the specialists learn attack shapes.",
+      "tiers": [
+        "B",
+        "D"
+      ],
+      "teaches": [
+        "technique identification",
+        "tactic sequence (initial access -> exfiltration)",
+        "prerequisites",
+        "detection opportunities",
+        "mitigations"
+      ],
+      "record_kinds": [
+        "attack_technique",
+        "flow",
+        "detection"
+      ],
+      "tasks": [
+        "knowledge",
+        "map_attack",
+        "classify"
+      ],
+      "split": {
+        "strategy": "group_hash",
+        "group_key": "parent technique id (T1071 for T1071.004)",
+        "fractions": {
+          "train": 0.8,
+          "dev": 0.1,
+          "test": 0.1
+        }
+      },
+      "sources": [
+        "atomic-red-team",
+        "darpa-optc",
+        "lanl-comprehensive-multisource-2015",
+        "mitre-attack-stix",
+        "mitre-caldera",
+        "otrf-security-datasets",
+        "sigmahq-rules",
+        "splunk-attack-data",
+        "stratus-red-team"
+      ],
+      "status": "partial",
+      "notes": "Implemented: ATT&CK knowledge examples. Specified: lab-trace ingestion (needs the isolated HookProbe lab capture described in HEQK-TRAINING-STRATEGY.md §4; no attack tooling runs on the development host)."
+    },
+    {
+      "id": "dns_intelligence",
+      "number": "01",
+      "name": "DNS Intelligence",
+      "prefix": "dns",
+      "purpose": "Name-level and query-window classification for the tier B DNS specialist (int8 char model / trees replacing or backing dga.rs) and evaluation of the shipped dga.rs scorer.",
+      "tiers": [
+        "A",
+        "B",
+        "D"
+      ],
+      "teaches": [
+        "DGA names",
+        "tunnelling / exfiltration subdomain shape",
+        "lookalike and phishing names",
+        "NXDOMAIN bursts",
+        "fast-flux answer churn",
+        "benign high-entropy names (CDN hashes) as hard negatives"
+      ],
+      "record_kinds": [
+        "dns",
+        "indicator"
+      ],
+      "tasks": [
+        "classify",
+        "explain"
+      ],
+      "split": {
+        "strategy": "group_hash",
+        "group_key": "registrable domain",
+        "fractions": {
+          "train": 0.8,
+          "dev": 0.1,
+          "test": 0.1
+        }
+      },
+      "sources": [
+        "abusech-urlhaus",
+        "cic-bell-dns-2021",
+        "cic-bell-dns-exf-2021",
+        "cira-cic-dohbrw-2020",
+        "cisco-umbrella-top1m",
+        "dgarchive",
+        "dns-threats-palau-2019",
+        "netlab360-dga",
+        "phiusiil-phishing-url",
+        "tranco",
+        "tu-dns-tunnelling-2023",
+        "umudga"
+      ],
+      "status": "partial",
+      "notes": "Builder implemented. As of 2026-11-18 none of the obvious DNS sources clears the commercial_training gate (abuse.ch AI-training clause, Tranco has no licence of its own and blends NC sources); see HEQK-DATASET-RESEARCH.md §3. Evaluation-only and research builds work."
+    },
+    {
+      "id": "malware_intelligence",
+      "number": "04",
+      "name": "Malware Intelligence",
+      "prefix": "mal",
+      "purpose": "Family metadata, behavioural indicators and network communication patterns from sandbox REPORTS and metadata, never from executing samples.",
+      "tiers": [
+        "B",
+        "D"
+      ],
+      "teaches": [
+        "family behaviour",
+        "C2 protocol patterns",
+        "persistence mechanisms",
+        "ransomware behaviour"
+      ],
+      "record_kinds": [
+        "indicator"
+      ],
+      "tasks": [
+        "knowledge",
+        "classify"
+      ],
+      "split": {
+        "strategy": "group_hash",
+        "group_key": "malware family",
+        "fractions": {
+          "train": 0.8,
+          "dev": 0.1,
+          "test": 0.1
+        }
+      },
+      "sources": [
+        "abusech-feodotracker",
+        "abusech-malwarebazaar",
+        "abusech-sslbl"
+      ],
+      "status": "specified",
+      "notes": "No builder yet: the only machine-readable family sources found (abuse.ch) forbid AI training without written consent. Samples are never downloaded (safeio refuses executable members and password-protected archives)."
+    },
+    {
+      "id": "network_intelligence",
+      "number": "02",
+      "name": "Network Intelligence",
+      "prefix": "net",
+      "purpose": "Flow-level classification for tier B specialists and the per-device temporal tier C (Neural DNA) evaluation; packet-derived features only, never raw packets.",
+      "tiers": [
+        "B",
+        "C"
+      ],
+      "teaches": [
+        "port scanning",
+        "floods",
+        "C2 heartbeat",
+        "lateral movement",
+        "exfiltration volume",
+        "IoT botnet behaviour"
+      ],
+      "record_kinds": [
+        "flow",
+        "detection"
+      ],
+      "tasks": [
+        "classify"
+      ],
+      "split": {
+        "strategy": "group_stratified",
+        "group_key": "capture scenario (IoT-23 / CTU) or source host",
+        "fractions": {
+          "train": 0.7,
+          "dev": 0.15,
+          "test": 0.15
+        }
+      },
+      "sources": [
+        "bot-iot",
+        "cic-ids2017",
+        "ciciot2023",
+        "ctu-13",
+        "distrinet-cic-ids-2017-2018-improved",
+        "iot-23",
+        "kitsune-network-attack",
+        "lanl-unified-host-network-2017",
+        "ton-iot",
+        "unsw-nb15"
+      ],
+      "status": "implemented",
+      "notes": "The same scenario-hash grouping as tools/neuro-research/replay_iot23.py. CIC-IDS2017/2018 labels carry documented errors (label_quality low)."
+    },
+    {
+      "id": "soc_reasoning",
+      "number": "06",
+      "name": "SOC Reasoning and Security Investigation",
+      "prefix": "soc",
+      "purpose": "Evidence -> verdict, severity, ATT&CK, false-positive considerations, next step: the explanation tier D's job. Real examples need analyst-reviewed incidents; until then only explicitly labelled synthetic examples exist.",
+      "tiers": [
+        "D"
+      ],
+      "teaches": [
+        "triage",
+        "false-positive reasoning",
+        "investigation steps",
+        "response recommendation (never enforcement)"
+      ],
+      "record_kinds": [
+        "detection",
+        "dns",
+        "flow"
+      ],
+      "tasks": [
+        "triage",
+        "explain"
+      ],
+      "split": {
+        "strategy": "group_stratified",
+        "group_key": "scenario template",
+        "fractions": {
+          "train": 0.7,
+          "dev": 0.15,
+          "test": 0.15
+        }
+      },
+      "sources": [
+        "hf-witfoo-precinct6",
+        "hookprobe-synthetic-soc"
+      ],
+      "status": "partial",
+      "notes": "Synthetic templates only (ground_truth.type = synthetic). The 215-case blind set in tools/neuro-research/eval/blind is evaluation-only and is never ingested here. With 9 templates (groups) no split can be label-balanced; its dev/test splits are format checks, not evaluation."
+    },
+    {
+      "id": "vulnerability_intelligence",
+      "number": "05",
+      "name": "Vulnerability Intelligence",
+      "prefix": "vuln",
+      "purpose": "CVE / CWE / CAPEC / CVSS / KEV facts for retrieval and for tier D answers about exposure; mirrors what hookprobe-exploit (ADR 0024) consumes.",
+      "tiers": [
+        "D"
+      ],
+      "teaches": [
+        "exploitation status",
+        "weakness class",
+        "required action",
+        "ransomware association"
+      ],
+      "record_kinds": [
+        "vulnerability"
+      ],
+      "tasks": [
+        "knowledge"
+      ],
+      "split": {
+        "strategy": "group_hash",
+        "group_key": "CVE id",
+        "fractions": {
+          "train": 0.8,
+          "dev": 0.1,
+          "test": 0.1
+        }
+      },
+      "sources": [
+        "cisa-kev",
+        "cisa-vulnrichment",
+        "cve-list-v5",
+        "github-advisory-db",
+        "mitre-capec",
+        "mitre-cwe"
+      ],
+      "status": "partial",
+      "notes": "KEV builder implemented. CVE-list / NVD CVSS joins are specified. Vulnerability facts change: retrieval at answer time beats weights (HEQK-TRAINING-STRATEGY.md §2)."
+    }
+  ]
+}

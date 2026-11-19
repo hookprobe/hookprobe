@@ -1,0 +1,4 @@
+{"format": "hookprobe-ioc-v1", "generated": "2026-07-08", "indicators": [
+ {"value": "198.51.100.99", "ioc_type": "ip", "family": "Emotet", "source": "abuse.ch Feodo Tracker", "confidence": 0.9, "first_seen": "2022-06-04", "active": true, "mitre": "T1071.001", "tlp": "clear"},
+ {"value": "c2.canary.example", "ioc_type": "domain", "family": "canary", "source": "HookProbe canary", "confidence": 1.0, "first_seen": "2026-07-08", "active": true, "mitre": "", "tlp": "clear"},
+ {"value": "x", "ioc_type": "weird", "source": "x"}]}
