@@ -94,12 +94,16 @@ pub fn probe_stats() -> (u64, u64) {
 /// H4a: one functional probe when due (the main loop calls this every iteration; it costs one comparison until then,
 /// and at most one bounded EL0 excursion per `PROBE_PERIOD_MS`).
 pub fn probe_tick(now_ms: u64) {
-    // one slot today (el0-lansvc); el0-tlshost joins with its own wrong-answer test (a false positive there would
-    // drop every HTTPS session)
-    if unsafe { (*core::ptr::addr_of_mut!(PROBES)).due(now_ms, 1) }.is_none() {
-        return;
-    }
-    if let Some(ok) = crate::lansvc::probe(false) {
+    // two slots in turn (each server is asked once per two periods): el0-lansvc, el0-tlshost
+    let Some(slot) = (unsafe { (*core::ptr::addr_of_mut!(PROBES)).due(now_ms, 2) }) else { return };
+    let (name, r) = match slot {
+        0 => ("el0-lansvc", crate::lansvc::probe(false)),
+        #[cfg(feature = "mctls")]
+        _ => ("el0-tlshost", crate::tlshost::probe(false)),
+        #[cfg(not(feature = "mctls"))]
+        _ => ("el0-tlshost", None),
+    };
+    if let Some(ok) = r {
         unsafe {
             PROBE_STATS.0 += 1;
             if !ok {
@@ -107,7 +111,7 @@ pub fn probe_tick(now_ms: u64) {
             }
         }
         if !ok {
-            arch_aarch64::_print(format_args!(" [SUPERV] functional probe FAILED: el0-lansvc answered wrongly without faulting — reset (journaled, kind probe)\n"));
+            arch_aarch64::_print(format_args!(" [SUPERV] functional probe FAILED: {} answered wrongly without faulting — reset (journaled, kind probe)\n", name));
         }
     }
 }

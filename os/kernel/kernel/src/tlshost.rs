@@ -314,6 +314,38 @@ impl TlsHost {
         }
     }
 
+    /// H4b functional probe: the server parses one well-formed request (must be accepted, with a full record) and one
+    /// malformed request (must be refused) — a server stuck answering "ok" or "bad" to everything fails it. None = not
+    /// asked (hold-off) or it FAULTED (the fault path already handled that); Some(false) = it answered wrongly without
+    /// faulting -> journaled (kind probe) and reset (every TLS session drops, as on a fault). `tamper` (self-test
+    /// only): treat correct answers as wrong, and keep it out of the restart policy.
+    pub fn probe(&mut self, tamper: bool) -> Option<bool> {
+        const GOOD: &[u8] = b"GET /probe HTTP/1.1\r\nHost: heqk\r\n\r\n";
+        const BAD: &[u8] = b"\x00\x01 not http\r\n\r\n";
+        if !self.sup.ready(crate::superv::now_ms()) {
+            return None;
+        }
+        let g = self.call(CMD_HTTP_PARSE, 0, GOOD, 0);
+        if g.status == ST_PANIC {
+            return None;
+        }
+        let b = self.call(CMD_HTTP_PARSE, 0, BAD, 0);
+        if b.status == ST_PANIC {
+            return None;
+        }
+        if g.status == ST_OK && g.plain_len == HTTP_REC_LEN && b.status != ST_OK && !tamper {
+            return Some(true);
+        }
+        let _ = crate::superv::server_probe_failed("el0-tlshost");
+        if tamper {
+            self.sup.fault_uncounted();
+        } else {
+            let _ = self.sup.fault(crate::superv::now_ms());
+        }
+        self.reset();
+        Some(false)
+    }
+
     /// Fail closed and recover: restore the image's data/bss pages, zero the heap and IO region; the re-INIT runs at the
     /// next permitted call (H2: after the supervisor's hold-off, and never nested inside the faulted call).
     fn reset(&mut self) {
@@ -453,6 +485,36 @@ pub fn cert_chain(file: &[u8; CERT_FILE_LEN]) -> ([&[u8]; 4], usize) {
 /// fails THIS request closed (`Bad` → 400) and resets the server (every TLS session drops — D5). The kernel only
 /// bounds-checks the record against its own copy of the bytes and checks UTF-8: no HTTP parsing in EL1. A lying
 /// record can only describe a request the client could have sent itself (the handlers' threat model already).
+/// H4b: the functional probe of the EL0 TLS server (see `TlsHost::probe`). None = no EL0 server.
+pub fn probe(tamper: bool) -> Option<bool> {
+    host()?.probe(tamper)
+}
+
+/// [P-tlshost-probe] (QEMU, after `bring_up`): the probe answers; a simulated wrong answer is journaled kind probe,
+/// the server is reset (a restart, not a fault), `ready` is kept, the deferred re-INIT runs at the next call and the
+/// next probe answers; the journal entry closes Recovered.
+pub fn probe_selftest() -> bool {
+    let Some((r0, f0, t0, ready0)) = host().map(|h| (h.restarts, h.faults, h.timeouts, h.ready)) else {
+        arch_aarch64::_print(format_args!(" [P-tlshost-probe] FAIL — the EL0 TLS server is not loaded\n"));
+        return false;
+    };
+    let saved = crate::superv::swap(hal::superv::Journal::new());
+    let good = probe(false) == Some(true);
+    let wrong = probe(true) == Some(false);
+    let counted = host().is_some_and(|h| h.restarts == r0 + 1 && h.faults == f0 && h.timeouts == t0 && h.ready == ready0);
+    let j = crate::superv::journal();
+    let journaled = j.total() == 1 && j.get(1).is_some_and(|e| e.kind == hal::superv::Kind::Probe && e.rung == hal::superv::Rung::Restart);
+    let again = probe(false) == Some(true) && host().is_some_and(|h| h.restarts == r0 + 1 && h.ready == ready0);
+    let closed = crate::superv::journal().get(1).is_some_and(|e| e.outcome == hal::superv::Outcome::Recovered);
+    let _ = crate::superv::swap(saved);
+    let pass = good && wrong && counted && journaled && again && closed;
+    arch_aarch64::_print(format_args!(
+        " [P-tlshost-probe] {} — autoheal harness H4b, the functional probe of el0-tlshost: a well-formed request accepted + a malformed one refused={} a wrong answer (no fault) is caught={} counted as a restart, not a fault; HTTPS readiness kept={} journaled kind probe={} the deferred re-INIT runs and the next probe answers={} the entry closes Recovered={}\n",
+        if pass { "PASS" } else { "FAIL" }, good, wrong, counted, journaled, again, closed
+    ));
+    pass
+}
+
 pub fn http_parse(buf: &[u8]) -> Option<Result<crate::httpreq::Req<'_>, crate::httpreq::ParseErr>> {
     use crate::httpreq::{ParseErr, Req};
     let h = host()?;
