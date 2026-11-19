@@ -1,0 +1,25 @@
+## exact
+done: 95543405 packets, 27 devices, 37555 device-hours
+peer key exact: rule counts {'exact': 2283606}; name table max 0 entries/device
+DNA peer-key=exact period=dev split=d1: alarms/dev/week median 46.800 max 168.00 (devices >1: 21/21)  AUC 0.9103
+  detection {'dga': 1.0, 'scan': 1.0, 'exfil': 1.0, 'iot23': 1.0, 'all': 1.0}  held-out 1.000  onsets {'dga': 196, 'scan': 196, 'exfil': 197, 'iot23': 197}  -> criteria NOT MET
+## v1-24
+done: 95543405 packets, 27 devices, 37555 device-hours
+peer key v1-24: rule counts {'prefix': 171234, 'named': 1223688, 'local': 888684}; name table max 2014 entries/device
+DNA peer-key=v1-24 period=dev split=d1: alarms/dev/week median 34.300 max 168.00 (devices >1: 18/21)  AUC 0.9842
+  detection {'dga': 1.0, 'scan': 1.0, 'exfil': 1.0, 'iot23': 1.0, 'all': 1.0}  held-out 1.000  onsets {'dga': 196, 'scan': 196, 'exfil': 197, 'iot23': 197}  -> criteria NOT MET
+## v1-16
+done: 95543405 packets, 27 devices, 37555 device-hours
+peer key v1-16: rule counts {'prefix': 171234, 'named': 1223688, 'local': 888684}; name table max 2014 entries/device
+DNA peer-key=v1-16 period=dev split=d1: alarms/dev/week median 34.300 max 168.00 (devices >1: 18/21)  AUC 0.9882
+  detection {'dga': 1.0, 'scan': 1.0, 'exfil': 1.0, 'iot23': 1.0, 'all': 1.0}  held-out 1.000  onsets {'dga': 196, 'scan': 196, 'exfil': 197, 'iot23': 197}  -> criteria NOT MET
+## v2-24
+done: 95543405 packets, 27 devices, 37555 device-hours
+peer key v2-24: rule counts {'prefix': 3850, 'class': 392183, 'named': 1036117, 'local': 851456}; name table max 2014 entries/device
+DNA peer-key=v2-24 period=dev split=d1: alarms/dev/week median 29.000 max 168.00 (devices >1: 18/21)  AUC 0.9948
+  detection {'dga': 1.0, 'scan': 1.0, 'exfil': 1.0, 'iot23': 1.0, 'all': 1.0}  held-out 1.000  onsets {'dga': 196, 'scan': 196, 'exfil': 197, 'iot23': 197}  -> criteria NOT MET
+## v2-16
+done: 95543405 packets, 27 devices, 37555 device-hours
+peer key v2-16: rule counts {'prefix': 3850, 'class': 392183, 'named': 1036117, 'local': 851456}; name table max 2014 entries/device
+DNA peer-key=v2-16 period=dev split=d1: alarms/dev/week median 29.000 max 168.00 (devices >1: 18/21)  AUC 0.9949
+  detection {'dga': 1.0, 'scan': 1.0, 'exfil': 1.0, 'iot23': 1.0, 'all': 1.0}  held-out 1.000  onsets {'dga': 196, 'scan': 196, 'exfil': 197, 'iot23': 197}  -> criteria NOT MET
