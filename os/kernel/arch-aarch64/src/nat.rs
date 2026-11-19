@@ -80,6 +80,27 @@ static mut HIDX: [u16; HN] = [0; HN];
 /// ADR 0067 D1 work counters: the most table entries one new flow examined, and the bytes the last
 /// rewrite checksummed.
 static mut SCAN_MAX: u32 = 0;
+/// New-flow slot allocation without a table scan (ADR 0067 E3). Slots `FRESH..N` were never used;
+/// `FREE[..NFREE]` are slots `flush_wan` released; `HAND` is where the full-table sweep resumes.
+/// Invariant: a slot is unused exactly when it is `>= FRESH` or on the `FREE` stack.
+const SWEEP: usize = 32;
+static mut FRESH: u16 = 0;
+static mut FREE: [u16; N] = [0; N];
+static mut NFREE: u16 = 0;
+static mut HAND: u16 = 0;
+
+/// Forget every mapping (the boot self-tests, which own the table before any traffic).
+fn reset_all() {
+    unsafe {
+        for e in (*core::ptr::addr_of_mut!(TABLE)).iter_mut() {
+            *e = EMPTY;
+        }
+        (*core::ptr::addr_of_mut!(HIDX)).fill(0);
+        FRESH = 0;
+        NFREE = 0;
+        HAND = 0;
+    }
+}
 static mut CSUM_BYTES: u32 = 0;
 
 #[inline]
@@ -198,38 +219,50 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
         t[i].in_if = in_if;
         return i;
     }
-    // A NEW flow (once per mapping, not per packet): a free or expired slot, else the least recently used.
-    let mut free: Option<usize> = None;
-    let mut oldest = (0usize, u64::MAX);
+    // A NEW flow (once per mapping, not per packet). ADR 0067 E3: no table scan.
+    //   1. a slot `flush_wan` released, 2. a slot never used yet, 3. the table is full: look at the
+    //   next SWEEP slots from a rotating hand and take the first expired one, else the least recently
+    //   used of those SWEEP. A flood of new flows therefore costs a bounded SWEEP entries each (it was
+    //   the whole table, 4,096 entries of ~100 bytes, per new flow).
     let mut scanned = 0u32;
-    for i in 0..N {
-        let e = &t[i];
-        scanned += 1;
-        if e.used {
-            if now.wrapping_sub(e.last) > timeout(e.proto) {
-                free = Some(i); // expired — reusable
-                break;
-            }
-            if e.last < oldest.1 {
-                oldest = (i, e.last);
-            }
+    let i = unsafe {
+        if NFREE > 0 {
+            NFREE -= 1;
+            (*core::ptr::addr_of!(FREE))[NFREE as usize] as usize
+        } else if (FRESH as usize) < N {
+            FRESH += 1;
+            FRESH as usize - 1
         } else {
-            free = Some(i);
-            break;
+            let mut pick: Option<usize> = None;
+            let mut oldest = (HAND as usize, u64::MAX);
+            for k in 0..SWEEP {
+                let i = (HAND as usize + k) % N;
+                let e = &t[i];
+                scanned += 1;
+                if now.wrapping_sub(e.last) > timeout(e.proto) {
+                    pick = Some(i); // expired — reusable
+                    break;
+                }
+                if e.last < oldest.1 {
+                    oldest = (i, e.last);
+                }
+            }
+            let i = match pick {
+                Some(i) => i,
+                None => {
+                    st.table_evict += 1;
+                    oldest.0
+                }
+            };
+            HAND = ((i + 1) % N) as u16;
+            i
         }
-    }
+    };
     unsafe {
         if scanned > SCAN_MAX {
             SCAN_MAX = scanned;
         }
     }
-    let i = match free {
-        Some(i) => i,
-        None => {
-            st.table_evict += 1;
-            oldest.0
-        }
-    };
     if t[i].used {
         index_remove(t, i);
     }
@@ -621,6 +654,10 @@ pub fn flush_wan(old: [u8; 4]) -> usize {
         if t[i].used && t[i].wan == old {
             index_remove(t, i);
             t[i] = EMPTY;
+            unsafe {
+                (*core::ptr::addr_of_mut!(FREE))[NFREE as usize] = i as u16;
+                NFREE += 1;
+            }
             n += 1;
         }
     }
@@ -685,10 +722,7 @@ pub fn for_each_flow(now: u64, f: &mut dyn FnMut(&FlowView)) {
 pub fn index_selftest() -> bool {
     let t = unsafe { &mut *core::ptr::addr_of_mut!(TABLE) };
     // runs at boot before any NAT traffic (the table is empty before and after; no 400 KB stack copy)
-    for e in t.iter_mut() {
-        *e = EMPTY;
-    }
-    unsafe { (*core::ptr::addr_of_mut!(HIDX)).fill(0) };
+    reset_all();
     let mut st = NatStats::default();
     unsafe { SCAN_MAX = 0 };
     let key = |k: usize| ([10u8, 99, (k >> 8) as u8, k as u8], 1024 + (k % 7000) as u16);
@@ -719,7 +753,16 @@ pub fn index_selftest() -> bool {
         let (ip, port) = key(k);
         index_find(t, 6, &ip, port).is_none()
     });
-    crate::perfctr::emit("nat_newflow_scan_max", unsafe { SCAN_MAX } as u64);
+    // 3. ADR 0067 E3: no new flow examined more than SWEEP entries (it was the whole table), and a slot
+    //    `flush_wan` released is the next one handed out, with no sweep
+    let scan_max = unsafe { SCAN_MAX };
+    let bounded = scan_max as usize <= SWEEP;
+    t[7].wan = [203, 0, 113, 7];
+    let evicts = st.table_evict;
+    let reuse = flush_wan([203, 0, 113, 7]) == 1
+        && lookup_or_alloc(6, 0, &[0; 6], &[10, 98, 0, 1], 4242, 200_000, &mut st) == 7
+        && st.table_evict == evicts;
+    crate::perfctr::emit("nat_newflow_scan_max", scan_max as u64);
     // a full-size TCP segment through the SNAT rewrite: how many bytes the rewrite checksums
     {
         let mut f = [0u8; 1514];
@@ -738,13 +781,13 @@ pub fn index_selftest() -> bool {
         let _ = outbound(&f, IF_ETH1, &[10, 66, 0], &[192, 0, 2, 1], &[2; 6], &[4; 6], &mut out, 200_000, &mut st);
         crate::perfctr::emit("nat_rewrite_csum_bytes", unsafe { CSUM_BYTES } as u64);
     }
-    for e in t.iter_mut() {
-        *e = EMPTY;
-    }
-    unsafe { (*core::ptr::addr_of_mut!(HIDX)).fill(0) };
-    let pass = fill && hits && consistent && gone;
+    reset_all();
+    let pass = fill && hits && consistent && gone && bounded && reuse;
     crate::_print(format_args!(
         " [P-nat-index] {} — NAT table {} mappings with a hashed forward index (was 256 with a linear scan per packet): full table each flow in its own slot={} every lookup O(1) to its entry={} 512 evictions keep the index exact={} evicted keys no longer resolve={}\n",
         if pass { "PASS" } else { "FAIL" }, N, fill, hits, consistent, gone));
+    crate::_print(format_args!(
+        "   new-flow allocation (ADR 0067 E3): entries examined per new flow max={} bounded to {}={} a released slot is reused with no eviction={}\n",
+        scan_max, SWEEP, bounded, reuse));
     pass
 }
