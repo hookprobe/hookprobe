@@ -11,7 +11,7 @@
 //! total length before forwarding. Entries expire by `last` (cntpct) and are LRU-
 //! evicted when full.
 
-use hal::{inet_csum, pseudo_sum};
+use hal::{csum_adjust, inet_csum, pseudo_sum};
 
 /// Concurrent IPv4 mappings (audit 2026-11-10 A7: a household's phones, TVs and IoT easily hold more than
 /// the old 256 flows; the forward lookup is hashed, so the size no longer costs per-packet time).
@@ -404,6 +404,55 @@ fn fix_csums(f: &mut [u8], ihl: usize, ip_end: usize) {
     }
 }
 
+/// ADR 0067 E4 — the per-packet checksum fix-up, incremental (RFC 1624). `f` is the frame as received
+/// (its checksums as the sender wrote them), `out` the rewritten copy. Only the 16-bit words the NAT
+/// rewrote are summed: the TTL word and the addresses for the IPv4 header; the addresses (pseudo
+/// header), the ports and, on a SYN, the TCP options (the MSS clamp) for TCP; addresses and ports for
+/// UDP (a zero UDP checksum stays zero); the echo id for ICMP. `fix_csums` re-summed the whole
+/// datagram per packet; it stays as the self-test oracle and for the rare ICMP-error translation.
+/// A checksum that was wrong on arrival stays wrong: the receiver drops it, as without a NAT.
+fn fix_csums_incr(f: &[u8], out: &mut [u8], ihl: usize, ip_end: usize) {
+    let mut c = u16::from_be_bytes([f[24], f[25]]);
+    c = csum_adjust(c, &f[22..24], &out[22..24]);
+    c = csum_adjust(c, &f[26..34], &out[26..34]);
+    out[24..26].copy_from_slice(&c.to_be_bytes());
+    let mut summed = 10usize;
+    let l4 = 14 + ihl;
+    match f[23] {
+        6 if l4 + 20 <= ip_end => {
+            let mut c = u16::from_be_bytes([f[l4 + 16], f[l4 + 17]]);
+            c = csum_adjust(c, &f[26..34], &out[26..34]);
+            c = csum_adjust(c, &f[l4..l4 + 4], &out[l4..l4 + 4]);
+            summed += 12;
+            let doff = ((f[l4 + 12] >> 4) as usize) * 4;
+            if f[l4 + 13] & 0x02 != 0 && doff > 20 && l4 + doff <= ip_end {
+                c = csum_adjust(c, &f[l4 + 20..l4 + doff], &out[l4 + 20..l4 + doff]);
+                summed += doff - 20;
+            }
+            out[l4 + 16..l4 + 18].copy_from_slice(&c.to_be_bytes());
+        }
+        17 if l4 + 8 <= ip_end => {
+            let had = u16::from_be_bytes([f[l4 + 6], f[l4 + 7]]);
+            if had != 0 {
+                let mut c = csum_adjust(had, &f[26..34], &out[26..34]);
+                c = csum_adjust(c, &f[l4..l4 + 4], &out[l4..l4 + 4]);
+                if c == 0 {
+                    c = 0xffff;
+                }
+                out[l4 + 6..l4 + 8].copy_from_slice(&c.to_be_bytes());
+                summed += 12;
+            }
+        }
+        1 if l4 + 8 <= ip_end => {
+            let c = csum_adjust(u16::from_be_bytes([f[l4 + 2], f[l4 + 3]]), &f[l4 + 4..l4 + 6], &out[l4 + 4..l4 + 6]);
+            out[l4 + 2..l4 + 4].copy_from_slice(&c.to_be_bytes());
+            summed += 2;
+        }
+        _ => {}
+    }
+    unsafe { CSUM_BYTES = summed as u32 };
+}
+
 /// Parse an IPv4 frame: (ihl, ip_end bounded by the frame, proto). None if not IPv4 /
 /// truncated / fragmented (fragments are not NATed in v1).
 fn parse_v4(f: &[u8]) -> Option<(usize, usize, u8)> {
@@ -514,7 +563,7 @@ pub fn outbound_redirect(f: &[u8], in_if: u8, inside_net: &[u8; 3], dns: Option<
         }
         e.bytes_out += (ip_end - 14) as u64;
     }
-    fix_csums(out, ihl, ip_end);
+    fix_csums_incr(f, out, ihl, ip_end);
     st.out_fwd += 1;
     Some(ip_end)
 }
@@ -633,7 +682,7 @@ pub fn inbound(f: &[u8], wan_ip: &[u8; 4], wan_mac: &[u8; 6], inside_macs: [&[u8
     if e.dnat_from != [0; 4] && proto == 17 && u16::from_be_bytes([f[l4], f[l4 + 1]]) == 53 {
         out[26..30].copy_from_slice(&e.dnat_from);
     }
-    fix_csums(out, ihl, ip_end);
+    fix_csums_incr(f, out, ihl, ip_end);
     if let Some(i) = (ext as usize).checked_sub(EXT_BASE as usize).filter(|&i| i < N) {
         unsafe { (*core::ptr::addr_of_mut!(TABLE))[i].bytes_in += (ip_end - 14) as u64 };
     }
@@ -686,6 +735,107 @@ pub fn flush_wan_selftest() -> bool {
     });
     let rest = flush_wan(b) == 4;
     removed && only && rest
+}
+
+/// `[P-nat-csum]` (ADR 0067 E4) — the incremental checksum fix-up equals the full recompute. Frames
+/// with valid checksums go through the SNAT rewrite and back; each result is compared byte for byte
+/// with the same frame after `fix_csums` (the full recompute, the oracle).
+fn csum_selftest() -> bool {
+    // (protocol, IPv4 total length, TCP SYN carrying an MSS option, UDP sent without a checksum)
+    const CASES: [(u8, usize, bool, bool); 7] =
+        [(6, 1500, false, false), (6, 44, true, false), (6, 41, false, false), (17, 1500, false, false), (17, 61, false, false), (17, 60, false, true), (1, 84, false, false)];
+    #[allow(clippy::too_many_arguments)]
+    fn build(f: &mut [u8; 1514], proto: u8, tot: usize, syn: bool, udp0: bool, src: [u8; 4], dst: [u8; 4], sport: u16, dport: u16, reply: bool) {
+        f.fill(0);
+        f[12] = 0x08;
+        f[14] = 0x45;
+        f[16..18].copy_from_slice(&(tot as u16).to_be_bytes());
+        f[22] = 64;
+        f[23] = proto;
+        f[26..30].copy_from_slice(&src);
+        f[30..34].copy_from_slice(&dst);
+        for (i, b) in f.iter_mut().enumerate().take(14 + tot).skip(34) {
+            *b = (i * 7 + 3) as u8;
+        }
+        match proto {
+            6 => {
+                f[34..36].copy_from_slice(&sport.to_be_bytes());
+                f[36..38].copy_from_slice(&dport.to_be_bytes());
+                f[46] = if syn { 0x60 } else { 0x50 };
+                f[47] = if syn && reply { 0x12 } else if syn { 0x02 } else { 0x10 };
+                f[50] = 0;
+                f[51] = 0;
+                if syn {
+                    f[54..58].copy_from_slice(&[2, 4, 0x23, 0x28]); // MSS 9000: always above the clamp
+                }
+            }
+            17 => {
+                f[34..36].copy_from_slice(&sport.to_be_bytes());
+                f[36..38].copy_from_slice(&dport.to_be_bytes());
+                f[38..40].copy_from_slice(&((tot - 20) as u16).to_be_bytes());
+                f[40] = 0;
+                f[41] = if udp0 { 0 } else { 1 }; // non-zero: `fix_csums` then computes it
+            }
+            _ => {
+                f[34] = if reply { 0 } else { 8 };
+                f[35] = 0;
+                f[36] = 0;
+                f[37] = 0;
+                f[38..40].copy_from_slice(&(if reply { dport } else { sport }).to_be_bytes());
+            }
+        }
+        fix_csums(&mut f[..], 20, 14 + tot);
+    }
+    let (wan, remote, client) = ([192u8, 0, 2, 1], [93u8, 184, 216, 34], [10u8, 66, 0, 5]);
+    let (mut f, mut out, mut want) = ([0u8; 1514], [0u8; 1514], [0u8; 1514]);
+    let mut st = NatStats::default();
+    let (mut out_ok, mut in_ok, mut big) = (true, true, 0u32);
+    for (k, &(proto, tot, syn, udp0)) in CASES.iter().enumerate() {
+        let sport = 50_000 + k as u16;
+        build(&mut f, proto, tot, syn, udp0, client, remote, sport, 443, false);
+        let n = match outbound(&f[..14 + tot], IF_ETH1, &[10, 66, 0], &wan, &[2; 6], &[4; 6], &mut out, 200_000, &mut st) {
+            Some(n) => n,
+            None => {
+                out_ok = false;
+                continue;
+            }
+        };
+        if k == 0 {
+            big = unsafe { CSUM_BYTES };
+        }
+        want[..n].copy_from_slice(&out[..n]);
+        fix_csums(&mut want[..], 20, n);
+        out_ok &= out[..n] == want[..n] && (!udp0 || (out[40] == 0 && out[41] == 0));
+        // the reply, addressed to the external port the mapping got
+        let ext = if proto == 1 { u16::from_be_bytes([out[38], out[39]]) } else { u16::from_be_bytes([out[34], out[35]]) };
+        build(&mut f, proto, tot, syn, udp0, remote, wan, 443, ext, true);
+        match inbound(&f[..14 + tot], &wan, &[0; 6], [&[6; 6], &[8; 6]], &mut out, 200_001, &mut st) {
+            Some((n, _)) => {
+                want[..n].copy_from_slice(&out[..n]);
+                fix_csums(&mut want[..], 20, n);
+                in_ok &= out[..n] == want[..n] && out[30..34] == client;
+            }
+            None => in_ok = false,
+        }
+    }
+    let clamped = st.mss_clamped == 2; // the SYN out and the SYN-ACK back: the option path was exercised
+    // a checksum that was wrong on arrival is not repaired
+    build(&mut f, 6, 1500, false, false, client, remote, 50_100, 443, false);
+    f[50] ^= 0x01;
+    let kept_wrong = match outbound(&f[..1514], IF_ETH1, &[10, 66, 0], &wan, &[2; 6], &[4; 6], &mut out, 200_002, &mut st) {
+        Some(n) => {
+            want[..n].copy_from_slice(&out[..n]);
+            fix_csums(&mut want[..], 20, n);
+            out[..n] != want[..n] && out[14..50] == want[14..50]
+        }
+        None => false,
+    };
+    crate::perfctr::emit("nat_rewrite_csum_bytes", big as u64);
+    let pass = out_ok && in_ok && clamped && kept_wrong && big <= 22;
+    crate::_print(format_args!(
+        " [P-nat-csum] {} — ADR 0067 E4: the NAT rewrite updates checksums incrementally (RFC 1624) over the words it changed, not the whole datagram: outbound equals the full recompute over TCP / TCP SYN with a clamped MSS / odd length / UDP / UDP without a checksum (stays zero) / ICMP echo={} the replies inbound equal it too={} the MSS option path ran both ways={} a checksum wrong on arrival is not repaired={} bytes summed for a 1,500-byte TCP segment={} (was 1500)\n",
+        if pass { "PASS" } else { "FAIL" }, out_ok, in_ok, clamped, kept_wrong, big));
+    pass
 }
 
 /// One translated flow, read-only (Observe → flows). `dst` is the first destination the mapping
@@ -763,26 +913,9 @@ pub fn index_selftest() -> bool {
         && lookup_or_alloc(6, 0, &[0; 6], &[10, 98, 0, 1], 4242, 200_000, &mut st) == 7
         && st.table_evict == evicts;
     crate::perfctr::emit("nat_newflow_scan_max", scan_max as u64);
-    // a full-size TCP segment through the SNAT rewrite: how many bytes the rewrite checksums
-    {
-        let mut f = [0u8; 1514];
-        f[12] = 0x08;
-        f[14] = 0x45;
-        f[16..18].copy_from_slice(&1500u16.to_be_bytes());
-        f[22] = 64;
-        f[23] = 6;
-        f[26..30].copy_from_slice(&[10, 66, 0, 5]);
-        f[30..34].copy_from_slice(&[93, 184, 216, 34]);
-        f[34..36].copy_from_slice(&50000u16.to_be_bytes());
-        f[36..38].copy_from_slice(&443u16.to_be_bytes());
-        f[46] = 0x50;
-        let mut out = [0u8; 1514];
-        unsafe { CSUM_BYTES = 0 };
-        let _ = outbound(&f, IF_ETH1, &[10, 66, 0], &[192, 0, 2, 1], &[2; 6], &[4; 6], &mut out, 200_000, &mut st);
-        crate::perfctr::emit("nat_rewrite_csum_bytes", unsafe { CSUM_BYTES } as u64);
-    }
+    let csum = csum_selftest();
     reset_all();
-    let pass = fill && hits && consistent && gone && bounded && reuse;
+    let pass = fill && hits && consistent && gone && bounded && reuse && csum;
     crate::_print(format_args!(
         " [P-nat-index] {} — NAT table {} mappings with a hashed forward index (was 256 with a linear scan per packet): full table each flow in its own slot={} every lookup O(1) to its entry={} 512 evictions keep the index exact={} evicted keys no longer resolve={}\n",
         if pass { "PASS" } else { "FAIL" }, N, fill, hits, consistent, gone));

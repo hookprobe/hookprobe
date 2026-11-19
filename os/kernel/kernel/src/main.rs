@@ -14683,8 +14683,18 @@ fn dnsfwd_selftest() {
         buf[34..36].copy_from_slice(&sp.to_be_bytes());
         buf[36..38].copy_from_slice(&dp.to_be_bytes());
         buf[38..40].copy_from_slice(&28u16.to_be_bytes());
-        buf[40] = 0x12; // non-zero UDP checksum placeholder -> recomputed by NAT
         buf[42..62].copy_from_slice(b"dns-query-payload-01");
+        // the sender's own valid checksums: the NAT updates them incrementally (ADR 0067 E4) and does
+        // not repair a wrong one, so a test frame must carry what a real stack would send
+        let ic = csum16(&buf[14..34], 0);
+        buf[24..26].copy_from_slice(&ic.to_be_bytes());
+        let mut ps = 0u32;
+        for k in (26..34).step_by(2) {
+            ps += u16::from_be_bytes([buf[k], buf[k + 1]]) as u32;
+        }
+        ps += 17 + 28;
+        let uc = csum16(&buf[34..62], ps);
+        buf[40..42].copy_from_slice(&(if uc == 0 { 0xffff } else { uc }).to_be_bytes());
         14 + tot as usize
     }
     let (ap_ip, resolver, wan_ip) = ([10u8, 99, 0, 1], [10u8, 200, 0, 1], [10u8, 200, 0, 14]);
