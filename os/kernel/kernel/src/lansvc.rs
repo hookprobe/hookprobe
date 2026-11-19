@@ -187,7 +187,11 @@ mod el0 {
             if st == ST_PANIC {
                 self.faults += 1;
                 let _ = crate::superv::server_fault("el0-lansvc", how == crate::Excursion::Timeout); // H1
-                let _ = self.sup.fault(crate::superv::now_ms());
+                if crate::superv::fault_counts() {
+                    let _ = self.sup.fault(crate::superv::now_ms());
+                } else {
+                    self.sup.fault_uncounted();
+                }
                 self.reset();
                 return (ST_PANIC, 0);
             }

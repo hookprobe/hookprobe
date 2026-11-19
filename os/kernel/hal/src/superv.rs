@@ -266,18 +266,24 @@ pub struct Entry {
     /// The first hold-off after the grace; doubles per further consecutive fault up to `backoff_max_ms`.
     pub backoff_ms: u64,
     pub backoff_max_ms: u64,
+    /// H3b: how long the component must run WITHOUT a fault before its streak is forgotten. 0 = one good call
+    /// forgets it. Non-zero closes the flapping hole: a server that alternates fault / good call would otherwise
+    /// restart on every other call for ever, never held off. The station-facing Wi-Fi servers keep 0 — a hostile
+    /// station that can fault them must not be able to stretch the refusal window for every other station (they
+    /// have their own bounds: per-station poisoning in el0-wpa, the bus-fault ladder for el0-wifi).
+    pub stable_ms: u64,
 }
 
 /// The supervisor table. `wifi` is the Wi-Fi link as a whole (its ladder lives in `wifiheal`): the only critical
 /// entry — its ladder ends in one reboot, then degrade. The EL0 servers restart in place and never reboot the device.
 pub const TABLE: [Entry; 7] = [
-    Entry { name: "el0-wifi", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000 },
-    Entry { name: "el0-wpa", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000 },
-    Entry { name: "el0-tlshost", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
-    Entry { name: "el0-lansvc", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
-    Entry { name: "el0-hsh", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
-    Entry { name: "wifi", critical: true, exhausted: Exhausted::RebootOnce, grace: 0, backoff_ms: 0, backoff_max_ms: 0 },
-    Entry { name: "el0-neuro", critical: false, exhausted: Exhausted::Degrade, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000 },
+    Entry { name: "el0-wifi", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0 },
+    Entry { name: "el0-wpa", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0 },
+    Entry { name: "el0-tlshost", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
+    Entry { name: "el0-lansvc", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
+    Entry { name: "el0-hsh", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
+    Entry { name: "wifi", critical: true, exhausted: Exhausted::RebootOnce, grace: 0, backoff_ms: 0, backoff_max_ms: 0, stable_ms: 0 },
+    Entry { name: "el0-neuro", critical: false, exhausted: Exhausted::Degrade, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
 ];
 
 /// The table entry of a component (None = not supervised by name).
@@ -304,11 +310,15 @@ pub struct Sup {
     pub entry: &'static Entry,
     pub streak: u32,
     pub next_ok_ms: u64,
+    /// When the last fault happened (the streak is forgotten `entry.stable_ms` after it).
+    pub last_fault_ms: u64,
+    /// A fault since the last good call (the journal's close signal).
+    open: bool,
 }
 
 impl Sup {
     pub const fn new(entry: &'static Entry) -> Self {
-        Sup { entry, streak: 0, next_ok_ms: 0 }
+        Sup { entry, streak: 0, next_ok_ms: 0, last_fault_ms: 0, open: false }
     }
     /// May a call run now?
     pub fn ready(&self, now_ms: u64) -> bool {
@@ -318,17 +328,31 @@ impl Sup {
     pub fn left_ms(&self, now_ms: u64) -> u64 {
         self.next_ok_ms.saturating_sub(now_ms)
     }
-    /// The component faulted (it has been reset): returns the hold-off before its next call.
+    /// The component faulted (it has been reset): returns the hold-off before its next call. A streak older than
+    /// the entry's stable period is forgotten first.
     pub fn fault(&mut self, now_ms: u64) -> u64 {
+        if self.entry.stable_ms > 0 && self.streak > 0 && now_ms.saturating_sub(self.last_fault_ms) >= self.entry.stable_ms {
+            self.streak = 0;
+        }
         self.streak = self.streak.saturating_add(1);
+        self.last_fault_ms = now_ms;
+        self.open = true;
         let h = self.entry.hold_ms(self.streak);
         self.next_ok_ms = now_ms + h;
         h
     }
-    /// A good call: the streak is over. Returns whether it ended one (the journal's close signal).
+    /// A fault that does NOT count for the policy (a self-test's deliberate one): only the journal's close signal.
+    pub fn fault_uncounted(&mut self) {
+        self.open = true;
+    }
+    /// A good call. Returns whether it ended a fault episode (the journal's close signal). With `stable_ms == 0` the
+    /// streak is forgotten at once; otherwise it stays until the component has been fault-free for that long.
     pub fn ok(&mut self) -> bool {
-        let was = self.streak > 0;
-        self.streak = 0;
+        let was = self.open;
+        self.open = false;
+        if self.entry.stable_ms == 0 {
+            self.streak = 0;
+        }
         was
     }
 }
@@ -492,7 +516,9 @@ mod tests {
         assert_eq!(s.left_ms(1_010), 40);
         assert!(s.ok());
         assert!(!s.ok());
-        assert_eq!(s.fault(2_000), 0); // a good call reset the streak
+        assert_eq!(s.fault(2_000), 100); // H3b: a good call does not forget the streak (flapping)...
+        assert!(s.ok());
+        assert_eq!(s.fault(2_000 + t.stable_ms), 0); // ...a fault-free stable period does
         // a server that faults on every call never restarts faster than the cap allows
         let mut loopy = Sup::new(t);
         let (mut now, mut restarts) = (0u64, 0u32);
@@ -504,6 +530,39 @@ mod tests {
             now += 1;
         }
         assert!(restarts < 25, "{restarts} restarts in 60 s");
+    }
+
+    #[test]
+    fn flapping_is_held_off() {
+        // a server that alternates fault / good call: with a stable period the hold-off still grows to the cap
+        let t = entry("el0-tlshost").unwrap();
+        assert!(t.stable_ms > 0);
+        let mut s = Sup::new(t);
+        let (mut now, mut restarts, mut last_hold) = (0u64, 0u32, 0u64);
+        while now < 60_000 {
+            if s.ready(now) {
+                last_hold = s.fault(now);
+                restarts += 1;
+                now += last_hold + 1;
+                assert!(s.ready(now));
+                assert!(s.ok()); // the call after the restart works...
+                assert!(!s.ok());
+            } else {
+                now += 1;
+            }
+        }
+        assert_eq!(last_hold, t.backoff_max_ms); // ...and yet it reached the cap
+        assert!(restarts < 30, "{restarts} restarts in 60 s of flapping");
+        // fault-free for the stable period: forgotten, the next one-off fault restarts at once again
+        assert_eq!(s.fault(now + t.stable_ms), 0);
+        // the station-facing servers forget at the first good call (a hostile station must not stretch the window)
+        let w = entry("el0-wpa").unwrap();
+        assert_eq!(w.stable_ms, 0);
+        let mut s = Sup::new(w);
+        for i in 0..20u64 {
+            assert_eq!(s.fault(i * 1_000), 50);
+            assert!(s.ok());
+        }
     }
 
     #[test]
