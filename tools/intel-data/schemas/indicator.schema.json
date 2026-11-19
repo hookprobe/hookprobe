@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/indicator/1",
+  "title": "IndicatorOfCompromise",
+  "description": "A threat-feed assertion about one observable. Field set is a superset of hookprobe-ioc-v1 (ADR 0027 D1) so the existing feed format and heqk's IOC.TXT pack (os/kernel/kernel/src/ioc.rs) can be generated from it; STIX 2.1 indicator / MISP attribute fields map 1:1 (see HEQK-SECURITY-INTELLIGENCE.md §4). Indicators are LIVE INTELLIGENCE: they feed lookups and evaluation, and enter model training only as examples of patterns, never as a memorised list.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "value", "ioc_type", "family", "threat_type", "confidence", "first_seen", "last_seen", "expires", "active", "tlp", "attack_mapping", "tags"],
+  "properties": {
+    "schema": { "const": "heqk.indicator/1" },
+    "value": { "type": "string", "minLength": 1, "maxLength": 2048 },
+    "ioc_type": { "type": "string", "enum": ["ip", "cidr", "domain", "url", "sha256", "sha1", "md5", "ja3", "ja4", "ja4s", "x509_sha1", "asn"] },
+    "family": { "type": ["string", "null"], "maxLength": 128 },
+    "threat_type": {
+      "type": ["string", "null"],
+      "enum": ["botnet_cc", "payload_delivery", "malware_download", "phishing", "c2", "scanner", "spam", "compromised", "drop_list", "other", null]
+    },
+    "confidence": {
+      "description": "The source's own confidence mapped to 0..1, or null when the source gives none. Never invented.",
+      "$ref": "common.schema.json#/$defs/nullable_probability"
+    },
+    "first_seen": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+    "last_seen": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+    "expires": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+    "active": { "type": ["boolean", "null"] },
+    "tlp": { "type": "string", "enum": ["clear", "green", "amber", "amber+strict", "red"] },
+    "attack_mapping": { "$ref": "common.schema.json#/$defs/attack_mapping" },
+    "tags": { "type": "array", "items": { "type": "string", "maxLength": 64 }, "maxItems": 32 }
+  }
+}
