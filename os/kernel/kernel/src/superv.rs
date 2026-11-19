@@ -37,21 +37,36 @@ fn mark(c: u8) {
 
 /// Set while a self-test faults a server ON PURPOSE (some run at every boot, on metal too): those faults are
 /// journaled as `planned`, so an `exception` in the journal is always a real one.
-static mut DELIBERATE: bool = false;
+static mut DELIBERATE: u8 = 0; // 0 = no, 1 = deliberate (not counted by the restart policy), 2 = a policy drill (counted)
 
-/// Run `f`, journaling any server fault inside it as `planned` (a self-test's deliberate fault).
+/// Run `f`, journaling any server fault inside it as `planned` (a self-test's deliberate fault) and keeping it out
+/// of the restart policy: a boot self-test must not leave the server with a fault streak.
 pub fn deliberate<T>(f: impl FnOnce() -> T) -> T {
-    let was = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(DELIBERATE), true) };
+    scoped(1, f)
+}
+
+/// Like [`deliberate`], but the fault COUNTS for the restart policy (a self-test of the hold-off itself).
+pub fn drill<T>(f: impl FnOnce() -> T) -> T {
+    scoped(2, f)
+}
+
+fn scoped<T>(mode: u8, f: impl FnOnce() -> T) -> T {
+    let was = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(DELIBERATE), mode) };
     let r = f();
     unsafe { DELIBERATE = was };
     r
+}
+
+/// Does a fault right now count for the restart policy (the streak / hold-off)? Not inside [`deliberate`].
+pub fn fault_counts() -> bool {
+    unsafe { DELIBERATE != 1 }
 }
 
 /// An EL0 server faulted (`budget` = it overran its time budget) and is being reset + restarted.
 pub fn server_fault(name: &str, budget: bool) -> u32 {
     let c = component_id(name);
     mark(c);
-    let kind = if unsafe { DELIBERATE } {
+    let kind = if unsafe { DELIBERATE } != 0 {
         Kind::Planned
     } else if budget {
         Kind::Budget
@@ -252,7 +267,7 @@ pub fn selftest() -> bool {
             }
             now += 10;
         }
-        one_off && held && n < 25 && s.ok() && s.fault(70_000) == 0
+        one_off && held && n < 25 && s.ok() && s.fault(80_000) == 0
     });
     // the API document, rendered from the journal the test just filled: well-formed (brackets balance outside strings)
     #[cfg(feature = "netsvc")]
@@ -268,7 +283,7 @@ pub fn selftest() -> bool {
     let plan_rec = arch_aarch64::crashrec::planned_selftest();
     let ok = ladder && degrade && again && fault && unknown && table && policy && doc && plan_rec;
     arch_aarch64::_print(format_args!(
-        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={} | H2 supervisor table: only the Wi-Fi link is critical, no other entry may reboot={} a one-off server fault restarts at once, consecutive faults are held off (50 ms doubling, capped 5 s: < 25 restarts in 60 s of constant faulting), a good call resets it={} /api/recoveries renders well-formed={} H3a: the planned-reset reason is taken once, a torn / stale record never reads back={}\n",
+        " [P-superv] {} — autoheal harness H1, the recovery journal: Wi-Fi kick (repeat folded) -> bounce escalates it, a healthy tick closes the bounce Recovered with its time={} a degrade closes Failed={} an EL0 server fault opens one entry (budget-overrun), a second fault folds into it={} the next good call closes it Recovered, exactly one entry={} unknown components map to other={} | H2 supervisor table: only the Wi-Fi link is critical, no other entry may reboot={} a one-off server fault restarts at once, consecutive faults are held off (50 ms doubling, capped 5 s: < 25 restarts in 60 s of constant faulting), a fault-free stable period resets it (H3b: a good call alone does not — flapping is held off too)={} /api/recoveries renders well-formed={} H3a: the planned-reset reason is taken once, a torn / stale record never reads back={}\n",
         if ok { "PASS" } else { "FAIL" }, ladder, degrade, again, fault, unknown, table, policy, doc, plan_rec
     ));
     ok
