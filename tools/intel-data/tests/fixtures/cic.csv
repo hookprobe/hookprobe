@@ -1,0 +1,4 @@
+Flow ID, Source IP, Source Port, Destination IP, Destination Port, Protocol, Timestamp, Flow Duration, Total Fwd Packets, Total Backward Packets,Total Length of Fwd Packets, Total Length of Bwd Packets, Label
+192.168.10.5-198.51.100.3-50000-80-6,192.168.10.5,50000,198.51.100.3,80,6,2017-07-07 03:30:00,1500000,10,8,1200,5400,BENIGN
+192.168.10.6-192.168.10.50-40000-22-6,192.168.10.6,40000,192.168.10.50,22,6,2017-07-07 03:31:00,200000,4,3,300,200,SSH-Patator
+192.168.10.7-192.168.10.50-40001-80-6,192.168.10.7,40001,192.168.10.50,80,6,2017-07-07 03:32:00,100,1,0,0,0
