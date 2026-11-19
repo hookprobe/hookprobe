@@ -1,0 +1,388 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/source/1",
+  "title": "DataSource (catalogue entry)",
+  "description": "One dataset, feed, knowledge base, organisation or programme in the research catalogue. Public availability is NOT permission: commercial_use / training_use / redistribution are 'yes' only when a licence text was read that grants it, and license_class OPEN requires all three. Unverified facts are null with a note.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "name",
+    "organisation",
+    "country",
+    "geographic_coverage",
+    "source_url",
+    "download_url",
+    "api_endpoint",
+    "description",
+    "category",
+    "subcategories",
+    "data_format",
+    "machine_readable",
+    "records",
+    "collection_period",
+    "publication_date",
+    "last_update",
+    "update_frequency",
+    "labels_available",
+    "label_quality",
+    "known_limitations",
+    "license_id",
+    "license_class",
+    "commercial_use",
+    "training_use",
+    "redistribution",
+    "attribution",
+    "personal_data",
+    "sensitivity",
+    "access",
+    "collaboration_route",
+    "recommended_use",
+    "collections",
+    "priority",
+    "acquisition",
+    "verified_on",
+    "verification_status",
+    "evidence",
+    "notes"
+  ],
+  "properties": {
+    "id": {
+      "$ref": "common.schema.json#/$defs/slug"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "organisation": {
+      "type": "string",
+      "maxLength": 200
+    },
+    "country": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 64
+    },
+    "geographic_coverage": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 200
+    },
+    "source_url": {
+      "type": "string",
+      "format": "uri"
+    },
+    "download_url": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "api_endpoint": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "format": "uri"
+    },
+    "description": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "network_intrusion",
+        "dns",
+        "dga",
+        "phishing",
+        "malware",
+        "botnet",
+        "iot",
+        "wireless",
+        "web",
+        "vulnerability",
+        "attack_simulation",
+        "threat_intel",
+        "benign_baseline",
+        "soc_reasoning",
+        "taxonomy",
+        "detection_rules",
+        "reports",
+        "collaboration",
+        "funding",
+        "community_sharing"
+      ]
+    },
+    "subcategories": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 64
+      }
+    },
+    "data_format": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "maxLength": 80
+      }
+    },
+    "machine_readable": {
+      "type": "boolean"
+    },
+    "records": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 300
+    },
+    "collection_period": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 120
+    },
+    "publication_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 40
+    },
+    "last_update": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 40
+    },
+    "update_frequency": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 80
+    },
+    "labels_available": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "label_quality": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1000
+    },
+    "known_limitations": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1500
+    },
+    "license_id": {
+      "$ref": "common.schema.json#/$defs/slug"
+    },
+    "license_class": {
+      "type": "string",
+      "enum": [
+        "OPEN",
+        "RESEARCH",
+        "COMMERCIAL",
+        "RESTRICTED",
+        "UNKNOWN"
+      ]
+    },
+    "commercial_use": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "unclear",
+        "requires_agreement"
+      ]
+    },
+    "training_use": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "unclear",
+        "requires_agreement"
+      ]
+    },
+    "redistribution": {
+      "type": "string",
+      "enum": [
+        "yes",
+        "no",
+        "unclear",
+        "requires_agreement"
+      ]
+    },
+    "attribution": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1000
+    },
+    "personal_data": {
+      "type": "string",
+      "enum": [
+        "none",
+        "pseudonymised_ips",
+        "raw_ips",
+        "payloads",
+        "urls_may_contain_pii",
+        "unknown"
+      ]
+    },
+    "sensitivity": {
+      "type": "string",
+      "enum": [
+        "low",
+        "medium",
+        "high"
+      ]
+    },
+    "access": {
+      "type": "string",
+      "enum": [
+        "public_download",
+        "registration",
+        "request_form",
+        "api_key",
+        "membership",
+        "agreement",
+        "commercial_contract",
+        "eligibility_restricted",
+        "reports_only"
+      ]
+    },
+    "collaboration_route": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 1000
+    },
+    "recommended_use": {
+      "type": "string",
+      "maxLength": 600
+    },
+    "collections": {
+      "description": "Which HEQK training collections this source can feed (subject to the licence gate).",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "dns_intelligence",
+          "network_intelligence",
+          "attack_intelligence",
+          "malware_intelligence",
+          "vulnerability_intelligence",
+          "soc_reasoning",
+          "evaluation_only",
+          "live_intel",
+          "none"
+        ]
+      }
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 5
+    },
+    "acquisition": {
+      "description": "How tools/intel-data may fetch it. null = not automatable (agreement, registration, or reports only).",
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "url",
+            "adapter",
+            "max_bytes",
+            "compression"
+          ],
+          "properties": {
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "pattern": "^https://"
+            },
+            "adapter": {
+              "type": "string",
+              "pattern": "^[a-z0-9_]+$"
+            },
+            "max_bytes": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483648
+            },
+            "compression": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "enum": [
+                "zip",
+                "gzip",
+                null
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "verified_on": {
+      "$ref": "common.schema.json#/$defs/date"
+    },
+    "verification_status": {
+      "type": "string",
+      "enum": [
+        "verified",
+        "partially_verified",
+        "unverified"
+      ]
+    },
+    "evidence": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "format": "uri"
+      }
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 2500
+    },
+    "adapter": {
+      "description": "Adapter for manually registered files (`register`), when there is no automated acquisition.",
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z0-9_]+$"
+    }
+  }
+}

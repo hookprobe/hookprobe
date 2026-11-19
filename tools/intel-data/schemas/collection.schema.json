@@ -1,0 +1,175 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/collection/1",
+  "title": "Dataset (training collection definition)",
+  "description": "One of the six interoperable HEQK training collections: what it teaches, which intelligence tier consumes it, how it is split, and which sources may feed it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "number",
+    "name",
+    "prefix",
+    "purpose",
+    "tiers",
+    "teaches",
+    "record_kinds",
+    "tasks",
+    "split",
+    "sources",
+    "status",
+    "notes"
+  ],
+  "properties": {
+    "id": {
+      "type": "string",
+      "enum": [
+        "dns_intelligence",
+        "network_intelligence",
+        "attack_intelligence",
+        "malware_intelligence",
+        "vulnerability_intelligence",
+        "soc_reasoning"
+      ]
+    },
+    "number": {
+      "type": "string",
+      "pattern": "^0[1-6]$"
+    },
+    "name": {
+      "type": "string"
+    },
+    "prefix": {
+      "type": "string",
+      "enum": [
+        "dns",
+        "net",
+        "atk",
+        "mal",
+        "vuln",
+        "soc"
+      ]
+    },
+    "purpose": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "tiers": {
+      "description": "docs/research/neuro/09 tiers: A deterministic, B fast specialists, C temporal, D language, E distributed.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "A",
+          "B",
+          "C",
+          "D",
+          "E"
+        ]
+      }
+    },
+    "teaches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "record_kinds": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "dns",
+          "flow",
+          "detection",
+          "indicator",
+          "vulnerability",
+          "attack_technique"
+        ]
+      }
+    },
+    "tasks": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "classify",
+          "triage",
+          "explain",
+          "map_attack",
+          "knowledge"
+        ]
+      }
+    },
+    "split": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "strategy",
+        "group_key",
+        "fractions"
+      ],
+      "properties": {
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "group_hash",
+            "group_stratified",
+            "time",
+            "source_holdout"
+          ]
+        },
+        "group_key": {
+          "type": "string"
+        },
+        "fractions": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "train",
+            "dev",
+            "test"
+          ],
+          "properties": {
+            "train": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "dev": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            },
+            "test": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1
+            }
+          }
+        }
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/slug"
+      }
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "implemented",
+        "partial",
+        "specified"
+      ]
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "maxLength": 2000
+    }
+  }
+}

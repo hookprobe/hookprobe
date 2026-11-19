@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/network-flow/1",
+  "title": "NetworkFlow",
+  "description": "One bidirectional connection summary. Vocabulary follows Zeek conn.log (orig = initiator, resp = responder) because most public flow datasets are Zeek- or CICFlowMeter-derived; CICFlowMeter columns map onto these names in the adapter. No payload bytes: the LLM never sees raw packets.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "ts_start", "duration_s", "orig_ip", "orig_port", "resp_ip", "resp_port", "proto", "service", "orig_bytes", "resp_bytes", "orig_pkts", "resp_pkts", "conn_state", "history"],
+  "properties": {
+    "schema": { "const": "heqk.network-flow/1" },
+    "ts_start": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+    "duration_s": { "type": ["number", "null"], "minimum": 0 },
+    "orig_ip": { "$ref": "common.schema.json#/$defs/nullable_ip" },
+    "orig_port": { "$ref": "common.schema.json#/$defs/nullable_port" },
+    "resp_ip": { "$ref": "common.schema.json#/$defs/nullable_ip" },
+    "resp_port": { "$ref": "common.schema.json#/$defs/nullable_port" },
+    "proto": { "type": "string", "enum": ["tcp", "udp", "icmp", "icmpv6", "other"] },
+    "service": { "type": ["string", "null"], "maxLength": 64 },
+    "orig_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "resp_bytes": { "type": ["integer", "null"], "minimum": 0 },
+    "orig_pkts": { "type": ["integer", "null"], "minimum": 0 },
+    "resp_pkts": { "type": ["integer", "null"], "minimum": 0 },
+    "conn_state": {
+      "description": "Zeek conn_state (S0, SF, REJ, …) or null when the source has none.",
+      "type": ["string", "null"],
+      "pattern": "^(S0|S1|SF|REJ|S2|S3|RSTO|RSTR|RSTOS0|RSTRH|SH|SHR|OTH)$"
+    },
+    "history": { "type": ["string", "null"], "maxLength": 64 }
+  }
+}

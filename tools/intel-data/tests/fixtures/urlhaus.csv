@@ -1,0 +1,8 @@
+################################################################
+# abuse.ch URLhaus Database Dump (CSV) - FIXTURE                #
+# id,dateadded,url,url_status,last_online,threat,tags,urlhaus_link,reporter
+"1000001","2026-11-01 10:00:00","http://xjw3kq9vzt2lmpr8.example/bins/x86","online","2026-11-17 00:00:00","malware_download","elf,mirai","https://urlhaus.abuse.ch/url/1000001/","fixture"
+"1000002","2026-11-02 11:00:00","http://compromised-blog.example/wp-content/a.zip","offline","None","malware_download","None","https://urlhaus.abuse.ch/url/1000002/","fixture"
+"1000003","2026-11-03 12:00:00","http://192.0.2.10:8080/i","online","2026-11-17 00:00:00","malware_download","mozi","https://urlhaus.abuse.ch/url/1000003/","fixture"
+"1000004","2026-11-03 12:00:00","not a url","online","None","malware_download","None","https://urlhaus.abuse.ch/url/1000004/","fixture"
+"broken row"

@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/manifest/1",
+  "title": "DatasetVersion manifest",
+  "description": "Describes one built export: which acquisitions went in, with which tool versions, under which purpose, and the checksum of every output file. Rebuilding from the same acquisitions and tool version must reproduce every checksum (the reproducibility test).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "dataset_version", "purpose", "tool_version", "schema_versions", "created_at", "acquisitions", "outputs", "counts", "excluded"],
+  "properties": {
+    "schema": { "const": "heqk.manifest/1" },
+    "dataset_version": { "type": "string", "pattern": "^[0-9]{4}\\.[0-9]{2}\\.[0-9]{2}-[0-9a-f]{12}$" },
+    "purpose": { "type": "string", "enum": ["commercial_training", "research", "evaluation", "live_intel"] },
+    "tool_version": { "type": "string" },
+    "schema_versions": { "type": "object", "additionalProperties": { "type": "string" } },
+    "created_at": { "$ref": "common.schema.json#/$defs/timestamp" },
+    "acquisitions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["acquisition_id", "source_id", "license_id", "url", "fetched_at", "bytes"],
+        "properties": {
+          "acquisition_id": { "type": "string" },
+          "source_id": { "$ref": "common.schema.json#/$defs/slug" },
+          "license_id": { "$ref": "common.schema.json#/$defs/slug" },
+          "url": { "type": ["string", "null"] },
+          "fetched_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+          "bytes": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      }
+    },
+    "outputs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "records"],
+        "properties": {
+          "path": { "type": "string" },
+          "sha256": { "$ref": "common.schema.json#/$defs/sha256" },
+          "records": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "counts": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "excluded": {
+      "description": "Records or sources left out, with the reason (licence gate, validation failure, duplicate, contamination).",
+      "type": "object",
+      "additionalProperties": { "type": "integer" }
+    }
+  }
+}
