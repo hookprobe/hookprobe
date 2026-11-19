@@ -1,0 +1,13 @@
+[2026-11-19 05:50:52] 1/4 teacher labelling     3479 cases
+[2026-11-19 11:25:21] teacher done
+[2026-11-19 11:25:21] 2/4 filter (v1 + v2, no-echo)
+[2026-11-19 11:25:22] train examples     3262 -> 1631 iterations
+[2026-11-19 11:25:22] 3/4 fine-tune
+   800    val 0.228    5.42s
+  1000    val 0.247    5.46s
+  1200    val 0.235    5.53s
+  1400    val 0.219    5.45s
+  1600    val 0.230    5.54s
+  1631    val 0.225    5.52s
+[2026-11-19 11:42:13] 4/4 blind-set evaluation (single final look)
+[2026-11-19 11:44:48] DONE
