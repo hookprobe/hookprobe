@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The management ABI dispatcher (ADR 0059 D9; hsh spec §14, R3): every `hal::mgmtabi` message is served HERE, by the
 //! SAME producers as `GET /api/*` (McState, cfgd, the anchor, the EL0 servers' counters), as fixed records — so
 //! Mission Control and `hsh` see identical numbers and get the same authorisation decision.

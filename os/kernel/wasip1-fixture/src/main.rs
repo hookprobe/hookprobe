@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! A2 (M5.5) — a REAL `wasm32-wasip1` detection module (std, stdin/stdout — the SAME shape
 //! as the production signed modules napse-dpi/dnsxai/qsecbit). It reads an L4 header from
 //! STDIN, classifies the big-endian dst-port at bytes [2..4] (mirrors the in-kernel

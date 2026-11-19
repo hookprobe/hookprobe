@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Device identification (discovery D1) — legacy V1 Fingerbank parity, run on the DHCP evidence heqk already
 //! holds per lease (option 12 hostname, 55 parameter-request list, 60 vendor class, the MAC). Tables are
 //! generated from the legacy module (`fpdb.rs`, os/build/fpgen); the waterfall is legacy's, minus its cloud

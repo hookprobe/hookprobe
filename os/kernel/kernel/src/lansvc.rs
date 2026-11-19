@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Kernel side of the EL0 LAN-services server (ADR 0050 D4 step 2): Shield's DNS parsing — every client query and
 //! every upstream answer — runs in `el0-lansvc`, one bounded excursion per message. The kernel only rebuilds the
 //! result from a fixed record (bounds-checked against its own copy) and keeps every DECISION (Shield, policy).

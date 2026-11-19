@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M2.4 — L7 / behavioral OBSERVE-ONLY detectors (the LAST M2 detection-parity port).
 //!
 //! These detectors close the DETECTION half of the separation-matrix behavioral rows

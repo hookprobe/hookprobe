@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Anti-rollback: a security-version floor with a pluggable persistence
 //! backend (the `SecureCounter` abstraction).
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M5.3 (Track C) — the EL0 Wasm-HOST: a no_std aarch64 EL0 program linking a REAL
 //! `wasmi` 0.32 interpreter. The kernel (EL1, the TRUST ROOT) has ALREADY Ed25519-verified
 //! the `.wasm` module and copied it — with the input `port` — into this task's RW work

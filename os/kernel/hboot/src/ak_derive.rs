@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Per-device hardware-bound Attestation Key (B-1 extractability half).
 //!
 //! Closes the last B-1 gap: the AK is no longer a software constant baked into

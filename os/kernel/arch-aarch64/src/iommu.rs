@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P14 seed — BCM2712 custom IOMMU (`brcm,bcm2712-iommu`) for PCIe DMA
 //! containment. Closes the audit finding that the external PCIe RC (pcie1/RTL)
 //! maps a **64 GiB inbound window** (`rtl8111` RC_BAR1 size code 0x15) straight

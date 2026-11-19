@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Setup-AP credential (parity G12, ADR 0054): a per-device Wi-Fi SSID + WPA2 passphrase.
 //!
 //! Derived from the device sealing root (SRK, which HBoot derives from the per-device OTP secret

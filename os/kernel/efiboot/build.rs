@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HEQK_IMAGE=<raw heqk kernel binary> embeds a payload and turns efiboot from the read-only
 // probe into a loader (cfg `heqk_payload`). Unset -> probe only (nothing to load).
 fn main() {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0067 D1 — work counters. A work counter is a count of work done on a fixed input (table
 //! entries examined, bytes checksummed, round trips), so it is the same number on every run and
 //! under QEMU. Self-tests emit one line per counter; `tools/ci/perf_ratchet.py` compares the

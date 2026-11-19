@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! #54 — the DataVolume region registry: ONE fixed layout for the raw p2 partition (MBR type 0xDA, created by
 //! the image factory over the rest of the eMMC), so every writer has its own named, bounded region instead of
 //! picking LBAs ad hoc (BOI adversarial review A3.2) — and the 16 KiB keystore window stops being the only

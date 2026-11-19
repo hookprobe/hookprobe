@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M6 export frame **v2** — the device→off-device evidence wire format, as a PURE codec.
 //!
 //! No crate dependencies (no `events`, no asm, no allocator), so the off-device receiver

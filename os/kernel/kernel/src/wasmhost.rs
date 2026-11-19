@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M5.2 (Track C) — the Wasm-host BEACHHEAD: verify-then-run ONE signed `.wasm`
 //! module on heqk. This is the FIRST minimal sliver of the multi-year Wasm-host road
 //! (ADR 0044 D4 #2 / D5, `docs/design/heqk-module-runtime.md` §M5.2). It proves the

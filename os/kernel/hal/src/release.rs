@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The HookProbe OS release identity: the one source for the kernel boot banner, `/api/system`, `hsh version`
 //! and Mission Control (which reads `/api/system`).
 //!

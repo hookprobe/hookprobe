@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The kernel <-> EL0 LAN-services server ABI (ADR 0050 D4 step 2). One shared IO region; every bounded
 //! excursion carries ONE command. Shared by `el0-lansvc` and the kernel so the two cannot drift.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The bounded, sealed M3 evidence SNAPSHOT the `prod-full` sensor persists across reboots —
 //! counters + a ring of the most recent event images. Pure (no MMIO, no storage), so its ring
 //! and codec are QEMU-testable (`[P-snapshot]`); `prodfull.rs` owns sealing + the eMMC write.

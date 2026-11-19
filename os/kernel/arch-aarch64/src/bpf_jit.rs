@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P6b/P8 — BPF JIT: general native aarch64 codegen.
 //!
 //! `compile(prog)` is a two-pass compiler for the verified RFC 9669 ISA subset

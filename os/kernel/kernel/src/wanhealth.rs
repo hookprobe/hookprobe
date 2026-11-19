@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! WAN health with hysteresis (parity gap G16 — V1 `wan-failover-pbr.sh` did ping + HTTP checks with
 //! hysteresis; heqk only had ARP liveness, so a gateway that answers ARP while the internet behind it is
 //! dead counted as "up" and the metric-route failover never moved).

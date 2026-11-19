@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HookProbe microkernel — P3 EL0 entry + kernel resume (setjmp/longjmp style).
 //
 // enter_user(entry, user_sp): save the kernel's callee-saved context + SP + LR

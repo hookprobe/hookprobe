@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P13 — RP1 I²C master (Synopsys DW_apb_i2c), CM5 / BCM2712.
 //!
 //! Strictly PIO (the 32-entry FIFO is ample); the RP1 DMAC is NEVER touched. Every

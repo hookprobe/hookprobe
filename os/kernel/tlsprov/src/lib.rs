@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! heqk's thin rustls `CryptoProvider` (ADR 0051 D1).
 //!
 //! Server-only, TLS 1.3 only, exactly one cipher suite (`TLS13_CHACHA20_POLY1305_SHA256`), hybrid

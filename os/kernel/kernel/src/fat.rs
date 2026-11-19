@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! B2 (M3.4 OTA delivery) — a MINIMAL, READ-ONLY FAT32 LOCATOR. No writer, no `alloc`,
 //! fixed buffers, fail-closed.
 //!

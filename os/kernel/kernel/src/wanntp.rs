@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! SNTP over the WAN uplink for images whose Mission Control node lives on the LAN side (the AP):
 //! parity gap G11 — the AP had no wall clock (every timestamp boot-relative). Pure: the caller sends
 //! the frame `request` builds on the WAN and offers each inbound WAN frame to `on_frame`.

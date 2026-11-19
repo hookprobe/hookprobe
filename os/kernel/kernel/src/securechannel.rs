@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4.2a — PQC secure-channel crypto PRIMITIVES + Known-Answer Tests (KATs).
 //!
 //! This module adds the four cryptographic building blocks a hybrid post-quantum

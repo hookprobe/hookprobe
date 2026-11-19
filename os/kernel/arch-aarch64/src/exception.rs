@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use crate::{semihosting, Pl011};
 use core::fmt::Write;
 

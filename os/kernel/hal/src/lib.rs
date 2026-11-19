@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![no_std]
 //! HookProbe HAL — the strict hardware-abstraction boundary.
 //!

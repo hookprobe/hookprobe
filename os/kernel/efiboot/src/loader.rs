@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Stage 2: hand the machine to an embedded heqk ELF, reproducing the state QEMU `-kernel`
 //! gives it today (EL1, MMU + caches off, PT_LOAD segments at their physical addresses, x0 =
 //! 0, branch to e_entry) so the CURRENT kernel can be measured on the cloud device model

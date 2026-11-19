@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The management sub-interface's IPv4 handling (ARP, ping under policy, hand-up), moved out of the CM5-only
 //! `uplink.rs` so the QEMU `[P-fuzz]` phase can drive it (ADR 0050 D3). Pure: transmit is a parameter.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Minimal SHA-256 (FIPS 180-4), no_std, shared by HBoot + kernel for boot
 //! measurement. NIST-vector tested. Not constant-time — boot-measurement use.
 //! payload measurement; replaced by a vetted crypto crate alongside the

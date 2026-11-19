@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! HQMGMT1 owner-signed command envelopes (hsh spec R6 = D, operator 2026-11-12): the ONE verifier every privileged
 //! management operation goes through, whatever the carrier — the management ABI (`mgmtabi`: config confirm / rollback
 //! / stage, from the web console and Mission Control) and Mission Control's own owner endpoints (factory reset, owner

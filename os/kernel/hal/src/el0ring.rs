@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 2: the frame ring between the kernel and a resident EL0 driver server.
 //!
 //! One page of header (`head` u32 at 0, `tail` u32 at 4) then `SLOTS` fixed slots of `SLOT_BYTES`

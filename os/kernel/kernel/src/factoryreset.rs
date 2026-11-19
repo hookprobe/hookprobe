@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Factory reset (Phase 7) — the boot-time wipe.
 //!
 //! `POST /api/factory-reset` (ownerapi::factory_reset) only appends a sealed `FactoryReset` record and reboots.

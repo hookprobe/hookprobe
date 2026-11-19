@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Pure HTTP/1.1 request + form parsing for Mission Control — every byte here comes from the network. Kept free of
 //! kernel state (no `crate::` paths) so the same code is compiled into the host libFuzzer harness
 //! (`tools/fuzz/heqk-kernel`, release gate SEC-02). `http.rs` / `actionapi.rs` re-export it unchanged.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! HQCFG1 configuration bundle verification (ADR 0059 step 2; assessment §B.4). Pure: no I/O, no heap — the
 //! caller hands in the received bytes (cfgd reads them into its one 16 KiB static buffer) and the 512-byte HQCSIG1.
 //!
