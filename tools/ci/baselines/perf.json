@@ -1,0 +1,4 @@
+{
+  "nat_newflow_scan_max": {"max": 4096, "evidence": "QEMU validate.sh at the P0.1 commit: the full-table scan of nat.rs lookup_or_alloc, before ADR 0067 E3"},
+  "nat_rewrite_csum_bytes": {"max": 1500, "evidence": "QEMU validate.sh at the P0.1 commit: fix_csums re-sums the whole datagram of a 1,500-byte TCP segment, before ADR 0067 E4"}
+}

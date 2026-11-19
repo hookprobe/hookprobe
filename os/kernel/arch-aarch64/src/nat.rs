@@ -77,6 +77,10 @@ struct Entry {
 const EMPTY: Entry = Entry { used: false, proto: 0, in_if: 0, in_mac: [0; 6], in_ip: [0; 4], in_port: 0, last: 0, dnat_from: [0; 4], remotes: [[0; 4]; 4], rnext: 0, dnat_to: [0; 4], first: 0, dport: 0, bytes_out: 0, bytes_in: 0, wan: [0; 4] };
 static mut TABLE: [Entry; N] = [EMPTY; N];
 static mut HIDX: [u16; HN] = [0; HN];
+/// ADR 0067 D1 work counters: the most table entries one new flow examined, and the bytes the last
+/// rewrite checksummed.
+static mut SCAN_MAX: u32 = 0;
+static mut CSUM_BYTES: u32 = 0;
 
 #[inline]
 fn hkey(proto: u8, in_ip: &[u8; 4], in_port: u16) -> usize {
@@ -197,8 +201,10 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
     // A NEW flow (once per mapping, not per packet): a free or expired slot, else the least recently used.
     let mut free: Option<usize> = None;
     let mut oldest = (0usize, u64::MAX);
+    let mut scanned = 0u32;
     for i in 0..N {
         let e = &t[i];
+        scanned += 1;
         if e.used {
             if now.wrapping_sub(e.last) > timeout(e.proto) {
                 free = Some(i); // expired — reusable
@@ -210,6 +216,11 @@ fn lookup_or_alloc(proto: u8, in_if: u8, in_mac: &[u8; 6], in_ip: &[u8; 4], in_p
         } else {
             free = Some(i);
             break;
+        }
+    }
+    unsafe {
+        if scanned > SCAN_MAX {
+            SCAN_MAX = scanned;
         }
     }
     let i = match free {
@@ -326,6 +337,7 @@ fn fix_csums(f: &mut [u8], ihl: usize, ip_end: usize) {
         return;
     }
     let l4len = (ip_end - l4) as u16;
+    unsafe { CSUM_BYTES = (ip_end - 14) as u32 };
     let mut sip = [0u8; 4];
     sip.copy_from_slice(&f[26..30]);
     let mut dip = [0u8; 4];
@@ -678,6 +690,7 @@ pub fn index_selftest() -> bool {
     }
     unsafe { (*core::ptr::addr_of_mut!(HIDX)).fill(0) };
     let mut st = NatStats::default();
+    unsafe { SCAN_MAX = 0 };
     let key = |k: usize| ([10u8, 99, (k >> 8) as u8, k as u8], 1024 + (k % 7000) as u16);
     // 1. fill the table: N distinct flows, each gets its own slot, each lookup returns it
     let mut fill = true;
@@ -706,6 +719,25 @@ pub fn index_selftest() -> bool {
         let (ip, port) = key(k);
         index_find(t, 6, &ip, port).is_none()
     });
+    crate::perfctr::emit("nat_newflow_scan_max", unsafe { SCAN_MAX } as u64);
+    // a full-size TCP segment through the SNAT rewrite: how many bytes the rewrite checksums
+    {
+        let mut f = [0u8; 1514];
+        f[12] = 0x08;
+        f[14] = 0x45;
+        f[16..18].copy_from_slice(&1500u16.to_be_bytes());
+        f[22] = 64;
+        f[23] = 6;
+        f[26..30].copy_from_slice(&[10, 66, 0, 5]);
+        f[30..34].copy_from_slice(&[93, 184, 216, 34]);
+        f[34..36].copy_from_slice(&50000u16.to_be_bytes());
+        f[36..38].copy_from_slice(&443u16.to_be_bytes());
+        f[46] = 0x50;
+        let mut out = [0u8; 1514];
+        unsafe { CSUM_BYTES = 0 };
+        let _ = outbound(&f, IF_ETH1, &[10, 66, 0], &[192, 0, 2, 1], &[2; 6], &[4; 6], &mut out, 200_000, &mut st);
+        crate::perfctr::emit("nat_rewrite_csum_bytes", unsafe { CSUM_BYTES } as u64);
+    }
     for e in t.iter_mut() {
         *e = EMPTY;
     }
