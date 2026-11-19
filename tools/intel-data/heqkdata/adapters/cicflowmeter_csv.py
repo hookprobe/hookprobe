@@ -14,7 +14,7 @@ import re
 
 from .. import canon, safeio
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 ALIASES = {
     "flow_id": ["flowid"],
@@ -104,8 +104,13 @@ def parse(path, ctx):
                         techs = t
                         break
             line = ",".join(row)
+            # Flow ID + timestamp is NOT unique in CIC-IDS (Flow IDs repeat, timestamps are coarse), so
+            # the row's own content is part of the key: distinct flows stay distinct, and only a
+            # byte-identical repeated row is dropped as a duplicate.
+            fid = g("flow_id") or None
+            srid = fid and f"{fid}@{g('ts')}#{canon.sha256_bytes(line.encode())[:16]}"
             yield ctx.record(
-                "flow", body, source_record_id=(g("flow_id") or None) and f"{g('flow_id')}@{g('ts')}", raw_bytes=line.encode(),
+                "flow", body, source_record_id=srid, raw_bytes=line.encode(),
                 observed_at=body["ts_start"], label=lab, family=None if lab != "malicious" else raw_label[:128],
                 label_source="dataset" if lab else "none", original_label=raw_label[:512] or None,
                 techniques=techs, mapping_source="heuristic",

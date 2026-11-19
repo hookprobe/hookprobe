@@ -14,17 +14,51 @@ build can say exactly what fraction of each class it saw.
 import hashlib
 import random
 
+from .safeio import MAX_LINE, UnsafeContent
+
 SEED = "heqk-v1"
 
 
-def _label_key(line):
-    # IoT-23 tail: "<tunnel_parents>   <label>   <detailed-label>" in the last tab field
-    tail = line.rsplit(b"\t", 1)[-1].split()
+def _d(b):
+    return b.decode("utf-8", "replace")
+
+
+def _label_key(line, cols=None):
+    """(label, detailed-label) of one data line. `cols` = (label index, detailed-label index) when the
+    #fields header has them as their own tab columns (the CTU / later IoT-23 layout); otherwise the
+    IoT-23 layout, where the last tab field is "<tunnel_parents>   <label>   <detailed-label>"."""
+    parts = line.rstrip(b"\r\n").split(b"\t")
+    if cols is not None:
+        li, di = cols
+        if li < len(parts):
+            lab = parts[li].strip() or b"-"
+            det = parts[di].strip() if di is not None and di < len(parts) else b"-"
+            if b"  " not in parts[-1]:
+                return (_d(lab), _d(det or b"-"))
+    tail = parts[-1].split()
     if len(tail) >= 3:
-        return (tail[1].decode("utf-8", "replace"), tail[2].decode("utf-8", "replace"))
+        return (_d(tail[1]), _d(tail[2]))
     if len(tail) == 2:
-        return (tail[1].decode("utf-8", "replace"), "-")
+        return (_d(tail[1]), "-")
     return ("-", "-")
+
+
+def _label_cols(header_line):
+    """From a '#fields' line: (label index, detailed-label index or None) if label is its own column."""
+    names = [_d(x).strip() for x in header_line.rstrip(b"\r\n").split(b"\t")[1:]]
+    if "label" not in names:
+        return None
+    return (names.index("label"), names.index("detailed-label") if "detailed-label" in names else None)
+
+
+def _bounded(f, limit):
+    while True:
+        line = f.readline(limit + 1)
+        if not line:
+            return
+        if len(line) > limit:
+            raise UnsafeContent(f"line longer than {limit} bytes")
+        yield line
 
 
 def zeek_per_label(src, dst, per_label, seed=SEED, name=""):
@@ -34,17 +68,20 @@ def zeek_per_label(src, dst, per_label, seed=SEED, name=""):
     h = hashlib.sha256()
     headers, res, seen = [], {}, {}
     n_bytes = n_lines = 0
+    cols = None
     with open(src, "rb") as f:
-        for i, line in enumerate(f):
+        for i, line in enumerate(_bounded(f, MAX_LINE)):
             h.update(line)
             n_bytes += len(line)
             n_lines += 1
             if line.startswith(b"#"):
+                if line.startswith(b"#fields"):
+                    cols = _label_cols(line)
                 headers.append((i, line))
                 continue
             if not line.strip():
                 continue
-            k = _label_key(line)
+            k = _label_key(line, cols)
             c = seen.get(k, 0) + 1
             seen[k] = c
             r = res.setdefault(k, [])
