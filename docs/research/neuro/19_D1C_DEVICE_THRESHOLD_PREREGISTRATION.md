@@ -95,3 +95,48 @@ gate on its own**: it has been seen.
   evaluates only the frozen configuration (confirmation).
 - The engine's scores do not depend on the threshold, so one engine run serves the whole grid.
 - Smoke-tested on synthetic data. The existing `--phase dna` output is unchanged.
+
+## Result: rejected on dev (2026-11-19). Deakin stays unopened.
+
+Raw output: `data/d1c-dev-selection.txt`. UNSW dev, V2 /24, 787 attack onsets, pooled AUC 0.995.
+
+| b | m | Alarms per device per week (median) | Devices > 1 | DGA | Scan | Exfiltration | IoT-23 | Not muted |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1.0 | 1.17 | 12/21 | 0.77 | 0.96 | 0.82 | 0.97 | 0.71 |
+| 0.5 | 1.0 | 1.08 | 11/21 | 0.72 | 0.96 | 0.82 | 0.97 | 0.67 |
+| 1 | 1.25 | **0.88** | 8/21 | 0.68 | 0.96 | 0.81 | 0.97 | 0.62 |
+| 0.5 | 1.25 | 0.54 | 6/21 | 0.64 | 0.96 | 0.81 | 0.97 | 0.57 |
+| 1 | 1.5 | 0.57 | 6/21 | 0.62 | 0.96 | 0.75 | 0.95 | 0.62 |
+| 0.5 | 1.5 | 0.30 | 3/21 | 0.54 | 0.96 | 0.75 | 0.95 | 0.48 |
+| 1 | 2.0 | 0.00 | 4/21 | 0.50 | 0.96 | 0.71 | 0.94 | 0.48 |
+| 0.5 | 2.0 | 0.00 | 3/21 | 0.42 | 0.96 | 0.65 | 0.90 | 0.38 |
+
+**No configuration qualifies.** Wherever the median nuisance reaches ≤ 1, DGA and exfiltration detection
+fall below 0.9 and devices are muted. **By the rule above, the hypothesis is rejected and Deakin is not
+opened.**
+
+**What was learned (dev only):**
+
+1. **Pooled ranking hides per-device overlap.** A pooled AUC of 0.995 does not mean every device can be
+   thresholded. On noisy devices, benign bursts in the calibration window reach scores above the injected
+   attacks. At `b=1, m=1`:
+
+   | Device | `T_d` | Detection |
+   |---|---|---|
+   | HP printer (fan-out bursts) | 738 | 0.19 |
+   | Samsung camera | 116 | 0.41 |
+   | Belkin switch | 13.3 | 0.50 |
+
+2. **Calibration does not carry forward on every device.** With thresholds from their own past, iHome
+   (13.0 per week), TP-Link camera (12.7) and Withings sleep sensor (5.7) still alarm often in the following
+   period. Their behaviour drifts.
+
+3. **DGA is the weakest class against a raised threshold.** The DNS term saturates at about 4–8 (Q8 units ÷
+   256), so any `T_d` above that hides a DGA burst entirely. Exfiltration of +2 GB is similar on
+   high-volume devices.
+
+**Decision.** The temporal tier stays **evidence-only** (`17`). Its V2-keyed scores are an excellent
+*ranking* signal (AUC 0.995): the explainer and correlation layers can use them. They are **not a
+stand-alone alarm**. Three rules have now been tried on UNSW dev (D1, D1b, D1c). Any further alarm rule
+should come from a design change (for example, unsaturated or per-term thresholds), not from more tuning
+on this dev set. **Deakin remains unopened** for that.

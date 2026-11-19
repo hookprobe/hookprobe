@@ -1,0 +1,9 @@
+b=1    m=1     alarms/dev/week median 1.167 max 13.00 (>1: 12/21)  detect {'dga': 0.765, 'scan': 0.959, 'exfil': 0.817, 'iot23': 0.97, 'all': 0.878}  not-muted 0.714  T_d median 4.27 max 738.07 -> not met
+b=0.5  m=1     alarms/dev/week median 1.077 max 8.27 (>1: 11/21)  detect {'dga': 0.724, 'scan': 0.959, 'exfil': 0.817, 'iot23': 0.97, 'all': 0.868}  not-muted 0.667  T_d median 6.65 max 1140.36 -> not met
+b=1    m=1.25  alarms/dev/week median 0.875 max 8.27 (>1: 8/21)  detect {'dga': 0.679, 'scan': 0.959, 'exfil': 0.807, 'iot23': 0.97, 'all': 0.854}  not-muted 0.619  T_d median 5.34 max 922.59 -> not met
+b=0.5  m=1.25  alarms/dev/week median 0.538 max 2.43 (>1: 6/21)  detect {'dga': 0.638, 'scan': 0.959, 'exfil': 0.807, 'iot23': 0.97, 'all': 0.844}  not-muted 0.571  T_d median 8.31 max 1425.45 -> not met
+b=1    m=1.5   alarms/dev/week median 0.568 max 3.32 (>1: 6/21)  detect {'dga': 0.622, 'scan': 0.959, 'exfil': 0.751, 'iot23': 0.954, 'all': 0.822}  not-muted 0.619  T_d median 6.41 max 1107.11 -> not met
+b=0.5  m=1.5   alarms/dev/week median 0.304 max 2.13 (>1: 3/21)  detect {'dga': 0.536, 'scan': 0.959, 'exfil': 0.746, 'iot23': 0.949, 'all': 0.798}  not-muted 0.476  T_d median 9.97 max 1710.54 -> not met
+b=1    m=2     alarms/dev/week median 0.000 max 1.52 (>1: 4/21)  detect {'dga': 0.495, 'scan': 0.959, 'exfil': 0.706, 'iot23': 0.944, 'all': 0.776}  not-muted 0.476  T_d median 8.55 max 1476.15 -> not met
+b=0.5  m=2     alarms/dev/week median 0.000 max 1.52 (>1: 3/21)  detect {'dga': 0.418, 'scan': 0.959, 'exfil': 0.645, 'iot23': 0.898, 'all': 0.73}  not-muted 0.381  T_d median 13.30 max 2280.73 -> not met
+doc 19 choice: NONE qualifies
