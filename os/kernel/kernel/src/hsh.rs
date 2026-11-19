@@ -156,7 +156,8 @@ mod el0 {
         /// One command; `(status, out_len)`. A fault / timeout resets the server and reports ST_PANIC.
         pub fn call(&mut self, cmd: u32, input: &[u8]) -> (u32, usize) {
             // H2: inside the restart hold-off (consecutive faults) the call is refused like a fault — fail closed
-            if !self.sup.ready(crate::superv::now_ms()) {
+            // H5: ...or with its CPU budget for this window used up
+            if !self.sup.ready(crate::superv::now_ms()) || !crate::superv::cpu_admit(hal::superv::C_HSH) {
                 return (ST_PANIC, 0);
             }
             let n = input.len().min(IN_MAX);
@@ -167,7 +168,9 @@ mod el0 {
             self.write(H_STATUS, &ST_PANIC.to_le_bytes());
             self.write(IN_OFF, &input[..n]);
             self.calls += 1;
+            let t0 = crate::clock::ticks();
             let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, BUDGET_US);
+            crate::superv::cpu_charge(hal::superv::C_HSH, t0); // H5
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
