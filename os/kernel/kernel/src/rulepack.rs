@@ -371,8 +371,59 @@ pub fn guard_selftest() -> bool {
     }
     crate::rules::GUARDS.store(true, Ordering::Relaxed);
     reset();
+    // step 2: the TCP-flag templates carry a byte guard (flags at offset 13)
+    use crate::bpf::{byte_guard, tcp_flag_eq_rule, tcp_flag_mask_eq_rule};
+    let bextract = byte_guard(&crate::bpf::TCP_NULL_SCAN) == Some((13, 0xff, 0x00))
+        && byte_guard(&crate::bpf::TCP_XMAS_SCAN) == Some((13, 0xff, 0x29))
+        && crate::bpf::TCP_SYNFIN == tcp_flag_mask_eq_rule(3, 3)
+        && byte_guard(&crate::bpf::TCP_SYNFIN) == Some((13, 0x03, 0x03))
+        && byte_guard(&tcp_flag_eq_rule(0x100)).is_none()
+        && byte_guard(&port_block_rule(443)).is_none()
+        && byte_guard(&crate::bpf::TCP_SYN_FLOOD_SRC).is_none();
+    let tcp = |flags: u8| {
+        let mut h = [0u8; 20];
+        h[13] = flags;
+        h
+    };
+    // outside its guard each template program is PASS, for all 256 flag values
+    let bsound = |prog: &[u64]| {
+        let g = byte_guard(prog);
+        (0..=u8::MAX).all(|f| {
+            let h = tcp(f);
+            let pass = crate::bpf::run(prog, h.as_ptr(), h.len()) == crate::bpf::PASS;
+            g.is_none_or(|(off, mask, val)| h[off as usize] & mask == val || pass)
+        })
+    };
+    let bexhaustive = bsound(&tcp_flag_eq_rule(0x00)) && bsound(&tcp_flag_eq_rule(0x29)) && bsound(&tcp_flag_eq_rule(0xff))
+        && bsound(&tcp_flag_mask_eq_rule(3, 3)) && bsound(&tcp_flag_mask_eq_rule(0x12, 0x02)) && bsound(&tcp_flag_mask_eq_rule(1, 2));
+    // the built-in TCP tier: the same verdict for all 256 flag values, guards off and on
+    let twire = |flags: u8| crate::rules::verdict_tcp(&tcp(flags), 0x0A00_0002).map(|v| v.to_wire());
+    let mut tsame = true;
+    let mut thits = 0u32;
+    for f in 0..=u8::MAX {
+        crate::rules::GUARDS.store(false, Ordering::Relaxed);
+        let want = twire(f);
+        crate::rules::GUARDS.store(true, Ordering::Relaxed);
+        tsame &= want == twire(f);
+        thits += want.is_some() as u32;
+    }
+    // work: one plain ACK through the TCP tier
+    let truns = |g: bool| {
+        crate::rules::GUARDS.store(g, Ordering::Relaxed);
+        let before = crate::rules::PROG_RUNS.load(Ordering::Relaxed);
+        let _ = twire(0x10);
+        crate::rules::PROG_RUNS.load(Ordering::Relaxed) - before
+    };
+    let (toff, ton) = (truns(false), truns(true));
+    crate::rules::GUARDS.store(true, Ordering::Relaxed);
+    arch_aarch64::perfctr::emit("ids_tcp_tier_prog_runs_ack", ton as u64);
+    let step2 = bextract && bexhaustive && tsame && thits >= 3 && toff >= 4 && ton == 0;
+    arch_aarch64::_print(format_args!(
+        "   step 2, byte guards (TCP flags): guard only from an exact template={} outside its guard each template program is PASS for all 256 flag values={} the built-in TCP tier's verdicts are equal with guards off and on for all 256 flag values={} ({} matched) programs run for a plain ACK: {} -> {}\n",
+        bextract, bexhaustive, tsame, thits, toff, ton
+    ));
     arch_aarch64::perfctr::emit("ids_pack64_prog_runs_other_port", on as u64);
-    let pass = loaded && extract && exhaustive && same && hits >= 73 && off == 64 && on == 1;
+    let pass = loaded && extract && exhaustive && same && hits >= 73 && off == 64 && on == 1 && step2;
     arch_aarch64::_print(format_args!(
         " [P-ruleguard] {} — ADR 0067 D5 step 1: a rule that is exactly a dst-port template (exact port or range) carries a guard read from its own program and is skipped for every other port: 64-rule tier loaded={} guard only from an exact template={} outside its guard each template program is PASS for all 65,536 dst ports={} the tier's verdicts are equal with guards off and on={} ({} sampled ports matched) programs run for a packet to an unnamed port: {} -> {} (the one left has no guard)\n",
         if pass { "PASS" } else { "FAIL" }, loaded, extract, exhaustive, same, hits, off, on
