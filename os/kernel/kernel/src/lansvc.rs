@@ -84,6 +84,8 @@ mod el0 {
         pub restarts: u64,
         /// H2: the restart state under the supervisor table's policy (a server faulting on every call is held off).
         sup: hal::superv::Sup,
+        /// Output bytes the previous call reported: zeroed before the next call (see `call`).
+        last_out: usize,
     }
     pub static mut SRV: Option<Server> = None;
     static mut TRIED: bool = false;
@@ -125,7 +127,7 @@ mod el0 {
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(LANSVC_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-lansvc").unwrap_or(&hal::superv::TABLE[0])) };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-lansvc").unwrap_or(&hal::superv::TABLE[0])), last_out: 0 };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -225,6 +227,20 @@ mod el0 {
             if !self.sup.ready(crate::superv::now_ms()) || !crate::superv::cpu_admit(hal::superv::C_LANSVC) {
                 return (ST_PANIC, 0);
             }
+            // H6b finding (fault-injection campaign, 2026-11-20): a command may report a fixed-length record and write
+            // only part of it (a DNS question record: the name array past the name's length), so the rest of the
+            // reported output was whatever the PREVIOUS call left there. No reader used those bytes, but one request's
+            // leftovers do not belong in the next request's output: zero what the previous call reported.
+            if self.last_out > 0 {
+                let z = [0u8; 64];
+                let mut off = 0;
+                while off < self.last_out {
+                    let k = (self.last_out - off).min(z.len());
+                    self.write(OUT_OFF + off, &z[..k]);
+                    off += k;
+                }
+                self.last_out = 0;
+            }
             let n = input.len().min(IN_MAX);
             self.write(H_MAGIC, &MAGIC.to_le_bytes());
             self.write(H_CMD, &cmd.to_le_bytes());
@@ -250,7 +266,8 @@ mod el0 {
             if self.sup.ok() {
                 crate::superv::server_ok("el0-lansvc");
             }
-            (st, (self.r32(H_OUT_LEN) as usize).min(OUT_MAX))
+            self.last_out = (self.r32(H_OUT_LEN) as usize).min(OUT_MAX);
+            (st, self.last_out)
         }
         /// H4a functional probe: an echo of a fixed pattern through the full call path (control page, IO pages, the
         /// server's loop). None = not asked (hold-off) or it FAULTED (the fault path already handled that);
@@ -288,6 +305,26 @@ mod el0 {
         #[cfg(feature = "swifi")]
         pub fn swifi_raw(&mut self, cmd: u32, input: &[u8]) -> u32 {
             self.call(cmd, input).0
+        }
+        /// H6b: one workload call — a digest of (status, output length, output bytes). None = it faulted / was refused.
+        #[cfg(feature = "swifi")]
+        pub fn swifi_work(&mut self, cmd: u32, input: &[u8]) -> Option<u64> {
+            let (st, n) = self.call(cmd, input);
+            if st == ST_PANIC {
+                return None;
+            }
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ ((st as u64) << 32 | n as u64);
+            let mut buf = [0u8; 256];
+            let mut off = 0;
+            while off < n {
+                let k = (n - off).min(buf.len());
+                self.read(OUT_OFF + off, &mut buf[..k]);
+                for b in &buf[..k] {
+                    h = (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                off += k;
+            }
+            Some(h)
         }
         /// H6: put the image back between injections (not counted as a restart) so each injection starts clean.
         #[cfg(feature = "swifi")]

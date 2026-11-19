@@ -319,11 +319,59 @@ pub fn swifi_campaign() -> bool {
     // counters: [lansvc, tlshost] x {injected, masked, fault, wrong, unrecovered}
     let mut c = [[0u64; 5]; 2];
     let (mut flips, mut raws) = (0u64, 0u64);
+    // wrong answers that only the golden workload caught (the probe still answered correctly)
+    let mut wl_only = 0u64;
     // bit flips by image class: [text, read-only data, writable data] x {injected, surfaced}
     let mut cls = [[0u64; 2]; 3];
     let mut first_bad: Option<(u64, usize, u64)> = None;
     // the probe of server `s`: Some(true) ok, Some(false) wrong answer (already reset), None faulted / held off
     let probe = |s: usize| if s == 0 { crate::lansvc::probe(false) } else { crate::tlshost::probe(false) };
+    // H6b — the workload replayed after every injection: a fixed set of calls whose answers were recorded on the clean
+    // image ("golden"). It reaches far more of each server than the probe: every el0-lansvc command with a well-formed
+    // DNS query, a DNS answer, a DHCP DISCOVER and a patterned buffer; the el0-tlshost HTTP parser with eight requests.
+    // work(s) = a digest over all answers; None = a call faulted / was refused.
+    const DNS_Q: &[u8] = &[0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 1, 0, 1];
+    const DNS_A: &[u8] = &[0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 1, 0, 1,
+        0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 93, 184, 216, 34];
+    const HTTP: [&[u8]; 8] = [
+        b"GET / HTTP/1.1\r\nHost: heqk.local\r\n\r\n",
+        b"GET /api/health?x=1&y=two HTTP/1.1\r\nHost: 10.99.0.1\r\nCookie: s=abcdef0123456789\r\nAccept: */*\r\n\r\n",
+        b"POST /api/login HTTP/1.1\r\nHost: heqk.local\r\nContent-Length: 11\r\nContent-Type: application/x-www-form-urlencoded\r\nOrigin: https://heqk.local\r\n\r\ntoken=abcde",
+        b"POST /api/owner-rules HTTP/1.1\r\nHost: heqk.local\r\nX-HQ-CSRF: 0011223344556677\r\nContent-Length: 0\r\n\r\n",
+        b"HEAD /index.html HTTP/1.0\r\n\r\n",
+        b"GET /a/very/long/path/that/goes/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on HTTP/1.1\r\nHost: h\r\n\r\n",
+        b"GET / HTTP/1.1\r\nHost: heqk.local\r\n", // incomplete
+        b"\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03 not http at all", // a TLS record on the plain port
+    ];
+    // one workload call by index: el0-lansvc has 18 commands x 4 inputs = 72, el0-tlshost 8 requests
+    const NW: [usize; 2] = [72, 8];
+    let call = |s: usize, k: usize| -> Option<u64> {
+        if s == 0 {
+            let v = crate::lansvc::swifi()?;
+            // a DHCP DISCOVER: BOOTP header (op 1, htype 1, hlen 6) + magic cookie + option 53 = 1 + end
+            let mut dhcp = [0u8; 244];
+            dhcp[0] = 1;
+            dhcp[1] = 1;
+            dhcp[2] = 6;
+            dhcp[4..8].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+            dhcp[28..34].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+            dhcp[236..240].copy_from_slice(&[99, 130, 83, 99]);
+            dhcp[240..244].copy_from_slice(&[53, 1, 1, 255]);
+            let mut pat = [0u8; 96];
+            for (i, b) in pat.iter_mut().enumerate() {
+                *b = (i as u8).wrapping_mul(37).wrapping_add(11);
+            }
+            let input: &[u8] = match k % 4 {
+                0 => DNS_Q,
+                1 => DNS_A,
+                2 => &dhcp[..],
+                _ => &pat[..],
+            };
+            v.swifi_work(1 + (k / 4) as u32, input)
+        } else {
+            crate::tlshost::host()?.swifi_work(HTTP[k])
+        }
+    };
     let stats = |s: usize| -> (u64, u64) {
         if s == 0 {
             let (_, _, f, r, _) = crate::lansvc::stats();
@@ -342,6 +390,48 @@ pub fn swifi_campaign() -> bool {
         }
     };
     let both = crate::lansvc::swifi().is_some() && crate::tlshost::host().is_some();
+    // golden answers on the clean image, taken twice: the workload must be deterministic or it cannot judge anything
+    // Golden answers on the clean image. Each call is taken TWICE; a call is used only if it answered both times with
+    // the same digest (a call that faults on its input, or whose answer carries state, cannot judge anything).
+    let mut golden = [[None::<u64>; 72]; 2];
+    let mut usable = [0usize; 2];
+    deliberate(|| {
+        for s in 0..2 {
+            restore(s);
+            for k in 0..NW[s] {
+                let a = call(s, k);
+                if a.is_none() {
+                    restore(s); // it faulted on a clean image: not a reference
+                    continue;
+                }
+                if call(s, k) == a {
+                    golden[s][k] = a;
+                    usable[s] += 1;
+                }
+            }
+            restore(s);
+            server_ok(if s == 0 { "el0-lansvc" } else { "el0-tlshost" });
+        }
+    });
+    // the replay: 0 = every usable call answered as recorded, 1 = a call faulted / was refused, 2 = a wrong answer
+    let last_bad = core::cell::Cell::new((usize::MAX, 0u64, 0u64));
+    let work = |s: usize| -> u8 {
+        for k in 0..NW[s] {
+            if let Some(g) = golden[s][k] {
+                match call(s, k) {
+                    None => return 1,
+                    Some(h) if h != g => {
+                        last_bad.set((s * 1000 + k, h, g));
+                        return 2;
+                    }
+                    Some(_) => {}
+                }
+            }
+        }
+        0
+    };
+    let stable = usable[0] >= 8 && usable[1] >= 4 && work(0) == 0 && work(1) == 0;
+    let both = both && stable;
     let mut i = 0u64;
     while both && i < N {
         let r = rnd();
@@ -372,8 +462,20 @@ pub fn swifi_campaign() -> bool {
                     crate::tlshost::host().map(|h| h.swifi_raw(cmd, (rnd() % 8) as usize, &buf[..len]));
                 }
             }
-            // --- observe: the probe right after the injection
-            let p = probe(s);
+            // --- observe: the probe, then the workload against its golden answers
+            let mut p = probe(s);
+            if p == Some(true) {
+                match work(s) {
+                    1 => p = None, // a workload call faulted (already reset by the fault path)
+                    2 => {
+                        // a WRONG ANSWER with no fault and a passing probe: only the workload saw it
+                        let _ = server_probe_failed(if s == 0 { "el0-lansvc" } else { "el0-tlshost" });
+                        wl_only += 1;
+                        p = Some(false);
+                    }
+                    _ => {}
+                }
+            }
             let (f1, r1) = stats(s);
             c[s][0] += 1;
             if p == Some(false) {
@@ -392,7 +494,7 @@ pub fn swifi_campaign() -> bool {
             }
             // --- recover: a clean image, then the server must answer its probe (a faulted INIT gets two more tries)
             restore(s);
-            let ok = probe(s) == Some(true) || probe(s) == Some(true) || probe(s) == Some(true);
+            let ok = (probe(s) == Some(true) || probe(s) == Some(true) || probe(s) == Some(true)) && work(s) == 0;
             // (the restore replaced the server's restart state, so close its journal entry here)
             server_ok(if s == 0 { "el0-lansvc" } else { "el0-tlshost" });
             if !ok {
@@ -416,17 +518,22 @@ pub fn swifi_campaign() -> bool {
     // leave both servers clean and answering for the rest of the boot
     restore(0);
     restore(1);
-    let alive = probe(0) == Some(true) && probe(1) == Some(true);
+    let alive = probe(0) == Some(true) && probe(1) == Some(true) && work(0) == 0 && work(1) == 0;
     let unrec = c[0][4] + c[1][4];
     let surfaced = c[0][2] + c[0][3] + c[1][2] + c[1][3];
     let pass = both && i == N && unrec == 0 && jp == 0 && alive && surfaced > 0 && jk[Kind::Exception as usize] == 0;
     arch_aarch64::_print(format_args!(
-        " [P-swifi] {} — autoheal harness H6, fault-injection campaign: {} injections ({} bit flips in writable server memory, {} random-command calls), seed fixed | el0-lansvc: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-tlshost: injected {} masked {} fault {} wrong-answer {} unrecovered {} | bit flips surfaced by class: text {}/{} read-only data {}/{} writable data {}/{} | surfaced {} of {} | journal entries {} (planned {}), left pending {} | both servers answer after the campaign={} | {} ms{}\n",
+        " [P-swifi] {} — autoheal harness H6, fault-injection campaign: {} injections ({} bit flips in writable server memory, {} random-command calls), seed fixed | el0-lansvc: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-tlshost: injected {} masked {} fault {} wrong-answer {} unrecovered {} | bit flips surfaced by class: text {}/{} read-only data {}/{} writable data {}/{} | wrong answers only the golden workload caught (probe still correct): {} | golden workload: {} of 72 el0-lansvc calls and {} of 8 el0-tlshost requests usable (answered twice identically on the clean image), replay clean={} | surfaced {} of {} | journal entries {} (planned {}), left pending {} | both servers answer after the campaign={} | {} ms{}\n",
         if pass { "PASS" } else { "FAIL" }, i, flips, raws,
         c[0][0], c[0][1], c[0][2], c[0][3], c[0][4], c[1][0], c[1][1], c[1][2], c[1][3], c[1][4],
-        cls[0][1], cls[0][0], cls[1][1], cls[1][0], cls[2][1], cls[2][0], surfaced, i, jt, jk[Kind::Planned as usize], jp, alive, now_ms().saturating_sub(t_start),
+        cls[0][1], cls[0][0], cls[1][1], cls[1][0], cls[2][1], cls[2][0], wl_only, usable[0], usable[1], stable, surfaced, i, jt, jk[Kind::Planned as usize], jp, alive, now_ms().saturating_sub(t_start),
         match first_bad { Some((n, s, r)) => { let _ = (n, s, r); " | FIRST UNRECOVERED recorded above" } None => "" }
     ));
+    if last_bad.get().0 != usize::MAX {
+        let (w, h, g) = last_bad.get();
+        arch_aarch64::_print(format_args!("   [swifi] last workload mismatch: server {} call #{} (el0-lansvc: command {} input {}) digest {:#x} vs golden {:#x}\n",
+            w / 1000, w % 1000, 1 + (w % 1000) / 4, (w % 1000) % 4, h, g));
+    }
     if let Some((n, s, r)) = first_bad {
         arch_aarch64::_print(format_args!("   [swifi] first unrecovered: injection #{} server {} r={:#x}\n", n, if s == 0 { "el0-lansvc" } else { "el0-tlshost" }, r));
     }

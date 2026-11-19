@@ -408,6 +408,23 @@ impl TlsHost {
     pub fn swifi_raw(&mut self, cmd: u32, conn: usize, input: &[u8]) -> u32 {
         self.call(cmd, conn, input, 0).status
     }
+    /// H6b: one workload call (the HTTP request parser) — a digest of (status, record length, record bytes). None =
+    /// it faulted / was refused.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_work(&mut self, input: &[u8]) -> Option<u64> {
+        let r = self.call(CMD_HTTP_PARSE, 0, input, 0);
+        if r.status == ST_PANIC {
+            return None;
+        }
+        let n = r.plain_len.min(256);
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ ((r.status as u64) << 32 | n as u64);
+        let mut buf = [0u8; 256];
+        self.read(OUT_PLAIN_OFF, &mut buf[..n]);
+        for b in &buf[..n] {
+            h = (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        Some(h)
+    }
     /// H6: put the image back between injections (not counted) so each injection starts clean; the re-INIT runs at
     /// the next call, as after a fault.
     #[cfg(feature = "swifi")]
