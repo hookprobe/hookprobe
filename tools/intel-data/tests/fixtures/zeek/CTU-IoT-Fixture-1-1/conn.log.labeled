@@ -1,0 +1,6 @@
+#separator \x09
+#fields	ts	uid	id.orig_h	id.orig_p	id.resp_h	id.resp_p	proto	service	duration	orig_bytes	resp_bytes	conn_state	local_orig	local_resp	missed_bytes	history	orig_pkts	orig_ip_bytes	resp_pkts	resp_ip_bytes	tunnel_parents   label   detailed-label
+1525879831.015811	CUmrqr4svHuSXJy5z7	192.168.100.103	51524	203.0.113.7	23	tcp	-	2.998	0	0	S0	-	-	0	S	3	180	0	0	-   Malicious   PartOfAHorizontalPortScan
+1525879832.000000	CH6Cwd2ZJdlhm8yNA2	192.168.100.103	40112	198.51.100.9	6667	tcp	irc	60.5	1200	3400	SF	-	-	0	ShADadfF	20	2240	18	4340	-   Malicious   C&C-HeartBeat
+1525879833.500000	CaX9jI2Q5Wk2e7Wq51	192.168.100.103	53001	192.168.100.1	53	udp	dns	0.01	40	120	SF	-	-	0	Dd	1	68	1	148	-   Benign   -
+garbage line without uid

@@ -1,0 +1,143 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Safe handling of untrusted downloaded files.
+
+Rules (HEQK-DATA-GOVERNANCE.md §5):
+  * nothing downloaded is executed, imported, unpickled or evaluated: parsers are csv / json / text;
+  * archives are extracted only member-by-member into a fresh directory, refusing absolute paths,
+    '..', links, devices, and anything over the size / ratio / count caps (zip bombs);
+  * decompression streams are capped;
+  * lines and CSV fields are length-capped, so one hostile row cannot exhaust memory;
+  * executable-looking members are refused outright (no malware samples in this pipeline).
+"""
+import csv
+import gzip
+import io
+import json
+import os
+import stat
+import zipfile
+
+MAX_MEMBER = 2 << 30          # 2 GiB per extracted member
+MAX_TOTAL = 8 << 30           # 8 GiB per archive
+MAX_MEMBERS = 50_000
+MAX_RATIO = 200               # uncompressed / compressed per member
+MAX_LINE = 1 << 20            # 1 MiB per text line
+REFUSED_EXT = (".exe", ".dll", ".scr", ".bin", ".elf", ".so", ".dylib", ".msi", ".apk", ".jar", ".ps1", ".bat",
+               ".cmd", ".vbs", ".js", ".hta", ".lnk", ".docm", ".xlsm", ".pyc", ".pkl", ".pickle")
+
+
+class UnsafeContent(Exception):
+    pass
+
+
+def _safe_member_path(dest, name):
+    if name.startswith(("/", "\\")) or ":" in name.split("/")[0]:
+        raise UnsafeContent(f"absolute member path {name!r}")
+    parts = [p for p in name.replace("\\", "/").split("/") if p not in ("", ".")]
+    if any(p == ".." for p in parts):
+        raise UnsafeContent(f"path traversal in {name!r}")
+    target = os.path.realpath(os.path.join(dest, *parts))
+    if not target.startswith(os.path.realpath(dest) + os.sep):
+        raise UnsafeContent(f"member escapes destination: {name!r}")
+    return target
+
+
+def extract_zip(path, dest, allow=None):
+    """Extract `path` into empty directory `dest`. `allow(name) -> bool` filters members. Returns the list
+    of extracted paths. Raises UnsafeContent on anything suspicious (fail closed: nothing partial is kept
+    on error by the caller, who extracts into a temp dir)."""
+    os.makedirs(dest, exist_ok=True)
+    if os.listdir(dest):
+        raise UnsafeContent(f"extraction directory not empty: {dest}")
+    out, total = [], 0
+    with zipfile.ZipFile(path) as z:
+        infos = z.infolist()
+        if len(infos) > MAX_MEMBERS:
+            raise UnsafeContent(f"{len(infos)} members > {MAX_MEMBERS}")
+        for info in infos:
+            name = info.filename
+            if info.is_dir():
+                continue
+            mode = (info.external_attr >> 16) & 0o170000
+            if mode and mode not in (stat.S_IFREG,):
+                raise UnsafeContent(f"non-regular member {name!r} (link/device)")
+            if name.lower().endswith(REFUSED_EXT):
+                raise UnsafeContent(f"executable-type member {name!r} refused (no samples in this pipeline)")
+            if info.flag_bits & 0x1:
+                raise UnsafeContent(f"encrypted member {name!r} (password-protected archives are typical of malware sample sets)")
+            if allow is not None and not allow(name):
+                continue
+            if info.file_size > MAX_MEMBER:
+                raise UnsafeContent(f"member {name!r} is {info.file_size} bytes > cap")
+            if info.compress_size and info.file_size / info.compress_size > MAX_RATIO:
+                raise UnsafeContent(f"member {name!r} compression ratio {info.file_size / info.compress_size:.0f} > {MAX_RATIO}")
+            total += info.file_size
+            if total > MAX_TOTAL:
+                raise UnsafeContent("archive total exceeds cap")
+            target = _safe_member_path(dest, name)
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            written = 0
+            with z.open(info) as src, open(target, "xb") as dst:
+                while True:
+                    chunk = src.read(1 << 20)
+                    if not chunk:
+                        break
+                    written += len(chunk)
+                    if written > info.file_size or written > MAX_MEMBER:
+                        raise UnsafeContent(f"member {name!r} inflates beyond its declared size")
+                    dst.write(chunk)
+            out.append(target)
+    return out
+
+
+def open_text(path, compression=None, max_bytes=MAX_TOTAL):
+    """A text stream over a plain or gzip file with a decompressed-size cap."""
+    raw = open(path, "rb")
+    if compression == "gzip" or (compression is None and path.endswith(".gz")):
+        raw = gzip.GzipFile(fileobj=raw)
+    return io.TextIOWrapper(_Capped(raw, max_bytes), encoding="utf-8", errors="replace", newline="")
+
+
+class _Capped(io.RawIOBase):
+    def __init__(self, f, cap):
+        self.f, self.cap, self.n = f, cap, 0
+
+    def readable(self):
+        return True
+
+    def readinto(self, b):
+        data = self.f.read(len(b))
+        self.n += len(data)
+        if self.n > self.cap:
+            raise UnsafeContent(f"decompressed stream exceeds {self.cap} bytes")
+        b[:len(data)] = data
+        return len(data)
+
+    def close(self):
+        self.f.close()
+        super().close()
+
+
+def lines(stream):
+    """Yield (line_no, line) with the newline stripped; over-long lines raise."""
+    for n, line in enumerate(stream, 1):
+        if len(line) > MAX_LINE:
+            raise UnsafeContent(f"line {n} longer than {MAX_LINE} bytes")
+        yield n, line.rstrip("\r\n")
+
+
+def csv_rows(stream, **kw):
+    csv.field_size_limit(MAX_LINE)
+    return csv.reader(stream, **kw)
+
+
+def load_json(path, max_bytes=512 << 20):
+    size = os.path.getsize(path)
+    if size > max_bytes:
+        raise UnsafeContent(f"{path}: {size} bytes > JSON cap {max_bytes}")
+    with open(path, "rb") as f:
+        return json.loads(f.read().decode("utf-8"), parse_constant=_no_constants)
+
+
+def _no_constants(name):
+    raise UnsafeContent(f"non-standard JSON constant {name}")

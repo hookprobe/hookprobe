@@ -1,0 +1,10 @@
+dev: 3 benign timelines, 9 infected scenarios
+  ridge=0.1    train pairs=168  dev AUC(B)=0.9309
+  ridge=1      train pairs=168  dev AUC(B)=0.9522
+  ridge=10     train pairs=168  dev AUC(B)=0.9524
+  ridge=100    train pairs=168  dev AUC(B)=0.9446
+phase=dev episodes=27
+cand      AUC incident det @1/wk      benign alarms/dev/day  bytes/dev
+A      0.9491              0.519                      0.000       1214
+B      0.9524              0.370                      0.093        568
+C      0.9771              0.667                      0.093       1782

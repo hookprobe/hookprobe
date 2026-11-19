@@ -10,9 +10,11 @@
 //! and PTK/MIC self-consistency vectors. The P16 short-tail-HMAC bug is the
 //! standing proof that crypto QEMU<->metal gaps bite.
 
-#[path = "../arch-aarch64/src/aes.rs"]
+// hal since 52cb2ac0 (SEC-01 step 5b moved the WPA crypto out of arch-aarch64); the old paths made this harness
+// fail to BUILD, which validate.sh reported as "skip" — the gate was silently off from 2026-11-11.
+#[path = "../hal/src/aes.rs"]
 mod aes;
-#[path = "../arch-aarch64/src/wpa.rs"]
+#[path = "../hal/src/wpa.rs"]
 mod wpa;
 
 fn check(name: &str, pass: bool, ok: &mut bool) {
