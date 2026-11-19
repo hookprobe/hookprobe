@@ -175,6 +175,8 @@ mod imp {
         pub last_fault_ticks: u64,
         /// H2: the restart state under the supervisor table's policy (the fault streak, the hold-off).
         sup: hal::superv::Sup,
+        /// H5: the component id the CPU accounting is charged to.
+        cid: u8,
         /// Run once after each fault / budget overrun, before the server's next call (the bus server: recover the SDHCI
         /// controller if the fault left a transfer in flight — ADR 0065 claims C1/C5).
         pub on_fault: Option<fn() -> u8>,
@@ -273,6 +275,7 @@ mod imp {
             bad_rings: 0,
             last_fault_ticks: 0,
             sup: hal::superv::Sup::new(hal::superv::entry(sp.name).unwrap_or(&hal::superv::TABLE[0])),
+            cid: hal::superv::component_id(sp.name),
             on_fault: None,
         };
         for g in parsed.segs[..parsed.nsegs].iter() {
@@ -372,7 +375,7 @@ mod imp {
         /// One command: a bounded excursion; a fault or overrun resets the server and starts the backoff.
         pub fn call(&mut self, cmd: u32) -> Call {
             let t = now_ms();
-            if !self.sup.ready(t) {
+            if !self.sup.ready(t) || !crate::superv::cpu_admit_at(self.cid, t) {
                 return Call::Backoff;
             }
             self.w32(H_MAGIC, self.magic);
@@ -381,6 +384,7 @@ mod imp {
             self.calls += 1;
             let t0 = crate::clock::ticks();
             let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, self.budget_us);
+            crate::superv::cpu_charge(self.cid, t0); // H5
             let st = if how == crate::Excursion::Exited { self.r32(H_STATUS) } else { ST_PANIC };
             if st == ST_PANIC {
                 self.faults += 1;
