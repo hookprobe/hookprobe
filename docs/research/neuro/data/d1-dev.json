@@ -1,0 +1,512 @@
+{
+ "phase": "dev",
+ "held_out": [
+  "AwairAirQuality",
+  "BelkinWemoMotionSensor",
+  "HPPrinter",
+  "PhilipsHue",
+  "TPLinkSmartPlug",
+  "WithingsSleepSensor",
+  "WithingsSmartScale"
+ ],
+ "days": {
+  "AmazonEcho": {
+   "history": 45,
+   "dev": 23,
+   "test": 23
+  },
+  "AugustDoorBell": {
+   "history": 54,
+   "dev": 27,
+   "test": 27
+  },
+  "AwairAirQuality": {
+   "history": 14,
+   "dev": 7,
+   "test": 7
+  },
+  "BelkinCamera": {
+   "history": 7,
+   "dev": 4,
+   "test": 4
+  },
+  "BelkinWemoMotionSensor": {
+   "history": 38,
+   "dev": 19,
+   "test": 20
+  },
+  "BelkinWemoSwitch": {
+   "history": 52,
+   "dev": 26,
+   "test": 27
+  },
+  "BlipCareBPMeter": {
+   "history": 4,
+   "dev": 2,
+   "test": 2
+  },
+  "CanaryCamera": {
+   "history": 3,
+   "dev": 1,
+   "test": 2
+  },
+  "HPPrinter": {
+   "history": 69,
+   "dev": 35,
+   "test": 35
+  },
+  "HelloBarbie": {
+   "history": 6,
+   "dev": 3,
+   "test": 4
+  },
+  "LiFXBulb": {
+   "history": 47,
+   "dev": 23,
+   "test": 24
+  },
+  "NestDropCam": {
+   "history": 80,
+   "dev": 40,
+   "test": 40
+  },
+  "NestProtectSmokeAlarm": {
+   "history": 74,
+   "dev": 37,
+   "test": 37
+  },
+  "NetatmoWeatherStation": {
+   "history": 71,
+   "dev": 35,
+   "test": 36
+  },
+  "NetatmoWelcome": {
+   "history": 64,
+   "dev": 32,
+   "test": 33
+  },
+  "PhilipsHue": {
+   "history": 41,
+   "dev": 21,
+   "test": 21
+  },
+  "PixStarPhotoFrame": {
+   "history": 13,
+   "dev": 7,
+   "test": 7
+  },
+  "RingDoorBell": {
+   "history": 11,
+   "dev": 6,
+   "test": 6
+  },
+  "SamsungCamera": {
+   "history": 60,
+   "dev": 30,
+   "test": 30
+  },
+  "SamsungSmartThings": {
+   "history": 54,
+   "dev": 27,
+   "test": 27
+  },
+  "TPLinkCamera": {
+   "history": 22,
+   "dev": 11,
+   "test": 11
+  },
+  "TPLinkSmartPlug": {
+   "history": 16,
+   "dev": 8,
+   "test": 8
+  },
+  "TribySpeaker": {
+   "history": 46,
+   "dev": 23,
+   "test": 23
+  },
+  "WithingsBabyMonitor": {
+   "history": 8,
+   "dev": 4,
+   "test": 4
+  },
+  "WithingsSleepSensor": {
+   "history": 43,
+   "dev": 22,
+   "test": 22
+  },
+  "WithingsSmartScale": {
+   "history": 83,
+   "dev": 42,
+   "test": 42
+  },
+  "iHome": {
+   "history": 14,
+   "dev": 7,
+   "test": 8
+  }
+ },
+ "q2": {
+  "0": {
+   "nuisance": {
+    "median": 46.8,
+    "max": 168.0,
+    "devices_over_1": 21,
+    "devices": 21,
+    "per_device": {
+     "AmazonEcho": 46.56521739130435,
+     "AugustDoorBell": 150.88888888888889,
+     "AwairAirQuality": 95.0,
+     "BelkinCamera": 31.5,
+     "BelkinWemoMotionSensor": 38.315789473684205,
+     "BelkinWemoSwitch": 46.03846153846154,
+     "BlipCareBPMeter": 0.0,
+     "CanaryCamera": 28.0,
+     "HPPrinter": 46.8,
+     "HelloBarbie": 0.0,
+     "LiFXBulb": 150.34782608695653,
+     "NestDropCam": 34.3,
+     "NestProtectSmokeAlarm": 3.027027027027027,
+     "NetatmoWeatherStation": 2.6,
+     "NetatmoWelcome": 42.4375,
+     "PhilipsHue": 79.33333333333333,
+     "PixStarPhotoFrame": 32.0,
+     "RingDoorBell": 7.0,
+     "SamsungCamera": 95.9,
+     "SamsungSmartThings": 138.7037037037037,
+     "TPLinkCamera": 152.0909090909091,
+     "TPLinkSmartPlug": 78.75,
+     "TribySpeaker": 103.17391304347827,
+     "WithingsBabyMonitor": 0.0,
+     "WithingsSleepSensor": 27.681818181818183,
+     "WithingsSmartScale": 1.1666666666666667,
+     "iHome": 168.0
+    },
+    "period_days": {
+     "AmazonEcho": 23,
+     "AugustDoorBell": 27,
+     "AwairAirQuality": 7,
+     "BelkinCamera": 4,
+     "BelkinWemoMotionSensor": 19,
+     "BelkinWemoSwitch": 26,
+     "BlipCareBPMeter": 2,
+     "CanaryCamera": 1,
+     "HPPrinter": 35,
+     "HelloBarbie": 3,
+     "LiFXBulb": 23,
+     "NestDropCam": 40,
+     "NestProtectSmokeAlarm": 37,
+     "NetatmoWeatherStation": 35,
+     "NetatmoWelcome": 32,
+     "PhilipsHue": 21,
+     "PixStarPhotoFrame": 7,
+     "RingDoorBell": 6,
+     "SamsungCamera": 30,
+     "SamsungSmartThings": 27,
+     "TPLinkCamera": 11,
+     "TPLinkSmartPlug": 8,
+     "TribySpeaker": 23,
+     "WithingsBabyMonitor": 4,
+     "WithingsSleepSensor": 22,
+     "WithingsSmartScale": 42,
+     "iHome": 7
+    },
+    "min_days": 7
+   },
+   "dga_detect": 1.0,
+   "dga_onsets": 196
+  },
+  "3": {
+   "nuisance": {
+    "median": 46.8,
+    "max": 168.0,
+    "devices_over_1": 21,
+    "devices": 21,
+    "per_device": {
+     "AmazonEcho": 46.56521739130435,
+     "AugustDoorBell": 150.88888888888889,
+     "AwairAirQuality": 95.0,
+     "BelkinCamera": 31.5,
+     "BelkinWemoMotionSensor": 38.315789473684205,
+     "BelkinWemoSwitch": 46.03846153846154,
+     "BlipCareBPMeter": 0.0,
+     "CanaryCamera": 28.0,
+     "HPPrinter": 46.8,
+     "HelloBarbie": 0.0,
+     "LiFXBulb": 150.34782608695653,
+     "NestDropCam": 34.3,
+     "NestProtectSmokeAlarm": 3.027027027027027,
+     "NetatmoWeatherStation": 2.6,
+     "NetatmoWelcome": 42.4375,
+     "PhilipsHue": 79.33333333333333,
+     "PixStarPhotoFrame": 32.0,
+     "RingDoorBell": 7.0,
+     "SamsungCamera": 95.9,
+     "SamsungSmartThings": 138.7037037037037,
+     "TPLinkCamera": 152.0909090909091,
+     "TPLinkSmartPlug": 78.75,
+     "TribySpeaker": 103.17391304347827,
+     "WithingsBabyMonitor": 0.0,
+     "WithingsSleepSensor": 27.681818181818183,
+     "WithingsSmartScale": 1.1666666666666667,
+     "iHome": 168.0
+    },
+    "period_days": {
+     "AmazonEcho": 23,
+     "AugustDoorBell": 27,
+     "AwairAirQuality": 7,
+     "BelkinCamera": 4,
+     "BelkinWemoMotionSensor": 19,
+     "BelkinWemoSwitch": 26,
+     "BlipCareBPMeter": 2,
+     "CanaryCamera": 1,
+     "HPPrinter": 35,
+     "HelloBarbie": 3,
+     "LiFXBulb": 23,
+     "NestDropCam": 40,
+     "NestProtectSmokeAlarm": 37,
+     "NetatmoWeatherStation": 35,
+     "NetatmoWelcome": 32,
+     "PhilipsHue": 21,
+     "PixStarPhotoFrame": 7,
+     "RingDoorBell": 6,
+     "SamsungCamera": 30,
+     "SamsungSmartThings": 27,
+     "TPLinkCamera": 11,
+     "TPLinkSmartPlug": 8,
+     "TribySpeaker": 23,
+     "WithingsBabyMonitor": 4,
+     "WithingsSleepSensor": 22,
+     "WithingsSmartScale": 42,
+     "iHome": 7
+    },
+    "min_days": 7
+   },
+   "dga_detect": 1.0,
+   "dga_onsets": 196
+  },
+  "5": {
+   "nuisance": {
+    "median": 46.8,
+    "max": 168.0,
+    "devices_over_1": 21,
+    "devices": 21,
+    "per_device": {
+     "AmazonEcho": 46.56521739130435,
+     "AugustDoorBell": 150.88888888888889,
+     "AwairAirQuality": 95.0,
+     "BelkinCamera": 31.5,
+     "BelkinWemoMotionSensor": 38.315789473684205,
+     "BelkinWemoSwitch": 46.03846153846154,
+     "BlipCareBPMeter": 0.0,
+     "CanaryCamera": 28.0,
+     "HPPrinter": 46.8,
+     "HelloBarbie": 0.0,
+     "LiFXBulb": 150.34782608695653,
+     "NestDropCam": 34.3,
+     "NestProtectSmokeAlarm": 3.027027027027027,
+     "NetatmoWeatherStation": 2.6,
+     "NetatmoWelcome": 43.75,
+     "PhilipsHue": 79.33333333333333,
+     "PixStarPhotoFrame": 32.0,
+     "RingDoorBell": 7.0,
+     "SamsungCamera": 95.9,
+     "SamsungSmartThings": 138.7037037037037,
+     "TPLinkCamera": 152.0909090909091,
+     "TPLinkSmartPlug": 78.75,
+     "TribySpeaker": 103.17391304347827,
+     "WithingsBabyMonitor": 0.0,
+     "WithingsSleepSensor": 27.681818181818183,
+     "WithingsSmartScale": 1.1666666666666667,
+     "iHome": 168.0
+    },
+    "period_days": {
+     "AmazonEcho": 23,
+     "AugustDoorBell": 27,
+     "AwairAirQuality": 7,
+     "BelkinCamera": 4,
+     "BelkinWemoMotionSensor": 19,
+     "BelkinWemoSwitch": 26,
+     "BlipCareBPMeter": 2,
+     "CanaryCamera": 1,
+     "HPPrinter": 35,
+     "HelloBarbie": 3,
+     "LiFXBulb": 23,
+     "NestDropCam": 40,
+     "NestProtectSmokeAlarm": 37,
+     "NetatmoWeatherStation": 35,
+     "NetatmoWelcome": 32,
+     "PhilipsHue": 21,
+     "PixStarPhotoFrame": 7,
+     "RingDoorBell": 6,
+     "SamsungCamera": 30,
+     "SamsungSmartThings": 27,
+     "TPLinkCamera": 11,
+     "TPLinkSmartPlug": 8,
+     "TribySpeaker": 23,
+     "WithingsBabyMonitor": 4,
+     "WithingsSleepSensor": 22,
+     "WithingsSmartScale": 42,
+     "iHome": 7
+    },
+    "min_days": 7
+   },
+   "dga_detect": 1.0,
+   "dga_onsets": 196
+  },
+  "10": {
+   "nuisance": {
+    "median": 46.8,
+    "max": 168.0,
+    "devices_over_1": 21,
+    "devices": 21,
+    "per_device": {
+     "AmazonEcho": 46.56521739130435,
+     "AugustDoorBell": 150.88888888888889,
+     "AwairAirQuality": 95.0,
+     "BelkinCamera": 31.5,
+     "BelkinWemoMotionSensor": 38.315789473684205,
+     "BelkinWemoSwitch": 46.03846153846154,
+     "BlipCareBPMeter": 0.0,
+     "CanaryCamera": 28.0,
+     "HPPrinter": 46.8,
+     "HelloBarbie": 0.0,
+     "LiFXBulb": 150.34782608695653,
+     "NestDropCam": 34.3,
+     "NestProtectSmokeAlarm": 3.027027027027027,
+     "NetatmoWeatherStation": 2.6,
+     "NetatmoWelcome": 43.75,
+     "PhilipsHue": 79.33333333333333,
+     "PixStarPhotoFrame": 15.0,
+     "RingDoorBell": 7.0,
+     "SamsungCamera": 95.9,
+     "SamsungSmartThings": 138.7037037037037,
+     "TPLinkCamera": 152.0909090909091,
+     "TPLinkSmartPlug": 78.75,
+     "TribySpeaker": 103.17391304347827,
+     "WithingsBabyMonitor": 0.0,
+     "WithingsSleepSensor": 27.681818181818183,
+     "WithingsSmartScale": 1.1666666666666667,
+     "iHome": 168.0
+    },
+    "period_days": {
+     "AmazonEcho": 23,
+     "AugustDoorBell": 27,
+     "AwairAirQuality": 7,
+     "BelkinCamera": 4,
+     "BelkinWemoMotionSensor": 19,
+     "BelkinWemoSwitch": 26,
+     "BlipCareBPMeter": 2,
+     "CanaryCamera": 1,
+     "HPPrinter": 35,
+     "HelloBarbie": 3,
+     "LiFXBulb": 23,
+     "NestDropCam": 40,
+     "NestProtectSmokeAlarm": 37,
+     "NetatmoWeatherStation": 35,
+     "NetatmoWelcome": 32,
+     "PhilipsHue": 21,
+     "PixStarPhotoFrame": 7,
+     "RingDoorBell": 6,
+     "SamsungCamera": 30,
+     "SamsungSmartThings": 27,
+     "TPLinkCamera": 11,
+     "TPLinkSmartPlug": 8,
+     "TribySpeaker": 23,
+     "WithingsBabyMonitor": 4,
+     "WithingsSleepSensor": 22,
+     "WithingsSmartScale": 42,
+     "iHome": 7
+    },
+    "min_days": 7
+   },
+   "dga_detect": 1.0,
+   "dga_onsets": 196
+  },
+  "20": {
+   "nuisance": {
+    "median": 46.8,
+    "max": 168.0,
+    "devices_over_1": 21,
+    "devices": 21,
+    "per_device": {
+     "AmazonEcho": 46.56521739130435,
+     "AugustDoorBell": 150.88888888888889,
+     "AwairAirQuality": 95.0,
+     "BelkinCamera": 31.5,
+     "BelkinWemoMotionSensor": 38.315789473684205,
+     "BelkinWemoSwitch": 46.03846153846154,
+     "BlipCareBPMeter": 0.0,
+     "CanaryCamera": 28.0,
+     "HPPrinter": 46.8,
+     "HelloBarbie": 0.0,
+     "LiFXBulb": 150.34782608695653,
+     "NestDropCam": 34.3,
+     "NestProtectSmokeAlarm": 3.027027027027027,
+     "NetatmoWeatherStation": 2.6,
+     "NetatmoWelcome": 43.75,
+     "PhilipsHue": 79.33333333333333,
+     "PixStarPhotoFrame": 15.0,
+     "RingDoorBell": 7.0,
+     "SamsungCamera": 95.9,
+     "SamsungSmartThings": 138.7037037037037,
+     "TPLinkCamera": 152.0909090909091,
+     "TPLinkSmartPlug": 78.75,
+     "TribySpeaker": 103.17391304347827,
+     "WithingsBabyMonitor": 0.0,
+     "WithingsSleepSensor": 27.681818181818183,
+     "WithingsSmartScale": 1.1666666666666667,
+     "iHome": 168.0
+    },
+    "period_days": {
+     "AmazonEcho": 23,
+     "AugustDoorBell": 27,
+     "AwairAirQuality": 7,
+     "BelkinCamera": 4,
+     "BelkinWemoMotionSensor": 19,
+     "BelkinWemoSwitch": 26,
+     "BlipCareBPMeter": 2,
+     "CanaryCamera": 1,
+     "HPPrinter": 35,
+     "HelloBarbie": 3,
+     "LiFXBulb": 23,
+     "NestDropCam": 40,
+     "NestProtectSmokeAlarm": 37,
+     "NetatmoWeatherStation": 35,
+     "NetatmoWelcome": 32,
+     "PhilipsHue": 21,
+     "PixStarPhotoFrame": 7,
+     "RingDoorBell": 6,
+     "SamsungCamera": 30,
+     "SamsungSmartThings": 27,
+     "TPLinkCamera": 11,
+     "TPLinkSmartPlug": 8,
+     "TribySpeaker": 23,
+     "WithingsBabyMonitor": 4,
+     "WithingsSleepSensor": 22,
+     "WithingsSmartScale": 42,
+     "iHome": 7
+    },
+    "min_days": 7
+   },
+   "dga_detect": 1.0,
+   "dga_onsets": 196
+  }
+ },
+ "dev_auc": {
+  "A": 0.9102552113450052,
+  "B": 0.8141214284411883
+ },
+ "frozen": {
+  "q_min": null,
+  "ridge": 100.0,
+  "mae": [
+   0.26055461492106013,
+   0.3087967024402121,
+   0.2914234940775522,
+   0.22314640133886327
+  ],
+  "admit_q": 13.750742643666406,
+  "tB": 92.45006198422882
+ }
+}
