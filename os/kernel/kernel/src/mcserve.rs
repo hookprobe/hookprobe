@@ -763,6 +763,7 @@ pub fn run() -> ! {
     // ADR 0051: the EL0 TLS server + MCTLS.CRT from the same boot disk (before the node: it decides :443).
     #[cfg(feature = "mctls")]
     crate::tlshost::bring_up(arch_aarch64::virtio_blk::VirtioBlk::open().as_ref());
+    let _ = crate::tlshost::probe_selftest(); // autoheal harness H4b: the functional probe of el0-tlshost
     let _ = crate::lansvc::selftest(); // ADR 0050 D4 step 2 (loads the EL0 LAN-services server)
     let _ = crate::el0srv::selftest(); // ADR 0065 step 2: the resident EL0 driver substrate (el0-wifi + a fake device)
     let _ = crate::el0srv::split_selftest(); // ADR 0065 step 4g S1: bus server + WPA security server, supervised apart
