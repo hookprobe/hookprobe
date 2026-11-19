@@ -493,6 +493,7 @@ pub fn probe(tamper: bool) -> Option<bool> {
 /// [P-tlshost-probe] (QEMU, after `bring_up`): the probe answers; a simulated wrong answer is journaled kind probe,
 /// the server is reset (a restart, not a fault), `ready` is kept, the deferred re-INIT runs at the next call and the
 /// next probe answers; the journal entry closes Recovered.
+#[cfg(not(feature = "cm5"))]
 pub fn probe_selftest() -> bool {
     let Some((r0, f0, t0, ready0)) = host().map(|h| (h.restarts, h.faults, h.timeouts, h.ready)) else {
         arch_aarch64::_print(format_args!(" [P-tlshost-probe] FAIL — the EL0 TLS server is not loaded\n"));
