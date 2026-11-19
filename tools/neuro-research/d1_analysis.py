@@ -27,6 +27,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 import dna_fixed as fx  # noqa: E402
 import p2_learned_vs_dna as p2  # noqa: E402
+import unsw_to_d1 as conv  # noqa: E402
+import ipaddress  # noqa: E402
+
+PEER_MODE = "exact"             # doc 18: the overlays use the same peer key as the converted data
+
+
+def ov_fp(s):
+    """'ip:port' of an overlay peer -> its fingerprint under PEER_MODE (no transport: port-only class match)."""
+    ip, _, port = s.rpartition(":")
+    return conv.service_peer_fp(PEER_MODE, ipaddress.ip_address(ip.strip("[]")).packed, int(port or 0))
 
 Q_MINS = (3, 5, 10, 20)
 ONSETS = 8                      # attack onsets per device, per kind, per period
@@ -34,6 +44,18 @@ KINDS = ("dga", "scan", "exfil", "iot23")
 DUR = {"dga": 4, "scan": 1, "exfil": 1, "iot23": 4}
 CALM = fx.CALM_Q8
 HOURS_WEEK = 24 * 7
+CALIB = {}                      # mac -> (calibration-window scores, calibration active days), doc 19
+B_GRID = (0.5, 1.0)
+M_GRID = (1.0, 1.25, 1.5, 2.0)
+
+
+def device_threshold(mac, b, m):
+    """doc 19: T_d = max(1.0, m * S_d[k]), k = min(15, floor(b * calibration weeks)), S_d descending."""
+    cal, days = CALIB.get(mac, ([], 0))
+    k = min(15, int(b * days / 7.0))
+    srt = sorted(cal, reverse=True)
+    base = srt[k] if k < len(srt) else 0.0
+    return max(1.0, m * base)
 CLOCK_CUT = 1472688000 // 3600  # 2016-09-01 UTC: earlier timestamps are capture clock errors (addendum A2)
 MIN_DAYS = 7                    # medians use devices with >= 7 active days in the period (addendum A6)
 
@@ -59,10 +81,17 @@ def held_out(mac):
     return int(hashlib.sha256(mac.encode()).hexdigest(), 16) % 27 < 5
 
 
-def split(hours):
-    """Per device: first 50% of ACTIVE DAYS = history, next 25% = dev, last 25% = test."""
+def split(hours, mode="d1"):
+    """Per device. d1: first 50% of ACTIVE DAYS = history, next 25% = dev, last 25% = test.
+    half (doc 18 confirmation): first 50% = history (learning, unscored), last 50% = test (scored)."""
     days = sorted({h // 24 for h, _ in hours})
     n = len(days)
+    if mode == "half":
+        a = days[n // 2] if n else 0
+        out = {"history": [], "dev": [], "test": []}
+        for h, r in hours:
+            out["history" if h // 24 < a else "test"].append((h, r))
+        return out, {"history": n // 2, "dev": 0, "test": n - n // 2}
     a, b = days[n // 2] if n else 0, days[(3 * n) // 4] if n else 0
     out = {"history": [], "dev": [], "test": []}
     for h, r in hours:
@@ -119,17 +148,17 @@ def attack_hours(kind, seed, iot_segs):
             out.append({"dns": [(fx.dns_fp_from_str(n), 1) for n in names], "conns": 0, "bytes": 150 * 70})
         return out
     if kind == "scan":  # 59 LAN hosts x {22, 445}, as behavioural_memory.py
-        peers = [fx.peer_fp_from_str("192.168.10.%d:%d" % (q, p)) for q in range(1, 60) for p in (22, 445)]
+        peers = [ov_fp("192.168.10.%d:%d" % (q, p)) for q in range(1, 60) for p in (22, 445)]
         return [{"peers": peers, "conns": 118, "bytes": 118 * 60}]
     if kind == "exfil":  # +2 GB to one new external peer, as behavioural_memory.py
-        return [{"peers": [fx.peer_fp_from_str("203.0.113.%d:443" % r.randrange(1, 250))], "conns": 1,
+        return [{"peers": [ov_fp("203.0.113.%d:443" % r.randrange(1, 250))], "conns": 1,
                  "bytes": 2_000_000_000}]
     name, seg = iot_segs[seed % len(iot_segs)]      # IoT-23 malicious hours of an infected host
     k = min(DUR[kind], len(seg))
     s0 = (seed >> 8) % (len(seg) - k + 1)
     out = []
     for _, (conns, peers, bytes_out, _s, _n) in seg[s0:s0 + k]:
-        out.append({"peers": [fx.peer_fp_from_str(p) for p in sorted(peers)], "conns": conns, "bytes": bytes_out})
+        out.append({"peers": [ov_fp(p) for p in sorted(peers)], "conns": conns, "bytes": bytes_out})
     return out
 
 
@@ -205,8 +234,13 @@ def run_device(mac, parts, period, q_min, iot_segs, ssm=None):
     Returns benign scores [(h, sA, sB)] and attack results {kind: [(scoresA, scoresB)]}."""
     dna = DNAQ(q_min)
     warm = parts["history"] + (parts["dev"] if period == "test" else [])
-    for h, r in warm:
-        dna.close_hour(h % 24, make_agg(dna, r))
+    half = len(warm) // 2                          # doc 19: calibration window = last 50% of warm hours
+    cal = []
+    for i, (h, r) in enumerate(warm):
+        sc, _ = dna.close_hour(h % 24, make_agg(dna, r))
+        if i >= half:
+            cal.append(sc / 256.0)
+    CALIB[mac] = (cal, len({h // 24 for h, _ in warm[half:]}))
     b = None
     if ssm is not None:
         W, mae, admit_q = ssm
@@ -258,7 +292,8 @@ def nuisance(res, devs, period, col=1, thr=1.0):
     for d, (benign, _) in res.items():
         nd = devs[d][3][period]
         weeks = max(nd, 1) / 7.0
-        per[devs[d][1]] = sum(1 for x in benign if x[col] is not None and x[col] >= thr) / weeks
+        t = thr[d] if isinstance(thr, dict) else thr
+        per[devs[d][1]] = sum(1 for x in benign if x[col] is not None and x[col] >= t) / weeks
         days[devs[d][1]] = nd
     vals = sorted(v for k, v in per.items() if days[k] >= MIN_DAYS)
     return {"median": statistics.median(vals) if vals else float("nan"), "max": max(vals) if vals else float("nan"),
@@ -266,19 +301,23 @@ def nuisance(res, devs, period, col=1, thr=1.0):
             "period_days": days, "min_days": MIN_DAYS}
 
 
-def detection(res, col=0, thr=1.0, kinds=KINDS, only=None):
+def detection(res, col=0, thr=1.0, kinds=KINDS, only=None, per_dev=None):
     det, n, pos = collections.Counter(), collections.Counter(), []
     for d, (_, attacks) in res.items():
         if only is not None and d not in only:
             continue
+        t = thr[d] if isinstance(thr, dict) else thr
         for k in kinds:
             for sc in attacks[k]:
                 s = sc[col]
                 if not s:
                     continue
+                hit = any(v >= t for v in s)
                 n[k] += 1
-                det[k] += any(v >= thr for v in s)
+                det[k] += hit
                 pos.extend(s)
+                if per_dev is not None:
+                    per_dev.setdefault(d, []).append(hit)
     rate = {k: det[k] / n[k] if n[k] else float("nan") for k in kinds}
     tot = sum(n.values())
     rate["all"] = sum(det.values()) / tot if tot else float("nan")
@@ -295,14 +334,22 @@ def main():
     ap.add_argument("d1")
     ap.add_argument("devices")
     ap.add_argument("iot23")
-    ap.add_argument("--phase", choices=["dev", "test"], required=True)
+    ap.add_argument("--b", type=float, help="doc 19 frozen budget (confirmation); omit to evaluate the grid")
+    ap.add_argument("--m", type=float, help="doc 19 frozen margin (confirmation)")
+    ap.add_argument("--phase", choices=["dev", "test", "dna", "calib"], required=True,
+                    help="dev/test: doc 17. dna: doc 18, the DNA alone on --period, with the overlays")
+    ap.add_argument("--period", choices=["dev", "test"], default="dev")
+    ap.add_argument("--split", choices=["d1", "half"], default="d1")
+    ap.add_argument("--peer-key", choices=conv.PEER_MODES, default="exact")
     ap.add_argument("--json", required=True)
     ap.add_argument("--frozen")
     a = ap.parse_args()
+    global PEER_MODE
+    PEER_MODE = a.peer_key
     names, tl = load(a.d1, a.devices)
     devs = {}
     for d, hours in sorted(tl.items()):
-        parts, ndays = split(hours)
+        parts, ndays = split(hours, a.split)
         mac, name = names[d]
         devs[d] = (mac, name, parts, ndays)
     held = {d for d, v in devs.items() if held_out(v[0])}
@@ -311,13 +358,53 @@ def main():
         print("  %-24s days h/d/t %3d/%3d/%3d  hours h/d/t %5d/%5d/%5d%s" % (
             name, nd["history"], nd["dev"], nd["test"], len(parts["history"]), len(parts["dev"]), len(parts["test"]),
             "  HELD-OUT" if d in held else ""))
-    iot_split = "dev" if a.phase == "dev" else "test"
+    iot_split = "dev" if (a.phase == "dev" or (a.phase in ("dna", "calib") and a.period == "dev")) else "test"
     _, iot_segs = p2.load(a.iot23, iot_split)
     print("IoT-23 %s split: %d infected scenarios for splicing" % (iot_split, len(iot_segs)))
     report = {"phase": a.phase, "held_out": sorted(devs[d][1] for d in held),
               "days": {devs[d][1]: devs[d][3] for d in devs}}
 
-    if a.phase == "dev":
+    if a.phase == "calib":
+        res = run_all(devs, a.period, 0, iot_segs)
+        grid = [(a.b, a.m)] if a.b is not None else [(b, m) for m in M_GRID for b in sorted(B_GRID, reverse=True)]
+        rows = []
+        for b, m in grid:
+            thr = {d: device_threshold(devs[d][0], b, m) for d in res}
+            nu = nuisance(res, devs, a.period, thr=thr)
+            per_dev = {}
+            rate, _, n = detection(res, col=0, thr=thr, per_dev=per_dev)
+            counted = [d for d in res if devs[d][3][a.period] >= MIN_DAYS and per_dev.get(d)]
+            not_muted = sum(1 for d in counted if sum(per_dev[d]) / len(per_dev[d]) >= 0.8) / max(1, len(counted))
+            ok = nu["median"] <= 1.0 and all(rate[k] >= 0.9 for k in KINDS if n.get(k)) and not_muted >= 0.9
+            tds = sorted(thr[d] for d in res)
+            print("b=%-4g m=%-5g alarms/dev/week median %.3f max %.2f (>1: %d/%d)  detect %s  not-muted %.3f  T_d median %.2f max %.2f -> %s" % (
+                b, m, nu["median"], nu["max"], nu["devices_over_1"], nu["devices"], {k: round(v, 3) for k, v in rate.items()},
+                not_muted, statistics.median(tds), tds[-1], "MET" if ok else "not met"))
+            rows.append({"b": b, "m": m, "nuisance": nu, "detect": rate, "not_muted": not_muted, "criteria_met": ok,
+                         "T_d": {devs[d][1]: thr[d] for d in res},
+                         "detect_per_device": {devs[d][1]: sum(v) / len(v) for d, v in per_dev.items()}})
+        met = [r for r in rows if r["criteria_met"]]
+        choice = min(met, key=lambda r: (r["m"], -r["b"])) if met else None
+        print("doc 19 choice: %s" % ("b=%g m=%g" % (choice["b"], choice["m"]) if choice else "NONE qualifies"))
+        _, posA, _ = detection(res, col=0)
+        report.update({"peer_key": a.peer_key, "period": a.period, "split": a.split, "grid": rows,
+                       "choice": choice and {"b": choice["b"], "m": choice["m"]}, "auc": p2.auc(posA, neg_scores(res, 1)),
+                       "onsets": n})
+    elif a.phase == "dna":
+        res = run_all(devs, a.period, 0, iot_segs)
+        nu = nuisance(res, devs, a.period)
+        rate, posA, n = detection(res, col=0)
+        rate_ho, _, _ = detection(res, col=0, only=held)
+        aA = p2.auc(posA, neg_scores(res, 1))
+        drivers = collections.Counter()
+        ok = nu["median"] <= 1.0 and all(rate[k] >= 0.9 for k in KINDS if n.get(k))
+        print("DNA peer-key=%s period=%s split=%s: alarms/dev/week median %.3f max %.2f (devices >1: %d/%d)  AUC %.4f" % (
+            a.peer_key, a.period, a.split, nu["median"], nu["max"], nu["devices_over_1"], nu["devices"], aA))
+        print("  detection %s  held-out %.3f  onsets %s  -> criteria %s" % (
+            {k: round(v, 3) for k, v in rate.items()}, rate_ho["all"], n, "MET" if ok else "NOT MET"))
+        report.update({"peer_key": a.peer_key, "period": a.period, "split": a.split, "nuisance": nu, "detect": rate,
+                       "detect_held_out": rate_ho, "auc": aA, "onsets": n, "criteria_met": ok})
+    elif a.phase == "dev":
         # Q2: q_min on dev
         q2 = {}
         for q in (0,) + Q_MINS:
