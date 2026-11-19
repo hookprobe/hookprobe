@@ -85,25 +85,34 @@ pub static FLOW_RULES: &[Rule] = &[
 ];
 
 const MAX_RULES: usize = 16;
+const G_NONE: u8 = 0;
+const G_DPORT: u8 = 1;
+const G_BYTE: u8 = 2;
 #[derive(Clone, Copy)]
 pub(crate) struct RState {
     pub(crate) verified: bool,
     pub(crate) min_len: u64,
     pub(crate) jit: usize, // compiled fn VA, or 0 => interpreter only
-    /// ADR 0067 D5 step 1: `guarded` => the program is PASS with no effect unless the packet's
-    /// dst port (u16 BE at 2..4) is in `g_lo..=g_hi` (`bpf::dport_guard`), so it is skipped otherwise.
-    pub(crate) guarded: bool,
+    /// ADR 0067 D5 steps 1-2: the guard read from the program when it was installed. Outside its
+    /// guard the program is PASS with no effect, so the runner skips it.
+    /// `G_DPORT`: dst port (u16 BE at 2..4) in `g_lo..=g_hi` (`bpf::dport_guard`).
+    /// `G_BYTE`: `(pkt[g_lo] & (g_hi >> 8)) == (g_hi & 0xff)` (`bpf::byte_guard`).
+    pub(crate) gkind: u8,
     pub(crate) g_lo: u16,
     pub(crate) g_hi: u16,
 }
 impl RState {
-    pub(crate) const EMPTY: RState = RState { verified: false, min_len: 0, jit: 0, guarded: false, g_lo: 0, g_hi: 0 };
+    pub(crate) const EMPTY: RState = RState { verified: false, min_len: 0, jit: 0, gkind: G_NONE, g_lo: 0, g_hi: 0 };
     /// A verified rule: its guard is read from the program itself.
     pub(crate) fn armed(prog: &[u64], min_len: u64, jit: usize) -> RState {
-        match bpf::dport_guard(prog) {
-            Some((g_lo, g_hi)) => RState { verified: true, min_len, jit, guarded: true, g_lo, g_hi },
-            None => RState { verified: true, min_len, jit, guarded: false, g_lo: 0, g_hi: 0 },
-        }
+        let (gkind, g_lo, g_hi) = if let Some((lo, hi)) = bpf::dport_guard(prog) {
+            (G_DPORT, lo, hi)
+        } else if let Some((off, mask, val)) = bpf::byte_guard(prog) {
+            (G_BYTE, off, (mask as u16) << 8 | val as u16)
+        } else {
+            (G_NONE, 0, 0)
+        };
+        RState { verified: true, min_len, jit, gkind, g_lo, g_hi }
     }
 }
 static mut RSTATE: [RState; MAX_RULES] =
@@ -262,11 +271,20 @@ fn run_set_verdict(
             continue;
         }
         // ADR 0067 D5 step 1: a guarded rule is PASS, with no effect, for every other dst port —
-        // skipping it is the same as running it ([P-ruleguard] checks that over all 65,536 ports).
-        if st.guarded && pkt.len() >= 4 && GUARDS.load(Ordering::Relaxed) {
-            let dp = u16::from_be_bytes([pkt[2], pkt[3]]);
-            if dp < st.g_lo || dp > st.g_hi {
-                continue;
+        // skipping it is the same as running it ([P-ruleguard] checks that over all 65,536 ports, and
+        // over all 256 values of a guarded byte).
+        if st.gkind != G_NONE && GUARDS.load(Ordering::Relaxed) {
+            if st.gkind == G_DPORT {
+                if pkt.len() >= 4 {
+                    let dp = u16::from_be_bytes([pkt[2], pkt[3]]);
+                    if dp < st.g_lo || dp > st.g_hi {
+                        continue;
+                    }
+                }
+            } else if let Some(&b) = pkt.get(st.g_lo as usize) {
+                if b & (st.g_hi >> 8) as u8 != st.g_hi as u8 {
+                    continue;
+                }
             }
         }
         PROG_RUNS.fetch_add(1, Ordering::Relaxed);
