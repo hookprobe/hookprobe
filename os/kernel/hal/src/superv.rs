@@ -374,6 +374,39 @@ impl Sup {
     }
 }
 
+/// H4a functional probes: every `PROBE_PERIOD_MS` the kernel asks ONE supervised server (in turn) a question whose
+/// answer it knows. A server that answers wrongly WITHOUT faulting (corrupted data, a wedged state machine) is
+/// invisible to the fault path; a failed probe restarts it like a fault (kind `probe`). Pure schedule: which
+/// probe slot is due.
+pub const PROBE_PERIOD_MS: u64 = 15_000;
+
+pub struct ProbeClock {
+    next_ms: u64,
+    turn: u8,
+}
+
+impl Default for ProbeClock {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ProbeClock {
+    pub const fn new() -> Self {
+        ProbeClock { next_ms: PROBE_PERIOD_MS, turn: 0 }
+    }
+    /// The slot (0..slots) to probe now, if one is due. At most one per call; a long stall never causes a burst.
+    pub fn due(&mut self, now_ms: u64, slots: u8) -> Option<u8> {
+        if slots == 0 || now_ms < self.next_ms {
+            return None;
+        }
+        self.next_ms = now_ms + PROBE_PERIOD_MS;
+        let t = self.turn % slots;
+        self.turn = (t + 1) % slots;
+        Some(t)
+    }
+}
+
 /// Planned-reset codes (written before the reset, `arch crashrec::write_planned`).
 pub const PLANNED_OWNER_REBOOT: u32 = 1;
 pub const PLANNED_OTA_TRIAL: u32 = 2;
@@ -593,6 +626,20 @@ mod tests {
             assert_eq!(s.fault(i * 1_000), 50);
             assert!(s.ok());
         }
+    }
+
+    #[test]
+    fn probe_clock() {
+        let mut c = ProbeClock::new();
+        assert_eq!(c.due(0, 2), None);
+        assert_eq!(c.due(PROBE_PERIOD_MS - 1, 2), None);
+        assert_eq!(c.due(PROBE_PERIOD_MS, 2), Some(0));
+        assert_eq!(c.due(PROBE_PERIOD_MS + 1, 2), None); // one per period
+        assert_eq!(c.due(2 * PROBE_PERIOD_MS, 2), Some(1));
+        // a long stall: one probe, not a burst
+        assert_eq!(c.due(100 * PROBE_PERIOD_MS, 2), Some(0));
+        assert_eq!(c.due(100 * PROBE_PERIOD_MS + 5, 2), None);
+        assert_eq!(c.due(u64::MAX / 2, 0), None);
     }
 
     #[test]
