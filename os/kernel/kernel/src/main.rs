@@ -7752,6 +7752,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = snapshot::snapshot_selftest();
         let _ = anchor::selftest();
         let _ = arch_aarch64::nat::index_selftest();
+        let _ = arch_aarch64::perfctr::report();
         let _ = rules::lateral6_selftest();
         let _ = devbase::selftest();
         #[cfg(feature = "netsvc")]
