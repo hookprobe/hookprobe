@@ -284,6 +284,161 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
     w.raw("]}");
 }
 
+/// [P-swifi] — autoheal harness H6, the software fault-injection campaign (QEMU, feature `swifi`, never shipped).
+/// `HEQK_SWIFI_N` injections (default 10 000, a fixed-seed xorshift so a run is reproducible) into el0-lansvc and
+/// el0-tlshost, two fault models: (1) one flipped bit in the server's writable memory, (2) a call with a random
+/// command id and random input. After each injection the server's functional probe runs: the injection is MASKED
+/// (probe answers, nothing happened), or it surfaced as a FAULT (exception / budget overrun -> reset) or a WRONG
+/// ANSWER (the probe caught it -> reset). Acceptance: after every injection the server answers its probe again
+/// (bounded tries), the kernel is alive, and the journal has no entry left open. An injection that leaves a server
+/// unable to answer is UNRECOVERED and fails the campaign.
+#[cfg(all(feature = "swifi", feature = "mctls"))]
+pub fn swifi_campaign() -> bool {
+    const N: u64 = match option_env!("HEQK_SWIFI_N") {
+        Some(s) => parse_u64(s),
+        None => 10_000,
+    };
+    const fn parse_u64(s: &str) -> u64 {
+        let b = s.as_bytes();
+        let (mut i, mut v) = (0, 0u64);
+        while i < b.len() {
+            v = v * 10 + (b[i] - b'0') as u64;
+            i += 1;
+        }
+        v
+    }
+    let mut x: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut rnd = move || {
+        x ^= x << 13;
+        x ^= x >> 7;
+        x ^= x << 17;
+        x
+    };
+    let saved = core::mem::replace(j(), Journal::new());
+    let t_start = now_ms();
+    // counters: [lansvc, tlshost] x {injected, masked, fault, wrong, unrecovered}
+    let mut c = [[0u64; 5]; 2];
+    let (mut flips, mut raws) = (0u64, 0u64);
+    // bit flips by image class: [text, read-only data, writable data] x {injected, surfaced}
+    let mut cls = [[0u64; 2]; 3];
+    let mut first_bad: Option<(u64, usize, u64)> = None;
+    // the probe of server `s`: Some(true) ok, Some(false) wrong answer (already reset), None faulted / held off
+    let probe = |s: usize| if s == 0 { crate::lansvc::probe(false) } else { crate::tlshost::probe(false) };
+    let stats = |s: usize| -> (u64, u64) {
+        if s == 0 {
+            let (_, _, f, r, _) = crate::lansvc::stats();
+            (f, r)
+        } else {
+            crate::tlshost::host().map_or((0, 0), |h| (h.faults as u64 + h.timeouts as u64, h.restarts as u64))
+        }
+    };
+    let restore = |s: usize| {
+        if s == 0 {
+            if let Some(v) = crate::lansvc::swifi() {
+                v.swifi_restore();
+            }
+        } else if let Some(h) = crate::tlshost::host() {
+            h.swifi_restore();
+        }
+    };
+    let both = crate::lansvc::swifi().is_some() && crate::tlshost::host().is_some();
+    let mut i = 0u64;
+    while both && i < N {
+        let r = rnd();
+        let s = (r & 1) as usize;
+        let model_flip = (r >> 1) & 3 != 0; // 3 in 4 are bit flips, 1 in 4 a random call
+        let (f0, r0) = stats(s);
+        // --- inject (every fault inside is a campaign fault: journaled `planned`, kept out of the restart policy)
+        deliberate(|| {
+            let mut hit: Option<u8> = None;
+            if model_flip {
+                flips += 1;
+                let rr = rnd();
+                hit = if s == 0 { crate::lansvc::swifi().and_then(|v| v.swifi_flip(rr)) } else { crate::tlshost::host().and_then(|h| h.swifi_flip(rr)) };
+                if let Some(k) = hit {
+                    cls[k as usize][0] += 1;
+                }
+            } else {
+                raws += 1;
+                let mut buf = [0u8; 96];
+                for b in buf.iter_mut() {
+                    *b = rnd() as u8;
+                }
+                let (cmd, len) = ((rnd() % 128) as u32, (rnd() % 97) as usize);
+                if s == 0 {
+                    crate::lansvc::swifi().map(|v| v.swifi_raw(cmd, &buf[..len]));
+                } else if cmd != hal::tlsabi::CMD_INIT {
+                    // (INIT is the kernel's own, with the device scalar: never driven with random bytes)
+                    crate::tlshost::host().map(|h| h.swifi_raw(cmd, (rnd() % 8) as usize, &buf[..len]));
+                }
+            }
+            // --- observe: the probe right after the injection
+            let p = probe(s);
+            let (f1, r1) = stats(s);
+            c[s][0] += 1;
+            if p == Some(false) {
+                c[s][3] += 1; // answered wrongly without faulting: caught by the probe, reset
+            } else if f1 != f0 || p.is_none() {
+                c[s][2] += 1; // exception / budget overrun (at the raw call or at the probe): reset by the fault path
+            } else if r1 != r0 {
+                c[s][2] += 1;
+            } else {
+                c[s][1] += 1; // masked
+            }
+            if let Some(k) = hit {
+                if !(p == Some(true) && f1 == f0 && r1 == r0) {
+                    cls[k as usize][1] += 1;
+                }
+            }
+            // --- recover: a clean image, then the server must answer its probe (a faulted INIT gets two more tries)
+            restore(s);
+            let ok = probe(s) == Some(true) || probe(s) == Some(true) || probe(s) == Some(true);
+            // (the restore replaced the server's restart state, so close its journal entry here)
+            server_ok(if s == 0 { "el0-lansvc" } else { "el0-tlshost" });
+            if !ok {
+                c[s][4] += 1;
+                if first_bad.is_none() {
+                    first_bad = Some((i, s, r));
+                }
+                restore(s);
+            }
+        });
+        i += 1;
+        if i % 1000 == 0 {
+            arch_aarch64::_print(format_args!("   [swifi] {} / {} injections, unrecovered so far {}\n", i, N, c[0][4] + c[1][4]));
+        }
+    }
+    // the campaign's journal: every entry it opened is closed (nothing left pending), and the kinds are the planned ones
+    let jj = journal();
+    let (jt, jp) = (jj.total(), jj.pending());
+    let jk = jj.by_kind;
+    *j() = saved;
+    // leave both servers clean and answering for the rest of the boot
+    restore(0);
+    restore(1);
+    let alive = probe(0) == Some(true) && probe(1) == Some(true);
+    let unrec = c[0][4] + c[1][4];
+    let surfaced = c[0][2] + c[0][3] + c[1][2] + c[1][3];
+    let pass = both && i == N && unrec == 0 && jp == 0 && alive && surfaced > 0 && jk[Kind::Exception as usize] == 0;
+    arch_aarch64::_print(format_args!(
+        " [P-swifi] {} — autoheal harness H6, fault-injection campaign: {} injections ({} bit flips in writable server memory, {} random-command calls), seed fixed | el0-lansvc: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-tlshost: injected {} masked {} fault {} wrong-answer {} unrecovered {} | bit flips surfaced by class: text {}/{} read-only data {}/{} writable data {}/{} | surfaced {} of {} | journal entries {} (planned {}), left pending {} | both servers answer after the campaign={} | {} ms{}\n",
+        if pass { "PASS" } else { "FAIL" }, i, flips, raws,
+        c[0][0], c[0][1], c[0][2], c[0][3], c[0][4], c[1][0], c[1][1], c[1][2], c[1][3], c[1][4],
+        cls[0][1], cls[0][0], cls[1][1], cls[1][0], cls[2][1], cls[2][0], surfaced, i, jt, jk[Kind::Planned as usize], jp, alive, now_ms().saturating_sub(t_start),
+        match first_bad { Some((n, s, r)) => { let _ = (n, s, r); " | FIRST UNRECOVERED recorded above" } None => "" }
+    ));
+    if let Some((n, s, r)) = first_bad {
+        arch_aarch64::_print(format_args!("   [swifi] first unrecovered: injection #{} server {} r={:#x}\n", n, if s == 0 { "el0-lansvc" } else { "el0-tlshost" }, r));
+    }
+    pass
+}
+
+#[cfg(all(feature = "swifi", not(feature = "mctls")))]
+pub fn swifi_campaign() -> bool {
+    arch_aarch64::_print(format_args!(" [P-swifi] FAIL — needs the EL0 servers (feature mctls)\n"));
+    false
+}
+
 /// Brackets and braces balance outside string literals, and the document is one object.
 #[cfg(feature = "netsvc")]
 fn json_balanced(b: &[u8]) -> bool {
