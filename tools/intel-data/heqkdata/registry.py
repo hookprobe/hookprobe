@@ -34,6 +34,12 @@ class Registry:
     def license_of(self, sid):
         return self.licenses[self.source(sid)["license_id"]]
 
+    def collection_sources(self, cid):
+        """Sources that may feed collection `cid`: those the collection lists plus those whose own
+        `collections` field names it (the two lists are maintained separately; either is a declaration)."""
+        listed = set(self.collections[cid]["sources"])
+        return listed | {sid for sid, s in self.sources.items() if cid in (s.get("collections") or [])}
+
     def check(self, validator=None):
         """List of problems; empty means the registry is internally consistent."""
         v = validator or schemamod.default()
