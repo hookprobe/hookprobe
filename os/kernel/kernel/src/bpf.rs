@@ -104,6 +104,45 @@ pub fn dport_guard(prog: &[u64]) -> Option<(u16, u16)> {
     None
 }
 
+/// A "DROP iff (flags & `mask`) == `val`" TCP rule (R1 = TCP header, flags @13): the shape of
+/// `TCP_SYNFIN` (`mask` = `val` = 0x03).
+pub const fn tcp_flag_mask_eq_rule(mask: i32, val: i32) -> [u64; 6] {
+    [
+        insn(0x71, 2, 1, 13, 0),   // R2 = TCP flags
+        insn(0x57, 2, 0, 0, mask), // R2 &= mask
+        insn(0xb7, 0, 0, 0, 1),    // R0 = PASS
+        insn(0x55, 2, 0, 1, val),  // if (flags & mask) != val goto EXIT (PASS)
+        insn(0xb7, 0, 0, 0, 2),    // R0 = DROP
+        insn(0x95, 0, 0, 0, 0),    // EXIT
+    ]
+}
+
+/// ADR 0067 D5, step 2 — the BYTE guard of a rule program: `Some((off, mask, val))` means the program
+/// returns PASS, with no helper call and no other effect, for every packet where
+/// `(pkt[off] & mask) != val`. Same rule as `dport_guard`: exact equality with a template rebuilt from
+/// the constants read out of the program, never analysis. Today's templates are the two TCP-flag
+/// shapes (flags byte at offset 13).
+pub fn byte_guard(prog: &[u64]) -> Option<(u16, u8, u8)> {
+    let imm = |w: u64| (w >> 32) as u32 as i32;
+    let byte = |v: i32| if (0..=0xff).contains(&v) { Some(v as u8) } else { None };
+    if prog.len() == 5 {
+        let v = imm(prog[2]);
+        if prog == tcp_flag_eq_rule(v) {
+            return byte(v).map(|v| (13, 0xff, v));
+        }
+    }
+    if prog.len() == 6 {
+        let (m, v) = (imm(prog[1]), imm(prog[3]));
+        if prog == tcp_flag_mask_eq_rule(m, v) {
+            return match (byte(m), byte(v)) {
+                (Some(m), Some(v)) => Some((13, m, v)),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
 /// P8 corpus (beyond the signed 4444 rule): telnet + a common backdoor port.
 pub const BLOCK_TELNET: [u64; 9] = port_block_rule(23);
 pub const BLOCK_BACKDOOR: [u64; 9] = port_block_rule(31337);
