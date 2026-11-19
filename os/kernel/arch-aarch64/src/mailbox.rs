@@ -128,18 +128,11 @@ pub fn get_clock_rate(clock_id: u32) -> Option<u32> {
 // Reboot flags — the ON-DEVICE `tryboot` mechanism (M1 criterion 4 / M3 OTA).
 //
 // `reboot "0 tryboot"` on Linux is NOT a magic userspace string: it is two VideoCore
-// mailbox properties. From the reference driver, Linux
-// drivers/firmware/raspberrypi.c:204 (source in builder/kernel-build/linux-rpi-*.tar.gz):
+// mailbox properties, sent in this order: SET_REBOOT_FLAGS with bit 0 set (a one-shot flag the
+// firmware clears on reboot; it makes the firmware load tryboot.txt instead of config.txt), then
+// NOTIFY_REBOOT with no payload.
 //
-//     // 'tryboot': Sets a one-shot flag which is cleared upon reboot and
-//     //           causes the tryboot.txt to be loaded instead of config.txt
-//     if (data && strstr(data, " tryboot"))
-//             reboot_flags |= 0x1;
-//     if (reboot_flags)
-//             rpi_firmware_property(fw, RPI_FIRMWARE_SET_REBOOT_FLAGS, ...);
-//     rpi_firmware_property(fw, RPI_FIRMWARE_NOTIFY_REBOOT, NULL, 0);
-//
-// Tag numbers from include/soc/bcm2835/raspberrypi-firmware.h:
+// Firmware property tag numbers (the VideoCore mailbox property interface):
 //     RPI_FIRMWARE_NOTIFY_REBOOT    = 0x00030048
 //     RPI_FIRMWARE_GET_REBOOT_FLAGS = 0x00030064
 //     RPI_FIRMWARE_SET_REBOOT_FLAGS = 0x00038064

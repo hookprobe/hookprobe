@@ -239,11 +239,8 @@ pub fn pcie_inbound_mip_doorbell() -> u32 {
 
 /// RX ring depth.
 ///
-/// Was 8 — BELOW the minimum the reference driver for this controller declares. Linux
-/// drivers/net/ethernet/cadence/macb_main.c:58-59:
-///
-///     #define DEFAULT_RX_RING_SIZE 512 /* must be power of 2 */
-///     #define MIN_RX_RING_SIZE      64
+/// Was 8 — far below what this controller needs: the ring length must be a power of two, and other
+/// drivers for this MAC use at least 64 descriptors and 512 by default.
 ///
 /// Measured consequence of 8 (2026-08-20, isolated DUT link): a deterministic 2000-frame
 /// burst was seen as only 214 frames — ~89% lost. At 1 Gbps a 2000-frame burst arrives in
@@ -1049,13 +1046,9 @@ pub fn tx_frame(bytes: &[u8]) -> Option<u32> {
     }
     // KICK, THEN RETRIGGER WHILE POLLING.
     //
-    // Grounded in the reference driver for this exact controller — Linux
-    // drivers/net/ethernet/cadence/macb_main.c:2517:
-    //
-    //     /* TSTART write might get dropped, so make the IRQ retrigger a buffer read */
-    //     if (macb_readl(bp, TSR) & MACB_BIT(TGO))
-    //             queue->tx_pending = 1;
-    //     macb_writel(bp, NCR, macb_readl(bp, NCR) | MACB_BIT(TSTART));
+    // Hardware behaviour of this controller (also handled by the Linux macb driver): a TSTART write
+    // made while the transmitter is still going (TSR.TGO set) may have no effect, so the start must
+    // be issued again once the transmitter has stopped.
     //
     // A TSTART write CAN BE SILENTLY DROPPED by the hardware. Linux expects this: it
     // notes the condition via TSR.TGO (transmitter still going) and has the TCOMP/TXUBR
@@ -1988,15 +1981,9 @@ pub fn recycle_rx(i: usize) {
         nw0 |= RXD_WRAP;
     }
     unsafe {
-        // ORDER IS PART OF THE CONTRACT — from the reference driver for this controller,
-        // Linux drivers/net/ethernet/cadence/macb_main.c:1451-1456:
-        //
-        //     desc->ctrl = 0;
-        //     /* Setting addr clears RX_USED and allows reception,
-        //      * make sure ctrl is cleared first to avoid a race.
-        //      */
-        //     dma_wmb();
-        //     macb_set_addr(bp, desc, paddr);
+        // ORDER IS PART OF THE CONTRACT for this controller's RX descriptors: clear the control word
+        // (word1) first, make that write visible (barrier), and only then write the address word
+        // (word0).
         //
         // Writing word0 is what CLEARS RX_USED and hands the descriptor back to the
         // controller — i.e. it is the ownership release, and everything the controller
