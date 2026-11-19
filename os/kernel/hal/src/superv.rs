@@ -107,11 +107,18 @@ pub struct Recovery {
     /// Further detections folded into this open entry (same component, same rung).
     pub repeats: u16,
     pub t_detect_ms: u64,
+    /// When the recovery ACTION itself finished (the server reset, the BSS bounce / firmware reload returned); 0 = not
+    /// recorded. `t_done_ms` is later: when the component was OBSERVED working again (a good call, a healthy tick).
+    pub t_acted_ms: u64,
     /// 0 while pending.
     pub t_done_ms: u64,
 }
 
 impl Recovery {
+    /// How long the recovery action took (detection -> the action returned); None when not recorded.
+    pub fn action_ms(&self) -> Option<u64> {
+        (self.t_acted_ms != 0).then(|| self.t_acted_ms.saturating_sub(self.t_detect_ms))
+    }
     /// Time to recover (or to escalate / give up); None while pending.
     pub fn duration_ms(&self) -> Option<u64> {
         (self.outcome != Outcome::Pending).then(|| self.t_done_ms.saturating_sub(self.t_detect_ms))
@@ -121,7 +128,7 @@ impl Recovery {
 pub const JOURNAL_N: usize = 64;
 
 const EMPTY: Recovery =
-    Recovery { seq: 0, component: 0, kind: Kind::Exception, rung: Rung::Restart, outcome: Outcome::Pending, repeats: 0, t_detect_ms: 0, t_done_ms: 0 };
+    Recovery { seq: 0, component: 0, kind: Kind::Exception, rung: Rung::Restart, outcome: Outcome::Pending, repeats: 0, t_detect_ms: 0, t_acted_ms: 0, t_done_ms: 0 };
 
 /// The recovery journal: a ring of the last `JOURNAL_N` recoveries plus totals that never wrap.
 pub struct Journal {
@@ -196,7 +203,7 @@ impl Journal {
             }
             self.dropped += 1;
         }
-        self.ring[s] = Recovery { seq: self.total, component, kind, rung, outcome: Outcome::Pending, repeats: 0, t_detect_ms: t_ms, t_done_ms: 0 };
+        self.ring[s] = Recovery { seq: self.total, component, kind, rung, outcome: Outcome::Pending, repeats: 0, t_detect_ms: t_ms, t_acted_ms: 0, t_done_ms: 0 };
         self.by_kind[kind as usize] += 1;
         self.total
     }
@@ -208,6 +215,16 @@ impl Journal {
         let s = self.open_of(component)?;
         self.finish(s, if outcome == Outcome::Pending { Outcome::Recovered } else { outcome }, t_ms);
         Some(self.ring[s].seq)
+    }
+
+    /// The recovery action on the component's open entry finished at `t_ms` (first report wins; no open entry: ignored).
+    pub fn acted(&mut self, component: u8, t_ms: u64) {
+        if let Some(s) = self.open_of(component) {
+            let r = &mut self.ring[s];
+            if r.t_acted_ms == 0 {
+                r.t_acted_ms = t_ms.max(r.t_detect_ms).max(1);
+            }
+        }
     }
 
     /// Is an entry of this component open?
@@ -429,6 +446,19 @@ mod tests {
         assert_eq!(j.pending(), 1);
         j.close(H, Outcome::Recovered, 900);
         assert_eq!(j.pending(), 0);
+    }
+
+    #[test]
+    fn action_time_is_separate_from_recovery_time() {
+        let mut j = Journal::new();
+        j.acted(H, 5); // nothing open: ignored
+        j.open(H, Kind::Probe, Rung::Reload, 1_000);
+        assert_eq!(j.get(1).unwrap().action_ms(), None);
+        j.acted(H, 1_830);
+        j.acted(H, 9_999); // the first report wins
+        j.close(H, Outcome::Recovered, 6_000);
+        let r = j.get(1).unwrap();
+        assert_eq!((r.action_ms(), r.duration_ms()), (Some(830), Some(5_000)));
     }
 
     #[test]
