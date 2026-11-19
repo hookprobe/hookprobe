@@ -7630,6 +7630,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = devpolicy::selftest();
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();
+        let _ = rulepack::guard_selftest();
         #[cfg(feature = "netsvc")]
         let _ = actionapi::selftest();
         let _ = apcred::selftest();

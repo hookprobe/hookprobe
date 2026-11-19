@@ -90,18 +90,34 @@ pub(crate) struct RState {
     pub(crate) verified: bool,
     pub(crate) min_len: u64,
     pub(crate) jit: usize, // compiled fn VA, or 0 => interpreter only
+    /// ADR 0067 D5 step 1: `guarded` => the program is PASS with no effect unless the packet's
+    /// dst port (u16 BE at 2..4) is in `g_lo..=g_hi` (`bpf::dport_guard`), so it is skipped otherwise.
+    pub(crate) guarded: bool,
+    pub(crate) g_lo: u16,
+    pub(crate) g_hi: u16,
 }
 impl RState {
-    pub(crate) const EMPTY: RState = RState { verified: false, min_len: 0, jit: 0 };
+    pub(crate) const EMPTY: RState = RState { verified: false, min_len: 0, jit: 0, guarded: false, g_lo: 0, g_hi: 0 };
+    /// A verified rule: its guard is read from the program itself.
+    pub(crate) fn armed(prog: &[u64], min_len: u64, jit: usize) -> RState {
+        match bpf::dport_guard(prog) {
+            Some((g_lo, g_hi)) => RState { verified: true, min_len, jit, guarded: true, g_lo, g_hi },
+            None => RState { verified: true, min_len, jit, guarded: false, g_lo: 0, g_hi: 0 },
+        }
+    }
 }
 static mut RSTATE: [RState; MAX_RULES] =
-    [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
+    [RState::EMPTY; MAX_RULES];
 static mut RSTATE_L2: [RState; MAX_RULES] =
-    [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
+    [RState::EMPTY; MAX_RULES];
 static mut RSTATE_TCP: [RState; MAX_RULES] =
-    [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
+    [RState::EMPTY; MAX_RULES];
 static mut RSTATE_FLOW: [RState; MAX_RULES] =
-    [RState { verified: false, min_len: 0, jit: 0 }; MAX_RULES];
+    [RState::EMPTY; MAX_RULES];
+/// ADR 0067 D1 work counter: rule programs executed (JIT or interpreter) since boot.
+pub(crate) static PROG_RUNS: AtomicUsize = AtomicUsize::new(0);
+/// Guards on (the shipped behaviour). The self-test turns them off to get the reference result.
+pub(crate) static GUARDS: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 static NRULES: AtomicUsize = AtomicUsize::new(0);
 static NRULES_L2: AtomicUsize = AtomicUsize::new(0);
 static NRULES_TCP: AtomicUsize = AtomicUsize::new(0);
@@ -165,9 +181,9 @@ fn compile_set(rules: &[Rule], state: *mut RState) -> (usize, usize) {
                 if jit != 0 {
                     jitted += 1;
                 }
-                RState { verified: true, min_len, jit }
+                RState::armed(rule.prog, min_len, jit)
             }
-            Err(_) => RState { verified: false, min_len: 0, jit: 0 },
+            Err(_) => RState::EMPTY,
         };
         unsafe { state.add(i).write(st) };
     }
@@ -245,6 +261,15 @@ fn run_set_verdict(
         if (pkt.len() as u64) < st.min_len {
             continue;
         }
+        // ADR 0067 D5 step 1: a guarded rule is PASS, with no effect, for every other dst port —
+        // skipping it is the same as running it ([P-ruleguard] checks that over all 65,536 ports).
+        if st.guarded && pkt.len() >= 4 && GUARDS.load(Ordering::Relaxed) {
+            let dp = u16::from_be_bytes([pkt[2], pkt[3]]);
+            if dp < st.g_lo || dp > st.g_hi {
+                continue;
+            }
+        }
+        PROG_RUNS.fetch_add(1, Ordering::Relaxed);
         let v = if st.jit != 0 {
             let f: extern "C" fn(*const u8) -> u64 =
                 unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(st.jit) };

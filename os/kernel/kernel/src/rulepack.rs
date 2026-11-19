@@ -168,7 +168,7 @@ fn load_body_jit(body: &[u8], jit: bool, arm: bool) -> Result<PackInfo, &'static
                 if jit && !room {
                     info.interp_only += 1;
                 }
-                RState { verified: true, min_len, jit: j }
+                RState::armed(prog, min_len, j)
             }
             Err(_) => {
                 info.refused_verify += 1;
@@ -276,6 +276,108 @@ pub fn verdict(tier: usize, pkt: &[u8], src: u32, decide_fn: fn(FindingClass, cr
     let rules = dyn_rules(tier, n);
     let st = unsafe { core::ptr::addr_of_mut!(DYN_STATE).cast::<[RState; DYN_MAX]>().add(tier).cast::<RState>() };
     crate::rules::run_set_verdict_pub(rules, st, n, pkt, src, decide_fn)
+}
+
+/// `[P-ruleguard]` (ADR 0067 D5 step 1) — a rule whose program is a dst-port template is skipped for
+/// every other port, and that changes no verdict. A full tier of 64 port rules: with guards off every
+/// packet runs 64 programs; with guards on a packet to another port runs none.
+pub fn guard_selftest() -> bool {
+    use crate::bpf::{dport_guard, dport_range_rule, port_block_rule};
+    use core::sync::atomic::Ordering;
+    static mut PK: [u8; 8192] = [0; 8192];
+    let pk = unsafe { &mut *core::ptr::addr_of_mut!(PK) };
+    pk.fill(0);
+    pk[..8].copy_from_slice(b"HQRULES1");
+    let mut p = 12usize;
+    let mut put = |id: u16, class: u8, prog: &[u64]| {
+        pk[p..p + 2].copy_from_slice(&id.to_le_bytes());
+        pk[p + 2] = 0; // tier 0: the L4 header
+        pk[p + 3] = class;
+        pk[p + 4] = 5;
+        pk[p + 5] = 1;
+        pk[p + 6..p + 8].copy_from_slice(&(prog.len() as u16).to_le_bytes());
+        pk[p + 8] = b'g';
+        let mut q = p + 9;
+        for w in prog {
+            pk[q..q + 8].copy_from_slice(&w.to_le_bytes());
+            q += 8;
+        }
+        p = q;
+    };
+    // 62 exact ports (every third one observe-only), one range, one program with NO guard (the port
+    // rule with an extra leading no-op is not a template: it must always run)
+    for k in 0..62u16 {
+        put(1000 + k, if k % 3 == 0 { 5 } else { 0 }, &port_block_rule(20_000 + 7 * k as i32));
+    }
+    put(1062, 0, &dport_range_rule(30_000, 30_009));
+    let mut odd = [0u64; 10];
+    odd[0] = crate::bpf::insn(0xb7, 4, 0, 0, 0); // R4 = 0
+    odd[1..].copy_from_slice(&port_block_rule(40_000));
+    put(1063, 0, &odd);
+    pk[8..10].copy_from_slice(&64u16.to_le_bytes());
+    // interpreter only: the JIT takes code space from the never-freeing kernel heap
+    let loaded = load_body_jit(&pk[..p], false, true).is_ok_and(|i| i.loaded == 64);
+    // the guard is read from the program, and only from an exact template
+    let extract = dport_guard(&port_block_rule(443)) == Some((443, 443))
+        && dport_guard(&dport_range_rule(3333, 3334)) == Some((3333, 3334))
+        && dport_guard(&odd).is_none()
+        && dport_guard(&port_block_rule(70_000)).is_none()
+        && dport_guard(&crate::bpf::TCP_SYN_FLOOD_SRC).is_none()
+        && dport_guard(&[]).is_none();
+    let l4 = |port: u16| {
+        let mut h = [0u8; 8];
+        h[2..4].copy_from_slice(&port.to_be_bytes());
+        h
+    };
+    let wire = |port: u16| verdict(0, &l4(port), 0x0A00_0001, crate::verdict::decide).map(|v| v.to_wire());
+    // work: one packet to a port no rule names
+    let runs = |on: bool| {
+        crate::rules::GUARDS.store(on, Ordering::Relaxed);
+        let before = crate::rules::PROG_RUNS.load(Ordering::Relaxed);
+        let _ = wire(443);
+        crate::rules::PROG_RUNS.load(Ordering::Relaxed) - before
+    };
+    let (off, on) = (runs(false), runs(true));
+    // soundness, per program, over ALL 65,536 dst ports: outside the guard the program itself says PASS
+    let sound = |prog: &[u64]| {
+        let g = dport_guard(prog);
+        (0..=u16::MAX).all(|port| {
+            let h = l4(port);
+            let pass = crate::bpf::run(prog, h.as_ptr(), h.len()) == crate::bpf::PASS;
+            g.is_none_or(|(lo, hi)| !(port < lo || port > hi) || pass)
+        })
+    };
+    let exhaustive = sound(&port_block_rule(0)) && sound(&port_block_rule(65_535)) && sound(&port_block_rule(20_007))
+        && sound(&dport_range_rule(30_000, 30_009)) && sound(&dport_range_rule(0, 65_535)) && sound(&dport_range_rule(5, 4));
+    // the tier as a whole: the same verdict with guards off (reference) and on, at every named port, its
+    // neighbours and a stride through the rest
+    let mut same = true;
+    let mut hits = 0u32;
+    let mut check = |port: u16| {
+        crate::rules::GUARDS.store(false, Ordering::Relaxed);
+        let want = wire(port);
+        crate::rules::GUARDS.store(true, Ordering::Relaxed);
+        same &= want == wire(port);
+        hits += want.is_some() as u32;
+    };
+    for port in (0..=u16::MAX).step_by(251) {
+        check(port);
+    }
+    for port in 19_990..=20_440u16 {
+        check(port);
+    }
+    for port in (29_990..=30_020u16).chain(39_990..=40_010) {
+        check(port);
+    }
+    crate::rules::GUARDS.store(true, Ordering::Relaxed);
+    reset();
+    arch_aarch64::perfctr::emit("ids_pack64_prog_runs_other_port", on as u64);
+    let pass = loaded && extract && exhaustive && same && hits >= 73 && off == 64 && on == 1;
+    arch_aarch64::_print(format_args!(
+        " [P-ruleguard] {} — ADR 0067 D5 step 1: a rule that is exactly a dst-port template (exact port or range) carries a guard read from its own program and is skipped for every other port: 64-rule tier loaded={} guard only from an exact template={} outside its guard each template program is PASS for all 65,536 dst ports={} the tier's verdicts are equal with guards off and on={} ({} sampled ports matched) programs run for a packet to an unnamed port: {} -> {} (the one left has no guard)\n",
+        if pass { "PASS" } else { "FAIL" }, loaded, extract, exhaustive, same, hits, off, on
+    ));
+    pass
 }
 
 /// `[P-rulepack]`
