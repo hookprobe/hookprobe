@@ -65,7 +65,7 @@ class Store:
     def raw_dir(self, source_id, acq_id):
         return os.path.join(self.root, "raw", source_id, acq_id)
 
-    def _ingest_file(self, tmp_path, source, lic, filename, url, method):
+    def _ingest_file(self, tmp_path, source, lic, filename, url, method, derived_from=None):
         digest = _sha256_file(tmp_path)
         d = self.raw_dir(source["id"], digest)
         target = os.path.join(d, filename)
@@ -82,6 +82,8 @@ class Store:
             "license_snapshot": lic, "url": url, "filename": filename, "bytes": size,
             "fetched_at": canon.now(), "method": method, "tool_version": VERSION,
         }
+        if derived_from:
+            acq["derived_from"] = derived_from
         with open(os.path.join(d, "acquisition.json"), "x", encoding="utf-8") as f:
             json.dump(acq, f, indent=2, sort_keys=True)
         os.chmod(os.path.join(d, "acquisition.json"), 0o444)
@@ -125,21 +127,35 @@ class Store:
             raise
         return self._ingest_file(tmp, source, lic, filename, a["url"], "fetch")
 
-    def register(self, registry, source_id, path, purpose, url=None):
-        """Copy a manually obtained file (registration- or form-gated datasets) into the raw store."""
+    def register(self, registry, source_id, path, purpose, url=None, sample_per_label=None):
+        """Copy a manually obtained file (registration- or form-gated datasets) into the raw store.
+        sample_per_label stores a per-label reservoir sample instead of the whole file (Zeek conn logs
+        only; see sample.py); the original's hash, size and label counts go into `derived_from`."""
         source = registry.source(source_id)
         lic = registry.license_of(source_id)
         licensing.require(lic, purpose)
         fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".partial-")
         os.close(fd)
-        shutil.copyfile(path, tmp)
+        derived = None
+        try:
+            if sample_per_label:
+                if source.get("adapter") != "zeek_conn_labeled":
+                    raise RuntimeError(f"{source_id}: sampling at registration supports zeek_conn_labeled sources only")
+                from . import sample
+                derived = sample.zeek_per_label(path, tmp, sample_per_label, name=os.path.basename(path))
+            else:
+                shutil.copyfile(path, tmp)
+        except BaseException:
+            os.unlink(tmp)
+            raise
         # keep the parent directory in the stored name: many datasets ship one file name per scenario dir
         # (IoT-23: <scenario>/bro/conn.log.labeled), and the scenario is the split group
         parent = os.path.basename(os.path.dirname(os.path.abspath(path)))
         if parent == "bro":
             parent = os.path.basename(os.path.dirname(os.path.dirname(os.path.abspath(path))))
         name = f"{parent}__{os.path.basename(path)}" if parent else os.path.basename(path)
-        return self._ingest_file(tmp, source, lic, name, url or source["source_url"], "register")
+        return self._ingest_file(tmp, source, lic, name, url or source["source_url"],
+                                 "register_sampled" if derived else "register", derived)
 
     def acquisition(self, source_id, acq_id):
         with open(os.path.join(self.raw_dir(source_id, acq_id), "acquisition.json"), "r", encoding="utf-8") as f:

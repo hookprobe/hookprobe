@@ -12,7 +12,7 @@ behaviour, no kernel code and no ADR.
 | [CATALOGUE.md](CATALOGUE.md) | generated table of all 149 sources and 118 licence decisions, with the gate result per purpose |
 | [HEQK-DATA-GOVERNANCE.md](HEQK-DATA-GOVERNANCE.md) | licence gate, provenance, GDPR and telemetry consent, safe parsing, synthetic data, evaluation hygiene |
 | [HEQK-TRAINING-STRATEGY.md](HEQK-TRAINING-STRATEGY.md) | what each tier learns from; TrainingExample format; export spec; evaluation; roadmap R1–R8 |
-| [QUALITY-2026-11-18.md](QUALITY-2026-11-18.md) | quality report and manifest of the first real build: 365,738 examples (DNS 266,548 · network flows 96,662 · KEV 1,786 · ATT&CK 706 · synthetic SOC 36) |
+| [QUALITY-2026-11-19.md](QUALITY-2026-11-19.md) | quality report and manifest of the latest build: 660,123 examples (DNS 266,548 · network flows 391,047 from all 23 IoT-23 captures · KEV 1,786 · ATT&CK 706 · synthetic SOC 36), with the measured label counts of the 12 sampled captures |
 | [DGA-BASELINE-2026-11-18.md](DGA-BASELINE-2026-11-18.md) | **measured:** the shipped `dga.rs` on 49,898 DGA names (50 families) and 135,796 benign names |
 
 Tooling: [`tools/intel-data/`](../../../tools/intel-data/).
