@@ -118,6 +118,11 @@ pub fn take_crash_at_boot() -> bool {
             " [CRASH-PROBE] DRAM canaries from the last crash still present: {:#x}={} {:#x}={} {:#x}={} (all false after a power-on = normal)\n",
             p[0], m & 1 != 0, p[1], m & 2 != 0, p[2], m & 4 != 0));
     }
+    // H3a: the planned-reset reason the previous boot wrote (owner reboot, OTA trial / revert, config revert, factory reset)
+    if let Some(code) = arch_aarch64::crashrec::take_planned() {
+        PLANNED.store(code, Relaxed);
+        arch_aarch64::_print(format_args!(" [BOOT] the previous boot ended in a planned reset (code {})\n", code));
+    }
     match arch_aarch64::crashrec::take() {
         Some(c) => {
             arch_aarch64::_print(format_args!(
@@ -128,6 +133,16 @@ pub fn take_crash_at_boot() -> bool {
             true
         }
         None => false,
+    }
+}
+
+static PLANNED: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+/// The previous boot's planned-reset reason (`hal::superv::PLANNED_*`), if it wrote one.
+pub fn last_planned() -> Option<u32> {
+    match PLANNED.load(Relaxed) {
+        0 => None,
+        c => Some(c),
     }
 }
 
