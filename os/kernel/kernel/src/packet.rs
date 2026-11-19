@@ -389,16 +389,24 @@ fn classify_tiers_n(frame: &[u8], nframe: &[u8], meta: Option<crate::net::Packet
             // (dst: parsed once in classify — eth_ipv4_dst walks the VLAN tags itself)
             // One observation per CONNECTION (a pure SYN), not per packet: a keep-alive or a long
             // transfer is not a series of beacons (parity G4; V1's per-packet lateral was an FP factory).
-            let syn = frame.get(m.l4_off + 13).is_some_and(|&f| f & 0x12 == 0x02);
-            if m.ip_proto == crate::net::IPPROTO_TCP && syn {
-                let _ = crate::rules::beacon_verdict(src, dst, m.dst_port);
-                let _ = crate::rules::lateral_verdict(src, dst, m.dst_port);
-                let _ = crate::rules::brute_verdict(src, dst, m.dst_port);
-            } else if m.ip_proto == crate::net::IPPROTO_TCP && frame.get(m.l4_off + 13).is_some_and(|&f| f & 0x12 == 0x12) {
-                // a SYN-ACK: the admin service answered (rule 124's evidence; server = src, client = dst)
-                crate::behavioral::brute_answer_at(src, dst, m.src_port, crate::behavioral::now_secs());
-            } else if m.dst_port == 53 {
-                let _ = crate::rules::dns_verdict(frame);
+            let tcp = m.ip_proto == crate::net::IPPROTO_TCP;
+            let syn = tcp && frame.get(m.l4_off + 13).is_some_and(|&f| f & 0x12 == 0x02);
+            let synack = tcp && frame.get(m.l4_off + 13).is_some_and(|&f| f & 0x12 == 0x12);
+            // ADR 0067 D8: under CPU pressure these observe-only detectors are paused (counted and
+            // reported as evidence, `inspshed`); they can never drop, so the wire verdict is unchanged.
+            let observe = (syn || synack || m.dst_port == 53) && !crate::inspshed::skip_observers();
+            if observe {
+                if syn {
+                    let _ = crate::rules::beacon_verdict(src, dst, m.dst_port);
+                    let _ = crate::rules::lateral_verdict(src, dst, m.dst_port);
+                    let _ = crate::rules::brute_verdict(src, dst, m.dst_port);
+                } else if synack {
+                    // a SYN-ACK: the admin service answered (rule 124's evidence; server = src, client = dst)
+                    crate::behavioral::brute_answer_at(src, dst, m.src_port, crate::behavioral::now_secs());
+                } else {
+                    // neither: `observe` was true for dst port 53
+                    let _ = crate::rules::dns_verdict(frame);
+                }
             }
             // Passive TLS ClientHello fingerprint (JA4 + SNI): two byte compares on every other segment.
             if m.ip_proto == crate::net::IPPROTO_TCP {
