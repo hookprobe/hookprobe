@@ -38,6 +38,52 @@ pub struct Reply {
     pub flags: u32,
 }
 
+/// H6 (swifi campaign only): every image page of the server (frame, file offset, file bytes, class 0 = text,
+/// 1 = read-only data, 2 = writable data) — the campaign flips bits in any of them and puts them all back.
+#[cfg(feature = "swifi")]
+static mut SWIFI_IMG: ([(usize, usize, usize, u8); 160], usize) = ([(0, 0, 0, 0); 160], 0);
+#[cfg(feature = "swifi")]
+fn swifi_note(f: usize, off: usize, n: usize, class: u8) {
+    let t = unsafe { &mut *core::ptr::addr_of_mut!(SWIFI_IMG) };
+    if t.1 < t.0.len() {
+        t.0[t.1] = (f, off, n, class);
+        t.1 += 1;
+    }
+}
+/// One flipped bit in a random image page (in its file-backed bytes; anywhere in a bss page). Returns the class hit.
+#[cfg(feature = "swifi")]
+pub fn swifi_flip_image(r: u64) -> Option<u8> {
+    let t = unsafe { &*core::ptr::addr_of!(SWIFI_IMG) };
+    if t.1 == 0 {
+        return None;
+    }
+    let (f, _, n, class) = t.0[(r as usize) % t.1];
+    let span = if n > 0 { n } else { 0x1000 };
+    let bit = ((r >> 16) as usize) % (span * 8);
+    unsafe { *((f + bit / 8) as *mut u8) ^= 1 << (bit % 8) };
+    if class == 0 {
+        arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
+    }
+    Some(class)
+}
+/// Put every image page back from the signed ELF (text and read-only data too — a normal reset restores only the
+/// writable pages, because nothing in EL0 can write the others).
+#[cfg(feature = "swifi")]
+pub fn swifi_restore_image() {
+    let t = unsafe { &*core::ptr::addr_of!(SWIFI_IMG) };
+    for &(f, off, n, class) in &t.0[..t.1] {
+        unsafe {
+            core::ptr::write_bytes(f as *mut u8, 0, 0x1000);
+            if n > 0 {
+                core::ptr::copy_nonoverlapping(TLSHOST_ELF.as_ptr().add(off), f as *mut u8, n);
+            }
+        }
+        if class == 0 {
+            arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
+        }
+    }
+}
+
 pub struct TlsHost {
     entry: usize,
     aspace: crate::el0as::El0As,
@@ -132,6 +178,8 @@ impl TlsHost {
                 if n > 0 {
                     unsafe { core::ptr::copy_nonoverlapping(TLSHOST_ELF.as_ptr().add(s.offset + voff), f as *mut u8, n) };
                 }
+                #[cfg(feature = "swifi")]
+                swifi_note(f, s.offset + voff, n, if s.executable() { 0 } else if s.writable() { 2 } else { 1 });
                 if s.executable() {
                     arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
                 } else if s.writable() {
@@ -348,6 +396,26 @@ impl TlsHost {
         }
         self.reset();
         Some(false)
+    }
+
+    /// H6 (swifi campaign only): flip one bit in a random page of the server's image. Returns the class hit.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_flip(&mut self, r: u64) -> Option<u8> {
+        swifi_flip_image(r)
+    }
+    /// H6: a raw call with any command id, slot and input.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_raw(&mut self, cmd: u32, conn: usize, input: &[u8]) -> u32 {
+        self.call(cmd, conn, input, 0).status
+    }
+    /// H6: put the image back between injections (not counted) so each injection starts clean; the re-INIT runs at
+    /// the next call, as after a fault.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_restore(&mut self) {
+        swifi_restore_image();
+        self.reset();
+        self.restarts -= 1;
+        self.sup = hal::superv::Sup::new(self.sup.entry);
     }
 
     /// Fail closed and recover: restore the image's data/bss pages, zero the heap and IO region; the re-INIT runs at the

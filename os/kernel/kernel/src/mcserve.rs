@@ -773,6 +773,8 @@ pub fn run() -> ! {
     let _ = crate::el0srv::sae_selftest(); // ADR 0065 steps 3c/3d: WPA3-SAE + PMKSA in el0-wifi
     #[cfg(feature = "wpa3")]
     let _ = crate::lansvc::sae_selftest(); // ADR 0050 D4 step 5c: the SAE station-frame walk in EL0
+    #[cfg(feature = "swifi")]
+    let _ = crate::superv::swifi_campaign(); // autoheal harness H6: the fault-injection campaign (never shipped)
     let _ = crate::hsh::selftest(0); // ADR 0059 step 4a: the EL0 management shell + the management ABI
     let _ = crate::el0as::report(); // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
     #[cfg(feature = "hsh")]
