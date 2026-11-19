@@ -97,6 +97,10 @@ pub const RT_OPKEY: u16 = 4;
 /// Evidence batch tagged with the build that wrote it: a 16-byte build id (HEQK_BUILD_ID, zero-padded) then the
 /// event images. Readers accept both this and the untagged `RT_EVIDENCE` (records written before the tag).
 pub const RT_EVIDENCE_B: u16 = 5;
+/// Evidence batch tagged with the build AND the configuration in force (ADR 0067 D10): the 16-byte build id, then
+/// 16 bytes of provenance (sealed-config generation, u64 LE, + the first 8 bytes of the config bundle's SHA-256),
+/// then the event images. Readers accept this, `RT_EVIDENCE_B` and `RT_EVIDENCE`.
+pub const RT_EVIDENCE_C: u16 = 6;
 pub const RT_TEST: u16 = 0x00FF;
 
 // Record header field offsets.
