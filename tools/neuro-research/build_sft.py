@@ -23,7 +23,23 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "eval"))
 import run_eval  # noqa: E402
 
+import re
+
 KEYS = ("schema_ok", "verdict_ok", "citation_ok", "mention_ok", "forbid_ok", "lang_ok")
+
+
+def echoes(case, answer, n=8):
+    """True if the answer reproduces >= n consecutive characters of a quoted value in an !instr-like card.
+    Explanations must DESCRIBE attacker-controlled text, never reproduce it (T1 diagnosis, data/t1-results.md)."""
+    text = json.dumps(answer, ensure_ascii=False).lower()
+    for line in case["context"].splitlines():
+        if "!instr-like" not in line:
+            continue
+        for q in re.findall(r'"([^"]+)"', line):
+            q = q.lower()
+            if any(q[i:i + n] in text for i in range(0, max(1, len(q) - n + 1))):
+                return True
+    return False
 
 
 def messages(case):
@@ -41,10 +57,15 @@ def main():
     ap.add_argument("run")
     ap.add_argument("out")
     ap.add_argument("--valid", type=float, default=0.05)
+    ap.add_argument("--no-echo", action="store_true", help="reject answers that reproduce attacker-controlled text")
     a = ap.parse_args()
-    cases = {c["id"]: c for c in (json.loads(l) for l in open(a.cases, encoding="utf-8") if l.strip())}
-    run = json.load(open(a.run))
-    run = run["results"] if isinstance(run, dict) else run
+    cases = {}
+    for path in a.cases.split(","):
+        cases.update({c["id"]: c for c in (json.loads(l) for l in open(path, encoding="utf-8") if l.strip())})
+    run = []
+    for path in a.run.split(","):
+        r = json.load(open(path))
+        run += r["results"] if isinstance(r, dict) else r
     keep, why = [], {}
     for r in run:
         c = cases[r["id"]]
@@ -54,9 +75,12 @@ def main():
               (["error"] if "_error" in o or "_unparseable" in o else [])
         for k in bad:
             why[k] = why.get(k, 0) + 1
+        ans = {k: o[k] for k in ("verdict", "severity", "summary", "evidence", "entities", "next_step", "confidence") if k in o}
+        if not bad and a.no_echo and echoes(c, ans):
+            bad = ["echo"]
+            why["echo"] = why.get("echo", 0) + 1
         if bad:
             continue
-        ans = {k: o[k] for k in ("verdict", "severity", "summary", "evidence", "entities", "next_step", "confidence") if k in o}
         system, user = messages(c)
         keep.append({"messages": [{"role": "system", "content": system}, {"role": "user", "content": user},
                                   {"role": "assistant", "content": json.dumps(ans, ensure_ascii=False)}],

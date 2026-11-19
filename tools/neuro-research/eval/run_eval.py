@@ -228,6 +228,8 @@ def openai_backend(case, a, temperature):
         schema = triage_schema(case["context"], a.mode == "closed")
         # BOTH modes see the same contract (field names AND allowed values); only "closed" also enforces it
         # with a grammar. An earlier version showed free mode only the field names -- an unfair comparison.
+        if a.system_extra:  # data generation only (teacher); never used when evaluating a model
+            msgs[0]["content"] += " " + a.system_extra
         if a.example and a.mode == "free":
             # Phase 0b ("freeex"): the same contract in plain words + ONE fixed example answer instead of a raw
             # JSON-schema dump, which small models copy back verbatim (Qwen3.5-0.8B, Phase 0). FORMAT only --
@@ -331,6 +333,7 @@ def main():
     ap.add_argument("--model", default="local")
     ap.add_argument("--mode", choices=["free", "closed"], default="closed")
     ap.add_argument("--repeat", type=int, default=1)
+    ap.add_argument("--system-extra", default="", help="TEACHER ONLY (T0 data generation): text appended to the system prompt")
     ap.add_argument("--example", action="store_true", help="free mode: add one fixed example answer to the prompt")
     ap.add_argument("--temperature", type=float, default=0.0)
     ap.add_argument("--max-tokens", type=int, default=700)
