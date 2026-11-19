@@ -285,6 +285,73 @@ pub fn take_heal() -> Option<(u32, [u32; HEAL_WORDS])> {
     valid.then_some((r.flags, r.words))
 }
 
+// --- the planned-reset reason (autoheal harness H3a, plan Wave 2c C5) ---
+// A reset the kernel chose for an ordinary reason (the owner asked, an OTA trial / revert, a configuration revert, a
+// factory reset) left NO trace: the next boot could not tell it from a power cycle. One word, same page as the two
+// records above (CM5: +0x600), same FNV check; written just before the reset, taken once at boot.
+const PLAN_MAGIC: u64 = 0x314e_4c50_4b51_4548; // "HEQKPLN1"
+
+#[repr(C)]
+struct PlanRec {
+    magic: u64,
+    code: u32,
+    sum: u64,
+}
+
+#[cfg(not(feature = "cm5"))]
+static mut QEMU_PLAN: PlanRec = PlanRec { magic: 0, code: 0, sum: 0 };
+
+fn plan() -> *mut PlanRec {
+    #[cfg(feature = "cm5")]
+    {
+        (REC_PA + 0x600) as *mut PlanRec
+    }
+    #[cfg(not(feature = "cm5"))]
+    {
+        core::ptr::addr_of_mut!(QEMU_PLAN)
+    }
+}
+
+fn plan_sum(code: u32) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in code.to_le_bytes().iter().chain(b"plan") {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h
+}
+
+/// Record why the kernel is about to reset (`code` = `hal::superv::PLANNED_*`). Call right before the reset.
+pub fn write_planned(code: u32) {
+    unsafe { core::ptr::write_volatile(plan(), PlanRec { magic: PLAN_MAGIC, code, sum: plan_sum(code) }) };
+    clean_range(plan() as usize, core::mem::size_of::<PlanRec>());
+}
+
+/// Take the planned-reset reason once (cleared; power-on garbage / a torn write reads as None).
+pub fn take_planned() -> Option<u32> {
+    let r = unsafe { core::ptr::read_volatile(plan()) };
+    let valid = r.magic == PLAN_MAGIC && r.sum == plan_sum(r.code);
+    unsafe {
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*plan()).magic), 0);
+        core::ptr::write_volatile(core::ptr::addr_of_mut!((*plan()).sum), 0);
+    }
+    clean_range(plan() as usize, core::mem::size_of::<PlanRec>());
+    valid.then_some(r.code)
+}
+
+/// `[P-superv]` part: the reason is taken once; a flipped code / a bare magic never reads back. Restores what was
+/// there (the boot already took the real one).
+pub fn planned_selftest() -> bool {
+    write_planned(2);
+    let once = take_planned() == Some(2) && take_planned().is_none();
+    write_planned(3);
+    unsafe { (*plan()).code ^= 1 };
+    let torn = take_planned().is_none();
+    unsafe { (*plan()).magic = PLAN_MAGIC };
+    let stale = take_planned().is_none();
+    once && torn && stale
+}
+
 /// `[P-wifiheal]` part: the recovery record is taken once, and a flipped word / a bare magic never reads back.
 pub fn heal_selftest() -> bool {
     let w = [7u32; HEAL_WORDS];
