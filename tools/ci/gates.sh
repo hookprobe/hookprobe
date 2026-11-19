@@ -108,7 +108,12 @@ gate_g2() {
   # then reports them as "missing marker" — a phantom kernel regression (CI, 2026-11-08). Under
   # CI_STRICT a missing tool fails here, by name.
   local t; for t in mkfs.vfat mcopy sfdisk; do need "$t" || return 0; done
-  step "heqk validate.sh (QEMU)"       bash -c 'cd os/kernel && ./validate.sh'
+  # The QEMU log is kept for the performance ratchet (ADR 0067 D1/D2): the [PERF] work counters the
+  # boot self-tests print are compared with tools/ci/baselines/perf.json.
+  local qlog="$LOGS/validate-qemu.log"
+  : > "$qlog"
+  step "heqk validate.sh (QEMU)"       bash -c "cd os/kernel && VALIDATE_KEEP_LOG='$qlog' ./validate.sh"
+  step "performance ratchet (work counters)" python3 -I tools/ci/perf_ratchet.py --log "$qlog" --out "$CI_OUT/perf.json"
 }
 
 ensure_ui() {
