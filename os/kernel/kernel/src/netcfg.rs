@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4.1 — network configuration clients over the smoltcp stack: DHCP + DNS + SNTP.
 //!
 //! This is the first time heqk drives smoltcp UDP (PH6/`netsvc.rs` only ever

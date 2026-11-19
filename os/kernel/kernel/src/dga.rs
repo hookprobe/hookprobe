@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! DGA / lookalike / tunnelling scoring for Shield queries (parity gap G8). DETECTION ONLY — a high score
 //! raises an observe-only `dns_dga` detection, it never blocks (ADR 0023, ADR 0052 D4).
 //!

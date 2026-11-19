@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The heqk detection-rule CATALOGUE as operator-facing metadata: message, category, MITRE
 //! ATT&CK id and canonical severity (1=CRITICAL … 5=INFO, the scale the UI and every evidence
 //! producer use). Pure, dependency-free: the on-device Mission Control server and the

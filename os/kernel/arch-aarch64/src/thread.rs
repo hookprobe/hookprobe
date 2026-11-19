@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Thread context = a trap frame on the thread's KERNEL stack, laid out to match
 //! the save/restore in `vectors.s` (irq_entry). 34 u64 slots (272 bytes):
 //!   [0..=30] = x0..x30   [31] = ELR_EL1   [32] = SPSR_EL1   [33] = SP_EL0

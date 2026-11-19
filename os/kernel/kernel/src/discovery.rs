@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Passive LAN discovery (D2): what devices ANNOUNCE about themselves on mDNS (UDP 5353) and SSDP (UDP 1900).
 //! heqk already receives these multicast frames on its AP / LAN port; reading them needs no probing (legacy
 //! shelled out to avahi + nbtscan). Kept per MAC: a friendly name, a model string, the SSDP SERVER header and

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M-NAT0 — the wired UPLINK: lease an IP over DHCP, resolve + ping the gateway,
 //! then ping an internet host, over a raw-frame NIC. Operator topology (2026-09-11):
 //! **end0 (RP1 GEM) is ALWAYS the WAN; eth1 (RTL8111H) is the LAN.** So the uplink

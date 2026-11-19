@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! WPA2-PSK PMK derivation — PBKDF2-HMAC-SHA1(passphrase, ssid, 4096, 32).
 //!
 //! IEEE 802.11i mandates this exact (legacy) KDF for the WPA2 PMK. The Raspberry-Pi

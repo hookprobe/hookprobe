@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Mission Control on the management sub-interface (parity G12-M, ADR 0054 D4).
 //!
 //! The Mission Control node (smoltcp, `mcserve::McNode`) owns static buffers, so there is exactly one.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! G32: JA4 as a device identity signal. Every TLS ClientHello a LAN device sends is already fingerprinted (`ja4.rs`);
 //! here the DISTINCT fingerprints are kept per MAC (up to `PER`), so a phone that rotates its private MAC can be
 //! linked to the MAC it had before.

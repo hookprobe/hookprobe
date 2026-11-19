@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P-wifi-crypto — offline KAT harness for the cm5-gated WiFi/WPA crypto
 //! (`arch-aarch64/src/aes.rs` + `arch-aarch64/src/wpa.rs`). Those modules are
 //! `#[cfg(feature = "cm5")]` in `arch-aarch64/src/lib.rs`, so they compile ONLY in

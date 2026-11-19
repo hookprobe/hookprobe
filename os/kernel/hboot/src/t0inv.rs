@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0062 T0 inventory (feature `t0inv`; never in a production image). READ-ONLY platform discovery at EL2:
 //! the CPU identification registers, the firmware DTB (bounded `boot_abi::fdt` reader), three VC-mailbox GET
 //! tags, and — only when the DTB declares PSCI over SMC AND EL3 is implemented — the SMCCC/PSCI feature probe.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! HMAC-DRBG (NIST SP 800-90A Rev. 1 §10.1.2, HMAC-SHA-256), for `el0-wpa` (operator decision D-c, 2026-11-16):
 //! the kernel keeps the hardware RNG and feeds fresh TRNG entropy to this DRBG at initialisation and on reseed; the
 //! security server draws every secret random value (SAE scalars / masks, group keys) from it. An unseeded DRBG, or

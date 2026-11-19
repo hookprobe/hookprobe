@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! `GET /api/capabilities` — what this device can do, so Mission Control greys out (with the reason) or hides what
 //! it cannot (UI contract from the Mission Control session, 2026-11-10):
 //!   {"source":"manifest","schema":2,"granted":[ids],"denied":{id: one-line operator-facing reason}}

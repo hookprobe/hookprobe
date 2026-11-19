@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! EL2 identity MMU for HBoot — enabled early so HBoot's crypto runs CACHED.
 //!
 //! HBoot runs at EL2 with the MMU off, which forces all data accesses to be

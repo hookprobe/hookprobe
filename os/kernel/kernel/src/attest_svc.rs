@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Runtime attestation service — verifier-supplied per-request freshness (B-2).
 //!
 //! Measured boot proves WHAT booted, once, at boot time. Audit B-2's gap was

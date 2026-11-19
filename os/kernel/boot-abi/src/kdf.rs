@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P15 sealing primitives — HMAC / HKDF / CTR / constant-time compare, all built
 //! over the `boot-abi` SHA-256 (`sha256`). Kept minimal on purpose: rather than
 //! pull a RustCrypto AEAD into the boot TCB for a <=4 KiB blob, the whole

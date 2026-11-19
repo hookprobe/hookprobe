@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! L-02 (operator 2026-11-17): a minimal mDNS responder for the device's OWN names (`heqk.local`, the unit-unique
 //! `<label>.heqk.local`), aligned with the legacy fortress's Avahi setup: address records only (IPv4 — legacy ran
 //! `use-ipv6=no`), no service publishing, no reflector. Pure logic, host-tested; the kernel decides where it runs

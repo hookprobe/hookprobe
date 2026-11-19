@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0050 D4 step 3: the WAN control parsers the uplink runs on bytes from the ISP side (DHCPv4 replies, Router
 //! Advertisements, DHCPv6). The kernel installs the EL0 network-services parser here once `el0-lansvc` is loaded;
 //! the uplink then parses through it. A server fault reads as "not for us / unparseable" — exactly what a

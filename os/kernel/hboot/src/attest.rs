@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Remote-attestation quote generation.
 //!
 //! After measured boot, HBoot signs a quote — `nonce || svn || PCR0..3` — with

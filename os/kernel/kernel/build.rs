@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pass the right linker script to the final link:
 //   hboot  -> linker-hboot.ld  (0x1000000, launched by HBoot)
 //   cm5    -> linker-cm5.ld    (0x200000, firmware-direct)

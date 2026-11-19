@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! IDS/IPS cost benchmark — `packet::verdict` (every detection tier the AP runs on a forwarded frame) timed
 //! on a realistic mix, so optimisations are measured on the real core, not guessed. Prints ns per packet
 //! per frame kind and the mix average. Frames are neutral for the stateful tiers: one TEST-NET source,

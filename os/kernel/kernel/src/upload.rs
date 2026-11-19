@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0056 — the device-side upload interface (phase 1: signed data packs).
 //!
 //! `POST /api/upload/begin` (owner re-auth) → `POST /api/upload/chunk?id=&off=` (raw bytes, in order) →

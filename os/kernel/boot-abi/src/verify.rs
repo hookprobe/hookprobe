@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The ONE hybrid secure-boot verifier + the ONE embedded trust root.
 //!
 //! This is the single code path that decides whether a HEQK payload is

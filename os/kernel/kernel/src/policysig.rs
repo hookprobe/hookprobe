@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0049 D1 — the operator's signature over POLICY.TXT, verified BEFORE the policy is parsed.
 //!
 //! `POLICY.SIG` (fixed 512 B on the FAT boot partition, next to POLICY.TXT):

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P9 — RTL8111H second Ethernet (`eth1`) on BCM2712 external PCIe **RC1**.
 //!
 //! PREPARED (not yet wired/flashed). Mirrors the proven `gem.rs` patterns: the

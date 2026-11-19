@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0062 T0 inventory: pure decoding of the CPU identification registers and the rule for when an SMCCC
 //! probe is safe to issue. Everything here is DETECTED state. Under ADR 0062 V0 nothing decoded here is ever
 //! a PASS by itself: a mitigation becomes PASS only with a configured-state self-test AND a metal verification

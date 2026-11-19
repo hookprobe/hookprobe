@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! G19 — the SASE tunnel to the operator's super-PoP (device side). Wire format v1, mirrored from the PoP's
 //! authoritative spec (`onboarding/enrollment/superpop/README.md`):
 //!

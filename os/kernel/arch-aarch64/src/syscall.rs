@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P3 — EL0 entry / kernel-resume glue (asm in `syscall.s`).
 
 // Saved kernel context for the enter_user/resume_kernel longjmp:

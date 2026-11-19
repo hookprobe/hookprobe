@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![no_std]
 #![no_main]
 //! HBoot — the HEQK boot manager (Phase 1 of the HookProbe boot architecture).

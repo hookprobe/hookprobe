@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Client DHCP request parsing (ADR 0050 D4 step 2b): what every Wi-Fi / LAN client sends the device's DHCP server.
 //! Pure, allocation-free, bounds-safe — compiled into the kernel (in-kernel fallback) AND into the EL0 LAN-services
 //! server (`el0-lansvc`), so the parse that runs on attacker bytes can live outside the kernel without a second copy.

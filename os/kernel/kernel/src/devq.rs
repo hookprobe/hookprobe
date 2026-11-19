@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P11 — Device-class transport (the sDDF borrow), the hardened security core.
 //!
 //! DEVICE_CLASS_TRANSPORT.md is the frozen design; this is its QEMU-validatable

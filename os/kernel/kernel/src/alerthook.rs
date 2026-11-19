@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Owner alert delivery (operator decision 2026-11-10): a signed webhook, ntfy / Gotify compatible, local-first —
 //! no HookProbe cloud. The owner points it at their own server (e.g. a self-hosted ntfy or Gotify on the LAN or the
 //! management network; their phone app subscribes there). The in-UI feed and the SIEM syslog export are unchanged.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! PPPoE discovery parsing (ADR 0050 D4 step 3b): the tag walk of a PADO / PADS — bytes any host on the WAN segment
 //! can send. Pure, allocation-free: compiled into the kernel (fallback) and into `el0-lansvc`, which runs it in EL0.
 //! The PPPoE engine (`arch_aarch64::pppoe`) keeps every decision (host-uniq match, AC MAC, SID, phase).

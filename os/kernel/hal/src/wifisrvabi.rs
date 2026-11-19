@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065: the ABI of `el0-wifi`, the resident EL0 Wi-Fi driver server.
 //!
 //! Window (one per platform): the image, its stack, one control page, the device mapping, then the two frame rings

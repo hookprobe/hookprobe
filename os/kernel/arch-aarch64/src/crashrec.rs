@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Crash record (production phase 3): why did the last boot end?
 //!
 //! A kernel panic or an unexpected EL1 fault resets the unit through the EL2 gate (`hvc #0`), and the

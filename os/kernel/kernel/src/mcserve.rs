@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! `mcserve` — heqk serves Mission Control itself (ADR 0047 D2): the IPS-gated datapath, the
 //! SOAR → evidence state, and an HTTP server for the UI + API, in ONE loop on the device. QEMU
 //! virt (virtio-net) today; the CM5 GEM path reuses the same pieces (`mcstate`/`http`) behind the

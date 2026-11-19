@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! cfgd — the single writer of the device configuration (ADR 0059 step 3; assessment Phase 2).
 //!
 //! A new HQCFG1 bundle (upload type `config`, ADR 0056 staging -> artifact store) is committed to the manifest as

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Detection-accuracy benchmark (readiness checklist 4.1): replay a LABELLED frame corpus through the real
 //! detection pipeline (`packet::verdict` → the signed rule plane, rate / scan / behavioural tiers, JA4, IOC)
 //! with the detectors' clock pinned to each frame's recorded time, and count every alert per rule and per

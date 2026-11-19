@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! `block` = REJECT (task #26): the answer a blocked sender gets back, so it fails fast instead of
 //! timing out. Pure (no MMIO), built on every target so QEMU tests it.
 //! - TCP -> RST (RFC 9293 §3.10.7.1): for a segment carrying ACK, RST with seq = its ack; otherwise

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Minimal ARM semihosting — lets bare-metal code terminate QEMU (test harness
 //! + the P0 self-test). Requires QEMU's `-semihosting` flag. Not shipped on real
 //!   hardware; a debug-build convenience only.

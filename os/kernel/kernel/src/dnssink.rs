@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4 DNS-sinkhole / RPZ (Response Policy Zone) — "refuse a NAME, never a PACKET" (ADR 0023).
 //!
 //! heqk sits inline as a sensor/gateway. When a client queries a policy-blocked domain, the RPZ

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The station's RSNE from its (Re)Association Request — attacker-shaped bytes from anyone in radio range — and the
 //! AP's keying decision (IEEE 802.11-2020 12.6.10.3 / 12.7, what hostapd's `wpa_validate_wpa_ie` decides).
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P5 — Packet Engine: the zero-copy SPSC datapath (the north-star).
 //!
 //! A descriptor ring carries indices + metadata; packet payloads live once in a

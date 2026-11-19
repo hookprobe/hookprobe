@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 fn main() {
     let dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
     let script = if std::env::var("CARGO_FEATURE_CM5").is_ok() { "link-cm5.ld" } else { "link.ld" };
