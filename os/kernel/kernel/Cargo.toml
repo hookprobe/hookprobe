@@ -91,6 +91,8 @@ hsh-dev = ["hsh"]
 # el0-wifi, faults it, faults el0-wpa on one station's command, or faults el0-wpa outside any station (full wipe).
 # Refused in a release build by os/build/make-cm5-heqk-image.sh (needs HOOKPROBE_DEBUG_ACCESS=1).
 wifi-inject = ["apmc"]
+# Autoheal harness H6: the software fault-injection campaign ([P-swifi]) in the mcserve QEMU boot. Never shipped.
+swifi = ["mcserve"]
 mcserve = ["netsvc", "mctls"]
 # M4 GEM↔smoltcp bridge FIRST-LIGHT (metal) — a persistent EL1 smoltcp instance fed from the
 # prod GEM drain loop that answers ARP/ICMP for heqk's own IP on the real wire. Pulls netsvc
