@@ -4431,6 +4431,7 @@ fn cm5_p10_probe() {
                                 let mut hp = MetalHeal { ssid: ap_ssid, cs: chosen_cs, gtk: &gtk, ap: &mut ap, head, nv: unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) } };
                                 let a = heal.step(&smp, &mut hp);
                                 superv::wifi_heal(a as u8, heal.class == wifiheal::Class::Healthy, smp.now_ms); // H1
+                                superv::probe_tick(smp.now_ms); // H4a: one functional probe per period
                                 a
                             };
                             match heal_act {

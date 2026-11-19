@@ -200,6 +200,33 @@ mod el0 {
             }
             (st, (self.r32(H_OUT_LEN) as usize).min(OUT_MAX))
         }
+        /// H4a functional probe: an echo of a fixed pattern through the full call path (control page, IO pages, the
+        /// server's loop). None = not asked (hold-off) or it FAULTED (the fault path already handled that);
+        /// Some(false) = it answered wrongly without faulting -> journaled (kind probe) and reset.
+        /// `tamper` (self-test only): treat a correct answer as wrong, and keep it out of the restart policy.
+        pub fn probe(&mut self, tamper: bool) -> Option<bool> {
+            const P: [u8; 32] = *b"heqk functional probe 0123456789";
+            if !self.sup.ready(crate::superv::now_ms()) {
+                return None;
+            }
+            let (st, n) = self.call(CMD_NOP_COPY, &P);
+            if st == ST_PANIC {
+                return None;
+            }
+            let mut out = [0u8; 32];
+            self.read(OUT_OFF, &mut out);
+            if st == ST_OK && n == P.len() && out == P && !tamper {
+                return Some(true);
+            }
+            let _ = crate::superv::server_probe_failed("el0-lansvc");
+            if tamper {
+                self.sup.fault_uncounted();
+            } else {
+                let _ = self.sup.fault(crate::superv::now_ms());
+            }
+            self.reset();
+            Some(false)
+        }
         /// Fail closed and recover: restore the image's data/bss pages and zero the IO region.
         fn reset(&mut self) {
             self.restarts += 1;
@@ -236,6 +263,16 @@ pub fn stats() -> (&'static str, u64, u64, u64, u64) {
         return ("el0", s.calls, s.faults, s.restarts, unsafe { IN_KERNEL });
     }
     ("el1", 0, 0, 0, unsafe { IN_KERNEL })
+}
+
+/// H4a: the functional probe of the EL0 LAN-services server (see `el0::Server::probe`). None = no EL0 server.
+pub fn probe(tamper: bool) -> Option<bool> {
+    #[cfg(feature = "mctls")]
+    if let Some(s) = el0::server() {
+        return s.probe(tamper);
+    }
+    let _ = tamper;
+    None
 }
 
 /// A client DNS query → its question facts (None = not a standard one-question query, or the parser failed).
@@ -689,6 +726,21 @@ pub fn selftest() -> bool {
     };
     let (_, _, f1, r1, _) = stats();
     let recovered = faulted && f1 == f0 + 1 && r1 == r0 + 1 && dns_query(&q[..n]).is_some();
+    // H4a: the functional probe answers; a WRONG answer (simulated: `tamper`) is journaled as kind probe, the server
+    // is reset (restart counted, no fault counted), and it answers the next probe and the next query
+    let probed = {
+        let saved = crate::superv::swap(hal::superv::Journal::new());
+        let good = probe(false) == Some(true);
+        let (_, _, f2, r2, _) = stats();
+        let wrong = probe(true) == Some(false);
+        let (_, _, f3, r3, _) = stats();
+        let j = crate::superv::journal();
+        let journaled = j.total() == 1 && j.get(1).is_some_and(|e| e.kind == hal::superv::Kind::Probe && e.rung == hal::superv::Rung::Restart);
+        let again = probe(false) == Some(true) && dns_query(&q[..n]).is_some();
+        let closed = crate::superv::journal().get(1).is_some_and(|e| e.outcome == hal::superv::Outcome::Recovered);
+        let _ = crate::superv::swap(saved);
+        good && wrong && f3 == f2 && r3 == r2 + 1 && journaled && again && closed
+    };
     // D4 step 2b: a DHCP REQUEST (option 50, hostname, vendor, PRL) parses to the same facts in EL0 as in-kernel
     let mut f = [0u8; 400];
     f[12] = 0x08;
@@ -857,10 +909,10 @@ pub fn selftest() -> bool {
     let wan_ok_extra = sta_ok && lcp_peer_ok && sta_crypto_ok;
     let wan_ok = same_offer && other_xid && same_ra && junk && pppoe && wan_ok_extra;
     let (_, c_after, _, _, _) = stats();
-    let pass = where_ == "el0" && same_q && same_w && bad && recovered && same_d && bad_d && wan_ok && c_after > 0;
+    let pass = where_ == "el0" && same_q && same_w && bad && recovered && probed && same_d && bad_d && wan_ok && c_after > 0;
     arch_aarch64::_print(format_args!(
-        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak + CHAP Challenge + IPv6CP Request classification identical, 3b-v the AC's LCP Nak/Reject identical, 5a EAPOL-Key M2 + RSNE MFP identical, 5b M2/M4 PTK + MIC (AKM 2 and 8) identical, tampering refused, PMK/PTK wiped from the IO page={}\n",
-        if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe
+        " [P-lansvc] {} — ADR 0050 D4 step 2: Shield DNS parsing in the EL0 LAN-services server (placement={}): a query gives the same facts as the in-kernel parser={} | an answer's CNAME chain is walked identically={} | malformed messages are unparseable in EL0 too={} | a deliberate EL0 fault resets the server (counted) and the next query parses={} | D4 step 2b: a DHCP REQUEST parses to the same facts in EL0 (type, chaddr, xid, option 50, hostname, vendor, PRL)={} a truncated frame is not DHCP={} | D4 step 3 WAN control in EL0: a DHCP OFFER merges identically={} another xid ignored={} an RA parses identically={} a bad-checksum RA / non-DHCPv6 refused={} | 3b PPPoE PADO tags + LCP Configure-Request + IPCP Request / Nak + CHAP Challenge + IPv6CP Request classification identical, 3b-v the AC's LCP Nak/Reject identical, 5a EAPOL-Key M2 + RSNE MFP identical, 5b M2/M4 PTK + MIC (AKM 2 and 8) identical, tampering refused, PMK/PTK wiped from the IO page={} | H4a functional probe: answers; a wrong answer (no fault) is journaled kind probe, the server reset, the next probe and query answer={}\n",
+        if pass { "PASS" } else { "FAIL" }, where_, same_q, same_w, bad, recovered, same_d, bad_d, same_offer, other_xid, same_ra, junk, pppoe, probed
     ));
     pass
 }
