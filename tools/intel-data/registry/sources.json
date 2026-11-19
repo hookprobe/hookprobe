@@ -1981,7 +1981,7 @@
     "https://www.stratosphereips.org/datasets-faq"
    ],
    "notes": "The datasets overview page says 'The CTU-13 dataset is published with the license Creative Commons CC-BY' and links CC BY 2.0. The FAQ says no permission is needed if cited. personal_data is a judgement: real university hosts are present, but I did not verify whether IPs were anonymised. The archive contains live malware binaries, so handle it in a sandbox.",
-   "adapter": "zeek_conn_labeled"
+   "adapter": "argus_binetflow"
   },
   {
    "id": "cve-list-v5",
