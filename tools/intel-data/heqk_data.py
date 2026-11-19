@@ -80,7 +80,11 @@ def cmd_fetch(a):
 
 def cmd_register(a):
     st, reg = Store(), registry.Registry()
-    acq = st.register(reg, a.source, a.file, a.purpose, a.url, a.sample_per_label)
+    try:
+        acq = st.register(reg, a.source, a.file, a.purpose, a.url, a.sample_per_label)
+    except licensing.LicenseDenied as e:
+        print(f"DENIED by licence gate: {e}", file=sys.stderr)  # same exit status as fetch
+        return 2
     print(json.dumps({k: acq[k] for k in ("acquisition_id", "source_id", "bytes", "fetched_at")}))
     return 0
 
@@ -93,6 +97,8 @@ def cmd_normalize(a):
         print(f"{acq['source_id']} {acq['acquisition_id'][:12]}: {n} records, {len(rej)} rejects")
         for r in rej[:5]:
             print("   reject:", r["reason"])
+        if n == 0 and rej:
+            rc = 1  # every row of this acquisition was rejected: the adapter and the data disagree
     return rc
 
 

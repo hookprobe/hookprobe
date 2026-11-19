@@ -35,12 +35,34 @@ class Store:
         self.db.executescript(
             """
             CREATE TABLE IF NOT EXISTS acquisitions (
-              acquisition_id TEXT PRIMARY KEY, source_id TEXT NOT NULL, license_id TEXT NOT NULL,
-              url TEXT, filename TEXT NOT NULL, bytes INTEGER NOT NULL, fetched_at TEXT NOT NULL, method TEXT NOT NULL);
+              acquisition_id TEXT NOT NULL, source_id TEXT NOT NULL, license_id TEXT NOT NULL,
+              url TEXT, filename TEXT NOT NULL, bytes INTEGER NOT NULL, fetched_at TEXT NOT NULL, method TEXT NOT NULL,
+              PRIMARY KEY (source_id, acquisition_id));
             CREATE TABLE IF NOT EXISTS normalizations (
               acquisition_id TEXT NOT NULL, adapter TEXT NOT NULL, adapter_version TEXT NOT NULL,
               records INTEGER NOT NULL, rejects INTEGER NOT NULL, created_at TEXT NOT NULL,
               PRIMARY KEY (acquisition_id, adapter, adapter_version));
+            """
+        )
+        self._migrate_acquisitions_key()
+
+    def _migrate_acquisitions_key(self):
+        """Stores created before the (source_id, acquisition_id) key used acquisition_id alone, so the same bytes
+        registered for a second source REPLACED the first source's row. Rebuild such a table in place."""
+        pk = [r[1] for r in self.db.execute("PRAGMA table_info(acquisitions)") if r[5]]
+        if pk != ["acquisition_id"]:
+            return
+        self.db.executescript(
+            """
+            BEGIN;
+            ALTER TABLE acquisitions RENAME TO acquisitions_old;
+            CREATE TABLE acquisitions (
+              acquisition_id TEXT NOT NULL, source_id TEXT NOT NULL, license_id TEXT NOT NULL,
+              url TEXT, filename TEXT NOT NULL, bytes INTEGER NOT NULL, fetched_at TEXT NOT NULL, method TEXT NOT NULL,
+              PRIMARY KEY (source_id, acquisition_id));
+            INSERT INTO acquisitions SELECT * FROM acquisitions_old;
+            DROP TABLE acquisitions_old;
+            COMMIT;
             """
         )
 
@@ -69,7 +91,9 @@ class Store:
         digest = _sha256_file(tmp_path)
         d = self.raw_dir(source["id"], digest)
         target = os.path.join(d, filename)
-        if os.path.exists(target):
+        # the same bytes for the same source are the same acquisition, whatever the file was called this time
+        # (register prefixes '<parent>__', so a second copy from another dir used to crash on acquisition.json)
+        if os.path.exists(os.path.join(d, "acquisition.json")):
             os.unlink(tmp_path)
             self.audit("acquire_duplicate", source_id=source["id"], acquisition_id=digest)
             return self.acquisition(source["id"], digest)
