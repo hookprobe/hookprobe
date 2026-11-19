@@ -45,6 +45,8 @@ pub enum Rung {
     Reboot = 4,
     /// Degrade: the component is switched off for this boot.
     Degrade = 5,
+    /// H5: the component used up its CPU budget for this window — its calls are refused until the next window.
+    Throttle = 6,
 }
 
 /// How it ended.
@@ -69,7 +71,7 @@ impl Kind {
 
 impl Rung {
     pub fn name(self) -> &'static str {
-        ["restart", "kick", "bounce", "reload", "reboot", "degrade"][self as usize]
+        ["restart", "kick", "bounce", "reload", "reboot", "degrade", "throttle"][self as usize]
     }
 }
 
@@ -86,6 +88,13 @@ pub const OUTCOME_NAMES: [&str; 4] = ["pending", "recovered", "escalated", "fail
 /// `el0-neuro` (the on-device inference server, a separate track) is listed ahead of its integration so its faults are
 /// attributed by name from the first day. At most 8 components (the kernel keeps a u8 bitmask).
 pub const COMPONENTS: [&str; 8] = ["el0-wifi", "el0-wpa", "el0-tlshost", "el0-lansvc", "el0-hsh", "wifi", "el0-neuro", "other"];
+/// The component ids as constants (hot paths pass an id, never a name; a test pins them to `COMPONENTS`).
+pub const C_WIFI_SRV: u8 = 0;
+pub const C_WPA: u8 = 1;
+pub const C_TLSHOST: u8 = 2;
+pub const C_LANSVC: u8 = 3;
+pub const C_HSH: u8 = 4;
+pub const C_NEURO: u8 = 6;
 
 /// The id of a component name (unknown names map to "other").
 pub fn component_id(name: &str) -> u8 {
@@ -290,18 +299,24 @@ pub struct Entry {
     /// station that can fault them must not be able to stretch the refusal window for every other station (they
     /// have their own bounds: per-station poisoning in el0-wpa, the bus-fault ladder for el0-wifi).
     pub stable_ms: u64,
+    /// H5: the CPU the component may use per `CPU_WINDOW_MS` window, in ms (0 = measured only, never throttled). Each
+    /// call is already bounded; this bounds the SUM — a server that is called (or made to work) so often that it
+    /// would starve the main loop is refused until the next window, fail closed, and the episode is journaled.
+    /// The Wi-Fi servers are measured only: el0-wifi IS the data path, and el0-wpa's SAE work comes in bursts whose
+    /// size is set by how many stations join — both need metal numbers before a limit is honest.
+    pub cpu_ms_per_window: u32,
 }
 
 /// The supervisor table. `wifi` is the Wi-Fi link as a whole (its ladder lives in `wifiheal`): the only critical
 /// entry — its ladder ends in one reboot, then degrade. The EL0 servers restart in place and never reboot the device.
 pub const TABLE: [Entry; 7] = [
-    Entry { name: "el0-wifi", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0 },
-    Entry { name: "el0-wpa", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0 },
-    Entry { name: "el0-tlshost", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
-    Entry { name: "el0-lansvc", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
-    Entry { name: "el0-hsh", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
-    Entry { name: "wifi", critical: true, exhausted: Exhausted::RebootOnce, grace: 0, backoff_ms: 0, backoff_max_ms: 0, stable_ms: 0 },
-    Entry { name: "el0-neuro", critical: false, exhausted: Exhausted::Degrade, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000 },
+    Entry { name: "el0-wifi", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0, cpu_ms_per_window: 0 },
+    Entry { name: "el0-wpa", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0, cpu_ms_per_window: 0 },
+    Entry { name: "el0-tlshost", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500 },
+    Entry { name: "el0-lansvc", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500 },
+    Entry { name: "el0-hsh", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500 },
+    Entry { name: "wifi", critical: true, exhausted: Exhausted::RebootOnce, grace: 0, backoff_ms: 0, backoff_max_ms: 0, stable_ms: 0, cpu_ms_per_window: 0 },
+    Entry { name: "el0-neuro", critical: false, exhausted: Exhausted::Degrade, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 200 },
 ];
 
 /// The table entry of a component (None = not supervised by name).
@@ -372,6 +387,80 @@ impl Sup {
             self.streak = 0;
         }
         was
+    }
+}
+
+/// The CPU budget of a component id, without a table search (the el0-wifi call path runs once per frame). A test
+/// pins it to the table.
+pub const fn cpu_budget_ms(c: u8) -> u32 {
+    match c {
+        C_TLSHOST | C_LANSVC | C_HSH => 500,
+        C_NEURO => 200,
+        _ => 0,
+    }
+}
+
+/// H5: the accounting window of the per-component CPU budget.
+pub const CPU_WINDOW_MS: u64 = 1_000;
+
+/// One component's CPU use in the current window. Pure: the kernel owns the clock and measures each excursion.
+#[derive(Clone, Copy, Debug)]
+pub struct CpuWindow {
+    start_ms: u64,
+    used_us: u64,
+    tripped: bool,
+    /// What the previous full window used.
+    pub last_us: u64,
+    /// The most any window used since boot.
+    pub peak_us: u64,
+    /// Windows in which the budget ran out.
+    pub throttled_windows: u32,
+    /// Calls refused because of it.
+    pub refused_calls: u64,
+}
+
+impl Default for CpuWindow {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl CpuWindow {
+    pub const fn new() -> Self {
+        CpuWindow { start_ms: 0, used_us: 0, tripped: false, last_us: 0, peak_us: 0, throttled_windows: 0, refused_calls: 0 }
+    }
+    fn roll(&mut self, now_ms: u64) {
+        if now_ms.saturating_sub(self.start_ms) >= CPU_WINDOW_MS {
+            self.last_us = self.used_us;
+            self.peak_us = self.peak_us.max(self.used_us);
+            self.used_us = 0;
+            self.start_ms = now_ms;
+            self.tripped = false;
+        }
+    }
+    /// May a call run now under `budget_ms` per window (0 = unlimited)? Returns (admitted, this is the first refusal
+    /// of the window — the moment to journal the episode).
+    pub fn admit(&mut self, now_ms: u64, budget_ms: u32) -> (bool, bool) {
+        self.roll(now_ms);
+        if budget_ms == 0 || self.used_us < budget_ms as u64 * 1_000 {
+            return (true, false);
+        }
+        let first = !self.tripped;
+        self.tripped = true;
+        if first {
+            self.throttled_windows += 1;
+        }
+        self.refused_calls += 1;
+        (false, first)
+    }
+    /// A call of this component took `us`.
+    pub fn charge(&mut self, us: u64) {
+        self.used_us = self.used_us.saturating_add(us);
+        self.peak_us = self.peak_us.max(self.used_us);
+    }
+    /// Use in the current window so far.
+    pub fn used_us(&self) -> u64 {
+        self.used_us
     }
 }
 
@@ -630,6 +719,45 @@ mod tests {
     }
 
     #[test]
+    fn cpu_window() {
+        // the ids used on hot paths are the journal's
+        for (id, name) in [(C_WIFI_SRV, "el0-wifi"), (C_WPA, "el0-wpa"), (C_TLSHOST, "el0-tlshost"), (C_LANSVC, "el0-lansvc"), (C_HSH, "el0-hsh"), (C_NEURO, "el0-neuro")] {
+            assert_eq!(component_id(name), id);
+        }
+        for e in TABLE.iter() {
+            assert_eq!(cpu_budget_ms(component_id(e.name)), e.cpu_ms_per_window, "{}", e.name);
+        }
+        assert_eq!(cpu_budget_ms(component_id("other")), 0);
+        // the data-path server is never throttled; a per-call budget can never exceed the window budget's meaning
+        assert_eq!(entry("el0-wifi").unwrap().cpu_ms_per_window, 0);
+        assert!(TABLE.iter().all(|e| (e.cpu_ms_per_window as u64) < CPU_WINDOW_MS));
+        let mut w = CpuWindow::new();
+        // unlimited: measured, never refused
+        w.charge(900_000);
+        assert_eq!(w.admit(10, 0), (true, false));
+        // a 200 ms budget: admitted until the sum reaches it, then refused for the rest of the window
+        let mut w = CpuWindow::new();
+        assert_eq!(w.admit(0, 200), (true, false));
+        w.charge(150_000);
+        assert_eq!(w.admit(100, 200), (true, false));
+        w.charge(60_000); // 210 ms: one call may overshoot by at most its own (already bounded) length
+        assert_eq!(w.admit(200, 200), (false, true)); // the first refusal: journal it
+        assert_eq!(w.admit(300, 200), (false, false));
+        assert_eq!(w.admit(999, 200), (false, false));
+        assert_eq!((w.throttled_windows, w.refused_calls), (1, 3));
+        // the next window: admitted again, the last window's use and the peak are kept
+        assert_eq!(w.admit(1_000, 200), (true, false));
+        assert_eq!((w.last_us, w.peak_us, w.used_us()), (210_000, 210_000, 0));
+        // a second episode counts a second throttled window
+        w.charge(200_000);
+        assert_eq!(w.admit(1_500, 200), (false, true));
+        assert_eq!(w.throttled_windows, 2);
+        // a long idle gap rolls once, cleanly
+        assert_eq!(w.admit(60_000, 200), (true, false));
+        assert_eq!(w.used_us(), 0);
+    }
+
+    #[test]
     fn probe_clock() {
         let mut c = ProbeClock::new();
         assert_eq!(c.due(0, 2), None);
@@ -651,6 +779,7 @@ mod tests {
         assert_eq!(component_name(component_id("wifi")), "wifi");
         assert_eq!(Kind::Budget.name(), KIND_NAMES[1]);
         assert_eq!(Rung::Reload.name(), "reload");
+        assert_eq!(Rung::Throttle.name(), "throttle");
         assert_eq!(Outcome::Escalated.name(), OUTCOME_NAMES[2]);
     }
 }
