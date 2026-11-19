@@ -24,11 +24,13 @@ python3 -I heqk_data.py build --purpose commercial_training --cap 50000
 python3 -I heqk_data.py dga xjw3kq9vzt2lmpr8.com                     # heqk dga.rs, bit-exact
 python3 -I heqk_data.py dga-eval                                     # dga.rs FP/recall sweep on the store
 python3 -I heqk_data.py catalog --out ../../docs/research/intel-data/CATALOGUE.md
-python3 -I -m unittest discover -s tests -t tests                     # 42 tests, fixtures only
+python3 -I -m unittest discover -s tests -t tests                     # 57 tests, fixtures only
 ```
 
 Purposes are `commercial_training`, `evaluation`, `research` and `live_intel`. Each source is checked
-against the right one at acquisition and again at build.
+against the right one at acquisition and again at build. A build reads only the latest acquisition of each
+file of a source (a re-fetched feed snapshot supersedes the older one), and each collection only the
+sources that declare it (in `collections.json` or the source's own `collections` field).
 
 | Path | What |
 |---|---|
