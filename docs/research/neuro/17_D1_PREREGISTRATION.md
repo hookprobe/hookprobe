@@ -62,3 +62,50 @@ format of `dna_fixed.py` and `el0-neuro`:
 - **If Q1 fails even with Q2:** the temporal tier does **not** ship as an alarm source. It stays as an
   evidence feature, with no alarms of its own, until a fix passes a new pre-registration.
 - **Q4** is decided by the rule above.
+
+## Analysis addendum (2026-11-19, after conversion, before any score was computed)
+
+The data was received and converted. Only coverage (devices, hours, days) was looked at: no engine score,
+alarm or detection number existed when this was written. Implementation: `tools/neuro-research/d1_analysis.py`.
+
+**A1. Data received.**
+- The browser auto-extracted `pcaps.zip`, so its SHA-256 could not be checked.
+- Integrity rests on the archive tool's per-member CRC-32 check during extraction.
+- 27 files (26 `.pcap`, 1 `.pcapng`, 27 GB) match the 27 documented devices.
+- Conversion: 95,543,405 packets became 37,555 device-hours for 27 devices. Each device is identified by the MAC address in its file name (`--macs`).
+
+**A2. Clock errors.**
+- 9 device-hours carry timestamps before 2016-09-01 (1970 or 1981), on 4 devices. They are dropped.
+- The rest of the data spans 2016-09-22 to 2017-04-13.
+
+**A3. Held-out devices.**
+- The rule `sha256(device id) % 27 < 5` is applied to the converter's MAC string (`aa:bb:cc:dd:ee:ff`).
+- It selects **7** devices, not the 5 the text expected: AwairAirQuality, BelkinWemoMotionSensor, HPPrinter, PhilipsHue, TPLinkSmartPlug, WithingsSleepSensor and WithingsSmartScale.
+- The rule as written is kept. Disclosure: the colon-free MAC form was also computed and gives a different set. The colon form was chosen because it is the identity the converter writes.
+
+**A4. Engine run.**
+- `dna_fixed.DNAFixed` is fed event by event (bit-exact with `el0-neuro`). An hour is closed only if the device had traffic in it, as `el0-neuro` does.
+- The engine streams history unscored, then dev. For test it streams history and dev unscored, then test.
+
+**A5. Semi-synthetic attacks (Q2, Q3).**
+- Attacks are **overlaid** on a real device hour: added on top of that hour's own traffic.
+- 8 deterministic onsets per device, per kind, per period.
+- Kinds:
+  - DGA: 150 NX queries per hour to random registered domains, for 4 h. Random subdomains of a single parent would collapse to one fingerprint under the pinned eTLD rule.
+  - Scan: 59 LAN hosts × {22, 445}, 118 connections, 1 h.
+  - Exfiltration: +2 GB to one new peer, 1 h.
+  - IoT-23: up to 4 consecutive malicious hours of an infected host. They come from the IoT-23 **dev** split for the dev period and the **test** split for the test period.
+- An incident counts as detected when an alarm (score ≥ 1.0) fires in one of its attack hours.
+- AUC: attack hours against the period's benign hours.
+
+**A6. How Q1 and Q2 are read.**
+- Alarms per week = alarms in the period ÷ (the device's active days in that period ÷ 7).
+- The median uses devices with ≥ 7 active days in the period. For the test period that is 21 of the 27 devices; the other 6 are listed but not counted in the median.
+- **Gate:** passed when that median is ≤ 1. The strict reading (every device ≤ 1) is reported next to it, and each device above 1 is named.
+- Q2 chooses `q_min` on dev with the same median.
+
+**A7. Q4.**
+- The readout is trained on the history hours of non-held-out devices, and the ridge is chosen on dev by AUC.
+- B's threshold is calibrated on dev benign hours at 1 alarm per device-week.
+- "Without raising nuisance" means B's test median ≤ the DNA's test median.
+- Labelled attack periods: the authors' README was not downloaded, so none are known. Every hour is treated as benign (as pre-registered).
