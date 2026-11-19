@@ -14,6 +14,24 @@ cd "$(dirname "$0")"
 # one; through the shared target/ a concurrent builder (another session) once swapped in a
 # non-p15-write kernel between the two and produced a phantom [P15-otafat] FAIL.
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-target/validate}"
+# MACHINE-WIDE lock for heavy runs (2026-11-19): the lock below is per target dir, so two sessions in
+# two worktrees still ran QEMU at the same time. On a loaded host the TCG guest is starved and the
+# time-bounded EL0 phases fail ([P7c], [P12c], [P-wasm-el0], [P-wasmi-el0], [P-wasm-parity], [P-wasip1];
+# [P15-otaimg] hit the 600 s boot limit) — phantom FAILs, seen 4 times in two days. One heavy run at a
+# time per machine: validate.sh, and by convention `flock <lock> <cmd>` around mc-e2e.sh, clippy and
+# image builds. HEQK_HEAVY_LOCK names the lock file (default $XDG_RUNTIME_DIR/heqk-heavy.lock); set it
+# empty to turn the lock off. With no XDG_RUNTIME_DIR (a CI runner) there is no lock. A caller that
+# already holds it (`flock <lock> ./validate.sh`: the open lock file is inherited) is not locked twice.
+HEAVY_LOCK="${HEQK_HEAVY_LOCK-${XDG_RUNTIME_DIR:+$XDG_RUNTIME_DIR/heqk-heavy.lock}}"
+if [ -n "$HEAVY_LOCK" ] && command -v flock >/dev/null 2>&1; then
+  heavy_held=0
+  for fd in /proc/$$/fd/*; do
+    [ "$(readlink "$fd" 2>/dev/null)" = "$HEAVY_LOCK" ] && heavy_held=1
+  done
+  if [ "$heavy_held" = 0 ] && exec 8>>"$HEAVY_LOCK"; then
+    if ! flock -n 8; then echo "[lock] another heavy run holds $HEAVY_LOCK — waiting for it..."; flock 8; fi
+  fi
+fi
 # ...and SERIALIZE concurrent validate runs (two sessions share this worktree): two runs in the
 # same target dir swap each other's kernels between build and boot stages (phantom FAILs).
 mkdir -p "$CARGO_TARGET_DIR"
