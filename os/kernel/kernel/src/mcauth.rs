@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Owner authentication for the on-device Mission Control (ADR 0037 D3 (retired 2026-11-12; see in part 0051 / 0054 / 0058 / 0059), ADR 0047 D2).
 //!
 //! **Physical possession is the only credential; no default password, ever.** The flasher mints

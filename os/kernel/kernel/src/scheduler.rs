@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Priority preemptive scheduler — arch-neutral. A thread's context is an opaque
 //! `sp: usize`; the arch builds/saves/restores the real frame. Accessed only from
 //! IRQ context (single core, non-reentrant), so no locking is needed.

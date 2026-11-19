@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P16 — offline soundness harness for the BPF verifier's abstract operators
 //! (the Agni lesson: Linux's verifier shipped 27 latent soundness bugs, several
 //! in individually-unsound abstract operators). It compiles the REAL operators

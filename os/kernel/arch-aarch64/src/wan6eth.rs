@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! IPv6 on an Ethernet WAN (DHCP / static uplink) — parity G17, operator decision 2026-11-08.
 //!
 //! PPPoE carries IPv6 inside the session (ip6.rs builders + pppoe encap). On an Ethernet WAN the same

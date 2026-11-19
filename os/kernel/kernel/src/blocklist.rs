@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P8 — threat-feed blocklist: the SECOND stateful BPF helper, proving the
 //! substrate generalizes beyond a counter to a keyed LOOKUP. A signed rule passes
 //! an IP source; this returns 1 if it matches any blocked CIDR prefix. Mirrors

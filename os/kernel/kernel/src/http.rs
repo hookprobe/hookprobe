@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Minimal, allocation-free HTTP/1.1 for the on-device Mission Control (ADR 0047 D2).
 //!
 //! Scope is deliberately small: `GET` only, one request per connection (`Connection: close`),

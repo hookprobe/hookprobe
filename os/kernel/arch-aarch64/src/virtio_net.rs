@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4.1 — persistent, pollable virtio-net (virtio-mmio, modern/v2) driver.
 //!
 //! `virtio.rs::rx_one_packet` is a one-shot: it resets the NIC, sends a single

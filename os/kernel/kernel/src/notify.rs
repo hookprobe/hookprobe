@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P12 — Notification objects + capability pub-sub (topics as caps).
 //!
 //! seL4-exact async signalling for `#![no_std]`, single core. See

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![no_std]
 //! HEQK boot ABI — the typed contract between HBoot (heqk-boot, EL2) and the
 //! HEQK microkernel (heqk-core, EL1). The kernel never parses raw DTBs: HBoot

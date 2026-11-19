@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! BCM2712 hardware TRNG (iproc rng200) — real per-boot entropy for attestation.
 //!
 //! Before this, the attestation nonce was a compile-time constant

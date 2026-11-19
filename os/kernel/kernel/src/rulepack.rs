@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Field-updatable detection rules (parity gap G6) — `RULES.BIN` on the boot partition.
 //!
 //! heqk shipped 3 signature rules against NAPSE's set; new detections meant a new kernel. A rule pack is

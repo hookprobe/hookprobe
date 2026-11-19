@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The write path for ADR 0053 actions: form parsing + every guard, in order, with the outcome audited.
 //! Kept apart from `http.rs` so it is testable without a socket.
 

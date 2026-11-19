@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Virtio transport seam: the register-level operations the virtio drivers need, behind
 //! one type with two backends.
 //!

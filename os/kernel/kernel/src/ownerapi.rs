@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0055 stage B — the owner-rules API over the journal (`ownerjournal.rs`).
 //!
 //! `POST /api/owner-rules` (form body): `op=set|remove`, `kind=device_policy|shield_allow|shield_block|

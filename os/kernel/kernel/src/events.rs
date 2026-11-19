@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P8 / SOAR — the async telemetry exfiltration path ("the OS is the sensor" can
 //! now REPORT). The BPF verdict engine, in the TCB, pushes a fixed-size event
 //! HEADER (never the packet payload) into an SPSC ring on a rule hit; an EL0

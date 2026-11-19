@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Shield v2 — DNS protection on the heqk AP (ADR 0052; dnsXai model, its bugs not repeated).
 //!
 //! Pure, `no_std`, allocation-free. Every client DNS query the AP forwards passes `on_client_frame`; every

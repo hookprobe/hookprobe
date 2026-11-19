@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HookProbe microkernel — aarch64 boot stub, CM5 (BCM2712) variant.
 // BREADCRUMB PROBE BUILD (operator design, 2026-07-21): dump-before-touch,
 // BootDebug page in RAM @ 0x3FFF0000, step counter + UART/clock/pinmux

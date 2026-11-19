@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Pure parsers for frames the Wi-Fi AP / WAN DHCP paths receive from untrusted peers: the WAN DHCP
 //! client's reply parser, the AP DHCP server's request parser, CYW43455 firmware event decoding and the
 //! WPA2 authenticator's EAPOL matcher. No MMIO — built on EVERY target so the QEMU `[P-fuzz]` phase can

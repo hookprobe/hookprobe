@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! eMMC RPMB anti-rollback anchor (decision record 2026-11-10 D-RPMB; operator 2026-11-10b: "implement the
 //! approved RPMB architecture, but keep all irreversible key programming behind a separate explicit manufacturing
 //! operation").

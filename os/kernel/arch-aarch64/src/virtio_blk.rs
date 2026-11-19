@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M3.1 — minimal virtio-blk (virtio-mmio, modern/v2) block device behind
 //! `hal::BlockDev`. This is the QEMU **write path with cross-restart persistence**
 //! (a file-backed `-drive`) that replaces the volatile `RamDisk` for the M3

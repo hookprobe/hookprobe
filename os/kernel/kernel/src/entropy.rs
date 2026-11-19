@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4.3 #6 — entropy source abstraction (the auditor's highest-consequence item).
 //!
 //! The M4.2b security-auditor review (docs/design/heqk-control-plane.md §"M4.2b

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P6 — AI Runtime: a small RFC 9669 BPF virtual machine (interpreter).
 //!
 //! Runs standard BPF bytecode (a *subset* of the RFC 9669 ISA — enough for a

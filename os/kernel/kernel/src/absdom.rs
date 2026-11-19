@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Abstract domain for the BPF verifier (`bpf::verify_prevail`), factored out as
 //! MODULAR, individually-specified transfer functions — the Agni lesson (P16(a)):
 //! Linux's verifier had 27 latent soundness bugs, several in individually-unsound

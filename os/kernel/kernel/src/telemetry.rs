@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P6b — Telemetry Bus ("the OS is the sensor") + a QSecBit-lite scorer.
 //!
 //! The capability kernel mediates every resource access, so it can emit

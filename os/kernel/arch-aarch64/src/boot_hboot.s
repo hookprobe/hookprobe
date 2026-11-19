@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HEQK microkernel entry when launched by HBoot (heqk-boot).
 //
 // Contract on entry (guaranteed by hboot_launch_el1):

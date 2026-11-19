@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P7a — stage-1 MMU on real BCM2712 silicon (identity map, 40-bit PA space).
 //!
 //! The CM5 addresses peripherals above 32 bits: the RP1 window (incl. the

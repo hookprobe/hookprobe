@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! IPv6 LAN router for the heqk AP — pure (no MMIO), built on every target so QEMU tests it.
 //!
 //! The LAN /64 is the first subnet of the prefix the ISP delegated over DHCPv6 (IA_PD). This module:

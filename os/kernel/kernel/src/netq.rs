@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P17 — the net-class queue: the transport between the EL1/TCB packet plane and
 //! an untrusted EL0 IP service (smoltcp), per OVERLAY_CONVERGENCE.md §A3.1.
 //!

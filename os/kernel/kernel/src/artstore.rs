@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0056 D5 — the artifact store: signed data packs uploaded to a running device live here, in the
 //! DataVolume `Store` region (datavol.rs), never over the boot-FAT copy.
 //!

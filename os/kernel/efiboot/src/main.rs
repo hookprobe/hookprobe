@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! heqk efiboot — UEFI entry for the arm64-cloud tier (OCI Ampere A1 first).
 //!
 //! Stage 1: `probe`. A read-only census of the guest the firmware hands us — the facts the
