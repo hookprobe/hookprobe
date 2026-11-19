@@ -102,9 +102,9 @@ mod imp {
     const BUDGET_US: u64 = 20_000;
     #[cfg(not(feature = "cm5"))]
     const BUDGET_US: u64 = 2_000_000;
-    /// First restart backoff; doubles per consecutive fault up to BACKOFF_MAX_MS.
+    /// First restart backoff (the supervisor table's, `hal::superv::TABLE`: doubles per consecutive fault, capped).
+    #[cfg_attr(feature = "cm5", allow(dead_code))] // the QEMU self-tests wait it out
     pub const BACKOFF_MS: u64 = 50;
-    pub const BACKOFF_MAX_MS: u64 = 5_000;
 
     /// A ring as the kernel sees it: its physical frames, in order.
     pub struct PagedRing {
@@ -172,8 +172,8 @@ mod imp {
         pub bad_rings: u64,
         /// `crate::clock::ticks()` at the last fault / overrun (0 = none) — `/api/health` wifi_driver.
         pub last_fault_ticks: u64,
-        next_ok: u64,
-        streak: u32,
+        /// H2: the restart state under the supervisor table's policy (the fault streak, the hold-off).
+        sup: hal::superv::Sup,
         /// Run once after each fault / budget overrun, before the server's next call (the bus server: recover the SDHCI
         /// controller if the fault left a transfer in flight — ADR 0065 claims C1/C5).
         pub on_fault: Option<fn() -> u8>,
@@ -271,8 +271,7 @@ mod imp {
             restarts: 0,
             bad_rings: 0,
             last_fault_ticks: 0,
-            next_ok: 0,
-            streak: 0,
+            sup: hal::superv::Sup::new(hal::superv::entry(sp.name).unwrap_or(&hal::superv::TABLE[0])),
             on_fault: None,
         };
         for g in parsed.segs[..parsed.nsegs].iter() {
@@ -372,7 +371,7 @@ mod imp {
         /// One command: a bounded excursion; a fault or overrun resets the server and starts the backoff.
         pub fn call(&mut self, cmd: u32) -> Call {
             let t = now_ms();
-            if t < self.next_ok {
+            if !self.sup.ready(t) {
                 return Call::Backoff;
             }
             self.w32(H_MAGIC, self.magic);
@@ -391,19 +390,16 @@ mod imp {
                     let us = crate::clock::ticks().saturating_sub(t0) / (crate::clock::freq() / 1_000_000).max(1);
                     arch_aarch64::_print(format_args!(" [EL0-FAULT] {} fault #{}: cmd={} kind={} after {} us (budget {} us) streak={} controller recover={}\n",
                         self.name, self.faults, self.r32(H_CMD), match how { crate::Excursion::Timeout => "budget-overrun", crate::Excursion::Fault => "exception", _ => "panic-status" },
-                        us, self.budget_us, self.streak + 1, ["nothing in flight", "reset+abort+terminate", "reset did NOT clear", "-", "-", "-", "-", "-", "-", "n/a"][rec as usize]));
+                        us, self.budget_us, self.sup.streak + 1, ["nothing in flight", "reset+abort+terminate", "reset did NOT clear", "-", "-", "-", "-", "-", "-", "n/a"][rec as usize]));
                 }
                 let _ = crate::superv::server_fault(self.name, how == crate::Excursion::Timeout); // H1: one journal entry per episode
                 self.reset();
-                self.streak = self.streak.saturating_add(1);
-                let b = (BACKOFF_MS << (self.streak - 1).min(10)).min(BACKOFF_MAX_MS);
-                self.next_ok = now_ms() + b;
+                let _ = self.sup.fault(now_ms()); // H2: the table's capped exponential hold-off
                 return Call::Fault;
             }
-            if self.streak > 0 {
+            if self.sup.ok() {
                 crate::superv::server_ok(self.name); // H1: the first good call after a fault closes the entry
             }
-            self.streak = 0;
             Call::Done(st, self.r32(H_R0), self.r32(H_SERVED))
         }
         /// Restore the image's writable pages, zero the control page and both rings (nothing a crashed driver left
@@ -507,7 +503,7 @@ mod imp {
         }
         /// Milliseconds until the next call is allowed (0 = now).
         pub fn backoff_left_ms(&self) -> u64 {
-            self.next_ok.saturating_sub(now_ms())
+            self.sup.left_ms(now_ms())
         }
     }
 

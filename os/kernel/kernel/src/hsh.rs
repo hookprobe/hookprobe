@@ -37,6 +37,8 @@ mod el0 {
         pub calls: u64,
         pub faults: u64,
         pub restarts: u64,
+        /// H2: the restart state under the supervisor table's policy (a server faulting on every call is held off).
+        sup: hal::superv::Sup,
         pub role: u8,
     }
     pub static mut SRV: Option<Server> = None;
@@ -79,7 +81,7 @@ mod el0 {
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(HSH_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, role: 0 };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-hsh").unwrap_or(&hal::superv::TABLE[0])), role: 0 };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -152,6 +154,10 @@ mod el0 {
         }
         /// One command; `(status, out_len)`. A fault / timeout resets the server and reports ST_PANIC.
         pub fn call(&mut self, cmd: u32, input: &[u8]) -> (u32, usize) {
+            // H2: inside the restart hold-off (consecutive faults) the call is refused like a fault — fail closed
+            if !self.sup.ready(crate::superv::now_ms()) {
+                return (ST_PANIC, 0);
+            }
             let n = input.len().min(IN_MAX);
             self.write(H_MAGIC, &MAGIC.to_le_bytes());
             self.write(H_ROLE, &(self.role as u32).to_le_bytes());
@@ -165,10 +171,13 @@ mod el0 {
             if st == ST_PANIC {
                 self.faults += 1;
                 let _ = crate::superv::server_fault("el0-hsh", how == crate::Excursion::Timeout); // H1
+                let _ = self.sup.fault(crate::superv::now_ms());
                 self.reset();
                 return (ST_PANIC, 0);
             }
-            crate::superv::server_ok("el0-hsh");
+            if self.sup.ok() {
+                crate::superv::server_ok("el0-hsh");
+            }
             (st, (self.r32(H_OUT_LEN) as usize).min(OUT_MAX))
         }
         /// Fail closed and recover: restore the image's data/bss pages and zero the IO region.
@@ -614,14 +623,26 @@ fn selftest_inner(now_ms: u64) -> bool {
     let abi = abi && cfg_refused && chal && retired;
     // fault containment: a deliberate EL0 fault resets the shell, counted; the next command answers
     let (_, _, f0, r0) = stats();
-    let faulted = el0::server().is_some_and(|s| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0 == hal::hshabi::ST_PANIC);
+    let faulted = el0::server().is_some_and(|s| crate::superv::deliberate(|| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0) == hal::hshabi::ST_PANIC);
     let (_, _, f1, r1) = stats();
     let contained = faulted && f1 == f0 + 1 && r1 == r0 + 1 && has(&run(b"version", v), b"HEQK ");
+    // H2 (the supervisor table's policy on a real server): two faults in a row -> the shell is held off — the next call
+    // is refused WITHOUT an excursion (no new fault, no restart) — and answers again once the 50 ms hold-off is over
+    let held = {
+        let fault = |s: &mut el0::Server| crate::superv::deliberate(|| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0) == hal::hshabi::ST_PANIC;
+        let two = el0::server().is_some_and(|s| fault(s) && fault(s));
+        let (_, _, f2, r2) = stats();
+        let refused = el0::server().is_some_and(|s| s.call(hal::hshabi::CMD_SELFTEST_FAULT, &[]).0 == hal::hshabi::ST_PANIC);
+        let (_, _, f3, r3) = stats();
+        let t0 = crate::superv::now_ms();
+        while crate::superv::now_ms() < t0 + 60 {}
+        two && refused && (f3, r3) == (f2, r2) && f2 == f1 + 2 && has(&run(b"version", v), b"HEQK ")
+    };
     let _ = &mut o;
-    let pass = parser && reads && denied && abi && contained;
+    let pass = parser && reads && denied && abi && contained && held;
     arch_aarch64::_print(format_args!(
-        " [P-hsh] {} — ADR 0059 step 4a hsh (EL0 excursion shell, two-phase line -> mgmtabi -> text): parser limits (empty, 255 B at/over, 12 tokens, 64-B token, non-ASCII / NUL / control, shell operators, unknown, 4b/4c not supported)={} every read command formatted from its ABI reply={} the kernel enforces the role (no role -> denied, help hides)={} a deliberate EL0 fault is contained and the next command answers={}\n",
-        if pass { "PASS" } else { "FAIL" }, parser, reads, denied, contained
+        " [P-hsh] {} — ADR 0059 step 4a hsh (EL0 excursion shell, two-phase line -> mgmtabi -> text): parser limits (empty, 255 B at/over, 12 tokens, 64-B token, non-ASCII / NUL / control, shell operators, unknown, 4b/4c not supported)={} every read command formatted from its ABI reply={} the kernel enforces the role (no role -> denied, help hides)={} a deliberate EL0 fault is contained and the next command answers={} H2: two faults in a row hold the shell off (refused with no excursion), it answers again after the hold-off={}\n",
+        if pass { "PASS" } else { "FAIL" }, parser, reads, denied, contained, held
     ));
     arch_aarch64::_print(format_args!(
         " [P-mgmtabi] {} — ADR 0059 D9 management ABI: every read message answers with exactly its fixed record from the /api producers, an unknown id is refused, a caller without the role is denied; config confirm / rollback / stage refused on every session role without an owner-signed HQMGMT1 envelope, the challenge reports what to bind, session elevation retired (R6 = D)={}\n",
