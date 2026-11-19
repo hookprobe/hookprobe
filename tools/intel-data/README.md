@@ -17,12 +17,14 @@ python3 -I heqk_data.py sources --class OPEN                         # what is u
 python3 -I heqk_data.py gate abusech-urlhaus commercial_training      # DENY + the reason
 python3 -I heqk_data.py fetch cisa-kev --purpose commercial_training  # licence-gated download
 python3 -I heqk_data.py register iot-23 ~/data/IoT-23/CTU-IoT-Malware-Capture-1-1/bro/conn.log.labeled --purpose commercial_training
+python3 -I heqk_data.py register iot-23 ~/data/IoT-23/CTU-IoT-Malware-Capture-39-1/bro/conn.log.labeled \
+    --purpose commercial_training --sample-per-label 20000          # multi-GB capture: per-label reservoir, original hash kept
 python3 -I heqk_data.py normalize                                    # raw -> heqk.security-event/1
 python3 -I heqk_data.py build --purpose commercial_training --cap 50000
 python3 -I heqk_data.py dga xjw3kq9vzt2lmpr8.com                     # heqk dga.rs, bit-exact
 python3 -I heqk_data.py dga-eval                                     # dga.rs FP/recall sweep on the store
 python3 -I heqk_data.py catalog --out ../../docs/research/intel-data/CATALOGUE.md
-python3 -I -m unittest discover -s tests -t tests                     # 41 tests, fixtures only
+python3 -I -m unittest discover -s tests -t tests                     # 42 tests, fixtures only
 ```
 
 Purposes are `commercial_training`, `evaluation`, `research` and `live_intel`. Each source is checked

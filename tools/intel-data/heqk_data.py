@@ -80,7 +80,7 @@ def cmd_fetch(a):
 
 def cmd_register(a):
     st, reg = Store(), registry.Registry()
-    acq = st.register(reg, a.source, a.file, a.purpose, a.url)
+    acq = st.register(reg, a.source, a.file, a.purpose, a.url, a.sample_per_label)
     print(json.dumps({k: acq[k] for k in ("acquisition_id", "source_id", "bytes", "fetched_at")}))
     return 0
 
@@ -208,6 +208,8 @@ def main(argv=None):
     s.add_argument("file")
     s.add_argument("--purpose", required=True, choices=licensing.PURPOSES)
     s.add_argument("--url")
+    s.add_argument("--sample-per-label", type=int, metavar="N",
+                   help="Zeek conn logs: keep at most N lines per (label, detailed-label); records the original's hash")
     s.set_defaults(fn=cmd_register)
     s = sub.add_parser("normalize")
     s.add_argument("source", nargs="?")
