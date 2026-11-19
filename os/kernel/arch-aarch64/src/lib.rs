@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![no_std]
 //! aarch64 implementation of the HookProbe HAL, plus the low-level boot stub
 //! and exception/IRQ vector table. This is the ONE crate allowed to know the

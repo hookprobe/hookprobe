@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 4b-1: the SDHCI / SDIO bus primitives of the CYW43455 driver, generic over register access.
 //!
 //! Lifted unchanged from `arch-aarch64::cyw43` (command issue with the inhibit-recovery reset, CMD52, CMD53

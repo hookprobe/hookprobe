@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! WPA3-SAE (IEEE 802.11-2020 §12.4, group 19 = NIST P-256), the AP-side responder heqk runs on the host because
 //! the CYW43455 RPi firmware forwards SAE Authentication frames (event 188 `EXT_AUTH_FRAME_RX`) instead of running
 //! SAE itself (batch 37). Hunting-and-pecking PWE (the default every client supports), constant-iteration loop

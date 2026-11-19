@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Raw UEFI FFI — only the handful of services efiboot uses (UEFI 2.x spec layouts).
 //! No crate dependency: every struct offset here is checked against the spec tables.
 

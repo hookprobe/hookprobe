@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P15 — sealed storage on a block device: MBR-derived write guard + the
 //! read/scan path (always) and the store/write path (behind `p15-write`).
 //!

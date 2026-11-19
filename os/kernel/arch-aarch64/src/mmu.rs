@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P1b — aarch64 stage-1 MMU + a physical frame allocator.
 //!
 //! 4 KiB granule, 39-bit VA (T0SZ=25), TTBR0 only. Boot uses an identity map of

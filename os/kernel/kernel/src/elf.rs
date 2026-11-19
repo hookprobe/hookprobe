@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M5.1 (Track C) — a MINIMAL, bounds-safe ELF64/aarch64 STATIC loader: the
 //! userspace-server substrate beachhead. It replaces the raw
 //! `copy_nonoverlapping(stub..stub_end)` path (how every EL0 task is created today —

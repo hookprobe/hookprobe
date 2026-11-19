@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HBoot — HEQK boot manager, aarch64 entry stub (CM5/BCM2712).
 // Carries the console doctrine proven during kernel bring-up (2026-07-21):
 //   mask DAIF -> vectors (with resident hvc-reboot gate) -> own the console

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Sealed-config / live apply step 10 — the Wi-Fi executor (the repo-root sealed-config / live-apply design, §3).
 //!
 //! A verified HQCFG1 bundle whose Wi-Fi section changed (SSID / passphrase / security mode / max_clients) is applied

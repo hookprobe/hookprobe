@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P5b — minimal virtio-net driver: bring the NIC up, ARP the gateway, and receive one real
 //! packet — proving the Packet Engine is fed by real hardware, not synthetic data.
 //! Poll-mode (no IRQ). Transport-agnostic via `virtio_transport`: virtio-mmio v2 on the QEMU

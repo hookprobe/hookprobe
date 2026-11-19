@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P13 — RP1 SPI master (Synopsys DW_apb_ssi), CM5 / BCM2712.
 //!
 //! Strictly PIO; the DMACR register is NEVER written (no DMA — the 32-entry FIFO

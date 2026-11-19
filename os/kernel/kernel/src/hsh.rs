@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Kernel side of `hsh`, the native management shell (ADR 0059 step 4a; docs/design/hsh-native-management-shell.md).
 //! The shell is an EL0 excursion server (`el0-hsh`); each command line runs in two bounded excursions:
 //!   1. the line goes in; the shell returns text, or ONE management request (a `hal::mgmtabi` message id);

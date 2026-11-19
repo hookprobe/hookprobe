@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The EL0 TLS server (ADR 0050 D2 / ADR 0051). Each bounded excursion runs ONE command from the shared
 //! IO region (`hal::tlsabi`) and exits back to the kernel with `SYS_EXIT_USER`. Connection state lives in
 //! statics + the talc heap, which stay mapped between excursions. The kernel keeps TCP; this server only

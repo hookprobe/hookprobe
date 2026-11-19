@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Threat-intel IOC pack (parity gap G7) — replaces the 4-CIDR stub as the source of `ioc_match`.
 //!
 //! `IOC.TXT` on the boot partition, operator-signed (`IOC.SIG`, magic HQISIG1 / tag HQIOC1 — never

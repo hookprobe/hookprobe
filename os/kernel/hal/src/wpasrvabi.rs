@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 4g (S1): the ABI of `el0-wpa`, the resident EL0 WPA security server.
 //!
 //! Window: the image, its stack, one control page (the SAME layout as el0-wifi's, `crate::wifisrvabi::H_*` /

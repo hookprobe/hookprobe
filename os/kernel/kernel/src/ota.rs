@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M3.4 — on-device A/B OTA orchestrator + state machine (kernel-side).
 //!
 //! The device already owns the ROLLBACK half of A/B: HBoot's EL2 PM-watchdog

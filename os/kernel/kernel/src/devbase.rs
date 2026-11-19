@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Per-device behaviour baseline (production phase 4 — the "IoT baseline").
 //!
 //! A single-purpose device (a camera, a smart plug, a TV, a printer — device identification's category) talks

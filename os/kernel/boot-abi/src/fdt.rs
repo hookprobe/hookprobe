@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Bounded, allocation-free Flattened Device Tree (DTB) reader for HBoot's platform discovery
 //! (ADR 0061 D1, ADR 0062 T0). HBoot owns platform discovery; the kernel never parses a raw DTB.
 //!

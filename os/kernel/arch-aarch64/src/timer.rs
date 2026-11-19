@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ARM generic timer (EL1 physical timer, CNTP_*). Fires as PPI 14 == GIC
 //! INTID 30. Drives the preemptive scheduler tick.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P8 — adaptive NAPI data plane. Retires spin-poll-forever (ARCHITECTURE.md §5,
 //! "right-size for edge"): each service call drains a bounded BUDGET of frames,
 //! then adapts.

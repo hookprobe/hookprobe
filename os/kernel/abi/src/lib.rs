@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![no_std]
 //! Shared kernel<->userspace ABI: syscall numbers, trap-frame layout, cap structs.
 //!

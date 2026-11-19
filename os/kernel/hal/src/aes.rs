@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Minimal AES-128 (encrypt/decrypt) + NIST AES Key Wrap unwrap (RFC 3394), used ONLY for
 //! the WPA2 GTK: the 4-way-handshake M3 delivers the GTK KDE wrapped with the KEK (AES key
 //! wrap) for key-descriptor version 2. heqk's CCMP is done in the CYW43455 firmware; this

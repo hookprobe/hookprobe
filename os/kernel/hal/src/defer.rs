@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The AP's parked-station-frame ring (COR-M4 + P5): station frames read by a control request or
 //! by the WPA2 authenticator while the AP serves are parked here instead of discarded, and the
 //! serve loop delivers them first, in order. Pure + generic so QEMU proves the same code the CM5

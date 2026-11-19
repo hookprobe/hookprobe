@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0055 — the owner policy journal (stage A: records, chain, append, replay, rule table, precedence).
 //!
 //! Durable owner settings from Mission Control, kept SEPARATE from the operator-signed baseline (operator

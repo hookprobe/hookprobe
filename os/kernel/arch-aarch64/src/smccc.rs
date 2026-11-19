@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! SMCCC over the HVC conduit (feature `smccc`) — the arm64-cloud tier's firmware interface:
 //! PSCI power control and the SMCCC TRNG (Arm DEN0098). OCI Ampere A1, measured 2026-11-09:
 //! PSCI over HVC (ACPI FADT), and the hypervisor's SMCCC TRNG is live (Linux `smccc_trng`).

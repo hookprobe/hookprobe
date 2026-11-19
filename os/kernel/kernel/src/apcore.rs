@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! G0 — the AP data plane, pulled out of the `cm5`-only AP loop in `main.rs` so QEMU can test it.
 //!
 //! Step 1 (this file): `forward4`, the decision ladder for one client IPv4 frame leaving the LAN (Wi-Fi or

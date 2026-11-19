@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 4d: the CYW43455 control channel (BCDC dcmd over SDPCM channel 0), pure.
 //!
 //! The driver used to build each request and match each reply inline (`cyw43::bcdc_dcmd`). Both halves are here so

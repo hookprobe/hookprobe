@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! `WIFI.TXT` — the AP's network settings from the boot partition (parity gap G20). Until now the SSID
 //! was hard-coded ("heqk-ap") and the PSK a build-time env var, so changing either meant a rebuild.
 //!

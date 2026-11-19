@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! PCIe configuration access over ECAM (feature `pci`) — the arm64-cloud tier (OCI Ampere A1
 //! and its QEMU model). Minimal by design: enumerate, read BARs (as firmware assigned them),
 //! walk capabilities, enable memory decode + bus mastering. No BAR (re)allocation, no

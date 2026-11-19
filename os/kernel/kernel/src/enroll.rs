@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4.3 — MSSP enrollment + authenticated update fetch over the Noise channel.
 //!
 //! This is the ADDITIVE control-plane layer (docs/design/heqk-control-plane.md

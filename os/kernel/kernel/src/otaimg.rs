@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! OS-image update over the upload channel (ADR 0056 phase 2 / production phase 1, step 4).
 //!
 //! The uploaded container is the signed boot image itself (`heqk8.img`: HBoot padded to

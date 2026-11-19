@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P8 — stateful detection substrate: a fixed-window per-key rate limiter, the
 //! FIRST BPF helper (kernel-owned state a signed rule can consult via a `CALL`).
 //! This is what single-packet rules can't do — decide on a RATE. It unlocks the

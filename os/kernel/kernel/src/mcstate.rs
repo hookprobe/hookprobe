@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! On-device Mission Control STATE (ADR 0047 D2) — what the operator's UI reads from the device:
 //! recent detections (fed from the ONE SOAR-ring drain), a windowed QSecBit-lite risk history,
 //! per-source incident correlation, and datapath counters. Rendered as the JSON the Mission

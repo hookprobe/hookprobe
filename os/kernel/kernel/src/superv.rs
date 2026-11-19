@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Autoheal harness H1: the kernel's one recovery journal (`hal::superv`), fed by every EL0 server fault/restart and
 //! every Wi-Fi self-heal rung, served as `GET /api/recoveries`.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 #![no_std]
 #![no_main]
 //! HEQK Core — Hardened Edge Quantum-safe Kernel (the HookProbe microkernel).
