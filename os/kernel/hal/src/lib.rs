@@ -537,6 +537,89 @@ pub fn inet_csum(data: &[u8], init: u32) -> u16 {
     !(sum as u16)
 }
 
+/// Incremental internet-checksum update (RFC 1624 eqn 3: `HC' = ~(~HC + ~m + m')`). `csum` is the
+/// checksum field as it stands; `old` / `new` are one region the checksum covers, before and after
+/// a rewrite. The region must start on a 16-bit boundary of the checksummed data and have an even
+/// length (only whole 16-bit words are read; the two slices are read to the shorter length).
+/// The result equals a full recompute whenever `csum` was valid for the old data; a checksum that
+/// was wrong before the rewrite stays wrong (end-to-end integrity is preserved, not repaired).
+pub fn csum_adjust(csum: u16, old: &[u8], new: &[u8]) -> u16 {
+    let mut sum = (!csum) as u32;
+    let mut i = 0;
+    while i + 1 < old.len() && i + 1 < new.len() {
+        sum += (!u16::from_be_bytes([old[i], old[i + 1]])) as u32;
+        sum += u16::from_be_bytes([new[i], new[i + 1]]) as u32;
+        i += 2;
+    }
+    while sum >> 16 != 0 {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+#[cfg(test)]
+mod csum_adjust_tests {
+    use super::*;
+    /// xorshift: a fixed, reproducible byte stream
+    fn rng(s: &mut u64) -> u64 {
+        *s ^= *s << 13;
+        *s ^= *s >> 7;
+        *s ^= *s << 17;
+        *s
+    }
+    #[test]
+    fn equals_a_full_recompute_over_random_rewrites() {
+        let mut s = 0x9e37_79b9_7f4a_7c15u64;
+        for round in 0..20_000 {
+            let len = 20 + 2 * (rng(&mut s) as usize % 700);
+            let mut d = [0u8; 1500];
+            for b in d[..len].iter_mut() {
+                *b = rng(&mut s) as u8;
+            }
+            // the checksum field at 10..12 (as in an IPv4 header), valid for the data
+            d[10] = 0;
+            d[11] = 0;
+            let c = inet_csum(&d[..len], 0);
+            d[10..12].copy_from_slice(&c.to_be_bytes());
+            let mut n = d;
+            // rewrite 1..=3 even-aligned regions (never the checksum field), adjusting as we go
+            let mut c2 = c;
+            for _ in 0..1 + rng(&mut s) % 3 {
+                let rl = 2 * (1 + rng(&mut s) as usize % 6);
+                let mut at = 2 * (rng(&mut s) as usize % ((len - rl) / 2 + 1));
+                if at < 12 && at + rl > 10 {
+                    at = 12;
+                }
+                if at + rl > len {
+                    continue;
+                }
+                let before = n;
+                for b in n[at..at + rl].iter_mut() {
+                    *b = if round % 5 == 0 { 0 } else { rng(&mut s) as u8 };
+                }
+                c2 = csum_adjust(c2, &before[at..at + rl], &n[at..at + rl]);
+            }
+            n[10] = 0;
+            n[11] = 0;
+            assert_eq!(c2, inet_csum(&n[..len], 0), "round {round}");
+        }
+    }
+    #[test]
+    fn rfc1624_example() {
+        // RFC 1624 §4: HC = 0xDD2F, m = 0x5555 -> m' = 0x3285 gives HC' = 0x0000
+        assert_eq!(csum_adjust(0xdd2f, &[0x55, 0x55], &[0x32, 0x85]), 0x0000);
+    }
+    #[test]
+    fn a_wrong_checksum_stays_wrong() {
+        let old = [1u8, 2, 3, 4];
+        let new = [9u8, 9, 3, 4];
+        let good = inet_csum(&old, 0);
+        let bad = good ^ 0x0100;
+        assert_ne!(csum_adjust(bad, &old, &new), inet_csum(&new, 0));
+        assert_eq!(csum_adjust(good, &old, &new), inet_csum(&new, 0));
+    }
+}
+
 /// TCP/UDP pseudo-header partial sum (src, dst, proto, L4 length).
 pub fn pseudo_sum(sip: &[u8; 4], dip: &[u8; 4], proto: u8, l4len: u16) -> u32 {
     let mut s = 0u32;
