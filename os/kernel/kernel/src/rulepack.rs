@@ -344,7 +344,7 @@ pub fn guard_selftest() -> bool {
         (0..=u16::MAX).all(|port| {
             let h = l4(port);
             let pass = crate::bpf::run(prog, h.as_ptr(), h.len()) == crate::bpf::PASS;
-            g.map_or(true, |(lo, hi)| !(port < lo || port > hi) || pass)
+            g.is_none_or(|(lo, hi)| !(port < lo || port > hi) || pass)
         })
     };
     let exhaustive = sound(&port_block_rule(0)) && sound(&port_block_rule(65_535)) && sound(&port_block_rule(20_007))
@@ -372,7 +372,7 @@ pub fn guard_selftest() -> bool {
     crate::rules::GUARDS.store(true, Ordering::Relaxed);
     reset();
     arch_aarch64::perfctr::emit("ids_pack64_prog_runs_other_port", on as u64);
-    let pass = loaded && extract && exhaustive && same && hits >= 62 + 10 + 1 && off == 64 && on == 1;
+    let pass = loaded && extract && exhaustive && same && hits >= 73 && off == 64 && on == 1;
     arch_aarch64::_print(format_args!(
         " [P-ruleguard] {} — ADR 0067 D5 step 1: a rule that is exactly a dst-port template (exact port or range) carries a guard read from its own program and is skipped for every other port: 64-rule tier loaded={} guard only from an exact template={} outside its guard each template program is PASS for all 65,536 dst ports={} the tier's verdicts are equal with guards off and on={} ({} sampled ports matched) programs run for a packet to an unnamed port: {} -> {} (the one left has no guard)\n",
         if pass { "PASS" } else { "FAIL" }, loaded, extract, exhaustive, same, hits, off, on
