@@ -25,6 +25,7 @@ Usage:
   python3 -I unsw_to_d1.py <pcap dir or file> --out d1.jsonl --devices devices.tsv [--macs mac_list.csv]
 """
 import argparse
+import collections
 import glob
 import json
 import os
@@ -187,9 +188,115 @@ def dns_question(p):
     return txid, flags & 0x0F, bool(flags & 0x8000), ".".join(labels)
 
 
+def _skip_name(p, i):
+    while i < len(p):
+        ln = p[i]
+        if ln == 0:
+            return i + 1
+        if ln & 0xC0 == 0xC0:
+            return i + 2
+        i += 1 + ln
+    return None
+
+
+def dns_answers(p):
+    """A/AAAA addresses in a DNS response's answer section (name compression handled). -> [addr bytes]."""
+    if len(p) < 12:
+        return []
+    qd, an = struct.unpack("!HH", p[4:8])
+    i = 12
+    for _ in range(qd):
+        i = _skip_name(p, i)
+        if i is None:
+            return []
+        i += 4
+    out = []
+    for _ in range(an):
+        i = _skip_name(p, i)
+        if i is None or i + 10 > len(p):
+            break
+        typ, _cls, _ttl, rdlen = struct.unpack("!HHIH", p[i:i + 10])
+        i += 10
+        if i + rdlen > len(p):
+            break
+        if (typ == 1 and rdlen == 4) or (typ == 28 and rdlen == 16):
+            out.append(bytes(p[i:i + rdlen]))
+        i += rdlen
+    return out
+
+
+# ------------------------------------------------------------------------------------------------ D1b peer keys (doc 18)
+PEER_MODES = ("exact", "v1-24", "v1-16", "v2-24", "v2-16")
+NAME_WINDOW = 86400.0
+NAME_CAP = 4096
+INFRA = {123: ("ntp", "u"), 3478: ("stun", "ut"), 3479: ("stun", "ut"), 5349: ("stun", "ut"), 19302: ("stun", "ut"),
+         67: ("dhcp", "u"), 68: ("dhcp", "u"), 546: ("dhcp", "u"), 547: ("dhcp", "u"),
+         5353: ("lan-discovery", "u"), 1900: ("lan-discovery", "u"), 5355: ("lan-discovery", "u"),
+         137: ("lan-discovery", "u"), 138: ("lan-discovery", "u")}
+
+
+def is_local(ip):
+    if len(ip) == 4:
+        a, b = ip[0], ip[1]
+        return a == 10 or a == 127 or (a == 172 and 16 <= b <= 31) or (a == 192 and b == 168) or (a == 169 and b == 254)
+    return (ip[0] & 0xFE) == 0xFC or (ip[0] == 0xFE and ip[1] & 0xC0 == 0x80) or ip == bytes(15) + b"\x01"
+
+
+def is_bcast_mcast(ip):
+    if len(ip) == 4:
+        return 224 <= ip[0] <= 239 or ip == b"\xff\xff\xff\xff" or (is_local(ip) and ip[3] == 255)
+    return ip[0] == 0xFF
+
+
+def _key(s):
+    return fx.fingerprint(fx.fnv1a64(s.encode()))
+
+
+def infra_class(ip, port, proto):
+    """proto: 6, 17 or None (port-only match, used for overlays without a transport)."""
+    if is_bcast_mcast(ip):
+        return "broadcast-multicast"
+    c = INFRA.get(port)
+    if c and (proto is None or ("u" in c[1] and proto == 17) or ("t" in c[1] and proto == 6)):
+        return c[0]
+    return None
+
+
+def service_peer_fp(mode, ip, port, proto=None, name=None):
+    """The doc-18 rule order: infrastructure class (V2) > local exact > named service > prefix."""
+    if mode == "exact":
+        return peer_fp(ip, port)
+    variant, plen = mode.split("-")
+    if variant == "v2":
+        c = infra_class(ip, port, proto)
+        if c:
+            return _key("cls:" + c)
+    if is_local(ip):
+        return peer_fp(ip, port)
+    if name:
+        return _key("svc:%s:%d" % (name, port))
+    if len(ip) == 4:
+        pre = "%d.%d.%d.0/24" % tuple(ip[:3]) if plen == "24" else "%d.%d.0.0/16" % tuple(ip[:2])
+    else:
+        pre = ip[:6].hex() + "/48"
+    return _key("net:%s:%d" % (pre, port))
+
+
+def peer_kind(mode, ip, port, proto, name):
+    if mode == "exact":
+        return "exact"
+    if mode.startswith("v2") and infra_class(ip, port, proto):
+        return "class"
+    return "local" if is_local(ip) else "named" if name else "prefix"
+
+
 # ------------------------------------------------------------------------------------------------ conversion
 class Converter:
-    def __init__(self, device_macs=None):
+    def __init__(self, device_macs=None, peer_mode="exact"):
+        self.peer_mode = peer_mode
+        self.amap = {}                           # dev -> OrderedDict(addr -> (registered domain, ts)), doc 18
+        self.kinds = {}                          # peer-key rule -> count (reported)
+        self.amap_max = 0
         self.dev_of_mac = {}                     # mac bytes -> index
         self.names = {}                          # index -> (mac str, name)
         if device_macs:
@@ -231,20 +338,42 @@ class Converter:
                 return
             if proto == 6 and flags & 0x02 and not flags & 0x10:
                 a["conns"] += 1
-                a["peers"].append(peer_fp(dst, dp))
+                a["peers"].append(self._peer(dev, ts, dst, dp, 6))
             elif proto == 17:
                 key = (dev, src, dst, sp, dp)
                 last = self.udp_last.get(key)
                 if last is None or ts - last >= UDP_IDLE:
                     a["conns"] += 1
-                    a["peers"].append(peer_fp(dst, dp))
+                    a["peers"].append(self._peer(dev, ts, dst, dp, 17))
                 self.udp_last[key] = ts
         if dmac in self.dev_of_mac and proto == 17 and sp == 53:
             q = dns_question(payload)
+            if q and q[2] and self.peer_mode != "exact":
+                self._learn_names(self.dev_of_mac[dmac], ts, q[3], payload)
             if q and q[2]:
                 ev = self.pending.pop((self.dev_of_mac[dmac], q[0], q[3].lower()), None)
                 if ev is not None and q[1] == 3:
                     ev[1] = 1
+
+    def _learn_names(self, dev, ts, qname, payload):
+        m = self.amap.setdefault(dev, collections.OrderedDict())
+        dom = registered_domain(qname)
+        for addr in dns_answers(payload):
+            m[addr] = (dom, ts)
+            m.move_to_end(addr)
+            while len(m) > NAME_CAP:
+                m.popitem(last=False)
+        self.amap_max = max(self.amap_max, len(m))
+
+    def _peer(self, dev, ts, dst, dp, proto):
+        name = None
+        if self.peer_mode != "exact":
+            e = self.amap.get(dev, {}).get(bytes(dst))
+            if e and 0 <= ts - e[1] <= NAME_WINDOW:
+                name = e[0]
+        k = peer_kind(self.peer_mode, dst, dp, proto, name)
+        self.kinds[k] = self.kinds.get(k, 0) + 1
+        return service_peer_fp(self.peer_mode, bytes(dst), dp, proto, name)
 
     def write(self, out_path, dev_path):
         with open(out_path, "w") as f:
@@ -340,11 +469,56 @@ def selftest():
             for ts, fr, lt in packets(src):
                 c2.packet(ts, fr, lt)
         checks["pcap reader round trip"] = c2.hours == c.hours
+    checks.update(selftest_d1b(dev, gw, me, dnss))
     for k, v in checks.items():
         print("  %-60s %s" % (k, "PASS" if v else "FAIL"))
     ok = all(checks.values())
     print("selftest:", "PASS" if ok else "FAIL")
     return ok
+
+
+def _dnsresp_a(txid, name, addrs):
+    """A response with a compressed answer name (pointer to the question at offset 12)."""
+    q = b"".join(bytes([len(l)]) + l.encode() for l in name.split(".")) + b"\0" + struct.pack("!HH", 1, 1)
+    ans = b"".join(b"\xc0\x0c" + struct.pack("!HHIH", 1, 1, 60, 4) + a for a in addrs)
+    return struct.pack("!HHHHHH", txid, 0x8180, 1, len(addrs), 0, 0) + q + ans
+
+
+def selftest_d1b(dev, gw, me, dnss):
+    cdn1, cdn2, other = bytes([52, 1, 2, 3]), bytes([52, 1, 9, 9]), bytes([198, 51, 100, 7])
+    lan, ntp, mc = bytes([192, 168, 1, 20]), bytes([162, 159, 200, 1]), bytes([239, 255, 255, 250])
+    def run(mode):
+        c = Converter([(dev, "t")], mode)
+        frames = [
+            (10.0, _eth(gw, dev, 0x0800, _ipv4(dnss, me, 17, _udp(53, 5000, _dnsresp_a(9, "eu.api.vendor.com", [cdn1, cdn2]))))),
+            (11.0, _eth(dev, gw, 0x0800, _ipv4(me, cdn1, 6, _tcp(40000, 443, 0x02)))),     # named
+            (12.0, _eth(dev, gw, 0x0800, _ipv4(me, cdn2, 6, _tcp(40001, 443, 0x02)))),     # named, other address
+            (13.0, _eth(dev, gw, 0x0800, _ipv4(me, other, 6, _tcp(40002, 443, 0x02)))),    # unnamed -> prefix
+            (14.0, _eth(dev, gw, 0x0800, _ipv4(me, lan, 6, _tcp(40003, 22, 0x02)))),       # LAN exact
+            (15.0, _eth(dev, gw, 0x0800, _ipv4(me, ntp, 17, _udp(123, 123, b"n" * 48)))),   # NTP
+            (16.0, _eth(dev, gw, 0x0800, _ipv4(me, mc, 17, _udp(1900, 1900, b"m" * 20)))),  # SSDP multicast
+            (10.0 + 86401, _eth(dev, gw, 0x0800, _ipv4(me, cdn1, 6, _tcp(40004, 443, 0x02)))),  # name expired
+        ]
+        for ts, fr in frames:
+            c.packet(ts, fr, 1)
+        return [x for (d, h), a in sorted(c.hours.items()) for x in a["peers"]], c
+    ex, _ = run("exact")
+    v1, c1 = run("v1-24")
+    v2, _ = run("v2-24")
+    v16, _ = run("v1-16")
+    svc = fx.fingerprint(fx.fnv1a64(b"svc:vendor.com:443"))
+    return {
+        "D1b: exact mode unchanged (6 addresses -> 6 keys)": len(set(ex)) == 6 and ex[0] == ex[6],
+        "D1b: two CDN addresses of one name -> one service key": v1[0] == v1[1] == svc,
+        "D1b: unnamed public peer -> /24 prefix key": v1[2] == fx.fingerprint(fx.fnv1a64(b"net:198.51.100.0/24:443")),
+        "D1b: /16 prefix variant": v16[2] == fx.fingerprint(fx.fnv1a64(b"net:198.51.0.0/16:443")),
+        "D1b: LAN peer keeps the exact D1 key": v1[3] == ex[3] == v2[3],
+        "D1b: V1 has no classes (NTP -> prefix key)": v1[4] == fx.fingerprint(fx.fnv1a64(b"net:162.159.200.0/24:123")),
+        "D1b: V2 NTP -> class key": v2[4] == fx.fingerprint(fx.fnv1a64(b"cls:ntp")),
+        "D1b: V2 multicast -> class key": v2[5] == fx.fingerprint(fx.fnv1a64(b"cls:broadcast-multicast")),
+        "D1b: name older than 24 h -> prefix key": v1[6] == fx.fingerprint(fx.fnv1a64(b"net:52.1.2.0/24:443")),
+        "D1b: rule counts reported": c1.kinds == {"named": 2, "prefix": 4, "local": 1},
+    }
 
 
 def main():
@@ -353,6 +527,7 @@ def main():
     ap.add_argument("--out")
     ap.add_argument("--devices")
     ap.add_argument("--macs", help="CSV/TSV with a MAC address and a device name per line (the dataset's device list)")
+    ap.add_argument("--peer-key", choices=PEER_MODES, default="exact", help="doc 18 peer identity (default: D1's exact key)")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -365,7 +540,7 @@ def main():
             if m:
                 name = line.replace(m.group(1), "").strip(" ,\t\r\n")
                 macs.append((bytes.fromhex(m.group(1).replace(":", "")), name))
-    c = Converter(macs or None)
+    c = Converter(macs or None, a.peer_key)
     n = 0
     for name, f in iter_sources(a.src):
         for ts, fr, lt in packets(f):
@@ -374,6 +549,7 @@ def main():
         print("  %s: %d packets so far, %d device-hours" % (name, n, len(c.hours)), flush=True)
     c.write(a.out, a.devices)
     print("done: %d packets, %d devices, %d device-hours" % (n, len(c.names), len(c.hours)))
+    print("peer key %s: rule counts %s; name table max %d entries/device" % (a.peer_key, c.kinds, c.amap_max))
 
 
 if __name__ == "__main__":
