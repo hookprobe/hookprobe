@@ -13,6 +13,49 @@ may be built, gated and measured behind feature flags before that.
 | Boot to product loop | 60–70 s | `[BOOT-TIMING]` |
 | Evidence-log mount | ~1.5 s | `kernel/src/evlog.rs` |
 
+## 0. Status (2026-11-19, end of day)
+
+| Item | State | Evidence |
+|---|---|---|
+| P0.1 work counters + g2 ratchet | merged (#1344) | `tools/ci/perf_ratchet.py`, `tools/ci/baselines/perf.json` |
+| E3 NAT new-flow allocation | merged (#1345) | `nat_newflow_scan_max` 4096 → 32 |
+| E4 incremental NAT checksums | merged (#1347) | `nat_rewrite_csum_bytes` 1500 → 22; `[P-nat-csum]` |
+| L0.3a quoted Linux lines removed from comments | merged (#1349) | `gem.rs`, `mailbox.rs` |
+| L0.4 SPDX headers + g0 check | merged (#1350) | 234 files |
+| Machine-wide lock for heavy runs | merged (#1352) | `validate.sh`, `HEQK_HEAVY_LOCK` |
+| N1 evidence records name the config in force | merged (#1354) | `RT_EVIDENCE_C`; `[P-evlog]` |
+| X1 step 1, dst-port guards | merged (#1355) | `ids_pack64_prog_runs_other_port` 64 → 1; `[P-ruleguard]` |
+| X1 step 2, byte guards (TCP flags) | this PR | `ids_tcp_tier_prog_runs_ack` 4 → 0 |
+| L0.2 driver provenance register | written, not published | operator decision |
+
+None of the merged items has a CM5 timing yet. All are bench batch B2 / B4.
+
+**What the evidence changed in this plan.**
+
+- **P0.2 (PMU timing) is not needed for the IDS path.** `idsbench.rs` already times `packet::verdict`
+  and each tier with the generic timer and prints `[IDS-BENCH]` / `[IDS-TIERS]` at AP boot. The last
+  metal figures (`docs/design/metal-evidence/20261109-detection-network-series.md`), TCP data, ns per
+  tier: parse 11, l2-stateful 16, l2 20, flow 53, scan 24, conn-rate 13, resource-shed 30, ja4 4,
+  tcp-flags 45, l4-rules 91. What is missing is the gate: a g6 step that compares those lines with a
+  baseline (8 % tolerance). PMU counters stay useful only for paths with no bench of their own.
+- **X1 was re-scoped by that table.** The two largest tiers are rule loops over template programs
+  (l4-rules 91 ns, tcp-flags 45 ns). Steps 1 and 2 skip those programs with a guard read from the
+  program itself. The fused single program of ADR 0067 D5 is deferred until the metal figures after
+  B4 show what is left.
+- **E1 is the first bench item.** Measured on CM5 by the per-server CPU accounting of #1356, at a
+  median 96.5 Mbps through the AP: el0-wifi used up to 610 ms of EL0 time per second (61 % of a
+  core); el0-wpa 20.7 ms, el0-tlshost 6.2 ms, el0-lansvc 5.7 ms.
+- **E9 (evidence-log mount scan): dropped (operator, 2026-11-19).** The full scan is what
+  authenticates and counts every record ([P-evlog] tamper case, the honest-retention count). A
+  shortcut would save about 1.5 s of a 60–70 s boot and let one forged slot mislead where the head is.
+- **E5 (frame zeroing): lowest priority.** It runs only when an EL0 server is spawned.
+- **L0.1 (firmware as files) needs a design and the bench.** The firmware is patched in place at
+  fixed offsets and written from the embedded image; the kernel heap is a 1 MiB bump allocator; the
+  path is CM5-only.
+- **Load makes QEMU gates lie.** Two sessions running validate.sh at once starved the TCG guest and
+  failed the time-bounded EL0 phases. Heavy runs now take one machine-wide lock (#1352). The cause
+  (a scheduler demo that exits after a fixed 300 ticks) is not fixed.
+
 ## 1. How the work runs (autonomy rules)
 
 One item = one branch = one draft PR. The loop for each item:
@@ -65,7 +108,7 @@ P0.1 lands first. Every later item names the counter it moves.
 | E6 | Deeper GEM RX ring (F11) | Multi-page EL0 grant; RX ring to 1,024 | `[P-gemring]` grant bounds cases | zero RX overruns at the baseline saturation load | ADR 0061 D2 budget row |
 | E7 | Hardware crypto, el0-tlshost (F6) | Read `ID_AA64ISAR0_EL1` into the manifest; a second el0-tlshost build with `+neon,+aes,+sha2`; per-excursion FP enable and `v0–v31` zero on exit | `[P-fpscrub]`: FP registers read zero in the next server; scalar fallback selected when the capability is absent | TLS record seal ns down ≥ 3× | P0.2; security-auditor review |
 | E8 | Boot verify cost (F6, F12) | Measure SLH-DSA-128s verify in hboot; build the verifier at `opt-level=3`; if the capability is present use SHA-2 instructions (FP enabled only inside hboot verify) | image size stays under `ap-size-gate.sh` | verify ms recorded, then ratcheted | P0.2 |
-| E9 | Evidence-log mount (F12) | Persist head and tail in a superblock pair; verify the two neighbours instead of scanning every slot; full scan on mismatch | sectors read at mount ≤ 8 | mount ms down ≥ 10× | P0 |
+| ~~E9~~ | Evidence-log mount (F12) | **Dropped (operator, 2026-11-19)**: the full scan authenticates and counts every record; see section 0 | — | — | — |
 | E10 | SMP | Execute ADR 0060 as written, after E1–E4 | ADR 0060 gates | ADR 0060 gates | ADR 0060 accepted |
 
 ## 4. Wave 2: distinctive mechanisms (ADR 0067 D5–D9)
@@ -111,7 +154,7 @@ Each stays behind its feature until its metal gate passes **and** D12/D13 are re
 all new features off (the shipping flavour until promoted) and with all on together.
 
 **Metal batches (operator, bench CM5).** Batches are grouped to save flashes: B1 = P0.2 + P0.3 +
-L0.1; B2 = E1–E5; B3 = E6–E9; B4 = X1 + X3; B5 = X2a + X2b + X4; B6 = X5 (enclosure). Each batch
+L0.1; B2 = E1–E5; B3 = E6–E8; B4 = X1 + X3; B5 = X2a + X2b + X4; B6 = X5 (enclosure). Each batch
 runs, in order:
 
 1. `cm5-bench-baseline.sh`, then the 26-check CM5 regression of `main`.
@@ -130,7 +173,7 @@ reverted at the feature flag; the item returns to step 2 of section 1.
 ```
 P0.1 ─┬─ E1 ─ E2 ─ E3 ─ E4 ─ E5 ──────────── B2 ─┬─ E10 (ADR 0060)
       ├─ L0.1 ─ L0.4 ─ L0.2 ─ L0.3              │
-      ├─ P0.2 ─ E7 ─ E8 ─ E9 ─ E6 ─────────── B3 │
+      ├─ P0.2 ─ E7 ─ E8 ─ E6 ──────────────── B3 │
       ├─ X1 ─ X3 ─ X4 ──────────────────────── B4/B5
       ├─ X2a ─ X2b ──────────────────────────── B5
       ├─ X5 ─────────────────────────────────── B6
