@@ -35,6 +35,8 @@ mod el0 {
         pub calls: u64,
         pub faults: u64,
         pub restarts: u64,
+        /// H2: the restart state under the supervisor table's policy (a server faulting on every call is held off).
+        sup: hal::superv::Sup,
     }
     pub static mut SRV: Option<Server> = None;
     static mut TRIED: bool = false;
@@ -76,7 +78,7 @@ mod el0 {
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(LANSVC_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0 };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-lansvc").unwrap_or(&hal::superv::TABLE[0])) };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -169,6 +171,10 @@ mod el0 {
         }
         /// One command; `(status, out_len)`. A fault / timeout resets the server and reports ST_PANIC.
         pub fn call(&mut self, cmd: u32, input: &[u8]) -> (u32, usize) {
+            // H2: inside the restart hold-off (consecutive faults) the call is refused like a fault — fail closed
+            if !self.sup.ready(crate::superv::now_ms()) {
+                return (ST_PANIC, 0);
+            }
             let n = input.len().min(IN_MAX);
             self.write(H_MAGIC, &MAGIC.to_le_bytes());
             self.write(H_CMD, &cmd.to_le_bytes());
@@ -181,10 +187,13 @@ mod el0 {
             if st == ST_PANIC {
                 self.faults += 1;
                 let _ = crate::superv::server_fault("el0-lansvc", how == crate::Excursion::Timeout); // H1
+                let _ = self.sup.fault(crate::superv::now_ms());
                 self.reset();
                 return (ST_PANIC, 0);
             }
-            crate::superv::server_ok("el0-lansvc");
+            if self.sup.ok() {
+                crate::superv::server_ok("el0-lansvc");
+            }
             (st, (self.r32(H_OUT_LEN) as usize).min(OUT_MAX))
         }
         /// Fail closed and recover: restore the image's data/bss pages and zero the IO region.
@@ -671,7 +680,7 @@ pub fn selftest() -> bool {
     // fault containment: deliberate EL0 fault -> reset, counted; the next query parses again
     let (where_, _, f0, r0, _) = stats();
     let faulted = match el0::server() {
-        Some(s) => s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0 == hal::lansvcabi::ST_PANIC,
+        Some(s) => crate::superv::deliberate(|| s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0 == hal::lansvcabi::ST_PANIC),
         None => false,
     };
     let (_, _, f1, r1, _) = stats();
@@ -928,7 +937,7 @@ pub fn sae_selftest() -> bool {
     }
     fn fault_hook(_: &[u8], _: bool) -> Option<w::Msg> {
         let s = el0::server()?;
-        (s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0 != hal::lansvcabi::ST_PANIC).then_some(w::MSG0)
+        (crate::superv::deliberate(|| s.call(hal::lansvcabi::CMD_SELFTEST_FAULT, &[]).0) != hal::lansvcabi::ST_PANIC).then_some(w::MSG0)
     }
 
     install_dhcp();
