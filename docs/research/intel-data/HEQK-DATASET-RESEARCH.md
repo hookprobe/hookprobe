@@ -203,4 +203,4 @@
 | 4 | Propose a DNSC cooperation agreement (DefCamp contact) | Romanian campaign intelligence |
 | 5 | Approach UPB for a research partnership + joint ECCC CYBER-11 proposal (deadline 2027-01-14) | funding; RoEduNet-SIMARGL licence; lab capacity |
 | 6 | Build the isolated attack/DNS lab (training strategy §4) | collections 01, 03 with owned, perfectly labelled data |
-| 7 | ~~Register IoT-23~~ done for 11 of 23 scenarios; add the large captures with sampling | collection 02 |
+| 7 | ~~Register IoT-23~~ done: all 23 scenarios (the 12 multi-GB captures sampled per label at registration) | collection 02 |

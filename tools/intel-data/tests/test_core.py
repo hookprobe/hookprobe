@@ -200,5 +200,37 @@ class StratifiedSplitTests(unittest.TestCase):
         self.assertEqual([e["split"]["name"] for e in again], [e["split"]["name"] for e in ex])  # deterministic
 
 
+class SampleTests(unittest.TestCase):
+    def _log(self, d):
+        p = os.path.join(d, "conn.log.labeled")
+        with open(p, "w") as f:
+            f.write("#separator \\x09\n#fields\tts\tuid\ttunnel_parents   label   detailed-label\n")
+            for i in range(1000):
+                f.write(f"{i}\tC{i}\t-   Malicious   PartOfAHorizontalPortScan\n")
+                if i % 100 == 0:
+                    f.write(f"{i}.5\tB{i}\t-   Benign   -\n")
+            f.write("#close\t2026-11-19\n")
+        return p
+
+    def test_per_label_reservoir_keeps_rare_class_and_is_deterministic(self):
+        from heqkdata import sample
+        with tempfile.TemporaryDirectory() as d:
+            src = self._log(d)
+            a, b = os.path.join(d, "a"), os.path.join(d, "b")
+            info = sample.zeek_per_label(src, a, 50, name="x")
+            sample.zeek_per_label(src, b, 50, name="x")
+            with open(a, "rb") as fa, open(b, "rb") as fb:
+                self.assertEqual(fa.read(), fb.read())
+            self.assertEqual(info["label_counts"], {"Benign/-": 10, "Malicious/PartOfAHorizontalPortScan": 1000})
+            self.assertEqual(info["sample"]["kept"], {"Benign/-": 10, "Malicious/PartOfAHorizontalPortScan": 50})
+            with open(a) as f:
+                lines = f.read().splitlines()
+            self.assertTrue(lines[0].startswith("#separator") and lines[1].startswith("#fields"))
+            self.assertTrue(lines[-1].startswith("#close"))
+            ts = [float(x.split("\t")[0]) for x in lines[2:-1]]
+            self.assertEqual(ts, sorted(ts))  # original order kept
+            self.assertEqual(len(ts), 60)
+
+
 if __name__ == "__main__":
     unittest.main()
