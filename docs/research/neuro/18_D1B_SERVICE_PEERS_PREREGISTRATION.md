@@ -167,3 +167,52 @@ size and MD5. The manifest above therefore holds **119 unique daily captures**, 
   - It runs the DNA alone with the D1 overlays keyed by the same rule. Overlays carry no transport, so
     class matching is by port only.
   - `--split half` is the confirmation split: the first 50% of active days learn, the last 50% are scored.
+
+## Result: rejected on dev (2026-11-19). Deakin stays unopened.
+
+Raw output: `data/d1b-dev-selection.txt`. The `exact` conversion reproduces D1's `d1.jsonl` byte for byte,
+and its dev numbers reproduce D1's.
+
+| UNSW dev, DNA at threshold 1.0 | exact (D1) | V1 /24 | V1 /16 | **V2 /24** | V2 /16 |
+|---|---|---|---|---|---|
+| Benign alarms per device per week (median, 21 devices) | 46.8 | 34.3 | 34.3 | **29.0** | 29.0 |
+| Devices above 1 per week | 21 | 18 | 18 | 18 | 18 |
+| Detection: DGA, scan, exfiltration, IoT-23 (787 onsets) | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 |
+| Hour-level AUC | 0.910 | 0.984 | 0.988 | **0.995** | 0.995 |
+
+Under V2, public connections fall into these rules:
+
+| Rule | Connections | Share |
+|---|---|---|
+| infrastructure class | 392 k | 17% |
+| named service | 1,036 k | 45% |
+| prefix fallback | 3.9 k | **0.2%** |
+| LAN | 851 k | |
+
+The largest name table is 2,014 entries per device, under the 4,096 cap.
+
+**No configuration reaches ≤ 1 per week, so by the rule above the hypothesis is rejected and nothing is
+tested.** The Deakin captures are downloaded and MD5-verified but **not converted or read**. They stay a
+fresh set for a future pre-registration.
+
+**What was learned (dev only):**
+
+- **The service key fixes what it targeted.** Novel-peer alarms fall from 2,860 to 597 (−79%).
+  - LiFX: 146 → 5.5 per week.
+  - SmartThings: 133 → 21 per week.
+  - Ranking becomes near perfect: AUC 0.995.
+- **The remaining nuisance comes from the engine's statistical terms at the fixed threshold.**
+  - Under V2 the drivers are volume 874, fan-out 582, DNS novelty 565, novel peers 597 and activity 301.
+  - Examples:
+    - the iHome alarms every hour (activity and volume);
+    - the August doorbell is dominated by novel registered domains (543);
+    - the TP-Link camera is still novel peers (STUN-like relays on non-standard ports);
+    - the Triby speaker and the Samsung camera alarm on volume and fan-out.
+  - Ranking is good but **the absolute threshold of 1.0 is wrong for real devices**: a fixed z-like cut-off
+    does not fit their heavy-tailed hourly traffic.
+
+**The next candidate (needs its own pre-registration, D1c):** V2 service keys plus a **per-device alarm
+threshold calibrated on that device's own learning period**. An example rule: the score the device exceeds
+at most once per week of learning, floored at 1.0. It would be chosen on UNSW dev and confirmed once on
+Deakin. AUC 0.995 suggests a threshold exists. Whether it holds on unseen time is exactly what the
+confirmation must show.
