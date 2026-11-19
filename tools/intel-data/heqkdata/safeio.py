@@ -118,17 +118,37 @@ class _Capped(io.RawIOBase):
         super().close()
 
 
+def _bounded(stream, limit=None):
+    """Raw lines (newline kept), each read with a size limit: a newline-free hostile file raises after
+    `limit` characters instead of being loaded into memory whole (iterating a stream reads to the
+    next newline, however far away it is)."""
+    limit = MAX_LINE if limit is None else limit
+    if not hasattr(stream, "readline"):  # already-materialised lines (a list): check each one
+        for n, line in enumerate(stream, 1):
+            if len(line) > limit:
+                raise UnsafeContent(f"line {n} longer than {limit} bytes")
+            yield line
+        return
+    n = 0
+    while True:
+        line = stream.readline(limit + 1)
+        if not line:
+            return
+        n += 1
+        if len(line) > limit:
+            raise UnsafeContent(f"line {n} longer than {limit} bytes")
+        yield line
+
+
 def lines(stream):
-    """Yield (line_no, line) with the newline stripped; over-long lines raise."""
-    for n, line in enumerate(stream, 1):
-        if len(line) > MAX_LINE:
-            raise UnsafeContent(f"line {n} longer than {MAX_LINE} bytes")
+    """Yield (line_no, line) with the newline stripped; over-long lines raise before they are read whole."""
+    for n, line in enumerate(_bounded(stream), 1):
         yield n, line.rstrip("\r\n")
 
 
 def csv_rows(stream, **kw):
     csv.field_size_limit(MAX_LINE)
-    return csv.reader(stream, **kw)
+    return csv.reader(_bounded(stream), **kw)
 
 
 def load_json(path, max_bytes=512 << 20):
