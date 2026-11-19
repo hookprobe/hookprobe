@@ -5326,7 +5326,10 @@ fn cm5_p10_probe() {
                                                 {
                                                     pf.on_threat(e);
                                                     let img = pf.image_of(e);
-                                                    evlog::with(&mut |l, _| {
+                                                    // ADR 0067 D10: the record names the configuration in force
+                                                    let (prov, clk) = (evlog::Prov::current(), pf.clock().is_some());
+                                                    evlog::with(&mut |l, s| {
+                                                        let _ = l.set_prov(s, clk, prov);
                                                         let _ = l.push(img);
                                                     });
                                                 }
