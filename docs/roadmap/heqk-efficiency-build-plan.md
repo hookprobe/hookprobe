@@ -26,7 +26,10 @@ may be built, gated and measured behind feature flags before that.
 | N1 evidence records name the config in force | merged (#1354) | `RT_EVIDENCE_C`; `[P-evlog]` |
 | X1 step 1, dst-port guards | merged (#1355) | `ids_pack64_prog_runs_other_port` 64 → 1; `[P-ruleguard]` |
 | X1 step 2, byte guards (TCP flags) | this PR | `ids_tcp_tier_prog_runs_ack` 4 → 0 |
-| L0.2 driver provenance register | written, not published | operator decision |
+| X4 step 1, inspection shedding with evidence | draft PR #1363 | rule 129; `[P-inspshed]` |
+| X2a step 1, flow-event ABI and queue | this PR | `hal::flowevt`, 7 host tests |
+| L0.2 driver provenance register | draft PR #1359 (standalone) | `docs/security/driver-provenance.md`; g0 check |
+| ADR 0067 amendment (D12 disclosure record, D13 three reviews) | draft PR #1360 | ADR stays Proposed |
 
 None of the merged items has a CM5 timing yet. All are bench batch B2 / B4.
 
@@ -48,6 +51,17 @@ None of the merged items has a CM5 timing yet. All are bench batch B2 / B4.
 - **E9 (evidence-log mount scan): dropped (operator, 2026-11-19).** The full scan is what
   authenticates and counts every record ([P-evlog] tamper case, the honest-retention count). A
   shortcut would save about 1.5 s of a 60–70 s boot and let one forged slot mislead where the head is.
+- **X2a is three steps, not one.** The Wasm host is not resident: each run spawns a host and a server
+  thread in the scheduler demo and returns one 32-bit result; the WASI path takes 64 bytes of input
+  and returns the first output byte. Step 1 (done): the record format, the 2-bit verdict word
+  (16 records per round trip) and a bounded queue, in `hal::flowevt`. Step 2: a batch module in
+  `wasip1-fixture` (n records in, n verdict bytes out) and batch mode in `el0-wasmhost` (a 256-byte
+  input, the host packs the verdict word), with a QEMU phase `[P-wasmevt]`. Step 3: a resident host
+  the product loop calls, which touches the EL0 server supervision (`el0srv.rs`) and is coordinated
+  with the autoheal work.
+- **X4's trigger is weak today.** Step 1 uses `ratelimit::under_pressure()` (run-queue depth), which is
+  near zero in the single polled product loop. A loop-gap signal is the follow-on before X4 means
+  anything on metal.
 - **E5 (frame zeroing): lowest priority.** It runs only when an EL0 server is spawned.
 - **L0.1 (firmware as files) needs a design and the bench.** The firmware is patched in place at
   fixed offsets and written from the embedded image; the kernel heap is a 1 MiB bump allocator; the
