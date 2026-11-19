@@ -258,9 +258,12 @@ pub fn selftest() {
         }
         Err(_) => false,
     };
-    let pass = good && floor && short && trial_running && badsig && hboot && installed && a_same && trial && committed;
-    kprint!(" [P15-otaimg] {} — OS-image update on a factory A/B disk: a {}-byte signed image staged sector by sector, checked (shared verifier over a streamed digest, SVN floor, A/B layout, HBoot prefix pinned, tryboot names the inactive slot) -> slot B={} ; refused: svn<floor={} wrong length={} flipped payload byte={} different HBoot prefix={} trial in progress={} ; installed into slot B + payload re-hashed from the slot={} ; slot A untouched={} ; boot identity check={} ; trial of B -> commit (config=B, tryboot=A) -> cold boot of B={}\n",
-        if pass { "PASS" } else { "FAIL" }, len, good, floor, short, badsig, hboot, trial_running, installed, a_same, trial, committed);
+    // re-installing the running build is refused (metal 2026-11-19); an unknown running hash never matches
+    let h = [0x5au8; 32];
+    let same_refused = same_build(Some(h), &h) && !same_build(None, &h) && !same_build(Some([1u8; 32]), &h) && !same_build(Some([0u8; 32]), &[0u8; 32]);
+    let pass = good && floor && short && trial_running && badsig && hboot && installed && a_same && trial && committed && same_refused;
+    kprint!(" [P15-otaimg] {} — OS-image update on a factory A/B disk: a {}-byte signed image staged sector by sector, checked (shared verifier over a streamed digest, SVN floor, A/B layout, HBoot prefix pinned, tryboot names the inactive slot) -> slot B={} ; refused: svn<floor={} wrong length={} flipped payload byte={} different HBoot prefix={} trial in progress={} ; installed into slot B + payload re-hashed from the slot={} ; slot A untouched={} ; boot identity check={} ; trial of B -> commit (config=B, tryboot=A) -> cold boot of B={} ; the build already running is refused at activation (no slot write, no reboot)={}\n",
+        if pass { "PASS" } else { "FAIL" }, len, good, floor, short, badsig, hboot, trial_running, installed, a_same, trial, committed, same_refused);
 }
 
 
@@ -290,6 +293,12 @@ pub fn running() -> u8 {
 /// The trial gate committed the running slot: it is now the cold-boot slot.
 pub fn committed() {
     unsafe { RUNNING &= 0x7f }
+}
+
+/// Is the verified upload the very image this boot is running (HBoot's measurement of the running kernel)? An
+/// unknown running hash (no HBoot) never matches.
+pub fn same_build(running: Option<[u8; 32]>, new: &[u8; 32]) -> bool {
+    running.is_some_and(|r| r == *new && r != [0u8; 32])
 }
 
 /// Classify this boot from HBoot's measurement and the two slot headers.
