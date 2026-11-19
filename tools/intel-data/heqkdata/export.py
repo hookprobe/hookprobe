@@ -89,31 +89,56 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
         raise ValueError(purpose)
     v = validator or schema.default()
     excluded = {}
-    allowed_records = []
+
+    def bump(key, n=1):
+        excluded[key] = excluded.get(key, 0) + n
+
+    # One read of every acquisition.json. A re-fetch of the same file (same source + filename, e.g. a
+    # feed snapshot) supersedes the older one: only the latest is built from. Distinct files of one
+    # source (IoT-23 scenarios, UMUDGA family folders) are all kept.
+    meta = {(a["source_id"], a["acquisition_id"]): a for a in store.acquisitions()}
+    latest = {}
+    for a in meta.values():
+        k = (a["source_id"], a["filename"])
+        if k not in latest or (a["fetched_at"], a["acquisition_id"]) > (latest[k]["fetched_at"], latest[k]["acquisition_id"]):
+            latest[k] = a
+    current = {(a["source_id"], a["acquisition_id"]) for a in latest.values()}
+    by_rid = {}
     norm_counts = {}
-    acqs = {}
     for r in store.records():
         sid = r["provenance"]["source_id"]
+        aid = (sid, r["provenance"]["acquisition_id"])
         norm_counts[sid] = norm_counts.get(sid, 0) + 1
+        if aid in meta and aid not in current:
+            bump(f"superseded_acquisition:{sid}")
+            continue
         lic = registry.licenses.get(r["provenance"]["license_id"])
         if lic is None:
-            excluded[f"unknown_licence:{r['provenance']['license_id']}"] = excluded.get(f"unknown_licence:{r['provenance']['license_id']}", 0) + 1
+            bump(f"unknown_licence:{r['provenance']['license_id']}")
             continue
-        gate = "live_intel" if purpose == "live_intel" else purpose
-        ok, _why = licensing.decide(lic, gate)
+        ok, _why = licensing.decide(lic, purpose)
         if not ok:
-            key = f"licence_gate:{sid}"
-            excluded[key] = excluded.get(key, 0) + 1
+            bump(f"licence_gate:{sid}")
             continue
-        allowed_records.append(r)
-        acqs[r["provenance"]["acquisition_id"]] = sid
+        # the same record_id from two kept acquisitions (one record in two files): the newest wins
+        when = meta[aid]["fetched_at"] if aid in meta else ""
+        prev = by_rid.get(r["record_id"])
+        if prev is not None:
+            bump(f"duplicate_record_id:{sid}")
+            if (when, aid) <= prev[0]:
+                continue
+        by_rid[r["record_id"]] = ((when, aid), r)
+    allowed_records = [r for _, r in by_rid.values()]
+    acqs = {(r["provenance"]["source_id"], r["provenance"]["acquisition_id"]) for r in allowed_records}
     stats = {}
     wanted = collections or list(registry.collections)
     examples = []
     for cid in wanted:
         fn = builders.BUILDERS.get(cid)
         if fn:
-            examples += fn(allowed_records, cap_per_source=cap_per_source, stats=stats)
+            members = registry.collection_sources(cid)
+            recs = [r for r in allowed_records if r["provenance"]["source_id"] in members]
+            examples += fn(recs, cap_per_source=cap_per_source, stats=stats)
     if soc_synthetic and "soc_reasoning" in wanted:
         examples += builders.build_soc_synthetic()
     bad = []
@@ -134,7 +159,7 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
     contamination = splits.check_contamination(examples)
 
     inputs = sorted(acqs)
-    newest = max((store.acquisition(acqs[a], a)["fetched_at"] for a in inputs), default="2026-11-18T00:00:00.000Z")
+    newest = max((meta[a]["fetched_at"] for a in inputs if a in meta), default="2026-11-18T00:00:00.000Z")
     version = newest[:10].replace("-", ".") + "-" + canon.sha256_obj(
         [inputs, VERSION, code_digest(), purpose, wanted, cap_per_source, soc_synthetic])[:12]
     out = os.path.join(out_root or os.path.join(store.root, "builds"), version)
@@ -178,8 +203,8 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
         "schema_versions": {"training-example": "1", "security-event": "1"},
         "created_at": newest,
         "acquisitions": [
-            {k: store.acquisition(acqs[a], a)[k] for k in ("acquisition_id", "source_id", "license_id", "url", "fetched_at", "bytes")}
-            for a in inputs if not a.startswith("synthetic:")
+            {k: meta[a][k] for k in ("acquisition_id", "source_id", "license_id", "url", "fetched_at", "bytes")}
+            for a in inputs if a in meta
         ],
         "outputs": outputs,
         "counts": {cid: sum(1 for e in examples if e["collection"] == cid) for cid in wanted},
