@@ -58,6 +58,52 @@ pub const fn port_block_rule(port: i32) -> [u64; 9] {
         insn(0x95, 0, 0, 0, 0),   // EXIT
     ]
 }
+/// A dst-port RANGE rule: DROP if `lo <= dst-port <= hi`, else PASS. These are the exact words
+/// `tools/rulepack.py` emits for `dport-range lo-hi` (tool <-> device contract, checked in [P-rulepack]).
+pub const fn dport_range_rule(lo: i32, hi: i32) -> [u64; 10] {
+    [
+        insn(0x71, 2, 1, 2, 0),  // R2 = *(u8*)(R1+2)   dst-port high byte
+        insn(0x67, 2, 0, 0, 8),  // R2 <<= 8
+        insn(0x71, 3, 1, 3, 0),  // R3 = *(u8*)(R1+3)   dst-port low byte
+        insn(0x4f, 2, 3, 0, 0),  // R2 |= R3            (R2 = dst_port)
+        insn(0x25, 2, 0, 1, hi), // if R2 > hi goto +1  (PASS)
+        insn(0x35, 2, 0, 2, lo), // if R2 >= lo goto +2 (DROP)
+        insn(0xb7, 0, 0, 0, 1),  // R0 = PASS
+        insn(0x95, 0, 0, 0, 0),  // EXIT
+        insn(0xb7, 0, 0, 0, 2),  // R0 = DROP
+        insn(0x95, 0, 0, 0, 0),  // EXIT
+    ]
+}
+
+/// ADR 0067 D5, step 1 — the dst-port GUARD of a rule program, found when the rule is installed.
+/// `Some((lo, hi))` means: this program returns PASS, with no helper call and no other effect, for
+/// every packet whose big-endian u16 at offset 2..4 is outside `lo..=hi`. The runner may then skip
+/// the program for such a packet: the result is the same as running it.
+///
+/// Soundness is by exact equality, not analysis: the program must be word-for-word one of the two
+/// templates above, rebuilt from the constants read out of it. Anything else has no guard and always
+/// runs. A program that can never match (constants outside 0..=65535) also gets no guard.
+pub fn dport_guard(prog: &[u64]) -> Option<(u16, u16)> {
+    let imm = |w: u64| (w >> 32) as u32 as i32;
+    let port = |v: i32| if (0..=0xffff).contains(&v) { Some(v as u16) } else { None };
+    if prog.len() == 9 {
+        let p = imm(prog[4]);
+        if prog == port_block_rule(p) {
+            return port(p).map(|p| (p, p));
+        }
+    }
+    if prog.len() == 10 {
+        let (hi, lo) = (imm(prog[4]), imm(prog[5]));
+        if prog == dport_range_rule(lo, hi) {
+            return match (port(lo), port(hi)) {
+                (Some(l), Some(h)) => Some((l, h)),
+                _ => None,
+            };
+        }
+    }
+    None
+}
+
 /// P8 corpus (beyond the signed 4444 rule): telnet + a common backdoor port.
 pub const BLOCK_TELNET: [u64; 9] = port_block_rule(23);
 pub const BLOCK_BACKDOOR: [u64; 9] = port_block_rule(31337);
