@@ -545,7 +545,13 @@ pub fn activate_by_id(tag: [u8; 4], now_ms: u64, id: u64) -> Result<Activated, &
     if u.os {
         let plan = u.plan.ok_or("not verified (finish first)")?;
         end();
-        let (svn, _, _) = boot_facts();
+        let (svn, _, running) = boot_facts();
+        // metal 2026-11-19: re-installing the build that is ALREADY RUNNING rewrote the inactive slot, rebooted, and the
+        // trial boot then classified itself Cold (both slots hold the same image, the active one matches first) — so
+        // nothing ever committed. Refuse before anything is written: no slot write, no reboot.
+        if crate::otaimg::same_build(running, &plan.hash) {
+            return Err("this build is already running — nothing to install");
+        }
         let mut reason = [0u8; 64];
         let rl = {
             use core::fmt::Write;
