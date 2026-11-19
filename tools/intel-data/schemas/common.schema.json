@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/common/1",
+  "title": "HEQK intel-data shared definitions",
+  "description": "Types every other HEQK intel-data schema references. Canonical forms: timestamps are RFC 3339 UTC with a Z suffix and millisecond precision; domains are lowercase A-labels (IDNA) without a trailing dot; IP addresses are in Python ipaddress compressed form; hashes are lowercase hex. Absent knowledge is an explicit null, never an invented value.",
+  "$defs": {
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}\\.[0-9]{3}Z$"
+    },
+    "date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}(-[0-9]{2}(-[0-9]{2})?)?$"
+    },
+    "nullable_timestamp": {
+      "anyOf": [{ "$ref": "#/$defs/timestamp" }, { "type": "null" }]
+    },
+    "ip": {
+      "type": "string",
+      "format": "ip-canonical"
+    },
+    "nullable_ip": {
+      "anyOf": [{ "$ref": "#/$defs/ip" }, { "type": "null" }]
+    },
+    "domain": {
+      "type": "string",
+      "format": "domain-canonical",
+      "maxLength": 253
+    },
+    "port": { "type": "integer", "minimum": 0, "maximum": 65535 },
+    "nullable_port": { "anyOf": [{ "$ref": "#/$defs/port" }, { "type": "null" }] },
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "slug": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{1,79}$" },
+    "attack_technique_id": { "type": "string", "pattern": "^T[0-9]{4}(\\.[0-9]{3})?$" },
+    "attack_tactic_id": { "type": "string", "pattern": "^TA[0-9]{4}$" },
+    "cve_id": { "type": "string", "pattern": "^CVE-[0-9]{4}-[0-9]{4,}$" },
+    "cwe_id": { "type": "string", "pattern": "^CWE-[0-9]+$" },
+    "capec_id": { "type": "string", "pattern": "^CAPEC-[0-9]+$" },
+    "severity": {
+      "description": "The heqk catalogue scale (os/kernel/kernel/src/rulecat.rs): 1 critical, 2 high, 3 medium, 4 low, 5 info.",
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "info"]
+    },
+    "nullable_severity": { "anyOf": [{ "$ref": "#/$defs/severity" }, { "type": "null" }] },
+    "probability": { "type": "number", "minimum": 0, "maximum": 1 },
+    "nullable_probability": { "anyOf": [{ "$ref": "#/$defs/probability" }, { "type": "null" }] },
+    "label": {
+      "description": "Verdict vocabulary shared with the neuro eval set (tools/neuro-research/eval).",
+      "type": "string",
+      "enum": ["malicious", "suspicious", "benign", "insufficient_evidence"]
+    },
+    "recommended_action": {
+      "description": "What a model may RECOMMEND. Enforcement stays with heqk decide() and the separation matrix (ADR 0023, contract C9); none of these values is an instruction to the data plane.",
+      "type": "string",
+      "enum": ["none", "observe", "investigate", "rate_limit", "sinkhole_name", "quarantine", "harden", "allowlist"]
+    },
+    "attack_mapping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["framework", "version", "techniques", "tactics", "mapping_source"],
+      "properties": {
+        "framework": { "const": "MITRE ATT&CK" },
+        "version": { "type": ["string", "null"] },
+        "techniques": { "type": "array", "items": { "$ref": "#/$defs/attack_technique_id" }, "uniqueItems": true },
+        "tactics": { "type": "array", "items": { "$ref": "#/$defs/attack_tactic_id" }, "uniqueItems": true },
+        "mapping_source": {
+          "description": "Who asserted the mapping: the upstream dataset, the heqk rule catalogue, a HookProbe analyst, or a heuristic table in this tooling.",
+          "type": "string",
+          "enum": ["source", "heqk_rulecat", "analyst", "heuristic", "none"]
+        }
+      }
+    },
+    "provenance": {
+      "description": "Where a record came from and how it was made. Every transformed record carries one; it must resolve to an acquisition in the raw store.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_id", "source_record_id", "acquisition_id", "raw_sha256", "license_id", "transform", "created_at"],
+      "properties": {
+        "source_id": { "$ref": "#/$defs/slug" },
+        "source_record_id": { "type": ["string", "null"], "maxLength": 512 },
+        "acquisition_id": {
+          "description": "sha256 of the raw file as acquired, or 'synthetic:<generator>' for generated records.",
+          "type": "string",
+          "pattern": "^([0-9a-f]{64}|synthetic:[a-z0-9_.-]+)$"
+        },
+        "raw_sha256": {
+          "description": "sha256 of the raw record bytes (line or row) the record was derived from; null for synthetic records.",
+          "anyOf": [{ "$ref": "#/$defs/sha256" }, { "type": "null" }]
+        },
+        "license_id": { "$ref": "#/$defs/slug" },
+        "transform": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "version"],
+          "properties": {
+            "name": { "$ref": "#/$defs/slug" },
+            "version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" }
+          }
+        },
+        "created_at": { "$ref": "#/$defs/timestamp" }
+      }
+    }
+  }
+}

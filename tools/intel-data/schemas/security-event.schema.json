@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/security-event/1",
+  "title": "SecurityEvent (normalised record envelope)",
+  "description": "The one envelope every normalised record has, whatever its kind. `body` holds the kind-specific object; `labels` holds what the SOURCE asserted (never what this tooling guessed); `original_label` keeps the source's raw label string for audit. Records live in the normalised layer (JSONL), one per line, and are immutable once written for a given transform version.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "record_id", "kind", "observed_at", "sensor", "body", "labels", "provenance"],
+  "properties": {
+    "schema": { "const": "heqk.security-event/1" },
+    "record_id": {
+      "description": "Deterministic: '<kind>:' + first 24 hex of sha256(source_id, source_record_id or raw_sha256, transform version).",
+      "type": "string",
+      "pattern": "^(dns|flow|detection|indicator|vulnerability|attack_technique):[0-9a-f]{24}$"
+    },
+    "kind": { "type": "string", "enum": ["dns", "flow", "detection", "indicator", "vulnerability", "attack_technique"] },
+    "observed_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
+    "sensor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "name"],
+      "properties": {
+        "type": { "type": "string", "enum": ["dataset", "feed", "knowledge_base", "heqk", "lab_simulation", "synthetic"] },
+        "name": { "type": "string", "maxLength": 128 }
+      }
+    },
+    "body": { "type": "object" },
+    "labels": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "family", "label_source", "original_label", "attack_mapping"],
+      "properties": {
+        "label": { "anyOf": [{ "$ref": "common.schema.json#/$defs/label" }, { "type": "null" }] },
+        "family": { "type": ["string", "null"], "maxLength": 128 },
+        "label_source": { "type": "string", "enum": ["dataset", "feed", "knowledge_base", "heqk_rule", "analyst", "synthetic", "none"] },
+        "original_label": { "type": ["string", "null"], "maxLength": 512 },
+        "attack_mapping": { "$ref": "common.schema.json#/$defs/attack_mapping" }
+      }
+    },
+    "provenance": { "$ref": "common.schema.json#/$defs/provenance" }
+  },
+  "allOf": [
+    { "if": { "properties": { "kind": { "const": "dns" } } }, "then": { "properties": { "body": { "$ref": "dns-event.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "flow" } } }, "then": { "properties": { "body": { "$ref": "network-flow.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "indicator" } } }, "then": { "properties": { "body": { "$ref": "indicator.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "vulnerability" } } }, "then": { "properties": { "body": { "$ref": "vulnerability.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "attack_technique" } } }, "then": { "properties": { "body": { "$ref": "attack-technique.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "detection" } } }, "then": { "properties": { "body": { "$ref": "#/$defs/detection" } } } }
+  ],
+  "$defs": {
+    "detection": {
+      "description": "A heqk detection row, same fields as GET /api/detections (mcstate.rs det_row) and the SIEM export (siem.rs).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema", "rule_id", "rule_msg", "category", "severity", "mitre", "src_ip", "dst_ip", "dst_port", "action"],
+      "properties": {
+        "schema": { "const": "heqk.detection/1" },
+        "rule_id": { "type": "integer", "minimum": 0 },
+        "rule_msg": { "type": "string", "maxLength": 256 },
+        "category": { "type": "string", "maxLength": 64 },
+        "severity": { "$ref": "common.schema.json#/$defs/severity" },
+        "mitre": { "type": ["string", "null"] },
+        "src_ip": { "$ref": "common.schema.json#/$defs/nullable_ip" },
+        "dst_ip": { "$ref": "common.schema.json#/$defs/nullable_ip" },
+        "dst_port": { "$ref": "common.schema.json#/$defs/nullable_port" },
+        "action": { "type": "string", "enum": ["dropped", "rate_limited", "observed"] }
+      }
+    }
+  }
+}
