@@ -18,6 +18,7 @@ NAMES = (
     "abusech_feodo_json",
     "tranco_csv",
     "zeek_conn_labeled",
+    "argus_binetflow",
     "cicflowmeter_csv",
     "hookprobe_ioc_v1",
     "domain_list",
