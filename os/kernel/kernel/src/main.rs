@@ -266,6 +266,43 @@ const NTHREADS: usize = 5; // IPC consumer/producer + priority H/M/L
 const STACK_SIZE: usize = 0x4000; // 16 KiB per thread
 const TICK_HZ: u32 = 100; // 10 ms quantum
 const RUN_TICKS: u32 = 300; // safety backstop; normal exit is "all threads done"
+/// QEMU only: how long the scheduler demo may run past `RUN_TICKS` while an EL0 task has not reported yet. Under TCG
+/// the guest clock follows the host's wall clock, so on a loaded host 300 ticks pass while the guest has executed
+/// almost nothing: the low-priority EL0 tasks never got to run and every phase that reads their result failed as a
+/// phantom ([P7c], [P12c], [P-wasm-el0], [P-wasmi-el0], [P-wasm-parity], [P-wasip1] — seen four times 2026-11-18/19).
+/// Waiting for the reports loosens nothing: every phase still checks the same values, and a task that never reports
+/// still fails — after this cap instead of after 3 s.
+#[cfg(not(feature = "cm5"))]
+const RUN_TICKS_MAX: u32 = 20 * RUN_TICKS;
+
+/// Has every EL0 task of the scheduler demo written its result word (and every deliberately crashing task used up
+/// its restarts)? A word that was never registered is not waited for. Says nothing about whether the results are
+/// RIGHT — the phases check that.
+#[cfg(not(feature = "cm5"))]
+fn sched_demo_reported() -> bool {
+    let word = |pa: &AtomicUsize| {
+        let p = pa.load(Ordering::SeqCst);
+        p == 0 || unsafe { read_volatile(p as *const u64) } != 0
+    };
+    let crashed_out = |tid: &AtomicUsize| {
+        let t = tid.load(Ordering::Relaxed);
+        t == usize::MAX || scheduler::restart_used(t) >= EL0_MAX_RESTARTS
+    };
+    let base = word(&EL0_CNT_PA) && word(&P12_RESULT_PA) && word(&R1_SRESULT_PA) && word(&R1_CRESULT_PA) && word(&ELF_CRESULT_PA) && crashed_out(&EL0_FAULT_TID);
+    #[cfg(feature = "wasmhost")]
+    let base = base
+        && word(&WHOST_SRESULT_PA)
+        && crashed_out(&WHOST_FAULT_TID)
+        && word(&WASMI_RES_A)
+        && word(&WASMI_RES_C)
+        && word(&WASMI_DETECT_RES)
+        && word(&WASMI_DETECT_ISO_RES)
+        && word(&WASIP1_RES_A)
+        && word(&WASIP1_RES_B)
+        && word(&WASIP1_RES_C)
+        && word(&WASIP1_RES_D);
+    base
+}
 const WORK: u32 = 60_000; // per-print busy work (short so workers finish promptly)
 
 #[repr(align(16))]
@@ -11738,7 +11775,12 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
         // metal too (ASID-tagged TTBR0 switch, flush-free).
         enter_current_addr_space();
         gic.eoi(intid);
-        if scheduler::alive_workers() == 0 || n >= RUN_TICKS {
+        // QEMU: past RUN_TICKS, keep running (up to RUN_TICKS_MAX) while an EL0 task has not reported — a starved host
+        #[cfg(not(feature = "cm5"))]
+        let time_up = n >= RUN_TICKS && (n >= RUN_TICKS_MAX || sched_demo_reported());
+        #[cfg(feature = "cm5")]
+        let time_up = n >= RUN_TICKS;
+        if scheduler::alive_workers() == 0 || time_up {
             #[cfg(not(feature = "cm5"))]
             {
                 // P7c: the uncooperative EL0 task ran (counter>0) AND we reached
