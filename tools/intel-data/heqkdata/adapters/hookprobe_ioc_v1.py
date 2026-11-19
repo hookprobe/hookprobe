@@ -11,10 +11,21 @@ VERSION = "1.0.0"
 TYPES = {"ip", "cidr", "domain", "url", "sha256", "sha1", "md5", "ja3", "ja4", "ja4s"}
 
 
+# The public EICAR anti-malware test file (eicar.org): a test string, never threat intelligence.
+EICAR_DIGESTS = {
+    "275a021bbfb6489e54d471899f7db9d1663fc695ec2fe2a2c4538aabf651fd0f",  # sha256
+    "3395856ce81f2b7382dee72602f798b642f14140",                          # sha1
+    "44d88612fea8a8f36de82e1278abb02f",                                  # md5
+}
+
+
 def _is_canary(ind):
     v = str(ind.get("value", ""))
     src = str(ind.get("source", "")).lower()
-    return "canary" in src or "hookprobe" in src or v.endswith((".example", ".test", ".invalid")) or v.startswith(("192.0.2.", "198.51.100.", "203.0.113."))
+    fam = str(ind.get("family") or "").lower()
+    return ("canary" in src or "hookprobe" in src or "canary" in fam or "eicar" in src or "eicar" in fam
+            or v.lower() in EICAR_DIGESTS
+            or v.endswith((".example", ".test", ".invalid")) or v.startswith(("192.0.2.", "198.51.100.", "203.0.113.")))
 
 
 def parse(path, ctx):
