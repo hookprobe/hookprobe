@@ -76,6 +76,42 @@ pub fn server_fault(name: &str, budget: bool) -> u32 {
     j().open(c, kind, Rung::Restart, now_ms())
 }
 
+/// H4a: a server answered a functional probe WRONGLY (no fault): it is being reset like a fault.
+pub fn server_probe_failed(name: &str) -> u32 {
+    let c = component_id(name);
+    mark(c);
+    let kind = if unsafe { DELIBERATE } != 0 { Kind::Planned } else { Kind::Probe };
+    j().open(c, kind, Rung::Restart, now_ms())
+}
+
+static mut PROBES: hal::superv::ProbeClock = hal::superv::ProbeClock::new();
+/// (probes run, probes failed) since boot.
+static mut PROBE_STATS: (u64, u64) = (0, 0);
+pub fn probe_stats() -> (u64, u64) {
+    unsafe { PROBE_STATS }
+}
+
+/// H4a: one functional probe when due (the main loop calls this every iteration; it costs one comparison until then,
+/// and at most one bounded EL0 excursion per `PROBE_PERIOD_MS`).
+pub fn probe_tick(now_ms: u64) {
+    // one slot today (el0-lansvc); el0-tlshost joins with its own wrong-answer test (a false positive there would
+    // drop every HTTPS session)
+    if unsafe { (*core::ptr::addr_of_mut!(PROBES)).due(now_ms, 1) }.is_none() {
+        return;
+    }
+    if let Some(ok) = crate::lansvc::probe(false) {
+        unsafe {
+            PROBE_STATS.0 += 1;
+            if !ok {
+                PROBE_STATS.1 += 1;
+            }
+        }
+        if !ok {
+            arch_aarch64::_print(format_args!(" [SUPERV] functional probe FAILED: el0-lansvc answered wrongly without faulting — reset (journaled, kind probe)\n"));
+        }
+    }
+}
+
 /// An EL0 server's initialisation failed or was refused.
 pub fn server_init_refused(name: &str) -> u32 {
     let c = component_id(name);
@@ -166,7 +202,8 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
         let _ = write!(w, "{}{{\"component\":\"{}\",\"critical\":{},\"exhausted\":\"{}\",\"grace\":{},\"backoff_ms\":{},\"backoff_max_ms\":{}}}",
             if i > 0 { "," } else { "" }, e.name, e.critical, e.exhausted.name(), e.grace, e.backoff_ms, e.backoff_max_ms);
     }
-    let _ = write!(w, "],\"now_ms\":{},\"recoveries\":[", now_ms());
+    let (pr, pf) = probe_stats();
+    let _ = write!(w, "],\"probes\":{{\"period_ms\":{},\"run\":{},\"failed\":{}}},\"now_ms\":{},\"recoveries\":[", hal::superv::PROBE_PERIOD_MS, pr, pf, now_ms());
     for (i, r) in jj.newest_first().take(limit).enumerate() {
         let _ = write!(w, "{}{{\"seq\":{},\"component\":\"{}\",\"kind\":\"{}\",\"rung\":\"{}\",\"outcome\":\"{}\",\"repeats\":{},\"t_detect_ms\":{},",
             if i > 0 { "," } else { "" }, r.seq, component_name(r.component), r.kind.name(), r.rung.name(), r.outcome.name(), r.repeats, r.t_detect_ms);
