@@ -54,7 +54,7 @@ pre-registration.
 - **Otherwise** A (the statistical DNA) stays in `el0-neuro`, and the result is reported as is.
 - **Either way the result is preliminary** until D1.
 
-## Results (2026-11-19), recorded after the pre-registration commit `7c56f1bc`
+## Results (2026-11-19), recorded after the pre-registration commit `268fe25c` (`7c56f1bc` before the 2026-11-18 history rewrite; same content and timestamps)
 
 **Data.** IoT-23 re-downloaded; MD5 `7132e603…` matches; 23 conn logs, the same as Phase 0.
 
