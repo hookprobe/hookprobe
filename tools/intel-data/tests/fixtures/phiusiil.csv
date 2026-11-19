@@ -1,0 +1,8 @@
+﻿FILENAME,URL,Domain,Title,label
+1.txt,https://www.example.com/,www.example.com,Home,1
+2.txt,http://login-verify.example/x?u=victim@example.org,login-verify.example,Sign in,0
+3.txt,http://198.51.100.5/a,198.51.100.5,,0
+4.txt,https://both.example/,both.example,x,1
+5.txt,https://both.example/p,both.example,x,0
+6.txt,https://www.example.com/again,www.example.com,Home,1
+7.txt,short

@@ -1,0 +1,88 @@
+# Data quality report — 2026.11.18-6283713ff3ed (research)
+
+Examples: **56**. Human-verified share: 0.0714. Synthetic share: 0.6429. Provenance completeness: 1.0. Licence completeness: 1.0.
+
+## By collection and split
+
+| collection/split | labels |
+|---|---|
+| attack_intelligence/dev | None: 1 |
+| attack_intelligence/test | None: 1 |
+| dns_intelligence/test | benign: 2, malicious: 2 |
+| dns_intelligence/train | benign: 3, malicious: 4 |
+| network_intelligence/dev | malicious: 1 |
+| network_intelligence/train | benign: 2, malicious: 2 |
+| soc_reasoning/dev | malicious: 4 |
+| soc_reasoning/test | benign: 4 |
+| soc_reasoning/train | benign: 8, malicious: 20 |
+| vulnerability_intelligence/train | None: 2 |
+
+## Sources and licences
+
+| source | examples |
+|---|---|
+| hookprobe-synthetic-soc | 36 |
+| f-tranco | 4 |
+| f-dga | 3 |
+| f-iot23 | 3 |
+| f-attack | 2 |
+| f-phiusiil | 2 |
+| f-cic | 2 |
+| f-kev | 2 |
+| f-umudga | 1 |
+| f-urlhaus | 1 |
+
+Licences: t-open (18), t-research (2), agpl-3.0-only (36)
+
+## Labels
+
+Ground-truth types: knowledge_base 4, dataset_label 15, feed_assertion 1, synthetic 36
+
+Label-quality grades: high 9, medium 10, low 1, unknown 36
+
+Class imbalance (max/min label count): dns_intelligence 1.2, network_intelligence 1.5, soc_reasoning 2.0
+
+## Exclusions and contamination
+
+- excluded exact_duplicates: 0
+- build: dns_benign_dropped_conflict = 1
+- build: net_group:f-cic:192.168.10.5-198.51.100.3-50000-80-6@2017-07-07 03 = 1/1
+- build: net_group:f-cic:192.168.10.6-192.168.10.50-40000-22-6@2017-07-07 03 = 1/1
+- build: net_group:f-iot23:CTU-IoT-Fixture-1-1 = 3/3
+
+Contamination problems: **0**
+
+
+## Missing fields (top)
+
+| field | null count |
+|---|---|
+| target.confidence | 56 |
+| target.severity | 20 |
+| target.reasoning | 20 |
+| target.recommended_action | 18 |
+| detection.dst_port | 16 |
+| dns.client_ref | 11 |
+| dns.rcode | 11 |
+| dns.transport | 11 |
+| dns.window | 11 |
+| record.observed_at | 10 |
+| flow.service | 3 |
+| attack_technique.detection | 2 |
+| flow.conn_state | 2 |
+| flow.history | 2 |
+| vulnerability.cvss | 2 |
+| vulnerability.published | 2 |
+
+## Temporal coverage (records by year)
+
+2017: 2, 2018: 3, 2025: 2, 2026: 39
+
+## Tier-A baseline: heqk dga.rs on the DNS test split
+
+| label@source | n | flagged (score ≥ 600) | rate |
+|---|---|---|---|
+| benign@f-phiusiil | 1 | 0 | 0.0 |
+| benign@f-tranco | 1 | 0 | 0.0 |
+| malicious@f-dga | 1 | 1 | 1.0 |
+| malicious@f-phiusiil | 1 | 0 | 0.0 |

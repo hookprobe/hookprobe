@@ -1,0 +1,5 @@
+{"title": "fixture", "catalogVersion": "2026.11.18", "count": 3, "vulnerabilities": [
+ {"cveID": "CVE-2099-0001", "vendorProject": "ExampleVendor", "product": "ExampleRouter", "vulnerabilityName": "fixture", "dateAdded": "2026-01-02", "shortDescription": "Fixture command injection.", "requiredAction": "Apply mitigations per vendor instructions.", "dueDate": "2026-01-23", "knownRansomwareCampaignUse": "Known", "notes": "", "cwes": ["CWE-78"]},
+ {"cveID": "CVE-2099-0002", "vendorProject": "ExampleVendor", "product": "ExampleVPN", "dateAdded": "2026-02-03", "shortDescription": "Fixture auth bypass.", "requiredAction": "Patch.", "dueDate": "2026-02-24", "knownRansomwareCampaignUse": "Unknown", "cwes": []},
+ {"cveID": "NOT-A-CVE", "vendorProject": "x"}
+]}
