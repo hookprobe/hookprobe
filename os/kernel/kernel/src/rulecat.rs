@@ -56,6 +56,7 @@ pub fn lookup(id: u16) -> Option<RuleInfo> {
         126 => r("TLS to a Shield-blocked name (DNS bypass)", "dns_bypass", "T1572", SEV_MEDIUM),
         127 => r("ARP cache poisoning (IP claimed by a new MAC)", "arp_spoof", "T1557.002", SEV_HIGH),
         128 => r("Device behaviour change (a new service for a single-purpose device)", "behaviour_change", "T1071", SEV_MEDIUM),
+        129 => r("Inspection reduced under load (behaviour detectors paused; no traffic dropped)", "inspection_shed", "", SEV_LOW),
         201 => r("TCP NULL scan", "port_scan", "T1046", SEV_MEDIUM),
         202 => r("TCP FIN scan", "port_scan", "T1046", SEV_MEDIUM),
         203 => r("TCP Xmas scan", "port_scan", "T1046", SEV_MEDIUM),
