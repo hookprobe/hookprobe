@@ -84,3 +84,14 @@ gate on its own**: it has been seen.
 - **The gate fails on Deakin:** the temporal tier stays evidence-only (`17`). Deakin is then spent, and any
   further rule needs a new fresh dataset.
 - **Rejected on dev:** as above. Deakin stays unopened.
+
+## Implementation (committed before any D1c number was computed)
+
+`d1_analysis.py --phase calib --period {dev, test} --split {d1, half} --peer-key v2-24 [--b B --m M]`.
+- It records each device's scores over the calibration window (the last 50% of the warm-up hours).
+- It applies `T_d` per device, and evaluates the three conditions with per-device detection for the
+  muting check.
+- Without `--b`/`--m` it evaluates the 8-configuration grid and prints the rule's choice. With them, it
+  evaluates only the frozen configuration (confirmation).
+- The engine's scores do not depend on the threshold, so one engine run serves the whole grid.
+- Smoke-tested on synthetic data. The existing `--phase dna` output is unchanged.
