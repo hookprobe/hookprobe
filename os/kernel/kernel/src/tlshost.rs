@@ -251,7 +251,8 @@ impl TlsHost {
     /// session is lost, which the caller sees as `ST_PANIC`) and re-initialised.
     pub fn call(&mut self, cmd: u32, conn: usize, input: &[u8], unix_secs: u64) -> Reply {
         // H2: inside the restart hold-off (consecutive faults) the call is refused like a fault — fail closed
-        if !self.sup.ready(crate::superv::now_ms()) {
+        // H5: ...or with its CPU budget for this window used up
+        if !self.sup.ready(crate::superv::now_ms()) || !crate::superv::cpu_admit(hal::superv::C_TLSHOST) {
             return Reply { status: ST_PANIC, tls_len: 0, plain_len: 0, flags: F_CLOSED };
         }
         // a reset deferred its re-INIT to here; if that INIT faults too the server stays down until the next hold-off ends
@@ -274,7 +275,9 @@ impl TlsHost {
         self.w32(H_ENT_LEN, elen as u32);
         self.write(IN_OFF, &input[..n]);
         self.calls += 1;
+        let t0 = crate::clock::ticks();
         let how = crate::el0as::excursion(&self.aspace, self.entry, self.sp_top, BUDGET_US);
+        crate::superv::cpu_charge(hal::superv::C_TLSHOST, t0); // H5
         if how != crate::Excursion::Exited {
             match how {
                 crate::Excursion::Timeout => self.timeouts += 1,
