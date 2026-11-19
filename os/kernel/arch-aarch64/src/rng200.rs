@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! BCM2712 hardware TRNG (iproc rng200) — the STRICT, fail-closed leaf for the
 //! kernel's production entropy source (`kernel::entropy::HwTrng`).
 //!

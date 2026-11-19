@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P15 — sealing blob format (`HQKSEAL1`) + seal/unseal (Encrypt-then-MAC).
 //!
 //! DICE-style, TPM-free: every per-policy key is derived from a sealing root key

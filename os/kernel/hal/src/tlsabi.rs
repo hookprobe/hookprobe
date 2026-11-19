@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The kernel <-> EL0 TLS server ABI (ADR 0050 D2 / ADR 0051). One shared IO region; every bounded
 //! excursion carries ONE command. Shared by `el0-tlshost` and the kernel so the two cannot drift.
 //!

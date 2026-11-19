@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Operator actions from Mission Control (ADR 0053, accepted with safeguards 2026-11-08).
 //!
 //! Only reversible, time-bounded operations. Limits are enforced here, not in the UI. Actions are kept

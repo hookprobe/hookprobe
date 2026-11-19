@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P10-BT — CYW43455 Bluetooth over HCI-UART (H4) on CM5 / BCM2712.
 //!
 //! The BT side of the combo chip is NOT on SDIO (that's the WiFi side, cyw43.rs) —

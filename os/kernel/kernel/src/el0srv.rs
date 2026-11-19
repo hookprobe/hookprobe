@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 2 — the RESIDENT EL0 driver-server substrate, first used by `el0-wifi`.
 //!
 //! What the kernel keeps (ADR 0065 D1) is all here:

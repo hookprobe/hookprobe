@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! GICv3 backend (feature `gicv3`) — the arm64-cloud tier: OCI Ampere A1 (measured
 //! 2026-11-09: GICv3, single security state, virt timer PPI 27) and its QEMU model
 //! `virt,gic-version=3` (os/kernel/tools/oci-a1/run-oci-a1.sh). Same API as the GICv2 driver

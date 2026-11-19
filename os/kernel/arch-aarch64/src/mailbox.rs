@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! VideoCore property mailbox (kernel side) — set the SDIO/WiFi clock + power so
 //! the CYW43455 radio comes alive for P10. Ported from the proven HBoot mailbox
 //! (same base/channel/pointer rule). Every poll is BOUNDED; a bad response returns

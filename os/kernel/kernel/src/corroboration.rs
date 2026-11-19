@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M2 / A11 — multi-signal CORROBORATION as a SOC severity signal (NOT a wire action).
 //!
 //! A source that trips several INDEPENDENT detection axes (IOC reputation, scan shape,

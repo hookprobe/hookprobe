@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Kernel side of the EL0 TLS server (ADR 0050 D2 / ADR 0051): load `el0-tlshost` into EL0, then drive it
 //! one command per BOUNDED excursion (`crate::excursion_bounded`, ADR 0050 D5). The kernel keeps TCP and
 //! only ever passes ciphertext in / gets ciphertext + plaintext back. A timeout or fault fails the HTTPS

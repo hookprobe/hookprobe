@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 4g S3d: `el0_keys` = the `el0-keys` AND `wpa3` features. In such a build every Wi-Fi key (PMK, SAE PT,
 //! PTK, GTK, IGTK) is made and kept by el0-wpa: the in-kernel authenticator, SAE responder and group-key generation are
 //! not compiled in (the kernel never holds a derived key — operator decision 2026-11-15, design D-b).

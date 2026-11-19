@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 S0 — every resident EL0 server in its OWN address space.
 //!
 //! Finding (2026-11-15): the resident servers (el0-wifi, el0-hsh, el0-lansvc, el0-tlshost) were all mapped into the

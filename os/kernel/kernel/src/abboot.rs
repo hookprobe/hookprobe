@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! A/B boot COMMIT that survives a cold boot (BuildPlan M3 / audit B2).
 //!
 //! The firmware cold-boots whatever `config.txt`'s `kernel=` line names and one-shot trial-boots

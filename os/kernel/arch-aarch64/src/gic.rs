@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! GICv2 (ARM Generic Interrupt Controller). QEMU `virt`: GICD 0x0800_0000 /
 //! GICC 0x0801_0000. CM5/BCM2712 GIC-400 (also GICv2): GICD 0x10_7FFF_9000 /
 //! GICC 0x10_7FFF_A000 — same register layout, different base (Device-mapped).

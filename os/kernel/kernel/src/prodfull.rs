@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! `prod-full` — M3 persistence / M4 control-plane posture / M6 export, wired into
 //! the PH1 production sensor loop on metal.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4.4 — the ADR-0004 secure-edge OPERATIONAL ENVELOPE on heqk's native stack.
 //!
 //! ADR 0004's footer names the "crown jewel" that must be re-implemented on heqk:

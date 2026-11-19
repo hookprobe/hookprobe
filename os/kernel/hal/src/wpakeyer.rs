@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 3a: the WPA 4-way authenticator as a PURE state machine.
 //!
 //! It is the non-blocking keyer of #1200, lifted out of the CYW43455 driver with no I/O and no statics:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HookProbe microkernel — EL1 exception vector table (P0 + P1 IRQ path).
 // AArch64 layout: 2 KiB-aligned base, 16 entries, each 0x80 (128) bytes apart,
 // in 4 groups of 4 (Sync, IRQ, FIQ, SError) x (SP0, SPx, LowerA64, LowerA32).

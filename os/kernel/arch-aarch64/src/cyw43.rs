@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P10 Stage A — CYW43455 WiFi (SDIO) bring-up to the chip-ID proof-point.
 //!
 //! The WiFi radio is an Infineon/Cypress CYW43455 (Broadcom silicon, Linux

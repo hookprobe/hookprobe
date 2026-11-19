@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P13 — RP1 peripheral-bus common layer (CM5 / BCM2712).
 //!
 //! HEQK reaches the RP1 southbridge through the firmware-programmed prefetchable

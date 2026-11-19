@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The EL0 LAN-services server (ADR 0050 D4 step 2). Each bounded excursion runs ONE command from the shared IO
 //! region (`hal::lansvcabi`) and exits back to the kernel with `SYS_EXIT_USER`. It parses what every Wi-Fi client
 //! and the upstream resolver send to Shield — a DNS query, a DNS answer — with the kernel's own `dnswire.rs`, so a

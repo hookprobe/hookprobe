@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! VideoCore property mailbox — read device OTP + board serial from bare-metal
 //! EL2 on BCM2712 (Pi 5 / CM5). The VPU firmware stays resident after the
 //! SPI-EEPROM bootloader hands off and keeps servicing channel 8, so HBoot can

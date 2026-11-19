@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Minimal kernel heap: a bump allocator over a static region. No reclaim —
 //! adequate for P1 (a few long-lived allocations). A real allocator arrives
 //! with the physical frame allocator + MMU at P1b/P2. Zero external deps.

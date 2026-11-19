@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Pure TLS ClientHello parser + JA4 fingerprint (moved verbatim from `ja4.rs`; SEC-02). Every byte is from the
 //! network; no kernel state, so the host libFuzzer harness (`tools/fuzz/heqk-kernel`) compiles this same file.
 //! `ja4.rs` re-exports it.

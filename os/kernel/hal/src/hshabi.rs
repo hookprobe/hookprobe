@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The kernel <-> EL0 `hsh` (native management shell) ABI (ADR 0059 step 4; hsh spec R1). One shared IO region;
 //! every bounded excursion runs ONE command and exits. Two-phase per shell command:
 //!   1. CMD_LINE  : IN = one input line. OUT = text (ST_TEXT), or one management request (ST_REQUEST:

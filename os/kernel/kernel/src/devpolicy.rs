@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Local per-device access policy (parity gap G9 — V1 Fortress `fortress-ctl device set-policy`).
 //!
 //! `DEVICES.TXT` on the boot partition, operator-signed (`DEVICES.SIG`, magic HQDSIG1 / tag HQDEV1, never

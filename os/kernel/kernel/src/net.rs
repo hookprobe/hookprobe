@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Packet parser for the IDS/IPS datapath — Ethernet → IPv4 → TCP/UDP.
 //!
 //! This is the layer that turns a raw, attacker-controlled frame into a

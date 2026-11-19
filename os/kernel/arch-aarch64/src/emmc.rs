@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P15 — eMMC block device (BCM2712 second SDHCI @ 0x10_00FF_F000), READ-ONLY.
 //!
 //! A `broken-cd`, 8-bit, 1.8 V-VCCQ `brcm,bcm2712-sdhci` sharing `clk-emmc2` with

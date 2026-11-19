@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! L-02: the facts Mission Control shows about its own certificate (names, addresses, expiry), read from the leaf
 //! DER the device serves. A bounded DER walk — never a validator (the browser validates; this only reports).
 //! Every length is checked against its parent; anything malformed yields `None`.

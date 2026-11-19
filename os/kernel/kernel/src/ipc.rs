@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P4 — synchronous IPC over an Endpoint (register-passed message word).
 //!
 //! The rendezvous: whichever side arrives first blocks (via the scheduler); the

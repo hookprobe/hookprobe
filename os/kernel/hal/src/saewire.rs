@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0050 D4 step 5c: the WPA3-SAE responder's walk over what a station sends — the body of an 802.11
 //! Authentication frame (algorithm 3), Commit or Confirm — attacker-shaped bytes from anyone in radio range. Pure,
 //! allocation-free, no curve library: compiled into `el0-lansvc` (the live path) and into the kernel (the fallback

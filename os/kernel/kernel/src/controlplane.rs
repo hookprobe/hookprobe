@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M4.5 control-plane INITIATOR — the on-device half of the full PQ-hybrid Noise handshake,
 //! carried over a SMOLTCP-FREE, hand-framed UDP transport that rides the sensor's SINGLE GEM
 //! drain (RX tee) + single `gem::tx_frame` path (the Linux-`macb` single-ring-owner discipline,

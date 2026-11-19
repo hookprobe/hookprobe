@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Autoheal harness H1 (the 2026-11-18 gap-fix plan at the repository root, `heqk-gap-fix-plan-2026-11-18`, Wave 2b A2 + A10): failure kinds and
 //! the recovery journal.
 //!

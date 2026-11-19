@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Bounded ACPI walk — exactly the tables the arm64-cloud port needs (ACPI 6.x layouts):
 //! RSDP -> XSDT -> {MADT(APIC), GTDT, MCFG, SPCR}. All reads are unaligned-safe and every
 //! table is length-checked before a field is touched (firmware tables are untrusted input).

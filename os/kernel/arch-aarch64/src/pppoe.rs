@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! PPPoE client (RFC 2516) + PPP (RFC 1661 LCP, RFC 1334 PAP, RFC 1994 CHAP-MD5, RFC 1332 IPCP,
 //! RFC 1877 DNS) for the WAN port. A PURE state machine — frames in, frames out, a millisecond
 //! clock for retransmits — no MMIO, so QEMU drives it end to end against a scripted server and the

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M6 (Track C, ADR 0044 D3 **B2**) — the ON-DEVICE evidence/telemetry EXPORT path.
 //!
 //! Per ADR 0044 D3 (B2, the recommended default): the CM5 is a PURE heqk

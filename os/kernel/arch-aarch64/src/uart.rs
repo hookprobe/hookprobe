@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 use core::fmt;
 
 /// PL011 UART console.

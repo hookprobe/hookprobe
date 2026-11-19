@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P13 — RP1 peripheral UART (PL011), CM5 / BCM2712.
 //!
 //! These are the *peripheral* UARTs (uart1..5) a sensor/actuator might use — NOT

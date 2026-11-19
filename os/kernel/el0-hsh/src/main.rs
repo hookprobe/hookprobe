@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! hsh — the HEQK native management shell (ADR 0059 step 4a; docs/design/hsh-native-management-shell.md §0 wins).
 //!
 //! An EL0 EXCURSION server (R1): each excursion runs ONE command from the shared IO region (`hal::hshabi`) and exits

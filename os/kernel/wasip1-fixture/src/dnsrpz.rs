@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! A2+ (M5.5 catalogue) — a SECOND, genuinely-distinct REAL `wasm32-wasip1` detection
 //! module: a DNS-RPZ sinkhole detector. It reads a dotted lowercase DNS query NAME from
 //! STDIN (e.g. b"ads.tracker" or b"host.malware.example"), and DROPs it (verdict 2, i.e.

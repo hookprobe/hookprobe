@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Device-pinned policy trust anchor (ADR 0049 D1 TOFU, audit 2026-11-10 §2.1 #1).
 //!
 //! The operator key that authorises POLICY.TXT and every signed pack is compiled into the image by the
