@@ -1,0 +1,7 @@
+StartTime,Dur,Proto,SrcAddr,Sport,Dir,DstAddr,Dport,State,sTos,dTos,TotPkts,TotBytes,SrcBytes,Label
+2011/08/10 09:46:53.047277,3.124,tcp,192.0.2.165,1027,   ->,198.51.100.10,80,FSPA_FSPA,0,0,12,4200,800,flow=From-Botnet-V42-TCP-CC6-Plain-HTTP-Encrypted-Data
+2011/08/10 09:46:54.100000,0.002,udp,192.0.2.165,1028,  <->,198.51.100.53,53,CON,0,0,2,250,70,flow=From-Botnet-V42-UDP-DNS
+2011/08/10 09:47:00.000001,10.5,tcp,192.0.2.20,40000,   ->,203.0.113.80,443,FSPA_FSPA,0,0,40,30000,5000,flow=From-Normal-V42-Grill
+2011/08/10 09:47:01.500000,0.0,icmp,192.0.2.30,0x0008,   ->,203.0.113.1,0x0000,ECO,0,,1,98,98,flow=Background
+2011/08/10 09:47:02.000000,1.0,tcp,192.0.2.40,51000,   ->,203.0.113.90,22,REQ,0,0,1,60,60,Background-TCP-Attempt
+2011/13/10 09:47:03.000000,1.0,tcp,192.0.2.40,51001,   ->,203.0.113.90,22,REQ,0,0,1,60,60,flow=Background
