@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Discovery D3 — the full IEEE OUI registry as an operator-signed data file (OUI.TXT on the boot partition).
 //!
 //! The 846 curated OUIs compiled into `fpdb` (legacy Fingerbank parity) name the vendors that matter most and

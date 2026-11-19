@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0050 D4 step 5b: the WPA authenticator's work on what a station sends — the PTK derivation over the station's
 //! SNonce and the EAPOL-Key MIC checks of M2 / M4 — pure and allocation-free, run in `el0-lansvc`. The kernel keeps
 //! the state machine, the replay counters, M1 / M3 building and the key installation.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! DET-SEP / M2 keystone — the **tri-state enforcement verdict** and the `decide()`
 //! seam, porting the operator's hard rule (ADR 0023) onto heqk: *observe by
 //! default; a legitimate customer connection must ALWAYS pass; drop ONLY a genuine,

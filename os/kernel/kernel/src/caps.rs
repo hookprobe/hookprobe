@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P2 — the object-capability system (arch-neutral; needs no HAL).
 //!
 //! Models seL4's design (see `CAPABILITY_MODEL.md`): memory begins as **Untyped**

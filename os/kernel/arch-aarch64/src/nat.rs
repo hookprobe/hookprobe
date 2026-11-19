@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M-NAT1 — a bounded, no-alloc IPv4 source-NAT (masquerade) between the WiFi-AP /
 //! eth1-LAN side (10.99.0.0/24, heqk = 10.99.0.1) and the end0 WAN lease.
 //!

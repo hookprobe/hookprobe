@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! #54 — the evidence log on the AP image: every detection is kept, SEALED, in a bounded ring in the
 //! DataVolume `Evidence` region (fslog M3.2 framing + M3.3 HQKSEAL1 records), so Mission Control's history
 //! survives a power cycle well beyond the 64-event G12 snapshot.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! L-02 (operator 2026-11-17): the device answers mDNS for its own names, so `https://heqk.local` and the
 //! unit-unique `https://<label>.heqk.local` (both in the Mission Control certificate) work whatever its addresses
 //! are. Aligned with the legacy fortress's Avahi setup (survey 2026-11-17): IPv4 address records only, published

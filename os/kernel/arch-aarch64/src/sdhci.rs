@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Base-parameterized SD Host Controller v3 (`brcm,bcm2712-sdhci`) helper layer.
 //!
 //! This is a faithful TRANSCRIPTION of the metal-proven SDHCI knowledge in

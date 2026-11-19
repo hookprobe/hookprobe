@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Local SIEM export (parity gap G15 — beats both legacy tiers, which had no syslog/CEF export).
 //!
 //! Each new detection is sent once, as one UDP datagram, to the collector named in the operator-signed

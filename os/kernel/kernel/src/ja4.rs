@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Passive TLS client fingerprint (FoxIO JA4) + SNI from a ClientHello — detection + device identity.
 //!
 //! Ported from the linux-tier `napse-capture` dpi.rs (whose JA4 was cross-checked against the FoxIO

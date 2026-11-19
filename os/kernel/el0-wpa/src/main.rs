@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0065 step 4g — `el0-wpa`, the resident EL0 WPA security server (operator decision 2026-11-15: the Wi-Fi bus
 //! driver and the WPA control plane in two independently restartable EL0 servers; design
 //! docs/design/wifi-el0-split.md).

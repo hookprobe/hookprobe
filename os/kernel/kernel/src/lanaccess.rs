@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! A-01 (operator decision 2026-11-17): Wi-Fi / LAN clients are refused **upstream private networks** (RFC 1918,
 //! 169.254/16, IPv6 ULA) unless an exception covers them. Every refusal is attributed (device, destination, port,
 //! count, first / last seen) so Mission Control can explain it and offer the exception (`GET /api/lan-access`).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! A/B OTA — which sectors may an OS-image update write? (production phase 1, step 3)
 //!
 //! Pure FAT32 walk over a sector reader, shared by the CM5 eMMC driver's Gate 1 (it re-derives the

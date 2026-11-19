@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Measured boot: a small TPM-style measurement chain.
 //!
 //! Each measurement `m` extends a register: `PCR[i] = SHA-256( PCR[i] || m )`.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M3.2 — a minimal crash-safe, log-structured record store over a `DataVolume`
 //! region. This is what lets the evidence graph + QSecBit history PERSIST (today
 //! they only reach the serial/SIEM ring + RAM). NOT a POSIX filesystem — a

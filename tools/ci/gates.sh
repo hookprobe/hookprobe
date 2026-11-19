@@ -76,6 +76,7 @@ lockdirs() { grep -vE '^\s*(#|$)' tools/ci/lockfiles.txt | awk -v e="$1" '$1==e{
 gate_g0() {
   step "CI wiring meta-gate"            python3 -I tools/ci/g0_wiring.py --root "$ROOT"
   step "release identity (versions)"    python3 -I tools/ci/release_check.py --root "$ROOT"
+  step "SPDX headers (heqk sources)"    python3 -I tools/ci/spdx_check.py --root "$ROOT"
   step "CI tooling self-tests"          python3 -I -m unittest discover -s tools/ci/tests -t tools/ci -q
   if need shellcheck; then
     step "shellcheck tools/ci"          shellcheck -S warning tools/ci/*.sh tools/ci/heal/*.sh

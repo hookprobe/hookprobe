@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // Pass the fixed-VA EL0 link map to the final link, as an ABSOLUTE path so the nested
 // build (invoked by the kernel's build.rs from an arbitrary CWD) always resolves it.
 fn main() {

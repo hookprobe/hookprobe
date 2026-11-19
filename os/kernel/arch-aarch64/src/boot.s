@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 // HookProbe microkernel — aarch64 boot stub (P0).
 // Firmware/QEMU hands us the CPU in AArch64 state (EL2 on `virt` with
 // virtualization, else EL1). We: gate to the primary core, set the stack,

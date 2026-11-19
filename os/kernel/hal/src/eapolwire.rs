@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! WPA authenticator frame parsing (ADR 0050 D4 step 5a): what a station sends during the 4-way handshake — EAPOL-Key
 //! frames (M2 / M4) and the RSNE inside M2's key data — attacker-shaped bytes from anyone in radio range. Pure,
 //! allocation-free: compiled into the kernel (fallback) and into `el0-lansvc`. The authenticator keeps every decision

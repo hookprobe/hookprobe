@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P8 — HookProbe rule plane: a registry of signed BPF threat rules, each
 //! statically verified (PREVAIL) and JIT-compiled at load, run on every packet's
 //! L4 header. **Rule parity**: the SAME RFC 9669 bytecode that runs on the

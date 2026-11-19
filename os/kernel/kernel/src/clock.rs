@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The detectors' clock: the hardware counter, or — only while the detection benchmark replays a recorded
 //! corpus (`detbench`) — the recorded timestamp of the frame being replayed, so rate / window / beacon
 //! detectors see the traffic's real timing. Nothing else ever sets the override.

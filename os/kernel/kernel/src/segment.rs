@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! M-segmentation — the per-device REACH plane: the on-device ACTUATOR the U2b unbuild,
 //! L5/L6 NAC onboarding, and A11 quarantine-to-segment all need. heqk's single aggregate
 //! inline port + binary verdict cannot switch VLANs/segments, but it CAN enforce a per-device

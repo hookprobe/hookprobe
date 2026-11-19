@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! RP1 GEM (Cadence MACB) Gigabit Ethernet — polled RX bring-up (CM5/BCM2712).
 //!
 //! In-kernel first-light driver: reach the MAC, bring the PHY out of reset, arm

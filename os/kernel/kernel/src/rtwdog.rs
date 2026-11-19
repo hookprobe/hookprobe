@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Runtime watchdog (production phase 3a): after the trial boot is confirmed (`hvc #1` disarms
 //! HBoot's trial watchdog), the AP main loop keeps the BCM2712 PM watchdog armed through HBoot's
 //! `hvc #3` gate. A loop that stops returning (a driver spin, a deadlock, a livelocked parser)

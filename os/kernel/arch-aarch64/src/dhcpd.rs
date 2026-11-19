@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Inside-side DHCP server lease table + client fingerprint (parity gaps G1/G2). Target-independent and
 //! pure (time is passed in), so QEMU can regression-test it; the AP/LAN serve path in `cyw43.rs` drives it.
 //!

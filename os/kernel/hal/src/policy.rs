@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! WAN policy engine — pure (no_std, no alloc), QEMU-tested: prefix lists and ACLs ATTACHED to an
 //! interface / sub-interface per direction, source+destination routes with gateway and metric, and the
 //! encapsulation-stack MTU of a WAN sub-interface.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Audit A7 / release workstream 3 — Wi-Fi field self-heal (task #60).
 //!
 //! One pure state machine, fed once per AP-loop iteration with progress counters; the radio side is a [`Port`]

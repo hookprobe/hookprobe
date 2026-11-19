@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P8 / L7 — deep-packet L7 signature matching in the VERIFIED fast-path. Home/
 //! farm automation threats are at L7 (malformed MQTT payloads, unauthorized CoAP
 //! commands to open a gate, Modbus-TCP function codes). This helper (#3) matches a

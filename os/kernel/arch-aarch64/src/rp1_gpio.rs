@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P13 — RP1 bank0 GPIO / pinmux (CM5 / BCM2712).
 //!
 //! bank0 = **GPIO0-27**, the 40-pin header. `CTRL = io_bank0 + idx*8 + 4`,

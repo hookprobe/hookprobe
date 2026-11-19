@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! BCM2712 PM watchdog — the A/B trial-boot safety timer (reliability keystone).
 //!
 //! HBoot arms this right before it launches the kernel at EL1. If the kernel is

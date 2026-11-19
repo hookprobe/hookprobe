@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! PH6 — smoltcp net service (stack-integration core).
 //!
 //! smoltcp runs ABOVE the P17 rule plane, never beside it: an ingress frame is admitted to

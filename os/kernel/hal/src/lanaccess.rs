@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! A-01 (operator decision 2026-11-17): Wi-Fi / LAN clients may not reach **upstream private networks** (the
 //! networks beyond the WAN: an ISP router's page, an upstream NAS or printer, the management network) unless the
 //! owner made an exception. Pure logic, host-tested; the kernel holds one [`Table`] and one [`Blocks`] ring.

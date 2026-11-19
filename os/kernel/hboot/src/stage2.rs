@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! P7e — EL1↔EL2 isolation via stage-2 translation (audit B-3).
 //!
 //! HBoot stays resident at EL2 (the HVC reboot/fault gate). Without isolation

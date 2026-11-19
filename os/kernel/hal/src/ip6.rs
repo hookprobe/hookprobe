@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! IPv6 on the PPPoE WAN — pure builders/parsers (no MMIO, built on every target so QEMU tests it).
 //!
 //! What the WAN v6 PROBE needs to learn what the ISP provides, nothing more:

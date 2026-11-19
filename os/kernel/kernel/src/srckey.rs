@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! ADR 0049 D2 — tagged source identity for the source-keyed tiers (parity G24a/G18).
 //!
 //! The rate / scan / corroboration tables key on a `u64`. IPv4 sources keep their address (`< 2^32`), so

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! Pure DNS wire parsing (names with compression, the client query) — moved verbatim from `shield.rs` (SEC-02) so
 //! the host libFuzzer harness compiles the same code. Every byte is from the network.
 

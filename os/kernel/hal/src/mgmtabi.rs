@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! The management ABI (ADR 0059 D9; hsh spec §14): ONE bounded message set every management client uses — the
 //! native shell `hsh` (EL0) today, Mission Control's handlers over time. Explicit ids, a version, fixed little-endian
 //! records, explicit result codes. Shared by the kernel (`kernel/src/mgmtabi.rs`, the dispatcher, served by the SAME

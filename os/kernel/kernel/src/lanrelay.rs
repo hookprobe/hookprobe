@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-only
 //! G10 — Wi-Fi station-to-station traffic THROUGH heqk.
 //!
 //! The AP starts with `ap_isolate` on (the firmware never bridges stations itself — an IDS bypass otherwise; the
