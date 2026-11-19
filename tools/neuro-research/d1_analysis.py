@@ -27,6 +27,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import numpy as np  # noqa: E402
 import dna_fixed as fx  # noqa: E402
 import p2_learned_vs_dna as p2  # noqa: E402
+import unsw_to_d1 as conv  # noqa: E402
+import ipaddress  # noqa: E402
+
+PEER_MODE = "exact"             # doc 18: the overlays use the same peer key as the converted data
+
+
+def ov_fp(s):
+    """'ip:port' of an overlay peer -> its fingerprint under PEER_MODE (no transport: port-only class match)."""
+    ip, _, port = s.rpartition(":")
+    return conv.service_peer_fp(PEER_MODE, ipaddress.ip_address(ip.strip("[]")).packed, int(port or 0))
 
 Q_MINS = (3, 5, 10, 20)
 ONSETS = 8                      # attack onsets per device, per kind, per period
@@ -59,10 +69,17 @@ def held_out(mac):
     return int(hashlib.sha256(mac.encode()).hexdigest(), 16) % 27 < 5
 
 
-def split(hours):
-    """Per device: first 50% of ACTIVE DAYS = history, next 25% = dev, last 25% = test."""
+def split(hours, mode="d1"):
+    """Per device. d1: first 50% of ACTIVE DAYS = history, next 25% = dev, last 25% = test.
+    half (doc 18 confirmation): first 50% = history (learning, unscored), last 50% = test (scored)."""
     days = sorted({h // 24 for h, _ in hours})
     n = len(days)
+    if mode == "half":
+        a = days[n // 2] if n else 0
+        out = {"history": [], "dev": [], "test": []}
+        for h, r in hours:
+            out["history" if h // 24 < a else "test"].append((h, r))
+        return out, {"history": n // 2, "dev": 0, "test": n - n // 2}
     a, b = days[n // 2] if n else 0, days[(3 * n) // 4] if n else 0
     out = {"history": [], "dev": [], "test": []}
     for h, r in hours:
@@ -119,17 +136,17 @@ def attack_hours(kind, seed, iot_segs):
             out.append({"dns": [(fx.dns_fp_from_str(n), 1) for n in names], "conns": 0, "bytes": 150 * 70})
         return out
     if kind == "scan":  # 59 LAN hosts x {22, 445}, as behavioural_memory.py
-        peers = [fx.peer_fp_from_str("192.168.10.%d:%d" % (q, p)) for q in range(1, 60) for p in (22, 445)]
+        peers = [ov_fp("192.168.10.%d:%d" % (q, p)) for q in range(1, 60) for p in (22, 445)]
         return [{"peers": peers, "conns": 118, "bytes": 118 * 60}]
     if kind == "exfil":  # +2 GB to one new external peer, as behavioural_memory.py
-        return [{"peers": [fx.peer_fp_from_str("203.0.113.%d:443" % r.randrange(1, 250))], "conns": 1,
+        return [{"peers": [ov_fp("203.0.113.%d:443" % r.randrange(1, 250))], "conns": 1,
                  "bytes": 2_000_000_000}]
     name, seg = iot_segs[seed % len(iot_segs)]      # IoT-23 malicious hours of an infected host
     k = min(DUR[kind], len(seg))
     s0 = (seed >> 8) % (len(seg) - k + 1)
     out = []
     for _, (conns, peers, bytes_out, _s, _n) in seg[s0:s0 + k]:
-        out.append({"peers": [fx.peer_fp_from_str(p) for p in sorted(peers)], "conns": conns, "bytes": bytes_out})
+        out.append({"peers": [ov_fp(p) for p in sorted(peers)], "conns": conns, "bytes": bytes_out})
     return out
 
 
@@ -295,14 +312,20 @@ def main():
     ap.add_argument("d1")
     ap.add_argument("devices")
     ap.add_argument("iot23")
-    ap.add_argument("--phase", choices=["dev", "test"], required=True)
+    ap.add_argument("--phase", choices=["dev", "test", "dna"], required=True,
+                    help="dev/test: doc 17. dna: doc 18, the DNA alone on --period, with the overlays")
+    ap.add_argument("--period", choices=["dev", "test"], default="dev")
+    ap.add_argument("--split", choices=["d1", "half"], default="d1")
+    ap.add_argument("--peer-key", choices=conv.PEER_MODES, default="exact")
     ap.add_argument("--json", required=True)
     ap.add_argument("--frozen")
     a = ap.parse_args()
+    global PEER_MODE
+    PEER_MODE = a.peer_key
     names, tl = load(a.d1, a.devices)
     devs = {}
     for d, hours in sorted(tl.items()):
-        parts, ndays = split(hours)
+        parts, ndays = split(hours, a.split)
         mac, name = names[d]
         devs[d] = (mac, name, parts, ndays)
     held = {d for d, v in devs.items() if held_out(v[0])}
@@ -311,13 +334,27 @@ def main():
         print("  %-24s days h/d/t %3d/%3d/%3d  hours h/d/t %5d/%5d/%5d%s" % (
             name, nd["history"], nd["dev"], nd["test"], len(parts["history"]), len(parts["dev"]), len(parts["test"]),
             "  HELD-OUT" if d in held else ""))
-    iot_split = "dev" if a.phase == "dev" else "test"
+    iot_split = "dev" if (a.phase == "dev" or (a.phase == "dna" and a.period == "dev")) else "test"
     _, iot_segs = p2.load(a.iot23, iot_split)
     print("IoT-23 %s split: %d infected scenarios for splicing" % (iot_split, len(iot_segs)))
     report = {"phase": a.phase, "held_out": sorted(devs[d][1] for d in held),
               "days": {devs[d][1]: devs[d][3] for d in devs}}
 
-    if a.phase == "dev":
+    if a.phase == "dna":
+        res = run_all(devs, a.period, 0, iot_segs)
+        nu = nuisance(res, devs, a.period)
+        rate, posA, n = detection(res, col=0)
+        rate_ho, _, _ = detection(res, col=0, only=held)
+        aA = p2.auc(posA, neg_scores(res, 1))
+        drivers = collections.Counter()
+        ok = nu["median"] <= 1.0 and all(rate[k] >= 0.9 for k in KINDS if n.get(k))
+        print("DNA peer-key=%s period=%s split=%s: alarms/dev/week median %.3f max %.2f (devices >1: %d/%d)  AUC %.4f" % (
+            a.peer_key, a.period, a.split, nu["median"], nu["max"], nu["devices_over_1"], nu["devices"], aA))
+        print("  detection %s  held-out %.3f  onsets %s  -> criteria %s" % (
+            {k: round(v, 3) for k, v in rate.items()}, rate_ho["all"], n, "MET" if ok else "NOT MET"))
+        report.update({"peer_key": a.peer_key, "period": a.period, "split": a.split, "nuisance": nu, "detect": rate,
+                       "detect_held_out": rate_ho, "auc": aA, "onsets": n, "criteria_met": ok})
+    elif a.phase == "dev":
         # Q2: q_min on dev
         q2 = {}
         for q in (0,) + Q_MINS:

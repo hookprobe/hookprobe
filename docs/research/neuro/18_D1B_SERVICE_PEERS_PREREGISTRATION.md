@@ -150,3 +150,20 @@ Figshare. Every downloaded file must match its line before it is converted.
 
 **Caveat, as with D1:** the description says "a controlled environment under normal operating
 conditions". This is a lab with scripted interactions, not a lived-in home.
+
+**Note, found during download:** Figshare lists 31 of the `IoT_*.pcap` files twice, with identical name,
+size and MD5. The manifest above therefore holds **119 unique daily captures**, matching the dataset's
+"119 days" (31.56 GB). The duplicates are downloaded once.
+
+## Implementation (committed before any D1b number was computed)
+
+- **`unsw_to_d1.py --peer-key {exact, v1-24, v1-16, v2-24, v2-16}`.**
+  - It parses DNS answers (A/AAAA, with name compression) into a per-device address → registered-domain
+    table: 24 h window, 4,096 entries per device, oldest-first eviction.
+  - It applies the rule order above, and reports the rule counts and the largest table size.
+  - `exact` is D1's key.
+  - Self-tests: 10 new rule checks, all passing.
+- **`d1_analysis.py --phase dna --period {dev, test} --split {d1, half} --peer-key …`.**
+  - It runs the DNA alone with the D1 overlays keyed by the same rule. Overlays carry no transport, so
+    class matching is by port only.
+  - `--split half` is the confirmation split: the first 50% of active days learn, the last 50% are scored.
