@@ -264,8 +264,13 @@ if rustc --edition 2021 -O tools/wifi-crypto-kat.rs -o "$WCK" >/tmp/hp_wck_build
     rm -f "$WCK"; exit 2
   fi
   rm -f "$WCK"
+elif ! command -v rustc >/dev/null 2>&1; then
+  echo "skip (no host rustc)"
 else
-  echo "skip (rustc host build unavailable)"
+  # rustc is there and the harness did not build: the crypto KATs did not run. That is a FAIL, not a skip —
+  # "skip" here hid a moved source path (52cb2ac0 moved aes.rs/wpa.rs to hal) from 2026-11-11 to 2026-11-19.
+  echo "FAIL — WiFi crypto KAT harness did not build:"; grep -E '^error' -A4 /tmp/hp_wck_build.log | sed 's/^/    /' | head -20
+  rm -f "$WCK"; exit 2
 fi
 
 # --- Stage 1d: design-doc canon references must resolve --------------------

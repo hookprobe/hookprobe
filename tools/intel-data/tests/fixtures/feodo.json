@@ -1,0 +1,3 @@
+[{"ip_address": "198.51.100.23", "port": 443, "status": "online", "hostname": null, "as_number": 64500, "as_name": "EXAMPLE", "country": "ZZ", "first_seen": "2026-10-01 08:00:00", "last_online": "2026-11-17", "malware": "QakBot"},
+ {"ip_address": "198.51.100.24", "port": 8080, "status": "offline", "first_seen": "2026-09-01 08:00:00", "last_online": "2026-09-30", "malware": "Emotet"},
+ {"ip_address": "not-an-ip", "port": 1}]

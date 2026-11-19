@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/dns-event/1",
+  "title": "DNSEvent (DNSQuery + DNSResponse)",
+  "description": "One DNS transaction, or a query with no observed response. Field names follow RFC 1035 / RFC 6895 vocabulary. The qname is a canonical A-label. Client identity is a pseudonym, never a customer address (see HEQK-DATA-GOVERNANCE.md).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "qname", "qtype", "rcode", "answers", "client_ref", "transport", "window"],
+  "properties": {
+    "schema": { "const": "heqk.dns-event/1" },
+    "qname": { "$ref": "common.schema.json#/$defs/domain" },
+    "qtype": {
+      "description": "RR type mnemonic (A, AAAA, TXT, …) or TYPEnnn (RFC 3597) when unknown.",
+      "type": "string",
+      "pattern": "^([A-Z][A-Z0-9-]{0,9}|TYPE[0-9]{1,5})$"
+    },
+    "rcode": {
+      "anyOf": [
+        { "type": "string", "enum": ["NOERROR", "FORMERR", "SERVFAIL", "NXDOMAIN", "NOTIMP", "REFUSED", "YXDOMAIN", "YXRRSET", "NXRRSET", "NOTAUTH", "NOTZONE"] },
+        { "type": "null" }
+      ]
+    },
+    "answers": {
+      "type": "array",
+      "maxItems": 64,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "value", "ttl"],
+        "properties": {
+          "type": { "type": "string", "pattern": "^([A-Z][A-Z0-9-]{0,9}|TYPE[0-9]{1,5})$" },
+          "value": { "type": "string", "maxLength": 1024 },
+          "ttl": { "type": ["integer", "null"], "minimum": 0 }
+        }
+      }
+    },
+    "client_ref": {
+      "description": "Stable pseudonym of the querying client within one dataset (HMAC, see governance), or null.",
+      "type": ["string", "null"],
+      "pattern": "^c:[0-9a-f]{16}$"
+    },
+    "transport": { "type": ["string", "null"], "enum": ["udp", "tcp", "dot", "doh", "doq", null] },
+    "window": {
+      "description": "Aggregate behaviour of the same client over a window, when the source provides it (tunnelling and NXDOMAIN-burst signals). Null when the record is a single lookup.",
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["duration_s", "queries", "nxdomain", "unique_subdomains", "txt_queries"],
+          "properties": {
+            "duration_s": { "type": "number", "minimum": 0 },
+            "queries": { "type": "integer", "minimum": 0 },
+            "nxdomain": { "type": ["integer", "null"], "minimum": 0 },
+            "unique_subdomains": { "type": ["integer", "null"], "minimum": 0 },
+            "txt_queries": { "type": ["integer", "null"], "minimum": 0 }
+          }
+        }
+      ]
+    }
+  }
+}
