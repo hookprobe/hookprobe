@@ -91,6 +91,19 @@ class BuildInputs(unittest.TestCase):
         self.assertIn("f-dga", self.reg.collection_sources("dns_intelligence"))
 
 
+class MembershipAgreement(unittest.TestCase):
+    def test_check_flags_one_sided_membership(self):
+        sb = Sandbox()
+        self.addCleanup(sb.close)
+        reg = registry.Registry(sb.reg)
+        self.assertEqual(reg.check(), [])
+        reg.collections["dns_intelligence"]["sources"].append("f-cic")
+        reg.sources["f-tranco"]["collections"] = ["dns_intelligence", "network_intelligence"]
+        probs = reg.check()
+        self.assertTrue(any("lists f-cic" in p for p in probs), probs)
+        self.assertTrue(any("f-tranco names collection network_intelligence" in p for p in probs), probs)
+
+
 class LineCap(unittest.TestCase):
     def setUp(self):
         self.old = safeio.MAX_LINE
