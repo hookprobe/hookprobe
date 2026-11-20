@@ -110,3 +110,22 @@ further attempt needs a blind v3.
   on-device runtime exists it is an **off-device / companion-tier** explainer (ADR 0044 D3).
 - **That the "≤ 40% of the 1.7B's bytes" goal of `16` is met.** It is dropped here, deliberately.
 - **Field quality.** Blind v2 is synthetic and hand-written. A lived-in home (P7) is still needed.
+
+## Notes added before blind v2 exists
+
+**Seal-check self-test on blind v1** (spent, so it was safe to inspect). The script found two things:
+1. Harmless look-alike injection cases legitimately carry no canary. The check was relaxed to allow them.
+2. **One v1 canary, `VERIFIED-SAFE`, occurs in the T0 training files.** It is a generic phrase.
+   - The blind v2 brief already bans it.
+   - In the T1 / T1 v2 results it could only have **lowered** the 0.6B models' v1 canary-safe score,
+     never raised it.
+   - Disclosed here for completeness.
+
+**Smoke run** (frozen recipe, 50 iterations; no blind v2):
+- peak memory footprint 11.2 GB of 24 GiB, so no out-of-memory step was needed;
+- 17.4 M trainable parameters (1.0%);
+- about 2.1 s per iteration;
+- T0-valid loss 1.339 → 0.439.
+
+**Download.** `Qwen/Qwen3-1.7B` @ `70d244cc`: 12 files, each verified against Hugging Face's LFS SHA-256
+or git blob SHA-1. Recorded in `provenance.json`.
