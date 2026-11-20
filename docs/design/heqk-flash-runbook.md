@@ -15,10 +15,10 @@ Rule: **a flash is one deliberate, operator-approved action with a stop rule —
 Use `tools/diagnostics/cm5-rpiboot-check.sh` (add `--msd` to also expose the eMMC as USB mass storage, read-only)
 to prove the path without flashing. **Root cause of the 2026-11-12 failures:** the operator heard a single relay click —
 the board was not power-cycled while nRPIBOOT was held, so the ROM never saw the boot mode. **Operator procedure (2026-11-20; IN1 = power, IN2 = rpiboot).** Phase 1, enter rpiboot: power off (IN1) → wait 3 s →
-IN2 on → power on → release IN2 2 s later → boot ROM `0a5c:2712` on USB. Phase 2, after the flash: reset IN1 only.
+IN2 on → **hold IN2 10 s with the board off** → power on → release IN2 2 s later → boot ROM `0a5c:2712` on USB. Phase 2, after the flash: reset IN1 only.
 **Rule: never switch the two relays in the same instant** — the supply cannot pull in both coils at once, one of them does not
-take, and the controller's read-back still claims both. `cm5-relay.py rpiboot` keeps 1 s between IN2 on and power on
-(`--in2-gap`), and with `--power-sense enp4s0` checks that the board really lost power (the host interface cabled to the CM5
+take, and the controller's read-back still claims both. `cm5-relay.py rpiboot` holds IN2 10 s before the power comes back
+(`--in2-gap`; 1–2 s failed three times on 2026-11-20, 10 s entered at once), and with `--power-sense enp4s0` checks that the board really lost power (the host interface cabled to the CM5
 must lose carrier) before IN2 is switched. From 2026-11-12 to 2026-11-20 the tool sent both together: five failed entries in
 one day.
 After flashing, a normal boot = reset IN1 only (off → on). **Always run the paper test first:**
