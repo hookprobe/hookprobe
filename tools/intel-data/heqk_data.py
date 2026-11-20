@@ -112,6 +112,20 @@ def cmd_build(a):
     return 1 if rep["contamination_problems"] else 0
 
 
+def cmd_windows(a):
+    from heqkdata import windows
+    st, reg = Store(), registry.Registry()
+    out, man = windows.export(st, reg, a.source, a.purpose, a.split_rule, out_root=a.out, window=a.window,
+                              splits=a.splits.split(",") if a.splits else None,
+                              unseal=[a.unseal] if a.unseal else (), chunk_events=a.chunk_events, max_rows=a.max_rows)
+    print(f"windows {man['version']} -> {out}")
+    for f in man["files"]:
+        print(f"  {f['scenario']:<34} {f['split']:<5} windows={f.get('windows', 0)} events={f.get('events', 0)}")
+    for k, v in sorted(man["skipped"].items()):
+        print(f"  skipped {k}: {v}")
+    return 0
+
+
 def cmd_validate(a):
     v = schema.default()
     name = SCHEMA_IDS.get(a.schema, a.schema)
@@ -226,6 +240,18 @@ def main(argv=None):
     s.add_argument("--cap", type=int, default=None, help="max records per source per collection (deterministic sample)")
     s.add_argument("--collections")
     s.set_defaults(fn=cmd_build)
+    s = sub.add_parser("windows", help="host-hour windows of FULL captures for tools/neuro-research")
+    s.add_argument("source")
+    s.add_argument("--purpose", required=True, choices=licensing.PURPOSES)
+    s.add_argument("--split-rule", default="neuro-sha256-mod3")
+    s.add_argument("--splits", help="comma list, e.g. dev")
+    s.add_argument("--window", default="host-hour", choices=["host-hour", "scenario-hour"],
+                   help="scenario-hour reproduces gen_t0_iot23.py (acceptance test)")
+    s.add_argument("--max-rows", type=int, default=1_500_000, help="scenario-hour only")
+    s.add_argument("--chunk-events", type=int, default=50_000, help="host-hour: at most N events per line (0 = one line per window)")
+    s.add_argument("--unseal", metavar="SOURCE", help="export sealed holdouts of SOURCE (logged)")
+    s.add_argument("--out")
+    s.set_defaults(fn=cmd_windows)
     s = sub.add_parser("validate")
     s.add_argument("file")
     s.add_argument("--schema", default="training-example")

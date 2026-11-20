@@ -163,7 +163,7 @@ class Store:
         derived = None
         try:
             if sample_per_label:
-                if source.get("adapter") != "zeek_conn_labeled":
+                if (source.get("adapter") or (source["acquisition"] or {}).get("adapter")) != "zeek_conn_labeled":
                     raise RuntimeError(f"{source_id}: sampling at registration supports zeek_conn_labeled sources only")
                 from . import sample
                 derived = sample.zeek_per_label(path, tmp, sample_per_label, name=os.path.basename(path))
