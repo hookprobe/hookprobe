@@ -250,6 +250,8 @@ impl DecideCtx {
     /// detector sets it explicitly when the distinct-port wall is crossed.
     #[inline]
     pub fn for_src(src: u32) -> Self {
+        // ADR 0067 D1 work counter (a plain load + store: no atomic read-modify-write on a packet path).
+        CTX_BUILDS.store(CTX_BUILDS.load(core::sync::atomic::Ordering::Relaxed).wrapping_add(1), core::sync::atomic::Ordering::Relaxed);
         DecideCtx {
             allowlisted: is_allowlisted(src),
             confirmed: crate::ratelimit::scan_confirmed(src as u64),
@@ -323,6 +325,9 @@ pub fn is_allowlisted(src: u32) -> bool {
     let mask = if len == 0 { 0 } else { u32::MAX << (32 - len) };
     (src & mask) == (net & mask)
 }
+
+/// How many times `DecideCtx::for_src` ran since boot (ADR 0067 D1 work counter).
+pub static CTX_BUILDS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// The core policy: `FindingClass` × `DecideCtx` → `Verdict`. Default is `Observe`.
 /// The management floor short-circuits every ENFORCEABLE class to `Allowlisted`

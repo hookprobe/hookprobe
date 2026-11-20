@@ -7755,6 +7755,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();
         let _ = rulepack::guard_selftest();
+        let _ = rules::lazy_ctx_selftest();
         let _ = fwfiles::selftest();
         let _ = inspshed::selftest();
         #[cfg(feature = "netsvc")]

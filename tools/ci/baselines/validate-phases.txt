@@ -126,6 +126,7 @@ Pjitcall
 Pjournalsweep
 Planrelay
 Plateral6
+Plazyctx
 Pm6export
 Pmc
 Pmcauth
