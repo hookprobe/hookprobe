@@ -107,6 +107,8 @@ pub struct TlsHost {
     /// A reset left the server un-initialised: the next permitted call re-INITs it first. (The reset used to re-INIT
     /// through `call` itself — an INIT that faulted reset again and recursed without bound.)
     need_init: bool,
+    /// H6c: the known-answer digests the functional probe recorded this boot (None = not recorded yet).
+    probe_gold: [Option<u64>; 2],
     pub tls_errors: u32,
 }
 
@@ -161,6 +163,7 @@ impl TlsHost {
             restarts: 0,
             sup: hal::superv::Sup::new(hal::superv::entry("el0-tlshost").unwrap_or(&hal::superv::TABLE[0])),
             need_init: false,
+            probe_gold: [None; 2],
             tls_errors: 0,
         };
         for s in parsed.segs[..parsed.nsegs].iter() {
@@ -385,7 +388,28 @@ impl TlsHost {
         if b.status == ST_PANIC {
             return None;
         }
-        if g.status == ST_OK && g.plain_len == HTTP_REC_LEN && b.status != ST_OK && !tamper {
+        let mut good = g.status == ST_OK && g.plain_len == HTTP_REC_LEN && b.status != ST_OK;
+        // H6c known answers: the parsed RECORD of two requests must equal what this server answered the first time this
+        // boot (taken twice then) — a parser that still accepts requests but fills the record wrongly fails here.
+        const KNOWN: [&[u8]; 2] = [
+            b"GET /api/health?x=1&y=two HTTP/1.1\r\nHost: 10.99.0.1\r\nCookie: s=abcdef0123456789\r\nAccept: */*\r\n\r\n",
+            b"POST /api/login HTTP/1.1\r\nHost: heqk.local\r\nContent-Length: 11\r\nContent-Type: application/x-www-form-urlencoded\r\nOrigin: https://heqk.local\r\n\r\ntoken=abcde",
+        ];
+        for (k, req) in KNOWN.into_iter().enumerate() {
+            if !good {
+                break;
+            }
+            let Some(d) = self.digest_call(req) else { return None };
+            match self.probe_gold[k] {
+                Some(x) => good = d == x,
+                None => match self.digest_call(req) {
+                    None => return None,
+                    Some(d2) if d2 == d => self.probe_gold[k] = Some(d),
+                    Some(_) => good = false,
+                },
+            }
+        }
+        if good && !tamper {
             return Some(true);
         }
         let _ = crate::superv::server_probe_failed("el0-tlshost");
@@ -408,10 +432,14 @@ impl TlsHost {
     pub fn swifi_raw(&mut self, cmd: u32, conn: usize, input: &[u8]) -> u32 {
         self.call(cmd, conn, input, 0).status
     }
-    /// H6b: one workload call (the HTTP request parser) — a digest of (status, record length, record bytes). None =
-    /// it faulted / was refused.
+    /// H6b campaign name of [`TlsHost::digest_call`].
     #[cfg(feature = "swifi")]
     pub fn swifi_work(&mut self, input: &[u8]) -> Option<u64> {
+        self.digest_call(input)
+    }
+    /// One HTTP-parser call reduced to a digest of (status, record length, record bytes). None = it faulted / was
+    /// refused.
+    pub fn digest_call(&mut self, input: &[u8]) -> Option<u64> {
         let r = self.call(CMD_HTTP_PARSE, 0, input, 0);
         if r.status == ST_PANIC {
             return None;
