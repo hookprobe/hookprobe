@@ -20,6 +20,7 @@ The engine **observes and scores**. It never decides enforcement (ADR 0023, cont
 | The integer design loses nothing against the float DNA | **measured** (Python integer reference vs float, same experiments) | synthetic, 5 seeds: AUC 0.999 = 0.999 (10 days); **0.929 vs 0.928** (12 h cold start); identical per-kind detection, drift alerts and nuisance. IoT-23: Hue honeypot **2.00 alarms/day in both**; onset 14/14, all novelty-driven, in both. `docs/research/neuro/data/e-n0-*` |
 | The Rust port equals the integer reference bit for bit | **passed** (host, rustc 1.99.0-nightly 9f36de775 2026-07-19, the heqk pin) | `neuro-core/tests/golden.rs`: 1,200 hour closes (155 alarms, Bloom rotations at 168/336 h), every score part and the final profile bit-exact; 27 unit checks; **1,296 B per device** (real struct size) |
 | `el0-neuro` builds for heqk | **passed** for `aarch64-unknown-none-softfloat`, QEMU and CM5 variants; clippy clean | CM5 ELF: code 5.4 KB RX at 0x1_4026_0000, rodata 512 B R, **.bss 83 KB RW with 0 bytes in the file**: about 6 KB embedded in the kernel image. **Zero FP/SIMD instructions** (objdump) |
+| Peer keys for the data plane (`neuro-core::peerkey`) equal the Python reference bit for bit | **passed** (host) | `neuro-core/tests/peerkey.rs`: 3,000 keys in 5 modes and 4,000 name-table operations (64-entry table, evictions) identical to `unsw_to_d1.py`; `NameEntry` 32 B, `NameTable<4096>` 128 KiB |
 | Runs in QEMU-heqk / on CM5 | **not started** | needs HomePods: wire the crate into `kernel/build.rs`, assign the address range, move `abi.rs` into `hal/` (`docs/research/neuro/12` R1) |
 
 ## Run the checks
@@ -65,6 +66,10 @@ python3 -I tools/neuro-research/gen_golden.py os/neuro/neuro-core
    The golden vectors show this, the float DNA has the same formula, and IoT-23 has no DNS to test it.
    It needs a minimum query count before the NX term counts. That fix belongs on a dev split of real
    DNS data, not here.
-2. Kernel side (HomePods): fingerprinting in the data plane, an hourly `CMD_CLOSE_HOUR`, and alarms as
-   evidence-graph nodes with the driver named.
+2. **Evidence only (decided by D1, `docs/research/neuro/17`–`19`).** On six months of real IoT traffic the
+   engine detects every injected attack class but raises 72 benign deviations per device per week, and
+   neither a DNS rule, service-keyed peers nor a per-device threshold makes it quiet without losing
+   detection. Its result is therefore **evidence, never an alert**. The kernel-side wiring (HomePods) is
+   specified in `docs/research/neuro/20`: service-keyed peer fingerprints (`neuro-core::peerkey`, below),
+   an hourly `CMD_CLOSE_HOUR`, and a "behaviour deviation" evidence node with the driver named.
 3. Multi-day benign traffic for the nuisance rate (`docs/research/neuro-engine` E-BM2).

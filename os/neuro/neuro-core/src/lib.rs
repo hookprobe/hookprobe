@@ -16,6 +16,7 @@
 
 mod log2_lut;
 pub use log2_lut::LOG2_LUT;
+pub mod peerkey;
 
 // ---- parameters (mirror dna_fixed.py) ------------------------------------------------------------------
 pub const BLOOM_BITS: usize = 1024;
