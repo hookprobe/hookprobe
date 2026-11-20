@@ -32,6 +32,8 @@ wifi-pmkid-fix = []
 # BENCH ONLY: does this firmware run a second BSS (guest SSID)? mbss read-back/set + bsscfg:ssid create, logged.
 guestprobe = []
 cm5 = [] # BCM2712 (Pi CM5) peripheral addresses instead of QEMU virt
+# ADR 0067 L0.1: the CYW43455 vendor files are NOT linked in; the kernel installs verified files at boot.
+fwfiles = []
 # arm64-cloud tier (OCI Ampere A1 / QEMU virt gic-version=3): GICv3 sysreg CPU interface +
 # redistributors instead of the GICv2 MMIO GICC. Not combinable with cm5 (GIC-400 = v2).
 gicv3 = []

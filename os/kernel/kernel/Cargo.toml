@@ -152,6 +152,9 @@ stajoin = ["cm5"]
 # Build for real hardware (Raspberry Pi CM5 / BCM2712): switches peripheral
 # addresses + linker load address, and boots a minimal serial "hello" first.
 cm5 = ["arch-aarch64/cm5"]
+# ADR 0067 L0.1: read the CYW43455 vendor files from the boot partition (SHA-256 pinned, kernel::fwfiles)
+# instead of linking them into the image. Not in the shipping flavour until metal batch B1 passes.
+fwfiles = ["arch-aarch64/fwfiles"]
 # arm64-cloud tier (OCI Ampere A1), booted by efiboot (UEFI) — see tools/oci-a1/README.md.
 # GICv3 + virtio-pci (modern) + SMCCC (PSCI power, hypervisor TRNG). ACPI-driven discovery
 # and virtio-scsi follow.
