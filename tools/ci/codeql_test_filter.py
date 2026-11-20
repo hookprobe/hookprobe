@@ -10,8 +10,11 @@ Two rules, deliberately different in scope:
   1. Items under `#[cfg(test)]` / `#[cfg(all(test, ..))]` / `#[test]` are never compiled into a device image, so
      results there are dropped for EVERY rule. That includes whole FILES whose `mod` declaration is under such an
      attribute (`#[cfg(test)] mod testutil;`), directly or through a test-only parent module.
-  2. On-device known-answer self-tests (`fn ...selftest...`) DO ship, so only `rust/hard-coded-cryptographic-value`
-     is dropped there (their fixed vectors are public test vectors); every other rule still sees them.
+  2. On-device known-answer self-tests DO ship in test builds, so only `rust/hard-coded-cryptographic-value` is
+     dropped there (their fixed vectors are public test vectors); every other rule still sees them. A self-test is
+     a `fn ...selftest...`, a `mod ...selftest...` block, or an item under `#[cfg(feature = "...selftest...")]`
+     (e.g. export.rs's `#[cfg(feature = "securechannel-selftest")] mod selftest`, #1372 — a feature the shipping
+     guard keeps out of every device image).
 
 Everything removed is printed (rule, file:line, why), so the CI log shows exactly what the filter hid.
 
@@ -27,6 +30,8 @@ import sys
 CRYPTO_RULE = "rust/hard-coded-cryptographic-value"
 TEST_ATTR = re.compile(r"#\[\s*(?:cfg\s*\(\s*(?:all\s*\(\s*)?test\b|test\s*\])")
 SELFTEST_FN = re.compile(r"\bfn\s+\w*(?:selftest|self_test)\w*\s*[<(]")
+SELFTEST_MOD = re.compile(r"\bmod\s+\w*(?:selftest|self_test)\w*\s*(?=\{)")  # stop BEFORE the brace: _block_end counts it
+SELFTEST_FEATURE = re.compile(r"#\[\s*cfg\s*\(\s*(?:all\s*\(\s*)?feature\s*=\s*\"[^\"]*(?:selftest|self-test)[^\"]*\"")
 
 
 def _mask(src: str) -> str:
@@ -89,11 +94,20 @@ def test_ranges(src: str):
     code = _mask(src)
     line_at = lambda off: code.count("\n", 0, off) + 1
     out = []
-    for rx, kind in ((TEST_ATTR, "test"), (SELFTEST_FN, "selftest")):
+    for rx, kind in ((TEST_ATTR, "test"), (SELFTEST_FN, "selftest"), (SELFTEST_MOD, "selftest")):
         for m in rx.finditer(code):
             end = _block_end(code, m.end())
             if end:
                 out.append((line_at(m.start()), line_at(end), kind))
+    # the feature NAME is a string literal, which _mask blanks: match the raw source, but only where the masked
+    # text still has the '#' (so a match inside a comment or string does not count); offsets are identical
+    for m in SELFTEST_FEATURE.finditer(src):
+        if code[m.start()] != "#":
+            continue
+        close = code.find("]", m.end())
+        end = _block_end(code, close + 1) if close >= 0 else None
+        if end:
+            out.append((line_at(m.start()), line_at(end), "selftest"))
     return out
 
 

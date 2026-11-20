@@ -105,6 +105,43 @@ class Filter(unittest.TestCase):
         self.assertEqual(len(doc["runs"][0]["results"]), 2)
 
 
+class SelftestScope(unittest.TestCase):
+    """#1372: a fixed key inside `#[cfg(feature = "securechannel-selftest")] mod selftest { fn channel_checks() }` —
+    a self-test module whose fn name does not say "selftest"."""
+    SRC = (
+        'pub fn real() -> [u8; 4] { [1, 2, 3, 4] }\n'
+        '#[cfg(feature = "securechannel-selftest")]\n'
+        'mod selftest {\n'
+        '    fn channel_checks() -> bool {\n'
+        '        let k = [0x42u8; 32];\n'
+        '        k[0] == 0x42\n'
+        '    }\n'
+        '}\n'
+        '#[cfg(feature = "netsvc")]\n'
+        'pub fn served() -> [u8; 2] { [5, 6] }\n'
+    )
+
+    def kinds(self, needle):
+        n = self.SRC.split("\n").index(next(l for l in self.SRC.split("\n") if needle in l)) + 1
+        return {k for a, b, k in f.test_ranges(self.SRC) if a <= n <= b}
+
+    def test_selftest_feature_module_is_selftest(self):
+        self.assertEqual(self.kinds("[0x42u8; 32]"), {"selftest"})
+
+    def test_feature_attribute_alone_counts_but_not_in_a_comment(self):
+        src = ('// #[cfg(feature = "x-selftest")] is how the vectors are gated\n'
+               'pub fn prod() -> [u8; 1] { [1] }\n'
+               '#[cfg(feature = "wifi-selftest")]\n'
+               'fn checks() -> [u8; 1] { [7] }\n')
+        r = f.test_ranges(src)
+        self.assertEqual({k for a, b, k in r if a <= 2 <= b}, set())        # prod fn after the comment
+        self.assertEqual({k for a, b, k in r if a <= 4 <= b}, {"selftest"})
+
+    def test_other_features_and_production_are_not(self):
+        self.assertEqual(self.kinds("[5, 6]"), set())
+        self.assertEqual(self.kinds("[1, 2, 3, 4]"), set())
+
+
 class TestOnlyFiles(unittest.TestCase):
     """A file whose `mod` declaration is under #[cfg(test)] is test code as a whole (#1370 / #1371: evidence-export's
     `#[cfg(test)] mod testutil;`), while a sibling declared without it is production code (#1369: anon.rs)."""
