@@ -3063,10 +3063,14 @@ fn cm5_p10_probe() {
                 kprint!("   [P10-B sdio] CCCR SPEED={:#04x} (SHS={}) HOST_CTRL1={:#04x} (HISPD={}) => SDCLK {} MHz {}\n",
                     spd, spd & 1, hc1, (hc1 >> 2) & 1, mhz, if mhz > 12 { "High-Speed, verified over 64 CMD53 reads" } else { "default speed (fallback)" });
             }
+            if !cyw43::firmware_present() {
+                kprint!(" [P10-B] SKIPPED — no Wi-Fi vendor files installed: nothing was uploaded to the chip (the lines below are the untouched chip's state)\n");
+            } else {
             kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {} (stage-B step {})\n",
                 if f2 { "PASS" } else { "SILENT" }, cyw43::fw_bin().len(),
                 if f2 { "ready (firmware alive)" } else { "not ready — see step + EROM diag" },
                 cyw43::fw_last_step());
+            }
             kprint!("   [P10-B diag] erom_ptr={:#010x} CR4 regbase={:#010x} wrapbase={:#010x}\n",
                 erom, cr4b, cr4w);
             let (cstage, cint, cps) = cyw43::cmd53_diag();
