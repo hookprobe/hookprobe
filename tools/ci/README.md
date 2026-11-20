@@ -116,3 +116,6 @@ call it; it is a no-op when the pinned blob is already staged.
    `METAL_BENCH_RUNNER=true` (`gh variable set METAL_BENCH_RUNNER --body true`); without it
    `metal.yml` is skipped rather than queueing for a runner that does not exist.
 4. A tag ruleset protecting `v*` (only maintainers may create release tags).
+5. Optional: an ARM64 gate runner (an Apple Silicon Mac in an aarch64 Ubuntu VM) for `arm-gates.yml`, which runs g0 g1 g2 on
+   main pushes and g4r nightly, never on PRs. Setup and the local gate box: [`runner/README.md`](runner/README.md).
+   Enable it with `gh variable set ARM_GATES_RUNNER --body true`.

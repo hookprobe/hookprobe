@@ -1,0 +1,42 @@
+# hp-gates.lima.yaml — an aarch64 Ubuntu 24.04 VM for running the HookProbe gate ladder on an Apple Silicon Mac
+# (tools/ci/runner/README.md). Same distro + GNU userland as the GitHub runners, so tools/ci/gates.sh,
+# os/kernel/validate.sh and mc-e2e.sh run unchanged (native macOS has bash 3.2, BSD mktemp, keg-only sfdisk).
+#
+#   limactl start --name=hp-gates tools/ci/runner/hp-gates.lima.yaml        # local gate box
+#   limactl start --name=hp-runner tools/ci/runner/hp-gates.lima.yaml       # GitHub runner (arm-gates.yml)
+#
+# Isolation: NO host mounts. Gate code (build.rs, tests) runs inside the VM only; repos are cloned inside it.
+vmType: vz
+arch: aarch64
+cpus: 6
+memory: 8GiB
+disk: 100GiB
+images:
+  - location: "https://cloud-images.ubuntu.com/releases/noble/release/ubuntu-24.04-server-cloudimg-arm64.img"
+    arch: aarch64
+mounts: []
+# Lets QEMU inside the VM use KVM once heqk boots under hardware virtualization (Apple M3 or later, macOS 15+,
+# Lima >= 1.1). Harmless while the gates still use TCG. Remove the line on an older Lima that rejects it.
+nestedVirtualization: true
+containerd:
+  system: false
+  user: false
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      export DEBIAN_FRONTEND=noninteractive
+      apt-get update
+      # The gate tool list (tools/ci/apt-install.sh callers) + what gates.sh/mc-e2e.sh need from python.
+      apt-get install -y --no-install-recommends \
+        qemu-system-arm mtools dosfstools fdisk shellcheck python3-yaml python3-cryptography \
+        build-essential pkg-config ca-certificates curl git jq
+  - mode: user
+    script: |
+      #!/bin/bash
+      set -eux -o pipefail
+      # rustup only; the pinned nightly comes from os/kernel/rust-toolchain.toml (installed on first use or by
+      # the workflow's dtolnay/rust-toolchain step).
+      command -v rustup >/dev/null 2>&1 || \
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal --default-toolchain stable

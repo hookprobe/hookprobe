@@ -1,0 +1,79 @@
+# =============================================================================
+# arm-gates.yml — the gate ladder on a self-hosted ARM64 runner (an Apple Silicon Mac running an aarch64
+# Ubuntu VM, tools/ci/runner/README.md). heqk is aarch64, so an ARM host is the natural gate box: today it
+# runs QEMU under TCG like the GitHub runners (measured on an M5 Pro: g2 green in 319 s vs 351-547 s
+# hosted); once heqk boots with hardware virtualization (the pre-MMU heap-lock finding) the same box can
+# run the QEMU gates with KVM instead of emulation.
+#
+# What runs here: g0 g1 g2 on every push to main, plus g4r nightly. NOT g3 (Mission Control e2e +
+# real browser) and NOT g4 (supply chain): they stay on GitHub-hosted runners in ci.yml / nightly.yml.
+# This workflow is ADDITIONAL signal. The required PR checks (ci-ok, the heqk QEMU gate) are unchanged
+# and stay GitHub-hosted.
+#
+# SECURITY (same model as metal.yml): never triggered by pull_request (G0 W2 enforces it), main ONLY,
+# no secrets, read-only token, credentials not persisted in the checkout. Operator-side:
+#   - a runner group (or repo-level runner) restricted to hookprobe/hookprobe,
+#     selected workflow `.github/workflows/arm-gates.yml@refs/heads/main`;
+#   - the runner lives in its own VM with no host mounts (tools/ci/runner/hp-gates.lima.yaml);
+#   - set the repository variable ARM_GATES_RUNNER=true once the runner is online. Until then every job
+#     is skipped instead of queueing for 24 h for a runner that does not exist.
+# =============================================================================
+name: arm-gates
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: arm-gates
+  cancel-in-progress: false
+
+env:
+  CI_STRICT: "1"            # a missing tool is a FAIL here, never a silent skip
+  CARGO_TERM_COLOR: never
+  HEQK_QEMU_TIMEOUT: "900"  # TCG until heqk boots under KVM/HVF
+
+jobs:
+  gates:
+    name: "arm64 · g0 g1 g2 (+ g4r nightly)"
+    if: >-
+      github.repository == 'hookprobe/hookprobe' && github.ref == 'refs/heads/main'
+      && vars.ARM_GATES_RUNNER == 'true'
+    runs-on: [self-hosted, linux, ARM64, hp-gates]
+    timeout-minutes: 120
+    env:
+      # Build caches OUTSIDE the checkout (checkout cleans the workspace): persistent on a self-hosted box.
+      CI_TARGET_ROOT: ${{ github.workspace }}/../hp-cache/g1
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1   # v7.0.1
+        with: { fetch-depth: 0, persist-credentials: false }   # g1's clippy ratchet lints the base commit (W2c)
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8   # master; toolchain = os/kernel/rust-toolchain.toml pin
+        with:
+          toolchain: nightly-2026-07-20
+          components: rust-src, llvm-tools, clippy
+          targets: aarch64-unknown-none-softfloat, wasm32-wasip1
+      - uses: actions/setup-node@v7   # g4r: the shipping flavour embeds the Mission Control UI (gates.sh ensure_ui)
+        with: { node-version: "24" }
+      - name: Gate tooling (idempotent; the VM is pre-provisioned with the same list)
+        run: tools/ci/apt-install.sh qemu-system-arm mtools dosfstools fdisk shellcheck python3-yaml
+      # One CI_OUT per call: gates.sh truncates its results file at the start of every invocation.
+      - run: tools/ci/gates.sh g0 g1
+        env: { CI_OUT: "${{ github.workspace }}/out/ci/g0-g1" }
+      - run: tools/ci/gates.sh g2
+        if: success() || failure()
+        env:
+          CI_OUT: ${{ github.workspace }}/out/ci/g2
+          CARGO_TARGET_DIR: ${{ github.workspace }}/../hp-cache/validate
+      - run: tools/ci/gates.sh g4r
+        if: github.event_name == 'schedule' && (success() || failure())
+        env: { CI_OUT: "${{ github.workspace }}/out/ci/g4r" }
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9   # v7.0.2
+        with: { name: arm-gates, path: out/ci, if-no-files-found: ignore }

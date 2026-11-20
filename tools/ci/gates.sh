@@ -96,8 +96,13 @@ gate_g1() {
   fi
   # Host unit tests on STABLE: nightly build-std of std for the host broke on a newer nightly in CI
   # (E0152 duplicate lang item `sized`, 2026-11-08) and host tests need no build-std at all.
-  step "host tests: heqk hal (policy / ACS / routing units)" bash -c "cd os/kernel/hal && CARGO_TARGET_DIR=$(tdir hal) cargo +stable test --release --target x86_64-unknown-linux-gnu"
-  step "host tests: heqk-tlsprov"      bash -c "cd os/kernel/tlsprov && CARGO_TARGET_DIR=$(tdir tlsprov) cargo +stable test --release --target x86_64-unknown-linux-gnu"
+  # --target overrides os/kernel's bare-metal default target; use the HOST triple so the same gate runs on
+  # x86_64 (GitHub-hosted, unchanged: resolves to x86_64-unknown-linux-gnu) and aarch64 (arm-gates.yml) hosts.
+  local HOST_TRIPLE
+  HOST_TRIPLE="$(rustc +stable -vV 2>/dev/null | sed -n 's/^host: //p')"
+  HOST_TRIPLE="${HOST_TRIPLE:-x86_64-unknown-linux-gnu}"
+  step "host tests: heqk hal (policy / ACS / routing units)" bash -c "cd os/kernel/hal && CARGO_TARGET_DIR=$(tdir hal) cargo +stable test --release --target $HOST_TRIPLE"
+  step "host tests: heqk-tlsprov"      bash -c "cd os/kernel/tlsprov && CARGO_TARGET_DIR=$(tdir tlsprov) cargo +stable test --release --target $HOST_TRIPLE"
   step "host tests: responder-sim"     bash -c "cd onboarding/enrollment/responder-sim && CARGO_TARGET_DIR=$(tdir responder-sim) cargo +stable test --release"
   step "host tests: superpop (G19)"    bash -c "cd onboarding/enrollment/superpop && CARGO_TARGET_DIR=$(tdir superpop) cargo +stable test --release"
   step "host tests: evidence-export"   bash -c "cd onboarding/enrollment/evidence-export && CARGO_TARGET_DIR=$(tdir evidence-export) cargo +stable test --release"
