@@ -3,6 +3,13 @@
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
 
+
+## 2026-11-20 — AB-21 step 1: the CM5 devicetree leaves `legacy/`
+
+- Operator asked the agent to prepare step 1, which edits the protected Red-tier `os/build/make-cm5-heqk-disk.sh` (one line). Guard A1 flags it by design; the operator authorised it in chat.
+- `bcm2712-rpi-cm5-cm5io.dtb` moved unchanged to `os/drivers/firmware/rpi-dtb/` (next to the CYW43455 blobs) with a `LICENSE.md`: built from raspberrypi/linux `rpi-6.12.y` @ `a923c1dc` (tarball sha256 `0564f61d…`). SPDX tags of the include chain at that commit: GPL-2.0 for the board files, GPL-2.0 OR MIT for `bcm2712.dtsi` / `bcm2712-rpi-cm5.dtsi`, none on `rp1.dtsi` → the blob is GPL-2.0. Flagged for the operator: every image that ships it must be able to point at that source.
+- Proof available on this Mac: 100% git rename; running the script's own lines 173–175 stages the same sha256 (`2ca3879f…`) as before; the path is used nowhere else in the script. A full byte-for-byte disk-image comparison was **not** run (needs sfdisk, mtools and keys: a Linux host or the bench).
+- The other `out/` files (4 more `.dtb`, logs, checksums) are unused; they go with the rest of `legacy/linux-tier` (#1396 follow-up).
 ## 2026-11-20 — AB-16 (agent part), AB-08 closed
 
 - `docs/architecture/MissionControl.md` §12 still described the legacy Linux tier: a Containerfile builder with `.iso`/`.qcow2` outputs, modules with `runtime` wasm/container/sysext from a Marketplace, and `bootc upgrade` updates. §10 called the model "open core". Rewrote these four sentences to what heqk does: boot images signed by `heqk-sign`, signed packs with one-generation rollback (`packUpload.ts`), A/B `tryboot` updates (`make-cm5-heqk-image.sh`), AGPL-3.0-only + commercial (`LICENSING.md`). Target and legacy wording kept in brackets.

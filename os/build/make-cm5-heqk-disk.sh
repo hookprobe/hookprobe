@@ -170,7 +170,7 @@ if [ "$ZERO_LINUX" = 1 ]; then
   TEMPLATE="$HEQK/cm5-boot/config-nolinux.txt"
 else
   TEMPLATE="$HEQK/cm5-boot/config.txt"
-  DTB="${HEQK_DTB:-$ROOT/legacy/linux-tier/builder/kernel-build/out/bcm2712-rpi-cm5-cm5io.dtb}"
+  DTB="${HEQK_DTB:-$ROOT/os/drivers/firmware/rpi-dtb/bcm2712-rpi-cm5-cm5io.dtb}"   # source + licence: its LICENSE.md
   [ -s "$DTB" ] || { echo "FATAL: proven layout needs $DTB (set HEQK_DTB, or use --zero-linux)"; exit 1; }
   cp "$DTB" "$STAGE/bcm2712-rpi-cm5-cm5io.dtb"
 fi

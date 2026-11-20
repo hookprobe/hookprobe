@@ -12,7 +12,7 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-AB-16 (agent part): `MissionControl.md` §12 described the legacy Linux tier (Containerfile builder, wasm/container/sysext modules, Marketplace, `bootc upgrade`) and an open-core model. Now matches heqk: signed boot images, signed packs, A/B `tryboot` updates, AGPL + commercial. Branch `agent/docs-ab16`, draft PR.
+AB-21 step 1 (operator: "You prepare step 1"): the CM5 `.dtb` moves from `legacy/linux-tier/builder/kernel-build/out/` to `os/drivers/firmware/rpi-dtb/` with its source and licence; `make-cm5-heqk-disk.sh` default repointed. Branch `agent/move-cm5-dtb`, draft PR. Unblocks deleting the last `legacy/linux-tier` folder.
 
 ## Delivery ledger
 
@@ -28,6 +28,7 @@ AB-16 (agent part): `MissionControl.md` §12 described the legacy Linux tier (Co
 | HookProbe logo in Mission Control (rails + favicon) | `agent/mc-brand-logo` | yes | astro check 0 errors; build 27 pages; browser: mark renders in the rail (22 px, theme colour), favicon is the mark | see PR | yes | [#1312](https://github.com/hookprobe/hookprobe/pull/1312) | yes (2026-11-18) |
 | Sample incident uses real rule ids (1200125, 1200113) | `agent/mc-sample-rule-ids` | yes | unit 12/12; astro check 0 errors; build 27 pages; browser: sample incident shows the new story and rule 1200125, no old DNS-feed text | see PR | yes | [#1318](https://github.com/hookprobe/hookprobe/pull/1318) | yes (2026-11-18) |
 | AB-16 `MissionControl.md` §12 matches heqk; backlog statuses refreshed | `agent/docs-ab16` | yes | n/a (docs); every new claim checked against `os/build/`, `packUpload.ts`, `shipping-features.txt`, `LICENSING.md`, `mcstate.rs` | pending | yes | draft | no |
+| AB-21 step 1: CM5 `.dtb` out of `legacy/` | `agent/move-cm5-dtb` | yes | 100% rename; the script's own staging lines (173–175) stage sha256 `2ca3879f…` as before; the path is used nowhere else in the script; `bash -n` ok; **full disk-image build not run** (needs sfdisk/mtools/keys: Linux host or bench) | pending | yes | draft | no |
 
 AB-07 needed no change: the CVE tab has said "This device does not report software exposure yet" since `47a2ad85` (2026-11-10). The audit finding was wrong.
 
