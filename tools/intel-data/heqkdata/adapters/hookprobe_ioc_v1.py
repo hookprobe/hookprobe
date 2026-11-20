@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""hookprobe-ioc-v1 feed (ADR 0027 D1; legacy/linux-tier/security/threat-intel/snapshots/) -> indicator.
+"""hookprobe-ioc-v1 feed (ADR 0027 D1; the snapshots lived in legacy/linux-tier/security/threat-intel/, removed in #1396) -> indicator.
 
 The in-repo snapshot mixes real Feodo entries with HookProbe canary indicators (RFC 5737/2606 values,
 EICAR). Canaries are kept but tagged 'canary' and labelled null: they test plumbing, they are not
