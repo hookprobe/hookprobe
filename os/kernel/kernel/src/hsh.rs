@@ -28,6 +28,57 @@ mod el0 {
     #[cfg(not(feature = "cm5"))]
     const BUDGET_US: u64 = 2_000_000;
 
+    /// H6 (swifi campaign only): every image page of the server (frame, file offset, file bytes, class 0 = text,
+    /// 1 = read-only data, 2 = writable data) — the campaign flips bits in any of them and puts them all back.
+    #[cfg(feature = "swifi")]
+    static mut SWIFI_IMG: ([(usize, usize, usize, u8); 160], usize) = ([(0, 0, 0, 0); 160], 0);
+    #[cfg(feature = "swifi")]
+    fn swifi_note(f: usize, off: usize, n: usize, class: u8) {
+        let t = unsafe { &mut *core::ptr::addr_of_mut!(SWIFI_IMG) };
+        if t.1 < t.0.len() {
+            t.0[t.1] = (f, off, n, class);
+            t.1 += 1;
+        }
+    }
+    #[cfg(feature = "swifi")]
+    fn swifi_flip_image(r: u64) -> Option<u8> {
+        let t = unsafe { &*core::ptr::addr_of!(SWIFI_IMG) };
+        if t.1 == 0 {
+            return None;
+        }
+        let (f, _, n, class) = t.0[(r as usize) % t.1];
+        let span = if n > 0 { n } else { 0x1000 };
+        let bit = ((r >> 16) as usize) % (span * 8);
+        unsafe { *((f + bit / 8) as *mut u8) ^= 1 << (bit % 8) };
+        if class == 0 {
+            arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
+        }
+        Some(class)
+    }
+    #[cfg(feature = "swifi")]
+    fn swifi_restore_image() {
+        let t = unsafe { &*core::ptr::addr_of!(SWIFI_IMG) };
+        for &(f, off, n, class) in &t.0[..t.1] {
+            unsafe {
+                core::ptr::write_bytes(f as *mut u8, 0, 0x1000);
+                if n > 0 {
+                    core::ptr::copy_nonoverlapping(HSH_ELF.as_ptr().add(off), f as *mut u8, n);
+                }
+            }
+            if class == 0 {
+                arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
+            }
+        }
+    }
+
+    /// The campaign's known lines (H6d): reads, help, the parser's refusals. A line that answers ST_REQUEST gets a
+    /// fixed synthetic reply, so the formatter runs too.
+    #[cfg(feature = "swifi")]
+    pub const KNOWN: [&[u8]; 16] = [
+        b"help", b"info", b"version", b"status", b"", b"    ", b"rm -rf", b"a b c d e f g h i j k l m", b"info | cat", b"info; reboot",
+        b"$(id)", b"'q'", b"config history", b"reboot", b"info\x1b[2J", b"help version",
+    ];
+
     pub struct Server {
         entry: usize,
         aspace: crate::el0as::El0As,
@@ -98,6 +149,8 @@ mod el0 {
                 if n > 0 {
                     unsafe { core::ptr::copy_nonoverlapping(HSH_ELF.as_ptr().add(g.offset + voff), f as *mut u8, n) };
                 }
+                #[cfg(feature = "swifi")]
+                swifi_note(f, g.offset + voff, n, if g.executable() { 0 } else if g.writable() { 2 } else { 1 });
                 if g.executable() {
                     arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
                 } else if g.writable() {
@@ -187,6 +240,66 @@ mod el0 {
                 crate::superv::server_ok("el0-hsh");
             }
             (st, (self.r32(H_OUT_LEN) as usize).min(OUT_MAX))
+        }
+        /// H6 (swifi campaign only): flip one bit in a random page of the server's image. Returns the class hit.
+        #[cfg(feature = "swifi")]
+        pub fn swifi_flip(&mut self, r: u64) -> Option<u8> {
+            swifi_flip_image(r)
+        }
+        /// H6: a raw call with any command id and input.
+        #[cfg(feature = "swifi")]
+        pub fn swifi_raw(&mut self, cmd: u32, input: &[u8]) -> u32 {
+            self.call(cmd, input).0
+        }
+        /// H6: put the image back between injections (not counted as a restart).
+        #[cfg(feature = "swifi")]
+        pub fn swifi_restore(&mut self) {
+            swifi_restore_image();
+            self.reset();
+            self.restarts -= 1;
+            self.sup = hal::superv::Sup::new(self.sup.entry);
+        }
+        /// H6d: known line `k` at the view role, reduced to a digest of (status, length, text) — and of the formatted
+        /// answer to a fixed synthetic reply when the line asks the kernel for something. None = it faulted.
+        #[cfg(feature = "swifi")]
+        pub fn known_call(&mut self, k: usize) -> Option<u64> {
+            self.role = 0;
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+            let (st, n) = self.call(CMD_LINE, KNOWN[k % KNOWN.len()]);
+            if st == ST_PANIC {
+                return None;
+            }
+            let mut fold = |srv: &Server, st: u32, n: usize| {
+                h = (h ^ ((st as u64) << 32 | n as u64)).wrapping_mul(0x0000_0100_0000_01b3);
+                let mut buf = [0u8; 256];
+                let mut off = 0;
+                while off < n {
+                    let c = (n - off).min(buf.len());
+                    srv.read(OUT_OFF + off, &mut buf[..c]);
+                    for b in &buf[..c] {
+                        h = (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+                    }
+                    off += c;
+                }
+            };
+            fold(self, st, n);
+            if st == ST_REQUEST && n == REQ_LEN {
+                let mut rq = [0u8; 4];
+                self.read(OUT_OFF, &mut rq);
+                // [msg u16][result u8 = 0][cmd0 u8] + 24 patterned payload bytes
+                let mut rep = [0u8; 28];
+                rep[..2].copy_from_slice(&rq[..2]);
+                rep[3] = rq[2];
+                for (i, b) in rep[4..].iter_mut().enumerate() {
+                    *b = (i as u8).wrapping_mul(29).wrapping_add(3);
+                }
+                let (st2, n2) = self.call(CMD_REPLY, &rep);
+                if st2 == ST_PANIC {
+                    return None;
+                }
+                fold(self, st2, n2);
+            }
+            Some(h)
         }
         /// Fail closed and recover: restore the image's data/bss pages and zero the IO region.
         fn reset(&mut self) {
@@ -538,6 +651,12 @@ pub fn ensure_loaded() -> bool {
     return el0::server().is_some();
     #[cfg(not(feature = "mctls"))]
     false
+}
+
+/// H6 campaign access to the EL0 shell server.
+#[cfg(all(feature = "swifi", feature = "mctls"))]
+pub fn swifi() -> Option<&'static mut el0::Server> {
+    el0::server()
 }
 
 pub fn stats() -> (bool, u64, u64, u64) {
