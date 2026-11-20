@@ -84,6 +84,18 @@ pub fn swifi_restore_image() {
     }
 }
 
+
+/// The requests the functional probe and the H6 campaign workload replay through the HTTP parser.
+pub const KNOWN: [&[u8]; 8] = [
+    b"GET / HTTP/1.1\r\nHost: heqk.local\r\n\r\n",
+    b"GET /api/health?x=1&y=two HTTP/1.1\r\nHost: 10.99.0.1\r\nCookie: s=abcdef0123456789\r\nAccept: */*\r\n\r\n",
+    b"POST /api/login HTTP/1.1\r\nHost: heqk.local\r\nContent-Length: 11\r\nContent-Type: application/x-www-form-urlencoded\r\nOrigin: https://heqk.local\r\n\r\ntoken=abcde",
+    b"POST /api/owner-rules HTTP/1.1\r\nHost: heqk.local\r\nX-HQ-CSRF: 0011223344556677\r\nContent-Length: 0\r\n\r\n",
+    b"HEAD /index.html HTTP/1.0\r\n\r\n",
+    b"GET /a/very/long/path/that/goes/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on HTTP/1.1\r\nHost: h\r\n\r\n",
+    b"GET / HTTP/1.1\r\nHost: heqk.local\r\n", // incomplete
+    b"\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03 not http at all", // a TLS record on the plain port
+];
 pub struct TlsHost {
     entry: usize,
     aspace: crate::el0as::El0As,
@@ -108,7 +120,7 @@ pub struct TlsHost {
     /// through `call` itself — an INIT that faulted reset again and recursed without bound.)
     need_init: bool,
     /// H6c: the known-answer digests the functional probe recorded this boot (None = not recorded yet).
-    probe_gold: [Option<u64>; 2],
+    probe_gold: [Option<u64>; KNOWN.len()],
     pub tls_errors: u32,
 }
 
@@ -163,7 +175,7 @@ impl TlsHost {
             restarts: 0,
             sup: hal::superv::Sup::new(hal::superv::entry("el0-tlshost").unwrap_or(&hal::superv::TABLE[0])),
             need_init: false,
-            probe_gold: [None; 2],
+            probe_gold: [None; KNOWN.len()],
             tls_errors: 0,
         };
         for s in parsed.segs[..parsed.nsegs].iter() {
@@ -389,23 +401,18 @@ impl TlsHost {
             return None;
         }
         let mut good = g.status == ST_OK && g.plain_len == HTTP_REC_LEN && b.status != ST_OK;
-        // H6c known answers: the parsed RECORD of two requests must equal what this server answered the first time this
+        // H6c known answers: the parsed RECORD of each KNOWN request must equal what this server answered the first time this
         // boot (taken twice then) — a parser that still accepts requests but fills the record wrongly fails here.
-        const KNOWN: [&[u8]; 2] = [
-            b"GET /api/health?x=1&y=two HTTP/1.1\r\nHost: 10.99.0.1\r\nCookie: s=abcdef0123456789\r\nAccept: */*\r\n\r\n",
-            b"POST /api/login HTTP/1.1\r\nHost: heqk.local\r\nContent-Length: 11\r\nContent-Type: application/x-www-form-urlencoded\r\nOrigin: https://heqk.local\r\n\r\ntoken=abcde",
-        ];
         for (k, req) in KNOWN.into_iter().enumerate() {
             if !good {
                 break;
             }
-            let Some(d) = self.digest_call(req) else { return None };
+            let d = self.digest_call(req)?;
             match self.probe_gold[k] {
                 Some(x) => good = d == x,
-                None => match self.digest_call(req) {
-                    None => return None,
-                    Some(d2) if d2 == d => self.probe_gold[k] = Some(d),
-                    Some(_) => good = false,
+                None => match self.digest_call(req)? {
+                    d2 if d2 == d => self.probe_gold[k] = Some(d),
+                    _ => good = false,
                 },
             }
         }
