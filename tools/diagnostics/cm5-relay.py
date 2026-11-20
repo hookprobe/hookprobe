@@ -34,6 +34,7 @@ Examples:
   tools/diagnostics/cm5-relay.py --backend hid --dev /dev/hidraw3 boot
 """
 import argparse
+import re
 import glob
 import os
 import sys
@@ -154,7 +155,13 @@ class Nano:
             sys.exit(f"relay command {line} failed: {reply or 'no reply'}")
 
     def status(self):
-        return self.cmd("?")
+        # a garbled reply (a stale byte, 2026-11-20 20:27: "power=0 r\ufffd\ufffd=1") is read again, never acted on
+        for _ in range(4):
+            st = self.cmd("?")
+            if re.search(r"power=[01] rpiboot=[01]", st):
+                return st
+            time.sleep(0.3)
+        return st
 
 
 class Paper:
