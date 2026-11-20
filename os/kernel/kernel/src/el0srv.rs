@@ -166,6 +166,10 @@ mod imp {
         pub tx: PagedRing,
         rw: [(usize, usize, usize); RW_MAX],
         nrw: usize,
+        /// H6 (swifi campaign only): every image page (frame, file offset, file bytes, class 0 text / 1 read-only data /
+        /// 2 writable data).
+        #[cfg(feature = "swifi")]
+        swifi_img: alloc::vec::Vec<(usize, usize, usize, u8)>,
         pub calls: u64,
         pub faults: u64,
         pub restarts: u64,
@@ -269,6 +273,8 @@ mod imp {
             tx: PagedRing { frames: [0; RING_PAGES] },
             rw: [(0, 0, 0); RW_MAX],
             nrw: 0,
+            #[cfg(feature = "swifi")]
+            swifi_img: alloc::vec::Vec::new(),
             calls: 0,
             faults: 0,
             restarts: 0,
@@ -293,6 +299,8 @@ mod imp {
                 if n > 0 {
                     unsafe { core::ptr::copy_nonoverlapping(sp.elf.as_ptr().add(g.offset + voff), f as *mut u8, n) };
                 }
+                #[cfg(feature = "swifi")]
+                s.swifi_img.push((f, g.offset + voff, n, if g.executable() { 0 } else if g.writable() { 2 } else { 1 }));
                 let k = if g.executable() {
                     arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
                     Kind::Code
@@ -436,6 +444,41 @@ mod imp {
                 zero(f);
             }
             self.wipes += 1;
+        }
+        /// H6 (swifi campaign only): one flipped bit in a random image page. Returns the class hit.
+        #[cfg(feature = "swifi")]
+        pub fn swifi_flip(&mut self, r: u64) -> Option<u8> {
+            if self.swifi_img.is_empty() {
+                return None;
+            }
+            let (f, _, n, class) = self.swifi_img[(r as usize) % self.swifi_img.len()];
+            let span = if n > 0 { n } else { 0x1000 };
+            let bit = ((r >> 16) as usize) % (span * 8);
+            unsafe { *((f + bit / 8) as *mut u8) ^= 1 << (bit % 8) };
+            if class == 0 {
+                arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
+            }
+            Some(class)
+        }
+        /// H6: every image page back from the signed ELF, the control page / rings / persistent state zeroed, the
+        /// restart state fresh — each injection starts from a clean, empty server (not counted as a restart or wipe).
+        #[cfg(feature = "swifi")]
+        pub fn swifi_restore(&mut self) {
+            for i in 0..self.swifi_img.len() {
+                let (f, off, n, class) = self.swifi_img[i];
+                zero(f);
+                if n > 0 {
+                    unsafe { core::ptr::copy_nonoverlapping(self.elf.as_ptr().add(off), f as *mut u8, n) };
+                }
+                if class == 0 {
+                    arch_aarch64::mmu::sync_instruction_cache(f, 0x1000);
+                }
+            }
+            self.restore();
+            for &f in &self.state[..self.nstate] {
+                zero(f);
+            }
+            self.sup = hal::superv::Sup::new(self.sup.entry);
         }
         /// The server's name (the isolation report, the beat).
         #[allow(dead_code)]
@@ -1504,6 +1547,161 @@ pub mod keyer {
     }
 
     /// `[P-el0srv-keyer]` (QEMU): a full 4-way through el0-wifi against a simulated station.
+    // ---- H6f: el0-wpa in the fault-injection campaign (feature `swifi`, QEMU only) ----
+    /// Load a WPA security server for the campaign (the product one is only wired on the CM5).
+    #[cfg(feature = "swifi")]
+    pub fn swifi_setup() -> bool {
+        match super::imp::load_wpa() {
+            Ok(mut s) => {
+                let ok = matches!(s.call(hal::wpasrvabi::CMD_INIT), Call::Done(ST_OK, ..));
+                unsafe { WPA = Some(s) };
+                ok
+            }
+            Err(_) => false,
+        }
+    }
+    #[cfg(feature = "swifi")]
+    pub fn swifi_teardown() {
+        swifi_restore();
+        unsafe { WPA = None };
+    }
+    #[cfg(feature = "swifi")]
+    pub fn swifi_stats() -> (u64, u64) {
+        srv().map_or((0, 0), |s| (s.faults, s.restarts))
+    }
+    #[cfg(feature = "swifi")]
+    pub fn swifi_flip(r: u64) -> Option<u8> {
+        srv().and_then(|s| s.swifi_flip(r))
+    }
+    /// A raw call with any command id and input, past the keyer's containment logic.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_raw(cmd: u32, input: &[u8]) {
+        if let Some(s) = srv() {
+            let _ = s.call_io(cmd, input, &mut [0u8; 64]);
+        }
+    }
+    /// A clean, empty server and no containment state left from the injection.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_restore() {
+        if let Some(s) = srv() {
+            s.swifi_restore();
+        }
+        super::imp::keyx_zero();
+        unsafe {
+            WIPED = false;
+            PENDING = None;
+            FAULT_STA = None;
+            CONSEC = 0;
+        }
+    }
+    /// Known exchange `k` reduced to a digest; None = the server faulted during it. 0: a whole WPA2 4-way against a
+    /// simulated station (M1, a verified M2 -> M3, a verified M4 -> keyed; the frames, and the key in the transfer
+    /// slot, are part of the digest — the ANonce and GTK are the kernel's, so nothing in it is random). 1: an M2 with
+    /// a wrong MIC (must not produce M3), then abort. 2: the PMKSA count and the persistent-state counter. 3: a
+    /// handshake started and aborted (the station must be gone). Every exchange leaves the server without the station.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_known(k: usize) -> Option<u64> {
+        use hal::wpakeyer::{FRAME_MAX, KeyData};
+        let f0 = swifi_stats().0;
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut mix = |b: &[u8]| {
+            for x in b {
+                h = (h ^ *x as u64).wrapping_mul(0x0000_0100_0000_01b3);
+            }
+            h = (h ^ 0xff).wrapping_mul(0x0000_0100_0000_01b3);
+        };
+        let sta = [2, 0x5a, 0, 0, 0, 9];
+        let aa = [2, 0xaa, 0, 0, 0, 1];
+        let mut rsne = [0u8; 40];
+        rsne[..4].copy_from_slice(&[0x30, 0x02, 0x01, 0x00]);
+        let st = Start { sta, aa, pmk: [0x11; 32], akm8: false, pmkid: None, anonce: [0x22; 32],
+            kd: KeyData { rsne, rsne_len: 4, gtk: [0x33; 16], gtk_keyid: 1, igtk_kde: None } };
+        let snonce = [0x55u8; 32];
+        let ptk = hal::wpaauth::ptk(false, &st.pmk, &aa, &sta, &st.anonce, &snonce);
+        let mut kck = [0u8; 16];
+        kck.copy_from_slice(&ptk[..16]);
+        let frame = |replay: u64, secure: bool, good: bool| {
+            let mut f = [0u8; 99];
+            f[0] = 2;
+            f[1] = 3;
+            f[2..4].copy_from_slice(&95u16.to_be_bytes());
+            f[4] = 2;
+            f[5..7].copy_from_slice(&((if secure { 0x0300u16 } else { 0x0100 }) | 0x000a).to_be_bytes());
+            f[9..17].copy_from_slice(&replay.to_be_bytes());
+            if !secure {
+                f[17..49].copy_from_slice(&snonce);
+            }
+            let mut mic = hal::wpaauth::mic(&kck, &f, false);
+            if !good {
+                mic[0] ^= 0x80;
+            }
+            f[81..97].copy_from_slice(&mic);
+            f
+        };
+        let mut fr = [0u8; FRAME_MAX];
+        let mut out = |o: Option<Out>, fr: &[u8], mix: &mut dyn FnMut(&[u8])| match o {
+            None => mix(&[0]),
+            Some(Out::None) => mix(&[1]),
+            Some(Out::Send(n)) => {
+                mix(&[2]);
+                mix(&fr[..n.min(fr.len())]);
+            }
+            Some(Out::Keyed { done, tk }) => {
+                mix(&[3, done.auth.m4_mic_ok as u8]);
+                mix(&tk);
+            }
+            Some(Out::Failed(_)) => mix(&[4]),
+        };
+        let exp = |mix: &mut dyn FnMut(&[u8])| match expect(&sta) {
+            None => mix(&[9]),
+            Some(None) => mix(&[8]),
+            Some(Some((sec, n))) => mix(&[7, sec as u8, n as u8]),
+        };
+        match k {
+            0 => {
+                let o = start(&st, 0, &mut fr);
+                out(o, &fr, &mut mix);
+                exp(&mut mix);
+                let o = eapol(&sta, &frame(1, false, true), 10, &mut fr);
+                out(o, &fr, &mut mix);
+                exp(&mut mix);
+                let o = eapol(&sta, &frame(2, true, true), 20, &mut fr);
+                out(o, &fr, &mut mix);
+                if let Some(r) = super::imp::keyx_test_read(hal::wpasrvabi::keyx::SLOT_TK) {
+                    mix(&r.ea);
+                    mix(&r.key[..16]);
+                    mix(&[(r.key[..16] == ptk[32..48]) as u8]);
+                }
+                super::imp::keyx_zero();
+                exp(&mut mix);
+            }
+            1 => {
+                let o = start(&st, 0, &mut fr);
+                out(o, &fr, &mut mix);
+                let o = eapol(&sta, &frame(1, false, false), 10, &mut fr);
+                out(o, &fr, &mut mix);
+                exp(&mut mix);
+                let _ = wpa_call(CMD_KEY_ABORT, &sta, &mut [], Some(sta));
+                exp(&mut mix);
+            }
+            2 => {
+                for cmd in [hal::wpasrvabi::CMD_PMKSA_COUNT, hal::wpasrvabi::CMD_STATE_READ] {
+                    match wpa_call(cmd, &[], &mut [], None) {
+                        Some((Call::Done(stt, r0, _), _)) => mix(&[stt as u8, r0 as u8]),
+                        _ => mix(&[0xee]),
+                    }
+                }
+            }
+            _ => {
+                let o = start(&st, 0, &mut fr);
+                out(o, &fr, &mut mix);
+                let _ = wpa_call(CMD_KEY_ABORT, &sta, &mut [], Some(sta));
+                exp(&mut mix);
+            }
+        }
+        (swifi_stats().0 == f0).then_some(h)
+    }
+
     pub fn selftest() -> bool {
         use hal::wpakeyer::{FRAME_MAX, KeyData};
         let mut s = match super::imp::load_wpa() {
