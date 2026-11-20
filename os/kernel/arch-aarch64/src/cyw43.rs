@@ -1710,6 +1710,8 @@ pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
         REG_DONE = false;
         CON_LAST = 0;
         VER_OK = false;
+        #[cfg(feature = "wifi-vec")]
+        rxv_reset();
         let g = &mut *core::ptr::addr_of_mut!(GLOM);
         g.n = 0;
         g.next = 0;
@@ -2675,6 +2677,120 @@ fn el0_rx_chunked(h: El0Keyer, sdb: u32, max_dry: u32, skip: bool, block: bool, 
     }
 }
 
+/// ADR 0067 E1 (feature `wifi-vec`): frames left to pop from the last vectored read; a mailbox interrupt that ended it
+/// (handled once those frames are consumed, as the single-frame order has it); skip the next intstatus poll.
+#[cfg(feature = "wifi-vec")]
+static mut RXV_LEFT: usize = 0;
+#[cfg(feature = "wifi-vec")]
+static mut RXV_HOSTINT: bool = false;
+#[cfg(feature = "wifi-vec")]
+static mut RXV_SKIP: bool = false;
+/// Frames per vectored read asked of el0-wifi (<= `hal::wifisrvabi::VEC_MAX`; sized so a full batch stays well inside
+/// the server's per-excursion budget).
+#[cfg(feature = "wifi-vec")]
+const RXV_BATCH: u8 = 8;
+/// Frames the kernel refused after popping them (a header that does not parse or does not match the ring's length).
+#[cfg(feature = "wifi-vec")]
+pub static mut RXV_REFUSED: u32 = 0;
+#[cfg(feature = "wifi-vec")]
+fn rxv_reset() {
+    unsafe {
+        RXV_LEFT = 0;
+        RXV_HOSTINT = false;
+        RXV_SKIP = false;
+    }
+}
+/// The next frame through the vectored read. Some(result) = served (Some(frame) or None = nothing to read now, exactly
+/// what the single-frame path returns); None = the server cannot serve a vectored read: use the single-frame path.
+#[cfg(feature = "wifi-vec")]
+fn rxv_next(h: El0Keyer, sdb: u32, max_dry: u32, block: bool, rx: &mut [u8]) -> Option<Option<(u8, u16, usize)>> {
+    use hal::wifisrvabi::VecStop;
+    let mut waited = 0u32;
+    loop {
+        if unsafe { RXV_LEFT } > 0 {
+            unsafe { RXV_LEFT -= 1 };
+            let Some(n) = (h.rx_vec_pop)(rx) else {
+                unsafe {
+                    RXV_LEFT = 0; // the ring holds fewer than it said: resync on the next read
+                    RXV_REFUSED += 1;
+                }
+                continue;
+            };
+            let tail = n.min(rx.len());
+            for b in rx[tail..].iter_mut() {
+                *b = 0; // never a previous frame's bytes behind this one (audit M-3 / L-15)
+            }
+            // the kernel's own check of every frame the server delivered (the fuzzed header parser; the length the
+            // header claims must be the length the ring holds)
+            match hal::sdpcm_hdr(&rx[..hal::sdio::FIRSTREAD.min(rx.len())]) {
+                Ok(Some(hdr)) if n >= hal::sdio::FIRSTREAD && (hdr.len as usize).max(hal::sdio::FIRSTREAD) == n => {
+                    unsafe {
+                        if RX_DIAG.3 != 0 && hdr.seq != (RX_DIAG.0 as u8).wrapping_add(1) {
+                            RX_DIAG.1 += 1;
+                        }
+                        RX_DIAG.0 = hdr.seq as u32;
+                        RX_DIAG.3 = 1;
+                    }
+                    apply_window(hdr.w1);
+                    return Some(Some((hdr.chan, hdr.len, hdr.doff)));
+                }
+                _ => {
+                    unsafe {
+                        RXV_REFUSED += 1;
+                        AP_DIAG[15] += 1;
+                    }
+                    continue;
+                }
+            }
+        }
+        if unsafe { RXV_HOSTINT } {
+            unsafe {
+                RXV_HOSTINT = false;
+                RXV_SKIP = true;
+            }
+            hostmail(sdb);
+        }
+        let skip = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(RXV_SKIP), false) };
+        let (take, stop, drained, blk) = (h.rx_readv)(sdb, skip, block, RXV_BATCH)?;
+        unsafe { RXV_LEFT = take };
+        let fail = |drained: bool| unsafe {
+            AP_DIAG[6] += 1;
+            if !drained {
+                AP_DIAG[7] += 1;
+            }
+        };
+        let mut ended_bad = false;
+        match VecStop::from_u8(stop) {
+            Some(VecStop::HostInt) => unsafe { RXV_HOSTINT = true },
+            Some(VecStop::BadFrame) => {
+                unsafe { AP_DIAG[15] += 1 };
+                fail(drained);
+                ended_bad = true;
+            }
+            Some(VecStop::BusError) => {
+                unsafe {
+                    if cfg!(feature = "wifi-bigrx") {
+                        AP_DIAG[12] = blk;
+                    }
+                }
+                fail(drained);
+                ended_bad = true;
+            }
+            _ => {}
+        }
+        if take == 0 {
+            if unsafe { RXV_HOSTINT } {
+                continue; // the mailbox first, then read on (as the single-frame loop)
+            }
+            if ended_bad || waited >= max_dry {
+                return Some(None);
+            }
+            waited += 1;
+            delay(1_000);
+        }
+    }
+}
+
 fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, usize)> {
     // ADR 0065 step 4b-2: the bus traffic of reading one frame is `hal::sdio::Bus::read_frame` (host-tested; the
     // code el0-wifi runs). It keeps every rule this function had: the header checked by the fuzzed `hal::sdpcm_hdr`
@@ -2692,6 +2808,15 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
     // Step 4d: a longer wait (the control path's 800 ms) also reads through el0-wifi: one poll per call, the kernel
     // delays between them.
     let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
+    // ADR 0067 E1: the vectored read serves it when it can (up to RXV_BATCH frames per EL0 round trip)
+    #[cfg(feature = "wifi-vec")]
+    if let Some(h) = el0h {
+        if let Some(r) = rxv_next(h, sdb, max_dry, block, rx) {
+            sync_diag();
+            return r;
+        }
+        rxv_reset(); // the server could not: nothing of a batch is left; the single-frame path below serves
+    }
     let mut skip = false;
     let mut el0_blk = None;
     let r = loop {
@@ -4776,6 +4901,10 @@ pub struct El0Keyer {
     pub pmksa_remove: fn(&[u8; 6], bool),
     // step 4b-2b: one SDPCM frame read by el0-wifi over its SDHCI grant (None = read in-kernel)
     pub rx_read: fn(u32, u32, bool, bool, &mut [u8]) -> Option<(hal::sdio::RxRead, u32)>,
+    // ADR 0067 E1: up to N frames read by el0-wifi into the RX ring in one call -> (frames to pop, stop code, drained,
+    // blk_diag); then one pop per frame (None = no vectored read: use `rx_read`)
+    pub rx_readv: fn(u32, bool, bool, u8) -> Option<(usize, u8, bool, u32)>,
+    pub rx_vec_pop: fn(&mut [u8]) -> Option<usize>,
     // step 4c: one data frame built + written by el0-wifi with the kernel's sequence (None = write in-kernel)
     pub tx_data: fn(u8, u8, bool, &[u8]) -> Option<hal::sdio::TxWrite>,
     // step 4d: one control request built + written by el0-wifi (None = write in-kernel)

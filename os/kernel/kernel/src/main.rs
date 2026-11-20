@@ -5713,6 +5713,12 @@ fn cm5_p10_probe() {
                                                 }
                                                 let (c, f, r, h) = crate::el0srv::keyer::stats();
                                                 let (rxe, rxr, txe, txl, cte, ctl) = crate::el0srv::keyer::rx_stats();
+                                                #[cfg(feature = "wifi-vec")]
+                                                {
+                                                    let v = crate::el0srv::keyer::rxv_stats();
+                                                    kprint!("   [EL0-WIFI-VEC] vectored reads={} frames delivered={} (x100 per read: {}) lost in el0-wifi={} replies refused={} frames refused by the kernel={}\n",
+                                                        v[0], v[1], (v[1] * 100).checked_div(v[0]).unwrap_or(0), v[2], v[3], unsafe { arch_aarch64::cyw43::RXV_REFUSED });
+                                                }
                                                 kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={} fw_bytes_written_in_el0={} fw_slices_lost={} reload_reg_ops_in_el0={} reload_reg_ops_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl,
                                                     unsafe { crate::el0srv::keyer::BP_EL0_BYTES }, unsafe { crate::el0srv::keyer::BP_LOST },
                                                     unsafe { crate::el0srv::keyer::REG_EL0_OPS }, unsafe { crate::el0srv::keyer::REG_LOST });
