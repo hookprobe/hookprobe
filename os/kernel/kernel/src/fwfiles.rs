@@ -172,7 +172,7 @@ pub fn fat_selftest<D: BlockDev>(dev: &D) {
 }
 
 /// The run-time copies (BSS: nothing of the vendor files is in the image).
-#[cfg(feature = "fwfiles")]
+#[cfg(all(feature = "fwfiles", feature = "cm5"))]
 mod bufs {
     pub static mut FW: [u8; 640 * 1024] = [0; 640 * 1024];
     pub static mut NVRAM: [u8; 4096] = [0; 4096];
@@ -182,7 +182,7 @@ mod bufs {
 /// Boot: read the three files from the boot partition, verify them against the pins and hand them
 /// to the Wi-Fi driver. On any error nothing is installed and Wi-Fi stays unavailable.
 /// Call once, before the first Wi-Fi bring-up.
-#[cfg(feature = "fwfiles")]
+#[cfg(all(feature = "fwfiles", feature = "cm5"))]
 pub fn load<D: BlockDev>(dev: &D) -> Result<(), FwErr> {
     let mut sec = [0u8; 512];
     let p1 = if dev.read_block(0, &mut sec).is_ok() { crate::store::parse_mbr(&sec)[0].start } else { 0 };
