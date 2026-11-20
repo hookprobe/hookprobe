@@ -1710,7 +1710,7 @@ pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
         REG_DONE = false;
         CON_LAST = 0;
         VER_OK = false;
-        #[cfg(feature = "wifi-vec")]
+        #[cfg(feature = "wifi-vec-rx")]
         rxv_reset();
         let g = &mut *core::ptr::addr_of_mut!(GLOM);
         g.n = 0;
@@ -2679,20 +2679,20 @@ fn el0_rx_chunked(h: El0Keyer, sdb: u32, max_dry: u32, skip: bool, block: bool, 
 
 /// ADR 0067 E1 (feature `wifi-vec`): frames left to pop from the last vectored read; a mailbox interrupt that ended it
 /// (handled once those frames are consumed, as the single-frame order has it); skip the next intstatus poll.
-#[cfg(feature = "wifi-vec")]
+#[cfg(feature = "wifi-vec-rx")]
 static mut RXV_LEFT: usize = 0;
-#[cfg(feature = "wifi-vec")]
+#[cfg(feature = "wifi-vec-rx")]
 static mut RXV_HOSTINT: bool = false;
-#[cfg(feature = "wifi-vec")]
+#[cfg(feature = "wifi-vec-rx")]
 static mut RXV_SKIP: bool = false;
 /// Frames per vectored read asked of el0-wifi (<= `hal::wifisrvabi::VEC_MAX`; sized so a full batch stays well inside
 /// the server's per-excursion budget).
-#[cfg(feature = "wifi-vec")]
+#[cfg(feature = "wifi-vec-rx")]
 const RXV_BATCH: u8 = 8;
 /// Frames the kernel refused after popping them (a header that does not parse or does not match the ring's length).
-#[cfg(feature = "wifi-vec")]
+#[cfg(feature = "wifi-vec-rx")]
 pub static mut RXV_REFUSED: u32 = 0;
-#[cfg(feature = "wifi-vec")]
+#[cfg(feature = "wifi-vec-rx")]
 fn rxv_reset() {
     unsafe {
         RXV_LEFT = 0;
@@ -2702,7 +2702,7 @@ fn rxv_reset() {
 }
 /// The next frame through the vectored read. Some(result) = served (Some(frame) or None = nothing to read now, exactly
 /// what the single-frame path returns); None = the server cannot serve a vectored read: use the single-frame path.
-#[cfg(feature = "wifi-vec")]
+#[cfg(feature = "wifi-vec-rx")]
 fn rxv_next(h: El0Keyer, sdb: u32, max_dry: u32, block: bool, rx: &mut [u8]) -> Option<Option<(u8, u16, usize)>> {
     use hal::wifisrvabi::VecStop;
     let mut waited = 0u32;
@@ -2809,7 +2809,7 @@ fn read_sdpcm_frame_raw_inner(rx: &mut [u8], max_dry: u32) -> Option<(u8, u16, u
     // delays between them.
     let el0h = if !unsafe { RADIO_OFF } { el0() } else { None };
     // ADR 0067 E1: the vectored read serves it when it can (up to RXV_BATCH frames per EL0 round trip)
-    #[cfg(feature = "wifi-vec")]
+    #[cfg(feature = "wifi-vec-rx")]
     if let Some(h) = el0h {
         if let Some(r) = rxv_next(h, sdb, max_dry, block, rx) {
             sync_diag();

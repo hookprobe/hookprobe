@@ -1115,7 +1115,7 @@ pub mod keyer {
     /// ADR 0067 E1: vectored reads served, frames they delivered, frames the server took off the bus and did not
     /// deliver, replies that disagreed with the ring (or calls that faulted).
     pub static mut RXV: [u64; 4] = [0; 4];
-    #[cfg_attr(not(feature = "wifi-vec"), allow(dead_code))]
+    #[cfg_attr(not(feature = "wifi-vec-rx"), allow(dead_code))]
     pub fn rxv_stats() -> [u64; 4] {
         unsafe { RXV }
     }
@@ -1135,6 +1135,9 @@ pub mod keyer {
         rxvmsg::encode_in(&rxvmsg::In { sdb, skip_int: skip, block_rx: block, max, cap: hal::el0ring::FRAME_MAX as u16 }, &mut inp);
         let mut o = [0u8; rxvmsg::OUT_LEN];
         let (c, n) = s.call_lean(CMD_RX_READV, &inp, &mut o);
+        if matches!(c, Call::Backoff) {
+            return None; // in the restart hold-off: nothing was asked of the server (not a refused reply)
+        }
         let reply = if matches!(c, Call::Done(ST_OK, ..)) && n == rxvmsg::OUT_LEN { rxvmsg::decode_out(&o) } else { None };
         let after = hal::el0ring::pending(&s.rx);
         let r = rxvmsg::rx_reconcile(max, before, after, reply.as_ref());
@@ -1190,6 +1193,10 @@ pub mod keyer {
         txvmsg::encode_in(n.clamp(1, VEC_MAX as u8), &mut inp);
         let mut o = [0u8; txvmsg::OUT_LEN];
         let (c, len) = s.call_lean(CMD_TX_DATAV, &inp, &mut o);
+        if matches!(c, Call::Backoff) {
+            hal::el0ring::reset(&mut s.tx); // nothing was sent; the caller keeps the frames
+            return None;
+        }
         let served = matches!(c, Call::Done(ST_OK, ..)) && len == txvmsg::OUT_LEN;
         let reply = if served { txvmsg::decode_out(&o) } else { None };
         let after = hal::el0ring::pending(&s.tx);
@@ -1204,9 +1211,6 @@ pub mod keyer {
             TXV[2] += r.dropped as u64;
             TXV[3] += r.left as u64;
             TXV[4] += r.lied as u64;
-        }
-        if matches!(c, Call::Backoff) {
-            return None;
         }
         let failed = r.lied || matches!(reply.map(|x| x.stop), Some(VecStop::BusError) | Some(VecStop::Ring) | None);
         Some((if r.lied && reply.is_none() { 0 } else { r.sent }, failed))

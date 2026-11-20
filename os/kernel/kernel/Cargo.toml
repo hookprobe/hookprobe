@@ -277,6 +277,8 @@ wifi-bigrx = ["apmode", "arch-aarch64/wifi-bigrx"]
 # ADR 0067 E1: vectored Wi-Fi frame reads (el0-wifi reads up to N frames into the RX ring per call). Bench until
 # metal-proven; not in tools/ci/shipping-features.txt.
 wifi-vec = ["apmode", "arch-aarch64/wifi-vec"]
+# the vectored READ as well (opt-in: metal 2026-11-20, 0.02 frames per read in a download, no gain)
+wifi-vec-rx = ["wifi-vec", "arch-aarch64/wifi-vec-rx"]
 # sepdiag — M2 Gate-R metal observability. Drains the per-rule event ring in the prod
 # heartbeat and prints {rule_id, verdict(PASS/DROP), src, sev} so a separation-matrix row's
 # verdict can be ATTRIBUTED on metal (prod exposes only aggregate counters otherwise). Also

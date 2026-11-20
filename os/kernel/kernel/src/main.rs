@@ -5745,10 +5745,12 @@ fn cm5_p10_probe() {
                                                 let (rxe, rxr, txe, txl, cte, ctl) = crate::el0srv::keyer::rx_stats();
                                                 #[cfg(feature = "wifi-vec")]
                                                 {
+                                                    #[cfg(feature = "wifi-vec-rx")]
                                                     let v = crate::el0srv::keyer::rxv_stats();
                                                     let t = crate::el0srv::keyer::txv_stats();
                                                     kprint!("   [EL0-WIFI-VECTX] vectored writes={} frames sent={} (x100 per write: {}) unsent after a failed write={} taken back from the ring={} replies refused={}\n",
                                                         t[0], t[1], (t[1] * 100).checked_div(t[0]).unwrap_or(0), t[2], t[3], t[4]);
+                                                    #[cfg(feature = "wifi-vec-rx")]
                                                     kprint!("   [EL0-WIFI-VEC] vectored reads={} frames delivered={} (x100 per read: {}) lost in el0-wifi={} replies refused={} frames refused by the kernel={}\n",
                                                         v[0], v[1], (v[1] * 100).checked_div(v[0]).unwrap_or(0), v[2], v[3], unsafe { arch_aarch64::cyw43::RXV_REFUSED });
                                                 }
