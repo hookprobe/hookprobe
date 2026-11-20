@@ -176,6 +176,7 @@ Pwasip1
 Pwasip1cat
 Pwasm
 Pwasmel0
+Pwasmevt
 Pwasmiel0
 Pwasmparity
 Pwificfg
