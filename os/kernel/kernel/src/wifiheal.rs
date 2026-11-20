@@ -536,6 +536,9 @@ pub enum BootFault {
     NoControl = 3,
     /// The radio is up but the AP could not be started twice.
     ApStartFailed = 4,
+    /// The chip's vendor files (firmware / NVRAM / CLM) are missing from the boot partition or were refused
+    /// (ADR 0067 L0.1, `fwfiles` builds; which one and why is `/api/health` "wifi_files").
+    VendorFiles = 5,
 }
 
 impl BootFault {
@@ -545,6 +548,7 @@ impl BootFault {
             BootFault::FirmwareNotStarted => "firmware-not-started",
             BootFault::NoControl => "no-control",
             BootFault::ApStartFailed => "ap-start-failed",
+            BootFault::VendorFiles => "vendor-files",
         }
     }
     pub fn text(self) -> &'static str {
@@ -553,6 +557,7 @@ impl BootFault {
             BootFault::FirmwareNotStarted => "the Wi-Fi firmware did not start",
             BootFault::NoControl => "the Wi-Fi firmware started but does not answer control requests",
             BootFault::ApStartFailed => "the access point could not be started",
+            BootFault::VendorFiles => "the Wi-Fi chip's vendor files are missing or were refused",
         }
     }
 }
@@ -570,6 +575,7 @@ pub fn boot_fault_name() -> &'static str {
         2 => BootFault::FirmwareNotStarted.name(),
         3 => BootFault::NoControl.name(),
         4 => BootFault::ApStartFailed.name(),
+        5 => BootFault::VendorFiles.name(),
         _ => "ok",
     }
 }
