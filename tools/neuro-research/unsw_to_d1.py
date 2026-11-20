@@ -282,6 +282,86 @@ def service_peer_fp(mode, ip, port, proto=None, name=None):
     return _key("net:%s:%d" % (pre, port))
 
 
+class Fnv:
+    """Streaming FNV-1a 64: the kernel-side form of _key() (no strings on the device, only a running state)."""
+    __slots__ = ("h",)
+
+    def __init__(self, h=0xCBF29CE484222325):
+        self.h = h
+
+    def bytes(self, b):
+        h = self.h
+        for c in b:
+            h = ((h ^ c) * 0x100000001B3) & 0xFFFFFFFFFFFFFFFF
+        return Fnv(h)
+
+    def dec(self, v):
+        return self.bytes(str(int(v)).encode())
+
+    def fp(self):
+        return fx.fingerprint(self.h)
+
+
+def svc_state(domain):
+    """FNV state after 'svc:<registered domain>:' -- what the name table stores (8 bytes, no string)."""
+    return Fnv().bytes(b"svc:").bytes(domain.encode()).bytes(b":").h
+
+
+class SetAssocNames:
+    """doc 20: the kernel-shaped name table. ONE table for all devices, N entries in 4-way sets, keyed by
+    (device, address); a set evicts its entry with the oldest timestamp (lowest index on ties). Stores the
+    svc FNV state, never the name. Bit-exact with neuro_core::peerkey::NameTable."""
+    WAYS = 4
+
+    def __init__(self, n=4096):
+        assert n % self.WAYS == 0 and (n // self.WAYS) & (n // self.WAYS - 1) == 0
+        self.sets = n // self.WAYS
+        self.e = [None] * n          # (dev, ip16, state, ts)
+
+    @staticmethod
+    def ip16(ip):
+        return bytes(10) + b"\xff\xff" + bytes(ip) if len(ip) == 4 else bytes(ip)
+
+    def _base(self, dev, ip16):
+        h = fx.splitmix64(fx.fnv1a64(dev.to_bytes(2, "little") + ip16))
+        return (h % self.sets) * self.WAYS
+
+    def insert(self, dev, ip, state, ts):
+        k = self.ip16(ip)
+        b = self._base(dev, k)
+        victim = None
+        for j in range(b, b + self.WAYS):
+            x = self.e[j]
+            if x is not None and x[0] == dev and x[1] == k:
+                victim = j
+                break
+        if victim is None:
+            empty = [j for j in range(b, b + self.WAYS) if self.e[j] is None]
+            victim = empty[0] if empty else min(range(b, b + self.WAYS), key=lambda j: (self.e[j][3], j))
+        self.e[victim] = (dev, k, state, ts)
+
+    def lookup(self, dev, ip, now):
+        k = self.ip16(ip)
+        b = self._base(dev, k)
+        for j in range(b, b + self.WAYS):
+            x = self.e[j]
+            if x is not None and x[0] == dev and x[1] == k:
+                return x[2] if 0 <= now - x[3] <= NAME_WINDOW else None
+        return None
+
+
+def service_peer_fp_state(mode, ip, port, proto, state):
+    """As service_peer_fp, but the named rule takes the stored FNV state (kernel form). Same result."""
+    if state is None or mode == "exact":
+        return service_peer_fp(mode, ip, port, proto, None)
+    variant = mode.split("-")[0]
+    if variant == "v2" and infra_class(ip, port, proto):
+        return service_peer_fp(mode, ip, port, proto, None)
+    if is_local(ip):
+        return peer_fp(ip, port)
+    return Fnv(state).dec(port).fp()
+
+
 def peer_kind(mode, ip, port, proto, name):
     if mode == "exact":
         return "exact"
@@ -292,8 +372,9 @@ def peer_kind(mode, ip, port, proto, name):
 
 # ------------------------------------------------------------------------------------------------ conversion
 class Converter:
-    def __init__(self, device_macs=None, peer_mode="exact"):
+    def __init__(self, device_macs=None, peer_mode="exact", name_table=None):
         self.peer_mode = peer_mode
+        self.ntab = SetAssocNames(name_table) if name_table else None   # doc 20 kernel-shaped table
         self.amap = {}                           # dev -> OrderedDict(addr -> (registered domain, ts)), doc 18
         self.kinds = {}                          # peer-key rule -> count (reported)
         self.amap_max = 0
@@ -356,6 +437,11 @@ class Converter:
                     ev[1] = 1
 
     def _learn_names(self, dev, ts, qname, payload):
+        if self.ntab is not None:
+            st = svc_state(registered_domain(qname))
+            for addr in dns_answers(payload):
+                self.ntab.insert(dev, addr, st, int(ts))
+            return
         m = self.amap.setdefault(dev, collections.OrderedDict())
         dom = registered_domain(qname)
         for addr in dns_answers(payload):
@@ -366,6 +452,11 @@ class Converter:
         self.amap_max = max(self.amap_max, len(m))
 
     def _peer(self, dev, ts, dst, dp, proto):
+        if self.ntab is not None and self.peer_mode != "exact":
+            st = self.ntab.lookup(dev, bytes(dst), int(ts))
+            k = peer_kind(self.peer_mode, dst, dp, proto, st)
+            self.kinds[k] = self.kinds.get(k, 0) + 1
+            return service_peer_fp_state(self.peer_mode, bytes(dst), dp, proto, st)
         name = None
         if self.peer_mode != "exact":
             e = self.amap.get(dev, {}).get(bytes(dst))
@@ -528,6 +619,7 @@ def main():
     ap.add_argument("--devices")
     ap.add_argument("--macs", help="CSV/TSV with a MAC address and a device name per line (the dataset's device list)")
     ap.add_argument("--peer-key", choices=PEER_MODES, default="exact", help="doc 18 peer identity (default: D1's exact key)")
+    ap.add_argument("--name-table", type=int, help="doc 20: use the kernel-shaped set-associative table of N entries")
     ap.add_argument("--selftest", action="store_true")
     a = ap.parse_args()
     if a.selftest:
@@ -540,7 +632,7 @@ def main():
             if m:
                 name = line.replace(m.group(1), "").strip(" ,\t\r\n")
                 macs.append((bytes.fromhex(m.group(1).replace(":", "")), name))
-    c = Converter(macs or None, a.peer_key)
+    c = Converter(macs or None, a.peer_key, a.name_table)
     n = 0
     for name, f in iter_sources(a.src):
         for ts, fr, lt in packets(f):
