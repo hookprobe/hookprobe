@@ -30,6 +30,8 @@ may be built, gated and measured behind feature flags before that.
 | X2a step 1, flow-event ABI and queue | merged (#1364) | `hal::flowevt`, 7 host tests |
 | X2a step 2, batch mode in the wasip1 host | draft PR #1369 | `wasm_events_per_round_trip` = 16; `[P-wasmevt]` |
 | L0.1 step 1, vendor files out of the image (`fwfiles`) | merged (#1367) | `[P-fwfiles]`; SHA-256 pins |
+| E1 vectored Wi-Fi calls | **owned by the kernel session** (2026-11-20); ABI draft in this PR (`hal::wifisrvabi` `CMD_RX_READV` / `CMD_TX_DATAV`, 7 host tests) | integration, budgets, fault accounting, feature flag, counter and metal rounds are its work; metal proof over OTA |
+| Metal timing ratchet | draft PR #1376 | `tools/ci/metal_timing.py`, `tools/ci/baselines/perf-metal.json` |
 | L0.2 driver provenance register | draft PR #1359 (standalone) | `docs/security/driver-provenance.md`; g0 check |
 | ADR 0067 amendment (D12 disclosure record, D13 three reviews) | draft PR #1360 | ADR stays Proposed |
 
@@ -69,6 +71,9 @@ kernel session (boot-degraded prerequisite #1370, integration PR stacked on it):
   service has the files or that path exists.
 - Prerequisite found: without Wi-Fi at boot the AP image never reached the serve loop, so Mission
   Control was unreachable (independent of fwfiles). #1370 enters the serve loop degraded.
+- rpiboot, 2026-11-20 16:50: the one operator-approved full flash (image am23F) did not start — the
+  boot ROM never enumerated over USB in 15 s; nothing was written and the board is back on its previous
+  image. A second attempt needs a physical check of the USB link and a new go-ahead.
 - B1 so far: firmware absent PASS on the CM5 (15/15, by OTA; the trial does not commit); truncated /
   altered / NVRAM or CLM absent PASS in QEMU on the factory disk image (9/9); the fwfiles slot image is
   600,528 bytes smaller and holds no firmware bytes. NOT run: files present with throughput, firmware

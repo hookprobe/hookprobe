@@ -798,6 +798,398 @@ pub mod ctlmsg {
     }
 }
 
+// ---- ADR 0067 E1: VECTORED frame calls (draft ABI; pure and host-tested; not yet dispatched by el0-wifi) ----
+//
+// Today `CMD_RX_READ` / `CMD_TX_DATA` move ONE frame per EL0 round trip, through the control page's
+// 2 KiB message areas. Measured on CM5 (2026-11-19, 96.5 Mbps through the AP): el0-wifi spent up to
+// 610 ms of each second in EL0. The vectored commands move up to `VEC_MAX` frames per round trip.
+//
+// The control page cannot hold a vector (IN_MAX / OUT_MAX are 2 KiB), so the FRAMES travel in the
+// frame rings that already exist (`crate::el0ring`, 32 slots of 2 KiB at RX_OFF / TX_OFF) and the
+// control page carries only a small batch header. Rules both sides keep:
+//   * a frame is at most one ring slot and is copied once by the kernel, as today;
+//   * the single-frame commands are unchanged;
+//   * the server's reply is NOT trusted: the kernel counts the ring itself and reconciles
+//     (`rx_reconcile` / `tx_reconcile`); a batch that ends early says how many frames were handled,
+//     so a fault mid-batch is counted, never silent;
+//   * the kernel chooses the batch size per call (`max` / `n`), so it can cap the batch to what the
+//     existing per-excursion time budget covers.
+
+/// el0-wifi reads up to `max` SDPCM frames and pushes each to the RX ring. IN = [`rxvmsg::encode_in`],
+/// OUT = [`rxvmsg::encode_out`].
+pub const CMD_RX_READV: u32 = 38;
+/// el0-wifi pops up to `n` frames from the TX ring and writes each to the bus. IN = [`txvmsg::encode_in`],
+/// OUT = [`txvmsg::encode_out`]. A TX ring slot holds [`txvmsg::slot_encode`].
+pub const CMD_TX_DATAV: u32 = 39;
+
+/// The most frames one vectored call moves: half a ring, so a full batch always fits a ring that the
+/// other side has drained to at most half. The kernel may ask for fewer.
+pub const VEC_MAX: usize = crate::el0ring::SLOTS / 2;
+
+/// Why a batch stopped.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum VecStop {
+    /// The batch size asked for was reached.
+    Limit = 0,
+    /// RX: the device had no more frames. TX: the ring was empty.
+    Drained = 1,
+    /// RX: a host interrupt needs the kernel before more frames can be read.
+    HostInt = 2,
+    /// RX: a frame header was bad. TX: a ring slot was malformed.
+    BadFrame = 3,
+    /// RX: a short read. TX: the bus write failed.
+    BusError = 4,
+    /// The ring the frames travel in was full (RX) / in a bad state (either side).
+    Ring = 5,
+    /// TX: no flow-control credit for the next frame.
+    NoCredit = 6,
+}
+impl VecStop {
+    pub fn from_u8(v: u8) -> Option<VecStop> {
+        Some(match v {
+            0 => VecStop::Limit,
+            1 => VecStop::Drained,
+            2 => VecStop::HostInt,
+            3 => VecStop::BadFrame,
+            4 => VecStop::BusError,
+            5 => VecStop::Ring,
+            6 => VecStop::NoCredit,
+            _ => return None,
+        })
+    }
+}
+
+/// The vectored read.
+pub mod rxvmsg {
+    use super::{VecStop, VEC_MAX};
+
+    pub const IN_LEN: usize = 12;
+    pub const OUT_LEN: usize = 12;
+
+    /// What the kernel asks for.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct In {
+        /// SDIO core base (as `rxmsg`).
+        pub sdb: u32,
+        /// Skip the first intstatus poll (as `rxmsg`).
+        pub skip_int: bool,
+        /// Block-mode RX allowed (as `rxmsg`).
+        pub block_rx: bool,
+        /// The most frames to read, `1..=VEC_MAX`.
+        pub max: u8,
+        /// The kernel's per-frame buffer size: the server pushes no frame longer than this.
+        pub cap: u16,
+    }
+    /// What the server says it did.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Out {
+        /// Frames pushed to the RX ring by this call.
+        pub produced: u8,
+        /// Frames taken off the bus by this call, including one that was then dropped (bad header,
+        /// short, longer than `cap`, ring full): `attempted - produced` frames were lost here.
+        pub attempted: u8,
+        pub stop: VecStop,
+        /// The device reported it is drained (as `rxmsg` flag 1).
+        pub drained: bool,
+        /// Diagnostic word of the last block read (as `rxmsg`).
+        pub blk_diag: u32,
+    }
+
+    pub fn encode_in(i: &In, o: &mut [u8; IN_LEN]) {
+        o[0..4].copy_from_slice(&i.sdb.to_le_bytes());
+        o[4] = i.skip_int as u8;
+        o[5] = i.block_rx as u8;
+        o[6] = i.max;
+        o[7] = 0;
+        o[8..10].copy_from_slice(&i.cap.to_le_bytes());
+        o[10] = 0;
+        o[11] = 0;
+    }
+    /// `None` for a malformed request: wrong length, a flag that is not 0/1, a batch size outside
+    /// `1..=VEC_MAX`, a zero or over-slot `cap`, or non-zero reserved bytes.
+    pub fn decode_in(b: &[u8]) -> Option<In> {
+        if b.len() != IN_LEN || b[4] > 1 || b[5] > 1 || b[7] != 0 || b[10] != 0 || b[11] != 0 {
+            return None;
+        }
+        let max = b[6];
+        let cap = u16::from_le_bytes([b[8], b[9]]);
+        if max == 0 || max as usize > VEC_MAX || cap == 0 || cap as usize > crate::el0ring::FRAME_MAX {
+            return None;
+        }
+        Some(In { sdb: u32::from_le_bytes([b[0], b[1], b[2], b[3]]), skip_int: b[4] == 1, block_rx: b[5] == 1, max, cap })
+    }
+    pub fn encode_out(r: &Out, o: &mut [u8; OUT_LEN]) {
+        o[0] = r.produced;
+        o[1] = r.attempted;
+        o[2] = r.stop as u8;
+        o[3] = r.drained as u8;
+        o[4..8].copy_from_slice(&r.blk_diag.to_le_bytes());
+        o[8..12].fill(0);
+    }
+    /// `None` for a reply that cannot be true: wrong length, unknown stop code, a flag that is not
+    /// 0/1, more frames produced than attempted, or more attempted than `VEC_MAX + 1`.
+    pub fn decode_out(b: &[u8]) -> Option<Out> {
+        if b.len() != OUT_LEN || b[3] > 1 || b[8..12] != [0; 4] {
+            return None;
+        }
+        let (produced, attempted) = (b[0], b[1]);
+        if produced > attempted || attempted as usize > VEC_MAX + 1 {
+            return None;
+        }
+        Some(Out { produced, attempted, stop: VecStop::from_u8(b[2])?, drained: b[3] == 1, blk_diag: u32::from_le_bytes([b[4], b[5], b[6], b[7]]) })
+    }
+
+    /// The kernel's view after a `CMD_RX_READV` call.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Rx {
+        /// Frames the kernel may pop from the RX ring for this call.
+        pub take: usize,
+        /// Frames the server took off the bus and did not deliver (as far as it said).
+        pub lost: usize,
+        /// The reply disagreed with the ring, or could not be decoded: count it, resync, do not trust more.
+        pub lied: bool,
+    }
+    /// Reconcile the reply with what the kernel itself counted: `before` / `after` are the RX ring's
+    /// pending counts around the call (`el0ring::pending`), `asked` the batch size it requested.
+    /// The ring is the truth; the reply only explains it. Never more than `asked` frames are taken.
+    pub fn rx_reconcile(asked: u8, before: usize, after: usize, reply: Option<&Out>) -> Rx {
+        let grew = after.saturating_sub(before);
+        let take = grew.min(asked as usize);
+        match reply {
+            Some(r) if r.produced as usize == grew && grew <= asked as usize && after >= before => Rx { take, lost: (r.attempted - r.produced) as usize, lied: false },
+            Some(r) => Rx { take, lost: r.attempted.saturating_sub(r.produced) as usize, lied: true },
+            None => Rx { take, lost: 0, lied: true },
+        }
+    }
+}
+
+/// The vectored write.
+pub mod txvmsg {
+    use super::{VecStop, VEC_MAX};
+
+    pub const IN_LEN: usize = 4;
+    pub const OUT_LEN: usize = 8;
+    /// Per-frame header in a TX ring slot (the single-frame `txmsg` header).
+    pub const SLOT_HDR: usize = 4;
+    /// The longest ethernet frame a slot carries.
+    pub const ETH_MAX: usize = super::txmsg::ETH_MAX;
+
+    /// One TX ring slot: (sequence, interface, block TX allowed, the ethernet frame) -> bytes written.
+    pub fn slot_encode(seq: u8, ifidx: u8, big_tx: bool, eth: &[u8], o: &mut [u8]) -> Option<usize> {
+        if eth.is_empty() || eth.len() > ETH_MAX || o.len() < SLOT_HDR + eth.len() {
+            return None;
+        }
+        o[0] = seq;
+        o[1] = ifidx;
+        o[2] = big_tx as u8;
+        o[3] = 0;
+        o[SLOT_HDR..SLOT_HDR + eth.len()].copy_from_slice(eth);
+        Some(SLOT_HDR + eth.len())
+    }
+    /// The server's reading of one slot. `None` = malformed (the batch stops with `BadFrame`).
+    pub fn slot_decode(b: &[u8]) -> Option<(u8, u8, bool, &[u8])> {
+        if b.len() <= SLOT_HDR || b.len() > SLOT_HDR + ETH_MAX || b[2] > 1 || b[3] != 0 {
+            return None;
+        }
+        Some((b[0], b[1], b[2] == 1, &b[SLOT_HDR..]))
+    }
+
+    /// The request: how many frames to pop from the TX ring, `1..=VEC_MAX`.
+    pub fn encode_in(n: u8, o: &mut [u8; IN_LEN]) {
+        *o = [n, 0, 0, 0];
+    }
+    pub fn decode_in(b: &[u8]) -> Option<u8> {
+        if b.len() != IN_LEN || b[1..] != [0; 3] || b[0] == 0 || b[0] as usize > VEC_MAX {
+            return None;
+        }
+        Some(b[0])
+    }
+
+    /// What the server says it did.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Out {
+        /// Frames popped from the TX ring by this call.
+        pub popped: u8,
+        /// Of those, frames written to the bus. `popped - sent` frames were dropped here.
+        pub sent: u8,
+        pub stop: VecStop,
+        /// Bus status of the last write (the single-frame reply's status word).
+        pub status: u32,
+    }
+    pub fn encode_out(r: &Out, o: &mut [u8; OUT_LEN]) {
+        o[0] = r.popped;
+        o[1] = r.sent;
+        o[2] = r.stop as u8;
+        o[3] = 0;
+        o[4..8].copy_from_slice(&r.status.to_le_bytes());
+    }
+    pub fn decode_out(b: &[u8]) -> Option<Out> {
+        if b.len() != OUT_LEN || b[3] != 0 || b[1] > b[0] || b[0] as usize > VEC_MAX {
+            return None;
+        }
+        Some(Out { popped: b[0], sent: b[1], stop: VecStop::from_u8(b[2])?, status: u32::from_le_bytes([b[4], b[5], b[6], b[7]]) })
+    }
+
+    /// The kernel's view after a `CMD_TX_DATAV` call.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct Tx {
+        /// Frames that reached the bus.
+        pub sent: usize,
+        /// Frames the server took and dropped (bus error, malformed slot).
+        pub dropped: usize,
+        /// Frames still in the TX ring: the kernel retries or drops them, and counts either way.
+        pub left: usize,
+        /// The reply disagreed with the ring, or could not be decoded.
+        pub lied: bool,
+    }
+    /// Reconcile the reply with the TX ring's pending counts around the call. The ring is the truth
+    /// for how many frames left it; of those, only what the reply says was sent is counted as sent
+    /// (a frame that left the ring and is not claimed as sent is counted as dropped).
+    pub fn tx_reconcile(asked: u8, before: usize, after: usize, reply: Option<&Out>) -> Tx {
+        let gone = before.saturating_sub(after);
+        match reply {
+            Some(r) if r.popped as usize == gone && gone <= asked as usize && after <= before => Tx { sent: r.sent as usize, dropped: gone - r.sent as usize, left: after, lied: false },
+            Some(r) => {
+                let sent = (r.sent as usize).min(gone);
+                Tx { sent, dropped: gone - sent, left: after, lied: true }
+            }
+            None => Tx { sent: 0, dropped: gone, left: after, lied: true },
+        }
+    }
+}
+
+#[cfg(test)]
+mod vec_tests {
+    use super::rxvmsg::{self, rx_reconcile, Rx};
+    use super::txvmsg::{self, tx_reconcile, Tx};
+    use super::{VecStop, VEC_MAX};
+
+    #[test]
+    fn a_full_batch_fits_half_a_ring_and_a_slot_holds_a_full_frame() {
+        assert_eq!(VEC_MAX, 16);
+        assert!(txvmsg::SLOT_HDR + txvmsg::ETH_MAX <= crate::el0ring::FRAME_MAX);
+        assert!(rxvmsg::OUT_LEN <= super::OUT_MAX && txvmsg::OUT_LEN <= super::OUT_MAX);
+    }
+
+    #[test]
+    fn rx_request_round_trips_and_refuses_bad_values() {
+        let i = rxvmsg::In { sdb: 0x1800_2000, skip_int: true, block_rx: false, max: 16, cap: 1600 };
+        let mut b = [0u8; rxvmsg::IN_LEN];
+        rxvmsg::encode_in(&i, &mut b);
+        assert_eq!(rxvmsg::decode_in(&b), Some(i));
+        for (at, v) in [(6usize, 0u8), (6, 17), (4, 2), (5, 2), (7, 1), (10, 1), (11, 9)] {
+            let mut bad = b;
+            bad[at] = v;
+            assert_eq!(rxvmsg::decode_in(&bad), None, "byte {at} = {v}");
+        }
+        let mut bad = b;
+        bad[8..10].copy_from_slice(&0u16.to_le_bytes());
+        assert_eq!(rxvmsg::decode_in(&bad), None);
+        bad[8..10].copy_from_slice(&((crate::el0ring::FRAME_MAX + 1) as u16).to_le_bytes());
+        assert_eq!(rxvmsg::decode_in(&bad), None);
+        assert_eq!(rxvmsg::decode_in(&b[..11]), None);
+    }
+
+    #[test]
+    fn rx_reply_round_trips_and_refuses_impossible_replies() {
+        let r = rxvmsg::Out { produced: 7, attempted: 8, stop: VecStop::BadFrame, drained: false, blk_diag: 0xdead_beef };
+        let mut b = [0u8; rxvmsg::OUT_LEN];
+        rxvmsg::encode_out(&r, &mut b);
+        assert_eq!(rxvmsg::decode_out(&b), Some(r));
+        let mut bad = b;
+        bad[0] = 9; // produced > attempted
+        assert_eq!(rxvmsg::decode_out(&bad), None);
+        bad = b;
+        bad[1] = 18; // attempted > VEC_MAX + 1
+        assert_eq!(rxvmsg::decode_out(&bad), None);
+        bad = b;
+        bad[2] = 7; // unknown stop code
+        assert_eq!(rxvmsg::decode_out(&bad), None);
+        bad = b;
+        bad[3] = 2;
+        assert_eq!(rxvmsg::decode_out(&bad), None);
+        bad = b;
+        bad[9] = 1;
+        assert_eq!(rxvmsg::decode_out(&bad), None);
+    }
+
+    #[test]
+    fn rx_reconcile_trusts_the_ring_not_the_reply() {
+        let out = |produced, attempted| rxvmsg::Out { produced, attempted, stop: VecStop::Limit, drained: false, blk_diag: 0 };
+        // honest: 5 pushed, 5 claimed
+        assert_eq!(rx_reconcile(16, 3, 8, Some(&out(5, 5))), Rx { take: 5, lost: 0, lied: false });
+        // honest with a loss: 6 read from the bus, one dropped
+        assert_eq!(rx_reconcile(16, 0, 5, Some(&out(5, 6))), Rx { take: 5, lost: 1, lied: false });
+        // the reply claims more than the ring holds: take what is really there, flag it
+        assert_eq!(rx_reconcile(16, 0, 2, Some(&out(9, 9))), Rx { take: 2, lost: 0, lied: true });
+        // the ring grew by more than was asked: never take more than asked
+        assert_eq!(rx_reconcile(4, 0, 9, Some(&out(9, 9))), Rx { take: 4, lost: 0, lied: true });
+        // no decodable reply (a faulted server): the frames already in the ring are still taken, and it is flagged
+        assert_eq!(rx_reconcile(16, 1, 4, None), Rx { take: 3, lost: 0, lied: true });
+        // the ring shrank during a read call: nothing to take, flagged
+        assert_eq!(rx_reconcile(16, 5, 2, Some(&out(0, 0))), Rx { take: 0, lost: 0, lied: true });
+        // an empty, honest call
+        assert_eq!(rx_reconcile(16, 0, 0, Some(&out(0, 0))), Rx { take: 0, lost: 0, lied: false });
+    }
+
+    #[test]
+    fn tx_slot_and_request_round_trip_and_refuse_bad_values() {
+        let eth = [0xabu8; 1514];
+        let mut slot = [0u8; crate::el0ring::FRAME_MAX];
+        let n = txvmsg::slot_encode(9, 1, true, &eth, &mut slot).unwrap();
+        assert_eq!(n, 1518);
+        assert_eq!(txvmsg::slot_decode(&slot[..n]), Some((9, 1, true, &eth[..])));
+        assert_eq!(txvmsg::slot_encode(0, 0, false, &[0u8; 1515], &mut slot), None);
+        assert_eq!(txvmsg::slot_encode(0, 0, false, &[], &mut slot), None);
+        assert_eq!(txvmsg::slot_decode(&slot[..4]), None); // header only
+        let mut bad = [0u8; 64];
+        bad[2] = 2;
+        assert_eq!(txvmsg::slot_decode(&bad), None);
+        let mut b = [0u8; txvmsg::IN_LEN];
+        txvmsg::encode_in(16, &mut b);
+        assert_eq!(txvmsg::decode_in(&b), Some(16));
+        assert_eq!(txvmsg::decode_in(&[0, 0, 0, 0]), None);
+        assert_eq!(txvmsg::decode_in(&[17, 0, 0, 0]), None);
+        assert_eq!(txvmsg::decode_in(&[4, 0, 1, 0]), None);
+    }
+
+    #[test]
+    fn tx_reply_round_trips_and_refuses_impossible_replies() {
+        let r = txvmsg::Out { popped: 6, sent: 5, stop: VecStop::BusError, status: 0x8000_0001 };
+        let mut b = [0u8; txvmsg::OUT_LEN];
+        txvmsg::encode_out(&r, &mut b);
+        assert_eq!(txvmsg::decode_out(&b), Some(r));
+        let mut bad = b;
+        bad[1] = 7; // sent > popped
+        assert_eq!(txvmsg::decode_out(&bad), None);
+        bad = b;
+        bad[0] = 17;
+        assert_eq!(txvmsg::decode_out(&bad), None);
+        bad = b;
+        bad[2] = 200;
+        assert_eq!(txvmsg::decode_out(&bad), None);
+    }
+
+    #[test]
+    fn tx_reconcile_counts_every_frame() {
+        let out = |popped, sent| txvmsg::Out { popped, sent, stop: VecStop::Limit, status: 0 };
+        // honest: 8 queued, all sent
+        assert_eq!(tx_reconcile(8, 8, 0, Some(&out(8, 8))), Tx { sent: 8, dropped: 0, left: 0, lied: false });
+        // honest, stopped on a bus error: 3 popped, 2 sent, 5 still queued
+        assert_eq!(tx_reconcile(8, 8, 5, Some(&out(3, 2))), Tx { sent: 2, dropped: 1, left: 5, lied: false });
+        // the reply claims more sent than left the ring: only what left the ring can have been sent
+        assert_eq!(tx_reconcile(8, 8, 6, Some(&out(8, 8))), Tx { sent: 2, dropped: 0, left: 6, lied: true });
+        // a faulted server: whatever left the ring is counted as dropped, never as sent
+        assert_eq!(tx_reconcile(8, 8, 5, None), Tx { sent: 0, dropped: 3, left: 5, lied: true });
+        // sent + dropped + left always equals what was queued
+        for (b, a, r) in [(16usize, 0usize, Some(out(16, 16))), (16, 9, Some(out(7, 3))), (5, 5, Some(out(0, 0))), (12, 2, None)] {
+            let t = tx_reconcile(16, b, a, r.as_ref());
+            assert_eq!(t.sent + t.dropped + t.left, b, "{b} {a} {r:?}");
+        }
+    }
+}
+
 #[cfg(test)]
 mod bp_reg {
     use super::*;
@@ -835,7 +1227,7 @@ mod cmd_numbers {
     fn every_command_el0_wifi_dispatches_has_its_own_number() {
         use super::*;
         let all = [
-            CMD_INIT, CMD_POLL, CMD_BUS_PROBE, CMD_RX_READ, CMD_TX_DATA, CMD_TX_CTL, CMD_KEYX_PEEK, CMD_BP_WRITE, CMD_BP_REG,
+            CMD_INIT, CMD_POLL, CMD_BUS_PROBE, CMD_RX_READ, CMD_TX_DATA, CMD_TX_CTL, CMD_RX_READV, CMD_TX_DATAV, CMD_KEYX_PEEK, CMD_BP_WRITE, CMD_BP_REG,
             crate::wpasrvabi::CMD_KEY_INSTALL, CMD_INJECT_READ_VA, CMD_INJECT_CMD53_STALL, CMD_SELFTEST_KEYX_WRITE,
             CMD_SELFTEST_BAD_RING, CMD_SELFTEST_FAULT,
         ];
