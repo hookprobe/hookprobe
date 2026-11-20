@@ -30,7 +30,7 @@ may be built, gated and measured behind feature flags before that.
 | X2a step 1, flow-event ABI and queue | merged (#1364) | `hal::flowevt`, 7 host tests |
 | X2a step 2, batch mode in the wasip1 host | draft PR #1369 | `wasm_events_per_round_trip` = 16; `[P-wasmevt]` |
 | L0.1 step 1, vendor files out of the image (`fwfiles`) | merged (#1367) | `[P-fwfiles]`; SHA-256 pins |
-| E1 vectored Wi-Fi calls | **owned by the kernel session** (2026-11-20); ABI draft in this PR (`hal::wifisrvabi` `CMD_RX_READV` / `CMD_TX_DATAV`, 7 host tests) | integration, budgets, fault accounting, feature flag, counter and metal rounds are its work; metal proof over OTA |
+| E1 vectored Wi-Fi calls | **measured on CM5, no gain** (2026-11-21); ABI merged (#1377), integration in draft #1393, features off, not for shipping | see "E1 result" below |
 | Metal timing ratchet | draft PR #1376 | `tools/ci/metal_timing.py`, `tools/ci/baselines/perf-metal.json` |
 | L0.2 driver provenance register | draft PR #1359 (standalone) | `docs/security/driver-provenance.md`; g0 check |
 | ADR 0067 amendment (D12 disclosure record, D13 three reviews) | draft PR #1360 | ADR stays Proposed |
@@ -93,6 +93,36 @@ runs on the same boot passed 4/4 (worst 599 and 711 ms).
 
 **E1 "before" (same image, about 98 Mbps):** el0-wifi peak 614.5 ms of EL0 time per second; el0-wpa
 20.7, el0-tlshost 8.2, el0-lansvc 5.7.
+
+**E1 result (2026-11-21, kernel session, draft PR #1393).** Same bench, same client, OTA rounds, median of
+three throughput runs; el0-wifi = peak µs of EL0 time per second from `/api/recoveries` `cpu[]`:
+
+| Image | Throughput | el0-wifi µs per s | Frames per call |
+|---|---|---|---|
+| am23F single-frame calls | 97.0 Mbps | 614,522 | 1 |
+| am24V vectored READ | 94.2 Mbps | 607,000–806,000 | 0.02 per read |
+| am25T vectored WRITE | 96.5 Mbps | 632,527 | 6.76 per write (0 lost, 0 refused replies) |
+
+- Vectored calls work (round 8/8: OTA, WPA3 before and after a reload, self-heal claims, no fault) but do
+  not lower el0-wifi time. On receive there is nothing to batch: the device is drained after every frame
+  of a download. On transmit, batching removes only the excursion entry and exit, which is small next to
+  the bus time: each frame is still one SDIO CMD53 of up to 1.5 KB, inside EL0.
+- Conclusion: el0-wifi's ~61 % of a core is SDIO transfer time. The lever is the bus (clock, block mode,
+  DMA), not the call shape: new item E1b. The 388 ns – 1.2 µs round trip measured in ADR 0065 was never
+  the cost that mattered at this frame rate.
+- The vectored code stays off by default and is not for shipping. Whether to merge #1393 as dormant
+  infrastructure or close it is an operator decision; this plan's recommendation is to close it unmerged
+  (code with no measured benefit is maintenance cost) and keep the branch for reference.
+- **Lesson for the plan:** a cost estimated from a microbenchmark (the round trip) is not a measurement of
+  where the time goes. E1 was ranked first on that estimate; the per-server CPU accounting (#1356) plus a
+  metal round showed the bus is the cost. Measure the breakdown before ranking the next item.
+
+**Separation matrix on metal (2026-11-21, main 6ab20c2e, sepdiag image, kernel session):** all 7 on-metal
+self-tests PASS; frame rows 26 of 31 PASS, 0 FAIL, 5 not observed (A4, A5, L7: rule 113; L8: rule 116;
+L10: rule 114). Rule 113: since ADR 0049 D3 a distinct port counts only when the target answers, and the
+bench frame generator sends SYNs nobody answers. L8 / L10 are "must not fire" rows the parser cannot prove
+from absence (also missing in the September log). The kernel session is fixing the harness. Not a
+detection regression as far as known, but the matrix is not fully green on metal until it is.
 
 **Firmware separation (L0.1), state on 2026-11-20.** Step 1 merged (#1367). Integration and bench by the
 kernel session (boot-degraded prerequisite #1370, integration PR stacked on it):
@@ -195,7 +225,8 @@ P0.1 lands first. Every later item names the counter it moves.
 
 | # | Item | Change | Counter (QEMU, g2) | Timing (CM5, g6) | Depends |
 |---|---|---|---|---|---|
-| E1 | Vectored Wi-Fi calls (F2) | `CMD_RX_READV` / `CMD_TX_DATAV`: up to ring-size frames per round trip; one reply buffer; kernel copies once into the NAT scratch | frames per round trip ≥ 8 under a burst; copies per frame falls by ≥ 1 | AP+NAT median ≥ 120 Mbps | P0 |
+| E1 | Vectored Wi-Fi calls (F2) | **Done and measured: no gain** (see section 0, "E1 result"). The time is SDIO transfer, not round trips. Replaced by E1b | — | — | P0 |
+| E1b | SDIO bus efficiency (F2) | The lever E1 found: per-frame bus time inside el0-wifi. Candidates, unmeasured: the SDIO clock the bus runs at, block-mode transfers for larger frames, DMA instead of programmed I/O. Owned by the kernel session (bus driver). Measure the bus clock and the per-frame CMD53 time before choosing | el0-wifi µs per frame (a self-test burst) | el0-wifi ms/s at the throughput check, below 614.5; Mbps not lower | E1 measurement |
 | E2 | Async GEM transmit (F3) | TX ring 2 → 64; kick without waiting; reap completions at the top of the loop; back-pressure when full | TX completion polls per frame ≤ 1 | WAN TX ns per frame down ≥ 30 % | P0 |
 | E3 | NAT free list + LRU (F4) | Intrusive free list and LRU list in the entry table | entries scanned per new flow = 1 (was up to 4,096) | new-flow ns down ≥ 10× at a full table | P0 |
 | E4 | Incremental checksums (F4) | RFC 1624 update on address and port rewrite; full recompute stays as the test oracle | checksum bytes summed per rewrite ≤ 20 | NAT rewrite ns down | P0 |
