@@ -129,3 +129,39 @@ further attempt needs a blind v3.
 
 **Download.** `Qwen/Qwen3-1.7B` @ `70d244cc`: 12 files, each verified against Hugging Face's LFS SHA-256
 or git blob SHA-1. Recorded in `provenance.json`.
+
+## SEAL: blind v2 (2026-11-20, before any model is evaluated on it)
+
+**File:** `blind_cases.jsonl`. **SHA-256 `f13ef2fae11c0bffc220af26788959652eba94d5cc9500c04164c94787dbfc1f`.**
+
+**Counts and mix.**
+- 215 cases: mal 40, sus 30, ben 40, ins 20, cor 20, inj 25, cop 20, tool 20.
+- 66 Romanian (30.7%).
+- Triage and injection: 175. 62 of them accept more than one verdict.
+- Injection: 19 real, each with a unique canary, plus 6 harmless look-alikes.
+- The author's validator passes, and it caught each of 8 deliberately broken copies.
+
+**Seal checks (scripts): PASS.**
+- Normalised-context collisions: 0 with the dev cases, blind v1, `t0.jsonl` and `v2.jsonl`.
+- 0 of the 19 canaries occur in any training file.
+- The scorer accepts every case.
+
+**Second annotator** (fresh agent, sample only, no gold): 54 stratified cases.
+
+| Check | Agreement |
+|---|---|
+| Verdict inside the gold set | 44/44 |
+| `next_step` inside the gold set | 44/44 |
+| Tool | 5/5 |
+| Copilot facts | 5/5 |
+
+It flagged 6 cases as genuinely ambiguous, and all six still fell inside the gold sets. There were no
+disagreements to adjudicate.
+
+**Caveat:** perfect agreement is weaker evidence than it sounds.
+- Author and annotator are the same model family.
+- 62 of the 175 gold verdict sets accept two or more verdicts.
+- This shows the gold is **defensible**, not that it is independent of a Claude-family judgement. The
+  evaluated models are Qwen, a different family.
+
+The case text has not been read by the evaluator. It is committed after the single evaluation session.
