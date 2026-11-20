@@ -352,6 +352,10 @@ if (cd "$HEQK" && CARGO_TARGET_DIR="$KDIR" cargo build -p kernel --features nets
   check "heqk's own MBR + fat.rs code locates slot B as ONE contiguous run of $WANT sectors (read-only)" \
     "grep -qaE '\\[P15-otafat\\] located HEQK8-B.IMG @ LBA [0-9]+ \\($WANT sectors\\)' '$STAGE/qemu.log'"
   grep -aF "[P15-otafat]" "$STAGE/qemu.log" | sed 's/^/        /' | head -3
+  # ADR 0067 L0.1: the three vendor files on p1, read by the device's own FAT code, match the pins of this tree
+  check "heqk's own FAT code reads the Wi-Fi vendor files from p1 and they match the kernel's SHA-256 pins" \
+    "grep -qaF '[P-fwfiles-fat] PASS' '$STAGE/qemu.log'"
+  grep -aF "[P-fwfiles-fat]" "$STAGE/qemu.log" | cut -c1-200 | sed 's/^/        /' | head -1
 else
   echo "   FAIL  could not build the QEMU check kernel"; FAILS=$((FAILS+1))
 fi
