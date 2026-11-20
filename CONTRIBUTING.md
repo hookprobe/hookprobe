@@ -4,7 +4,7 @@ HookProbe OS is **one operating system** — a single signed OCI image, one data
 graph, one AI. Every named component is a *module/lens* on the same substrate, never a separate
 product. Before contributing, read ADR 0047 (`docs/adr/0047-heqk-everywhere-on-device-mission-control.md`:
 heqk replaces Linux everywhere), `os/kernel/ARCHITECTURE.md` and `docs/architecture/MissionControl.md`
-(the target dashboard); `docs/architecture/Readme.md` describes the legacy Linux tier, and skim `CLAUDE.md` for the load-bearing decisions that are not up for
+(the target dashboard), and skim `CLAUDE.md` for the load-bearing decisions that are not up for
 relitigation.
 
 ## Ground rules
