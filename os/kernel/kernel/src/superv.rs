@@ -328,48 +328,16 @@ pub fn swifi_campaign() -> bool {
     let probe = |s: usize| if s == 0 { crate::lansvc::probe(false) } else { crate::tlshost::probe(false) };
     // H6b — the workload replayed after every injection: a fixed set of calls whose answers were recorded on the clean
     // image ("golden"). It reaches far more of each server than the probe: every el0-lansvc command with a well-formed
-    // DNS query, a DNS answer, a DHCP DISCOVER and a patterned buffer; the el0-tlshost HTTP parser with eight requests.
+    // DNS query, a DNS answer, a DHCP DISCOVER and a patterned buffer; the el0-tlshost HTTP parser with eight requests
+    // (`lansvc::Server::known_call`, `tlshost::KNOWN` — since H6c the probes sweep the same set).
     // work(s) = a digest over all answers; None = a call faulted / was refused.
-    const DNS_Q: &[u8] = &[0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 1, 0, 1];
-    const DNS_A: &[u8] = &[0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 1, 0, 1,
-        0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 93, 184, 216, 34];
-    const HTTP: [&[u8]; 8] = [
-        b"GET / HTTP/1.1\r\nHost: heqk.local\r\n\r\n",
-        b"GET /api/health?x=1&y=two HTTP/1.1\r\nHost: 10.99.0.1\r\nCookie: s=abcdef0123456789\r\nAccept: */*\r\n\r\n",
-        b"POST /api/login HTTP/1.1\r\nHost: heqk.local\r\nContent-Length: 11\r\nContent-Type: application/x-www-form-urlencoded\r\nOrigin: https://heqk.local\r\n\r\ntoken=abcde",
-        b"POST /api/owner-rules HTTP/1.1\r\nHost: heqk.local\r\nX-HQ-CSRF: 0011223344556677\r\nContent-Length: 0\r\n\r\n",
-        b"HEAD /index.html HTTP/1.0\r\n\r\n",
-        b"GET /a/very/long/path/that/goes/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on/and/on HTTP/1.1\r\nHost: h\r\n\r\n",
-        b"GET / HTTP/1.1\r\nHost: heqk.local\r\n", // incomplete
-        b"\x16\x03\x01\x02\x00\x01\x00\x01\xfc\x03\x03 not http at all", // a TLS record on the plain port
-    ];
     // one workload call by index: el0-lansvc has 18 commands x 4 inputs = 72, el0-tlshost 8 requests
     const NW: [usize; 2] = [72, 8];
     let call = |s: usize, k: usize| -> Option<u64> {
         if s == 0 {
-            let v = crate::lansvc::swifi()?;
-            // a DHCP DISCOVER: BOOTP header (op 1, htype 1, hlen 6) + magic cookie + option 53 = 1 + end
-            let mut dhcp = [0u8; 244];
-            dhcp[0] = 1;
-            dhcp[1] = 1;
-            dhcp[2] = 6;
-            dhcp[4..8].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
-            dhcp[28..34].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
-            dhcp[236..240].copy_from_slice(&[99, 130, 83, 99]);
-            dhcp[240..244].copy_from_slice(&[53, 1, 1, 255]);
-            let mut pat = [0u8; 96];
-            for (i, b) in pat.iter_mut().enumerate() {
-                *b = (i as u8).wrapping_mul(37).wrapping_add(11);
-            }
-            let input: &[u8] = match k % 4 {
-                0 => DNS_Q,
-                1 => DNS_A,
-                2 => &dhcp[..],
-                _ => &pat[..],
-            };
-            v.swifi_work(1 + (k / 4) as u32, input)
+            crate::lansvc::swifi()?.known_call(k)
         } else {
-            crate::tlshost::host()?.swifi_work(HTTP[k])
+            crate::tlshost::host()?.swifi_work(crate::tlshost::KNOWN[k])
         }
     };
     let stats = |s: usize| -> (u64, u64) {
