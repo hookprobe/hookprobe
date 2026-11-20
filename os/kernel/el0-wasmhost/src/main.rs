@@ -82,6 +82,17 @@ const DETECT_FAIL_NIBBLE: u32 = 0xF; // per-input fail-closed marker (trap / bad
 const WASIP1_MAGIC: u64 = 0x4851_5741_5349_5031; // sentinel ("HQWASIP1")
 #[cfg(not(feature = "syncabi"))]
 const WASIP1_STDIN_OFF: usize = 24;
+// ---- ADR 0067 D6 / X2a step 2: BATCH mode. Same work-page layout as wasip1 mode, selected by
+// its own magic. stdin is a vector of 16-byte flow-event records (up to 16 = 256 bytes); the
+// module runs ONCE and writes one verdict byte per record; the host returns ONE packed word.
+#[cfg(not(feature = "syncabi"))]
+const WASIP1B_MAGIC: u64 = 0x4851_5741_5349_5042; // sentinel ("HQWASIPB")
+#[cfg(not(feature = "syncabi"))]
+const WASIP1_STDIN_MAX: usize = 256; // 16 records of 16 bytes (== hal::flowevt::BATCH_BYTES)
+#[cfg(not(feature = "syncabi"))]
+const BATCH_REC_LEN: usize = 16; // == hal::flowevt::REC_LEN
+#[cfg(not(feature = "syncabi"))]
+const BATCH_MAX: usize = 16; // == hal::flowevt::BATCH_MAX
 
 // ============================ bump allocator ================================
 // A monotonic bump over the kernel-mapped [HEAP_BASE, HEAP_BASE+HEAP_SIZE) window. wasmi's
@@ -321,13 +332,13 @@ fn run_detect(module: &[u8], inputs_base: usize, n: usize, stride: usize) -> u32
 /// kernel staged) and a stdout sink (the module's verdict byte).
 #[cfg(not(feature = "syncabi"))]
 struct WasiState {
-    stdin: [u8; 64],
+    stdin: [u8; WASIP1_STDIN_MAX],
     stdin_len: usize,
     stdin_pos: usize,
     stdout: [u8; 64],
     stdout_len: usize,
-    #[allow(dead_code)]
     exit_code: i32,
+    exited: bool, // proc_exit was called
 }
 
 /// Run a REAL, kernel-verified `wasm32-wasip1` module through wasmi with a minimal WASI
@@ -337,21 +348,69 @@ struct WasiState {
 /// can only ever yield a verdict or the fail-closed sentinel, never escape EL0.
 #[cfg(not(feature = "syncabi"))]
 fn run_wasip1(module: &[u8], stdin_bytes: &[u8]) -> u32 {
+    match run_wasip1_io(module, stdin_bytes) {
+        Some((out, n, _)) if n >= 1 => out[0] as u32,
+        _ => FAIL,
+    }
+}
+
+/// ADR 0067 D6 / X2a step 2 — BATCH mode: run the module ONCE with a vector of flow-event
+/// records on stdin and return ONE packed verdict word for `n = stdin_len / 16` records, two
+/// bits per record. The packing mirrors `hal::flowevt::pack_verdicts` (this crate cannot
+/// depend on hal): record i gets 1 (pass) or 2 (alert) when stdout byte i is 1 or 2, else 3
+/// (fault). A record the module did not answer stays 0, which the kernel counts as a fault. A
+/// module that wrote MORE bytes than records gets a fault marker at record n (when n < 16), so
+/// the surplus is never silently dropped. A wasmi error or a trap is the all-ones FAIL word.
+#[cfg(not(feature = "syncabi"))]
+fn run_wasip1_batch(module: &[u8], stdin_bytes: &[u8]) -> u32 {
+    let (out, out_len, clean) = match run_wasip1_io(module, stdin_bytes) {
+        Some(r) => r,
+        None => return FAIL,
+    };
+    if !clean {
+        return FAIL;
+    }
+    let n = (stdin_bytes.len().min(WASIP1_STDIN_MAX) / BATCH_REC_LEN).min(BATCH_MAX);
+    let mut word = 0u32;
+    let mut i = 0usize;
+    while i < n && i < out_len {
+        let v: u32 = match out[i] {
+            1 => 1,
+            2 => 2,
+            _ => 3,
+        };
+        word |= v << (2 * i);
+        i += 1;
+    }
+    if out_len > n && n < BATCH_MAX {
+        word |= 3 << (2 * n);
+    }
+    word
+}
+
+/// The shared wasip1 run: `Some((stdout bytes, stdout length, clean))`, or `None` when the
+/// module could not be decoded, linked or started. `clean` is false when `_start` trapped
+/// without a `proc_exit(0)` before it (the single-input mode ignores it, as it always did).
+#[cfg(not(feature = "syncabi"))]
+fn run_wasip1_io(module: &[u8], stdin_bytes: &[u8]) -> Option<([u8; 64], usize, bool)> {
     use wasmi::{Caller, Engine, Extern, Linker, Module, Store};
+    // Inside this function the fail-closed result is "no run" (the callers map it to the FAIL word).
+    const FAIL: Option<([u8; 64], usize, bool)> = None;
     let engine = Engine::default();
     let m = match Module::new(&engine, module) {
         Ok(m) => m,
         Err(_) => return FAIL,
     };
     let mut init = WasiState {
-        stdin: [0u8; 64],
+        stdin: [0u8; WASIP1_STDIN_MAX],
         stdin_len: 0,
         stdin_pos: 0,
         stdout: [0u8; 64],
         stdout_len: 0,
         exit_code: 0,
+        exited: false,
     };
-    let n = stdin_bytes.len().min(64);
+    let n = stdin_bytes.len().min(WASIP1_STDIN_MAX);
     init.stdin[..n].copy_from_slice(&stdin_bytes[..n]);
     init.stdin_len = n;
     let mut store = Store::new(&engine, init);
@@ -385,7 +444,7 @@ fn run_wasip1(module: &[u8], stdin_bytes: &[u8]) -> u32 {
                 let avail = slen - pos;
                 let take = len.min(avail);
                 if take > 0 {
-                    let mut tmp = [0u8; 64];
+                    let mut tmp = [0u8; WASIP1_STDIN_MAX];
                     {
                         let d = caller.data();
                         tmp[..take].copy_from_slice(&d.stdin[pos..pos + take]);
@@ -481,6 +540,7 @@ fn run_wasip1(module: &[u8], stdin_bytes: &[u8]) -> u32 {
     if linker
         .func_wrap(WASI, "proc_exit", |mut caller: Caller<'_, WasiState>, code: i32| {
             caller.data_mut().exit_code = code;
+            caller.data_mut().exited = true;
         })
         .is_err()
     {
@@ -501,13 +561,9 @@ fn run_wasip1(module: &[u8], stdin_bytes: &[u8]) -> u32 {
     };
     // A trailing trap after proc_exit is EXPECTED (the crt's post-exit unreachable); the
     // verdict was written to stdout before that, so read it back regardless of the result.
-    let _ = start.call(&mut store, ());
+    let ran = start.call(&mut store, ()).is_ok();
     let d = store.data();
-    if d.stdout_len >= 1 {
-        d.stdout[0] as u32
-    } else {
-        FAIL
-    }
+    Some((d.stdout, d.stdout_len, ran || (d.exited && d.exit_code == 0)))
 }
 
 /// EL0 entry. The kernel set our SP (via make_el0_thread) and mapped the work page + heap.
@@ -526,18 +582,19 @@ pub extern "C" fn _start() -> ! {
     let mode = unsafe { core::ptr::read_volatile(work as *const u64) };
     // M5.5 (QEMU) — wasip1 mode: the module is in WASIP1_MODULE_BASE (too big for the work
     // page); the work page carries [MAGIC, wasm_len, stdin_len, stdin bytes].
+    // X2a step 2 — batch mode (WASIP1B_MAGIC): the same layout, stdin is a vector of records.
     #[cfg(not(feature = "syncabi"))]
-    if mode == WASIP1_MAGIC {
+    if mode == WASIP1_MAGIC || mode == WASIP1B_MAGIC {
         let (wasm_len, stdin_len) = unsafe {
             let w = core::ptr::read_volatile((work + 8) as *const u64) as usize;
             let s = core::ptr::read_volatile((work + 16) as *const u64) as usize;
-            (w.min(4 * 1024 * 1024), s.min(64))
+            (w.min(4 * 1024 * 1024), s.min(WASIP1_STDIN_MAX))
         };
         let module: &[u8] =
             unsafe { core::slice::from_raw_parts(WASIP1_MODULE_BASE as *const u8, wasm_len) };
         let stdin: &[u8] =
             unsafe { core::slice::from_raw_parts((work + WASIP1_STDIN_OFF) as *const u8, stdin_len) };
-        let v = run_wasip1(module, stdin);
+        let v = if mode == WASIP1B_MAGIC { run_wasip1_batch(module, stdin) } else { run_wasip1(module, stdin) };
         send_verdict_and_exit(v);
     }
     if mode == DETECT_MAGIC {

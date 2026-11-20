@@ -302,7 +302,9 @@ fn sched_demo_reported() -> bool {
         && word(&WASIP1_RES_A)
         && word(&WASIP1_RES_B)
         && word(&WASIP1_RES_C)
-        && word(&WASIP1_RES_D);
+        && word(&WASIP1_RES_D)
+        && word(&WASMEVT_RES_A)
+        && word(&WASMEVT_RES_B);
     base
 }
 const WORK: u32 = 60_000; // per-print busy work (short so workers finish promptly)
@@ -550,6 +552,28 @@ static mut WASIP1_C_SKS: KStack = KStack([0; KSTACK_SIZE]);
 static mut WASIP1_D_HKS: KStack = KStack([0; KSTACK_SIZE]);
 #[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
 static mut WASIP1_D_SKS: KStack = KStack([0; KSTACK_SIZE]);
+// ADR 0067 D6 / X2a step 2 — the flow-event BATCH hosts: one host run answers a VECTOR of records with one
+// packed verdict word (A: the first 16 queued records; B: the remaining 4). Same host ELF, batch mode.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+const WASIP1B_MAGIC: u64 = 0x4851_5741_5349_5042; // "HQWASIPB" (== el0-wasmhost WASIP1B_MAGIC)
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMEVT_RES_A: AtomicUsize = AtomicUsize::new(0); // round trip 1 result word
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMEVT_RES_B: AtomicUsize = AtomicUsize::new(0); // round trip 2 result word
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMEVT_N1: AtomicUsize = AtomicUsize::new(0); // records handed to host A
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMEVT_N2: AtomicUsize = AtomicUsize::new(0); // records handed to host B
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static WASMEVT_TAMPER_NOSPAWN: AtomicBool = AtomicBool::new(false); // bad signature -> no host
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMEVT_A_HKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMEVT_A_SKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMEVT_B_HKS: KStack = KStack([0; KSTACK_SIZE]);
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+static mut WASMEVT_B_SKS: KStack = KStack([0; KSTACK_SIZE]);
 
 // --- M5.4 (Track C) — DETECTION-at-PARITY host (ADR 0044 D4 #4, small scale). The SAME
 // el0-wasmhost binary runs a signed DETECTION module (linear memory + hp_input/hp_emit
@@ -11967,6 +11991,28 @@ pub extern "C" fn handle_irq(sp: usize) -> usize {
                     let cat_ok = vc == ref_c && vd == ref_d && vc == 2 && vd == 1;
                     kprint!(" [P-wasip1-cat] {} — 2-module signed CATALOGUE via the ONE wasip1 host: a DISTINCT DNS-RPZ module (not the port-signature one, same WASI ABI) 'host.malware.example' -> {} (kernel rpz_blocked ref={} => DROP=2), 'good.example.com' -> {} (ref={} => PASS=1) — verdicts == in-kernel dnssink::rpz_blocked case-for-case; the portable-signed-rule catalogue on heqk\n",
                         if cat_ok { "PASS" } else { "FAIL" }, vc, ref_c, vd, ref_d);
+
+                    // ADR 0067 D6 / X2a step 2 — a VECTOR of flow events per EL0 round trip. Host A got the
+                    // first 16 queued records, host B the remaining 4; each ran the signed batch module
+                    // ONCE and returned one packed word (2 bits per record). The kernel reads the words
+                    // with hal::flowevt::tally (fail-closed: an unanswered record is a fault, never a pass).
+                    let ea = WASMEVT_RES_A.load(Ordering::SeqCst);
+                    let eb = WASMEVT_RES_B.load(Ordering::SeqCst);
+                    let w1 = if ea != 0 { (unsafe { read_volatile(ea as *const u64) }) as u32 } else { 0 };
+                    let w2 = if eb != 0 { (unsafe { read_volatile(eb as *const u64) }) as u32 } else { 0 };
+                    let n1 = WASMEVT_N1.load(Ordering::SeqCst);
+                    let n2 = WASMEVT_N2.load(Ordering::SeqCst);
+                    let t1 = hal::flowevt::tally(w1, n1);
+                    let t2 = hal::flowevt::tally(w2, n2);
+                    let pos1 = (0..hal::flowevt::BATCH_MAX).all(|i| hal::flowevt::verdict_at(w1, i) == if matches!(i, 2 | 5 | 11) { 2 } else { 1 });
+                    let pos2 = (0..hal::flowevt::BATCH_MAX).all(|i| hal::flowevt::verdict_at(w2, i) == if i == 1 { 2 } else if i < 4 { 1 } else { 0 });
+                    let ev_a = n1 == 16 && t1 == (3, 0) && pos1;
+                    let ev_b = n2 == 4 && t2 == (1, 0) && pos2;
+                    let ev_c = WASMEVT_TAMPER_NOSPAWN.load(Ordering::SeqCst);
+                    // The work counter: records answered in round trip 1 (0 when that round trip did not come back clean).
+                    arch_aarch64::perfctr::emit("wasm_events_per_round_trip", if t1.1 == 0 && pos1 { n1 as u64 } else { 0 });
+                    kprint!(" [P-wasmevt] {} — a VECTOR of flow-event records per EL0 round trip (ADR 0067 D6, X2a step 2): 20 events queued, drain_batch -> a signed wasm32-wasip1 batch module run ONCE per batch by the wasmi host in batch mode -> ONE packed verdict word (2 bits per record) over the Endpoint-cap IPC; (a) round trip 1: {} records -> word {:#010x}, alerts/faults={}/{} (want 3/0), alert exactly at records 2,5,11 and pass elsewhere={} => {}; (b) round trip 2: {} records -> word {:#010x}, alerts/faults={}/{} (want 1/0), alert exactly at record 1, no answer past record 3={} => {}; (c) a BAD-SIGNATURE copy of the module REFUSED by the kernel before any host is spawned={} [QEMU-proven, ONE module; the host is SPAWNED PER BATCH here, not resident; a module alert would map to an observe-class event, which is NOT wired yet; nothing here is on a packet path]\n",
+                        if ev_a && ev_b && ev_c { "PASS" } else { "FAIL" }, n1, w1, t1.0, t1.1, pos1, ev_a, n2, w2, t2.0, t2.1, pos2, ev_b, ev_c);
                 }
                 #[cfg(feature = "wasmhost")]
                 kprint!(" [ALL] P0 P1 P1b P2 P3 P4 P5 P5b P6 P6b DRV P7c P12 P-r1-ipc P-elf P-wasm P-wasm-el0 P-wasmi-el0 P-wasm-parity P-wasip1 P-wasip1-cat GREEN\n");
@@ -13596,6 +13642,25 @@ fn bringup_wasip1_el0(
     prio: u8,
     kstack: usize,
 ) -> Option<usize> {
+    bringup_wasip1_el0_mode(mmu, parsed, module, stdin, ep, prio, kstack, WASIP1_MAGIC)
+}
+
+/// The wasip1 bring-up with the work-page mode word chosen by the caller: `WASIP1_MAGIC` (one
+/// input, the host returns the first stdout byte) or `WASIP1B_MAGIC` (X2a step 2: stdin is a
+/// vector of flow-event records, the host returns one packed verdict word). stdin is capped at
+/// 256 bytes (16 records) in both modes; the existing single-input callers send 16-20 bytes.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+#[allow(clippy::too_many_arguments)]
+fn bringup_wasip1_el0_mode(
+    mmu: &arch_aarch64::Mmu,
+    parsed: &elf::ParsedElf,
+    module: &[u8],
+    stdin: &[u8],
+    ep: ipc::EpHandle,
+    prio: u8,
+    kstack: usize,
+    magic: u64,
+) -> Option<usize> {
     let (l1, asid) = mmu.new_addr_space();
     if l1 == 0 {
         return None;
@@ -13634,14 +13699,14 @@ fn bringup_wasip1_el0(
         }
         mmu.map_user_data_in(l1, WASMI_MODULE_VA + off, f);
     }
-    // Work page: [+0]=WASIP1_MAGIC [+8]=wasm_len [+16]=stdin_len [+24..]=stdin bytes.
+    // Work page: [+0]=mode magic [+8]=wasm_len [+16]=stdin_len [+24..]=stdin bytes.
     let work = mmu.alloc_frame();
     if work == 0 {
         return None;
     }
-    let sn = stdin.len().min(64);
+    let sn = stdin.len().min(hal::flowevt::BATCH_BYTES);
     unsafe {
-        write_volatile(work as *mut u64, WASIP1_MAGIC);
+        write_volatile(work as *mut u64, magic);
         write_volatile((work + 8) as *mut u64, module.len() as u64);
         write_volatile((work + 16) as *mut u64, sn as u64);
         core::ptr::copy_nonoverlapping(stdin.as_ptr(), (work + 24) as *mut u8, sn);
@@ -13731,7 +13796,60 @@ fn m5_wasip1_el0_spawn() {
             let _ = bringup_wasip1_el0(&mmu, &parsed, dmod, ben, eh, 8, hks);
         }
     }
+    m5_wasmevt_el0_spawn(&mmu, &parsed); // ADR 0067 D6 / X2a step 2: a VECTOR of flow events per round trip
     EL0_SCHED_MODE.store(true, Ordering::Relaxed); // scheduled-EL0 phase: faults restart
+}
+
+/// ADR 0067 D6 / X2a step 2 — deliver a VECTOR of flow-event records to a signed wasip1 module in
+/// ONE EL0 round trip. 20 events are queued (`hal::flowevt::Queue`); `drain_batch` hands the first
+/// 16 to host A and the remaining 4 to host B, each host runs the module ONCE in batch mode and
+/// returns one packed verdict word over the same Endpoint-cap IPC as the other wasip1 hosts.
+/// Records 2, 5, 11 of the first batch and record 1 of the second carry an alert port. The kernel
+/// verifies the module signature first; a bad signature spawns no host. [P-wasmevt] checks the words.
+#[cfg(all(not(feature = "cm5"), feature = "wasmhost"))]
+fn m5_wasmevt_el0_spawn(mmu: &arch_aarch64::Mmu, parsed: &elf::ParsedElf) {
+    use hal::flowevt::{FlowEvt, Queue, BATCH_BYTES, KIND_CLOSE, REC_LEN};
+    let (wasm, pk, sig) = wasmhost::fixture_wasip1_flowbatch();
+    // FAIL-CLOSED before any EL0 hand-off: a corrupted signature is refused (same check as [P-wasip1]).
+    let mut badsig = [0u8; 64];
+    badsig.copy_from_slice(&sig[..64]);
+    badsig[0] ^= 0x01;
+    WASMEVT_TAMPER_NOSPAWN.store(wasmhost::verified_module(wasm, pk, &badsig).is_none(), Ordering::SeqCst);
+    let module = match wasmhost::verified_module(wasm, pk, sig) {
+        Some(m) => m,
+        None => {
+            kprint!(" [P-wasmevt] FAIL: signed flow-event batch module failed Ed25519 verify\n");
+            return;
+        }
+    };
+    let mut q: Queue<32> = Queue::new();
+    for i in 0..20u32 {
+        let dport: u16 = match i {
+            2 | 17 => 4444, // 17 = record 1 of the second batch
+            5 => 23,
+            11 => 31337,
+            _ => [443, 53, 8080][(i % 3) as usize],
+        };
+        q.push(FlowEvt::new(0x0a00_0010 + i, 0x5db8_d822, dport, 6, KIND_CLOSE, 10 + i as u64, 4096 * (i as u64 + 1)));
+    }
+    let mut b1 = [0u8; BATCH_BYTES];
+    let n1 = q.drain_batch(&mut b1);
+    let mut b2 = [0u8; BATCH_BYTES];
+    let n2 = q.drain_batch(&mut b2);
+    WASMEVT_N1.store(n1, Ordering::SeqCst);
+    WASMEVT_N2.store(n2, Ordering::SeqCst);
+    if let Some(eh) = ipc::ep_create() {
+        let sks = core::ptr::addr_of!(WASMEVT_A_SKS) as usize + KSTACK_SIZE;
+        WASMEVT_RES_A.store(spawn_ipc_result_server(mmu, eh, 9, sks), Ordering::SeqCst);
+        let hks = core::ptr::addr_of!(WASMEVT_A_HKS) as usize + KSTACK_SIZE;
+        let _ = bringup_wasip1_el0_mode(mmu, parsed, module, &b1[..n1 * REC_LEN], eh, 8, hks, WASIP1B_MAGIC);
+    }
+    if let Some(eh) = ipc::ep_create() {
+        let sks = core::ptr::addr_of!(WASMEVT_B_SKS) as usize + KSTACK_SIZE;
+        WASMEVT_RES_B.store(spawn_ipc_result_server(mmu, eh, 9, sks), Ordering::SeqCst);
+        let hks = core::ptr::addr_of!(WASMEVT_B_HKS) as usize + KSTACK_SIZE;
+        let _ = bringup_wasip1_el0_mode(mmu, parsed, module, &b2[..n2 * REC_LEN], eh, 8, hks, WASIP1B_MAGIC);
+    }
 }
 
 /// M5.4 DETECT-mode work-page magic (== el0-wasmhost `DETECT_MAGIC`). Both tiers.
