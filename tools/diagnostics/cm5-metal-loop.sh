@@ -15,6 +15,7 @@ ROOT="$(cd "$HERE/../.." && pwd)"
 IMG=""
 LOG=""
 TIMEOUT=240
+INRPI=0
 RELAY="--backend nano --dev auto"
 CONSOLE="/dev/serial/by-id/usb-FTDI_FT232R_USB_UART_AB0OHO28-if00-port0"
 EXPECT=()
@@ -28,6 +29,7 @@ while [ $# -gt 0 ]; do
     --console) CONSOLE="$2"; shift ;;
     --expect) EXPECT+=("$2"); shift ;;
     --fail) FAIL+=("$2"); shift ;;
+    --in-rpiboot) INRPI=1 ;;   # the board is already in rpiboot (boot ROM on USB): flash from there, no new entry
     *) echo "unknown argument $1" >&2; exit 2 ;;
   esac
   shift
@@ -57,8 +59,13 @@ trap cleanup EXIT
 say() { echo "$*" | tee -a "$REPORT"; }
 say "== cm5-metal-loop $(date -Is) image=$(basename "$IMG") sha256=$(sha256sum "$IMG" | cut -c1-16)"
 
-say "-- 1/4 relay: rpiboot"
-"${RELAYPY[@]}" rpiboot 2>&1 | tee -a "$REPORT" || { say "FAIL: board did not enter rpiboot"; exit 1; }
+if [ "$INRPI" = 1 ]; then
+  say "-- 1/4 already in rpiboot (no new entry)"
+  lsusb | grep -q "0a5c:271[12]" || { say "FAIL: --in-rpiboot but no boot ROM on USB"; exit 1; }
+else
+  say "-- 1/4 relay: rpiboot"
+  "${RELAYPY[@]}" rpiboot 2>&1 | tee -a "$REPORT" || { say "FAIL: board did not enter rpiboot"; exit 1; }
+fi
 
 say "-- 2/4 flash + verify"
 FLOG="${REPORT%.txt}-flash.txt"
