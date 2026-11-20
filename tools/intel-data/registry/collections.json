@@ -38,15 +38,32 @@
         }
       },
       "sources": [
+        "abusech-yaraify",
         "atomic-red-team",
         "darpa-optc",
+        "dvwa",
+        "et-open",
+        "et-pro",
+        "evtx-attack-samples",
+        "first-cvss-spec",
+        "infection-monkey",
         "lanl-comprehensive-multisource-2015",
+        "metasploit-framework",
+        "microsoft-simuland",
         "mitre-attack-stix",
         "mitre-caldera",
+        "mitre-capec",
+        "mitre-cwe",
+        "neo23x0-signature-base",
+        "nvd-cpe-dictionary",
+        "oasis-stix-taxii",
         "otrf-security-datasets",
+        "owasp-juice-shop",
+        "owasp-webgoat",
         "sigmahq-rules",
         "splunk-attack-data",
-        "stratus-red-team"
+        "stratus-red-team",
+        "yara-forge"
       ],
       "status": "partial",
       "notes": "Implemented: ATT&CK knowledge examples. Specified: lab-trace ingestion (needs the isolated HookProbe lab capture described in HEQK-TRAINING-STRATEGY.md §4; no attack tooling runs on the development host)."
@@ -89,16 +106,35 @@
       },
       "sources": [
         "abusech-urlhaus",
+        "bccc-cic-bell-dns-2024",
+        "bccc-cira-cic-dohbrw-2020",
+        "caida-anonymized-passive-traces",
+        "ch-switch-abuse-handling",
         "cic-bell-dns-2021",
         "cic-bell-dns-exf-2021",
         "cira-cic-dohbrw-2020",
         "cisco-umbrella-top1m",
+        "cloudflare-radar",
         "dgarchive",
         "dns-threats-palau-2019",
+        "hf-ealvaradob-phishing",
+        "int-apwg-ecx",
+        "iscx-url2016",
+        "lu-circl-opendata",
+        "lu-circl-passive-dns",
+        "mawi-wide",
         "netlab360-dga",
+        "openphish-community",
+        "phishstats",
+        "phishtank",
         "phiusiil-phishing-url",
+        "ro-dnsc-rss",
+        "ro-romanian-phishing-datasets",
+        "ro-rotld",
+        "spamhaus-dnsbl-dqs",
         "tranco",
         "tu-dns-tunnelling-2023",
+        "uk-cambridge-cybercrime-centre",
         "umudga"
       ],
       "status": "partial",
@@ -139,7 +175,9 @@
       "sources": [
         "abusech-feodotracker",
         "abusech-malwarebazaar",
-        "abusech-sslbl"
+        "abusech-sslbl",
+        "abusech-urlhaus",
+        "stratosphere-mcfp-captures"
       ],
       "status": "specified",
       "notes": "No builder yet: the only machine-readable family sources found (abuse.ch) forbid AI training without written consent. Samples are never downloaded (safeio refuses executable members and password-protected archives)."
@@ -179,16 +217,30 @@
         }
       },
       "sources": [
+        "abusech-feodotracker",
+        "abusech-sslbl",
+        "awid3",
+        "bccc-cic-ids2017",
+        "bccc-cse-cic-ids2018",
         "bot-iot",
+        "cic-ddos2019",
         "cic-ids2017",
         "ciciot2023",
+        "cse-cic-ids2018",
+        "csic-2010-http",
         "ctu-13",
+        "darpa-optc",
+        "darpa-transparent-computing",
         "distrinet-cic-ids-2017-2018-improved",
         "iot-23",
         "kitsune-network-attack",
         "lanl-unified-host-network-2017",
+        "mawilab",
+        "shadowserver-reports",
         "ton-iot",
-        "unsw-nb15"
+        "ugr16",
+        "unsw-nb15",
+        "uq-netflow-nids"
       ],
       "status": "implemented",
       "notes": "The same scenario-hash grouping as tools/neuro-research/replay_iot23.py. CIC-IDS2017/2018 labels carry documented errors (label_quality low)."
@@ -227,6 +279,10 @@
         }
       },
       "sources": [
+        "hf-cybermetric",
+        "hf-fenrir-v2-1",
+        "hf-nist-cybersecurity-training",
+        "hf-trendyol-cybersecurity-instruct",
         "hf-witfoo-precinct6",
         "hookprobe-synthetic-soc"
       ],
@@ -267,9 +323,17 @@
         "cisa-kev",
         "cisa-vulnrichment",
         "cve-list-v5",
+        "eu-cert-eu-advisories",
+        "eu-enisa-euvd",
+        "exploit-db",
+        "first-epss",
         "github-advisory-db",
+        "hf-all-cve-records",
+        "lu-circl-vulnerability-lookup",
         "mitre-capec",
-        "mitre-cwe"
+        "mitre-cwe",
+        "nist-nvd-api2",
+        "osv-dev"
       ],
       "status": "partial",
       "notes": "KEV builder implemented. CVE-list / NVD CVSS joins are specified. Vulnerability facts change: retrieval at answer time beats weights (HEQK-TRAINING-STRATEGY.md §2)."
