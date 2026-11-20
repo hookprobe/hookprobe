@@ -29,6 +29,7 @@ Facts are from `origin/main` @ `6ab20c2e`._
 | L3 | A Claude workflow that builds the Linux tier | `.claude/workflows/base-tier-build.js` | Delete. | operator (governance) |
 | L4 | `CLAUDE.md` says the `legacy/linux-tier/crates/hookprobe-api` contract "is now the interface spec the on-device server implements"; ADRs 0008, 0021, 0025–0030, 0047 cite it | `CLAUDE.md`, `docs/adr/` | Point at the real contract: `os/kernel/kernel/src/http.rs` (server) and `os/mission-control/src/store/*` (client). | operator |
 | L5 | The capability token names are cited from `legacy/linux-tier/manifest/schema/manifest.schema.json` | `appliance/hookprobe-sbc/README.md:24` | Cite the heqk capability list (`/api/health` `capabilities`) instead. | agent |
+| L7 | **The kernel's device-fingerprint table is generated from V1.** `fpdb.rs` = `gen_fpdb.py legacy/v1/products/fortress/lib/fingerbank.py` (122 KB, literal dicts parsed with `ast`) | `os/build/fpgen/gen_fpdb.py:5` | Move `fingerbank.py` next to its generator (`os/build/fpgen/fingerbank_v1.py`, header kept) before deleting `legacy/v1`; prove the regenerated `fpdb.rs` is byte-identical. | agent |
 | L6 | Gate scripts special-case `legacy/` | `tools/ci/g0_wiring.py`, `lockfiles.txt`, `release_check.py`, `deny.toml` | Harmless after deletion. Simplify only if `legacy/v1` also goes (D1). | operator (gate machinery) |
 
 Not dependencies (text only, safe to leave or reword later): kernel provenance comments ("ported from the
@@ -45,6 +46,10 @@ patterns, `tools/intel-data/.../hookprobe_ioc_v1.py` (names the old feed format 
 | D4 | Waive the "never deleted until gates prove nothing broke on heqk" rule (ADR 0044 D4, heqk-unbuild.md §0)? | Yes for the repository: nothing ships Linux and history keeps the code. Mark the rule satisfied by "no shipping consumer", not by metal gates. |
 | D5 | Who edits the 39 `os/kernel/` files that mention Linux? | homepods, or nobody: they are provenance comments, and `validate.sh` PASS lines must not be edited by the agent (guard A6). |
 
+**Operator answer (2026-11-20): all five recommendations accepted.** `legacy/v1` goes too (D1); tree
+deletion only, no history rewrite (D2); Linux-only ADRs stay with a "Retired" status line (D3); the
+"metal gates first" rule is waived for the repository (D4); kernel provenance comments are left to homepods (D5).
+
 ## 4. Order of work (one PR each, all drafts, a human merges)
 
 | Step | PR | Content | Size | Owner |
@@ -52,7 +57,8 @@ patterns, `tools/intel-data/.../hookprobe_ioc_v1.py` (names the old feed format 
 | 0 | #1386 | Delete `docs/architecture/Readme.md` (done, draft) | 13 files | agent |
 | 1 | L1 | Move the CM5 `.dtb` out of `legacy/`, repoint `make-cm5-heqk-disk.sh`, prove identical disk image | 3 files | operator / release-engineer |
 | 2 | L5 + MC comments | `appliance/` READMEs; `plannerApi.ts` / `dnsLive.ts` comments; drop `PUBLIC_PLANNER_API_BASE` Linux example | ~5 files | agent |
-| 3 | **Delete `legacy/linux-tier/`** | `git rm -r legacy/linux-tier`, `.gitleaks.toml` L2, `.gitignore` lines, `.claude/workflows/base-tier-build.js` | 5,226 files, one directory | operator (protected paths in the same PR); agent can prepare the branch |
+| 3a | **Delete `legacy/v1/`** (D1), after moving L7 | `git rm -r legacy/v1`, `fingerbank.py` → `os/build/fpgen/` | 1,178 files | agent |
+| 3 | **Delete `legacy/linux-tier/`** except `builder/kernel-build/out/` (the CM5 `.dtb`, until step 1 moves it) | `git rm -r legacy/linux-tier`, `.gitleaks.toml` L2, `.gitignore` lines, `.claude/workflows/base-tier-build.js` | 5,226 files, one directory | operator (protected paths in the same PR); agent can prepare the branch |
 | 4 | Docs, unprotected | ~42 files: `docs/` (outside `adr/` and `autonomous-agent/`), `README.md`, `CONTRIBUTING.md`, `appliance/`. BuildPlan Track B and C-unbuild become "removed 2026-11-xx"; `heqk-unbuild.md` gets a closing status; dated research and journal rows stay as written | 3 PRs of ≤15 files | agent |
 | 5 | Governance | `CLAUDE.md` (decisions #1/#2, the ADR 0047 banner, layout block, L4), `SECURITY.md`, `LICENSING.md`, 11 `.claude/` files, ADR status lines (D3) | ~50 files | operator, or agent with explicit link-and-status-only permission |
 | 6 | `legacy/v1/` | only if D1 = yes | 1,178 files | operator |
