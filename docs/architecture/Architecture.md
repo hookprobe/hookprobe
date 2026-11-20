@@ -6,9 +6,9 @@
 > `legacy/linux-tier/` (path map: [`docs/PATHS.md`](../PATHS.md)). Current status:
 > [`heqk-parity-gaps.md`](../design/heqk-parity-gaps.md).
 
-> This document operationalizes the HLD in [`Readme.md`](Readme.md). The Readme says *what* HookProbe OS is; this says *how the pieces connect* and *in what order we build them*. It specifies the bootstrap-to-runtime spine — **unified installer → device scanner → classification → capability mapper → resource allocator → signed Platform Manifest → local backend → supervisor/reconciler → Mission Control** — as a set of explicit connections (contract · mechanism · failure mode), then a phased plan whose **Phase 1 is the Readme core**.
+> This document operationalizes the HLD (the Linux-tier `Readme.md`, removed 2026-11-20; superseded by [ADR 0047](../adr/0047-heqk-everywhere-on-device-mission-control.md)). The HLD said *what* HookProbe OS is; this says *how the pieces connect* and *in what order we build them*. It specifies the bootstrap-to-runtime spine — **unified installer → device scanner → classification → capability mapper → resource allocator → signed Platform Manifest → local backend → supervisor/reconciler → Mission Control** — as a set of explicit connections (contract · mechanism · failure mode), then a phased plan whose **Phase 1 is the Readme core**.
 >
-> Canonical companions: [`Readme.md`](Readme.md) (HLD), [`MissionControl.md`](MissionControl.md) (UX), [ADR 0001](../adr/0001-mission-control-stack.md) (stack), [ADR 0002](../adr/0002-crypto-agility-pqc.md) (crypto/PQC). When this doc and those disagree, **they win** — flag the contradiction, don't silently resolve it.
+> Canonical companions: [ADR 0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) (the product), [`MissionControl.md`](MissionControl.md) (UX), [ADR 0001](../adr/0001-mission-control-stack.md) (stack), [ADR 0002](../adr/0002-crypto-agility-pqc.md) (crypto/PQC). When this doc and those disagree, **they win** — flag the contradiction, don't silently resolve it.
 
 ---
 

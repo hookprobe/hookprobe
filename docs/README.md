@@ -2,7 +2,7 @@
 
 | Folder | Read it for |
 |---|---|
-| [`architecture/`](architecture/) | What HookProbe OS is. **Canon for the current product:** [`MissionControl.md`](architecture/MissionControl.md) (target UI), [`MIGRATION-heqk.md`](architecture/MIGRATION-heqk.md) (the move from Linux to heqk) and ADR [0047](adr/0047-heqk-everywhere-on-device-mission-control.md). [`Readme.md`](architecture/Readme.md) describes the retired Linux-tier (bootc) architecture and is **historical, not canon** for heqk. |
+| [`architecture/`](architecture/) | What HookProbe OS is. **Canon for the current product:** [`MissionControl.md`](architecture/MissionControl.md) (target UI), [`MIGRATION-heqk.md`](architecture/MIGRATION-heqk.md) (the move from Linux to heqk) and ADR [0047](adr/0047-heqk-everywhere-on-device-mission-control.md). |
 | [`getting-started/`](getting-started/) | Build, test in QEMU, flash a CM5 |
 | [`security/`](security/) | Security model, supply chain, disclosure |
 | [`roadmap/`](roadmap/) | [`BuildPlan.md`](roadmap/BuildPlan.md) (phase history; Linux-tier tracks are historical) |

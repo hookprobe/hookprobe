@@ -198,7 +198,7 @@ Kernel enforcement and resource authority belong to the kernel. Device ownership
 
 ## 10. Related specifications
 
-- [OS architecture](../architecture/Readme.md) — canonical OS and substrate decisions.
+- [OS architecture](../adr/0047-heqk-everywhere-on-device-mission-control.md) and [heqk architecture](../../os/kernel/ARCHITECTURE.md) — canonical OS and substrate decisions.
 - [Mission Control](../architecture/MissionControl.md) — operator and workspace contract.
 - [heqk low-level design](heqk-low-level-design.md) — hardware, kernel, packet path, trust boundaries, and implementation status.
 - [ADR 0043](../adr/0043-heqk-microkernel-substrate.md), [ADR 0044](../adr/0044-zero-linux-rpi-native-cm5.md), and [ADR 0047](../adr/0047-heqk-everywhere-on-device-mission-control.md) — substrate and deployment decisions.
