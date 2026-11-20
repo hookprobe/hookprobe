@@ -95,11 +95,12 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
 
     # One read of every acquisition.json. A re-fetch of the same file (same source + filename, e.g. a
     # feed snapshot) supersedes the older one: only the latest is built from. Distinct files of one
-    # source (IoT-23 scenarios, UMUDGA family folders) are all kept.
+    # source (IoT-23 scenarios, UMUDGA family folders) are all kept. A full copy and a sampled copy of the
+    # same file are different variants (the full one feeds windows.py), so neither supersedes the other.
     meta = {(a["source_id"], a["acquisition_id"]): a for a in store.acquisitions()}
     latest = {}
     for a in meta.values():
-        k = (a["source_id"], a["filename"])
+        k = (a["source_id"], a["filename"], "sampled" if a.get("derived_from") else "full")
         if k not in latest or (a["fetched_at"], a["acquisition_id"]) > (latest[k]["fetched_at"], latest[k]["acquisition_id"]):
             latest[k] = a
     current = {(a["source_id"], a["acquisition_id"]) for a in latest.values()}
