@@ -3151,6 +3151,8 @@ fn cm5_p10_probe() {
                 }
                 } // f2
                 if ver_ok || boot_off {
+                    let mut aps = [cyw43::ApInfo::new(); 32]; // the boot scan (the AP's channel choice reads it)
+                    let mut naps = 0usize;
                     if radio {
                     // Control path proven — confirm the regdomain via the country iovar.
                     // RO (Romania) matches the ccode=RO baked into NVRAM (fw >=7.45.265).
@@ -3167,8 +3169,7 @@ fn cm5_p10_probe() {
                     }
                     // P10-D: WiFi scan — enumerate nearby APs (event_msgs -> UP -> escan).
                     kprint!(" [P10-D] WiFi scan — MAC + preinit + WLC_UP + escan (all channels)...\n");
-                    let mut aps = [cyw43::ApInfo::new(); 32];
-                    let naps = cyw43::wifi_scan(&mut aps);
+                    naps = cyw43::wifi_scan(&mut aps);
                     let sd = cyw43::scan_diag();
                     let (svok, sver) = cyw43::scan_ver_diag();
                     let (v1s, _v2s) = cyw43::escan_status_v1v2();
