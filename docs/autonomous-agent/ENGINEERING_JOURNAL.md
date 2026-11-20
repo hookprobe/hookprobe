@@ -3,6 +3,12 @@
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
 
+
+## 2026-11-20 — AB-21 step 3: `legacy/linux-tier` removed (except the CM5 `.dtb` folder)
+
+- `git rm` of 5,215 files (~270 MB in the tree; history keeps them). Kept: `legacy/linux-tier/builder/kernel-build/out/` (11 files), because `os/build/make-cm5-heqk-disk.sh:173` still defaults to its `bcm2712-rpi-cm5-cm5io.dtb`. Step 1 (operator / release-engineer, Red-tier script) moves it; then that folder goes too.
+- Checked: no CI workflow, Cargo/npm workspace, lockfile list or include path points into the deleted files. Remaining mentions are text: `.gitleaks.toml` allowlist for the deleted dev keys (now matches nothing; operator removes it, L2), `.claude/workflows/base-tier-build.js` (L3), kernel provenance comments (D5), docs (step 4).
+- None of the deleted paths match `tools/ci/heal/protected-paths.txt`.
 ## 2026-11-20 — AB-16 (agent part), AB-08 closed
 
 - `docs/architecture/MissionControl.md` §12 still described the legacy Linux tier: a Containerfile builder with `.iso`/`.qcow2` outputs, modules with `runtime` wasm/container/sysext from a Marketplace, and `bootc upgrade` updates. §10 called the model "open core". Rewrote these four sentences to what heqk does: boot images signed by `heqk-sign`, signed packs with one-generation rollback (`packUpload.ts`), A/B `tryboot` updates (`make-cm5-heqk-image.sh`), AGPL-3.0-only + commercial (`LICENSING.md`). Target and legacy wording kept in brackets.

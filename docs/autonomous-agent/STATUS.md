@@ -12,7 +12,7 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-AB-16 (agent part): `MissionControl.md` §12 described the legacy Linux tier (Containerfile builder, wasm/container/sysext modules, Marketplace, `bootc upgrade`) and an open-core model. Now matches heqk: signed boot images, signed packs, A/B `tryboot` updates, AGPL + commercial. Branch `agent/docs-ab16`, draft PR.
+AB-21 (remove Linux; operator accepted D1–D5): step 3, delete `legacy/linux-tier` except `builder/kernel-build/out/` (the CM5 `.dtb` the factory disk script still reads until step 1 moves it). Branch `agent/remove-linux-tier`, draft PR. Step 3a (`legacy/v1`) is a separate PR.
 
 ## Delivery ledger
 
@@ -28,6 +28,7 @@ AB-16 (agent part): `MissionControl.md` §12 described the legacy Linux tier (Co
 | HookProbe logo in Mission Control (rails + favicon) | `agent/mc-brand-logo` | yes | astro check 0 errors; build 27 pages; browser: mark renders in the rail (22 px, theme colour), favicon is the mark | see PR | yes | [#1312](https://github.com/hookprobe/hookprobe/pull/1312) | yes (2026-11-18) |
 | Sample incident uses real rule ids (1200125, 1200113) | `agent/mc-sample-rule-ids` | yes | unit 12/12; astro check 0 errors; build 27 pages; browser: sample incident shows the new story and rule 1200125, no old DNS-feed text | see PR | yes | [#1318](https://github.com/hookprobe/hookprobe/pull/1318) | yes (2026-11-18) |
 | AB-16 `MissionControl.md` §12 matches heqk; backlog statuses refreshed | `agent/docs-ab16` | yes | n/a (docs); every new claim checked against `os/build/`, `packUpload.ts`, `shipping-features.txt`, `LICENSING.md`, `mcstate.rs` | pending | yes | draft | no |
+| AB-21 step 3: delete `legacy/linux-tier` (5,215 files; `builder/kernel-build/out/` kept) | `agent/remove-linux-tier` | yes | no workflow, workspace, lockfile list or include path reads it (`git grep`); only `make-cm5-heqk-disk.sh:173` (the `.dtb`, kept) and text mentions; no deleted path matches `protected-paths.txt` | pending | yes | draft | no |
 
 AB-07 needed no change: the CVE tab has said "This device does not report software exposure yet" since `47a2ad85` (2026-11-10). The audit finding was wrong.
 
