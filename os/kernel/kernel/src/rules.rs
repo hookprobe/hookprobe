@@ -287,7 +287,12 @@ fn run_set_verdict(
                 }
             }
         }
-        PROG_RUNS.fetch_add(1, Ordering::Relaxed);
+        // A plain load + store, not `fetch_add`: this target has no LSE atomics, so `fetch_add` is an
+        // exclusive load/store loop on the per-packet path (the first metal run after the guards
+        // showed the unguarded tiers slower: l2 20 -> 30 ns, flow 53 -> 68 ns). The data plane runs
+        // on one core (os/kernel/ARCHITECTURE.md) and this is a diagnostic count, so a lost update
+        // under a future SMP data plane would cost a count, never a verdict.
+        PROG_RUNS.store(PROG_RUNS.load(Ordering::Relaxed).wrapping_add(1), Ordering::Relaxed);
         let v = if st.jit != 0 {
             let f: extern "C" fn(*const u8) -> u64 =
                 unsafe { core::mem::transmute::<usize, extern "C" fn(*const u8) -> u64>(st.jit) };
