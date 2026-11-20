@@ -88,6 +88,8 @@ mod el0 {
         nrw: usize,
         pub calls: u64,
         pub faults: u64,
+        /// H4c: replies refused for breaking the call protocol.
+        pub complaints: u64,
         pub restarts: u64,
         /// H2: the restart state under the supervisor table's policy (a server faulting on every call is held off).
         sup: hal::superv::Sup,
@@ -133,7 +135,7 @@ mod el0 {
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(HSH_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-hsh").unwrap_or(&hal::superv::TABLE[0])), role: 0 };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, complaints: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-hsh").unwrap_or(&hal::superv::TABLE[0])), role: 0 };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -236,10 +238,32 @@ mod el0 {
                 self.reset();
                 return (ST_PANIC, 0);
             }
+            // H4c: el0-hsh answers ST_TEXT, ST_BAD_CMD or ST_REQUEST (always one REQ_LEN record) — anything else, or a
+            // length past the output region, is a broken reply: refused, journaled, the server reset
+            let injected = crate::superv::take_injected(hal::superv::C_HSH);
+            let n = if injected { OUT_MAX + 1 } else { self.r32(H_OUT_LEN) as usize };
+            let why = if n > OUT_MAX || (st == ST_REQUEST && n != REQ_LEN) {
+                Some(crate::superv::WHY_BAD_LENGTH)
+            } else if !matches!(st, ST_TEXT | ST_BAD_CMD | ST_REQUEST) {
+                Some(crate::superv::WHY_BAD_STATUS)
+            } else {
+                None
+            };
+            if let Some(why) = why {
+                self.complaints += 1;
+                let _ = crate::superv::server_complaint("el0-hsh", why);
+                if injected || !crate::superv::fault_counts() {
+                    self.sup.fault_uncounted();
+                } else {
+                    let _ = self.sup.fault(crate::superv::now_ms());
+                }
+                self.reset();
+                return (ST_PANIC, 0);
+            }
             if self.sup.ok() {
                 crate::superv::server_ok("el0-hsh");
             }
-            (st, (self.r32(H_OUT_LEN) as usize).min(OUT_MAX))
+            (st, n)
         }
         /// H6 (swifi campaign only): flip one bit in a random page of the server's image. Returns the class hit.
         #[cfg(feature = "swifi")]
@@ -473,6 +497,21 @@ pub fn journal_words(line: &[u8], why: &mut [u8; 64]) -> usize {
         }
     }
     k
+}
+
+/// H4c drill (QEMU): a broken reply is refused (ST_PANIC), the server reset as a restart (not a fault, the restart policy
+/// untouched) and the next `help` line answers text again. None = no EL0 shell.
+#[cfg(all(feature = "hsh", feature = "mctls", not(feature = "cm5")))]
+pub fn complain_drill() -> Option<bool> {
+    use hal::hshabi::{CMD_LINE, ST_PANIC, ST_TEXT};
+    let s = el0::server()?;
+    s.role = 0;
+    let (r0, f0, c0) = (s.restarts, s.faults, s.complaints);
+    crate::superv::inject_bad_reply(hal::superv::C_HSH);
+    let refused = s.call(CMD_LINE, b"help").0 == ST_PANIC;
+    let counted = s.restarts == r0 + 1 && s.faults == f0 && s.complaints == c0 + 1;
+    let (st, n) = s.call(CMD_LINE, b"help");
+    Some(refused && counted && st == ST_TEXT && n > 0)
 }
 
 /// A test envelope signed with `k` (QEMU self-tests only; the device never holds the real K_own).
