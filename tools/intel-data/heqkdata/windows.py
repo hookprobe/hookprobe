@@ -14,7 +14,10 @@ service, history, pkts, duration, conn_state, label, detailed_label) are extra k
 Choices (agreed with the Neuro session, 2026-11-20):
 - Host = a LAN (RFC 1918) address. A flow belongs to its originator's window if the originator is LAN,
   otherwise to its responder's window if the responder is LAN (an inbound scan lands on the device it hits).
-  Flows stay oriented by initiator either way. Remote->remote flows have no host and are counted, not kept.
+  Flows stay oriented by initiator either way. Flows with no LAN end have no host and are dropped, counted in
+  the manifest: dropped_unattributed (0.0.0.0 / ::, an unconfigured client such as a DHCP discover, which
+  Zeek cannot attribute without a MAC) and dropped_remote_to_remote (spoofed or backscatter on the link).
+  IPv6 link-local (fe80::/10) and unique-local (fc00::/7) addresses are LAN hosts.
 - state is replay_iot23.to_events()'s mapping: REJ/RSTO/RSTR/RSTOS0/RSTRH/S0/SH -> "rst", else "est".
 - Pseudonyms are allocated in order of first appearance per capture (time order), so they are injective
   and stable within a capture and reveal nothing about the real address. LAN -> 192.168.0.0/16; remote ->
@@ -54,9 +57,13 @@ SPLIT_RULES = {
 
 
 def lan(ip):
-    """semantic_compression.kind_of() == "H"."""
+    """A site-local host: RFC 1918, or IPv6 link-local fe80::/10 and unique-local fc00::/7 (neuro-core peerkey
+    is_local()). LAN pseudonyms are 192.168.x.y, so all of these render as H in semantic_compression.kind_of()."""
     if ip.startswith(("10.", "192.168.")):
         return True
+    if ":" in ip:
+        h = ip.lower().split(":", 1)[0].rjust(4, "0")
+        return h[:2] in ("fc", "fd") or h[:3] in ("fe8", "fe9", "fea", "feb")
     if ip.startswith("172."):
         p = ip.split(".")
         return len(p) > 1 and p[1].isdigit() and 16 <= int(p[1]) <= 31
@@ -107,7 +114,7 @@ class Pseudonyms:
             return ip
         if a.is_multicast or a.is_unspecified or ip == "255.255.255.255" or (a.version == 4 and ip.endswith(".255") and lan(ip)):
             out = ip  # no identity in these
-        elif a.version == 6:
+        elif a.version == 6 and not lan(ip):
             self.n_v6 += 1
             out = str(ipaddress.IPv6Address(int(ipaddress.IPv6Address("2001:db8::")) + self.n_v6))
         elif lan(ip):
@@ -293,6 +300,8 @@ def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None)
             counts["flows"] += 1
             if host is None:
                 counts["flows_without_lan_host"] += 1
+                unspec = o in ("0.0.0.0", "::") or r in ("0.0.0.0", "::")
+                counts["dropped_unattributed" if unspec else "dropped_remote_to_remote"] += 1
                 continue
             sp.add(int(t[0] // 3600), (host,) + t)
         sp.close()
