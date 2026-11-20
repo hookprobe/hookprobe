@@ -13,7 +13,7 @@ use core::ptr::{addr_of, addr_of_mut};
 // P1 H/M/L + the EL0 preempt-loop + the EL0 crash TCB), leaving no room for the two
 // scheduled EL0 TCBs the blocking-WAIT proof needs. Every per-tid array below AND
 // `main.rs`'s `CSPACE[MAX_THREADS]` grow with this constant.
-pub const MAX_THREADS: usize = 36; // M5.4:+2 detect; M5.5:+2 wasip1; A2+:+2 wasip1-dnsrpz catalogue hosts (+servers)
+pub const MAX_THREADS: usize = 40; // M5.4:+2 detect; M5.5:+2 wasip1; A2+:+2 wasip1-dnsrpz catalogue hosts (+servers); X2a step 2:+2 flow-event batch hosts (+servers)
 
 static mut SP: [usize; MAX_THREADS] = [0; MAX_THREADS];
 static mut PRIO: [u8; MAX_THREADS] = [0; MAX_THREADS];

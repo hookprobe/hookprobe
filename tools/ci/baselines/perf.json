@@ -2,5 +2,6 @@
   "ids_pack64_prog_runs_other_port": {"max": 1, "evidence": "QEMU validate.sh at the ADR 0067 X1 step 1 commit: a 64-rule dst-port tier, one packet to an unnamed port; 64 programs ran with guards off, 1 (the rule with no guard) with guards on"},
   "ids_tcp_tier_prog_runs_ack": {"max": 0, "evidence": "QEMU validate.sh at the ADR 0067 X1 step 2 commit: the built-in TCP-flag tier on a plain ACK; 4 programs ran with guards off, 0 with byte guards on"},
   "nat_newflow_scan_max": {"max": 32, "evidence": "QEMU validate.sh at the ADR 0067 E3 commit: free stack + fresh mark + bounded 32-slot sweep (was 4096)"},
-  "nat_rewrite_csum_bytes": {"max": 22, "evidence": "QEMU validate.sh at the ADR 0067 E4 commit: RFC 1624 incremental update over the rewritten words of a 1,500-byte TCP segment (was 1500)"}
+  "nat_rewrite_csum_bytes": {"max": 22, "evidence": "QEMU validate.sh at the ADR 0067 E4 commit: RFC 1624 incremental update over the rewritten words of a 1,500-byte TCP segment (was 1500)"},
+  "wasm_events_per_round_trip": {"min": 16, "evidence": "QEMU validate.sh at the ADR 0067 X2a step 2 commit: 16 flow-event records answered by a signed wasip1 module in one EL0 round trip, one packed verdict word back (was 1 input per round trip)"}
 }
