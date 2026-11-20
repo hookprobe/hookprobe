@@ -116,7 +116,15 @@ Also needed, separately:
 - **Fix the live-stream privacy gap** (Context 3): `export_src` should apply `anon::is_internal_v4` (or the whole
   `anonymize`) to the IPv4 rules. This changes `export.rs` only.
 - **The tri-state class is not in the 16-byte log image**, so HQX3 records carry `class = 0`. Adding it means a
-  new image layout (and a new record type, `RT_EVIDENCE_C`); out of scope here.
+  new image layout (and a new record type, now `RT_EVIDENCE_D`: `RT_EVIDENCE_C` is taken, below); out of scope here.
+- **Provenance records (`RT_EVIDENCE_C`, 2026-11-20).** Since ADR 0067 N1 (#1354) the kernel writes every
+  evidence record as `RT_EVIDENCE_C`: the 16-byte build tag, then 16 bytes of provenance (`cfg_gen u64` and the
+  first 8 bytes of the config bundle's SHA-256), then up to 20 images. The library treated unknown record types
+  as "not evidence" and skipped them, so all evidence written after N1 would have been silently left out of
+  HQX3. `record::verify` now opens `RT_EVIDENCE_C` and returns its `Prov` (`Prov::UNKNOWN` for the older two
+  layouts, as the kernel reads them). HQX3 does not carry the build tag or the provenance yet: a frame can span
+  records made under different configurations, so carrying them needs a per-record field or a rule that a frame
+  never crosses a provenance change. That is a wire change (version 2), not made here.
 - **Attack paths and Wasm module identity** are not in the log image either (rule id, severity and verdict are).
   Exporting them needs the same image change.
 - **Unflushed events** (the RAM batch, up to 60 s) reach HQX3 only once `evlog` writes the record.
@@ -172,3 +180,10 @@ stay unproven until the kernel wiring and its `[P-evexport]` phase land.
 tests pass 13 of 13 (9 new receiver tests and the end-to-end round trip above, plus the 3 existing live-stream
 tests), with no new clippy warnings, and `--selftest` passes. The pass-through sealer in the round trip again
 stands in for HQKSEAL1.
+
+**Evidence (2026-11-20), `RT_EVIDENCE_C`:** on macOS (stable Rust 1.100, an isolated worktree),
+`evidence-export` passes 33 of 33 unit tests, among them `record::opens_provenance_records` (provenance read
+back; the full 20-image layout; the older layouts read as unknown; short or ragged payloads rejected) and
+`exporter::provenance_records_are_exported_alongside_older_layouts` (a log mixing `RT_EVIDENCE_B` and
+`RT_EVIDENCE_C` exports all 12 events in order, none rejected). Clippy warnings are unchanged (5 before, 5 after),
+and `responder-sim` still passes 13 of 13.

@@ -23,6 +23,8 @@ pub const REC_MAGIC: u32 = 0x4652_4543; // b"CERF" LE
 pub const RT_EVIDENCE: u16 = 1;
 /// Evidence batch led by a 16-byte build tag.
 pub const RT_EVIDENCE_B: u16 = 5;
+/// Evidence batch led by a 16-byte build tag and 16 bytes of provenance (ADR 0067 D10).
+pub const RT_EVIDENCE_C: u16 = 6;
 
 const R_SEQ: usize = 8;
 const R_LEN: usize = 16;

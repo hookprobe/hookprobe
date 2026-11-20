@@ -7,13 +7,15 @@
 //! is what `seal::unseal` already guarantees.
 //!
 //! Inside the seal (kernel `evlog.rs`):
+//! * `RT_EVIDENCE_C`: a 16-byte build tag, 16 bytes of provenance (`cfg_gen u64 | first 8 bytes of
+//!   the config bundle's SHA-256`, ADR 0067 D10), then up to 20 event images of 16 bytes;
 //! * `RT_EVIDENCE_B`: a 16-byte build tag, then up to 21 event images of 16 bytes;
 //! * `RT_EVIDENCE`: up to 22 event images, no tag (records written before the tag existed).
 //!
 //! Event image (kernel `export::ev_to_image`), little-endian:
 //! `ts u64 (wall-clock ms, 0 = time unknown) | src u32 | rule_id u16 | severity u8 | verdict u8`.
 
-use crate::slot::{self, SlotErr, RT_EVIDENCE, RT_EVIDENCE_B, SEC};
+use crate::slot::{self, SlotErr, RT_EVIDENCE, RT_EVIDENCE_B, RT_EVIDENCE_C, SEC};
 
 pub const SEAL_HDR_LEN: usize = 128;
 pub const SEAL_MAGIC: &[u8; 8] = b"HQKSEAL1";
@@ -21,6 +23,8 @@ pub const SEAL_MAGIC: &[u8; 8] = b"HQKSEAL1";
 pub const MAX_SEALED_PAYLOAD: usize = slot::MAX_PAYLOAD - SEAL_HDR_LEN; // 352
 pub const EV_IMAGE_LEN: usize = 16;
 pub const BUILD_TAG_LEN: usize = 16;
+/// Bytes of provenance after the build tag in an `RT_EVIDENCE_C` record.
+pub const PROV_LEN: usize = 16;
 /// Most images one record can carry (the untagged layout).
 pub const MAX_IMAGES: usize = MAX_SEALED_PAYLOAD / EV_IMAGE_LEN; // 22
 
@@ -34,6 +38,32 @@ pub trait SealOpener {
     /// Authenticate `blob`, then decrypt it into `out`; return the plaintext length.
     /// On any failure return `Err` and leave `out` untouched.
     fn open(&self, blob: &[u8], out: &mut [u8]) -> Result<usize, ()>;
+}
+
+/// The configuration a record's events were made under (kernel `evlog::Prov`, ADR 0067 D10): the
+/// sealed-config generation and the first 8 bytes of the SHA-256 of the config bundle in force.
+/// [`Prov::UNKNOWN`] (all ones) = not recorded: a record from before provenance existed, or one the
+/// kernel could not attribute. Never a guess.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Prov {
+    pub cfg_gen: u64,
+    pub cfg: [u8; 8],
+}
+
+impl Prov {
+    pub const UNKNOWN: Prov = Prov { cfg_gen: u64::MAX, cfg: [0xff; 8] };
+
+    fn from_bytes(b: &[u8]) -> Prov {
+        let mut g = [0u8; 8];
+        g.copy_from_slice(&b[..8]);
+        let mut cfg = [0u8; 8];
+        cfg.copy_from_slice(&b[8..16]);
+        Prov { cfg_gen: u64::from_le_bytes(g), cfg }
+    }
+
+    pub fn is_known(&self) -> bool {
+        *self != Prov::UNKNOWN
+    }
 }
 
 /// One event read back from the log.
@@ -51,6 +81,8 @@ pub struct Event {
 pub struct Verified {
     pub seq: u64,
     pub build_tag: Option<[u8; BUILD_TAG_LEN]>,
+    /// [`Prov::UNKNOWN`] for `RT_EVIDENCE` and `RT_EVIDENCE_B` records.
+    pub prov: Prov,
     pub n: usize,
     pub events: [Event; MAX_IMAGES],
 }
@@ -103,9 +135,11 @@ pub fn verify<O: SealOpener + ?Sized>(sec: &[u8; SEC], seq: u64, nslots: u64, op
         Err(SlotErr::Empty) => return Err(Outcome::Skip),
         Err(e) => return Err(Outcome::Reject(Reject::Framing(e))),
     };
-    let tagged = match s.rtype {
-        RT_EVIDENCE_B => true,
-        RT_EVIDENCE => false,
+    // Bytes of head before the images: (build tag?, provenance?).
+    let (tagged, with_prov) = match s.rtype {
+        RT_EVIDENCE_C => (true, true),
+        RT_EVIDENCE_B => (true, false),
+        RT_EVIDENCE => (false, false),
         _ => return Err(Outcome::Skip), // another record type sharing the log: not evidence
     };
     if s.payload.len() < SEAL_HDR_LEN || &s.payload[..8] != SEAL_MAGIC {
@@ -116,20 +150,23 @@ pub fn verify<O: SealOpener + ?Sized>(sec: &[u8; SEC], seq: u64, nslots: u64, op
     if n > MAX_SEALED_PAYLOAD {
         return Err(Outcome::Reject(Reject::Layout));
     }
-    let (build_tag, body) = if tagged {
-        if n < BUILD_TAG_LEN {
-            return Err(Outcome::Reject(Reject::Layout));
-        }
+    let head = if with_prov { BUILD_TAG_LEN + PROV_LEN } else if tagged { BUILD_TAG_LEN } else { 0 };
+    if n < head {
+        return Err(Outcome::Reject(Reject::Layout));
+    }
+    let build_tag = if tagged {
         let mut t = [0u8; BUILD_TAG_LEN];
         t.copy_from_slice(&pt[..BUILD_TAG_LEN]);
-        (Some(t), &pt[BUILD_TAG_LEN..n])
+        Some(t)
     } else {
-        (None, &pt[..n])
+        None
     };
+    let prov = if with_prov { Prov::from_bytes(&pt[BUILD_TAG_LEN..head]) } else { Prov::UNKNOWN };
+    let body = &pt[head..n];
     if body.len() % EV_IMAGE_LEN != 0 {
         return Err(Outcome::Reject(Reject::Layout));
     }
-    let mut v = Verified { seq, build_tag, n: 0, events: [Event::default(); MAX_IMAGES] };
+    let mut v = Verified { seq, build_tag, prov, n: 0, events: [Event::default(); MAX_IMAGES] };
     for chunk in body.chunks_exact(EV_IMAGE_LEN) {
         let e = img(chunk);
         if e.verdict != VERDICT_PASS && e.verdict != VERDICT_DROP {
@@ -207,6 +244,33 @@ mod tests {
         bad.verdict = 0;
         let s = sealed_slot(&o, 4, 8, true, &[bad]);
         assert_eq!(verify(&s, 4, 8, &o).unwrap_err(), Outcome::Reject(Reject::BadImage));
+    }
+
+    /// ADR 0067 D10 records (kernel N1, `RT_EVIDENCE_C`) are evidence: opened, never skipped.
+    #[test]
+    fn opens_provenance_records() {
+        let o = TestOpener::new([1; 32]);
+        let evs = [ev(0), ev(1), ev(2)];
+        let p = Prov { cfg_gen: 42, cfg: [0xb2; 8] };
+        let s = crate::testutil::sealed_slot_prov(&o, 20, 8, p, &evs);
+        let v = verify(&s, 20, 8, &o).unwrap();
+        assert_eq!(v.events(), &evs);
+        assert_eq!(v.build_tag, Some(*b"test-build-tag!!"));
+        assert_eq!(v.prov, p);
+        assert!(v.prov.is_known());
+        // The full layout the kernel writes: tag + provenance + 20 images fills the seal.
+        let full: [Event; 20] = core::array::from_fn(|i| ev(i as u32));
+        let s = crate::testutil::sealed_slot_prov(&o, 21, 8, Prov::UNKNOWN, &full);
+        let v = verify(&s, 21, 8, &o).unwrap();
+        assert_eq!((v.n, v.prov), (20, Prov::UNKNOWN));
+        // Older layouts read as unknown provenance.
+        let s = sealed_slot(&o, 22, 8, true, &evs);
+        assert!(!verify(&s, 22, 8, &o).unwrap().prov.is_known());
+        // Shorter than tag + provenance, or a ragged tail: layout.
+        let s = crate::testutil::sealed_raw(&o, 23, 8, RT_EVIDENCE_C, &[0u8; 24]);
+        assert_eq!(verify(&s, 23, 8, &o).unwrap_err(), Outcome::Reject(Reject::Layout));
+        let s = crate::testutil::sealed_raw(&o, 24, 8, RT_EVIDENCE_C, &[0u8; 40]);
+        assert_eq!(verify(&s, 24, 8, &o).unwrap_err(), Outcome::Reject(Reject::Layout));
     }
 
     #[test]

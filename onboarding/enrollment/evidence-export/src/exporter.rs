@@ -253,6 +253,12 @@ mod tests {
             self.slots[(self.next_seq % n) as usize] = s;
             self.next_seq += 1;
         }
+        fn append_prov(&mut self, o: &TestOpener, p: crate::record::Prov, evs: &[Event]) {
+            let n = self.slots.len() as u64;
+            let s = crate::testutil::sealed_slot_prov(o, self.next_seq, n, p, evs);
+            self.slots[(self.next_seq % n) as usize] = s;
+            self.next_seq += 1;
+        }
     }
 
     impl SlotSource for MemLog {
@@ -479,5 +485,25 @@ mod tests {
         assert_eq!(p.sent, None);
         assert_eq!(x.stats.io_errors, 1);
         assert!(matches!(x.poll(1, Link::Up, &mut log, &o, &mut tx).decision, Decision::WaitUntil(_)));
+    }
+
+    /// Since ADR 0067 N1 the kernel writes `RT_EVIDENCE_C` records. A log that mixes them with the
+    /// older layouts (an OTA across the change) exports every event, none rejected or skipped.
+    #[test]
+    fn provenance_records_are_exported_alongside_older_layouts() {
+        let o = TestOpener::new([1; 32]);
+        let mut log = MemLog::new(16);
+        let evs = |r: u64| -> Vec<Event> { (0..3).map(|i| ev(r * 3 + i, ip(203, 0, 114, (i + 1) as u8))).collect() };
+        log.append(&o, &evs(0));
+        log.append_prov(&o, crate::record::Prov { cfg_gen: 7, cfg: [0xa1; 8] }, &evs(1));
+        log.append_prov(&o, crate::record::Prov::UNKNOWN, &evs(2));
+        log.append(&o, &evs(3));
+        let mut x = Exporter::new(ID, KEEP, SyncState::default(), CFG, 60_000);
+        let mut tx = Tx { up: true, frames: Vec::new() };
+        let (got, _) = drain(&mut x, &mut log, &o, &mut tx, 0);
+        assert_eq!(got.len(), 12);
+        let want: Vec<u64> = (0..12).map(|i| 1_000 + i).collect();
+        assert_eq!(got.iter().map(|r| r.ts_ms).collect::<Vec<_>>(), want);
+        assert_eq!(x.stats.rejected, 0);
     }
 }
