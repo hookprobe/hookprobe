@@ -425,6 +425,9 @@ fn pinmux_wifi() {
 }
 
 pub fn radio_power_on() -> u32 {
+    // Powering the radio on ends "radio off": without this, the in-kernel redo of a failed first bring-up (which
+    // power-cycles the radio through `radio_off`) had every SDIO command refused and could never succeed.
+    unsafe { RADIO_OFF = false };
     // Mux the pins FIRST — WL_ON's GPIO write and the SDHCI's SDIO2 signals only
     // reach the physical pads once their function-select is set.
     pinmux_wifi();
