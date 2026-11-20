@@ -4,7 +4,7 @@
 #   tools/swifi.sh [N] [max seconds]        (default: 10000 injections, 5400 s)
 #
 # Builds the Mission Control kernel with the `swifi` feature (never shipped) and boots it once. The campaign runs
-# inside the boot self-tests: N injections with a fixed seed into el0-lansvc, el0-tlshost and el0-hsh — one flipped bit in a
+# inside the boot self-tests: N injections with a fixed seed into el0-lansvc, el0-tlshost, el0-hsh and el0-wpa — one flipped bit in a
 # random page of the server's image (text, read-only data, writable data), or a call with a random command id and
 # random input. After each injection the server's functional probe runs, the whole image is put back from the signed
 # ELF, and the server must answer its probe again. PASS = no injection left a server unable to answer, the kernel
