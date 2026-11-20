@@ -610,6 +610,52 @@ pub fn read_frames<M: Mmio, R: crate::el0ring::RingMem + ?Sized>(bus: &mut Bus<M
     o.blk_diag = bus.blk_diag;
     o
 }
+
+/// ADR 0067 E1 — the vectored write: pop up to `n` slots from the TX ring (`txvmsg::slot_encode`), build each SDPCM data
+/// frame with the sequence the kernel assigned and write it to F2, in one call. The batch ends at its size, at an empty
+/// ring, at a malformed slot or a frame this build cannot send, or at the first failed bus write — and says which.
+/// `popped - sent` frames left the ring without reaching the device (at most one: the batch stops there).
+pub fn write_frames<M: Mmio, R: crate::el0ring::RingMem + ?Sized>(bus: &mut Bus<M>, ring: &mut R, n: u8) -> crate::wifisrvabi::txvmsg::Out {
+    use crate::wifisrvabi::{txvmsg, VecStop};
+    let mut o = txvmsg::Out { popped: 0, sent: 0, stop: VecStop::Limit, status: 0 };
+    let mut slot = [0u8; crate::el0ring::FRAME_MAX];
+    let mut frame = [0u8; DATA_TX_BUF];
+    while o.popped < n {
+        let len = match crate::el0ring::pop(ring, &mut slot) {
+            crate::el0ring::Pop::Frame(len) => len,
+            crate::el0ring::Pop::Empty => {
+                o.stop = VecStop::Drained;
+                break;
+            }
+            crate::el0ring::Pop::Bad => {
+                o.stop = VecStop::Ring;
+                break;
+            }
+        };
+        o.popped += 1;
+        let Some((seq, ifidx, big, eth)) = txvmsg::slot_decode(&slot[..len]) else {
+            o.stop = VecStop::BadFrame;
+            break;
+        };
+        let total = data_frame(seq, ifidx, eth, &mut frame);
+        match bus.write_frame(&frame, total, big) {
+            TxWrite::Sent { block } => {
+                o.sent += 1;
+                o.status |= block as u32; // bit 0: a frame of this batch went in block mode
+            }
+            TxWrite::TooBig => {
+                o.stop = VecStop::BadFrame;
+                break;
+            }
+            TxWrite::Failed { block } => {
+                o.stop = VecStop::BusError;
+                o.status |= 2 | (block as u32) << 2; // bit 1: a write failed; bit 2: it was a block-mode write
+                break;
+            }
+        }
+    }
+    o
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -853,6 +899,49 @@ mod tests {
         let mut b = Bus::new(Fake::new());
         *b.m.fail.borrow_mut() = true;
         assert_eq!(b.write_frame(&f, 100, false), TxWrite::Failed { block: false });
+    }
+
+    #[test]
+    fn write_frames_sends_a_batch_from_the_ring_in_order_and_stops_at_the_first_failure() {
+        use crate::el0ring as ring;
+        use crate::wifisrvabi::{txvmsg, VecStop};
+        let mut mem = std::vec![0u8; ring::RING_BYTES];
+        let fill = |mem: &mut [u8], seqs: &[u8]| {
+            ring::reset(mem);
+            for &q in seqs {
+                let mut sl = [0u8; 2048];
+                let n = txvmsg::slot_encode(q, 0, false, &[q; 100], &mut sl).unwrap();
+                assert!(ring::push(mem, &sl[..n]));
+            }
+        };
+        // three frames queued, a batch of 8: all three written, in order, with the kernel's sequence numbers
+        fill(&mut mem[..], &[7, 8, 9]);
+        let mut b = Bus::new(Fake::new());
+        let o = write_frames(&mut b, &mut mem[..], 8);
+        assert_eq!((o.popped, o.sent, o.stop), (3, 3, VecStop::Drained));
+        let out: Vec<u8> = b.m.data_out.borrow().iter().flat_map(|w| w.to_le_bytes()).collect();
+        let mut one = [0u8; DATA_TX_BUF];
+        let n1 = (data_frame(7, 0, &[7u8; 100], &mut one) + 3) & !3;
+        assert_eq!(out.len(), 3 * n1);
+        assert_eq!(&out[..n1], &one[..n1]);
+        assert_eq!(out[n1 + 4], 8, "the second frame carries sequence 8");
+        assert_eq!(out[2 * n1 + 4], 9);
+        // the batch size is a hard limit: two written, one stays in the ring
+        fill(&mut mem[..], &[1, 2, 3]);
+        let o = write_frames(&mut Bus::new(Fake::new()), &mut mem[..], 2);
+        assert_eq!((o.popped, o.sent, o.stop, ring::pending(&mem[..])), (2, 2, VecStop::Limit, 1));
+        // a failing bus: the first write fails, the batch stops, the other frames stay queued
+        fill(&mut mem[..], &[1, 2, 3]);
+        let mut bad = Bus::new(Fake::new());
+        *bad.m.fail.borrow_mut() = true;
+        let o = write_frames(&mut bad, &mut mem[..], 8);
+        assert_eq!((o.popped, o.sent, o.stop, ring::pending(&mem[..])), (1, 0, VecStop::BusError, 2));
+        assert_eq!(o.status & 2, 2);
+        // a malformed slot is not sent and ends the batch
+        ring::reset(&mut mem[..]);
+        assert!(ring::push(&mut mem[..], &[1, 0, 9, 0, 0xaa, 0xbb]));
+        let o = write_frames(&mut Bus::new(Fake::new()), &mut mem[..], 8);
+        assert_eq!((o.popped, o.sent, o.stop), (1, 0, VecStop::BadFrame));
     }
 
     #[test]

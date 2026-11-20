@@ -4907,6 +4907,9 @@ pub struct El0Keyer {
     pub rx_vec_pop: fn(&mut [u8]) -> Option<usize>,
     // step 4c: one data frame built + written by el0-wifi with the kernel's sequence (None = write in-kernel)
     pub tx_data: fn(u8, u8, bool, &[u8]) -> Option<hal::sdio::TxWrite>,
+    // ADR 0067 E1: queue a data frame with its sequence; then ONE call writes the queued frames -> (sent, a write failed)
+    pub tx_vec_push: fn(u8, u8, bool, &[u8]) -> bool,
+    pub tx_datav: fn(u8) -> Option<(usize, bool)>,
     // step 4d: one control request built + written by el0-wifi (None = write in-kernel)
     #[allow(clippy::type_complexity)]
     pub tx_ctl: fn(u8, u8, u32, u32, u16, usize, &[u8]) -> Option<bool>,
@@ -5405,6 +5408,63 @@ pub fn ap_keepalive() {
 /// per-station PTK when the L2 dst is that station's MAC — the proven path).
 pub fn ap_tx(eth: &[u8]) -> bool {
     sdpcm_data_tx(eth)
+}
+
+/// ADR 0067 E1 (feature `wifi-vec`): frames queued for the vectored write in progress.
+#[cfg(feature = "wifi-vec")]
+static mut TXV_QUEUED: u8 = 0;
+/// The most data frames one vectored write carries (<= `hal::wifisrvabi::VEC_MAX`).
+#[cfg(feature = "wifi-vec")]
+const TXV_BATCH: u8 = 8;
+/// How many data frames a vectored write could take right now: the firmware's credit window (less the control
+/// reserve), capped at the batch size; 0 = use the single-frame path (no server, no credit, flow control on).
+#[cfg(feature = "wifi-vec")]
+pub fn txv_room() -> usize {
+    if unsafe { RADIO_OFF } || el0().is_none() || unsafe { FC_MASK } != 0 {
+        return 0;
+    }
+    let d = credit_avail();
+    if (d & 0x80) != 0 || d <= TXCTL_CREDITS {
+        return 0;
+    }
+    ((d - TXCTL_CREDITS) as usize).min(TXV_BATCH as usize)
+}
+/// Queue one frame for the vectored write (its sequence = the next after the frames already queued).
+#[cfg(feature = "wifi-vec")]
+pub fn txv_push(eth: &[u8]) -> bool {
+    let Some(h) = el0() else { return false };
+    let q = unsafe { TXV_QUEUED };
+    if q >= TXV_BATCH {
+        return false;
+    }
+    let seq = unsafe { TX_SEQ }.wrapping_add(q);
+    let ok = (h.tx_vec_push)(seq, unsafe { CUR_IF } & 0x0f, cfg!(feature = "wifi-bigtx"), eth);
+    if ok {
+        unsafe { TXV_QUEUED = q + 1 };
+    }
+    ok
+}
+/// Write the queued frames in ONE call into el0-wifi. Returns how many were sent, in order from the first queued; the
+/// sequence advances by exactly that (as the single-frame path: only on Sent). The caller keeps every frame that was
+/// not sent and sends it again.
+#[cfg(feature = "wifi-vec")]
+pub fn txv_commit() -> usize {
+    let q = unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(TXV_QUEUED), 0) };
+    if q == 0 {
+        return 0;
+    }
+    let t0 = ticks();
+    let r = el0().and_then(|h| (h.tx_datav)(q));
+    prof_add(0, t0);
+    let (sent, failed) = r.unwrap_or((0, false));
+    if failed {
+        // a write that failed or was cut short by a fault is terminated in the device (brcmfmac's TX-error path)
+        let _ = bus().txfail();
+        sync_diag();
+        unsafe { AP_DIAG[4] += 1 };
+    }
+    unsafe { TX_SEQ = TX_SEQ.wrapping_add(sent.min(q as usize) as u8) };
+    sent.min(q as usize)
 }
 
 /// Is there SDPCM TX credit right now? Credits (the firmware's tx window) are refreshed

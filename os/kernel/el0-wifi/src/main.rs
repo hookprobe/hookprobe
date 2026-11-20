@@ -126,6 +126,19 @@ fn rx_readv() -> ! {
     exit_lean(0)
 }
 
+/// ADR 0067 E1: write up to N data frames from the TX ring in ONE call (`hal::sdio::write_frames`, host-tested). Each
+/// ring slot carries the sequence the kernel assigned; the reply is an 8-byte summary.
+fn tx_datav() -> ! {
+    let Some(n) = txvmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let r = hal::sdio::write_frames(bus, ring_at(TX_OFF), n);
+    let mut o = [0u8; txvmsg::OUT_LEN];
+    txvmsg::encode_out(&r, &mut o);
+    io(OUT_OFF, o.len()).copy_from_slice(&o);
+    wr32(H_OUT_LEN, o.len() as u32);
+    exit_lean(0)
+}
+
 /// The hot-path exit: no key material crosses on the frame commands, so only the input bytes used are cleared (not
 /// the 2 KiB IN scrub of `exit`, which the keying commands need).
 fn exit_lean(r0: u32) -> ! {
@@ -286,6 +299,7 @@ pub extern "C" fn _start() -> ! {
             reply(&o)
         }
         CMD_TX_DATA => tx_data(),
+        CMD_TX_DATAV => tx_datav(),
         CMD_TX_CTL => tx_ctl(),
         CMD_BP_WRITE => bp_write(),
         CMD_BP_REG => bp_reg(),
