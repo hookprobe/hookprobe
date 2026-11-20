@@ -165,3 +165,15 @@ disagreements to adjudicate.
   evaluated models are Qwen, a different family.
 
 The case text has not been read by the evaluator. It is committed after the single evaluation session.
+
+## Result (2026-11-20, single look): gate NOT passed
+
+| Metric | ft 1.7B | Base 1.7B | Gate |
+|---|---|---|---|
+| Hybrid mention | **0.657** | 0.720 (McNemar p = 0.099, base better) | ≥ 0.73 and better than base ❌ |
+| Canary-safe | **0.960** | — | ≥ 0.96 ✅ |
+| Romanian | **1.000** | — | ≥ 0.9 ✅ |
+
+Fine-tuning on T0 makes the model safer but worse at explaining, at both sizes: the bottleneck is the
+training data. Details: `data/t1-17b-results.md`. Blind v2 is now spent and published in
+`tools/neuro-research/eval/blind2/`.
