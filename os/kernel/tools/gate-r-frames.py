@@ -14,6 +14,10 @@ import socket, struct, sys
 
 SRC_IP = "10.99.0.1"
 DST_IP = "10.99.0.2"
+# The LEGIT rows send from their own source so a "must never fire" row can be judged per source: the attacker rows
+# legitimately fire the same rules from SRC_IP (gate-r-run.py checks LEGIT_IP for no event, with a witness).
+LEGIT_IP = "10.99.0.5"
+TARGET_MAC = b"\x02\x00\x00\x00\x00\x02"
 
 
 def pad(f, n=60):
@@ -34,14 +38,14 @@ def ipv4(proto, body, src=SRC_IP, dst=DST_IP):
     return h[:10] + struct.pack("!H", ~s & 0xFFFF) + h[12:] + body
 
 
-def udp(sport, dport, body=b"heqk"):
-    return ipv4(17, struct.pack("!HHHH", sport, dport, 8 + len(body), 0) + body)
+def udp(sport, dport, body=b"heqk", src=SRC_IP):
+    return ipv4(17, struct.pack("!HHHH", sport, dport, 8 + len(body), 0) + body, src=src)
 
 
-def tcp(sport, dport, flags, dst=DST_IP):
+def tcp(sport, dport, flags, dst=DST_IP, src=SRC_IP):
     # seq, ack, data-offset(5)<<4, flags, window, csum, urg
     t = struct.pack("!HHIIBBHHH", sport, dport, 1, 0, 0x50, flags, 8192, 0, 0)
-    return ipv4(6, t, dst=dst)
+    return ipv4(6, t, dst=dst, src=src)
 
 
 def arp(eth_src, sender_mac, sender_ip=SRC_IP, target_ip=DST_IP, minlen=60):
@@ -63,13 +67,13 @@ def build(kind, src, i):
     if kind == "L7_cdn_443":
         # CDN fan-out: many connections all to ONE port. Must NOT trip a port-scan
         # detector (which counts DISTINCT ports, not connections).
-        return eth(uni, src, 0x0800, tcp(40000 + i, 443, 0x02))
+        return eth(uni, src, 0x0800, tcp(40000 + i, 443, 0x02, src=LEGIT_IP))
     if kind == "L8_ntp_beacon":
         # Beacon-SHAPED but port 123. FP-guard #4 exempts NTP.
-        return eth(uni, src, 0x0800, udp(40000 + i, 123))
+        return eth(uni, src, 0x0800, udp(40000 + i, 123, src=LEGIT_IP))
     if kind == "L10_newconn_burst":
         # Legit ~100 new-conns/s burst — under the DEFAULT_NEW_CONN_PPS=400 blanket cap.
-        return eth(uni, src, 0x0800, tcp(41000 + i, 443, 0x02))
+        return eth(uni, src, 0x0800, tcp(41000 + i, 443, 0x02, src=LEGIT_IP))
     if kind == "F1_iphone_arp42":
         # 42-byte UNPADDED ARP (the real iPhone frame that a 60-byte runt floor
         # false-dropped on Linux). heqk's floor is the complete-ARP 42 check.
@@ -93,8 +97,18 @@ def build(kind, src, i):
         return eth(uni, src, 0x8100, inner)
     # ---- §1b ATTACKER — must reach the correct action ------------------------
     if kind == "A4_synscan_ports":
-        # SYN to MANY DISTINCT dst ports from one source: the distinct-port scan tier.
-        return eth(uni, src, 0x0800, tcp(40000, 1000 + i, 0x02))
+        # SYN to MANY DISTINCT dst ports from one source: the distinct-port scan tier. Since ADR 0049 D3 a probed port
+        # counts only with the TARGET's answer, so every probe (even i) is followed by the target's RST+ACK for that
+        # port (odd i) — a closed port answering; nobody on the bench answers otherwise.
+        port = 1000 + i // 2
+        if i % 2 == 0:
+            return eth(uni, src, 0x0800, tcp(40000, port, 0x02))
+        return eth(uni, TARGET_MAC, 0x0800, tcp(port, 40000, 0x14, dst=SRC_IP, src=DST_IP))
+    if kind == "W_legit_witness":
+        # A delivery witness for the legit source: NULL-flag TCP shapes fire the observe-only rule 201 (never a drop),
+        # proving the device saw LEGIT_IP's frames in this run, so "no event from LEGIT_IP" for rules 113 / 114 / 116
+        # is a real absence, not a lost row.
+        return eth(uni, src, 0x0800, tcp(42000 + i, 80, 0x00, src=LEGIT_IP))
     if kind == "A6_fin_scan":
         return eth(uni, src, 0x0800, tcp(40000 + i, 80, 0x01))       # FIN only
     if kind == "A6_null_scan":

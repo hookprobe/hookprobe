@@ -25,14 +25,17 @@ row F6_mcast_src     "rule110 DROP"       F6_mcast_src 40
 row F8_double_vlan   "rule110 DROP"       F8_double_vlan 40
 row F9_arp_malformed "rule101 DROP"       F9_arp_malformed 40
 # --- ATTACKER: correct tri-state ---
-row A4_synscan_rl    "rule113 DROP(RL)"   A4_synscan_ports 60
-row A5_synscan_confirm "rule113 DROP(Qtn)" A4_synscan_ports 130
+# (each probe is followed by the target's RST answer: twice the frames for the same number of ports, ADR 0049 D3)
+row A4_synscan_rl    "rule113 DROP(RL)"   A4_synscan_ports 120
+row A5_synscan_confirm "rule113 DROP(Qtn)" A4_synscan_ports 260
 row A6_fin_scan      "rule202 fire"       A6_fin_scan 40
 row A6_null_scan     "rule201 fire"       A6_null_scan 40
 row A6_xmas_scan     "rule203 fire"       A6_xmas_scan 40
 row threat_4444      "rule1 DROP"         threat_4444 40
 # --- BEHAVIORAL (M2.4, Observe-only — fire but NEVER wire-drop) ---
 row A10_lateral      "rule117 PASS"       A10_lateral 10
+# --- WITNESS: the legit source was seen (rule 201 observe-only from 10.99.0.5) ---
+row W_legit_witness  "rule201 PASS (legit src)" W_legit_witness 5
 # --- A3: bcast-storm shed on ANY port (post-fix: FloodRate -> RateLimit DROP). LAST + alone. ---
 row A3_bcast_storm   "rule112 DROP"       A3_bcast_storm 120
 echo "###MATRIX-END###"
