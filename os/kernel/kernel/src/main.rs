@@ -2994,6 +2994,13 @@ fn first_bringup() -> (Option<u16>, bool) {
         let f2 = p == Some(0x4345) && cyw43::firmware_upload(unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) });
         (p, f2)
     };
+    // ADR 0067 L0.1: the vendor files come from the boot partition (verified against the pins) before the first
+    // bring-up; a reload reuses them. Without them there is nothing to upload: one in-kernel probe for the
+    // diagnostics, no el0-wifi bring-up and no retry.
+    #[cfg(feature = "fwfiles")]
+    if !fwfiles::boot_load() {
+        return run();
+    }
     #[cfg(feature = "mctls")]
     let el0 = crate::el0srv::keyer::load_bus_early();
     #[cfg(not(feature = "mctls"))]
@@ -3080,10 +3087,14 @@ fn cm5_p10_probe() {
                 kprint!("   [P10-B sdio] CCCR SPEED={:#04x} (SHS={}) HOST_CTRL1={:#04x} (HISPD={}) => SDCLK {} MHz {}\n",
                     spd, spd & 1, hc1, (hc1 >> 2) & 1, mhz, if mhz > 12 { "High-Speed, verified over 64 CMD53 reads" } else { "default speed (fallback)" });
             }
+            if !cyw43::firmware_present() {
+                kprint!(" [P10-B] SKIPPED — no Wi-Fi vendor files installed: nothing was uploaded to the chip (the lines below are the untouched chip's state)\n");
+            } else {
             kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {} (stage-B step {})\n",
                 if f2 { "PASS" } else { "SILENT" }, cyw43::fw_bin().len(),
                 if f2 { "ready (firmware alive)" } else { "not ready — see step + EROM diag" },
                 cyw43::fw_last_step());
+            }
             kprint!("   [P10-B diag] erom_ptr={:#010x} CR4 regbase={:#010x} wrapbase={:#010x}\n",
                 erom, cr4b, cr4w);
             let (cstage, cint, cps) = cyw43::cmd53_diag();
@@ -3234,7 +3245,7 @@ fn cm5_p10_probe() {
                         // Wi-Fi off from the start: fail every SDIO command at once and hold the chip in reset.
                         let mut wifi_boot_off = boot_off;
                         if boot_off {
-                            let why = if !chip_ok { wifiheal::BootFault::NoChip } else if !f2 { wifiheal::BootFault::FirmwareNotStarted } else { wifiheal::BootFault::NoControl };
+                            let why = if cfg!(feature = "fwfiles") && !cyw43::firmware_present() { wifiheal::BootFault::VendorFiles } else if !chip_ok { wifiheal::BootFault::NoChip } else if !f2 { wifiheal::BootFault::FirmwareNotStarted } else { wifiheal::BootFault::NoControl };
                             cyw43::radio_off();
                             wifiheal::set_boot_fault(why);
                             superv::wifi_heal(5, false, superv::now_ms()); // journal: Wi-Fi degraded, closed Failed
@@ -10511,6 +10522,8 @@ fn p15_otafat_selftest() {
         kprint!(" [P15-otafat] SKIP — no first partition in the MBR\n");
         return;
     }
+    // ADR 0067 L0.1: the Wi-Fi vendor files of this disk against the pins of this build (read-only).
+    fwfiles::fat_selftest(&dev);
     // 2. Locate heqk8-b.img (8.3 short name "HEQK8-B IMG") as a contiguous LBA run.
     let (slot_lba, slot_sectors) = match fat::locate_contiguous(&dev, part_start, b"HEQK8-B IMG") {
         Some(r) => r,
