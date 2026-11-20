@@ -199,7 +199,7 @@ def main():
     ap.add_argument("--hold-secs", type=float, default=2.0, help="rpiboot: IN2 held after the power is back (operator 2026-11-20: 2 s)")
     ap.add_argument("--rpiboot-off-secs", type=float, default=3.0, help="rpiboot: board off before IN2 goes on (operator 2026-11-20: 3 s)")
     ap.add_argument("--rom-timeout", type=float, default=15.0)
-    ap.add_argument("--in2-gap", type=float, default=1.0, help="rpiboot: seconds between IN2 on and power on — the relays are never switched in the same instant (operator rule)")
+    ap.add_argument("--in2-gap", type=float, default=10.0, help="rpiboot: IN2 held this long with the board still off before the power comes back (operator 2026-11-20: 10 s; 1-2 s failed three times)")
     ap.add_argument("--power-sense", default="", help="rpiboot: a host network interface cabled to the CM5 (e.g. enp4s0); its carrier must drop after IN1 on, else stop before anything else is switched")
     ap.add_argument("--dry-run", action="store_true", help="paper test: print the relay commands in order, touch nothing")
     ap.add_argument("cmd", choices=["status", "off", "on", "cycle", "rpiboot", "boot", "in2-on", "in2-off"])
@@ -249,7 +249,8 @@ def main():
         # RULE (operator): the two relays are NEVER switched in the same instant — "you might not have enough power to
         # charge the electromagnet and it will not coil up". Sent back to back, one of them did not take while the
         # read-back claimed both (2026-11-20: five failed entries). So IN2 goes on --in2-gap (1 s) before the power
-        # comes back: that pause is the one thing here that is not in the operator's words.
+        # comes back. Operator, 2026-11-20 19:24: "in2 needs more seconds — like 10s before powering": with IN2 held
+        # 10 s the boot ROM enumerated 0.6 s after power-on; with 1-2 s it failed three times.
         r.set(POWER, True)
         if isinstance(r, Paper):
             print(f"  (wait {a.rpiboot_off_secs:.0f} s — board off{'; power really off, checked on ' + a.power_sense if a.power_sense else ''})")
@@ -269,7 +270,7 @@ def main():
             if "power=0" not in st or "rpiboot=1" not in st:
                 sys.exit(f"want power=0 rpiboot=1 (board off, nRPIBOOT held), read {st or 'no reply'} — stop")
         if isinstance(r, Paper):
-            print(f"  (wait {a.in2_gap:.0f} s — IN2 seated before the power comes back)")
+            print(f"  (wait {a.in2_gap:.0f} s — IN2 held with the board off)")
         else:
             time.sleep(a.in2_gap)
         r.set(POWER, False)  # power on with nRPIBOOT held
