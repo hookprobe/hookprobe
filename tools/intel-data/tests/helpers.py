@@ -80,9 +80,9 @@ class Sandbox:
         os.makedirs(self.reg)
         with open(os.path.join(REGISTRY_DIR, "collections.json"), encoding="utf-8") as f:
             cols = json.load(f)
-        known = {s["id"] for s in SOURCES}
         for c in cols["entries"]:
-            c["sources"] = [s for s in c["sources"] if s in known]
+            # the fixture sources replace the real ones; membership must agree both ways (Registry.check)
+            c["sources"] = sorted(s["id"] for s in SOURCES if c["id"] in (s.get("collections") or []))
         self._dump("collections.json", cols)
         self._dump("sources.json", {"schema": "heqk.source/1", "entries": sorted(SOURCES, key=lambda x: x["id"])})
         self._dump("licenses.json", {"schema": "heqk.license/1", "entries": sorted(LICENSES, key=lambda x: x["id"])})
