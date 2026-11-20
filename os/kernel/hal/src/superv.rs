@@ -47,6 +47,9 @@ pub enum Rung {
     Degrade = 5,
     /// H5: the component used up its CPU budget for this window — its calls are refused until the next window.
     Throttle = 6,
+    /// H7: the component's persistent state was wiped (it failed its integrity check, or a fault could not be
+    /// contained): a fresh, empty incarnation; whatever depended on that state starts over (stations re-key).
+    Wipe = 7,
 }
 
 /// How it ended.
@@ -71,7 +74,7 @@ impl Kind {
 
 impl Rung {
     pub fn name(self) -> &'static str {
-        ["restart", "kick", "bounce", "reload", "reboot", "degrade", "throttle"][self as usize]
+        ["restart", "kick", "bounce", "reload", "reboot", "degrade", "throttle", "wipe"][self as usize]
     }
 }
 
@@ -305,18 +308,43 @@ pub struct Entry {
     /// The Wi-Fi servers are measured only: el0-wifi IS the data path, and el0-wpa's SAE work comes in bursts whose
     /// size is set by how many stations join — both need metal numbers before a limit is honest.
     pub cpu_ms_per_window: u32,
+    /// H7: what survives the component's own restart.
+    pub state: StateClass,
+}
+
+/// H7: what a component keeps across its own restart — so the recovery for it is known up front.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum StateClass {
+    /// Nothing between calls: a restart restores the signed image and loses nothing.
+    Stateless,
+    /// State lives only in the incarnation (TLS sessions, bus / firmware state): a restart loses it and the users
+    /// start over (reconnect, re-init).
+    Volatile,
+    /// State pages kept ACROSS a restart (el0-wpa: PMKSA cache, SAE / 4-way state, keys). Reused only after an
+    /// integrity check; a slot that fails it is never reused — the pages are wiped (rung wipe) and stations re-key.
+    Persistent,
+}
+
+impl StateClass {
+    pub fn name(self) -> &'static str {
+        match self {
+            StateClass::Stateless => "stateless",
+            StateClass::Volatile => "volatile",
+            StateClass::Persistent => "persistent",
+        }
+    }
 }
 
 /// The supervisor table. `wifi` is the Wi-Fi link as a whole (its ladder lives in `wifiheal`): the only critical
 /// entry — its ladder ends in one reboot, then degrade. The EL0 servers restart in place and never reboot the device.
 pub const TABLE: [Entry; 7] = [
-    Entry { name: "el0-wifi", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0, cpu_ms_per_window: 0 },
-    Entry { name: "el0-wpa", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0, cpu_ms_per_window: 0 },
-    Entry { name: "el0-tlshost", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500 },
-    Entry { name: "el0-lansvc", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500 },
-    Entry { name: "el0-hsh", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500 },
-    Entry { name: "wifi", critical: true, exhausted: Exhausted::RebootOnce, grace: 0, backoff_ms: 0, backoff_max_ms: 0, stable_ms: 0, cpu_ms_per_window: 0 },
-    Entry { name: "el0-neuro", critical: false, exhausted: Exhausted::Degrade, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 200 },
+    Entry { name: "el0-wifi", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0, cpu_ms_per_window: 0, state: StateClass::Volatile },
+    Entry { name: "el0-wpa", critical: false, exhausted: Exhausted::KeepRestarting, grace: 0, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 0, cpu_ms_per_window: 0, state: StateClass::Persistent },
+    Entry { name: "el0-tlshost", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500, state: StateClass::Volatile },
+    Entry { name: "el0-lansvc", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500, state: StateClass::Stateless },
+    Entry { name: "el0-hsh", critical: false, exhausted: Exhausted::KeepRestarting, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 500, state: StateClass::Stateless },
+    Entry { name: "wifi", critical: true, exhausted: Exhausted::RebootOnce, grace: 0, backoff_ms: 0, backoff_max_ms: 0, stable_ms: 0, cpu_ms_per_window: 0, state: StateClass::Volatile },
+    Entry { name: "el0-neuro", critical: false, exhausted: Exhausted::Degrade, grace: 1, backoff_ms: 50, backoff_max_ms: 5_000, stable_ms: 10_000, cpu_ms_per_window: 200, state: StateClass::Volatile },
 ];
 
 /// The table entry of a component (None = not supervised by name).
@@ -772,6 +800,16 @@ mod tests {
     }
 
     #[test]
+    fn state_classes() {
+        // only el0-wpa keeps state across its own restart (and so is the only one that can need a wipe)
+        let persistent: usize = TABLE.iter().filter(|e| e.state == StateClass::Persistent).count();
+        assert_eq!(persistent, 1);
+        assert_eq!(entry("el0-wpa").map(|e| e.state), Some(StateClass::Persistent));
+        assert_eq!(entry("el0-lansvc").map(|e| e.state), Some(StateClass::Stateless));
+        assert_eq!(entry("el0-tlshost").map(|e| e.state), Some(StateClass::Volatile));
+    }
+
+    #[test]
     fn names() {
         assert_eq!(component_id("el0-tlshost"), 2);
         assert_eq!(component_id("nope"), 7);
@@ -780,6 +818,8 @@ mod tests {
         assert_eq!(Kind::Budget.name(), KIND_NAMES[1]);
         assert_eq!(Rung::Reload.name(), "reload");
         assert_eq!(Rung::Throttle.name(), "throttle");
+        assert_eq!(Rung::Wipe.name(), "wipe");
+        assert_eq!(StateClass::Persistent.name(), "persistent");
         assert_eq!(Outcome::Escalated.name(), OUTCOME_NAMES[2]);
     }
 }

@@ -134,6 +134,23 @@ pub fn server_probe_failed(name: &str) -> u32 {
     j().open(c, kind, Rung::Restart, now_ms())
 }
 
+// --- H7: state classes ---
+/// A persistent-state server's state was wiped: `bad_state` = its integrity check refused the saved state (journaled
+/// kind probe: the check is the detector), else a fault that could not be contained (kind exception). Rung wipe —
+/// it escalates the restart entry the fault opened; the next good call closes it Recovered.
+pub fn state_wiped(name: &str, bad_state: bool) -> u32 {
+    let c = component_id(name);
+    mark(c);
+    let kind = if unsafe { DELIBERATE } != 0 {
+        Kind::Planned
+    } else if bad_state {
+        Kind::Probe
+    } else {
+        Kind::Exception
+    };
+    j().open(c, kind, Rung::Wipe, now_ms())
+}
+
 static mut PROBES: hal::superv::ProbeClock = hal::superv::ProbeClock::new();
 /// (probes run, probes failed) since boot.
 static mut PROBE_STATS: (u64, u64) = (0, 0);
@@ -253,8 +270,8 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
     // H2: the supervisor table (fixed in the signed image) — who may escalate to a reboot, and each restart policy
     w.raw("},\"supervised\":[");
     for (i, e) in hal::superv::TABLE.iter().enumerate() {
-        let _ = write!(w, "{}{{\"component\":\"{}\",\"critical\":{},\"exhausted\":\"{}\",\"grace\":{},\"backoff_ms\":{},\"backoff_max_ms\":{}}}",
-            if i > 0 { "," } else { "" }, e.name, e.critical, e.exhausted.name(), e.grace, e.backoff_ms, e.backoff_max_ms);
+        let _ = write!(w, "{}{{\"component\":\"{}\",\"critical\":{},\"exhausted\":\"{}\",\"grace\":{},\"backoff_ms\":{},\"backoff_max_ms\":{},\"state\":\"{}\"}}",
+            if i > 0 { "," } else { "" }, e.name, e.critical, e.exhausted.name(), e.grace, e.backoff_ms, e.backoff_max_ms, e.state.name());
     }
     // H5: CPU use per component per window (us); budget 0 = measured only
     w.raw("],\"cpu\":[");
