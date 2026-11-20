@@ -14,12 +14,13 @@ Rule: **a flash is one deliberate, operator-approved action with a stop rule —
 
 Use `tools/diagnostics/cm5-rpiboot-check.sh` (add `--msd` to also expose the eMMC as USB mass storage, read-only)
 to prove the path without flashing. **Root cause of the 2026-11-12 failures:** the operator heard a single relay click —
-the board was not power-cycled while nRPIBOOT was held, so the ROM never saw the boot mode. **Operator procedure (IN1 = power, IN2 = rpiboot):** cut power with IN1 → THEN IN2 on (never in the same instant as IN1) →
-release IN1 (board powers up, nRPIBOOT held) → 3 s later release IN2 → boot ROM `0a5c:2712` on USB.
-**2026-11-20:** the tool had been sending IN1 and IN2 back to back since 2026-11-12 13:57 (a misreading of "IN1 + IN2"); sent that way the
-second relay did not take — five failed entries in one day, the read-back claiming both every time. With IN1 first and IN2 a second later the
-ROM enumerated three times out of three. `cm5-relay.py rpiboot --power-sense enp4s0` also checks that the board really lost power (the host
-interface cabled to the CM5 must lose carrier) before IN2 is switched.
+the board was not power-cycled while nRPIBOOT was held, so the ROM never saw the boot mode. **Operator procedure (2026-11-20; IN1 = power, IN2 = rpiboot).** Phase 1, enter rpiboot: power off (IN1) → wait 3 s →
+IN2 on → power on → release IN2 2 s later → boot ROM `0a5c:2712` on USB. Phase 2, after the flash: reset IN1 only.
+**Rule: never switch the two relays in the same instant** — the supply cannot pull in both coils at once, one of them does not
+take, and the controller's read-back still claims both. `cm5-relay.py rpiboot` keeps 1 s between IN2 on and power on
+(`--in2-gap`), and with `--power-sense enp4s0` checks that the board really lost power (the host interface cabled to the CM5
+must lose carrier) before IN2 is switched. From 2026-11-12 to 2026-11-20 the tool sent both together: five failed entries in
+one day.
 After flashing, a normal boot = reset IN1 only (off → on). **Always run the paper test first:**
 `tools/diagnostics/cm5-relay.py --backend nano --dev auto --dry-run rpiboot` (and `… --dry-run boot`) prints the exact
 relay commands in order without touching anything. Asserting nRPIBOOT FIRST and cycling
