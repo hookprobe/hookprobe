@@ -173,6 +173,9 @@ class ExportRules(unittest.TestCase):
         _, man = windows.export(self.st, self.reg, "f-iot23", "commercial_training", "neuro-sha256-mod3", out_root=out,
                                 unseal=["f-iot23"])
         self.assertEqual(man["unsealed"], [test_name])
+        with self.assertRaises(RuntimeError):  # a finished export directory is never rewritten
+            windows.export(self.st, self.reg, "f-iot23", "commercial_training", "neuro-sha256-mod3", out_root=out,
+                           unseal=["f-iot23"])
         with open(os.path.join(self.sb.data, "audit.jsonl")) as f:
             self.assertTrue(any(json.loads(l)["action"] == "unseal" for l in f))
 
