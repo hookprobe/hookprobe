@@ -144,6 +144,10 @@ class Nano:
     def set(self, ch, on):
         line = ("P0" if on else "P1") if ch == POWER else ("B1" if on else "B0")
         reply = self.cmd(line)
+        if reply.startswith("ERR unknown"):
+            # seen 2026-11-20: a stale byte in front of the command; nothing was switched — poll, send it once more
+            self.cmd("?")
+            reply = self.cmd(line)
         if not reply.startswith("OK"):
             sys.exit(f"relay command {line} failed: {reply or 'no reply'}")
 
@@ -192,6 +196,8 @@ def main():
     ap.add_argument("--off-secs", type=float, default=5.0, help="power-off dwell (CM5 caps drain; operator: 5 s, 10 s if too fast)")
     ap.add_argument("--hold-secs", type=float, default=3.0, help="IN2 held after IN1 is released (operator: 3 s; 6 s if too fast)")
     ap.add_argument("--rom-timeout", type=float, default=15.0)
+    ap.add_argument("--in2-gap", type=float, default=1.0, help="rpiboot: seconds between IN1 on and IN2 on (IN1 must be seated first: sent back to back, IN1 did not cut power — 2026-11-20, twice)")
+    ap.add_argument("--power-sense", default="", help="rpiboot: a host network interface cabled to the CM5 (e.g. enp4s0); its carrier must drop after IN1 on, else stop before anything else is switched")
     ap.add_argument("--dry-run", action="store_true", help="paper test: print the relay commands in order, touch nothing")
     ap.add_argument("cmd", choices=["status", "off", "on", "cycle", "rpiboot", "boot"])
     a = ap.parse_args()
@@ -235,6 +241,21 @@ def main():
         # IN2 3 s later. Asserting nRPIBOOT first and cycling power after it
         # left IN1 unswitched (one click). Each step is read back on the Nano.
         r.set(POWER, True)
+        # IN1 first, seated, THEN IN2. Sent back to back (2026-11-20, 16:50 and 17:22) the read-back said power=0 but
+        # the board never lost power (its Ethernet link to the host stayed up) and the ROM never saw the boot mode;
+        # with IN1 on alone first, the link dropped at once and the boot ROM enumerated in 1.2 s.
+        if isinstance(r, Paper):
+            print(f"  (wait {a.in2_gap:.0f} s — IN1 seated; power really off{' (checked on ' + a.power_sense + ')' if a.power_sense else ''})")
+        else:
+            time.sleep(a.in2_gap)
+            if a.power_sense:
+                try:
+                    up = open(f"/sys/class/net/{a.power_sense}/carrier").read().strip() == "1"
+                except OSError:
+                    up = False
+                if up:
+                    r.set(POWER, False)
+                    sys.exit(f"IN1 is on but {a.power_sense} still has carrier: the board did not lose power — IN1 released, stop")
         r.set(RPIBOOT, True)
         if isinstance(r, Nano):
             st = r.status()
