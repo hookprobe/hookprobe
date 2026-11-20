@@ -4521,6 +4521,36 @@ fn cm5_p10_probe() {
                                     break;
                                 }
                             }
+                            // ADR 0067 E1: the bulk queue goes out in vectored writes — up to txv_room() frames per EL0 round trip
+                            // instead of one. Frames that were not sent stay queued (same order, new sequence numbers).
+                            #[cfg(feature = "wifi-vec")]
+                            while wq_n > 1 && pq_n == 0 && tx_round < tx_budget {
+                                let room = cyw43::txv_room().min(wq_n).min((tx_budget - tx_round) as usize);
+                                if room < 2 {
+                                    break;
+                                }
+                                let mut queued = 0usize;
+                                for k in 0..room {
+                                    let i = (wq_head + k) % WQ_N;
+                                    if !cyw43::txv_push(&wq[i][..wq_len[i]]) {
+                                        break;
+                                    }
+                                    queued += 1;
+                                }
+                                let sent = cyw43::txv_commit();
+                                tx_round += queued.max(1) as i32;
+                                for _ in 0..sent {
+                                    let i = wq_head;
+                                    sent_ring[sent_i % 4] = (u32::from_be_bytes([0, wq[i][3], wq[i][4], wq[i][5]]), wq_len[i] as u16);
+                                    sent_i += 1;
+                                    wq_head = (i + 1) % WQ_N;
+                                    wq_n -= 1;
+                                    wq_flushed += 1;
+                                }
+                                if sent < queued || queued == 0 {
+                                    break; // the single-frame path below takes the next frame (and counts its failure)
+                                }
+                            }
                             while wq_n > 0 && pq_n == 0 && cyw43::tx_credit_ok() && tx_round < tx_budget {
                                 tx_round += 1;
                                 let i = wq_head;
@@ -5713,6 +5743,17 @@ fn cm5_p10_probe() {
                                                 }
                                                 let (c, f, r, h) = crate::el0srv::keyer::stats();
                                                 let (rxe, rxr, txe, txl, cte, ctl) = crate::el0srv::keyer::rx_stats();
+                                                #[cfg(feature = "wifi-vec")]
+                                                {
+                                                    #[cfg(feature = "wifi-vec-rx")]
+                                                    let v = crate::el0srv::keyer::rxv_stats();
+                                                    let t = crate::el0srv::keyer::txv_stats();
+                                                    kprint!("   [EL0-WIFI-VECTX] vectored writes={} frames sent={} (x100 per write: {}) unsent after a failed write={} taken back from the ring={} replies refused={}\n",
+                                                        t[0], t[1], (t[1] * 100).checked_div(t[0]).unwrap_or(0), t[2], t[3], t[4]);
+                                                    #[cfg(feature = "wifi-vec-rx")]
+                                                    kprint!("   [EL0-WIFI-VEC] vectored reads={} frames delivered={} (x100 per read: {}) lost in el0-wifi={} replies refused={} frames refused by the kernel={}\n",
+                                                        v[0], v[1], (v[1] * 100).checked_div(v[0]).unwrap_or(0), v[2], v[3], unsafe { arch_aarch64::cyw43::RXV_REFUSED });
+                                                }
                                                 kprint!("   [EL0-WIFI] calls={} faults={} restarts={} handshakes_in_el0={} rx_frames_read_in_el0={} rx_replies_refused={} tx_frames_written_in_el0={} tx_calls_lost={} ctl_requests_in_el0={} ctl_calls_lost={} fw_bytes_written_in_el0={} fw_slices_lost={} reload_reg_ops_in_el0={} reload_reg_ops_lost={}\n", c, f, r, h, rxe, rxr, txe, txl, cte, ctl,
                                                     unsafe { crate::el0srv::keyer::BP_EL0_BYTES }, unsafe { crate::el0srv::keyer::BP_LOST },
                                                     unsafe { crate::el0srv::keyer::REG_EL0_OPS }, unsafe { crate::el0srv::keyer::REG_LOST });
