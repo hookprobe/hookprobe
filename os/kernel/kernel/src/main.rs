@@ -57,6 +57,7 @@ mod actions;
 mod apcred;
 mod mcmgmt;
 mod srckey;
+mod fwfiles;
 mod idsbench;
 mod inspshed;
 mod ja4;
@@ -3056,7 +3057,7 @@ fn cm5_p10_probe() {
                     spd, spd & 1, hc1, (hc1 >> 2) & 1, mhz, if mhz > 12 { "High-Speed, verified over 64 CMD53 reads" } else { "default speed (fallback)" });
             }
             kprint!(" [P10-B] {} — firmware ({} B) + NVRAM uploaded; F2 {} (stage-B step {})\n",
-                if f2 { "PASS" } else { "SILENT" }, cyw43::FW_BIN.len(),
+                if f2 { "PASS" } else { "SILENT" }, cyw43::fw_bin().len(),
                 if f2 { "ready (firmware alive)" } else { "not ready — see step + EROM diag" },
                 cyw43::fw_last_step());
             kprint!("   [P10-B diag] erom_ptr={:#010x} CR4 regbase={:#010x} wrapbase={:#010x}\n",
@@ -7719,6 +7720,7 @@ pub extern "C" fn kmain() -> ! {
         let _ = wificfg::selftest();
         let _ = rulepack::selftest();
         let _ = rulepack::guard_selftest();
+        let _ = fwfiles::selftest();
         let _ = inspshed::selftest();
         #[cfg(feature = "netsvc")]
         let _ = actionapi::selftest();
