@@ -2,7 +2,9 @@
   "tolerance_pct": 8,
   "min_boots": 3,
   "timings": {
-    "ids.mix": {"max_ns": 441, "evidence": "docs/design/metal-evidence/20261109-detection-network-series.md: 398-441 ns per packet over later batches; the upper end, before ADR 0067. To be lowered after batch B1 (one trial boot on 2026-11-20 read 322)"},
-    "tier.sum": {"max_ns": 307, "evidence": "same file: the ten [IDS-TIERS] values for TCP data (parse 11, l2-stateful 16, l2 20, flow 53, scan 24, conn-rate 13, resource-shed 30, ja4 4, tcp-flags 45, l4-rules 91) sum to 307"}
+    "ids.mix": {"max_ns": 321, "evidence": "docs/design/metal-evidence/20261120-l01-fwfiles-b1.md (update 2026-11-20 evening): median of three boots of am23F-1db60802 (316 / 321 / 321); was 398-441 before ADR 0067"},
+    "tier.sum": {"max_ns": 306, "evidence": "same three boots: [IDS-TIERS] sum 306 / 294 / 306, median 306; was 307 on 2026-11-09"},
+    "tier.l4-rules": {"max_ns": 52, "evidence": "same three boots: 52 / 52 / 52 (dst-port guards, #1355); was 91 on 2026-11-09"},
+    "tier.tcp-flags": {"max_ns": 36, "evidence": "same three boots: 36 / 36 / 36 (TCP-flag byte guards, #1361); was 45 on 2026-11-09"}
   }
 }
