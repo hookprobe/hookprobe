@@ -136,6 +136,29 @@ BS="$OUT/bootset"
 if [ "$ZERO_LINUX" = 1 ]; then MODE_DESC="ZERO-LINUX: no devicetree"; else MODE_DESC="proven: one .dtb"; fi
 echo "== [factory] 3/5 canonical A/B boot config ($MODE_DESC)"
 STAGE="$(mktemp -d)"; trap 'rm -rf "$STAGE"' EXIT
+# ADR 0067 D11 / L0.1 — the Wi-Fi chip's vendor files on the boot partition, in EVERY image (8.3 names of
+# kernel::fwfiles). A build with the `fwfiles` feature reads them from here and checks them against its SHA-256
+# pins; a build that embeds them ignores these copies. They are always written because the device has no FAT
+# writer: an OTA can replace a slot image in place but can never add a file, so a unit must already carry them
+# when a later OTA brings a fwfiles kernel.
+cp "$FW/cyw43455-sdio.bin" "$STAGE/CYW43455.BIN"
+cp "$FW/cyw43455-sdio-cm5.nvram.txt" "$STAGE/CYW43455.NVR"
+cp "$FW/cyw43455-sdio.clm_blob" "$STAGE/CYW43455.CLM"
+# Guard: a fwfiles image must not contain the firmware (that is the point of the feature); an embedding image
+# must (which also proves this search can find it). Three 64-byte windows of the firmware, searched in the
+# signed slot image.
+FWIN="$(python3 -I - "$FW/cyw43455-sdio.bin" "$BS/heqk8.img" <<'PY'
+import sys
+fw = open(sys.argv[1], "rb").read()
+img = open(sys.argv[2], "rb").read()
+print(sum(1 for q in (1, 2, 3) if fw[len(fw) * q // 4:len(fw) * q // 4 + 64] in img))
+PY
+)"
+case ",$FEATURES," in
+  *,fwfiles,*) [ "$FWIN" = 0 ] || { echo "FATAL: FEATURES has fwfiles but the slot image still contains the Wi-Fi firmware ($FWIN of 3 windows found)"; exit 1; }
+               echo "   fwfiles: the slot image contains no Wi-Fi firmware bytes (0 of 3 windows); files staged on p1" ;;
+  *)           [ "$FWIN" = 3 ] || { echo "FATAL: firmware-in-image guard cannot find the embedded Wi-Fi firmware ($FWIN of 3 windows) — the guard would not detect a leak"; exit 1; } ;;
+esac
 cp "$BS/heqk8.img" "$STAGE/heqk8-a.img"
 cp "$BS/heqk8.img" "$STAGE/heqk8-b.img"           # both slots start identical; OTA replaces B
 # Pad both slot files to the full HBoot load window (5 MiB = 0x700000 - 0x200000). The device has no FAT
@@ -295,7 +318,7 @@ fi
 PART="$STAGE/p1.vfat"
 truncate -s $((P1_SECT * 512)) "$PART"
 mkfs.vfat -F 32 -n HEQKBOOT "$PART" >/dev/null
-for f in "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/WAN.SIG "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/OUI.TXT "$STAGE"/OUI.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
+for f in "$STAGE"/CYW43455.BIN "$STAGE"/CYW43455.NVR "$STAGE"/CYW43455.CLM "$STAGE"/config.txt "$STAGE"/tryboot.txt "$STAGE"/OWNER.TXT "$STAGE"/WAN.TXT "$STAGE"/WAN.SIG "$STAGE"/POLICY.TXT "$STAGE"/POLICY.SIG "$STAGE"/BLOCK.TXT "$STAGE"/BLOCK.SIG "$STAGE"/ALLOW.TXT "$STAGE"/ALLOW.SIG "$STAGE"/IOC.TXT "$STAGE"/IOC.SIG "$STAGE"/OUI.TXT "$STAGE"/OUI.SIG "$STAGE"/DEVICES.TXT "$STAGE"/DEVICES.SIG "$STAGE"/WIFI.TXT "$STAGE"/WIFI.SIG "$STAGE"/RULES.BIN "$STAGE"/RULES.SIG "$STAGE"/MCTLS.CRT "$STAGE"/heqk8-a.img "$STAGE"/heqk8-b.img "$STAGE"/*.dtb; do
   [ -e "$f" ] && mcopy -i "$PART" "$f" ::"$(basename "$f")"
 done
 dd if="$PART" of="$IMG" bs=512 seek=$P1_START conv=notrunc status=none
@@ -329,6 +352,10 @@ if (cd "$HEQK" && CARGO_TARGET_DIR="$KDIR" cargo build -p kernel --features nets
   check "heqk's own MBR + fat.rs code locates slot B as ONE contiguous run of $WANT sectors (read-only)" \
     "grep -qaE '\\[P15-otafat\\] located HEQK8-B.IMG @ LBA [0-9]+ \\($WANT sectors\\)' '$STAGE/qemu.log'"
   grep -aF "[P15-otafat]" "$STAGE/qemu.log" | sed 's/^/        /' | head -3
+  # ADR 0067 L0.1: the three vendor files on p1, read by the device's own FAT code, match the pins of this tree
+  check "heqk's own FAT code reads the Wi-Fi vendor files from p1 and they match the kernel's SHA-256 pins" \
+    "grep -qaF '[P-fwfiles-fat] PASS' '$STAGE/qemu.log'"
+  grep -aF "[P-fwfiles-fat]" "$STAGE/qemu.log" | cut -c1-200 | sed 's/^/        /' | head -1
 else
   echo "   FAIL  could not build the QEMU check kernel"; FAILS=$((FAILS+1))
 fi

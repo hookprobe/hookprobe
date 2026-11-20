@@ -16,7 +16,7 @@
 
 // Without the feature only `verify_one` and the self-test are used: the FAT read path and the names
 // have no caller. They are compiled anyway so that every build type-checks the loader.
-#![cfg_attr(not(feature = "fwfiles"), allow(dead_code))]
+#![cfg_attr(not(all(feature = "fwfiles", feature = "cm5")), allow(dead_code))]
 
 use hal::BlockDev;
 
@@ -95,16 +95,16 @@ pub fn verify(fw: &[u8], nvram: &[u8], clm: &[u8]) -> Result<(), FwErr> {
     verify_one(F_CLM, clm, &CLM_PIN)
 }
 
-/// Read one whole file from the FAT32 boot partition into `buf`. Returns its length in bytes.
-/// The file's size comes from its directory entry; a file larger than `buf` is a size error, not a
-/// silent truncation.
-pub fn read_file<D: BlockDev>(dev: &D, fs: &crate::fat::Fat32, which: u8, name: &[u8; 11], buf: &mut [u8]) -> Result<usize, FwErr> {
+/// Walk one whole file on the FAT32 boot partition, sector by sector, through `sink`. Returns its length in bytes
+/// (from its directory entry). `max` bounds it: a larger file is a size error, never a silent truncation. This is
+/// the one reader: the boot load copies through it and the image self-check hashes through it.
+pub fn stream_file<D: BlockDev>(dev: &D, fs: &crate::fat::Fat32, which: u8, name: &[u8; 11], max: usize, sink: &mut dyn FnMut(usize, &[u8])) -> Result<usize, FwErr> {
     let file = crate::fat::find_file(dev, fs, name).ok_or(FwErr::Missing(which))?;
     let size = file.size_bytes as usize;
     if size == 0 {
         return Err(FwErr::Missing(which));
     }
-    if size > buf.len() {
+    if size > max {
         return Err(FwErr::Size(which));
     }
     let mut done = 0usize;
@@ -116,7 +116,7 @@ pub fn read_file<D: BlockDev>(dev: &D, fs: &crate::fat::Fat32, which: u8, name: 
             }
             dev.read_block(lba + k, &mut sec).map_err(|_| FwErr::Read(which))?;
             let n = (size - done).min(512);
-            buf[done..done + n].copy_from_slice(&sec[..n]);
+            sink(done, &sec[..n]);
             done += n;
         }
     }
@@ -126,8 +126,53 @@ pub fn read_file<D: BlockDev>(dev: &D, fs: &crate::fat::Fat32, which: u8, name: 
     Ok(size)
 }
 
+/// Read one whole file from the FAT32 boot partition into `buf`. Returns its length in bytes.
+pub fn read_file<D: BlockDev>(dev: &D, fs: &crate::fat::Fat32, which: u8, name: &[u8; 11], buf: &mut [u8]) -> Result<usize, FwErr> {
+    let max = buf.len();
+    stream_file(dev, fs, which, name, max, &mut |off, d| buf[off..off + d.len()].copy_from_slice(d))
+}
+
+/// One file on a boot partition against its pin, without holding it in memory (same reader, same checks and the
+/// same order as the boot load: present, exact length, digest).
+pub fn check_on_disk<D: BlockDev>(dev: &D, fs: &crate::fat::Fat32, which: u8, name: &[u8; 11], pin: &Pin) -> Result<(), FwErr> {
+    let mut h = boot_abi::sha256::Hasher::new();
+    // the bound only stops a runaway directory entry; the exact length is checked against the pin below
+    let n = stream_file(dev, fs, which, name, 4 << 20, &mut |_, d| h.update(d))?;
+    if n != pin.len {
+        return Err(FwErr::Size(which));
+    }
+    if h.finish() != pin.sha256 {
+        return Err(FwErr::Digest(which));
+    }
+    Ok(())
+}
+
+/// `[P-fwfiles-fat]` (QEMU, a disk attached): the three vendor files of the attached disk's boot partition through
+/// the device's own MBR + FAT code and the pins of this build. The image factory boots this against every image it
+/// produces; `tools/fwfiles-fat-cases.sh` boots it against copies with a file removed, truncated or altered.
+#[cfg(not(feature = "cm5"))]
+pub fn fat_selftest<D: BlockDev>(dev: &D) {
+    let mut sec = [0u8; 512];
+    let p1 = if dev.read_block(0, &mut sec).is_ok() { crate::store::parse_mbr(&sec)[0].start } else { 0 };
+    let Some(fs) = (if p1 != 0 { crate::fat::parse(dev, p1) } else { None }) else {
+        arch_aarch64::_print(format_args!(" [P-fwfiles-fat] SKIP — no FAT32 boot partition on the attached disk\n"));
+        return;
+    };
+    let r = [
+        check_on_disk(dev, &fs, F_FW, FW_NAME, &FW_PIN),
+        check_on_disk(dev, &fs, F_NVRAM, NVRAM_NAME, &NVRAM_PIN),
+        check_on_disk(dev, &fs, F_CLM, CLM_NAME, &CLM_PIN),
+    ];
+    // what the boot load would report: the first failure in file order
+    let first = r.iter().copied().find_map(|x| x.err());
+    arch_aarch64::_print(format_args!(
+        " [P-fwfiles-fat] {} — Wi-Fi vendor files on the boot partition vs the pins of this build: firmware={:?} nvram={:?} clm={:?} | the boot load would say: {:?}\n",
+        if first.is_none() { "PASS" } else { "REFUSED" }, r[0], r[1], r[2], first.map_or(Ok(()), Err)
+    ));
+}
+
 /// The run-time copies (BSS: nothing of the vendor files is in the image).
-#[cfg(feature = "fwfiles")]
+#[cfg(all(feature = "fwfiles", feature = "cm5"))]
 mod bufs {
     pub static mut FW: [u8; 640 * 1024] = [0; 640 * 1024];
     pub static mut NVRAM: [u8; 4096] = [0; 4096];
@@ -137,7 +182,7 @@ mod bufs {
 /// Boot: read the three files from the boot partition, verify them against the pins and hand them
 /// to the Wi-Fi driver. On any error nothing is installed and Wi-Fi stays unavailable.
 /// Call once, before the first Wi-Fi bring-up.
-#[cfg(feature = "fwfiles")]
+#[cfg(all(feature = "fwfiles", feature = "cm5"))]
 pub fn load<D: BlockDev>(dev: &D) -> Result<(), FwErr> {
     let mut sec = [0u8; 512];
     let p1 = if dev.read_block(0, &mut sec).is_ok() { crate::store::parse_mbr(&sec)[0].start } else { 0 };
@@ -154,9 +199,55 @@ pub fn load<D: BlockDev>(dev: &D) -> Result<(), FwErr> {
     Ok(())
 }
 
+/// What the boot load found: 0xff not run, 0 ok, 1 no volume, else kind << 4 | file.
+#[cfg(feature = "fwfiles")]
+static BOOT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0xff);
+
+/// Boot, before the first Wi-Fi bring-up: load the vendor files from the eMMC boot partition. One console line either
+/// way; on an error nothing is installed, the driver reports the chip unavailable and the boot continues.
+#[cfg(all(feature = "fwfiles", feature = "cm5"))]
+pub fn boot_load() -> bool {
+    let r = match arch_aarch64::emmc::Emmc::probe() {
+        Ok(dev) => load(&dev),
+        Err(_) => Err(FwErr::NoVolume),
+    };
+    let code = match r {
+        Ok(()) => 0,
+        Err(FwErr::NoVolume) => 1,
+        Err(FwErr::Missing(n)) => 0x10 | n,
+        Err(FwErr::Size(n)) => 0x20 | n,
+        Err(FwErr::Read(n)) => 0x30 | n,
+        Err(FwErr::Digest(n)) => 0x40 | n,
+    };
+    BOOT.store(code, core::sync::atomic::Ordering::Relaxed);
+    match r {
+        Ok(()) => arch_aarch64::_print(format_args!(" [FWFILES] Wi-Fi vendor files read from the boot partition and verified against the pins of this build (firmware {} B, NVRAM {} B, CLM {} B)\n", FW_PIN.len, NVRAM_PIN.len, CLM_PIN.len)),
+        Err(e) => arch_aarch64::_print(format_args!(" [FWFILES] REFUSED — {:?} ({}): no firmware is given to the Wi-Fi chip; Wi-Fi unavailable, the boot continues\n", e, status())),
+    }
+    r.is_ok()
+}
+
+/// "ok", "not-loaded", or kind:file — e.g. "missing:firmware", "size:nvram", "digest:clm", "no-volume". `/api/health`.
+#[cfg(feature = "fwfiles")]
+pub fn status() -> &'static str {
+    const KIND: [[&str; 3]; 4] = [
+        ["missing:firmware", "missing:nvram", "missing:clm"],
+        ["size:firmware", "size:nvram", "size:clm"],
+        ["read:firmware", "read:nvram", "read:clm"],
+        ["digest:firmware", "digest:nvram", "digest:clm"],
+    ];
+    match BOOT.load(core::sync::atomic::Ordering::Relaxed) {
+        0 => "ok",
+        1 => "no-volume",
+        0xff => "not-loaded",
+        c => KIND.get(((c >> 4) as usize).wrapping_sub(1)).and_then(|k| k.get((c & 0xf) as usize)).copied().unwrap_or("error"),
+    }
+}
+
 /// `[P-fwfiles]` — the verification every file goes through, on synthetic files with their own pins
 /// (the real vendor files are not in the repository): present, absent, truncated, oversized, one
 /// byte changed; and the pins of this build are well-formed.
+#[cfg_attr(feature = "cm5", allow(dead_code))] // a QEMU phase
 pub fn selftest() -> bool {
     static mut T: [u8; 4096] = [0; 4096];
     let t = unsafe { &mut *core::ptr::addr_of_mut!(T) };
