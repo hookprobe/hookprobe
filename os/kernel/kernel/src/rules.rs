@@ -249,7 +249,10 @@ fn run_set_verdict(
     src: u32,
     decide_fn: fn(FindingClass, DecideCtx) -> Verdict,
 ) -> Option<Verdict> {
-    let ctx = DecideCtx::for_src(src);
+    // The decide() context (management floor + scan confirmation: two table lookups with clock reads)
+    // is needed only when a rule MATCHES. It was built on every call of every tier, for every packet;
+    // it is built at the first match now (once per call, as before, when anything matches).
+    let mut ctx_cache: Option<DecideCtx> = None;
     let mut observed: Option<Verdict> = None;
     for i in 0..n {
         let st = rstate(state, i);
@@ -302,6 +305,7 @@ fn run_set_verdict(
         };
         if v == bpf::DROP {
             // The rule MATCHED — an alert, not a wire action. decide() graduates it.
+            let ctx = *ctx_cache.get_or_insert_with(|| DecideCtx::for_src(src));
             let verdict = decide_fn(rules[i].class, ctx);
             // A11 corroboration (SEVERITY only, never the wire): record this axis for the
             // source and, if it is now corroborated across >= K axes, stamp the alert
@@ -992,6 +996,55 @@ pub fn alert_ok(rule_id: u16, src: u32, now: u64) -> bool {
 /// Self-tests that count individual events switch the de-duplication off (and back on).
 pub fn alert_dedup(on: bool) {
     DEDUP_ON.store(on, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// `[P-lazyctx]` (ADR 0067) — the decide() context is built when a rule matches, not on every call
+/// of every rule tier. Counted with `verdict::CTX_BUILDS`.
+pub fn lazy_ctx_selftest() -> bool {
+    let builds = || crate::verdict::CTX_BUILDS.load(Ordering::Relaxed);
+    let src = 0x0A4D_0009u32; // 10.77.0.9
+    let l4 = |port: u16, flags: u8| {
+        let mut h = [0u8; 20];
+        h[2..4].copy_from_slice(&port.to_be_bytes());
+        h[12] = 0x50;
+        h[13] = flags;
+        h
+    };
+    // the two header tiers on a packet no rule matches: no context is built
+    let b0 = builds();
+    let quiet = verdict_l4(&l4(443, 0x10), src).is_none() && verdict_tcp(&l4(443, 0x10), src).is_none();
+    let benign_tiers = builds() - b0;
+    // a match builds it once for the call and decides as before
+    let b1 = builds();
+    let hit = verdict_l4(&l4(4444, 0x10), src).is_some();
+    let on_match = builds() - b1;
+    let b2 = builds();
+    let xmas = verdict_tcp(&l4(443, 0x29), src).is_some();
+    let on_xmas = builds() - b2;
+    // the whole per-packet path on a plain TCP ACK (every tier the datapath runs)
+    let mut f = [0u8; 64];
+    f[12] = 0x08;
+    f[14] = 0x45;
+    f[16..18].copy_from_slice(&40u16.to_be_bytes());
+    f[22] = 64;
+    f[23] = 6;
+    f[26..30].copy_from_slice(&[100, 64, 0, 78]);
+    f[30..34].copy_from_slice(&[198, 51, 100, 10]);
+    f[34..36].copy_from_slice(&443u16.to_be_bytes());
+    f[36..38].copy_from_slice(&51_000u16.to_be_bytes());
+    f[46] = 0x50;
+    f[47] = 0x10;
+    let _ = crate::packet::verdict(&f[..54]); // warm any first-packet state
+    let b3 = builds();
+    let passed = crate::packet::verdict(&f[..54]).1 == crate::packet::PASS;
+    let per_packet = builds() - b3;
+    arch_aarch64::perfctr::emit("ids_decide_ctx_builds_per_ack", per_packet as u64);
+    let pass = quiet && benign_tiers == 0 && hit && on_match == 1 && xmas && on_xmas == 1 && passed;
+    arch_aarch64::_print(format_args!(
+        " [P-lazyctx] {} — the decide() context (management floor + scan confirmation) is built when a rule matches, not on every call of every rule tier: no match in the L4 and TCP-flag tiers -> {} contexts built (was one per tier call)={} a port-rule match builds exactly one={} a TCP-flag match builds exactly one={} a plain ACK through the whole per-packet path still passes={} contexts built for that packet: {}\n",
+        if pass { "PASS" } else { "FAIL" }, benign_tiers, quiet && benign_tiers == 0, hit && on_match == 1, xmas && on_xmas == 1, passed, per_packet
+    ));
+    pass
 }
 
 /// `[P-alert-dedup]` — one event per (rule, source) per window; the wire verdict is untouched.

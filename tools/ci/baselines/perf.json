@@ -1,4 +1,5 @@
 {
+  "ids_decide_ctx_builds_per_ack": {"max": 0, "evidence": "QEMU validate.sh at the lazy decide-context commit: a plain TCP ACK through packet::verdict builds no decide() context (before, one was built on every call of every rule tier, 4 built-in tiers per packet: read from the code, not measured)"},
   "ids_pack64_prog_runs_other_port": {"max": 1, "evidence": "QEMU validate.sh at the ADR 0067 X1 step 1 commit: a 64-rule dst-port tier, one packet to an unnamed port; 64 programs ran with guards off, 1 (the rule with no guard) with guards on"},
   "ids_tcp_tier_prog_runs_ack": {"max": 0, "evidence": "QEMU validate.sh at the ADR 0067 X1 step 2 commit: the built-in TCP-flag tier on a plain ACK; 4 programs ran with guards off, 0 with byte guards on"},
   "nat_newflow_scan_max": {"max": 32, "evidence": "QEMU validate.sh at the ADR 0067 E3 commit: free stack + fresh mark + bounded 32-slot sweep (was 4096)"},
