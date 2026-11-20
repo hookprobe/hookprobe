@@ -1,1 +1,0 @@
-"""NAPSE test suite."""
