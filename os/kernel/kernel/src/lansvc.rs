@@ -72,6 +72,9 @@ mod el0 {
         }
     }
 
+    /// The known call set of the probe and the campaign workload: 18 commands x 4 inputs.
+    pub const KNOWN_N: usize = 72;
+
     pub struct Server {
         entry: usize,
         aspace: crate::el0as::El0As,
@@ -86,6 +89,10 @@ mod el0 {
         sup: hal::superv::Sup,
         /// Output bytes the previous call reported: zeroed before the next call (see `call`).
         last_out: usize,
+        /// H6c: the known-answer digests the functional probe recorded this boot (None = not recorded yet).
+        probe_gold: [Option<u64>; KNOWN_N],
+        /// Where the probe's sweep over the known set continues.
+        probe_at: usize,
     }
     pub static mut SRV: Option<Server> = None;
     static mut TRIED: bool = false;
@@ -127,7 +134,7 @@ mod el0 {
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(LANSVC_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-lansvc").unwrap_or(&hal::superv::TABLE[0])), last_out: 0 };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-lansvc").unwrap_or(&hal::superv::TABLE[0])), last_out: 0, probe_gold: [None; KNOWN_N], probe_at: 0 };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -275,6 +282,16 @@ mod el0 {
         /// `tamper` (self-test only): treat a correct answer as wrong, and keep it out of the restart policy.
         pub fn probe(&mut self, tamper: bool) -> Option<bool> {
             const P: [u8; 32] = *b"heqk functional probe 0123456789";
+            // H6c known answers. The fault-injection campaign showed why the echo is not enough: of 212 wrong answers,
+            // 195 came from a server whose echo still worked. So every round also replays real requests and compares
+            // each answer's digest with a recorded one: the three hot paths (a DNS query, a DNS answer and a DHCP
+            // DISCOVER through the commands that parse them) every round, plus a window that walks the whole known
+            // set (every command x four inputs) over KNOWN_N / PROBE_SWEEP rounds. The expected digests are not
+            // hard-coded (they would have to change with every server build): they are recorded from this server's
+            // own first answers of the boot, taken twice, and a restart restores the signed image — so the recorded
+            // digest stays the reference. The server keeps no state between calls, so the extra calls disturb nothing.
+            const HOT: [usize; 3] = [0, 5, 10];
+            const PROBE_SWEEP: usize = 8;
             if !self.sup.ready(crate::superv::now_ms()) {
                 return None;
             }
@@ -284,7 +301,26 @@ mod el0 {
             }
             let mut out = [0u8; 32];
             self.read(OUT_OFF, &mut out);
-            if st == ST_OK && n == P.len() && out == P && !tamper {
+            let mut good = st == ST_OK && n == P.len() && out == P;
+            let at = self.probe_at;
+            for k in HOT.into_iter().chain((0..PROBE_SWEEP).map(|i| (at + i) % KNOWN_N)) {
+                if !good {
+                    break;
+                }
+                let d = self.known_call(k)?;
+                match self.probe_gold[k] {
+                    Some(g) => good = d == g,
+                    // first time this boot: keep it as the reference only if a second answer agrees
+                    None => match self.known_call(k)? {
+                        d2 if d2 == d => self.probe_gold[k] = Some(d),
+                        _ => good = false,
+                    },
+                }
+            }
+            if good {
+                self.probe_at = (self.probe_at + PROBE_SWEEP) % KNOWN_N;
+            }
+            if good && !tamper {
                 return Some(true);
             }
             let _ = crate::superv::server_probe_failed("el0-lansvc");
@@ -306,9 +342,35 @@ mod el0 {
         pub fn swifi_raw(&mut self, cmd: u32, input: &[u8]) -> u32 {
             self.call(cmd, input).0
         }
-        /// H6b: one workload call — a digest of (status, output length, output bytes). None = it faulted / was refused.
-        #[cfg(feature = "swifi")]
-        pub fn swifi_work(&mut self, cmd: u32, input: &[u8]) -> Option<u64> {
+        /// Known call `k` (< KNOWN_N) reduced to its digest: command 1 + k/4 with input k%4 — a DNS query, a DNS
+        /// answer, a DHCP DISCOVER or a patterned buffer. Shared by the functional probe and the H6 campaign workload.
+        pub fn known_call(&mut self, k: usize) -> Option<u64> {
+            const DNS_Q: &[u8] = &[0x12, 0x34, 0x01, 0x00, 0, 1, 0, 0, 0, 0, 0, 0, 3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 1, 0, 1];
+            const DNS_A: &[u8] = &[0x12, 0x34, 0x81, 0x80, 0, 1, 0, 1, 0, 0, 0, 0, 3, b'w', b'w', b'w', 7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0, 0, 1, 0, 1,
+                0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 60, 0, 4, 93, 184, 216, 34];
+            // a DHCP DISCOVER: BOOTP header (op 1, htype 1, hlen 6) + magic cookie + option 53 = 1 + end
+            let mut dhcp = [0u8; 244];
+            dhcp[0] = 1;
+            dhcp[1] = 1;
+            dhcp[2] = 6;
+            dhcp[4..8].copy_from_slice(&[0xde, 0xad, 0xbe, 0xef]);
+            dhcp[28..34].copy_from_slice(&[0x02, 0x11, 0x22, 0x33, 0x44, 0x55]);
+            dhcp[236..240].copy_from_slice(&[99, 130, 83, 99]);
+            dhcp[240..244].copy_from_slice(&[53, 1, 1, 255]);
+            let mut pat = [0u8; 96];
+            for (i, b) in pat.iter_mut().enumerate() {
+                *b = (i as u8).wrapping_mul(37).wrapping_add(11);
+            }
+            let input: &[u8] = match k % 4 {
+                0 => DNS_Q,
+                1 => DNS_A,
+                2 => &dhcp[..],
+                _ => &pat[..],
+            };
+            self.digest_call(1 + (k / 4) as u32, input)
+        }
+        /// One call reduced to a digest of (status, output length, output bytes). None = it faulted / was refused.
+        pub fn digest_call(&mut self, cmd: u32, input: &[u8]) -> Option<u64> {
             let (st, n) = self.call(cmd, input);
             if st == ST_PANIC {
                 return None;
