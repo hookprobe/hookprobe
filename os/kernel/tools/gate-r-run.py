@@ -37,10 +37,10 @@ ROWS = {
     "L4":  ("legit", "downstream RA on uplink -> observed+accepted",("sepdiag", "RAGUARD")),
     "L5":  ("legit", "new device -> OnboardingGrace",               ("offdev", "NAC state machine (ADR 0044 D3)")),
     "L6":  ("legit", "stale device -> InternetOnly",                ("offdev", "NAC state machine (ADR 0044 D3)")),
-    "L7":  ("legit", "CDN fan-out 100 conns:443 -> no scan alert",  ("rule", 113, "PASS")),
-    "L8":  ("legit", "NTP beacon-shape :123 -> allowlisted",        ("rule", 116, "PASS")),
+    "L7":  ("legit", "CDN fan-out 100 conns:443 -> no scan alert",  ("absent", 113)),
+    "L8":  ("legit", "NTP beacon-shape :123 -> allowlisted",        ("absent", 116)),
     "L9":  ("legit", "heavy legit src, low PSI -> no shed",         ("sepdiag", "SHED")),
-    "L10": ("legit", "~100 new-conn/s under 400/s cap -> allow",    ("rule", 114, "PASS")),
+    "L10": ("legit", "~100 new-conn/s under 400/s cap -> allow",    ("absent", 114)),
     "L11": ("legit", "customer touches one IOC -> never quarantine",("rule", 302, "PASS")),
     # --- attacker (must reach the correct tri-state) ---
     "A1":  ("attacker", "access-port mac-flood >=20 -> RateLimit",  ("sepdiag", "A1A2")),
@@ -68,13 +68,16 @@ ROWS = {
     "F11": ("frame", "FIN/NULL/XMAS shapes -> recognized",          ("rule", 201, "PASS")),
 }
 
-RULE_LINE = re.compile(r"rule=(\d+)\s+verdict=([A-Z]+)")
+RULE_LINE = re.compile(r"rule=(\d+)\s+verdict=([A-Z]+)(?:\s+src=(0x[0-9a-fA-F]+))?")
+# the legit rows' own source (gate-r-frames.py LEGIT_IP = 10.99.0.5)
+LEGIT_SRC = 0x0A630005
 SEPDIAG = re.compile(r"\[SEPDIAG-([A-Z0-9]+)\].*?\b(PASS|FAIL)\b")
 
 
 def parse(paths):
     # rule_id -> {verdict: count}
     rules = {}
+    by_src = {}  # src -> {rule_id: count}  (rule events attributed to a source)
     seldiag = {}  # TAG -> PASS/FAIL (last seen)
     for p in paths:
         try:
@@ -86,9 +89,13 @@ def parse(paths):
             rid, v = int(m.group(1)), m.group(2)
             rules.setdefault(rid, {}).setdefault(v, 0)
             rules[rid][v] += 1
+            if m.group(3):
+                s = int(m.group(3), 16)
+                by_src.setdefault(s, {}).setdefault(rid, 0)
+                by_src[s][rid] += 1
         for m in SEPDIAG.finditer(data):
             seldiag[m.group(1)] = m.group(2)
-    return rules, seldiag
+    return rules, seldiag, by_src
 
 
 # Rule ids an ATTACKER/FRAME row expects to DROP/RateLimit — a legit row that shares
@@ -102,8 +109,18 @@ def _shared_drop_rules():
     return s
 
 
-def row_status(rid, how, rules, seldiag, shared):
+def row_status(rid, how, rules, seldiag, shared, by_src=None):
     kind = how[0]
+    if kind == "absent":
+        # a legit "must never fire" row: PASS = the device saw the legit source (any rule event from it, e.g. the
+        # W_legit_witness row) AND none of those events is this rule. Absence alone proves nothing (a lost row).
+        ruleid = how[1]
+        seen = (by_src or {}).get(LEGIT_SRC, {})
+        if not seen:
+            return "MISSING", f"no event from the legit source {LEGIT_SRC:#010x} (witness row not seen)"
+        if seen.get(ruleid):
+            return "FAIL", f"rule {ruleid} fired {seen[ruleid]}x for the legit source"
+        return "PASS", f"rule {ruleid} never fired for the legit source (witness: rules {sorted(seen)})"
     if kind == "offdev":
         return "OFF-DEVICE", how[1]
     if kind == "sepdiag":
@@ -139,7 +156,7 @@ def main():
     if len(sys.argv) < 2:
         print(__doc__)
         sys.exit(2)
-    rules, seldiag = parse(sys.argv[1:])
+    rules, seldiag, by_src = parse(sys.argv[1:])
     shared = _shared_drop_rules()
     print(f"== Gate-R matrix readiness from {len(sys.argv)-1} log(s) ==")
     print(f"   observed rules: {', '.join(str(r) for r in sorted(rules))}")
@@ -148,7 +165,7 @@ def main():
     counts = {"PASS": 0, "FAIL": 0, "MISSING": 0, "SHARED": 0, "OFF-DEVICE": 0}
     for rid in sorted(ROWS, key=lambda x: (x[0], int(x[1:]))):
         klass, human, how = ROWS[rid]
-        st, why = row_status(rid, how, rules, seldiag, shared)
+        st, why = row_status(rid, how, rules, seldiag, shared, by_src)
         counts[st] += 1
         print(f"  {rid:<4} {klass:<8} {st:<10} {human:<44} {why}")
     print()
