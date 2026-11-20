@@ -620,10 +620,54 @@ pub fn buswidth_diag() -> (u32, u32) {
 // regd — so wide spectrum visibility does NOT require (nor imply) illegal TX.
 // ============================================================================
 
-/// The CYW43455 blobs, baked into the self-contained HEQK image.
-pub static FW_BIN: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.bin");
-pub static NVRAM_TXT: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio-cm5.nvram.txt");
-pub static CLM_BLOB: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.clm_blob");
+/// The CYW43455 vendor files (firmware, board NVRAM, regulatory blob).
+///
+/// Default build: linked into the image (as before). With the `fwfiles` feature (ADR 0067 D11, build-plan
+/// item L0.1) nothing of them is in the image: the kernel reads them from the boot partition, checks them
+/// against SHA-256 pins (`kernel::fwfiles`) and installs them here before the first bring-up. Until then
+/// the three slices are empty and bring-up reports the chip unavailable.
+#[cfg(not(feature = "fwfiles"))]
+mod fwsrc {
+    static FW_BIN: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.bin");
+    static NVRAM_TXT: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio-cm5.nvram.txt");
+    static CLM_BLOB: &[u8] = include_bytes!("../../firmware/brcm/cyw43455-sdio.clm_blob");
+    pub fn get() -> (&'static [u8], &'static [u8], &'static [u8]) {
+        (FW_BIN, NVRAM_TXT, CLM_BLOB)
+    }
+}
+#[cfg(feature = "fwfiles")]
+mod fwsrc {
+    static mut SET: (&[u8], &[u8], &[u8]) = (&[], &[], &[]);
+    pub fn get() -> (&'static [u8], &'static [u8], &'static [u8]) {
+        unsafe { SET }
+    }
+    /// Install verified files (called once at boot, before any bring-up, by `kernel::fwfiles::load`).
+    pub fn install(fw: &'static [u8], nvram: &'static [u8], clm: &'static [u8]) {
+        unsafe { SET = (fw, nvram, clm) };
+    }
+}
+/// The firmware image (empty until installed, with `fwfiles`).
+pub fn fw_bin() -> &'static [u8] {
+    fwsrc::get().0
+}
+/// The board NVRAM text.
+pub fn nvram_txt() -> &'static [u8] {
+    fwsrc::get().1
+}
+/// The regulatory (CLM) blob.
+pub fn clm_blob() -> &'static [u8] {
+    fwsrc::get().2
+}
+/// Are the vendor files available to bring the chip up?
+pub fn firmware_present() -> bool {
+    let (fw, nvram, _) = fwsrc::get();
+    fw.len() >= 4 && !nvram.is_empty()
+}
+/// Hand verified vendor files to the driver (`fwfiles` builds only).
+#[cfg(feature = "fwfiles")]
+pub fn install_firmware(fw: &'static [u8], nvram: &'static [u8], clm: &'static [u8]) {
+    fwsrc::install(fw, nvram, clm);
+}
 
 // BCM4345/6 (CYW43455) ARMCR4 geometry + F1 chip-backplane control regs.
 // CRITICAL (metal + brcmfmac brcmf_chip_tcm_rambase): the 4345 firmware loads at
@@ -1467,10 +1511,13 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     unsafe { PMU_DUMP[0] = pmu_dump() };
     unsafe { FW_STEP = 3 };
     // 4. Firmware → TCM 0x198000, then #1 BYTE-FOR-BYTE READ-BACK VERIFY (sampled).
-    if !backplane_write(RAM_BASE, FW_BIN) {
+    if !firmware_present() {
+        return false; // no vendor files installed (fwfiles): the chip stays down, Wi-Fi unavailable
+    }
+    if !backplane_write(RAM_BASE, fw_bin()) {
         return false;
     }
-    unsafe { FW_VERIFY = backplane_verify(RAM_BASE, FW_BIN) };
+    unsafe { FW_VERIFY = backplane_verify(RAM_BASE, fw_bin()) };
     #[cfg(all(feature = "wifi-pmkid-noexpire", not(feature = "wifi-pmkid-fix")))]
     unsafe {
         PMKID_PATCH = pmkid_noexpire_patch();
@@ -1486,7 +1533,7 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     //    blob at ~0x230000 — the firmware found no trailer at 0x260000, silently aborted
     //    init (no MAC/RF params), and F2 never readied. Use the computed hardware size.
     let ram_top = if ramsize >= RAM_SIZE { ramsize } else { RAM_SIZE };
-    let nlen = nvram_strip(NVRAM_TXT, nvram_scratch);
+    let nlen = nvram_strip(nvram_txt(), nvram_scratch);
     let nvram_addr = RAM_BASE + ram_top - (nlen as u32);
     unsafe { NVRAM_ADDR_DIAG = nvram_addr };
     if !backplane_write(nvram_addr, &nvram_scratch[..nlen]) {
@@ -1494,7 +1541,7 @@ pub fn firmware_upload(nvram_scratch: &mut [u8]) -> bool {
     }
     unsafe { FW_STEP = 5 };
     // 6. CR4 ACTIVATE — reset vector (fw[0..4]) → addr 0, clear CPUHALT → CPU boots.
-    let rstvec = u32::from_le_bytes([FW_BIN[0], FW_BIN[1], FW_BIN[2], FW_BIN[3]]);
+    let rstvec = u32::from_le_bytes([fw_bin()[0], fw_bin()[1], fw_bin()[2], fw_bin()[3]]);
     cr4_activate(cr4w, rstvec);
     unsafe { FW_STEP = 6 };
     // #4 register dump: PMU + ChipCommon AFTER CR4 release.
@@ -1622,7 +1669,7 @@ pub fn radio_off() {
 /// FNV-1a over the embedded firmware image: which firmware a diagnostic record is about (no secret in it).
 pub fn fw_hash() -> u32 {
     let mut h: u32 = 0x811c_9dc5;
-    for &b in FW_BIN {
+    for &b in fw_bin() {
         h = (h ^ b as u32).wrapping_mul(0x0100_0193);
     }
     h
@@ -2014,7 +2061,7 @@ pub fn scan_diag() -> [u32; 8] {
 /// first chunk, END on the last. Returns (all chunks ok, last BCDC status).
 fn clmload_small() -> (bool, u32) {
     const CS: usize = 384;
-    let total = CLM_BLOB.len();
+    let total = clm_blob().len();
     if total == 0 {
         return (true, 0);
     }
@@ -2032,7 +2079,7 @@ fn clmload_small() -> (bool, u32) {
         if off + n >= total {
             flag |= DL_END;
         }
-        let clen = clm_chunk(flag, &CLM_BLOB[off..off + n], &mut buf);
+        let clen = clm_chunk(flag, &clm_blob()[off..off + n], &mut buf);
         let ilen = iovar_buf(b"clmload", &buf[..clen], &mut iob);
         let (o, st) = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &iob[..ilen], &mut []);
         if !o {
@@ -2383,7 +2430,7 @@ fn pmkid_walk_fix() -> Option<bool> {
     const WALK_FIXED: [u8; 120] = [0xf0, 0xb5, 0x03, 0x68, 0x05, 0x46, 0xd0, 0xf8, 0x38, 0x44, 0xd5, 0xf8, 0x30, 0x14, 0x98, 0x68, 0x00, 0x27, 0x56, 0xf6, 0xeb, 0xfc, 0x15, 0xe0, 0xe6, 0x69, 0x7b, 0xb9, 0x17, 0xb9, 0xc5, 0xf8, 0x38, 0x64, 0x00, 0xe0, 0xfe, 0x61, 0x2b, 0x68, 0x21, 0x46, 0x58, 0x68, 0xff, 0xf7, 0x58, 0xff, 0x95, 0xf8, 0x34, 0x34, 0x01, 0x3b, 0x85, 0xf8, 0x34, 0x34, 0x02, 0xe0, 0x01, 0x3b, 0xa3, 0x61, 0x27, 0x46, 0x34, 0x46, 0x1c, 0xb1, 0xa3, 0x69, 0x5a, 0x1c, 0xe5, 0xd1, 0xfe, 0xe7, 0x2b, 0x68, 0xd5, 0xf8, 0x38, 0x24, 0xd5, 0xf8, 0x30, 0x14, 0x98, 0x68, 0x32, 0xb9, 0x56, 0xf6, 0x40, 0xfd, 0xc5, 0xf8, 0x30, 0x44, 0x85, 0xf8, 0x34, 0x44, 0xf0, 0xbd, 0x42, 0xf2, 0x10, 0x72, 0x23, 0x46, 0xbd, 0xe8, 0xf0, 0x40, 0x56, 0xf6, 0x80, 0xbc];
     const VER: &[u8] = b"Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c";
     let off = (AT - RAM_BASE) as usize;
-    if FW_BIN.len() < off + 120 || FW_BIN[off..off + 120] != WALK_ORIG || !FW_BIN.windows(VER.len()).any(|w| w == VER) {
+    if fw_bin().len() < off + 120 || fw_bin()[off..off + 120] != WALK_ORIG || !fw_bin().windows(VER.len()).any(|w| w == VER) {
         return None;
     }
     if !backplane_write(AT, &WALK_FIXED) {
@@ -2399,11 +2446,11 @@ fn pmkid_noexpire_patch() -> Option<bool> {
     const NEW: [u8; 4] = [0x4f, 0xf0, 0xfe, 0x43]; // mov.w r3, #0x7f000000
     const VER: &[u8] = b"Version: 7.45.265 (28bca26 CY) CRC: 68bafb8c";
     let off = (AT - RAM_BASE) as usize;
-    if FW_BIN.len() < off + 8 || FW_BIN[off + 2..off + 6] != ORIG || !FW_BIN.windows(VER.len()).any(|w| w == VER) {
+    if fw_bin().len() < off + 8 || fw_bin()[off + 2..off + 6] != ORIG || !fw_bin().windows(VER.len()).any(|w| w == VER) {
         return None;
     }
     let mut w = [0u8; 8];
-    w.copy_from_slice(&FW_BIN[off..off + 8]);
+    w.copy_from_slice(&fw_bin()[off..off + 8]);
     w[2..6].copy_from_slice(&NEW);
     if !backplane_write(AT, &w) {
         return Some(false);
