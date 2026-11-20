@@ -844,6 +844,9 @@ pub fn handle(req: &Req, st: &McState, auth: &mut Auth, now_ms: u64, rand16: imp
                 let _ = write!(w, ",\"wifi_heal\":{{\"state\":\"{}\",\"last_class\":\"{}\",\"kicks\":{},\"bounces\":{},\"reloads\":{},\"after_wifi_reboot\":{}}}", hs, hc, hk, hb, hr, hpr);
                 // Boot degraded: "ok", or why Wi-Fi has been off since power-on (the unit serves wired + management only)
                 let _ = write!(w, ",\"wifi_boot\":\"{}\"", crate::wifiheal::boot_fault_name());
+                // ADR 0067 L0.1: what the boot found on the boot partition — "ok" or kind:file ("missing:firmware", ...)
+                #[cfg(feature = "fwfiles")]
+                let _ = write!(w, ",\"wifi_files\":\"{}\"", crate::fwfiles::status());
                 // BENCH ONLY: what the self-heal metal trigger injects (absent from every product image)
                 #[cfg(feature = "wifiheal-bench")]
                 let _ = write!(w, ",\"wifi_heal_bench\":{{\"mode\":\"{}\",\"injected_fwhalts\":{}}}", crate::wifiheal::bench::mode_name(), crate::wifiheal::bench::halts());
