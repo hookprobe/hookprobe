@@ -36,6 +36,15 @@ class Pseudo(unittest.TestCase):
         self.assertEqual(P.addr("224.0.0.251"), "224.0.0.251")
         self.assertEqual(P.addr("255.255.255.255"), "255.255.255.255")
 
+    def test_ipv6_local_addresses_are_lan_hosts(self):
+        P = windows.Pseudonyms()
+        for ip in ("fe80::5bcc:698e:39d5:cdf", "fd12:3456::1", "FC00::7"):
+            self.assertTrue(windows.lan(ip), ip)
+            self.assertTrue(P.addr(ip).startswith("192.168."), ip)
+        for ip in ("2001:db8::1", "ff02::fb", "::", "0.0.0.0", "198.51.100.1"):
+            self.assertFalse(windows.lan(ip), ip)
+        self.assertTrue(P.addr("2001:db8::1").startswith("2001:db8::"))
+
     def test_last_remote_pseudonym_stays_below_255_255_255_0(self):
         total = sum(b * 254 for _, b in windows.REMOTE_POOLS)
         last = windows._alloc(total - 1, windows.REMOTE_POOLS)
@@ -96,6 +105,18 @@ class HostWindows(unittest.TestCase):
         self.assertEqual(second["baseline"]["pairs"], [[e0["src_ip"], e0["dst_ip"]]])
         self.assertEqual(e0["ts"], "2018-05-09T16:00:05.000Z")
         self.assertEqual(first["events"][0]["detailed_label"], "PartOfAHorizontalPortScan")
+
+    def test_drops_are_counted_by_kind(self):
+        acq = self._capture("Synthetic-4", [
+            row(H0 + 1, "G1", "0.0.0.0", 68, "255.255.255.255", 67),               # DHCP discover: unattributed
+            row(H0 + 2, "G2", "198.51.100.66", 1, "203.0.113.9", 2),              # remote -> remote
+            row(H0 + 3, "G3", "fe80::1", 5353, "ff02::fb", 5353),                 # link-local host: kept
+        ])
+        lines, c = self._windows(acq)
+        self.assertEqual((c["dropped_unattributed"], c["dropped_remote_to_remote"]), (1, 1))
+        self.assertEqual(len(lines), 1)
+        self.assertTrue(lines[0]["host"].startswith("192.168."))
+        self.assertEqual(lines[0]["events"][0]["dst_ip"], "ff02::fb")
 
     def test_baseline_forgets_after_24_hours(self):
         acq = self._capture("Synthetic-2", [
