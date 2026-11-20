@@ -286,7 +286,7 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
 
 /// [P-swifi] — autoheal harness H6, the software fault-injection campaign (QEMU, feature `swifi`, never shipped).
 /// `HEQK_SWIFI_N` injections (default 10 000, a fixed-seed xorshift so a run is reproducible) into el0-lansvc,
-/// el0-tlshost and (H6d) el0-hsh, two fault models: (1) one flipped bit in the server's writable memory, (2) a call with a random
+/// el0-tlshost, (H6d) el0-hsh and (H6f) el0-wpa, two fault models: (1) one flipped bit in the server's writable memory, (2) a call with a random
 /// command id and random input. After each injection the server's functional probe runs: the injection is MASKED
 /// (probe answers, nothing happened), or it surfaced as a FAULT (exception / budget overrun -> reset) or a WRONG
 /// ANSWER (the probe caught it -> reset). Acceptance: after every injection the server answers its probe again
@@ -317,8 +317,11 @@ pub fn swifi_campaign() -> bool {
     let saved = core::mem::replace(j(), Journal::new());
     let t_start = now_ms();
     // counters: [lansvc, tlshost, hsh] x {injected, masked, fault, wrong, unrecovered}
-    const NAMES: [&str; 3] = ["el0-lansvc", "el0-tlshost", "el0-hsh"];
-    let mut c = [[0u64; 5]; 3];
+    const NAMES: [&str; 4] = ["el0-lansvc", "el0-tlshost", "el0-hsh", "el0-wpa"];
+    const NS: usize = 4;
+    let mut c = [[0u64; 5]; NS];
+    // H6f: the WPA security server (the product one is wired only on the CM5): a campaign instance
+    let wpa_up = crate::el0srv::keyer::swifi_setup();
     let (mut flips, mut raws) = (0u64, 0u64);
     // wrong answers that only the golden workload caught (the probe still answered correctly)
     let mut wl_only = 0u64;
@@ -331,7 +334,9 @@ pub fn swifi_campaign() -> bool {
     let probe = |s: usize| match s {
         0 => crate::lansvc::probe(false),
         1 => crate::tlshost::probe(false),
-        _ => crate::hsh::swifi().and_then(|v| v.known_call(0)).map(|_| true),
+        2 => crate::hsh::swifi().and_then(|v| v.known_call(0)).map(|_| true),
+        // (el0-wpa: liveness too — its state counters answered; its wrong answers are the workload's to find)
+        _ => crate::el0srv::keyer::swifi_known(2).map(|_| true),
     };
     // H6b — the workload replayed after every injection: a fixed set of calls whose answers were recorded on the clean
     // image ("golden"). It reaches far more of each server than the probe: every el0-lansvc command with a well-formed
@@ -340,15 +345,17 @@ pub fn swifi_campaign() -> bool {
     // work(s) = a digest over all answers; None = a call faulted / was refused.
     // one workload call by index: el0-lansvc has 18 commands x 4 inputs = 72, el0-tlshost 8 requests
     // (H6e: el0-tlshost = the 8 HTTP requests + 4 TLS handshake openings, the latter only with a certificate)
-    const NW: [usize; 3] = [72, 12, 16];
+    const NW: [usize; NS] = [72, 12, 16, 4];
     let call = |s: usize, k: usize| -> Option<u64> {
         if s == 0 {
             crate::lansvc::swifi()?.known_call(k)
         } else if s == 1 {
             let h = crate::tlshost::host()?;
             if k < 8 { h.swifi_work(crate::tlshost::KNOWN[k]) } else { h.swifi_handshake(k - 8, None) }
-        } else {
+        } else if s == 2 {
             crate::hsh::swifi()?.known_call(k)
+        } else {
+            crate::el0srv::keyer::swifi_known(k)
         }
     };
     let stats = |s: usize| -> (u64, u64) {
@@ -357,9 +364,11 @@ pub fn swifi_campaign() -> bool {
             (f, r)
         } else if s == 1 {
             crate::tlshost::host().map_or((0, 0), |h| (h.faults as u64 + h.timeouts as u64, h.restarts as u64))
-        } else {
+        } else if s == 2 {
             let (_, _, f, r) = crate::hsh::stats();
             (f, r)
+        } else {
+            crate::el0srv::keyer::swifi_stats()
         }
     };
     let restore = |s: usize| {
@@ -371,18 +380,22 @@ pub fn swifi_campaign() -> bool {
             if let Some(h) = crate::tlshost::host() {
                 h.swifi_restore();
             }
-        } else if let Some(v) = crate::hsh::swifi() {
-            v.swifi_restore();
+        } else if s == 2 {
+            if let Some(v) = crate::hsh::swifi() {
+                v.swifi_restore();
+            }
+        } else {
+            crate::el0srv::keyer::swifi_restore();
         }
     };
-    let both = crate::lansvc::swifi().is_some() && crate::tlshost::host().is_some() && crate::hsh::swifi().is_some();
+    let both = crate::lansvc::swifi().is_some() && crate::tlshost::host().is_some() && crate::hsh::swifi().is_some() && wpa_up;
     // golden answers on the clean image, taken twice: the workload must be deterministic or it cannot judge anything
     // Golden answers on the clean image. Each call is taken TWICE; a call is used only if it answered both times with
     // the same digest (a call that faults on its input, or whose answer carries state, cannot judge anything).
-    let mut golden = [[None::<u64>; 72]; 3];
-    let mut usable = [0usize; 3];
+    let mut golden = [[None::<u64>; 72]; NS];
+    let mut usable = [0usize; NS];
     deliberate(|| {
-        for s in 0..3 {
+        for s in 0..NS {
             restore(s);
             for k in 0..NW[s] {
                 let a = call(s, k);
@@ -435,12 +448,12 @@ pub fn swifi_campaign() -> bool {
     let hs_ok = !tls_on || (shapes[0].0[0] == 0x16 && shapes[0].0[..shapes[0].1].contains(&0x17) && !shapes[1].0[..shapes[1].1].contains(&0x17) && shapes[2].1 == 0);
     arch_aarch64::_print(format_args!("   [swifi] TLS handshake workload: certificate={} | records answered to: accepted hello {:02x?}, unsupported suite {:02x?}, half a hello {:02x?}, hello + undecryptable record {:02x?} | as expected={}\n",
         tls_on, &shapes[0].0[..shapes[0].1], &shapes[1].0[..shapes[1].1], &shapes[2].0[..shapes[2].1], &shapes[3].0[..shapes[3].1], hs_ok));
-    let stable = usable[0] >= 8 && usable[1] >= 4 && usable[2] >= 8 && work(0) == 0 && work(1) == 0 && work(2) == 0;
+    let stable = usable[0] >= 8 && usable[1] >= 4 && usable[2] >= 8 && usable[3] >= 3 && (0..NS).all(|s| work(s) == 0);
     let both = both && stable && hs_ok;
     let mut i = 0u64;
     while both && i < N {
         let r = rnd();
-        let s = ((r >> 8) % 3) as usize;
+        let s = ((r >> 8) % NS as u64) as usize;
         let model_flip = (r >> 1) & 3 != 0; // 3 in 4 are bit flips, 1 in 4 a random call
         let (f0, r0) = stats(s);
         // --- inject (every fault inside is a campaign fault: journaled `planned`, kept out of the restart policy)
@@ -452,7 +465,8 @@ pub fn swifi_campaign() -> bool {
                 hit = match s {
                     0 => crate::lansvc::swifi().and_then(|v| v.swifi_flip(rr)),
                     1 => crate::tlshost::host().and_then(|h| h.swifi_flip(rr)),
-                    _ => crate::hsh::swifi().and_then(|v| v.swifi_flip(rr)),
+                    2 => crate::hsh::swifi().and_then(|v| v.swifi_flip(rr)),
+                    _ => crate::el0srv::keyer::swifi_flip(rr),
                 };
                 if let Some(k) = hit {
                     cls[k as usize][0] += 1;
@@ -466,6 +480,8 @@ pub fn swifi_campaign() -> bool {
                 let (cmd, len) = ((rnd() % 128) as u32, (rnd() % 97) as usize);
                 if s == 0 {
                     crate::lansvc::swifi().map(|v| v.swifi_raw(cmd, &buf[..len]));
+                } else if s == 3 {
+                    crate::el0srv::keyer::swifi_raw(cmd, &buf[..len]);
                 } else if s == 2 {
                     crate::hsh::swifi().map(|v| v.swifi_raw(cmd, &buf[..len]));
                 } else if cmd != hal::tlsabi::CMD_INIT {
@@ -520,7 +536,7 @@ pub fn swifi_campaign() -> bool {
         });
         i += 1;
         if i % 1000 == 0 {
-            arch_aarch64::_print(format_args!("   [swifi] {} / {} injections, unrecovered so far {}\n", i, N, c[0][4] + c[1][4] + c[2][4]));
+            arch_aarch64::_print(format_args!("   [swifi] {} / {} injections, unrecovered so far {}\n", i, N, c.iter().map(|x| x[4]).sum::<u64>()));
         }
     }
     // the campaign's journal: every entry it opened is closed (nothing left pending), and the kinds are the planned ones
@@ -532,15 +548,17 @@ pub fn swifi_campaign() -> bool {
     restore(0);
     restore(1);
     restore(2);
-    let alive = (0..3).all(|s| probe(s) == Some(true) && work(s) == 0);
-    let unrec = c[0][4] + c[1][4] + c[2][4];
+    restore(3);
+    let alive = (0..NS).all(|s| probe(s) == Some(true) && work(s) == 0);
+    crate::el0srv::keyer::swifi_teardown();
+    let unrec: u64 = c.iter().map(|x| x[4]).sum();
     let surfaced: u64 = c.iter().map(|x| x[2] + x[3]).sum();
     let pass = both && i == N && unrec == 0 && jp == 0 && alive && surfaced > 0 && jk[Kind::Exception as usize] == 0;
     arch_aarch64::_print(format_args!(
-        " [P-swifi] {} — autoheal harness H6, fault-injection campaign: {} injections ({} bit flips in the server image, {} random-command calls), seed fixed | el0-lansvc: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-tlshost: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-hsh: injected {} masked {} fault {} wrong-answer {} unrecovered {} | bit flips surfaced by class: text {}/{} read-only data {}/{} writable data {}/{} | wrong answers only the golden workload caught in el0-lansvc / el0-tlshost (probe still correct): {} | golden workload: {} of 72 el0-lansvc calls, {} of 12 el0-tlshost calls (8 HTTP requests + 4 TLS handshake openings, the latter need a certificate) and {} of 16 el0-hsh lines usable (answered twice identically on the clean image), replay clean={} | surfaced {} of {} | journal entries {} (planned {}), left pending {} | all three servers answer after the campaign={} | {} ms{}\n",
+        " [P-swifi] {} — autoheal harness H6, fault-injection campaign: {} injections ({} bit flips in the server image, {} random-command calls), seed fixed | el0-lansvc: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-tlshost: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-hsh: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-wpa: injected {} masked {} fault {} wrong-answer {} unrecovered {} | bit flips surfaced by class: text {}/{} read-only data {}/{} writable data {}/{} | wrong answers only the golden workload caught in el0-lansvc / el0-tlshost (probe still correct): {} | golden workload: {} of 72 el0-lansvc calls, {} of 12 el0-tlshost calls (8 HTTP requests + 4 TLS handshake openings, the latter need a certificate), {} of 16 el0-hsh lines and {} of 4 el0-wpa exchanges (a WPA2 4-way against a simulated station among them) usable (answered twice identically on the clean image), replay clean={} | surfaced {} of {} | journal entries {} (planned {}), left pending {} | all four servers answer after the campaign={} | {} ms{}\n",
         if pass { "PASS" } else { "FAIL" }, i, flips, raws,
-        c[0][0], c[0][1], c[0][2], c[0][3], c[0][4], c[1][0], c[1][1], c[1][2], c[1][3], c[1][4], c[2][0], c[2][1], c[2][2], c[2][3], c[2][4],
-        cls[0][1], cls[0][0], cls[1][1], cls[1][0], cls[2][1], cls[2][0], wl_only, usable[0], usable[1], usable[2], stable, surfaced, i, jt, jk[Kind::Planned as usize], jp, alive, now_ms().saturating_sub(t_start),
+        c[0][0], c[0][1], c[0][2], c[0][3], c[0][4], c[1][0], c[1][1], c[1][2], c[1][3], c[1][4], c[2][0], c[2][1], c[2][2], c[2][3], c[2][4], c[3][0], c[3][1], c[3][2], c[3][3], c[3][4],
+        cls[0][1], cls[0][0], cls[1][1], cls[1][0], cls[2][1], cls[2][0], wl_only, usable[0], usable[1], usable[2], usable[3], stable, surfaced, i, jt, jk[Kind::Planned as usize], jp, alive, now_ms().saturating_sub(t_start),
         match first_bad { Some((n, s, r)) => { let _ = (n, s, r); " | FIRST UNRECOVERED recorded above" } None => "" }
     ));
     if last_bad.get().0 != usize::MAX {
