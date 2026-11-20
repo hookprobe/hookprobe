@@ -16,7 +16,7 @@
 
 // Without the feature only `verify_one` and the self-test are used: the FAT read path and the names
 // have no caller. They are compiled anyway so that every build type-checks the loader.
-#![cfg_attr(not(feature = "fwfiles"), allow(dead_code))]
+#![cfg_attr(not(all(feature = "fwfiles", feature = "cm5")), allow(dead_code))]
 
 use hal::BlockDev;
 
@@ -247,6 +247,7 @@ pub fn status() -> &'static str {
 /// `[P-fwfiles]` — the verification every file goes through, on synthetic files with their own pins
 /// (the real vendor files are not in the repository): present, absent, truncated, oversized, one
 /// byte changed; and the pins of this build are well-formed.
+#[cfg_attr(feature = "cm5", allow(dead_code))] // a QEMU phase
 pub fn selftest() -> bool {
     static mut T: [u8; 4096] = [0; 4096];
     let t = unsafe { &mut *core::ptr::addr_of_mut!(T) };
