@@ -572,7 +572,10 @@ pub fn l2_stateful_verdict(frame: &[u8], src: u32, port: u64, port_role: PortRol
 
     // ARP cache poisoning (detection benchmark 2026-11-09: rule 102 only catches an ARP whose sender MAC
     // disagrees with the Ethernet source; a poisoner sends consistent MACs). Observe-only (ADR 0023).
-    if let Some(claim) = arp_binding_conflict(frame, crate::behavioral::now_secs()) {
+    // Only an ARP frame can carry a binding; the clock (a counter read, a frequency read and a 64-bit
+    // division) is read for those only. It was read for every frame, TCP data included.
+    let is_arp = frame.len() >= 14 && frame[12] == 0x08 && frame[13] == 0x06;
+    if let Some(claim) = if is_arp { arp_binding_conflict(frame, crate::behavioral::now_secs()) } else { None } {
         let v = verdict::decide(FindingClass::Behavioral, DecideCtx::for_src(claim));
         fire(RULE_ARP_POISON, SEV_HIGH, v, claim);
         if observed.is_none() {
@@ -1043,6 +1046,51 @@ pub fn lazy_ctx_selftest() -> bool {
     arch_aarch64::_print(format_args!(
         " [P-lazyctx] {} — the decide() context (management floor + scan confirmation) is built when a rule matches, not on every call of every rule tier: no match in the L4 and TCP-flag tiers -> {} contexts built (was one per tier call)={} a port-rule match builds exactly one={} a TCP-flag match builds exactly one={} a plain ACK through the whole per-packet path still passes={} contexts built for that packet: {}\n",
         if pass { "PASS" } else { "FAIL" }, benign_tiers, quiet && benign_tiers == 0, hit && on_match == 1, xmas && on_xmas == 1, passed, per_packet
+    ));
+    pass
+}
+
+/// `[P-l2clock]` (ADR 0067) — the L2-stateful tier reads the seconds clock for an ARP frame only.
+#[cfg(feature = "securechannel-selftest")]
+pub fn l2_clock_selftest() -> bool {
+    use core::sync::atomic::Ordering::Relaxed;
+    let calls = || crate::behavioral::NOW_SECS_CALLS.load(Relaxed);
+    let role = crate::verdict::PortRole::Uplink;
+    // a unicast TCP data frame (not ARP, not broadcast)
+    let mut t = [0u8; 64];
+    t[0..6].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x01]);
+    t[6..12].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x77]);
+    t[12] = 0x08;
+    t[14] = 0x45;
+    t[16..18].copy_from_slice(&40u16.to_be_bytes());
+    t[22] = 64;
+    t[23] = 6;
+    t[26..30].copy_from_slice(&[100, 64, 0, 79]);
+    t[30..34].copy_from_slice(&[198, 51, 100, 10]);
+    t[46] = 0x50;
+    t[47] = 0x10;
+    let src = u32::from_be_bytes([100, 64, 0, 79]);
+    let c0 = calls();
+    let tcp_ok = l2_stateful_verdict(&t[..54], src, 0, role).is_none();
+    let tcp_reads = calls() - c0;
+    // an ARP request (broadcast): the binding check runs and reads the clock
+    let mut a = [0u8; 60];
+    a[0..6].fill(0xff);
+    a[6..12].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x78]);
+    a[12] = 0x08;
+    a[13] = 0x06;
+    a[14..22].copy_from_slice(&[0, 1, 8, 0, 6, 4, 0, 1]);
+    a[22..28].copy_from_slice(&[0x02, 0, 0, 0, 0, 0x78]);
+    a[28..32].copy_from_slice(&[100, 64, 0, 80]);
+    a[38..42].copy_from_slice(&[100, 64, 0, 1]);
+    let c1 = calls();
+    let _ = l2_stateful_verdict(&a, 0, 0, role);
+    let arp_reads = calls() - c1;
+    arch_aarch64::perfctr::emit("l2_stateful_clock_reads_tcp", tcp_reads as u64);
+    let pass = tcp_ok && tcp_reads == 0 && arp_reads >= 1;
+    arch_aarch64::_print(format_args!(
+        " [P-l2clock] {} — the L2-stateful tier reads the seconds clock (counter + frequency + 64-bit division) for an ARP frame only: a TCP data frame passes={} and reads it {} times (was once per frame, for the ARP binding check)={} an ARP request still reads it ({} reads) so the binding check runs={}\n",
+        if pass { "PASS" } else { "FAIL" }, tcp_ok, tcp_reads, tcp_reads == 0, arp_reads, arp_reads >= 1
     ));
     pass
 }
