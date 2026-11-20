@@ -35,10 +35,9 @@ class Registry:
         return self.licenses[self.source(sid)["license_id"]]
 
     def collection_sources(self, cid):
-        """Sources that may feed collection `cid`: those the collection lists plus those whose own
-        `collections` field names it (the two lists are maintained separately; either is a declaration)."""
-        listed = set(self.collections[cid]["sources"])
-        return listed | {sid for sid, s in self.sources.items() if cid in (s.get("collections") or [])}
+        """Sources that may feed collection `cid`. Membership is declared twice, in the collection's
+        `sources` and in each source's `collections`; check() fails unless the two agree."""
+        return set(self.collections[cid]["sources"])
 
     def check(self, validator=None):
         """List of problems; empty means the registry is internally consistent."""
@@ -80,4 +79,10 @@ class Registry:
             for sid in c["sources"]:
                 if sid not in self.sources:
                     problems.append(f"collection {cid}: unknown source {sid}")
+                elif cid not in (self.sources[sid].get("collections") or []):
+                    problems.append(f"collection {cid} lists {sid}, but {sid}.collections does not name it")
+        for sid, s in self.sources.items():
+            for cid in s.get("collections") or []:
+                if cid in self.collections and sid not in self.collections[cid]["sources"]:
+                    problems.append(f"source {sid} names collection {cid}, but {cid}.sources does not list it")
         return problems
