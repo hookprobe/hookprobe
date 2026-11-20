@@ -302,11 +302,11 @@ mod el0 {
             let mut out = [0u8; 32];
             self.read(OUT_OFF, &mut out);
             let mut good = st == ST_OK && n == P.len() && out == P;
-            for i in 0..HOT.len() + PROBE_SWEEP {
+            let at = self.probe_at;
+            for k in HOT.into_iter().chain((0..PROBE_SWEEP).map(|i| (at + i) % KNOWN_N)) {
                 if !good {
                     break;
                 }
-                let k = if i < HOT.len() { HOT[i] } else { (self.probe_at + i - HOT.len()) % KNOWN_N };
                 let d = self.known_call(k)?;
                 match self.probe_gold[k] {
                     Some(g) => good = d == g,
