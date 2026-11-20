@@ -10,6 +10,8 @@ analyst (or a model) needs?  Four representations are compared at several token 
   DETECTIONS  only heqk's detection rows, de-duplicated (what the device already has, rulecat.rs)
   TOPK        groups by (type, src, dst, port), ranked by COUNT (frequency-only aggregation)
   CARDS       proposed: evidence cards -- per-entity behavioural aggregates (fan-out, periodicity,
+              plus, when given, the temporal engine's per-device-hour deviations ("behaviour" events,
+              docs/research/neuro/20) as evidence-only cards,
               volume, NXDOMAIN ratio, label entropy) merged with the detections that reference them,
               ranked by severity + novelty against a behavioural baseline, entity-interned (H1, R3
               aliases defined inline on first use), untrusted strings quoted and flagged, budget-filled, and the tail
@@ -225,8 +227,12 @@ def rep_cards(events, baseline, intern=True):
     flows = collections.defaultdict(list)          # (src,dst) -> [(t,port,out,in,state)]
     dns = collections.defaultdict(list)            # (src,suffix) -> [(t,qname,rcode,shield)]
     dets = collections.defaultdict(list)           # src -> [det]
+    behav = []                                     # el0-neuro result records (doc 20): evidence, never alerts
     t_of = lambda ts: int(ts[11:13]) * 3600 + int(ts[14:16]) * 60 + float(ts[17:23])
     for e in events:
+        if e["type"] == "behaviour":
+            behav.append(e)
+            continue
         if e["type"] == "flow":
             flows[(e["src_ip"], e["dst_ip"])].append((t_of(e["ts"]), e["dst_port"], e["bytes_out"], e["bytes_in"],
                                                       e["state"]))
@@ -357,6 +363,17 @@ def rep_cards(events, baseline, intern=True):
             continue
         text = "%s dns %s n=%d %s%s%s" % (I(src, kind_of(src)), I(suf, "D"), n, " ".join(flags), " novel" if novel else "", note)
         cards.append((w, text, None))
+
+    # temporal-engine deviations (docs/research/neuro/20): one card per deviating device-hour, worded as
+    # evidence. The score ranks hours (AUC 0.995 on real traffic) but is NOT an alarm (D1: 72 benign
+    # deviations per device-week), so it ranks below detections and never says "alert".
+    for b in behav:
+        sc = b["score_q8"] / 256.0
+        if sc < 1.0:
+            continue
+        cards.append((1.0 + min(3.0, sc / 4.0),
+                      "%s behaviour hour=%02d driver=%s score=%.1f (deviation from its own history; evidence, not an alert)" % (
+                          I(b["src_ip"], kind_of(b["src_ip"])), b["hour"], b["driver"], sc), None))
 
     # detections that no aggregate claimed (e.g. a single IOC hit) are kept VERBATIM: rare + severe
     for src, ds in dets.items():
