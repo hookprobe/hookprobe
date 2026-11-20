@@ -1,6 +1,0 @@
-mkosi.extra/
-mkosi.output/
-mkosi.cache/
-mkosi.builddir/
-*.raw
-*.qcow2
