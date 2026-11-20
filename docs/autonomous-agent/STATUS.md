@@ -12,7 +12,7 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-Fix for the `investigate-honest` UI spec (g3 red on `main` since #1299) on `agent/mc-investigate-spec-fix`, draft PR.
+AB-15: operator said "no linux, remove anything about linux". `docs/architecture/Readme.md` (the Linux-tier architecture) deleted, which ends the macOS case collision with `README.md`; live links outside protected paths repointed to ADR 0047 / `os/kernel/ARCHITECTURE.md`. Branch `agent/docs-ab15`, draft PR.
 
 ## Delivery ledger
 
@@ -28,6 +28,7 @@ Fix for the `investigate-honest` UI spec (g3 red on `main` since #1299) on `agen
 | AB-09/10 Investigate: process tree and reports cap | `agent/mc-investigate-honest` | yes | astro check 0 errors; build 27 pages; **no browser check** (this shell can no longer reach a local mock server); new spec `investigate-honest` not run locally | pending | yes | [#1299](https://github.com/hookprobe/hookprobe/pull/1299) draft | no |
 | HookProbe logo in Mission Control (rails + favicon) | `agent/mc-brand-logo` | yes | astro check 0 errors; build 27 pages; browser: mark renders in the rail (22 px, theme colour), favicon is the mark | pending | yes | draft | no |
 | Sample incident uses real rule ids (1200125, 1200113) | `agent/mc-sample-rule-ids` | yes | unit 12/12; astro check 0 errors; build 27 pages; browser: sample incident shows the new story and rule 1200125, no old DNS-feed text | pending | yes | draft | no |
+| AB-15 drop the Linux-tier `Readme.md` (ends the case collision) | `agent/docs-ab15` | yes | n/a (docs); no markdown link to it left outside protected paths (`git grep`); fresh worktree has a clean `git status` | pending | yes | draft | no |
 
 AB-07 needed no change: the CVE tab has said "This device does not report software exposure yet" since `47a2ad85` (2026-11-10). The audit finding was wrong.
 
@@ -44,7 +45,7 @@ GitHub CI only, and reported as such.
 |---|---|
 | AB-01 trust chain, AB-03 shipping flavour, AB-13/14 CI wiring, AB-19 metal | operator |
 | AB-07, AB-08 | homepods (HP-01, HP-02) |
-| AB-15 rename | operator naming choice |
+| AB-15 links in protected paths | operator: `CLAUDE.md` (3), 17 ADRs, `.claude/agents/` (4 files), `legacy/linux-tier/` (12 files) still name `docs/architecture/Readme.md` |
 
 ## HomePods dependencies
 

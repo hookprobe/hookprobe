@@ -249,7 +249,7 @@ tools/ci/gates.sh g3
 
 - [HookProbe high-level design](docs/design/hookprobe-high-level-design.md)
 - [heqk low-level design](docs/design/heqk-low-level-design.md)
-- [OS architecture](docs/architecture/Readme.md)
+- [OS architecture (ADR 0047)](docs/adr/0047-heqk-everywhere-on-device-mission-control.md) and [heqk architecture](os/kernel/ARCHITECTURE.md)
 - [Mission Control specification](docs/architecture/MissionControl.md)
 - [Mission Control UI layouts and requirements](docs/design/mission-control-ui-requirements.md) (incl. the configuration journey)
 - [ADR 0058 — owner-signed configuration on a running device](docs/adr/0058-owner-signed-runtime-config.md)

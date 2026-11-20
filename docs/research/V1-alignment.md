@@ -1,6 +1,6 @@
 # HookProbe V1 ↔ V2 alignment
 
-> Read-only investigation (2026-06-28): does HookProbe **V1** align with the **V2** vision in this repo's `docs/`, and how should we reconcile? Companion to [Readme.md](../architecture/Readme.md), [Architecture.md](../architecture/Architecture.md), [ADR 0001](../adr/0001-mission-control-stack.md), [ADR 0002](../adr/0002-crypto-agility-pqc.md), [ADR 0003](../adr/0003-platform-manifest-schema.md).
+> Read-only investigation (2026-06-28): does HookProbe **V1** align with the **V2** vision in this repo's `docs/`, and how should we reconcile? Companion to the Linux-tier `Readme.md` (removed 2026-11-20), [Architecture.md](../architecture/Architecture.md), [ADR 0001](../adr/0001-mission-control-stack.md), [ADR 0002](../adr/0002-crypto-agility-pqc.md), [ADR 0003](../adr/0003-platform-manifest-schema.md).
 
 ## 0. Scope note
 

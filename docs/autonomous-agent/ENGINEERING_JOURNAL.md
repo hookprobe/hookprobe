@@ -2,6 +2,12 @@
 
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
+
+## 2026-11-20 — AB-15: the Linux-tier architecture doc is removed
+
+- Asked whether to rename the legacy `docs/architecture/Readme.md` or the small `README.md` index (they collide on macOS), the operator answered "no linux remove anything about linux". Done for this item: `Readme.md` deleted (last version `e4c48181` in history), `README.md` kept as the folder index with ADR 0047 first.
+- Live links repointed in 9 unprotected files (README, CONTRIBUTING, docs index, HLD, BuildPlan, Architecture.md, runtime-engine-map, V1-alignment). Dated research notes and journal rows that name the file in plain text are history and left as written.
+- Not touched (protected or frozen): `CLAUDE.md` (3 mentions), 17 ADRs, `.claude/agents/` (4), `legacy/linux-tier/` (12). Wider "remove anything about Linux" (the `legacy/linux-tier/` workspace, CLAUDE.md's legacy sections, Track B in BuildPlan) is a larger change: asked the operator for its scope instead of guessing.
 ## 2026-11-18 — Session 2 (cont.): real rule ids in the sample incident
 
 - The device reports rule ids as `HEQK_RULE_BAND` (1,200,000) + the kernel id (`rulecat.rs:12`). The
