@@ -11,6 +11,14 @@ HERE=$(cd "$(dirname "$0")" && pwd); ROOT=$(cd "$HERE/../.." && pwd)
 SIGN="${SIGN_KEY:-$HOME/heqk-owner-ca/bench-owner.key}"   # the enrolled owner key (R6 = D)
 UP="python3 -I $ROOT/os/kernel/tools/hq-upload.py --mc $MC --owner-key-file $KEY --insecure --sign-key $SIGN"
 T=$(mktemp -d); trap 'rm -rf "$T"' EXIT
+# A full flash wipes the enrolled owner signing key (R6 = D): without it every activation below is refused and the
+# baseline reports "generation N not in force" (2026-11-20, first check after a flash). Enrol it first, as the OTA
+# check does; a no-op when it is already enrolled.
+if ! python3 -I "$ROOT/os/kernel/tools/hq-upload.py" --mc "$MC" --owner-key-file "$KEY" --insecure --hsh "info" 2>/dev/null | grep -ai "signing key" | grep -q ENROLLED; then
+  python3 -I "$ROOT/os/kernel/tools/policy-sign.py" enroll-proof "$SIGN" > "$T/enroll" \
+    && python3 -I "$ROOT/os/kernel/tools/hq-upload.py" --mc "$MC" --owner-key-file "$KEY" --insecure --enroll "$T/enroll" >/dev/null 2>&1 \
+    || echo "   (owner signing key could not be enrolled — the activation will be refused)"
+fi
 cfg() { python3 -I - "$MC" "$KEY" <<'PY'
 import json, ssl, sys, time, urllib.parse, urllib.request, http.cookiejar
 mc, key = sys.argv[1], open(sys.argv[2]).read().strip()

@@ -23,9 +23,11 @@ Commands:
   status           print what the tool believes (lcus modules cannot be read back)
   off | on         power the board off / on (relay 1)
   cycle            off, wait --off-secs, on
-  rpiboot          assert nRPIBOOT, power-cycle, wait for the 0a5c:2712 boot ROM on USB,
-                   then release nRPIBOOT (the ROM has latched the mode by then)
-  boot             release nRPIBOOT, power-cycle (normal eMMC boot)
+  rpiboot          operator phase 1: power off (IN1), 3 s, IN2 on, power on, IN2 released 2 s later;
+                   then wait for the 0a5c:2712 boot ROM on USB. The relays are never switched in
+                   the same instant (--in2-gap, 1 s, between IN2 on and power on).
+  boot             operator phase 2, after a flash: reset IN1 only (off, --off-secs, on)
+  in2-on | in2-off IN2 alone (for listening tests at the bench)
 
 Examples:
   tools/diagnostics/cm5-relay.py --backend lcus --dev /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0 rpiboot
@@ -194,12 +196,13 @@ def main():
     ap.add_argument("--backend", choices=["lcus", "hid", "nano"], required=True)
     ap.add_argument("--dev", required=True, help="device path, or auto (nano only)")
     ap.add_argument("--off-secs", type=float, default=5.0, help="power-off dwell (CM5 caps drain; operator: 5 s, 10 s if too fast)")
-    ap.add_argument("--hold-secs", type=float, default=3.0, help="IN2 held after IN1 is released (operator: 3 s; 6 s if too fast)")
+    ap.add_argument("--hold-secs", type=float, default=2.0, help="rpiboot: IN2 held after the power is back (operator 2026-11-20: 2 s)")
+    ap.add_argument("--rpiboot-off-secs", type=float, default=3.0, help="rpiboot: board off before IN2 goes on (operator 2026-11-20: 3 s)")
     ap.add_argument("--rom-timeout", type=float, default=15.0)
-    ap.add_argument("--in2-gap", type=float, default=1.0, help="rpiboot: seconds between IN1 on and IN2 on (IN1 must be seated first: sent back to back, IN1 did not cut power — 2026-11-20, twice)")
+    ap.add_argument("--in2-gap", type=float, default=1.0, help="rpiboot: seconds between IN2 on and power on — the relays are never switched in the same instant (operator rule)")
     ap.add_argument("--power-sense", default="", help="rpiboot: a host network interface cabled to the CM5 (e.g. enp4s0); its carrier must drop after IN1 on, else stop before anything else is switched")
     ap.add_argument("--dry-run", action="store_true", help="paper test: print the relay commands in order, touch nothing")
-    ap.add_argument("cmd", choices=["status", "off", "on", "cycle", "rpiboot", "boot"])
+    ap.add_argument("cmd", choices=["status", "off", "on", "cycle", "rpiboot", "boot", "in2-on", "in2-off"])
     a = ap.parse_args()
     if a.dev == "auto" and not a.dry_run:
         if a.backend != "nano":
@@ -220,6 +223,10 @@ def main():
         print(f"boot ROM on USB: {'yes' if bootrom_present() else 'no'}")
         if isinstance(r, Nano):
             print(f"relays: {r.status()}")
+    elif a.cmd == "in2-on":
+        r.set(RPIBOOT, True)  # IN2 only (bench listening tests)
+    elif a.cmd == "in2-off":
+        r.set(RPIBOOT, False)
     elif a.cmd == "off":
         r.set(POWER, True)
     elif a.cmd == "on":
@@ -236,18 +243,18 @@ def main():
         cycle()
         print("IN1 reset — power-cycled for a normal eMMC boot")
     elif a.cmd == "rpiboot":
-        # Operator procedure (2026-11-12, proven at the bench with the IN1/IN2 LEDs): energise IN1 (power OFF) and IN2
-        # (nRPIBOOT) together, wait for the caps to drain, release IN1 (board powers up with nRPIBOOT held), then release
-        # IN2 3 s later. Asserting nRPIBOOT first and cycling power after it
-        # left IN1 unswitched (one click). Each step is read back on the Nano.
+        # Operator procedure, phase 1 (2026-11-20, verbatim: "IN1 power off wait 3s, in2+in1 on for rpiboot release in2
+        # after 2s"): power OFF (IN1), wait 3 s, IN2 on, power ON, release IN2 2 s later. Phase 2, after the flash:
+        # reset IN1 only (`boot`).
+        # RULE (operator): the two relays are NEVER switched in the same instant — "you might not have enough power to
+        # charge the electromagnet and it will not coil up". Sent back to back, one of them did not take while the
+        # read-back claimed both (2026-11-20: five failed entries). So IN2 goes on --in2-gap (1 s) before the power
+        # comes back: that pause is the one thing here that is not in the operator's words.
         r.set(POWER, True)
-        # IN1 first, seated, THEN IN2. Sent back to back (2026-11-20, 16:50 and 17:22) the read-back said power=0 but
-        # the board never lost power (its Ethernet link to the host stayed up) and the ROM never saw the boot mode;
-        # with IN1 on alone first, the link dropped at once and the boot ROM enumerated in 1.2 s.
         if isinstance(r, Paper):
-            print(f"  (wait {a.in2_gap:.0f} s — IN1 seated; power really off{' (checked on ' + a.power_sense + ')' if a.power_sense else ''})")
+            print(f"  (wait {a.rpiboot_off_secs:.0f} s — board off{'; power really off, checked on ' + a.power_sense if a.power_sense else ''})")
         else:
-            time.sleep(a.in2_gap)
+            time.sleep(a.rpiboot_off_secs)
             if a.power_sense:
                 try:
                     up = open(f"/sys/class/net/{a.power_sense}/carrier").read().strip() == "1"
@@ -260,17 +267,17 @@ def main():
         if isinstance(r, Nano):
             st = r.status()
             if "power=0" not in st or "rpiboot=1" not in st:
-                sys.exit(f"want power=0 rpiboot=1 (IN1 + IN2 on), read {st or 'no reply'} — stop")
+                sys.exit(f"want power=0 rpiboot=1 (board off, nRPIBOOT held), read {st or 'no reply'} — stop")
         if isinstance(r, Paper):
-            print(f"  (wait {a.off_secs:.0f} s — caps drain)")
+            print(f"  (wait {a.in2_gap:.0f} s — IN2 seated before the power comes back)")
         else:
-            time.sleep(a.off_secs)
-        r.set(POWER, False)  # release IN1: the board powers up with nRPIBOOT still held
+            time.sleep(a.in2_gap)
+        r.set(POWER, False)  # power on with nRPIBOOT held
         if isinstance(r, Paper):
             print(f"  (wait {a.hold_secs:.0f} s)")
         else:
             time.sleep(a.hold_secs)
-        r.set(RPIBOOT, False)  # release IN2 3 s later (operator procedure)
+        r.set(RPIBOOT, False)  # release IN2 2 s after power-on (operator procedure)
         if isinstance(r, Paper):
             print("  (wait up to --rom-timeout for the boot ROM 0a5c:2712 on USB, then: rpiboot -d mass-storage-gadget64, flash)")
             return
@@ -278,7 +285,7 @@ def main():
             st = r.status()
             if "power=1" not in st or "rpiboot=0" not in st:
                 sys.exit(f"want power=1 rpiboot=0 (both released), read {st or 'no reply'} — stop")
-            print(f"IN1 + IN2 on -> both released, IN1 first ({st})")
+            print(f"power off -> IN2 on -> power on -> IN2 released ({st})")
         t0 = time.time()
         while time.time() - t0 < a.rom_timeout and not bootrom_present():
             time.sleep(0.2)
