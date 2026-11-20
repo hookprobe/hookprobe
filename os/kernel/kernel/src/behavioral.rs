@@ -47,8 +47,16 @@ fn cntfrq() -> u64 {
 /// (beacon needs a `now`). Same clock the internal detectors already use.
 #[inline]
 pub fn now_secs() -> u64 {
+    // ADR 0067 D1 work counter, compiled into self-test builds only (a work counter must not cost on
+    // the path it counts in a shipped image).
+    #[cfg(feature = "securechannel-selftest")]
+    NOW_SECS_CALLS.store(NOW_SECS_CALLS.load(core::sync::atomic::Ordering::Relaxed).wrapping_add(1), core::sync::atomic::Ordering::Relaxed);
     cntpct() / cntfrq().max(1)
 }
+
+/// Calls of `now_secs` since boot (self-test builds only).
+#[cfg(feature = "securechannel-selftest")]
+pub static NOW_SECS_CALLS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
 /// RFC1918 + loopback "internal" test on a HOST-ORDER IPv4 u32 — parity with
 /// `napse_loader::lateral::is_private_ipv4` (which also treats 127/8 as private). Used by
