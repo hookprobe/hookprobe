@@ -560,6 +560,56 @@ impl<M: Mmio> Bus<M> {
     }
 }
 
+
+/// ADR 0067 E1 — the vectored read: up to `i.max` SDPCM frames off the bus, each pushed whole to the RX ring, in one
+/// call. One poll per frame and never a wait (as the single-frame read in el0-wifi). The batch ends at its size, at a
+/// dry device, at the mailbox interrupt (the kernel's to handle), at a frame that could not be read whole, or when the
+/// ring is full — and says which. A frame taken off the bus and not delivered is `attempted - produced`.
+pub fn read_frames<M: Mmio, R: crate::el0ring::RingMem + ?Sized>(bus: &mut Bus<M>, ring: &mut R, i: &crate::wifisrvabi::rxvmsg::In) -> crate::wifisrvabi::rxvmsg::Out {
+    use crate::wifisrvabi::{rxvmsg::Out, VecStop};
+    let mut buf = [0u8; 2048];
+    let cap = (i.cap as usize).clamp(FIRSTREAD, crate::el0ring::FRAME_MAX.min(buf.len()));
+    let mut o = Out { produced: 0, attempted: 0, stop: VecStop::Limit, drained: false, blk_diag: 0 };
+    let mut skip = i.skip_int;
+    while o.produced < i.max {
+        let r = bus.read_frame(i.sdb, &mut buf[..cap], 0, skip, i.block_rx, None, &mut || {});
+        skip = false;
+        match r {
+            RxRead::Dry => {
+                o.stop = VecStop::Drained;
+                break;
+            }
+            RxRead::HostInt => {
+                o.stop = VecStop::HostInt;
+                break;
+            }
+            RxRead::BadHdr { drained } => {
+                o.attempted += 1;
+                o.stop = VecStop::BadFrame;
+                o.drained = drained;
+                break;
+            }
+            RxRead::Short { drained, .. } => {
+                o.attempted += 1;
+                o.stop = VecStop::BusError;
+                o.drained = drained;
+                break;
+            }
+            RxRead::Frame { len, .. } => {
+                o.attempted += 1;
+                let n = (len as usize).max(FIRSTREAD).min(cap);
+                if crate::el0ring::push(ring, &buf[..n]) {
+                    o.produced += 1;
+                } else {
+                    o.stop = VecStop::Ring;
+                    break;
+                }
+            }
+        }
+    }
+    o.blk_diag = bus.blk_diag;
+    o
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -702,6 +752,64 @@ mod tests {
         bad[0] ^= 0x0001_0000; // break the check word
         *b.m.fifo.borrow_mut() = bad.into();
         assert!(matches!(b.read_frame(0, &mut rx, 0, false, false, None, &mut || {}), RxRead::BadHdr { .. }));
+    }
+
+    #[test]
+    fn read_frames_moves_a_batch_into_the_ring_and_says_why_it_stopped() {
+        use crate::el0ring as ring;
+        use crate::wifisrvabi::{rxvmsg, VecStop};
+        let mut mem = std::vec![0u8; ring::RING_BYTES];
+        ring::reset(&mut mem[..]);
+        let ask = |max: u8| rxvmsg::In { sdb: 0x1800_2000, skip_int: false, block_rx: false, max, cap: 2044 };
+        // three frames in the FIFO, then nothing: a batch of 8 delivers three and reports the device drained
+        let mut b = Bus::new(Fake::new());
+        let mut q: Vec<u32> = Vec::new();
+        for (len, fill) in [(300u16, 0xa1u8), (400, 0xb2), (92, 0xc3)] {
+            q.extend(frame(len, 2, 14, fill));
+        }
+        q.extend(std::vec![0u32; 16]);
+        *b.m.fifo.borrow_mut() = q.into();
+        let o = read_frames(&mut b, &mut mem[..], &ask(8));
+        assert_eq!((o.produced, o.attempted, o.stop), (3, 3, VecStop::Drained));
+        assert_eq!(ring::pending(&mem[..]), 3);
+        let mut out = [0u8; 2048];
+        assert_eq!(ring::pop(&mut mem[..], &mut out), ring::Pop::Frame(300));
+        assert!(out[64..300].iter().all(|&x| x == 0xa1));
+        assert_eq!(ring::pop(&mut mem[..], &mut out), ring::Pop::Frame(400));
+        assert!(out[64..400].iter().all(|&x| x == 0xb2));
+        assert_eq!(ring::pop(&mut mem[..], &mut out), ring::Pop::Frame(92));
+        // the batch size is a hard limit: two of three, the third stays in the device
+        let mut q: Vec<u32> = Vec::new();
+        for fill in [1u8, 2, 3] {
+            q.extend(frame(200, 2, 14, fill));
+        }
+        *b.m.fifo.borrow_mut() = q.into();
+        let o = read_frames(&mut b, &mut mem[..], &ask(2));
+        assert_eq!((o.produced, o.attempted, o.stop), (2, 2, VecStop::Limit));
+        // a bad header ends the batch: the good frame before it is delivered, the bad one counted as attempted
+        ring::reset(&mut mem[..]);
+        let mut q: Vec<u32> = frame(120, 2, 14, 9);
+        let mut bad = frame(100, 2, 14, 1);
+        bad[0] ^= 0x0001_0000;
+        q.extend(bad);
+        *b.m.fifo.borrow_mut() = q.into();
+        let o = read_frames(&mut b, &mut mem[..], &ask(8));
+        assert_eq!((o.produced, o.attempted, o.stop), (1, 2, VecStop::BadFrame));
+        // a full ring ends the batch and the frame that did not fit is counted lost (attempted - produced)
+        ring::reset(&mut mem[..]);
+        for _ in 0..ring::SLOTS - 1 {
+            if !ring::push(&mut mem[..], &[0u8; 64]) {
+                break;
+            }
+        }
+        let room = ring::SLOTS - ring::pending(&mem[..]);
+        let mut q: Vec<u32> = Vec::new();
+        for fill in [1u8, 2, 3] {
+            q.extend(frame(200, 2, 14, fill));
+        }
+        *b.m.fifo.borrow_mut() = q.into();
+        let o = read_frames(&mut b, &mut mem[..], &ask(8));
+        assert!(o.stop == VecStop::Ring && o.produced as usize == room && o.attempted == o.produced + 1, "{o:?} room {room}");
     }
 
     #[test]
