@@ -423,6 +423,7 @@ fn build_wasip1_fixture(kernel_manifest_dir: &str, out_dir: &str) {
 
     println!("cargo:rerun-if-changed={}", manifest.display());
     println!("cargo:rerun-if-changed={}", crate_dir.join("src/main.rs").display());
+    println!("cargo:rerun-if-changed={}", crate_dir.join("src/flowbatch.rs").display());
 
     let mut cmd = Command::new("cargo");
     cmd.arg("build")
@@ -486,6 +487,15 @@ fn build_wasip1_fixture(kernel_manifest_dir: &str, out_dir: &str) {
     std::fs::write(dir.join("fixture_wasip1_dnsrpz.wasm"), &wasm2).expect("write dnsrpz wasm");
     std::fs::write(dir.join("fixture_wasip1_dnsrpz.pk"), kp.pk.as_ref()).expect("write dnsrpz pk");
     std::fs::write(dir.join("fixture_wasip1_dnsrpz.sig"), sig2.as_ref()).expect("write dnsrpz sig");
+
+    // ADR 0067 D6 / X2a step 2 — the flow-event BATCH module, signed with the SAME pinned root key.
+    let produced3 = nested_target.join("wasm32-wasip1/release/wasip1-flowbatch.wasm");
+    let wasm3 = std::fs::read(&produced3)
+        .unwrap_or_else(|e| panic!("wasip1-flowbatch wasm not found at {}: {e}", produced3.display()));
+    let sig3 = kp.sk.sign(&wasm3, None);
+    std::fs::write(dir.join("fixture_wasip1_flowbatch.wasm"), &wasm3).expect("write flowbatch wasm");
+    std::fs::write(dir.join("fixture_wasip1_flowbatch.pk"), kp.pk.as_ref()).expect("write flowbatch pk");
+    std::fs::write(dir.join("fixture_wasip1_flowbatch.sig"), sig3.as_ref()).expect("write flowbatch sig");
 }
 
 // M5.4 (Track C) — the DETECTION-shaped `.wasm` fixture the [P-wasm-parity] gate runs at
