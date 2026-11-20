@@ -23,6 +23,11 @@ path = "src/main.rs"
 name = "wasip1-dnsrpz"
 path = "src/dnsrpz.rs"
 
+# ADR 0067 D6 / X2a step 2 — the flow-event BATCH module: up to 16 records in, one verdict byte per record out.
+[[bin]]
+name = "wasip1-flowbatch"
+path = "src/flowbatch.rs"
+
 [profile.release]
 panic = "abort"
 opt-level = "z"
