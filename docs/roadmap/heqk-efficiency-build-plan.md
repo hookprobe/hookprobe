@@ -27,11 +27,54 @@ may be built, gated and measured behind feature flags before that.
 | X1 step 1, dst-port guards | merged (#1355) | `ids_pack64_prog_runs_other_port` 64 → 1; `[P-ruleguard]` |
 | X1 step 2, byte guards (TCP flags) | this PR | `ids_tcp_tier_prog_runs_ack` 4 → 0 |
 | X4 step 1, inspection shedding with evidence | draft PR #1363 | rule 129; `[P-inspshed]` |
-| X2a step 1, flow-event ABI and queue | this PR | `hal::flowevt`, 7 host tests |
+| X2a step 1, flow-event ABI and queue | merged (#1364) | `hal::flowevt`, 7 host tests |
+| X2a step 2, batch mode in the wasip1 host | draft PR #1369 | `wasm_events_per_round_trip` = 16; `[P-wasmevt]` |
+| L0.1 step 1, vendor files out of the image (`fwfiles`) | merged (#1367) | `[P-fwfiles]`; SHA-256 pins |
 | L0.2 driver provenance register | draft PR #1359 (standalone) | `docs/security/driver-provenance.md`; g0 check |
 | ADR 0067 amendment (D12 disclosure record, D13 three reviews) | draft PR #1360 | ADR stays Proposed |
 
 None of the merged items has a CM5 timing yet. All are bench batch B2 / B4.
+
+**First metal figures (2026-11-20, one trial boot; indicative).** Image am22F on the bench CM5 (shipping
+features + wpa3 + wifi-inject + fwfiles, booted degraded with no Wi-Fi), from the kernel session's B1 run;
+the baseline is `docs/design/metal-evidence/20261109-detection-network-series.md`. Different flavour and a
+single boot, so this is not yet a ratchet baseline.
+
+| Measure | Before | 2026-11-20 |
+|---|---|---|
+| `[IDS-BENCH]` mix, ns per packet | 398–441 | 322 |
+| `[IDS-TIERS]` l4-rules | 91 | 52 |
+| `[IDS-TIERS]` tcp-flags | 45 | 36 |
+| `[IDS-TIERS]` l2 | 20 | 30 |
+| `[IDS-TIERS]` flow | 53 | 68 |
+| `[IDS-TIERS]` l2-stateful / scan (not rule loops) | 16 / 24 | 30 / 30 |
+
+- The guards lowered the two tiers they target, by less than the QEMU work counters suggest: a skipped
+  program still costs its loop iteration and compare.
+- The l2 and flow tiers got slower. Probable cause, fixed in this PR: the run counter added with the
+  guards used `fetch_add`, which on this target (no LSE atomics) is an exclusive load/store loop per
+  program run. It is a plain load + store now. The tiers that are not rule loops also read slower, so
+  part of the difference is flavour or boot-to-boot spread; a second capture decides.
+- **Lesson for D1:** a work counter must not itself cost on the path it counts. New counters on a
+  per-packet path use a plain load + store (single data-plane core) or are compiled only into
+  self-test builds.
+
+**Firmware separation (L0.1), state on 2026-11-20.** Step 1 merged (#1367). Integration and bench by the
+kernel session (boot-degraded prerequisite #1370, integration PR stacked on it):
+
+- Operator-level decisions taken: the image factory writes the three vendor files on the boot partition
+  of EVERY image from now on (the device has no FAT writer, so an OTA cannot add them); no FAT writer
+  is built; units already deployed without the files get them later through the upload store (ADR
+  0056) with the same pins; `fwfiles` stays out of `shipping-features.txt` until every image in
+  service has the files or that path exists.
+- Prerequisite found: without Wi-Fi at boot the AP image never reached the serve loop, so Mission
+  Control was unreachable (independent of fwfiles). #1370 enters the serve loop degraded.
+- B1 so far: firmware absent PASS on the CM5 (15/15, by OTA; the trial does not commit); truncated /
+  altered / NVRAM or CLM absent PASS in QEMU on the factory disk image (9/9); the fwfiles slot image is
+  600,528 bytes smaller and holds no firmware bytes. NOT run: files present with throughput, firmware
+  reload, the 26-check regression and the 33-row matrix. They need full flashes (operator go-ahead).
+- For counsel (package A): behind `wifi-pmkid-fix`, which the shipping flavour includes through `wpa3`,
+  the driver changes instruction bytes of the running firmware in the chip's RAM (REL-08 workaround).
 
 **What the evidence changed in this plan.**
 
