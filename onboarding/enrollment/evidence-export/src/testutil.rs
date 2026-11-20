@@ -6,8 +6,8 @@
 //! `seal::unseal` (ADR 0066); the library treats opening as opaque, so these tests exercise the
 //! library's handling of open/refuse, not the cipher.
 
-use crate::record::{Event, SealOpener, BUILD_TAG_LEN, EV_IMAGE_LEN, MAX_SEALED_PAYLOAD, SEAL_HDR_LEN, SEAL_MAGIC};
-use crate::slot::{frame_slot, RT_EVIDENCE, RT_EVIDENCE_B, SEC};
+use crate::record::{Event, Prov, SealOpener, BUILD_TAG_LEN, EV_IMAGE_LEN, MAX_SEALED_PAYLOAD, PROV_LEN, SEAL_HDR_LEN, SEAL_MAGIC};
+use crate::slot::{frame_slot, RT_EVIDENCE, RT_EVIDENCE_B, RT_EVIDENCE_C, SEC};
 use boot_abi::kdf;
 
 pub struct TestOpener {
@@ -67,6 +67,21 @@ pub fn sealed_slot(o: &TestOpener, seq: u64, nslots: u64, tagged: bool, evs: &[E
         pt[..BUILD_TAG_LEN].copy_from_slice(b"test-build-tag!!");
         n = BUILD_TAG_LEN;
     }
+    n = put_images(&mut pt, n, evs);
+    sealed_raw(o, seq, nslots, if tagged { RT_EVIDENCE_B } else { RT_EVIDENCE }, &pt[..n])
+}
+
+/// The layout the kernel writes since ADR 0067 N1: build tag, provenance, images.
+pub fn sealed_slot_prov(o: &TestOpener, seq: u64, nslots: u64, p: Prov, evs: &[Event]) -> [u8; SEC] {
+    let mut pt = [0u8; MAX_SEALED_PAYLOAD];
+    pt[..BUILD_TAG_LEN].copy_from_slice(b"test-build-tag!!");
+    pt[BUILD_TAG_LEN..BUILD_TAG_LEN + 8].copy_from_slice(&p.cfg_gen.to_le_bytes());
+    pt[BUILD_TAG_LEN + 8..BUILD_TAG_LEN + PROV_LEN].copy_from_slice(&p.cfg);
+    let n = put_images(&mut pt, BUILD_TAG_LEN + PROV_LEN, evs);
+    sealed_raw(o, seq, nslots, RT_EVIDENCE_C, &pt[..n])
+}
+
+fn put_images(pt: &mut [u8], mut n: usize, evs: &[Event]) -> usize {
     for e in evs {
         pt[n..n + 8].copy_from_slice(&e.ts_ms.to_le_bytes());
         pt[n + 8..n + 12].copy_from_slice(&e.src.to_le_bytes());
@@ -75,5 +90,5 @@ pub fn sealed_slot(o: &TestOpener, seq: u64, nslots: u64, tagged: bool, evs: &[E
         pt[n + 15] = e.verdict;
         n += EV_IMAGE_LEN;
     }
-    sealed_raw(o, seq, nslots, if tagged { RT_EVIDENCE_B } else { RT_EVIDENCE }, &pt[..n])
+    n
 }
