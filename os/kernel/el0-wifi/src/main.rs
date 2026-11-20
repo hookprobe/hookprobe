@@ -112,6 +112,33 @@ fn rx_read() -> ! {
     exit_lean(0)
 }
 
+/// ADR 0067 E1: read up to N SDPCM frames off F2 in ONE call, each pushed whole to the RX ring (the kernel pops them
+/// and re-checks every header itself). The batch loop is `hal::sdio::read_frames` (host-tested). The reply is a
+/// 12-byte summary; the frames never touch the control page.
+fn rx_readv() -> ! {
+    let Some(i) = rxvmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let r = hal::sdio::read_frames(bus, ring_at(RX_OFF), &i);
+    let mut o = [0u8; rxvmsg::OUT_LEN];
+    rxvmsg::encode_out(&r, &mut o);
+    io(OUT_OFF, o.len()).copy_from_slice(&o);
+    wr32(H_OUT_LEN, o.len() as u32);
+    exit_lean(0)
+}
+
+/// ADR 0067 E1: write up to N data frames from the TX ring in ONE call (`hal::sdio::write_frames`, host-tested). Each
+/// ring slot carries the sequence the kernel assigned; the reply is an 8-byte summary.
+fn tx_datav() -> ! {
+    let Some(n) = txvmsg::decode_in(input()) else { exit(ST_BAD_CMD, 0) };
+    let bus = unsafe { &mut *core::ptr::addr_of_mut!(BUS) };
+    let r = hal::sdio::write_frames(bus, ring_at(TX_OFF), n);
+    let mut o = [0u8; txvmsg::OUT_LEN];
+    txvmsg::encode_out(&r, &mut o);
+    io(OUT_OFF, o.len()).copy_from_slice(&o);
+    wr32(H_OUT_LEN, o.len() as u32);
+    exit_lean(0)
+}
+
 /// The hot-path exit: no key material crosses on the frame commands, so only the input bytes used are cleared (not
 /// the 2 KiB IN scrub of `exit`, which the keying commands need).
 fn exit_lean(r0: u32) -> ! {
@@ -262,6 +289,7 @@ pub extern "C" fn _start() -> ! {
         CMD_POLL => exit(ST_OK, poll()),
         CMD_BUS_PROBE => bus_probe(),
         CMD_RX_READ => rx_read(),
+        CMD_RX_READV => rx_readv(),
         // S1: the key-transfer page el0-wpa writes is readable here (S3: a key record on its way to the chip)
         CMD_KEYX_PEEK => {
             let mut o = [0u8; 16];
@@ -271,6 +299,7 @@ pub extern "C" fn _start() -> ! {
             reply(&o)
         }
         CMD_TX_DATA => tx_data(),
+        CMD_TX_DATAV => tx_datav(),
         CMD_TX_CTL => tx_ctl(),
         CMD_BP_WRITE => bp_write(),
         CMD_BP_REG => bp_reg(),

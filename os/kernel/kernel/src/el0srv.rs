@@ -1112,6 +1112,110 @@ pub mod keyer {
         }
     }
 
+    /// ADR 0067 E1: vectored reads served, frames they delivered, frames the server took off the bus and did not
+    /// deliver, replies that disagreed with the ring (or calls that faulted).
+    pub static mut RXV: [u64; 4] = [0; 4];
+    #[cfg_attr(not(feature = "wifi-vec-rx"), allow(dead_code))]
+    pub fn rxv_stats() -> [u64; 4] {
+        unsafe { RXV }
+    }
+    /// ADR 0067 E1 — one vectored read: el0-wifi reads up to `max` frames into the RX ring. The ring is the truth and
+    /// the reply only explains it (`rxvmsg::rx_reconcile`): Some((frames to pop, stop code, drained, blk_diag)).
+    /// None = the server could not serve it (absent, backoff, fault, an undecodable request): read in-kernel.
+    pub(crate) fn rx_readv(sdb: u32, skip: bool, block: bool, max: u8) -> Option<(usize, u8, bool, u32)> {
+        use hal::wifisrvabi::rxvmsg;
+        let s = bus_srv()?;
+        let max = max.clamp(1, VEC_MAX as u8);
+        let before = hal::el0ring::pending(&s.rx);
+        if before != 0 {
+            // frames of an earlier batch are still unread: the caller pops them first, in order
+            return Some((before.min(VEC_MAX), hal::wifisrvabi::VecStop::Limit as u8, false, 0));
+        }
+        let mut inp = [0u8; rxvmsg::IN_LEN];
+        rxvmsg::encode_in(&rxvmsg::In { sdb, skip_int: skip, block_rx: block, max, cap: hal::el0ring::FRAME_MAX as u16 }, &mut inp);
+        let mut o = [0u8; rxvmsg::OUT_LEN];
+        let (c, n) = s.call_lean(CMD_RX_READV, &inp, &mut o);
+        if matches!(c, Call::Backoff) {
+            return None; // in the restart hold-off: nothing was asked of the server (not a refused reply)
+        }
+        let reply = if matches!(c, Call::Done(ST_OK, ..)) && n == rxvmsg::OUT_LEN { rxvmsg::decode_out(&o) } else { None };
+        let after = hal::el0ring::pending(&s.rx);
+        let r = rxvmsg::rx_reconcile(max, before, after, reply.as_ref());
+        unsafe {
+            RXV[0] += 1;
+            RXV[1] += r.take as u64;
+            RXV[2] += r.lost as u64;
+            RXV[3] += r.lied as u64;
+        }
+        match reply {
+            Some(out) if !r.lied => Some((r.take, out.stop as u8, out.drained, out.blk_diag)),
+            // a fault (the reset emptied the rings) or a reply that does not match the ring: take what the ring holds,
+            // as a batch that ended on a bus error — the caller then reads in-kernel
+            _ if r.take > 0 => Some((r.take, hal::wifisrvabi::VecStop::BusError as u8, false, 0)),
+            _ => None,
+        }
+    }
+    /// The next frame of the last vectored read (the kernel's ONE copy of it).
+    pub(crate) fn rx_vec_pop(out: &mut [u8]) -> Option<usize> {
+        match bus_srv()?.rx_pop(out) {
+            hal::el0ring::Pop::Frame(n) => Some(n),
+            _ => None,
+        }
+    }
+
+    /// ADR 0067 E1: vectored writes served, frames they sent, frames that left the ring unsent, frames left in the ring
+    /// (dropped by the kernel: they stay in ITS queue and are sent again with new sequence numbers), replies that
+    /// disagreed with the ring (or calls that faulted).
+    pub static mut TXV: [u64; 5] = [0; 5];
+    #[cfg_attr(not(feature = "wifi-vec"), allow(dead_code))]
+    pub fn txv_stats() -> [u64; 5] {
+        unsafe { TXV }
+    }
+    /// Queue one data frame, with its sequence, for the next vectored write.
+    pub(crate) fn tx_vec_push(seq: u8, ifidx: u8, big: bool, eth: &[u8]) -> bool {
+        use hal::wifisrvabi::txvmsg;
+        let Some(s) = bus_srv() else { return false };
+        let mut slot = [0u8; hal::el0ring::FRAME_MAX];
+        match txvmsg::slot_encode(seq, ifidx, big, eth, &mut slot) {
+            Some(n) => s.tx_push(&slot[..n]),
+            None => false,
+        }
+    }
+    /// ADR 0067 E1 — one vectored write of the `n` frames just queued. Some((sent, failed)) — `sent` frames reached
+    /// the device, in order; `failed` = a bus write failed or the call faulted (the driver terminates the write in
+    /// the device). Whatever was not sent is taken out of the ring: the caller still holds those frames and sends
+    /// them again. None = the server could not serve it (nothing was sent; the ring is empty again).
+    pub(crate) fn tx_datav(n: u8) -> Option<(usize, bool)> {
+        use hal::wifisrvabi::{txvmsg, VecStop};
+        let s = bus_srv()?;
+        let before = hal::el0ring::pending(&s.tx);
+        let mut inp = [0u8; txvmsg::IN_LEN];
+        txvmsg::encode_in(n.clamp(1, VEC_MAX as u8), &mut inp);
+        let mut o = [0u8; txvmsg::OUT_LEN];
+        let (c, len) = s.call_lean(CMD_TX_DATAV, &inp, &mut o);
+        if matches!(c, Call::Backoff) {
+            hal::el0ring::reset(&mut s.tx); // nothing was sent; the caller keeps the frames
+            return None;
+        }
+        let served = matches!(c, Call::Done(ST_OK, ..)) && len == txvmsg::OUT_LEN;
+        let reply = if served { txvmsg::decode_out(&o) } else { None };
+        let after = hal::el0ring::pending(&s.tx);
+        let r = txvmsg::tx_reconcile(n, before, after, reply.as_ref());
+        // nothing stays queued in the ring between calls: a leftover would be sent later with a stale sequence
+        if after != 0 {
+            hal::el0ring::reset(&mut s.tx);
+        }
+        unsafe {
+            TXV[0] += 1;
+            TXV[1] += r.sent as u64;
+            TXV[2] += r.dropped as u64;
+            TXV[3] += r.left as u64;
+            TXV[4] += r.lied as u64;
+        }
+        let failed = r.lied || matches!(reply.map(|x| x.stop), Some(VecStop::BusError) | Some(VecStop::Ring) | None);
+        Some((if r.lied && reply.is_none() { 0 } else { r.sent }, failed))
+    }
+
     /// `[P-el0wpa-contain]` (QEMU) — ADR 0065 step 4g S2, operator evidence items 4 and 5 in miniature: a fault in one
     /// station's call forgets only that station (another station's handshake and the PMKSA cache survive the server's
     /// restart); a second fault on it in a row also drops its PMKSA entry; a fault outside any station call full-wipes.
@@ -1235,7 +1339,7 @@ pub mod keyer {
         let bus = if unsafe { (*core::ptr::addr_of!(WIFI)).is_some() } { true } else { load_bus() };
         #[cfg(feature = "cm5")]
         unsafe {
-            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, tx_data, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new, bp_write, bp_reg });
+            arch_aarch64::cyw43::EL0_KEYER = Some(arch_aarch64::cyw43::El0Keyer { start, expect, eapol, tick, abort, sae_setup, sae_rx, sae_keying, key_start_sae, sae_forget, pmksa_remove, rx_read, rx_readv, rx_vec_pop, tx_data, tx_vec_push, tx_datav, tx_ctl, wpa_wiped: take_wiped, key_install, keyx_done, group_new, bp_write, bp_reg });
         }
         #[cfg(all(feature = "cm5", feature = "wpa3"))]
         let _ = arch_aarch64::cyw43::ap_sae_el0_sync(false); // the security installed before the server loaded

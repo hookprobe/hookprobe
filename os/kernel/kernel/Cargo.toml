@@ -274,6 +274,11 @@ wifi-bigtx = ["apmode", "wifi-bigrx", "arch-aarch64/wifi-bigtx"]
 # Full-MTU RX from stations (block-mode read), TX > 512 B refused + counted — the AP default
 # until block-mode WRITE is proven (it wedged the firmware on metal 2026-11-04).
 wifi-bigrx = ["apmode", "arch-aarch64/wifi-bigrx"]
+# ADR 0067 E1: vectored Wi-Fi frame reads (el0-wifi reads up to N frames into the RX ring per call). Bench until
+# metal-proven; not in tools/ci/shipping-features.txt.
+wifi-vec = ["apmode", "arch-aarch64/wifi-vec"]
+# the vectored READ as well (opt-in: metal 2026-11-20, 0.02 frames per read in a download, no gain)
+wifi-vec-rx = ["wifi-vec", "arch-aarch64/wifi-vec-rx"]
 # sepdiag — M2 Gate-R metal observability. Drains the per-rule event ring in the prod
 # heartbeat and prints {rule_id, verdict(PASS/DROP), src, sev} so a separation-matrix row's
 # verdict can be ATTRIBUTED on metal (prod exposes only aggregate counters otherwise). Also

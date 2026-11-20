@@ -73,4 +73,9 @@ txsweep = ["cm5"]
 # Block-mode CMD53 READ of a frame remainder > 512 B (metal-proven 2026-11-04: frames read
 # whole, stream healthy). TX > 512 B stays refused unless `wifi-bigtx`.
 wifi-bigrx = ["cm5"]
+# ADR 0067 E1: vectored Wi-Fi frame reads through el0-wifi (up to N frames per EL0 round trip). Not in the shipping
+# set until metal-proven.
+wifi-vec = ["cm5"]
+# E1 vectored READ (opt-in, measured as no gain on 2026-11-20: 0.02 frames per read in a download, ~3 Mbps less)
+wifi-vec-rx = ["wifi-vec"]
 wifi-bigtx = ["cm5", "wifi-bigrx"]
