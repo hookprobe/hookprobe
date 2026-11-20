@@ -7756,6 +7756,8 @@ pub extern "C" fn kmain() -> ! {
         let _ = rulepack::selftest();
         let _ = rulepack::guard_selftest();
         let _ = rules::lazy_ctx_selftest();
+        #[cfg(feature = "securechannel-selftest")] // its work counter exists in self-test builds only
+        let _ = rules::l2_clock_selftest();
         let _ = fwfiles::selftest();
         let _ = inspshed::selftest();
         #[cfg(feature = "netsvc")]
