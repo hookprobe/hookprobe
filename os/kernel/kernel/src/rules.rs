@@ -401,10 +401,11 @@ fn fire(rule_id: u16, severity: u32, v: Verdict, src: u32) {
     // blocklisted address 9,001 — each evicting the 256-row detection ring). The WIRE verdict is untouched
     // (a drop still drops every packet); only a repeat EVENT for the same (rule, source) within
     // `ALERT_DEDUP_SECS` is suppressed and counted. Behavioral rules keep their own longer cooldown.
-    if !alert_ok(rule_id, src, crate::behavioral::now_secs()) {
+    let wire = v.to_wire();
+    // an ESCALATION (a stronger wire verdict, or a higher severity) is never folded into an earlier, weaker event
+    if !alert_ok_rank(rule_id, src, crate::behavioral::now_secs(), (wire as u8) << 4 | (severity.min(15) as u8)) {
         return;
     }
-    let wire = v.to_wire();
     crate::events::push_hit(rule_id, severity as u8, wire as u8, v.class_code(), src);
     // Parity G5: every detection scores by SEVERITY, whatever its wire verdict — an observed beacon,
     // lateral sweep or ARP spoof is a threat even though ADR 0023 forbids dropping it. (Behavioral
@@ -975,24 +976,41 @@ pub const ALERT_DEDUP_SECS: u64 = 60;
 const DEDUP_N: usize = 512;
 static DEDUP_KEY: [core::sync::atomic::AtomicU64; DEDUP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; DEDUP_N];
 static DEDUP_AT: [core::sync::atomic::AtomicU64; DEDUP_N] = [const { core::sync::atomic::AtomicU64::new(0) }; DEDUP_N];
+/// The strength of the last event let through per slot: wire verdict << 4 | severity.
+static DEDUP_RANK: [core::sync::atomic::AtomicU8; DEDUP_N] = [const { core::sync::atomic::AtomicU8::new(0) }; DEDUP_N];
 pub static DEDUP_SUPPRESSED: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static DEDUP_ON: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(true);
 
 /// True if (rule, src) may raise an event now (and arms the window). An aliasing pair just evicts — at worst
 /// one extra event, never a lost one.
 pub fn alert_ok(rule_id: u16, src: u32, now: u64) -> bool {
+    alert_ok_rank(rule_id, src, now, 0)
+}
+
+/// `alert_ok` with the event's strength (`wire << 4 | severity`): a repeat inside the window is suppressed only if it
+/// is not STRONGER than the event already raised. Separation matrix on the CM5, 2026-11-20: a fast port scan whose
+/// probes were answered crossed the slow tier first (observe, severity 3) and the fast tier's rate-limit DROP
+/// (severity 5) seconds later was folded into it — the wire dropped, the record said "observe". An escalation now
+/// raises its own event.
+pub fn alert_ok_rank(rule_id: u16, src: u32, now: u64, rank: u8) -> bool {
     use core::sync::atomic::Ordering::Relaxed;
     if !DEDUP_ON.load(Relaxed) {
         return true;
     }
     let key = ((rule_id as u64) << 32) | src as u64 | (1u64 << 62);
     let i = crate::ratelimit::slot(key, DEDUP_N);
-    if DEDUP_KEY[i].load(Relaxed) == key && now.saturating_sub(DEDUP_AT[i].load(Relaxed)) < ALERT_DEDUP_SECS {
+    if DEDUP_KEY[i].load(Relaxed) == key && now.saturating_sub(DEDUP_AT[i].load(Relaxed)) < ALERT_DEDUP_SECS
+        && rank <= DEDUP_RANK[i].load(Relaxed)
+    {
         DEDUP_SUPPRESSED.fetch_add(1, Relaxed);
         return false;
     }
+    let fresh = DEDUP_KEY[i].load(Relaxed) != key || now.saturating_sub(DEDUP_AT[i].load(Relaxed)) >= ALERT_DEDUP_SECS;
     DEDUP_KEY[i].store(key, Relaxed);
-    DEDUP_AT[i].store(now, Relaxed);
+    if fresh {
+        DEDUP_AT[i].store(now, Relaxed); // an escalation keeps the window it escalated in
+    }
+    DEDUP_RANK[i].store(rank, Relaxed);
     true
 }
 
@@ -1106,12 +1124,16 @@ pub fn dedup_selftest() -> bool {
     let other_src = alert_ok(113, 0x0a63_0043, 1001);
     let other_rule = alert_ok(124, 0x0a63_0042, 1001);
     let after = alert_ok(113, 0x0a63_0042, 1000 + ALERT_DEDUP_SECS);
+    // an escalation inside the window is its own event (observe sev 3 -> drop sev 5); its repeat is not
+    let observe = alert_ok_rank(113, 0x0a63_0044, 2000, 1 << 4 | 3);
+    let escalated = alert_ok_rank(113, 0x0a63_0044, 2002, 2 << 4 | 5);
+    let not_again = !alert_ok_rank(113, 0x0a63_0044, 2003, 2 << 4 | 5) && !alert_ok_rank(113, 0x0a63_0044, 2004, 1 << 4 | 3);
     let suppressed = DEDUP_SUPPRESSED.load(core::sync::atomic::Ordering::Relaxed) >= 50;
     refire_reset();
-    let pass = first && repeats && other_src && other_rule && after && suppressed;
+    let pass = first && repeats && other_src && other_rule && after && suppressed && observe && escalated && not_again;
     arch_aarch64::_print(format_args!(
-        " [P-alert-dedup] {} — repeat alerts collapse to one event per (rule, source) per {} s (a port scan raised 974 events, a blocklisted flow 9,001 — detection benchmark 2026-11-09): first alert={} 50 repeats suppressed + counted={} another source still alerts={} another rule still alerts={} next window alerts again={}\n",
-        if pass { "PASS" } else { "FAIL" }, ALERT_DEDUP_SECS, first, repeats && suppressed, other_src, other_rule, after
+        " [P-alert-dedup] {} — repeat alerts collapse to one event per (rule, source) per {} s (a port scan raised 974 events, a blocklisted flow 9,001 — detection benchmark 2026-11-09): first alert={} 50 repeats suppressed + counted={} another source still alerts={} another rule still alerts={} next window alerts again={} a stronger repeat (observe -> drop) is its own event and its repeat is not={}\n",
+        if pass { "PASS" } else { "FAIL" }, ALERT_DEDUP_SECS, first, repeats && suppressed, other_src, other_rule, after, observe && escalated && not_again
     ));
     pass
 }
@@ -1126,6 +1148,7 @@ pub fn refire_reset() {
     for i in 0..DEDUP_N {
         DEDUP_KEY[i].store(0, Relaxed);
         DEDUP_AT[i].store(0, Relaxed);
+        DEDUP_RANK[i].store(0, Relaxed);
     }
 }
 
