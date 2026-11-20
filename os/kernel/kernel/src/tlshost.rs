@@ -439,6 +439,92 @@ impl TlsHost {
     pub fn swifi_raw(&mut self, cmd: u32, conn: usize, input: &[u8]) -> u32 {
         self.call(cmd, conn, input, 0).status
     }
+    /// H6e (swifi campaign only): open a TLS session and feed it a ClientHello — the server's key exchange, its
+    /// certificate signature and its record encryption all run. Four variants: 0 a TLS 1.3 hello this server accepts
+    /// (X25519, CHACHA20_POLY1305, ECDSA-P256); 1 the same hello offering only a cipher suite the server does not
+    /// have (it must answer with an alert); 2 the hello cut in half (nothing to answer yet); 3 the accepted hello
+    /// followed by a record that cannot be decrypted (alert). The server's random and its ephemeral key differ on
+    /// every run, so the answer is reduced to what must NOT differ: each step's status and flags, and the sequence of
+    /// TLS record types with the length of the first record. None = a step faulted, or the server has no certificate.
+    /// `shape` (the campaign's report) receives the record types of the answer to the hello.
+    #[cfg(feature = "swifi")]
+    pub fn swifi_handshake(&mut self, variant: usize, mut shape: Option<&mut ([u8; 8], usize)>) -> Option<u64> {
+        if !self.ready {
+            return None;
+        }
+        const SLOT: usize = SLOTS - 1;
+        let mut hello = [0u8; 160];
+        let mut n = 0;
+        let mut put = |b: &[u8], n: &mut usize| {
+            hello[*n..*n + b.len()].copy_from_slice(b);
+            *n += b.len();
+        };
+        put(&[0x16, 0x03, 0x01, 0, 0, 0x01, 0, 0, 0, 0x03, 0x03], &mut n); // record + handshake headers (lengths below)
+        let mut rnd = [0u8; 32];
+        for (i, b) in rnd.iter_mut().enumerate() {
+            *b = (i as u8).wrapping_mul(7).wrapping_add(1);
+        }
+        put(&rnd, &mut n);
+        put(&[0x00], &mut n); // no legacy session id
+        put(&[0x00, 0x02, 0x13, if variant == 1 { 0x05 } else { 0x03 }], &mut n); // TLS_CHACHA20_POLY1305_SHA256, or AES_128_CCM_8
+        put(&[0x01, 0x00], &mut n); // null compression
+        let ext_len_at = n;
+        put(&[0, 0], &mut n);
+        put(&[0x00, 0x00, 0x00, 0x0f, 0x00, 0x0d, 0x00, 0x00, 0x0a], &mut n); // server_name
+        put(b"heqk.local", &mut n);
+        put(&[0x00, 0x0a, 0x00, 0x04, 0x00, 0x02, 0x00, 0x1d], &mut n); // supported_groups: x25519
+        put(&[0x00, 0x0d, 0x00, 0x04, 0x00, 0x02, 0x04, 0x03], &mut n); // signature_algorithms: ecdsa_secp256r1_sha256
+        put(&[0x00, 0x2b, 0x00, 0x03, 0x02, 0x03, 0x04], &mut n); // supported_versions: TLS 1.3
+        put(&[0x00, 0x33, 0x00, 0x26, 0x00, 0x24, 0x00, 0x1d, 0x00, 0x20, 0x09], &mut n); // key_share: x25519, the base point
+        put(&[0u8; 31], &mut n);
+        let ext = (n - ext_len_at - 2) as u16;
+        hello[ext_len_at..ext_len_at + 2].copy_from_slice(&ext.to_be_bytes());
+        let (rec, hs) = ((n - 5) as u16, (n - 9) as u32);
+        hello[3..5].copy_from_slice(&rec.to_be_bytes());
+        hello[6..9].copy_from_slice(&hs.to_be_bytes()[1..]);
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        let mut seen = ([0u8; 8], 0usize);
+        let mut step = |me: &mut Self, cmd: u32, input: &[u8]| -> Option<()> {
+            let r = me.call(cmd, SLOT, input, 0);
+            if r.status == ST_PANIC {
+                return None;
+            }
+            let mut mix = |v: u64| h = (h ^ v).wrapping_mul(0x0000_0100_0000_01b3);
+            mix((r.status as u64) << 32 | r.flags as u64);
+            mix(r.plain_len as u64);
+            // the TLS records the server wants sent: their types, and the first one's length
+            let mut out = [0u8; 5];
+            let (mut off, mut first) = (0usize, true);
+            while off + 5 <= r.tls_len {
+                me.read(OUT_TLS_OFF + off, &mut out);
+                let len = u16::from_be_bytes([out[3], out[4]]) as usize;
+                mix(out[0] as u64);
+                if cmd == CMD_RECV && seen.1 < 8 {
+                    seen.0[seen.1] = out[0];
+                    seen.1 += 1;
+                }
+                if first {
+                    mix(len as u64);
+                    first = false;
+                }
+                off += 5 + len;
+            }
+            mix((off == r.tls_len) as u64); // the records fill the output exactly
+            Some(())
+        };
+        step(self, CMD_OPEN, &[])?;
+        let cut = if variant == 2 { n / 2 } else { n };
+        step(self, CMD_RECV, &hello[..cut])?;
+        if variant == 3 {
+            // an "application data" record before any key exists for it
+            step(self, CMD_RECV, &[0x17, 0x03, 0x03, 0x00, 0x18, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24])?;
+        }
+        step(self, CMD_CLOSE, &[])?;
+        if let Some(sh) = shape.as_mut() {
+            **sh = seen;
+        }
+        Some(h)
+    }
     /// H6b campaign name of [`TlsHost::digest_call`].
     #[cfg(feature = "swifi")]
     pub fn swifi_work(&mut self, input: &[u8]) -> Option<u64> {
