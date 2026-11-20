@@ -64,7 +64,13 @@ pub const EV_VOLUME: u8 = 2;
 pub const EV_DNS: u8 = 3;
 
 /// Result record, 20 bytes, little-endian:
-/// `[dev u16][driver u8][alarm u8][score u32][vol u16][fan u16][novel u16][dns u16][act u16][rsv u16]`.
-/// Q8 values (256 = 1.0), saturated to the field width. alarm = score >= 1.0.
+/// `[dev u16][driver u8][deviant u8][score u32][vol u16][fan u16][novel u16][dns u16][act u16][rsv u16]`.
+/// Q8 values (256 = 1.0), saturated to the field width. deviant = score >= 1.0 (byte 3, formerly "alarm").
+///
+/// **Evidence only** (docs/research/neuro/17, 18, 19; contract 20). On real device traffic a fixed or
+/// per-device threshold on this score cannot be both quiet and sensitive (D1: 72 benign deviations per
+/// device per week). The kernel must NOT raise an alert, a notification or an enforcement action from
+/// `deviant` or `score`; it records them as a "behaviour deviation" evidence node and passes the driver and
+/// score to the explainer's context. The score RANKS hours well (AUC 0.995 with service-keyed peers).
 /// driver: 0 volume, 1 fan-out, 2 novel peers, 3 dns, 4 activity.
 pub const RES_SIZE: usize = 20;

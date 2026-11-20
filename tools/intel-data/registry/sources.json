@@ -45,7 +45,8 @@
    "collaboration_route": null,
    "recommended_use": "ship blocklist on device (CC0 per platform terms) but get written AI-training consent",
    "collections": [
-    "network_intelligence"
+    "network_intelligence",
+    "malware_intelligence"
    ],
    "priority": 4,
    "acquisition": {
@@ -157,7 +158,8 @@
    "collaboration_route": null,
    "recommended_use": "TLS cert reputation on device (CC0); training requires consent",
    "collections": [
-    "network_intelligence"
+    "network_intelligence",
+    "malware_intelligence"
    ],
    "priority": 3,
    "acquisition": null,
@@ -275,7 +277,8 @@
    "collaboration_route": null,
    "recommended_use": "live reputation lookup / RPZ on device only under commercial Spamhaus subscription; no model training without written consent",
    "collections": [
-    "malware_intelligence"
+    "malware_intelligence",
+    "dns_intelligence"
    ],
    "priority": 5,
    "acquisition": null,
@@ -2077,7 +2080,8 @@
    "collaboration_route": null,
    "recommended_use": "train/eval provenance & network anomaly models (Zeek subset)",
    "collections": [
-    "network_intelligence"
+    "network_intelligence",
+    "attack_intelligence"
    ],
    "priority": 3,
    "acquisition": null,
@@ -5360,7 +5364,8 @@
    "collaboration_route": null,
    "recommended_use": "fine-tune taxonomy knowledge",
    "collections": [
-    "attack_intelligence"
+    "attack_intelligence",
+    "vulnerability_intelligence"
    ],
    "priority": 2,
    "acquisition": null,
@@ -5412,7 +5417,8 @@
    "collaboration_route": null,
    "recommended_use": "fine-tune taxonomy knowledge; vulnerability classification",
    "collections": [
-    "attack_intelligence"
+    "attack_intelligence",
+    "vulnerability_intelligence"
    ],
    "priority": 3,
    "acquisition": null,

@@ -3,11 +3,12 @@
 Newest first. Each entry: what was investigated or changed, the evidence, and its status.
 
 
-## 2026-11-20 — AB-15: the Linux-tier architecture doc is removed
+## 2026-11-20 — AB-16 (agent part), AB-08 closed
 
-- Asked whether to rename the legacy `docs/architecture/Readme.md` or the small `README.md` index (they collide on macOS), the operator answered "no linux remove anything about linux". Done for this item: `Readme.md` deleted (last version `e4c48181` in history), `README.md` kept as the folder index with ADR 0047 first.
-- Live links repointed in 9 unprotected files (README, CONTRIBUTING, docs index, HLD, BuildPlan, Architecture.md, runtime-engine-map, V1-alignment). Dated research notes and journal rows that name the file in plain text are history and left as written.
-- Not touched (protected or frozen): `CLAUDE.md` (3 mentions), 17 ADRs, `.claude/agents/` (4), `legacy/linux-tier/` (12). Wider "remove anything about Linux" (the `legacy/linux-tier/` workspace, CLAUDE.md's legacy sections, Track B in BuildPlan) is a larger change: asked the operator for its scope instead of guessing.
+- `docs/architecture/MissionControl.md` §12 still described the legacy Linux tier: a Containerfile builder with `.iso`/`.qcow2` outputs, modules with `runtime` wasm/container/sysext from a Marketplace, and `bootc upgrade` updates. §10 called the model "open core". Rewrote these four sentences to what heqk does: boot images signed by `heqk-sign`, signed packs with one-generation rollback (`packUpload.ts`), A/B `tryboot` updates (`make-cm5-heqk-image.sh`), AGPL-3.0-only + commercial (`LICENSING.md`). Target and legacy wording kept in brackets.
+- The `wasmhost` feature is still in no shipping flavour (`tools/ci/shipping-features.txt`): the doc now says so. The CLAUDE.md wording ("heqk today: signed Wasm via wasmi") and the ADR 0024/0026/0028 status lines are governance paths: left for the operator.
+- AB-08 closed: `/api/devices` now sends `mac`, `hostname`, `mdns_name`, `vendor`, model, category and OS (`mcstate.rs:516-539`), and the UI names devices from them. HP-02 marked done.
+- Backlog statuses refreshed for the merged #1279, #1280, #1281, #1298, #1299, #1311, #1312, #1318.
 ## 2026-11-18 — Session 2 (cont.): real rule ids in the sample incident
 
 - The device reports rule ids as `HEQK_RULE_BAND` (1,200,000) + the kernel id (`rulecat.rs:12`). The

@@ -7,8 +7,9 @@
 //!
 //! Integer-only and allocation-free; builds for `aarch64-unknown-none-softfloat` like every heqk server.
 //! The server parses untrusted input defensively, never decides enforcement (ADR 0023, C9), and holds no
-//! network, storage or policy capability. It returns scores; the kernel turns alarms into evidence-graph
-//! nodes.
+//! network, storage or policy capability. It returns scores. They are EVIDENCE ONLY: the kernel attaches them
+//! to the evidence graph and to the explainer's context, and never raises an alert or an enforcement action
+//! from them (docs/research/neuro/17 decision, 20 contract).
 #![no_std]
 #![no_main]
 
