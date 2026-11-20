@@ -2,7 +2,9 @@
 """Generate os/kernel/kernel/src/fpdb.rs — the device-fingerprint tables heqk uses for discovery — from the
 legacy V1 Fingerbank module (literal dicts only: parsed with `ast`, never imported or executed).
 
-    python3 -I os/build/fpgen/gen_fpdb.py legacy/v1/products/fortress/lib/fingerbank.py > os/kernel/kernel/src/fpdb.rs
+    python3 -I os/build/fpgen/gen_fpdb.py os/build/fpgen/fingerbank_v1.py > os/kernel/kernel/src/fpdb.rs
+    (`fingerbank_v1.py` is the V1 Fingerbank module, moved here from legacy/v1/products/fortress/lib/ on
+    2026-11-20 when legacy/v1 was removed; its table output is byte-identical. Then re-add the SPDX line.)
 
 Tables (all sorted for binary search; strings sanitised to printable ASCII without quotes/backslashes):
   OPT55     — DHCP option-55 parameter-request-list string -> (name, vendor, category, os, confidence %)
