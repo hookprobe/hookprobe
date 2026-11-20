@@ -49,6 +49,10 @@ import tempfile
 from . import VERSION, adapters, canon, licensing
 from .adapters import Ctx, Reject
 
+# Bump when the window content changes for the same inputs (host rule, pseudonyms, fields, drops), so a new
+# export gets a new version directory instead of overwriting one a consumer may already be reading.
+# 1 = #1402; 2 = IPv6 local hosts, drops counted by kind.
+FORMAT = 2
 RST = {"REJ", "RSTO", "RSTR", "RSTOS0", "RSTRH", "S0", "SH"}
 SPLIT_RULES = {
     # tools/neuro-research/replay_iot23.py split_of(): dev = sha256(scenario name) % 3 == 0, else test.
@@ -393,12 +397,12 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
         if a.get("derived_from"):
             continue
         acqs[a["filename"]] = a  # ordered by fetched_at: the newest full copy of a file wins
-    version = "windows-" + canon.sha256_obj([sorted(a["acquisition_id"] for a in acqs.values()), VERSION, purpose,
+    version = "windows-" + canon.sha256_obj([FORMAT, sorted(a["acquisition_id"] for a in acqs.values()), VERSION, purpose,
                                              split_rule, window, sorted(splits or []), chunk_events,
                                              max_rows if window == "scenario-hour" else None])[:12]
     out_dir = os.path.join(out_root or os.path.join(store.root, "builds"), version)
     os.makedirs(out_dir, exist_ok=True)
-    manifest = {"schema": "heqk.windows-manifest/1", "version": version, "tool_version": VERSION, "purpose": purpose,
+    manifest = {"schema": "heqk.windows-manifest/1", "version": version, "tool_version": VERSION, "format": FORMAT, "purpose": purpose,
                 "source_id": source_id, "license": {k: lic.get(k) for k in ("id", "name", "spdx", "url", "attribution_required", "verified_on")},
                 "attribution": registry.source(source_id).get("attribution"),
                 "window": window, "split_rule": {"name": split_rule, "params": {"modulus": 3, "dev_if": 0}},
