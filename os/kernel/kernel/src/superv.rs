@@ -339,12 +339,14 @@ pub fn swifi_campaign() -> bool {
     // (`lansvc::Server::known_call`, `tlshost::KNOWN` — since H6c the probes sweep the same set).
     // work(s) = a digest over all answers; None = a call faulted / was refused.
     // one workload call by index: el0-lansvc has 18 commands x 4 inputs = 72, el0-tlshost 8 requests
-    const NW: [usize; 3] = [72, 8, 16];
+    // (H6e: el0-tlshost = the 8 HTTP requests + 4 TLS handshake openings, the latter only with a certificate)
+    const NW: [usize; 3] = [72, 12, 16];
     let call = |s: usize, k: usize| -> Option<u64> {
         if s == 0 {
             crate::lansvc::swifi()?.known_call(k)
         } else if s == 1 {
-            crate::tlshost::host()?.swifi_work(crate::tlshost::KNOWN[k])
+            let h = crate::tlshost::host()?;
+            if k < 8 { h.swifi_work(crate::tlshost::KNOWN[k]) } else { h.swifi_handshake(k - 8, None) }
         } else {
             crate::hsh::swifi()?.known_call(k)
         }
@@ -414,8 +416,27 @@ pub fn swifi_campaign() -> bool {
         }
         0
     };
+    // H6e: what the server answered to the four hellos on the clean image (TLS record types: 0x16 handshake, 0x14
+    // change-cipher-spec, 0x17 encrypted, 0x15 alert). With a certificate the accepted hello must get a ServerHello
+    // followed by encrypted records, the unsupported-suite hello must get no encrypted record (this server refuses it
+    // with an error status and sends nothing), and half a hello nothing yet — else the workload is not a handshake.
+    let mut shapes = [([0u8; 8], 0usize); 4];
+    let mut tls_on = false;
+    deliberate(|| {
+        if let Some(h) = crate::tlshost::host() {
+            tls_on = h.ready;
+            for (v, sh) in shapes.iter_mut().enumerate() {
+                let _ = h.swifi_handshake(v, Some(sh));
+            }
+        }
+        restore(1);
+        server_ok(NAMES[1]);
+    });
+    let hs_ok = !tls_on || (shapes[0].0[0] == 0x16 && shapes[0].0[..shapes[0].1].contains(&0x17) && !shapes[1].0[..shapes[1].1].contains(&0x17) && shapes[2].1 == 0);
+    arch_aarch64::_print(format_args!("   [swifi] TLS handshake workload: certificate={} | records answered to: accepted hello {:02x?}, unsupported suite {:02x?}, half a hello {:02x?}, hello + undecryptable record {:02x?} | as expected={}\n",
+        tls_on, &shapes[0].0[..shapes[0].1], &shapes[1].0[..shapes[1].1], &shapes[2].0[..shapes[2].1], &shapes[3].0[..shapes[3].1], hs_ok));
     let stable = usable[0] >= 8 && usable[1] >= 4 && usable[2] >= 8 && work(0) == 0 && work(1) == 0 && work(2) == 0;
-    let both = both && stable;
+    let both = both && stable && hs_ok;
     let mut i = 0u64;
     while both && i < N {
         let r = rnd();
@@ -516,7 +537,7 @@ pub fn swifi_campaign() -> bool {
     let surfaced: u64 = c.iter().map(|x| x[2] + x[3]).sum();
     let pass = both && i == N && unrec == 0 && jp == 0 && alive && surfaced > 0 && jk[Kind::Exception as usize] == 0;
     arch_aarch64::_print(format_args!(
-        " [P-swifi] {} — autoheal harness H6, fault-injection campaign: {} injections ({} bit flips in the server image, {} random-command calls), seed fixed | el0-lansvc: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-tlshost: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-hsh: injected {} masked {} fault {} wrong-answer {} unrecovered {} | bit flips surfaced by class: text {}/{} read-only data {}/{} writable data {}/{} | wrong answers only the golden workload caught in el0-lansvc / el0-tlshost (probe still correct): {} | golden workload: {} of 72 el0-lansvc calls, {} of 8 el0-tlshost requests and {} of 16 el0-hsh lines usable (answered twice identically on the clean image), replay clean={} | surfaced {} of {} | journal entries {} (planned {}), left pending {} | all three servers answer after the campaign={} | {} ms{}\n",
+        " [P-swifi] {} — autoheal harness H6, fault-injection campaign: {} injections ({} bit flips in the server image, {} random-command calls), seed fixed | el0-lansvc: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-tlshost: injected {} masked {} fault {} wrong-answer {} unrecovered {} | el0-hsh: injected {} masked {} fault {} wrong-answer {} unrecovered {} | bit flips surfaced by class: text {}/{} read-only data {}/{} writable data {}/{} | wrong answers only the golden workload caught in el0-lansvc / el0-tlshost (probe still correct): {} | golden workload: {} of 72 el0-lansvc calls, {} of 12 el0-tlshost calls (8 HTTP requests + 4 TLS handshake openings, the latter need a certificate) and {} of 16 el0-hsh lines usable (answered twice identically on the clean image), replay clean={} | surfaced {} of {} | journal entries {} (planned {}), left pending {} | all three servers answer after the campaign={} | {} ms{}\n",
         if pass { "PASS" } else { "FAIL" }, i, flips, raws,
         c[0][0], c[0][1], c[0][2], c[0][3], c[0][4], c[1][0], c[1][1], c[1][2], c[1][3], c[1][4], c[2][0], c[2][1], c[2][2], c[2][3], c[2][4],
         cls[0][1], cls[0][0], cls[1][1], cls[1][0], cls[2][1], cls[2][0], wl_only, usable[0], usable[1], usable[2], stable, surfaced, i, jt, jk[Kind::Planned as usize], jp, alive, now_ms().saturating_sub(t_start),
