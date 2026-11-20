@@ -2985,6 +2985,12 @@ fn first_bringup() -> (Option<u16>, bool) {
     use arch_aarch64::cyw43;
     let run = || {
         let p = cyw43::chip_id_probe();
+        // BENCH ONLY (wifi-inject): HEQK_INJECT_BOOT_NOWIFI=1 at build time — the firmware is never uploaded, as on a
+        // unit whose chip does not start at power-on (the boot-degraded proof on metal).
+        #[cfg(feature = "wifi-inject")]
+        if matches!(option_env!("HEQK_INJECT_BOOT_NOWIFI"), Some("1")) {
+            return (p, false);
+        }
         let f2 = p == Some(0x4345) && cyw43::firmware_upload(unsafe { &mut *core::ptr::addr_of_mut!(NVSCRATCH) });
         (p, f2)
     };
@@ -3013,6 +3019,28 @@ fn first_bringup() -> (Option<u16>, bool) {
     r
 }
 
+/// The diagnostics of a chip that did not identify as a CYW43455 at power-on.
+#[cfg(feature = "cm5")]
+fn p10_no_chip_diag(probe: Option<u16>) {
+    use arch_aarch64::cyw43;
+    match probe {
+        Some(id) => {
+            let (via52, via53, win_ok) = cyw43::chipid_diag();
+            kprint!(" [P10-A] MISMATCH — chip ID {:#06x} (want 0x4345)\n", id);
+            kprint!("   [P10-diag] chipcommon[0..4] via_cmd52={:#010x} via_cmd53={:#010x} window_ack={}\n",
+                via52, via53, win_ok);
+        }
+        None => {
+            let (ps, ist) = cyw43::sdio_diag();
+            let d = cyw43::p10_regdump();
+            kprint!(" [P10-A] SILENT — stalled step {}; PRESENT={:#010x} INT={:#010x}\n",
+                cyw43::sdio_last_step(), ps, ist);
+            kprint!("   [P10-diag] gioDATA={:#010x} (WL_ON bit28={}) mux08={:#010x} mux0c={:#010x} CAPS={:#010x} CLKCTL={:#06x} (SDclk_en={} stable={}) HOSTCTL={:#010x}\n",
+                d[0], (d[0] >> 28) & 1, d[1], d[2], d[3], d[4] as u16, (d[4] >> 2) & 1, (d[4] >> 1) & 1, d[5]);
+        }
+    }
+}
+
 /// P10 Stage A — CYW43455 WiFi (SDIO) bring-up: read the chip common-core ID and
 /// confirm 0x4345 (BCM4345/6 = CYW43455). First step toward the regdomain backlog
 /// (Stage C: clmload + country iovar). WL_ON rail + clk_emmc2 are mailbox-owned and
@@ -3032,8 +3060,19 @@ fn cm5_p10_probe() {
     let clk = cyw43::radio_power_on();
     kprint!(" [P10] WL_ON asserted; clk_emmc2 = {} Hz {}\n", clk, if clk > 0 { "(clock live)" } else { "(clock OFF — mailbox failed?)" });
     let (probe, f2) = first_bringup();
-    match probe {
+    // Boot degraded: in the AP image the serve loop below is also the WAN, the wired LAN, the management network and
+    // Mission Control. It used to be entered only with the radio up, so a chip that did not answer at power-on (or a
+    // firmware that did not start, or an AP that would not come up) left the unit unmanageable. Now the loop is
+    // entered anyway, with Wi-Fi off from the start — the state the self-heal ladder's Degrade ends in.
+    let chip_ok = probe == Some(0x4345);
+    let radio = chip_ok && f2 && arch_aarch64::cyw43::ver_result().0;
+    let boot_off = cfg!(feature = "apmode") && !radio;
+    if boot_off && !chip_ok {
+        p10_no_chip_diag(probe);
+    }
+    match if boot_off { Some(0x4345) } else { probe } {
         Some(0x4345) => {
+            if chip_ok {
             kprint!(" [P10-A] PASS — SDIO link up; chip ID 0x4345 (BCM4345/6 / CYW43455)\n");
             let (erom, cr4b, cr4w) = cyw43::erom_diag();
             {
@@ -3097,12 +3136,14 @@ fn cm5_p10_probe() {
                 }
                 kprint!("\n");
             }
-            if f2 {
+            } // chip_ok
+            if f2 || boot_off {
+                let (ver_ok, ver, _vl) = cyw43::ver_result();
+                if f2 {
                 // Stage C METAL GATE: the GET "ver" round-trip already RAN inside
                 // firmware_upload the instant F2 came ready (no idle window — the 43455
                 // sleeps after ~150ms of a silent bus). Here we only READ the captured
                 // result + diagnostics and print them.
-                let (ver_ok, ver, _vl) = cyw43::ver_result();
                 let (bw, hc) = cyw43::buswidth_diag();
                 kprint!("   [P10-C 4bit] CCCR_bus(0x07)={:#04x} (0x02=card 4-bit) HOST_CTRL1={:#04x} (bit1=host 4-bit) => {}\n",
                     bw, hc, if bw & 3 == 2 { "4-BIT active" } else { "fell back to 1-bit" });
@@ -3133,7 +3174,11 @@ fn cm5_p10_probe() {
                     }
                     kprint!("\n");
                 }
-                if ver_ok {
+                } // f2
+                if ver_ok || boot_off {
+                    let mut aps = [cyw43::ApInfo::new(); 32]; // the boot scan (the AP's channel choice reads it)
+                    let mut naps = 0usize;
+                    if radio {
                     // Control path proven — confirm the regdomain via the country iovar.
                     // RO (Romania) matches the ccode=RO baked into NVRAM (fw >=7.45.265).
                     let rd = cyw43::set_regdomain(b"RO", 0);
@@ -3149,8 +3194,7 @@ fn cm5_p10_probe() {
                     }
                     // P10-D: WiFi scan — enumerate nearby APs (event_msgs -> UP -> escan).
                     kprint!(" [P10-D] WiFi scan — MAC + preinit + WLC_UP + escan (all channels)...\n");
-                    let mut aps = [cyw43::ApInfo::new(); 32];
-                    let naps = cyw43::wifi_scan(&mut aps);
+                    naps = cyw43::wifi_scan(&mut aps);
                     let sd = cyw43::scan_diag();
                     let (svok, sver) = cyw43::scan_ver_diag();
                     let (v1s, _v2s) = cyw43::escan_status_v1v2();
@@ -3180,12 +3224,22 @@ fn cm5_p10_probe() {
                     } else {
                         kprint!(" [P10-D] scan armed (up={} escan={}); no AP frames parsed — see scan diag\n", sd[2], sd[3]);
                     }
+                    } // radio
                     // P11 M-AP0: AP-mode bring-up (compile-time switch — runs INSTEAD of the STA
                     // join). heqk becomes the WiFi authenticator (gap #4). The FullMAC firmware
                     // makes beacons/auth/assoc itself; M-AP0 just proves it enters AP mode + the
                     // BSS beacons (validated by an attending operator seeing the SSID on a phone).
                     const AP_MODE: bool = cfg!(feature = "apmode");
                     if AP_MODE {
+                        // Wi-Fi off from the start: fail every SDIO command at once and hold the chip in reset.
+                        let mut wifi_boot_off = boot_off;
+                        if boot_off {
+                            let why = if !chip_ok { wifiheal::BootFault::NoChip } else if !f2 { wifiheal::BootFault::FirmwareNotStarted } else { wifiheal::BootFault::NoControl };
+                            cyw43::radio_off();
+                            wifiheal::set_boot_fault(why);
+                            superv::wifi_heal(5, false, superv::now_ms()); // journal: Wi-Fi degraded, closed Failed
+                            kprint!(" [WIFI] BOOT DEGRADED — {}: Wi-Fi is OFF for this boot (reason in /api/health wifi_boot); wired LAN, WAN and management keep running\n", why.text());
+                        }
                         // M-NAT0: the wired UPLINK. Operator topology: end0 (RP1 GEM) is ALWAYS
                         // the WAN, eth1 (RTL8111H) is the LAN. Lease an IP on end0, resolve the
                         // gateway, ping the internet — over the metal-proven GEM rings (armed by
@@ -3577,6 +3631,9 @@ fn cm5_p10_probe() {
                         let mut dfs_watch: Option<hal::DfsWatch> = None;
                         let mut dfs_last_s = 0u64;
                         loop {
+                            if wifi_boot_off {
+                                break;
+                            }
                             ap_tries += 1;
                             ap = cyw43::ApResult::new();
                             // Try 1: the scan-driven channel choice (hal::acs_choose — least interference,
@@ -3690,9 +3747,15 @@ fn cm5_p10_probe() {
                             kprint!(" [P11-AP2] AP config INCOMPLETE (try {}: get_ap={} ssid_ok={} bssid_nonzero={} ev_ok={} gtk_set={})\n",
                                 ap_tries, ap.get_ap, ap.ssid_ok, ap.bssid != [0u8; 6], ap.ev_ok, ap.gtk_set);
                             if ap_tries >= 2 {
-                                kprint!(" [P11-AP2] FAIL — AP not serve-ready after 2 attempts; not entering the serve loop (a BSS that can't key clients must not beacon as if it could)\n");
+                                kprint!(" [P11-AP2] FAIL — AP not serve-ready after 2 attempts (a BSS that can't key clients must not beacon as if it could)\n");
                                 let _ = cyw43::ap_stop();
-                                return;
+                                ap = cyw43::ApResult::new();
+                                cyw43::radio_off();
+                                wifiheal::set_boot_fault(wifiheal::BootFault::ApStartFailed);
+                                superv::wifi_heal(5, false, superv::now_ms());
+                                wifi_boot_off = true;
+                                kprint!(" [WIFI] BOOT DEGRADED — {}: Wi-Fi is OFF for this boot (reason in /api/health wifi_boot); wired LAN, WAN and management keep running\n", wifiheal::BootFault::ApStartFailed.text());
+                                break;
                             }
                         }
                         // M-AP3/M-AP4: the PERSISTENT AP serve loop is now ONE event-driven frame
@@ -3785,7 +3848,7 @@ fn cm5_p10_probe() {
                         // WPA3: per-station rate limit of the association-refusal log (a stale-scan station retries ~15 s)
                         #[cfg(feature = "wpa3")]
                         let mut rejlog = hal::rsnassoc::RejectLog::new();
-                        let mut wifi_off = false; // Degrade: the radio is off for this boot, wired + management keep running
+                        let mut wifi_off = wifi_boot_off; // Degrade (or boot degraded): the radio is off for this boot, wired + management keep running
                         let (mut wifi_tx_queued, mut wifi_tx_dropped, mut wq_flushed) = (0u32, 0u32, 0u32);
                         let (mut wq_head_fail, mut wq_head_drop) = (0u32, 0u32);
                         // credit-stall diagnostics: last frames handed to the firmware (dst MAC low 3 bytes, len)
@@ -5837,20 +5900,7 @@ fn cm5_p10_probe() {
                 }
             }
         }
-        Some(id) => {
-            let (via52, via53, win_ok) = cyw43::chipid_diag();
-            kprint!(" [P10-A] MISMATCH — chip ID {:#06x} (want 0x4345)\n", id);
-            kprint!("   [P10-diag] chipcommon[0..4] via_cmd52={:#010x} via_cmd53={:#010x} window_ack={}\n",
-                via52, via53, win_ok);
-        }
-        None => {
-            let (ps, ist) = cyw43::sdio_diag();
-            let d = cyw43::p10_regdump();
-            kprint!(" [P10-A] SILENT — stalled step {}; PRESENT={:#010x} INT={:#010x}\n",
-                cyw43::sdio_last_step(), ps, ist);
-            kprint!("   [P10-diag] gioDATA={:#010x} (WL_ON bit28={}) mux08={:#010x} mux0c={:#010x} CAPS={:#010x} CLKCTL={:#06x} (SDclk_en={} stable={}) HOSTCTL={:#010x}\n",
-                d[0], (d[0] >> 28) & 1, d[1], d[2], d[3], d[4] as u16, (d[4] >> 2) & 1, (d[4] >> 1) & 1, d[5]);
-        }
+        other => p10_no_chip_diag(other),
     }
     // P10-BT is opt-in (feature `p10bt`) — see kernel/Cargo.toml. On metal the
     // unresponsive BT core left a deferred external abort that SError'd the next

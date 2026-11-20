@@ -525,6 +525,55 @@ fn publish(h: &Heal) {
     FLAGS.store(h.post_reboot as u32 | (h.prev.is_some() as u32) << 1, Relaxed);
 }
 
+/// Why Wi-Fi is off since power-on (boot degraded): the serve loop runs without the radio. `/api/health` "wifi_boot".
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum BootFault {
+    /// The chip did not identify as a CYW43455 on the SDIO bus.
+    NoChip = 1,
+    /// The chip is there but its firmware did not start (F2 never ready).
+    FirmwareNotStarted = 2,
+    /// The firmware started but the control path did not answer.
+    NoControl = 3,
+    /// The radio is up but the AP could not be started twice.
+    ApStartFailed = 4,
+}
+
+impl BootFault {
+    pub fn name(self) -> &'static str {
+        match self {
+            BootFault::NoChip => "no-chip",
+            BootFault::FirmwareNotStarted => "firmware-not-started",
+            BootFault::NoControl => "no-control",
+            BootFault::ApStartFailed => "ap-start-failed",
+        }
+    }
+    pub fn text(self) -> &'static str {
+        match self {
+            BootFault::NoChip => "the Wi-Fi chip did not answer at power-on",
+            BootFault::FirmwareNotStarted => "the Wi-Fi firmware did not start",
+            BootFault::NoControl => "the Wi-Fi firmware started but does not answer control requests",
+            BootFault::ApStartFailed => "the access point could not be started",
+        }
+    }
+}
+
+static BOOT_FAULT: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(0);
+
+pub fn set_boot_fault(f: BootFault) {
+    BOOT_FAULT.store(f as u8, core::sync::atomic::Ordering::Relaxed);
+}
+
+/// "ok", or the name of the fault that left Wi-Fi off since power-on.
+pub fn boot_fault_name() -> &'static str {
+    match BOOT_FAULT.load(core::sync::atomic::Ordering::Relaxed) {
+        1 => BootFault::NoChip.name(),
+        2 => BootFault::FirmwareNotStarted.name(),
+        3 => BootFault::NoControl.name(),
+        4 => BootFault::ApStartFailed.name(),
+        _ => "ok",
+    }
+}
+
 /// (state name, last class name, kicks, bounces, reloads this boot, post-reboot boot)
 pub fn status() -> (&'static str, &'static str, u32, u32, u32, bool) {
     let c = COUNTS.load(Relaxed);
