@@ -61,6 +61,39 @@ single boot, so this is not yet a ratchet baseline.
   per-packet path use a plain load + store (single data-plane core) or are compiled only into
   self-test builds.
 
+**Three-boot metal figures (2026-11-20 evening, the ratchet baseline).** Image am23F-1db60802 (main before
+#1379; shipping + wpa3 + wifi-inject + fwfiles), three boots, medians via `tools/ci/metal_timing.py`
+(`ok (3 boots)`); evidence `docs/design/metal-evidence/20261120-l01-fwfiles-b1.md`.
+`tools/ci/baselines/perf-metal.json` now holds ids.mix 321, tier.sum 306, l4-rules 52, tcp-flags 36.
+
+| `[IDS-TIERS]`, ns | 2026-11-09 | trial boot 11-20 | three boots 11-20 (median; per boot) |
+|---|---|---|---|
+| IDS mix | 398–441 | 322 | **321** (316 / 321 / 321) |
+| l4-rules | 91 | 52 | **52** (52 / 52 / 52) |
+| tcp-flags | 45 | 36 | **36** (36 / 36 / 36) |
+| l2 | 20 | 30 | 24 (24 / 24 / 24) |
+| flow | 53 | 68 | 73 (74 / 64 / 73) |
+| l2-stateful | 16 | 30 | 31 |
+| scan | 24 | 30 | 29 |
+
+- #1372 (no atomic read-modify-write in the run counter) brought l2 from 30 back to 24, not to the 20
+  of 2026-11-09. Flow did not improve. l2-stateful and scan, which are not rule loops, stay about 6–15 ns
+  above 2026-11-09 for a reason not yet found (image flavour, or changes merged by other work since). The
+  two tiers with the most spread (flow 64–74) are not in the ratchet; small values with that spread would
+  fail an 8 % bound on noise.
+- #1379 (decide() context only on a match) was not in this image; the next capture includes it.
+
+**L0.1 on metal with the files present (same image):** AP up and WPA3 7/7 on three boots; throughput
+95.1 / 97.0 / 98.3 Mbps, median 97.0 (floor 96; one boot alone was under it). Firmware reload after a
+burst of bus faults: PASS (832 ms, both stations back). Bench baseline and the LAN-client suite PASS
+(27 checks). NOT run on metal: the truncated / altered / missing-NVRAM-or-CLM states (each needs its own
+flash; QEMU 9/9 stands) and the 33-row matrix (needs a sepdiag image). One unexplained outlier: in the
+self-heal claims run, one of ten spaced bus faults took 2,188 ms against a 2,000 ms bound; two further
+runs on the same boot passed 4/4 (worst 599 and 711 ms).
+
+**E1 "before" (same image, about 98 Mbps):** el0-wifi peak 614.5 ms of EL0 time per second; el0-wpa
+20.7, el0-tlshost 8.2, el0-lansvc 5.7.
+
 **Firmware separation (L0.1), state on 2026-11-20.** Step 1 merged (#1367). Integration and bench by the
 kernel session (boot-degraded prerequisite #1370, integration PR stacked on it):
 
