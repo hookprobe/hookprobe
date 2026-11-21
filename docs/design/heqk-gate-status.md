@@ -65,7 +65,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | GF-E2 | single gate-status source | eng | done (this document) | — |
 | GF-E3 | bench restored before / after config-changing checks | eng | done+metal | #1428 (cfgd-live 20/20 with the wrapper on metal) |
 | GF-E4 | local mc-e2e uses a stale UI dist | eng | done | #1427 |
-| GF-E5 | ~980 ms post-upload reload round trips | eng | open (low) | #1294 |
+| GF-E5 | ~980 ms post-upload reload round trips | eng | instrumented; not reproduced (2/2 reloads 834–838 ms, slowest control request 21 ms) | #1440 |
 | GF-H1 (W3) | bench certificate SAN (192.168.200.146, unit name) | bench | done+metal | served cert checked 2026-11-21 (`openssl s_client` against 192.168.200.146:443): SAN heqk.local, r3q1.heqk.local, 10.99.0.1, 192.168.200.146, 10.200.0.6, written by the rpiboot flash of 20261120-l01-fwfiles-b1.md |
 | GF-H2 (W3) | browser flasher (ADR 0037) | op / bench | open | remaining-gaps #7 |
 | GF-H3 (W3) | G19 PoP tunnel on metal | op | blocked (PoP) | device side `[P-g19]` |
@@ -81,7 +81,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | AH-H3 | policy decay / hold-off / planned-reset reasons | eng | done+metal (H3a); H3b done-QEMU (pure policy) | #1328, #1336 |
 | AH-H4 | probes (H4a/H4b) + complaint channel (H4c) | eng | done+metal (a/b); H4c done-QEMU (no shipping server can be made to break the protocol on metal) | #1339, #1351, #1409 |
 | AH-H5 | CPU budget per server per window | eng | done+metal | #1356 (8/8) |
-| AH-H6 | software fault-injection campaign | eng / bench | done-QEMU (10k, 0 unrecovered); CM5 ≥1k campaign open | #1365–#1378 |
+| AH-H6 | software fault-injection campaign | eng / bench | done+metal (CM5: 1000 injections into lansvc / tlshost / hsh, 0 unrecovered; el0-wpa QEMU only, live on metal) | #1365–#1378, #1446 |
 | AH-H7 | state classes + el0-wpa saved-state integrity | eng | done+metal | #1418, #1420 (8/8) |
 | AH-D1 | abandoned endpoint: probes for el0-hsh and el0-wpa | eng | done-QEMU | #1430 ([P-probe-hsh], [P-probe-wpa]) |
 
