@@ -34,9 +34,9 @@ class Context(unittest.TestCase):
         self.assertEqual(asn.lookup("2001:db8::5")["asn"], 64501)
         wl, _ = self.tables["f-wl"]
         self.assertEqual(sorted(wl.lists), ["public-dns-v4", "tor-exit-nodes"])  # vpn (X4BNet) and ranking dropped
-        self.assertEqual(wl.lookup("198.51.100.53"), ["Synthetic public DNS"])
+        self.assertEqual(wl.lookup("198.51.100.53"), [{"id": "public-dns-v4", "name": "Synthetic public DNS", "category": "list"}])
         self.assertEqual(wl.lookup("198.51.100.7"), [])  # tor list: current snapshot, never on captures
-        self.assertEqual(wl.lookup("198.51.100.7", for_capture=False), ["Synthetic Tor exits"])
+        self.assertEqual([x["id"] for x in wl.lookup("198.51.100.7", for_capture=False)], ["tor-exit-nodes"])
 
     def test_windows_carry_remote_context_by_pseudonym_only(self):
         d = os.path.join(self.sb.dir, "cap", "Synthetic-C", "bro")
@@ -52,7 +52,7 @@ class Context(unittest.TestCase):
         rc = w["remote_context"]
         self.assertEqual(list(rc), [w["events"][0]["dst_ip"]])  # multicast carries no identity: no entry
         ctx = rc[w["events"][0]["dst_ip"]]
-        self.assertEqual((ctx["asn"], ctx["country"], ctx["warninglists"]), (64500, "ZZ", ["Synthetic public DNS"]))
+        self.assertEqual((ctx["asn"], ctx["country"], ctx["warninglists"]), (64500, "ZZ", [{"id": "public-dns-v4", "name": "Synthetic public DNS", "category": "list"}]))
         self.assertNotIn("198.51.100.53", buf.getvalue())  # the real address never leaves the export
 
     def test_lookup_ships_the_same_tables(self):

@@ -127,8 +127,9 @@ class Warninglists:
             net = x >> (bits - p) << (bits - p) if p else 0
             for k in self.nets[(a.version, p)].get(net, ()):
                 if not (for_capture and k in NOT_FOR_CAPTURES):
-                    hits.add(self.lists[k]["name"])
-        return sorted(hits)
+                    hits.add(k)
+        # the stable list id is the key (names change between MISP versions); category gives a short phrase
+        return [{"id": k, "name": self.lists[k]["name"], "category": self.lists[k]["category"]} for k in sorted(hits)]
 
 
 def load(store, registry, purpose, source_ids):
