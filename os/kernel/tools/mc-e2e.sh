@@ -36,9 +36,20 @@ jget() { python3 -I -c "import json,sys; d=json.load(sys.stdin); print(eval(sys.
 
 echo "[1] build the Mission Control UI (same-origin API) + the heqk mcserve kernel"
 UI=../mission-control
-if [ ! -f "$UI/dist/index.html" ]; then
-  command -v npm >/dev/null || { echo "  npm not found and os/mission-control/dist missing — cannot embed the UI"; exit 2; }
+# Gap-fix E4: the dist must come from THIS checkout's UI sources, not from whatever an earlier run left behind. The
+# run records the source state the dist was built from (target/mc-ui-dist.src: the committed tree of os/mission-control plus a hash of
+# any uncommitted change there); a missing or different stamp rebuilds it. HEQK_UI_DIST (an explicit dist the caller
+# chose) is used as given.
+UI_SRC=$( { git rev-parse HEAD:os/mission-control 2>/dev/null; git status --porcelain -- "$UI" ':!'"$UI/dist" 2>/dev/null; git diff -- "$UI" ':!'"$UI/dist" 2>/dev/null; } | sha256sum | cut -c1-16)
+if [ -n "${HEQK_UI_DIST:-}" ]; then
+  echo "  UI dist: HEQK_UI_DIST=$HEQK_UI_DIST (as given)"
+elif [ ! -f "$UI/dist/index.html" ] || [ "$(cat target/mc-ui-dist.src 2>/dev/null)" != "$UI_SRC" ]; then
+  command -v npm >/dev/null || { echo "  npm not found and os/mission-control/dist missing or stale — cannot embed the UI"; exit 2; }
+  echo "  UI dist missing or built from other sources: rebuilding ($UI_SRC)"
   (cd "$UI" && npm ci --no-audit --no-fund >/dev/null && PUBLIC_API_BASE='' npm run build >/dev/null) || { echo "  UI build failed"; exit 2; }
+  mkdir -p target && echo "$UI_SRC" > target/mc-ui-dist.src
+else
+  echo "  UI dist current ($UI_SRC)"
 fi
 # Private target dir: never overwrite the shared target/ other builders/sessions flash from.
 export CARGO_TARGET_DIR=target/mc
