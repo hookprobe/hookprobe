@@ -8,12 +8,17 @@ becomes {"value": "...", "instr_like": bool}; the card renderer appends ` !instr
 Known limitation (measured by Neuro): the keyword rule misses English injections without those words and all
 Romanian ones. Do not change the rule here; a detector change is its own pre-registered step on Neuro's side.
 
-Today's windows exports (IoT-23 conn.log, CTU-13 binetflow) carry no attacker-controlled strings (service,
+Today's windows events (IoT-23 conn.log, CTU-13 binetflow) carry no attacker-controlled strings (service,
 history and conn_state are the sensor's own vocabulary), so wrapping them is a no-op and their output is
 unchanged. The field list is ready for sources that do carry them (DNS, HTTP, TLS, DHCP/mDNS, mail, files).
+remote_context.as_name IS flagged: AS names are chosen by whoever registers the AS (Neuro, 2026-11-22). The
+export id includes the pattern and flags; the manifest records them with the detector's SHA-256 and a per-file
+count of flagged values (also when 0).
 """
+import hashlib
 import importlib.util
 import os
+import re
 
 from . import TOOL_DIR
 
@@ -28,6 +33,7 @@ ATTACKER_FIELDS = frozenset({
     "filename", "file_name",
     "dhcp_hostname", "mdns_name", "hostname",
     "mail_subject", "subject",
+    "as_name",  # registrant-chosen text from external registries (iptoasn); same for whois org names later
 })
 
 _regex = None
@@ -42,6 +48,25 @@ def pattern():
         spec.loader.exec_module(mod)
         _regex = mod.INSTRUCTION_LIKE
     return _regex
+
+
+def rule():
+    """What the manifest records: the pattern, its flags and the detector file's SHA-256 at build time."""
+    p = pattern()
+    with open(DETECTOR, "rb") as f:
+        sha = hashlib.sha256(f.read()).hexdigest()
+    return {"pattern": p.pattern, "flags": "re.I" if p.flags & re.I else "", "match": "search, full value before truncation",
+            "detector": "tools/neuro-research/semantic_compression.py", "detector_sha256": sha}
+
+
+def flagged(d):
+    """How many flagged values one (wrapped) dict holds."""
+    n = 0
+    for k in ATTACKER_FIELDS.intersection(d):
+        v = d[k]
+        for x in v if isinstance(v, list) else [v]:
+            n += isinstance(x, dict) and x.get("instr_like") is True
+    return n
 
 
 def flag(value):

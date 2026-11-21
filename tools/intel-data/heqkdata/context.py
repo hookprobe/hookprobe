@@ -21,7 +21,7 @@ import re
 import tempfile
 import zipfile
 
-from . import licensing, safeio
+from . import instrlike, licensing, safeio
 
 LOADERS = ("iptoasn_tsv", "misp_warninglists_zip")
 X4BNET = {"datacenter-ipv4", "datacenter-ipv6", "vpn-ipv4", "vpn-ipv6"}
@@ -172,6 +172,8 @@ def remote_fields(tables, ip):
         if isinstance(t, ASN):
             r = t.lookup(ip)
             f.update(r or {"asn": None, "as_name": None, "country": None})
+            if f["as_name"] is not None:  # registrant-chosen text: quoted and flagged, never inlined bare
+                f["as_name"] = instrlike.flag(f["as_name"])
             f["asn_source_date"] = a["fetched_at"][:10]
         else:
             f["warninglists"] = t.lookup(ip)
