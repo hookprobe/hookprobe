@@ -66,7 +66,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | GF-E3 | bench baseline inside the regression runner | eng | open | cm5-bench-baseline.sh exists (#1293), not called by a runner |
 | GF-E4 | local mc-e2e uses a stale UI dist | eng | open | mc-e2e.sh builds the dist only when missing |
 | GF-E5 | ~980 ms post-upload reload round trips | eng | open (low) | #1294 |
-| GF-H1 (W3) | bench certificate SAN (192.168.200.146, unit name) | bench | open — unblocked (rpiboot fixed #1389/#1399) | 20261120-l01-fwfiles-b1.md shows a working rpiboot flash |
+| GF-H1 (W3) | bench certificate SAN (192.168.200.146, unit name) | bench | done+metal | served cert checked 2026-11-21 (`openssl s_client` against 192.168.200.146:443): SAN heqk.local, r3q1.heqk.local, 10.99.0.1, 192.168.200.146, 10.200.0.6, written by the rpiboot flash of 20261120-l01-fwfiles-b1.md |
 | GF-H2 (W3) | browser flasher (ADR 0037) | op / bench | open | remaining-gaps #7 |
 | GF-H3 (W3) | G19 PoP tunnel on metal | op | blocked (PoP) | device side `[P-g19]` |
 | GF-H4 (W3) | /setup as HQCFG1 bundle metal batch | op | deferred (after the soak) | — |
@@ -104,7 +104,7 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 | DNS-01 first blocked answer held ~3 s | eng | done+metal | #1187 |
 | H-01 security headers | eng | done | #1161, #1168 |
 | L-01b PD loss withdraws | eng | done | #1176 |
-| L-02 SAN incl. mgmt IP | eng (code) / bench (cert) | code done; bench cert = GF-H1 | a2fcd1d21, 44754c2bc |
+| L-02 SAN incl. mgmt IP | eng (code) / bench (cert) | done+metal (bench cert = GF-H1) | a2fcd1d21, 44754c2bc |
 | L-03 PQ TLS group from a PQ client | bench | open | pi4-assessment.md |
 | W-01 transition downgradable | op | accepted (shipping default) | — |
 | W-02 PMF in transition | eng | done+metal (WPA3-only); optional by design | 20261114-night.md |
