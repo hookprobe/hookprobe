@@ -39,10 +39,12 @@ written to the audit log.
 CTU-13 (Argus binetflow; agreed with the Neuro session, 2026-11-21):
 - Scenario names for the split are the MEGA mirror directory names, "CTU-13.Dataset-<capture>" (scenario n =
   capture 41 + n), frozen before any window was exported: dev = 1, 5, 8; test = the other nine; 10 missing.
-- The university network uses public addresses, so "LAN" does not identify the host. The host is taken from the
-  dataset's own labels: "From-Botnet/Normal-..." -> the originator, "To-..." -> the responder, an undirected
-  "Normal-..." -> the originator. Only those labelled hosts are local (H pseudonyms); every other address,
-  including the rest of 147.32.0.0/16, is remote.
+- The university network uses public addresses, so "LAN" does not identify the host. Hosts are taken from the
+  dataset's own labels: the originator of a "From-Botnet/Normal-..." or undirected "Normal-..." flow. A
+  "To-..." label names the DESTINATION as known (e.g. "To-Normal-V42-UDP-NTP-server": university clients
+  querying a verified external NTP server), so it does not make a host; such a flow joins the window of
+  whichever end is a host, and is otherwise dropped and counted. Only labelled hosts are local
+  (H pseudonyms); every other address, including the rest of 147.32.0.0/16, is remote.
 - Background flows (label null: unknown, NOT benign) that touch a labelled host stay in that host's window as
   unlabelled context, counted in "background_events"; "labels" counts only Botnet/Normal flows. A host-hour
   with no labelled flow gets no window (counted in the export's file entry).
@@ -67,6 +69,9 @@ from .adapters import Ctx, Reject
 # 1 = #1402; 2 = IPv6 local hosts, drops counted by kind. Adding the CTU-13 path left IoT-23 output unchanged,
 # so FORMAT stays 2 (CTU-13 exports get their own ids from their acquisition ids).
 FORMAT = 2
+# CTU-13 (binetflow) window content version, in the export id of argus_binetflow sources only.
+# 1 = first cut (never shared); 2 = hosts from From-/Normal- labels only, To- flows follow an existing host.
+BINET_FORMAT = 2
 # Split / file names per source, from the store's "<scenario>__<file>" prefix. Sources not listed use the prefix.
 SCENARIO_NAMES = {"ctu-13": lambda s: f"CTU-13.Dataset-{int(s) + 41}" if s.isdigit() else s}
 
@@ -372,12 +377,14 @@ def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None,
 
 
 def _binet_host(rec):
-    """The labelled host of a CTU-13 flow, from the label's direction; None for Background."""
+    """The host a CTU-13 label names: the originator of a From-/undirected Botnet or Normal flow. None for
+    Background and for To- labels (those name the destination as known, not a monitored host)."""
     lab = rec["labels"]
     if lab["label"] not in ("malicious", "benign"):
         return None
-    ol = lab["original_label"] or ""
-    return rec["body"]["resp_ip"] if ol.startswith("To-") else rec["body"]["orig_ip"]
+    if (lab["original_label"] or "").startswith("To-"):
+        return None
+    return rec["body"]["orig_ip"]
 
 
 def _binet_tuple(rec):
@@ -407,7 +414,8 @@ def binetflow_host_windows(store, registry, acq, out, split, chunk_events=0, wor
                 o, r = t[1], t[3]
                 host = o if o in hosts else r if r in hosts else None
                 if host is None:
-                    counts["dropped_background_without_labelled_host"] += 1
+                    counts["dropped_background_without_labelled_host" if t[14] == "Background"
+                           else "dropped_labelled_to_without_host"] += 1
                     continue
             sp.add(int(t[0] // 3600), (host,) + t)
         sp.close()
@@ -514,7 +522,9 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
         if a.get("derived_from"):
             continue
         acqs[a["filename"]] = a  # ordered by fetched_at: the newest full copy of a file wins
-    version = "windows-" + canon.sha256_obj([FORMAT, sorted(a["acquisition_id"] for a in acqs.values()), VERSION, purpose,
+    src = registry.source(source_id)
+    binet = (src.get("adapter") or (src["acquisition"] or {}).get("adapter")) == "argus_binetflow"
+    version = "windows-" + canon.sha256_obj([[FORMAT, BINET_FORMAT] if binet else FORMAT, sorted(a["acquisition_id"] for a in acqs.values()), VERSION, purpose,
                                              split_rule, window, sorted(splits or []), sorted(unseal), chunk_events,
                                              max_rows if window == "scenario-hour" else None])[:12]
     out_dir = os.path.join(out_root or os.path.join(store.root, "builds"), version)

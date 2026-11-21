@@ -224,7 +224,9 @@ class BinetflowWindows(unittest.TestCase):
         bot, normal, other, remote = "192.0.2.165", "192.0.2.20", "192.0.2.99", "198.51.100.10"
         acq = self._capture([
             brow(1, bot, remote, 80, "From-Botnet-V42-TCP-CC6"),
-            brow(2, remote, normal, 22, "To-Normal-V42-SSH"),           # 'To-': the responder is the host
+            brow(2, normal, remote, 123, "From-Normal-V42-NTP"),
+            brow(2.5, normal, "198.51.100.123", 123, "To-Normal-V42-UDP-NTP-server"),  # 'To-' names the server: joins the host's window
+            brow(2.7, other, "198.51.100.123", 123, "To-Normal-V42-UDP-NTP-server"),   # client is no host: dropped
             brow(3, bot, "203.0.113.5", 53, "Background-UDP-Established"),  # touches the botnet host: context
             brow(4, other, remote, 443, "Background-TCP-Established"),  # touches no labelled host: dropped
             brow(3600 + 5, normal, remote, 443, "Background-TCP-Attempt"),  # background-only host-hour: no window
@@ -238,11 +240,12 @@ class BinetflowWindows(unittest.TestCase):
         self.assertEqual((b["labels"], b["background_events"], len(b["events"])), ({"Botnet/From-Botnet-V42-TCP-CC6": 1}, 1, 2))
         self.assertIsNone(b["events"][1]["label"])           # background: unknown, never benign
         self.assertIsNone(b["events"][0]["state"])           # Argus State is not mapped to rst/est
-        self.assertEqual(n["events"][0]["dst_ip"], n["host"])  # oriented by initiator, kept in the host's window
+        self.assertEqual(n["labels"], {"Normal/From-Normal-V42-NTP": 1, "Normal/To-Normal-V42-UDP-NTP-server": 1})
+        self.assertEqual(n["events"][1]["src_ip"], n["host"])
         self.assertTrue(b["host"].startswith("192.168.") and n["host"].startswith("192.168."))
         self.assertTrue(b["events"][0]["dst_ip"].startswith(("198.51.100.", "203.0.113.")))  # unlabelled = remote
-        self.assertEqual((c["dropped_background_without_labelled_host"], c["host_hours_background_only_skipped"],
-                          c["labelled_hosts"]), (1, 1, 2))
+        self.assertEqual((c["dropped_background_without_labelled_host"], c["dropped_labelled_to_without_host"],
+                          c["host_hours_background_only_skipped"], c["labelled_hosts"]), (1, 1, 1, 2))
 
     def test_ctu13_split_names_are_the_frozen_mirror_names(self):
         rule = windows.SPLIT_RULES["neuro-sha256-mod3"]
