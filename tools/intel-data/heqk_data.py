@@ -117,7 +117,8 @@ def cmd_windows(a):
     st, reg = Store(), registry.Registry()
     out, man = windows.export(st, reg, a.source, a.purpose, a.split_rule, out_root=a.out, window=a.window,
                               splits=a.splits.split(",") if a.splits else None,
-                              unseal=[a.unseal] if a.unseal else (), chunk_events=a.chunk_events, max_rows=a.max_rows)
+                              unseal=[a.unseal] if a.unseal else (), chunk_events=a.chunk_events, max_rows=a.max_rows,
+                              context_sources=a.context.split(",") if a.context else ())
     print(f"windows {man['version']} -> {out}")
     for f in man["files"]:
         print(f"  {f['scenario']:<34} {f['split']:<5} windows={f.get('windows', 0)} events={f.get('events', 0)}")
@@ -254,6 +255,7 @@ def main(argv=None):
     s.add_argument("--collections")
     s.set_defaults(fn=cmd_build)
     s = sub.add_parser("windows", help="host-hour windows of FULL captures for tools/neuro-research")
+    s.add_argument("--context", help="per-remote context sources, e.g. iptoasn,misp-warninglists")
     s.add_argument("source")
     s.add_argument("--purpose", required=True, choices=licensing.PURPOSES)
     s.add_argument("--split-rule", default="neuro-sha256-mod3")

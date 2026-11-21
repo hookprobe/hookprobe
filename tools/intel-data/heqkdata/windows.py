@@ -61,7 +61,7 @@ import shutil
 import sqlite3
 import tempfile
 
-from . import VERSION, adapters, canon, licensing
+from . import VERSION, adapters, canon, context, licensing
 from .adapters import Ctx, Reject
 
 # Bump when the window content changes for the same inputs (host rule, pseudonyms, fields, drops), so a new
@@ -72,6 +72,8 @@ FORMAT = 2
 # CTU-13 (binetflow) window content version, in the export id of argus_binetflow sources only.
 # 1 = first cut (never shared); 2 = hosts from From-/Normal- labels only, To- flows follow an existing host.
 BINET_FORMAT = 2
+# remote_context field version (in the export id only when --context is used). 1 = iptoasn + warninglists.
+CONTEXT_FORMAT = 1
 # Split / file names per source, from the store's "<scenario>__<file>" prefix. Sources not listed use the prefix.
 SCENARIO_NAMES = {"ctu-13": lambda s: f"CTU-13.Dataset-{int(s) + 41}" if s.isdigit() else s}
 
@@ -302,7 +304,24 @@ class _PairHistory:
         self.db.close()
 
 
-def _write_window(out, head, n_events, make_events, chunk_events):
+def _remote_context(tuples, P, tables, memo):
+    """{pseudonym: context} for the non-local remotes in these flow tuples, looked up on the REAL address (the
+    real address itself never leaves this function). memo caches per real address for the capture."""
+    out = {}
+    for t in tuples:
+        for ip in (t[1], t[3]):
+            if not ip or P.local(ip):
+                continue
+            ps = P.addr(ip)
+            if ps == ip or ps in out:  # multicast / broadcast / unspecified carry no identity
+                continue
+            if ip not in memo:
+                memo[ip] = context.remote_fields(tables, ip)
+            out[ps] = memo[ip]
+    return out
+
+
+def _write_window(out, head, n_events, make_events, chunk_events, make_context=None):
     """Chunk i of n carries events [i*size, (i+1)*size); labels and baseline are on chunk 0 only. Event dicts
     are made one chunk at a time (make_events(lo, hi)), so a window of millions of flows is never all in memory
     as dicts."""
@@ -310,16 +329,19 @@ def _write_window(out, head, n_events, make_events, chunk_events):
     n = max(1, -(-n_events // size))
     for i in range(n):
         line = dict(head, chunk=[i, n], events=make_events(i * size, (i + 1) * size))
+        if make_context is not None:  # per chunk: the remotes of this chunk's events
+            line["remote_context"] = make_context(i * size, (i + 1) * size)
         if i:
             line["labels"], line["baseline"] = {}, {"pairs": [], "suffixes": []}
         out.write(json.dumps(line, separators=(",", ":")) + "\n")
     return n
 
 
-def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None, scenario=None):
+def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None, scenario=None, tables=None):
     """Write every host-hour window of one acquisition to `out`. Returns counts."""
     scenario = scenario or acq["filename"].split("__", 1)[0]
     P = Pseudonyms()
+    memo = {}
     tmp = tempfile.mkdtemp(prefix=".windows-", dir=workdir or store.root)
     counts = collections.Counter()
     try:
@@ -365,7 +387,9 @@ def host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None,
                         "baseline": {"pairs": sorted([list(p) for p in base]), "suffixes": []}}
                 counts["lines"] += _write_window(out, head, len(flows),
                                                  lambda lo, hi, f=flows: [_event(t, _iso(t[0]), P) for t in f[lo:hi]],
-                                                 chunk_events)
+                                                 chunk_events,
+                                                 (lambda lo, hi, f=flows: _remote_context(f[lo:hi], P, tables, memo))
+                                                 if tables else None)
                 counts["windows"] += 1
                 counts["events"] += len(flows)
                 counts["max_window_events"] = max(counts["max_window_events"], len(flows))
@@ -393,7 +417,7 @@ def _binet_tuple(rec):
     return t[:14] + (coarse, rec["labels"]["original_label"] or "-")
 
 
-def binetflow_host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None, scenario=None):
+def binetflow_host_windows(store, registry, acq, out, split, chunk_events=0, workdir=None, scenario=None, tables=None):
     """CTU-13 host-hour windows: hosts from the labels, Background kept as unlabelled context (module docstring)."""
     scenario = scenario or acq["filename"].split("__", 1)[0]
     counts = collections.Counter()
@@ -403,6 +427,7 @@ def binetflow_host_windows(store, registry, acq, out, split, chunk_events=0, wor
         if h:
             hosts.add(h)
     P = Pseudonyms(local=lambda ip: ip in hosts)
+    memo = {}
     tmp = tempfile.mkdtemp(prefix=".windows-", dir=workdir or store.root)
     try:
         sp = _Spill(tmp)
@@ -454,7 +479,9 @@ def binetflow_host_windows(store, registry, acq, out, split, chunk_events=0, wor
                         "baseline": {"pairs": sorted([list(p) for p in base]), "suffixes": []}}
                 counts["lines"] += _write_window(out, head, len(flows),
                                                  lambda lo, hi, f=flows: [_binet_event(t, _iso(t[0]), P) for t in f[lo:hi]],
-                                                 chunk_events)
+                                                 chunk_events,
+                                                 (lambda lo, hi, f=flows: _remote_context(f[lo:hi], P, tables, memo))
+                                                 if tables else None)
                 counts["windows"] += 1
                 counts["events"] += len(flows)
                 counts["background_events"] += n_bg
@@ -510,7 +537,7 @@ def scenario_hour_windows(store, registry, acq, out, split, max_rows=1_500_000):
 
 
 def export(store, registry, source_id, purpose, split_rule, out_root=None, window="host-hour", splits=None,
-           unseal=(), chunk_events=50_000, max_rows=1_500_000, registry_dir=None):
+           unseal=(), chunk_events=50_000, max_rows=1_500_000, registry_dir=None, context_sources=()):
     """Windows for every FULL (unsampled) acquisition of `source_id`. Refuses sampled acquisitions (timelines
     need every flow), sealed scenarios unless unsealed, and anything the licence gate denies for `purpose`."""
     lic = registry.license_of(source_id)
@@ -524,9 +551,15 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
         acqs[a["filename"]] = a  # ordered by fetched_at: the newest full copy of a file wins
     src = registry.source(source_id)
     binet = (src.get("adapter") or (src["acquisition"] or {}).get("adapter")) == "argus_binetflow"
-    version = "windows-" + canon.sha256_obj([[FORMAT, BINET_FORMAT] if binet else FORMAT, sorted(a["acquisition_id"] for a in acqs.values()), VERSION, purpose,
-                                             split_rule, window, sorted(splits or []), sorted(unseal), chunk_events,
-                                             max_rows if window == "scenario-hour" else None])[:12]
+    tables = context.load(store, registry, purpose, sorted(context_sources)) if context_sources else None
+    if tables and window != "host-hour":
+        raise RuntimeError("remote context is only attached to host-hour windows")
+    key = [[FORMAT, BINET_FORMAT] if binet else FORMAT, sorted(a["acquisition_id"] for a in acqs.values()), VERSION, purpose,
+           split_rule, window, sorted(splits or []), sorted(unseal), chunk_events,
+           max_rows if window == "scenario-hour" else None]
+    if tables:  # only then, so exports without context keep their ids
+        key.append(["context", CONTEXT_FORMAT, sorted((s, a["acquisition_id"]) for s, (_, a) in tables.items())])
+    version = "windows-" + canon.sha256_obj(key)[:12]
     out_dir = os.path.join(out_root or os.path.join(store.root, "builds"), version)
     if os.path.exists(os.path.join(out_dir, "manifest.json")):
         # build directories are immutable: a finished export is never rewritten (consumers pin its manifest)
@@ -538,6 +571,8 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
                 "window": window, "split_rule": {"name": split_rule, "params": {"modulus": 3, "dev_if": 0}},
                 "splits": sorted(splits) if splits else None, "chunk_events": chunk_events,
                 "max_rows": max_rows if window == "scenario-hour" else None, "files": [], "skipped": {}, "unsealed": []}
+    if tables:
+        manifest["context"] = context.manifest_entry(tables)
     for fn in sorted(acqs):
         a = acqs[fn]
         scenario = scenario_name(source_id, fn)
@@ -557,9 +592,9 @@ def export(store, registry, source_id, purpose, split_rule, out_root=None, windo
             adapter = (registry.source(source_id).get("adapter")
                        or (registry.source(source_id)["acquisition"] or {}).get("adapter"))
             if window == "host-hour" and adapter == "argus_binetflow":
-                c = binetflow_host_windows(store, registry, a, out, s, chunk_events, scenario=scenario)
+                c = binetflow_host_windows(store, registry, a, out, s, chunk_events, scenario=scenario, tables=tables)
             elif window == "host-hour":
-                c = host_windows(store, registry, a, out, s, chunk_events, scenario=scenario)
+                c = host_windows(store, registry, a, out, s, chunk_events, scenario=scenario, tables=tables)
             else:
                 c = scenario_hour_windows(store, registry, a, out, s, max_rows)
         os.chmod(path + ".partial", 0o444)
