@@ -1,6 +1,6 @@
 # Status
 
-_Updated 2026-11-20._
+_Updated 2026-11-21._
 
 ## Platform status
 
@@ -12,7 +12,7 @@ views. Release trust-chain signoffs are open. See [ARCHITECTURE_AUDIT.md](ARCHIT
 
 ## Active task
 
-AB-21 (remove Linux; operator accepted D1–D5): step 3a, delete `legacy/v1`. The kernel's fingerprint table source (`fingerbank.py`) moved to `os/build/fpgen/fingerbank_v1.py` first. Branch `agent/remove-legacy-v1`, draft PR.
+AB-21 follow-up (operator 2026-11-21: "fix the license per components so we are covered"): per-file source and licence for the CM5 `.dtb`, its 16 GPL-2.0 / dual-licensed sources kept in-tree (they rebuild the blob byte for byte), licence texts for the boot-partition firmware. Branch `agent/dtb-licence-per-component`, draft PR.
 
 ## Delivery ledger
 
@@ -29,6 +29,7 @@ AB-21 (remove Linux; operator accepted D1–D5): step 3a, delete `legacy/v1`. Th
 | Sample incident uses real rule ids (1200125, 1200113) | `agent/mc-sample-rule-ids` | yes | unit 12/12; astro check 0 errors; build 27 pages; browser: sample incident shows the new story and rule 1200125, no old DNS-feed text | see PR | yes | [#1318](https://github.com/hookprobe/hookprobe/pull/1318) | yes (2026-11-18) |
 | AB-16 `MissionControl.md` §12 matches heqk; backlog statuses refreshed | `agent/docs-ab16` | yes | n/a (docs); every new claim checked against `os/build/`, `packUpload.ts`, `shipping-features.txt`, `LICENSING.md`, `mcstate.rs` | pending | yes | draft | no |
 | AB-21 step 3a: delete `legacy/v1` (1,177 files) | `agent/remove-legacy-v1` | yes | `gen_fpdb.py` on the moved `fingerbank_v1.py` gives byte-identical output; table body equals the committed `fpdb.rs` (header differs only by the SPDX line and the source hash from `e4c48181`) | pending | yes | draft | no |
+| AB-21 licence per component: CM5 `.dtb` sources + licence texts | `agent/dtb-licence-per-component` | yes | the 16 vendored sources rebuild `bcm2712-rpi-cm5-cm5io.dtb` byte for byte (`dtc -@`, DTC 1.8.1, sha256 `2ca3879f…`); `source/SHA256SUMS` checks | pending | yes | draft | no |
 
 AB-07 needed no change: the CVE tab has said "This device does not report software exposure yet" since `47a2ad85` (2026-11-10). The audit finding was wrong.
 
