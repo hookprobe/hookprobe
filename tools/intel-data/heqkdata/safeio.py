@@ -151,6 +151,35 @@ def csv_rows(stream, **kw):
     return csv.reader(_bounded(stream), **kw)
 
 
+def ndjson(stream, limit=32 << 20):
+    """Yield (line_no, object_or_None, reason) for newline-delimited JSON. A line over `limit` bytes is
+    skipped (read in bounded pieces, never held whole) and reported with reason, as is a line that is not a
+    JSON object; one bad line never stops the file. Non-standard constants (NaN, Infinity) are refused."""
+    n = 0
+    while True:
+        line = stream.readline(limit + 1)
+        if not line:
+            return
+        n += 1
+        if len(line) > limit:
+            while line and not line.endswith("\n"):
+                line = stream.readline(limit + 1)
+            yield n, None, f"line longer than {limit} bytes"
+            continue
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line, parse_constant=_no_constants)
+        except (ValueError, UnsafeContent) as e:
+            yield n, None, f"bad JSON: {str(e)[:120]}"
+            continue
+        if not isinstance(obj, dict):
+            yield n, None, "line is not a JSON object"
+            continue
+        yield n, obj, None
+
+
 def load_json(path, max_bytes=512 << 20):
     size = os.path.getsize(path)
     if size > max_bytes:

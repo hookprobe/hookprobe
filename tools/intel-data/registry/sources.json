@@ -1993,7 +1993,7 @@
    "country": "US",
    "geographic_coverage": "global",
    "source_url": "https://github.com/CVEProject/cvelistV5",
-   "download_url": null,
+   "download_url": "https://vulnerability.circl.lu/dumps/cvelistv5.ndjson",
    "api_endpoint": null,
    "description": "Authoritative CVE records published by CNAs, mirrored to GitHub with hourly deltas.",
    "category": "vulnerability",
@@ -2006,7 +2006,7 @@
     "CVE JSON 5.x"
    ],
    "machine_readable": true,
-   "records": null,
+   "records": "430075 vulnerabilities from the CVE Program (vulnerability.circl.lu/about sources list, 2026-11-21); cvelistv5.ndjson was 6,461,066,392 bytes on 2026-11-21",
    "collection_period": null,
    "publication_date": null,
    "last_update": "2026-11-18",
@@ -2029,13 +2029,20 @@
     "vulnerability_intelligence"
    ],
    "priority": 4,
-   "acquisition": null,
-   "verified_on": "2026-11-18",
-   "verification_status": "partially_verified",
+   "acquisition": {
+    "url": "https://vulnerability.circl.lu/dumps/cvelistv5.ndjson",
+    "adapter": "cve_record_v5",
+    "max_bytes": 12884901888,
+    "compression": null
+   },
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
    "evidence": [
-    "https://github.com/CVEProject/cvelistV5"
+    "https://github.com/CVEProject/cvelistV5",
+    "https://github.com/CVEProject/cve-website/blob/main/src/views/Legal/TermsOfUse.vue",
+    "https://vulnerability.circl.lu/dumps/"
    ],
-   "notes": "cvelistV5 README says use is 'per the CVE Program Terms of Use'. The live cve.org ToU page could not be fetched (DNS resolution failed from this host); grant text (perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable, copy/redistribute) taken from archived ToU and SPDX 'cve-tou' entry. Re-verify live page. Repo had a 'Date Normalization' process Feb 2026."
+   "notes": "Terms re-verified 2026-11-21 from the CVE website source (TermsOfUse.vue in CVEProject/cve-website): MITRE grants a perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright licence to reproduce, prepare derivative works of, display, sublicense and distribute CVE, provided MITRE's copyright designation and the licence are reproduced in copies. vulnerability.circl.lu labels the CVE Program source 'CC BY 4.0'; the CVE ToU is the governing text and is what the registry records. Acquired from CIRCL Vulnerability-Lookup's daily NDJSON dump (one CVE JSON 5 record per line), which mirrors cvelistV5. Records can carry ADP containers: CISA-ADP (Vulnrichment, CC0) and the CVE Program container."
   },
   {
    "id": "darpa-optc",
@@ -3215,7 +3222,7 @@
    "country": "US",
    "geographic_coverage": "global",
    "source_url": "https://github.com/github/advisory-database",
-   "download_url": null,
+   "download_url": "https://vulnerability.circl.lu/dumps/github.ndjson",
    "api_endpoint": null,
    "description": "Reviewed advisories for open-source ecosystems.",
    "category": "vulnerability",
@@ -3227,7 +3234,7 @@
     "OSV JSON"
    ],
    "machine_readable": true,
-   "records": null,
+   "records": "409723 vulnerabilities (vulnerability.circl.lu/about sources list, 2026-11-21); github.ndjson was 596,301,721 bytes on 2026-11-21",
    "collection_period": null,
    "publication_date": null,
    "last_update": "2026-11-18 (last push)",
@@ -3250,13 +3257,19 @@
     "vulnerability_intelligence"
    ],
    "priority": 3,
-   "acquisition": null,
-   "verified_on": "2026-11-18",
+   "acquisition": {
+    "url": "https://vulnerability.circl.lu/dumps/github.ndjson",
+    "adapter": "osv_advisory",
+    "max_bytes": 2147483648,
+    "compression": null
+   },
+   "verified_on": "2026-11-21",
    "verification_status": "verified",
    "evidence": [
-    "https://google.github.io/osv.dev/data/"
+    "https://github.com/github/advisory-database/blob/main/LICENSE.md",
+    "https://vulnerability.circl.lu/dumps/"
    ],
-   "notes": "spdx CC-BY-4.0 per GitHub API."
+   "notes": "LICENSE.md in github/advisory-database is CC BY 4.0 (read 2026-11-21). Acquired from CIRCL Vulnerability-Lookup's daily NDJSON dump (OSV 1.4 JSON per line). Advisories with no CVE alias are rejected by the adapter because heqk.vulnerability/1 is keyed on a CVE id."
   },
   {
    "id": "google-threat-intel-virustotal",
@@ -4901,14 +4914,14 @@
    ],
    "priority": 4,
    "acquisition": null,
-   "verified_on": "2026-11-18",
+   "verified_on": "2026-11-21",
    "verification_status": "partially_verified",
    "evidence": [
     "https://circl.lu/feeds/",
     "https://github.com/vulnerability-lookup/vulnerability-lookup",
     "https://new.circl.lu/opendata/"
    ],
-   "notes": "CIRCL is the Computer Incident Response Center LUXEMBOURG (not Switzerland) - brief misattributed it. vulnerability.circl.lu itself did not resolve during research; per-source upstream licences (e.g. NVD, vendor feeds) may differ from CC BY - check api-policy.json."
+   "notes": "CIRCL is the Computer Incident Response Center LUXEMBOURG (not Switzerland) - brief misattributed it. vulnerability.circl.lu itself did not resolve during research; per-source upstream licences (e.g. NVD, vendor feeds) may differ from CC BY - check api-policy.json. 2026-11-21: vulnerability.circl.lu resolves; /about lists each of ~99 upstream sources with its own licence (e.g. CVE Program, GitHub, OSV ecosystems CC BY 4.0; NVD public domain; OSV Ubuntu and Alpine CC BY-SA 4.0; several CSAF vendors and openEuler/Rocky with no licence shown). The CC BY label is NOT blanket: each dump is registered under its upstream source's own registry entry and licence."
   },
   {
    "id": "mawi-wide",

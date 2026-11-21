@@ -25,7 +25,7 @@ python3 -I heqk_data.py windows iot-23 --purpose commercial_training --splits de
 python3 -I heqk_data.py dga xjw3kq9vzt2lmpr8.com                     # heqk dga.rs, bit-exact
 python3 -I heqk_data.py dga-eval                                     # dga.rs FP/recall sweep on the store
 python3 -I heqk_data.py catalog --out ../../docs/research/intel-data/CATALOGUE.md
-python3 -I -m unittest discover -s tests -t tests                     # 72 tests, fixtures only
+python3 -I -m unittest discover -s tests -t tests                     # 81 tests, fixtures only
 ```
 
 Purposes are `commercial_training`, `evaluation`, `research` and `live_intel`. Each source is checked
@@ -57,7 +57,7 @@ choices are in `heqkdata/windows.py`.
 | `heqkdata/licensing.py` | the licence gate |
 | `heqkdata/safeio.py` | safe parsing of untrusted files (zip-slip, bombs, executables refused) |
 | `heqkdata/store.py` | immutable raw store, normalised records, audit log, SQLite index |
-| `heqkdata/adapters/` | MITRE ATT&CK STIX, CISA KEV, URLhaus CSV, Feodo JSON, Tranco, Zeek conn (IoT-23/CTU), Argus binetflow (CTU-13), CICFlowMeter CSV, hookprobe-ioc-v1, labelled domain lists (UMUDGA), PhiUSIIL |
+| `heqkdata/adapters/` | MITRE ATT&CK STIX, CISA KEV, URLhaus CSV, Feodo JSON, Tranco, Zeek conn (IoT-23/CTU), Argus binetflow (CTU-13), CICFlowMeter CSV, hookprobe-ioc-v1, labelled domain lists (UMUDGA), PhiUSIIL, CVE JSON 5 and OSV advisories (CIRCL Vulnerability-Lookup NDJSON dumps; `cvss.py` scores v3 vectors) |
 | `heqkdata/builders.py` | records → training examples per collection; synthetic SOC templates |
 | `heqkdata/splits.py` | group / time / source-holdout splits, contamination check, dedup |
 | `heqkdata/quality.py` | quality report + tier-A baseline of `dga.rs` on the DNS test split |
