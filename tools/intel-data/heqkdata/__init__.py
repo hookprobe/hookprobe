@@ -21,6 +21,7 @@ SCHEMA_IDS = {
     "indicator": "indicator.schema.json",
     "vulnerability": "vulnerability.schema.json",
     "attack-technique": "attack-technique.schema.json",
+    "weakness": "weakness.schema.json",
     "security-event": "security-event.schema.json",
     "training-example": "training-example.schema.json",
     "source": "source.schema.json",

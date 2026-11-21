@@ -30,8 +30,11 @@ class Lookup(unittest.TestCase):
         self._add("f-kev", os.path.join(FIX, "vulnlookup", "cvelistv5.ndjson"), "cve_record_v5")
         self._add("f-urlhaus", os.path.join(FIX, "vulnlookup", "github.ndjson"), "osv_advisory")
         self._add("f-attack", os.path.join(FIX, "stix_bundle.json"), "mitre_attack_stix")
+        self._add("f-tranco", os.path.join(FIX, "vulnlookup", "cwec.ndjson"), "mitre_weakness_json")
+        self._add("f-dga", os.path.join(FIX, "vulnlookup", "capec.ndjson"), "mitre_weakness_json")
         out = os.path.join(self.sb.dir, "lk")
-        kw = dict(cve_sources=("f-kev", "f-urlhaus"), attack_sources={"f-attack": "enterprise"}, kev_source="none")
+        kw = dict(cve_sources=("f-kev", "f-urlhaus"), attack_sources={"f-attack": "enterprise"}, kev_source="none",
+                  weakness_sources=("f-tranco", "f-dga"))
         d, man = lookup.build(self.st, self.reg, "commercial_training", out_root=out, **kw)
         with open(os.path.join(d, "cve.jsonl")) as f:
             cve = {r["cve"]: r for r in map(json.loads, f)}
@@ -45,6 +48,14 @@ class Lookup(unittest.TestCase):
         with open(os.path.join(d, "attack.jsonl")) as f:
             att = [json.loads(l) for l in f]
         self.assertTrue(att and all(set(r) == {"id", "name", "tactics", "domains"} for r in att))
+        with open(os.path.join(d, "cwe.jsonl")) as f:
+            cwe = [json.loads(l) for l in f]
+        with open(os.path.join(d, "capec.jsonl")) as f:
+            capec = [json.loads(l) for l in f]
+        self.assertEqual([c["id"] for c in cwe], ["CWE-9001"])  # grouping rejected, deprecated left out
+        self.assertEqual((cwe[0]["parents"], cwe[0]["capec"]), (["CWE-9000"], ["CAPEC-9101"]))
+        self.assertEqual((capec[0]["cwe"], capec[0]["attack"], capec[0]["parents"], capec[0]["severity"]),
+                         (["CWE-9001"], ["T1574.010"], ["CAPEC-9100"], "High"))
         for f in man["files"]:
             self.assertEqual(f["sha256"], lookup._sha(os.path.join(d, f["file"])))
             self.assertEqual(os.stat(os.path.join(d, f["file"])).st_mode & 0o222, 0)

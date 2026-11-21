@@ -25,6 +25,7 @@ NAMES = (
     "phiusiil_csv",
     "cve_record_v5",
     "osv_advisory",
+    "mitre_weakness_json",
 )
 
 

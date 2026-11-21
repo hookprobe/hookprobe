@@ -6867,13 +6867,19 @@
     "vulnerability_intelligence"
    ],
    "priority": 2,
-   "acquisition": null,
+   "acquisition": {
+    "url": "https://vulnerability.circl.lu/dumps/capec.ndjson",
+    "adapter": "mitre_weakness_json",
+    "max_bytes": 268435456,
+    "compression": null
+   },
    "verified_on": "2026-11-18",
    "verification_status": "verified",
    "evidence": [
-    "https://capec.mitre.org/about/termsofuse.html"
+    "https://capec.mitre.org/about/termsofuse.html",
+    "https://vulnerability.circl.lu/dumps/"
    ],
-   "notes": "Same MITRE royalty-free research/development/commercial grant as ATT&CK/CWE."
+   "notes": "Same MITRE royalty-free research/development/commercial grant as ATT&CK/CWE. 2026-11-21: acquired from CIRCL Vulnerability-Lookup's capec.ndjson (2,524,314 bytes that day), MITRE's XML catalogue converted to JSON per entry; names and text are as in that conversion. MITRE's copyright and licence notice must accompany copies."
   },
   {
    "id": "mitre-cwe",
@@ -6920,13 +6926,19 @@
     "vulnerability_intelligence"
    ],
    "priority": 3,
-   "acquisition": null,
+   "acquisition": {
+    "url": "https://vulnerability.circl.lu/dumps/cwec.ndjson",
+    "adapter": "mitre_weakness_json",
+    "max_bytes": 268435456,
+    "compression": null
+   },
    "verified_on": "2026-11-18",
    "verification_status": "verified",
    "evidence": [
-    "https://cwe.mitre.org/about/termsofuse.html"
+    "https://cwe.mitre.org/about/termsofuse.html",
+    "https://vulnerability.circl.lu/dumps/"
    ],
-   "notes": "Free 'for any research, development, and/or commercial purposes'; copies must keep copyright + licence."
+   "notes": "Free 'for any research, development, and/or commercial purposes'; copies must keep copyright + licence. 2026-11-21: acquired from CIRCL Vulnerability-Lookup's cwec.ndjson (13,703,503 bytes that day), MITRE's XML catalogue converted to JSON per entry; names and text are as in that conversion. MITRE's copyright and licence notice must accompany copies."
   },
   {
    "id": "mitre-d3fend",

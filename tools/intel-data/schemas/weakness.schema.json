@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hookprobe.com/schemas/heqk-intel/weakness/1",
+  "title": "Weakness",
+  "description": "One MITRE CWE weakness or CAPEC attack pattern: the identifier, name and short description, how it relates to the other catalogue, and (CAPEC) the ATT&CK techniques MITRE maps it to. Facts as the catalogue states them; nothing inferred.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "catalog", "entry_id", "name", "abstraction", "status", "description", "likelihood", "typical_severity", "parents", "related_cwe", "related_capec", "attack_mapping"],
+  "properties": {
+    "schema": { "const": "heqk.weakness/1" },
+    "catalog": { "enum": ["CWE", "CAPEC"] },
+    "entry_id": { "type": "string", "pattern": "^(CWE|CAPEC)-[0-9]+$" },
+    "name": { "type": "string", "minLength": 1, "maxLength": 512 },
+    "abstraction": { "type": ["string", "null"], "maxLength": 64 },
+    "status": { "type": ["string", "null"], "maxLength": 64 },
+    "description": { "type": ["string", "null"], "maxLength": 8192 },
+    "likelihood": { "type": ["string", "null"], "maxLength": 32 },
+    "typical_severity": { "type": ["string", "null"], "maxLength": 32 },
+    "parents": { "type": "array", "items": { "type": "string", "pattern": "^(CWE|CAPEC)-[0-9]+$" }, "uniqueItems": true },
+    "related_cwe": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/cwe_id" }, "uniqueItems": true },
+    "related_capec": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/capec_id" }, "uniqueItems": true },
+    "attack_mapping": { "$ref": "common.schema.json#/$defs/attack_mapping" }
+  }
+}
