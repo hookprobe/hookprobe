@@ -134,6 +134,97 @@ pub fn server_probe_failed(name: &str) -> u32 {
     j().open(c, kind, Rung::Restart, now_ms())
 }
 
+// --- H4c: the complaint channel ---
+/// Why the kernel complained about a server's reply (index into the per-component counters).
+pub const WHY_NAMES: [&str; 2] = ["bad-length", "bad-status"];
+/// The reply reported more output than the IO region holds (or a record of the wrong size).
+pub const WHY_BAD_LENGTH: u8 = 0;
+/// The reply carried a status the protocol does not define for that command.
+pub const WHY_BAD_STATUS: u8 = 1;
+static mut COMPLAINTS: [[u32; 2]; 8] = [[0; 2]; 8];
+
+/// H4c: a server answered without faulting, but its reply broke the call protocol (a length past its output region,
+/// a status the ABI does not define). Until now the kernel clamped such a reply and used it; now the reply is refused
+/// (the caller sees ST_PANIC, fail closed), the complaint is journaled (kind complaint, rung restart) and the server is
+/// reset by its caller, like a fault. Returns the journal sequence number.
+pub fn server_complaint(name: &str, why: u8) -> u32 {
+    let c = component_id(name);
+    mark(c);
+    unsafe { (*core::ptr::addr_of_mut!(COMPLAINTS))[(c & 7) as usize][(why as usize).min(1)] += 1 };
+    let kind = if unsafe { DELIBERATE } != 0 { Kind::Planned } else { Kind::Complaint };
+    arch_aarch64::_print(format_args!(" [SUPERV] {} broke the call protocol ({}): reply refused, server reset (journaled, kind {})\n",
+        name, WHY_NAMES[(why as usize).min(1)], kind.name()));
+    j().open(c, kind, Rung::Restart, now_ms())
+}
+
+/// Complaints since boot, per component and reason.
+pub fn complaints(c: u8) -> [u32; 2] {
+    unsafe { (*core::ptr::addr_of!(COMPLAINTS))[(c & 7) as usize] }
+}
+
+/// H4c test hook (QEMU images only): the next reply of component `c` is read as if the server had reported a broken
+/// length, so the self-test drives the real refusal path. A metal image has no way to set it.
+#[cfg(not(feature = "cm5"))]
+static mut INJECT: u8 = 0;
+
+#[cfg(not(feature = "cm5"))]
+pub fn inject_bad_reply(c: u8) {
+    unsafe { INJECT |= 1 << (c & 7) };
+}
+
+/// Consume a pending test injection for component `c` (always false on metal).
+#[inline]
+pub fn take_injected(c: u8) -> bool {
+    #[cfg(not(feature = "cm5"))]
+    unsafe {
+        let bit = 1u8 << (c & 7);
+        let hit = INJECT & bit != 0;
+        INJECT &= !bit;
+        hit
+    }
+    #[cfg(feature = "cm5")]
+    {
+        let _ = c;
+        false
+    }
+}
+
+/// [P-superv-complain] (QEMU) — H4c: for each loaded EL0 server (el0-lansvc, el0-tlshost, el0-hsh) a reply with a broken
+/// length is refused (the call answers ST_PANIC), the journal holds one `complaint` entry for that server, the server is
+/// reset (a restart, the restart policy untouched), and the next call answers normally; the entry closes Recovered.
+#[cfg(all(feature = "mctls", not(feature = "cm5")))]
+pub fn complain_selftest() -> bool {
+    let saved = swap(Journal::new());
+    let counters = unsafe { *core::ptr::addr_of!(COMPLAINTS) }; // the drill's complaints are not the boot's
+    let mut ran = 0u32;
+    let mut pass = true;
+    let mut one = |name: &str, r: Option<bool>| {
+        let Some(ok) = r else { return };
+        ran += 1;
+        let c = component_id(name);
+        let jj = journal();
+        let entry = jj.newest_first().find(|e| e.component == c);
+        let journaled = entry.is_some_and(|e| e.kind == Kind::Complaint && e.rung == Rung::Restart && e.outcome == Outcome::Recovered);
+        let counted = complaints(c)[WHY_BAD_LENGTH as usize] > 0;
+        arch_aarch64::_print(format_args!("   [P-superv-complain] {}: refused + reset + answers again={} journaled complaint, closed Recovered={} counted={}\n",
+            name, ok, journaled, counted));
+        pass &= ok && journaled && counted;
+    };
+    one("el0-lansvc", crate::lansvc::complain_drill());
+    one("el0-tlshost", crate::tlshost::complain_drill());
+    #[cfg(feature = "hsh")]
+    one("el0-hsh", crate::hsh::complain_drill());
+    let open = journal().newest_first().any(|e| e.outcome == Outcome::Pending);
+    let _ = swap(saved);
+    unsafe { COMPLAINTS = counters };
+    let pass = pass && ran >= 2 && !open;
+    arch_aarch64::_print(format_args!(
+        " [P-superv-complain] {} — autoheal harness H4c, the complaint channel: {} servers drilled; a reply that breaks the call protocol is refused, journaled kind complaint and the server reset; no entry left open={}\n",
+        if pass { "PASS" } else { "FAIL" }, ran, !open
+    ));
+    pass
+}
+
 static mut PROBES: hal::superv::ProbeClock = hal::superv::ProbeClock::new();
 /// (probes run, probes failed) since boot.
 static mut PROBE_STATS: (u64, u64) = (0, 0);
@@ -263,8 +354,28 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
         let _ = write!(w, "{}{{\"component\":\"{}\",\"window_ms\":{},\"budget_ms\":{},\"last_us\":{},\"peak_us\":{},\"throttled_windows\":{},\"refused_calls\":{}}}",
             if i > 0 { "," } else { "" }, e.name, hal::superv::CPU_WINDOW_MS, e.cpu_ms_per_window, c.last_us, c.peak_us, c.throttled_windows, c.refused_calls);
     }
+    // H4c: complaints per component per reason (nonzero only)
+    w.raw("],\"complaints\":{");
+    let mut first = true;
+    for e in hal::superv::TABLE.iter() {
+        let n = complaints(component_id(e.name));
+        if n.iter().all(|&x| x == 0) {
+            continue;
+        }
+        let _ = write!(w, "{}\"{}\":{{", if first { "" } else { "," }, e.name);
+        first = false;
+        let mut f2 = true;
+        for (k, why) in WHY_NAMES.iter().enumerate() {
+            if n[k] > 0 {
+                let _ = write!(w, "{}\"{}\":{}", if f2 { "" } else { "," }, why, n[k]);
+                f2 = false;
+            }
+        }
+        w.raw("}");
+    }
+    w.raw("}");
     let (pr, pf) = probe_stats();
-    let _ = write!(w, "],\"probes\":{{\"period_ms\":{},\"run\":{},\"failed\":{}}},\"now_ms\":{},\"recoveries\":[", hal::superv::PROBE_PERIOD_MS, pr, pf, now_ms());
+    let _ = write!(w, ",\"probes\":{{\"period_ms\":{},\"run\":{},\"failed\":{}}},\"now_ms\":{},\"recoveries\":[", hal::superv::PROBE_PERIOD_MS, pr, pf, now_ms());
     for (i, r) in jj.newest_first().take(limit).enumerate() {
         let _ = write!(w, "{}{{\"seq\":{},\"component\":\"{}\",\"kind\":\"{}\",\"rung\":\"{}\",\"outcome\":\"{}\",\"repeats\":{},\"t_detect_ms\":{},",
             if i > 0 { "," } else { "" }, r.seq, component_name(r.component), r.kind.name(), r.rung.name(), r.outcome.name(), r.repeats, r.t_detect_ms);

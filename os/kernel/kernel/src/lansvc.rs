@@ -84,6 +84,8 @@ mod el0 {
         nrw: usize,
         pub calls: u64,
         pub faults: u64,
+        /// H4c: replies refused for breaking the call protocol.
+        pub complaints: u64,
         pub restarts: u64,
         /// H2: the restart state under the supervisor table's policy (a server faulting on every call is held off).
         sup: hal::superv::Sup,
@@ -134,7 +136,7 @@ mod el0 {
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(LANSVC_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-lansvc").unwrap_or(&hal::superv::TABLE[0])), last_out: 0, probe_gold: [None; KNOWN_N], probe_at: 0 };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, complaints: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-lansvc").unwrap_or(&hal::superv::TABLE[0])), last_out: 0, probe_gold: [None; KNOWN_N], probe_at: 0 };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -270,11 +272,31 @@ mod el0 {
                 self.reset();
                 return (ST_PANIC, 0);
             }
+            // H4c: a reported length past the output region is a broken reply, not something to clamp and use
+            let injected = crate::superv::take_injected(hal::superv::C_LANSVC);
+            let n = if injected { OUT_MAX + 1 } else { self.r32(H_OUT_LEN) as usize };
+            if n > OUT_MAX {
+                self.complained(crate::superv::WHY_BAD_LENGTH, injected);
+                return (ST_PANIC, 0);
+            }
             if self.sup.ok() {
                 crate::superv::server_ok("el0-lansvc");
             }
-            self.last_out = (self.r32(H_OUT_LEN) as usize).min(OUT_MAX);
+            self.last_out = n;
             (st, self.last_out)
+        }
+        /// H4c: the reply broke the call protocol without a fault — journal the complaint and reset (fail closed). A
+        /// test injection, or one inside `superv::deliberate`, stays out of the restart policy.
+        fn complained(&mut self, why: u8, injected: bool) {
+            self.complaints += 1;
+            let _ = crate::superv::server_complaint("el0-lansvc", why);
+            if injected || !crate::superv::fault_counts() {
+                self.sup.fault_uncounted();
+            } else {
+                let _ = self.sup.fault(crate::superv::now_ms());
+            }
+            self.last_out = 0; // reset zeroes the IO region
+            self.reset();
         }
         /// H4a functional probe: an echo of a fixed pattern through the full call path (control page, IO pages, the
         /// server's loop). None = not asked (hold-off) or it FAULTED (the fault path already handled that);
@@ -432,6 +454,22 @@ pub fn stats() -> (&'static str, u64, u64, u64, u64) {
         return ("el0", s.calls, s.faults, s.restarts, unsafe { IN_KERNEL });
     }
     ("el1", 0, 0, 0, unsafe { IN_KERNEL })
+}
+
+/// H4c drill (QEMU): a broken reply is refused (ST_PANIC), the server reset as a restart (not a fault, the restart policy
+/// untouched) and the next call echoes again. None = no EL0 server.
+#[cfg(all(feature = "mctls", not(feature = "cm5")))]
+pub fn complain_drill() -> Option<bool> {
+    use hal::lansvcabi::{CMD_NOP_COPY, OUT_OFF, ST_OK, ST_PANIC};
+    let s = el0::server()?;
+    let (r0, f0, c0) = (s.restarts, s.faults, s.complaints);
+    crate::superv::inject_bad_reply(hal::superv::C_LANSVC);
+    let refused = s.call(CMD_NOP_COPY, b"complaint drill").0 == ST_PANIC;
+    let counted = s.restarts == r0 + 1 && s.faults == f0 && s.complaints == c0 + 1;
+    let (st, n) = s.call(CMD_NOP_COPY, b"complaint drill");
+    let mut out = [0u8; 15];
+    s.read(OUT_OFF, &mut out);
+    Some(refused && counted && st == ST_OK && n == 15 && &out == b"complaint drill")
 }
 
 /// H4a: the functional probe of the EL0 LAN-services server (see `el0::Server::probe`). None = no EL0 server.

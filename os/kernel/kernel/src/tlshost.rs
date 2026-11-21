@@ -113,6 +113,8 @@ pub struct TlsHost {
     pub calls: u32,
     pub timeouts: u32,
     pub faults: u32,
+    /// H4c: replies refused for breaking the call protocol.
+    pub complaints: u32,
     pub restarts: u32,
     /// H2: the restart state under the supervisor table's policy.
     sup: hal::superv::Sup,
@@ -172,6 +174,7 @@ impl TlsHost {
             calls: 0,
             timeouts: 0,
             faults: 0,
+            complaints: 0,
             restarts: 0,
             sup: hal::superv::Sup::new(hal::superv::entry("el0-tlshost").unwrap_or(&hal::superv::TABLE[0])),
             need_init: false,
@@ -367,18 +370,29 @@ impl TlsHost {
             self.reset();
             return Reply { status, tls_len: 0, plain_len: 0, flags: F_CLOSED };
         }
+        // H4c: a reported length past its output region is a broken reply (until now clamped and used): refused,
+        // journaled kind complaint, the server reset like a fault (every session drops)
+        let injected = crate::superv::take_injected(hal::superv::C_TLSHOST);
+        let tls_len = if injected { OUT_TLS_MAX + 1 } else { self.r32(H_OUT_TLS) as usize };
+        let plain_len = self.r32(H_OUT_PLAIN) as usize;
+        if tls_len > OUT_TLS_MAX || plain_len > OUT_PLAIN_MAX {
+            self.complaints += 1;
+            let _ = crate::superv::server_complaint("el0-tlshost", crate::superv::WHY_BAD_LENGTH);
+            if injected || !crate::superv::fault_counts() {
+                self.sup.fault_uncounted();
+            } else {
+                let _ = self.sup.fault(crate::superv::now_ms());
+            }
+            self.reset();
+            return Reply { status: ST_PANIC, tls_len: 0, plain_len: 0, flags: F_CLOSED };
+        }
         if self.sup.ok() {
             crate::superv::server_ok("el0-tlshost");
         }
         if status == ST_TLS_ERROR {
             self.tls_errors += 1;
         }
-        Reply {
-            status,
-            tls_len: (self.r32(H_OUT_TLS) as usize).min(OUT_TLS_MAX),
-            plain_len: (self.r32(H_OUT_PLAIN) as usize).min(OUT_PLAIN_MAX),
-            flags: self.r32(H_FLAGS),
-        }
+        Reply { status, tls_len, plain_len, flags: self.r32(H_FLAGS) }
     }
 
     /// H4b functional probe: the server parses one well-formed request (must be accepted, with a full record) and one
@@ -698,6 +712,19 @@ pub fn cert_chain(file: &[u8; CERT_FILE_LEN]) -> ([&[u8]; 4], usize) {
 /// H4b: the functional probe of the EL0 TLS server (see `TlsHost::probe`). None = no EL0 server.
 pub fn probe(tamper: bool) -> Option<bool> {
     host()?.probe(tamper)
+}
+
+/// H4c drill (QEMU): a broken reply is refused (ST_PANIC), the server reset as a restart (not a fault), the deferred
+/// re-INIT runs at the next call and the probe answers again. None = no EL0 TLS server.
+#[cfg(not(feature = "cm5"))]
+pub fn complain_drill() -> Option<bool> {
+    let h = host()?;
+    let (r0, f0, t0, c0) = (h.restarts, h.faults, h.timeouts, h.complaints);
+    crate::superv::inject_bad_reply(hal::superv::C_TLSHOST);
+    let refused = h.call(CMD_HTTP_PARSE, 0, b"GET / HTTP/1.1\r\n\r\n", 0).status == ST_PANIC;
+    let counted = h.restarts == r0 + 1 && h.faults == f0 && h.timeouts == t0 && h.complaints == c0 + 1;
+    let again = probe(false) == Some(true);
+    Some(refused && counted && again)
 }
 
 /// [P-tlshost-probe] (QEMU, after `bring_up`): the probe answers; a simulated wrong answer is journaled kind probe,
