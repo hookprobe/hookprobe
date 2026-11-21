@@ -1,6 +1,7 @@
 /**
  * CommandPalette — the AI Copilot overlay (⌘K / Ctrl+K), wired to the REAL AEGIS BYO-LLM planner
- * (ADR 0025, `crates/hookprobe-planner`) — ends the Layer-0 canned-response era for this surface.
+ * (ADR 0025; routes `/api/planner/*`) — ends the Layer-0 canned-response era for this surface. heqk
+ * has no on-device planner yet: it answers `configured: false` and the palette says so.
  *
  * Spec (MissionControl.md §Global chrome):
  *   "State intent or ask anything; returns an answer with evidence, or a plan
