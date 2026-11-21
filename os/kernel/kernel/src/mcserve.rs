@@ -778,6 +778,8 @@ pub fn run() -> ! {
     let _ = crate::hsh::selftest(0); // ADR 0059 step 4a: the EL0 management shell + the management ABI
     #[cfg(feature = "mctls")]
     let _ = crate::superv::complain_selftest(); // autoheal harness H4c: the complaint channel (every EL0 server loaded by now)
+    #[cfg(all(feature = "hsh", feature = "mctls"))]
+    let _ = crate::hsh::probe_selftest(); // D1: the functional probe of el0-hsh
     let _ = crate::el0as::report(); // ADR 0065 S0: every resident EL0 server loaded by now is in its own address space
     #[cfg(feature = "hsh")]
     let _ = crate::hsh::selftest_web(0); // R6 = D: owner-signed HQMGMT1 envelopes on the web carrier

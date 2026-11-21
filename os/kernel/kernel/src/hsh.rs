@@ -94,6 +94,8 @@ mod el0 {
         /// H2: the restart state under the supervisor table's policy (a server faulting on every call is held off).
         sup: hal::superv::Sup,
         pub role: u8,
+        /// D1 (abandoned endpoint): the digest of this boot's first `help` answer (taken twice), the probe's reference.
+        probe_gold: Option<u64>,
     }
     pub static mut SRV: Option<Server> = None;
     static mut TRIED: bool = false;
@@ -135,7 +137,7 @@ mod el0 {
     fn load() -> Result<Server, &'static str> {
         let parsed = crate::elf::parse(HSH_ELF).map_err(|_| "ELF parse")?;
         let aspace = crate::el0as::El0As::new().ok_or("no address space")?;
-        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, complaints: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-hsh").unwrap_or(&hal::superv::TABLE[0])), role: 0 };
+        let mut s = Server { entry: parsed.entry, aspace, sp_top: BASE + STACK_OFF + STACK_SIZE, io: [0; IO_PAGES], rw: [(0, 0, 0); RW_MAX], nrw: 0, calls: 0, faults: 0, complaints: 0, restarts: 0, sup: hal::superv::Sup::new(hal::superv::entry("el0-hsh").unwrap_or(&hal::superv::TABLE[0])), role: 0, probe_gold: None };
         for g in parsed.segs[..parsed.nsegs].iter() {
             if g.vaddr < BASE || g.vaddr + g.memsz > BASE + IMAGE_MAX {
                 return Err("segment outside the window"); // the image must stay inside its own window
@@ -264,6 +266,66 @@ mod el0 {
                 crate::superv::server_ok("el0-hsh");
             }
             (st, n)
+        }
+        /// D1 (abandoned endpoint: a server that stops answering its protocol without faulting): the functional probe
+        /// of the management shell. `help` at the view role must answer text whose digest equals this boot's first
+        /// answer (the text is static). None = not asked (hold-off) or it FAULTED (the fault path handled that);
+        /// Some(false) = a wrong answer without a fault -> journaled (kind probe) and reset. `tamper` (self-test only):
+        /// treat a right answer as wrong, kept out of the restart policy. Never journaled as a shell command.
+        pub fn probe(&mut self, tamper: bool) -> Option<bool> {
+            if !self.sup.ready(crate::superv::now_ms()) {
+                return None;
+            }
+            let role = core::mem::replace(&mut self.role, 0);
+            let d = self.help_digest();
+            let good = match d? {
+                0 => false,
+                d => match self.probe_gold {
+                    Some(g) => d == g,
+                    None => match self.help_digest() {
+                        Some(d2) if d2 == d => {
+                            self.probe_gold = Some(d);
+                            true
+                        }
+                        Some(_) => false,
+                        None => return None,
+                    },
+                },
+            };
+            self.role = role;
+            if good && !tamper {
+                return Some(true);
+            }
+            let _ = crate::superv::server_probe_failed("el0-hsh");
+            if tamper {
+                self.sup.fault_uncounted();
+            } else {
+                let _ = self.sup.fault(crate::superv::now_ms());
+            }
+            self.reset();
+            Some(false)
+        }
+        /// `help` reduced to a digest of (status, length, text); Some(0) = not a text answer; None = it faulted.
+        fn help_digest(&mut self) -> Option<u64> {
+            let (st, n) = self.call(CMD_LINE, b"help");
+            if st == ST_PANIC {
+                return None;
+            }
+            if st != ST_TEXT || n == 0 {
+                return Some(0);
+            }
+            let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ n as u64;
+            let mut buf = [0u8; 256];
+            let mut off = 0;
+            while off < n {
+                let c = (n - off).min(buf.len());
+                self.read(OUT_OFF + off, &mut buf[..c]);
+                for b in &buf[..c] {
+                    h = (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                off += c;
+            }
+            Some(h.max(1))
         }
         /// H6 (swifi campaign only): flip one bit in a random page of the server's image. Returns the class hit.
         #[cfg(feature = "swifi")]
@@ -497,6 +559,37 @@ pub fn journal_words(line: &[u8], why: &mut [u8; 64]) -> usize {
         }
     }
     k
+}
+
+/// D1: the functional probe of el0-hsh, only when it is loaded (the probe never loads it). None = not loaded.
+#[cfg(feature = "mctls")]
+pub fn probe(tamper: bool) -> Option<bool> {
+    unsafe { (*core::ptr::addr_of_mut!(el0::SRV)).as_mut() }?.probe(tamper)
+}
+
+/// [P-probe-hsh] (QEMU): the probe answers; a simulated wrong answer is journaled kind probe and the shell reset (a
+/// restart, the restart policy untouched); the next probe answers; the entry closes Recovered.
+#[cfg(all(feature = "hsh", feature = "mctls", not(feature = "cm5")))]
+pub fn probe_selftest() -> bool {
+    let Some(r0) = el0::server().map(|s| s.restarts) else {
+        arch_aarch64::_print(format_args!(" [P-probe-hsh] FAIL — the EL0 shell is not loaded\n"));
+        return false;
+    };
+    let saved = crate::superv::swap(hal::superv::Journal::new());
+    let good = probe(false) == Some(true);
+    let wrong = probe(true) == Some(false);
+    let counted = el0::server().is_some_and(|s| s.restarts == r0 + 1);
+    let again = probe(false) == Some(true);
+    let j = crate::superv::journal();
+    let c = hal::superv::component_id("el0-hsh");
+    let journaled = j.newest_first().any(|e| e.component == c && e.kind == hal::superv::Kind::Probe && e.outcome == hal::superv::Outcome::Recovered);
+    let _ = crate::superv::swap(saved);
+    let pass = good && wrong && counted && again && journaled;
+    arch_aarch64::_print(format_args!(
+        " [P-probe-hsh] {} — D1 abandoned endpoint, the functional probe of el0-hsh: help answers its recorded text={} a wrong answer (no fault) is caught={} reset as a restart={} the next probe answers={} journaled kind probe, closed Recovered={}\n",
+        if pass { "PASS" } else { "FAIL" }, good, wrong, counted, again, journaled
+    ));
+    pass
 }
 
 /// H4c drill (QEMU): a broken reply is refused (ST_PANIC), the server reset as a restart (not a fault, the restart policy
