@@ -25,6 +25,7 @@ import run_eval  # noqa: E402
 
 import re
 
+GOLD_SEVERITY = {"malicious": "high", "suspicious": "medium", "benign": "info", "insufficient_evidence": "low"}
 KEYS = ("schema_ok", "verdict_ok", "citation_ok", "mention_ok", "forbid_ok", "lang_ok")
 
 
@@ -58,6 +59,11 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--valid", type=float, default=0.05)
     ap.add_argument("--no-echo", action="store_true", help="reject answers that reproduce attacker-controlled text")
+    ap.add_argument("--relabel-hedges", action="store_true",
+                    help="a teacher 'suspicious' on a gold-'malicious' case is a hedge, not an error: keep it and write the "
+                         "gold verdict (and its severity) into the target. Hybrid mode takes the verdict from L0. Any other "
+                         "verdict disagreement (e.g. 'suspicious' on an explained false positive) is still rejected: there the "
+                         "summary itself is wrong.")
     a = ap.parse_args()
     cases = {}
     for path in a.cases.split(","):
@@ -66,16 +72,22 @@ def main():
     for path in a.run.split(","):
         r = json.load(open(path))
         run += r["results"] if isinstance(r, dict) else r
-    keep, why = [], {}
+    keep, why, relabelled = [], {}, 0
     for r in run:
         c = cases[r["id"]]
         o = r["outputs"][0]
         s = run_eval.score(c, o)
-        bad = [k for k in KEYS if k in s and not s[k]] + (["halluc"] if s.get("hallucinated_entities") else []) + \
+        gv = c["gold"]["verdict"]
+        gv = gv[0] if isinstance(gv, list) else gv
+        hedge = a.relabel_hedges and not s.get("verdict_ok", True) and o.get("verdict") == "suspicious" and gv == "malicious"
+        bad = [k for k in KEYS if k in s and not s[k] and not (hedge and k == "verdict_ok")] + (["halluc"] if s.get("hallucinated_entities") else []) + \
               (["error"] if "_error" in o or "_unparseable" in o else [])
         for k in bad:
             why[k] = why.get(k, 0) + 1
         ans = {k: o[k] for k in ("verdict", "severity", "summary", "evidence", "entities", "next_step", "confidence") if k in o}
+        if hedge and not bad:
+            ans["verdict"], ans["severity"] = gv, GOLD_SEVERITY[gv]
+            relabelled += 1
         if not bad and a.no_echo and echoes(c, ans):
             bad = ["echo"]
             why["echo"] = why.get("echo", 0) + 1
@@ -93,6 +105,7 @@ def main():
             for row in rows:
                 f.write(json.dumps({"messages": row["messages"]}, ensure_ascii=False) + "\n")
     print("teacher answers: %d, kept %d (%.1f%%); rejected by: %s" % (len(run), len(keep), 100 * len(keep) / max(1, len(run)), why))
+    print("hedges relabelled suspicious->malicious: %d" % relabelled)
     print("train %d / valid %d; RO kept %d" % (len(keep) - nv, nv, sum(r["_lang"] == "ro" for r in keep)))
 
 

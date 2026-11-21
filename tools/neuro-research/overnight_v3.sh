@@ -3,7 +3,7 @@
 set -uo pipefail
 S=$1; O=$S/t0v3; T=$(cd "$(dirname "$0")" && pwd)
 log() { echo "[$(date '+%F %T')] $*"; }
-until grep -qE 'T0v3 DONE' "$O/pipeline.log"; do sleep 60; done
+until grep -qE 'REDO DONE' "$O/redo.log" 2>/dev/null; do sleep 60; done
 log "T0 v3 filtered: $(wc -l < $O/sft/train.jsonl) train / $(wc -l < $O/sft/valid.jsonl) valid"
 mkdir -p "$O/mixA" "$O/mixB"
 cp "$O/sft/train.jsonl" "$O/sft/valid.jsonl" "$O/mixA/"
