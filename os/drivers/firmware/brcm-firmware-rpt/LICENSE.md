@@ -12,6 +12,15 @@ AGPL-3.0 licence. They are redistributed under their owners' terms, as packaged 
 
 The licence assignments and the text below are copied from the package's `/usr/share/doc/firmware-brcm80211/copyright`.
 
+**What each licence asks when an image ships these files** (the factory disk image puts them on the boot
+partition as `CYW43455.BIN`, `CYW43455.CLM` and `CYW43455.NVR`, the last from the
+`raspberrypi,5-compute-module` NVRAM file):
+
+- **Cypress blobs (`.bin`, `.clm_blob`):** object code only, unmodified, keep the notices, and only for
+  use with Cypress (now Infineon) chips; the CM5's CYW43455 is one. Ship the licence text below with the image.
+- **NVRAM files (GPL-2):** they are plain text, so the file is its own source. Ship the GPL-2.0 text
+  ([`../LICENSES/GPL-2.0.txt`](../LICENSES/GPL-2.0.txt)) with the image.
+
 ## binary-redist-Cypress
 
 ```

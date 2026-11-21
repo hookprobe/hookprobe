@@ -29,9 +29,9 @@ export const [detections, setDetections] = createSignal<DetectionRow[]>([]);
 export const [detectStatus, setDetectStatus] = createSignal<LiveStatus>('loading');
 export const [detectError, setDetectError] = createSignal<string | null>(null);
 
-/** One `GET /api/engines` row — see `crates/hookprobe-api/src/engine_status.rs`'s doc for the
- * exact shape. `source` is the honesty flag: `"real"` (Sigma/YARA, from their own status files)
- * vs `"mock"` (Suricata/AI Detection/Behavioral — no backing engine exists in this workspace). */
+/** One `GET /api/engines` row — see heqk `mcstate.rs` `render_engines` for the exact shape.
+ * `source` is the honesty flag: heqk always sends `"real"` (its own detection tiers); `"mock"` would
+ * mark a row with no backing engine. */
 export interface EngineRow {
   name: string;
   kind: string | null;
