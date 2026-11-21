@@ -436,6 +436,29 @@ mod imp {
                 ring::reset(&mut self.tx);
             }
         }
+        /// H7: a wipe the caller did not see as a fault (the server refused its saved state): open the episode, so
+        /// the next good call closes the journal entry. Not counted for the restart policy.
+        pub fn wipe_opened(&mut self) {
+            self.sup.fault_uncounted();
+        }
+        /// H7 test hook (QEMU): flip one bit of the persistent state the server would load next — a data byte of slot 0
+        /// when that slot is the selected one, else the selected slot's check word. False = nothing saved yet.
+        #[cfg(all(feature = "wpa3", not(feature = "cm5")))]
+        pub fn corrupt_state(&mut self) -> bool {
+            if self.nstate == 0 {
+                return false;
+            }
+            let p = self.state[0];
+            unsafe {
+                if core::ptr::read_volatile(p as *const u64) == 0 {
+                    return false; // never saved
+                }
+                let sel = (core::ptr::read_volatile((p + 8) as *const u64) & 1) as usize;
+                let at = if sel == 0 { p + 0x40 + 7 } else { p + 16 + 8 * sel };
+                core::ptr::write_volatile(at as *mut u8, core::ptr::read_volatile(at as *const u8) ^ 0x10);
+            }
+            true
+        }
         /// A full wipe (ADR 0065 step 4g): the reset, AND the persistent state pages zeroed — every secret the server
         /// held is gone. The next call starts a fresh, empty incarnation.
         pub fn full_wipe(&mut self) {
@@ -797,14 +820,21 @@ pub mod keyer {
     /// Contained faults (one station forgotten), poisoned stations (PMKSA entry dropped), full wipes signalled.
     pub static mut CONTAINED: u64 = 0;
     pub static mut POISONED: u64 = 0;
+    /// H7: saved states refused by el0-wpa's integrity check (each one full-wiped, never reused).
+    pub static mut STATE_BAD: u64 = 0;
     /// Set by a full wipe; the driver takes it (deauthenticate everyone, re-provision the passphrase).
     static mut WIPED: bool = false;
-    /// A full wipe: every secret el0-wpa held is gone, every station must re-authenticate.
-    fn full_wipe() {
+    /// A full wipe: every secret el0-wpa held is gone, every station must re-authenticate. `bad_state` = the server
+    /// refused its saved state (H7: its integrity check), else a fault that could not be contained.
+    fn full_wipe(bad_state: bool) {
         let mut pages = 0;
         if let Some(s) = srv() {
             s.full_wipe();
             pages = s.nstate;
+            let _ = crate::superv::state_wiped("el0-wpa", bad_state); // H7: journaled, rung wipe
+            if bad_state {
+                s.wipe_opened();
+            }
         }
         super::imp::keyx_zero();
         arch_aarch64::_print(format_args!(" [EL0-WPA] FULL WIPE: {} state page(s) + the key-transfer page zeroed (the PMKSA cache, SAE state, PMKs and group keys are gone)\n", pages));
@@ -923,7 +953,8 @@ pub mod keyer {
         }
         match c {
             Call::Done(st, ..) if st == hal::wpasrvabi::ST_STATE_BAD => {
-                full_wipe();
+                unsafe { STATE_BAD += 1 };
+                full_wipe(true);
                 return Some((Call::Fault, 0));
             }
             Call::Fault => unsafe {
@@ -935,7 +966,7 @@ pub mod keyer {
                         PENDING = Some((x, poison));
                         CONTAINED += 1;
                     }
-                    _ => full_wipe(),
+                    _ => full_wipe(false),
                 }
             },
             Call::Done(..) => unsafe { CONSEC = 0 },
@@ -1266,6 +1297,53 @@ pub mod keyer {
         arch_aarch64::_print(format_args!(
             " [P-el0wpa-contain] {} — ADR 0065 step 4g S2: per-station fault containment in el0-wpa: station A keying + a PMKSA entry={} a fault in station B's call is contained (not a wipe)={} after the restart A's handshake is still there={} the PMKSA cache is intact ({:?} entries)={} B is forgotten={} B's second fault in a row drops its PMKSA entry only={} a fault outside any station call full-wipes (cache empty, A forgotten, the driver told to re-key everyone)={}\n",
             if pass { "PASS" } else { "FAIL" }, a_hs, b_fault, a_kept, c0, cache_kept, b_gone, poisoned, wiped
+        ));
+        pass
+    }
+
+    /// `[P-el0wpa-state]` (QEMU) — autoheal harness H7, el0-wpa's persistent state is reused only after its integrity
+    /// check: the server saves state, a station's call faults (contained: a restart that KEEPS the state pages), one
+    /// bit of the saved slot is flipped before the next incarnation loads it -> the server refuses the slot
+    /// (ST_STATE_BAD), the kernel full-wipes (never reuses it), tells the driver to re-key every station, journals it
+    /// (kind probe, rung wipe) and the next call answers from a fresh, empty state; the entry closes Recovered.
+    #[cfg(all(feature = "wpa3", not(feature = "cm5")))]
+    pub(crate) fn state_selftest() -> bool {
+        use hal::wpasrvabi as wp;
+        let wait = || {
+            let ms = |t: u64| t / (crate::clock::freq() / 1000).max(1);
+            let t0 = ms(crate::clock::ticks());
+            while ms(crate::clock::ticks()) < t0 + super::imp::BACKOFF_MS * 4 + 5 {}
+        };
+        let read = || match wpa_call(wp::CMD_STATE_READ, &[], &mut [], None) {
+            Some((Call::Done(ST_OK, n, _), _)) => Some(n),
+            _ => None,
+        };
+        let saved = crate::superv::swap(hal::superv::Journal::new());
+        let b = [2, 0x5c, 0, 0, 0, 0x0c];
+        // two saves: the selected slot is slot 0, so the flip below lands in the state data itself
+        let bump = || matches!(wpa_call(wp::CMD_STATE_BUMP, &[], &mut [], None), Some((Call::Done(ST_OK, ..), _)));
+        let saved_state = bump() && bump() && read().is_some_and(|n| n >= 2);
+        // a contained fault (one station's call): the server restarts, the state pages are kept
+        let w0 = srv().map_or(0, |s| s.wipes);
+        let _ = wpa_call(wp::CMD_SELFTEST_ARM_FAULT, &b, &mut [], None);
+        let contained = matches!(wpa_call(CMD_KEY_EXPECT, &b, &mut [0u8; 10], Some(b)), Some((Call::Fault, _))) && srv().is_some_and(|s| s.wipes == w0);
+        let corrupted = srv().is_some_and(|s| s.corrupt_state());
+        wait();
+        let bad0 = unsafe { STATE_BAD };
+        let _ = take_wiped();
+        // the next incarnation's first call: the slot fails its check -> refused, wiped, never reused
+        let refused = matches!(wpa_call(wp::CMD_STATE_READ, &[], &mut [], None), Some((Call::Fault, _)));
+        let wiped = srv().is_some_and(|s| s.wipes == w0 + 1) && unsafe { STATE_BAD } == bad0 + 1 && take_wiped();
+        wait();
+        let fresh = read() == Some(0);
+        let c = hal::superv::C_WPA;
+        let journaled = crate::superv::journal().newest_first().any(|e| e.component == c && e.rung == hal::superv::Rung::Wipe
+            && e.kind == hal::superv::Kind::Probe && e.outcome == hal::superv::Outcome::Recovered);
+        let _ = crate::superv::swap(saved);
+        let pass = saved_state && contained && corrupted && refused && wiped && fresh && journaled;
+        arch_aarch64::_print(format_args!(
+            " [P-el0wpa-state] {} — autoheal harness H7, el0-wpa state class persistent: state saved={} a contained fault keeps the pages (no wipe)={} one bit of the saved slot flipped={} the next incarnation refuses it (ST_STATE_BAD)={} full wipe + the driver told to re-key every station={} the next call answers from a fresh state={} journaled kind probe, rung wipe, closed Recovered={}\n",
+            if pass { "PASS" } else { "FAIL" }, saved_state, contained, corrupted, refused, wiped, fresh, journaled
         ));
         pass
     }
@@ -2091,6 +2169,8 @@ pub fn sae_selftest() -> bool {
     }
     // S2: the containment proof on this server (it holds a PMKSA entry for `sta` now)
     let _ = keyer::contain_selftest(&sta);
+    #[cfg(not(feature = "cm5"))]
+    let _ = keyer::state_selftest(); // autoheal harness H7: a corrupted saved state is wiped, never reused
     unsafe { WPA = None };
     let pass = setup && committed && ok_peer && accepted && clean1 && fresh && m1 && m3 && keyed && clean2 && cached && nosae && psk_own && group_own && k1 && unseeded_refuses && seeded_works;
     arch_aarch64::_print(format_args!(
