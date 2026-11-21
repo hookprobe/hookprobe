@@ -45,6 +45,31 @@ appears later, it follows the rule (test). There is no re-split.
   export).
 - The test split is sealed in the intel-data registry (`sealed.json`, scope `split:test@neuro-sha256-mod3`).
 
+**Pinned dev export (2026-11-21, intel-data #1435).** `windows-d1bc3ad9dae8`. Neuro verified every hash below, and
+all files are read-only. The 9 test scenarios appear in the manifest only as "skipped: split test not requested".
+
+| | SHA-256 | Windows | Events (background) | Labelled hosts |
+|---|---|---|---|---|
+| `manifest.json` | `6cdcaaba60452b8fb1f18e17baa72e038a774e3690717ca2845144316eebe9bc` | | | |
+| `CTU-13.Dataset-42.jsonl` | `b751eda2b0c765f4dd2974b03feb54dc01847272c46f166a30034c75b8d83ce6` | 47 | 824,913 (753,685) | 11 |
+| `CTU-13.Dataset-46.jsonl` | `945484f97a1b84bc97e34a1199fcb944a846675ed457201725bedd42ab3e872d` | 17 | 37,100 (31,531) | 12 |
+| `CTU-13.Dataset-49.jsonl` | `1cb57d552448bb3cfd0cb8a32eb0c9995c5c2661ddb653feb1d3de0623899cbd` | 109 | 708,654 (629,887) | 9 |
+
+**Host rule as exported.**
+- A window host originates `From-` or undirected `Normal-` flows.
+- A `To-` label names a verified external server, so it never makes a host. Its flows join the window of
+  whichever end is a host; otherwise they are dropped and counted (120 / 11 / 182 per scenario above).
+
+**Known format differences from IoT-23.**
+- `state` is null: Argus State is not mapped, so rep_cards' rst% reads 0.
+- `hour_utc` is the capture clock and not verified UTC.
+- Background events carry `label` null.
+
+**Lookup tables (for a CONTEXT line, not training text).** `lookup-2209c34c15c7`, manifest
+`b4f8f54ea0dff738c46407edb1dad43f711a8b5d486f095e30aa601bc7b93412`. Record facts only:
+- `cve.jsonl`: 418,514 rows. Fields: CWE, CVSS band, vendor, product, and KEV as of the 2026-11-18 snapshot.
+- `attack.jsonl`: 935 techniques (enterprise, mobile and ICS), each with name and tactics.
+
 **Purpose.** T0 v4 training and dev material: real, non-IoT botnet behaviour (Neris, Rbot, Virut, Murlo and
 others), complementing IoT-23.
 
