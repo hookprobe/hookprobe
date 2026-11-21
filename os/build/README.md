@@ -9,6 +9,7 @@ Turns the heqk workspace + the Mission Control UI into **signed** boot artifacts
 | [`gen-heqk-dev-keys.sh`](gen-heqk-dev-keys.sh) | a DEV boot-signing keydir (bench only; never for release) |
 | [`heqk-boot-key-check.sh`](heqk-boot-key-check.sh) | release-blocking gate: refuses a release image that carries DEV keys ([fingerprints](heqk-dev-key-fingerprints.txt)) |
 | [`heqk-sign/`](heqk-sign/) | the in-tree signer: Ed25519 + SLH-DSA-128s boot signatures |
+| [`licenses/gen_third_party.py`](licenses/gen_third_party.py) | [`licenses/THIRD_PARTY_NOTICES.md`](licenses/THIRD_PARTY_NOTICES.md): licence and text of every third-party crate and browser package a heqk image can contain (`--check` to verify) |
 
 ```sh
 # dev keys (once), then a production Mission Control factory image with no devicetree
