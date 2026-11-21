@@ -33,14 +33,16 @@ import hashlib
 import json
 import os
 
-from . import VERSION, canon, cvss, licensing
+from . import VERSION, canon, context, cvss, licensing
 
 CVE_SOURCES = ("cve-list-v5", "github-advisory-db", "cisa-kev")
 ATTACK_SOURCES = {"mitre-attack-stix": "enterprise", "mitre-attack-mobile": "mobile", "mitre-attack-ics": "ics"}
 WEAKNESS_SOURCES = ("mitre-cwe", "mitre-capec")
 INACTIVE = {"Deprecated", "Obsolete"}
-# 1 = cve + attack; 2 = + cwe + capec
-FORMAT = 2
+CONTEXT_SOURCES = ("iptoasn", "misp-warninglists")
+# 1 = cve + attack; 2 = + cwe + capec; 3 = + asn_ranges.tsv + warninglists.jsonl (the windows' remote_context
+# tables, so L0 at inference matches what training saw); 4 = + warninglist_phrases.jsonl, more third-party lists dropped
+FORMAT = 4
 
 
 def _newest(store, source_id):
@@ -58,11 +60,11 @@ def _records(store, acq):
 
 
 def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, attack_sources=None, kev_source="cisa-kev",
-          weakness_sources=WEAKNESS_SOURCES):
+          weakness_sources=WEAKNESS_SOURCES, context_sources=CONTEXT_SOURCES):
     """cve_sources in precedence order; kev_source is the KEV catalogue (sources are parameters for tests)."""
     attack_sources = attack_sources or ATTACK_SOURCES
     used, refused = {}, {}
-    for sid in tuple(cve_sources) + tuple(attack_sources) + tuple(weakness_sources):
+    for sid in tuple(cve_sources) + tuple(attack_sources) + tuple(weakness_sources) + tuple(context_sources):
         ok, why = licensing.decide(registry.license_of(sid), purpose)
         acq = _newest(store, sid)
         if not ok:
@@ -148,6 +150,42 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
                                         "likelihood": b["likelihood"]}
 
     files = []
+    ctx_sources = [s for s in context_sources if s in used]
+    tables = context.load(store, registry, purpose, ctx_sources) if ctx_sources else {}
+    for sid, (tab, _) in tables.items():
+        if isinstance(tab, context.ASN):
+            p = os.path.join(out, "asn_ranges.tsv")
+            with open(p + ".partial", "w", encoding="utf-8") as f:
+                f.write("family\tstart\tend\tasn\tcountry\tas_name\n")
+                for fam, s, e, asn, cc, name in tab.rows():
+                    f.write(f"{fam}\t{s}\t{e}\t{asn}\t{cc or ''}\t{(name or '').replace(chr(9), ' ')}\n")
+            nrows = sum(1 for _ in tab.rows())
+            fname = "asn_ranges.tsv"
+        else:
+            p = os.path.join(out, "warninglists.jsonl")
+            with open(p + ".partial", "w", encoding="utf-8") as f:
+                for k in sorted(tab.lists):
+                    l = tab.lists[k]
+                    f.write(json.dumps({"id": k, "name": l["name"], "type": l["type"], "category": l["category"],
+                                        "version": l["version"], "not_for_captures": k in context.NOT_FOR_CAPTURES,
+                                        "entries": l["entries"]}, separators=(",", ":"), sort_keys=True) + "\n")
+            nrows, fname = len(tab.lists), "warninglists.jsonl"
+            os.chmod(p + ".partial", 0o444)
+            os.replace(p + ".partial", p)
+            files.append({"file": fname, "rows": nrows, "sha256": _sha(p)})
+            # one hand-written phrase per kept list, so L0 and training render identical CONTEXT phrases
+            ph = context.phrases()
+            unmapped = sorted(k for k in tab.lists if k not in ph)
+            if unmapped:
+                raise RuntimeError(f"warninglists without a hand-written phrase: {unmapped}")
+            p = os.path.join(out, "warninglist_phrases.jsonl")
+            with open(p + ".partial", "w", encoding="utf-8") as f:
+                for k in sorted(tab.lists):
+                    f.write(json.dumps({"id": k, "phrase": ph[k]}, separators=(",", ":"), sort_keys=True) + "\n")
+            nrows, fname = len(tab.lists), "warninglist_phrases.jsonl"
+        os.chmod(p + ".partial", 0o444)
+        os.replace(p + ".partial", p)
+        files.append({"file": fname, "rows": nrows, "sha256": _sha(p)})
     for name, rows, key in (("cve.jsonl", cve, _cve_key), ("attack.jsonl", attack, _attack_key),
                             ("cwe.jsonl", cwe, _num_key), ("capec.jsonl", capec, _num_key)):
         p = os.path.join(out, name)
@@ -164,6 +202,9 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
                         "license_id": a["license_id"],
                         "attribution": registry.source(s).get("attribution")} for s, a in sorted(used.items())},
         "refused": refused,
+        "context": context.manifest_entry(tables) if tables else {},
+        "phrases_note": "warninglist_phrases.jsonl is hand-written (registry/warninglist_phrases.json): no inferred facts; "
+                        "null = address space or non-network data, never a CONTEXT phrase.",
         "notes": "Record facts only. kev=false means 'not in the CISA KEV snapshot fetched at "
                  + (used[kev_source]["fetched_at"] if kev_source in used else "n/a") + "'.",
     }

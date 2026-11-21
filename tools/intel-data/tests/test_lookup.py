@@ -34,7 +34,7 @@ class Lookup(unittest.TestCase):
         self._add("f-dga", os.path.join(FIX, "vulnlookup", "capec.ndjson"), "mitre_weakness_json")
         out = os.path.join(self.sb.dir, "lk")
         kw = dict(cve_sources=("f-kev", "f-urlhaus"), attack_sources={"f-attack": "enterprise"}, kev_source="none",
-                  weakness_sources=("f-tranco", "f-dga"))
+                  weakness_sources=("f-tranco", "f-dga"), context_sources=())
         d, man = lookup.build(self.st, self.reg, "commercial_training", out_root=out, **kw)
         with open(os.path.join(d, "cve.jsonl")) as f:
             cve = {r["cve"]: r for r in map(json.loads, f)}

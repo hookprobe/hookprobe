@@ -5209,13 +5209,18 @@
     "network_intelligence"
    ],
    "priority": 3,
-   "acquisition": null,
+   "acquisition": {
+    "url": "https://iptoasn.com/data/ip2asn-combined.tsv.gz",
+    "adapter": "iptoasn_tsv",
+    "max_bytes": 268435456,
+    "compression": "gzip"
+   },
    "verified_on": "2026-11-21",
    "verification_status": "verified",
    "evidence": [
     "https://iptoasn.com/"
    ],
-   "notes": "'Licensed under Public Domain (PDDL v1.0)'; 'Updated hourly'. Good open replacement for Team Cymru lookups."
+   "notes": "'Licensed under Public Domain (PDDL v1.0)'; 'Updated hourly'. Good open replacement for Team Cymru lookups. 2026-11-21: ip2asn-combined.tsv.gz was 10,955,454 bytes, last-modified 2026-11-01. The site offers only the current mapping (no historical snapshots), so context for old captures is 'current mapping as of <fetch date>'."
   },
   {
    "id": "iscx-url2016",
@@ -6502,7 +6507,7 @@
    "country": "LU",
    "geographic_coverage": null,
    "source_url": "https://github.com/MISP/misp-warninglists",
-   "download_url": "https://github.com/MISP/misp-warninglists/tree/main/lists",
+   "download_url": "https://github.com/MISP/misp-warninglists/archive/refs/heads/main.zip",
    "api_endpoint": null,
    "description": "Lists of known benign/false-positive indicators (cloud ranges, top domains, public DNS resolvers, CDN, RFC1918, etc.).",
    "category": "benign_baseline",
@@ -6535,13 +6540,18 @@
     "dns_intelligence"
    ],
    "priority": 3,
-   "acquisition": null,
+   "acquisition": {
+    "url": "https://github.com/MISP/misp-warninglists/archive/refs/heads/main.zip",
+    "adapter": "misp_warninglists_zip",
+    "max_bytes": 1073741824,
+    "compression": "zip"
+   },
    "verified_on": "2026-11-21",
    "verification_status": "verified",
    "evidence": [
     "https://github.com/MISP/misp-warninglists"
    ],
-   "notes": "README: 'licensed under CC0 1.0 ... If a specific author of a warning-list ... wants to license it under a different license' - at least one list carries an MIT notice (doc/licenses/X4BNet-lists_vpn.txt). Some lists are derived from third-party top lists (e.g. Tranco/Umbrella) whose terms may apply - check per list."
+   "notes": "README: 'licensed under CC0 1.0 ... If a specific author of a warning-list ... wants to license it under a different license' - at least one list carries an MIT notice (doc/licenses/X4BNet-lists_vpn.txt). Some lists are derived from third-party top lists (e.g. Tranco/Umbrella) whose terms may apply - check per list. 2026-11-21: README re-read: CC0 1.0, except 'The X4BNet-derived VPN and datacenter data retain their upstream MIT license notice' (doc/licenses/X4BNet-lists_vpn.txt is the only licence exception file). The adapter drops X4BNet-derived lists and lists built from third-party rankings with their own terms."
   },
   {
    "id": "mitre-atlas",

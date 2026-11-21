@@ -56,6 +56,8 @@ SOURCES = [
     src("f-iot23", "t-open", "zeek_conn_labeled", ("network_intelligence",)),
     src("f-cic", "t-research", "cicflowmeter_csv", ("network_intelligence",)),
     src("f-ctu13", "t-open", "argus_binetflow", ("network_intelligence",)),
+    src("f-asn", "t-open", "iptoasn_tsv", ("network_intelligence",)),
+    src("f-wl", "t-open", "misp_warninglists_zip", ("network_intelligence",)),
     src("f-iocv1", "t-cc-by-sa", "hookprobe_ioc_v1", ("live_intel",)),
     src("f-dga", "t-open", "domain_list"),
     src("f-phiusiil", "t-open", "phiusiil_csv"),

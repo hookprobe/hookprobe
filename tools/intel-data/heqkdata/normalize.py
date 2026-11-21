@@ -18,6 +18,10 @@ def normalize(store, registry, acq, adapter_name=None, pseudonym_key=None, valid
     name = adapter_name or (source["acquisition"] or {}).get("adapter") or source.get("adapter")
     if not name:
         raise RuntimeError(f"{source['id']}: no adapter declared; pass --adapter")
+    from . import context
+    if name in context.LOADERS:
+        raise RuntimeError(f"{source['id']}: a context table (heqkdata/context.py), used directly by windows/lookup; "
+                           "nothing to normalise")
     mod = adapters.get(name)
     key = pseudonym_key or store.pseudonym_key()
     ctx = Ctx(source, acq, name, mod.VERSION, key)
