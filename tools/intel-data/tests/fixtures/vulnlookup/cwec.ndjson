@@ -1,0 +1,3 @@
+{"@ID": "9001", "@Name": "Synthetic Weakness", "@Abstraction": "Base", "@Status": "Draft", "entry_type": "Weakness", "Description": "Synthetic description.", "Related_Weaknesses": {"Related_Weakness": {"@Nature": "ChildOf", "@CWE_ID": "9000", "@View_ID": "1000"}}, "Related_Attack_Patterns": {"Related_Attack_Pattern": [{"@CAPEC_ID": "9101"}]}, "Likelihood_Of_Exploit": "High", "Content_History": {"Submission": {"Submission_Name": "someone"}}}
+{"@ID": "9002", "@Name": "Synthetic Grouping", "@Status": "Draft", "entry_type": "Grouping"}
+{"@ID": "9003", "@Name": "Old Weakness", "@Abstraction": "Base", "@Status": "Deprecated", "entry_type": "Weakness", "Description": {"xhtml:p": ["Deprecated", "entry."]}}

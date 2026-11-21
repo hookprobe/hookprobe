@@ -10,6 +10,10 @@ for `purpose`:
                  "src": ["cve-list-v5", ...]}
   attack.jsonl  {"id": "T1110", "name": "Brute Force", "tactics": ["credential-access"],
                  "domains": ["enterprise"]}
+  cwe.jsonl     {"id": "CWE-79", "name": ..., "abstraction": "Base", "status": "Stable", "parents": ["CWE-74"],
+                 "capec": ["CAPEC-209", ...], "likelihood": "High"}
+  capec.jsonl   {"id": "CAPEC-66", "name": "SQL Injection", "parents": [...], "cwe": ["CWE-89", ...],
+                 "attack": ["T1190"?], "severity": "High", "likelihood": "High", ...}
 
 Field rules:
 - CVE fields come from the CVE Program record first; the GitHub Advisory Database fills a field only where
@@ -18,6 +22,8 @@ Field rules:
 - band is the CVSS v3/v4 qualitative rating; v2 scores keep band null (v2 has no 'critical').
 - kev is true when the CVE is in the CISA KEV catalogue acquisition used, or the CVE record's CISA-ADP
   container carries the KEV marker; false means "not in that catalogue snapshot", dated in the manifest.
+- CWE / CAPEC: Weakness entries and attack patterns that are not Deprecated or Obsolete; links and the
+  CAPEC -> ATT&CK mapping are MITRE's own (mitre_weakness_json).
 - ATT&CK: active techniques only (deprecated and revoked are left out); domains lists which of the
   enterprise / mobile / ICS bundles carry the id.
 The output directory is immutable (id = hash of inputs + code); files are 0444 and the manifest, with every
@@ -31,7 +37,10 @@ from . import VERSION, canon, cvss, licensing
 
 CVE_SOURCES = ("cve-list-v5", "github-advisory-db", "cisa-kev")
 ATTACK_SOURCES = {"mitre-attack-stix": "enterprise", "mitre-attack-mobile": "mobile", "mitre-attack-ics": "ics"}
-FORMAT = 1
+WEAKNESS_SOURCES = ("mitre-cwe", "mitre-capec")
+INACTIVE = {"Deprecated", "Obsolete"}
+# 1 = cve + attack; 2 = + cwe + capec
+FORMAT = 2
 
 
 def _newest(store, source_id):
@@ -48,11 +57,12 @@ def _records(store, acq):
             yield json.loads(line)
 
 
-def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, attack_sources=None, kev_source="cisa-kev"):
+def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, attack_sources=None, kev_source="cisa-kev",
+          weakness_sources=WEAKNESS_SOURCES):
     """cve_sources in precedence order; kev_source is the KEV catalogue (sources are parameters for tests)."""
     attack_sources = attack_sources or ATTACK_SOURCES
     used, refused = {}, {}
-    for sid in tuple(cve_sources) + tuple(attack_sources):
+    for sid in tuple(cve_sources) + tuple(attack_sources) + tuple(weakness_sources):
         ok, why = licensing.decide(registry.license_of(sid), purpose)
         acq = _newest(store, sid)
         if not ok:
@@ -117,8 +127,29 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
             if domain not in e["domains"]:
                 e["domains"].append(domain)
 
+    cwe, capec = {}, {}
+    for sid in weakness_sources:
+        if sid not in used:
+            continue
+        for r in _records(store, used[sid]):
+            if r["kind"] != "weakness":
+                continue
+            b = r["body"]
+            if b["status"] in INACTIVE:
+                continue
+            if b["catalog"] == "CWE":
+                cwe[b["entry_id"]] = {"id": b["entry_id"], "name": b["name"], "abstraction": b["abstraction"],
+                                      "status": b["status"], "parents": b["parents"], "capec": b["related_capec"],
+                                      "likelihood": b["likelihood"]}
+            else:
+                capec[b["entry_id"]] = {"id": b["entry_id"], "name": b["name"], "abstraction": b["abstraction"],
+                                        "status": b["status"], "parents": b["parents"], "cwe": b["related_cwe"],
+                                        "attack": b["attack_mapping"]["techniques"], "severity": b["typical_severity"],
+                                        "likelihood": b["likelihood"]}
+
     files = []
-    for name, rows, key in (("cve.jsonl", cve, _cve_key), ("attack.jsonl", attack, _attack_key)):
+    for name, rows, key in (("cve.jsonl", cve, _cve_key), ("attack.jsonl", attack, _attack_key),
+                            ("cwe.jsonl", cwe, _num_key), ("capec.jsonl", capec, _num_key)):
         p = os.path.join(out, name)
         with open(p + ".partial", "w", encoding="utf-8") as f:
             for k in sorted(rows, key=key):
@@ -156,6 +187,10 @@ def _norm(store, acq):
 def _cve_key(c):
     y, n = c[4:].split("-")
     return (int(y), int(n))
+
+
+def _num_key(i):
+    return int(i.rsplit("-", 1)[1])
 
 
 def _attack_key(t):

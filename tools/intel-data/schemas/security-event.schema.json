@@ -11,9 +11,9 @@
     "record_id": {
       "description": "Deterministic: '<kind>:' + first 24 hex of sha256(source_id, source_record_id or raw_sha256, transform version).",
       "type": "string",
-      "pattern": "^(dns|flow|detection|indicator|vulnerability|attack_technique):[0-9a-f]{24}$"
+      "pattern": "^(dns|flow|detection|indicator|vulnerability|attack_technique|weakness):[0-9a-f]{24}$"
     },
-    "kind": { "type": "string", "enum": ["dns", "flow", "detection", "indicator", "vulnerability", "attack_technique"] },
+    "kind": { "type": "string", "enum": ["dns", "flow", "detection", "indicator", "vulnerability", "attack_technique", "weakness"] },
     "observed_at": { "$ref": "common.schema.json#/$defs/nullable_timestamp" },
     "sensor": {
       "type": "object",
@@ -45,6 +45,7 @@
     { "if": { "properties": { "kind": { "const": "indicator" } } }, "then": { "properties": { "body": { "$ref": "indicator.schema.json" } } } },
     { "if": { "properties": { "kind": { "const": "vulnerability" } } }, "then": { "properties": { "body": { "$ref": "vulnerability.schema.json" } } } },
     { "if": { "properties": { "kind": { "const": "attack_technique" } } }, "then": { "properties": { "body": { "$ref": "attack-technique.schema.json" } } } },
+    { "if": { "properties": { "kind": { "const": "weakness" } } }, "then": { "properties": { "body": { "$ref": "weakness.schema.json" } } } },
     { "if": { "properties": { "kind": { "const": "detection" } } }, "then": { "properties": { "body": { "$ref": "#/$defs/detection" } } } }
   ],
   "$defs": {

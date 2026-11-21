@@ -214,6 +214,7 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
             for a in inputs if a in meta
         ],
         "outputs": outputs,
+        "usage_notes": {c: n for c, n in builders.USAGE_NOTES.items() if c in wanted},
         "counts": {cid: sum(1 for e in examples if e["collection"] == cid) for cid in wanted},
         "excluded": excluded,
     }

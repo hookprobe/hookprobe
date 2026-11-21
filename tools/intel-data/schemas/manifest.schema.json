@@ -43,6 +43,11 @@
       }
     },
     "counts": { "type": "object", "additionalProperties": { "type": "integer" } },
+    "usage_notes": {
+      "description": "Per-collection notes for consumers, e.g. a collection that only restates lookup-table facts and should not be used to fine-tune a small model.",
+      "type": "object",
+      "additionalProperties": { "type": "string", "maxLength": 1024 }
+    },
     "excluded": {
       "description": "Records or sources left out, with the reason (licence gate, validation failure, duplicate, contamination).",
       "type": "object",
