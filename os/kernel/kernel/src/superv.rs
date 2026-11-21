@@ -242,6 +242,124 @@ pub fn state_wiped(name: &str, bad_state: bool) -> u32 {
     j().open(c, kind, Rung::Wipe, now_ms())
 }
 
+// --- the journal across a warm reset (plan Wave 2c C5) ---
+const _: () = assert!(hal::superv::SNAP_LEN <= arch_aarch64::crashrec::JOURNAL_AREA);
+/// The journal generation last written to the snapshot area (MAX = never: the first tick writes even an empty
+/// journal, so "the previous boot recovered from nothing" is told apart from "no record").
+static mut PERSISTED_GEN: u32 = u32::MAX;
+/// What the previous boot left (taken once at boot).
+static mut PREV: Option<hal::superv::PrevBoot> = None;
+static mut PREV_TAKEN: bool = false;
+
+/// Write the journal to the snapshot area if it changed since the last write. The main loop calls this every
+/// iteration (one comparison when nothing changed; ~1.6 KB copy + a cache clean when it did).
+pub fn persist_tick() {
+    let g = journal().generation();
+    if unsafe { PERSISTED_GEN } == g {
+        return;
+    }
+    persist_now();
+}
+
+fn persist_now() {
+    let mut b = [0u8; hal::superv::SNAP_LEN];
+    journal().encode(now_ms(), &mut b);
+    arch_aarch64::crashrec::journal_area()[..hal::superv::SNAP_LEN].copy_from_slice(&b);
+    arch_aarch64::crashrec::journal_clean(hal::superv::SNAP_LEN);
+    unsafe { PERSISTED_GEN = journal().generation() };
+}
+
+/// Early at boot: take the previous boot's journal once (the area is cleared), print a summary line.
+pub fn take_previous_at_boot() {
+    if unsafe { PREV_TAKEN } {
+        return;
+    }
+    let area = arch_aarch64::crashrec::journal_area();
+    let p = hal::superv::decode_snapshot(&area[..hal::superv::SNAP_LEN]);
+    area[..16].fill(0);
+    arch_aarch64::crashrec::journal_clean(16);
+    unsafe {
+        PREV = p;
+        PREV_TAKEN = true;
+    }
+    match p {
+        Some(p) => {
+            arch_aarch64::_print(format_args!(" [SUPERV] previous boot: {} recoveries ({} kept), still open at the end: {}; written at its uptime {} ms\n",
+                p.total, p.n, p.newest_first().filter(|r| r.outcome == Outcome::Pending).count(), p.written_ms));
+            for r in p.newest_first().take(5) {
+                arch_aarch64::_print(format_args!("   [SUPERV] prev #{} {} {} rung {} -> {}\n",
+                    r.seq, hal::superv::component_name(r.component), r.kind.name(), r.rung.name(), r.outcome.name()));
+            }
+        }
+        None => arch_aarch64::_print(format_args!(" [SUPERV] previous boot: no recovery journal (first boot, power cut, or none written)\n")),
+    }
+}
+
+/// The previous boot's journal, if one was taken.
+pub fn previous() -> Option<&'static hal::superv::PrevBoot> {
+    unsafe { (*core::ptr::addr_of!(PREV)).as_ref() }
+}
+
+/// [P-superv-persist] (QEMU): a journal written by `persist_tick` is read back by the next "boot" field for field;
+/// unchanged = not rewritten; it is taken once (a second take finds nothing); a flipped byte reads as no record.
+/// Runs against a scratch journal and restores the real one, and the area as it was.
+#[cfg(not(feature = "cm5"))]
+pub fn persist_selftest() -> bool {
+    let area_saved = *arch_aarch64::crashrec::journal_area();
+    let (pg, pv, pt) = unsafe { (PERSISTED_GEN, PREV, PREV_TAKEN) };
+    let saved = swap(Journal::new());
+    let c = component_id("el0-wpa");
+    j().open(c, Kind::Probe, Rung::Wipe, 10);
+    j().close(c, Outcome::Pending, 30);
+    j().open(component_id("el0-lansvc"), Kind::Exception, Rung::Restart, 40);
+    unsafe { PERSISTED_GEN = u32::MAX };
+    persist_tick();
+    let written = unsafe { PERSISTED_GEN } == journal().generation();
+    // unchanged: no rewrite (mark the area; a rewrite would restore the magic)
+    arch_aarch64::crashrec::journal_area()[100] ^= 0xFF;
+    persist_tick();
+    let lazy = arch_aarch64::crashrec::journal_area()[100] != area_after_encode();
+    arch_aarch64::crashrec::journal_area()[100] ^= 0xFF;
+    // the next boot reads it back
+    unsafe { PREV_TAKEN = false };
+    take_previous_at_boot();
+    let want: [hal::superv::Recovery; 2] = [*journal().get(2).unwrap_or(&EMPTY_R), *journal().get(1).unwrap_or(&EMPTY_R)];
+    let back = previous().is_some_and(|p| p.total == 2 && p.n == 2 && p.entries[..2] == want && p.by_kind == journal().by_kind);
+    unsafe { PREV_TAKEN = false };
+    take_previous_at_boot();
+    let once = previous().is_none();
+    // a corrupted snapshot never reads as a record
+    persist_now();
+    arch_aarch64::crashrec::journal_area()[hal::superv::SNAP_LEN - 20] ^= 1;
+    unsafe { PREV_TAKEN = false };
+    take_previous_at_boot();
+    let corrupt = previous().is_none();
+    let _ = swap(saved);
+    *arch_aarch64::crashrec::journal_area() = area_saved;
+    unsafe {
+        PERSISTED_GEN = pg;
+        PREV = pv;
+        PREV_TAKEN = pt;
+    }
+    let pass = written && lazy && back && once && corrupt;
+    arch_aarch64::_print(format_args!(
+        " [P-superv-persist] {} — the recovery journal across a warm reset: written when it changed={} not rewritten when unchanged={} the next boot reads it back entry for entry={} taken once={} a corrupted snapshot reads as none={}\n",
+        if pass { "PASS" } else { "FAIL" }, written, lazy, back, once, corrupt
+    ));
+    pass
+}
+
+#[cfg(not(feature = "cm5"))]
+const EMPTY_R: hal::superv::Recovery = hal::superv::Recovery { seq: 0, component: 0, kind: Kind::Exception, rung: Rung::Restart, outcome: Outcome::Pending, repeats: 0, t_detect_ms: 0, t_acted_ms: 0, t_done_ms: 0 };
+
+/// Byte 100 of a fresh encoding of the current journal (the self-test's "was it rewritten?" probe).
+#[cfg(not(feature = "cm5"))]
+fn area_after_encode() -> u8 {
+    let mut b = [0u8; hal::superv::SNAP_LEN];
+    journal().encode(0, &mut b);
+    b[100]
+}
+
 static mut PROBES: hal::superv::ProbeClock = hal::superv::ProbeClock::new();
 /// (probes run, probes failed) since boot.
 static mut PROBE_STATS: (u64, u64) = (0, 0);
@@ -359,7 +477,24 @@ pub fn render(w: &mut crate::mcstate::JsonBuf<'_>, limit: usize) {
         None => w.raw("null"),
     }
     // H2: the supervisor table (fixed in the signed image) — who may escalate to a reboot, and each restart policy
-    w.raw("},\"supervised\":[");
+    // the previous boot's journal (kept across a warm reset; null after a power cut or on a first boot)
+    w.raw("},\"previous_boot\":");
+    match previous() {
+        Some(p) => {
+            let _ = write!(w, "{{\"total\":{},\"dropped\":{},\"written_ms\":{},\"by_kind\":{{", p.total, p.dropped, p.written_ms);
+            for (i, k) in KIND_NAMES.iter().enumerate() {
+                let _ = write!(w, "{}\"{}\":{}", if i > 0 { "," } else { "" }, k, p.by_kind[i]);
+            }
+            w.raw("},\"recoveries\":[");
+            for (i, r) in p.newest_first().take(limit).enumerate() {
+                let _ = write!(w, "{}{{\"seq\":{},\"component\":\"{}\",\"kind\":\"{}\",\"rung\":\"{}\",\"outcome\":\"{}\",\"repeats\":{},\"t_detect_ms\":{}}}",
+                    if i > 0 { "," } else { "" }, r.seq, component_name(r.component), r.kind.name(), r.rung.name(), r.outcome.name(), r.repeats, r.t_detect_ms);
+            }
+            w.raw("]}");
+        }
+        None => w.raw("null"),
+    }
+    w.raw(",\"supervised\":[");
     for (i, e) in hal::superv::TABLE.iter().enumerate() {
         let _ = write!(w, "{}{{\"component\":\"{}\",\"critical\":{},\"exhausted\":\"{}\",\"grace\":{},\"backoff_ms\":{},\"backoff_max_ms\":{},\"state\":\"{}\"}}",
             if i > 0 { "," } else { "" }, e.name, e.critical, e.exhausted.name(), e.grace, e.backoff_ms, e.backoff_max_ms, e.state.name());

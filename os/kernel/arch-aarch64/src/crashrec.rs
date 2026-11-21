@@ -286,6 +286,33 @@ pub fn take_heal() -> Option<(u32, [u32; HEAL_WORDS])> {
     valid.then_some((r.flags, r.words))
 }
 
+// --- the recovery journal across a warm reset (autoheal harness, plan Wave 2c C5) ---
+// The kernel's recovery journal (`hal::superv::Journal`) is snapshotted here whenever it changes; the next boot takes
+// it once. Same page as the records above (CM5: +0x800, 2 KiB: the snapshot is `hal::superv::SNAP_LEN` <= 0x800 —
+// the kernel checks it), the same DRAM-retention rules: a watchdog / panic / planned reset keeps it, a power cut does
+// not. The format and its check word are the kernel's (`hal::superv`); this module only owns the bytes.
+pub const JOURNAL_AREA: usize = 0x800;
+
+#[cfg(not(feature = "cm5"))]
+static mut QEMU_JOURNAL: [u8; JOURNAL_AREA] = [0; JOURNAL_AREA];
+
+/// The snapshot area (one writer: the kernel's main loop at run time, the boot path before it).
+pub fn journal_area() -> &'static mut [u8; JOURNAL_AREA] {
+    #[cfg(feature = "cm5")]
+    unsafe {
+        &mut *((REC_PA + 0x800) as *mut [u8; JOURNAL_AREA])
+    }
+    #[cfg(not(feature = "cm5"))]
+    unsafe {
+        &mut *core::ptr::addr_of_mut!(QEMU_JOURNAL)
+    }
+}
+
+/// Push the first `len` bytes of the area to the point of coherency (a warm reset does not write caches back).
+pub fn journal_clean(len: usize) {
+    clean_range(journal_area().as_ptr() as usize, len.min(JOURNAL_AREA));
+}
+
 // --- the planned-reset reason (autoheal harness H3a, plan Wave 2c C5) ---
 // A reset the kernel chose for an ordinary reason (the owner asked, an OTA trial / revert, a configuration revert, a
 // factory reset) left NO trace: the next boot could not tell it from a power cycle. One word, same page as the two
