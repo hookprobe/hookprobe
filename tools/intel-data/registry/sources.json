@@ -399,6 +399,55 @@
    "notes": "EULA snippet: OTX 'free to end users for non-commercial use'; prohibits service-bureau use. Full text not read - re-verify. Pulse quality varies widely (user-generated)."
   },
   {
+   "id": "aptnotes",
+   "name": "APTnotes",
+   "organisation": "APTnotes project (community)",
+   "country": null,
+   "geographic_coverage": null,
+   "source_url": "https://github.com/aptnotes/data",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Index of public APT and malware threat reports from many vendors; PDFs hosted on Box.",
+   "category": "reports",
+   "subcategories": [],
+   "data_format": [
+    "csv",
+    "json",
+    "pdf"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "aptnotes-terms",
+   "license_class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "no",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "Reading list only; each report needs its own publisher licence before any training use",
+   "collections": [
+    "none"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://github.com/aptnotes/data"
+   ],
+   "notes": "Not a licensed corpus: an index of copyrighted third-party reports."
+  },
+  {
    "id": "atomic-red-team",
    "name": "Atomic Red Team",
    "organisation": "Red Canary",
@@ -2124,14 +2173,14 @@
    ],
    "priority": 4,
    "acquisition": null,
-   "verified_on": "2026-11-18",
+   "verified_on": "2026-11-21",
    "verification_status": "verified",
    "evidence": [
     "https://www.stratosphereips.org/datasets-ctu13",
     "https://www.stratosphereips.org/datasets-overview",
     "https://www.stratosphereips.org/datasets-faq"
    ],
-   "notes": "The datasets overview page says 'The CTU-13 dataset is published with the license Creative Commons CC-BY' and links CC BY 2.0. The FAQ says no permission is needed if cited. personal_data is a judgement: real university hosts are present, but I did not verify whether IPs were anonymised. The archive contains live malware binaries, so handle it in a sandbox.",
+   "notes": "The datasets overview page says 'The CTU-13 dataset is published with the license Creative Commons CC-BY' and links CC BY 2.0. The FAQ says no permission is needed if cited. personal_data is a judgement: real university hosts are present, but I did not verify whether IPs were anonymised. The archive contains live malware binaries, so handle it in a sandbox. 2026-11-21: mcfp.felk.cvut.cz timed out on 80/443, so the 12 labelled bidirectional NetFlow files (capture*.binetflow.xz) were taken from the backup mirror the CTU-13 page links (https://mega.nz/#F!vdRmBA6D). Only those files and the READMEs were downloaded: no pcaps, no malware archives. Every file matched the size the mirror listed and decompressed with valid xz checksums; there is no official hash to compare against. The mirror has no binetflow for scenario 10 (CTU-Malware-Capture-Botnet-51, only pcaps and rbot.exe.zip), so scenario 10 is missing. Scenario n = capture 41+n. The mirror READMEs carry no licence statement; the CC BY terms come from the Stratosphere datasets overview page.",
    "adapter": "argus_binetflow"
   },
   {
@@ -2347,6 +2396,103 @@
     "https://wid.cert-bund.de/.well-known/csaf/white/2026/wid-sec-w-2026-4721.json"
    ],
    "notes": "provider-metadata has no licence field; list_on/mirror_on_CSAF_aggregators=true (mirroring permission, not a licence). Sample doc carries TLP:WHITE and a liability disclaimer only. WHITE feed had 14,875 entries at check time. GREEN feeds are TLP-restricted - use WHITE only."
+  },
+  {
+   "id": "dfir-report",
+   "name": "The DFIR Report (intrusion reports)",
+   "organisation": "The DFIR Report",
+   "country": null,
+   "geographic_coverage": null,
+   "source_url": "https://thedfirreport.com/",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Step-by-step intrusion case write-ups mapped to ATT&CK.",
+   "category": "reports",
+   "subcategories": [],
+   "data_format": [
+    "html"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "dfir-report-terms",
+   "license_class": "RESTRICTED",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "no",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "reports_only",
+   "collaboration_route": null,
+   "recommended_use": "Analyst reading only; ask the publisher for a licence before any training use",
+   "collections": [
+    "none"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://thedfirreport.com/"
+   ],
+   "notes": "All rights reserved."
+  },
+  {
+   "id": "dfir-report-rules",
+   "name": "The DFIR Report Sigma / YARA / Suricata rules",
+   "organisation": "The DFIR Report",
+   "country": null,
+   "geographic_coverage": null,
+   "source_url": "https://github.com/The-DFIR-Report",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Detection rules published alongside the DFIR Report cases.",
+   "category": "detection_rules",
+   "subcategories": [],
+   "data_format": [
+    "yaml",
+    "yar",
+    "rules"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "gpl-3.0-dfir-report-rules",
+   "license_class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "Detection content; training blocked by the share-alike gate pending legal review",
+   "collections": [
+    "attack_intelligence"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://github.com/The-DFIR-Report",
+    "https://github.com/The-DFIR-Report/Sigma-Rules"
+   ],
+   "notes": "GPL-3.0: derived rule sets must stay GPL."
   },
   {
    "id": "dgarchive",
@@ -2662,6 +2808,55 @@
    "verification_status": "partially_verified",
    "evidence": [],
    "notes": "Last push 2026-11-17. Not an OWASP flagship project (independent)."
+  },
+  {
+   "id": "elastic-protections-artifacts",
+   "name": "Elastic protections-artifacts (YARA and behaviour rules)",
+   "organisation": "Elastic",
+   "country": "US",
+   "geographic_coverage": null,
+   "source_url": "https://github.com/elastic/protections-artifacts",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Endpoint YARA signatures and behavioural rules used by Elastic Security.",
+   "category": "detection_rules",
+   "subcategories": [],
+   "data_format": [
+    "yar",
+    "toml"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "elastic-license-2.0",
+   "license_class": "RESTRICTED",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "None until legal review of the ELv2 hosted-service clause",
+   "collections": [
+    "malware_intelligence"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://github.com/elastic/protections-artifacts",
+    "https://www.elastic.co/licensing/elastic-license"
+   ],
+   "notes": ""
   },
   {
    "id": "ember-2017-2018",
@@ -4428,6 +4623,53 @@
     "https://github.com/guardicore/monkey"
    ],
    "notes": "Last push 2026-11-03; no deprecation notice; releases section shows no current release."
+  },
+  {
+   "id": "inquest-yara-rules",
+   "name": "InQuest YARA rules",
+   "organisation": "InQuest",
+   "country": "US",
+   "geographic_coverage": null,
+   "source_url": "https://github.com/InQuest/yara-rules",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "YARA rules from InQuest Labs.",
+   "category": "detection_rules",
+   "subcategories": [],
+   "data_format": [
+    "yar"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "inquest-yara-rules-terms",
+   "license_class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "yes",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "Detection-rule explanation examples",
+   "collections": [
+    "malware_intelligence"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://github.com/InQuest/yara-rules"
+   ],
+   "notes": "Companion list InQuest/awesome-yara is CC BY 4.0 but only links to repos with their own licences."
   },
   {
    "id": "int-apwg-ecx",
@@ -6350,6 +6592,130 @@
    "notes": "LICENSE: 'Copyright 2021-2026 MITRE ... Apache License, Version 2.0'."
   },
   {
+   "id": "mitre-attack-ics",
+   "name": "MITRE ATT&CK for ICS (STIX 2.1 data)",
+   "organisation": "The MITRE Corporation",
+   "country": "US",
+   "geographic_coverage": "global",
+   "source_url": "https://github.com/mitre-attack/attack-stix-data",
+   "download_url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/ics-attack/ics-attack.json",
+   "api_endpoint": null,
+   "description": "Adversary tactics/techniques knowledge base published as STIX 2.1 collections.",
+   "category": "taxonomy",
+   "subcategories": [
+    "adversary_techniques",
+    "groups",
+    "software",
+    "mitigations",
+    "data_components"
+   ],
+   "data_format": [
+    "STIX 2.1 JSON bundles (enterprise",
+    "mobile",
+    "ics)"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": "2026-11-05 (last push)",
+   "update_frequency": "ATT&CK releases ~twice a year plus minor updates",
+   "labels_available": null,
+   "label_quality": "curated by MITRE, high",
+   "known_limitations": "Behavioural knowledge, not indicators; technique coverage is not exhaustive (stated in licence disclaimer).",
+   "license_id": "mitre-attack-stix-terms",
+   "license_class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "attribution": "Reproduce MITRE copyright designation and licence: '© 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation.'",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "fine-tune taxonomy knowledge; map detections/alerts to techniques; ship on device with notice",
+   "collections": [
+    "attack_intelligence"
+   ],
+   "priority": 4,
+   "acquisition": {
+    "url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/ics-attack/ics-attack.json",
+    "adapter": "mitre_attack_stix",
+    "max_bytes": 268435456,
+    "compression": null
+   },
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://github.com/mitre-attack/attack-stix-data",
+    "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/LICENSE.txt",
+    "https://attack.mitre.org/resources/legal-and-branding/terms-of-use/"
+   ],
+   "notes": "Same ATT&CK Terms of Use as enterprise: the grant covers 'ATT&CK' without naming a domain, and the repo README lists enterprise, mobile and ics together (checked 2026-11-21). Licence explicitly grants 'research, development, and commercial purposes'; copies must carry MITRE copyright + licence text. ATT&CK is a registered trademark - do not imply endorsement. Repo GitHub spdx=NOASSERTION because of custom licence."
+  },
+  {
+   "id": "mitre-attack-mobile",
+   "name": "MITRE ATT&CK for Mobile (STIX 2.1 data)",
+   "organisation": "The MITRE Corporation",
+   "country": "US",
+   "geographic_coverage": "global",
+   "source_url": "https://github.com/mitre-attack/attack-stix-data",
+   "download_url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/mobile-attack/mobile-attack.json",
+   "api_endpoint": null,
+   "description": "Adversary tactics/techniques knowledge base published as STIX 2.1 collections.",
+   "category": "taxonomy",
+   "subcategories": [
+    "adversary_techniques",
+    "groups",
+    "software",
+    "mitigations",
+    "data_components"
+   ],
+   "data_format": [
+    "STIX 2.1 JSON bundles (enterprise",
+    "mobile",
+    "ics)"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": "2026-11-05 (last push)",
+   "update_frequency": "ATT&CK releases ~twice a year plus minor updates",
+   "labels_available": null,
+   "label_quality": "curated by MITRE, high",
+   "known_limitations": "Behavioural knowledge, not indicators; technique coverage is not exhaustive (stated in licence disclaimer).",
+   "license_id": "mitre-attack-stix-terms",
+   "license_class": "OPEN",
+   "commercial_use": "yes",
+   "training_use": "yes",
+   "redistribution": "yes",
+   "attribution": "Reproduce MITRE copyright designation and licence: '© 2026 The MITRE Corporation. This work is reproduced and distributed with the permission of The MITRE Corporation.'",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "fine-tune taxonomy knowledge; map detections/alerts to techniques; ship on device with notice",
+   "collections": [
+    "attack_intelligence"
+   ],
+   "priority": 4,
+   "acquisition": {
+    "url": "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/mobile-attack/mobile-attack.json",
+    "adapter": "mitre_attack_stix",
+    "max_bytes": 268435456,
+    "compression": null
+   },
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://github.com/mitre-attack/attack-stix-data",
+    "https://raw.githubusercontent.com/mitre-attack/attack-stix-data/master/LICENSE.txt",
+    "https://attack.mitre.org/resources/legal-and-branding/terms-of-use/"
+   ],
+   "notes": "Same ATT&CK Terms of Use as enterprise: the grant covers 'ATT&CK' without naming a domain, and the repo README lists enterprise, mobile and ics together (checked 2026-11-21). Licence explicitly grants 'research, development, and commercial purposes'; copies must carry MITRE copyright + licence text. ATT&CK is a registered trademark - do not imply endorsement. Repo GitHub spdx=NOASSERTION because of custom licence."
+  },
+  {
    "id": "mitre-attack-stix",
    "name": "MITRE ATT&CK (STIX 2.1 data)",
    "organisation": "The MITRE Corporation",
@@ -6611,6 +6977,54 @@
     "https://api.github.com/repos/d3fend/d3fend-ontology"
    ],
    "notes": "GitHub licence detection MIT; LICENSE text and d3fend.mitre.org site terms not read."
+  },
+  {
+   "id": "mitre-emb3d",
+   "name": "MITRE EMB3D (embedded device threat model)",
+   "organisation": "The MITRE Corporation",
+   "country": "US",
+   "geographic_coverage": null,
+   "source_url": "https://emb3d.mitre.org/",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Threat model for embedded/IoT devices: device properties, threats and mitigations.",
+   "category": "taxonomy",
+   "subcategories": [],
+   "data_format": [
+    "json"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "mitre-emb3d-terms",
+   "license_class": "RESTRICTED",
+   "commercial_use": "yes",
+   "training_use": "unclear",
+   "redistribution": "requires_agreement",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": "EMB3D@mitre.org (notice of use); techtransfer@mitre.org for other uses",
+   "recommended_use": "IoT threat vocabulary for Neuro once training use is confirmed with MITRE",
+   "collections": [
+    "attack_intelligence"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://emb3d.mitre.org/subtabs/terms-of-use.html",
+    "https://api.github.com/repos/mitre/emb3d"
+   ],
+   "notes": "GitHub repo has no licence file; the website terms govern. Notify EMB3D@mitre.org on use."
   },
   {
    "id": "neo23x0-signature-base",
@@ -8606,6 +9020,53 @@
    "notes": "LICENSE.txt: data dedicated to public domain under CC0 'except otherwise specified'; README template says advisories may carry license='CC-BY-4.0' when imported from GHSA - filter on that field and attribute those."
   },
   {
+   "id": "secqa",
+   "name": "SecQA",
+   "organisation": "Zefang Liu (Hugging Face)",
+   "country": null,
+   "geographic_coverage": null,
+   "source_url": "https://huggingface.co/datasets/zefang-liu/secqa",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Multiple-choice security questions generated by GPT-4 from a security textbook.",
+   "category": "soc_reasoning",
+   "subcategories": [],
+   "data_format": [
+    "csv"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "cc-by-nc-sa-4.0",
+   "license_class": "RESEARCH",
+   "commercial_use": "no",
+   "training_use": "no",
+   "redistribution": "yes",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "Non-commercial research evaluation only; never in a shipped model",
+   "collections": [
+    "evaluation_only"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://huggingface.co/datasets/zefang-liu/secqa"
+   ],
+   "notes": "Card lists training models for hacking or exploits as out of scope."
+  },
+  {
    "id": "shadowserver-reports",
    "name": "Shadowserver network reports",
    "organisation": "The Shadowserver Foundation",
@@ -9233,6 +9694,56 @@
     "https://tranco-list.eu/api_documentation"
    ],
    "notes": "Licence trap: since 2023-08-01 the list includes Cloudflare Radar (CC BY-NC 4.0) and CrUX (CC BY-SA 4.0) - derived ranking may inherit NC/SA obligations. API 1 query/s for rank lookups, auth via email+token for list creation."
+  },
+  {
+   "id": "trendmicro-primus",
+   "name": "Trend Micro Primus datasets (FineWeb, Seed, Instruct, Reasoning)",
+   "organisation": "Trend Micro AI Lab",
+   "country": "TW",
+   "geographic_coverage": null,
+   "source_url": "https://huggingface.co/trendmicro-ailab",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Cybersecurity pre-training and instruction corpora.",
+   "category": "soc_reasoning",
+   "subcategories": [],
+   "data_format": [
+    "parquet"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "trendmicro-primus-terms",
+   "license_class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "attribution": "required",
+   "personal_data": "none",
+   "sensitivity": "low",
+   "access": "registration",
+   "collaboration_route": null,
+   "recommended_use": "None until the gate conditions and model-output terms are reviewed",
+   "collections": [
+    "none"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://huggingface.co/datasets/trendmicro-ailab/Primus-FineWeb",
+    "https://huggingface.co/datasets/trendmicro-ailab/Primus-Seed",
+    "https://huggingface.co/datasets/trendmicro-ailab/Primus-Instruct",
+    "https://huggingface.co/datasets/trendmicro-ailab/Primus-Reasoning"
+   ],
+   "notes": "Partly model-generated (GPT-4o, o1-preview, DeepSeek-R1)."
   },
   {
    "id": "trickest-cve",
@@ -9898,6 +10409,54 @@
     "https://raw.githubusercontent.com/volexity/threat-intel/main/LICENSE.txt"
    ],
    "notes": "LICENSE.txt: 'Copyright 2022 by Volexity, Inc. The 2-Clause BSD License'."
+  },
+  {
+   "id": "vx-underground-papers",
+   "name": "vx-underground papers and APT report archive",
+   "organisation": "vx-underground",
+   "country": null,
+   "geographic_coverage": null,
+   "source_url": "https://vx-underground.org/",
+   "download_url": null,
+   "api_endpoint": null,
+   "description": "Archive of malware research papers and APT reports (the malware sample collections are out of scope and must never be downloaded).",
+   "category": "reports",
+   "subcategories": [],
+   "data_format": [
+    "pdf"
+   ],
+   "machine_readable": true,
+   "records": null,
+   "collection_period": null,
+   "publication_date": null,
+   "last_update": null,
+   "update_frequency": null,
+   "labels_available": null,
+   "label_quality": null,
+   "known_limitations": null,
+   "license_id": "vx-underground-papers-terms",
+   "license_class": "UNKNOWN",
+   "commercial_use": "unclear",
+   "training_use": "unclear",
+   "redistribution": "unclear",
+   "attribution": "required",
+   "personal_data": "unknown",
+   "sensitivity": "low",
+   "access": "public_download",
+   "collaboration_route": null,
+   "recommended_use": "None until terms are known",
+   "collections": [
+    "none"
+   ],
+   "priority": 3,
+   "acquisition": null,
+   "verified_on": "2026-11-21",
+   "verification_status": "verified",
+   "evidence": [
+    "https://vx-underground.org/",
+    "https://github.com/vxunderground/MalwareSourceCode"
+   ],
+   "notes": "Terms page unreadable (HTTP 403). The site also hosts live malware and malware source: never acquire from it in this pipeline."
   },
   {
    "id": "yara-forge",
