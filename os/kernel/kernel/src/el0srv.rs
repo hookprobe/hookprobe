@@ -1613,6 +1613,16 @@ pub mod keyer {
     /// `/api/health` wifi_driver.bus: (state, restarts, faults, ticks of the last fault or 0). State: "absent" = the
     /// server is not loaded (the in-kernel driver serves — D5), "handed_to_wifiheal" = Wi-Fi was degraded after a
     /// failed recovery, "backoff" = restarting after a fault, else "running". Only counters, nothing derived.
+    /// ADR 0067 E1b: the bus server's counters (None = absent / backoff / an undecodable reply).
+    pub fn bus_stats() -> Option<hal::sdio::BusStats> {
+        let s = bus_srv()?;
+        let mut o = [0u8; hal::sdio::BusStats::LEN];
+        match s.call_io(hal::wifisrvabi::CMD_BUS_STATS, &[], &mut o) {
+            (Call::Done(ST_OK, ..), n) if n == o.len() => hal::sdio::BusStats::decode(&o),
+            _ => None,
+        }
+    }
+
     pub fn bus_health() -> (&'static str, u64, u64, u64) {
         let Some(s) = bus_srv() else { return ("absent", 0, 0, 0) };
         let st = if crate::wifiheal::status().0.starts_with("degraded") {

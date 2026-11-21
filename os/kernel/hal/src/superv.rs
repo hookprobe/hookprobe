@@ -591,6 +591,8 @@ pub struct CpuWindow {
     pub throttled_windows: u32,
     /// Calls refused because of it.
     pub refused_calls: u64,
+    /// All CPU charged since boot (E1b: the kernel divides it by the bus server's own counters).
+    pub total_us: u64,
 }
 
 impl Default for CpuWindow {
@@ -601,7 +603,7 @@ impl Default for CpuWindow {
 
 impl CpuWindow {
     pub const fn new() -> Self {
-        CpuWindow { start_ms: 0, used_us: 0, tripped: false, last_us: 0, peak_us: 0, throttled_windows: 0, refused_calls: 0 }
+        CpuWindow { start_ms: 0, used_us: 0, tripped: false, last_us: 0, peak_us: 0, throttled_windows: 0, refused_calls: 0, total_us: 0 }
     }
     fn roll(&mut self, now_ms: u64) {
         if now_ms.saturating_sub(self.start_ms) >= CPU_WINDOW_MS {
@@ -630,6 +632,7 @@ impl CpuWindow {
     /// A call of this component took `us`.
     pub fn charge(&mut self, us: u64) {
         self.used_us = self.used_us.saturating_add(us);
+        self.total_us = self.total_us.saturating_add(us);
         self.peak_us = self.peak_us.max(self.used_us);
     }
     /// Use in the current window so far.

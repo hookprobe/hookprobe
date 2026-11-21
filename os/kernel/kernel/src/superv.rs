@@ -121,6 +121,11 @@ fn cpu_admit_with(c: u8, now: u64, budget: u32) -> bool {
 }
 
 /// A call of component `c` that started at `t0_ticks` just returned: charge its duration.
+/// E1b: all CPU charged to component `c` since boot (us).
+pub fn cpu_total_us(c: u8) -> u64 {
+    cpu(c).total_us
+}
+
 pub fn cpu_charge(c: u8, t0_ticks: u64) {
     let us = crate::clock::ticks().saturating_sub(t0_ticks) / (crate::clock::freq() / 1_000_000).max(1);
     cpu(c).charge(us);
