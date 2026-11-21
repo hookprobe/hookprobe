@@ -1558,9 +1558,21 @@ pub mod keyer {
     pub static mut REG_LOST: u64 = 0;
     /// One register operation of a firmware reload (`hal::wifisrvabi::CMD_BP_REG`): Some((ok, value read)); None = no
     /// server / backoff (the driver does it in-kernel). A fault reports (false, all-ones) — a failed bus read.
+    /// BENCH (`wifi-inject`): the next reload register op faults the bus server instead (the R1 metal proof: a bus
+    /// fault DURING a firmware reload must be recovered in EL1, never through the server that just faulted).
+    #[cfg(feature = "wifi-inject")]
+    static mut ARM_RELOAD_FAULT: bool = false;
     pub(crate) fn bp_reg(op: u8, fnum: u8, addr: u32, val: u32) -> Option<(bool, u32)> {
         use hal::wifisrvabi::{bp_reg_in, CMD_BP_REG};
         let s = bus_srv()?;
+        #[cfg(feature = "wifi-inject")]
+        if unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(ARM_RELOAD_FAULT), false) } {
+            let c = s.call(CMD_SELFTEST_FAULT);
+            arch_aarch64::_print(format_args!(" [WIFI-INJECT] reload-bus-fault: the bus server faulted during a firmware reload ({:?}); recover counts {:?}\n",
+                c, unsafe { arch_aarch64::cyw43::BUS_RECOVER }));
+            unsafe { REG_LOST += 1 };
+            return Some((false, u32::MAX));
+        }
         let mut out = [0u8; 8];
         let (c, k) = s.call_lean(CMD_BP_REG, &bp_reg_in(op, fnum, addr, val), &mut out);
         match c {
@@ -1694,6 +1706,21 @@ pub mod keyer {
                 Some((Call::Fault, _)) => "el0-wpa faulted outside a station call: full wipe",
                 _ => return Err("security server unavailable"),
             },
+            // R1: the bus server faults on the next register op of a firmware reload (arm, then cause a reload)
+            "reload-bus-fault" => {
+                unsafe { ARM_RELOAD_FAULT = true };
+                "armed: the bus server faults on the next register op of a firmware reload"
+            }
+            // R7: the next authorize ioctl is reported never sent -> the authorize iovar must take over
+            "drop-authorize" => {
+                unsafe { arch_aarch64::cyw43::INJECT_DROP_AUTHORIZE = true };
+                "armed: the next station authorize ioctl is reported never sent"
+            }
+            "auth-stats" => {
+                let (t, a) = unsafe { arch_aarch64::cyw43::AUTH_IOVAR };
+                arch_aarch64::_print(format_args!(" [WIFI-INJECT] authorize iovar fallbacks tried={} authorized={}\n", t, a));
+                if t > 0 && t == a { "authorize iovar fallback: every try authorized" } else if t == 0 { "authorize iovar fallback: never tried" } else { "authorize iovar fallback: a try FAILED" }
+            }
             // H7: one bit of el0-wpa's saved state flipped, then a restart: its next call must refuse the state
             // (ST_STATE_BAD), the kernel full-wipes (never reuses it), every station re-keys, journaled kind probe / rung wipe
             "wpa-state-corrupt" => {
@@ -1737,7 +1764,7 @@ pub mod keyer {
                     "ISOLATION PROBE FAILED (see [WIFI-ISOLATION])"
                 }
             }
-            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | wpa-state-corrupt | bus-read-wpa)"),
+            _ => return Err("unknown kind (cmd53-stall | bus-fault | wpa-station-m2 | wpa-fault | wpa-state-corrupt | bus-read-wpa | reload-bus-fault | drop-authorize | auth-stats)"),
         };
         arch_aarch64::_print(format_args!(" [WIFI-INJECT] {}: {}\n", kind, r));
         Ok(r)

@@ -90,7 +90,7 @@ hsh-dev = ["hsh"]
 # BENCH ONLY (ADR 0065 S4): Wi-Fi fault injection — POST /api/bench/wifi-inject (owner re-auth) stalls a CMD53 in
 # el0-wifi, faults it, faults el0-wpa on one station's command, or faults el0-wpa outside any station (full wipe).
 # Refused in a release build by os/build/make-cm5-heqk-image.sh (needs HOOKPROBE_DEBUG_ACCESS=1).
-wifi-inject = ["apmc"]
+wifi-inject = ["apmc", "arch-aarch64/wifi-inject"]
 # Autoheal harness H6: the software fault-injection campaign ([P-swifi]) in the mcserve QEMU boot. Never shipped.
 swifi = ["mcserve"]
 mcserve = ["netsvc", "mctls"]

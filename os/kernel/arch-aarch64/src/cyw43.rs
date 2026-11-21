@@ -5268,6 +5268,12 @@ fn key_install(d: hal::wpakeyer::Done, mut tk: [u8; 16]) -> KeyDone {
         let mut ab = [0u8; 32];
         let na = iovar_buf(b"authorize", &d.sta, &mut ab);
         auth.authorized = bcdc_dcmd(WLC_SET_VAR, BCDC_SET, &ab[..na], &mut []).0;
+        unsafe {
+            AUTH_IOVAR.0 += 1;
+            if auth.authorized {
+                AUTH_IOVAR.1 += 1;
+            }
+        }
     }
     dbg_putc(b'A');
     #[cfg(feature = "wpa3")]
@@ -7220,6 +7226,11 @@ fn bcdc_iovar_get(name: &[u8], out: &mut [u8]) -> bool {
 /// R7 (code review 2026-11-18): the last `bcdc_dcmd` never reached the firmware (no TX credit, or the control write
 /// failed) — as opposed to a request the firmware got but answered late. Both return (false, 0).
 static mut DCMD_NOT_SENT: bool = false;
+/// R7: (authorize-iovar fallbacks tried, of them authorized) — the ioctl was refused or never sent.
+pub static mut AUTH_IOVAR: (u32, u32) = (0, 0);
+/// BENCH (`wifi-inject`): the next WLC_SCB_AUTHORIZE ioctl is reported never sent (the R7 metal proof).
+#[cfg(feature = "wifi-inject")]
+pub static mut INJECT_DROP_AUTHORIZE: bool = false;
 /// Gap-fix E5: while a firmware reload runs, the slowest control round trip it made — (ms, cmd, iovar name, requests).
 /// The ~980 ms reloads (vs ~830) sit after the upload, in the version / pre-init control requests (#1294); this names
 /// the one that waited.
@@ -7245,6 +7256,12 @@ fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u
 }
 fn bcdc_dcmd_raw(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u32) {
     unsafe { DCMD_NOT_SENT = false };
+    #[cfg(feature = "wifi-inject")]
+    if cmd == WLC_SCB_AUTHORIZE && unsafe { core::mem::replace(&mut *core::ptr::addr_of_mut!(INJECT_DROP_AUTHORIZE), false) } {
+        crate::_print(format_args!(" [WIFI-INJECT] drop-authorize: this authorize ioctl is reported never sent (R7)\n"));
+        unsafe { DCMD_NOT_SENT = true };
+        return (false, 0);
+    }
     let reqid = unsafe {
         BCDC_REQID = BCDC_REQID.wrapping_add(1);
         BCDC_REQID
