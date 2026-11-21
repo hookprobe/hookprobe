@@ -3,6 +3,7 @@
  "note": "Holdouts the windows export refuses unless `--unseal <source_id>` is given; every unseal is written to the audit log. A source may be sealed by name before it is in the registry: no data, no hashes, never opened.",
  "sealed": [
   {"source_id": "iot-23", "scope": "split:test@neuro-sha256-mod3", "reason": "Neuro P2 test side (spent); never train on it", "sealed_on": "2026-11-20"},
-  {"source_id": "deakin-iot-traffic-v2", "name": "Deakin IoT Traffic v2 (Figshare 28013234, v2)", "scope": "*", "reason": "Neuro's fresh confirmation set for a pre-registered temporal-engine test (docs/research/neuro/18, 19); deliberately unopened", "sealed_on": "2026-11-20"}
+  {"source_id": "deakin-iot-traffic-v2", "name": "Deakin IoT Traffic v2 (Figshare 28013234, v2)", "scope": "*", "reason": "Neuro's fresh confirmation set for a pre-registered temporal-engine test (docs/research/neuro/18, 19); deliberately unopened", "sealed_on": "2026-11-20"},
+  {"source_id": "ctu-13", "scope": "split:test@neuro-sha256-mod3", "reason": "Neuro CTU-13 test split (scenarios 2,3,4,6,7,9,11,12,13 by mirror name CTU-13.Dataset-<capture>), frozen with the Neuro session before any window was exported; dev = 1,5,8; 10 missing (would be test)", "sealed_on": "2026-11-21"}
  ]
 }

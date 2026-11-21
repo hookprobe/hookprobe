@@ -1,0 +1,176 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Read-only lookup tables for Neuro's L0 CONTEXT line (agreed with the Neuro session, 2026-11-21).
+
+Not training text: a 1.7B explainer should look CVE and ATT&CK facts up, not memorise them. Two tables,
+record facts only, from the newest normalised acquisition of each source that the licence gate allows
+for `purpose`:
+
+  cve.jsonl     {"cve": "CVE-2021-44228", "cwe": ["CWE-502"], "cvss": {"version": "3.1", "score": 10.0,
+                 "band": "critical"} | null, "vendor": "...", "product": "...", "kev": true|false,
+                 "src": ["cve-list-v5", ...]}
+  attack.jsonl  {"id": "T1110", "name": "Brute Force", "tactics": ["credential-access"],
+                 "domains": ["enterprise"]}
+
+Field rules:
+- CVE fields come from the CVE Program record first; the GitHub Advisory Database fills a field only where
+  the CVE record has none (vendor/product there are the package ecosystem and name). `src` lists the
+  sources that contributed.
+- band is the CVSS v3/v4 qualitative rating; v2 scores keep band null (v2 has no 'critical').
+- kev is true when the CVE is in the CISA KEV catalogue acquisition used, or the CVE record's CISA-ADP
+  container carries the KEV marker; false means "not in that catalogue snapshot", dated in the manifest.
+- ATT&CK: active techniques only (deprecated and revoked are left out); domains lists which of the
+  enterprise / mobile / ICS bundles carry the id.
+The output directory is immutable (id = hash of inputs + code); files are 0444 and the manifest, with every
+file's SHA-256, is renamed into place last.
+"""
+import hashlib
+import json
+import os
+
+from . import VERSION, canon, cvss, licensing
+
+CVE_SOURCES = ("cve-list-v5", "github-advisory-db", "cisa-kev")
+ATTACK_SOURCES = {"mitre-attack-stix": "enterprise", "mitre-attack-mobile": "mobile", "mitre-attack-ics": "ics"}
+FORMAT = 1
+
+
+def _newest(store, source_id):
+    acqs = [a for a in store.acquisitions(source_id) if not a.get("derived_from")]
+    return acqs[-1] if acqs else None  # acquisitions() is ordered by fetched_at
+
+
+def _records(store, acq):
+    p = os.path.join(store.norm_dir(acq["source_id"], acq["acquisition_id"]), "records.jsonl")
+    if not os.path.exists(p):
+        return
+    with open(p, "r", encoding="utf-8") as f:
+        for line in f:
+            yield json.loads(line)
+
+
+def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, attack_sources=None, kev_source="cisa-kev"):
+    """cve_sources in precedence order; kev_source is the KEV catalogue (sources are parameters for tests)."""
+    attack_sources = attack_sources or ATTACK_SOURCES
+    used, refused = {}, {}
+    for sid in tuple(cve_sources) + tuple(attack_sources):
+        ok, why = licensing.decide(registry.license_of(sid), purpose)
+        acq = _newest(store, sid)
+        if not ok:
+            refused[sid] = why
+        elif acq is None:
+            refused[sid] = "no acquisition"
+        else:
+            used[sid] = acq
+    version = "lookup-" + canon.sha256_obj([FORMAT, VERSION, purpose, _code_digest(),
+                                            sorted((s, a["acquisition_id"], _norm(store, a)) for s, a in used.items())])[:12]
+    out = os.path.join(out_root or os.path.join(store.root, "builds"), version)
+    if os.path.exists(os.path.join(out, "manifest.json")):
+        raise RuntimeError(f"{out} is a finished lookup build and is never rewritten")
+    os.makedirs(out, exist_ok=True)
+
+    cve = {}
+    kev = set()
+    for sid in cve_sources:
+        if sid not in used:
+            continue
+        for r in _records(store, used[sid]):
+            if r["kind"] != "vulnerability":
+                continue
+            b = r["body"]
+            if sid == kev_source or b["known_exploited"]:
+                kev.add(b["cve_id"])
+            if sid == kev_source:
+                continue
+            e = cve.setdefault(b["cve_id"], {"cve": b["cve_id"], "cwe": [], "cvss": None, "vendor": None,
+                                             "product": None, "src": []})
+            took = False
+            if not e["cwe"] and b["cwe_ids"]:
+                e["cwe"], took = list(b["cwe_ids"]), True
+            if e["cvss"] is None and b["cvss"]:
+                c = b["cvss"]
+                band = cvss.severity(c["base_score"]) if c["version"] != "2.0" else None
+                e["cvss"], took = {"version": c["version"], "score": c["base_score"], "band": band}, True
+            if e["vendor"] is None and e["product"] is None and (b["vendor"] or b["product"]):
+                e["vendor"], e["product"], took = b["vendor"], b["product"], True
+            if took and sid not in e["src"]:
+                e["src"].append(sid)
+    for c in kev:  # a KEV entry missing from both CVE sources still gets a row (kev only)
+        cve.setdefault(c, {"cve": c, "cwe": [], "cvss": None, "vendor": None, "product": None, "src": []})
+    for c, e in cve.items():
+        e["kev"] = c in kev
+        if c in kev and kev_source in used and kev_source not in e["src"]:
+            e["src"].append(kev_source)
+
+    attack = {}
+    for sid, domain in attack_sources.items():
+        if sid not in used:
+            continue
+        for r in _records(store, used[sid]):
+            if r["kind"] != "attack_technique":
+                continue
+            b = r["body"]
+            if b["deprecated"] or b["revoked"]:
+                continue
+            e = attack.setdefault(b["technique_id"], {"id": b["technique_id"], "name": b["name"], "tactics": [],
+                                                      "domains": []})
+            e["tactics"] = sorted(set(e["tactics"]) | set(b["tactics"]))
+            if domain not in e["domains"]:
+                e["domains"].append(domain)
+
+    files = []
+    for name, rows, key in (("cve.jsonl", cve, _cve_key), ("attack.jsonl", attack, _attack_key)):
+        p = os.path.join(out, name)
+        with open(p + ".partial", "w", encoding="utf-8") as f:
+            for k in sorted(rows, key=key):
+                f.write(json.dumps(rows[k], separators=(",", ":"), sort_keys=True) + "\n")
+        os.chmod(p + ".partial", 0o444)
+        os.replace(p + ".partial", p)
+        files.append({"file": name, "rows": len(rows), "sha256": _sha(p)})
+    manifest = {
+        "schema": "heqk.lookup-manifest/1", "version": version, "tool_version": VERSION, "format": FORMAT,
+        "purpose": purpose, "files": files,
+        "sources": {s: {"acquisition_id": a["acquisition_id"], "fetched_at": a["fetched_at"], "normalized_by": _norm(store, a),
+                        "license_id": a["license_id"],
+                        "attribution": registry.source(s).get("attribution")} for s, a in sorted(used.items())},
+        "refused": refused,
+        "notes": "Record facts only. kev=false means 'not in the CISA KEV snapshot fetched at "
+                 + (used[kev_source]["fetched_at"] if kev_source in used else "n/a") + "'.",
+    }
+    mp = os.path.join(out, "manifest.json")
+    with open(mp + ".partial", "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=1, sort_keys=True)
+    os.chmod(mp + ".partial", 0o444)
+    os.replace(mp + ".partial", mp)
+    store.audit("lookup", version=version, purpose=purpose, sources=sorted(used))
+    return out, manifest
+
+
+def _norm(store, acq):
+    """(adapter, adapter_version) of the acquisition's current normalisation: a re-parse changes the id."""
+    row = store.db.execute("SELECT adapter, adapter_version FROM normalizations WHERE acquisition_id = ? "
+                           "ORDER BY created_at DESC LIMIT 1",
+                           (acq["acquisition_id"],)).fetchone()
+    return list(row) if row else None
+
+
+def _cve_key(c):
+    y, n = c[4:].split("-")
+    return (int(y), int(n))
+
+
+def _attack_key(t):
+    main, _, sub = t[1:].partition(".")
+    return (int(main), int(sub or 0))
+
+
+def _code_digest():
+    with open(__file__, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def _sha(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    return h.hexdigest()

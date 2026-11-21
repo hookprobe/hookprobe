@@ -7,7 +7,10 @@ TA-ids come from the bundle's x-mitre-tactic objects.
 """
 from .. import canon, safeio
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
+# enterprise, mobile and ICS bundles name their kill chains differently (1.0.0 read enterprise only, so
+# mobile / ICS techniques came out with no tactics)
+KILL_CHAINS = {"mitre-attack", "mitre-mobile-attack", "mitre-ics-attack"}
 
 
 def _ext_id(obj):
@@ -38,7 +41,7 @@ def parse(path, ctx):
         if not tid or not tid.startswith("T"):
             yield Reject(i, "attack-pattern without a mitre-attack external_id", o.get("id"))
             continue
-        phases = sorted({p["phase_name"] for p in o.get("kill_chain_phases", []) if p.get("kill_chain_name") == "mitre-attack"})
+        phases = sorted({p["phase_name"] for p in o.get("kill_chain_phases", []) if p.get("kill_chain_name") in KILL_CHAINS})
         body = {
             "schema": "heqk.attack-technique/1",
             "technique_id": tid,

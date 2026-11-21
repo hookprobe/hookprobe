@@ -126,6 +126,19 @@ def cmd_windows(a):
     return 0
 
 
+def cmd_lookup(a):
+    from heqkdata import lookup
+    st, reg = Store(), registry.Registry()
+    out, man = lookup.build(st, reg, a.purpose, out_root=a.out)
+    print(f"lookup {man['version']} -> {out}")
+    for f in man["files"]:
+        print(f"  {f['file']:<14} rows={f['rows']} sha256={f['sha256']}")
+    for k, v in sorted(man["refused"].items()):
+        print(f"  refused {k}: {v}")
+    print(f"  manifest sha256={lookup._sha(os.path.join(out, 'manifest.json'))}")
+    return 0
+
+
 def cmd_validate(a):
     v = schema.default()
     name = SCHEMA_IDS.get(a.schema, a.schema)
@@ -252,6 +265,10 @@ def main(argv=None):
     s.add_argument("--unseal", metavar="SOURCE", help="export sealed holdouts of SOURCE (logged)")
     s.add_argument("--out")
     s.set_defaults(fn=cmd_windows)
+    s = sub.add_parser("lookup", help="read-only CVE and ATT&CK lookup tables (facts only) for Neuro's L0 context")
+    s.add_argument("--purpose", required=True, choices=licensing.PURPOSES)
+    s.add_argument("--out")
+    s.set_defaults(fn=cmd_lookup)
     s = sub.add_parser("validate")
     s.add_argument("file")
     s.add_argument("--schema", default="training-example")
