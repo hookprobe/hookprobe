@@ -6,7 +6,8 @@ also contains the third-party components below, each under its own licence. All 
 permissive (MIT, Apache-2.0, BSD, ISC, 0BSD, Unicode) and compatible with AGPL-3.0.
 
 The list is the union over every build flavour (`--all-features`) of heqk and the EL0 services it
-embeds, so any one image contains a subset of it. Files that sit **next to** the image on the boot
+embeds, so any one image contains a subset of it. Email addresses are left out of the licence texts;
+each copyright notice keeps its year and holder. Files that sit **next to** the image on the boot
 partition have their own records:
 
 - CM5 device tree (GPL-2.0, with its source): [`os/drivers/firmware/rpi-dtb/LICENSE.md`](../../drivers/firmware/rpi-dtb/LICENSE.md)
@@ -85,7 +86,7 @@ partition have their own records:
 | Rust crate | kem | 0.3.0 | `Apache-2.0 OR MIT` | el0-tlshost, heqk, tlsprov | [d4fe614e01bf](#text-d4fe614e01bf) |
 | Rust crate | libm | 0.2.16 | `MIT` | el0-wasmhost | [b8e7dc40cca9](#text-b8e7dc40cca9) |
 | Rust crate | lock_api | 0.4.14 | `MIT OR Apache-2.0` | el0-tlshost | [a489355fe231](#text-a489355fe231) |
-| Rust crate | managed | 0.8.0 | `0BSD` | heqk | [14d99b5f222e](#text-14d99b5f222e) |
+| Rust crate | managed | 0.8.0 | `0BSD` | heqk | [d1737273f173](#text-d1737273f173) |
 | Rust crate | ml-kem | 0.3.4 | `Apache-2.0 OR MIT` | el0-tlshost, heqk, tlsprov | [82e92d44683b](#text-82e92d44683b) |
 | Rust crate | module-lattice | 0.2.4 | `Apache-2.0 OR MIT` | el0-tlshost, heqk, tlsprov | [82e92d44683b](#text-82e92d44683b) |
 | Rust crate | multi-stash | 0.2.0 | `MIT/Apache-2.0` | el0-wasmhost | [a356774099c4](#text-a356774099c4) |
@@ -101,8 +102,8 @@ partition have their own records:
 | Rust crate | rand_core | 0.6.4 | `MIT OR Apache-2.0` | el0-tlshost, heqk, tlsprov | [21d785df9cce](#text-21d785df9cce) |
 | Rust crate | rfc6979 | 0.6.0 | `Apache-2.0 OR MIT` | el0-tlshost, tlsprov | [ea8a060c5f88](#text-ea8a060c5f88) |
 | Rust crate | ring | 0.17.14 | `Apache-2.0 AND ISC` | el0-tlshost, tlsprov | [33714fbd33d3](#text-33714fbd33d3) |
-| Rust crate | rustls | 0.23.46 | `Apache-2.0 OR ISC OR MIT` | el0-tlshost, tlsprov | [0fa050876c6a](#text-0fa050876c6a) |
-| Rust crate | rustls-pki-types | 1.15.1 | `MIT OR Apache-2.0` | el0-tlshost, tlsprov | [651f52920a0e](#text-651f52920a0e) |
+| Rust crate | rustls | 0.23.46 | `Apache-2.0 OR ISC OR MIT` | el0-tlshost, tlsprov | [18c7571d4f84](#text-18c7571d4f84) |
+| Rust crate | rustls-pki-types | 1.15.1 | `MIT OR Apache-2.0` | el0-tlshost, tlsprov | [3fe310c8497c](#text-3fe310c8497c) |
 | Rust crate | rustls-webpki | 0.103.16 | `ISC` | el0-tlshost, tlsprov | [a301fd1e56d5](#text-a301fd1e56d5) |
 | Rust crate | scopeguard | 1.2.0 | `MIT OR Apache-2.0` | el0-tlshost | [62b64b4c4890](#text-62b64b4c4890) |
 | Rust crate | sec1 | 0.8.1 | `Apache-2.0 OR MIT` | el0-tlshost, el0-wpa, heqk, tlsprov | [b9f73d075c95](#text-b9f73d075c95) |
@@ -127,9 +128,9 @@ partition have their own records:
 | Rust crate | typenum | 1.20.1 | `MIT OR Apache-2.0` | el0-tlshost, el0-wpa, heqk, tlsprov | [b7ff76ba80dd](#text-b7ff76ba80dd) |
 | Rust crate | universal-hash | 0.5.1 | `MIT OR Apache-2.0` | el0-tlshost, heqk, tlsprov | [73cc20138a07](#text-73cc20138a07) |
 | Rust crate | untrusted | 0.9.0 | `ISC` | el0-tlshost, tlsprov | [cdde5630ef2c](#text-cdde5630ef2c) |
-| Rust crate | wasmi | 0.32.3 | `MIT/Apache-2.0` | el0-wasmhost | [f6f3f7cc3468](#text-f6f3f7cc3468) |
-| Rust crate | wasmi_collections | 0.32.3 | `MIT/Apache-2.0` | el0-wasmhost | [f6f3f7cc3468](#text-f6f3f7cc3468) |
-| Rust crate | wasmi_core | 0.32.3 | `MIT/Apache-2.0` | el0-wasmhost | [f6f3f7cc3468](#text-f6f3f7cc3468) |
+| Rust crate | wasmi | 0.32.3 | `MIT/Apache-2.0` | el0-wasmhost | [27cec487330c](#text-27cec487330c) |
+| Rust crate | wasmi_collections | 0.32.3 | `MIT/Apache-2.0` | el0-wasmhost | [27cec487330c](#text-27cec487330c) |
+| Rust crate | wasmi_core | 0.32.3 | `MIT/Apache-2.0` | el0-wasmhost | [27cec487330c](#text-27cec487330c) |
 | Rust crate | wasmparser-nostd | 0.100.2 | `Apache-2.0 WITH LLVM-exception` | el0-wasmhost | [2c4f5209924c](#text-2c4f5209924c) |
 | Rust crate | wnaf | 0.14.1 | `Apache-2.0 OR MIT` | el0-tlshost, el0-wpa, heqk, tlsprov | [a11be8659007](#text-a11be8659007) |
 | Rust crate | x25519-dalek | 2.0.1 | `BSD-3-Clause` | el0-tlshost, heqk, tlsprov | [6411ad0acd0e](#text-6411ad0acd0e) |
@@ -2096,14 +2097,14 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-<a id="text-14d99b5f222e"></a>
-### Text 14d99b5f222e
+<a id="text-d1737273f173"></a>
+### Text d1737273f173
 
 Used by: managed 0.8.0
 
 ````text
 --- LICENSE-0BSD.txt ---
-Copyright (C) 2017 whitequark@whitequark.org
+Copyright (C) 2017 whitequark
 
 Permission to use, copy, modify, and/or distribute this software for
 any purpose with or without fee is hereby granted.
@@ -2724,14 +2725,14 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-<a id="text-0fa050876c6a"></a>
-### Text 0fa050876c6a
+<a id="text-18c7571d4f84"></a>
+### Text 18c7571d4f84
 
 Used by: rustls 0.23.46
 
 ````text
 --- LICENSE-MIT ---
-Copyright (c) 2016 Joseph Birr-Pixton <jpixton@gmail.com>
+Copyright (c) 2016 Joseph Birr-Pixton
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -2758,14 +2759,14 @@ IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
 DEALINGS IN THE SOFTWARE.
 ````
 
-<a id="text-651f52920a0e"></a>
-### Text 651f52920a0e
+<a id="text-3fe310c8497c"></a>
+### Text 3fe310c8497c
 
 Used by: rustls-pki-types 1.15.1
 
 ````text
 --- LICENSE-MIT ---
-Copyright (c) 2023 Dirkjan Ochtman <dirkjan@ochtman.nl>
+Copyright (c) 2023 Dirkjan Ochtman
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated
@@ -3399,14 +3400,14 @@ Used by: untrusted 0.9.0
 // OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 ````
 
-<a id="text-f6f3f7cc3468"></a>
-### Text f6f3f7cc3468
+<a id="text-27cec487330c"></a>
+### Text 27cec487330c
 
 Used by: wasmi 0.32.3, wasmi_collections 0.32.3, wasmi_core 0.32.3
 
 ````text
 --- (no licence file in the package; standard MIT text, holders from Cargo.toml `authors`) ---
-Copyright (c) Robin Freyler <robin.freyler@gmail.com>
+Copyright (c) Robin Freyler
 
 Permission is hereby granted, free of charge, to any
 person obtaining a copy of this software and associated

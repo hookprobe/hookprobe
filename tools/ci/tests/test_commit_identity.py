@@ -24,7 +24,7 @@ class Identity(unittest.TestCase):
     def test_contact_email_as_author_or_committer_fails(self):
         self.assertEqual(len(c.problems([rec(ae="qsecbit@hookprobe.com")])), 1)       # the 2026-11-21 leak
         self.assertEqual(len(c.problems([rec(ce="hookprobe@hookprobe.com")])), 1)
-        self.assertEqual(len(c.problems([rec(ae="someone@gmail.com", ce="someone@gmail.com")])), 2)
+        self.assertEqual(len(c.problems([rec(ae="someone@example.com", ce="someone@example.com")])), 2)
 
     def test_coauthor_trailers(self):
         leak = rec(body="subject\n\nCo-authored-by: homepods <qsecbit@hookprobe.com>\n")
