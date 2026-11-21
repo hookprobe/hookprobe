@@ -16,6 +16,7 @@ UP="$UP --sign-key $SIGN"
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 T=$(mktemp -d); chmod 700 "$T"; trap 'rm -rf "$T"' EXIT
+. "$(dirname "$0")/lib-bench-baseline.sh"; bench_baseline_wrap "$KEY" "$LOG" "$MC"   # gap-fix E3: bench state before + after
 since() { tail -c +$((mark + 1)) "$LOG" | tr -d '\r\000'; }
 waitlog() { for _ in $(seq 1 "$2"); do since | grep -aq "$1" && return 0; sleep 2; done; return 1; }
 api() { python3 -I - "$MC" "$KEY" "$1" <<'PY'

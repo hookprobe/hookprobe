@@ -16,6 +16,7 @@ UP="python3 -I $ROOT/os/kernel/tools/hq-upload.py --mc $MC --owner-key-file $KEY
 ok=0; n=0
 chk() { n=$((n + 1)); if [ "$1" = 0 ]; then echo "ok  $2"; ok=$((ok + 1)); else echo "BAD $2"; fi; }
 T=$(mktemp -d); chmod 700 "$T"; trap 'shred -u "$T"/* 2>/dev/null; rm -rf "$T"' EXIT
+. "$(dirname "$0")/lib-bench-baseline.sh"; bench_baseline_wrap "$KEY" "$LOG" "$MC"   # gap-fix E3: bench state before + after
 # sh "<line>" [origin-override] -> prints the shell's reply (HTTP status on the last line as "HTTP <code>")
 # (/api/hsh is an owner write: the session's next seq rides in ?seq=, replay-checked — without it every line is
 # refused 409 'replay', which read as 'the shell does not answer')
