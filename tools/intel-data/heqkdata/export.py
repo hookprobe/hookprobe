@@ -16,7 +16,7 @@ import json
 import os
 import shutil
 
-from . import VERSION, builders, canon, licensing, quality, schema, splits
+from . import VERSION, builders, canon, evalfence, licensing, quality, schema, splits
 
 
 SYSTEM_PROMPT = ("You are the HookProbe security analyst. Answer only from the evidence given. "
@@ -157,6 +157,13 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
         excluded["schema_invalid_examples"] = len(bad)
         bad_ids = {b[0] for b in bad}
         examples = [e for e in examples if e["id"] not in bad_ids]
+    fence = evalfence.Fence()
+    fenced = [(e["id"], fence.hit(e)) for e in examples]
+    fenced = {i: s for i, s in fenced if s}
+    for s in fenced.values():
+        bump(f"eval_fence:{s}")
+    if fenced:
+        examples = [e for e in examples if e["id"] not in fenced]
     examples, ndup = splits.dedupe(examples)
     excluded["exact_duplicates"] = ndup
     for cid in wanted:
@@ -214,6 +221,7 @@ def build(store, registry, purpose, *, collections=None, cap_per_source=None, so
             for a in inputs if a in meta
         ],
         "outputs": outputs,
+        "eval_fence": fence.summary(),
         "usage_notes": {c: n for c, n in builders.USAGE_NOTES.items() if c in wanted},
         "counts": {cid: sum(1 for e in examples if e["collection"] == cid) for cid in wanted},
         "excluded": excluded,
