@@ -1,0 +1,16 @@
+{
+ "verdict_agreement": 1.0,
+ "next_step": [
+  61,
+  61
+ ],
+ "tool": [
+  6,
+  6
+ ],
+ "copilot": [
+  8,
+  8
+ ],
+ "disagreements": []
+}
