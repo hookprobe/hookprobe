@@ -56,10 +56,10 @@ validate / e2e log), 15 blocked, of 35**. `docs/release/signoffs/` holds no sign
 
 | ID | What | Owner | State | Evidence |
 |---|---|---|---|---|
-| GF-R1 | bus recovery never re-enters the faulted el0-wifi | eng | done-QEMU (metal proof pending) | #1308 |
+| GF-R1 | bus recovery never re-enters the faulted el0-wifi | eng | done+metal | #1308; metal: bus fault injected inside a reload, recovered in EL1 (#1454) |
 | GF-R2..R5 | A-01 review fixes (selftest state, grants, table full, own prefix) | eng | done-QEMU | #1310 |
-| GF-R6 | v6 A-01 signed-route exemption | eng | done-QEMU (CM5 ULA check pending) | #1310 |
-| GF-R7 | authorize retry when the ioctl was never sent | eng | done-QEMU (metal pending) | #1309 |
+| GF-R6 | v6 A-01 signed-route exemption | eng → bench | done-QEMU; metal needs an IPv6 upstream on the bench WAN (the bench VLAN has none; fortress001's live PPPoE is not touched) | #1310 |
+| GF-R7 | authorize retry when the ioctl was never sent | eng | fix corrected on metal (#1454): the iovar fallback did not authorize; re-sending the ioctl does (6/6) | #1309, #1454 |
 | GF-R8 | bus-fault episode cap | eng | done+metal | #1309; metal 2026-11-22: 1 Hz bus faults escalated to a firmware reload in 24 s (comment on #1309) |
 | GF-R9, R10 | reseed retry gate; doc comments | eng | done | #1309 |
 | GF-E1 | first-boot bring-up via el0-wifi (ADR 0065 D4.4) | eng; ADR edit op | done+metal; ADR status edit open (C2) | #1319 |
