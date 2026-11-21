@@ -41,8 +41,8 @@ WEAKNESS_SOURCES = ("mitre-cwe", "mitre-capec")
 INACTIVE = {"Deprecated", "Obsolete"}
 CONTEXT_SOURCES = ("iptoasn", "misp-warninglists")
 # 1 = cve + attack; 2 = + cwe + capec; 3 = + asn_ranges.tsv + warninglists.jsonl (the windows' remote_context
-# tables, so L0 at inference matches what training saw)
-FORMAT = 3
+# tables, so L0 at inference matches what training saw); 4 = + warninglist_phrases.jsonl, more third-party lists dropped
+FORMAT = 4
 
 
 def _newest(store, source_id):
@@ -170,6 +170,19 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
                                         "version": l["version"], "not_for_captures": k in context.NOT_FOR_CAPTURES,
                                         "entries": l["entries"]}, separators=(",", ":"), sort_keys=True) + "\n")
             nrows, fname = len(tab.lists), "warninglists.jsonl"
+            os.chmod(p + ".partial", 0o444)
+            os.replace(p + ".partial", p)
+            files.append({"file": fname, "rows": nrows, "sha256": _sha(p)})
+            # one hand-written phrase per kept list, so L0 and training render identical CONTEXT phrases
+            ph = context.phrases()
+            unmapped = sorted(k for k in tab.lists if k not in ph)
+            if unmapped:
+                raise RuntimeError(f"warninglists without a hand-written phrase: {unmapped}")
+            p = os.path.join(out, "warninglist_phrases.jsonl")
+            with open(p + ".partial", "w", encoding="utf-8") as f:
+                for k in sorted(tab.lists):
+                    f.write(json.dumps({"id": k, "phrase": ph[k]}, separators=(",", ":"), sort_keys=True) + "\n")
+            nrows, fname = len(tab.lists), "warninglist_phrases.jsonl"
         os.chmod(p + ".partial", 0o444)
         os.replace(p + ".partial", p)
         files.append({"file": fname, "rows": nrows, "sha256": _sha(p)})
@@ -190,6 +203,8 @@ def build(store, registry, purpose, out_root=None, cve_sources=CVE_SOURCES, atta
                         "attribution": registry.source(s).get("attribution")} for s, a in sorted(used.items())},
         "refused": refused,
         "context": context.manifest_entry(tables) if tables else {},
+        "phrases_note": "warninglist_phrases.jsonl is hand-written (registry/warninglist_phrases.json): no inferred facts; "
+                        "null = address space or non-network data, never a CONTEXT phrase.",
         "notes": "Record facts only. kev=false means 'not in the CISA KEV snapshot fetched at "
                  + (used[kev_source]["fetched_at"] if kev_source in used else "n/a") + "'.",
     }

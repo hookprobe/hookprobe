@@ -25,7 +25,11 @@ from . import licensing, safeio
 
 LOADERS = ("iptoasn_tsv", "misp_warninglists_zip")
 X4BNET = {"datacenter-ipv4", "datacenter-ipv6", "vpn-ipv4", "vpn-ipv6"}
-RANKING = re.compile(r"^(alexa|cisco_top|cloudflare-top|google-chrome-crux|majestic|tranco|umbrella-)")
+RANKING = re.compile(r"^(alexa|cisco_top|cloudflare-top|google-chrome-crux|majestic|tranco|umbrella-|netapi-top|moz-top)")
+# lists that republish another party's feed or curated list under that party's own terms
+THIRD_PARTY = {"digitalside": "OSINT.DigitalSide.IT feed (own terms; UNKNOWN in the registry)",
+               "covid-19-cyber-threat-coalition-whitelist": "third-party curated list with its own terms",
+               "covid-19-krassi-whitelist": "third-party curated list with its own terms"}
 NOT_FOR_CAPTURES = {"tor-exit-nodes"}  # current snapshots that must be date-matched to a capture
 MAX_LIST_JSON = 256 << 20
 
@@ -81,6 +85,8 @@ def warninglists_kept(name):
         return False, "X4BNet-derived (MIT notice, not CC0)"
     if RANKING.match(name):
         return False, "third-party ranking or vendor list with its own terms"
+    if name in THIRD_PARTY:
+        return False, THIRD_PARTY[name]
     return True, None
 
 
@@ -130,6 +136,13 @@ class Warninglists:
                     hits.add(k)
         # the stable list id is the key (names change between MISP versions); category gives a short phrase
         return [{"id": k, "name": self.lists[k]["name"], "category": self.lists[k]["category"]} for k in sorted(hits)]
+
+
+def phrases():
+    """Hand-written {list id: phrase or None} (registry/warninglist_phrases.json)."""
+    from . import REGISTRY_DIR
+    with open(os.path.join(REGISTRY_DIR, "warninglist_phrases.json"), "r", encoding="utf-8") as f:
+        return json.load(f)["phrases"]
 
 
 def load(store, registry, purpose, source_ids):

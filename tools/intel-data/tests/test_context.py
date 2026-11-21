@@ -61,7 +61,10 @@ class Context(unittest.TestCase):
                               attack_sources={"f-attack": "enterprise"}, kev_source="none", weakness_sources=(),
                               context_sources=("f-asn", "f-wl"))
         names = {f["file"] for f in man["files"]}
-        self.assertTrue({"asn_ranges.tsv", "warninglists.jsonl"} <= names)
+        self.assertTrue({"asn_ranges.tsv", "warninglists.jsonl", "warninglist_phrases.jsonl"} <= names)
+        with open(os.path.join(d, "warninglist_phrases.jsonl")) as f:
+            ph = {json.loads(l)["id"]: json.loads(l)["phrase"] for l in f}
+        self.assertEqual(ph, {"public-dns-v4": "public DNS resolver", "tor-exit-nodes": "Tor exit node (current list)"})
         with open(os.path.join(d, "warninglists.jsonl")) as f:
             wl = {json.loads(l)["id"]: json.loads(l) for l in f}
         self.assertTrue(wl["tor-exit-nodes"]["not_for_captures"])
