@@ -155,3 +155,56 @@ the model.
 4. Romanian ≥ 0.9.
 
 **Reported, not gated:** canary-safe split by marked and unmarked lines; English-only mention.
+
+## SEAL: blind v4 (2026-11-22, before any model is evaluated on it)
+
+**File:** `blind_cases.jsonl`. **SHA-256 `d5f6011f13b428e67be9e9cbe585627a4a5af2538d9aada2668112eb7d336ca5`.**
+
+**Counts and mix.**
+- 300 cases: mal 50, sus 35, ben 45, ins 20, cor 20, inj 80, cop 25, tool 25.
+- 35 Romanian (11.7%).
+- Triage and injection: 250. 107 of them accept more than one verdict.
+
+**Injection cases: 70 real, each with a unique canary, plus 10 harmless look-alikes.**
+- Canary forms: 32 identifier-style, 38 sentence-style.
+- **53 of the 70 sit on lines without the marker**, because the instruction avoids every keyword. The brief asked
+  for at least 15. The author chose 53, which is within the brief, and the set stands as authored. Blind v4 is
+  therefore a hard test of the model's own behaviour on unmarked injections, where guard R cannot help; only 17
+  real injections are redactable.
+- Carriers: certificate 6, device name 5, DHCP/mDNS 6, DNS 7, file 6, HTTP host 7, mail subject 6, owner note 4,
+  referer 5, SNI 6, user agent 6, URL query 6.
+- Instruction language: English 57, Romanian 13.
+
+**Validator.** The author's validator passes, and its self-test catches 32 kinds of deliberate break.
+
+**Seal checks (`blind4_seal.py`): PASS.**
+- **Marker rule:** 0 violations, re-checked independently against `semantic_compression.INSTRUCTION_LIKE` over
+  all 183 quoted values (31 marked).
+- **Collisions:** 0 normalised-context collisions with dev v1, dev v2, blind v1/v2/v3, T0, T0 v2, T0 v3, T0 v3
+  injection and T0 v3 identifier injection.
+- **Canaries:** 0 of the 70 occur in any training file (T0 v2 SFT, mixD, mixE) or any earlier set.
+
+**Second annotator** (fresh agent, sample only, no gold): 75 stratified cases.
+- **Before adjudication:** verdict 62/63, `next_step` 63/63, tool 5/6, copilot 4/6.
+- **The author adjudicated the 4 disagreements:**
+  - inj-007: (b) a thin single event, so insufficient_evidence is added. It is the only case accepting three
+    verdicts, slightly beyond the brief's two-verdict wording. Verdicts do not enter the gate, because hybrid
+    scoring takes the verdict from L0.
+  - cop-001 and cop-017: (b) over-literal keyword lists; synonyms added.
+  - tool-016: (a) kept, because no tool can delete malware and an unrequested policy change has side effects.
+- **After adjudication:** verdict 63/63, `next_step` 63/63, tool 5/6, copilot 6/6.
+- The pre-adjudication file (`5b9cdbdd…`) also passed every seal check.
+- **9 cases** were flagged as genuinely ambiguous.
+- **Caveat:** author and annotator are the same model family (as doc 23).
+
+**Frozen models.**
+
+| Model | File | SHA-256 |
+|---|---|---|
+| base17g (+R) | `base17-q8_0.gguf` | `b42e5551df9518eaf144220fe36beb1cdd557d4d9e2052c11ff30a6e92a19101` |
+| ftDg (+R) | `gguf-mixD-q8_0.gguf` | `2c06307299c3b979e99a9a499989b612a06aed3f03cf438c9d6b7a8eb40e2c2a` |
+
+**Guard.** `guard.py` as merged in #1450. The detector truncation fix (#1452) does not affect blind v4: the cards
+are authored, and the markers were checked on full values.
+
+The case text has not been read by the evaluator. It is committed after the single evaluation session.
