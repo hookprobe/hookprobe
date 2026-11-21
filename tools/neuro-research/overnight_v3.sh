@@ -25,8 +25,11 @@ for mix in mixA mixB; do
   "$S/venv/bin/mlx_lm.lora" -c "$O/$mix.yaml" --model "$S/models/student17" --train --data "$O/$mix" --fine-tune-type lora \
     --num-layers -1 --mask-prompt --grad-checkpoint --batch-size 4 --iters "$IT" --learning-rate 1e-4 --max-seq-length 2048 \
     --steps-per-report 50 --steps-per-eval 200 --val-batches 25 --save-every 200 --adapter-path "$O/ft-$mix" > "$O/train-$mix.log" 2>&1
-  python3 -I - "$O/train-$mix.log" "$O/ft-$mix" <<'PY'
+  python3 -I - "$O/train-$mix.log" "$O/ft-$mix" "$IT" <<'PY'
 import re, sys, os, shutil
+fin = os.path.join(sys.argv[2], "%07d_adapters.safetensors" % int(sys.argv[3]))
+if not os.path.exists(fin):                       # keep the FINAL adapter as a candidate too
+    shutil.copy(os.path.join(sys.argv[2], "adapters.safetensors"), fin)
 vals = {}
 for l in open(sys.argv[1]):
     m = re.match(r"\s*(\d+)\s+val ([0-9.]+)", re.sub(r"\x1b\[[0-9;]*m", "", l))
