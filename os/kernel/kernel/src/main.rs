@@ -5779,11 +5779,11 @@ fn cm5_p10_probe() {
                                                     let d = b.since(&p);
                                                     let (us, ms) = (cpu.saturating_sub(pc), t.saturating_sub(pt).max(1));
                                                     let x53 = (d.cmd53_rd + d.cmd53_wr + d.blk_rd + d.blk_wr) as u64;
-                                                    kprint!("   [SDIO-BUS] {} ms: el0-wifi cpu {} us ({} per mille) | cmd52 {} cmd53 rd {} wr {} blk rd {} wr {} | {} KB in {} KB out | frames {} dry polls {} | wait spins {} inhibit {} | per frame: cmd52 x100 {} cmd53 x100 {} | us per cmd53 (all el0-wifi cpu) {}\n",
+                                                    kprint!("   [SDIO-BUS] {} ms: el0-wifi cpu {} us ({} per mille) | cmd52 {} cmd53 rd {} wr {} blk rd {} wr {} | {} KB in {} KB out | frames {} dry polls {} | wait spins {} inhibit {} | per frame: cmd52 x100 {} cmd53 x100 {} | us per cmd53 (all el0-wifi cpu) {} | intstatus reads skipped (total) {}\n",
                                                         ms, us, us / ms, d.cmd52, d.cmd53_rd, d.cmd53_wr, d.blk_rd, d.blk_wr, d.bytes_rd / 1024, d.bytes_wr / 1024,
                                                         d.frames, d.dry_reads, d.wait_spins, d.inhibit_spins,
                                                         (d.cmd52 as u64 * 100).checked_div(d.frames as u64).unwrap_or(0), (x53 * 100).checked_div(d.frames as u64).unwrap_or(0),
-                                                        us.checked_div(x53).unwrap_or(0));
+                                                        us.checked_div(x53).unwrap_or(0), unsafe { arch_aarch64::cyw43::INT_POLL_SKIPPED });
                                                 }
                                                 unsafe { PREV = Some((b, cpu, t)) };
                                             }
