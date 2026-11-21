@@ -7,8 +7,7 @@
  * Typed against the Platform Manifest capability model — every stat
  * corresponds to a real manifest grant (dns_filtering, segmentation, wan …).
  *
- * WIRED to the real hookprobe-api read-API (ADR 0001) as of the evidence-graph
- * read-API build: `store/live.ts`'s `startLiveUpdates()` (called from
+ * WIRED to the device's real read API (served by heqk): `store/live.ts`'s `startLiveUpdates()` (called from
  * `App.tsx`'s `onMount`) overwrites `qsecbit`/`heartbeat`/`security` with real
  * data from `/api/qsecbit` + `/api/incidents` (+ live deltas via `/api/stream`)
  * whenever the API is reachable. `shield`/`network`/`connectivity`/`timeline`

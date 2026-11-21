@@ -1,6 +1,6 @@
 /**
  * dnsLive — Shield v2 live data from the device (`GET /api/dns`, ADR 0052 D7).
- * Polled every 10 s; stays null when the API is absent (dev box / Linux tier) so the page keeps
+ * Polled every 10 s; stays null when the API is absent (a dev server with no device) so the page keeps
  * its sample layout there. Nothing here is invented: every number is the device's.
  */
 import { createSignal } from 'solid-js';
