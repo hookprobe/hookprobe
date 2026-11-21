@@ -340,12 +340,15 @@ def main():
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--only", default="", help="comma list of case-id prefixes")
     ap.add_argument("--json", help="write per-case results here")
+    ap.add_argument("--workers", type=int, default=1,
+                    help="concurrent requests (server needs matching -np). Results keep case order. Use for TEACHER data "
+                         "generation; keep 1 for student evaluations so latency numbers stay comparable.")
     a = ap.parse_args()
     cases = [json.loads(l) for l in open(a.cases, encoding="utf-8") if l.strip()]
     if a.only:
         cases = [c for c in cases if any(c["id"].startswith(p) for p in a.only.split(","))]
     results, agg = [], collections.defaultdict(list)
-    for c in cases:
+    def generate(c):
         outs = []
         for r in range(a.repeat):
             if a.backend == "template":
@@ -356,6 +359,16 @@ def main():
                 except Exception as e:  # noqa: BLE001 -- record, never crash the run
                     out = {"_error": repr(e)[:300]}
             outs.append(out)
+        return outs
+
+    if a.workers > 1:
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(a.workers) as pool:
+            all_outs = list(pool.map(generate, cases))
+    else:
+        all_outs = None
+    for i, c in enumerate(cases):
+        outs = all_outs[i] if all_outs is not None else generate(c)
         sc = [score(c, o) for o in outs]
         first = sc[0]
         if a.repeat > 1 and c["task"] in ("triage", "injection"):
