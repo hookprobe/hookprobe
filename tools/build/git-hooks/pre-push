@@ -90,6 +90,18 @@ while read -r local_ref local_sha remote_ref remote_sha; do
   check_range "$range" "Slack token"        'xox[baprs]-[A-Za-z0-9-]{10,}'
   check_range "$range" "Unix shadow password hash" '[$]6[$][./A-Za-z0-9]{8,}[$][./A-Za-z0-9]{20,}'
   check_range "$range" "personal email address"    '@(hotmail|gmail|outlook|yahoo|icloud|proton(mail)?|aol)[.][a-z]{2,}'
+
+  # Commit IDENTITIES (author / committer / Co-authored-by) must be GitHub noreply addresses: the
+  # qsecbit@hookprobe.com leak of 2026-11-21 came from a commit made with a copied contact email.
+  if [ "$remote_sha" = "$ZERO_SHA" ]; then
+    id_args=(--not-remotes "$local_sha")
+  else
+    id_args=("$remote_sha..$local_sha")
+  fi
+  if ! python3 "$(git rev-parse --show-toplevel)/tools/ci/commit_identity.py" "${id_args[@]}" >/dev/null; then
+    echo "PRE-PUSH COMMIT IDENTITY -- refusing to push (see the list above)" >&2
+    FOUND=1
+  fi
 done
 
 if [ "$FOUND" -ne 0 ]; then

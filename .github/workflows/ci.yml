@@ -137,10 +137,25 @@ jobs:
           python3 -I "$RUNNER_TEMP/guard.py" --protected "$RUNNER_TEMP/protected.txt" \
             --base "origin/$BASE_REF" --head HEAD --branch "$HEAD_REF" --require-branch
 
+  identity:
+    name: "commit identity (noreply emails only)"
+    # PR commits only: a personal / contact email in author, committer or Co-authored-by fails the PR before
+    # merge (the qsecbit@hookprobe.com leak of 2026-11-21, tools/ci/commit_identity.py)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0 }
+      - name: Check the PR's commits
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: python3 tools/ci/commit_identity.py "$BASE..$HEAD"
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [g0, g1, g3, g4, autofix-guard]
+    needs: [g0, g1, g3, g4, autofix-guard, identity]
     runs-on: ubuntu-24.04
     steps:
       - name: All required gates green (autofix-guard may be skipped)
@@ -150,6 +165,6 @@ jobs:
           echo "$RESULTS" | python3 -c '
           import json, sys
           bad = {k: v["result"] for k, v in json.load(sys.stdin).items()
-                 if v["result"] not in ("success", "skipped") or (k != "autofix-guard" and v["result"] == "skipped")}
+                 if v["result"] not in ("success", "skipped") or (k not in ("autofix-guard", "identity") and v["result"] == "skipped")}
           print("gate results:", bad or "all green")
           sys.exit(1 if bad else 0)'
