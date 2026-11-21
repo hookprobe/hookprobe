@@ -24,6 +24,10 @@ Usage:
   python3 -I run_eval.py --backend template
   python3 -I run_eval.py --backend openai --url http://127.0.0.1:8080/v1 --model local --mode closed --repeat 3
 """
+import os as _os
+import sys as _sys
+_sys.path.insert(0, _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__))))
+import guard  # noqa: E402  (tools/neuro-research/guard.py)
 import argparse
 import collections
 import json
@@ -340,6 +344,9 @@ def main():
     ap.add_argument("--timeout", type=float, default=600)
     ap.add_argument("--only", default="", help="comma list of case-id prefixes")
     ap.add_argument("--json", help="write per-case results here")
+    ap.add_argument("--guard", choices=["none", "R", "E", "RE"], default="none",
+                    help="doc 24 injection guard: R = redact quoted values on !instr-like lines before the model sees "
+                         "them; E = echo filter on the answer. Scoring always uses the original case and gold.")
     ap.add_argument("--workers", type=int, default=1,
                     help="concurrent requests (server needs matching -np). Results keep case order. Use for TEACHER data "
                          "generation; keep 1 for student evaluations so latency numbers stay comparable.")
@@ -355,7 +362,10 @@ def main():
                 out = template_backend(c)
             else:
                 try:
-                    out = openai_backend(c, a, a.temperature if r == 0 else max(a.temperature, 0.7))
+                    seen = dict(c, context=guard.redact(c["context"])) if "R" in a.guard else c
+                    out = openai_backend(seen, a, a.temperature if r == 0 else max(a.temperature, 0.7))
+                    if "E" in a.guard:
+                        out = guard.apply_output(c, out, template_backend)
                 except Exception as e:  # noqa: BLE001 -- record, never crash the run
                     out = {"_error": repr(e)[:300]}
             outs.append(out)

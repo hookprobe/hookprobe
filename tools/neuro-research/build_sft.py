@@ -25,6 +25,9 @@ import run_eval  # noqa: E402
 
 import re
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import guard  # noqa: E402
+
 GOLD_SEVERITY = {"malicious": "high", "suspicious": "medium", "benign": "info", "insufficient_evidence": "low"}
 KEYS = ("schema_ok", "verdict_ok", "citation_ok", "mention_ok", "forbid_ok", "lang_ok")
 
@@ -59,6 +62,8 @@ def main():
     ap.add_argument("out")
     ap.add_argument("--valid", type=float, default=0.05)
     ap.add_argument("--no-echo", action="store_true", help="reject answers that reproduce attacker-controlled text")
+    ap.add_argument("--redact", action="store_true", help="doc 24: render training prompts with guard R (redact quoted "
+                    "values on !instr-like lines), so training matches guarded inference")
     ap.add_argument("--relabel-hedges", action="store_true",
                     help="a teacher 'suspicious' on a gold-'malicious' case is a hedge, not an error: keep it and write the "
                          "gold verdict (and its severity) into the target. Hybrid mode takes the verdict from L0. Any other "
@@ -93,7 +98,7 @@ def main():
             why["echo"] = why.get("echo", 0) + 1
         if bad:
             continue
-        system, user = messages(c)
+        system, user = messages(dict(c, context=guard.redact(c["context"])) if a.redact else c)
         keep.append({"messages": [{"role": "system", "content": system}, {"role": "user", "content": user},
                                   {"role": "assistant", "content": json.dumps(ans, ensure_ascii=False)}],
                      "_id": c["id"], "_lang": c["lang"], "_family": c.get("family")})
