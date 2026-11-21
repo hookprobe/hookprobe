@@ -1,5 +1,9 @@
 # Plan: remove the Linux tier from the repository
 
+**Progress (2026-11-21):** steps 0 (#1386), 1 (#1398), 3a (#1395) and 3 (#1396) are merged; the last
+11 files under `legacy/` go in `agent/remove-legacy-leftovers`. Licences of what ships: #1414 (device tree
+and firmware), #1415 (crates and browser code in the image). Next: step 2, then step 4.
+
 _Drafted 2026-11-20 by the agent, after the operator said "no linux, remove anything about linux"
 (AB-15). Nothing below has been executed except PR #1386 (the Linux-tier architecture doc).
 Facts are from `origin/main` @ `6ab20c2e`._
