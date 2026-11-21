@@ -1728,6 +1728,16 @@ pub fn fw_reload(nvram_scratch: &mut [u8]) -> u8 {
     let defer_on = unsafe { (*core::ptr::addr_of!(DEFER)).on };
     set_defer(defer_on); // empties the parked-frame ring, keeps the mode
     pet();
+    unsafe {
+        CTL_SLOW = (0, 0, [0; 16], 0);
+        CTL_SLOW_ON = true;
+    }
+    let r = fw_reload_steps(nvram_scratch, &pet);
+    unsafe { CTL_SLOW_ON = false };
+    r
+}
+
+fn fw_reload_steps(nvram_scratch: &mut [u8], pet: &dyn Fn()) -> u8 {
     let t0 = ms_now();
     let _ = radio_power_on();
     let t1 = ms_now();
@@ -7210,7 +7220,30 @@ fn bcdc_iovar_get(name: &[u8], out: &mut [u8]) -> bool {
 /// R7 (code review 2026-11-18): the last `bcdc_dcmd` never reached the firmware (no TX credit, or the control write
 /// failed) — as opposed to a request the firmware got but answered late. Both return (false, 0).
 static mut DCMD_NOT_SENT: bool = false;
+/// Gap-fix E5: while a firmware reload runs, the slowest control round trip it made — (ms, cmd, iovar name, requests).
+/// The ~980 ms reloads (vs ~830) sit after the upload, in the version / pre-init control requests (#1294); this names
+/// the one that waited.
+pub static mut CTL_SLOW: (u64, u32, [u8; 16], u32) = (0, 0, [0; 16], 0);
+static mut CTL_SLOW_ON: bool = false;
 fn bcdc_dcmd(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u32) {
+    if !unsafe { CTL_SLOW_ON } {
+        return bcdc_dcmd_raw(cmd, flags, payload, reply);
+    }
+    let t0 = ms_now();
+    let r = bcdc_dcmd_raw(cmd, flags, payload, reply);
+    let dt = ms_now().saturating_sub(t0);
+    unsafe {
+        let s = &mut *core::ptr::addr_of_mut!(CTL_SLOW);
+        s.3 += 1;
+        if dt >= s.0 {
+            s.0 = dt;
+            s.1 = cmd;
+            s.2 = CTL_CUR.1;
+        }
+    }
+    r
+}
+fn bcdc_dcmd_raw(cmd: u32, flags: u32, payload: &[u8], reply: &mut [u8]) -> (bool, u32) {
     unsafe { DCMD_NOT_SENT = false };
     let reqid = unsafe {
         BCDC_REQID = BCDC_REQID.wrapping_add(1);
