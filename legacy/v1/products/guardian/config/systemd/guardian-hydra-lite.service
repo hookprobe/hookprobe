@@ -1,0 +1,35 @@
+[Unit]
+Description=HookProbe Guardian HYDRA-Lite Threat Feed Sync
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-online.target guardian-dnsxai.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/hookprobe/guardian/scripts/hydra-lite-daemon.py
+Restart=always
+RestartSec=30
+User=root
+Group=root
+
+# Memory cap for Pi (100-200MB typical, 256MB max)
+MemoryMax=256M
+
+# Security hardening
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/hookprobe/guardian/data/hydra /var/log/hookprobe /etc/hookprobe
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+RestrictSUIDSGID=yes
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=guardian-hydra-lite
+
+[Install]
+WantedBy=multi-user.target

@@ -4,6 +4,11 @@
 11 files under `legacy/` go in `agent/remove-legacy-leftovers`. Licences of what ships: #1414 (device tree
 and firmware), #1415 (crates and browser code in the image). Next: step 2, then step 4.
 
+**Step 3a reversed (operator 2026-11-21):** `legacy/v1/` is back, restored unchanged from `6abfbf89` (the last
+`main` commit before #1395). heqk docs cite HYDRA, AEGIS, QSECBIT and NAPSE code in it as a learning base, and the
+private `hookprobe-com` repo runs scripts from it. It stays frozen: no new work lands there. Before deleting anything
+from this repo, also grep `hookprobe-com`. Branch `legacy/v1-frozen` points at the same commit.
+
 _Drafted 2026-11-20 by the agent, after the operator said "no linux, remove anything about linux"
 (AB-15). Nothing below has been executed except PR #1386 (the Linux-tier architecture doc).
 Facts are from `origin/main` @ `6ab20c2e`._

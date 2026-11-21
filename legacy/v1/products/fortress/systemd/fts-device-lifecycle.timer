@@ -1,0 +1,13 @@
+[Unit]
+Description=HookProbe Fortress Device Status Update Timer
+Documentation=https://hookprobe.com/docs/fortress/device-lifecycle
+
+[Timer]
+# Run every minute to update device statuses
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10
+Persistent=true
+
+[Install]
+WantedBy=timers.target

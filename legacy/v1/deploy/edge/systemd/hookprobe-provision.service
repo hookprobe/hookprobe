@@ -1,0 +1,36 @@
+[Unit]
+Description=HookProbe Provision Service - Install, Configure, and Auto-Repair
+Documentation=https://github.com/hookprobe/hookprobe
+After=network-online.target podman.service openvswitch.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# Environment
+Environment="PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+Environment="HOOKPROBE_BASE=/opt/hookprobe"
+Environment="HOOKPROBE_CONFIG=/etc/hookprobe"
+
+# Provisioning script
+ExecStart=/opt/hookprobe/scripts/provision.sh
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hookprobe-provision
+
+# Security
+PrivateTmp=yes
+NoNewPrivileges=no
+ProtectSystem=strict
+ReadWritePaths=/opt/hookprobe /var/log/hookprobe /etc/hookprobe /var/lib/containers
+
+# Resource limits
+TimeoutStartSec=600
+CPUQuota=200%
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

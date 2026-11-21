@@ -1,0 +1,50 @@
+# AIOCHI Supplementary Log Shipper Container
+# Ships supplementary log data to ClickHouse
+#
+# NAPSE handles primary IDS event shipping via clickhouse_shipper.py.
+# This service monitors ClickHouse health and ships any supplementary
+# log data not covered by the NAPSE event bus pipeline.
+#
+# Usage: podman build -t localhost/aiochi-logshipper:latest -f Containerfile.logshipper ..
+#
+# NOTE: Heredocs with Python 'from' statements confuse buildah's parser.
+#       All scripts are now external files that get COPYed in.
+
+FROM docker.io/library/python:3.11-slim-bookworm
+
+LABEL maintainer="HookProbe Team <qsecbit@hookprobe.com>"
+LABEL version="1.0.0"
+LABEL description="AIOCHI Supplementary Log Shipper - ClickHouse health and supplementary data"
+
+# Create app user
+RUN groupadd -r aiochi && useradd -r -g aiochi aiochi
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    procps \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create app directory
+WORKDIR /app
+
+# Install Python dependencies
+RUN pip install --no-cache-dir \
+    clickhouse-connect>=0.7.0 \
+    watchdog>=3.0.0 \
+    python-json-logger>=2.0.0
+
+# Copy scripts (external files to avoid heredoc parsing issues)
+COPY containers/scripts/log_shipper.py /app/log_shipper.py
+COPY containers/scripts/logshipper_entrypoint.sh /app/entrypoint.sh
+
+# Set permissions
+RUN chmod +x /app/log_shipper.py /app/entrypoint.sh
+
+# Switch to non-root user
+USER aiochi
+
+HEALTHCHECK --interval=30s --timeout=10s --retries=3 \
+    CMD pgrep -x python || exit 1
+
+ENTRYPOINT ["/app/entrypoint.sh"]

@@ -1,0 +1,510 @@
+# HookProbe IDS Infrastructure v5.0 (HYDRA)
+# ===========================================
+#
+# HYDRA Active Defense + Inspector + QSecBit Architecture
+#
+# Shared IDS/monitoring stack with active threat mitigation:
+#   - XDP HYDRA: Active filtering with LPM_TRIE blocklist/allowlist + weighted IP scores
+#   - Feed Sync: Threat feed download + XDP map population
+#   - Event Consumer: RINGBUF event reader + ClickHouse writer
+#   - RDAP Enricher: IP ownership lookup + weighted scoring + adaptive sampling
+#   - Feature Extractor: 24-feature behavioral vector extraction
+#   - Anomaly Detector: Isolation Forest ML + auto-block escalation
+#   - Inspector: Python AF_PACKET heuristic classification
+#   - QSecBit: Security scoring engine
+#
+# Prerequisites:
+#   1. Run setup-vrf.sh to create dummy-mirror interface
+#   2. Run hydra-xdp-deploy.sh to load XDP program
+#   3. ClickHouse must be running and healthy
+#
+# Usage:
+#   sudo podman-compose -f podman-compose.ids.yml up -d
+#
+# Architecture:
+#   dummy-mirror (receives all mirrored traffic)
+#        |
+#        +---> XDP HYDRA (kernel-level blocklist/allowlist filtering)
+#        |       |---> RINGBUF events -> Event Consumer -> ClickHouse
+#        |       +---> Feed Sync populates blocklist from threat feeds
+#        |
+#        +---> Inspector (Python AF_PACKET capture + heuristic classification)
+#        |       |---> napse_intents -> ClickHouse
+#        |       |---> napse_flows -> ClickHouse
+#        |       +---> xdp_stats -> ClickHouse
+#        |
+#        +---> Feature Extractor -> hydra_ip_features -> Anomaly Detector
+#        |
+#        +---> RDAP Enricher -> ip_scores BPF map (kernel-level score drops)
+#        |
+#        +---> QSecBit (security scoring from ClickHouse data)
+#
+# Version: 5.0.0
+
+name: hookprobe-ids
+
+volumes:
+  hydra_models:
+    name: ids-hydra-models
+
+services:
+  # ============================================================================
+  # DATA TIER - Uses AIOCHI ClickHouse (aiochi-clickhouse on ports 8123/9000)
+  # Database: hookprobe_ids, User: ids
+  # ============================================================================
+  # NOTE: ClickHouse service disabled - using shared AIOCHI ClickHouse instance.
+  # Schema initialized via: podman exec aiochi-clickhouse clickhouse-client < init.sql
+
+  # ============================================================================
+  # CAPTURE + CLASSIFICATION - Inspector (Python AF_PACKET)
+  # ============================================================================
+
+  inspector:
+    build:
+      context: ./inspector
+      dockerfile: Containerfile
+    container_name: ids-inspector
+    hostname: ids-inspector
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+    command: ["--interface", "dummy-mirror", "--stats-interval", "10", "--flush-interval", "30"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    labels:
+      - "hookprobe.service=inspector"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=Real-time packet capture and intent classification"
+
+  # ============================================================================
+  # SCORING TIER - QSecBit Security Scoring Engine
+  # ============================================================================
+
+  qsecbit:
+    build:
+      context: ./qsecbit
+      dockerfile: Containerfile
+    container_name: ids-qsecbit
+    hostname: ids-qsecbit
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=qsecbit"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=QSecBit security scoring engine"
+
+  # ============================================================================
+  # HYDRA - Threat Feed Sync Daemon
+  # ============================================================================
+  #
+  # Downloads threat intelligence feeds (Spamhaus, FireHOL, ET, Feodo)
+  # and pushes CIDRs to the XDP blocklist/allowlist BPF maps via raw syscalls.
+  # Also maintains the trusted allowlist (Anthropic, Vodafone RO, Cloudflare).
+  # ============================================================================
+
+  hydra-feed:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-feed
+    hostname: ids-hydra-feed
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      XDP_INTERFACE: "dummy-mirror"
+      SYNC_INTERVAL: "3600"
+    command: ["python3", "-u", "feed_sync.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-feed"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=Threat feed sync and XDP map population"
+
+  # ============================================================================
+  # HYDRA - Event Consumer
+  # ============================================================================
+  #
+  # Reads XDP RINGBUF events (drops, rate alerts) and writes to ClickHouse.
+  # Also sends Discord alerts for high-severity blocks.
+  # ============================================================================
+
+  hydra-consumer:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-consumer
+    hostname: ids-hydra-consumer
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      XDP_INTERFACE: "dummy-mirror"
+      DISCORD_WEBHOOK_URL: "${DISCORD_WEBHOOK_URL:-}"
+    command: ["python3", "-u", "event_consumer.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-consumer"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=XDP RINGBUF event consumer and ClickHouse writer"
+
+  # ============================================================================
+  # HYDRA - RDAP Enricher + Adaptive Sampling
+  # ============================================================================
+  #
+  # Queries RIPE RDAP for IP ownership, classifies IPs (datacenter/ISP/CDN/VPN/Tor),
+  # computes weighted threat scores, syncs to XDP ip_scores map for kernel-level
+  # filtering, and adjusts XDP sampling rate based on CPU load.
+  # ============================================================================
+
+  hydra-enricher:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-enricher
+    hostname: ids-hydra-enricher
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      POSTGRES_HOST: "${POSTGRES_HOST:-127.0.0.1}"
+      POSTGRES_PORT: "${POSTGRES_PORT:-5432}"
+      POSTGRES_DB: "${POSTGRES_DB:-hookprobe}"
+      POSTGRES_USER: "${POSTGRES_USER:-hookprobe}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-}"
+      XDP_INTERFACE: "dummy-mirror"
+      SCORE_DROP_THRESHOLD: "100"
+      RDAP_RATE_LIMIT: "10"
+      ENRICHER_INTERVAL: "30"
+    command: ["python3", "-u", "rdap_enricher.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-enricher"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=RDAP IP enrichment, weighted scoring, adaptive sampling"
+
+  # ============================================================================
+  # HYDRA - Feature Extractor
+  # ============================================================================
+  #
+  # Extracts 24-feature behavioral vectors per IP per 5-minute window
+  # from ClickHouse data and BPF IAT maps. Writes to hydra_ip_features.
+  # ============================================================================
+
+  hydra-features:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-features
+    hostname: ids-hydra-features
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      EXTRACT_INTERVAL: "300"
+      FEATURE_WINDOW: "300"
+      MIN_PACKETS: "10"
+    command: ["python3", "-u", "feature_extractor.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-features"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=24-feature behavioral vector extraction for ML"
+
+  # ============================================================================
+  # HYDRA - Anomaly Detector (Isolation Forest ML)
+  # ============================================================================
+  #
+  # Scores IP feature vectors with Isolation Forest anomaly detection.
+  # Writes verdicts to hydra_verdicts. Auto-blocks on escalation.
+  # ============================================================================
+
+  hydra-anomaly:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-anomaly
+    hostname: ids-hydra-anomaly
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - hydra_models:/app/models
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      DISCORD_WEBHOOK_URL: "${DISCORD_WEBHOOK_URL:-}"
+      DETECT_INTERVAL: "300"
+      MIN_TRAINING_SAMPLES: "100"
+      BASELINE_HOURS: "24"
+      RETRAIN_HOURS: "168"
+    command: ["python3", "-u", "anomaly_detector.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    labels:
+      - "hookprobe.service=hydra-anomaly"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=Isolation Forest anomaly detection and auto-blocking"
+
+  # ============================================================================
+  # SENTINEL - Baseline Profiler (Stage 1)
+  # ============================================================================
+  #
+  # Builds per-IP statistical profiles using Welford's online algorithm.
+  # Computes Z-scores, diurnal patterns, and RDAP enrichment integration.
+  # Writes to sentinel_ip_profiles table.
+  # ============================================================================
+
+  hydra-profiler:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-profiler
+    hostname: ids-hydra-profiler
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      PROFILE_INTERVAL: "300"
+      WINDOW_SIZE: "300"
+      MIN_EVENTS: "3"
+      MAX_TRACKED_IPS: "5000"
+    command: ["python3", "-u", "baseline_profiler.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-profiler"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 1: per-IP Welford statistical profiles"
+
+  # ============================================================================
+  # SENTINEL - CVE Enricher (Stage 2)
+  # ============================================================================
+  #
+  # Downloads CVE data from NVD API 2.0 and CISA KEV feed.
+  # Stores in local SQLite, provides CVE relevance scoring per (IP, port, intent).
+  # Writes to sentinel_cve_context table.
+  # ============================================================================
+
+  hydra-cve:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-cve
+    hostname: ids-hydra-cve
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - hydra_models:/app/models
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      NVD_API_KEY: "${NVD_API_KEY:-}"
+      CVE_DB_PATH: "/app/models/cve.db"
+      CVE_SCORING_INTERVAL: "300"
+    command: ["python3", "-u", "cve_enricher.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-cve"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 2: NVD/CISA CVE relevance scoring"
+
+  # ============================================================================
+  # SENTINEL - Temporal Memory (Stage 4)
+  # ============================================================================
+  #
+  # Behavioral drift detection via KL divergence, campaign co-occurrence
+  # graph with BFS reputation propagation, intent sequence tracking.
+  # Writes to sentinel_temporal and sentinel_campaigns tables.
+  # ============================================================================
+
+  hydra-temporal:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-temporal
+    hostname: ids-hydra-temporal
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      TEMPORAL_INTERVAL: "600"
+    command: ["python3", "-u", "temporal_memory.py"]
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-temporal"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 4: drift detection, campaigns, intent sequences"
+
+  hydra-sentinel:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-sentinel
+    hostname: ids-hydra-sentinel
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      SENTINEL_INTERVAL: "300"
+      SENTINEL_MIN_TRAINING: "10"
+      SENTINEL_ENABLED: "true"
+    volumes:
+      - hydra_models:/app/models
+    command: ["python3", "-u", "sentinel_engine.py"]
+    depends_on:
+      hydra-profiler:
+        condition: service_started
+      hydra-cve:
+        condition: service_started
+      hydra-temporal:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-sentinel"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 3: Bayesian ensemble engine with calibrated TP probabilities"
+
+  hydra-lifecycle:
+    build:
+      context: ../hydra
+      dockerfile: Containerfile
+    container_name: ids-hydra-lifecycle
+    hostname: ids-hydra-lifecycle
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      CLICKHOUSE_HOST: "127.0.0.1"
+      CLICKHOUSE_PORT: "8123"
+      CLICKHOUSE_DB: hookprobe_ids
+      CLICKHOUSE_USER: ids
+      CLICKHOUSE_PASSWORD: "${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD must be set}"
+      LIFECYCLE_INTERVAL: "300"
+      LIFECYCLE_MIN_NEW: "10"
+      LIFECYCLE_PH_THRESHOLD: "0.15"
+    command: ["python3", "-u", "sentinel_lifecycle.py"]
+    depends_on:
+      hydra-sentinel:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8123/ping', timeout=5)\" || exit 1"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "hookprobe.service=hydra-lifecycle"
+      - "hookprobe.vrf=hp-ids"
+      - "hookprobe.purpose=SENTINEL Stage 6: self-learning lifecycle, drift detection, metrics tracking"

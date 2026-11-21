@@ -1,0 +1,732 @@
+<!-- Config Tab Content -->
+<div class="dashboard-header">
+    <h2>Network Configuration</h2>
+    <p class="text-muted">WiFi settings and hotspot configuration</p>
+</div>
+
+<!-- Network Status -->
+<div class="stats-grid">
+    <div class="stat-card" id="wan-gateway-card">
+        <div class="stat-value" style="font-size: 1.1rem; font-family: var(--font-mono);" id="wan-gateway">Checking...</div>
+        <div class="stat-label">WAN Gateway</div>
+    </div>
+    <div class="stat-card info" id="lan-ssid-card">
+        <div class="stat-value" style="font-size: 1.1rem;" id="lan-ssid">Checking...</div>
+        <div class="stat-label">Hotspot SSID</div>
+    </div>
+    <div class="stat-card warning">
+        <div class="stat-value" style="font-size: 1.25rem;" id="lan-clients">0</div>
+        <div class="stat-label">Connected Clients</div>
+    </div>
+    <div class="stat-card success" id="channel-status-card">
+        <div class="stat-value" style="font-size: 1.1rem;" id="current-channel">--</div>
+        <div class="stat-label">WiFi Channel</div>
+    </div>
+</div>
+
+<!-- Automatic WiFi Optimization -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+            </svg>
+            Automatic WiFi Optimization
+        </h3>
+        <span class="badge badge-success" id="auto-channel-status">Active</span>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-bottom: var(--spacing-md);">
+            Guardian automatically selects the best WiFi channel for optimal signal quality.
+        </p>
+        <div class="stats-grid" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); margin-bottom: var(--spacing-md);">
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 0.9rem;">At Boot</div>
+                <div class="stat-label">Scans and selects best channel</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 0.9rem;">Daily 4:00 AM</div>
+                <div class="stat-label">Scheduled optimization</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" style="font-size: 0.9rem;">Continuous</div>
+                <div class="stat-label">Monitors signal conditions</div>
+            </div>
+        </div>
+        <div id="channel-analysis" style="display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--spacing-sm); margin-bottom: var(--spacing-md);">
+            <!-- Channel utilization populated by JavaScript -->
+        </div>
+        <div style="padding: var(--spacing-sm); background: var(--bg-light); border-radius: var(--radius-sm); border-left: 3px solid var(--hp-green);">
+            <small class="text-muted">
+                <strong>Automatic Mode:</strong> Best channel is selected at startup and re-evaluated daily at 4:00 AM to ensure optimal WiFi performance.
+            </small>
+        </div>
+    </div>
+</div>
+
+<!-- Route Metrics -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4s1.79-4 4-4h.71C7.37 7.69 9.48 6 12 6c3.04 0 5.5 2.46 5.5 5.5v.5H19c1.66 0 3 1.34 3 3s-1.34 3-3 3z"/>
+            </svg>
+            Route Metrics (Interface Priority)
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadRouteMetrics()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-bottom: var(--spacing-md);">
+            Lower metric = higher priority. eth0 should always be preferred when connected.
+        </p>
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Interface</th>
+                        <th>Gateway</th>
+                        <th>Metric</th>
+                        <th>Priority</th>
+                    </tr>
+                </thead>
+                <tbody id="route-metrics-body">
+                    <tr>
+                        <td colspan="4" class="empty-state">Loading routes...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- WAN WiFi Status -->
+<div class="card" id="wan-wifi-card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+            </svg>
+            WAN WiFi Connection (wlan0)
+        </h3>
+        <button class="btn btn-sm btn-secondary" onclick="refreshWanWifiStatus()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div id="wan-wifi-status" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--spacing-md);">
+            <div>
+                <div style="font-weight: 600;" id="wan-wifi-ssid">Checking...</div>
+                <div class="text-muted" style="font-size: 0.875rem;" id="wan-wifi-details">
+                    State: <span id="wan-wifi-state">--</span> |
+                    IP: <span id="wan-wifi-ip">--</span>
+                </div>
+            </div>
+            <div id="wan-wifi-actions">
+                <button class="btn btn-sm btn-danger" id="wan-wifi-disconnect-btn" onclick="disconnectWanWifi()" style="display: none;">
+                    Disconnect
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- WiFi Scanner -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M1 9l2 2c4.97-4.97 13.03-4.97 18 0l2-2C16.93 2.93 7.08 2.93 1 9zm8 8l3 3 3-3c-1.65-1.66-4.34-1.66-6 0zm-4-4l2 2c2.76-2.76 7.24-2.76 10 0l2-2C15.14 9.14 8.87 9.14 5 13z"/>
+            </svg>
+            Available Networks
+        </h3>
+        <button class="btn btn-sm btn-primary" id="scan-wifi-btn" onclick="scanWifiNetworks()">
+            Scan
+        </button>
+    </div>
+    <div class="card-body">
+        <div class="network-grid" id="wifi-networks-list">
+            <div class="empty-state" style="grid-column: 1 / -1;">
+                <p class="text-muted">Click "Scan" to discover available WiFi networks</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Connect to Network -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Connect to Network</h3>
+    </div>
+    <div class="card-body">
+        <form id="wifi-connect-form" onsubmit="connectToWifi(event)">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">Network Name (SSID)</label>
+                    <input type="text" class="form-input" id="wifi-ssid" placeholder="Enter network name" required>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="wifi-password" placeholder="Enter password">
+                </div>
+            </div>
+            <div class="card-footer" style="border-top: none; padding-top: var(--spacing-lg);">
+                <button type="submit" class="btn btn-primary">Connect</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Hotspot Configuration -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M12 11c-1.1 0-2 .9-2 2s.9 2 2 2 2-.9 2-2-.9-2-2-2zm6 2c0-3.31-2.69-6-6-6s-6 2.69-6 6c0 2.22 1.21 4.15 3 5.19l1-1.74c-1.19-.7-2-1.97-2-3.45 0-2.21 1.79-4 4-4s4 1.79 4 4c0 1.48-.81 2.75-2 3.45l1 1.74c1.79-1.04 3-2.97 3-5.19zM12 3C6.48 3 2 7.48 2 13c0 3.7 2.01 6.92 4.99 8.65l1-1.73C5.61 18.53 4 15.96 4 13c0-4.42 3.58-8 8-8s8 3.58 8 8c0 2.96-1.61 5.53-4 6.92l1 1.73c2.99-1.73 5-4.95 5-8.65 0-5.52-4.48-10-10-10z"/>
+            </svg>
+            Hotspot Settings
+        </h3>
+    </div>
+    <div class="card-body">
+        <form id="hotspot-form" onsubmit="updateHotspot(event)">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--spacing-md);">
+                <div class="form-group">
+                    <label class="form-label">Hotspot SSID</label>
+                    <input type="text" class="form-input" id="hotspot-ssid" placeholder="Guardian-AP" value="Guardian-AP">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Password</label>
+                    <input type="password" class="form-input" id="hotspot-password" placeholder="Minimum 8 characters">
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Channel</label>
+                    <select class="form-select" id="hotspot-channel">
+                        <option value="auto">Auto</option>
+                        <option value="1">1</option>
+                        <option value="6">6</option>
+                        <option value="11">11</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label class="form-label">Security</label>
+                    <select class="form-select" id="hotspot-security">
+                        <option value="wpa2">WPA2-PSK</option>
+                        <option value="wpa3">WPA3-SAE</option>
+                    </select>
+                </div>
+            </div>
+            <div style="margin-top: var(--spacing-md);">
+                <label class="toggle">
+                    <input type="checkbox" class="toggle-input" id="hotspot-hidden">
+                    <span class="toggle-slider"></span>
+                    <span class="toggle-label">Hidden Network</span>
+                </label>
+            </div>
+            <div class="card-footer" style="border-top: none; padding-top: var(--spacing-lg);">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-secondary" onclick="restartHotspot()">Restart Hotspot</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Network Interfaces -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">Network Interfaces</h3>
+        <button class="btn btn-sm btn-secondary" onclick="loadConfigData()">Refresh</button>
+    </div>
+    <div class="card-body">
+        <div class="table-container">
+            <table class="table">
+                <thead>
+                    <tr>
+                        <th>Interface</th>
+                        <th>IP Address</th>
+                        <th>MAC Address</th>
+                        <th>Status</th>
+                    </tr>
+                </thead>
+                <tbody id="interfaces-body">
+                    <tr>
+                        <td colspan="4" class="empty-state">Loading interfaces...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<!-- eth0 Configuration -->
+<div class="card">
+    <div class="card-header">
+        <h3 class="card-title">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" class="icon">
+                <path d="M15 9H9v6h6V9zm-2 4h-2v-2h2v2zm8-2V9h-2V7c0-1.1-.9-2-2-2h-2V3h-2v2h-2V3H9v2H7c-1.1 0-2 .9-2 2v2H3v2h2v2H3v2h2v2c0 1.1.9 2 2 2h2v2h2v-2h2v2h2v-2h2c1.1 0 2-.9 2-2v-2h2v-2h-2v-2h2zm-4 6H7V7h10v10z"/>
+            </svg>
+            eth0 Configuration (WAN Primary)
+        </h3>
+    </div>
+    <div class="card-body">
+        <p class="text-muted" style="margin-bottom: var(--spacing-md);">
+            Configure eth0 as DHCP (automatic) or set a static IP address. eth0 is the primary WAN interface with highest priority.
+        </p>
+        <form id="eth0-config-form" onsubmit="saveEth0Config(event)">
+            <div style="margin-bottom: var(--spacing-md);">
+                <label class="form-label" style="font-size: 0.9rem; font-weight: 700; margin-bottom: 0.75rem;">IP Configuration Mode</label>
+                <div style="display: flex; gap: var(--spacing-xl); flex-wrap: wrap;">
+                    <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 0.95rem;">
+                        <input type="radio" name="eth0-mode" value="dhcp" id="eth0-mode-dhcp" checked onchange="toggleEth0Mode()" style="width: 18px; height: 18px; accent-color: var(--pacific);">
+                        <span>DHCP (Automatic)</span>
+                    </label>
+                    <label style="cursor: pointer; display: flex; align-items: center; gap: 0.5rem; font-weight: 600; font-size: 0.95rem;">
+                        <input type="radio" name="eth0-mode" value="static" id="eth0-mode-static" onchange="toggleEth0Mode()" style="width: 18px; height: 18px; accent-color: var(--pacific);">
+                        <span>Static (Manual)</span>
+                    </label>
+                </div>
+            </div>
+            <div id="eth0-static-config" style="display: none;">
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: var(--spacing-md);">
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">IP Address</label>
+                        <input type="text" class="form-input" id="eth0-ip" placeholder="192.168.1.100" pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">Subnet Mask</label>
+                        <input type="text" class="form-input" id="eth0-netmask" placeholder="255.255.255.0" value="255.255.255.0">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">Gateway</label>
+                        <input type="text" class="form-input" id="eth0-gateway" placeholder="192.168.1.1" pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$">
+                    </div>
+                    <div class="form-group" style="margin-bottom: 0;">
+                        <label class="form-label">DNS Server</label>
+                        <input type="text" class="form-input" id="eth0-dns" placeholder="8.8.8.8" pattern="^(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$">
+                    </div>
+                </div>
+            </div>
+            <div id="eth0-current-config" style="margin-top: var(--spacing-md); padding: var(--spacing-sm); background: var(--bg-tertiary); border-radius: var(--radius-sm);">
+                <small class="text-muted">Current: <span id="eth0-current-mode">Loading...</span> - <span id="eth0-current-ip">--</span></small>
+            </div>
+            <div class="card-footer" style="border-top: none; padding-top: var(--spacing-lg);">
+                <button type="submit" class="btn btn-primary">Apply Configuration</button>
+            </div>
+        </form>
+    </div>
+</div>
+
+<script>
+// =========================================================================
+// AUTOMATIC WIFI CHANNEL OPTIMIZATION
+// =========================================================================
+
+async function refreshChannelStatus() {
+    const container = document.getElementById('channel-analysis');
+    const channelEl = document.getElementById('current-channel');
+    const statusBadge = document.getElementById('auto-channel-status');
+
+    try {
+        const result = await apiGet('/config/channel/status');
+        if (result.success) {
+            // Update header channel display
+            channelEl.textContent = `CH ${result.current_channel || '--'}`;
+
+            // Update status badge
+            if (result.auto_enabled) {
+                statusBadge.textContent = 'Active';
+                statusBadge.className = 'badge badge-success';
+            } else {
+                statusBadge.textContent = 'Manual';
+                statusBadge.className = 'badge badge-warning';
+            }
+
+            // Render channel utilization
+            renderChannelUtilization(result);
+        } else {
+            channelEl.textContent = '--';
+            container.innerHTML = '<div class="empty-state"><p class="text-muted">Channel data unavailable</p></div>';
+        }
+    } catch (error) {
+        console.error('Failed to get channel status:', error);
+        container.innerHTML = '<div class="empty-state"><p class="text-muted">Channel data unavailable</p></div>';
+    }
+}
+
+function renderChannelUtilization(data) {
+    const container = document.getElementById('channel-analysis');
+    const scores = data.channel_scores || {};
+    const currentChannel = data.current_channel || 6;
+
+    // Only show 2.4GHz non-overlapping channels (1, 6, 11)
+    const channels = [1, 6, 11];
+    let html = '';
+
+    channels.forEach(ch => {
+        const score = scores[ch] || scores[String(ch)] || { score: 0, utilization: 0 };
+        const isCurrent = ch === currentChannel;
+
+        // Determine card style based on utilization
+        let cardClass = 'stat-card';
+        if (isCurrent) {
+            cardClass = 'stat-card success';
+        } else if (score.utilization > 50) {
+            cardClass = 'stat-card danger';
+        } else if (score.utilization > 25) {
+            cardClass = 'stat-card warning';
+        }
+
+        const utilization = score.utilization || 0;
+
+        html += `
+            <div class="${cardClass}" style="text-align: center;">
+                <div class="stat-value" style="font-size: 1.5rem;">CH ${ch}</div>
+                <div class="stat-label">
+                    ${isCurrent ? '<strong style="color: var(--hp-green);">ACTIVE</strong><br>' : ''}
+                    ${utilization > 0 ? `${utilization.toFixed(0)}% busy` : '<span style="color: var(--hp-green);">Clear</span>'}
+                </div>
+            </div>
+        `;
+    });
+
+    container.innerHTML = html;
+}
+
+async function loadRouteMetrics() {
+    try {
+        const result = await apiGet('/config/offline/route-metrics');
+        if (result.success) {
+            renderRouteMetrics(result);
+        }
+    } catch (error) {
+        console.error('Failed to load route metrics:', error);
+    }
+}
+
+function renderRouteMetrics(data) {
+    const tbody = document.getElementById('route-metrics-body');
+    const routes = data.routes || [];
+
+    // Update WAN Gateway card with the primary route's gateway
+    const gatewayEl = document.getElementById('wan-gateway');
+    const gatewayCard = document.getElementById('wan-gateway-card');
+
+    if (gatewayEl && gatewayCard) {
+        if (routes.length > 0) {
+            // Find primary (eth0) or first route
+            const primaryRoute = routes.find(r => r.role === 'Primary') || routes[0];
+            if (primaryRoute && primaryRoute.gateway) {
+                gatewayEl.textContent = primaryRoute.gateway;
+                gatewayCard.className = 'stat-card success';
+            } else {
+                gatewayEl.textContent = 'No Gateway';
+                gatewayCard.className = 'stat-card danger';
+            }
+        } else {
+            gatewayEl.textContent = 'No Routes';
+            gatewayCard.className = 'stat-card danger';
+        }
+    }
+
+    if (routes.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="4" class="empty-state">No default routes configured</td></tr>';
+        return;
+    }
+
+    let html = '';
+    routes.forEach((route) => {
+        // Use role from API: 'Primary' for eth0, 'Fallback' for wlan0
+        const priority = route.role || 'Unknown';
+        const priorityClass = priority === 'Primary' ? 'badge-success' : 'badge-secondary';
+
+        html += `
+            <tr>
+                <td><strong>${route.interface || 'unknown'}</strong></td>
+                <td><code>${route.gateway || 'N/A'}</code></td>
+                <td>${route.metric || 0}</td>
+                <td><span class="badge ${priorityClass}">${priority}</span></td>
+            </tr>
+        `;
+    });
+
+    tbody.innerHTML = html;
+}
+
+// =========================================================================
+// WIFI & HOTSPOT FUNCTIONS
+// =========================================================================
+
+async function refreshWanWifiStatus() {
+    const ssidEl = document.getElementById('wan-wifi-ssid');
+    const stateEl = document.getElementById('wan-wifi-state');
+    const ipEl = document.getElementById('wan-wifi-ip');
+    const disconnectBtn = document.getElementById('wan-wifi-disconnect-btn');
+    const card = document.getElementById('wan-wifi-card');
+
+    try {
+        const result = await apiGet('/config/wifi/status');
+
+        if (result.connected && result.ssid) {
+            ssidEl.textContent = 'Connected to: ' + result.ssid;
+            ssidEl.style.color = 'var(--hp-green)';
+            stateEl.textContent = result.state || 'COMPLETED';
+            ipEl.textContent = result.ip || 'Waiting...';
+            disconnectBtn.style.display = 'inline-block';
+            card.style.borderLeft = '4px solid var(--hp-green)';
+        } else if (result.state === 'SCANNING' || result.state === 'ASSOCIATING') {
+            ssidEl.textContent = 'Connecting...';
+            ssidEl.style.color = 'var(--hp-amber)';
+            stateEl.textContent = result.state;
+            ipEl.textContent = '--';
+            disconnectBtn.style.display = 'none';
+            card.style.borderLeft = '4px solid var(--hp-amber)';
+        } else {
+            ssidEl.textContent = 'Not connected';
+            ssidEl.style.color = 'var(--text-secondary)';
+            stateEl.textContent = result.state || 'DISCONNECTED';
+            ipEl.textContent = '--';
+            disconnectBtn.style.display = 'none';
+            card.style.borderLeft = '4px solid var(--text-muted)';
+        }
+    } catch (error) {
+        ssidEl.textContent = 'Status unavailable';
+        ssidEl.style.color = 'var(--text-secondary)';
+        stateEl.textContent = 'ERROR';
+        ipEl.textContent = '--';
+        disconnectBtn.style.display = 'none';
+    }
+}
+
+async function disconnectWanWifi() {
+    if (!confirm('Disconnect from current WiFi network?')) {
+        return;
+    }
+
+    const btn = document.getElementById('wan-wifi-disconnect-btn');
+    if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Disconnecting...';
+    }
+
+    try {
+        const result = await apiPost('/config/wifi/disconnect');
+        if (result.success) {
+            showToast('Disconnected from WiFi', 'success');
+            setTimeout(refreshWanWifiStatus, 1000);
+        } else {
+            showToast(result.error || 'Failed to disconnect', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to disconnect', 'error');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.textContent = 'Disconnect';
+        }
+    }
+}
+
+async function connectToWifi(e) {
+    e.preventDefault();
+    const ssid = document.getElementById('wifi-ssid').value;
+    const password = document.getElementById('wifi-password').value;
+    const submitBtn = e.target.querySelector('button[type="submit"]');
+
+    // Show loading state
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="loading-spinner"></span> Connecting...';
+    }
+
+    showToast('Connecting to ' + ssid + '...', 'info');
+
+    try {
+        const result = await apiPost('/config/wifi/connect', { ssid, password });
+        if (result.success) {
+            if (result.ip) {
+                showToast('Connected to ' + ssid + ' (' + result.ip + ')', 'success');
+            } else if (result.message) {
+                showToast(result.message, 'info');
+            } else {
+                showToast('Connection initiated to ' + ssid, 'success');
+            }
+            // Refresh status after a delay
+            setTimeout(() => {
+                refreshWanWifiStatus();
+                refreshChannelStatus();
+                loadRouteMetrics();
+            }, 3000);
+            // Check again after 8 seconds for slow connections
+            setTimeout(refreshWanWifiStatus, 8000);
+        } else {
+            showToast(result.error || 'Failed to connect', 'error');
+        }
+    } catch (error) {
+        showToast('Connection failed: ' + (error.message || 'Unknown error'), 'error');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = 'Connect';
+        }
+    }
+}
+
+async function updateHotspot(e) {
+    e.preventDefault();
+    const data = {
+        ssid: document.getElementById('hotspot-ssid').value,
+        password: document.getElementById('hotspot-password').value,
+        channel: document.getElementById('hotspot-channel').value,
+        security: document.getElementById('hotspot-security').value,
+        hidden: document.getElementById('hotspot-hidden').checked
+    };
+
+    try {
+        const result = await apiPost('/config/hotspot', data);
+        if (result.success) {
+            showToast('Hotspot settings updated', 'success');
+        } else {
+            showToast(result.error || 'Failed to update settings', 'error');
+        }
+    } catch (error) {
+        showToast('Update failed', 'error');
+    }
+}
+
+async function restartHotspot() {
+    showToast('Restarting hotspot...', 'info');
+    try {
+        const result = await apiPost('/config/hotspot/restart');
+        if (result.success) {
+            showToast('Hotspot restarting...', 'info');
+            // Refresh status after restart
+            setTimeout(refreshHotspotStatus, 3000);
+        } else {
+            showToast(result.error || 'Failed to restart hotspot', 'error');
+        }
+    } catch (error) {
+        showToast('Failed to restart hotspot', 'error');
+    }
+}
+
+// =========================================================================
+// HOTSPOT STATUS & CONTROL FUNCTIONS
+// =========================================================================
+
+async function refreshHotspotStatus() {
+    try {
+        const result = await apiGet('/config/hotspot/status');
+        updateHotspotStatusUI(result);
+    } catch (error) {
+        console.error('Failed to get hotspot status:', error);
+        updateHotspotStatusUI({ success: false, error: 'Failed to fetch status' });
+    }
+}
+
+function updateHotspotStatusUI(data) {
+    // Update SSID in form if available
+    if (data.ssid) {
+        document.getElementById('hotspot-ssid').placeholder = data.ssid;
+    }
+
+    // Update header SSID card
+    const ssidEl = document.getElementById('lan-ssid');
+    const ssidCard = document.getElementById('lan-ssid-card');
+
+    if (ssidEl && ssidCard) {
+        ssidEl.textContent = data.ssid || 'HookProbe-Guardian';
+        ssidCard.className = 'stat-card success';
+    }
+
+    // Update connected clients count
+    const clientsEl = document.getElementById('lan-clients');
+    if (clientsEl) {
+        clientsEl.textContent = data.clients || 0;
+    }
+}
+
+// =========================================================================
+// ETH0 CONFIGURATION FUNCTIONS
+// =========================================================================
+
+function toggleEth0Mode() {
+    const staticMode = document.getElementById('eth0-mode-static').checked;
+    const staticConfig = document.getElementById('eth0-static-config');
+    staticConfig.style.display = staticMode ? 'block' : 'none';
+}
+
+async function loadEth0Config() {
+    try {
+        const result = await apiGet('/config/eth0/config');
+        if (result.success) {
+            // Update current status display
+            const modeEl = document.getElementById('eth0-current-mode');
+            const ipEl = document.getElementById('eth0-current-ip');
+
+            modeEl.textContent = result.mode === 'dhcp' ? 'DHCP' : 'Static';
+            ipEl.textContent = result.ip || '--';
+
+            // Set radio button based on current mode
+            if (result.mode === 'static') {
+                document.getElementById('eth0-mode-static').checked = true;
+                document.getElementById('eth0-static-config').style.display = 'block';
+                // Fill in current values if static
+                if (result.ip) document.getElementById('eth0-ip').value = result.ip;
+                if (result.netmask) document.getElementById('eth0-netmask').value = result.netmask;
+                if (result.gateway) document.getElementById('eth0-gateway').value = result.gateway;
+                if (result.dns) document.getElementById('eth0-dns').value = result.dns;
+            } else {
+                document.getElementById('eth0-mode-dhcp').checked = true;
+                document.getElementById('eth0-static-config').style.display = 'none';
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load eth0 config:', error);
+    }
+}
+
+async function saveEth0Config(e) {
+    e.preventDefault();
+
+    const mode = document.getElementById('eth0-mode-static').checked ? 'static' : 'dhcp';
+    const data = { mode };
+
+    if (mode === 'static') {
+        data.ip = document.getElementById('eth0-ip').value;
+        data.netmask = document.getElementById('eth0-netmask').value;
+        data.gateway = document.getElementById('eth0-gateway').value;
+        data.dns = document.getElementById('eth0-dns').value;
+
+        // Validate required fields for static
+        if (!data.ip || !data.gateway) {
+            showToast('IP address and gateway are required for static configuration', 'error');
+            return;
+        }
+    }
+
+    showToast('Applying eth0 configuration...', 'info');
+
+    try {
+        const result = await apiPost('/config/eth0/config', data);
+        if (result.success) {
+            showToast(result.message || 'eth0 configuration applied', 'success');
+            // Reload config and status
+            loadEth0Config();
+            refreshChannelStatus();
+            loadRouteMetrics();
+        } else {
+            showToast(result.error || 'Configuration failed', 'error');
+        }
+    } catch (error) {
+        showToast('Configuration failed', 'error');
+    }
+}
+
+// Load all status on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Delay to ensure tab is visible
+    setTimeout(() => {
+        refreshWanWifiStatus();
+        refreshChannelStatus();
+        refreshHotspotStatus();
+        loadRouteMetrics();
+        loadEth0Config();
+    }, 500);
+});
+</script>

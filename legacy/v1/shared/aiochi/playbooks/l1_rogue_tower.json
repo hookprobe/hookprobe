@@ -1,0 +1,101 @@
+{
+  "id": "l1_rogue_tower",
+  "name": "L1 Rogue Tower Alert",
+  "version": "1.0",
+  "description": "Detects and responds to rogue or unknown cell towers",
+  "mitre_attack": ["T1584", "T1040"],
+  "category": "l1_soc",
+  "severity_threshold": 2,
+
+  "triggers": [
+    {
+      "type": "l1_anomaly",
+      "anomaly_types": ["unknown_tower", "rogue_tower"],
+      "conditions": {
+        "tower_in_whitelist": false,
+        "tower_in_opencellid": false
+      }
+    },
+    {
+      "type": "l1_tower_verification",
+      "description": "Tower location doesn't match GPS",
+      "conditions": {
+        "location_mismatch_km": ">10",
+        "timing_advance_mismatch": true
+      }
+    },
+    {
+      "type": "l1_tower_verification",
+      "description": "Neighbor cell list doesn't match expected",
+      "conditions": {
+        "neighbor_overlap_ratio": "<0.3"
+      }
+    }
+  ],
+
+  "actions": [
+    {
+      "order": 1,
+      "type": "tower_reputation_report",
+      "description": "Report anomaly to tower reputation system",
+      "command": "l1_report_anomaly",
+      "parameters": {
+        "cell_id": "{{trigger.cell_id}}",
+        "pci": "{{trigger.pci}}",
+        "indicator_type": "unknown_tower",
+        "details": "{{trigger.evidence}}"
+      }
+    },
+    {
+      "order": 2,
+      "type": "cell_avoidance",
+      "description": "Force handover to different cell",
+      "command": "l1_force_handover",
+      "parameters": {
+        "avoid_cell_id": "{{trigger.cell_id}}",
+        "avoid_pci": "{{trigger.pci}}",
+        "prefer_whitelisted": true
+      }
+    },
+    {
+      "order": 3,
+      "type": "notification",
+      "description": "Alert user (non-emergency)",
+      "command": "send_narrative",
+      "parameters": {
+        "severity": "medium",
+        "persona": "parent"
+      }
+    }
+  ],
+
+  "narratives": {
+    "headline": "Connected to unfamiliar cell tower",
+    "owner_friendly": "Your device connected to a cell tower I don't recognize. This could be a new legitimate tower, or it could be something suspicious. I'm monitoring the situation and will alert you if I see anything concerning. I've noted this tower for future reference.",
+    "technical": "L1 SOC detected unknown tower: Cell ID {{trigger.cell_id}} (PCI {{trigger.pci}}, MCC-MNC {{trigger.mcc}}-{{trigger.mnc}}). Tower not in whitelist or OpenCellID database. Location verification: {{trigger.location_verification}}. L1 Trust Score: {{trigger.l1_trust_score}}%.",
+    "action_prompt": "No immediate action required. I'm keeping an eye on this tower.",
+    "resolution_options": [
+      {"label": "Mark tower as trusted", "action": "whitelist_tower"},
+      {"label": "Report as suspicious", "action": "report_tower"},
+      {"label": "View tower details", "action": "show_tower_info"}
+    ]
+  },
+
+  "auto_resolve": {
+    "enabled": true,
+    "conditions": {
+      "observation_count": ">5",
+      "no_anomalies_hours": 24,
+      "stable_location": true
+    },
+    "action": "auto_whitelist",
+    "reason": "Tower observed stable for 24+ hours, auto-whitelisting"
+  },
+
+  "evidence_collection": {
+    "tower_fingerprint": true,
+    "neighbor_cell_list": true,
+    "signal_profile": true,
+    "gps_correlation": true
+  }
+}

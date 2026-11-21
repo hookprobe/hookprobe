@@ -1,8 +1,9 @@
 target/
 node_modules/
 os/mission-control/dist/
-# legacy/ was removed from the tree 2026-11 (AB-21); keep old local build output there out of git
-legacy/
+# legacy/linux-tier/ was removed 2026-11 (AB-21); keep its old local build output out of git.
+# legacy/v1/ is tracked again (operator 2026-11-21): the frozen V1 code base heqk work learns from.
+legacy/linux-tier/
 *.orig
 *.old
 
