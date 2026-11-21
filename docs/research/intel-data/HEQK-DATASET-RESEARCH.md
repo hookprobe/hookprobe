@@ -60,7 +60,7 @@
    - DARPA OpTC and Transparent Computing (public domain);
    - IoT-23 (CC BY 4.0), already used by the neuro programme.
 5. **The legacy feed scripts fetched sources with no stated licence or restrictive terms.** In
-   `hydra-feed-fetch.sh` (removed in #1396) and V1 `feed_sync.py` (removed in #1395): FireHOL (aggregator; per-source terms), ET
+   `hydra-feed-fetch.sh` (removed in #1396) and V1 `legacy/v1/core/hydra/feed_sync.py` (frozen; restored in #1429): FireHOL (aggregator; per-source terms), ET
    compromised-ips, blocklist.de and CINS (no licence stated), and Spamhaus DROP (free in products
    with attribution, but revocable and silent on AI). A heqk `IOC.TXT` must not be compiled from them
    until the registry says so.

@@ -19,8 +19,8 @@ exists, so the foundation feeds it instead of duplicating it.
 | dnsXai | **Shield v2**: signed BLOCK/ALLOW lists, NXDOMAIN + EDE 15; plus `dga.rs` (integer port of the dnsXai lexical scorer) raising observe-only `dns_dga` (rule 119). *"No ML/keyword rule ever blocks."* | detection rows; Shield decisions | `shield.rs`, `dga.rs`, `dnssink.rs`, ADR 0052 |
 | HYDRA (threat intel) | `ioc.rs`: operator-signed `IOC.TXT` (≤ 64 K IPv4 prefixes + 64 K domains, optional `exp=`), matching is **observe-only** (rule 302 / Shield `ioc_match`). Feeds are compiled into this format **off-device**. Legacy tier: `hookprobe-ioc-v1` JSON (ADR 0027). | `ioc_match` detections | `ioc.rs`, ADR 0027 (the legacy feed folder `legacy/linux-tier/security/threat-intel/` was removed in #1396) |
 | AEGIS | Deterministic reconciler; the AI planner endpoint answers `503 not_configured` | — | `http.rs:429` |
-| XDP/eBPF | **Not on heqk.** heqk runs its own RFC 9669 BPF ISA verifier + interpreter + arm64 JIT. XDP/eBPF lived in `legacy/v1`, removed in #1395 | — | ADR 0043 D2 |
-| Suricata / Zeek | **Not on heqk.** They were V1 NAPSE components (`legacy/v1/core/napse`, removed in #1395). Their formats matter here only because most public datasets are Zeek logs, CICFlowMeter CSVs or Suricata EVE | — | git history before #1395 |
+| XDP/eBPF | **Not on heqk.** heqk runs its own RFC 9669 BPF ISA verifier + interpreter + arm64 JIT. XDP/eBPF lives in the frozen `legacy/v1` (removed in #1395, restored unchanged in #1429) | — | ADR 0043 D2 |
+| Suricata / Zeek | **Not on heqk.** They were V1 NAPSE components (`legacy/v1/core/napse`, frozen; restored in #1429 after its removal in #1395). Their formats matter here only because most public datasets are Zeek logs, CICFlowMeter CSVs or Suricata EVE | — | `legacy/v1/core/napse` (frozen) |
 | Corroboration | Multi-axis per-source severity raise. **Never changes the wire verdict** (security-auditor ruling 2026-09-08) | severity only | `corroboration.rs` |
 | Export | M6 frame v2 (`exportwire.rs`, 20-byte records) over the enrolled Noise channel; local SIEM export as RFC 5424 or OCSF-style JSON (class 2004) | binary frames / syslog / OCSF | `export.rs`, `exportwire.rs`, `siem.rs` |
 | Device identity | JA4 per MAC (`ja4id.rs`), DHCP fingerprints (`fpdb.rs`, generated from V1 Fingerbank tables) | hints, never identity merges | — |
@@ -77,8 +77,8 @@ exists, so the foundation feeds it instead of duplicating it.
 
 **Findings worth flagging:**
 1. Two legacy feed scripts fetch sources whose terms are now restrictive or unknown:
-   - `legacy/linux-tier/modules/hydra/hydra-feed-fetch.sh` (removed in #1396) and V1 `feed_sync.py`
-     (removed in #1395);
+   - `legacy/linux-tier/modules/hydra/hydra-feed-fetch.sh` (removed in #1396) and V1 `legacy/v1/core/hydra/feed_sync.py`
+     (frozen; restored in #1429);
    - affected feeds: FireHOL level 1, ET compromised-ips, blocklist.de, CINS, GreenSnow, IPsum;
    - see the research doc §3.
    Both scripts are gone from the tree now, but a heqk IOC pack must not be compiled from those feeds
